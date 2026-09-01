@@ -19,7 +19,6 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Sparkles, GitBranch } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
-import { getDelegationSummary, getDirectDelegatedChildren } from '../app-shell/left-sidebar/session-tree'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
@@ -27,8 +26,6 @@ import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from '@/lib/agent-channel-selection'
 import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
-import { ActiveTasksBar } from './ActiveTasksBar'
-import type { BackgroundTask } from '@/atoms/agent-atoms'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { PresetSelector } from './PresetSelector'
 import { agentPresetsAtom } from '@/atoms/agent-preset-atoms'
@@ -41,7 +38,9 @@ import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
 import { RichTextInput } from '@/components/ai-elements/rich-text-input'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
 import { InputToolbarOverflow, type ToolbarItem } from '@/components/ai-elements/InputToolbarOverflow'
-import { AgentComposerToolMenuItem, AgentComposerToolPopover, AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
@@ -56,7 +55,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { ProjectGraphPanel } from './ProjectGraphPanel'
 import { cn } from '@/lib/utils'
-import { evaluateAutoSendTurn, shouldStartAutoSendFromIdle } from '@/lib/agent-autosend-turn'
+import { evaluateAutoSendTurn } from '@/lib/agent-autosend-turn'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, agentInterruptionMapAtom, currentAgentInterruptionAtom, getAgentInterruptionTone } from '@/atoms/preview-atoms'
@@ -106,16 +105,13 @@ import {
   finalizeStreamingActivities,
   currentAgentSessionIdAtom,
   workspaceCapabilitiesVersionAtom,
-  agentImageGenerationsAtom,
-  agentSessionImageGenerationsAtomFamily,
-  backgroundTasksAtomFamily,
-  upsertAgentImageGeneration,
 } from '@/atoms/agent-atoms'
 import { currentGraphSummaryAtom } from '@/atoms/graph-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import { isTaskProgressTool } from './task-progress'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
+import { activeViewAtom } from '@/atoms/active-view'
 import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
@@ -123,7 +119,6 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
-import { isImageAttachmentMediaType, resolveAgentAttachmentPrompt } from '@profer/shared'
 
 /** 桌面端 Agent 会话懒加载单页消息数（与 main/agent-session-manager 的 DESKTOP_AGENT_PAGE_SIZE 同步） */
 const DESKTOP_AGENT_PAGE_SIZE = 60
@@ -159,7 +154,6 @@ import {
 import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message-queue'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
-import { rollbackRejectedAgentRunState } from '@/lib/agent-stream-state-cleanup'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -277,22 +271,34 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
   }
 
   return (
-    <AgentComposerToolPopover
-      open={open}
-      onOpenChange={setOpen}
-      tooltip={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : '全局默认'}` : '思考设置'}
-      className={cn('p-2 px-2.5', isOpenAIReasoning ? 'w-36' : 'w-auto min-w-[180px]')}
-      trigger={(
-        <AgentComposerToolTrigger
-          label={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : '全局默认'}` : '思考设置'}
-          state={isEnabled ? 'active' : 'default'}
-          disabled={openAIConfig?.disabled}
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          <Brain className="size-5" />
-        </AgentComposerToolTrigger>
-      )}
-    >
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            disabled={openAIConfig?.disabled}
+            className={cn(
+              'size-[36px] rounded-full',
+              isEnabled ? 'text-green-500' : 'text-foreground/60 hover:text-foreground',
+            )}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setOpen((value) => !value)}
+            aria-label={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : '全局默认'}` : '思考设置'}
+            aria-expanded={open}
+          >
+            <Brain className="size-5" />
+          </Button>
+        </div>
+      </PopoverAnchor>
+      <PopoverContent
+        side="top"
+        align="center"
+        sideOffset={8}
+        className={cn('p-2 px-2.5', isOpenAIReasoning ? 'w-36' : 'w-auto min-w-[180px]')}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
         {isOpenAIReasoning ? (
           <div className="flex flex-col">
             <div className="px-2 py-1 text-xs text-muted-foreground">推理档位</div>
@@ -303,14 +309,18 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
                 label: OPENAI_THINKING_LABELS[level] ?? level,
               })),
             ].map(({ level, label }) => (
-              <AgentComposerToolMenuItem
+              <button
                 key={level ?? '__default__'}
-                selected={(openAIConfig?.currentLevel ?? null) === level}
+                type="button"
                 onClick={() => handleOpenAILevelChange(level)}
+                className={cn(
+                  'flex items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent',
+                  (openAIConfig?.currentLevel ?? null) === level && 'bg-accent font-medium',
+                )}
               >
                 <span className="w-4 text-center">{(openAIConfig?.currentLevel ?? null) === level ? '✓' : ''}</span>
                 <span>{label}</span>
-              </AgentComposerToolMenuItem>
+              </button>
             ))}
             <div className="my-1 h-px bg-border" />
             <div className="flex items-center justify-between gap-4 px-2 py-1">
@@ -338,15 +348,16 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, onOpenAIT
               <span className="text-xs text-foreground/70">思考强度</span>
               <div className="flex gap-0.5">
                 {(['low', 'medium', 'high', 'max'] as const).map((v) => (
-                  <AgentComposerToolMenuItem key={v} selected={(effort ?? 'high') === v} className="w-auto px-1.5 py-0.5 text-[10px]" onClick={() => handleEffortChange(v)}>
+                  <button key={v} type="button" onClick={() => handleEffortChange(v)} className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors', (effort ?? 'high') === v ? 'bg-primary text-primary-foreground' : 'text-foreground/50 hover:bg-muted hover:text-foreground/70')}>
                     {v === 'low' ? '低' : v === 'medium' ? '中' : v === 'high' ? '高' : '最大'}
-                  </AgentComposerToolMenuItem>
+                  </button>
                 ))}
               </div>
             </div>
           </div>
         )}
-    </AgentComposerToolPopover>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -368,67 +379,87 @@ function AgentRuntimeSelector({
   const current = AGENT_RUNTIME_OPTIONS.find((option) => option.value === runtime) ?? AGENT_RUNTIME_OPTIONS[0]!
 
   return (
-    <AgentComposerToolPopover
-      open={open}
-      onOpenChange={(nextOpen) => setOpen(disabled ? false : nextOpen)}
-      align="start"
-      className="w-48"
-      tooltip={disabled ? 'Agent 运行中，完成后可切换内核' : '切换当前会话下一轮使用的 Agent 内核'}
-      trigger={(
-        <AgentComposerToolTrigger
-          label={`Agent 内核：${current.label}`}
-          disabled={disabled}
-          className="w-auto gap-1.5 px-2 text-xs font-medium"
-        >
-          <Bot className="size-3.5" />
-          <span>{current.label}</span>
-        </AgentComposerToolTrigger>
-      )}
-    >
-      {AGENT_RUNTIME_OPTIONS.map((option) => (
-        <AgentComposerToolMenuItem
-          key={option.value}
-          selected={option.value === runtime}
-          className="flex-col items-stretch gap-0.5"
-          onClick={() => { onChange(option.value); setOpen(false) }}
-        >
-          <span className="text-xs font-medium">{option.label}</span>
-          <span className="text-[11px] text-muted-foreground">{option.description}</span>
-        </AgentComposerToolMenuItem>
-      ))}
-    </AgentComposerToolPopover>
+    <Popover open={open} onOpenChange={(nextOpen) => setOpen(disabled ? false : nextOpen)}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={disabled}
+              className="h-8 shrink-0 gap-1.5 rounded-md px-2 text-xs font-medium text-foreground/60 hover:bg-muted/50 hover:text-foreground"
+              aria-label={`Agent 内核：${current.label}`}
+            >
+              <Bot className="size-3.5" />
+              <span>{current.label}</span>
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          <p>{disabled ? 'Agent 运行中，完成后可切换内核' : '切换当前会话下一轮使用的 Agent 内核'}</p>
+        </TooltipContent>
+      </Tooltip>
+      <PopoverContent side="top" align="start" sideOffset={8} className="w-48 p-1.5" onOpenAutoFocus={(event) => event.preventDefault()}>
+        {AGENT_RUNTIME_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={cn(
+              'flex w-full flex-col rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted',
+              option.value === runtime && 'bg-muted',
+            )}
+            onClick={() => { onChange(option.value); setOpen(false) }}
+          >
+            <span className="text-xs font-medium">{option.label}</span>
+            <span className="mt-0.5 text-[11px] text-muted-foreground">{option.description}</span>
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   )
 }
 
 // ===== 工具栏附件按钮（添加文件 / 附加文件夹 二级菜单） =====
 
-function AttachMenuButton({ onAttachFile, onAttachFolder, tabletMode }: {
+function AttachMenuButton({ onAttachFile, onAttachFolder, toolBtnSize }: {
   onAttachFile: () => void
   onAttachFolder: () => void
-  tabletMode: boolean
+  toolBtnSize: string
 }): React.ReactElement {
   const [open, setOpen] = React.useState(false)
   return (
-    <AgentComposerToolPopover
-      open={open}
-      onOpenChange={setOpen}
-      className="w-44"
-      tooltip="添加文件或文件夹"
-      trigger={(
-        <AgentComposerToolTrigger label="添加文件或文件夹" tabletMode={tabletMode}>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(toolBtnSize, 'shrink-0 rounded-full text-foreground/60 hover:text-foreground')}
+          aria-label="添加文件或文件夹"
+          title="添加附件"
+        >
           <Paperclip className="size-5" />
-        </AgentComposerToolTrigger>
-      )}
-    >
-      <AgentComposerToolMenuItem onClick={() => { setOpen(false); onAttachFile() }}>
-        <Paperclip className="size-4 shrink-0" />
-        添加文件
-      </AgentComposerToolMenuItem>
-      <AgentComposerToolMenuItem onClick={() => { setOpen(false); onAttachFolder() }}>
-        <FolderPlus className="size-4 shrink-0" />
-        附加文件夹
-      </AgentComposerToolMenuItem>
-    </AgentComposerToolPopover>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="center" sideOffset={8} className="w-44 p-1.5">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none transition-colors duration-100 hover:bg-accent/70"
+          onClick={() => { setOpen(false); onAttachFile() }}
+        >
+          <Paperclip className="size-4 shrink-0" />
+          添加文件
+        </button>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none transition-colors duration-100 hover:bg-accent/70"
+          onClick={() => { setOpen(false); onAttachFolder() }}
+        >
+          <FolderPlus className="size-4 shrink-0" />
+          附加文件夹
+        </button>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -454,25 +485,32 @@ function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactEl
   const inProgress = summary?.statusCounts.in_progress ?? 0
 
   return (
-    <AgentComposerToolTrigger
-      label={`任务图${hasData ? ` · ${completed}/${total}` : ''}`}
-      tooltip={`任务图${hasData ? ` · ${completed}/${total}` : ''}`}
-      state={hasData ? 'active' : 'muted'}
-      onClick={onClick}
-      className={cn(
-        'flex w-auto items-center gap-1.5 px-2',
-        hasData ? 'min-w-9' : 'justify-center px-0',
-      )}
-    >
-      <GitBranch className="size-[14px] shrink-0" />
-      {hasData && (
-        <>
-          <span className="font-medium text-foreground/70 tabular-nums">{completed}/{total}</span>
-          <span className="h-1 w-8 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-emerald-400 transition-all duration-500" style={{ width: `${progress}%` }} /></span>
-          <span className="text-muted-foreground/50">{inProgress > 0 ? '进行中' : progress === 100 ? '完成' : ''}</span>
-        </>
-      )}
-    </AgentComposerToolTrigger>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          className={cn(
+            'flex items-center gap-1.5 h-9 rounded-lg transition-[transform,background-color,border-color,color] duration-150 ease-out active:scale-[0.97]',
+            hasData
+              ? 'px-2.5 bg-muted/40 text-xs hover:bg-accent/70 hover:text-accent-foreground'
+              : 'w-9 justify-center text-muted-foreground/40 hover:bg-accent/70 hover:text-accent-foreground',
+          )}
+        >
+          <GitBranch className={cn('size-[14px] flex-shrink-0', hasData && 'text-muted-foreground')} />
+          {hasData && (
+            <>
+              <span className="font-medium text-foreground/70 tabular-nums">{completed}/{total}</span>
+              <div className="w-8 h-1 bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-400 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
+              </div>
+              <span className="text-muted-foreground/50">{inProgress > 0 ? '进行中' : progress === 100 ? '完成' : ''}</span>
+            </>
+          )}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">任务图{hasData ? ` · ${completed}/${total}` : ''}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -551,8 +589,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   // atom 输出引用未变，订阅者跳过通知。
   const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
   const streaming = streamState?.running ?? false
-  const imageGenerations = useAtomValue(agentSessionImageGenerationsAtomFamily(sessionId))
-  const setImageGenerations = useSetAtom(agentImageGenerationsAtom)
   const setPersistedGraph = useSetAtom(persistedGraphAtomFamily(sessionId))
   // 软空闲态：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
   // 此时服务端 activeSessions 仍保留，新消息须走注入通道而非新建 run。
@@ -571,25 +607,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         .catch(() => {})
     }
   }, [streaming, sessionId, setPersistedGraph])
-  React.useEffect(() => {
-    if (tabletMode) return
-    let cancelled = false
-    window.electronAPI.listAgentImageGenerations(sessionId)
-      .then((cards) => {
-        if (cancelled) return
-        setImageGenerations((previous) => {
-          const next = new Map(previous)
-          let merged = previous.get(sessionId) ?? []
-          for (const card of cards) merged = upsertAgentImageGeneration(merged, card)
-          next.set(sessionId, merged)
-          return next
-        })
-      })
-      .catch((error) => console.warn('[AgentView] 图片生成记录恢复失败:', error))
-    return () => { cancelled = true }
-  }, [sessionId, tabletMode, setImageGenerations])
-
-
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   const longTextPasteAsAttachmentEnabled = useAtomValue(longTextPasteAsAttachmentEnabledAtom)
@@ -600,19 +617,12 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const liveMessages = liveMessagesMap.get(sessionId) ?? EMPTY_SDK_MESSAGES
   // 运行中追加消息队列（前端托管，turn 结束后 auto-drain 逐条发送）
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
-  const backgroundTasks = useAtomValue(backgroundTasksAtomFamily(sessionId))
   const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
-  // 用户主动开启自动发送后的待处理请求；即使当下 live 消息尚未清空或仍在运行，
-  // 条件满足后也要自动启动队首，而不是要求用户再次点击。
-  const autoSendRequestedRef = React.useRef(false)
   // Stop 会递增 epoch，使此前已取出但尚未 settle 的队列消息失去回队资格。
   const queueStopEpochRef = React.useRef(0)
   const stopInFlightRef = React.useRef(false)
-  // 覆盖附件落盘等 await 之前的启动窗口；React 的 streaming 快照还未更新时，
-  // 防止重复提交再次创建同一会话的 run。
-  const sendStartInFlightRef = React.useRef(false)
   const sendingQueuedMessageIdsRef = React.useRef<Set<string>>(new Set())
   // 队列自动发送「轮结束」版本号：每轮运行结束（running 下降沿）+1；consumedVersion 记录已消费版本
   const turnVersionRef = React.useRef(0)
@@ -635,10 +645,12 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
   const [agentThinking, setAgentThinking] = useAtom(agentThinkingAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setActiveView = useSetAtom(activeViewAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const sessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
+  const agentPresetsMap = useAtomValue(agentPresetsAtom)
   const setAgentPresets = useSetAtom(agentPresetsAtom)
   const revealRendererDraft = React.useCallback(() => {
     setDraftSessionIds((previous: Set<string>) => {
@@ -653,15 +665,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     [sessions, sessionId],
   )
   const hasSessionMeta = Boolean(sessionMeta)
-  // 父会话本轮空闲时，仍应依据持久化的直接子会话状态展示协作等待态。
-  // 自动续跑开始后 streaming 变为 true，提示由 AgentMessages 自动收起。
-  const runningDelegationCount = React.useMemo(
-    () => getDelegationSummary(getDirectDelegatedChildren(sessions, sessionId)).running,
-    [sessions, sessionId],
-  )
-  // 1.6.2 每会话「队列自动发送」开关：权威来源是 session meta（缺省开/重启保留）；map 仅为运行时缓存，
+  // 1.6.2 每会话「队列自动发送」开关：权威来源是会话 meta（缺省关/重启保留）；map 仅为运行时缓存，
   // 首次/切会话且 meta 有值时由下方 effect 填充。
-  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? true
+  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false
   // 切会话/首次：map 无值且 meta 有值 → 从 meta 填充运行时缓存（每个会话独立记忆，不串）
   React.useEffect(() => {
     const metaValue = sessionMeta?.autoQueueSendEnabled
@@ -962,6 +968,22 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
   // 获取工作区共享文件目录路径（@ 引用时需要搜索）
   const workspaceSlug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null
+  // 预设有效性由工作区预设 API 返回；失效或未选择时发送前必须重新选择。
+  const sessionPresetId = sessionMeta?.presetId
+  const workspacePresetList = workspaceSlug ? agentPresetsMap.get(workspaceSlug) ?? [] : []
+  const hasUsableSessionPreset = Boolean(sessionPresetId && workspacePresetList.some((preset) => preset.id === sessionPresetId && preset.enabledInWorkspace !== false))
+  const presetSelectionRequired = Boolean(sessionMeta && !hasUsableSessionPreset)
+  const [presetMenuOpen, setPresetMenuOpen] = React.useState(false)
+  const openWorkspacePresets = React.useCallback(() => {
+    setActiveView('agent-skills')
+    // AgentSkillsView 的预设 tab 是现有页面内部状态；等页面挂载后复用其既有 tab 按钮完成定位。
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>('[data-agent-skill-tab="presets"]')?.click()
+      })
+    })
+  }, [setActiveView])
+  const openPresetMenu = React.useCallback(() => setPresetMenuOpen(true), [])
   React.useEffect(() => {
     if (!workspaceSlug) {
       setWorkspaceFilesPath(null)
@@ -1335,7 +1357,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           const current = prev.get(sessionId)
           if (!current) return prev
           const map = new Map(prev)
-          map.set(sessionId, { ...current, running: false, stopping: false })
+          map.set(sessionId, { ...current, running: false })
           return map
         })
       })
@@ -1872,7 +1894,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
    * 供发送按钮左键（streaming/队列非空分支）、发送按钮右键（无条件入队）复用。
    * 仅支持纯文本；输入为空且无附件时静默返回。
    */
-  const enqueueCurrentInput = React.useCallback((disableAutoSend = false): void => {
+  const enqueueCurrentInput = React.useCallback((): void => {
     const text = inputContent.trim()
     const effectiveText = text || suggestion || ''
     const pendingFilesSnapshot = pendingFilesRef.current
@@ -1889,17 +1911,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       ...prev,
       createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection),
     ])
-    // 右键的语义是“仅排队，不自动发送”：成功入队后关闭本会话自动发送，
-    // 用户重新打开开关时才启动队首。左键在运行中入队则保留当前自动发送设置。
-    if (disableAutoSend) {
-      autoSendRequestedRef.current = false
-      setAutoSendMap((prev) => {
-        const map = new Map(prev)
-        map.set(sessionId, false)
-        return map
-      })
-      window.electronAPI.updateAgentQueueAutoSend(sessionId, false).catch(console.error)
-    }
     setInputContent('')
     setInputHtmlContent('')
     setPromptSuggestions((prev) => {
@@ -1908,7 +1919,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       map.delete(sessionId)
       return map
     })
-  }, [consumeQuotedSelection, inputContent, pendingFilesRef, sessionId, setAutoSendMap, setInputContent, setInputHtmlContent, setPromptSuggestions, setQueuedMessages, suggestion])
+  }, [consumeQuotedSelection, inputContent, pendingFilesRef, sessionId, setInputContent, setInputHtmlContent, setPromptSuggestions, setQueuedMessages, suggestion])
 
   /** 向 liveMessages 追加一条乐观用户消息 */
   const appendLiveUserMessage = React.useCallback((message: SDKMessage) => {
@@ -2035,7 +2046,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           const current = prev.get(sessionId)
           if (!current) return prev
           const map = new Map(prev)
-          map.set(sessionId, { ...current, running: false, stopping: false })
+          map.set(sessionId, { ...current, running: false })
           return map
         })
         throw error
@@ -2069,23 +2080,12 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const effectiveText = text || suggestion || ''
     const pendingFilesSnapshot = pendingFilesRef.current
     if (!messagesLoaded || (!effectiveText && pendingFilesSnapshot.length === 0) || !agentChannelId || !hasAvailableModel) return
-    // 纯图片没有文字任务时，默认读图并直接描述；用户已有文字时始终以文字为准。
-    const resolvedUserTask = resolveAgentAttachmentPrompt(
-      effectiveText,
-      pendingFilesSnapshot.map((file) => isImageAttachmentMediaType(file.mediaType) ? 'image' : 'file'),
-    )
-    // 不依赖本次 render 捕获的 streaming 快照：同一事件循环内的重复点击可能发生在
-    // setStreamingStates 生效前；store 才是当前 renderer 的同步真源。
-    const liveStreamState = store.get(agentStreamingStatesAtom).get(sessionId)
-    const liveStreaming = liveStreamState?.running ?? streaming
-    const liveBackgroundWaiting = liveStreamState?.backgroundWaiting ?? backgroundWaiting
-    const liveStopping = liveStreamState?.stopping ?? streamState?.stopping
-    if (liveStopping) {
-      toast.info('Agent 正在停止', { description: '停止完成前不会发送或清除你的草稿。' })
+    if (presetSelectionRequired) {
+      toast.warning('请先选择可用的 Agent 预设', { description: '当前会话尚未绑定有效预设，选择后才能发送消息。' })
       return
     }
-    if (sendStartInFlightRef.current) {
-      toast.info('消息正在准备发送，请稍候')
+    if (streamState?.stopping) {
+      toast.info('Agent 正在停止', { description: '停止完成前不会发送或清除你的草稿。' })
       return
     }
 
@@ -2101,14 +2101,14 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     }
 
     // streaming：进入前端托管队列，turn 结束后 auto-drain 逐条发送（不打断当前 turn）。
-    if (liveStreaming) {
+    if (streaming) {
       // 附件限制/消费引用/入队/清空输入统一收敛到 enqueueCurrentInput
       enqueueCurrentInput()
       return
     }
 
     // backgroundWaiting（软空闲，无活跃 turn）：直接注入，无需中断。
-    if (liveBackgroundWaiting) {
+    if (backgroundWaiting) {
       if (pendingFilesSnapshot.length > 0) {
         toast.info('Agent 后台等待中暂不支持追加发送附件', {
           description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
@@ -2134,10 +2134,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       return
     }
 
-    // 从此处到 IPC 请求创建之前可能包含附件落盘等 await；同步锁必须覆盖整个窗口，
-    // 否则连续点击会在主进程 activeSessions 真正占用前发出第二个 new-run 请求。
-    sendStartInFlightRef.current = true
-    try {
     // 清除当前会话的错误消息
     setAgentStreamErrors((prev) => {
       if (!prev.has(sessionId)) return prev
@@ -2279,7 +2275,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     // 2. 构建最终消息：拼接顺序「中断说明 → 用户引用 → 用户文本」。
     // 中断说明是会话级「待注入」前缀，空闲直发时随本条消息消费；streaming 入队分支不消费（留给队列 drain 首条）。
     const interruptionBlock = consumeAgentInterruptionBlock()
-    const finalMessage = interruptionBlock + fileReferences + resolvedUserTask
+    const finalMessage = interruptionBlock + fileReferences + effectiveText
 
     // 清除打断状态（上一轮的打断标记不再显示）
     store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
@@ -2335,9 +2331,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
       ...(() => {
-        const skills = [...resolvedUserTask.matchAll(/\/skill:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
-        const mcps = [...resolvedUserTask.matchAll(/#mcp:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
-        const sessionIds = [...resolvedUserTask.matchAll(/&session:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
+        const skills = [...effectiveText.matchAll(/\/skill:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
+        const mcps = [...effectiveText.matchAll(/#mcp:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
+        const sessionIds = [...effectiveText.matchAll(/&session:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]
         return {
           ...(skills.length > 0 && { mentionedSkills: skills }),
           ...(mcps.length > 0 && { mentionedMcpServers: mcps }),
@@ -2351,20 +2347,18 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
     window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch((error) => {
       console.error('[AgentView] 发送消息失败:', error)
+      if (error instanceof Error && (error.message.includes('AGENT_PRESET_REQUIRED') || error.message.includes('PRESET_UNKNOWN_REFERENCE') || error.message.includes('PRESET_NOT_FOUND'))) {
+        toast.warning('请先重新选择可用的 Agent 预设', { description: '当前会话引用的预设已失效，选择预设后才能继续发送。' })
+        setInputContent(effectiveText)
+      }
       setStreamingStates((prev) => {
         const current = prev.get(sessionId)
-        // 仅回滚本次请求设置的 optimistic running 状态。旧请求的拒绝/失败不得把
-        // 后续真正运行中的会话误标为空闲，否则下一条会再次撞上主进程并发保护。
-        if (!current || current.startedAt !== streamStartedAt) return prev
+        if (!current) return prev
         const map = new Map(prev)
-        map.set(sessionId, { ...current, running: false, stopping: false })
+        map.set(sessionId, { ...current, running: false })
         return map
       })
     })
-    } finally {
-      // IPC 调用已创建且 stream state 已同步写入；之后由 liveStreamState 判断运行状态。
-      sendStartInFlightRef.current = false
-    }
   }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
@@ -2375,7 +2369,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     (allAskUserRequestsForQueue.get(sessionId)?.length ?? 0) > 0 ||
     (allExitPlanRequestsForQueue.get(sessionId)?.length ?? 0) > 0 ||
     (allPermissionRequestsForQueue.get(sessionId)?.length ?? 0) > 0
-  const canSendQueuedNow = messagesLoaded && !!agentChannelId && hasAvailableModel && !hasBlockingRequests
+  const canSendQueuedNow = messagesLoaded && !presetSelectionRequired && !!agentChannelId && hasAvailableModel && !hasBlockingRequests
 
   const handleSendQueuedNow = React.useCallback((messageId: string): void => {
     if (!canSendQueuedNow) return
@@ -2443,19 +2437,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     // 飞行中的发送启动的新一轮结束会再 +1 版本）
     if (autoSendingQueuedRef.current || queuedSendInFlightRef.current) return
 
-    if (shouldStartAutoSendFromIdle({
-      autoSendEnabled,
-      autoSendRequested: autoSendRequestedRef.current,
-      queuedCount: queuedMessages.length,
-      liveMessagesPending: liveMessages.length > 0,
-      streaming,
-      canSendQueuedNow,
-    })) {
-      autoSendRequestedRef.current = false
-      handleSendQueuedNow(queuedMessages[0]!.id)
-      return
-    }
-
     const decision = evaluateAutoSendTurn({
       turnVersion: turnVersionRef.current,
       consumedVersion: consumedTurnVersionRef.current,
@@ -2504,7 +2485,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     // 1.6：手动停止时不再清空队列（保留排队消息）；只关闭「自动发送」开关，
     // 防止停止后立刻自动发送下一条排队消息。停止之后的草稿不入队，见 handleSend。
     queueStopEpochRef.current += 1
-    autoSendRequestedRef.current = false
     setAutoSendMap((prev) => {
       const map = new Map(prev)
       map.set(sessionId, false)
@@ -2531,36 +2511,16 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       })
   }, [sessionId, streamState?.stopping, setStreamingStates, setAutoSendMap])
 
-  /** 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留）。
-   * 开启时若会话已空闲且队列非空，立即启动队首；运行中的会话仍等当前轮结束。
-   */
+  /** 1.6.2 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留） */
   const handleToggleAutoSend = React.useCallback((): void => {
-    const next = !(store.get(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? true)
+    const next = !(store.get(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false)
     setAutoSendMap((prev) => {
       const map = new Map(prev)
       map.set(sessionId, next)
       return map
     })
     window.electronAPI.updateAgentQueueAutoSend(sessionId, next).catch(console.error)
-
-    if (next) {
-      autoSendRequestedRef.current = true
-      if (shouldStartAutoSendFromIdle({
-        autoSendEnabled: next,
-        autoSendRequested: true,
-        queuedCount: queuedMessages.length,
-        liveMessagesPending: liveMessages.length > 0,
-        streaming,
-        canSendQueuedNow,
-      })) {
-        // 直接复用“立即发送”入口，避免仅依赖 turnVersion（空闲会话没有新的下降沿）。
-        autoSendRequestedRef.current = false
-        handleSendQueuedNow(queuedMessages[0]!.id)
-      }
-    } else {
-      autoSendRequestedRef.current = false
-    }
-  }, [canSendQueuedNow, handleSendQueuedNow, liveMessages.length, queuedMessages, sessionId, setAutoSendMap, sessionMeta?.autoQueueSendEnabled, streaming, store])
+  }, [sessionId, setAutoSendMap, sessionMeta?.autoQueueSendEnabled])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -2635,7 +2595,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         const map = new Map(prev)
         const current = prev.get(sessionId)
         if (!current) return prev
-        map.set(sessionId, rollbackRejectedAgentRunState(current))
+        map.set(sessionId, { ...current, isCompacting: false, compactInFlight: false })
         return map
       })
     }).finally(() => {
@@ -2882,20 +2842,20 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
 
   const hasTextInput = inputContent.trim().length > 0
   const isCompacting = contextStatus.isCompacting
-  const canSend = messagesLoaded && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting && !streamState?.stopping
+  const canSend = messagesLoaded && !presetSelectionRequired && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting && !streamState?.stopping
+
+  // 触控目标尺寸：平板 44px（size-11），桌面保持 36px
+  const toolBtnSize = tabletMode ? 'size-11' : 'size-[36px]'
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => {
     const items: ToolbarItem[] = [
     {
       key: 'model',
-      label: '模型',
-      render: () => (
+      node: (
         <ModelSelector
           filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
           preferredProtocol={sessionAgentRuntime === 'pi' ? 'openai' : 'anthropic'}
           strictProtocolFilter
-          composerTool
-          tabletMode={tabletMode}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
         />
@@ -2903,8 +2863,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     },
     {
       key: 'runtime',
-      label: 'Agent 内核',
-      render: () => (
+      node: (
         <AgentRuntimeSelector
           runtime={sessionAgentRuntime}
           disabled={streaming || backgroundWaiting || runtimeSwitchInFlight}
@@ -2912,12 +2871,11 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         />
       ),
     },
-    { key: 'permission-mode', label: '权限模式', render: () => <PermissionModeSelector sessionId={sessionId} composerTool tabletMode={tabletMode} /> },
-    { key: 'preset', label: '预设', render: () => <PresetSelector sessionId={sessionId} tabletMode={tabletMode} persistedPresetId={sessionMeta?.presetId} workspaceSlug={sessionMeta?.workspaceId ? workspaces.find((w) => w.id === sessionMeta.workspaceId)?.slug : undefined} /> },
+    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
+    { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} workspaceSlug={sessionMeta?.workspaceId ? workspaces.find((w) => w.id === sessionMeta.workspaceId)?.slug : undefined} open={presetMenuOpen} onOpenChange={setPresetMenuOpen} onManagePresets={openWorkspacePresets} /> },
     {
       key: 'thinking',
-      label: '思考设置',
-      render: () => (
+      node: (
         <AgentThinkingPopover
           agentThinking={agentThinking}
           onToggle={() => {
@@ -2943,23 +2901,21 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         />
       ),
     },
-    { key: 'speech', label: '语音输入', render: () => <SpeechButton composerTool tabletMode={tabletMode} /> },
+    { key: 'speech', node: <SpeechButton className="size-[36px] shrink-0 rounded-full" /> },
     {
       key: 'attach',
-      label: '添加文件或文件夹',
-      render: () => (
+      node: (
         <AttachMenuButton
           onAttachFile={handleOpenFileDialog}
           onAttachFolder={handleAttachFolder}
-          tabletMode={tabletMode}
+          toolBtnSize={toolBtnSize}
         />
       ),
     },
     // Fast Mode 保留会话/请求层能力，但不在输入工具栏暴露切换入口。
     {
       key: 'context-usage',
-      label: '上下文使用量',
-      render: () => (
+      node: (
         <ContextUsageBadge
           inputTokens={contextStatus.inputTokens}
           outputTokens={contextStatus.outputTokens}
@@ -2971,16 +2927,13 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           isProcessing={streaming || backgroundWaiting}
           planQuotaChannelId={planQuotaChannelId}
           sessionId={sessionId}
-          composerTool
-          tabletMode={tabletMode}
           onCompact={handleCompact}
         />
       ),
     },
     {
       key: 'graph',
-      label: '任务图',
-      render: () => <ToolbarGraphButton onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
+      node: <ToolbarGraphButton onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
     },
   ]
     return tabletMode
@@ -3012,59 +2965,68 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     runtimeSwitchInFlight,
     handleCompact,
     tabletMode,
+    presetMenuOpen,
+    openWorkspacePresets,
   ])
 
-  const handleBackgroundTaskStop = React.useCallback(async (task: BackgroundTask): Promise<void> => {
-    try {
-      await window.electronAPI.stopTask({ sessionId, taskId: task.id, type: task.type })
-      store.set(backgroundTasksAtomFamily(sessionId), (prev) => prev.filter((item) => item.id !== task.id))
-    } catch (error) {
-      toast.error('停止后台任务失败', { description: error instanceof Error ? error.message : String(error) })
-    }
-  }, [sessionId, store])
-
-  const handleBackgroundTaskOutput = React.useCallback(async (task: BackgroundTask): Promise<void> => {
-    try {
-      const result = await window.electronAPI.getTaskOutput({ sessionId, taskId: task.id, block: false })
-      if (result.output) {
-        toast.info(`任务 #${task.id.slice(0, 8)} 输出`, { description: result.output.slice(-500) })
-      } else {
-        toast.info(`任务 #${task.id.slice(0, 8)} 暂无输出`, { description: result.summary ?? '任务仍在运行' })
-      }
-    } catch (error) {
-      toast.error('读取任务输出失败', { description: error instanceof Error ? error.message : String(error) })
-    }
-  }, [sessionId])
-
   const inputTrailingNode = (streaming || streamState?.stopping) ? (
-    <AgentComposerToolTrigger
-      label="停止 Agent"
-      tooltip={<div className="text-center"><p>停止 Agent</p><p>{getAcceleratorDisplay(getActiveAccelerator('stop-generation'))}</p></div>}
-      state="destructive"
-      tabletMode={tabletMode}
-      onClick={handleStop}
-      disabled={streamState?.stopping}
-    >
-      <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
-    </AgentComposerToolTrigger>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            toolBtnSize,
+            'rounded-full text-destructive hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]',
+          )}
+          onClick={handleStop}
+          disabled={streamState?.stopping}
+        >
+          <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-center">
+        <p>停止 Agent</p>
+        <p>{getAcceleratorDisplay(getActiveAccelerator('stop-generation'))}</p>
+      </TooltipContent>
+    </Tooltip>
   ) : (
-    <AgentComposerToolTrigger
-      label="发送消息"
-      tooltip={queuedMessages.length > 0
-        ? '点击添加到队列（Enter）'
-        : <div className="text-center"><p>左键发送（Enter）</p><p>右键添加到队列</p></div>}
-      state={canSend ? 'active' : 'muted'}
-      tabletMode={tabletMode}
-      onClick={handleSend}
-      // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
-      onContextMenu={(event) => {
-        event.preventDefault()
-        enqueueCurrentInput(true)
-      }}
-      disabled={!canSend}
-    >
-      <CornerDownLeft className="size-[22px]" />
-    </AgentComposerToolTrigger>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={cn(
+            toolBtnSize,
+            'rounded-full',
+            canSend
+              ? 'text-primary hover:bg-primary/10'
+              : 'text-foreground/30 cursor-not-allowed'
+          )}
+          onClick={handleSend}
+          // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
+          onContextMenu={(event) => {
+            event.preventDefault()
+            enqueueCurrentInput()
+          }}
+          disabled={!canSend}
+        >
+          <CornerDownLeft className="size-[22px]" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-center">
+        {queuedMessages.length > 0 ? (
+          <p>点击添加到队列（Enter）</p>
+        ) : (
+          <>
+            <p>左键发送（Enter）</p>
+            <p>右键添加到队列</p>
+          </>
+        )}
+      </TooltipContent>
+    </Tooltip>
   )
 
   return (
@@ -3082,7 +3044,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           persistedSDKMessages={persistedSDKMessages}
           streaming={streaming}
           streamState={streamState}
-          runningDelegationCount={runningDelegationCount}
           liveMessages={liveMessages}
           sessionPath={sessionPath}
           attachedDirs={allAttachedDirs}
@@ -3093,7 +3054,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           onRewind={handleRewindRequest}
           onCompact={handleCompact}
           tabletMode={tabletMode}
-          imageGenerations={imageGenerations}
           onLoadEarlierHistory={handleLoadEarlierHistory}
           historyMoreAvailable={historyHasMore}
           historyLoadingEarlier={historyLoading}
@@ -3114,19 +3074,10 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
           {/* 下方 composer 以完整顶部圆角叠在服务轨上；服务轨延伸至圆角背后。 */}
           <div className="composer-stack">
-            <ActiveTasksBar
-              sessionId={sessionId}
-              tasks={backgroundTasks}
-              onTaskClick={(toolUseId) => {
-                document.querySelector(`[data-tool-use-id="${CSS.escape(toolUseId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-              }}
-              onTaskStop={handleBackgroundTaskStop}
-              onTaskOutput={handleBackgroundTaskOutput}
-            />
             <RuntimeProcessPanel sessionId={sessionId} />
             <div
               className={cn(
-                'agent-input-surface relative z-10 rounded-[17px] border-[0.5px] border-surface-border bg-input/70 backdrop-blur-sm transition-[background-color,border-color,box-shadow] duration-200 focus-within:border-focus/40 focus-within:ring-2 focus-within:ring-focus/10 [.composer-stack:has(.service-rail)_&]:-mt-5',
+                'agent-input-surface relative z-10 rounded-[17px] border-[0.5px] border-border bg-background/70 backdrop-blur-sm transition-[background-color,border-color,box-shadow] duration-200 [.composer-stack:has(.service-rail)_&]:-mt-5',
                 (isPlanMode || isPermissionPlanMode) && !isDragOver && 'plan-mode-border',
                 isDragOver && 'border-[2px] border-dashed border-[#2ecc71] bg-[#2ecc71]/[0.03]'
               )}
@@ -3222,6 +3173,19 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
               </div>
             )}
 
+            {presetSelectionRequired && (
+              <div className="mx-3 mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                当前会话尚未选择可用的 Agent 预设，请先点击工具栏的{' '}
+                <button
+                  type="button"
+                  className="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100"
+                  onClick={openPresetMenu}
+                >
+                  预设按钮
+                </button>
+                {' '}完成选择，再开始对话。
+              </div>
+            )}
             <RichTextInput
               value={inputContent}
               onChange={setInputContent}
@@ -3233,7 +3197,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
                 // 平板触屏：输入框保持干净，不显示占位提示文字
                 tabletMode
                   ? ''
-                  : isCompacting
+                  : presetSelectionRequired
+                    ? '请先选择 Agent 预设，然后再开始对话'
+                    : isCompacting
                     ? '正在压缩上下文，完成后可继续对话...'
                     : agentChannelId && hasAvailableModel
                       ? sendWithCmdEnter

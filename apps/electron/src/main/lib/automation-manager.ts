@@ -25,6 +25,7 @@ import {
   type CreateAutomationInput,
   type UpdateAutomationInput,
 } from '@profer/shared'
+import { presetReferenceForId } from './agent-preset-manager'
 
 /** 索引文件格式 */
 interface AutomationsIndex {
@@ -33,6 +34,12 @@ interface AutomationsIndex {
 }
 
 const INDEX_VERSION = 3
+
+function presetReferenceForAutomation(workspaceId: string | undefined, presetId: string) {
+  const { getAgentWorkspace } = require('./agent-workspace-manager') as typeof import('./agent-workspace-manager')
+  const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
+  return presetReferenceForId(workspaceSlug, presetId)
+}
 
 /**
  * 兼容历史字段：
@@ -367,6 +374,7 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     workspaceId: input.workspaceId,
     permissionMode: input.permissionMode ?? AUTOMATION_DEFAULT_PERMISSION_MODE,
     presetId: input.presetId?.trim() || undefined,
+    ...(input.presetId?.trim() ? { presetReference: presetReferenceForAutomation(input.workspaceId, input.presetId) } : {}),
     sessionMode: input.sessionMode,
     notificationTargets: input.notificationTargets,
     sourceSessionId: input.sourceSessionId,
@@ -406,8 +414,14 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
   }
   if (input.permissionMode !== undefined) target.permissionMode = input.permissionMode
   // presetId 允许设为空字符串表示「跟随工作区默认」；用 undefined 区分「不修改」
-  if (input.presetId !== undefined) {
+  if (input.presetReference !== undefined) {
+    target.presetReference = input.presetReference
+    target.presetId = input.presetReference?.presetId
+  } else if (input.presetId !== undefined) {
     target.presetId = input.presetId.trim() || undefined
+    target.presetReference = target.presetId
+      ? presetReferenceForAutomation(target.workspaceId, target.presetId)
+      : undefined
   }
   if (input.sessionMode !== undefined) target.sessionMode = input.sessionMode
   if (input.notificationTargets !== undefined) target.notificationTargets = input.notificationTargets

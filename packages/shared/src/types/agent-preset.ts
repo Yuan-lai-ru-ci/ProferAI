@@ -15,6 +15,63 @@
 
 import type { AgentEffort, ProferPermissionMode } from './agent'
 
+/** 预设实体作用域；builtin-meta 由 Profer 维护且只读。 */
+export type AgentPresetScope = 'builtin-meta' | 'user-global' | 'workspace'
+
+/** 跨工作区持久化的唯一预设引用。 */
+export interface PresetReference {
+  presetId: string
+  presetScope: AgentPresetScope
+  /** workspace 作用域必须提供；全局作用域不得依赖工作区 slug 解析。 */
+  workspaceSlug?: string
+  /** 可选的解析/审计版本。 */
+  presetVersion?: string
+}
+
+export type PresetErrorCode =
+  | 'PRESET_READ_ONLY'
+  | 'PRESET_SCOPE_MISMATCH'
+  | 'PRESET_INVALID_BASE'
+  | 'PRESET_WORKSPACE_REQUIRED'
+  | 'PRESET_NOT_FOUND'
+  | 'PRESET_UNKNOWN_REFERENCE'
+  | 'PRESET_DELETE_BLOCKED'
+  | 'PRESET_WRITE_FAILED'
+  | 'PRESET_CONCURRENT_UPDATE'
+
+export interface PresetWorkspaceReference {
+  workspaceSlug: string
+  workspaceName: string
+  status: 'active' | 'inactive' | 'unknown'
+  reason: 'workspace-default' | 'session' | 'automation' | 'other'
+  objectIds: string[]
+  objectCount: number
+  alternativePresetReferences?: PresetReference[]
+  actions: Array<'rebind' | 'disable' | 'inspect'>
+}
+
+export interface PresetReferenceReport {
+  preset: PresetReference
+  blockers: PresetWorkspaceReference[]
+  /** 当前全局预设实际生效的工作区；即使没有默认/会话/自动任务引用也必须返回。 */
+  workspaceScopes: Array<{ workspaceSlug: string; workspaceName: string }>
+  totalCount: number
+  canDelete: boolean
+}
+
+/** Manager/API 返回的结构化预设错误。 */
+export class AgentPresetError extends Error {
+  readonly code: PresetErrorCode
+  readonly details?: unknown
+
+  constructor(code: PresetErrorCode, message: string, details?: unknown) {
+    super(message)
+    this.name = 'AgentPresetError'
+    this.code = code
+    this.details = details
+  }
+}
+
 /** 产品内置工具组（预设可禁用，注入时直接不注册对应工具） */
 export const AGENT_PRESET_TOOL_GROUPS = ['task-graph', 'memory', 'collaboration', 'automation'] as const
 export type AgentPresetToolGroup = (typeof AGENT_PRESET_TOOL_GROUPS)[number]
@@ -74,12 +131,25 @@ export const AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP: Record<AgentPresetToolGroup, 
 export interface AgentPreset {
   /** 唯一标识：内置使用 'standard' | 'code' | 'minimal'，自定义使用 UUID */
   id: string
+  /** 作用域；旧配置读取时由 Manager 补齐为 workspace。 */
+  scope?: AgentPresetScope
+  /** 实体版本；内置版本随 Profer 发布更新。 */
+  version?: string
+  /** workspace 预设所属工作区。 */
+  workspaceSlug?: string
+  /** 从全局/其他预设复制而来的来源审计信息。 */
+  sourcePresetId?: string
+  sourcePresetScope?: AgentPresetScope
+  sourceVersion?: string
+  copiedAt?: number
   /** 预设名称 */
   name: string
   /** 一句话描述（UI 展示） */
   description: string
   /** 是否为内置预设（不可编辑/删除） */
   isBuiltin: boolean
+  /** 工作区页面使用：该预设当前是否在目标工作区生效。 */
+  enabledInWorkspace?: boolean
   /** 追加到标准系统提示词之后的预设专属提示词段 */
   promptSections?: string[]
   /** [方案 1] 隐藏与预设矛盾的内置提示词段落 key（见 AGENT_PRESET_SUPPRESS_KEYS）：'subagents' | 'memory' | 'task-graph' | 'automation'；用于极简类预设消除矛盾指令 */
@@ -103,7 +173,13 @@ export interface AgentPreset {
    * 设置后本预设只存储与基座的差异，读取时按 resolveAgentPresetMerge 合并；
    * 内置预设升级会自动传导到派生预设，无需手动同步。
    */
+  /** 兼容旧版的基座 ID；新迁移数据同时写入带作用域的引用。 */
   basePresetId?: string
+  /** C4/C5 继承关系的稳定作用域引用。 */
+  basePresetReference?: PresetReference
+  /** 旧数据迁移诊断，不参与实体解析。 */
+  migrationStatus?: 'modified-legacy-copy' | 'preserved-legacy-disabled-copy' | 'uncertain-legacy-copy' | 'unknown-legacy' | 'invalid-base' | 'builtin-corrupt' | 'id-conflict'
+  migrationReason?: string
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -112,10 +188,28 @@ export interface AgentPreset {
 
 /** 预设配置（存储在每个工作区的 agent-presets.json：~/.profer/agent-workspaces/{slug}/agent-presets.json） */
 export interface AgentPresetConfig {
-  /** 该工作区的用户自定义预设 */
+  /** 该作用域的用户自定义预设 */
   presets: AgentPreset[]
-  /** 该工作区新建会话时默认使用的预设 ID */
+  /** 迁移异常与 C/D 分类诊断；失败时原始文件仍保留。 */
+  migrationDiagnostics?: Array<{ presetId?: string; status: string; reason: string }>
+  /** 兼容旧版本的默认预设 ID；新代码优先使用 reference。 */
   defaultPresetId: string
+  /** workspace 默认预设的显式引用。 */
+  defaultPresetReference?: PresetReference
+  /** 用户明确取消默认预设；缺失时按旧版本兼容规则使用 standard。 */
+  defaultPresetExplicitlyCleared?: boolean
+  /** 当前工作区显式解除生效的用户全局预设 ID。 */
+  disabledGlobalPresetIds?: string[]
+  /** 当前工作区显式关闭的工作区预设 ID。 */
+  disabledWorkspacePresetIds?: string[]
+}
+
+/** 全局用户预设配置文件。 */
+export interface GlobalAgentPresetConfig {
+  version: 1
+  presets: AgentPreset[]
+  /** 用户全局预设的工作区生效范围；未列出的预设不自动投影到工作区。 */
+  workspaceScopes?: Record<string, string[]>
 }
 
 /** 其他工作区的预设分组（导入用，对齐 OtherWorkspaceSkillsGroup） */
@@ -162,6 +256,8 @@ export const BUILTIN_AGENT_PRESETS: AgentPreset[] = [
     name: '标准',
     description: '完整能力：任务图、子 Agent、记忆维护、知识沉淀，适合日常复杂任务',
     isBuiltin: true,
+    scope: 'builtin-meta',
+    version: '1.0.0',
     createdAt: 0,
     updatedAt: 0,
   },
@@ -170,6 +266,8 @@ export const BUILTIN_AGENT_PRESETS: AgentPreset[] = [
     name: '代码',
     description: '面向代码任务的验证闭环：最小改动、必验结果、尊重既有约定',
     isBuiltin: true,
+    scope: 'builtin-meta',
+    version: '1.0.0',
     promptSections: CODE_PROMPT_SECTIONS,
     createdAt: 0,
     updatedAt: 0,
@@ -179,6 +277,8 @@ export const BUILTIN_AGENT_PRESETS: AgentPreset[] = [
     name: '极简',
     description: '最小动作：不建任务图、不写记忆、不委派，适合快速问答和简单修改',
     isBuiltin: true,
+    scope: 'builtin-meta',
+    version: '1.0.0',
     promptSections: MINIMAL_PROMPT_SECTIONS,
     suppressPromptSections: ['subagents', 'memory', 'task-graph'],
     disabledToolGroups: ['task-graph', 'memory', 'collaboration'],
@@ -240,6 +340,8 @@ export interface AgentPresetUpdateInput {
   mcpServerNames?: string[] | null
   allowSubagents?: boolean | null
   basePresetId?: string | null
+  /** 工作区列表中用于显示/筛选的本地开关，不参与预设内容解析。 */
+  enabledInWorkspace?: boolean
 }
 
 // ===== 预设导出 / 导入（跨机器分享文件） =====
@@ -329,8 +431,24 @@ export function mergeAgentPreset(base: AgentPreset, child: AgentPreset): AgentPr
 
 /** Agent 预设 IPC 通道常量 */
 export const AGENT_PRESET_IPC_CHANNELS = {
-  /** 获取全部可用预设（内置 + 自定义） */
+  /** 获取全部可用预设（内置 + 全局 + 当前工作区） */
   LIST_PRESETS: 'agent:list-presets',
+  /** 查询某个全局预设的工作区有效引用。 */
+  GET_REFERENCE_REPORT: 'agent:get-preset-reference-report',
+  /** 删除全局用户预设（Manager 会再次执行引用检查）。 */
+  DELETE_GLOBAL_PRESET: 'agent:delete-global-preset',
+  /** 将全局预设冻结复制到当前工作区。 */
+  COPY_TO_WORKSPACE: 'agent:copy-preset-to-workspace',
+  LIST_GLOBAL_PRESETS: 'agent:list-global-presets',
+  CREATE_GLOBAL_PRESET: 'agent:create-global-preset',
+  PROMOTE_WORKSPACE_PRESET_TO_GLOBAL: 'agent:promote-workspace-preset-to-global',
+  UPDATE_GLOBAL_PRESET: 'agent:update-global-preset',
+  SET_DEFAULT_REFERENCE: 'agent:set-default-preset-reference',
+  ENABLE_GLOBAL_IN_WORKSPACE: 'agent:enable-global-preset-in-workspace',
+  DISABLE_GLOBAL_IN_WORKSPACE: 'agent:disable-global-preset-in-workspace',
+  SET_WORKSPACE_ENABLED: 'agent:set-workspace-preset-enabled',
+  REBIND_SESSION_REFERENCE: 'agent:rebind-session-preset-reference',
+  REBIND_AUTOMATION_REFERENCE: 'agent:rebind-automation-preset-reference',
   /** 获取默认预设 ID */
   GET_DEFAULT_PRESET: 'agent:get-default-preset',
   /** 更新会话绑定的预设 */

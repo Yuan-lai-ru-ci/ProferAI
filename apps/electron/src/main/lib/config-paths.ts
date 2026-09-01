@@ -252,6 +252,16 @@ export function getAgentPresetsPath(): string {
   return join(getConfigDir(), 'agent-presets.json')
 }
 
+/** 获取全局 Agent 预设配置文件路径（user-global；builtin-meta 不落盘）。 */
+export function getGlobalAgentPresetsPath(): string {
+  return join(getConfigDir(), 'agent-presets.json')
+}
+
+/** 获取全局预设迁移状态/诊断文件路径。 */
+export function getAgentPresetMigrationPath(): string {
+  return join(getConfigDir(), 'agent-preset-migration.json')
+}
+
 /**
  * 获取 Chat 工具配置文件路径
  *
@@ -480,6 +490,49 @@ export function getDefaultSkillsDir(): string {
   }
 
   return dir
+}
+
+/** 全局 Skill 库根目录。 */
+export function getGlobalSkillsDir(): string {
+  const dir = join(getConfigDir(), 'global-skills')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 全局 Skill 索引路径。 */
+export function getGlobalSkillsIndexPath(): string {
+  return join(getGlobalSkillsDir(), 'index.json')
+}
+
+/** 全局 Skill 用户定义目录。 */
+export function getUserGlobalSkillsDir(): string {
+  const dir = join(getGlobalSkillsDir(), 'user')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 全局 Skill 内置缓存目录。 */
+export function getBuiltinGlobalSkillsDir(): string {
+  const dir = join(getGlobalSkillsDir(), 'builtin')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 工作区全局 Skill 覆盖清单。 */
+export function getWorkspaceSkillOverridesPath(slug: string): string {
+  return join(getAgentWorkspacePath(slug), 'skill-overrides.json')
+}
+
+/** 工作区有效 Skill 投影根目录。 */
+export function getWorkspaceRuntimeSkillsDir(slug: string): string {
+  const dir = join(getAgentWorkspacePath(slug), '.runtime', 'skills')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+/** 全局 Skill 体系迁移状态文件。 */
+export function getSkillSystemMigrationPath(): string {
+  return join(getConfigDir(), 'skill-system-migration.json')
 }
 
 /**

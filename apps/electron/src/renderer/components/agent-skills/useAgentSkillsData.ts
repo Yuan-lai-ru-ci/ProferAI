@@ -27,7 +27,7 @@ export interface AgentSkillsData {
   skillsDir: string
   mcpConfig: WorkspaceMcpConfig
   updatingSkill: string | null
-  toggleSkill: (slug: string, enabled: boolean) => Promise<void>
+  toggleSkill: (slug: string, enabled: boolean, sourceSkillId?: string) => Promise<void>
   deleteSkill: (slug: string, name: string) => Promise<boolean>
   updateSkill: (slug: string) => Promise<void>
   toggleMcp: (name: string, enabled: boolean) => Promise<void>
@@ -77,20 +77,24 @@ export function useAgentSkillsData(): AgentSkillsData {
 
   // workspaceSlug 或外部能力版本变化时重新拉取
   React.useEffect(() => {
-    setLoading(true)
+    // 保留现有列表，避免单个开关或其他能力变化导致整页白屏闪烁。
     void loadData()
   }, [loadData, capabilitiesVersion])
 
-  const toggleSkill = React.useCallback(async (slug: string, enabled: boolean) => {
+  const toggleSkill = React.useCallback(async (slug: string, enabled: boolean, sourceSkillId?: string) => {
+    if (enabled) {
+      const duplicate = skills.find((skill) => skill.slug === slug && skill.enabled && (sourceSkillId ? skill.actualSource === 'workspace' : Boolean(skill.sourceSkillId)))
+      if (duplicate && typeof window !== 'undefined' && !window.confirm('当前工作区同时存在该 Skill 的工作区副本与全局/元 Skill，同时启用可能导致能力重复或行为冲突，不推荐这样使用。是否仍要继续启用？')) return
+    }
     try {
-      await window.electronAPI.toggleWorkspaceSkill(workspaceSlug, slug, enabled)
-      setSkills((prev) => prev.map((s) => (s.slug === slug ? { ...s, enabled } : s)))
+      await window.electronAPI.toggleWorkspaceSkill(workspaceSlug, slug, enabled, sourceSkillId)
+      setSkills((prev) => prev.map((s) => (s.slug === slug && (sourceSkillId ? s.sourceSkillId === sourceSkillId : !s.sourceSkillId) ? { ...s, enabled } : s)))
       bumpCapabilitiesVersion((v) => v + 1)
     } catch (error) {
       console.error('[Agent 技能] 切换 Skill 状态失败:', error)
       toast.error('切换 Skill 状态失败')
     }
-  }, [workspaceSlug, bumpCapabilitiesVersion])
+  }, [skills, workspaceSlug, bumpCapabilitiesVersion])
 
   const deleteSkill = React.useCallback(async (slug: string, name: string): Promise<boolean> => {
     try {

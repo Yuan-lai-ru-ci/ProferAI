@@ -738,8 +738,10 @@ export interface AgentSessionMeta {
   piEntryBindings?: Record<string, string>
   /** 本会话使用的 Agent runtime；历史会话缺省时按 Claude 处理。 */
   agentRuntime?: AgentRuntime
-  /** 本会话绑定的 Agent 预设 ID；历史会话/缺省视为 standard。 */
+  /** 兼容旧版本的本会话预设 ID；新数据同时保存 presetReference。 */
   presetId?: string
+  /** 本会话绑定的显式预设引用。 */
+  presetReference?: import('./agent-preset').PresetReference
   /**
    * Agent 执行 cwd 的持久化语义。新会话使用 project；缺失字段兼容升级前的
    * session workbench cwd。
@@ -964,6 +966,8 @@ export interface WorkspaceMcpConfig {
 
 /** 从其他工作区导入的 Skill 来源元数据 */
 export interface SkillImportSource {
+  /** 工作区本地 Skill 的稳定 ID；导入和迁移时必须保留/生成。 */
+  workspaceSkillId?: string
   sourceWorkspaceSlug: string
   sourceWorkspaceName: string
   importedAt: string        // ISO 8601
@@ -976,6 +980,8 @@ export interface SkillImportSource {
 
 /** 工作区 Skill 元数据 */
 export interface SkillMeta {
+  /** 工作区本地 Skill 的稳定 ID；旧数据缺失时迁移会回填。 */
+  workspaceSkillId?: string
   slug: string
   name: string
   description?: string
@@ -986,6 +992,20 @@ export interface SkillMeta {
   enabled: boolean
   /** 如果此 Skill 是从其他工作区导入的，则携带来源信息 */
   importSource?: SkillImportSource
+  /** 新全局 Skill 体系的来源唯一 ID */
+  sourceSkillId?: string
+  /** 新全局 Skill 体系的来源类型 */
+  sourceSkillType?: 'builtin-meta' | 'user-global'
+  /** 创建副本时的来源版本 */
+  sourceVersion?: string
+  /** 创建副本的时间 */
+  copiedAt?: string
+  /** 被该工作区副本替换的全局 Skill ID */
+  replacementForSkillId?: string
+  /** 来源状态，unknown-legacy 表示迁移无法可靠匹配 */
+  sourceStatus?: 'available' | 'deleted' | 'modified-legacy-copy' | 'preserved-legacy-disabled-copy' | 'uncertain-legacy-copy' | 'unknown-legacy'
+  /** 当前实际用于工作区加载的来源层 */
+  actualSource?: 'workspace' | 'global' | 'none'
   /** 是否有可用更新（源 Skill 版本 > importSource.sourceVersion） */
   hasUpdate?: boolean
 
@@ -1014,6 +1034,8 @@ export interface MasterSkillMeta {
   group?: string
   icon?: string
   version?: string
+  /** 当前工作区实际加载的来源层 */
+  actualSource?: 'workspace' | 'global' | 'none'
   /** 是否相对出厂基线（bundle 内置）被用户改过 */
   userModified: boolean
   /** 当前分布到多少个工作区（有 .source.json 指向 master 的副本数） */
@@ -1842,6 +1864,9 @@ export const AGENT_IPC_CHANNELS = {
   GET_SKILLS: 'agent:get-skills',
   /** 获取工作区 Skills 目录绝对路径 */
   GET_SKILLS_DIR: 'agent:get-skills-dir',
+  /** 创建工作区 Skill */
+  CREATE_SKILL: 'agent:create-skill',
+  PROMOTE_SKILL_TO_GLOBAL: 'agent:promote-skill-to-global',
   /** 删除工作区 Skill */
   DELETE_SKILL: 'agent:delete-skill',
   /** 切换工作区 Skill 启用/禁用 */
@@ -2116,6 +2141,23 @@ export const SKILL_MARKETPLACE_IPC_CHANNELS = {
   LIST_TEAM_SKILLS: 'skill:list-team-skills',
   INSTALL_TEAM_SKILL: 'skill:install-team-skill',
   CHECK_FOR_UPDATES: 'skill:check-for-updates',
+} as const
+
+/** 全局 Skill 体系 IPC 通道；旧 master 通道保留兼容。 */
+export const GLOBAL_SKILL_IPC_CHANNELS = {
+  LIST: 'global-skill:list',
+  READ: 'global-skill:read',
+  READ_WORKSPACE_COPY: 'global-skill:read-workspace-copy',
+  SAVE_WORKSPACE_COPY: 'global-skill:save-workspace-copy',
+  SAVE: 'global-skill:save',
+  COPY_TO_USER: 'global-skill:copy-to-user',
+  CREATE_USER: 'global-skill:create-user',
+  COPY_TO_WORKSPACE: 'global-skill:copy-to-workspace',
+  DELETE_USER: 'global-skill:delete-user',
+  GET_DELETE_BLOCKERS: 'global-skill:get-delete-blockers',
+  SET_ENABLED: 'global-skill:set-enabled',
+  RESTORE: 'global-skill:restore',
+  GET_OVERRIDES: 'global-skill:get-overrides',
 } as const
 
 /** 全局元 Skill（master 库）IPC 通道 */

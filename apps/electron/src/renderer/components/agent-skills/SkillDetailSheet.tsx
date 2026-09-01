@@ -127,10 +127,19 @@ function SkillDetailBody({
   }
 
   const sourceLabel = isBuiltin
-    ? 'Profer 内置'
-    : skill.importSource
-      ? `从 ${skill.importSource.sourceWorkspaceName} 导入`
-      : '当前工作区'
+    ? 'Profer 内置全局源'
+    : skill.sourceSkillId
+      ? `${skill.sourceSkillType === 'builtin-meta' ? 'Profer 内置元 Skill' : '用户全局 Skill'}（工作区副本）`
+      : skill.importSource
+        ? `从 ${skill.importSource.sourceWorkspaceName} 导入`
+        : '当前工作区'
+  const actualSourceLabel = skill.actualSource === 'workspace'
+    ? '当前工作区副本'
+    : skill.actualSource === 'global'
+      ? '全局 Skill'
+      : skill.actualSource === 'none'
+        ? '未加载'
+        : skill.enabled ? '当前工作区' : '未加载'
 
   return (
     <div className="flex h-full flex-col min-h-0">
@@ -244,6 +253,13 @@ function SkillDetailBody({
                 </>
               )}
               <MetaRow label="数据源" value={sourceLabel} />
+              <MetaRow label="实际加载" value={actualSourceLabel} />
+              <MetaRow label="来源 ID" value={skill.sourceSkillId ?? '无（工作区自有 Skill）'} />
+              <MetaRow label="来源类型" value={skill.sourceSkillType ?? 'workspace-local'} />
+              <MetaRow label="来源版本" value={skill.sourceVersion ?? '无'} />
+              <MetaRow label="复制时间" value={skill.copiedAt ?? '无'} />
+              <MetaRow label="替换来源" value={skill.replacementForSkillId ?? '无'} />
+              <MetaRow label="来源状态" value={skill.sourceStatus === 'unknown-legacy' ? '来源无法确认' : skill.sourceStatus === 'deleted' ? '来源已删除' : skill.sourceStatus === 'available' ? '可用' : '无来源'} />
               <MetaRow label="位置" value={`skills/${skill.slug}`} />
             </SettingsCard>
           </div>

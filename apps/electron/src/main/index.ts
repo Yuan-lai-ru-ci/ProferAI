@@ -141,7 +141,8 @@ import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from '
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills, VITE_DEV_SERVER_URL } from './lib/config-paths'
-import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
+import { configureGlobalSkillSystem, ensureGlobalSkillSystemReady } from './lib/global-skill-manager'
+import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
@@ -769,6 +770,13 @@ async function bootstrap(): Promise<void> {
   const menu = createApplicationMenu()
   Menu.setApplicationMenu(menu)
 
+  // 仅注入全局 Skill 的 bundle 来源；真正的 seed/迁移必须在窗口创建后执行。
+  // Agent 首次运行前仍会通过 prepareRuntimeSkills / AgentOrchestrator 的幂等 ready gate 保证一致性。
+  const bundledGlobalSkillsDir = app.isPackaged
+    ? join(process.resourcesPath, 'default-skills')
+    : join(__dirname, '../default-skills')
+  configureGlobalSkillSystem(bundledGlobalSkillsDir)
+
   // Register IPC handlers
   registerIpcHandlers()
 
@@ -798,6 +806,18 @@ async function bootstrap(): Promise<void> {
   // ─── 窗口 + 托盘：用户看到界面的临界点 ───
   createWindow()
 
+  // Skill / 预设迁移可能涉及目录扫描、复制和原子替换；必须在主窗口实际显示后才开始，
+  // 避免与 Renderer 首屏加载竞争。首次 Agent 运行前的幂等 ready gate 仍会兜底一致性。
+  mainWindow?.once('show', () => {
+    setTimeout(() => {
+      // 必须先完成全局能力迁移，再运行旧 default-skills 的 seed：seed 可能在
+      // 缺少旧基线时替换 legacy master，导致 B1/B2 无法用旧 master 识别。
+      safeRun('ensureGlobalSkillSystemReady', ensureGlobalSkillSystemReady)
+      safeRun('ensurePresetSystemReady', ensurePresetSystemReady)
+      safeRun('seedDefaultSkills', seedDefaultSkills)
+    }, 0)
+  })
+
   // 开发态由裸 electron.exe 承载；维护 .dev AUMID 的专属 Shell 快捷方式，
   // 防止它注册为 Electron 或污染正式 Profer 的任务栏身份。
   safeRun('maintainDevShellShortcut', maintainDevShellShortcut)
@@ -815,10 +835,6 @@ async function bootstrap(): Promise<void> {
   })
 
   // ─── 第二梯队：窗口已显示，以下任务延迟到空闲时执行 ───
-
-  // 同步默认 Skills（非关键，后台执行）
-  safeRun('seedDefaultSkills', seedDefaultSkills)
-  safeRun('upgradeDefaultSkillsInWorkspaces', upgradeDefaultSkillsInWorkspaces)
 
   // 应用开机自启动设置：确保与实际系统状态同步
   safeRun('applyAutoLaunch', () => {

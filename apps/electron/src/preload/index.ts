@@ -6,9 +6,10 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, LARK_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, PPT_MATERIAL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision, type ChangelogEntry, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, PPT_MATERIAL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, SSE_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type TeamMemoryApiResult, type TeamMemoryDocument, type TeamMemoryRevision, type ChangelogEntry, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
+import type { PresetReference, PresetReferenceReport, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
 import type {
   RuntimeStatus,
   GitRepoStatus,
@@ -113,13 +114,6 @@ import type {
   FeishuChatBinding,
   FeishuPresenceReport,
   FeishuUpdateBindingInput,
-  LarkCliStatus,
-  LarkCliOperationResult,
-  LarkLoginStartResult,
-  LarkLoginEvent,
-  LarkMcpCredentialsInput,
-  LarkMcpSetupResult,
-  LarkMcpStatus,
   DingTalkConfig,
   DingTalkConfigInput,
   DingTalkBridgeState,
@@ -573,8 +567,24 @@ export interface ElectronAPI {
 
   // ===== Agent 预设（工作区级） =====
 
-  /** 获取指定工作区的全部可用 Agent 预设（内置 + 自定义）；无工作区仅内置 */
-  listAgentPresets: (workspaceSlug?: string) => Promise<AgentPreset[]>
+  /** 获取指定工作区的全部可用 Agent 预设（内置 + 全局 + 当前工作区） */
+  listAgentPresets: (workspaceSlug?: string, includeInactiveGlobal?: boolean) => Promise<AgentPreset[]>
+  /** 获取全局元预设和用户全局预设。 */
+  listGlobalAgentPresets: () => Promise<AgentPreset[]>
+  /** 创建/更新用户全局预设。 */
+  createGlobalAgentPreset: (input: AgentPresetCreateInput) => Promise<AgentPreset>
+  promoteWorkspacePresetToGlobal: (workspaceSlug: string, presetId: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy?: boolean) => Promise<AgentPreset>
+  updateGlobalAgentPreset: (presetId: string, updates: AgentPresetUpdateInput) => Promise<AgentPreset>
+  /** 查询全局预设工作区引用并复制到工作区。 */
+  getPresetReferenceReport: (reference: PresetReference) => Promise<PresetReferenceReport>
+  copyPresetToWorkspace: (reference: PresetReference, workspaceSlug: string, name?: string) => Promise<AgentPreset>
+  deleteGlobalAgentPreset: (reference: PresetReference) => Promise<void>
+  setDefaultAgentPresetReference: (workspaceSlug: string, reference: PresetReference) => Promise<PresetReference>
+  enableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => Promise<void>
+  disableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => Promise<void>
+  setWorkspacePresetEnabled: (workspaceSlug: string, presetId: string, enabled: boolean) => Promise<void>
+  rebindAgentSessionPresetReference: (sessionId: string, reference: PresetReference) => Promise<AgentSessionMeta>
+  rebindAutomationPresetReference: (automationId: string, reference: PresetReference | null) => Promise<import('@profer/shared').Automation>
 
   /** 获取指定工作区的默认预设 ID（新建会话使用） */
   getDefaultAgentPreset: (workspaceSlug?: string) => Promise<string>
@@ -617,10 +627,6 @@ export interface ElectronAPI {
     (id: string): Promise<SDKMessage[]>
     (id: string, opts: { tail?: number; before?: number }): Promise<{ messages: SDKMessage[]; total: number; startIndex: number; endIndex: number; hasMore: boolean }>
   }
-  /** 获取当前会话脱敏后的图片生成独立时间线卡片。 */
-  listAgentImageGenerations: (sessionId: string) => Promise<import('@profer/shared').AgentImageGenerationCard[]>
-  /** 仅按会话和 generation ID 重试失败卡；主进程重建受信任参数。 */
-  retryAgentImageGeneration: (input: import('@profer/shared').RetryAgentImageGenerationInput) => Promise<import('@profer/shared').AgentImageGenerationCard>
 
   /** 更新 Agent 会话标题 */
   updateAgentSessionTitle: (id: string, title: string) => Promise<AgentSessionMeta>
@@ -734,11 +740,16 @@ export interface ElectronAPI {
   /** 获取工作区 Skills 目录绝对路径 */
   getWorkspaceSkillsDir: (workspaceSlug: string) => Promise<string>
 
+  /** 创建工作区 Skill */
+  createWorkspaceSkill: (workspaceSlug: string, skillSlug: string, name: string, description: string, content: string) => Promise<void>
+  /** 将工作区 Skill 提升为用户全局 Skill，并按工作区范围启用。 */
+  promoteWorkspaceSkillToGlobal: (workspaceSlug: string, skillSlug: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy?: boolean) => Promise<import('@profer/shared').GlobalSkillManifest>
+
   /** 删除工作区 Skill */
   deleteWorkspaceSkill: (workspaceSlug: string, skillSlug: string) => Promise<void>
 
   /** 切换工作区 Skill 启用/禁用 */
-  toggleWorkspaceSkill: (workspaceSlug: string, skillSlug: string, enabled: boolean) => Promise<void>
+  toggleWorkspaceSkill: (workspaceSlug: string, skillSlug: string, enabled: boolean, sourceSkillId?: string) => Promise<void>
 
   /** 获取其他工作区的 Skill 列表 */
   getOtherWorkspaceSkills: (currentSlug: string) => Promise<OtherWorkspaceSkillsGroup[]>
@@ -886,12 +897,6 @@ export interface ElectronAPI {
 
   /** 获取当前会话的 Graph 摘要 */
   getGraphSummary: (sessionId: string) => Promise<import('@profer/project-core').GraphSummary>
-
-  /** 获取已脱敏的 Pi Host Harness 只读执行/验证摘要 */
-  getPiHarnessSnapshot: (sessionId: string) => Promise<import('@profer/shared').PiHarnessSnapshotView>
-
-  /** 用户显式继续一个 ready_task/shadow_mode Harness 候选任务。 */
-  continuePiHarnessCandidate: (input: import('@profer/shared').PiHarnessManualContinueInput) => Promise<void>
 
   /** 追加 Graph 事件到 JSONL（渲染进程主动持久化） */
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => Promise<void>
@@ -1108,9 +1113,7 @@ export interface ElectronAPI {
   onCapabilitiesChanged: (callback: () => void) => () => void
   onWorkspaceFilesChanged: (callback: () => void) => () => void
 
-  // ===== 飞书集成 =====
-
-  /** Lark 用户云端能力（凭据留在官方 CLI credential store） */
+  // ===== Lark 用户云端能力 =====
   getLarkCliStatus: () => Promise<LarkCliStatus>
   refreshLarkCliStatus: () => Promise<LarkCliStatus>
   installLarkCli: () => Promise<LarkCliOperationResult>
@@ -1125,6 +1128,8 @@ export interface ElectronAPI {
   cancelLarkMcpLogin: () => Promise<void>
   testLarkMcpConnection: () => Promise<LarkMcpSetupResult>
   onLarkMcpLoginEvent: (callback: (event: LarkLoginEvent) => void) => () => void
+
+  // ===== 飞书集成 =====
 
   /** 获取飞书配置 */
   getFeishuConfig: () => Promise<FeishuConfig>
@@ -1444,6 +1449,23 @@ export interface ElectronAPI {
     checkForUpdates: (workspaceSlug: string) => Promise<Array<import('@profer/shared').SkillMeta>>
   }
 
+  // ===== 全局 Skill 体系 =====
+  globalSkill: {
+    list: (workspaceSlug?: string) => Promise<Array<import('@profer/shared').GlobalSkillMeta>>
+    read: (skillId: string) => Promise<string>
+    readWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string) => Promise<string>
+    saveWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string, content: string) => Promise<void>
+    save: (skillId: string, content: string, workspaceSlug: string | undefined, scope: 'global' | 'workspace') => Promise<import('@profer/shared').GlobalSkillManifest | import('@profer/shared').WorkspaceSkillCopyResult>
+    copyToUser: (skillId: string, slug?: string) => Promise<import('@profer/shared').GlobalSkillManifest>
+    createUser: (slug: string, name: string, description: string, content: string) => Promise<import('@profer/shared').GlobalSkillManifest>
+    copyToWorkspace: (skillId: string, workspaceSlug: string) => Promise<import('@profer/shared').WorkspaceSkillCopyResult>
+    deleteUser: (skillId: string, confirmationToken?: string) => Promise<void>
+    getDeleteBlockers: (skillId: string) => Promise<import('@profer/shared').GlobalSkillDeleteBlockers>
+    setEnabled: (workspaceSlug: string, skillId: string, enabled: boolean) => Promise<void>
+    restore: (workspaceSlug: string, skillId: string) => Promise<void>
+    getOverrides: (workspaceSlug: string) => Promise<import('@profer/shared').WorkspaceSkillOverridesFile>
+  }
+
   // ===== 全局元 Skill（master 库）=====
   skillMaster: {
     list: () => Promise<Array<import('@profer/shared').MasterSkillMeta>>
@@ -1559,6 +1581,9 @@ const electronAPI: ElectronAPI = {
   openAgentBrowser: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_BROWSER, sessionId)
   },
+  setAgentBrowserForeground: (sessionId: string | null) => {
+    ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_FOREGROUND, sessionId)
+  },
   listAgentBrowserTabs: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_BROWSER_TABS, sessionId),
   createAgentBrowserTab: (input: import('@profer/shared').BrowserCreateTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_BROWSER_TAB, input),
   selectAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SELECT_BROWSER_TAB, input),
@@ -1581,9 +1606,6 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, payload: import('@profer/shared').BrowserDownloadBlockedEvent) => callback(payload)
     ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
     return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
-  },
-  setAgentBrowserForeground: (sessionId: string | null) => {
-    ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_FOREGROUND, sessionId)
   },
   hideAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.HIDE_BROWSER, sessionId),
   closeAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLOSE_BROWSER, sessionId),
@@ -2042,9 +2064,22 @@ const electronAPI: ElectronAPI = {
   },
 
   // Agent 预设
-  listAgentPresets: (workspaceSlug?: string) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS, workspaceSlug)
+  listAgentPresets: (workspaceSlug?: string, includeInactiveGlobal?: boolean) => {
+    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS, workspaceSlug, includeInactiveGlobal)
   },
+  listGlobalAgentPresets: () => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.LIST_GLOBAL_PRESETS),
+  createGlobalAgentPreset: (input: AgentPresetCreateInput) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.CREATE_GLOBAL_PRESET, input),
+  promoteWorkspacePresetToGlobal: (workspaceSlug: string, presetId: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.PROMOTE_WORKSPACE_PRESET_TO_GLOBAL, workspaceSlug, presetId, targetWorkspaceSlugs, keepWorkspaceCopy),
+  updateGlobalAgentPreset: (presetId: string, updates: AgentPresetUpdateInput) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.UPDATE_GLOBAL_PRESET, presetId, updates),
+  getPresetReferenceReport: (reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.GET_REFERENCE_REPORT, reference),
+  copyPresetToWorkspace: (reference: PresetReference, workspaceSlug: string, name?: string) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.COPY_TO_WORKSPACE, reference, workspaceSlug, name),
+  deleteGlobalAgentPreset: (reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.DELETE_GLOBAL_PRESET, reference),
+  setDefaultAgentPresetReference: (workspaceSlug: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_REFERENCE, workspaceSlug, reference),
+  enableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.ENABLE_GLOBAL_IN_WORKSPACE, workspaceSlug, reference),
+  disableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.DISABLE_GLOBAL_IN_WORKSPACE, workspaceSlug, reference),
+  setWorkspacePresetEnabled: (workspaceSlug: string, presetId: string, enabled: boolean) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.SET_WORKSPACE_ENABLED, workspaceSlug, presetId, enabled),
+  rebindAgentSessionPresetReference: (sessionId: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_SESSION_REFERENCE, sessionId, reference),
+  rebindAutomationPresetReference: (automationId: string, reference: PresetReference | null) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_AUTOMATION_REFERENCE, automationId, reference),
 
   getDefaultAgentPreset: (workspaceSlug?: string) => {
     return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.GET_DEFAULT_PRESET, workspaceSlug)
@@ -2096,14 +2131,6 @@ const electronAPI: ElectronAPI = {
 
   getAgentSessionSDKMessages: (id: string, opts?: { tail?: number; before?: number }) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id, opts)
-  },
-
-  listAgentImageGenerations: (sessionId: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_IMAGE_GENERATIONS, sessionId)
-  },
-
-  retryAgentImageGeneration: (input: import('@profer/shared').RetryAgentImageGenerationInput) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RETRY_IMAGE_GENERATION, input)
   },
 
   restoreActiveAgentStreams: () => {
@@ -2266,12 +2293,17 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SKILLS_DIR, workspaceSlug)
   },
 
+  createWorkspaceSkill: (workspaceSlug: string, skillSlug: string, name: string, description: string, content: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SKILL, workspaceSlug, skillSlug, name, description, content)
+  },
+  promoteWorkspaceSkillToGlobal: (workspaceSlug: string, skillSlug: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PROMOTE_SKILL_TO_GLOBAL, workspaceSlug, skillSlug, targetWorkspaceSlugs, keepWorkspaceCopy),
+
   deleteWorkspaceSkill: (workspaceSlug: string, skillSlug: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_SKILL, workspaceSlug, skillSlug)
   },
 
-  toggleWorkspaceSkill: (workspaceSlug: string, skillSlug: string, enabled: boolean) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_SKILL, workspaceSlug, skillSlug, enabled)
+  toggleWorkspaceSkill: (workspaceSlug: string, skillSlug: string, enabled: boolean, sourceSkillId?: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_SKILL, workspaceSlug, skillSlug, enabled, sourceSkillId)
   },
 
   getOtherWorkspaceSkills: (currentSlug: string) => {
@@ -2510,14 +2542,6 @@ const electronAPI: ElectronAPI = {
 
   getGraphSummary: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY, sessionId)
-  },
-
-  getPiHarnessSnapshot: (sessionId: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_HARNESS_SNAPSHOT, sessionId)
-  },
-
-  continuePiHarnessCandidate: (input: import('@profer/shared').PiHarnessManualContinueInput) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CONTINUE_PI_HARNESS_CANDIDATE, input)
   },
 
   appendGraphEvent: (sessionId: string, event: import('@profer/project-core').GraphEvent) => {
@@ -2806,7 +2830,6 @@ const electronAPI: ElectronAPI = {
   },
 
   // ===== Lark 用户云端能力 =====
-
   getLarkCliStatus: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.GET_STATUS),
   refreshLarkCliStatus: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.REFRESH_STATUS),
   installLarkCli: () => ipcRenderer.invoke(LARK_IPC_CHANNELS.INSTALL_CLI),
@@ -3399,6 +3422,23 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.INSTALL_TEAM_SKILL, input),
     checkForUpdates: (workspaceSlug: string) =>
       ipcRenderer.invoke(SKILL_MARKETPLACE_IPC_CHANNELS.CHECK_FOR_UPDATES, workspaceSlug),
+  },
+
+  // ===== 全局 Skill 体系 =====
+  globalSkill: {
+    list: (workspaceSlug?: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.LIST, workspaceSlug),
+    read: (skillId: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.READ, skillId),
+    readWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.READ_WORKSPACE_COPY, workspaceSlug, workspaceSkillId),
+    saveWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string, content: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.SAVE_WORKSPACE_COPY, workspaceSlug, workspaceSkillId, content),
+    save: (skillId: string, content: string, workspaceSlug: string | undefined, scope: 'global' | 'workspace') => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.SAVE, skillId, content, workspaceSlug ?? '', scope),
+    copyToUser: (skillId: string, slug?: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_USER, skillId, slug),
+    createUser: (slug: string, name: string, description: string, content: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, slug, name, description, content),
+    copyToWorkspace: (skillId: string, workspaceSlug: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_WORKSPACE, skillId, workspaceSlug),
+    getDeleteBlockers: (skillId: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.GET_DELETE_BLOCKERS, skillId),
+    deleteUser: (skillId: string, confirmationToken?: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.DELETE_USER, skillId, confirmationToken),
+    setEnabled: (workspaceSlug: string, skillId: string, enabled: boolean) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.SET_ENABLED, workspaceSlug, skillId, enabled),
+    restore: (workspaceSlug: string, skillId: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.RESTORE, workspaceSlug, skillId),
+    getOverrides: (workspaceSlug: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.GET_OVERRIDES, workspaceSlug),
   },
 
   // ===== 全局元 Skill（master 库）=====

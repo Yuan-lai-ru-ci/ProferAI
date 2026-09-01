@@ -21,23 +21,27 @@ interface SkillCardProps {
   /** 团队工作区时：发布到团队市场 */
   onPublish?: () => void
   publishing?: boolean
+  /** 是否允许打开详情；全局/元 Skill 在工作区页面同样可查看。 */
+  interactive?: boolean
+  onPromote?: () => void
 }
 
-export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate, onPublish, publishing }: SkillCardProps): React.ReactElement {
+export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate, onPublish, publishing, interactive = true, onPromote }: SkillCardProps): React.ReactElement {
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : -1}
+      onClick={interactive ? onOpen : undefined}
+      onKeyDown={interactive ? (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           onOpen()
         }
-      }}
+      } : undefined}
       className={cn(
         'group relative flex h-full flex-col gap-3 rounded-xl border border-border/60 bg-content-area p-4 text-left transition-all cursor-pointer',
         'hover:border-border hover:shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        !interactive && 'cursor-default hover:border-border/60 hover:shadow-none',
         !skill.enabled && 'opacity-55',
       )}
     >
@@ -73,6 +77,8 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
           <span className="flex items-center gap-1 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
             <ShieldCheck size={12} /> Profer 内置
           </span>
+        ) : skill.sourceSkillType === 'user-global' ? (
+          <span className="truncate rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">全局 Skill</span>
         ) : skill.importSource ? (
           <span className="truncate rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
             来自 {skill.importSource.sourceWorkspaceName}
@@ -115,7 +121,10 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
             <TooltipContent side="top">发布到团队市场</TooltipContent>
           </Tooltip>
         )}
-        {!skill.hasUpdate && skill.importSource && !onPublish && (
+        {onPromote && (
+          <button type="button" onClick={(event) => { event.stopPropagation(); onPromote() }} className="ml-auto rounded-md bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary hover:bg-primary/20">提升为全局</button>
+        )}
+        {!onPromote && !skill.hasUpdate && skill.importSource && !onPublish && (
           <ArrowDownToLine size={12} className="ml-auto text-muted-foreground/40" />
         )}
       </div>
