@@ -72,6 +72,28 @@ const BUILTIN_FALLBACK: InstallerManifest = {
       sizeBytes: 28000000,
       filename: 'node-v22.13.1-arm64.msi',
     },
+    {
+      id: 'nodejs',
+      platform: 'darwin',
+      arch: 'arm64',
+      version: '22.13.1',
+      downloadUrl: '',
+      fallbackUrl: 'https://nodejs.org/dist/v22.13.1/node-v22.13.1.pkg',
+      sha256: '',
+      sizeBytes: 45000000,
+      filename: 'node-v22.13.1.pkg',
+    },
+    {
+      id: 'nodejs',
+      platform: 'darwin',
+      arch: 'x64',
+      version: '22.13.1',
+      downloadUrl: '',
+      fallbackUrl: 'https://nodejs.org/dist/v22.13.1/node-v22.13.1.pkg',
+      sha256: '',
+      sizeBytes: 45000000,
+      filename: 'node-v22.13.1.pkg',
+    },
   ],
 }
 
@@ -100,9 +122,18 @@ export async function fetchInstallerManifest(force = false): Promise<InstallerMa
       throw new Error('Manifest format invalid')
     }
 
-    cache = { data, timestamp: Date.now() }
-    console.log(`[Installer Manifest] 远程清单获取成功，共 ${data.installers.length} 项`)
-    return data
+    // 远程清单可能先只覆盖 Windows；补齐本地平台的官方 fallback，
+    // 避免“接口请求成功但 macOS 没有可下载条目”把按钮变成不可用状态。
+    const remoteKeys = new Set(data.installers.map((source) => `${source.id}:${source.platform}:${source.arch}`))
+    const mergedData: InstallerManifest = {
+      installers: [
+        ...data.installers,
+        ...BUILTIN_FALLBACK.installers.filter((source) => !remoteKeys.has(`${source.id}:${source.platform}:${source.arch}`)),
+      ],
+    }
+    cache = { data: mergedData, timestamp: Date.now() }
+    console.log(`[Installer Manifest] 远程清单获取成功，共 ${data.installers.length} 项，补齐 ${mergedData.installers.length - data.installers.length} 项本地 fallback`)
+    return mergedData
   } catch (error) {
     console.warn(
       `[Installer Manifest] 远程清单获取失败，降级到内置 fallback:`,
@@ -120,6 +151,7 @@ export function findInstallerSource(
   manifest: InstallerManifest,
   id: string,
   arch: 'x64' | 'arm64',
+  platform: InstallerSource['platform'] = process.platform as InstallerSource['platform'],
 ): InstallerSource | undefined {
-  return manifest.installers.find((s) => s.id === id && s.arch === arch)
+  return manifest.installers.find((s) => s.id === id && s.platform === platform && s.arch === arch)
 }

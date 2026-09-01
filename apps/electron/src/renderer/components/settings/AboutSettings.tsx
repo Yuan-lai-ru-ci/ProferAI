@@ -240,6 +240,8 @@ function EnvironmentCard(): React.ReactElement {
   }
 
   // Node.js 检测状态
+  const isMac = window.electronAPI.getPlatformInfo().platform === 'darwin'
+
   const nodejsStatus = !result
     ? 'checking'
     : result.nodejs.installed && result.nodejs.meetsMinimum
@@ -288,10 +290,14 @@ function EnvironmentCard(): React.ReactElement {
           status={nodejsStatus}
           version={result?.nodejs.version}
           requirement="推荐 22 LTS，最低 18 LTS"
-          action={{
-            type: 'openExternal',
-            url: result?.nodejs.downloadUrl || 'https://nodejs.org/',
-          }}
+          action={
+            isMac
+              ? { type: 'download', installerId: 'nodejs', labelPrefix: '一键下载' }
+              : {
+                  type: 'openExternal',
+                  url: result?.nodejs.downloadUrl || 'https://nodejs.org/',
+                }
+          }
           statusText={
             result && nodejsStatus === 'warning'
               ? `v${result.nodejs.version} (建议升级到 22 LTS 以获得最佳体验)`

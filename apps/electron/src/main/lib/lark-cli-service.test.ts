@@ -4,6 +4,7 @@ import {
   __setLarkCliCommandRunner,
   detectLarkCli,
   getLarkDiagnostics,
+  installLarkCli,
   parseLarkAuthStatus,
   type LarkCliCommandRunner,
 } from './lark-cli-service'
@@ -32,6 +33,24 @@ describe('parseLarkAuthStatus', () => {
     expect(result.state).toBe('reauthorization_required')
     expect(result.userLabel).toBe('Feishu User')
     expect(result.scopeCount).toBe(2)
+  })
+})
+
+describe('installLarkCli', () => {
+  test('uses npm global install so the CLI is discoverable after installation', async () => {
+    const calls: Array<{ command: string; args: string[] }> = []
+    const runner: LarkCliCommandRunner = {
+      exec: async (command, args) => {
+        calls.push({ command, args })
+        if (command === 'which' && args[0] === 'npm') return { stdout: '/usr/local/bin/npm\n', stderr: '' }
+        return { stdout: '', stderr: '' }
+      },
+      spawn: () => { throw new Error('spawn is not used in this test') },
+    }
+    __setLarkCliCommandRunner(runner)
+
+    await expect(installLarkCli()).resolves.toEqual({ success: true, message: 'Official Lark CLI installed' })
+    expect(calls).toContainEqual({ command: '/usr/local/bin/npm', args: ['install', '--global', '@larksuite/cli@latest'] })
   })
 })
 
