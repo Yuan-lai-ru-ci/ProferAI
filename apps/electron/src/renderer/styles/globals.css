@@ -693,11 +693,6 @@
   outline-offset: -2px;
 }
 
-/* macOS 原生 traffic lights 占用左上角约 70px；Tab 从安全区之后开始。 */
-.topbar-macos > .topbar-editorial-scroll {
-  padding-left: 76px;
-}
-
 .window-control-btn:hover {
   background-color: hsl(var(--selected-surface));
   color: hsl(var(--foreground));
@@ -1142,25 +1137,6 @@
   pointer-events: none;
   z-index: 0;
 }
-/* Editorial topbar prototype: a quiet context band, not a row of floating pills. */
-.topbar-editorial .topbar-context-anchor {
-  color: hsl(var(--muted-foreground));
-}
-
-.topbar-editorial .topbar-context-mark {
-  color: hsl(var(--primary));
-  background-color: hsl(var(--primary) / 0.12);
-  box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.18);
-}
-
-.topbar-editorial .topbar-context-product {
-  color: hsl(var(--foreground) / 0.48);
-}
-
-.topbar-editorial .topbar-context-name {
-  color: hsl(var(--foreground) / 0.78);
-}
-
 .topbar-editorial .app-tab-active,
 .topbar-editorial .app-tab-inactive {
   border-radius: 8px;
@@ -1265,32 +1241,49 @@
   border-color: hsl(142 71% 45%);
 }
 
-.topbar-editorial .topbar-action-surface {
-  position: absolute;
+.topbar-editorial .topbar-actions-slot {
+  position: relative;
   isolation: isolate;
+  min-width: max-content;
   padding: 0 8px 0 12px;
-  border: 0;
-  border-radius: 0;
-  /* 主体从左到右保持纯色；左侧过渡由 ::before 延伸到 Tab 上方。 */
+  /* 保持原顶栏的连续关系：操作区本体是右侧实色，渐变只向左外延。 */
   background: hsl(var(--tabbar-surface));
   overflow: visible;
 }
 
-.topbar-editorial .topbar-action-surface::before {
+.topbar-editorial .topbar-actions-slot::before {
   content: '';
   position: absolute;
   z-index: -1;
-  top: -1px;
-  bottom: -1px;
+  top: -4px;
+  bottom: -4px;
   left: -64px;
   width: 64px;
   pointer-events: none;
+  /* 与原顶栏一致：透明端露出 TabBar，靠近操作区时自然融入实色。 */
   background: linear-gradient(
     to left,
     hsl(var(--tabbar-surface)),
     hsl(var(--tabbar-surface) / 0.78) 30%,
     hsl(var(--tabbar-surface) / 0) 100%
   );
+}
+
+.topbar-editorial .topbar-actions-slot::after {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  left: -64px;
+  right: -8px;
+  bottom: -4px;
+  height: 1px;
+  pointer-events: none;
+  background: hsl(var(--surface-border) / 0.8);
+}
+
+.topbar-editorial .topbar-actions-slot > * {
+  position: relative;
+  z-index: 1;
 }
 
 .topbar-editorial .topbar-tool-group {
@@ -1320,7 +1313,7 @@
 }
 
 /* 操作面板是唯一的背景层，窗口按钮组不再在右侧形成第二块内嵌色块。 */
-.topbar-editorial .topbar-action-surface .window-controls {
+.topbar-editorial .topbar-actions-slot .window-controls {
   padding: 0;
   border: 0;
   border-radius: 0;
