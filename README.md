@@ -154,4 +154,4 @@ Profer 基于 [Proma](https://github.com/ErlichLiu/Proma) 开发，社区版采�
 
 ## 🙏 致谢
 
-感谢 [Proma](https://github.com/ErlichLiu/Proma) by Erlich Liu，以及 Shiki、Beautiful Mermaid、Cherry Studio、Lobe Icons、Craft Agents OSS、MemOS 等开源项目。
+感谢 [Proma](https://github.com/ErlichLiu/Proma) by Erlich Liu，以及 Shiki、Beautiful Mermaid、Cherry Studio、Lobe Icons、Craft Agents OSS
