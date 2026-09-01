@@ -11,7 +11,7 @@ function nextLayoutRevision(): number {
   return nextBrowserLayoutRevision
 }
 
-/** WebContentsView 位于 renderer DOM 上方；遮挡它的 portal 必须让原生 frame 暂时隐藏。 */
+/** WebContentsView 位于 renderer DOM 上方；原生 host 只覆盖网页区，遮挡它的 portal 仍需让原生 frame 暂时隐藏。 */
 const APP_OVERLAY_LIFECYCLE_SELECTOR = [
   '[data-profer-intro-overlay]',
   '[data-browser-blocking]',
@@ -72,8 +72,8 @@ function readFrameRadius(frame: HTMLElement): number {
 
 /**
  * Native browser frame 的唯一 renderer 入口。
- * 外层 card 是 frame 的唯一几何来源，工具栏/标签条继续由 DOM 处于 frame 顶部；
- * 原生页面只占 frame 内的 `pageBounds`，不再独立推断或轮询卡片几何。
+ * 外层 card 是唯一几何来源，工具栏/标签条继续由 DOM 处于卡片顶部；
+ * 原生 host 只占 card 内的 `pageBounds`，避免透明原生 View 在 macOS 上覆盖 DOM 交互区。
  */
 export function BrowserViewport({
   sessionId,

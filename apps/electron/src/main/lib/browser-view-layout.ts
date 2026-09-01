@@ -35,6 +35,19 @@ export function hasUsableBrowserBounds(bounds: BrowserViewBounds): boolean {
   return bounds.width > 4 && bounds.height > 4
 }
 
+/** 将 frame 内的网页区域转换为 contentView 直接子 View 的绝对边界。 */
+export function resolveBrowserPageHostBounds(
+  viewportBounds: BrowserViewBounds,
+  pageBounds: BrowserViewBounds,
+): BrowserViewBounds {
+  return {
+    x: viewportBounds.x + pageBounds.x,
+    y: viewportBounds.y + pageBounds.y,
+    width: pageBounds.width,
+    height: pageBounds.height,
+  }
+}
+
 export function sameBrowserBounds(left: BrowserViewBounds | undefined, right: BrowserViewBounds): boolean {
   return !!left
     && left.x === right.x

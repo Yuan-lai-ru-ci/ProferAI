@@ -13,7 +13,7 @@ import { buildPromaBrowserUserAgent } from './browser-identity'
 import { assertBrowserScript, buildBrowserDomActionExpression, type BrowserDomActionInput, BUILD_READ_ELEMENT_VALUE_FUNCTION, BUILD_WRITE_ELEMENT_VALUE_FUNCTION, normalizeFilledText } from './browser-script-policy'
 import { getSettings } from './settings-service'
 import { getBrowserHostSurfaceColor } from './titlebar-overlay'
-import { hasUsableBrowserBounds, resolveBrowserViewportLayout, sameBrowserBounds, shouldApplyBrowserLayoutRevision } from './browser-view-layout'
+import { hasUsableBrowserBounds, resolveBrowserPageHostBounds, resolveBrowserViewportLayout, sameBrowserBounds, shouldApplyBrowserLayoutRevision } from './browser-view-layout'
 import { recordHistory } from './browser-start-page-store'
 import {
   BUILD_COLLECT_SCRIPT,
@@ -84,11 +84,13 @@ type BrowserSessionRecord = {
   userOpenedAt: number | null
   lastLayoutRevision: number
   /**
-   * 唯一原生裁切 frame。它只接收 BrowserViewport 发布的 frame/page 两个矩形，
-   * 不再从 DOM 卡片反推边界、圆角或局部坐标。
+   * 唯一原生网页 frame。它只覆盖网页 pageBounds，不覆盖 renderer 的工具栏、标签栏或操作区。
+   * macOS 下透明 View 仍会参与 hit-test，因此不能把它设成整张浏览器卡片大小。
    */
   hostView: View
   lastViewportBounds?: BrowserViewLayout['viewportBounds']
+  lastHostBounds?: BrowserViewLayout['pageBounds']
+  /** WebContentsView 相对于 hostView 的局部边界，始终从 0,0 开始。 */
   lastPageBounds?: BrowserViewLayout['pageBounds']
   lastViewportRadius?: number
   /** 上次布局应用后的实际可见状态；隐藏→显示过渡时强制重绘，避免 WebContentsView 白屏。 */
@@ -524,7 +526,7 @@ export class BrowserController {
       hostView: new View(),
       lastVisible: false,
     }
-    // hostView 仅是原生网页 frame 的裁切 owner；它永不覆盖 renderer 的工具栏或整张卡片。
+    // hostView 只承载网页区域；透明原生 View 也会拦截 macOS 鼠标命中，不能覆盖工具栏和标签栏。
     // 圆角由 BrowserViewport 的固定 frame 契约驱动，不再读取 DOM 的卡片样式。
     record.hostView.setVisible(false)
     this.owner.contentView.addChildView(record.hostView)
@@ -762,25 +764,31 @@ export class BrowserController {
       && hasUsableBrowserBounds(pageBounds)
       && this.owner.isVisible()
     const wasVisible = browserSession.lastVisible
-    const viewportChanged = !sameBrowserBounds(browserSession.lastViewportBounds, viewportBounds)
     const pageChanged = !sameBrowserBounds(browserSession.lastPageBounds, pageBounds)
-    const radius = Math.max(0, Math.round(layout.viewportRadius * zoomFactor))
+    // hostView 是 contentView 的直接子节点，必须把 frame 内的 pageBounds 转为窗口绝对坐标。
+    // 之前 hostView 使用完整 viewportBounds：虽然背景透明，macOS 仍把它当作可命中的原生 View，
+    // 于是它覆盖了浏览器 DOM 工具栏、标签栏和关闭按钮。现在 hostView 的命中范围严格收窄到网页。
+    const hostBounds = resolveBrowserPageHostBounds(viewportBounds, pageBounds)
+    const hostChanged = !sameBrowserBounds(browserSession.lastHostBounds, hostBounds)
 
-    // 隐藏后恢复时强制重写 frame / page bounds，规避 Chromium 不重合成白屏。
-    if (visible && (viewportChanged || !wasVisible)) {
-      browserSession.hostView.setBounds(viewportBounds)
+    // 隐藏后恢复时强制重写网页 frame / page bounds，规避 Chromium 不重合成白屏。
+    if (visible && (hostChanged || !wasVisible)) {
+      browserSession.hostView.setBounds(hostBounds)
+      browserSession.lastHostBounds = { ...hostBounds }
       browserSession.lastViewportBounds = { ...viewportBounds }
     }
-    if (radius !== browserSession.lastViewportRadius) {
-      browserSession.hostView.setBorderRadius(radius)
-      browserSession.lastViewportRadius = radius
+    // hostView 不再覆盖整张卡片，不能继续使用整卡片圆角；DOM 卡片负责外层圆角和裁切。
+    if (browserSession.lastViewportRadius !== 0) {
+      browserSession.hostView.setBorderRadius(0)
+      browserSession.lastViewportRadius = 0
     }
     for (const other of browserSession.tabs.values()) {
       const shouldBeVisible = visible && other.tabId === tab.tabId
       if (other.view.getVisible() !== shouldBeVisible) other.view.setVisible(shouldBeVisible)
     }
     if (visible && (pageChanged || !wasVisible)) {
-      tab.view.setBounds(pageBounds)
+      // WebContentsView 是 hostView 的子节点，边界必须使用网页区域的局部坐标。
+      tab.view.setBounds({ x: 0, y: 0, width: pageBounds.width, height: pageBounds.height })
       browserSession.lastPageBounds = { ...pageBounds }
     }
     if (visible) this.hideOtherBrowserSessions(layout.sessionId)
@@ -799,7 +807,14 @@ export class BrowserController {
     for (const other of browserSession.tabs.values()) {
       if (other.tabId !== tab.tabId) other.view.setVisible(false)
     }
-    if (browserSession.lastPageBounds) tab.view.setBounds(browserSession.lastPageBounds)
+    if (browserSession.lastPageBounds) {
+      tab.view.setBounds({
+        x: 0,
+        y: 0,
+        width: browserSession.lastPageBounds.width,
+        height: browserSession.lastPageBounds.height,
+      })
+    }
     tab.view.webContents.setZoomFactor(tab.zoomFactor)
     const visible = browserSession.sessionId === this.foregroundSessionId
       && !!browserSession.lastViewportBounds
