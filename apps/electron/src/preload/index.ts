@@ -153,6 +153,9 @@ import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNEL
  * 暴露给渲染进程的 API 接口定义
  */
 export interface ElectronAPI {
+  /** 获取宿主操作系统和 CPU 架构，供安装包选择使用 */
+  getPlatformInfo: () => { platform: NodeJS.Platform; arch: string }
+
   // ===== 运行时相关 =====
 
   /**
@@ -1525,6 +1528,8 @@ interface MigrationExportResult {
 let _settingsPromise: Promise<AppSettings> | null = null
 
 const electronAPI: ElectronAPI = {
+  getPlatformInfo: () => ({ platform: process.platform, arch: process.arch }),
+
   // 运行时
   getRuntimeStatus: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_RUNTIME_STATUS)

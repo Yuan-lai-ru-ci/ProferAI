@@ -10,9 +10,11 @@
 """
 from PIL import Image
 import os
+from pathlib import Path
 
-SRC = r"D:\profer\Profer-main\apps\electron\resources\icon.png"
-RES = r"D:\profer\Profer-main\tablet-app\android\app\src\main\res"
+ROOT = Path(__file__).resolve().parents[2]
+SRC = ROOT / "apps" / "electron" / "resources" / "icon.png"
+RES = ROOT / "tablet-app" / "android" / "app" / "src" / "main" / "res"
 BG_COLOR = "#000000"
 # 图标内容相对画布的缩放（1.0 = 满幅；0.9 = 整体缩小 10%，四周留黑边）
 SCALE = 0.9

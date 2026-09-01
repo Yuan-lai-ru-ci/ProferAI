@@ -10,12 +10,21 @@ const { spawnSync } = require('node:child_process')
 const appDir = resolve(__dirname, '..')
 const repoRoot = resolve(appDir, '../..')
 const bunStore = join(repoRoot, 'node_modules', '.bun')
-const candidates = existsSync(bunStore)
+const isolatedCandidates = existsSync(bunStore)
   ? readdirSync(bunStore)
     .filter((name) => name.startsWith('electron-builder@'))
     .map((name) => join(bunStore, name, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js'))
     .filter(existsSync)
   : []
+
+// Bun 使用 hoisted linker 或兼容性 backend 安装时，electron-builder 会位于
+// 工作区根 node_modules，而不会出现在 node_modules/.bun 虚拟仓库中。
+// 本地 macOS（尤其是从 NTFS/外置盘迁移到 APFS 后）常采用这种安装方式，
+// 因此保留根目录回退，仍然只接受仓库内已安装的固定版本，不触发网络下载。
+const hoistedCandidate = join(repoRoot, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js')
+const candidates = isolatedCandidates.length > 0
+  ? isolatedCandidates
+  : (existsSync(hoistedCandidate) ? [hoistedCandidate] : [])
 
 if (candidates.length !== 1) {
   throw new Error(`期望在 Bun 虚拟依赖仓库中找到唯一 electron-builder CLI，实际找到 ${candidates.length} 个。请先运行 bun install --frozen-lockfile。`)

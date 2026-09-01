@@ -119,7 +119,7 @@ function CardAction({ action, toolName }: { action: CardAction; toolName: string
   }
 
   if (action.type === 'download') {
-    return <DownloadAction installerId={action.installerId} toolName={toolName} />
+    return <DownloadAction installerId={action.installerId} toolName={toolName} labelPrefix={action.labelPrefix} />
   }
 
   return null
@@ -133,16 +133,17 @@ function formatBytes(bytes: number): string {
 }
 
 function detectArch(): 'x64' | 'arm64' {
-  const ua = navigator.userAgent || ''
-  if (/arm64|aarch64/i.test(ua)) return 'arm64'
-  return 'x64'
+  const platformInfo = window.electronAPI.getPlatformInfo()
+  return platformInfo.arch === 'arm64' ? 'arm64' : 'x64'
 }
 
-function DownloadAction({ installerId, toolName }: { installerId: string; toolName: string }) {
+function DownloadAction({ installerId, toolName, labelPrefix }: { installerId: string; toolName: string; labelPrefix?: string }) {
   const [downloadStates, setDownloadStates] = useAtom(installerDownloadStatesAtom)
   const manifest = useAtomValue(installerManifestAtom)
 
+  const platformInfo = window.electronAPI.getPlatformInfo()
   const arch = detectArch()
+  // IPC 下载 key 仍按 id + arch 生成，保持进度事件和取消下载的既有契约。
   const key = `${installerId}:${arch}`
   const state: InstallerDownloadState = downloadStates[key] ?? { status: 'idle' }
 
@@ -171,7 +172,7 @@ function DownloadAction({ installerId, toolName }: { installerId: string; toolNa
       [key]: { status: 'downloading', downloaded: 0, total: 0, speed: 0 },
     }))
     try {
-      const req: InstallerDownloadRequest = { id: installerId, arch }
+      const req: InstallerDownloadRequest = { id: installerId, arch, platform: platformInfo.platform as 'darwin' | 'linux' | 'win32' }
       const result = await window.electronAPI.downloadInstaller(req)
       setDownloadStates((prev) => ({
         ...prev,
@@ -205,7 +206,7 @@ function DownloadAction({ installerId, toolName }: { installerId: string; toolNa
 
   // 如果 manifest 里完全没有这个 installer（远程拉失败且内置 fallback 也没覆盖），禁用按钮
   const hasSource =
-    manifest?.installers.some((i) => i.id === installerId && i.arch === arch) ?? true
+    manifest?.installers.some((i) => i.id === installerId && i.platform === platformInfo.platform && i.arch === arch) ?? true
 
   if (state.status === 'downloading') {
     const pct =
@@ -280,7 +281,7 @@ function DownloadAction({ installerId, toolName }: { installerId: string; toolNa
       className="mt-1.5 h-7 text-xs"
     >
       <Download className="mr-1.5 h-3 w-3" />
-      一键下载 {toolName}
+      {labelPrefix ?? '一键下载'} {toolName}
     </Button>
   )
 }

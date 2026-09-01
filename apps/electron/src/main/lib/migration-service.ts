@@ -9,7 +9,7 @@
  */
 
 import { existsSync, mkdirSync, cpSync, readFileSync, writeFileSync, readdirSync, rmSync, type Dirent } from 'node:fs'
-import { join, resolve, relative, isAbsolute, sep, dirname, win32, posix } from 'node:path'
+import { join, resolve, relative, dirname, basename, isAbsolute, sep, win32, posix } from 'node:path'
 import { homedir, platform, arch, tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import AdmZip from 'adm-zip'
@@ -32,6 +32,7 @@ import {
   getSettingsPath,
   getUserProfilePath,
   getChatToolsConfigPath,
+  getSdkConfigDir,
 } from './config-paths'
 import { listAgentWorkspaces, getAgentWorkspace, getAllWorkspaceSkills, getWorkspaceMcpConfig } from './agent-workspace-manager'
 import { listChannels, decryptApiKey } from './channel-manager'
@@ -97,6 +98,22 @@ export interface ConfirmImportOptions {
   conflictResolution?: 'overwrite' | 'skip'
 }
 
+interface RuntimeArtifactRef {
+  /** SDK 原生会话 ID。 */
+  sessionId: string
+  /** Profer 会话 ID，用于导入时重新绑定工作区。 */
+  proferSessionId?: string
+  path: string
+  workspaceId?: string
+  sourceProjectKey?: string
+  runtime?: 'claude' | 'pi'
+}
+
+interface RuntimeArtifactsManifest {
+  claudeProjects: RuntimeArtifactRef[]
+  piSessions: RuntimeArtifactRef[]
+}
+
 interface MigrationManifest {
   mode: MigrationMode
   version: string
@@ -108,6 +125,8 @@ interface MigrationManifest {
   workspaceId: string
   workspaceName: string
   workspaceSlug: string
+  /** Claude/Pi 原生会话文件；旧备份没有此字段，导入仍按旧格式兼容。 */
+  runtimeArtifacts?: RuntimeArtifactsManifest
 }
 
 // ─── v2 多工作区类型 ─────────────────────────────────────────────────────────
@@ -129,6 +148,8 @@ interface MigrationManifestV2 {
   sourceArch: string
   sourceHomeDir: string
   workspaces: WorkspaceExportEntry[]
+  /** Claude/Pi 原生会话文件；旧备份没有此字段，导入仍按旧格式兼容。 */
+  runtimeArtifacts?: RuntimeArtifactsManifest
 }
 
 export interface ExportOptionsV2 {
@@ -285,9 +306,16 @@ export async function exportData(options: ExportOptions): Promise<ExportResult> 
 
   const zip = new AdmZip()
 
-  zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8'))
+  if (components.includes('sessions')) {
+    manifest.runtimeArtifacts = _addRuntimeArtifacts(
+      zip,
+      _collectRuntimeArtifactCandidates([workspace], sessionIds),
+      warnings,
+    )
+    _addSessions(zip, workspace, sessionIds, warnings)
+  }
 
-  if (components.includes('sessions')) _addSessions(zip, workspace, sessionIds, warnings)
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8'))
   if (components.includes('skills')) _addSkills(zip, workspace, warnings)
   if (components.includes('mcp')) _addMcp(zip, workspace, mode)
   if (components.includes('channels')) _addChannels(zip, mode)
@@ -342,11 +370,17 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
   }
 
   const zip = new AdmZip()
-  zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8'))
 
   if (components.includes('sessions')) {
+    manifest.runtimeArtifacts = _addRuntimeArtifacts(
+      zip,
+      _collectRuntimeArtifactCandidates(targetWorkspaces.map((t) => t.workspace), sessionIds),
+      warnings,
+    )
     _addSessionsMultiWorkspace(zip, targetWorkspaces.map((t) => t.workspace), sessionIds, warnings)
   }
+
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8'))
 
   if (components.includes('skills')) {
     for (const { workspace, skillSlugs } of targetWorkspaces) {
@@ -370,6 +404,199 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
 
   zip.writeZip(outputPath)
   return buildExportResult(outputPath, warnings)
+}
+
+interface RuntimeArtifactCandidate extends RuntimeArtifactRef {
+  sourcePath: string
+}
+
+function _collectRuntimeArtifactCandidates(
+  workspaces: AgentWorkspace[],
+  filterIds: string[] | undefined,
+): RuntimeArtifactCandidate[] {
+  const workspaceIds = new Set(workspaces.map((w) => w.id))
+  const sessionsIndex = readJsonSafe<{ sessions?: Array<{ id: string; workspaceId?: string; agentRuntime?: string; sdkSessionId?: string }> }>(
+    getAgentSessionsIndexPath(),
+  )
+  const candidates: RuntimeArtifactCandidate[] = []
+  for (const session of sessionsIndex?.sessions ?? []) {
+    if (!workspaceIds.has(session.workspaceId ?? '') || (filterIds && !filterIds.includes(session.id)) || !session.sdkSessionId) continue
+    if (session.agentRuntime === 'pi') {
+      const piPath = _findPiSessionArtifact(session.sdkSessionId)
+      if (piPath) {
+        candidates.push({
+          sessionId: session.sdkSessionId,
+          proferSessionId: session.id,
+          path: `runtime/pi/${session.sdkSessionId}.jsonl`,
+          sourcePath: piPath,
+          workspaceId: session.workspaceId,
+          runtime: 'pi',
+        })
+      }
+    } else {
+      const claudePath = _findClaudeSessionArtifact(session.sdkSessionId)
+      if (claudePath) {
+        candidates.push({
+          sessionId: session.sdkSessionId,
+          proferSessionId: session.id,
+          path: `runtime/claude/${session.sdkSessionId}.jsonl`,
+          sourcePath: claudePath.filePath,
+          sourceProjectKey: claudePath.projectKey,
+          workspaceId: session.workspaceId,
+          runtime: 'claude',
+        })
+      }
+    }
+  }
+  return candidates
+}
+
+function _findPiSessionArtifact(sessionId: string): string | undefined {
+  const root = join(getSdkConfigDir(), 'sessions', 'pi')
+  if (!existsSync(root)) return undefined
+  const scan = (dir: string): string | undefined => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const candidate = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        const nested = scan(candidate)
+        if (nested) return nested
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        try {
+          const first = readFileSync(candidate, 'utf-8').split('\n', 1)[0]
+          const header = first ? JSON.parse(first) as { type?: unknown; id?: unknown } : undefined
+          if (header?.type === 'session' && header.id === sessionId) return candidate
+        } catch { /* 忽略损坏或非 Pi 文件 */ }
+      }
+    }
+    return undefined
+  }
+  return scan(root)
+}
+
+function _findClaudeSessionArtifact(sessionId: string): { filePath: string; projectKey: string } | undefined {
+  const root = join(getSdkConfigDir(), 'projects')
+  if (!existsSync(root)) return undefined
+  for (const project of readdirSync(root, { withFileTypes: true })) {
+    if (!project.isDirectory()) continue
+    const filePath = join(root, project.name, `${sessionId}.jsonl`)
+    if (existsSync(filePath)) return { filePath, projectKey: project.name }
+  }
+  return undefined
+}
+
+function _addRuntimeArtifacts(
+  zip: AdmZip,
+  candidates: RuntimeArtifactCandidate[],
+  warnings: string[],
+): RuntimeArtifactsManifest {
+  const refs: RuntimeArtifactsManifest = { claudeProjects: [], piSessions: [] }
+  for (const candidate of candidates) {
+    if (candidate.runtime === 'pi' || candidate.path.startsWith('runtime/pi/')) {
+      try {
+        zip.addLocalFile(candidate.sourcePath, 'runtime/pi', `${candidate.sessionId}.jsonl`)
+        refs.piSessions.push({ sessionId: candidate.sessionId, proferSessionId: candidate.proferSessionId, path: candidate.path, workspaceId: candidate.workspaceId, runtime: 'pi' })
+      } catch (error) {
+        addExportWarning(warnings, `已跳过 Pi 原生会话: ${candidate.sourcePath} (${formatErrorMessage(error)})`)
+      }
+      continue
+    }
+
+    try {
+      zip.addLocalFile(candidate.sourcePath, 'runtime/claude', `${candidate.sessionId}.jsonl`)
+      refs.claudeProjects.push({
+        sessionId: candidate.sessionId,
+        proferSessionId: candidate.proferSessionId,
+        path: candidate.path,
+        workspaceId: candidate.workspaceId,
+        sourceProjectKey: candidate.sourceProjectKey,
+        runtime: 'claude',
+      })
+    } catch (error) {
+      addExportWarning(warnings, `已跳过 Claude 原生会话: ${candidate.sourcePath} (${formatErrorMessage(error)})`)
+    }
+  }
+  return refs
+}
+
+/** 与 Claude Agent SDK 的项目目录键规则保持一致，包括超长路径的稳定短哈希。 */
+export function __testSdkProjectKey(projectDir: string): string {
+  return _sdkProjectKey(projectDir)
+}
+
+function _sdkProjectKey(projectDir: string): string {
+  const sanitized = projectDir.replace(/[^a-zA-Z0-9]/g, '-')
+  if (sanitized.length <= 200) return sanitized
+  let hash = 0
+  for (let i = 0; i < projectDir.length; i++) hash = (hash * 31 + projectDir.charCodeAt(i)) | 0
+  return `${sanitized.slice(0, 200)}-${Math.abs(hash).toString(36)}`
+}
+
+/** 导入新版本运行时的 Claude/Pi 原生会话文件；旧备份没有该字段时安全空操作。 */
+function _importRuntimeArtifacts(
+  tempDir: string,
+  artifacts: RuntimeArtifactsManifest | undefined,
+  wsIdMap: Map<string, AgentWorkspace>,
+): Map<string, string> {
+  const piSessionFiles = new Map<string, string>()
+  if (!artifacts) return piSessionFiles
+
+  const findTarget = (ref: RuntimeArtifactRef): AgentWorkspace | undefined => {
+    const mapped = ref.workspaceId ? wsIdMap.get(ref.workspaceId) : undefined
+    return mapped ?? [...wsIdMap.values()][0]
+  }
+
+  for (const ref of [...artifacts.claudeProjects, ...artifacts.piSessions]) {
+    if (!ref.proferSessionId) continue
+    const target = findTarget(ref)
+    if (!target) continue
+    const isPi = ref.runtime === 'pi' || artifacts.piSessions.includes(ref)
+    const sourcePath = join(tempDir, isPi ? 'runtime/pi' : 'runtime/claude', basename(ref.path))
+    if (!existsSync(sourcePath)) continue
+
+    if (isPi) {
+      const sessionCwd = getAgentSessionWorkspacePath(target.slug, ref.proferSessionId)
+      const destination = join(getSdkConfigDir(), 'sessions', 'pi', basename(ref.path))
+      mkdirSync(dirname(destination), { recursive: true })
+      if (!existsSync(destination)) {
+        cpSync(sourcePath, destination)
+        _rewriteRuntimeCwd(destination, sessionCwd)
+      }
+      piSessionFiles.set(ref.sessionId, destination)
+    } else {
+      const sessionCwd = getAgentSessionWorkspacePath(target.slug, ref.proferSessionId)
+      const destination = join(getSdkConfigDir(), 'projects', _sdkProjectKey(sessionCwd), `${ref.sessionId}.jsonl`)
+      mkdirSync(dirname(destination), { recursive: true })
+      if (!existsSync(destination)) {
+        cpSync(sourcePath, destination)
+        // SDK 的历史文件可能记录旧 cwd；新 Profer 会话的 cwd 由工作区映射决定。
+        // 仅替换 JSONL 中的 cwd 字段，避免恢复后继续读写源机器路径。
+        _rewriteRuntimeCwd(destination, sessionCwd)
+      }
+    }
+  }
+  return piSessionFiles
+}
+
+export function __testRewriteRuntimeCwd(filePath: string, cwd: string): void {
+  _rewriteRuntimeCwd(filePath, cwd)
+}
+
+function _rewriteRuntimeCwd(filePath: string, cwd: string): void {
+  try {
+    const lines = readFileSync(filePath, 'utf-8').split('\n')
+    const rewritten = lines.map((line) => {
+      try {
+        const value = JSON.parse(line) as Record<string, unknown>
+        if (value && typeof value === 'object' && 'cwd' in value) value.cwd = cwd
+        return JSON.stringify(value)
+      } catch {
+        return line
+      }
+    }).join('\n')
+    writeFileSync(filePath, rewritten, 'utf-8')
+  } catch {
+    // 原生 artifact 已经复制成功；cwd 修正失败不阻断整个备份导入。
+  }
 }
 
 function _addSessions(zip: AdmZip, workspace: AgentWorkspace, filterIds: string[] | undefined, warnings: string[]) {
@@ -822,7 +1049,13 @@ export async function confirmImport(options: ConfirmImportOptions | ConfirmImpor
     if (!targetWorkspace) throw new Error('无法确定目标工作区')
 
     if (manifest.components.includes('sessions')) {
-      await _importSessions(tempDir, targetWorkspace)
+      const v1Manifest = manifest as MigrationManifest
+      const runtimeSessionFiles = await _importRuntimeArtifacts(
+        tempDir,
+        v1Manifest.runtimeArtifacts,
+        new Map([[v1Manifest.workspaceId, targetWorkspace]]),
+      )
+      await _importSessions(tempDir, targetWorkspace, runtimeSessionFiles)
     }
     if (manifest.components.includes('skills')) {
       _importSkills(tempDir, targetWorkspace, overwrite)
@@ -907,7 +1140,8 @@ async function _confirmImportV2(options: ConfirmImportOptionsV2): Promise<{ succ
       const resolved = resolvedMappings.find((r) => r.sourceSlug === wsEntry.workspaceSlug)
       if (resolved) wsIdMap.set(wsEntry.workspaceId, resolved.target)
     }
-    await _importSessionsV2(tempDir, wsIdMap, resolvedMappings[0]!.target)
+    const runtimeSessionFiles = await _importRuntimeArtifacts(tempDir, v2Manifest.runtimeArtifacts, wsIdMap)
+    await _importSessionsV2(tempDir, wsIdMap, resolvedMappings[0]!.target, runtimeSessionFiles)
   }
   if (v2Manifest.components.includes('channels')) {
     _importChannels(tempDir, v2Manifest.mode)
@@ -922,7 +1156,11 @@ async function _confirmImportV2(options: ConfirmImportOptionsV2): Promise<{ succ
   return { success: true }
 }
 
-async function _importSessions(tempDir: string, targetWorkspace: AgentWorkspace) {
+async function _importSessions(
+  tempDir: string,
+  targetWorkspace: AgentWorkspace,
+  runtimeSessionFiles: Map<string, string> = new Map(),
+) {
   // Agent 会话
   const agentDir = join(tempDir, 'sessions/agent')
   const agentSessionsDir = getAgentSessionsDir()
@@ -940,14 +1178,18 @@ async function _importSessions(tempDir: string, targetWorkspace: AgentWorkspace)
   // Agent sessions index 合并
   const importedIndexPath = join(tempDir, 'sessions/agent-sessions-index.json')
   if (existsSync(importedIndexPath)) {
-    const imported = readJsonSafe<{ sessions: Array<{ id: string; workspaceId: string }> }>(importedIndexPath)
+    const imported = readJsonSafe<{ sessions: Array<{ id: string; workspaceId: string; sdkSessionId?: string; agentRuntime?: string }> }>(importedIndexPath)
     const currentIndexPath = getAgentSessionsIndexPath()
     const current = readJsonSafe<{ version: number; sessions: Array<Record<string, unknown>> }>(currentIndexPath) ?? { version: 1, sessions: [] }
     const currentIds = new Set(current.sessions.map((s) => s['id']))
 
     for (const s of imported?.sessions ?? []) {
       if (!currentIds.has(s.id)) {
-        current.sessions.push({ ...s, workspaceId: targetWorkspace.id })
+        current.sessions.push({
+          ...s,
+          workspaceId: targetWorkspace.id,
+          ...(s.agentRuntime === 'pi' ? { piSessionFile: s.sdkSessionId ? runtimeSessionFiles.get(s.sdkSessionId) : undefined } : {}),
+        })
       }
     }
     writeFileSync(currentIndexPath, JSON.stringify(current, null, 2), 'utf-8')
@@ -1293,6 +1535,7 @@ async function _importSessionsV2(
   tempDir: string,
   wsIdMap: Map<string, AgentWorkspace>,
   fallbackWorkspace: AgentWorkspace,
+  runtimeSessionFiles: Map<string, string> = new Map(),
 ) {
   const agentDir = join(tempDir, 'sessions/agent')
   const agentSessionsDir = getAgentSessionsDir()
@@ -1308,7 +1551,7 @@ async function _importSessionsV2(
 
   const importedIndexPath = join(tempDir, 'sessions/agent-sessions-index.json')
   if (existsSync(importedIndexPath)) {
-    const imported = readJsonSafe<{ sessions: Array<{ id: string; workspaceId: string }> }>(importedIndexPath)
+    const imported = readJsonSafe<{ sessions: Array<{ id: string; workspaceId: string; sdkSessionId?: string; agentRuntime?: string }> }>(importedIndexPath)
     const currentIndexPath = getAgentSessionsIndexPath()
     const current = readJsonSafe<{ version: number; sessions: Array<Record<string, unknown>> }>(currentIndexPath) ?? { version: 1, sessions: [] }
     const currentIds = new Set(current.sessions.map((s) => s['id']))
@@ -1316,7 +1559,11 @@ async function _importSessionsV2(
     for (const s of imported?.sessions ?? []) {
       if (currentIds.has(s.id)) continue
       const target = wsIdMap.get(s.workspaceId) ?? fallbackWorkspace
-      current.sessions.push({ ...s, workspaceId: target.id })
+      current.sessions.push({
+        ...s,
+        workspaceId: target.id,
+        ...(s.agentRuntime === 'pi' ? { piSessionFile: s.sdkSessionId ? runtimeSessionFiles.get(s.sdkSessionId) : undefined } : {}),
+      })
     }
     writeFileSync(currentIndexPath, JSON.stringify(current, null, 2), 'utf-8')
   }

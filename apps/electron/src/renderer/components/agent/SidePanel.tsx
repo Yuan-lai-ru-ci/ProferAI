@@ -449,7 +449,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     >
       {/* 侧栏顶部是独立的可拖标题带。它必须是实际承载的布局节点（而非盖在
           no-drag 内容上的空 overlay），否则 Electron 在 Windows 的命中区计算会丢弃它。 */}
-      {isOpen && <div className="absolute z-20 top-0 left-0 right-[126px] h-[40px] select-none titlebar-drag-region" />}
+      {isOpen && isWindows && <div className="absolute z-20 top-0 left-0 right-[126px] h-[40px] select-none titlebar-drag-region" />}
       <WindowControlsHost id="right-side-panel" active={isOpen} priority={30} className="absolute right-2 top-1 z-30" />
       {/* 面板内容：everOpened 懒挂载，首次展开才渲染（FileBrowser/文件树等重型 DOM 不会随启动加载）；收起后保留在 DOM（保活，不丢滚动/展开状态） */}
       {everOpened && (

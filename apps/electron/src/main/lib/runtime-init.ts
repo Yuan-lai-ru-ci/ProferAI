@@ -170,10 +170,24 @@ export async function initializeRuntime(options: RuntimeInitOptions = {}): Promi
   // 如果有强制跳过的选项或被要求强制重新检测，跳过缓存逻辑
   const forceRefresh = options.skipEnvLoad || options.skipNodeDetection || options.skipBunDetection || options.skipGitDetection || options.skipShellDetection
 
-  // 热启动：尝试从磁盘缓存恢复（含增量重检缺失工具）
+  // 必须在读取缓存前加载 shell 环境：macOS 打包应用从 Finder/Dock 启动时
+  // PATH 很短；若先用缓存中的“未找到”状态增量重检，会导致 Bun/Node 始终不可见。
+  let envLoaded = false
+  if (!options.skipEnvLoad) {
+    try {
+      const shellEnvResult = await loadShellEnv()
+      envLoaded = shellEnvResult.success
+    } catch (error) {
+      console.error('[运行时初始化] Shell 环境加载失败:', error)
+    }
+  }
+
+  // 热启动：在完整环境中尝试从磁盘缓存恢复（含增量重检缺失工具）
   if (!forceRefresh) {
     const cached = await loadCachedRuntime()
     if (cached) {
+      // 缓存中的值来自旧会话，不能覆盖本次实际加载 shell 环境的结果。
+      cached.envLoaded = envLoaded
       runtimeStatusCache = cached
       isInitialized = true
       console.log(`[运行时初始化] 从缓存恢复完成 (耗时 ${Date.now() - startTime}ms)`)
@@ -182,19 +196,6 @@ export async function initializeRuntime(options: RuntimeInitOptions = {}): Promi
   }
 
   console.log('[运行时初始化] 开始初始化运行时环境...')
-
-  // 1. 加载 Shell 环境
-  let envLoaded = false
-
-  if (!options.skipEnvLoad) {
-    try {
-      const shellEnvResult = await loadShellEnv()
-      envLoaded = shellEnvResult.success
-    } catch (error) {
-      console.error('[运行时初始化] Shell 环境加载失败:', error)
-      envLoaded = false
-    }
-  }
 
   // 2. 检测 Node.js 运行时
   const nodeStatus = options.skipNodeDetection

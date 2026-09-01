@@ -96,6 +96,27 @@ type SkillLoadResult = ReturnType<ResourceLoader['getSkills']>
 const PI_NATIVE_MAX_RETRIES = 8
 const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
 
+type PiRetrySettings = {
+  enabled: boolean
+  maxRetries?: number
+  baseDelayMs?: number
+}
+
+/**
+ * Pi SDK 原生重试按 provider 隔离。
+ *
+ * Ollama 的兼容层可能在一次工具结果续请求失败后再次提交同一份上下文；
+ * 这类重试应交给 Profer 编排层统一判断，否则会绕过 Ollama 特判并在用户看来
+ * "一发就开始重试"。GPT 等其他渠道继续保留 Pi 原生断流重试。
+ */
+export function buildPiRetrySettings(provider: ProviderType): PiRetrySettings {
+  if (provider === 'ollama') return { enabled: false }
+  return {
+    enabled: true,
+    maxRetries: PI_NATIVE_MAX_RETRIES,
+    baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS,
+  }
+}
 
 /** Pi SDK 查询选项（扩展通用 AgentQueryInput） */
 export interface PiAgentQueryOptions extends AgentQueryInput {
@@ -1795,7 +1816,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         // - 自动压缩在上下文达到模型窗口的约 80% 时触发；Pi 以 reserveTokens 表示预留空间。
         compaction: { enabled: true, reserveTokens: autoCompactionReserveTokens },
         // Continue the same transcript after transient failures so completed tools are not replayed.
-        retry: { enabled: true, maxRetries: PI_NATIVE_MAX_RETRIES, baseDelayMs: PI_NATIVE_RETRY_BASE_DELAY_MS },
+        // Ollama 由 buildPiRetrySettings 单独关闭 native retry，避免兼容层重复提交工具上下文。
+        retry: buildPiRetrySettings(input.provider),
         ...connectionSettings,
       })
       const openAIReasoningProfile = (input.provider === 'openai-codex' || input.provider === 'xai' || input.provider === 'openai-responses')

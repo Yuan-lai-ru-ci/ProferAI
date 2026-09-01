@@ -211,9 +211,19 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
   }
 
   const pathKey = getPathKey(processEnv)
+  // Pi 的每次 Bash 调用通过 runtimeEnv 合并环境；不能只依赖主进程的 PATH。
+  // 将本次已验证的 Bun 目录明确注入，保证并行会话共享同一可用运行时。
+  const runtimeBunDir = options.runtimeStatus?.bun.available && options.runtimeStatus.bun.path
+    ? dirnameForPlatform(options.runtimeStatus.bun.path, platform)
+    : undefined
   const enhancedPath = prependPathEntry(
-    processEnv[pathKey],
-    bundledCliPath ? dirnameForPlatform(bundledCliPath, platform) : undefined,
+    prependPathEntry(
+      processEnv[pathKey],
+      bundledCliPath ? dirnameForPlatform(bundledCliPath, platform) : undefined,
+      pathDelimiter,
+      platform,
+    ),
+    runtimeBunDir,
     pathDelimiter,
     platform,
   )

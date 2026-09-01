@@ -1,3 +1,5 @@
+import type { Platform } from './runtime'
+
 /**
  * 第三方安装包（Git、Node.js 等）相关类型
  *
@@ -13,8 +15,8 @@
 export interface InstallerSource {
   /** 工具 ID，如 'git-for-windows' / 'nodejs' */
   id: string
-  /** 平台：目前只支持 'win32' */
-  platform: 'win32'
+  /** 目标操作系统平台 */
+  platform: Platform
   /** CPU 架构 */
   arch: 'x64' | 'arm64'
   /** 版本号，如 '2.47.1' */
@@ -70,6 +72,8 @@ export interface InstallerDownloadRequest {
   id: string
   /** CPU 架构 */
   arch: 'x64' | 'arm64'
+  /** 目标平台；省略时由主进程按当前系统处理，兼容旧调用方 */
+  platform?: Platform
 }
 
 /**

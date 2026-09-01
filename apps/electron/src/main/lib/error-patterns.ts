@@ -13,7 +13,7 @@
  * 这两种是 provider 连接被 CDN/网关切断的同类瞬时错误，与 ECONNRESET 性质一致。
  */
 export const TRANSIENT_NETWORK_PATTERN =
-  /terminated|socket hang up|ECONNRESET|ETIMEDOUT|ECONNABORTED|EPIPE|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|fetch failed|network error|connection (?:error|closed|reset)|other side closed|AbortError|(?:operation|request) was aborted|(?:request )?timed out|(?:upstream response )?stream was interrupted|stream (?:closed|ended|disconnected) prematurely|premature close|peer closed connection|incomplete chunked read|stream ended before (?:a )?(?:terminal response event|message_stop)/i
+  /terminated|socket hang up|ECONNRESET|ETIMEDOUT|ECONNABORTED|EPIPE|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|fetch failed|network error|connection (?:error|closed|reset)|other side closed|AbortError|(?:operation|request) was aborted|(?:request )?timed out|(?:upstream (?:response )?)?HTTP\/2 stream failed|(?:upstream response )?stream was interrupted|stream (?:closed|ended|disconnected) prematurely|premature close|peer closed connection|incomplete chunked read|stream ended before (?:a )?(?:terminal response event|message_stop)/i
 
 /** 判断错误消息/stderr 是否为瞬时网络错误 */
 export function isTransientNetworkError(message?: string, stderr?: string): boolean {
@@ -61,7 +61,7 @@ const TIMEOUT_PATTERN = /ETIMEDOUT|(?:request )?timed out/i
 
 /** HTTP chunked/SSE 流中断（可立即重试，无需退避等待） */
 const STREAM_INTERRUPTED_PATTERN =
-  /(?:upstream response )?stream was interrupted|stream (?:closed|ended|disconnected) prematurely|premature close|incomplete chunked read|stream ended before (?:a )?(?:terminal response event|message_stop)|peer closed connection/i
+  /(?:upstream (?:response )?)?HTTP\/2 stream failed|(?:upstream response )?stream was interrupted|stream (?:closed|ended|disconnected) prematurely|premature close|incomplete chunked read|stream ended before (?:a )?(?:terminal response event|message_stop)|peer closed connection/i
 
 /**
  * 将瞬时网络错误细分为具体类别
@@ -146,4 +146,15 @@ export function isMalformedResponseError(message?: string, stderr?: string): boo
     (!!message && MALFORMED_RESPONSE_PATTERN.test(message)) ||
     (!!stderr && MALFORMED_RESPONSE_PATTERN.test(stderr))
   )
+}
+
+/**
+ * 判断 Agent 错误是否只是传输层瞬时故障。
+ *
+ * 这类错误可以在当前轮提示用户并触发重试，但不应成为会话内容的一部分；
+ * 否则一次已经恢复的断流会在下次打开会话时继续挂在消息末尾。
+ */
+export function isEphemeralTransportError(errorCode?: string, ...messages: Array<string | undefined>): boolean {
+  if (errorCode === 'network_error') return true
+  return messages.some((message) => isTransientNetworkError(message) || isMalformedResponseError(message))
 }

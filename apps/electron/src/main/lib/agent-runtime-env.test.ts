@@ -17,4 +17,27 @@ describe('Agent runtime CLI PATH', () => {
       'C:\\Program Files\\Git\\bin',
     ].join(';'))
   })
+
+  test('Given detected Bun outside the inherited PATH When building Pi env Then Bun directory is prepended', () => {
+    const result = buildAgentRuntimeEnv({
+      bundledCliPath: '/Applications/Profer.app/Contents/Resources/bin/profer',
+      platform: 'darwin',
+      pathDelimiter: ':',
+      processEnv: { PATH: '/usr/bin:/bin' },
+      runtimeStatus: {
+        node: { available: false, path: null, version: null, error: null },
+        bun: { available: true, path: '/Users/mac/.bun/bin/bun', version: '1.4.0', source: 'system', error: null },
+        git: { available: true, path: '/usr/bin/git', version: '2.50.1', error: null },
+        envLoaded: true,
+        initializedAt: Date.now(),
+      },
+    })
+
+    expect(result.env.PATH).toBe([
+      '/Users/mac/.bun/bin',
+      '/Applications/Profer.app/Contents/Resources/bin',
+      '/usr/bin',
+      '/bin',
+    ].join(':'))
+  })
 })

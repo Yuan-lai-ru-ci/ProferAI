@@ -65,17 +65,30 @@ describe('resolveAgentModelSelection', () => {
     })
   })
 
-  test('rejects a Claude model as the current Pi selection', () => {
+  test('Pi keeps a Claude model as the current selection', () => {
     expect(resolveAgentModelSelection(channels, 'pi', ['claude'], {
       channelId: 'claude',
       modelId: 'claude-sonnet-4-6',
     })).toEqual({
-      channelId: 'openai',
-      modelId: 'gpt-5.5',
+      channelId: 'claude',
+      modelId: 'claude-sonnet-4-6',
     })
   })
 
-  test('returns null when the runtime has no compatible model', () => {
-    expect(resolveAgentModelSelection([channels[0]!], 'pi', ['claude'])).toBeNull()
+  test('Pi falls back to an Anthropic protocol model when no OpenAI model exists', () => {
+    expect(resolveAgentModelSelection([channels[0]!], 'pi', [])).toEqual({
+      channelId: 'claude',
+      modelId: 'claude-sonnet-4-6',
+    })
+  })
+
+  test('Pi keeps the current Claude model selection', () => {
+    expect(resolveAgentModelSelection(channels, 'pi', [], {
+      channelId: 'claude',
+      modelId: 'claude-sonnet-4-6',
+    })).toEqual({
+      channelId: 'claude',
+      modelId: 'claude-sonnet-4-6',
+    })
   })
 })

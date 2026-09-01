@@ -17,7 +17,7 @@ import {
   isNodeJsOkAtom,
 } from '@/atoms/environment'
 import { useAtomValue } from 'jotai'
-import { detectIsWindows } from '@/lib/platform'
+import { detectIsMac, detectIsWindows } from '@/lib/platform'
 
 interface EnvironmentCheckPanelProps {
   /** 首次挂载时是否自动跑一次检测（Onboarding 用），Dialog 场景可设 false */
@@ -33,6 +33,7 @@ export function EnvironmentCheckPanel({
   const nodeOk = useAtomValue(isNodeJsOkAtom)
   const [isChecking, setIsChecking] = React.useState(false)
   const isWindows = React.useMemo(() => detectIsWindows(), [])
+  const isMac = React.useMemo(() => detectIsMac(), [])
 
   const refresh = React.useCallback(async () => {
     setIsChecking(true)
@@ -157,7 +158,7 @@ export function EnvironmentCheckPanel({
           statusText={nodeStatusText}
           action={
             nodeStatus === 'warning'
-              ? isWindows
+              ? isWindows || isMac
                 ? { type: 'download', installerId: 'nodejs' }
                 : { type: 'openExternal', url: 'https://nodejs.org/en/download/' }
               : { type: 'none' }

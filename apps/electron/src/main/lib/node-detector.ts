@@ -7,6 +7,7 @@
 import { execSync, spawnSync } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
+import { homedir } from 'os'
 import type { NodeRuntimeStatus } from '@profer/shared'
 import { getNodeInstallPathFromRegistry } from './windows-env'
 
@@ -25,13 +26,31 @@ function findNodePath(): string | null {
       timeout: 5000,
     })
 
-    const nodePath = result.trim().split('\n')[0]
+    const nodePath = result.trim().split(/\r?\n/)[0]
 
     if (nodePath && existsSync(nodePath)) {
       return nodePath
     }
   } catch {
-    // Node.js 未安装
+    // GUI 应用从 Finder/Dock 启动时可能继承不到用户 Shell 的 PATH，继续检查常见路径。
+  }
+
+  // macOS 上补充检查常见的 Homebrew、版本管理器和官方安装器路径。
+  if (process.platform === 'darwin') {
+    const home = homedir()
+    const commonPaths = [
+      '/opt/homebrew/bin/node',
+      '/usr/local/bin/node',
+      join(home, '.local', 'share', 'mise', 'shims', 'node'),
+      join(home, '.local', 'share', 'mise', 'installs', 'node', 'latest', 'bin', 'node'),
+      join(home, '.volta', 'bin', 'node'),
+      join(home, '.asdf', 'shims', 'node'),
+      join(home, '.nvm', 'current', 'bin', 'node'),
+    ]
+
+    for (const path of commonPaths) {
+      if (existsSync(path)) return path
+    }
   }
 
   // Windows 上额外检查其他安装位置

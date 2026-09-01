@@ -1,7 +1,9 @@
 /** Secure wrapper around the official Lark CLI. OAuth credentials stay in the CLI store. */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
-import { basename } from 'node:path'
 import type { LarkCliOperationResult, LarkCliStatus, LarkDiagnostics, LarkLoginEvent, LarkLoginStartResult } from '@profer/shared'
 
 const execFileAsync = promisify(execFile)
@@ -30,13 +32,17 @@ const defaultRunner: LarkCliCommandRunner = {
       encoding: 'utf8', timeout: timeoutMs, windowsHide: true,
       shell: process.platform === 'win32' && /\.(cmd|bat|ps1)$/i.test(command),
       maxBuffer: 1024 * 1024,
+      env: getCommandEnv(),
     })
     return { stdout: result.stdout, stderr: result.stderr }
   },
   spawn: (command, args) => {
     const isWindowsScript = process.platform === 'win32' && /\.(cmd|bat|ps1)$/i.test(command)
     return spawn(isWindowsScript ? basename(command) : command, args, {
-      windowsHide: true, shell: isWindowsScript, stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: isWindowsScript,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: getCommandEnv(),
     })
   },
 }
@@ -50,12 +56,54 @@ export function __setLarkCliCommandRunner(next: LarkCliCommandRunner | null): vo
 export function __setLarkLoginEventHandler(handler: ((event: LarkLoginEvent) => void) | null): void { loginEventHandler = handler }
 export function __resetLarkCliTestState(): void { disposeLarkCliService() }
 
+function getMacToolDirectories(): string[] {
+  if (process.platform !== 'darwin') return []
+
+  const home = homedir()
+  return [
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    join(home, '.local', 'share', 'mise', 'shims'),
+    join(home, '.local', 'share', 'mise', 'installs', 'node', 'latest', 'bin'),
+    join(home, '.npm-global', 'bin'),
+    join(home, '.bun', 'bin'),
+  ]
+}
+
+function getFallbackCommandPaths(name: string): string[] {
+  return getMacToolDirectories().map((directory) => join(directory, name))
+}
+
+function getCommandEnv(): NodeJS.ProcessEnv {
+  const pathEntries = [...getMacToolDirectories(), process.env.PATH ?? '']
+  return { ...process.env, PATH: [...new Set(pathEntries.filter(Boolean))].join(':') }
+}
+
 async function findCommand(name: string): Promise<string | null> {
   try {
     const { stdout } = await runner.exec(process.platform === 'win32' ? 'where.exe' : 'which', [name], 5_000)
     const candidates = stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-    return (process.platform === 'win32' ? candidates.find((line) => /\.(cmd|exe)$/i.test(line)) : candidates[0]) ?? candidates[0] ?? null
-  } catch { return null }
+    const path = (process.platform === 'win32' ? candidates.find((line) => /\.(cmd|exe)$/i.test(line)) : candidates[0]) ?? candidates[0] ?? null
+    if (path) return path
+  } catch { /* GUI 启动时 PATH 可能尚未包含用户的 Node 安装目录 */ }
+
+  const fallbackPath = getFallbackCommandPaths(name).find((path) => existsSync(path))
+  if (fallbackPath) return fallbackPath
+
+  // npm 的全局 bin 不一定是固定目录（mise、Homebrew、nvm 都可能不同）。
+  // 安装后优先从 npm prefix 解析，避免只依赖 GUI 进程继承的 PATH。
+  if (process.platform === 'darwin' && name === 'lark-cli') {
+    const npmPath = await findCommand('npm')
+    if (npmPath) {
+      try {
+        const { stdout } = await runner.exec(npmPath, ['prefix', '--global'])
+        const globalPath = join(stdout.trim(), 'bin', name)
+        if (existsSync(globalPath)) return globalPath
+      } catch { /* npm prefix 不可用时保留其他检测结果 */ }
+    }
+  }
+
+  return null
 }
 
 async function inspectCommand(name: string): Promise<{ available: boolean; version: string | null; path: string | null }> {
@@ -108,16 +156,27 @@ export async function detectLarkCli(): Promise<LarkCliStatus> {
 }
 
 export async function installLarkCli(): Promise<LarkCliOperationResult> {
-  const npx = await findCommand('npx')
-  if (!npx) return { success: false, message: 'npx unavailable; install Node.js first' }
-  try { await runner.exec(npx, ['@larksuite/cli@latest', 'install'], 5 * 60 * 1000); return { success: true, message: 'Official Lark CLI installed' } }
-  catch (error) { const e = error as { stdout?: string; stderr?: string }; const detail = redactLarkOutput(`${e.stderr ?? ''} ${e.stdout ?? ''}`).trim(); return { success: false, message: detail ? `Install failed: ${detail.slice(0, 300)}` : 'Official Lark CLI installation failed' } }
+  const npm = await findCommand('npm')
+  if (!npm) return { success: false, message: 'npm unavailable; install Node.js first' }
+  try {
+    // 使用全局安装，而不是 `npx ... install`：后者只运行一次安装向导，
+    // 不会可靠地把 lark-cli 放入用户的全局 bin，GUI 启动时尤其容易表现为“安装成功但仍检测不到”。
+    await runner.exec(npm, ['install', '--global', '@larksuite/cli@latest'], 5 * 60 * 1000)
+    return { success: true, message: 'Official Lark CLI installed' }
+  } catch (error) {
+    const e = error as { stdout?: string; stderr?: string }
+    const detail = redactLarkOutput(`${e.stderr ?? ''} ${e.stdout ?? ''}`).trim()
+    return { success: false, message: detail ? `Install failed: ${detail.slice(0, 300)}` : 'Official Lark CLI installation failed' }
+  }
 }
 
 function emitLoginEvent(event: LarkLoginEvent): void { loginEventHandler?.(event) }
-export function startLarkLogin(): LarkLoginStartResult {
+export async function startLarkLogin(): Promise<LarkLoginStartResult> {
   if (loginProcess) return { started: false, authorizationUrl: null, message: 'Login flow already running' }
-  const child = runner.spawn(process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli', ['auth', 'login', '--recommend'])
+  const cliPath = await findCommand('lark-cli')
+  if (!cliPath) return { started: false, authorizationUrl: null, message: 'Lark CLI unavailable; install it first' }
+
+  const child = runner.spawn(cliPath, ['auth', 'login', '--recommend'])
   loginProcess = child
   let output = ''
   const onData = (chunk: Buffer | string) => { output += chunk.toString(); const url = output.match(URL_PATTERN)?.[0]; if (url) emitLoginEvent({ type: 'url', authorizationUrl: url, message: 'Open the authorization URL to finish Lark login' }) }

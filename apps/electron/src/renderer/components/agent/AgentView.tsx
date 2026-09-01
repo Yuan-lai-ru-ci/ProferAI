@@ -2855,7 +2855,11 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         <ModelSelector
           filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
           preferredProtocol={sessionAgentRuntime === 'pi' ? 'openai' : 'anthropic'}
-          strictProtocolFilter
+          // Pi supports both OpenAI and Anthropic wire protocols; preferredProtocol
+          // only controls ordering/labels and must not hide Claude channels.
+          strictProtocolFilter={sessionAgentRuntime !== 'pi'}
+          composerTool
+          tabletMode={tabletMode}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
         />

@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
+import { detectIsWindows } from '@/lib/platform'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { BROWSER_RISK_DISCLAIMER_VERSION } from '@/types/settings'
 import { BrowserViewport } from './BrowserViewport'
@@ -38,6 +39,9 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   // 浏览器实际可见性（统一面板系统计算）。隐藏时（width 0 常驻 DOM）不能把窗口控制按钮
   // 锚定在本面板——会渲染进不可见容器导致按钮消失；应让按钮回落到 TabBar 宿主。
   const browserVisible = useAtomValue(panelVisibilityAtom).browser
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
+  // 只有 Windows 自定义窗口按钮实际存在时，才需要给它们预留右侧空间。
+  const shouldAvoidWindowControls = avoidWindowControls && isWindows
   const [url, setUrl] = React.useState(state?.url ?? '')
   // 用户正在地址栏输入/聚焦时，禁止用主进程回推的 state.url 覆盖，避免被 Agent 导航顶掉输入。
   const urlDirtyRef = React.useRef(false)
@@ -298,8 +302,8 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
   return (
     <div data-browser-native-host className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden rounded-2xl border border-panel-border/70 bg-panel-surface shadow-none titlebar-no-drag">
       {/* 浏览器是最右侧分栏时，窗口按钮成为浏览器顶栏的一部分。 */}
-      <WindowControlsHost id="browser-panel" active={avoidWindowControls && browserVisible} priority={20} className="absolute right-2 top-1 z-10" />
-      <div className={`flex items-center h-[40px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20 ${avoidWindowControls ? 'pr-[126px]' : ''}`}>
+      <WindowControlsHost id="browser-panel" active={shouldAvoidWindowControls && browserVisible} priority={20} className="absolute right-2 top-1 z-10" />
+      <div className={`flex items-center h-[40px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20 ${shouldAvoidWindowControls ? 'pr-[126px]' : ''}`}>
         {sourceLabel && (
           <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[9px] font-medium text-primary">{sourceLabel}</span>
         )}

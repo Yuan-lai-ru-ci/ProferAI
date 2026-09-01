@@ -28,6 +28,7 @@ import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
 import { normalizeSessionPresetId, presetReferenceForId } from './agent-preset-manager'
 import { copySettledPiHarnessEventsForFork } from './pi-harness/pi-harness-store'
 import { forkPiSessionArtifact } from './pi-session-fork'
+import { isEphemeralTransportError } from './error-patterns'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
 // process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）。
@@ -65,6 +66,29 @@ import {
 } from '@profer/shared'
 import { getConversationMessages } from './conversation-manager'
 import { isUserInputMessage } from '@profer/session-core'
+
+interface PersistedAssistantMessage {
+  type?: string
+  role?: string
+  content?: string
+  message?: { content?: Array<{ type?: string; text?: string }> }
+  error?: { message?: string; errorType?: string }
+  errorCode?: string
+  _errorCode?: string
+}
+
+function getPersistedAssistantError(message: unknown): { errorCode?: string; errorText?: string } | null {
+  if (!message || typeof message !== 'object') return null
+  const assistant = message as PersistedAssistantMessage
+  const isAssistantError = assistant.type === 'assistant' && (assistant.error || assistant._errorCode)
+  const isLegacyStatusError = assistant.role === 'status' && assistant.errorCode
+  if (!isAssistantError && !isLegacyStatusError) return null
+  const errorText = assistant.error?.message ?? assistant.message?.content
+    ?.filter((block) => block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text!)
+    .join('\n') ?? assistant.content
+  return { errorCode: assistant._errorCode ?? assistant.error?.errorType ?? assistant.errorCode, errorText }
+}
 import {
   getGraphJsonlPath,
   parseEventsFromJsonl,
@@ -454,7 +478,10 @@ export function getAgentSessionMessages(id: string): AgentMessage[] {
     const messages: AgentMessage[] = []
     for (const line of lines) {
       try {
-        messages.push(JSON.parse(line) as AgentMessage)
+        const parsed = JSON.parse(line) as AgentMessage
+        const assistantError = getPersistedAssistantError(parsed)
+        if (assistantError && isEphemeralTransportError(assistantError.errorCode, assistantError.errorText)) continue
+        messages.push(parsed)
       } catch {
         // 单行损坏不丢整文件：跳过坏行继续解析后续
         console.warn(`[Agent 会话] 跳过损坏的消息行 (${id})`)
@@ -504,12 +531,17 @@ const TRUNCATED_PREVIEW_LENGTH = 2000
  * 超过 256K chars 的消息会被自动截断以防止存储膨胀。
  */
 export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
-  if (messages.length === 0) return
+  const persistentMessages = messages.filter((message) => {
+    if (message.type !== 'assistant') return true
+    const assistantError = getPersistedAssistantError(message)
+    return !assistantError || !isEphemeralTransportError(assistantError.errorCode, assistantError.errorText)
+  })
+  if (persistentMessages.length === 0) return
 
   const filePath = getAgentSessionMessagesPath(id)
 
   try {
-    const lines = messages.map((m) => {
+    const lines = persistentMessages.map((m) => {
       const serialized = JSON.stringify(m)
       if (serialized.length <= MAX_SDK_MESSAGE_LENGTH) return serialized
       const sanitized = JSON.stringify(sanitizeOversizedMessage(m, serialized.length))
@@ -582,9 +614,17 @@ function parseSDKMessageLine(line: string, id: string): SDKMessage | null {
     const parsed = JSON.parse(line)
     // 旧格式检测：AgentMessage 有 `role` 字段，SDKMessage 有 `type` 字段
     if ('role' in parsed && !('type' in parsed)) {
-      return convertLegacyMessage(parsed as AgentMessage)
+      const message = convertLegacyMessage(parsed as AgentMessage)
+      const assistantError = getPersistedAssistantError(message)
+      if (assistantError && isEphemeralTransportError(assistantError.errorCode, assistantError.errorText)) return null
+      return message
     }
-    return parsed as SDKMessage
+    const message = parsed as SDKMessage
+    if (message.type === 'assistant') {
+      const assistantError = getPersistedAssistantError(message)
+      if (assistantError && isEphemeralTransportError(assistantError.errorCode, assistantError.errorText)) return null
+    }
+    return message
   } catch {
     // 单行损坏不丢整文件：跳过坏行继续解析后续
     console.warn(`[Agent 会话] 跳过损坏的 SDKMessage 行 (${id})`)

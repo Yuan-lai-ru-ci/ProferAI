@@ -86,6 +86,7 @@ import type {
   InstallerManifest,
   InstallerDownloadRequest,
   InstallerDownloadResult,
+  InstallerSource,
   ProxyConfig,
   SystemProxyDetectResult,
   GitHubRelease,
@@ -2448,7 +2449,7 @@ export function registerIpcHandlers(): void {
     INSTALLER_IPC_CHANNELS.DOWNLOAD,
     async (event, req: InstallerDownloadRequest): Promise<InstallerDownloadResult> => {
       const manifest = await fetchInstallerManifest()
-      const source = findInstallerSource(manifest, req.id, req.arch)
+      const source = findInstallerSource(manifest, req.id, req.arch, req.platform ?? (process.platform as InstallerSource['platform']))
       if (!source) {
         throw new Error(`未找到安装包：id=${req.id}, arch=${req.arch}`)
       }

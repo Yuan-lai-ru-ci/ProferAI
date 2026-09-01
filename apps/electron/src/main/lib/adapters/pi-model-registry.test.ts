@@ -59,6 +59,25 @@ describe('Pi runtime 智谱团队版认证', () => {
 })
 
 describe('Pi runtime Ollama 双协议注册', () => {
+  test('Given commercial Anthropic relay base URL When buildModel Then keep relay base without duplicating messages path', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-anthropic-relay',
+      prompt: 'hi',
+      apiKey: 'relay-token',
+      provider: 'anthropic',
+      baseUrl: 'https://team.example.com/v1/proxy',
+      model: 'claude-opus-4-8',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.api).toBe('anthropic-messages')
+    expect(result.model.baseUrl).toBe('https://team.example.com/v1/proxy')
+  })
+
   test('Given 本机 Ollama channel When buildModel Then preserve Anthropic messages and root Agent URL', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     const result = await buildModel(sdk, {

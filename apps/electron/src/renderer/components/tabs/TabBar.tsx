@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useLayoutEffect } from 'react'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
-import { Bot, Globe2, MessageSquare, PanelRight, PenLine, StickyNote } from 'lucide-react'
+import { Globe2, PanelRight } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   tabsAtom,
@@ -52,10 +52,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { TabBarItem } from './TabBarItem'
 import { useCloseTab } from '@/hooks/useCloseTab'
-import { detectIsMac, detectIsWindows } from '@/lib/platform'
+import { detectIsWindows } from '@/lib/platform'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { cn } from '@/lib/utils'
 import { replaceAgentSessionInFreshnessOrder } from '@/lib/agent-session-list'
+import { TOPBAR_CONTENT_HEIGHT, TOPBAR_HEIGHT } from './topbar-layout'
 
 export function TabBar({ teamMode = false }: { teamMode?: boolean } = {}): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
@@ -342,7 +343,7 @@ export function TabBar({ teamMode = false }: { teamMode?: boolean } = {}): React
     }
   }, [])
 
-  if (tabs.length === 0) return <div className="topbar-editorial flex h-[40px] items-center tabbar-bg titlebar-drag-region" />
+  if (tabs.length === 0) return <div className="topbar-editorial flex items-center tabbar-bg titlebar-drag-region" style={{ height: TOPBAR_HEIGHT }} />
 
   return (
     <>
@@ -390,49 +391,18 @@ function TabBarInner({
   const setTabs = useSetAtom(tabsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const [isLeaving, setIsLeaving] = React.useState(false)
-  const agentWorkspaces = useAtomValue(agentWorkspacesAtom)
   const enterTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const leaveTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const fadeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const isWindows = React.useMemo(() => detectIsWindows(), [])
-  const isMac = React.useMemo(() => detectIsMac(), [])
 
   // 文件面板切换（全局共享）：活动 Tab 是 Agent 且面板关闭时，在 TabBar 右上角展示"打开"按钮。
-  // 该按钮的 absolute 定位与 DiffPanelTabBar.PanelRightClose 的 mr-1 mb-[3px] 坐标耦合，
-  // 若右侧关闭按钮样式变化，这里需同步调整。
+  // 操作区使用顶栏自身的真实布局列，不依赖右侧面板内部按钮的 margin 或定位。
   const [isPanelOpen, setSidePanelOpen] = useAtom(agentSidePanelOpenAtom)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const seenFilesVersion = useAtomValue(seenFilesVersionAtom)
   const hasFileChanges = filesVersion > seenFilesVersion
   const activeTab = React.useMemo(() => tabs.find((t) => t.id === activeTabId), [tabs, activeTabId])
-  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
-  const currentWorkspace = React.useMemo(
-    () => agentWorkspaces.find((workspace) => workspace.id === currentWorkspaceId),
-    [agentWorkspaces, currentWorkspaceId],
-  )
-  const contextKicker = activeTab?.type === 'chat'
-    ? 'CHAT'
-    : activeTab?.type === 'scratch'
-      ? 'EDITOR'
-      : 'PROFER'
-  const contextLabel = activeTab?.type === 'agent'
-    ? (currentWorkspace?.name ?? '工作台')
-    : activeTab?.type === 'chat'
-      ? '独立对话'
-      : activeTab?.type === 'scratch'
-        ? '草稿'
-        : activeTab?.type === 'tutorial'
-          ? '使用教程'
-          : activeTab?.type === 'preview'
-            ? '文件预览'
-            : '工作台'
-  const contextIcon = activeTab?.type === 'chat'
-    ? <MessageSquare className="size-3" strokeWidth={1.8} />
-    : activeTab?.type === 'scratch'
-      ? <StickyNote className="size-3" strokeWidth={1.8} />
-      : activeTab?.type === 'agent'
-        ? <Bot className="size-3" strokeWidth={1.8} />
-        : <PenLine className="size-3" strokeWidth={1.8} />
   const activeAgentSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
   // 实际可见性（B = 展开意图 A && 窗口足够），由 usePanelAutoLayout 统一计算
   const visibility = useAtomValue(panelVisibilityAtom)
@@ -528,21 +498,6 @@ function TabBarInner({
       badge: hasFileChanges ? <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary animate-pulse" /> : undefined,
     },
   ]
-  // 操作面板宽度由实际可见入口计算。左侧渐变允许 Tab 视觉上自然压到面板下面，
-  // 但滚动容器仍让出面板的实色内容区，避免文字进入右侧按钮区域。
-  const visibleTopBarToolCount = topBarTools.filter((tool) => tool.visible).length
-  const topBarToolGroupWidth = visibleTopBarToolCount > 0
-    ? visibleTopBarToolCount * 32 + (visibleTopBarToolCount - 1) * 4
-    : 0
-  const windowControlsWidth = showTabBarWindowControls ? 108 : 0
-  // 面板自身还包含左右内边距、边框和两组之间的 gap；这些都随内容一起收缩/展开。
-  // CSS 中左右 padding 共 20px、边框共 2px，因此这里与实际 max-content 宽度保持一致。
-  const topBarActionSurfaceWidth = topBarToolGroupWidth
-    + (topBarToolGroupWidth > 0 && windowControlsWidth > 0 ? 4 : 0)
-    + windowControlsWidth
-    + 22
-  const tabScrollRightPadding = topBarActionSurfaceWidth + 4
-
   React.useEffect(() => {
     return registerShortcut('toggle-right-panel', togglePanel)
   }, [togglePanel])
@@ -565,7 +520,12 @@ function TabBarInner({
 
       if (tabCompressionLevel === 'full') {
         fullTabsWidthRef.current = el.scrollWidth
-        if (el.scrollWidth > availableWidth) setTabCompressionLevel('title-only')
+        if (el.scrollWidth > availableWidth) {
+          setTabCompressionLevel('title-only')
+        } else if (el.scrollLeft !== 0) {
+          // 内容恢复到单行可见时清除旧的横向滚动位置，避免左端留下无法解释的空白。
+          el.scrollLeft = 0
+        }
         return
       }
 
@@ -579,7 +539,7 @@ function TabBarInner({
     const observer = new ResizeObserver(measure)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [tabLayoutKey, tabScrollRightPadding, tabCompressionLevel])
+  }, [tabLayoutKey, tabCompressionLevel])
 
   // ?? TabBar ?? ref????? tear-off ????????? TabBar ??
   const barRef = React.useRef<HTMLDivElement>(null)
@@ -745,14 +705,20 @@ function TabBarInner({
     }
   }, [])
 
-  // 新增 tab 时自动滚动到最右
+  // 新增 tab 时自动滚动到最右；其他布局变化回到左端，避免旧 scrollLeft 把首个 Tab 裁掉。
   const prevTabCount = React.useRef(tabs.length)
-  React.useEffect(() => {
-    if (tabs.length > prevTabCount.current && scrollRef.current) {
-      scrollRef.current.scrollTo({ left: scrollRef.current.scrollWidth, behavior: 'smooth' })
+  const prevTabLayoutKey = React.useRef(tabLayoutKey)
+  React.useLayoutEffect(() => {
+    const el = scrollRef.current
+    const layoutChanged = prevTabLayoutKey.current !== tabLayoutKey
+    if (el && tabs.length > prevTabCount.current) {
+      el.scrollTo({ left: el.scrollWidth, behavior: 'smooth' })
+    } else if (el && layoutChanged) {
+      el.scrollLeft = 0
     }
     prevTabCount.current = tabs.length
-  }, [tabs.length])
+    prevTabLayoutKey.current = tabLayoutKey
+  }, [tabLayoutKey, tabs.length])
 
   React.useEffect(() => {
     return () => {
@@ -808,82 +774,48 @@ function TabBarInner({
   }, [])
 
   return (
-    <div ref={barRef} className={cn('topbar-editorial flex items-end h-[40px] tabbar-bg relative titlebar-drag-region', isMac && 'topbar-macos')}>
-      {/* 顶部 TabBar 的空白区域必须保持可拖拽，尤其是 macOS/Windows 自定义标题栏。
-          注意：不要把 titlebar-no-drag 加到下面的整条 flex 容器上，否则标签右侧空白会再次失去拖拽能力。
-          Windows 上背景拖拽层避开右上角 WindowControls 区域（126px），防止 hitmask 重叠。
-          需要交互的单个 Tab 会在 TabBarItem 内部自己声明 titlebar-no-drag。 */}
-      <div className={cn("absolute inset-x-0 top-0 h-2 titlebar-drag-region", isWindows && !previewOwnsWindowControls && "right-[126px]")} />
-
-      {/* Tear-off 提示遮罩：拖出 TabBar 区域时，让 TabBar 下方出现一条高亮分割线 */}
+    <div ref={barRef} className="topbar-editorial relative tabbar-bg" style={{ height: TOPBAR_HEIGHT }}>
+      {/* 只把顶部空白区交给窗口拖拽；32px 内容行由各自插槽明确管理命中区域。 */}
+      <div className={cn('absolute inset-x-0 top-0 h-[4px] titlebar-drag-region', showTabBarWindowControls && 'right-[126px]')} />
       {tearingOff && (
         <div className="pointer-events-none absolute -bottom-px left-0 right-0 h-px bg-primary/60 shadow-[0_0_8px_rgba(0,0,0,0.2)]" />
       )}
 
-      {/* 不显示品牌图标，但保留原品牌区占位，确保草稿及后续 Tab 位置不变化。 */}
-      <div
-        className={cn(
-          'topbar-brand-spacer titlebar-drag-region h-[32px] w-[32px] shrink-0',
-          isMac && 'ml-[76px]',
-        )}
-        aria-hidden="true"
-      />
+      {/* 40px 外框中的 32px 内容行，上下各 4px；Tab 直接从主区左缘开始，操作区使用真实布局列。 */}
+      <div className="topbar-content absolute inset-x-0 top-1/2 z-10 grid w-full -translate-y-1/2 grid-cols-[minmax(0,1fr)_auto] items-center" style={{ height: TOPBAR_CONTENT_HEIGHT }}>
+        <div ref={scrollRef} className="flex h-[32px] min-w-0 items-center gap-1 overflow-x-auto px-1 scrollbar-none titlebar-drag-region">
+          {tabs.map((tab) => (
+            <TabBarItem
+              key={tab.id}
+              id={tab.id}
+              type={tab.type}
+              title={tab.title}
+              workspaceName={tab.type === 'agent' ? workspaceNameBySessionId.get(tab.sessionId) : undefined}
+              hideWorkspaceName={tabCompressionLevel === 'title-only'}
+              hideRenameControl={tabCompressionLevel === 'title-only'}
+              isAutomation={tab.type === 'agent' && automationSessionIds.has(tab.sessionId)}
+              onRename={tab.type === 'agent' ? (title) => handleRenameAgentSession(tab.sessionId, title) : undefined}
+              isActive={tab.id === activeTabId}
+              isStreaming={streamingMap.get(tab.id) ?? 'idle'}
+              isHovered={hoveredTabId === tab.id}
+              isLeaving={hoveredTabId === tab.id && isLeaving}
+              isTearingOff={tearingOff === tab.id}
+              onActivate={() => onActivate(tab.id)}
+              onClose={() => onClose(tab.id)}
+              onMiddleClick={() => onClose(tab.id)}
+              onDragStart={(e) => handleDragStartWithTearOff(tab.id, e)}
+              onHoverEnter={() => handleTabHoverEnter(tab.id)}
+              onHoverLeave={handleTabHoverLeave}
+              onPanelHoverEnter={handlePanelHoverEnter}
+              onPanelHoverLeave={handleTabHoverLeave}
+            />
+          ))}
+        </div>
 
-      <div
-        ref={scrollRef}
-        // 工具组位于同一行的右端并优先保留空间；标签区仅消费剩余宽度，
-        // 宽度不足时横向滚动而非挤压/覆盖右端工具。
-        className="relative z-10 mb-[3px] ml-1 flex h-[32px] self-end items-end flex-1 min-w-0 overflow-x-auto scrollbar-none pr-1 pb-0 gap-1 titlebar-drag-region"
-        // 右侧工具组和 Windows 窗口控制区占用空间由同一份工具定义计算，
-        // 新增或移除按钮时不必再手工维护多组 absolute right 偏移。
-        style={{
-          // 工具组/窗口按钮是覆盖在 TabBar 上的绝对定位层；给滚动区真实让出右侧空间，
-          // 不能只增加 padding，否则标签仍会在按钮下方滚过，形成图 2 的重叠。
-          marginRight: tabScrollRightPadding,
-          paddingRight: 4,
-        }}
-      >
-        {tabs.map((tab) => (
-          <TabBarItem
-            key={tab.id}
-            id={tab.id}
-            type={tab.type}
-            title={tab.title}
-            workspaceName={tab.type === 'agent' ? workspaceNameBySessionId.get(tab.sessionId) : undefined}
-            hideWorkspaceName={tabCompressionLevel === 'title-only'}
-            hideRenameControl={tabCompressionLevel === 'title-only'}
-            isAutomation={tab.type === 'agent' && automationSessionIds.has(tab.sessionId)}
-            onRename={tab.type === 'agent' ? (title) => handleRenameAgentSession(tab.sessionId, title) : undefined}
-            isActive={tab.id === activeTabId}
-            isStreaming={streamingMap.get(tab.id) ?? 'idle'}
-            isHovered={hoveredTabId === tab.id}
-            isLeaving={hoveredTabId === tab.id && isLeaving}
-            isTearingOff={tearingOff === tab.id}
-            onActivate={() => onActivate(tab.id)}
-            onClose={() => onClose(tab.id)}
-            onMiddleClick={() => onClose(tab.id)}
-            onDragStart={(e) => handleDragStartWithTearOff(tab.id, e)}
-            onHoverEnter={() => handleTabHoverEnter(tab.id)}
-            onHoverLeave={handleTabHoverLeave}
-            onPanelHoverEnter={handlePanelHoverEnter}
-            onPanelHoverLeave={handleTabHoverLeave}
-          />
-        ))}
+        <TopBarActions tools={topBarTools} showWindowControls={showTabBarWindowControls}>
+          <WindowControlsHost id="tab-bar" active={showTabBarWindowControls} priority={10} className="shrink-0" />
+        </TopBarActions>
       </div>
-
-      {/* 顶栏入口和 Windows 窗口按钮共用一块弹性操作面板：右侧为纯色，
-          左侧向 Tab 做短渐变；窗口按钮移到右侧面板后，面板会随内容自动缩短。 */}
-      <TopBarActionSurface
-        tools={topBarTools}
-        showWindowControls={showTabBarWindowControls}
-      >
-        <WindowControlsHost
-          id="tab-bar"
-          active={showTabBarWindowControls}
-          priority={10}
-          className="shrink-0"
-        />
-      </TopBarActionSurface>
     </div>
   )
 }
@@ -900,8 +832,8 @@ interface TopBarTool {
   highlighted?: boolean
 }
 
-/** 顶栏右侧的弹性操作面板：工具入口和窗口按钮共享同一块背景。 */
-function TopBarActionSurface({
+/** 顶栏右侧操作插槽：内容参与 Grid 布局，背景由伪元素独立绘制。 */
+function TopBarActions({
   tools,
   showWindowControls,
   children,
@@ -914,9 +846,9 @@ function TopBarActionSurface({
   if (visibleTools.length === 0 && !showWindowControls) return null
 
   return (
-    <div className="topbar-action-surface absolute bottom-[3px] right-0 z-20 flex h-[32px] items-end gap-1 titlebar-drag-region">
+    <div className="topbar-actions-slot relative z-20 flex h-[32px] items-center gap-1 titlebar-no-drag">
       {visibleTools.length > 0 && (
-        <div className="topbar-tool-group flex h-[32px] items-end gap-1" role="toolbar" aria-label="顶栏工具">
+        <div className="topbar-tool-group flex h-[32px] items-center gap-1" role="toolbar" aria-label="顶栏工具">
           {visibleTools.map((tool) => (
             <Tooltip key={tool.id}>
               <TooltipTrigger asChild>
