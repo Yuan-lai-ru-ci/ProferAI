@@ -1246,21 +1246,21 @@
   isolation: isolate;
   min-width: max-content;
   padding: 0 8px 0 12px;
-  /* 保持原顶栏的连续关系：操作区本体是右侧实色，渐变只向左外延。 */
-  background: hsl(var(--tabbar-surface));
+  /* 背景统一由伪元素绘制；父元素保持透明，避免遮住左侧渐变。 */
+  background: transparent;
   overflow: visible;
 }
 
 .topbar-editorial .topbar-actions-slot::before {
   content: '';
   position: absolute;
-  z-index: -1;
+  z-index: 0;
   top: -4px;
   bottom: -4px;
   left: -64px;
-  width: 64px;
+  right: -8px;
   pointer-events: none;
-  /* 与原顶栏一致：透明端露出 TabBar，靠近操作区时自然融入实色。 */
+  /* 单一连续背景：左端透明露出 TabBar，向右渐变并自然进入操作区实色。 */
   background: linear-gradient(
     to left,
     hsl(var(--tabbar-surface)),

@@ -455,6 +455,9 @@ function LarkCloudCapabilitiesSection(): React.ReactElement {
 
   const authLabel = status?.auth.state === 'logged_in' ? '已登录' : status?.auth.state === 'reauthorization_required' ? '需要重新授权' : status?.auth.state === 'logged_out' ? '未登录' : '未知'
   const ready = status?.cli.available && status.cli.version
+  const isMac = window.electronAPI.getPlatformInfo().platform === 'darwin'
+  const nodeMissing = Boolean(status && !status.node.available)
+  const nodeDownloadUrl = 'https://nodejs.org/dist/v22.13.1/node-v22.13.1.pkg'
 
   return (
     <SettingsSection title="飞书云端能力（Lark 用户授权）" description="通过官方 Lark CLI 使用你的用户身份访问云文档、表格和其他云端资源。凭据只保留在 CLI 的安全存储中，Profer 不读取或展示 token。">
@@ -476,7 +479,12 @@ function LarkCloudCapabilitiesSection(): React.ReactElement {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {!ready && <Button size="sm" onClick={() => void install()} disabled={working} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}安装官方 CLI</Button>}
+            {nodeMissing && isMac && (
+              <Button size="sm" variant="outline" onClick={() => openLink(nodeDownloadUrl)} className="gap-1.5">
+                <ExternalLink size={14} />下载 macOS Node.js
+              </Button>
+            )}
+            {!ready && <Button size="sm" onClick={() => void install()} disabled={working || nodeMissing} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}安装官方 CLI</Button>}
             <Button size="sm" onClick={() => void login()} disabled={!ready || working} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}重新登录 / 授权</Button>
             {status?.cli.path && <span className="self-center text-xs text-muted-foreground">路径：{status.cli.path}</span>}
           </div>
