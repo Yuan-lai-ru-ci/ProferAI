@@ -88,6 +88,8 @@ export interface SDKMessageRendererProps {
   showHeader?: boolean
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
+  /** 是否展示模型返回的 thinking 内容；Pi/GPT 当前仅返回不可读的内部概览时关闭。 */
+  showThinking?: boolean
 }
 
 // ===== system 消息：上下文压缩分割线 =====
@@ -555,9 +557,11 @@ export interface AssistantTurnRendererProps {
   stoppedByUser?: boolean
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
+  /** 是否展示模型返回的 thinking 内容；Pi/GPT 当前仅返回不可读的内部概览时关闭。 */
+  showThinking?: boolean
 }
 
-export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubjects, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubjects, basePath, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true }: AssistantTurnRendererProps): React.ReactElement | null {
   const channels = useAtomValue(channelsAtom)
   const processGroupsKeepExpanded = useAtomValue(agentProcessGroupsKeepExpandedAtom)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
@@ -586,6 +590,9 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
           // 流式中保留未闭合标签的既有思考渲染，等待可能随后到达的闭标签。
           unclosedTagAsText: !isStreaming,
         })) {
+          // Pi/OpenAI 只返回内部 reasoning 概览时不把它当作可读思考展示；
+          // 工具调用和最终正文仍按原顺序渲染。
+          if (!showThinking && normalizedBlock.type === 'thinking') continue
           enrichedBlocks.push({ block: normalizedBlock, parentToolUseId: aMsg.parent_tool_use_id })
         }
       }
@@ -709,6 +716,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
         dimmed={hasTextContent && block.type !== 'text'}
         childBlocks={childBlocks}
         isStreaming={isStreaming}
+        showThinking={showThinking}
       />
     )
   }
@@ -823,6 +831,7 @@ export function SDKMessageRenderer({
   basePaths,
   showHeader = true,
   sessionModelId,
+  showThinking = true,
 }: SDKMessageRendererProps): React.ReactElement | null {
   const channels = useAtomValue(channelsAtom)
   const msgType = message.type
@@ -871,6 +880,7 @@ export function SDKMessageRenderer({
                 basePath={basePath}
                 index={i}
                 dimmed={hasTextContent && block.type !== 'text'}
+                showThinking={showThinking}
               />
             ))}
           </div>
@@ -1376,6 +1386,8 @@ export interface MessageGroupRendererProps {
   stoppedByUser?: boolean
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
+  /** 是否展示模型返回的 thinking 内容；Pi/GPT 当前仅返回不可读的内部概览时关闭。 */
+  showThinking?: boolean
 }
 
 /**
@@ -1450,7 +1462,7 @@ export function getGroupPreview(group: MessageGroup): string {
   return texts.join(' ').slice(0, 200)
 }
 
-export function MessageGroupRenderer({ group, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId }: MessageGroupRendererProps): React.ReactElement | null {
+export function MessageGroupRenderer({ group, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
@@ -1488,6 +1500,7 @@ export function MessageGroupRenderer({ group, allMessages, historicalTaskSubject
         isStreaming={isStreaming}
         stoppedByUser={stoppedByUser}
         sessionModelId={sessionModelId}
+        showThinking={showThinking}
       />
     </div>
   )

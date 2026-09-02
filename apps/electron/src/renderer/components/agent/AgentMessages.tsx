@@ -43,7 +43,7 @@ import { mergeMessagesByUuid } from '@/lib/agent-message-merge'
 import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
-import type { AgentEventUsage, RetryAttempt, SDKMessage, AgentImageGenerationCard } from '@profer/shared'
+import type { AgentEventUsage, RetryAttempt, SDKMessage, AgentImageGenerationCard, AgentRuntime } from '@profer/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { AgentImageGenerationCardView } from './AgentImageGenerationCard'
 import { getPendingImageGenerationCards, mergeAgentImageGenerationTimeline } from './agent-image-generation-timeline'
@@ -99,6 +99,8 @@ interface AgentMessagesProps {
   sessionId: string
   /** 用户在前端选择的模型 ID（用于显示渠道配置的 Model Name） */
   sessionModelId?: string
+  /** 当前 Agent runtime；Pi/GPT 的 reasoning 仅作为执行状态，不展示不可读的概览文本。 */
+  agentRuntime?: AgentRuntime
   /** 消息是否已完成首次加载 */
   messagesLoaded?: boolean
   /** Phase 4: 持久化的 SDKMessage（新格式） */
@@ -503,7 +505,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -848,6 +850,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                   isStreaming={isLive || undefined}
                   stoppedByUser={isLastAssistantTurn || undefined}
                   sessionModelId={sessionModelId}
+                  showThinking={agentRuntime !== 'pi'}
                 />
               )
             })}
@@ -886,6 +889,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                             index={index}
                             dimmed={hasSmoothTextContent && block.type !== 'text'}
                             isStreaming={streaming}
+                            showThinking={agentRuntime !== 'pi'}
                           />
                         ))}
                       </div>

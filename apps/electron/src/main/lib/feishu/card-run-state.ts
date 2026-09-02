@@ -27,8 +27,8 @@ export interface ToolEntry {
 }
 
 export type Block =
-  | { kind: 'text'; content: string; streaming: boolean }
-  | { kind: 'tool'; tool: ToolEntry }
+  | { kind: 'text'; content: string; streaming: boolean; sourceId?: string }
+  | { kind: 'tool'; tool: ToolEntry; sourceId?: string }
 
 export type FooterStatus = 'thinking' | 'tool_running' | 'streaming' | null
 
@@ -43,6 +43,13 @@ export interface RunState {
   /** idle_timeout 终态下，无响应的分钟数（卡片渲染时拼"N 分钟无响应"）。 */
   idleTimeoutMinutes?: number
   startedAt: number
+  /**
+   * Pi 的 partial assistant 消息是“累计快照”而不是 delta；按 uuid 保存其来源，
+   * 让后续快照替换旧块而不是重复追加。Claude 消息没有该字段时仍走增量兼容路径。
+   */
+  assistantSourceOrder?: string[]
+  /** source uuid → 当前快照中的 thinking 文本。 */
+  assistantThinking?: Record<string, string>
   /** result 消息携带的元数据，渲染卡片底部 summary 用。 */
   meta: {
     durationMs?: number
@@ -60,6 +67,8 @@ export function createInitialState(): RunState {
     footer: 'thinking',
     terminal: 'running',
     startedAt: Date.now(),
+    assistantSourceOrder: [],
+    assistantThinking: {},
     meta: {},
   }
 }
@@ -70,9 +79,9 @@ function closeStreamingText(blocks: Block[]): Block[] {
   )
 }
 
-function appendText(state: RunState, delta: string): RunState {
+function appendText(state: RunState, delta: string, sourceId?: string): RunState {
   const last = state.blocks[state.blocks.length - 1]
-  if (last && last.kind === 'text' && last.streaming) {
+  if (last && last.kind === 'text' && last.streaming && last.sourceId === sourceId) {
     const next: Block = { ...last, content: last.content + delta }
     return {
       ...state,
@@ -83,7 +92,7 @@ function appendText(state: RunState, delta: string): RunState {
   }
   return {
     ...state,
-    blocks: [...state.blocks, { kind: 'text', content: delta, streaming: true }],
+    blocks: [...state.blocks, { kind: 'text', content: delta, streaming: true, ...(sourceId ? { sourceId } : {}) }],
     reasoning: { ...state.reasoning, active: false },
     footer: 'streaming',
   }
@@ -97,11 +106,11 @@ function appendThinking(state: RunState, delta: string): RunState {
   }
 }
 
-function startTool(state: RunState, id: string, name: string, input: unknown): RunState {
+function startTool(state: RunState, id: string, name: string, input: unknown, sourceId?: string): RunState {
   const tool: ToolEntry = { id, name, input, status: 'running' }
   return {
     ...state,
-    blocks: [...closeStreamingText(state.blocks), { kind: 'tool', tool }],
+    blocks: [...closeStreamingText(state.blocks), { kind: 'tool', tool, ...(sourceId ? { sourceId } : {}) }],
     reasoning: { ...state.reasoning, active: false },
     footer: 'tool_running',
   }
@@ -116,6 +125,32 @@ function completeTool(state: RunState, id: string, output: string, isError: bool
     }
   })
   return { ...state, blocks }
+}
+
+function replaceAssistantSnapshot(state: RunState, sourceId: string, blocks: Block[], thinking: string): RunState {
+  const oldIndexes = state.blocks
+    .map((block, index) => block.sourceId === sourceId ? index : -1)
+    .filter((index) => index >= 0)
+  const insertAt = oldIndexes[0] ?? state.blocks.length
+  const oldIndexSet = new Set(oldIndexes)
+  const remaining = state.blocks.filter((_block, index) => !oldIndexSet.has(index))
+  const before = remaining.slice(0, Math.min(insertAt, remaining.length))
+  const after = remaining.slice(Math.min(insertAt, remaining.length))
+  const assistantSourceOrder = state.assistantSourceOrder?.includes(sourceId)
+    ? state.assistantSourceOrder
+    : [...(state.assistantSourceOrder ?? []), sourceId]
+  const assistantThinking = { ...(state.assistantThinking ?? {}), [sourceId]: thinking }
+  return {
+    ...state,
+    blocks: [...before, ...blocks, ...after],
+    assistantSourceOrder,
+    assistantThinking,
+    reasoning: {
+      content: assistantSourceOrder.map((id) => assistantThinking[id] ?? '').join(''),
+      active: thinking.length > 0,
+    },
+    footer: blocks.some((block) => block.kind === 'tool') ? 'tool_running' : 'streaming',
+  }
 }
 
 function stringifyToolResult(content: unknown): string {
@@ -157,21 +192,54 @@ export function reduce(state: RunState, payload: AgentStreamPayload): RunState {
       if (am.error?.message) {
         return markError(state, am.error.message)
       }
+
+      const rawAssistant = am as unknown as Record<string, unknown>
+      const sourceId = typeof am.uuid === 'string' && am.uuid.length > 0 ? am.uuid : undefined
+      const isPartialSnapshot = rawAssistant._partial === true
+      // Pi 的 partial assistant 帧携带累计全文，final 帧通常复用同一个 uuid。
+      // 这类消息必须按快照替换；否则每次更新都会把已有前缀再次拼进卡片。
+      if (sourceId && (isPartialSnapshot || state.blocks.some((block) => block.sourceId === sourceId))) {
+        const snapshotBlocks: Block[] = []
+        let thinking = ''
+        for (const block of am.message?.content ?? []) {
+          if (block.type === 'text') {
+            const text = (block as { text?: unknown }).text
+            if (typeof text === 'string' && text) {
+              const last = snapshotBlocks[snapshotBlocks.length - 1]
+              if (last?.kind === 'text') {
+                snapshotBlocks[snapshotBlocks.length - 1] = { ...last, content: last.content + text }
+              } else {
+                snapshotBlocks.push({ kind: 'text', content: text, streaming: true, sourceId })
+              }
+            }
+          } else if (block.type === 'thinking') {
+            const value = (block as { thinking?: unknown }).thinking
+            if (typeof value === 'string') thinking += value
+          } else if (block.type === 'tool_use') {
+            const tb = block as { id?: unknown; name?: unknown; input?: unknown }
+            if (typeof tb.id === 'string' && typeof tb.name === 'string') {
+              snapshotBlocks.push({
+                kind: 'tool',
+                tool: { id: tb.id, name: tb.name, input: tb.input, status: 'running' },
+                sourceId,
+              })
+            }
+          }
+        }
+        return replaceAssistantSnapshot(next, sourceId, snapshotBlocks, thinking)
+      }
+
       for (const block of am.message?.content ?? []) {
         if (block.type === 'text') {
           const text = (block as { text?: unknown }).text
-          if (typeof text === 'string' && text) {
-            next = appendText(next, text)
-          }
+          if (typeof text === 'string' && text) next = appendText(next, text, sourceId)
         } else if (block.type === 'thinking') {
           const thinking = (block as { thinking?: unknown }).thinking
-          if (typeof thinking === 'string' && thinking) {
-            next = appendThinking(next, thinking)
-          }
+          if (typeof thinking === 'string' && thinking) next = appendThinking(next, thinking)
         } else if (block.type === 'tool_use') {
           const tb = block as { id?: unknown; name?: unknown; input?: unknown }
           if (typeof tb.id === 'string' && typeof tb.name === 'string') {
-            next = startTool(next, tb.id, tb.name, tb.input)
+            next = startTool(next, tb.id, tb.name, tb.input, sourceId)
           }
         }
       }

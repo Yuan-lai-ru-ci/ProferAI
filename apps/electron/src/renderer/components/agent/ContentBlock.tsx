@@ -4,7 +4,7 @@
  * 支持三种内容块类型：
  * - text: 通过 MessageResponse 渲染 Markdown
  * - tool_use: 语义化短语行（如 "读取 foo.ts 第 10-60 行"），展开显示结构化结果
- * - thinking: 默认展开，左上角 "Thinking" 标签 + 虚线边框内容区
+ * - thinking: Claude 等提供可读 thinking 时展示；Pi/GPT 的内部概览由上层过滤，不渲染思考框
  */
 
 import * as React from 'react'
@@ -221,6 +221,8 @@ export interface ContentBlockProps {
   childBlocks?: SDKContentBlock[]
   /** 是否正在流式输出中（仅流式中的未完成工具调用才显示 spinner） */
   isStreaming?: boolean
+  /** 是否展示模型返回的 thinking 内容；Pi/GPT 当前仅返回不可读的内部概览时关闭。 */
+  showThinking?: boolean
 }
 
 // ===== 提示词折叠行 =====
@@ -614,7 +616,7 @@ function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.Rea
       <div className="flex items-center gap-1.5 mb-1.5">
         <Brain className={cn('size-3.5', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')} />
         <span className={cn('text-[14px] uppercase tracking-wider', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
-          Thinking
+          思考摘要
         </span>
       </div>
       <div
@@ -656,7 +658,7 @@ function ThinkingBlock({ block, dimmed = false }: ThinkingBlockProps): React.Rea
             ) : (
               <>
                 <ChevronDown className="size-3" />
-                <span>展开思考</span>
+                <span>展开摘要</span>
               </>
             )}
           </button>
@@ -717,7 +719,7 @@ function GeneratedImageThumb({ image }: { image: ParsedAgentImageAttachment }): 
 
 // ===== ContentBlock 主组件 =====
 
-export function ContentBlock({ block, allMessages, basePath, basePaths, animate = false, index = 0, dimmed = false, childBlocks, isStreaming }: ContentBlockProps): React.ReactElement | null {
+export function ContentBlock({ block, allMessages, basePath, basePaths, animate = false, index = 0, dimmed = false, childBlocks, isStreaming, showThinking = true }: ContentBlockProps): React.ReactElement | null {
   // text 块 — 主要内容，不受 dimmed 影响
   if (block.type === 'text') {
     const textBlock = block as SDKTextBlock
@@ -762,7 +764,7 @@ export function ContentBlock({ block, allMessages, basePath, basePaths, animate 
   // thinking 块
   if (block.type === 'thinking') {
     const thinkingBlock = block as SDKThinkingBlock
-    if (!thinkingBlock.thinking) return null
+    if (!showThinking || !thinkingBlock.thinking) return null
     return <ThinkingBlock block={thinkingBlock} dimmed={dimmed} />
   }
 

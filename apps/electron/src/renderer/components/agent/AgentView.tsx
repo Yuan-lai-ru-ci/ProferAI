@@ -3080,6 +3080,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         <AgentMessages
           sessionId={sessionId}
           sessionModelId={agentModelId || undefined}
+          agentRuntime={sessionAgentRuntime}
           messagesLoaded={messagesLoaded}
           persistedSDKMessages={persistedSDKMessages}
           streaming={streaming}
