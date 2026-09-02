@@ -4,6 +4,8 @@ import { resolveNativeBrowserVisible, sameBrowserViewportLayout } from './browse
 const layout = {
   sessionId: 'session-1',
   tabId: 'tab-1',
+  rendererInstanceId: 'renderer-1',
+  layoutSourceRevision: 1,
   revision: 1,
   visible: true,
   viewportBounds: { x: 200, y: 100, width: 600, height: 500 },

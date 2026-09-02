@@ -10,7 +10,11 @@ export interface BrowserViewBounds {
 export interface BrowserViewLayout {
   sessionId: string
   tabId?: string
-  /** Renderer 全局单调递增代际；主进程忽略晚到的旧布局 IPC。 */
+  /** 当前 renderer 实例标识；renderer 刷新后旧实例的晚到布局必须全部丢弃。 */
+  rendererInstanceId: string
+  /** 当前 BrowserViewport 挂载来源序号；顶栏切换后旧视口的 cleanup 不能覆盖新视口。 */
+  layoutSourceRevision: number
+  /** 同一布局来源内单调递增的布局代际；主进程忽略晚到的旧布局 IPC。 */
   revision: number
   visible: boolean
   /**

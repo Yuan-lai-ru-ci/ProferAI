@@ -25,6 +25,7 @@ import {
 const MAX_TRACE_ITEMS = 30
 /** 总数超限时只回收 Agent 创建且未在使用的标签，绝不自动关闭用户标签。 */
 const MAX_BROWSER_TABS = 20
+const MAX_INVALIDATED_LAYOUT_RENDERERS = 16
 const MAX_SCREENSHOT_BYTES = 3 * 1024 * 1024
 const ACTION_HIGHLIGHT_DURATION_MS = 900
 const MAX_BROWSER_SCRIPT_RESULT_CHARS = 64_000
@@ -82,6 +83,12 @@ type BrowserSessionRecord = {
   ledger: BrowserTraceItem[]
   /** 用户在面板中主动打开/操作过浏览器；用于下一条消息的实时上下文。 */
   userOpenedAt: number | null
+  /** 最近一次布局来自哪个 renderer 实例；renderer 刷新后允许新实例从 revision=1 重新开始。 */
+  lastLayoutRendererInstanceId: string | null
+  /** renderer 刷新期间仍可能有旧布局 IPC 在途，记录已失效实例，避免它晚到覆盖新实例。 */
+  invalidatedLayoutRendererInstanceIds: Set<string>
+  /** 同一 renderer 内最近接受的 BrowserViewport 来源序号。 */
+  lastLayoutSourceRevision: number
   lastLayoutRevision: number
   /**
    * 唯一原生网页 frame。它只覆盖网页 pageBounds，不覆盖 renderer 的工具栏、标签栏或操作区。
@@ -119,6 +126,15 @@ export interface BrowserObservation {
 
 function emptyTabState(tabId: string): BrowserTabState {
   return { tabId, url: '', title: '新建标签页', loading: false, visible: false, canGoBack: false, canGoForward: false, zoomFactor: 1, translated: false, trace: [] }
+}
+
+function rememberInvalidatedLayoutRenderer(browserSession: BrowserSessionRecord, rendererInstanceId: string): void {
+  browserSession.invalidatedLayoutRendererInstanceIds.add(rendererInstanceId)
+  while (browserSession.invalidatedLayoutRendererInstanceIds.size > MAX_INVALIDATED_LAYOUT_RENDERERS) {
+    const oldest = browserSession.invalidatedLayoutRendererInstanceIds.values().next().value
+    if (typeof oldest !== 'string') break
+    browserSession.invalidatedLayoutRendererInstanceIds.delete(oldest)
+  }
 }
 
 function textValue(value: unknown): string {
@@ -245,7 +261,9 @@ export class BrowserController {
    */
   setForegroundSession(sessionId: string | null): void {
     if (sessionId === null) {
-      this.hideAll()
+      // 普通切换到 Chat / 草稿时只隐藏原生视图；不能把当前 renderer 加入刷新失效列表，
+      // 否则同一个 renderer 切回 Agent 后，新 BrowserViewport 会被误判为旧来源。
+      this.hideAll(false)
       return
     }
     this.foregroundSessionId = sessionId
@@ -522,6 +540,9 @@ export class BrowserController {
       executionSource: configuration?.executionSource ?? 'user',
       ledger: [],
       userOpenedAt: null,
+      lastLayoutRendererInstanceId: null,
+      invalidatedLayoutRendererInstanceIds: new Set(),
+      lastLayoutSourceRevision: 0,
       lastLayoutRevision: 0,
       hostView: new View(),
       lastVisible: false,
@@ -740,7 +761,21 @@ export class BrowserController {
 
   setLayout(layout: BrowserViewLayout): void {
     const browserSession = this.sessions.get(layout.sessionId)
-    if (!browserSession || !shouldApplyBrowserLayoutRevision(browserSession.lastLayoutRevision, layout.revision)) return
+    if (
+      !browserSession
+      || browserSession.invalidatedLayoutRendererInstanceIds.has(layout.rendererInstanceId)
+      || !Number.isSafeInteger(layout.layoutSourceRevision)
+    ) return
+    const isNewRenderer = browserSession.lastLayoutRendererInstanceId !== layout.rendererInstanceId
+    const isNewLayoutSource = isNewRenderer || layout.layoutSourceRevision !== browserSession.lastLayoutSourceRevision
+    if (!isNewLayoutSource && !shouldApplyBrowserLayoutRevision(browserSession.lastLayoutRevision, layout.revision)) return
+    if (!isNewRenderer && layout.layoutSourceRevision < browserSession.lastLayoutSourceRevision) return
+    if (isNewRenderer && browserSession.lastLayoutRendererInstanceId) {
+      // 顶栏切换标签会卸载旧 BrowserViewport；即使旧 cleanup 晚于新布局抵达，也不能再隐藏新页面。
+      rememberInvalidatedLayoutRenderer(browserSession, browserSession.lastLayoutRendererInstanceId)
+    }
+    browserSession.lastLayoutRendererInstanceId = layout.rendererInstanceId
+    browserSession.lastLayoutSourceRevision = layout.layoutSourceRevision
     browserSession.lastLayoutRevision = layout.revision
     const tab = browserSession.tabs.get(layout.tabId ?? browserSession.activeTabId)
     // 视口卸载与标签关闭可交错，晚到布局不应让 renderer 报错。
@@ -1512,9 +1547,15 @@ export class BrowserController {
    * 不再有 BrowserViewport 去 setLayout 定位/隐藏原生 view；若不在此刻隐藏，主窗口重新显示后
    * 旧会话的网页会裸奔在旧位置，脱离浏览器容器、不再受控。
    */
-  hideAll(): void {
+  hideAll(invalidateLayoutSources = true): void {
     this.foregroundSessionId = null
     for (const browserSession of this.sessions.values()) {
+      if (invalidateLayoutSources && browserSession.lastLayoutRendererInstanceId) {
+        rememberInvalidatedLayoutRenderer(browserSession, browserSession.lastLayoutRendererInstanceId)
+        browserSession.lastLayoutRendererInstanceId = null
+        browserSession.lastLayoutSourceRevision = 0
+        browserSession.lastLayoutRevision = 0
+      }
       browserSession.lastVisible = false
       browserSession.hostView.setVisible(false)
       for (const tab of browserSession.tabs.values()) {

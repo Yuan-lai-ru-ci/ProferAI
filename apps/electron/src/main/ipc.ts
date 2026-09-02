@@ -3505,6 +3505,9 @@ export function registerIpcHandlers(): void {
         typeof layout.sessionId !== 'string' ||
         !layout.viewportBounds ||
         !layout.pageBounds ||
+        typeof layout.rendererInstanceId !== 'string' ||
+        layout.rendererInstanceId.length === 0 ||
+        !Number.isSafeInteger(layout.layoutSourceRevision) ||
         !Number.isSafeInteger(layout.revision)
       )
         return

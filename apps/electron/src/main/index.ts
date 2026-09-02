@@ -182,6 +182,7 @@ import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/glob
 import { maintainDevShellShortcut } from './lib/dev-shell-shortcut'
 import { setProferVersion } from '@profer/core'
 import { TRAY_IPC_CHANNELS } from '../types'
+import { installMacTrafficLightZoomSync } from './lib/mac-traffic-light'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'
 
@@ -428,6 +429,7 @@ function createWindow(): void {
 
   const titleBarOptions = isMac
     ? {
+        // 使用 macOS 原生 traffic lights；位置与规划中心窗口保持一致。
         titleBarStyle: 'hiddenInset' as const,
         trafficLightPosition: { x: 18, y: 18 },
         vibrancy: 'under-window' as const,
@@ -472,6 +474,7 @@ function createWindow(): void {
     }
   }
   installWindowsZoomInFallback(mainWindow)
+  installMacTrafficLightZoomSync(mainWindow)
   updateWindowFrameAppearance(mainWindow)
   browserController.setOwnerWindow(mainWindow)
 
@@ -560,48 +563,15 @@ function createWindow(): void {
     refreshWasFullScreen = mainWindow.isFullScreen()
     refreshWasMaximized = mainWindow.isMaximized()
     splashStartedAt = Date.now()
-    splashShown = false
+    // 热刷新不再创建覆盖整个窗口的独立 splash。独立窗口一旦与 renderer-ready 通知竞态，
+    // 就会一直压在主窗口上，表现为浏览器标签栏和其他页面全部无法点击。
+    // 刷新期间保持主窗口可见，只隐藏原生网页 View，待新 renderer 重新发布布局即可恢复。
+    splashShown = true
     rendererReady = false
-    // Ctrl/Cmd+R 刷新 renderer：内存态 browserOpenMap/browserState（非持久化）将随重建清空，
-    // 不再有 BrowserViewport 去 setLayout 定位/隐藏原生 view。必须在此隐藏所有浏览器原生视图，
-    // 否则主窗口重新显示后旧会话网页会裸奔脱出容器、不受控制（刷新场景需回到未打开浏览器态）。
     browserController.hideAll()
-    // 刷新时重建启动画面，避免退化成固定尺寸的小方块。
-    // 仅当刷新前处于全屏时用显示器完整边界（getBounds() 在全屏下可能返回 workArea 或
-    // 带 DWM 隐形边界的尺寸，导致 logo 动画底边/右侧出现边距级偏移）；
-    // 非全屏（普通/最大化）时 splash 必须跟随主窗口当前 bounds，否则会扩展成整个显示器。
-    const currentBounds = mainWindow.getBounds()
-    let splashBounds: { x: number; y: number; width: number; height: number } | undefined
-    if (currentBounds) {
-      // 全屏/最大化时用显示器完整边界：getBounds() 在这两种状态下返回 workArea（不含任务栏）
-      // 或带 DWM 隐形边界的尺寸，导致 logo 动画底边/右侧出现边距级偏移；
-      // 普通窗口 splash 跟随主窗口 bounds，否则会扩展成整个显示器。
-      if (refreshWasFullScreen || refreshWasMaximized) {
-        const display = screen.getDisplayMatching(currentBounds)
-        splashBounds = display
-          ? {
-              x: display.bounds.x,
-              y: display.bounds.y,
-              width: display.bounds.width,
-              height: display.bounds.height,
-            }
-          : {
-              x: currentBounds.x,
-              y: currentBounds.y,
-              width: currentBounds.width,
-              height: currentBounds.height,
-            }
-      } else {
-        splashBounds = {
-          x: currentBounds.x,
-          y: currentBounds.y,
-          width: currentBounds.width,
-          height: currentBounds.height,
-        }
-      }
-    }
-    mainWindow?.hide()
-    createSplashWindow(splashBounds)
+    if (startupSplashWindow && !startupSplashWindow.isDestroyed()) startupSplashWindow.close()
+    startupSplashWindow = null
+    mainWindow.show()
     loadRenderer()
   }
 

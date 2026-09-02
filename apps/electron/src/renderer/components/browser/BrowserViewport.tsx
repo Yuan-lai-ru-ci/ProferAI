@@ -2,9 +2,16 @@ import * as React from 'react'
 import type { BrowserViewLayout } from '@profer/shared'
 import { resolveNativeBrowserVisible, sameBrowserViewportLayout } from './browser-viewport-layout'
 
-// 每次 publish（包括卸载隐藏）分配全局单调 revision。旧 viewport 的 IPC 即使晚到，
-// 主进程也不会覆盖当前标签的可见性或几何。
+// renderer 刷新时生成新的实例标识；同一 renderer 内的 BrowserViewport 挂载实例再使用
+// 独立来源序号，分别解决“刷新后 revision 归零”和“顶栏切换 cleanup 晚到”两类竞态。
+const RENDERER_INSTANCE_ID = globalThis.crypto?.randomUUID?.() ?? `renderer-${Date.now()}-${Math.random().toString(36).slice(2)}`
 let nextBrowserLayoutRevision = 0
+let nextBrowserLayoutSourceRevision = 0
+
+function nextLayoutSourceRevision(): number {
+  nextBrowserLayoutSourceRevision += 1
+  return nextBrowserLayoutSourceRevision
+}
 
 function nextLayoutRevision(): number {
   nextBrowserLayoutRevision += 1
@@ -94,7 +101,10 @@ export function BrowserViewport({
     const frame = page.closest<HTMLElement>('[data-browser-native-host]')
     if (!frame) return
 
+    const layoutSourceRevision = nextLayoutSourceRevision()
     let raf = 0
+    let geometryPollRaf = 0
+    let geometryPollUntil = 0
     let pendingVisible = true
     let previous: BrowserViewLayout | undefined
     const publish = (visible: boolean, force = false) => {
@@ -108,6 +118,8 @@ export function BrowserViewport({
         const next: BrowserViewLayout = {
           sessionId,
           tabId,
+          rendererInstanceId: RENDERER_INSTANCE_ID,
+          layoutSourceRevision,
           revision: nextLayoutRevision(),
           visible: pendingVisible && viewportBounds.width > 4 && viewportBounds.height > 4 && pageRect.width > 4 && pageRect.height > 4,
           viewportBounds,
@@ -128,20 +140,44 @@ export function BrowserViewport({
     // 纳入协议，收起或窄窗自动隐藏时立即撤走 native WebContentsView，不能让它
     // 继续停留在上一次的有效矩形上覆盖已不可见的 DOM 卡片。
     const publishCurrentVisibility = () => publish(resolveNativeBrowserVisible(panelVisible, findBlockingOverlay(frame)))
-    const resizeObserver = new ResizeObserver(publishCurrentVisibility)
+    // 分栏拖动、窗口调整和侧栏切换可能只改变元素位置，IntersectionObserver 在某些平台
+    // 不会逐帧报告这种变化。短暂逐帧收敛几何，既保证原生 View 跟手，又不引入常驻轮询。
+    const scheduleGeometryPoll = () => {
+      geometryPollUntil = Math.max(geometryPollUntil, performance.now() + 600)
+      if (geometryPollRaf) return
+      const poll = () => {
+        geometryPollRaf = 0
+        publishCurrentVisibility()
+        if (performance.now() < geometryPollUntil) geometryPollRaf = requestAnimationFrame(poll)
+      }
+      geometryPollRaf = requestAnimationFrame(poll)
+    }
+    const resizeObserver = new ResizeObserver(() => {
+      publishCurrentVisibility()
+      scheduleGeometryPoll()
+    })
     resizeObserver.observe(frame)
     resizeObserver.observe(page)
     // ResizeObserver 不报告纯 x/y 平移；IntersectionObserver 会在卡片因侧栏、分栏或
     // 页面滚动改变视口矩形时回调，替代旧实现中持续运行的 rAF 几何轮询。
-    const positionObserver = new IntersectionObserver(() => publishCurrentVisibility(), { threshold: [0, 1] })
+    const positionObserver = new IntersectionObserver(() => {
+      publishCurrentVisibility()
+      scheduleGeometryPoll()
+    }, { threshold: [0, 1] })
     positionObserver.observe(frame)
     positionObserver.observe(page)
     const overlayObserver = new MutationObserver((mutations) => {
-      if (mutationsAffectAppOverlay(mutations)) publishCurrentVisibility()
+      if (mutationsAffectAppOverlay(mutations)) {
+        publishCurrentVisibility()
+        scheduleGeometryPoll()
+      }
     })
     // 皮肤/主题可能改变 --radius；根节点变更后重新读取实际卡片半径。
     const themeObserver = new MutationObserver(publishCurrentVisibility)
-    const publishOnScroll = () => publishCurrentVisibility()
+    const publishOnScroll = () => {
+      publishCurrentVisibility()
+      scheduleGeometryPoll()
+    }
     overlayObserver.observe(document.body, {
       childList: true,
       subtree: true,
@@ -152,6 +188,7 @@ export function BrowserViewport({
     window.addEventListener('resize', publishOnScroll)
     window.addEventListener('scroll', publishOnScroll, true)
     publishCurrentVisibility()
+    scheduleGeometryPoll()
 
     return () => {
       resizeObserver.disconnect()
@@ -161,9 +198,12 @@ export function BrowserViewport({
       window.removeEventListener('resize', publishOnScroll)
       window.removeEventListener('scroll', publishOnScroll, true)
       if (raf) cancelAnimationFrame(raf)
+      if (geometryPollRaf) cancelAnimationFrame(geometryPollRaf)
       setLayout({
         sessionId,
         tabId,
+        rendererInstanceId: RENDERER_INSTANCE_ID,
+        layoutSourceRevision,
         revision: nextLayoutRevision(),
         visible: false,
         viewportBounds: { x: 0, y: 0, width: 0, height: 0 },

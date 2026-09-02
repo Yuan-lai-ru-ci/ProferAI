@@ -152,12 +152,19 @@ export function TabBar({ teamMode = false }: { teamMode?: boolean } = {}): React
   const dragSettleCleanupRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleActivate = React.useCallback((tabId: string) => {
+    const tab = tabs.find((t) => t.id === tabId)
+    if (!tab) return
+
+    // 原生 WebContentsView 位于 renderer DOM 之上，不能等 React 重渲染后再隐藏：
+    // 顶栏切换标签的瞬间，旧网页可能仍覆盖新 TabBar，甚至继续拦截鼠标命中。
+    // 先同步切换主进程的前台浏览器所有权；新的 BrowserViewport 发布布局后再显示目标网页。
+    const setForeground = (window.electronAPI as Partial<typeof window.electronAPI>).setAgentBrowserForeground
+    if (typeof setForeground === 'function') {
+      setForeground(tab.type === 'agent' ? tab.sessionId : null)
+    }
     setActiveTabId(tabId)
     // 点击任意 tab 都关闭定时任务编辑表单（overlay 否则会盖在内容区上）
     setAutomationForm({ open: false, draft: null })
-
-    const tab = tabs.find((t) => t.id === tabId)
-    if (!tab) return
 
     if (tab.type === 'chat') {
       setAppMode('chat')
