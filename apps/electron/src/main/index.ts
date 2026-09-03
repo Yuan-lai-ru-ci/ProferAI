@@ -1,15 +1,16 @@
 import { app, BrowserWindow, dialog, Menu, nativeTheme, powerMonitor, protocol, screen, shell } from 'electron'
 import { join } from 'path'
 import { existsSync, cpSync, mkdirSync, readdirSync } from 'fs'
+import { getDevInstanceId, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
 
-// userData 目录隔离：让 Profer 与开源原版 Proma、以及各自的 dev 版互不干扰。
-//
-// 当前状态（B5 已完成）：apps/electron/package.json 的 name 已是 "@profer/electron"，
-//   app.getName() === "@profer/electron"，默认 userData 自然落入 %APPDATA%\@profer\electron，
-//   已与原版 Proma（@proma\electron）彻底独立 → 单实例锁不再互斥 → 两者可同时运行。
-//   此显式 setPath 现在与默认一致，保留作为冗余保险（防未来再被 productName 逻辑绕回去）。
-// 必须在任何会读取 userData 路径的模块加载之前执行。
-app.setPath('userData', join(app.getPath('appData'), app.isPackaged ? '@profer/electron' : '@profer/electron-dev'))
+// userData 和单实例锁必须在任何会读取 userData 的模块加载前隔离。
+// PROFER_DEV_INSTANCE / PROFER_USER_DATA_DIR 仅对开发版生效，正式版忽略这些参数。
+const devInstanceId = getDevInstanceId()
+if (!app.isPackaged) app.setName(resolveDevAppName())
+app.setPath('userData', resolveDevUserDataPath(app.getPath('appData'), app.isPackaged, process.env))
+if (devInstanceId) {
+  console.log(`[启动] 开发隔离实例: ${devInstanceId}，userData=${app.getPath('userData')}`)
+}
 
 // 一次性迁移：把存量 Profer 用户遗留在 @proma/electron 的浏览器层数据搬到新目录。
 // 登录态/会话/自动任务/device_id 都在 ~/.profer（不涉及），这里只搬 Chromium 层，避免用户升级后
@@ -59,10 +60,6 @@ if (process.platform === 'win32' && app.isPackaged) {
   app.setAppUserModelId('com.profer.app')
 }
 
-// 开发模式用独立锁名，与生产版共存
-if (!app.isPackaged) {
-  app.setName('profer-dev')
-}
 
 // 单实例锁：防止重复启动同一个版本
 if (!app.requestSingleInstanceLock()) {

@@ -10,9 +10,10 @@ import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renam
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
+import { resolveDevVitePort } from './dev-instance'
 
-/** Vite 开发服务器端口（避开旧 Proma 的 5173） */
-export const VITE_DEV_SERVER_PORT = 5174
+/** Vite 开发服务器端口（避开旧 Proma 的 5173），可由隔离开发实例覆盖。 */
+export const VITE_DEV_SERVER_PORT = resolveDevVitePort()
 /** Vite 开发服务器 URL */
 export const VITE_DEV_SERVER_URL = `http://localhost:${VITE_DEV_SERVER_PORT}`
 

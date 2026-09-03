@@ -3305,7 +3305,8 @@ export function registerIpcHandlers(): void {
     async (_, workspaceSlug: string, skillSlug: string, enabled: boolean, sourceSkillId?: string): Promise<void> => {
       assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
       assertSafeSkillSegment(skillSlug, 'Skill slug')
-      if (sourceSkillId !== undefined) assertSafeSkillSegment(sourceSkillId, 'sourceSkillId')
+      // sourceSkillId 三态：非空为全局 ID，空字符串明确选择工作区副本，未传为兼容 fallback。
+      if (sourceSkillId !== undefined && sourceSkillId !== '') assertSafeSkillSegment(sourceSkillId, 'sourceSkillId')
       return toggleWorkspaceSkill(workspaceSlug, skillSlug, enabled, sourceSkillId)
     }
   )

@@ -25,6 +25,7 @@ import {
   seedBuiltinGlobalSkills,
   setGlobalSkillEnabled,
 } from './global-skill-manager'
+import { getWorkspaceSkills, toggleWorkspaceSkill } from './agent-workspace-manager'
 
 const roots: string[] = []
 function setup(): { global: string; bundle: string; workspaces: string } {
@@ -304,10 +305,42 @@ version: 1.0.1
     else process.env.PROFER_CONFIG_DIR = previousConfigRoot
   })
 
+  test('工作区 Skill 列表保留 inactive 副本，并保留稳定 ID 与来源元数据', async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), 'profer-workspace-skill-list-'))
+    roots.push(configRoot)
+    const previousConfigRoot = process.env.PROFER_CONFIG_DIR
+    process.env.PROFER_CONFIG_DIR = configRoot
+    const { getWorkspaceSkillsDir, getInactiveSkillsDir } = await import('./config-paths')
+    const inactive = join(getInactiveSkillsDir('listed'), 'disabled-copy')
+    mkdirSync(inactive, { recursive: true })
+    writeFileSync(join(inactive, 'SKILL.md'), '---\\nname: 已关闭副本\\ndescription: 保留来源\\nversion: 1.2.3\\n---\\n\\n# 内容\\n')
+    writeFileSync(join(inactive, '.source.json'), JSON.stringify({
+      scope: 'workspace',
+      workspaceSkillId: 'workspace-disabled-copy',
+      sourceSkillId: 'builtin-demo',
+      sourceSkillType: 'builtin-meta',
+      sourceVersion: '1.2.3',
+      sourceStatus: 'available',
+    }))
+
+    const result = getWorkspaceSkills('listed')
+    const skill = result.find((item) => item.slug === 'disabled-copy')
+    expect(skill?.enabled).toBe(false)
+    expect(skill?.actualSource).toBe('none')
+    expect(skill?.workspaceSkillId).toBe('workspace-disabled-copy')
+    expect(skill?.sourceSkillId).toBe('builtin-demo')
+    expect(skill?.sourceSkillType).toBe('builtin-meta')
+    expect(existsSync(join(getWorkspaceSkillsDir('listed'), 'disabled-copy'))).toBe(false)
+    if (previousConfigRoot === undefined) delete process.env.PROFER_CONFIG_DIR
+    else process.env.PROFER_CONFIG_DIR = previousConfigRoot
+  })
+
   test('旧 schema 已完成但误标 unknown 的干净副本会重新分类为 builtin-meta 引用', () => {
     const paths = setup()
     const builtin = listGlobalSkills()[0]!
     const root = join(paths.workspaces, 'legacy-reclassified', 'skills', builtin.slug)
+    const legacyMaster = join(paths.global, 'legacy-default-skills', builtin.slug)
+    cpSync(join(paths.bundle, 'demo'), legacyMaster, { recursive: true })
     cpSync(join(paths.bundle, 'demo'), root, { recursive: true })
     writeFileSync(join(root, '.source.json'), JSON.stringify({
       workspaceSkillId: 'legacy-workspace-id',
@@ -349,6 +382,118 @@ version: 1.0.1
     expect(resolveEffectiveSkills('b2-inactive').find((skill) => skill.slug === builtin.slug)).toBeUndefined()
   })
 
+  test('repair：schema 3 completed 仍使用历史备份中的旧正文证据，多工作区幂等迁移', () => {
+    const paths = setup()
+    const builtin = listGlobalSkills()[0]!
+    const oldSkill = '---\nname: 演示\nversion: 0.9.0\n---\n\n# Proma 旧正文\n'
+    const legacyMaster = join(paths.global, 'legacy-default-skills', builtin.slug)
+    mkdirSync(legacyMaster, { recursive: true })
+    writeFileSync(join(legacyMaster, 'SKILL.md'), oldSkill)
+    for (const workspace of ['repair-a', 'repair-b']) {
+      const current = join(paths.workspaces, workspace, 'skills', builtin.slug)
+      mkdirSync(current, { recursive: true })
+      writeFileSync(join(current, 'SKILL.md'), oldSkill)
+      const backup = join(paths.workspaces, workspace, '.migration-backup', 'skills', 'skills', builtin.slug)
+      mkdirSync(backup, { recursive: true })
+      writeFileSync(join(backup, 'SKILL.md'), oldSkill)
+      writeFileSync(join(current, '.source.json'), JSON.stringify({ scope: 'workspace', sourceStatus: 'unknown-legacy', migrationReason: '历史迁移误分类' }))
+    }
+    writeFileSync(join(paths.global, 'skill-system-migration.json'), JSON.stringify({
+      schemaVersion: 3,
+      status: 'completed',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      completedWorkspaces: ['repair-a', 'repair-b'],
+      migratedLegacyMasters: [],
+      failedEntries: [],
+    }))
+
+    const first = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(first.migrated).toBe(2)
+    for (const workspace of ['repair-a', 'repair-b']) {
+      expect(existsSync(join(paths.workspaces, workspace, 'skills', builtin.slug))).toBe(false)
+      expect(existsSync(join(paths.workspaces, workspace, '.migration-backup', 'retired-skills', 'active', builtin.slug))).toBe(true)
+      expect(JSON.parse(readFileSync(join(paths.workspaces, workspace, 'skill-overrides.json'), 'utf8')).globalSkills[builtin.skillId].enabled).toBe(true)
+    }
+    const second = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(second.migrated).toBe(0)
+    expect(second.failed).toEqual([])
+  })
+
+  test('repair：已有历史备份正文不可被当前副本覆盖，二次运行 migrated=0 且结构不变', () => {
+    const paths = setup()
+    const builtin = listGlobalSkills()[0]!
+    const workspace = join(paths.workspaces, 'immutable-history')
+    const current = join(workspace, 'skills', builtin.slug)
+    const backup = join(workspace, '.migration-backup', 'skills', 'skills', builtin.slug)
+    const historicalContent = '---\nname: 演示\nversion: 0.9.0\n---\n\n# Proma 历史正文\n'
+    const userContent = '---\nname: 演示\nversion: 0.9.0\n---\n\n# 用户修改正文\n'
+    mkdirSync(current, { recursive: true })
+    mkdirSync(backup, { recursive: true })
+    writeFileSync(join(current, 'SKILL.md'), userContent)
+    writeFileSync(join(backup, 'SKILL.md'), historicalContent)
+    const beforeHash = readFileSync(join(backup, 'SKILL.md'), 'utf8')
+    const first = migrateLegacyWorkspaceSkills(paths.bundle)
+    const afterFirstStructure = readFileSync(join(current, 'SKILL.md'), 'utf8')
+    const second = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(first.migrated).toBe(0)
+    expect(second.migrated).toBe(0)
+    expect(second.unknown).toBe(0)
+    expect(second.failed).toEqual([])
+    expect(readFileSync(join(backup, 'SKILL.md'), 'utf8')).toBe(beforeHash)
+    expect(readFileSync(join(current, 'SKILL.md'), 'utf8')).toBe(afterFirstStructure)
+    expect(existsSync(current)).toBe(true)
+    expect(existsSync(backup)).toBe(true)
+  })
+
+  test('repair 幂等：已退休正文与对应 override 存在时，残留同正文副本不再次迁移', () => {
+    const paths = setup()
+    const builtin = listGlobalSkills()[0]!
+    const workspaceRoot = join(paths.workspaces, 'already-consumed')
+    const current = join(workspaceRoot, 'skills', builtin.slug)
+    const retired = join(workspaceRoot, '.migration-backup', 'retired-skills', 'active', builtin.slug)
+    mkdirSync(current, { recursive: true })
+    mkdirSync(retired, { recursive: true })
+    const content = '---\nname: 演示\nversion: 0.9.0\n---\n\n# 旧正文\n'
+    writeFileSync(join(current, 'SKILL.md'), content)
+    writeFileSync(join(retired, 'SKILL.md'), content)
+    writeFileSync(join(workspaceRoot, 'skill-overrides.json'), JSON.stringify({
+      schemaVersion: 1,
+      globalSkills: { [builtin.skillId]: { enabled: true, updatedAt: '2026-09-02T00:00:00.000Z' } },
+    }))
+    const before = readFileSync(join(current, 'SKILL.md'), 'utf8')
+    const first = migrateLegacyWorkspaceSkills(paths.bundle)
+    const afterFirst = readFileSync(join(current, 'SKILL.md'), 'utf8')
+    const second = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(first.migrated).toBe(0)
+    expect(second.migrated).toBe(0)
+    expect(second.unknown).toBe(0)
+    expect(second.failed).toEqual([])
+    expect(afterFirst).toBe(before)
+    expect(existsSync(current)).toBe(true)
+    expect(existsSync(retired)).toBe(true)
+  })
+
+  test('local toggle：明确空字符串和未传 sourceSkillId 都优先移动工作区副本，不修改同名全局 override', async () => {
+    const paths = setup()
+    const builtin = listGlobalSkills()[0]!
+    const configRoot = mkdtempSync(join(tmpdir(), 'profer-toggle-local-'))
+    roots.push(configRoot)
+    const previousConfigRoot = process.env.PROFER_CONFIG_DIR
+    process.env.PROFER_CONFIG_DIR = configRoot
+    const { getWorkspaceSkillsDir, getInactiveSkillsDir } = await import('./config-paths')
+    const local = join(getWorkspaceSkillsDir('toggle-local'), builtin.slug)
+    mkdirSync(local, { recursive: true })
+    writeFileSync(join(local, 'SKILL.md'), '---\nname: 本地\nversion: 1.0.0\n---\n\n# 本地\n')
+    toggleWorkspaceSkill('toggle-local', builtin.slug, false, '')
+    expect(existsSync(join(getWorkspaceSkillsDir('toggle-local'), builtin.slug))).toBe(false)
+    expect(existsSync(join(getInactiveSkillsDir('toggle-local'), builtin.slug))).toBe(true)
+    expect(existsSync(join(configRoot, 'agent-workspaces', 'toggle-local', 'skill-overrides.json'))).toBe(false)
+    toggleWorkspaceSkill('toggle-local', builtin.slug, true)
+    expect(existsSync(join(getWorkspaceSkillsDir('toggle-local'), builtin.slug))).toBe(true)
+    if (previousConfigRoot === undefined) delete process.env.PROFER_CONFIG_DIR
+    else process.env.PROFER_CONFIG_DIR = previousConfigRoot
+  })
+
   test('B1/B2：真实旧版无 source metadata 时通过 legacy default-skills 内容识别并转为全局引用', () => {
     const paths = setup()
     const builtin = listGlobalSkills()[0]!
@@ -370,9 +515,119 @@ version: 1.0.1
     expect(existsSync(join(paths.workspaces, 'legacy-no-meta-active', '.migration-backup', 'retired-skills', 'active', builtin.slug))).toBe(true)
   })
 
+  test('modified meta automation：source-less 修改版与旧 master 不同则保留 active workspace replacement', () => {
+    const paths = setup()
+    const automationBundle = join(paths.bundle, 'automation')
+    mkdirSync(automationBundle, { recursive: true })
+    writeFileSync(join(automationBundle, 'SKILL.md'), '---\nname: automation\nversion: 1.0.0\n---\n\n# automation 旧 master\n')
+    seedBuiltinGlobalSkills(paths.bundle)
+    const builtin = listGlobalSkills().find((skill) => skill.slug === 'automation')!
+    const legacyMaster = join(paths.global, 'legacy-default-skills', builtin.slug)
+    cpSync(automationBundle, legacyMaster, { recursive: true })
+    const current = join(paths.workspaces, 'source-less-modified', 'skills', builtin.slug)
+    mkdirSync(current, { recursive: true })
+    writeFileSync(join(current, 'SKILL.md'), `---
+name: automation改
+version: 1.0.0
+---
+
+# 用户修改
+`)
+
+
+    const result = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(result.migrated).toBe(1)
+    expect(existsSync(current)).toBe(true)
+    const source = JSON.parse(readFileSync(join(current, '.source.json'), 'utf8'))
+    expect(source.sourceSkillId).toBe(builtin.skillId)
+    expect(source.sourceSkillType).toBe('builtin-meta')
+    expect(source.sourceVersion).toBe(builtin.version)
+    expect(source.replacementForSkillId).toBe(builtin.skillId)
+    expect(source.sourceStatus).toBe('modified-legacy-copy')
+    const override = JSON.parse(readFileSync(join(paths.workspaces, 'source-less-modified', 'skill-overrides.json'), 'utf8')).globalSkills[builtin.skillId]
+    expect(override.replacementWorkspaceSkillId).toBe(source.workspaceSkillId)
+    expect(override.replacementWorkspaceSkillSlug).toBe(builtin.slug)
+    expect(resolveEffectiveSkills('source-less-modified').find((skill) => skill.scope === 'workspace')?.name).toBe('automation改')
+    const runtime = prepareRuntimeSkills('source-less-modified')
+    expect(readFileSync(join(runtime.path, 'skills', builtin.slug, 'SKILL.md'), 'utf8')).toContain('automation改')
+    expect(existsSync(join(paths.workspaces, 'source-less-modified', '.migration-backup', 'retired-skills', 'active', builtin.slug))).toBe(false)
+    const beforeSecond = {
+      content: readFileSync(join(current, 'SKILL.md'), 'utf8'),
+      source: readFileSync(join(current, '.source.json'), 'utf8'),
+      override: readFileSync(join(paths.workspaces, 'source-less-modified', 'skill-overrides.json'), 'utf8'),
+    }
+    const second = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(second.migrated).toBe(0)
+    expect(existsSync(current)).toBe(true)
+    expect(readFileSync(join(current, 'SKILL.md'), 'utf8')).toBe(beforeSecond.content)
+    expect(readFileSync(join(current, '.source.json'), 'utf8')).toBe(beforeSecond.source)
+    expect(readFileSync(join(paths.workspaces, 'source-less-modified', 'skill-overrides.json'), 'utf8')).toBe(beforeSecond.override)
+  })
+
+  test('source-less inactive 修改副本保留 disabled replacement，不进入 runtime', () => {
+    const paths = setup()
+    const builtin = listGlobalSkills()[0]!
+    const legacyMaster = join(paths.global, 'legacy-default-skills', builtin.slug)
+    cpSync(join(paths.bundle, 'demo'), legacyMaster, { recursive: true })
+    const current = join(paths.workspaces, 'source-less-modified-inactive', 'skills-inactive', builtin.slug)
+    mkdirSync(current, { recursive: true })
+    writeFileSync(join(current, 'SKILL.md'), `---
+name: 演示修改版（已关闭）
+version: 1.0.0
+---
+
+# 用户修改
+`)
+
+    const result = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(result.migrated).toBe(1)
+    expect(existsSync(current)).toBe(true)
+    const source = JSON.parse(readFileSync(join(current, '.source.json'), 'utf8'))
+    const override = JSON.parse(readFileSync(join(paths.workspaces, 'source-less-modified-inactive', 'skill-overrides.json'), 'utf8')).globalSkills[builtin.skillId]
+    expect(source.sourceStatus).toBe('preserved-legacy-disabled-copy')
+    expect(source.workspaceSkillId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(source.sourceSkillId).toBe(builtin.skillId)
+    expect(override.enabled).toBe(false)
+    expect(override.replacementWorkspaceSkillId).toBe(source.workspaceSkillId)
+    expect(override.replacementWorkspaceSkillSlug).toBe(builtin.slug)
+    expect(resolveEffectiveSkills('source-less-modified-inactive').find((skill) => skill.slug === builtin.slug)).toBeUndefined()
+    expect(existsSync(join(paths.workspaces, 'source-less-modified-inactive', '.migration-backup', 'retired-skills', 'inactive', builtin.slug))).toBe(false)
+    const beforeSecond = {
+      source: readFileSync(join(current, '.source.json'), 'utf8'),
+      override: readFileSync(join(paths.workspaces, 'source-less-modified-inactive', 'skill-overrides.json'), 'utf8'),
+    }
+    const second = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(second.migrated).toBe(0)
+    expect(existsSync(current)).toBe(true)
+    expect(readFileSync(join(current, '.source.json'), 'utf8')).toBe(beforeSecond.source)
+    expect(readFileSync(join(paths.workspaces, 'source-less-modified-inactive', 'skill-overrides.json'), 'utf8')).toBe(beforeSecond.override)
+  })
+
+  test('source-less 副本缺少可靠旧 master 时不使用当前 builtin 或历史备份退休', () => {
+    const paths = setup()
+    const builtin = listGlobalSkills()[0]!
+    const current = join(paths.workspaces, 'source-less-no-master', 'skills', builtin.slug)
+    const historicalBackup = join(paths.workspaces, 'source-less-no-master', '.migration-backup', 'skills', 'skills', builtin.slug)
+    cpSync(join(paths.bundle, 'demo'), current, { recursive: true })
+    cpSync(join(paths.bundle, 'demo'), historicalBackup, { recursive: true })
+
+    const first = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(first.migrated).toBe(0)
+    expect(first.unknown).toBe(1)
+    expect(existsSync(current)).toBe(true)
+    expect(existsSync(join(paths.workspaces, 'source-less-no-master', '.migration-backup', 'retired-skills', 'active', builtin.slug))).toBe(false)
+    expect(JSON.parse(readFileSync(join(current, '.source.json'), 'utf8')).sourceStatus).toBe('unknown-legacy')
+    const second = migrateLegacyWorkspaceSkills(paths.bundle)
+    expect(second.migrated).toBe(0)
+    expect(second.unknown).toBe(0)
+    expect(existsSync(current)).toBe(true)
+  })
+
   test('B3/B4：来源可靠但内容被修改时保留独立 workspace 副本，active/inactive 状态与诊断不变', () => {
     const paths = setup()
     const builtin = listGlobalSkills()[0]!
+    // sourceKind 只说明来源，不说明正文未修改；必须提供可比对的旧 master 才能分类 B3/B4。
+    cpSync(join(paths.bundle, 'demo'), join(paths.global, 'legacy-default-skills', builtin.slug), { recursive: true })
     const cases: Array<[string, boolean]> = [['b3-active', true], ['b4-inactive', false]]
     for (const [workspace, active] of cases) {
       const root = join(paths.workspaces, workspace, active ? 'skills' : 'skills-inactive', builtin.slug)
@@ -385,6 +640,10 @@ version: 1.0.1
     const inactiveSource = JSON.parse(readFileSync(join(paths.workspaces, 'b4-inactive', 'skills-inactive', builtin.slug, '.source.json'), 'utf8'))
     expect(activeSource.sourceStatus).toBe('modified-legacy-copy')
     expect(inactiveSource.sourceStatus).toBe('preserved-legacy-disabled-copy')
+    const activeOverride = JSON.parse(readFileSync(join(paths.workspaces, 'b3-active', 'skill-overrides.json'), 'utf8')).globalSkills[builtin.skillId]
+    const inactiveOverride = JSON.parse(readFileSync(join(paths.workspaces, 'b4-inactive', 'skill-overrides.json'), 'utf8')).globalSkills[builtin.skillId]
+    expect(activeOverride.replacementWorkspaceSkillId).toBe(activeSource.workspaceSkillId)
+    expect(inactiveOverride.enabled).toBe(false)
     expect(resolveEffectiveSkills('b3-active').find((skill) => skill.scope === 'workspace')?.slug).toBe(builtin.slug)
     expect(resolveEffectiveSkills('b4-inactive').find((skill) => skill.scope === 'workspace')).toBeUndefined()
   })
@@ -458,7 +717,8 @@ version: 1.0.1
     expect(activeOverride.enabled).toBe(false)
     expect(activeOverride.replacementWorkspaceSkillSlug).toBe('demo')
     expect(inactiveOverride.enabled).toBe(false)
-    expect(inactiveOverride.replacementWorkspaceSkillSlug).toBeUndefined()
+    expect(inactiveOverride.replacementWorkspaceSkillSlug).toBe('demo')
+    expect(inactiveOverride.replacementWorkspaceSkillId).toBe(JSON.parse(readFileSync(join(inactive, '.source.json'), 'utf8')).workspaceSkillId)
     expect(inactiveOverride.disabledReason).toBe('preserved-legacy-disabled-copy')
     expect(existsSync(join(paths.workspaces, 'legacy-active', '.migration-backup'))).toBe(true)
     expect(listGlobalSkills().some((skill) => skill.type === 'user-global' && skill.slug === 'demo-legacy')).toBe(true)

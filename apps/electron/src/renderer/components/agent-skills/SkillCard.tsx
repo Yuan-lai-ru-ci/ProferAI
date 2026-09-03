@@ -52,6 +52,11 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium text-foreground">{skill.name}</span>
+            {!skill.enabled && (
+              <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                已禁用
+              </span>
+            )}
             {skill.version && (
               <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                 v{skill.version}

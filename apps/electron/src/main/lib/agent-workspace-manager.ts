@@ -424,10 +424,11 @@ export function saveWorkspaceMcpConfig(workspaceSlug: string, config: WorkspaceM
 
 // ===== Skill 目录扫描 =====
 
-/** 扫描工作区活跃 Skills，仅返回 skills/ 下的 Skill */
+/** 扫描工作区 Skills（包括 skills/ 与 skills-inactive/），并保留全局引用。 */
 export function getWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
   assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
-  const localSkills = scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)
+  const activeSkills = scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)
+  const inactiveSkills = scanSkillsInDir(getInactiveSkillsDir(workspaceSlug), false)
   const globalSkills = listGlobalSkills(workspaceSlug)
     .filter((skill) => skill.actualSource !== 'workspace')
     .map((skill): SkillMeta => ({
@@ -442,7 +443,7 @@ export function getWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
       sourceVersion: skill.version,
       sourceStatus: 'available',
     }))
-  return [...localSkills, ...globalSkills]
+  return [...activeSkills, ...inactiveSkills, ...globalSkills]
 }
 
 /** 解析 SKILL.md 的 YAML frontmatter，支持单行值、block scalar（`|` / `>`）和多行缩进 */
@@ -660,30 +661,31 @@ export function getAllWorkspaceSkills(workspaceSlug: string, includeGlobalSkills
 export function toggleWorkspaceSkill(workspaceSlug: string, skillSlug: string, enabled: boolean, sourceSkillId?: string): void {
   assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
   assertSafeSkillSegment(skillSlug, 'Skill slug')
-  const globalSkill = sourceSkillId !== undefined
-    ? (sourceSkillId ? listGlobalSkills(workspaceSlug).find((skill) => skill.skillId === sourceSkillId) : undefined)
-    : listGlobalSkills(workspaceSlug).find((skill) => skill.slug === skillSlug)
-  if (globalSkill) {
+  // 三态路由：非空 ID=全局，空字符串=明确本地，未传=本地优先后才回退全局。
+  if (sourceSkillId !== undefined && sourceSkillId !== '') {
+    assertSafeSkillSegment(sourceSkillId, 'sourceSkillId')
+    const globalSkill = listGlobalSkills(workspaceSlug).find((skill) => skill.skillId === sourceSkillId)
+    if (!globalSkill) throw new Error(`全局 Skill 不存在: ${sourceSkillId}`)
     setGlobalSkillEnabled(workspaceSlug, globalSkill.skillId, enabled)
     return
   }
   const activeDir = getWorkspaceSkillsDir(workspaceSlug)
   const inactiveDir = getInactiveSkillsDir(workspaceSlug)
-
-  const srcDir = enabled ? inactiveDir : activeDir
+  const activePath = join(activeDir, skillSlug)
+  const inactivePath = join(inactiveDir, skillSlug)
+  // 未传 sourceSkillId 时只有本地不存在才允许按 slug 回退全局，避免同名误操作。
+  if (!existsSync(activePath) && !existsSync(inactivePath) && sourceSkillId === undefined) {
+    const globalSkill = listGlobalSkills(workspaceSlug).find((skill) => skill.slug === skillSlug)
+    if (globalSkill) {
+      setGlobalSkillEnabled(workspaceSlug, globalSkill.skillId, enabled)
+      return
+    }
+  }
+  const srcPath = enabled ? inactivePath : activePath
   const destDir = enabled ? activeDir : inactiveDir
-
-  const srcPath = join(srcDir, skillSlug)
   const destPath = join(destDir, skillSlug)
-
-  if (!existsSync(srcPath)) {
-    throw new Error(`Skill 不存在: ${skillSlug}`)
-  }
-
-  if (existsSync(destPath)) {
-    throw new Error(`目标目录已存在同名 Skill: ${skillSlug}`)
-  }
-
+  if (!existsSync(srcPath)) throw new Error(`工作区 Skill 不存在: ${skillSlug}`)
+  if (existsSync(destPath)) throw new Error(`目标目录已存在同名 Skill: ${skillSlug}`)
   renameSync(srcPath, destPath)
   console.log(`[Agent 工作区] Skill ${enabled ? '启用' : '禁用'}: ${workspaceSlug}/${skillSlug}`)
 }

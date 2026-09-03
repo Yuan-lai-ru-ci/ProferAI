@@ -260,7 +260,7 @@ function SkillDetailBody({
               <MetaRow label="复制时间" value={skill.copiedAt ?? '无'} />
               <MetaRow label="替换来源" value={skill.replacementForSkillId ?? '无'} />
               <MetaRow label="来源状态" value={skill.sourceStatus === 'unknown-legacy' ? '来源无法确认' : skill.sourceStatus === 'deleted' ? '来源已删除' : skill.sourceStatus === 'available' ? '可用' : '无来源'} />
-              <MetaRow label="位置" value={`skills/${skill.slug}`} />
+              <MetaRow label="位置" value={`${skill.actualSource === 'none' && skill.workspaceSkillId ? 'skills-inactive' : 'skills'}/${skill.slug}`} />
             </SettingsCard>
           </div>
 

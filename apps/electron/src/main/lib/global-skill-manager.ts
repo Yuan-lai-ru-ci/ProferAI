@@ -391,13 +391,14 @@ export function listGlobalSkills(workspaceSlug?: string): GlobalSkillMeta[] {
     const replacementActive = Boolean(override?.replacementWorkspaceSkillId
       ? replacementSkill?.workspaceSkillId === override.replacementWorkspaceSkillId
       : replacementSource?.sourceSkillId === manifest.skillId)
-    const workspaceConflict = Boolean(workspaceSkills.some((skill) => skill.slug === manifest.slug))
+    // actualSource 只描述该全局定义的实际来源。未关联的同名 workspace Skill
+    // 仍由 resolver 按 workspace 优先级处理，但不能把全局定义伪装成 workspace 来源。
     return {
       ...manifest,
       enabledInWorkspace: override?.enabled ?? true,
       replacedInWorkspace: replaced,
       sourceStatus: (replacementSkill?.sourceStatus ?? replacementSource?.sourceStatus ?? 'available') as GlobalSkillMeta['sourceStatus'],
-      actualSource: replacementActive || workspaceConflict ? 'workspace' as const : (override?.enabled === false ? 'none' as const : 'global' as const),
+      actualSource: replacementActive ? 'workspace' as const : (override?.enabled === false ? 'none' as const : 'global' as const),
       ...(replacementSkill?.workspaceSkillId ? { workspaceSkillId: replacementSkill.workspaceSkillId } : {}),
       ...(manifest.source ? {
         sourceSkillId: manifest.source.sourceSkillId,
@@ -993,8 +994,12 @@ function backupWorkspaceMigrationMetadata(workspaceSlug: string, migrationStarte
       }
       // 旧版本 Skill 通常没有 .source.json，备份必须仍然包含完整正文和资源。
       const contentBackup = join(backupDir, 'skills', relative(workspaceRoot(workspaceSlug), skillDir))
-      mkdirSync(dirname(contentBackup), { recursive: true })
-      cpSync(skillDir, contentBackup, { recursive: true, dereference: false, errorOnExist: false })
+      // 历史正文是 repair migration 的不可变证据。已有目录即使来自更早批次也不能
+      // 再被当前副本覆盖，否则下一次重入会把残留副本伪装成新的 clean candidate。
+      if (!existsSync(contentBackup)) {
+        mkdirSync(dirname(contentBackup), { recursive: true })
+        cpSync(skillDir, contentBackup, { recursive: true, dereference: false, errorOnExist: false })
+      }
     }
   }
   mkdirSync(backupDir, { recursive: true })
@@ -1009,7 +1014,14 @@ function backupWorkspaceMigrationMetadata(workspaceSlug: string, migrationStarte
 /** B1/B2 的干净旧副本已验证并备份后退出运行时目录；备份目录保留可人工恢复。 */
 function retireCleanLegacySkillCopy(workspaceSlug: string, dir: string, slug: string, active: boolean): void {
   const target = join(workspaceRoot(workspaceSlug), '.migration-backup', 'retired-skills', active ? 'active' : 'inactive', slug)
-  if (existsSync(target)) return
+  if (existsSync(target)) {
+    // 上次切换成功但状态写入中断时，允许安全重入；若正文已被改动则保留并让本轮失败。
+    if (skillDirectoryHashIgnoringVersion(dir) !== skillDirectoryHashIgnoringVersion(target)) {
+      throw new Error(`历史 Skill 退休目标已存在且正文不一致: ${slug}`)
+    }
+    rmSync(dir, { recursive: true, force: true })
+    return
+  }
   mkdirSync(dirname(target), { recursive: true })
   renameSync(dir, target)
 }
@@ -1094,38 +1106,33 @@ function migrateModifiedLegacyMasters(state: SkillSystemMigrationState): { migra
  */
 export function migrateLegacyWorkspaceSkills(bundleRoot: string): { migrated: number; unknown: number; legacyMasters: number; failed: string[] } {
   const state = readMigrationState()
-  // 旧版本曾把“仅同名/带 master 标记”的副本标为 completed；schemaVersion=2
-  // 必须重新盘点一次，避免旧结论阻止 B1～B6 规则生效。
-  if (state.schemaVersion >= 3 && state.status === 'completed') return { migrated: 0, unknown: 0, legacyMasters: 0, failed: [] }
+  // schema 3 completed 只代表上一次扫描成功，不代表历史 unknown-legacy 分类正确。
+  // repair migration 每次都重扫，依靠稳定来源证据和幂等目录状态避免重复改动。
   const builtinBySlug = new Map<string, { skillId: string; version: string; hash: string }>()
   for (const manifest of allGlobalManifests().filter((item) => item.type === 'builtin-meta')) {
     builtinBySlug.set(manifest.slug, { skillId: manifest.skillId, version: manifest.version, hash: skillDirectoryHashIgnoringVersion(sourcePath(manifest)) })
   }
-  // 旧版工作区没有来源元数据时，以旧 default-skills 中的 master 内容作为 B1/B2 的可靠证据。
-  // 这里比较“工作区副本 ↔ 旧 master”，而不是“旧 master ↔ 当前 builtin”：新版本
-  // 可能已经更新了 builtin 的正文，但旧版用户未修改的同步副本仍应升级为引用。
-  const findLegacyBuiltinCandidate = (slug: string, workspaceDir: string): { skillId: string; version: string; hash: string } | undefined => {
+  interface LegacyBuiltinEvidence {
+    candidate: { skillId: string; version: string; hash: string }
+    matches: boolean
+  }
+  // B1/B2 只能由当前副本与可靠旧 master 的 hash 一致证明。当前 builtin 或历史
+  // migration backup 不是旧 master，不得用于 clean retirement。
+  const findLegacyBuiltinEvidence = (slug: string, workspaceDir: string): LegacyBuiltinEvidence | undefined => {
     const normalizedSlug = normalizeDefaultSkillSlug(slug)
     const builtin = builtinBySlug.get(normalizedSlug)
     if (!builtin) return undefined
     const legacyRoot = legacyDefaultSkillsRoot()
-    const legacyCandidates = [...new Set([slug, normalizedSlug])]
+    const legacyPath = [...new Set([slug, normalizedSlug])]
       .map((candidateSlug) => join(legacyRoot, candidateSlug))
-      .filter((candidatePath) => existsSync(join(candidatePath, 'SKILL.md')))
-    const legacyPath = legacyCandidates[0]
+      .find((candidatePath) => existsSync(join(candidatePath, 'SKILL.md')))
     if (!legacyPath) return undefined
-    const workspaceHash = skillDirectoryHashIgnoringVersion(workspaceDir)
-    const legacyHash = skillDirectoryHashIgnoringVersion(legacyPath)
-    return workspaceHash === legacyHash ? builtin : undefined
+    return {
+      candidate: builtin,
+      matches: skillDirectoryHashIgnoringVersion(workspaceDir) === skillDirectoryHashIgnoringVersion(legacyPath),
+    }
   }
 
-  // 兼容上一轮迁移已经写入的稳定旧诊断；新鲜旧备份不依赖该中文字符串。
-  const findPreviouslyMisclassifiedBuiltin = (slug: string, source: WorkspaceSkillSource | undefined): { skillId: string; version: string; hash: string } | undefined => {
-    if (source?.sourceStatus !== 'unknown-legacy' || !source.migrationReason) return undefined
-    const normalizedSlug = normalizeDefaultSkillSlug(slug)
-    const builtin = builtinBySlug.get(normalizedSlug)
-    return source.migrationReason.includes('疑似元 Skill') && builtin ? builtin : undefined
-  }
   // bundleRoot 仅用于保持 API 兼容；builtin 必须先由 seedBuiltinGlobalSkills() 建立稳定 manifest，
   // 不能在迁移阶段凭目录名伪造一个可能不存在的全局 skillId。
   void bundleRoot
@@ -1139,8 +1146,9 @@ export function migrateLegacyWorkspaceSkills(bundleRoot: string): { migrated: nu
   state.failedEntries = [...state.failedEntries.filter((item) => !item.startsWith('legacy-master/')), ...legacyMasterResult.failed]
   writeMigrationState(state)
   for (const workspaceSlug of listWorkspaceSlugs()) {
-    if (state.completedWorkspaces.includes(workspaceSlug)) continue
     try {
+      // 必须先读取既有备份，再创建本次备份；否则当前副本会被当成“历史证据”，
+      // 让本次 repair 在首次运行时错误地把任意同名 Skill 转为 builtin。
       backupWorkspaceMigrationMetadata(workspaceSlug, state.startedAt)
       const overrides = readWorkspaceSkillOverrides(workspaceSlug)
       let changed = false
@@ -1152,23 +1160,32 @@ export function migrateLegacyWorkspaceSkills(bundleRoot: string): { migrated: nu
           if (!existsSync(join(root, entry.name, 'SKILL.md'))) continue
           const dir = safeSkillPath(root, entry.name, 'workspace Skill slug')
           const current = readSource(dir) as (WorkspaceSkillSource & LegacyMasterSource) | undefined
+          // 已有同一 global source 的 workspace override 表示该 workspace/slug 已完成
+          // 该状态的 clean repair。只有目录正文不同（例如用户后来修改）时才继续，
+          // 不能按 global skillId 粗暴跳过同名用户副本。
+          const normalizedEntrySlug = normalizeDefaultSkillSlug(entry.name)
+          const existingGlobal = builtinBySlug.get(normalizedEntrySlug)
+          const existingOverride = existingGlobal ? overrides.globalSkills[existingGlobal.skillId] : undefined
+          if (existingOverride && existingGlobal && !existingOverride.replacementWorkspaceSkillId && existingOverride.enabled === enabled
+            && current?.sourceSkillId === existingGlobal.skillId) continue
           // 旧版错误迁移会把“官方正文 + 无 sourceKind”的副本写成 unknown-legacy。
           // 仅对该迁移生成的精确诊断重新核验官方指纹；真正来源不明的 B6 仍保持保护态。
           const normalizedLegacySlug = normalizeDefaultSkillSlug(entry.name)
           const sourceCandidate = current?.sourceKind === 'master' && current.masterSlug
             ? builtinBySlug.get(normalizeDefaultSkillSlug(current.masterSlug))
             : undefined
-          const previousCandidate = findPreviouslyMisclassifiedBuiltin(entry.name, current)
-          const legacyCandidate = !current?.sourceStatus
-            ? findLegacyBuiltinCandidate(entry.name, dir)
-            : previousCandidate && skillDirectoryHashIgnoringVersion(dir) === previousCandidate.hash
-              ? previousCandidate
-              : undefined
-          // legacyCandidate 已在 findLegacyBuiltinCandidate 内部完成“工作区副本 ↔ 旧 master”比对，
-          // 不能再次拿旧副本去和当前 builtin hash 比较：新版本 builtin 可能已经升级正文。
-          const cleanCandidate = sourceCandidate && skillDirectoryHashIgnoringVersion(dir) === sourceCandidate.hash
+          const legacyEvidence = findLegacyBuiltinEvidence(current?.masterSlug ?? entry.name, dir)
+          // source-less/current/backupCandidate 的优先级：旧 master > 保守保留。
+          // 历史 backup 仅不可变诊断证据，绝不生成 clean candidate。
+          const sourceCandidateForModified = sourceCandidate ?? legacyEvidence?.candidate
+          const currentHash = skillDirectoryHashIgnoringVersion(dir)
+          // 显式 sourceKind=master 是可靠来源标记，可用当前 builtin hash 判断未修改；
+          // source-less 副本则只能使用 legacyEvidence（旧 default-skills），不能使用当前 builtin。
+          const cleanCandidate = sourceCandidate && currentHash === sourceCandidate.hash
             ? sourceCandidate
-            : legacyCandidate
+            : !sourceCandidate && legacyEvidence?.matches
+              ? legacyEvidence.candidate
+              : undefined
           if (cleanCandidate) {
             // B1/B2：旧副本内容等于未修改的 master，升级为全局引用而不是 workspace 副本。
             overrides.globalSkills[cleanCandidate.skillId] = enabled
@@ -1179,8 +1196,10 @@ export function migrateLegacyWorkspaceSkills(bundleRoot: string): { migrated: nu
             changed = true
             continue
           }
-          if (current?.sourceStatus === 'unknown-legacy' || current?.sourceStatus === 'uncertain-legacy-copy' || current?.sourceStatus === 'modified-legacy-copy' || current?.sourceStatus === 'preserved-legacy-disabled-copy') {
-            // 已分类的 B3/B4/B5/B6 必须是稳定终态；重试不能因为新增官方基线而改判为 B1/B2。
+          if (current?.sourceStatus === 'modified-legacy-copy' || current?.sourceStatus === 'preserved-legacy-disabled-copy'
+            || (current?.sourceStatus === 'uncertain-legacy-copy' && current.sourceKind === 'master')) {
+            // B3/B4 与有明确 master 来源但无法确认基线的 B5 是稳定终态；
+            // source-less 的 unknown-legacy 则可能是旧版本误分类，仍须重新核验。
             if (!current.workspaceSkillId) { ensureWorkspaceSkillId(dir, current); changed = true }
             continue
           }
@@ -1206,10 +1225,11 @@ export function migrateLegacyWorkspaceSkills(bundleRoot: string): { migrated: nu
             }
             continue
           }
-          const candidate = sourceCandidate
-          const suspectedBuiltin = current === undefined ? builtinBySlug.get(normalizedLegacySlug) : undefined          // B1/B2 只允许“来源可靠 + 内容等于官方基线”的唯一匹配。
-          // 仅同名、版本相同或 sourceKind=master 不能证明正文未被修改。
-          const knownModifiedCandidate = candidate && skillDirectoryHashIgnoringVersion(dir) !== candidate.hash ? candidate : undefined
+          const suspectedBuiltin = current === undefined ? builtinBySlug.get(normalizedLegacySlug) : undefined
+          // 只有存在可靠旧 master 且内容不同，才判定 B3/B4；无旧 master 时保守未知。
+          const knownModifiedCandidate = sourceCandidateForModified && legacyEvidence && !legacyEvidence.matches
+            ? sourceCandidateForModified
+            : undefined
 
           if (knownModifiedCandidate) {
             // B3/B4：保留正文为独立 workspace Skill，明确禁用全局源。
@@ -1227,9 +1247,15 @@ export function migrateLegacyWorkspaceSkills(bundleRoot: string): { migrated: nu
               sourceStatus: enabled ? 'modified-legacy-copy' : 'preserved-legacy-disabled-copy',
               migrationReason: '来源可靠但内容指纹与官方基线不一致，按独立工作区副本保留',
             })
-            overrides.globalSkills[knownModifiedCandidate.skillId] = enabled
-              ? { enabled: false, replacementWorkspaceSkillSlug: entry.name, replacementWorkspaceSkillId: workspaceSkillId, disabledReason: 'modified-legacy-copy', updatedAt: new Date().toISOString() }
-              : { enabled: false, disabledReason: 'preserved-legacy-disabled-copy', updatedAt: new Date().toISOString() }
+            // active/inactive 都保留稳定替换关系；inactive 仍以 enabled=false
+            // 禁止进入 runtime，但 replacement ID 让 UI/repair 能精确追踪该副本。
+            overrides.globalSkills[knownModifiedCandidate.skillId] = {
+              enabled: false,
+              replacementWorkspaceSkillSlug: entry.name,
+              replacementWorkspaceSkillId: workspaceSkillId,
+              disabledReason: enabled ? 'modified-legacy-copy' : 'preserved-legacy-disabled-copy',
+              updatedAt: new Date().toISOString(),
+            }
             migrated++
             changed = true
           } else if (current?.sourceKind === 'master') {
@@ -1288,7 +1314,7 @@ export function migrateLegacyWorkspaceSkills(bundleRoot: string): { migrated: nu
   return { migrated, unknown, legacyMasters, failed }
 }
 
-function scanWorkspaceSkills(workspaceSlug: string): ResolvedSkillMeta[] {
+function scanWorkspaceSkills(workspaceSlug: string, includeInactive = false): ResolvedSkillMeta[] {
   assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
   const result: ResolvedSkillMeta[] = []
   for (const [root, enabled] of [[workspaceSkillsRoot(workspaceSlug), true], [workspaceInactiveRoot(workspaceSlug), false]] as const) {
@@ -1296,7 +1322,7 @@ function scanWorkspaceSkills(workspaceSlug: string): ResolvedSkillMeta[] {
     for (const entry of readdirSync(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       assertSafeSkillSegment(entry.name, 'workspace Skill slug')
-      if (!existsSync(join(root, entry.name, 'SKILL.md')) || !enabled) continue
+      if (!existsSync(join(root, entry.name, 'SKILL.md')) || (!enabled && !includeInactive)) continue
       const content = readFileSync(join(root, entry.name, 'SKILL.md'), 'utf-8')
       const meta = parseMeta(content, entry.name)
       const source = readSource(join(root, entry.name))
@@ -1330,6 +1356,7 @@ function resolveSkills(workspaceSlug: string): RuntimeSkillsProjection {
   const overrides = readWorkspaceSkillOverrides(workspaceSlug)
   const local = scanWorkspaceSkills(workspaceSlug)
   const globalsById = new Map(allGlobalManifests().map((skill) => [skill.skillId, skill]))
+  const localAll = scanWorkspaceSkills(workspaceSlug, true)
   // restoreGlobalSkill 只清除 replacement，不删除副本；带来源的 active 副本此时作为备份保留，
   // 不能再次以同 slug 抢占已恢复的全局源。来源删除或 replacement 状态仍允许副本继续生效。
   const effectiveLocal = local.filter((skill) => {
@@ -1353,8 +1380,8 @@ function resolveSkills(workspaceSlug: string): RuntimeSkillsProjection {
     const override = overrides.globalSkills[global.skillId]
     if (override?.enabled === false) {
       const replacementPresent = override.replacementWorkspaceSkillId
-        ? local.some((skill) => skill.workspaceSkillId === override.replacementWorkspaceSkillId)
-        : Boolean(override.replacementWorkspaceSkillSlug && local.some((skill) => skill.sourceSkillId === global.skillId))
+        ? localAll.some((skill) => skill.workspaceSkillId === override.replacementWorkspaceSkillId)
+        : Boolean(override.replacementWorkspaceSkillSlug && localAll.some((skill) => skill.sourceSkillId === global.skillId))
       if ((override.replacementWorkspaceSkillId || override.replacementWorkspaceSkillSlug) && !replacementPresent) {
         diagnostics.push({
           code: 'replacement-missing',
