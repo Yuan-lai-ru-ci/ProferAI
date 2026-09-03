@@ -6,7 +6,7 @@
  * - 分步执行打包流程，每步带计时和状态指示
  * - 支持只构建当前架构（--current-arch）加速开发测试
  * - 支持详细输出模式（--verbose）查看 electron-builder 完整日志
- * - 支持跳过代码签名（--no-sign）
+ * - 支持跳过代码签名（--no-sign，Mac 验收包专用）
  * - 支持只构建 DMG 或 ZIP（--dmg / --zip）
  *
  * 使用：
@@ -19,6 +19,10 @@
 
 import { spawnSync } from 'child_process'
 import { delimiter, dirname, join } from 'path'
+
+const { assertPackagingHost } = require('./packaging-host.cjs') as {
+  assertPackagingHost: (targetPlatform: 'mac' | 'win' | 'linux', hostPlatform?: string) => void
+}
 
 // ============================================
 // 类型定义
@@ -167,7 +171,14 @@ function main(): void {
   const arch = process.arch // arm64 或 x64
   const results: StepResult[] = []
 
-  // P1 只支持在 Apple Silicon 真机上构建本地无签名包。拒绝从 Windows/Linux
+  try {
+    assertPackagingHost(opts.platform, process.platform)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(2)
+  }
+
+  // 只支持在 Apple Silicon 真机上构建 macOS 产物。拒绝从 Windows/Linux
   // 伪造 macOS 产物，也不让 Intel Mac 被误认为已进入支持范围。
   if (opts.platform === 'mac' && process.platform !== 'darwin') {
     console.error('macOS 打包必须在 Apple Silicon Mac 上运行；当前宿主不是 darwin。')
@@ -177,17 +188,13 @@ function main(): void {
     console.error(`P1 仅支持 Apple Silicon arm64 本地构建，当前架构为 ${arch}。`)
     process.exit(2)
   }
-  if (opts.platform === 'mac' && !opts.noSign) {
-    console.error('P1 macOS 构建必须显式传 --no-sign；Developer ID 签名和 notarization 尚未接入。')
-    process.exit(2)
-  }
 
   // 打印配置信息
   console.log(`\n${color.bgBlue}${color.bold} Profer 打包工具 ${color.reset}\n`)
   console.log(`  ${color.bold}平台${color.reset}:     ${opts.platform}`)
   console.log(`  ${color.bold}架构${color.reset}:     ${opts.currentArch ? arch + ' (仅当前)' : opts.platform === 'mac' ? 'arm64' : 'arm64 + x64'}`)
   console.log(`  ${color.bold}格式${color.reset}:     ${opts.targetFormat}`)
-  console.log(`  ${color.bold}签名${color.reset}:     ${opts.noSign ? '跳过' : '启用'}`)
+  console.log(`  ${color.bold}签名${color.reset}:     ${opts.noSign ? '跳过（验收包）' : '启用（发布包）'}`)
   console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
   printSeparator()
 
@@ -262,6 +269,11 @@ function main(): void {
   // 只构建当前架构
   if (opts.currentArch) {
     builderArgs.push(`--${arch}`)
+  }
+
+  // 正式 macOS 更新包必须是可验证的签名包；无签名只允许通过 dist:mac 验收命令生成。
+  if (opts.platform === 'mac' && !opts.noSign) {
+    builderArgs.push('--config.forceCodeSigning=true')
   }
 
   // 指定输出格式
