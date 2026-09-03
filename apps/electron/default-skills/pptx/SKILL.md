@@ -2,7 +2,7 @@
 name: pptx
 description: "Use this skill whenever a PowerPoint .pptx file is involved as input or output. This includes creating, reading, editing, modifying, combining, splitting, previewing, or exporting PowerPoint files; working with templates, layouts, speaker notes, comments, charts, and native editable objects. Trigger on requests to create or handle a PowerPoint file, PPT, 幻灯片, 演示文稿, or a .pptx filename. Do not introduce extra project paperwork, specification contracts, source tracking, or confirmation workflows unless the user explicitly requests formal review or submission governance."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.2.0"
+version: "1.2.1"
 ---
 
 # PPTX Skill
@@ -157,6 +157,12 @@ Choose colors that match your topic — don't default to generic blue. Use these
 - **NEVER use accent lines under titles** — these are a hallmark of AI-generated slides; use whitespace or background color instead
 
 ---
+
+## Profer 正式预览（必须遵守）
+
+PPTX 生成或修改后，必须进入 Profer 当前 Agent 会话的正式文件预览，让用户与 Agent 围绕同一份文件继续工作：使用 `open_file_preview` 请求现有 PreviewPanel/PreviewTabContent 刷新或打开 PPTX。不要创建 `Preview.html`，不要把 PPTX 转成本地网页，不要使用 `BrowserPreviewOpen`、BrowserScreenshot、Quick Look 或任何独立截图旁路来替代 Profer PPT 预览。浏览器工具只用于用户明确要求访问网页或预览 HTML/网页 PPT。
+
+`open_file_preview` 只负责把 PPTX 交给正式预览入口，不代表视觉设计已经通过；应等待用户在同一预览中反馈，或在具备可靠视觉观察能力时基于正式预览状态继续修订。结构、内容、可编辑性检查仍需单独完成。
 
 ## QA (Required)
 

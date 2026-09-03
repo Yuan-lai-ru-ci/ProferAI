@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { resolveAuthorizedRemoteFilePath } from './remote-file-access'
@@ -26,7 +26,7 @@ describe('resolveAuthorizedRemoteFilePath', () => {
     expect(resolveAuthorizedRemoteFilePath(file, {
       directoryRoots: [join(root, 'workspace')],
       exactFiles: [],
-    })).toBe(file)
+    })).toBe(realpathSync(file))
   })
 
   test('allows relative paths only below server-derived roots', () => {
@@ -39,7 +39,7 @@ describe('resolveAuthorizedRemoteFilePath', () => {
     expect(resolveAuthorizedRemoteFilePath('src/app.ts', {
       directoryRoots: [workspace],
       exactFiles: [],
-    })).toBe(file)
+    })).toBe(realpathSync(file))
   })
 
   test('rejects another workspace even when the client submits an absolute path', () => {
@@ -66,7 +66,7 @@ describe('resolveAuthorizedRemoteFilePath', () => {
     writeFileSync(sibling, 'blocked')
 
     const context = { directoryRoots: [], exactFiles: [attached] }
-    expect(resolveAuthorizedRemoteFilePath(attached, context)).toBe(attached)
+    expect(resolveAuthorizedRemoteFilePath(attached, context)).toBe(realpathSync(attached))
     expect(resolveAuthorizedRemoteFilePath(sibling, context)).toBeNull()
   })
 

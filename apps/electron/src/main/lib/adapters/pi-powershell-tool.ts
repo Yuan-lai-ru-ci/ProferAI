@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { win32 } from 'node:path'
 import { Type } from 'typebox'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
@@ -50,7 +50,7 @@ export function getWindowsPowerShellPath(
 ): string | null {
   const systemRoot = environment.SystemRoot || environment.SYSTEMROOT || environment.WINDIR || environment.windir
   if (!systemRoot) return null
-  const executable = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const executable = win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   return pathExists(executable) ? executable : null
 }
 

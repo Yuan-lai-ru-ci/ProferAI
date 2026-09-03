@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { InMemoryCredentialStore } from '@earendil-works/pi-ai'
 import {
   DEFAULT_CONTEXT_WINDOW,
   buildModel,
@@ -9,6 +10,62 @@ import {
   resolvePiApiKey,
   stripAgentSdkContextSuffix,
 } from './pi-model-registry'
+
+const BASE_PI_AGENT_OPTIONS = {
+  prompt: 'hi',
+  permissionMode: 'plan' as const,
+  systemPrompt: 'system',
+  piAgentDir: '/tmp/pi-agent',
+  piSessionDir: '/tmp/pi-session',
+}
+
+describe('Pi runtime 临时凭据隔离', () => {
+  test.each([
+    {
+      name: 'ChatGPT Codex',
+      input: {
+        ...BASE_PI_AGENT_OPTIONS,
+        sessionId: 'session-codex-sync-error',
+        apiKey: 'oauth-access-token',
+        provider: 'openai-codex' as const,
+        model: 'gpt-5.6-terra',
+      },
+    },
+    {
+      name: '普通 API Key 渠道',
+      input: {
+        ...BASE_PI_AGENT_OPTIONS,
+        sessionId: 'session-openai-sync-error',
+        apiKey: 'sk-test',
+        provider: 'openai' as const,
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-5.1',
+      },
+    },
+  ])('Given $name 的 runtime key 同步失败 When buildModel Then 使用内存存储并向调用方抛出', async ({ input }) => {
+    const synchronizationError = new Error('runtime key synchronization failed')
+    let createOptions: Record<string, unknown> | undefined
+    const sdk = {
+      ModelRuntime: {
+        create: async (options: Record<string, unknown>) => {
+          createOptions = options
+          return {
+            setRuntimeApiKey: async () => {
+              throw synchronizationError
+            },
+          }
+        },
+      },
+    } as unknown as Parameters<typeof buildModel>[0]
+
+    await expect(buildModel(sdk, input)).rejects.toBe(synchronizationError)
+    expect(createOptions).toMatchObject({
+      modelsPath: null,
+      allowModelNetwork: false,
+    })
+    expect(createOptions?.credentials).toBeInstanceOf(InMemoryCredentialStore)
+  })
+})
 
 describe('Pi runtime 智谱团队版认证', () => {
   test('Given 团队版复合凭据 When resolvePiApiKey Then 提取出真实 apiKey', () => {

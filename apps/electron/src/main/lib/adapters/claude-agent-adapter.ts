@@ -31,7 +31,7 @@ import type { CanUseToolOptions, PermissionResult } from '../agent-permission-se
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '../error-patterns'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { win32 } from 'node:path'
 import { BackgroundTaskManager } from '../background-task-manager'
 
 /** SDK Query 对象类型（从动态导入中推断） */
@@ -1214,7 +1214,7 @@ export function getWindowsPowerShellPath(
 ): string | null {
   const systemRoot = environment.SystemRoot || environment.WINDIR
   if (!systemRoot) return null
-  const executable = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const executable = win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   return pathExists(executable) ? executable : null
 }
 

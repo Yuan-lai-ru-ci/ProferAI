@@ -1,22 +1,29 @@
 /**
  * agent-directory-utils 测试
  */
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
-import { mkdirSync, existsSync, rmSync } from 'node:fs'
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { getAgentWorkspacePath, getWorkspaceFilesDir } from './config-paths'
-import { homedir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { collectAttachedDirectories } from './agent-directory-utils'
 
-const testDir = join(homedir(), '.profer-test-tmp')
+let testDir: string | undefined
+let previousConfigRoot: string | undefined
 
 beforeEach(() => {
-  if (!existsSync(testDir)) mkdirSync(testDir, { recursive: true })
+  previousConfigRoot = process.env.PROFER_CONFIG_DIR
+  testDir = mkdtempSync(join(tmpdir(), 'profer-agent-directory-utils-'))
+  process.env.PROFER_CONFIG_DIR = testDir
 })
 
 afterEach(() => {
-  if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
+  if (previousConfigRoot === undefined) delete process.env.PROFER_CONFIG_DIR
+  else process.env.PROFER_CONFIG_DIR = previousConfigRoot
+  if (testDir) rmSync(testDir, { recursive: true, force: true })
+  testDir = undefined
+  previousConfigRoot = undefined
 })
 
 describe('collectAttachedDirectories', () => {
@@ -88,13 +95,9 @@ describe('collectAttachedDirectories', () => {
   test('工作区会加入根目录和 workspace-files，以读取工作区 CLAUDE.md', () => {
     const slug = `directory-utils-${randomUUID()}`
     const workspaceDir = getAgentWorkspacePath(slug)
-    try {
-      const result = collectAttachedDirectories({ workspaceSlug: slug })
+    const result = collectAttachedDirectories({ workspaceSlug: slug })
 
-      expect(result).toContain(workspaceDir)
-      expect(result).toContain(getWorkspaceFilesDir(slug))
-    } finally {
-      if (existsSync(workspaceDir)) rmSync(workspaceDir, { recursive: true, force: true })
-    }
+    expect(result).toContain(workspaceDir)
+    expect(result).toContain(getWorkspaceFilesDir(slug))
   })
 })

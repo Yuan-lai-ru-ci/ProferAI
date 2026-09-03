@@ -8,7 +8,7 @@
  */
 
 import { appendFileSync, existsSync, readFileSync, mkdirSync, lstatSync, realpathSync } from 'node:fs'
-import { dirname, resolve, sep } from 'node:path'
+import { basename, dirname, resolve, sep } from 'node:path'
 import { getAgentSessionsDir } from './config-paths'
 import {
   buildGraphFromEvents,
@@ -50,6 +50,15 @@ function assertSafeSessionId(sessionId: string): void {
   if (!isSafeSessionId(sessionId)) throw new Error('无效的会话标识')
 }
 
+function realpathCandidate(path: string): string {
+  if (existsSync(path)) return realpathSync(path)
+  return resolve(realpathSync(dirname(path)), basename(path))
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(root + sep)
+}
+
 /**
  * 解析并校验 Graph 文件路径。
  * 会话 ID 校验阻止路径注入；这里再拒绝已有 Graph 文件的 symlink，
@@ -60,15 +69,12 @@ function getSafeGraphPath(sessionId: string): string {
   const sessionDir = getAgentSessionsDir()
   const graphPath = resolve(getGraphJsonlPath(sessionDir, sessionId))
   const realSessionDir = realpathSync(sessionDir)
-  if (graphPath !== realSessionDir && !graphPath.startsWith(realSessionDir + sep)) {
-    throw new Error('任务图路径不在会话目录内')
-  }
   if (existsSync(graphPath)) {
     if (lstatSync(graphPath).isSymbolicLink()) throw new Error('任务图文件不允许使用符号链接')
-    const realGraphPath = realpathSync(graphPath)
-    if (realGraphPath !== realSessionDir && !realGraphPath.startsWith(realSessionDir + sep)) {
-      throw new Error('任务图路径不在会话目录内')
-    }
+  }
+  const realGraphPath = realpathCandidate(graphPath)
+  if (!isPathInside(realSessionDir, realGraphPath)) {
+    throw new Error('任务图路径不在会话目录内')
   }
   return graphPath
 }
@@ -186,4 +192,3 @@ export function appendGraphEvent(sessionId: string, event: GraphEvent): void {
   const line = serializeEvent(event)
   appendFileSync(graphJsonlPath, line + '\n', 'utf-8')
 }
-

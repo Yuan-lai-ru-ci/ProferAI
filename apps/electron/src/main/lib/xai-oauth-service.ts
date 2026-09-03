@@ -9,6 +9,7 @@
 import { shell } from 'electron'
 import type { XaiOAuthCredentials, XaiOAuthDeviceCode } from '@profer/shared'
 import { runWithOAuthProxyScope } from './oauth-proxy-scope'
+import { createIsolatedModelRuntimeOptions } from './pi-model-runtime-options'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type OAuthCredential = XaiOAuthCredentials & { type: 'oauth'; [key: string]: unknown }
@@ -73,10 +74,9 @@ export async function loginXaiOAuth(callbacks?: XaiLoginCallbacks): Promise<XaiO
 
   try {
     return await runWithOAuthProxyScope(async () => {
-      const runtime = await sdk.ModelRuntime.create({
-        credentials: createEphemeralCredentialStore(),
-        allowModelNetwork: false,
-      })
+      const runtime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions(
+        createEphemeralCredentialStore(),
+      ))
       const credentials = await runtime.login('xai', 'oauth', {
         signal: abort.signal,
         // xAI 的内置 OAuth 直接走 device code，不会向此 callback 提问；保留拒绝路径
@@ -120,7 +120,7 @@ export async function refreshXaiOAuth(refreshToken: string): Promise<XaiOAuthCre
       refresh: refreshToken,
       expires: 0,
     })
-    const runtime = await sdk.ModelRuntime.create({ credentials: store, allowModelNetwork: false })
+    const runtime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions(store))
     await runtime.getAuth('xai')
     return normalizeCredentials(await store.read('xai'))
   })

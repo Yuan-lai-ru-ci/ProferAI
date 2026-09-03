@@ -232,10 +232,13 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
 
     const imageTool = tools.find((tool) => tool.name === 'send_local_image')
     const previewTool = tools.find((tool) => tool.name === 'inspect_preview')
+    const openPreviewTool = tools.find((tool) => tool.name === 'open_file_preview')
     expect(imageTool).toBeDefined()
     expect(imageTool!.description).not.toContain('IMAGE_ATTACHMENT')
     expect(previewTool).toBeDefined()
     expect(JSON.stringify(previewTool!.parameters)).toContain('previousRevision')
+    expect(openPreviewTool).toBeDefined()
+    expect(openPreviewTool!.description).toContain('official current-session file preview')
   })
 
   test('Given GPT Image enabled and available in a workspace Pi session When building tools Then it exposes the unified generate_image schema and structured image result', async () => {

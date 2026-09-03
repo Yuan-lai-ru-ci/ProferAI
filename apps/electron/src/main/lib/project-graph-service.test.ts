@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -55,6 +55,30 @@ describe('Graph sessionId 安全边界', () => {
       type: 'task_created', taskId: 'task', timestamp: 1,
       payload: { subject: 'task', description: '', dependsOn: [] },
     })).toThrow('符号链接')
+  })
+
+  test('Given 配置目录经符号链接指向同一真实目录 When 写入 Graph Then 使用真实路径语义通过边界校验', async () => {
+    const container = mkdtempSync(join(tmpdir(), 'profer-harness-graph-alias-'))
+    roots.push(container)
+    const realConfigDir = join(container, 'real-config')
+    const aliasConfigDir = join(container, 'config-alias')
+    mkdirSync(realConfigDir)
+    try {
+      symlinkSync(realConfigDir, aliasConfigDir, process.platform === 'win32' ? 'junction' : 'dir')
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'EPERM') return
+      throw error
+    }
+    process.env.PROFER_CONFIG_DIR = aliasConfigDir
+    const service = await import(`./project-graph-service?test=${Date.now()}-${Math.random()}`)
+
+    service.appendGraphEvent('session-alias', {
+      type: 'task_created', taskId: 'task', timestamp: 1,
+      payload: { subject: 'path alias', description: '', dependsOn: [] },
+    })
+
+    expect(service.loadGraph('session-alias').nodes.task?.subject).toBe('path alias')
+    expect(existsSync(join(realConfigDir, 'agent-sessions', 'session-alias-graph.jsonl'))).toBe(true)
   })
 })
 

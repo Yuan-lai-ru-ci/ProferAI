@@ -30,7 +30,7 @@ describe('Pi Windows PowerShell tool', () => {
     })
   })
 
-  test('Given a native Windows PowerShell command When executing Then returns its stdout without requiring PATH lookup', async () => {
+  test.skipIf(process.platform !== 'win32')('Given a native Windows PowerShell command When executing Then returns its stdout without requiring PATH lookup', async () => {
     const result = await executePowerShellCommand('[Environment]::OSVersion.Platform', {
       cwd: 'C:\\',
       executable: WINDOWS_POWERSHELL,
@@ -43,7 +43,7 @@ describe('Pi Windows PowerShell tool', () => {
     expect(result.output).toContain('Win32NT')
   })
 
-  test('Given stderr and a non-zero exit code When executing Then preserves both for the tool result', async () => {
+  test.skipIf(process.platform !== 'win32')('Given stderr and a non-zero exit code When executing Then preserves both for the tool result', async () => {
     const result = await executePowerShellCommand("[Console]::Error.WriteLine('expected-error'); exit 7", {
       cwd: 'C:\\',
       executable: WINDOWS_POWERSHELL,
@@ -54,7 +54,7 @@ describe('Pi Windows PowerShell tool', () => {
     expect(result.output).toContain('expected-error')
   })
 
-  test('Given a command exceeding its timeout When executing Then terminates it and reports the timeout', async () => {
+  test.skipIf(process.platform !== 'win32')('Given a command exceeding its timeout When executing Then terminates it and reports the timeout', async () => {
     const result = await executePowerShellCommand('Start-Sleep -Seconds 10', {
       cwd: 'C:\\',
       executable: WINDOWS_POWERSHELL,
@@ -114,7 +114,7 @@ describe('Pi Windows PowerShell tool', () => {
     expect(DEFAULT_TIMEOUT_SECONDS).toBe(30)
   })
 
-  test('Given an aborted signal When executing Then terminates the command and reports cancellation', async () => {
+  test.skipIf(process.platform !== 'win32')('Given an aborted signal When executing Then terminates the command and reports cancellation', async () => {
     const controller = new AbortController()
     const pending = executePowerShellCommand('Start-Sleep -Seconds 10', {
       cwd: 'C:\\',

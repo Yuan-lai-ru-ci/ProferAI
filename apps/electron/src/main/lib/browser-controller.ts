@@ -620,11 +620,13 @@ export class BrowserController {
     view.webContents.on('did-navigate', () => { this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
     view.webContents.on('did-navigate-in-page', () => { this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
     view.webContents.on('destroyed', () => {
-      if (!browserSession.tabs.has(tab.tabId)) return
+      if (this.sessions.get(browserSession.sessionId) !== browserSession || !browserSession.tabs.has(tab.tabId)) return
       const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
       browserSession.tabs.delete(tab.tabId)
       if (browserSession.tabs.size === 0) {
-        this.sessions.delete(browserSession.sessionId)
+        // WebContents 可能因 renderer crash 等原因绕过 closeTab。最后一个 tab 消失时仍必须
+        // 从主窗口移除透明 hostView，否则 macOS 会留下永久拦截点击的不可见原生区域。
+        this.disposeSession(browserSession)
         return
       }
       if (browserSession.activeTabId === tab.tabId) this.selectAdjacentActiveTab(browserSession, closingIndex)
@@ -710,9 +712,11 @@ export class BrowserController {
 
   open(sessionId: string): BrowserViewState {
     // 用户从界面手动打开浏览器时，初始标签不应伪装成 Agent 标签。
-    // 前台会话所有权由 renderer 的 setAgentBrowserForeground 同步维护；
-    // 这里不能再次切换所有权，否则旧会话迟到的 open IPC 可能抢回主窗口。
+    // 这是用户面板的显式打开动作，必须无条件重新声明当前 session 的前台所有权：
+    // 主进程重启 / renderer 重载后旧的 foregroundSessionId 可能仍指向已销毁的 View，
+    // 仅在它为 null 时恢复会让新创建的网页永远被布局判定为后台而不显示。
     const browserSession = this.getOrCreateSession(sessionId, [], false)
+    this.setForegroundSession(sessionId)
     this.markUserBrowserContext(browserSession)
     this.emit(browserSession)
     return structuredClone(this.buildState(browserSession))
@@ -956,7 +960,7 @@ export class BrowserController {
     const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
     this.disposeTab(browserSession, tab)
     if (browserSession.tabs.size === 0) {
-      this.sessions.delete(sessionId)
+      this.disposeSession(browserSession)
       return null
     }
     if (browserSession.activeTabId === tab.tabId) this.selectAdjacentActiveTab(browserSession, closingIndex)
@@ -1565,19 +1569,38 @@ export class BrowserController {
     }
   }
 
-  async close(sessionId: string): Promise<void> {
-    if (this.foregroundSessionId === sessionId) this.foregroundSessionId = null
-    const browserSession = this.sessions.get(sessionId)
-    if (!browserSession) return
-    this.sessions.delete(sessionId)
+  /**
+   * 销毁浏览器 session 的唯一出口。必须先隐藏、再从主窗口移除 hostView；仅从 sessions Map
+   * 删除记录并不会移除 Electron 原生 View，透明残留仍会在 macOS 上参与 hit-test。
+   *
+   * 注意：foregroundSessionId 表示当前前台 Agent 会话，不是浏览器 session 的存活状态。
+   * 关闭最后一个浏览器标签后必须保留该所有权，否则同一 Agent 会话重新打开浏览器时，
+   * renderer 不会发生会话切换，新的 layout 会永久被判定为后台而没有画面。
+   */
+  private disposeSession(browserSession: BrowserSessionRecord): void {
+    if (this.sessions.get(browserSession.sessionId) !== browserSession) return
+    this.sessions.delete(browserSession.sessionId)
+    browserSession.lastVisible = false
+    try {
+      // 即使 removeChildView 因窗口销毁竞态失败，也把命中区域先收敛为零，避免留下透明死区。
+      browserSession.hostView.setVisible(false)
+      browserSession.hostView.setBounds({ x: 0, y: 0, width: 0, height: 0 })
+    } catch { /* 宿主已销毁 */ }
     for (const tab of browserSession.tabs.values()) {
       this.clearAgentTargetHighlight(tab)
+      try { tab.view.setVisible(false) } catch { /* 视图已销毁 */ }
       try { if (tab.view.webContents.debugger.isAttached()) tab.view.webContents.debugger.detach() } catch { /* 已销毁 */ }
       try { browserSession.hostView.removeChildView(tab.view) } catch { /* 宿主已销毁 */ }
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     }
-    try { this.owner?.contentView.removeChildView(browserSession.hostView) } catch { /* owner 已销毁 */ }
     browserSession.tabs.clear()
+    try { this.owner?.contentView.removeChildView(browserSession.hostView) } catch { /* owner 已销毁 */ }
+  }
+
+  async close(sessionId: string): Promise<void> {
+    const browserSession = this.sessions.get(sessionId)
+    if (!browserSession) return
+    this.disposeSession(browserSession)
   }
 
   dispose(): void {

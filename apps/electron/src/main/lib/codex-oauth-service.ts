@@ -8,6 +8,7 @@
 
 import { shell } from 'electron'
 import type { CodexOAuthCredentials } from '@profer/shared'
+import { createIsolatedModelRuntimeOptions } from './pi-model-runtime-options'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type OAuthCredential = {
@@ -98,10 +99,9 @@ export async function loginCodexOAuth(callbacks?: CodexLoginCallbacks): Promise<
   activeLoginAbort = abort
 
   try {
-    const runtime = await sdk.ModelRuntime.create({
-      credentials: createEphemeralCredentialStore(),
-      allowModelNetwork: false,
-    })
+    const runtime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions(
+      createEphemeralCredentialStore(),
+    ))
     const credentials = await runtime.login('openai-codex', 'oauth', {
       signal: abort.signal,
       prompt: async (prompt) => {
@@ -148,10 +148,7 @@ export async function refreshCodexOAuth(refreshToken: string): Promise<CodexOAut
     refresh: refreshToken,
     expires: 0,
   })
-  const runtime = await sdk.ModelRuntime.create({
-    credentials: store,
-    allowModelNetwork: false,
-  })
+  const runtime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions(store))
 
   // getAuth() 走 provider 的标准 refresh 流程，并通过 store 原子更新凭据。
   await runtime.getAuth('openai-codex')

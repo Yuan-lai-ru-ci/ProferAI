@@ -40,6 +40,8 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('PPT 视觉交付门禁')
     expect(prompt).not.toContain('inspect_deck_sources')
     expect(prompt).not.toContain('PptxScrollViewer')
+    expect(prompt).toContain('open_file_preview')
+    expect(prompt).toContain('不得为 PPTX 创建 `Preview.html`')
   })
 
   test('PPT 能力激活后不注入已移除的快速生成通道或治理工作流', () => {

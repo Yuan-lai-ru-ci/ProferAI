@@ -118,7 +118,13 @@ function isWithinRoot(root: string, target: string): boolean {
 
 async function replay(context: AgentImageGenerationRecordContext): Promise<AgentImageGenerationRecord[]> {
   const agentCwd = await normalizedAgentCwd(context.agentCwd)
-  const outputRoot = resolve(agentCwd, '.context', 'agent-output-images')
+  // persisted output paths may use the non-canonical long Windows path while
+  // realpath(agentCwd) returns an 8.3 alias; use the lexical session root for
+  // containment as well as the canonical cwd to avoid rejecting our own output.
+  const outputRoots = [
+    resolve(context.agentCwd, '.context', 'agent-output-images'),
+    resolve(agentCwd, '.context', 'agent-output-images'),
+  ]
   let contents: string
   try { contents = await readFile(await getAgentImageGenerationRecordsPath(context.agentCwd), 'utf8') } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
@@ -132,7 +138,7 @@ async function replay(context: AgentImageGenerationRecordContext): Promise<Agent
       if (!record || record.sessionId !== context.sessionId) continue
       // JSONL is session-local but must still be treated as untrusted persisted input: a
       // tampered image path must never turn a card into a renderer file-read capability.
-      if (record.image && !isWithinRoot(outputRoot, resolve(record.image.localPath))) continue
+      if (record.image && !outputRoots.some((root) => isWithinRoot(root, resolve(record.image!.localPath)))) continue
       const existing = latest.get(record.id)
       if (!existing || record.updatedAt >= existing.updatedAt) latest.set(record.id, record)
     } catch { console.warn('[图片生成记录] 忽略损坏的会话记录行') }

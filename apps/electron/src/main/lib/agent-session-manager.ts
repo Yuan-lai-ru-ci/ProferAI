@@ -25,7 +25,9 @@ import {
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
-import { normalizeSessionPresetId } from './agent-preset-manager'
+import { normalizeSessionPresetId, presetReferenceForId } from './agent-preset-manager'
+import { copySettledPiHarnessEventsForFork } from './pi-harness/pi-harness-store'
+import { forkPiSessionArtifact } from './pi-session-fork'
 import { isEphemeralTransportError } from './error-patterns'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
@@ -92,9 +94,7 @@ import {
   parseEventsFromJsonl,
   serializeEvent,
 } from '@profer/project-core'
-import { copySettledPiHarnessEventsForFork } from './pi-harness/pi-harness-store'
-import { forkPiSessionArtifact } from './pi-session-fork'
-// GPT Image 的产物由统一附件生命周期管理；Agent 会话无需额外清理逻辑
+// GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
 
 /**
  * 会话索引文件格式
@@ -341,10 +341,8 @@ export function getAgentSessionMeta(id: string): AgentSessionMeta | undefined {
 }
 
 /**
- * 返回删除指定会话时应一并清理的会话 ID，顺序为叶子会话到根会话。
- *
- * 只有带 sourceDelegationId 的记录才是协作委派子会话；普通会话即使带有
- * 历史异常 parentSessionId 也绝不可被级联删除。通过 visited 防御损坏索引中的环。
+ * 获取删除指定会话时应一并处理的会话 ID，顺序为子会话到父会话。
+ * 仅将带 sourceDelegationId 的协作委派子会话纳入级联删除，避免误删普通会话。
  */
 export function getAgentSessionDeletionOrder(id: string): string[] {
   const sessions = readIndex().sessions
@@ -393,9 +391,7 @@ export function createAgentSession(
     modelId,
     workspaceId,
     agentRuntime: normalizeAgentRuntime(agentRuntime),
-    presetId: normalizeSessionPresetId(presetWorkspaceSlug, presetId),
-    // 新会话默认在当前轮结束后自动发送队首；用户可在队列面板中关闭。
-    autoQueueSendEnabled: true,
+    ...(normalizeSessionPresetId(presetWorkspaceSlug, presetId) ? { presetId: normalizeSessionPresetId(presetWorkspaceSlug, presetId), presetReference: presetReferenceForId(presetWorkspaceSlug, presetId) } : {}),
     ...(draft ? { draft: true } : {}),
     createdAt: now,
     updatedAt: now,
@@ -761,7 +757,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'pptCapabilityActive' | 'codexFastMode' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'autoQueueSendEnabled' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn' | 'presetId' | 'lastInterruptReason' | 'lastInterruptLabel' | 'lastInterruptAt'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'agentRuntime' | 'codexFastMode' | 'openAIThinkingLevel' | 'workspaceId' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'autoQueueSendEnabled' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn' | 'presetId' | 'lastInterruptReason' | 'lastInterruptLabel' | 'lastInterruptAt' | 'presetReference'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -771,6 +767,11 @@ export function updateAgentSessionMeta(
   }
 
   const existing = index.sessions[idx]!
+  // 新引用是唯一跨作用域解析依据；旧调用传裸 presetId 时按会话工作区补齐兼容引用。
+  if (updates.presetId !== undefined && updates.presetReference === undefined) {
+    const workspaceSlug = existing.workspaceId ? getAgentWorkspace(existing.workspaceId)?.slug : undefined
+    updates = { ...updates, presetReference: presetReferenceForId(workspaceSlug, updates.presetId) }
+  }
   // 非手动归档操作时，若会话已归档则自动恢复为活跃（仅更新 stoppedByUser 不触发解归档）
   const isStoppedByUserOnly = Object.keys(updates).every((k) => k === 'stoppedByUser')
   const autoUnarchive = existing.archived && !('archived' in updates) && !isStoppedByUserOnly
@@ -820,7 +821,7 @@ export function deleteAgentSession(id: string): void {
   const removed = index.sessions.splice(idx, 1)[0]!
   writeIndex(index)
 
-  // 删除消息、任务图与 Harness sidecar。它们均属于该 Profer session，删除必须同步清理。
+  // 删除消息与任务图文件。任务图和会话消息均属于该 Profer session，删除必须同步清理。
   for (const [label, filePath] of [
     ['消息', getAgentSessionMessagesPath(id)],
     ['任务图', getGraphJsonlPath(getAgentSessionsDir(), id)],
@@ -962,8 +963,7 @@ export function findOrphanSessions(): SessionHealth[] {
       isOrphan: false,
     }
 
-    // 检查 Profer JSONL。Harness sidecar 缺失仅表示历史会话可从空 snapshot 降级，
-    // 不是孤儿条件，绝不能因此阻断恢复。
+    // 检查 Profer JSONL。Harness sidecar 缺失仅表示历史会话可从空 snapshot 降级，不是孤儿条件。
     health.hasProferJsonl = existsSync(getAgentSessionMessagesPath(session.id))
     health.hasPiHarnessJsonl = existsSync(getPiHarnessEventsPath(session.id))
 
@@ -1757,9 +1757,7 @@ function rewritePathsInJsonlFile(filePath: string, sourceDir: string, destDir: s
 /** Resolve a branch boundary from the persisted display message timestamp. */
 function resolveForkTimestamp(upToMessageUuid: string | undefined, sourceMessages: SDKMessage[]): number {
   if (!upToMessageUuid) return Date.now()
-  const target = sourceMessages.find(
-    (message) => 'uuid' in message && (message as { uuid?: string }).uuid === upToMessageUuid,
-  ) as (SDKMessage & { _createdAt?: unknown }) | undefined
+  const target = sourceMessages.find((message) => 'uuid' in message && (message as { uuid?: string }).uuid === upToMessageUuid) as (SDKMessage & { _createdAt?: unknown }) | undefined
   return typeof target?._createdAt === 'number' ? target._createdAt : Date.now()
 }
 

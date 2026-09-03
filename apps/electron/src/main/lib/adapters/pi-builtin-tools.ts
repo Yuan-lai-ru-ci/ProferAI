@@ -13,7 +13,7 @@ import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GraphEvent } from '@profer/project-core'
-import type { AgentRuntime, ProferPermissionMode, AgentImageGenerationCard } from '@profer/shared'
+import type { AgentRuntime, ProferPermissionMode, AgentImageGenerationCard, ProferEvent } from '@profer/shared'
 import type {
   CalendarEventListQuery,
   CreateAutomationInput,
@@ -78,7 +78,7 @@ import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
 import { downloadPptMaterialToWorkspace, searchPptMaterials } from '../ppt-material-service'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
-import { AGENT_INSPECT_PREVIEW_DESCRIPTION, AGENT_INSPECT_PREVIEW_TOOL_NAME, executeAgentPreviewTool } from '../agent-preview-tools'
+import { AGENT_INSPECT_PREVIEW_DESCRIPTION, AGENT_INSPECT_PREVIEW_TOOL_NAME, executeAgentPreviewTool, executeOpenFilePreviewTool } from '../agent-preview-tools'
 import { generateAgentGptImage } from '../agent-gpt-image-service'
 import {
   AGENT_GPT_IMAGE_DESCRIPTION,
@@ -123,6 +123,8 @@ export interface PiBuiltinToolsContext {
   pptCapabilityActive?: boolean
   /** 图片生命周期持久化成功后通知 renderer 的安全卡片。 */
   onImageGenerationUpdate?: (record: AgentImageGenerationCard) => void
+  /** Agent 请求使用当前会话的正式文件预览入口。 */
+  onPreviewRequest?: (event: Extract<ProferEvent, { type: 'preview_requested' }>) => void
   /** Windows 是否已有可用 Shell（Git Bash / WSL）；缺失时向前台用户会话提供安装工具。 */
   windowsShellAvailable?: boolean
   /** 预设禁用的产品内置工具组（task-graph/memory/collaboration/automation），对应工具不注册 */
@@ -674,7 +676,30 @@ function buildPiAgentPreviewTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolD
   // A non-workspace cwd can be the user home directory and is not an implicit Agent authorization.
   // The tool still exists for every session; without explicit roots it safely returns unauthorized_path.
   if (!ctx.agentCwd) return []
+  const previewContext = {
+    sessionId: ctx.sessionId,
+    agentCwd: ctx.workspaceSlug ? ctx.agentCwd! : '',
+    allowedRoots: ctx.allowedRoots ?? [],
+    onRequest: ctx.onPreviewRequest,
+  }
   return [
+    sdk.defineTool({
+      name: 'open_file_preview',
+      label: '打开 Profer 文件预览',
+      description: 'Open an authorized local PPTX in Profer’s official current-session file preview. The user and Agent continue working from the same visible preview context. Do not create Preview.html, open a browser, or capture a screenshot.',
+      promptSnippet: 'OpenFilePreview: open PPTX in Profer official preview; never create Preview.html or use a browser screenshot.',
+      parameters: Type.Object({
+        filePath: Type.String({ minLength: 1, maxLength: 4096 }),
+        readOnly: Type.Optional(Type.Boolean()),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as Record<string, unknown>
+        return executeOpenFilePreviewTool({
+          filePath: typeof args.filePath === 'string' ? args.filePath : '',
+          readOnly: args.readOnly !== false,
+        }, previewContext) as Promise<AgentToolResult<unknown>>
+      },
+    }),
     sdk.defineTool({
       name: AGENT_INSPECT_PREVIEW_TOOL_NAME,
       label: '检查文件预览',

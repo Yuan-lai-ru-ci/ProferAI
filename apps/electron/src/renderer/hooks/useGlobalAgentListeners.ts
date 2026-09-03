@@ -59,10 +59,10 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, getPreviewTabTitle, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
-import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
+import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom, previewModePreferenceAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, SDKResultMessage, SDKBackgroundTaskSummary, ProferEvent, AgentSessionMeta, TodoAgentSessionActivation } from '@profer/shared'
@@ -626,7 +626,50 @@ export function useGlobalAgentListeners(): void {
 
         if (payload.kind === 'profer_event') {
           const proferEvent = payload.event
-          if (proferEvent.type === 'image_generation_updated' && proferEvent.sessionId === sessionId && proferEvent.record.sessionId === sessionId) {
+          if (proferEvent.type === 'preview_requested' && proferEvent.sessionId === sessionId) {
+            // Agent 请求预览时只复用当前 renderer 的正式 PreviewPanel/PreviewTabContent。
+            // 不创建浏览器页面、Preview.html 或隐藏截图窗口；用户与 Agent 围绕同一会话预览继续工作。
+            const previewPath = proferEvent.filePath
+            const requestId = (autoPreviewSeq.get(sessionId) ?? 0) + 1
+            autoPreviewSeq.set(sessionId, requestId)
+            buildAutoPreviewFile(sessionId, previewPath).then((previewFile) => {
+              if (!previewFile || autoPreviewSeq.get(sessionId) !== requestId) return
+              const nextFile = {
+                ...previewFile,
+                previewOnly: true,
+                readOnly: proferEvent.readOnly !== false,
+                basePaths: proferEvent.basePaths?.length ? proferEvent.basePaths : previewFile.basePaths,
+              }
+              store.set(previewFileMapAtom, (prev) => {
+                const next = new Map(prev)
+                next.set(sessionId, nextFile)
+                return next
+              })
+              const preferSplit = store.get(previewModePreferenceAtom) === 'split'
+              if (preferSplit) {
+                store.set(previewPanelOpenMapAtom, (prev) => {
+                  const next = new Map(prev)
+                  next.set(sessionId, true)
+                  return next
+                })
+              } else {
+                store.set(previewPanelOpenMapAtom, (prev) => {
+                  const next = new Map(prev)
+                  next.set(sessionId, false)
+                  return next
+                })
+                const result = openTab(store.get(tabsAtom), {
+                  type: 'preview',
+                  sessionId,
+                  title: getPreviewTabTitle(nextFile.filePath),
+                })
+                store.set(tabsAtom, result.tabs)
+                store.set(activeTabIdAtom, result.activeTabId)
+              }
+            }).catch(() => {
+              // Agent 预览请求失败不应中断消息流；正式预览仍可由用户点击文件路径重新打开。
+            })
+          } else if (proferEvent.type === 'image_generation_updated' && proferEvent.sessionId === sessionId && proferEvent.record.sessionId === sessionId) {
             // Card events are independent timeline updates; never let them fabricate an Agent
             // running state through legacy event conversion or cross-session cache pollution.
             store.set(agentImageGenerationsAtom, (previous) => {

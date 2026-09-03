@@ -23,6 +23,7 @@ import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from '../xai-oauth-credentials'
 import { isOfficialManagedChannel } from '../official-channel'
+import { createIsolatedModelRuntimeOptions } from '../pi-model-runtime-options'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type PiAiCompat = typeof import('@earendil-works/pi-ai/compat')
@@ -441,11 +442,9 @@ export async function getCodexCatalogModels(): Promise<PiCatalogModel[]> {
  * 刷新后的 access token，而不是存储的凭据 JSON。
  */
 async function buildCodexModelWithRuntimeKey(sdk: PiSdk, input: PiAgentQueryOptions) {
-  const modelRuntime = await sdk.ModelRuntime.create({
-    allowModelNetwork: false,
-  })
+  const modelRuntime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions())
   // 内置 codex 模型的 provider 字段即 'openai-codex'，token 必须设在该名下。
-  modelRuntime.setRuntimeApiKey('openai-codex', input.apiKey)
+  await modelRuntime.setRuntimeApiKey('openai-codex', input.apiKey)
 
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const codexModels = await getCodexCatalogModels()
@@ -500,11 +499,9 @@ export async function buildModel(
   // Pi 请求使用干净模型 ID，但先保留用户显式 `[1m]` 配置，供未知兼容网关声明能力。
   const explicit1MContext = /\[1m\]$/i.test(input.model ?? '')
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
-  const modelRuntime = await sdk.ModelRuntime.create({
-    allowModelNetwork: false,
-  })
+  const modelRuntime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions())
   if (shouldUseRuntimeApiKey(input.provider)) {
-    modelRuntime.setRuntimeApiKey(providerName, resolvedApiKey)
+    await modelRuntime.setRuntimeApiKey(providerName, resolvedApiKey)
   }
   const api = normalizePiApi(input.provider, input.baseUrl)
   const modelDefaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId }, explicit1MContext)
@@ -606,10 +603,9 @@ export async function buildCodexModel(sdk: PiSdk, input: CodexModelInput) {
     throw new Error('ChatGPT (Codex) OAuth 凭据缺失，请重新登录')
   }
 
-  const modelRuntime = await sdk.ModelRuntime.create({
-    credentials: createCodexRuntimeCredentialStore(input.codexOAuthCredentials, input.onCodexOAuthCredentialsRefreshed),
-    allowModelNetwork: false,
-  })
+  const modelRuntime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions(
+    createCodexRuntimeCredentialStore(input.codexOAuthCredentials, input.onCodexOAuthCredentialsRefreshed),
+  ))
 
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const codexModels = await getCodexCatalogModels()
@@ -697,10 +693,9 @@ export async function buildXaiOAuthModel(sdk: PiSdk, input: XaiModelInput) {
   if (!input.xaiOAuthCredentials || !input.channelId) {
     throw new Error('xAI OAuth 凭据或渠道标识缺失，请重新登录')
   }
-  const modelRuntime = await sdk.ModelRuntime.create({
-    credentials: createXaiRuntimeCredentialStore(input.channelId, input.xaiOAuthCredentials, input.onXaiOAuthCredentialsRefreshed),
-    allowModelNetwork: false,
-  })
+  const modelRuntime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions(
+    createXaiRuntimeCredentialStore(input.channelId, input.xaiOAuthCredentials, input.onXaiOAuthCredentialsRefreshed),
+  ))
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const { getModels } = await loadPiAiCompat()
   const xaiModels = [...getModels('xai')]

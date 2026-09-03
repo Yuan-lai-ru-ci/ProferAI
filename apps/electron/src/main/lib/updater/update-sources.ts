@@ -47,6 +47,10 @@ export function isSecureUpdateFeedUrl(value: unknown): value is string {
 /**
  * 客户端运行时更新源顺序。
  * 国内源是默认主源，GitHub 只在主源不可达或下载失败时作为备用。
+ *
+ * generic provider 会由 electron-updater 根据运行平台自动请求：
+ * Windows 为 latest.yml，macOS 为 latest-mac.yml。因此两个平台共用同一个 HTTPS
+ * 目录，发布时必须同时提供各自平台的元数据和安装包。
  */
 export function getUpdateSources(overrideUrl = process.env.PROFER_UPDATE_FEED_URL): UpdateSource[] {
   const sources: UpdateSource[] = []
