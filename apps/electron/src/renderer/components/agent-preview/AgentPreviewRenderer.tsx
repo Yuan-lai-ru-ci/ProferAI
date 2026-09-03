@@ -176,8 +176,10 @@ function AgentPreviewApp(): React.ReactElement {
 
   React.useEffect(() => {
     if (!window.agentPreviewAPI) return
+    // 先订阅再上报 ready；主进程收到 ready 后可能立刻发送首个任务。
+    const unsubscribe = window.agentPreviewAPI.onRender((nextTask) => setTask(nextTask))
     window.agentPreviewAPI.notifyReady()
-    return window.agentPreviewAPI.onRender((nextTask) => setTask(nextTask))
+    return unsubscribe
   }, [])
 
   if (!task) return <div style={{ width: 1200, height: 900, background: '#fff' }} />
