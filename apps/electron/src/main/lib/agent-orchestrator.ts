@@ -160,6 +160,7 @@ import { injectClaudeClipboardMcpServer } from './claude-clipboard-tools'
 import { evaluatePptCapability } from './ppt-capability-gate'
 import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
 import { injectAgentGptImageMcpServer, isAgentGptImageAvailable } from './agent-gpt-image-tools'
+import { injectAgentPreviewMcpServer } from './agent-preview-tools'
 import { browserController } from './browser-controller'
 import {
   applySdkCredentials,
@@ -1186,20 +1187,28 @@ export class AgentOrchestrator {
         })
       }
       // 本地图片输出只在受工作区授权的会话注册；没有 workspace 的 cwd 是 homedir，不能默认授权整个用户目录。
-      const imageOutputAllowedRoots = workspaceSlug && agentCwd
-        ? [
-            agentCwd,
-            ...collectAttachedDirectories({
-              extraDirs: additionalDirectories,
-              sessionMeta,
-              workspaceSlug,
-            }),
-          ]
-        : []
+      const attachedPreviewRoots = collectAttachedDirectories({
+        extraDirs: additionalDirectories,
+        sessionMeta,
+        workspaceSlug,
+      })
+      // 文件预览是所有 Agent 会话的基础能力：工作区会话包含 session cwd；
+      // 非工作区会话仅授予用户显式附加的目录，绝不把 home 作为默认根。
+      const previewAllowedRoots = workspaceSlug && agentCwd
+        ? [agentCwd, ...attachedPreviewRoots]
+        : attachedPreviewRoots
+      // 本地图片输出沿用既有工作区门禁，避免把输出写入无工作区会话。
+      const imageOutputAllowedRoots = workspaceSlug && agentCwd ? previewAllowedRoots : []
       const emitImageGenerationUpdate = (record: import('@profer/shared').AgentImageGenerationCard): void => {
         this.eventBus.emit(sessionId, {
           kind: 'profer_event',
           event: { type: 'image_generation_updated', sessionId, record },
+        })
+      }
+      if (agentRuntime === 'claude') {
+        await injectAgentPreviewMcpServer(sdk, mcpServers, {
+          agentCwd: workspaceSlug ? agentCwd : '',
+          allowedRoots: previewAllowedRoots,
         })
       }
       if (agentCwd && imageOutputAllowedRoots.length > 0) {
@@ -1207,15 +1216,17 @@ export class AgentOrchestrator {
           agentCwd,
           allowedRoots: imageOutputAllowedRoots,
         })
-        // Pi receives the same tool through sdk.defineTool below. Inject the SDK MCP
-        // server only for Claude to avoid duplicate tool names after Pi MCP conversion.
-        if (agentRuntime === 'claude' && isAgentGptImageAvailable()) {
-          await injectAgentGptImageMcpServer(sdk, mcpServers, {
-            sessionId,
-            agentCwd,
-            allowedRoots: imageOutputAllowedRoots,
-            onGenerationUpdate: emitImageGenerationUpdate,
-          })
+        // Pi receives preview/GPT image through sdk.defineTool below; Claude uses in-process MCP.
+        // Keep every runtime on the same domain service while avoiding duplicate Pi tool names.
+        if (agentRuntime === 'claude') {
+          if (isAgentGptImageAvailable()) {
+            await injectAgentGptImageMcpServer(sdk, mcpServers, {
+              sessionId,
+              agentCwd,
+              allowedRoots: imageOutputAllowedRoots,
+              onGenerationUpdate: emitImageGenerationUpdate,
+            })
+          }
         }
       }
 

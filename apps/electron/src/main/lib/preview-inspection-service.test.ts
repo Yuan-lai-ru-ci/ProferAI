@@ -56,9 +56,9 @@ describe('preview inspection service', () => {
     expect('error' in escaped && escaped.error.code).toBe('unauthorized_path')
   })
 
-  test('uses visual defaults for markdown and passes explicit scope to the renderer', async () => {
+  test('uses visual defaults for markdown and passes sanitized visual data to the renderer', async () => {
     const { root } = await fixture()
-    const calls: Array<{ filePath: string; scope: string; page?: number }> = []
+    const calls: Array<{ filePath: string; fileName: string; scope: string; page?: number; text?: string }> = []
     const dependencies: PreviewInspectionDependencies = {
       render: async (input) => {
         calls.push(input)
@@ -67,9 +67,30 @@ describe('preview inspection service', () => {
     }
     const result = await inspectPreview({ filePath: 'note.md', scope: 'page', page: 2 }, { agentCwd: root, allowedRoots: [] }, dependencies)
     expect('file' in result).toBe(true)
+    if ('file' in result) {
+      expect(result.content?.text).toContain('Hello')
+      expect(result.visual?.images[0]?.mediaType).toBe('image/png')
+    }
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.scope).toBe('page')
-    expect(calls[0]?.page).toBe(2)
+    expect(calls[0]).toMatchObject({ fileName: 'note.md', scope: 'page', page: 2, text: '# Preview\n\nHello' })
+  })
+
+  test('renders visual-only Markdown with source text and treats an empty response as retryable failure', async () => {
+    const { root } = await fixture()
+    let visualText: string | undefined
+    const result = await inspectPreview({ filePath: 'note.md', mode: 'visual' }, { agentCwd: root, allowedRoots: [] }, {
+      render: async (input) => { visualText = input.text; return { images: [] } },
+    })
+    expect(visualText).toContain('Hello')
+    expect('error' in result && result.error).toMatchObject({ code: 'renderer_failed', retryable: true })
+  })
+
+  test('maps renderer page bounds to the stable page_out_of_range error', async () => {
+    const { root } = await fixture()
+    const result = await inspectPreview({ filePath: 'note.md', mode: 'visual', scope: 'page', page: 4 }, { agentCwd: root, allowedRoots: [] }, {
+      render: async () => { throw Object.assign(new Error('页码 4 超出范围'), { code: 'page_out_of_range' }) },
+    })
+    expect('error' in result && result.error.code).toBe('page_out_of_range')
   })
 
   test('reports whether the current revision differs from the previous observation', async () => {
@@ -81,10 +102,12 @@ describe('preview inspection service', () => {
     expect('file' in second && second.changedSincePreviousRevision).toBe(true)
   })
 
-  test('requires a positive integer page for page scope', async () => {
+  test('requires a positive integer page only for page scope', async () => {
     const { root } = await fixture()
-    const result = await inspectPreview({ filePath: 'note.md', scope: 'page' }, { agentCwd: root, allowedRoots: [] })
-    expect('error' in result && result.error.code).toBe('invalid_page')
+    const missing = await inspectPreview({ filePath: 'note.md', scope: 'page' }, { agentCwd: root, allowedRoots: [] })
+    const misplaced = await inspectPreview({ filePath: 'note.md', scope: 'overview', page: 2 }, { agentCwd: root, allowedRoots: [] })
+    expect('error' in missing && missing.error.code).toBe('invalid_page')
+    expect('error' in misplaced && misplaced.error.code).toBe('invalid_page')
   })
 
   test('does not return a mixed result when the file changes during inspection', async () => {

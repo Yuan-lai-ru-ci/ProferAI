@@ -226,13 +226,16 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     triggeredBy: 'user' as const,
   }
 
-  test('Given a workspace-backed Pi session When building builtin tools Then it exposes send_local_image', async () => {
+  test('Given a workspace-backed Pi session When building builtin tools Then it exposes local image output and inspect_preview', async () => {
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, { ...baseCtx, agentCwd: 'C:/safe/session', allowedRoots: ['C:/safe/attached'] })
 
     const imageTool = tools.find((tool) => tool.name === 'send_local_image')
+    const previewTool = tools.find((tool) => tool.name === 'inspect_preview')
     expect(imageTool).toBeDefined()
     expect(imageTool!.description).not.toContain('IMAGE_ATTACHMENT')
+    expect(previewTool).toBeDefined()
+    expect(JSON.stringify(previewTool!.parameters)).toContain('previousRevision')
   })
 
   test('Given GPT Image enabled and available in a workspace Pi session When building tools Then it exposes the unified generate_image schema and structured image result', async () => {
@@ -268,11 +271,12 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     expect(noWorkspace.tools.some((tool) => tool.name === 'generate_image')).toBe(false)
   })
 
-  test('Given a Pi session without a workspace When building builtin tools Then it does not authorize the home cwd for image output', async () => {
+  test('Given a Pi session without a workspace When building builtin tools Then it keeps inspect_preview but does not authorize home image output', async () => {
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, { ...baseCtx, workspaceSlug: undefined, agentCwd: 'C:/Users/test', allowedRoots: [] })
 
     expect(tools.some((tool) => tool.name === 'send_local_image')).toBe(false)
+    expect(tools.some((tool) => tool.name === 'inspect_preview')).toBe(true)
   })
 
   test('Given PPT capability inactive Then PPT-specific tools are not registered', async () => {

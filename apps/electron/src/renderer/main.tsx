@@ -117,6 +117,7 @@ function hasEnabledModel(
 const isQuickTaskWindow = new URLSearchParams(window.location.search).get('window') === 'quick-task'
 const isVoiceDictationWindow = new URLSearchParams(window.location.search).get('window') === 'voice-dictation'
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
+const isAgentPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'agent-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
 
 /**
@@ -1083,6 +1084,10 @@ if (isQuickTaskWindow) {
         <Toaster position="top-right" />
       </React.StrictMode>
     )
+  })
+} else if (isAgentPreviewWindow) {
+  import('./components/agent-preview/AgentPreviewRenderer').then(({ mountAgentPreviewRenderer }) => {
+    mountAgentPreviewRenderer()
   })
 } else if (isPlanningWindow) {
   import('./components/planning/PlanningWindowApp').then(({ PlanningWindowApp }) => {

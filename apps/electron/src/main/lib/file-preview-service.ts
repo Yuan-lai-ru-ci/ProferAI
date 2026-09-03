@@ -771,12 +771,12 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[]):
       window.parent.postMessage({ type: 'pdf-zoom-changed', zoom: Math.round(STEPS[stepIdx] * 100) }, '*');
     }
 
-    async function renderAll() {
+    async function renderPages(pageNumbers) {
       if (!pdfDoc) return;
       container.innerHTML = '';
       const userScale = STEPS[stepIdx];
       const dpr = window.devicePixelRatio || 1;
-      for (let i = 1; i <= pdfDoc.numPages; i++) {
+      for (const i of pageNumbers) {
         const page = await pdfDoc.getPage(i);
         const vp = page.getViewport({ scale: userScale * dpr });
         const canvas = document.createElement('canvas');
@@ -793,10 +793,19 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[]):
       notifyZoom();
     }
 
-    window.addEventListener('message', (e) => {
+    async function renderAll() { return renderPages(Array.from({ length: pdfDoc?.numPages || 0 }, (_, i) => i + 1)); }
+
+    window.addEventListener('message', async (e) => {
       if (e.data?.type === 'pdf-zoom') {
         if (e.data.direction === 'in' && stepIdx < STEPS.length - 1) { stepIdx++; renderAll(); }
         if (e.data.direction === 'out' && stepIdx > 0) { stepIdx--; renderAll(); }
+      }
+      // 隐藏 Agent renderer 使用此窄消息协议逐页渲染；普通人类预览不会发送它。
+      if (e.data?.type === 'agent-preview:select-pdf-page') {
+        const page = Number(e.data.page);
+        if (!Number.isInteger(page) || page < 1 || !pdfDoc || page > pdfDoc.numPages) return;
+        await renderPages([page]);
+        window.parent.postMessage({ type: 'agent-preview:pdf-page-rendered', page }, '*');
       }
     });
 
@@ -808,6 +817,7 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[]):
         standardFontDataUrl,
       }).promise;
       await renderAll();
+      window.parent.postMessage({ type: 'agent-preview:pdf-ready', pageCount: pdfDoc.numPages }, '*');
     } catch (err) {
       container.innerHTML = '<div class="error">PDF 加载失败: ' + err.message + '<\\/div>';
     }

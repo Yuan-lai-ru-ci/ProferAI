@@ -24,6 +24,12 @@ interface ZoomableViewer {
   setScale?: (scale: number) => void
   fitWidth?: () => void
   fitPage?: () => void
+  scrollToSlide?: (index: number, options?: { behavior?: 'auto' | 'smooth' }) => void
+  scrollToPage?: (index: number, options?: { behavior?: 'auto' | 'smooth' }) => void
+  goToSheet?: (index: number) => Promise<void>
+  slideCount?: number
+  pageCount?: number
+  sheetCount?: number
 }
 
 interface ScrollViewerOptions {

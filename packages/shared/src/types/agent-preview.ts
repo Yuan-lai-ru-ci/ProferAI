@@ -31,6 +31,23 @@ export interface AgentPreviewImage {
   page?: number
 }
 
+/** 主进程与隐藏 renderer 之间的受控任务载荷，不直接暴露给模型。 */
+export interface AgentPreviewRenderTask {
+  id: string
+  /** 仅用于 renderer 的扩展名类型选择；不包含本机路径。 */
+  fileName: string
+  sourceUrl: string
+  kind: AgentPreviewFileKind
+  scope: InspectPreviewScope
+  page?: number
+  text?: string
+}
+
+export interface AgentPreviewRenderOutput {
+  images: AgentPreviewImage[]
+  warnings?: string[]
+}
+
 export interface InspectPreviewContent {
   text: string
   truncated: boolean

@@ -114,6 +114,7 @@ import { getSettings, updateSettings } from './lib/settings-service'
 import { INTRO_FLUID_FRAGMENT_SHADER, INTRO_FLUID_VERTEX_SHADER } from '../shared/intro-fluid-shader'
 import { handleProferFileRequest } from './lib/local-file-protocol'
 import { handleProferSkinRequest } from './lib/skin-service'
+import { disposeAgentPreviewRenderer } from './lib/agent-preview-renderer'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
 // 这在开发环境热重载时经常发生，不影响应用功能
@@ -1016,6 +1017,7 @@ app.on('before-quit', () => {
   disposeLarkCliService()
   disposeLarkMcpService()
   browserController.dispose()
+  disposeAgentPreviewRenderer()
   stopAllGenerations()
   // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）
   // 针对 pidMap 未覆盖、dispose 漏杀等极端场景，确保不遗留残留进程

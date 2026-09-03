@@ -3474,5 +3474,31 @@ contextBridge.exposeInMainWorld('electronAPI', electronAPI)
 declare global {
   interface Window {
     electronAPI: ElectronAPI
+    agentPreviewAPI?: {
+      onRender: (callback: (task: import('@profer/shared').AgentPreviewRenderTask) => void) => () => void
+      sendResult: (id: string, result: import('@profer/shared').AgentPreviewRenderOutput) => void
+      sendError: (id: string, payload: { code?: string; message?: string }) => void
+      notifyReady: () => void
+      capture: (id: string) => Promise<string>
+    }
   }
 }
+
+const agentPreviewAPI = {
+  onRender: (callback: (task: import('@profer/shared').AgentPreviewRenderTask) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, task: import('@profer/shared').AgentPreviewRenderTask) => callback(task)
+    ipcRenderer.on('agent-preview:render', listener)
+    return () => ipcRenderer.removeListener('agent-preview:render', listener)
+  },
+  sendResult: (id: string, result: import('@profer/shared').AgentPreviewRenderOutput) => {
+    ipcRenderer.send('agent-preview:result', id, result)
+  },
+  sendError: (id: string, payload: { code?: string; message?: string }) => {
+    ipcRenderer.send('agent-preview:error', id, payload)
+  },
+  notifyReady: () => ipcRenderer.send('agent-preview:ready'),
+  capture: (id: string) => ipcRenderer.invoke('agent-preview:capture', id) as Promise<string>,
+}
+
+// iframe 内容（HTML/PDF）不需要也不能获得主进程预览控制能力。
+if (process.isMainFrame) contextBridge.exposeInMainWorld('agentPreviewAPI', agentPreviewAPI)

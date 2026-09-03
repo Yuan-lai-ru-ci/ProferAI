@@ -78,6 +78,7 @@ import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
 import { downloadPptMaterialToWorkspace, searchPptMaterials } from '../ppt-material-service'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
+import { AGENT_INSPECT_PREVIEW_DESCRIPTION, AGENT_INSPECT_PREVIEW_TOOL_NAME, executeAgentPreviewTool } from '../agent-preview-tools'
 import { generateAgentGptImage } from '../agent-gpt-image-service'
 import {
   AGENT_GPT_IMAGE_DESCRIPTION,
@@ -664,6 +665,37 @@ function buildPiAgentImageOutputTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): T
           agentCwd: ctx.agentCwd!,
           allowedRoots: ctx.allowedRoots ?? [],
         })) as AgentToolResult<unknown>
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
+function buildPiAgentPreviewTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  // A non-workspace cwd can be the user home directory and is not an implicit Agent authorization.
+  // The tool still exists for every session; without explicit roots it safely returns unauthorized_path.
+  if (!ctx.agentCwd) return []
+  return [
+    sdk.defineTool({
+      name: AGENT_INSPECT_PREVIEW_TOOL_NAME,
+      label: '检查文件预览',
+      description: AGENT_INSPECT_PREVIEW_DESCRIPTION,
+      promptSnippet: 'InspectPreview: inspect the current authorized local file content and/or visual rendering. Re-run it after modifying a visual file and pass the previous revision to learn whether the current file changed.',
+      parameters: Type.Object({
+        filePath: Type.String({ minLength: 1, maxLength: 4096 }),
+        mode: Type.Optional(Type.Union([Type.Literal('content'), Type.Literal('visual'), Type.Literal('both')])),
+        scope: Type.Optional(Type.Union([Type.Literal('overview'), Type.Literal('page'), Type.Literal('all')])),
+        page: Type.Optional(Type.Integer({ minimum: 1 })),
+        previousRevision: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as Record<string, unknown>
+        return executeAgentPreviewTool({
+          filePath: typeof args.filePath === 'string' ? args.filePath : '',
+          mode: args.mode === 'content' || args.mode === 'visual' || args.mode === 'both' ? args.mode : undefined,
+          scope: args.scope === 'overview' || args.scope === 'page' || args.scope === 'all' ? args.scope : undefined,
+          page: typeof args.page === 'number' ? args.page : undefined,
+          previousRevision: typeof args.previousRevision === 'string' ? args.previousRevision : undefined,
+        }, { agentCwd: ctx.workspaceSlug ? ctx.agentCwd! : '', allowedRoots: ctx.allowedRoots ?? [] }) as Promise<AgentToolResult<unknown>>
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -1398,6 +1430,12 @@ export async function buildPiBuiltinTools(
     tools.push(...buildPiAgentImageOutputTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入本地图片输出工具失败:', error)
+  }
+
+  try {
+    tools.push(...buildPiAgentPreviewTools(sdk, ctx))
+  } catch (error) {
+    console.error('[Pi 桥接] 注入文件预览工具失败:', error)
   }
 
   try {
