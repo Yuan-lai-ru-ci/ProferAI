@@ -1,4 +1,65 @@
-import { Menu, shell, BrowserWindow } from 'electron'
+import { app, Menu, shell, BrowserWindow } from 'electron'
+
+export type TextContextMenuParams = Pick<
+  Electron.ContextMenuParams,
+  'isEditable' | 'selectionText' | 'editFlags'
+>
+
+/**
+ * 根据右键位置的编辑能力生成原生文本菜单。
+ *
+ * 非编辑区域只有存在文本选区时才返回菜单，避免盖住 Renderer 中已有的业务右键菜单。
+ */
+export function createTextContextMenuTemplate(
+  params: TextContextMenuParams,
+  platform: NodeJS.Platform = process.platform,
+): Electron.MenuItemConstructorOptions[] {
+  const { editFlags } = params
+
+  if (!params.isEditable) {
+    if (params.selectionText.length === 0) return []
+    return [{ role: 'copy', label: '复制', enabled: editFlags.canCopy }]
+  }
+
+  return [
+    { role: 'undo', label: '撤销', enabled: editFlags.canUndo },
+    { role: 'redo', label: '重做', enabled: editFlags.canRedo },
+    { type: 'separator' },
+    { role: 'cut', label: '剪切', enabled: editFlags.canCut },
+    { role: 'copy', label: '复制', enabled: editFlags.canCopy },
+    { role: 'paste', label: '粘贴', enabled: editFlags.canPaste },
+    ...(platform === 'darwin'
+      ? [{ role: 'pasteAndMatchStyle' as const, label: '粘贴并匹配样式', enabled: editFlags.canPaste }]
+      : []),
+    { role: 'delete', label: '删除', enabled: editFlags.canDelete },
+    { type: 'separator' },
+    { role: 'selectAll', label: '全选', enabled: editFlags.canSelectAll },
+  ]
+}
+
+let textContextMenusInstalled = false
+
+/** 为 Profer 创建的所有 WebContents 安装通用复制/粘贴右键菜单。 */
+export function installTextContextMenus(): void {
+  if (textContextMenusInstalled) return
+  textContextMenusInstalled = true
+
+  app.on('web-contents-created', (_event, webContents) => {
+    webContents.on('context-menu', (_contextMenuEvent, params) => {
+      const template = createTextContextMenuTemplate(params)
+      if (template.length === 0) return
+
+      const ownerWindow = BrowserWindow.fromWebContents(webContents) ?? BrowserWindow.getFocusedWindow()
+      const popupOptions: Electron.PopupOptions = {
+        sourceType: params.menuSourceType,
+      }
+      if (ownerWindow) popupOptions.window = ownerWindow
+      if (params.frame) popupOptions.frame = params.frame
+
+      Menu.buildFromTemplate(template).popup(popupOptions)
+    })
+  })
+}
 
 export function createApplicationMenu(): Menu {
   const isMac = process.platform === 'darwin'

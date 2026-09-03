@@ -486,7 +486,7 @@ export const ConversationItem = React.memo(function ConversationItem({
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
+      <ContextMenuTrigger asChild disabled={editing}>
         <div
           ref={preview.setAnchorRef}
           role="button"
@@ -758,7 +758,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>
+      <ContextMenuTrigger asChild disabled={editing}>
         <div
           ref={preview.setAnchorRef}
           role="button"

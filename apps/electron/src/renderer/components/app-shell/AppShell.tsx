@@ -219,13 +219,13 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   return (
     <WindowControlsTemplateProvider>
     <AppShellProvider value={contextValue}>
-      {/* Mac 的 45px chrome 是全局布局带，不属于左侧栏；Windows 保持原有页面内顶栏。 */}
+      {/* Mac 的 53px chrome 为 37px Tab 行保留上下各 8px，不属于左侧栏；Windows 保持原有页面内顶栏。 */}
       <div
         className={cn('shell-bg h-screen w-screen flex flex-col overflow-clip bg-surface-shell', showMacGlobalChrome && 'mac-global-shell', isNativeFullScreen && 'native-fullscreen-shell')}
         style={{ '--app-sidebar-column': `${(sidebarCollapsed ? 60 : clampedLeftSidebarWidth) + 8 + (isClassic ? 8 : 0)}px` } as React.CSSProperties}
       >
         {showMacGlobalChrome && (
-          <div className="mac-global-chrome flex h-[45px] flex-none min-w-0">
+          <div className="mac-global-chrome flex h-[53px] flex-none min-w-0">
             <div className="mac-global-sidebar-slot h-full flex-none titlebar-drag-region" />
             <div className="mac-global-tab-slot min-w-0 flex-1">
               <TabBar teamMode={isTeamWorkspace} variant="mac-global" />
@@ -259,7 +259,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         </div>
 
         {/* 中间容器 */}
-        <div className={cn('main-area-glass-host flex-1 min-w-0 p-2 relative z-[60]', isMac && 'pt-0')}>
+        <div className={cn('main-area-glass-host flex-1 min-w-0 p-2 relative z-[60]', showMacGlobalChrome && 'pt-0')}>
           {/* 团队工作区也必须挂载统一顶栏；否则团队页面与个人页面各自拥有一套入口，
               标签切换、关闭和拖拽排序会与团队 Agent 面板脱节。 */}
           {showTeamWorkspaceView ? (

@@ -480,6 +480,10 @@ function TabBarInner({
     if (!activeAgentSessionId) return
     const open = (window.electronAPI as Partial<typeof window.electronAPI>).openAgentBrowser
     if (typeof open !== 'function') return
+    // 用户明确点击打开时，即使主进程刚热重启、前台所有权状态已丢失，也先同步声明当前会话。
+    // 不能只依赖 MainArea 的会话切换 effect：当前 sessionId 未变化时它不会再次执行。
+    const setForeground = (window.electronAPI as Partial<typeof window.electronAPI>).setAgentBrowserForeground
+    if (typeof setForeground === 'function') setForeground(activeAgentSessionId)
     const state = await open(activeAgentSessionId)
     setBrowserStateMap((previous) => { const next = new Map(previous); next.set(activeAgentSessionId, state); return next })
     // 用户主动重新打开浏览器，清除“已手动关闭”标记，恢复后续状态推送自动打开能力。
@@ -801,13 +805,13 @@ function TabBarInner({
 
   return (
     <div ref={barRef} className={cn('topbar-editorial relative tabbar-bg', variant === 'mac-global' && 'mac-global-topbar')} style={{ height: topbarHeight }}>
-      {/* 只把顶部空白区交给窗口拖拽；内容行由各自插槽明确管理命中区域。Mac Tab 顶部固定保留 5px 间距。 */}
-      <div className={cn('absolute inset-x-0 top-0 titlebar-drag-region', variant === 'mac-global' ? 'h-[10px]' : 'h-[4px]', showTabBarWindowControls && 'right-[126px]')} />
+      {/* 只把顶部空白区交给窗口拖拽；内容行由各自插槽明确管理命中区域。Mac Tab 上下各保留 8px 间距。 */}
+      <div className={cn('absolute inset-x-0 top-0 titlebar-drag-region', variant === 'mac-global' ? 'h-[42px]' : 'h-[4px]', showTabBarWindowControls && 'right-[126px]')} />
       {tearingOff && (
         <div className="pointer-events-none absolute -bottom-px left-0 right-0 h-px bg-primary/60 shadow-[0_0_8px_rgba(0,0,0,0.2)]" />
       )}
 
-      {/* 默认 40px 外框中的 37px 内容行；Mac 全局 chrome 为 45px 外框中的 37px 内容行，顶部保留 5px 页面间距。 */}
+      {/* 默认 40px 外框中的 37px 内容行；Mac 全局 chrome 为 53px 外框中的 37px 内容行，上下各保留 8px 间距。 */}
       <div className="topbar-content absolute inset-x-0 top-1/2 z-10 grid w-full -translate-y-1/2 grid-cols-[minmax(0,1fr)_auto] items-center" style={{
           height: topbarContentHeight,
           top: variant === 'mac-global' ? `${MAC_TOPBAR_TOP_INSET}px` : '50%',
