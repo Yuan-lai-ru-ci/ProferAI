@@ -8,9 +8,9 @@
 
 import type { BrowserWindow, Point } from 'electron'
 
-// 标准倍率下：红绿灯保持原有横向位置；其垂直中心与顶部 5px 间距后的 37px Tab 行水平中线对齐。
-// Electron 坐标是按钮组的左基准；按 hiddenInset 的实际可见偏移，y=16 与 Tab 行中心重合。
-export const DEFAULT_TRAFFIC_LIGHT_POSITION: Point = { x: 16, y: 16 }
+// 标准倍率下：红绿灯保持原有横向位置；其垂直中心与顶部 8px 间距后的 37px Tab 行水平中线对齐。
+// Electron 坐标是按钮组的左基准；Tab 行整体下移 3px 后，y 同步由 16 调整为 19。
+export const DEFAULT_TRAFFIC_LIGHT_POSITION: Point = { x: 16, y: 19 }
 
 export function resolveTrafficLightPosition(zoomFactor: number, base = DEFAULT_TRAFFIC_LIGHT_POSITION): Point {
   const scale = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1

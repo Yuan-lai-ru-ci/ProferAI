@@ -42,7 +42,7 @@ describe('installLarkCli', () => {
     const runner: LarkCliCommandRunner = {
       exec: async (command, args) => {
         calls.push({ command, args })
-        if (command === 'which' && args[0] === 'npm') return { stdout: '/usr/local/bin/npm\n', stderr: '' }
+        if ((command === 'which' || command === 'where.exe') && args[0] === 'npm') return { stdout: process.platform === 'win32' ? 'C:\\node\\npm.cmd\n' : '/usr/local/bin/npm\n', stderr: '' }
         return { stdout: '', stderr: '' }
       },
       spawn: () => { throw new Error('spawn is not used in this test') },
@@ -50,7 +50,7 @@ describe('installLarkCli', () => {
     __setLarkCliCommandRunner(runner)
 
     await expect(installLarkCli()).resolves.toEqual({ success: true, message: 'Official Lark CLI installed' })
-    expect(calls).toContainEqual({ command: '/usr/local/bin/npm', args: ['install', '--global', '@larksuite/cli@latest'] })
+    expect(calls).toContainEqual({ command: process.platform === 'win32' ? 'C:\\node\\npm.cmd' : '/usr/local/bin/npm', args: ['install', '--global', '@larksuite/cli@latest'] })
   })
 })
 
