@@ -67,11 +67,16 @@ jobs:
         working-directory: apps/electron
         run: bun run dist:mac
 
+      - name: Verify macOS updater metadata
+        working-directory: apps/electron
+        run: bun run verify:mac-update-assets
+
       - name: Upload macOS installable artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Profer-macOS-arm64-${{ inputs.ref }}
           path: |
+            apps/electron/out/latest-mac.yml
             apps/electron/out/*.dmg
             apps/electron/out/*.zip
           if-no-files-found: error

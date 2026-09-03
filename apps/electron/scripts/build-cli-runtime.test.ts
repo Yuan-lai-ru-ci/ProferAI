@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  cleanCliBuildArtifacts,
   createBuildCliInvocation,
   createTemporaryBunPath,
+  formatCliBuildArtifactNames,
   tryRemoveTemporaryBun,
 } from './build-cli-runtime'
 
@@ -43,5 +47,31 @@ describe('Windows CLI 编译调用', () => {
       throw new Error('ENOENT')
     }, 'C:\\Temp\\bun-temp.exe')).toBe(false)
     expect(tryRemoveTemporaryBun(() => {}, 'C:\\Temp\\bun-temp.exe')).toBe(true)
+  })
+
+  test('Given 曾在不同宿主构建 CLI When 新构建开始 Then 删除两种已知二进制残留', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'profer-cli-build-'))
+    const unixCli = join(outDir, 'profer')
+    const windowsCli = join(outDir, 'profer.exe')
+    const unrelatedFile = join(outDir, 'keep.txt')
+    try {
+      writeFileSync(unixCli, 'mac')
+      writeFileSync(windowsCli, 'windows')
+      writeFileSync(unrelatedFile, 'keep')
+
+      expect(cleanCliBuildArtifacts(outDir)).toEqual([unixCli, windowsCli])
+      expect(existsSync(unixCli)).toBe(false)
+      expect(existsSync(windowsCli)).toBe(false)
+      expect(existsSync(unrelatedFile)).toBe(true)
+    } finally {
+      rmSync(outDir, { recursive: true, force: true })
+    }
+  })
+
+  test('Given 清理了多个平台 CLI When 生成日志 Then 只展示文件名且不把数组下标当作扩展名', () => {
+    expect(formatCliBuildArtifactNames([
+      join('/workspace/resources/bin', 'profer'),
+      join('/workspace/resources/bin', 'profer.exe'),
+    ])).toBe('profer, profer.exe')
   })
 })

@@ -59,12 +59,6 @@ files:
 
 # 通用额外资源
 extraResources:
-  # proma CLI 自包含二进制（build:cli 用 bun build --compile 产出到 resources/bin/）。
-  # 运行时由主进程注入 PROMA_CLI 环境变量，暴露给 skill / Agent 调用。
-  - from: resources/bin
-    to: bin
-    filter:
-      - "**/*"
   # 默认 Skills 模板（首次启动时同步到 ~/.proma/default-skills/）
   - from: default-skills
     to: default-skills
@@ -110,6 +104,10 @@ extraResources:
 mac:
   category: public.app-category.developer-tools
   icon: resources/icon.icns
+  # CLI 是宿主原生二进制，只允许复制 macOS 文件名，避免携带 Windows 残留。
+  extraResources:
+    - from: resources/bin/profer
+      to: bin/profer
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
@@ -141,11 +139,21 @@ dmg:
     width: 540
     height: 380
 
+# Linux CLI 与 macOS 同名，但仍按平台精确复制，避免未来 Linux 构建回归。
+linux:
+  extraResources:
+    - from: resources/bin/profer
+      to: bin/profer
+
 # ============================================
 # Windows 配置
 # ============================================
 win:
   icon: icon.ico
+  # Windows 包必须只携带 .exe；发布校验会再次检查最终 unpacked 目录。
+  extraResources:
+    - from: resources/bin/profer.exe
+      to: bin/profer.exe
   fileAssociations:
     - ext: profer-backup
       name: Profer Personal Backup

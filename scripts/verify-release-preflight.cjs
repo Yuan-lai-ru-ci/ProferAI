@@ -11,7 +11,8 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const version = process.argv[2]
-if (!version) throw new Error('用法: node scripts/verify-release-preflight.cjs <版本号>')
+const allowPublishedRelease = process.argv.includes('--allow-published-release')
+if (!version) throw new Error('用法: node scripts/verify-release-preflight.cjs <版本号> [--allow-published-release]')
 
 const root = path.resolve(__dirname, '..')
 const electron = path.join(root, 'apps/electron')
@@ -71,7 +72,7 @@ function assertExistingRelease() {
     throw new Error(`无法确认 GitHub Release ${tag} 状态：${result.out.slice(-300)}`)
   }
   const release = JSON.parse(result.out)
-  if (!release.isDraft) {
+  if (!release.isDraft && !allowPublishedRelease) {
     throw new Error(`GitHub Release ${tag} 已发布；拒绝覆盖已发布版本。`)
   }
 }
@@ -85,4 +86,4 @@ if (!tryRun('git merge-base --is-ancestor origin/main HEAD').ok) {
 const head = run('git rev-parse HEAD')
 assertTagTargets(head)
 assertExistingRelease()
-console.log(`[release-preflight] ${tag} -> ${head} OK`)
+console.log(`[release-preflight] ${tag} -> ${head} OK${allowPublishedRelease ? '（允许补充已发布 Release 资产）' : ''}`)

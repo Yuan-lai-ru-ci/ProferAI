@@ -15,6 +15,7 @@
     "electron:build:github": "bun run --filter='@profer/electron' build:github",
     "electron:build:commercial": "bun run --filter='@profer/electron' build:commercial",
     "electron:start": "bun run --filter='@profer/electron' start",
+    "release:mac": "node scripts/push-mac-release.cjs",
     "build": "bun run --filter='*' build",
     "typecheck": "bun run --filter='*' typecheck",
     "test": "bun test --isolate"

@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 import pkg from './package.json' with { type: 'json' }
+import { resolveDevVitePort } from './src/main/lib/dev-instance'
 
 export default defineConfig({
   plugins: [react()],
@@ -27,7 +28,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5174,
+    port: resolveDevVitePort(),
     strictPort: true, // 确保使用指定端口，如被占用则报错
     open: false,
   },

@@ -10,6 +10,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { execFileSync } = require('node:child_process')
+const { verifyPackagedWindowsCli } = require('./packaged-cli-contract.cjs')
 
 const appRoot = path.resolve(__dirname, '..')
 const out = path.join(appRoot, 'out')
@@ -25,6 +26,11 @@ for (const name of expected) {
   if (fs.statSync(filePath).size <= 0) throw new Error(`Windows 发布资产为空: ${filePath}`)
   console.log(`[verify:release-assets] ${name} OK`)
 }
+
+const packagedCliPath = verifyPackagedWindowsCli(
+  path.join(out, 'win-unpacked', 'resources', 'bin'),
+)
+console.log(`[verify:release-assets] ${path.relative(out, packagedCliPath)} OK`)
 
 function parseLatestYml(text) {
   const versionMatch = text.match(/^version:\s*([^\r\n]+)$/m)

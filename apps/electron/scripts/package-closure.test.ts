@@ -45,6 +45,13 @@ describe('Pi packaged runtime 闭包', () => {
     }
   })
 
+  test('probe 使用内存凭据与模型缓存，不读取或写入 CI 用户的全局 Pi 目录', async () => {
+    const source = await read(join(appDir, 'scripts/packaged-pi-probe.cjs'))
+
+    expect(source).toContain('credentials: new piAi.InMemoryCredentialStore()')
+    expect(source).toContain('modelsPath: null')
+  })
+
   test('probe 只枚举目标 unpacked scope 内的 native/WASM 文件', () => {
     const probe = require('./packaged-pi-probe.cjs') as {
       findUnpackedNativeFiles(root: string): string[]

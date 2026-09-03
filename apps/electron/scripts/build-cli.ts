@@ -19,8 +19,10 @@ import { copyFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
+  cleanCliBuildArtifacts,
   createBuildCliInvocation,
   createTemporaryBunPath,
+  formatCliBuildArtifactNames,
   tryRemoveTemporaryBun,
 } from './build-cli-runtime'
 
@@ -53,6 +55,12 @@ if (!existsSync(cliEntry)) {
 }
 
 mkdirSync(outDir, { recursive: true })
+const removedArtifacts = cleanCliBuildArtifacts(outDir)
+if (removedArtifacts.length > 0) {
+  console.log(
+    `${color.dim}[build:cli] 已清理异平台 CLI 残留: ${formatCliBuildArtifactNames(removedArtifacts)}${color.reset}`,
+  )
+}
 
 console.log(`${color.cyan}[build:cli]${color.reset} 编译 profer CLI → ${color.dim}${outFile}${color.reset}`)
 

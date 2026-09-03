@@ -6,6 +6,15 @@
 const { readdirSync, existsSync } = require('node:fs')
 const { join, resolve } = require('node:path')
 const { spawnSync } = require('node:child_process')
+const { assertBuilderPackagingHost } = require('./packaging-host.cjs')
+
+const builderArgs = process.argv.slice(2)
+try {
+  assertBuilderPackagingHost(builderArgs, process.platform)
+} catch (error) {
+  console.error(`[electron-builder] ${error instanceof Error ? error.message : String(error)}`)
+  process.exit(2)
+}
 
 const appDir = resolve(__dirname, '..')
 const repoRoot = resolve(appDir, '../..')
@@ -30,7 +39,7 @@ if (candidates.length !== 1) {
   throw new Error(`期望在 Bun 虚拟依赖仓库中找到唯一 electron-builder CLI，实际找到 ${candidates.length} 个。请先运行 bun install --frozen-lockfile。`)
 }
 
-const result = spawnSync(process.execPath, [candidates[0], ...process.argv.slice(2)], {
+const result = spawnSync(process.execPath, [candidates[0], ...builderArgs], {
   cwd: appDir,
   stdio: 'inherit',
   env: process.env,

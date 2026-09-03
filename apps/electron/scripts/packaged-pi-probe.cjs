@@ -82,12 +82,17 @@ async function runProbe(resourcesDir) {
   }
 
   const sdk = imported.get('@earendil-works/pi-coding-agent')
+  const piAi = imported.get('@earendil-works/pi-ai')
   // Pi 0.84.2：AuthStorage/ModelRegistry.inMemory 已移除，改为 ModelRuntime.create + registerProvider
   assert(typeof sdk.ModelRuntime?.create === 'function', 'Pi ModelRuntime.create 不可用')
   assert(typeof sdk.SessionManager?.create === 'function', 'Pi SessionManager.create 不可用')
   assert(typeof sdk.SettingsManager?.inMemory === 'function', 'Pi SettingsManager.inMemory 不可用')
 
-  const modelRuntime = await sdk.ModelRuntime.create({ allowModelNetwork: false })
+  const modelRuntime = await sdk.ModelRuntime.create({
+    credentials: new piAi.InMemoryCredentialStore(),
+    modelsPath: null,
+    allowModelNetwork: false,
+  })
   const providerId = 'profer-packaged-probe'
   modelRuntime.registerProvider(providerId, {
     name: 'Profer packaged probe',
