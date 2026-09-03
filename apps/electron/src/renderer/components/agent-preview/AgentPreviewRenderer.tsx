@@ -166,7 +166,7 @@ function AgentPreviewApp(): React.ReactElement {
         const payload = error as { code?: string; message?: string }
         window.agentPreviewAPI!.sendError(task.id, { code: payload.code, message: payload.message || '截图失败' })
       }
-    })
+    })()
   }, [task])
 
   const handleFailure = React.useCallback((error: unknown) => {
