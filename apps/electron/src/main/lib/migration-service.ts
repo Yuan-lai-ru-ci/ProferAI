@@ -9,7 +9,7 @@
  */
 
 import { existsSync, mkdirSync, cpSync, readFileSync, writeFileSync, readdirSync, rmSync, type Dirent } from 'node:fs'
-import { join, resolve, relative, dirname, basename, isAbsolute, sep } from 'node:path'
+import { join, resolve, relative, dirname, basename, isAbsolute, sep, win32, posix } from 'node:path'
 import { homedir, platform, arch, tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import AdmZip from 'adm-zip'
@@ -28,6 +28,7 @@ import {
   getWorkspaceMcpPath,
   getWorkspaceSkillsDir,
   getInactiveSkillsDir,
+  getWorkspaceSkillOverridesPath,
   getSettingsPath,
   getUserProfilePath,
   getChatToolsConfigPath,
@@ -36,6 +37,9 @@ import {
 import { listAgentWorkspaces, getAgentWorkspace, getAllWorkspaceSkills, getWorkspaceMcpConfig } from './agent-workspace-manager'
 import { listChannels, decryptApiKey } from './channel-manager'
 import type { AgentWorkspace } from '@profer/shared'
+import { writeJsonFileAtomic } from './safe-file'
+import { assertSafeSkillSegment } from './skill-path-security'
+import { copySkillDirectorySafely } from './global-skill-manager'
 
 // ─── 类型定义 ────────────────────────────────────────────────────────────────
 
@@ -137,7 +141,7 @@ export interface WorkspaceExportEntry {
 
 interface MigrationManifestV2 {
   mode: MigrationMode
-  version: '2.0'
+  version: '2.0' | '3.0'
   components: MigrationComponent[]
   exportedAt: number
   sourcePlatform: string
@@ -289,7 +293,7 @@ export async function exportData(options: ExportOptions): Promise<ExportResult> 
 
   const manifest: MigrationManifest = {
     mode,
-    version: '1.0',
+    version: '3.0',
     components,
     exportedAt: Date.now(),
     sourcePlatform: platform(),
@@ -356,7 +360,7 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
 
   const manifest: MigrationManifestV2 = {
     mode,
-    version: '2.0',
+    version: '3.0',
     components,
     exportedAt: Date.now(),
     sourcePlatform: platform(),
@@ -689,6 +693,8 @@ function _addSkills(zip: AdmZip, workspace: AgentWorkspace, warnings: string[]) 
   if (existsSync(skillsDir)) _addDirToZip(zip, skillsDir, 'skills/active', warnings)
   const inactiveDir = getInactiveSkillsDir(workspace.slug)
   if (existsSync(inactiveDir)) _addDirToZip(zip, inactiveDir, 'skills/inactive', warnings)
+  const overridesPath = getWorkspaceSkillOverridesPath(workspace.slug)
+  if (existsSync(overridesPath)) zip.addLocalFile(overridesPath, 'skills', 'skill-overrides.json')
 }
 
 function _addMcp(zip: AdmZip, workspace: AgentWorkspace, mode: MigrationMode) {
@@ -771,7 +777,8 @@ function _addSkillsV2(zip: AdmZip, workspace: AgentWorkspace, selectedSlugs: str
   const skillsDir = getWorkspaceSkillsDir(workspace.slug)
   if (existsSync(skillsDir)) {
     for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+      assertSafeSkillSegment(entry.name, '导出 Skill slug')
       if (selectedSlugs && !selectedSlugs.includes(entry.name)) continue
       _addDirToZip(zip, join(skillsDir, entry.name), `${prefix}/skills/active/${entry.name}`, warnings)
     }
@@ -779,11 +786,14 @@ function _addSkillsV2(zip: AdmZip, workspace: AgentWorkspace, selectedSlugs: str
   const inactiveDir = getInactiveSkillsDir(workspace.slug)
   if (existsSync(inactiveDir)) {
     for (const entry of readdirSync(inactiveDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+      assertSafeSkillSegment(entry.name, '导出 Skill slug')
       if (selectedSlugs && !selectedSlugs.includes(entry.name)) continue
       _addDirToZip(zip, join(inactiveDir, entry.name), `${prefix}/skills/inactive/${entry.name}`, warnings)
     }
   }
+  const overridesPath = getWorkspaceSkillOverridesPath(workspace.slug)
+  if (existsSync(overridesPath)) zip.addLocalFile(overridesPath, `${prefix}/skills`, 'skill-overrides.json')
 }
 
 function _addMcpV2(zip: AdmZip, workspace: AgentWorkspace, mode: MigrationMode, selectedNames?: string[]) {
@@ -863,7 +873,11 @@ export async function parseImportFile(filePath: string): Promise<ImportPreview |
 
   const crossPlatform = rawManifest.sourcePlatform !== platform()
 
-  if (rawManifest.version === '2.0' && rawManifest.workspaces) {
+  if ((rawManifest.version === '2.0' || rawManifest.version === '3.0') && rawManifest.workspaces) {
+    for (const entry of rawManifest.workspaces) {
+      assertSafeSkillSegment(entry.workspaceSlug, '迁移 workspaceSlug')
+      if (Array.isArray(entry.skillSlugs)) entry.skillSlugs.forEach((slug) => assertSafeSkillSegment(slug, '迁移 Skill slug'))
+    }
     const manifest = rawManifest as unknown as MigrationManifestV2
     const localWorkspaces = listAgentWorkspaces()
     const localBySlug = new Map(localWorkspaces.map((w) => [w.slug, w]))
@@ -932,6 +946,7 @@ export async function parseImportFile(filePath: string): Promise<ImportPreview |
   }
 
   // v1.0 原有逻辑
+  assertSafeSkillSegment((rawManifest as MigrationManifest).workspaceSlug, '迁移 workspaceSlug')
   const manifest = rawManifest as MigrationManifest
   const skillsDir = join(tempDir, 'skills/active')
   const skillNames: string[] = existsSync(skillsDir)
@@ -1013,7 +1028,7 @@ export async function confirmImport(options: ConfirmImportOptions | ConfirmImpor
   const { tempDir, manifest, pathMappings } = options
 
   try {
-    if (manifest.version === '2.0' && 'workspaces' in manifest) {
+    if ((manifest.version === '2.0' || manifest.version === '3.0') && 'workspaces' in manifest) {
       return await _confirmImportV2(options as ConfirmImportOptionsV2)
     }
 
@@ -1227,16 +1242,60 @@ function _importSkills(tempDir: string, targetWorkspace: AgentWorkspace, overwri
   const activeDir = join(tempDir, 'skills/active')
   if (existsSync(activeDir)) {
     const targetSkillsDir = getWorkspaceSkillsDir(targetWorkspace.slug)
-    for (const skillName of readdirSync(activeDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)) {
+    for (const skillName of readdirSync(activeDir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.isSymbolicLink()).map((e) => e.name)) {
+      assertSafeSkillSegment(skillName, '导入 Skill slug')
       const src = join(activeDir, skillName)
       const dest = join(targetSkillsDir, skillName)
       if (existsSync(dest)) {
         if (!overwrite) continue
         rmSync(dest, { recursive: true, force: true })
       }
-      cpSync(src, dest, { recursive: true })
+      copySkillDirectorySafely(src, dest)
+      ensureImportedWorkspaceSkillId(dest)
     }
   }
+  const inactiveDir = join(tempDir, 'skills/inactive')
+  if (existsSync(inactiveDir)) {
+    const targetInactiveDir = getInactiveSkillsDir(targetWorkspace.slug)
+    for (const skillName of readdirSync(inactiveDir, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.isSymbolicLink()).map((e) => e.name)) {
+      assertSafeSkillSegment(skillName, '导入 Skill slug')
+      const src = join(inactiveDir, skillName)
+      const dest = join(targetInactiveDir, skillName)
+      if (existsSync(dest)) {
+        if (!overwrite) continue
+        rmSync(dest, { recursive: true, force: true })
+      }
+      copySkillDirectorySafely(src, dest)
+      ensureImportedWorkspaceSkillId(dest)
+    }
+  }
+  _importSkillOverrides(tempDir, targetWorkspace, overwrite)
+}
+
+function ensureImportedWorkspaceSkillId(skillDir: string): void {
+  const sourcePath = join(skillDir, '.source.json')
+  const current = existsSync(sourcePath) ? readJsonSafe<Record<string, unknown>>(sourcePath) : null
+  if (typeof current?.workspaceSkillId === 'string' && current.workspaceSkillId.length > 0) return
+  writeJsonFileAtomic(sourcePath, { ...(current ?? { scope: 'workspace' }), workspaceSkillId: randomUUID() })
+}
+
+function _importSkillOverrides(sourceRoot: string, targetWorkspace: AgentWorkspace, overwrite = false): void {
+  const sourcePath = join(sourceRoot, 'skills/skill-overrides.json')
+  if (!existsSync(sourcePath)) return
+  const imported = readJsonSafe<{ schemaVersion?: number; globalSkills?: Record<string, unknown> }>(sourcePath)
+  if (!imported?.globalSkills || imported.schemaVersion !== 1) return
+  const targetPath = getWorkspaceSkillOverridesPath(targetWorkspace.slug)
+  const current = existsSync(targetPath)
+    ? readJsonSafe<{ schemaVersion?: number; globalSkills?: Record<string, unknown> }>(targetPath)
+    : null
+  const merged = {
+    schemaVersion: 1,
+    globalSkills: overwrite
+      ? { ...(current?.globalSkills ?? {}), ...imported.globalSkills }
+      : { ...imported.globalSkills, ...(current?.globalSkills ?? {}) },
+  }
+  mkdirSync(dirname(targetPath), { recursive: true })
+  writeJsonFileAtomic(targetPath, merged)
 }
 
 function _importMcp(tempDir: string, targetWorkspace: AgentWorkspace, overwrite = false) {
@@ -1379,13 +1438,15 @@ function _importSkillsV2(tempDir: string, sourceSlug: string, targetWorkspace: A
   if (existsSync(activeDir)) {
     const targetSkillsDir = getWorkspaceSkillsDir(targetWorkspace.slug)
     for (const entry of readdirSync(activeDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+      assertSafeSkillSegment(entry.name, '导入 Skill slug')
       const dest = join(targetSkillsDir, entry.name)
       if (existsSync(dest)) {
         if (!overwrite) continue
         rmSync(dest, { recursive: true, force: true })
       }
-      cpSync(join(activeDir, entry.name), dest, { recursive: true })
+      copySkillDirectorySafely(join(activeDir, entry.name), dest)
+      ensureImportedWorkspaceSkillId(dest)
     }
   }
 
@@ -1393,15 +1454,18 @@ function _importSkillsV2(tempDir: string, sourceSlug: string, targetWorkspace: A
   if (existsSync(inactiveDir)) {
     const targetInactiveDir = getInactiveSkillsDir(targetWorkspace.slug)
     for (const entry of readdirSync(inactiveDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+      assertSafeSkillSegment(entry.name, '导入 Skill slug')
       const dest = join(targetInactiveDir, entry.name)
       if (existsSync(dest)) {
         if (!overwrite) continue
         rmSync(dest, { recursive: true, force: true })
       }
-      cpSync(join(inactiveDir, entry.name), dest, { recursive: true })
+      copySkillDirectorySafely(join(inactiveDir, entry.name), dest)
+      ensureImportedWorkspaceSkillId(dest)
     }
   }
+  _importSkillOverrides(join(tempDir, `workspaces/${sourceSlug}`), targetWorkspace, overwrite)
 }
 
 function _importMcpV2(tempDir: string, sourceSlug: string, targetWorkspace: AgentWorkspace, overwrite = false) {
@@ -1593,15 +1657,68 @@ function _addDirToZip(zip: AdmZip, srcDir: string, zipPrefix: string, warnings: 
   }
 }
 
-/** Zip Slip 安全解压：校验每个条目的路径不会逃逸 targetDir */
-function _safeExtractAll(zip: AdmZip, targetDir: string): void {
-  const resolvedTarget = resolve(targetDir)
-  for (const entry of zip.getEntries()) {
-    const entryPath = resolve(targetDir, entry.entryName)
-    const relativeEntryPath = relative(resolvedTarget, entryPath)
-    if (relativeEntryPath === '..' || relativeEntryPath.startsWith(`..${sep}`) || isAbsolute(relativeEntryPath)) {
-      throw new Error(`迁移文件包含非法路径，已拒绝解压: ${entry.entryName}`)
-    }
+const WINDOWS_INVALID_ARCHIVE_SEGMENT = /[<>:"|?*\u0000-\u001f\u007f]/u
+const WINDOWS_RESERVED_ARCHIVE_DEVICE = /^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])$/iu
+
+function assertWindowsSafeArchiveSegment(segment: string, entryName: string): void {
+  if (WINDOWS_INVALID_ARCHIVE_SEGMENT.test(segment)) {
+    throw new Error(`迁移文件包含 Windows 非法路径字符，已拒绝解压: ${entryName}`)
   }
+  if (/[. ]$/u.test(segment)) {
+    throw new Error(`迁移文件包含 Windows 尾随点或空格，已拒绝解压: ${entryName}`)
+  }
+
+  // Windows 的设备名即使带扩展名仍然保留；点前的尾随点/空格也会被 Win32 规范化掉。
+  const deviceBase = segment.split('.', 1)[0]!.replace(/[. ]+$/u, '')
+  if (WINDOWS_RESERVED_ARCHIVE_DEVICE.test(deviceBase)) {
+    throw new Error(`迁移文件包含 Windows 保留设备名，已拒绝解压: ${entryName}`)
+  }
+}
+
+/** 校验单个迁移压缩包条目，兼容 POSIX 与 Windows 路径语义。 */
+export function assertSafeMigrationArchiveEntry(entryName: string, targetDir: string): void {
+  if (typeof entryName !== 'string' || entryName.length === 0) {
+    throw new Error('迁移文件包含空路径条目，已拒绝解压')
+  }
+  const resolvedTarget = resolve(targetDir)
+  const entryPath = resolve(targetDir, entryName)
+  const relativeEntryPath = relative(resolvedTarget, entryPath)
+  const winEntryPath = win32.resolve(resolvedTarget, entryName)
+  const winRelative = win32.relative(win32.resolve(resolvedTarget), winEntryPath)
+  const entrySegments = entryName.replaceAll('\\', '/').split('/').filter(Boolean)
+  const malformed = entrySegments.some((segment) => segment === '.' || segment === '..')
+  const escaped = relativeEntryPath === '..' || relativeEntryPath.startsWith(`..${sep}`) || isAbsolute(relativeEntryPath)
+    || winRelative === '..' || winRelative.startsWith(`..${win32.sep}`) || win32.isAbsolute(winRelative)
+    || posix.isAbsolute(entryName) || win32.isAbsolute(entryName) || entryName.includes('\0') || malformed
+  if (escaped) throw new Error(`迁移文件包含非法路径，已拒绝解压: ${entryName}`)
+  for (const segment of entrySegments) assertWindowsSafeArchiveSegment(segment, entryName)
+}
+
+function windowsArchiveDestinationKey(entryName: string, targetDir: string): string {
+  const windowsEntryName = entryName.replaceAll('/', '\\')
+  // resolve 同时折叠重复分隔符；小写键模拟默认 Windows 卷的大小写不敏感语义。
+  return win32.resolve(win32.resolve(targetDir), windowsEntryName).toLowerCase()
+}
+
+/** 解压前一次性验证所有条目，避免大小写或分隔符归一化后覆盖同一 Windows 路径。 */
+export function assertSafeMigrationArchiveEntries(
+  entries: readonly { entryName: string; isDirectory?: boolean }[],
+  targetDir: string,
+): void {
+  const destinations = new Map<string, string>()
+  for (const entry of entries) {
+    assertSafeMigrationArchiveEntry(entry.entryName, targetDir)
+    const destinationKey = windowsArchiveDestinationKey(entry.entryName, targetDir)
+    const previous = destinations.get(destinationKey)
+    if (previous !== undefined) {
+      throw new Error(`迁移文件包含 Windows 路径冲突，已拒绝解压: ${previous} / ${entry.entryName}`)
+    }
+    destinations.set(destinationKey, entry.entryName)
+  }
+}
+
+/** Zip Slip 安全解压：在委托 ZIP 库前逐条校验路径不会逃逸 targetDir。 */
+function _safeExtractAll(zip: AdmZip, targetDir: string): void {
+  assertSafeMigrationArchiveEntries(zip.getEntries(), targetDir)
   zip.extractAllTo(targetDir, true)
 }

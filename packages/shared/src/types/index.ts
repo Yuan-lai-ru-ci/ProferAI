@@ -31,6 +31,7 @@ export * from './ppt-deck'
 export * from './agent'
 export * from './agent-preview'
 export * from './pi-harness'
+export * from './global-skill'
 export * from './browser'
 
 // 推理 profile 相关类型

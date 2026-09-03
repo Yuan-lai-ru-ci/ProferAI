@@ -7,21 +7,41 @@
 
 import * as React from 'react'
 import { toast } from 'sonner'
-import { Sparkles, Save, X, Pencil, ArrowLeft, RefreshCw, History, Download } from 'lucide-react'
+import { Sparkles, Save, X, Pencil, ArrowLeft, RefreshCw, History, Download, Plus, ChevronDown, Check, ShieldCheck } from 'lucide-react'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { SettingsCard } from '@/components/settings/primitives'
-import type { MasterSkillMeta, MasterSkillVersion } from '@profer/shared'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import type { AgentWorkspace, GlobalSkillMeta, GlobalSkillWorkspaceReference, MasterSkillMeta, MasterSkillVersion } from '@profer/shared'
 import { extractSkillBody, rebuildSkillMd } from './skillMdUtils'
 
 interface Props {
-  skill: MasterSkillMeta | null
+  skill: MasterSkillMeta | GlobalSkillMeta | null
+  workspaceSlug?: string
+  globalMode?: boolean
   onOpenChange: (open: boolean) => void
   onChanged: () => void
   /** 打开同步对话框 */
-  onSync: (slug: string) => void
+  onSync?: (slug: string) => void
+  /** 工作区页面查看全局/元 Skill 时，原始定义只读。 */
+  readOnlyGlobal?: boolean
+  onCopyToWorkspace?: (skillId: string) => void | Promise<void>
+  onOpenGlobalConfig?: () => void
 }
+
+function isGlobalSkill(skill: Props['skill']): skill is GlobalSkillMeta {
+  return !!skill && 'skillId' in skill
+}
+
+function ScopeManager({ references, workspaces, busy, onAdd, onRemove }: { references: GlobalSkillWorkspaceReference[]; workspaces: AgentWorkspace[]; busy: boolean; onAdd: (slug: string) => void; onRemove: (slug: string) => void }): React.ReactElement {
+  const active = references.filter((reference) => reference.actualSource === 'global')
+  const activeSlugs = new Set(active.map((reference) => reference.workspaceSlug))
+  const available = workspaces.filter((workspace) => !activeSlugs.has(workspace.slug))
+  return <SettingsCard divided={false}><div className="flex flex-wrap items-center gap-2 p-4"><span className="mr-1 text-sm font-medium">已生效工作区：</span>{active.map((reference) => <span key={reference.workspaceSlug} className="inline-flex items-center gap-1 rounded-full bg-primary/10 py-1 pl-2.5 pr-1.5 text-xs text-primary"><span>{reference.workspaceName}</span><button type="button" aria-label={`移除 ${reference.workspaceName}`} disabled={busy} onClick={() => onRemove(reference.workspaceSlug)} className="rounded-full p-0.5 hover:bg-primary/15 disabled:opacity-50"><X size={12} /></button></span>)}<Popover><PopoverTrigger asChild><Button size="sm" variant="outline" disabled={busy || available.length === 0}><Plus size={13} className="mr-1" />添加工作区<ChevronDown size={13} className="ml-1" /></Button></PopoverTrigger><PopoverContent align="start" className="w-56 p-1">{available.length ? available.map((workspace) => <button key={workspace.id} type="button" onClick={() => onAdd(workspace.slug)} className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent"><span className="truncate">{workspace.name}</span><Check size={13} className="text-primary" /></button>) : <p className="p-2 text-xs text-muted-foreground">所有工作区均已生效</p>}</PopoverContent></Popover></div></SettingsCard>
+}
+
+function BuiltinTag(): React.ReactElement { return <span className="inline-flex items-center gap-1 rounded-md bg-blue-500/15 px-1.5 py-0.5 text-[11px] font-medium text-blue-700 dark:text-blue-300"><ShieldCheck size={12} />Profer 内置</span> }
 
 export function MasterSkillDetailSheet(props: Props): React.ReactElement {
   const { skill, onOpenChange } = props
@@ -35,8 +55,11 @@ export function MasterSkillDetailSheet(props: Props): React.ReactElement {
   )
 }
 
-function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { skill: MasterSkillMeta }): React.ReactElement {
+function MasterSkillBody({ skill, workspaceSlug, globalMode = false, onOpenChange, onChanged, onSync, readOnlyGlobal = false, onCopyToWorkspace, onOpenGlobalConfig }: Props & { skill: MasterSkillMeta | GlobalSkillMeta }): React.ReactElement {
   const slug = skill.slug
+  const isGlobal = isGlobalSkill(skill)
+  const canEditBody = !isGlobal || (!readOnlyGlobal && skill.type !== 'builtin-meta')
+  const canEditMeta = !isGlobal || !readOnlyGlobal
   const [content, setContent] = React.useState<string | null>(null)
   const [history, setHistory] = React.useState<MasterSkillVersion[]>([])
   const [isEditing, setIsEditing] = React.useState(false)
@@ -51,28 +74,27 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
   const [editName, setEditName] = React.useState('')
   const [editDesc, setEditDesc] = React.useState('')
   const [savingMeta, setSavingMeta] = React.useState(false)
+  const [scopeReferences, setScopeReferences] = React.useState<GlobalSkillWorkspaceReference[]>([])
+  const [workspaces, setWorkspaces] = React.useState<AgentWorkspace[]>([])
+  const [scopeBusy, setScopeBusy] = React.useState(false)
 
   React.useEffect(() => {
     setContent(null)
     setHistory([])
     setIsEditing(false)
     setTab('edit')
-    window.electronAPI.skillMaster.read(slug)
-      .then(setContent)
-      .catch((e) => {
-        console.error('[MasterSkill] 读取失败:', e)
-        setContent(null)
-      })
-    window.electronAPI.skillMaster.listHistory(slug)
-      .then(setHistory)
-      .catch(() => setHistory([]))
-  }, [slug])
+    const read = isGlobal ? window.electronAPI.globalSkill.read(skill.skillId) : window.electronAPI.skillMaster.read(slug)
+    void read.then(setContent).catch((e) => { console.error('[MasterSkill] 读取失败:', e); setContent(null) })
+    if (!isGlobal) void window.electronAPI.skillMaster.listHistory(slug).then(setHistory).catch(() => setHistory([]))
+    if (globalMode && isGlobal) void Promise.all([window.electronAPI.globalSkill.getDeleteBlockers(skill.skillId), window.electronAPI.listAgentWorkspaces()]).then(([report, listed]) => { setScopeReferences(report.references); setWorkspaces(listed.filter((workspace) => !workspace.isDeleted)) }).catch(() => { setScopeReferences([]); setWorkspaces([]) })
+  }, [slug, skill, isGlobal, globalMode])
 
   const body = React.useMemo(() => extractSkillBody(content ?? ''), [content])
 
   const saveMeta = async (): Promise<void> => {
     setSavingMeta(true)
     try {
+      if (isGlobal) return
       await window.electronAPI.skillMaster.renameMeta(slug, { name: editName, description: editDesc })
       setDisplayName(editName)
       setDisplayDesc(editDesc)
@@ -92,15 +114,18 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
     setSaving(true)
     try {
       const newContent = rebuildSkillMd(content, { body: editBody })
-      await window.electronAPI.skillMaster.save(slug, newContent, note.trim() || undefined)
+      if (isGlobal) await window.electronAPI.globalSkill.save(skill.skillId, newContent, workspaceSlug ?? '', 'global')
+      else await window.electronAPI.skillMaster.save(slug, newContent, note.trim() || undefined)
       setContent(newContent)
       setIsEditing(false)
       setNote('')
       onChanged()
       // 刷新历史
-      const h = await window.electronAPI.skillMaster.listHistory(slug)
-      setHistory(h)
-      toast.success('元 Skill 已保存（版本已 bump）')
+      if (!isGlobal) {
+        const h = await window.electronAPI.skillMaster.listHistory(slug)
+        setHistory(h)
+      }
+      toast.success(isGlobal ? '全局 Skill 已保存' : '元 Skill 已保存（版本已 bump）')
     } catch (e) {
       console.error('[MasterSkill] 保存失败:', e)
       toast.error('保存失败')
@@ -112,6 +137,7 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
   const rollback = async (snapshotId: string): Promise<void> => {
     setRollingBack(true)
     try {
+      if (isGlobal) return
       await window.electronAPI.skillMaster.rollback(slug, snapshotId)
       const c = await window.electronAPI.skillMaster.read(slug)
       const h = await window.electronAPI.skillMaster.listHistory(slug)
@@ -135,7 +161,7 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
           <Button variant="ghost" size="icon" className="h-8 w-8" type="button" onClick={() => onOpenChange(false)}>
             <ArrowLeft size={18} />
           </Button>
-          <h3 className="text-lg font-medium text-foreground">全局元 Skill 详情</h3>
+          <h3 className="text-lg font-medium text-foreground">{isGlobal ? '全局 Skill 详情' : '全局元 Skill 详情'}</h3>
         </div>
 
         <div className="mt-4 flex items-start gap-3">
@@ -149,29 +175,34 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
                 <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">v{skill.version}</span>
               )}
             </div>
-            <div className="mt-0.5 truncate text-xs text-muted-foreground">{slug}</div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span>{slug}</span>{isGlobal && skill.type === 'builtin-meta' && <BuiltinTag />}</div>
           </div>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 mr-auto flex-wrap">
-            <span className="text-[11px] text-muted-foreground">已同步 {skill.syncedWorkspaceCount} 个工作区</span>
-            {skill.userModified && (
+            <span className="text-[11px] text-muted-foreground">{isGlobal ? '全局 Skill' : `已同步 ${skill.syncedWorkspaceCount} 个工作区`}</span>
+            {!isGlobal && skill.userModified && (
               <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">已修改</span>
             )}
           </div>
-          <Button size="sm" variant="outline" onClick={() => onSync(slug)}>
+          {!globalMode && onSync && <Button size="sm" variant="outline" onClick={() => onSync(slug)}>
             <Download size={14} className="mr-1" />
             同步到工作区
-          </Button>
+          </Button>}
+          {isGlobal && readOnlyGlobal && onCopyToWorkspace && <Button size="sm" variant="outline" onClick={() => void onCopyToWorkspace(skill.skillId)}><Download size={14} className="mr-1" />在当前工作区创建副本</Button>}
+          {isGlobal && readOnlyGlobal && onOpenGlobalConfig && skill.type === 'user-global' && <Button size="sm" variant="outline" onClick={onOpenGlobalConfig}>前往全局配置编辑</Button>}
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
+        {globalMode && isGlobal && <ScopeManager references={scopeReferences} workspaces={workspaces} busy={scopeBusy} onAdd={(target) => { setScopeBusy(true); void window.electronAPI.globalSkill.setEnabled(target, skill.skillId, true).then(async () => { const report = await window.electronAPI.globalSkill.getDeleteBlockers(skill.skillId); setScopeReferences(report.references); onChanged(); toast.success('已添加该工作区的生效范围') }).catch((error) => toast.error(error instanceof Error ? error.message : '添加范围失败')).finally(() => setScopeBusy(false)) }} onRemove={(target) => { setScopeBusy(true); void window.electronAPI.globalSkill.setEnabled(target, skill.skillId, false).then(async () => { const report = await window.electronAPI.globalSkill.getDeleteBlockers(skill.skillId); setScopeReferences(report.references); onChanged(); toast.success('已移除该工作区的生效范围') }).catch((error) => toast.error(error instanceof Error ? error.message : '移除范围失败')).finally(() => setScopeBusy(false)) }} />}
         {/* 编辑 / 历史 切换 */}
         <div className="flex items-center gap-1 px-5 pt-3">
-          <TabButton active={tab === 'edit'} label="编辑" onClick={() => setTab('edit')} />
-          <TabButton active={tab === 'history'} label={`历史 (${history.length})`} onClick={() => setTab('history')} />
+          {!globalMode && <>
+            <TabButton active={tab === 'edit'} label="编辑" onClick={() => setTab('edit')} />
+            <TabButton active={tab === 'history'} label={`历史 (${history.length})`} onClick={() => setTab('history')} />
+          </>}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin p-5">
@@ -181,7 +212,7 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
               <div className="rounded-lg border border-border/60 bg-content-area px-3 py-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">元数据</span>
-                  {!isEditingMeta ? (
+                  {canEditMeta && (!isEditingMeta ? (
                     <Button size="sm" variant="ghost" onClick={() => { setEditName(displayName); setEditDesc(displayDesc); setIsEditingMeta(true) }}>
                       <Pencil size={13} className="mr-1" /> 编辑
                     </Button>
@@ -194,7 +225,7 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
                         <Save size={13} className="mr-1" /> {savingMeta ? '保存中...' : '保存'}
                       </Button>
                     </div>
-                  )}
+                  ))}
                 </div>
                 {isEditingMeta ? (
                   <div className="mt-2 flex flex-col gap-2">
@@ -223,7 +254,7 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
 
               <div className="flex items-center justify-between">
                 <div className="font-mono text-xs text-muted-foreground">SKILL.md</div>
-                {!isEditing ? (
+                {canEditBody && (!isEditing ? (
                   <Button
                     size="sm"
                     variant="ghost"
@@ -241,10 +272,10 @@ function MasterSkillBody({ skill, onOpenChange, onChanged, onSync }: Props & { s
                       <Save size={14} className="mr-1" /> {saving ? '保存中...' : '保存并生成新版本'}
                     </Button>
                   </div>
-                )}
+                ))}
               </div>
 
-              {isEditing && (
+              {isEditing && !isGlobal && (
                 <input
                   type="text"
                   value={note}

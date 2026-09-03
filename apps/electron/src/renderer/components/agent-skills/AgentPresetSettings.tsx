@@ -6,8 +6,9 @@
  */
 
 import * as React from 'react'
+import { toast } from 'sonner'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Plus, Copy, Pencil, Trash2, Star, Check, Download, Upload } from 'lucide-react'
+import { Plus, Copy, Pencil, Trash2, Star, Check, Download, Upload, ChevronDown, X, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -31,6 +32,38 @@ import { SettingsSection, SettingsCard } from '@/components/settings/primitives'
 import { workspacePresetsAtom } from '@/atoms/agent-preset-atoms'
 import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { GlobalPresetScopePanel } from './GlobalPresetScopePanel'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import type { AgentWorkspace, PresetReferenceReport, PresetWorkspaceReference } from '@profer/shared'
+
+function BuiltinPresetTag(): React.ReactElement {
+  return <span className="inline-flex items-center gap-1 rounded-md bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300"><ShieldCheck size={11} />Profer 内置</span>
+}
+
+type PresetSortMode = 'default' | 'alpha' | 'updated'
+
+const PRESET_SORT_STORAGE_KEYS: Record<'workspace' | 'global', string> = {
+  workspace: 'profer.agent-presets.sort.workspace',
+  global: 'profer.agent-presets.sort.global',
+}
+
+const PRESET_SORT_OPTIONS: Array<{ value: PresetSortMode; label: string }> = [
+  { value: 'default', label: '默认排序' },
+  { value: 'alpha', label: '按字母排序' },
+  { value: 'updated', label: '按修改时间排序' },
+]
+
+function readPresetSortMode(scope: 'workspace' | 'global'): PresetSortMode {
+  try {
+    if (typeof window === 'undefined') return 'default'
+    const saved = window.localStorage.getItem(PRESET_SORT_STORAGE_KEYS[scope])
+    return saved === 'alpha' || saved === 'updated' ? saved : 'default'
+  } catch {
+    return 'default'
+  }
+}
+
 import type { AgentPreset, AgentPresetCreateInput, AgentPresetUpdateInput, AgentPresetToolGroup, AgentEffort, ProferPermissionMode, SkillMeta } from '@profer/shared'
 import { AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP, AGENT_PRESET_GROUP_TOOL_NAMES } from '@profer/shared'
 
@@ -161,8 +194,14 @@ function PickList({ items, selected, searchable, emptyHint, onToggle, onSelectAl
   )
 }
 
-export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceSlug?: string; search?: string }): React.ReactElement {
-  const [presets, setPresets] = useAtom(workspacePresetsAtom(workspaceSlug))
+export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = false, onlyEffective = false, onPromote, onOpenGlobalConfig }: { workspaceSlug?: string; search?: string; globalMode?: boolean; onlyEffective?: boolean; onPromote?: (preset: AgentPreset) => void; onOpenGlobalConfig?: () => void }): React.ReactElement {
+  const [workspacePresets, setWorkspacePresets] = useAtom(workspacePresetsAtom(workspaceSlug))
+  const [globalPresets, setGlobalPresets] = React.useState<AgentPreset[]>([])
+  const presets = globalMode ? globalPresets : workspacePresets
+  const sortScope = globalMode ? 'global' : 'workspace'
+  const [sortMode, setSortMode] = React.useState<PresetSortMode>(() => readPresetSortMode(sortScope))
+  const [loading, setLoading] = React.useState(true)
+  const [toggleBusy, setToggleBusy] = React.useState<Set<string>>(new Set())
   // 与 Skills/MCP 相同的刷新信号：预设写操作后 bump，通知会话工具栏等订阅方重拉
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
   const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
@@ -172,13 +211,15 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
   const [form, setForm] = React.useState<PresetFormState>(presetToForm({ name: '', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0 } as AgentPreset))
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState('')
+  const [pendingGlobalDelete, setPendingGlobalDelete] = React.useState<AgentPreset | null>(null)
+  const [globalDeleteReport, setGlobalDeleteReport] = React.useState<PresetReferenceReport | null>(null)
+  const [globalDeleteBusy, setGlobalDeleteBusy] = React.useState(false)
   // 导出/导入文件操作的结果提示（头部按钮下方展示，几秒后自动消失）
   const [fileNotice, setFileNotice] = React.useState('')
   const [fileBusy, setFileBusy] = React.useState(false)
   // 勾选面板数据源：当前工作区的 Skills 与 MCP 列表（打开对话框时拉取）
   const [availableSkills, setAvailableSkills] = React.useState<SkillMeta[]>([])
   const [availableMcpServers, setAvailableMcpServers] = React.useState<Array<{ name: string; enabled: boolean }>>([])
-
   const dialogOpen = creating || editing !== null
 
   React.useEffect(() => {
@@ -229,24 +270,56 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
     }))
   }, [])
 
-  const reload = React.useCallback(async () => {
+  React.useEffect(() => {
+    setSortMode(readPresetSortMode(sortScope))
+  }, [sortScope])
+
+  const handleSortChange = React.useCallback((value: PresetSortMode) => {
+    setSortMode(value)
+    try { window.localStorage.setItem(PRESET_SORT_STORAGE_KEYS[sortScope], value) } catch { /* 本地存储不可用时仍保留本次会话选择 */ }
+  }, [sortScope])
+
+  const reload = React.useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) setLoading(true)
     try {
-      const [list, defaultId] = await Promise.all([
-        window.electronAPI.listAgentPresets(workspaceSlug),
-        window.electronAPI.getDefaultAgentPreset(workspaceSlug),
-      ])
-      setPresets(list)
-      setDefaultPresetId(defaultId)
+      const list = globalMode
+        ? await window.electronAPI.listGlobalAgentPresets()
+        : await window.electronAPI.listAgentPresets(workspaceSlug, true)
+      if (globalMode) {
+        setGlobalPresets(list)
+        setDefaultPresetId('')
+      } else {
+        setWorkspacePresets(list)
+        setDefaultPresetId(await window.electronAPI.getDefaultAgentPreset(workspaceSlug))
+      }
     } catch (err) {
       console.error('[预设设置] 加载失败:', err)
+    } finally {
+      if (!options?.silent) setLoading(false)
     }
-  }, [setPresets, workspaceSlug])
+  }, [globalMode, setWorkspacePresets, workspaceSlug])
 
   // 搜索过滤：名称 / 描述 / 提示词段 / Skill 白名单 / MCP 白名单
   const q = search.trim().toLowerCase()
   const filteredPresets = React.useMemo(() => {
-    if (!q) return presets
-    return presets.filter((p) => {
+    const scoped = globalMode || !onlyEffective ? presets : presets.filter((preset) => preset.scope === 'workspace' || preset.enabledInWorkspace === true)
+    const defaultOrder = new Map(presets.map((preset, index) => [preset.id, index]))
+    const compare = (a: AgentPreset, b: AgentPreset): number => {
+      if (sortMode === 'alpha') {
+        const byName = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        if (byName !== 0) return byName
+        const byScope = (a.scope ?? 'workspace').localeCompare(b.scope ?? 'workspace')
+        return byScope !== 0 ? byScope : a.id.localeCompare(b.id)
+      }
+      if (sortMode === 'updated') {
+        const byUpdated = (b.updatedAt || 0) - (a.updatedAt || 0)
+        return byUpdated !== 0 ? byUpdated : (defaultOrder.get(a.id) ?? 0) - (defaultOrder.get(b.id) ?? 0)
+      }
+      return (defaultOrder.get(a.id) ?? 0) - (defaultOrder.get(b.id) ?? 0)
+    }
+    const sorted = [...scoped].sort(compare)
+    if (!q) return sorted
+    return sorted.filter((p) => {
       const haystack = [
         p.name,
         p.description,
@@ -256,9 +329,13 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
       ].join('\n').toLowerCase()
       return haystack.includes(q)
     })
-  }, [presets, q])
+  }, [globalMode, onlyEffective, presets, q, sortMode])
 
-  React.useEffect(() => { void reload() }, [reload, capabilitiesVersion])
+  // 首次进入/切换工作区时显示加载态；能力开关等外部刷新沿用当前列表，避免整页白屏和滚动位置跳动。
+  React.useEffect(() => { void reload() }, [reload])
+  React.useEffect(() => {
+    if (capabilitiesVersion > 0) void reload({ silent: true })
+  }, [capabilitiesVersion, reload])
 
   const openCreate = React.useCallback(() => {
     setError('')
@@ -326,16 +403,26 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
     setSaving(true)
     setError('')
     try {
-      if (!workspaceSlug) {
-        setError('预设管理需要选择工作区')
-        return
-      }
-      if (editing) {
-        await window.electronAPI.updateAgentPreset(workspaceSlug, editing.id, buildUpdateInput())
-        setEditing(null)
+      if (globalMode) {
+        if (editing) {
+          await window.electronAPI.updateGlobalAgentPreset(editing.id, buildUpdateInput())
+          setEditing(null)
+        } else {
+          await window.electronAPI.createGlobalAgentPreset(buildCreateInput())
+          setCreating(false)
+        }
       } else {
-        await window.electronAPI.createAgentPreset(workspaceSlug, buildCreateInput())
-        setCreating(false)
+        if (!workspaceSlug) {
+          setError('预设管理需要选择工作区')
+          return
+        }
+        if (editing) {
+          await window.electronAPI.updateAgentPreset(workspaceSlug, editing.id, buildUpdateInput())
+          setEditing(null)
+        } else {
+          await window.electronAPI.createAgentPreset(workspaceSlug, buildCreateInput())
+          setCreating(false)
+        }
       }
       await reload()
       bumpCapabilities((v) => v + 1)
@@ -345,10 +432,10 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
     } finally {
       setSaving(false)
     }
-  }, [editing, form.name, buildUpdateInput, buildCreateInput, workspaceSlug, reload, bumpCapabilities])
+  }, [editing, form.name, buildUpdateInput, buildCreateInput, globalMode, workspaceSlug, reload, bumpCapabilities])
 
   const handleCopy = React.useCallback(async (preset: AgentPreset) => {
-    if (!workspaceSlug) return
+    if (!workspaceSlug || globalMode) return
     try {
       await window.electronAPI.copyAgentPreset(workspaceSlug, preset.id)
       await reload()
@@ -356,29 +443,104 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
     } catch (err) {
       console.error('[预设设置] 复制失败:', err)
     }
-  }, [workspaceSlug, reload, bumpCapabilities])
+  }, [globalMode, workspaceSlug, reload, bumpCapabilities])
 
   const handleDelete = React.useCallback(async (preset: AgentPreset) => {
-    if (!workspaceSlug) return
     try {
+      if (globalMode) {
+        const report = await window.electronAPI.getPresetReferenceReport({ presetId: preset.id, presetScope: preset.scope ?? 'user-global' })
+        setGlobalDeleteReport(report)
+        if (report.canDelete) setPendingGlobalDelete(preset)
+        else {
+          const message = `无法删除「${preset.name}」：仍有 ${report.totalCount} 个有效引用，请先解除对应工作区范围。`
+          setError(message)
+          toast.error(message)
+        }
+        return
+      }
+      if (!workspaceSlug) return
       await window.electronAPI.deleteAgentPreset(workspaceSlug, preset.id)
       await reload()
       bumpCapabilities((v) => v + 1)
     } catch (err) {
       console.error('[预设设置] 删除失败:', err)
+      const message = err instanceof Error ? err.message : '删除失败'
+      setError(message)
+      toast.error(message)
     }
-  }, [workspaceSlug, reload, bumpCapabilities])
+  }, [globalMode, workspaceSlug, reload, bumpCapabilities])
+
+  const confirmGlobalDelete = React.useCallback(async () => {
+    if (!pendingGlobalDelete) return
+    setGlobalDeleteBusy(true)
+    try {
+      await window.electronAPI.deleteGlobalAgentPreset({ presetId: pendingGlobalDelete.id, presetScope: pendingGlobalDelete.scope ?? 'user-global' })
+      setPendingGlobalDelete(null)
+      setGlobalDeleteReport(null)
+      setError('')
+      await reload()
+      bumpCapabilities((v) => v + 1)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除失败')
+    } finally {
+      setGlobalDeleteBusy(false)
+    }
+  }, [pendingGlobalDelete, reload, bumpCapabilities])
+
+  const handleTogglePreset = React.useCallback(async (preset: AgentPreset, enabled: boolean) => {
+    if (!workspaceSlug) return
+    const busyId = preset.id
+    if (enabled) {
+      const counterpart = presets.find((candidate) => candidate.id !== preset.id && candidate.name === preset.name && candidate.scope !== preset.scope && candidate.enabledInWorkspace !== false)
+      if (counterpart && !window.confirm('当前工作区同时存在同名的工作区预设与全局/元预设，同时启用可能导致配置重复或行为冲突，不推荐这样使用。是否仍要继续启用？')) return
+    }
+    const previousEnabled = preset.scope === 'workspace' ? preset.enabledInWorkspace !== false : preset.enabledInWorkspace === true
+    setToggleBusy((previous) => new Set(previous).add(busyId))
+    const updateList = (items: AgentPreset[], nextEnabled: boolean): AgentPreset[] => items.map((item) => item.id === preset.id ? { ...item, enabledInWorkspace: nextEnabled } : item)
+    if (!globalMode) setWorkspacePresets(updateList(workspacePresets, enabled))
+    else setGlobalPresets(updateList(globalPresets, enabled))
+    try {
+      if (preset.scope === 'workspace') {
+        await window.electronAPI.setWorkspacePresetEnabled(workspaceSlug, preset.id, enabled)
+      } else {
+        const reference = { presetId: preset.id, presetScope: preset.scope ?? (preset.isBuiltin ? 'builtin-meta' : 'user-global') } as const
+        if (enabled) await window.electronAPI.enableGlobalPresetInWorkspace(workspaceSlug, reference)
+        else await window.electronAPI.disableGlobalPresetInWorkspace(workspaceSlug, reference)
+      }
+      bumpCapabilities((v) => v + 1)
+    } catch (err) {
+      console.error('[预设设置] 切换预设生效状态失败:', err)
+      if (globalMode) setGlobalPresets(updateList(globalPresets, previousEnabled))
+      else setWorkspacePresets(updateList(workspacePresets, previousEnabled))
+      toast.error(err instanceof Error ? err.message : '切换预设生效状态失败')
+    } finally {
+      setToggleBusy((previous) => { const next = new Set(previous); next.delete(busyId); return next })
+    }
+  }, [bumpCapabilities, globalMode, globalPresets, setGlobalPresets, setWorkspacePresets, workspacePresets, workspaceSlug])
+
+  const handleCopyToWorkspace = React.useCallback(async (preset: AgentPreset) => {
+    if (!workspaceSlug || preset.scope === 'workspace') return
+    try {
+      await window.electronAPI.copyPresetToWorkspace({ presetId: preset.id, presetScope: preset.scope ?? (preset.isBuiltin ? 'builtin-meta' : 'user-global') }, workspaceSlug)
+      await reload({ silent: true })
+      bumpCapabilities((v) => v + 1)
+      toast.success(`已复制「${preset.name}」到当前工作区`)
+    } catch (err) {
+      console.error('[预设设置] 复制到工作区失败:', err)
+      toast.error(err instanceof Error ? err.message : '复制到工作区失败')
+    }
+  }, [bumpCapabilities, globalMode, reload, workspaceSlug])
 
   const handleSetDefault = React.useCallback(async (preset: AgentPreset) => {
-    if (!workspaceSlug) return
+    if (!workspaceSlug || globalMode) return
     try {
-      const id = await window.electronAPI.setDefaultAgentPreset(workspaceSlug, preset.id)
+      const id = await window.electronAPI.setDefaultAgentPreset(workspaceSlug, defaultPresetId === preset.id ? '' : preset.id)
       setDefaultPresetId(id)
       bumpCapabilities((v) => v + 1)
     } catch (err) {
       console.error('[预设设置] 设默认失败:', err)
     }
-  }, [workspaceSlug, bumpCapabilities])
+  }, [defaultPresetId, globalMode, workspaceSlug, bumpCapabilities])
 
   /** 导出全部预设为 JSON 文件（保存对话框由主进程弹出；取消则静默） */
   const handleExport = React.useCallback(async () => {
@@ -430,8 +592,19 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
     availableMcpServers.map((m) => ({ value: m.name, label: m.name, hint: m.enabled ? '已启用' : '未启用', disabled: !m.enabled })), [availableMcpServers])
 
   return (
-    <SettingsSection title="Agent 预设" description="预设 = 岗位 + 工作环境：把提示词、推理档位、权限模式、Skill/MCP 白名单与能力裁剪组合成可复用配置。预设为工作区级配置，可跨工作区导入；会话内可随时切换（下一轮消息完整生效），星标为新建会话的默认预设。">
-      <div className="flex justify-end gap-2">
+    <SettingsSection title={globalMode ? '全局预设' : 'Agent 预设'} description="预设 = 岗位 + 工作环境：把提示词、推理档位、权限模式、Skill/MCP 白名单与能力裁剪组合成可复用配置。预设为工作区级配置，可跨工作区导入；会话内可随时切换（下一轮消息完整生效），星标为新建会话的默认预设。">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">排序</span>
+          <Select value={sortMode} onValueChange={(value) => handleSortChange(value as PresetSortMode)}>
+            <SelectTrigger className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {PRESET_SORT_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {!globalMode && onOpenGlobalConfig && <Button size="sm" variant="ghost" onClick={onOpenGlobalConfig}>全局配置</Button>}
+        </div>
+        <div className="flex justify-end gap-2">
         <Button size="sm" variant="outline" onClick={handleExport} disabled={fileBusy} title="把预设导出为 JSON 文件，便于跨机器分享">
           <Download size={14} />
           <span>导出</span>
@@ -442,30 +615,38 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
         </Button>
         <Button size="sm" variant="outline" onClick={openCreate}>
           <Plus size={14} />
-          <span>新建预设</span>
+          <span>{globalMode ? '新建全局预设' : '新建预设'}</span>
         </Button>
+        </div>
       </div>
       {fileNotice && (
         <p className="text-right text-xs text-muted-foreground break-all">{fileNotice}</p>
       )}
       <SettingsCard divided>
-        {presets.length === 0 && (
+        {presets.length === 0 && loading && (
           <div className="p-4 text-sm text-muted-foreground">加载中…</div>
         )}
-        {presets.length > 0 && filteredPresets.length === 0 && (
+        {!loading && presets.length === 0 && (
+          <div className="p-6 text-center text-sm text-muted-foreground">暂无预设。</div>
+        )}
+        {!loading && presets.length > 0 && filteredPresets.length === 0 && (
           <div className="p-6 text-center text-sm text-muted-foreground">没有匹配的预设，试试更换搜索关键词。</div>
         )}
-        {filteredPresets.map((preset) => {
+        {(['workspace', 'user-global', 'builtin-meta'] as const).map((scope) => {
+          const sectionPresets = filteredPresets.filter((preset) => globalMode ? (scope === 'user-global' ? preset.scope === 'user-global' : scope === 'builtin-meta' ? preset.scope === 'builtin-meta' : false) : preset.scope === scope)
+          if (sectionPresets.length === 0) return null
+          const sectionTitle = scope === 'workspace' ? '工作区预设' : scope === 'user-global' ? '全局预设' : '元预设'
+          return <React.Fragment key={scope}><div className="border-t border-border/50 px-4 py-2 text-xs font-medium text-muted-foreground first:border-t-0">{sectionTitle} <span className="ml-1 tabular-nums text-foreground/35">{sectionPresets.length}</span></div>{sectionPresets.map((preset) => {
           const isDefault = preset.id === defaultPresetId
           const baseName = preset.basePresetId
             ? presets.find((p) => p.id === preset.basePresetId)?.name
             : undefined
           return (
-            <div key={preset.id} className="flex items-center justify-between gap-3 p-4">
+            <div key={preset.id} className={cn('flex items-center justify-between gap-3 p-4', globalMode && 'cursor-pointer hover:bg-muted/40')} onClick={globalMode ? () => openEdit(preset) : undefined}>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium truncate">{preset.name}</span>
-                  {preset.isBuiltin && (
+                  {globalMode && preset.scope === 'builtin-meta' ? <BuiltinPresetTag /> : preset.isBuiltin && (
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground shrink-0">内置</span>
                   )}
                   {!preset.isBuiltin && preset.basePresetId && (
@@ -492,13 +673,17 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                <Button size="icon" variant="ghost" className="size-8" onClick={() => handleSetDefault(preset)} title="设为默认">
+                {!globalMode && <Switch checked={preset.scope === 'workspace' ? preset.enabledInWorkspace !== false : preset.enabledInWorkspace === true} disabled={toggleBusy.has(preset.id)} onCheckedChange={(enabled) => void handleTogglePreset(preset, enabled)} aria-label={`${preset.name} 在当前工作区生效`} />}
+                {!globalMode && preset.scope !== 'workspace' && <Button size="icon" variant="ghost" className="size-8" onClick={(event) => { event.stopPropagation(); void handleCopyToWorkspace(preset) }} title="创建工作区副本"><Copy className="size-4 text-foreground/60" /></Button>}
+                {!globalMode && preset.scope !== 'workspace' && onOpenGlobalConfig && <Button size="sm" variant="ghost" className="h-8 px-2 text-xs text-primary" onClick={(event) => { event.stopPropagation(); onOpenGlobalConfig() }} title="请打开全局配置进行编辑">编辑全局预设</Button>}
+                {!globalMode && preset.scope === 'workspace' && onPromote && <Button size="sm" variant="ghost" className="h-8 px-2 text-xs text-primary" onClick={(event) => { event.stopPropagation(); onPromote(preset) }} title="提升为全局预设">提升为全局</Button>}
+                {!globalMode && preset.scope === 'workspace' && <Button size="icon" variant="ghost" className="size-8" onClick={() => void handleSetDefault(preset)} title={isDefault ? '取消默认' : '设为默认'}>
                   <Star className={cn('size-4', isDefault ? 'fill-primary text-primary' : 'text-foreground/50')} />
-                </Button>
-                <Button size="icon" variant="ghost" className="size-8" onClick={() => handleCopy(preset)} title="复制">
+                </Button>}
+                {!globalMode && preset.scope === 'workspace' && <Button size="icon" variant="ghost" className="size-8" onClick={() => void handleCopy(preset)} title="复制">
                   <Copy className="size-4 text-foreground/60" />
-                </Button>
-                {!preset.isBuiltin && (
+                </Button>}
+                {!globalMode && preset.scope === 'workspace' && !preset.isBuiltin && (
                   <>
                     <Button size="icon" variant="ghost" className="size-8" onClick={() => openEdit(preset)} title="编辑">
                       <Pencil className="size-4 text-foreground/60" />
@@ -508,10 +693,14 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
                     </Button>
                   </>
                 )}
+                {globalMode && workspaceSlug && preset.scope !== 'workspace' && <Button size="icon" variant="ghost" className="size-8" onClick={(event) => { event.stopPropagation(); void handleCopyToWorkspace(preset) }} title="复制到当前工作区"><Copy className="size-4 text-foreground/60" /></Button>}
+                {globalMode && preset.scope === 'user-global' && <Button size="icon" variant="ghost" className="size-8 hover:text-destructive" onClick={(event) => { event.stopPropagation(); void handleDelete(preset) }} title="删除全局预设"><Trash2 className="size-4 text-foreground/60" /></Button>}
               </div>
             </div>
           )
+        })}</React.Fragment>
         })}
+
       </SettingsCard>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) { setCreating(false); setEditing(null); setError('') } }}>
@@ -521,8 +710,9 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
             <DialogDescription>
               提示词段之间用空行分隔。Skill / MCP 白名单在下方勾选；留空 = 不注入任何项，需全部可用时请点「全选」。
             </DialogDescription>
+            {globalMode && editing && <GlobalPresetScopePanel preset={editing} />}
           </DialogHeader>
-          <div className="flex flex-col gap-3">
+          {!(globalMode && editing?.scope === 'builtin-meta') && <div className="flex flex-col gap-3">
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-foreground/70">名称 *</label>
@@ -681,13 +871,16 @@ export function AgentPresetSettings({ workspaceSlug, search = '' }: { workspaceS
               <p className="text-[10px] text-muted-foreground">禁用后对应工具不再注入，相关提示词段落自动隐藏（任务图/记忆/协作/定时任务）。组已整体禁用时无需再逐个勾选单工具；全部关 = 完整能力。</p>
             </div>
             {error && <p className="text-xs text-destructive">{error}</p>}
-          </div>
+          </div>}
+          {globalMode && editing?.scope === 'builtin-meta' && <p className="rounded-lg bg-blue-500/10 p-3 text-xs text-blue-700 dark:text-blue-300">这是 Profer 内置元预设，只读，不能编辑、重命名或删除。</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => { setCreating(false); setEditing(null); setError('') }}>取消</Button>
-            <Button onClick={handleSave} disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
+            {!(globalMode && editing?.scope === 'builtin-meta') && <Button onClick={handleSave} disabled={saving}>{saving ? '保存中…' : '保存'}</Button>}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {globalMode && globalDeleteReport && globalDeleteReport.blockers.length > 0 && <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive"><p className="font-medium">当前预设存在有效引用，暂不可删除</p><ul className="mt-1 list-disc space-y-1 pl-4">{globalDeleteReport.blockers.map((blocker) => <li key={`${blocker.workspaceSlug}:${blocker.reason}`}>{blocker.workspaceName} · {blocker.reason} · {blocker.objectCount} 项</li>)}</ul></div>}
+      <ConfirmDialog open={pendingGlobalDelete !== null} onOpenChange={(open) => { if (!open && !globalDeleteBusy) { setPendingGlobalDelete(null); setGlobalDeleteReport(null) } }} title={`确认删除全局预设「${pendingGlobalDelete?.name ?? ''}」？`} description="删除后不可恢复，且不会自动替换其他会话或工作区配置。" confirmLabel="删除" loadingLabel="删除中…" loading={globalDeleteBusy} onConfirm={() => void confirmGlobalDelete()} />
     </SettingsSection>
   )
 }
