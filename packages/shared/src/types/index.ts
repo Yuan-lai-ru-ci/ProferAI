@@ -29,6 +29,7 @@ export * from './ppt-deck'
 
 // Agent 相关类型
 export * from './agent'
+export * from './agent-preview'
 export * from './pi-harness'
 export * from './browser'
 
