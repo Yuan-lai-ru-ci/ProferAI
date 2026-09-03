@@ -183,9 +183,13 @@ import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/glob
 import { maintainDevShellShortcut } from './lib/dev-shell-shortcut'
 import { setProferVersion } from '@profer/core'
 import { TRAY_IPC_CHANNELS } from '../types'
-import { installMacTrafficLightZoomSync } from './lib/mac-traffic-light'
+import {
+  DEFAULT_TRAFFIC_LIGHT_POSITION,
+  installMacTrafficLightZoomSync,
+} from './lib/mac-traffic-light'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'
+const WINDOW_FULLSCREEN_CHANGED = 'window:fullscreen-changed'
 
 /** 检查文件路径是否为迁移文件，如果是则通知渲染进程打开导入流程 */
 function handleMigrationFileOpen(filePath: string): void {
@@ -432,7 +436,7 @@ function createWindow(): void {
     ? {
         // 使用 macOS 原生 traffic lights；位置与规划中心窗口保持一致。
         titleBarStyle: 'hiddenInset' as const,
-        trafficLightPosition: { x: 18, y: 18 },
+        trafficLightPosition: DEFAULT_TRAFFIC_LIGHT_POSITION,
         vibrancy: 'under-window' as const,
         visualEffectState: 'followWindow' as const,
       }
@@ -597,6 +601,9 @@ function createWindow(): void {
   }
   mainWindow.on('resize', scheduleWindowStateSave)
   mainWindow.on('move', scheduleWindowStateSave)
+  // macOS 原生全屏不会稳定触发 renderer 的 DOM resize；显式广播状态以驱动侧栏补位动画。
+  mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send(WINDOW_FULLSCREEN_CHANGED, true))
+  mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send(WINDOW_FULLSCREEN_CHANGED, false))
 
   // 将 file:// 或 Windows 绝对路径转为系统路径
   const toSystemPath = (u: string): string | null => {

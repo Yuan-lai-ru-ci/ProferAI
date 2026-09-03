@@ -32,7 +32,7 @@ import { cn } from '@/lib/utils'
 import { resolveBrowserSplitGeometry } from '@/lib/browser-split-layout'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 
-export function MainArea(): React.ReactElement {
+export function MainArea({ showTabBar = true }: { showTabBar?: boolean } = {}): React.ReactElement {
   // 记录每个会话上次停留的视图（对话 / 预览），供切回时重建预览 Tab
   useTrackSessionView()
 
@@ -315,12 +315,12 @@ export function MainArea(): React.ReactElement {
             style={leftFlexStyle}
           >
             {/* 无 TabBar 的全屏/空状态视图使用通用主内容宿主；右侧分栏打开时由其更高优先级接管。 */}
-            <WindowControlsHost
+            {showTabBar && <WindowControlsHost
               id="main-content"
               active={automationFormOpen || tabs.length === 0}
               priority={10}
               className="absolute right-2 top-[3px] z-20"
-            />
+            />}
             {activeView === 'planning' ? (
               automationFormOpen ? (
                 // 规划中心内的定时任务设置页：与列表同层级替换中间区，不经过 TabBar。
@@ -334,7 +334,7 @@ export function MainArea(): React.ReactElement {
               <AgentSkillsView />
             ) : (
               <>
-                <TabBar />
+                {showTabBar && <TabBar />}
                 {automationFormOpen ? (
                   // 兼容从会话内入口打开任务设置的场景。
                   <AutomationFormView />

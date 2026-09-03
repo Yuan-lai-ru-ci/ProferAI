@@ -210,7 +210,7 @@ export function TabBarItem({
           ref={buttonRef}
           type="button"
           className={cn(
-            'group relative flex h-[32px] w-[32px] items-center justify-center overflow-hidden rounded-[8px] px-0',
+            'group relative flex h-[37px] w-[37px] items-center justify-center overflow-hidden rounded-[8px] px-0',
             'text-xs transition-colors select-none cursor-grab active:cursor-grabbing focus-visible:ring-0 focus-visible:ring-offset-0',
             'border border-transparent',
             isActive
@@ -252,7 +252,7 @@ export function TabBarItem({
         role="tab"
         aria-selected={isActive}
         className={cn(
-          'group relative flex items-center gap-1.5 px-3 h-[32px] w-full rounded-[8px] overflow-hidden',
+          'group relative flex items-center gap-1.5 px-3 h-[37px] w-full rounded-[8px] overflow-hidden',
           'text-xs transition-colors select-none cursor-grab active:cursor-grabbing focus-visible:ring-0 focus-visible:ring-offset-0',
           'border border-transparent',
           isActive

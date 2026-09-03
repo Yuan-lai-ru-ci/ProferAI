@@ -7537,6 +7537,11 @@ export function registerIpcHandlers(): void {
     return win && !win.isDestroyed() ? win.isMaximized() : false
   })
 
+  ipcMain.handle(IPC_CHANNELS.WINDOW_IS_FULLSCREEN, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    return win && !win.isDestroyed() ? win.isFullScreen() : false
+  })
+
   // ===== 任务 / 日程（Planning）=====
 
   const isPlanningTitle = (value: unknown): value is string =>

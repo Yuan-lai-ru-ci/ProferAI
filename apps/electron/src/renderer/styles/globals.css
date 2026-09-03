@@ -633,7 +633,22 @@
 
 /* ===== 侧边栏折叠动画 ===== */
 .sidebar-collapse-ease {
-  transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 原生全屏时左侧卡片上沿对齐 Tab 顶边：45px chrome - 4px Tab 内余量 = 41px。 */
+.native-fullscreen-sidebar {
+  margin-top: 0;
+  height: 100%;
+  transition-property: margin-top, height;
+  transition-duration: 560ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: margin-top, height;
+}
+
+.native-fullscreen-sidebar.native-fullscreen-active {
+  margin-top: -41px;
+  height: calc(100% + 41px);
 }
 
 /* Left sidebar sits above the global titlebar layer, so it owns a stable top drag strip. */
@@ -1119,11 +1134,53 @@
   color: hsl(var(--primary));
 }
 
+/* ===== Mac 全局顶部布局 =====
+ * 45px chrome 只负责把红绿灯、Tab 和工具栏排成一行；主区顶栏与工具栏使用同一底色。
+ * 左侧槽宽跟随 AppShell 的实际侧栏列宽，收起时 Tab 随 rail 一起左移。
+ */
+.mac-global-chrome {
+  display: flex;
+  min-width: 0;
+  height: 45px;
+  /* 透明继承 shell：顶栏与下方工作区使用同一张背景画布。 */
+  background: transparent;
+}
+
+.mac-global-sidebar-slot {
+  width: var(--app-sidebar-column, 300px);
+  background: transparent;
+}
+
+.mac-global-tab-slot {
+  min-width: 0;
+  background: transparent;
+}
+
+.mac-global-topbar {
+  background: transparent !important;
+}
+
+.mac-global-topbar::after {
+  display: none;
+}
+
+/* Mac 顶部带内的 Tab 内容行从顶部保留 5px，Tab 本体与页面统一的顶部间距对齐。 */
+.mac-global-topbar .topbar-content {
+  height: 37px !important;
+}
+
+/* Mac 全局布局已经在 AppShell 预留 45px，侧栏内部不能再重复预留红绿灯高度。 */
+.mac-global-shell .sidebar-window-drag-strip,
+.mac-global-shell .sidebar-top-spacer {
+  display: none;
+}
+
 /* ===== TabBar 背景 ===== */
 /* 默认背景 */
 .tabbar-bg {
   position: relative;
-  background-color: hsl(var(--tabbar-surface));
+  /* 顶栏不拥有独立底色；由所在 Panel / shell 决定背景。 */
+  background: transparent;
 }
 
 .tabbar-bg::after {
@@ -1137,6 +1194,12 @@
   pointer-events: none;
   z-index: 0;
 }
+
+/* 顶部工具栏下方不保留分隔线，让它与后方区域保持一体。 */
+.topbar-editorial.tabbar-bg::after {
+  display: none;
+}
+
 .topbar-editorial .app-tab-active,
 .topbar-editorial .app-tab-inactive {
   border-radius: 8px;
@@ -1245,56 +1308,35 @@
   position: relative;
   isolation: isolate;
   min-width: max-content;
-  padding: 0 8px 0 12px;
-  /* 背景统一由伪元素绘制；父元素保持透明，避免遮住左侧渐变。 */
-  background: transparent;
+  justify-self: end;
+  /* 胶囊外壳右缘对齐原有页面内侧基线，不贴到窗口最外缘。 */
+  margin-right: 12px;
+  height: 37px;
+  padding: 2px 3px 2px 5px;
+  border: 1px solid hsl(var(--border) / 0.5);
+  border-radius: 12px;
+  background: hsl(var(--panel-surface));
+  box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.08), 0 1px 3px hsl(0 0% 0% / 0.06);
   overflow: visible;
 }
 
-.topbar-editorial .topbar-actions-slot::before {
-  content: '';
-  position: absolute;
-  z-index: 0;
-  top: -4px;
-  bottom: -4px;
-  left: -64px;
-  right: -8px;
-  pointer-events: none;
-  /* 单一连续背景：左端透明露出 TabBar，向右渐变并自然进入操作区实色。 */
-  background: linear-gradient(
-    to left,
-    hsl(var(--tabbar-surface)),
-    hsl(var(--tabbar-surface) / 0.78) 30%,
-    hsl(var(--tabbar-surface) / 0) 100%
-  );
-}
-
-.topbar-editorial .topbar-actions-slot::after {
-  content: '';
-  position: absolute;
-  z-index: 0;
-  left: -64px;
-  right: -8px;
-  bottom: -4px;
-  height: 1px;
-  pointer-events: none;
-  background: hsl(var(--surface-border) / 0.8);
-}
-
-.topbar-editorial .topbar-actions-slot > * {
-  position: relative;
-  z-index: 1;
-}
-
+/* 第二层胶囊：工具组与外壳之间保留一圈细微层次。 */
 .topbar-editorial .topbar-tool-group {
-  background: transparent;
-  border-radius: 0;
+  height: 31px;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid hsl(var(--border) / 0.42);
+  border-radius: 10px;
+  background: hsl(var(--tab-surface) / 0.58);
+  box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.07);
 }
 
+/* 第三层胶囊：每个工具保留独立的圆润命中面，图标按钮在内圈中保持紧凑。 */
 .topbar-editorial .topbar-tool-button {
-  color: hsl(var(--muted-foreground) / 0.76);
-  border-radius: 0;
-  /* 按钮本身保持无底；统一背景由右侧操作面板承载。 */
+  width: 27px;
+  height: 27px;
+  color: hsl(var(--muted-foreground) / 0.82);
+  border-radius: 9px;
   background: transparent !important;
   border: 0;
   box-shadow: none;
@@ -1304,21 +1346,24 @@
 .topbar-editorial .topbar-tool-button:hover,
 .topbar-editorial .topbar-tool-button:active,
 .topbar-editorial .topbar-tool-button-highlighted {
-  background: transparent !important;
+  background: hsl(var(--selected-surface) / 0.82) !important;
   color: hsl(var(--foreground));
 }
 
-.topbar-editorial .topbar-tool-button:hover {
-  color: hsl(var(--foreground));
-}
-
-/* 操作面板是唯一的背景层，窗口按钮组不再在右侧形成第二块内嵌色块。 */
+/* Windows 控件也收进外层胶囊，保持与工具组相同的层次。 */
 .topbar-editorial .topbar-actions-slot .window-controls {
+  height: 31px;
   padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  overflow: visible;
+  border: 1px solid hsl(var(--border) / 0.28);
+  border-radius: 10px;
+  background: hsl(var(--tab-surface) / 0.46);
+  overflow: hidden;
+}
+
+.topbar-editorial .topbar-actions-slot .window-control-btn {
+  width: 34px;
+  height: 29px;
+  border-radius: 9px;
 }
 
 .topbar-editorial .topbar-tool-button:focus-visible,

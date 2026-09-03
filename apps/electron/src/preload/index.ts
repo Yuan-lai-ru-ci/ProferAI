@@ -250,6 +250,10 @@ export interface ElectronAPI {
   windowClose: () => Promise<void>
   /** 窗口是否处于最大化状态 */
   windowIsMaximized: () => Promise<boolean>
+  /** 窗口是否处于原生全屏状态 */
+  windowIsFullScreen: () => Promise<boolean>
+  /** 订阅原生全屏状态切换 */
+  onWindowFullScreenChanged: (callback: (isFullScreen: boolean) => void) => () => void
   /** 订阅窗口最大化/还原事件 */
   onWindowResize: (callback: () => void) => () => void
 
@@ -1624,6 +1628,16 @@ const electronAPI: ElectronAPI = {
 
   windowIsMaximized: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_IS_MAXIMIZED)
+  },
+
+  windowIsFullScreen: () => {
+    return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_IS_FULLSCREEN)
+  },
+
+  onWindowFullScreenChanged: (callback: (isFullScreen: boolean) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, isFullScreen: boolean): void => callback(isFullScreen)
+    ipcRenderer.on(IPC_CHANNELS.WINDOW_FULLSCREEN_CHANGED, listener)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_FULLSCREEN_CHANGED, listener)
   },
 
   onWindowResize: (callback: () => void) => {

@@ -401,6 +401,10 @@ export const IPC_CHANNELS = {
   WINDOW_CLOSE: 'window:close',
   /** 窗口是否最大化 */
   WINDOW_IS_MAXIMIZED: 'window:is-maximized',
+  /** 窗口是否处于原生全屏状态 */
+  WINDOW_IS_FULLSCREEN: 'window:is-fullscreen',
+  /** 原生全屏状态发生变化 */
+  WINDOW_FULLSCREEN_CHANGED: 'window:fullscreen-changed',
   /** 截图导出：将 HTML 渲染为 PNG 图片 */
   SCREENSHOT_CAPTURE: 'screenshot:capture',
   /** 使 git diff 缓存失效（Agent 写文件/git 突变后调用，传 changedPath 可定向失效） */
