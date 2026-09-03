@@ -6,10 +6,10 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentPreset } from '@profer/shared'
+import type { AgentPreset, AgentPresetConfig } from '@profer/shared'
 import {
   listAgentPresets,
   getAgentPreset,
@@ -24,11 +24,23 @@ import {
   importAgentPresets,
   __setAgentPresetsBaseDirForTest,
   __resetAgentPresetsBaseDirForTest,
+  listGlobalAgentPresets,
+  createGlobalAgentPreset,
+  copyPresetToWorkspace,
+  normalizePresetReference,
+  resolvePresetReference,
+  deleteGlobalAgentPreset,
+  enableGlobalPresetInWorkspace,
+  disableGlobalPresetInWorkspace,
+  ensurePresetSystemReady,
+  __setAgentPresetMigrationWorkspacesForTest,
 } from './agent-preset-manager'
+import { AgentPresetError } from '@profer/shared'
 import {
   BUILTIN_PRESET_STANDARD,
   BUILTIN_PRESET_CODE,
   BUILTIN_PRESET_MINIMAL,
+  BUILTIN_AGENT_PRESETS,
   DEFAULT_PRESET_ID,
 } from '@profer/shared'
 
@@ -46,6 +58,14 @@ afterEach(() => {
   __resetAgentPresetsBaseDirForTest()
   rmSync(tmpDir, { recursive: true, force: true })
 })
+
+function writeLegacyPresetConfig(workspaceSlug: string, config: Record<string, unknown>): string {
+  const dir = join(tmpDir, workspaceSlug)
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, 'agent-presets.json')
+  writeFileSync(path, JSON.stringify(config, null, 2))
+  return path
+}
 
 describe('listAgentPresets', () => {
   test('极简内置预设声明禁用产品工具组与 suppress 段落（提示词与工具一致）', () => {
@@ -82,6 +102,188 @@ describe('listAgentPresets', () => {
   })
 })
 
+describe('全局预设与作用域引用', () => {
+  test('Given builtin-meta When listing Then only one read-only definition exists', () => {
+    const presets = listGlobalAgentPresets()
+    expect(presets.filter((preset) => preset.scope === 'builtin-meta')).toHaveLength(3)
+  })
+
+  test('Given user-global When resolving Then workspace context cannot change identity', () => {
+    const created = createGlobalAgentPreset({ name: '全局代码', description: '' })
+    const reference = { presetId: created.id, presetScope: 'user-global' as const }
+    expect(resolvePresetReference(reference, WS_A).id).toBe(created.id)
+    expect(() => normalizePresetReference({ ...reference, workspaceSlug: WS_A })).toThrow('不得携带 workspaceSlug')
+  })
+
+  test('Given global source When copying Then workspace copy records source', () => {
+    const source = createGlobalAgentPreset({ name: '全局研究', description: '跨区' })
+    const copied = copyPresetToWorkspace({ presetId: source.id, presetScope: 'user-global' }, WS_A)
+    expect(copied.scope).toBe('workspace')
+    expect(copied.workspaceSlug).toBe(WS_A)
+    expect(copied.sourcePresetId).toBe(source.id)
+    expect(copied.sourcePresetScope).toBe('user-global')
+  })
+
+  test('Given builtin-meta When deleting Then manager rejects with machine-readable error', () => {
+    try { deleteGlobalAgentPreset({ presetId: 'standard', presetScope: 'builtin-meta' }); throw new Error('expected') } catch (error) {
+      expect(error).toBeInstanceOf(AgentPresetError)
+      expect((error as AgentPresetError).code).toBe('PRESET_READ_ONLY')
+    }
+  })
+
+  test('全局预设工作区范围可直接移除，不要求替代预设', () => {
+    const preset = createGlobalAgentPreset({ name: '可解除范围', description: '' })
+    const reference = { presetId: preset.id, presetScope: 'user-global' as const }
+    enableGlobalPresetInWorkspace(WS_A, reference)
+    expect(listAgentPresets(WS_A).some((item) => item.id === preset.id)).toBe(true)
+    disableGlobalPresetInWorkspace(WS_A, reference)
+    expect(listAgentPresets(WS_A).some((item) => item.id === preset.id)).toBe(false)
+    expect(() => resolvePresetReference(reference, WS_A)).toThrow('解除当前工作区生效范围')
+  })
+
+  test('Given no legacy files When ready gate runs Then migration is idempotent', () => {
+    const first = ensurePresetSystemReady()
+    const second = ensurePresetSystemReady()
+    expect(first.status).toBe('completed')
+    expect(second.status).toBe('completed')
+    expect(second.result).toBe('no-history')
+  })
+
+  test('C1/C2/C3/C4/C5：旧用户预设保留为 workspace，默认值、继承和会话/任务引用均带作用域', () => {
+    __setAgentPresetMigrationWorkspacesForTest([WS_A])
+    const workspacePresetId = 'legacy-workspace-preset'
+    const derivedId = 'legacy-derived-preset'
+    const path = writeLegacyPresetConfig(WS_A, {
+      presets: [
+        { id: workspacePresetId, name: '旧工作区预设', description: '用户配置', isBuiltin: false, createdAt: 1, updatedAt: 2 },
+        { id: derivedId, name: '继承代码', description: '', isBuiltin: false, basePresetId: workspacePresetId, createdAt: 1, updatedAt: 2 },
+      ],
+      defaultPresetId: workspacePresetId,
+    })
+    writeFileSync(join(tmpDir, 'agent-sessions.json'), JSON.stringify({ sessions: [{ id: 'session-1', workspaceId: WS_A, presetId: derivedId }] }))
+    writeFileSync(join(tmpDir, 'automations.json'), JSON.stringify({ automations: [{ id: 'automation-1', workspaceId: WS_A, presetId: workspacePresetId }] }))
+
+    const state = ensurePresetSystemReady()
+    expect(state.status).toBe('completed')
+    expect(state.completedWorkspaces).toEqual([WS_A])
+    expect(existsSync(join(tmpDir, WS_A, '.migration-backup'))).toBe(true)
+    const migrated = JSON.parse(readFileSync(path, 'utf8')) as AgentPresetConfig
+    expect(migrated.presets.every((preset) => preset.scope === 'workspace' && preset.workspaceSlug === WS_A)).toBe(true)
+    expect(migrated.defaultPresetReference).toEqual({ presetId: workspacePresetId, presetScope: 'workspace', workspaceSlug: WS_A })
+    expect(migrated.presets.find((preset) => preset.id === derivedId)?.basePresetReference).toEqual({ presetId: workspacePresetId, presetScope: 'workspace', workspaceSlug: WS_A })
+    expect((JSON.parse(readFileSync(join(tmpDir, 'agent-sessions.json'), 'utf8')) as { sessions: Array<Record<string, unknown>> }).sessions[0]!.presetReference).toEqual({ presetId: derivedId, presetScope: 'workspace', workspaceSlug: WS_A })
+    expect((JSON.parse(readFileSync(join(tmpDir, 'automations.json'), 'utf8')) as { automations: Array<Record<string, unknown>> }).automations[0]!.presetReference).toEqual({ presetId: workspacePresetId, presetScope: 'workspace', workspaceSlug: WS_A })
+  })
+
+  test('C6：无效基座保留原始字段并记录诊断，不静默改为 standard', () => {
+    __setAgentPresetMigrationWorkspacesForTest([WS_A])
+    const path = writeLegacyPresetConfig(WS_A, {
+      presets: [{ id: 'broken-base', name: '损坏基座', description: '', isBuiltin: false, basePresetId: 'removed-base', createdAt: 1, updatedAt: 2 }],
+      defaultPresetId: 'broken-base',
+    })
+    const state = ensurePresetSystemReady()
+    const migrated = JSON.parse(readFileSync(path, 'utf8')) as AgentPresetConfig
+    expect(state.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ presetId: 'broken-base', status: 'invalid-base' })]))
+    expect(migrated.presets[0]?.basePresetId).toBe('removed-base')
+    expect(migrated.presets[0]?.migrationStatus).toBe('invalid-base')
+    expect(migrated.defaultPresetId).toBe('broken-base')
+    expect(() => resolvePresetReference({ presetId: 'broken-base', presetScope: 'workspace', workspaceSlug: WS_A }, WS_A)).toThrow('非法派生基座')
+  })
+
+  test('C6：自引用和双节点循环在运行时返回机器可读错误，不发生递归溢出', () => {
+    writeLegacyPresetConfig(WS_A, {
+      presets: [
+        { id: 'self-cycle', name: '自引用', description: '', isBuiltin: false, basePresetId: 'self-cycle', createdAt: 1, updatedAt: 2 },
+        { id: 'cycle-a', name: '循环 A', description: '', isBuiltin: false, basePresetId: 'cycle-b', createdAt: 1, updatedAt: 2 },
+        { id: 'cycle-b', name: '循环 B', description: '', isBuiltin: false, basePresetId: 'cycle-a', createdAt: 1, updatedAt: 2 },
+      ],
+      defaultPresetId: 'self-cycle',
+    })
+    ensurePresetSystemReady()
+    for (const presetId of ['self-cycle', 'cycle-a', 'cycle-b']) {
+      try {
+        resolvePresetReference({ presetId, presetScope: 'workspace', workspaceSlug: WS_A }, WS_A)
+        throw new Error('expected cycle error')
+      } catch (error) {
+        expect(error).toBeInstanceOf(AgentPresetError)
+        expect((error as AgentPresetError).code).toBe('PRESET_INVALID_BASE')
+      }
+    }
+  })
+
+  test('旧 version 2 完成状态会重跑 D1/D2，且保留旧内置副本的禁用状态', () => {
+    __setAgentPresetMigrationWorkspacesForTest([WS_A])
+    const builtin = { ...BUILTIN_AGENT_PRESETS.find((preset) => preset.id === BUILTIN_PRESET_CODE)!, enabledInWorkspace: false }
+    const path = writeLegacyPresetConfig(WS_A, { presets: [builtin], defaultPresetId: BUILTIN_PRESET_CODE })
+    writeFileSync(join(tmpDir, 'agent-preset-migration.json'), JSON.stringify({ version: 2, status: 'completed', startedAt: '2026-01-01T00:00:00.000Z', completedWorkspaces: [WS_A], remappedIds: [], diagnostics: [], failures: [] }))
+
+    const state = ensurePresetSystemReady()
+    const migrated = JSON.parse(readFileSync(path, 'utf8')) as AgentPresetConfig
+    expect(state.version).toBe(3)
+    expect(migrated.presets).toHaveLength(0)
+    expect(migrated.disabledGlobalPresetIds).toEqual([BUILTIN_PRESET_CODE])
+    expect(listAgentPresets(WS_A).find((preset) => preset.id === BUILTIN_PRESET_CODE)?.enabledInWorkspace).toBe(false)
+  })
+
+  test('D1/D2：正常内置副本不落为 workspace 实体，引用改为 builtin-meta', () => {
+    __setAgentPresetMigrationWorkspacesForTest([WS_A])
+    const builtin = BUILTIN_AGENT_PRESETS.find((preset) => preset.id === BUILTIN_PRESET_CODE)!
+    writeLegacyPresetConfig(WS_A, { presets: [{ ...builtin }], defaultPresetId: BUILTIN_PRESET_CODE })
+    const state = ensurePresetSystemReady()
+    const migrated = JSON.parse(readFileSync(join(tmpDir, WS_A, 'agent-presets.json'), 'utf8')) as AgentPresetConfig
+    expect(state.status).toBe('completed')
+    expect(migrated.presets).toHaveLength(0)
+    expect(migrated.defaultPresetReference?.presetScope).toBe('builtin-meta')
+    expect(migrated.defaultPresetReference?.presetId).toBe(BUILTIN_PRESET_CODE)
+  })
+
+  test('D3/D5：内置 ID 内容异常时生成 workspace UUID，保护原文并记录映射', () => {
+    __setAgentPresetMigrationWorkspacesForTest([WS_A])
+    const path = writeLegacyPresetConfig(WS_A, {
+      presets: [{ id: BUILTIN_PRESET_STANDARD, name: '用户改过的标准', description: '保留', isBuiltin: true, createdAt: 1, updatedAt: 2 }],
+      defaultPresetId: BUILTIN_PRESET_STANDARD,
+    })
+    const state = ensurePresetSystemReady()
+    const migrated = JSON.parse(readFileSync(path, 'utf8')) as AgentPresetConfig
+    expect(migrated.presets).toHaveLength(1)
+    expect(migrated.presets[0]?.scope).toBe('workspace')
+    expect(migrated.presets[0]?.migrationStatus).toBe('builtin-corrupt')
+    expect(state.remappedIds).toEqual(expect.arrayContaining([expect.objectContaining({ oldId: BUILTIN_PRESET_STANDARD, reason: 'builtin-conflict' })]))
+    expect(migrated.defaultPresetReference?.presetScope).toBe('workspace')
+  })
+
+  test('C7/D5：重复旧 ID 无法精确消歧时失败并保留源配置，不把引用指向最后一个副本', () => {
+    __setAgentPresetMigrationWorkspacesForTest([WS_A])
+    const path = writeLegacyPresetConfig(WS_A, {
+      presets: [
+        { id: 'same-id', name: '重复一', description: '', isBuiltin: false, createdAt: 1, updatedAt: 2 },
+        { id: 'same-id', name: '重复二', description: '', isBuiltin: false, createdAt: 1, updatedAt: 2 },
+      ],
+      defaultPresetId: 'same-id',
+    })
+    const state = ensurePresetSystemReady()
+    expect(state.status).toBe('failed')
+    expect(state.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'id-conflict' })]))
+    const original = JSON.parse(readFileSync(path, 'utf8')) as { presets: AgentPreset[] }
+    expect(original.presets).toHaveLength(2)
+    expect(original.presets.every((preset) => preset.scope === undefined)).toBe(true)
+  })
+
+  test('D4：损坏配置迁移失败、保留源文件和备份，并允许修复后重试', () => {
+    __setAgentPresetMigrationWorkspacesForTest([WS_A])
+    const path = writeLegacyPresetConfig(WS_A, { presets: [{ id: 'missing-name', description: '', isBuiltin: false, createdAt: 1, updatedAt: 2 }], defaultPresetId: 'missing-name' })
+    const first = ensurePresetSystemReady()
+    expect(first.status).toBe('failed')
+    expect(JSON.parse(readFileSync(path, 'utf8')).presets[0].id).toBe('missing-name')
+    expect(existsSync(join(tmpDir, WS_A, '.migration-backup'))).toBe(true)
+    expect(readdirSync(join(tmpDir, WS_A, '.migration-backup')).some((entry) => entry.startsWith('preset-system-'))).toBe(true)
+    writeFileSync(path, JSON.stringify({ presets: [{ id: 'fixed', name: '修复后', description: '', isBuiltin: false, createdAt: 1, updatedAt: 2 }], defaultPresetId: 'fixed' }))
+    const retried = ensurePresetSystemReady()
+    expect(retried.status).toBe('completed')
+    expect((JSON.parse(readFileSync(path, 'utf8')) as AgentPresetConfig).presets[0]?.scope).toBe('workspace')
+  })
+})
+
 describe('getAgentPreset', () => {
   test('未知/缺失 ID 回退 standard', () => {
     expect(getAgentPreset(WS_A, undefined).id).toBe(BUILTIN_PRESET_STANDARD)
@@ -94,26 +296,25 @@ describe('getAgentPreset', () => {
 })
 
 describe('默认预设', () => {
-  test('无配置时默认 standard', () => {
+  test('无配置时保持 standard 默认预设', () => {
     expect(getDefaultPresetId(WS_A)).toBe(DEFAULT_PRESET_ID)
     expect(getDefaultPresetId(undefined)).toBe(DEFAULT_PRESET_ID)
   })
 
-  test('setDefaultPresetId 持久化并规范化未知 ID', () => {
+  test('setDefaultPresetId 持久化、支持清除并拒绝未知 ID', () => {
     expect(setDefaultPresetId(WS_A, BUILTIN_PRESET_CODE)).toBe(BUILTIN_PRESET_CODE)
     expect(getDefaultPresetId(WS_A)).toBe(BUILTIN_PRESET_CODE)
-    // 坏 ID 回退 standard 且落盘
-    expect(setDefaultPresetId(WS_A, 'bad-id')).toBe(DEFAULT_PRESET_ID)
-    expect(getDefaultPresetId(WS_A)).toBe(DEFAULT_PRESET_ID)
-    // 配置文件存在且内容正确
+    expect(() => setDefaultPresetId(WS_A, 'bad-id')).toThrow('预设不存在')
+    expect(setDefaultPresetId(WS_A, '')).toBe('')
+    expect(getDefaultPresetId(WS_A)).toBe('')
     expect(existsSync(join(tmpDir, WS_A, 'agent-presets.json'))).toBe(true)
     const raw = JSON.parse(readFileSync(join(tmpDir, WS_A, 'agent-presets.json'), 'utf-8'))
-    expect(raw.defaultPresetId).toBe(DEFAULT_PRESET_ID)
+    expect(raw.defaultPresetId).toBe('')
   })
 })
 
 describe('normalizeSessionPresetId', () => {
-  test('历史会话缺省回退 standard', () => {
+  test('兼容旧会话缺省预设时使用 standard', () => {
     expect(normalizeSessionPresetId(WS_A, undefined)).toBe(DEFAULT_PRESET_ID)
   })
 
@@ -305,14 +506,14 @@ describe('自定义预设 CRUD', () => {
     expect(() => deleteAgentPreset(WS_A, BUILTIN_PRESET_CODE)).toThrow('内置预设不可修改或删除')
   })
 
-  test('删除自定义预设；默认引用回退 standard', () => {
+  test('删除自定义预设；默认引用清空', () => {
     const created = createAgentPreset(WS_A, { name: '临时', description: '' })
     setDefaultPresetId(WS_A, created.id)
     expect(getDefaultPresetId(WS_A)).toBe(created.id)
 
     deleteAgentPreset(WS_A, created.id)
     expect(listAgentPresets(WS_A).some((p) => p.id === created.id)).toBe(false)
-    expect(getDefaultPresetId(WS_A)).toBe(DEFAULT_PRESET_ID)
+    expect(getDefaultPresetId(WS_A)).toBe('')
   })
 
   test('自定义预设可设为默认并在重读后保持', () => {
@@ -572,7 +773,7 @@ describe('派生预设（basePresetId）', () => {
     expect(resolved.promptSections![0]).toContain('代码任务模式')
   })
 
-  test('Given 手工写入非法 basePresetId 的配置 When 读取 Then 净化后按独立预设处理', () => {
+  test('Given 手工写入非法 basePresetId 的配置 When 读取 Then 保留原始基座并标记 invalid-base', () => {
     mkdirSync(join(tmpDir, WS_A), { recursive: true })
     writeFileSync(join(tmpDir, WS_A, 'agent-presets.json'), JSON.stringify({
       presets: [{
@@ -587,8 +788,9 @@ describe('派生预设（basePresetId）', () => {
       defaultPresetId: DEFAULT_PRESET_ID,
     }))
     const raw = listAgentPresets(WS_A).find((p) => p.id === 'dirty-derived')!
-    expect(raw.basePresetId).toBeUndefined()
-    expect(getAgentPreset(WS_A, 'dirty-derived').promptSections).toBeUndefined()
+    expect(raw.basePresetId).toBe('removed-builtin')
+    expect(raw.migrationStatus).toBe('invalid-base')
+    expect(() => getAgentPreset(WS_A, 'dirty-derived')).toThrow('非法派生基座')
   })
 
   test('Given 导出派生预设 When 跨机器导入 Then 保留基座引用；非法基座导入被拒绝', () => {

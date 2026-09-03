@@ -99,12 +99,10 @@ export interface Automation {
   workspaceId?: string
   /** 权限模式（无人值守运行时的工具审批策略，默认 bypassPermissions） */
   permissionMode?: AutomationPermissionMode
-  /**
-   * 运行子会话绑定的 Agent 预设 ID（内置 standard/code/minimal 或任务工作区的自定义预设）。
-   * undefined = 跟随工作区默认预设（无默认则 standard）。
-   * 权限语义：预设的 permissionMode 不覆盖本任务的 permissionMode（无人值守安全优先）。
-   */
+  /** 兼容旧版本的预设 ID；新数据同时保存显式引用。 */
   presetId?: string
+  /** 运行子会话绑定的显式预设引用；undefined = 跟随工作区默认。 */
+  presetReference?: import('./agent-preset').PresetReference
   /** 会话模式：daily=同一自然日内复用子会话，跨日新建（默认）；reuse=始终复用同一个子会话 */
   sessionMode?: AutomationSessionMode
   /** 运行完成后的外部通知目标 */
@@ -206,6 +204,8 @@ export interface CreateAutomationInput {
   permissionMode?: AutomationPermissionMode
   /** 运行子会话绑定的 Agent 预设 ID；不传则跟随工作区默认预设 */
   presetId?: string
+  /** 显式跨作用域预设引用；与 presetId 同步保存。 */
+  presetReference?: import('./agent-preset').PresetReference
   sessionMode?: AutomationSessionMode
   notificationTargets?: AutomationNotificationTarget[]
   sourceSessionId?: string
@@ -239,6 +239,8 @@ export interface UpdateAutomationInput {
   permissionMode?: AutomationPermissionMode
   /** 运行子会话绑定的 Agent 预设 ID；传空字符串清除并回退为跟随工作区默认 */
   presetId?: string
+  /** 显式跨作用域预设引用；与 presetId 同步保存。 */
+  presetReference?: import('./agent-preset').PresetReference
   sessionMode?: AutomationSessionMode
   notificationTargets?: AutomationNotificationTarget[]
   active?: boolean
