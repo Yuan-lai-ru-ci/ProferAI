@@ -2173,13 +2173,39 @@ ${enrichedMessage}`
                           .join('').length ?? 0
                       }`,
                     )
-                    // 先推送正文消息（无 error 字段），复用原 uuid 覆盖流式部分帧
+                    // 先推送正文消息（无 error 字段），复用原 uuid 覆盖流式部分帧。
+                    // 正文需要立即落盘；但若错误可自动恢复，不能提前追加红色终态错误卡，
+                    // 否则 UI 会同时显示「已失败」和「Agent Running / 正在重试」两种矛盾状态。
                     this.eventBus.emit(sessionId, {
                       kind: 'sdk_message',
                       message: separated.contentMessage,
                     })
                     accumulatedMessages.push(separated.contentMessage)
-                    // 生成简短错误摘要消息
+
+                    // 先判定是否自动重试；重试中只保留已生成正文，最终失败时再追加错误摘要。
+                    const rawError = assistantMsg.error as unknown
+                    const errorCode: ErrorCode =
+                      (typeof rawError === 'object' && rawError !== null ? ((rawError as Record<string, unknown>).errorType as ErrorCode) : undefined) ??
+                      'unknown_error'
+                    const willAutoRetry = isAutoRetryableTypedError({
+                      code: errorCode,
+                      title: '流式传输中断',
+                      message: separated.errorText,
+                      actions: [],
+                      canRetry: true,
+                    }) && canAutoRetry(attempt)
+
+                    if (willAutoRetry) {
+                      this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+                      accumulatedMessages.length = 0
+                      lastRetryableError = `连接中断：${separated.errorText}`
+                      console.log(`[Agent 编排] 可重试错误 (断流保消息): ${lastRetryableError}`)
+                      stderrChunks.length = 0
+                      shouldRetryFromError = true
+                      break
+                    }
+
+                    // 已确定不会继续重试，此时才生成并持久化终态错误摘要。
                     const errorSummary: SDKMessage = {
                       type: 'assistant',
                       message: {
@@ -2193,7 +2219,7 @@ ${enrichedMessage}`
                       parent_tool_use_id: null,
                       error: {
                         message: separated.errorText,
-                        errorType: (assistantMsg.error as { errorType?: string })?.errorType ?? 'network_error',
+                        errorType: errorCode,
                       },
                       _createdAt: Date.now(),
                     } as unknown as SDKMessage
@@ -2204,27 +2230,7 @@ ${enrichedMessage}`
                     accumulatedMessages.push(errorSummary)
                     this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
                     accumulatedMessages.length = 0
-                    // 检查是否可自动重试
-                    const rawError = assistantMsg.error as unknown
-                    const errorCode: ErrorCode =
-                      (typeof rawError === 'object' && rawError !== null ? ((rawError as Record<string, unknown>).errorType as ErrorCode) : undefined) ??
-                      'unknown_error'
-                    if (
-                      isAutoRetryableTypedError({
-                        code: errorCode,
-                        title: '流式传输中断',
-                        message: separated.errorText,
-                        actions: [],
-                        canRetry: true,
-                      }) &&
-                      canAutoRetry(attempt)
-                    ) {
-                      lastRetryableError = `连接中断：${separated.errorText}`
-                      console.log(`[Agent 编排] 可重试错误 (断流保消息): ${lastRetryableError}`)
-                      stderrChunks.length = 0
-                      shouldRetryFromError = true
-                      break
-                    }
+
                     // 不可重试 → 终止
                     try {
                       updateAgentSessionMeta(sessionId, {})

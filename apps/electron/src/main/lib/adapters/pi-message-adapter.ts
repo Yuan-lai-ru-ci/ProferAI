@@ -288,7 +288,17 @@ export function hasTerminalErrorWithContent(msg: SDKMessage): boolean {
   if (!assistant.error) return false
   const content = assistant.message?.content
   if (!Array.isArray(content) || content.length === 0) return false
-  return content.some((b) => b.type === 'text' && typeof (b as { text?: string }).text === 'string' && (b as { text?: string }).text!.trim().length > 0)
+  const text = content
+    .filter((block) => block.type === 'text' && typeof (block as { text?: string }).text === 'string')
+    .map((block) => (block as { text: string }).text)
+    .join('\n')
+    .trim()
+  if (!text) return false
+
+  // Pi/OpenAI 上游有时会把同一句错误文案同时放入 content 与 errorMessage。
+  // 这不是「断流前已生成的正文」；若误判为正文，编排层会在自动重试尚未结束时
+  // 提前渲染红色错误卡，并与 Agent Running 指示器同时存在。
+  return text !== assistant.error.message?.trim()
 }
 
 /**

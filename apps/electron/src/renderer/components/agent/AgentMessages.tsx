@@ -40,6 +40,7 @@ import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupPreview, pars
 import { extractUserText } from '@profer/session-core'
 import { buildLiveGroupSet } from './live-group-set'
 import { mergeMessagesByUuid } from '@/lib/agent-message-merge'
+import { shouldShowAgentRunningIndicator } from '@/lib/agent-running-indicator'
 import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
@@ -117,6 +118,8 @@ interface AgentMessagesProps {
   attachedDirs?: string[]
   /** 最后一轮是否被用户中断 */
   stoppedByUser?: boolean
+  /** 当前会话已收到终态流式错误；用于防止错误卡片下方继续显示运行中指示器。 */
+  streamError?: string | null
   onRetry?: () => void
   onRetryInNewSession?: () => void
   onFork?: (upToMessageUuid: string) => void
@@ -505,7 +508,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -758,6 +761,12 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
     ? allGroups.some((g) => g.type === 'assistant-turn' && liveGroupSet.has(g))
     : (liveMessages != null && liveMessages.some((m) => (m as { type: string }).type === 'assistant'))
 
+  const showAgentRunningIndicator = shouldShowAgentRunningIndicator({
+    streaming,
+    streamError,
+    liveMessages,
+  })
+
   return (
     <TabletModeContext.Provider value={tabletMode}>
     <BasePathsProvider basePaths={[...(sessionPath ? [sessionPath] : []), ...(attachedDirs ?? [])]}>
@@ -824,9 +833,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
               if (item.kind === 'image') return <AgentImageGenerationCardView key={`generation:${item.id}`} card={item.card} />
               const group = item.group
               const isLive = liveGroupSet.has(group)
-              const isErrorGroup = group.type === 'assistant-turn'
-                && group.assistantMessages.some((m) => !!m.error)
-              const shouldDisableActions = isLive && !isErrorGroup
+              const shouldDisableActions = isLive
               // 会话活跃态（streaming 或 backgroundWaiting）时禁用压缩/重试操作，
               // 防止用户误操作触发与正在运行的 agent session 冲突
               const isSessionActive = streaming || (streamState?.backgroundWaiting ?? false) || runningDelegationCount > 0
@@ -858,16 +865,16 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
             {/* 有实时助手内容时：显示运行指示器或占位（防止 streaming 结束到 Actions Bar 出现之间的高度跳动） */}
             {/* 不使用 mt：ConversationContent 的 gap-1(4px) 已提供间距，
                 匹配内部 MessageActions 的 gap-0.5(2px)+mt-0.5(2px)=4px 间距 */}
-            {hasLiveAssistantContent && !suppressAgentRunning && (
+            {hasLiveAssistantContent && !suppressAgentRunning && (showAgentRunningIndicator || retrying) && (
               <div className="pl-[56px] min-h-[28px]">
                 {retrying && <RetryingNotice retrying={retrying} />}
-                {streaming && <AgentRunningIndicator startedAt={startedAt} />}
+                {showAgentRunningIndicator && <AgentRunningIndicator startedAt={startedAt} />}
               </div>
             )}
 
             {/* 无实时助手内容时：显示完整气泡（含头像/名称/时间） */}
             {/* 注意：工具活动已通过 SDK 渲染路径（liveGroups）展示 */}
-            {!hasLiveAssistantContent && !suppressAgentRunning && (streaming || smoothContent || retrying) && (
+            {!hasLiveAssistantContent && !suppressAgentRunning && (showAgentRunningIndicator || smoothContent || retrying) && (
               <Message from="assistant">
                 <MessageHeader
                   model={agentStreamingModel}
@@ -893,10 +900,10 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                           />
                         ))}
                       </div>
-                      {streaming && <AgentRunningIndicator startedAt={startedAt} />}
+                      {showAgentRunningIndicator && <AgentRunningIndicator startedAt={startedAt} />}
                     </>
                   ) : (
-                    streaming && <AgentRunningIndicator startedAt={startedAt} />
+                    showAgentRunningIndicator && <AgentRunningIndicator startedAt={startedAt} />
                   )}
                 </MessageContent>
               </Message>

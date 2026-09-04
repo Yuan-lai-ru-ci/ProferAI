@@ -161,6 +161,22 @@ describe('convertPiMessage', () => {
     expect(stripErrorFromContentMessage(message!)).toBeNull()
   })
 
+  test('Given 正文只是错误文案副本 When 检测 Then 不冒充断流前有效正文', () => {
+    const errorText = 'OpenAI 官方上游服务当前请求量较大，请稍后重试。'
+    const message = convertPiMessage(
+      textAssistant(errorText, {
+        stopReason: 'error',
+        errorMessage: errorText,
+      }),
+      'session-1',
+      undefined,
+      { final: true, uuid: 'assistant-duplicated-error' },
+    )
+
+    expect(hasTerminalErrorWithContent(message!)).toBe(false)
+    expect(stripErrorFromContentMessage(message!)).toBeNull()
+  })
+
   test('Given 正常消息（无错误）When 检测 Then 不判定为 terminal error with content', () => {
     const message = convertPiMessage(
       textAssistant('正常回复内容'),

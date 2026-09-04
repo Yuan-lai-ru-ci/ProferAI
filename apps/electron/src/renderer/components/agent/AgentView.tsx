@@ -3061,6 +3061,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           sessionPath={sessionPath}
           attachedDirs={allAttachedDirs}
           stoppedByUser={stoppedByUser}
+          streamError={agentError}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
           onFork={handleFork}
