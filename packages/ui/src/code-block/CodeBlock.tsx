@@ -205,7 +205,7 @@ export function CodeBlock({ children }: CodeBlockProps): React.ReactElement {
   }, [trimmedCode])
 
   return (
-    <div className="code-block-wrapper group/code rounded-lg overflow-hidden my-2 border border-border/50">
+    <div className="code-block-wrapper not-prose group/code rounded-lg overflow-hidden my-2 border border-border/50">
       {/* 头部栏：语言标签 + 复制按钮 */}
       <div className="flex items-center justify-between h-[34px] px-2 py-1 bg-muted/60 text-muted-foreground text-xs">
         <span className="font-medium select-none">{getDisplayName(language)}</span>

@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { toast } from 'sonner'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { Plus, Copy, Pencil, Trash2, Star, Check, Download, Upload, ChevronDown, X, ShieldCheck } from 'lucide-react'
+import { Plus, Copy, Pencil, Trash2, Star, Check, Download, Upload, ShieldCheck, SlidersHorizontal, Sparkles, BrainCircuit, LockKeyhole, Wrench, Layers3, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -143,7 +143,7 @@ function PickList({ items, selected, searchable, emptyHint, onToggle, onSelectAl
   const q = filter.trim().toLowerCase()
   const visible = q ? items.filter((i) => (i.label + i.value + (i.hint ?? '')).toLowerCase().includes(q)) : items
   return (
-    <div className="flex flex-col gap-2 rounded-md border p-2">
+    <div className="rounded-xl bg-muted/35 p-3 ring-1 ring-border/45">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           {searchable && (
@@ -175,10 +175,10 @@ function PickList({ items, selected, searchable, emptyHint, onToggle, onSelectAl
                   onClick={() => onToggle(item.value)}
                   title={`${item.value}${item.hint ? ` · ${item.hint}` : ''}`}
                   className={cn(
-                    'inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors',
+                    'inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs transition-all',
                     checked
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border/80 text-foreground/75 hover:bg-foreground/[0.04]',
+                      ? 'border-primary/45 bg-primary/12 text-primary shadow-sm'
+                      : 'border-border/70 bg-background/60 text-foreground/75 hover:-translate-y-px hover:border-primary/30 hover:bg-background',
                     item.disabled && !checked && 'opacity-45',
                   )}
                 >
@@ -192,6 +192,22 @@ function PickList({ items, selected, searchable, emptyHint, onToggle, onSelectAl
       </div>
     </div>
   )
+}
+
+function EditorSection({ icon, title, description, children }: { icon: React.ReactNode; title: string; description: string; children: React.ReactNode }): React.ReactElement {
+  return (
+    <section className="rounded-xl bg-muted/20 p-3.5 ring-1 ring-border/45">
+      <div className="mb-3 flex items-start gap-2.5">
+        <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">{icon}</div>
+        <div className="min-w-0"><h3 className="text-xs font-semibold text-foreground">{title}</h3><p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">{description}</p></div>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function FieldLabel({ children, hint }: { children: React.ReactNode; hint?: string }): React.ReactElement {
+  return <div className="mb-1.5 flex items-baseline justify-between gap-2"><label className="text-xs font-semibold text-foreground/80">{children}</label>{hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}</div>
 }
 
 export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = false, onlyEffective = false, onPromote, onOpenGlobalConfig }: { workspaceSlug?: string; search?: string; globalMode?: boolean; onlyEffective?: boolean; onPromote?: (preset: AgentPreset) => void; onOpenGlobalConfig?: () => void }): React.ReactElement {
@@ -592,9 +608,12 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
     availableMcpServers.map((m) => ({ value: m.name, label: m.name, hint: m.enabled ? '已启用' : '未启用', disabled: !m.enabled })), [availableMcpServers])
 
   return (
-    <SettingsSection title={globalMode ? '全局预设' : 'Agent 预设'} description="预设 = 岗位 + 工作环境：把提示词、推理档位、权限模式、Skill/MCP 白名单与能力裁剪组合成可复用配置。预设为工作区级配置，可跨工作区导入；会话内可随时切换（下一轮消息完整生效），星标为新建会话的默认预设。">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <SettingsSection title={globalMode ? '全局预设' : 'Agent 预设'} description="把提示词、模型策略与工具能力组合成可复用的工作模式。会话内可随时切换，星标预设将用于新建会话。">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-muted/35 p-2 ring-1 ring-border/40">
         <div className="flex items-center gap-2">
+          <div className="flex size-8 items-center justify-center rounded-lg bg-background text-primary shadow-sm ring-1 ring-border/40"><SlidersHorizontal size={15} /></div>
+          <span className="text-xs font-medium text-foreground/75">管理预设</span>
+          <span className="hidden text-[11px] text-muted-foreground sm:inline">按名称或最近修改时间整理</span>
           <span className="text-xs text-muted-foreground">排序</span>
           <Select value={sortMode} onValueChange={(value) => handleSortChange(value as PresetSortMode)}>
             <SelectTrigger className="h-8 w-36 text-xs"><SelectValue /></SelectTrigger>
@@ -604,16 +623,16 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
           </Select>
           {!globalMode && onOpenGlobalConfig && <Button size="sm" variant="ghost" onClick={onOpenGlobalConfig}>全局配置</Button>}
         </div>
-        <div className="flex justify-end gap-2">
-        <Button size="sm" variant="outline" onClick={handleExport} disabled={fileBusy} title="把预设导出为 JSON 文件，便于跨机器分享">
+        <div className="flex flex-wrap justify-end gap-1.5">
+        <Button size="sm" variant="ghost" className="h-8" onClick={handleExport} disabled={fileBusy} title="把预设导出为 JSON 文件，便于跨机器分享">
           <Download size={14} />
           <span>导出</span>
         </Button>
-        <Button size="sm" variant="outline" onClick={handleImport} disabled={fileBusy} title="从 Profer 预设 JSON 文件导入">
+        <Button size="sm" variant="ghost" className="h-8" onClick={handleImport} disabled={fileBusy} title="从 Profer 预设 JSON 文件导入">
           <Upload size={14} />
           <span>导入</span>
         </Button>
-        <Button size="sm" variant="outline" onClick={openCreate}>
+        <Button size="sm" className="h-8 shadow-sm" onClick={openCreate}>
           <Plus size={14} />
           <span>{globalMode ? '新建全局预设' : '新建预设'}</span>
         </Button>
@@ -622,7 +641,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
       {fileNotice && (
         <p className="text-right text-xs text-muted-foreground break-all">{fileNotice}</p>
       )}
-      <SettingsCard divided>
+      <SettingsCard divided={false} className="overflow-hidden bg-card/80 shadow-sm ring-1 ring-border/50">
         {presets.length === 0 && loading && (
           <div className="p-4 text-sm text-muted-foreground">加载中…</div>
         )}
@@ -636,16 +655,17 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
           const sectionPresets = filteredPresets.filter((preset) => globalMode ? (scope === 'user-global' ? preset.scope === 'user-global' : scope === 'builtin-meta' ? preset.scope === 'builtin-meta' : false) : preset.scope === scope)
           if (sectionPresets.length === 0) return null
           const sectionTitle = scope === 'workspace' ? '工作区预设' : scope === 'user-global' ? '全局预设' : '元预设'
-          return <React.Fragment key={scope}><div className="border-t border-border/50 px-4 py-2 text-xs font-medium text-muted-foreground first:border-t-0">{sectionTitle} <span className="ml-1 tabular-nums text-foreground/35">{sectionPresets.length}</span></div>{sectionPresets.map((preset) => {
+          return <React.Fragment key={scope}><div className="flex items-center gap-2 border-t border-border/50 bg-muted/25 px-4 py-2.5 first:border-t-0"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{sectionTitle}</span><span className="rounded-full bg-background px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground shadow-sm ring-1 ring-border/40">{sectionPresets.length}</span></div>{sectionPresets.map((preset) => {
           const isDefault = preset.id === defaultPresetId
           const baseName = preset.basePresetId
             ? presets.find((p) => p.id === preset.basePresetId)?.name
             : undefined
           return (
-            <div key={preset.id} className={cn('flex items-center justify-between gap-3 p-4', globalMode && 'cursor-pointer hover:bg-muted/40')} onClick={globalMode ? () => openEdit(preset) : undefined}>
+            <div key={preset.id} className={cn('group flex items-center justify-between gap-4 p-4 transition-colors hover:bg-muted/25', globalMode && 'cursor-pointer')} onClick={globalMode ? () => openEdit(preset) : undefined}>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium truncate">{preset.name}</span>
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Sparkles size={15} /></div>
+                  <span className="truncate text-sm font-semibold">{preset.name}</span>
                   {globalMode && preset.scope === 'builtin-meta' ? <BuiltinPresetTag /> : preset.isBuiltin && (
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground shrink-0">内置</span>
                   )}
@@ -660,7 +680,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{preset.description}</p>
                 {(preset.skillSlugs || preset.mcpServerNames || preset.effort || preset.permissionMode || preset.disabledToolGroups || preset.disabledTools || preset.allowSubagents !== undefined) && (
-                  <p className="mt-1 flex flex-wrap gap-1">
+                  <p className="mt-2 flex flex-wrap gap-1.5">
                     {preset.effort && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground/60">强度 {preset.effort}</span>}
                     {preset.permissionMode && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground/60">权限 {preset.permissionMode}</span>}
                     {preset.skillSlugs && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-foreground/60">Skill×{preset.skillSlugs.length}</span>}
@@ -704,27 +724,29 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
       </SettingsCard>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) { setCreating(false); setEditing(null); setError('') } }}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto scrollbar-thin sm:max-w-[680px]">
-          <DialogHeader>
-            <DialogTitle>{formTitle}</DialogTitle>
-            <DialogDescription>
-              提示词段之间用空行分隔。Skill / MCP 白名单在下方勾选；留空 = 不注入任何项，需全部可用时请点「全选」。
-            </DialogDescription>
+        <DialogContent className="max-h-[90vh] overflow-y-auto bg-background/95 p-0 scrollbar-thin sm:max-w-[760px]">
+          <DialogHeader className="border-b border-border/50 bg-gradient-to-br from-primary/[0.12] via-primary/[0.04] to-transparent px-6 pb-5 pt-6 pr-12">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-primary/15 text-primary shadow-sm"><Sparkles size={19} /></div>
+              <div><DialogTitle className="text-base">{formTitle}</DialogTitle><DialogDescription className="mt-1 text-xs">将一组提示词、模型策略和工具能力保存为可复用的工作模式。</DialogDescription></div>
+            </div>
             {globalMode && editing && <GlobalPresetScopePanel preset={editing} />}
           </DialogHeader>
-          {!(globalMode && editing?.scope === 'builtin-meta') && <div className="flex flex-col gap-3">
-            <div className="grid grid-cols-2 gap-3">
+          {!(globalMode && editing?.scope === 'builtin-meta') && <div className="flex flex-col gap-4 p-5">
+            <EditorSection icon={<Layers3 size={15} />} title="基本信息" description="给这个工作模式一个清晰的名字，方便快速识别。">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">名称 *</label>
-                <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="如：研究模式" />
+                <FieldLabel>名称 *</FieldLabel>
+                <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="如：研究模式" className="bg-background/70" />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">描述</label>
-                <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="一句话说明这个岗位" />
+                <FieldLabel>描述</FieldLabel>
+                <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="一句话说明这个岗位" className="bg-background/70" />
               </div>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-foreground/70">派生基座（可选）</label>
+            </EditorSection>
+            <EditorSection icon={<ArrowRight size={15} />} title="继承关系" description="派生预设只保存差异，内置基座升级后会自动跟随。">
+              <FieldLabel hint="可选">派生基座</FieldLabel>
               <Select value={form.basePresetId || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, basePresetId: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
                 <SelectTrigger><SelectValue placeholder="独立预设（不基于内置预设）" /></SelectTrigger>
                 <SelectContent>
@@ -734,22 +756,21 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
                   <SelectItem value="minimal">基于「极简」</SelectItem>
                 </SelectContent>
               </Select>
-              <p className="text-[10px] text-muted-foreground">
-                派生预设只存储与基座的差异：内置预设升级（提示词段/能力裁剪调整）会自动跟随；表格中的字段仍可覆盖或追加。
-              </p>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-foreground/70">提示词段（追加到系统提示词）</label>
+            </EditorSection>
+            <EditorSection icon={<BrainCircuit size={15} />} title="行为指令" description="这些内容会追加到系统提示词中，段落之间用空行分隔。">
+              <FieldLabel hint="Markdown">提示词段</FieldLabel>
               <Textarea
                 value={form.promptText}
                 onChange={(e) => setForm((f) => ({ ...f, promptText: e.target.value }))}
                 placeholder={'## 研究模式\n\n本会话专注调研，只读不写……'}
                 rows={5}
+                className="resize-y bg-background/70 font-mono text-xs leading-5"
               />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
+            </EditorSection>
+            <EditorSection icon={<SlidersHorizontal size={15} />} title="运行策略" description="控制模型的思考投入、操作权限和是否允许拆分任务。">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">推理强度</label>
+                <FieldLabel>推理强度</FieldLabel>
                 <Select value={form.effort || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, effort: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
                   <SelectTrigger><SelectValue placeholder="跟随全局设置" /></SelectTrigger>
                   <SelectContent>
@@ -762,7 +783,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
                 </Select>
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">权限模式</label>
+                <FieldLabel>权限模式</FieldLabel>
                 <Select value={form.permissionMode || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, permissionMode: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
                   <SelectTrigger><SelectValue placeholder="跟随会话默认" /></SelectTrigger>
                   <SelectContent>
@@ -773,10 +794,21 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">Skill 白名单（留空 = 全部禁用）</label>
+                <FieldLabel>子 Agent 委派</FieldLabel>
+                <Select value={form.allowSubagents || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, allowSubagents: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
+                  <SelectTrigger className="bg-background/70"><SelectValue placeholder="跟随默认策略" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={SELECT_DEFAULT_VALUE}>跟随默认策略</SelectItem><SelectItem value="yes">允许委派</SelectItem><SelectItem value="no">禁止委派</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            </EditorSection>
+            <EditorSection icon={<Wrench size={15} />} title="能力白名单" description="留空表示不注入任何项；需要完整能力时，请在列表中点击「全选」。">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <FieldLabel>Skill 白名单</FieldLabel>
                 <PickList
                   items={skillItems}
                   selected={selectedSkillSlugs}
@@ -788,7 +820,7 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground/70">MCP 白名单（留空 = 全部禁用）</label>
+                <FieldLabel>MCP 白名单</FieldLabel>
                 <PickList
                   items={mcpItems}
                   selected={selectedMcpNames}
@@ -799,78 +831,30 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
                 />
               </div>
             </div>
-            <p className="text-[10px] text-muted-foreground">白名单按名尽力匹配：留空时不会注入任何 Skill 或 MCP；需要完整能力请点各列表的「全选」。预设里选了但工作区没有的项会自动忽略；标注「未启用」的项需先在 Skills/MCP 页启用。</p>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-foreground/70">子 Agent 委派</label>
-              <Select value={form.allowSubagents || SELECT_DEFAULT_VALUE} onValueChange={(v) => setForm((f) => ({ ...f, allowSubagents: v === SELECT_DEFAULT_VALUE ? '' : v }))}>
-                <SelectTrigger><SelectValue placeholder="跟随默认策略" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={SELECT_DEFAULT_VALUE}>跟随默认策略</SelectItem>
-                  <SelectItem value="yes">允许委派</SelectItem>
-                  <SelectItem value="no">禁止委派</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-foreground/70">精简能力（禁用产品内置工具组 / 单个工具）</label>
-              <div className="flex flex-col gap-2 rounded-md border p-3">
+            </EditorSection>
+            <p className="px-1 text-[10px] leading-4 text-muted-foreground">白名单按名尽力匹配：预设里选了但工作区没有的项会自动忽略；标注「未启用」的项需先在 Skills/MCP 页启用。</p>
+            <EditorSection icon={<LockKeyhole size={15} />} title="能力裁剪" description="关闭不需要的内置能力，相关工具和提示词段会同步隐藏。">
+              <FieldLabel>精简能力</FieldLabel>
+              <div className="rounded-xl bg-background/60 p-3 ring-1 ring-border/45">
                 {TOOL_GROUP_OPTIONS.map((group) => {
                   const groupDisabled = form.disabledToolGroups.includes(group.value)
                   const groupTools = AGENT_PRESET_GROUP_TOOL_NAMES[group.value]
                   return (
-                    <div key={group.value} className="flex flex-col gap-1.5">
+                    <div key={group.value} className="flex flex-col gap-1.5 border-b border-border/40 py-2.5 first:pt-0 last:border-b-0 last:pb-0">
                       <label className="flex cursor-pointer items-center justify-between gap-2 select-none">
-                        <span className="flex min-w-0 flex-col">
-                          <span className="text-xs">{group.label}</span>
-                          <span className="truncate text-[10px] text-muted-foreground">{group.hint}</span>
-                        </span>
-                        <Switch
-                          checked={groupDisabled}
-                          onCheckedChange={(on) => setForm((f) => ({
-                            ...f,
-                            disabledToolGroups: on
-                              ? [...f.disabledToolGroups, group.value]
-                              : f.disabledToolGroups.filter((g) => g !== group.value),
-                          }))}
-                          className="scale-90 shrink-0"
-                        />
+                        <span className="flex min-w-0 flex-col"><span className="text-xs font-medium">{group.label}</span><span className="truncate text-[10px] text-muted-foreground">{group.hint}</span></span>
+                        <Switch checked={groupDisabled} onCheckedChange={(on) => setForm((f) => ({ ...f, disabledToolGroups: on ? [...f.disabledToolGroups, group.value] : f.disabledToolGroups.filter((g) => g !== group.value) }))} className="scale-90 shrink-0" />
                       </label>
-                      {!groupDisabled && (
-                        <details className="ml-1 border-l-2 border-border/60 pl-3">
-                          <summary className="cursor-pointer select-none text-[10px] text-muted-foreground hover:text-foreground/80">
-                            单工具裁剪（已禁 {form.disabledTools.filter((t) => (groupTools as readonly string[]).includes(t)).length} / {groupTools.length}）
-                          </summary>
-                          <div className="flex flex-wrap gap-1.5 pt-1.5">
-                            {groupTools.map((toolName) => {
-                              const checked = form.disabledTools.includes(toolName)
-                              return (
-                                <button
-                                  key={toolName}
-                                  type="button"
-                                  onClick={() => toggleDisabledTool(toolName)}
-                                  title={checked ? `已禁用 ${toolName}` : `禁用 ${toolName}`}
-                                  className={cn(
-                                    'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] transition-colors',
-                                    checked
-                                      ? 'border-destructive/60 bg-destructive/10 text-destructive'
-                                      : 'border-border/80 text-foreground/70 hover:bg-foreground/[0.04]',
-                                  )}
-                                >
-                                  {checked && <Check size={10} strokeWidth={3} />}
-                                  <span>{toolName}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </details>
-                      )}
+                      {!groupDisabled && <details className="ml-1 border-l-2 border-border/60 pl-3"><summary className="cursor-pointer select-none text-[10px] text-muted-foreground hover:text-foreground/80">单工具裁剪（已禁 {form.disabledTools.filter((t) => (groupTools as readonly string[]).includes(t)).length} / {groupTools.length}）</summary><div className="flex flex-wrap gap-1.5 pt-1.5">
+                        {groupTools.map((toolName) => { const checked = form.disabledTools.includes(toolName); return <button key={toolName} type="button" onClick={() => toggleDisabledTool(toolName)} title={checked ? `已禁用 ${toolName}` : `禁用 ${toolName}`} className={cn('inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[10px] transition-colors', checked ? 'border-destructive/60 bg-destructive/10 text-destructive' : 'border-border/70 bg-background/60 text-foreground/70 hover:bg-muted')}>{checked && <Check size={10} strokeWidth={3} />}{toolName}</button> })}
+                      </div></details>}
                     </div>
                   )
                 })}
               </div>
-              <p className="text-[10px] text-muted-foreground">禁用后对应工具不再注入，相关提示词段落自动隐藏（任务图/记忆/协作/定时任务）。组已整体禁用时无需再逐个勾选单工具；全部关 = 完整能力。</p>
-            </div>
-            {error && <p className="text-xs text-destructive">{error}</p>}
+              <p className="mt-2 text-[10px] leading-4 text-muted-foreground">禁用后对应工具不再注入，相关提示词段落自动隐藏。全部关闭 = 保留完整能力。</p>
+            </EditorSection>
+            {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>}
           </div>}
           {globalMode && editing?.scope === 'builtin-meta' && <p className="rounded-lg bg-blue-500/10 p-3 text-xs text-blue-700 dark:text-blue-300">这是 Profer 内置元预设，只读，不能编辑、重命名或删除。</p>}
           <DialogFooter>
