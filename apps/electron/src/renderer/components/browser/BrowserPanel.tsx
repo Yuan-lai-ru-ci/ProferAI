@@ -22,6 +22,7 @@ import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { BROWSER_RISK_DISCLAIMER_VERSION } from '@/types/settings'
 import { BrowserViewport } from './BrowserViewport'
 import { BrowserStartPage } from './BrowserStartPage'
+import { shouldNavigateDefaultHome } from './browser-start-page-navigation'
 
 interface BrowserPanelProps {
   sessionId: string
@@ -282,16 +283,15 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
     }
   }, [sessionId])
 
-  // 默认首页：空标签且配置了默认首页时自动导航（同一标签只触发一次）。
-  const isEmptyTab = !state?.url
-  const activeTabIdForNav = state?.activeTabId ?? ''
+  // 默认首页：仅为主进程已创建的真实空标签自动导航（同一标签只触发一次）。
+  // BrowserPanel 收起时仍预挂载，state=null 代表浏览器会话尚不存在，不能据此反向创建会话。
+  const isEmptyTab = !!state && !state.url
   const defaultHomeUrl = startPage?.defaultHomeUrl ?? null
   React.useEffect(() => {
-    if (!isEmptyTab || !defaultHomeUrl) return
-    if (autoNavigatedTabRef.current === activeTabIdForNav) return
-    autoNavigatedTabRef.current = activeTabIdForNav
+    if (!state || !defaultHomeUrl || !shouldNavigateDefaultHome(state, defaultHomeUrl, autoNavigatedTabRef.current)) return
+    autoNavigatedTabRef.current = state.activeTabId
     void navigateStartPage(defaultHomeUrl)
-  }, [isEmptyTab, defaultHomeUrl, activeTabIdForNav, navigateStartPage])
+  }, [state, defaultHomeUrl, navigateStartPage])
 
   const isBookmarked = !!state?.url && (startPage?.bookmarks.some((b) => b.url === state.url) ?? false)
 
