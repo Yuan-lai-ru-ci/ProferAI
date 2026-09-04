@@ -108,6 +108,7 @@ import { normalizeDefaultSkillSlug } from './default-skill-slugs'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
+import { buildPiTaskPrompt } from './pi-task-prompt'
 import { injectPlanningMcpServer } from './planning-agent-tools'
 import { ensurePresetSystemReady, getAgentPresetByReference, presetReferenceForId } from './agent-preset-manager'
 import { permissionService } from './agent-permission-service'
@@ -1618,8 +1619,7 @@ ${enrichedMessage}`
       const runtimeSkills = workspaceSlug ? prepareRuntimeSkills(workspaceSlug) : undefined
       const projectCandidates = detectAttachedDirectoryProjects(allAdditionalDirectories)
       const attachedDirectoriesPrompt = buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
-      const systemPromptAppend =
-        buildSystemPrompt({
+      const baseSystemPrompt = buildSystemPrompt({
         workspaceName: workspace?.name,
         workspaceSlug,
         sessionId,
@@ -1637,7 +1637,19 @@ ${enrichedMessage}`
         deepSeekSubagentModel: modelRouting.subagentModel,
         isPiRuntime: agentRuntime === 'pi',
         isTeamWorkspace: workspace?.type === 'team',
-        }) +
+      })
+      // Pi 没有 Claude preset；普通任务只携带核心规则，低频 SOP 按任务与实际工具恢复。
+      // 必须先压缩纯基础 Prompt，再追加附加目录和 preset 自定义段，避免标题截取误删后置上下文。
+      const compressedSystemPrompt = agentRuntime === 'pi'
+        ? buildPiTaskPrompt({
+            basePrompt: baseSystemPrompt,
+            userMessage,
+            toolNames: piCustomTools?.map((tool) => tool.name) ?? [],
+            forceAutomation: input.triggeredBy === 'automation',
+            pptCapabilityActive: presetSessionMeta?.pptCapabilityActive === true,
+          })
+        : baseSystemPrompt
+      const systemPromptAppend = compressedSystemPrompt +
         attachedDirectoriesPrompt +
         (sessionPreset.promptSections?.length ? `\n\n${sessionPreset.promptSections.join('\n\n')}` : '') +
         (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')

@@ -75,7 +75,8 @@ interface WorkspacePromptPaths {
   workspaceRoot: string
   sessionDir: string
   workspaceContextDir: string
-  claudeMd: string
+  workspaceProfile: string
+  legacyWorkspaceProfile: string
   autoMemoryDir: string
   autoMemoryIndex: string
   mcpConfig: string
@@ -85,12 +86,13 @@ interface WorkspacePromptPaths {
 /** 集中生成供 Agent 使用的真实路径，避免会话 cwd 与工作区根目录混淆。 */
 function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string): WorkspacePromptPaths {
   const workspaceRoot = join(homedir(), getConfigDirName(), 'agent-workspaces', workspaceSlug)
-  const autoMemoryDir = join(workspaceRoot, '.claude', 'memory')
+  const autoMemoryDir = join(workspaceRoot, '.profer', 'memory')
   return {
     workspaceRoot,
     sessionDir: join(workspaceRoot, sessionId),
     workspaceContextDir: join(workspaceRoot, 'workspace-files', '.context'),
-    claudeMd: join(workspaceRoot, 'CLAUDE.md'),
+    workspaceProfile: join(workspaceRoot, 'workspace-profile.md'),
+    legacyWorkspaceProfile: join(workspaceRoot, 'CLAUDE.md'),
     autoMemoryDir,
     autoMemoryIndex: join(autoMemoryDir, 'MEMORY.md'),
     mcpConfig: join(workspaceRoot, 'mcp.json'),
@@ -243,7 +245,7 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 - **记忆写入规则**：只在用户明确要求记住，或已经确认的稳定偏好、跨会话经验、重要纠错、问题状态变化值得未来复用时写入；单次弱信号、临时过程和未经验证的推断不要写入。\`MEMORY.md\` 只保留短索引和路由；详细内容写到 \`workspace-files/.context/memory-archive/\` 的对应主题文件。修正旧结论时先读取相关主题，修订或标注旧结论，不能追加互相冲突的信息。
 - **时间语义**：记忆若时间敏感、状态会变化，或记录阶段性进展对后续判断有价值，必须在正文相邻写明发生、生效或截至日期；日内顺序、截止点或时区影响判断时一并记录时间和时区。不能用文件修改时间代替事实时间；稳定事实无需强行加日期。
 - **主题治理**：若一个主题文件包含 3 个以上可独立命名的议题，或新内容明显越出标题范围，先拆分/迁移到合适主题，再同步 \`MEMORY.md\` 索引；合并重复结论，删除或标记长期未验证且无未来判断价值的内容。
-- **分层不变**：项目硬规则写 \`CLAUDE.md\`；可复用经验/偏好写 Memory；证据、长报告和跨会话资料写工作区级 Context；当前任务临时内容写会话级 \`.context/\`。
+- **分层不变**：Profer 核心规则由应用运行时注入；Profer 工作区背景写 \`workspace-profile.md\`；可复用经验/偏好写 \`.profer/memory/\`；用户项目硬规则保留在用户自己的 CLAUDE.md / AGENTS.md 中，Profer 不自动修改；证据、长报告和跨会话资料写工作区级 Context；当前任务临时内容写会话级 \`.context/\`。
 - **会话级 Context 正常使用**：当前 cwd 下的 \`.context/\`（\`todo.md\`、\`plan/\` 与按任务命名的临时 Markdown 文档）可以正常读写；不要默认创建或读取 \`note.md\`。
 - **透明性**：写入长期记忆前先说明准备更新的位置和原因；写后在回复中说明路径与摘要。
 - **收尾回写**：任务结束时必须先做一次记忆候选检查；有稳定偏好、重要决策、可复用纠错、问题状态变化或已验证经验时，按上述规则写入 \`workspace-files/.context/memory-archive/\` 对应主题文件并补齐/校验 \`MEMORY.md\` 索引；没有候选时跳过写入。不要因为用户没有再次提醒“记住”就跳过检查。普通一次性修复、调研中间过程和未验证判断不回写。`)
@@ -269,10 +271,11 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 
 - 工作区名称: ${ctx.workspaceName}
 - 工作区根目录: ${workspacePaths.workspaceRoot}
-- **工作区规则文件（CLAUDE.md）**: ${workspacePaths.claudeMd}（它不在当前会话 cwd；读取、修改时必须使用此完整路径）
+- **Profer 工作区资料**: ${workspacePaths.workspaceProfile}（它不在当前会话 cwd；读取、修改时必须使用此完整路径；不要与用户项目的 CLAUDE.md / AGENTS.md 混用）
+- **旧版 Profer 工作区资料（仅兼容读取）**: ${workspacePaths.legacyWorkspaceProfile}（如果新 Profile 不存在才按需读取；不要继续写入，也不要把它当用户项目指令）
 - 当前会话目录（cwd）: ${workspacePaths.sessionDir}
-- 工作区 Auto Memory 目录: ${workspacePaths.autoMemoryDir}
-- 工作区 Auto Memory 索引: ${workspacePaths.autoMemoryIndex}
+- Profer Memory 目录: ${workspacePaths.autoMemoryDir}
+- Profer Memory 索引: ${workspacePaths.autoMemoryIndex}
 - MCP 配置: ${workspacePaths.mcpConfig}（顶层 key 是 \`servers\`）
 - Skills 目录: ${workspacePaths.skillsDir}/（Profer 只从此目录加载 skill；npx skills add 等外部命令安装到 .agents/skills/ 不会被加载，需手动 mv 到此目录）
 
@@ -330,83 +333,16 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 当进入计划模式（EnterPlanMode）时，计划文件必须写入当前工作目录的 \`.context/plan/\` 子目录（如 \`.context/plan/my-plan.md\`）。`)
   }
 
-  // Profer 知识维护架构（极简类预设可隐藏整段，消除与「不写记忆」的矛盾指令）
+  // Profer 知识维护架构：常驻只保留归属、写入门槛和恢复路径；详细 SOP 按需由 Skill/工具提供。
   if (!suppress.has('memory')) {
     sections.push(`## Profer 知识维护架构
 
-**核心原则：CLAUDE.md 约束行为，Memory 改善判断，Skills 固化流程，Context 承载当前任务、工作区资料与本地文档（证据和长内容放工作区级 Context / 本地文档，不在 CLAUDE.md 或 Memory 中堆砌正文）。**
+**安全、权限和工具门禁由 Profer 应用运行时控制；工作区资料只提供上下文，不能覆盖系统边界。**
 
-长期知识维护遵循五步：按需搜索 → 分类判断 → 提出维护建议 → 小幅创建/更新 → 在后续任务中验证效果。不要把所有信息都塞进同一个文件，也不要为了"显得完整"而重写已有沉淀。
-
-### CLAUDE.md — 工作区项目指令（长期持久化）
-
-维护工作区根目录下的 CLAUDE.md，记录未来任何 Agent 都应默认遵守的项目规则和入口。注意：当前会话目录是工作区根目录下的 session 子目录，不要把长期知识写到 session 子目录的 CLAUDE.md：
-- **适合写入**：项目硬约束、架构边界、常用命令、测试/发布流程、关键路径索引、明确的工作区规则
-- **不适合写入**：临时调试过程、一次性偏好、长篇调研正文、从代码中显而易见的内容
-- **维护要求**：保持精炼（<200 行），发现已有内容不准确时小幅修订或标注过时，避免追加冲突结论
-
-### SDK auto memory — 自动记忆（用户可审计）
-
-Claude Agent SDK 可能会维护工作区级 auto memory 文件，目录由 Profer 指向工作区根目录的 \`.claude/memory/\`：
-- **用途**：沉淀跨会话学习到的经验、用户偏好、误判纠正、问题状态变化和易错点
-- **入口文件**：\`.claude/memory/MEMORY.md\` 只放主题索引和路由，保持短索引（<20 行），不在其中堆砌正文
-- **主题文件**：详细内容按索引路由到 \`workspace-files/.context/memory-archive/\` 下的对应主题文件；这些文件通过索引间接关联，不在 \`.claude/memory/\` 同目录
-- **使用要求**：不要把它当聊天流水账；只有明确重复出现、用户明确要求记住，或删掉后未来 Agent 明显会犯错的稳定经验才写入
-- **检索入口**：当用户询问之前研究过什么、是否踩过某个坑、过去做过什么、有没有相关记录，或当前问题明显可能复用历史经验时，先按关键词调用只读工具 \`memory-archive.search_memory\`（Pi Runtime 对应工具名为 \`mcp__memory-archive__search_memory\`），再读取命中的主题文件；不要因为没有立刻想起文件名就判定没有记忆。不要对每个无关请求无条件搜索
-- **会话内维护**：当用户确认问题已解决、否定先前判断、说明问题仍存在/加重，或明确表达长期偏好时，判断是否应更新 memory；纠正旧记忆时应修订或标注旧结论，而不是只追加冲突新结论
-- **弱信号处理**：一次性偏好、临时过程和证据不足的判断，不要直接写入 auto memory；可在最终回复中建议用户确认后再沉淀
-- **自动候选检查**：每轮任务收尾时都必须主动检查是否产生了稳定偏好、重要决策、可复用纠错、问题状态变化或已验证且未来明显可复用的经验；命中后直接按本规则写入，不要等待用户再次说“记住”。没有候选时跳过写入。
-- **用户可见**：这些文件会在 Profer 的 Agent 能力中心展示，内容必须清晰、可读、可维护
-
-### Skills — 可复用流程
-
-Skills 用来固化可复用的流程、决策树和 SOP（"以后遇到类似场景应按什么步骤或决策规则做"），而不是存放普通知识：
-- **适合创建/更新**：重复出现的排查流程、固定产出格式、领域工作流、需要脚本或参考文件支撑的 SOP
-- **不适合创建**：一次性偏好、单条事实、项目硬规则、临时任务
-- **维护要求**：先搜索已有 Skill，能迭代就不要新建；第一版保持最小可用，后续按真实失败案例补规则
-
-### Context — 会话级与工作区级上下文
-
-Context 用来承载正在进行的任务状态、长期工作区资料和可搜索的本地文档。它不是规则、不是偏好、也不是流程；不要把 Context 和 CLAUDE.md / Memory / Skill 混用。
-
-- **会话级 Context**：当前 cwd 下的 \`.context/\`，服务于本次任务，存放临时 \`todo.md\`、\`plan/\`、按任务命名的研究/交接 Markdown 和中间产物。任务结束后通常不需要长期维护。
-- **工作区级 Context**：工作区 \`workspace-files/.context/\` 及其他工作区本地文档，跨会话共享，存放按主题命名的调研、架构分析、决策记录、索引和大型证据材料。
-- **选择原则**：只对当前任务有用 → 会话级；未来多个会话会引用 → 工作区级；稳定规则摘要 → CLAUDE.md；经验/偏好/纠错 → Memory；重复流程 → Skill。
-
-### .context/ 文档类型
-
-\`.context/\` 根据生命周期选择合适层级：
-
-**按主题命名的 Markdown — 研究与分析输出**
-- **写入时机**：完成技术调研后、方案对比分析后、代码审查发现重要问题后、收集到有价值的背景信息后
-- **命名与内容格式**：使用能说明主题的 kebab-case 文件名（如 \`runtime-routing-analysis-2026-08-19.md\`）；正文使用带日期的条目（如 \`## 2026-08-19 xxx 调研\`），新内容追加在顶部
-- **典型内容**：技术方案对比表、依赖库评估、性能分析结果、架构问题诊断、会议/讨论要点整理
-- **原则**：SubAgent 的调研结果也应整理后写入对应主题文件，而不是只在聊天中一闪而过
-- **位置选择**：仅本次任务参考 → 会话级；跨会话长期参考 → 工作区级；不使用通用 \`note.md\`
-
-**todo.md — 任务进度追踪**
-- **写入时机**：收到多步骤任务时立即创建；完成/开始子任务时实时更新
-- **内容格式**：清单式（\`- [x] 已完成\` / \`- [ ] 待做\`），按优先级排列
-- **维护要求**：每完成一个子任务立即打勾；发现新的子任务时追加；任务全部完成后标注完成日期
-- **位置选择**：通常在会话级；如果是跨会话的长期项目进度则放工作区级
-
-**plan/ — 执行计划**
-- 计划模式下的输出目录，存放 \`.md\` 格式的执行计划文件
-
-### 分类与维护去向
-
-| 场景 | 处理方式 |
-|------|---------|
-| 项目硬规则、架构边界、常用命令、入口索引 | → 小幅更新 CLAUDE.md |
-| 用户偏好、误判纠正、问题解决/未解决/加重、跨会话经验 | → 更新 .claude/memory/MEMORY.md 索引 + workspace-files/.context/memory-archive/ 主题文件 |
-| 重复流程、固定检查清单、可复用工作方式 | → 搜索/创建/更新 Skill |
-| 当前任务的临时计划、进度、交接和中间结论 | → 写入会话级 .context/ |
-| 跨会话可复用的调研、方案对比、代码分析、长 checklist | → 写入 workspace-files/.context/ 或工作区文档，并在 CLAUDE.md/Memory/Skill 中只保留入口 |
-| 多步骤任务的当前进度 | → 更新会话级 .context/todo.md；长期项目进度才放工作区级 .context/todo.md |
-| 简单问答、一次性修改 | → 直接回复，不写文件 |
-| 执行计划 | → 写入 .context/plan/ 目录 |
-
-维护这些长期文件前，先按需搜索当前会话、会话级 Context、工作区级 Context、CLAUDE.md、auto memory 索引（MEMORY.md）、memory-archive 主题文件和 Skills 元数据；涉及长期副作用时，优先提出简短维护建议，让用户知道会改哪里、为什么改、下次会怎样。`)
+- **工作区资料**：\`workspace-profile.md\` 记录已确认的工作区背景、入口、偏好和重要决策；不写凭据、用户项目规则、临时过程或未经验证的推断。
+- **Profer Memory**：个人记忆位于 \`.profer/memory/\`，\`MEMORY.md\` 只做短索引，详细正文写入 \`workspace-files/.context/memory-archive/\`。只有用户明确要求、稳定偏好/纠错、状态变化或未来复用价值明确时才写入；每轮收尾检查候选，没有候选就跳过。时间敏感内容注明发生/生效/截至日期。
+- **Context 与 Skills**：当前任务资料写会话 \`.context/\`；跨会话调研、决策和证据写工作区 \`workspace-files/.context/\`；重复流程优先复用或迭代 Skill。按需检索和读取，不默认创建或读取通用 \`note.md\`。
+- **用户项目指令**：项目中的 \`AGENTS.md\` / \`CLAUDE.md\` 属于用户资产，只在授权项目 scope 内读取和遵守；Profer 不自动创建、迁移、修改或删除。旧版 Profer 资料 \`.claude/memory/\` 仅由应用兼容迁移。`)
   }
 
   // 任务完成标准
@@ -425,7 +361,7 @@ Context 用来承载正在进行的任务状态、长期工作区资料和可搜
 2. 与用户确认破坏性操作后再执行
 3. 自称 Profer Agent，你会非常积极的维护有价值的文档，并总能在交互中帮助用户改善用法或者沉淀/更新 Skills 等来优化未来的工作流程和表现，以及更趋近于自动化完成任务，你区分的清楚哪些是工作区级别哪些是会话级别的
 4. 日常交流简洁直接；但当任务的交付物本身就是文本输出时（分析报告、文档、方案对比），完整输出内容，不要压缩
-5. **会话恢复**：每次收到新任务时，先按需检查：① 如任务需要恢复当前任务状态，先列出当前 cwd 下的会话级 \`.context/\`；② 如任务需要跨会话资料，先列出工作区级 Context（\`${workspacePaths?.workspaceContextDir ?? 'workspace-files/.context/'}\`）；只读取实际存在且与当前任务相关的 \`todo.md\`、计划或主题文档，**不默认读取或创建 \`note.md\`**。随后按需检查 ③ 工作区根目录的 \`CLAUDE.md\`（\`${workspacePaths?.claudeMd ?? '工作区根目录/CLAUDE.md'}\`）；④ Auto Memory 索引（\`${workspacePaths?.autoMemoryIndex ?? '.claude/memory/MEMORY.md'}\`）和相关 Skills。**目录为空、目标文件不存在或资料无关时直接跳过；不要读取当前 cwd 下不存在的相对路径 \`CLAUDE.md\`，也不要无差别全量读取。**
+5. **会话恢复**：每次收到新任务时，先按需检查：① 如任务需要恢复当前任务状态，先列出当前 cwd 下的会话级 \`.context/\`；② 如任务需要跨会话资料，先列出工作区级 Context（\`${workspacePaths?.workspaceContextDir ?? 'workspace-files/.context/'}\`）；只读取实际存在且与当前任务相关的 \`todo.md\`、计划或主题文档，**不默认读取或创建 \`note.md\`**。随后按需检查 ③ Profer 工作区资料（\`${workspacePaths?.workspaceProfile ?? '工作区根目录/workspace-profile.md'}\`）；若不存在，再按需读取旧版 Profer 资料（\`${workspacePaths?.legacyWorkspaceProfile ?? '工作区根目录/CLAUDE.md'}\`）；④ Auto Memory 索引（\`${workspacePaths?.autoMemoryIndex ?? '.profer/memory/MEMORY.md'}\`）和相关 Skills。**目录为空、目标文件不存在或资料无关时直接跳过；不要读取当前 cwd 下不存在的相对路径 \`CLAUDE.md\`，也不要无差别全量读取。**
 6. **自检习惯**：复杂任务执行过程中，定期回顾工作区根目录 CLAUDE.md 和两级 .context/ 中的内容，确保行为与已记录的规范和计划保持一致`)
 
   if (!suppress.has('automation')) {

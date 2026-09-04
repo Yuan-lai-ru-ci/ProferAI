@@ -53,7 +53,7 @@ describe('buildSystemPrompt', () => {
     }
   })
 
-  test('工作区会话恢复指向根目录 CLAUDE.md，而非会话 cwd', () => {
+  test('工作区会话恢复指向 Profer workspace profile，而非用户项目指令文件', () => {
     const slug = 'demo-workspace'
     const sessionId = 'session-123'
     const configDirName = getConfigDirName()
@@ -65,13 +65,14 @@ describe('buildSystemPrompt', () => {
     })
 
     const workspaceRoot = join(homedir(), configDirName, 'agent-workspaces', slug)
-    const workspaceClaudeMd = join(workspaceRoot, 'CLAUDE.md')
-    expect(prompt).toContain(`**工作区规则文件（CLAUDE.md）**: ${workspaceClaudeMd}`)
-    expect(prompt).toContain(`③ 工作区根目录的 \`CLAUDE.md\`（\`${workspaceClaudeMd}\``)
+    const workspaceProfile = join(workspaceRoot, 'workspace-profile.md')
+    expect(prompt).toContain(`**Profer 工作区资料**: ${workspaceProfile}`)
+    expect(prompt).toContain(`③ Profer 工作区资料（\`${workspaceProfile}\``)
+    expect(prompt).toContain('项目中的 `AGENTS.md` / `CLAUDE.md` 属于用户资产')
     expect(prompt).toContain('不要读取当前 cwd 下不存在的相对路径 `CLAUDE.md`')
     expect(prompt).not.toContain('以及当前目录的 CLAUDE.md')
     expect(prompt).toContain(join(workspaceRoot, 'workspace-files', '.context'))
-    expect(prompt).toContain(join(workspaceRoot, '.claude', 'memory', 'MEMORY.md'))
+    expect(prompt).toContain(join(workspaceRoot, '.profer', 'memory', 'MEMORY.md'))
     expect(prompt).not.toContain('Profer 脱胎于开源项目')
   })
 
@@ -86,10 +87,9 @@ describe('buildSystemPrompt', () => {
 
     expect(prompt).toContain('先列出两个目录；只读取**实际存在且与当前任务相关**的文件')
     expect(prompt).toContain('不得默认创建或读取 `note.md`、`todo.md`')
-    expect(prompt).toContain('不默认读取或创建 `note.md`')
-    expect(prompt).toContain('目录为空、目标文件不存在或资料无关时直接跳过')
-    expect(prompt).toContain('按主题命名的 Markdown — 研究与分析输出')
-    expect(prompt).toContain('不使用通用 `note.md`')
+    expect(prompt).toContain('Profer Memory')
+    expect(prompt).toContain('按需检索和读取，不默认创建或读取通用 `note.md`')
+    expect(prompt).not.toContain('按主题命名的 Markdown — 研究与分析输出')
     expect(prompt).not.toContain('会话级 `.context/`（note.md、todo.md）')
   })
 
@@ -125,7 +125,7 @@ describe('buildSystemPrompt', () => {
     expect(claudePrompt).not.toContain('mcp__agent-presets__preset_create')
     expect(piPrompt).toContain('不要等待 SDK 自动落盘')
     expect(piPrompt).toContain('可以读取和写入')
-    expect(piPrompt).toContain('`.claude/memory/MEMORY.md`')
+    expect(piPrompt).toContain('`.profer/memory/MEMORY.md`')
     expect(piPrompt).toContain('收尾回写')
     expect(piPrompt).toContain('单次弱信号、临时过程和未经验证的推断不要写入')
     expect(piPrompt).not.toContain('不要写入长期记忆文件')
