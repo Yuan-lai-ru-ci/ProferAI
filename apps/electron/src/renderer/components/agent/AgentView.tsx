@@ -718,12 +718,20 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   // setter 内的 `prev.has(sessionId)` 守卫避免写入 → atom 引用变化 → effect 自循环（React #185）。
   const [agentRuntime, setAgentRuntime] = useAtom(agentRuntimeAtom)
   const [runtimeSwitchInFlight, setRuntimeSwitchInFlight] = React.useState(false)
+  const [runtimeCapabilities, setRuntimeCapabilities] = React.useState<import('@profer/shared').AgentRuntimeCapabilities | null>(null)
   // state 渲染前的连续点击也必须串行化，不能仅依赖 disabled 的下一帧更新。
   const runtimeSwitchInFlightRef = React.useRef(false)
   // 已加载会话以 metadata 为唯一真相来源；历史缺省 runtime 仍按 Claude 回退。
   const sessionAgentRuntime: AgentRuntime = sessionMeta
     ? sessionMeta.agentRuntime ?? 'claude'
     : agentRuntime
+  React.useEffect(() => {
+    let cancelled = false
+    window.electronAPI.getAgentRuntimeCapabilities(sessionAgentRuntime)
+      .then((capabilities) => { if (!cancelled) setRuntimeCapabilities(capabilities) })
+      .catch(() => { if (!cancelled) setRuntimeCapabilities(null) })
+    return () => { cancelled = true }
+  }, [sessionAgentRuntime])
   // 当前 Pi 模型的推理档位能力（异步桥接，供思考档位菜单动态展示）。
   const [piReasoningCapability, setPiReasoningCapability] = React.useState<import('@profer/shared').ReasoningCapability | undefined>(undefined)
   React.useEffect(() => {
@@ -3056,7 +3064,11 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
           onFork={handleFork}
-          onRewind={handleRewindRequest}
+          // Pi/Claude 都可能实现不同的回退语义；当前由主进程 capability 契约决定，
+          // 暂时仅对已明确支持的 Claude 暴露按钮，避免 UI 先显示再失败。
+          onRewind={runtimeCapabilities?.supportsRewind
+            ? handleRewindRequest
+            : (runtimeCapabilities === null && sessionAgentRuntime === 'claude' ? handleRewindRequest : undefined)}
           onCompact={handleCompact}
           tabletMode={tabletMode}
           onLoadEarlierHistory={handleLoadEarlierHistory}

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AgentProviderAdapter, AgentQueryInput, SDKMessage } from '@profer/shared'
 import { RuntimeRoutingAgentAdapter } from './runtime-routing-agent-adapter'
 
-function createAdapter(calls: string[], errorPrefix = ''): AgentProviderAdapter {
+function createAdapter(calls: string[], errorPrefix = '', capabilities?: Partial<ReturnType<NonNullable<AgentProviderAdapter['getCapabilities']>>>): AgentProviderAdapter {
   return {
     async *query(input: AgentQueryInput): AsyncIterable<SDKMessage> {
       calls.push(`query:${input.sessionId}`)
@@ -13,7 +13,26 @@ function createAdapter(calls: string[], errorPrefix = ''): AgentProviderAdapter 
     async sendQueuedMessage(sessionId, _message, options) {
       calls.push(`queue:${sessionId}:${options?.interrupt ?? false}`)
     },
+    async getTaskOutput(sessionId, taskId) {
+      calls.push(`output:${sessionId}:${taskId}`)
+      return { output: 'done', isComplete: true, status: 'completed' }
+    },
+    async stopTask(sessionId, taskId, expectedType) {
+      if (expectedType === 'shell') throw new Error('类型不匹配')
+      calls.push(`task-stop:${sessionId}:${taskId}`)
+    },
     dispose() { calls.push('dispose') },
+    ...(capabilities ? { getCapabilities: () => ({
+      supportsTaskOutput: false,
+      supportsTaskStop: false,
+      supportsRewind: false,
+      supportsInterrupt: false,
+      supportsQueuedMessage: false,
+      supportsBackgroundWakeup: false,
+      supportsNativeMcp: false,
+      supportsSubAgents: false,
+      ...capabilities,
+    }) } : {}),
     errorHelpers: {
       friendlyErrorMessage: value => `${errorPrefix}${value}`,
       isPromptTooLongError: () => false,
@@ -78,6 +97,65 @@ describe('RuntimeRoutingAgentAdapter', () => {
       message: { role: 'user', content: 'next' },
     })).rejects.toThrow('当前活跃 Agent runtime 不支持追加消息')
     expect(claudeCalls).toEqual([])
+  })
+
+  test('Given a completed query When reading or stopping a task Then routes through the session runtime', async () => {
+    const calls: string[] = []
+    const router = new RuntimeRoutingAgentAdapter({ claude: createAdapter(calls) })
+    const iterator = router.query({ sessionId: 'completed-session', prompt: 'hi', agentRuntime: 'claude' })[Symbol.asyncIterator]()
+    await iterator.next()
+    await iterator.return?.()
+
+    await expect(router.getTaskOutput('completed-session', 'task-1')).resolves.toMatchObject({ output: 'done' })
+    await router.stopTask('completed-session', 'task-1')
+    expect(calls).toContain('output:completed-session:task-1')
+    expect(calls).toContain('task-stop:completed-session:task-1')
+  })
+
+  test('Given a completed query When stopping with the wrong task type Then rejects before adapter execution', async () => {
+    const calls: string[] = []
+    const router = new RuntimeRoutingAgentAdapter({ claude: createAdapter(calls) })
+    const iterator = router.query({ sessionId: 'typed-session', prompt: 'hi', agentRuntime: 'claude' })[Symbol.asyncIterator]()
+    await iterator.next()
+    await iterator.return?.()
+
+    // Router forwards the type contract; the real Claude adapter enforces the
+    // same ownership/type check before invoking SDK stopTask.
+    await expect(router.stopTask('typed-session', 'task-1', 'shell')).rejects.toThrow('类型不匹配')
+    expect(calls).not.toContain('task-stop:typed-session:task-1')
+  })
+
+  test('Given a runtime When reading its capabilities Then reports explicit support differences', () => {
+    const router = new RuntimeRoutingAgentAdapter({
+      claude: createAdapter([]),
+      pi: createAdapter([], '', {
+        supportsTaskOutput: false,
+        supportsTaskStop: false,
+        supportsQueuedMessage: true,
+      }),
+    })
+    expect(router.getRuntimeCapabilities('claude')).toMatchObject({
+      available: true,
+      supportsTaskOutput: true,
+      supportsTaskStop: true,
+      supportsBackgroundWakeup: true,
+    })
+    expect(router.getRuntimeCapabilities('pi')).toMatchObject({
+      available: true,
+      supportsTaskOutput: false,
+      supportsTaskStop: false,
+      supportsQueuedMessage: true,
+    })
+  })
+
+  test('Given an unavailable runtime When reading capabilities Then reports unavailable without falling back', () => {
+    const router = new RuntimeRoutingAgentAdapter({ claude: createAdapter([]) })
+    expect(router.getRuntimeCapabilities('pi')).toMatchObject({
+      runtime: 'pi',
+      available: false,
+      supportsTaskOutput: false,
+      supportsTaskStop: false,
+    })
   })
 
   test('Given Pi runtime When resolving error helpers Then returns Pi helpers instead of Claude helpers', () => {

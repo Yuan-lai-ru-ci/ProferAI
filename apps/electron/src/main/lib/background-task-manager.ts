@@ -5,6 +5,8 @@ export type BackgroundTaskStatus = 'running' | 'completed' | 'failed' | 'stopped
 export interface BackgroundTaskRecord {
   sessionId: string
   taskId: string
+  /** SDK 任务类型；缺失时仅兼容旧记录，不允许据此猜测 renderer 类型。 */
+  type?: 'agent' | 'shell'
   status: BackgroundTaskStatus
   outputFile?: string
   summary?: string

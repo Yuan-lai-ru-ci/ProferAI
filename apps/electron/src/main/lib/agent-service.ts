@@ -416,12 +416,20 @@ export function stopAgent(sessionId: string): void {
   orchestrator.stop(sessionId)
 }
 
+export function getAgentRuntimeCapabilities(runtime: import('@profer/shared').AgentRuntime): import('@profer/shared').AgentRuntimeCapabilities {
+  return adapter.getRuntimeCapabilities(runtime)
+}
+
 export function getAgentTaskOutput(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<import('@profer/shared').GetTaskOutputResult> {
   return adapter.getTaskOutput(sessionId, taskId, options)
 }
 
-export async function stopAgentTask(sessionId: string, taskId: string): Promise<void> {
-  await adapter.stopTask(sessionId, taskId)
+export async function stopAgentTask(sessionId: string, taskId: string, type?: 'agent' | 'shell'): Promise<void> {
+  // SDK 后台任务（包含 shell）必须由产生它的 runtime adapter 停止；Pi 没有
+  // Claude Task API 等价物时由 adapter 明确拒绝。长期 Pi 服务进程继续使用
+  // KILL_PROCESS 的 ownership registry + PID/startTime 双因子路径，避免把不同
+  // 命名空间的 taskId 与服务记录 id 错配后误杀进程。
+  await adapter.stopTask(sessionId, taskId, type)
 }
 
 /** 删除运行中会话前停止并等待其真实运行生命周期结束。 */

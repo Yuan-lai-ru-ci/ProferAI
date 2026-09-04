@@ -1722,6 +1722,19 @@ export function installRuntimeGuardHooks(session: AgentSession, guard: AgentRunt
 }
 
 export class PiAgentAdapter implements AgentProviderAdapter {
+  // Pi 的后台服务进程由 runtime registry 管理，但尚未提供 Claude SDK TaskOutput/TaskStop 等价物。
+  getCapabilities() {
+    return {
+      supportsTaskOutput: false,
+      supportsTaskStop: false,
+      supportsRewind: true,
+      supportsInterrupt: true,
+      supportsQueuedMessage: true,
+      supportsBackgroundWakeup: false,
+      supportsNativeMcp: false,
+      supportsSubAgents: true,
+    }
+  }
   private activeSessions = new Map<string, ActivePiSession>()
 
   /** Keep the orchestrator's existing structured error and retry pipeline runtime-neutral. */

@@ -1850,6 +1850,8 @@ export const AGENT_IPC_CHANNELS = {
   // 后台任务管理
   /** 获取任务输出 */
   GET_TASK_OUTPUT: 'agent:get-task-output',
+  /** 获取 Claude/Pi runtime 能力快照 */
+  GET_RUNTIME_CAPABILITIES: 'agent:get-runtime-capabilities',
   /** 停止任务 */
   STOP_TASK: 'agent:stop-task',
 

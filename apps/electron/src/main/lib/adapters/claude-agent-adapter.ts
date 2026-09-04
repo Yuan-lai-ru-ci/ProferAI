@@ -616,6 +616,12 @@ const activeControllers = new Map<string, AbortController>()
 const activeQueries = new Map<string, SDKQuery>()
 const backgroundTaskManager = new BackgroundTaskManager()
 
+function getBackgroundTaskType(value: unknown): 'agent' | 'shell' | undefined {
+  if (value === 'shell' || value === 'bash' || value === 'local_bash') return 'shell'
+  if (value === 'agent' || value === 'subagent' || value === 'task') return 'agent'
+  return undefined
+}
+
 /** 活跃的消息通道映射（sessionId → channel），供后续消息注入 */
 const activeChannels = new Map<string, MessageChannel>()
 
@@ -729,6 +735,20 @@ const ANTHROPIC_PROXY_PROVIDERS = new Set<ProviderType>([
 ])
 
 export class ClaudeAgentAdapter implements AgentProviderAdapter {
+  // Claude SDK 当前已接通后台任务生命周期、文件回退和持续 query 能力。
+  getCapabilities() {
+    return {
+      supportsTaskOutput: true,
+      supportsTaskStop: true,
+      supportsRewind: true,
+      supportsInterrupt: true,
+      supportsQueuedMessage: true,
+      supportsBackgroundWakeup: true,
+      supportsNativeMcp: true,
+      supportsSubAgents: true,
+    }
+  }
+
   // ---- Provider-agnostic interface requirements ----
 
   /** 错误处理辅助函数集（Provider 特化） */
@@ -803,9 +823,12 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     return backgroundTaskManager.getOutput(sessionId, taskId, options)
   }
 
-  async stopTask(sessionId: string, taskId: string): Promise<void> {
+  async stopTask(sessionId: string, taskId: string, expectedType?: 'agent' | 'shell'): Promise<void> {
     const record = backgroundTaskManager.get(sessionId, taskId)
     if (!record) throw new Error(`后台任务不存在或不属于当前会话: ${taskId}`)
+    if (expectedType && record.type && record.type !== expectedType) {
+      throw new Error(`后台任务类型不匹配: 期望 ${expectedType}，实际 ${record.type}`)
+    }
     if (record.status !== 'running') return
     const query = activeQueries.get(sessionId)
     if (!query) throw new Error(`后台任务所属 Agent 已结束: ${taskId}`)
@@ -1057,14 +1080,27 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         // 后台任务等待期间收到任意 task 活动消息：重置空闲计时器，避免误释放子进程。
         if (msg.type === 'system') {
           const taskId = typeof msg.task_id === 'string' ? msg.task_id : undefined
+          const taskType = getBackgroundTaskType(msg.task_type)
           if (taskId && msg.subtype === 'task_started') {
-            backgroundTaskManager.upsert({ sessionId: options.sessionId, taskId, status: 'running' })
+            backgroundTaskManager.upsert({
+              sessionId: options.sessionId,
+              taskId,
+              ...(taskType ? { type: taskType } : {}),
+              status: 'running',
+            })
           } else if (taskId && msg.subtype === 'task_progress') {
-            backgroundTaskManager.upsert({ sessionId: options.sessionId, taskId, status: 'running', summary: typeof msg.summary === 'string' ? msg.summary : undefined })
+            backgroundTaskManager.upsert({
+              sessionId: options.sessionId,
+              taskId,
+              ...(taskType ? { type: taskType } : {}),
+              status: 'running',
+              summary: typeof msg.summary === 'string' ? msg.summary : undefined,
+            })
           } else if (taskId && msg.subtype === 'task_notification') {
             backgroundTaskManager.upsert({
               sessionId: options.sessionId,
               taskId,
+              ...(taskType ? { type: taskType } : {}),
               status: msg.status === 'failed' || msg.status === 'stopped' ? msg.status : 'completed',
               outputFile: typeof msg.output_file === 'string' ? msg.output_file : undefined,
               summary: typeof msg.summary === 'string' ? msg.summary : undefined,

@@ -3,6 +3,7 @@ import {
   type AgentErrorHelpers,
   type AgentProviderAdapter,
   type GetTaskOutputResult,
+  type AgentRuntimeCapabilities,
   type AgentQueryInput,
   type AgentRuntime,
   type SDKMessage,
@@ -25,6 +26,8 @@ export class RuntimeRoutingAgentAdapter implements AgentProviderAdapter {
    * 在新 query 已开始后误删新绑定。
    */
   private readonly sessionRuntimes = new Map<string, { runtime: AgentRuntime; token: symbol }>()
+  /** 已知会话的 runtime。query 结束后仍需靠它读取/停止 Claude 后台任务。 */
+  private readonly knownSessionRuntimes = new Map<string, AgentRuntime>()
 
   constructor(private readonly adapters: Partial<Record<AgentRuntime, AgentProviderAdapter>>) {}
 
@@ -51,6 +54,7 @@ export class RuntimeRoutingAgentAdapter implements AgentProviderAdapter {
 
     const token = Symbol(`agent-query:${input.sessionId}`)
     this.sessionRuntimes.set(input.sessionId, { runtime, token })
+    this.knownSessionRuntimes.set(input.sessionId, runtime)
     try {
       yield* adapter.query({ ...input, agentRuntime: runtime })
     } finally {
@@ -75,16 +79,35 @@ export class RuntimeRoutingAgentAdapter implements AgentProviderAdapter {
     await this.getSessionAdapter(sessionId)?.interruptQuery?.(sessionId)
   }
 
+  getRuntimeCapabilities(runtime: AgentRuntime): AgentRuntimeCapabilities {
+    const adapter = this.adapters[runtime]
+    const inferred = {
+      supportsTaskOutput: Boolean(adapter?.getTaskOutput),
+      supportsTaskStop: Boolean(adapter?.stopTask),
+      supportsRewind: runtime === 'claude',
+      supportsInterrupt: Boolean(adapter?.interruptQuery),
+      supportsQueuedMessage: Boolean(adapter?.sendQueuedMessage),
+      supportsBackgroundWakeup: runtime === 'claude',
+      supportsNativeMcp: runtime === 'claude',
+      supportsSubAgents: runtime === 'claude' || Boolean(adapter),
+    }
+    return {
+      runtime,
+      available: Boolean(adapter),
+      ...(adapter?.getCapabilities?.() ?? inferred),
+    }
+  }
+
   async getTaskOutput(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<GetTaskOutputResult> {
-    const adapter = this.getSessionAdapter(sessionId)
-    if (!adapter?.getTaskOutput) throw new Error('当前活跃 Agent runtime 不支持后台任务输出查询')
+    const adapter = this.getTaskAdapter(sessionId)
+    if (!adapter?.getTaskOutput) throw new Error('当前 Agent runtime 不支持后台任务输出查询')
     return adapter.getTaskOutput(sessionId, taskId, options)
   }
 
-  async stopTask(sessionId: string, taskId: string): Promise<void> {
-    const adapter = this.getSessionAdapter(sessionId)
-    if (!adapter?.stopTask) throw new Error('当前活跃 Agent runtime 不支持后台任务停止')
-    await adapter.stopTask(sessionId, taskId)
+  async stopTask(sessionId: string, taskId: string, expectedType?: 'agent' | 'shell'): Promise<void> {
+    const adapter = this.getTaskAdapter(sessionId)
+    if (!adapter?.stopTask) throw new Error('当前 Agent runtime 不支持后台任务停止')
+    await adapter.stopTask(sessionId, taskId, expectedType)
   }
 
   async sendQueuedMessage(
@@ -108,10 +131,16 @@ export class RuntimeRoutingAgentAdapter implements AgentProviderAdapter {
   dispose(): void {
     for (const adapter of Object.values(this.adapters)) adapter?.dispose()
     this.sessionRuntimes.clear()
+    this.knownSessionRuntimes.clear()
   }
 
   private getSessionAdapter(sessionId: string): AgentProviderAdapter | undefined {
     const runtime = this.sessionRuntimes.get(sessionId)?.runtime
+    return runtime ? this.adapters[runtime] : undefined
+  }
+
+  private getTaskAdapter(sessionId: string): AgentProviderAdapter | undefined {
+    const runtime = this.sessionRuntimes.get(sessionId)?.runtime ?? this.knownSessionRuntimes.get(sessionId)
     return runtime ? this.adapters[runtime] : undefined
   }
 

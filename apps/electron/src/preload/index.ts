@@ -703,6 +703,8 @@ export interface ElectronAPI {
 
   /** 获取任务输出 */
   getTaskOutput: (input: GetTaskOutputInput) => Promise<GetTaskOutputResult>
+  /** 获取 Claude/Pi runtime 能力快照 */
+  getAgentRuntimeCapabilities: (runtime: import('@profer/shared').AgentRuntime) => Promise<import('@profer/shared').AgentRuntimeCapabilities>
 
   /** 停止任务 */
   stopTask: (input: StopTaskInput) => Promise<void>
@@ -2254,6 +2256,10 @@ const electronAPI: ElectronAPI = {
   // Agent 后台任务管理
   getTaskOutput: (input: GetTaskOutputInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_TASK_OUTPUT, input)
+  },
+
+  getAgentRuntimeCapabilities: (runtime: import('@profer/shared').AgentRuntime) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_RUNTIME_CAPABILITIES, runtime)
   },
 
   stopTask: (input: StopTaskInput) => {

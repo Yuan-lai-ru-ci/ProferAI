@@ -262,7 +262,7 @@ import {
   countArchivedAgentSessions,
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
-import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask } from './lib/agent-service'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
@@ -3547,22 +3547,39 @@ export function registerIpcHandlers(): void {
 
   // ===== Agent 后台任务管理 =====
 
-  // 获取任务输出（保留接口，供未来扩展）
+  // 获取任务输出。任务归属和输出路径由主进程 adapter 决定，renderer 只能提供会话/任务标识。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_TASK_OUTPUT,
-    async (_, input: GetTaskOutputInput): Promise<GetTaskOutputResult> => {
-      try {
-        // TODO: 实现通过 SDK 的 TaskOutput 获取任务输出
-        console.warn('[IPC] GET_TASK_OUTPUT: 当前版本暂未实现，返回空输出')
-        return {
-          output: '',
-          isComplete: false,
-        }
-      } catch (error) {
-        console.error('[IPC] 获取任务输出失败:', error)
-        throw error
+    async (event, input: GetTaskOutputInput): Promise<GetTaskOutputResult> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input !== 'object') throw new Error('无效的后台任务查询参数')
+      if (typeof input.sessionId !== 'string' || !input.sessionId.trim() || input.sessionId.length > 200) {
+        throw new Error('无效的后台任务会话标识')
       }
+      if (typeof input.taskId !== 'string' || !input.taskId.trim() || input.taskId.length > 200) {
+        throw new Error('无效的后台任务标识')
+      }
+      if (input.block !== undefined && typeof input.block !== 'boolean') {
+        throw new Error('无效的后台任务阻塞参数')
+      }
+      if (input.timeoutMs !== undefined && (!Number.isFinite(input.timeoutMs) || input.timeoutMs < 0 || input.timeoutMs > 30_000)) {
+        throw new Error('无效的后台任务超时时间')
+      }
+      return getAgentTaskOutput(input.sessionId, input.taskId, {
+        block: input.block,
+        timeoutMs: input.timeoutMs,
+      })
     }
+  )
+
+  // 查询 runtime 能力。只读快照由主进程适配器提供，renderer 不自行推断。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_RUNTIME_CAPABILITIES,
+    async (event, runtime: unknown): Promise<import('@profer/shared').AgentRuntimeCapabilities> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!isAgentRuntime(runtime)) throw new Error(`无效的 Agent runtime: ${String(runtime)}`)
+      return getAgentRuntimeCapabilities(runtime)
+    },
   )
 
   // ===== Agent 权限系统 =====
@@ -3585,20 +3602,23 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 停止任务
+  // 停止任务。Agent 任务交给 runtime adapter；Pi 的 owned Shell 服务走 registry 的安全停止路径。
+  // 不支持或无法确认归属时明确抛错，禁止静默成功。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.STOP_TASK,
-    async (_, input: StopTaskInput): Promise<void> => {
-      try {
-        if (input.type === 'shell') {
-          console.warn('[IPC] STOP_TASK: Shell 任务停止功能待实现')
-        } else {
-          console.warn('[IPC] STOP_TASK: Agent 任务暂不支持单独停止')
-        }
-      } catch (error) {
-        console.error('[IPC] 停止任务失败:', error)
-        throw error
+    async (event, input: StopTaskInput): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      if (!input || typeof input !== 'object') throw new Error('无效的后台任务停止参数')
+      if (typeof input.sessionId !== 'string' || !input.sessionId.trim() || input.sessionId.length > 200) {
+        throw new Error('无效的后台任务会话标识')
       }
+      if (typeof input.taskId !== 'string' || !input.taskId.trim() || input.taskId.length > 200) {
+        throw new Error('无效的后台任务标识')
+      }
+      if (input.type !== 'agent' && input.type !== 'shell') {
+        throw new Error('无效的后台任务类型')
+      }
+      await stopAgentTask(input.sessionId, input.taskId, input.type)
     }
   )
 

@@ -11,6 +11,23 @@ import type { GetTaskOutputResult, SDKMessage, TypedError } from './agent'
 /** Agent runtime 实现。未知/旧持久化值一律按 Claude 回退。 */
 export type AgentRuntime = 'claude' | 'pi'
 
+/**
+ * Runtime 能力快照。能力是只读产品契约，不代表 renderer 可以绕过主进程权限。
+ * 未实现的能力必须明确为 false，禁止用 UI 的“调用成功”伪装跨 runtime 等价。
+ */
+export interface AgentRuntimeCapabilities {
+  runtime: AgentRuntime
+  available: boolean
+  supportsTaskOutput: boolean
+  supportsTaskStop: boolean
+  supportsRewind: boolean
+  supportsInterrupt: boolean
+  supportsQueuedMessage: boolean
+  supportsBackgroundWakeup: boolean
+  supportsNativeMcp: boolean
+  supportsSubAgents: boolean
+}
+
 /** 默认 runtime。Pi 完成执行链路与灰度前，产品默认始终保持 Claude。 */
 export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
 
@@ -112,9 +129,11 @@ export interface AgentProviderAdapter {
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
   /** 查询已登记后台任务输出。 */
   getTaskOutput?(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<GetTaskOutputResult>
-  /** 独立停止已登记后台任务。 */
-  stopTask?(sessionId: string, taskId: string): Promise<void>
-  /** 错误处理辅助函数（Provider 特化逻辑由 Adapter 提供） */
+  /** 独立停止已登记后台任务；expectedType 用于防止 agent/shell 标识混用。 */
+  stopTask?(sessionId: string, taskId: string, expectedType?: 'agent' | 'shell'): Promise<void>
+  /** Runtime 的静态/当前实现能力快照；未提供时由路由层按适配器方法降级推断。 */
+  getCapabilities?(): Omit<AgentRuntimeCapabilities, 'runtime' | 'available'>
+  /** 错误处理辅助函数（Provider 特化逻辑由 Adapter 提供）
   errorHelpers: AgentErrorHelpers
   /**
    * 多 runtime Router 可按本次请求选择错误处理器；普通 adapter 保持使用 errorHelpers。
