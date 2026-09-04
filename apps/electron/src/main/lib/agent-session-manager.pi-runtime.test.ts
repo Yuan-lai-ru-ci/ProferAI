@@ -118,9 +118,20 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(sessions.getAgentSessionDeletionOrder(unrelated.id)).toEqual([unrelated.id])
   })
 
-  test('Given a session is created with a preset When re-reading index Then the preset persists', () => {
+  test('Given a session is created with a preset When re-reading index Then the preset and reference persist', () => {
     const session = sessions.createAgentSession('delegation preset', undefined, undefined, undefined, 'pi', false, 'minimal')
-    expect(sessions.getAgentSessionMeta(session.id)?.presetId).toBe('minimal')
+    expect(sessions.getAgentSessionMeta(session.id)).toMatchObject({
+      presetId: 'minimal',
+      presetReference: { presetId: 'minimal', presetScope: 'builtin-meta' },
+    })
+  })
+
+  test('Given a session omits a preset When created Then it binds the standard preset consistently', () => {
+    const session = sessions.createAgentSession('default preset')
+    expect(sessions.getAgentSessionMeta(session.id)).toMatchObject({
+      presetId: 'standard',
+      presetReference: { presetId: 'standard', presetScope: 'builtin-meta' },
+    })
   })
 
   test('Given sessions have distinct channel/model selections When re-reading index Then each selection persists independently', () => {

@@ -384,6 +384,11 @@ export function createAgentSession(
   // 预设工作区化：按会话工作区解析（未指定/不存在时仅内置预设可用）
   const presetWorkspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
 
+  // 先统一计算规范化后的 ID，再用同一个 ID 构建稳定引用。
+  // 不能把原始 presetId 传给 presetReferenceForId：旧会话/快捷入口未传
+  // presetId 时，前者会回退为 standard，而后者会得到空引用，发送校验就会
+  // 错误地报 AGENT_PRESET_REQUIRED。
+  const normalizedPresetId = normalizeSessionPresetId(presetWorkspaceSlug, presetId)
   const meta: AgentSessionMeta = {
     id: randomUUID(),
     title: title || '新 Agent 会话',
@@ -391,7 +396,7 @@ export function createAgentSession(
     modelId,
     workspaceId,
     agentRuntime: normalizeAgentRuntime(agentRuntime),
-    ...(normalizeSessionPresetId(presetWorkspaceSlug, presetId) ? { presetId: normalizeSessionPresetId(presetWorkspaceSlug, presetId), presetReference: presetReferenceForId(presetWorkspaceSlug, presetId) } : {}),
+    ...(normalizedPresetId ? { presetId: normalizedPresetId, presetReference: presetReferenceForId(presetWorkspaceSlug, normalizedPresetId) } : {}),
     ...(draft ? { draft: true } : {}),
     createdAt: now,
     updatedAt: now,
