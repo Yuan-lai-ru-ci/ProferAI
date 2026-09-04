@@ -1,2 +1,0 @@
-# 默认 Skill 的 frontmatter 需跨 Windows/macOS/Linux 一致解析；统一保留 LF。
-apps/electron/default-skills/**/SKILL.md text eol=lf

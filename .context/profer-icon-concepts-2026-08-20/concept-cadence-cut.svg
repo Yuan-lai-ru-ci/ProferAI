@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <title>Profer icon concept — Cadence Cut</title>
-  <desc>Four compact rising forms with a shared curved cut at the top.</desc>
-  <path fill="#151515" d="M169 741V487c0-19 14-34 32-35l26-2c19-1 35 14 35 33v258H169Z"/>
-  <path fill="#151515" d="M319 741V374c0-18 13-32 31-34l28-3c19-2 36 13 36 32v372H319Z" transform="rotate(-4 366 553)"/>
-  <path fill="#151515" d="M478 741V279c0-18 12-32 30-35l29-5c20-3 38 12 38 32v470H478Z" transform="rotate(-8 526 507)"/>
-  <path fill="#151515" d="M642 741V191c0-17 11-31 28-35l29-7c21-5 41 11 41 32v560H642Z" transform="rotate(-12 690 469)"/>
-  <path fill="#F2F1ED" d="M176 486c19-33 54-52 91-48-18 15-30 36-31 59-2 26 8 51 28 68-40-2-75-29-88-79Z"/>
-</svg>

@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <title>Profer icon concept — Soft Prism</title>
-  <desc>Three rounded planes gather into a quiet asymmetric prism.</desc>
-  <path fill="#151515" d="M261 709c-16 0-29-13-29-29V385c0-16 13-29 29-29h84c16 0 29 13 29 29v295c0 16-13 29-29 29h-84Z"/>
-  <path fill="#151515" d="M412 709c-16 0-29-13-29-29V275c0-16 13-29 29-29h84c16 0 29 13 29 29v405c0 16-13 29-29 29h-84Z" transform="rotate(-11 454 478)"/>
-  <path fill="#151515" d="M573 709c-16 0-29-13-29-29V184c0-16 13-29 29-29h84c16 0 29 13 29 29v496c0 16-13 29-29 29h-84Z" transform="rotate(-21 615 432)"/>
-</svg>
