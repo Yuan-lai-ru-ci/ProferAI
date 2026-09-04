@@ -1,0 +1,342 @@
+/**
+ * 运行时初始化协调器
+ *
+ * 负责协调所有运行时初始化逻辑，包括：
+ * 1. Shell 环境加载（macOS）
+ * 2. Node.js 运行时检测
+ * 3. Bun 运行时检测
+ * 4. Git 运行时检测
+ * 5. Shell 环境检测（Windows - Git Bash / WSL）
+ */
+
+import type { RuntimeStatus, RuntimeInitOptions, ShellEnvironmentStatus } from '@profer/shared'
+import { loadShellEnv } from './shell-env'
+import { detectNodeRuntime } from './node-detector'
+import { detectBunRuntime } from './bun-finder'
+import { detectGitRuntime, getGitRepoStatus } from './git-detector'
+import { detectGitBash } from './git-bash-detector'
+import { detectWsl } from './wsl-detector'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs'
+
+/** 运行时状态缓存 */
+let runtimeStatusCache: RuntimeStatus | null = null
+
+/** 初始化标志 */
+let isInitialized = false
+
+/** 运行时缓存有效期（24 小时），过期后重新检测以捕获环境变化 */
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000
+
+/** 获取缓存文件路径（不能依赖 config-paths.ts 避免循环引用） */
+function getRuntimeCachePath(): string {
+  // 复用 getConfigDir 的逻辑：检测是否为打包版本
+  let configDirName = '.profer'
+  try {
+    const { app } = require('electron')
+    configDirName = app.isPackaged ? '.profer' : '.profer-dev'
+  } catch { /* 降级使用默认值 */ }
+  return join(homedir(), configDirName, 'runtime-cache.json')
+}
+
+/** 读取磁盘缓存的运行时状态，如果有效则直接返回；缺失的工具会增量重检 */
+async function loadCachedRuntime(): Promise<RuntimeStatus | null> {
+  try {
+    const cachePath = getRuntimeCachePath()
+    if (!existsSync(cachePath)) return null
+
+    const raw = readFileSync(cachePath, 'utf-8')
+    const cached = JSON.parse(raw) as RuntimeStatus & { _cachedAt?: number }
+
+    // 检查缓存是否过期
+    if (cached._cachedAt && Date.now() - cached._cachedAt > CACHE_TTL_MS) {
+      console.log('[运行时初始化] 缓存已过期，将重新检测')
+      return null
+    }
+
+    // 快速验证：确认缓存中已找到的工具路径仍存在
+    const pathsToCheck: (string | null)[] = [
+      cached.node?.path,
+      cached.bun?.path,
+      cached.git?.path,
+    ]
+    const allPathsValid = pathsToCheck
+      .filter((p): p is string => typeof p === 'string')
+      .every((p) => existsSync(p))
+
+    if (!allPathsValid) {
+      console.log('[运行时初始化] 缓存路径已失效，将重新检测')
+      return null
+    }
+
+    // 增量重检：缓存中标记为"未找到"的工具，尝试快速重新检测
+    // 解决"第一波没装环境，后面装了也检测不到"的问题
+    let needsRewrite = false
+
+    if (!cached.bun?.available) {
+      console.log('[运行时初始化] 缓存中 Bun 未找到，尝试增量重检...')
+      const bunStatus = await detectBunRuntime()
+      if (bunStatus.available) {
+        cached.bun = bunStatus
+        needsRewrite = true
+        console.log('[运行时初始化] 增量重检发现 Bun:', bunStatus.version)
+      }
+    }
+
+    if (!cached.git?.available) {
+      console.log('[运行时初始化] 缓存中 Git 未找到，尝试增量重检...')
+      const gitStatus = await detectGitRuntime()
+      if (gitStatus.available) {
+        cached.git = gitStatus
+        needsRewrite = true
+        console.log('[运行时初始化] 增量重检发现 Git:', gitStatus.version)
+      }
+    }
+
+    if (!cached.node?.available) {
+      console.log('[运行时初始化] 缓存中 Node.js 未找到，尝试增量重检...')
+      const nodeStatus = await detectNodeRuntime()
+      if (nodeStatus.available) {
+        cached.node = nodeStatus
+        needsRewrite = true
+        console.log('[运行时初始化] 增量重检发现 Node.js:', nodeStatus.version)
+      }
+    }
+
+    // Windows 下 Git Bash / WSL 的增量重检
+    // 当缓存中至少有一个 Shell 不可用时触发重检，解决「后装了环境但识别不到」的问题
+    const gitBashMissing = !cached.shell?.gitBash?.available
+    const wslMissing = !cached.shell?.wsl?.available
+    if (process.platform === 'win32' && (gitBashMissing || wslMissing || !cached.shell?.recommended)) {
+      console.log('[运行时初始化] 缓存中 Shell 环境不完整，尝试增量重检...')
+      try {
+        const gitBashStatus = gitBashMissing ? await detectGitBash() : cached.shell!.gitBash
+        const wslStatus = wslMissing ? await detectWsl() : cached.shell!.wsl
+        let recommended: 'git-bash' | 'wsl' | null = null
+        if (gitBashStatus.available) recommended = 'git-bash'
+        else if (wslStatus.available) recommended = 'wsl'
+        if (recommended) {
+          cached.shell = { gitBash: gitBashStatus, wsl: wslStatus, recommended }
+          needsRewrite = true
+          console.log('[运行时初始化] 增量重检发现 Shell:', recommended)
+        }
+      } catch { /* 重检失败不影响已有缓存 */ }
+    }
+
+    if (needsRewrite) {
+      saveCachedRuntime(cached)
+    }
+
+    console.log('[运行时初始化] 已从磁盘缓存恢复运行时状态')
+    return cached
+  } catch (err) {
+    console.warn('[运行时初始化] 读取缓存失败，将重新检测:', err)
+    return null
+  }
+}
+
+/** 将运行时状态写入磁盘缓存 */
+function saveCachedRuntime(status: RuntimeStatus): void {
+  try {
+    const cachePath = getRuntimeCachePath()
+    const dir = join(homedir(), '.profer')
+    try { mkdirSync(dir, { recursive: true }) } catch { /* 目录可能已存在 */ }
+    const toCache = { ...status, _cachedAt: Date.now() }
+    writeFileSync(cachePath, JSON.stringify(toCache, null, 2), 'utf-8')
+    console.log('[运行时初始化] 已写入磁盘缓存')
+  } catch (err) {
+    // 缓存写入失败不影响功能，仅记录日志
+    console.warn('[运行时初始化] 写入缓存失败:', err)
+  }
+}
+
+/**
+ * 初始化运行时环境
+ *
+ * 按顺序执行：
+ * 1. loadShellEnv() - 加载 Shell 环境（仅 macOS 打包环境）
+ * 2. detectNodeRuntime() - 检测 Node.js 运行时
+ * 3. detectBunRuntime() - 检测 Bun 运行时
+ * 4. detectGitRuntime() - 检测 Git 运行时
+ * 5. detectShellEnvironment() - 检测 Shell 环境（仅 Windows）
+ *
+ * @param options - 初始化选项
+ * @returns 运行时状态
+ */
+export async function initializeRuntime(options: RuntimeInitOptions = {}): Promise<RuntimeStatus> {
+  const startTime = Date.now()
+
+  // 如果有强制跳过的选项或被要求强制重新检测，跳过缓存逻辑
+  const forceRefresh = options.skipEnvLoad || options.skipNodeDetection || options.skipBunDetection || options.skipGitDetection || options.skipShellDetection
+
+  // 必须在读取缓存前加载 shell 环境：macOS 打包应用从 Finder/Dock 启动时
+  // PATH 很短；若先用缓存中的“未找到”状态增量重检，会导致 Bun/Node 始终不可见。
+  let envLoaded = false
+  if (!options.skipEnvLoad) {
+    try {
+      const shellEnvResult = await loadShellEnv()
+      envLoaded = shellEnvResult.success
+    } catch (error) {
+      console.error('[运行时初始化] Shell 环境加载失败:', error)
+    }
+  }
+
+  // 热启动：在完整环境中尝试从磁盘缓存恢复（含增量重检缺失工具）
+  if (!forceRefresh) {
+    const cached = await loadCachedRuntime()
+    if (cached) {
+      // 缓存中的值来自旧会话，不能覆盖本次实际加载 shell 环境的结果。
+      cached.envLoaded = envLoaded
+      runtimeStatusCache = cached
+      isInitialized = true
+      console.log(`[运行时初始化] 从缓存恢复完成 (耗时 ${Date.now() - startTime}ms)`)
+      return cached
+    }
+  }
+
+  console.log('[运行时初始化] 开始初始化运行时环境...')
+
+  // 2. 检测 Node.js 运行时
+  const nodeStatus = options.skipNodeDetection
+    ? {
+        available: false,
+        path: null,
+        version: null,
+        error: '已跳过 Node.js 检测',
+      }
+    : await detectNodeRuntime()
+
+  // 3. 检测 Bun 运行时
+  const bunStatus = options.skipBunDetection
+    ? {
+        available: false,
+        path: null,
+        version: null,
+        source: null,
+        error: '已跳过 Bun 检测',
+      }
+    : await detectBunRuntime()
+
+  // 4. 检测 Git 运行时
+  const gitStatus = options.skipGitDetection
+    ? {
+        available: false,
+        version: null,
+        path: null,
+        error: '已跳过 Git 检测',
+      }
+    : await detectGitRuntime()
+
+  // 5. 检测 Shell 环境（仅 Windows 平台）
+  let shellEnvironmentStatus: ShellEnvironmentStatus | undefined
+
+  if (process.platform === 'win32' && !options.skipShellDetection) {
+    try {
+      const gitBashStatus = await detectGitBash()
+      const wslStatus = await detectWsl()
+
+      // 推荐策略：优先 Git Bash > WSL 2 > WSL 1
+      let recommended: 'git-bash' | 'wsl' | null = null
+      if (gitBashStatus.available) {
+        recommended = 'git-bash'
+      } else if (wslStatus.available) {
+        recommended = 'wsl'
+      }
+
+      shellEnvironmentStatus = {
+        gitBash: gitBashStatus,
+        wsl: wslStatus,
+        recommended,
+      }
+
+      console.log('[运行时初始化] Shell 环境检测完成:', {
+        gitBash: gitBashStatus.available ? `✅ ${gitBashStatus.version}` : `❌ ${gitBashStatus.error}`,
+        wsl: wslStatus.available
+          ? `✅ WSL ${wslStatus.version} (${wslStatus.defaultDistro})`
+          : `❌ ${wslStatus.error}`,
+        recommended: recommended || '⚠️ 无可用环境',
+      })
+    } catch (error) {
+      console.error('[运行时初始化] Shell 环境检测失败:', error)
+    }
+  }
+
+  // 构建运行时状态
+  const runtimeStatus: RuntimeStatus = {
+    node: nodeStatus,
+    bun: bunStatus,
+    git: gitStatus,
+    shell: shellEnvironmentStatus,
+    envLoaded,
+    initializedAt: Date.now(),
+  }
+
+  // 缓存状态（内存 + 磁盘）
+  runtimeStatusCache = runtimeStatus
+  isInitialized = true
+
+  // 写入磁盘缓存供下次热启动使用
+  if (!forceRefresh) {
+    saveCachedRuntime(runtimeStatus)
+  }
+
+  const duration = Date.now() - startTime
+  console.log(`[运行时初始化] 初始化完成 (耗时 ${duration}ms)`)
+  console.log('[运行时初始化] 状态:', {
+    node: nodeStatus.available ? `✅ ${nodeStatus.version}` : `❌ ${nodeStatus.error}`,
+    bun: bunStatus.available ? `✅ ${bunStatus.version} (${bunStatus.source})` : `❌ ${bunStatus.error}`,
+    git: gitStatus.available ? `✅ ${gitStatus.version}` : `❌ ${gitStatus.error}`,
+    shell: shellEnvironmentStatus
+      ? `${shellEnvironmentStatus.recommended ? '✅' : '⚠️'} ${shellEnvironmentStatus.recommended || '无可用环境'}`
+      : '⏭️ 跳过（非 Windows）',
+    envLoaded: envLoaded ? '✅' : '⚠️ 未加载或不需要',
+  })
+
+  return runtimeStatus
+}
+
+/**
+ * 获取当前运行时状态
+ *
+ * @returns 运行时状态，如果未初始化返回 null
+ */
+export function getRuntimeStatus(): RuntimeStatus | null {
+  return runtimeStatusCache
+}
+
+/**
+ * 检查运行时是否已初始化
+ *
+ * @returns 是否已初始化
+ */
+export function isRuntimeInitialized(): boolean {
+  return isInitialized
+}
+
+/**
+ * 重新初始化运行时
+ *
+ * @param options - 初始化选项
+ * @returns 新的运行时状态
+ */
+export async function reinitializeRuntime(options: RuntimeInitOptions = {}): Promise<RuntimeStatus> {
+  isInitialized = false
+  runtimeStatusCache = null
+  // 删除磁盘缓存后强制重新检测，确保「刷新」按钮真正生效
+  // 避免旧缓存中的 shell 信息（如只有 Git Bash 没有 WSL）被复用
+  try {
+    const cachePath = getRuntimeCachePath()
+    if (existsSync(cachePath)) {
+      unlinkSync(cachePath)
+      console.log('[运行时初始化] 已删除磁盘缓存，将强制重新检测')
+    }
+  } catch { /* 缓存删除失败不影响功能 */ }
+  return initializeRuntime(options)
+}
+
+// 重新导出子模块的函数，方便外部使用
+export { getGitRepoStatus } from './git-detector'
+export { detectNodeRuntime } from './node-detector'
+export { detectBunRuntime } from './bun-finder'
+export { loadShellEnv } from './shell-env'

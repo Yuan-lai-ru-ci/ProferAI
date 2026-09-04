@@ -1,0 +1,1817 @@
+/**
+ * 渠道管理器
+ *
+ * 负责渠道的 CRUD 操作、API Key 加密/解密、连接测试。
+ * 使用 Electron safeStorage 进行 API Key 加密（底层使用 OS 级加密）。
+ * 数据持久化到 ~/.proma/channels.json。
+ */
+
+import { readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { getChannelsPath } from './config-paths'
+import { encryptToken, decryptToken } from './token-crypto'
+import type {
+  Channel,
+  ChannelCreateInput,
+  ChannelUpdateInput,
+  ChannelsConfig,
+  ChannelTestResult,
+  ChannelModel,
+  CodexOAuthCredentials,
+  FetchModelsInput,
+  FetchModelsResult,
+  ProviderType,
+  XaiOAuthCredentials,
+} from '@profer/shared'
+import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, isCodexCredentialExpired, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
+import { getFetchFn } from './proxy-fetch'
+import { getEffectiveProxyUrl } from './proxy-settings-service'
+import { normalizeBaseUrl, normalizeAnthropicProviderUrl, normalizeOpenAIBaseUrlForSdk, resolveOpenAIModelsUrl, getProferUserAgent } from '@profer/core'
+import { parseMiniMaxGeneralQuotaWindows } from './channel-plan-quota-parsers'
+import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
+import { refreshCodexOAuth } from './codex-oauth-service'
+import { refreshXaiOAuth } from './xai-oauth-service'
+import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from './xai-oauth-credentials'
+import { isCommercialBuild } from './build-target'
+import { isOfficialManagedChannel } from './official-channel'
+import {
+  inferAgentBaseUrl,
+  normalizeChannelForCurrentSchema,
+  normalizeConfigForCurrentSchema,
+} from './channel-url-routing'
+import pkg from '../../../package.json' with { type: 'json' }
+
+/** 当前配置版本 */
+const CONFIG_VERSION = 1
+
+/** 渠道测试请求超时（毫秒） */
+const CHANNEL_TEST_TIMEOUT_MS = 15_000
+
+/** 订阅 Plan / 余额查询超时（毫秒）。余额是 hover 触发的轻量查询，
+ * 不应复用连通性测试的 15s 超时，否则网络抖动时用户会卡很久转圈 */
+const PLAN_QUOTA_TIMEOUT_MS = 5_000
+
+const GLM_53_PRESET_MODEL_UPDATE_ID = 'glm-5.3-candidates-v1'
+const GLM_53_PRESET_MODEL_CANDIDATES: Partial<Record<ProviderType, readonly ChannelModel[]>> = {
+  zhipu: [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  'zhipu-coding': [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  'zhipu-coding-team': [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  doubao: [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  'opencode-go-openai': [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+  'ark-coding-plan': [{ id: 'glm-5.3', name: 'GLM-5.3', enabled: false }],
+}
+
+function cloneModels(models: readonly ChannelModel[]): ChannelModel[] {
+  return models.map((model) => ({ ...model }))
+}
+
+/** Adds a new preset candidate only once, preserving existing channel/model enablement. */
+export function applyPresetModelCandidateUpdates(config: ChannelsConfig): { config: ChannelsConfig; changed: boolean } {
+  const appliedUpdates = new Set(config.appliedPresetModelUpdates ?? [])
+  if (appliedUpdates.has(GLM_53_PRESET_MODEL_UPDATE_ID)) return { config, changed: false }
+
+  let changed = false
+  const channels = config.channels.map((channel) => {
+    const candidates = GLM_53_PRESET_MODEL_CANDIDATES[channel.provider]
+    if (!candidates) return channel
+
+    const existingModelIds = new Set(channel.models.map((model) => model.id))
+    const missingCandidates = candidates.filter((model) => !existingModelIds.has(model.id))
+    if (missingCandidates.length === 0) return channel
+
+    changed = true
+    return { ...channel, models: [...channel.models, ...cloneModels(missingCandidates)] }
+  })
+
+  appliedUpdates.add(GLM_53_PRESET_MODEL_UPDATE_ID)
+  return {
+    config: { ...config, channels, appliedPresetModelUpdates: [...appliedUpdates] },
+    changed: changed || !config.appliedPresetModelUpdates?.includes(GLM_53_PRESET_MODEL_UPDATE_ID),
+  }
+}
+
+function withTimeout(init: RequestInit, timeoutMs: number = CHANNEL_TEST_TIMEOUT_MS): RequestInit {
+  return { ...init, signal: AbortSignal.timeout(timeoutMs) }
+}
+
+/** 余额/额度查询专用：短超时，快速失败 */
+function withPlanQuotaTimeout(init: RequestInit): RequestInit {
+  return withTimeout(init, PLAN_QUOTA_TIMEOUT_MS)
+}
+
+export function resolveChannelAgentBaseUrl(channel: Pick<Channel, 'provider' | 'baseUrl' | 'agentBaseUrl'>): string | undefined {
+  return inferAgentBaseUrl(channel.provider, channel.baseUrl, channel.agentBaseUrl)
+}
+
+/**
+ * 读取渠道配置文件
+ */
+function readConfig(): ChannelsConfig {
+  const configPath = getChannelsPath()
+
+  if (!existsSync(configPath)) {
+    return { version: CONFIG_VERSION, channels: [] }
+  }
+
+  try {
+    const raw = readFileSync(configPath, 'utf-8')
+    const parsed = JSON.parse(raw) as ChannelsConfig
+    const normalized = normalizeConfigForCurrentSchema(parsed)
+    const presetUpdated = applyPresetModelCandidateUpdates(normalized.config)
+    if (normalized.changed || presetUpdated.changed) {
+      try {
+        writeFileSync(configPath, JSON.stringify(presetUpdated.config, null, 2), 'utf-8')
+        console.log('[渠道管理] 已应用渠道配置迁移或预设模型更新')
+      } catch (error) {
+        console.warn('[渠道管理] 写入迁移后的渠道配置失败，将继续使用内存中的迁移结果:', error)
+      }
+    }
+    return presetUpdated.config
+  } catch (error) {
+    console.error('[渠道管理] 读取配置文件失败:', error)
+    return { version: CONFIG_VERSION, channels: [] }
+  }
+}
+
+/**
+ * 写入渠道配置文件
+ */
+function writeConfig(config: ChannelsConfig): void {
+  const configPath = getChannelsPath()
+
+  try {
+    writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+  } catch (error) {
+    console.error('[渠道管理] 写入配置文件失败:', error)
+    throw new Error('写入渠道配置失败')
+  }
+}
+
+/**
+ * 加密 API Key
+ *
+ * 使用 Electron safeStorage 加密（底层使用 OS 级加密）。
+ * safeStorage 不可用时自动降级到 AES-256-GCM（deviceId 派生密钥）。
+ *
+ * @returns base64 编码的加密字符串
+ */
+function encryptApiKey(plainKey: string): string {
+  return encryptToken(plainKey)
+}
+
+/**
+ * 解密 API Key
+ *
+ * @param encryptedKey base64 编码的加密字符串
+ * @returns 明文 API Key
+ */
+function decryptKey(encryptedKey: string): string {
+  return decryptToken(encryptedKey)
+}
+
+/**
+ * 登出渠道备份文件的路径（按账号隔离）。
+ * 备份/恢复/校验共用此函数，避免文件名拼写漂移。
+ */
+export function getChannelsLogoutBackupPath(accountId: string): string {
+  const safeId = accountId.replace(/[^A-Za-z0-9._-]/g, '_')
+  return `${getChannelsPath()}.logout-backup-${safeId}`
+}
+
+/**
+ * 判断是否存在待恢复的登出备份。
+ *
+ * 登出后渲染进程仍会刷新一次渠道列表；如果此时自动创建 DeepSeek
+ * 占位渠道，登录恢复会误判“当前已有渠道”而跳过真正的备份。
+ */
+export function hasPendingLogoutChannelBackup(): boolean {
+  const channelsPath = getChannelsPath()
+  const path = require('node:path') as typeof import('node:path')
+  const prefix = `${path.basename(channelsPath)}.logout-backup-`
+  try {
+    return readdirSync(path.dirname(channelsPath)).some((name) => name.startsWith(prefix))
+  } catch {
+    return false
+  }
+}
+
+/** 登出备份只保存用户自配渠道，官方渠道由登录后的服务端同步重新生成。 */
+export function getUserManagedChannelsForLogout(channels: Channel[]): Channel[] {
+  return channels.filter((channel) => !isOfficialManagedChannel(channel))
+}
+
+/**
+ * 将当前渠道配置加密备份到磁盘（按账号隔离）
+ *
+ * logout 时调用：把整个 channels.json（含渠道元数据）用 token-crypto 整体加密后
+ * 写入 channels.json.logout-backup-{accountId}。加密密钥由 deviceId 派生
+ * （注册表/Keychain，仅当前用户可读），其他用户/进程拿到备份文件也无法解密。
+ *
+ * 安全语义：**备份必须成功，失败一律抛错**，由调用方决定是否继续清空活跃文件。
+ * 绝不静默吞掉失败——否则「重登恢复」会因无备份而丢渠道。
+ *
+ * @returns 写出的备份文件绝对路径；无渠道/无文件时返回 null
+ * @throws 加密失败/写盘失败/写回校验失败时抛错，调用方应据此中止清空活跃渠道
+ */
+export function backupChannelsForAccount(accountId: string | undefined | null): string | null {
+  const configPath = getChannelsPath()
+  if (!existsSync(configPath)) return null
+
+  const raw = readFileSync(configPath, 'utf-8')
+  const parsed = JSON.parse(raw) as ChannelsConfig
+  const userManagedChannels = getUserManagedChannelsForLogout(parsed.channels || [])
+  if (userManagedChannels.length === 0) {
+    // 无自配渠道时无需备份，也不应视为失败（清空官方渠道无损失）
+    return null
+  }
+  if (!accountId) {
+    throw new Error('无法获取账号标识，无法为渠道创建隔离备份')
+  }
+
+  const backupPath = getChannelsLogoutBackupPath(accountId)
+  const backupConfig: ChannelsConfig = {
+    ...parsed,
+    channels: userManagedChannels,
+  }
+  const encrypted = encryptToken(JSON.stringify(backupConfig))
+  if (!encrypted || encrypted.length === 0) {
+    throw new Error('渠道加密备份生成为空，已中止（避免覆盖丢失）')
+  }
+
+  writeFileSync(backupPath, encrypted, 'utf-8')
+
+  // 写回校验：确认备份确实落盘且非空，杜绝「以为备份了其实没写进去」
+  const verified = readFileSync(backupPath, 'utf-8')
+  if (!verified || verified.length === 0) {
+    throw new Error('渠道备份写回校验失败（文件为空），已中止清空')
+  }
+
+  console.log(`[渠道管理] 已为账号 ${accountId.replace(/[^A-Za-z0-9._-]/g, '_')} 加密备份 ${userManagedChannels.length} 个自配渠道 → ${backupPath}`)
+  return backupPath
+}
+
+/**
+ * 渠道恢复结果
+ */
+export interface RestoreChannelsResult {
+  /** 恢复的渠道数量（0 = 无备份、已跳过或恢复失败） */
+  restored: number
+  /** 非 0 时表示发生了需要用户知晓的问题 */
+  error?: string
+  /** 备份文件是否保留在磁盘（失败时为 true，便于二次抢救） */
+  backupRetained: boolean
+}
+
+/**
+ * 从加密备份恢复渠道配置（按账号隔离）
+ *
+ * login 成功后调用：仅当 channels.json 为空时才恢复对应账号的备份，
+ * 避免覆盖用户已有配置；恢复成功且落盘后才删除备份文件。
+ * 任何失败（解密/解析/落盘）都**保留备份文件**，不静默丢弃，便于用户二次抢救。
+ */
+export function restoreChannelsForAccount(accountId: string): RestoreChannelsResult {
+  const backupPath = getChannelsLogoutBackupPath(accountId)
+  if (!existsSync(backupPath)) {
+    return { restored: 0, backupRetained: false }
+  }
+
+  let encrypted: string
+  try {
+    encrypted = readFileSync(backupPath, 'utf-8')
+  } catch (err) {
+    return { restored: 0, error: `读取渠道备份失败: ${(err as Error).message}`, backupRetained: true }
+  }
+
+  let raw: string
+  try {
+    raw = decryptToken(encrypted)
+  } catch (err) {
+    return { restored: 0, error: `渠道备份解密失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
+  }
+
+  let parsed: ChannelsConfig
+  try {
+    parsed = JSON.parse(raw) as ChannelsConfig
+  } catch (err) {
+    return { restored: 0, error: `渠道备份解析失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
+  }
+
+  const backedUpChannels = getUserManagedChannelsForLogout(parsed.channels || [])
+  if (backedUpChannels.length === 0) {
+    // 兼容旧版“整份配置备份”：解密确认有效后清理仅含官方渠道的旧备份。
+    rmSync(backupPath, { force: true })
+    return { restored: 0, backupRetained: false }
+  }
+
+  // 合并而不是要求当前配置完全为空：登录其他账号后，官方渠道可能已先同步到本地，
+  // 不能因此阻断原账号自配渠道的恢复。已有同 ID 渠道不覆盖。
+  const current = readConfig()
+  const existingIds = new Set(current.channels.map((channel) => channel.id))
+  const channelsToRestore = backedUpChannels.filter((channel) => !existingIds.has(channel.id))
+  if (channelsToRestore.length === 0) {
+    // 备份中的渠道已经存在，删除重复备份，避免每次登录都重复提示/扫描。
+    rmSync(backupPath, { force: true })
+    return { restored: 0, backupRetained: false }
+  }
+
+  // 落盘成功后才删备份：写入失败时备份仍留在磁盘
+  try {
+    writeConfig({ ...current, channels: [...current.channels, ...channelsToRestore] })
+  } catch (err) {
+    return { restored: 0, error: `渠道备份写入本地失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
+  }
+  rmSync(backupPath, { force: true })
+  console.log(`[渠道管理] 已从加密备份恢复 ${channelsToRestore.length} 个自配渠道 → ${backupPath}`)
+  return { restored: channelsToRestore.length, backupRetained: false }
+}
+
+/**
+ * 从服务端同步渠道到本地
+ *
+ * 仅商业模式下调用。拉取服务端渠道 → 加密 API Key → 覆盖本地 channels.json。
+ * 同时备份旧配置到 channels.json.server-backup。
+ */
+export async function syncChannelsFromServer(serverBaseUrl: string, accessToken: string): Promise<void> {
+  // 记录请求发起时的账号身份。登出后旧请求即使返回成功，也不得把官方渠道写回本地。
+  const { getTeamAuth } = require('./auth-service') as typeof import('./auth-service')
+  const authAtStart = getTeamAuth()
+  if (!authAtStart || authAtStart.baseUrl !== serverBaseUrl || authAtStart.teamAccountId === undefined) {
+    throw new Error('渠道同步已跳过：当前团队会话已失效')
+  }
+  const accountIdAtStart = authAtStart.teamAccountId
+
+  const fetchFn = await getFetchFn()
+  const url = `${serverBaseUrl}/v1/account/channels`
+
+  const resp = await fetchFn(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+
+  if (!resp.ok) {
+    throw new Error(`渠道同步失败: HTTP ${resp.status}`)
+  }
+
+  const data = await resp.json() as {
+    commercialMode: boolean
+    channels: Array<{
+      id: string
+      name: string
+      provider: string
+      apiKey: string
+      baseUrl: string
+      agentBaseUrl?: string
+      managedType?: 'model-family' | 'legacy'
+      familyId?: string
+      models: ChannelModel[]
+    }>
+  }
+
+  if (!data.commercialMode || !data.channels) return
+
+  // 请求期间可能发生登出或切换账号；再次校验账号后再落盘，避免旧响应污染新会话。
+  const authBeforeWrite = getTeamAuth()
+  if (!authBeforeWrite || authBeforeWrite.baseUrl !== serverBaseUrl || authBeforeWrite.teamAccountId !== accountIdAtStart) {
+    throw new Error('渠道同步已跳过：请求完成时团队会话已变化')
+  }
+
+  // 防止空列表雪崩：服务端返回 0 条渠道时跳过同步，保留现有本地缓存。
+  // 空结果通常是服务端异常导致，不应将客户端全部渠道清空。
+  if (data.channels.length === 0) {
+    console.warn('[渠道管理] 服务端返回空渠道列表，跳过同步以保留现有渠道')
+    return
+  }
+
+  // 备份旧配置
+  const configPath = getChannelsPath()
+  if (existsSync(configPath)) {
+    try {
+      const backupPath = configPath + '.server-backup'
+      writeFileSync(backupPath, readFileSync(configPath))
+    } catch { /* 备份失败不致命 */ }
+  }
+
+  // 将服务端渠道写入本地，保留用户自建的本地渠道
+  const existingConfig = readConfig()
+  const serverIds = new Set(data.channels.map((ch) => ch.id))
+
+  // 清理已不在服务端列表中的 serverManaged 渠道（服务端已删除的渠道）
+  const preCleanupCount = existingConfig.channels.length
+  const localChannels = existingConfig.channels.filter((c) => {
+    if (serverIds.has(c.id)) return false // 服务端仍在管理，后面会用最新数据覆盖
+    if (isOfficialManagedChannel(c)) return false // 之前由服务端管理但现在不在列表中了 → 已删除，清理
+    return true // 用户自建本地渠道，保留
+  })
+  const cleanedCount = preCleanupCount - localChannels.length - serverIds.size
+  if (cleanedCount > 0) {
+    console.log(`[渠道管理] 清理了 ${cleanedCount} 个服务端已删除的渠道`)
+  }
+
+  const now = Date.now()
+  const config: ChannelsConfig = { version: 1, channels: [...localChannels] }
+
+  for (const ch of data.channels) {
+    // 本地已有同 ID 渠道时：保留用户启停状态（enabled + 模型级 enabled）
+    const localExisting = existingConfig.channels.find((c) => c.id === ch.id)
+    const mergedModels = ch.models.map((m: any) => {
+      const localModel = localExisting?.models?.find((lm: any) => lm.id === (m.id || m.name))
+      return { ...m, enabled: localModel ? localModel.enabled : (m.enabled !== false) }
+    })
+    const result = normalizeChannelForCurrentSchema({
+      id: ch.id,
+      name: ch.name,
+      provider: ch.provider as ProviderType,
+      baseUrl: ch.baseUrl,
+      agentBaseUrl: ch.agentBaseUrl || '',
+      apiKey: encryptApiKey(ch.apiKey),
+      models: mergedModels,
+      enabled: localExisting?.enabled ?? true,
+      serverManaged: true,
+      managedType: ch.managedType ?? 'legacy',
+      familyId: ch.familyId,
+      createdAt: localExisting?.createdAt ?? now,
+      updatedAt: now,
+    })
+    config.channels.push(result.channel)
+  }
+
+  writeConfig(config)
+  console.log(`[渠道管理] 已从服务端同步 ${config.channels.length} 个渠道`)
+
+  // 首次同步时自动配置 Agent 供应商（用户手动配过后不再覆盖）
+  if (config.channels.length > 0) {
+    try {
+      const { updateSettings, getSettings } = require('./settings-service')
+      const settings = getSettings()
+      // 已配置过 → 不覆盖用户选择
+      if (settings.agentChannelIds && settings.agentChannelIds.length > 0) {
+        // 静默跳过
+      } else {
+        const agentCapableChannels = config.channels.filter((c) => {
+          const { isAgentCompatibleProvider } = require('@profer/shared')
+          return isAgentCompatibleProvider(c.provider)
+        })
+        const agentIds = agentCapableChannels.map((c) => c.id)
+        const firstAgent = agentCapableChannels[0]
+        const firstModel = firstAgent?.models?.find((m) => m.enabled)
+
+        updateSettings({
+          agentChannelIds: agentIds,
+          agentChannelId: settings.agentChannelId || firstAgent?.id,
+          agentModelId: settings.agentModelId || firstModel?.id,
+        })
+        console.log(`[渠道管理] 首次自动配置 ${agentIds.length} 个 Agent 供应商`)
+      }
+    } catch (err) {
+      console.warn('[渠道管理] 自动配置 Agent 供应商失败:', err)
+    }
+  }
+}
+
+/** 当前是否处于商业模式（渠道由服务端统一管理） */
+export function isCommercialMode(): boolean {
+  try {
+    const { getCommercialMode } = require('./auth-service')
+    return getCommercialMode()
+  } catch {
+    return false
+  }
+}
+
+/** 当前用户是否可以自配渠道（代管模式 + 自配开关 = 可自配） */
+export function canSelfConfig(): boolean {
+  try {
+    const { isSelfConfigAllowed } = require('./auth-service')
+    return isSelfConfigAllowed()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 获取所有渠道
+ *
+ * 返回的渠道中 apiKey 保持加密状态。
+ * 首次调用时，如果没有任何 DeepSeek 渠道，自动创建预设渠道。
+ */
+export function listChannels(): Channel[] {
+  const config = readConfig()
+
+  // 登出后如果存在待恢复备份，不能创建占位渠道，否则会让登录恢复误判为“已有渠道”。
+  const hasPendingLogoutBackup = hasPendingLogoutChannelBackup()
+
+  // 首次使用：如果没有 DeepSeek 渠道，自动创建预设
+  const hasDeepSeek = config.channels.some(
+    (c) => c.provider === 'deepseek' || c.baseUrl.includes('api.deepseek.com'),
+  )
+  if (!hasDeepSeek && !hasPendingLogoutBackup) {
+    const now = Date.now()
+    const presetChannel: Channel = {
+      id: randomUUID(),
+      name: 'DeepSeek',
+      provider: 'deepseek',
+      baseUrl: PROVIDER_DEFAULT_URLS.deepseek,
+      agentBaseUrl: PROVIDER_DEFAULT_AGENT_URLS.deepseek,
+      apiKey: encryptApiKey(''),
+      models: [
+        { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', enabled: true },
+        { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', enabled: true },
+      ],
+      enabled: false,
+      createdAt: now,
+      updatedAt: now,
+    }
+    config.channels.push(presetChannel)
+    writeConfig(config)
+    console.log('[渠道管理] 已自动创建 DeepSeek 预设渠道')
+    return config.channels
+  }
+
+  return config.channels
+}
+
+/**
+ * 按 ID 获取渠道
+ *
+ * 返回的渠道中 apiKey 保持加密状态。
+ */
+export function getChannelById(id: string): Channel | undefined {
+  const config = readConfig()
+  return config.channels.find((c) => c.id === id)
+}
+
+/**
+ * 创建新渠道
+ *
+ * @param input 渠道创建数据（apiKey 为明文，会自动加密）
+ * @returns 创建后的渠道（apiKey 为加密态）
+ */
+export function createChannel(input: ChannelCreateInput): Channel {
+  if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许手动创建渠道，渠道由服务端统一管理')
+  const config = readConfig()
+  const now = Date.now()
+
+  const rawChannel: Channel = {
+    id: randomUUID(),
+    name: input.name,
+    provider: input.provider,
+    baseUrl: input.baseUrl,
+    agentBaseUrl: input.agentBaseUrl,
+    apiKey: encryptApiKey(input.apiKey),
+    models: input.models,
+    enabled: input.enabled,
+    createdAt: now,
+    updatedAt: now,
+  }
+  const { channel } = normalizeChannelForCurrentSchema(rawChannel)
+
+  config.channels.push(channel)
+  writeConfig(config)
+
+  console.log(`[渠道管理] 已创建渠道: ${channel.name} (${channel.id})`)
+  return channel
+}
+
+/**
+ * 更新渠道
+ *
+ * @param id 渠道 ID
+ * @param input 更新数据（apiKey 为明文，空字符串表示不更新）
+ * @returns 更新后的渠道
+ */
+export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
+  // 官方同步渠道（newapi-*）：允许切换 channel enabled + 模型 enabled，不允许改名称/供应商/API Key/增删模型
+  if (isOfficialManagedChannel({ id })) {
+    if (input.name !== undefined || input.provider !== undefined ||
+        input.baseUrl !== undefined || input.agentBaseUrl !== undefined ||
+        input.apiKey !== undefined) {
+      throw new Error('官方渠道由平台统一管理，不可修改')
+    }
+    if (input.models !== undefined) {
+      const config = readConfig()
+      const existing = config.channels.find((c) => c.id === id)
+      if (existing) {
+        const oldIds = new Set(existing.models.map(m => m.id))
+        const newIds = new Set(input.models.map(m => m.id))
+        if (oldIds.size !== newIds.size || ![...oldIds].every(oid => newIds.has(oid))) {
+          throw new Error('官方渠道不可增删模型，仅可控制启用/停用')
+        }
+      }
+    }
+  }
+  // 商业模式下无自配权限时只允许切换 enabled，有自配权限则全部放开
+  if (isCommercialMode() && !canSelfConfig()) {
+    const hasStructuralChange =
+      input.name !== undefined ||
+      input.provider !== undefined ||
+      input.baseUrl !== undefined ||
+      input.agentBaseUrl !== undefined ||
+      input.apiKey !== undefined ||
+      input.models !== undefined
+    if (hasStructuralChange) {
+      throw new Error('商业模式下不允许修改渠道，渠道由服务端统一管理')
+    }
+  }
+  const config = readConfig()
+  const index = config.channels.findIndex((c) => c.id === id)
+
+  if (index === -1) {
+    throw new Error(`渠道不存在: ${id}`)
+  }
+
+  const existing = config.channels[index]!
+
+  const rawUpdated: Channel = {
+    ...existing,
+    name: input.name ?? existing.name,
+    provider: input.provider ?? existing.provider,
+    baseUrl: input.baseUrl ?? existing.baseUrl,
+    agentBaseUrl: input.agentBaseUrl !== undefined ? input.agentBaseUrl : existing.agentBaseUrl,
+    apiKey: input.apiKey ? encryptApiKey(input.apiKey) : existing.apiKey,
+    models: input.models ?? existing.models,
+    enabled: input.enabled ?? existing.enabled,
+    updatedAt: Date.now(),
+  }
+  const { channel: updated } = normalizeChannelForCurrentSchema(rawUpdated)
+
+  config.channels[index] = updated
+  writeConfig(config)
+
+  console.log(`[渠道管理] 已更新渠道: ${updated.name} (${updated.id})`)
+  return updated
+}
+
+/**
+ * 删除渠道
+ */
+export function deleteChannel(id: string): void {
+  if (isOfficialManagedChannel({ id })) throw new Error('官方同步渠道不可删除，请在 New API 后台管理')
+  if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许删除渠道，渠道由服务端统一管理')
+  const config = readConfig()
+  const index = config.channels.findIndex((c) => c.id === id)
+
+  if (index === -1) {
+    throw new Error(`渠道不存在: ${id}`)
+  }
+
+  const removed = config.channels.splice(index, 1)[0]!
+  writeConfig(config)
+
+  console.log(`[渠道管理] 已删除渠道: ${removed.name} (${removed.id})`)
+}
+
+/**
+ * 解密渠道的 API Key
+ *
+ * 仅在用户需要查看时调用。
+ */
+export function decryptApiKey(channelId: string): string {
+  const config = readConfig()
+  const channel = config.channels.find((c) => c.id === channelId)
+
+  if (!channel) {
+    throw new Error(`渠道不存在: ${channelId}`)
+  }
+
+  return decryptKey(channel.apiKey)
+}
+
+/**
+ * 进行中的 codex token 刷新（按 channelId 去重）。
+ *
+ * 多个 Agent 会话可能并发触发同一渠道的 token 刷新；若不去重会造成对
+ * OpenAI token 端点的重复请求，且后写覆盖先写。此 Map 保证同一渠道同一时刻
+ * 只有一次刷新在飞行，其余调用复用同一 Promise。
+ */
+const inflightCodexRefresh = new Map<string, Promise<CodexOAuthCredentials>>()
+
+/** 保存 Pi 或 Profer 刷新后的完整 Codex OAuth 凭据。 */
+export function persistCodexOAuthCredentials(channelId: string, credentials: CodexOAuthCredentials): void {
+  const channel = getChannelById(channelId)
+  if (!channel || channel.provider !== 'openai-codex') {
+    throw new Error(`Codex 渠道不存在或类型不匹配: ${channelId}`)
+  }
+
+  const existing = parseCodexCredentials(decryptKey(channel.apiKey))
+  const merged = {
+    ...credentials,
+    accountId: credentials.accountId ?? existing?.accountId,
+  }
+  updateChannel(channelId, { apiKey: serializeCodexCredentials(merged) })
+}
+
+/**
+ * 解析渠道存储的 ChatGPT (Codex) OAuth 凭据，按需刷新并回写。
+ * Pi runtime 必须接收完整 credential，才能在长时间运行时按真实 expires 刷新 token。
+ */
+export async function resolveCodexOAuthCredentials(channelId: string): Promise<CodexOAuthCredentials> {
+  const config = readConfig()
+  const channel = config.channels.find((c) => c.id === channelId)
+  if (!channel) {
+    throw new Error(`渠道不存在: ${channelId}`)
+  }
+
+  const credentials = parseCodexCredentials(decryptKey(channel.apiKey))
+  if (!credentials) {
+    throw new Error('ChatGPT 登录凭据无效或缺失，请重新登录')
+  }
+
+  if (!isCodexCredentialExpired(credentials)) {
+    return credentials
+  }
+
+  const existing = inflightCodexRefresh.get(channelId)
+  if (existing) return existing
+
+  const refreshPromise = (async (): Promise<CodexOAuthCredentials> => {
+    try {
+      const refreshed = await refreshCodexOAuth(credentials.refresh)
+      const merged = {
+        ...refreshed,
+        accountId: refreshed.accountId ?? credentials.accountId,
+      }
+      persistCodexOAuthCredentials(channelId, merged)
+      return merged
+    } finally {
+      inflightCodexRefresh.delete(channelId)
+    }
+  })()
+
+  inflightCodexRefresh.set(channelId, refreshPromise)
+  return refreshPromise
+}
+
+/** 返回当前有效的 Codex access token，兼容只需要 bearer token 的调用方。 */
+export async function resolveCodexAccessToken(channelId: string): Promise<string> {
+  return (await resolveCodexOAuthCredentials(channelId)).access
+}
+
+/** 保存 Pi 或 Profer 刷新后的完整 xAI OAuth 凭据。 */
+export function persistXaiOAuthCredentials(channelId: string, credentials: XaiOAuthCredentials): void {
+  const channel = getChannelById(channelId)
+  if (!channel || channel.provider !== 'xai') {
+    throw new Error(`xAI 渠道不存在或类型不匹配: ${channelId}`)
+  }
+  updateChannel(channelId, { apiKey: serializeXaiCredentials(credentials) })
+  rememberXaiOAuthCredentials(channelId, credentials, true)
+}
+
+/** 解析 xAI（Grok/X 订阅）凭据，按 expiry 刷新并回写加密渠道存储。 */
+export async function resolveXaiOAuthCredentials(channelId: string): Promise<XaiOAuthCredentials> {
+  const config = readConfig()
+  const channel = config.channels.find((c) => c.id === channelId)
+  if (!channel || channel.provider !== 'xai') {
+    throw new Error('xAI 订阅渠道不存在或类型不匹配')
+  }
+  const credentials = parseXaiCredentials(decryptKey(channel.apiKey))
+  if (!credentials) throw new Error('xAI 登录凭据无效或缺失，请重新登录')
+  if (!isXaiCredentialExpired(credentials)) {
+    return rememberXaiOAuthCredentials(channelId, credentials)
+  }
+
+  const refreshed = await refreshXaiOAuthCredentialsSerial(
+    channelId,
+    credentials,
+    (current) => refreshXaiOAuth(current.refresh),
+  )
+  persistXaiOAuthCredentials(channelId, refreshed)
+  return refreshed
+}
+
+export async function resolveXaiAccessToken(channelId: string): Promise<string> {
+  return (await resolveXaiOAuthCredentials(channelId)).access
+}
+
+/**
+ * 解析渠道运行时实际使用的认证 token。
+ *
+ * 普通渠道直接解密 API Key；ChatGPT (Codex) OAuth 渠道的 apiKey 字段存储的是
+ * OAuth 凭据 JSON，运行时必须取出 access token 并按需刷新。
+ */
+export async function resolveChannelRuntimeApiKey(channelId: string): Promise<string> {
+  const channel = getChannelById(channelId)
+  if (!channel) {
+    throw new Error(`渠道不存在: ${channelId}`)
+  }
+
+  if (channel.provider === 'openai-codex') return resolveCodexAccessToken(channelId)
+  if (channel.provider === 'xai') return resolveXaiAccessToken(channelId)
+  return decryptApiKey(channelId)
+}
+
+/**
+ * 测试渠道连接
+ *
+ * 向供应商的 API 发送简单请求，验证 API Key 和连接是否有效。
+ */
+export async function testChannel(channelId: string): Promise<ChannelTestResult> {
+  const config = readConfig()
+  const channel = config.channels.find((c) => c.id === channelId)
+
+  if (!channel) {
+    return { success: false, message: '渠道不存在' }
+  }
+
+  const apiKey = decryptKey(channel.apiKey)
+  const proxyUrl = await getEffectiveProxyUrl()
+
+  try {
+    switch (channel.provider) {
+      case 'anthropic':
+      case 'anthropic-compatible':
+      case 'kimi-api':
+      case 'kimi-coding':
+      case 'zhipu-coding':
+      case 'minimax':
+      case 'xiaomi':
+      case 'xiaomi-token-plan':
+      case 'ollama':
+        return await testAnthropicCompatible(channel.baseUrl, apiKey, proxyUrl, channel.provider)
+      case 'openai':
+      case 'openai-responses':
+      case 'opencode-go-openai':
+      case 'deepseek':
+      case 'zhipu':
+      case 'doubao':
+      case 'qwen':
+      case 'custom':
+        return await testOpenAICompatible(channel.baseUrl, apiKey, proxyUrl)
+      case 'google':
+        return await testGoogle(channel.baseUrl, apiKey, proxyUrl)
+      default:
+        return { success: false, message: `不支持的供应商: ${channel.provider}。你可能过去使用的是 Profer 商业版，请重新下载商业版覆盖安装，当前版本为开源版本。` }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    return { success: false, message: `连接测试失败: ${message}` }
+  }
+}
+
+/**
+ * 测试 Anthropic 兼容 API 连接（Anthropic / DeepSeek / Kimi API / Kimi Coding Plan / MiniMax）
+ *
+ * DeepSeek / Kimi 的 Anthropic API 端点无需 /v1 前缀。
+ * Kimi Coding Plan 必须发送 Profer User-Agent，否则返回 403。
+ */
+async function testAnthropicCompatible(
+  baseUrl: string,
+  apiKey: string,
+  proxyUrl?: string,
+  provider: ProviderType = 'anthropic',
+): Promise<ChannelTestResult> {
+  const url = normalizeAnthropicProviderUrl(baseUrl, provider)
+  const fetchFn = getFetchFn(proxyUrl)
+
+  let testModel: string
+  switch (provider) {
+    case 'deepseek':
+      testModel = 'deepseek-v4-pro'
+      break
+    case 'kimi-api':
+      testModel = 'k3'
+      break
+    case 'kimi-coding':
+      testModel = 'kimi-for-coding'
+      break
+    case 'zhipu-coding':
+      testModel = 'glm-5.2'
+      break
+    case 'minimax':
+      testModel = 'MiniMax-M3'
+      break
+    case 'xiaomi':
+    case 'xiaomi-token-plan':
+      testModel = 'mimo-v2.5-pro'
+      break
+    case 'ollama':
+      // testChannelDirect 没有选中模型参数，因此只验证服务和模型目录可达性。
+      // 实际模型存在性由 /api/tags 拉取结果与用户选择共同保证。
+      testModel = ''
+      break
+    default:
+      testModel = 'claude-sonnet-4-6'
+  }
+
+  const headers: Record<string, string> = {
+    'anthropic-version': '2023-06-01',
+    'content-type': 'application/json',
+  }
+  if (provider === 'ollama') {
+    headers.Authorization = `Bearer ${apiKey || 'ollama'}`
+  } else if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
+    headers.Authorization = `Bearer ${apiKey}`
+    headers['User-Agent'] = getProferUserAgent(pkg.version)
+  } else if (provider === 'xiaomi-token-plan') {
+    headers.Authorization = `Bearer ${apiKey}`
+    headers['User-Agent'] = getProferUserAgent(pkg.version)
+  } else if (provider === 'minimax') {
+    headers.Authorization = `Bearer ${apiKey}`
+  } else {
+    headers['x-api-key'] = apiKey
+    headers.Authorization = `Bearer ${apiKey}`
+  }
+
+  if (provider === 'ollama') {
+    const rootUrl = normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')
+    const tagsResponse = await fetchFn(`${rootUrl}/api/tags`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey || 'ollama'}` },
+    })
+    if (tagsResponse.ok) return { success: true, message: 'Ollama 服务连接成功，已可读取本机模型' }
+    const tagsText = await tagsResponse.text().catch(() => '')
+    return { success: false, message: `Ollama 服务不可用 (${tagsResponse.status})${tagsText ? `: ${tagsText.slice(0, 200)}` : ''}` }
+  }
+
+  const endpoint = `${url}/messages`
+  const response = await fetchFn(endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: testModel,
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'hi' }],
+    }),
+  })
+
+  if (response.ok) {
+    return { success: true, message: '连接成功' }
+  }
+
+  const text = await response.text().catch(() => '')
+
+  if (response.status === 401) {
+    return { success: false, message: `API Key 无效${text ? `: ${text.slice(0, 150)}` : ''}` }
+  }
+
+  const detail = text ? `: ${text.slice(0, 200)}` : ''
+  const endpointHint = provider === 'deepseek'
+    ? `；当前测试端点为 ${endpoint}。DeepSeek 内置渠道使用 Anthropic 协议，Base URL 应为 https://api.deepseek.com/anthropic，而不是 OpenAI 兼容的 /v1`
+    : `；当前测试端点为 ${endpoint}`
+
+  return { success: false, message: `请求失败 (${response.status})${detail}${endpointHint}` }
+}
+
+/**
+ * 测试 OpenAI 兼容 API 连接（OpenAI / Custom）
+ */
+async function testOpenAICompatible(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<ChannelTestResult> {
+  const url = normalizeOpenAIBaseUrlForSdk(baseUrl)
+  const fetchFn = getFetchFn(proxyUrl)
+
+  const response = await fetchFn(`${url}/models`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  })
+
+  if (response.ok) {
+    return { success: true, message: '连接成功' }
+  }
+
+  if (response.status === 401) {
+    return { success: false, message: 'API Key 无效' }
+  }
+
+  const text = await response.text().catch(() => '')
+  return { success: false, message: `请求失败 (${response.status}): ${text.slice(0, 200)}` }
+}
+
+/**
+ * 测试 Google Generative AI API 连接
+ */
+async function testGoogle(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<ChannelTestResult> {
+  const url = normalizeBaseUrl(baseUrl)
+  const fetchFn = getFetchFn(proxyUrl)
+
+  const response = await fetchFn(`${url}/v1beta/models?key=${apiKey}`, {
+    method: 'GET',
+  })
+
+  if (response.ok) {
+    return { success: true, message: '连接成功' }
+  }
+
+  if (response.status === 400 || response.status === 403) {
+    return { success: false, message: 'API Key 无效' }
+  }
+
+  const text = await response.text().catch(() => '')
+  return { success: false, message: `请求失败 (${response.status}): ${text.slice(0, 200)}` }
+}
+
+// ===== 订阅 Plan 额度查询 =====
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+function normalizePlanQuotaTimestamp(value?: number | string): number | undefined {
+  if (value == null || value === '') return undefined
+  const timestamp = typeof value === 'number' ? value : new Date(value).getTime()
+  if (!Number.isFinite(timestamp)) return undefined
+  return timestamp > 0 && timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp
+}
+
+function planQuotaResetAt(value?: number | string): Pick<import('@profer/shared').ChannelPlanQuotaWindow, 'resetAt'> {
+  const resetAt = normalizePlanQuotaTimestamp(value)
+  return resetAt ? { resetAt } : {}
+}
+
+function createUnsupportedPlanQuota(provider: ProviderType, message: string): import('@profer/shared').ChannelPlanQuotaResult {
+  return {
+    supported: false,
+    provider,
+    windows: [],
+    updatedAt: Date.now(),
+    message,
+  }
+}
+
+async function queryKimiPlanQuota(apiKey: string, proxyUrl?: string): Promise<import('@profer/shared').ChannelPlanQuotaResult> {
+  const fetchFn = getFetchFn(proxyUrl)
+  const response = await fetchFn('https://api.kimi.com/coding/v1/usages', withPlanQuotaTimeout({
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': getProferUserAgent(pkg.version),
+      Authorization: `Bearer ${apiKey}`,
+    },
+  }))
+  const responseText = await response.text()
+  if (!response.ok) {
+    return createUnsupportedPlanQuota('kimi-coding', `Kimi 额度查询失败: HTTP ${response.status}`)
+  }
+
+  let data: {
+    usage?: { remaining?: string | number; used?: string | number; resetTime?: string }
+    limits?: Array<{
+      window: { duration: number; timeUnit: string }
+      detail: { remaining?: string | number; used?: string | number; resetTime?: string }
+    }>
+    code?: string
+  }
+  try {
+    data = JSON.parse(responseText)
+  } catch {
+    return createUnsupportedPlanQuota('kimi-coding', 'Kimi 额度响应格式错误')
+  }
+
+  if (data.code) {
+    return createUnsupportedPlanQuota('kimi-coding', `Kimi 额度查询失败: ${data.code}`)
+  }
+  if (!data.usage) {
+    return createUnsupportedPlanQuota('kimi-coding', 'Kimi 未返回订阅额度数据')
+  }
+
+  const windows: import('@profer/shared').ChannelPlanQuotaWindow[] = []
+  const summaryRemaining = clampPercent(Number(data.usage.remaining ?? 0))
+  const summaryUsed = clampPercent(Number(data.usage.used ?? (100 - summaryRemaining)))
+  windows.push({
+    type: 'weekly',
+    label: '每周额度',
+    remainingPercent: summaryRemaining,
+    usedPercent: summaryUsed,
+    ...planQuotaResetAt(data.usage.resetTime),
+  })
+
+  for (const item of data.limits ?? []) {
+    const remaining = clampPercent(Number(item.detail.remaining ?? 0))
+    const used = clampPercent(Number(item.detail.used ?? (100 - remaining)))
+    const duration = item.window.duration
+    const isFiveHourWindow = (duration === 5 && item.window.timeUnit === 'TIME_UNIT_HOUR')
+      || (duration === 300 && item.window.timeUnit === 'TIME_UNIT_MINUTE')
+    const unitLabel = item.window.timeUnit === 'TIME_UNIT_HOUR'
+      ? '小时'
+      : item.window.timeUnit === 'TIME_UNIT_MINUTE'
+        ? '分钟'
+        : item.window.timeUnit === 'TIME_UNIT_DAY'
+          ? '天'
+          : item.window.timeUnit === 'TIME_UNIT_MONTH'
+            ? '月'
+            : item.window.timeUnit
+    windows.push({
+      type: isFiveHourWindow ? '5h' : 'custom',
+      label: isFiveHourWindow ? '每 5 小时' : `${duration} ${unitLabel}`,
+      remainingPercent: remaining,
+      usedPercent: used,
+      ...planQuotaResetAt(item.detail.resetTime),
+    })
+  }
+
+  return {
+    supported: true,
+    provider: 'kimi-coding',
+    planName: 'Kimi For Coding',
+    windows,
+    updatedAt: Date.now(),
+  }
+}
+
+async function queryMiniMaxPlanQuota(apiKey: string, baseUrl: string, proxyUrl?: string): Promise<import('@profer/shared').ChannelPlanQuotaResult> {
+  const fetchFn = getFetchFn(proxyUrl)
+  let requestUrl = 'https://www.minimaxi.com/v1/token_plan/remains'
+  try {
+    if (new URL(baseUrl).hostname.includes('minimax.io')) {
+      requestUrl = requestUrl.replace('.minimaxi.com', '.minimax.io')
+    }
+  } catch {
+    // 保持默认查询地址
+  }
+
+  const response = await fetchFn(requestUrl, withPlanQuotaTimeout({
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'User-Agent': getProferUserAgent(pkg.version),
+    },
+  }))
+  const responseText = await response.text()
+  if (!response.ok) {
+    return createUnsupportedPlanQuota('minimax', `MiniMax Token Plan 额度查询失败: HTTP ${response.status}`)
+  }
+
+  let data: {
+    model_remains?: Array<{
+      model_name: string
+      current_interval_remaining_percent?: number
+      current_weekly_total_count?: number
+      current_weekly_remaining_percent?: number
+      end_time?: number
+      weekly_end_time?: number
+    }>
+    base_resp?: { status_code: number; status_msg: string }
+  }
+  try {
+    data = JSON.parse(responseText)
+  } catch {
+    return createUnsupportedPlanQuota('minimax', 'MiniMax Token Plan 额度响应格式错误')
+  }
+
+  if (data.base_resp && data.base_resp.status_code !== 0) {
+    return createUnsupportedPlanQuota('minimax', data.base_resp.status_msg || 'MiniMax Token Plan 额度查询失败')
+  }
+
+  const general = (data.model_remains ?? []).filter((item) => item.model_name === 'general')
+  if (general.length === 0) {
+    return createUnsupportedPlanQuota('minimax', 'MiniMax Token Plan 未返回通用额度数据')
+  }
+
+  // `current_weekly_total_count=0` 仍代表 API 返回了有效周额度窗口，不能用 truthiness 跳过。
+  const windows = parseMiniMaxGeneralQuotaWindows(general)
+
+  return {
+    supported: true,
+    provider: 'minimax',
+    planName: 'MiniMax Token Plan',
+    windows,
+    updatedAt: Date.now(),
+  }
+}
+
+function formatDeepSeekBalanceAmount(currency: string | undefined, value: string | number | undefined): string {
+  const raw = value == null ? 0 : Number(value)
+  const amount = Number.isFinite(raw) ? raw : 0
+  const normalizedCurrency = (currency ?? '').trim().toUpperCase()
+  if (normalizedCurrency === 'CNY' || normalizedCurrency === 'RMB') {
+    return `¥${amount.toFixed(2)}`
+  }
+  if (normalizedCurrency === 'USD') {
+    return `$${amount.toFixed(2)}`
+  }
+  if (normalizedCurrency) {
+    return `${normalizedCurrency} ${amount.toFixed(2)}`
+  }
+  return amount.toFixed(2)
+}
+
+async function queryDeepSeekBalance(apiKey: string, baseUrl: string, proxyUrl?: string): Promise<import('@profer/shared').ChannelPlanQuotaResult> {
+  const fetchFn = getFetchFn(proxyUrl)
+  let requestUrl = 'https://api.deepseek.com/user/balance'
+  try {
+    requestUrl = `${new URL(baseUrl).origin}/user/balance`
+  } catch {
+    // 保持官方默认查询地址
+  }
+
+  const response = await fetchFn(requestUrl, withPlanQuotaTimeout({
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      Accept: 'application/json',
+      'User-Agent': getProferUserAgent(pkg.version),
+    },
+  }))
+  const responseText = await response.text()
+  if (!response.ok) {
+    return createUnsupportedPlanQuota('deepseek', `DeepSeek 余额查询失败: HTTP ${response.status}`)
+  }
+
+  let data: {
+    is_available?: boolean
+    balance_infos?: Array<{
+      currency?: string
+      total_balance?: string
+      granted_balance?: string
+      topped_up_balance?: string
+    }>
+    error?: { message?: string }
+  }
+  try {
+    data = JSON.parse(responseText)
+  } catch {
+    return createUnsupportedPlanQuota('deepseek', 'DeepSeek 余额响应格式错误')
+  }
+
+  if (data.error?.message) {
+    return createUnsupportedPlanQuota('deepseek', data.error.message)
+  }
+
+  const balances = data.balance_infos ?? []
+  if (balances.length === 0) {
+    return createUnsupportedPlanQuota('deepseek', 'DeepSeek 未返回余额数据')
+  }
+
+  const preferred = balances.find((item) => (item.currency ?? '').toUpperCase() === 'CNY')
+    ?? balances.find((item) => Number(item.total_balance ?? 0) > 0)
+    ?? balances[0]!
+  const amountLabel = formatDeepSeekBalanceAmount(preferred.currency, preferred.total_balance)
+  const granted = Number(preferred.granted_balance ?? 0)
+  const toppedUp = Number(preferred.topped_up_balance ?? 0)
+  const total = Number(preferred.total_balance ?? 0)
+  const denominator = granted + toppedUp
+  const remainingPercent = denominator > 0
+    ? clampPercent((total / denominator) * 100)
+    : data.is_available === false
+      ? 0
+      : 100
+
+  return {
+    supported: true,
+    provider: 'deepseek',
+    planName: 'DeepSeek 账户余额',
+    windows: [{
+      type: 'custom',
+      label: '账户余额',
+      remainingPercent,
+      usedPercent: clampPercent(100 - remainingPercent),
+      remainingLabel: amountLabel,
+      showProgress: denominator > 0,
+    }],
+    updatedAt: Date.now(),
+    message: data.is_available === false ? 'DeepSeek 账户余额不可用' : undefined,
+  }
+}
+
+// ===== 智谱 Coding Plan 额度查询 =====
+
+interface ZhipuQuotaLimitItem {
+  type: 'TIME_LIMIT' | 'TOKENS_LIMIT'
+  unit?: number
+  number?: number
+  percentage?: number
+  remaining?: number
+  usage?: number
+  currentValue?: number
+  nextResetTime?: number
+  usageDetails?: Array<{
+    modelCode: string
+    usage: number
+  }>
+}
+
+interface ZhipuQuotaResponse {
+  code?: number
+  msg?: string
+  success?: boolean
+  data?: {
+    limits?: ZhipuQuotaLimitItem[]
+    level?: string
+  }
+}
+
+function createZhipuQuotaUrl(baseUrl: string, query?: Record<string, string>): string {
+  let requestUrl = 'https://bigmodel.cn/api/monitor/usage/quota/limit'
+  try {
+    const hostname = new URL(baseUrl).hostname
+    if (hostname === 'api.z.ai') {
+      requestUrl = 'https://api.z.ai/api/monitor/usage/quota/limit'
+    } else if (hostname === 'open.bigmodel.cn') {
+      requestUrl = 'https://open.bigmodel.cn/api/monitor/usage/quota/limit'
+    }
+  } catch {
+    // 保持默认查询地址
+  }
+
+  const url = new URL(requestUrl)
+  for (const [key, value] of Object.entries(query ?? {})) {
+    url.searchParams.set(key, value)
+  }
+  return url.toString()
+}
+
+function createZhipuInternationalQuotaUrl(query?: Record<string, string>): string {
+  const url = new URL('https://api.z.ai/api/monitor/usage/quota/limit')
+  for (const [key, value] of Object.entries(query ?? {})) {
+    url.searchParams.set(key, value)
+  }
+  return url.toString()
+}
+
+async function fetchZhipuQuota(
+  apiKey: string,
+  requestUrl: string,
+  proxyUrl?: string,
+): Promise<ZhipuQuotaResponse | { error: string }> {
+  const fetchFn = getFetchFn(proxyUrl)
+  const response = await fetchFn(requestUrl, withPlanQuotaTimeout({
+    method: 'GET',
+    headers: {
+      Authorization: apiKey,
+      'Content-Type': 'application/json',
+      'User-Agent': getProferUserAgent(pkg.version),
+    },
+  }))
+  const responseText = await response.text()
+  if (!response.ok) {
+    return { error: `智谱 Coding Plan 额度查询失败: HTTP ${response.status}` }
+  }
+
+  try {
+    return JSON.parse(responseText) as ZhipuQuotaResponse
+  } catch {
+    return { error: '智谱 Coding Plan 额度响应格式错误' }
+  }
+}
+
+function parseZhipuQuotaData(
+  data: ZhipuQuotaResponse,
+  planName: string,
+  provider: ProviderType = 'zhipu-coding',
+): import('@profer/shared').ChannelPlanQuotaResult {
+  if (!data.success || data.code !== 200) {
+    return createUnsupportedPlanQuota(provider, data.msg || '智谱 Coding Plan 额度查询失败')
+  }
+
+  const limits = data.data?.limits ?? []
+  const windows: import('@profer/shared').ChannelPlanQuotaWindow[] = []
+  const tokenLimits = limits
+    .filter((item) => item.type === 'TOKENS_LIMIT')
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftReset = normalizePlanQuotaTimestamp(left.item.nextResetTime)
+      const rightReset = normalizePlanQuotaTimestamp(right.item.nextResetTime)
+      if (leftReset && rightReset && leftReset !== rightReset) {
+        return leftReset - rightReset
+      }
+      return left.index - right.index
+    })
+
+  for (const { item, index } of tokenLimits) {
+    const used = clampPercent(item.percentage ?? 0)
+    const type = item.unit === 3
+      ? '5h'
+      : item.unit === 6
+        ? 'weekly'
+        : item.unit == null && index === 0
+          ? '5h'
+          : item.unit == null && index === 1
+            ? 'weekly'
+            : undefined
+    if (!type) continue
+    windows.push({
+      type,
+      label: type === '5h' ? '每 5 小时' : '每周额度',
+      remainingPercent: clampPercent(100 - used),
+      usedPercent: used,
+      ...planQuotaResetAt(item.nextResetTime),
+    })
+  }
+
+  const timeLimit = limits.find((item) => item.type === 'TIME_LIMIT')
+  if (timeLimit) {
+    const remainingCount = Number(timeLimit.remaining ?? 0)
+    const totalCount = Number(timeLimit.usage ?? 0)
+    const usedCount = Number(timeLimit.currentValue ?? (totalCount > 0 ? totalCount - remainingCount : 0))
+    const total = totalCount > 0 ? totalCount : remainingCount + usedCount
+    const remainingPercent = total > 0 ? (remainingCount / total) * 100 : 0
+    windows.push({
+      type: 'custom',
+      label: 'MCP 每月',
+      remainingPercent: clampPercent(remainingPercent),
+      usedPercent: clampPercent(100 - remainingPercent),
+    })
+  }
+
+  if (windows.length === 0) {
+    return createUnsupportedPlanQuota(provider, '智谱 Coding Plan 未返回窗口额度数据')
+  }
+
+  return {
+    supported: true,
+    provider,
+    planName,
+    windows,
+    updatedAt: Date.now(),
+  }
+}
+
+async function queryZhipuPlanQuota(
+  apiKey: string,
+  baseUrl: string,
+  proxyUrl?: string,
+  provider: ProviderType = 'zhipu-coding',
+): Promise<import('@profer/shared').ChannelPlanQuotaResult> {
+  const requestUrls = Array.from(new Set([
+    createZhipuQuotaUrl(baseUrl),
+    createZhipuQuotaUrl(baseUrl, { type: '1' }),
+    createZhipuInternationalQuotaUrl(),
+    createZhipuInternationalQuotaUrl({ type: '1' }),
+  ]))
+
+  // 并行发起多个候选 URL，任一成功即短路返回；避免之前串行逐个 await、网络慢时逐个卡 5s 超时。
+  const results = await Promise.all(
+    requestUrls.map((requestUrl) => fetchZhipuQuota(apiKey, requestUrl, proxyUrl)),
+  )
+
+  const supportedResult = results
+    .map((response) => ('error' in response ? null : parseZhipuQuotaData(response, 'GLM Coding Plan', provider)))
+    .find((result) => result?.supported && result.windows.length > 0)
+  if (supportedResult) return supportedResult
+
+  // 无成功结果时，回退到最后一条可用的错误信息（优先带 error 的，其次第一个解析结果）
+  const firstError = results.find((r) => 'error' in r)
+  if (firstError && 'error' in firstError) {
+    return createUnsupportedPlanQuota(provider, firstError.error)
+  }
+  const firstParsed = results
+    .map((response) => ('error' in response ? null : parseZhipuQuotaData(response, 'GLM Coding Plan', provider)))
+    .find((result) => result != null)
+  return firstParsed ?? createUnsupportedPlanQuota(provider, '智谱 Coding Plan 未返回窗口额度数据')
+}
+
+export async function getChannelPlanQuota(channelId: string): Promise<import('@profer/shared').ChannelPlanQuotaResult> {
+  const channel = getChannelById(channelId)
+  if (!channel) {
+    return createUnsupportedPlanQuota('custom', '渠道不存在')
+  }
+
+  const provider = channel.provider
+  if (channel.serverManaged) {
+    return createUnsupportedPlanQuota(provider, 'Profer 代管渠道不支持查询第三方订阅额度')
+  }
+
+  const supportsPlanQuota = provider === 'openai-codex' || supportsProviderPlanQuota(provider) || channel.baseUrl.includes('api.kimi.com/coding')
+  if (!supportsPlanQuota) {
+    return createUnsupportedPlanQuota(provider, '当前渠道不支持订阅 Plan 额度查询')
+  }
+
+  let apiKey: string
+  try {
+    apiKey = decryptKey(channel.apiKey)
+  } catch {
+    return createUnsupportedPlanQuota(provider, '无法读取渠道 API Key')
+  }
+
+  // 统一注入渠道 updatedAt，renderer 侧据此区分「渠道是否为当前版本」并命中缓存。
+  const withChannelVersion = (
+    result: import('@profer/shared').ChannelPlanQuotaResult,
+  ): import('@profer/shared').ChannelPlanQuotaResult => ({ ...result, channelUpdatedAt: channel.updatedAt })
+
+  try {
+    const proxyUrl = await getEffectiveProxyUrl()
+    if (provider === 'openai-codex') {
+      const response = await getFetchFn(proxyUrl)('https://chatgpt.com/backend-api/wham/usage', withPlanQuotaTimeout({
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'application/json',
+          'User-Agent': getProferUserAgent(pkg.version),
+        },
+      }))
+      if (!response.ok) {
+        return createUnsupportedPlanQuota(provider, `ChatGPT Codex 额度查询失败: HTTP ${response.status}`)
+      }
+      return withChannelVersion(parseCodexPlanQuotaResponse(await response.json()))
+    }
+    if (provider === 'deepseek') {
+      return withChannelVersion(await queryDeepSeekBalance(apiKey, channel.baseUrl, proxyUrl))
+    }
+    if (provider === 'kimi-coding' || channel.baseUrl.includes('api.kimi.com/coding')) {
+      return withChannelVersion(await queryKimiPlanQuota(apiKey, proxyUrl))
+    }
+    if (provider === 'minimax') {
+      return withChannelVersion(await queryMiniMaxPlanQuota(apiKey, channel.baseUrl, proxyUrl))
+    }
+    if (provider === 'zhipu-coding') {
+      return withChannelVersion(await queryZhipuPlanQuota(apiKey, channel.baseUrl, proxyUrl, provider))
+    }
+
+    return withChannelVersion(createUnsupportedPlanQuota(provider, '当前渠道不支持订阅 Plan 额度查询'))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '订阅额度查询失败'
+    return withChannelVersion(createUnsupportedPlanQuota(provider, message))
+  }
+}
+
+// ===== 直接测试连接 =====
+
+/**
+ * 直接测试连接（无需已保存渠道）
+ *
+ * 使用传入的明文凭证直接向提供商发送测试请求。
+ * 适用于创建/编辑渠道时用户在保存前先验证连接。
+ */
+export async function testChannelDirect(input: FetchModelsInput): Promise<ChannelTestResult> {
+  const proxyUrl = await getEffectiveProxyUrl()
+
+  try {
+    switch (input.provider) {
+      case 'anthropic':
+      case 'anthropic-compatible':
+      case 'kimi-api':
+      case 'kimi-coding':
+      case 'zhipu-coding':
+      case 'minimax':
+      case 'xiaomi':
+      case 'xiaomi-token-plan':
+      case 'ollama':
+        return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider)
+      case 'openai':
+      case 'openai-responses':
+      case 'opencode-go-openai':
+      case 'deepseek':
+      case 'zhipu':
+      case 'doubao':
+      case 'qwen':
+      case 'custom':
+        return await testOpenAICompatible(input.baseUrl, input.apiKey, proxyUrl)
+      case 'google':
+        return await testGoogle(input.baseUrl, input.apiKey, proxyUrl)
+      default:
+        return { success: false, message: `不支持的提供商: ${input.provider}` }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    return { success: false, message: `连接测试失败: ${message}` }
+  }
+}
+
+// ===== 模型拉取相关 =====
+
+/**
+ * 从供应商 API 拉取可用模型列表
+ *
+ * 直接使用传入的凭证（无需已保存渠道），支持创建渠道时预先拉取模型。
+ * 针对不同供应商使用不同的 API 端点和响应解析。
+ */
+export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsResult> {
+  const proxyUrl = await getEffectiveProxyUrl()
+
+  try {
+    switch (input.provider) {
+      case 'anthropic':
+      case 'anthropic-compatible':
+      case 'kimi-api':
+      case 'kimi-coding':
+      case 'zhipu-coding':
+      case 'minimax':
+      case 'xiaomi':
+      case 'xiaomi-token-plan':
+        return await fetchAnthropicCompatibleModels(input.baseUrl, input.apiKey, proxyUrl, input.provider)
+      case 'ollama':
+        return await fetchOllamaModels(input.baseUrl, input.apiKey, proxyUrl)
+      case 'openai':
+      case 'openai-responses':
+      case 'opencode-go-openai':
+      case 'deepseek':
+      case 'zhipu':
+      case 'doubao':
+      case 'qwen':
+      case 'custom':
+        return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl)
+      case 'google':
+        return await fetchGoogleModels(input.baseUrl, input.apiKey, proxyUrl)
+      default:
+        return { success: false, message: `不支持的供应商: ${input.provider}`, models: [] }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    console.error('[渠道管理] 拉取模型列表失败:', error)
+    return { success: false, message: `拉取模型失败: ${message}`, models: [] }
+  }
+}
+
+/**
+ * Anthropic API 模型响应项
+ */
+interface AnthropicModelItem {
+  id: string
+  display_name?: string
+  type?: string
+}
+
+/**
+ * 从 Anthropic 兼容 API 拉取模型列表（Anthropic / DeepSeek / Kimi API / Kimi Coding Plan / MiniMax）
+ *
+ * DeepSeek / Kimi 的 Anthropic API 端点无需 /v1 前缀。
+ * Kimi Coding Plan 必须发送 Profer User-Agent。
+ * 文档: https://docs.anthropic.com/en/api/models-list
+ */
+interface OllamaTagItem {
+  name: string
+  size?: number
+  modified_at?: string
+}
+
+/** 从 Ollama 原生 API 读取本机已安装模型；此操作不会触发下载。 */
+async function fetchOllamaModels(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<FetchModelsResult> {
+  const rootUrl = normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')
+  const fetchFn = getFetchFn(proxyUrl)
+  const response = await fetchFn(`${rootUrl}/api/tags`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${apiKey || 'ollama'}` },
+  })
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    const hint = response.status === 404 ? '；请确认 Ollama 服务已启动' : ''
+    return { success: false, message: `Ollama 请求失败 (${response.status})${hint}${text ? `: ${text.slice(0, 200)}` : ''}`, models: [] }
+  }
+  const data = await response.json() as { models?: OllamaTagItem[] }
+  const models = (data.models ?? []).filter((item) => typeof item.name === 'string' && item.name.trim()).map((item) => ({
+    id: item.name,
+    name: item.name,
+    enabled: true,
+    source: 'fetched' as const,
+  }))
+  models.sort((a, b) => a.id.localeCompare(b.id))
+  return { success: true, message: `成功读取 ${models.length} 个 Ollama 模型`, models }
+}
+
+async function fetchAnthropicCompatibleModels(
+  baseUrl: string,
+  apiKey: string,
+  proxyUrl?: string,
+  provider: ProviderType = 'anthropic',
+): Promise<FetchModelsResult> {
+  const url = normalizeAnthropicProviderUrl(baseUrl, provider)
+  const fetchFn = getFetchFn(proxyUrl)
+
+  const headers: Record<string, string> = {
+    'anthropic-version': '2023-06-01',
+  }
+  if (provider === 'kimi-coding' || provider === 'zhipu-coding') {
+    headers.Authorization = `Bearer ${apiKey}`
+    headers['User-Agent'] = getProferUserAgent(pkg.version)
+  } else if (provider === 'xiaomi-token-plan') {
+    headers.Authorization = `Bearer ${apiKey}`
+    headers['User-Agent'] = getProferUserAgent(pkg.version)
+  } else if (provider === 'minimax') {
+    headers.Authorization = `Bearer ${apiKey}`
+  } else {
+    headers['x-api-key'] = apiKey
+    headers.Authorization = `Bearer ${apiKey}`
+  }
+
+  const response = await fetchFn(`${url}/models`, {
+    method: 'GET',
+    headers,
+  })
+
+  if (response.status === 401) {
+    const text = await response.text().catch(() => '')
+    return { success: false, message: `API Key 无效${text ? `: ${text.slice(0, 150)}` : ''}`, models: [] }
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    return { success: false, message: `请求失败 (${response.status}): ${text.slice(0, 200)}`, models: [] }
+  }
+
+  const data = await response.json() as { data?: AnthropicModelItem[] }
+  const items = data.data ?? []
+
+  const models: ChannelModel[] = items.map((item) => ({
+    id: item.id,
+    name: item.display_name || item.id,
+    enabled: true,
+  }))
+
+  return {
+    success: true,
+    message: `成功获取 ${models.length} 个模型`,
+    models,
+  }
+}
+
+/**
+ * OpenAI 兼容 API 模型响应项
+ */
+interface OpenAIModelItem {
+  id: string
+  owned_by?: string
+}
+
+/**
+ * 从 OpenAI 兼容 API 拉取模型列表（OpenAI / Custom）
+ *
+ * API: GET {baseUrl}/models
+ * 通用 OpenAI 兼容格式，适用于大部分第三方供应商。
+ */
+async function fetchOpenAICompatibleModels(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<FetchModelsResult> {
+  const url = resolveOpenAIModelsUrl(baseUrl)
+  const fetchFn = getFetchFn(proxyUrl)
+
+  const response = await fetchFn(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  })
+
+  if (response.status === 401) {
+    return { success: false, message: 'API Key 无效', models: [] }
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    return { success: false, message: `请求失败 (${response.status}): ${text.slice(0, 200)}`, models: [] }
+  }
+
+  const data = await response.json() as { data?: OpenAIModelItem[] }
+  const items = data.data ?? []
+
+  const models: ChannelModel[] = items.map((item) => ({
+    id: item.id,
+    name: item.id,
+    enabled: true,
+  }))
+
+  // 按模型 ID 字母排序，方便用户查找
+  models.sort((a, b) => a.id.localeCompare(b.id))
+
+  return {
+    success: true,
+    message: `成功获取 ${models.length} 个模型`,
+    models,
+  }
+}
+
+/**
+ * Google Generative AI 模型响应项
+ */
+interface GoogleModelItem {
+  name: string
+  displayName?: string
+  description?: string
+  supportedGenerationMethods?: string[]
+}
+
+/**
+ * 从 Google Generative AI API 拉取模型列表
+ *
+ * API: GET /v1beta/models?key={apiKey}
+ * 仅返回支持 generateContent 的模型（排除纯 embedding 模型）。
+ */
+async function fetchGoogleModels(baseUrl: string, apiKey: string, proxyUrl?: string): Promise<FetchModelsResult> {
+  const url = normalizeBaseUrl(baseUrl)
+  const fetchFn = getFetchFn(proxyUrl)
+
+  const response = await fetchFn(`${url}/v1beta/models?key=${apiKey}`, {
+    method: 'GET',
+  })
+
+  if (response.status === 400 || response.status === 403) {
+    return { success: false, message: 'API Key 无效', models: [] }
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    return { success: false, message: `请求失败 (${response.status}): ${text.slice(0, 200)}`, models: [] }
+  }
+
+  const data = await response.json() as { models?: GoogleModelItem[] }
+  const items = data.models ?? []
+
+  // 过滤出支持 generateContent 的模型（排除纯 embedding 模型）
+  const chatModels = items.filter((item) =>
+    item.supportedGenerationMethods?.includes('generateContent')
+  )
+
+  const models: ChannelModel[] = chatModels.map((item) => {
+    // Google 模型 name 格式为 "models/gemini-pro"，提取实际 ID
+    const id = item.name.replace(/^models\//, '')
+    return {
+      id,
+      name: item.displayName || id,
+      enabled: true,
+    }
+  })
+
+  return {
+    success: true,
+    message: `成功获取 ${models.length} 个模型`,
+    models,
+  }
+}

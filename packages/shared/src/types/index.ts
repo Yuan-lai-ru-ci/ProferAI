@@ -1,0 +1,81 @@
+/**
+ * Shared type definitions for proma
+ */
+
+// Placeholder types - will be expanded as needed
+export interface Workspace {
+  id: string
+  name: string
+  path: string
+}
+
+// 运行时相关类型
+export * from './runtime'
+
+// 渠道（AI 供应商）相关类型
+export * from './channel'
+
+// 代理配置相关类型
+export * from './proxy'
+
+// Chat 相关类型
+export * from './chat'
+
+// 开放许可 PPT 素材相关类型
+export * from './ppt-material'
+
+// Deck Project / 原生 PPTX 生成相关类型
+export * from './ppt-deck'
+
+// Agent 相关类型
+export * from './agent'
+export * from './agent-preview'
+export * from './pi-harness'
+export * from './global-skill'
+export * from './browser'
+
+// 推理 profile 相关类型
+export * from './reasoning-profile'
+
+// Agent Provider 适配器接口
+export * from './agent-provider'
+
+// 环境检测相关类型
+export * from './environment'
+
+// 第三方安装包（Git、Node.js 等）相关类型
+export * from './installer'
+
+// GitHub Release 相关类型
+export * from './github'
+
+// 版本更新日志（CHANGELOG）相关类型
+export * from './changelog'
+
+// 系统提示词相关类型
+export * from './system-prompt'
+export * from './agent-preset'
+
+// Chat 工具（function calling）相关类型
+export * from './chat-tool'
+
+// 飞书集成相关类型
+export * from './feishu'
+
+// Lark/飞书云端能力相关类型
+export * from './lark'
+
+// 钉钉集成相关类型
+export * from './dingtalk'
+
+// 微信集成相关类型
+export * from './wechat'
+
+// 定时任务（Automation）相关类型
+export * from './automation'
+
+// 论文知识库（Paper Knowledge Base）相关类型
+export * from './knowledge-base'
+
+// 本地任务与日程（Planning）相关类型
+export * from './planning'

@@ -1,0 +1,1797 @@
+/**
+ * Agent 工作区管理器
+ *
+ * 负责 Agent 工作区的 CRUD 操作。
+ * - 工作区索引：~/.proma/agent-workspaces.json（轻量元数据）
+ * - 工作区目录：~/.proma/agent-workspaces/{slug}/（Agent 的 cwd）
+ */
+
+import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync, realpathSync } from 'node:fs'
+import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
+import { randomUUID } from 'node:crypto'
+import { listGlobalSkills, setGlobalSkillEnabled, copySkillDirectorySafely, createUserGlobalSkill } from './global-skill-manager'
+import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path'
+import {
+  getAgentWorkspacesIndexPath,
+  getAgentWorkspacesDir,
+  getAgentWorkspacePath,
+  resolveWorkspaceFilesDir,
+  getWorkspaceMcpPath,
+  getWorkspaceSkillsDir,
+  getInactiveSkillsDir,
+  parseSkillVersion,
+} from './config-paths'
+import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
+import { assertSafeSkillSegment, canonicalSkillSegmentKey } from './skill-path-security'
+import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
+import { listAgentPresets, createAgentPreset } from './agent-preset-manager'
+import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, WorkspaceSkillSource, OtherWorkspaceSkillsGroup, OtherWorkspacePresetsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, WorkspaceType } from '@profer/shared'
+import type { AgentPreset } from '@profer/shared'
+
+interface AgentWorkspacesIndex {
+  version: number
+  workspaces: AgentWorkspace[]
+}
+
+const INDEX_VERSION = 3
+
+/** 读取工作区索引文件，自动执行版本迁移 */
+/** @internal 供同步/团队管理器使用，普通调用方用 listAgentWorkspaces() */
+export function readIndex(): AgentWorkspacesIndex {
+  const indexPath = getAgentWorkspacesIndexPath()
+  const data = readJsonFileSafe<AgentWorkspacesIndex>(indexPath)
+
+  if (data) {
+    // 版本迁移（幂等，顺序执行）
+    const currentVersion = data.version ?? 1
+    if (currentVersion < INDEX_VERSION) {
+      migrateIndex(data, currentVersion)
+    }
+    return data
+  }
+
+  return { version: INDEX_VERSION, workspaces: [] }
+}
+
+function migrateIndex(index: AgentWorkspacesIndex, oldVersion: number): void {
+  // v1 → v2: 为所有工作区默认启用 skill-creator
+  if (oldVersion < 2) {
+    activateSkillCreatorInAllWorkspaces(index)
+  }
+
+  // v2 → v3: 为所有工作区添加 type 字段（向后兼容）
+  if (oldVersion < 3) {
+    for (const workspace of index.workspaces) {
+      if (!workspace.type) {
+        workspace.type = 'personal'
+      }
+    }
+  }
+
+  index.version = INDEX_VERSION
+  writeIndex(index)
+  console.log(`[Agent 工作区] 索引已迁移: v${oldVersion} → v${INDEX_VERSION}`)
+}
+
+/** v1→v2 迁移：将 skills-inactive/skill-creator 移到 skills/ */
+function activateSkillCreatorInAllWorkspaces(index: AgentWorkspacesIndex): void {
+  for (const workspace of index.workspaces) {
+    const activeDir = getWorkspaceSkillsDir(workspace.slug)
+    const inactiveDir = getInactiveSkillsDir(workspace.slug)
+
+    const inactivePath = join(inactiveDir, 'skill-creator')
+    const activePath = join(activeDir, 'skill-creator')
+
+    if (existsSync(activePath) || !existsSync(inactivePath)) continue
+
+    try {
+      if (!existsSync(activeDir)) {
+        mkdirSync(activeDir, { recursive: true })
+      }
+      renameSync(inactivePath, activePath)
+      console.log(`[Agent 工作区] 已为 ${workspace.slug} 启用 skill-creator`)
+    } catch (err) {
+      console.warn(`[Agent 工作区] 启用 skill-creator 失败 (${workspace.slug}):`, err)
+    }
+  }
+}
+
+/** @internal 供同步/团队管理器使用 */
+export function writeIndex(index: AgentWorkspacesIndex): void {
+  const indexPath = getAgentWorkspacesIndexPath()
+
+  try {
+    writeJsonFileAtomic(indexPath, index)
+  } catch (error) {
+    console.error('[Agent 工作区] 写入索引文件失败:', error)
+    throw new Error('写入 Agent 工作区索引失败')
+  }
+}
+
+/** 名称转 URL-safe slug，非 ASCII 名称 fallback 为 workspace-{timestamp} */
+function slugify(name: string, existingSlugs: Set<string>): string {
+  let base = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+
+  if (!base) {
+    base = `workspace-${Date.now()}`
+  }
+
+  try { assertSafeSkillSegment(base, 'workspaceSlug') } catch { base = `workspace-${base}` }
+
+  let slug = base
+  let counter = 1
+  while (existingSlugs.has(canonicalSkillSegmentKey(slug))) {
+    slug = `${base}-${counter}`
+    counter++
+  }
+
+  return slug
+}
+
+/** 返回索引中的存储顺序（与 UI 拖拽顺序一致）；返回副本，避免调用方 sort 等操作误改索引数组 */
+
+export function listAgentWorkspaces(): AgentWorkspace[] {
+  const index = readIndex()
+  return index.workspaces.slice()
+}
+
+/** 按 updatedAt 降序（桥接/飞书列表等与旧版内联 sort 一致；渲染进程仍用 listAgentWorkspaces） */
+export function listAgentWorkspacesByUpdatedAt(): AgentWorkspace[] {
+  const index = readIndex()
+  return index.workspaces.slice().sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/** 按指定 ID 顺序重排工作区，未列出的追加到末尾 */
+export function reorderAgentWorkspaces(orderedIds: string[]): AgentWorkspace[] {
+  const index = readIndex()
+  const byId = new Map(index.workspaces.map((w) => [w.id, w]))
+  const reordered: AgentWorkspace[] = []
+  for (const id of orderedIds) {
+    const ws = byId.get(id)
+    if (ws) {
+      reordered.push(ws)
+      byId.delete(id)
+    }
+  }
+  for (const ws of byId.values()) reordered.push(ws)
+  index.workspaces = reordered
+  writeIndex(index)
+  return reordered
+}
+
+export function getAgentWorkspace(id: string): AgentWorkspace | undefined {
+  const index = readIndex()
+  return index.workspaces.find((w) => w.id === id)
+}
+
+export function createAgentWorkspace(
+  name: string,
+  opts?: { type?: WorkspaceType },
+): AgentWorkspace {
+  const index = readIndex()
+
+  const duplicate = index.workspaces.find((w) => w.name === name)
+  if (duplicate) {
+    throw new Error(`工作区名称「${name}」已存在`)
+  }
+
+  const existingSlugs = new Set(index.workspaces.map((w) => canonicalSkillSegmentKey(w.slug)))
+  const slug = slugify(name, existingSlugs)
+  const now = Date.now()
+
+  const workspace: AgentWorkspace = {
+    id: randomUUID(),
+    name,
+    slug,
+    createdAt: now,
+    updatedAt: now,
+    type: opts?.type ?? 'personal',
+  }
+
+  try {
+    getAgentWorkspacePath(slug)
+    ensurePluginManifest(slug, name)
+  } catch (error) {
+    const workspacesRoot = resolve(getAgentWorkspacesDir())
+    const workspaceDir = resolve(join(workspacesRoot, slug))
+    const relativePath = relative(workspacesRoot, workspaceDir)
+    if (relativePath && !relativePath.startsWith('..') && !isAbsolute(relativePath) && existsSync(workspaceDir)) {
+      try {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      } catch (cleanupError) {
+        console.warn(`[Agent 工作区] 创建失败后清理目录失败 (${slug}):`, cleanupError)
+      }
+    }
+    console.error(`[Agent 工作区] 创建工作区失败 (${name}, slug: ${slug}):`, error)
+    throw new Error(`创建项目失败: ${(error as Error)?.message ?? '初始化项目目录失败'}`)
+  }
+
+  index.workspaces.unshift(workspace)
+  writeIndex(index)
+
+  const typeLabel = workspace.type === 'team' ? '团队' : '个人'
+  console.log(`[Agent 工作区] 已创建${typeLabel}工作区: ${name} (slug: ${slug})`)
+  return workspace
+}
+
+/** 更新工作区名称（slug 和目录不变） */
+export function updateAgentWorkspace(
+  id: string,
+  updates: { name: string },
+): AgentWorkspace {
+  const index = readIndex()
+  const idx = index.workspaces.findIndex((w) => w.id === id)
+
+  if (idx === -1) {
+    throw new Error(`Agent 工作区不存在: ${id}`)
+  }
+
+  const existing = index.workspaces[idx]!
+
+  const duplicate = index.workspaces.find((w) => w.id !== id && w.name === updates.name)
+  if (duplicate) {
+    throw new Error(`工作区名称「${updates.name}」已存在`)
+  }
+
+  const updated: AgentWorkspace = {
+    ...existing,
+    name: updates.name,
+    updatedAt: Date.now(),
+  }
+
+  index.workspaces[idx] = updated
+  writeIndex(index)
+
+  console.log(`[Agent 工作区] 已更新工作区: ${updated.name} (${updated.id})`)
+  return updated
+}
+
+/** 删除工作区索引条目及其本地目录 */
+export function deleteAgentWorkspace(id: string): void {
+  const index = readIndex()
+  const idx = index.workspaces.findIndex((w) => w.id === id)
+
+  if (idx === -1) {
+    throw new Error(`Agent 工作区不存在: ${id}`)
+  }
+
+  const target = index.workspaces[idx]!
+  if (target.slug === 'default') {
+    throw new Error('默认项目不能删除')
+  }
+  if (index.workspaces.length <= 1) {
+    throw new Error('至少需要保留一个项目')
+  }
+
+  const workspacesRoot = resolve(getAgentWorkspacesDir())
+  const workspaceDir = resolve(join(workspacesRoot, target.slug))
+  const relativePath = relative(workspacesRoot, workspaceDir)
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(`工作区目录路径异常，已跳过删除: ${workspaceDir}`)
+  }
+
+  // 防御性级联清理：删除仍指向该工作区的会话（索引 + 消息/任务图文件 + session 目录 + SDK 数据）。
+  // 正常流程由 ipc DELETE_WORKSPACE handler 先行删除（含停止运行中 Agent、清理运行时状态），
+  // 这里兜底防止其他调用路径绕过后残留孤儿会话 —— 孤儿会话会让平板端把 workspaceId
+  // 归纳成“幽灵项目”显示（electronapi-stub 的 list_workspaces 回退路径）。
+  // 注意：必须在移除索引条目之前执行，deleteAgentSession 需要依赖工作区解析 session 工作目录。
+  try {
+    deleteAgentSessionsByWorkspace(id)
+  } catch (error) {
+    console.warn(`[Agent 工作区] 级联清理会话失败 (${target.slug}):`, error)
+  }
+
+  // 先移除索引条目并落盘，再删目录：
+  // 即使随后 rmSync 失败，也只会残留一个无引用目录（无害，可被同 slug 重建覆盖），
+  // 而不会留下指向已删目录的孤儿索引条目导致 UI 状态不一致
+  const removed = index.workspaces.splice(idx, 1)[0]!
+  writeIndex(index)
+
+  if (existsSync(workspaceDir)) {
+    try {
+      rmSync(workspaceDir, { recursive: true, force: true })
+      console.log(`[Agent 工作区] 已删除工作区目录: ${workspaceDir}`)
+    } catch (error) {
+      console.warn(`[Agent 工作区] 删除工作区目录失败，已残留无引用目录 (${target.slug}):`, error)
+    }
+  }
+
+  console.log(`[Agent 工作区] 已删除工作区: ${removed.name} (slug: ${removed.slug})`)
+}
+
+/** 确保默认工作区存在，首次启动时自动创建（slug: default） */
+export function ensureDefaultWorkspace(): AgentWorkspace {
+  const index = readIndex()
+  let defaultWs = index.workspaces.find((w) => w.slug === 'default')
+
+  if (!defaultWs) {
+    const now = Date.now()
+    defaultWs = {
+      id: randomUUID(),
+      name: '默认工作区',
+      slug: 'default',
+      createdAt: now,
+      updatedAt: now,
+      type: 'personal',
+    }
+
+    getAgentWorkspacePath('default')
+    ensurePluginManifest('default', '默认工作区')
+
+    index.workspaces.push(defaultWs)
+    writeIndex(index)
+
+    console.log('[Agent 工作区] 已创建默认工作区')
+  } else {
+    // 迁移兼容：确保已有默认工作区包含 plugin manifest
+    ensurePluginManifest(defaultWs.slug, defaultWs.name)
+  }
+
+  return defaultWs
+}
+
+// ===== Plugin Manifest（SDK 插件发现） =====
+
+/** 确保工作区包含 .claude-plugin/plugin.json，SDK 需要此文件发现 skills */
+export function ensurePluginManifest(workspaceSlug: string, workspaceName: string): void {
+  const wsPath = getAgentWorkspacePath(workspaceSlug)
+  const pluginDir = join(wsPath, '.claude-plugin')
+  const manifestPath = join(pluginDir, 'plugin.json')
+
+  if (existsSync(manifestPath)) return
+
+  if (!existsSync(pluginDir)) {
+    mkdirSync(pluginDir, { recursive: true })
+  }
+
+  const manifest = {
+    name: `profer-workspace-${workspaceSlug}`,
+    version: '1.0.0',
+  }
+
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8')
+  console.log(`[Agent 工作区] 已创建 plugin manifest: ${workspaceSlug}`)
+}
+
+// ===== MCP 配置管理 =====
+
+export function getWorkspaceMcpConfig(workspaceSlug: string): WorkspaceMcpConfig {
+  const mcpPath = getWorkspaceMcpPath(workspaceSlug)
+
+  if (!existsSync(mcpPath)) {
+    return { servers: {} }
+  }
+
+  try {
+    const raw = readFileSync(mcpPath, 'utf-8')
+    const parsed = JSON.parse(raw) as Partial<WorkspaceMcpConfig>
+    const servers = parsed.servers ?? {}
+    for (const [name, entry] of Object.entries(servers)) {
+      if (!entry.type) {
+        entry.type = entry.command ? 'stdio' : entry.url ? 'http' : 'stdio'
+        console.log(`[Agent 工作区] MCP 服务器 "${name}" 缺少 type 字段，已自动推断为 "${entry.type}"`)
+      }
+    }
+    return { servers }
+  } catch (error) {
+    console.error('[Agent 工作区] 读取 MCP 配置失败:', error)
+    return { servers: {} }
+  }
+}
+
+export function saveWorkspaceMcpConfig(workspaceSlug: string, config: WorkspaceMcpConfig): void {
+  const mcpPath = getWorkspaceMcpPath(workspaceSlug)
+
+  try {
+    writeFileSync(mcpPath, JSON.stringify(config, null, 2), 'utf-8')
+    console.log(`[Agent 工作区] 已保存 MCP 配置: ${workspaceSlug}`)
+  } catch (error) {
+    console.error('[Agent 工作区] 保存 MCP 配置失败:', error)
+    throw new Error('保存 MCP 配置失败')
+  }
+}
+
+// ===== Skill 目录扫描 =====
+
+/** 扫描工作区 Skills（包括 skills/ 与 skills-inactive/），并保留全局引用。 */
+export function getWorkspaceSkills(workspaceSlug: string): SkillMeta[] {
+  assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
+  const activeSkills = scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)
+  const inactiveSkills = scanSkillsInDir(getInactiveSkillsDir(workspaceSlug), false)
+  const globalSkills = listGlobalSkills(workspaceSlug)
+    .filter((skill) => skill.actualSource !== 'workspace')
+    .map((skill): SkillMeta => ({
+      slug: skill.slug,
+      name: skill.name,
+      description: skill.description,
+      version: skill.version,
+      enabled: skill.actualSource === 'global' && skill.enabledInWorkspace,
+      actualSource: skill.actualSource,
+      sourceSkillId: skill.skillId,
+      sourceSkillType: skill.type,
+      sourceVersion: skill.version,
+      sourceStatus: 'available',
+    }))
+  return [...activeSkills, ...inactiveSkills, ...globalSkills]
+}
+
+/** 解析 SKILL.md 的 YAML frontmatter，支持单行值、block scalar（`|` / `>`）和多行缩进 */
+export function parseSkillFrontmatter(content: string, slug: string, enabled: boolean): SkillMeta {
+  const meta: SkillMeta = { slug, name: slug, enabled }
+
+  // 移除 UTF-8 BOM（﻿），确保 YAML frontmatter 匹配不受 BOM 干扰
+  if (content.charCodeAt(0) === 0xFEFF) content = content.slice(1)
+
+  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/)
+  if (!fmMatch) return meta
+
+  const yaml = fmMatch[1]
+  if (!yaml) return meta
+
+  const validKeys = new Set(['name', 'description', 'group', 'icon', 'version'])
+  const entries: Record<string, string> = {}
+  let currentKey = ''
+  let isFolded = false
+
+  for (const line of yaml.split('\n')) {
+    const indented = /^\s/.test(line)
+
+    if (!indented) {
+      const colonIdx = line.indexOf(':')
+      if (colonIdx === -1) { currentKey = ''; continue }
+
+      const key = line.slice(0, colonIdx).trim()
+      const raw = line.slice(colonIdx + 1).trim()
+
+      if (!validKeys.has(key)) { currentKey = ''; isFolded = false; continue }
+
+      if (raw === '|' || raw === '>') {
+        currentKey = key
+        isFolded = raw === '>'
+        entries[key] = ''
+        continue
+      }
+
+      currentKey = key
+      isFolded = false
+      entries[key] = raw.replace(/^["']|["']$/g, '')
+    } else if (currentKey) {
+      const text = line.trim()
+      if (!text) { if (entries[currentKey]) entries[currentKey] += '\n'; continue }
+      const sep = isFolded ? ' ' : '\n'
+      entries[currentKey] = entries[currentKey] ? entries[currentKey] + sep + text : text
+    }
+  }
+
+  if (entries.name) meta.name = entries.name.trim()
+  if (entries.description) meta.description = entries.description.trim()
+  if (entries.group) meta.group = entries.group.trim()
+  if (entries.icon) meta.icon = entries.icon.trim()
+  if (entries.version) meta.version = entries.version.trim()
+
+  return meta
+}
+
+// ===== 工作区能力摘要 =====
+
+export function getWorkspaceCapabilities(workspaceSlug: string): WorkspaceCapabilities {
+  const mcpConfig = getWorkspaceMcpConfig(workspaceSlug)
+  const skills = getWorkspaceSkills(workspaceSlug)
+
+  const mcpServers = Object.entries(mcpConfig.servers ?? {}).map(([name, entry]) => ({
+    name,
+    enabled: entry.enabled,
+    type: entry.type,
+  }))
+
+  const memory = getWorkspaceMemorySummary(workspaceSlug)
+
+  return { mcpServers, builtinMcpServers: [], skills, memory }
+}
+
+export function createWorkspaceSkill(workspaceSlug: string, skillSlug: string, name: string, description: string, content: string): void {
+  assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
+  assertSafeSkillSegment(skillSlug, 'Skill slug')
+  const normalizedSlug = skillSlug.trim()
+  assertSafeSkillSegment(normalizedSlug, 'Skill slug')
+  if (!normalizedSlug) throw new Error('Skill slug 不能为空')
+  if (!name.trim()) throw new Error('Skill 名称不能为空')
+  const target = join(getWorkspaceSkillsDir(workspaceSlug), normalizedSlug)
+  if (findSkillPathInRoot(getWorkspaceSkillsDir(workspaceSlug), normalizedSlug)
+    || findSkillPathInRoot(getInactiveSkillsDir(workspaceSlug), normalizedSlug)) {
+    throw new Error(`Skill 已存在: ${normalizedSlug}`)
+  }
+  mkdirSync(target, { recursive: true })
+  const frontmatter = `---\nname: ${name.trim()}\ndescription: ${description.trim()}\nversion: 1.0.0\n---\n\n${content}`
+  writeFileSync(join(target, 'SKILL.md'), frontmatter, 'utf-8')
+  writeSkillSource(target, { scope: 'workspace', workspaceSkillId: randomUUID() })
+  console.log(`[Agent 工作区] 已创建 Skill: ${workspaceSlug}/${normalizedSlug}`)
+}
+
+/** 将当前工作区 Skill 提升为用户全局 Skill；原工作区副本是否保留由调用方明确传入。 */
+export function promoteWorkspaceSkillToGlobal(workspaceSlug: string, skillSlug: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true): import('@profer/shared').GlobalSkillManifest {
+  assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
+  assertSafeSkillSegment(skillSlug, 'Skill slug')
+  const skillSlugKey = canonicalSkillSegmentKey(skillSlug)
+  const skill = getAllWorkspaceSkills(workspaceSlug).find((item) => canonicalSkillSegmentKey(item.slug) === skillSlugKey && item.actualSource === 'workspace')
+  if (!skill) throw new Error(`工作区 Skill 不存在: ${skillSlug}`)
+  const content = readWorkspaceSkillContent(workspaceSlug, skill.slug)
+  const created = createUserGlobalSkill(skill.slug, skill.name, skill.description ?? '', content)
+  for (const target of targetWorkspaceSlugs) {
+    assertSafeSkillSegment(target, 'target workspaceSlug')
+    setGlobalSkillEnabled(target, created.skillId, true)
+  }
+  if (keepWorkspaceCopy) {
+    const activePath = findSkillPathInRoot(getWorkspaceSkillsDir(workspaceSlug), skill.slug)
+    const inactiveDir = getInactiveSkillsDir(workspaceSlug)
+    if (activePath) {
+      if (findSkillPathInRoot(inactiveDir, skill.slug)) throw new Error(`目标目录已存在同名 Skill: ${skill.slug}`)
+      renameSync(activePath, join(inactiveDir, basename(activePath)))
+    }
+  } else {
+    deleteWorkspaceSkill(workspaceSlug, skill.slug)
+  }
+  return created
+}
+
+export function deleteWorkspaceSkill(workspaceSlug: string, skillSlug: string): void {
+  assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
+  assertSafeSkillSegment(skillSlug, 'Skill slug')
+  const skillPath = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!skillPath) throw new Error(`Skill 不存在: ${skillSlug}`)
+  rmSync(skillPath, { recursive: true, force: true })
+  console.log(`[Agent 工作区] 已删除 Skill: ${workspaceSlug}/${skillSlug}`)
+}
+
+/** 扫描指定目录下的 Skills，供 getWorkspaceSkills 和 getAllWorkspaceSkills 复用 */
+export function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
+  const skills: SkillMeta[] = []
+
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true })
+
+    for (const entry of entries) {
+      const isDir = entry.isDirectory() || (entry.isSymbolicLink() && statSync(join(dir, entry.name)).isDirectory())
+      if (!isDir) continue
+
+      const skillMdPath = join(dir, entry.name, 'SKILL.md')
+      if (!existsSync(skillMdPath)) continue
+
+      try {
+        const content = readFileSync(skillMdPath, 'utf-8')
+        const meta = parseSkillFrontmatter(content, entry.name, enabled)
+
+        // 新全局体系与旧工作区导入共用 .source.json，但来源语义不同：
+        // 新格式没有 sourceWorkspaceSlug，不能误走旧的“回源工作区”逻辑。
+        const skillDir = join(dir, entry.name)
+        let source = readSkillSource(skillDir)
+        if (!source) {
+          source = { scope: 'workspace', workspaceSkillId: randomUUID() }
+          writeSkillSource(skillDir, source)
+        } else if (!source.workspaceSkillId) {
+          source = { ...source, workspaceSkillId: randomUUID() }
+          writeSkillSource(skillDir, source)
+        }
+        meta.workspaceSkillId = source.workspaceSkillId
+        if (source) {
+          if (isWorkspaceSkillSource(source)) {
+            if (source.sourceSkillId) meta.sourceSkillId = source.sourceSkillId
+            if (source.sourceSkillType) meta.sourceSkillType = source.sourceSkillType
+            if (source.sourceVersion) meta.sourceVersion = source.sourceVersion
+            if (source.copiedAt) meta.copiedAt = source.copiedAt
+            if (source.replacementForSkillId) meta.replacementForSkillId = source.replacementForSkillId
+            if (source.sourceStatus) meta.sourceStatus = source.sourceStatus
+            meta.actualSource = enabled ? 'workspace' : 'none'
+          } else {
+            meta.importSource = source
+            const sourceSkillDir = resolveSkillDir(source.sourceWorkspaceSlug, entry.name)
+            if (sourceSkillDir) {
+              const currentSourceVersion = parseSkillVersion(sourceSkillDir)
+              meta.hasUpdate = isNewerVersion(currentSourceVersion, source.sourceVersion)
+            }
+            meta.actualSource = enabled ? 'workspace' : 'none'
+          }
+        } else {
+          meta.actualSource = enabled ? 'workspace' : 'none'
+        }
+
+        skills.push(meta)
+      } catch {
+        console.warn(`[Agent 工作区] 解析 Skill 失败: ${entry.name}`)
+      }
+    }
+  } catch {
+    // 目录可能不存在
+  }
+
+  return skills
+}
+
+/**
+ * 旧 renderer 兼容 API：工作区目录中的 Skill（包括迁移来的旧元 Skill 副本）都可编辑。
+ * 全局 builtin 的只读展示由 globalSkill API 提供，不能再按 slug 将本地副本误判为只读。
+ */
+export function getDefaultSkillSlugs(): string[] {
+  return []
+}
+
+/** 获取工作区所有 Skills（含活跃和不活跃），用于设置页 UI */
+export function getAllWorkspaceSkills(workspaceSlug: string, includeGlobalSkills = false): SkillMeta[] {
+  assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
+  const activeSkills = scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)
+  const inactiveSkills = scanSkillsInDir(getInactiveSkillsDir(workspaceSlug), false)
+  const globalSkills = listGlobalSkills(workspaceSlug).map((skill): SkillMeta => ({
+    slug: skill.slug,
+    name: skill.name,
+    description: skill.description,
+    version: skill.version,
+    enabled: skill.enabledInWorkspace,
+    actualSource: skill.enabledInWorkspace ? 'global' : 'none',
+    sourceSkillId: skill.skillId,
+    sourceSkillType: skill.type,
+    sourceVersion: skill.version,
+    sourceStatus: 'available',
+  }))
+  // 全局定义与工作区副本是两个可分别管理的条目；UI 可选择同时展示全局来源。
+  return includeGlobalSkills ? [...activeSkills, ...inactiveSkills, ...globalSkills] : [...activeSkills, ...inactiveSkills]
+}
+
+/** 在 skills/ 和 skills-inactive/ 之间移动来切换启用/禁用 */
+export function toggleWorkspaceSkill(workspaceSlug: string, skillSlug: string, enabled: boolean, sourceSkillId?: string): void {
+  assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
+  assertSafeSkillSegment(skillSlug, 'Skill slug')
+  // 三态路由：非空 ID=全局，空字符串=明确本地，未传=本地优先后才回退全局。
+  if (sourceSkillId !== undefined && sourceSkillId !== '') {
+    assertSafeSkillSegment(sourceSkillId, 'sourceSkillId')
+    const globalSkill = listGlobalSkills(workspaceSlug).find((skill) => skill.skillId === sourceSkillId)
+    if (!globalSkill) throw new Error(`全局 Skill 不存在: ${sourceSkillId}`)
+    setGlobalSkillEnabled(workspaceSlug, globalSkill.skillId, enabled)
+    return
+  }
+  const activeDir = getWorkspaceSkillsDir(workspaceSlug)
+  const inactiveDir = getInactiveSkillsDir(workspaceSlug)
+  const activePath = findSkillPathInRoot(activeDir, skillSlug)
+  const inactivePath = findSkillPathInRoot(inactiveDir, skillSlug)
+  // 未传 sourceSkillId 时只有本地不存在才允许按 slug 回退全局，避免同名误操作。
+  if (!activePath && !inactivePath && sourceSkillId === undefined) {
+    const skillSlugKey = canonicalSkillSegmentKey(skillSlug)
+    const globalSkill = listGlobalSkills(workspaceSlug).find((skill) => canonicalSkillSegmentKey(skill.slug) === skillSlugKey)
+    if (globalSkill) {
+      setGlobalSkillEnabled(workspaceSlug, globalSkill.skillId, enabled)
+      return
+    }
+  }
+  const srcPath = enabled ? inactivePath : activePath
+  const destDir = enabled ? activeDir : inactiveDir
+  if (!srcPath) throw new Error(`工作区 Skill 不存在: ${skillSlug}`)
+  const actualSlug = basename(srcPath)
+  const destPath = join(destDir, actualSlug)
+  if (findSkillPathInRoot(destDir, actualSlug)) throw new Error(`目标目录已存在同名 Skill: ${actualSlug}`)
+  renameSync(srcPath, destPath)
+  console.log(`[Agent 工作区] Skill ${enabled ? '启用' : '禁用'}: ${workspaceSlug}/${actualSlug}`)
+}
+
+/**
+ * 获取其他工作区的 Skill 列表，按工作区分组返回。
+ */
+export function getOtherWorkspaceSkills(currentSlug: string): OtherWorkspaceSkillsGroup[] {
+  const workspaces = listAgentWorkspaces()
+  const result: OtherWorkspaceSkillsGroup[] = []
+
+  for (const workspace of workspaces) {
+    if (workspace.slug === currentSlug) continue
+
+    const skills = getAllWorkspaceSkills(workspace.slug)
+    if (skills.length === 0) continue
+
+    result.push({
+      workspaceName: workspace.name,
+      workspaceSlug: workspace.slug,
+      skills,
+    })
+  }
+
+  return result
+}
+
+// ===== 预设跨工作区导入（与 Skill 导入同构） =====
+
+/**
+ * 获取其他工作区的自定义预设列表，按工作区分组返回。
+ * 内置预设不参与导入（每工作区恒有）。
+ */
+export function getOtherWorkspacePresets(currentSlug: string): OtherWorkspacePresetsGroup[] {
+  const workspaces = listAgentWorkspaces()
+  const result: OtherWorkspacePresetsGroup[] = []
+
+  for (const workspace of workspaces) {
+    if (workspace.slug === currentSlug) continue
+
+    const presets = listAgentPresets(workspace.slug).filter((p) => !p.isBuiltin)
+    if (presets.length === 0) continue
+
+    result.push({
+      workspaceName: workspace.name,
+      workspaceSlug: workspace.slug,
+      presets,
+    })
+  }
+
+  return result
+}
+
+/**
+ * 从其他工作区导入自定义预设到当前工作区（深拷贝 + 新 UUID）。
+ */
+export function importPresetFromWorkspace(
+  targetSlug: string,
+  sourceSlug: string,
+  presetId: string,
+): AgentPreset {
+  const source = listAgentPresets(sourceSlug).find((p) => p.id === presetId && !p.isBuiltin)
+  if (!source) {
+    throw new Error(`源工作区中不存在自定义预设: ${presetId}`)
+  }
+
+  const imported = createAgentPreset(targetSlug, {
+    name: source.name,
+    description: source.description,
+    promptSections: source.promptSections,
+    suppressPromptSections: source.suppressPromptSections,
+    disabledToolGroups: source.disabledToolGroups,
+    effort: source.effort,
+    permissionMode: source.permissionMode,
+    skillSlugs: source.skillSlugs,
+    mcpServerNames: source.mcpServerNames,
+    allowSubagents: source.allowSubagents,
+  })
+
+  console.log(`[Agent 预设] 已从 ${sourceSlug} 导入预设: ${source.name} → ${targetSlug}/${imported.id}`)
+  return imported
+}
+
+/**
+ * 从其他工作区导入 Skill 到当前工作区。
+ *
+ * 复制目录并记录来源元数据（.source.json），支持后续版本检测和同步更新。
+ */
+export function importSkillFromWorkspace(
+  targetSlug: string,
+  sourceSlug: string,
+  skillSlug: string,
+): SkillMeta {
+  assertSafeSkillSegment(targetSlug, 'target workspaceSlug')
+  assertSafeSkillSegment(sourceSlug, 'source workspaceSlug')
+  assertSafeSkillSegment(skillSlug, 'Skill slug')
+  const sourcePath = resolveSkillDir(sourceSlug, skillSlug)
+
+  if (!sourcePath) {
+    throw new Error(`源工作区中不存在 Skill: ${skillSlug}`)
+  }
+  const actualSkillSlug = basename(sourcePath)
+
+  // P0 修复：复制前校验源 SKILL.md 存在，避免产生孤立目录
+  const sourceSkillMdPath = join(sourcePath, 'SKILL.md')
+  if (!existsSync(sourceSkillMdPath)) {
+    throw new Error(`源 Skill 缺少 SKILL.md: ${skillSlug}`)
+  }
+
+  const targetSkillsDir = getWorkspaceSkillsDir(targetSlug)
+  const targetInactiveDir = getInactiveSkillsDir(targetSlug)
+  if (findSkillPathInRoot(targetSkillsDir, actualSkillSlug) || findSkillPathInRoot(targetInactiveDir, actualSkillSlug)) {
+    throw new Error(`当前工作区已存在同名 Skill: ${actualSkillSlug}`)
+  }
+  const targetPath = join(targetSkillsDir, actualSkillSlug)
+
+  copySkillDirectorySafely(sourcePath, targetPath)
+
+  // 写入来源元数据
+  const sourceWorkspace = listAgentWorkspaces().find((w) => w.slug === sourceSlug)
+  const sourceSource = readSkillSource(sourcePath)
+  const importSource: SkillImportSource = {
+    // 导出/导入保留已存在的实体 ID；旧副本没有 ID 时才生成一次并写入目标元数据。
+    workspaceSkillId: sourceSource?.workspaceSkillId ?? randomUUID(),
+    sourceWorkspaceSlug: sourceSlug,
+    sourceWorkspaceName: sourceWorkspace?.name ?? sourceSlug,
+    importedAt: new Date().toISOString(),
+    sourceVersion: parseSkillVersion(sourcePath),
+  }
+  writeSkillImportSource(targetPath, importSource)
+
+  console.log(`[Agent 工作区] 已从 ${sourceSlug} 导入 Skill: ${targetSlug}/${actualSkillSlug}`)
+
+  const content = readFileSync(join(targetPath, 'SKILL.md'), 'utf-8')
+  const meta = parseSkillFrontmatter(content, actualSkillSlug, true)
+  meta.importSource = importSource
+  return meta
+}
+
+/**
+ * 从源工作区同步更新已导入的 Skill（覆盖更新）。
+ *
+ * - 源不存在：抛出错误，不修改目标
+ * - 本地已禁用（skills-inactive）：在 inactive 目录中原地更新，保留 enabled 状态
+ */
+export function updateSkillFromSource(
+  targetSlug: string,
+  skillSlug: string,
+): SkillMeta {
+  assertSafeSkillSegment(targetSlug, 'target workspaceSlug')
+  assertSafeSkillSegment(skillSlug, 'Skill slug')
+  const activeDir = getWorkspaceSkillsDir(targetSlug)
+  const inactiveDir = getInactiveSkillsDir(targetSlug)
+  const activePath = findSkillPathInRoot(activeDir, skillSlug)
+  const inactivePath = findSkillPathInRoot(inactiveDir, skillSlug)
+  const targetPath = activePath ?? inactivePath
+
+  if (!targetPath) {
+    throw new Error(`当前工作区中不存在 Skill: ${skillSlug}`)
+  }
+  const actualSkillSlug = basename(targetPath)
+
+  const existingSource = readSkillImportSource(targetPath)
+  if (!existingSource) {
+    throw new Error(`Skill ${skillSlug} 不是从其他工作区导入的，无法从源更新`)
+  }
+
+  const sourcePath = resolveSkillDir(existingSource.sourceWorkspaceSlug, actualSkillSlug)
+  if (!sourcePath) {
+    throw new Error(`源工作区中不再存在 Skill: ${skillSlug}（来源: ${existingSource.sourceWorkspaceName}）`)
+  }
+
+  if (!existsSync(join(sourcePath, 'SKILL.md'))) {
+    throw new Error(`源 Skill 缺少 SKILL.md: ${skillSlug}`)
+  }
+
+  // 先复制到临时目录，成功后再替换旧目录，确保原子性
+  const parentDir = join(targetPath, '..')
+  const tmpPath = join(parentDir, `.${actualSkillSlug}.updating`)
+  try {
+    copySkillDirectorySafely(sourcePath, tmpPath)
+  } catch (err) {
+    // 复制失败时清理临时目录，保留原目录不变
+    if (existsSync(tmpPath)) rmSync(tmpPath, { recursive: true, force: true })
+    throw err
+  }
+  rmSync(targetPath, { recursive: true, force: true })
+  renameSync(tmpPath, targetPath)
+
+  // 更新来源元数据（保留原始 importedAt）
+  const sourceWorkspace = listAgentWorkspaces().find((w) => w.slug === existingSource.sourceWorkspaceSlug)
+  const updatedSource: SkillImportSource = {
+    sourceWorkspaceSlug: existingSource.sourceWorkspaceSlug,
+    sourceWorkspaceName: sourceWorkspace?.name ?? existingSource.sourceWorkspaceName,
+    importedAt: existingSource.importedAt,
+    sourceVersion: parseSkillVersion(sourcePath),
+  }
+  writeSkillImportSource(targetPath, updatedSource)
+
+  const enabled = targetPath === activePath
+  const content = readFileSync(join(targetPath, 'SKILL.md'), 'utf-8')
+  const meta = parseSkillFrontmatter(content, actualSkillSlug, enabled)
+  meta.importSource = updatedSource
+  meta.hasUpdate = false
+
+  console.log(`[Agent 工作区] 已从源更新 Skill: ${targetSlug}/${actualSkillSlug}`)
+  return meta
+}
+
+// ===== Skill 来源追踪 helpers =====
+
+const SOURCE_META_FILE = '.source.json'
+
+function readSkillSource(skillDir: string): SkillImportSource | WorkspaceSkillSource | undefined {
+  const p = join(skillDir, SOURCE_META_FILE)
+  if (!existsSync(p)) return undefined
+  try {
+    const value = JSON.parse(readFileSync(p, 'utf-8')) as Partial<SkillImportSource & WorkspaceSkillSource>
+    if (value.scope === 'workspace') return value as WorkspaceSkillSource
+    if (typeof value.sourceWorkspaceSlug === 'string' && typeof value.sourceVersion === 'string') {
+      return value as SkillImportSource
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+function readSkillImportSource(skillDir: string): SkillImportSource | undefined {
+  const source = readSkillSource(skillDir)
+  return source && !isWorkspaceSkillSource(source) ? source : undefined
+}
+
+function isWorkspaceSkillSource(source: SkillImportSource | WorkspaceSkillSource): source is WorkspaceSkillSource {
+  return 'scope' in source && source.scope === 'workspace'
+}
+
+function writeSkillImportSource(skillDir: string, source: SkillImportSource): void {
+  writeSkillSource(skillDir, source)
+}
+
+function writeSkillSource(skillDir: string, source: SkillImportSource | WorkspaceSkillSource): void {
+  writeFileSync(join(skillDir, SOURCE_META_FILE), JSON.stringify(source, null, 2), 'utf-8')
+}
+
+/** 在大小写敏感宿主上也按 Windows 目录语义定位 Skill。 */
+function findSkillPathInRoot(root: string, skillSlug: string): string | null {
+  const key = canonicalSkillSegmentKey(skillSlug)
+  const entry = readdirSync(root, { withFileTypes: true })
+    .find((candidate) => candidate.isDirectory()
+      && !candidate.isSymbolicLink()
+      && canonicalSkillSegmentKey(candidate.name) === key)
+  if (!entry) return null
+  assertSafeSkillSegment(entry.name, 'Skill slug')
+  return join(root, entry.name)
+}
+
+/** 解析 Skill 所在目录（active 或 inactive），不存在则返回 null。 */
+function resolveSkillDir(workspaceSlug: string, skillSlug: string): string | null {
+  assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
+  assertSafeSkillSegment(skillSlug, 'Skill slug')
+  return findSkillPathInRoot(getWorkspaceSkillsDir(workspaceSlug), skillSlug)
+    ?? findSkillPathInRoot(getInactiveSkillsDir(workspaceSlug), skillSlug)
+}
+
+export function readWorkspaceSkillContent(workspaceSlug: string, skillSlug: string): string {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  const mdPath = join(dir, 'SKILL.md')
+  if (!existsSync(mdPath)) throw new Error(`SKILL.md 不存在: ${mdPath}`)
+  return readFileSync(mdPath, 'utf-8')
+}
+
+export function writeWorkspaceSkillContent(workspaceSlug: string, skillSlug: string, content: string): void {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 SKILL.md: ${workspaceSlug}/${skillSlug}`)
+}
+
+// ===== Profer 工作区资料与记忆管理 =====
+
+/** Profer 自己管理的工作区资料；不要与用户项目的 CLAUDE.md / AGENTS.md 混用。 */
+const WORKSPACE_PROFILE_FILE = 'workspace-profile.md'
+/** 历史版本曾把 Profer 工作区资料写成 CLAUDE.md，仅用于兼容读取。 */
+const LEGACY_WORKSPACE_PROFILE_FILE = 'CLAUDE.md'
+const PROFER_MEMORY_DIR = '.profer/memory'
+/** 旧版本使用 Claude 命名空间保存 Profer 工作区记忆，仅用于兼容迁移。 */
+const LEGACY_PROFER_MEMORY_DIR = '.claude/memory'
+const AUTO_MEMORY_INDEX = 'MEMORY.md'
+
+function fileSummary(absPath: string): WorkspaceMemorySummary['workspaceProfile'] {
+  if (!existsSync(absPath)) {
+    return { exists: false, path: absPath, size: 0 }
+  }
+  const st = statSync(absPath)
+  return {
+    exists: st.isFile(),
+    path: absPath,
+    size: st.isFile() ? st.size : 0,
+    updatedAt: st.mtimeMs,
+  }
+}
+
+export function getWorkspaceProfilePath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), WORKSPACE_PROFILE_FILE)
+}
+
+function getLegacyWorkspaceProfilePath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), LEGACY_WORKSPACE_PROFILE_FILE)
+}
+
+/** 新路径优先；旧 CLAUDE.md 只读兼容，后续写入始终落到 workspace-profile.md。 */
+function resolveWorkspaceProfileReadPath(workspaceSlug: string): string {
+  const profilePath = getWorkspaceProfilePath(workspaceSlug)
+  if (existsSync(profilePath)) return profilePath
+  const legacyPath = getLegacyWorkspaceProfilePath(workspaceSlug)
+  return existsSync(legacyPath) ? legacyPath : profilePath
+}
+
+function getWorkspaceAutoMemoryPath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), PROFER_MEMORY_DIR)
+}
+
+function getLegacyWorkspaceAutoMemoryPath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), LEGACY_PROFER_MEMORY_DIR)
+}
+
+/**
+ * 将旧 `.claude/memory` 中尚未出现在新目录的文件复制到 `.profer/memory`。
+ * 保留旧目录作为人工回滚/审计副本，不覆盖新目录中已经存在的文件。
+ */
+function mergeLegacyMemoryEntries(sourceDir: string, targetDir: string): void {
+  if (!existsSync(sourceDir)) return
+  if (existsSync(targetDir)) {
+    try {
+      if (!statSync(targetDir).isDirectory()) return
+    } catch {
+      return
+    }
+  } else {
+    mkdirSync(targetDir, { recursive: true })
+  }
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = readdirSync(sourceDir, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const source = join(sourceDir, entry.name)
+    const target = join(targetDir, entry.name)
+    if (entry.isDirectory()) {
+      if (!existsSync(target)) mkdirSync(target, { recursive: true })
+      mergeLegacyMemoryEntries(source, target)
+    } else if (entry.isFile() && !existsSync(target)) {
+      try { cpSync(source, target) } catch (error) {
+        console.warn(`[Agent 工作区] 迁移旧记忆文件失败 (${source}):`, error)
+      }
+    }
+  }
+}
+
+function migrateLegacyWorkspaceMemory(workspaceSlug: string, targetDir: string): void {
+  const legacyDir = getLegacyWorkspaceAutoMemoryPath(workspaceSlug)
+  if (!existsSync(legacyDir)) return
+  const targetExisted = existsSync(targetDir)
+  mergeLegacyMemoryEntries(legacyDir, targetDir)
+  if (!targetExisted) {
+    console.log(`[Agent 工作区] 已兼容迁移旧记忆目录: ${legacyDir} → ${targetDir}（旧目录保留）`)
+  }
+}
+
+export function getWorkspaceAutoMemoryDir(workspaceSlug: string): string {
+  const dir = getWorkspaceAutoMemoryPath(workspaceSlug)
+  migrateLegacyWorkspaceMemory(workspaceSlug, dir)
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}
+
+function resolveAutoMemoryFilePath(memoryDir: string, relativePath: string): string {
+  if (typeof relativePath !== 'string' || relativePath.length === 0) {
+    throw new Error('相对路径不能为空')
+  }
+  if (isAbsolute(relativePath)) {
+    throw new Error('禁止传入绝对路径')
+  }
+  const normalized = relativePath.replace(/\\/g, '/')
+  const resolved = resolve(memoryDir, normalized)
+  const rel = relative(memoryDir, resolved)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error('非法路径：禁止访问 auto memory 目录外')
+  }
+  // 防御 symlink 逃逸：字符串层面的 relative 检查无法识别目录内指向外部的软链接。
+  // 对真实存在的最近祖先做 realpath 校验，确保解析后仍落在 memoryDir 之内。
+  const memoryRealDir = existsSync(memoryDir) ? realpathSync(memoryDir) : memoryDir
+  let probe = resolved
+  while (probe !== memoryDir && !existsSync(probe)) {
+    const parent = dirname(probe)
+    if (parent === probe) break
+    probe = parent
+  }
+  if (existsSync(probe)) {
+    const realProbe = realpathSync(probe)
+    const realRel = relative(memoryRealDir, realProbe)
+    if (realRel.startsWith('..') || isAbsolute(realRel)) {
+      throw new Error('非法路径：禁止通过软链接访问 auto memory 目录外')
+    }
+  }
+  return resolved
+}
+
+function collectAutoMemorySummary(memoryDir: string): WorkspaceMemorySummary['autoMemory'] {
+  let fileCount = 0
+  let totalSize = 0
+  let updatedAt: number | undefined
+
+  const walk = (dir: string, depth: number): void => {
+    if (depth > SKILL_TREE_MAX_DEPTH) return
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const absPath = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(absPath, depth + 1)
+      } else if (entry.isFile()) {
+        const st = statSync(absPath)
+        if (isLikelyBinaryFile(absPath, st.size)) continue
+        fileCount += 1
+        totalSize += st.size
+        updatedAt = updatedAt == null ? st.mtimeMs : Math.max(updatedAt, st.mtimeMs)
+      }
+    }
+  }
+
+  walk(memoryDir, 0)
+  return {
+    directory: memoryDir,
+    indexExists: existsSync(join(memoryDir, AUTO_MEMORY_INDEX)),
+    fileCount,
+    totalSize,
+    updatedAt,
+  }
+}
+
+function buildMemoryFileTree(rootDir: string, currentDir: string, depth: number): SkillFileNode[] {
+  if (depth > SKILL_TREE_MAX_DEPTH) return []
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = readdirSync(currentDir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  const nodes: SkillFileNode[] = []
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const absPath = join(currentDir, entry.name)
+    const rel = relative(rootDir, absPath).split(/[\\/]/).join('/')
+
+    if (entry.isDirectory()) {
+      nodes.push({
+        relativePath: rel,
+        name: entry.name,
+        type: 'directory',
+        children: buildMemoryFileTree(rootDir, absPath, depth + 1),
+      })
+    } else if (entry.isFile()) {
+      let size = 0
+      try {
+        size = statSync(absPath).size
+      } catch {
+        // ignore
+      }
+      nodes.push({
+        relativePath: rel,
+        name: entry.name,
+        type: 'file',
+        size,
+        isText: !isLikelyBinaryFile(absPath, size),
+      })
+    }
+  }
+
+  nodes.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+    if (a.relativePath === AUTO_MEMORY_INDEX) return -1
+    if (b.relativePath === AUTO_MEMORY_INDEX) return 1
+    return a.name.localeCompare(b.name)
+  })
+  return nodes
+}
+
+export function getWorkspaceMemorySummary(workspaceSlug: string): WorkspaceMemorySummary {
+  const memoryDir = getWorkspaceAutoMemoryDir(workspaceSlug)
+  const profilePath = resolveWorkspaceProfileReadPath(workspaceSlug)
+  const profileSummary = fileSummary(profilePath)
+  return {
+    workspaceProfile: {
+      ...profileSummary,
+      // 旧 CLAUDE.md 只作为读取来源；写入 API 始终落到新的 Profer profile。
+      path: profilePath,
+    },
+    autoMemory: {
+      ...collectAutoMemorySummary(memoryDir),
+      memoryArchivePath: getWorkspaceMemoryArchivePath(workspaceSlug),
+    },
+  }
+}
+
+export function readWorkspaceProfile(workspaceSlug: string): SkillFileContent {
+  const abs = resolveWorkspaceProfileReadPath(workspaceSlug)
+  if (!existsSync(abs)) {
+    return { relativePath: WORKSPACE_PROFILE_FILE, isText: true, size: 0, content: '' }
+  }
+  const st = statSync(abs)
+  if (!st.isFile()) throw new Error(`${WORKSPACE_PROFILE_FILE} 不是文件`)
+  if (st.size > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`文件过大（${(st.size / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+  const binary = isLikelyBinaryFile(abs, st.size)
+  return {
+    relativePath: WORKSPACE_PROFILE_FILE,
+    isText: !binary,
+    size: st.size,
+    content: binary ? undefined : readFileSync(abs, 'utf-8'),
+  }
+}
+
+export function writeWorkspaceProfile(workspaceSlug: string, content: string): void {
+  const byteLen = Buffer.byteLength(content, 'utf-8')
+  if (byteLen > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+  writeFileSync(getWorkspaceProfilePath(workspaceSlug), content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 Profer workspace-profile.md: ${workspaceSlug}`)
+}
+
+export function listWorkspaceAutoMemoryFiles(workspaceSlug: string): SkillFileNode[] {
+  const dir = getWorkspaceAutoMemoryDir(workspaceSlug)
+  return buildMemoryFileTree(dir, dir, 0)
+}
+
+export function readWorkspaceAutoMemoryFile(workspaceSlug: string, relativePath: string): SkillFileContent {
+  const dir = getWorkspaceAutoMemoryDir(workspaceSlug)
+  const abs = resolveAutoMemoryFilePath(dir, relativePath)
+  if (!existsSync(abs) && relativePath === AUTO_MEMORY_INDEX) {
+    return { relativePath: AUTO_MEMORY_INDEX, isText: true, size: 0, content: '' }
+  }
+  if (!existsSync(abs)) throw new Error(`文件不存在: ${relativePath}`)
+
+  const st = statSync(abs)
+  if (!st.isFile()) throw new Error(`目标不是文件: ${relativePath}`)
+  if (st.size > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`文件过大（${(st.size / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+
+  const binary = isLikelyBinaryFile(abs, st.size)
+  return {
+    relativePath: relative(dir, abs).split(/[\\/]/).join('/'),
+    isText: !binary,
+    size: st.size,
+    content: binary ? undefined : readFileSync(abs, 'utf-8'),
+  }
+}
+
+export function writeWorkspaceAutoMemoryFile(workspaceSlug: string, relativePath: string, content: string): void {
+  const dir = getWorkspaceAutoMemoryDir(workspaceSlug)
+  const abs = resolveAutoMemoryFilePath(dir, relativePath)
+  const byteLen = Buffer.byteLength(content, 'utf-8')
+  if (byteLen > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+  const parent = dirname(abs)
+  if (!existsSync(parent)) {
+    mkdirSync(parent, { recursive: true })
+  }
+  writeFileSync(abs, content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 auto memory 文件: ${workspaceSlug}/${relativePath}`)
+}
+
+// ===== memory-archive 主题记忆目录管理 =====
+
+/**
+ * memory-archive 主题记忆目录（workspace-files/.context/memory-archive）绝对路径。
+ * 该目录承载 Claude 与 Pi 两个 runtime 通过统一知识维护规则写入的专题记忆正文，
+ * 在能力中心与 MEMORY.md 索引并列展示，确保 Pi 主动写入的内容可被用户审计。
+ */
+export function getWorkspaceMemoryArchivePath(workspaceSlug: string): string {
+  return join(resolveWorkspaceFilesDir(workspaceSlug), '.context', 'memory-archive')
+}
+
+export function listWorkspaceMemoryArchiveFiles(workspaceSlug: string): SkillFileNode[] {
+  const dir = getWorkspaceMemoryArchivePath(workspaceSlug)
+  if (!existsSync(dir)) return []
+  return buildMemoryFileTree(dir, dir, 0)
+}
+
+export function readWorkspaceMemoryArchiveFile(workspaceSlug: string, relativePath: string): SkillFileContent {
+  const dir = getWorkspaceMemoryArchivePath(workspaceSlug)
+  const abs = resolveAutoMemoryFilePath(dir, relativePath)
+  if (!existsSync(abs)) throw new Error(`文件不存在: ${relativePath}`)
+  const st = statSync(abs)
+  if (!st.isFile()) throw new Error(`目标不是文件: ${relativePath}`)
+  if (st.size > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`文件过大（${(st.size / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+  const binary = isLikelyBinaryFile(abs, st.size)
+  return {
+    relativePath: relative(dir, abs).split(/[\\/]/).join('/'),
+    isText: !binary,
+    size: st.size,
+    content: binary ? undefined : readFileSync(abs, 'utf-8'),
+  }
+}
+
+export function writeWorkspaceMemoryArchiveFile(workspaceSlug: string, relativePath: string, content: string): void {
+  const dir = getWorkspaceMemoryArchivePath(workspaceSlug)
+  const abs = resolveAutoMemoryFilePath(dir, relativePath)
+  const byteLen = Buffer.byteLength(content, 'utf-8')
+  if (byteLen > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+  const parent = dirname(abs)
+  if (!existsSync(parent)) {
+    mkdirSync(parent, { recursive: true })
+  }
+  writeFileSync(abs, content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 memory-archive 文件: ${workspaceSlug}/${relativePath}`)
+}
+
+// ===== Skill 子文件管理 =====
+
+/** 单个子文件大小上限（10 MB），超过则拒绝读入到编辑器 */
+const SKILL_FILE_SIZE_LIMIT = 10 * 1024 * 1024
+/** 文件树递归深度上限，防止异常深嵌套 */
+const SKILL_TREE_MAX_DEPTH = 8
+
+/** 把相对路径限制在 Skill 根目录内，并拒绝直接覆盖 SKILL.md */
+function resolveSkillChildPath(skillDir: string, relativePath: string, opts: { allowSkillMd?: boolean } = {}): string {
+  if (typeof relativePath !== 'string' || relativePath.length === 0) {
+    throw new Error('相对路径不能为空')
+  }
+  if (isAbsolute(relativePath)) {
+    throw new Error('禁止传入绝对路径')
+  }
+  const normalized = relativePath.replace(/\\/g, '/')
+  const resolved = resolve(skillDir, normalized)
+  const rel = relative(skillDir, resolved)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error('非法路径：禁止访问 Skill 目录外')
+  }
+  // 用 lowercase 比较，避免 macOS/Windows 的大小写不敏感文件系统上 skill.md/Skill.MD 绕过保护
+  if (!opts.allowSkillMd && rel.split(/[\\/]/).join('/').toLowerCase() === 'skill.md') {
+    throw new Error('SKILL.md 由专用接口管理，请通过 readWorkspaceSkillContent / writeWorkspaceSkillContent')
+  }
+  return resolved
+}
+
+/** 用文件头判断是否为二进制文件（粗略：含 NUL 字节即视为二进制）。只读前 8KB，避免把大文件全量读入内存 */
+function isLikelyBinaryFile(absPath: string, size: number): boolean {
+  if (size === 0) return false
+  let fd: number | undefined
+  try {
+    fd = openSync(absPath, 'r')
+    const buf = Buffer.alloc(Math.min(size, 8192))
+    const n = readSync(fd, buf, 0, buf.length, 0)
+    return buf.subarray(0, n).includes(0)
+  } catch {
+    return true
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
+}
+
+function buildSkillFileTree(rootDir: string, currentDir: string, depth: number): SkillFileNode[] {
+  if (depth > SKILL_TREE_MAX_DEPTH) return []
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = readdirSync(currentDir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+
+  const nodes: SkillFileNode[] = []
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue // 跳过隐藏文件，如 .source.json
+    const absPath = join(currentDir, entry.name)
+    const rel = relative(rootDir, absPath).split(/[\\/]/).join('/')
+
+    if (rel === 'SKILL.md') continue // SKILL.md 由主编辑器管理
+
+    const isDir = entry.isDirectory()
+    if (isDir) {
+      nodes.push({
+        relativePath: rel,
+        name: entry.name,
+        type: 'directory',
+        children: buildSkillFileTree(rootDir, absPath, depth + 1),
+      })
+    } else if (entry.isFile()) {
+      let size = 0
+      try {
+        size = statSync(absPath).size
+      } catch {
+        // ignore
+      }
+      nodes.push({
+        relativePath: rel,
+        name: entry.name,
+        type: 'file',
+        size,
+        isText: !isLikelyBinaryFile(absPath, size),
+      })
+    }
+  }
+
+  // 目录优先 + 名称升序
+  nodes.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+  return nodes
+}
+
+export function listSkillFiles(workspaceSlug: string, skillSlug: string): SkillFileNode[] {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  return buildSkillFileTree(dir, dir, 0)
+}
+
+export function readSkillFile(workspaceSlug: string, skillSlug: string, relativePath: string): SkillFileContent {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  const abs = resolveSkillChildPath(dir, relativePath)
+  if (!existsSync(abs)) throw new Error(`文件不存在: ${relativePath}`)
+
+  const st = statSync(abs)
+  if (!st.isFile()) throw new Error(`目标不是文件: ${relativePath}`)
+  if (st.size > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`文件过大（${(st.size / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+
+  const binary = isLikelyBinaryFile(abs, st.size)
+  return {
+    relativePath: relative(dir, abs).split(/[\\/]/).join('/'),
+    isText: !binary,
+    size: st.size,
+    content: binary ? undefined : readFileSync(abs, 'utf-8'),
+  }
+}
+
+export function writeSkillFile(workspaceSlug: string, skillSlug: string, relativePath: string, content: string): void {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  const abs = resolveSkillChildPath(dir, relativePath)
+
+  const byteLen = Buffer.byteLength(content, 'utf-8')
+  if (byteLen > SKILL_FILE_SIZE_LIMIT) {
+    throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
+  }
+
+  if (existsSync(abs) && statSync(abs).isDirectory()) {
+    throw new Error(`目标是目录，无法写入文件内容: ${relativePath}`)
+  }
+
+  // 自动创建父目录
+  const parent = dirname(abs)
+  if (!existsSync(parent)) {
+    mkdirSync(parent, { recursive: true })
+  }
+
+  writeFileSync(abs, content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 Skill 子文件: ${workspaceSlug}/${skillSlug}/${relativePath}`)
+}
+
+export function createSkillEntry(
+  workspaceSlug: string,
+  skillSlug: string,
+  relativePath: string,
+  type: 'file' | 'directory',
+): void {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  const abs = resolveSkillChildPath(dir, relativePath)
+
+  if (existsSync(abs)) {
+    throw new Error(`目标已存在: ${relativePath}`)
+  }
+
+  if (type === 'directory') {
+    mkdirSync(abs, { recursive: true })
+  } else {
+    const parent = dirname(abs)
+    if (!existsSync(parent)) {
+      mkdirSync(parent, { recursive: true })
+    }
+    writeFileSync(abs, '', 'utf-8')
+  }
+  console.log(`[Agent 工作区] 已创建 Skill 子${type === 'directory' ? '目录' : '文件'}: ${workspaceSlug}/${skillSlug}/${relativePath}`)
+}
+
+export function deleteSkillEntry(workspaceSlug: string, skillSlug: string, relativePath: string): void {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  const abs = resolveSkillChildPath(dir, relativePath)
+  if (!existsSync(abs)) {
+    throw new Error(`目标不存在: ${relativePath}`)
+  }
+  rmSync(abs, { recursive: true, force: true })
+  console.log(`[Agent 工作区] 已删除 Skill 子项: ${workspaceSlug}/${skillSlug}/${relativePath}`)
+}
+
+export function renameSkillEntry(
+  workspaceSlug: string,
+  skillSlug: string,
+  fromRelative: string,
+  toRelative: string,
+): void {
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  const fromAbs = resolveSkillChildPath(dir, fromRelative)
+  const toAbs = resolveSkillChildPath(dir, toRelative)
+  if (!existsSync(fromAbs)) {
+    throw new Error(`源不存在: ${fromRelative}`)
+  }
+  if (existsSync(toAbs)) {
+    throw new Error(`目标已存在: ${toRelative}`)
+  }
+  const parent = dirname(toAbs)
+  if (!existsSync(parent)) {
+    mkdirSync(parent, { recursive: true })
+  }
+  renameSync(fromAbs, toAbs)
+  console.log(`[Agent 工作区] Skill 子项重命名: ${workspaceSlug}/${skillSlug}: ${fromRelative} → ${toRelative}`)
+}
+
+/** 简单 semver 比较：a 是否比 b 更新 */
+function isNewerVersion(a: string, b: string): boolean {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff > 0
+  }
+  return false
+}
+
+// ===== 团队工作区同步 =====
+
+/** 将远程团队工作区合并到本地索引，侧边栏即可展示 */
+export function syncTeamWorkspacesToIndex(teamWorkspaces: AgentWorkspace[]): void {
+  // 远端请求失败时调用方不得传空数组。空数组只代表服务端成功确认用户没有团队，
+  // 否则会把仍可访问的团队条目当成“已被踢出”删除，且 UI 没有恢复入口。
+  if (!Array.isArray(teamWorkspaces)) throw new Error('团队工作区同步数据非法')
+  const index = readIndex()
+  let changed = false
+  const serverIds = new Set(teamWorkspaces.map((w) => w.id))
+
+  // 清理：移除本地索引中已不在服务端列表里的团队工作区（被踢出/删除）
+  const before = index.workspaces.length
+  index.workspaces = index.workspaces.filter((w) => {
+    if (w.type === 'team' && !serverIds.has(w.id)) {
+      console.log(`[Agent 工作区] 移除已无权访问的团队工作区: ${w.name} (${w.id})`)
+      changed = true
+      return false
+    }
+    return true
+  })
+
+  for (const tw of teamWorkspaces) {
+    const existing = index.workspaces.find((w) => w.id === tw.id)
+    if (!existing) {
+      // 新建团队工作区到本地索引
+      index.workspaces.unshift({
+        ...tw,
+        type: 'team',
+      })
+      getAgentWorkspacePath(tw.slug)
+      ensurePluginManifest(tw.slug, tw.name)
+      changed = true
+    } else if (existing.type !== 'team') {
+      existing.type = 'team'
+      changed = true
+    }
+  }
+
+  if (changed) {
+    writeIndex(index)
+    const removed = before - index.workspaces.length
+    console.log(`[Agent 工作区] 已同步 ${teamWorkspaces.length} 个团队工作区到本地索引${removed > 0 ? `，移除 ${removed} 个` : ''}`)
+  }
+}
+
+// ===== 工作区类型筛选 =====
+
+/** 列出指定类型的工作区 */
+export function listWorkspacesByType(type: WorkspaceType): AgentWorkspace[] {
+  const index = readIndex()
+  return index.workspaces.filter((w) => w.type === type && !w.isDeleted)
+}
+
+// ===== 工作区配置管理 =====
+
+interface WorkspaceConfig {
+  attachedDirectories?: string[]
+  attachedFiles?: string[]
+  worktreeRepos?: import('@profer/shared').WorkspaceWorktreeRepo[]
+}
+
+function getWorkspaceConfigPath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), 'config.json')
+}
+
+function readWorkspaceConfig(workspaceSlug: string): WorkspaceConfig {
+  const configPath = getWorkspaceConfigPath(workspaceSlug)
+
+  if (!existsSync(configPath)) {
+    return {}
+  }
+
+  try {
+    const raw = readFileSync(configPath, 'utf-8')
+    const data = JSON.parse(raw) as Partial<WorkspaceConfig>
+    return {
+      attachedDirectories: Array.isArray(data.attachedDirectories)
+        ? data.attachedDirectories.filter((dir): dir is string => typeof dir === 'string')
+        : undefined,
+      attachedFiles: Array.isArray(data.attachedFiles)
+        ? data.attachedFiles.filter((file): file is string => typeof file === 'string')
+        : undefined,
+      worktreeRepos: Array.isArray(data.worktreeRepos)
+        ? data.worktreeRepos.filter((r) => r && typeof r.name === 'string' && typeof r.repoPath === 'string' && typeof r.worktreesPath === 'string')
+        : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function writeWorkspaceConfig(workspaceSlug: string, config: WorkspaceConfig): void {
+  const configPath = getWorkspaceConfigPath(workspaceSlug)
+  writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+}
+
+// ===== 工作区级附加目录管理 =====
+
+export function getWorkspaceAttachedDirectories(workspaceSlug: string): string[] {
+  const config = readWorkspaceConfig(workspaceSlug)
+  return config.attachedDirectories ?? []
+}
+
+export function attachWorkspaceDirectory(workspaceSlug: string, directoryPath: string): string[] {
+  const config = readWorkspaceConfig(workspaceSlug)
+  const existing = config.attachedDirectories ?? []
+
+  if (existing.includes(directoryPath)) {
+    return existing
+  }
+
+  const updated = [...existing, directoryPath]
+  writeWorkspaceConfig(workspaceSlug, { ...config, attachedDirectories: updated })
+  console.log(`[Agent 工作区] 已附加工作区目录: ${directoryPath} → ${workspaceSlug}`)
+  return updated
+}
+
+export function detachWorkspaceDirectory(workspaceSlug: string, directoryPath: string): string[] {
+  const config = readWorkspaceConfig(workspaceSlug)
+  const existing = config.attachedDirectories ?? []
+  const updated = existing.filter((d) => d !== directoryPath)
+  writeWorkspaceConfig(workspaceSlug, { ...config, attachedDirectories: updated })
+  console.log(`[Agent 工作区] 已移除工作区目录: ${directoryPath} ← ${workspaceSlug}`)
+  return updated
+}
+
+// ===== 工作区级附加文件管理 =====
+
+export function getWorkspaceAttachedFiles(workspaceSlug: string): string[] {
+  const config = readWorkspaceConfig(workspaceSlug)
+  return config.attachedFiles ?? []
+}
+
+export function attachWorkspaceFile(workspaceSlug: string, filePath: string): string[] {
+  const config = readWorkspaceConfig(workspaceSlug)
+  const existing = config.attachedFiles ?? []
+
+  if (existing.includes(filePath)) {
+    return existing
+  }
+
+  const updated = [...existing, filePath]
+  writeWorkspaceConfig(workspaceSlug, { ...config, attachedFiles: updated })
+  console.log(`[Agent 工作区] 已附加工作区文件: ${filePath} → ${workspaceSlug}`)
+  return updated
+}
+
+export function detachWorkspaceFile(workspaceSlug: string, filePath: string): string[] {
+  const config = readWorkspaceConfig(workspaceSlug)
+  const existing = config.attachedFiles ?? []
+  const updated = existing.filter((f) => f !== filePath)
+  writeWorkspaceConfig(workspaceSlug, { ...config, attachedFiles: updated })
+  console.log(`[Agent 工作区] 已移除工作区文件: ${filePath} ← ${workspaceSlug}`)
+  return updated
+}
+
+// ===== 工作区级 Worktree 仓库管理 =====
+
+/**
+ * 获取工作区的 Worktree 仓库列表。
+ *
+ * 优先从工作区的「附加目录」中自动探测 git 仓库根，避免依赖手动维护的
+ * worktreeRepos 配置（其 repoPath 容易因仓库移动而失效，导致 WorktreeSelector
+ * 静默找不到 worktree）。同时保留 config 中仍然存在的手动配置项（如不在附加
+ * 目录内的额外仓库），并自动过滤掉路径已不存在的陈旧条目。
+ */
+export async function getWorktreeRepos(workspaceSlug: string): Promise<import('@profer/shared').WorkspaceWorktreeRepo[]> {
+  const config = readWorkspaceConfig(workspaceSlug)
+
+  // repoPath 归一化后去重
+  const byPath = new Map<string, import('@profer/shared').WorkspaceWorktreeRepo>()
+
+  // 1. 从附加目录自动探测 git 仓库根
+  const attachedDirs = config.attachedDirectories ?? []
+  for (const dir of attachedDirs) {
+    let roots: string[]
+    try {
+      roots = await findAllGitRoots(dir)
+    } catch {
+      continue
+    }
+    for (const root of roots) {
+      if (!byPath.has(root)) {
+        byPath.set(root, {
+          name: basename(root),
+          repoPath: root,
+          worktreesPath: '',
+          priority: 1,
+        })
+      }
+    }
+  }
+
+  // 2. 合并手动配置中仍然存在的仓库（自动过滤失效路径）
+  for (const repo of config.worktreeRepos ?? []) {
+    const normalized = normalizeGitRoot(repo.repoPath)
+    if (!byPath.has(normalized) && existsSync(repo.repoPath)) {
+      byPath.set(normalized, repo)
+    }
+  }
+
+  return Array.from(byPath.values()).sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
+}
+
+export function addWorktreeRepo(workspaceSlug: string, repo: import('@profer/shared').WorkspaceWorktreeRepo): import('@profer/shared').WorkspaceWorktreeRepo[] {
+  const config = readWorkspaceConfig(workspaceSlug)
+  const existing = config.worktreeRepos ?? []
+
+  if (existing.some((r) => r.repoPath === repo.repoPath)) {
+    return existing
+  }
+
+  const updated = [...existing, repo]
+  writeWorkspaceConfig(workspaceSlug, { ...config, worktreeRepos: updated })
+  console.log(`[Agent 工作区] 已添加 worktree 仓库: ${repo.name} (${repo.repoPath}) → ${workspaceSlug}`)
+  return updated
+}
+
+export function removeWorktreeRepo(workspaceSlug: string, repoPath: string): import('@profer/shared').WorkspaceWorktreeRepo[] {
+  const config = readWorkspaceConfig(workspaceSlug)
+  const existing = config.worktreeRepos ?? []
+  const updated = existing.filter((r) => r.repoPath !== repoPath)
+  writeWorkspaceConfig(workspaceSlug, { ...config, worktreeRepos: updated })
+  console.log(`[Agent 工作区] 已移除 worktree 仓库: ${repoPath} ← ${workspaceSlug}`)
+  return updated
+}
+
+/**
+ * 清理所有工作区中不存在的附加目录和附加文件
+ * @returns 清理的条目总数
+ */
+export function cleanupStaleWorkspaceAttachedPaths(): number {
+  const workspaces = listAgentWorkspaces()
+  let count = 0
+
+  for (const ws of workspaces) {
+    const config = readWorkspaceConfig(ws.slug)
+    let changed = false
+
+    if (config.attachedDirectories?.length) {
+      const valid = config.attachedDirectories.filter((d) => existsSync(d))
+      if (valid.length < config.attachedDirectories.length) {
+        count += config.attachedDirectories.length - valid.length
+        config.attachedDirectories = valid.length > 0 ? valid : undefined
+        changed = true
+      }
+    }
+
+    if (config.attachedFiles?.length) {
+      const valid = config.attachedFiles.filter((f) => existsSync(f))
+      if (valid.length < config.attachedFiles.length) {
+        count += config.attachedFiles.length - valid.length
+        config.attachedFiles = valid.length > 0 ? valid : undefined
+        changed = true
+      }
+    }
+
+    if (changed) {
+      writeWorkspaceConfig(ws.slug, config)
+    }
+  }
+
+  if (count > 0) {
+    console.log(`[Agent 工作区] 清理了 ${count} 个不存在的附加路径`)
+  }
+
+  return count
+}

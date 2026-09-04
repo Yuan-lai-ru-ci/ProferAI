@@ -1,0 +1,83 @@
+name: macOS Package Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的分支、tag 或 commit SHA'
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-package-${{ inputs.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos-arm64:
+    name: build (macos-14, darwin, arm64)
+    runs-on: macos-14
+    # Vite 处理包含 OOXML/WASM 资源的 renderer 时，Node 默认约 2 GiB 堆上限不足。
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify app version and changelog
+        run: |
+          package_version=$(node -p "require('./apps/electron/package.json').version")
+          changelog_version=$(node -p "require('./apps/electron/resources/CHANGELOG.json').releases[0].version")
+          test "$package_version" = "$changelog_version"
+          echo "Verifying version: $package_version"
+
+      - name: Typecheck workspace
+        run: bun run typecheck
+
+      - name: Run cross-platform packaging tests
+        # 全量测试集合包含 Windows PowerShell 专用测试，以及仍按裸路径字符串比较
+        # macOS /private/var 别名的测试；它们不应阻断 macOS 包构建。
+        # 这里保留与安装包、CLI、Pi 闭包和核心会话/任务图直接相关的跨平台回归。
+        run: >-
+          bun test --isolate --max-concurrency=1 --timeout 30000
+          apps/electron/scripts/package-closure.test.ts
+          apps/electron/scripts/build-cli-runtime.test.ts
+          packages/session-core/src/session-core.test.ts
+          packages/project-core/src/project-core.test.ts
+
+      - name: Build and package macOS arm64
+        working-directory: apps/electron
+        run: bun run dist:mac
+
+      - name: Verify macOS updater metadata
+        working-directory: apps/electron
+        run: bun run verify:mac-update-assets
+
+      - name: Upload macOS installable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Profer-macOS-arm64-${{ inputs.ref }}
+          path: |
+            apps/electron/out/latest-mac.yml
+            apps/electron/out/*.dmg
+            apps/electron/out/*.zip
+          if-no-files-found: error
+          retention-days: 14

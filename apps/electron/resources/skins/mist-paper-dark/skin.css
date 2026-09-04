@@ -1,0 +1,133 @@
+/* ===== Mist Paper Dark（雾纸暖灰）皮肤 =====
+ *
+ * 皮肤文件 = :root token 表 + 特例规则。
+ * token 表是完整自描述：所有颜色/表面 token 在此赋值，未定义 token 继承
+ * globals.css 的 :root / .dark 默认值（几何/阴影等通常不必重复）。
+ * 公共组件规则（选中态、滚动条等）在 skin-base.css 中引用这些 token，
+ * 皮肤作者无需了解内部类名。
+ */
+
+:root {
+  /* ===== 基底色板 =====
+   * 用户校准后的暖雾石墨：低饱和暖灰，保证主画布、框架与浮层可辨。
+   */
+  --background: 35 3.3333333333333335% 16%;
+  --foreground: 35 3.3333333333333335% 71%;
+  /* 对话正文专用 token：用户校准为比通用文字更柔和时可独立维护。 */
+  --mist-paper-message-foreground: 35 3.3333333333333335% 71%;
+  --muted: 35 3.3333333333333335% 19%;
+  --muted-foreground: 35 3.3333333333333335% 55%;
+  --border: 35 3.3333333333333335% 29%;
+  --input: 35 3.3333333333333335% 29%;
+  --ring: 221 18% 62%;
+  --primary: 221 18% 38%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 35 3.3333333333333335% 19%;
+  --secondary-foreground: 35 3.3333333333333335% 71%;
+  --accent: 35 3.3333333333333335% 24%;
+  --accent-foreground: 35 3.3333333333333335% 78%;
+  --destructive: 0 58% 50%;
+  --destructive-foreground: 0 0% 100%;
+  --stop-hover-bg: hsl(0 35% 23%);
+  /* 设置页再收一档：Dialog 贴近暖石墨，卡片只保留克制的 3% 层次差。 */
+  --card: 35 3.3333333333333335% 25%;
+  --card-foreground: 35 3.3333333333333335% 71%;
+  --popover: 35 3.3333333333333335% 22%;
+  --popover-foreground: 35 3.3333333333333335% 71%;
+  --dialog: 35 3.3333333333333335% 22%;
+  --dialog-foreground: 35 3.3333333333333335% 71%;
+  --content-area: 35 3.3333333333333335% 17%;
+  --sidebar-surface: 35 3.3333333333333335% 16%;
+  --tabbar-surface: 35 3.3333333333333335% 16%;
+  --input-surface: 35 3.3333333333333335% 20%;
+  --tab-surface: 35 3.3333333333333335% 25%;
+  --tooltip: 35 3.3333333333333335% 29%;
+  --tooltip-foreground: 0 0% 98%;
+  --tooltip-muted: 35 3.3333333333333335% 76%;
+  --code-bg: 35 3.3333333333333335% 15%;
+  --dashed-border: 35 3.3333333333333335% 92% / 0.26;
+  --dashed-border-hover: 221 18% 62% / 0.68;
+
+  /* ===== 深色化阴影五档（暖石墨专属定制） ===== */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.34);
+  --shadow-sm: 0 2px 5px 0 rgb(0 0 0 / 0.42), inset 0 1px 0 0 hsl(0 0% 100% / 0.045);
+  --shadow-md: 0 8px 20px -5px rgb(0 0 0 / 0.52), 0 2px 5px 0 rgb(0 0 0 / 0.32), inset 0 1px 0 0 hsl(0 0% 100% / 0.055);
+  --shadow-lg: 0 18px 38px -9px rgb(0 0 0 / 0.60), 0 8px 16px -3px rgb(0 0 0 / 0.40), inset 0 1px 0 0 hsl(0 0% 100% / 0.065);
+  --shadow-xl: 0 36px 72px -18px rgb(0 0 0 / 0.68), 0 18px 32px -8px rgb(0 0 0 / 0.50), inset 0 1px 0 0 hsl(0 0% 100% / 0.075);
+
+  /* ===== 输入区代码块（globals: .dark .tiptap pre = muted） ===== */
+  --tiptap-pre-bg: 35 3.3333333333333335% 19%;
+}
+
+/* ===== 特例规则区（雾纸专属，不 token 化） ===== */
+
+/* 高使用频率表面需要专用 token，避免 backdrop 透明度把输入区混回主画布。 */
+.agent-input-surface {
+  background-color: hsl(var(--input-surface) / 0.98);
+  border-color: hsl(var(--border) / 0.92);
+  box-shadow: var(--shadow-md);
+}
+
+.agent-input-surface:focus-within {
+  border-color: hsl(var(--ring) / 0.72);
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.14), var(--shadow-md);
+}
+
+/* 经典界面：默认以 background 覆盖输入表面，这里恢复专用输入 token。 */
+.ui-classic .agent-input-surface {
+  background-color: hsl(var(--input-surface)) !important;
+}
+
+/* 对话正文独立于设置与全局文字，避免主题正文过亮。代码块仍保留 Shiki 高亮。 */
+.message-item .prose {
+  --tw-prose-body: hsl(var(--mist-paper-message-foreground));
+  --tw-prose-headings: hsl(var(--mist-paper-message-foreground));
+  --tw-prose-bold: hsl(var(--mist-paper-message-foreground));
+  --tw-prose-bullets: hsl(var(--mist-paper-message-foreground) / 0.7);
+  --tw-prose-counters: hsl(var(--mist-paper-message-foreground) / 0.7);
+}
+
+.message-item .prose :is(p, li, blockquote, strong, em, h1, h2, h3, h4, h5, h6) {
+  color: hsl(var(--mist-paper-message-foreground));
+}
+
+/* 已回答但未激活的题目 Tab：温和提示但增加可读底色和边界。 */
+.ask-user-banner .ask-user-question-tab-answered {
+  background-color: hsl(var(--primary) / 0.32);
+  color: hsl(0 0% 96%);
+  box-shadow: inset 0 0 0 1px hsl(var(--ring) / 0.28);
+}
+
+/* ===== Skin Surface Contract v2 =====
+ * 本组将稳定的语义表面映射到本皮肤既有色板；业务组件不得依赖具体色相。 */
+:root {
+  --shell-surface: var(--background);
+  --raised-surface: var(--card);
+  --sunken-surface: var(--muted);
+  --surface-border: var(--border);
+  --surface-border-strong: var(--border);
+  --input-hover: var(--muted);
+  --control-surface: var(--secondary);
+  --control-hover: var(--accent);
+  --selected-surface: var(--accent);
+  --selected-foreground: var(--accent-foreground);
+  --focus-ring: var(--ring);
+  --overlay: 0 0% 0%;
+  --overlay-foreground: var(--foreground);
+  --message-surface: var(--content-area);
+  --message-user-surface: var(--secondary);
+  --code-fg: var(--foreground);
+  --blockquote-surface: var(--muted);
+  --table-header-surface: var(--muted);
+  --diff-addition-bg: 142 65% 45% / 0.18;
+  --diff-addition-fg: 142 60% 75%;
+  --diff-deletion-bg: 0 70% 52% / 0.20;
+  --diff-deletion-fg: 0 80% 78%;
+  --browser-host-surface: var(--content-area);
+  --success: 142 65% 45%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 26 83% 14%;
+  --info: var(--primary);
+  --info-foreground: var(--primary-foreground);
+}

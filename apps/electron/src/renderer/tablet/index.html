@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d0e" />
+    <title>Profer 移动版</title>
+    <script>
+      // 主题初始化（与桌面版一致的逻辑，确保 hue/配色一致）
+      ;(function () {
+        try {
+          var mode = localStorage.getItem('profer-theme-mode') || 'dark'
+          var style = localStorage.getItem('profer-theme-style')
+          var html = document.documentElement
+          if (mode === 'special' && style && style !== 'default') {
+            html.classList.add('theme-' + style)
+            if (style.endsWith('-dark')) html.classList.add('dark')
+          } else if (mode === 'dark') {
+            html.classList.add('dark')
+          } else if (mode === 'system') {
+            if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+              html.classList.add('dark')
+            }
+          }
+        } catch (e) {
+          /* ignore */
+        }
+      })()
+    </script>
+    <style>
+      /* 平板触控优化：保留纵向手势，不能用 manipulation 禁掉对话/会话列表滚动。 */
+      html, body {
+        height: 100%;
+        overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: pan-y;
+        background: hsl(var(--background));
+      }
+      /* 严格对齐桌面 Profer 字号：锁定 16px rem 基准，并禁用 iOS/Safari 的
+         text autosizing（否则横屏/小字号会被系统自动放大，与桌面观感不一致）。 */
+      html {
+        font-size: 16px;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+      }
+      body { margin: 0; user-select: none; -webkit-user-select: none; }
+      input, textarea, [contenteditable='true'] { user-select: text; -webkit-user-select: text; }
+      button { touch-action: manipulation; }
+      /* iOS 旋转/手势返回时避免 100vh 跳动；布局仍由 React 的 100dvh 承担。 */
+      #root { min-height: 100%; }
+      /* 平板端保留滚动能力，但不暴露浏览器/系统滚动条；会话密集时不破坏原生面板留白。 */
+      .tablet-scrollbar-hidden { scrollbar-width: none; -ms-overflow-style: none; }
+      .tablet-scrollbar-hidden::-webkit-scrollbar { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "id": "slate-light",
+  "name": "云朵舞者",
+  "tone": "light",
+  "version": "1.0.0",
+  "author": "Profer",
+  "description": "云朵舞者 — 温暖灰调",
+  "previewScale": 1.3,
+  "titlebar": {
+    "color": "#e6e4df",
+    "symbolColor": "#312f2a"
+  },
+  "contractVersion": 2
+}

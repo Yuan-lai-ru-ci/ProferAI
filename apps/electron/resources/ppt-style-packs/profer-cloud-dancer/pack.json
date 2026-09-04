@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "id": "profer-cloud-dancer",
+  "name": "Profer Cloud Dancer",
+  "description": "暖纸、云朵、月牙和轻盈动势组成的柔和编辑风格，适合需要亲和力与叙事换气的学生汇报。",
+  "tokens": {
+    "canvas": { "width": 13.333, "height": 7.5, "background": "#F0EFEC" },
+    "colors": {
+      "canvas": "#F0EFEC",
+      "frame": "#E3E1DC",
+      "ink": "#312F2A",
+      "clay": "#846557",
+      "panel": "#F6F5F2",
+      "cloud": "#EAE8E1",
+      "shadow": "#D8D5CE",
+      "white": "#FFFFFF"
+    },
+    "typography": {
+      "fontFallback": ["Aptos", "Arial", "Microsoft YaHei", "Noto Sans CJK SC"],
+      "titlePt": 29,
+      "sectionPt": 23,
+      "bodyPt": 15,
+      "captionPt": 9,
+      "pageNumberPt": 8,
+      "lineHeight": 1.16
+    },
+    "grid": { "columns": 12, "gutter": 0.14, "marginX": 0.64, "marginY": 0.5, "safeArea": 0.2 },
+    "spacing": { "unit": 0.08, "small": 0.17, "medium": 0.3, "large": 0.56 },
+    "lineWidthPt": { "hairline": 0.6, "rule": 1.0, "emphasis": 2.0 },
+    "cornerRadius": 0.12
+  },
+  "layoutGrammar": {
+    "title": { "low": ["cover-crescent-air", "title-cloud-corner"], "medium": ["cover-crescent-air", "title-cloud-corner"], "high": ["title-cloud-corner"] },
+    "section": { "low": ["section-arch-air"], "medium": ["section-arch-air", "section-cloud-cluster"], "high": ["section-arch-air"] },
+    "assertion_evidence": { "low": ["cloud-panel-claim"], "medium": ["cloud-panel-claim", "soft-split"], "high": ["soft-split"] },
+    "chart": { "low": ["rounded-chart-panel"], "medium": ["rounded-chart-panel", "cloud-margin-chart"], "high": ["rounded-chart-panel"] },
+    "mechanism_diagram": { "low": ["orbit-arch-diagram"], "medium": ["orbit-arch-diagram", "cloud-node-path"], "high": ["cloud-node-path"] },
+    "comparison": { "low": ["arch-columns"], "medium": ["arch-columns"], "high": ["arch-columns"] },
+    "image_with_annotation": { "low": ["soft-image-window"], "medium": ["soft-image-window"], "high": ["soft-image-window"] },
+    "limitations": { "low": ["quiet-cloud-limitations"], "medium": ["quiet-cloud-limitations"], "high": ["quiet-cloud-limitations"] },
+    "conclusion": { "low": ["conclusion-crescent"], "medium": ["conclusion-crescent", "conclusion-dancer-motion"], "high": ["conclusion-crescent"] },
+    "references": { "low": ["references-soft-panel"], "medium": ["references-soft-panel"], "high": ["references-soft-panel"] }
+  },
+  "motifs": [
+    { "id": "cloud-cluster", "kind": "overlapping-cloud-shapes", "editable": true, "maxPerSlide": 4, "allowedRoles": ["title", "section", "assertion_evidence", "chart", "conclusion"] },
+    { "id": "arch", "kind": "arch-and-semicircle", "editable": true, "maxPerSlide": 3, "allowedRoles": ["title", "section", "mechanism_diagram", "comparison"] },
+    { "id": "crescent", "kind": "moon-crescent", "editable": true, "maxPerSlide": 2, "allowedRoles": ["title", "section", "conclusion"] },
+    { "id": "dancer-motion", "kind": "abstract-dancer-motion", "editable": true, "maxPerSlide": 1, "allowedRoles": ["title", "section", "conclusion"] },
+    { "id": "paper-texture", "kind": "subtle-texture", "editable": false, "maxPerSlide": 1, "allowedRoles": ["title", "section", "conclusion"] }
+  ],
+  "chartLanguage": {
+    "seriesColors": ["#312F2A", "#846557", "#B7AAA2", "#C9C5BD"],
+    "axisColor": "#846557",
+    "gridColor": "#E3E1DC",
+    "labelPt": 9,
+    "annotationStyle": "clay-pill-and-rule",
+    "maxSeries": 3,
+    "minContrastRatio": 4.5
+  },
+  "imageDirection": {
+    "preferred": ["soft-experiment-photo", "paper-figure", "quiet-lab-detail"],
+    "aspectRatios": ["4:3", "16:9", "1:1"],
+    "treatment": "soft-window-with-paper-border",
+    "avoid": ["full-bleed-theme-poster", "dark-corporate-stock-photo", "glowing-neon-gradient"]
+  },
+  "narrativeRhythm": {
+    "sequence": ["air", "cloud-breathe", "evidence", "mechanism", "air", "conclusion"],
+    "densitySwing": "gentle",
+    "chapterBreatherEvery": 3,
+    "avoidRepeatingLayoutMoreThan": 2
+  },
+  "qaProfile": {
+    "minBodyPt": 13,
+    "minCaptionPt": 8,
+    "maxContentMotifs": 4,
+    "maxTextRatio": 0.4,
+    "forbidden": ["card-wall", "full-slide-rasterized-content", "full-slide-dancer-on-content", "stretched-vertical-preview"],
+    "required": ["one-dominant-claim", "soft-negative-space", "motif-locality"]
+  },
+  "editorialPolicy": {
+    "mode": "general-editorial",
+    "headlineStyle": "narrative",
+    "requireMetricDefinition": false,
+    "requireNativeQuantitativeVisual": true,
+    "requireConclusionBoundary": false,
+    "forbiddenHeadlinePatterns": ["unsupported-causal-claim"],
+    "narrativeRoles": ["title", "section", "assertion_evidence", "chart", "mechanism_diagram", "comparison", "image_with_annotation", "limitations", "conclusion", "references"]
+  },
+  "preview": {
+    "asset": "preview.webp",
+    "alt": "Profer Cloud Dancer 风格缩略图"
+  }
+}

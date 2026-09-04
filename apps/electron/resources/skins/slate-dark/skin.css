@@ -1,0 +1,119 @@
+/* ===== Slate Dark（莫兰迪夜）皮肤 =====
+ *
+ * 皮肤文件 = :root token 表 + 特例规则。
+ * token 表是完整自描述：所有颜色/表面 token 在此赋值，未定义 token 继承
+ * globals.css 的 :root / .dark 默认值（几何/阴影等通常不必重复）。
+ * 公共组件规则（选中态、滚动条等）在 skin-base.css 中引用这些 token，
+ * 皮肤作者无需了解内部类名。
+ */
+
+:root {
+  /* ===== 基底色板 ===== */
+  --background: 260 6% 12%;             /* #1d1b20 背景（侧边栏） */
+  --foreground: 30 10% 90%;             /* #e9e6e3 温暖前景文字 */
+  --content-area: 270 8% 9%;            /* #161418 内容区域 */
+  --sidebar-surface: 260 6% 12%;
+  --tabbar-surface: 260 6% 12%;
+  --input-surface: 260 6% 12%;
+  --muted: 260 6% 16%;                  /* #272429 次要背景 */
+  --muted-foreground: 30 8% 60%;        /* #9f9690 次要文字 */
+  --border: 260 8% 26%;                 /* 26% 与 12% 背景拉开 14%，hairline 后可见 */
+  --primary: 15 25% 68%;                /* #c9a89e 淡杏粉主色 */
+  --primary-foreground: 270 8% 9%;      /* #161418 主色前景 */
+  --secondary: 260 5% 18%;              /* #2c2930 二级背景 */
+  --secondary-foreground: 30 10% 88%;   /* #e5e1dc 二级前景 */
+  --accent: 200 12% 22%;                /* #303740 淡蓝灰强调背景 */
+  --accent-foreground: 200 25% 75%;     /* #a5c4d1 淡天蓝强调文字 */
+  --ring: 15 45% 72%;                   /* 焦点：稍鲜活的莫兰迪粉（保留克制感） */
+  --card: 260 6% 13%;                   /* #201e22 卡片背景 */
+  --card-foreground: 30 10% 90%;        /* #e9e6e3 卡片前景 */
+  --input: 260 6% 16%;                  /* #272429 输入框背景 */
+  --popover: 260 6% 15%;                /* #252228 弹出层 */
+  --popover-foreground: 30 10% 90%;     /* #e9e6e3 弹出前景 */
+  --dialog: 260 5% 16%;                 /* #282528 弹窗背景 */
+  --dialog-foreground: 30 10% 90%;      /* #e9e6e3 弹窗前景 */
+  --destructive: 0 45% 50%;             /* #b8635f 柔和危险色 */
+  --destructive-foreground: 0 0% 98%;   /* #fafafa 危险前景 */
+  --stop-hover-bg: hsl(0, 25%, 20%);
+  --tooltip: 260 8% 22%;                /* #38343d Tooltip */
+  --tooltip-foreground: 0 0% 98%;       /* #fafafa Tooltip前景 */
+  --tooltip-muted: 30 8% 65%;           /* #aca49d Tooltip弱 */
+  /* 代码块背景 - 莫兰迪紫调 */
+  --code-bg: 270 10% 10%;               /* #1a171d 淡紫深灰 */
+  /* 虚线边框色 */
+  --dashed-border: 15 25% 68% / 0.30;
+  --dashed-border-hover: 15 25% 68% / 0.45;
+
+  /* ===== 文字选区 =====
+   * 保持柔和：不覆写文字色，仅提高背景不透明度。
+   */
+  --selection-bg: hsl(var(--accent-foreground) / 0.4);
+
+  /* ===== 外层缝隙背景 ===== */
+  --shell-bg-gradient: linear-gradient(135deg, hsl(270 10% 7%) 0%, hsl(260 8% 9%) 100%);
+
+  /* ===== 模式切换器 ===== */
+  --mode-slider-bg: hsl(15 25% 68%);    /* #c9a89e 淡杏粉主色 */
+  --mode-slider-shadow: 0 2px 4px rgba(201, 168, 158, 0.3);
+  --mode-btn-selected-color: hsl(270 8% 12%);   /* 深色文字 */
+
+  /* ===== 选中态（会话/工作区/Tab/自动化入口） ===== */
+  --item-selected-bg: hsl(260 10% 22%); /* 淡紫灰背景 */
+  --item-selected-fg: hsl(15 30% 75%);  /* 淡杏粉文字 */
+
+  /* ===== 工作区 Badge ===== */
+  --workspace-badge-color: hsl(15 30% 75%);
+
+  /* ===== Dialog 光晕 ===== */
+  --dialog-glow-shadow:
+    0 0 40px 8px rgba(255, 255, 255, 0.06),
+    0 25px 50px -12px rgba(0, 0, 0, 0.5);
+
+  /* ===== 输入区代码块（globals: .theme-slate-dark .tiptap pre = muted） ===== */
+  --tiptap-pre-bg: 260 6% 16%;
+
+  /* ===== 代码块标题栏 ===== */
+  --code-block-header-bg: rgb(36, 35, 39);
+
+  /* ===== 滚动进度条三态 ===== */
+  --scroll-thumb-bg: hsl(15 25% 68% / 0.18);
+  --scroll-thumb-hover: hsl(15 25% 68% / 0.30);
+  --scroll-thumb-active: hsl(15 25% 68% / 0.40);
+
+  /* ===== ui-classic TabBar 下缘阴影（经典界面） ===== */
+  --tabbar-shadow-color: hsl(260 10% 18% / 0.6);
+}
+
+/* ===== Skin Surface Contract v2 =====
+ * 本组将稳定的语义表面映射到本皮肤既有色板；业务组件不得依赖具体色相。 */
+:root {
+  --shell-surface: var(--background);
+  --raised-surface: var(--card);
+  --sunken-surface: var(--muted);
+  --surface-border: var(--border);
+  --surface-border-strong: var(--border);
+  --input-hover: var(--muted);
+  --control-surface: var(--secondary);
+  --control-hover: var(--accent);
+  --selected-surface: var(--accent);
+  --selected-foreground: var(--accent-foreground);
+  --focus-ring: var(--ring);
+  --overlay: 0 0% 0%;
+  --overlay-foreground: var(--foreground);
+  --message-surface: var(--content-area);
+  --message-user-surface: var(--secondary);
+  --code-fg: var(--foreground);
+  --blockquote-surface: var(--muted);
+  --table-header-surface: var(--muted);
+  --diff-addition-bg: 142 65% 45% / 0.18;
+  --diff-addition-fg: 142 60% 75%;
+  --diff-deletion-bg: 0 70% 52% / 0.20;
+  --diff-deletion-fg: 0 80% 78%;
+  --browser-host-surface: var(--content-area);
+  --success: 142 65% 45%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 26 83% 14%;
+  --info: var(--primary);
+  --info-foreground: var(--primary-foreground);
+}

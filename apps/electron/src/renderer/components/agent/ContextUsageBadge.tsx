@@ -1,0 +1,493 @@
+/**
+ * ContextUsageBadge — 上下文使用量指示器
+ *
+ * 输入框工具栏上的一个 36×36 圆形按钮：
+ * - 内部为 16px 圆环，按 displayTokens / displayWindow 比例渲染
+ * - hover 弹出 Popover，内含 token 明细 + 订阅额度（可手动刷新）+ 手动压缩按钮（长按 650ms 触发，带进度动画）
+ * - 订阅额度与模型选择器徽章共享数据与刷新状态；刷新中刷新图标转圈并锁定，旧额度保持可见
+ * - 压缩中时按钮位置显示 Loader2 旋转图标
+ * - 占用接近压缩阈值（窗口 × 0.775 × 80%）时圆环变琥珀色
+ * - 无数据时不显示
+ */
+
+import * as React from 'react'
+import { Loader2, Minimize2, RefreshCw } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { cn } from '@/lib/utils'
+import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
+import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@profer/shared'
+import { usePlanQuota } from '@/hooks/use-plan-quota'
+
+/** 不支持 Plan 额度时主进程返回的统一消息，renderer 端用于判断应不展示额度区 */
+const UNSUPPORTED_PLAN_QUOTA_MESSAGE = '当前渠道不支持订阅 Plan 额度查询'
+
+/** 压缩阈值比例（SDK 在 ~77.5% 窗口大小时自动压缩） */
+const COMPACT_THRESHOLD_RATIO = 0.775
+/** 显示警告的阈值（压缩阈值的 80%） */
+const WARNING_RATIO = 0.80
+/** Popover hover 关闭延迟（ms），与 AgentThinkingPopover 一致 */
+const HOVER_CLOSE_DELAY = 150
+/** 手动压缩长按触发时长（ms），文件路径搜索长按复用其一半。 */
+export const LONG_PRESS_DURATION = 650
+
+interface ContextUsageBadgeProps {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+  costUsd?: number
+  contextWindow?: number
+  /** usage 数据最后更新时间戳（毫秒），用于显示数据时效 */
+  usageUpdatedAt?: number
+  isCompacting: boolean
+  isProcessing: boolean
+  onCompact: () => void
+  /**
+   * 当前 Agent 渠道 ID，用于 hover 时查询订阅 Plan 剩余额度
+   */
+  planQuotaChannelId?: string
+  /**
+   * 当前会话 ID，用于在切换会话时清空 stableRef，
+   * 避免新会话尚未发消息时仍显示上一个会话的 token 数。
+   */
+  sessionId?: string
+  /** Agent Composer 传入时，使用统一触发器的 hover/focus/尺寸外壳。 */
+  composerTool?: boolean
+  tabletMode?: boolean
+}
+
+/** 格式化 token 数为可读字符串（如 1234 → "1.2k"） */
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(1)}M`
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(1)}k`
+  }
+  return `${tokens}`
+}
+
+/** 圆环进度指示器 — 16×16 SVG，描边 2px */
+interface UsageRingProps {
+  ratio: number
+  isWarning: boolean
+}
+function UsageRing({ ratio, isWarning }: UsageRingProps): React.ReactElement {
+  const radius = 8
+  const circumference = 2 * Math.PI * radius
+  const clamped = Math.max(0, Math.min(1, ratio))
+  const dashOffset = circumference * (1 - clamped)
+
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 20 20"
+      className={cn(
+        'shrink-0 transition-colors',
+        isWarning ? 'text-amber-500 dark:text-amber-400' : 'text-foreground/70',
+      )}
+      aria-hidden="true"
+    >
+      <circle
+        cx="10"
+        cy="10"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeOpacity="0.2"
+        strokeWidth="2"
+      />
+      <circle
+        cx="10"
+        cy="10"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={dashOffset}
+        transform="rotate(-90 10 10)"
+        style={{ transition: 'stroke-dashoffset 300ms ease-out' }}
+      />
+    </svg>
+  )
+}
+
+/** Popover 里的一行 key/value */
+interface DetailRowProps {
+  label: string
+  value: string
+  emphasized?: boolean
+}
+function DetailRow({ label, value, emphasized }: DetailRowProps): React.ReactElement {
+  return (
+    <div className="flex items-center justify-between gap-4 text-xs">
+      <span className="text-foreground/70">{label}</span>
+      <span className={cn('tabular-nums', emphasized ? 'font-medium text-foreground' : 'text-foreground/90')}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+/** 格式化重置时间戳为可读短格式 */
+function formatResetTime(timestamp?: number): string | undefined {
+  if (!timestamp) return undefined
+  const now = Date.now()
+  const diff = timestamp - now
+  if (diff <= 0) return undefined
+  const hours = Math.floor(diff / (1000 * 60 * 60))
+  if (hours < 2) {
+    const minutes = Math.max(1, Math.floor(diff / (1000 * 60)))
+    return `${minutes} 分钟后重置`
+  }
+  if (hours < 24) {
+    return `${hours} 小时后重置`
+  }
+  const days = Math.floor(hours / 24)
+  return `${days} 天后重置 · ${new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp))}`
+}
+
+/** Popover 里的单条额度行 */
+interface PlanQuotaRowProps {
+  quotaWindow: ChannelPlanQuotaWindow
+}
+function PlanQuotaRow({ quotaWindow }: PlanQuotaRowProps): React.ReactElement {
+  const resetText = formatResetTime(quotaWindow.resetAt)
+  const value = `${quotaWindow.remainingLabel ?? `${quotaWindow.remainingPercent}%`} 剩余${resetText ? ` · ${resetText}` : ''}`
+  return (
+    <div className="flex flex-col gap-1">
+      <DetailRow
+        label={quotaWindow.label}
+        value={value}
+        emphasized={quotaWindow.remainingPercent <= 20}
+      />
+      {quotaWindow.showProgress !== false ? (
+        <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+          <div
+            className={cn('h-full rounded-full transition-all', quotaWindow.remainingPercent <= 20 ? 'bg-amber-500' : 'bg-foreground/60')}
+            style={{ width: `${Math.max(0, Math.min(100, quotaWindow.remainingPercent))}%` }}
+          />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+export function ContextUsageBadge({
+  inputTokens,
+  outputTokens,
+  cacheReadTokens,
+  cacheCreationTokens,
+  contextWindow,
+  usageUpdatedAt,
+  isCompacting,
+  isProcessing,
+  onCompact,
+  planQuotaChannelId,
+  sessionId,
+  composerTool = false,
+  tabletMode = false,
+}: ContextUsageBadgeProps): React.ReactElement | null {
+  // 订阅 Plan 额度状态：数据与刷新状态跨入口共享（usePlanQuota + planQuotaStateAtomFamily），
+  // 挂载预取、hover 补查、手动刷新统一由 hook 处理，refreshing 反映任何来源的请求在飞。
+  const { quota, refreshing, refresh } = usePlanQuota(planQuotaChannelId)
+
+  // 保留最近一次有效的 token 值，避免切换会话时闪烁消失
+  const stableRef = React.useRef<{
+    inputTokens: number
+    outputTokens?: number
+    cacheReadTokens?: number
+    cacheCreationTokens?: number
+    contextWindow?: number
+  } | null>(null)
+  // 会话切换时清空陈旧值，避免新会话尚未上报 usage 时显示上个会话的数字
+  const lastSessionRef = React.useRef<string | undefined>(sessionId)
+  React.useEffect(() => {
+    if (lastSessionRef.current !== sessionId) {
+      stableRef.current = null
+      lastSessionRef.current = sessionId
+    }
+  }, [sessionId])
+  if (inputTokens && inputTokens > 0) {
+    stableRef.current = { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, contextWindow }
+  }
+
+  const [open, setOpen] = React.useState(false)
+  const closeTimerRef = React.useRef<number | null>(null)
+
+  const cancelClose = React.useCallback(() => {
+    if (closeTimerRef.current != null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleClose = React.useCallback(() => {
+    cancelClose()
+    closeTimerRef.current = window.setTimeout(() => setOpen(false), HOVER_CLOSE_DELAY)
+  }, [cancelClose])
+
+  React.useEffect(() => cancelClose, [cancelClose])
+
+  // 额度拉取（挂载预取 / hover 缓存补查 / 手动刷新）统一由 usePlanQuota 处理，
+  // 旧值优先：刷新期间 quota 保持旧值，refreshing 置位驱动刷新图标转圈。
+
+  // 长按压缩相关状态
+  const [isPressing, setIsPressing] = React.useState(false)
+  const [pressProgress, setPressProgress] = React.useState(0)
+  const pressStartRef = React.useRef<number>(0)
+  const animFrameRef = React.useRef<number | null>(null)
+  const pressTriggeredRef = React.useRef(false)
+
+  const cancelPressAnim = React.useCallback(() => {
+    if (animFrameRef.current != null) {
+      cancelAnimationFrame(animFrameRef.current)
+      animFrameRef.current = null
+    }
+  }, [])
+
+  // 组件卸载时清理动画帧
+  React.useEffect(() => cancelPressAnim, [cancelPressAnim])
+
+  const startPress = React.useCallback(() => {
+    if (isProcessing) return
+    // 防重入：一次物理按压可能同时触发 touchstart 与合成的 mousedown（iPad/触屏），
+    // 若已触发过压缩或按压循环仍在跑，忽略后续事件，避免发出两次压缩指令。
+    if (pressTriggeredRef.current || animFrameRef.current != null) return
+    pressTriggeredRef.current = false
+    setIsPressing(true)
+    setPressProgress(0)
+    pressStartRef.current = performance.now()
+
+    const animate = (): void => {
+      const elapsed = performance.now() - pressStartRef.current
+      const progress = Math.min(elapsed / LONG_PRESS_DURATION, 1)
+      setPressProgress(progress)
+
+      if (progress >= 1) {
+        // 长按完成 → 触发压缩
+        pressTriggeredRef.current = true
+        setIsPressing(false)
+        setPressProgress(0)
+        cancelPressAnim()
+        onCompact()
+        setOpen(false)
+        return
+      }
+
+      animFrameRef.current = requestAnimationFrame(animate)
+    }
+
+    animFrameRef.current = requestAnimationFrame(animate)
+  }, [isProcessing, onCompact, cancelPressAnim])
+
+  const endPress = React.useCallback(() => {
+    // 无论本次按压是否已触发压缩，物理按压结束时都重置状态，
+    // 让下一次独立的按压可以重新开始；pressTriggeredRef 在 startPress 中拦截重复事件。
+    pressTriggeredRef.current = false
+    setIsPressing(false)
+    setPressProgress(0)
+    cancelPressAnim()
+  }, [cancelPressAnim])
+
+  // 压缩中 → 按钮位置显示 spinner
+  if (isCompacting) {
+    if (composerTool) {
+      return <AgentComposerToolTrigger label="正在压缩上下文" state="muted" tabletMode={tabletMode} disabled><Loader2 className="size-4 animate-spin" /></AgentComposerToolTrigger>
+    }
+    return (
+      <Button type="button" variant="ghost" size="icon" className="size-[36px] rounded-full text-muted-foreground cursor-default" disabled>
+        <Loader2 className="size-4 animate-spin" />
+      </Button>
+    )
+  }
+
+  // 使用稳定值：优先当前数据，回退到上次有效数据
+  const stable = stableRef.current
+  const hasCurrent = inputTokens != null && inputTokens > 0
+  const displayTokens = hasCurrent ? inputTokens : stable?.inputTokens
+  const displayWindow = hasCurrent ? contextWindow : stable?.contextWindow
+  const displayOutput = hasCurrent ? outputTokens : stable?.outputTokens
+  const displayCacheRead = hasCurrent ? cacheReadTokens : stable?.cacheReadTokens
+  const displayCacheCreation = hasCurrent ? cacheCreationTokens : stable?.cacheCreationTokens
+
+  // 从未有过 usage 数据 → 不显示
+  if (!displayTokens || displayTokens <= 0) return null
+
+  // 警告阈值：基于压缩阈值（contextWindow × 0.775 × 80%）
+  const compactThreshold = displayWindow
+    ? Math.floor(displayWindow * COMPACT_THRESHOLD_RATIO)
+    : undefined
+  const isWarning = compactThreshold
+    ? displayTokens / compactThreshold >= WARNING_RATIO
+    : false
+
+  const ratio = displayWindow ? displayTokens / displayWindow : 0
+
+  // 纯输入 = 总上下文 - 缓存读取 - 缓存写入
+  const pureInput = displayTokens - (displayCacheRead ?? 0) - (displayCacheCreation ?? 0)
+
+  const percent = displayWindow
+    ? Math.round((displayTokens / displayWindow) * 100)
+    : undefined
+
+  /** 计算数据时效提示（普通变量，非 useMemo — 避免在 isCompacting early return 后 hook 数不一致） */
+  let ageText: string | undefined
+  if (usageUpdatedAt) {
+    const ageMs = Date.now() - usageUpdatedAt
+    if (ageMs >= 5_000 && ageMs < 60_000) {
+      ageText = `${Math.round(ageMs / 1000)}秒前更新`
+    } else if (ageMs >= 60_000) {
+      ageText = `${Math.round(ageMs / 60_000)}分钟前更新`
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        {composerTool ? (
+          <AgentComposerToolTrigger
+            label={percent != null ? `上下文使用量：${percent}%` : '上下文使用量'}
+            state={isWarning ? 'warning' : 'default'}
+            tabletMode={tabletMode}
+            onMouseEnter={() => { cancelClose(); setOpen(true) }}
+            onMouseLeave={scheduleClose}
+          >
+            <UsageRing ratio={ratio} isWarning={isWarning} />
+          </AgentComposerToolTrigger>
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn('size-[36px] rounded-full', isWarning ? 'text-amber-600 dark:text-amber-400' : 'text-foreground/60 hover:text-foreground')}
+            onMouseEnter={() => { cancelClose(); setOpen(true) }}
+            onMouseLeave={scheduleClose}
+          >
+            <UsageRing ratio={ratio} isWarning={isWarning} />
+          </Button>
+        )}
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="center"
+        sideOffset={8}
+        className="w-auto min-w-[220px] p-2.5"
+        onMouseEnter={cancelClose}
+        onMouseLeave={scheduleClose}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        // 关闭时不要聚焦回 trigger（圈圈按钮）：Radix 默认会在关闭后把焦点还给 trigger，
+        // 导致 Agent 输入框失焦、焦点锁在按钮上。preventDefault 保持焦点在输入框原位。
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
+        <div className="flex flex-col gap-1.5">
+          {pureInput > 0 && <DetailRow label="输入" value={pureInput.toLocaleString()} />}
+          {displayOutput ? <DetailRow label="输出" value={displayOutput.toLocaleString()} /> : null}
+          {displayCacheCreation ? <DetailRow label="缓存写入" value={displayCacheCreation.toLocaleString()} /> : null}
+          {displayCacheRead ? <DetailRow label="缓存读取" value={displayCacheRead.toLocaleString()} /> : null}
+
+          {displayWindow ? (
+            <>
+              <div className="h-px bg-border my-0.5" />
+              <DetailRow
+                label="上下文"
+                value={`${formatTokens(displayTokens)} / ${formatTokens(displayWindow)}`}
+                emphasized
+              />
+              {percent != null && (
+                <DetailRow
+                  label="占用"
+                  value={`${percent}%`}
+                  emphasized={isWarning}
+                />
+              )}
+            </>
+          ) : null}
+
+          {ageText ? (
+            <div className="text-[11px] text-center text-foreground/50 pt-0.5">
+              数据{ageText}
+            </div>
+          ) : null}
+
+          {planQuotaChannelId ? (
+            <>
+              <div className="h-px bg-border my-0.5" />
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] font-medium text-foreground/80">
+                  订阅额度{quota?.planName ? ` · ${quota.planName}` : ''}
+                </div>
+                {/* 手动刷新：刷新中转圈并锁定（数据层 in-flight 锁兜底，杜绝重复请求）；旧额度在刷新期间保持可见 */}
+                <button
+                  type="button"
+                  title="刷新额度"
+                  aria-label="刷新额度"
+                  disabled={refreshing}
+                  onClick={refresh}
+                  className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default"
+                >
+                  <RefreshCw className={cn('size-3', refreshing && 'animate-spin')} />
+                </button>
+              </div>
+              {quota?.supported && quota.windows.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {quota.windows.map((quotaWindow) => (
+                    <PlanQuotaRow key={`${quotaWindow.type}-${quotaWindow.label}`} quotaWindow={quotaWindow} />
+                  ))}
+                </div>
+              ) : quota != null && quota.message !== UNSUPPORTED_PLAN_QUOTA_MESSAGE ? (
+                <div className="text-[11px] text-muted-foreground py-1">
+                  {quota.message ?? '订阅额度查询失败'}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          <div className="h-px bg-border my-0.5" />
+          <Button
+            type="button"
+            variant={isWarning ? 'default' : 'outline'}
+            size="sm"
+            className={cn(
+              'context-compact-button relative isolate h-7 text-xs gap-1.5 select-none overflow-hidden',
+              isWarning && 'bg-amber-500 hover:bg-amber-600 text-white',
+              isPressing && 'ring-1 ring-ring',
+            )}
+            onMouseDown={startPress}
+            onMouseUp={endPress}
+            onMouseLeave={endPress}
+            onTouchStart={startPress}
+            onTouchEnd={endPress}
+            onTouchCancel={endPress}
+            disabled={isProcessing}
+          >
+            {/* 独立进度层：避免工具栏/皮肤对 button 背景属性的覆盖影响长按反馈。 */}
+            {isPressing && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 left-0 z-0 bg-primary/25"
+                style={{
+                  width: `${pressProgress * 100}%`,
+                  backgroundColor: isWarning ? 'hsl(45 100% 55% / 0.35)' : undefined,
+                }}
+              />
+            )}
+            <Minimize2 className="size-3.5 relative z-10" />
+            <span className="relative z-10">
+              {isPressing ? '按住中…' : isProcessing ? '对话进行中' : '手动压缩'}
+            </span>
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}

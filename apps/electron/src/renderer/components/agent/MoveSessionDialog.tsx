@@ -1,0 +1,141 @@
+/**
+ * MoveSessionDialog - 迁移会话到另一个工作区的对话框
+ */
+
+import * as React from 'react'
+import { toast } from 'sonner'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { AlertTriangle } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { useAtom } from 'jotai'
+import { sdkBackgroundTasksAtomFamily } from '@/atoms/agent-atoms'
+import type { AgentWorkspace, AgentSessionMeta } from '@profer/shared'
+
+interface MoveSessionDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  sessionId: string
+  currentWorkspaceId: string | undefined
+  workspaces: AgentWorkspace[]
+  onMoved: (updatedSession: AgentSessionMeta, targetWorkspaceName: string) => void
+}
+
+export function MoveSessionDialog({
+  open,
+  onOpenChange,
+  sessionId,
+  currentWorkspaceId,
+  workspaces,
+  onMoved,
+}: MoveSessionDialogProps): React.ReactElement {
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = React.useState<string>('')
+  const [moving, setMoving] = React.useState(false)
+  // 该会话的 SDK 后台任务（免费数据）：存在 type:'shell' 运行中任务 → 提示迁移可能 EPERM
+  const [sdkTasks] = useAtom(sdkBackgroundTasksAtomFamily(sessionId))
+  const runningShellTasks = React.useMemo(
+    () => sdkTasks.filter((t) => t.type === 'shell' && t.status === 'running'),
+    [sdkTasks]
+  )
+
+  // 过滤掉当前工作区
+  const availableWorkspaces = React.useMemo(
+    () => workspaces.filter((ws) => ws.id !== currentWorkspaceId),
+    [workspaces, currentWorkspaceId]
+  )
+
+  // 打开时重置选择
+  React.useEffect(() => {
+    if (open) {
+      setSelectedWorkspaceId('')
+      setMoving(false)
+    }
+  }, [open])
+
+  const handleConfirm = async (): Promise<void> => {
+    if (!selectedWorkspaceId || moving) return
+
+    const targetWs = availableWorkspaces.find((ws) => ws.id === selectedWorkspaceId)
+    setMoving(true)
+    try {
+      const updated = await window.electronAPI.moveAgentSessionToWorkspace({
+        sessionId,
+        targetWorkspaceId: selectedWorkspaceId,
+      })
+      onMoved(updated, targetWs?.name ?? '未知工作区')
+      onOpenChange(false)
+    } catch (error) {
+      console.error('[迁移会话] 迁移失败:', error)
+      const message = error instanceof Error ? error.message : '未知错误'
+      toast.error('迁移失败', { description: message })
+      setMoving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>迁移到其他工作区</DialogTitle>
+          <DialogDescription>
+            选择目标工作区，会话将完整迁移过去。
+          </DialogDescription>
+        </DialogHeader>
+
+        {runningShellTasks.length > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              该会话有 <strong>{runningShellTasks.length}</strong> 个运行中的后台进程
+              （如 dev server）。直接迁移可能因文件占用失败（EPERM），建议先停止这些进程再迁移。
+            </span>
+          </div>
+        )}
+
+        {availableWorkspaces.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-2">
+            没有其他可用的工作区，请先创建新的工作区。
+          </p>
+        ) : (
+          <Select value={selectedWorkspaceId} onValueChange={setSelectedWorkspaceId}>
+            <SelectTrigger>
+              <SelectValue placeholder="选择目标工作区" />
+            </SelectTrigger>
+            <SelectContent>
+              {availableWorkspaces.map((ws) => (
+                <SelectItem key={ws.id} value={ws.id}>
+                  {ws.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={moving}>
+            取消
+          </Button>
+          <Button
+            onClick={handleConfirm}
+            disabled={!selectedWorkspaceId || moving || availableWorkspaces.length === 0}
+          >
+            {moving ? '迁移中...' : '确认迁移'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

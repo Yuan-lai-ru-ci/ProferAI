@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Profer</title>
+    <script>
+      // 窗口标题初始化（在 React 加载前执行，避免标题闪烁）
+      // 兼容旧 key（proma-→profer- 迁移，一两个版本后移除旧读）
+      ;(function() {
+        try {
+          var raw = localStorage.getItem('profer-user-profile') || localStorage.getItem('proma-user-profile')
+          var profile = JSON.parse(raw || 'null')
+          if (profile && profile.userName) {
+            document.title = profile.userName
+          }
+        } catch(e) { /* ignore */ }
+      })()
+    </script>
+    <script>
+      // 主题初始化脚本（在 React 加载前执行，避免闪烁）
+      // 从 localStorage 缓存读取主题模式和特殊风格，立即应用类名
+      ;(function() {
+        var mode = localStorage.getItem('profer-theme-mode') || 'dark'
+        var style = localStorage.getItem('profer-theme-style')
+        var html = document.documentElement
+
+        if (mode === 'special' && style && style !== 'default') {
+          // 皮肤机制（skin-<id> + IPC 注入 CSS）：tone 缓存在皮肤激活时由
+          // atoms/theme.ts 写入，首帧据此推断 dark 类，避免“默认色 → 皮肤色”闪变。
+          var tone = null
+          try { tone = localStorage.getItem('profer-skin-tone') } catch(e) { /* ignore */ }
+          if (tone === 'dark' || tone === 'light') {
+            html.classList.add('skin-' + style)
+            if (tone === 'dark') html.classList.add('dark')
+          } else {
+            // 桌面未知皮肤先只恢复基础明暗，等待 renderer 注册表确认后应用 skin-*。
+            // 不主动加入 theme-*，避免 desktop 主路径落入 legacy 双写视觉层。
+            if (style.endsWith('-dark')) {
+              html.classList.add('dark')
+            }
+          }
+        } else if (mode === 'dark') {
+          html.classList.add('dark')
+        } else if (mode === 'system') {
+          if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            html.classList.add('dark')
+          }
+        }
+        // mode === 'light' 时不添加 dark 类
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

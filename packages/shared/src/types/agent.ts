@@ -1,0 +1,2366 @@
+/**
+ * Agent 相关类型定义
+ *
+ * 包含 Agent SDK 集成所需的事件类型、会话管理、消息持久化和 IPC 通道常量。
+ */
+
+import type { AgentRuntime } from './agent-provider'
+
+// ===== Agent 工作区 =====
+
+/** 工作区类型 */
+export type WorkspaceType = 'personal' | 'team'
+
+/** 用户在团队工作区中的角色 */
+export type WorkspaceRole = 'owner' | 'admin' | 'member' | 'viewer'
+
+/** 工作区可见性 */
+export type WorkspaceVisibility = 'private' | 'team' | 'public'
+
+/** 团队工作区品牌定制 */
+export interface WorkspaceBrand {
+  /** 工作区图标（emoji 或 data URL） */
+  icon?: string
+  /** 品牌色（HSL 格式，如 "220 15% 30%"） */
+  primaryColor?: string
+  /** 品牌 Logo URL */
+  logoUrl?: string
+  /** 自定义应用名称（替换 "Profer"） */
+  appName?: string
+  /** 自定义 CSS 注入 */
+  customCss?: string
+}
+
+/** 团队成员摘要（仅缓存展示用） */
+export interface WorkspaceMemberSummary {
+  userId: string
+  displayName: string
+  avatar: string
+  role: WorkspaceRole
+  joinedAt: number
+  isOnline?: boolean
+}
+
+/** Agent 工作区 */
+export interface AgentWorkspace {
+  /** 工作区唯一标识 */
+  id: string
+  /** 显示名称 */
+  name: string
+  /** URL-safe 目录名（创建后不可变） */
+  slug: string
+  /** 创建时间戳 */
+  createdAt: number
+  /** 更新时间戳 */
+  updatedAt: number
+
+  /** 工作区类型（个人/团队） */
+  type?: WorkspaceType
+  /** 软删除标记 */
+  isDeleted?: boolean
+  /** 软删除时间戳 */
+  deletedAt?: number
+  /** 恢复时间戳 */
+  restoredAt?: number
+  /** 冷静期到期时间（仅 deleted 状态下有意义） */
+  expiresAt?: number
+
+  // 团队工作区专属字段（type === 'team' 时有效）
+  /** 团队 ID */
+  teamId?: string
+  /** 当前用户在此工作区的角色 */
+  role?: WorkspaceRole
+  /** 工作区可见性 */
+  visibility?: WorkspaceVisibility
+  /** 最后同步时间戳 */
+  lastSyncedAt?: number
+  /** 待同步变更数 */
+  pendingSyncCount?: number
+  /** 工作区品牌配置 */
+  brand?: WorkspaceBrand
+  /** 团队成员摘要 */
+  memberSummary?: WorkspaceMemberSummary[]
+}
+
+// ===== SDK 新增类型声明（0.2.52 ~ 0.2.63） =====
+
+/**
+ * 思考模式配置
+ *
+ * 控制 Claude 的推理/思考行为：
+ * - adaptive: Claude 自行决定何时以及思考多少（Opus 4.6+ 默认）
+ * - enabled: 固定思考 Token 预算（旧模型）
+ * - disabled: 不使用扩展思考
+ */
+export type ThinkingConfig =
+  | { type: 'adaptive' }
+  | { type: 'enabled'; budgetTokens: number }
+  | { type: 'disabled' }
+
+/**
+ * 推理深度等级
+ *
+ * 与 adaptive thinking 配合使用，引导思考深度：
+ * - low: 最少思考，最快响应
+ * - medium: 适度思考
+ * - high: 深度推理（默认）
+ * - max: 最大深度（仅 Opus 4.6）
+ */
+export type AgentEffort = 'low' | 'medium' | 'high' | 'max'
+
+/** Pi runtime thinking level. Claude continues to use ThinkingConfig and AgentEffort. */
+export type AgentThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/** Models whose Codex OAuth provider can opt into priority service tier. */
+export const CODEX_FAST_MODE_MODEL_IDS = [
+  'gpt-5.4',
+  'gpt-5.5',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+] as const
+
+export function isCodexFastModeSupportedModel(modelId: string | undefined): boolean {
+  return modelId !== undefined && (CODEX_FAST_MODE_MODEL_IDS as readonly string[]).includes(modelId.toLowerCase())
+}
+
+/**
+ * 自定义子代理定义
+ *
+ * 通过 SDK 的 agents 选项注册可被 Agent 工具调用的自定义子代理。
+ */
+export interface AgentDefinition {
+  /** 自然语言描述，说明何时使用该代理 */
+  description: string
+  /** 允许使用的工具名称列表，省略则继承父级所有工具 */
+  tools?: string[]
+  /** 明确禁止使用的工具名称列表 */
+  disallowedTools?: string[]
+  /** 自定义系统提示词 */
+  prompt?: string
+  /** 使用的模型（覆盖父级） */
+  model?: string
+  /** 最大轮次（覆盖父级） */
+  maxTurns?: number
+}
+
+/**
+ * SDK 会话信息（listSessions 返回）
+ *
+ * SDK 0.2.53 新增，用于发现和列出历史会话。
+ */
+export interface SDKSessionInfo {
+  /** 会话 ID */
+  sessionId: string
+  /** 项目路径 */
+  projectPath?: string
+  /** 会话标题（从 transcript 提取） */
+  title?: string
+  /** 创建时间 ISO 字符串 */
+  createdAt?: string
+  /** 最后更新时间 ISO 字符串 */
+  lastUpdatedAt?: string
+  /** 消息计数概要 */
+  messageCount?: number
+}
+
+/**
+ * SDK 会话消息（getSessionMessages 返回）
+ *
+ * SDK 0.2.59 新增，用于读取会话的完整对话历史。
+ */
+export interface SDKSessionMessage {
+  /** 消息类型（SDK 原始类型标识） */
+  type: string
+  /** 消息角色 */
+  role?: 'user' | 'assistant'
+  /** 消息内容 */
+  content?: unknown
+  /** 时间戳 */
+  timestamp?: string
+}
+
+/**
+ * SDK Beta 特性标识
+ *
+ * 当前支持：
+ * - context-1m-2025-08-07: 启用 1M token 上下文窗口（Claude Sonnet 4+ / Opus 4.6+、DeepSeek V4 系列）
+ */
+export type SdkBeta = 'context-1m-2025-08-07'
+
+/**
+ * JSON Schema 输出格式
+ *
+ * 用于指定结构化输出，Agent 将返回符合 Schema 的 JSON 数据。
+ */
+export interface JsonSchemaOutputFormat {
+  type: 'json_schema'
+  /** JSON Schema 定义 */
+  schema: Record<string, unknown>
+  /** Schema 名称（可选） */
+  name?: string
+  /** Schema 描述（可选） */
+  description?: string
+}
+
+// ===== SDK 消息类型（直接透传，不再翻译） =====
+
+/** SDK 文本内容块 */
+export interface SDKTextBlock {
+  type: 'text'
+  text: string
+}
+
+/** SDK 工具调用内容块 */
+export interface SDKToolUseBlock {
+  type: 'tool_use'
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+/** SDK 思考内容块 */
+export interface SDKThinkingBlock {
+  type: 'thinking'
+  thinking: string
+}
+
+/** SDK 内容块联合类型 */
+export type SDKContentBlock =
+  | SDKTextBlock
+  | SDKToolUseBlock
+  | SDKThinkingBlock
+  | { type: string; [key: string]: unknown }
+
+/** SDK tool_result 内容块（在 user 消息中） */
+export interface SDKToolResultBlock {
+  type: 'tool_result'
+  tool_use_id: string
+  content?: unknown
+  is_error?: boolean
+}
+
+/** SDK user 消息内容块联合类型 */
+export type SDKUserContentBlock =
+  | SDKToolResultBlock
+  | SDKTextBlock
+  | { type: string; [key: string]: unknown }
+
+/** SDK assistant 消息 */
+export interface SDKAssistantMessage {
+  type: 'assistant'
+  message: {
+    content: SDKContentBlock[]
+    usage?: {
+      input_tokens: number
+      output_tokens?: number
+      cache_read_input_tokens?: number
+      cache_creation_input_tokens?: number
+    }
+    model?: string
+    stop_reason?: string
+  }
+  parent_tool_use_id: string | null
+  session_id?: string
+  /** SDK 消息唯一标识，用于 forkSession / resumeSessionAt */
+  uuid?: string
+  error?: { message: string; errorType?: string }
+  isReplay?: boolean
+  /** 渠道配置的模型 ID，持久化/流式期间注入，用于正确匹配模型显示名 */
+  _channelModelId?: string
+}
+
+/** SDK user 消息 */
+export interface SDKUserMessage {
+  type: 'user'
+  message?: {
+    content?: SDKUserContentBlock[]
+  }
+  parent_tool_use_id: string | null
+  session_id?: string
+  /** SDK 消息唯一标识 */
+  uuid?: string
+  tool_use_result?: unknown
+  isReplay?: boolean
+  /** SDK 合成的消息（如 Skill 展开 prompt），非人类用户输入 */
+  isSynthetic?: boolean
+}
+
+/** SDK result 消息（查询结束时返回） */
+export interface SDKResultMessage {
+  type: 'result'
+  subtype: 'success' | 'error' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | (string & {})
+  usage: {
+    input_tokens: number
+    output_tokens: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+  }
+  total_cost_usd?: number
+  modelUsage?: Record<string, { contextWindow?: number }>
+  errors?: string[]
+  terminal_reason?: string
+  background_tasks?: SDKBackgroundTaskSummary[]
+  session_crons?: SDKSessionCronSummary[]
+  session_id?: string
+  /** 渠道配置的主模型 ID，用于多模型 usage 中定位主模型。 */
+  _channelModelId?: string
+}
+
+/** SDK system 消息（init / compact_boundary / compacting / permission_denied / interruption_record / task_started / task_progress / task_notification） */
+export interface SDKSystemMessage {
+  type: 'system'
+  subtype?: string
+  session_id?: string
+  /** init: 确认的模型 */
+  model?: string
+  /** task 相关字段 */
+  task_id?: string
+  description?: string
+  task_type?: string
+  tool_use_id?: string
+  status?: string
+  summary?: string
+  output_file?: string
+  last_tool_name?: string
+  /** permission_denied 相关字段 */
+  tool_name?: string
+  message?: string
+  decision_reason_type?: string
+  decision_reason?: string
+  usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number }
+  [key: string]: unknown
+}
+
+/** SDK thinking token 估算消息（Claude Agent SDK 0.3.156+） */
+export interface SDKThinkingTokensMessage {
+  type: 'system'
+  subtype: 'thinking_tokens'
+  estimated_tokens: number
+  estimated_tokens_delta: number
+  uuid?: string
+  session_id?: string
+}
+
+/** SDK 后台任务摘要（result / hook 中可能出现） */
+export interface SDKBackgroundTaskSummary {
+  id: string
+  type: string
+  status: string
+  description: string
+  command?: string
+  agent_type?: string
+  server?: string
+  tool?: string
+  name?: string
+}
+
+/** SDK 会话级定时任务摘要（result / hook 中可能出现） */
+export interface SDKSessionCronSummary {
+  id: string
+  schedule: string
+  recurring: boolean
+  prompt: string
+}
+
+/** SDK tool_progress 消息（工具执行心跳） */
+export interface SDKToolProgressMessage {
+  type: 'tool_progress'
+  tool_use_id: string
+  tool_name: string
+  parent_tool_use_id: string | null
+  elapsed_time_seconds?: number
+  /** 所属 SDK 子任务 / SubAgent 任务 ID */
+  task_id?: string
+  session_id?: string
+}
+
+/** SDK prompt_suggestion 消息 */
+export interface SDKPromptSuggestionMessage {
+  type: 'prompt_suggestion'
+  suggestion?: string
+  session_id?: string
+}
+
+/** SDK tool_use_summary 消息 */
+export interface SDKToolUseSummaryMessage {
+  type: 'tool_use_summary'
+  summary?: string
+  preceding_tool_use_ids?: string[]
+  session_id?: string
+}
+
+/** SDK 消息联合类型（v1 query + includePartialMessages: false 返回的完整 JSON 对象） */
+export type SDKMessage =
+  | SDKAssistantMessage
+  | SDKUserMessage
+  | SDKResultMessage
+  | SDKThinkingTokensMessage
+  | SDKSystemMessage
+  | SDKToolProgressMessage
+  | SDKPromptSuggestionMessage
+  | SDKToolUseSummaryMessage
+  | { type: string; session_id?: string; parent_tool_use_id?: string | null; [key: string]: unknown }
+
+// ===== Agent 事件类型 =====
+
+/** 错误代码 */
+export type ErrorCode =
+  | 'invalid_api_key'
+  | 'invalid_credentials'
+  | 'response_too_large'
+  | 'expired_oauth_token'
+  | 'token_expired'
+  | 'rate_limited'
+  | 'service_error'
+  | 'service_unavailable'
+  | 'network_error'
+  | 'mcp_auth_required'
+  | 'mcp_unreachable'
+  | 'billing_error'
+  | 'insufficient_credits'
+  | 'model_no_tool_support'
+  | 'invalid_model'
+  | 'data_policy_error'
+  | 'invalid_request'
+  | 'image_too_large'
+  | 'prompt_too_long'
+  | 'thinking_signature_invalid'
+  | 'provider_error'
+  // 环境 / 配置类错误（本地可修复）
+  | 'windows_shell_missing'
+  | 'channel_not_found'
+  | 'api_key_decrypt_failed'
+  | 'runtime_unavailable'
+  | 'agent_runtime_not_found'
+  | 'claude_binary_not_found'
+  | 'session_busy'
+  | 'unknown_error'
+
+/** 恢复操作 */
+export interface RecoveryAction {
+  /** 操作键（用于快捷键） */
+  key: string
+  /** 操作标签 */
+  label: string
+  /** 操作类型 */
+  action:
+    | 'settings'
+    | 'retry'
+    | 'cancel'
+    | 'compact'
+    | 'open_environment_check'
+    | 'open_channel_settings'
+    | 'open_credits'
+    | 'open_external'
+    | (string & {})
+  /** 操作附带的载荷，例如 open_external 的 URL */
+  payload?: string
+}
+
+/** 类型化错误 */
+export interface TypedError {
+  /** 错误代码，用于程序化处理 */
+  code: ErrorCode
+  /** 用户友好的标题 */
+  title: string
+  /** 详细的错误消息 */
+  message: string
+  /** 建议的恢复操作 */
+  actions: RecoveryAction[]
+  /** 是否可以自动重试 */
+  canRetry: boolean
+  /** 重试延迟（毫秒） */
+  retryDelayMs?: number
+  /** 诊断详情（用于调试） */
+  details?: string[]
+  /** 原始错误消息（用于调试） */
+  originalError?: string
+}
+
+/** Agent 事件 Usage 信息 */
+export interface AgentEventUsage {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+  costUsd?: number
+  contextWindow?: number
+}
+
+/** SDK 子任务 / SubAgent 用量统计 */
+export interface TaskUsage {
+  /** 总 Token 数 */
+  totalTokens: number
+  /** 工具调用次数 */
+  toolUses: number
+  /** 运行耗时（毫秒） */
+  durationMs: number
+}
+
+/**
+ * 重试尝试记录
+ *
+ * 记录每次重试尝试的详细信息，用于错误诊断和 UI 展示。
+ */
+export interface RetryAttempt {
+  /** 第几次尝试 (1-based) */
+  attempt: number
+  /** 时间戳 */
+  timestamp: number
+  /** 错误原因（简短描述，如"SDK 响应超时"） */
+  reason: string
+  /** 完整错误消息 */
+  errorMessage: string
+  /** stderr 输出（可选） */
+  stderr?: string
+  /** 堆栈跟踪（可选） */
+  stack?: string
+  /** 运行环境信息（可选） */
+  environment?: {
+    /** 运行时，如 "Bun 1.0.0" */
+    runtime: string
+    /** 平台，如 "darwin arm64" */
+    platform: string
+    /** 模型，如 "claude-sonnet-4-5-20250929" */
+    model: string
+    /** 工作区名称 */
+    workspace?: string
+    /** 工作目录 */
+    cwd?: string
+  }
+  /** 延迟秒数 */
+  delaySeconds: number
+}
+
+/**
+ * Agent 事件类型
+ */
+
+/** MCP 工具结果中的图片附件 */
+export interface AgentToolResultImage {
+  localPath: string
+  filename: string
+  mediaType: string
+}
+
+/** Agent 图片生成独立时间线卡片的真实生命周期状态。 */
+export type AgentImageGenerationStatus = 'requesting' | 'saving' | 'succeeded' | 'failed'
+
+/** 图片生成使用的参考图来源；绝不向 renderer 暴露外部文件路径。 */
+export interface AgentImageGenerationReference {
+  kind: 'none' | 'paths' | 'last_generated'
+  generationId?: string
+}
+
+/** 可安全跨 EventBus/IPC 传输的图片生成记录。 */
+export interface AgentImageGenerationCard {
+  version: 1
+  id: string
+  sessionId: string
+  toolCallId: string
+  status: AgentImageGenerationStatus
+  prompt: string
+  size: '1024x1024' | '1536x1024' | '1024x1536' | 'auto'
+  quality: 'auto' | 'low' | 'medium' | 'high'
+  reference: AgentImageGenerationReference
+  image?: { localPath: string; filename: string; mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' }
+  revisedPrompt?: string
+  mode?: 'official' | 'byok'
+  chargedCredits?: 5
+  error?: string
+  createdAt: number
+  updatedAt: number
+  completedAt?: number
+  retryOf?: string
+}
+
+/** renderer 只能用 session/id 请求重试，不能重放或改变 provider 参数。 */
+export interface RetryAgentImageGenerationInput {
+  sessionId: string
+  generationId: string
+}
+
+/** 计划阶段状态变化来源 */
+export type AgentPlanModeChangeSource = 'initial' | 'tool' | 'permission'
+
+/**
+ * Agent 事件流类型
+ *
+ * 从 SDK 消息转换而来的扁平事件流，用于驱动 UI 渲染。
+ */
+export type AgentEvent =
+  // 文本流式输出
+  | { type: 'text_delta'; text: string; turnId?: string; parentToolUseId?: string }
+  | { type: 'text_complete'; text: string; isIntermediate: boolean; turnId?: string; parentToolUseId?: string }
+  // 工具执行
+  | { type: 'tool_start'; toolName: string; toolUseId: string; input: Record<string, unknown>; intent?: string; displayName?: string; turnId?: string; parentToolUseId?: string }
+  | { type: 'tool_result'; toolUseId: string; toolName?: string; result: string; isError: boolean; input?: Record<string, unknown>; turnId?: string; parentToolUseId?: string; imageAttachments?: AgentToolResultImage[] }
+  // 后台任务
+  | { type: 'task_backgrounded'; toolUseId: string; taskId: string; intent?: string; turnId?: string }
+  | { type: 'task_started'; taskId: string; toolUseId?: string; description: string; taskType?: string; turnId?: string }
+  | { type: 'task_progress'; toolUseId: string; elapsedSeconds?: number; turnId?: string; taskId?: string; description?: string; lastToolName?: string; usage?: TaskUsage }
+  | { type: 'task_notification'; taskId: string; toolUseId?: string; status: 'completed' | 'failed' | 'stopped'; summary: string; outputFile?: string; usage?: TaskUsage; turnId?: string }
+  | { type: 'thinking_tokens'; estimatedTokens: number; estimatedTokensDelta: number }
+  | { type: 'shell_backgrounded'; toolUseId: string; shellId: string; intent?: string; command?: string; turnId?: string }
+  | { type: 'shell_killed'; shellId: string; turnId?: string }
+  // 工具使用摘要
+  | { type: 'tool_use_summary'; summary: string; precedingToolUseIds: string[] }
+  // 控制流
+  | { type: 'complete'; stopReason?: string; usage?: AgentEventUsage }
+  | { type: 'run_resumed' }
+  | { type: 'error'; message: string }
+  | { type: 'typed_error'; error: TypedError }
+  // 重试机制
+  | { type: 'retrying'; attempt: number; maxAttempts: number; delaySeconds: number; reason: string }  // 保留向后兼容
+  | { type: 'retry_attempt'; attemptData: RetryAttempt }  // 新增：记录详细尝试信息
+  | { type: 'retry_cleared' }  // 新增：重试成功，清除状态
+  | { type: 'retry_failed'; finalAttempt: RetryAttempt }  // 新增：重试失败
+  // Usage 更新
+  | { type: 'usage_update'; usage: AgentEventUsage }
+  // 主端/SDK 确认的会话级上下文窗口；必须可覆盖模型名推断的临时 fallback。
+  | { type: 'context_window'; contextWindow: number }
+  // 上下文压缩
+  | { type: 'compacting' }
+  | { type: 'compact_complete' }
+  // 权限请求
+  | { type: 'permission_request'; request: PermissionRequest }
+  | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
+  // AskUserQuestion 交互式问答
+  | { type: 'ask_user_request'; request: AskUserRequest }
+  | { type: 'ask_user_resolved'; requestId: string }
+  // ExitPlanMode 计划审批
+  | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
+  | { type: 'exit_plan_mode_resolved'; requestId: string }
+  // EnterPlanMode 进入计划模式
+  | { type: 'enter_plan_mode'; sessionId: string }
+  // 当前是否处于计划阶段（与用户选择的权限模式分离）
+  | { type: 'plan_mode_changed'; active: boolean; source: AgentPlanModeChangeSource }
+  // 提示建议
+  | { type: 'prompt_suggestion'; suggestion: string }
+  // 模型确认（SDK 确认实际使用的模型）
+  | { type: 'model_resolved'; model: string }
+  // 权限模式变更（Plan → bypassPermissions 等）
+  | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
+
+// ===== Profer 内部事件（SDK 不覆盖的场景） =====
+
+/** Profer 内部事件类型 */
+export type AgentFilePreviewStatus = 'ready' | 'error'
+
+export interface AgentFilePreviewReport {
+  requestId: string
+  sessionId: string
+  filePath: string
+  revision: string
+  status: AgentFilePreviewStatus
+  slideCount?: number
+  currentSlide?: number
+  scale?: number
+  error?: string
+}
+
+export interface AgentFilePreviewInspectRequest {
+  requestId: string
+  sessionId: string
+  filePath: string
+  revision: string
+  scope: 'overview' | 'page' | 'all'
+  page?: number
+}
+
+export interface AgentFilePreviewInspectResult {
+  requestId: string
+  sessionId: string
+  filePath: string
+  revision: string
+  slideCount: number
+  currentSlide: number
+  scale?: number
+  images: Array<{ page: number; data: string; mediaType: 'image/png' }>
+  warnings?: string[]
+  error?: string
+}
+
+export type ProferEvent =
+  | { type: 'permission_request'; request: PermissionRequest }
+  | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
+  | { type: 'ask_user_request'; request: AskUserRequest }
+  | { type: 'ask_user_resolved'; requestId: string }
+  | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
+  | { type: 'exit_plan_mode_resolved'; requestId: string }
+  | { type: 'enter_plan_mode'; sessionId: string }
+  | { type: 'plan_mode_changed'; sessionId: string; active: boolean; source: AgentPlanModeChangeSource }
+  | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; error?: TypedError }
+  | { type: 'model_resolved'; model: string }
+  | { type: 'context_window'; contextWindow: number }
+  | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
+  /** Agent 请求使用当前会话的正式文件预览入口；由 renderer 复用人类预览状态，不生成旁路截图。 */
+  | { type: 'preview_requested'; requestId: string; sessionId: string; filePath: string; revision: string; basePaths?: string[]; readOnly?: boolean }
+  /** Agent 请求从当前用户可见的正式 PPTX viewer 读取页图。 */
+  | { type: 'preview_inspection_requested'; request: AgentFilePreviewInspectRequest }
+  | { type: 'image_generation_updated'; sessionId: string; record: AgentImageGenerationCard }
+  | { type: 'title_updated'; title: string }
+  | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta }
+  | { type: 'delegation_session_updated'; session: AgentSessionMeta }
+  // 跨端会话元数据同步：Pocket 远程命令修改会话后立即通知桌面与其他 Pocket 客户端。
+  | { type: 'session_updated'; session: AgentSessionMeta }
+  | { type: 'session_deleted'; sessionId: string }
+  | { type: 'run_resumed'; sessionId: string }
+  // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
+  // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
+  | { type: 'run_idle'; sessionId: string }
+  // 会话 run 真正完成（平板 remote-service 在 orchestrator onComplete 时广播，携带完成元数据）。
+  // 与 run_idle 的区别：run_idle 表示 active 所有权释放（可能无结果），run_completed 表示本轮有确定结束。
+  // 平板靠它拿到真实 startedAt/stoppedByUser，替代用 Date.now() 伪造 startedAt 的旧路。
+  | { type: 'run_completed'; sessionId: string; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }
+
+/** 外部入口触发 Agent 运行的来源 */
+export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge' | 'delegation' | 'automation'
+
+/** IPC 传输的统一 payload（替代 AgentEvent） */
+export type AgentStreamPayload =
+  | { kind: 'sdk_message'; message: SDKMessage }
+  | { kind: 'profer_event'; event: ProferEvent }
+
+// ===== Agent 会话管理 =====
+
+/**
+ * Agent 任务结束原因（统一判定）
+ *
+ * 由主进程 orchestrator 的 owner finally 统一归一化，用于：
+ * - 持久化到会话 meta（lastInterruptReason），刷新/重启后可恢复中断说明 chip
+ * - 追加对话记录条目（interruption_record）
+ * - 透传到 STREAM_COMPLETE，驱动前端中断说明 chip 与 toast
+ *
+ * completed 表示正常完成，不算中断，不记录、不显示 chip。
+ */
+export type AgentEndReason =
+  | 'completed'        // 正常完成（不记录、不显示 chip）
+  | 'stopped_by_user'  // 用户手动停止
+  | 'max_turns'        // 达到轮次上限（Claude error_max_turns）
+  | 'max_budget'       // 达到预算上限（Claude error_max_budget_usd）
+  | 'max_tokens'       // 输出/上下文达到长度上限（Pi stopReason=length / subtype=max_tokens）
+  | 'error'            // 执行期错误 / preflight 错误 / 异常 catch
+  | 'unknown'          // 已知以外的未知 subtype
+
+/**
+ * Agent 执行时使用的文件根。
+ *
+ * 未持久化该字段的历史会话必须按 session 解释，避免升级后将历史 SDK 相对路径
+ * 错误应用到新的共享项目根。
+ */
+export type AgentCwdMode = 'session' | 'project'
+
+/** 会话私有工作台的文件布局。缺失字段兼容旧版 `.context/` 子目录。 */
+export type SessionWorkbenchLayout = 'legacy-context' | 'root'
+
+/**
+ * Agent 会话轻量索引项
+ *
+ * 存储在 ~/.proma/agent-sessions.json 中，
+ * 类似 ConversationMeta，独立存储。
+ */
+export interface AgentSessionMeta {
+  /** 会话唯一标识 */
+  id: string
+  /** 会话标题 */
+  title: string
+  /** 使用的渠道 ID */
+  channelId?: string
+  /** 使用的模型 ID（自动任务子会话恢复输入框模型选择时使用） */
+  modelId?: string
+  /** SDK 内部会话 ID（用于 resume 衔接上下文） */
+  sdkSessionId?: string
+  /** Pi session JSONL 的精确路径；避免仅按 session ID 子串定位 artifact。 */
+  piSessionFile?: string
+  /** Profer assistant UI UUID 到 Pi 树状 session entry ID 的持久映射。 */
+  piEntryBindings?: Record<string, string>
+  /** 本会话使用的 Agent runtime；历史会话缺省时按 Claude 处理。 */
+  agentRuntime?: AgentRuntime
+  /** 兼容旧版本的本会话预设 ID；新数据同时保存 presetReference。 */
+  presetId?: string
+  /** 本会话绑定的显式预设引用。 */
+  presetReference?: import('./agent-preset').PresetReference
+  /**
+   * Agent 执行 cwd 的持久化语义。新会话使用 project；缺失字段兼容升级前的
+   * session workbench cwd。
+   */
+  agentCwdMode?: AgentCwdMode
+  /**
+   * 会话私有工作台的文件布局。新会话在 workbench 根目录直接存放计划、handoff
+   * 等私有资料；缺失字段的历史会话保留 `.context/` 路径以兼容工具历史。
+   */
+  sessionWorkbenchLayout?: SessionWorkbenchLayout
+  /** ChatGPT Codex Fast Mode；仅 Pi + Codex 的受支持模型实际生效。 */
+  codexFastMode?: boolean
+  /** ChatGPT Codex 推理档位；跨会话持久化（off/low/medium/high/xhigh）。null/undefined 表示未设置，使用全局默认值。 */
+  openAIThinkingLevel?: AgentThinkingLevel | null
+  /** 所属工作区 ID */
+  workspaceId?: string
+  /** 当前 Agent 会话是否已激活 PPT 专用能力；缺省为 false。 */
+  pptCapabilityActive?: boolean
+  /** 是否置顶 */
+  pinned?: boolean
+  /** 是否已归档 */
+  archived?: boolean
+  /** 项目入口创建的隐藏会话；首条用户消息持久化后立即晋升。 */
+  draft?: boolean
+  /** 附加的外部目录路径列表（绝对路径，作为 SDK additionalDirectories 传递） */
+  attachedDirectories?: string[]
+  /** 附加的外部文件路径列表（绝对路径，发送时以父目录作为 SDK additionalDirectories） */
+  attachedFiles?: string[]
+  /** 分叉来源：源会话的 Profer 工作目录（SDK session 文件在此目录的项目空间中，首次 resume 后清除） */
+  forkSourceDir?: string
+  /** 分叉来源：源会话的 SDK session ID（用于 rewind 时读取源会话的 file-history-snapshot 和备份文件） */
+  forkSourceSdkSessionId?: string
+  /** 回退后的 resume 截断点：下次发消息时传给 SDK resumeSessionAt（消费后清除） */
+  resumeAtMessageUuid?: string
+  /** 历史兼容字段：旧版手动保留状态 */
+  manualWorking?: boolean
+  /** Agent 执行完成但用户尚未清除完成状态 */
+  completedButUnconfirmed?: boolean
+  /** 最后一次流式执行是否被用户主动中断 */
+  stoppedByUser?: boolean
+  /** 最近一次非正常结束的中断原因；正常完成时清除。仅表示「未消费的中断」，消费/移除后清除（见 agent:clear-interruption-state IPC）。 */
+  lastInterruptReason?: AgentEndReason
+  /** 最近中断的可读短文案（AGENT_END_REASON_LABELS 之一） */
+  lastInterruptLabel?: string
+  /** 最近中断时间戳 */
+  lastInterruptAt?: number
+  /** 队列「自动发送」开关：轮结束是否自动发送队首消息。per-session 持久化，新会话及历史缺省值为开（true）。手动停止/异常结束会自动置为 false。 */
+  autoQueueSendEnabled?: boolean
+  /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
+  permissionMode?: ProferPermissionMode
+  /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
+  sourceAutomationId?: string
+  /** 父会话 ID（委派子会话使用，指向母会话） */
+  parentSessionId?: string
+  /** 根会话 ID（委派链中的最初母会话，跨级委派时标记） */
+  rootSessionId?: string
+  /** 来源委派 ID（委派子会话使用，标记所属委派记录） */
+  sourceDelegationId?: string
+  /** 委派角色：explore / research / implement / review / custom */
+  delegationRole?: string
+  /** 委派任务目标描述 */
+  delegationGoal?: string
+  /** 委派链深度（0 为母会话，每级委派 +1） */
+  delegationDepth?: number
+  /** 委派状态（用于侧栏子会话状态显示）：running / completed / interrupted */
+  delegationStatus?: string
+  /** 自动任务毕业后标记（毕业指从自动任务区移到正常会话区） */
+  automationGraduated?: boolean
+  /** 回溯放弃抽取的增量水位：已分析到的最新轮次索引（下次只分析 > 此值的新增轮次） */
+  lastAnalyzedTurn?: number
+  /** 创建时间戳 */
+  createdAt: number
+  /** 更新时间戳 */
+  updatedAt: number
+}
+
+/** Whether an Agent session may be shown in user-facing session lists. */
+export function isVisibleAgentSession(session: Pick<AgentSessionMeta, 'draft'>): boolean {
+  return !session.draft
+}
+
+/**
+ * Agent 持久化消息
+ *
+ * 存储在 ~/.proma/agent-sessions/{id}.jsonl 中。
+ */
+export interface AgentMessage {
+  /** 消息唯一标识 */
+  id: string
+  /** 角色 */
+  role: 'user' | 'assistant' | 'tool' | 'status'
+  /** 消息内容 */
+  content: string
+  /** 创建时间戳 */
+  createdAt: number
+  /** 使用的模型 ID（assistant 消息） */
+  model?: string
+  /** 工具活动数据（agent 事件列表，用于回放工具调用） */
+  events?: AgentEvent[]
+  /** 错误代码（status 消息，role='status' 时使用） */
+  errorCode?: ErrorCode
+  /** 错误标题（status 消息） */
+  errorTitle?: string
+  /** 错误详细信息（status 消息） */
+  errorDetails?: string[]
+  /** 原始错误消息（status 消息） */
+  errorOriginal?: string
+  /** 是否可以重试（status 消息） */
+  errorCanRetry?: boolean
+  /** 错误恢复操作（status 消息） */
+  errorActions?: RecoveryAction[]
+  /** 耗时（毫秒），assistant 消息从流式开始到完成的时间 */
+  durationMs?: number
+  /** Token 用量明细（assistant 消息完成时记录） */
+  usage?: AgentEventUsage
+}
+
+// ===== Agent 消息搜索 =====
+
+/**
+ * Agent 会话消息搜索结果
+ */
+export interface AgentMessageSearchResult {
+  /** 会话 ID */
+  sessionId: string
+  /** 会话标题 */
+  sessionTitle: string
+  /** 消息 ID */
+  messageId: string
+  /** 消息角色 */
+  role: 'user' | 'assistant' | 'tool' | 'status'
+  /** 匹配上下文片段（约 80 字符） */
+  snippet: string
+  /** snippet 内匹配起始位置 */
+  matchStart: number
+  /** 匹配长度 */
+  matchLength: number
+  /** 是否已归档 */
+  archived?: boolean
+}
+
+/**
+ * Agent 会话引用搜索输入
+ */
+export interface AgentSessionReferenceSearchInput {
+  /** 当前工作区 ID，仅搜索该工作区下的会话 */
+  workspaceId: string
+  /** 搜索关键词，匹配标题或消息内容 */
+  query?: string
+  /** 排除当前会话，避免引用自己 */
+  excludeSessionId?: string
+  /** 最大返回数量 */
+  limit?: number
+}
+
+/**
+ * Agent 会话引用搜索结果
+ */
+export interface AgentSessionReferenceSearchResult {
+  /** 会话 ID */
+  sessionId: string
+  /** 会话标题 */
+  title: string
+  /** 更新时间戳 */
+  updatedAt: number
+  /** 命中消息片段；标题命中时可为空 */
+  snippet?: string
+  /** 命中来源 */
+  matchSource: 'title' | 'message' | 'recent'
+}
+
+// ===== Agent 标题生成输入 =====
+
+/** Agent 标题生成输入 */
+export interface AgentGenerateTitleInput {
+  /** 用户第一条消息内容 */
+  userMessage: string
+  /** 渠道 ID（用于获取 API Key） */
+  channelId: string
+  /** 模型 ID */
+  modelId: string
+}
+
+// ===== MCP 服务器配置 =====
+
+/** MCP 传输类型 */
+export type McpTransportType = 'stdio' | 'http' | 'sse'
+
+/** MCP 服务器条目 */
+export interface McpServerEntry {
+  type: McpTransportType
+  /** stdio: 可执行命令 */
+  command?: string
+  /** stdio: 命令参数 */
+  args?: string[]
+  /** stdio: 环境变量 */
+  env?: Record<string, string>
+  /** http/sse: 服务端 URL */
+  url?: string
+  /** http/sse: 请求头 */
+  headers?: Record<string, string>
+  /** 启动超时（秒），仅 stdio 类型有效，默认 30 */
+  timeout?: number
+  /** 是否启用 */
+  enabled: boolean
+  /** 是否为内置 MCP（不可删除，仅可配置 env） */
+  isBuiltin?: boolean
+  /** 最后一次测试结果 */
+  lastTestResult?: {
+    success: boolean
+    message: string
+    timestamp: number
+  }
+}
+
+/** 工作区 MCP 配置文件 */
+export interface WorkspaceMcpConfig {
+  servers: Record<string, McpServerEntry>
+}
+
+// ===== Skill 元数据 =====
+
+/** 从其他工作区导入的 Skill 来源元数据 */
+export interface SkillImportSource {
+  /** 工作区本地 Skill 的稳定 ID；导入和迁移时必须保留/生成。 */
+  workspaceSkillId?: string
+  sourceWorkspaceSlug: string
+  sourceWorkspaceName: string
+  importedAt: string        // ISO 8601
+  sourceVersion: string     // 导入时源 Skill 的 version，无则 '0.0.0'
+  /** 来源类别：master=全局元 skill 库；缺省或 'workspace' = 普通工作区导入 */
+  sourceKind?: 'workspace' | 'master'
+  /** 同步时记录的元 skill 基线版本（sourceKind='master' 时有效） */
+  baselineVersion?: string
+}
+
+/** 工作区 Skill 元数据 */
+export interface SkillMeta {
+  /** 工作区本地 Skill 的稳定 ID；旧数据缺失时迁移会回填。 */
+  workspaceSkillId?: string
+  slug: string
+  name: string
+  description?: string
+  /** UI 分组名，用于把 Profer 内嵌 Skills 收拢到同一组 */
+  group?: string
+  icon?: string
+  version?: string
+  enabled: boolean
+  /** 如果此 Skill 是从其他工作区导入的，则携带来源信息 */
+  importSource?: SkillImportSource
+  /** 新全局 Skill 体系的来源唯一 ID */
+  sourceSkillId?: string
+  /** 新全局 Skill 体系的来源类型 */
+  sourceSkillType?: 'builtin-meta' | 'user-global'
+  /** 创建副本时的来源版本 */
+  sourceVersion?: string
+  /** 创建副本的时间 */
+  copiedAt?: string
+  /** 被该工作区副本替换的全局 Skill ID */
+  replacementForSkillId?: string
+  /** 来源状态，unknown-legacy 表示迁移无法可靠匹配 */
+  sourceStatus?: 'available' | 'deleted' | 'modified-legacy-copy' | 'preserved-legacy-disabled-copy' | 'uncertain-legacy-copy' | 'unknown-legacy'
+  /** 当前实际用于工作区加载的来源层 */
+  actualSource?: 'workspace' | 'global' | 'none'
+  /** 是否有可用更新（源 Skill 版本 > importSource.sourceVersion） */
+  hasUpdate?: boolean
+
+  // 团队共享字段
+  /** 此技能的存储域 */
+  domain?: SkillDomain
+  /** 发布状态（仅团队技能相关） */
+  publishState?: SkillPublishState
+  /** 发布者用户 ID */
+  publishedBy?: string
+  /** 发布者显示名称 */
+  publishedByName?: string
+  /** 发布时间 */
+  publishedAt?: string
+  /** 安装计数（仅团队市场展示） */
+  installCount?: number
+  /** 来源团队工作区 ID */
+  sourceWorkspaceId?: string
+}
+
+/** 全局元 skill 库中的 Skill 元数据 */
+export interface MasterSkillMeta {
+  slug: string
+  name: string
+  description?: string
+  group?: string
+  icon?: string
+  version?: string
+  /** 当前工作区实际加载的来源层 */
+  actualSource?: 'workspace' | 'global' | 'none'
+  /** 是否相对出厂基线（bundle 内置）被用户改过 */
+  userModified: boolean
+  /** 当前分布到多少个工作区（有 .source.json 指向 master 的副本数） */
+  syncedWorkspaceCount: number
+  /** 当前版本号 */
+  versionCount: number
+}
+
+/** 元 skill 版本记录（快照） */
+export interface MasterSkillVersion {
+  version: string
+  /** 快照序号 v{n}，n≥1 */
+  snapshotId: string
+  /** ISO 8601 快照时间 */
+  createdAt: string
+  /** 用户备注，无则空 */
+  note?: string
+}
+
+/** 同步单个元 skill 到一个工作区的结果 */
+export interface SyncSkillResult {
+  workspaceSlug: string
+  success: boolean
+  /** 成功时返回同步后的版本 */
+  version?: string
+  error?: string
+}
+
+/** 冲突检测结果：工作区副本相对同步基线是否被用户改动 */
+export interface SkillConflict {
+  hasConflict: boolean
+  /** 变化文件相对 skill 目录的相对路径列表（absPath + '=' + rel 简单描述或直接路径） */
+  changedFiles: string[]
+}
+
+/** 技能存储域 */
+export type SkillDomain = 'local' | 'workspace-team' | 'global'
+
+/** 技能发布状态 */
+export type SkillPublishState = 'draft' | 'pending-review' | 'published' | 'deprecated'
+
+/** 其他工作区 Skill 分组（导入对话框用） */
+export interface OtherWorkspaceSkillsGroup {
+  workspaceName: string
+  workspaceSlug: string
+  skills: SkillMeta[]
+}
+
+/** Skill 目录下的文件/子目录节点（递归树） */
+export interface SkillFileNode {
+  /** 相对于 Skill 根目录的相对路径，使用 POSIX 分隔符 */
+  relativePath: string
+  /** 末段名字（用于显示） */
+  name: string
+  /** 类型：文件 / 目录 */
+  type: 'file' | 'directory'
+  /** 文件大小（字节）；目录为 undefined */
+  size?: number
+  /** 是否为文本文件（可在内置编辑器中打开）；目录为 undefined */
+  isText?: boolean
+  /** 子节点（仅 type=directory 有值，已按目录优先 + 名称排序） */
+  children?: SkillFileNode[]
+}
+
+/** 读取 Skill 子文件的响应 */
+export interface SkillFileContent {
+  relativePath: string
+  /** 文本内容（仅 isText=true 时存在） */
+  content?: string
+  /** 是否为文本文件 */
+  isText: boolean
+  /** 文件大小（字节） */
+  size: number
+}
+
+/** 工作区记忆文件摘要 */
+export interface WorkspaceMemoryFileSummary {
+  /** 文件是否存在 */
+  exists: boolean
+  /** 绝对路径 */
+  path: string
+  /** 文件大小（字节） */
+  size: number
+  /** 最近修改时间戳 */
+  updatedAt?: number
+}
+
+/** Profer 工作区资料与记忆摘要 */
+export interface WorkspaceMemorySummary {
+  /** Profer 工作区资料（workspace-profile.md；旧版本 CLAUDE.md 仅兼容读取） */
+  workspaceProfile: WorkspaceMemoryFileSummary
+  /** SDK auto memory 目录 */
+  autoMemory: {
+    /** 绝对目录路径 */
+    directory: string
+    /** MEMORY.md 是否存在 */
+    indexExists: boolean
+    /** 文本文件数量 */
+    fileCount: number
+    /** 总大小（字节） */
+    totalSize: number
+    /** 最近修改时间戳 */
+    updatedAt?: number
+    /** memory-archive 主题记忆目录（workspace-files/.context/memory-archive）绝对路径 */
+    memoryArchivePath?: string
+  }
+}
+
+/** 内置 MCP 服务器摘要 */
+export interface BuiltinMcpServerSummary {
+  name: string
+  enabled: boolean
+  type: McpTransportType
+}
+
+/** 工作区能力摘要（MCP + Skill + Memory） */
+export interface WorkspaceCapabilities {
+  mcpServers: Array<{ name: string; enabled: boolean; type: McpTransportType }>
+  builtinMcpServers: BuiltinMcpServerSummary[]
+  skills: SkillMeta[]
+  memory: WorkspaceMemorySummary
+}
+
+// ===== Agent 发送输入 =====
+
+/**
+ * Agent 发送消息的输入参数
+ */
+export interface AgentSendInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 用户消息内容 */
+  userMessage: string
+  /** 渠道 ID（用于获取 API Key） */
+  channelId: string
+  /** 模型 ID */
+  modelId?: string
+  /** 工作区 ID（用于确定 cwd） */
+  workspaceId?: string
+  /** 本轮请求的 runtime；缺省时由会话元数据（历史会话回退 Claude）决定。 */
+  agentRuntime?: AgentRuntime
+  /** 附加的外部目录（绝对路径，传递给 SDK additionalDirectories） */
+  additionalDirectories?: string[]
+  /** 动态注入的 MCP 服务器（仅在本次会话中生效，如飞书群聊工具） */
+  customMcpServers?: Record<string, Record<string, unknown>>
+  /** 强制覆盖权限模式（飞书等无 UI 交互场景下强制 'bypassPermissions'） */
+  permissionModeOverride?: ProferPermissionMode
+  /** 用户通过 /skill:xxx 引用的 Skill slug 列表 */
+  mentionedSkills?: string[]
+  /** 用户通过 #mcp:xxx 引用的 MCP 服务器名称列表 */
+  mentionedMcpServers?: string[]
+  /** 用户通过会话引用 mention 指定的 Agent 会话 ID 列表 */
+  mentionedSessionIds?: string[]
+  /** 渲染进程生成的流式开始时间戳，主进程原样回传到 STREAM_COMPLETE，确保竞态保护比较的是同一个值 */
+  startedAt?: number
+  /** 触发来源：用户手动 vs 定时任务自动触发（用于 UI 区分标记） */
+  triggeredBy?: 'user' | 'automation' | 'delegation'
+  /** 前端预生成的消息 UUID（透传到持久化消息，用于队列乐观气泡与消息重载按 uuid 合并去重） */
+  uuid?: string
+  /** 定时任务执行上下文（注入到系统提示词，用户不可见） */
+  automationContext?: string
+  /** Main-process one-shot ticket for a user-confirmed Pi Harness candidate. Not renderer-generated. */
+  piHarnessManualContinuationTicket?: string
+}
+
+// ===== Agent 队列消息 =====
+
+/** 流式追加消息的输入参数（Agent 流式中发送新消息） */
+export interface AgentQueueMessageInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 用户消息内容 */
+  userMessage: string
+  /** 前端预生成的 UUID（用于乐观更新去重） */
+  uuid?: string
+  /**
+   * 软中断当前 Agent turn 后再追加消息。
+   * true：先调用 SDK query.interrupt() 立即打断正在输出的 turn，再注入消息。
+   * false / undefined：排队追加（默认行为，turn 结束后才会被消费）。
+   */
+  interrupt?: boolean
+  /** 原始用户输入（含 /skill: #mcp: &session: 语法），仅用于持久化/气泡展示；省略回退到 userMessage */
+  rawUserMessage?: string
+  /** 用户通过 /skill:xxx 引用的 Skill slug 列表 */
+  mentionedSkills?: string[]
+  /** 用户通过 #mcp:xxx 引用的 MCP 服务器名称列表 */
+  mentionedMcpServers?: string[]
+  /** 用户通过 &session:xxx 引用的 Agent 会话 ID 列表 */
+  mentionedSessionIds?: string[]
+}
+
+// ===== 会话迁移输入 =====
+
+/**
+ * 迁移会话到另一个工作区的输入参数
+ */
+export interface MoveSessionToWorkspaceInput {
+  /** 要迁移的会话 ID */
+  sessionId: string
+  /** 目标工作区 ID */
+  targetWorkspaceId: string
+}
+
+/**
+ * 会话关联的运行进程视图项（进程视图 IPC 返回）
+ */
+export interface SessionProcessInfo {
+  /** 尚在确认归属的启动观察项没有 PID。 */
+  pid?: number
+  name: string
+  cmd: string
+  /** 启动时间戳（ms），用于 PID 转世双因子校验 */
+  startTime?: number
+  /** 该进程监听的端口 */
+  ports: number[]
+  /** 关联的 SDK 后台任务 id（type:'shell'） */
+  sdkTaskId?: string
+  /** 归属证据：Pi 在启动点登记，或 Claude SDK 的活跃后台任务。 */
+  source?: 'pi-owned' | 'sdk'
+  /** pending 表示已经登记、正在确认，尚不可结束。 */
+  status?: 'pending' | 'running'
+  /** Pi 实际执行服务时的工作目录。 */
+  cwd?: string
+  /** 聊天已结束但已登记服务仍存活时为 true。 */
+  persistsAfterChat?: boolean
+}
+
+/** 列出会话运行进程的输入 */
+export interface ListSessionProcessesInput {
+  sessionId: string
+  /** 该会话的 SDK 后台任务摘要（含 type:'shell' 的 command），由渲染层从 result 抽取 */
+  sdkShellTasks: SDKBackgroundTaskSummary[]
+}
+
+/** 结束会话关联进程树的输入 */
+export interface KillProcessInput {
+  sessionId: string
+  pid: number
+  /** 期望的进程启动时间戳，用于 PID 转世双因子防误杀；缺失则拒绝 */
+  startTime?: number
+  /** SDK 任务仅作展示补充，当前仅允许结束启动点已登记的 owned 进程。 */
+  source?: 'pi-owned' | 'sdk'
+}
+
+/** Fork（分叉）会话输入 */
+export interface ForkSessionInput {
+  /** Profer 会话 ID */
+  sessionId: string
+  /** SDK 消息 uuid（截断点，inclusive）。省略时复制全部历史 */
+  upToMessageUuid?: string
+  /** 目标模型 ID。省略时继承源会话模型；传入时必须属于源会话同一渠道且已启用 */
+  modelId?: string
+}
+
+/** 快照回退输入（同一会话内回退到指定点） */
+export interface RewindSessionInput {
+  /** Profer 会话 ID */
+  sessionId: string
+  /** 回退到哪条 assistant message（inclusive，截断该消息之后的一切） */
+  assistantMessageUuid: string
+}
+
+/** 快照回退结果 */
+export interface RewindSessionResult {
+  /** 截断后剩余的消息数 */
+  remainingMessages: number
+  /** 文件恢复结果（enableFileCheckpointing 启用时可用） */
+  fileRewind?: {
+    canRewind: boolean
+    error?: string
+    filesChanged?: string[]
+    insertions?: number
+    deletions?: number
+  }
+}
+
+/**
+ * 会话健康状态（findOrphanSessions 返回结果）
+ */
+export interface SessionHealth {
+  sessionId: string
+  title: string
+  /** agent-sessions/<id>.jsonl 是否存在 */
+  hasProferJsonl: boolean
+  /** agent-sessions/<id>-pi-harness.jsonl 是否存在；缺失代表可安全降级的历史会话，不是孤儿条件 */
+  hasPiHarnessJsonl: boolean
+  /** SDK project 目录下是否有对应 JSONL */
+  hasSdkJsonl: boolean
+  /** 工作区目录是否存在 */
+  hasWorkspaceDir: boolean
+  /** 是否为孤儿记录（有索引但缺关键数据） */
+  isOrphan: boolean
+  /** 孤儿原因描述 */
+  orphanReason?: string
+}
+
+// ===== 后台任务管理 =====
+
+/**
+ * 获取任务输出请求
+ */
+export interface GetTaskOutputInput {
+  /** 所属 Profer 会话 ID */
+  sessionId: string
+  /** 任务 ID */
+  taskId: string
+  /** 是否阻塞等待完成（默认 false） */
+  block?: boolean
+  /** 最长等待时间（毫秒） */
+  timeoutMs?: number
+}
+
+/**
+ * 获取任务输出响应
+ */
+export interface GetTaskOutputResult {
+  /** 任务输出内容 */
+  output: string
+  /** 任务是否已完成 */
+  isComplete: boolean
+  status?: string
+  summary?: string
+}
+
+/**
+ * 停止任务请求
+ */
+export interface StopTaskInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 任务 ID */
+  taskId: string
+  /** 任务类型 */
+  type: 'agent' | 'shell'
+}
+
+// ===== Agent 流式事件载荷 =====
+
+/**
+ * Agent 流式事件（主进程 → 渲染进程推送）
+ */
+export interface AgentStreamEvent {
+  /** 会话 ID */
+  sessionId: string
+  /** 事件数据（新格式） */
+  payload: AgentStreamPayload
+  /** @deprecated 兼容旧格式，Phase 2 后移除 */
+  event?: AgentEvent
+}
+
+/**
+ * Agent 流式完成事件载荷（主进程 → 渲染进程）
+ * 包含已持久化的消息列表，避免异步重新加载的竞态窗口。
+ */
+export interface AgentStreamCompletePayload {
+  sessionId: string
+  /** 已持久化的完整消息列表 */
+  messages?: AgentMessage[]
+  /** 是否由用户手动中止 */
+  stoppedByUser?: boolean
+  /** 本轮流式开始时间戳（用于区分新旧流，防止旧流的 complete 事件重置新流状态） */
+  startedAt?: number
+  /** SDK result 消息的 subtype（success / error_max_turns / error_max_budget_usd / error_during_execution 等） */
+  resultSubtype?: string
+  /** SDK result.errors[] 携带的真实错误原因（error_during_execution 等场景），用于前端展示具体错误 */
+  resultErrors?: string[]
+  /** 本轮主体结束但仍有后台任务/定时任务在飞行：UI 进入"空闲可输入"态，等待任务完成自动唤醒 */
+  backgroundTasksPending?: boolean
+  /** 归一化后的结束原因（仅主 orchestrator 路径透传；completed 不触发 chip） */
+  endReason?: AgentEndReason
+  /** 结束原因的可读短文案（AGENT_END_REASON_LABELS 之一），供 chip / toast 展示 */
+  endReasonLabel?: string
+}
+
+/** 更新会话中断说明状态输入：state 非 null 置位（点击记录行），null 清除（消费/移除 chip） */
+export interface UpdateAgentInterruptStateInput {
+  sessionId: string
+  state: { reason: AgentEndReason; label: string; at: number } | null
+}
+
+// ===== 文件浏览器 =====
+
+/** 文件/目录条目（用于文件浏览器树形视图） */
+export interface FileEntry {
+  /** 文件/目录名称 */
+  name: string
+  /** 完整路径 */
+  path: string
+  /** 是否为目录 */
+  isDirectory: boolean
+  /** 文件大小（字节）。目录为空 */
+  size?: number
+  /** 子条目（懒加载，仅目录展开时填充） */
+  children?: FileEntry[]
+  /** 文件同步状态（团队工作区文件） */
+  syncStatus?: 'synced' | 'syncing' | 'cloud-only' | 'local-only' | 'conflict'
+  /** 远程版本修改时间（用于冲突检测） */
+  remoteModifiedAt?: number
+  /** 服务端稳定资料身份（团队文件专用）。 */
+  fileId?: string
+  /** 服务端内容 SHA-256（团队文件专用，用于避免复用过期下载缓存）。 */
+  sha256?: string
+  /** 上传者 ID */
+  uploadedBy?: string
+  /** 上传者显示名称 */
+  uploadedByName?: string
+}
+
+/** 文件索引条目（用于 @ 引用搜索） */
+export interface FileIndexEntry {
+  /** 文件/目录名称 */
+  name: string
+  /** 相对于工作区的路径 */
+  path: string
+  /** 条目类型 */
+  type: 'file' | 'dir'
+  /** 来源：会话文件或工作区文件 */
+  source: 'session' | 'workspace'
+}
+
+/** 文件搜索结果 */
+export interface FileSearchResult {
+  entries: FileIndexEntry[]
+  total: number
+  /** 会话文件条目（来自 session 工作目录） */
+  sessionEntries: FileIndexEntry[]
+  /** 工作区文件条目（来自 workspace files + 附加目录） */
+  workspaceEntries: FileIndexEntry[]
+}
+
+// ===== Agent 附件 =====
+
+/** Agent 待发送文件（UI 侧暂存） */
+export interface AgentPendingFile {
+  id: string
+  filename: string
+  size: number
+  mediaType: string
+  /** 图片预览 URL（blob/data URL） */
+  previewUrl?: string
+  /** 文件原始路径（从侧面板添加时设置，发送时跳过复制直接引用） */
+  sourcePath?: string
+  /**
+   * 标记 sourcePath 指向的是剪贴板临时预览文件（os.tmpdir）。
+   * 这类文件可能被系统清理，发送时需读取其最新内容拷贝进 session 目录，
+   * 而非像侧面板真实文件那样原地引用。
+   */
+  isClipboardDraft?: boolean
+}
+
+/** Agent 文件保存到 session 的输入 */
+export interface AgentSaveFilesInput {
+  workspaceSlug: string
+  sessionId: string
+  files: Array<{ filename: string; data: string }>
+}
+
+/** Agent 已保存文件信息 */
+export interface AgentSavedFile {
+  filename: string
+  targetPath: string
+}
+
+/** Agent 文件保存到工作区文件目录的输入 */
+export interface AgentSaveWorkspaceFilesInput {
+  workspaceSlug: string
+  files: Array<{ filename: string; data: string | Uint8Array }>
+}
+
+/** 附加/分离目录的输入参数 */
+export interface AgentAttachDirectoryInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 目录的绝对路径 */
+  directoryPath: string
+}
+
+/** 附加/分离文件的输入参数 */
+export interface AgentAttachFileInput {
+  /** 会话 ID */
+  sessionId: string
+  /** 文件的绝对路径 */
+  filePath: string
+}
+
+/** 工作区级附加/分离目录的输入参数 */
+export interface WorkspaceAttachDirectoryInput {
+  /** 工作区 slug */
+  workspaceSlug: string
+  /** 目录的绝对路径 */
+  directoryPath: string
+}
+
+/** 工作区级附加/分离文件的输入参数 */
+export interface WorkspaceAttachFileInput {
+  /** 工作区 slug */
+  workspaceSlug: string
+  /** 文件的绝对路径 */
+  filePath: string
+}
+
+/** Worktree 仓库配置 */
+export interface WorkspaceWorktreeRepo {
+  /** 显示名称 */
+  name: string
+  /** 主仓库绝对路径 */
+  repoPath: string
+  /** Worktree 存放目录绝对路径 */
+  worktreesPath: string
+  /** 优先级（数字越小越优先） */
+  priority?: number
+}
+
+// ===== AskUserQuestion 交互式问答类型 =====
+
+/** 主进程受管的 AskUser 确认元数据；不会放入 renderer 展示模型。 */
+
+/** AskUserQuestion 工具的选项定义 */
+export interface AskUserQuestionOption {
+  /** 选项显示文本 */
+  label: string
+  /** 选项说明 */
+  description?: string
+  /** 选项预览内容（聚焦时展示，支持 Markdown） */
+  preview?: string
+}
+
+/** AskUserQuestion 工具的问题定义 */
+export interface AskUserQuestion {
+  /** 问题内容 */
+  question: string
+  /** 短标签（chip 显示） */
+  header?: string
+  /** 可选项列表 */
+  options: AskUserQuestionOption[]
+  /** 是否支持多选 */
+  multiSelect?: boolean
+}
+
+/** AskUser 请求（主进程 → 渲染进程） */
+export interface AskUserRequest {
+  /** 请求唯一 ID */
+  requestId: string
+  /** 会话 ID */
+  sessionId: string
+  /** 问题列表 */
+  questions: AskUserQuestion[]
+  /** 工具原始输入（用于构建 updatedInput；仅主进程内部使用） */
+  toolInput: Record<string, unknown>
+  /** 主进程内部确认元数据；不应出现在 renderer payload 中 */
+}
+
+/** AskUser 响应（渲染进程 → 主进程） */
+export interface AskUserResponse {
+  /** 请求 ID */
+  requestId: string
+  /** 用户答案（问题文本 → 答案文本，与 SDK 约定一致） */
+  answers: Record<string, string>
+}
+
+// ===== ExitPlanMode 计划审批类型 =====
+
+/** ExitPlanMode SDK 工具输入中的 allowedPrompts 项 */
+export interface ExitPlanAllowedPrompt {
+  /** 工具名称（目前仅 "Bash"） */
+  tool: 'Bash'
+  /** 语义化的操作描述（如 "run tests"、"install dependencies"） */
+  prompt: string
+}
+
+/** ExitPlanMode 请求（主进程 → 渲染进程） */
+export interface ExitPlanModeRequest {
+  /** 请求唯一 ID */
+  requestId: string
+  /** 会话 ID */
+  sessionId: string
+  /** SDK 工具原始输入 */
+  toolInput: Record<string, unknown>
+  /** 解析后的 allowedPrompts 列表 */
+  allowedPrompts: ExitPlanAllowedPrompt[]
+}
+
+/** ExitPlanMode 用户选择行为 */
+export type ExitPlanModeAction = 'approve_auto' | 'approve_edit' | 'deny' | 'feedback'
+
+/** ExitPlanMode 响应（渲染进程 → 主进程） */
+export interface ExitPlanModeResponse {
+  /** 请求 ID */
+  requestId: string
+  /** 用户选择的行为 */
+  action: ExitPlanModeAction
+  /** 用户反馈内容（action 为 feedback 时有值） */
+  feedback?: string
+}
+
+// ===== 权限系统类型 =====
+
+/** 当前 Profer 支持的权限模式，值直接映射 SDK 原生 permissionMode */
+export const PROFER_PERMISSION_MODES = ['auto', 'bypassPermissions', 'plan'] as const
+
+export type ProferPermissionMode = typeof PROFER_PERMISSION_MODES[number]
+
+export const PROFER_DEFAULT_PERMISSION_MODE: ProferPermissionMode = 'bypassPermissions'
+
+export interface ProferPermissionModeConfig {
+  /** 对应 Claude Agent SDK 的 permissionMode */
+  sdkMode: ProferPermissionMode
+  label: string
+  description: string
+}
+
+/** Profer 权限模式的单一配置来源 */
+export const PROFER_PERMISSION_MODE_CONFIG = {
+  auto: {
+    sdkMode: 'auto',
+    label: '自动审批',
+    description: 'SDK 内置审批器自动判断，危险操作才需确认',
+  },
+  bypassPermissions: {
+    sdkMode: 'bypassPermissions',
+    label: '完全自动',
+    description: '所有工具调用自动允许',
+  },
+  plan: {
+    sdkMode: 'plan',
+    label: '计划模式',
+    description: '仅规划不执行，查看工具使用计划',
+  },
+} as const satisfies Record<ProferPermissionMode, ProferPermissionModeConfig>
+
+/** 权限模式定义顺序（用于循环切换） */
+export const PROFER_PERMISSION_MODE_ORDER: readonly ProferPermissionMode[] = PROFER_PERMISSION_MODES
+
+export function isProferPermissionMode(mode: string): mode is ProferPermissionMode {
+  return (PROFER_PERMISSION_MODES as readonly string[]).includes(mode)
+}
+
+/** 规范化权限模式：不匹配当前三种模式时统一回到默认自动审批 */
+export function migratePermissionMode(mode: string): ProferPermissionMode {
+  if (isProferPermissionMode(mode)) return mode
+  return PROFER_DEFAULT_PERMISSION_MODE
+}
+
+/** 危险等级 */
+export type DangerLevel = 'safe' | 'normal' | 'dangerous'
+
+/** 权限请求（主进程 → 渲染进程） */
+export interface PermissionRequest {
+  /** 请求唯一 ID */
+  requestId: string
+  /** 会话 ID */
+  sessionId: string
+  /** 工具名称 */
+  toolName: string
+  /** 工具输入参数 */
+  toolInput: Record<string, unknown>
+  /** 操作描述（人类可读，Profer 生成） */
+  description: string
+  /** 具体命令（Bash 工具时有值��� */
+  command?: string
+  /** 危险等级 */
+  dangerLevel: DangerLevel
+  /** SDK 提供的原因说明 */
+  decisionReason?: string
+  /** SDK 提供的原因分类，如 classifier / safetyCheck / rule */
+  decisionReasonType?: string
+  /** SDK auto safety check 是否允许交给 classifier 审批 */
+  classifierApprovable?: boolean
+  /** SDK 提供的工具显示名称，如 "Write" */
+  sdkDisplayName?: string
+  /** SDK 提供的操作标题，如 "Write to /path/to/file.ts" */
+  sdkTitle?: string
+  /** SDK 提供的详细描述，如 "Claude wants to write 200 lines to /path/to/file.ts" */
+  sdkDescription?: string
+}
+
+/** 权限响应（渲染进程 → 主进程） */
+export interface PermissionResponse {
+  requestId: string
+  behavior: 'allow' | 'deny'
+  /** 是否记住选择（加入会话白名单） */
+  alwaysAllow: boolean
+}
+
+// ===== IPC 通道常量 =====
+
+/**
+ * Agent 相关 IPC 通道常量
+ */
+export const AGENT_IPC_CHANNELS = {
+  // 会话管理
+  /** 获取会话列表 */
+  LIST_SESSIONS: 'agent:list-sessions',
+  /** 获取单个会话 meta（归档会话兜底读取；不存在返回 null） */
+  GET_SESSION_META: 'agent:get-session-meta',
+  /** 创建会话 */
+  CREATE_SESSION: 'agent:create-session',
+  /** 为项目创建或复用隐藏的 Agent 草稿会话 */
+  ENSURE_PROJECT_DRAFT_SESSION: 'agent:ensure-project-draft-session',
+  /** 获取会话 SDKMessage（Phase 4 新格式） */
+  GET_SDK_MESSAGES: 'agent:get-sdk-messages',
+  /** 列出当前会话已持久化的图片生成独立时间线卡片 */
+  LIST_IMAGE_GENERATIONS: 'agent:list-image-generations',
+  /** 仅按 generation ID 重试失败的图片生成；参数在主进程重建 */
+  RETRY_IMAGE_GENERATION: 'agent:retry-image-generation',
+  /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
+  RESTORE_ACTIVE_STREAMS: 'agent:restore-active-streams',
+  /** renderer → main：读取授权文件当前 SHA-256，供 viewer 加载前后校验 revision。 */
+  FILE_PREVIEW_REVISION: 'agent:file-preview-revision',
+  /** renderer → main：当前用户可见的正式 PPTX viewer 已 ready/error。 */
+  FILE_PREVIEW_REPORT: 'agent:file-preview-report',
+  /** renderer → main：同一正式 PPTX viewer 的页级观察结果。 */
+  FILE_PREVIEW_INSPECTION_RESULT: 'agent:file-preview-inspection-result',
+  /** 更新会话标题 */
+  UPDATE_TITLE: 'agent:update-title',
+  /** 更新会话模型选择 */
+  UPDATE_SESSION_MODEL: 'agent:update-session-model',
+  /** 删除会话 */
+  DELETE_SESSION: 'agent:delete-session',
+  /** 迁移 Chat 对话记录到 Agent 会话 */
+  MIGRATE_CHAT_TO_AGENT: 'agent:migrate-chat-to-agent',
+  /** 切换会话置顶状态 */
+  TOGGLE_PIN: 'agent:toggle-pin',
+  /** 清除会话完成状态（兼容清除旧版 manualWorking）。channel 值保留旧名以兼容已缓存的 preload */
+  CLEAR_COMPLETION_STATE: 'agent:confirm-working-done',
+  /** 标记会话为「未读」（写入 completedButUnconfirmed，恢复绿色完成标记并持久化） */
+  SET_COMPLETION_STATE: 'agent:set-completion-state',
+  /** 更新中断说明状态（state 非 null 置位：点击中断记录行；null 清除：消费/移除 chip 时清 meta，保证重启不复活已消费的中断）。一个通道双向。 */
+  UPDATE_INTERRUPTION_STATE: 'agent:update-interruption-state',
+  /** 切换会话归档状态 */
+  TOGGLE_ARCHIVE: 'agent:toggle-archive',
+  /** 轻量：返回对话 + Agent 会话的归档计数（不传输 meta 列表） */
+  GET_ARCHIVED_COUNTS: 'agent:get-archived-counts',
+  /** 搜索会话消息内容 */
+  SEARCH_MESSAGES: 'agent:search-messages',
+  /** 搜索当前工作区可引用的 Agent 会话 */
+  SEARCH_SESSION_REFERENCES: 'agent:search-session-references',
+  /** 迁移会话到另一个工作区 */
+  MOVE_SESSION_TO_WORKSPACE: 'agent:move-session-to-workspace',
+  /** 列出会话关联的运行中的真实 OS 进程（进程视图） */
+  LIST_SESSION_PROCESSES: 'agent:list-session-processes',
+  /** 轻量：会话登记过的存活/待确认进程计数（仅读 registry，**不派 OS 扫描**） */
+  GET_SESSION_PROCESS_COUNT: 'agent:get-session-process-count',
+  /** 结束/终止会话关联的进程树（kill） */
+  KILL_PROCESS: 'agent:kill-process',
+  /** Pi 受控 launcher 已登记或确认了本会话运行进程 */
+  RUNTIME_PROCESSES_CHANGED: 'agent:runtime-processes-changed',
+  /** 分叉会话（从指定消息处创建新会话） */
+  FORK_SESSION: 'agent:fork-session',
+  /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
+  REWIND_SESSION: 'agent:rewind-session',
+  /** 扫描所有会话的孤儿记录和文件系统不一致 */
+  FIND_ORPHAN_SESSIONS: 'agent:find-orphan-sessions',
+
+  // 工作区管理
+  /** 获取工作区列表 */
+  LIST_WORKSPACES: 'agent:list-workspaces',
+  /** 创建工作区 */
+  CREATE_WORKSPACE: 'agent:create-workspace',
+  /** 更新工作区 */
+  UPDATE_WORKSPACE: 'agent:update-workspace',
+  /** 删除工作区 */
+  DELETE_WORKSPACE: 'agent:delete-workspace',
+  /** 重排工作区顺序 */
+  REORDER_WORKSPACES: 'agent:reorder-workspaces',
+  /** 主进程 → 渲染进程：工作区列表发生变化 */
+  WORKSPACES_CHANGED: 'agent-workspaces:changed',
+
+  // 标题生成
+  /** 生成 Agent 会话标题 */
+  GENERATE_TITLE: 'agent:generate-title',
+
+  // 消息发送
+  /** 发送消息（触发 Agent 流式响应） */
+  SEND_MESSAGE: 'agent:send-message',
+  /** 中止 Agent 执行 */
+  STOP_AGENT: 'agent:stop',
+
+  // Pi 受管浏览器（网页内容与 CDP 仅驻留主进程）
+  OPEN_BROWSER: 'agent:open-browser',
+  LIST_BROWSER_TABS: 'agent:list-browser-tabs',
+  CREATE_BROWSER_TAB: 'agent:create-browser-tab',
+  SELECT_BROWSER_TAB: 'agent:select-browser-tab',
+  CLOSE_BROWSER_TAB: 'agent:close-browser-tab',
+  GET_BROWSER_STATE: 'agent:get-browser-state',
+  /** 高频布局同步使用单向 IPC，不等待主进程 Promise。 */
+  SET_BROWSER_LAYOUT: 'agent:set-browser-layout',
+  NAVIGATE_BROWSER: 'agent:navigate-browser',
+  GO_BACK_BROWSER: 'agent:go-back-browser',
+  GO_FORWARD_BROWSER: 'agent:go-forward-browser',
+  RELOAD_BROWSER: 'agent:reload-browser',
+  /** 用户阅读用途：整页翻译当前 tab（toggle），返回翻译态。 */
+  TRANSLATE_BROWSER: 'agent:translate-browser',
+  SET_BROWSER_ZOOM: 'agent:set-browser-zoom',
+  /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
+  PASTE_BROWSER_CLIPBOARD: 'agent:paste-browser-clipboard',
+  /** 主进程 → 渲染进程：受管网页的下载被安全拦截，携带脱敏文件名与来源 URL。 */
+  BROWSER_DOWNLOAD_BLOCKED: 'agent:browser-download-blocked',
+  /** 将浏览器原生视图的可见性所有权切换到当前前台 Agent 会话。 */
+  SET_BROWSER_FOREGROUND: 'agent:set-browser-foreground',
+  /** 仅隐藏原生 WebContentsView，保留浏览器会话与标签。 */
+  HIDE_BROWSER: 'agent:hide-browser',
+  CLOSE_BROWSER: 'agent:close-browser',
+  BROWSER_STATE_CHANGED: 'agent:browser-state-changed',
+  /** 新标签页起始页数据（书签 + 最近访问 + 默认首页）。 */
+  GET_BROWSER_START_PAGE: 'agent:get-browser-start-page',
+  /** 新增书签，返回更新后的起始页状态。 */
+  ADD_BROWSER_BOOKMARK: 'agent:add-browser-bookmark',
+  /** 删除书签，返回更新后的起始页状态。 */
+  REMOVE_BROWSER_BOOKMARK: 'agent:remove-browser-bookmark',
+  /** 更新新标签页默认首页 URL（空串清除）。 */
+  UPDATE_BROWSER_HOME_URL: 'agent:update-browser-home-url',
+  /** 清空最近访问历史。 */
+  CLEAR_BROWSER_HISTORY: 'agent:clear-browser-history',
+
+  // 后台任务管理
+  /** 获取任务输出 */
+  GET_TASK_OUTPUT: 'agent:get-task-output',
+  /** 获取 Claude/Pi runtime 能力快照 */
+  GET_RUNTIME_CAPABILITIES: 'agent:get-runtime-capabilities',
+  /** 停止任务 */
+  STOP_TASK: 'agent:stop-task',
+
+  // 工作区能力（MCP + Skill）
+  /** 获取工作区能力摘要 */
+  GET_CAPABILITIES: 'agent:get-capabilities',
+  /** 获取工作区 MCP 配置 */
+  GET_MCP_CONFIG: 'agent:get-mcp-config',
+  /** 保存工作区 MCP 配置 */
+  SAVE_MCP_CONFIG: 'agent:save-mcp-config',
+  /** 测试 MCP 服务器连接 */
+  TEST_MCP_SERVER: 'agent:test-mcp-server',
+  /** 获取工作区 Skill 列表 */
+  GET_SKILLS: 'agent:get-skills',
+  /** 获取工作区 Skills 目录绝对路径 */
+  GET_SKILLS_DIR: 'agent:get-skills-dir',
+  /** 创建工作区 Skill */
+  CREATE_SKILL: 'agent:create-skill',
+  PROMOTE_SKILL_TO_GLOBAL: 'agent:promote-skill-to-global',
+  /** 删除工作区 Skill */
+  DELETE_SKILL: 'agent:delete-skill',
+  /** 切换工作区 Skill 启用/禁用 */
+  TOGGLE_SKILL: 'agent:toggle-skill',
+  /** 获取其他工作区的 Skill 列表 */
+  GET_OTHER_WORKSPACE_SKILLS: 'agent:get-other-workspace-skills',
+  /** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
+  GET_DEFAULT_SKILL_SLUGS: 'agent:get-default-skill-slugs',
+  /** 从其他工作区导入 Skill 到当前工作区 */
+  IMPORT_SKILL_FROM_WORKSPACE: 'agent:import-skill-from-workspace',
+  /** 从源工作区同步更新已导入的 Skill */
+  UPDATE_SKILL_FROM_SOURCE: 'agent:update-skill-from-source',
+  /** 读取 SKILL.md 全文内容 */
+  READ_SKILL_CONTENT: 'agent:read-skill-content',
+  /** 写入 SKILL.md 全文内容 */
+  WRITE_SKILL_CONTENT: 'agent:write-skill-content',
+  /** 列出 Skill 目录下的子文件树（不含 SKILL.md） */
+  LIST_SKILL_FILES: 'agent:list-skill-files',
+  /** 读取 Skill 目录下的子文件内容 */
+  READ_SKILL_FILE: 'agent:read-skill-file',
+  /** 写入 Skill 目录下的子文件内容 */
+  WRITE_SKILL_FILE: 'agent:write-skill-file',
+  /** 在 Skill 目录下创建文件或目录 */
+  CREATE_SKILL_ENTRY: 'agent:create-skill-entry',
+  /** 删除 Skill 目录下的文件或目录 */
+  DELETE_SKILL_ENTRY: 'agent:delete-skill-entry',
+  /** 重命名/移动 Skill 目录下的文件或目录 */
+  RENAME_SKILL_ENTRY: 'agent:rename-skill-entry',
+  /** 获取工作区记忆摘要 */
+  GET_WORKSPACE_MEMORY_SUMMARY: 'agent:get-workspace-memory-summary',
+  /** 读取 Profer 工作区资料 */
+  READ_WORKSPACE_PROFILE: 'agent:read-workspace-profile',
+  /** 写入 Profer 工作区资料 */
+  WRITE_WORKSPACE_PROFILE: 'agent:write-workspace-profile',
+  /** 列出工作区 auto memory 文件树 */
+  LIST_WORKSPACE_AUTO_MEMORY_FILES: 'agent:list-workspace-auto-memory-files',
+  /** 读取工作区 auto memory 文件 */
+  READ_WORKSPACE_AUTO_MEMORY_FILE: 'agent:read-workspace-auto-memory-file',
+  /** 写入工作区 auto memory 文件 */
+  WRITE_WORKSPACE_AUTO_MEMORY_FILE: 'agent:write-workspace-auto-memory-file',
+  /** 列出工作区 memory-archive 主题记忆文件树 */
+  LIST_WORKSPACE_MEMORY_ARCHIVE_FILES: 'agent:list-workspace-memory-archive-files',
+  /** 读取工作区 memory-archive 主题记忆文件 */
+  READ_WORKSPACE_MEMORY_ARCHIVE_FILE: 'agent:read-workspace-memory-archive-file',
+  /** 写入工作区 memory-archive 主题记忆文件 */
+  WRITE_WORKSPACE_MEMORY_ARCHIVE_FILE: 'agent:write-workspace-memory-archive-file',
+  /** 搜索工作区 memory-archive 正文 */
+  SEARCH_MEMORY_ARCHIVE: 'agent:search-memory-archive',
+  /** 解析双链名称 → 命中记忆文件（预览 [[...]] 点击跳转） */
+  RESOLVE_MEMORY_WIKILINK: 'agent:resolve-memory-wikilink',
+  /** 查询记忆反链：列出引用过当前文件的其它记忆文件 */
+  GET_MEMORY_BACKLINKS: 'agent:get-memory-backlinks',
+
+  // 流式事件（主进程 → 渲染进程推送）
+  /** Agent 流式事件 */
+  STREAM_EVENT: 'agent:stream:event',
+  /** Agent 流式完成 */
+  STREAM_COMPLETE: 'agent:stream:complete',
+  /** Agent 流式错误 */
+  STREAM_ERROR: 'agent:stream:error',
+
+  // 附件
+  /** 保存文件到 Agent session 工作目录 */
+  SAVE_FILES_TO_SESSION: 'agent:save-files-to-session',
+  /** 保存文件到工作区文件目录 */
+  SAVE_FILES_TO_WORKSPACE: 'agent:save-files-to-workspace',
+  /** 获取工作区文件目录路径 */
+  GET_WORKSPACE_FILES_PATH: 'agent:get-workspace-files-path',
+  /** 打开文件夹选择对话框 */
+  OPEN_FOLDER_DIALOG: 'agent:open-folder-dialog',
+  /** 附加外部目录到 Agent 会话 */
+  ATTACH_DIRECTORY: 'agent:attach-directory',
+  /** 移除会话的附加目录 */
+  DETACH_DIRECTORY: 'agent:detach-directory',
+  /** 附加外部文件到 Agent 会话 */
+  ATTACH_FILE: 'agent:attach-file',
+  /** 移除会话的附加文件 */
+  DETACH_FILE: 'agent:detach-file',
+  /** 附加外部目录到工作区（所有会话共享） */
+  ATTACH_WORKSPACE_DIRECTORY: 'agent:attach-workspace-directory',
+  /** 移除工作区的附加目录 */
+  DETACH_WORKSPACE_DIRECTORY: 'agent:detach-workspace-directory',
+  /** 附加外部文件到工作区（所有会话共享） */
+  ATTACH_WORKSPACE_FILE: 'agent:attach-workspace-file',
+  /** 移除工作区的附加文件 */
+  DETACH_WORKSPACE_FILE: 'agent:detach-workspace-file',
+  /** 获取工作区附加目录列表 */
+  GET_WORKSPACE_DIRECTORIES: 'agent:get-workspace-directories',
+  /** 获取工作区附加文件列表 */
+  GET_WORKSPACE_ATTACHED_FILES: 'agent:get-workspace-attached-files',
+  /** 获取工作区 worktree 仓库配置列表 */
+  GET_WORKTREE_REPOS: 'agent:get-worktree-repos',
+  /** 添加 worktree 仓库到工作区配置 */
+  ADD_WORKTREE_REPO: 'agent:add-worktree-repo',
+  /** 从工作区配置移除 worktree 仓库 */
+  REMOVE_WORKTREE_REPO: 'agent:remove-worktree-repo',
+
+  // 文件系统操作
+  /** 获取 session 工作路径 */
+  GET_SESSION_PATH: 'agent:get-session-path',
+  /** 列出目录内容 */
+  LIST_DIRECTORY: 'agent:list-directory',
+  /** 删除文件/空目录 */
+  DELETE_FILE: 'agent:delete-file',
+  /** 移动文件/目录到系统回收站（可恢复） */
+  MOVE_TO_TRASH: 'agent:move-to-trash',
+  /** 递归读取目录中所有文件（含相对路径和内容） */
+  READ_DIRECTORY_RECURSIVE: 'agent:read-directory-recursive',
+  /** 用系统默认应用打开文件 */
+  OPEN_FILE: 'agent:open-file',
+  /** 在系统文件管理器中显示文件 */
+  SHOW_IN_FOLDER: 'agent:show-in-folder',
+  /** 重命名文件/目录 */
+  RENAME_FILE: 'agent:rename-file',
+  /** 移动文件/目录到目标目录 */
+  MOVE_FILE: 'agent:move-file',
+  /** 列出附加目录内容（无工作区路径限制） */
+  LIST_ATTACHED_DIRECTORY: 'agent:list-attached-directory',
+  /** 在文件管理器中显示附加目录文件（无工作区路径限制） */
+  SHOW_ATTACHED_IN_FOLDER: 'agent:show-attached-in-folder',
+  /** 重命名附加目录文件/目录（无工作区路径限制） */
+  RENAME_ATTACHED_FILE: 'agent:rename-attached-file',
+  /** 移动附加目录文件/目录（无工作区路径限制） */
+  MOVE_ATTACHED_FILE: 'agent:move-attached-file',
+  /** 检查路径类型（文件 or 目录），用于拖拽检测 */
+  CHECK_PATHS_TYPE: 'agent:check-paths-type',
+  /** 读取附加目录文件内容为 base64（限制在已附加目录范围内，用于侧面板添加到聊天） */
+  READ_ATTACHED_FILE: 'agent:read-attached-file',
+  /** 搜索工作区文件（用于 @ 引用） */
+  SEARCH_WORKSPACE_FILES: 'agent:search-workspace-files',
+  /** 将文本内容写入临时预览文件并返回绝对路径 */
+  WRITE_CLIPBOARD_PREVIEW: 'agent:write-clipboard-preview',
+
+  // 标题自动生成通知（主进程 → 渲染进程推送）
+  /** 标题已更新（首次对话完成后自动生成） */
+  TITLE_UPDATED: 'agent:title-updated',
+  /** 会话元数据已更新（例如草稿会话晋升） */
+  SESSION_UPDATED: 'agent:session-updated',
+
+  // 工作区配置变化通知（主进程 → 渲染进程推送）
+  /** 工作区能力变化（MCP/Skills 文件监听触发） */
+  CAPABILITIES_CHANGED: 'agent:capabilities-changed',
+  /** 工作区文件变化（session 目录文件监听触发，用于文件浏览器刷新） */
+  WORKSPACE_FILES_CHANGED: 'agent:workspace-files-changed',
+
+  // 权限系统
+  /** 权限响应（渲染进程 → 主进程） */
+  PERMISSION_RESPOND: 'agent:permission:respond',
+  /** 热切换指定会话的权限模式（运行中生效，不广播到其他会话） */
+  UPDATE_SESSION_PERMISSION_MODE: 'agent:update-session-permission-mode',
+  /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效）。 */
+  UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
+  /** 切换指定会话的 ChatGPT Codex 推理档位（跨会话持久化）。 */
+  UPDATE_SESSION_OPENAI_THINKING: 'agent:update-session-openai-thinking',
+  /** 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单展示）。 */
+  GET_PI_REASONING_CAPABILITY: 'agent:get-pi-reasoning-capability',
+  /** 切换指定空闲会话的 Agent runtime；跨 runtime 时清除 SDK 会话恢复 ID。 */
+  UPDATE_SESSION_AGENT_RUNTIME: 'agent:update-session-agent-runtime',
+
+  // AskUserQuestion 交互式问答
+  /** AskUser 响应（渲染进程 → 主进程） */
+  ASK_USER_RESPOND: 'agent:ask-user:respond',
+
+  // ExitPlanMode 计划审批
+  /** ExitPlanMode 响应（渲染进程 → 主进程） */
+  EXIT_PLAN_MODE_RESPOND: 'agent:exit-plan-mode:respond',
+
+  // 队列消息（Agent 运行中排队发送）
+  /** 排队发送消息 */
+  QUEUE_MESSAGE: 'agent:queue-message',
+  /** 取消队列消息 */
+  CANCEL_QUEUED_MESSAGE: 'agent:cancel-queued-message',
+  /** 提升队列消息为立即发送 */
+  PROMOTE_QUEUED_MESSAGE: 'agent:promote-queued-message',
+  /** 队列消息状态变更通知（主进程 → 渲染进程推送） */
+  QUEUED_MESSAGE_STATUS: 'agent:queued-message-status',
+  /** 更新会话「队列自动发送」开关（per-session 持久化，重启保留） */
+  UPDATE_QUEUE_AUTO_SEND: 'agent:update-queue-auto-send',
+
+  // 待处理请求恢复（渲染进程重载后查询主进程状态）
+  /** 获取所有待处理的交互请求快照 */
+  GET_PENDING_REQUESTS: 'agent:get-pending-requests',
+
+  // Project Graph（任务图查询 + 实时推送）
+  /** 获取当前会话的 Graph 数据 */
+  GET_GRAPH: 'agent:get-graph',
+  /** 获取当前会话的 Graph 摘要 */
+  GET_GRAPH_SUMMARY: 'agent:get-graph-summary',
+  /** 获取已脱敏的 Pi Host Harness 只读执行/验证摘要 */
+  GET_PI_HARNESS_SNAPSHOT: 'agent:get-pi-harness-snapshot',
+  /** 用户显式确认继续一个 ready_task/shadow_mode Pi Harness candidate。 */
+  CONTINUE_PI_HARNESS_CANDIDATE: 'agent:continue-pi-harness-candidate',
+  /** 追加 Graph 事件到 JSONL（渲染进程 → 主进程） */
+  APPEND_GRAPH_EVENT: 'agent:append-graph-event',
+  /** 回溯放弃抽取：通读会话增量轮次，抽取放弃方向写进图（渲染进程 → 主进程，返回刷新后的图） */
+  RUN_RETROSPECTIVE: 'agent:run-retrospective',
+
+  // 热力图
+  /** 获取工作区每日活跃会话数（用于热力图） */
+  GET_WORKSPACE_HEATMAP_DAILY: 'agent:get-workspace-heatmap-daily',
+} as const
+
+/**
+ * 待处理交互请求快照（用于渲染进程重载后恢复状态）
+ */
+export interface PendingRequestsSnapshot {
+  /** 待处理的权限请求 */
+  permissions: PermissionRequest[]
+  /** 待处理的 AskUser 请求 */
+  askUsers: AskUserRequest[]
+  /** 待处理的 ExitPlanMode 请求 */
+  exitPlans: ExitPlanModeRequest[]
+}
+
+// ===== 团队协作 IPC 通道 =====
+
+/** 身份认证 IPC 通道 */
+export const AUTH_IPC_CHANNELS = {
+  GET_DEVICE_IDENTITY: 'auth:get-device-identity',
+  GET_USER_IDENTITY: 'auth:get-user-identity',
+  UPDATE_PROFILE: 'auth:update-profile',
+  LOGIN: 'auth:login',
+  LOGOUT: 'auth:logout',
+  GET_AUTH_STATUS: 'auth:get-auth-status',
+  REGISTER: 'auth:register',
+  GET_SERVER_INFO: 'auth:get-server-info',
+  GET_TEAM_AUTH: 'auth:get-team-auth',
+  LIST_DEVICES: 'auth:list-devices',
+  REVOKE_DEVICE: 'auth:revoke-device',
+  GET_REGISTRATION_OPTIONS: 'auth:get-registration-options',
+  SEND_REGISTRATION_OTP: 'auth:send-registration-otp',
+  VERIFY_REGISTRATION_OTP: 'auth:verify-registration-otp',
+} as const
+
+/** 同步 IPC 通道 */
+export const SYNC_IPC_CHANNELS = {
+  GET_STATUS: 'sync:get-status',
+  TRIGGER_SYNC: 'sync:trigger-sync',
+  GET_PENDING_CHANGES: 'sync:get-pending-changes',
+  DISCARD_PENDING_CHANGES: 'sync:discard-pending-changes',
+  /** 同步状态变更推送（主进程 → 渲染进程） */
+  STATUS_CHANGED: 'sync:status-changed',
+} as const
+
+/** 团队管理 IPC 通道 */
+export const TEAM_IPC_CHANNELS = {
+  LIST_WORKSPACES: 'team:list-workspaces',
+  CREATE_WORKSPACE: 'team:create-workspace',
+  DELETE_WORKSPACE: 'team:delete-workspace',
+  GET_MEMBERS: 'team:get-members',
+  CREATE_INVITATION: 'team:create-invitation',
+  LIST_INVITATIONS: 'team:list-invitations',
+  CANCEL_INVITATION: 'team:cancel-invitation',
+  GET_STATS: 'team:get-stats',
+  VERIFY_INVITATION: 'team:verify-invitation',
+  ACCEPT_INVITATION: 'team:accept-invitation',
+  DECLINE_INVITATION: 'team:decline-invitation',
+  UPDATE_MEMBER_ROLE: 'team:update-member-role',
+  REMOVE_MEMBER: 'team:remove-member',
+  APPLY_BRANDING: 'team:apply-branding',
+  GET_BRANDING: 'team:get-branding',
+  SET_WORKSPACE_BRAND: 'team:set-workspace-brand',
+  LEAVE_WORKSPACE: 'team:leave-workspace',
+  TRANSFER_OWNERSHIP: 'team:transfer-ownership',
+  RESTORE_WORKSPACE: 'team:restore-workspace',
+} as const
+
+/** 技能市场 IPC 通道 */
+export const SKILL_MARKETPLACE_IPC_CHANNELS = {
+  PUBLISH: 'skill:publish',
+  UNPUBLISH: 'skill:unpublish',
+  LIST_TEAM_SKILLS: 'skill:list-team-skills',
+  INSTALL_TEAM_SKILL: 'skill:install-team-skill',
+  CHECK_FOR_UPDATES: 'skill:check-for-updates',
+} as const
+
+/** 全局 Skill 体系 IPC 通道；旧 master 通道保留兼容。 */
+export const GLOBAL_SKILL_IPC_CHANNELS = {
+  LIST: 'global-skill:list',
+  READ: 'global-skill:read',
+  READ_WORKSPACE_COPY: 'global-skill:read-workspace-copy',
+  SAVE_WORKSPACE_COPY: 'global-skill:save-workspace-copy',
+  SAVE: 'global-skill:save',
+  COPY_TO_USER: 'global-skill:copy-to-user',
+  CREATE_USER: 'global-skill:create-user',
+  COPY_TO_WORKSPACE: 'global-skill:copy-to-workspace',
+  DELETE_USER: 'global-skill:delete-user',
+  GET_DELETE_BLOCKERS: 'global-skill:get-delete-blockers',
+  SET_ENABLED: 'global-skill:set-enabled',
+  RESTORE: 'global-skill:restore',
+  GET_OVERRIDES: 'global-skill:get-overrides',
+} as const
+
+/** 全局元 Skill（master 库）IPC 通道 */
+export const SKILL_MASTER_IPC_CHANNELS = {
+  LIST: 'skill-master:list',
+  READ: 'skill-master:read',
+  SAVE: 'skill-master:save',
+  RENAME_META: 'skill-master:rename-meta',
+  LIST_HISTORY: 'skill-master:list-history',
+  ROLLBACK: 'skill-master:rollback',
+  SYNC_TO_WORKSPACES: 'skill-master:sync-to-workspaces',
+  DETECT_CONFLICT: 'skill-master:detect-conflict',
+} as const
+
+/** 文件同步 IPC 通道（废弃，保留向后兼容） */
+export const FILE_SYNC_IPC_CHANNELS = {
+  GET_FILE_MANIFEST: 'file-sync:get-manifest',
+  DOWNLOAD_FILE: 'file-sync:download-file',
+  GET_FILE_STATUS: 'file-sync:get-file-status',
+  RESOLVE_CONFLICT: 'file-sync:resolve-conflict',
+} as const
+
+/** 团队文件操作 IPC 通道（用户主动上传/下载） */
+export const TEAM_FILE_IPC_CHANNELS = {
+  UPLOAD: 'team-file:upload',
+  DOWNLOAD: 'team-file:download',
+  DELETE: 'team-file:delete',
+  GET_MANIFEST: 'team-file:get-manifest',
+  CREATE_DIRECTORY: 'team-file:create-directory',
+  MOVE: 'team-file:move',
+  RENAME: 'team-file:rename',
+  SEARCH: 'team-file:search',
+  GET_METADATA: 'team-file:get-metadata',
+  PATCH_METADATA: 'team-file:patch-metadata',
+  GET_TAGS: 'team-file:get-tags',
+  GET_STATUSES: 'team-file:get-statuses',
+  SET_PREFERENCE: 'team-file:set-preference',
+  GET_ACTIVITIES: 'team-file:get-activities',
+  LIST_TRASH: 'team-file:list-trash',
+  RESTORE_TRASH: 'team-file:restore-trash',
+  PURGE_TRASH: 'team-file:purge-trash',
+} as const
+
+/** 团队共享知识记忆文档。个人工作区记忆不使用此类型。 */
+export interface TeamMemoryDocument {
+  id: string
+  path: string
+  title: string
+  content: string
+  version: number
+  createdBy: string
+  updatedBy: string
+  createdAt: number
+  updatedAt: number
+  archivedAt?: number
+}
+
+export interface TeamMemoryRevision {
+  id: string
+  version: number
+  changeSummary: string
+  editedBy: string
+  editedAt: number
+}
+
+export interface TeamMemoryApiResult<T> {
+  ok: boolean
+  status?: number
+  data?: T
+  error?: string
+  conflict?: { code: 'TEAM_MEMORY_VERSION_CONFLICT'; current: TeamMemoryDocument }
+}
+
+/** 团队共享知识记忆 IPC 通道。 */
+export const TEAM_MEMORY_IPC_CHANNELS = {
+  LIST: 'team-memory:list',
+  READ: 'team-memory:read',
+  CREATE: 'team-memory:create',
+  UPDATE: 'team-memory:update',
+  LIST_REVISIONS: 'team-memory:list-revisions',
+  ARCHIVE: 'team-memory:archive',
+  UNARCHIVE: 'team-memory:unarchive',
+} as const
+
+/** 团队文件回收站中的一项（仅 Owner/Admin 的治理界面使用）。 */
+export interface TeamTrashEntry {
+  id: string
+  fileId: string
+  originalPath: string
+  deletedBy: string | null
+  deletedAt: number
+  expiresAt: number
+}
+
+/** 团队文件 HTTP/IPC 代理的标准结果。 */
+export interface TeamFileApiResult<T> {
+  ok: boolean
+  status?: number
+  data?: T
+  error?: string
+}
+
+/** SSE 实时事件推送 IPC 通道 */
+export const SSE_IPC_CHANNELS = {
+  /** 主进程 → 渲染进程：SSE 事件推送 */
+  EVENT: 'sse:event',
+  /** 主进程 → 渲染进程：连接状态变更 */
+  CONNECTION_CHANGED: 'sse:connection-changed',
+} as const
+
+/** 团队服务器配置 */
+export interface TeamServerConfig {
+  id: string
+  name: string
+  baseUrl: string
+  authEndpoint: string
+  syncEndpoint: string
+  provider: 'self-hosted' | 'proma-cloud'
+  enabled: boolean
+  lastHealthCheck?: {
+    ok: boolean
+    checkedAt: number
+    error?: string
+  }
+}
+
+/** 工作区邀请 */
+export interface WorkspaceInvitation {
+  id: string
+  workspaceId: string
+  workspaceName: string
+  inviterId: string
+  inviterName: string
+  inviteeEmail: string
+  role: WorkspaceRole
+  token: string
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled'
+  createdAt: number
+  expiresAt: number
+  acceptedAt?: number
+}
+
+/** 记忆双链 [[...]] 解析结果 */
+export interface MemoryWikilinkTarget {
+  relativePath: string
+  kind: 'archive' | 'auto'
+  name: string
+  absolutePath: string
+  matchedBy: 'name' | 'filename' | 'contains'
+}
+
+/** 记忆反链：某条记忆被谁引用 */
+export interface MemoryBacklink {
+  relativePath: string
+  kind: 'archive' | 'auto'
+  name: string
+  absolutePath: string
+}
