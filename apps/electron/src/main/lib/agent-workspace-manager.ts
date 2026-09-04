@@ -950,13 +950,18 @@ export function writeWorkspaceSkillContent(workspaceSlug: string, skillSlug: str
   console.log(`[Agent 工作区] 已更新 SKILL.md: ${workspaceSlug}/${skillSlug}`)
 }
 
-// ===== 工作区记忆管理 =====
+// ===== Profer 工作区资料与记忆管理 =====
 
-const WORKSPACE_CLAUDE_MD = 'CLAUDE.md'
-const AUTO_MEMORY_DIR = '.claude/memory'
+/** Profer 自己管理的工作区资料；不要与用户项目的 CLAUDE.md / AGENTS.md 混用。 */
+const WORKSPACE_PROFILE_FILE = 'workspace-profile.md'
+/** 历史版本曾把 Profer 工作区资料写成 CLAUDE.md，仅用于兼容读取。 */
+const LEGACY_WORKSPACE_PROFILE_FILE = 'CLAUDE.md'
+const PROFER_MEMORY_DIR = '.profer/memory'
+/** 旧版本使用 Claude 命名空间保存 Profer 工作区记忆，仅用于兼容迁移。 */
+const LEGACY_PROFER_MEMORY_DIR = '.claude/memory'
 const AUTO_MEMORY_INDEX = 'MEMORY.md'
 
-function fileSummary(absPath: string): WorkspaceMemorySummary['claudeMd'] {
+function fileSummary(absPath: string): WorkspaceMemorySummary['workspaceProfile'] {
   if (!existsSync(absPath)) {
     return { exists: false, path: absPath, size: 0 }
   }
@@ -969,16 +974,79 @@ function fileSummary(absPath: string): WorkspaceMemorySummary['claudeMd'] {
   }
 }
 
-export function getWorkspaceClaudeMdPath(workspaceSlug: string): string {
-  return join(getAgentWorkspacePath(workspaceSlug), WORKSPACE_CLAUDE_MD)
+export function getWorkspaceProfilePath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), WORKSPACE_PROFILE_FILE)
+}
+
+function getLegacyWorkspaceProfilePath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), LEGACY_WORKSPACE_PROFILE_FILE)
+}
+
+/** 新路径优先；旧 CLAUDE.md 只读兼容，后续写入始终落到 workspace-profile.md。 */
+function resolveWorkspaceProfileReadPath(workspaceSlug: string): string {
+  const profilePath = getWorkspaceProfilePath(workspaceSlug)
+  if (existsSync(profilePath)) return profilePath
+  const legacyPath = getLegacyWorkspaceProfilePath(workspaceSlug)
+  return existsSync(legacyPath) ? legacyPath : profilePath
 }
 
 function getWorkspaceAutoMemoryPath(workspaceSlug: string): string {
-  return join(getAgentWorkspacePath(workspaceSlug), AUTO_MEMORY_DIR)
+  return join(getAgentWorkspacePath(workspaceSlug), PROFER_MEMORY_DIR)
+}
+
+function getLegacyWorkspaceAutoMemoryPath(workspaceSlug: string): string {
+  return join(getAgentWorkspacePath(workspaceSlug), LEGACY_PROFER_MEMORY_DIR)
+}
+
+/**
+ * 将旧 `.claude/memory` 中尚未出现在新目录的文件复制到 `.profer/memory`。
+ * 保留旧目录作为人工回滚/审计副本，不覆盖新目录中已经存在的文件。
+ */
+function mergeLegacyMemoryEntries(sourceDir: string, targetDir: string): void {
+  if (!existsSync(sourceDir)) return
+  if (existsSync(targetDir)) {
+    try {
+      if (!statSync(targetDir).isDirectory()) return
+    } catch {
+      return
+    }
+  } else {
+    mkdirSync(targetDir, { recursive: true })
+  }
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = readdirSync(sourceDir, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue
+    const source = join(sourceDir, entry.name)
+    const target = join(targetDir, entry.name)
+    if (entry.isDirectory()) {
+      if (!existsSync(target)) mkdirSync(target, { recursive: true })
+      mergeLegacyMemoryEntries(source, target)
+    } else if (entry.isFile() && !existsSync(target)) {
+      try { cpSync(source, target) } catch (error) {
+        console.warn(`[Agent 工作区] 迁移旧记忆文件失败 (${source}):`, error)
+      }
+    }
+  }
+}
+
+function migrateLegacyWorkspaceMemory(workspaceSlug: string, targetDir: string): void {
+  const legacyDir = getLegacyWorkspaceAutoMemoryPath(workspaceSlug)
+  if (!existsSync(legacyDir)) return
+  const targetExisted = existsSync(targetDir)
+  mergeLegacyMemoryEntries(legacyDir, targetDir)
+  if (!targetExisted) {
+    console.log(`[Agent 工作区] 已兼容迁移旧记忆目录: ${legacyDir} → ${targetDir}（旧目录保留）`)
+  }
 }
 
 export function getWorkspaceAutoMemoryDir(workspaceSlug: string): string {
   const dir = getWorkspaceAutoMemoryPath(workspaceSlug)
+  migrateLegacyWorkspaceMemory(workspaceSlug, dir)
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
   }
@@ -1104,9 +1172,15 @@ function buildMemoryFileTree(rootDir: string, currentDir: string, depth: number)
 }
 
 export function getWorkspaceMemorySummary(workspaceSlug: string): WorkspaceMemorySummary {
-  const memoryDir = getWorkspaceAutoMemoryPath(workspaceSlug)
+  const memoryDir = getWorkspaceAutoMemoryDir(workspaceSlug)
+  const profilePath = resolveWorkspaceProfileReadPath(workspaceSlug)
+  const profileSummary = fileSummary(profilePath)
   return {
-    claudeMd: fileSummary(getWorkspaceClaudeMdPath(workspaceSlug)),
+    workspaceProfile: {
+      ...profileSummary,
+      // 旧 CLAUDE.md 只作为读取来源；写入 API 始终落到新的 Profer profile。
+      path: profilePath,
+    },
     autoMemory: {
       ...collectAutoMemorySummary(memoryDir),
       memoryArchivePath: getWorkspaceMemoryArchivePath(workspaceSlug),
@@ -1114,32 +1188,32 @@ export function getWorkspaceMemorySummary(workspaceSlug: string): WorkspaceMemor
   }
 }
 
-export function readWorkspaceClaudeMd(workspaceSlug: string): SkillFileContent {
-  const abs = getWorkspaceClaudeMdPath(workspaceSlug)
+export function readWorkspaceProfile(workspaceSlug: string): SkillFileContent {
+  const abs = resolveWorkspaceProfileReadPath(workspaceSlug)
   if (!existsSync(abs)) {
-    return { relativePath: WORKSPACE_CLAUDE_MD, isText: true, size: 0, content: '' }
+    return { relativePath: WORKSPACE_PROFILE_FILE, isText: true, size: 0, content: '' }
   }
   const st = statSync(abs)
-  if (!st.isFile()) throw new Error(`${WORKSPACE_CLAUDE_MD} 不是文件`)
+  if (!st.isFile()) throw new Error(`${WORKSPACE_PROFILE_FILE} 不是文件`)
   if (st.size > SKILL_FILE_SIZE_LIMIT) {
     throw new Error(`文件过大（${(st.size / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
   }
   const binary = isLikelyBinaryFile(abs, st.size)
   return {
-    relativePath: WORKSPACE_CLAUDE_MD,
+    relativePath: WORKSPACE_PROFILE_FILE,
     isText: !binary,
     size: st.size,
     content: binary ? undefined : readFileSync(abs, 'utf-8'),
   }
 }
 
-export function writeWorkspaceClaudeMd(workspaceSlug: string, content: string): void {
+export function writeWorkspaceProfile(workspaceSlug: string, content: string): void {
   const byteLen = Buffer.byteLength(content, 'utf-8')
   if (byteLen > SKILL_FILE_SIZE_LIMIT) {
     throw new Error(`内容过大（${(byteLen / 1024 / 1024).toFixed(2)} MB），超过 10 MB 限制`)
   }
-  writeFileSync(getWorkspaceClaudeMdPath(workspaceSlug), content, 'utf-8')
-  console.log(`[Agent 工作区] 已更新工作区 CLAUDE.md: ${workspaceSlug}`)
+  writeFileSync(getWorkspaceProfilePath(workspaceSlug), content, 'utf-8')
+  console.log(`[Agent 工作区] 已更新 Profer workspace-profile.md: ${workspaceSlug}`)
 }
 
 export function listWorkspaceAutoMemoryFiles(workspaceSlug: string): SkillFileNode[] {

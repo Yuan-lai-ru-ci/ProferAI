@@ -92,7 +92,7 @@ describe('collectAttachedDirectories', () => {
     expect(result).toEqual(['/shared', '/unique'])
   })
 
-  test('工作区会加入根目录和 workspace-files，以读取工作区 CLAUDE.md', () => {
+  test('工作区会加入根目录和 workspace-files，以读取 Profer 工作区资料', () => {
     const slug = `directory-utils-${randomUUID()}`
     const workspaceDir = getAgentWorkspacePath(slug)
     const result = collectAttachedDirectories({ workspaceSlug: slug })

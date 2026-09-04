@@ -10,7 +10,7 @@
  * 2. 文件名（不含 .md 后缀）精确匹配；
  * 3. name / 文件名 / description 包含匹配（兜底）。
  *
- * 目标范围：memory-archive 主题文件 + auto memory（.claude/memory）下的 MEMORY.md 与主题文件。
+ * 目标范围：memory-archive 主题文件 + Profer Memory（.profer/memory；旧版 .claude/memory 由上层兼容迁移）下的 MEMORY.md 与主题文件。
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'

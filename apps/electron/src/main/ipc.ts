@@ -319,8 +319,8 @@ import {
   addWorktreeRepo,
   removeWorktreeRepo,
   cleanupStaleWorkspaceAttachedPaths,
-  readWorkspaceClaudeMd,
-  writeWorkspaceClaudeMd,
+  readWorkspaceProfile,
+  writeWorkspaceProfile,
   listWorkspaceAutoMemoryFiles,
   readWorkspaceAutoMemoryFile,
   writeWorkspaceAutoMemoryFile,
@@ -3737,17 +3737,17 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(
-    AGENT_IPC_CHANNELS.READ_WORKSPACE_CLAUDE_MD,
+    AGENT_IPC_CHANNELS.READ_WORKSPACE_PROFILE,
     async (_, workspaceSlug: string): Promise<SkillFileContent> => {
-      return readWorkspaceClaudeMd(workspaceSlug)
+      return readWorkspaceProfile(workspaceSlug)
     }
   )
 
   ipcMain.handle(
-    AGENT_IPC_CHANNELS.WRITE_WORKSPACE_CLAUDE_MD,
+    AGENT_IPC_CHANNELS.WRITE_WORKSPACE_PROFILE,
     async (event, workspaceSlug: string, content: string): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
-      writeWorkspaceClaudeMd(workspaceSlug, content)
+      writeWorkspaceProfile(workspaceSlug, content)
     }
   )
 

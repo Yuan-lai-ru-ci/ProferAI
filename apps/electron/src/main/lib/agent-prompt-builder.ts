@@ -30,7 +30,7 @@ function buildTaskGraphGuideline(isPiRuntime: boolean | undefined): string {
 /** 规划 Todo 与本地日程工具清单：Pi 运行时带 mcp__planning__ 前缀 */
 function buildPlanningTodoGuideline(isPiRuntime: boolean | undefined): string {
   const prefix = isPiRuntime ? 'mcp__planning__' : ''
-  return `- **规划 Todo 与本地日程**：规划中心 Todo 与任务图不同。
+  return `- **自动化与规划**：规划中心 Todo/本地日程与任务图不同；定时任务、提醒和明确安排统一使用 Profer 的自动化与规划工具。
   - 用户说“提醒我”“记得”“待办”“安排一下”“列入计划”等，且目标是需要完成的事项时，**默认直接调用** \`${prefix}create_todo\`，不要只用文字回复；用户给出日期/时间时填入 \`dueAt\`，必要时创建对应提醒。更新前用 \`${prefix}get_todo\` 获取最新记录，并把 \`updatedAt\` 作为 \`expectedUpdatedAt\` 传给 \`${prefix}update_todo\`。
   - 用户说“开会”“会议”“活动”“预约”或明确要创建某个时间段的事件时，**默认直接调用** \`${prefix}create_calendar_event\` 创建 Profer 规划中心的本地日程；先用当前时区解析时间，只有缺少开始时间、持续时长等必要信息时才提问。可用 \`${prefix}list_calendar_events\`/\`${prefix}get_calendar_event\` 查询，更新前必须读取最新日程并使用 \`${prefix}update_calendar_event\` 携带 \`expectedUpdatedAt\`。
   - “日程”“日历”默认指 Profer 本地规划中心，**不要主动询问 Google Calendar、Outlook 或其他平台**。只有用户明确说“同步到 Google/Outlook/飞书”等外部服务时，才进入外部日历流程；本地日程与外部同步不是一回事。
@@ -67,6 +67,8 @@ interface SystemPromptContext {
   pptCapabilityActive?: boolean
   /** 当前工作区是否为团队工作区 */
   isTeamWorkspace?: boolean
+  /** 仅当团队记忆工具实际注册时才注入团队记忆说明。 */
+  teamMemoryAvailable?: boolean
 }
 
 interface WorkspacePromptPaths {
@@ -139,9 +141,9 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 - 用户也可自行操作：会话输入工具栏（公文包图标）切换本会话预设；侧边栏「Agent 技能」→「预设」tab 管理预设
 - 当用户反复要求同类任务或特定能力组合时，主动建议创建/复用对应预设`)
 
-  // 工具使用指南（任务图条目按预设可隐藏，其余条目恒定；工具名按 runtime 适配）
+  // 工具使用指南：任务图与规划中心分别跟随各自实际注册状态；规划中心归入 automation 组。
   sections.push(`## 工具使用指南
-${suppress.has('task-graph') ? '' : `${buildTaskGraphGuideline(ctx.isPiRuntime)}\n`}${buildPlanningTodoGuideline(ctx.isPiRuntime)}\n${TOOL_USAGE_GUIDELINES}`)
+${suppress.has('task-graph') ? '' : `${buildTaskGraphGuideline(ctx.isPiRuntime)}\n`}${suppress.has('automation') ? '' : `${buildPlanningTodoGuideline(ctx.isPiRuntime)}\n`}${TOOL_USAGE_GUIDELINES}`)
 
   // SubAgent 委派策略（Pi 无 SDK 内置 SubAgent，委派走 Profer 协作子会话；极简类预设可隐藏）
   const claudeAvailable = ctx.claudeAvailable !== false
@@ -287,7 +289,7 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 - 新会话开始时，如任务需要恢复上下文，先列出两个目录；只读取**实际存在且与当前任务相关**的文件。不得默认创建或读取 \`note.md\`、\`todo.md\`，目录为空或无关时直接跳过。`)
   }
 
-  if (ctx.isTeamWorkspace) {
+  if (ctx.isTeamWorkspace && ctx.teamMemoryAvailable !== false && !suppress.has('memory')) {
     // 团队记忆工具名按 runtime 适配：Claude 走 in-process MCP 裸名，Pi 带 mcp__team-memory__ 前缀
     const teamMemoryPrefix = ctx.isPiRuntime ? 'mcp__team-memory__' : ''
     sections.push(`## 团队共享知识记忆
@@ -460,6 +462,8 @@ interface DynamicContext {
   agentCwd?: string
   /** 用户主动打开过的浏览器当前页面；不含正文或登录态。 */
   userBrowserContext?: BrowserUserContextSnapshot | null
+  /** 预设允许的用户 MCP 名称；undefined=不裁剪，[]=全部隐藏。 */
+  mcpServerNames?: string[]
 }
 
 function escapeContextText(value: string): string {
@@ -499,14 +503,13 @@ export function buildDynamicContext(ctx: DynamicContext): string {
     // MCP 服务器列表
     const mcpConfig = getWorkspaceMcpConfig(ctx.workspaceSlug)
     const serverEntries = Object.entries(mcpConfig.servers ?? {})
+      .filter(([name, entry]) => entry.enabled && name !== 'memos-cloud')
+      .filter(([name]) => ctx.mcpServerNames === undefined || ctx.mcpServerNames.includes(name))
     if (serverEntries.length > 0) {
       wsLines.push('MCP 服务器:')
       for (const [name, entry] of serverEntries) {
-        const status = entry.enabled ? '已启用' : '已禁用'
-        const detail = entry.type === 'stdio'
-          ? `${entry.command}${entry.args?.length ? ' ' + entry.args.join(' ') : ''}`
-          : entry.url || ''
-        wsLines.push(`- ${name} (${entry.type}, ${status}): ${detail}`)
+        // 动态上下文只提供能力摘要，避免把命令参数、URL 或 headers 泄露给模型。
+        wsLines.push(`- ${name} (${entry.type}, 已启用)`)
       }
     }
 

@@ -91,7 +91,7 @@ const TOOL_GROUP_OPTIONS: Array<{ value: AgentPresetToolGroup; label: string; hi
   { value: 'task-graph', label: '任务图', hint: '子任务图工具' },
   { value: 'memory', label: '长期记忆', hint: 'Auto Memory 与 memory-archive' },
   { value: 'collaboration', label: '协作子 Agent', hint: '委派与协作工具（等价禁止委派）' },
-  { value: 'automation', label: '定时任务', hint: 'Profer Automation 工具' },
+  { value: 'automation', label: '自动化与规划', hint: '定时任务、规划 Todo 与本地日程工具' },
 ]
 
 /** 与运行时一致的自动映射（shared 唯一事实表）：工具组禁用 → 隐藏对应提示词段 key（含 automation） */

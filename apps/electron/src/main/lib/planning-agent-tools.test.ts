@@ -42,3 +42,17 @@ test('Claude planning MCP exposes Todo and local calendar tools', async () => {
   ])
   expect(servers.planning).toBeDefined()
 })
+
+test('Claude planning MCP applies disabledTools filtering', async () => {
+  const sdk = {
+    createSdkMcpServer(input: { tools: Array<{ name?: string }> }) {
+      captured.push(...input.tools.map((tool) => ({ name: tool.name ?? '' })))
+      return { name: 'planning' }
+    },
+    tool(name: string) { return { name } },
+  } as unknown as typeof import('@anthropic-ai/claude-agent-sdk')
+  const servers: Record<string, Record<string, unknown>> = {}
+  const before = captured.length
+  await injectPlanningMcpServer(sdk, servers, { sessionId: 'claude-planning-test', disabledTools: ['create_todo', 'delete_calendar_event'] })
+  expect(captured.slice(before).map((tool) => tool.name)).toEqual(['list_todos', 'get_todo', 'update_todo', 'list_calendar_events', 'get_calendar_event', 'create_calendar_event', 'update_calendar_event'])
+})

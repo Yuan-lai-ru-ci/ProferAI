@@ -105,6 +105,7 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
       && tools.has('plan_ppt_visuals')
       && tools.has('audit_ppt_delivery')
       && tools.has('open_file_preview')
+      && tools.has('inspect_file_preview')
     const needsImageOutput = hasImageOutput
       && matches(task, /(?:发送|附上|展示|回复).*?(?:图片|图像|png|jpe?g|gif|webp)|(?:本地|已有).{0,8}(?:图片|图像)/i)
     const needsImageGenerationRouting = tools.has('generate_image')

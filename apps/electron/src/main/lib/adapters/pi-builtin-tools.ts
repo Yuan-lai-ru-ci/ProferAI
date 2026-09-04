@@ -1487,12 +1487,14 @@ export async function buildPiBuiltinTools(
     if (!disabled.has('task-graph')) {
       tools.push(...buildPiTaskGraphTools(sdk, ctx))
     }
-    tools.push(...buildPiPlanningTools(sdk, {
-      sessionId: ctx.sessionId,
-      workspaceId: ctx.workspaceId,
-      isTeamWorkspace: ctx.isTeamWorkspace,
-      disabledTools: ctx.disabledTools,
-    }))
+    if (!disabled.has('automation')) {
+      tools.push(...buildPiPlanningTools(sdk, {
+        sessionId: ctx.sessionId,
+        workspaceId: ctx.workspaceId,
+        isTeamWorkspace: ctx.isTeamWorkspace,
+        disabledTools: ctx.disabledTools,
+      }))
+    }
     tools.push(...buildPiAgentPresetTools(sdk, ctx))
   } catch (error) {
     console.error('[Pi 桥接] 注入个人记忆、任务图或规划中心工具失败:', error)

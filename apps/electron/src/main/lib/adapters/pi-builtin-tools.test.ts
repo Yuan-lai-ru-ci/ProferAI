@@ -316,6 +316,13 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     }
   })
 
+  test('Given automation disabled Then planning Todo and calendar tools are also pruned', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, { ...baseCtx, disabledToolGroups: ['automation'] })
+    expect(tools.some((tool) => tool.name.startsWith('mcp__automation__'))).toBe(false)
+    expect(tools.some((tool) => tool.name.startsWith('mcp__planning__'))).toBe(false)
+  })
+
   test('Given each group disabled individually Then only that group is pruned', async () => {
     for (const group of Object.keys(GROUP_PREFIXES) as Group[]) {
       const { sdk, tools } = createPiSdkStub()

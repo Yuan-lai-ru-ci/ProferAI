@@ -30,8 +30,8 @@ export function collectAttachedDirectories(params: {
   for (const file of sessionMeta?.attachedFiles ?? []) push(dirname(file))
 
   if (workspaceSlug) {
-    // cwd 是会话子目录；显式加入工作区根目录，使 CLAUDE.md 等工作区级
-    // 文件可被 Agent 用其绝对路径读取，也与提示词中的路径声明保持一致。
+    // cwd 是会话子目录；显式加入 Profer 工作区根目录，使 workspace-profile.md 等
+    // 工作区级资料可被 Agent 用其绝对路径读取，也与提示词中的路径声明保持一致。
     push(getAgentWorkspacePath(workspaceSlug))
     for (const d of getWorkspaceAttachedDirectories(workspaceSlug)) push(d)
     for (const f of getWorkspaceAttachedFiles(workspaceSlug)) push(dirname(f))

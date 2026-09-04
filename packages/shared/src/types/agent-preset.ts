@@ -100,7 +100,12 @@ export const AGENT_PRESET_GROUP_TOOL_NAMES: Record<AgentPresetToolGroup, readonl
     'answer_delegation_question',
     'continue_delegation',
   ],
-  automation: ['list_automations', 'get_automation', 'create_automation', 'update_automation', 'delete_automation', 'run_automation_now'],
+  // automation 组同时覆盖持久化定时任务与规划中心 Todo/日程，避免“提醒/安排”能力与自动化能力分裂。
+  automation: [
+    'list_automations', 'get_automation', 'create_automation', 'update_automation', 'delete_automation', 'run_automation_now',
+    'list_todos', 'get_todo', 'create_todo', 'update_todo',
+    'list_calendar_events', 'get_calendar_event', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event',
+  ],
 }
 
 /** 全部可裁剪单工具短名（disabledTools 校验用） */
@@ -118,6 +123,7 @@ export function filterDisabledTools<T extends { name: string }>(tools: T[], disa
 
 /**
  * 工具组禁用 → 提示词段隐藏 key 的自动映射（三层一致）。
+ * automation 组包含规划中心，因此同时隐藏定时任务和规划中心指南。
  * orchestrator 与设置页共用此表，避免硬编码漂移；禁止新工具组不在本表登记。
  */
 export const AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP: Record<AgentPresetToolGroup, AgentPresetSuppressKey> = {

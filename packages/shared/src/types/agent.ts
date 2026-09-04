@@ -1127,8 +1127,8 @@ export interface WorkspaceMemoryFileSummary {
 
 /** 工作区记忆摘要 */
 export interface WorkspaceMemorySummary {
-  /** 工作区级 CLAUDE.md */
-  claudeMd: WorkspaceMemoryFileSummary
+  /** Profer 工作区资料（workspace-profile.md；旧版本 CLAUDE.md 仅兼容读取） */
+  workspaceProfile: WorkspaceMemoryFileSummary
   /** SDK auto memory 目录 */
   autoMemory: {
     /** 绝对目录路径 */
@@ -1901,10 +1901,10 @@ export const AGENT_IPC_CHANNELS = {
   RENAME_SKILL_ENTRY: 'agent:rename-skill-entry',
   /** 获取工作区记忆摘要 */
   GET_WORKSPACE_MEMORY_SUMMARY: 'agent:get-workspace-memory-summary',
-  /** 读取工作区 CLAUDE.md */
-  READ_WORKSPACE_CLAUDE_MD: 'agent:read-workspace-claude-md',
-  /** 写入工作区 CLAUDE.md */
-  WRITE_WORKSPACE_CLAUDE_MD: 'agent:write-workspace-claude-md',
+  /** 读取 Profer 工作区资料 */
+  READ_WORKSPACE_PROFILE: 'agent:read-workspace-profile',
+  /** 写入 Profer 工作区资料 */
+  WRITE_WORKSPACE_PROFILE: 'agent:write-workspace-profile',
   /** 列出工作区 auto memory 文件树 */
   LIST_WORKSPACE_AUTO_MEMORY_FILES: 'agent:list-workspace-auto-memory-files',
   /** 读取工作区 auto memory 文件 */

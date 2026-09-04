@@ -24,7 +24,7 @@ mock.module('electron', () => ({
   WebContentsView: class {},
 }))
 
-const { buildSystemPrompt } = await import('./agent-prompt-builder')
+const { buildSystemPrompt, buildDynamicContext } = await import('./agent-prompt-builder')
 const { buildPiTaskPrompt } = await import('./pi-task-prompt')
 const { getConfigDirName } = await import('./config-paths')
 
@@ -221,6 +221,8 @@ describe('buildSystemPrompt', () => {
     })
     expect(withoutAutomation).not.toContain('7. **定时任务**')
     expect(withoutAutomation).not.toContain('Bash cron')
+    expect(withoutAutomation).not.toContain('create_todo')
+    expect(withoutAutomation).not.toContain('create_calendar_event')
     // 其余交互规范条目不受影响
     expect(withoutAutomation).toContain('8. **发送既有本地图片**')
     expect(withoutAutomation).toContain('9. **AI 生图**')
@@ -280,6 +282,23 @@ describe('buildSystemPrompt', () => {
     expect(webAndPpt).not.toContain('快速 PPTX 生成')
     expect(webAndPpt).not.toContain('generate_pptx_fast')
     expect(webAndPpt).not.toContain('7. **定时任务**')
+  })
+
+  test('禁用 memory 时团队工作区不再注入团队记忆提示词', () => {
+    const prompt = buildSystemPrompt({ workspaceName: 'Team', workspaceSlug: 'team-ws', sessionId: 'session-123', permissionMode: 'auto', isTeamWorkspace: true, teamMemoryAvailable: false, isPiRuntime: true })
+    expect(prompt).not.toContain('## 团队共享知识记忆')
+    expect(prompt).not.toContain('mcp__team-memory__list_team_memories')
+  })
+
+  test('动态上下文只展示当前预设实际允许的 MCP，且不泄露命令和 URL', () => {
+    const restricted = buildDynamicContext({ workspaceName: 'Demo', workspaceSlug: 'demo-workspace', mcpServerNames: ['allowed'] })
+    expect(restricted).toContain('- allowed (http, 已启用)')
+    expect(restricted).not.toContain('denied')
+    expect(restricted).not.toContain('disabled')
+    expect(restricted).not.toContain('https://allowed.example.test/mcp')
+    expect(restricted).not.toContain('/private/denied-mcp')
+    const none = buildDynamicContext({ workspaceSlug: 'demo-workspace', mcpServerNames: [] })
+    expect(none).not.toContain('MCP 服务器:')
   })
 
   test('团队记忆工具名按 runtime 适配（Pi 前缀 / Claude 裸名）', () => {

@@ -837,10 +837,10 @@ export interface ElectronAPI {
   getWorkspaceMemorySummary: (workspaceSlug: string) => Promise<WorkspaceMemorySummary>
   /** 获取工作区每日 Token 消耗，用于热力图展示。团队工作区返回空数组 */
   getWorkspaceHeatmapDaily: (workspaceId: string) => Promise<Array<{ date: string; tokens: number }>>
-  /** 读取工作区 CLAUDE.md */
-  readWorkspaceClaudeMd: (workspaceSlug: string) => Promise<SkillFileContent>
-  /** 写入工作区 CLAUDE.md */
-  writeWorkspaceClaudeMd: (workspaceSlug: string, content: string) => Promise<void>
+  /** 读取 Profer 工作区资料 */
+  readWorkspaceProfile: (workspaceSlug: string) => Promise<SkillFileContent>
+  /** 写入 Profer 工作区资料 */
+  writeWorkspaceProfile: (workspaceSlug: string, content: string) => Promise<void>
   /** 列出工作区 auto memory 文件树 */
   listWorkspaceAutoMemoryFiles: (workspaceSlug: string) => Promise<SkillFileNode[]>
   /** 读取工作区 auto memory 文件 */
@@ -2466,12 +2466,12 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_WORKSPACE_HEATMAP_DAILY, workspaceId) as Promise<Array<{ date: string; tokens: number }>>
   },
 
-  readWorkspaceClaudeMd: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_WORKSPACE_CLAUDE_MD, workspaceSlug)
+  readWorkspaceProfile: (workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_WORKSPACE_PROFILE, workspaceSlug)
   },
 
-  writeWorkspaceClaudeMd: (workspaceSlug: string, content: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_CLAUDE_MD, workspaceSlug, content)
+  writeWorkspaceProfile: (workspaceSlug: string, content: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_WORKSPACE_PROFILE, workspaceSlug, content)
   },
 
   listWorkspaceAutoMemoryFiles: (workspaceSlug: string) => {

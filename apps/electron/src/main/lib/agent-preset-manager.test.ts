@@ -109,6 +109,12 @@ describe('全局预设与作用域引用', () => {
     expect(presets.filter((preset) => preset.scope === 'builtin-meta')).toHaveLength(3)
   })
 
+  test('Given user-global MCP whitelist is empty When creating Then empty whitelist is preserved', () => {
+    const created = createGlobalAgentPreset({ name: '全局零 MCP', description: '', mcpServerNames: [] })
+    expect(created.mcpServerNames).toEqual([])
+    expect(listGlobalAgentPresets().find((preset) => preset.id === created.id)?.mcpServerNames).toEqual([])
+  })
+
   test('Given user-global When resolving Then workspace context cannot change identity', () => {
     const created = createGlobalAgentPreset({ name: '全局代码', description: '' })
     const reference = { presetId: created.id, presetScope: 'user-global' as const }

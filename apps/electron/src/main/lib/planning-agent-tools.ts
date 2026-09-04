@@ -6,6 +6,7 @@
  */
 
 import type { CalendarEventListQuery, CreateCalendarEventInput, CreateTodoInput, TodoListQuery, UpdateCalendarEventInput, UpdateTodoInput } from '@profer/shared'
+import { filterDisabledTools } from '@profer/shared'
 import {
   createPlanningCalendarEvent,
   createPlanningTodo,
@@ -98,7 +99,10 @@ function buildSchemas(z: typeof import('zod')['z']) {
   }
 }
 
-export interface PlanningMcpToolContext extends PlanningAgentToolContext {}
+export interface PlanningMcpToolContext extends PlanningAgentToolContext {
+  /** 预设禁用的规划中心工具短名；规划中心属于 automation 组。 */
+  disabledTools?: string[]
+}
 
 export async function injectPlanningMcpServer(
   sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
@@ -113,10 +117,7 @@ export async function injectPlanningMcpServer(
   }
   const schemas = buildSchemas(z)
 
-  const server = sdk.createSdkMcpServer({
-    name: 'planning',
-    version: '1.0.0',
-    tools: [
+  const tools = [
       sdk.tool(
         'list_todos',
         '列出当前 Agent 项目中的规划 Todo。规划 Todo 与任务图不同，适合记录用户待办和后续事项。',
@@ -207,7 +208,11 @@ export async function injectPlanningMcpServer(
           try { return jsonResult({ deleted: await deletePlanningCalendarEvent(ctx, (args as { id: string }).id) }) } catch (error) { return jsonError(error) }
         },
       ),
-    ],
+  ]
+  const server = sdk.createSdkMcpServer({
+    name: 'planning',
+    version: '1.0.0',
+    tools: filterDisabledTools(tools, ctx.disabledTools),
   })
 
   mcpServers.planning = server as unknown as Record<string, unknown>

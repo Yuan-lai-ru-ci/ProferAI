@@ -104,6 +104,7 @@ import {
 } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getBundledCliPath } from './config-paths'
 import { getRuntimeSkillsPath, prepareRuntimeSkills } from './global-skill-manager'
+import { normalizeDefaultSkillSlug } from './default-skill-slugs'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
@@ -263,6 +264,12 @@ export class AgentOrchestrator {
   /** 每轮真实运行的退出信号；仅 owner finally 可以 resolve。 */
   private runCompletions = new Map<string, { token: string; promise: Promise<void>; resolve: () => void }>()
 
+  /** 当前运行实际加载的预设能力；队列消息必须跟随它，而不是盲信运行中途刚切换的会话元数据。 */
+  private activePresetPolicies = new Map<string, {
+    skillSlugs?: string[]
+    loadedMcpServerNames: Set<string>
+  }>()
+
   /** 删除期间禁止同一会话从 UI、队列或 headless 路径重新进入。 */
   private deletingSessions = new Set<string>()
 
@@ -406,7 +413,7 @@ export class AgentOrchestrator {
       if (!entry.enabled) continue
       if (name === 'memos-cloud') continue
       // 预设 MCP 白名单：未列出的工作区 MCP 不加载
-      if (mcpNameFilter && !mcpNameFilter.includes(name)) {
+      if (mcpNameFilter !== undefined && !mcpNameFilter.includes(name)) {
         console.log(`[Agent 编排] MCP 服务器 "${name}" 被预设白名单裁剪`)
         continue
       }
@@ -1087,6 +1094,11 @@ export class AgentOrchestrator {
       // B2-3：预设禁用的单工具短名（与工具组叠加生效，两侧注入点按 shared 事实表口径过滤）
       const disabledTools = sessionPreset.disabledTools
       const mcpServers = this.buildMcpServers(workspaceSlug, sessionPreset.mcpServerNames)
+      // 先建立运行策略快照，再执行异步 MCP 注入，避免初始化期间的队列消息失去预设过滤。
+      this.activePresetPolicies.set(sessionId, {
+        ...(sessionPreset.skillSlugs !== undefined && { skillSlugs: sessionPreset.skillSlugs.map(normalizeDefaultSkillSlug) }),
+        loadedMcpServerNames: new Set(Object.keys(mcpServers)),
+      })
       if (!disabledToolGroups.has('automation')) {
         await injectAutomationMcpServer(
           sdk,
@@ -1134,11 +1146,12 @@ export class AgentOrchestrator {
         await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId }, disabledTools)
       }
       await injectAgentPresetMcpServer(sdk, mcpServers, { sessionId })
-      if (agentRuntime === 'claude') {
+      if (agentRuntime === 'claude' && !disabledToolGroups.has('automation')) {
         await injectPlanningMcpServer(sdk, mcpServers, {
           sessionId,
           workspaceId,
           isTeamWorkspace: workspace?.type === 'team',
+          disabledTools,
         })
       }
       // 本地图片输出只在受工作区授权的会话注册；没有 workspace 的 cwd 是 homedir，不能默认授权整个用户目录。
@@ -1202,10 +1215,23 @@ export class AgentOrchestrator {
         })
       }
 
-      // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具）
+      // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具），同样受当前预设白名单约束。
       if (customMcpServers) {
-        Object.assign(mcpServers, customMcpServers)
-        console.log(`[Agent 编排] 已合并 ${Object.keys(customMcpServers).length} 个自定义 MCP 服务器`)
+        const customEntries = Object.entries(customMcpServers)
+          .filter(([name]) => sessionPreset.mcpServerNames === undefined || sessionPreset.mcpServerNames.includes(name))
+          // 外部 MCP 不得覆盖 Profer 已注册的内置 MCP（如 automation/planning/team-memory）。
+          .filter(([name]) => !Object.prototype.hasOwnProperty.call(mcpServers, name))
+        Object.assign(mcpServers, Object.fromEntries(customEntries))
+        const rejectedCount = Object.keys(customMcpServers).length - customEntries.length
+        if (rejectedCount > 0) {
+          console.log(`[Agent 编排] 预设 MCP 白名单裁剪了 ${rejectedCount} 个外部 MCP 服务器`)
+        }
+        console.log(`[Agent 编排] 已合并 ${customEntries.length} 个自定义 MCP 服务器`)
+      }
+      // 队列消息复用当前 SDK 运行时，必须使用本轮真正加载的能力快照；会话内切换预设只影响下一轮。
+      const activePresetPolicy = this.activePresetPolicies.get(sessionId)
+      if (activePresetPolicy) {
+        activePresetPolicy.loadedMcpServerNames = new Set(Object.keys(mcpServers))
       }
 
       // 11. 构建动态上下文和最终 prompt
@@ -1213,6 +1239,7 @@ export class AgentOrchestrator {
         workspaceName: workspace?.name,
         workspaceSlug,
         agentCwd,
+        mcpServerNames: Object.keys(mcpServers),
         userBrowserContext: browserController.getUserContext(sessionId),
       })
 
@@ -1223,17 +1250,24 @@ export class AgentOrchestrator {
         enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
         console.log(`[Agent 编排] 注入 referenced_sessions: ${mentionedSessionIds?.length ?? 0} sessions`)
       }
-      if (mentionedSkills?.length || mentionedMcpServers?.length) {
-        const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
-        for (const slug of mentionedSkills ?? []) {
-          const qualifiedName = workspaceSlug ? `profer-workspace-${workspaceSlug}:${slug}` : slug
-          toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
-        }
-        for (const name of mentionedMcpServers ?? []) {
-          toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
-        }
-        enrichedMessage = `<mentioned_tools>\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${userMessage}`
-        console.log(`[Agent 编排] 注入 mentioned_tools: ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP`)
+      const allowedSkillSlugs = sessionPreset.skillSlugs?.map(normalizeDefaultSkillSlug)
+      const allowedMentionedSkills = mentionedSkills?.filter((slug) =>
+        allowedSkillSlugs === undefined || allowedSkillSlugs.includes(normalizeDefaultSkillSlug(slug)),
+      ) ?? []
+      const allowedMentionedMcpServers = mentionedMcpServers?.filter((name) =>
+        Object.prototype.hasOwnProperty.call(mcpServers, name),
+      ) ?? []
+      const toolLines: string[] = []
+      for (const slug of allowedMentionedSkills) {
+        const qualifiedName = workspaceSlug ? `profer-workspace-${workspaceSlug}:${slug}` : slug
+        toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
+      }
+      for (const name of allowedMentionedMcpServers) {
+        toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
+      }
+      if (toolLines.length > 0) {
+        enrichedMessage = `<mentioned_tools>\n用户在消息中明确引用了以下当前预设可用的工具，请在本次回复中主动调用：\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedMessage}`
+        console.log(`[Agent 编排] 注入 mentioned_tools: ${toolLines.length} 条（原始 ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP）`)
       }
 
       const contextualMessage = `${dynamicCtx}
@@ -2823,6 +2857,7 @@ ${enrichedMessage}`
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       // 只有仍持有本 generation 的 finally 能释放并清理 session scoped state。
       if (releaseActiveRun()) {
+        this.activePresetPolicies.delete(sessionId)
         this.sessionPermissionModes.delete(sessionId)
         this.queuedMessageUuids.delete(sessionId)
         permissionService.clearSessionPending(sessionId)
@@ -3162,22 +3197,31 @@ ${enrichedMessage}`
     const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
     // 运行中的 Agent 收到队列消息时也必须看到用户刚刚主动打开的页面。
     // 未打开浏览器时保持既有消息形态，避免给每条插队消息重复注入无关环境块。
+    const activePolicy = this.activePresetPolicies.get(sessionId)
     const userBrowserContext = browserController.getUserContext(sessionId)
-    let enrichedText = userBrowserContext ? `${buildDynamicContext({ userBrowserContext })}\n\n${text}` : text
+    let enrichedText = userBrowserContext
+      ? `${buildDynamicContext({ userBrowserContext, mcpServerNames: activePolicy ? [...activePolicy.loadedMcpServerNames] : undefined })}\n\n${text}`
+      : text
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
     if (referencedSessionsBlock) {
       enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
     }
-    if (mentionedSkills?.length || mentionedMcpServers?.length) {
-      const toolLines: string[] = ['用户在消息中明确引用了以下工具，请在本次回复中主动调用：']
-      for (const slug of mentionedSkills ?? []) {
-        const qualifiedName = workspaceSlug ? `profer-workspace-${workspaceSlug}:${slug}` : slug
-        toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
-      }
-      for (const name of mentionedMcpServers ?? []) {
-        toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
-      }
-      enrichedText = `<mentioned_tools>\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${text}`
+    const allowedMentionedSkills = mentionedSkills?.filter((slug) =>
+      activePolicy?.skillSlugs === undefined || activePolicy.skillSlugs.includes(normalizeDefaultSkillSlug(slug)),
+    ) ?? []
+    const allowedMentionedMcpServers = mentionedMcpServers?.filter((name) =>
+      activePolicy?.loadedMcpServerNames.has(name),
+    ) ?? []
+    const toolLines: string[] = []
+    for (const slug of allowedMentionedSkills) {
+      const qualifiedName = workspaceSlug ? `profer-workspace-${workspaceSlug}:${slug}` : slug
+      toolLines.push(`- Skill: ${qualifiedName}（请立即调用此 Skill）`)
+    }
+    for (const name of allowedMentionedMcpServers) {
+      toolLines.push(`- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)
+    }
+    if (toolLines.length > 0) {
+      enrichedText = `<mentioned_tools>\n用户在消息中明确引用了以下当前预设可用的工具，请在本次回复中主动调用：\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
     }
 
     // 构造 SDKUserMessage 并注入（'next' 优先级 = 等当前 turn 完成再处理）

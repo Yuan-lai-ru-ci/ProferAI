@@ -446,7 +446,7 @@ export function createGlobalAgentPreset(input: AgentPresetCreateInput): AgentPre
     ...(input.disabledTools?.length && { disabledTools: input.disabledTools }),
     ...(input.effort && { effort: input.effort }), ...(input.permissionMode && { permissionMode: input.permissionMode }),
     ...(input.skillSlugs !== undefined && { skillSlugs: input.skillSlugs }),
-    ...(input.mcpServerNames?.length && { mcpServerNames: input.mcpServerNames }),
+    ...(input.mcpServerNames !== undefined && { mcpServerNames: input.mcpServerNames }),
     ...(input.allowSubagents !== undefined && { allowSubagents: input.allowSubagents }),
     ...(input.basePresetId !== undefined && { basePresetId: input.basePresetId }),
     createdAt: now, updatedAt: now,
@@ -515,7 +515,7 @@ function applyPresetUpdates(existing: AgentPreset, updates: AgentPresetUpdateInp
   if (updates.effort !== undefined) next.effort = updates.effort ?? undefined
   if (updates.permissionMode !== undefined) next.permissionMode = updates.permissionMode ?? undefined
   if (updates.skillSlugs !== undefined) next.skillSlugs = updates.skillSlugs ?? undefined
-  if (updates.mcpServerNames !== undefined) next.mcpServerNames = updates.mcpServerNames?.length ? updates.mcpServerNames : undefined
+  if (updates.mcpServerNames !== undefined) next.mcpServerNames = updates.mcpServerNames ?? undefined
   if (updates.allowSubagents !== undefined) next.allowSubagents = updates.allowSubagents ?? undefined
   if (updates.basePresetId === null) {
     const base = next.basePresetId ? BUILTIN_AGENT_PRESETS.find((preset) => preset.id === next.basePresetId) : undefined

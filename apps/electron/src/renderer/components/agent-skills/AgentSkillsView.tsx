@@ -107,7 +107,7 @@ export function AgentSkillsView(): React.ReactElement {
   React.useEffect(() => {
     if (!data.workspaceSlug) return
     window.electronAPI.getWorkspaceMemorySummary(data.workspaceSlug).then((mem) => {
-      setMemoryCount((mem.claudeMd.exists ? 1 : 0) + (mem.autoMemory.fileCount ?? 0))
+      setMemoryCount((mem.workspaceProfile.exists ? 1 : 0) + (mem.autoMemory.fileCount ?? 0))
     }).catch(() => {})
   }, [data.workspaceSlug, data.loading])
 
