@@ -13,10 +13,12 @@ import type { ProferPermissionMode } from '@profer/shared'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { getUserProfile } from './user-profile-service'
-import { getWorkspaceMcpConfig } from './agent-workspace-manager'
+import { getWorkspaceMcpConfig } from './workspace-mcp-config'
 import type { BrowserUserContextSnapshot } from './browser-controller'
 import { getConfigDirName } from './config-paths'
 import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
+import { buildAgentPlatformPrompt } from './agent-platform-prompt'
+import type { AgentPlatformProjectCandidate } from './agent-platform-prompt'
 
 // ===== 工具使用指南（可复用常量） =====
 
@@ -69,6 +71,11 @@ interface SystemPromptContext {
   isTeamWorkspace?: boolean
   /** 仅当团队记忆工具实际注册时才注入团队记忆说明。 */
   teamMemoryAvailable?: boolean
+  /** 当前宿主平台与实际 shell；仅注入平台差异 overlay，不复制核心规则。 */
+  platform?: NodeJS.Platform
+  shellPath?: string
+  agentCwd?: string
+  projectCandidates?: AgentPlatformProjectCandidate[]
 }
 
 interface WorkspacePromptPaths {
@@ -258,6 +265,16 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 - 你拥有 Claude 原生的 Read、Write、Edit、Bash、Grep、Glob、Skill 与 Profer 产品工具，可直接使用
 - 遵循本提示词中的工作区、权限、计划模式、Context 和知识维护规则
 - 修改本地文件后必须在当前任务中自行完成最小验证（重新读取改动片段，或运行与改动相称的最小检查/测试）；系统不会自动追加验证轮次。`)
+  }
+
+  if (ctx.platform) {
+    sections.push(buildAgentPlatformPrompt({
+      platform: ctx.platform,
+      shellPath: ctx.shellPath,
+      agentCwd: ctx.agentCwd,
+      projectCandidates: ctx.projectCandidates,
+      isPiRuntime: ctx.isPiRuntime,
+    }))
   }
 
   // 用户信息

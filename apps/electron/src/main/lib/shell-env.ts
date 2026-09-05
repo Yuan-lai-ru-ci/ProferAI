@@ -12,7 +12,7 @@
  * 应用启动时运行用户的登录 Shell，提取完整的环境变量
  */
 
-import { execSync } from 'child_process'
+import { execFileSync } from 'node:child_process'
 import { app } from 'electron'
 import type { ShellEnvResult } from '@profer/shared'
 import { loadWindowsEnv } from './windows-env'
@@ -79,32 +79,51 @@ function parseEnvOutput(output: string): Record<string, string> {
 }
 
 /**
+ * 构造环境探测 Shell 调用参数，供运行时和单测共享。
+ * 使用非交互 login shell，避免 zsh 的 zle/bindkey 初始化在 GUI 进程中报错。
+ */
+export function buildShellEnvInvocation(): { args: string[]; marker: string } {
+  const marker = '__PROMA_ENV_START__'
+  return {
+    args: ['-l', '-c', `printf '%s\\n' '${marker}' && env`],
+    marker,
+  }
+}
+
+/**
  * 从用户 Shell 获取完整环境变量
  *
  * @param shell - Shell 可执行文件路径
  * @returns 环境变量键值对
  */
 export async function getShellEnv(shell: string): Promise<Record<string, string>> {
-  // 使用标记来定位环境变量输出的开始位置
-  // 这样可以过滤掉 Shell 启动时的其他输出
-  const marker = '__PROMA_ENV_START__'
-  const command = `echo ${marker} && env`
-
-  const output = execSync(`${shell} -l -i -c '${command}'`, {
-    encoding: 'utf-8',
-    timeout: 10000, // 10 秒超时
-    env: {
-      // 提供最小的初始环境
-      HOME: process.env.HOME,
-      USER: process.env.USER,
-      SHELL: shell,
-      TERM: 'xterm-256color',
-      // 阻止 macOS 弹出 "安装命令行开发者工具" 对话框
-      APPLE_SUPPRESS_DEVELOPER_TOOL_POPUP: '1',
-      GIT_TERMINAL_PROMPT: '0',
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
+  // 使用标记来定位环境变量输出的开始位置；非交互 login shell 仍会加载登录环境，
+  // 但不会执行 .zshrc 中依赖交互终端的 zle/bindkey 等逻辑。
+  const { args, marker } = buildShellEnvInvocation()
+  // 通过 execFileSync 参数数组调用，避免 shell 路径或 command 被外层 shell 二次解析。
+  let output: string
+  try {
+    output = execFileSync(shell, args, {
+      encoding: 'utf-8',
+      timeout: 10000, // 10 秒超时
+      env: {
+        // 提供最小的初始环境
+        HOME: process.env.HOME,
+        USER: process.env.USER,
+        SHELL: shell,
+        TERM: 'xterm-256color',
+        // 阻止 macOS 弹出 "安装命令行开发者工具" 对话框
+        APPLE_SUPPRESS_DEVELOPER_TOOL_POPUP: '1',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { stderr?: Buffer | string; status?: number }
+    const stderr = failure.stderr ? String(failure.stderr).trim() : ''
+    const status = failure.status == null ? '' : ` (exit ${failure.status})`
+    throw new Error(`执行 login shell 失败${status}${stderr ? `: ${stderr}` : ''}`, { cause: error })
+  }
 
   // 找到标记位置，只解析标记之后的内容
   const markerIndex = output.indexOf(marker)

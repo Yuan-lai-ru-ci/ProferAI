@@ -97,11 +97,12 @@ cd packages/core && bun run typecheck
 # 测试
 bun test
 
-# 打包分发（仅 Windows 发布）
+# 打包分发（按目标平台执行）
 cd apps/electron
-bun run dist:win      # Windows（唯一发布平台）
-bun run dist:fast     # 当前架构快速打包
-# macOS/Linux 不构建、不测试、不发布（无 mac 开发者/测试环境），release.yml 仅含 Windows job
+bun run dist:fast     # 当前宿主架构快速打包（本机 macOS 可用于 arm64 验收）
+bun run dist:mac      # macOS 当前架构验收包
+bun run dist:win      # Windows x64 发布/验收包（必须在 Windows 构建主机执行）
+# Windows 专属的 PowerShell/注册表 PATH/打包校验只在 Windows 主机执行；不要在 macOS shell 中执行 Windows 命令
 ```
 
 ### Electron 构建脚本（`apps/electron/` 目录下）
@@ -390,10 +391,10 @@ bun run generate:icons    # 生成应用图标
 - `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `claude-agent-sdk-${platform}-${arch}/{claude|claude.exe}` 得到 binary 路径
 
 **跨平台打包限制：**
-- 正式稳定发布默认仍只发布 Windows x64；Linux 不构建不发布。
-- macOS 现已具备 `macos-14` Apple Silicon (`darwin-arm64`) 的手动验收 workflow：`.github/workflows/macos-package.yml`。它只跑便携测试、typecheck、Mac 构建与包验证，并上传 Actions Artifact；不自动创建 Release。
+- 正式稳定发布默认仍只发布 Windows x64；Linux 正式签名发布暂未接入。
+- macOS 具备 `macos-14` Apple Silicon (`darwin-arm64`) 的手动验收 workflow：`.github/workflows/macos-package.yml`。它只跑便携测试、typecheck、Mac 构建与包验证，并上传 Actions Artifact；不自动创建 Release。
 - macOS 当前仅支持无签名、无公证的 arm64 验收包。只有用户明确要求时，才可将该 Artifact 作为测试版资产加入 GitHub Pre-release；不能把它当作正式稳定 Mac 发布。
-- macOS/Linux 正式签名发布仍未接入。Apple Silicon runner 不会构建 darwin-x64；Intel 需要 x64 runner 单独构建。
+- macOS 正式签名/公证发布仍未接入。Apple Silicon runner 不会构建 darwin-x64；Intel 需要 x64 runner 单独构建。
 
 **不使用 extraResources 放 binary 的原因：**
 - `extraResources` 会将文件复制到 `Contents/Resources/` 目录，路径与 node_modules 解析不一致

@@ -39,5 +39,20 @@ describe('Agent runtime CLI PATH', () => {
       '/usr/bin',
       '/bin',
     ].join(':'))
+    expect(result.shellKind).toBe('posix')
+    expect(result.shellPath).toBe('/bin/zsh')
+    expect(result.env.SHELL).toBe('/bin/zsh')
+  })
+
+  test('Given a custom POSIX shell When building Agent env Then preserves the explicit shell path', () => {
+    const result = buildAgentRuntimeEnv({
+      platform: 'darwin',
+      pathDelimiter: ':',
+      processEnv: { PATH: '/usr/bin', SHELL: '/opt/homebrew/bin/fish' },
+    })
+
+    expect(result.shellKind).toBe('posix')
+    expect(result.shellPath).toBe('/opt/homebrew/bin/fish')
+    expect(result.env.SHELL).toBe('/opt/homebrew/bin/fish')
   })
 })

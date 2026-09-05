@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 // prompt builder 经 config-paths 间接导入 Electron；Bun 单测需提供最小主进程 mock。
-mock.module('./agent-workspace-manager', () => ({
+mock.module('./workspace-mcp-config', () => ({
   getWorkspaceMcpConfig: () => ({
     servers: {
       allowed: { type: 'http', enabled: true, url: 'https://allowed.example.test/mcp' },
@@ -310,6 +310,41 @@ describe('buildSystemPrompt', () => {
     })
     expect(prompt).not.toContain('## 团队共享知识记忆')
     expect(prompt).not.toContain('mcp__team-memory__list_team_memories')
+  })
+
+  test('平台 overlay 同时注入给 Claude/Pi，但不复制两套完整核心提示词', () => {
+    const macPrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      platform: 'darwin',
+      shellPath: '/bin/zsh',
+      agentCwd: '/Users/mac/.profer/agent-workspaces/profer/session-123',
+      projectCandidates: [{ rootPath: '/Users/mac/profer/profer-main', name: 'proma', type: 'git-repository' }],
+      isPiRuntime: true,
+    })
+    const winPrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      platform: 'win32',
+      shellPath: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      agentCwd: 'C:\\Users\\alice\\session-123',
+      projectCandidates: [{ rootPath: 'D:\\repo', name: 'repo', type: 'git-repository' }],
+      isPiRuntime: false,
+    })
+
+    expect(macPrompt).toContain('## 当前平台与项目路径（macOS）')
+    expect(macPrompt).toContain('当前执行环境是 POSIX shell')
+    expect(macPrompt).toContain('不要把其他操作系统的命令')
+    expect(macPrompt).toContain('/Users/mac/profer/profer-main')
+    expect(macPrompt).toContain('path + edits[].oldText/newText')
+    expect(winPrompt).toContain('## 当前平台与项目路径（Windows）')
+    expect(winPrompt).toContain('只使用运行时实际提供的 Windows shell 和路径格式')
+    expect(winPrompt).toContain('file_path + old_string/new_string')
+    expect(winPrompt).not.toContain('## 当前平台与项目路径（macOS）')
   })
 
   test('动态上下文只展示当前预设实际允许的 MCP，且不泄露命令和 URL', () => {

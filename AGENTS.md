@@ -12,7 +12,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 - 在 UI 设计上采用更现代的方案，UI 组件推荐采用 ShadcnUI，在合适的情况下，用卡片和阴影取代边框，用符合主题的饱满色彩，设置界面要设置背景，为未来做不同主题留下空间。
 - 采用 BDD 行为驱动开发的方案。
 
-> ⚠️ 本文件与 `CLAUDE.md` 内容高度重合但更新不同步。**CLAUDE.md 是当前的主文档**，已更新至 2026-07-02 状态（v0.12.69）。本文件待后续整体同步。
+> 本文件与 `CLAUDE.md` 保持同一套项目约束；平台相关命令必须按当前宿主系统和运行时检测结果执行。
 
 ## 项目概述
 
@@ -94,12 +94,12 @@ cd packages/core && bun run typecheck
 # 测试
 bun test
 
-# 打包分发
+# 打包分发（按目标平台执行）
 cd apps/electron
-bun run dist:mac      # macOS
-bun run dist:win      # Windows
-bun run dist:linux    # Linux
-bun run dist:fast     # 当前架构快速打包
+bun run dist:fast     # 当前宿主架构快速打包
+bun run dist:mac      # macOS 当前架构验收包
+bun run dist:win      # Windows x64 发布/验收包（必须在 Windows 构建主机执行）
+# Windows 专属的 PowerShell/注册表 PATH/打包校验只在 Windows 主机执行；不要在 macOS shell 中执行 Windows 命令
 ```
 
 ### Electron 构建脚本（`apps/electron/` 目录下）

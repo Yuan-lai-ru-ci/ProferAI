@@ -3,7 +3,7 @@ import { delimiter, dirname, join, win32 } from 'node:path'
 import type { RuntimeStatus } from '@profer/shared'
 import { getBundledCliPath } from './config-paths'
 
-export type AgentRuntimeShellKind = 'git-bash' | 'wsl'
+export type AgentRuntimeShellKind = 'posix' | 'git-bash' | 'wsl'
 
 export interface AgentRuntimeEnv {
   env: Record<string, string>
@@ -245,5 +245,10 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
     }
   }
 
-  return { env }
+  // macOS/Linux 的 Pi Bash 使用用户实际的 POSIX shell；显式传递路径，
+  // 避免 Electron GUI 进程的 PATH 解析到错误或不存在的 bash。
+  const shellPath = getCaseInsensitiveEnvValue(processEnv, 'SHELL')
+    ?? (platform === 'darwin' ? '/bin/zsh' : '/bin/sh')
+  env.SHELL = shellPath
+  return { env, shellKind: 'posix', shellPath }
 }

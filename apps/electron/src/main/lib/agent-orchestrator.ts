@@ -1630,6 +1630,12 @@ ${enrichedMessage}`
       const runtimeSkills = workspaceSlug ? prepareRuntimeSkills(workspaceSlug) : undefined
       const projectCandidates = detectAttachedDirectoryProjects(allAdditionalDirectories)
       const attachedDirectoriesPrompt = buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
+      const runtimeStatus = getRuntimeStatus()
+      const piRuntimeEnv = buildAgentRuntimeEnv({
+        proxyUrl: await getEffectiveProxyUrl(),
+        runtimeStatus,
+        shellPreference: getSettings().agentShellPreference,
+      })
       const baseSystemPrompt = buildSystemPrompt({
         workspaceName: workspace?.name,
         workspaceSlug,
@@ -1649,6 +1655,12 @@ ${enrichedMessage}`
         isPiRuntime: agentRuntime === 'pi',
         isTeamWorkspace: workspace?.type === 'team',
         teamMemoryAvailable: workspace?.type === 'team' && !disabledToolGroups.has('memory'),
+        platform: process.platform,
+        shellPath: piRuntimeEnv.shellPath
+          ?? process.env.SHELL
+          ?? (process.platform === 'win32' ? undefined : process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh'),
+        agentCwd,
+        projectCandidates,
         })
       // Pi 没有 Claude preset；普通任务只携带核心规则，低频 SOP 按任务与实际工具恢复。
       // 必须先压缩纯基础 Prompt，再追加附加目录和 preset 自定义段，避免标题截取误删后置上下文。
@@ -1666,11 +1678,6 @@ ${enrichedMessage}`
         (sessionPreset.promptSections?.length ? `\n\n${sessionPreset.promptSections.join('\n\n')}` : '') +
         (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const piSystemPrompt = systemPromptAppend
-      const piRuntimeEnv = buildAgentRuntimeEnv({
-        proxyUrl: await getEffectiveProxyUrl(),
-        runtimeStatus: getRuntimeStatus(),
-        shellPreference: getSettings().agentShellPreference,
-      })
       const queryOptions: AgentQueryInput & Record<string, unknown> = {
         sessionId,
         agentRuntime,

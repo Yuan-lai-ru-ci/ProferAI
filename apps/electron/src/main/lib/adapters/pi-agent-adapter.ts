@@ -1580,10 +1580,10 @@ function createControlledLocalBashOperations(
           reject(new Error('aborted'))
           return
         }
-        // Pi's public API lets Profer replace BashOperations. Keep the command
-        // transport deliberately simple here: current Windows runtime selection
-        // supplies Git Bash explicitly; other hosts resolve `bash` via PATH.
-        const child = spawn(shellPath ?? 'bash', ['-c', command], {
+        // Pi's public API lets Profer replace BashOperations. Profer explicitly
+        // selects the platform shell so GUI-launched sessions do not depend on
+        // an accidental PATH entry (macOS normally uses the user's zsh).
+        const child = spawn(shellPath ?? (process.platform === 'win32' ? 'bash' : '/bin/sh'), ['-c', command], {
           cwd,
           env: options.env ?? process.env,
           detached: process.platform !== 'win32',
