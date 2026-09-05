@@ -3,40 +3,6 @@ import * as React from "react";
 import { toast } from "sonner";
 import { Blocks, RefreshCw, Plus, Upload } from "lucide-react";
 
-type SkillSortMode = "default" | "alpha" | "updated";
-const SKILL_SORT_KEY = "profer.agent-skills.sort.global";
-function readSkillSortMode(): SkillSortMode {
-  try {
-    const value = window.localStorage.getItem(SKILL_SORT_KEY);
-    return value === "alpha" || value === "updated" ? value : "default";
-  } catch {
-    return "default";
-  }
-}
-function sortListedSkills(
-  skills: ListedSkill[],
-  mode: SkillSortMode,
-): ListedSkill[] {
-  const indexed = skills.map((skill, index) => ({ skill, index }));
-  return indexed
-    .sort((a, b) => {
-      if (mode === "alpha")
-        return (
-          a.skill.name.localeCompare(b.skill.name, undefined, {
-            sensitivity: "base",
-          }) || a.skill.slug.localeCompare(b.skill.slug)
-        );
-      if (mode === "updated")
-        return (
-          (Date.parse(("updatedAt" in a.skill ? a.skill.updatedAt : "") || "") <
-          Date.parse(("updatedAt" in b.skill ? b.skill.updatedAt : "") || "")
-            ? 1
-            : -1) || a.index - b.index
-        );
-      return a.index - b.index;
-    })
-    .map(({ skill }) => skill);
-}
 import type {
   GlobalSkillMeta,
   MasterSkillMeta,
@@ -56,8 +22,6 @@ interface Props {
   onImportRequest?: () => void;
   createRequestToken?: number;
   importRequestToken?: number;
-  sortModeOverride?: SkillSortMode;
-  onSortModeChange?: (value: SkillSortMode) => void;
 }
 
 type ListedSkill = MasterSkillMeta | GlobalSkillMeta;
@@ -80,17 +44,12 @@ export function MasterSkillsTab({
   onImportRequest,
   createRequestToken = 0,
   importRequestToken = 0,
-  sortModeOverride,
-  onSortModeChange,
 }: Props): React.ReactElement {
   const [skills, setSkills] = React.useState<ListedSkill[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [selected, setSelected] = React.useState<ListedSkill | null>(null);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
-  const [internalSortMode, setInternalSortMode] =
-    React.useState<SkillSortMode>(readSkillSortMode);
-  const sortMode = sortModeOverride ?? internalSortMode;
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -177,30 +136,13 @@ export function MasterSkillsTab({
           .includes(query),
       )
     : skills;
-  const sortedSkills = sortListedSkills(visibleSkills, sortMode);
-  const mySkills = sortedSkills.filter((skill) => !isBuiltinSkill(skill));
-  const builtinSkills = sortedSkills.filter(isBuiltinSkill);
+  const mySkills = visibleSkills.filter((skill) => !isBuiltinSkill(skill));
+  const builtinSkills = visibleSkills.filter(isBuiltinSkill);
 
   return (
     <div className="flex flex-col gap-6">
       {!hideToolbar && (
         <div className="flex items-center justify-between px-1">
-          <select
-            value={sortMode}
-            onChange={(event) => {
-              const value = event.target.value as SkillSortMode;
-              setInternalSortMode(value);
-              onSortModeChange?.(value);
-              try {
-                window.localStorage.setItem(SKILL_SORT_KEY, value);
-              } catch {}
-            }}
-            className="h-8 rounded-lg border border-border/60 bg-content-area px-2 text-xs text-foreground/70 outline-none"
-          >
-            <option value="default">默认排序</option>
-            <option value="alpha">按字母排序</option>
-            <option value="updated">按修改时间排序</option>
-          </select>
           <div className="flex items-center gap-2">
             {globalMode && (
               <>

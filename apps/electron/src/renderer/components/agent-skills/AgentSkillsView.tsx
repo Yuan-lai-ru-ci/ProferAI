@@ -58,43 +58,6 @@ import { WorkspaceScopeSelectDialog } from "./WorkspaceScopeSelectDialog";
 import { AgentSkillsToolbar } from "./AgentSkillsToolbar";
 
 type CapabilityTab = "skills" | "marketplace" | "mcp" | "memory" | "presets";
-type SkillSortMode = "default" | "alpha" | "updated";
-const SKILL_SORT_STORAGE_KEY = "profer.agent-skills.sort.workspace";
-function readSkillSortMode(): SkillSortMode {
-  try {
-    const value = window.localStorage.getItem(SKILL_SORT_STORAGE_KEY);
-    return value === "alpha" || value === "updated" ? value : "default";
-  } catch {
-    return "default";
-  }
-}
-function sortSkills(skills: SkillMeta[], mode: SkillSortMode): SkillMeta[] {
-  const indexed = skills.map((skill, index) => ({ skill, index }));
-  return indexed
-    .sort((left, right) => {
-      if (mode === "alpha") {
-        const byName = left.skill.name.localeCompare(
-          right.skill.name,
-          undefined,
-          { sensitivity: "base" },
-        );
-        return byName || left.skill.slug.localeCompare(right.skill.slug);
-      }
-      if (mode === "updated") {
-        const leftTime =
-          Date.parse(
-            left.skill.copiedAt ?? left.skill.importSource?.importedAt ?? "",
-          ) || 0;
-        const rightTime =
-          Date.parse(
-            right.skill.copiedAt ?? right.skill.importSource?.importedAt ?? "",
-          ) || 0;
-        return rightTime - leftTime || left.index - right.index;
-      }
-      return left.index - right.index;
-    })
-    .map(({ skill }) => skill);
-}
 
 export function AgentSkillsView(): React.ReactElement {
   const data = useAgentSkillsData();
@@ -139,12 +102,6 @@ export function AgentSkillsView(): React.ReactElement {
   const [showImportPreset, setShowImportPreset] = React.useState(false);
   const [createWorkspaceSkillOpen, setCreateWorkspaceSkillOpen] =
     React.useState(false);
-  const [onlyEffectiveSkills, setOnlyEffectiveSkills] = React.useState(false);
-  const [skillSortMode, setSkillSortMode] =
-    React.useState<SkillSortMode>(readSkillSortMode);
-  const [presetSortMode, setPresetSortMode] =
-    React.useState<SkillSortMode>("default");
-  const [onlyEffectivePresets, setOnlyEffectivePresets] = React.useState(false);
   const [promoteSkill, setPromoteSkill] = React.useState<SkillMeta | null>(
     null,
   );
@@ -164,30 +121,16 @@ export function AgentSkillsView(): React.ReactElement {
     );
   }, [data.skills, q]);
 
-  const workspaceSkills = sortSkills(
-    filteredSkills.filter(
-      (s) =>
-        s.actualSource === "workspace" && (!onlyEffectiveSkills || s.enabled),
-    ),
-    skillSortMode,
+  const workspaceSkills = filteredSkills.filter(
+    (s) => s.actualSource === "workspace",
   );
-  const globalSkills = sortSkills(
-    filteredSkills.filter(
-      (s) =>
-        s.sourceSkillType === "user-global" &&
-        s.actualSource !== "workspace" &&
-        (!onlyEffectiveSkills || s.enabled),
-    ),
-    skillSortMode,
+  const globalSkills = filteredSkills.filter(
+    (s) =>
+      s.sourceSkillType === "user-global" && s.actualSource !== "workspace",
   );
-  const builtinSkills = sortSkills(
-    filteredSkills.filter(
-      (s) =>
-        s.sourceSkillType === "builtin-meta" &&
-        s.actualSource !== "workspace" &&
-        (!onlyEffectiveSkills || s.enabled),
-    ),
-    skillSortMode,
+  const builtinSkills = filteredSkills.filter(
+    (s) =>
+      s.sourceSkillType === "builtin-meta" && s.actualSource !== "workspace",
   );
   const updateCount = data.skills.filter(
     (s) => s.hasUpdate && s.actualSource === "workspace",
@@ -522,62 +465,12 @@ export function AgentSkillsView(): React.ReactElement {
                   ? "搜索记忆正文..."
                   : "搜索预设..."
         }
-        onlyEffective={
-          globalConfigOpen
-            ? false
-            : tab === "skills"
-              ? onlyEffectiveSkills
-              : onlyEffectivePresets
-        }
-        sortMode={
-          globalConfigOpen
-            ? globalConfigTab === "skills"
-              ? skillSortMode
-              : presetSortMode
-            : tab === "skills"
-              ? skillSortMode
-              : tab === "presets"
-                ? presetSortMode
-                : undefined
-        }
-        sortOptions={
-          globalConfigOpen || tab === "skills" || tab === "presets"
-            ? [
-                { value: "default", label: "默认排序" },
-                { value: "alpha", label: "按字母排序" },
-                { value: "updated", label: "按修改时间排序" },
-              ]
-            : undefined
-        }
         onDomainChange={(value) => {
           if (globalConfigOpen)
             setGlobalConfigTab(value === "presets" ? "presets" : "skills");
           else if (value !== "memory" || !isTeamWorkspace) setTab(value);
         }}
         onSearchChange={setSearch}
-        onOnlyEffectiveChange={
-          globalConfigOpen
-            ? undefined
-            : tab === "skills"
-              ? setOnlyEffectiveSkills
-              : tab === "presets"
-                ? setOnlyEffectivePresets
-                : undefined
-        }
-        onSortChange={(value) => {
-          const next = value as SkillSortMode;
-          if (globalConfigOpen) {
-            if (globalConfigTab === "skills") setSkillSortMode(next);
-            else setPresetSortMode(next);
-          } else if (tab === "presets") {
-            setPresetSortMode(next);
-          } else {
-            setSkillSortMode(next);
-            try {
-              window.localStorage.setItem(SKILL_SORT_STORAGE_KEY, next);
-            } catch {}
-          }
-        }}
         onCreate={
           globalConfigOpen
             ? () => {
@@ -632,10 +525,6 @@ export function AgentSkillsView(): React.ReactElement {
               createSkillRequestToken={globalCreateSkillToken}
               importSkillRequestToken={globalImportSkillToken}
               createPresetRequestToken={globalCreatePresetToken}
-              skillSortMode={skillSortMode}
-              onSkillSortModeChange={setSkillSortMode}
-              presetSortMode={presetSortMode}
-              onPresetSortModeChange={setPresetSortMode}
             />
           ) : tab === "marketplace" && isTeamWorkspace ? (
             marketLoading ? (
@@ -708,13 +597,10 @@ export function AgentSkillsView(): React.ReactElement {
             <AgentPresetSettings
               workspaceSlug={data.workspaceSlug}
               search={search}
-              onlyEffective={onlyEffectivePresets}
               hideToolbar
               createRequestToken={workspaceCreatePresetToken}
               importFileRequestToken={workspaceImportPresetFileToken}
               exportRequestToken={workspaceExportPresetToken}
-              sortModeOverride={presetSortMode}
-              onSortModeChange={setPresetSortMode}
               onPromote={setPromotePreset}
               onOpenGlobalConfig={() => {
                 setGlobalConfigTab("presets");

@@ -69,28 +69,6 @@ function BuiltinPresetTag(): React.ReactElement {
   );
 }
 
-type PresetSortMode = "default" | "alpha" | "updated";
-
-const PRESET_SORT_STORAGE_KEYS: Record<"workspace" | "global", string> = {
-  workspace: "profer.agent-presets.sort.workspace",
-  global: "profer.agent-presets.sort.global",
-};
-
-const PRESET_SORT_OPTIONS: Array<{ value: PresetSortMode; label: string }> = [
-  { value: "default", label: "默认排序" },
-  { value: "alpha", label: "按字母排序" },
-  { value: "updated", label: "按修改时间排序" },
-];
-
-function readPresetSortMode(scope: "workspace" | "global"): PresetSortMode {
-  try {
-    if (typeof window === "undefined") return "default";
-    const saved = window.localStorage.getItem(PRESET_SORT_STORAGE_KEYS[scope]);
-    return saved === "alpha" || saved === "updated" ? saved : "default";
-  } catch {
-    return "default";
-  }
-}
 
 import type {
   AgentPreset,
@@ -285,41 +263,30 @@ interface AgentPresetSettingsProps {
   workspaceSlug?: string;
   search?: string;
   globalMode?: boolean;
-  onlyEffective?: boolean;
   onPromote?: (preset: AgentPreset) => void;
   onOpenGlobalConfig?: () => void;
   hideToolbar?: boolean;
   createRequestToken?: number;
   importFileRequestToken?: number;
   exportRequestToken?: number;
-  sortModeOverride?: PresetSortMode;
-  onSortModeChange?: (value: PresetSortMode) => void;
 }
 
 export function AgentPresetSettings({
   workspaceSlug,
   search = "",
   globalMode = false,
-  onlyEffective = false,
   onPromote,
   onOpenGlobalConfig,
   hideToolbar = false,
   createRequestToken = 0,
   importFileRequestToken = 0,
   exportRequestToken = 0,
-  sortModeOverride,
-  onSortModeChange,
 }: AgentPresetSettingsProps): React.ReactElement {
   const [workspacePresets, setWorkspacePresets] = useAtom(
     workspacePresetsAtom(workspaceSlug),
   );
   const [globalPresets, setGlobalPresets] = React.useState<AgentPreset[]>([]);
   const presets = globalMode ? globalPresets : workspacePresets;
-  const sortScope = globalMode ? "global" : "workspace";
-  const [sortMode, setSortMode] = React.useState<PresetSortMode>(() =>
-    readPresetSortMode(sortScope),
-  );
-  const effectiveSortMode = sortModeOverride ?? sortMode;
   const [loading, setLoading] = React.useState(true);
   const [toggleBusy, setToggleBusy] = React.useState<Set<string>>(new Set());
   // 与 Skills/MCP 相同的刷新信号：预设写操作后 bump，通知会话工具栏等订阅方重拉
@@ -413,25 +380,6 @@ export function AgentPresetSettings({
     }));
   }, []);
 
-  React.useEffect(() => {
-    const next = readPresetSortMode(sortScope);
-    setSortMode(next);
-    onSortModeChange?.(next);
-  }, [onSortModeChange, sortScope]);
-
-  const handleSortChange = React.useCallback(
-    (value: PresetSortMode) => {
-      setSortMode(value);
-      onSortModeChange?.(value);
-      try {
-        window.localStorage.setItem(PRESET_SORT_STORAGE_KEYS[sortScope], value);
-      } catch {
-        /* 本地存储不可用时仍保留本次会话选择 */
-      }
-    },
-    [onSortModeChange, sortScope],
-  );
-
   const reload = React.useCallback(
     async (options?: { silent?: boolean }) => {
       if (!options?.silent) setLoading(true);
@@ -460,39 +408,8 @@ export function AgentPresetSettings({
   // 搜索过滤：名称 / 描述 / 提示词段 / Skill 白名单 / MCP 白名单
   const q = search.trim().toLowerCase();
   const filteredPresets = React.useMemo(() => {
-    const scoped =
-      globalMode || !onlyEffective
-        ? presets
-        : presets.filter(
-            (preset) =>
-              preset.scope === "workspace" ||
-              preset.enabledInWorkspace === true,
-          );
-    const defaultOrder = new Map(
-      presets.map((preset, index) => [preset.id, index]),
-    );
-    const compare = (a: AgentPreset, b: AgentPreset): number => {
-      if (effectiveSortMode === "alpha") {
-        const byName = a.name.localeCompare(b.name, undefined, {
-          sensitivity: "base",
-        });
-        if (byName !== 0) return byName;
-        const byScope = (a.scope ?? "workspace").localeCompare(
-          b.scope ?? "workspace",
-        );
-        return byScope !== 0 ? byScope : a.id.localeCompare(b.id);
-      }
-      if (effectiveSortMode === "updated") {
-        const byUpdated = (b.updatedAt || 0) - (a.updatedAt || 0);
-        return byUpdated !== 0
-          ? byUpdated
-          : (defaultOrder.get(a.id) ?? 0) - (defaultOrder.get(b.id) ?? 0);
-      }
-      return (defaultOrder.get(a.id) ?? 0) - (defaultOrder.get(b.id) ?? 0);
-    };
-    const sorted = [...scoped].sort(compare);
-    if (!q) return sorted;
-    return sorted.filter((p) => {
+    if (!q) return presets;
+    return presets.filter((p) => {
       const haystack = [
         p.name,
         p.description,
@@ -504,7 +421,7 @@ export function AgentPresetSettings({
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [effectiveSortMode, globalMode, onlyEffective, presets, q]);
+  }, [presets, q]);
 
   // 首次进入/切换工作区时显示加载态；能力开关等外部刷新沿用当前列表，避免整页白屏和滚动位置跳动。
   React.useEffect(() => {
@@ -948,24 +865,6 @@ export function AgentPresetSettings({
       {!hideToolbar && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">排序</span>
-            <Select
-              value={effectiveSortMode}
-              onValueChange={(value) =>
-                handleSortChange(value as PresetSortMode)
-              }
-            >
-              <SelectTrigger className="h-8 w-36 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PRESET_SORT_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
             {!globalMode && onOpenGlobalConfig && (
               <Button size="sm" variant="ghost" onClick={onOpenGlobalConfig}>
                 全局配置

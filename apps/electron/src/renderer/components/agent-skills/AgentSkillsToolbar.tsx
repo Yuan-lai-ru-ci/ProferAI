@@ -8,7 +8,6 @@ import {
   Download,
   Store,
 } from "lucide-react";
-import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
 export type AgentSkillsToolbarDomain =
@@ -27,13 +26,8 @@ interface AgentSkillsToolbarProps {
   tabs: AgentSkillsToolbarTab[];
   search: string;
   searchPlaceholder: string;
-  onlyEffective?: boolean;
-  sortMode?: string;
-  sortOptions?: Array<{ value: string; label: string }>;
   onDomainChange: (domain: AgentSkillsToolbarDomain) => void;
   onSearchChange: (value: string) => void;
-  onOnlyEffectiveChange?: (value: boolean) => void;
-  onSortChange?: (value: string) => void;
   onCreate?: () => void;
   onImport?: () => void;
   importLabel?: string;
@@ -50,13 +44,8 @@ export function AgentSkillsToolbar({
   tabs,
   search,
   searchPlaceholder,
-  onlyEffective = false,
-  sortMode,
-  sortOptions,
   onDomainChange,
   onSearchChange,
-  onOnlyEffectiveChange,
-  onSortChange,
   onCreate,
   onImport,
   importLabel = "导入",
@@ -109,29 +98,6 @@ export function AgentSkillsToolbar({
         />
       </div>
 
-      {onOnlyEffectiveChange && (
-        <label className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-2.5 text-xs text-foreground/70">
-          <Switch
-            checked={onlyEffective}
-            onCheckedChange={onOnlyEffectiveChange!}
-            className="scale-75"
-          />
-          只看生效的
-        </label>
-      )}
-      {sortOptions && sortMode && onSortChange && (
-        <select
-          value={sortMode}
-          onChange={(event) => onSortChange(event.target.value)}
-          className="h-8 rounded-lg border border-border/60 bg-content-area px-2 text-xs text-foreground/70 outline-none"
-        >
-          {sortOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      )}
       {onCreate && (
         <button
           type="button"

@@ -11,10 +11,6 @@ interface GlobalCapabilitiesViewProps {
   createSkillRequestToken?: number;
   importSkillRequestToken?: number;
   createPresetRequestToken?: number;
-  skillSortMode?: "default" | "alpha" | "updated";
-  onSkillSortModeChange?: (value: "default" | "alpha" | "updated") => void;
-  presetSortMode?: "default" | "alpha" | "updated";
-  onPresetSortModeChange?: (value: "default" | "alpha" | "updated") => void;
 }
 
 /** 全局内容容器：工具条由父页面统一渲染，子领域只负责列表、编辑和详情。 */
@@ -25,10 +21,6 @@ export function GlobalCapabilitiesView({
   createSkillRequestToken = 0,
   importSkillRequestToken = 0,
   createPresetRequestToken = 0,
-  skillSortMode,
-  onSkillSortModeChange,
-  presetSortMode,
-  onPresetSortModeChange,
 }: GlobalCapabilitiesViewProps): React.ReactElement {
   return (
     <section aria-label="全局配置" className="flex flex-col gap-5">
@@ -41,8 +33,6 @@ export function GlobalCapabilitiesView({
           hideToolbar
           createRequestToken={createSkillRequestToken}
           importRequestToken={importSkillRequestToken}
-          sortModeOverride={skillSortMode}
-          onSortModeChange={onSkillSortModeChange}
         />
       ) : (
         <AgentPresetSettings
@@ -51,8 +41,6 @@ export function GlobalCapabilitiesView({
           search={search}
           hideToolbar
           createRequestToken={createPresetRequestToken}
-          sortModeOverride={presetSortMode}
-          onSortModeChange={onPresetSortModeChange}
         />
       )}
     </section>
