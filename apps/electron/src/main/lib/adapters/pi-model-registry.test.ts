@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import { InMemoryCredentialStore } from '@earendil-works/pi-ai'
 import {
   DEFAULT_CONTEXT_WINDOW,
   buildModel,
@@ -10,6 +9,7 @@ import {
   resolvePiApiKey,
   stripAgentSdkContextSuffix,
 } from './pi-model-registry'
+import { IsolatedInMemoryCredentialStore } from '../pi-model-runtime-options'
 
 const BASE_PI_AGENT_OPTIONS = {
   prompt: 'hi',
@@ -63,7 +63,7 @@ describe('Pi runtime 临时凭据隔离', () => {
       modelsPath: null,
       allowModelNetwork: false,
     })
-    expect(createOptions?.credentials).toBeInstanceOf(InMemoryCredentialStore)
+    expect(createOptions?.credentials).toBeInstanceOf(IsolatedInMemoryCredentialStore)
   })
 })
 

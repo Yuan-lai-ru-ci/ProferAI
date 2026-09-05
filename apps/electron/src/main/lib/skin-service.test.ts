@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -12,12 +12,16 @@ mock.module('electron', () => ({
 const { parseSkinManifestText, readManifest } = await import('./skin-service')
 
 function withSkinManifest(manifest: object, run: (dir: string) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), 'profer-skin-manifest-'))
+  const root = mkdtempSync(join(tmpdir(), 'profer-skin-manifest-'))
+  const id = (manifest as { id?: unknown }).id
+  if (typeof id !== 'string') throw new Error('测试 manifest 必须提供字符串 id')
+  const dir = join(root, id)
+  mkdirSync(dir)
   try {
     writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest), 'utf8')
     run(dir)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
   }
 }
 
