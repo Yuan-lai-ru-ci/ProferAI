@@ -31,7 +31,6 @@ export interface PresetReference {
 export type PresetErrorCode =
   | 'PRESET_READ_ONLY'
   | 'PRESET_SCOPE_MISMATCH'
-  | 'PRESET_INVALID_BASE'
   | 'PRESET_WORKSPACE_REQUIRED'
   | 'PRESET_NOT_FOUND'
   | 'PRESET_UNKNOWN_REFERENCE'
@@ -100,12 +99,7 @@ export const AGENT_PRESET_GROUP_TOOL_NAMES: Record<AgentPresetToolGroup, readonl
     'answer_delegation_question',
     'continue_delegation',
   ],
-  // automation 组同时覆盖持久化定时任务与规划中心 Todo/日程，避免“提醒/安排”能力与自动化能力分裂。
-  automation: [
-    'list_automations', 'get_automation', 'create_automation', 'update_automation', 'delete_automation', 'run_automation_now',
-    'list_todos', 'get_todo', 'create_todo', 'update_todo',
-    'list_calendar_events', 'get_calendar_event', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event',
-  ],
+  automation: ['list_automations', 'get_automation', 'create_automation', 'update_automation', 'delete_automation', 'run_automation_now'],
 }
 
 /** 全部可裁剪单工具短名（disabledTools 校验用） */
@@ -123,7 +117,6 @@ export function filterDisabledTools<T extends { name: string }>(tools: T[], disa
 
 /**
  * 工具组禁用 → 提示词段隐藏 key 的自动映射（三层一致）。
- * automation 组包含规划中心，因此同时隐藏定时任务和规划中心指南。
  * orchestrator 与设置页共用此表，避免硬编码漂移；禁止新工具组不在本表登记。
  */
 export const AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP: Record<AgentPresetToolGroup, AgentPresetSuppressKey> = {
@@ -179,13 +172,7 @@ export interface AgentPreset {
    * 设置后本预设只存储与基座的差异，读取时按 resolveAgentPresetMerge 合并；
    * 内置预设升级会自动传导到派生预设，无需手动同步。
    */
-  /** 兼容旧版的基座 ID；新迁移数据同时写入带作用域的引用。 */
   basePresetId?: string
-  /** C4/C5 继承关系的稳定作用域引用。 */
-  basePresetReference?: PresetReference
-  /** 旧数据迁移诊断，不参与实体解析。 */
-  migrationStatus?: 'modified-legacy-copy' | 'preserved-legacy-disabled-copy' | 'uncertain-legacy-copy' | 'unknown-legacy' | 'invalid-base' | 'builtin-corrupt' | 'id-conflict'
-  migrationReason?: string
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -196,8 +183,6 @@ export interface AgentPreset {
 export interface AgentPresetConfig {
   /** 该作用域的用户自定义预设 */
   presets: AgentPreset[]
-  /** 迁移异常与 C/D 分类诊断；失败时原始文件仍保留。 */
-  migrationDiagnostics?: Array<{ presetId?: string; status: string; reason: string }>
   /** 兼容旧版本的默认预设 ID；新代码优先使用 reference。 */
   defaultPresetId: string
   /** workspace 默认预设的显式引用。 */

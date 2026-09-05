@@ -103,15 +103,15 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
 
   return (
     <div className="relative h-full flex flex-col overflow-hidden">
-      {!isMac && (
-        <SidebarWindowDragStrip height={SIDEBAR_DRAG_STRIP_HEIGHT.expanded} />
-      )}
+      <SidebarWindowDragStrip
+        height={isMac ? SIDEBAR_DRAG_STRIP_HEIGHT.expandedMac : SIDEBAR_DRAG_STRIP_HEIGHT.expanded}
+      />
 
       {/* macOS 需要避开左上角红绿灯；边栏覆盖全局标题栏拖拽层，因此留白自身也要可拖拽。 */}
-      <div className={cn('sidebar-top-spacer w-full flex-shrink-0', !isMac && 'titlebar-drag-region', isMac ? 'h-[30px]' : 'h-1')} />
+      <div className={cn('w-full flex-shrink-0 titlebar-drag-region', isMac ? 'h-[30px]' : 'h-1')} />
 
       {/* 模式切换器（Agent/Chat，与桌面原版一致）+ 折叠按钮（原版位置；收起为 60px 窄图标条） */}
-      <div className={cn('flex items-start gap-1.5 px-3', !isMac && 'titlebar-drag-region')}>
+      <div className="titlebar-drag-region flex items-start gap-1.5 px-3">
         <div className="flex-1 min-w-0">
           <ModeSwitcher />
         </div>

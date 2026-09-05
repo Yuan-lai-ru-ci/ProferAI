@@ -785,6 +785,13 @@ async function refreshAuthTokenImpl(): Promise<boolean> {
       } else {
         const body = await response.text().catch(() => '(无法读取响应体)')
         console.warn(`[认证] 刷新失败: HTTP ${response.status} — ${body.slice(0, 200)}`)
+        // 服务端明确拒绝 refresh token 时，该 token 已不可恢复；清除本地失效凭据，
+        // 避免启动恢复、同步和后续 API 请求反复使用同一个坏 token 形成重试循环。
+        if (response.status === 401) {
+          delete tokens[server.id]
+          writeTokens(tokens)
+          console.warn(`[认证] 已清除服务器 ${server.baseUrl} 的失效 token，请重新登录`)
+        }
       }
     } catch (err) {
       console.warn(`[认证] 刷新请求异常:`, (err as Error).message || err)
