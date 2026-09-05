@@ -186,6 +186,7 @@
   },
   "electronmon": {
     "patterns": [
+      "!**/*",
       "dist/main.cjs",
       "dist/preload.cjs"
     ],
