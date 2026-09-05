@@ -74,6 +74,7 @@ import {
   closeTab,
   updateTabTitle,
   sessionViewStateMapAtom,
+  tabMruAtom,
 } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { authStatusAtom } from '@/atoms/identity-atoms'
@@ -729,9 +730,10 @@ export function useLeftSidebar(tabletMode?: boolean) {
         const currentTabs = store.get(tabsAtom)
         const currentActiveTabId = store.get(activeTabIdAtom)
         const wasActive = currentActiveTabId === id
-        const tabResult = closeTab(currentTabs, currentActiveTabId, id)
+        const tabResult = closeTab(currentTabs, currentActiveTabId, id, store.get(tabMruAtom))
         setTabs(tabResult.tabs)
         setActiveTabId(tabResult.activeTabId)
+        store.set(tabMruAtom, tabResult.mru)
         cleanupMapAtoms(id)
         if (wasActive) {
           const newActiveTab = tabResult.activeTabId
@@ -765,12 +767,13 @@ export function useLeftSidebar(tabletMode?: boolean) {
       // 关闭对应的标签页：setTabs 与 setActiveTabId 成组更新，避免在删除
       // 事务失败时误关闭仍存在的父/子会话标签。
       const wasActive = activeTabId !== null && deletedSessionIds.has(activeTabId)
-      let tabResult = { tabs, activeTabId }
+      let tabResult = { tabs, activeTabId, mru: store.get(tabMruAtom) }
       for (const sessionId of deletedSessionIds) {
-        tabResult = closeTab(tabResult.tabs, tabResult.activeTabId, sessionId)
+        tabResult = closeTab(tabResult.tabs, tabResult.activeTabId, sessionId, tabResult.mru)
       }
       setTabs(tabResult.tabs)
       setActiveTabId(tabResult.activeTabId)
+      store.set(tabMruAtom, tabResult.mru)
 
       if (wasActive) {
         const newActiveTab = tabResult.activeTabId
@@ -1411,9 +1414,10 @@ export function useLeftSidebar(tabletMode?: boolean) {
     setAgentSessions((prev) => replaceAgentSessionInFreshnessOrder(prev, updatedSession))
     // 如果迁移的是当前选中的会话，取消选中并关闭标签页
     if (currentAgentSessionId === updatedSession.id) {
-      const tabResult = closeTab(tabs, activeTabId, updatedSession.id)
+      const tabResult = closeTab(tabs, activeTabId, updatedSession.id, store.get(tabMruAtom))
       setTabs(tabResult.tabs)
       setActiveTabId(tabResult.activeTabId)
+      store.set(tabMruAtom, tabResult.mru)
       setCurrentAgentSessionId(null)
     }
     setMoveTargetId(null)

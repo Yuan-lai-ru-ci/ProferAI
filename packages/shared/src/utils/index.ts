@@ -37,6 +37,7 @@ export {
 } from './agent-image-attachment'
 export type { AgentAttachmentKind } from './agent-image-attachment'
 export { supportsProviderPlanQuota } from './channel-plan-quota'
+export { promoteMru, removeMruId, selectMruFallbackId } from './tab-mru'
 // Pi 自动压缩阈值（80% 占用触发）
 export {
   PI_AUTO_COMPACTION_THRESHOLD_RATIO,

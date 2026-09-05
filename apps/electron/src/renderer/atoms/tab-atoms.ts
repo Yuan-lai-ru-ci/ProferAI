@@ -19,6 +19,7 @@ import {
 import type { SessionIndicatorStatus } from './agent-atoms'
 import type { PreviewFile } from './preview-atoms'
 import { getFileBaseName } from '@/lib/file-utils'
+import { removeMruId, selectMruFallbackId } from '@profer/shared'
 
 // basename 提取统一走 renderer/lib 公共实现（R1），此处转发以保持既有导入路径兼容
 export { getFileBaseName }
@@ -353,21 +354,37 @@ export function closeTab(
   tabs: TabItem[],
   activeTabId: string | null,
   tabId: string,
-): { tabs: TabItem[]; activeTabId: string | null } {
+  mru: readonly string[] = [],
+): { tabs: TabItem[]; activeTabId: string | null; mru: string[] } {
   // Scratch Pad 不可关闭
-  if (tabId === SCRATCH_PAD_ID) return { tabs, activeTabId }
+  if (tabId === SCRATCH_PAD_ID) return { tabs, activeTabId, mru: [...mru] }
 
   const tabIndex = tabs.findIndex((t) => t.id === tabId)
-  if (tabIndex === -1) return { tabs, activeTabId }
+  if (tabIndex === -1) return { tabs, activeTabId, mru: [...mru] }
   const closingTab = tabs[tabIndex]!
   const boundPreviewId = isSessionTab(closingTab) ? createPreviewTabId(closingTab.sessionId) : null
 
   const newTabs = tabs.filter((t) => t.id !== tabId && (!boundPreviewId || t.id !== boundPreviewId))
 
-  // 如果关闭的是当前激活的标签，切换到相邻标签
+  const nextMru = isPreviewTab(closingTab)
+    ? removeMruId(mru, tabId)
+    : removeMruId(mru, closingTab.sessionId)
+  // 关闭当前标签时按最近访问顺序回退；关闭非当前标签保持活动标签不变。
   let newActiveTabId = activeTabId
   if (activeTabId === tabId || (boundPreviewId !== null && activeTabId === boundPreviewId)) {
-    if (newTabs.length > 0) {
+    // MRU 以会话 ID 记账，预览 Tab 需要映射回其实际 Tab ID。
+    // 关闭预览时保留 owner 会话作为回退目标，避免关闭预览后悬空在其他会话。
+    const mruTarget = selectMruFallbackId(
+      nextMru,
+      isPreviewTab(closingTab) ? tabId : closingTab.sessionId,
+      newTabs.flatMap((tab) => [tab.id, tab.sessionId]),
+    )
+    const targetTab = mruTarget
+      ? newTabs.find((tab) => tab.id === mruTarget || tab.sessionId === mruTarget)
+      : undefined
+    if (targetTab) {
+      newActiveTabId = targetTab.id
+    } else if (newTabs.length > 0) {
       const nextIndex = Math.min(tabIndex, newTabs.length - 1)
       newActiveTabId = newTabs[nextIndex]!.id
     } else {
@@ -375,7 +392,7 @@ export function closeTab(
     }
   }
 
-  return { tabs: newTabs, activeTabId: newActiveTabId }
+  return { tabs: newTabs, activeTabId: newActiveTabId, mru: nextMru }
 }
 
 /** 重排标签顺序（Scratch Pad 固定在第 0 位） */

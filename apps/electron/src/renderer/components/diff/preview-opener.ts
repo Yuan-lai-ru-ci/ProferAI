@@ -28,6 +28,7 @@ import {
   isPreviewTab,
   openTab,
   sessionViewStateMapAtom,
+  tabMruAtom,
   tabsAtom,
 } from '@/atoms/tab-atoms'
 
@@ -131,9 +132,10 @@ export function tearOffPreviewToSplit(store: JotaiStore, tabId: string): void {
   if (!agentTab) return
 
   // 关闭 preview Tab，并激活该会话的 agent Tab，让右侧分屏可见
-  const closed = closeTab(store.get(tabsAtom), store.get(activeTabIdAtom), tabId)
+  const closed = closeTab(store.get(tabsAtom), store.get(activeTabIdAtom), tabId, store.get(tabMruAtom))
   store.set(tabsAtom, closed.tabs)
   store.set(activeTabIdAtom, agentTab.id)
+  store.set(tabMruAtom, closed.mru)
 
   // 标记会话视图为 session，避免切走再切回时重建 preview Tab
   store.set(sessionViewStateMapAtom, (prev) => {

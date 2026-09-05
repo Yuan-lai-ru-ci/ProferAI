@@ -1,3 +1,5 @@
+import { promoteMru } from '@profer/shared'
+
 const DEFAULT_TAB_MRU_LIMIT = 50
 
 interface TabSwitchCandidate {
@@ -17,10 +19,7 @@ export function promoteTabMru(
 ): string[] {
   if (!tabId) return mru
 
-  const next = [
-    tabId,
-    ...mru.filter((id) => id !== tabId),
-  ].slice(0, Math.max(1, limit))
+  const next = promoteMru(mru, tabId, limit)
 
   return arraysEqual(mru, next) ? mru : next
 }

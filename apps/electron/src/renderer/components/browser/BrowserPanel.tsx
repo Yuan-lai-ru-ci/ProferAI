@@ -397,7 +397,12 @@ export function BrowserPanel({ sessionId, state, avoidWindowControls = false, la
                 void closeTab(tab.tabId)
               }
             }}
-            className={`group flex items-center gap-1.5 h-6 min-w-[120px] max-w-[220px] px-2 rounded text-[11px] disabled:cursor-not-allowed disabled:opacity-50 ${tab.tabId === activeTabId ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'}`}
+            className={cn(
+              'managed-browser-tab group flex items-center gap-1.5 h-6 min-w-[120px] max-w-[220px] rounded px-2 text-[11px] disabled:cursor-not-allowed disabled:opacity-50',
+              tab.tabId === activeTabId
+                ? 'managed-browser-tab-active shadow-sm'
+                : 'managed-browser-tab-inactive',
+            )}
             aria-label={`切换到 ${tab.title || '新建标签页'}${tab.openedByAgent ? '（由 Agent 创建）' : ''}`}
           >
             <Globe2 className="size-3 shrink-0" />

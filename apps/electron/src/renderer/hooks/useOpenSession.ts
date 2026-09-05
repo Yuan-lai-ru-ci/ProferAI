@@ -6,6 +6,7 @@
  */
 
 import * as React from 'react'
+import { promoteMru } from '@profer/shared'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
   tabsAtom,
@@ -13,6 +14,7 @@ import {
   openTab,
   buildOpenTabRestore,
   sessionViewStateMapAtom,
+  tabMruAtom,
   type TabType,
 } from '@/atoms/tab-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
@@ -34,6 +36,7 @@ export function useOpenSession(): OpenSessionFn {
   const store = useStore()
   const [tabs, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
+  const setTabMru = useSetAtom(tabMruAtom)
   const setAppMode = useSetAtom(appModeAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setAutomationForm = useSetAtom(automationFormAtom)
@@ -57,6 +60,9 @@ export function useOpenSession(): OpenSessionFn {
       const result = openTab(tabs, { type, sessionId, title }, restore)
       setTabs(result.tabs)
       setActiveTabId(result.activeTabId)
+      if (type === 'chat' || type === 'agent' || type === 'preview') {
+        setTabMru((previous) => promoteMru(previous, sessionId))
+      }
       setAutomationForm({ open: false, draft: null })
       setActiveView('conversations')
 
@@ -109,6 +115,6 @@ export function useOpenSession(): OpenSessionFn {
         setCurrentAgentSessionId(null)
       }
     },
-    [tabs, setTabs, setActiveTabId, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions],
+    [tabs, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions],
   )
 }

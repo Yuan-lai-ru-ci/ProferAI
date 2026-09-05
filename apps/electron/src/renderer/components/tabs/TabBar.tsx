@@ -20,6 +20,7 @@ import {
   closeTab,
   reorderTabs,
   updateTabTitle,
+  tabMruAtom,
 } from '@/atoms/tab-atoms'
 import type { TabItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -56,6 +57,7 @@ import { detectIsWindows } from '@/lib/platform'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { cn } from '@/lib/utils'
 import { replaceAgentSessionInFreshnessOrder } from '@/lib/agent-session-list'
+import { promoteMru } from '@profer/shared'
 import { MAC_TOPBAR_CONTENT_HEIGHT, MAC_TOPBAR_HEIGHT, MAC_TOPBAR_TOP_INSET, TOPBAR_CONTENT_HEIGHT, TOPBAR_HEIGHT } from './topbar-layout'
 
 export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: boolean; variant?: 'default' | 'mac-global' } = {}): React.ReactElement {
@@ -65,6 +67,7 @@ export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: b
   const topbarContentHeight = variant === 'mac-global' ? MAC_TOPBAR_CONTENT_HEIGHT : TOPBAR_CONTENT_HEIGHT
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
   const indicatorMap = useAtomValue(tabIndicatorMapAtom)
+  const setTabMru = useSetAtom(tabMruAtom)
 
   // Tab 切换时同步 sidebar 状态
   const appMode = useAtomValue(appModeAtom)
@@ -114,6 +117,11 @@ export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: b
   // 主进程以便下次点击同一工作区复用。用上一枚 active tab 统一覆盖顶栏、侧栏和快捷切换器。
   const previousActiveTabRef = React.useRef<TabItem | null>(null)
   React.useEffect(() => {
+    const activeTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) : undefined
+    if (activeTab) setTabMru((previous) => promoteMru(previous, activeTab.sessionId))
+  }, [activeTabId, setTabMru, tabs])
+
+  React.useEffect(() => {
     const currentTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) ?? null : null
     const previousTab = previousActiveTabRef.current
     previousActiveTabRef.current = currentTab
@@ -132,14 +140,11 @@ export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: b
       .trim()
     if (markdownDraft || htmlText) return
 
-    setTabs((previousTabs) => {
-      const sessionTab = previousTabs.find((tab) => (
-        tab.type === 'agent' && tab.sessionId === previousSession.id
-      ))
-      if (!sessionTab) return previousTabs
-      return closeTab(previousTabs, activeTabId, sessionTab.id).tabs
-    })
-  }, [activeTabId, agentSessions, setTabs, store, tabs])
+    const sessionTab = tabs.find((tab) => (
+      tab.type === 'agent' && tab.sessionId === previousSession.id
+    ))
+    if (sessionTab) requestClose(sessionTab.id)
+  }, [activeTabId, agentSessions, requestClose, store, tabs])
 
   // 拖拽状态
   const dragState = React.useRef<{
@@ -165,6 +170,7 @@ export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: b
       setForeground(tab.type === 'agent' ? tab.sessionId : null)
     }
     setActiveTabId(tabId)
+    setTabMru((previous) => promoteMru(previous, tab.sessionId))
     // 点击任意 tab 都关闭定时任务编辑表单（overlay 否则会盖在内容区上）
     setAutomationForm({ open: false, draft: null })
 
@@ -201,7 +207,7 @@ export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: b
         setCurrentAgentSessionId(null)
       }
     }
-  }, [setActiveTabId, setAutomationForm, tabs, agentSessions, appMode, teamMode, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
+  }, [setActiveTabId, setAutomationForm, setTabMru, tabs, agentSessions, appMode, teamMode, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, setCurrentAgentWorkspaceId, setUnviewedCompleted])
 
   const handleDragStart = React.useCallback((tabId: string, e: React.PointerEvent) => {
     if (e.button !== 0) return // 只处理左键
@@ -804,8 +810,8 @@ function TabBarInner({
   }, [])
 
   return (
-    <div ref={barRef} className={cn('topbar-editorial relative tabbar-bg', variant === 'mac-global' && 'mac-global-topbar')} style={{ height: topbarHeight }}>
-      {/* 只把顶部空白区交给窗口拖拽；内容行由各自插槽明确管理命中区域。Mac Tab 上下各保留 8px 间距。 */}
+    <div ref={barRef} className={cn('topbar-editorial relative tabbar-bg titlebar-drag-region', variant === 'mac-global' && 'mac-global-topbar')} style={{ height: topbarHeight }}>
+      {/* 整个顶栏背景默认可拖动；Tab、工具组和窗口按钮通过 titlebar-no-drag 明确保留交互。 */}
       <div className={cn('absolute inset-x-0 top-0 titlebar-drag-region', variant === 'mac-global' ? 'h-[42px]' : 'h-[4px]', showTabBarWindowControls && 'right-[126px]')} />
       {tearingOff && (
         <div className="pointer-events-none absolute -bottom-px left-0 right-0 h-px bg-primary/60 shadow-[0_0_8px_rgba(0,0,0,0.2)]" />

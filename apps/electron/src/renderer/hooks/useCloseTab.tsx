@@ -19,6 +19,7 @@ import {
   closeTab,
   isPreviewTab,
   sessionViewStateMapAtom,
+  tabMruAtom,
 } from '@/atoms/tab-atoms'
 import {
   agentSessionsAtom,
@@ -37,6 +38,7 @@ interface UseCloseTabReturn {
 export function useCloseTab(): UseCloseTabReturn {
   const [tabs, setTabs] = useAtom(tabsAtom)
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
+  const [tabMru, setTabMru] = useAtom(tabMruAtom)
   const syncActiveTabSideEffects = useSyncActiveTabSideEffects()
   const store = useStore()
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
@@ -68,10 +70,11 @@ export function useCloseTab(): UseCloseTabReturn {
 
   const executeClose = React.useCallback((tabId: string) => {
     const closingTab = tabs.find((t) => t.id === tabId)
-    const wasActive = activeTabId === tabId
-    const result = closeTab(tabs, activeTabId, tabId)
+    const result = closeTab(tabs, activeTabId, tabId, tabMru)
+    const wasActive = result.activeTabId !== activeTabId
     setTabs(result.tabs)
     setActiveTabId(result.activeTabId)
+    setTabMru(result.mru)
 
     // 同步该会话的视图状态：
     // - 关闭预览 Tab → 预览不再打开（保留 lastView，切回不再重建预览）
@@ -106,7 +109,7 @@ export function useCloseTab(): UseCloseTabReturn {
     if (closingTab && closingTab.type === 'agent') {
       clearIdleAgentCompletionNotice(closingTab.sessionId)
     }
-  }, [tabs, activeTabId, setTabs, setActiveTabId, setViewStateMap, syncActiveTabSideEffects, clearIdleAgentCompletionNotice])
+  }, [tabs, activeTabId, tabMru, setTabs, setActiveTabId, setTabMru, setViewStateMap, syncActiveTabSideEffects, clearIdleAgentCompletionNotice])
 
   const requestClose = React.useCallback((tabId: string) => {
     executeClose(tabId)

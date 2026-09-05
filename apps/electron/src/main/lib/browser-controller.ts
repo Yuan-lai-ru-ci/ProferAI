@@ -1,6 +1,6 @@
 import { app, BrowserWindow, View, WebContentsView, session as electronSession, clipboard as electronClipboard, type Session } from 'electron'
 import type { BrowserDownloadBlockedEvent, BrowserExecutionSource, BrowserOperationStatus, BrowserTraceAction, BrowserTraceItem, BrowserTranslateResult, BrowserViewLayout, BrowserViewState, BrowserTabState } from '@profer/shared'
-import { AGENT_IPC_CHANNELS } from '@profer/shared'
+import { AGENT_IPC_CHANNELS, promoteMru, removeMruId, selectMruFallbackId } from '@profer/shared'
 import { assertSafeBrowserDestination, assertSafeBrowserUrl } from './browser-policy'
 import { createAuthorizedPreviewUrl, isAuthorizedPreviewProtocol } from './browser-preview-service'
 import { handleProferFileRequest } from './local-file-protocol'
@@ -73,6 +73,8 @@ type BrowserSessionRecord = {
   tabs: Map<string, BrowserTabRecord>
   /** 用户当前在面板中查看的标签。 */
   activeTabId: string
+  /** 当前会话内用户激活标签的 MRU 顺序，主进程状态为真实数据源。 */
+  tabMru: string[]
   /** Agent 未显式传 tabId 时继续操作的工作标签；被关闭后必须显式新建/选择。 */
   agentTabId: string | null
   /** 当前 Agent run 的取消源；UI 操作不接入此 signal。 */
@@ -534,6 +536,7 @@ export class BrowserController {
       browserSession,
       tabs: new Map(),
       activeTabId: '',
+      tabMru: [],
       agentTabId: null,
       agentAbortController: new AbortController(),
       allowedRoots: [...new Set((allowedRoots.length > 0 ? allowedRoots : configuration?.allowedRoots ?? []).filter(Boolean))],
@@ -629,13 +632,17 @@ export class BrowserController {
         this.disposeSession(browserSession)
         return
       }
-      if (browserSession.activeTabId === tab.tabId) this.selectAdjacentActiveTab(browserSession, closingIndex)
+      if (browserSession.activeTabId === tab.tabId) this.selectMruActiveTab(browserSession, tab.tabId, closingIndex)
+      browserSession.tabMru = removeMruId(browserSession.tabMru, tab.tabId)
       if (browserSession.agentTabId === tab.tabId) browserSession.agentTabId = null
       this.emit(browserSession)
     })
     try { view.webContents.debugger.attach('1.3') } catch (error) { console.warn('[受管浏览器] CDP attach 失败:', error) }
     browserSession.tabs.set(tabId, tab)
-    if (!browserSession.activeTabId) browserSession.activeTabId = tabId
+    if (!browserSession.activeTabId) {
+      browserSession.activeTabId = tabId
+      browserSession.tabMru = promoteMru(browserSession.tabMru, tabId)
+    }
     if (claimAsAgent) browserSession.agentTabId = tabId
     return tab
   }
@@ -843,6 +850,7 @@ export class BrowserController {
   private activateDisplayTab(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): void {
     tab.lastActivityAt = Date.now()
     browserSession.activeTabId = tab.tabId
+    browserSession.tabMru = promoteMru(browserSession.tabMru, tab.tabId)
     for (const other of browserSession.tabs.values()) {
       if (other.tabId !== tab.tabId) other.view.setVisible(false)
     }
@@ -885,6 +893,21 @@ export class BrowserController {
     const remainingIds = [...browserSession.tabs.keys()]
     const nextActive = remainingIds[closingIndex] ?? remainingIds[closingIndex - 1]
     if (nextActive) browserSession.activeTabId = nextActive
+  }
+
+  /** 关闭当前标签后优先回到最近访问且仍存在的标签；无历史时才使用相邻标签兜底。 */
+  private selectMruActiveTab(browserSession: BrowserSessionRecord, closingTabId: string, closingIndex: number): void {
+    browserSession.tabMru = removeMruId(browserSession.tabMru, closingTabId)
+    const targetId = selectMruFallbackId(browserSession.tabMru, closingTabId, browserSession.tabs.keys())
+    if (targetId) {
+      const target = browserSession.tabs.get(targetId)
+      if (target) {
+        this.activateDisplayTab(browserSession, target)
+        return
+      }
+    }
+    this.selectAdjacentActiveTab(browserSession, closingIndex)
+    if (browserSession.activeTabId) browserSession.tabMru = promoteMru(browserSession.tabMru, browserSession.activeTabId)
   }
 
   /**
@@ -963,7 +986,8 @@ export class BrowserController {
       this.disposeSession(browserSession)
       return null
     }
-    if (browserSession.activeTabId === tab.tabId) this.selectAdjacentActiveTab(browserSession, closingIndex)
+    if (browserSession.activeTabId === tab.tabId) this.selectMruActiveTab(browserSession, tab.tabId, closingIndex)
+    browserSession.tabMru = removeMruId(browserSession.tabMru, tab.tabId)
     if (browserSession.agentTabId === tab.tabId) browserSession.agentTabId = null
     this.emit(browserSession)
     return structuredClone(this.buildState(browserSession))

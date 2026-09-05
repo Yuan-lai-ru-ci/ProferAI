@@ -1511,6 +1511,44 @@
   border: 2px solid hsl(142 71% 45%) !important;
 }
 
+/* 选中态采用未选中态的颜色反转：背景使用未选中文字色，内容使用未选中背景色。 */
+.topbar-editorial button.app-tab-active {
+  background-color: hsl(var(--muted-foreground)) !important;
+  color: hsl(var(--tab-surface)) !important;
+}
+.topbar-editorial button.app-tab-active :is(svg, span, input) {
+  color: hsl(var(--tab-surface)) !important;
+}
+.topbar-editorial button.app-tab-active .workspace-badge,
+.topbar-editorial button.app-tab-active [role="button"] {
+  background-color: hsl(var(--tab-surface) / 0.18) !important;
+  color: hsl(var(--tab-surface)) !important;
+}
+
+.managed-browser-tab-active {
+  background-color: hsl(var(--muted-foreground));
+  color: hsl(var(--tab-surface));
+}
+.managed-browser-tab-active :is(svg, span) {
+  color: hsl(var(--tab-surface));
+}
+.managed-browser-tab-active [role="button"] {
+  background-color: hsl(var(--tab-surface) / 0.18);
+  color: hsl(var(--tab-surface));
+}
+.managed-browser-tab-inactive {
+  color: hsl(var(--muted-foreground));
+}
+.managed-browser-tab-inactive:hover {
+  background-color: hsl(var(--muted) / 0.5);
+  color: hsl(var(--foreground));
+}
+.managed-browser-tab-active:focus-visible,
+.managed-browser-tab-inactive:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+
 /* Tab 自带 focus ring 已关闭；选中状态只显示主题 primary 的边框。 */
 .topbar-editorial button[role="tab"]:focus-visible {
   outline: none !important;
@@ -1602,13 +1640,22 @@
   app-region: no-drag;
 }
 
-/* 拖拽顶栏中的交互控件自动退出窗口拖拽区，避免新加按钮时误挡点击。
+/* 拖拽顶栏中的交互控件自动退出窗口拖拽区，避免新加控件时误挡点击。
  * TabBarItem、工具组和各独立页面仍可用 titlebar-no-drag 表达更大的交互区域。 */
 .titlebar-drag-region button,
 .titlebar-drag-region input,
 .titlebar-drag-region textarea,
 .titlebar-drag-region select,
-.titlebar-drag-region [role='button'] {
+.titlebar-drag-region a,
+.titlebar-drag-region [contenteditable='true'],
+.titlebar-drag-region [role='button'],
+.titlebar-drag-region [role='tab'],
+.titlebar-drag-region [role='link'],
+.titlebar-drag-region [role='menuitem'],
+.titlebar-drag-region [role='option'],
+.titlebar-drag-region [role='checkbox'],
+.titlebar-drag-region [role='switch'],
+.titlebar-drag-region [role='combobox'] {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
