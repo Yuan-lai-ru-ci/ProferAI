@@ -785,8 +785,8 @@ function TabBarInner({
   }, [])
 
   return (
-    <div ref={barRef} className="topbar-editorial relative tabbar-bg" style={{ height: TOPBAR_HEIGHT }}>
-      {/* 只把顶部空白区交给窗口拖拽；内容行由各自插槽明确管理命中区域。 */}
+    <div ref={barRef} className="topbar-editorial relative tabbar-bg titlebar-drag-region" style={{ height: TOPBAR_HEIGHT }}>
+      {/* 整个顶栏背景默认可拖动；Tab、工具组和窗口按钮通过 titlebar-no-drag 明确保留交互。 */}
       <div className={cn('absolute inset-x-0 top-0 h-[4px] titlebar-drag-region', showTabBarWindowControls && 'right-[126px]')} />
       {tearingOff && (
         <div className="pointer-events-none absolute -bottom-px left-0 right-0 h-px bg-primary/60 shadow-[0_0_8px_rgba(0,0,0,0.2)]" />
