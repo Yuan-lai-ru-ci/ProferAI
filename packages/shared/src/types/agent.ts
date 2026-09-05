@@ -646,42 +646,6 @@ export type AgentEvent =
 // ===== Profer 内部事件（SDK 不覆盖的场景） =====
 
 /** Profer 内部事件类型 */
-export type AgentFilePreviewStatus = 'ready' | 'error'
-
-export interface AgentFilePreviewReport {
-  requestId: string
-  sessionId: string
-  filePath: string
-  revision: string
-  status: AgentFilePreviewStatus
-  slideCount?: number
-  currentSlide?: number
-  scale?: number
-  error?: string
-}
-
-export interface AgentFilePreviewInspectRequest {
-  requestId: string
-  sessionId: string
-  filePath: string
-  revision: string
-  scope: 'overview' | 'page' | 'all'
-  page?: number
-}
-
-export interface AgentFilePreviewInspectResult {
-  requestId: string
-  sessionId: string
-  filePath: string
-  revision: string
-  slideCount: number
-  currentSlide: number
-  scale?: number
-  images: Array<{ page: number; data: string; mediaType: 'image/png' }>
-  warnings?: string[]
-  error?: string
-}
-
 export type ProferEvent =
   | { type: 'permission_request'; request: PermissionRequest }
   | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
@@ -695,10 +659,6 @@ export type ProferEvent =
   | { type: 'model_resolved'; model: string }
   | { type: 'context_window'; contextWindow: number }
   | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
-  /** Agent 请求使用当前会话的正式文件预览入口；由 renderer 复用人类预览状态，不生成旁路截图。 */
-  | { type: 'preview_requested'; requestId: string; sessionId: string; filePath: string; revision: string; basePaths?: string[]; readOnly?: boolean }
-  /** Agent 请求从当前用户可见的正式 PPTX viewer 读取页图。 */
-  | { type: 'preview_inspection_requested'; request: AgentFilePreviewInspectRequest }
   | { type: 'image_generation_updated'; sessionId: string; record: AgentImageGenerationCard }
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta }
@@ -828,6 +788,8 @@ export interface AgentSessionMeta {
   lastInterruptLabel?: string
   /** 最近中断时间戳 */
   lastInterruptAt?: number
+  /** 队列「自动发送」开关：轮结束是否自动发送队首消息。per-session 持久化，新会话及历史缺省值为开（true）。手动停止/异常结束会自动置为 false。 */
+  autoQueueSendEnabled?: boolean
   /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
   permissionMode?: ProferPermissionMode
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
@@ -1041,7 +1003,7 @@ export interface SkillMeta {
   /** 被该工作区副本替换的全局 Skill ID */
   replacementForSkillId?: string
   /** 来源状态，unknown-legacy 表示迁移无法可靠匹配 */
-  sourceStatus?: 'available' | 'deleted' | 'modified-legacy-copy' | 'preserved-legacy-disabled-copy' | 'uncertain-legacy-copy' | 'unknown-legacy'
+  sourceStatus?: 'available' | 'deleted' | 'unknown-legacy'
   /** 当前实际用于工作区加载的来源层 */
   actualSource?: 'workspace' | 'global' | 'none'
   /** 是否有可用更新（源 Skill 版本 > importSource.sourceVersion） */
@@ -1161,10 +1123,10 @@ export interface WorkspaceMemoryFileSummary {
   updatedAt?: number
 }
 
-/** Profer 工作区资料与记忆摘要 */
+/** 工作区记忆摘要 */
 export interface WorkspaceMemorySummary {
-  /** Profer 工作区资料（workspace-profile.md；旧版本 CLAUDE.md 仅兼容读取） */
-  workspaceProfile: WorkspaceMemoryFileSummary
+  /** 工作区级 CLAUDE.md */
+  claudeMd: WorkspaceMemoryFileSummary
   /** SDK auto memory 目录 */
   autoMemory: {
     /** 绝对目录路径 */
@@ -1781,12 +1743,6 @@ export const AGENT_IPC_CHANNELS = {
   RETRY_IMAGE_GENERATION: 'agent:retry-image-generation',
   /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
   RESTORE_ACTIVE_STREAMS: 'agent:restore-active-streams',
-  /** renderer → main：读取授权文件当前 SHA-256，供 viewer 加载前后校验 revision。 */
-  FILE_PREVIEW_REVISION: 'agent:file-preview-revision',
-  /** renderer → main：当前用户可见的正式 PPTX viewer 已 ready/error。 */
-  FILE_PREVIEW_REPORT: 'agent:file-preview-report',
-  /** renderer → main：同一正式 PPTX viewer 的页级观察结果。 */
-  FILE_PREVIEW_INSPECTION_RESULT: 'agent:file-preview-inspection-result',
   /** 更新会话标题 */
   UPDATE_TITLE: 'agent:update-title',
   /** 更新会话模型选择 */
@@ -1892,8 +1848,6 @@ export const AGENT_IPC_CHANNELS = {
   // 后台任务管理
   /** 获取任务输出 */
   GET_TASK_OUTPUT: 'agent:get-task-output',
-  /** 获取 Claude/Pi runtime 能力快照 */
-  GET_RUNTIME_CAPABILITIES: 'agent:get-runtime-capabilities',
   /** 停止任务 */
   STOP_TASK: 'agent:stop-task',
 
@@ -1943,10 +1897,10 @@ export const AGENT_IPC_CHANNELS = {
   RENAME_SKILL_ENTRY: 'agent:rename-skill-entry',
   /** 获取工作区记忆摘要 */
   GET_WORKSPACE_MEMORY_SUMMARY: 'agent:get-workspace-memory-summary',
-  /** 读取 Profer 工作区资料 */
-  READ_WORKSPACE_PROFILE: 'agent:read-workspace-profile',
-  /** 写入 Profer 工作区资料 */
-  WRITE_WORKSPACE_PROFILE: 'agent:write-workspace-profile',
+  /** 读取工作区 CLAUDE.md */
+  READ_WORKSPACE_CLAUDE_MD: 'agent:read-workspace-claude-md',
+  /** 写入工作区 CLAUDE.md */
+  WRITE_WORKSPACE_CLAUDE_MD: 'agent:write-workspace-claude-md',
   /** 列出工作区 auto memory 文件树 */
   LIST_WORKSPACE_AUTO_MEMORY_FILES: 'agent:list-workspace-auto-memory-files',
   /** 读取工作区 auto memory 文件 */
@@ -2093,6 +2047,8 @@ export const AGENT_IPC_CHANNELS = {
   PROMOTE_QUEUED_MESSAGE: 'agent:promote-queued-message',
   /** 队列消息状态变更通知（主进程 → 渲染进程推送） */
   QUEUED_MESSAGE_STATUS: 'agent:queued-message-status',
+  /** 更新会话「队列自动发送」开关（per-session 持久化，重启保留） */
+  UPDATE_QUEUE_AUTO_SEND: 'agent:update-queue-auto-send',
 
   // 待处理请求恢复（渲染进程重载后查询主进程状态）
   /** 获取所有待处理的交互请求快照 */

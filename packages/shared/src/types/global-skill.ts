@@ -2,8 +2,8 @@
 
 export type GlobalSkillType = 'builtin-meta' | 'user-global'
 export type SkillScope = 'global' | 'workspace'
-export type SkillSourceStatus = 'available' | 'modified-legacy-copy' | 'preserved-legacy-disabled-copy' | 'uncertain-legacy-copy' | 'unknown-legacy'
-export type WorkspaceOverrideReason = 'user-disabled' | 'replaced-by-workspace-copy' | 'legacy-meta-copy' | 'modified-legacy-copy' | 'preserved-legacy-disabled-copy' | 'uncertain-legacy-copy' | 'unknown-legacy'
+export type SkillSourceStatus = 'available' | 'unknown-legacy'
+export type WorkspaceOverrideReason = 'user-disabled' | 'replaced-by-workspace-copy' | 'legacy-meta-copy'
 
 export interface GlobalSkillSource {
   sourceSkillId: string
@@ -57,7 +57,7 @@ export interface WorkspaceSkillOverridesFile {
 export interface GlobalSkillMeta extends GlobalSkillManifest {
   enabledInWorkspace: boolean
   replacedInWorkspace: boolean
-  sourceStatus: SkillSourceStatus
+  sourceStatus: 'available'
   /** 当前工作区实际加载的来源层 */
   actualSource: 'workspace' | 'global' | 'none'
   /** 展平来源字段，供详情 UI 和 IPC 消费 */
@@ -77,7 +77,7 @@ export interface WorkspaceGlobalSkillMeta {
   version?: string
   enabledInWorkspace: boolean
   replacedInWorkspace: boolean
-  sourceStatus: SkillSourceStatus
+  sourceStatus: 'available'
 }
 
 export interface ResolvedSkillMeta {

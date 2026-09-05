@@ -9,200 +9,299 @@
  * - 内容：能力卡片网格（商店风），点击卡片打开右侧详情抽屉
  */
 
-import * as React from 'react'
-import { useSetAtom, useAtomValue } from 'jotai'
-import { toast } from 'sonner'
-import { Blocks, ChevronDown, Search, Plus, FolderOpen, Check, Store, Download, RefreshCw, BriefcaseBusiness, Globe2 } from 'lucide-react'
-import { Switch } from '@/components/ui/switch'
-import { cn } from '@/lib/utils'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import * as React from "react";
+import { useSetAtom, useAtomValue } from "jotai";
+import { toast } from "sonner";
+import {
+  ArrowLeft,
+  Blocks,
+  ChevronDown,
+  Search,
+  Plus,
+  FolderOpen,
+  Check,
+  Store,
+  Download,
+  RefreshCw,
+  Globe2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@/components/ui/popover'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
-import { workspacePresetsAtom } from '@/atoms/agent-preset-atoms'
-import { useProjectActions } from '@/hooks/useProjectActions'
-import type { McpServerEntry, SkillMeta } from '@profer/shared'
-import { useAgentSkillsData } from './useAgentSkillsData'
-import { SkillCard } from './SkillCard'
-import { McpCard } from './McpCard'
-import { SkillDetailSheet } from './SkillDetailSheet'
-import { McpDetailSheet } from './McpDetailSheet'
-import { ImportSkillDialog } from './ImportSkillDialog'
-import { WorkspaceMemoryTab } from './WorkspaceMemoryTab'
-import { AgentPresetSettings } from './AgentPresetSettings'
-import { ImportPresetDialog } from './ImportPresetDialog'
-import { GlobalCapabilitiesView } from './GlobalCapabilitiesView'
-import { MasterSkillDetailSheet } from './MasterSkillDetailSheet'
-import { CreateWorkspaceSkillDialog } from './CreateWorkspaceSkillDialog'
-import { WorkspaceScopeSelectDialog } from './WorkspaceScopeSelectDialog'
-import { WindowControlsHost } from '@/components/WindowControlsTemplate'
+} from "@/components/ui/popover";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { activeViewAtom } from "@/atoms/active-view";
+import { workspaceCapabilitiesVersionAtom } from "@/atoms/agent-atoms";
+import { workspacePresetsAtom } from "@/atoms/agent-preset-atoms";
+import { useProjectActions } from "@/hooks/useProjectActions";
+import type { McpServerEntry, SkillMeta } from "@profer/shared";
+import { useAgentSkillsData } from "./useAgentSkillsData";
+import { SkillCard } from "./SkillCard";
+import { McpCard } from "./McpCard";
+import { SkillDetailSheet } from "./SkillDetailSheet";
+import { McpDetailSheet } from "./McpDetailSheet";
+import { ImportSkillDialog } from "./ImportSkillDialog";
+import { WorkspaceMemoryTab } from "./WorkspaceMemoryTab";
+import { AgentPresetSettings } from "./AgentPresetSettings";
+import { ImportPresetDialog } from "./ImportPresetDialog";
+import { GlobalCapabilitiesView } from "./GlobalCapabilitiesView";
+import { MasterSkillDetailSheet } from "./MasterSkillDetailSheet";
+import { CreateWorkspaceSkillDialog } from "./CreateWorkspaceSkillDialog";
+import { WorkspaceScopeSelectDialog } from "./WorkspaceScopeSelectDialog";
+import { AgentSkillsToolbar } from "./AgentSkillsToolbar";
 
-type CapabilityTab = 'skills' | 'marketplace' | 'mcp' | 'memory' | 'presets'
-type SkillSortMode = 'default' | 'alpha' | 'updated'
-const SKILL_SORT_STORAGE_KEY = 'profer.agent-skills.sort.workspace'
-function readSkillSortMode(): SkillSortMode { try { const value = window.localStorage.getItem(SKILL_SORT_STORAGE_KEY); return value === 'alpha' || value === 'updated' ? value : 'default' } catch { return 'default' } }
-function sortSkills(skills: SkillMeta[], mode: SkillSortMode): SkillMeta[] { const indexed = skills.map((skill, index) => ({ skill, index })); return indexed.sort((left, right) => { if (mode === 'alpha') { const byName = left.skill.name.localeCompare(right.skill.name, undefined, { sensitivity: 'base' }); return byName || left.skill.slug.localeCompare(right.skill.slug) } if (mode === 'updated') { const leftTime = Date.parse(left.skill.copiedAt ?? left.skill.importSource?.importedAt ?? '') || 0; const rightTime = Date.parse(right.skill.copiedAt ?? right.skill.importSource?.importedAt ?? '') || 0; return rightTime - leftTime || left.index - right.index } return left.index - right.index }).map(({ skill }) => skill) }
+type CapabilityTab = "skills" | "marketplace" | "mcp" | "memory" | "presets";
 
 export function AgentSkillsView(): React.ReactElement {
-  const data = useAgentSkillsData()
-  const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
-  const presetList = useAtomValue(workspacePresetsAtom(data.workspaceSlug))
-  const { workspaces, currentWorkspaceId, selectProject } = useProjectActions()
+  const data = useAgentSkillsData();
+  const setActiveView = useSetAtom(activeViewAtom);
+  const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom);
+  const presetList = useAtomValue(workspacePresetsAtom(data.workspaceSlug));
+  const { workspaces, currentWorkspaceId, selectProject } = useProjectActions();
 
-  const [tab, setTab] = React.useState<CapabilityTab>('skills')
-  const [search, setSearch] = React.useState('')
-  const [selectedSkillKey, setSelectedSkillKey] = React.useState<string | null>(null)
-  const [mcpSheetOpen, setMcpSheetOpen] = React.useState(false)
-  const [editingMcp, setEditingMcp] = React.useState<{ name: string; entry: McpServerEntry } | null>(null)
-  const [showImport, setShowImport] = React.useState(false)
-  const [globalConfigOpen, setGlobalConfigOpen] = React.useState(false)
-  const [globalConfigTab, setGlobalConfigTab] = React.useState<'skills' | 'presets'>('skills')
-  const [wsPopoverOpen, setWsPopoverOpen] = React.useState(false)
-  const [pendingDeleteSkill, setPendingDeleteSkill] = React.useState<SkillMeta | null>(null)
-  const [pendingDeleteMcpName, setPendingDeleteMcpName] = React.useState<string | null>(null)
-  const [isDeletingSkill, setIsDeletingSkill] = React.useState(false)
-  const [isDeletingMcp, setIsDeletingMcp] = React.useState(false)
-  const [showImportPreset, setShowImportPreset] = React.useState(false)
-  const [createWorkspaceSkillOpen, setCreateWorkspaceSkillOpen] = React.useState(false)
-  const [onlyEffectiveSkills, setOnlyEffectiveSkills] = React.useState(false)
-  const [skillSortMode, setSkillSortMode] = React.useState<SkillSortMode>(readSkillSortMode)
-  const [onlyEffectivePresets, setOnlyEffectivePresets] = React.useState(false)
-  const [promoteSkill, setPromoteSkill] = React.useState<SkillMeta | null>(null)
-  const [promotePreset, setPromotePreset] = React.useState<import('@profer/shared').AgentPreset | null>(null)
+  const [tab, setTab] = React.useState<CapabilityTab>("skills");
+  const [search, setSearch] = React.useState("");
+  const [selectedSkillKey, setSelectedSkillKey] = React.useState<string | null>(
+    null,
+  );
+  const [mcpSheetOpen, setMcpSheetOpen] = React.useState(false);
+  const [editingMcp, setEditingMcp] = React.useState<{
+    name: string;
+    entry: McpServerEntry;
+  } | null>(null);
+  const [showImport, setShowImport] = React.useState(false);
+  const [globalConfigOpen, setGlobalConfigOpen] = React.useState(false);
+  const [globalConfigTab, setGlobalConfigTab] = React.useState<
+    "skills" | "presets"
+  >("skills");
+  const [globalCreateSkillToken, setGlobalCreateSkillToken] = React.useState(0);
+  const [globalImportSkillToken, setGlobalImportSkillToken] = React.useState(0);
+  const [globalCreatePresetToken, setGlobalCreatePresetToken] =
+    React.useState(0);
+  const [workspaceCreatePresetToken, setWorkspaceCreatePresetToken] =
+    React.useState(0);
+  const [workspaceImportPresetFileToken, setWorkspaceImportPresetFileToken] =
+    React.useState(0);
+  const [workspaceExportPresetToken, setWorkspaceExportPresetToken] =
+    React.useState(0);
+  const [wsPopoverOpen, setWsPopoverOpen] = React.useState(false);
+  const [pendingDeleteSkill, setPendingDeleteSkill] =
+    React.useState<SkillMeta | null>(null);
+  const [pendingDeleteMcpName, setPendingDeleteMcpName] = React.useState<
+    string | null
+  >(null);
+  const [isDeletingSkill, setIsDeletingSkill] = React.useState(false);
+  const [isDeletingMcp, setIsDeletingMcp] = React.useState(false);
+  const [showImportPreset, setShowImportPreset] = React.useState(false);
+  const [createWorkspaceSkillOpen, setCreateWorkspaceSkillOpen] =
+    React.useState(false);
+  const [promoteSkill, setPromoteSkill] = React.useState<SkillMeta | null>(
+    null,
+  );
+  const [promotePreset, setPromotePreset] = React.useState<
+    import("@profer/shared").AgentPreset | null
+  >(null);
 
-  const q = search.trim().toLowerCase()
+  const q = search.trim().toLowerCase();
 
   const filteredSkills = React.useMemo(() => {
-    if (!q) return data.skills
-    return data.skills.filter((s) =>
-      s.name.toLowerCase().includes(q) ||
-      s.slug.toLowerCase().includes(q) ||
-      (s.description ?? '').toLowerCase().includes(q),
-    )
-  }, [data.skills, q])
+    if (!q) return data.skills;
+    return data.skills.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.slug.toLowerCase().includes(q) ||
+        (s.description ?? "").toLowerCase().includes(q),
+    );
+  }, [data.skills, q]);
 
-  // workspaceSkillId 是本地副本的稳定身份；inactive 副本 actualSource 为 none，仍保留在工作区列表。
-  const workspaceSkills = sortSkills(filteredSkills.filter((s) => Boolean(s.workspaceSkillId) && (!onlyEffectiveSkills || s.enabled)), skillSortMode)
-  const globalSkills = sortSkills(filteredSkills.filter((s) => !s.workspaceSkillId && s.sourceSkillType === 'user-global' && s.actualSource !== 'workspace' && (!onlyEffectiveSkills || s.enabled)), skillSortMode)
-  const builtinSkills = sortSkills(filteredSkills.filter((s) => !s.workspaceSkillId && s.sourceSkillType === 'builtin-meta' && s.actualSource !== 'workspace' && (!onlyEffectiveSkills || s.enabled)), skillSortMode)
-  const updateCount = data.skills.filter((s) => s.hasUpdate && s.actualSource === 'workspace').length
+  const workspaceSkills = filteredSkills.filter(
+    (s) => s.actualSource === "workspace",
+  );
+  const globalSkills = filteredSkills.filter(
+    (s) =>
+      s.sourceSkillType === "user-global" && s.actualSource !== "workspace",
+  );
+  const builtinSkills = filteredSkills.filter(
+    (s) =>
+      s.sourceSkillType === "builtin-meta" && s.actualSource !== "workspace",
+  );
+  const updateCount = data.skills.filter(
+    (s) => s.hasUpdate && s.actualSource === "workspace",
+  ).length;
 
   const serverEntries = React.useMemo(() => {
     return Object.entries(data.mcpConfig.servers ?? {})
-      .filter(([name]) => name !== 'memos-cloud')
-      .filter(([name]) => !q || name.toLowerCase().includes(q))
-  }, [data.mcpConfig, q])
+      .filter(([name]) => name !== "memos-cloud")
+      .filter(([name]) => !q || name.toLowerCase().includes(q));
+  }, [data.mcpConfig, q]);
 
   // 不含搜索过滤的 MCP 总数（标签计数与空态判断用）
   const mcpCount = React.useMemo(
-    () => Object.keys(data.mcpConfig.servers ?? {}).filter((n) => n !== 'memos-cloud').length,
+    () =>
+      Object.keys(data.mcpConfig.servers ?? {}).filter(
+        (n) => n !== "memos-cloud",
+      ).length,
     [data.mcpConfig],
-  )
+  );
 
-  const [memoryCount, setMemoryCount] = React.useState(0)
+  const [memoryCount, setMemoryCount] = React.useState(0);
   React.useEffect(() => {
-    if (!data.workspaceSlug) return
-    window.electronAPI.getWorkspaceMemorySummary(data.workspaceSlug).then((mem) => {
-      setMemoryCount((mem.workspaceProfile.exists ? 1 : 0) + (mem.autoMemory.fileCount ?? 0))
-    }).catch(() => {})
-  }, [data.workspaceSlug, data.loading])
+    if (!data.workspaceSlug) return;
+    window.electronAPI
+      .getWorkspaceMemorySummary(data.workspaceSlug)
+      .then((mem) => {
+        setMemoryCount(
+          (mem.claudeMd.exists ? 1 : 0) + (mem.autoMemory.fileCount ?? 0),
+        );
+      })
+      .catch(() => {});
+  }, [data.workspaceSlug, data.loading]);
 
   // 团队市场状态
-  const [marketSkills, setMarketSkills] = React.useState<Array<{ slug: string; name: string; description: string; version: string; publishedBy: string; publishedAt: number }>>([])
-  const [marketLoading, setMarketLoading] = React.useState(false)
-  const [installingSlug, setInstallingSlug] = React.useState<string | null>(null)
+  const [marketSkills, setMarketSkills] = React.useState<
+    Array<{
+      slug: string;
+      name: string;
+      description: string;
+      version: string;
+      publishedBy: string;
+      publishedAt: number;
+    }>
+  >([]);
+  const [marketLoading, setMarketLoading] = React.useState(false);
+  const [installingSlug, setInstallingSlug] = React.useState<string | null>(
+    null,
+  );
 
-  const currentWs = React.useMemo(() =>
-    (workspaces as Array<{ id: string; type?: string; teamId?: string }>).find((w) => w.id === currentWorkspaceId),
-  [workspaces, currentWorkspaceId])
-  const isTeamWorkspace = currentWs?.type === 'team'
-  const teamWorkspaceId = (currentWs as { id?: string; teamId?: string } | undefined)?.teamId || currentWorkspaceId
+  const currentWs = React.useMemo(
+    () =>
+      (
+        workspaces as Array<{ id: string; type?: string; teamId?: string }>
+      ).find((w) => w.id === currentWorkspaceId),
+    [workspaces, currentWorkspaceId],
+  );
+  const isTeamWorkspace = currentWs?.type === "team";
+  const teamWorkspaceId =
+    (currentWs as { id?: string; teamId?: string } | undefined)?.teamId ||
+    currentWorkspaceId;
 
   // 顶部 Skills/市场/MCP/记忆 切换按钮（团队工作区多一个团队市场）：roving focus，
   // 支持 ←/→ 循环切换 + Home/End。与规划中心 Todo/日程/定时任务 tab 行为一致。
-  const tabButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
-  const tabList: Array<{ value: CapabilityTab; label: string; count: number }> = [
-    { value: 'skills', label: 'Skills', count: data.skills.length },
-    ...(isTeamWorkspace ? [{ value: 'marketplace' as const, label: '团队市场', count: marketSkills.length }] : []),
-    { value: 'mcp', label: 'MCP', count: mcpCount },
-    { value: 'memory', label: '记忆', count: memoryCount },
-    { value: 'presets', label: '预设', count: presetList.length },
-  ]
-  const handleTabKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number): void => {
-    let nextIndex: number | undefined
-    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabList.length
-    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabList.length) % tabList.length
-    else if (event.key === 'Home') nextIndex = 0
-    else if (event.key === 'End') nextIndex = tabList.length - 1
-    if (nextIndex === undefined) return
-    const next = tabList[nextIndex]
-    if (!next) return
-    event.preventDefault()
-    setTab(next.value)
-    tabButtonRefs.current[nextIndex]?.focus()
-  }, [setTab, tabList])
+  const tabButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  const tabList: Array<{ value: CapabilityTab; label: string; count: number }> =
+    [
+      { value: "skills", label: "Skills", count: data.skills.length },
+      ...(isTeamWorkspace
+        ? [
+            {
+              value: "marketplace" as const,
+              label: "团队市场",
+              count: marketSkills.length,
+            },
+          ]
+        : []),
+      { value: "mcp", label: "MCP", count: mcpCount },
+      { value: "memory", label: "记忆", count: memoryCount },
+      { value: "presets", label: "预设", count: presetList.length },
+    ];
+  const handleTabKeyDown = React.useCallback(
+    (
+      event: React.KeyboardEvent<HTMLButtonElement>,
+      currentIndex: number,
+    ): void => {
+      let nextIndex: number | undefined;
+      if (event.key === "ArrowRight")
+        nextIndex = (currentIndex + 1) % tabList.length;
+      else if (event.key === "ArrowLeft")
+        nextIndex = (currentIndex - 1 + tabList.length) % tabList.length;
+      else if (event.key === "Home") nextIndex = 0;
+      else if (event.key === "End") nextIndex = tabList.length - 1;
+      if (nextIndex === undefined) return;
+      const next = tabList[nextIndex];
+      if (!next) return;
+      event.preventDefault();
+      setTab(next.value);
+      tabButtonRefs.current[nextIndex]?.focus();
+    },
+    [setTab, tabList],
+  );
 
   React.useEffect(() => {
-    if (tab === 'marketplace' && isTeamWorkspace && teamWorkspaceId) {
-      setMarketLoading(true)
-      window.electronAPI.skillMarketplace.listTeamSkills(teamWorkspaceId)
+    if (tab === "marketplace" && isTeamWorkspace && teamWorkspaceId) {
+      setMarketLoading(true);
+      window.electronAPI.skillMarketplace
+        .listTeamSkills(teamWorkspaceId)
         .then(setMarketSkills)
         .catch(() => setMarketSkills([]))
-        .finally(() => setMarketLoading(false))
+        .finally(() => setMarketLoading(false));
     }
-  }, [tab, isTeamWorkspace, teamWorkspaceId])
+  }, [tab, isTeamWorkspace, teamWorkspaceId]);
 
   const filteredMarket = React.useMemo(() => {
-    if (!q) return marketSkills
-    return marketSkills.filter((s) =>
-      s.name.toLowerCase().includes(q) ||
-      s.slug.toLowerCase().includes(q) ||
-      s.description.toLowerCase().includes(q),
-    )
-  }, [marketSkills, q])
+    if (!q) return marketSkills;
+    return marketSkills.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.slug.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q),
+    );
+  }, [marketSkills, q]);
 
-  const [publishingSlug, setPublishingSlug] = React.useState<string | null>(null)
+  const [publishingSlug, setPublishingSlug] = React.useState<string | null>(
+    null,
+  );
 
-  const handlePublish = React.useCallback(async (skillSlug: string) => {
-    if (!isTeamWorkspace || !teamWorkspaceId) return
-    setPublishingSlug(skillSlug)
-    try {
-      const result = await window.electronAPI.skillMarketplace.publish({
-        workspaceId: teamWorkspaceId,
-        workspaceSlug: data.workspaceSlug,
-        skillSlug,
-      })
-      if (result.success) {
-        toast.success(`已发布 ${skillSlug} 到团队市场`)
-        // 刷新市场列表
-        window.electronAPI.skillMarketplace.listTeamSkills(teamWorkspaceId)
-          .then(setMarketSkills)
-          .catch(() => {})
+  const handlePublish = React.useCallback(
+    async (skillSlug: string) => {
+      if (!isTeamWorkspace || !teamWorkspaceId) return;
+      setPublishingSlug(skillSlug);
+      try {
+        const result = await window.electronAPI.skillMarketplace.publish({
+          workspaceId: teamWorkspaceId,
+          workspaceSlug: data.workspaceSlug,
+          skillSlug,
+        });
+        if (result.success) {
+          toast.success(`已发布 ${skillSlug} 到团队市场`);
+          // 刷新市场列表
+          window.electronAPI.skillMarketplace
+            .listTeamSkills(teamWorkspaceId)
+            .then(setMarketSkills)
+            .catch(() => {});
+        }
+      } catch (e: any) {
+        toast.error(`发布失败: ${e.message}`);
+      } finally {
+        setPublishingSlug(null);
       }
-    } catch (e: any) {
-      toast.error(`发布失败: ${e.message}`)
-    } finally {
-      setPublishingSlug(null)
-    }
-  }, [isTeamWorkspace, teamWorkspaceId, data.workspaceSlug])
+    },
+    [isTeamWorkspace, teamWorkspaceId, data.workspaceSlug],
+  );
 
-  const skillKey = (skill: SkillMeta): string => skill.workspaceSkillId
-    ? `workspace:${skill.workspaceSkillId}`
-    : `global:${skill.sourceSkillId ?? skill.slug}`
-  const selectedSkill = data.skills.find((s) => skillKey(s) === selectedSkillKey) ?? null
-  // workspaceSkillId 标识本地副本，即使副本来自全局源且已禁用，也不能按全局条目操作。
-  const selectedIsGlobal = Boolean(selectedSkill?.sourceSkillId && !selectedSkill.workspaceSkillId)
-  const selectedIsBuiltin = selectedIsGlobal && selectedSkill?.sourceSkillType === 'builtin-meta'
+  const skillKey = (skill: SkillMeta): string =>
+    skill.sourceSkillId && skill.actualSource !== "workspace"
+      ? `global:${skill.sourceSkillId}`
+      : `workspace:${skill.workspaceSkillId ?? skill.slug}`;
+  const selectedSkill =
+    data.skills.find((s) => skillKey(s) === selectedSkillKey) ?? null;
+  // sourceSkillId 标识全局/元源；actualSource 只表示当前实际加载层，不能用来判断已关闭的全局条目。
+  const selectedIsGlobal = Boolean(
+    selectedSkill?.sourceSkillId && selectedSkill.actualSource !== "workspace",
+  );
+  const selectedIsBuiltin =
+    selectedIsGlobal && selectedSkill?.sourceSkillType === "builtin-meta";
 
-  const openSkillFolder = (skill: SkillMeta): void => {
-    if (!data.skillsDir) return
-    const baseDir = skill.workspaceSkillId && !skill.enabled ? `${data.skillsDir}/../skills-inactive` : data.skillsDir
-    window.electronAPI.openFile(`${baseDir}/${skill.slug}`)
-  }
+  const openSkillFolder = (slug: string): void => {
+    if (data.skillsDir)
+      window.electronAPI.openFile(`${data.skillsDir}/${slug}`);
+  };
 
   if (!data.hasWorkspace && !globalConfigOpen) {
     return (
@@ -210,7 +309,9 @@ export function AgentSkillsView(): React.ReactElement {
         <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
           <Blocks className="size-8 text-foreground/30" />
         </div>
-        <div className="text-[15px] font-medium text-foreground/80">未选择工作区</div>
+        <div className="text-[15px] font-medium text-foreground/80">
+          未选择工作区
+        </div>
         <div className="max-w-sm text-[13px] text-foreground/50">
           请先在 Agent 模式下选择或创建一个工作区，再来管理它的 Skills 与 MCP。
         </div>
@@ -223,183 +324,213 @@ export function AgentSkillsView(): React.ReactElement {
           管理全局配置
         </button>
       </div>
-    )
+    );
   }
 
   return (
-    <div data-profer-navigation-region="agent-skills" className="relative flex h-full flex-col overflow-hidden">
-      {/* 顶部标题区保留为窗口拖拽区；标题、工作区选择和窗口按钮保持可交互。 */}
-      <div className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region" aria-hidden="true" />
-      <WindowControlsHost id="agent-skills" priority={20} className="absolute right-2 top-[3px] z-20" />
-      <div className="relative mx-auto flex w-full max-w-6xl shrink-0 items-center justify-between gap-3 px-4 pb-4 pt-4 sm:px-6 lg:px-8">
-        <div className="titlebar-no-drag flex items-center gap-2.5">
-          <Blocks className="size-6 text-foreground/70" />
-          <h1 className="text-2xl font-semibold text-foreground">{globalConfigOpen ? 'Agent 技能 · 全局' : 'Agent 技能'}</h1>
+    <div
+      data-profer-navigation-region="agent-skills"
+      className="flex h-full flex-col overflow-hidden"
+    >
+      {/* 顶部 50px 留给 AppShell 的全局 drag-region。不能把含 pt-14 的外层设为
+          no-drag，否则它的布局盒会覆盖窗口顶端并抵消全局拖拽区。交互控件从 56px
+          开始的内层才设为 no-drag，以同时保证窗口拖动和 Radix Popover 点击可用。 */}
+      <div className="mx-auto mt-14 flex w-full max-w-6xl shrink-0 flex-col gap-3 px-4 pb-4 sm:px-6 lg:px-8">
+        <div className="titlebar-no-drag flex min-h-5 items-center">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => setActiveView("conversations")}
+                className="flex items-center gap-1.5 rounded-md text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                aria-label="返回当前 Agent 会话"
+              >
+                <ArrowLeft size={14} />
+                返回
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>返回当前 Agent 会话</TooltipContent>
+          </Tooltip>
         </div>
-
-        <div className="titlebar-no-drag flex items-center gap-2">
-          <button
-            type="button"
-            aria-pressed={globalConfigOpen}
-            onClick={() => setGlobalConfigOpen((open) => !open)}
-            className={cn(
-              'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium shadow-sm transition-colors',
-              globalConfigOpen
-                ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                : 'border border-border/60 bg-content-area text-foreground/80 hover:bg-foreground/[0.04]',
+        <div className="grid min-h-[76px] grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Blocks className="size-6 shrink-0 text-foreground/70" />
+            <div className="min-w-0">
+              <h1 className="text-2xl font-semibold text-foreground">
+                {globalConfigOpen ? "Agent 技能 · 全局" : "Agent 技能"}
+              </h1>
+              <p className="mt-1 whitespace-nowrap text-[13px] text-muted-foreground">
+                {globalConfigOpen
+                  ? "管理跨工作区生效的 Skills 与预设"
+                  : "管理当前工作区的 Skills、预设与其他 Agent 能力"}
+              </p>
+            </div>
+            {globalConfigOpen && (
+              <div className="flex min-h-[44px] min-w-0 items-center gap-2 rounded-xl bg-gradient-to-br from-primary/12 via-primary/[0.05] to-transparent px-3 py-2 shadow-sm ring-1 ring-primary/10">
+                <Globe2 size={16} className="shrink-0 text-primary" />
+                <div className="min-w-0 text-[11px] leading-4 text-muted-foreground">
+                  <div className="font-semibold text-foreground">全局能力</div>
+                  管理跨工作区生效的 Skill 与预设；内置元类型只读。
+                </div>
+              </div>
             )}
-          >
-            <Globe2 size={14} />
-            全局配置
-          </button>
-          <Popover open={wsPopoverOpen} onOpenChange={setWsPopoverOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="flex items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 py-1.5 text-[13px] font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.04]"
-              >
-                <FolderOpen size={14} className="text-foreground/45" />
-                <span className="max-w-[180px] truncate">{data.workspaceName}</span>
-                <ChevronDown size={14} className="text-foreground/45" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent align="end" className="max-h-[320px] w-56 overflow-y-auto scrollbar-thin p-1">
-            {workspaces.map((w) => (
-              <button
-                key={w.id}
-                type="button"
-                onClick={() => {
-                  setGlobalConfigOpen(false)
-                  if (w.id !== currentWorkspaceId) {
-                    selectProject(w.id, { resetView: false })
-                    toast.success(`已切换到工作区「${w.name}」`)
-                  }
-                  setWsPopoverOpen(false)
-                }}
-                className={cn(
-                  'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors',
-                  w.id === currentWorkspaceId
-                    ? 'bg-accent text-accent-foreground'
-                    : 'text-foreground/80 hover:bg-accent/50',
-                )}
-              >
-                <span className="truncate">{w.name}</span>
-                {w.id === currentWorkspaceId && <Check size={14} className="shrink-0 text-primary" />}
-              </button>
-            ))}
-            </PopoverContent>
-          </Popover>
-        </div>
-      </div>
-
-      {!globalConfigOpen && <>
-      {/* 工具条 */}
-      <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 flex-wrap items-center gap-2 px-4 pb-4 sm:px-6 lg:px-8">
-        {/* Skills / 市场 / MCP / 记忆 切换 */}
-        <div className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5">
-          {(() => {
-            const activeIndex = Math.max(0, tabList.findIndex((t) => t.value === tab))
-            const tabCount = tabList.length
-            return (
-              <div
-                className="absolute bottom-0.5 top-0.5 rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out"
-                style={{
-                  width: `calc(${100 / tabCount}% - 2px)`,
-                  transform: `translateX(${activeIndex * 100}%)`,
-                }}
-              />
-            )
-          })()}
-          {tabList.map(({ value, label, count }, index) => (
+          </div>
+          <div className="titlebar-no-drag flex shrink-0 items-center justify-end gap-2 whitespace-nowrap">
+            {!globalConfigOpen && (
+              <Popover open={wsPopoverOpen} onOpenChange={setWsPopoverOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 py-1.5 text-[13px] font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.04]"
+                  >
+                    <FolderOpen size={14} className="text-foreground/45" />
+                    <span className="max-w-[180px] truncate">
+                      {data.workspaceName}
+                    </span>
+                    <ChevronDown size={14} className="text-foreground/45" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  className="max-h-[320px] w-56 overflow-y-auto scrollbar-thin p-1"
+                >
+                  {workspaces.map((w) => (
+                    <button
+                      key={w.id}
+                      type="button"
+                      onClick={() => {
+                        setGlobalConfigOpen(false);
+                        if (w.id !== currentWorkspaceId) {
+                          selectProject(w.id, { resetView: false });
+                          toast.success(`已切换到工作区「${w.name}」`);
+                        }
+                        setWsPopoverOpen(false);
+                      }}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors",
+                        w.id === currentWorkspaceId
+                          ? "bg-accent text-accent-foreground"
+                          : "text-foreground/80 hover:bg-accent/50",
+                      )}
+                    >
+                      <span className="truncate">{w.name}</span>
+                      {w.id === currentWorkspaceId && (
+                        <Check size={14} className="shrink-0 text-primary" />
+                      )}
+                    </button>
+                  ))}
+                </PopoverContent>
+              </Popover>
+            )}
             <button
-              key={value}
-              ref={(element) => { tabButtonRefs.current[index] = element }}
               type="button"
-              data-agent-skill-tab={value}
-              aria-selected={tab === value}
-              onClick={() => { setTab(value) }}
-              onKeyDown={(event) => handleTabKeyDown(event, index)}
+              aria-pressed={globalConfigOpen}
+              onClick={() => setGlobalConfigOpen((open) => !open)}
               className={cn(
-                'relative z-[1] flex min-w-[72px] items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium transition-colors duration-200 sm:min-w-[90px] sm:px-3',
-                tab === value ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                "flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium shadow-sm transition-colors",
+                globalConfigOpen
+                  ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                  : "border border-border/60 bg-content-area text-foreground/80 hover:bg-foreground/[0.04]",
               )}
             >
-              {value === 'marketplace' && <Store size={13} />}
-              {value === 'presets' && <BriefcaseBusiness size={13} />}
-              {label}
-              <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
+              <Globe2 size={14} />
+              全局配置
             </button>
-          ))}
+          </div>
         </div>
-
-        {/* 搜索框 */}
-        <div className="flex h-8 min-w-[180px] flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 transition-colors focus-within:border-primary/40">
-          <Search size={14} className="shrink-0 text-foreground/40" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={tab === 'skills' ? '搜索 Skills...' : tab === 'mcp' ? '搜索 MCP 服务器...' : tab === 'memory' ? '搜索记忆正文...' : '搜索预设...'}
-            className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
-          />
-        </div>
-
-        {tab === 'skills' && <><label className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-2.5 text-xs text-foreground/70"><Switch checked={onlyEffectiveSkills} onCheckedChange={setOnlyEffectiveSkills} className="scale-75" />只看生效的</label><select value={skillSortMode} onChange={(event) => { const value = event.target.value as SkillSortMode; setSkillSortMode(value); try { window.localStorage.setItem(SKILL_SORT_STORAGE_KEY, value) } catch {} }} className="h-8 rounded-lg border border-border/60 bg-content-area px-2 text-xs text-foreground/70 outline-none"><option value="default">默认排序</option><option value="alpha">按字母排序</option><option value="updated">按修改时间排序</option></select></>}
-        {tab === 'presets' && <label className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-2.5 text-xs text-foreground/70"><Switch checked={onlyEffectivePresets} onCheckedChange={setOnlyEffectivePresets} className="scale-75" />只看生效的</label>}
-
-        {/* 预设：从其他工作区导入 */}
-        {tab === 'presets' && (
-          <button
-            type="button"
-            onClick={() => setShowImportPreset(true)}
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
-          >
-            <Plus size={14} />
-            <span>导入</span>
-          </button>
-        )}
-
-        {/* Skills：新建/从其他工作区导入 */}
-        {tab === 'skills' && (
-          <>
-          <button
-            type="button"
-            onClick={() => setCreateWorkspaceSkillOpen(true)}
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-          >
-            <Plus size={14} />
-            <span>新建 Skill</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowImport(true)}
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
-          >
-            <Plus size={14} />
-            <span>导入</span>
-          </button>
-          </>
-        )}
-
-        {/* 新增 MCP */}
-        {tab === 'mcp' && (
-          <button
-            type="button"
-            onClick={() => { setEditingMcp(null); setMcpSheetOpen(true) }}
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-          >
-            <Plus size={14} />
-            <span>添加服务器</span>
-          </button>
-        )}
       </div>
-      </>}
+
+      <AgentSkillsToolbar
+        scope={globalConfigOpen ? "global" : "workspace"}
+        domain={globalConfigOpen ? globalConfigTab : tab}
+        tabs={
+          globalConfigOpen
+            ? [
+                { value: "skills", label: "全局 Skill" },
+                { value: "presets", label: "全局预设" },
+              ]
+            : tabList
+        }
+        search={search}
+        searchPlaceholder={
+          globalConfigOpen
+            ? globalConfigTab === "skills"
+              ? "搜索全局 Skills…"
+              : "搜索全局预设…"
+            : tab === "skills"
+              ? "搜索 Skills..."
+              : tab === "mcp"
+                ? "搜索 MCP 服务器..."
+                : tab === "memory"
+                  ? "搜索记忆正文..."
+                  : "搜索预设..."
+        }
+        onDomainChange={(value) => {
+          if (globalConfigOpen)
+            setGlobalConfigTab(value === "presets" ? "presets" : "skills");
+          else if (value !== "memory" || !isTeamWorkspace) setTab(value);
+        }}
+        onSearchChange={setSearch}
+        onCreate={
+          globalConfigOpen
+            ? () => {
+                if (globalConfigTab === "skills")
+                  setGlobalCreateSkillToken((value) => value + 1);
+                else setGlobalCreatePresetToken((value) => value + 1);
+              }
+            : tab === "skills"
+              ? () => setCreateWorkspaceSkillOpen(true)
+              : tab === "presets"
+                ? () => setWorkspaceCreatePresetToken((value) => value + 1)
+                : tab === "mcp"
+                  ? () => {
+                      setEditingMcp(null);
+                      setMcpSheetOpen(true);
+                    }
+                  : undefined
+        }
+        onImport={
+          globalConfigOpen
+            ? globalConfigTab === "skills"
+              ? () => setGlobalImportSkillToken((value) => value + 1)
+              : undefined
+            : tab === "skills"
+              ? () => setShowImport(true)
+              : tab === "presets"
+                ? () => setShowImportPreset(true)
+                : undefined
+        }
+        importLabel="导入"
+        onSecondaryImport={
+          !globalConfigOpen && tab === "presets"
+            ? () => setWorkspaceImportPresetFileToken((value) => value + 1)
+            : undefined
+        }
+        secondaryImportLabel="从文件导入"
+        onExport={
+          !globalConfigOpen && tab === "presets"
+            ? () => setWorkspaceExportPresetToken((value) => value + 1)
+            : undefined
+        }
+      />
 
       {/* 内容 */}
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
         <div className="mx-auto w-full max-w-6xl px-4 pb-10 sm:px-6 lg:px-8">
-          {globalConfigOpen ? <GlobalCapabilitiesView initialTab={globalConfigTab} workspaceSlug={data.workspaceSlug} /> : tab === 'marketplace' && isTeamWorkspace ? (
+          {globalConfigOpen ? (
+            <GlobalCapabilitiesView
+              initialTab={globalConfigTab}
+              workspaceSlug={data.workspaceSlug}
+              search={search}
+              createSkillRequestToken={globalCreateSkillToken}
+              importSkillRequestToken={globalImportSkillToken}
+              createPresetRequestToken={globalCreatePresetToken}
+            />
+          ) : tab === "marketplace" && isTeamWorkspace ? (
             marketLoading ? (
-              <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
+              <div className="py-20 text-center text-sm text-muted-foreground">
+                加载中...
+              </div>
             ) : filteredMarket.length === 0 ? (
               <div className="py-20 text-center text-sm text-muted-foreground">
                 <Store size={32} className="mx-auto mb-3 text-foreground/30" />
@@ -408,33 +539,44 @@ export function AgentSkillsView(): React.ReactElement {
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {filteredMarket.map((skill) => (
-                  <div key={skill.slug} className="flex flex-col rounded-xl border border-border bg-card p-4">
+                  <div
+                    key={skill.slug}
+                    className="flex flex-col rounded-xl border border-border bg-card p-4"
+                  >
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="flex-1 min-w-0">
-                        <h3 className="text-sm font-semibold truncate">{skill.name}</h3>
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{skill.description || '暂无描述'}</p>
+                        <h3 className="text-sm font-semibold truncate">
+                          {skill.name}
+                        </h3>
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                          {skill.description || "暂无描述"}
+                        </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 text-[11px] text-muted-foreground mt-auto pt-3">
                       <span>v{skill.version}</span>
                       <span>·</span>
-                      <span className="truncate">{skill.publishedBy || '未知'}</span>
+                      <span className="truncate">
+                        {skill.publishedBy || "未知"}
+                      </span>
                     </div>
                     <button
                       onClick={async () => {
-                        setInstallingSlug(skill.slug)
+                        setInstallingSlug(skill.slug);
                         try {
-                          await window.electronAPI.skillMarketplace.installTeamSkill({
-                            workspaceId: teamWorkspaceId!,
-                            skillSlug: skill.slug,
-                            targetWorkspaceSlug: data.workspaceSlug,
-                          })
-                          toast.success(`已安装 ${skill.name}`)
-                          bumpCapabilities((v) => v + 1)
+                          await window.electronAPI.skillMarketplace.installTeamSkill(
+                            {
+                              workspaceId: teamWorkspaceId!,
+                              skillSlug: skill.slug,
+                              targetWorkspaceSlug: data.workspaceSlug,
+                            },
+                          );
+                          toast.success(`已安装 ${skill.name}`);
+                          bumpCapabilities((v) => v + 1);
                         } catch (e: any) {
-                          toast.error(`安装失败: ${e.message}`)
+                          toast.error(`安装失败: ${e.message}`);
                         } finally {
-                          setInstallingSlug(null)
+                          setInstallingSlug(null);
                         }
                       }}
                       disabled={installingSlug === skill.slug}
@@ -451,11 +593,25 @@ export function AgentSkillsView(): React.ReactElement {
                 ))}
               </div>
             )
-          ) : tab === 'presets' ? (
-            <AgentPresetSettings workspaceSlug={data.workspaceSlug} search={search} onlyEffective={onlyEffectivePresets} onPromote={setPromotePreset} onOpenGlobalConfig={() => { setGlobalConfigTab('presets'); setGlobalConfigOpen(true) }} />
+          ) : tab === "presets" ? (
+            <AgentPresetSettings
+              workspaceSlug={data.workspaceSlug}
+              search={search}
+              hideToolbar
+              createRequestToken={workspaceCreatePresetToken}
+              importFileRequestToken={workspaceImportPresetFileToken}
+              exportRequestToken={workspaceExportPresetToken}
+              onPromote={setPromotePreset}
+              onOpenGlobalConfig={() => {
+                setGlobalConfigTab("presets");
+                setGlobalConfigOpen(true);
+              }}
+            />
           ) : data.loading ? (
-            <div className="py-20 text-center text-sm text-muted-foreground">加载中...</div>
-          ) : tab === 'skills' ? (
+            <div className="py-20 text-center text-sm text-muted-foreground">
+              加载中...
+            </div>
+          ) : tab === "skills" ? (
             <SkillsTab
               workspaceSkills={workspaceSkills}
               globalSkills={globalSkills}
@@ -471,84 +627,142 @@ export function AgentSkillsView(): React.ReactElement {
               onPromote={(skill) => setPromoteSkill(skill)}
               publishingSlug={publishingSlug}
             />
-          ) : tab === 'memory' ? (
-            <WorkspaceMemoryTab workspaceSlug={data.workspaceSlug} search={search} />
+          ) : tab === "memory" ? (
+            <WorkspaceMemoryTab
+              workspaceSlug={data.workspaceSlug}
+              search={search}
+            />
           ) : (
             <McpTab
               entries={serverEntries}
               total={mcpCount}
-              onOpen={(name, entry) => { setEditingMcp({ name, entry }); setMcpSheetOpen(true) }}
+              onOpen={(name, entry) => {
+                setEditingMcp({ name, entry });
+                setMcpSheetOpen(true);
+              }}
               onToggle={data.toggleMcp}
               onRequestDelete={setPendingDeleteMcpName}
-              onAdd={() => { setEditingMcp(null); setMcpSheetOpen(true) }}
+              onAdd={() => {
+                setEditingMcp(null);
+                setMcpSheetOpen(true);
+              }}
             />
           )}
         </div>
       </div>
 
       {/* 详情抽屉 */}
-      {selectedIsGlobal ? <MasterSkillDetailSheet
-        skill={selectedSkill ? {
-          schemaVersion: 1,
-          skillId: selectedSkill.sourceSkillId ?? selectedSkill.slug,
-          slug: selectedSkill.slug,
-          type: selectedSkill.sourceSkillType ?? 'user-global',
-          version: selectedSkill.version ?? '1.0.0',
-          name: selectedSkill.name,
-          description: selectedSkill.description,
-          createdAt: '',
-          updatedAt: '',
-          enabledInWorkspace: selectedSkill.enabled,
-          replacedInWorkspace: false,
-          sourceStatus: 'available',
-          actualSource: 'global',
-        } : null} workspaceSlug={data.workspaceSlug} onOpenChange={(open) => { if (!open) setSelectedSkillKey(null) }} onChanged={() => bumpCapabilities((v) => v + 1)} readOnlyGlobal onCopyToWorkspace={async (skillId) => { await window.electronAPI.globalSkill.copyToWorkspace(skillId, data.workspaceSlug); bumpCapabilities((v) => v + 1); toast.success('已在当前工作区创建副本') }} onOpenGlobalConfig={() => { setGlobalConfigTab('skills'); setGlobalConfigOpen(true) }} /> : <SkillDetailSheet
-        skill={selectedSkill}
-        workspaceSlug={data.workspaceSlug}
-        isBuiltin={selectedIsBuiltin}
-        updating={data.updatingSkill === selectedSkill?.slug}
-        onOpenChange={(open) => { if (!open) setSelectedSkillKey(null) }}
-        onToggle={(enabled) => selectedSkill && data.toggleSkill(selectedSkill.slug, enabled, selectedSkill.workspaceSkillId ? '' : (selectedSkill.sourceSkillId ?? ''))}
-        onUpdate={() => selectedSkill && data.updateSkill(selectedSkill.slug)}
-        onRequestDelete={() => selectedSkill && setPendingDeleteSkill(selectedSkill)}
-        onOpenFolder={() => selectedSkill && openSkillFolder(selectedSkill)}
-        onChanged={() => bumpCapabilities((v) => v + 1)}
-      />}
+      {selectedIsGlobal ? (
+        <MasterSkillDetailSheet
+          skill={
+            selectedSkill
+              ? {
+                  schemaVersion: 1,
+                  skillId: selectedSkill.sourceSkillId ?? selectedSkill.slug,
+                  slug: selectedSkill.slug,
+                  type: selectedSkill.sourceSkillType ?? "user-global",
+                  version: selectedSkill.version ?? "1.0.0",
+                  name: selectedSkill.name,
+                  description: selectedSkill.description,
+                  createdAt: "",
+                  updatedAt: "",
+                  enabledInWorkspace: selectedSkill.enabled,
+                  replacedInWorkspace: false,
+                  sourceStatus: "available",
+                  actualSource: "global",
+                }
+              : null
+          }
+          workspaceSlug={data.workspaceSlug}
+          onOpenChange={(open) => {
+            if (!open) setSelectedSkillKey(null);
+          }}
+          onChanged={() => bumpCapabilities((v) => v + 1)}
+          readOnlyGlobal
+          onCopyToWorkspace={async (skillId) => {
+            await window.electronAPI.globalSkill.copyToWorkspace(
+              skillId,
+              data.workspaceSlug,
+            );
+            bumpCapabilities((v) => v + 1);
+            toast.success("已在当前工作区创建副本");
+          }}
+          onOpenGlobalConfig={() => {
+            setGlobalConfigTab("skills");
+            setGlobalConfigOpen(true);
+          }}
+        />
+      ) : (
+        <SkillDetailSheet
+          skill={selectedSkill}
+          workspaceSlug={data.workspaceSlug}
+          isBuiltin={selectedIsBuiltin}
+          updating={data.updatingSkill === selectedSkill?.slug}
+          onOpenChange={(open) => {
+            if (!open) setSelectedSkillKey(null);
+          }}
+          onToggle={(enabled) =>
+            selectedSkill &&
+            data.toggleSkill(
+              selectedSkill.slug,
+              enabled,
+              selectedSkill.actualSource === "workspace"
+                ? ""
+                : (selectedSkill.sourceSkillId ?? ""),
+            )
+          }
+          onUpdate={() => selectedSkill && data.updateSkill(selectedSkill.slug)}
+          onRequestDelete={() =>
+            selectedSkill && setPendingDeleteSkill(selectedSkill)
+          }
+          onOpenFolder={() =>
+            selectedSkill && openSkillFolder(selectedSkill.slug)
+          }
+          onChanged={() => bumpCapabilities((v) => v + 1)}
+        />
+      )}
 
       {/* Skill 删除确认 */}
       <ConfirmDialog
         open={pendingDeleteSkill !== null}
-        onOpenChange={(open) => { if (!open) setPendingDeleteSkill(null) }}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteSkill(null);
+        }}
         title={`确认删除 Skill「${pendingDeleteSkill?.name}」？`}
         description="删除后将无法恢复，确定要卸载这个 Skill 吗？"
         confirmLabel="删除"
         loadingLabel="删除中..."
         loading={isDeletingSkill}
         onConfirm={async () => {
-          if (!pendingDeleteSkill || isDeletingSkill) return
-          setIsDeletingSkill(true)
-          const ok = await data.deleteSkill(pendingDeleteSkill.slug, pendingDeleteSkill.name)
-          setIsDeletingSkill(false)
-          setPendingDeleteSkill(null)
-          if (ok) setSelectedSkillKey(null)
+          if (!pendingDeleteSkill || isDeletingSkill) return;
+          setIsDeletingSkill(true);
+          const ok = await data.deleteSkill(
+            pendingDeleteSkill.slug,
+            pendingDeleteSkill.name,
+          );
+          setIsDeletingSkill(false);
+          setPendingDeleteSkill(null);
+          if (ok) setSelectedSkillKey(null);
         }}
       />
 
       {/* MCP 删除确认 */}
       <ConfirmDialog
         open={pendingDeleteMcpName !== null}
-        onOpenChange={(open) => { if (!open) setPendingDeleteMcpName(null) }}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteMcpName(null);
+        }}
         title={`确认删除 MCP 服务器「${pendingDeleteMcpName}」？`}
         description="删除后将无法恢复，确定要删除这个 MCP 服务器吗？"
         confirmLabel="删除"
         loadingLabel="删除中..."
         loading={isDeletingMcp}
         onConfirm={async () => {
-          if (!pendingDeleteMcpName || isDeletingMcp) return
-          setIsDeletingMcp(true)
-          await data.deleteMcp(pendingDeleteMcpName)
-          setIsDeletingMcp(false)
-          setPendingDeleteMcpName(null)
+          if (!pendingDeleteMcpName || isDeletingMcp) return;
+          setIsDeletingMcp(true);
+          await data.deleteMcp(pendingDeleteMcpName);
+          setIsDeletingMcp(false);
+          setPendingDeleteMcpName(null);
         }}
       />
 
@@ -556,7 +770,10 @@ export function AgentSkillsView(): React.ReactElement {
         open={mcpSheetOpen}
         server={editingMcp}
         workspaceSlug={data.workspaceSlug}
-        onOpenChange={(open) => { setMcpSheetOpen(open); if (!open) bumpCapabilities((v) => v + 1) }}
+        onOpenChange={(open) => {
+          setMcpSheetOpen(open);
+          if (!open) bumpCapabilities((v) => v + 1);
+        }}
         onSaved={() => setMcpSheetOpen(false)}
         onChanged={() => bumpCapabilities((v) => v + 1)}
       />
@@ -577,33 +794,47 @@ export function AgentSkillsView(): React.ReactElement {
       />
       <WorkspaceScopeSelectDialog
         open={promoteSkill !== null}
-        title={`提升「${promoteSkill?.name ?? ''}」为全局 Skill`}
+        title={`提升「${promoteSkill?.name ?? ""}」为全局 Skill`}
         description="选择该全局 Skill 要在哪些工作区生效；下一步选择是否保留原工作区 Skill。"
         workspaces={workspaces.filter((workspace) => !workspace.isDeleted)}
         initialWorkspaceSlug={data.workspaceSlug}
-        onOpenChange={(open) => { if (!open) setPromoteSkill(null) }}
+        onOpenChange={(open) => {
+          if (!open) setPromoteSkill(null);
+        }}
         onConfirm={async (targets, keepWorkspaceCopy) => {
-          if (!promoteSkill) return
-          await window.electronAPI.promoteWorkspaceSkillToGlobal(data.workspaceSlug, promoteSkill.slug, targets, keepWorkspaceCopy)
-          setPromoteSkill(null)
-          bumpCapabilities((v) => v + 1)
-          toast.success(`已提升为全局 Skill：${promoteSkill.name}`)
+          if (!promoteSkill) return;
+          await window.electronAPI.promoteWorkspaceSkillToGlobal(
+            data.workspaceSlug,
+            promoteSkill.slug,
+            targets,
+            keepWorkspaceCopy,
+          );
+          setPromoteSkill(null);
+          bumpCapabilities((v) => v + 1);
+          toast.success(`已提升为全局 Skill：${promoteSkill.name}`);
         }}
       />
 
       <WorkspaceScopeSelectDialog
         open={promotePreset !== null}
-        title={`提升「${promotePreset?.name ?? ''}」为全局预设`}
+        title={`提升「${promotePreset?.name ?? ""}」为全局预设`}
         description="选择该全局预设要在哪些工作区生效；下一步选择是否保留原工作区预设。"
         workspaces={workspaces.filter((workspace) => !workspace.isDeleted)}
         initialWorkspaceSlug={data.workspaceSlug}
-        onOpenChange={(open) => { if (!open) setPromotePreset(null) }}
+        onOpenChange={(open) => {
+          if (!open) setPromotePreset(null);
+        }}
         onConfirm={async (targets, keepWorkspaceCopy) => {
-          if (!promotePreset) return
-          await window.electronAPI.promoteWorkspacePresetToGlobal(data.workspaceSlug, promotePreset.id, targets, keepWorkspaceCopy)
-          setPromotePreset(null)
-          bumpCapabilities((v) => v + 1)
-          toast.success(`已提升为全局预设：${promotePreset.name}`)
+          if (!promotePreset) return;
+          await window.electronAPI.promoteWorkspacePresetToGlobal(
+            data.workspaceSlug,
+            promotePreset.id,
+            targets,
+            keepWorkspaceCopy,
+          );
+          setPromotePreset(null);
+          bumpCapabilities((v) => v + 1);
+          toast.success(`已提升为全局预设：${promotePreset.name}`);
         }}
       />
 
@@ -616,33 +847,63 @@ export function AgentSkillsView(): React.ReactElement {
         }}
       />
     </div>
-  )
+  );
 }
 
 // ===== Skills Tab =====
 
 interface SkillsTabProps {
-  workspaceSkills: SkillMeta[]
-  globalSkills: SkillMeta[]
-  builtinSkills: SkillMeta[]
-  total: number
-  updateCount: number
-  updatingSkill: string | null
-  onPromote?: (skill: SkillMeta) => void
-  isBuiltin: (slug: string) => boolean
-  onOpen: (skill: SkillMeta) => void
-  onToggle: (slug: string, enabled: boolean, sourceSkillId?: string) => void
-  onUpdate: (slug: string) => void
-  onPublish?: (slug: string) => void
-  publishingSlug?: string | null
+  workspaceSkills: SkillMeta[];
+  globalSkills: SkillMeta[];
+  builtinSkills: SkillMeta[];
+  total: number;
+  updateCount: number;
+  updatingSkill: string | null;
+  onPromote?: (skill: SkillMeta) => void;
+  isBuiltin: (slug: string) => boolean;
+  onOpen: (skill: SkillMeta) => void;
+  onToggle: (slug: string, enabled: boolean, sourceSkillId?: string) => void;
+  onUpdate: (slug: string) => void;
+  onPublish?: (slug: string) => void;
+  publishingSlug?: string | null;
 }
 
-function SkillsTab({ workspaceSkills, globalSkills, builtinSkills, total, updateCount, updatingSkill, onPromote, isBuiltin, onOpen, onToggle, onUpdate, onPublish, publishingSlug }: SkillsTabProps): React.ReactElement {
+function SkillsTab({
+  workspaceSkills,
+  globalSkills,
+  builtinSkills,
+  total,
+  updateCount,
+  updatingSkill,
+  onPromote,
+  isBuiltin,
+  onOpen,
+  onToggle,
+  onUpdate,
+  onPublish,
+  publishingSlug,
+}: SkillsTabProps): React.ReactElement {
   if (total === 0) {
-    return <EmptyState icon={<Blocks className="size-8 text-foreground/30" />} title="暂无 Skill" hint="可以在 Agent 模式下让 Profer 帮你联网查找并安装 Skill，或从其他工作区导入。" />
+    return (
+      <EmptyState
+        icon={<Blocks className="size-8 text-foreground/30" />}
+        title="暂无 Skill"
+        hint="可以在 Agent 模式下让 Profer 帮你联网查找并安装 Skill，或从其他工作区导入。"
+      />
+    );
   }
-  if (workspaceSkills.length === 0 && globalSkills.length === 0 && builtinSkills.length === 0) {
-    return <EmptyState icon={<Search className="size-8 text-foreground/30" />} title="没有匹配的 Skill" hint="试试更换搜索关键词。" />
+  if (
+    workspaceSkills.length === 0 &&
+    globalSkills.length === 0 &&
+    builtinSkills.length === 0
+  ) {
+    return (
+      <EmptyState
+        icon={<Search className="size-8 text-foreground/30" />}
+        title="没有匹配的 Skill"
+        hint="试试更换搜索关键词。"
+      />
+    );
   }
 
   return (
@@ -653,73 +914,143 @@ function SkillsTab({ workspaceSkills, globalSkills, builtinSkills, total, update
         </div>
       )}
       {workspaceSkills.length > 0 && (
-        <SkillSection title="工作区 Skills" skills={workspaceSkills} isBuiltin={isBuiltin} interactive updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} onPublish={onPublish} publishingSlug={publishingSlug} />
+        <SkillSection
+          title="工作区 Skills"
+          skills={workspaceSkills}
+          isBuiltin={isBuiltin}
+          interactive
+          updatingSkill={updatingSkill}
+          onOpen={onOpen}
+          onToggle={onToggle}
+          onUpdate={onUpdate}
+          onPublish={onPublish}
+          publishingSlug={publishingSlug}
+        />
       )}
       {globalSkills.length > 0 && (
-        <SkillSection title="全局 Skills" skills={globalSkills} isBuiltin={isBuiltin} interactive updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} onPublish={onPublish} publishingSlug={publishingSlug} />
+        <SkillSection
+          title="全局 Skills"
+          skills={globalSkills}
+          isBuiltin={isBuiltin}
+          interactive
+          updatingSkill={updatingSkill}
+          onOpen={onOpen}
+          onToggle={onToggle}
+          onUpdate={onUpdate}
+          onPublish={onPublish}
+          publishingSlug={publishingSlug}
+        />
       )}
       {builtinSkills.length > 0 && (
-        <SkillSection title="元 Skills" skills={builtinSkills} isBuiltin={isBuiltin} interactive updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} onPublish={onPublish} publishingSlug={publishingSlug} />
+        <SkillSection
+          title="元 Skills"
+          skills={builtinSkills}
+          isBuiltin={isBuiltin}
+          interactive
+          updatingSkill={updatingSkill}
+          onOpen={onOpen}
+          onToggle={onToggle}
+          onUpdate={onUpdate}
+          onPublish={onPublish}
+          publishingSlug={publishingSlug}
+        />
       )}
-
     </div>
-  )
+  );
 }
 
 interface SkillSectionProps {
-  title: string
-  skills: SkillMeta[]
-  interactive?: boolean
-  isBuiltin: (slug: string) => boolean
-  updatingSkill: string | null
-  onOpen: (skill: SkillMeta) => void
-  onToggle: (slug: string, enabled: boolean, sourceSkillId?: string) => void
-  onUpdate: (slug: string) => void
-  onPublish?: (slug: string) => void
-  onPromote?: (skill: SkillMeta) => void
-  publishingSlug?: string | null
+  title: string;
+  skills: SkillMeta[];
+  interactive?: boolean;
+  isBuiltin: (slug: string) => boolean;
+  updatingSkill: string | null;
+  onOpen: (skill: SkillMeta) => void;
+  onToggle: (slug: string, enabled: boolean, sourceSkillId?: string) => void;
+  onUpdate: (slug: string) => void;
+  onPublish?: (slug: string) => void;
+  onPromote?: (skill: SkillMeta) => void;
+  publishingSlug?: string | null;
 }
 
-function SkillSection({ title, skills, isBuiltin, interactive = true, updatingSkill, onOpen, onToggle, onUpdate, onPublish, onPromote, publishingSlug }: SkillSectionProps): React.ReactElement {
+function SkillSection({
+  title,
+  skills,
+  isBuiltin,
+  interactive = true,
+  updatingSkill,
+  onOpen,
+  onToggle,
+  onUpdate,
+  onPublish,
+  onPromote,
+  publishingSlug,
+}: SkillSectionProps): React.ReactElement {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2 px-1">
-        <span className="text-[13px] font-medium text-foreground/55">{title}</span>
-        <span className="text-[12px] tabular-nums text-foreground/35">{skills.length}</span>
+        <span className="text-[13px] font-medium text-foreground/55">
+          {title}
+        </span>
+        <span className="text-[12px] tabular-nums text-foreground/35">
+          {skills.length}
+        </span>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {skills.map((skill) => (
           <SkillCard
-            key={skill.workspaceSkillId ? `workspace:${skill.workspaceSkillId}` : `global:${skill.sourceSkillId ?? skill.slug}`}
+            key={skill.sourceSkillId ?? skill.slug}
             skill={skill}
-            isBuiltin={!skill.workspaceSkillId && skill.sourceSkillType === 'builtin-meta'}
+            isBuiltin={
+              skill.actualSource !== "workspace" &&
+              skill.sourceSkillType === "builtin-meta"
+            }
             updating={updatingSkill === skill.slug}
             onOpen={() => onOpen(skill)}
-            onToggle={(enabled) => onToggle(skill.slug, enabled, skill.workspaceSkillId ? '' : (skill.sourceSkillId ?? ''))}
+            onToggle={(enabled) =>
+              onToggle(
+                skill.slug,
+                enabled,
+                skill.actualSource === "workspace"
+                  ? ""
+                  : (skill.sourceSkillId ?? ""),
+              )
+            }
             onUpdate={() => onUpdate(skill.slug)}
             onPublish={onPublish ? () => onPublish(skill.slug) : undefined}
             publishing={publishingSlug === skill.slug}
             interactive={interactive}
-            onPromote={onPromote && title === '工作区 Skills' ? () => onPromote(skill) : undefined}
+            onPromote={
+              onPromote && title === "工作区 Skills"
+                ? () => onPromote(skill)
+                : undefined
+            }
           />
         ))}
       </div>
     </div>
-  )
+  );
 }
 
 // ===== MCP Tab =====
 
 interface McpTabProps {
-  entries: Array<[string, McpServerEntry]>
-  total: number
-  onOpen: (name: string, entry: McpServerEntry) => void
-  onToggle: (name: string, enabled: boolean) => void
-  onRequestDelete: (name: string) => void
-  onAdd: () => void
+  entries: Array<[string, McpServerEntry]>;
+  total: number;
+  onOpen: (name: string, entry: McpServerEntry) => void;
+  onToggle: (name: string, enabled: boolean) => void;
+  onRequestDelete: (name: string) => void;
+  onAdd: () => void;
 }
 
-function McpTab({ entries, total, onOpen, onToggle, onRequestDelete, onAdd }: McpTabProps): React.ReactElement {
+function McpTab({
+  entries,
+  total,
+  onOpen,
+  onToggle,
+  onRequestDelete,
+  onAdd,
+}: McpTabProps): React.ReactElement {
   if (total === 0) {
     return (
       <EmptyState
@@ -737,10 +1068,16 @@ function McpTab({ entries, total, onOpen, onToggle, onRequestDelete, onAdd }: Mc
           </button>
         }
       />
-    )
+    );
   }
   if (entries.length === 0) {
-    return <EmptyState icon={<Search className="size-8 text-foreground/30" />} title="没有匹配的 MCP 服务器" hint="试试更换搜索关键词。" />
+    return (
+      <EmptyState
+        icon={<Search className="size-8 text-foreground/30" />}
+        title="没有匹配的 MCP 服务器"
+        hint="试试更换搜索关键词。"
+      />
+    );
   }
 
   return (
@@ -756,20 +1093,36 @@ function McpTab({ entries, total, onOpen, onToggle, onRequestDelete, onAdd }: Mc
         />
       ))}
     </div>
-  )
+  );
 }
 
 // ===== Empty State =====
 
-function EmptyState({ icon, title, hint, action }: { icon: React.ReactNode; title: string; hint: string; action?: React.ReactNode }): React.ReactElement {
+function EmptyState({
+  icon,
+  title,
+  hint,
+  action,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  action?: React.ReactNode;
+}): React.ReactElement {
   return (
     <div className="mx-auto flex max-w-md flex-col items-center gap-4 pt-24 text-center">
-      <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">{icon}</div>
+      <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
+        {icon}
+      </div>
       <div className="flex flex-col gap-1.5">
-        <div className="text-[15px] font-medium text-foreground/85">{title}</div>
-        <div className="text-[13px] leading-relaxed text-foreground/50">{hint}</div>
+        <div className="text-[15px] font-medium text-foreground/85">
+          {title}
+        </div>
+        <div className="text-[13px] leading-relaxed text-foreground/50">
+          {hint}
+        </div>
       </div>
       {action}
     </div>
-  )
+  );
 }

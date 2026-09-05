@@ -24,13 +24,8 @@ export * from './chat'
 // 开放许可 PPT 素材相关类型
 export * from './ppt-material'
 
-// Deck Project / 原生 PPTX 生成相关类型
-export * from './ppt-deck'
-
 // Agent 相关类型
 export * from './agent'
-export * from './agent-preview'
-export * from './pi-harness'
 export * from './global-skill'
 export * from './browser'
 
@@ -61,9 +56,6 @@ export * from './chat-tool'
 
 // 飞书集成相关类型
 export * from './feishu'
-
-// Lark/飞书云端能力相关类型
-export * from './lark'
 
 // 钉钉集成相关类型
 export * from './dingtalk'

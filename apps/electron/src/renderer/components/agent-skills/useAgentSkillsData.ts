@@ -88,12 +88,7 @@ export function useAgentSkillsData(): AgentSkillsData {
     }
     try {
       await window.electronAPI.toggleWorkspaceSkill(workspaceSlug, slug, enabled, sourceSkillId)
-      setSkills((prev) => prev.map((s) => {
-        // workspaceSkillId 同时覆盖 active/inactive 副本；不能因副本带有 sourceSkillId 就误更新全局条目。
-        const isLocal = sourceSkillId === '' || (sourceSkillId === undefined && Boolean(s.workspaceSkillId))
-        const matches = isLocal ? Boolean(s.workspaceSkillId) && s.slug === slug : s.sourceSkillId === sourceSkillId && s.slug === slug
-        return matches ? { ...s, enabled } : s
-      }))
+      setSkills((prev) => prev.map((s) => (s.slug === slug && (sourceSkillId ? s.sourceSkillId === sourceSkillId : !s.sourceSkillId) ? { ...s, enabled } : s)))
       bumpCapabilitiesVersion((v) => v + 1)
     } catch (error) {
       console.error('[Agent 技能] 切换 Skill 状态失败:', error)

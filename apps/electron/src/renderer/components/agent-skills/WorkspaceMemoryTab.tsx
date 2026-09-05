@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils'
 import { getFileBaseName } from '@/lib/file-utils'
 
 type SelectedMemoryFile =
-  | { kind: 'profile'; relativePath: 'workspace-profile.md'; title: string; absolutePath: string }
+  | { kind: 'claude'; relativePath: 'CLAUDE.md'; title: string; absolutePath: string }
   | { kind: 'auto'; relativePath: string; title: string; absolutePath: string }
   | { kind: 'archive'; relativePath: string; title: string; absolutePath: string }
 
@@ -50,10 +50,10 @@ function buildWorkspaceMemoryInitPrompt(historyRange: MemoryHistoryRange): strin
 目标：
 1. 读取当前工作区${rangeLabel}的 Agent 工作会话，优先关注最新、最有代表性、用户实际完成工作的会话。如果证据不足，请说明而不是编造。
 2. 同时检查会话级 Context（各会话 cwd 下的 .context/）和工作区级 Context（工作区 workspace-files/.context/ 及相关本地文档），区分当前任务临时产物与跨会话长期资料。
-3. 从这些会话和 Context 中提炼 Profer 工作区级别的稳定知识，包括工作区背景、用户偏好、踩坑经验、重要决策和未来 Agent 必须知道的注意事项。
-4. 更新 Profer 工作区资料 \`workspace-profile.md\`：只写稳定、跨会话有价值的工作区背景和工作方式，避免写临时过程和聊天流水账；不要修改用户项目的 \`CLAUDE.md\` / \`AGENTS.md\`。
-5. 更新 Profer 工作区 \`.profer/memory/MEMORY.md\`，必要时创建主题文件：MEMORY.md 只放主题索引和路由，详细内容拆到主题文件；只记录未来 Agent 应长期回忆的经验。更新前先读索引及相关主题，修订旧结论而不是追加冲突版本。
-6. 沉淀并持续迭代一份「用户画像」记忆，写入 .profer/memory/user-profile.md（并在 MEMORY.md 索引中登记）。这份画像用于让未来的 Agent 越来越懂用户，应包含：
+3. 从这些会话和 Context 中提炼工作区级别的稳定知识，包括项目结构、常用命令、架构约定、用户偏好、踩坑经验、重要决策和未来 Agent 必须知道的注意事项。
+4. 更新工作区根目录的 CLAUDE.md：只写稳定、跨会话有价值的项目指令和工作方式，避免写临时过程和聊天流水账。
+5. 更新工作区 .claude/memory/MEMORY.md，必要时创建主题文件：MEMORY.md 只放主题索引和路由，详细内容拆到主题文件；只记录未来 Agent 应长期回忆的经验。更新前先读索引及相关主题，修订旧结论而不是追加冲突版本。
+6. 沉淀并持续迭代一份「用户画像」记忆，写入 .claude/memory/user-profile.md（并在 MEMORY.md 索引中登记）。这份画像用于让未来的 Agent 越来越懂用户，应包含：
    - 用户的角色、技术背景与擅长领域
    - 稳定的工作方式与协作偏好（沟通风格、语言、颗粒度、对确认/自动化的偏好等）
    - 反复出现的关注点、常用工具链和技术栈倾向
@@ -219,8 +219,8 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
 
   /** 底层写入：把指定内容写回目标文件并刷新摘要，供手动保存与自动保存复用 */
   const persistTarget = React.useCallback(async (target: SelectedMemoryFile, text: string): Promise<void> => {
-    if (target.kind === 'profile') {
-      await window.electronAPI.writeWorkspaceProfile(workspaceSlug, text)
+    if (target.kind === 'claude') {
+      await window.electronAPI.writeWorkspaceClaudeMd(workspaceSlug, text)
     } else if (target.kind === 'archive') {
       await window.electronAPI.writeWorkspaceMemoryArchiveFile(workspaceSlug, target.relativePath, text)
     } else {
@@ -228,8 +228,8 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     }
     const nextSummary = await refreshSummaryAndTree()
     let nextAbsolute: string
-    if (target.kind === 'profile') {
-      nextAbsolute = nextSummary.workspaceProfile.path
+    if (target.kind === 'claude') {
+      nextAbsolute = nextSummary.claudeMd.path
     } else if (target.kind === 'archive') {
       nextAbsolute = joinArchivePath(nextSummary, target.relativePath)
     } else {
@@ -282,23 +282,23 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     }
   }, [persistTarget])
 
-  const openWorkspaceProfile = React.useCallback(async (knownSummary?: WorkspaceMemorySummary): Promise<void> => {
+  const openClaude = React.useCallback(async (knownSummary?: WorkspaceMemorySummary): Promise<void> => {
     await flushPendingSave()
     setLoadingFile(true)
     try {
       const currentSummary = knownSummary ?? summary ?? await window.electronAPI.getWorkspaceMemorySummary(workspaceSlug)
-      const file = await window.electronAPI.readWorkspaceProfile(workspaceSlug)
+      const file = await window.electronAPI.readWorkspaceClaudeMd(workspaceSlug)
       setSelected({
-        kind: 'profile',
-        relativePath: 'workspace-profile.md',
-        title: 'workspace-profile.md',
-        absolutePath: currentSummary.workspaceProfile.path,
+        kind: 'claude',
+        relativePath: 'CLAUDE.md',
+        title: 'CLAUDE.md',
+        absolutePath: currentSummary.claudeMd.path,
       })
       setEditText(file.content ?? '')
       setIsDirty(false)
     } catch (err) {
-      console.error('[工作区记忆] 读取 workspace-profile.md 失败:', err)
-      toast.error(err instanceof Error ? err.message : '读取 workspace-profile.md 失败')
+      console.error('[工作区记忆] 读取 CLAUDE.md 失败:', err)
+      toast.error(err instanceof Error ? err.message : '读取 CLAUDE.md 失败')
     } finally {
       setLoadingFile(false)
     }
@@ -358,7 +358,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
       } else if (selected?.kind === 'archive') {
         await openArchiveFile(selected.relativePath, nextSummary)
       } else {
-        await openWorkspaceProfile(nextSummary)
+        await openClaude(nextSummary)
       }
     } catch (err) {
       console.error('[工作区记忆] 刷新失败:', err)
@@ -366,7 +366,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     } finally {
       setLoading(false)
     }
-  }, [openAutoFile, openWorkspaceProfile, refreshSummaryAndTree, selected, flushPendingSave])
+  }, [openAutoFile, openClaude, refreshSummaryAndTree, selected, flushPendingSave])
 
   /** 双链 [[...]] 点击：解析名称 → 打开命中的记忆文件 */
   const handleWikilinkClick = React.useCallback((name: string): void => {
@@ -382,20 +382,20 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
         } else if (target.kind === 'auto') {
           await openAutoFile(target.relativePath, summary ?? undefined)
         } else {
-          await openWorkspaceProfile(summary ?? undefined)
+          await openClaude(summary ?? undefined)
         }
       } catch (err) {
         console.error('[工作区记忆] 双链跳转失败:', err)
         toast.error(err instanceof Error ? err.message : '双链跳转失败')
       }
     })()
-  }, [workspaceSlug, summary, openAutoFile, openArchiveFile, openWorkspaceProfile])
+  }, [workspaceSlug, summary, openAutoFile, openArchiveFile, openClaude])
 
   /** 加载当前选中文件的反链 */
   React.useEffect(() => {
     let cancelled = false
     setBacklinks([])
-    if (!selected || selected.kind === 'profile') return
+    if (!selected || selected.kind === 'claude') return
     // 反链匹配名 = 当前文件 stem（文件名不含扩展）
     const currentStem = getFileBaseName(selected.relativePath).replace(/\.md$/i, '')
     if (!currentStem) return
@@ -419,23 +419,23 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     setLoading(true)
     void (async () => {
       try {
-        const [nextSummary, files, archive, profileFile] = await Promise.all([
+        const [nextSummary, files, archive, claudeFile] = await Promise.all([
           window.electronAPI.getWorkspaceMemorySummary(workspaceSlug),
           window.electronAPI.listWorkspaceAutoMemoryFiles(workspaceSlug),
           window.electronAPI.listWorkspaceMemoryArchiveFiles(workspaceSlug),
-          window.electronAPI.readWorkspaceProfile(workspaceSlug),
+          window.electronAPI.readWorkspaceClaudeMd(workspaceSlug),
         ])
         if (cancelled) return
         setSummary(nextSummary)
         setAutoFiles(files)
         setArchiveFiles(archive)
         setSelected({
-          kind: 'profile',
-          relativePath: 'workspace-profile.md',
-          title: 'workspace-profile.md',
-          absolutePath: nextSummary.workspaceProfile.path,
+          kind: 'claude',
+          relativePath: 'CLAUDE.md',
+          title: 'CLAUDE.md',
+          absolutePath: nextSummary.claudeMd.path,
         })
-        setEditText(profileFile.content ?? '')
+        setEditText(claudeFile.content ?? '')
         setIsDirty(false)
       } catch (err) {
         console.error('[工作区记忆] 加载失败:', err)
@@ -479,7 +479,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
     try {
       setIsDirty(false)
       await persistTarget(selected, editText)
-      toast.success('工作区记忆文件已保存')
+      toast.success('记忆文件已保存')
     } catch (err) {
       console.error('[工作区记忆] 保存失败:', err)
       toast.error(err instanceof Error ? err.message : '保存失败')
@@ -532,10 +532,10 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
         <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="text-base font-semibold text-foreground">工作区记忆</div>
-            <div className="mt-1 text-xs text-muted-foreground">工作区资料提供背景，主题负责积累；搜索框可直接查找记忆正文。</div>
+            <div className="mt-1 text-xs text-muted-foreground">规则负责约束，主题负责积累；搜索框可直接查找记忆正文。</div>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
-            <MemorySummaryButton label="工作区资料" value={summary.workspaceProfile.exists ? formatBytes(summary.workspaceProfile.size) : '未创建'} active={selected?.kind === 'profile'} onClick={() => void openWorkspaceProfile(summary)} />
+            <MemorySummaryButton label="项目指令" value={summary.claudeMd.exists ? formatBytes(summary.claudeMd.size) : '未创建'} active={selected?.kind === 'claude'} onClick={() => void openClaude(summary)} />
             <MemorySummaryButton label="自动记忆" value={`${summary.autoMemory.fileCount} 文件`} active={selected?.kind === 'auto'} onClick={() => void openAutoFile(AUTO_MEMORY_INDEX, summary)} />
             <MemorySummaryButton label="长期经验" value={`${archiveFiles.filter((node) => node.type === 'file').length} 主题`} active={selected?.kind === 'archive'} onClick={() => {
               const first = archiveFiles.find((node) => node.type === 'file')
@@ -544,7 +544,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
           </div>
         </div>
         <div className="flex flex-col gap-3 border-t border-border/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs text-muted-foreground">从历史会话生成并更新 Profer 工作区记忆（{historyRangeLabel}）</div>
+          <div className="text-xs text-muted-foreground">从历史会话生成并更新工作区记忆（{historyRangeLabel}）</div>
           <div className="flex shrink-0 items-center gap-2">
             <Select value={historyRange} onValueChange={(value) => setHistoryRange(value as MemoryHistoryRange)} disabled={initializing}>
               <SelectTrigger className="h-8 w-[108px] text-xs"><SelectValue /></SelectTrigger>
@@ -573,11 +573,11 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               <FileButton
-                active={selected?.kind === 'profile'}
+                active={selected?.kind === 'claude'}
                 icon={<FileText size={14} />}
-                label="workspace-profile.md"
-                meta="Profer 工作区资料"
-                onClick={() => void openWorkspaceProfile(summary)}
+                label="CLAUDE.md"
+                meta="工作区项目指令"
+                onClick={() => void openClaude(summary)}
               />
               <div className="mt-3 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
                 Auto Memory
@@ -741,8 +741,8 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                 }}
                 spellCheck={false}
                 className="min-h-0 flex-1 resize-none bg-transparent p-4 font-mono text-[13px] leading-6 text-foreground outline-none placeholder:text-muted-foreground"
-                placeholder={selected.kind === 'profile'
-                  ? '# Profer 工作区资料\n\n写下未来 Agent 必须知道的工作区背景、偏好和已确认决策。'
+                placeholder={selected.kind === 'claude'
+                  ? '# 项目指令\n\n写下未来 Agent 必须知道的项目规范、命令和决策。'
                   : '# MEMORY\n\n写下稳定、可复用的自动记忆索引。'}
               />
             ) : selected ? (

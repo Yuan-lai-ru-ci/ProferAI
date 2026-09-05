@@ -22,6 +22,7 @@ import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { leftSidebarWidthAtom } from '@/atoms/sidebar-atoms'
 import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
+import { detectIsWindows } from '@/lib/platform'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { usePanelAutoLayout } from '@/hooks/usePanelAutoLayout'
 import { cn } from '@/lib/utils'
@@ -83,6 +84,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const filePanelActive = !isTeamWorkspace && showRightPanel
   // 统一自适应可见性：窗口 resize 监听 + 浏览器/文件面板可见性计算（挂载于此布局容器）
   usePanelAutoLayout({ filePanelActive })
+  const isWindows = React.useMemo(() => detectIsWindows(), [])
   // 团队工作区的默认 Agent 页仍展示文件主区；规划中心必须进入 MainArea，
   // 否则 TeamWorkspaceView 会覆盖其中的 PlanningView。
   const showTeamWorkspaceView = isTeamWorkspace && appMode === 'agent' && activeView !== 'agent-skills' && activeView !== 'planning'
@@ -196,7 +198,19 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   return (
     <WindowControlsTemplateProvider>
     <AppShellProvider value={contextValue}>
-      {/* 各顶栏宿主自行提供明确的拖拽空区；这里不再用 fixed 覆盖层参与命中计算。 */}
+      {/* 只保留顶端 8px 的全局拖拽缝隙。
+          过去这里覆盖 50px 高的固定 drag-region；它会和 TabBar 内的 no-drag
+          控件重叠。Electron 的原生 app-region 命中并不总是遵循 CSS z-index，
+          尤其当皮肤为 TabBar 创建 backdrop-filter 合成层时，Tab、工具按钮会被
+          误判为窗口拖动区而不可点击。TabBar、侧栏和各独立视图已经各自提供
+          局部 drag region，因此全局层不能覆盖任何实际交互区域。 */}
+      <div
+        className={cn(
+          'titlebar-drag-region fixed top-0 left-0 h-2 z-50',
+          isWindows ? 'right-[126px]' : 'right-0'
+        )}
+      />
+
       <div className="shell-bg h-screen w-screen flex overflow-clip bg-surface-shell">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
         <div
