@@ -4950,6 +4950,46 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 删除附加目录文件/目录
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.DELETE_ATTACHED_FILE,
+    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<void> => {
+      const { rmSync } = await import('node:fs')
+      const { resolve } = await import('node:path')
+
+      const safePath = resolve(filePath)
+      const options = normalizeFileAccessOptions(access)
+      if (!isPathAllowed(safePath, options)) {
+        throw new Error('访问路径不在允许范围内')
+      }
+      try {
+        rmSync(safePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+        console.log(`[附加目录] 已删除: ${safePath}`)
+      } catch (err) {
+        throw new Error(await toFsErrorMessage(err, '删除', safePath))
+      }
+    }
+  )
+
+  // 将附加目录文件/目录移入系统回收站
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.MOVE_ATTACHED_TO_TRASH,
+    async (_, filePath: string, access?: FileAccessOptions | string[]): Promise<void> => {
+      const { resolve } = await import('node:path')
+      const safePath = resolve(filePath)
+      const options = normalizeFileAccessOptions(access)
+      if (!isPathAllowed(safePath, options)) {
+        throw new Error('访问路径不在允许范围内')
+      }
+      try {
+        await shell.trashItem(safePath)
+        console.log(`[附加目录] 已移入回收站: ${safePath}`)
+      } catch (err) {
+        throw new Error(await toFsErrorMessage(err, '移入回收站', safePath))
+      }
+    }
+  )
+
   // 检查路径类型（文件 or 目录），用于拖拽检测
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CHECK_PATHS_TYPE,
