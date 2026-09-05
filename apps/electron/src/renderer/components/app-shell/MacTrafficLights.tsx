@@ -11,6 +11,8 @@ import { cn } from '@/lib/utils'
 interface MacTrafficLightsProps {
   /** 经典界面的外层侧栏有 8px 内边距，按钮需要扣除这段偏移。 */
   classic?: boolean
+  /** 侧边栏收起时缩小控制区，避免窄 rail 裁掉第三个按钮。 */
+  collapsed?: boolean
   className?: string
 }
 
@@ -20,7 +22,7 @@ const trafficLights = [
   { color: 'bg-[#28c840]', hoverColor: 'group-hover:bg-[#42d65a]', label: '最大化', action: 'maximize' as const },
 ]
 
-export function MacTrafficLights({ classic = false, className }: MacTrafficLightsProps): React.ReactElement {
+export function MacTrafficLights({ classic = false, collapsed = false, className }: MacTrafficLightsProps): React.ReactElement {
   const handleAction = (action: (typeof trafficLights)[number]['action']): void => {
     if (action === 'close') void window.electronAPI.windowClose()
     else if (action === 'minimize') void window.electronAPI.windowMinimize()
@@ -31,7 +33,9 @@ export function MacTrafficLights({ classic = false, className }: MacTrafficLight
     <div
       className={cn(
         'mac-traffic-lights titlebar-no-drag pointer-events-auto absolute z-[999] flex items-center gap-[3px]',
-        classic ? 'left-2.5 top-2.5' : 'left-[18px] top-[18px]',
+        collapsed
+          ? 'left-1/2 top-[18px] -translate-x-1/2 gap-[2px]'
+          : classic ? 'left-2.5 top-2.5' : 'left-[18px] top-[18px]',
         className,
       )}
       role="group"
@@ -63,14 +67,16 @@ export function MacTrafficLights({ classic = false, className }: MacTrafficLight
             pointerEvents: 'auto',
           } as React.CSSProperties}
           className={cn(
-            'mac-traffic-light-hitbox group pointer-events-auto flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full',
+            'mac-traffic-light-hitbox group pointer-events-auto flex shrink-0 cursor-pointer items-center justify-center rounded-full',
+            collapsed ? 'size-3.5' : 'size-5',
             'hover:bg-black/[0.05] active:bg-black/[0.1] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring',
           )}
         >
           <span
             aria-hidden="true"
             className={cn(
-              'pointer-events-none size-3 rounded-full border border-black/10 shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.08)] transition-[filter,transform] duration-100',
+              'pointer-events-none rounded-full border border-black/10 shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.08)] transition-[filter,transform] duration-100',
+              collapsed ? 'size-2' : 'size-3',
               light.color,
               light.hoverColor,
             )}

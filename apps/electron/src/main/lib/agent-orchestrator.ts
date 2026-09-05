@@ -45,6 +45,7 @@ import {
   THINKING_SIGNATURE_ERROR_TITLE,
   resolveAgentSdkModelId,
   AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP,
+  AGENT_PRESET_CAPABILITY_GROUPS,
 } from '@profer/shared'
 import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest, AgentPresetSuppressKey } from '@profer/shared'
 import { AgentEventBus } from './agent-event-bus'
@@ -269,6 +270,8 @@ export class AgentOrchestrator {
   /** 当前运行实际加载的预设能力；队列消息必须跟随它，而不是盲信运行中途刚切换的会话元数据。 */
   private activePresetPolicies = new Map<string, {
     skillSlugs?: string[]
+    disabledToolGroups: Set<string>
+    disabledTools?: string[]
     loadedMcpServerNames: Set<string>
   }>()
 
@@ -1093,12 +1096,34 @@ export class AgentOrchestrator {
       // 方案 3：预设禁用的产品内置工具组（注入时直接不注册）；allowSubagents=false 等价禁用协作工具
       const disabledToolGroups = new Set<string>(sessionPreset.disabledToolGroups ?? [])
       if (sessionPreset.allowSubagents === false) disabledToolGroups.add('collaboration')
-      // B2-3：预设禁用的单工具短名（与工具组叠加生效，两侧注入点按 shared 事实表口径过滤）
+      const pptDecision = evaluatePptCapability({
+        userMessage,
+        active: presetSessionMeta?.pptCapabilityActive === true,
+        hasActiveDeckProject: presetSessionMeta?.pptCapabilityActive === true,
+      })
+      const pptCapabilityActive = !disabledToolGroups.has('ppt-materials') && pptDecision.active
+      if (presetSessionMeta && pptCapabilityActive !== (presetSessionMeta.pptCapabilityActive === true)) {
+        try {
+          updateAgentSessionMeta(sessionId, { pptCapabilityActive })
+        } catch {
+          // 会话可能在并发删除；本轮仍使用已计算的 gate 结果。
+        }
+      }
+      // Claude 原生工具不经过 in-process MCP，必须通过 SDK disallowedTools 同步硬禁用。
+      const disabledClaudeTools = [
+        ...AGENT_PRESET_CAPABILITY_GROUPS
+          .filter((group) => disabledToolGroups.has(group.id))
+          .flatMap((group) => group.toolNames),
+        ...(sessionPreset.disabledTools ?? []),
+      ].filter((name) => name === 'WebSearch' || name === 'WebFetch')
+        .filter((name, index, names) => names.indexOf(name) === index)
       const disabledTools = sessionPreset.disabledTools
       const mcpServers = this.buildMcpServers(workspaceSlug, sessionPreset.mcpServerNames)
       // 先建立运行策略快照，再执行异步 MCP 注入，避免初始化期间的队列消息失去预设过滤。
       this.activePresetPolicies.set(sessionId, {
         ...(sessionPreset.skillSlugs !== undefined && { skillSlugs: sessionPreset.skillSlugs.map(normalizeDefaultSkillSlug) }),
+        disabledToolGroups: new Set(disabledToolGroups),
+        ...(disabledTools !== undefined && { disabledTools: [...disabledTools] }),
         loadedMcpServerNames: new Set(Object.keys(mcpServers)),
       })
       if (!disabledToolGroups.has('automation')) {
@@ -1170,7 +1195,7 @@ export class AgentOrchestrator {
           event: { type: 'image_generation_updated', sessionId, record },
         })
       }
-      if (agentRuntime === 'claude') {
+      if (agentRuntime === 'claude' && !disabledToolGroups.has('preview')) {
         await injectAgentPreviewMcpServer(sdk, mcpServers, {
           sessionId,
           agentCwd: workspaceSlug ? agentCwd : '',
@@ -1181,27 +1206,31 @@ export class AgentOrchestrator {
           onInspectRequest: (request) => agentFilePreviewSessionManager.inspect(request, (previewEvent) => {
             this.eventBus.emit(sessionId, { kind: 'profer_event', event: previewEvent })
           }),
-        })
+        }, disabledTools)
       }
-      if (agentCwd && imageOutputAllowedRoots.length > 0) {
+      if (agentCwd && imageOutputAllowedRoots.length > 0 && !disabledToolGroups.has('image')) {
         await injectAgentImageOutputMcpServer(sdk, mcpServers, {
           agentCwd,
           allowedRoots: imageOutputAllowedRoots,
-        })
+        }, disabledTools)
         if (agentRuntime === 'claude' && isAgentGptImageAvailable()) {
           await injectAgentGptImageMcpServer(sdk, mcpServers, {
             sessionId,
             agentCwd,
             allowedRoots: imageOutputAllowedRoots,
             onGenerationUpdate: emitImageGenerationUpdate,
-          })
+          }, disabledTools)
         }
       }
-      await injectPptMaterialMcpServer(sdk, mcpServers, { agentCwd })
+      if (pptCapabilityActive) {
+        await injectPptMaterialMcpServer(sdk, mcpServers, { agentCwd }, disabledTools)
+      }
 
       // Claude 通过 in-process MCP 使用与 Pi 相同的受管浏览器 controller；Pi 在后续分支注册 customTools。
-      if (agentRuntime === 'claude') {
-        await injectClaudeClipboardMcpServer(sdk, mcpServers)
+      if (agentRuntime === 'claude' && !disabledToolGroups.has('clipboard')) {
+        await injectClaudeClipboardMcpServer(sdk, mcpServers, disabledTools)
+      }
+      if (agentRuntime === 'claude' && !disabledToolGroups.has('browser')) {
         await injectClaudeBrowserMcpServer(sdk, mcpServers, {
           sessionId,
           workspaceId,
@@ -1219,6 +1248,7 @@ export class AgentOrchestrator {
             ),
           ],
           executionSource: input.triggeredBy ?? 'user',
+          disabledTools,
         })
       }
 
@@ -1239,6 +1269,8 @@ export class AgentOrchestrator {
       const activePresetPolicy = this.activePresetPolicies.get(sessionId)
       if (activePresetPolicy) {
         activePresetPolicy.loadedMcpServerNames = new Set(Object.keys(mcpServers))
+        activePresetPolicy.disabledToolGroups = new Set(disabledToolGroups)
+        activePresetPolicy.disabledTools = disabledTools ? [...disabledTools] : undefined
       }
 
       // 11. 构建动态上下文和最终 prompt
@@ -1247,6 +1279,8 @@ export class AgentOrchestrator {
         workspaceSlug,
         agentCwd,
         mcpServerNames: Object.keys(mcpServers),
+        disabledToolGroups: [...disabledToolGroups].filter((group): group is import('@profer/shared').AgentPresetToolGroup => AGENT_PRESET_CAPABILITY_GROUPS.some((item) => item.id === group)),
+        disabledTools,
         userBrowserContext: browserController.getUserContext(sessionId),
       })
 
@@ -1338,6 +1372,7 @@ ${enrichedMessage}`
               triggeredBy: input.triggeredBy,
               disabledToolGroups: [...disabledToolGroups],
               disabledTools,
+              pptCapabilityActive,
             })
             const mcpTools = await buildPiMcpTools(mcpServers)
             return [...builtin.tools, ...mcpTools]
@@ -1655,6 +1690,9 @@ ${enrichedMessage}`
         isPiRuntime: agentRuntime === 'pi',
         isTeamWorkspace: workspace?.type === 'team',
         teamMemoryAvailable: workspace?.type === 'team' && !disabledToolGroups.has('memory'),
+        disabledToolGroups: [...disabledToolGroups].filter((group): group is import('@profer/shared').AgentPresetToolGroup => AGENT_PRESET_CAPABILITY_GROUPS.some((item) => item.id === group)),
+        disabledTools,
+        pptCapabilityActive,
         platform: process.platform,
         shellPath: piRuntimeEnv.shellPath
           ?? process.env.SHELL
@@ -1670,7 +1708,7 @@ ${enrichedMessage}`
             userMessage,
             toolNames: piCustomTools?.map((tool) => tool.name) ?? [],
             forceAutomation: input.triggeredBy === 'automation',
-            pptCapabilityActive: presetSessionMeta?.pptCapabilityActive === true,
+            pptCapabilityActive,
           })
         : baseSystemPrompt
       const systemPromptAppend = compressedSystemPrompt +
@@ -1729,6 +1767,7 @@ ${enrichedMessage}`
         allowDangerouslySkipPermissions: !canUseTool,
         canUseTool,
         ...(sdkPermissionModeForProferMode(initialPermissionMode) === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
+        ...(disabledClaudeTools.length > 0 && { disallowedTools: disabledClaudeTools }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Profer 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt:
@@ -3231,7 +3270,7 @@ ${enrichedMessage}`
     const activePolicy = this.activePresetPolicies.get(sessionId)
     const userBrowserContext = browserController.getUserContext(sessionId)
     let enrichedText = userBrowserContext
-      ? `${buildDynamicContext({ userBrowserContext, mcpServerNames: activePolicy ? [...activePolicy.loadedMcpServerNames] : undefined })}\n\n${text}`
+      ? `${buildDynamicContext({ userBrowserContext, mcpServerNames: activePolicy ? [...activePolicy.loadedMcpServerNames] : undefined, disabledToolGroups: activePolicy ? [...activePolicy.disabledToolGroups].filter((group): group is import('@profer/shared').AgentPresetToolGroup => AGENT_PRESET_CAPABILITY_GROUPS.some((item) => item.id === group)) : undefined, disabledTools: activePolicy?.disabledTools })}\n\n${text}`
       : text
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
     if (referencedSessionsBlock) {

@@ -14,6 +14,7 @@ function textResult(value: unknown): { content: Array<{ type: 'text'; text: stri
 export async function injectClaudeClipboardMcpServer(
   sdk: ClaudeSdk,
   mcpServers: Record<string, Record<string, unknown>>,
+  disabledTools?: string[],
 ): Promise<void> {
   let z: ZodModule['z']
   try { ({ z } = await import('zod') as ZodModule) } catch { z = require('zod').z }
@@ -50,7 +51,7 @@ export async function injectClaudeClipboardMcpServer(
           }
         },
       ),
-    ],
+    ].filter((tool) => !disabledTools?.includes(tool.name)),
   })
   mcpServers.clipboard = server as unknown as Record<string, unknown>
 }

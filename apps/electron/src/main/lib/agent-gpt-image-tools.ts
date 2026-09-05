@@ -3,6 +3,7 @@ import { getToolState } from './chat-tool-config'
 import { isGptImageAvailable, } from './chat-tools/gpt-image-tool'
 import { generateAgentGptImage, type AgentGptImageContext } from './agent-gpt-image-service'
 import { GPT_IMAGE_QUALITIES, GPT_IMAGE_SIZES, type GptImageQuality, type GptImageSize } from './gpt-image-service'
+import { filterDisabledTools } from '@profer/shared'
 
 export const AGENT_GPT_IMAGE_TOOL_NAME = 'generate_image'
 
@@ -48,11 +49,12 @@ export async function injectAgentGptImageMcpServer(
   sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
   mcpServers: Record<string, Record<string, unknown>>,
   context: AgentGptImageContext,
+  disabledTools?: string[],
 ): Promise<void> {
   let z: typeof import('zod').z
   try { ({ z } = await import('zod')) } catch { z = require('zod').z }
   const server = sdk.createSdkMcpServer({
-    name: 'agent-gpt-image', version: '1.0.0', tools: [
+    name: 'agent-gpt-image', version: '1.0.0', tools: filterDisabledTools([
       sdk.tool(
         AGENT_GPT_IMAGE_TOOL_NAME,
         DESCRIPTION,
@@ -72,7 +74,7 @@ export async function injectAgentGptImageMcpServer(
           toolCallId: claudeToolCallId(extra),
         }, context)),
       ),
-    ],
+    ], disabledTools),
   })
   mcpServers['agent-gpt-image'] = server as unknown as Record<string, unknown>
 }

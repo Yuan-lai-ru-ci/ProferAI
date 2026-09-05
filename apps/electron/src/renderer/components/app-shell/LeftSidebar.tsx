@@ -45,7 +45,7 @@ export function LeftSidebar({ width, noTransition, tabletMode, renderSearchDialo
         flexShrink: sidebarCollapsed ? 0 : 1,
       }}
     >
-      {s.isMac && <MacTrafficLights classic={isClassic} />}
+      {s.isMac && <MacTrafficLights classic={isClassic} collapsed={sidebarCollapsed} />}
       {sidebarCollapsed ? <SidebarRail s={s} /> : <ExpandedSidebar s={s} />}
       {/* 迁移/搜索对话框：双视图共享状态，必须只在外层渲染唯一实例，
           否则 Radix Portal 双实例同时打开会叠出双遮罩+双内容 */}

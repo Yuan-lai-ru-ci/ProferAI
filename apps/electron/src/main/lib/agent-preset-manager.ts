@@ -387,7 +387,9 @@ export function getAgentPresetByReference(reference: PresetReference, contextWor
 
 /** 三层一致兜底：disabledToolGroups → 对应 suppressPromptSections 并集（shared 唯一事实表） */
 function withSuppressMapping(preset: AgentPreset): AgentPreset {
-  const mapped = (preset.disabledToolGroups ?? []).map((g) => AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP[g])
+  const mapped = (preset.disabledToolGroups ?? [])
+    .map((g) => AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP[g])
+    .filter((key): key is AgentPresetSuppressKey => key !== undefined)
   const suppress = [...new Set([...(preset.suppressPromptSections ?? []), ...mapped])]
   return suppress.length > 0 ? { ...preset, suppressPromptSections: suppress } : preset
 }

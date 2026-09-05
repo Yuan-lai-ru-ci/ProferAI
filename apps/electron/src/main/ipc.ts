@@ -6124,9 +6124,16 @@ export function registerIpcHandlers(): void {
     IPC_CHANNELS.WINDOW_MAXIMIZE,
     async (event) => {
       const win = BrowserWindow.fromWebContents(event.sender)
-      if (win && !win.isDestroyed()) {
-        win.isMaximized() ? win.unmaximize() : win.maximize()
+      if (!win || win.isDestroyed()) return
+
+      // macOS 绿色按钮的原生语义是进入/退出独立全屏 Space，
+      // 不是把窗口手动拉到 display.workArea。自定义红绿灯也必须保持这个语义。
+      if (process.platform === 'darwin') {
+        win.setFullScreen(!win.isFullScreen())
+        return
       }
+
+      win.isMaximized() ? win.unmaximize() : win.maximize()
     }
   )
 

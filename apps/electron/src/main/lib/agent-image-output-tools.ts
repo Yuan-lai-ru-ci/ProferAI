@@ -1,4 +1,5 @@
 import { sendAgentLocalImage, type AgentImageOutputContext } from './agent-image-output-service'
+import { filterDisabledTools } from '@profer/shared'
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; details?: unknown }
 
@@ -18,6 +19,7 @@ export async function injectAgentImageOutputMcpServer(
   sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
   mcpServers: Record<string, Record<string, unknown>>,
   context: AgentImageOutputContext,
+  disabledTools?: string[],
 ): Promise<void> {
   let z: typeof import('zod').z
   try { ({ z } = await import('zod')) } catch { z = require('zod').z }
@@ -25,7 +27,7 @@ export async function injectAgentImageOutputMcpServer(
   const server = sdk.createSdkMcpServer({
     name: 'agent-image-output',
     version: '1.0.0',
-    tools: [
+    tools: filterDisabledTools([
       sdk.tool(
         'send_local_image',
         'Send an existing local PNG/JPEG/GIF/WebP as an image in the final Agent response. The path must be inside the current session workspace or an explicitly authorized attached directory. Profer automatically attaches the verified image to the conversation; do not output internal image protocol markers. This tool does not generate or edit images.',
@@ -35,7 +37,7 @@ export async function injectAgentImageOutputMcpServer(
         },
         async (args) => result(await sendAgentLocalImage(args, context)),
       ),
-    ],
+    ], disabledTools),
   })
   mcpServers['agent-image-output'] = server as unknown as Record<string, unknown>
 }

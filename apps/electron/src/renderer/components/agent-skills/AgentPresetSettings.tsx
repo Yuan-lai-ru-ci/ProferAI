@@ -65,7 +65,8 @@ function readPresetSortMode(scope: 'workspace' | 'global'): PresetSortMode {
 }
 
 import type { AgentPreset, AgentPresetCreateInput, AgentPresetUpdateInput, AgentPresetToolGroup, AgentEffort, ProferPermissionMode, SkillMeta } from '@profer/shared'
-import { AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP, AGENT_PRESET_GROUP_TOOL_NAMES } from '@profer/shared'
+import { AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP, AGENT_PRESET_CAPABILITY_GROUPS } from '@profer/shared'
+import type { AgentPresetSuppressKey } from '@profer/shared'
 
 // ===== 表单状态 =====
 
@@ -83,16 +84,11 @@ interface PresetFormState {
   basePresetId: string // '' = 独立预设 / 内置预设 ID = 派生
 }
 
-/** 产品内置工具组选项（预设可禁用） */
+/** 产品内置能力组选项直接来自 shared registry，避免 UI 与运行时清单漂移。 */
 /** Radix Select 保留空字符串给 placeholder，表单的“跟随/独立”状态使用非空哨兵值。 */
 const SELECT_DEFAULT_VALUE = '__default__'
 
-const TOOL_GROUP_OPTIONS: Array<{ value: AgentPresetToolGroup; label: string; hint: string }> = [
-  { value: 'task-graph', label: '任务图', hint: '子任务图工具' },
-  { value: 'memory', label: '长期记忆', hint: 'Auto Memory 与 memory-archive' },
-  { value: 'collaboration', label: '协作子 Agent', hint: '委派与协作工具（等价禁止委派）' },
-  { value: 'automation', label: '自动化与规划', hint: '定时任务、规划 Todo 与本地日程工具' },
-]
+const TOOL_GROUP_OPTIONS = AGENT_PRESET_CAPABILITY_GROUPS
 
 /** 与运行时一致的自动映射（shared 唯一事实表）：工具组禁用 → 隐藏对应提示词段 key（含 automation） */
 
@@ -373,7 +369,9 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
     const promptSections = form.promptText.trim()
       ? form.promptText.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)
       : null
-    const suppressPromptSections = form.disabledToolGroups.map((g) => AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP[g])
+    const suppressPromptSections = form.disabledToolGroups
+      .map((g) => AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP[g])
+      .filter((key): key is AgentPresetSuppressKey => key !== undefined)
     return {
       name: form.name,
       description: form.description,
@@ -837,16 +835,16 @@ export function AgentPresetSettings({ workspaceSlug, search = '', globalMode = f
               <FieldLabel>精简能力</FieldLabel>
               <div className="rounded-xl bg-background/60 p-3 ring-1 ring-border/45">
                 {TOOL_GROUP_OPTIONS.map((group) => {
-                  const groupDisabled = form.disabledToolGroups.includes(group.value)
-                  const groupTools = AGENT_PRESET_GROUP_TOOL_NAMES[group.value]
+                  const groupDisabled = form.disabledToolGroups.includes(group.id)
+                  const groupTools = group.toolNames
                   return (
-                    <div key={group.value} className="flex flex-col gap-1.5 border-b border-border/40 py-2.5 first:pt-0 last:border-b-0 last:pb-0">
+                    <div key={group.id} className="flex flex-col gap-1.5 border-b border-border/40 py-2.5 first:pt-0 last:border-b-0 last:pb-0">
                       <label className="flex cursor-pointer items-center justify-between gap-2 select-none">
                         <span className="flex min-w-0 flex-col"><span className="text-xs font-medium">{group.label}</span><span className="truncate text-[10px] text-muted-foreground">{group.hint}</span></span>
-                        <Switch checked={groupDisabled} onCheckedChange={(on) => setForm((f) => ({ ...f, disabledToolGroups: on ? [...f.disabledToolGroups, group.value] : f.disabledToolGroups.filter((g) => g !== group.value) }))} className="scale-90 shrink-0" />
+                        <Switch checked={groupDisabled} onCheckedChange={(on) => setForm((f) => ({ ...f, disabledToolGroups: on ? [...f.disabledToolGroups, group.id] : f.disabledToolGroups.filter((g) => g !== group.id) }))} className="scale-90 shrink-0" />
                       </label>
                       {!groupDisabled && <details className="ml-1 border-l-2 border-border/60 pl-3"><summary className="cursor-pointer select-none text-[10px] text-muted-foreground hover:text-foreground/80">单工具裁剪（已禁 {form.disabledTools.filter((t) => (groupTools as readonly string[]).includes(t)).length} / {groupTools.length}）</summary><div className="flex flex-wrap gap-1.5 pt-1.5">
-                        {groupTools.map((toolName) => { const checked = form.disabledTools.includes(toolName); return <button key={toolName} type="button" onClick={() => toggleDisabledTool(toolName)} title={checked ? `已禁用 ${toolName}` : `禁用 ${toolName}`} className={cn('inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[10px] transition-colors', checked ? 'border-destructive/60 bg-destructive/10 text-destructive' : 'border-border/70 bg-background/60 text-foreground/70 hover:bg-muted')}>{checked && <Check size={10} strokeWidth={3} />}{toolName}</button> })}
+                        {groupTools.map((toolName: string) => { const checked = form.disabledTools.includes(toolName); return <button key={toolName} type="button" onClick={() => toggleDisabledTool(toolName)} title={checked ? `已禁用 ${toolName}` : `禁用 ${toolName}`} className={cn('inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[10px] transition-colors', checked ? 'border-destructive/60 bg-destructive/10 text-destructive' : 'border-border/70 bg-background/60 text-foreground/70 hover:bg-muted')}>{checked && <Check size={10} strokeWidth={3} />}{toolName}</button> })}
                       </div></details>}
                     </div>
                   )

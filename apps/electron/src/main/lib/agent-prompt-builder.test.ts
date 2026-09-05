@@ -130,10 +130,11 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).not.toContain('自动追加一次只做最小验证的续轮')
     // 工具名按 runtime 适配：Pi 带 mcp__ 前缀，Claude 用 in-process MCP 裸名
     expect(piPrompt).toContain('mcp__task-graph__proma_task_create')
-    expect(piPrompt).toContain('mcp__agent-presets__preset_create')
+    expect(piPrompt).toContain('mcp__agent-presets__preset_list')
+    expect(piPrompt).not.toContain('mcp__agent-presets__preset_create')
     expect(piPrompt).not.toContain('用 `proma_task_create` 创建子任务')
     expect(claudePrompt).toContain('用 `proma_task_create` 创建子任务')
-    expect(claudePrompt).toContain('`preset_create` 新建')
+    expect(claudePrompt).toContain('预设创建、修改、删除、设为默认和切换当前会话，必须由用户在设置页或会话工具栏执行')
     expect(claudePrompt).not.toContain('mcp__agent-presets__preset_create')
     expect(piPrompt).toContain('不要等待 SDK 自动落盘')
     expect(piPrompt).toContain('可以读取和写入')
@@ -310,6 +311,49 @@ describe('buildSystemPrompt', () => {
     })
     expect(prompt).not.toContain('## 团队共享知识记忆')
     expect(prompt).not.toContain('mcp__team-memory__list_team_memories')
+  })
+
+  test('单工具裁剪时 Prompt 不描述已关闭的具体入口', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      disabledTools: ['generate_image', 'send_local_image', 'BrowserPreviewOpen', 'WebSearch', 'WebFetch'],
+    })
+    expect(prompt).not.toContain('`generate_image`')
+    expect(prompt).not.toContain('`send_local_image`')
+    expect(prompt).not.toContain('`BrowserPreviewOpen`')
+    expect(prompt).not.toContain('`WebSearch`')
+    expect(prompt).not.toContain('`WebFetch`')
+    expect(prompt).not.toContain('## Profer 受管浏览器')
+    expect(prompt).not.toContain('BrowserObserve')
+  })
+
+  test('六类能力硬禁用时 Prompt 与动态浏览器上下文不暴露对应入口', () => {
+    const disabled = ['browser', 'clipboard', 'preview', 'image', 'web', 'ppt-materials'] as const
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      disabledToolGroups: disabled,
+    })
+    expect(prompt).not.toContain('## Profer 受管浏览器')
+    expect(prompt).not.toContain('`inspect_preview`')
+    expect(prompt).not.toContain('`generate_image`')
+    expect(prompt).not.toContain('`WebSearch`')
+    expect(prompt).toContain('当前预设已关闭的能力')
+    expect(prompt).toContain('受管浏览器（browser）')
+    expect(prompt).toContain('PPT 素材（ppt-materials）')
+
+    const dynamic = buildDynamicContext({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      userBrowserContext: { activeTabId: 'tab-1', title: 'Private', url: 'https://private.example.test', openedAt: Date.now() },
+      disabledToolGroups: ['browser'],
+    })
+    expect(dynamic).not.toContain('<user_browser_context>')
   })
 
   test('平台 overlay 同时注入给 Claude/Pi，但不复制两套完整核心提示词', () => {

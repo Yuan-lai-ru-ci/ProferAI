@@ -21,6 +21,7 @@ import type {
   ProferPermissionMode,
   AgentImageGenerationCard,
   ProferEvent,
+  PptMaterialItem,
 } from '@profer/shared'
 import type {
   CalendarEventListQuery,
@@ -32,7 +33,7 @@ import type {
   UpdateCalendarEventInput,
   UpdateTodoInput,
 } from '@profer/shared'
-import { filterDisabledTools } from '@profer/shared'
+import { filterDisabledTools, isAgentPresetToolGroupDisabled } from '@profer/shared'
 import {
   createAutomation,
   deleteAutomation,
@@ -44,16 +45,10 @@ import {
   broadcastChanged as broadcastAutomationsChanged,
   runAutomationNow,
 } from '../automation-scheduler'
-import { getAgentSessionMeta, updateAgentSessionMeta } from '../agent-session-manager'
+import { getAgentSessionMeta } from '../agent-session-manager'
 import {
   listAgentPresets,
   getDefaultPresetId,
-  setDefaultPresetId,
-  createAgentPreset,
-  copyAgentPreset,
-  updateAgentPreset,
-  deleteAgentPreset,
-  getAgentPreset,
 } from '../agent-preset-manager'
 import {
   createPlanningCalendarEvent,
@@ -84,6 +79,7 @@ import { browserController } from '../browser-controller'
 import { resolveBrowserProfileKey } from '../browser-profile-policy'
 import { readClipboardText, writeClipboardText } from '../clipboard-agent-tools'
 import { downloadPptMaterialToWorkspace, searchPptMaterials } from '../ppt-material-service'
+import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
 import {
@@ -103,18 +99,6 @@ import {
 import { GPT_IMAGE_QUALITIES, GPT_IMAGE_SIZES } from '../gpt-image-service'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
-
-// ===== Agent 预设 suppress key schema（与 shared AGENT_PRESET_SUPPRESS_KEYS 对齐） =====
-
-const AGENT_PRESET_SUPPRESS_LITERALS = [
-  Type.Literal('subagents'),
-  Type.Literal('memory'),
-  Type.Literal('task-graph'),
-  Type.Literal('automation'),
-]
-
-/** suppressPromptSections 数组 schema（TypeBox 模式不可变，可安全复用） */
-const AGENT_PRESET_SUPPRESS_ARRAY = Type.Array(Type.Union(AGENT_PRESET_SUPPRESS_LITERALS))
 
 // ===== 通用 =====
 
@@ -143,7 +127,7 @@ export interface PiBuiltinToolsContext {
   onPreviewInspectRequest?: (request: AgentFilePreviewInspectRequest) => Promise<AgentFilePreviewInspectResult>
   /** Windows 是否已有可用 Shell（Git Bash / WSL）；缺失时向前台用户会话提供安装工具。 */
   windowsShellAvailable?: boolean
-  /** 预设禁用的产品内置工具组（task-graph/memory/collaboration/automation），对应工具不注册 */
+  /** 预设禁用的产品内置能力组；对应工具不注册。 */
   disabledToolGroups?: string[]
   /** 预设禁用的单个产品内置工具（短名，见 shared AGENT_PRESET_GROUP_TOOL_NAMES），与工具组叠加生效 */
   disabledTools?: string[]
@@ -448,7 +432,12 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
  * Pi 侧显式桥接 agent-presets 能力（Claude 走 in-process MCP server，Pi 无法消费，
  * 与 task-graph 同一原因）。handler 直接调 agent-preset-manager，与 MCP 侧共用逻辑。
  */
-export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'sessionId' | 'workspaceSlug'>): ToolDefinition[] {
+export function buildPiAgentPresetTools(
+  sdk: PiSdk,
+  ctx: Pick<PiBuiltinToolsContext, 'sessionId' | 'workspaceSlug'>,
+): ToolDefinition[] {
+  // 预设变更是用户控制面。Agent 运行中只注册只读列表，避免模型通过
+  // preset_switch_session / preset_update 等路径改变本轮或下一轮能力门禁。
   return [
     sdk.defineTool({
       name: 'mcp__agent-presets__preset_list',
@@ -478,167 +467,6 @@ export function buildPiAgentPresetTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCont
             disabledTools: p.disabledTools ?? null,
           })),
         })
-      },
-    }),
-    sdk.defineTool({
-      name: 'mcp__agent-presets__preset_create',
-      label: '创建 Agent 预设',
-      description: '创建一个新的自定义预设。预设 = 岗位 + 工作环境：把提示词段、推理强度、权限模式、Skill/MCP 白名单、子 Agent 策略组合成命名配置。用户说「帮我建个 XX 预设」或「把这类任务固化」时使用。',
-      parameters: Type.Object({
-        name: Type.String({ minLength: 1 }),
-        description: Type.Optional(Type.String()),
-        promptSections: Type.Optional(Type.Array(Type.String())),
-        suppressPromptSections: Type.Optional(AGENT_PRESET_SUPPRESS_ARRAY),
-        disabledToolGroups: Type.Optional(Type.Array(Type.Union([Type.Literal('task-graph'), Type.Literal('memory'), Type.Literal('collaboration'), Type.Literal('automation')]))),
-        disabledTools: Type.Optional(Type.Array(Type.String({ description: '禁用的单个产品内置工具短名（如 proma_task_create / delegate_agent）' }))),
-        effort: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('max')])),
-        permissionMode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('bypassPermissions'), Type.Literal('plan')])),
-        skillSlugs: Type.Optional(Type.Array(Type.String())),
-        mcpServerNames: Type.Optional(Type.Array(Type.String())),
-        allowSubagents: Type.Optional(Type.Boolean()),
-        basePresetId: Type.Optional(Type.String({ description: '派生基座（内置预设 ID：standard / code / minimal）；省略=独立预设' })),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as {
-          name: string; description?: string; promptSections?: string[]
-          suppressPromptSections?: Array<'subagents' | 'memory' | 'task-graph' | 'automation'>
-          disabledToolGroups?: Array<'task-graph' | 'memory' | 'collaboration' | 'automation'>
-          disabledTools?: string[]
-          effort?: 'low' | 'medium' | 'high' | 'max'
-          permissionMode?: 'auto' | 'bypassPermissions' | 'plan'
-          skillSlugs?: string[]; mcpServerNames?: string[]; allowSubagents?: boolean
-          basePresetId?: string
-        }
-        try {
-          const preset = createAgentPreset(ctx.workspaceSlug, {
-            name: args.name,
-            description: args.description ?? '',
-            ...(args.promptSections && { promptSections: args.promptSections }),
-            ...(args.suppressPromptSections && { suppressPromptSections: args.suppressPromptSections }),
-            ...(args.disabledToolGroups && { disabledToolGroups: args.disabledToolGroups }),
-            ...(args.disabledTools && { disabledTools: args.disabledTools }),
-            ...(args.effort && { effort: args.effort }),
-            ...(args.permissionMode && { permissionMode: args.permissionMode }),
-            ...(args.skillSlugs !== undefined && { skillSlugs: args.skillSlugs }),
-            ...(args.mcpServerNames !== undefined && { mcpServerNames: args.mcpServerNames }),
-            ...(args.allowSubagents !== undefined && { allowSubagents: args.allowSubagents }),
-            ...(args.basePresetId !== undefined && { basePresetId: args.basePresetId }),
-          })
-          return jsonToolResult({
-            preset,
-            hint: '新预设已创建。会话内可用 mcp__agent-presets__preset_switch_session 随时切换；新建会话将使用默认预设（mcp__agent-presets__preset_set_default 可改）。',
-          })
-        } catch (error) {
-          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    }),
-    sdk.defineTool({
-      name: 'mcp__agent-presets__preset_copy',
-      label: '复制 Agent 预设',
-      description: '复制一个预设（内置或自定义）为新的自定义预设，完整保留源配置（含能力裁剪字段）。',
-      parameters: Type.Object({
-        fromId: Type.String({ minLength: 1 }),
-        name: Type.Optional(Type.String()),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as { fromId: string; name?: string }
-        try {
-          const preset = copyAgentPreset(ctx.workspaceSlug, args.fromId, args.name)
-          return jsonToolResult({
-            preset,
-            hint: '副本已创建。新建会话时可以在会话创建入口选择该预设；如需设为默认（mcp__agent-presets__preset_set_default）请向用户确认。',
-          })
-        } catch (error) {
-          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    }),
-    sdk.defineTool({
-      name: 'mcp__agent-presets__preset_update',
-      label: '更新 Agent 预设',
-      description: '更新自定义预设（内置预设不可更新；字段省略表示不修改，传 null 清除该字段回退跟随默认）。',
-      parameters: Type.Object({
-        presetId: Type.String({ minLength: 1 }),
-        name: Type.Optional(Type.String()),
-        description: Type.Optional(Type.String()),
-        promptSections: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-        suppressPromptSections: Type.Optional(Type.Union([AGENT_PRESET_SUPPRESS_ARRAY, Type.Null()])),
-        disabledToolGroups: Type.Optional(Type.Union([Type.Array(Type.Union([Type.Literal('task-graph'), Type.Literal('memory'), Type.Literal('collaboration'), Type.Literal('automation')])), Type.Null()])),
-        disabledTools: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-        effort: Type.Optional(Type.Union([Type.Literal('low'), Type.Literal('medium'), Type.Literal('high'), Type.Literal('max'), Type.Null()])),
-        permissionMode: Type.Optional(Type.Union([Type.Literal('auto'), Type.Literal('bypassPermissions'), Type.Literal('plan'), Type.Null()])),
-        skillSlugs: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-        mcpServerNames: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-        allowSubagents: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-        basePresetId: Type.Optional(Type.Union([Type.String({ description: '切换派生基座（内置预设 ID）' }), Type.Null({ description: '脱离基座，冻结当前生效配置为独立预设' })])),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as { presetId: string } & Record<string, unknown>
-        try {
-          const { presetId, ...rest } = args
-          const preset = updateAgentPreset(ctx.workspaceSlug, presetId, rest)
-          return jsonToolResult({ preset })
-        } catch (error) {
-          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    }),
-    sdk.defineTool({
-      name: 'mcp__agent-presets__preset_delete',
-      label: '删除 Agent 预设',
-      description: '删除自定义预设（内置不可删除；被删预设若是默认则自动回退 standard）。',
-      parameters: Type.Object({
-        presetId: Type.String({ minLength: 1 }),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as { presetId: string }
-        try {
-          deleteAgentPreset(ctx.workspaceSlug, args.presetId)
-          return jsonToolResult({ deleted: args.presetId, defaultPresetId: getDefaultPresetId(ctx.workspaceSlug) })
-        } catch (error) {
-          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    }),
-    sdk.defineTool({
-      name: 'mcp__agent-presets__preset_set_default',
-      label: '设置默认 Agent 预设',
-      description: '设置默认预设（新建会话自动使用）。',
-      parameters: Type.Object({
-        presetId: Type.String({ minLength: 1 }),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as { presetId: string }
-        try {
-          const id = setDefaultPresetId(ctx.workspaceSlug, args.presetId)
-          return jsonToolResult({ defaultPresetId: id })
-        } catch (error) {
-          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    }),
-    sdk.defineTool({
-      name: 'mcp__agent-presets__preset_switch_session',
-      label: '切换当前会话预设',
-      description: '切换当前会话绑定的预设（下一轮消息完整生效，含工具裁剪）。用户说「这个会话换成 XX 模式」时使用。',
-      parameters: Type.Object({
-        presetId: Type.String({ minLength: 1 }),
-      }),
-      async execute(_toolCallId, params) {
-        const args = params as { presetId: string }
-        try {
-          const resolved = getAgentPreset(ctx.workspaceSlug, args.presetId)
-          if (resolved.id !== args.presetId) {
-            return jsonToolResult({ error: `预设不存在: ${args.presetId}` })
-          }
-          const session = getAgentSessionMeta(ctx.sessionId)
-          if (!session) return jsonToolResult({ error: '会话不存在' })
-          const updated = updateAgentSessionMeta(ctx.sessionId, { presetId: args.presetId })
-          return jsonToolResult({ sessionId: ctx.sessionId, presetId: updated.presetId })
-        } catch (error) {
-          return jsonToolResult({ error: error instanceof Error ? error.message : String(error) })
-        }
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -757,6 +585,95 @@ function buildPiAgentPreviewTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolD
           page: typeof args.page === 'number' ? args.page : undefined,
           previousRevision: typeof args.previousRevision === 'string' ? args.previousRevision : undefined,
         }, { agentCwd: ctx.workspaceSlug ? ctx.agentCwd! : '', allowedRoots: ctx.allowedRoots ?? [] }) as Promise<AgentToolResult<unknown>>
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
+function buildPiPptMaterialTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  // PPT 素材工具同时受会话级意图 gate 和预设级 ppt-materials 硬门禁控制。
+  if (!ctx.pptCapabilityActive || !ctx.agentCwd) return []
+  return [
+    sdk.defineTool({
+      name: 'search_open_materials',
+      label: '搜索 PPT 开放许可素材',
+      description: '搜索可用于 PPT 的开放许可真实图片。默认仅返回 Public Domain/CC0；需要时可加入 CC BY，并保留来源与许可信息。',
+      promptSnippet: 'SearchOpenMaterials: find openly licensed real images for the active PPT deck and preserve attribution.',
+      parameters: Type.Object({
+        query: Type.String({ minLength: 1, maxLength: 200 }),
+        includeAttribution: Type.Optional(Type.Boolean()),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { query: string; includeAttribution?: boolean }
+        return jsonToolResult(await searchPptMaterials({ query: args.query, includeAttribution: args.includeAttribution }))
+      },
+    }),
+    sdk.defineTool({
+      name: 'download_open_material',
+      label: '下载 PPT 开放许可素材',
+      description: '将搜索返回的一项开放许可素材下载到当前 Agent 工作区 .context/ppt-materials/，返回本地路径、来源页和许可信息。',
+      promptSnippet: 'DownloadOpenMaterial: save a selected licensed PPT asset under .context/ppt-materials/ with attribution metadata.',
+      parameters: Type.Object({
+        material: Type.Object({
+          id: Type.String(),
+          source: Type.Literal('wikimedia'),
+          title: Type.String(),
+          thumbnailUrl: Type.String({ format: 'uri' }),
+          originalUrl: Type.String({ format: 'uri' }),
+          landingPageUrl: Type.String({ format: 'uri' }),
+          licenseCode: Type.String(),
+          licenseUrl: Type.Optional(Type.String({ format: 'uri' })),
+          creator: Type.Optional(Type.String()),
+          attribution: Type.Optional(Type.String()),
+          width: Type.Optional(Type.Number()),
+          height: Type.Optional(Type.Number()),
+          mediaType: Type.Optional(Type.String()),
+        }),
+      }),
+      async execute(_toolCallId, params) {
+        const { material } = params as { material: PptMaterialItem }
+        return jsonToolResult(await downloadPptMaterialToWorkspace({ material }, ctx.agentCwd!))
+      },
+    }),
+    sdk.defineTool({
+      name: 'plan_ppt_visuals',
+      label: '规划 PPT 视觉',
+      description: '在生成多页 PPT 前创建逐页视觉计划。每页必须指定真实图片、图表、图解或数据大字之一。',
+      promptSnippet: 'PlanPptVisuals: create a slide-by-slide visual plan before generating the active PPT deck.',
+      parameters: Type.Object({
+        deckIntent: Type.String({ minLength: 1, maxLength: 300 }),
+        slides: Type.Array(Type.Object({
+          slideNumber: Type.Optional(Type.Integer({ minimum: 1 })),
+          title: Type.String({ minLength: 1, maxLength: 200 }),
+          purpose: Type.Optional(Type.String({ maxLength: 300 })),
+        }), { minItems: 1 }),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { deckIntent: string; slides: Array<{ slideNumber?: number; title: string; purpose?: string }> }
+        return jsonToolResult(planPptVisuals(args.deckIntent, args.slides))
+      },
+    }),
+    sdk.defineTool({
+      name: 'audit_ppt_delivery',
+      label: '审计 PPT 交付',
+      description: 'PPT 生成后审计逐页图片、图表、形状与文本；若视觉计划未落地或整套无图片无图表，必须修订后再交付。',
+      promptSnippet: 'AuditPptDelivery: audit the generated PPTX against its visual plan before delivery.',
+      parameters: Type.Object({
+        filePath: Type.String({ minLength: 1 }),
+        visualPlan: Type.Optional(Type.Object({
+          deckIntent: Type.String(),
+          slides: Type.Array(Type.Object({
+            slideNumber: Type.Integer({ minimum: 1 }),
+            slidePurpose: Type.String(),
+            heroVisual: Type.Union([Type.Literal('real_image'), Type.Literal('chart'), Type.Literal('diagram'), Type.Literal('data_typography')]),
+            materialQuery: Type.Optional(Type.String()),
+            fallbackReason: Type.Optional(Type.String()),
+          })),
+        })),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { filePath: string; visualPlan?: Parameters<typeof auditPptDelivery>[1] }
+        return jsonToolResult(auditPptDelivery(args.filePath, args.visualPlan))
       },
     }),
   ] as unknown as ToolDefinition[]
@@ -1487,26 +1404,37 @@ export async function buildPiBuiltinTools(
 
   const tools: ToolDefinition[] = []
 
-  try {
-    tools.push(...buildPiAgentImageOutputTools(sdk, ctx))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入本地图片输出工具失败:', error)
+  if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'image')) {
+    try {
+      tools.push(...buildPiAgentImageOutputTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入本地图片输出工具失败:', error)
+    }
+
+    try {
+      tools.push(...buildPiAgentGptImageTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入 GPT Image 工具失败:', error)
+    }
   }
 
-  try {
-    tools.push(...buildPiAgentPreviewTools(sdk, ctx))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入文件预览工具失败:', error)
+  if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'preview')) {
+    try {
+      tools.push(...buildPiAgentPreviewTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入文件预览工具失败:', error)
+    }
   }
 
-  try {
-    tools.push(...buildPiAgentGptImageTools(sdk, ctx))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入 GPT Image 工具失败:', error)
+  if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'ppt-materials')) {
+    try {
+      tools.push(...buildPiPptMaterialTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入 PPT 素材工具失败:', error)
+    }
   }
 
-
-  if (isWebSearchEnabledForAgent()) {
+  if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'web') && isWebSearchEnabledForAgent()) {
     try {
       tools.push(...buildWebTools(sdk))
     } catch (error) {
@@ -1576,18 +1504,22 @@ export async function buildPiBuiltinTools(
 
   // Pi-native 受管浏览器不经过 MCP：网页 WebContents 和 CDP 永远停留在主进程。
   // 用户会话、自动任务与协作子会话共用同一套受管浏览器能力，仍受 URL、下载和权限策略约束。
-  try {
-    tools.push(...buildBrowserTools(sdk, ctx))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入受管浏览器工具失败:', error)
+  if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'browser')) {
+    try {
+      tools.push(...buildBrowserTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入受管浏览器工具失败:', error)
+    }
   }
 
   // 系统剪贴板工具：Agent 读取/写入系统剪贴板走主进程 Electron clipboard（UTF-8），
   // 避免退化为 PowerShell Get-Clipboard（Windows 代码页导致中文乱码）。
-  try {
-    tools.push(...buildPiClipboardTools(sdk))
-  } catch (error) {
-    console.error('[Pi 桥接] 注入系统剪贴板工具失败:', error)
+  if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'clipboard')) {
+    try {
+      tools.push(...buildPiClipboardTools(sdk))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入系统剪贴板工具失败:', error)
+    }
   }
 
   const cloudTools = buildProferCloudTools(sdk, ctx)

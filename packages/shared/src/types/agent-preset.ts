@@ -72,66 +72,70 @@ export class AgentPresetError extends Error {
   }
 }
 
-/** 产品内置工具组（预设可禁用，注入时直接不注册对应工具） */
-export const AGENT_PRESET_TOOL_GROUPS = ['task-graph', 'memory', 'collaboration', 'automation'] as const
-export type AgentPresetToolGroup = (typeof AGENT_PRESET_TOOL_GROUPS)[number]
-
-/** 可被 suppressPromptSections 隐藏的内置提示词段 key（运行时校验与 Zod/TypeBox schema 的唯一事实来源） */
+/** 可被 suppressPromptSections 隐藏的内置提示词段 key。 */
 export const AGENT_PRESET_SUPPRESS_KEYS = ['subagents', 'memory', 'task-graph', 'automation'] as const
 export type AgentPresetSuppressKey = (typeof AGENT_PRESET_SUPPRESS_KEYS)[number]
 
-/**
- * 每个产品内置工具组的工具短名清单（B2-3 单工具裁剪的唯一事实来源）。
- * 短名不带 runtime 前缀（Claude 为裸名，Pi 为 mcp__server__tool 的末段），
- * 两侧注册点按短名匹配过滤，UI 与工具 schema 均从本表渲染/校验。
- */
-export const AGENT_PRESET_GROUP_TOOL_NAMES: Record<AgentPresetToolGroup, readonly string[]> = {
-  'task-graph': ['proma_task_create', 'proma_task_update'],
-  memory: ['search_memory', 'list_team_memories', 'read_team_memory', 'search_team_memories', 'create_team_memory', 'update_team_memory'],
-  collaboration: [
-    'list_available_agent_models',
-    'delegate_agent',
-    'delegate_agents',
-    'wait_for_delegations',
-    'list_delegations',
-    'get_delegation_results',
-    'stop_delegation',
-    'stop_delegations',
-    'answer_delegation_question',
-    'continue_delegation',
-  ],
-  // automation 组同时覆盖持久化定时任务与规划中心 Todo/日程，避免“提醒/安排”能力与自动化能力分裂。
-  automation: [
-    'list_automations', 'get_automation', 'create_automation', 'update_automation', 'delete_automation', 'run_automation_now',
-    'list_todos', 'get_todo', 'create_todo', 'update_todo',
-    'list_calendar_events', 'get_calendar_event', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event',
-  ],
+export interface AgentPresetCapabilityGroup<Id extends string = string> {
+  id: Id
+  label: string
+  hint: string
+  /** 该组拥有的工具短名；Claude 使用裸名，Pi 使用带 server 前缀的名字。 */
+  toolNames: readonly string[]
+  /** 组禁用时需要自动隐藏的内置提示词段。 */
+  suppressPromptSection?: AgentPresetSuppressKey
 }
 
-/** 全部可裁剪单工具短名（disabledTools 校验用） */
-export const AGENT_PRESET_TOOL_NAMES: readonly string[] = Object.values(AGENT_PRESET_GROUP_TOOL_NAMES).flat()
-
 /**
- * 按 disabledTools 短名过滤工具定义（Claude/Pi 注册点共用）。
- * 短名口径：Claude 工具名为裸短名，Pi 为 mcp__server__tool，取 name 按 '__' 分割的末段。
+ * 统一能力注册表：能力元数据只维护在 shared，业务实现仍留在各自 Runtime 模块。
+ * UI、schema、Claude/Pi 注入和单工具裁剪都从这里派生，避免多份清单漂移。
  */
+export const AGENT_PRESET_CAPABILITY_GROUPS = [
+  { id: 'task-graph', label: '任务图', hint: '子任务图工具', toolNames: ['proma_task_create', 'proma_task_update'], suppressPromptSection: 'task-graph' },
+  { id: 'memory', label: '长期记忆', hint: 'Auto Memory 与 memory-archive', toolNames: ['search_memory', 'list_team_memories', 'read_team_memory', 'search_team_memories', 'create_team_memory', 'update_team_memory'], suppressPromptSection: 'memory' },
+  { id: 'collaboration', label: '协作子 Agent', hint: '委派与协作工具（等价禁止委派）', toolNames: ['list_available_agent_models', 'delegate_agent', 'delegate_agents', 'wait_for_delegations', 'list_delegations', 'get_delegation_results', 'stop_delegation', 'stop_delegations', 'answer_delegation_question', 'continue_delegation'], suppressPromptSection: 'subagents' },
+  { id: 'automation', label: '自动化与规划', hint: '定时任务、规划 Todo 与本地日程工具', toolNames: ['list_automations', 'get_automation', 'create_automation', 'update_automation', 'delete_automation', 'run_automation_now', 'list_todos', 'get_todo', 'create_todo', 'update_todo', 'list_calendar_events', 'get_calendar_event', 'create_calendar_event', 'update_calendar_event', 'delete_calendar_event'], suppressPromptSection: 'automation' },
+  { id: 'browser', label: '受管浏览器', hint: '网页访问、交互与标签页工具', toolNames: ['BrowserObserve', 'BrowserNavigate', 'BrowserWaitFor', 'BrowserClick', 'BrowserFill', 'BrowserDomAction', 'BrowserExecuteJavaScript', 'BrowserPress', 'BrowserScreenshot', 'BrowserPreviewOpen', 'BrowserListTabs', 'BrowserNewTab', 'BrowserSelectTab', 'BrowserCloseTab'] },
+  { id: 'clipboard', label: '系统剪贴板', hint: '读取和写入系统剪贴板文本', toolNames: ['clipboard_read_text', 'clipboard_write_text'] },
+  { id: 'preview', label: '文件预览', hint: '通用文件预览与 PPTX 正式预览检查', toolNames: ['inspect_preview', 'open_file_preview', 'inspect_file_preview'] },
+  { id: 'image', label: '图片', hint: '图片生成、编辑与本地图片输出', toolNames: ['generate_image', 'send_local_image'] },
+  { id: 'web', label: '网页搜索', hint: 'WebSearch 与 WebFetch', toolNames: ['WebSearch', 'WebFetch'] },
+  { id: 'ppt-materials', label: 'PPT 素材', hint: '开放许可素材、视觉计划与交付审计', toolNames: ['search_open_materials', 'download_open_material', 'plan_ppt_visuals', 'audit_ppt_delivery'] },
+] as const satisfies readonly AgentPresetCapabilityGroup[]
+
+export type AgentPresetToolGroup = (typeof AGENT_PRESET_CAPABILITY_GROUPS)[number]['id']
+
+/** 能力组 ID 序列由注册表派生，供 zod schema 等需要 tuple 的调用方使用。 */
+export const AGENT_PRESET_TOOL_GROUPS = AGENT_PRESET_CAPABILITY_GROUPS.map((group) => group.id) as [AgentPresetToolGroup, ...AgentPresetToolGroup[]]
+
+/** 兼容已有按组索引的调用方；内容由统一注册表派生。 */
+export const AGENT_PRESET_GROUP_TOOL_NAMES = Object.fromEntries(
+  AGENT_PRESET_CAPABILITY_GROUPS.map((group) => [group.id, group.toolNames]),
+) as unknown as Record<AgentPresetToolGroup, readonly string[]>
+
+/** 全部可裁剪单工具短名（disabledTools 校验用） */
+export const AGENT_PRESET_TOOL_NAMES: readonly string[] = AGENT_PRESET_CAPABILITY_GROUPS.flatMap((group) => [...group.toolNames])
+
+/** 按 disabledTools 短名过滤工具定义（Claude/Pi 注册点共用）。 */
 export function filterDisabledTools<T extends { name: string }>(tools: T[], disabledTools: readonly string[] | undefined): T[] {
   if (!disabledTools?.length) return tools
   const disabled = new Set(disabledTools)
   return tools.filter((tool) => !disabled.has(tool.name.split('__').at(-1) ?? tool.name))
 }
 
-/**
- * 工具组禁用 → 提示词段隐藏 key 的自动映射（三层一致）。
- * automation 组包含规划中心，因此同时隐藏定时任务和规划中心指南。
- * orchestrator 与设置页共用此表，避免硬编码漂移；禁止新工具组不在本表登记。
- */
-export const AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP: Record<AgentPresetToolGroup, AgentPresetSuppressKey> = {
-  'task-graph': 'task-graph',
-  memory: 'memory',
-  collaboration: 'subagents',
-  automation: 'automation',
+/** 统一判断能力组是否被预设硬禁用。 */
+export function isAgentPresetToolGroupDisabled(disabledToolGroups: readonly string[] | undefined, group: AgentPresetToolGroup): boolean {
+  return disabledToolGroups?.includes(group) === true
 }
+
+/** 工具组禁用 → 提示词段隐藏 key 的自动映射（三层一致）。 */
+const capabilitySuppressMap: Partial<Record<AgentPresetToolGroup, AgentPresetSuppressKey>> = {}
+for (const group of AGENT_PRESET_CAPABILITY_GROUPS) {
+  if ('suppressPromptSection' in group) {
+    capabilitySuppressMap[group.id] = group.suppressPromptSection
+  }
+}
+export const AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP = capabilitySuppressMap
 
 /** Agent 预设 */
 export interface AgentPreset {

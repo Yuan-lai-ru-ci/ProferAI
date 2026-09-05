@@ -159,6 +159,7 @@ export async function injectAgentPreviewMcpServer(
   sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
   mcpServers: Record<string, Record<string, unknown>>,
   context: OpenFilePreviewContext,
+  disabledTools?: string[],
 ): Promise<void> {
   let z: typeof import('zod').z
   try { ({ z } = await import('zod')) } catch { z = require('zod').z }
@@ -197,7 +198,7 @@ export async function injectAgentPreviewMcpServer(
         },
         async (input) => executeAgentPreviewTool(input, context),
       ),
-    ],
+    ].filter((tool) => !disabledTools?.includes(tool.name)),
   })
   mcpServers['agent-preview'] = server as unknown as Record<string, unknown>
 }

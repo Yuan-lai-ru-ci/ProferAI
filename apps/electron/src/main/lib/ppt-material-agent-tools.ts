@@ -1,3 +1,4 @@
+import { filterDisabledTools } from '@profer/shared'
 import type { PptMaterialItem } from '@profer/shared'
 import { downloadPptMaterialToWorkspace, searchPptMaterials } from './ppt-material-service'
 import { auditPptDelivery, planPptVisuals } from './ppt-delivery-audit-service'
@@ -12,12 +13,13 @@ export async function injectPptMaterialMcpServer(
   sdk: typeof import('@anthropic-ai/claude-agent-sdk'),
   mcpServers: Record<string, Record<string, unknown>>,
   ctx: { agentCwd: string },
+  disabledTools?: string[],
 ): Promise<void> {
   let z: typeof import('zod').z
   try { ({ z } = await import('zod')) } catch { z = require('zod').z }
 
   const server = sdk.createSdkMcpServer({
-    name: 'ppt-materials', version: '1.0.0', tools: [
+    name: 'ppt-materials', version: '1.0.0', tools: filterDisabledTools([
       sdk.tool(
         'search_open_materials',
         '搜索可用于 PPT 的开放许可真实图片。默认仅返回 Public Domain/CC0；includeAttribution=true 时可加入 CC BY。免费不等于已清权，使用时仍须注意商标、肖像和隐私权，并保留返回的来源与许可信息。',
@@ -45,7 +47,7 @@ export async function injectPptMaterialMcpServer(
         async ({ filePath, visualPlan }) => result(auditPptDelivery(filePath, visualPlan)),
         { annotations: { readOnlyHint: true } },
       ),
-    ],
+    ], disabledTools),
   })
   mcpServers['ppt-materials'] = server as unknown as Record<string, unknown>
 }

@@ -75,76 +75,25 @@ function createPiSdkStub(): {
 }
 
 describe('Pi Profer in-process tool bridges', () => {
-  test('Given Pi runtime When building preset tools Then it exposes 7 preset_* tools with mcp__agent-presets prefix', () => {
+  test('Given Pi runtime When building preset tools Then only the read-only preset_list is exposed', () => {
     const { sdk, tools } = createPiSdkStub()
     buildPiAgentPresetTools(sdk, { sessionId: 'pi-preset-test', workspaceSlug: 'pi-test-ws' })
-    expect(tools.length).toBe(7)
-    const names = tools.map((t) => t.name)
-    expect(names).toEqual([
-      'mcp__agent-presets__preset_list',
-      'mcp__agent-presets__preset_create',
-      'mcp__agent-presets__preset_copy',
-      'mcp__agent-presets__preset_update',
-      'mcp__agent-presets__preset_delete',
-      'mcp__agent-presets__preset_set_default',
-      'mcp__agent-presets__preset_switch_session',
-    ])
+    expect(tools.length).toBe(1)
+    expect(tools.map((t) => t.name)).toEqual(['mcp__agent-presets__preset_list'])
   })
 
-  test('Given preset_create tool When executed with a valid name Then it creates and returns a custom preset', async () => {
+  test('Given preset mutation tool names When building Pi preset tools Then they are not registered', () => {
     const { sdk, tools } = createPiSdkStub()
-    const presetManager = await import('../agent-preset-manager')
-    const { mkdtempSync, rmSync } = await import('node:fs')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const tmpDir = mkdtempSync(join(tmpdir(), 'pi-preset-tool-test-'))
-    presetManager.__setAgentPresetsConfigPathForTest(tmpDir)
-    try {
-      buildPiAgentPresetTools(sdk, { sessionId: 'pi-preset-test', workspaceSlug: 'pi-test-ws' })
-      const createTool = tools.find((t) => t.name === 'mcp__agent-presets__preset_create')!
-      const result = await createTool.execute!('call-1', { name: '研究模式', description: '只读调研' }) as { content: Array<{ text: string }> }
-      const payload = JSON.parse(result.content[0]!.text)
-      expect(payload.preset.name).toBe('研究模式')
-      expect(payload.preset.isBuiltin).toBe(false)
-      // list 工具能读回该预设
-      const listTool = tools.find((t) => t.name === 'mcp__agent-presets__preset_list')!
-      const listResult = await listTool.execute!('call-2', {}) as { content: Array<{ text: string }> }
-      const listPayload = JSON.parse(listResult.content[0]!.text)
-      expect(listPayload.presets.length).toBe(4)
-      expect(listPayload.presets.some((p: { name: string }) => p.name === '研究模式')).toBe(true)
-    } finally {
-      presetManager.__resetAgentPresetsConfigPathForTest()
-      rmSync(tmpDir, { recursive: true, force: true })
-    }
+    buildPiAgentPresetTools(sdk, { sessionId: 'pi-preset-test', workspaceSlug: 'pi-test-ws' })
+    expect(tools.map((tool) => tool.name)).not.toContain('mcp__agent-presets__preset_create')
+    expect(tools.map((tool) => tool.name)).not.toContain('mcp__agent-presets__preset_update')
+    expect(tools.map((tool) => tool.name)).not.toContain('mcp__agent-presets__preset_switch_session')
   })
 
-  test('Given preset_create 带 basePresetId When Pi 创建 Then 落盘为派生预设（内置基座校验由 manager 把关）', async () => {
+  test('Given preset mutation names When Pi builds preset tools Then mutation tools are absent', () => {
     const { sdk, tools } = createPiSdkStub()
-    const presetManager = await import('../agent-preset-manager')
-    const { mkdtempSync, rmSync } = await import('node:fs')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const tmpDir = mkdtempSync(join(tmpdir(), 'pi-preset-derive-test-'))
-    presetManager.__setAgentPresetsConfigPathForTest(tmpDir)
-    try {
-      buildPiAgentPresetTools(sdk, { sessionId: 'pi-derive-test', workspaceSlug: 'pi-derive-ws' })
-      const createTool = tools.find((t) => t.name === 'mcp__agent-presets__preset_create')!
-      const result = await createTool.execute!('call-1', {
-        name: '极简·研究',
-        description: '基于极简派生',
-        basePresetId: 'minimal',
-        disabledToolGroups: ['automation'],
-      }) as { content: Array<{ text: string }> }
-      const payload = JSON.parse(result.content[0]!.text)
-      expect(payload.preset.basePresetId).toBe('minimal')
-      // 生效配置合并基座 + 映射兜底：minimal 的 3 项 suppress ∪ automation（禁用工具组自动补全）
-      const resolved = presetManager.getAgentPreset('pi-derive-ws', payload.preset.id)
-      expect(resolved.suppressPromptSections).toEqual(['subagents', 'memory', 'task-graph', 'automation'])
-      expect(resolved.disabledToolGroups).toEqual(['task-graph', 'memory', 'collaboration', 'automation'])
-    } finally {
-      presetManager.__resetAgentPresetsConfigPathForTest()
-      rmSync(tmpDir, { recursive: true, force: true })
-    }
+    buildPiAgentPresetTools(sdk, { sessionId: 'pi-derive-test', workspaceSlug: 'pi-derive-ws' })
+    expect(tools.map((tool) => tool.name)).toEqual(['mcp__agent-presets__preset_list'])
   })
 
   test('Given Pi runtime When building memory tools without a workspace Then it does not expose personal memory search', () => {
@@ -306,9 +255,26 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
       pptCapabilityActive: true,
     })
     const names = tools.map((tool) => tool.name)
-    for (const forbidden of ['plan_ppt_visuals', 'audit_ppt_delivery', 'search_open_materials', 'inspect_deck_sources', 'create_deck_project', 'confirm_deck_brief', 'compile_deck_project']) {
+    for (const expected of ['plan_ppt_visuals', 'audit_ppt_delivery', 'search_open_materials', 'download_open_material']) {
+      expect(names).toContain(expected)
+    }
+    for (const forbidden of ['inspect_deck_sources', 'create_deck_project', 'confirm_deck_brief', 'compile_deck_project']) {
       expect(names).not.toContain(forbidden)
     }
+  })
+
+  test('Given PPT capability active but ppt-materials disabled Then PPT-specific tools are absent', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      ...baseCtx,
+      agentCwd: 'C:/safe/session',
+      allowedRoots: ['C:/safe/attached'],
+      pptCapabilityActive: true,
+      disabledToolGroups: ['ppt-materials'],
+    })
+    expect(tools.some((tool) => tool.name === 'plan_ppt_visuals')).toBe(false)
+    expect(tools.some((tool) => tool.name === 'audit_ppt_delivery')).toBe(false)
+    expect(tools.some((tool) => tool.name === 'search_open_materials')).toBe(false)
   })
 
   test('Given no disabled groups Then all four groups are registered', async () => {
@@ -316,6 +282,23 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     await buildPiBuiltinTools(sdk, baseCtx)
     for (const [group, prefix] of Object.entries(GROUP_PREFIXES)) {
       expect(tools.some((t) => t.name.startsWith(prefix)), `group ${group} (${prefix}) should be registered`).toBe(true)
+    }
+  })
+
+  test('Given each new capability group disabled Then only its registered tools are pruned', async () => {
+    const cases = [
+      { group: 'browser', names: ['BrowserObserve', 'BrowserNavigate'] },
+      { group: 'clipboard', names: ['clipboard_read_text', 'clipboard_write_text'] },
+      { group: 'preview', names: ['inspect_preview', 'open_file_preview', 'inspect_file_preview'] },
+      { group: 'image', names: ['send_local_image'] },
+      { group: 'web', names: ['WebSearch', 'WebFetch'] },
+    ] as const
+    for (const { group, names: disabledNames } of cases) {
+      const { sdk, tools } = createPiSdkStub()
+      await buildPiBuiltinTools(sdk, { ...baseCtx, agentCwd: 'C:/safe/session', allowedRoots: ['C:/safe/attached'], disabledToolGroups: [group] })
+      const registered = new Set(tools.map((tool) => tool.name))
+      for (const name of disabledNames) expect(registered.has(name), `${group}/${name} should be disabled`).toBe(false)
+      expect(registered.has('mcp__agent-presets__preset_list')).toBe(true)
     }
   })
 

@@ -41,6 +41,7 @@ import {
   ensureProjectDraftAgentSession,
   updateAgentSessionMeta,
   deleteAgentSession,
+  migrateChatToAgentSession,
   forkAgentSession,
   moveSessionToWorkspace,
   paginateSDKMessages,
@@ -1170,6 +1171,23 @@ export async function handleRemoteCommand(
       const meta = createAgentSession(title, channelId, workspaceId, modelId)
       publishSessionUpdated(meta)
       return { ok: true, data: { sessionId: meta.id, title: meta.title } }
+    }
+
+    // Chat 与 Agent 共用电脑端持久化目录，直接复用桌面迁移逻辑，避免移动端复制一份转换规则。
+    case 'migrate_chat_to_agent': {
+      const conversationId = typeof parsed.conversationId === 'string' ? parsed.conversationId : ''
+      const agentSessionId = typeof parsed.agentSessionId === 'string' ? parsed.agentSessionId : ''
+      if (!conversationId || !agentSessionId) return { ok: false, error: '缺少 conversationId 或 agentSessionId' }
+      if (!listConversations(true).some((conversation) => conversation.id === conversationId)) {
+        return { ok: false, error: '对话不存在' }
+      }
+      if (!getAgentSessionMeta(agentSessionId)) return { ok: false, error: 'Agent 会话不存在' }
+      try {
+        migrateChatToAgentSession(conversationId, agentSessionId)
+        return { ok: true, data: { migrated: true } }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
     }
 
     // 语义对齐桌面 ensureProjectDraftAgentSession：项目已有草稿会话则复用（发过消息则晋升正式），否则创建

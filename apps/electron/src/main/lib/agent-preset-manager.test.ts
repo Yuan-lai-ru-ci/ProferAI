@@ -43,6 +43,9 @@ import {
   BUILTIN_PRESET_MINIMAL,
   BUILTIN_AGENT_PRESETS,
   DEFAULT_PRESET_ID,
+  AGENT_PRESET_TOOL_GROUPS,
+  AGENT_PRESET_CAPABILITY_GROUPS,
+  AGENT_PRESET_TOOL_NAMES,
 } from '@profer/shared'
 
 const WS_A = 'ws-a'
@@ -67,6 +70,15 @@ function writeLegacyPresetConfig(workspaceSlug: string, config: Record<string, u
   writeFileSync(path, JSON.stringify(config, null, 2))
   return path
 }
+
+describe('Capability Registry', () => {
+  test('能力组和工具短名来自同一注册表且没有重复项', () => {
+    expect(AGENT_PRESET_CAPABILITY_GROUPS.map((group) => group.id)).toEqual([...AGENT_PRESET_TOOL_GROUPS])
+    const names = AGENT_PRESET_CAPABILITY_GROUPS.flatMap((group) => group.toolNames)
+    expect(new Set(names).size).toBe(names.length)
+    expect(new Set(AGENT_PRESET_TOOL_NAMES)).toEqual(new Set(names))
+  })
+})
 
 describe('listAgentPresets', () => {
   test('极简内置预设声明禁用产品工具组与 suppress 段落（提示词与工具一致）', () => {
