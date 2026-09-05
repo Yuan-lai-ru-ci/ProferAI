@@ -1,6 +1,12 @@
 {
   "releases": [
     {
+      "version": "0.15.72",
+      "date": "2026-09-05",
+      "title": "v0.15.72",
+      "notes": "- 新增：Agent 支持本地文件预览检查、全局 Skills 与预设范围管理\n- 优化：Agent Runtime、浏览器标签、皮肤和 macOS 窗口界面稳定性\n- 优化：Windows 打包、CLI Runtime 和发布资产校验流程"
+    },
+    {
       "version": "0.15.68",
       "date": "2026-09-03",
       "title": "v0.15.68",
