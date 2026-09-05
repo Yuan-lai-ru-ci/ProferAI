@@ -56,13 +56,11 @@ import { detectIsWindows } from '@/lib/platform'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { cn } from '@/lib/utils'
 import { replaceAgentSessionInFreshnessOrder } from '@/lib/agent-session-list'
-import { MAC_TOPBAR_CONTENT_HEIGHT, MAC_TOPBAR_HEIGHT, MAC_TOPBAR_TOP_INSET, TOPBAR_CONTENT_HEIGHT, TOPBAR_HEIGHT } from './topbar-layout'
+import { TOPBAR_CONTENT_HEIGHT, TOPBAR_HEIGHT } from './topbar-layout'
 
-export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: boolean; variant?: 'default' | 'mac-global' } = {}): React.ReactElement {
+export function TabBar({ teamMode = false }: { teamMode?: boolean } = {}): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
   const setTabs = useSetAtom(tabsAtom)
-  const topbarHeight = variant === 'mac-global' ? MAC_TOPBAR_HEIGHT : TOPBAR_HEIGHT
-  const topbarContentHeight = variant === 'mac-global' ? MAC_TOPBAR_CONTENT_HEIGHT : TOPBAR_CONTENT_HEIGHT
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom)
   const indicatorMap = useAtomValue(tabIndicatorMapAtom)
 
@@ -352,15 +350,7 @@ export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: b
     }
   }, [])
 
-  if (tabs.length === 0) return (
-    <div
-      className={cn(
-        'topbar-editorial flex items-center tabbar-bg titlebar-drag-region',
-        variant === 'mac-global' && 'mac-global-topbar',
-      )}
-      style={{ height: topbarHeight }}
-    />
-  )
+  if (tabs.length === 0) return <div className="topbar-editorial flex items-center tabbar-bg titlebar-drag-region" style={{ height: TOPBAR_HEIGHT }} />
 
   return (
     <>
@@ -375,9 +365,6 @@ export function TabBar({ teamMode = false, variant = 'default' }: { teamMode?: b
         onDragStart={handleDragStart}
         onTearOff={handleTearOff}
         teamMode={teamMode}
-        variant={variant}
-        topbarHeight={topbarHeight}
-        topbarContentHeight={topbarContentHeight}
       />
     </>
   )
@@ -395,9 +382,6 @@ function TabBarInner({
   onDragStart,
   onTearOff,
   teamMode,
-  variant,
-  topbarHeight,
-  topbarContentHeight,
 }: {
   tabs: TabItem[]
   activeTabId: string | null
@@ -409,9 +393,6 @@ function TabBarInner({
   onDragStart: (tabId: string, e: React.PointerEvent) => void
   onTearOff: (tabId: string) => void
   teamMode: boolean
-  variant: 'default' | 'mac-global'
-  topbarHeight: number
-  topbarContentHeight: number
 }): React.ReactElement {
   const [hoveredTabId, setHoveredTabId] = React.useState<string | null>(null)
   const setTabs = useSetAtom(tabsAtom)
@@ -804,20 +785,16 @@ function TabBarInner({
   }, [])
 
   return (
-    <div ref={barRef} className={cn('topbar-editorial relative tabbar-bg', variant === 'mac-global' && 'mac-global-topbar')} style={{ height: topbarHeight }}>
-      {/* 只把顶部空白区交给窗口拖拽；内容行由各自插槽明确管理命中区域。Mac Tab 上下各保留 8px 间距。 */}
-      <div className={cn('absolute inset-x-0 top-0 titlebar-drag-region', variant === 'mac-global' ? 'h-[42px]' : 'h-[4px]', showTabBarWindowControls && 'right-[126px]')} />
+    <div ref={barRef} className="topbar-editorial relative tabbar-bg" style={{ height: TOPBAR_HEIGHT }}>
+      {/* 只把顶部空白区交给窗口拖拽；内容行由各自插槽明确管理命中区域。 */}
+      <div className={cn('absolute inset-x-0 top-0 h-[4px] titlebar-drag-region', showTabBarWindowControls && 'right-[126px]')} />
       {tearingOff && (
         <div className="pointer-events-none absolute -bottom-px left-0 right-0 h-px bg-primary/60 shadow-[0_0_8px_rgba(0,0,0,0.2)]" />
       )}
 
-      {/* 默认 40px 外框中的 37px 内容行；Mac 全局 chrome 为 53px 外框中的 37px 内容行，上下各保留 8px 间距。 */}
-      <div className="topbar-content absolute inset-x-0 top-1/2 z-10 grid w-full -translate-y-1/2 grid-cols-[minmax(0,1fr)_auto] items-center" style={{
-          height: topbarContentHeight,
-          top: variant === 'mac-global' ? `${MAC_TOPBAR_TOP_INSET}px` : '50%',
-          transform: variant === 'mac-global' ? 'none' : undefined,
-        }}>
-        <div ref={scrollRef} className={cn('flex min-w-0 items-center gap-1 overflow-x-auto px-1 scrollbar-none titlebar-drag-region', variant === 'mac-global' ? 'h-[37px]' : 'h-[37px]')}>
+      {/* 40px 外框中的 37px 内容行；Tab 直接从主区左缘开始，操作区使用真实布局列。 */}
+      <div className="topbar-content absolute inset-x-0 top-1/2 z-10 grid w-full -translate-y-1/2 grid-cols-[minmax(0,1fr)_auto] items-center" style={{ height: TOPBAR_CONTENT_HEIGHT }}>
+        <div ref={scrollRef} className="flex h-[37px] min-w-0 items-center gap-1 overflow-x-auto px-1 scrollbar-none titlebar-drag-region">
           {tabs.map((tab) => (
             <TabBarItem
               key={tab.id}

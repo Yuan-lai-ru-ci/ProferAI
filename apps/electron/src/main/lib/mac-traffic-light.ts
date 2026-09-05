@@ -8,9 +8,9 @@
 
 import type { BrowserWindow, Point } from 'electron'
 
-// 标准倍率下：红绿灯保持原有横向位置；其垂直中心与顶部 8px 间距后的 37px Tab 行水平中线对齐。
-// Electron 坐标是按钮组的左基准；Tab 行整体下移 3px 后，y 同步由 16 调整为 19。
-export const DEFAULT_TRAFFIC_LIGHT_POSITION: Point = { x: 16, y: 19 }
+export const DEFAULT_TRAFFIC_LIGHT_POSITION: Point = { x: 18, y: 18 }
+/** 桌面主界面默认缩放；⌘0 也应回到此倍率，而非 Chromium 的 100%。 */
+export const DEFAULT_MAIN_WINDOW_ZOOM_FACTOR = 1.1
 
 export function resolveTrafficLightPosition(zoomFactor: number, base = DEFAULT_TRAFFIC_LIGHT_POSITION): Point {
   const scale = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1
@@ -38,6 +38,13 @@ export function adjustWindowZoom(win: BrowserWindow, delta: number): void {
   setWindowZoomLevel(win, Math.max(-9, Math.min(9, win.webContents.getZoomLevel() + delta)))
 }
 
+/** 将主界面恢复到 Profer 设定的默认缩放，并同步 macOS 原生红绿灯。 */
+export function resetWindowZoom(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.webContents.setZoomFactor(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR)
+  syncMacTrafficLightPosition(win)
+}
+
 /** 监听所有 Chromium 缩放入口，确保菜单、快捷键和滚轮缩放都能同步。 */
 export function installMacTrafficLightZoomSync(win: BrowserWindow): void {
   if (process.platform !== 'darwin') return
@@ -50,7 +57,7 @@ export function installMacTrafficLightZoomSync(win: BrowserWindow): void {
     const key = input.key.toLowerCase()
     if (key === '0') {
       event.preventDefault()
-      setWindowZoomLevel(win, 0)
+      resetWindowZoom(win)
     } else if (['=', '+', 'add', 'numadd'].includes(key)) {
       event.preventDefault()
       adjustWindowZoom(win, 0.5)

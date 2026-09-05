@@ -1,4 +1,5 @@
 import { app, Menu, shell, BrowserWindow } from 'electron'
+import { DEFAULT_MAIN_WINDOW_ZOOM_FACTOR, resetWindowZoom } from './lib/mac-traffic-light'
 
 export type TextContextMenuParams = Pick<
   Electron.ContextMenuParams,
@@ -140,7 +141,17 @@ export function createApplicationMenu(): Menu {
         { role: 'forceReload' as const, label: '强制重新加载' },
         { role: 'toggleDevTools' as const, label: '切换开发者工具' },
         { type: 'separator' as const },
-        { role: 'resetZoom' as const, label: '重置缩放' },
+        {
+          label: '重置缩放',
+          accelerator: 'CmdOrCtrl+0',
+          click: () => {
+            const win = BrowserWindow.getFocusedWindow()
+            if (!win) return
+            // Profer 的默认缩放是 110%，不沿用 Chromium resetZoom 的 100%。
+            if (process.platform === 'darwin') resetWindowZoom(win)
+            else win.webContents.setZoomFactor(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR)
+          },
+        },
         { role: 'zoomIn' as const, label: '放大' },
         { role: 'zoomOut' as const, label: '缩小' },
         { type: 'separator' as const },

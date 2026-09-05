@@ -1,8 +1,5 @@
 export const TOPBAR_HEIGHT = 40
 export const TOPBAR_CONTENT_HEIGHT = 37
-export const MAC_TOPBAR_HEIGHT = 53
-export const MAC_TOPBAR_CONTENT_HEIGHT = 37
-export const MAC_TOPBAR_TOP_INSET = 8
 
 export interface TopBarGeometryInput {
   frameHeight?: number
@@ -20,8 +17,7 @@ export interface TopBarGeometry {
 }
 
 /**
- * 默认顶栏保持 40px 外框、内容行 37px；Mac 全局顶栏保持 53px 外框，37px Tab 行上下各保留 8px。
- * 横向列宽由真实 brand/action slot 决定，不能通过垂直偏移或负 margin 补偿。
+ * 默认顶栏保持 40px 外框、内容行 37px；横向列宽由真实 brand/action slot 决定，不能通过垂直偏移或负 margin 补偿。
  */
 export function resolveTopBarGeometry({
   frameHeight = TOPBAR_HEIGHT,

@@ -137,6 +137,15 @@ export const systemIsDarkAtom = atom<boolean>(
 /** 皮肤注册表（loadSkins 后填充；声明须先于 resolvedThemeAtom 以便其读取） */
 export const skinsAtom = atom<SkinInfo[]>([])
 
+/**
+ * 皮肤 id 后缀推断 tone 的统一兜底（-light 后缀视为浅色，其余深色）。
+ * applyThemeToDOM、resolvedThemeAtom 与 index.html 首帧脚本必须共用同一方向，
+ * 否则注册表未就绪窗口期内 UI 与 DOM 的明暗判断相反。
+ */
+function inferSkinToneFromStyle(style: ThemeStyle): 'light' | 'dark' {
+  return style.endsWith('-light') ? 'light' : 'dark'
+}
+
 /** 派生：最终解析的主题（light | dark） */
 export const resolvedThemeAtom = atom<'light' | 'dark'>((get) => {
   const mode = get(themeModeAtom)
@@ -146,11 +155,13 @@ export const resolvedThemeAtom = atom<'light' | 'dark'>((get) => {
   if (mode === 'special') {
     const style = get(themeStyleAtom)
     // 优先从皮肤注册表取真实 tone（用户皮肤可能不带 -light/-dark 后缀）；
-    // 未命中（旧主题/注册表未就绪）再回退后缀推断。
+    // 注册表未就绪时回退 tone 缓存（与首帧脚本同源），最后才按后缀启发。
     // 读 skinsAtom 而非模块级 skinsCache，loadSkins 完成后能自动触发重算。
     const skinTone = get(skinsAtom).find((item) => item.id === style)?.tone
     if (skinTone) return skinTone
-    return style.endsWith('-light') ? 'light' : 'dark'
+    const cachedTone = getCachedSkinTone()
+    if (cachedTone) return cachedTone
+    return inferSkinToneFromStyle(style)
   }
   return mode
 })
@@ -174,30 +185,30 @@ const SKIN_STYLE_ID = 'skin-css'
 let skinCssGeneration = 0
 /**
  * 注入皮肤 CSS 到 <style id="skin-css">。
- * 幂等（默认）：皮肤 class 已就位且 style 元素已有内容时直接短路，
+ * 幂等（默认）：style 元素已归属当前皮肤（data-skin-id）且有内容时直接短路，
  * 避免重复 IPC + style.textContent 赋值触发的全文档样式重算（P0）。
+ * 归属判断不依赖“调用先于 class 切换”的隐式顺序，切换皮肤时必然重新拉取。
  * force=true 用于手动刷新皮肤库后强制重注入。
  */
 async function applySkinCss(id: string, force = false): Promise<void> {
+  const html = document.documentElement
   if (!force) {
-    const html = document.documentElement
-    if (html.classList.contains(`skin-${id}`)) {
-      const existing = document.getElementById(SKIN_STYLE_ID) as HTMLStyleElement | null
-      if (existing && existing.textContent) return
-    }
+    const existing = document.getElementById(SKIN_STYLE_ID) as HTMLStyleElement | null
+    if (existing && existing.dataset.skinId === id && existing.textContent) return
   }
   const generation = ++skinCssGeneration
   const css = await window.electronAPI.getSkinCss(id).catch(() => null)
   // 注入期间又发起了新的切换，丢弃本次结果（class 已切换为更新的皮肤）
   if (generation !== skinCssGeneration) return
-  const html = document.documentElement
   if (!css) {
-    // 注入失败（文件损坏/IPC 失败）：摘掉 skin-* class 回退默认主题，避免“有 class 无样式”半状态
+    // 注入失败（文件损坏/审计未通过/IPC 失败）：摘掉 skin-* class 回退默认主题，
+    // 避免“有 class 无样式”半状态
     if (html.classList.contains(`skin-${id}`)) html.classList.remove(`skin-${id}`)
     return
   }
   let style = document.getElementById(SKIN_STYLE_ID) as HTMLStyleElement | null
   if (!style) { style = document.createElement('style'); style.id = SKIN_STYLE_ID; document.head.appendChild(style) }
+  style.dataset.skinId = id
   style.textContent = css
 }
 export async function refreshSkinRegistry(currentStyle?: ThemeStyle): Promise<SkinInfo[]> {
@@ -253,11 +264,18 @@ export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = '
       // 持久化 tone，供下次启动时 index.html 首帧防闪烁脚本推断 dark 类
       cacheSkinTone(skin.tone)
       void applySkinCss(themeStyle)
+    } else if (skinsCache === null) {
+      // 注册表尚未就绪（IPC 未返回）：沿用首帧脚本的 tone 缓存保持 DOM 状态不变，
+      // 否则会把首帧防闪烁设置的 skin-*/dark 类重置掉，造成“默认色→皮肤色”二段闪变。
+      // 注册表就绪后 initializeTheme 会再次调用本函数完成真正应用。
+      const cachedTone = getCachedSkinTone()
+      targetSkinClass = `skin-${themeStyle}`
+      targetIsDark = (cachedTone ?? inferSkinToneFromStyle(themeStyle)) === 'dark'
     } else {
-      // 注册表尚未就绪时，桌面只保持可读的基础 light/dark 表面；registry 完成后
-      // initializeTheme 会再次调用本函数并注入 skin CSS。tablet 无 IPC 时才保留旧路径。
+      // 注册表已就绪但皮肤不存在（被删除/目录被移除）：按统一启发式回落基础明暗。
+      // initializeTheme 会在启动时检测并自动回退默认主题，此分支只是兜底。
       if (allowLegacyThemeFallback) targetStyleClass = `theme-${themeStyle}`
-      targetIsDark = themeStyle.endsWith('-dark')
+      targetIsDark = inferSkinToneFromStyle(themeStyle) === 'dark'
     }
   } else if (themeMode === 'system') {
     targetIsDark = systemIsDark

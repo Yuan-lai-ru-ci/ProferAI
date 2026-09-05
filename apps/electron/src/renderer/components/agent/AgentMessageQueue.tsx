@@ -8,12 +8,8 @@ import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message
 interface AgentMessageQueueProps {
   items: AgentQueuedMessage[]
   canSendNow: boolean
-  /** 队列「自动发送」开关：默认开启；关闭后需手动逐条发送。 */
-  autoSend: boolean
-  /** 当前 Agent 是否正在执行；用于说明自动发送何时开始生效。 */
+  /** 当前 Agent 是否正在执行；用于展示队列何时开始发送。 */
   agentRunning: boolean
-  /** 翻转「自动发送」开关 */
-  onToggleAutoSend: () => void
   onSendNow: (messageId: string) => void
   onRecall: (messageId: string) => void
   onRemove: (messageId: string) => void
@@ -23,9 +19,7 @@ interface AgentMessageQueueProps {
 export function AgentMessageQueue({
   items,
   canSendNow,
-  autoSend,
   agentRunning,
-  onToggleAutoSend,
   onSendNow,
   onRecall,
   onRemove,
@@ -78,36 +72,9 @@ export function AgentMessageQueue({
         <span className="inline-flex items-center gap-1.5">
           <Clock3 className="size-3.5" />
           <span>队列</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={autoSend}
-            onClick={onToggleAutoSend}
-            title={
-              autoSend
-                ? (agentRunning ? '自动发送已开启：本轮结束后自动发送队首' : '自动发送已开启：空闲时立即发送队首')
-                : '自动发送已关闭：需手动逐条「立即发送」'
-            }
-            className={cn(
-              'ml-1 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] leading-none transition-colors',
-              autoSend
-                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'
-                : 'border-border bg-muted/40 text-muted-foreground/60 hover:text-foreground/80',
-            )}
-          >
-            <span
-              className={cn(
-                'size-1.5 rounded-full transition-colors',
-                autoSend ? 'bg-emerald-500' : 'bg-muted-foreground/40',
-              )}
-            />
-            <span className="tabular-nums">自动发送</span>
-          </button>
-          {autoSend && (
-            <span className="whitespace-nowrap text-[11px] text-muted-foreground/60">
-              {agentRunning ? '本轮结束后自动发送' : '空闲时立即发送'}
-            </span>
-          )}
+          <span className="whitespace-nowrap text-[11px] text-emerald-600/80">
+            {agentRunning ? '本轮结束后自动发送' : '空闲时立即发送'}
+          </span>
         </span>
         <span className="tabular-nums">{items.length}</span>
       </div>

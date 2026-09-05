@@ -3702,13 +3702,6 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  // 队列「自动发送」开关 per-session 持久化（手动切换 / 自动由开到关均经此写入 meta）
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.UPDATE_QUEUE_AUTO_SEND,
-    (_e, input: { sessionId: string; enabled: boolean }): AgentSessionMeta =>
-      updateAgentSessionMeta(input.sessionId, { autoQueueSendEnabled: input.enabled }),
-  )
-
   // 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单动态展示）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY,
@@ -6112,11 +6105,6 @@ export function registerIpcHandlers(): void {
       return win && !win.isDestroyed() ? win.isMaximized() : false
     }
   )
-
-  ipcMain.handle(IPC_CHANNELS.WINDOW_IS_FULLSCREEN, async (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    return win && !win.isDestroyed() ? win.isFullScreen() : false
-  })
 
   // ===== 任务 / 日程（Planning）=====
 

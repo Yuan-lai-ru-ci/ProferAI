@@ -631,24 +631,17 @@
   app-region: drag;
 }
 
+/* macOS 自定义红绿灯必须从原生窗口拖拽命中区中彻底排除；否则小按钮会无法点击。 */
+.mac-traffic-lights,
+.mac-traffic-lights button {
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
+  pointer-events: auto !important;
+}
+
 /* ===== 侧边栏折叠动画 ===== */
 .sidebar-collapse-ease {
-  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-/* 原生全屏时左侧卡片上沿对齐 Tab 顶边：53px chrome - 8px Tab 内余量 = 45px。 */
-.native-fullscreen-sidebar {
-  margin-top: 0;
-  height: 100%;
-  transition-property: margin-top, height;
-  transition-duration: 560ms;
-  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: margin-top, height;
-}
-
-.native-fullscreen-sidebar.native-fullscreen-active {
-  margin-top: -45px;
-  height: calc(100% + 45px);
+  transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 /* Left sidebar sits above the global titlebar layer, so it owns a stable top drag strip. */
@@ -1132,47 +1125,6 @@
 /* CRT 终端：工作区 Badge 文字色 */
 .theme-terminal-dark .workspace-badge {
   color: hsl(var(--primary));
-}
-
-/* ===== Mac 全局顶部布局 =====
- * 53px chrome 为 37px Tab 行保留上下各 8px；主区顶栏与工具栏使用同一底色。
- * 左侧槽宽跟随 AppShell 的实际侧栏列宽，收起时 Tab 随 rail 一起左移。
- */
-.mac-global-chrome {
-  display: flex;
-  min-width: 0;
-  height: 53px;
-  /* 透明继承 shell：顶栏与下方工作区使用同一张背景画布。 */
-  background: transparent;
-}
-
-.mac-global-sidebar-slot {
-  width: var(--app-sidebar-column, 300px);
-  background: transparent;
-}
-
-.mac-global-tab-slot {
-  min-width: 0;
-  background: transparent;
-}
-
-.mac-global-topbar {
-  background: transparent !important;
-}
-
-.mac-global-topbar::after {
-  display: none;
-}
-
-/* Mac 顶部带内的 Tab 内容行上下各保留 8px，与页面统一外边距对齐。 */
-.mac-global-topbar .topbar-content {
-  height: 37px !important;
-}
-
-/* Mac 全局布局已经在 AppShell 预留 53px，侧栏内部不能再重复预留红绿灯高度。 */
-.mac-global-shell .sidebar-window-drag-strip,
-.mac-global-shell .sidebar-top-spacer {
-  display: none;
 }
 
 /* ===== TabBar 背景 ===== */

@@ -25,7 +25,6 @@ import { sidebarCollapsedAtom } from '@/atoms/tab-atoms'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { usePanelAutoLayout } from '@/hooks/usePanelAutoLayout'
 import { cn } from '@/lib/utils'
-import { detectIsMac } from '@/lib/platform'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
@@ -48,8 +47,6 @@ export interface AppShellProps {
 
 export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const appMode = useAtomValue(appModeAtom)
-  const isMac = React.useMemo(() => detectIsMac(), [])
-  const [isNativeFullScreen, setIsNativeFullScreen] = React.useState(false)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -89,26 +86,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   // 团队工作区的默认 Agent 页仍展示文件主区；规划中心必须进入 MainArea，
   // 否则 TeamWorkspaceView 会覆盖其中的 PlanningView。
   const showTeamWorkspaceView = isTeamWorkspace && appMode === 'agent' && activeView !== 'agent-skills' && activeView !== 'planning'
-  const showMacGlobalChrome = isMac && activeView !== 'planning' && activeView !== 'agent-skills'
-
-  // 原生全屏下 macOS 不再需要为左侧栏保留全局 chrome 高度。
-  // 进入/退出全屏由主进程事件直接推送；resize 仅作为初始化/异常回退。
-  React.useEffect(() => {
-    if (!isMac) return
-    let cancelled = false
-    const syncNativeFullScreen = async (): Promise<void> => {
-      const next = await window.electronAPI.windowIsFullScreen()
-      if (!cancelled) setIsNativeFullScreen(next)
-    }
-    void syncNativeFullScreen()
-    const removeFullScreenListener = window.electronAPI.onWindowFullScreenChanged((next) => setIsNativeFullScreen(next))
-    const removeResizeListener = window.electronAPI.onWindowResize(() => { void syncNativeFullScreen() })
-    return () => {
-      cancelled = true
-      removeFullScreenListener()
-      removeResizeListener()
-    }
-  }, [isMac])
 
   // 窗口标题设为用户名
   React.useEffect(() => {
@@ -219,30 +196,15 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   return (
     <WindowControlsTemplateProvider>
     <AppShellProvider value={contextValue}>
-      {/* Mac 的 53px chrome 为 37px Tab 行保留上下各 8px，不属于左侧栏；Windows 保持原有页面内顶栏。 */}
-      <div
-        className={cn('shell-bg h-screen w-screen flex flex-col overflow-clip bg-surface-shell', showMacGlobalChrome && 'mac-global-shell', isNativeFullScreen && 'native-fullscreen-shell')}
-        style={{ '--app-sidebar-column': `${(sidebarCollapsed ? 60 : clampedLeftSidebarWidth) + 8 + (isClassic ? 8 : 0)}px` } as React.CSSProperties}
-      >
-        {showMacGlobalChrome && (
-          <div className="mac-global-chrome flex h-[53px] flex-none min-w-0">
-            <div className="mac-global-sidebar-slot h-full flex-none titlebar-drag-region" />
-            <div className="mac-global-tab-slot min-w-0 flex-1">
-              <TabBar teamMode={isTeamWorkspace} variant="mac-global" />
-            </div>
-          </div>
-        )}
-        <div className="flex min-h-0 flex-1">
+      {/* 各顶栏宿主自行提供明确的拖拽空区；这里不再用 fixed 覆盖层参与命中计算。 */}
+      <div className="shell-bg h-screen w-screen flex overflow-clip bg-surface-shell">
         {/* 左侧边栏：可折叠，可拖拽调整宽度 */}
         <div
           className={cn(
-            isClassic ? (showMacGlobalChrome ? 'px-2 pb-2 pr-0' : 'p-2 pr-0') : '',
+            isClassic ? 'p-2 pr-0' : '',
             // 收起 rail 必须压过其右侧的分隔线；冷启动直接恢复收起状态时，
             // 分隔线处于更高层会裁掉 rail 最右侧，造成整列图标视觉上向左偏移。
             sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[70] flex-none crt-sidebar',
-            // 原生全屏时把左侧卡片上沿对齐到右侧顶栏标记线；状态变化由 CSS 平滑过渡。
-            'native-fullscreen-sidebar',
-            isNativeFullScreen && 'native-fullscreen-active',
           )}
         >
           <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
@@ -259,18 +221,18 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
         </div>
 
         {/* 中间容器 */}
-        <div className={cn('main-area-glass-host flex-1 min-w-0 p-2 relative z-[60]', showMacGlobalChrome && 'pt-0')}>
+        <div className="main-area-glass-host flex-1 min-w-0 p-2 relative z-[60]">
           {/* 团队工作区也必须挂载统一顶栏；否则团队页面与个人页面各自拥有一套入口，
               标签切换、关闭和拖拽排序会与团队 Agent 面板脱节。 */}
           {showTeamWorkspaceView ? (
             <div className="flex h-full min-h-0 flex-col">
-              {!showMacGlobalChrome && <TabBar teamMode />}
+              <TabBar teamMode />
               <div className="min-h-0 flex-1">
                 <TeamWorkspaceView />
               </div>
             </div>
           ) : (
-            <MainArea showTabBar={!isMac} />
+            <MainArea />
           )}
         </div>
 
@@ -282,9 +244,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             className={cn(
               // 只让 SidePanel 自身展开。若同时动画化外层 padding，面板会在横向展开时
               // 从 top: 0 平移到 p-2 的最终基线，视觉上像从右上方斜着滑入。
-              filePanelVisible
-                ? cn('relative z-[70] flex items-stretch crt-sidebar p-2 pl-0', isMac && 'pt-0')
-                : 'relative z-[60] flex items-stretch crt-sidebar p-0'
+              filePanelVisible ? 'relative z-[70] flex items-stretch crt-sidebar p-2 pl-0' : 'relative z-[60] flex items-stretch crt-sidebar p-0'
             )}
           >
             <RightSidePanel width={clampedRightPanelWidth} />
@@ -300,7 +260,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             )}
           </div>
         )}
-        </div>
       </div>
     </AppShellProvider>
     </WindowControlsTemplateProvider>

@@ -1,24 +1,7 @@
 import { expect, test } from 'bun:test'
-import { MAC_TOPBAR_CONTENT_HEIGHT, MAC_TOPBAR_HEIGHT, MAC_TOPBAR_TOP_INSET, resolveTopBarGeometry } from './topbar-layout'
+import { resolveTopBarGeometry } from './topbar-layout'
 
-test('Mac 全局 chrome 为 53px，37px 内容行上下各保留 8px', () => {
-  expect(MAC_TOPBAR_HEIGHT).toBe(53)
-  expect(MAC_TOPBAR_CONTENT_HEIGHT).toBe(37)
-  expect(MAC_TOPBAR_TOP_INSET).toBe(8)
-  expect(resolveTopBarGeometry({
-    frameHeight: MAC_TOPBAR_HEIGHT,
-    contentHeight: MAC_TOPBAR_CONTENT_HEIGHT,
-    brandWidth: 0,
-    actionWidth: 104,
-    availableWidth: 1200,
-  })).toMatchObject({
-    frameHeight: 53,
-    contentHeight: 37,
-    verticalGutter: 8,
-  })
-})
-
-test('普通顶栏内容行提高到 37px并保持 40px 外框', () => {
+test('顶栏内容行保持 40px 外框与 37px 内容行', () => {
   expect(resolveTopBarGeometry({ brandWidth: 32, actionWidth: 96, availableWidth: 800 })).toEqual({
     frameHeight: 40,
     contentHeight: 37,

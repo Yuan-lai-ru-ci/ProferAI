@@ -55,7 +55,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { ProjectGraphPanel } from './ProjectGraphPanel'
 import { cn } from '@/lib/utils'
-import { evaluateAutoSendTurn } from '@/lib/agent-autosend-turn'
+import { evaluateAutoSendTurn, shouldStartAutoSendFromIdle } from '@/lib/agent-autosend-turn'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, currentQuotedSelectionAtom, agentInterruptionMapAtom, currentAgentInterruptionAtom, getAgentInterruptionTone } from '@/atoms/preview-atoms'
@@ -101,7 +101,6 @@ import {
   allPendingExitPlanRequestsAtom,
   allPendingPermissionRequestsAtom,
   agentMessageQueueAtomFamily,
-  agentQueueAutoSendMapAtom,
   finalizeStreamingActivities,
   currentAgentSessionIdAtom,
   workspaceCapabilitiesVersionAtom,
@@ -617,7 +616,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
   const liveMessages = liveMessagesMap.get(sessionId) ?? EMPTY_SDK_MESSAGES
   // 运行中追加消息队列（前端托管，turn 结束后 auto-drain 逐条发送）
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
-  const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
   const autoSendingQueuedRef = React.useRef(false)
   const queuedSendInFlightRef = React.useRef(false)
   // Stop 会递增 epoch，使此前已取出但尚未 settle 的队列消息失去回队资格。
@@ -665,21 +663,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     [sessions, sessionId],
   )
   const hasSessionMeta = Boolean(sessionMeta)
-  // 1.6.2 每会话「队列自动发送」开关：权威来源是会话 meta（缺省关/重启保留）；map 仅为运行时缓存，
-  // 首次/切会话且 meta 有值时由下方 effect 填充。
-  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false
-  // 切会话/首次：map 无值且 meta 有值 → 从 meta 填充运行时缓存（每个会话独立记忆，不串）
-  React.useEffect(() => {
-    const metaValue = sessionMeta?.autoQueueSendEnabled
-    if (metaValue === undefined) return
-    if (store.get(agentQueueAutoSendMapAtom).has(sessionId)) return
-    setAutoSendMap((prev) => {
-      if (prev.has(sessionId)) return prev
-      const map = new Map(prev)
-      map.set(sessionId, metaValue)
-      return map
-    })
-  }, [sessionId, sessionMeta?.autoQueueSendEnabled, setAutoSendMap])
   const sessionMetaChannelId = sessionMeta?.channelId
   const sessionMetaModelId = sessionMeta?.modelId
   const agentChannelId = sessionMetaChannelId ?? sessionChannelMap.get(sessionId) ?? defaultChannelId
@@ -2448,19 +2431,25 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     const decision = evaluateAutoSendTurn({
       turnVersion: turnVersionRef.current,
       consumedVersion: consumedTurnVersionRef.current,
-      autoSendEnabled,
       queuedCount: queuedMessages.length,
       liveMessagesPending: liveMessages.length > 0,
       streaming,
       stoppedByUser,
       canSendQueuedNow,
     })
-    if (decision === 'idle' || decision === 'defer') return
+    if (decision === 'defer') return
+    if (decision === 'idle' && !shouldStartAutoSendFromIdle({
+      queuedCount: queuedMessages.length,
+      liveMessagesPending: liveMessages.length > 0,
+      streaming,
+      stoppedByUser,
+      canSendQueuedNow,
+    })) return
     if (decision === 'consume') {
       consumedTurnVersionRef.current = turnVersionRef.current
       return
     }
-    // decision === 'send'
+    // decision === 'send'，或空闲队列新增/恢复后的立即发送
     consumedTurnVersionRef.current = turnVersionRef.current
     const message = queuedMessages[0]
     if (!message) return
@@ -2483,23 +2472,16 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         queuedSendInFlightRef.current = false
         autoSendingQueuedRef.current = false
       })
-  }, [autoSendEnabled, canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping, liveMessages.length])
+  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping, liveMessages.length])
 
   /** 经唯一入口请求停止；只有主进程 STREAM_COMPLETE 才能将 UI 收敛为空闲。 */
   const handleStop = React.useCallback((): void => {
     if (stopInFlightRef.current || streamState?.stopping) return
     stopInFlightRef.current = true
 
-    // 1.6：手动停止时不再清空队列（保留排队消息）；只关闭「自动发送」开关，
-    // 防止停止后立刻自动发送下一条排队消息。停止之后的草稿不入队，见 handleSend。
+    // 手动停止时保留排队消息，但本次停止产生的结束事件不得自动触发队列。
+    // 用户下一次发送/继续后，队列仍会在正常轮结束时按 FIFO 自动发送。
     queueStopEpochRef.current += 1
-    setAutoSendMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, false)
-      return map
-    })
-    // 1.6.2 开关状态 per-session 持久化：手动停止 → 写 meta false（重启保留）
-    window.electronAPI.updateAgentQueueAutoSend(sessionId, false).catch(console.error)
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
       if (!current || (!current.running && !current.backgroundWaiting)) return prev
@@ -2517,18 +2499,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       .finally(() => {
         stopInFlightRef.current = false
       })
-  }, [sessionId, streamState?.stopping, setStreamingStates, setAutoSendMap])
-
-  /** 1.6.2 翻转「队列自动发送」开关：本地乐观更新 + 写 meta 持久化（每个会话独立记忆、重启保留） */
-  const handleToggleAutoSend = React.useCallback((): void => {
-    const next = !(store.get(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? false)
-    setAutoSendMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, next)
-      return map
-    })
-    window.electronAPI.updateAgentQueueAutoSend(sessionId, next).catch(console.error)
-  }, [sessionId, setAutoSendMap, sessionMeta?.autoQueueSendEnabled])
+  }, [sessionId, streamState?.stopping, setStreamingStates])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -3156,9 +3127,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
             <AgentMessageQueue
               items={queuedMessages}
               canSendNow={canSendQueuedNow}
-              autoSend={autoSendEnabled}
               agentRunning={streaming}
-              onToggleAutoSend={handleToggleAutoSend}
               onSendNow={handleSendQueuedNow}
               onRecall={handleRecallQueuedMessage}
               onRemove={handleRemoveQueuedMessage}

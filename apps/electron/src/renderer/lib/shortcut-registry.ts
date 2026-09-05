@@ -157,7 +157,25 @@ function rebuildCache(): void {
  *
  * 遍历所有注册的快捷键，匹配后执行对应 handler
  */
+/** 判断 macOS 上的 F1–F12，兼容浏览器 key/code 两种上报方式。 */
+export function isMacFunctionKeyEvent(
+  event: Pick<KeyboardEvent, 'key' | 'code'>,
+  mac = isMac,
+): boolean {
+  if (!mac) return false
+  return /^F(?:[1-9]|1[0-2])$/i.test(event.key)
+    || /^F(?:[1-9]|1[0-2])$/i.test(event.code)
+}
+
 function dispatchShortcut(e: KeyboardEvent): void {
+  // macOS 的 Fn+F1–F12 可能被 Chromium 转成焦点导航，先在 capture 阶段吞掉，
+  // 防止窗口出现整块原生黄色焦点框。Profer 当前没有 F1–F12 快捷键。
+  if (isMacFunctionKeyEvent(e)) {
+    e.preventDefault()
+    e.stopPropagation()
+    return
+  }
+
   // 忽略输入法组合过程
   if (e.isComposing) return
 

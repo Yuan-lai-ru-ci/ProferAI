@@ -12,8 +12,8 @@
  * id 冲突策略：禁止同名，用户皮肤不覆盖内置皮肤（跳过并告警）。
  */
 import { app, net } from 'electron'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { getConfigDir } from './config-paths'
 import type { SkinInfo } from '../../types'
@@ -67,7 +67,8 @@ const PREVIEW_MIME: Record<string, string> = {
 
 /** 皮肤目录下的预览图文件（preview.*，按扩展名优先 webp/png/svg） */
 const PREVIEW_PRIORITY = ['.webp', '.png', '.svg', '.jpg', '.jpeg']
-/** 皮肤 CSS 中 assets 引用匹配：`url(assets/xxx.webp)`（安装校验 ASSET_RE 同款白名单） */
+/** 皮肤 CSS 中 assets 引用匹配：`url(assets/xxx.webp)`。i 标志仅兼容 URL( 函数名大小写；
+ * 路径部分由 auditSkinCss 强制为字面量小写 assets/，改写结果必然被协议白名单接受 */
 const SKIN_ASSET_RE = /url\(\s*(['"]?)(assets\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(?:webp|png|svg|jpe?g))\1\s*\)/gi
 /** profer-skin:// 协议路径白名单：仅允许皮肤目录内 assets/ 下的图片 */
 const SKIN_ASSET_PATH_RE = /^assets\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(?:webp|png|svg|jpe?g)$/
@@ -76,6 +77,160 @@ const SKIN_CSS_CACHE_FORMAT_VERSION = 2
 
 /** 皮肤 id 白名单（kebab-case，与 skin-manager-service 的 ID_RE 一致） */
 const SKIN_ID_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
+
+/** skin.css 大小上限（安装与运行时读取共用，防止手放目录塞入超大文件） */
+export const MAX_SKIN_CSS_BYTES = 512 * 1024
+
+/** assets 相对路径白名单：与协议白名单 SKIN_ASSET_PATH_RE 一致（大小写敏感，改写后必须能被协议 handler 接受） */
+const SKIN_CSS_ASSET_RE = /^assets\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(?:webp|png|svg|jpe?g)$/
+
+/** CSS 转义序列：\XXXXXX(1-6 位十六进制，可跟一个空白) 或 \任意单字符 */
+const CSS_ESCAPE_RE = /\\(?:([0-9a-fA-F]{1,6})[ \t\r\n\f]?|(.))/gs
+
+function isCssIdentStart(ch: string): boolean {
+  return /[a-zA-Z_\-\\\u0080-\uffff]/.test(ch)
+}
+function isCssIdentChar(ch: string): boolean {
+  return /[a-zA-Z0-9_\-\\\u0080-\uffff]/.test(ch)
+}
+
+/** 解码 ident 中的 CSS 转义（\75 rl( → url(、@\69 mport → @import），堵住转义绕过 */
+function decodeCssEscapes(raw: string): string {
+  return raw.replace(CSS_ESCAPE_RE, (_match, hex: string | undefined, ch: string | undefined) => {
+    if (hex) return String.fromCodePoint(parseInt(hex, 16))
+    return ch ?? ''
+  })
+}
+
+interface CssToken {
+  /** 原始切片（含转义序列） */
+  raw: string
+  /** 结束位置（下一个未消费字符下标） */
+  next: number
+}
+
+/** 读取一个 ident token（含转义序列，raw 保留原始转义，由调用方按需 decode） */
+function readCssIdentToken(css: string, start: number): CssToken {
+  let i = start
+  while (i < css.length) {
+    const ch = css[i]!
+    if (ch === '\\') {
+      // 转义序列整体消费：十六进制（≤6 位 + 可选空白）或单字符
+      const rest = css.slice(i + 1, i + 8)
+      const hexMatch = /^([0-9a-fA-F]{1,6})[ \t\r\n\f]?/.exec(rest)
+      i += hexMatch ? 1 + hexMatch[0].length : 2
+      continue
+    }
+    if (!isCssIdentChar(ch)) break
+    i++
+  }
+  return { raw: css.slice(start, i), next: i }
+}
+
+/** 跳过一个完整字符串字面量；返回结束下标（闭引号之后），未闭合/裸换行返回 -1 */
+function skipCssString(css: string, start: number): number {
+  const quote = css[start]
+  let i = start + 1
+  while (i < css.length) {
+    const ch = css[i]!
+    if (ch === '\\') { i += 2; continue }
+    if (ch === quote) return i + 1
+    if (ch === '\n' || ch === '\r') return -1
+    i++
+  }
+  return -1
+}
+
+export interface SkinCssAuditResult {
+  ok: boolean
+  reason?: string
+  /** ok 时给出全部 assets/ 相对路径引用（去重），供安装路径做存在性检查 */
+  assetRefs: string[]
+}
+
+/**
+ * 皮肤 CSS 内容审计：安装校验与运行时读取（getSkinCss）共用，单一真源。
+ *
+ * 与正则黑名单不同，这里做最小 CSS 词法扫描，堵两类已知绕过：
+ * 1. 注释混淆——字符串内的 "/*" 不会开启注释（与 CSS 引擎一致），
+ *    避免 `--x: "/*"; background: url(https://…)` 里的真实 url() 被当注释吞掉后漏检；
+ * 2. 转义绕过——ident 转义先解码再匹配（\75 rl( = url(、@\69 mport = @import）。
+ *
+ * 规则：禁止 @import/@font-face；所有 url(...)/src(...) 的参数必须是
+ * 小写 assets/ 相对图片路径，且参数本身不得含 CSS 转义（保证 SKIN_ASSET_RE
+ * 改写结果与协议白名单行为一致，改不动的写法一律在安装/读取时拒绝）。
+ */
+export function auditSkinCss(css: string): SkinCssAuditResult {
+  const assetRefs = new Set<string>()
+  const n = css.length
+  let i = 0
+  const fail = (reason: string): SkinCssAuditResult => ({ ok: false, reason, assetRefs: [] })
+
+  while (i < n) {
+    const ch = css[i]!
+    // 字符串：字符串内的 /* 不开启注释（注释混淆绕过的根因）
+    if (ch === '"' || ch === "'") {
+      const end = skipCssString(css, i)
+      if (end === -1) return fail('skin.css 存在未闭合或跨行的字符串（CSS 语法非法）')
+      i = end
+      continue
+    }
+    // 注释：仅字符串外生效，未闭合注释吞到文件尾（与 CSS 引擎一致）
+    if (ch === '/' && css[i + 1] === '*') {
+      const end = css.indexOf('*/', i + 2)
+      if (end === -1) break
+      i = end + 2
+      continue
+    }
+    // at-rule：解码后按名字黑名单拦截
+    if (ch === '@') {
+      const token = readCssIdentToken(css, i + 1)
+      const name = decodeCssEscapes(token.raw).toLowerCase()
+      if (name === 'import' || name === 'font-face') {
+        return fail(`skin.css 不允许使用 @${name}（仅允许引用包内 assets/ 的本地图片）`)
+      }
+      i = token.next
+      continue
+    }
+    // ident / 函数：url(...) / src(...) 白名单校验；其余函数跳过函数名继续扫描函数体（嵌套 url 仍会被捕获）
+    if (isCssIdentStart(ch)) {
+      const token = readCssIdentToken(css, i)
+      const name = decodeCssEscapes(token.raw).toLowerCase()
+      const isUrlLike = (name === 'url' || name === 'src') && css[token.next] === '('
+      if (isUrlLike) {
+        let j = token.next + 1
+        while (j < n && /[ \t\r\n\f]/.test(css[j]!)) j++
+        let urlRaw: string
+        if (css[j] === '"' || css[j] === "'") {
+          const end = skipCssString(css, j)
+          if (end === -1) return fail('skin.css 中 url() 字符串未闭合（CSS 语法非法）')
+          urlRaw = css.slice(j + 1, end - 1)
+          j = end
+          while (j < n && /[ \t\r\n\f]/.test(css[j]!)) j++
+          if (css[j] !== ')') return fail('skin.css 中 url() 参数格式非法')
+        } else {
+          const close = css.indexOf(')', j)
+          if (close === -1) return fail('skin.css 中 url() 缺少右括号（CSS 语法非法）')
+          urlRaw = css.slice(j, close).trim()
+          j = close
+        }
+        j++
+        // 参数含转义则改写器与协议白名单都无法对应，直接拒绝（fail closed）
+        if (/\\/.test(urlRaw)) return fail('skin.css 的 url() 参数不允许使用 CSS 转义')
+        if (!SKIN_CSS_ASSET_RE.test(urlRaw)) {
+          return fail('skin.css 仅允许引用 assets/ 中的本地图片（小写 png/webp/svg/jpg/jpeg）；不允许外链、file:、data: 或其他路径')
+        }
+        assetRefs.add(urlRaw)
+        i = j
+        continue
+      }
+      i = token.next
+      continue
+    }
+    i++
+  }
+  return { ok: true, assetRefs: [...assetRefs] }
+}
 
 /** 内置皮肤目录：dev 为 dist/resources/skins（build:resources 拷贝），打包为 process.resourcesPath/skins */
 function getBuiltinSkinDir(): string {
@@ -160,7 +315,13 @@ export function parseSkinManifestText(text: string): { ok: true; manifest: SkinM
 export function readManifest(dir: string, builtin: boolean): SkinInfo | null {
   let text: string
   try {
-    text = readFileSync(join(dir, 'manifest.json'), 'utf-8')
+    const manifestPath = join(dir, 'manifest.json')
+    // 拒绝符号链接：手放目录可能把 manifest 指向任意文件（内容随注册表扫描被读出）
+    if (lstatSync(manifestPath).isSymbolicLink()) {
+      console.warn('[皮肤] 跳过 manifest.json 为符号链接的皮肤:', dir)
+      return null
+    }
+    text = readFileSync(manifestPath, 'utf-8')
   } catch (err) {
     console.warn('[皮肤] 读取 manifest 失败:', dir, err)
     return null
@@ -171,6 +332,13 @@ export function readManifest(dir: string, builtin: boolean): SkinInfo | null {
     return null
   }
   const manifest = parsed.manifest
+  const id = manifest.id
+  // 注册表 id 必须等于目录名且为 kebab-case：findSkinDir / 协议 handler / 安装冲突检测都按
+  // 目录名定位，二者解耦会出现“注册表可见、CSS/预览永远查无此目录”的半可用皮肤。
+  if (typeof id !== 'string' || !SKIN_ID_RE.test(id) || id !== basename(dir)) {
+    console.warn('[皮肤] 跳过 id 非法或与目录名不一致的皮肤（id:', id, ', 目录:', basename(dir), '）:', dir)
+    return null
+  }
   const titlebar =
     manifest.titlebar && typeof manifest.titlebar === 'object' && typeof manifest.titlebar.color === 'string'
       ? {
@@ -180,8 +348,8 @@ export function readManifest(dir: string, builtin: boolean): SkinInfo | null {
         }
       : undefined
   return {
-    id: manifest.id as string,
-    name: typeof manifest.name === 'string' && manifest.name ? manifest.name : (manifest.id as string),
+    id,
+    name: typeof manifest.name === 'string' && manifest.name ? manifest.name : id,
     tone: manifest.tone as 'light' | 'dark',
     // v1 皮肤没有 contractVersion；无效值同样按 v1 降级，保证用户旧皮肤可继续加载。
     contractVersion: typeof manifest.contractVersion === 'number' && Number.isInteger(manifest.contractVersion) && manifest.contractVersion >= 2
@@ -278,14 +446,23 @@ function skinCssSignature(dir: string): string | null {
   }
 }
 
-/** 读取皮肤 CSS 内容；无此皮肤或文件缺失返回 null */
+/** 读取皮肤 CSS 内容；无此皮肤/内容未通过审计返回 null（审计失败用空串负缓存，避免重复扫盘刷警告） */
 export function getSkinCss(skinId: string): string | null {
   const cached = cacheGet(SKIN_CSS_CACHE, skinId)
-  if (cached !== undefined) return cached
+  if (cached !== undefined) return cached === '' ? null : cached
   const dir = findSkinDir(skinId)
   if (!dir) return null
   const cssPath = join(dir, 'skin.css')
   if (!existsSync(cssPath)) return null
+  // 拒绝符号链接：skin.css 指向任意文件时内容会被注入 renderer 并落入磁盘缓存
+  try {
+    if (lstatSync(cssPath).isSymbolicLink()) {
+      console.warn('[皮肤] skin.css 为符号链接，拒绝读取:', skinId)
+      return null
+    }
+  } catch {
+    return null
+  }
 
   // 磁盘持久化缓存：签名一致时直接复用处理结果，冷启动避免重复 base64 编码（P1）
   const sig = skinCssSignature(dir)
@@ -310,8 +487,22 @@ export function getSkinCss(skinId: string): string | null {
 
   try {
     const rawCss = readFileSync(cssPath, 'utf-8')
+    // 大小上限 + 内容审计：与安装校验共用同一套规则（auditSkinCss），
+    // 手放 ~/.profer/skins 的皮肤和安装后被手工编辑的 skin.css 都在此拦截。
+    if (Buffer.byteLength(rawCss, 'utf-8') > MAX_SKIN_CSS_BYTES) {
+      console.warn('[皮肤] skin.css 超过 512 KB 上限，拒绝注入:', skinId)
+      cacheSet(SKIN_CSS_CACHE, skinId, '', SKIN_CSS_CACHE_MAX)
+      return null
+    }
+    const audit = auditSkinCss(rawCss)
+    if (!audit.ok) {
+      console.warn('[皮肤] skin.css 未通过内容审计，拒绝注入:', skinId, '—', audit.reason)
+      cacheSet(SKIN_CSS_CACHE, skinId, '', SKIN_CSS_CACHE_MAX)
+      return null
+    }
     // assets 不再 base64 内联：改为稳定的 profer-skin://<skinId>/assets/... 协议引用，
-    // 图片由主进程协议 handler 按需读取（P2：移除大图 IPC 传输与编码开销）
+    // 图片由主进程协议 handler 按需读取（P2：移除大图 IPC 传输与编码开销）。
+    // 审计已保证 url 参数为字面量 assets/ 路径，正则改写不会漏改。
     const css = rawCss.replace(SKIN_ASSET_RE, (_match, quote: string, assetPath: string) => {
       return `url(${quote}profer-skin://${skinId}/${assetPath}${quote})`
     })
@@ -355,7 +546,15 @@ export function handleProferSkinRequest(request: Request): Promise<Response> | R
   if (!SKIN_ASSET_PATH_RE.test(relativePath)) return new Response('Forbidden', { status: 403 })
   const target = resolve(dir, relativePath)
   if (!target.startsWith(`${resolve(dir)}${sep}`)) return new Response('Forbidden', { status: 403 })
-  if (!existsSync(target) || !statSync(target).isFile()) return new Response('Not Found', { status: 404 })
+  let stat
+  try {
+    // 拒绝符号链接：手放皮肤的 assets 可能指向任意本地文件
+    if (lstatSync(target).isSymbolicLink()) return new Response('Not Found', { status: 404 })
+    stat = statSync(target)
+  } catch {
+    return new Response('Not Found', { status: 404 })
+  }
+  if (!stat.isFile()) return new Response('Not Found', { status: 404 })
   return net.fetch(pathToFileURL(target).toString())
 }
 

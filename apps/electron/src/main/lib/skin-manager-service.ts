@@ -1,15 +1,20 @@
 import { app, dialog, shell, BrowserWindow } from 'electron'
 import AdmZip from 'adm-zip'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, isAbsolute, join, normalize, resolve, sep } from 'node:path'
+import { isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import type { SkinInfo, SkinManagerResult } from '../../types'
-import { getBuiltinSkinIds, getUserSkinDir, invalidateSkinCache, parseSkinManifestText, scanSkins } from './skin-service'
+import { MAX_SKIN_CSS_BYTES, auditSkinCss, getBuiltinSkinIds, getUserSkinDir, invalidateSkinCache, parseSkinManifestText, scanSkins } from './skin-service'
 
 const MAX_PACKAGE_BYTES = 5 * 1024 * 1024
-const MAX_CSS_BYTES = 512 * 1024
 const MAX_ASSET_BYTES = 2 * 1024 * 1024
-const ASSET_RE = /^assets\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(webp|png|svg|jpe?g)$/i
+/** ZIP 文件本体大小上限：防止超大压缩包被 AdmZip 全量读入内存 */
+const MAX_ZIP_FILE_BYTES = 20 * 1024 * 1024
+/** ZIP 解压前预检的 uncompressed 总量上限（略高于包体限制，防止 zip 轰炸先撑爆磁盘再被 dirSize 拦截） */
+const MAX_ZIP_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
+// 大小写敏感（与运行时 SKIN_ASSET_PATH_RE 协议白名单一致）：`Assets/` 这类写法
+// 在大小写不敏感文件系统上能通过安装校验，运行时却会被协议 handler 403，图片静默丢失。
+const ASSET_RE = /^assets\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(webp|png|svg|jpe?g)$/
 const ID_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 const PREVIEW_RE = /^preview\.(webp|png|svg|jpe?g)$/i
 
@@ -28,18 +33,29 @@ function dirSizeInner(dir: string, depth: number): number {
     return total + statSync(join(dir, entry.name)).size
   }, 0)
 }
-function unsafeCss(css: string, packageRoot: string): boolean {
-  // 注释中的示例代码不应参与校验，否则模板的注释示例会被误判为资源引用。
-  const executableCss = css.replace(/\/\*[\s\S]*?\*\//g, '')
-  if (/@import\b|@font-face\b|url\(\s*(['"]?)(?:https?:|file:|data:|\/\/)/i.test(executableCss)) return true
-  const urls = [...executableCss.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/gi)].map((match) => (match[2] ?? '').trim())
-  return urls.some((url) => !ASSET_RE.test(url) || !existsSync(join(packageRoot, ...url.split('/'))))
+/** 皮肤包内不允许任何符号链接：skin.css/manifest.json 指向任意文件会造成本地文件读取 */
+function assertNoSymlinks(root: string): SkinManagerResult | null {
+  const walk = (dir: string, depth: number): SkinManagerResult | null => {
+    if (depth > 12) return null
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) return fail('皮肤包不允许包含符号链接')
+      const child = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        const result = walk(child, depth + 1)
+        if (result) return result
+      }
+    }
+    return null
+  }
+  return walk(root, 0)
 }
 function validateAssets(packageRoot: string): SkinManagerResult | null {
   const assetsDir = join(packageRoot, 'assets')
   if (!existsSync(assetsDir)) return null
   for (const entry of readdirSync(assetsDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !ASSET_RE.test(`assets/${entry.name}`)) return fail('assets 仅允许 png/webp/svg/jpg/jpeg 图片文件')
+    if (!entry.isFile() || !ASSET_RE.test(`assets/${entry.name}`)) {
+      return fail('assets 仅允许小写扩展名的 png/webp/svg/jpg/jpeg 图片文件（文件名与 assets/ 前缀不得使用大写）')
+    }
     if (statSync(join(assetsDir, entry.name)).size > MAX_ASSET_BYTES) return fail('单张皮肤图片不能超过 2 MB')
   }
   return null
@@ -53,10 +69,18 @@ function validatePackage(root: string): { id: string; info: SkinInfo } | SkinMan
   const packageRoot = resolvePackageRoot(root)
   if (!packageRoot) return fail('皮肤包根目录必须包含 manifest.json，或仅包含一层皮肤目录')
   if (!existsSync(join(packageRoot, 'skin.css'))) return fail('皮肤包缺少 skin.css')
+  const symlinkError = assertNoSymlinks(packageRoot)
+  if (symlinkError) return symlinkError
   if (dirSize(packageRoot) > MAX_PACKAGE_BYTES) return fail('皮肤包超过 5 MB 限制')
   const css = readFileSync(join(packageRoot, 'skin.css'), 'utf8')
-  if (Buffer.byteLength(css) > MAX_CSS_BYTES) return fail('skin.css 超过 512 KB 限制')
-  if (unsafeCss(css, packageRoot)) return fail('skin.css 仅允许引用 assets/ 中的本地图片；不允许 @import、@font-face、data URL、外部或 file URL')
+  // 内容审计与运行时读取（skin-service.auditSkinCss）同一套规则，杜绝双写漂移
+  const audit = auditSkinCss(css)
+  if (!audit.ok) return fail(audit.reason ?? 'skin.css 内容不合法')
+  if (Buffer.byteLength(css) > MAX_SKIN_CSS_BYTES) return fail('skin.css 超过 512 KB 限制')
+  // 引用的 assets 图片必须真实存在
+  for (const ref of audit.assetRefs) {
+    if (!existsSync(join(packageRoot, ...ref.split('/')))) return fail(`skin.css 引用的图片不存在：${ref}`)
+  }
   const assetError = validateAssets(packageRoot)
   if (assetError) return assetError
   // 单一 manifest 解析入口（skin-service.parseSkinManifestText）：与扫描注册表共用，字段扩展不会双写漂移（P2-L6）
@@ -124,13 +148,23 @@ function installDirectory(sourceRoot: string, replace = false): SkinManagerResul
 export function installSkinFromFolder(folder: string, replace = false): SkinManagerResult { return installDirectory(folder, replace) }
 export function installSkinFromZip(zipPath: string, replace = false): SkinManagerResult {
   if (!zipPath.toLowerCase().endsWith('.zip')) return fail('仅支持 ZIP 文件')
+  // 预检 1：ZIP 文件本体大小。AdmZip 会把整个文件读进内存，不设上限会被超大包打爆。
+  try {
+    if (statSync(zipPath).size > MAX_ZIP_FILE_BYTES) return fail('ZIP 文件超过 20 MB 限制')
+  } catch {
+    return fail('无法读取 ZIP 文件')
+  }
   const temp = mkdtempSync(join(tmpdir(), 'profer-skin-'))
   try {
     const zip = new AdmZip(zipPath)
+    let uncompressedTotal = 0
     for (const entry of zip.getEntries()) {
       const rawParts = entry.entryName.replace(/\\/g, '/').split('/')
       const name = normalize(entry.entryName)
       if (entry.entryName.startsWith('/') || rawParts.includes('..') || isAbsolute(name) || name === '..' || name.startsWith(`..${sep}`)) return fail('ZIP 包含非法路径')
+      // 预检 2：解压前累计 uncompressed 大小，防止 zip 轰炸先把磁盘/内存撑爆再被 dirSize 拦截
+      uncompressedTotal += entry.header.size
+      if (uncompressedTotal > MAX_ZIP_UNCOMPRESSED_BYTES) return fail('ZIP 解压后超过 20 MB 限制')
     }
     zip.extractAllTo(temp, true)
     return installDirectory(temp, replace)

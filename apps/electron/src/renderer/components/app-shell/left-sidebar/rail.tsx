@@ -42,12 +42,10 @@ export function SidebarRail({ s }: { s: SidebarModel }): React.ReactElement {
 
   return (
     <div className="relative h-full flex flex-col items-center px-2">
-        <SidebarWindowDragStrip
-          height={isMac ? SIDEBAR_DRAG_STRIP_HEIGHT.collapsedMac : SIDEBAR_DRAG_STRIP_HEIGHT.collapsed}
-        />
+        {!isMac && <SidebarWindowDragStrip height={SIDEBAR_DRAG_STRIP_HEIGHT.collapsed} />}
 
         {/* macOS 需要避开左上角红绿灯；边栏覆盖全局标题栏拖拽层，因此留白自身也要可拖拽。 */}
-        <div className={cn('sidebar-top-spacer w-full flex-shrink-0 titlebar-drag-region', isMac ? 'h-[50px]' : 'h-2')} />
+        <div className={cn('sidebar-top-spacer w-full flex-shrink-0', !isMac && 'titlebar-drag-region', isMac ? 'h-[50px]' : 'h-2')} />
 
         {/* 展开按钮：mini rail 的唯一布局控制入口 */}
         <div className="pt-2">

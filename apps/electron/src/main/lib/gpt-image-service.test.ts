@@ -17,7 +17,7 @@ mock.module('./auth-service', () => ({
   recoverCommercialProxyAuth: async () => recoveredAuth,
 }))
 
-const { generateGptImage } = await import('./gpt-image-service')
+const { generateGptImage, __setOfficialImageRecoveryDelaysForTest } = await import('./gpt-image-service')
 const originalFetch = globalThis.fetch
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -30,6 +30,7 @@ afterEach(() => {
   credentials = { mode: 'official', apiKey: '', baseUrl: '', model: '' }
   auth = { baseUrl: 'https://team.example/', token: 'team-token', proxyToken: 'proxy-token' }
   recoveredAuth = auth
+  __setOfficialImageRecoveryDelaysForTest(undefined)
 })
 
 describe('generateGptImage', () => {
@@ -48,6 +49,40 @@ describe('generateGptImage', () => {
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer proxy-token')
     expect(calls[0]!.headers.get('idempotency-key')).toBe('call-1')
     expect(await calls[0]!.json()).toEqual({ model: 'gpt-image-2', prompt: 'blue square', size: '1024x1024', quality: 'high', n: 1 })
+  })
+
+  test('restores an official image result after a gateway 504 using the original idempotency key', async () => {
+    __setOfficialImageRecoveryDelaysForTest([0])
+    const calls: Request[] = []
+    globalThis.fetch = (async (input, init) => {
+      const request = new Request(input, init)
+      calls.push(request)
+      if (calls.length === 1) return new Response('<html><title>504 Gateway Time-out</title></html>', { status: 504 })
+      return response({ data: [{ b64_json: png.toString('base64') }] })
+    }) as typeof fetch
+
+    const result = await generateGptImage({ prompt: 'recover image', idempotencyKey: 'gateway-recovery-key' })
+
+    expect(result.ok).toBe(true)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]!.url).toBe('https://team.example/v1/proxy/images/operations/by-idempotency/generation/gateway-recovery-key')
+    expect(calls[1]!.method).toBe('GET')
+    expect(calls[1]!.headers.get('authorization')).toBe('Bearer proxy-token')
+  })
+
+  test('continues recovery polling only while the operation reports processing', async () => {
+    __setOfficialImageRecoveryDelaysForTest([0, 0])
+    const calls: Request[] = []
+    globalThis.fetch = (async (input, init) => {
+      const request = new Request(input, init)
+      calls.push(request)
+      if (calls.length === 1) return new Response('<html><title>504 Gateway Time-out</title></html>', { status: 504 })
+      if (calls.length === 2) return response({ code: 'IMAGE_OPERATION_PROCESSING' }, 409)
+      return response({ data: [{ b64_json: png.toString('base64') }] })
+    }) as typeof fetch
+
+    await expect(generateGptImage({ prompt: 'wait for operation', idempotencyKey: 'gateway-processing-key' })).resolves.toMatchObject({ ok: true })
+    expect(calls).toHaveLength(3)
   })
 
   test('refreshes a stale relay token once and reuses the idempotency key', async () => {

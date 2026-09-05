@@ -182,12 +182,13 @@ import { maintainDevShellShortcut } from './lib/dev-shell-shortcut'
 import { setProferVersion } from '@profer/core'
 import { TRAY_IPC_CHANNELS } from '../types'
 import {
+  DEFAULT_MAIN_WINDOW_ZOOM_FACTOR,
   DEFAULT_TRAFFIC_LIGHT_POSITION,
   installMacTrafficLightZoomSync,
 } from './lib/mac-traffic-light'
+import { installMacFunctionKeyBlocker } from './lib/mac-function-key-blocker'
 
 const MIGRATION_IPC_OPEN = 'migration:open-import-file'
-const WINDOW_FULLSCREEN_CHANGED = 'window:fullscreen-changed'
 
 /** 检查文件路径是否为迁移文件，如果是则通知渲染进程打开导入流程 */
 function handleMigrationFileOpen(filePath: string): void {
@@ -432,8 +433,9 @@ function createWindow(): void {
 
   const titleBarOptions = isMac
     ? {
-        // 使用 macOS 原生 traffic lights；位置与规划中心窗口保持一致。
-        titleBarStyle: 'hiddenInset' as const,
+        // 使用完整隐藏标题栏：hiddenInset 即使隐藏原生按钮仍保留系统标题栏命中区，
+        // 会吞掉自定义红绿灯的 hover/click。
+        titleBarStyle: 'hidden' as const,
         trafficLightPosition: DEFAULT_TRAFFIC_LIGHT_POSITION,
         vibrancy: 'under-window' as const,
         visualEffectState: 'followWindow' as const,
@@ -463,6 +465,10 @@ function createWindow(): void {
     },
     ...titleBarOptions,
   })
+  // 主界面默认放大到 110%；使用 webContents 缩放，避免 CSS zoom 破坏有限布局区域。
+  mainWindow.webContents.setZoomFactor(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR)
+  // 原生 traffic lights 不支持调整尺寸，改由 renderer 中的可控按钮替代。
+  if (isMac) mainWindow.setWindowButtonVisibility(false)
   // Windows 开发运行时的 Electron 壳不会稳定继承 BrowserWindow 构造参数中的图标；
   // 显式设置一次，确保任务栏窗口图标使用当前资源文件。
   if (process.platform === 'win32' && iconExists) {
@@ -478,6 +484,7 @@ function createWindow(): void {
   }
   installWindowsZoomInFallback(mainWindow)
   installMacTrafficLightZoomSync(mainWindow)
+  installMacFunctionKeyBlocker(mainWindow)
   updateWindowFrameAppearance(mainWindow)
   browserController.setOwnerWindow(mainWindow)
 
@@ -599,10 +606,6 @@ function createWindow(): void {
   }
   mainWindow.on('resize', scheduleWindowStateSave)
   mainWindow.on('move', scheduleWindowStateSave)
-  // macOS 原生全屏不会稳定触发 renderer 的 DOM resize；显式广播状态以驱动侧栏补位动画。
-  mainWindow.on('enter-full-screen', () => mainWindow?.webContents.send(WINDOW_FULLSCREEN_CHANGED, true))
-  mainWindow.on('leave-full-screen', () => mainWindow?.webContents.send(WINDOW_FULLSCREEN_CHANGED, false))
-
   // 将 file:// 或 Windows 绝对路径转为系统路径
   const toSystemPath = (u: string): string | null => {
     if (u.startsWith('file:///')) {

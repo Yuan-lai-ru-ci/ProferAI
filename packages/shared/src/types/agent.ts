@@ -828,8 +828,6 @@ export interface AgentSessionMeta {
   lastInterruptLabel?: string
   /** 最近中断时间戳 */
   lastInterruptAt?: number
-  /** 队列「自动发送」开关：轮结束是否自动发送队首消息。per-session 持久化，新会话及历史缺省值为开（true）。手动停止/异常结束会自动置为 false。 */
-  autoQueueSendEnabled?: boolean
   /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
   permissionMode?: ProferPermissionMode
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
@@ -2091,8 +2089,6 @@ export const AGENT_IPC_CHANNELS = {
   PROMOTE_QUEUED_MESSAGE: 'agent:promote-queued-message',
   /** 队列消息状态变更通知（主进程 → 渲染进程推送） */
   QUEUED_MESSAGE_STATUS: 'agent:queued-message-status',
-  /** 更新会话「队列自动发送」开关（per-session 持久化，重启保留） */
-  UPDATE_QUEUE_AUTO_SEND: 'agent:update-queue-auto-send',
 
   // 待处理请求恢复（渲染进程重载后查询主进程状态）
   /** 获取所有待处理的交互请求快照 */
