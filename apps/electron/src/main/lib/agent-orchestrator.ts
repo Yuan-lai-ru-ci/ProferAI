@@ -129,6 +129,8 @@ import {
   isInvalidRelayTokenError,
   isSessionNotFoundError,
   getRetryDelayMs,
+  getRetryDisplayReason,
+  getMaxAutoRetries,
   classifyCatchError,
   MAX_AUTO_RETRIES,
   MAX_AUTO_RETRY_WAIT_MS,
@@ -1835,9 +1837,30 @@ ${enrichedMessage}`
           })
         },
         onRetry: (retry: PiRetryUpdate) => {
+          const normalizedRetry: PiRetryUpdate = retry.status === 'starting'
+            ? { ...retry, reason: getRetryDisplayReason(channel.provider, retry.reason) }
+            : retry.status === 'attempt'
+              ? {
+                  ...retry,
+                  attemptData: {
+                    ...retry.attemptData,
+                    reason: getRetryDisplayReason(channel.provider, retry.attemptData.reason),
+                    errorMessage: getRetryDisplayReason(channel.provider, retry.attemptData.errorMessage),
+                  },
+                }
+              : retry.status === 'failed'
+                ? {
+                    ...retry,
+                    attemptData: {
+                      ...retry.attemptData,
+                      reason: getRetryDisplayReason(channel.provider, retry.attemptData.reason),
+                      errorMessage: getRetryDisplayReason(channel.provider, retry.attemptData.errorMessage),
+                    },
+                  }
+                : retry
           this.eventBus.emit(sessionId, {
             kind: 'profer_event',
-            event: { type: 'retry', ...retry },
+            event: { type: 'retry', ...normalizedRetry },
           })
         },
       }
@@ -1849,12 +1872,17 @@ ${enrichedMessage}`
       let retryDelayElapsedMs = 0
       let retryAttemptsScheduled = 0
       let retrySucceeded = false
+      // OpenAI 官方上游繁忙错误收敛为 8 次；其他瞬时错误保留通用上限。
+      let retryMaxAttempts = MAX_AUTO_RETRIES
       let skipNextRetryDelay = false
       let thinkingSignatureRecoveryAttempted = false
       let invisibleRecoveryAttempts = 0
       /** 前 N 次自动重试静默执行，不向 UI 发送事件，减少网络瞬断时的界面噪音 */
-      const RETRY_VISIBILITY_THRESHOLD = 5
-      const canAutoRetry = (attempt: number): boolean => attempt <= MAX_AUTO_RETRIES && retryDelayElapsedMs < MAX_AUTO_RETRY_WAIT_MS
+      const RETRY_VISIBILITY_THRESHOLD = 0
+      const canAutoRetry = (attempt: number, ...errorMessages: Array<string | undefined>): boolean => {
+        retryMaxAttempts = Math.min(retryMaxAttempts, getMaxAutoRetries(channel.provider, ...errorMessages))
+        return attempt <= retryMaxAttempts && retryDelayElapsedMs < MAX_AUTO_RETRY_WAIT_MS
+      }
 
       // 记录交给 SDK 的脱敏路由输入；它证明本地配置，不宣称最终 TLS 对端。
       let agentUrlForLog: URL | undefined
@@ -1939,7 +1967,7 @@ ${enrichedMessage}`
                   type: 'retry',
                   status: 'starting',
                   attempt: retryAttempt,
-                  maxAttempts: MAX_AUTO_RETRIES,
+                  maxAttempts: retryMaxAttempts,
                   delaySeconds: delaySec,
                   reason: lastRetryableError ?? '未知错误',
                 },
@@ -2251,12 +2279,12 @@ ${enrichedMessage}`
                       message: separated.errorText,
                       actions: [],
                       canRetry: true,
-                    }) && canAutoRetry(attempt)
+                    }) && canAutoRetry(attempt, separated.errorText)
 
                     if (willAutoRetry) {
                       this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
                       accumulatedMessages.length = 0
-                      lastRetryableError = `连接中断：${separated.errorText}`
+                      lastRetryableError = getRetryDisplayReason(channel.provider, `连接中断：${separated.errorText}`)
                       console.log(`[Agent 编排] 可重试错误 (断流保消息): ${lastRetryableError}`)
                       stderrChunks.length = 0
                       shouldRetryFromError = true
@@ -2327,7 +2355,7 @@ ${enrichedMessage}`
                 console.error(`  originalError: ${typedError.originalError?.slice(0, 300) || '(空)'}`)
 
                 // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
-                if (isSessionNotFoundError(detailedMessage, originalError) && existingSdkSessionId && canAutoRetry(attempt)) {
+                if (isSessionNotFoundError(detailedMessage, originalError) && existingSdkSessionId && canAutoRetry(attempt, detailedMessage, originalError)) {
                   existingSdkSessionId = undefined
                   capturedSdkSessionId = undefined
                   lastRetryableError = this.prepareSessionNotFoundRecovery(
@@ -2374,8 +2402,8 @@ ${enrichedMessage}`
                   break
                 }
 
-                if (isAutoRetryableTypedError(typedError) && canAutoRetry(attempt)) {
-                  lastRetryableError = typedError.title ? `${typedError.title}: ${typedError.message}` : typedError.message
+                if (isAutoRetryableTypedError(typedError) && canAutoRetry(attempt, typedError.message, originalError)) {
+                  lastRetryableError = getRetryDisplayReason(channel.provider, typedError.title ? `${typedError.title}: ${typedError.message}` : typedError.message)
                   console.log(`[Agent 编排] 自动重试决策:`, {
                     sessionId,
                     channelId,
@@ -2655,7 +2683,7 @@ ${enrichedMessage}`
           const rawErrorMessage = error instanceof Error ? error.message : ''
 
           // Session 不存在错误：清除 sdkSessionId，切换到上下文回填模式重试
-          if (isSessionNotFoundError(rawErrorMessage, stderrOutput) && existingSdkSessionId && canAutoRetry(attempt)) {
+          if (isSessionNotFoundError(rawErrorMessage, stderrOutput) && existingSdkSessionId && canAutoRetry(attempt, rawErrorMessage, stderrOutput)) {
             existingSdkSessionId = undefined
             capturedSdkSessionId = undefined
             lastRetryableError = this.prepareSessionNotFoundRecovery(sessionId, queryOptions, contextualMessage, agentCwd, accumulatedMessages, queryStartedAt)
@@ -2692,8 +2720,8 @@ ${enrichedMessage}`
             continue
           }
 
-          if (isAutoRetryableCatchError(apiError, rawErrorMessage, stderrOutput) && canAutoRetry(attempt)) {
-            lastRetryableError = apiError ? `API Error ${apiError.statusCode}: ${apiError.message}` : error instanceof Error ? error.message : '未知错误'
+          if (isAutoRetryableCatchError(apiError, rawErrorMessage, stderrOutput) && canAutoRetry(attempt, apiError?.message, rawErrorMessage, stderrOutput)) {
+            lastRetryableError = getRetryDisplayReason(channel.provider, apiError ? `API Error ${apiError.statusCode}: ${apiError.message}` : error instanceof Error ? error.message : '未知错误')
             console.log(`[Agent 编排] 可重试错误 (catch, attempt ${attempt}/${MAX_AUTO_RETRIES}): ${lastRetryableError}`)
             // 保存部分内容
             this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
@@ -2843,14 +2871,14 @@ ${enrichedMessage}`
       // 重试循环结束（达到最大次数仍失败）
       if (!retrySucceeded && lastRetryableError) {
         const retryFailureMessage =
-          retryDelayElapsedMs >= MAX_AUTO_RETRY_WAIT_MS ? '重试等待已达到 5 分钟后仍然失败' : `重试 ${retryAttemptsScheduled || MAX_AUTO_RETRIES} 次后仍然失败`
+          retryDelayElapsedMs >= MAX_AUTO_RETRY_WAIT_MS ? '重试等待已达到 5 分钟后仍然失败' : `重试 ${retryAttemptsScheduled || retryMaxAttempts} 次后仍然失败`
         this.eventBus.emit(sessionId, {
           kind: 'profer_event',
           event: {
             type: 'retry',
             status: 'failed',
             attemptData: {
-              attempt: retryAttemptsScheduled || MAX_AUTO_RETRIES,
+              attempt: retryAttemptsScheduled || retryMaxAttempts,
               timestamp: Date.now(),
               reason: lastRetryableError,
               errorMessage: retryFailureMessage,

@@ -253,6 +253,8 @@ function AssistantLogo({ model }: { model?: string }): React.ReactElement {
 function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['retrying']> }): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [countdown, setCountdown] = React.useState(0)
+  const latestReason = retrying.history[retrying.history.length - 1]?.reason ?? ''
+  const isOpenAIUpstreamBusy = /OpenAI 官方上游服务当前请求量较大|OpenAI.*(?:overloaded|too many requests|rate.?limit)/i.test(latestReason)
 
   // 倒计时逻辑
   React.useEffect(() => {
@@ -298,18 +300,30 @@ function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['
         )}
         <span className="text-sm text-amber-900 dark:text-amber-100 flex-1">
           {retrying.failed
-            ? `重试失败 (${retrying.currentAttempt}/${retrying.maxAttempts})`
+            ? `重试失败 ${retrying.currentAttempt}/${retrying.maxAttempts}`
             : countdown > 0
-              ? `重试倒计时 ${countdown}秒 (${retrying.currentAttempt}/${retrying.maxAttempts})`
-              : `重试中 (${retrying.currentAttempt}/${retrying.maxAttempts})`}
-          {retrying.history.length > 0 && ` · ${retrying.history[retrying.history.length - 1]?.reason}`}
+              ? `重试 ${retrying.currentAttempt}/${retrying.maxAttempts} · ${countdown}秒后继续`
+              : `重试 ${retrying.currentAttempt}/${retrying.maxAttempts}`}
+          {!isOpenAIUpstreamBusy && latestReason && ` · ${latestReason}`}
         </span>
+        {isOpenAIUpstreamBusy && (
+          <span className="text-xs text-amber-700 dark:text-amber-300 shrink-0">
+            官方服务繁忙
+          </span>
+        )}
         {expanded ? (
           <ChevronDown className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
         ) : (
           <ChevronRight className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
         )}
       </button>
+
+      {isOpenAIUpstreamBusy && (
+        <div className="mt-2 border-t border-amber-200/80 dark:border-amber-800/80 pt-2 text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
+          <div>OpenAI 官方上游服务当前请求量较大</div>
+          <div>本次情况与您的账户及卡扣AI无关，请稍候片刻后再重试。</div>
+        </div>
+      )}
 
       {/* 展开内容：重试历史 */}
       {expanded && retrying.history.length > 0 && (

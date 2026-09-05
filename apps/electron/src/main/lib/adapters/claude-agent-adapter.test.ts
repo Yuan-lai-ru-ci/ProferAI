@@ -34,6 +34,17 @@ describe('Claude 适配器 Ollama 工具流错误', () => {
   })
 })
 
+describe('Claude 适配器 OpenAI 上游繁忙错误', () => {
+  test('Given OpenAI 官方上游请求量较大 When 映射错误 Then 使用统一文案并允许重试', () => {
+    const message = 'OpenAI 官方上游服务当前请求量较大，请稍后重试。'
+    const error = mapSDKErrorToTypedError('unknown', message, message)
+    expect(error.code).toBe('provider_error')
+    expect(error.title).toBe('OpenAI 官方服务繁忙')
+    expect(error.message).toContain('与您的账户及卡扣AI无关')
+    expect(error.canRetry).toBe(true)
+  })
+})
+
 describe('Claude 适配器上游额度错误', () => {
   test('Given 独立上游 billing 页面 402 When 映射错误 Then 识别为不可自动重试的额度不足', () => {
     const message = 'API Error: 402 Insufficient credit. Add funds at zyloo.io/dashboard/billing.'

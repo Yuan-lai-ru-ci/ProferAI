@@ -401,6 +401,23 @@ export function mapSDKErrorToTypedError(
     },
   }
 
+  // OpenAI 官方上游繁忙统一使用固定用户文案，避免把临时服务问题误导为
+  // 账户、卡扣或本地配置故障；编排层会据此展示「重试 n/8」。
+  if (/OpenAI 官方上游服务当前请求量较大|OpenAI.*(?:overloaded|too many requests|rate.?limit)/i.test(`${detailedMessage}\n${originalError}`)) {
+    return {
+      code: 'provider_error',
+      title: 'OpenAI 官方服务繁忙',
+      message: 'OpenAI 官方上游服务当前请求量较大，暂时无法及时响应，本次情况与您的账户及卡扣AI无关，请稍候片刻后再重试。',
+      actions: [
+        { key: 's', label: '设置', action: 'settings' },
+        { key: 'r', label: '重试', action: 'retry' },
+      ],
+      canRetry: true,
+      retryDelayMs: 1000,
+      originalError,
+    }
+  }
+
   // Ollama 工具结果续请求的已知上游协议错误不是网络瞬断，不能自动重试：
   // Qwen3.8 在该错误后重试相同请求可能再次占满 Ollama runner，形成更长的假性超时。
   if (/no user query found in messages/i.test(`${detailedMessage}\n${originalError}`)) {
