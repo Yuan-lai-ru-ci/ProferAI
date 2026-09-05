@@ -1061,6 +1061,12 @@ export interface ElectronAPI {
   /** 移动附加目录文件/目录（无工作区路径限制） */
   moveAttachedFile: (filePath: string, targetDir: string, access?: import('@profer/shared').FileAccessOptions) => Promise<void>
 
+  /** 删除附加目录文件/目录（无工作区路径限制） */
+  deleteAttachedFile: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<void>
+
+  /** 将附加目录文件/目录移入系统回收站（无工作区路径限制） */
+  moveAttachedToTrash: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<void>
+
   /** 检查路径类型（文件 or 目录），用于拖拽检测 */
   checkPathsType: (paths: string[]) => Promise<{ directories: string[]; files: string[] }>
 
@@ -2788,6 +2794,14 @@ const electronAPI: ElectronAPI = {
 
   moveAttachedFile: (filePath: string, targetDir: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_ATTACHED_FILE, filePath, targetDir, access)
+  },
+
+  deleteAttachedFile: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_ATTACHED_FILE, filePath, access)
+  },
+
+  moveAttachedToTrash: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MOVE_ATTACHED_TO_TRASH, filePath, access)
   },
 
   checkPathsType: (paths: string[]) => {

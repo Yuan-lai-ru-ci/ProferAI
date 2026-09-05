@@ -7,14 +7,25 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { X, FolderOpen, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart, MessageSquarePlus } from 'lucide-react'
+import { X, FolderOpen, ExternalLink, ChevronRight, MoreHorizontal, FolderSearch, Pencil, FolderInput, Info, FolderHeart, MessageSquarePlus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
@@ -43,7 +54,7 @@ import {
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { detectIsWindows } from '@/lib/platform'
-import { getFileBaseName, getLastPathSegments } from '@/lib/file-utils'
+import { getFileBaseName, getFileParentPath, getLastPathSegments } from '@/lib/file-utils'
 import type { FileEntry, AgentPendingFile } from '@profer/shared'
 
 function getMediaTypeFromFilename(filename: string): string {
@@ -52,6 +63,23 @@ function getMediaTypeFromFilename(filename: string): string {
   if (!imageExts.has(ext)) return 'application/octet-stream'
   const mimeExt = ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext
   return `image/${mimeExt}`
+}
+
+/** 使用原路径的分隔符拼接路径，兼容 Windows 与 Unix。 */
+function appendPath(parentPath: string, name: string): string {
+  const separator = parentPath.includes('\\') ? '\\' : '/'
+  return `${parentPath.replace(/[\\/]+$/, '')}${separator}${name}`
+}
+
+/** 根据原路径和新名称生成同级路径。 */
+function getSiblingPath(filePath: string, newName: string): string {
+  const parentPath = getFileParentPath(filePath)
+  return parentPath ? appendPath(parentPath, newName) : newName
+}
+
+/** 把目录移动到目标目录后得到的新绝对路径。 */
+function getMovedPath(filePath: string, targetDir: string): string {
+  return appendPath(targetDir, getFileBaseName(filePath))
 }
 
 interface SidePanelProps {
@@ -259,6 +287,58 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     }
   }, [sessionId, setAttachedDirsMap])
 
+  const replaceSessionDirectory = React.useCallback(async (oldPath: string, newPath: string): Promise<void> => {
+    await window.electronAPI.detachDirectory({ sessionId, directoryPath: oldPath })
+    const updated = await window.electronAPI.attachDirectory({ sessionId, directoryPath: newPath })
+    setAttachedDirsMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, updated)
+      return map
+    })
+  }, [sessionId, setAttachedDirsMap])
+
+  const handleRenameSessionDirectory = React.useCallback(async (dirPath: string, newName: string): Promise<void> => {
+    const newPath = getSiblingPath(dirPath, newName)
+    try {
+      await window.electronAPI.renameAttachedFile(dirPath, newName, { sessionId, candidateBasePaths: basePathsRef.current })
+      await replaceSessionDirectory(dirPath, newPath)
+      setFilesVersion((prev) => prev + 1)
+    } catch (error) {
+      console.error('[SidePanel] 重命名附加目录失败:', error)
+    }
+  }, [sessionId, replaceSessionDirectory, setFilesVersion])
+
+  const handleMoveSessionDirectory = React.useCallback(async (dirPath: string, targetDir: string): Promise<void> => {
+    const newPath = getMovedPath(dirPath, targetDir)
+    try {
+      await window.electronAPI.moveAttachedFile(dirPath, targetDir, { sessionId, candidateBasePaths: basePathsRef.current })
+      await replaceSessionDirectory(dirPath, newPath)
+      setFilesVersion((prev) => prev + 1)
+    } catch (error) {
+      console.error('[SidePanel] 移动附加目录失败:', error)
+    }
+  }, [sessionId, replaceSessionDirectory, setFilesVersion])
+
+  const handleDeleteSessionDirectory = React.useCallback(async (dirPath: string): Promise<void> => {
+    try {
+      await window.electronAPI.deleteAttachedFile(dirPath, { sessionId, candidateBasePaths: basePathsRef.current })
+      await handleDetachDirectory(dirPath)
+      setFilesVersion((prev) => prev + 1)
+    } catch (error) {
+      console.error('[SidePanel] 删除附加目录失败:', error)
+    }
+  }, [sessionId, handleDetachDirectory, setFilesVersion])
+
+  const handleMoveSessionDirectoryToTrash = React.useCallback(async (dirPath: string): Promise<void> => {
+    try {
+      await window.electronAPI.moveAttachedToTrash(dirPath, { sessionId, candidateBasePaths: basePathsRef.current })
+      await handleDetachDirectory(dirPath)
+      setFilesVersion((prev) => prev + 1)
+    } catch (error) {
+      console.error('[SidePanel] 移入回收站失败:', error)
+    }
+  }, [sessionId, handleDetachDirectory, setFilesVersion])
+
   const attachSessionFile = React.useCallback(async (filePath: string) => {
     const updated = await window.electronAPI.attachFile({ sessionId, filePath })
     setAttachedFilesMap((prev) => {
@@ -331,6 +411,63 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       console.error('[SidePanel] 移除工作区附加目录失败:', error)
     }
   }, [workspaceSlug, currentWorkspaceId, setWsAttachedDirsMap])
+
+  const replaceWorkspaceDirectory = React.useCallback(async (oldPath: string, newPath: string): Promise<void> => {
+    if (!workspaceSlug || !currentWorkspaceId) return
+    await window.electronAPI.detachWorkspaceDirectory({ workspaceSlug, directoryPath: oldPath })
+    const updated = await window.electronAPI.attachWorkspaceDirectory({ workspaceSlug, directoryPath: newPath })
+    setWsAttachedDirsMap((prev) => {
+      const map = new Map(prev)
+      map.set(currentWorkspaceId, updated)
+      return map
+    })
+  }, [workspaceSlug, currentWorkspaceId, setWsAttachedDirsMap])
+
+  const handleRenameWorkspaceDirectory = React.useCallback(async (dirPath: string, newName: string): Promise<void> => {
+    if (!workspaceSlug || !currentWorkspaceId) return
+    const newPath = getSiblingPath(dirPath, newName)
+    try {
+      await window.electronAPI.renameAttachedFile(dirPath, newName, { sessionId, workspaceSlug, candidateBasePaths: basePathsRef.current })
+      await replaceWorkspaceDirectory(dirPath, newPath)
+      setFilesVersion((prev) => prev + 1)
+    } catch (error) {
+      console.error('[SidePanel] 重命名工作区附加目录失败:', error)
+    }
+  }, [sessionId, workspaceSlug, currentWorkspaceId, replaceWorkspaceDirectory, setFilesVersion])
+
+  const handleMoveWorkspaceDirectory = React.useCallback(async (dirPath: string, targetDir: string): Promise<void> => {
+    if (!workspaceSlug || !currentWorkspaceId) return
+    const newPath = getMovedPath(dirPath, targetDir)
+    try {
+      await window.electronAPI.moveAttachedFile(dirPath, targetDir, { sessionId, workspaceSlug, candidateBasePaths: basePathsRef.current })
+      await replaceWorkspaceDirectory(dirPath, newPath)
+      setFilesVersion((prev) => prev + 1)
+    } catch (error) {
+      console.error('[SidePanel] 移动工作区附加目录失败:', error)
+    }
+  }, [sessionId, workspaceSlug, currentWorkspaceId, replaceWorkspaceDirectory, setFilesVersion])
+
+  const handleDeleteWorkspaceDirectory = React.useCallback(async (dirPath: string): Promise<void> => {
+    if (!workspaceSlug || !currentWorkspaceId) return
+    try {
+      await window.electronAPI.deleteAttachedFile(dirPath, { sessionId, workspaceSlug, candidateBasePaths: basePathsRef.current })
+      await handleDetachWorkspaceDirectory(dirPath)
+      setFilesVersion((prev) => prev + 1)
+    } catch (error) {
+      console.error('[SidePanel] 删除工作区附加目录失败:', error)
+    }
+  }, [sessionId, workspaceSlug, currentWorkspaceId, handleDetachWorkspaceDirectory, setFilesVersion])
+
+  const handleMoveWorkspaceDirectoryToTrash = React.useCallback(async (dirPath: string): Promise<void> => {
+    if (!workspaceSlug || !currentWorkspaceId) return
+    try {
+      await window.electronAPI.moveAttachedToTrash(dirPath, { sessionId, workspaceSlug, candidateBasePaths: basePathsRef.current })
+      await handleDetachWorkspaceDirectory(dirPath)
+      setFilesVersion((prev) => prev + 1)
+    } catch (error) {
+      console.error('[SidePanel] 移入工作区附加目录回收站失败:', error)
+    }
+  }, [sessionId, workspaceSlug, currentWorkspaceId, handleDetachWorkspaceDirectory, setFilesVersion])
 
   const attachWorkspaceFile = React.useCallback(async (filePath: string) => {
     if (!workspaceSlug || !currentWorkspaceId) return
@@ -546,6 +683,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                       <AttachedDirsSection
                         attachedDirs={attachedDirs}
                         onDetach={handleDetachDirectory}
+                        onRename={handleRenameSessionDirectory}
+                        onMove={handleMoveSessionDirectory}
+                        onDelete={handleDeleteSessionDirectory}
+                        onMoveToTrash={handleMoveSessionDirectoryToTrash}
                         refreshVersion={filesVersion}
                         onAddToChat={handleAddToChat}
                         onFilePreview={handleFilePreview}
@@ -632,6 +773,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                     <AttachedDirsSection
                       attachedDirs={wsAttachedDirs}
                       onDetach={handleDetachWorkspaceDirectory}
+                      onRename={handleRenameWorkspaceDirectory}
+                      onMove={handleMoveWorkspaceDirectory}
+                      onDelete={handleDeleteWorkspaceDirectory}
+                      onMoveToTrash={handleMoveWorkspaceDirectoryToTrash}
                       refreshVersion={filesVersion}
                       onAddToChat={handleAddToChat}
                       onFilePreview={handleFilePreview}
@@ -756,6 +901,10 @@ function AttachedFilesSection({ attachedFiles, onDetach, onAddToChat, onFilePrev
 interface AttachedDirsSectionProps {
   attachedDirs: string[]
   onDetach: (dirPath: string) => void
+  onRename: (dirPath: string, newName: string) => Promise<void>
+  onMove: (dirPath: string, targetDir: string) => Promise<void>
+  onDelete: (dirPath: string) => Promise<void>
+  onMoveToTrash: (dirPath: string) => Promise<void>
   /** 文件版本号，用于自动刷新已展开的目录 */
   refreshVersion: number
   onAddToChat?: (entry: FileEntry) => void
@@ -766,7 +915,7 @@ interface AttachedDirsSectionProps {
 }
 
 /** 附加目录区域：统一管理所有子项的选中状态 */
-function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId }: AttachedDirsSectionProps): React.ReactElement {
+function AttachedDirsSection({ attachedDirs, onDetach, onRename, onMove, onDelete, onMoveToTrash, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId }: AttachedDirsSectionProps): React.ReactElement {
   const [selectedPaths, setSelectedPaths] = React.useState<Set<string>>(new Set())
 
   // ===== 接入搜索点击触发的 reveal：附加目录文件搜到后，需要展开/选中目标 =====
@@ -822,6 +971,10 @@ function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion, onAddToCh
             key={dir}
             dirPath={dir}
             onDetach={() => onDetach(dir)}
+            onRename={onRename}
+            onMove={onMove}
+            onDelete={onDelete}
+            onMoveToTrash={onMoveToTrash}
             selectedPaths={selectedPaths}
             onSelect={handleSelect}
             refreshVersion={refreshVersion}
@@ -843,6 +996,10 @@ function AttachedDirsSection({ attachedDirs, onDetach, refreshVersion, onAddToCh
 interface AttachedDirTreeProps {
   dirPath: string
   onDetach: () => void
+  onRename: (dirPath: string, newName: string) => Promise<void>
+  onMove: (dirPath: string, targetDir: string) => Promise<void>
+  onDelete: (dirPath: string) => Promise<void>
+  onMoveToTrash: (dirPath: string) => Promise<void>
   selectedPaths: Set<string>
   onSelect: (path: string, ctrlKey: boolean) => void
   refreshVersion: number
@@ -856,12 +1013,58 @@ interface AttachedDirTreeProps {
   revealTs?: number
 }
 
-function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId, revealTarget = null, revealTs = 0 }: AttachedDirTreeProps): React.ReactElement {
+function AttachedDirTree({ dirPath, onDetach, onRename, onMove, onDelete, onMoveToTrash, selectedPaths, onSelect, refreshVersion, onAddToChat, onFilePreview, allowedPaths, sessionId, revealTarget = null, revealTs = 0 }: AttachedDirTreeProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
   const [loaded, setLoaded] = React.useState(false)
+  const [isRenaming, setIsRenaming] = React.useState(false)
+  const [renameValue, setRenameValue] = React.useState('')
+  const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const renameInputRef = React.useRef<HTMLInputElement>(null)
+  const renameSubmittingRef = React.useRef(false)
 
   const dirName = getFileBaseName(dirPath)
+  const rootEntry: FileEntry = { name: dirName, path: dirPath, isDirectory: true }
+
+  const startRename = (): void => {
+    setRenameValue(dirName)
+    setIsRenaming(true)
+    setTimeout(() => renameInputRef.current?.select(), 50)
+  }
+
+  const confirmRename = async (): Promise<void> => {
+    const newName = renameValue.trim()
+    if (!newName || newName === dirName || renameSubmittingRef.current) {
+      setIsRenaming(false)
+      return
+    }
+    renameSubmittingRef.current = true
+    try {
+      await onRename(dirPath, newName)
+    } finally {
+      renameSubmittingRef.current = false
+      setIsRenaming(false)
+    }
+  }
+
+  const handleMove = async (): Promise<void> => {
+    try {
+      const result = await window.electronAPI.openFolderDialog()
+      if (result) await onMove(dirPath, result.path)
+    } catch (error) {
+      console.error('[AttachedDirTree] 移动失败:', error)
+    }
+  }
+
+  const confirmDelete = async (): Promise<void> => {
+    setDeleteOpen(false)
+    await onDelete(dirPath)
+  }
+
+  const confirmMoveToTrash = async (): Promise<void> => {
+    setDeleteOpen(false)
+    await onMoveToTrash(dirPath)
+  }
 
   // 计算从 dirPath 到 revealTarget 之间的祖先目录集合（用于子项决定是否自动展开）
   const revealAncestors = React.useMemo(
@@ -938,10 +1141,28 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
           )}
         />
         <FileTypeIcon name={dirName} isDirectory isOpen={expanded} />
-        <span className="text-xs truncate flex-1" title={dirPath}>
-          {dirName}
-        </span>
-        <DropdownMenu>
+        {isRenaming ? (
+          <input
+            ref={renameInputRef}
+            autoFocus
+            value={renameValue}
+            onChange={(event) => setRenameValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') { event.preventDefault(); void confirmRename() }
+              if (event.key === 'Escape') { event.preventDefault(); setIsRenaming(false) }
+              event.stopPropagation()
+            }}
+            onBlur={() => { void confirmRename() }}
+            onClick={(event) => event.stopPropagation()}
+            className="min-w-0 flex-1 rounded border border-primary bg-background px-1 py-0.5 text-xs outline-none"
+            maxLength={255}
+          />
+        ) : (
+          <span className="text-xs truncate flex-1" title={dirPath}>
+            {dirName}
+          </span>
+        )}
+        {!isRenaming && <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
               type="button"
@@ -955,21 +1176,72 @@ function AttachedDirTree({ dirPath, onDetach, selectedPaths, onSelect, refreshVe
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-40 z-[9999] min-w-0 p-0.5">
             {onAddToChat && (
-              <DropdownMenuItem className="text-xs py-1 [&>svg]:size-3.5">
+              <DropdownMenuItem
+                className="text-xs py-1 [&>svg]:size-3.5"
+                onSelect={() => onAddToChat(rootEntry)}
+              >
                 <MessageSquarePlus />
                 添加到聊天
               </DropdownMenuItem>
             )}
             <DropdownMenuItem
+              className="text-xs py-1 [&>svg]:size-3.5"
+              onSelect={() => window.electronAPI.showAttachedInFolder(dirPath, { sessionId, candidateBasePaths: allowedPaths }).catch(console.error)}
+            >
+              <FolderSearch />
+              在文件夹中显示
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-xs py-1 [&>svg]:size-3.5"
+              onSelect={() => { void handleMove() }}
+            >
+              <FolderInput />
+              移动到...
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-xs py-1 [&>svg]:size-3.5"
+              onSelect={startRename}
+            >
+              <Pencil />
+              重命名
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="my-0.5" />
+            <DropdownMenuItem
               className="text-xs py-1 text-destructive focus:text-destructive [&>svg]:size-3.5"
+              onSelect={() => setDeleteOpen(true)}
+            >
+              <Trash2 />
+              删除
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-xs py-1 text-yellow-600 hover:text-yellow-600 focus:text-yellow-600 dark:text-yellow-400 dark:hover:text-yellow-400 dark:focus:text-yellow-400 [&>svg]:size-3.5"
               onSelect={onDetach}
             >
               <X />
               移除附加
             </DropdownMenuItem>
           </DropdownMenuContent>
-        </DropdownMenu>
+        </DropdownMenu>}
       </div>
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除附加目录</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除「{dirName}」及其全部内容吗？可选择移入回收站以便恢复，或永久删除磁盘上的实际文件夹。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { void confirmMoveToTrash() }} className="bg-secondary text-secondary-foreground hover:bg-secondary/80">
+              移动到回收站
+            </AlertDialogAction>
+            <AlertDialogAction onClick={() => { void confirmDelete() }} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {expanded && (
         <div className="relative">
           <span
