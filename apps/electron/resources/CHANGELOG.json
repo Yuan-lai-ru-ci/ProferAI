@@ -1,9 +1,9 @@
 {
   "releases": [
     {
-      "version": "0.15.68",
-      "date": "2026-09-03",
-      "title": "v0.15.68",
+      "version": "0.15.72",
+      "date": "2026-09-05",
+      "title": "v0.15.72",
       "notes": "- 本地测试包：基于当前 main 构建 macOS Apple Silicon arm64 无签名验收包"
     },
     {
