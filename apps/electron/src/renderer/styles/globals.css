@@ -1554,13 +1554,22 @@
   app-region: no-drag;
 }
 
-/* 拖拽顶栏中的交互控件自动退出窗口拖拽区，避免新加按钮时误挡点击。
+/* 拖拽顶栏中的交互控件自动退出窗口拖动区，避免新加控件时误挡点击。
  * TabBarItem、工具组和各独立页面仍可用 titlebar-no-drag 表达更大的交互区域。 */
 .titlebar-drag-region button,
 .titlebar-drag-region input,
 .titlebar-drag-region textarea,
 .titlebar-drag-region select,
-.titlebar-drag-region [role='button'] {
+.titlebar-drag-region a,
+.titlebar-drag-region [contenteditable='true'],
+.titlebar-drag-region [role='button'],
+.titlebar-drag-region [role='tab'],
+.titlebar-drag-region [role='link'],
+.titlebar-drag-region [role='menuitem'],
+.titlebar-drag-region [role='option'],
+.titlebar-drag-region [role='checkbox'],
+.titlebar-drag-region [role='switch'],
+.titlebar-drag-region [role='combobox'] {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
