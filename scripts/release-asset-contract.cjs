@@ -1,6 +1,5 @@
 const WINDOWS_RELEASE_ASSET_NAMES = Object.freeze([
   'latest.yml',
-  'latest.yml.sig',
 ])
 
 function requiredWindowsReleaseAssetNames(version) {
