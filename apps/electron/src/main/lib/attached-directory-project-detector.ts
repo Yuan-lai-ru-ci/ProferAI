@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync, type Dirent } from 'node:fs'
-import { basename, join, relative, resolve } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 export type AttachedProjectType = 'obsidian-vault' | 'git-repository' | 'node-project' | 'python-project'
 
@@ -174,7 +174,14 @@ export function detectAttachedDirectoryProjects(directories: string[]): Attached
   for (const [path, candidate] of candidates) {
     if (candidate.type === 'git-repository') continue
     const repositoryRoot = gitRoots
-      .filter((root) => path === root || path.startsWith(`${root}/`))
+      .filter((root) => {
+        const relativePath = relative(root, path)
+        return relativePath === '' || (
+          relativePath !== '..' &&
+          !relativePath.startsWith(`..${sep}`) &&
+          !isAbsolute(relativePath)
+        )
+      })
       .sort((a, b) => b.length - a.length)[0]
     if (repositoryRoot) candidates.set(path, { ...candidate, repositoryRoot })
   }

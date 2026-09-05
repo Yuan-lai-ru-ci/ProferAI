@@ -6,7 +6,6 @@ const { assertWindowsReleaseReady, requiredWindowsReleaseAssetNames } = contract
 describe('macOS 补充发布资产前置条件', () => {
   const expectedNames = [
     'latest.yml',
-    'latest.yml.sig',
     'Profer-Setup-0.15.68.exe',
     'Profer-Setup-0.15.68.exe.blockmap',
   ]

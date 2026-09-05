@@ -2037,6 +2037,10 @@ export const AGENT_IPC_CHANNELS = {
   RENAME_ATTACHED_FILE: 'agent:rename-attached-file',
   /** 移动附加目录文件/目录（无工作区路径限制） */
   MOVE_ATTACHED_FILE: 'agent:move-attached-file',
+  /** 删除附加目录文件/目录（无工作区路径限制） */
+  DELETE_ATTACHED_FILE: 'agent:delete-attached-file',
+  /** 将附加目录文件/目录移入系统回收站（无工作区路径限制） */
+  MOVE_ATTACHED_TO_TRASH: 'agent:move-attached-to-trash',
   /** 检查路径类型（文件 or 目录），用于拖拽检测 */
   CHECK_PATHS_TYPE: 'agent:check-paths-type',
   /** 读取附加目录文件内容为 base64（限制在已附加目录范围内，用于侧面板添加到聊天） */

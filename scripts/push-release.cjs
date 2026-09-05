@@ -12,8 +12,9 @@ const fs = require('fs');
 const path = require('path');
 
 const VERSION = process.argv[2];
+const UNSIGNED_RELEASE = process.argv.includes('--unsigned');
 if (!VERSION) {
-  console.error('用法: node scripts/push-release.cjs <版本号>');
+  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned]');
   process.exit(1);
 }
 
@@ -47,10 +48,10 @@ function sleep(ms) {
 
 function assertReleaseSigningConfiguration() {
   if (!process.env.CSC_LINK || !process.env.CSC_KEY_PASSWORD) {
-    throw new Error('缺少 CSC_LINK 或 CSC_KEY_PASSWORD；禁止发布未签名 Windows 安装包。');
+    throw new Error('缺少 CSC_LINK 或 CSC_KEY_PASSWORD；签名发布必须提供 Windows 代码签名证书。');
   }
   if (!process.env.PROFER_UPDATE_METADATA_PRIVATE_KEY && !process.env.PROFER_UPDATE_METADATA_PRIVATE_KEY_FILE) {
-    throw new Error('缺少更新元数据签名私钥；禁止发布未签名 latest.yml。');
+    throw new Error('缺少更新元数据签名私钥；签名发布必须提供 latest.yml 签名密钥。');
   }
 }
 
@@ -219,21 +220,18 @@ async function ensureGitHubRelease(assets) {
   // 必须先完成所有只读预检；随后才允许构建、上传或 Git/GitHub 写入。
   run(`node scripts/verify-release-preflight.cjs ${VERSION}`);
 
-  console.log('[1/4] 执行发布验证门禁...');
-  assertReleaseSigningConfiguration();
+  console.log(`[1/4] 执行发布验证门禁（Windows x64${UNSIGNED_RELEASE ? ' 未签名' : ' 签名'}正式包）...`);
+  if (!UNSIGNED_RELEASE) assertReleaseSigningConfiguration();
   run('bun run typecheck');
   run('bun test --isolate --timeout 30000');
   fs.rmSync(path.join(OUT, 'win-unpacked'), { recursive: true, force: true });
-  run('bun run release:verify:windows', ELECTRON);
-  // release:verify:windows 已包含 latest.yml 内容哈希和 Authenticode 门禁；
-  // 未签名 Windows 安装包禁止进入任何上传步骤。
+  run(`bun run ${UNSIGNED_RELEASE ? 'release:verify:windows:unsigned' : 'release:verify:windows'}`, ELECTRON);
+  // 两种模式都保留完整构建链、latest.yml 哈希、CLI 和运行时闭包门禁。
 
-  const assets = [
-    'latest.yml',
-    'latest.yml.sig',
-    `Profer-Setup-${VERSION}.exe`,
-    `Profer-Setup-${VERSION}.exe.blockmap`,
-  ].map((name) => ({ name, path: path.join(OUT, name) }));
+  const assetNames = UNSIGNED_RELEASE
+    ? ['latest.yml', `Profer-Setup-${VERSION}.exe`, `Profer-Setup-${VERSION}.exe.blockmap`]
+    : ['latest.yml', 'latest.yml.sig', `Profer-Setup-${VERSION}.exe`, `Profer-Setup-${VERSION}.exe.blockmap`];
+  const assets = assetNames.map((name) => ({ name, path: path.join(OUT, name) }));
   for (const asset of assets) {
     if (!fs.existsSync(asset.path)) throw new Error(`缺少打包资产: ${asset.path}`);
     asset.size = fs.statSync(asset.path).size;
@@ -248,7 +246,7 @@ async function ensureGitHubRelease(assets) {
   const metadata = assets.find((asset) => asset.name === 'latest.yml');
   const metadataSignature = assets.find((asset) => asset.name === 'latest.yml.sig');
   const blockmap = assets.find((asset) => asset.name.endsWith('.blockmap'));
-  if (!installer || !metadata || !metadataSignature || !blockmap) {
+  if (!installer || !metadata || !blockmap || (!UNSIGNED_RELEASE && !metadataSignature)) {
     throw new Error('发布资产列表不完整，拒绝上传。');
   }
   const latestJsonPath = path.join(OUT, 'latest.json');
@@ -259,12 +257,13 @@ async function ensureGitHubRelease(assets) {
     date: new Date().toISOString().split('T')[0],
   }));
   await scp(metadata.path, '/tmp/latest.yml');
-  await scp(metadataSignature.path, '/tmp/latest.yml.sig');
+  if (metadataSignature) await scp(metadataSignature.path, '/tmp/latest.yml.sig');
   await scp(installer.path, `/tmp/${installer.name}`);
   await scp(blockmap.path, `/tmp/${blockmap.name}`);
   await scp(latestJsonPath, '/tmp/latest.json');
   await ssh(
-    `sudo mkdir -p ${UPDATE_DIR} && sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && sudo cp /tmp/latest.yml.sig ${UPDATE_DIR}/ && ` +
+    `sudo mkdir -p ${UPDATE_DIR} && sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && ` +
+    (metadataSignature ? `sudo cp /tmp/latest.yml.sig ${UPDATE_DIR}/ && ` : '') +
     `sudo cp /tmp/${installer.name} ${UPDATE_DIR}/ && sudo cp /tmp/${blockmap.name} ${UPDATE_DIR}/ && ` +
     `sudo cp /tmp/latest.json ${UPDATE_DIR}/ && ` +
     `sudo ln -sf ${UPDATE_DIR}/${installer.name} ${UPDATE_DIR}/Profer-latest.exe && ` +

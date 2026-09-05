@@ -1,6 +1,6 @@
 {
   "name": "@profer/electron",
-  "version": "0.15.72",
+  "version": "0.15.73",
   "description": "Profer",
   "main": "dist/main.cjs",
   "author": "Profer Team",
@@ -35,6 +35,8 @@
     "verify:update-metadata": "node scripts/verify-update-metadata.cjs",
     "verify:packaged-pi-runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-packaged-pi-runtime.ps1",
     "release:verify:windows": "bun run verify:packaging-host:win && bun run build:github && bun run sync:runtime-deps && node scripts/run-electron-builder.cjs --win --x64 --publish never && bun run sign:update-metadata && bun run verify:release-assets && bun run verify:packaged-pi-runtime",
+    "release:verify:windows:unsigned": "bun run verify:packaging-host:win && bun run build:github && bun run sync:runtime-deps && node scripts/run-electron-builder.cjs --win --x64 --publish never && bun run verify:release-assets:unsigned && bun run verify:packaged-pi-runtime",
+    "verify:release-assets:unsigned": "node scripts/verify-release-assets-unsigned.cjs",
     "build:github": "bun run build:main-github && bun run verify:build-target:oss && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:resources && bun run verify:tablet",
     "build:commercial": "bun run build:main-commercial && bun run verify:build-target:commercial && bun run build:preload && bun run build:renderer && bun run build:cli && bun run build:resources",
     "start": "bun run build && bunx electron .",
