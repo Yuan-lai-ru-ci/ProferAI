@@ -2854,7 +2854,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         />
       ),
     },
-    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
+    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} composerTool tabletMode={tabletMode} /> },
     { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} workspaceSlug={sessionMeta?.workspaceId ? workspaces.find((w) => w.id === sessionMeta.workspaceId)?.slug : undefined} open={presetMenuOpen} onOpenChange={setPresetMenuOpen} onManagePresets={openWorkspacePresets} /> },
     {
       key: 'thinking',
