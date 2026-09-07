@@ -30,6 +30,13 @@ describe('Pi native retry classifier', () => {
   })
 
   test.each([
+    'Summarization failed: OpenAI 官方上游服务当前请求量较大，暂时无法及时响应',
+    'Summarization failed: 服务繁忙，请稍后重试',
+  ])('classifies localized summarization overload "%s" as retryable', (errorMessage) => {
+    expect(isRetryableAssistantError(failedAssistant(errorMessage))).toBe(true)
+  })
+
+  test.each([
     'Upstream response stream was interrupted',
     'peer closed connection',
     'incomplete chunked read',
