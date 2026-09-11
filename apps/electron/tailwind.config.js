@@ -4,8 +4,8 @@ export default {
   content: [
     './src/renderer/**/*.{js,ts,jsx,tsx}',
   ],
-  // LEGACY TABLET / NO-IPC FALLBACK：仅平板无 IPC 场景仍可能由 applyThemeToDOM
-  // 拼接 theme-${style}。桌面主窗口走 skin-* + 动态 CSS，不能依赖此 safelist。
+  // LEGACY theme-* 类：applyThemeToDOM 自 2026-09-11 起不再拼接 theme-${style}
+  // （无 IPC 的 tablet 入口已退役）；列表保留以兼容仍可能带 theme-* 类的 DOM。
   safelist: [
     'theme-ocean-light',
     'theme-ocean-dark',

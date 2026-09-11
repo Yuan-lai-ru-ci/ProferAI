@@ -40,7 +40,7 @@ function getToolIcon(iconName?: string): React.ReactElement {
   }
 }
 
-export function ToolSelectorPopover({ composerTool = false, tabletMode = false }: { composerTool?: boolean; tabletMode?: boolean } = {}): React.ReactElement {
+export function ToolSelectorPopover({ composerTool = false }: { composerTool?: boolean } = {}): React.ReactElement {
   const [open, setOpen] = useState(false)
   const tools = useAtomValue(chatToolsAtom)
   const setChatTools = useSetAtom(chatToolsAtom)
@@ -74,7 +74,6 @@ export function ToolSelectorPopover({ composerTool = false, tabletMode = false }
   const trigger = composerTool ? (
     <AgentComposerToolTrigger
       label="工具"
-      tabletMode={tabletMode}
       className={hasActiveTools ? 'text-blue-500 hover:text-blue-500' : undefined}
     >
       <Wrench className="size-5" />

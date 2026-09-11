@@ -117,7 +117,7 @@ import { focusEnterableViewItem } from './navigation-items'
 import type { AgentProjectGroup } from './session-items'
 
 
-export function useLeftSidebar(tabletMode?: boolean) {
+export function useLeftSidebar() {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
   // 持续持有最新 activeView 的稳定引用，供 navigation consumer（useEffect [] 注册一次）
   // 读取最新视图状态，避免陈旧闭包（不能在 [] 闭包里直接读 activeView 变量）。
@@ -1630,7 +1630,6 @@ export function useLeftSidebar(tabletMode?: boolean) {
     setActiveView,
     mode,
     setMode,
-    tabletMode,
     isMac,
     isClassic,
     viewMode,

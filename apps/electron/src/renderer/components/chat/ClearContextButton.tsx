@@ -22,14 +22,12 @@ export interface ClearContextButtonProps
   onClick?: () => void
   /** 输入工具栏使用统一的 Composer 触发器。 */
   composerTool?: boolean
-  tabletMode?: boolean
 }
 
 export function ClearContextButton({
   onClick,
   className,
   composerTool = false,
-  tabletMode = false,
   ...props
 }: ClearContextButtonProps): React.ReactElement {
   // 检测平台以显示正确的快捷键
@@ -43,7 +41,6 @@ export function ClearContextButton({
       <AgentComposerToolTrigger
         label="清除上下文"
         tooltip={`清除上下文 (${shortcutKey})`}
-        tabletMode={tabletMode}
         className={className}
         onClick={onClick}
         {...props}

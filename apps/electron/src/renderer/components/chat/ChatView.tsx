@@ -62,21 +62,17 @@ import type {
 
 interface ChatViewProps {
   conversationId: string
-  /** 移动模式：隐藏输入框占位提示文字等触屏简化 */
-  tabletMode?: boolean
-  /** 隐藏 ChatHeader（平板竖屏由外部顶栏承担标题，避免双顶栏） */
-  hideChatHeader?: boolean
 }
 
-export function ChatView({ conversationId, tabletMode = false, hideChatHeader = false }: ChatViewProps): React.ReactElement {
+export function ChatView({ conversationId }: ChatViewProps): React.ReactElement {
   return (
     <ConversationProvider conversationId={conversationId}>
-      <ChatViewInner conversationId={conversationId} tabletMode={tabletMode} hideChatHeader={hideChatHeader} />
+      <ChatViewInner conversationId={conversationId} />
     </ConversationProvider>
   )
 }
 
-function ChatViewInner({ conversationId, tabletMode = false, hideChatHeader = false }: ChatViewProps): React.ReactElement {
+function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   // ===== 本地状态（每个实例独立） =====
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [contextDividers, setContextDividers] = React.useState<string[]>([])
@@ -730,7 +726,7 @@ function ChatViewInner({ conversationId, tabletMode = false, hideChatHeader = fa
       {/* 主内容区域 */}
       <div data-profer-navigation-region="conversation" tabIndex={-1} className="flex flex-col h-full flex-1 min-w-0">
         {/* Header 在 max-w 外，按钮可到达最右侧 */}
-        {!hideChatHeader && <ChatHeader conversation={conversation} onOpenHistory={() => setHistoryDrawerOpen(true)} />}
+        <ChatHeader conversation={conversation} onOpenHistory={() => setHistoryDrawerOpen(true)} />
         <div className="flex flex-col flex-1 w-full max-w-[min(72rem,100%)] mx-auto overflow-hidden min-h-0">
           {/* 中间：消息区域 */}
           <ChatMessages
@@ -803,8 +799,6 @@ function ChatViewInner({ conversationId, tabletMode = false, hideChatHeader = fa
             onSend={handleSend}
             onStop={handleStop}
             onClearContext={handleClearContext}
-            placeholder={tabletMode ? '' : undefined}
-            tabletMode={tabletMode}
           />
         </div>
       </div>

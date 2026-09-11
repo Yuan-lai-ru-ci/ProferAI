@@ -45,7 +45,7 @@ function valueToSliderPosition(value: ContextLengthValue): number {
   return index >= 0 ? index : CONTEXT_LENGTH_OPTIONS.length - 2 // 默认 20
 }
 
-export function ContextSettingsPopover({ composerTool = false, tabletMode = false }: { composerTool?: boolean; tabletMode?: boolean } = {}): React.ReactElement {
+export function ContextSettingsPopover({ composerTool = false }: { composerTool?: boolean } = {}): React.ReactElement {
   const [open, setOpen] = useState(false)
   const [contextLength, setContextLength] = useConversationContextLength()
 
@@ -58,7 +58,7 @@ export function ContextSettingsPopover({ composerTool = false, tabletMode = fals
   }
 
   const trigger = composerTool ? (
-    <AgentComposerToolTrigger label="上下文设置" tabletMode={tabletMode}>
+    <AgentComposerToolTrigger label="上下文设置">
       <Settings2 className="size-4" />
     </AgentComposerToolTrigger>
   ) : (

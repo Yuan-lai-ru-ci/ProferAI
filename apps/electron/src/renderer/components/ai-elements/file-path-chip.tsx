@@ -3,7 +3,6 @@ import { toast } from 'sonner'
 import { Copy, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getFileBaseName, isAbsoluteFilePath as isAbsoluteFilePathCore, resolveRelativeToAbsolute } from '@/lib/file-utils'
-import { useTabletMode } from './tablet-mode-context'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { useFileAccessSessionId } from './file-access-context'
@@ -65,7 +64,6 @@ export function shouldSearchFileCandidate(isAbsolute: boolean): boolean {
 export function FilePathChip({ filePath, basePath, basePaths, className }: FilePathChipProps): React.ReactElement {
   const trimmedPath = filePath.trim()
   const { path: cleanPath, suffix: lineColSuffix } = stripLineCol(trimmedPath)
-  const tabletMode = useTabletMode()
   const filename = getFileBaseName(cleanPath)
   const isAbsolute = isAbsoluteFilePathCore(cleanPath)
   const sessionId = useFileAccessSessionId()
@@ -243,15 +241,6 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     // 右键复制完整路径。
     copyDisplayPath()
   }, [copyDisplayPath])
-
-  if (tabletMode) {
-    return (
-      <span title={displayPath} className={cn('inline-flex items-center gap-1 rounded px-1.5 py-[2px] text-[12px] font-medium leading-[1.6] align-baseline not-prose', fileStatus === 'broken' ? 'opacity-50 border border-dashed border-muted-foreground/30 text-muted-foreground' : 'bg-primary/10 text-primary', className)}>
-        <FileTypeIcon name={filename} isDirectory={false} size={14} />
-        <span className="truncate max-w-[240px]">{filename}{lineColSuffix}</span>
-      </span>
-    )
-  }
 
   const chipClassName = cn(
     'relative inline-flex max-w-full items-center gap-1 overflow-hidden rounded border px-1.5 py-[2px] text-[12px] font-medium leading-[1.6] align-baseline not-prose',

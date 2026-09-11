@@ -244,11 +244,12 @@
     --info-foreground: 0 0% 100%;
   }
 
-  /* ===== LEGACY TABLET / NO-IPC FALLBACK =====
+  /* ===== LEGACY .theme-* TOKEN 块（无 IPC 回退层） =====
    *
-   * 这些 .theme-* token 块只服务于无 IPC 的 tablet fallback；desktop 主窗口使用
-   * skin-* + 动态 #skin-css，不能主动进入本区。为保持 tablet 兼容，旧 token 仍需
-   * 与 resources/skins/<id>/skin.css 的交集同步；用 check-skin-token-sync.mjs 校验。
+   * 这些 .theme-* token 块原为无 IPC 的 tablet 入口提供 CSS 回退（该入口已于
+   * 2026-09-11 随 tablet 退役删除，applyThemeToDOM 也不会再拼接 theme-* 类）。
+   * 块本身保留：check-skin-token-sync.mjs 仍以它们为基准校验与
+   * resources/skins/<id>/skin.css 的交集 token 一致（缺块直接报错退出）。
    * v2 token 不再承担此双写义务，新增 desktop 表面应直接使用 Surface Contract。
    */
 
@@ -1645,7 +1646,7 @@
 /* ===== 全局 Profer 滚动条 =====
  * 应用内所有滚动容器默认使用 6px 细滚动条，中性灰（--muted-foreground），
  * 随主题/皮肤 token 自动适配明暗；平时透明，鼠标移入容器时淡入显示，
- * 悬停 thumb 加深。显式隐藏仍用 .scrollbar-none；平板模式见 body.tablet-mode 规则。
+ * 悬停 thumb 加深。显式隐藏仍用 .scrollbar-none。
  * 代码中的 .scrollbar-thin 类名保留作语义兼容，样式已由本全局规则接管。
  */
 * {
@@ -2918,82 +2919,6 @@
 }
 
 
-/* ===== 平板竖屏：设置弹窗改为纵向布局（顶部横条 tab + 内容区全宽） =====
- * 平板设置只有少量 tab，竖屏下 160px 左侧导航会挤压内容区；
- * 改成顶部横向 tab 条（保留切换入口——多个 tab 时必须能切换），内容全宽。桌面端导航宽度由 SettingsPanel 统一控制。
- * body.tablet-mode 由 tablet/main.tsx 挂载时标记，覆盖 Portal 到 body 的弹窗（radix Dialog 默认 Portal）。桌面版不受影响。
- */
-@media (orientation: portrait) {
-  body.tablet-mode .tablet-settings-dialog {
-    width: 94vw;
-    max-width: 94vw;
-    height: 92vh;
-    max-height: 92vh;
-  }
-  body.tablet-mode .settings-body {
-    flex-direction: column;
-  }
-  body.tablet-mode .settings-nav {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    width: 100%;
-    height: auto;
-    padding: 6px 10px;
-    border-right: none;
-    border-bottom: 1px solid hsl(var(--border) / 0.5);
-    overflow-x: auto;
-    overflow-y: hidden;
-    flex-shrink: 0;
-  }
-  body.tablet-mode .settings-nav-header {
-    display: none;
-  }
-  body.tablet-mode .settings-nav nav {
-    flex-direction: row;
-    gap: 2px;
-  }
-  body.tablet-mode .settings-nav nav button {
-    white-space: nowrap;
-  }
-  body.tablet-mode .settings-main-header {
-    min-height: 56px;
-    padding: 14px 20px 8px;
-  }
-  body.tablet-mode .tablet-settings-dialog .px-6 {
-    padding-left: 20px;
-    padding-right: 20px;
-  }
-  /* 特殊风格 8 宫格：手机窄屏（<430px）4 列固定 99px 卡片会溢出，改 2 列居中 */
-  body.tablet-mode .tablet-special-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    justify-items: center;
-  }
-}
-
-/* ===== 平板竖屏：隐藏 Chat 提示词编辑侧栏 =====
- * ChatView 最右侧的提示词编辑侧栏在平板上无功能（平板不支持提示词编辑），
- * 收起态也常驻 40px 窄条，竖屏下挤压并可能与内容区视觉重合；直接隐藏。
- */
-@media (orientation: portrait) {
-  body.tablet-mode .chat-prompt-sidebar {
-    display: none;
-  }
-}
-
-/* ===== 平板输入框高度：竖屏 +20px（40px → 60px），方便触屏输入 =====
- * --tablet-input-h 由 rich-text-input tabletMode 分支消费（min-h/max-h 折叠态）；
- * 竖屏覆盖变量值即可，展开态（200px/500px）不受影响，桌面版不消费该变量。
- */
-:root {
-  --tablet-input-h: 40px;
-}
-@media (orientation: portrait) {
-  body.tablet-mode {
-    --tablet-input-h: 60px;
-  }
-}
-
 /* ===== 窄屏 Agent：消息内容向头像侧收拢 =====
  * 消息头部仍保留头像、模型名/用户名和时间；正文、思考/执行过程、复制操作栏以及
  * 文件改动汇总不再为头像额外预留 46px，避免窄窗口下内容整体被推到右侧。
@@ -3018,56 +2943,6 @@
   .agent-conversation .message-item > .message-content + .file-changes-summary,
   .agent-conversation .message-item > .message-content + .file-changes-summary + .agent-turn-actions {
     padding-left: 6px;
-  }
-}
-
-/* 平板竖屏没有稳定的容器尺寸，继续按屏幕方向收拢消息内容。 */
-@media (orientation: portrait) {
-  body.tablet-mode .message-item .message-content,
-  body.tablet-mode .message-item .file-changes-summary,
-  body.tablet-mode .message-item .agent-turn-actions,
-  body.tablet-mode .message-item > .message-actions {
-    padding-left: 6px;
-  }
-}
-
-/* ===== 平板 App 状态栏安全区（Capacitor WebView 沉浸式） =====
- * App 内 WebView 延伸到系统状态栏后面，顶部内容会被状态栏遮挡。
- * 仅在原生 App 环境由 main.tsx 动态添加 tablet-safe-area 类（浏览器 env() 为 0，不影响）。
- * padding-top 用 max() 保证无状态栏设备（沉浸横屏）为 0；!important 覆盖 Tailwind 的 p-* 工具类。
- */
-.tablet-safe-area {
-  padding-top: max(env(safe-area-inset-top), 0px) !important;
-}
-
-/* ===== 移动模式：隐藏滚动条（触控滚动，滚动条多余且占视觉空间） =====
- * 平板所有滚动都靠手指惯性，自定义滚动条无意义；桌面版不受影响。
- */
-body.tablet-mode *::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  display: none;
-}
-body.tablet-mode * {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-/* ===== 平板竖屏：模型名保留显示 =====
- * 消息头部（MessageHeader）的模型名称在竖屏下保留显示，帮助用户识别当前模型。
- * 输入工具栏的模型选择器（model-selector-trigger）仍只显示 logo 图标。
- */
-
-/* ===== 平板竖屏：工具栏模型选择器只显示图标 =====
- * ModelSelector 触发按钮（agent/chat 输入工具栏共用 model-selector-trigger class）
- * 竖屏窄屏下隐藏模型名文本与下拉箭头，只留模型 logo 图标；点击仍可打开选择弹窗。
- */
-@media (orientation: portrait) {
-  body.tablet-mode .model-selector-trigger span {
-    display: none;
-  }
-  body.tablet-mode .model-selector-trigger .lucide-chevron-down {
-    display: none;
   }
 }
 

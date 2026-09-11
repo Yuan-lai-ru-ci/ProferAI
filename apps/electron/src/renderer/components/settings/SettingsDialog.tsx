@@ -39,7 +39,7 @@ export function SettingsDialog({ tabsOverride }: SettingsDialogProps): React.Rea
         />
         <DialogPrimitive.Content
           data-browser-blocking
-          className="tablet-settings-dialog fixed left-[50%] top-[50%] z-[100] translate-x-[-50%] translate-y-[-50%] h-[88vh] w-[90vw] max-h-[820px] max-w-[1080px] overflow-hidden rounded-xl border border-surface-border/60 bg-dialog text-dialog-foreground shadow-2xl titlebar-no-drag transition-all duration-100 data-[state=open]:scale-100 data-[state=open]:opacity-100 data-[state=closed]:scale-[0.98] data-[state=closed]:opacity-0"
+          className="settings-dialog fixed left-[50%] top-[50%] z-[100] translate-x-[-50%] translate-y-[-50%] h-[88vh] w-[90vw] max-h-[820px] max-w-[1080px] overflow-hidden rounded-xl border border-surface-border/60 bg-dialog text-dialog-foreground shadow-2xl titlebar-no-drag transition-all duration-100 data-[state=open]:scale-100 data-[state=open]:opacity-100 data-[state=closed]:scale-[0.98] data-[state=closed]:opacity-0"
         >
           <DialogPrimitive.Title className="sr-only">设置</DialogPrimitive.Title>
           <SettingsPanel onClose={() => setOpen(false)} tabsOverride={tabsOverride} />

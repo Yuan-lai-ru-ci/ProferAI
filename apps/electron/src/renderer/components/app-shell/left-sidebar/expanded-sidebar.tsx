@@ -22,7 +22,6 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
   const {
     isMac,
     setSidebarCollapsed,
-    tabletMode,
     isClassic,
     mode,
     handleNewAgentSession,
@@ -121,7 +120,6 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                 onClick={() => setSidebarCollapsed(true)}
                 className={cn(
                   'sidebar-collapse-button mt-2 size-10 flex-shrink-0 flex items-center justify-center rounded-[10px] text-foreground/40 titlebar-no-drag',
-                  tabletMode && 'ml-auto',
                   isClassic
                     ? 'bg-muted hover:bg-foreground/[0.08] hover:text-foreground/60 transition-colors'
                     : 'bg-primary/5 hover:bg-primary/10 hover:text-foreground/60 transition-[background-color,border-color,color] duration-150 border border-border/60 hover:border-border'
@@ -157,19 +155,17 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
         </Tooltip>
       </div>
 
-      {/* 自动任务入口：作为任务中心入口放在置顶区上方，不参与置顶列表层级。平板版隐藏（无规划中心能力） */}
-      {!tabletMode && (
-        <div className="px-3 pt-2 pb-0.5">
-          <AutomationSidebarEntry
-            count={automationCount}
-            active={activeView === 'planning'}
-            onClick={handleOpenAutomations}
-          />
-        </div>
-      )}
+      {/* 自动任务入口：作为任务中心入口放在置顶区上方，不参与置顶列表层级 */}
+      <div className="px-3 pt-2 pb-0.5">
+        <AutomationSidebarEntry
+          count={automationCount}
+          active={activeView === 'planning'}
+          onClick={handleOpenAutomations}
+        />
+      </div>
 
-      {/* Agent 技能入口：Skills / MCP 能力中心，仅 Agent 模式可见；平板版隐藏 */}
-      {mode === 'agent' && !tabletMode && (
+      {/* Agent 技能入口：Skills / MCP 能力中心，仅 Agent 模式可见 */}
+      {mode === 'agent' && (
         <div className="px-3 pb-0.5">
           <SkillsSidebarEntry
             count={capabilities?.skills.length ?? 0}
@@ -346,8 +342,8 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                   当前{WORKSPACE_SORT_LABEL[workspaceSortMode]}排序，点击切换排序方式
                 </TooltipContent>
               </Tooltip>
-              {/* 平板版暂时隐藏团队版功能：不展示“加入团队工作区”入口 */}
-              {authStatus.isLoggedIn && accountCaps.membershipTier !== 'free' && !tabletMode && (
+              {/* 团队版功能入口（登录且非免费档才展示） */}
+              {authStatus.isLoggedIn && accountCaps.membershipTier !== 'free' && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button

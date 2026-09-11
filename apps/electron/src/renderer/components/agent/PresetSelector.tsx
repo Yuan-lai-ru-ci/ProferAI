@@ -53,10 +53,9 @@ interface PresetSelectorProps {
   onOpenChange?: (open: boolean) => void
   /** 跳转到 Agent 技能页的工作区预设配置。 */
   onManagePresets?: () => void
-  tabletMode?: boolean
 }
 
-export function PresetSelector({ sessionId, persistedPresetId, persistedPresetReference, workspaceSlug, open, onOpenChange, onManagePresets, tabletMode = false }: PresetSelectorProps): React.ReactElement {
+export function PresetSelector({ sessionId, persistedPresetId, persistedPresetReference, workspaceSlug, open, onOpenChange, onManagePresets }: PresetSelectorProps): React.ReactElement {
   const [presets, setPresets] = useAtom(workspacePresetsAtom(workspaceSlug))
   const loadedPresetCaches = useAtomValue(agentPresetsLoadedAtom)
   const setLoadedPresetCaches = useSetAtom(agentPresetsLoadedAtom)
@@ -152,7 +151,6 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
           <AgentComposerToolTrigger
             label={showPresetRequired ? '请先选择 Agent 预设' : `预设：${current?.name ?? '标准'}`}
             state={showPresetRequired ? 'warning' : 'default'}
-            tabletMode={tabletMode}
           >
             {showPresetRequired ? <AlertTriangle className="size-5" /> : <BriefcaseBusiness className="size-5" />}
           </AgentComposerToolTrigger>

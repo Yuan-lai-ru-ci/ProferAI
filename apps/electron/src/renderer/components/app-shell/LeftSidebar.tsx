@@ -28,10 +28,9 @@ import type { LeftSidebarProps } from "./left-sidebar/types";
 export function LeftSidebar({
   width,
   noTransition,
-  tabletMode,
   renderSearchDialog = true,
 }: LeftSidebarProps): React.ReactElement {
-  const s = useLeftSidebar(tabletMode);
+  const s = useLeftSidebar();
   const isClassic = s.isClassic;
   const sidebarCollapsed = s.sidebarCollapsed;
 

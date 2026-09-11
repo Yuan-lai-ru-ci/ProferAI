@@ -30,18 +30,17 @@ const STATE_CLASS: Record<AgentComposerToolState, string> = {
   destructive: 'text-destructive hover:text-destructive',
 }
 
-export function getAgentComposerToolSize(tabletMode = false): string {
-  return tabletMode ? 'size-11' : 'size-[36px]'
+export function getAgentComposerToolSize(): string {
+  return 'size-[36px]'
 }
 
 export function getAgentComposerToolTriggerClass(
   state: AgentComposerToolState = 'default',
-  tabletMode = false,
   className?: string,
 ): string {
   return cn(
     AGENT_COMPOSER_TOOL_BASE_CLASS,
-    getAgentComposerToolSize(tabletMode),
+    getAgentComposerToolSize(),
     STATE_CLASS[state],
     className,
   )
@@ -68,7 +67,6 @@ export interface AgentComposerToolTriggerProps extends Omit<React.ComponentProps
   label: string
   tooltip?: React.ReactNode
   state?: AgentComposerToolState
-  tabletMode?: boolean
   children: React.ReactNode
 }
 
@@ -80,7 +78,6 @@ export const AgentComposerToolTrigger = React.forwardRef<HTMLButtonElement, Agen
   label,
   tooltip,
   state = 'default',
-  tabletMode = false,
   className,
   children,
   ...props
@@ -92,7 +89,7 @@ export const AgentComposerToolTrigger = React.forwardRef<HTMLButtonElement, Agen
       variant="ghost"
       size="icon"
       aria-label={label}
-      className={getAgentComposerToolTriggerClass(state, tabletMode, className)}
+      className={getAgentComposerToolTriggerClass(state, className)}
       {...props}
     >
       {children}

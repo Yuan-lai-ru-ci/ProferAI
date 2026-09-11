@@ -63,13 +63,11 @@ interface ChatInputProps {
   onStop: () => void
   /** 清除上下文回调 */
   onClearContext?: () => void
-  /** 自定义占位文字（平板触屏传空串保持输入框干净） */
+  /** 自定义占位文字 */
   placeholder?: string
-  /** 移动模式：输入框尺寸/占位与 Agent 一致（40px，竖屏 60px） */
-  tabletMode?: boolean
 }
 
-export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, pendingKnowledgeReferences = [], onSetPendingKnowledgeReferences, onSend, onStop, onClearContext, placeholder, tabletMode = false }: ChatInputProps): React.ReactElement {
+export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, pendingKnowledgeReferences = [], onSetPendingKnowledgeReferences, onSend, onStop, onClearContext, placeholder }: ChatInputProps): React.ReactElement {
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   // 从 Map atom 读写草稿
   const draftsMap = useAtomValue(conversationDraftsAtom)
@@ -332,7 +330,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
   useLoadVoiceDictationSettings()
   const toolbarItems = React.useMemo<ToolbarItem[]>(() => [
     // 模型选择是 Chat 的一级动作，固定放在最左侧；窄窗口时也优先保留。
-    { key: 'model', node: <ModelSelector composerTool tabletMode={tabletMode} /> },
+    { key: 'model', node: <ModelSelector composerTool /> },
     // 资料库入口已暂时关闭，恢复时取消下面注释即可
     /*
     {
@@ -343,7 +341,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
     {
       key: 'attach',
       node: (
-        <AgentComposerToolTrigger label="添加附件" tooltip="添加附件" tabletMode={tabletMode} onClick={handleOpenFileDialog}>
+        <AgentComposerToolTrigger label="添加附件" tooltip="添加附件" onClick={handleOpenFileDialog}>
           <Paperclip className="size-5" />
         </AgentComposerToolTrigger>
       ),
@@ -355,25 +353,23 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           label={thinkingEnabled ? '关闭思考模式' : '开启思考模式'}
           tooltip={thinkingEnabled ? '关闭思考模式' : '开启思考模式'}
           state={thinkingEnabled ? 'active' : 'default'}
-          tabletMode={tabletMode}
           onClick={() => setThinkingEnabled(!thinkingEnabled)}
         >
           <Brain className="size-5" />
         </AgentComposerToolTrigger>
       ),
     },
-    ...(voiceDictationEnabled ? [{ key: 'speech', node: <SpeechButton composerTool tabletMode={tabletMode} /> }] : []),
-    { key: 'tools', node: <ToolSelectorPopover composerTool tabletMode={tabletMode} /> },
-    { key: 'context', node: <ContextSettingsPopover composerTool tabletMode={tabletMode} /> },
-    { key: 'clear', node: <ClearContextButton composerTool tabletMode={tabletMode} onClick={onClearContext} /> },
-  ], [handleOpenFileDialog, thinkingEnabled, setThinkingEnabled, onClearContext, tabletMode, voiceDictationEnabled])
+    ...(voiceDictationEnabled ? [{ key: 'speech', node: <SpeechButton composerTool /> }] : []),
+    { key: 'tools', node: <ToolSelectorPopover composerTool /> },
+    { key: 'context', node: <ContextSettingsPopover composerTool /> },
+    { key: 'clear', node: <ClearContextButton composerTool onClick={onClearContext} /> },
+  ], [handleOpenFileDialog, thinkingEnabled, setThinkingEnabled, onClearContext, voiceDictationEnabled])
 
   const trailingNode = streaming ? (
     <AgentComposerToolTrigger
       label="停止生成"
       tooltip={`停止生成 (${getAcceleratorDisplay(getActiveAccelerator('stop-generation'))})`}
       state="destructive"
-      tabletMode={tabletMode}
       onClick={onStop}
     >
       <Square className="size-[16px]" fill="currentColor" strokeWidth={0} />
@@ -383,7 +379,6 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
       label="发送消息"
       tooltip="发送消息"
       state={canSend ? 'active' : 'muted'}
-      tabletMode={tabletMode}
       onClick={handleSend}
       disabled={!canSend}
     >
@@ -429,7 +424,6 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
             placeholder={placeholder ?? (sendWithCmdEnter ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行)' : '输入消息... (Enter 发送，Shift+Enter 换行)')}
             autoFocusTrigger={conversationId}
             sendWithCmdEnter={sendWithCmdEnter}
-            tabletMode={tabletMode}
           />
 
           {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}

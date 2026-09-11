@@ -54,7 +54,6 @@ interface ContextUsageBadgeProps {
   sessionId?: string
   /** Agent Composer 传入时，使用统一触发器的 hover/focus/尺寸外壳。 */
   composerTool?: boolean
-  tabletMode?: boolean
 }
 
 /** 格式化 token 数为可读字符串（如 1234 → "1.2k"） */
@@ -195,7 +194,6 @@ export function ContextUsageBadge({
   planQuotaChannelId,
   sessionId,
   composerTool = false,
-  tabletMode = false,
 }: ContextUsageBadgeProps): React.ReactElement | null {
   // 订阅 Plan 额度状态：数据与刷新状态跨入口共享（usePlanQuota + planQuotaStateAtomFamily），
   // 挂载预取、hover 补查、手动刷新统一由 hook 处理，refreshing 反映任何来源的请求在飞。
@@ -302,7 +300,7 @@ export function ContextUsageBadge({
   // 压缩中 → 按钮位置显示 spinner
   if (isCompacting) {
     if (composerTool) {
-      return <AgentComposerToolTrigger label="正在压缩上下文" state="muted" tabletMode={tabletMode} disabled><Loader2 className="size-4 animate-spin" /></AgentComposerToolTrigger>
+      return <AgentComposerToolTrigger label="正在压缩上下文" state="muted" disabled><Loader2 className="size-4 animate-spin" /></AgentComposerToolTrigger>
     }
     return (
       <Button type="button" variant="ghost" size="icon" className="size-[36px] rounded-full text-muted-foreground cursor-default" disabled>
@@ -357,7 +355,6 @@ export function ContextUsageBadge({
           <AgentComposerToolTrigger
             label={percent != null ? `上下文使用量：${percent}%` : '上下文使用量'}
             state={isWarning ? 'warning' : 'default'}
-            tabletMode={tabletMode}
             onMouseEnter={() => { cancelClose(); setOpen(true) }}
             onMouseLeave={scheduleClose}
           >

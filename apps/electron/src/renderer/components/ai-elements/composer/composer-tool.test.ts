@@ -6,9 +6,8 @@ import {
 } from './ComposerTool'
 
 describe('Agent composer tool visual contract', () => {
-  test('uses one canonical desktop and tablet target size', () => {
+  test('uses one canonical target size', () => {
     expect(getAgentComposerToolSize()).toBe('size-[36px]')
-    expect(getAgentComposerToolSize(true)).toBe('size-11')
   })
 
   test('keeps one hover material and focus behavior across semantic states', () => {

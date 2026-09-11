@@ -25,7 +25,6 @@ export function SidebarRail({ s }: { s: SidebarModel }): React.ReactElement {
     handleNewAgentSession,
     handleNewConversation,
     setSearchDialogOpen,
-    tabletMode,
     automationCount,
     handleOpenAutomations,
     activeView,
@@ -141,8 +140,7 @@ export function SidebarRail({ s }: { s: SidebarModel }): React.ReactElement {
             <TooltipContent side="right">搜索</TooltipContent>
           </Tooltip>
 
-          {/* 规划中心入口：平板版隐藏（无规划中心能力），与展开态保持一致 */}
-          {!tabletMode && (
+          {/* 规划中心入口 */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -176,10 +174,9 @@ export function SidebarRail({ s }: { s: SidebarModel }): React.ReactElement {
               规划中心（{automationCount} 个定时任务）
             </TooltipContent>
           </Tooltip>
-          )}
 
-          {/* Agent 技能入口：平板版隐藏（无 Agent 技能能力），与展开态保持一致 */}
-          {mode === 'agent' && !tabletMode && (
+          {/* Agent 技能入口 */}
+          {mode === 'agent' && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button

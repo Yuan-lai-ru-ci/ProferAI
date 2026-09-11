@@ -249,9 +249,8 @@ export async function handleSkinsChanged(payload: { deletedId: string | null }):
 export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = 'default', systemIsDark: boolean = true): void {
   const html = document.documentElement
 
-  // 计算目标状态。注册表就绪后桌面只用 skin-* + 动态 CSS；仅无 IPC 的
-  // tablet 入口保留 theme-* 兼容层，避免 desktop 主窗口重新命中 legacy 双写规则。
-  const allowLegacyThemeFallback = document.body?.classList.contains('tablet-mode') ?? false
+  // 计算目标状态。注册表就绪后桌面只用 skin-* + 动态 CSS，不进入 theme-* 兼容层
+  // （theme-* legacy 双写规则仅服务于已退役的无 IPC 平板入口，2026-09-11 移除）。
   let targetStyleClass: string | null = null
   let targetSkinClass: string | null = null
   let targetIsDark: boolean
@@ -274,7 +273,6 @@ export function applyThemeToDOM(themeMode: ThemeMode, themeStyle: ThemeStyle = '
     } else {
       // 注册表已就绪但皮肤不存在（被删除/目录被移除）：按统一启发式回落基础明暗。
       // initializeTheme 会在启动时检测并自动回退默认主题，此分支只是兜底。
-      if (allowLegacyThemeFallback) targetStyleClass = `theme-${themeStyle}`
       targetIsDark = inferSkinToneFromStyle(themeStyle) === 'dark'
     }
   } else if (themeMode === 'system') {

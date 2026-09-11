@@ -32,7 +32,7 @@ Profer is a local-first AI desktop app: **use Chat for simple questions, hand co
 | 🤖 **General-purpose Agent** | Built on `@anthropic-ai/claude-agent-sdk` — task graphs, dependency-ordered subtasks, streaming output, plan confirmation, with **Claude / Pi dual runtimes** |
 | 🧩 **Collaboration Sub-Agents** | Split complex tasks across real parallel sub-sessions, each advancing independently, then aggregate results — fully visible and trackable |
 | ⏰ **Scheduled Automations** | Durable scheduling (interval / daily / weekly / monthly) with run history, failure protection, and retrospection — ideal for reports, periodic checks, unattended workflows |
-| 📱 **Mobile Remote Access** | Mobile client (separate `Profer-pocket` repo, Capacitor Android) connects to the desktop via local HTTP/WS — mobile chat, synced settings, auto-reconnect |
+| 📱 **Mobile Remote Access** | Built-in HTTP/WS remote service (`remote-service`); the mobile client (see Profer-pocket) connects to the desktop to browse sessions, stream work in real time and send input |
 | 👥 **Team Workspaces** | Invite-only teams (Owner / Admin / Member / Viewer roles), Skills marketplace, cloud file sync, brand customization |
 | 💬 **Multi-model Chat** | Multi-provider conversations, attachments (PDF / Office / images), Markdown / Mermaid / KaTeX / syntax highlighting, side-by-side compare, context management |
 | 🧠 **Skills & MCP** | Per-workspace Skills and MCP servers, fullscreen skill view with search, enable, update, import, uninstall, and team publishing |
@@ -103,7 +103,6 @@ Then configure the team server address in **Settings → Branding** to invite me
 | Rich text / charts | TipTap · Beautiful Mermaid · KaTeX · Shiki |
 | Build | Vite + esbuild + electron-builder |
 | Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.201` (Claude) + `@earendil-works/pi-agent@0.82.1` (Pi) dual runtimes |
-| Mobile | Capacitor (Android, client lives in the `Profer-pocket` repo) |
 | Team backend | Hono + better-sqlite3 + JWT |
 
 ---

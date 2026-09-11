@@ -217,7 +217,6 @@ interface OpenAIThinkingConfig {
 
 interface AgentThinkingPopoverProps {
   agentThinking: import('@profer/shared').ThinkingConfig | undefined
-  tabletMode?: boolean
   sessionId: string
   onToggle: () => void
   /** Pi + Codex 推理模型时，统一用同一个脑图标控制会话级 reasoning.effort。 */
@@ -252,7 +251,7 @@ const OPENAI_THINKING_LABELS: Record<string, string> = {
 /** 完整推理档位顺序（缺省 capability 时菜单回退用）。 */
 const ALL_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
-function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, sessionId, sessionAgentEffort, presetEffort, onAgentEffortUpdated, onOpenAIThinkingUpdated, tabletMode = false }: AgentThinkingPopoverProps): React.ReactElement {
+function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, sessionId, sessionAgentEffort, presetEffort, onAgentEffortUpdated, onOpenAIThinkingUpdated }: AgentThinkingPopoverProps): React.ReactElement {
   const [thinkingExpanded, setThinkingExpanded] = useAtom(thinkingExpandedAtom)
   const effort = useAtomValue(agentEffortAtom)
   const [open, setOpen] = React.useState(false)
@@ -321,7 +320,6 @@ function AgentThinkingPopover({ agentThinking, onToggle, openAIConfig, sessionId
           label={isOpenAIReasoning ? `推理档位：${openAIConfig?.currentLevel ? OPENAI_THINKING_LABELS[openAIConfig.currentLevel] : openAIDefaultLabel}` : '思考设置'}
           state={isEnabled ? 'active' : 'default'}
           disabled={openAIConfig?.disabled}
-          tabletMode={tabletMode}
           aria-expanded={open}
         >
           <Brain className="size-5" />
@@ -400,12 +398,10 @@ const AGENT_RUNTIME_OPTIONS: Array<{ value: AgentRuntime; label: string; descrip
 function AgentRuntimeSelector({
   runtime,
   disabled,
-  tabletMode,
   onChange,
 }: {
   runtime: AgentRuntime
   disabled: boolean
-  tabletMode: boolean
   onChange: (runtime: AgentRuntime) => void
 }): React.ReactElement {
   const [open, setOpen] = React.useState(false)
@@ -421,7 +417,6 @@ function AgentRuntimeSelector({
       trigger={
         <AgentComposerToolTrigger
           label={`Agent 内核：${current.label}`}
-          tabletMode={tabletMode}
           disabled={disabled}
           // 与模型选择器等「带文字工具」共用同一壳层尺寸约定：
           // 内核是会话级模式指示，必须能一眼分辨 Claude / Pi，不能只留图标。
@@ -449,10 +444,9 @@ function AgentRuntimeSelector({
 
 // ===== 工具栏附件按钮（添加文件 / 附加文件夹 二级菜单） =====
 
-function AttachMenuButton({ onAttachFile, onAttachFolder, tabletMode }: {
+function AttachMenuButton({ onAttachFile, onAttachFolder }: {
   onAttachFile: () => void
   onAttachFolder: () => void
-  tabletMode: boolean
 }): React.ReactElement {
   const [open, setOpen] = React.useState(false)
   return (
@@ -464,7 +458,6 @@ function AttachMenuButton({ onAttachFile, onAttachFolder, tabletMode }: {
       trigger={
         <AgentComposerToolTrigger
           label="添加文件或文件夹"
-          tabletMode={tabletMode}
         >
           <Paperclip className="size-5" />
         </AgentComposerToolTrigger>
@@ -484,7 +477,7 @@ function AttachMenuButton({ onAttachFile, onAttachFolder, tabletMode }: {
 
 // ===== 工具栏 Graph 按钮（状态感知） =====
 
-function ToolbarGraphButton({ onClick, tabletMode }: { onClick: () => void; tabletMode?: boolean }): React.ReactElement {
+function ToolbarGraphButton({ onClick }: { onClick: () => void }): React.ReactElement {
   const atomSummary = useAtomValue(currentGraphSummaryAtom)
   const sessionId = useAtomValue(currentAgentSessionIdAtom)
   const [ipcSummary, setIpcSummary] = React.useState<import('@profer/project-core').GraphSummary | null>(null)
@@ -508,7 +501,6 @@ function ToolbarGraphButton({ onClick, tabletMode }: { onClick: () => void; tabl
       label={`任务图${hasData ? ` · ${completed}/${total}` : ''}`}
       tooltip={`任务图${hasData ? ` · ${completed}/${total} · ${inProgress > 0 ? '进行中' : progress === 100 ? '完成' : ''}` : ''}`}
       state={hasData ? 'default' : 'muted'}
-      tabletMode={tabletMode}
       onClick={onClick}
       className="active:scale-[0.97]"
     >
@@ -517,18 +509,11 @@ function ToolbarGraphButton({ onClick, tabletMode }: { onClick: () => void; tabl
   )
 }
 
-/** 平板远程模式下从输入工具栏隐藏的项（依赖桌面文件系统/语音/全局设置，浏览器环境无意义） */
-const TABLET_HIDDEN_TOOLBAR_KEYS = new Set(['thinking', 'speech', 'attach', 'graph'])
-
 export interface AgentViewProps {
   sessionId: string
-  /** 平板远程模式：隐藏无意义的工具栏项，触控目标加大到 44px */
-  tabletMode?: boolean
-  /** 平板竖屏等场景：标题由外部顶栏承担时隐藏内置 AgentHeader（避免双标题） */
-  hideAgentHeader?: boolean
 }
 
-export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = false }: AgentViewProps): React.ReactElement {
+export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
   persistedSDKMessagesRef.current = persistedSDKMessages
@@ -549,9 +534,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       getAgentSessionSDKMessages?: (id: string, opts?: unknown) => Promise<unknown>
       getSdkMessagesHasMore?: (id: string) => boolean
     }
-    const opts = tabletMode
-      ? { pullEarlier: true }
-      : { before: historyStartIndexRef.current, tail: DESKTOP_AGENT_PAGE_SIZE }
+    const opts = { before: historyStartIndexRef.current, tail: DESKTOP_AGENT_PAGE_SIZE }
     ;(api.getAgentSessionSDKMessages?.(sessionId, opts) ?? Promise.resolve([]))
       .then((sdkMsgs) => {
         const normalized = normalizeAgentHistoryResult(
@@ -572,7 +555,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           historyHasMoreRef.current = normalized.cursor.hasMore
           setHistoryHasMore(normalized.cursor.hasMore)
         } else {
-          // 平板 stub 路径：从 getSdkMessagesHasMore 读累计状态
+          // 非分页（旧版全量返回）：从 getSdkMessagesHasMore 读累计状态
           const more = api.getSdkMessagesHasMore?.(sessionId)
           const nextHasMore = typeof more === 'boolean' ? more : historyHasMoreRef.current
           historyHasMoreRef.current = nextHasMore
@@ -588,7 +571,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         historyPullInFlightRef.current = false
         setHistoryLoading(false)
       })
-  }, [tabletMode, sessionId])
+  }, [sessionId])
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   // 按 sessionId 切片订阅：仅本 session 的 streaming state 变化才让 AgentView 重渲染。
   // 流式期间其他 session 的高频更新（每 token 一次）通过 base map atom 传播但派生
@@ -1190,22 +1173,19 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       }
     }
     let cancelled = false
-    // 移动端打开会话：显式 paginateFirst 走首帧分页（无参=全量，留给侧栏预览）。
     // 桌面懒加载：首次只取尾部一页（tail）；refresh（流结束/出错/rewind）时覆盖
     // 已加载条数 + 余量，避免把用户已加载的更早历史丢回空窗。
     const api = window.electronAPI as unknown as {
       getAgentSessionSDKMessages?: (id: string, opts?: unknown) => Promise<unknown>
     }
-    const loadPromise = tabletMode
-      ? api.getAgentSessionSDKMessages?.(sessionId, { paginateFirst: 4 }) ?? Promise.resolve([])
-      : (() => {
-          // 切会话时 persistedSDKMessagesRef 仍是旧会话，需以目标会话缓存为准；
-          // refresh 时以当前已加载条数为准。tail 取「已加载 + 余量」保证不丢历史。
-          const cachedCount = store.get(agentSDKMessagesCacheAtom).get(sessionId)?.length ?? 0
-          const currentCount = isSessionSwitch ? cachedCount : persistedSDKMessagesRef.current.length
-          const tailCount = Math.max(DESKTOP_AGENT_PAGE_SIZE, currentCount + AGENT_REFRESH_HEADROOM)
-          return api.getAgentSessionSDKMessages?.(sessionId, { tail: tailCount }) ?? Promise.resolve([])
-        })()
+    const loadPromise = (() => {
+      // 切会话时 persistedSDKMessagesRef 仍是旧会话，需以目标会话缓存为准；
+      // refresh 时以当前已加载条数为准。tail 取「已加载 + 余量」保证不丢历史。
+      const cachedCount = store.get(agentSDKMessagesCacheAtom).get(sessionId)?.length ?? 0
+      const currentCount = isSessionSwitch ? cachedCount : persistedSDKMessagesRef.current.length
+      const tailCount = Math.max(DESKTOP_AGENT_PAGE_SIZE, currentCount + AGENT_REFRESH_HEADROOM)
+      return api.getAgentSessionSDKMessages?.(sessionId, { tail: tailCount }) ?? Promise.resolve([])
+    })()
     loadPromise
       .then((sdkMsgs) => {
         if (cancelled) return
@@ -1236,7 +1216,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           setPersistedSDKMessages(merged)
           setMessagesLoaded(true)
 
-          // 桌面：从分页结果同步 hasMore；平板：从服务端读累计状态
+          // 桌面：从分页结果同步 hasMore；非分页时从服务端读累计状态
           if (historyResult.isPage) {
             historyStartIndexRef.current = historyResult.cursor.startIndex
             historyHasMoreRef.current = historyResult.cursor.hasMore
@@ -1315,7 +1295,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         setMessagesLoaded(true)
       })
     return () => { cancelled = true }
-  }, [sessionId, refreshVersion, tabletMode, setStreamingStates, setLiveMessagesMap, setMessagesCache, store])
+  }, [sessionId, refreshVersion, setStreamingStates, setLiveMessagesMap, setMessagesCache, store])
 
   // 从会话元数据初始化附加目录（仅冷启动水合，后续由 handleAttachFolder/handleDetachDirectory 实时写入）
   React.useEffect(() => {
@@ -2993,13 +2973,12 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         <AgentRuntimeSelector
           runtime={sessionAgentRuntime}
           disabled={streaming || backgroundWaiting || runtimeSwitchInFlight}
-          tabletMode={tabletMode}
           onChange={handleAgentRuntimeChange}
         />
       ),
     },
-    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} presetPermissionMode={sessionBoundPreset?.permissionMode} composerTool tabletMode={tabletMode} /> },
-    { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} persistedPresetReference={sessionMeta?.presetReference} workspaceSlug={workspaceSlug ?? undefined} open={presetMenuOpen} onOpenChange={setPresetMenuOpen} onManagePresets={openWorkspacePresets} tabletMode={tabletMode} /> },
+    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} presetPermissionMode={sessionBoundPreset?.permissionMode} composerTool /> },
+    { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} persistedPresetReference={sessionMeta?.presetReference} workspaceSlug={workspaceSlug ?? undefined} open={presetMenuOpen} onOpenChange={setPresetMenuOpen} onManagePresets={openWorkspacePresets} /> },
     {
       key: 'thinking',
       node: (
@@ -3036,14 +3015,13 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
         />
       ),
     },
-    ...(voiceDictationEnabled ? [{ key: 'speech', node: <SpeechButton composerTool tabletMode={tabletMode} /> }] : []),
+    ...(voiceDictationEnabled ? [{ key: 'speech', node: <SpeechButton composerTool /> }] : []),
     {
       key: 'attach',
       node: (
         <AttachMenuButton
           onAttachFile={handleOpenFileDialog}
           onAttachFolder={handleAttachFolder}
-          tabletMode={tabletMode}
         />
       ),
     },
@@ -3064,18 +3042,15 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           sessionId={sessionId}
           onCompact={handleCompact}
           composerTool
-          tabletMode={tabletMode}
         />
       ),
     },
     ...(taskGraphEnabled ? [{
       key: 'graph',
-      node: <ToolbarGraphButton tabletMode={tabletMode} onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
+      node: <ToolbarGraphButton onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
     }] : []),
   ]
-    return tabletMode
-      ? items.filter((item) => !TABLET_HIDDEN_TOOLBAR_KEYS.has(item.key))
-      : items
+    return items
   }, [
     agentChannelIds,
     sessionAgentRuntime,
@@ -3101,7 +3076,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     backgroundWaiting,
     runtimeSwitchInFlight,
     handleCompact,
-    tabletMode,
     presetMenuOpen,
     workspaceSlug,
     openWorkspacePresets,
@@ -3115,7 +3089,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       label="停止 Agent"
       tooltip={<>停止 Agent<br />{getAcceleratorDisplay(getActiveAccelerator('stop-generation'))}</>}
       state="destructive"
-      tabletMode={tabletMode}
       className="hover:!text-[hsl(0,75%,55%)] hover:!bg-[var(--stop-hover-bg)]"
       onClick={handleStop}
       disabled={streamState?.stopping}
@@ -3127,7 +3100,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       label={queuedMessages.length > 0 ? '点击添加到队列（Enter）' : '发送消息（Enter）'}
       tooltip={queuedMessages.length > 0 ? '点击添加到队列（Enter）' : <>左键发送（Enter）<br />右键添加到队列</>}
       state={canSend ? 'active' : 'muted'}
-      tabletMode={tabletMode}
       className="disabled:cursor-not-allowed"
       onClick={handleSend}
       // 1.6.1 右键发送按钮：无条件加入队列（无论队列是否为空），阻止默认浏览器右键菜单
@@ -3146,7 +3118,7 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
     <AgentSessionProvider sessionId={sessionId}>
       <div data-profer-navigation-region="conversation" tabIndex={-1} className="agent-conversation flex h-full min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
         {/* Agent Header（平板竖屏由外部顶栏承担标题时隐藏，避免双标题） */}
-        {!hideAgentHeader && <AgentHeader sessionId={sessionId} />}
+        <AgentHeader sessionId={sessionId} />
         <GoalStatusBar sessionId={sessionId} />
 
         {/* 消息区域 */}
@@ -3166,7 +3138,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
           onFork={handleFork}
           onRewind={handleRewindRequest}
           onCompact={handleCompact}
-          tabletMode={tabletMode}
           onLoadEarlierHistory={handleLoadEarlierHistory}
           historyMoreAvailable={historyHasMore}
           historyLoadingEarlier={historyLoading}
@@ -3307,12 +3278,9 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
               onPasteLongText={handlePasteLongText}
               longTextPasteThreshold={longTextPasteAsAttachmentEnabled ? LONG_TEXT_ATTACHMENT_THRESHOLD : undefined}
               placeholder={
-                // 平板触屏：输入框保持干净，不显示占位提示文字
-                tabletMode
-                  ? ''
-                  : showPresetSelectionRequired
-                    ? '请先选择 Agent 预设，然后再开始对话'
-                    : isCompacting
+                showPresetSelectionRequired
+                  ? '请先选择 Agent 预设，然后再开始对话'
+                  : isCompacting
                     ? '正在压缩上下文，完成后可继续对话...'
                     : agentChannelId && hasAvailableModel
                       ? sendWithCmdEnter
@@ -3335,7 +3303,6 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
               htmlValue={inputHtmlContent}
               onHtmlChange={setInputHtmlContent}
               sendWithCmdEnter={sendWithCmdEnter}
-              tabletMode={tabletMode}
             />
 
             {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}
@@ -3347,15 +3314,13 @@ export function AgentView({ sessionId, tabletMode = false, hideAgentHeader = fal
       </div>
     </AgentSessionProvider>
 
-    {/* 任务图悬浮画板（平板版不渲染：无 IPC getGraph 桥接，画板没有数据来源） */}
-    {!tabletMode && (
-      <Dialog open={graphDialogOpen} onOpenChange={setGraphDialogOpen}>
-        <DialogContent className="w-[85vw] max-w-[1200px] h-[80vh] max-h-[850px] p-0 gap-0" hideClose={false}>
-          <DialogTitle className="sr-only">任务图</DialogTitle>
-          <ProjectGraphPanel refreshVersion={graphRefreshVersion} />
-        </DialogContent>
-      </Dialog>
-    )}
+    {/* 任务图悬浮画板 */}
+    <Dialog open={graphDialogOpen} onOpenChange={setGraphDialogOpen}>
+      <DialogContent className="w-[85vw] max-w-[1200px] h-[80vh] max-h-[850px] p-0 gap-0" hideClose={false}>
+        <DialogTitle className="sr-only">任务图</DialogTitle>
+        <ProjectGraphPanel refreshVersion={graphRefreshVersion} />
+      </DialogContent>
+    </Dialog>
 
     {/* 回退确认弹窗 */}
     <AlertDialog

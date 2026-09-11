@@ -11,13 +11,9 @@
  * - 根 font-size（rem）：固定 px 元素不跟随，比例失调畸变（用户反馈“畸变”）。
  * transform:scale + 容器反补偿是同时满足“等比 + 区域保持”的唯一正解。
  *
- * 桌面与平板共用同一套代码：
+ * 桌面与移动端共用同一套代码：
  *   - 桌面：localStorage 缓存（同步读取防启动闪烁）+ settings.json 持久化（权威，
  *     经 electronAPI.updateSettings，字段见 AppSettings.uiScale）
- *   - 平板：localStorage 缓存（electronapi-stub 的 getSettings/updateSettings 为空实现，
- *     自动降级到纯本地缓存）
- * - 平板端首次访问无缓存时保持 standard（与原版观感一致），需要放大时在设置里调节；
- *   tablet/main.tsx 调用 initTabletUiScale(store) 覆盖默认值；桌面保持 standard。
  */
 
 import { atom } from 'jotai'
@@ -108,20 +104,4 @@ export async function initializeUiScale(
   } catch (error) {
     console.error('[界面缩放] 初始化失败:', error)
   }
-}
-
-/**
- * 初始化界面缩放（平板）
- *
- * 平板无 Electron settings.json（stub 为空实现），只使用 localStorage。
- * 首次访问无缓存时保持 standard（100%，与原版观感一致，需要放大时在设置里调）；
- * 已有用户选择则保持。
- * 需在 tablet/main.tsx 渲染前调用，并把档位写入平板 store 的 uiScaleAtom
- * （atom 默认值在模块加载时已固定，直接改 localStorage 不会驱动组件）。
- */
-export function initTabletUiScale(store: { set: (atom: typeof uiScaleAtom, value: UiScale) => void }): void {
-  const cached = getCachedUiScale()
-  const next: UiScale = (cached && cached in UI_SCALE_VALUES) ? cached : 'standard'
-  if (!cached) cacheUiScale(next)
-  store.set(uiScaleAtom, next)
 }

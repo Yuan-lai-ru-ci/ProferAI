@@ -29,7 +29,6 @@ interface SpeechButtonProps {
   className?: string
   /** Agent 输入区使用统一 Composer 触发器；Chat 默认保持原样。 */
   composerTool?: boolean
-  tabletMode?: boolean
 }
 
 export function useLoadVoiceDictationSettings(): void {
@@ -52,7 +51,6 @@ export function SpeechButton({
   disabled = false,
   className,
   composerTool = false,
-  tabletMode = false,
 }: SpeechButtonProps): React.ReactElement | null {
   const enabled = useAtomValue(voiceDictationEnabledAtom)
 
@@ -76,7 +74,6 @@ export function SpeechButton({
       <AgentComposerToolTrigger
         label="语音输入"
         tooltip="语音输入"
-        tabletMode={tabletMode}
         className={className}
         onClick={handleClick}
         disabled={disabled}

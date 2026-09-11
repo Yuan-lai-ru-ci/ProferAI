@@ -34,14 +34,12 @@ interface PermissionModeSelectorProps {
   presetPermissionMode?: ProferPermissionMode
   /** 输入区调用时通过统一 Composer 触发器保证 hover/focus/tooltip 一致。 */
   composerTool?: boolean
-  tabletMode?: boolean
 }
 
 export function PermissionModeSelector({
   sessionId,
   presetPermissionMode,
   composerTool = false,
-  tabletMode = false,
 }: PermissionModeSelectorProps): React.ReactElement | null {
   const [modeMap, setModeMap] = useAtom(agentPermissionModeMapAtom)
   const setPlanModeSessions = useSetAtom(agentPlanModeSessionsAtom)
@@ -147,7 +145,6 @@ export function PermissionModeSelector({
             <p className="mt-1 text-xs text-muted-foreground">点击切换模式</p>
           </div>
         }
-        tabletMode={tabletMode}
         onClick={() => { cycleMode(); requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus()) }}
       >
         <Icon className="size-5" />

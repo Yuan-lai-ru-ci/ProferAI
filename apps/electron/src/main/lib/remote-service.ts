@@ -11,8 +11,11 @@
  *  3. 通过唯一的 agentEventBus（agent-service 单例）订阅 Agent 工作流事件，
  *     广播给所有已连接的平板客户端 —— 对现有桌面版零侵入；
  *  4. 接收客户端指令：列会话 / 列渠道 / 新建会话 / 发送消息 / 停止任务 / 取历史；
- *  5. 显式开关控制：仅当环境变量 PROFER_REMOTE=1 或命令行参数 --tablet 时启动，
+ *  5. 显式开关控制：环境变量 PROFER_REMOTE=1 或设置页「移动模式」开关（settings.tabletModeEnabled）时启动，
  *     默认不启动，确保桌面版行为零变化。
+ *
+ * 注：本文件**不含平板静态 UI 服务**（原静态页面已随 tablet 退役移除，2026-09-11）；
+ *     当前仅提供 /health 与 /ws（WebSocket 命令通道），供移动端（Profer-pocket）客户端接入。
  *
  * 依赖说明：
  *  本文件使用 Node 原生 http/https + ws 库（已于 apps/electron 安装）。
@@ -20,8 +23,8 @@
  */
 
 import { createServer, Server as HttpServer, IncomingMessage } from 'node:http'
-import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs'
-import { basename, join, normalize, resolve } from 'node:path'
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { basename, join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
@@ -104,26 +107,8 @@ export const DEFAULT_REMOTE_PORT = 7788
 /** 开发模式默认监听端口：与正式版（7788）区分，避免与打包版实例并存时 EADDRINUSE */
 export const DEV_DEFAULT_REMOTE_PORT = 7789
 
-/** 平板 Web UI 静态资源根目录（指向 dist/renderer，涵盖 tablet 子目录与 assets） */
-let staticRoot: string | null = null
-
-/** tablet 首页相对于 staticRoot 的入口（dist/renderer/tablet/index.html） */
-let tabletIndexRel = 'tablet'
-
 /** 访问令牌（首次启动生成并持久化，或由环境变量指定） */
 let accessToken: string | null = null
-
-/**
- * 平板静态页 CSP。
- *  - index.html 含内联主题初始化脚本 + React inline style → 需 unsafe-inline；
- *  - 平板 WebSocket 连接同源（ws://host:port/ws）→ connect-src 需 ws:/wss:；
- *  - Markdown 代码高亮使用 shiki（oniguruma WASM），WebAssembly 编译在 CSP 中属于
- *    eval 类操作 → 必须加 'wasm-unsafe-eval'（仅放行 WASM，不放行 JS eval）。
- *    若缺此项，平板打开含代码块的会话会报 CompileError 且初始化链中断。
- * 仅作用于 remote-service 提供的静态资源；桌面版（vite/打包）不受影响。
- */
-const TABLET_STATIC_CSP =
-  "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:;"
 
 /** HTTP + WebSocket 服务实例 */
 let httpServer: HttpServer | null = null
@@ -401,7 +386,7 @@ function loadOrCreateToken(): string {
 /** 是否启用远程服务（显式开关） */
 export function isRemoteEnabled(): boolean {
   if (process.env.PROFER_REMOTE === '1') return true
-  return runtimeEnabled || process.argv.includes('--tablet')
+  return runtimeEnabled
 }
 
 export interface RemoteServiceStatus {
@@ -482,140 +467,6 @@ export function restartRemoteService(): RemoteServiceStatus {
     startRemoteService()
   }
   return getRemoteServiceStatus()
-}
-
-/** 解析静态根目录 */
-function resolveStaticRoot(): string | null {
-  // 优先环境变量
-  if (process.env.PROFER_REMOTE_STATIC) {
-    const explicit = process.env.PROFER_REMOTE_STATIC
-    try {
-      if (existsSync(join(explicit, 'index.html'))) {
-        tabletIndexRel = '.'
-        return explicit
-      }
-    } catch { /* ignore */ }
-    return explicit
-  }
-  // 首选（2026-08-05 起）：vite 多入口产物 dist/renderer/tablet。
-  // 这是唯一权威产物 —— build:renderer 一次构建桌面+平板两套入口。
-  // ⚠️ 之前 dist/tablet（vite.tablet.config.ts 独立构建）排在前面，
-  // 曾出现陈旧独立产物长期抢占、平板一直加载旧 UI 的事故，故必须让多入口产物优先。
-  const oldCandidates = [
-    join(__dirname, 'renderer'),
-    join(__dirname, '..', 'dist', 'renderer'),
-    join(process.cwd(), 'apps', 'electron', 'dist', 'renderer'),
-  ]
-  for (const c of oldCandidates) {
-    try {
-      if (existsSync(join(c, 'tablet', 'index.html'))) {
-        tabletIndexRel = 'tablet'
-        return c
-      }
-    } catch {
-      /* continue */
-    }
-  }
-  // 弃用路径：独立构建产物 dist/tablet（仅兼容历史部署，新代码不应再生成）
-  const candidates = [
-    join(__dirname, 'tablet'),
-    join(__dirname, '..', 'dist', 'tablet'),
-    join(process.cwd(), 'apps', 'electron', 'dist', 'tablet'),
-  ]
-  for (const c of candidates) {
-    try {
-      if (existsSync(join(c, 'index.html'))) {
-        tabletIndexRel = '.'
-        return c
-      }
-    } catch {
-      /* continue */
-    }
-  }
-  return null
-}
-
-/** 平板首页文件绝对路径 */
-function getTabletIndexPath(): string | null {
-  if (!staticRoot) return null
-  return join(staticRoot, tabletIndexRel, 'index.html')
-}
-
-/**
- * 将请求 URL 路径安全映射到静态根目录下的文件，并处理平板首页入口。
- * 规则：
- *  - '/' 或 '/index.html'（根）→ tablet 首页（tablet/index.html）
- *  - 其余路径（如 /assets/x.js）→ 从静态根解析（assets 在 renderer 根）
- * 路径穿越防护：解析结果必须位于 staticRoot 内。
- */
-function safeResolveStatic(rootPath: string, urlPath: string, tabletIndexRel2: string): string | null {
-  let relative = decodeURIComponent(urlPath.split('?')[0] ?? '')
-  // 根路径或 index.html → tablet 首页
-  if (relative === '/' || relative === '' || relative === '/index.html') {
-    const home = join(rootPath, tabletIndexRel2, 'index.html')
-    return existsSync(home) ? home : null
-  }
-  relative = relative.replace(/^\/+/m, '')
-  const rootNorm = normalize(rootPath)
-  const normalized = normalize(join(rootNorm, relative))
-  if (normalized !== rootNorm && !normalized.startsWith(rootNorm + require('node:path').sep)) {
-    return null
-  }
-  try {
-    if (!existsSync(normalized)) return null
-    if (statSync(normalized).isDirectory()) return null
-  } catch {
-    return null
-  }
-  return normalized
-}
-
-/** 生成静态文件响应体 */
-function serveStatic(res: {
-  writeHead: (code: number, headers: Record<string, string>) => void
-  end: (body?: Uint8Array | Buffer | string) => void
-}, urlPath: string): void {
-  if (!staticRoot) {
-    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('移动端 UI 未构建。请先运行 build:tablet，或通过 PROFER_REMOTE_STATIC 指定静态目录。')
-    return
-  }
-  const rel = tabletIndexRel
-  const filePath = safeResolveStatic(staticRoot, urlPath, rel)
-  if (!filePath) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('Not Found')
-    return
-  }
-  try {
-    const data = readFileSync(filePath)
-    const ext = filePath.split('.').pop() || ''
-    const mimeMap: Record<string, string> = {
-      html: 'text/html; charset=utf-8',
-      js: 'text/javascript; charset=utf-8',
-      css: 'text/css; charset=utf-8',
-      json: 'application/json; charset=utf-8',
-      svg: 'image/svg+xml',
-      png: 'image/png',
-      ico: 'image/x-icon',
-      map: 'application/json',
-      woff2: 'font/woff2',
-      woff: 'font/woff',
-      ttf: 'font/ttf',
-    }
-    res.writeHead(200, {
-      'content-type': mimeMap[ext] || 'application/octet-stream',
-      // 消除 Electron “Insecure Content-Security-Policy” 警告（仅静态资源，含平板首页与 assets）
-      'content-security-policy': TABLET_STATIC_CSP,
-      // html 不缓存（dev 迭代频繁，避免平板 WebView 一直加载旧页面/旧 hash 包）；
-      // hash 命名的 assets 天然不可变，缓存一年
-      'cache-control': ext === 'html' ? 'no-cache' : 'public, max-age=31536000, immutable',
-    })
-    res.end(data)
-  } catch {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('Not Found')
-  }
 }
 
 /** 校验 token（HTTP 或 WS 请求） */
@@ -1707,7 +1558,7 @@ export async function handleRemoteCommand(
 export function startRemoteService(): string | null {
   if (isStarted) return listenAddress
   if (!isRemoteEnabled()) {
-    console.log('[Remote] 未启用（PROFER_REMOTE 未设置 且 无 --tablet）')
+    console.log('[Remote] 未启用（设置页未开启移动模式，且 PROFER_REMOTE 未设置）')
     return null
   }
   isStarted = true
@@ -1715,10 +1566,6 @@ export function startRemoteService(): string | null {
 
   // 初始化 token
   accessToken = loadOrCreateToken()
-
-  // 初始化静态根
-  staticRoot = resolveStaticRoot()
-  console.log(`[Remote] 移动端 UI 静态目录: ${staticRoot || '(未构建)'}`)
 
   const port = getPort()
   httpServer = createServer((req, res) => {
@@ -1728,9 +1575,10 @@ export function startRemoteService(): string | null {
       res.end(JSON.stringify({ ok: true, time: Date.now() }))
       return
     }
-    // 静态资源（token 表单页必须无鉴权可达，否则用户无法填写 token）。
-    // 安全性由 WS /ws 连接的 token 鉴权保障（见下方 connection 处理）。
-    serveStatic(res, req.url || '/')
+    // 平板静态 UI 服务已随 tablet 退役移除（2026-09-11）：非 /health 的 HTTP 请求一律 404。
+    // WS 客户端（Profer-pocket）直接连 /ws，不依赖 HTTP 根路径。
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('Not Found')
   })
 
   wss = new WebSocketServer({ server: httpServer, path: '/ws' })

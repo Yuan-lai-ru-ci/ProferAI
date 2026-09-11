@@ -126,7 +126,6 @@ interface ModelSelectorProps {
   strictProtocolFilter?: boolean
   /** Agent 输入区使用统一的 Composer hover/focus/Tooltip 外壳，Chat 默认不变。 */
   composerTool?: boolean
-  tabletMode?: boolean
 }
 
 export function ModelSelector({
@@ -139,7 +138,6 @@ export function ModelSelector({
   preferredProtocol = 'openai',
   strictProtocolFilter = false,
   composerTool = false,
-  tabletMode = false,
 }: ModelSelectorProps = {}): React.ReactElement {
   const compactCtx = React.useContext(CompactModelSelectorCtx)
   const compact = compactProp ?? compactCtx
@@ -346,7 +344,7 @@ export function ModelSelector({
               ? (showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName)
               : '选择模型'}
             className={cn(
-              getAgentComposerToolTriggerClass('default', tabletMode, 'model-selector-trigger'),
+              getAgentComposerToolTriggerClass('default', 'model-selector-trigger'),
               compact
                 ? 'justify-center'
                 : 'flex w-auto items-center gap-1.5 px-2 text-xs',

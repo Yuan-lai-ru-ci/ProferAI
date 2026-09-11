@@ -16,7 +16,6 @@ import {
   BasePathsProvider,
 } from '@/components/ai-elements/message'
 import { FileAccessSessionProvider } from '@/components/ai-elements/file-access-context'
-import { TabletModeContext } from '@/components/ai-elements/tablet-mode-context'
 import {
   Conversation,
   ConversationContent,
@@ -126,8 +125,6 @@ interface AgentMessagesProps {
   onFork?: (upToMessageUuid: string) => void
   onRewind?: (assistantMessageUuid: string) => void
   onCompact?: () => void
-  /** 平板远程模式不显示桌面端的用户消息悬浮置顶导航条。 */
-  tabletMode?: boolean
   /** Desktop-only durable image generation timeline cards. */
   imageGenerations?: AgentImageGenerationCard[]
   /** 移动端触顶自动加载：还有更早消息时可触发。 */
@@ -512,7 +509,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, tabletMode = false, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onFork, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier }: AgentMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -659,7 +656,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
       liveWithKeys,
     )
   }, [persistedSDKMessages, liveMessages, streaming])
-  const hasContent = allSDKMessages.length > 0 || (!tabletMode && (imageGenerations?.length ?? 0) > 0)
+  const hasContent = allSDKMessages.length > 0 || (imageGenerations?.length ?? 0) > 0
 
   // 压缩流程进行中（含收尾窗口：compact_boundary 已到但 result 未到）
   // → 一律抑制 AgentRunningIndicator，避免压缩分隔符切换期间闪烁。
@@ -683,14 +680,13 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   // When SDK history is paged, do not inject cards older than the loaded message tail;
   // they appear naturally after the user loads the corresponding older message page.
   const visibleImageGenerations = React.useMemo(() => {
-    if (tabletMode) return []
     const firstCreatedAt = visibleGroups
       .map((group) => group.type === 'assistant-turn' ? group.createdAt : (group.message as Record<string, unknown>)._createdAt)
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
       .reduce<number | undefined>((earliest, value) => earliest === undefined || value < earliest ? value : earliest, undefined)
     return getPendingImageGenerationCards(imageGenerations ?? [])
       .filter((card) => firstCreatedAt === undefined || card.createdAt >= firstCreatedAt)
-  }, [visibleGroups, imageGenerations, tabletMode])
+  }, [visibleGroups, imageGenerations])
   const visibleTimeline = React.useMemo(
     () => mergeAgentImageGenerationTimeline(visibleGroups, visibleImageGenerations, getGroupId),
     [visibleGroups, visibleImageGenerations],
@@ -772,7 +768,6 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   })
 
   return (
-    <TabletModeContext.Provider value={tabletMode}>
     <FileAccessSessionProvider sessionId={sessionId}>
     <BasePathsProvider basePaths={[...(sessionPath ? [sessionPath] : []), ...(attachedDirs ?? [])]}>
     <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
@@ -785,19 +780,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
       />
       <StreamScrollFollow sessionId={sessionId} streaming={streaming} />
       <ConversationContent>
-        {tabletMode && hasContent && (historyLoadingEarlier || historyMoreAvailable === false) && (
-          <div className="flex items-center justify-center py-2 text-xs text-muted-foreground/50">
-            {historyLoadingEarlier ? (
-              <span className="inline-flex items-center gap-1.5">
-                <Spinner size="sm" className="text-muted-foreground/40" />
-                正在加载更早消息…
-              </span>
-            ) : (
-              <span>— 已到最早消息 —</span>
-            )}
-          </div>
-        )}
-        {!tabletMode && onLoadEarlierHistory && hasContent && (
+        {onLoadEarlierHistory && hasContent && (
           <div className="flex justify-center py-3">
             <button
               type="button"
@@ -818,7 +801,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
             </button>
           </div>
         )}
-        {!tabletMode && !onLoadEarlierHistory && hasEarlierGroups && (
+        {!onLoadEarlierHistory && hasEarlierGroups && (
           <div className="flex justify-center py-3">
             <button
               type="button"
@@ -950,7 +933,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
       </ConversationContent>
       <ScrollMinimap items={minimapItems} />
       <ConversationScrollButton />
-      {!tabletMode && allUserMessagesData.length > 0 && (
+      {allUserMessagesData.length > 0 && (
         <StickyUserMessage userMessages={allUserMessagesData} />
       )}
     </Conversation>
@@ -958,6 +941,5 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
     </div>
     </BasePathsProvider>
     </FileAccessSessionProvider>
-    </TabletModeContext.Provider>
   )
 }
