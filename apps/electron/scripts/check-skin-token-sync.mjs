@@ -2,7 +2,7 @@
  * 皮肤 token 双写一致性校验（只读）
  *
  * 背景：globals.css 的 theme-* 块与 resources/skins 各目录 skin.css 定义同一批主题 token。
- * 双写是设计必要——平板端/无皮肤注册场景无法通过 IPC 注入 skin.css，需要 globals.css
+ * 双写是设计必要——移动端/无皮肤注册场景无法通过 IPC 注入 skin.css，需要 globals.css
  * 内置 fallback（见 renderer/atoms/theme.ts applyThemeToDOM 的 theme-* 分支）。
  * 但双写必须同步维护：本脚本校验交集 token 的值完全一致，防漂移。
  *

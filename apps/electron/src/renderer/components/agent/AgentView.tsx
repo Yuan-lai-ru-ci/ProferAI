@@ -518,7 +518,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
   const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
   persistedSDKMessagesRef.current = persistedSDKMessages
   // 触顶自动加载更早历史：hasMore（还有更早）+ loading（防抖），供触顶加载与顶部状态使用。
-  // 桌面/平板共用：桌面走 IPC 分页（before 游标），平板走服务端 pullEarlier。
+  // 统一走 IPC 分页（before 游标）拉取更早历史。
   const [historyHasMore, setHistoryHasMore] = React.useState(true)
   const historyHasMoreRef = React.useRef(true)
   const [historyLoading, setHistoryLoading] = React.useState(false)
@@ -3117,7 +3117,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     <>
     <AgentSessionProvider sessionId={sessionId}>
       <div data-profer-navigation-region="conversation" tabIndex={-1} className="agent-conversation flex h-full min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
-        {/* Agent Header（平板竖屏由外部顶栏承担标题时隐藏，避免双标题） */}
+        {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
         <GoalStatusBar sessionId={sessionId} />
 

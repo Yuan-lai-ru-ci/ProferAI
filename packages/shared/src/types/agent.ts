@@ -671,11 +671,11 @@ export type ProferEvent =
   // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
   // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
   | { type: 'run_idle'; sessionId: string }
-  // 会话 run 真正完成（平板 remote-service 在 orchestrator onComplete 时广播，携带完成元数据）。
+  // 会话 run 真正完成（移动端 remote-service 在 orchestrator onComplete 时广播，携带完成元数据）。
   // 与 run_idle 的区别：run_idle 表示 active 所有权释放（可能无结果），run_completed 表示本轮有确定结束。
-  // 平板靠它拿到真实 startedAt/stoppedByUser，替代用 Date.now() 伪造 startedAt 的旧路。
+  // 移动端靠它拿到真实 startedAt/stoppedByUser，替代用 Date.now() 伪造 startedAt 的旧路。
   // endReason / endReasonLabel：orchestrator 已归一化的结束原因与其可读短文案，
-  // 由 remote-service 的 run_completed 广播透传给 Pocket / 平板，驱动中断 chip + toast
+  // 由 remote-service 的 run_completed 广播透传给移动端（Pocket），驱动中断 chip + toast
   // （completed 表示正常完成，不触发 chip）。缺省兼容旧服务端。
   | { type: 'run_completed'; sessionId: string; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean; endReason?: AgentEndReason; endReasonLabel?: string }
   | { type: 'preview_requested'; requestId: string; sessionId: string; filePath: string; revision: string; basePaths?: string[]; readOnly: boolean }

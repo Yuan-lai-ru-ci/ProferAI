@@ -122,7 +122,7 @@ export function SidebarDialogs({ s }: { s: SidebarModel }): React.ReactElement {
         onMoved={handleSessionMoved}
       />
 
-      {/* 加入团队工作区对话框（平板版不渲染） */}
+      {/* 加入团队工作区对话框 */}
       {showJoinDialog && (
         <AlertDialog open={showJoinDialog} onOpenChange={setShowJoinDialog}>
           <AlertDialogContent>

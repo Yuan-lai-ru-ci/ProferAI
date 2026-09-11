@@ -73,7 +73,7 @@ function cacheUiScale(scale: UiScale): void {
 export const uiScaleAtom = atom<UiScale>(getCachedUiScale() ?? DEFAULT_UI_SCALE)
 
 /**
- * 更新界面缩放档位并持久化（localStorage + settings.json；平板 stub 自动降级）。
+ * 更新界面缩放档位并持久化（localStorage 缓存 + settings.json 持久化；IPC 不可用时仅记日志降级）。
  * DOM 应用由 <UiScaleContainer> 依据 uiScaleAtom 自动完成，此处无需操作 DOM。
  */
 export async function updateUiScale(scale: UiScale): Promise<void> {

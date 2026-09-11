@@ -1,10 +1,10 @@
 import * as React from 'react'
-import { Copy, Download, Loader2, QrCode, RotateCcw, Save, Tablet, Wifi } from 'lucide-react'
+import { Copy, Download, Loader2, QrCode, RotateCcw, Save, Smartphone, Wifi } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SettingsCard, SettingsSection, SettingsToggle } from './primitives'
-import type { TabletModeStatus } from '../../../types'
+import type { PocketModeStatus } from '../../../types'
 
 /** 安卓版 APK 扫码下载信息 */
 interface ApkQrInfo {
@@ -37,8 +37,8 @@ function ConnectionValue({ label, value, secret = false }: { label: string; valu
 }
 
 /** 局域网移动端的连接与凭据设置。 */
-export function TabletModeSettings(): React.ReactElement {
-  const [status, setStatus] = React.useState<TabletModeStatus | null>(null)
+export function PocketModeSettings(): React.ReactElement {
+  const [status, setStatus] = React.useState<PocketModeStatus | null>(null)
   const [saving, setSaving] = React.useState(false)
   const [portInput, setPortInput] = React.useState('')
   const [savingPort, setSavingPort] = React.useState(false)
@@ -48,9 +48,9 @@ export function TabletModeSettings(): React.ReactElement {
   const [apkQr, setApkQr] = React.useState<ApkQrInfo | null>(null)
   const [apkLoading, setApkLoading] = React.useState(false)
 
-  const refresh = React.useCallback(async (): Promise<TabletModeStatus | null> => {
+  const refresh = React.useCallback(async (): Promise<PocketModeStatus | null> => {
     try {
-      const next = await window.electronAPI.getTabletModeStatus()
+      const next = await window.electronAPI.getPocketModeStatus()
       setStatus(next)
       return next
     } catch (error) {
@@ -99,7 +99,7 @@ export function TabletModeSettings(): React.ReactElement {
   const toggle = async (enabled: boolean): Promise<void> => {
     setSaving(true)
     try {
-      const next = await window.electronAPI.setTabletModeEnabled(enabled)
+      const next = await window.electronAPI.setPocketModeEnabled(enabled)
       setStatus(next)
       toast.success(enabled ? '移动模式已开启' : '移动模式已关闭')
     } catch (error) {
@@ -128,7 +128,7 @@ export function TabletModeSettings(): React.ReactElement {
     setSavingPort(true)
     try {
       const wasRunning = status?.running === true
-      const next = await window.electronAPI.setTabletModePort(parsedPort)
+      const next = await window.electronAPI.setPocketModePort(parsedPort)
       setStatus(next)
       portDirtyRef.current = false
       setPortInput(String(next.port))
@@ -151,7 +151,7 @@ export function TabletModeSettings(): React.ReactElement {
     setSavingPort(true)
     try {
       const wasRunning = status?.running === true
-      const next = await window.electronAPI.setTabletModePort(0)
+      const next = await window.electronAPI.setPocketModePort(0)
       setStatus(next)
       portDirtyRef.current = false
       setPortInput(String(next.port))
@@ -338,7 +338,7 @@ export function TabletModeSettings(): React.ReactElement {
       </SettingsSection>
 
       <div className="flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
-        <Tablet className="mt-0.5 size-4 shrink-0" />
+        <Smartphone className="mt-0.5 size-4 shrink-0" />
         <span>这是试验版功能。手机/平板与电脑需连接同一个 Wi‑Fi 或局域网。</span>
       </div>
     </div>

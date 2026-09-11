@@ -12,7 +12,7 @@ import { settingsOpenAtom, channelFormDirtyAtom, settingsCloseRequestedAtom } fr
 import { SettingsPanel, type SettingsTabItem } from './SettingsPanel'
 
 export interface SettingsDialogProps {
-  /** 受限环境（如平板）传入的 tab 白名单，透传给 SettingsPanel */
+  /** 受限环境（如外部嵌入入口）传入的 tab 白名单，透传给 SettingsPanel */
   tabsOverride?: SettingsTabItem[]
 }
 

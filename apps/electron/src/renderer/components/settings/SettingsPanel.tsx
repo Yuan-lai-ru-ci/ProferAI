@@ -162,7 +162,7 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
 
 interface SettingsPanelProps {
   onClose?: () => void;
-  /** 受限环境（如平板）传入的 tab 白名单；不传时按 appMode 推导完整列表 */
+  /** 受限环境（如外部嵌入入口）传入的 tab 白名单；不传时按 appMode 推导完整列表 */
   tabsOverride?: SettingsTabItem[];
 }
 
@@ -214,7 +214,7 @@ export function SettingsPanel({
     setPendingAction(null)
   }
 
-  // 受限环境（平板）传入白名单时直接使用（无分组标题）；否则按语义分组组装导航。
+  // 受限环境传入白名单时直接使用（无分组标题）；否则按语义分组组装导航。
   // 未登录时过滤掉需要团队账号的 Tab；账户页始终保留，用于登录入口。
   const groups = React.useMemo<SettingsTabGroup[]>(() => {
     if (tabsOverride) {
@@ -248,7 +248,7 @@ export function SettingsPanel({
     [groups]
   );
 
-  // 统一回落：activeTab 不在当前可见列表（平板白名单 / 未登录过滤）时回落到首项，
+  // 统一回落：activeTab 不在当前可见列表（白名单过滤 / 未登录过滤）时回落到首项，
   // 避免渲染未暴露的设置页（如登录/订阅/团队管理）。
   // tabs 为空数组（tabsOverride 传空）时整体不渲染，避免解引用崩溃。
   const effectiveTab: SettingsTab = tabs.some((t) => t.id === activeTab) ? activeTab : (tabs[0]?.id ?? 'general')

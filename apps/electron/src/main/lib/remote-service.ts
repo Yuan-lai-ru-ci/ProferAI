@@ -1,7 +1,7 @@
 /**
- * Profer Remote Service — 平板版远程接入服务
+ * Profer Remote Service — 移动端（Pocket）远程接入服务
  *
- * 目标：在不破坏现有桌面版的前提下，为「平板/手机等外部设备」提供
+ * 目标：在不破坏现有桌面版的前提下，为「手机/平板等外部设备」提供
  * 一条独立的 HTTP + WebSocket 通道，用来传输 Agent 工作过程与用户输入，
  * 而非传输图像。
  *
@@ -9,12 +9,12 @@
  *  1. 仅绑定 127.0.0.1（本机回环），外部设备通过电脑局域网 IP 访问；
  *  2. 简单 token 鉴权，防止局域网内他人误连；
  *  3. 通过唯一的 agentEventBus（agent-service 单例）订阅 Agent 工作流事件，
- *     广播给所有已连接的平板客户端 —— 对现有桌面版零侵入；
+ *     广播给所有已连接的移动端（Pocket）客户端 —— 对现有桌面版零侵入；
  *  4. 接收客户端指令：列会话 / 列渠道 / 新建会话 / 发送消息 / 停止任务 / 取历史；
- *  5. 显式开关控制：环境变量 PROFER_REMOTE=1 或设置页「移动模式」开关（settings.tabletModeEnabled）时启动，
+ *  5. 显式开关控制：环境变量 PROFER_REMOTE=1 或设置页「移动模式」开关（settings.pocketModeEnabled）时启动，
  *     默认不启动，确保桌面版行为零变化。
  *
- * 注：本文件**不含平板静态 UI 服务**（原静态页面已随 tablet 退役移除，2026-09-11）；
+ * 注：本文件**不含静态 UI 服务**（原平板静态页面已随 tablet 线退役移除，2026-09-11）；
  *     当前仅提供 /health 与 /ws（WebSocket 命令通道），供移动端（Profer-pocket）客户端接入。
  *
  * 依赖说明：
@@ -152,7 +152,7 @@ let isStarted = false
 /** 由设置页在当前运行期显式开启；启动参数仍保持兼容。 */
 let runtimeEnabled = false
 
-/** 平板会话删除协调器：合并并发删除 + stop-and-wait 成功前绝不清理持久化数据（对齐桌面 IPC 语义） */
+/** 移动端会话删除协调器：合并并发删除 + stop-and-wait 成功前绝不清理持久化数据（对齐桌面 IPC 语义） */
 const agentSessionDeletionCoordinator = new AgentSessionDeletionCoordinator()
 
 /**
@@ -171,7 +171,7 @@ const IDLE_SWEEP_INTERVAL_MS = 30 * 1000
 
 /**
  * partial assistant 消息（Pi 的累计全文预览）合并窗口：
- * 连续到达的 partial 只广播窗口内最后一个，减少平板弱网/移动端的传输与渲染抖动。
+ * 连续到达的 partial 只广播窗口内最后一个，减少移动端弱网下的传输与渲染抖动。
  * Pi 的 partial 是同 UUID 覆盖式累计全文，final 完整消息总会在 result 前送达，
  * 中间 partial 丢弃不影响最终正确性。
  */
@@ -186,7 +186,7 @@ function isPartialSdkPayload(payload: unknown): boolean {
   return p?.kind === 'sdk_message' && p.message?._partial === true
 }
 
-/** 真正把一条 agent_event 帧广播给所有已连接平板客户端。 */
+/** 真正把一条 agent_event 帧广播给所有已连接移动端客户端。 */
 function broadcastAgentFrame(sessionId: string, payload: import('@profer/shared').AgentStreamPayload): void {
   const record = remoteAgentEventLog.append(sessionId, payload)
   const frame = JSON.stringify({
@@ -294,7 +294,7 @@ function replayAgentEvents(client: WebSocket, requestId: unknown, cursor: unknow
 }
 
 /**
- * agentEventBus → 平板 WS 的广播入口，带 partial 合并：
+ * agentEventBus → 移动端 WS 的广播入口，带 partial 合并：
  * - partial sdk_message：合并到时间窗，只发最后一个（减少传输/渲染抖动）。
  * - 非 partial（含 final 完整消息）：先取消 pending 的 partial 再立即广播，
  *   确保 final 不被延迟到达的旧 partial 覆盖（renderer 按同 UUID 覆盖，顺序必须保证）。
@@ -358,7 +358,7 @@ function loadOrCreateToken(): string {
     /* 忽略，重新生成 */
   }
   // 迁移：旧版 token 写在 cwd 相对路径（PROFER_CONFIG_DIR 或 .profer-dev/remote-token.json），
-  // 与配置目录不一致会导致换目录启动后重新生成 token。此处检测旧位置并原值迁移，避免平板重新输入。
+  // 与配置目录不一致会导致换目录启动后重新生成 token。此处检测旧位置并原值迁移，避免移动端重新输入。
   const legacyDir = process.env.PROFER_CONFIG_DIR?.trim() || '.profer-dev'
   if (resolve(legacyDir) !== getConfigDir()) {
     try {
@@ -442,7 +442,7 @@ export function setRemoteServiceEnabled(enabled: boolean): RemoteServiceStatus {
 
 /** 解析监听端口：设置页保存的端口优先，其次 PROFER_REMOTE_PORT 环境变量，最后默认 7788。 */
 function getPort(): number {
-  const saved = getSettings().tabletModePort
+  const saved = getSettings().pocketModePort
   if (saved) {
     if (Number.isInteger(saved) && saved > 0 && saved < 65536) return saved
   }
@@ -481,11 +481,11 @@ function checkToken(req: IncomingMessage): boolean {
   return header === accessToken
 }
 
-// ===== 指令处理：平板客户端 → 主进程 Agent =====
+// ===== 指令处理：移动端客户端 → 主进程 Agent =====
 
 /**
  * 从 SDK 消息对象提取文本（content 可为字符串或 [{type:'text'|'thinking', text|thinking}] 数组）。
- * 与平板前端 parseSdkMessage 保持一致；这里用于服务端把持久化 SDK 消息转成平板可读结构。
+ * 与移动端前端 parseSdkMessage 保持一致；这里用于服务端把持久化 SDK 消息转成移动端可读结构。
  */
 function extractSdkText(m: Record<string, unknown>): string {
   const c = m.content
@@ -508,7 +508,7 @@ function extractSdkText(m: Record<string, unknown>): string {
 }
 
 /**
- * 把持久化 SDK 消息（getAgentSessionMessages 返回的原生结构）转成平板端可见消息。
+ * 把持久化 SDK 消息（getAgentSessionMessages 返回的原生结构）转成移动端可见消息。
  * 真实结构：{ type:'user'|'assistant', message:{ role, content:[{type:'text',text}] }, _createdAt }
  */
 function sdkMessagesToViewMessages(rawMessages: Array<Record<string, unknown>>): Array<{
@@ -560,7 +560,7 @@ export function validateWorkspaceHeatmapRequest(workspaceId: unknown): string | 
   return null
 }
 
-/** 单个会话对象（脱敏，仅暴露平板端需要的字段；与桌面 AgentSessionMeta 平板所需子集兼容）。
+/** 单个会话对象（脱敏，仅暴露移动端需要的字段；与桌面 AgentSessionMeta 移动端所需子集兼容）。
  * 注意：必须包含 id/updatedAt/title/pinned/archived/draft 等完整字段——桌面复用组件
  * （AgentView/LeftSidebar）按桌面 IPC 返回完整对象的契约处理 .then((updated) => updated.id)
  * 等；若缺字段（旧实现只回 { channelId, modelId }）会导致切换模型后列表不更新甚至
@@ -588,7 +588,7 @@ function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]) {
   }
 }
 
-/** 会话列表（脱敏，仅暴露平板端需要的字段） */
+/** 会话列表（脱敏，仅暴露移动端需要的字段） */
 function buildSessionList() {
   return listAgentSessions(true).map(buildSessionItem)
 }
@@ -622,7 +622,7 @@ function publishSessionDeleted(sessionId: string): void {
   }
 }
 
-/** 工作区（项目）列表（脱敏，仅暴露平板端侧栏渲染需要的字段；与桌面 AgentWorkspace 形状兼容） */
+/** 工作区（项目）列表（脱敏，仅暴露移动端侧栏渲染需要的字段；与桌面 AgentWorkspace 形状兼容） */
 function buildWorkspaceList() {
   return listAgentWorkspaces().map((w) => ({
     id: w.id,
@@ -634,7 +634,7 @@ function buildWorkspaceList() {
   }))
 }
 
-/** 渠道列表（脱敏，仅暴露平板端发消息需要的字段） */
+/** 渠道列表（脱敏，仅暴露移动端发消息需要的字段） */
 function buildChannelList() {
   return listSwitchableChannels().map((c) => ({
     id: c.id,
@@ -664,7 +664,7 @@ interface RemoteCommandContext {
   activeSessionId?: string
 }
 
-/** 处理来自平板客户端的一条 JSON 指令消息 */
+/** 处理来自移动端客户端的一条 JSON 指令消息 */
 export async function handleRemoteCommand(
   message: string,
   requestId: unknown = null,
@@ -1123,15 +1123,15 @@ export async function handleRemoteCommand(
       const startedAt = typeof parsed.startedAt === 'number' ? parsed.startedAt : Date.now()
       const uuid = typeof parsed.uuid === 'string' ? parsed.uuid : undefined
 
-      // 弱网重连重放幂等：平板断线后按原 clientMessageId 重发同一逻辑消息，这里去重，避免重复启动 run。
+      // 弱网重连重放幂等：移动端断线后按原 clientMessageId 重发同一逻辑消息，这里去重，避免重复启动 run。
       if (isSendMessageDuplicate(clientMessageId)) {
         return { ok: true, data: { accepted: true, deduped: true } }
       }
 
       // 异步执行，不阻塞 WS 响应；结果通过事件流返回。
       // onComplete 不再空置：orchestrator 会在 run 真正结束时回调「已持久化的完整消息列表」，
-      // 这里把 completion 标记（携带最终消息 + 完成元数据）通过 agentEventBus 广播给平板，
-      // 让平板端能确定性地拿到"结果已落盘"的完成信号，而不是只依赖 run_idle 的间接触发。
+      // 这里把 completion 标记（携带最终消息 + 完成元数据）通过 agentEventBus 广播给移动端，
+      // 让移动端能确定性地拿到"结果已落盘"的完成信号，而不是只依赖 run_idle 的间接触发。
       // run 失败原因：orchestrator / agent-service 的 onError 一定先于 onComplete 触发，
       // 这里暂存并并入 completion 的 resultErrors，让 Pocket 能看到真实错误文案（而非只有「执行出错」）。
       let runErrorMessage: string | null = null
@@ -1281,7 +1281,7 @@ export async function handleRemoteCommand(
 
     // 队列消息：向正在运行的 Agent 注入（interrupt=true 时软打断当前 turn 立即插入）。
     // 桌面端 queueAgentMessage IPC 的等价物；会话未运行时返回 "会话未运行" 错误，
-    // 平板端 stub 据此降级为 send_message 新建 run（与桌面 isQueueTargetNoLongerActiveError 一致）。
+    // 移动端 stub 据此降级为 send_message 新建 run（与桌面 isQueueTargetNoLongerActiveError 一致）。
     case 'queue_message': {
       const sessionId = parsed.sessionId as string
       const userMessage = typeof parsed.userMessage === 'string' ? parsed.userMessage : ''
@@ -1298,7 +1298,7 @@ export async function handleRemoteCommand(
             mentionedMcpServers: Array.isArray(parsed.mentionedMcpServers) ? parsed.mentionedMcpServers as string[] : undefined,
             mentionedSessionIds: Array.isArray(parsed.mentionedSessionIds) ? parsed.mentionedSessionIds as string[] : undefined,
           } as import('@profer/shared').AgentQueueMessageInput,
-          // 桌面 IPC 的 webContents 仅用于把事件转发到渲染进程；平板走 EventBus → WS，无需指定
+          // 桌面 IPC 的 webContents 仅用于把事件转发到渲染进程；移动端走 EventBus → WS，无需指定
           null as never,
         )
         return { ok: true, data: { accepted: true, uuid } }
@@ -1637,7 +1637,7 @@ export function startRemoteService(): string | null {
       res.end(JSON.stringify({ ok: true, time: Date.now() }))
       return
     }
-    // 平板静态 UI 服务已随 tablet 退役移除（2026-09-11）：非 /health 的 HTTP 请求一律 404。
+    // 本机不再提供静态 UI 服务（原平板页面已随 tablet 线退役移除，2026-09-11）：非 /health 的 HTTP 请求一律 404。
     // WS 客户端（Profer-pocket）直接连 /ws，不依赖 HTTP 根路径。
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('Not Found')
@@ -1646,7 +1646,7 @@ export function startRemoteService(): string | null {
   wss = new WebSocketServer({ server: httpServer, path: '/ws' })
 
   // 闲置踢人：定期扫描，清除长时间（含心跳 ping）无任何活跃的假死连接。
-  // 平板 WebView 可能因网络切换/后台冻结形成半开连接，TCP 不报错但不再通信；
+  // 移动端 WebView 可能因网络切换/后台冻结形成半开连接，TCP 不报错但不再通信；
   // 不清理会让这些连接永久占用，且客户端也因无 pong 而无法自愈。
   if (idleSweepTimer) clearInterval(idleSweepTimer)
   idleSweepTimer = setInterval(() => {
@@ -1666,7 +1666,7 @@ export function startRemoteService(): string | null {
       ws.close(4001, 'unauthorized')
       return
     }
-    console.log('[Remote] 平板客户端已连接')
+    console.log('[Remote] 移动端客户端已连接')
     ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
     const commandContext: RemoteCommandContext = {}
     const replayState: AgentReplayState = {
@@ -1689,7 +1689,7 @@ export function startRemoteService(): string | null {
       try {
         const parsed = JSON.parse(raw.toString())
         parsedRaw = parsed
-        // 命令追踪 ID：优先 _cmdId（平板 ws-client 新协议），兼容旧的 requestId
+        // 命令追踪 ID：优先 _cmdId（移动端 ws-client 新协议），兼容旧的 requestId
         reqId = parsed?._cmdId ?? parsed?.requestId ?? null
         body = raw.toString()
       } catch {
@@ -1726,7 +1726,7 @@ export function startRemoteService(): string | null {
       const replayState = agentReplayStates.get(ws)
       if (replayState?.fallbackTimer) clearTimeout(replayState.fallbackTimer)
       agentReplayStates.delete(ws)
-      console.log('[Remote] 平板客户端断开')
+      console.log('[Remote] 移动端客户端断开')
     })
 
     // 连接建立后推送握手。客户端可据此判断旧 cursor 是否跨越了服务重启。
@@ -1739,14 +1739,14 @@ export function startRemoteService(): string | null {
     }))
   })
 
-  // 订阅 agentEventBus，把工作流事件广播给所有平板客户端
+  // 订阅 agentEventBus，把工作流事件广播给所有移动端客户端
   eventBusUnsubscribe = agentEventBus.on((sessionId, payload) => {
     broadcastAgentEvent(sessionId, payload)
   })
 
   // 订阅 chatEventBus，把 Chat 流式事件（chunk/reasoning/complete/error/tool-activity）
-  // 广播给所有平板客户端；channel 使用桌面 CHAT_IPC_CHANNELS 同名通道，
-  // 平板 stub 按通道名分发到 onStreamChunk 等注册器。
+  // 广播给所有移动端客户端；channel 使用桌面 CHAT_IPC_CHANNELS 同名通道，
+  // 移动端 stub 按通道名分发到 onStreamChunk 等注册器。
   chatBusUnsubscribe = chatEventBus.on((conversationId, channel, payload) => {
     const frame = JSON.stringify({ kind: 'chat_event', conversationId, channel, payload })
     if (remoteRelaySink?.isOpen()) remoteRelaySink.send(frame)
@@ -1806,7 +1806,7 @@ export function startRemoteService(): string | null {
     remoteRelayClient.start()
   }
 
-  // 监听地址：默认 0.0.0.0（局域网设备可访问，平板通过电脑局域网 IP:端口 访问）。
+  // 监听地址：默认 0.0.0.0（局域网设备可访问，移动端通过电脑局域网 IP:端口 访问）。
   // 安全性由 accessToken 鉴权保障。可用 PROFER_REMOTE_HOST 覆盖（如设为 127.0.0.1 即仅本机）。
   const HOST = process.env.PROFER_REMOTE_HOST || '0.0.0.0'
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
@@ -1850,7 +1850,7 @@ export function startRemoteService(): string | null {
     console.log('[Remote] Profer 移动版已启动')
     console.log(`[Remote] 本机访问:  ${listenAddress}`)
     console.log(`[Remote] 移动端访问:  http://${lanIp}:${actualPort}`)
-    console.log(`[Remote] 访问 Token: ${accessToken}（首次在平板输入一次）`)
+    console.log(`[Remote] 访问 Token: ${accessToken}（首次在移动端输入一次）`)
     console.log('════════════════════════════════════════════════════\n')
   })
 

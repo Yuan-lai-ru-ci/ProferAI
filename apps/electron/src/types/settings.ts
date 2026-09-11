@@ -217,7 +217,7 @@ export type MarkdownFontSize = 'small' | 'medium' | 'large'
 /** 默认 Markdown 字号档位 */
 export const DEFAULT_MARKDOWN_FONT_SIZE: MarkdownFontSize = 'medium'
 
-/** 界面缩放档位（桌面默认标准，平板端默认大号，见 atoms/ui-scale.ts） */
+/** 界面缩放档位（默认标准，见 atoms/ui-scale.ts） */
 export type UiScale = 'standard' | 'large' | 'xlarge' | 'huge' | 'massive' | 'max'
 
 /** 默认界面缩放档位 */
@@ -291,7 +291,7 @@ export interface AppSettings {
   richTextRenderingEnabled?: boolean
   /** Markdown 预览字号档位（默认 'medium'，对应 15px） */
   markdownFontSize?: MarkdownFontSize
-  /** 界面缩放档位（默认 'standard' 100%；平板端无缓存时默认 'large' 110%） */
+  /** 界面缩放档位（默认 'standard' 100%） */
   uiScale?: UiScale
   /** Agent 预览默认展开方式（默认 'tab'） */
   previewModePreference?: 'tab' | 'split'
@@ -316,9 +316,9 @@ export interface AppSettings {
   /** 是否开机自启动（默认 false） */
   autoLaunch?: boolean
   /** 是否启用局域网移动模式（试验版）；启动后自动恢复。 */
-  tabletModeEnabled?: boolean
+  pocketModeEnabled?: boolean
   /** 移动模式服务端口（正式版默认 7788，开发模式默认 7789；0/缺省表示使用默认端口）。 */
-  tabletModePort?: number
+  pocketModePort?: number
   /** Windows Shell 环境偏好：'auto'（自动检测，优先 Git Bash）| 'git-bash' | 'wsl'（默认 'auto'） */
   agentShellPreference?: 'auto' | 'git-bash' | 'wsl'
 }
@@ -338,8 +338,8 @@ export interface PersistedTabSettings {
   activeTabId: string | null
 }
 
-/** 设置 IPC 通道 */
-export interface TabletModeStatus {
+/** 移动模式（Pocket 远程接入）服务状态与连接信息 */
+export interface PocketModeStatus {
   enabled: boolean
   running: boolean
   port: number
@@ -381,10 +381,10 @@ export const SETTINGS_IPC_CHANNELS = {
   GET_AUTO_LAUNCH: 'settings:get-auto-launch',
   SET_AUTO_LAUNCH: 'settings:set-auto-launch',
   /** 移动模式（试验版）运行时控制 */
-  GET_TABLET_MODE_STATUS: 'settings:get-tablet-mode-status',
-  SET_TABLET_MODE_ENABLED: 'settings:set-tablet-mode-enabled',
+  GET_POCKET_MODE_STATUS: 'settings:get-pocket-mode-status',
+  SET_POCKET_MODE_ENABLED: 'settings:set-pocket-mode-enabled',
   /** 设置移动模式服务端口（保存并热应用；服务运行时自动重启） */
-  SET_TABLET_MODE_PORT: 'settings:set-tablet-mode-port',
+  SET_POCKET_MODE_PORT: 'settings:set-pocket-mode-port',
   /** 获取安卓版 APK 扫码下载二维码（指向官网 profer.cn 域名；始终返回） */
   GET_APK_QR: 'settings:get-apk-qr',
 } as const

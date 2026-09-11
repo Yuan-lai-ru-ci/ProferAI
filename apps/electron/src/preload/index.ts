@@ -131,7 +131,7 @@ import type {
 import type {
   UserProfile,
   AppSettings,
-  TabletModeStatus,
+  PocketModeStatus,
   QuickTaskSubmitInput,
   QuickTaskOpenSessionData,
   VoiceDictationAudioChunkInput,
@@ -464,11 +464,11 @@ export interface ElectronAPI {
   updateSettingsSync: (updates: Partial<AppSettings>) => boolean
 
   /** 获取移动模式（试验版）状态与连接信息 */
-  getTabletModeStatus: () => Promise<TabletModeStatus>
+  getPocketModeStatus: () => Promise<PocketModeStatus>
   /** 启用或关闭移动模式（试验版） */
-  setTabletModeEnabled: (enabled: boolean) => Promise<TabletModeStatus>
+  setPocketModeEnabled: (enabled: boolean) => Promise<PocketModeStatus>
   /** 设置移动模式服务端口（保存并热应用，服务运行中自动重启） */
-  setTabletModePort: (port: number) => Promise<TabletModeStatus>
+  setPocketModePort: (port: number) => Promise<PocketModeStatus>
   /** 获取安卓版 APK 扫码下载信息（官网地址/二维码/文件名） */
   getProferApkQr: () => Promise<{ url: string; dataUrl: string; fileName: string }>
 
@@ -1988,15 +1988,15 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.sendSync(SETTINGS_IPC_CHANNELS.UPDATE_SYNC, updates)
   },
 
-  getTabletModeStatus: () => {
-    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_TABLET_MODE_STATUS) as Promise<TabletModeStatus>
+  getPocketModeStatus: () => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_POCKET_MODE_STATUS) as Promise<PocketModeStatus>
   },
 
-  setTabletModeEnabled: (enabled: boolean) => {
-    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_ENABLED, enabled) as Promise<TabletModeStatus>
+  setPocketModeEnabled: (enabled: boolean) => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_POCKET_MODE_ENABLED, enabled) as Promise<PocketModeStatus>
   },
-  setTabletModePort: (port: number) => {
-    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_PORT, port) as Promise<TabletModeStatus>
+  setPocketModePort: (port: number) => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_POCKET_MODE_PORT, port) as Promise<PocketModeStatus>
   },
   getProferApkQr: () => {
     return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_APK_QR) as Promise<{ url: string; dataUrl: string; fileName: string }>

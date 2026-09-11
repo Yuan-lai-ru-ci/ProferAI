@@ -32,7 +32,7 @@ Profer 是本地优先（local-first）的 AI 桌面应用：**简单问题用 C
 | 🤖 **通用 Agent** | 基于 `@anthropic-ai/claude-agent-sdk`，任务图拆解、子任务依赖编排、流式输出、计划确认，支持 **Claude / Pi 双运行时**切换 |
 | 🧩 **协作子 Agent** | 复杂任务并行拆分给多个真实子会话独立推进，完成后汇总结果，全程可见可追踪 |
 | ⏰ **定时任务自动化** | 持久化调度（interval / daily / weekly / monthly），运行历史、失败保护、结果复盘，适合日报周报、自动检查等无人值守场景 |
-| 📱 **移动端远程接入** | 内置 HTTP/WS 远程服务（`remote-service`），移动端客户端（见 Profer-pocket）可远程接入电脑端，查看会话、实时工作流并发送输入 |
+| 📱 **移动端远程接入** | 移动端客户端（独立仓库 Profer-pocket，Capacitor Android）通过本地 HTTP/WS 远程接入电脑端，移动端 Chat、设置同步、断线重连 |
 | 👥 **团队工作区** | 邀请制团队（Owner / Admin / Member / Viewer 角色权限），Skills 共享市场、文件云端同步、品牌定制 |
 | 💬 **多模型 Chat** | 多供应商对话、附件解析（PDF / Office / 图片）、Markdown / Mermaid / KaTeX / 代码高亮、并排对比、上下文管理 |
 | 🧠 **Skills & MCP** | 每工作区独立配置 Skills 与 MCP Server，全屏技能视图支持搜索、启用、更新、导入、卸载与团队发布 |
@@ -103,6 +103,7 @@ nohup node index.js > server.log 2>&1 &
 | 富文本 / 图表 | TipTap · Beautiful Mermaid · KaTeX · Shiki |
 | 构建 | Vite + esbuild + electron-builder |
 | Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.201`（Claude）+ `@earendil-works/pi-agent@0.82.1`（Pi）双运行时 |
+| 移动端 | Capacitor（Android，客户端在 Profer-pocket 仓库） |
 | 团队后端 | Hono + better-sqlite3 + JWT |
 
 ---

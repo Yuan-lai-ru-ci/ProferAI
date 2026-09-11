@@ -786,7 +786,7 @@ async function bootstrap(): Promise<void> {
   // 设置页开启「启用移动端连接」后，下次启动自动恢复监听（正式版与开发版一致）。
   // 开发版默认端口 7789、正式版 7788，端口已隔离，dev 与打包版并存不会互相抢占。
   safeRun('startRemoteService', () => {
-    if (getSettings().tabletModeEnabled === true) {
+    if (getSettings().pocketModeEnabled === true) {
       setRemoteServiceEnabled(true)
     } else {
       startRemoteService()
@@ -1092,7 +1092,7 @@ app.on('before-quit', () => {
   stopPlanningReminderScheduler()
   // 销毁规划窗口
   destroyPlanningWindow()
-  // 停止平板版远程服务
+  // 停止移动端版远程服务
   stopRemoteService()
   // 停止同步引擎
   const { stopSyncEngine } = require('./lib/sync-manager')

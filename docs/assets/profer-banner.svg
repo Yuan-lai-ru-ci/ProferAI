@@ -59,6 +59,6 @@
     <rect x="348" y="240" width="120" height="34" rx="17" fill="#4f46e5" opacity="0.92"/>
     <text x="408" y="262" text-anchor="middle" fill="#e0e7ff">定时自动化</text>
     <rect x="480" y="240" width="120" height="34" rx="17" fill="#4f46e5" opacity="0.92"/>
-    <text x="540" y="262" text-anchor="middle" fill="#e0e7ff">平板远程</text>
+    <text x="540" y="262" text-anchor="middle" fill="#e0e7ff">移动端远程</text>
   </g>
 </svg>

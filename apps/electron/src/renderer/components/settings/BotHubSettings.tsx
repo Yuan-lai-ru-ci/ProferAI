@@ -17,7 +17,7 @@ import { DingTalkSettings } from './DingTalkSettings'
 import { WeChatSettings } from './WeChatSettings'
 import { BotDefaultSettings } from './BotDefaultSettings'
 import { ProferLogoSettings } from './ProferLogoSettings'
-import { TabletModeSettings } from './TabletModeSettings'
+import { PocketModeSettings } from './PocketModeSettings'
 import feishuLogo from '@/assets/bots/feishu.png'
 import dingtalkLogo from '@/assets/bots/dingding.png'
 import wechatLogo from '@/assets/bots/wechat.png'
@@ -25,7 +25,7 @@ import proferModelLogo from '@/assets/models/profer.png'
 
 // ===== 类型 =====
 
-type BotPlatformId = 'feishu' | 'dingtalk' | 'wechat' | 'tablet' | 'defaults' | 'logos'
+type BotPlatformId = 'feishu' | 'dingtalk' | 'wechat' | 'pocket' | 'defaults' | 'logos'
 
 interface BotPlatformDef {
   id: BotPlatformId
@@ -42,7 +42,7 @@ interface BotPlatformDef {
 
 const PLATFORMS: readonly BotPlatformDef[] = [
   {
-    id: 'tablet',
+    id: 'pocket',
     name: '移动模式（试验版）',
     iconChar: '▣',
     iconBgClass: 'bg-violet-500/15',
@@ -97,7 +97,7 @@ function PlatformStatusDot({ platformId }: { platformId: BotPlatformId }): React
   const dingtalkBotStates = useAtomValue(dingtalkBotStatesAtom)
   const wechatState = useAtomValue(wechatBridgeStateAtom)
 
-  if (platformId === 'defaults' || platformId === 'logos' || platformId === 'tablet') return null
+  if (platformId === 'defaults' || platformId === 'logos' || platformId === 'pocket') return null
 
   const statusMap: Record<string, string> = {
     feishu: getPlatformStatus(feishuBotStates),
@@ -176,8 +176,8 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
       return <DingTalkSettings />
     case 'wechat':
       return <WeChatSettings />
-    case 'tablet':
-      return <TabletModeSettings />
+    case 'pocket':
+      return <PocketModeSettings />
     case 'defaults':
       return <BotDefaultSettings />
     case 'logos':
@@ -188,7 +188,7 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
 // ===== 主组件 =====
 
 export function BotHubSettings(): React.ReactElement {
-  const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('tablet')
+  const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('pocket')
 
   return (
     <div className="-mx-6 -my-5 flex h-full min-h-0 flex-col">

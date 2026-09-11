@@ -28,7 +28,7 @@ function getCacheTtl(result: ChannelPlanQuotaResult): number {
 
 export function getCachedPlanQuota(channelId: string, channelUpdatedAt?: number): ChannelPlanQuotaResult | null {
   const cached = quotaCache.get(channelId)
-  // result 必须有效：历史缺陷曾把 undefined 写入缓存（IPC 实现缺失/平板 stub 兜底），
+  // result 必须有效：历史缺陷曾把 undefined 写入缓存（IPC 实现缺失/受限环境兜底），
   // 二次查询读 cached.result.updatedAt 会抛 TypeError。
   if (!cached || !cached.result) return null
   // 仅在调用方显式传入渠道版本时才做严格一致性校验；否则信任结果内部自带的 channelUpdatedAt，
@@ -45,7 +45,7 @@ function performPlanQuotaRequest(
 ): Promise<ChannelPlanQuotaResult> {
   return window.electronAPI.getChannelPlanQuota(channelId)
     .then((result) => {
-      // 兜底：IPC 实现异常或平板 stub 返回 undefined 时，写入明确的“不支持”结果，
+      // 兜底：IPC 实现异常或受限环境兜底返回 undefined 时，写入明确的“不支持”结果，
       // 避免缓存中出现 result: undefined（二次查询会读 result.updatedAt 崩溃）。
       if (!result || typeof result !== 'object') {
         result = {

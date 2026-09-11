@@ -2189,25 +2189,25 @@ export function registerIpcHandlers(): void {
 
   // 获取移动模式服务状态。Token 只在服务实际监听后随状态返回。
   ipcMain.handle(
-    SETTINGS_IPC_CHANNELS.GET_TABLET_MODE_STATUS,
+    SETTINGS_IPC_CHANNELS.GET_POCKET_MODE_STATUS,
     async () => getRemoteServiceStatus(),
   )
 
   // 设置移动模式（试验版）。开启后立即监听局域网，关闭后立即断开。
   ipcMain.handle(
-    SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_ENABLED,
+    SETTINGS_IPC_CHANNELS.SET_POCKET_MODE_ENABLED,
     async (_event, enabled: boolean) => {
       if (typeof enabled !== 'boolean') throw new Error('移动模式开关参数无效')
       if (!enabled) {
         const status = setRemoteServiceEnabled(false)
-        updateSettings({ tabletModeEnabled: false })
+        updateSettings({ pocketModeEnabled: false })
         return status
       }
 
       setRemoteServiceEnabled(true)
       // listen 是异步的；状态会在 UI 随后刷新时带回地址和 Token。
       const status = getRemoteServiceStatus()
-      updateSettings({ tabletModeEnabled: true })
+      updateSettings({ pocketModeEnabled: true })
       return status
     },
   )
@@ -2216,17 +2216,17 @@ export function registerIpcHandlers(): void {
   // port=0 表示恢复默认端口（清除自定义值，回到正式版 7788 / 开发版 7789）。
   // 端口占用或非法时服务可能启动失败，状态由 UI 轮询刷新呈现。
   ipcMain.handle(
-    SETTINGS_IPC_CHANNELS.SET_TABLET_MODE_PORT,
+    SETTINGS_IPC_CHANNELS.SET_POCKET_MODE_PORT,
     async (_event, port: unknown) => {
       const n = typeof port === 'number' ? port : Number(port)
       if (n === 0) {
-        updateSettings({ tabletModePort: 0 })
+        updateSettings({ pocketModePort: 0 })
         return restartRemoteService()
       }
       if (!Number.isInteger(n) || n < 1024 || n > 65535) {
         throw new Error('端口必须是 1024-65535 之间的整数')
       }
-      updateSettings({ tabletModePort: n })
+      updateSettings({ pocketModePort: n })
       // 服务运行中则停掉旧端口并重启；未运行时新端口在下次启动时生效。
       return restartRemoteService()
     },

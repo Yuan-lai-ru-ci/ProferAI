@@ -90,16 +90,10 @@ dev-start*.log
 *.dev-start*.log
 *.upgrade-backup
 
-# Remote 服务开发模式目录与本地产物（不入库/不打包）
+# 远程服务开发模式目录与本地产物（不入库/不打包）
 apps/electron/.profer-dev/
 apps/electron/remote-test-*.log
 *.remote-token.json
-
-# 遗留 Tablet App 目录（Capacitor 壳随 tablet 退役不再维护；本地未跟踪产物仍在此忽略）
-tablet-app/android/
-tablet-app/web/
-tablet-app/node_modules/
-tablet-app/dist/
 
 # local Profer Team Server deployment (keep separate repo)
 server/

@@ -709,7 +709,7 @@ const IMAGE_MIME_MAP: Record<string, string> = {
 }
 
 /**
- * 读取文件为 base64 data URL（供移动端/平板预览图片等二进制文件）。
+ * 读取文件为 base64 data URL（供移动端预览图片等二进制文件）。
  * 桌面端图片预览走 profer-file:// 自定义协议 URL，移动端无法加载该协议，
  * 必须把内容直接以 data URL 形式经 WS 传输给客户端渲染。
  * 复用 resolveTargetPath 的绝对/相对路径解析与 MAX_FILE_SIZE 体积限制。

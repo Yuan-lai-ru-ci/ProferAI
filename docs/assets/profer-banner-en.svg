@@ -59,6 +59,6 @@
     <rect x="348" y="240" width="120" height="34" rx="17" fill="#4f46e5" opacity="0.92"/>
     <text x="408" y="262" text-anchor="middle" fill="#e0e7ff">Automations</text>
     <rect x="480" y="240" width="120" height="34" rx="17" fill="#4f46e5" opacity="0.92"/>
-    <text x="540" y="262" text-anchor="middle" fill="#e0e7ff">Tablet Remote</text>
+    <text x="540" y="262" text-anchor="middle" fill="#e0e7ff">Mobile Remote</text>
   </g>
 </svg>

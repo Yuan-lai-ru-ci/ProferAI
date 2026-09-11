@@ -606,7 +606,7 @@ export function useLeftSidebar() {
     return unsub
   }, [setWorkspacesStable])
 
-  // 监听工作区列表变更（创建/删除/重命名/重排、平板远程创建）：主进程广播后刷新侧边栏，
+  // 监听工作区列表变更（创建/删除/重命名/重排、移动端远程创建）：主进程广播后刷新侧边栏，
   // 否则运行中的桌面端一直用启动时的工作区快照，新工作区的会话会被归入默认工作区
   React.useEffect(() => {
     const unsub = window.electronAPI.onAgentWorkspacesChanged(() => {

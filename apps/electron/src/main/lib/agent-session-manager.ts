@@ -1047,7 +1047,7 @@ export function deleteAgentSession(id: string): void {
  *
  * 供删除工作区时级联清理使用：正常流程由 ipc DELETE_WORKSPACE handler 先行处理
  * （含停止运行中 Agent、清理权限/提问状态等运行时资源），此函数作为 manager 层防御性兜底，
- * 防止其他调用路径删除工作区后残留孤儿会话 —— 孤儿会话会让平板端把 workspaceId
+ * 防止其他调用路径删除工作区后残留孤儿会话 —— 孤儿会话会让移动端把 workspaceId
  * 归纳成“幽灵项目”显示（electronapi-stub 的 list_workspaces 回退路径）。
  *
  * @returns 删除的会话数量

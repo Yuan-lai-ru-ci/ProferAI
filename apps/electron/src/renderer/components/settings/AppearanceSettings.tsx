@@ -125,7 +125,7 @@ export function AppearanceSettings(): React.ReactElement {
   const [conflict, setConflict] = React.useState<{ path: string; kind: 'zip' | 'folder' } | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [markdownFontSize, setMarkdownFontSize] = useAtom(markdownFontSizeAtom)
-  // 界面大小控件仅面向平板/浏览器端（UiScaleContainer 等比缩放）；
+  // 界面大小控件仅面向移动端/浏览器端（UiScaleContainer 等比缩放）；
   // Electron 桌面保持原版行为（Ctrl+± 浏览器级缩放），不渲染控件避免“调了无效果”。
   const isElectron = React.useMemo(() => navigator.userAgent.includes('Electron'), [])
   const [uiScale, setUiScale] = useAtom(uiScaleAtom)

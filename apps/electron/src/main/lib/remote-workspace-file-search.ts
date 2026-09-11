@@ -1,5 +1,5 @@
 /**
- * Remote Workspace File Search — 远程端（Pocket / 平板）`@` 引用检索
+ * Remote Workspace File Search — 移动端（Pocket）`@` 引用检索
  *
  * 为什么单独存在：
  *  - 桌面端 `@` 引用由 renderer 提交 `rootPath` / `additionalPaths` / `sessionPaths`，

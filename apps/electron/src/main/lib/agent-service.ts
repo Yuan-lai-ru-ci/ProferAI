@@ -354,7 +354,7 @@ export async function runAgentHeadless(
       onRunStarted: ({ startedAt: persistedStartedAt }) => {
         // draft 晋升（与 runAgent.onRunStarted 对齐）：对话真正开始后草稿会话转为正式，
         // 否则 ensureProjectDraftAgentSession 永远复用旧草稿——
-        // 平板（runAgentHeadless 路径）点击项目将不会像桌面那样产生新对话（“点击项目仍指向刚才的对话”）。
+        // runAgentHeadless 路径点击项目将不会像桌面那样产生新对话（“点击项目仍指向刚才的对话”）。
         const beforePromotion = getAgentSessionMeta(runInput.sessionId)
         const session = beforePromotion?.draft
           ? updateAgentSessionMeta(runInput.sessionId, { draft: false })
