@@ -13,12 +13,6 @@ export const MAX_CONTEXT_MESSAGES = 20
 /** 单条工具摘要最大字符数 */
 const MAX_TOOL_SUMMARY_LENGTH = 200
 
-/** 标题生成 Prompt */
-export const TITLE_PROMPT = '根据用户的第一条消息，生成一个简短的对话标题（10字以内）。只输出标题，不要有任何其他内容、标点符号或引号。\n\n用户消息：'
-
-/** 标题最大长度 */
-export const MAX_TITLE_LENGTH = 20
-
 /** 默认会话标题 */
 export const DEFAULT_SESSION_TITLE = '新 Agent 会话'
 

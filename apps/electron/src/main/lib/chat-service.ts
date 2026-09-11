@@ -37,6 +37,7 @@ import { isCommercialBuild } from './build-target'
 import { isOfficialManagedChannel } from './official-channel'
 import { searchKnowledgeItemsForChat } from './knowledge-item-service'
 import { prepareChatKnowledgeRequest } from './chat-knowledge-request'
+import { buildTitlePrompt, sanitizeGeneratedTitle, MAX_TITLE_LENGTH, SHORT_MESSAGE_THRESHOLD } from './title-generation'
 
 /** 活跃的 AbortController 映射（conversationId → controller） */
 const activeControllers = new Map<string, AbortController>()
@@ -635,15 +636,6 @@ export function stopAllGenerations(): void {
 
 // ===== 标题生成 =====
 
-/** 标题生成 Prompt */
-const TITLE_PROMPT = '根据用户的第一条消息，生成一个简短的对话标题（10字以内）。只输出标题，不要有任何其他内容、标点符号或引号。如果消息内容过短或无明确主题，直接使用原始消息作为标题。\n\n用户消息：'
-
-/** 短消息阈值：低于此长度直接使用原文作为标题 */
-const SHORT_MESSAGE_THRESHOLD = 4
-
-/** 最大标题长度 */
-const MAX_TITLE_LENGTH = 20
-
 /**
  * 调用 AI 生成对话标题
  *
@@ -712,7 +704,7 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
       baseUrl: proxyBaseUrl || channel.baseUrl,
       apiKey,
       modelId,
-      prompt: TITLE_PROMPT + userMessage,
+      prompt: buildTitlePrompt(userMessage),
     })
 
     if (proxyBaseUrl) request.url = proxyBaseUrl
@@ -725,9 +717,12 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
       return null
     }
 
-    // 截断到最大长度并清理引号
-    const cleaned = title.trim().replace(/^["'""'']+|["'""'']+$/g, '').trim()
-    const result = cleaned.slice(0, MAX_TITLE_LENGTH) || null
+    // 清洗引号/书名号并截断；兼容部分端点把 content 返回为内容块数组的情况
+    const result = sanitizeGeneratedTitle(title)
+    if (!result) {
+      console.warn('[标题生成] 标题清洗后为空')
+      return null
+    }
     console.log('[标题生成] 成功生成标题:', result)
     return result
   } catch (error) {

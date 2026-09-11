@@ -91,7 +91,7 @@ import { getAdapter, fetchTitle } from '@profer/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { generateCodexTitle } from './adapters/pi-codex-title-generator'
-import { createFallbackTitle, sanitizeGeneratedTitle } from './title-generation'
+import { buildTitlePrompt, createFallbackTitle, sanitizeGeneratedTitle } from './title-generation'
 import { isCommercialBuild } from './build-target'
 import { isOfficialManagedChannel } from './official-channel'
 import {
@@ -151,8 +151,6 @@ import {
   buildRecoveryPrompt,
   escapeContextAttr,
   buildReferencedSessionsPrompt,
-  TITLE_PROMPT,
-  MAX_TITLE_LENGTH,
   DEFAULT_SESSION_TITLE,
   DEFAULT_MODEL_ID,
   MAX_CONTEXT_MESSAGES,
@@ -497,7 +495,7 @@ export class AgentOrchestrator {
           const [credentials, proxyUrl] = await Promise.all([resolveCodexOAuthCredentials(channelId), getEffectiveProxyUrl()])
           const generatedTitle = await generateCodexTitle({
             modelId,
-            prompt: TITLE_PROMPT + userMessage,
+            prompt: buildTitlePrompt(userMessage),
             credentials,
             proxyUrl,
             onCredentialsRefreshed: (refreshed) => persistCodexOAuthCredentials(channelId, refreshed),
@@ -534,7 +532,7 @@ export class AgentOrchestrator {
         baseUrl: proxyBaseUrl || channel.baseUrl,
         apiKey,
         modelId,
-        prompt: TITLE_PROMPT + userMessage,
+        prompt: buildTitlePrompt(userMessage),
       })
       if (proxyBaseUrl) request.url = proxyBaseUrl
 
@@ -546,11 +544,12 @@ export class AgentOrchestrator {
         return null
       }
 
-      const cleaned = title
-        .trim()
-        .replace(/^["'""''「《]+|["'""''」》]+$/g, '')
-        .trim()
-      const result = cleaned.slice(0, MAX_TITLE_LENGTH) || null
+      const cleaned = sanitizeGeneratedTitle(title)
+      if (!cleaned) {
+        console.warn('[Agent 标题生成] 标题清洗后为空')
+        return null
+      }
+      const result = cleaned
 
       console.log(`[Agent 标题生成] 生成标题成功: "${result}"`)
       return result
