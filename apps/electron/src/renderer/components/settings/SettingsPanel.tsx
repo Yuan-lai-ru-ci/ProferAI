@@ -59,8 +59,6 @@ import { DataManagementSettings } from "./DataManagementSettings";
 import { TeamWorkspaceSettings } from "./TeamWorkspaceSettings";
 import { CreditsSettings } from "./CreditsSettings";
 import { SubscriptionSettings } from "./SubscriptionSettings";
-import { TabletConnectionSettings } from "./TabletConnectionSettings";
-import { TabletNotificationSettings } from "./TabletNotificationSettings";
 import { OpenApiSettings } from "./OpenApiSettings";
 import { ProxySettings } from "./ProxySettings";
 
@@ -138,10 +136,6 @@ function renderTabContent(tab: SettingsTab, tabletMode = false): React.ReactElem
     case "appearance":
       // 平板（tabsOverride 非空）：界面大小裁剪到 150%、隐藏 Agent 预览展开方式（功能不可用）
       return <AppearanceSettings tabletMode={tabletMode} />;
-    case "connection":
-      return <TabletConnectionSettings />;
-    case "notifications":
-      return <TabletNotificationSettings />;
     case "about":
       return <AboutSettings />;
     case "bots":
