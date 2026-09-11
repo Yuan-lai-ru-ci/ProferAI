@@ -674,17 +674,33 @@ export type ProferEvent =
   // 会话 run 真正完成（平板 remote-service 在 orchestrator onComplete 时广播，携带完成元数据）。
   // 与 run_idle 的区别：run_idle 表示 active 所有权释放（可能无结果），run_completed 表示本轮有确定结束。
   // 平板靠它拿到真实 startedAt/stoppedByUser，替代用 Date.now() 伪造 startedAt 的旧路。
-  | { type: 'run_completed'; sessionId: string; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }
+  // endReason / endReasonLabel：orchestrator 已归一化的结束原因与其可读短文案，
+  // 由 remote-service 的 run_completed 广播透传给 Pocket / 平板，驱动中断 chip + toast
+  // （completed 表示正常完成，不触发 chip）。缺省兼容旧服务端。
+  | { type: 'run_completed'; sessionId: string; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean; endReason?: AgentEndReason; endReasonLabel?: string }
   | { type: 'preview_requested'; requestId: string; sessionId: string; filePath: string; revision: string; basePaths?: string[]; readOnly: boolean }
   | { type: 'preview_inspection_requested'; request: import('./agent-preview').AgentFilePreviewInspectRequest }
 
 /** 外部入口触发 Agent 运行的来源 */
 export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge' | 'delegation' | 'automation'
 
-/** IPC 传输的统一 payload（替代 AgentEvent） */
+/** 可失效并重新拉取的目录类型（Pocket 收到失效通知后按 catalog 重新拉取列表）。 */
+export type AgentCatalogKind = 'channels' | 'presets' | 'workspace_capabilities' | 'workspaces'
+
+/** 目录失效通知：只发送失效信号，不广播配置正文（避免经 WS 外发渠道密钥 / 预设正文）。 */
+export interface AgentCatalogInvalidation {
+  kind: 'catalog_invalidation'
+  catalog: AgentCatalogKind
+  workspaceSlug: string | null
+  revision: number
+  changedAt: number
+}
+
+/** IPC 传输的统一 payload（替代 AgentEvent）；kind 是唯一分流依据 */
 export type AgentStreamPayload =
   | { kind: 'sdk_message'; message: SDKMessage }
   | { kind: 'profer_event'; event: ProferEvent }
+  | AgentCatalogInvalidation
 
 // ===== Agent 会话管理 =====
 

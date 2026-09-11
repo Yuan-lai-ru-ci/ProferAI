@@ -71,6 +71,8 @@ import {
 } from './agent-preset-manager'
 import type { AgentPresetCreateInput, AgentPresetUpdateInput } from '@profer/shared'
 import { AgentSessionDeletionCoordinator } from './agent-session-deletion'
+import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
+import { searchRemoteWorkspaceFiles } from './remote-workspace-file-search'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
 import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
@@ -864,6 +866,50 @@ export async function handleRemoteCommand(
       }
     }
 
+    // 查询某 Pi 模型可用的推理档位能力（Pocket 思考档位菜单与服务端同源，避免两端快照漂移）。
+    // 入参只接受 provider / modelId：档位由主进程的 pi-model-registry 级联解析
+    // （reasoning-profile 纯函数 + pi-ai 目录），渲染端拿不到该目录，因此不能本地推导。
+    case 'get_pi_reasoning_capability': {
+      const provider = typeof parsed.provider === 'string' ? parsed.provider : ''
+      const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : undefined
+      if (!provider) return { ok: false, error: '缺少 provider' }
+      // resolvePiReasoningCapability 是异步的（需读 pi-ai 目录），必须 await，
+      // 否则 data 会变成 Promise 而被 JSON 序列化成 {}。
+      return { ok: true, data: await resolvePiReasoningCapability(provider as import('@profer/shared').ProviderType, modelId) }
+    }
+
+    // 工作区文件检索（Pocket `@` 引用）：桌面端由 renderer 提交 rootPath/additionalPaths
+    // 后本地扫描；远程端没有本地 fs，因此**不接受客户端提交的 rootPath / candidateBasePaths**，
+    // roots 一律由服务端从会话 meta 推导（与 resolve_and_read_file 同一授权策略），
+    // 保证搜索返回的条目一定能被后续的 read_file_as_data_url 再校验通过。
+    case 'search_workspace_files': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      const query = typeof parsed.query === 'string' ? parsed.query : ''
+      const limit = typeof parsed.limit === 'number' ? parsed.limit : undefined
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const session = getAgentSessionMeta(sessionId)
+      if (!session?.workspaceId) return { ok: false, error: '会话不存在或未绑定工作区' }
+      const workspace = getAgentWorkspace(session.workspaceId)
+      if (!workspace) return { ok: false, error: '会话工作区不存在' }
+      return {
+        ok: true,
+        data: searchRemoteWorkspaceFiles({
+          query,
+          limit,
+          sessionRoot: getAgentSessionWorkspacePath(workspace.slug, sessionId),
+          workspaceRoot: getWorkspaceFilesDir(workspace.slug),
+          sessionAttachedPaths: [
+            ...(session.attachedDirectories ?? []),
+            ...(session.attachedFiles ?? []),
+          ],
+          workspaceAttachedPaths: [
+            ...getWorkspaceAttachedDirectories(workspace.slug),
+            ...getWorkspaceAttachedFiles(workspace.slug),
+          ],
+        }),
+      }
+    }
+
     case 'update_session_model': {
       const sessionId = parsed.sessionId as string
       const channelId = parsed.channelId as string
@@ -1071,6 +1117,11 @@ export async function handleRemoteCommand(
       const modelId = parsed.modelId as string | undefined
       const workspaceId = parsed.workspaceId as string | undefined
       const clientMessageId = typeof parsed.clientMessageId === 'string' ? parsed.clientMessageId : ''
+      // 渲染进程预生成的流式开始时间戳 / 消息 UUID：原样透传到 AgentSendInput，
+      // 让 run_completed.startedAt 与前端流状态同源（消除跨机时钟比较），
+      // 并让持久化消息可按 uuid 与前端乐观气泡匹配去重。两者均缺省回退现有行为。
+      const startedAt = typeof parsed.startedAt === 'number' ? parsed.startedAt : Date.now()
+      const uuid = typeof parsed.uuid === 'string' ? parsed.uuid : undefined
 
       // 弱网重连重放幂等：平板断线后按原 clientMessageId 重发同一逻辑消息，这里去重，避免重复启动 run。
       if (isSendMessageDuplicate(clientMessageId)) {
@@ -1081,11 +1132,19 @@ export async function handleRemoteCommand(
       // onComplete 不再空置：orchestrator 会在 run 真正结束时回调「已持久化的完整消息列表」，
       // 这里把 completion 标记（携带最终消息 + 完成元数据）通过 agentEventBus 广播给平板，
       // 让平板端能确定性地拿到"结果已落盘"的完成信号，而不是只依赖 run_idle 的间接触发。
+      // run 失败原因：orchestrator / agent-service 的 onError 一定先于 onComplete 触发，
+      // 这里暂存并并入 completion 的 resultErrors，让 Pocket 能看到真实错误文案（而非只有「执行出错」）。
+      let runErrorMessage: string | null = null
       void runAgentHeadless(
-        { sessionId, userMessage, channelId, modelId, workspaceId, startedAt: Date.now() },
+        { sessionId, userMessage, channelId, modelId, workspaceId, startedAt, ...(uuid ? { uuid } : {}) },
         {
           source: 'bridge',
-          onError: () => {},
+          onError: (error) => {
+            // 此前此处完全静默：run 失败在服务端零日志、Pocket 端零提示
+            // （Pocket 没有桌面那条 IPC STREAM_ERROR 通道，失败信息只能靠 run_completed 携带）。
+            runErrorMessage = error
+            console.error('[Remote] send_message 运行失败:', error)
+          },
           onComplete: (_messages, opts) => {
             agentEventBus.emit(sessionId, {
               kind: 'profer_event',
@@ -1093,10 +1152,13 @@ export async function handleRemoteCommand(
                 type: 'run_completed',
                 sessionId,
                 stoppedByUser: opts?.stoppedByUser ?? false,
-                startedAt: opts?.startedAt ?? Date.now(),
+                startedAt: opts?.startedAt ?? startedAt,
                 resultSubtype: opts?.resultSubtype,
-                resultErrors: opts?.resultErrors,
+                resultErrors: opts?.resultErrors ?? (runErrorMessage ? [runErrorMessage] : undefined),
                 backgroundTasksPending: opts?.backgroundTasksPending ?? false,
+                // 透传 orchestrator 已归一化的 endReason / label：Pocket 据此置位中断 chip + toast。
+                endReason: opts?.endReason,
+                endReasonLabel: opts?.endReasonLabel,
               },
             })
           },

@@ -32,6 +32,7 @@ import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './ada
 import { PiAgentAdapter } from './adapters/pi-agent-adapter'
 import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-adapter'
 import { AgentEventBus } from './agent-event-bus'
+import { AgentCatalogInvalidationPublisher } from './agent-catalog-invalidation'
 import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
 import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, type HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
@@ -41,6 +42,9 @@ import { AgentRuntimeContextStore } from './agent-runtime-context'
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
+// 目录失效发布器单例：ipc.ts / remote-service.ts / workspace-watcher.ts 共享同一 revision 序列，
+// 保证 Pocket 按 (catalog, workspaceSlug) 去重时看到的 revision 单调可信。
+export const agentCatalogInvalidationPublisher = new AgentCatalogInvalidationPublisher(eventBus)
 const claudeAdapter = new ClaudeAgentAdapter()
 const piAdapter = new PiAgentAdapter()
 // Both runtimes remain behind the same orchestrator, credential gate, P0 lifecycle and Plan-mode boundary.

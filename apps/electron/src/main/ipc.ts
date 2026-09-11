@@ -266,7 +266,7 @@ import {
   countArchivedAgentSessions,
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
-import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, agentCatalogInvalidationPublisher } from './lib/agent-service'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
@@ -1610,7 +1610,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.CREATE,
     async (_, input: ChannelCreateInput): Promise<Channel> => {
-      return createChannel(input)
+      const channel = createChannel(input)
+      // 目录失效通知：Pocket 据此重取渠道列表（只发失效信号，不广播配置正文）。
+      agentCatalogInvalidationPublisher.invalidate('channels')
+      return channel
     }
   )
 
@@ -1618,7 +1621,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.UPDATE,
     async (_, id: string, input: ChannelUpdateInput): Promise<Channel> => {
-      return updateChannel(id, input)
+      const channel = updateChannel(id, input)
+      agentCatalogInvalidationPublisher.invalidate('channels')
+      return channel
     }
   )
 
@@ -1626,7 +1631,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.DELETE,
     async (_, id: string): Promise<void> => {
-      return deleteChannel(id)
+      const result = deleteChannel(id)
+      agentCatalogInvalidationPublisher.invalidate('channels')
+      return result
     }
   )
 

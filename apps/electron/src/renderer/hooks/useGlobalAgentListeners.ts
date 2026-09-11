@@ -166,6 +166,9 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
     }
   }
 
+  // UI Projection / Catalog 都不属于 Runtime Event Plane，不能转换为旧运行事件。
+  if (payload.kind !== 'sdk_message') return []
+
   // sdk_message → 转换为对应的 AgentEvent
   const msg = payload.message
 
