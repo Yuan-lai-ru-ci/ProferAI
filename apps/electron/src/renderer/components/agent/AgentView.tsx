@@ -94,6 +94,7 @@ import {
   workspaceAttachedDirectoriesMapAtom,
   workspaceAttachedFilesMapAtom,
   liveMessagesMapAtom,
+  liveMessagesAtomFamily,
   agentThinkingAtom,
   agentEffortAtom,
   stoppedByUserSessionsAtom,
@@ -605,10 +606,8 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   const longTextPasteAsAttachmentEnabled = useAtomValue(longTextPasteAsAttachmentEnabledAtom)
   const stoppedByUser = stoppedByUserSessions.has(sessionId)
-  const liveMessagesMap = useAtomValue(liveMessagesMapAtom)
+  const liveMessages = useAtomValue(liveMessagesAtomFamily(sessionId))
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
-  // 稳定化空数组引用，避免 ?? [] 每次创建新引用导致下游 useMemo 链不必要重算
-  const liveMessages = liveMessagesMap.get(sessionId) ?? EMPTY_SDK_MESSAGES
   // 运行中追加消息队列（前端托管，turn 结束后 auto-drain 逐条发送）
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
   const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)

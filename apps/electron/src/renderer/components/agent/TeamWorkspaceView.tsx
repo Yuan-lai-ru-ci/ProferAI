@@ -119,8 +119,8 @@ export function TeamWorkspaceView(): React.ReactElement {
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const filesVersion = useAtomValue(workspaceFilesVersionAtom)
   const isWindows = React.useMemo(() => detectIsWindows(), [])
-  const deferredActiveTabId = React.useDeferredValue(activeTabId)
-  const activeTab = tabs.find((tab) => tab.id === deferredActiveTabId)
+  // 团队 Agent 内容必须与顶栏 active tab 同步，避免 deferred id 让旧会话长期残留。
+  const activeTab = tabs.find((tab) => tab.id === activeTabId)
   const activeTabAgentSessionId = activeTab && (activeTab.type === 'agent' || activeTab.type === 'preview')
     ? activeTab.sessionId
     : null

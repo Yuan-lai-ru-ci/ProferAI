@@ -49,6 +49,7 @@ import {
   agentDiffDataAtom,
   agentStreamingStatesAtom,
   liveMessagesMapAtom,
+  liveMessagesAtomFamily,
   agentSessionPendingFilesAtom,
   agentSessionStreamingStateAtomFamily,
   agentSessionDraftAtomFamily,
@@ -450,6 +451,7 @@ export function useLeftSidebar() {
     // atomFamily 内部缓存（Jotai 对 string key 强引用 Map，不显式 remove 永不释放）。
     // 删除/归档是会话的终态，连同草稿一起清理，无需像关闭 Tab 那样保留可恢复输入。
     agentSessionStreamingStateAtomFamily.remove(id)
+    liveMessagesAtomFamily.remove(id)
     agentSessionDraftAtomFamily.remove(id)
     agentSessionDraftHtmlAtomFamily.remove(id)
     agentPendingFilesAtomFamily.remove(id)

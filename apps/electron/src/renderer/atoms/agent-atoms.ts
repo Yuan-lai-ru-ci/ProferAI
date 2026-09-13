@@ -272,6 +272,13 @@ export const agentSessionStreamingStateAtomFamily = atomFamily((sessionId: strin
  */
 export const liveMessagesMapAtom = atom<Map<string, SDKMessage[]>>(new Map())
 
+const EMPTY_LIVE_MESSAGES: SDKMessage[] = []
+
+/** 单个 session 的实时消息切片，避免后台会话更新唤醒当前 AgentView。 */
+export const liveMessagesAtomFamily = atomFamily((sessionId: string) =>
+  atom((get) => get(liveMessagesMapAtom).get(sessionId) ?? EMPTY_LIVE_MESSAGES),
+)
+
 export const agentPendingPromptAtom = atom<AgentPendingPrompt | null>(null)
 
 /**
