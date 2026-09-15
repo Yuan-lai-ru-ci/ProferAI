@@ -120,6 +120,13 @@ function registerProtocolsAndHandlers(): void {
   // ClearType 是为浅色背景+深色文字设计的，在深色代码块背景下会产生彩色边缘，导致文字模糊。
   if (process.platform === 'win32') {
     app.commandLine.appendSwitch('disable-lcd-text')
+    // ANGLE 后端是整个 Electron 进程级开关，不能为单个 Splash 安全隔离。
+    // 因此不默认修改所有 Windows GPU 的渲染路径，仅保留显式环境变量用于兼容性 A/B。
+    const angleBackend = process.env.PROFER_ANGLE_BACKEND
+    if (angleBackend && ['d3d11', 'd3d9', 'd3d11on12', 'gl', 'swiftshader'].includes(angleBackend)) {
+      app.commandLine.appendSwitch('use-angle', angleBackend)
+      console.info(`[图形] ANGLE backend: ${angleBackend}`)
+    }
   }
 
   // macOS 文件关联：在 app ready 之前注册 open-file 事件
@@ -141,7 +148,7 @@ function registerProtocolsAndHandlers(): void {
 
 
 import { getSettings, updateSettings } from './lib/settings-service'
-import { INTRO_FLUID_FRAGMENT_SHADER, INTRO_FLUID_VERTEX_SHADER } from '../shared/intro-fluid-shader'
+import { createStartupSplashHtml } from './lib/startup-splash'
 import { handleProferFileRequest } from './lib/local-file-protocol'
 import { handleProferSkinRequest } from './lib/skin-service'
 import { disposeAgentPreviewRenderer } from './lib/agent-preview-renderer'
@@ -333,6 +340,7 @@ function parseDiagnosticPayload(raw: string): unknown {
 }
 let startupSplashWindow: BrowserWindow | null = null
 
+// 启动 Splash 不应在 renderer 已就绪后额外阻塞主窗口。
 const STARTUP_SPLASH_MIN_MS = 1200
 
 function resolveStartupSplashDark(): boolean {
@@ -341,24 +349,6 @@ function resolveStartupSplashDark(): boolean {
   if (settings.themeMode === 'system') return nativeTheme.shouldUseDarkColors
   if (settings.themeMode === 'special') return !settings.themeStyle?.endsWith('-light')
   return true
-}
-
-function createStartupSplashHtml(isDark: boolean): string {
-  const background = isDark ? '#0b0b0c' : '#f7f7f5'
-  const foreground = isDark ? '#f3f3f3' : '#101114'
-  const highlight = isDark ? '#aeb4bd' : '#3c414a'
-  const muted = isDark ? 'rgba(243,243,243,.28)' : 'rgba(16,17,20,.46)'
-  const vertex = JSON.stringify(INTRO_FLUID_VERTEX_SHADER)
-  const fragment = JSON.stringify(INTRO_FLUID_FRAGMENT_SHADER)
-  return `<!doctype html><html><head><meta charset="UTF-8"><style>
-    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:${background};color:${foreground};font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
-    body{display:grid;place-items:center}.stage{position:relative;width:100vw;height:100vh;display:grid;place-items:center;background:${background}}
-    #fluid{position:absolute;inset:0;width:100%;height:100%}.glow{position:absolute;width:min(58vw,720px);height:min(58vw,720px);border-radius:50%;background:radial-gradient(circle,${highlight}18 0%,transparent 66%);filter:blur(28px);animation:breathe 2.8s ease-in-out infinite;pointer-events:none}
-    .logo{position:relative;z-index:2;font-size:clamp(52px,10vw,112px);font-weight:600;font-style:italic;letter-spacing:-.045em;transform:skewX(-7deg);text-shadow:0 0 28px ${highlight}28;animation:rise 1.1s cubic-bezier(.22,1,.36,1) both}.status{position:absolute;z-index:2;bottom:8%;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.32em;text-transform:uppercase;color:${muted};animation:pulse 1.8s ease-in-out infinite}
-    @keyframes rise{from{opacity:0;transform:translateY(18px) skewX(-7deg) scale(.96)}to{opacity:1;transform:translateY(0) skewX(-7deg) scale(1)}}@keyframes breathe{0%,100%{opacity:.35;transform:scale(.86)}50%{opacity:.8;transform:scale(1.08)}}@keyframes pulse{0%,100%{opacity:.35}50%{opacity:.8}}
-  </style></head><body><main class="stage"><canvas id="fluid"></canvas><div class="glow"></div><div class="logo">Profer</div><div class="status">Loading</div></main><script>
-  (function(){var c=document.getElementById('fluid'),gl=c.getContext('webgl',{alpha:false,antialias:false}),dark=${isDark ? 'true' : 'false'};if(!gl)return;function shader(type,src){var x=gl.createShader(type);gl.shaderSource(x,src);gl.compileShader(x);return gl.getShaderParameter(x,gl.COMPILE_STATUS)?x:null}var v=shader(gl.VERTEX_SHADER,${vertex}),f=shader(gl.FRAGMENT_SHADER,${fragment});if(!v||!f)return;var p=gl.createProgram();gl.attachShader(p,v);gl.attachShader(p,f);gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))return;var b=gl.createBuffer(),a=gl.getAttribLocation(p,'aPosition'),time=gl.getUniformLocation(p,'uTime'),res=gl.getUniformLocation(p,'uResolution'),op=gl.getUniformLocation(p,'uOpacity'),seed=gl.getUniformLocation(p,'uSeed'),theme=gl.getUniformLocation(p,'uThemeLight');gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);var w=1,h=1,started=performance.now(),seedValue=Math.random()*1000;function resize(){var d=Math.min(devicePixelRatio||1,1.5);w=Math.max(1,Math.round(innerWidth*d));h=Math.max(1,Math.round(innerHeight*d));c.width=w;c.height=h}function draw(now){var elapsed=now-started;gl.viewport(0,0,w,h);gl.clearColor(dark?.043:.969,dark?.043:.969,dark?.047:.961,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(p);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);gl.uniform1f(time,elapsed/625);gl.uniform2f(res,w,h);gl.uniform1f(op,1);gl.uniform1f(seed,seedValue);gl.uniform1f(theme,dark?0:1);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);requestAnimationFrame(draw)}addEventListener('resize',resize);resize();requestAnimationFrame(draw)})();
-  </script></body></html>`
 }
 
 /** 获取主窗口实例（供其他模块使用）。 */
@@ -635,9 +625,22 @@ function createWindow(): void {
 
   const createSplashWindow = (splashBounds?: { width: number; height: number; x: number; y: number }): void => {
     if (startupSplashWindow && !startupSplashWindow.isDestroyed()) startupSplashWindow.close()
-    // 刷新（Ctrl/Cmd+R）场景会传入主窗口当前真实 bounds，让启动画面保持
-    // 与主窗口一致的尺寸/位置（原本多大就多大），而不是退化成固定小方块。
-    const bounds = splashBounds ?? initialBounds
+    // 刷新（Ctrl/Cmd+R）场景会传入主窗口当前真实 bounds；Splash 与普通窗口一致，
+    // 允许跨屏移动和缩放。Splash 的 WebGL 内容与主窗口 renderer 隔离。
+    const requestedBounds: { x: number; y: number; width: number; height: number } = splashBounds
+      ? { x: splashBounds.x, y: splashBounds.y, width: splashBounds.width, height: splashBounds.height }
+      : savedState
+        ? { x: savedState.x, y: savedState.y, width: savedState.width, height: savedState.height }
+        : (() => {
+            const workArea = screen.getPrimaryDisplay().workArea
+            return {
+              x: workArea.x + Math.round((workArea.width - initialBounds.width) / 2),
+              y: workArea.y + Math.round((workArea.height - initialBounds.height) / 2),
+              width: initialBounds.width,
+              height: initialBounds.height,
+            }
+          })()
+    const bounds = requestedBounds
     startupSplashWindow = new BrowserWindow({
       x: bounds.x,
       y: bounds.y,
@@ -652,13 +655,16 @@ function createWindow(): void {
       backgroundColor: resolveStartupSplashDark() ? '#101010' : '#f4f4f2',
       webPreferences: { contextIsolation: true, nodeIntegration: false },
     })
-    startupSplashWindow.setMenuBarVisibility(false)
-    startupSplashWindow.webContents.once('did-finish-load', () => {
+    const splashWindow = startupSplashWindow
+    splashWindow.setMenuBarVisibility(false)
+
+
+    splashWindow.webContents.once('did-finish-load', () => {
       splashShown = true
       startupSplashWindow?.show()
       showWhenReady()
     })
-    void startupSplashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(createStartupSplashHtml(resolveStartupSplashDark()))}`)
+    void splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(createStartupSplashHtml(resolveStartupSplashDark()))}`)
   }
 
   /**
