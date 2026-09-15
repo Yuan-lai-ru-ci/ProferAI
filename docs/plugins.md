@@ -1,4 +1,6 @@
-# Profer 插件开发：第一、二批能力
+# Profer 通用插件平台：第一、二批能力
+
+插件宿主 API 是 provider-neutral 的平台契约，可供工作区工具、外部服务、任务看板等多类插件复用。具体业务适配器不属于公共契约；未配置 provider 的新能力返回稳定的 `PLUGIN_OPERATION_NOT_SUPPORTED`。
 
 插件使用静态 HTML/CSS/JS 和 `profer-plugin.json` 分发，通过独立沙箱中的 `window.profer` 调用宿主。
 公开 TypeScript 契约位于 `packages/plugin-api/src/index.ts`。示例位于 `examples/plugins/capability-demo/`，可直接安装该目录。
@@ -22,6 +24,8 @@
 
 ## 宿主 API 与权限
 
+除下表既有 API 外，Slice 3 在 Slice 1/2 基础上冻结了通用工作区、session/preset metadata、runtime capability reference、opaque secret reference 和统一 RPC 生命周期契约。它们均要求细粒度 permission、workspace/resource scope、owner/page 绑定、requestId、取消/超时、整数 revision/CAS 与稳定错误码；当前只建立安全边界，provider 尚未接入时不会伪造成功。
+
 | API | 权限 | 行为 |
 | --- | --- | --- |
 | `getContext()`、`onContextChanged(callback)` | 无 | 插件信息、语言、主题；主题变化时自动更新 `data-profer-theme` 并通知监听器 |
@@ -34,6 +38,12 @@
 | `network.fetch(input)` | `network.fetch` | 通过宿主请求已声明、已授权的精确 HTTPS origin |
 | `tools.register(id, handler)` | `agent.tools` | 注册已声明的 Agent 工具；Claude 和 Pi 使用一致的参数与宿主执行逻辑 |
 | `requests.cancel(requestId)` | 无额外权限 | 取消本插件的模型或网络请求 |
+| `workspace.list()` | `workspace.read` | 仅列出宿主注入且已授权的 workspace 摘要；不返回绝对根路径 |
+| `workspace.files.list/read/write(input)` | `workspace.files.read` / `workspace.files.write` | 仅限授权 workspace + prefix 的相对 POSIX 路径；list/read 有深度、条目、字节上限，write 只允许单文件 create/replace、每次宿主确认、整数 CAS 与临时文件 rename |
+| `sessions.list/get/create/configure/cancel()` | `sessions.read` / `sessions.create` / `sessions.configure` / `sessions.control` | 只返回 opaque 会话元数据；mutation 绑定 workspace/session ownership、宿主 confirmation、非负整数 `expectedRevision`、取消/撤权和 unknown 终态，不暴露消息、JSONL、SDK/Pi session 对象或内部文件 |
+| `sessions.listPresets/getPreset/requestPreset()` | `presets.read` / `presets.switch` | 只返回 opaque preset metadata；切换必须 CAS/confirmation，明确 `effectiveFrom: "next_turn"`，当前 turn 不热替换 |
+| `runtime.resolve()/inject()` | `runtime.capabilities.read` / `runtime.capabilities.inject` | 只接受 capability references/declarations，返回安全 snapshot/fingerprint；禁止任意 prompt、JS、command、path、env/header 或 SDK/Pi 对象。注入失败保留旧 view，按 `next_turn`/`new_session` 生效 |
+| `secrets.listMetadata()/requestConfigure()` | `secrets.readMetadata` / `secrets.configure`（兼容 `mcp.secrets.readMetadata` / `mcp.secrets.write`） | 只返回 opaque metadata/reference；插件永远不能读取明文。宿主原生/受控输入和 runtime prepare 才能短暂解析；safe storage 不可用、未配置、撤权和卸载均返回稳定错误 |
 
 生成输入：`{requestId,channelId,modelId,prompt,system?,maxTokens?}`。默认输出上限 2048 token，最多 8192；最长 120 秒。
 网络输入：`{requestId,url,method?:"GET"|"POST",headers?,body?,credentialId?}`，返回 `{status,headers,body}`；最长 60 秒，响应最多 2 MB，不跟随重定向，不支持内网地址。

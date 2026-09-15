@@ -51,7 +51,26 @@ if (process.isMainFrame) {
   })
   ipcRenderer.on(PROFER_PLUGIN_HOST_CHANNELS.TOOL_CANCEL, (_event, callId: string) => calls.get(callId)?.abort())
 }
-const call = <T>(method: string, input?: unknown): Promise<T> => ipcRenderer.invoke(PROFER_PLUGIN_HOST_CHANNELS.CALL, method, input) as Promise<T>
+const call = async <T>(operation: string, payload?: unknown): Promise<T> => {
+  const payloadRequestId = payload && typeof payload === 'object' && 'requestId' in payload && typeof payload.requestId === 'string'
+    ? payload.requestId
+    : undefined
+  const response = await ipcRenderer.invoke(PROFER_PLUGIN_HOST_CHANNELS.CALL, {
+    protocol: 'plugin-host.rpc.v1',
+    requestId: payloadRequestId ?? crypto.randomUUID().replaceAll('-', '_'),
+    operation,
+    payload,
+  }) as { ok: boolean; requestId: string; operation: string; value?: T; error?: { code: string; message: string } }
+  if (!response || response.ok !== true) {
+    const error = response?.error
+    const failure = new Error(error?.message ?? '插件宿主操作失败') as Error & { code?: string; requestId?: string; operation?: string }
+    failure.code = error?.code
+    failure.requestId = response?.requestId
+    failure.operation = response?.operation
+    throw failure
+  }
+  return response.value as T
+}
 
 const api: ProferPluginHostApi = {
   getContext: context,
@@ -62,6 +81,32 @@ const api: ProferPluginHostApi = {
   attachments: { select: () => call('attachments.select') },
   network: { fetch: (input) => call('network.fetch', input) },
   requests: { cancel: (requestId) => call('requests.cancel', requestId) },
+  workspace: {
+    list: () => call('workspace.list'),
+    files: {
+      list: (input) => call('workspace.files.list', input),
+      read: (input) => call('workspace.files.read', input),
+      write: (input) => call('workspace.files.write', input),
+    },
+  },
+  sessions: {
+    listPresets: (input) => call('sessions.presets.list', input),
+    getPreset: (input) => call('sessions.presets.get', input),
+    list: (input) => call('sessions.list', input),
+    get: (input) => call('sessions.get', input),
+    create: (input) => call('sessions.create', input),
+    configure: (input) => call('sessions.configure', input),
+    requestPreset: (input) => call('sessions.preset.request', input),
+    cancel: (input) => call('sessions.cancel', input),
+  },
+  runtime: {
+    resolve: (input) => call('runtime.capabilities.resolve', input),
+    inject: (input) => call('runtime.capabilities.inject', input),
+  },
+  secrets: {
+    listMetadata: (input) => call('secrets.metadata.list', input),
+    requestConfigure: (input) => call('secrets.configure.request', input),
+  },
   tools: { register: async (id, handler) => {
     handlers.set(id, handler)
     try { await ipcRenderer.invoke(PROFER_PLUGIN_HOST_CHANNELS.TOOL_REGISTER, id) } catch (error) { handlers.delete(id); throw error }
