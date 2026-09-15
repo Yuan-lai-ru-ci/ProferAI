@@ -55,6 +55,15 @@ const SAFE_RELATIVE_PATH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
 const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm'])
 const COMPARATOR_PATTERN = /^(>=|<=|>|<|=)?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/
 
+function canonicalizeScopePrefix(value: unknown): string {
+  if (typeof value !== 'string' || value.includes('\0') || value.includes('\\') || value.startsWith('/')) throw new Error('资源 scope 前缀非法')
+  const input = value.trim()
+  if (!input || input.split('/').some((part) => part === '..' || part === '.')) throw new Error('资源 scope 前缀必须是相对路径')
+  const normalized = input.replace(/^\.\//, '').replace(/\/+/g, '/').replace(/\/+$/, '')
+  if (!normalized || normalized.startsWith('../') || normalized.includes(':')) throw new Error('资源 scope 前缀非法')
+  return normalized
+}
+
 interface PluginIndexEntry {
   enabled: boolean
   installedAt: number
@@ -208,6 +217,38 @@ export function parsePluginManifest(raw: unknown): ProferPluginManifest {
   if (!name || name.length > 80) throw new Error('插件 name 不能为空且不能超过 80 个字符')
   if (!VERSION_PATTERN.test(version)) throw new Error('插件 version 必须是 semver，例如 1.0.0')
 
+  let workspaceScopes: ProferPluginManifest['workspaceScopes']
+  if (raw.workspaceScopes !== undefined) {
+    if (!Array.isArray(raw.workspaceScopes) || raw.workspaceScopes.length > 50) throw new Error('workspaceScopes 必须是有限数组')
+    workspaceScopes = raw.workspaceScopes.map((value, index) => {
+      if (!isRecord(value) || typeof value.workspaceId !== 'string' || !value.workspaceId.trim() || value.workspaceId.length > 200) {
+        throw new Error(`workspaceScopes[${index}] 的 workspaceId 非法`)
+      }
+      if (value.prefixes !== undefined && (!Array.isArray(value.prefixes) || value.prefixes.length > 100)) throw new Error(`workspaceScopes[${index}] 的 prefixes 非法`)
+      const prefixes = value.prefixes === undefined ? undefined : [...new Set(value.prefixes.map((prefix) => canonicalizeScopePrefix(prefix)))]
+      return { workspaceId: value.workspaceId.trim(), ...(prefixes && { prefixes }) }
+    })
+    if (new Set(workspaceScopes.map((scope) => `${scope.workspaceId}\\0${scope.prefixes?.join('\\0') ?? ''}`)).size !== workspaceScopes.length) {
+      throw new Error('workspaceScopes 不能重复')
+    }
+  }
+  let providerScopes: ProferPluginManifest['providerScopes']
+  if (raw.providerScopes !== undefined) {
+    if (!Array.isArray(raw.providerScopes) || raw.providerScopes.length > 50) throw new Error('providerScopes 必须是有限数组')
+    providerScopes = raw.providerScopes.map((value, index) => {
+      if (!isRecord(value) || typeof value.providerId !== 'string' || !value.providerId.trim() || value.providerId.length > 200) {
+        throw new Error(`providerScopes[${index}] 的 providerId 非法`)
+      }
+      if (value.fields !== undefined && (!Array.isArray(value.fields) || value.fields.length > 100 || value.fields.some((field) => typeof field !== 'string' || !field.trim() || field.length > 200))) {
+        throw new Error(`providerScopes[${index}] 的 fields 非法`)
+      }
+      const fields = value.fields === undefined ? undefined : [...new Set(value.fields.map((field) => field.trim()))]
+      return { providerId: value.providerId.trim(), ...(fields && { fields }) }
+    })
+    if (new Set(providerScopes.map((scope) => `${scope.providerId}\\0${scope.fields?.join('\\0') ?? ''}`)).size !== providerScopes.length) {
+      throw new Error('providerScopes 不能重复')
+    }
+  }
   let permissions: ProferPluginPermission[] | undefined
   if (raw.permissions !== undefined) {
     if (!Array.isArray(raw.permissions)) throw new Error('permissions 必须是数组')
@@ -272,6 +313,8 @@ export function parsePluginManifest(raw: unknown): ProferPluginManifest {
     ...(engines && { engines }),
     ...(capabilities.network && { network: capabilities.network }),
     ...(permissions && { permissions }),
+    ...(workspaceScopes && { workspaceScopes }),
+    ...(providerScopes && { providerScopes }),
     contributes: {
       ...capabilities.contributions,
       ...(pages && { pages }),

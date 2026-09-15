@@ -22,12 +22,28 @@ export type ProferPluginPermission =
   | 'attachments.read'
   | 'network.fetch'
   | 'agent.tools'
+  | 'workspace.read'
+  | 'workspace.files.read'
+  | 'workspace.files.write'
+  | 'presets.read'
+  | 'presets.switch'
+  | 'sessions.read'
+  | 'sessions.create'
+  | 'sessions.configure'
+  | 'sessions.control'
+  | 'runtime.capabilities.read'
+  | 'runtime.capabilities.inject'
+  | 'secrets.readMetadata'
+  | 'secrets.configure'
+  | 'mcp.secrets.readMetadata'
+  | 'mcp.secrets.write'
 
 export const PROFER_PLUGIN_PERMISSIONS: readonly ProferPluginPermission[] = [
-  'pluginStorage',
-  'models.read',
-  'modelRouting.rules.write',
-  'models.invoke', 'context.read', 'attachments.read', 'network.fetch', 'agent.tools',
+  'pluginStorage', 'models.read', 'modelRouting.rules.write', 'models.invoke', 'context.read',
+  'attachments.read', 'network.fetch', 'agent.tools', 'workspace.read', 'workspace.files.read',
+  'workspace.files.write', 'presets.read', 'presets.switch', 'sessions.read', 'sessions.create',
+  'sessions.configure', 'sessions.control', 'runtime.capabilities.read', 'runtime.capabilities.inject',
+  'secrets.readMetadata', 'secrets.configure', 'mcp.secrets.readMetadata', 'mcp.secrets.write',
 ]
 
 export interface ProferPluginPageContribution {
@@ -52,6 +68,16 @@ export interface ProferPluginContributions {
   messageActions?: Array<{ id: string; title: string; pageId: string }>
 }
 
+export interface ProferPluginWorkspaceScope {
+  workspaceId: string
+  prefixes?: string[]
+}
+
+export interface ProferPluginProviderScope {
+  providerId: string
+  fields?: string[]
+}
+
 export interface ProferPluginManifest {
   schemaVersion: 1
   id: string
@@ -63,6 +89,10 @@ export interface ProferPluginManifest {
   /** 支持空格连接的 AND comparator，例如 >=0.15.80 <0.17.0。 */
   engines?: { profer: string }
   permissions?: ProferPluginPermission[]
+  /** 工作区授权范围；缺省不代表所有工作区。 */
+  workspaceScopes?: ProferPluginWorkspaceScope[]
+  /** provider/resource scope；缺省不代表全部 provider 或字段。 */
+  providerScopes?: ProferPluginProviderScope[]
   /** 精确 HTTPS origin，例如 https://api.example.com；不支持通配符。 */
   network?: { origins: string[]; credentials?: Array<{ id: string; title: string; origin: string; header: 'Authorization' | 'X-API-Key'; scheme?: 'bearer' | 'raw' }> }
   contributes: ProferPluginContributions
@@ -123,6 +153,11 @@ export interface ProferPluginHostApi {
   network: { fetch(input: ProferPluginFetchInput): Promise<ProferPluginFetchResult> }
   requests: { cancel(requestId: string): Promise<void> }
   tools: { register(id: string, handler: (args: Record<string, unknown>, context: { callId: string; isCancelled(): boolean; onCancel(callback: () => void): () => void }) => Promise<unknown>): Promise<void> }
+  /** Provider 未注册时，宿主以 PLUGIN_OPERATION_NOT_SUPPORTED 稳定拒绝。 */
+  workspace: PluginWorkspaceApi
+  sessions: PluginSessionApi
+  runtime: PluginRuntimeApi
+  secrets: PluginSecretApi
 
   storage?: {
     get<T = unknown>(key: string): Promise<T | null>
@@ -236,9 +271,61 @@ export interface ProferPluginFetchResult {
   body: string
 }
 
+export interface PluginWorkspaceRef { workspaceId: string }
+export interface PluginResourceScope extends PluginWorkspaceRef {
+  resource: 'workspace' | 'file' | 'session' | 'preset'
+  prefixes?: string[]
+}
+export interface PluginWorkspaceSummary extends PluginWorkspaceRef { displayName: string; revision: number }
+export interface PluginFileEntry { path: string; kind: 'file' | 'directory'; size?: number; modifiedAt?: string }
+export interface PluginFileRead { workspaceId: string; path: string; content: string; encoding: 'utf8'; truncated: boolean; revision: number }
+export interface PluginFileWriteInput { workspaceId: string; path: string; content: string; mode: 'create' | 'replace'; expectedRevision: number; confirmationId?: string }
+export interface PluginFileWriteResult { workspaceId: string; path: string; bytesWritten: number; revision: number; committed: true }
+export type PluginSessionStatus = 'draft' | 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'unknown'
+export interface PluginPresetMetadata { presetId: string; displayName: string; description?: string; version: number; enabled: boolean }
+export interface PluginPresetCatalog { revision: number; items: PluginPresetMetadata[] }
+export interface PluginSessionMetadata { sessionId: string; workspaceId: string; title: string; status: PluginSessionStatus; runtime: 'claude' | 'pi'; presetId: string | null; presetVersion?: number; createdAt: number; updatedAt: number; revision: number }
+export type PluginCapabilityKind = 'preset' | 'skill' | 'tool' | 'service'
+export interface PluginCapabilityRef { kind: PluginCapabilityKind; id: string; version?: number }
+export interface PluginCapabilityDeclaration { references: PluginCapabilityRef[] }
+export interface PluginRuntimeCapabilityView { snapshotId: string; fingerprint: string; runtime: 'claude' | 'pi'; references: PluginCapabilityRef[]; revision: number; effectiveFrom: 'next_turn' | 'new_session'; outcome?: 'committed' | 'rolled_back' | 'unknown' }
+export interface PluginSecretRef { secretId: string; providerId: string; field: string }
+export interface PluginSecretMetadata extends PluginSecretRef { configured: boolean; updatedAt: string }
+export type ProferPluginErrorCode = 'PLUGIN_PERMISSION_DENIED' | 'PLUGIN_CONFIRMATION_REQUIRED' | 'PLUGIN_REVOKED' | 'PLUGIN_DISABLED' | 'PLUGIN_PAGE_CLOSED' | 'PLUGIN_REQUEST_CANCELLED' | 'PLUGIN_REQUEST_TIMEOUT' | 'PLUGIN_INVALID_ARGUMENT' | 'PLUGIN_WORKSPACE_NOT_FOUND' | 'PLUGIN_SESSION_NOT_FOUND' | 'PLUGIN_REFERENCE_NOT_FOUND' | 'PLUGIN_REVISION_CONFLICT' | 'PLUGIN_CAPABILITY_VERSION_CONFLICT' | 'PLUGIN_SECRET_STORAGE_UNAVAILABLE' | 'PLUGIN_SECRET_NOT_CONFIGURED' | 'PLUGIN_RUNTIME_UNAVAILABLE' | 'PLUGIN_RUNTIME_INJECTION_FAILED' | 'PLUGIN_OPERATION_NOT_SUPPORTED' | 'PLUGIN_HOST_NOT_READY' | 'PLUGIN_INTERNAL_ERROR'
+export interface ProferPluginRpcRequest<T> { protocol: 'plugin-host.rpc.v1'; requestId: string; operation: string; payload: T; timeoutMs?: number }
+export interface ProferPluginRpcSuccess<T> { protocol: 'plugin-host.rpc.v1'; ok: true; requestId: string; operation: string; value: T; revision?: number; auditEventId?: string }
+export interface ProferPluginRpcFailure { protocol: 'plugin-host.rpc.v1'; ok: false; requestId: string; operation: string; error: { code: ProferPluginErrorCode; message: string; retryable: boolean; details?: Record<string, string | number | boolean> } }
+export type ProferPluginRpcResponse<T> = ProferPluginRpcSuccess<T> | ProferPluginRpcFailure
+export interface PluginRequestContext { pluginId: string; pageId: string; ownerId: number; requestId: string; operation: string; signal: AbortSignal }
+export interface PluginWorkspaceApi { list(): Promise<{ items: PluginWorkspaceSummary[]; revision: number }>; files: { list(input: { workspaceId: string; path?: string; depth?: number }): Promise<{ entries: PluginFileEntry[]; revision: number }>; read(input: { workspaceId: string; path: string; maxBytes?: number }): Promise<PluginFileRead>; write(input: PluginFileWriteInput): Promise<PluginFileWriteResult> } }
+export interface PluginSessionApi {
+  listPresets(input: { workspaceId: string }): Promise<PluginPresetCatalog>
+  getPreset(input: { workspaceId: string; presetId: string }): Promise<PluginPresetMetadata>
+  list(input: { workspaceId: string }): Promise<{ items: PluginSessionMetadata[]; revision: number }>
+  get(input: { workspaceId: string; sessionId: string }): Promise<PluginSessionMetadata>
+  create(input: { workspaceId: string; presetId?: string; title?: string; runtime?: 'claude' | 'pi'; expectedRevision: number; confirmationId?: string }): Promise<PluginSessionMetadata>
+  configure(input: { workspaceId: string; sessionId: string; title?: string; modelId?: string; expectedRevision: number; confirmationId?: string }): Promise<PluginSessionMetadata>
+  requestPreset(input: { workspaceId: string; sessionId: string; presetId: string; expectedRevision: number; confirmationId?: string }): Promise<{ sessionId: string; presetId: string; effectiveFrom: 'next_turn'; revision: number; auditEventId: string }>
+  cancel(input: { workspaceId: string; sessionId: string; expectedRevision: number; confirmationId?: string }): Promise<PluginSessionMetadata>
+}
+export interface PluginRuntimeApi {
+  resolve(input: { workspaceId: string; sessionId?: string; declaration: PluginCapabilityDeclaration; runtime: 'claude' | 'pi' }): Promise<PluginRuntimeCapabilityView>
+  inject(input: { workspaceId: string; sessionId?: string; declaration: PluginCapabilityDeclaration; runtime: 'claude' | 'pi'; expectedRevision: number; confirmationId?: string }): Promise<PluginRuntimeCapabilityView>
+}
+export interface PluginSecretApi {
+  listMetadata(input?: { providerId?: string }): Promise<{ items: PluginSecretMetadata[]; revision: number }>
+  requestConfigure(input: { providerId: string; field: string; expectedRevision: number; confirmationId?: string }): Promise<PluginSecretRef>
+}
+
 export const PROFER_PLUGIN_PERMISSION_LABELS: Record<ProferPluginPermission, string> = {
   pluginStorage: '保存插件私有数据', 'models.read': '读取模型列表（不含密钥）',
   'modelRouting.rules.write': '配置自动模型路由规则', 'models.invoke': '调用模型（产生模型用量）',
   'context.read': '读取打开插件时交给它的会话或消息', 'attachments.read': '读取你在文件选择器中指定的附件',
   'network.fetch': '请求声明的网络服务', 'agent.tools': '向 Agent 提供工具',
+  'workspace.read': '读取工作区元数据', 'workspace.files.read': '读取工作区文件', 'workspace.files.write': '写入工作区文件',
+  'presets.read': '读取预设元数据', 'presets.switch': '切换预设', 'sessions.read': '读取会话元数据',
+  'sessions.create': '创建会话', 'sessions.configure': '配置会话', 'sessions.control': '控制会话',
+  'runtime.capabilities.read': '读取运行时能力引用', 'runtime.capabilities.inject': '请求运行时能力变更',
+  'secrets.readMetadata': '读取秘密元数据', 'secrets.configure': '配置秘密引用',
+  'mcp.secrets.readMetadata': '读取秘密元数据', 'mcp.secrets.write': '配置秘密引用',
 }

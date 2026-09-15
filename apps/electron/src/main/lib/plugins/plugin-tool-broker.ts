@@ -39,7 +39,7 @@ export class PluginToolBroker {
   }
   async run(pluginId: string, toolId: string, args: Record<string, unknown>, contents: WebContents, signal?: AbortSignal): Promise<unknown> {
     const callId = randomUUID()
-    const cancel = (): void => pluginRequests.cancel(pluginId, callId)
+    const cancel = (): void => { pluginRequests.cancel(pluginId, callId) }
     signal?.throwIfAborted()
     const operation = pluginRequests.run(pluginId, callId, async (localSignal) => {
       await new Promise<void>((resolve, reject) => {

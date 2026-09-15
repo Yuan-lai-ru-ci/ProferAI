@@ -1,5 +1,7 @@
 import type { ProferPluginTaskReference } from '@profer/plugin-api'
 import { callPluginHost } from './plugin-host'
+import { dispatchPluginRpc, validatePluginRpcRequest, PROTOCOL } from './plugin-host-rpc'
+import { PluginRpcError, toPluginRpcFailure } from './plugin-rpc-errors'
 import { pluginRequests } from './plugin-requests'
 import { pluginToolBroker } from './plugin-tool-broker'
 import { assertPluginPermission } from './plugin-permissions'
@@ -268,9 +270,34 @@ export class PluginViewManager {
     return pluginToolBroker.run(pluginId, toolId, args, record.pageView.webContents, signal)
   }
 
-  async call(sender: WebContents, frame: Electron.WebFrameMain | null, method: unknown, input: unknown): Promise<unknown> {
-    const owner = this.ownerFor(sender, frame)
-    return callPluginHost(owner.pluginId, method, input, this.views.get(owner.key)?.taskContext ?? null, sender.id)
+  async call(sender: WebContents, frame: Electron.WebFrameMain | null, rawRequest: unknown): Promise<unknown> {
+    const request = (() => {
+      try { return validatePluginRpcRequest(rawRequest) } catch { return null }
+    })()
+    const requestId = request?.requestId ?? 'invalid-request'
+    const operation = request?.operation ?? 'invalid.request'
+    let owner: { pluginId: string; pageId: string; key: string }
+    try {
+      owner = this.ownerFor(sender, frame, true)
+    } catch (error) {
+      const failure = error instanceof Error && error.message.includes('页面')
+        ? new PluginRpcError('PLUGIN_PAGE_CLOSED', '插件页面已关闭')
+        : new PluginRpcError('PLUGIN_INVALID_ARGUMENT', '插件页面上下文非法')
+      return { ...toPluginRpcFailure(failure), requestId, operation }
+    }
+    const context = {
+      pluginId: owner.pluginId,
+      pageId: owner.pageId,
+      ownerId: sender.id,
+      requestId,
+      operation,
+      signal: new AbortController().signal,
+    }
+    return dispatchPluginRpc(rawRequest, context, (payload, requestContext) => callPluginHost(
+      { protocol: PROTOCOL, requestId: requestContext.requestId, operation: requestContext.operation, payload },
+      requestContext,
+      this.views.get(owner.key)?.taskContext ?? null,
+    ))
   }
 
   registerTool(sender: WebContents, frame: Electron.WebFrameMain | null, toolId: unknown): void {
@@ -384,12 +411,13 @@ export class PluginViewManager {
     // 不可在 dispose 时清空注册标记，否则下次打开插件会重复 protocol.handle。
   }
 
-  private ownerFor(sender: WebContents, senderFrame: Electron.WebFrameMain | null): { pluginId: string; pageId: string; key: string } {
+  private ownerFor(sender: WebContents, senderFrame: Electron.WebFrameMain | null, allowDisabled = false): { pluginId: string; pageId: string; key: string } {
     if (!senderFrame || senderFrame !== sender.mainFrame) throw new Error('仅允许插件主页面访问 Plugin Host API')
     const owner = this.webContentsOwners.get(sender.id)
     if (!owner) throw new Error('拒绝非插件页面访问 Plugin Host API')
-    const plugin = resolvePluginPage(owner.pluginId, owner.pageId).plugin
-    if (!plugin.enabled) throw new Error('插件已停用')
+    const plugin = getInstalledPlugin(owner.pluginId)
+    if (!plugin || !plugin.manifest.contributes.pages?.some((page) => page.id === owner.pageId)) throw new Error('插件页面不存在')
+    if (!allowDisabled && !plugin.enabled) throw new Error('插件已停用')
     return owner
   }
 
@@ -464,7 +492,7 @@ export const pluginViewManager = new PluginViewManager()
 export function registerPluginHostIpc(): void {
   subscribeSettingsChanges(() => pluginViewManager.notifyContextChanged())
   nativeTheme.on('updated', () => pluginViewManager.notifyContextChanged())
-  ipcMain.handle(PROFER_PLUGIN_HOST_CHANNELS.CALL, (event, method: unknown, input: unknown) => pluginViewManager.call(event.sender, event.senderFrame, method, input))
+  ipcMain.handle(PROFER_PLUGIN_HOST_CHANNELS.CALL, (event, request: unknown) => pluginViewManager.call(event.sender, event.senderFrame, request))
   ipcMain.handle(PROFER_PLUGIN_HOST_CHANNELS.TOOL_REGISTER, (event, toolId: unknown) => pluginViewManager.registerTool(event.sender, event.senderFrame, toolId))
   ipcMain.handle(PROFER_PLUGIN_HOST_CHANNELS.TOOL_RESULT, (event, callId: unknown, value: unknown, error: unknown) => pluginViewManager.toolResult(event.sender, event.senderFrame, callId, value, error))
   ipcMain.handle(PROFER_PLUGIN_HOST_CHANNELS.GET_CONTEXT, (event) => pluginViewManager.getContext(event.sender, event.senderFrame))
