@@ -16,8 +16,11 @@ export const AUTO_RETRYABLE_ERROR_CODES: ReadonlySet<string> = new Set([
   'network_error',
 ])
 
-/** 最大自动重试次数 */
+/** 通用自动重试最大次数 */
 export const MAX_AUTO_RETRIES = 25
+
+/** OpenAI 官方上游繁忙错误在 UI 中统一展示为「重试 n/8」 */
+export const OPENAI_UPSTREAM_BUSY_MAX_RETRIES = 8
 
 /** 自动重试累计等待预算（毫秒） */
 export const MAX_AUTO_RETRY_WAIT_MS = 5 * 60_000
@@ -79,6 +82,26 @@ export function isAutoRetryableTypedError(error: TypedError): boolean {
   return AUTO_RETRYABLE_ERROR_CODES.has(error.code)
 }
 
+/**
+ * OpenAI 官方上游繁忙时统一使用面向用户的提示，避免把网关/SDK 原始文案
+ * 误解为账户或卡扣问题。只对明确的官方上游过载语义命中，不影响其他渠道。
+ */
+export const OPENAI_UPSTREAM_BUSY_MESSAGE = 'OpenAI 官方上游服务当前请求量较大，暂时无法及时响应，本次情况与您的账户及卡扣AI无关，请稍候片刻后再重试。'
+
+export function isOpenAIUpstreamBusyError(provider: string | undefined, ...messages: Array<string | undefined>): boolean {
+  const text = messages.filter(Boolean).join('\n')
+  const isOpenAIProvider = provider === 'openai' || provider === 'openai-responses' || provider === 'openai-codex'
+  return (isOpenAIProvider || /openai/i.test(text)) && /(overloaded|too many requests|rate.?limit|请求量较大|服务繁忙|temporarily unavailable)/i.test(text)
+}
+
+export function getMaxAutoRetries(provider: string | undefined, ...messages: Array<string | undefined>): number {
+  return isOpenAIUpstreamBusyError(provider, ...messages) ? OPENAI_UPSTREAM_BUSY_MAX_RETRIES : MAX_AUTO_RETRIES
+}
+
+export function getRetryDisplayReason(provider: string | undefined, ...messages: Array<string | undefined>): string {
+  return isOpenAIUpstreamBusyError(provider, ...messages) ? OPENAI_UPSTREAM_BUSY_MESSAGE : (messages.find(Boolean) ?? '未知错误')
+}
+
 export function isAutoRetryableCatchError(
   apiError: { statusCode: number; message: string } | null,
   rawErrorMessage?: string,
@@ -92,6 +115,7 @@ export function isAutoRetryableCatchError(
     if (rawErrorMessage.includes('context_management')) return true
   }
   const text = `${rawErrorMessage ?? ''}\n${stderr ?? ''}`
+  if (/OpenAI 官方上游服务当前请求量较大|OpenAI.*(?:overloaded|too many requests|rate.?limit|temporarily unavailable)/i.test(text)) return true
   if (/\b502\b|\b529\b|overloaded/i.test(text)) return true
   if (isTransientNetworkError(rawErrorMessage, stderr)) return true
   if (isMalformedResponseError(rawErrorMessage, stderr)) return true

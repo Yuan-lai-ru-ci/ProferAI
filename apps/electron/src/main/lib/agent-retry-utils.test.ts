@@ -15,6 +15,12 @@ import {
   sdkPermissionModeForProferMode,
   MAX_AUTO_RETRY_WAIT_MS,
   RETRY_MAX_DELAY_MS,
+  OPENAI_UPSTREAM_BUSY_MESSAGE,
+  OPENAI_UPSTREAM_BUSY_MAX_RETRIES,
+  MAX_AUTO_RETRIES,
+  isOpenAIUpstreamBusyError,
+  getRetryDisplayReason,
+  getMaxAutoRetries,
 } from './agent-retry-utils'
 import type { TypedError } from '@profer/shared'
 import { mapSDKErrorToTypedError } from './adapters/claude-agent-adapter'
@@ -56,6 +62,24 @@ describe('extractApiError', () => {
 
   test('HTTP 200 不被视为错误', () => {
     expect(extractApiError('200: OK')).toBeNull()
+  })
+})
+
+describe('OpenAI 官方上游繁忙提示', () => {
+  test('OpenAI 官方渠道的过载错误使用统一提示', () => {
+    expect(isOpenAIUpstreamBusyError('openai', 'API Error 529: overloaded')).toBe(true)
+    expect(getRetryDisplayReason('openai', 'API Error 529: overloaded')).toBe(OPENAI_UPSTREAM_BUSY_MESSAGE)
+  })
+
+  test('非 OpenAI 渠道不误用官方上游提示', () => {
+    expect(isOpenAIUpstreamBusyError('anthropic', '服务繁忙')).toBe(false)
+    expect(getRetryDisplayReason('anthropic', '服务繁忙')).toBe('服务繁忙')
+  })
+
+  test('官方上游繁忙限制为 8 次，通用重试保持原上限', () => {
+    expect(MAX_AUTO_RETRIES).toBe(25)
+    expect(OPENAI_UPSTREAM_BUSY_MAX_RETRIES).toBe(8)
+    expect(getMaxAutoRetries('openai', 'overloaded')).toBe(8)
   })
 })
 
