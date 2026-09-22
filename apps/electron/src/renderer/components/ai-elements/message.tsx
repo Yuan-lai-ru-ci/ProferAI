@@ -722,6 +722,9 @@ export function rowsToMarkdown(rows: string[][]): string {
   return lines.join('\n')
 }
 
+/** 多选块点击时不应把内容交互误判为块选择。 */
+const AGENT_BLOCK_INTERACTION_SELECTOR = 'a,button,input,textarea,select,img,[role="button"],[role="img"]'
+
 /** Markdown 图片渲染器。 */
 const MarkdownImage = React.memo(function MarkdownImage({ src, alt }: React.ImgHTMLAttributes<HTMLImageElement>): React.ReactElement {
   const sessionId = useFileAccessSessionId()
@@ -885,6 +888,7 @@ interface CopyableMarkdownBlockProps {
   onToolbarEnter: () => void
   onToolbarLeave: () => void
   toolbarExpanded: boolean
+  previewVisible: boolean
   onCopy: () => void
   onEnterSelection: (event: React.MouseEvent<HTMLButtonElement>) => void
   onExitSelection: (event: React.MouseEvent<HTMLButtonElement>) => void
@@ -895,7 +899,7 @@ interface CopyableMarkdownBlockProps {
   copied: boolean
 }
 
-function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, selectedBefore, selectedAfter, selecting, toolbarVisible, toolbarBlock, toolbarBlockSelected, marginClassName, selectionBridgeAfterClassName, markdownFormat, onSelect, onHover, onToolbarEnter, onToolbarLeave, toolbarExpanded, onCopy, onEnterSelection, onExitSelection, onMarkdownFormatChange, tableFormat, onTableFormatChange, selectionFormatMode, copied }: CopyableMarkdownBlockProps): React.ReactElement {
+function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, selectedBefore, selectedAfter, selecting, toolbarVisible, toolbarBlock, toolbarBlockSelected, marginClassName, selectionBridgeAfterClassName, markdownFormat, onSelect, onHover, onToolbarEnter, onToolbarLeave, toolbarExpanded, previewVisible, onCopy, onEnterSelection, onExitSelection, onMarkdownFormatChange, tableFormat, onTableFormatChange, selectionFormatMode, copied }: CopyableMarkdownBlockProps): React.ReactElement {
   const selectionGroupStart = selected && !selectedBefore
   const selectionGroupEnd = selected && !selectedAfter
   const selectionPaddingClassName = selected
@@ -907,7 +911,9 @@ function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, sel
         selectionGroupStart && 'rounded-t-md border-t-[3px]',
         selectionGroupEnd ? 'bottom-0 rounded-b-md border-b-[3px]' : selectionBridgeAfterClassName,
       )
-    : undefined
+    : previewVisible
+      ? 'pointer-events-none absolute -inset-x-1 inset-y-0 z-0 rounded-md border-2 border-dashed border-primary/40 bg-primary/[0.025]'
+      : undefined
   return (
     <div
       className={cn('group/agent-block relative transition-[padding,colors] duration-100', marginClassName, selectionPaddingClassName, selected && 'is-selected')}
@@ -919,6 +925,7 @@ function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, sel
       {toolbarVisible && toolbarBlock && (
         <div
           data-agent-toolbar-block-id={toolbarBlock.id}
+          data-agent-toolbar-corridor="true"
           className="pointer-events-auto absolute -right-1 -top-9 z-20 flex h-9 items-end pb-0.5"
           onMouseEnter={onToolbarEnter}
           onMouseLeave={onToolbarLeave}
@@ -961,6 +968,7 @@ export const MessageResponse = React.memo(
     const [hoveredBlockId, setHoveredBlockId] = React.useState<string | null>(null)
     const [toolbarExpanded, setToolbarExpanded] = React.useState(false)
     const hoverSwitchTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+    const toolbarLeaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
     const [markdownFormat, setMarkdownFormat] = React.useState<'markdown' | 'plainText'>('markdown')
     const [tableFormats, setTableFormats] = React.useState<Map<string, 'markdown' | 'tsv'>>(new Map())
 
@@ -976,14 +984,28 @@ export const MessageResponse = React.memo(
       hoverSwitchTimerRef.current = null
     }, [])
 
+    const clearToolbarLeaveTimer = React.useCallback(() => {
+      if (toolbarLeaveTimerRef.current === null) return
+      clearTimeout(toolbarLeaveTimerRef.current)
+      toolbarLeaveTimerRef.current = null
+    }, [])
+
     React.useEffect(() => {
       exitSelection()
       clearHoverSwitchTimer()
+      clearToolbarLeaveTimer()
       setHoveredBlockId(null)
       setToolbarExpanded(false)
-    }, [processed, enableBlockCopy, exitSelection, clearHoverSwitchTimer])
+    }, [processed, enableBlockCopy, exitSelection, clearHoverSwitchTimer, clearToolbarLeaveTimer])
 
-    React.useEffect(() => () => clearHoverSwitchTimer(), [clearHoverSwitchTimer])
+    React.useEffect(() => () => {
+      clearHoverSwitchTimer()
+      clearToolbarLeaveTimer()
+    }, [clearHoverSwitchTimer, clearToolbarLeaveTimer])
+
+    React.useEffect(() => {
+      clearToolbarLeaveTimer()
+    }, [clearToolbarLeaveTimer, selecting, selectedIds])
 
     React.useEffect(() => {
       if (!selecting) return
@@ -1048,7 +1070,7 @@ export const MessageResponse = React.memo(
       }
     }, [blocks, markdownFormat, markCopied, selectedIds, tableFormats])
     const toggleBlock = React.useCallback((block: AgentMarkdownBlock, event: React.MouseEvent<HTMLDivElement>) => {
-      if (!selecting || (event.target as HTMLElement).closest('a,button,input,textarea,select,[role="button"]')) return
+      if (!selecting || (event.target as HTMLElement).closest(AGENT_BLOCK_INTERACTION_SELECTOR)) return
       if (!rangeEstablished && selectionAnchorId && selectionAnchorId !== block.id) {
         setSelection({ selectedIds: selectAgentBlockRange(blocks, selectionAnchorId, block.id), selecting: true })
         setRangeEstablished(true)
@@ -1068,7 +1090,9 @@ export const MessageResponse = React.memo(
     }, [exitSelection])
     const hoverBlock = React.useCallback((block: AgentMarkdownBlock) => {
       clearHoverSwitchTimer()
+      clearToolbarLeaveTimer()
       const currentId = hoveredBlockId
+      if (!selecting && currentId !== null && currentId !== block.id) setToolbarExpanded(false)
       if (selecting && selectedIds.has(block.id) && currentId !== null) {
         const currentAnchor = findAgentSelectionToolbarAnchor(blocks, selectedIds, currentId, true)
         const nextAnchor = findAgentSelectionToolbarAnchor(blocks, selectedIds, block.id, true)
@@ -1081,14 +1105,23 @@ export const MessageResponse = React.memo(
         }
       }
       setHoveredBlockId(block.id)
-    }, [blocks, clearHoverSwitchTimer, hoveredBlockId, selectedIds, selecting])
+    }, [blocks, clearHoverSwitchTimer, clearToolbarLeaveTimer, hoveredBlockId, selectedIds, selecting])
     const enterToolbar = React.useCallback(() => {
       clearHoverSwitchTimer()
+      clearToolbarLeaveTimer()
       setToolbarExpanded(true)
-    }, [clearHoverSwitchTimer])
+    }, [clearHoverSwitchTimer, clearToolbarLeaveTimer])
+    const scheduleHoverLeave = React.useCallback(() => {
+      clearToolbarLeaveTimer()
+      toolbarLeaveTimerRef.current = setTimeout(() => {
+        toolbarLeaveTimerRef.current = null
+        setHoveredBlockId(null)
+        setToolbarExpanded(false)
+      }, 160)
+    }, [clearToolbarLeaveTimer])
     const leaveToolbar = React.useCallback(() => {
-      setToolbarExpanded(false)
-    }, [])
+      scheduleHoverLeave()
+    }, [scheduleHoverLeave])
 
     const hoveredIndex = blocks.findIndex((block) => block.id === hoveredBlockId)
     const hoveredBlock = hoveredIndex >= 0 ? blocks[hoveredIndex]! : null
@@ -1104,7 +1137,6 @@ export const MessageResponse = React.memo(
           : 'markdown'
     const toolbarAnchorIndex = findAgentSelectionToolbarAnchor(blocks, selectedIds, hoveredBlockId, selecting)
 
-    if (streaming) return <div className={cn(containerClassName, 'whitespace-pre-wrap break-words')}>{processed}</div>
     if (!enableBlockCopy) {
       const plugins = [...(remarkPlugins ? [...REMARK_PLUGINS, ...remarkPlugins] : [...REMARK_PLUGINS]), remarkTableSource(processed)]
       return <div className={containerClassName}><Markdown remarkPlugins={plugins} rehypePlugins={REHYPE_PLUGINS} urlTransform={mentionUrlTransform} components={components}>{processed}</Markdown></div>
@@ -1112,7 +1144,7 @@ export const MessageResponse = React.memo(
 
     return (
       <>
-        <div className={cn(containerClassName, selecting && 'select-none')} onPointerLeave={() => { clearHoverSwitchTimer(); setHoveredBlockId(null) }}>
+        <div className={cn(containerClassName, selecting && 'select-none')} onPointerLeave={() => { clearHoverSwitchTimer(); scheduleHoverLeave() }}>
           {blocks.map((block, index) => {
             const plugins = [...(remarkPlugins ? [...REMARK_PLUGINS, ...remarkPlugins] : [...REMARK_PLUGINS]), remarkTableSource(block.source)]
             const toolbarBlock = selecting && !selectedIds.has(block.id)
@@ -1124,7 +1156,7 @@ export const MessageResponse = React.memo(
             const margin = agentBlockMargin(block, previousBlock, nextBlock)
             const nextMargin = nextBlock ? agentBlockMargin(nextBlock, block, blocks[index + 2]) : margin
             const bridgeClassName = margin.bottomRank >= nextMargin.topRank ? margin.bottomBridgeClassName : nextMargin.topBridgeClassName
-            return <CopyableMarkdownBlock key={block.id} block={block} components={components} remarkPlugins={plugins} selected={selectedIds.has(block.id)} selectedBefore={selectedIds.has(previousBlock?.id ?? '')} selectedAfter={selectedIds.has(nextBlock?.id ?? '')} selecting={selecting} toolbarVisible={toolbarBlock !== null} toolbarBlock={toolbarBlock} toolbarBlockSelected={selectedIds.has(toolbarTarget.id)} copied={copied} toolbarExpanded={toolbarExpanded} marginClassName={margin.className} selectionBridgeAfterClassName={bridgeClassName} markdownFormat={markdownFormat} selectionFormatMode={selectionFormatMode} onSelect={(event) => toggleBlock(block, event)} onHover={() => hoverBlock(block)} onToolbarEnter={enterToolbar} onToolbarLeave={leaveToolbar} onCopy={() => void (selecting ? copySelected() : copyBlock(toolbarTarget))} onEnterSelection={(event) => enterSelection(toolbarTarget, event)} onExitSelection={exitSelectionFromButton} onMarkdownFormatChange={setMarkdownFormat} tableFormat={tableFormatFor(toolbarTarget)} onTableFormatChange={(format) => updateTableFormat(toolbarTarget.id, format)} />
+            return <CopyableMarkdownBlock key={block.id} block={block} components={components} remarkPlugins={plugins} selected={selectedIds.has(block.id)} selectedBefore={selectedIds.has(previousBlock?.id ?? '')} selectedAfter={selectedIds.has(nextBlock?.id ?? '')} selecting={selecting} toolbarVisible={toolbarBlock !== null} toolbarBlock={toolbarBlock} toolbarBlockSelected={selectedIds.has(toolbarTarget.id)} copied={copied} toolbarExpanded={toolbarExpanded} previewVisible={!selecting && toolbarExpanded && toolbarBlock?.id === block.id} marginClassName={margin.className} selectionBridgeAfterClassName={bridgeClassName} markdownFormat={markdownFormat} selectionFormatMode={selectionFormatMode} onSelect={(event) => toggleBlock(block, event)} onHover={() => hoverBlock(block)} onToolbarEnter={enterToolbar} onToolbarLeave={leaveToolbar} onCopy={() => void (selecting ? copySelected() : copyBlock(toolbarTarget))} onEnterSelection={(event) => enterSelection(toolbarTarget, event)} onExitSelection={exitSelectionFromButton} onMarkdownFormatChange={setMarkdownFormat} tableFormat={tableFormatFor(toolbarTarget)} onTableFormatChange={(format) => updateTableFormat(toolbarTarget.id, format)} />
           })}
         </div>
       </>
