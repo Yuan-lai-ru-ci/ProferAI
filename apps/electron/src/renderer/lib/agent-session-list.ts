@@ -1,4 +1,4 @@
-import type { AgentSessionMeta } from '@profer/shared'
+import type { AgentSessionMeta, AgentSessionUiProjection } from '@profer/shared'
 
 /** 按最近更新时间排序 Agent 会话，保持与主进程 listAgentSessions 一致。 */
 export function sortAgentSessionsByUpdatedAtDesc(
@@ -23,6 +23,53 @@ export function replaceAgentSessionInFreshnessOrder(
  * 绝不删除其它会话。这避免了用一份可能陈旧的全量快照整体覆盖
  * agentSessionsAtom 时，把刚结束 turn 的父会话等条目意外冲掉的竞态。
  */
+export function upsertAgentSessionProjection(
+  sessions: readonly AgentSessionMeta[],
+  projection: AgentSessionUiProjection,
+): AgentSessionMeta[] {
+  const existing = sessions.find((session) => session.id === projection.id)
+  if (existing && projection.revision < (existing.revision ?? 0)) return [...sessions]
+  const next: AgentSessionMeta = {
+    ...(existing ?? {}),
+    id: projection.id,
+    revision: projection.revision,
+    title: projection.title,
+    createdAt: projection.createdAt,
+    updatedAt: projection.updatedAt,
+    channelId: projection.channelId ?? undefined,
+    modelId: projection.modelId ?? undefined,
+    agentRuntime: projection.agentRuntime,
+    permissionMode: projection.permissionMode,
+    presetId: projection.presetId ?? undefined,
+    presetReference: projection.presetReference ?? undefined,
+    openAIThinkingLevel: projection.openAIThinkingLevel ?? undefined,
+    codexFastMode: projection.codexFastMode,
+    autoQueueSendEnabled: projection.autoQueueSendEnabled,
+    workspaceId: projection.workspaceId ?? undefined,
+    pinned: projection.pinned,
+    archived: projection.archived,
+    draft: projection.draft,
+    parentSessionId: projection.parentSessionId ?? undefined,
+    rootSessionId: projection.rootSessionId ?? undefined,
+    sourceDelegationId: projection.sourceDelegationId ?? undefined,
+    explorationParentSessionId: projection.explorationParentSessionId ?? undefined,
+    explorationSourceMessageId: projection.explorationSourceMessageId ?? undefined,
+    explorationSourceLabel: projection.explorationSourceLabel ?? undefined,
+    delegationRole: projection.delegationRole ?? undefined,
+    delegationStatus: projection.delegationStatus ?? undefined,
+    delegationDepth: projection.delegationDepth ?? undefined,
+    sourceAutomationId: projection.sourceAutomationId ?? undefined,
+    automationGraduated: projection.automationGraduated,
+    completedButUnconfirmed: projection.completedButUnconfirmed,
+    stoppedByUser: projection.stoppedByUser,
+    lastInterruptReason: projection.lastInterruptReason ?? undefined,
+    lastInterruptLabel: projection.lastInterruptLabel ?? undefined,
+    lastInterruptAt: projection.lastInterruptAt ?? undefined,
+  }
+  const others = sessions.filter((session) => session.id !== projection.id)
+  return sortAgentSessionsByUpdatedAtDesc([next, ...others])
+}
+
 export function upsertAgentSession(
   sessions: readonly AgentSessionMeta[],
   incoming: AgentSessionMeta,

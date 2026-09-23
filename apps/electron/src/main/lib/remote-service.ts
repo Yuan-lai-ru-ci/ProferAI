@@ -33,6 +33,7 @@ import { app, BrowserWindow } from 'electron'
 
 import { AGENT_IPC_CHANNELS, type AgentSessionMeta } from '@profer/shared'
 import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession } from './agent-service'
+import { publishAgentSessionProjection, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
 import { getUserProfile } from './user-profile-service'
 import {
   listAgentSessions,
@@ -553,9 +554,27 @@ function sdkMessagesToViewMessages(rawMessages: Array<Record<string, unknown>>):
 /** 轻量封装的 JSON 响应交互类型 */
 type CommandResult =
   | { ok: true; data: unknown }
-  | { ok: false; error: string }
+  | { ok: false; error: string; conflict?: { code: 'REVISION_CONFLICT'; expectedRevision: number; actualRevision: number; sessionId: string } }
 
-export function validateWorkspaceHeatmapRequest(workspaceId: unknown): string | null {
+export function validateExpectedRevision(parsed: Record<string, unknown>, sessionId: string): CommandResult | null {
+  if (parsed.expectedRevision === undefined) return null
+  if (typeof parsed.expectedRevision !== 'number' || !Number.isSafeInteger(parsed.expectedRevision)) {
+    return { ok: false, error: 'expectedRevision 必须是整数' }
+  }
+  const current = getAgentSessionMeta(sessionId)
+  if (!current) return { ok: false, error: '会话不存在' }
+  const actualRevision = current.revision ?? 0
+  if (actualRevision !== parsed.expectedRevision) {
+    return {
+      ok: false,
+      error: '会话状态已更新，请刷新后重试',
+      conflict: { code: 'REVISION_CONFLICT', expectedRevision: parsed.expectedRevision, actualRevision, sessionId },
+    }
+  }
+  return null
+}
+
+function validateWorkspaceHeatmapRequest(workspaceId: unknown): string | null {
   if (typeof workspaceId !== 'string' || !workspaceId.trim()) return '缺少 workspaceId'
   return null
 }
@@ -589,6 +608,7 @@ export function normalizeExplorationSourceLabel(raw: unknown): string {
 export function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]) {
   return {
     id: s.id,
+    revision: s.revision ?? 0,
     title: s.title,
     channelId: s.channelId,
     modelId: s.modelId,
@@ -624,15 +644,9 @@ function buildSessionList() {
  * 与其它 Pocket 连接的实时通知，避免置顶、归档等操作必须等待下一条 Agent 事件才显示。
  */
 function publishSessionUpdated(session: AgentSessionMeta): void {
-  agentEventBus.emit(session.id, {
-    kind: 'profer_event',
-    event: { type: 'session_updated', session },
-  })
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) {
-      window.webContents.send(AGENT_IPC_CHANNELS.SESSION_UPDATED, { session })
-    }
-  }
+  // Compatibility name retained for older command paths; the projection publisher is
+  // the only metadata event出口 so desktop and Pocket consume one canonical payload.
+  publishAgentSessionProjection(session)
 }
 
 function publishSessionDeleted(sessionId: string): void {
@@ -843,9 +857,8 @@ export async function handleRemoteCommand(
       if (!result) return { ok: false, error: '计划审批不存在或已处理' }
       agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'exit_plan_mode_resolved', requestId } })
       if (result.targetMode) {
-        const updated = updateAgentSessionMeta(result.sessionId, { permissionMode: result.targetMode })
+        updateAgentSessionUiMeta(result.sessionId, { permissionMode: result.targetMode })
         agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode: result.targetMode } })
-        publishSessionUpdated(updated)
       }
       return { ok: true, data: { sessionId: result.sessionId } }
     }
@@ -941,13 +954,14 @@ export async function handleRemoteCommand(
       const channelId = parsed.channelId as string
       const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : undefined
       if (!sessionId || !channelId) return { ok: false, error: '缺少有效 sessionId 或 channelId' }
+      const modelRevisionError = validateExpectedRevision(parsed, sessionId)
+      if (modelRevisionError) return modelRevisionError
       if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换模型' }
       if (!getAgentSessionMeta(sessionId)) return { ok: false, error: '会话不存在' }
       const channel = listSwitchableChannels().find((item) => item.id === channelId)
       if (!channel) return { ok: false, error: '渠道不可用或不存在' }
       if (modelId && !getEnabledModels(channel).some((model) => model.id === modelId)) return { ok: false, error: '模型不属于当前渠道或未启用' }
-      const updated = updateAgentSessionMeta(sessionId, { channelId, modelId })
-      publishSessionUpdated(updated)
+      const updated = updateAgentSessionUiMeta(sessionId, { channelId, modelId })
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -955,11 +969,12 @@ export async function handleRemoteCommand(
       const sessionId = parsed.sessionId as string
       const runtime = parsed.runtime === 'pi' ? 'pi' : parsed.runtime === 'claude' ? 'claude' : null
       if (!sessionId || !runtime) return { ok: false, error: '缺少有效 sessionId 或 runtime' }
+      const runtimeRevisionError = validateExpectedRevision(parsed, sessionId)
+      if (runtimeRevisionError) return runtimeRevisionError
       if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换内核' }
       const meta = getAgentSessionMeta(sessionId)
       if (!meta) return { ok: false, error: '会话不存在' }
-      const updated = updateAgentSessionMeta(sessionId, { agentRuntime: runtime })
-      publishSessionUpdated(updated)
+      const updated = updateAgentSessionUiMeta(sessionId, { agentRuntime: runtime })
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -967,11 +982,21 @@ export async function handleRemoteCommand(
       const sessionId = parsed.sessionId as string
       const mode = parsed.mode as import('@profer/shared').ProferPermissionMode
       if (!sessionId || !['auto', 'plan', 'bypassPermissions'].includes(mode)) return { ok: false, error: '缺少有效 sessionId 或权限模式' }
+      const permissionRevisionError = validateExpectedRevision(parsed, sessionId)
+      if (permissionRevisionError) return permissionRevisionError
       if (!getAgentSessionMeta(sessionId)) return { ok: false, error: '会话不存在' }
+      const current = getAgentSessionMeta(sessionId)
+      if (!current) return { ok: false, error: '会话不存在' }
       const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
-      if (isAgentSessionActive(sessionId)) await updateAgentPermissionMode(sessionId, mode)
+      try {
+        if (isAgentSessionActive(sessionId)) await updateAgentPermissionMode(sessionId, mode)
+      } catch (error) {
+        const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode })
+        publishAgentSessionProjection(restored)
+        return { ok: false, error: error instanceof Error ? error.message : '切换权限模式失败' }
+      }
+      publishAgentSessionProjection(updated)
       agentEventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode } })
-      publishSessionUpdated(updated)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1015,7 +1040,7 @@ export async function handleRemoteCommand(
       const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
       const resolved = getAgentPreset(workspaceSlug, presetId)
       if (resolved.id !== presetId) return { ok: false, error: `预设不存在: ${presetId}` }
-      const updated = updateAgentSessionMeta(sessionId, { presetId })
+      const updated = updateAgentSessionUiMeta(sessionId, { presetId })
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1085,9 +1110,7 @@ export async function handleRemoteCommand(
       const sessionId = parsed.sessionId as string
       const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
       if (!sessionId || !title) return { ok: false, error: '缺少 sessionId 或 title' }
-      const meta = updateAgentSessionMeta(sessionId, { title })
-      if (!meta) return { ok: false, error: '会话不存在' }
-      publishSessionUpdated(meta)
+      const meta = updateAgentSessionUiMeta(sessionId, { title })
       return { ok: true, data: buildSessionItem(meta) }
     }
 
@@ -1258,8 +1281,7 @@ export async function handleRemoteCommand(
       const newPinned = !current.pinned
       const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
       if (newPinned && current.archived) updates.archived = false
-      const updated = updateAgentSessionMeta(sessionId, updates)
-      publishSessionUpdated(updated)
+      const updated = updateAgentSessionUiMeta(sessionId, updates)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1272,8 +1294,7 @@ export async function handleRemoteCommand(
       const newArchived = !current.archived
       const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
       if (newArchived && current.pinned) updates.pinned = false
-      const updated = updateAgentSessionMeta(sessionId, updates)
-      publishSessionUpdated(updated)
+      const updated = updateAgentSessionUiMeta(sessionId, updates)
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1288,7 +1309,7 @@ export async function handleRemoteCommand(
       }
       try {
         const updated = moveSessionToWorkspace(sessionId, targetWorkspaceId)
-        publishSessionUpdated(updated)
+        publishAgentSessionProjection(updated)
         return { ok: true, data: buildSessionItem(updated) }
       } catch (error) {
         console.error('[Remote] move_session_to_workspace 失败:', error)
@@ -1307,8 +1328,7 @@ export async function handleRemoteCommand(
       }
       if (!getAgentSessionMeta(sessionId)) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
       if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换推理档位' }
-      const updated = updateAgentSessionMeta(sessionId, { openAIThinkingLevel: level as import('@profer/shared').AgentThinkingLevel | null })
-      publishSessionUpdated(updated)
+      const updated = updateAgentSessionUiMeta(sessionId, { openAIThinkingLevel: level as import('@profer/shared').AgentThinkingLevel | null })
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1323,8 +1343,7 @@ export async function handleRemoteCommand(
       }
       if (!getAgentSessionMeta(sessionId)) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
       if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换思考强度' }
-      const updated = updateAgentSessionMeta(sessionId, { agentEffort: effort as import('@profer/shared').AgentEffort | null })
-      publishSessionUpdated(updated)
+      const updated = updateAgentSessionUiMeta(sessionId, { agentEffort: effort as import('@profer/shared').AgentEffort | null })
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1763,11 +1782,10 @@ export function startRemoteService(): string | null {
       }
 
       void handleRemoteCommand(body, reqId, commandContext).then((result) => {
-        // 将指令响应作为 "command_result" 事件回给客户端
+        // commandId 与 requestId 同源：新客户端按 commandId 幂等，旧客户端继续读取 requestId。
+        const commandId = typeof reqId === 'string' && reqId.length > 0 ? reqId : randomUUID()
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({ kind: 'command_result', requestId: reqId, ...result }),
-          )
+          ws.send(JSON.stringify({ kind: 'command_result', requestId: reqId, commandId, ...result }))
         }
       })
     })
@@ -1853,7 +1871,8 @@ export function startRemoteService(): string | null {
         if (typeof parsed.type !== 'string') return
         const requestId = parsed._cmdId ?? parsed.requestId ?? null
         void handleRemoteCommand(raw, requestId, remoteRelayCommandContext).then((result) => {
-          if (sink.isOpen()) sink.send(JSON.stringify({ kind: 'command_result', requestId, ...result }))
+          const commandId = typeof requestId === 'string' && requestId.length > 0 ? requestId : randomUUID()
+          if (sink.isOpen()) sink.send(JSON.stringify({ kind: 'command_result', requestId, commandId, ...result }))
         })
       },
     })

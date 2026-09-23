@@ -69,7 +69,7 @@ import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStr
 import { inferContextWindow, resolveContextWindowFromModelUsage } from '@profer/shared'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
 import { buildTodoAgentPrompt } from '@/lib/todo-agent-prompt'
-import { upsertAgentSession, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
+import { upsertAgentSession, upsertAgentSessionProjection, mergeFetchedAgentSessions } from '@/lib/agent-session-list'
 import { upsertLiveMessageByUuid } from '@/lib/agent-live-message-upsert'
 import { createSessionUpdateBatcher } from '@/lib/session-update-batcher'
 
@@ -661,6 +661,16 @@ export function useGlobalAgentListeners(): void {
         // running/backgroundWaiting）会判定「已结束」并跳过收尾，导致桌面通知、未查看标记、
         // 中断 chip、后台任务清理、finalize 等副作用全部丢失。
         if (payload.kind === 'run_complete' || payload.kind === 'run_error') return
+
+        if (payload.kind === 'session_projection') {
+          if (payload.operation === 'upsert') {
+            store.set(agentSessionsAtom, (previous) => upsertAgentSessionProjection(previous, payload.session))
+            store.set(tabsAtom, (tabs) => updateTabTitle(tabs, payload.session.id, payload.session.title))
+          } else {
+            store.set(agentSessionsAtom, (previous) => previous.filter((session) => session.id !== payload.sessionId))
+          }
+          return
+        }
 
         if (payload.kind === 'profer_event') {
           const proferEvent = payload.event

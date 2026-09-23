@@ -4,6 +4,7 @@ import {
   sortAgentSessionsByUpdatedAtDesc,
   replaceAgentSessionInFreshnessOrder,
   upsertAgentSession,
+  upsertAgentSessionProjection,
   mergeFetchedAgentSessions,
 } from './agent-session-list'
 
@@ -97,6 +98,74 @@ describe('upsertAgentSession', () => {
       sourceDelegationId: 'delegation-a',
       delegationStatus: 'completed',
     })
+  })
+})
+
+describe('upsertAgentSessionProjection', () => {
+  const projection = (revision: number, extra: Partial<import('@profer/shared').AgentSessionUiProjection> = {}): import('@profer/shared').AgentSessionUiProjection => ({
+    schemaVersion: 1,
+    id: 'a',
+    revision,
+    title: `标题-${revision}`,
+    createdAt: 1,
+    updatedAt: revision,
+    channelId: 'channel',
+    modelId: 'model',
+    agentRuntime: 'claude',
+    permissionMode: 'auto',
+    presetId: null,
+    presetReference: null,
+    openAIThinkingLevel: null,
+    codexFastMode: false,
+    autoQueueSendEnabled: true,
+    workspaceId: null,
+    pinned: false,
+    archived: false,
+    draft: false,
+    parentSessionId: null,
+    rootSessionId: null,
+    sourceDelegationId: null,
+    explorationParentSessionId: null,
+    explorationSourceMessageId: null,
+    explorationSourceLabel: null,
+    delegationRole: null,
+    delegationStatus: null,
+    delegationDepth: null,
+    sourceAutomationId: null,
+    automationGraduated: false,
+    completedButUnconfirmed: false,
+    stoppedByUser: false,
+    lastInterruptReason: null,
+    lastInterruptLabel: null,
+    lastInterruptAt: null,
+    ...extra,
+  })
+
+  test('实时投影保留未知探索分支的三字段', () => {
+    const result = upsertAgentSessionProjection([], projection(2, {
+      id: 'exploration-branch',
+      explorationParentSessionId: 'mainline',
+      explorationSourceMessageId: 'assistant-1',
+      explorationSourceLabel: '这条 Agent 回复',
+    }))
+    expect(result[0]).toMatchObject({
+      id: 'exploration-branch',
+      explorationParentSessionId: 'mainline',
+      explorationSourceMessageId: 'assistant-1',
+      explorationSourceLabel: '这条 Agent 回复',
+    })
+  })
+
+  test('低 revision 不覆盖较新的权限模式', () => {
+    const current = makeSession('a', 10, { revision: 3, permissionMode: 'plan' })
+    const result = upsertAgentSessionProjection([current], projection(2, { permissionMode: 'auto' }))
+    expect(result[0]).toMatchObject({ revision: 3, permissionMode: 'plan' })
+  })
+
+  test('普通会话投影不伪造探索血缘', () => {
+    const result = upsertAgentSessionProjection([], projection(1))
+    expect(result[0]?.explorationParentSessionId).toBeUndefined()
+    expect(result[0]?.explorationSourceMessageId).toBeUndefined()
   })
 })
 

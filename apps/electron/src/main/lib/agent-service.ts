@@ -38,11 +38,16 @@ import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
 import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, type HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getAgentSessionMeta, setAgentSessionActiveChecker, updateAgentSessionMeta } from './agent-session-manager'
+import {
+  configureAgentSessionProjectionPublisher,
+  publishAgentSessionProjection,
+} from './agent-session-ui-projection-publisher'
 import { AgentRuntimeContextStore } from './agent-runtime-context'
 
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
+configureAgentSessionProjectionPublisher(eventBus)
 // 目录失效发布器单例：ipc.ts / remote-service.ts / workspace-watcher.ts 共享同一 revision 序列，
 // 保证 Pocket 按 (catalog, workspaceSlug) 去重时看到的 revision 单调可信。
 export const agentCatalogInvalidationPublisher = new AgentCatalogInvalidationPublisher(eventBus)
@@ -187,14 +192,19 @@ eventBus.use((sessionId, payload, next) => {
 
 // 必须先于 IPC 转发记录，确保刷新重连时能按原顺序回放所有已发生的实时事件。
 eventBus.use((sessionId, payload, next) => {
-  const backlog = activeStreamEventBacklogs.get(sessionId)
-  if (backlog) backlog.push(payload)
+  if (payload.kind !== 'session_projection' && payload.kind !== 'catalog_invalidation') {
+    const backlog = activeStreamEventBacklogs.get(sessionId)
+    if (backlog) backlog.push(payload)
+  }
   next()
 })
 
 eventBus.use((sessionId, payload, next) => {
-  const wc = sessionWebContents.get(sessionId)
-  if (wc && !wc.isDestroyed()) {
+  const targets = payload.kind === 'session_projection' || payload.kind === 'catalog_invalidation'
+    ? BrowserWindow.getAllWindows().map((window) => window.webContents)
+    : [sessionWebContents.get(sessionId)]
+  for (const wc of targets) {
+    if (!wc || wc.isDestroyed()) continue
     try {
       wc.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload } as AgentStreamEvent)
     } catch (err) {
@@ -315,10 +325,7 @@ export async function runAgent(
           : beforePromotion
         if (beforePromotion?.draft && session) {
           await onDraftPromoted?.(session)
-          const currentWc = sessionWebContents.get(input.sessionId)
-          if (currentWc && !currentWc.isDestroyed()) {
-            currentWc.send(AGENT_IPC_CHANNELS.SESSION_UPDATED, { session })
-          }
+          publishAgentSessionProjection(session)
         }
       },
     })
@@ -433,10 +440,7 @@ export async function runAgentHeadless(
           ? updateAgentSessionMeta(runInput.sessionId, { draft: false })
           : beforePromotion
         // 用当前登记的窗口发送，而不是 run 启动时捕获的 wc（刷新后旧窗口已销毁，事件会丢）。
-        const sessionWc = sessionWebContents.get(runInput.sessionId)
-        if (beforePromotion?.draft && session && sessionWc && !sessionWc.isDestroyed()) {
-          sessionWc.send(AGENT_IPC_CHANNELS.SESSION_UPDATED, { session })
-        }
+        if (beforePromotion?.draft && session) publishAgentSessionProjection(session)
         eventBus.emit(runInput.sessionId, {
           kind: 'profer_event',
           event: {

@@ -666,7 +666,7 @@ export type ProferEvent =
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }
   // 跨端会话元数据同步：Pocket 远程命令修改会话后立即通知桌面与其他 Pocket 客户端。
   | { type: 'session_updated'; session: AgentSessionMeta }
-  | { type: 'session_deleted'; sessionId: string }
+  | { type: 'session_deleted'; sessionId: string; revision?: number }
   | { type: 'run_resumed'; sessionId: string }
   // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
   // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
@@ -696,12 +696,18 @@ export interface AgentCatalogInvalidation {
   changedAt: number
 }
 
+/** UI Projection Plane：会话安全完整快照或删除墓碑。 */
+export type AgentSessionProjectionPayload =
+  | { kind: 'session_projection'; operation: 'upsert'; session: AgentSessionUiProjection }
+  | { kind: 'session_projection'; operation: 'delete'; sessionId: string; revision: number }
+
 /** IPC 传输的统一 payload（替代 AgentEvent）；kind 是唯一分流依据 */
 export type AgentStreamPayload =
   | { kind: 'sdk_message'; message: SDKMessage }
   | { kind: 'profer_event'; event: ProferEvent }
   | { kind: 'run_error'; error: string }
   | { kind: 'run_complete'; completion: AgentStreamCompletePayload }
+  | AgentSessionProjectionPayload
   | AgentCatalogInvalidation
 
 // ===== Agent 会话管理 =====
@@ -737,6 +743,49 @@ export type AgentCwdMode = 'session' | 'project'
 export type SessionWorkbenchLayout = 'legacy-context' | 'root'
 
 /**
+ * UI Projection Plane：会话安全完整快照。
+ *
+ * 只包含可跨设备广播的安全 UI 字段；设备私有字段由本地 meta 保留。
+ */
+export interface AgentSessionUiProjection {
+  schemaVersion: 1
+  id: string
+  revision: number
+  title: string
+  createdAt: number
+  updatedAt: number
+  channelId: string | null
+  modelId: string | null
+  agentRuntime: AgentRuntime
+  permissionMode: ProferPermissionMode
+  presetId: string | null
+  presetReference: import('./agent-preset').PresetReference | null
+  openAIThinkingLevel: AgentThinkingLevel | null
+  codexFastMode: boolean
+  autoQueueSendEnabled: boolean
+  workspaceId: string | null
+  pinned: boolean
+  archived: boolean
+  draft: boolean
+  parentSessionId: string | null
+  rootSessionId: string | null
+  sourceDelegationId: string | null
+  explorationParentSessionId: string | null
+  explorationSourceMessageId: string | null
+  explorationSourceLabel: string | null
+  delegationRole: string | null
+  delegationStatus: string | null
+  delegationDepth: number | null
+  sourceAutomationId: string | null
+  automationGraduated: boolean
+  completedButUnconfirmed: boolean
+  stoppedByUser: boolean
+  lastInterruptReason: AgentEndReason | null
+  lastInterruptLabel: string | null
+  lastInterruptAt: number | null
+}
+
+/**
  * Agent 会话轻量索引项
  *
  * 存储在 ~/.proma/agent-sessions.json 中，
@@ -745,6 +794,8 @@ export type SessionWorkbenchLayout = 'legacy-context' | 'root'
 export interface AgentSessionMeta {
   /** 会话唯一标识 */
   id: string
+  /** UI 投影版本；旧会话缺省为 0，写入时单调递增。 */
+  revision?: number
   /** 会话标题 */
   title: string
   /** 使用的渠道 ID */

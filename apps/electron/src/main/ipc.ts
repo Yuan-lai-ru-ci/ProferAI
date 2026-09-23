@@ -271,6 +271,7 @@ import {
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { runAgent, stopAgent, stopAgentAndWait, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
+import { publishAgentSessionProjection, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
@@ -2729,7 +2730,7 @@ export function registerIpcHandlers(): void {
       const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
       const resolved = getAgentPreset(workspaceSlug, presetId)
       if (resolved.id !== presetId) throw new Error(`预设不存在: ${presetId}`)
-      return updateAgentSessionMeta(sessionId, { presetId })
+      return updateAgentSessionUiMeta(sessionId, { presetId })
     },
   )
 
@@ -3081,7 +3082,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_TITLE,
     async (_, id: string, title: string): Promise<AgentSessionMeta> => {
-      return updateAgentSessionMeta(id, { title, titleLockedAt: Date.now() })
+      return updateAgentSessionUiMeta(id, { title, titleLockedAt: Date.now() })
     }
   )
 
@@ -3099,7 +3100,7 @@ export function registerIpcHandlers(): void {
       if (!getAgentSessionMeta(sessionId)) {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
       }
-      return updateAgentSessionMeta(sessionId, { autoQueueSendEnabled: enabled })
+      return updateAgentSessionUiMeta(sessionId, { autoQueueSendEnabled: enabled })
     },
   )
 
@@ -3111,7 +3112,7 @@ export function registerIpcHandlers(): void {
       if (isAgentSessionActive(id)) {
         throw new Error('Agent 正在运行，完成后再切换模型')
       }
-      return updateAgentSessionMeta(id, { channelId, modelId })
+      return updateAgentSessionUiMeta(id, { channelId, modelId })
     }
   )
 
@@ -3174,7 +3175,7 @@ export function registerIpcHandlers(): void {
       if (newPinned && current.archived) {
         updates.archived = false
       }
-      return updateAgentSessionMeta(id, updates)
+      return updateAgentSessionUiMeta(id, updates)
     }
   )
 
@@ -3189,7 +3190,7 @@ export function registerIpcHandlers(): void {
       if (current.manualWorking) updates.manualWorking = false
       if (current.completedButUnconfirmed) updates.completedButUnconfirmed = false
       if (Object.keys(updates).length === 0) return current
-      return updateAgentSessionMeta(id, updates)
+      return updateAgentSessionUiMeta(id, updates)
     }
   )
 
@@ -3200,7 +3201,7 @@ export function registerIpcHandlers(): void {
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
-      return updateAgentSessionMeta(id, { completedButUnconfirmed: true })
+      return updateAgentSessionUiMeta(id, { completedButUnconfirmed: true })
     }
   )
 
@@ -3209,7 +3210,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_INTERRUPTION_STATE,
     (_e, input: UpdateAgentInterruptStateInput): AgentSessionMeta => {
       const { sessionId, state } = input
-      return updateAgentSessionMeta(sessionId, state
+      return updateAgentSessionUiMeta(sessionId, state
         ? { lastInterruptReason: state.reason, lastInterruptLabel: state.label, lastInterruptAt: state.at }
         : { lastInterruptReason: undefined, lastInterruptLabel: undefined, lastInterruptAt: undefined })
     }
@@ -3228,7 +3229,7 @@ export function registerIpcHandlers(): void {
       if (newArchived && current.pinned) {
         updates.pinned = false
       }
-      return updateAgentSessionMeta(id, updates)
+      return updateAgentSessionUiMeta(id, updates)
     }
   )
 
@@ -3755,7 +3756,7 @@ export function registerIpcHandlers(): void {
           // 不能只在这里使用兜底引用：编排器会重新读取 session meta。
           // 将旧会话/回归期间生成的空引用自愈为正确引用，避免下一阶段再次失败。
           if (!session.presetReference?.presetId || session.presetId !== reference.presetId) {
-            updateAgentSessionMeta(session.id, { presetId: reference.presetId, presetReference: reference })
+            updateAgentSessionUiMeta(session.id, { presetId: reference.presetId, presetReference: reference })
           }
           getAgentPresetByReference(reference, workspaceSlug)
         },
@@ -3916,20 +3917,17 @@ export function registerIpcHandlers(): void {
       if (!getAgentSessionMeta(sessionId)) {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
       }
-      // 持久化到 session meta（重启后可恢复，即使 session 未运行也要写）。
-      // 这里的 catch 仅用于兜底磁盘 I/O 类异常，不影响后续热切换。
-      try {
-        updateAgentSessionMeta(sessionId, { permissionMode: mode })
-      } catch (err) {
-        console.warn(`[IPC] 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
-      }
-      // 若 session 正在跑，同步热切换运行时模式
+      const current = getAgentSessionMeta(sessionId)!
+      const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
+      // 若 session 正在跑，同步热切换运行时模式；失败时广播回滚后的权威状态。
       if (isAgentSessionActive(sessionId)) {
         await updateAgentPermissionMode(sessionId, mode).catch((err) => {
-          console.warn(`[IPC] 运行中权限模式切换失败: sessionId=${sessionId}`, err)
+          const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode })
+          publishAgentSessionProjection(restored)
           throw err
         })
       }
+      publishAgentSessionProjection(updated)
     }
   )
 
@@ -3940,7 +3938,7 @@ export function registerIpcHandlers(): void {
       if (typeof enabled !== 'boolean') throw new Error(`无效的 Codex Fast Mode 状态: ${String(enabled)}`)
       if (!getAgentSessionMeta(sessionId)) throw new Error(`Agent 会话不存在: ${sessionId}`)
       if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换快速模式')
-      return updateAgentSessionMeta(sessionId, { codexFastMode: enabled })
+      return updateAgentSessionUiMeta(sessionId, { codexFastMode: enabled })
     },
   )
 
@@ -3955,7 +3953,7 @@ export function registerIpcHandlers(): void {
       }
       if (!getAgentSessionMeta(sessionId)) throw new Error(`Agent 会话不存在: ${sessionId}`)
       if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换推理档位')
-      return updateAgentSessionMeta(sessionId, { openAIThinkingLevel: level })
+      return updateAgentSessionUiMeta(sessionId, { openAIThinkingLevel: level })
     },
   )
 
@@ -3970,7 +3968,7 @@ export function registerIpcHandlers(): void {
       }
       if (!getAgentSessionMeta(sessionId)) throw new Error(`Agent 会话不存在: ${sessionId}`)
       if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换思考强度')
-      return updateAgentSessionMeta(sessionId, { agentEffort: effort })
+      return updateAgentSessionUiMeta(sessionId, { agentEffort: effort })
     },
   )
 
@@ -4000,10 +3998,14 @@ export function registerIpcHandlers(): void {
       const updated = updateAgentSessionMeta(sessionId, { agentRuntime: runtime })
       try {
         updateSettings({ agentRuntime: runtime })
+        publishAgentSessionProjection(updated)
         return updated
       } catch (error) {
         // 不使用普通 update helper：它会把恢复 runtime 视为一次切换并再次清空快照字段。
-        try { restoreAgentRuntimeMeta(sessionId, previousRuntime) } catch { /* 保留原始设置错误 */ }
+        try {
+          const restored = restoreAgentRuntimeMeta(sessionId, previousRuntime)
+          publishAgentSessionProjection(restored)
+        } catch { /* 保留原始设置错误 */ }
         throw error
       }
     },
@@ -4255,7 +4257,8 @@ export function registerIpcHandlers(): void {
           // 持久化到 session meta，和 cycleMode 路径保持一致（重启后该 session 能恢复）
           if (meta) {
             try {
-              updateAgentSessionMeta(sessionId, { permissionMode: targetMode })
+              const updated = updateAgentSessionMeta(sessionId, { permissionMode: targetMode })
+              publishAgentSessionProjection(updated)
             } catch (err) {
               console.warn(`[IPC] ExitPlanMode 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
             }

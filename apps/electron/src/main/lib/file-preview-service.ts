@@ -677,14 +677,31 @@ function convertPptxToHtml(filePath: string, resolvedPath: string): OfficePrevie
 // ─── 导出：内联预览 API ───
 
 /** 解析文件路径并读取内容（供内联文本/代码预览使用） */
-export function resolveAndReadFile(filePath: string, basePaths?: string[]): { resolvedPath: string; content: string } | null {
+export interface FilePreviewVersion {
+  /** 内容版本：mtime+size 可快速判断外部写入，hash 用于同时间戳写入的保险。 */
+  revision: string
+  mtimeMs: number
+  size: number
+  hash: string
+}
+
+function buildFilePreviewVersion(filePath: string, content: Buffer | string, stat: { mtimeMs: number; size: number }): FilePreviewVersion {
+  return {
+    revision: `${stat.mtimeMs}:${stat.size}`,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    hash: createHash('sha256').update(content).digest('hex'),
+  }
+}
+
+export function resolveAndReadFile(filePath: string, basePaths?: string[]): { resolvedPath: string; content: string; version: FilePreviewVersion } | null {
   const safePath = resolveTargetPath(filePath, basePaths)
   if (!existsSync(safePath)) return null
   try {
     const st = statSync(safePath)
     if (st.size > MAX_FILE_SIZE) return null
     const content = readFileSync(safePath, 'utf-8')
-    return { resolvedPath: safePath, content }
+    return { resolvedPath: safePath, content, version: buildFilePreviewVersion(safePath, content, st) }
   } catch {
     return null
   }
@@ -714,7 +731,7 @@ const IMAGE_MIME_MAP: Record<string, string> = {
  * 必须把内容直接以 data URL 形式经 WS 传输给客户端渲染。
  * 复用 resolveTargetPath 的绝对/相对路径解析与 MAX_FILE_SIZE 体积限制。
  */
-export function readFileAsDataUrl(filePath: string, basePaths?: string[]): { resolvedPath: string; dataUrl: string } | null {
+export function readFileAsDataUrl(filePath: string, basePaths?: string[]): { resolvedPath: string; dataUrl: string; version: FilePreviewVersion } | null {
   const safePath = resolveTargetPath(filePath, basePaths)
   if (!existsSync(safePath)) return null
   try {
@@ -723,7 +740,7 @@ export function readFileAsDataUrl(filePath: string, basePaths?: string[]): { res
     const ext = basename(safePath).split('.').pop()?.toLowerCase() ?? ''
     const mime = IMAGE_MIME_MAP[ext] ?? 'application/octet-stream'
     const buffer = readFileSync(safePath)
-    return { resolvedPath: safePath, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` }
+    return { resolvedPath: safePath, dataUrl: `data:${mime};base64,${buffer.toString('base64')}`, version: buildFilePreviewVersion(safePath, buffer, st) }
   } catch {
     return null
   }

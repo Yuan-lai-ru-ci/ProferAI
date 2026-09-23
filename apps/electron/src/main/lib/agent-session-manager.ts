@@ -1272,6 +1272,7 @@ export function updateAgentSessionMeta(
   const updated: AgentSessionMeta = {
     ...existing,
     ...updates,
+    revision: (existing.revision ?? 0) + 1,
     agentRuntime: nextRuntime,
     // Claude 与 Pi 的会话、fork 与 rewind 元数据均不可互用；运行时发生实际切换时由存储层统一失效。
     ...(runtimeChanged
