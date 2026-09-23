@@ -14,6 +14,14 @@ import { FileMentionList } from './FileMentionList'
 import type { FileMentionRef } from './FileMentionList'
 import type { FileIndexEntry, FileSearchResult } from '@profer/shared'
 import { createMentionPopup, positionPopup } from '@/components/agent/mention-popup-utils'
+import {
+  createLatestQueryRunner,
+  createFileSnapshotKey,
+  filterFileSnapshot,
+  getCachedFileSnapshot,
+  getMentionCacheGeneration,
+  limitFileMentionResult,
+} from '@/components/agent/mention-query-utils'
 
 export function createFileMentionSuggestion(
   workspacePathRef: React.RefObject<string | null>,
@@ -24,6 +32,13 @@ export function createFileMentionSuggestion(
 ): Omit<SuggestionOptions<FileIndexEntry>, 'editor'> {
   let lastResult: FileSearchResult | null = null
   let missingWorkspaceToastShown = false
+  let latestQuerySequence = 0
+  const runLatestQuery = createLatestQueryRunner<FileSearchResult>({
+    entries: [],
+    total: 0,
+    sessionEntries: [],
+    workspaceEntries: [],
+  })
 
   return {
     char: '@',
@@ -31,8 +46,19 @@ export function createFileMentionSuggestion(
     allowedPrefixes: null,
 
     items: async ({ query }): Promise<FileIndexEntry[]> => {
+      // 新 query 开始时先清掉旧分组，避免等待快照期间 renderer 继续显示旧工作区结果。
+      lastResult = null
+      const generation = getMentionCacheGeneration()
       const wsPath = workspacePathRef.current
       if (!wsPath) {
+        // 使正在等待 IPC 的旧请求失效，防止工作区切换/清空后旧结果重新打开候选框。
+        latestQuerySequence += 1
+        void runLatestQuery(async () => ({
+          entries: [],
+          total: 0,
+          sessionEntries: [],
+          workspaceEntries: [],
+        }))
         console.warn('[FileMention] workspacePath is null, mention disabled')
         if (!missingWorkspaceToastShown) {
           toast.warning('暂时无法引用文件', {
@@ -47,17 +73,28 @@ export function createFileMentionSuggestion(
       try {
         const additionalPaths = attachedDirsRef?.current ?? []
         const sessionPaths = sessionAttachedDirsRef?.current ?? []
-
-        const result = await window.electronAPI.searchWorkspaceFiles(
-          wsPath,
-          query ?? '',
-          200,
-          additionalPaths.length > 0 ? additionalPaths : undefined,
-          sessionPaths.length > 0 ? sessionPaths : undefined,
-        )
-        lastResult = result
-        return result.entries
-      } catch(e) {
+        const currentSequence = ++latestQuerySequence
+        const snapshotKey = createFileSnapshotKey(wsPath, additionalPaths, sessionPaths)
+        const normalizedQuery = query ?? ''
+        const result = await runLatestQuery(async () => {
+          const snapshot = await getCachedFileSnapshot(wsPath, additionalPaths, sessionPaths)
+          return filterFileSnapshot(snapshot, normalizedQuery)
+        })
+        const currentWorkspacePath = workspacePathRef.current
+        const currentAdditionalPaths = attachedDirsRef?.current ?? []
+        const currentSessionPaths = sessionAttachedDirsRef?.current ?? []
+        if (
+          currentSequence !== latestQuerySequence
+          || !currentWorkspacePath
+          || createFileSnapshotKey(currentWorkspacePath, currentAdditionalPaths, currentSessionPaths) !== snapshotKey
+          || getMentionCacheGeneration() !== generation
+        ) {
+          lastResult = null
+          return []
+        }
+        lastResult = limitFileMentionResult(result)
+        return lastResult.entries
+      } catch (e) {
         console.error('[FileMention] search failed:', e)
         lastResult = null
         return []

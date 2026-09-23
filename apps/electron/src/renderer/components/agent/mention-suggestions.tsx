@@ -13,6 +13,7 @@ import { MentionList } from './MentionList'
 import type { MentionListRef } from './MentionList'
 import { createMentionPopup, positionPopup, isSuggestionTriggerPresent } from './mention-popup-utils'
 import type { AgentSessionReferenceSearchResult } from '@profer/shared'
+import { createLatestQueryRunner, getCachedWorkspaceCapabilities, getMentionCacheGeneration, MAX_MENTION_ITEMS } from './mention-query-utils'
 
 // ===== 泛型工厂 =====
 
@@ -39,6 +40,8 @@ function createMentionSuggestion<T>(
   mentionActiveRef: React.MutableRefObject<boolean>,
   mentionItemCountRef: React.MutableRefObject<number>,
 ): Omit<SuggestionOptions<T>, 'editor'> {
+  const runLatestQuery = createLatestQueryRunner<T[]>([])
+
   return {
     char: config.char,
     allowSpaces: false,
@@ -48,9 +51,11 @@ function createMentionSuggestion<T>(
     allowedPrefixes: null,
     items: async ({ query }): Promise<T[]> => {
       const slug = workspaceSlugRef.current
-      if (!slug) return []
+      const generation = getMentionCacheGeneration()
       try {
-        return await config.fetchItems(slug, (query ?? '').toLowerCase())
+        if (!slug) return await runLatestQuery(async () => [])
+        const result = (await runLatestQuery(() => config.fetchItems(slug, (query ?? '').toLowerCase()))).slice(0, MAX_MENTION_ITEMS)
+        return workspaceSlugRef.current === slug && getMentionCacheGeneration() === generation ? result : []
       } catch {
         return []
       }
@@ -167,7 +172,7 @@ export function createSkillMentionSuggestion(
       headerLabel: '调用 skill',
       emptyText: '无匹配 Skill',
       fetchItems: async (slug, q) => {
-        const caps = await window.electronAPI.getWorkspaceCapabilities(slug)
+        const caps = await getCachedWorkspaceCapabilities(slug)
         return caps.skills
           .filter((s) => s.enabled)
           .filter((s) => !q || s.name.toLowerCase().includes(q) || (s.slug ?? '').toLowerCase().includes(q))
@@ -210,7 +215,7 @@ export function createMcpMentionSuggestion(
       headerLabel: 'MCP 服务',
       emptyText: '无匹配 MCP 服务',
       fetchItems: async (slug, q) => {
-        const caps = await window.electronAPI.getWorkspaceCapabilities(slug)
+        const caps = await getCachedWorkspaceCapabilities(slug)
         return caps.mcpServers
           .filter((s) => s.enabled)
           .filter((s) => !q || s.name.toLowerCase().includes(q))

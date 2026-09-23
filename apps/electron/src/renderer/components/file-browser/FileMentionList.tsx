@@ -20,6 +20,7 @@ import type { FileIndexEntry } from '@profer/shared'
 import { FileTypeIcon } from './FileTypeIcon'
 import { ChevronRight, Folder } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
+import { MAX_FILE_MENTION_ITEMS, limitMentionGroups } from '@/components/agent/mention-query-utils'
 
 // ===== Error Boundary =====
 
@@ -144,14 +145,22 @@ function flattenVisible(nodes: FileTreeNode[]): FileTreeNode[] {
 
 export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListProps>(
   function FileMentionList({ sessionEntries, workspaceEntries, onSelect }, ref) {
+    // renderer 侧再做一道上限保护，避免未来其他调用方把数千个节点交给 React。
+    const visibleGroups = React.useMemo(
+      () => limitMentionGroups(sessionEntries, workspaceEntries, MAX_FILE_MENTION_ITEMS),
+      [sessionEntries, workspaceEntries],
+    )
+    const visibleSessionEntries = visibleGroups.sessionEntries
+    const visibleWorkspaceEntries = visibleGroups.workspaceEntries
+
     // 构建树（仅在条目变化时重建）
     const sessionTree = React.useMemo(
-      () => buildTree(sessionEntries),
-      [sessionEntries],
+      () => buildTree(visibleSessionEntries),
+      [visibleSessionEntries],
     )
     const workspaceTree = React.useMemo(
-      () => buildTree(workspaceEntries),
-      [workspaceEntries],
+      () => buildTree(visibleWorkspaceEntries),
+      [visibleWorkspaceEntries],
     )
 
     // 折叠/展开状态（用 expandedPaths Set 管理）
@@ -198,7 +207,7 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
     // 条目变化或展开状态变化时重置/修正索引
     React.useEffect(() => {
       setSelectedIndex((prev) => (totalItems > 0 ? Math.min(prev, totalItems - 1) : 0))
-    }, [sessionEntries, workspaceEntries, totalItems])
+    }, [visibleSessionEntries, visibleWorkspaceEntries, totalItems])
 
     // 滚动选中项到可见区域
     React.useEffect(() => {
@@ -293,8 +302,8 @@ export const FileMentionList = React.forwardRef<FileMentionRef, FileMentionListP
       },
     }))
 
-    const hasSession = sessionEntries.length > 0
-    const hasWorkspace = workspaceEntries.length > 0
+    const hasSession = visibleSessionEntries.length > 0
+    const hasWorkspace = visibleWorkspaceEntries.length > 0
     const hasResults = hasSession || hasWorkspace
 
     // 无匹配结果

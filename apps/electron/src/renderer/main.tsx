@@ -100,6 +100,7 @@ import { toast } from 'sonner'
 import { diffCapabilities, isVisibleAgentSession } from '@profer/shared'
 import type { WorkspaceCapabilities } from '@profer/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
+import { invalidateFileSnapshotCache, invalidateWorkspaceCapabilitiesCache } from './components/agent/mention-query-utils'
 import { getVisibleAgentWorkspaces, isAgentWorkspaceVisible } from './lib/product-feature-flags'
 import { UpdateDialog } from './components/settings/UpdateDialog'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
@@ -328,9 +329,11 @@ function AgentSettingsInitializer(): null {
   useEffect(() => {
     suppressToastRef.current = true
     prevCapabilitiesRef.current = null
+    const ws = currentWorkspaceId ? workspaces.find((w) => w.id === currentWorkspaceId) : undefined
+    invalidateWorkspaceCapabilitiesCache()
+    invalidateFileSnapshotCache()
 
     if (!currentWorkspaceId) return
-    const ws = workspaces.find((w) => w.id === currentWorkspaceId)
     if (!ws) return
 
     window.electronAPI
@@ -345,6 +348,7 @@ function AgentSettingsInitializer(): null {
   // 订阅主进程文件监听推送
   useEffect(() => {
     const unsubCapabilities = window.electronAPI.onCapabilitiesChanged(() => {
+      invalidateWorkspaceCapabilitiesCache()
       // 查找当前工作区 slug
       const ws = workspaces.find((w) => w.id === currentWorkspaceId)
       if (ws) {
@@ -368,6 +372,7 @@ function AgentSettingsInitializer(): null {
     // 避免同步引擎轮询 + 文件监听器同时触发导致文件浏览器频繁重载
     let fileBumpThrottle: ReturnType<typeof setTimeout> | null = null
     const unsubFiles = window.electronAPI.onWorkspaceFilesChanged(() => {
+      invalidateFileSnapshotCache()
       if (fileBumpThrottle) return
       bumpFiles((v) => v + 1)
       fileBumpThrottle = setTimeout(() => { fileBumpThrottle = null }, 1000)
