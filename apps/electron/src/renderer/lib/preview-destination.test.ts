@@ -72,7 +72,7 @@ describe('文件点开去哪儿', () => {
     }
   })
 
-  test('能当纯文本读的格式刻意不进 OFV：留在文本渲染器里可搜可划词', () => {
+  test('文本 / 代码与 Browser 列内预览', () => {
     // 这些格式 OFV 也有插件（office/gis/drawing），但今天作为文本是可读的，
     // 换视图属于另一种取舍 —— 改动前先看 `OFV_EXTRA_EXTS` 的注释。
     for (const path of [
@@ -89,11 +89,11 @@ describe('文件点开去哪儿', () => {
     ]) {
       expect(resolvePreviewDestination(path)).toBe('browser-inline')
     }
-    // `.obj` 双义（三维模型 / 编译产物）：仓库已按「编译产物 → 不支持」定调，不被三维视图抢走
-    expect(resolvePreviewDestination('/tmp/a/compiled.obj')).toBe('panel')
+    // `.obj` 双义（三维模型 / 编译产物）：仍在 Browser 列内显示统一的不可预览提示
+    expect(resolvePreviewDestination('/tmp/a/compiled.obj')).toBe('browser-inline')
   })
 
-  test('文本 / 代码兜底 → 浏览器列里的 app 渲染器（列内模式，不经 OFV）', () => {
+  test('文本 / 代码与 Browser 列内预览', () => {
     for (const path of [
       '/tmp/a/main.ts',
       '/tmp/a/App.tsx',
@@ -116,7 +116,7 @@ describe('文件点开去哪儿', () => {
     }
   })
 
-  test('静态图 → 列内模式（同一份图片清单被面板与列共用）', () => {
+  test('静态图 → Browser 列内预览', () => {
     for (const extension of IMAGE_PREVIEW_EXTS) {
       expect(resolvePreviewDestination(`/tmp/a/pic${extension}`)).toBe('browser-inline')
     }
@@ -127,26 +127,32 @@ describe('文件点开去哪儿', () => {
     }
   })
 
-  test('必须留在面板的格式：各有专属渲染器或 Agent 契约', () => {
+  test('原先面板专属的格式 → 右侧 Browser 列内预览', () => {
     for (const extension of PANEL_ONLY_PREVIEW_EXTS) {
-      expect(resolvePreviewDestination(`/tmp/a/file${extension}`)).toBe('panel')
+      expect(resolvePreviewDestination(`/tmp/a/file${extension}`)).toBe('browser-inline')
     }
     // 大小写不敏感
-    expect(resolvePreviewDestination('/tmp/a/README.MD')).toBe('panel')
-    expect(resolvePreviewDestination('/tmp/a/REPORT.DOCX')).toBe('panel')
+    expect(resolvePreviewDestination('/tmp/a/README.MD')).toBe('browser-inline')
+    expect(resolvePreviewDestination('/tmp/a/REPORT.DOCX')).toBe('browser-inline')
   })
 
-  test('连 OFV 都做不了的二进制 → 面板给出「不支持预览 + 扩展名」的准话', () => {
+  test('连 OFV 都做不了的二进制 → Browser 列内给出「不支持预览 + 扩展名」的准话', () => {
     for (const path of ['/tmp/a/app.exe', '/tmp/a/lib.dylib', '/tmp/a/img.iso', '/tmp/a/blob.dat', '/tmp/a/x.o', '/tmp/a/setup.pkg']) {
-      expect(resolvePreviewDestination(path)).toBe('panel')
+      expect(resolvePreviewDestination(path)).toBe('browser-inline')
     }
   })
 
-  test('面板独有的清单里不会混进 OFV 格式（否则路由会先被 OFV 抢走，注释与现实不符）', () => {
-    for (const extension of PANEL_ONLY_PREVIEW_EXTS) {
-      expect(resolvePreviewDestination(`/tmp/a/file${extension}`)).not.toBe('ofv-viewer')
+  test('所有非 OFV 文件都不再分流到旧的预览面板', () => {
+    for (const path of [
+      '/tmp/a/compiled.obj',
+      '/tmp/a/app.exe',
+      '/tmp/a/README.MD',
+      '/tmp/a/REPORT.DOCX',
+      '/tmp/a/report.pdf',
+    ]) {
+      expect(resolvePreviewDestination(path)).not.toBe('panel')
     }
-    // 老式 Office 是 OFV 的，不该出现在面板独占清单里
+    // 老式 Office 仍由右侧 Browser 的 OFV viewer 承担。
     for (const extension of ['.doc', '.xls', '.ppt']) {
       expect(PANEL_ONLY_PREVIEW_EXTS.has(extension)).toBe(false)
       expect(resolvePreviewDestination(`/tmp/a/file${extension}`)).toBe('ofv-viewer')

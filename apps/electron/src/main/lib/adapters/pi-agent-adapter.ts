@@ -5,9 +5,10 @@
  * JSONL 持久化和历史会话展示在 SDK 迁移时一起改名。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Dispatcher } from 'undici'
 import { randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -15,6 +16,7 @@ import type {
   AgentThinkingLevel,
   AgentProviderAdapter,
   AgentQueryInput,
+  GetTaskOutputResult,
   CodexOAuthCredentials,
   ErrorCode,
   JsonSchemaOutputFormat,
@@ -63,6 +65,7 @@ import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { inferReasoningTransport, resolveReasoningProfile, calculatePiAutoCompactionReserveTokens } from '@profer/shared'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
+import { commandExecutionErrorCode, createCommandExecutionFailure, type CommandExecutionCallbacks, type CommandExecutionErrorKind, type CommandExecutionResult, type StructuredExecRequest } from '../command-execution'
 import {
   convertPiMessage,
   convertResultMessage,
@@ -87,6 +90,7 @@ import {
   runWithPiRequestProxy,
 } from './pi-request-proxy'
 import { registerPendingPiRuntimeProcess, registerPiRuntimeProcessShell } from '../runtime-process-registry'
+import { piBackgroundTaskManager } from '../pi-background-task-manager'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -95,6 +99,7 @@ type SkillLoadResult = ReturnType<ResourceLoader['getSkills']>
 
 const PI_NATIVE_MAX_RETRIES = 8
 const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
+const piToolExecutionContext = new AsyncLocalStorage<{ toolCallId: string }>()
 
 type PiRetrySettings = {
   enabled: boolean
@@ -156,6 +161,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onModelResolved?: (model: string) => void
   onContextWindow?: (contextWindow: number) => void
   onRetry?: (update: import('./pi-retry-control').PiRetryUpdate) => void
+  /** Structured local command evidence, keyed by the exact Pi tool call id. */
+  onToolExecutionResult?: (toolCallId: string, result: CommandExecutionResult) => void
   /** Passive lifecycle feed for Pi Host Harness; observers cannot control Session or queue prompts. */
   onHarnessLifecycle?: PiHarnessLifecycleObserver
   thinkingLevel?: AgentThinkingLevel
@@ -556,6 +563,7 @@ const ERROR_CODE_META: Partial<Record<ErrorCode, { title: string; canRetry: bool
   service_unavailable: { title: '服务暂时不可用', canRetry: true },
   service_error: { title: '服务错误', canRetry: true },
   provider_error: { title: '服务繁忙', canRetry: true },
+  empty_output: { title: '模型未生成回复', canRetry: true },
   network_error: { title: '网络异常', canRetry: true },
   invalid_model: { title: '模型不可用', canRetry: false },
   agent_runtime_not_found: { title: 'Agent 核心未就绪', canRetry: false },
@@ -620,6 +628,8 @@ export function mapSDKErrorToTypedError(errorCode: string, message: string, orig
     // pi runtime 动态 import 失败（打包遗漏依赖 / 安装损坏），产出定向的「核心未就绪」错误码，
     // 让 UI 给出「请重新安装」引导，而非泛化的 unknown_error
     code = 'agent_runtime_not_found'
+  } else if (errorCode === 'empty_output') {
+    code = 'empty_output'
   } else if (/api.*key|unauthorized|authentication|invalid.*credential/i.test(diagnosticText)) {
     code = 'invalid_api_key'
   } else if (/billing|quota|insufficient_quota|credit|balance|payment|subscription/i.test(diagnosticText)) {
@@ -950,13 +960,12 @@ interface ToolWrapOptions {
   canUseTool?: PiAgentQueryOptions['canUseTool']
 }
 
-function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
+export function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
   definition: ToolDefinition<TParams, TDetails, TState>,
   options: ToolWrapOptions,
 ): ToolDefinition<TParams, TDetails, TState> {
   const canUseTool = options.canUseTool
   const executionMode = 'sequential' as const
-  if (!canUseTool) return { ...definition, executionMode }
   return {
     ...definition,
     executionMode,
@@ -975,13 +984,13 @@ function wrapToolWithPermission<TParams extends TSchema, TDetails, TState>(
         }
         updatedParams = restorePiInput(definition.name, rawInput, permission.updatedInput)
       }
-      return definition.execute(
+      return piToolExecutionContext.run({ toolCallId }, () => definition.execute(
         toolCallId,
         updatedParams as typeof params,
         signal,
         onUpdate as AgentToolUpdateCallback<TDetails> | undefined,
         ctx,
-      ) as Promise<AgentToolResult<TDetails>>
+      ) as Promise<AgentToolResult<TDetails>>)
     },
   }
 }
@@ -1474,120 +1483,260 @@ export function buildWslBashArgs(
   ]
 }
 
-function createWslBashOperations(runtimeEnv: AgentRuntimeEnv, sessionId: string): BashOperations {
+export interface ExecuteWslBashOptions {
+  runtimeEnv: Pick<AgentRuntimeEnv, 'wslCommand' | 'wslDistro'>
+  command: string
+  cwd: string
+  env?: NodeJS.ProcessEnv
+  timeoutMs?: number
+  signal?: AbortSignal
+  shell?: string
+  spawnProcess?: typeof spawn
+  forceKillGraceMs?: number
+  terminationGraceMs?: number
+  maxOutputBytes?: number
+}
+
+/**
+ * Executes one WSL Bash command while preserving the host-side process
+ * lifecycle. The WSL launcher is still the controlled process; its Linux
+ * descendants are terminated through the existing taskkill/SIGKILL fallback.
+ */
+export function executeWslBashCommand(
+  request: ExecuteWslBashOptions,
+  callbacks: CommandExecutionCallbacks = {},
+): Promise<CommandExecutionResult> {
+  const startedAt = Date.now()
+  const shell = request.shell ?? 'bash'
+  const maxOutputBytes = boundedOutputBytes(request.maxOutputBytes)
+  const createResult = (options: {
+    stdout: string
+    stderr: string
+    exitCode: number | null
+    signal: NodeJS.Signals | null
+    timedOut: boolean
+    aborted: boolean
+    truncated: boolean
+    errorKind?: CommandExecutionErrorKind
+    errorCode?: string
+  }): CommandExecutionResult => ({
+    ...options,
+    durationMs: Date.now() - startedAt,
+    shell,
+    cwd: request.cwd,
+  })
+
+  if (request.signal?.aborted) {
+    return Promise.resolve(createResult({
+      stdout: '',
+      stderr: '',
+      exitCode: null,
+      signal: null,
+      timedOut: false,
+      aborted: true,
+      truncated: false,
+    }))
+  }
+
+  const mergedEnv = mergeRuntimeEnv(process.env, request.env)
+  const spawnProcess = request.spawnProcess ?? spawn
+  let child: ChildProcess
+  try {
+    child = spawnProcess(
+      request.runtimeEnv.wslCommand ?? 'wsl.exe',
+      buildWslBashArgs(request.runtimeEnv, request.cwd, request.command, mergedEnv),
+      {
+        env: mergedEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      },
+    )
+  } catch (error) {
+    return Promise.resolve(createCommandExecutionFailure({
+      shell,
+      cwd: request.cwd,
+      errorKind: commandExecutionErrorCode(error) === 'ENOENT' ? 'shell_not_found' : 'spawn_error',
+      errorCode: commandExecutionErrorCode(error),
+      stderr: error instanceof Error ? error.message : String(error),
+      durationMs: Date.now() - startedAt,
+    }))
+  }
+
+  if (child.pid) callbacks.onSpawn?.(child.pid)
+  const stdout = new BoundedOutputCapture(maxOutputBytes)
+  const stderr = new BoundedOutputCapture(maxOutputBytes)
+
+  return new Promise((resolvePromise, reject) => {
+    let settled = false
+    let timedOut = false
+    let aborted = false
+    let stopping = false
+    let timeoutHandle: NodeJS.Timeout | undefined
+    let forceKillTimer: NodeJS.Timeout | undefined
+    let terminationGraceHandle: NodeJS.Timeout | undefined
+
+    const result = (
+      exitCode: number | null,
+      failure?: { errorKind: CommandExecutionErrorKind; errorCode: string },
+    ): CommandExecutionResult => createResult({
+      stdout: stdout.toString(),
+      stderr: stderr.toString(),
+      exitCode,
+      signal: child.signalCode ?? null,
+      timedOut,
+      aborted,
+      truncated: stdout.truncated || stderr.truncated,
+      ...(failure ?? {}),
+    })
+    const clearForceKill = (): void => {
+      if (!forceKillTimer) return
+      clearTimeout(forceKillTimer)
+      forceKillTimer = undefined
+    }
+    const cleanup = (): void => {
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+      if (terminationGraceHandle) clearTimeout(terminationGraceHandle)
+      clearForceKill()
+      request.signal?.removeEventListener('abort', onAbort)
+      child.stdout?.removeListener('data', onStdout)
+      child.stderr?.removeListener('data', onStderr)
+      child.removeListener('error', onChildError)
+      child.removeListener('close', onClose)
+    }
+    const finish = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      fn()
+    }
+    const forceKillChild = (): void => {
+      forceKillTimer = undefined
+      if (child.pid === undefined) return
+      try {
+        process.kill(child.pid, 0)
+      } catch {
+        return
+      }
+      try {
+        if (process.platform === 'win32') {
+          execFile('taskkill', ['/F', '/T', '/PID', String(child.pid)], () => {})
+        } else {
+          process.kill(child.pid, 'SIGKILL')
+        }
+        console.warn(`[Pi 适配器] force-killed residual WSL bash pid=${child.pid}`)
+      } catch (error) {
+        console.warn(`[Pi 适配器] force-kill pid=${child.pid} 失败:`, error)
+      }
+    }
+    const stop = (): void => {
+      if (settled || stopping) return
+      stopping = true
+      if (!child.killed) child.kill('SIGTERM')
+      clearForceKill()
+      forceKillTimer = setTimeout(forceKillChild, request.forceKillGraceMs ?? FORCE_KILL_WSL_GRACE_MS)
+      forceKillTimer.unref?.()
+      terminationGraceHandle = setTimeout(() => {
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        finish(() => resolvePromise(result(child.exitCode ?? null)))
+      }, request.terminationGraceMs ?? LOCAL_BASH_TERMINATION_GRACE_MS)
+      terminationGraceHandle.unref?.()
+    }
+    const onStdout = (data: Buffer): void => {
+      stdout.append(data)
+      callbacks.onStdout?.(data)
+    }
+    const onStderr = (data: Buffer): void => {
+      stderr.append(data)
+      callbacks.onStderr?.(data)
+    }
+    const onAbort = (): void => {
+      if (timedOut || aborted) return
+      aborted = true
+      stop()
+    }
+
+    const onChildError = (error: Error): void => {
+      const failure = { errorKind: 'spawn_error' as const, errorCode: commandExecutionErrorCode(error) }
+      if (timedOut || aborted) {
+        finish(() => resolvePromise(result(child.exitCode ?? null, failure)))
+      } else {
+        finish(() => resolvePromise(createCommandExecutionFailure({
+          shell,
+          cwd: request.cwd,
+          ...failure,
+          stderr: error.message,
+          durationMs: Date.now() - startedAt,
+        })))
+      }
+    }
+    const onClose = (exitCode: number | null): void => {
+      finish(() => resolvePromise(result(exitCode)))
+    }
+
+    child.stdout?.on('data', onStdout)
+    child.stderr?.on('data', onStderr)
+    child.once('error', onChildError)
+    child.once('close', onClose)
+
+    if (request.timeoutMs !== undefined && request.timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => {
+        if (settled || timedOut || aborted) return
+        timedOut = true
+        stop()
+      }, request.timeoutMs)
+    }
+    request.signal?.addEventListener('abort', onAbort, { once: true })
+    if (request.signal?.aborted) onAbort()
+  })
+}
+
+function createWslBashOperations(
+  runtimeEnv: AgentRuntimeEnv,
+  sessionId: string,
+  onToolExecutionResult?: PiAgentQueryOptions['onToolExecutionResult'],
+  getTaskId?: () => string | undefined,
+  clearTaskId?: () => void,
+): BashOperations {
   return {
-    exec(command, cwd, options) {
-      return new Promise((resolve, reject) => {
-        const mergedEnv = mergeRuntimeEnv(process.env, options.env)
-        const args = [
-          ...(runtimeEnv.wslDistro ? ['--distribution', runtimeEnv.wslDistro] : []),
-          '--cd',
-          cwd,
-          '--exec',
-          'bash',
-          '-lc',
-          buildWslCommand(command, mergedEnv),
-        ]
-        const child = spawn(runtimeEnv.wslCommand ?? 'wsl.exe', args, {
-          env: mergedEnv,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-        })
-        // This PID is the Profer-controlled Windows wsl.exe launcher. The
-        // eventual Linux listener remains pending until a WSL-aware observer
-        // exists, so it is never offered as an unsafe kill target.
-        if (child.pid) registerPiRuntimeProcessShell(sessionId, command, cwd, child.pid)
-        let settled = false
-        let timedOut = false
-        let timeoutHandle: NodeJS.Timeout | undefined
-        let forceKillTimer: NodeJS.Timeout | undefined
-
-        const cleanup = (): void => {
-          if (timeoutHandle) clearTimeout(timeoutHandle)
-          options.signal?.removeEventListener('abort', onAbort)
-        }
-        const settle = (fn: () => void): void => {
-          if (settled) return
-          settled = true
-          cleanup()
-          fn()
-        }
-        const clearForceKill = (): void => {
-          if (forceKillTimer) {
-            clearTimeout(forceKillTimer)
-            forceKillTimer = undefined
+    async exec(command, cwd, options) {
+      const execution = await executeWslBashCommand({
+        runtimeEnv,
+        command,
+        cwd,
+        env: options.env,
+        timeoutMs: options.timeout !== undefined ? options.timeout * 1_000 : undefined,
+        signal: options.signal,
+      }, {
+        onStdout: (data) => {
+          options.onData?.(data)
+          const taskId = getTaskId?.()
+          if (taskId) piBackgroundTaskManager.append(sessionId, taskId, data)
+        },
+        onStderr: (data) => {
+          options.onData?.(data)
+          const taskId = getTaskId?.()
+          if (taskId) piBackgroundTaskManager.append(sessionId, taskId, data)
+        },
+        onSpawn: (pid) => {
+          if (pid > 0) {
+            const record = registerPiRuntimeProcessShell(sessionId, command, cwd, pid)
+            const taskId = getTaskId?.()
+            if (taskId && record) piBackgroundTaskManager.attachProcess(sessionId, taskId, pid, record.startTime)
           }
-        }
-        /**
-         * 优先软终止，再兜底强杀：WSL 下 `wsl.exe --exec bash -lc` 的 SIGTERM
-         * （TerminateProcess）只终止 wsl.exe 宿主，WSL 会话内前台命令可能残留。
-         * 与 Claude 适配器一致，Windows 用 taskkill /F /T 级联杀 wsl.exe 进程树，
-         * 其它平台用 SIGKILL。仅在 abort / timeout 需要强制终止时触发。
-         */
-        const forceKillChild = (): void => {
-          forceKillTimer = undefined
-          if (child.pid === undefined) return
-          try {
-            process.kill(child.pid, 0)
-          } catch {
-            // 已退出，无需强杀
-            return
-          }
-          try {
-            if (process.platform === 'win32') {
-              execFile('taskkill', ['/F', '/T', '/PID', String(child.pid)], () => {})
-            } else {
-              process.kill(child.pid, 'SIGKILL')
-            }
-            console.warn(`[Pi 适配器] force-killed residual WSL bash pid=${child.pid}`)
-          } catch (error) {
-            console.warn(`[Pi 适配器] force-kill pid=${child.pid} 失败:`, error)
-          }
-        }
-        const killChild = (): void => {
-          if (child.killed && forceKillTimer) return
-          if (!child.killed) child.kill('SIGTERM')
-          // SIGTERM（对 wsl.exe 实为 TerminateProcess）可能不立即终止会话内命令，
-          // 若子进程在窗口期内未自行退出，用 taskkill /T / SIGKILL 兜底强杀进程树。
-          clearForceKill()
-          forceKillTimer = setTimeout(forceKillChild, FORCE_KILL_WSL_GRACE_MS)
-          forceKillTimer.unref?.()
-        }
-        const onAbort = (): void => {
-          killChild()
-        }
-
-        if (options.signal?.aborted) {
-          killChild()
-          settle(() => reject(new Error('aborted')))
-          return
-        }
-
-        child.stdout?.on('data', options.onData)
-        child.stderr?.on('data', options.onData)
-        child.on('error', (error) => {
-          settle(() => reject(error))
-        })
-        child.on('close', (code) => {
-          // 进程已真正退出，无需再强杀；清除尚未触发的兜底 timer（避免无谓的 taskkill）。
-          clearForceKill()
-          if (options.signal?.aborted) {
-            settle(() => reject(new Error('aborted')))
-          } else if (timedOut) {
-            settle(() => reject(new Error(`timeout:${options.timeout}`)))
-          } else {
-            settle(() => resolve({ exitCode: code }))
-          }
-        })
-
-        if (options.timeout !== undefined && options.timeout > 0) {
-          timeoutHandle = setTimeout(() => {
-            timedOut = true
-            killChild()
-          }, options.timeout * 1000)
-        }
-        options.signal?.addEventListener('abort', onAbort, { once: true })
+        },
       })
+      reportCommandExecutionResult(onToolExecutionResult, execution)
+      const taskId = getTaskId?.()
+      if (taskId) {
+        const status = execution.aborted || execution.timedOut ? 'stopped' : execution.errorKind || execution.exitCode !== 0 ? 'failed' : 'completed'
+        piBackgroundTaskManager.complete(sessionId, taskId, status)
+        clearTaskId?.()
+      }
+      if (execution.errorKind) throw commandExecutionFailureError(execution)
+      if (execution.aborted) throw new Error('aborted')
+      if (execution.timedOut) throw new Error(`timeout:${options.timeout}`)
+      return { exitCode: execution.exitCode }
     },
   }
 }
@@ -1598,19 +1747,80 @@ export function ensureBashWorkingDirectory(
   createDirectory: (path: string) => void = (path) => { mkdirSync(path, { recursive: true }) },
 ): void {
   const trimmedCwd = cwd.trim()
-  if (!trimmedCwd) throw new Error('Bash 工作目录为空，无法启动命令')
+  if (!trimmedCwd) {
+    const error = new Error('Bash 工作目录为空，无法启动命令') as NodeJS.ErrnoException
+    error.code = 'working_directory_error'
+    throw error
+  }
   if (pathExists(trimmedCwd)) return
 
   try {
     // 会话目录由 Profer 管理；如果用户在两轮之间删除它，启动下一条命令时安全重建。
     createDirectory(trimmedCwd)
   } catch (error) {
-    throw new Error(`Bash 工作目录不存在且无法重建: ${trimmedCwd}`, { cause: error })
+    const wrapped = new Error(`Bash 工作目录不存在且无法重建: ${trimmedCwd}`, { cause: error }) as NodeJS.ErrnoException
+    wrapped.code = 'working_directory_error'
+    throw wrapped
   }
+}
+
+export function requireLocalBashShellPath(shellPath: string | undefined): string {
+  if (shellPath) return shellPath
+  const error = new Error('Bash 启动失败：shell_not_found（未找到可用的 Bash）') as NodeJS.ErrnoException
+  error.code = 'shell_not_found'
+  throw error
+}
+
+function reportCommandExecutionResult(
+  onToolExecutionResult: PiAgentQueryOptions['onToolExecutionResult'] | undefined,
+  result: CommandExecutionResult,
+): void {
+  const toolCallId = piToolExecutionContext.getStore()?.toolCallId
+  if (!toolCallId) return
+  try {
+    onToolExecutionResult?.(toolCallId, result)
+  } catch (error) {
+    console.warn(`[Pi adapter] structured execution observer 失败，忽略 (${toolCallId}):`, error)
+  }
+}
+
+function commandExecutionFailureError(result: CommandExecutionResult): Error {
+  const message = result.errorKind === 'shell_not_found'
+    ? `Bash 启动失败：shell_not_found（未找到可用的 Bash）`
+    : result.errorKind === 'working_directory_error'
+      ? `Bash 启动失败：working_directory_error（工作目录不可用）`
+      : result.stderr || `Bash 启动失败：${result.errorKind ?? 'spawn_error'}`
+  const error = new Error(message) as NodeJS.ErrnoException
+  error.code = result.errorCode
+  return error
+}
+
+function classifyLocalBashFailure(
+  error: unknown,
+  shell: string,
+  cwd: string,
+): { errorKind: 'shell_not_found' | 'working_directory_error' | 'spawn_error'; errorCode: string } {
+  const errorCode = commandExecutionErrorCode(error, 'spawn_error')
+  if (errorCode === 'shell_not_found') return { errorKind: 'shell_not_found', errorCode }
+
+  const message = error instanceof Error ? error.message : String(error)
+  if (message.includes('工作目录')) {
+    return { errorKind: 'working_directory_error', errorCode: errorCode === 'spawn_error' ? 'working_directory_error' : errorCode }
+  }
+
+  if (errorCode === 'ENOENT') {
+    const shellLooksLikePath = isAbsolute(shell) || shell.includes('/') || shell.includes('\\\\')
+    if (shellLooksLikePath && !existsSync(shell)) return { errorKind: 'shell_not_found', errorCode }
+    if (!existsSync(cwd)) return { errorKind: 'working_directory_error', errorCode }
+  }
+
+  return { errorKind: 'spawn_error', errorCode }
 }
 
 function formatLocalBashSpawnError(error: unknown, shell: string, cwd: string): Error {
   const code = (error as NodeJS.ErrnoException | undefined)?.code
+  if (code === 'shell_not_found') return new Error('Bash 启动失败：shell_not_found（未找到可用的 Bash）', { cause: error })
+  if (code === 'working_directory_error') return new Error(`Bash 启动失败：working_directory_error（工作目录不可用: ${cwd}）`, { cause: error })
   if (code !== 'ENOENT') return error instanceof Error ? error : new Error(String(error))
 
   const shellLooksLikePath = isAbsolute(shell) || shell.includes('/') || shell.includes('\\')
@@ -1622,68 +1832,344 @@ function formatLocalBashSpawnError(error: unknown, shell: string, cwd: string): 
   return new Error(`Bash 启动失败：${missingPart}`, { cause: error })
 }
 
-function createControlledLocalBashOperations(
+const LOCAL_BASH_STDIO_DRAIN_GRACE_MS = 100
+const LOCAL_BASH_STDIO_MAX_DRAIN_MS = 5_000
+const LOCAL_BASH_TERMINATION_GRACE_MS = 2_000
+
+/**
+ * 等待本地 shell 退出，同时防止 detached descendant 继承 stdout/stderr pipe 后
+ * 让 Node 的 close 事件永远不触发。若退出后仍有输出，则按输出重新计算 idle
+ * grace；absolute deadline 不会重置，防止持续输出无限延长工具调用。
+ */
+export function waitForLocalBashProcess(
+  child: ChildProcess,
+  drainGraceMs = LOCAL_BASH_STDIO_DRAIN_GRACE_MS,
+  maxDrainMs = LOCAL_BASH_STDIO_MAX_DRAIN_MS,
+): Promise<number | null> {
+  return new Promise((resolvePromise, reject) => {
+    let settled = false
+    let exited = false
+    let exitCode: number | null = null
+    let stdoutEnded = false
+    let stderrEnded = false
+    let postExitIdleTimer: NodeJS.Timeout | undefined
+    let postExitDeadlineTimer: NodeJS.Timeout | undefined
+
+    const cleanup = (): void => {
+      if (postExitIdleTimer) clearTimeout(postExitIdleTimer)
+      if (postExitDeadlineTimer) clearTimeout(postExitDeadlineTimer)
+      child.removeListener('error', onError)
+      child.removeListener('exit', onExit)
+      child.removeListener('close', onClose)
+      child.stdout?.removeListener('end', onStdoutEnd)
+      child.stderr?.removeListener('end', onStderrEnd)
+      child.stdout?.removeListener('data', onData)
+      child.stderr?.removeListener('data', onData)
+    }
+    const finalize = (code: number | null): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+      resolvePromise(code)
+    }
+    const maybeFinalizeAfterExit = (): void => {
+      if (exited && stdoutEnded && stderrEnded) finalize(exitCode)
+    }
+    const armIdleTimer = (): void => {
+      if (postExitIdleTimer) clearTimeout(postExitIdleTimer)
+      postExitIdleTimer = setTimeout(() => finalize(exitCode), drainGraceMs)
+    }
+    const onData = (): void => {
+      if (exited && !settled) armIdleTimer()
+    }
+    const onStdoutEnd = (): void => {
+      stdoutEnded = true
+      maybeFinalizeAfterExit()
+    }
+    const onStderrEnd = (): void => {
+      stderrEnded = true
+      maybeFinalizeAfterExit()
+    }
+    const onError = (error: Error): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    }
+    const onExit = (code: number | null): void => {
+      exited = true
+      exitCode = code
+      maybeFinalizeAfterExit()
+      if (!settled) {
+        armIdleTimer()
+        postExitDeadlineTimer = setTimeout(() => finalize(exitCode), maxDrainMs)
+      }
+    }
+    const onClose = (code: number | null): void => finalize(code)
+
+    child.stdout?.once('end', onStdoutEnd)
+    child.stderr?.once('end', onStderrEnd)
+    child.stdout?.on('data', onData)
+    child.stderr?.on('data', onData)
+    child.once('error', onError)
+    child.once('exit', onExit)
+    child.once('close', onClose)
+  })
+}
+
+const LOCAL_BASH_MAX_CAPTURE_BYTES = 1024 * 1024
+
+class BoundedOutputCapture {
+  private readonly chunks: Buffer[] = []
+  private byteLength = 0
+  truncated = false
+
+  constructor(private readonly maxBytes: number) {}
+
+  append(data: Buffer): void {
+    if (data.length === 0) return
+    if (this.maxBytes === 0) {
+      this.truncated = true
+      return
+    }
+
+    const chunk = Buffer.from(data)
+    this.chunks.push(chunk)
+    this.byteLength += chunk.length
+    while (this.byteLength > this.maxBytes) {
+      const first = this.chunks[0]
+      if (!first) break
+      const overflow = this.byteLength - this.maxBytes
+      if (first.length <= overflow) {
+        this.chunks.shift()
+        this.byteLength -= first.length
+      } else {
+        this.chunks[0] = first.subarray(overflow)
+        this.byteLength -= overflow
+      }
+      this.truncated = true
+    }
+  }
+
+  toString(): string {
+    return Buffer.concat(this.chunks, this.byteLength).toString('utf8')
+  }
+}
+
+function boundedOutputBytes(value: number | undefined): number {
+  if (value === undefined) return LOCAL_BASH_MAX_CAPTURE_BYTES
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.floor(value)
+}
+
+function killLocalProcessTree(child: ChildProcess): void {
+  if (!child.pid) return
+  try {
+    if (process.platform === 'win32') execFile('taskkill', ['/F', '/T', '/PID', String(child.pid)], () => {})
+    else process.kill(-child.pid, 'SIGKILL')
+  } catch {
+    try { child.kill('SIGKILL') } catch { /* already exited */ }
+  }
+}
+
+export function executeLocalBashCommand(
+  request: StructuredExecRequest,
+  callbacks: CommandExecutionCallbacks = {},
+): Promise<CommandExecutionResult> {
+  const startedAt = Date.now()
+  const createResult = (options: {
+    stdout: string
+    stderr: string
+    exitCode: number | null
+    signal: NodeJS.Signals | null
+    timedOut: boolean
+    aborted: boolean
+    truncated: boolean
+    errorKind?: CommandExecutionErrorKind
+    errorCode?: string
+  }): CommandExecutionResult => ({
+    ...options,
+    durationMs: Date.now() - startedAt,
+    shell: request.shell,
+    cwd: request.cwd,
+  })
+
+  if (request.signal?.aborted) {
+    return Promise.resolve(createResult({
+      stdout: '',
+      stderr: '',
+      exitCode: null,
+      signal: null,
+      timedOut: false,
+      aborted: true,
+      truncated: false,
+    }))
+  }
+
+  const maxOutputBytes = boundedOutputBytes(request.maxOutputBytes)
+  const stdout = new BoundedOutputCapture(maxOutputBytes)
+  const stderr = new BoundedOutputCapture(maxOutputBytes)
+  let child: ChildProcess
+  try {
+    child = spawn(request.shell, ['-c', request.command], {
+      cwd: request.cwd,
+      env: request.env ?? process.env,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+  } catch (error) {
+    return Promise.resolve(createCommandExecutionFailure({
+      shell: request.shell,
+      cwd: request.cwd,
+      ...classifyLocalBashFailure(error, request.shell, request.cwd),
+      stderr: error instanceof Error ? error.message : String(error),
+      durationMs: Date.now() - startedAt,
+    }))
+  }
+  if (child.pid) callbacks.onSpawn?.(child.pid)
+
+  return new Promise((resolvePromise, reject) => {
+    let settled = false
+    let timedOut = false
+    let aborted = false
+    let timeoutHandle: NodeJS.Timeout | undefined
+    let terminationGraceHandle: NodeJS.Timeout | undefined
+
+    const onStdout = (data: Buffer): void => {
+      stdout.append(data)
+      callbacks.onStdout?.(data)
+    }
+    const onStderr = (data: Buffer): void => {
+      stderr.append(data)
+      callbacks.onStderr?.(data)
+    }
+    const result = (
+      exitCode: number | null,
+      failure?: { errorKind: CommandExecutionErrorKind; errorCode: string },
+    ): CommandExecutionResult => createResult({
+      stdout: stdout.toString(),
+      stderr: stderr.toString(),
+      exitCode,
+      signal: child.signalCode,
+      timedOut,
+      aborted,
+      truncated: stdout.truncated || stderr.truncated,
+      ...(failure ?? {}),
+    })
+    const cleanup = (): void => {
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+      if (terminationGraceHandle) clearTimeout(terminationGraceHandle)
+      request.signal?.removeEventListener('abort', onAbort)
+      child.stdout?.removeListener('data', onStdout)
+      child.stderr?.removeListener('data', onStderr)
+    }
+    const finish = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      fn()
+    }
+    const stop = (): void => {
+      if (settled) return
+      killLocalProcessTree(child)
+      terminationGraceHandle ??= setTimeout(() => finish(() => {
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        resolvePromise(result(child.exitCode))
+      }), LOCAL_BASH_TERMINATION_GRACE_MS)
+    }
+    const onAbort = (): void => {
+      if (timedOut || aborted) return
+      aborted = true
+      stop()
+    }
+
+    child.stdout?.on('data', onStdout)
+    child.stderr?.on('data', onStderr)
+    void waitForLocalBashProcess(child)
+      .then((exitCode) => finish(() => resolvePromise(result(exitCode))))
+      .catch((error) => {
+        const failure = classifyLocalBashFailure(error, request.shell, request.cwd)
+        finish(() => resolvePromise({
+          ...result(null, failure),
+          stderr: error instanceof Error ? error.message : String(error),
+        }))
+      })
+
+    if (request.timeoutMs !== undefined && request.timeoutMs > 0) {
+      timeoutHandle = setTimeout(() => {
+        if (settled || timedOut || aborted) return
+        timedOut = true
+        stop()
+      }, request.timeoutMs)
+    }
+    if (request.signal) {
+      request.signal.addEventListener('abort', onAbort, { once: true })
+      // 关闭“检查 signal”和“注册 listener”之间的竞态窗口。
+      if (request.signal.aborted) onAbort()
+    }
+  })
+}
+
+export function createControlledLocalBashOperations(
   sessionId: string,
   shellPath: string | undefined,
+  onToolExecutionResult?: PiAgentQueryOptions['onToolExecutionResult'],
+  getTaskId?: () => string | undefined,
+  clearTaskId?: () => void,
 ): BashOperations {
   return {
-    exec(command, cwd, options) {
-      return new Promise((resolve, reject) => {
-        if (options.signal?.aborted) {
-          reject(new Error('aborted'))
-          return
-        }
-        try {
-          ensureBashWorkingDirectory(cwd)
-        } catch (error) {
-          reject(error)
-          return
-        }
+    async exec(command, cwd, options) {
+      let shell = shellPath ?? 'bash'
+      try {
+        ensureBashWorkingDirectory(cwd)
         // Pi's public API lets Profer replace BashOperations. Profer explicitly
         // selects the platform shell so GUI-launched sessions do not depend on
-        // an accidental PATH entry (macOS normally uses the user's zsh).
-        const shell = shellPath ?? (process.platform === 'win32' ? 'bash' : '/bin/sh')
-        const child = spawn(shell, ['-c', command], {
+        // an accidental PATH entry. A missing Bash is a typed execution error;
+        // silently using sh would change the contract of a tool named Bash.
+        shell = requireLocalBashShellPath(shellPath)
+      } catch (error) {
+        const failure = classifyLocalBashFailure(error, shell, cwd)
+        const execution = createCommandExecutionFailure({
+          shell,
           cwd,
-          env: options.env ?? process.env,
-          detached: process.platform !== 'win32',
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
+          ...failure,
+          stderr: error instanceof Error ? error.message : String(error),
         })
-        if (child.pid) registerPiRuntimeProcessShell(sessionId, command, cwd, child.pid)
-        let timedOut = false
-        let settled = false
-        let timeoutHandle: NodeJS.Timeout | undefined
-        const killTree = (): void => {
-          if (!child.pid) return
-          try {
-            if (process.platform === 'win32') execFile('taskkill', ['/F', '/T', '/PID', String(child.pid)], () => {})
-            else process.kill(-child.pid, 'SIGKILL')
-          } catch {
-            try { child.kill('SIGKILL') } catch { /* already exited */ }
-          }
-        }
-        const finish = (fn: () => void): void => {
-          if (settled) return
-          settled = true
-          if (timeoutHandle) clearTimeout(timeoutHandle)
-          options.signal?.removeEventListener('abort', onAbort)
-          fn()
-        }
-        const onAbort = (): void => killTree()
-        child.stdout?.on('data', options.onData)
-        child.stderr?.on('data', options.onData)
-        child.once('error', (error) => finish(() => reject(formatLocalBashSpawnError(error, shell, cwd))))
-        child.once('close', (code) => finish(() => {
-          if (options.signal?.aborted) reject(new Error('aborted'))
-          else if (timedOut) reject(new Error(`timeout:${options.timeout}`))
-          else resolve({ exitCode: code })
-        }))
-        if (options.timeout !== undefined && options.timeout > 0) {
-          timeoutHandle = setTimeout(() => { timedOut = true; killTree() }, options.timeout * 1_000)
-        }
-        options.signal?.addEventListener('abort', onAbort, { once: true })
+        reportCommandExecutionResult(onToolExecutionResult, execution)
+        throw formatLocalBashSpawnError(error, shell, cwd)
+      }
+
+      const execution = await executeLocalBashCommand({
+        command,
+        cwd,
+        shell,
+        env: options.env,
+        timeoutMs: options.timeout !== undefined ? options.timeout * 1_000 : undefined,
+        signal: options.signal,
+      }, {
+        onStdout: (data) => { options.onData?.(data); const taskId = getTaskId?.(); if (taskId) piBackgroundTaskManager.append(sessionId, taskId, data) },
+        onStderr: (data) => { options.onData?.(data); const taskId = getTaskId?.(); if (taskId) piBackgroundTaskManager.append(sessionId, taskId, data) },
+        onSpawn: (pid) => {
+          const record = registerPiRuntimeProcessShell(sessionId, command, cwd, pid)
+          const taskId = getTaskId?.()
+          if (taskId && record) piBackgroundTaskManager.attachProcess(sessionId, taskId, pid, record.startTime)
+        },
       })
+
+      reportCommandExecutionResult(onToolExecutionResult, execution)
+      const taskId = getTaskId?.()
+      if (taskId) {
+        piBackgroundTaskManager.complete(sessionId, taskId, execution.aborted || execution.timedOut ? 'stopped' : execution.errorKind || execution.exitCode !== 0 ? 'failed' : 'completed')
+        clearTaskId?.()
+      }
+      if (execution.errorKind) throw commandExecutionFailureError(execution)
+      if (execution.aborted) throw new Error('aborted')
+      if (execution.timedOut) throw new Error(`timeout:${options.timeout}`)
+      return { exitCode: execution.exitCode }
     },
   }
 }
@@ -1691,12 +2177,28 @@ function createControlledLocalBashOperations(
 function createPromaBashToolOptions(
   sessionId: string,
   runtimeEnv: AgentRuntimeEnv | undefined,
+  onToolExecutionResult?: PiAgentQueryOptions['onToolExecutionResult'],
 ): BashToolOptions | undefined {
+  const taskIds = new Map<string, string>()
+  const currentToolCallId = (): string | undefined => piToolExecutionContext.getStore()?.toolCallId
+  const getTaskId = (): string | undefined => {
+    const toolCallId = currentToolCallId()
+    return toolCallId ? taskIds.get(toolCallId) : undefined
+  }
+  const clearTaskId = (): void => {
+    const toolCallId = currentToolCallId()
+    if (toolCallId) taskIds.delete(toolCallId)
+  }
   const spawnHook: NonNullable<BashToolOptions['spawnHook']> = ({ command, cwd, env }) => {
     // Pi exposes this public pre-spawn hook. Record ownership here, while the
     // command/cwd still describe the actual Agent launch rather than a later
     // renderer-side directory guess. PID is confirmed by the registry monitor.
-    registerPendingPiRuntimeProcess(sessionId, command, cwd)
+    const record = registerPendingPiRuntimeProcess(sessionId, command, cwd)
+    const toolCallId = currentToolCallId()
+    if (record && toolCallId) {
+      taskIds.set(toolCallId, record.id)
+      piBackgroundTaskManager.begin(sessionId, record.id, command)
+    }
     return {
       command,
       cwd,
@@ -1706,13 +2208,13 @@ function createPromaBashToolOptions(
 
   if (runtimeEnv?.shellKind === 'wsl') {
     return {
-      operations: createWslBashOperations(runtimeEnv, sessionId),
+      operations: createWslBashOperations(runtimeEnv, sessionId, onToolExecutionResult, getTaskId, clearTaskId),
       spawnHook,
     }
   }
 
   return {
-    operations: createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath),
+    operations: createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath, onToolExecutionResult, getTaskId, clearTaskId),
     spawnHook,
   }
 }
@@ -1723,11 +2225,12 @@ function buildBuiltinToolDefinitions(
   cwd: string,
   canUseTool: PiAgentQueryOptions['canUseTool'],
   runtimeEnv: AgentRuntimeEnv | undefined,
+  onToolExecutionResult?: PiAgentQueryOptions['onToolExecutionResult'],
 ): ToolDefinition[] {
   const powerShellTool = createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId)
   const definitions = [
     sdk.createReadToolDefinition(cwd),
-    sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(sessionId, runtimeEnv)),
+    sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult)),
     ...(powerShellTool ? [powerShellTool] : []),
     sdk.createEditToolDefinition(cwd),
     sdk.createWriteToolDefinition(cwd),
@@ -1782,11 +2285,11 @@ export function installRuntimeGuardHooks(session: AgentSession, guard: AgentRunt
 }
 
 export class PiAgentAdapter implements AgentProviderAdapter {
-  // Pi 的后台服务进程由 runtime registry 管理，但尚未提供 Claude SDK TaskOutput/TaskStop 等价物。
+  // Pi 的后台服务由 runtime registry 负责归属，TaskOutput/TaskStop 只做安全适配。
   getCapabilities() {
     return {
-      supportsTaskOutput: false,
-      supportsTaskStop: false,
+      supportsTaskOutput: true,
+      supportsTaskStop: true,
       supportsRewind: true,
       supportsInterrupt: true,
       supportsQueuedMessage: true,
@@ -1878,6 +2381,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           cwd,
           input.canUseTool,
           input.runtimeEnv,
+          input.onToolExecutionResult,
         ),
         ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
         ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
@@ -1977,12 +2481,17 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         const previousPrepareNextTurnWithContext = session.agent.prepareNextTurnWithContext
         session.agent.prepareNextTurnWithContext = async (context, signal) => {
           const previousSnapshot = await previousPrepareNextTurnWithContext?.(context, signal)
-          const nextContext = previousSnapshot?.context ?? context.context
-          const systemPrompt = projectInstructionScope.appendPendingInstructions(nextContext.systemPrompt)
-          if (systemPrompt === nextContext.systemPrompt) return previousSnapshot
+          // Pi 0.86 起 AgentContext 不再承载 systemPrompt（变成只读的 AgentState.systemPrompt，
+          // 官方建议通过追加 system 消息更新提示词）。新激活的项目指令因此以一条追加的
+          // SystemMessage 进入下一轮请求：只增不改，不会覆盖已有系统提示词。
+          const pendingInstructions = projectInstructionScope.takePendingInstructions()
+          if (!pendingInstructions) return previousSnapshot
           return {
             ...previousSnapshot,
-            context: { ...nextContext, systemPrompt },
+            messages: [
+              ...(previousSnapshot?.messages ?? []),
+              { role: 'system' as const, content: pendingInstructions, timestamp: Date.now() },
+            ],
           }
         }
       }
@@ -2506,6 +3015,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
   async setPermissionMode(_sessionId: string, _mode: string): Promise<void> {
     // Proma 权限由工具包装层实时读取 sessionPermissionModes，自身无需同步给 Pi。
+  }
+
+  async getTaskOutput(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<GetTaskOutputResult> {
+    return piBackgroundTaskManager.getOutput(sessionId, taskId, options)
+  }
+
+  async stopTask(sessionId: string, taskId: string, expectedType?: 'agent' | 'shell'): Promise<void> {
+    if (expectedType && expectedType !== 'shell') throw new Error('Pi runtime 只支持停止 shell 后台任务')
+    await piBackgroundTaskManager.stop(sessionId, taskId)
   }
 
   dispose(): void {

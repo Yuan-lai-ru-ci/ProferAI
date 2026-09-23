@@ -1,11 +1,20 @@
 import { describe, expect, test } from 'bun:test'
 import type { AssistantMessage } from '@earendil-works/pi-ai/compat'
-import { convertPiMessage, convertResultMessage, hasTerminalErrorWithContent, stripErrorFromContentMessage } from './pi-message-adapter'
+import { convertPiMessage, convertResultMessage, EMPTY_OUTPUT_ERROR_MESSAGE, hasTerminalErrorWithContent, stripErrorFromContentMessage } from './pi-message-adapter'
 
 function textAssistant(content: string, overrides?: Partial<AssistantMessage>): AssistantMessage {
   return {
     role: 'assistant',
     content: [{ type: 'text', text: content }],
+    ...overrides,
+  } as unknown as AssistantMessage
+}
+
+function thinkingOnlyAssistant(overrides?: Partial<AssistantMessage>): AssistantMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'thinking', thinking: '先分析，但没有生成正文' }],
+    stopReason: 'stop',
     ...overrides,
   } as unknown as AssistantMessage
 }
@@ -26,6 +35,18 @@ function writeToolCall(content: string): AssistantMessage {
 }
 
 describe('convertPiMessage', () => {
+  test('Given thinking-only final message When converting Then marks empty_output instead of success content', () => {
+    const message = convertPiMessage(
+      thinkingOnlyAssistant(),
+      'session-empty-output',
+      undefined,
+      { final: true, uuid: 'assistant-empty-output' },
+    ) as { error?: { message: string; errorType: string }; _emptyOutput?: boolean }
+
+    expect(message.error).toEqual({ message: EMPTY_OUTPUT_ERROR_MESSAGE, errorType: 'empty_output' })
+    expect(message._emptyOutput).toBe(true)
+  })
+
   test('omits cumulative write content from partial tool-call frames', () => {
     const message = convertPiMessage(writeToolCall('x'.repeat(10_240)), 'session-1', undefined, {
       final: false,
@@ -50,6 +71,17 @@ describe('convertPiMessage', () => {
       content,
     })
     expect(JSON.stringify(message).length).toBeGreaterThan(content.length)
+  })
+
+  test('Given thinking-only final message When converting result Then subtype is execution error', () => {
+    const result = convertResultMessage(
+      [thinkingOnlyAssistant()],
+      'session-empty-output',
+    ) as { subtype?: string; terminal_reason?: string; errors?: string[] }
+
+    expect(result.subtype).toBe('error_during_execution')
+    expect(result.terminal_reason).toBe('empty_output')
+    expect(result.errors).toEqual([EMPTY_OUTPUT_ERROR_MESSAGE])
   })
 
   test('Given Pi 剥离 SDK 后缀 When 持久化 result Then 保存真实窗口、请求模型和渠道主模型', () => {

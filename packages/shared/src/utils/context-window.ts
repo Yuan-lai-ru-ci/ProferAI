@@ -7,7 +7,7 @@
  */
 
 import type { ProviderType } from '../types/channel'
-import { DEEPSEEK_V4_MODEL_ALIASES, resolveDeepSeekV4ModelId, normalizeModelIdTail } from '../types/deepseek-model-alias'
+import { DEEPSEEK_V4_SHORT_MODEL_NAMES, resolveDeepSeekV4ModelId, normalizeModelIdTail } from '../types/deepseek-model-alias'
 
 /** 默认上下文窗口（无法识别模型时使用） */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
@@ -26,11 +26,11 @@ const GPT_GENERATION_MIN_VERSION = '5.4'
 /** Kimi K3 短 ID；需精确匹配，避免误伤其它含 "k3" 子串的模型名。 */
 const KIMI_K3_SHORT_MODEL_ID = 'k3'
 /**
- * DeepSeek 自 V4 代起在官方 API 同时提供的无版本号短名（与 deepseek-v4-* 同代、同窗口）。
+ * DeepSeek 自 V4 代起在官方 API 提供的无版本号短名（与带版本号 ID 同代、同窗口）。
  * 渠道里手填的模型 ID 常常就是这类短名，缺了它会导致 1M 判定回落到 200K。
- * 直接从别名表派生，避免短名在两处漂移。
+ * 短名清单源在 deepseek-model-alias，与「需要归一的别名」分开维护。
  */
-const DEEPSEEK_SHORT_MODEL_NAMES: readonly string[] = Object.keys(DEEPSEEK_V4_MODEL_ALIASES)
+const DEEPSEEK_SHORT_MODEL_NAMES: readonly string[] = DEEPSEEK_V4_SHORT_MODEL_NAMES
 
 export interface ModelUsageContextInfo {
   contextWindow?: number
@@ -46,12 +46,14 @@ export function normalizeContextModelId(modelId?: string): string | undefined {
 
 /**
  * 仅 DeepSeek V4 Pro / Flash 是当前产品已确认的 1M DeepSeek 模型。
- * 官方短名（deepseek-flash / deepseek-pro）指向同代同模型，需一并归入，
- * 否则同模型的思考协议、成本与窗口会因写法不同而漂移。
+ *
+ * 基于归一后的 ID 判定，因此同一个模型无论写成 0.86 起的 `deepseek-flash`、
+ * 旧代的 `deepseek-v4-flash`，还是官方短名 `deepseek-pro`，都会归入同一族，
+ * 不会因写法不同而让思考协议、成本与窗口漂移。
  */
 export function isDeepSeekV4Model(modelId?: string): boolean {
   const model = resolveDeepSeekV4ModelId(modelId)
-  return model != null && /^deepseek-v4-(?:pro|flash)$/.test(model)
+  return model != null && /^(?:deepseek-flash|deepseek-v4-pro)$/.test(model)
 }
 
 /** 把 "4.6" / "5-4" 这类版本串解析为可逐位比较的数字段。 */
@@ -104,7 +106,8 @@ const ONE_MILLION_FAMILY_RULES: readonly OneMillionFamilyRule[] = [
   { prefix: 'claude-fable-', minVersion: '5' },
   // GPT：5.4 及之后的 GPT / Codex 世代；mini 档位实测窗口更小，单独排除
   { prefix: 'gpt-', minVersion: GPT_GENERATION_MIN_VERSION, exclude: (modelId) => modelId.includes('mini') },
-  // DeepSeek：V4 及之后（v5+ 自动继承）；deepseek-flash / deepseek-pro 为 V4 起的官方无版本号短名
+  // DeepSeek：V4 及之后（v5+ 自动继承）；deepseek-flash / deepseek-pro 为 V4 起的官方无版本号短名，
+  // 其中 deepseek-flash 自 0.86 起就是带图能力的 catalog 正式 ID
   { prefix: 'deepseek-v', minVersion: '4', shortNames: DEEPSEEK_SHORT_MODEL_NAMES },
   // Kimi：K3 及之后（K4+ 自动继承）
   { prefix: 'kimi-k', minVersion: '3' },
@@ -151,7 +154,7 @@ export function isNextGeneration1MContextModel(modelId?: string): boolean {
  * 模型家族都按 1M 处理，家族新版本自动继承，不再逐个 SKU 维护白名单。
  *
  * 当前覆盖：Claude Sonnet 4+ / Opus 4.6+ / Fable 5、GPT-5.4+（mini 除外）、
- * DeepSeek V4+（含官方无版本号短名 deepseek-flash / deepseek-pro）、Kimi K3+、
+ * DeepSeek V4+（含官方无版本号短名 deepseek-flash / deepseek-pro，以及旧的 deepseek-v4-flash 写法）、Kimi K3+、
  * 智谱 GLM-5.2+、小米 MiMo V2.5+（含已确认的 V2 Pro）、MiniMax M3+、Grok 4.6+，
  * 以及显式声明 `[1m]` 的 GLM-X-Preview。
  *

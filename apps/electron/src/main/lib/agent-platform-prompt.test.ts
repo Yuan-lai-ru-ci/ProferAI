@@ -30,6 +30,18 @@ describe('agent platform prompt overlay', () => {
     expect(prompt).not.toContain('当前平台：Windows')
   })
 
+  test('Pi macOS overlay reports shell_not_found instead of claiming zsh when Bash is unavailable', () => {
+    const prompt = buildAgentPlatformPrompt({
+      platform: 'darwin',
+      agentCwd: '/Users/mac/session-1',
+      isPiRuntime: true,
+    })
+
+    expect(prompt).toContain('当前 Agent shell：Bash 不可用（shell_not_found）')
+    expect(prompt).toContain('不要改用 zsh/sh 猜测执行')
+    expect(prompt).not.toContain('当前 Agent shell：/bin/zsh')
+  })
+
   test('Windows overlay describes detected shell choices and rejects macOS assumptions', () => {
     const prompt = buildAgentPlatformPrompt({
       platform: 'win32',

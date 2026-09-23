@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { RuntimeStatus } from '@profer/shared'
-import { buildAgentRuntimeEnv, resolvePosixShellPath } from './agent-runtime-env'
+import { buildAgentRuntimeEnv, mergeRuntimeEnv, resolvePosixShellPath } from './agent-runtime-env'
 
 describe('Agent runtime CLI PATH', () => {
   test('Given packaged CLI on Windows When building Agent env Then only CLI directory is prepended', () => {
@@ -18,12 +18,12 @@ describe('Agent runtime CLI PATH', () => {
     ].join(';'))
   })
 
-  test('Given detected Bun outside the inherited PATH When building Pi env Then Bun directory is prepended', () => {
+  test('Given detected Bun outside the inherited PATH When building Pi env Then Bun directory is prepended and Bash stays explicit', () => {
     const result = buildAgentRuntimeEnv({
       bundledCliPath: '/Applications/Profer.app/Contents/Resources/bin/profer',
       platform: 'darwin',
       pathDelimiter: ':',
-      processEnv: { PATH: '/usr/bin:/bin' },
+      processEnv: { PATH: '/usr/bin:/bin', SHELL: '/bin/zsh' },
       runtimeStatus: {
         node: { available: false, path: null, version: null, error: null },
         bun: { available: true, path: '/Users/mac/.bun/bin/bun', version: '1.4.0', source: 'system', error: null },
@@ -40,41 +40,52 @@ describe('Agent runtime CLI PATH', () => {
       '/bin',
     ].join(':'))
     expect(result.shellKind).toBe('posix')
-    expect(result.shellPath).toBe('/bin/zsh')
-    expect(result.env.SHELL).toBe('/bin/zsh')
+    expect(result.shellPath).toBe('/bin/bash')
+    // `shellPath` selects the Agent Bash executable; the runtime override preserves the base SHELL.
+    expect(result.env.SHELL).toBeUndefined()
+    expect(mergeRuntimeEnv({ PATH: '/usr/bin', SHELL: '/bin/zsh' }, result.env).SHELL).toBe('/bin/zsh')
   })
 
-  test('Given a custom POSIX shell When building Agent env Then preserves the explicit existing shell path', () => {
+  test('Given zsh as the user environment shell When building Agent env Then uses Bash for command execution without rewriting SHELL', () => {
     const result = buildAgentRuntimeEnv({
       platform: 'darwin',
       pathDelimiter: ':',
-      processEnv: { PATH: '/usr/bin', SHELL: '/opt/homebrew/bin/fish' },
-      pathExists: (path) => path === '/opt/homebrew/bin/fish',
+      processEnv: { PATH: '/usr/bin', SHELL: '/bin/zsh' },
+      pathExists: (path) => path === '/bin/bash',
     })
 
     expect(result.shellKind).toBe('posix')
-    expect(result.shellPath).toBe('/opt/homebrew/bin/fish')
-    expect(result.env.SHELL).toBe('/opt/homebrew/bin/fish')
+    expect(result.shellPath).toBe('/bin/bash')
+    expect(result.env.SHELL).toBeUndefined()
   })
 
-  test('Given a stale absolute SHELL path When building Agent env Then falls back to the macOS system shell', () => {
+  test('Given a stale user SHELL path When building Agent env Then still resolves the system Bash', () => {
     const result = buildAgentRuntimeEnv({
       platform: 'darwin',
       pathDelimiter: ':',
       processEnv: { PATH: '/usr/bin', SHELL: '/Users/mac/.missing-shell' },
-      pathExists: (path) => path === '/bin/zsh',
+      pathExists: (path) => path === '/bin/bash',
     })
 
-    expect(result.shellPath).toBe('/bin/zsh')
-    expect(result.env.SHELL).toBe('/bin/zsh')
+    expect(result.shellPath).toBe('/bin/bash')
+    expect(result.env.SHELL).toBeUndefined()
   })
 
-  test('Given a shell command name When resolving Then uses its verified PATH entry instead of returning a bare command', () => {
+  test('Given Bash only on PATH When resolving Then uses its verified PATH entry instead of returning a bare command', () => {
     expect(resolvePosixShellPath(
-      { PATH: '/custom/bin:/bin', SHELL: 'bash' },
+      { PATH: '/custom/bin:/usr/bin', SHELL: '/bin/zsh' },
       'darwin',
       ':',
       (path) => path === '/custom/bin/bash',
     )).toBe('/custom/bin/bash')
+  })
+
+  test('Given no verified Bash When resolving Then does not silently fall back to sh', () => {
+    expect(resolvePosixShellPath(
+      { PATH: '/usr/local/bin', SHELL: '/bin/zsh' },
+      'linux',
+      ':',
+      () => false,
+    )).toBeUndefined()
   })
 })

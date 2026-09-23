@@ -321,7 +321,11 @@ export interface AppSettings {
   planningWindowState?: MainWindowState
   /** 是否开机自启动（默认 false） */
   autoLaunch?: boolean
-  /** 是否已通过版本号连击解锁插件系统入口。 */
+  /** 是否已通过版本号连击解锁开发者模式。 */
+  developerModeEnabled?: boolean
+  /** 是否启用 Agent 开放认识论姿态；仅在开发者模式下生效。 */
+  openEpistemicModeEnabled?: boolean
+  /** @deprecated 旧版插件入口解锁标记，仅兼容读取，不再写入。 */
   pluginSystemEnabled?: boolean
   /** 是否启用局域网移动模式（试验版）；启动后自动恢复。 */
   pocketModeEnabled?: boolean
@@ -344,8 +348,10 @@ export interface MainWindowState {
 export interface PersistedTabSettings {
   tabs: import('../renderer/atoms/tab-atoms').TabItem[]
   activeTabId: string | null
-  /** 可选的左右组合布局；缺省表示单栏 */
+  /** 旧版单组合布局；仅用于向后兼容读取。 */
   group?: import('../renderer/atoms/tab-group-atoms').PersistedTabGroup
+  /** 可选的多个左右组合布局；缺省或空数组表示单栏。 */
+  groups?: import('../renderer/atoms/tab-group-atoms').PersistedTabGroup[]
 }
 
 /** 移动模式（Pocket 远程接入）服务状态与连接信息 */
@@ -378,6 +384,12 @@ export const SKIN_IPC_CHANNELS = {
   ON_SKINS_CHANGED: 'skins:changed',
 } as const
 
+/** 跨窗口同步的开发者设置快照。 */
+export interface DeveloperSettingsSnapshot {
+  developerModeEnabled: boolean
+  openEpistemicModeEnabled: boolean
+}
+
 export const SETTINGS_IPC_CHANNELS = {
   RENDERER_READY: 'settings:renderer-ready',
   GET: 'settings:get',
@@ -387,6 +399,8 @@ export const SETTINGS_IPC_CHANNELS = {
   ON_SYSTEM_THEME_CHANGED: 'settings:system-theme-changed',
   /** 用户手动切换主题时广播给所有窗口 */
   ON_THEME_SETTINGS_CHANGED: 'settings:theme-settings-changed',
+  /** 开发者模式及 Agent 开放认识论设置变化时广播给所有窗口 */
+  ON_DEVELOPER_SETTINGS_CHANGED: 'settings:developer-settings-changed',
   /** 获取/设置开机自启动状态 */
   GET_AUTO_LAUNCH: 'settings:get-auto-launch',
   SET_AUTO_LAUNCH: 'settings:set-auto-launch',

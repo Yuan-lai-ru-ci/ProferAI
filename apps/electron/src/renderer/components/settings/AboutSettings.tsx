@@ -37,10 +37,10 @@ import { Badge } from '@/components/ui/badge'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { VersionHistory } from './VersionHistory'
-import { pluginSystemEnabledAtom } from '@/atoms/plugin-system'
+import { developerModeEnabledAtom, openEpistemicModeEnabledAtom } from '@/atoms/developer-mode'
 import {
-  INITIAL_PLUGIN_UNLOCK_CLICK_STATE,
-  advancePluginUnlockClick,
+  INITIAL_DEVELOPER_MODE_UNLOCK_CLICK_STATE,
+  advanceDeveloperModeUnlockClick,
 } from '@/lib/plugin-unlock'
 
 /** 从 package.json 构建时由 Vite define 注入 */
@@ -476,32 +476,34 @@ function ShellEnvironmentCard(): React.ReactElement | null {
 }
 
 export function AboutSettings(): React.ReactElement {
-  const pluginSystemEnabled = useAtomValue(pluginSystemEnabledAtom)
-  const setPluginSystemEnabled = useSetAtom(pluginSystemEnabledAtom)
-  const unlockClickStateRef = React.useRef(INITIAL_PLUGIN_UNLOCK_CLICK_STATE)
+  const developerModeEnabled = useAtomValue(developerModeEnabledAtom)
+  const setDeveloperModeEnabled = useSetAtom(developerModeEnabledAtom)
+  const setOpenEpistemicModeEnabled = useSetAtom(openEpistemicModeEnabledAtom)
+  const unlockClickStateRef = React.useRef(INITIAL_DEVELOPER_MODE_UNLOCK_CLICK_STATE)
   const unlockPendingRef = React.useRef(false)
 
   const handleVersionClick = React.useCallback((): void => {
-    if (pluginSystemEnabled || unlockPendingRef.current) return
+    if (developerModeEnabled || unlockPendingRef.current) return
 
-    const result = advancePluginUnlockClick(unlockClickStateRef.current, Date.now())
+    const result = advanceDeveloperModeUnlockClick(unlockClickStateRef.current, Date.now())
     unlockClickStateRef.current = result.state
     if (!result.unlocked) return
 
     unlockPendingRef.current = true
-    window.electronAPI.updateSettings({ pluginSystemEnabled: true })
-      .then(() => {
-        setPluginSystemEnabled(true)
-        toast.success('插件已启用')
+    window.electronAPI.updateSettings({ developerModeEnabled: true })
+      .then((settings) => {
+        setDeveloperModeEnabled(settings.developerModeEnabled === true)
+        setOpenEpistemicModeEnabled(settings.openEpistemicModeEnabled === true)
+        toast.success('开发者模式已启用')
       })
       .catch((error: unknown) => {
-        console.error('[插件] 启用入口失败:', error)
-        toast.error('插件启用失败，请重试')
+        console.error('[开发者模式] 启用入口失败:', error)
+        toast.error('开发者模式启用失败，请重试')
       })
       .finally(() => {
         unlockPendingRef.current = false
       })
-  }, [pluginSystemEnabled, setPluginSystemEnabled])
+  }, [developerModeEnabled, setDeveloperModeEnabled, setOpenEpistemicModeEnabled])
 
   return (
     <div className="space-y-8">
@@ -511,7 +513,7 @@ export function AboutSettings(): React.ReactElement {
       >
         <SettingsCard>
           <SettingsRow label="版本">
-            {pluginSystemEnabled ? (
+            {developerModeEnabled ? (
               <span className="font-mono text-sm text-muted-foreground">{APP_VERSION}</span>
             ) : (
               <button

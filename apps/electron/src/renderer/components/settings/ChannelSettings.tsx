@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch'
 import { PROVIDER_LABELS, isAgentCompatibleProvider, isAgentEnabledForChannel } from '@profer/shared'
 import type { Channel, OfficialChannelHealth, ProviderType } from '@profer/shared'
 import { getChannelLogo } from '@/lib/model-logo'
+import { resolvePiCoreState } from '@/lib/channel-model-groups'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { authStatusAtom } from '@/atoms/identity-atoms'
@@ -506,10 +507,10 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
 
 // ===== Agent Core 兼容性标签 =====
 
-function AgentCoreChips({ channel }: { channel: Pick<Channel, 'provider' | 'enabled' | 'agentExperimentalEnabled'> }): React.ReactElement {
+function AgentCoreChips({ channel }: { channel: Pick<Channel, 'provider' | 'enabled' | 'agentExperimentalEnabled' | 'agentRuntimes'> }): React.ReactElement {
   const supportsClaude = isAgentCompatibleProvider(channel.provider)
-  const isExperimentalXai = channel.provider === 'xai'
-  const agentEnabled = isAgentEnabledForChannel(channel)
+  const piCoreState = resolvePiCoreState(channel)
+  const isExperimentalXai = piCoreState !== 'active'
 
   return (
     <span className="flex items-center gap-1 shrink-0">
@@ -519,7 +520,7 @@ function AgentCoreChips({ channel }: { channel: Pick<Channel, 'provider' | 'enab
         </span>
       )}
       <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${isExperimentalXai ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'}`}>
-        {isExperimentalXai ? (agentEnabled ? 'Pi 实验' : 'Pi 实验未启用') : 'Pi'}
+        {isExperimentalXai ? (piCoreState === 'experimental-active' ? 'Pi 实验' : 'Pi 实验未启用') : 'Pi'}
       </span>
     </span>
   )

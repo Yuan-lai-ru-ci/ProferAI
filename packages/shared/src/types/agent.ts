@@ -428,6 +428,7 @@ export type ErrorCode =
   | 'prompt_too_long'
   | 'thinking_signature_invalid'
   | 'provider_error'
+  | 'empty_output'
   // 环境 / 配置类错误（本地可修复）
   | 'windows_shell_missing'
   | 'channel_not_found'

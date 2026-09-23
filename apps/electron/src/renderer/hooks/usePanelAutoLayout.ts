@@ -24,7 +24,7 @@ import {
 import { browserPanelOpenMapAtom } from '@/atoms/browser-atoms'
 import { agentSidePanelOpenAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import { sidebarCollapsedAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
-import { isGroupActive, tabGroupAtom } from '@/atoms/tab-group-atoms'
+import { findTabGroup, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import {
   computeVisibility,
@@ -46,11 +46,8 @@ function getCurrentLayout(): PanelLayoutState {
   const agentSessionActive = scopeActive && appMode === 'agent' && !!sessionId
   // 主区栏数：用与 MainArea 相同的纯判定（isGroupActive），
   // 避免"预算算几栏"和"实际渲染几栏"各写一套。
-  const group = store.get(tabGroupAtom)
-  const groupViewActive =
-    !!group &&
-    (!!group.leftTabId || !!group.rightTabId) &&
-    isGroupActive(group, store.get(activeTabIdAtom))
+  const group = findTabGroup(store.get(tabGroupsAtom), store.get(activeTabIdAtom))
+  const groupViewActive = !!group && (!!group.leftTabId || !!group.rightTabId)
   return {
     sidebar: !store.get(sidebarCollapsedAtom),
     filePanel: agentSessionActive && store.get(agentSidePanelOpenAtom),
@@ -150,7 +147,7 @@ export function usePanelAutoLayout(options: UsePanelAutoLayoutOptions = {}): voi
   const sidePanelOpen = useAtomValue(agentSidePanelOpenAtom)
   const browserOpenMap = useAtomValue(browserPanelOpenMapAtom)
   const layoutScopeActive = useAtomValue(layoutScopeActiveAtom)
-  const tabGroup = useAtomValue(tabGroupAtom)
+  const tabGroups = useAtomValue(tabGroupsAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
 
   // 统一可见性计算：以当前可见性为 prev 走滞后带，窗口停在临界值附近不反复横跳
@@ -162,5 +159,5 @@ export function usePanelAutoLayout(options: UsePanelAutoLayoutOptions = {}): voi
     if (vis.browser !== cur.browser || vis.filePanel !== cur.filePanel) {
       setPanelVisibility(vis)
     }
-  }, [windowWidth, appMode, sessionId, sidebarCollapsed, sidePanelOpen, browserOpenMap, layoutScopeActive, tabGroup, activeTabId, setPanelVisibility])
+  }, [windowWidth, appMode, sessionId, sidebarCollapsed, sidePanelOpen, browserOpenMap, layoutScopeActive, tabGroups, activeTabId, setPanelVisibility])
 }

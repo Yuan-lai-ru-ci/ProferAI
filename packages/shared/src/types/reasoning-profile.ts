@@ -356,10 +356,11 @@ export function resolveReasoningProfile(input: ResolveReasoningProfileInput): Re
   const isOpenAITransport = input.transport === 'openai-completions' || input.transport === 'openai-responses'
   const isOpenAIReasoningModel = !modelId.endsWith('-chat-latest')
     && (modelId.startsWith('gpt-5') || modelId === 'gpt-6-astra' || /^(o1|o3|o4)(?:-|$)/.test(modelId))
-  // DeepSeek 官方短名（deepseek-flash / deepseek-pro）与 deepseek-v4-* 同代同协议，
-  // 先归一再匹配档位，避免短名丢失 output_config.effort 映射。
+  // DeepSeek 的 catalog ID、旧代写法与官方短名同代同协议，
+  // 先归一再匹配档位，避免写法不同丢失 output_config.effort 映射。
+  // 归一后 Flash 档的 ID 形如 `deepseek-flash`（0.86 起）或 `deepseek-flash-*`。
   const deepseekModelId = resolveDeepSeekV4ModelId(modelId) ?? modelId
-  const profile = /^deepseek-v4-flash(?:-|$)/.test(deepseekModelId)
+  const profile = /^deepseek-flash(?:-|$)/.test(deepseekModelId)
     ? DEEPSEEK_V4_FLASH_PROFILE
     : /^deepseek-v4-pro(?:-|$)/.test(deepseekModelId)
       ? DEEPSEEK_V4_PRO_PROFILE

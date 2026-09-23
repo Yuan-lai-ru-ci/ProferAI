@@ -39,6 +39,8 @@ export interface TabGroupItemProps {
   onActivate: () => void
   /** 解散组合（两个标签都保留） */
   onDissolve: () => void
+  /** 中键拆分组合（与解散按钮一致，不关闭成员标签） */
+  onMiddleClick: () => void
   /** 关闭整组（两个标签都关闭） */
   onCloseGroup: () => void
   onDragStart: (e: React.PointerEvent) => void
@@ -67,6 +69,7 @@ export function TabGroupItem({
   focusedSide,
   onActivate,
   onDissolve,
+  onMiddleClick,
   onCloseGroup,
   onDragStart,
   onHoverEnter,
@@ -76,6 +79,13 @@ export function TabGroupItem({
   const suppressClickRef = React.useRef(false)
   const leftLabel = leftTitle ?? '选择会话…'
   const rightLabel = rightTitle ?? '选择会话…'
+
+  const handleMouseDown = (e: React.MouseEvent): void => {
+    if (e.button !== 1) return
+    e.preventDefault()
+    e.stopPropagation()
+    onMiddleClick()
+  }
 
   const handlePointerDown = (e: React.PointerEvent): void => {
     if (e.button !== 0) return
@@ -136,6 +146,7 @@ export function TabGroupItem({
             : 'topbar-tab-inactive text-muted-foreground hover:text-foreground',
         )}
         onClick={handleClick}
+        onMouseDown={handleMouseDown}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

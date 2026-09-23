@@ -4,7 +4,7 @@
  * 模型（保持扁平，避免重演 #288 那套嵌套 SplitLayoutState 的耦合）：
  * - tabsAtom 保持扁平：组合成员仍是普通标签，仍在列表与持久化里，
  *   只是**渲染时折叠成一个条目**（跳过第二个成员，在第一个成员位置渲染组合条目）。
- * - 组合本身只是一个叠加态：leftTabId / rightTabId / focusedTabId。
+ * - 每个组合只是一个叠加态：leftTabId / rightTabId / focusedTabId；多个组合组成扁平列表。
  * - **允许一侧为空**（null）：把当前标签拖进分区时不再自动补一个对照会话，
  *   空的那一栏由用户自己挑（拖另一个标签进来，或在空栏里从列表选择）。
  * - 焦点 = activeTabIdAtom 属于哪一侧，不另设 focusedPane：
@@ -46,6 +46,9 @@ export interface PersistedTabGroup {
   rightTabId: string | null
   focusedTabId: string
 }
+
+/** 运行期允许同时存在多个互不重叠的组合。 */
+export type TabGroupsState = TabGroupState[]
 
 /**
  * 允许参与组合的 tab 类型白名单。
@@ -123,6 +126,42 @@ export function isGroupMember(group: TabGroupState | null, tabId: string | null 
   return group.leftTabId === tabId || group.rightTabId === tabId
 }
 
+/** 查找标签所属组合；每个标签最多属于一个组合。 */
+export function findTabGroup(
+  groups: readonly TabGroupState[],
+  tabId: string | null | undefined,
+): TabGroupState | null {
+  if (!tabId) return null
+  return groups.find((group) => isGroupMember(group, tabId)) ?? null
+}
+
+/**
+ * 新增或替换一个组合，并移除与新组合成员重叠的旧组合。
+ * 这样拖入另一个组合的成员时也不会产生一个标签同时出现在两组的非法状态。
+ */
+export function replaceTabGroup(
+  groups: readonly TabGroupState[],
+  previousGroup: TabGroupState | null,
+  nextGroup: TabGroupState,
+): TabGroupState[] {
+  const nextIds = new Set(groupTabIds(nextGroup))
+  const previousIndex = previousGroup ? groups.indexOf(previousGroup) : -1
+  const retained = groups.filter((group) => (
+    group !== previousGroup && !groupTabIds(group).some((id) => nextIds.has(id))
+  ))
+  const insertAt = previousIndex < 0 ? retained.length : Math.min(previousIndex, retained.length)
+  return [...retained.slice(0, insertAt), nextGroup, ...retained.slice(insertAt)]
+}
+
+/** 从组合列表移除指定组合。 */
+export function removeTabGroup(
+  groups: readonly TabGroupState[],
+  target: TabGroupState | null,
+): TabGroupState[] {
+  if (!target) return [...groups]
+  return groups.filter((group) => group !== target)
+}
+
 /** 组合是否处于激活态（焦点标签是组内成员） */
 export function isGroupActive(group: TabGroupState | null, activeTabId: string | null | undefined): boolean {
   return isGroupMember(group, activeTabId)
@@ -134,6 +173,23 @@ export function groupSideOf(group: TabGroupState | null, tabId: string | null | 
   if (group.leftTabId === tabId) return 'left'
   if (group.rightTabId === tabId) return 'right'
   return null
+}
+
+/**
+ * 点击组合栏时应切换到哪个成员。
+ *
+ * 只有当前本来就在组合视图里，左右栏点击才有资格切换焦点；当前正在查看组外标签时，
+ * MainArea 仍复用左栏容器渲染该标签，此时 pointerdown 不能把用户劫持回组合。
+ */
+export function resolveGroupPaneFocusTarget(
+  group: TabGroupState | null,
+  activeTabId: string | null | undefined,
+  side: TabGroupSide,
+): string | null {
+  if (!isGroupActive(group, activeTabId)) return null
+  const targetId = side === 'left' ? group?.leftTabId : group?.rightTabId
+  if (!targetId || targetId === activeTabId) return null
+  return targetId
 }
 
 /** 切换组内焦点成员（非成员时返回原引用） */
@@ -247,6 +303,24 @@ export function reconcileGroup(
   return { ...group, focusedTabId: (group.leftTabId ?? group.rightTabId)! }
 }
 
+/** 对账多个组合，并保证恢复后的成员互不重叠。 */
+export function reconcileTabGroups(
+  groups: readonly TabGroupState[],
+  existingTabIds: ReadonlySet<string>,
+): TabGroupState[] {
+  const usedTabIds = new Set<string>()
+  const reconciled: TabGroupState[] = []
+  for (const group of groups) {
+    const next = reconcileGroup(group, existingTabIds)
+    if (!next) continue
+    const memberIds = groupTabIds(next)
+    if (memberIds.some((id) => usedTabIds.has(id))) continue
+    memberIds.forEach((id) => usedTabIds.add(id))
+    reconciled.push(next)
+  }
+  return reconciled
+}
+
 /** 生成持久化字段；至少一侧可持久化，否则丢弃组合 */
 export function toPersistedTabGroup(
   group: TabGroupState | null,
@@ -268,6 +342,26 @@ export function fromPersistedTabGroup(value: unknown): TabGroupState | null {
   const left = typeof raw.leftTabId === 'string' && raw.leftTabId ? raw.leftTabId : null
   const right = typeof raw.rightTabId === 'string' && raw.rightTabId ? raw.rightTabId : null
   return createGroup(left, right, typeof raw.focusedTabId === 'string' ? raw.focusedTabId : null)
+}
+
+/** 写入新版 groups 数组；不可持久化的组合会被过滤。 */
+export function toPersistedTabGroups(
+  groups: readonly TabGroupState[],
+  persistentTabIds: ReadonlySet<string>,
+): PersistedTabGroup[] {
+  return reconcileTabGroups(groups, persistentTabIds).map((group) => ({
+    leftTabId: group.leftTabId,
+    rightTabId: group.rightTabId,
+    focusedTabId: group.focusedTabId,
+  }))
+}
+
+/** 读取新版 groups 数组；旧版单个 group 由调用方包装成数组传入。 */
+export function fromPersistedTabGroups(value: unknown): TabGroupState[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(fromPersistedTabGroup)
+    .filter((group): group is TabGroupState => group !== null)
 }
 
 /** 右栏占比 clamp（拖拽入口与持久化读取共用） */
@@ -317,8 +411,8 @@ export function resolveGroupSplitGeometry(
 
 // ===== Atoms =====
 
-/** 当前组合（null = 无组合）；运行期内存态，重启恢复由 main.tsx 读 settings.tabState.group 写入 */
-export const tabGroupAtom = atom<TabGroupState | null>(null)
+/** 当前全部组合；运行期内存态，重启恢复由 main.tsx 读 settings.tabState.groups 写入。 */
+export const tabGroupsAtom = atom<TabGroupsState>([])
 
 /** 组合内的左右比例，持久化到 localStorage（与 previewSplitRatioAtom 同款做法） */
 export const tabGroupRatioAtom = atomWithStorage<number>('profer-tab-group-ratio', 0.5)
@@ -327,4 +421,4 @@ export const tabGroupRatioAtom = atomWithStorage<number>('profer-tab-group-ratio
 export const tabGroupDragAtom = atom<TabGroupDragState>({ draggingTabId: null, hoveredPosition: null })
 
 /** 是否存在组合（派生） */
-export const hasTabGroupAtom = atom<boolean>((get) => get(tabGroupAtom) !== null)
+export const hasTabGroupAtom = atom<boolean>((get) => get(tabGroupsAtom).length > 0)

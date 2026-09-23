@@ -47,13 +47,15 @@ import { appModeAtom } from "@/atoms/app-mode";
 import { openBrowserFromPush, openFilePanel } from "@/hooks/usePanelAutoLayout";
 import {
   emptyGroupSide,
+  findTabGroup,
   groupTabIds,
   isGroupActive,
   isGroupEligibleTab,
-  isGroupMember,
   planGroupDrop,
   ratioForEmptySide,
-  tabGroupAtom,
+  removeTabGroup,
+  replaceTabGroup,
+  tabGroupsAtom,
   tabGroupDragAtom,
   tabGroupRatioAtom,
   type TabGroupSide,
@@ -581,6 +583,8 @@ function TabBarInner({
     () => tabs.find((t) => t.id === activeTabId),
     [tabs, activeTabId],
   );
+  const [tabGroups, setTabGroups] = useAtom(tabGroupsAtom);
+  const activeGroup = findTabGroup(tabGroups, activeTabId);
   const activeAgentSessionId =
     activeTab?.type === "agent" ? activeTab.sessionId : null;
   // 实际可见性（B = 展开意图 A && 窗口足够），由 usePanelAutoLayout 统一计算
@@ -594,6 +598,7 @@ function TabBarInner({
     isWindows &&
     activeAgentSessionId &&
     previewOpenMap.get(activeAgentSessionId) &&
+    !activeGroup &&
     !filePanelVisible &&
     !browserVisible,
   );
@@ -702,31 +707,34 @@ function TabBarInner({
   // ===== 组合 tab =====
   // 唯一创建入口是手势：把标签向下拖出标签栏，在主区左右投放区选位置。
   // 顶栏只在"已处于左右双栏"时提供一个解散按钮（常态不显示任何入口按钮）。
-  const [tabGroup, setTabGroup] = useAtom(tabGroupAtom);
   const setTabGroupRatio = useSetAtom(tabGroupRatioAtom);
   const setTabGroupDrag = useSetAtom(tabGroupDragAtom);
-  const groupActive = isGroupActive(tabGroup, activeTabId);
-  // 组合在顶栏的锚点：两个成员中在 tabsAtom 里靠前的那个（另一个折叠隐藏）
-  const groupAnchorTabId = React.useMemo(() => {
-    if (!tabGroup) return null;
-    // 只按非空成员定位：组合允许一侧为空（等用户选择）
-    const present = groupTabIds(tabGroup)
-      .map((id) => ({ id, index: tabs.findIndex((tab) => tab.id === id) }))
-      .filter((entry) => entry.index >= 0);
-    if (present.length === 0) return null;
-    present.sort((a, b) => a.index - b.index);
-    return present[0]!.id;
-  }, [tabGroup, tabs]);
 
-  const dissolveGroup = React.useCallback(() => {
-    setTabGroup(null);
-  }, [setTabGroup]);
+  // 每个组合在顶栏的锚点：成员中在 tabsAtom 里靠前的那个，另一个折叠隐藏。
+  const groupAnchorByMemberId = React.useMemo(() => {
+    const result = new Map<string, string>();
+    for (const group of tabGroups) {
+      const present = groupTabIds(group)
+        .map((id) => ({ id, index: tabs.findIndex((tab) => tab.id === id) }))
+        .filter((entry) => entry.index >= 0)
+        .sort((a, b) => a.index - b.index);
+      const anchor = present[0]?.id;
+      if (!anchor) continue;
+      for (const memberId of groupTabIds(group)) result.set(memberId, anchor);
+    }
+    return result;
+  }, [tabGroups, tabs]);
+
+  const dissolveGroup = React.useCallback((group: ReturnType<typeof findTabGroup>) => {
+    setTabGroups((previous) => removeTabGroup(previous, group));
+  }, [setTabGroups]);
 
   // 关闭整组：两个标签都关闭（运行中的会话仍按既有语义保留在后台）
-  const closeGroup = React.useCallback((groupTabIds: string[]) => {
-    setTabGroup(null);
-    for (const tabId of groupTabIds) onClose(tabId);
-  }, [onClose, setTabGroup]);
+  const closeGroup = React.useCallback((group: ReturnType<typeof findTabGroup>) => {
+    if (!group) return;
+    setTabGroups((previous) => removeTabGroup(previous, group));
+    for (const tabId of groupTabIds(group)) onClose(tabId);
+  }, [onClose, setTabGroups]);
 
   const topBarTools: TopBarTool[] = [
     {
@@ -755,11 +763,11 @@ function TabBarInner({
     {
       id: "tab-group",
       // 只在左右双栏（组合）状态下出现：常态不提供入口按钮，创建入口只有"把标签向下拖"手势。
-      visible: !teamMode && !!tabGroup,
+      visible: !teamMode && !!activeGroup,
       label: "解散组合",
-      tooltip: "解散组合（两个标签都保留）",
+      tooltip: "解散当前组合（两个标签都保留）",
       icon: <Ungroup className="size-3.5" />,
-      onClick: dissolveGroup,
+      onClick: () => dissolveGroup(activeGroup),
     },
   ];
   React.useEffect(() => {
@@ -986,14 +994,17 @@ function TabBarInner({
         if (mode !== "group" || !side) return;
 
         // 落定规则集中在 planGroupDrop（纯函数，已单测），此处只负责写状态。
+        const groups = store.get(tabGroupsAtom);
+        const currentActiveTabId = store.get(activeTabIdAtom);
+        const currentGroup = findTabGroup(groups, currentActiveTabId);
         const plan = planGroupDrop({
-          group: store.get(tabGroupAtom),
-          activeTabId: store.get(activeTabIdAtom),
+          group: currentGroup,
+          activeTabId: currentActiveTabId,
           draggedTabId: tabId,
           position: side,
         });
         if (!plan) return;
-        store.set(tabGroupAtom, plan.group);
+        store.set(tabGroupsAtom, replaceTabGroup(groups, currentGroup, plan.group));
         store.set(activeTabIdAtom, plan.activeTabId);
         // 空栏给一个较小的初始占比；之后用户可以自由拖分栏缝
         const emptySide = emptyGroupSide(plan.group);
@@ -1255,9 +1266,11 @@ function TabBarInner({
             style={{ height: TOPBAR_CONTENT_HEIGHT }}
           >
             {tabs.map((tab) => {
-              // 组合的两个成员在顶栏折叠成一个条目：跳过另一个成员，
+              // 每个组合的两个成员在顶栏折叠成一个条目：跳过另一个成员，
               // 在锚点（列表中靠前的那个成员）位置渲染组合条目。
-              if (tabGroup && groupAnchorTabId && isGroupMember(tabGroup, tab.id)) {
+              const tabGroup = findTabGroup(tabGroups, tab.id);
+              const groupAnchorTabId = groupAnchorByMemberId.get(tab.id);
+              if (tabGroup && groupAnchorTabId) {
                 if (tab.id !== groupAnchorTabId) return null;
                 const leftTab = tabGroup.leftTabId
                   ? tabs.find((item) => item.id === tabGroup.leftTabId) ?? null
@@ -1274,11 +1287,12 @@ function TabBarInner({
                       rightTitle={rightTab?.title ?? null}
                       leftStatus={leftTab ? streamingMap.get(leftTab.id) ?? "idle" : "idle"}
                       rightStatus={rightTab ? streamingMap.get(rightTab.id) ?? "idle" : "idle"}
-                      isActive={groupActive}
+                      isActive={isGroupActive(tabGroup, activeTabId)}
                       focusedSide={rightTab && activeTabId === rightTab.id ? "right" : "left"}
                       onActivate={() => onActivate(tabGroup.focusedTabId)}
-                      onDissolve={dissolveGroup}
-                      onCloseGroup={() => closeGroup(groupTabIds(tabGroup))}
+                      onDissolve={() => dissolveGroup(tabGroup)}
+                      onMiddleClick={() => dissolveGroup(tabGroup)}
+                      onCloseGroup={() => closeGroup(tabGroup)}
                       onDragStart={(e) => handleDragStartWithTearOff(tab.id, e)}
                       onHoverEnter={() => handleTabHoverEnter(tab.id)}
                       onHoverLeave={handleTabHoverLeave}

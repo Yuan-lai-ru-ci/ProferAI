@@ -112,6 +112,13 @@ describe('mapSDKErrorToTypedError 覆盖中转 5xx / 瞬时文案（回归：曾
     expect(typed.canRetry).toBe(true)
   })
 
+  test('Given thinking-only empty output Then maps to a retryable structured error', () => {
+    const typed = mapSDKErrorToTypedError('empty_output', '模型未生成可见回复', '模型未生成可见回复')
+    expect(typed.code).toBe('empty_output')
+    expect(typed.title).toBe('模型未生成回复')
+    expect(typed.canRetry).toBe(true)
+  })
+
   test('Given 认证失败 Then 仍不误判为 5xx 可重试', () => {
     const typed = mapSDKErrorToTypedError('invalid_api_key', 'invalid api key', 'invalid api key')
     expect(typed.code).toBe('invalid_api_key')

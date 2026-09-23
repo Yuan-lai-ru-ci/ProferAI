@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildQueuedMessageSendPayload, createAgentQueuedMessage, isQueueTargetNoLongerActiveError, shouldRestoreQueuedMessageAfterFailure } from './agent-message-queue'
+import { buildQueuedMessageSendPayload, createAgentQueuedMessage, isAgentRunAlreadyActiveError, isQueueTargetNoLongerActiveError, shouldRestoreQueuedMessageAfterFailure } from './agent-message-queue'
 import { buildQuotedSelectionBlock } from './quoted-selection'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 
@@ -9,6 +9,14 @@ describe('queue target lifecycle errors', () => {
     expect(isQueueTargetNoLongerActiveError(new Error('当前活跃 Agent runtime 不支持追加消息'))).toBe(false)
     expect(isQueueTargetNoLongerActiveError(new Error('[Agent 编排] 会话正在停止，无法追加消息: session-1'))).toBe(false)
     expect(isQueueTargetNoLongerActiveError('会话未运行，无法追加消息')).toBe(false)
+  })
+
+  test('识别同会话 owner run 仍活跃的未启动请求，包括 Electron IPC 包装', () => {
+    expect(isAgentRunAlreadyActiveError(new Error('AGENT_RUN_ALREADY_ACTIVE: 上一条消息仍在处理中，请稍候再试'))).toBe(true)
+    expect(isAgentRunAlreadyActiveError(new Error(
+      "Error invoking remote method 'agent:send-message': Error: AGENT_RUN_ALREADY_ACTIVE: Agent 正在停止，请稍候再试",
+    ))).toBe(true)
+    expect(isAgentRunAlreadyActiveError(new Error('上一条消息仍在处理中，请稍候再试'))).toBe(false)
   })
 
   test('回归：真实 IPC 拒绝会带 Electron 包装前缀，仍必须识别为可恢复', () => {

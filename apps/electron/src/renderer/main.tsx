@@ -72,7 +72,8 @@ import {
   initializeUiScale,
 } from './atoms/ui-scale'
 import { initializePreviewModePreference, previewModePreferenceAtom } from './atoms/preview-atoms'
-import { pluginSystemEnabledAtom, installedPluginsAtom } from './atoms/plugin-system'
+import { installedPluginsAtom } from './atoms/plugin-system'
+import { developerModeEnabledAtom, openEpistemicModeEnabledAtom } from './atoms/developer-mode'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { useBrowserLocalFileSelectionQuote } from './hooks/useBrowserLocalFileSelectionQuote'
 import { useBrowserPreviewThemeSync } from './hooks/useBrowserPreviewThemeSync'
@@ -87,7 +88,13 @@ import {
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
 import { tabsAtom, activeTabIdAtom, ensureScratchPadTab, getPersistableTabState, scratchPadContentAtom, scratchPadLoadedAtom, SCRATCH_PAD_ID } from './atoms/tab-atoms'
-import { fromPersistedTabGroup, reconcileGroup, tabGroupAtom, toPersistedTabGroup } from './atoms/tab-group-atoms'
+import {
+  fromPersistedTabGroup,
+  fromPersistedTabGroups,
+  reconcileTabGroups,
+  tabGroupsAtom,
+  toPersistedTabGroups,
+} from './atoms/tab-group-atoms'
 import type { TabItem } from './atoms/tab-atoms'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
@@ -634,7 +641,7 @@ function PreviewModePreferenceInitializer(): null {
   return null
 }
 
-/** 从 settings.json 恢复版本号连击解锁的插件入口。 */
+/** 恢复插件列表与开发者模式设置。 */
 function PluginSystemInitializer(): null {
   const store = useStore()
   useEffect(() => {
@@ -660,13 +667,19 @@ function PluginSystemInitializer(): null {
     const unsubscribe = window.electronAPI.onPluginsChanged(refresh)
     return () => { revision += 1; unsubscribe() }
   }, [store])
-  const setPluginSystemEnabled = useSetAtom(pluginSystemEnabledAtom)
+  const setDeveloperModeEnabled = useSetAtom(developerModeEnabledAtom)
+  const setOpenEpistemicModeEnabled = useSetAtom(openEpistemicModeEnabledAtom)
 
   useEffect(() => {
+    const apply = (settings: { developerModeEnabled?: boolean; openEpistemicModeEnabled?: boolean }): void => {
+      setDeveloperModeEnabled(settings.developerModeEnabled === true)
+      setOpenEpistemicModeEnabled(settings.developerModeEnabled === true && settings.openEpistemicModeEnabled === true)
+    }
     void window.electronAPI.getSettings()
-      .then((settings) => setPluginSystemEnabled(settings.pluginSystemEnabled === true))
-      .catch((error: unknown) => console.error('[插件] 初始化入口状态失败:', error))
-  }, [setPluginSystemEnabled])
+      .then(apply)
+      .catch((error: unknown) => console.error('[开发者模式] 初始化状态失败:', error))
+    return window.electronAPI.onDeveloperSettingsChanged(apply)
+  }, [setDeveloperModeEnabled, setOpenEpistemicModeEnabled])
 
   return null
 }
@@ -962,8 +975,11 @@ function TabStatePersistenceInitializer(): null {
       const activeTab = validTabs.find((t) => t.id === restoredActiveTabId) ?? validTabs[0] ?? null
       store.set(tabsAtom, ensureScratchPadTab(validTabs))
       store.set(activeTabIdAtom, activeTab?.id ?? SCRATCH_PAD_ID)
-      const restoredGroup = reconcileGroup(fromPersistedTabGroup(tabState.group), validTabIds)
-      store.set(tabGroupAtom, restoredGroup)
+      // 新版支持多个组合；旧版单个 group 自动包装迁移。
+      const persistedGroups = tabState.groups?.length
+        ? fromPersistedTabGroups(tabState.groups)
+        : [fromPersistedTabGroup(tabState.group)].filter((group) => group !== null)
+      store.set(tabGroupsAtom, reconcileTabGroups(persistedGroups, validTabIds))
 
       // 同步 appMode、currentSessionId 和 Agent 所属工作区。
       // 团队 Tab 恢复时必须以会话元数据为准，否则页面会按旧的个人工作区渲染。
@@ -995,12 +1011,12 @@ function TabStatePersistenceInitializer(): null {
       const tabs = store.get(tabsAtom)
       const activeTabId = store.get(activeTabIdAtom)
       const persistableTabState = getPersistableTabState(tabs, activeTabId)
-      const group = toPersistedTabGroup(
-        store.get(tabGroupAtom),
+      const groups = toPersistedTabGroups(
+        store.get(tabGroupsAtom),
         new Set(persistableTabState.tabs.map((tab) => tab.id)),
       )
       window.electronAPI.updateSettings({
-        tabState: { ...persistableTabState, ...(group ? { group } : {}) },
+        tabState: { ...persistableTabState, ...(groups.length > 0 ? { groups } : {}) },
       }).catch(console.error)
     }
 
@@ -1012,7 +1028,7 @@ function TabStatePersistenceInitializer(): null {
 
     const unsub1 = store.sub(tabsAtom, debouncedSave)
     const unsub2 = store.sub(activeTabIdAtom, debouncedSave)
-    const unsub3 = store.sub(tabGroupAtom, debouncedSave)
+    const unsub3 = store.sub(tabGroupsAtom, debouncedSave)
 
     // 窗口关闭前立即刷新，避免最后 500ms 内的变更丢失
     const handleBeforeUnload = (): void => {
@@ -1021,11 +1037,11 @@ function TabStatePersistenceInitializer(): null {
       const tabs = store.get(tabsAtom)
       const activeTabId = store.get(activeTabIdAtom)
       const persistableTabState = getPersistableTabState(tabs, activeTabId)
-      const group = toPersistedTabGroup(
-        store.get(tabGroupAtom),
+      const groups = toPersistedTabGroups(
+        store.get(tabGroupsAtom),
         new Set(persistableTabState.tabs.map((tab) => tab.id)),
       )
-      const tabState = { ...persistableTabState, ...(group ? { group } : {}) }
+      const tabState = { ...persistableTabState, ...(groups.length > 0 ? { groups } : {}) }
       if (tabs.length > 0 && window.electronAPI.updateSettingsSync) {
         const ok = window.electronAPI.updateSettingsSync({ tabState })
         if (!ok) {

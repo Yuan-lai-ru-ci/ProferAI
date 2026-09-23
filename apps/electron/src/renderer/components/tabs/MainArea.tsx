@@ -41,12 +41,15 @@ import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects
 import {
   GROUP_SPLIT_GAP,
   fillGroupSide,
+  findTabGroup,
   focusGroupMember,
   groupTabIds,
-  isGroupActive,
-  reconcileGroup,
+  reconcileTabGroups,
+  removeTabGroup,
+  replaceTabGroup,
+  resolveGroupPaneFocusTarget,
   resolveGroupSplitGeometry,
-  tabGroupAtom,
+  tabGroupsAtom,
   tabGroupDragAtom,
   tabGroupRatioAtom,
   type TabGroupSide,
@@ -60,6 +63,8 @@ export function MainArea(): React.ReactElement {
   const activeTabId = useAtomValue(activeTabIdAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const activeTab = useAtomValue(activeTabAtom)
+  const [tabGroups, setTabGroups] = useAtom(tabGroupsAtom)
+  const tabGroup = findTabGroup(tabGroups, activeTabId)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
   const appMode = useAtomValue(appModeAtom)
@@ -207,8 +212,13 @@ export function MainArea(): React.ReactElement {
     return () => observer.disconnect()
   }, [])
 
+  // 组合视图本身已经占用左右两栏，不能再把当前成员的内联预览嵌套成第三栏。
+  // 这里只抑制显示意图，不清除 previewOpenMap；解散组合后原预览可以自然恢复。
   const previewOpen =
-    activeTab?.type === 'agent' && (previewOpenMap.get(activeTab.sessionId) ?? false) && !showBrowserPanel
+    activeTab?.type === 'agent'
+    && (previewOpenMap.get(activeTab.sessionId) ?? false)
+    && !showBrowserPanel
+    && !tabGroup
   const previewSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
 
   // 关闭动画状态：当 previewOpen 从 true → false 时，播放退出动画再移除 DOM
@@ -275,10 +285,8 @@ export function MainArea(): React.ReactElement {
   // 组合是一个叠加态：两个成员标签仍在 tabsAtom 里，只是顶栏渲染时折叠成一个条目。
   // 焦点 = activeTabId 属于哪一侧，因此"当前会话"（左侧栏高亮/右侧文件面板）
   // 通过既有的 useSyncActiveTabSideEffects 单点同步自动跟随焦点栏，不需要第二条真相。
-  const [tabGroup, setTabGroup] = useAtom(tabGroupAtom)
   const [tabGroupRatio, setTabGroupRatio] = useAtom(tabGroupRatioAtom)
   const tabGroupDrag = useAtomValue(tabGroupDragAtom)
-  const groupActive = isGroupActive(tabGroup, activeTabId)
   const leftGroupTab = React.useMemo(
     () => (tabGroup ? tabs.find((tab) => tab.id === tabGroup.leftTabId) ?? null : null),
     [tabGroup, tabs],
@@ -305,18 +313,24 @@ export function MainArea(): React.ReactElement {
   }, [])
 
   const groupGeometry = resolveGroupSplitGeometry(groupContainerWidth, tabGroupRatio)
-  // 左栏渲染哪个标签：组合激活时固定为组内左成员，否则跟随当前激活标签
-  const groupViewActive = groupActive && !!tabGroup && (!!leftGroupTab || !!rightGroupTab)
+  // 当前激活标签属于某个组合时才显示该组合；其他组合保持后台状态。
+  const groupViewActive = !!tabGroup && (!!leftGroupTab || !!rightGroupTab)
   const leftPaneTabId = groupViewActive ? leftGroupTab?.id ?? null : contentTabId
-  // 两栏宽度一律由比例算（含空栏）：空栏只是初始比例更小，分栏缝始终可以自由拖动。
-  const leftPaneStyle: React.CSSProperties = { flex: '1 1 auto' }
-  const rightPaneStyle: React.CSSProperties = { width: groupGeometry.rightWidth, flexShrink: 0 }
+  // ResizeObserver 首次回调前宽度是 0。此时必须用 CSS 等分兜底，不能把右栏写成 0px；
+  // 否则初次合并会只剩一条窄边界，用户也很难命中分隔条。
+  const groupGeometryReady = groupContainerWidth > GROUP_SPLIT_GAP
+  const rightPaneStyle: React.CSSProperties = {
+    width: groupGeometryReady ? groupGeometry.rightWidth : `calc(50% - ${GROUP_SPLIT_GAP / 2}px)`,
+    flexShrink: 0,
+  }
 
-  // 成员被关闭/删除（或组合指向失效标签）时自动解散，避免渲染出一栏空白。
+  // 成员被关闭/删除（或组合指向失效标签）时自动解散对应组合。
   React.useEffect(() => {
-    const reconciled = reconcileGroup(tabGroup, new Set(tabs.map((tab) => tab.id)))
-    if (reconciled !== tabGroup) setTabGroup(reconciled)
-  }, [tabGroup, tabs, setTabGroup])
+    const reconciled = reconcileTabGroups(tabGroups, new Set(tabs.map((tab) => tab.id)))
+    const unchanged = reconciled.length === tabGroups.length
+      && reconciled.every((group, index) => group === tabGroups[index])
+    if (!unchanged) setTabGroups(reconciled)
+  }, [setTabGroups, tabGroups, tabs])
 
   const activateGroupTab = React.useCallback((tabId: string): void => {
     setActiveTabId(tabId)
@@ -324,28 +338,29 @@ export function MainArea(): React.ReactElement {
     if (target) syncActiveTabSideEffects(target)
   }, [setActiveTabId, syncActiveTabSideEffects, tabs])
 
-  /** 聚焦某一栏：把 activeTabId 指向该侧成员，让"当前会话"跟随焦点 */
+  /** 聚焦某一栏：只在组合视图激活时切换成员，组外标签不能被 pointerdown 劫持 */
   const focusGroupSide = React.useCallback((side: TabGroupSide): void => {
-    if (!tabGroup) return
-    const targetId = side === 'left' ? tabGroup.leftTabId : tabGroup.rightTabId
-    // 空栏没有可聚焦的标签（焦点只能落在非空成员上）
-    if (!targetId || activeTabId === targetId) return
-    setTabGroup((previous) => focusGroupMember(previous, targetId))
+    const targetId = resolveGroupPaneFocusTarget(tabGroup, activeTabId, side)
+    if (!targetId || !tabGroup) return
+    const focused = focusGroupMember(tabGroup, targetId)
+    if (focused) setTabGroups((previous) => replaceTabGroup(previous, tabGroup, focused))
     activateGroupTab(targetId)
-  }, [activateGroupTab, activeTabId, setTabGroup, tabGroup])
+  }, [activateGroupTab, activeTabId, setTabGroups, tabGroup])
 
   /** 空栏里选中一个标签（会话或预览）：放进去并把焦点交给它 */
   const fillGroupPane = React.useCallback((side: TabGroupSide, tabId: string): void => {
-    setTabGroup((previous) => fillGroupSide(previous, side, tabId))
+    if (!tabGroup) return
+    const filledGroup = fillGroupSide(tabGroup, side, tabId)
+    if (filledGroup) setTabGroups((previous) => replaceTabGroup(previous, tabGroup, filledGroup))
     activateGroupTab(tabId)
     // 预览成员自带"用一栏展示这个文件"的语义，关掉该会话的内联分屏，避免同一文件两处显示
     const filled = tabs.find((tab) => tab.id === tabId)
     if (filled && isPreviewTab(filled)) closeInlinePreview(filled.sessionId)
-  }, [activateGroupTab, setTabGroup, tabs])
+  }, [activateGroupTab, setTabGroups, tabGroup, tabs])
 
   const dissolveGroup = React.useCallback((): void => {
-    setTabGroup(null)
-  }, [setTabGroup])
+    setTabGroups((previous) => removeTabGroup(previous, tabGroup))
+  }, [setTabGroups, tabGroup])
 
   // 右栏栏头动作：关闭该栏标签（关闭后由对账 effect 自动解散组合），焦点回到左栏
   const closeRightPane = React.useCallback((): void => {
@@ -353,11 +368,11 @@ export function MainArea(): React.ReactElement {
     const rightTabId = group?.rightTabId
     if (!group || !rightTabId) return
     const fallbackTabId = group.leftTabId
-    setTabGroup(null)
+    setTabGroups((previous) => removeTabGroup(previous, group))
     executeClose(rightTabId)
     // 右栏关掉后焦点回到左栏（若左栏也空着则保持现状，由标签列表决定激活项）
     if (fallbackTabId && activeTabId !== fallbackTabId) activateGroupTab(fallbackTabId)
-  }, [activateGroupTab, activeTabId, executeClose, setTabGroup, tabGroup])
+  }, [activateGroupTab, activeTabId, executeClose, setTabGroups, tabGroup])
 
   const handleGroupDragStart = React.useCallback((e: React.MouseEvent): void => {
     const container = groupContainerRef.current
@@ -504,7 +519,7 @@ export function MainArea(): React.ReactElement {
               <div
                 ref={groupContainerRef}
                 data-group-drop-region="true"
-                data-group-drop-split={Math.round(groupGeometry.leftWidth + GROUP_SPLIT_GAP / 2)}
+                data-group-drop-split={groupGeometryReady ? Math.round(groupGeometry.leftWidth + GROUP_SPLIT_GAP / 2) : undefined}
                 className="flex h-full min-w-0 relative"
                 style={leftFlexStyle}
               >
@@ -587,7 +602,7 @@ export function MainArea(): React.ReactElement {
                 {/* 合并投放区：拖动标签向下时出现，左右两半各对应一个落点。
                     位置由 TabBar 的全局 pointermove 计算（指针已被 setPointerCapture 捕获，
                     因此投放区只负责视觉，不接收事件）。 */}
-                {tabGroupDrag.draggingTabId && (!tabGroup || groupActive) && (
+                {tabGroupDrag.draggingTabId && (
                   // top-2 = TabBar 那边 GROUP_DROP_COMMIT_MARGIN（8px）：可视区必须与可提交区
                   // 完全重合，否则会出现"高亮了但松手无效"的死带。两个数值改一处要同步改另一处。
                   //
@@ -599,9 +614,11 @@ export function MainArea(): React.ReactElement {
                         key={side}
                         className="absolute inset-y-0 px-1"
                         style={{
-                          width: side === 'left'
-                            ? groupGeometry.leftWidth + GROUP_SPLIT_GAP / 2
-                            : groupGeometry.rightWidth + GROUP_SPLIT_GAP / 2,
+                          width: groupGeometryReady
+                            ? side === 'left'
+                              ? groupGeometry.leftWidth + GROUP_SPLIT_GAP / 2
+                              : groupGeometry.rightWidth + GROUP_SPLIT_GAP / 2
+                            : '50%',
                           left: side === 'left' ? 0 : undefined,
                           right: side === 'right' ? 0 : undefined,
                         }}

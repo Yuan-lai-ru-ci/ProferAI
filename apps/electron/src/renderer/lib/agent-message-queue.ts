@@ -104,6 +104,12 @@ export function isQueueTargetNoLongerActiveError(error: unknown): boolean {
   return /^\[Agent 编排\] 会话未运行，无法追加消息: /.test(stripIpcErrorPrefix(error.message))
 }
 
+/** Main 确认本次请求未启动、同 session 的 owner run 仍在执行。 */
+export function isAgentRunAlreadyActiveError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return /^AGENT_RUN_ALREADY_ACTIVE: /.test(stripIpcErrorPrefix(error.message))
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')

@@ -1,20 +1,8 @@
 /**
  * useOpenPreview — 统一的预览入口 Hook
  *
- * 把分散在 SidePanel / PreviewOpenButton / AgentView 等处的「打开预览」逻辑收敛到一处，
- * 按用户偏好（previewModePreferenceAtom）路由到 Tab 或右侧分屏。
- *
- * 例外：由**浏览器列**承担的两类格式都不进预览面板（目的地判定集中在 `lib/preview-destination`）：
- * - Open File Viewer 承担的长尾格式（老式 Office / 归档 / 设计文件 / 3D / GIS…）
- *   → 浏览器列里的独立 viewer 页（沙箱 webContents，无 preload）；
- * - 文本 / 代码兜底 + 静态图 → 浏览器列的**列内模式**（app 自己渲染，不经 OFV）。
- *
- * 用户仍可通过：
- *   - 把 preview Tab 拖出 TabBar 且**不落入组合投放区**（即时切换为分屏；
- *     落入投放区则是把它变成组合的一栏，见 atoms/tab-group-atoms 的合并手势）
- *   - PreviewPanel 顶栏 Maximize2（即时切换为 Tab）
- *   - PreviewTabContent 顶栏「切换为侧边分屏」按钮（即时切换为分屏）
- * 在两种模式间即时切换，本 hook 仅控制默认行为。
+ * 文件链接默认统一进入右侧 Browser：长尾格式走 Open File Viewer，其他格式走 BrowserInlinePreview。
+ * BrowserInlinePreview 仍提供“在标签页中打开”的手动逃生口，但不再由文件链接默认路由触发。
  */
 
 import * as React from 'react'
@@ -23,7 +11,6 @@ import { toast } from 'sonner'
 import {
   previewFileMapAtom,
   previewPanelOpenMapAtom,
-  previewModePreferenceAtom,
   type PreviewFile,
 } from '@/atoms/preview-atoms'
 import { agentSessionPathMapAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
@@ -111,8 +98,7 @@ export function useOpenPreview() {
       })
 
       // 目的地判定集中在一个纯函数里（`lib/preview-destination`，可逐格式单测）：
-      // viewer 页 / 浏览器列里的 app 渲染器 / 预览面板。
-      // 放在偏好判定之前 —— 前两者的呈现位置不该由“Tab / 分屏”偏好决定。
+      // OFV viewer 或 Browser 列内预览。文件链接不再根据 Tab / 分屏偏好进入旧预览面板。
       const requestVersion = beginBrowserPreviewRequest(sessionId)
       const destination = resolvePreviewDestination(normalizedFile.filePath)
       if (destination === 'ofv-viewer') {
@@ -124,23 +110,10 @@ export function useOpenPreview() {
         return
       }
 
-      const preferSplit = store.get(previewModePreferenceAtom) === 'split'
-
-      if (preferSplit) {
-        // 浏览器列与预览面板共用同一右侧空间；切回面板前先收起浏览器意图，
-        // 否则 MainArea 的浏览器优先级会把刚打开的预览继续盖住。
-        closeBrowserPanelForSession(store, sessionId)
-        clearBrowserInlinePreviewForSession(store, sessionId)
-        // 分屏：开启预览面板，不创建 Tab
-        store.set(previewPanelOpenMapAtom, (prev) => {
-          const m = new Map(prev)
-          m.set(sessionId, true)
-          return m
-        })
-        return
-      }
-
-      openPreviewTab(store, sessionId, normalizedFile.filePath)
+      // resolvePreviewDestination 当前只返回 Browser 路由；保留显式失败保护，
+      // 防止未来新增目的地时静默回落到旧的 Tab/面板行为。
+      console.warn(`[preview] 未处理的预览目的地: ${destination}`)
+      openBrowserInlinePreview(store, sessionId, normalizedFile)
     },
     [store],
   )

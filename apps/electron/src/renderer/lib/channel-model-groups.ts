@@ -47,6 +47,22 @@ export function getChannelProtocol(provider: Channel['provider']): ChannelProtoc
 }
 
 /**
+ * 渠道列表「Pi」内核标签的状态。
+ *
+ * 必须按用户真正勾选的 Pi 内核判定，不能沿用 `isAgentEnabledForChannel`：
+ * 后者是「是否勾选 Claude 内核」的 @deprecated 别名，而 xAI 按设计永远不获得 claude 内核，
+ * 于是已开启实验性 Agent 的 xAI 渠道会被显示成「Pi 实验未启用」，与事实相反。
+ */
+export type PiCoreState = 'active' | 'experimental-active' | 'experimental-inactive'
+
+export function resolvePiCoreState(
+  channel: Pick<Channel, 'provider' | 'enabled' | 'agentExperimentalEnabled' | 'agentRuntimes'>,
+): PiCoreState {
+  if (channel.provider !== 'xai') return 'active'
+  return isChannelEnabledForRuntime(channel, 'pi') ? 'experimental-active' : 'experimental-inactive'
+}
+
+/**
  * 该渠道能否服务于指定协议的 Agent 运行时。
  *
  * Agent 场景下「协议」等价于「内核」：Anthropic 协议 = Claude 内核，OpenAI 协议 = Pi 内核。

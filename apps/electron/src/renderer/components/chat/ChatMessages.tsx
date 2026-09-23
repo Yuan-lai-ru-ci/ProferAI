@@ -234,6 +234,9 @@ export function ChatMessages({
   // 这里用原始 streamingContent 作为守卫：如果原始内容已清空且不在流式中，立即归零。
   const smoothContent = (streaming || streamingContent) ? rawSmoothContent : ''
   const smoothReasoning = (streaming || streamingReasoning) ? rawSmoothReasoning : ''
+  // 流式阶段直接显示最新 chunk，确保 Markdown renderer 能随每个增量及时更新。
+  const visibleContent = streamingContent || smoothContent
+  const visibleReasoning = streamingReasoning || smoothReasoning
   const [parallelMode] = useConversationParallelMode()
 
   /** 是否正在加载更多历史 */
@@ -369,8 +372,8 @@ export function ChatMessages({
         messages={messages}
         conversationId={conversationId}
         streaming={streaming}
-        streamingContent={smoothContent}
-        streamingReasoning={smoothReasoning}
+        streamingContent={visibleContent}
+        streamingReasoning={visibleReasoning}
         startedAt={startedAt}
         contextDividers={contextDividers}
         onDeleteDivider={onDeleteDivider}
@@ -433,7 +436,7 @@ export function ChatMessages({
             ))}
 
             {/* 正在生成 / 停止后等待磁盘消息加载的临时 assistant 消息 */}
-            {(streaming || smoothContent || smoothReasoning) && (
+            {(streaming || visibleContent || visibleReasoning) && (
               <Message from="assistant">
                 <MessageHeader
                   model={streamingModel ?? undefined}
@@ -445,25 +448,25 @@ export function ChatMessages({
                   <ChatToolActivityIndicator activities={toolActivities} isStreaming={streaming} />
 
                   {/* 推理内容（如果有） */}
-                  {smoothReasoning && (
+                  {visibleReasoning && (
                     <Reasoning
-                      isStreaming={streaming && !smoothContent}
+                      isStreaming={streaming && !visibleContent}
                       defaultOpen={true}
                     >
                       <ReasoningTrigger />
-                      <ReasoningContent>{smoothReasoning}</ReasoningContent>
+                      <ReasoningContent>{visibleReasoning}</ReasoningContent>
                     </Reasoning>
                   )}
 
                   {/* 流式内容（经过平滑处理） */}
-                  {smoothContent ? (
+                  {visibleContent ? (
                     <>
-                      <MessageResponse>{smoothContent}</MessageResponse>
+                      <MessageResponse>{visibleContent}</MessageResponse>
                       {streaming && <StreamingIndicator />}
                     </>
                   ) : (
                     /* 等待首个 chunk 时的加载动画（仅流式中且无推理时显示） */
-                    streaming && !smoothReasoning && <MessageLoading startedAt={startedAt} />
+                    streaming && !visibleReasoning && <MessageLoading startedAt={startedAt} />
                   )}
                 </MessageContent>
                 {/* 操作栏占位：预留与 MessageActions 相同高度，防止流式结束时布局跳动 */}

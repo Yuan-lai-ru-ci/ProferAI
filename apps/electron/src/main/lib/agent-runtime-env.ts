@@ -75,35 +75,31 @@ export function dirnameForPlatform(path: string, platform: NodeJS.Platform): str
 }
 
 /**
- * 解析 POSIX shell 的可执行路径。
+ * 解析 Agent Bash 的 POSIX 执行路径。
  *
- * GUI 启动时 SHELL 可能是已经卸载的绝对路径，也可能只有 `bash` 这样的命令名；
- * 不能把它未经校验地交给 child_process.spawn，否则 shell 缺失和 cwd 缺失都会只显示为 ENOENT。
+ * 环境加载 shell 与 Agent Bash 执行 shell 必须分离：macOS 用户默认 shell
+ * 通常是 zsh，但 Bash 工具的语义应保持 Bash。Codex/Proma 都采用“用用户
+ * shell 准备环境、用确定的 Bash 执行命令”的边界，避免把 zsh glob/options
+ * 隐式带进名为 Bash 的工具。
+ *
+ * 只返回经过存在性校验的绝对路径，避免 GUI 进程的 PATH 或失效 SHELL 配置
+ * 把 child_process.spawn 的真实错误压扁成难以诊断的 ENOENT。
  */
 export function resolvePosixShellPath(
   processEnv: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
+  _platform: NodeJS.Platform,
   pathDelimiter: string,
   pathExists: (path: string) => boolean = existsSync,
-): string {
-  const requested = getCaseInsensitiveEnvValue(processEnv, 'SHELL')?.trim()
-  const candidates: string[] = []
+): string | undefined {
+  const pathKey = getPathKey(processEnv)
+  const candidates = ['/bin/bash', '/usr/bin/bash']
 
-  if (requested) {
-    if (requested.startsWith('/')) {
-      candidates.push(requested)
-    } else {
-      const pathKey = getPathKey(processEnv)
-      for (const directory of (processEnv[pathKey] ?? '').split(pathDelimiter)) {
-        const trimmedDirectory = directory.trim()
-        if (trimmedDirectory) candidates.push(join(trimmedDirectory, requested))
-      }
-    }
+  for (const directory of (processEnv[pathKey] ?? '').split(pathDelimiter)) {
+    const trimmedDirectory = directory.trim()
+    if (trimmedDirectory) candidates.push(join(trimmedDirectory, 'bash'))
   }
 
-  const fallback = platform === 'darwin' ? '/bin/zsh' : '/bin/sh'
-  candidates.push(fallback)
-  return candidates.find(pathExists) ?? fallback
+  return candidates.find(pathExists)
 }
 
 function collectProxyEnv(proxyUrl: string | undefined, processEnv: NodeJS.ProcessEnv): Record<string, string> {
@@ -279,7 +275,8 @@ export function buildAgentRuntimeEnv(options: BuildAgentRuntimeEnvOptions = {}):
 
   // macOS/Linux 的 Pi Bash 使用经过存在性校验的 POSIX shell；显式传递绝对路径，
   // 避免 Electron GUI 进程的 PATH 或失效 SHELL 配置把命令启动变成高频 ENOENT。
+  // `shellPath` 是 Agent Bash 的执行器；不要覆盖 `env.SHELL`，否则命令读取
+  // `$SHELL` 时会把用户的 login shell（通常是 zsh）误认为 Bash。
   const shellPath = resolvePosixShellPath(processEnv, platform, pathDelimiter, pathExists)
-  env.SHELL = shellPath
   return { env, shellKind: 'posix', shellPath }
 }

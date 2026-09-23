@@ -1,7 +1,18 @@
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { AgentRuntime, ProviderType, SDKMessage } from '@profer/shared'
+import type { AgentRuntime, Channel, ProviderType, SDKMessage } from '@profer/shared'
+import { isChannelEnabledForRuntime } from '@profer/shared'
 import { normalizeAnthropicBaseUrlForSdk } from '@profer/core'
 import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
+
+/** 本次发送未获得运行所有权；它不是 owner run 的流式错误或终态。 */
+export class AgentRunAlreadyActiveError extends Error {
+  readonly code = 'AGENT_RUN_ALREADY_ACTIVE'
+
+  constructor(readonly stopping: boolean) {
+    super(`AGENT_RUN_ALREADY_ACTIVE: ${stopping ? 'Agent 正在停止，请稍候再试' : '上一条消息仍在处理中，请稍候再试'}`)
+    this.name = 'AgentRunAlreadyActiveError'
+  }
+}
 
 /** 在任意 await 前原子占用会话；false 表示已有同 session 运行。 */
 export function tryAcquireActiveSession(activeSessions: Map<string, string>, sessionId: string, runToken: string): boolean {
@@ -30,6 +41,24 @@ export function tryReserveQueuedMessage(uuids: Set<string>, uuid: string): boole
 /** Pi 的 sendQueuedMessage(interrupt) 自己先建立 reservation 再 abort；不能预先 interruptQuery。 */
 export function shouldPreInterruptQueuedMessage(runtime: AgentRuntime, interrupt: boolean | undefined): boolean {
   return interrupt === true && runtime !== 'pi'
+}
+
+/**
+ * xAI 渠道能否服务指定 Agent 内核 —— Agent 预检的唯一判据。
+ *
+ * 必须按「用户在渠道上勾选的 Agent 内核」判定，不能沿用 `isAgentEnabledForChannel`：
+ * 后者已是 `@deprecated` 兼容别名，语义收敛为「是否勾选 Claude 内核」，而 xAI 按设计
+ * （无 Anthropic 端点）永远不获得 claude 内核，于是任何 xAI 渠道都会被判为「未开启
+ * 实验性 Agent」，即使开关真的开着 —— 这会让 xAI + Pi 的实验链路永久无法启动。
+ *
+ * 非 xAI 渠道不受本规则约束，由各自的 provider 门禁负责。
+ */
+export function isXaiChannelAvailableForRuntime(
+  channel: Pick<Channel, 'provider' | 'enabled' | 'agentExperimentalEnabled' | 'agentRuntimes'>,
+  agentRuntime: AgentRuntime,
+): boolean {
+  if (channel.provider !== 'xai') return true
+  return agentRuntime === 'pi' && isChannelEnabledForRuntime(channel, 'pi')
 }
 
 /** Plan 模式只允许写入当前会话 .context/plan 内的 Markdown 文件。 */

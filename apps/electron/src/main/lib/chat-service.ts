@@ -39,6 +39,7 @@ import { isOfficialManagedChannel } from './official-channel'
 import { searchKnowledgeItemsForChat } from './knowledge-item-service'
 import { prepareChatKnowledgeRequest } from './chat-knowledge-request'
 import { buildTitlePrompt, buildWindowTitlePrompt, collectTitleSources, mergeTitleRefineAttempts, planTitleWindow, preflightTitleWindow, sanitizeGeneratedTitle, MAX_TITLE_LENGTH, SHORT_MESSAGE_THRESHOLD } from './title-generation'
+import { normalizeChatStreamError } from './chat-error-utils'
 
 /** 单个对话的活跃 Chat run。`settled` 在该 run 完成落盘与事件收尾后 resolve。 */
 interface ActiveChatRun {
@@ -625,12 +626,15 @@ export async function sendMessage(
       return
     }
 
-    const errorMessage = error instanceof Error ? error.message : '未知错误'
     console.error(`[聊天服务] 流式请求失败:`, error)
 
-    // 额度不足（402）：把原始报错替换成「额度不足，请充值」结构化引导
+    // 额度不足（402）：把原始报错替换成「额度不足，请充值」结构化引导。
+    // 其他上游瞬时错误只在日志保留原文，UI 使用稳定、可读的提示。
+    const normalizedError = normalizeChatStreamError(channel.provider, error)
     const insufficient = detectInsufficientCredits(error)
-    const displayError = insufficient ? insufficient.message : errorMessage
+    const displayError = insufficient ? insufficient.message : normalizedError.message
+    const errorCode = insufficient ? 'insufficient_credits' : normalizedError.code
+    const errorTitle = insufficient ? '额度不足' : normalizedError.errorTitle
 
     // 保存已累积的部分助手消息（与 abort 逻辑一致，防止内容丢失）
     if (accumulatedContent) {
@@ -657,7 +661,8 @@ export async function sendMessage(
       conversationId,
       runId,
       error: displayError,
-      ...(insufficient ? { code: 'insufficient_credits', errorTitle: '额度不足' } : {}),
+      ...(errorCode ? { code: errorCode } : {}),
+      ...(errorTitle ? { errorTitle } : {}),
     })
   } finally {
     // 先唤醒等待中的新请求，再移除登记项；仅在仍是自己登记时才移除（旧 run 不能删除已替换的新 run）。

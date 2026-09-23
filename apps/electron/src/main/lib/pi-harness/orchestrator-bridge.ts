@@ -352,57 +352,30 @@ export function startPiHarnessRun(options: {
 
   const selectedTaskId = manual?.taskId ?? graphSnapshot.focusTaskId
   const goalId = existingGoal?.id ?? randomUUID()
-  if (!existingGoal) {
-    appendPiHarnessEvent(options.sessionId, {
-      version: 1,
-      eventId: randomUUID(),
-      timestamp: Date.now(),
-      sessionId: options.sessionId,
-      goalId,
-      type: 'goal_created',
-      payload: { rootTaskId, activeTaskId: selectedTaskId, policy: policy(options.permissionMode) },
-    })
-  }
-  if (manual) {
-    appendPiHarnessEvent(options.sessionId, {
-      version: 1,
-      eventId: randomUUID(),
-      timestamp: Date.now(),
-      sessionId: options.sessionId,
-      goalId,
-      taskId: manual.taskId,
-      type: 'manual_candidate_continued',
-      payload: { candidateFingerprint: manual.candidateFingerprint },
-    })
-  }
-  appendPiHarnessEvent(options.sessionId, {
-    version: 1,
-    eventId: randomUUID(),
-    timestamp: Date.now(),
+  const policySnapshot = policy(options.permissionMode)
+  // Build all potentially-throwing read/format state before appending lifecycle events.
+  // This keeps a normal setup error from leaving a `turn_started` with no terminal state.
+  const goalForPrompt: PiHarnessGoal = existingGoal ?? {
+    id: goalId,
     sessionId: options.sessionId,
-    goalId,
-    type: 'task_focus_changed',
-    payload: { activeTaskId: selectedTaskId, reason: manual ? '用户明确继续 shadow 候选任务' : graphSnapshot.focusReason },
-  })
-
-  const turnId = randomUUID()
-  appendPiHarnessEvent(options.sessionId, {
-    version: 1,
-    eventId: randomUUID(),
-    timestamp: Date.now(),
-    sessionId: options.sessionId,
-    goalId,
-    turnId,
-    type: 'turn_started',
-    payload: { activeTaskId: selectedTaskId },
-  })
-  const current = loadPiHarnessSnapshot(options.sessionId)
-  const goal = current.goals[goalId]
+    rootTaskId,
+    activeTaskId: selectedTaskId,
+    state: 'active',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    policy: policySnapshot,
+    autonomyUsage: {
+      taskTransitions: 0,
+      repairAttemptsByTask: {},
+      equivalentVerificationRuns: {},
+    },
+  }
   const packet = buildGraphFocusPacket({
     graph: graphSnapshot.graph,
-    ...(goal ? { goal } : {}),
-    verificationByTask: current.verificationByTask,
+    goal: goalForPrompt,
+    verificationByTask: before.verificationByTask,
   })
+  const turnId = randomUUID()
   const scope = createScope({
     sessionId: options.sessionId,
     goalId,
@@ -410,6 +383,80 @@ export function startPiHarnessRun(options: {
     activeTaskId: selectedTaskId,
     prompt: `${packet}\n\n${options.prompt}`,
   })
+
+  try {
+    if (!existingGoal) {
+      appendPiHarnessEvent(options.sessionId, {
+        version: 1,
+        eventId: randomUUID(),
+        timestamp: Date.now(),
+        sessionId: options.sessionId,
+        goalId,
+        type: 'goal_created',
+        payload: { rootTaskId, activeTaskId: selectedTaskId, policy: policySnapshot },
+      })
+    }
+    if (manual) {
+      appendPiHarnessEvent(options.sessionId, {
+        version: 1,
+        eventId: randomUUID(),
+        timestamp: Date.now(),
+        sessionId: options.sessionId,
+        goalId,
+        taskId: manual.taskId,
+        payload: { candidateFingerprint: manual.candidateFingerprint },
+        type: 'manual_candidate_continued',
+      })
+    }
+    appendPiHarnessEvent(options.sessionId, {
+      version: 1,
+      eventId: randomUUID(),
+      timestamp: Date.now(),
+      sessionId: options.sessionId,
+      goalId,
+      type: 'task_focus_changed',
+      payload: { activeTaskId: selectedTaskId, reason: manual ? '用户明确继续 shadow 候选任务' : graphSnapshot.focusReason },
+    })
+    appendPiHarnessEvent(options.sessionId, {
+      version: 1,
+      eventId: randomUUID(),
+      timestamp: Date.now(),
+      sessionId: options.sessionId,
+      goalId,
+      turnId,
+      type: 'turn_started',
+      payload: { activeTaskId: selectedTaskId },
+    })
+  } catch (error) {
+    // Best effort: if goal/turn events were already appended, close the turn as
+    // failed instead of leaving an active-looking ledger entry. Preserve the
+    // original setup error even if the diagnostic append also fails.
+    try {
+      appendPiHarnessEvent(options.sessionId, {
+        version: 1,
+        eventId: randomUUID(),
+        timestamp: Date.now(),
+        sessionId: options.sessionId,
+        goalId,
+        turnId,
+        type: 'turn_state_changed',
+        payload: { state: 'failed', endReason: 'harness_setup_failed' },
+      })
+      appendPiHarnessEvent(options.sessionId, {
+        version: 1,
+        eventId: randomUUID(),
+        timestamp: Date.now(),
+        sessionId: options.sessionId,
+        goalId,
+        type: 'goal_paused',
+        payload: { reason: 'harness_setup_failed' },
+      })
+    } catch {
+      // The underlying store may itself be unavailable; do not mask the source error.
+    }
+    throw error
+  }
+
   activeScopes.set(options.sessionId, scope)
   return scope
 }

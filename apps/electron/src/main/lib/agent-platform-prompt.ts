@@ -37,7 +37,17 @@ function commonToolingRules(isPiRuntime: boolean | undefined): string {
  * 本模块只描述当前 OS、shell 和路径事实，避免复制两套完整系统提示词。
  */
 export function buildAgentPlatformPrompt(options: AgentPlatformPromptOptions): string {
-  const shellPath = options.shellPath ?? (options.platform === 'win32' ? 'PowerShell（由运行时检测）' : options.platform === 'darwin' ? '/bin/zsh' : '/bin/sh')
+  const shellPath = options.shellPath
+    ?? (options.isPiRuntime
+      ? 'Bash 不可用（shell_not_found）'
+      : options.platform === 'win32'
+        ? 'PowerShell（由运行时检测）'
+        : options.platform === 'darwin'
+          ? '/bin/zsh'
+          : '/bin/sh')
+  const shellExecutionDescription = options.isPiRuntime && !options.shellPath
+    ? 'Bash 工具当前不可执行；不要改用 zsh/sh 猜测执行，先向用户报告 shell_not_found。'
+    : 'POSIX 命令通过该 shell 的非交互 `-c` 执行。'
   const candidateBlock = projectRootsBlock(options.projectCandidates ?? [])
 
   if (options.platform === 'win32') {
@@ -54,7 +64,7 @@ ${commonToolingRules(options.isPiRuntime)}`
   if (options.platform === 'darwin') {
     return `## 当前平台与项目路径（macOS）
 
-- 当前平台：macOS（darwin）。当前 Agent shell：${escapePromptText(shellPath)}；POSIX 命令通过该 shell 的非交互 \`-c\` 执行。
+- 当前平台：macOS（darwin）。当前 Agent shell：${escapePromptText(shellPath)}；${shellExecutionDescription}
 - 当前执行环境是 POSIX shell；只使用该 shell 实际支持的命令和路径格式，不要把其他操作系统的命令、路径或环境变量当作当前事实。
 - 当前 Agent cwd：${escapePromptText(options.agentCwd ?? '未提供')}。cwd 不是项目 root；不要默认仓库根目录存在 \`src\`，先检查实际目录树。
 ${candidateBlock}

@@ -148,6 +148,7 @@ import {
   buildQueuedMessageSendPayload,
   createAgentQueuedMessage,
   moveQueuedMessage,
+  isAgentRunAlreadyActiveError,
   isQueueTargetNoLongerActiveError,
   parseQueuedMessageMentions,
   queuedTextToParagraphHtml,
@@ -1140,6 +1141,16 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     if (typeof optimisticUuid === 'string') {
       pendingOptimisticMessagesRef.current.set(optimisticUuid, message)
     }
+  }, [sessionId, setMessagesCache])
+  const removeOptimisticPersistedMessage = React.useCallback((uuid: string) => {
+    pendingOptimisticMessagesRef.current.delete(uuid)
+    const next = persistedSDKMessagesRef.current.filter(
+      (message) => (message as Record<string, unknown>).uuid !== uuid,
+    )
+    if (next.length === persistedSDKMessagesRef.current.length) return
+    persistedSDKMessagesRef.current = next
+    setPersistedSDKMessages(next)
+    setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, next))
   }, [sessionId, setMessagesCache])
 
   // 消息是否已完成首次加载（用于 auto-send 等待）
@@ -2383,6 +2394,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
 
     // 初始化流式状态（startedAt 由渲染进程生成，传递给主进程原样回传，确保竞态保护使用同一个值）
     const streamStartedAt = Date.now()
+    const previousStreamState = store.get(agentStreamingStatesAtom).get(sessionId)
     setStreamingStates((prev) => {
       const map = new Map(prev)
       const existing = prev.get(sessionId)
@@ -2405,14 +2417,8 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     })
 
     // 乐观更新：SDKMessage 格式的用户消息（Phase 4）
-    const tempUserSDKMsg: SDKMessage = {
-      type: 'user',
-      message: {
-        content: [{ type: 'text', text: finalMessage }],
-      },
-      parent_tool_use_id: null,
-      _createdAt: Date.now(),
-    } as unknown as SDKMessage
+    const messageUuid = crypto.randomUUID()
+    const tempUserSDKMsg = createUserSDKMessage(finalMessage, messageUuid, streamStartedAt)
     appendOptimisticPersistedMessage(tempUserSDKMsg)
 
     const input: AgentSendInput = {
@@ -2423,6 +2429,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       workspaceId: currentWorkspaceId || undefined,
       agentRuntime: sessionAgentRuntime,
       startedAt: streamStartedAt,
+      uuid: messageUuid,
       permissionModeOverride: permissionMode,
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
       // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
@@ -2441,7 +2448,69 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     setInputContent('')
     setInputHtmlContent('')
 
-    window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch((error) => {
+    window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch(async (error) => {
+      if (isAgentRunAlreadyActiveError(error)) {
+        // renderer 曾短暂误判为空闲；先恢复 owner run 的代次，使其后续事件和真实
+        // completion 仍能被接收，再把本条消息追加到该 run。若 run 恰好结束，降级重试为新 run。
+        setStreamingStates((prev) => {
+          const map = new Map(prev)
+          const current = prev.get(sessionId)
+          map.set(sessionId, {
+            ...(current ?? previousStreamState ?? { content: '', toolActivities: [] }),
+            running: true,
+            backgroundWaiting: false,
+            stopping: false,
+            startedAt: previousStreamState?.startedAt,
+          })
+          return map
+        })
+        try {
+          await window.electronAPI.queueAgentMessage({
+            sessionId,
+            userMessage: finalMessage,
+            rawUserMessage: finalMessage,
+            uuid: messageUuid,
+            interrupt: false,
+            mentionedSkills: input.mentionedSkills,
+            mentionedMcpServers: input.mentionedMcpServers,
+            mentionedSessionIds: input.mentionedSessionIds,
+          })
+          toast.info('已追加到当前任务', { description: 'Agent 完成本轮动作后会继续处理这条消息。' })
+          return
+        } catch (queueError) {
+          if (isQueueTargetNoLongerActiveError(queueError)) {
+            // owner run 已在 queue 请求前结束，恢复本次新 run 的 startedAt 再重试，
+            // 防止旧 completion 被误认为属于这次重试。
+            setStreamingStates((prev) => {
+              const map = new Map(prev)
+              const current = prev.get(sessionId)
+              map.set(sessionId, {
+                ...(current ?? { content: '', toolActivities: [] }),
+                running: true,
+                backgroundWaiting: false,
+                stopping: false,
+                startedAt: streamStartedAt,
+              })
+              return map
+            })
+            try {
+              await window.electronAPI.sendAgentMessage(input)
+              revealRendererDraft()
+              return
+            } catch (retryError) {
+              error = retryError
+            }
+          } else {
+            console.error('[AgentView] 将冲突消息追加到当前任务失败:', queueError)
+            error = queueError
+          }
+        }
+
+        // 两条主进程路径均未接收消息：撤销乐观气泡并恢复草稿，避免静默丢失。
+        removeOptimisticPersistedMessage(messageUuid)
+        setInputContent(effectiveText)
+        setInputHtmlContent('')
+      }
       console.error('[AgentView] 发送消息失败:', error)
       if (error instanceof Error && (error.message.includes('AGENT_PRESET_REQUIRED') || error.message.includes('PRESET_UNKNOWN_REFERENCE') || error.message.includes('PRESET_NOT_FOUND'))) {
         toast.warning('请先重新选择可用的 Agent 预设', { description: '当前会话引用的预设已失效，选择预设后才能继续发送。' })
@@ -2455,7 +2524,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         return map
       })
     })
-  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput])
+  }, [inputContent, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput, removeOptimisticPersistedMessage])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)

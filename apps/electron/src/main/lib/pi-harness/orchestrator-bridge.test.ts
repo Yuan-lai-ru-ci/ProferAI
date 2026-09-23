@@ -118,6 +118,17 @@ describe('Pi Harness orchestrator bridge', () => {
     expect(Object.keys(snapshot.turns)).toHaveLength(1)
   })
 
+  test('settles a failed Turn as failed instead of completed', () => {
+    useTempConfig()
+    const scope = startPiHarnessRun({ sessionId: 'failed', ...base })!
+    settlePiHarnessRun('failed', 'failed')
+
+    const snapshot = loadPiHarnessSnapshot('failed')
+    expect(snapshot.turns[scope.turnId]).toMatchObject({ state: 'failed', endReason: 'failed' })
+    expect(snapshot.goals[scope.goalId]).toMatchObject({ state: 'active' })
+    expect(getActivePiHarnessRunForTest('failed')).toBeUndefined()
+  })
+
   test('attributes an interrupted tool-running Turn to one model call when Stop suppresses agent_end', () => {
     useTempConfig()
     const scope = startPiHarnessRun({ sessionId: 'stopped-after-tool', ...base })!

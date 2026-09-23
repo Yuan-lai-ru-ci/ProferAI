@@ -34,6 +34,19 @@ function removeSection(prompt: string, startMarker: string, endMarker: string): 
   }
 }
 
+/** 只取当前段落及其子标题；下一个 ## 标题后的常驻规则必须保留。 */
+function removeHeadingSection(prompt: string, startMarker: string): PromptSection | undefined {
+  const start = prompt.indexOf(startMarker)
+  if (start < 0) return undefined
+  const contentStart = start + startMarker.length
+  const nextHeading = prompt.slice(contentStart).search(/^## /m)
+  const end = nextHeading < 0 ? prompt.length : contentStart + nextHeading
+  return {
+    text: prompt.slice(start, end).trim(),
+    rest: `${prompt.slice(0, start)}${prompt.slice(end)}`,
+  }
+}
+
 function hasAnyTool(toolNames: Set<string>, predicate: (name: string) => boolean): boolean {
   return [...toolNames].some(predicate)
 }
@@ -63,7 +76,7 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     if (needsCollaboration) lowFrequency.push(collaboration.text)
   }
 
-  const piMemory = removeSection(prompt, '### Pi Runtime 与文件记忆', '## 用户信息')
+  const piMemory = removeHeadingSection(prompt, '### Pi Runtime 与文件记忆')
   if (piMemory) {
     prompt = piMemory.rest
     const hasMemoryTool = hasAnyTool(tools, (name) => name.startsWith('mcp__memory-archive__') || name.startsWith('mcp__team-memory__'))
@@ -116,15 +129,12 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     if (needsImageOutput || needsImageGenerationRouting || needsSkinCreationRouting || needsPpt) lowFrequency.push(delivery.text)
   }
 
-  // Browser 是 buildSystemPrompt 的最后一个 section，直接截取尾部；若日后在它后面
-  // 新增常驻内容，应改为显式 end marker，避免把新常驻内容错误降级。
-  const browserStart = prompt.indexOf('## Profer 受管浏览器')
-  if (browserStart >= 0) {
-    const browser = prompt.slice(browserStart).trim()
-    prompt = prompt.slice(0, browserStart)
+  const browser = removeHeadingSection(prompt, '## Profer 受管浏览器')
+  if (browser) {
+    prompt = browser.rest
     const hasBrowser = hasAnyTool(tools, (name) => name.startsWith('Browser'))
     const needsBrowser = hasBrowser && matches(task, /(?:https?:\/\/|\b(?:browser|website|webpage|url|login|screenshot)\b|网页|网站|浏览|打开.*(?:页|网)|站内搜索|截图|登录)/i)
-    if (needsBrowser) lowFrequency.push(browser)
+    if (needsBrowser) lowFrequency.push(browser.text)
   }
 
   return lowFrequency.length > 0 ? `${prompt.trim()}\n\n${lowFrequency.join('\n\n')}` : prompt.trim()

@@ -35,6 +35,7 @@ import { AgentEventBus } from './agent-event-bus'
 import { fanoutSessionEvent } from './agent-event-fanout'
 import { AgentCatalogInvalidationPublisher } from './agent-catalog-invalidation'
 import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
+import { AgentRunAlreadyActiveError } from './agent-orchestrator-p0-guards'
 import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, type HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getAgentSessionMeta, setAgentSessionActiveChecker, updateAgentSessionMeta } from './agent-session-manager'
@@ -330,6 +331,9 @@ export async function runAgent(
       },
     })
   } catch (err) {
+    // 请求没有获得 run ownership：不要向同 session 的 owner run 广播假的错误/终态。
+    // 让 ipcRenderer.invoke 直接 reject，renderer 会恢复发送前状态和用户草稿。
+    if (err instanceof AgentRunAlreadyActiveError) throw err
     console.error(`[Agent 服务] ══════════ runAgent 未处理异常 ══════════`)
     console.error(`[Agent 服务] sessionId: ${input.sessionId}`)
     console.error(`[Agent 服务] raw error 详细诊断:\n${serializeErrorDetail(err)}`)
@@ -457,6 +461,8 @@ export async function runAgentHeadless(
       },
     })
   } catch (err) {
+    // 同一会话已有 owner run 时，本次 headless 请求从未启动；不得广播终态破坏它。
+    if (err instanceof AgentRunAlreadyActiveError) throw err
     console.error(`[Agent 服务] ══════════ runAgentHeadless 未处理异常 ══════════`)
     console.error(`[Agent 服务] sessionId: ${runInput.sessionId}`)
     console.error(`[Agent 服务] raw error 详细诊断:\n${serializeErrorDetail(err)}`)

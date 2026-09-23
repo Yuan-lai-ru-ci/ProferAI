@@ -588,16 +588,13 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
     isStreaming: streaming,
   })
 
-  // 防闪屏守卫：useSmoothStream 通过 useEffect 重置 displayedContent，比 render 晚一帧。
-  // 当 streamingContent 已清空但 smoothContent 仍持有旧值时，
-  // 会导致 fallback 气泡与持久化消息同时渲染一帧（重复内容闪烁）。
-  // 用原始 streamingContent 作为守卫：内容已清空且不在流式中，立即归零。
-  const smoothContent = (streaming || streamingContent) ? rawSmoothContent : ''
-  const smoothContentBlocks = React.useMemo(() => {
-    if (!smoothContent) return []
-    return parseThinkTagsFromText(smoothContent)
-  }, [smoothContent])
-  const hasSmoothTextContent = smoothContentBlocks.some((block) => block.type === 'text')
+  // 流式阶段优先使用最新的原始 chunk，确保 Markdown renderer 能随每个增量及时更新。
+  const visibleContent = streamingContent || rawSmoothContent
+  const visibleContentBlocks = React.useMemo(() => {
+    if (!visibleContent) return []
+    return parseThinkTagsFromText(visibleContent)
+  }, [visibleContent])
+  const hasVisibleTextContent = visibleContentBlocks.some((block) => block.type === 'text')
 
   /**
    * 流式完成过渡：streaming 结束到持久化消息加载完成之间，
@@ -612,7 +609,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
 
   // render-phase 判断：是否处于需要 instant resize 的过渡期
   // liveMessages 非空说明持久化消息还没加载完（加载完后会清空 liveMessages）
-  const needsInstant = !streaming && (!!streamingContent || !!smoothContent || (liveMessages != null && liveMessages.length > 0))
+  const needsInstant = !streaming && (!!streamingContent || !!visibleContent || (liveMessages != null && liveMessages.length > 0))
 
   React.useEffect(() => {
     // 刚从 streaming → not-streaming：启动 cooldown
@@ -892,7 +889,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
 
             {/* 无实时助手内容时：显示完整气泡（含头像/名称/时间） */}
             {/* 注意：工具活动已通过 SDK 渲染路径（liveGroups）展示 */}
-            {!hasLiveAssistantContent && !suppressAgentRunning && (showAgentRunningIndicator || smoothContent || retrying) && (
+            {!hasLiveAssistantContent && !suppressAgentRunning && (showAgentRunningIndicator || visibleContent || retrying) && (
               <Message from="assistant">
                 <MessageHeader
                   model={agentStreamingModel}
@@ -901,10 +898,10 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                 />
                 <MessageContent>
                   {retrying && <RetryingNotice retrying={retrying} />}
-                  {smoothContent ? (
+                  {visibleContent ? (
                     <>
                       <div className={cn('space-y-2')}>
-                        {smoothContentBlocks.map((block, index) => (
+                        {visibleContentBlocks.map((block, index) => (
                           <ContentBlock
                             key={index}
                             block={block}
@@ -912,7 +909,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                             basePath={sessionPath || undefined}
                             basePaths={[...(sessionPath ? [sessionPath] : []), ...(attachedDirs ?? [])]}
                             index={index}
-                            dimmed={hasSmoothTextContent && block.type !== 'text'}
+                            dimmed={hasVisibleTextContent && block.type !== 'text'}
                             isStreaming={streaming}
                             showThinking={agentRuntime !== 'pi'}
                           />

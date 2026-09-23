@@ -673,6 +673,8 @@ export interface AssistantTurnRendererProps {
   /** 跨 turn 历史 TaskCreate id → subject 映射（由父组件 useMemo 算一次后传入） */
   historicalTaskSubjects: Map<string, string>
   basePath?: string
+  /** 附加目录候选，用于解析相对文件路径。 */
+  basePaths?: string[]
   /** 分叉回调（传入最后一条 assistant 消息的 uuid） */
   onFork?: (upToMessageUuid: string) => void
   /** 探索分支回调（Pi `/tree`；hover 分叉按钮时可用） */
@@ -695,7 +697,7 @@ export interface AssistantTurnRendererProps {
   showThinking?: boolean
 }
 
-export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessages, historicalTaskSubjects, basePath, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true }: AssistantTurnRendererProps): React.ReactElement | null {
   const channels = useAtomValue(channelsAtom)
   const processGroupsKeepExpanded = useAtomValue(agentProcessGroupsKeepExpandedAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
@@ -843,6 +845,7 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
         block={block}
         allMessages={allMessages}
         basePath={basePath}
+        basePaths={basePaths}
         animate={!!isStreaming}
         index={i}
         dimmed={hasTextContent && block.type !== 'text'}
@@ -1029,6 +1032,7 @@ export function SDKMessageRenderer({
                 block={block}
                 allMessages={allMessages}
                 basePath={basePath}
+                basePaths={basePaths}
                 index={i}
                 dimmed={hasTextContent && block.type !== 'text'}
               />
@@ -1660,6 +1664,7 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
         allMessages={allMessages}
         historicalTaskSubjects={historicalTaskSubjects}
         basePath={basePath}
+        basePaths={basePaths}
         onFork={onFork}
         onExplore={onExplore}
         onRewind={onRewind}

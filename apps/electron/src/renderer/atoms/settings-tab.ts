@@ -17,14 +17,15 @@
  * - credits: 额度与用量
  * - openapi: 开放 API
  * - data-management: 数据管理（备份+磁盘）
- * - plugins: 插件系统（版本号连击解锁后显示）
+ * - developer: 开发者模式（版本号连击解锁后显示）
+ * - plugins: 插件系统（开发者模式下显示）
  * - team: 团队管理
  * - about: 关于（含意见反馈）
  */
 
 import { atom } from 'jotai'
 
-export type SettingsTab = 'general' | 'account' | 'channels' | 'appearance' | 'about' | 'agent' | 'prompts' | 'tools' | 'bots' | 'tutorial' | 'shortcuts' | 'team' | 'credits' | 'subscription' | 'openapi' | 'data-management' | 'plugins' | 'proxy' | 'devices'
+export type SettingsTab = 'general' | 'account' | 'channels' | 'appearance' | 'about' | 'agent' | 'prompts' | 'tools' | 'bots' | 'tutorial' | 'shortcuts' | 'team' | 'credits' | 'subscription' | 'openapi' | 'data-management' | 'developer' | 'plugins' | 'proxy' | 'devices'
 
 /** 当前设置标签页（不持久化，每次打开设置默认显示通用偏好） */
 export const settingsTabAtom = atom<SettingsTab>('general')

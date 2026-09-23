@@ -27,6 +27,7 @@ import {
   Network,
   UserRound,
   Blocks,
+  FlaskConical,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { settingsTabAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
@@ -36,7 +37,7 @@ import { authStatusAtom } from "@/atoms/identity-atoms";
 import { hasUpdateAtom } from "@/atoms/updater";
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from "@/atoms/tab-atoms";
 import { hasEnvironmentIssuesAtom } from "@/atoms/environment";
-import { pluginSystemEnabledAtom } from "@/atoms/plugin-system";
+import { developerModeEnabledAtom } from "@/atoms/developer-mode";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -64,6 +65,7 @@ import { SubscriptionSettings } from "./SubscriptionSettings";
 import { OpenApiSettings } from "./OpenApiSettings";
 import { ProxySettings } from "./ProxySettings";
 import { PluginSettings } from "./PluginSettings";
+import { DeveloperSettings } from "./DeveloperSettings";
 import { TEAM_WORKSPACE_UI_ENABLED } from "@/lib/product-feature-flags";
 
 /** 设置 Tab 定义 */
@@ -117,6 +119,12 @@ const SYSTEM_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "about", label: "关于/更新", icon: <Info size={16} /> },
 ];
 
+const DEVELOPER_MODE_ITEM: SettingsTabItem = {
+  id: "developer",
+  label: "开发者",
+  icon: <FlaskConical size={16} />,
+};
+
 const PLUGIN_SYSTEM_ITEM: SettingsTabItem = {
   id: "plugins",
   label: "插件",
@@ -155,6 +163,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <ShortcutSettings />;
     case "data-management":
       return <DataManagementSettings />;
+    case "developer":
+      return <DeveloperSettings />;
     case "plugins":
       return <PluginSettings />;
     case "team":
@@ -191,7 +201,7 @@ export function SettingsPanel({
   const appMode = useAtomValue(appModeAtom);
   const hasUpdate = useAtomValue(hasUpdateAtom);
   const hasEnvironmentIssues = useAtomValue(hasEnvironmentIssuesAtom);
-  const pluginSystemEnabled = useAtomValue(pluginSystemEnabledAtom);
+  const developerModeEnabled = useAtomValue(developerModeEnabledAtom);
   const [mainTabs, setMainTabs] = useAtom(tabsAtom);
   const setMainActiveTabId = useSetAtom(activeTabIdAtom);
   const authStatus = useAtomValue(authStatusAtom);
@@ -240,8 +250,8 @@ export function SettingsPanel({
       ? MODEL_GROUP_ITEMS
       : MODEL_GROUP_ITEMS.filter((item) => item.id !== "agent")
 
-    const systemItems = pluginSystemEnabled
-      ? [SYSTEM_GROUP_ITEMS[0]!, PLUGIN_SYSTEM_ITEM, ...SYSTEM_GROUP_ITEMS.slice(1)]
+    const systemItems = developerModeEnabled
+      ? [SYSTEM_GROUP_ITEMS[0]!, DEVELOPER_MODE_ITEM, PLUGIN_SYSTEM_ITEM, ...SYSTEM_GROUP_ITEMS.slice(1)]
       : SYSTEM_GROUP_ITEMS
 
     const allGroups: SettingsTabGroup[] = [
@@ -259,7 +269,7 @@ export function SettingsPanel({
     return allGroups
       .map((g) => ({ ...g, items: g.items.filter((t) => !AUTH_REQUIRED_TABS.has(t.id)) }))
       .filter((g) => g.items.length > 0)
-  }, [appMode, tabsOverride, authStatus.isLoggedIn, pluginSystemEnabled]);
+  }, [appMode, tabsOverride, authStatus.isLoggedIn, developerModeEnabled]);
 
   // 将所有可见 tab 拍平成列表，用于 activeTab 回落与标题查找
   const tabs: SettingsTabItem[] = React.useMemo(

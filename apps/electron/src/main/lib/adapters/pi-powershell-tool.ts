@@ -6,7 +6,9 @@ import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentRuntimeEnv } from '../agent-runtime-env'
 import { mergeRuntimeEnv } from '../agent-runtime-env'
+import { commandExecutionErrorCode, type CommandExecutionResult } from '../command-execution'
 import { registerPendingPiRuntimeProcess, registerPiRuntimeProcessShell } from '../runtime-process-registry'
+import { piBackgroundTaskManager } from '../pi-background-task-manager'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
@@ -21,11 +23,9 @@ export interface PowerShellInvocation {
   args: string[]
 }
 
-export interface PowerShellExecutionResult {
-  exitCode: number | null
+/** PowerShell 兼容结果：统一执行字段为事实来源，output 保留给既有展示调用方。 */
+export interface PowerShellExecutionResult extends CommandExecutionResult {
   output: string
-  timedOut: boolean
-  aborted: boolean
 }
 
 export interface ExecutePowerShellOptions {
@@ -41,6 +41,8 @@ export interface ExecutePowerShellOptions {
   terminateProcessTree?: (pid: number) => void
   /** Called immediately after PowerShell is spawned, before any command output. */
   onSpawn?: (pid: number) => void
+  onStdout?: (data: Buffer) => void
+  onStderr?: (data: Buffer) => void
 }
 
 /** Windows PowerShell 5.1 是系统组件；使用 SystemRoot 绝对路径避免启动器 PATH 不完整。 */
@@ -100,8 +102,9 @@ export function executePowerShellCommand(command: string, options: ExecutePowerS
   const invocation = createPowerShellInvocation(executable, command)
   const timeoutSeconds = clampTimeout(options.timeoutSeconds)
   const terminationGraceMs = Math.max(0, options.terminationGraceMs ?? TERMINATION_GRACE_MS)
+  const startedAt = Date.now()
 
-  return new Promise((resolvePromise, reject) => {
+  return new Promise((resolvePromise) => {
     let child: ChildProcessWithoutNullStreams
     try {
       child = spawnProcess(invocation.executable, invocation.args, {
@@ -111,18 +114,49 @@ export function executePowerShellCommand(command: string, options: ExecutePowerS
         shell: false,
       }) as ChildProcessWithoutNullStreams
     } catch (error) {
-      reject(error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      resolvePromise({
+        stdout: '',
+        stderr: errorMessage,
+        output: errorMessage,
+        exitCode: null,
+        signal: null,
+        timedOut: false,
+        aborted: false,
+        durationMs: Date.now() - startedAt,
+        shell: 'powershell',
+        cwd: options.cwd,
+        truncated: false,
+        errorKind: 'spawn_error',
+        errorCode: commandExecutionErrorCode(error),
+      })
       return
     }
 
     if (typeof child.pid === 'number') options.onSpawn?.(child.pid)
 
     let output = ''
+    let stdout = ''
+    let stderr = ''
     let timedOut = false
     let aborted = false
     let settled = false
     let terminationGraceHandle: ReturnType<typeof setTimeout> | undefined
     let stopping = false
+    const buildResult = (exitCode: number | null, extra: Partial<CommandExecutionResult> = {}): PowerShellExecutionResult => ({
+      stdout,
+      stderr,
+      output: output || [stdout, stderr].filter(Boolean).join('\n'),
+      exitCode,
+      signal: child.signalCode ?? null,
+      timedOut,
+      aborted,
+      durationMs: Date.now() - startedAt,
+      shell: 'powershell',
+      cwd: options.cwd,
+      truncated: stdout.length >= MAX_OUTPUT_CHARS || stderr.length >= MAX_OUTPUT_CHARS,
+      ...extra,
+    })
     const finish = (result: PowerShellExecutionResult): void => {
       if (settled) return
       settled = true
@@ -142,7 +176,7 @@ export function executePowerShellCommand(command: string, options: ExecutePowerS
       }
       // 某些 Windows 进程树不会可靠触发父进程 close；不能让 Agent 无限等待。
       terminationGraceHandle ??= setTimeout(() => {
-        finish({ exitCode: null, output, timedOut, aborted })
+        finish(buildResult(null))
       }, terminationGraceMs)
     }
     const onAbort = (): void => {
@@ -160,17 +194,29 @@ export function executePowerShellCommand(command: string, options: ExecutePowerS
       options.signal?.addEventListener('abort', onAbort, { once: true })
     }
 
-    child.stdout.on('data', (chunk: Buffer) => { output = appendOutput(output, chunk) })
-    child.stderr.on('data', (chunk: Buffer) => { output = appendOutput(output, chunk) })
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout = appendOutput(stdout, chunk)
+      output = appendOutput(output, chunk)
+      options.onStdout?.(chunk)
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = appendOutput(stderr, chunk)
+      output = appendOutput(output, chunk)
+      options.onStderr?.(chunk)
+    })
     child.once('error', (error) => {
       if (settled) return
       clearTimeout(timeoutHandle)
       options.signal?.removeEventListener('abort', onAbort)
       settled = true
-      reject(error)
+      resolvePromise(buildResult(null, {
+        errorKind: 'spawn_error',
+        errorCode: commandExecutionErrorCode(error),
+        stderr: error.message,
+      }))
     })
     child.once('close', (exitCode) => {
-      finish({ exitCode, output, timedOut, aborted })
+      finish(buildResult(exitCode))
     })
   })
 }
@@ -213,19 +259,27 @@ export function createWindowsPowerShellToolDefinition(
       command: Type.String({ minLength: 1, description: '要执行的 PowerShell 命令。' }),
       timeout: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `超时秒数，默认 ${DEFAULT_TIMEOUT_SECONDS}，最大 ${MAX_TIMEOUT_SECONDS}。` })),
     }),
-    async execute(_toolCallId, params, signal) {
+    async execute(toolCallId, params, signal) {
       const input = params as { command: string; timeout?: number }
-      if (sessionId) registerPendingPiRuntimeProcess(sessionId, input.command, cwd, 'powershell')
+      const record = sessionId ? registerPendingPiRuntimeProcess(sessionId, input.command, cwd, 'powershell') : undefined
+      const taskId = record?.id
+      if (sessionId && taskId) piBackgroundTaskManager.begin(sessionId, taskId, input.command)
       const result = await executePowerShellCommand(input.command, {
         cwd,
         env: runtimeEnv?.env,
         timeoutSeconds: input.timeout,
         signal,
         executable,
+        onStdout: (data) => { if (sessionId && taskId) piBackgroundTaskManager.append(sessionId, taskId, data) },
+        onStderr: (data) => { if (sessionId && taskId) piBackgroundTaskManager.append(sessionId, taskId, data) },
         onSpawn: (pid) => {
-          if (sessionId) registerPiRuntimeProcessShell(sessionId, input.command, cwd, pid, 'powershell')
+          if (sessionId) {
+            const shellRecord = registerPiRuntimeProcessShell(sessionId, input.command, cwd, pid, 'powershell')
+            if (taskId && shellRecord) piBackgroundTaskManager.attachProcess(sessionId, taskId, pid, shellRecord.startTime)
+          }
         },
       })
+      if (sessionId && taskId) piBackgroundTaskManager.complete(sessionId, taskId, result.aborted || result.timedOut ? 'stopped' : result.errorKind || result.exitCode !== 0 ? 'failed' : 'completed')
       return {
         content: [{ type: 'text', text: formatPowerShellResult(result) }],
         details: result,

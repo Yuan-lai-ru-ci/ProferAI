@@ -42,6 +42,7 @@ import type {
   MessageSearchResult,
   AgentMessageSearchResult,
 } from '@profer/shared'
+import { isDeepSeekV4Model } from '@profer/shared'
 import { getVisibleAgentWorkspaces } from '@/lib/product-feature-flags'
 
 /** 标题搜索结果项 */
@@ -372,8 +373,10 @@ export function SearchDialog(): React.ReactElement {
     const q = query.trim()
     if (!q) return
 
+    // 用统一判定而不是硬编码旧代 ID：渠道里可能填 deepseek-flash（0.86 起的 catalog 正式 ID）、
+    // 旧写法 deepseek-v4-flash 或短名 deepseek-pro，三者都应识别为 DeepSeek 渠道。
     const deepseekChannel = channels.find(
-      (c) => c.enabled && c.models.some((m) => m.id === 'deepseek-v4-flash' && m.enabled)
+      (c) => c.enabled && c.models.some((m) => m.enabled && isDeepSeekV4Model(m.id))
     )
     const channelId = deepseekChannel?.id ?? currentAgentChannelId ?? undefined
 

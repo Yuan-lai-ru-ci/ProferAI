@@ -13,8 +13,10 @@ import {
   fillGroupSide,
   clampGroupRatio,
   createGroup,
+  findTabGroup,
   focusGroupMember,
   fromPersistedTabGroup,
+  fromPersistedTabGroups,
   groupSideOf,
   groupTabIds,
   isGroupComplete,
@@ -24,9 +26,14 @@ import {
   planGroupDrop,
   ratioForEmptySide,
   reconcileGroup,
+  reconcileTabGroups,
+  removeTabGroup,
+  replaceTabGroup,
   resolveGroupMembership,
+  resolveGroupPaneFocusTarget,
   resolveGroupSplitGeometry,
   toPersistedTabGroup,
+  toPersistedTabGroups,
   type TabGroupState,
 } from './tab-group-atoms'
 
@@ -85,6 +92,39 @@ test('切换组内焦点成员；非成员不改变状态', () => {
   expect(focusGroupMember(group, 'a')).toBe(group)
   expect(focusGroupMember(group, 'c')).toBe(group)
   expect(focusGroupMember(group, null)).toBe(group)
+})
+
+test('点击组合栏：仅组合激活时切换焦点，查看组外会话时不被劫持回组合', () => {
+  const group = createGroup('a', 'b', 'a') as TabGroupState
+
+  expect(resolveGroupPaneFocusTarget(group, 'a', 'right')).toBe('b')
+  expect(resolveGroupPaneFocusTarget(group, 'b', 'left')).toBe('a')
+  expect(resolveGroupPaneFocusTarget(group, 'a', 'left')).toBeNull()
+  expect(resolveGroupPaneFocusTarget(group, 'c', 'left')).toBeNull()
+  expect(resolveGroupPaneFocusTarget(group, 'c', 'right')).toBeNull()
+  expect(resolveGroupPaneFocusTarget(null, 'c', 'left')).toBeNull()
+})
+
+test('多组合：按成员查找、替换和中键拆分只影响目标组合', () => {
+  const first = createGroup('a', 'b', 'a') as TabGroupState
+  const second = createGroup('c', 'd', 'c') as TabGroupState
+  const groups = [first, second]
+
+  expect(findTabGroup(groups, 'b')).toBe(first)
+  expect(findTabGroup(groups, 'd')).toBe(second)
+  expect(findTabGroup(groups, 'x')).toBeNull()
+  expect(removeTabGroup(groups, first)).toEqual([second])
+
+  const replacement = createGroup('a', 'e', 'e') as TabGroupState
+  expect(replaceTabGroup(groups, first, replacement)).toEqual([replacement, second])
+})
+
+test('多组合：成员移入另一组时移除重叠旧组，保证一个标签只属于一个组合', () => {
+  const first = createGroup('a', 'b', 'a') as TabGroupState
+  const second = createGroup('c', 'd', 'c') as TabGroupState
+  const replacement = createGroup('a', 'c', 'c') as TabGroupState
+
+  expect(replaceTabGroup([first, second], first, replacement)).toEqual([replacement])
 })
 
 // ===== 合并落点语义 =====
@@ -174,6 +214,22 @@ test('读取持久化字段：非法结构视为无组合；单侧为空是合�
     rightTabId: 'b',
     focusedTabId: 'b',
   })
+})
+
+test('多组合持久化：过滤失效和重叠组合并保留合法顺序', () => {
+  const first = createGroup('a', 'b', 'a') as TabGroupState
+  const overlapping = createGroup('b', 'c', 'b') as TabGroupState
+  const second = createGroup('d', 'e', 'e') as TabGroupState
+  const groups = [first, overlapping, second]
+
+  expect(reconcileTabGroups(groups, new Set(['a', 'b', 'c', 'd', 'e']))).toEqual([first, second])
+  const persisted = toPersistedTabGroups(groups, new Set(['a', 'b', 'd', 'e']))
+  expect(persisted).toEqual([
+    { leftTabId: 'a', rightTabId: 'b', focusedTabId: 'a' },
+    { leftTabId: 'd', rightTabId: 'e', focusedTabId: 'e' },
+  ])
+  expect(fromPersistedTabGroups(persisted)).toEqual([first, second])
+  expect(fromPersistedTabGroups({})).toEqual([])
 })
 
 // ===== 比例与几何 =====

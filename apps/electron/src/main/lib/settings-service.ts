@@ -18,6 +18,7 @@ let _settingsCache: AppSettings | null = null
 interface LegacyTabletModeSettings {
   tabletModeEnabled?: boolean
   tabletModePort?: number
+  pluginSystemEnabled?: boolean
 }
 
 function getDefaultSettings(): AppSettings {
@@ -29,7 +30,8 @@ function getDefaultSettings(): AppSettings {
     notificationsEnabled: true,
     feishuSessionMirror: { mode: 'off' },
     agentRuntime: DEFAULT_AGENT_RUNTIME,
-    pluginSystemEnabled: false,
+    developerModeEnabled: false,
+    openEpistemicModeEnabled: false,
   }
 }
 
@@ -54,7 +56,8 @@ export function getSettings(): AppSettings {
     const parsed = JSON.parse(raw) as Partial<AppSettings> & LegacyTabletModeSettings
     // 2026-09 命名收敛（Tablet* → Pocket*）：旧版写入的 tabletMode* 键归一为 pocketMode*，
     // 归一后旧键不再写回文件，老用户的「移动模式」开关与自定义端口保持不变。
-    const { tabletModeEnabled, tabletModePort, ...data } = parsed
+    const { tabletModeEnabled, tabletModePort, pluginSystemEnabled, ...data } = parsed
+    const developerModeEnabled = data.developerModeEnabled ?? pluginSystemEnabled ?? false
     _settingsCache = {
       ...data,
       pocketModeEnabled: data.pocketModeEnabled ?? tabletModeEnabled,
@@ -66,7 +69,8 @@ export function getSettings(): AppSettings {
       notificationsEnabled: data.notificationsEnabled ?? true,
       feishuSessionMirror: data.feishuSessionMirror ?? { mode: 'off' },
       agentRuntime: normalizeAgentRuntime(data.agentRuntime),
-      pluginSystemEnabled: data.pluginSystemEnabled === true,
+      developerModeEnabled,
+      openEpistemicModeEnabled: developerModeEnabled && data.openEpistemicModeEnabled === true,
     }
     return _settingsCache
   } catch (error) {
@@ -90,11 +94,22 @@ export function updateSettings(updates: Partial<AppSettings>): AppSettings {
     ...(updates.agentRuntime !== undefined
       ? { agentRuntime: normalizeAgentRuntime(updates.agentRuntime) }
       : {}),
+    ...(updates.developerModeEnabled === undefined && updates.pluginSystemEnabled !== undefined
+      ? { developerModeEnabled: updates.pluginSystemEnabled }
+      : {}),
+  }
+  delete normalizedUpdates.pluginSystemEnabled
+  const developerModeEnabled = normalizedUpdates.developerModeEnabled
+    ?? _settingsCache!.developerModeEnabled
+    ?? false
+  if (!developerModeEnabled && (updates.openEpistemicModeEnabled !== undefined || _settingsCache!.openEpistemicModeEnabled === true)) {
+    normalizedUpdates.openEpistemicModeEnabled = false
   }
   const updated: AppSettings = {
     ..._settingsCache!,
     ...normalizedUpdates,
   }
+  delete updated.pluginSystemEnabled
 
   const filePath = getSettingsPath()
 

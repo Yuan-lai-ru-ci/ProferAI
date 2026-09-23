@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test'
-import { SAFE_TOOLS } from '@profer/shared'
+import { isAgentEnabledForChannel, SAFE_TOOLS } from '@profer/shared'
 import {
+  AgentRunAlreadyActiveError,
   applySdkCredentials,
   buildPiSkillMentionOptions,
   isBrowserToolName,
   isPartialSDKMessage,
   isPlanModeMarkdownPath,
   isPlanModeMcpTool,
+  isXaiChannelAvailableForRuntime,
   PLAN_MODE_READ_ONLY_BROWSER_TOOLS,
   releaseActiveSession,
   resolvePlanModeBrowserPermission,
@@ -16,6 +18,15 @@ import {
 } from './agent-orchestrator-p0-guards'
 
 describe('AgentOrchestrator P0 guards', () => {
+  test('Given 同一 session 已有 owner run When 新请求未启动 Then 返回可识别的普通拒绝', () => {
+    const activeError = new AgentRunAlreadyActiveError(false)
+    const stoppingError = new AgentRunAlreadyActiveError(true)
+
+    expect(activeError.code).toBe('AGENT_RUN_ALREADY_ACTIVE')
+    expect(activeError.message).toContain('上一条消息仍在处理中')
+    expect(stoppingError.message).toContain('Agent 正在停止')
+  })
+
   test('Given 同一 session 已在运行 When 再次占用 Then 拒绝并保留原运行令牌', () => {
     const sessions = new Map<string, string>()
 
@@ -156,5 +167,52 @@ describe('AgentOrchestrator P0 guards', () => {
     policySkillSlugs.push('pptx')
 
     expect(options.skillMentions).toEqual(['in-app-browser'])
+  })
+})
+
+describe('xAI Agent 预检', () => {
+  const xaiChannel = {
+    provider: 'xai' as const,
+    enabled: true,
+    agentExperimentalEnabled: true,
+    agentRuntimes: ['pi'] as Array<'pi' | 'claude'>,
+  }
+
+  test('Given xAI 渠道已开启实验开关并勾选 Pi 内核 When Pi 运行时预检 Then 放行', () => {
+    expect(isXaiChannelAvailableForRuntime(xaiChannel, 'pi')).toBe(true)
+  })
+
+  test('Given xAI 渠道未开启实验开关 When Pi 运行时预检 Then 拦截并提示开启实验模式', () => {
+    expect(isXaiChannelAvailableForRuntime(
+      { ...xaiChannel, agentExperimentalEnabled: false, agentRuntimes: undefined },
+      'pi',
+    )).toBe(false)
+  })
+
+  test('Given xAI 渠道被停用 When Pi 运行时预检 Then 拦截', () => {
+    expect(isXaiChannelAvailableForRuntime({ ...xaiChannel, enabled: false }, 'pi')).toBe(false)
+  })
+
+  test('Given xAI 渠道 When Claude 运行时预检 Then 拦截（xAI 无 Anthropic 端点）', () => {
+    expect(isXaiChannelAvailableForRuntime(xaiChannel, 'claude')).toBe(false)
+  })
+
+  test('Given 非 xAI 渠道 When 预检 Then 交给各自 provider 门禁，不在此拦截', () => {
+    expect(isXaiChannelAvailableForRuntime(
+      { provider: 'deepseek', enabled: true, agentExperimentalEnabled: false, agentRuntimes: ['pi'] },
+      'pi',
+    )).toBe(true)
+    expect(isXaiChannelAvailableForRuntime(
+      { provider: 'deepseek', enabled: true, agentExperimentalEnabled: false, agentRuntimes: ['pi'] },
+      'claude',
+    )).toBe(true)
+  })
+
+  test('回归：旧判据对 xAI 恒为 false，预检不得再使用它', () => {
+    // 根因锁：isAgentEnabledForChannel 已是「是否勾选 Claude 内核」的 @deprecated 别名，
+    // xAI 按设计永远拿不到 claude 内核，所以它恒为 false。
+    // 一旦有调用方把它当成「xAI 实验开关是否开启」，xAI + Pi 链路会永久被拦截。
+    expect(isAgentEnabledForChannel(xaiChannel)).toBe(false)
+    expect(isXaiChannelAvailableForRuntime(xaiChannel, 'pi')).toBe(true)
   })
 })

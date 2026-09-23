@@ -306,7 +306,7 @@ describe('Pi runtime DeepSeek V4 1M 上下文', () => {
     expect(result.model.contextWindow).toBe(1_000_000)
   })
 
-  test('Given DeepSeek 官方短名 deepseek-flash When 注册 Pi 模型 Then 沿用同代 catalog 元数据但保留原始模型 ID', async () => {
+  test('Given DeepSeek 正式 ID deepseek-flash When 注册 Pi 模型 Then 沿用 catalog 元数据但保留原始模型 ID', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     const result = await buildModel(sdk, {
       sessionId: 'session-deepseek-short-name',
@@ -321,12 +321,38 @@ describe('Pi runtime DeepSeek V4 1M 上下文', () => {
       piSessionDir: '/tmp/pi-session',
     })
 
-    // 请求仍用用户填写的短名（上游只认短名），元数据借同代正式 ID
+    // 请求仍用用户填写的 ID（DeepSeek 上游与 Pi catalog 0.86 起的正式 ID 都是它），
+    // 元数据直接取 catalog 条目。
     expect(result.model.id).toBe('deepseek-flash')
     expect(result.model.contextWindow).toBe(1_000_000)
     expect(result.model.maxTokens).toBe(384_000)
-    expect(result.model.cost.input).toBe(0.14)
+    // 0.86 catalog 的 deepseek-flash 是 DeepSeek V4.1 Flash，定价比旧代 deepseek-v4-flash
+    // （$0.14/M 输入）高：$0.30/M。这里跟随上游报价，不保留旧代价格。
+    expect(result.model.cost.input).toBe(0.3)
     expect(result.model.reasoning).toBe(true)
+  })
+
+  test('Given DeepSeek 旧代写法 deepseek-v4-flash When 注册 Pi 模型 Then 归一后仍拿到含图片能力的 catalog 元数据', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-deepseek-legacy-id',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'deepseek',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-v4-flash',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    // 渠道里仍可能填 0.86 之前的写法：元数据必须归一到新 catalog 条目，
+    // 尤其是 input 含 image——这直接决定 DeepSeek 能否收到图片而不是被降级成占位文本。
+    expect(result.model.id).toBe('deepseek-v4-flash')
+    expect(result.model.input).toContain('image')
+    expect(result.model.contextWindow).toBe(1_000_000)
+    expect(result.model.maxTokens).toBe(384_000)
   })
 
   test('Given custom provider 填写完整 Chat Completions 端点 When 注册 Pi 模型 Then 保留协议根地址并使用保守窗口', async () => {
@@ -556,7 +582,10 @@ describe('Pi runtime GLM-5.3 fallback and reasoning metadata', () => {
       piSessionDir: '/tmp/pi-session',
     })
 
-    expect(result.model.contextWindow).toBe(1_000_000)
+    // 火山 coding plan 在 Pi catalog 里没有专属 provider 条目，走全局兜底命中第三方条目：
+    // 0.86 起该模型被记为 1MiB（1048576）而非 1M（1000000）。两者都满足 Profer 的 1M 下界，
+    // 差异只影响展示与压缩阈值的尾数，因此跟随 catalog 声明值。
+    expect(result.model.contextWindow).toBe(1_048_576)
     expect(result.model.maxTokens).toBe(128_000)
   })
 })
@@ -701,8 +730,11 @@ describe('ChatGPT Codex 模型目录补丁', () => {
     const models = await getCodexCatalogModels()
     const byId = new Map(models.map((model) => [model.id, model.contextWindow]))
 
-    expect(byId.get('gpt-5.4')).toBe(1_050_000)
-    expect(byId.get('gpt-5.4-mini')).toBe(400_000)
+    // 0.86 起上游 catalog 已移除 gpt-5.4 / gpt-5.4-mini：Profer 的窗口补丁只覆盖目录里仍存在的
+    // 条目，不会凭空补回上游删掉的模型。
+    expect(byId.has('gpt-5.4')).toBe(false)
+    expect(byId.has('gpt-5.4-mini')).toBe(false)
+    // 仍在目录里的同代模型必须被覆盖为当前 OpenAI 规格（上游内置值只有 272000）。
     expect(byId.get('gpt-5.5')).toBe(1_050_000)
     expect(byId.get('gpt-6-astra')).toBe(1_050_000)
   })

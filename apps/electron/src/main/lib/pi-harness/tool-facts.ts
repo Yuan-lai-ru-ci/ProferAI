@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { CommandExecutionResult } from '../command-execution'
 import type { ToolFact } from './types'
 
 export interface ToolFactInput {
@@ -6,6 +7,7 @@ export interface ToolFactInput {
   toolName: string
   input: Record<string, unknown>
   result: unknown
+  executionResult?: CommandExecutionResult
   isError?: boolean
   timestamp?: number
 }
@@ -40,7 +42,7 @@ function commandCategory(command: string): 'test' | 'typecheck' | 'build' | 'com
   return 'command'
 }
 
-function exitCodeFromResult(text: string): number | undefined {
+function legacyExitCodeFromResult(text: string): number | undefined {
   const match = text.match(/(?:exit\s*code|退出码)\s*(?:is|为|=|:)?\s*(-?\d+)/i)
   return match?.[1] ? Number(match[1]) : undefined
 }
@@ -99,19 +101,24 @@ export function createToolFact(context: {
 
   if (name === 'bash' || name === 'powershell') {
     const command = typeof input.input.command === 'string' ? input.input.command : ''
-    const exitCode = exitCodeFromResult(resultText)
+    const execution = input.executionResult
+    // Legacy tool results and non-Profer runtimes may still expose only human-readable
+    // text. New execution paths must provide executionResult, which takes precedence.
+    const exitCode = execution ? execution.exitCode : legacyExitCodeFromResult(resultText)
     const category = commandCategory(command)
-    // Pi's native Bash tool reports a successful execution structurally through
-    // tool_result.is_error=false, but its human-readable text does not always
-    // include an `exit code 0` marker. That protocol flag is execution evidence
-    // (unlike model prose), so it may establish success for the already-finite
-    // test/typecheck/build categories. Explicit non-zero output and is_error
-    // remain failures; arbitrary commands remain non-verifying below.
-    const outcome: ToolFact['outcome'] = isError || (exitCode !== undefined && exitCode !== 0)
+    const processFailed = execution
+      ? execution.timedOut || execution.aborted || execution.signal !== null || execution.exitCode !== 0 || execution.errorKind !== undefined
+      : exitCode !== undefined && exitCode !== 0
+    // tool_result.is_error is tool-protocol evidence; executionResult is process
+    // evidence. Only finite verification categories may use the protocol fallback.
+    const outcome: ToolFact['outcome'] = isError || processFailed
       ? 'failure'
-      : exitCode === 0 || (!isError && exitCode === undefined && category !== 'command')
+      : execution?.exitCode === 0 || exitCode === 0 || (!execution && !isError && exitCode === undefined && category !== 'command')
         ? 'success'
         : 'unknown'
+    const outputHash = execution
+      ? digest(`${execution.stdout}\n${execution.stderr}`)
+      : digest(resultText)
     return {
       ...base,
       kind: category === 'command' ? 'command' : 'verification_command',
@@ -119,12 +126,27 @@ export function createToolFact(context: {
       subject: {
         commandHash: digest(command),
         category,
-        ...(exitCode !== undefined ? { exitCode } : {}),
-        ...(exitCode === undefined && !isError && category !== 'command' ? { executionEvidence: 'tool_result_success' } : {}),
-        outputHash: digest(resultText),
+        ...(exitCode !== undefined && exitCode !== null ? { exitCode } : {}),
+        ...(execution
+          ? {
+              executionEvidence: 'structured_execution',
+              signal: execution.signal,
+              timedOut: execution.timedOut,
+              aborted: execution.aborted,
+              durationMs: execution.durationMs,
+              shell: execution.shell,
+              cwd: execution.cwd,
+              truncated: execution.truncated,
+              ...(execution.errorKind ? { errorKind: execution.errorKind } : {}),
+              ...(execution.errorCode ? { errorCode: execution.errorCode } : {}),
+            }
+          : exitCode === undefined && !isError && category !== 'command'
+            ? { executionEvidence: 'tool_result_success' }
+            : {}),
+        outputHash,
       },
-      summary: `${input.toolName} ${category} ${outcome}${exitCode !== undefined ? ` exit=${exitCode}` : ''}`,
-      fingerprint: input.toolUseId ?? digest(`${input.toolName}|${command}|${exitCode ?? 'unknown'}|${resultText}`),
+      summary: `${input.toolName} ${category} ${outcome}${exitCode !== undefined && exitCode !== null ? ` exit=${exitCode}` : ''}`,
+      fingerprint: input.toolUseId ?? digest(`${input.toolName}|${command}|${exitCode ?? 'unknown'}|${outputHash}`),
     }
   }
 

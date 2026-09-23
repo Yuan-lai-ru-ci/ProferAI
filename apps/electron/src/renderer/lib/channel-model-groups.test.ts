@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { Channel } from '@profer/shared'
-import { inferAgentRuntimeModes, isChannelEnabledForRuntime } from '@profer/shared'
+import { inferAgentRuntimeModes, isAgentEnabledForChannel, isChannelEnabledForRuntime } from '@profer/shared'
 import {
   getChannelProtocol,
   getOfficialChannelDisplayName,
   isModelFamilyChannel,
+  resolvePiCoreState,
   supportsChannelProtocol,
 } from './channel-model-groups'
 
@@ -119,5 +120,53 @@ describe('官方模型池展示元数据', () => {
     const value = pool({ id: 'newapi-family-claude', name: 'Claude', managedType: undefined })
     expect(isModelFamilyChannel(value)).toBe(true)
     expect(getOfficialChannelDisplayName(value)).toBe('Claude 模型池')
+  })
+})
+
+describe('渠道列表的 Pi 内核标签', () => {
+  test('Given xAI 渠道已开启实验开关并勾选 Pi 内核 When 判定标签状态 Then 显示为已启用的实验内核', () => {
+    expect(resolvePiCoreState({
+      provider: 'xai',
+      enabled: true,
+      agentExperimentalEnabled: true,
+      agentRuntimes: ['pi'],
+    })).toBe('experimental-active')
+  })
+
+  test('Given xAI 渠道未开实验开关或停用 When 判定标签状态 Then 显示未启用', () => {
+    expect(resolvePiCoreState({
+      provider: 'xai',
+      enabled: true,
+      agentExperimentalEnabled: false,
+      agentRuntimes: undefined,
+    })).toBe('experimental-inactive')
+    expect(resolvePiCoreState({
+      provider: 'xai',
+      enabled: false,
+      agentExperimentalEnabled: true,
+      agentRuntimes: ['pi'],
+    })).toBe('experimental-inactive')
+  })
+
+  test('Given 非 xAI 渠道 When 判定标签状态 Then 一律为普通 Pi 内核', () => {
+    expect(resolvePiCoreState({
+      provider: 'deepseek',
+      enabled: true,
+      agentExperimentalEnabled: false,
+      agentRuntimes: ['pi'],
+    })).toBe('active')
+  })
+
+  test('回归：旧判据对 xAI 恒为 false，标签不得再用它判定', () => {
+    // 根因锁：isAgentEnabledForChannel 是「是否勾选 Claude 内核」的 @deprecated 别名，
+    // 而 xAI 按设计永远不获得 claude 内核 → 用它会让已开启实验的渠道显示「Pi 实验未启用」。
+    const xai = {
+      provider: 'xai' as const,
+      enabled: true,
+      agentExperimentalEnabled: true,
+      agentRuntimes: ['pi'] as Array<'pi' | 'claude'>,
+    }
+    expect(isAgentEnabledForChannel(xai)).toBe(false)
+    expect(resolvePiCoreState(xai)).toBe('experimental-active')
   })
 })

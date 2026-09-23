@@ -11,6 +11,7 @@ export interface TaskToolInvocation {
   toolName: string
   input: Record<string, unknown>
   result?: unknown
+  executionResult?: import('./command-execution').CommandExecutionResult
 }
 
 export interface TaskGraphEventConversion {

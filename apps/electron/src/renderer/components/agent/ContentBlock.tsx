@@ -342,11 +342,13 @@ interface ToolUseBlockProps {
   dimmed?: boolean
   childBlocks?: SDKContentBlock[]
   basePath?: string
+  /** 多个可解析相对文件路径的基准目录 */
+  basePaths?: string[]
   /** 是否正在流式输出中 */
   isStreaming?: boolean
 }
 
-function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed = false, childBlocks, basePath, isStreaming }: ToolUseBlockProps): React.ReactElement {
+function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed = false, childBlocks, basePath, basePaths, isStreaming }: ToolUseBlockProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const toolResult = useToolResult(block.id, allMessages)
   const resultText = toolResult?.result
@@ -454,6 +456,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
                 block={childBlock}
                 allMessages={allMessages}
                 basePath={basePath}
+                basePaths={basePaths}
                 animate={animate}
                 index={ci}
                 dimmed
@@ -639,7 +642,7 @@ function ThinkingBlock({ block, dimmed = false, streaming = false }: ThinkingBlo
             shouldCollapse && !isExpanded && 'max-h-[5.6em]',
           )}
         >
-          <MessageResponse streaming={streaming} enableBlockCopy={(!shouldCollapse || isExpanded) && !streaming}>{block.thinking}</MessageResponse>
+          <MessageResponse enableBlockCopy={(!shouldCollapse || isExpanded) && !streaming}>{block.thinking}</MessageResponse>
         </div>
         {shouldCollapse && (
           <button
@@ -739,7 +742,7 @@ const ContentBlockView = function ContentBlock({ block, allMessages, basePath, b
           </div>
         )}
         {cleanText && (
-          <MessageResponse basePath={basePath} basePaths={basePaths} streaming={isStreaming} enableBlockCopy={!isStreaming}>{cleanText}</MessageResponse>
+          <MessageResponse basePath={basePath} basePaths={basePaths} enableBlockCopy={!isStreaming}>{cleanText}</MessageResponse>
         )}
       </>
     )
@@ -757,6 +760,7 @@ const ContentBlockView = function ContentBlock({ block, allMessages, basePath, b
         dimmed={dimmed}
         childBlocks={childBlocks}
         basePath={basePath}
+        basePaths={basePaths}
         isStreaming={isStreaming}
       />
     )

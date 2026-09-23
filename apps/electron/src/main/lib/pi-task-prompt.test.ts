@@ -80,6 +80,45 @@ describe('buildPiTaskPrompt', () => {
     expect(prompt).not.toContain('BROWSER_RULES')
   })
 
+  test('按需移除 Pi 文件记忆时始终保留后续平台和项目路径规则', () => {
+    const basePrompt = BASE_PROMPT.replace('## 用户信息', `## 当前平台与项目路径（macOS）
+PLATFORM_AND_PROJECT_RULES
+
+## 用户信息`)
+
+    for (const userMessage of ['检查类型错误。', '记住这个项目的运行方式。']) {
+      const prompt = buildPiTaskPrompt({ basePrompt, userMessage, toolNames: ALL_TOOLS })
+      expect(prompt).toContain('PLATFORM_AND_PROJECT_RULES')
+      expect(prompt.indexOf('PLATFORM_AND_PROJECT_RULES')).toBeLessThan(prompt.indexOf('## 用户信息'))
+      expect(prompt.includes('PI_MEMORY_RULES')).toBe(userMessage.includes('记住'))
+    }
+  })
+
+  test('按需移除浏览器 SOP 时不吞掉后续能力边界与其他常驻段落', () => {
+    const basePrompt = `${BASE_PROMPT}
+
+### 浏览器补充规则
+NESTED_BROWSER_RULES
+
+## 当前预设已关闭的能力
+DISABLED_CAPABILITY_RULES
+
+## 其他常驻规则
+ALWAYS_PRESENT_RULES`
+
+    for (const [userMessage, toolNames, hasBrowserRules] of [
+      ['检查类型错误。', ALL_TOOLS, false],
+      ['打开网页。', ALL_TOOLS, true],
+      ['打开网页。', [], false],
+    ] as const) {
+      const prompt = buildPiTaskPrompt({ basePrompt, userMessage, toolNames })
+      expect(prompt).toContain('DISABLED_CAPABILITY_RULES')
+      expect(prompt).toContain('ALWAYS_PRESENT_RULES')
+      expect(prompt.includes('## Profer 受管浏览器')).toBe(hasBrowserRules)
+      expect(prompt.includes('NESTED_BROWSER_RULES')).toBe(hasBrowserRules)
+    }
+  })
+
   test('PPT 任务在能力未激活时不恢复 PPT SOP，即使工具名称存在', () => {
     const prompt = buildPiTaskPrompt({
       basePrompt: BASE_PROMPT,

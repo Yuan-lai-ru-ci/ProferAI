@@ -65,6 +65,39 @@ describe('Pi Windows PowerShell tool', () => {
     expect(result.aborted).toBe(false)
   }, 5_000)
 
+  test('Given a mocked PowerShell child When it writes both streams and exits non-zero Then returns the unified execution result', async () => {
+    const stdoutListeners: Array<(chunk: Buffer) => void> = []
+    const stderrListeners: Array<(chunk: Buffer) => void> = []
+    const closeListeners: Array<(code: number) => void> = []
+    const child = {
+      pid: 4241,
+      killed: false,
+      signalCode: null,
+      kill: () => true,
+      stdout: { on: (_event: string, listener: (chunk: Buffer) => void) => { stdoutListeners.push(listener) } },
+      stderr: { on: (_event: string, listener: (chunk: Buffer) => void) => { stderrListeners.push(listener) } },
+      once: (event: string, listener: (value: never) => void) => {
+        if (event === 'close') closeListeners.push(listener as (code: number) => void)
+      },
+    }
+    const pending = executePowerShellCommand('exit 7', {
+      cwd: 'C:\\workspace',
+      executable: WINDOWS_POWERSHELL,
+      timeoutSeconds: 1,
+      spawnProcess: (() => child) as never,
+    })
+    stdoutListeners[0]?.(Buffer.from('out'))
+    stderrListeners[0]?.(Buffer.from('err'))
+    closeListeners[0]?.(7)
+    const result = await pending
+
+    expect(result).toMatchObject({
+      stdout: 'out', stderr: 'err', output: 'outerr', exitCode: 7,
+      signal: null, timedOut: false, aborted: false, shell: 'powershell', cwd: 'C:\\workspace',
+    })
+    expect(result.errorKind).toBeUndefined()
+  })
+
   test('Given a Windows command whose child never closes after timeout When executing Then force-settles and requests process-tree termination', async () => {
     let treePid: number | undefined
     const result = await executePowerShellCommand('never-closes', {

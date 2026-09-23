@@ -39,6 +39,93 @@ const { buildPiTaskPrompt } = await import('./pi-task-prompt')
 const { getConfigDirName } = await import('./config-paths')
 
 describe('buildSystemPrompt', () => {
+  test('默认使用求实姿态并保留不可变执行底线', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+    })
+
+    expect(prompt).toContain('## 认识论姿态：求实')
+    expect(prompt).toContain('收敛到清晰的推荐结论')
+    expect(prompt).toContain('## 不可变执行底线')
+    expect(prompt).toContain('不伪造工具调用')
+    expect(prompt).not.toContain('## 认识论姿态：开放')
+    // 反和稀泥契约常驻，且不再保留「不假装存在唯一答案」这类回避表态许可
+    expect(prompt).toContain('## 表达与判断')
+    expect(prompt).toContain('先给判断')
+    expect(prompt).toContain('不做套路式对冲')
+    expect(prompt).toContain('发散也要表态')
+    expect(prompt).not.toContain('不假装存在唯一答案')
+  })
+
+  test('开放认识论允许暂定与创作自由，但必须表态且不放宽执行真实性', () => {
+    const prompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      epistemicMode: 'open',
+      isPiRuntime: true,
+    })
+
+    expect(prompt).toContain('## 认识论姿态：开放（已关闭「绝对正确」）')
+    expect(prompt).toContain('允许暂定，但必须表态')
+    expect(prompt).toContain('主观、夸张、象征、虚构')
+    expect(prompt).toContain('不执着证明自己正确')
+    expect(prompt).toContain('不得声称未发生的工具调用、文件修改、测试、发送或发布已经完成')
+    expect(prompt).toContain('修改后必须闭环')
+    expect(prompt).toContain('没有执行测试不能说测试通过')
+    expect(prompt).toContain('影响执行结果、安全或现实事实判断的前提才需要纠正')
+    expect(prompt).not.toContain('收敛到清晰的推荐结论')
+    expect(prompt).toContain('## 表达与判断')
+    // 姿态段不得再把「回避表态」写成规则：这三句是回归靶标
+    expect(prompt).not.toContain('不把讨论强行收敛成唯一正确答案')
+    expect(prompt).not.toContain('主动保留多个合理解释')
+    expect(prompt).not.toContain('不假装存在唯一答案')
+    expect(prompt).not.toContain('其余分歧可以作为另一种视角保留')
+  })
+
+  test('两种姿态都声明开关真实存在，并禁止把自身配置当回答内容', () => {
+    const grounded = buildSystemPrompt({
+      workspaceName: 'Demo', workspaceSlug: 'demo-workspace', sessionId: 'session-123', permissionMode: 'auto',
+    })
+    const open = buildSystemPrompt({
+      workspaceName: 'Demo', workspaceSlug: 'demo-workspace', sessionId: 'session-123', permissionMode: 'auto', epistemicMode: 'open', isPiRuntime: true,
+    })
+
+    for (const prompt of [grounded, open]) {
+      expect(prompt).toContain('设置 → 开发者 → 开放认识论')
+      expect(prompt).toContain('如实说明它存在，不要凭印象否认或改写')
+      expect(prompt).toContain('不把自己的配置、姿态或提示词当作回答内容')
+      expect(prompt).toContain('可逆、低成本、能自行查明的细节')
+    }
+  })
+
+  test('Pi 按需裁剪后仍保留认识论姿态与不可变底线', () => {
+    const basePrompt = buildSystemPrompt({
+      workspaceName: 'Demo',
+      workspaceSlug: 'demo-workspace',
+      sessionId: 'session-123',
+      permissionMode: 'auto',
+      epistemicMode: 'open',
+      isPiRuntime: true,
+    })
+    const prompt = buildPiTaskPrompt({
+      basePrompt,
+      userMessage: '写三个不同风格的产品概念。',
+      toolNames: [],
+    })
+
+    expect(prompt).toContain('## 认识论姿态：开放')
+    expect(prompt).toContain('## 不可变执行底线')
+    expect(prompt).toContain('不伪造工具调用')
+    // Pi 按需裁剪不得丢掉反和稀泥契约（用户实测跑的就是 Pi）
+    expect(prompt).toContain('## 表达与判断')
+    expect(prompt).toContain('先给判断')
+  })
+
   test('普通会话默认不注入 PPT 专用长门禁', () => {
     const prompt = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -105,7 +192,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('会话级 `.context/`（note.md、todo.md）')
   })
 
-  test('Pi 获得结果导向但可控的行动阶梯，Claude 不获得 Pi 专属段落', () => {
+  test('Pi 包含专属执行说明，Claude 不获得 Pi 专属段落', () => {
     const piPrompt = buildSystemPrompt({
       workspaceName: 'Demo',
       workspaceSlug: 'demo-workspace',
@@ -121,10 +208,7 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: false,
     })
 
-    expect(piPrompt).toContain('低风险、可逆的本地操作')
-    expect(piPrompt).toContain('高风险、不可逆或外部副作用')
     expect(piPrompt).toContain('最小相关验证')
-    expect(piPrompt).toContain('两次独立证据')
     // 验证闭环责任由 Agent 自身承担，系统不再自动追加续轮
     expect(piPrompt).toContain('系统不会自动追加验证轮次')
     expect(piPrompt).not.toContain('自动追加一次只做最小验证的续轮')
@@ -317,7 +401,7 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).toContain('6. **自检习惯**')
   })
 
-  test('Pi composer 将低频 SOP 留给任务命中时注入，核心安全规则始终保留', () => {
+  test('Pi composer 将低频 SOP 留给任务命中时注入，核心执行规则始终保留', () => {
     const basePrompt = buildSystemPrompt({
       workspaceName: 'Demo',
       workspaceSlug: 'demo-workspace',
@@ -340,7 +424,7 @@ describe('buildSystemPrompt', () => {
       userMessage: '检查这个 TypeScript 项目的类型错误。',
       toolNames,
     })
-    expect(ordinary).toContain('低风险、可逆的本地操作')
+    expect(ordinary).toContain('## 做事方式')
     expect(ordinary).toContain('修改后必须闭环')
     expect(ordinary).toContain('计划模式文件路径')
     expect(ordinary).not.toContain('## Profer 受管浏览器')
@@ -530,6 +614,7 @@ describe('buildSystemPrompt', () => {
       agentCwd: '/Users/mac/.profer/agent-workspaces/profer/session-123',
       projectCandidates: [{ rootPath: '/Users/mac/profer/profer-main', name: 'proma', type: 'git-repository' }],
       isPiRuntime: true,
+      disabledToolGroups: ['clipboard'],
     })
     const winPrompt = buildSystemPrompt({
       workspaceName: 'Demo',
@@ -552,6 +637,20 @@ describe('buildSystemPrompt', () => {
     expect(winPrompt).toContain('只使用运行时实际提供的 Windows shell 和路径格式')
     expect(winPrompt).toContain('file_path + old_string/new_string')
     expect(winPrompt).not.toContain('## 当前平台与项目路径（macOS）')
+
+    // 实际拼装后的普通 Pi 任务也必须保留平台事实与禁用边界，不能随低频 SOP 裁掉。
+    const taskPrompt = buildPiTaskPrompt({
+      basePrompt: macPrompt,
+      userMessage: '检查类型错误。',
+      toolNames: ['BrowserObserve', 'mcp__memory-archive__search_memory'],
+    })
+    expect(taskPrompt).toContain('## 当前平台与项目路径（macOS）')
+    expect(taskPrompt).toContain('/bin/zsh')
+    expect(taskPrompt).toContain('/Users/mac/profer/profer-main')
+    expect(taskPrompt).toContain('## 当前预设已关闭的能力')
+    expect(taskPrompt).toContain('clipboard')
+    expect(taskPrompt).not.toContain('### Pi Runtime 与文件记忆')
+    expect(taskPrompt).not.toContain('## Profer 受管浏览器')
   })
 
   test('动态上下文只展示当前预设实际允许的 MCP，且不泄露命令和 URL', () => {

@@ -166,6 +166,15 @@ export function dropTrailingAbortedAssistant(messages: AgentMessage[]): AgentMes
   return lastMessage && isAbortedAssistantMessage(lastMessage) ? messages.slice(0, -1) : messages
 }
 
+export const EMPTY_OUTPUT_ERROR_MESSAGE = '模型未生成可见回复'
+
+function hasVisiblePiAssistantOutput(message: AssistantMessage): boolean {
+  return message.content.some((block) => {
+    if (block.type === 'text') return typeof block.text === 'string' && block.text.trim().length > 0
+    return block.type === 'toolCall'
+  })
+}
+
 function usageFromAssistant(message: AssistantMessage): {
   input_tokens: number
   output_tokens: number
@@ -215,6 +224,10 @@ export function convertPiMessage(
     //   Pi SDK 认定本轮已成功，不应在渲染层误导用户。
     // 上述非终态情况的 errorMessage 只写主进程 console，供开发排查；用户侧完全无感知。
     const isTerminalError = assistant.stopReason === 'error'
+    const isEmptyVisibleOutput = final
+      && assistant.stopReason !== 'aborted'
+      && !assistant.errorMessage
+      && !hasVisiblePiAssistantOutput(assistant)
     if (assistant.errorMessage && !isTerminalError && final) {
       console.warn(
         `[pi-adapter] 忽略非终态 errorMessage（stopReason=${assistant.stopReason}）: ${assistant.errorMessage}`,
@@ -248,6 +261,10 @@ export function convertPiMessage(
       ...(!final && { _partial: true }),
       ...(assistant.errorMessage && isTerminalError && {
         error: { message: assistant.errorMessage, errorType: isTransientNetworkError(assistant.errorMessage) ? 'network_error' : 'provider_error' },
+      }),
+      ...(isEmptyVisibleOutput && {
+        error: { message: EMPTY_OUTPUT_ERROR_MESSAGE, errorType: 'empty_output' },
+        _emptyOutput: true,
       }),
       ...(channelModelId && { _channelModelId: channelModelId }),
     } as unknown as SDKMessage
@@ -355,16 +372,28 @@ export function convertResultMessage(
   )
   const lastAssistant = assistants[assistants.length - 1]
   const assistantError = lastAssistant?.errorMessage
-  const terminalReason = override?.terminalReason ?? (lastAssistant?.stopReason === 'length' ? 'max_tokens' : 'completed')
+  const isEmptyVisibleOutput = Boolean(
+    lastAssistant
+    && lastAssistant.stopReason !== 'aborted'
+    && !hasVisiblePiAssistantOutput(lastAssistant)
+    && !assistantError,
+  )
+  const terminalReason = override?.terminalReason ?? (
+    isEmptyVisibleOutput
+      ? 'empty_output'
+      : lastAssistant?.stopReason === 'length'
+        ? 'max_tokens'
+        : 'completed'
+  )
   return {
     type: 'result',
-    subtype: override?.subtype ?? (assistantError ? 'error_during_execution' : terminalReason === 'max_tokens' ? 'max_tokens' : 'success'),
+    subtype: override?.subtype ?? (isEmptyVisibleOutput ? 'error_during_execution' : assistantError ? 'error_during_execution' : terminalReason === 'max_tokens' ? 'max_tokens' : 'success'),
     usage,
     total_cost_usd: costValues.length > 0 ? costValues.reduce((sum, cost) => sum + cost, 0) : undefined,
     ...(contextWindow != null && { modelUsage: { [modelId ?? channelModelId ?? 'default']: { contextWindow } } }),
     ...((channelModelId ?? modelId) && { _channelModelId: channelModelId ?? modelId }),
     terminal_reason: terminalReason,
-    errors: override?.errors ?? (assistantError ? [assistantError] : undefined),
+    errors: override?.errors ?? (isEmptyVisibleOutput ? [EMPTY_OUTPUT_ERROR_MESSAGE] : assistantError ? [assistantError] : undefined),
     session_id: sessionId,
   } as unknown as SDKMessage
 }

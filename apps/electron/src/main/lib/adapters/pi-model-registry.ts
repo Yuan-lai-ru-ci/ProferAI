@@ -92,6 +92,8 @@ const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
     maxTokens: 128_000,
   },
   {
+    // 0.86 起上游 openai-codex catalog 已移除 gpt-5.4：这里保留条目作为兜底，
+    // 只有当 catalog 仍收录该 ID 时才会把它的窗口覆盖为当前规格（否则不凭空补回）。
     id: 'gpt-5.4',
     contextWindow: CODEX_56_CONTEXT_WINDOW,
   },
@@ -301,8 +303,8 @@ async function getCatalogModels(provider: KnownProvider): Promise<readonly PiCat
 }
 
 async function findPiCatalogModel(provider: ProviderType, modelId: string): Promise<PiCatalogModel | undefined> {
-  // DeepSeek 官方短名（deepseek-flash / deepseek-pro）在 catalog 里以 deepseek-v4-* 登记：
-  // 只借它的元数据（窗口/成本/最大输出/思考档位），注册与请求仍用用户填的原始 ID。
+  // DeepSeek 旧代写法（deepseek-v4-flash）与官方短名（deepseek-pro）先归一到 catalog 正式 ID：
+  // 只借它的元数据（窗口/成本/最大输出/思考档位/图片能力），注册与请求仍用用户填的原始 ID。
   const catalogModelId = resolveDeepSeekV4ModelId(modelId) ?? modelId
   const checked = new Set<string>()
   for (const candidate of candidatePiProviders(provider)) {

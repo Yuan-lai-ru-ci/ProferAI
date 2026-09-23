@@ -479,8 +479,6 @@ export function TurnFileMapProvider({ map, children }: { map?: Map<string, strin
 interface MessageResponseProps {
   /** Markdown 内容 */
   children: string
-  /** 流式阶段使用稳定的纯文本布局，避免未闭合 Markdown 语法反复改变 DOM 结构。 */
-  streaming?: boolean
   className?: string
   /** 基础目录路径，用于解析相对文件路径（如 Agent 会话工作目录） */
   basePath?: string
@@ -795,7 +793,8 @@ const MarkdownInlineCode = React.memo(function MarkdownInlineCode({
     if (isAbsoluteFilePath(text)) {
       return <FilePathChip filePath={text.trim()} basePaths={merged.length > 0 ? merged : undefined} />
     }
-    if (merged.length > 0 && isRelativeFilePath(text)) {
+    if (isRelativeFilePath(text)) {
+      // 相对路径也必须先渲染为统一 chip；没有 basePaths 时由主进程按当前 session 继续解析。
       // 裸文件名命中本轮工具实际访问过的路径时，补成绝对路径；同名冲突会从映射中移除，
       // 因此未命中时继续走既有 basePaths 降级解析，不会误打开别的同名文件。
       const trimmed = text.trim()
@@ -958,7 +957,7 @@ function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, sel
 }
 
 export const MessageResponse = React.memo(
-  function MessageResponse({ children, className, basePath, basePaths, remarkPlugins, streaming = false, enableBlockCopy = false }: MessageResponseProps): React.ReactElement {
+  function MessageResponse({ children, className, basePath, basePaths, remarkPlugins, enableBlockCopy = false }: MessageResponseProps): React.ReactElement {
     const processed = React.useMemo(() => normalizeMarkdownEmphasisWhitespace(normalizeLatexDelimiters(children.replace(/<!--PROMA_AUTOMATION:[\s\S]*?-->/g, '').trim())), [children])
     const blocks = React.useMemo(() => parseAgentMarkdownBlocks(processed), [processed])
     const [selection, setSelection] = React.useState<AgentBlockSelectionUpdate>({ selectedIds: new Set(), selecting: false })
@@ -1162,7 +1161,7 @@ export const MessageResponse = React.memo(
       </>
     )
   },
-  (prevProps, nextProps) => prevProps.children === nextProps.children && prevProps.basePath === nextProps.basePath && prevProps.basePaths === nextProps.basePaths && prevProps.remarkPlugins === nextProps.remarkPlugins && prevProps.streaming === nextProps.streaming && prevProps.enableBlockCopy === nextProps.enableBlockCopy
+  (prevProps, nextProps) => prevProps.children === nextProps.children && prevProps.basePath === nextProps.basePath && prevProps.basePaths === nextProps.basePaths && prevProps.remarkPlugins === nextProps.remarkPlugins && prevProps.enableBlockCopy === nextProps.enableBlockCopy
 )
 
 // ===== UserMessageContent 可折叠用户消息 =====

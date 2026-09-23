@@ -38,7 +38,7 @@ import type {
   AgentThinkingLevel,
   ErrorCode,
 } from '@profer/shared'
-import { isAgentEnabledForChannel, normalizeAgentRuntime } from '@profer/shared'
+import { normalizeAgentRuntime } from '@profer/shared'
 import {
   SAFE_TOOLS,
   THINKING_SIGNATURE_ERROR_CODE,
@@ -125,8 +125,13 @@ import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getPiCheckpointsDi
 import { getRuntimeSkillsPath, prepareRuntimeSkills } from './global-skill-manager'
 import { normalizeDefaultSkillSlug } from './default-skill-slugs'
 import { getRuntimeStatus } from './runtime-init'
+import { shouldStartPiHarness } from './pi-harness/feature-gate'
+import { pauseActivePiHarnessRun, settlePiHarnessRun, startPiHarnessRun } from './pi-harness/orchestrator-bridge'
+import type { CommandExecutionResult } from './command-execution'
+import { createCommandExecutionLedger } from './pi-execution-ledger'
 import { getSettings } from './settings-service'
 import { buildSystemPrompt, buildDynamicContext } from './agent-prompt-builder'
+import { resolveAgentRuntimeSystemPrompt, resolveAgentSystemPromptPolicy } from './agent-system-prompt-policy'
 import { buildPiTaskPrompt } from './pi-task-prompt'
 import { injectPlanningMcpServer } from './planning-agent-tools'
 import { ensurePresetSystemReady, getAgentPresetByReference, presetReferenceForId } from './agent-preset-manager'
@@ -167,7 +172,8 @@ import {
 } from './agent-prompt-utils'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
-import { buildAgentRuntimeEnv } from './agent-runtime-env'
+import { buildAgentRuntimeEnv, mergeRuntimeEnv } from './agent-runtime-env'
+import { getOrCreateShellSnapshot } from './shell-snapshot'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
 import type { PiRetryUpdate } from './adapters/pi-retry-control'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
@@ -185,17 +191,19 @@ import { browserController } from './browser-controller'
 import {
   applySdkCredentials,
   buildPiSkillMentionOptions,
+  AgentRunAlreadyActiveError,
   isBrowserToolName,
   isPartialSDKMessage,
   isPlanModeMarkdownPath,
   isPlanModeMcpTool,
+  isXaiChannelAvailableForRuntime,
   releaseActiveSession,
   resolvePlanModeBrowserPermission,
   shouldPreInterruptQueuedMessage,
   tryAcquireActiveSession,
   tryReserveQueuedMessage,
 } from './agent-orchestrator-p0-guards'
-import { hasTerminalErrorWithContent, stripErrorFromContentMessage } from './adapters/pi-message-adapter'
+import { EMPTY_OUTPUT_ERROR_MESSAGE, hasTerminalErrorWithContent, stripErrorFromContentMessage } from './adapters/pi-message-adapter'
 import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { buildPiAdditionalDirectoriesPrompt } from './pi-additional-directories-prompt'
 import { detectAttachedDirectoryProjects } from './attached-directory-project-detector'
@@ -924,9 +932,10 @@ export class AgentOrchestrator {
         `activeSessionsToken=${this.activeSessions.get(sessionId) ?? '(empty/hung)'}, ` +
         `runCompletionsPending=${hungCompletion ? 'true(finally未释放)' : 'false'}`,
       )
-      callbacks.onError(stopping ? 'Agent 正在停止，请稍候再试' : '上一条消息仍在处理中，请稍候再试')
-      callbacks.onComplete([], { startedAt: input.startedAt })
-      return
+      // 本次请求尚未获得运行所有权，不能伪造 STREAM_ERROR / STREAM_COMPLETE。
+      // 否则 renderer 会把 owner run 提前标成结束，并在其真实 completion 到达时
+      // 因 startedAt 不匹配而丢弃终态。交给调用入口作为普通 IPC 拒绝处理。
+      throw new AgentRunAlreadyActiveError(stopping)
     }
     input = routePluginModel(`agent:${sessionId}`, input, agentRuntime)
     ;({ channelId, modelId } = input)
@@ -956,6 +965,9 @@ export class AgentOrchestrator {
     // 运行级错误标志：preflight / 异常 catch / TypedError 无 subtype 等无 resultSubtype 的错误路径
     // 据此归一化为 error。必须放在 try 之外，owner finally 需要读取它。
     let runEndedWithError = false
+    let piHarnessScope: ReturnType<typeof startPiHarnessRun> | undefined
+    let harnessStopped = false
+    const executionResultsByToolUse = createCommandExecutionLedger()
 
     try {
     // 0.5 清除上一轮中断标记
@@ -1045,7 +1057,7 @@ export class AgentOrchestrator {
       return
     }
 
-    if (channel.provider === 'xai' && (agentRuntime !== 'pi' || !isAgentEnabledForChannel(channel))) {
+    if (!isXaiChannelAvailableForRuntime(channel, agentRuntime)) {
       reportPreflightError({
         code: 'invalid_request',
         title: agentRuntime !== 'pi' ? 'xAI 仅支持 Pi Agent' : 'xAI Agent 尚未开启',
@@ -1560,7 +1572,7 @@ export class AgentOrchestrator {
 ${enrichedMessage}`
 
       const isCompactCommand = userMessage.trim() === '/compact'
-      const finalPrompt = isCompactCommand
+      let finalPrompt = isCompactCommand
         ? '/compact'
         : existingSdkSessionId
           ? contextualMessage
@@ -1577,6 +1589,29 @@ ${enrichedMessage}`
       const appSettings = getSettings()
       // Agent 预设：会话绑定的预设可覆盖权限模式与推理档位，并在系统提示词后追加预设专属段（sessionPreset 已在步骤 10 解析）。
       const initialPermissionMode: ProferPermissionMode = presetPolicy.permissionMode
+      // Harness 默认启用；设置 PROFER_PI_HARNESS=0 可按进程关闭。初始化失败不能阻断普通 Agent turn。
+      // Stop 可能发生在前面的异步 preflight 期间，此时不能再晚建 scope，
+      // 否则 finally 会把用户主动停止的 Turn 误记为 completed。
+      if (shouldStartPiHarness(agentRuntime)) {
+        if (this.stoppedBySessions.has(sessionId)) {
+          harnessStopped = true
+          console.log(`[Pi Harness] 检测到 scope 初始化前已停止，跳过本轮 scope (${sessionId})`)
+        } else {
+          try {
+            piHarnessScope = startPiHarnessRun({
+              sessionId,
+              userMessage,
+              prompt: finalPrompt,
+              permissionMode: initialPermissionMode,
+              manualCandidateContinuationTicket: input.piHarnessManualContinuationTicket,
+            })
+            if (piHarnessScope) finalPrompt = piHarnessScope.prompt
+          } catch (error) {
+            console.warn(`[Pi Harness] scope 初始化失败，继续普通 Pi turn (${sessionId}):`, error)
+          }
+        }
+      }
+
       // 受管浏览器允许读取的根目录 = 会话工作目录 + 会话/工作区已授权目录（后者含工作区根与 workspace-files）。
       const browserAllowedRoots = [
         ...new Set(
@@ -1902,6 +1937,7 @@ ${enrichedMessage}`
       // 检测用户选用的模型是否为 Claude 系列，决定 SubAgent 是否使用独立模型分层
       const claudeAvailable = (modelId || DEFAULT_MODEL_ID).toLowerCase().includes('claude')
       const maxTurns = appSettings.agentMaxTurns && appSettings.agentMaxTurns > 0 ? appSettings.agentMaxTurns : undefined
+      const promptPolicy = resolveAgentSystemPromptPolicy(appSettings)
       const selectedModelId = modelId || DEFAULT_MODEL_ID
       const allAdditionalDirectories = collectAttachedDirectories({
         extraDirs: additionalDirectories,
@@ -1912,17 +1948,42 @@ ${enrichedMessage}`
       const projectCandidates = detectAttachedDirectoryProjects(allAdditionalDirectories)
       const attachedDirectoriesPrompt = buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
       const runtimeStatus = getRuntimeStatus()
+      const shellPreference = getSettings().agentShellPreference
+      const piShellSnapshot = agentRuntime === 'pi'
+        ? await getOrCreateShellSnapshot({
+            sessionId,
+            cwd: agentCwd,
+            platform: process.platform,
+            processEnv: process.env,
+            source: runtimeStatus ? 'runtime-status' : undefined,
+            shell: process.platform === 'win32' && shellPreference === 'git-bash' && runtimeStatus?.shell?.gitBash.path
+              ? { kind: 'git-bash', path: runtimeStatus.shell.gitBash.path, login: false, source: 'configured' }
+              : process.platform === 'win32' && shellPreference === 'wsl'
+                ? { kind: 'wsl', path: 'wsl.exe', login: false, source: 'configured' }
+                : runtimeStatus?.shell?.recommended === 'git-bash' && runtimeStatus.shell.gitBash.path
+                  ? { kind: 'git-bash', path: runtimeStatus.shell.gitBash.path, login: false, source: 'detected' }
+                  : runtimeStatus?.shell?.recommended === 'wsl'
+                    ? { kind: 'wsl', path: 'wsl.exe', login: false, source: 'detected' }
+                    : undefined,
+          })
+        : undefined
       const piRuntimeEnv = buildAgentRuntimeEnv({
         proxyUrl: await getEffectiveProxyUrl(),
         runtimeStatus,
-        shellPreference: getSettings().agentShellPreference,
+        processEnv: piShellSnapshot ? mergeRuntimeEnv(process.env, piShellSnapshot.env) : process.env,
+        shellPreference,
       })
+      const promptShellPath = agentRuntime === 'pi'
+        ? piRuntimeEnv.shellPath
+        : process.env.SHELL
+          ?? (process.platform === 'win32' ? undefined : process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh')
       const baseSystemPrompt = buildSystemPrompt({
         workspaceName: workspace?.name,
         workspaceSlug,
         sessionId,
         permissionMode: initialPermissionMode,
         presetName: presetPolicy.preset.name,
+        epistemicMode: promptPolicy.epistemicMode,
         allowedPresetOperations,
         // 方案 3：工具组禁用同步隐藏提示词段落，自动映射来自 shared 唯一事实表
         // （task-graph→task-graph、memory→memory、collaboration→subagents、automation→automation）
@@ -1936,9 +1997,7 @@ ${enrichedMessage}`
         disabledTools: disabledTools ? [...disabledTools] : undefined,
         pptCapabilityActive: presetPolicy.pptCapabilityActive,
         platform: process.platform,
-        shellPath: piRuntimeEnv.shellPath
-          ?? process.env.SHELL
-          ?? (process.platform === 'win32' ? undefined : process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh'),
+        shellPath: promptShellPath,
         agentCwd,
         projectCandidates,
         })
@@ -2000,6 +2059,12 @@ ${enrichedMessage}`
           piSessionDir: join(getSdkConfigDir(), 'sessions', 'pi'),
           // Pi model credentials stay in its request-local AuthStorage; never pass Claude auth env into Bash/tool processes.
           runtimeEnv: piRuntimeEnv,
+          onToolExecutionResult: (toolCallId: string, result: CommandExecutionResult) => {
+            executionResultsByToolUse.set(toolCallId, result)
+          },
+          onHarnessLifecycle: (event: import('./adapters/pi-harness-lifecycle').PiHarnessLifecycleEvent) => {
+            piHarnessScope?.observeLifecycle(event)
+          },
           thinkingLevel: resolvePiThinkingLevel(
             sessionMeta?.openAIThinkingLevel,
             // 预设 effort 作为无会话级覆盖时的默认档；会话级 agentEffort 手动切换优先
@@ -2034,16 +2099,13 @@ ${enrichedMessage}`
         canUseTool,
         ...(sdkPermissionModeForProferMode(initialPermissionMode) === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
         ...(disabledClaudeTools.length > 0 && { disallowedTools: disabledClaudeTools }),
-        // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
-        // buildSystemPrompt 追加 Profer 特有指令（角色定义、SubAgent 策略、工作区信息等）
-        systemPrompt:
-          agentRuntime === 'pi'
-          ? piSystemPrompt
-          : {
-              type: 'preset',
-              preset: 'claude_code',
-              append: systemPromptAppend,
-            },
+        // 默认继续使用 claude_code preset；开发者开启开放认识论后改用 Profer 完整自管 prompt，
+        // 避免上游本地 preset 稀释该姿态。模型服务端更高优先级规则不受此设置影响。
+        systemPrompt: resolveAgentRuntimeSystemPrompt(
+          agentRuntime,
+          promptPolicy,
+          agentRuntime === 'pi' ? piSystemPrompt : systemPromptAppend,
+        ),
         resumeSessionId: existingSdkSessionId,
         // 回退后 resume：从指定消息处继续（SDK 在同一 JSONL 内创建分支）
         ...(rewindResumeAt && { resumeSessionAt: rewindResumeAt }),
@@ -2206,6 +2268,8 @@ ${enrichedMessage}`
       let skipNextRetryDelay = false
       let thinkingSignatureRecoveryAttempted = false
       let invisibleRecoveryAttempts = 0
+      // thinking-only 不是网络错误：最多做一次无感恢复，避免空回复触发 25 次长重试。
+      let emptyOutputRecoveryAttempted = false
       /** 前 N 次自动重试静默执行，不向 UI 发送事件，减少网络瞬断时的界面噪音 */
       const RETRY_VISIBILITY_THRESHOLD = 0
       const canAutoRetry = (attempt: number, ...errorMessages: Array<string | undefined>): boolean => {
@@ -2499,6 +2563,7 @@ ${enrichedMessage}`
                       type?: string
                       tool_use_id?: string
                       content?: unknown
+                      is_error?: boolean
                     }>
                   }
                 }
@@ -2508,6 +2573,17 @@ ${enrichedMessage}`
                 const invocation = taskToolUses.get(block.tool_use_id)
                 if (!invocation) continue
                 invocation.result = block.content
+                invocation.executionResult = executionResultsByToolUse.get(block.tool_use_id)
+                if (piHarnessScope) {
+                  piHarnessScope.observeToolResult({
+                    toolUseId: invocation.toolUseId,
+                    toolName: invocation.toolName,
+                    input: invocation.input,
+                    result: block.content,
+                    ...(invocation.executionResult ? { executionResult: invocation.executionResult } : {}),
+                    isError: block.is_error === true,
+                  })
+                }
 
                 if (invocation.toolName === 'TaskCreate' || invocation.toolName === 'TaskUpdate') {
                   const conversion = nativeTaskToolToGraphEvents(invocation, sessionId, Date.now(), {
@@ -2555,6 +2631,7 @@ ${enrichedMessage}`
                   }
                 }
                 taskToolUses.delete(block.tool_use_id)
+                executionResultsByToolUse.delete(block.tool_use_id)
               }
             }
 
@@ -2723,6 +2800,49 @@ ${enrichedMessage}`
                   stderrChunks.length = 0
                   shouldRetryFromError = true
                   break
+                }
+
+                // thinking-only 空输出只恢复一次；第二次必须给用户可见反馈，不能静默成功。
+                if (typedError.code === 'empty_output') {
+                  if (!emptyOutputRecoveryAttempted && canAutoRetry(attempt)) {
+                    emptyOutputRecoveryAttempted = true
+                    lastRetryableError = EMPTY_OUTPUT_ERROR_MESSAGE
+                    skipNextRetryDelay = true
+                    stderrChunks.length = 0
+                    console.warn(`[Agent 编排] 检测到 thinking-only 空回复，立即恢复一次 (attempt ${attempt})`)
+                    shouldRetryFromError = true
+                    break
+                  }
+
+                  const emptyOutputErrorContent = '模型未生成可见回复，请重试或更换模型。'
+                  const emptyOutputErrorSDKMsg: SDKMessage = {
+                    type: 'assistant',
+                    message: {
+                      content: [{ type: 'text', text: emptyOutputErrorContent }],
+                    },
+                    parent_tool_use_id: null,
+                    error: {
+                      message: emptyOutputErrorContent,
+                      errorType: 'empty_output',
+                    },
+                    _createdAt: Date.now(),
+                    _errorCode: 'empty_output',
+                    _errorTitle: '模型未生成回复',
+                    _errorCanRetry: true,
+                    _errorActions: [{ key: 'r', label: '重试', action: 'retry' }],
+                  } as unknown as SDKMessage
+                  appendSDKMessages(sessionId, [emptyOutputErrorSDKMsg])
+                  this.eventBus.emit(sessionId, {
+                    kind: 'sdk_message',
+                    message: emptyOutputErrorSDKMsg,
+                  })
+                  runEndedWithError = true
+                  completeRun(getAgentSessionMessages(sessionId), {
+                    startedAt: streamStartedAt,
+                    resultSubtype: 'error_during_execution',
+                    resultErrors: [emptyOutputErrorContent],
+                  })
+                  return
                 }
 
                 // 判断是否可自动重试
@@ -3236,8 +3356,20 @@ ${enrichedMessage}`
 
         failRun(`${retryFailureMessage}: ${lastRetryableError}`, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
       }
+    } catch (error) {
+      // setup/query 失败可能发生在 Pi query 启动之前；Harness 仍必须看到 failed，
+      // 不能让 finally 把已创建的 scope 误结算为 completed。
+      runEndedWithError = true
+      throw error
     } finally {
       // 凭证仅存在于 queryOptions.env；这里只清理本轮运行态。
+      if (piHarnessScope && !harnessStopped) {
+        try {
+          settlePiHarnessRun(sessionId, runEndedWithError ? 'failed' : 'completed')
+        } catch (error) {
+          console.warn(`[Pi Harness] scope settle 失败，忽略 (${sessionId}):`, error)
+        }
+      }
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       // 只有仍持有本 generation 的 finally 能释放并清理 session scoped state。
       if (releaseActiveRun()) {
@@ -3254,6 +3386,9 @@ ${enrichedMessage}`
           currentCompletion.resolve()
         }
         // ownership 已释放，renderer 此时收到 STREAM_COMPLETE 后可安全开始下一轮。
+        // 若 Stop 发生在 query/setup 尚未进入统一终态处理前，清掉残留标记，
+        // 防止下一轮被误判为“启动前已停止”。
+        this.stoppedBySessions.delete(sessionId)
         if (pendingTerminalCompletion) {
           const completion = pendingTerminalCompletion
           // 1.1 统一结束原因判定：在任何终端路径的 complete 处归一化。
@@ -3363,6 +3498,7 @@ ${enrichedMessage}`
   stop(sessionId: string): void {
     if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
     this.stoppedBySessions.add(sessionId)
+    pauseActivePiHarnessRun(sessionId, 'user_stop')
     browserController.cancelSession(sessionId)
     try {
       this.adapter.abort(sessionId)

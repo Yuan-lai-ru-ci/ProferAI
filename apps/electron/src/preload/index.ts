@@ -133,6 +133,7 @@ import type {
 import type {
   UserProfile,
   AppSettings,
+  DeveloperSettingsSnapshot,
   PocketModeStatus,
   QuickTaskSubmitInput,
   QuickTaskOpenSessionData,
@@ -518,6 +519,9 @@ export interface ElectronAPI {
 
   /** 同步更新应用设置（用于 beforeunload 场景） */
   updateSettingsSync: (updates: Partial<AppSettings>) => boolean
+
+  /** 订阅开发者模式与开放认识论设置变化（返回清理函数） */
+  onDeveloperSettingsChanged: (callback: (settings: DeveloperSettingsSnapshot) => void) => () => void
 
   /** 获取移动模式（试验版）状态与连接信息 */
   getPocketModeStatus: () => Promise<PocketModeStatus>
@@ -2110,6 +2114,12 @@ const electronAPI: ElectronAPI = {
 
   updateSettingsSync: (updates: Partial<AppSettings>) => {
     return ipcRenderer.sendSync(SETTINGS_IPC_CHANNELS.UPDATE_SYNC, updates)
+  },
+
+  onDeveloperSettingsChanged: (callback: (settings: DeveloperSettingsSnapshot) => void) => {
+    const listener = (_: unknown, settings: DeveloperSettingsSnapshot): void => callback(settings)
+    ipcRenderer.on(SETTINGS_IPC_CHANNELS.ON_DEVELOPER_SETTINGS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.ON_DEVELOPER_SETTINGS_CHANGED, listener) }
   },
 
   getPocketModeStatus: () => {
