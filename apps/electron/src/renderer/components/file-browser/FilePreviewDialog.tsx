@@ -2,7 +2,9 @@
  * FilePreviewDialog — 文件内嵌预览弹窗
  *
  * 根据文件扩展名分派预览方式：
- * - 图片: base64 → ImageLightbox
+ * - 图片: 自渲染 <img>（useSmoothZoom：普通滚轮直接缩放、rAF 平滑、指针锚定）
+ *   曾试过交给 OFV viewer，但它的 imagePlugin 要求按住 Ctrl/Cmd 滚轮才缩放、
+ *   且是档位式 zoom-in/out 命令，体验不如自渲染版本，故改回。
  * - PDF: prepare-pdf-preview → HTML iframe
  * - Office: docx-to-html / office-to-html → HTML iframe
  * - 代码/文本: resolve-and-read → 代码查看器
@@ -15,6 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { OfficePreview } from './office-preview/OfficePreview'
+import { useSmoothZoom } from '@/hooks/useSmoothZoom'
 import type { FileAccessOptions } from '@profer/shared'
 
 interface FilePreviewDialogProps {
@@ -44,9 +47,6 @@ const TEXT_EXTS = new Set([
 ])
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'])
-const MIN_IMAGE_ZOOM = 0.5
-const MAX_IMAGE_ZOOM = 3
-const IMAGE_ZOOM_STEP = 0.1
 
 function ext(name: string): string {
   return name.split('.').pop()?.toLowerCase() ?? ''
@@ -67,33 +67,17 @@ function langFromExt(e: string): string {
 export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownload }: FilePreviewDialogProps): React.ReactElement {
   const [state, setState] = React.useState<PreviewState>({ status: 'loading' })
   const [resolvedPath, setResolvedPath] = React.useState<string | null>(null)
-  const [imageZoom, setImageZoom] = React.useState(1)
-  const imagePreviewRef = React.useRef<HTMLDivElement>(null)
+  // 自渲染图片缩放：普通滚轮直接缩放（不用按 Ctrl）+ rAF 平滑 + 指针锚定 + 拖拽平移
+  const { zoom: imageZoom, pan: imagePan, bindRef: bindImagePreview, reset: resetImageZoom, onPanMouseDown: onImagePanMouseDown } =
+    useSmoothZoom({ minZoom: 0.5, maxZoom: 5 })
 
   React.useEffect(() => {
     if (!open || !filePath) return
     setState({ status: 'loading' })
     setResolvedPath(null)
-    setImageZoom(1)
+    resetImageZoom(1)
     loadPreview()
-  }, [open, filePath, fileName])
-
-  // 原生 non-passive 监听器确保 Electron 中可阻止默认滚动，并允许在预览区域任意位置缩放。
-  React.useEffect(() => {
-    const element = imagePreviewRef.current
-    if (!element || state.status !== 'image') return
-
-    const handleWheel = (event: WheelEvent): void => {
-      event.preventDefault()
-      setImageZoom((currentZoom) => {
-        const nextZoom = currentZoom + (event.deltaY < 0 ? IMAGE_ZOOM_STEP : -IMAGE_ZOOM_STEP)
-        return Math.min(MAX_IMAGE_ZOOM, Math.max(MIN_IMAGE_ZOOM, nextZoom))
-      })
-    }
-
-    element.addEventListener('wheel', handleWheel, { passive: false })
-    return () => element.removeEventListener('wheel', handleWheel)
-  }, [state.status])
+  }, [open, filePath, fileName, resetImageZoom])
 
   const loadPreview = async (): Promise<void> => {
     const e = ext(fileName)
@@ -221,17 +205,16 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
             </div>
           )}
           {state.status === 'image' && (
-            <div
-              ref={imagePreviewRef}
-              className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-auto bg-surface-sunken/50"
-              title={`在预览区域滚动滚轮可缩放（${Math.round(imageZoom * 100)}%）`}
-            >
+            <div className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-hidden">
               <img
+                ref={bindImagePreview}
                 src={state.src}
                 alt={fileName}
-                className="max-w-full max-h-full object-contain select-none cursor-zoom-in"
-                style={{ transform: `scale(${imageZoom})`, transformOrigin: 'center center', transition: 'transform 80ms ease-out' }}
+                className="max-w-full max-h-full object-contain select-none cursor-grab"
+                style={{ transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`, transformOrigin: '0 0' }}
+                onMouseDown={onImagePanMouseDown}
                 draggable={false}
+                title="滚动滚轮缩放，拖拽平移"
               />
             </div>
           )}

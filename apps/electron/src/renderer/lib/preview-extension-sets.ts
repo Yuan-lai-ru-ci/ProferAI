@@ -4,7 +4,8 @@
  * `UNSUPPORTED_EXTS`：Profer 现有链路明确不支持预览的格式（历史上直接给"不支持"提示）。
  * `NON_PREVIEWABLE_BINARY_EXTS`：其中**连 OFV 也无法有意义预览**的纯二进制 / 磁盘映像 ——
  *   保留原"不支持"提示，不交给 OFV 试（免得被它的 textPlugin 当成文本渲染出一屏乱码）。
- * `IMAGE_PREVIEW_EXTS`：面板与浏览器列**共用**的静态图清单（两处各写一份时必须同改，故收敛到此）。
+ * `IMAGE_PREVIEW_EXTS`：静态图清单。普通打开路径统一交给 OFV viewer；
+ *   DiffTabContent 仍保留图片回退渲染，供历史 preview tab / 组合等旧状态安全落地。
  * `PANEL_ONLY_PREVIEW_EXTS`：必须留在预览面板的格式 —— 各有专属渲染器或契约，见各处注释。
  */
 

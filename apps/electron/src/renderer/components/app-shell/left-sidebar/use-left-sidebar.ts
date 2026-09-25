@@ -41,8 +41,6 @@ import {
   workspaceCapabilitiesVersionAtom,
   agentDiffPanelTabAtom,
   agentSidePanelOpenAtom,
-  agentSideExplorationMapAtom,
-  getExplorationSidePanelTab,
   agentDiffRefreshVersionAtom,
   agentDiffUnseenChangesAtom,
   agentDiffUnseenFilesAtom,
@@ -68,11 +66,9 @@ import {
   allPendingExitPlanRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
-import { previewPanelOpenMapAtom, previewFileMapAtom } from '@/atoms/preview-atoms'
+import { previewFileMapAtom, previewFilesByTabAtom } from '@/atoms/preview-atoms'
 import {
-  browserInlinePreviewMapAtom,
   browserPanelDismissedSessionIdsAtom,
-  browserPanelOpenMapAtom,
   browserStateMapAtom,
 } from '@/atoms/browser-atoms'
 import { clearPreviewCacheForSession } from '@/components/diff/DiffTabContent'
@@ -83,7 +79,6 @@ import {
   sidebarCollapsedAtom,
   closeTab,
   updateTabTitle,
-  sessionViewStateMapAtom,
   tabMruAtom,
 } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
@@ -95,6 +90,7 @@ import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
 import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
+import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 import { detectIsMac } from '@/lib/platform'
 import { navigationController } from '@/lib/navigation-controller'
@@ -275,7 +271,6 @@ export function useLeftSidebar() {
 
   // Agent 模式状态
   const [agentSessions, setAgentSessions] = useAtom(agentSessionsAtom)
-  const setExplorationMap = useSetAtom(agentSideExplorationMapAtom)
   const [currentAgentSessionId, setCurrentAgentSessionId] = useAtom(currentAgentSessionIdAtom)
   const agentIndicatorMap = useAtomValue(agentSessionIndicatorMapAtom)
   const unviewedCompletedSessionIds = useAtomValue(unviewedCompletedSessionIdsAtom)
@@ -375,10 +370,8 @@ export function useLeftSidebar() {
   const setConvThinking = useSetAtom(conversationThinkingEnabledAtom)
   const setConvParallel = useSetAtom(conversationParallelModeAtom)
   const setConvPromptId = useSetAtom(conversationPromptIdAtom)
-  const setPreviewPanelOpen = useSetAtom(previewPanelOpenMapAtom)
   const setPreviewFile = useSetAtom(previewFileMapAtom)
-  const setBrowserInlinePreview = useSetAtom(browserInlinePreviewMapAtom)
-  const setBrowserPanelOpen = useSetAtom(browserPanelOpenMapAtom)
+  const setPreviewFilesByTab = useSetAtom(previewFilesByTabAtom)
   const setBrowserState = useSetAtom(browserStateMapAtom)
   const setBrowserDismissed = useSetAtom(browserPanelDismissedSessionIdsAtom)
   const setDiffPanelTab = useSetAtom(agentDiffPanelTabAtom)
@@ -389,7 +382,6 @@ export function useLeftSidebar() {
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   const setLiveMessagesMap = useSetAtom(liveMessagesMapAtom)
   const setSessionPendingFiles = useSetAtom(agentSessionPendingFilesAtom)
-  const setSessionViewStateMap = useSetAtom(sessionViewStateMapAtom)
   const setAgentStreamErrors = useSetAtom(agentStreamErrorsAtom)
   const setAgentPromptSuggestions = useSetAtom(agentPromptSuggestionsAtom)
   const setAllPendingPermissionRequests = useSetAtom(allPendingPermissionRequestsAtom)
@@ -410,10 +402,7 @@ export function useLeftSidebar() {
     setConvThinking(deleteKey)
     setConvParallel(deleteKey)
     setConvPromptId(deleteKey)
-    setPreviewPanelOpen(deleteKey)
     setPreviewFile(deleteKey)
-    setBrowserInlinePreview(deleteKey)
-    setBrowserPanelOpen(deleteKey)
     setBrowserState(deleteKey)
     setBrowserDismissed((prev) => {
       if (!prev.has(id)) return prev
@@ -422,7 +411,6 @@ export function useLeftSidebar() {
       return next
     })
     setDiffPanelTab(deleteKey)
-    setExplorationMap(deleteKey)
     setDiffRefreshVersion(deleteKey)
     setDiffUnseen(deleteKey)
     setDiffUnseenFiles(deleteKey)
@@ -431,8 +419,16 @@ export function useLeftSidebar() {
     setSessionModelMap(deleteKey)
     // 会话工作目录路径：不清理会导致右侧文件面板继续用已删除目录请求 list-directory
     setSessionPathMap(deleteKey)
-    // 视图状态（预览开关 + 上次视图）：删除/归档是终态，统一清理避免孤立条目
-    setSessionViewStateMap(deleteKey)
+    // 预览 Tab 元数据：删除/归档是终态，清掉该会话全部预览 Tab 条目，避免孤立
+    setPreviewFilesByTab((prev) => {
+      const prefix = `__preview__:${id}:`
+      if (![...prev.keys()].some((key) => key.startsWith(prefix))) return prev
+      const next = new Map(prev)
+      for (const key of next.keys()) {
+        if (key.startsWith(prefix)) next.delete(key)
+      }
+      return next
+    })
 
     // 重型流式数据：streamingStates（累积 content + toolActivities）与 liveMessages（SDK 消息数组）
     setStreamingStates(deleteKey)
@@ -480,7 +476,7 @@ export function useLeftSidebar() {
     sessionExistsAtom.remove(id)
 
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewPanelOpen, setPreviewFile, setBrowserInlinePreview, setBrowserPanelOpen, setBrowserState, setBrowserDismissed, setDiffPanelTab, setExplorationMap, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setSessionViewStateMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewFile, setPreviewFilesByTab, setBrowserState, setBrowserDismissed, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store])
 
 
   const currentWorkspaceSlug = React.useMemo(() => {
@@ -1306,26 +1302,13 @@ export function useLeftSidebar() {
     }
   }, [handleCreateProject])
 
-  /** 选择 Agent 会话（打开或聚焦标签页）。探索分支回到父会话右侧工作区。 */
+  /** 选择 Agent 会话（打开或聚焦标签页）。探索分支打开为父会话上下文内的子会话 Tab。 */
   const handleSelectAgentSession = React.useCallback((id: string, title: string): void => {
     const selected = agentSessions.find((session) => session.id === id)
     if (selected?.explorationParentSessionId && selected.explorationSourceMessageId) {
       const parent = agentSessions.find((session) => session.id === selected.explorationParentSessionId)
       if (parent) {
-        openSession('agent', parent.id, parent.title)
-        store.set(agentSideExplorationMapAtom, (previous) => {
-          const branches = previous.get(parent.id) ?? []
-          if (branches.some((branch) => branch.sessionId === id)) return previous
-          const next = new Map(previous)
-          next.set(parent.id, [...branches, {
-            sessionId: id,
-            sourceMessageId: selected.explorationSourceMessageId!,
-            sourceLabel: selected.explorationSourceLabel ?? '主线探索节点',
-          }])
-          return next
-        })
-        store.set(agentDiffPanelTabAtom, (previous) => new Map(previous).set(parent.id, getExplorationSidePanelTab(id)))
-        store.set(agentSidePanelOpenAtom, true)
+        openExplorationBranchTab(store, parent.id, { sessionId: id, title: selected.title || '探索分支' })
         setActiveView('conversations')
         setUnviewedCompleted((previous) => {
           if (!previous.has(id)) return previous
@@ -1770,6 +1753,9 @@ export function useLeftSidebar() {
     capabilities,
     handleOpenAutomations,
     handleOpenSkills,
+
+    // tab 状态
+    tabs,
 
     // conversations
     conversations,

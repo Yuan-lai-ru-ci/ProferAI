@@ -71,7 +71,6 @@ import {
   uiScaleAtom,
   initializeUiScale,
 } from './atoms/ui-scale'
-import { initializePreviewModePreference, previewModePreferenceAtom } from './atoms/preview-atoms'
 import { installedPluginsAtom } from './atoms/plugin-system'
 import { developerModeEnabledAtom, openEpistemicModeEnabledAtom } from './atoms/developer-mode'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
@@ -623,20 +622,6 @@ function UiScaleInitializer(): null {
   useEffect(() => {
     initializeUiScale(setUiScale)
   }, [setUiScale])
-
-  return null
-}
-
-/**
- * 预览默认展开方式初始化组件。
- * settings.json 是跨重启的权威值，localStorage 仅用于首屏和旧版本兼容。
- */
-function PreviewModePreferenceInitializer(): null {
-  const setPreference = useSetAtom(previewModePreferenceAtom)
-
-  useEffect(() => {
-    void initializePreviewModePreference(setPreference)
-  }, [setPreference])
 
   return null
 }
@@ -1228,7 +1213,6 @@ if (isQuickTaskWindow) {
       <UiPreferencesInitializer />
       <MarkdownFontSizeInitializer />
       <UiScaleInitializer />
-      <PreviewModePreferenceInitializer />
       <PluginSystemInitializer />
       <ChatListenersInitializer />
       <AgentListenersInitializer />

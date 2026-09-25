@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
+import { allowsPluginPagePlacement } from '@profer/plugin-api'
 
 mock.module('electron', () => ({
   app: { getVersion: () => '0.15.80' },
@@ -16,9 +17,12 @@ const {
   installPluginPackage,
   listInstalledPlugins,
   parsePluginManifest,
+  readPluginPageIcon,
   removePlugin,
+  resolvePluginPage,
   resolvePluginDataFile,
   setPluginEnabled,
+  setPluginPagePlacement,
 } = await import('./plugin-manager')
 
 let root = ''
@@ -66,6 +70,48 @@ describe('插件 manifest 校验', () => {
     expect(manifest.contributes.pages?.[0]?.entry).toBe('dist/index.html')
   })
 
+  test('旧清单消息动作即使指向非 Tab 页面也保留安装兼容', () => {
+    const base = {
+      schemaVersion: 1, id: 'com.example.actions', name: 'Actions', version: '1.0.0',
+      contributes: {
+        pages: [{ id: 'main', title: 'Main', entry: 'dist/index.html', placements: ['settings'] }],
+        messageActions: [{ id: 'act', title: '处理', pageId: 'main' }],
+      },
+    }
+    expect(parsePluginManifest(base).contributes.messageActions).toHaveLength(1)
+    expect(parsePluginManifest({ ...base, contributes: { ...base.contributes, pages: [{ id: 'main', title: 'Main', entry: 'dist/index.html' }] } })
+      .contributes.messageActions).toHaveLength(1)
+  })
+
+  test('生命周期验收插件清单可解析并包含完整实例入口', () => {
+    const fixture = JSON.parse(readFileSync(join(import.meta.dir, '../../../../../../examples/plugins/plugin-lifecycle-demo/profer-plugin.json'), 'utf8')) as Record<string, unknown>
+    const manifest = parsePluginManifest(fixture)
+    expect(manifest.id).toBe('com.profer.plugin-lifecycle-demo')
+    expect(manifest.permissions).toContain('agent.tools')
+    expect(manifest.permissions).toContain('runtime.capabilities.inject')
+    expect(manifest.contributes.pages?.[0]?.placements).toEqual(['settings', 'tab', 'sidebar'])
+    expect(manifest.contributes.tools).toHaveLength(2)
+  })
+
+  test('页面 icon 只接受图片扩展且不允许目录穿越', () => {
+    const base = {
+      schemaVersion: 1,
+      id: 'com.example.icons',
+      name: 'Icons',
+      version: '1.0.0',
+      contributes: { pages: [{ id: 'dashboard', title: 'Demo', entry: 'dist/index.html', icon: 'dist/icon.svg' }] },
+    }
+    expect(parsePluginManifest(base).contributes.pages?.[0]?.icon).toBe('dist/icon.svg')
+    expect(() => parsePluginManifest({
+      ...base,
+      contributes: { pages: [{ id: 'dashboard', title: 'Demo', entry: 'dist/index.html', icon: 'dist/run.html' }] },
+    })).toThrow('icon 必须是图片文件')
+    expect(() => parsePluginManifest({
+      ...base,
+      contributes: { pages: [{ id: 'dashboard', title: 'Demo', entry: 'dist/index.html', icon: '../outside.png' }] },
+    })).toThrow('必须位于插件目录内')
+  })
+
   test('拒绝目录穿越页面入口', () => {
     expect(() => parsePluginManifest({
       schemaVersion: 1,
@@ -85,6 +131,91 @@ describe('插件 manifest 校验', () => {
       engines: { profer: '>=99.0.0' },
       contributes: { pages: [{ id: 'main', title: 'Main', entry: 'dist/index.html' }] },
     })).toThrow('插件不支持当前 Profer 版本')
+  })
+
+  test('悬浮窗口配置解析并被宿主钳制到安全范围', () => {
+    const base = {
+      schemaVersion: 1,
+      id: 'com.example.pet',
+      name: 'Pet',
+      version: '1.0.0',
+      permissions: ['window.floating'],
+      contributes: {
+        pages: [{
+          id: 'pet', title: '桌宠', entry: 'dist/pet.html',
+          placements: ['floating', 'settings'],
+          floatingWindow: {
+            width: 5000, height: 200, minWidth: 10, transparent: true,
+            frame: false, alwaysOnTop: true, skipTaskbar: true, resizable: false, movable: true,
+          },
+        }],
+      },
+    }
+    const manifest = parsePluginManifest(base)
+    const page = manifest.contributes.pages?.[0]
+    expect(page?.placements).toContain('floating')
+    // width 超出上限被宿主钳制，minWidth 低于下限被钳制
+    expect(page?.floatingWindow?.width).toBe(1920)
+    expect(page?.floatingWindow?.minWidth).toBe(48)
+    expect(page?.floatingWindow?.transparent).toBe(true)
+    expect(page?.floatingWindow?.frame).toBe(false)
+  })
+
+  test('拒绝非法的悬浮窗口配置类型与未知 placement', () => {
+    const base = {
+      schemaVersion: 1, id: 'com.example.bad', name: 'Bad', version: '1.0.0',
+      contributes: { pages: [{ id: 'main', title: 'Main', entry: 'dist/index.html', placements: ['floating'], floatingWindow: { width: 'big' } }] },
+    }
+    expect(() => parsePluginManifest(base)).toThrow('floatingWindow.width 必须是有限数字')
+    expect(() => parsePluginManifest({
+      schemaVersion: 1, id: 'com.example.bad', name: 'Bad', version: '1.0.0',
+      contributes: { pages: [{ id: 'main', title: 'Main', entry: 'dist/index.html', placements: ['fullscreen'] }] },
+    })).toThrow('未知 placement')
+  })
+
+  test('未声明 placements 的旧页面不允许悬浮入口', () => {
+    const manifest = parsePluginManifest({
+      schemaVersion: 1, id: 'com.example.legacy', name: 'Legacy', version: '1.0.0',
+      contributes: { pages: [{ id: 'main', title: 'Main', entry: 'dist/index.html' }] },
+    })
+    const page = manifest.contributes.pages?.[0]
+    expect(allowsPluginPagePlacement(page!, 'tab')).toBe(true)
+    expect(allowsPluginPagePlacement(page!, 'floating')).toBe(false)
+  })
+
+  test('悬浮窗口支持不抢焦点、全 Space 可见与鼠标穿透声明', () => {
+    const manifest = parsePluginManifest({
+      schemaVersion: 1, id: 'com.example.pet', name: 'Pet', version: '1.0.0',
+      permissions: ['window.floating'],
+      contributes: {
+        pages: [{
+          id: 'pet', title: '桌宠', entry: 'dist/pet.html', placements: ['floating'],
+          floatingWindow: { transparent: true, focusable: false, visibleOnAllWorkspaces: true, clickThrough: true },
+        }],
+      },
+    })
+    const config = manifest.contributes.pages?.[0]?.floatingWindow
+    expect(config?.focusable).toBe(false)
+    expect(config?.visibleOnAllWorkspaces).toBe(true)
+    expect(config?.clickThrough).toBe(true)
+    expect(() => parsePluginManifest({
+      schemaVersion: 1, id: 'com.example.bad', name: 'Bad', version: '1.0.0',
+      contributes: { pages: [{ id: 'main', title: 'Main', entry: 'dist/index.html', placements: ['floating'], floatingWindow: { focusable: 'no' } }] },
+    })).toThrow('floatingWindow.focusable 必须是布尔值')
+  })
+
+  test('悬浮窗口验收台清单可解析并声明完整悬浮配置', () => {
+    const fixture = JSON.parse(readFileSync(join(import.meta.dir, '../../../../../../examples/plugins/floating-window-demo/profer-plugin.json'), 'utf8')) as Record<string, unknown>
+    const manifest = parsePluginManifest(fixture)
+    expect(manifest.id).toBe('com.profer.floating-window-demo')
+    expect(manifest.permissions).toContain('window.floating')
+    const page = manifest.contributes.pages?.[0]
+    expect(page?.placements).toEqual(['settings', 'sidebar', 'tab', 'floating'])
+    expect(allowsPluginPagePlacement(page!, 'floating')).toBe(true)
+    expect(page?.floatingWindow?.transparent).toBe(true)
+    expect(page?.floatingWindow?.alwaysOnTop).toBe(true)
+    expect(page?.floatingWindow?.skipTaskbar).toBe(true)
+    expect(page?.floatingWindow?.visibleOnAllWorkspaces).toBe(true)
   })
 
   test('拒绝未知权限和没有贡献的空插件', () => {
@@ -126,6 +257,70 @@ describe('插件目录安装与生命周期', () => {
     expect(listInstalledPlugins()).toHaveLength(0)
     expect(existsSync(dataFile)).toBe(true)
     expect(readFileSync(dataFile, 'utf8')).toContain('peak')
+  })
+
+  test('安装后页面解析按入口拒绝未声明的 placement', () => {
+    const source = createPlugin({
+      contributes: { pages: [{ id: 'dashboard', title: 'Demo', entry: 'dist/index.html', placements: ['settings'] }] },
+    })
+    expect(installPluginPackage(source).ok).toBe(true)
+    expect(resolvePluginPage('com.example.demo', 'dashboard', 'settings').page.id).toBe('dashboard')
+    expect(() => resolvePluginPage('com.example.demo', 'dashboard', 'tab')).toThrow('未声明此入口')
+  })
+
+  test('图标文件缺失时拒绝安装', () => {
+    const source = createPlugin({
+      contributes: { pages: [{ id: 'dashboard', title: 'Demo', entry: 'dist/index.html', icon: 'dist/icon.svg' }] },
+    })
+    const result = installPluginPackage(source)
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('页面图标不存在')
+    expect(listInstalledPlugins()).toHaveLength(0)
+  })
+
+  test('页面图标可读取且缺失图标时返回 null', () => {
+    const source = createPlugin({
+      contributes: { pages: [{ id: 'dashboard', title: 'Demo', entry: 'dist/index.html', icon: 'dist/icon.svg' }] },
+    })
+    writeFileSync(join(source, 'dist', 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>', 'utf8')
+    expect(installPluginPackage(source).ok).toBe(true)
+    const icon = readPluginPageIcon('com.example.demo', 'dashboard')
+    expect(icon?.mime).toBe('image/svg+xml')
+    expect(Buffer.from(icon!.dataBase64, 'base64').toString('utf8')).toContain('<svg')
+
+    const second = createPlugin({ id: 'com.example.plain' })
+    expect(installPluginPackage(second).ok).toBe(true)
+    expect(readPluginPageIcon('com.example.plain', 'dashboard')).toBeNull()
+  })
+
+  test('用户摆放偏好受清单 allowlist 约束并可恢复默认', () => {
+    const source = createPlugin({
+      contributes: { pages: [{ id: 'dashboard', title: 'Demo', entry: 'dist/index.html', placements: ['sidebar', 'tab'] }] },
+    })
+    expect(installPluginPackage(source).ok).toBe(true)
+    expect(setPluginPagePlacement('com.example.demo', 'dashboard', 'hidden').ok).toBe(true)
+    expect(listInstalledPlugins()[0]?.pagePlacements).toEqual({ dashboard: 'hidden' })
+    expect(setPluginPagePlacement('com.example.demo', 'dashboard', 'sidebar').ok).toBe(true)
+    expect(listInstalledPlugins()[0]?.pagePlacements).toEqual({ dashboard: 'sidebar' })
+    // 停用/启用切换保留偏好
+    expect(setPluginEnabled('com.example.demo', false).ok).toBe(true)
+    expect(setPluginEnabled('com.example.demo', true).ok).toBe(true)
+    expect(listInstalledPlugins()[0]?.pagePlacements).toEqual({ dashboard: 'sidebar' })
+    // null 恢复默认并清除记录
+    expect(setPluginPagePlacement('com.example.demo', 'dashboard', null).ok).toBe(true)
+    expect(listInstalledPlugins()[0]?.pagePlacements).toBeUndefined()
+    // 非法页面与未知插件被拒
+    expect(setPluginPagePlacement('com.example.demo', 'missing', 'hidden').ok).toBe(false)
+    expect(setPluginPagePlacement('com.example.missing', 'dashboard', 'hidden').ok).toBe(false)
+  })
+
+  test('用户摆放偏好不能放大清单未声明的入口', () => {
+    const source = createPlugin({
+      contributes: { pages: [{ id: 'dashboard', title: 'Demo', entry: 'dist/index.html', placements: ['sidebar'] }] },
+    })
+    expect(installPluginPackage(source).ok).toBe(true)
+    expect(setPluginPagePlacement('com.example.demo', 'dashboard', 'tab').ok).toBe(false)
+    expect(setPluginPagePlacement('com.example.demo', 'dashboard', 'hidden').ok).toBe(true)
   })
 
   test('入口文件缺失时拒绝安装且不污染插件目录', () => {

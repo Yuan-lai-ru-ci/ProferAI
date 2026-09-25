@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "com.profer.desktop-pet",
+  "name": "Profer 桌宠",
+  "version": "0.1.0",
+  "description": "开发版里的轻量互动桌宠：陪伴、喂食、休息，并记住你的宠物状态。",
+  "publisher": "Profer 开发版示例",
+  "permissions": ["pluginStorage"],
+  "contributes": {
+    "pages": [
+      {
+        "id": "pet",
+        "title": "桌宠",
+        "entry": "index.html",
+        "icon": "icon.svg",
+        "placements": ["settings", "sidebar"]
+      }
+    ]
+  }
+}

@@ -33,6 +33,10 @@ declare global {
       opts: Record<string, unknown>
     }>
     registeredAccelerators: string[]
+    /** contextBridge.exposeInMainWorld 暴露记录：插件 preload 类测试从这里取 api */
+    exposedApi: Record<string, unknown>
+    /** ipcRenderer.invoke 委托：测试自己赋值，reset 时清空 */
+    ipcRendererInvoke: ((channel: string, ...args: unknown[]) => Promise<unknown>) | null
     reset: () => void
   }
 }
@@ -40,9 +44,13 @@ declare global {
 globalThis.__proferElectronTestHooks = {
   createdWindows: [],
   registeredAccelerators: [],
+  exposedApi: {},
+  ipcRendererInvoke: null,
   reset() {
     this.createdWindows.length = 0
     this.registeredAccelerators.length = 0
+    this.exposedApi = {}
+    this.ipcRendererInvoke = null
   },
 }
 
@@ -114,6 +122,23 @@ mock.module('electron', () => ({
   clipboard: {
     readText: () => '',
     writeText: () => undefined,
+  },
+  // contextBridge / ipcRenderer（2026-09-25，插件 preload rejection 形状测试引入）。
+  // 注意 --isolate 下测试文件无法二次 mock electron，行为请通过
+  // __proferElectronTestHooks.exposedApi / ipcRendererInvoke 控制。
+  contextBridge: {
+    exposeInMainWorld: (key: string, api: unknown) => {
+      globalThis.__proferElectronTestHooks.exposedApi[key] = api
+    },
+  },
+  ipcRenderer: {
+    invoke: (channel: string, ...args: unknown[]) => {
+      const delegate = globalThis.__proferElectronTestHooks.ipcRendererInvoke
+      if (!delegate) return Promise.reject(new Error(`ipcRenderer.invoke 未在测试中实现（${channel}）`))
+      return delegate(channel, ...args)
+    },
+    on: () => undefined,
+    send: () => undefined,
   },
   dialog: { showMessageBox: async () => ({ response: 0 }), showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
   ipcMain: {

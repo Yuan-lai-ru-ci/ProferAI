@@ -376,32 +376,8 @@ export const teamWorkspaceLayoutModeAtom = atomWithStorage<TeamWorkspaceLayoutMo
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
 export type AgentSidePanelBaseTab = 'session' | 'workspace' | 'changes'
-/** 右侧工作区 Tab：文件视图之外，探索分支也作为独立的可切换工作面。 */
-export type AgentSidePanelTab = AgentSidePanelBaseTab | `exploration:${string}`
-
-/** Pi `/tree` 探索分支在右侧工作区的展示信息。 */
-export interface AgentExplorationBranchTab {
-  /** Pi 原生 fork 生成的独立 Agent session。 */
-  sessionId: string
-  /** 作为分叉锚点的主线 assistant message UUID。 */
-  sourceMessageId: string
-  /** 给用户看的分叉来源。 */
-  sourceLabel: string
-}
-
-/**
- * 右侧探索分支：key 为主线 Agent sessionId，value 为从其 Pi session tree 分叉出的已打开分支。
- * 只管理右侧展示；branch artifact 本身持久化在普通 Agent session 中，关闭 Tab 不会删除它。
- */
-export const agentSideExplorationMapAtom = atom<Map<string, AgentExplorationBranchTab[]>>(new Map())
-
-export function getExplorationSidePanelTab(branchSessionId: string): AgentSidePanelTab {
-  return `exploration:${branchSessionId}`
-}
-
-export function getExplorationSessionIdFromSidePanelTab(tab: AgentSidePanelTab): string | null {
-  return tab.startsWith('exploration:') ? tab.slice('exploration:'.length) : null
-}
+/** 右侧工作区 Tab：探索分支 Tab 化后只剩文件视图。 */
+export type AgentSidePanelTab = AgentSidePanelBaseTab
 
 /** 侧面板当前 Tab（per-session Map）。 */
 export const agentDiffPanelTabAtom = atom<Map<string, AgentSidePanelTab>>(new Map())

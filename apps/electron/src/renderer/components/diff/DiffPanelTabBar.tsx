@@ -6,20 +6,17 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { FileDiff, FolderOpen, FolderTree, PanelRightClose, Split, X } from 'lucide-react'
+import { FileDiff, FolderOpen, FolderTree, PanelRightClose } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
-import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom, type AgentSidePanelTab, type SessionIndicatorStatus } from '@/atoms/agent-atoms'
+import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom, type AgentSidePanelTab } from '@/atoms/agent-atoms'
 
 type DiffPanelTab = AgentSidePanelTab
 
 interface DiffPanelTabBarProps {
   activeTab: DiffPanelTab
   onTabChange: (tab: DiffPanelTab) => void
-  /** 当前父会话已打开的探索分支，按最近打开顺序追加在文件 Tab 后。 */
-  explorationTabs?: Array<{ id: `exploration:${string}`; label: string; status: SessionIndicatorStatus }>
-  onCloseExplorationTab?: (tab: `exploration:${string}`) => void
   onClose?: () => void
 }
 
@@ -97,7 +94,7 @@ function FileViewTabButton({
   )
 }
 
-export function DiffPanelTabBar({ activeTab, onTabChange, explorationTabs = [], onCloseExplorationTab, onClose }: DiffPanelTabBarProps): React.ReactElement {
+export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTabBarProps): React.ReactElement {
   const unseenMap = useAtomValue(agentDiffUnseenChangesAtom)
   const setUnseenMap = useSetAtom(agentDiffUnseenChangesAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
@@ -132,9 +129,6 @@ export function DiffPanelTabBar({ activeTab, onTabChange, explorationTabs = [], 
     }
   }
 
-  // 有探索分支时，文件视图 Tab 收成图标，把整行剩余宽度让给探索 Tab 自适应伸展。
-  const hasExplorationTabs = explorationTabs.length > 0
-
   return (
     <div className="flex items-end h-[40px] tabbar-bg relative flex-shrink-0">
       <div className="absolute inset-0 titlebar-drag-region" />
@@ -144,7 +138,6 @@ export function DiffPanelTabBar({ activeTab, onTabChange, explorationTabs = [], 
           isClassic={isClassic}
           label="会话文件"
           icon={<FolderOpen className="size-3.5" />}
-          compact={hasExplorationTabs}
           onClick={() => onTabChange('session')}
         />
         <FileViewTabButton
@@ -152,7 +145,6 @@ export function DiffPanelTabBar({ activeTab, onTabChange, explorationTabs = [], 
           isClassic={isClassic}
           label="工作区文件"
           icon={<FolderTree className="size-3.5" />}
-          compact={hasExplorationTabs}
           onClick={() => onTabChange('workspace')}
         />
         <FileViewTabButton
@@ -160,62 +152,9 @@ export function DiffPanelTabBar({ activeTab, onTabChange, explorationTabs = [], 
           isClassic={isClassic}
           label="文件改动"
           icon={<FileDiff className="size-3.5" />}
-          compact={hasExplorationTabs}
           badge={unseenChanges && activeTab !== 'changes'}
           onClick={handleChangesClick}
         />
-        {explorationTabs.map((tab) => (
-          <div
-            key={tab.id}
-            className="group relative flex min-w-[140px] flex-1 items-center"
-            onMouseDown={(event) => {
-              // 中键关闭：与顶部会话标签、浏览器标签同一交互约定。
-              // 绑在容器上，中键点 Tab 主体或右侧关闭钮均可关闭。
-              if (event.button === 1) {
-                event.preventDefault()
-                onCloseExplorationTab?.(tab.id)
-              }
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => onTabChange(tab.id)}
-              className={cn(
-                'flex min-w-0 w-full items-center gap-1.5 pl-3 pr-8 h-[40px] text-xs whitespace-nowrap overflow-hidden text-ellipsis transition-colors select-none cursor-pointer',
-                'border-t border-l border-r',
-                isClassic ? 'rounded-t-lg' : 'rounded-none',
-                activeTab === tab.id
-                  ? isClassic ? 'bg-content-area text-foreground border-border/50' : 'app-tab-active text-foreground border-border/80'
-                  : isClassic ? 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50' : 'app-tab-inactive text-muted-foreground border-transparent hover:text-foreground',
-              )}
-              title={tab.label}
-            >
-              <span className={cn(
-                'size-1.5 shrink-0 rounded-full',
-                tab.status === 'running' && 'bg-sky-500 animate-pulse',
-                tab.status === 'blocked' && 'bg-amber-500',
-                tab.status === 'completed' && 'bg-emerald-500',
-                tab.status === 'idle' && 'bg-transparent',
-              )} />
-              <Split className="size-3 shrink-0" />
-              <span className="truncate">{tab.label}</span>
-            </button>
-            {onCloseExplorationTab && (
-              <button
-                type="button"
-                aria-label={`关闭探索分支：${tab.label}`}
-                title="关闭探索 Tab"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onCloseExplorationTab(tab.id)
-                }}
-                className="absolute right-1 flex size-6 items-center justify-center rounded text-muted-foreground/60 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
-              >
-                <X className="size-3" />
-              </button>
-            )}
-          </div>
-        ))}
       </div>
       {/* 折叠钮始终固定在右侧，不随大量探索 Tab 横向滚走。 */}
       {onClose && (

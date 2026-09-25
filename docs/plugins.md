@@ -3,7 +3,7 @@
 插件宿主 API 是 provider-neutral 的平台契约，可供工作区工具、外部服务、任务看板等多类插件复用。具体业务适配器不属于公共契约；未配置 provider 的新能力返回稳定的 `PLUGIN_OPERATION_NOT_SUPPORTED`。
 
 插件使用静态 HTML/CSS/JS 和 `profer-plugin.json` 分发，通过独立沙箱中的 `window.profer` 调用宿主。
-公开 TypeScript 契约位于 `packages/plugin-api/src/index.ts`。示例位于 `examples/plugins/capability-demo/`，可直接安装该目录。
+公开 TypeScript 契约位于 `packages/plugin-api/src/index.ts`。示例位于 `examples/plugins/capability-demo/`，可直接安装该目录。插件实例生命周期验收样例位于 `examples/plugins/plugin-lifecycle-demo/`，详细步骤见其中的 `PLUGIN-LIFECYCLE-TEST.md`。插件页面统一以 Tab 为主；不再提供插件任务侧面板。
 
 ## 安装与授权
 
@@ -15,18 +15,33 @@
 
 ## 清单贡献
 
-- `contributes.pages`：HTML 页面入口；`placements` 中 `sidebar` 增加侧边栏入口，`panel` 可在当前任务右侧展开工具面板，页面也可以在 Tab 打开。插件设置页本身使用 Profer 原生控件管理插件、权限和凭据；插件 HTML 页面不会嵌入设置弹窗。
-- `contributes.messageActions`：`{id,title,pageId}`，加入 Chat 和 Agent 助手消息的处理入口。
+- `contributes.pages`：HTML 页面入口。`placements` 是宿主入口的 allowlist：`settings` 从插件设置页打开（页面显示为 Tab，不嵌入设置弹窗），`sidebar` 从左侧栏打开，`tab` 从当前会话顶栏/浏览器/右侧工作区入口或消息动作打开。页面统一进入 Tab；会话入口打开时绑定当前会话，关闭宿主会话会连带关闭插件页面。桌宠等全局插件页可作为不绑定会话的例外；v1 旧清单省略 `placements` 时保留设置页和 Tab 入口；显式传空数组不暴露上述入口。页面可选 `icon` 字段：插件包内图片文件（png/jpg/webp/gif/svg/ico，不超过 256 KB），用于左侧栏与顶栏入口图标，缺省时使用宿主占位图标。插件设置页本身仍使用 Profer 原生控件管理插件、权限和凭据。
+- 用户可在插件设置页为每个页面选择入口位置（左侧栏 / 顶栏 / 隐藏），隐藏后插件静默生效；该偏好只能在插件声明的 `placements` 范围内收窄，不会放大入口，停用/启用与插件更新后保留。
+- `contributes.messageActions`：`{id,title,pageId}`，加入 Chat 和 Agent 助手消息的处理入口；目标页面需允许 `tab`（省略 `placements` 的 v1 页面兼容）。已有清单若指向非 Tab 页面仍可加载，但不显示该动作。
 - `contributes.modelRoutingPolicies`：`{id,kind:"model-routing.rules.v1"}`，提供时段路由规则。
 - `contributes.tools`：`{id,title,description,pageId,parameters}`，工具由指定页面注册。工具 ID 最长 34 字符，参数支持 string/number/boolean，可指定 description 和 required。
 
 工具不是 Node 插件：宿主在单独的隐藏沙箱页面中运行工具代码，不会复用用户正在操作的页面。多个页面共享插件私有 storage。
 
+## 当前能力接线状态（2026-09-24 静态核对）
+
+下表只说明生产代码路径是否接线，不等于完成 macOS/Windows 打包态验收。授权清单可以包含预留权限，但授权本身不会使缺失的 provider 自动生效。
+
+| 能力 | 当前状态 | 依据与失败行为 |
+| --- | --- | --- |
+| 私有存储、模型列表/调用、模型路由、显式任务上下文、附件选择、受限网络请求 | 已有宿主处理逻辑 | 仍需按插件授权、平台打包态和实际服务状态验证。 |
+| Agent 工具 | 已接入 Claude/Pi | 在独立工具页面执行；仍受当前预设、工具权限及双运行时验证约束。 |
+| `workspace.list`、`workspace.files.list/read/write` | 仅契约及 provider 端口，生产未接线 | `setPluginWorkspaceProvider()` 在生产启动路径无调用者；授权后调用返回 `PLUGIN_OPERATION_NOT_SUPPORTED`。写入即使接线，还需要一次性宿主确认与 CAS。 |
+| sessions/presets、runtime capabilities、secrets | 仅契约及 provider 端口，生产未接线 | `setPluginCapabilityProviders()` 在生产启动路径无调用者；授权后返回 `PLUGIN_OPERATION_NOT_SUPPORTED`。未来的 mutation 仍需宿主确认及 scope 校验。 |
+| 桌宠窗口与 OS 系统能力 | 设计预留，未进入 v1 manifest/API | 不可由普通页面 placement 或 Electron API 推导出这些权限。 |
+
+生产 provider 未接线的能力在本文中均按**预留**理解；下面的 API 表描述参数及安全边界，不代表现在能成功调用。若先因停用、撤权、权限不足或参数/确认校验失败，实际返回的对应错误可能优先于 `PLUGIN_OPERATION_NOT_SUPPORTED`。
+
 ## 宿主 API 与权限
 
 除下表既有 API 外，Slice 3 在 Slice 1/2 基础上冻结了通用工作区、session/preset metadata、runtime capability reference、opaque secret reference 和统一 RPC 生命周期契约。它们均要求细粒度 permission、workspace/resource scope、owner/page 绑定、requestId、取消/超时、整数 revision/CAS 与稳定错误码；当前只建立安全边界，provider 尚未接入时不会伪造成功。
 
-**当前不可用（等宿主接入 provider）**：`workspace.files.write`、`sessions.create/configure/cancel`、`runtime.capabilities.inject`、`secrets.requestConfigure` 在生产代码里尚无 provider 接入点（`setPluginWorkspaceProvider` / `setPluginCapabilityProviders` 无调用者，`pluginConfirmations.issue()` 只出现在测试中），调用会稳定返回 `PLUGIN_CONFIRMATION_REQUIRED` 或 `PLUGIN_OPERATION_NOT_SUPPORTED`，不会伪造成功。它们已进入公开契约，属预留能力。
+**当前不可用（等宿主接入 provider）**：`workspace.*`、`sessions.*`、`presets.*`、`runtime.capabilities.*`、`secrets.*` 在生产启动路径没有 provider 注入（`setPluginWorkspaceProvider` / `setPluginCapabilityProviders` 无调用者，`pluginConfirmations.issue()` 只出现在测试中）。它们已进入公开契约，但属于预留能力：有权限时调用通常返回 `PLUGIN_OPERATION_NOT_SUPPORTED`；要求确认的写操作还可能返回 `PLUGIN_CONFIRMATION_REQUIRED`。二者都不表示操作已成功。
 
 **授权与撤权**：`revokePluginPermissions` 保留 grant 内容但写入 `revoked: true`；此后 `getGrantedPermissions` 返回空数组、`listInstalledPlugins()` 返回 `revoked: true`，所有 RPC 与已加载的 Agent 工具调用均返回 `PLUGIN_REVOKED`。插件设置页对本状态显示「已撤销」，与「待授权」区分。
 

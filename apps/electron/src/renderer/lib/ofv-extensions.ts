@@ -12,7 +12,7 @@
  * - `.xlsx`：SheetJS 路径，不需要页数/抓图回执；
  * - **不含 `.docx` / `.pptx`**：见 DiffTabContent 与 preview-opener 里的说明（注入面 / Agent 回执）。
  */
-import { NON_PREVIEWABLE_BINARY_EXTS, UNSUPPORTED_EXTS } from './preview-extension-sets'
+import { NON_PREVIEWABLE_BINARY_EXTS, IMAGE_PREVIEW_EXTS, UNSUPPORTED_EXTS } from './preview-extension-sets'
 
 /** OFV 承担的 Office 格式（不含 docx/pptx） */
 export const OFV_OFFICE_EXTS: ReadonlySet<string> = new Set(['.xlsx', '.doc', '.xls', '.ppt'])
@@ -57,6 +57,7 @@ export const OFV_EXTRA_EXTS: ReadonlySet<string> = new Set([
 export const OFV_EXTS: ReadonlySet<string> = new Set([
   ...OFV_OFFICE_EXTS,
   ...OFV_EXTRA_EXTS,
+  ...IMAGE_PREVIEW_EXTS,
   ...[...UNSUPPORTED_EXTS].filter((extension) => !NON_PREVIEWABLE_BINARY_EXTS.has(extension)),
 ])
 

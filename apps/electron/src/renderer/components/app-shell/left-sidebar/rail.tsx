@@ -1,4 +1,3 @@
-import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
 /**
  * rail.tsx — 折叠态（mini rail）
  *
@@ -6,6 +5,7 @@ import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
  */
 
 import * as React from 'react'
+import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
 import { PanelLeftOpen, Bot, MessageSquare, Plus, Search, CalendarDays, Blocks } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'

@@ -45,6 +45,7 @@ import {
   workspaceAttachedFilesMapAtom,
   unviewedCompletedSessionIdsAtom,
   agentSessionPathMapAtom,
+  agentSessionIndicatorMapAtom,
   agentDiffRefreshVersionAtom,
   agentNonGitFileChangesAtom,
   agentFileChangesCurrentRunAtom,
@@ -59,10 +60,12 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, getPreviewTabTitle, updateTabTitle } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
+import { planFollowWorkTab, tabGroupsAtom } from '@/atoms/tab-group-atoms'
+import { openFilePreviewTab } from '@/components/diff/preview-opener'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
-import { autoPreviewEnabledAtom, previewPanelOpenMapAtom, previewFileMapAtom, previewModePreferenceAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
+import { autoPreviewEnabledAtom, previewFileMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
 import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKMessage, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, SDKResultMessage, SDKBackgroundTaskSummary, ProferEvent, AgentSessionMeta, TodoAgentSessionActivation } from '@profer/shared'
@@ -617,7 +620,7 @@ export function useGlobalAgentListeners(): void {
       }
     }
 
-    const setAutoPreviewFile = (sid: string, targetPath: string, openPanel: boolean) => {
+    const setAutoPreviewFile = (sid: string, targetPath: string, openSurface: boolean) => {
       const seq = (autoPreviewSeq.get(sid) ?? 0) + 1
       autoPreviewSeq.set(sid, seq)
       return buildAutoPreviewFile(sid, targetPath)
@@ -628,11 +631,18 @@ export function useGlobalAgentListeners(): void {
             m.set(sid, previewFile)
             return m
           })
-          if (openPanel) {
-            store.set(previewPanelOpenMapAtom, (prev) => {
-              if (prev.get(sid)) return prev
-              const m = new Map(prev); m.set(sid, true); return m
+          if (openSurface) {
+            // Tab 化：后台开/更新该文件的预览 Tab，并让用户当前布局「跟随最新文件」
+            // （对话左 + 预览右；用户自定义布局不打扰，焦点始终留在对话）。
+            const tabId = openFilePreviewTab(store, sid, previewFile, { activate: false })
+            const next = planFollowWorkTab({
+              groups: store.get(tabGroupsAtom),
+              tabs: store.get(tabsAtom),
+              agentTabId: sid,
+              workTabId: tabId,
+              activeTabId: store.get(activeTabIdAtom),
             })
+            if (next) store.set(tabGroupsAtom, next)
           }
           return previewFile
         })
@@ -648,6 +658,37 @@ export function useGlobalAgentListeners(): void {
         store.set(stoppedByUserSessionsAtom, stoppedIds)
       }
     }).catch(console.error)
+
+    // ===== 0.5 委派子会话自动后台 Tab =====
+    // 子会话真正开跑（流指示 running/blocked）且 meta 带委派血缘时，静默确保其顶栏 Tab
+    // 存在——不打断焦点、不自动关闭。两个订阅缺一漏一：
+    // - 只订阅会话列表：meta 先到、指示后到，会错过创建时刻；
+    // - 按持久化 delegationStatus='running' 兜底：重启后磁盘 meta 残留 running（死委派，
+    //   主进程只在内存收敛为 interrupted 不回写磁盘），会在启动时冒出假活跃 Tab。
+    // 用「血缘 + 实时指示」作为唯一判据：创建、阻塞、重跑都能覆盖；死委派不冒 Tab。
+    const ensureDelegationChildTabs = (): void => {
+      if (!effectActive) return
+      const sessions = store.get(agentSessionsAtom)
+      const indicatorMap = store.get(agentSessionIndicatorMapAtom)
+      store.set(tabsAtom, (tabs) => {
+        let next = tabs
+        for (const child of sessions) {
+          if (!child.parentSessionId || !child.sourceDelegationId) continue
+          const status = indicatorMap.get(child.id)
+          if (status !== 'running' && status !== 'blocked') continue
+          if (next.some((tab) => tab.type === 'agent' && tab.sessionId === child.id)) continue
+          next = openTab(next, {
+            type: 'agent',
+            sessionId: child.id,
+            title: child.title,
+            parentSessionId: child.parentSessionId,
+          }).tabs
+        }
+        return next
+      })
+    }
+    const unsubscribeDelegationSessionTabs = store.sub(agentSessionsAtom, ensureDelegationChildTabs)
+    const unsubscribeDelegationIndicatorTabs = store.sub(agentSessionIndicatorMapAtom, ensureDelegationChildTabs)
 
     // ===== 1. 流式事件 =====
     const cleanupEvent = window.electronAPI.onAgentStreamEvent(
@@ -711,27 +752,9 @@ export function useGlobalAgentListeners(): void {
                 next.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
                 return next
               })
-              const preferSplit = store.get(previewModePreferenceAtom) === 'split'
-              if (preferSplit) {
-                store.set(previewPanelOpenMapAtom, (prev) => {
-                  const next = new Map(prev)
-                  next.set(sessionId, true)
-                  return next
-                })
-              } else {
-                store.set(previewPanelOpenMapAtom, (prev) => {
-                  const next = new Map(prev)
-                  next.set(sessionId, false)
-                  return next
-                })
-                const result = openTab(store.get(tabsAtom), {
-                  type: 'preview',
-                  sessionId,
-                  title: getPreviewTabTitle(nextFile.filePath),
-                })
-                store.set(tabsAtom, result.tabs)
-                store.set(activeTabIdAtom, result.activeTabId)
-              }
+              // 正式预览（PPTX 回执链路）：开成预览 Tab 并激活——OfficePreview 必须在
+              // 可见 pane 里渲染并回执 ready/error，激活保证它落在当前渲染的 pane 上。
+              openFilePreviewTab(store, sessionId, nextFile)
             }).catch((error: unknown) => {
               if (!effectActive) return
               void window.electronAPI.reportAgentFilePreview({
@@ -771,6 +794,9 @@ export function useGlobalAgentListeners(): void {
           } else if (proferEvent.type === 'delegation_session_updated' || proferEvent.type === 'session_updated') {
             store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, proferEvent.session))
             store.set(tabsAtom, (tabs) => updateTabTitle(tabs, proferEvent.session.id, proferEvent.session.title))
+            // 委派子会话的后台 Tab 由 0.5 节的双订阅（会话列表 × 流指示）统一补齐：
+            // 创建时刻主进程不推此事件（只在完成态转变时推），且启动时磁盘 meta 的
+            // running 可能是死委派，详见该节注释。
           } else if (proferEvent.type === 'session_deleted') {
             store.set(agentSessionsAtom, (previous) => previous.filter((session) => session.id !== proferEvent.sessionId))
           }
@@ -1646,6 +1672,8 @@ export function useGlobalAgentListeners(): void {
       cleanupSessionUpdated()
       cleanupTodoSessionReady()
       clearInterval(pruneTimer)
+      unsubscribeDelegationSessionTabs()
+      unsubscribeDelegationIndicatorTabs()
       window.removeEventListener('focus', onWindowFocus)
     }
   }, [store]) // store 引用稳定，effect 只执行一次

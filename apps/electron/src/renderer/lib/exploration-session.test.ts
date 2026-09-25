@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@profer/shared'
-import { buildExplorationReferenceDraft, getLatestExplorationConclusion, ownsExplorationShortcut, resolveForkActionAvailability, resolveLatestExplorationSourceMessageId } from './exploration-session'
+import { buildExplorationReferenceDraft, getLatestExplorationConclusion, mergeExplorationMessages, resolveForkActionAvailability, resolveLatestExplorationSourceMessageId } from './exploration-session'
 import { parseQueuedMessageMentions } from './agent-message-queue'
 
 function message(uuid: string, text: string): SDKMessage {
@@ -13,30 +13,23 @@ function message(uuid: string, text: string): SDKMessage {
 }
 
 describe('探索分支引用', () => {
-  test('Given 父会话与右侧探索分支同时挂载 When 判断快捷键归属 Then 仅当前工作面拥有快捷键', () => {
-    expect(ownsExplorationShortcut(false, 'parent', 'session')).toBe(true)
-    expect(ownsExplorationShortcut(false, 'parent', 'exploration:branch')).toBe(false)
-    expect(ownsExplorationShortcut(true, 'branch', 'exploration:branch')).toBe(true)
-    expect(ownsExplorationShortcut(true, 'other', 'exploration:branch')).toBe(false)
-  })
-
   test('Given 主线 Pi 会话 When 解析分叉动作可用性 Then 分叉与探索都可用', () => {
-    expect(resolveForkActionAvailability({ embedded: false, agentRuntime: 'pi' }))
+    expect(resolveForkActionAvailability({ isBranch: false, agentRuntime: 'pi' }))
       .toEqual({ canFork: true, canExplore: true })
   })
 
   test('Given 主线 Claude 会话 When 解析分叉动作可用性 Then 仍可分叉但不提供探索', () => {
-    expect(resolveForkActionAvailability({ embedded: false, agentRuntime: 'claude' }))
+    expect(resolveForkActionAvailability({ isBranch: false, agentRuntime: 'claude' }))
       .toEqual({ canFork: true, canExplore: false })
   })
 
-  test('Given 右侧嵌入的探索分支 When 解析分叉动作可用性 Then 两个入口都不提供', () => {
-    expect(resolveForkActionAvailability({ embedded: true, agentRuntime: 'pi' }))
+  test('Given 探索分支会话 When 解析分叉动作可用性 Then 两个入口都不提供', () => {
+    expect(resolveForkActionAvailability({ isBranch: true, agentRuntime: 'pi' }))
       .toEqual({ canFork: false, canExplore: false })
   })
 
   test('Given 历史会话缺省 runtime When 解析分叉动作可用性 Then 按 claude 处理仍保留分叉', () => {
-    expect(resolveForkActionAvailability({ embedded: false, agentRuntime: undefined }))
+    expect(resolveForkActionAvailability({ isBranch: false, agentRuntime: undefined }))
       .toEqual({ canFork: true, canExplore: false })
   })
 
@@ -55,6 +48,13 @@ describe('探索分支引用', () => {
       'assistant-1': 'entry-1',
       'assistant-2': 'entry-2',
     })).toBe('assistant-2')
+  })
+
+  test('Given 初次读取的旧快照与后续缓存的新回复 When 合并探索消息 Then 保留新回复作为结论', () => {
+    const initial = [message('source', '主线旧结论')]
+    const refreshed = [message('source', '主线旧结论'), message('new', '探索新结论')]
+    const merged = mergeExplorationMessages(initial, refreshed)
+    expect(getLatestExplorationConclusion(merged, 'source')).toBe('探索新结论')
   })
 
   test('Given fork 前历史与 fork 后回复 When 提取结论 Then 只返回锚点后的最新 assistant 文本', () => {

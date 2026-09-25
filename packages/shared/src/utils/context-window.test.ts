@@ -5,6 +5,7 @@ import {
   CODEX_GPT_CONTEXT_WINDOW,
   CODEX_GPT_54_MINI_CONTEXT_WINDOW,
   inferContextWindow,
+  inferAgentSdkContextWindow,
   isDeepSeekV4Model,
   isNextGeneration1MContextModel,
   normalizeContextModelId,
@@ -120,6 +121,14 @@ describe('代际默认 1M 规则（DeepSeek 一代及之后）', () => {
   test('Given GPT-5.4 mini When 推断 Then 使用已验证的 400K 而不是 1M', () => {
     expect(supports1MContext('gpt-5.4-mini')).toBe(false)
     expect(inferContextWindow('gpt-5.4-mini')).toBe(CODEX_GPT_54_MINI_CONTEXT_WINDOW)
+  })
+
+  test('Given 用户显式开启未知模型 When 推断 Agent SDK 窗口 Then 采用 1M', () => {
+    expect(inferAgentSdkContextWindow('glm-4.6', 'custom', true)).toBe(ONE_MILLION_CONTEXT_WINDOW)
+  })
+
+  test('Given 用户显式关闭已识别 1M 模型 When 推断 Agent SDK 窗口 Then 回到默认窗口', () => {
+    expect(inferAgentSdkContextWindow('deepseek-v4-pro', 'deepseek', false)).toBe(DEFAULT_CONTEXT_WINDOW)
   })
 
   test('Given provider + 模型 When 判定已验证 1M Then 只认可已验证的组合', () => {

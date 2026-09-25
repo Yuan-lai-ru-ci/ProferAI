@@ -11,14 +11,16 @@
 import * as React from "react";
 import { useLayoutEffect } from "react";
 import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
-import { Globe2, PanelRight, Ungroup } from "lucide-react";
+import { PluginTopBarEntries } from '@/components/plugins/PluginEntries'
+import { resolvePluginPageSurfaceVisibility } from '@profer/plugin-api'
+import { installedPluginsAtom } from '@/atoms/plugin-system'
+import { Globe2, PanelRight, Ungroup, Blocks } from "lucide-react";
 import { toast } from "sonner";
 import {
   tabsAtom,
   activeTabIdAtom,
   tabIndicatorMapAtom,
   closeTab,
-  isPreviewTab,
   reorderTabs,
   updateTabTitle,
   tabMruAtom,
@@ -38,13 +40,10 @@ import {
   workspaceFilesVersionAtom,
   seenFilesVersionAtom,
 } from "@/atoms/agent-atoms";
-import {
-  browserPanelDismissedSessionIdsAtom,
-  browserPanelOpenMapAtom,
-  browserStateMapAtom,
-} from "@/atoms/browser-atoms";
+import { browserStateMapAtom } from "@/atoms/browser-atoms";
 import { appModeAtom } from "@/atoms/app-mode";
-import { openBrowserFromPush, openFilePanel } from "@/hooks/usePanelAutoLayout";
+import { openFilePanel } from "@/hooks/usePanelAutoLayout";
+import { openBrowserTabManually } from "@/lib/browser-tab";
 import {
   emptyGroupSide,
   findTabGroup,
@@ -61,10 +60,7 @@ import {
   type TabGroupSide,
 } from "@/atoms/tab-group-atoms";
 import { panelVisibilityAtom } from "@/atoms/panel-layout-atoms";
-import { closeInlinePreview } from "@/components/diff/preview-opener";
 import { automationFormAtom } from "@/atoms/automation-atoms";
-import { previewPanelOpenMapAtom } from "@/atoms/preview-atoms";
-import { tearOffPreviewToSplit } from "@/components/diff/preview-opener";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -95,6 +91,31 @@ export function TabBar({
   const tabs = useAtomValue(tabsAtom);
   const setTabs = useSetAtom(tabsAtom);
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom);
+  const agentSessions = useAtomValue(agentSessionsAtom);
+  const installedPlugins = useAtomValue(installedPluginsAtom)
+  const hasPluginPages = installedPlugins.some((plugin) => plugin.enabled && (plugin.manifest.contributes.pages ?? []).some((page) => resolvePluginPageSurfaceVisibility(page, plugin.pagePlacements?.[page.id], 'tab')))
+  const contextTabs = React.useMemo(() => {
+    const active = tabs.find((tab) => tab.id === activeTabId) ?? null
+    if (!active) return tabs
+    if (active.type === 'chat') return tabs.filter((tab) => tab.sessionId === active.sessionId)
+
+    const sessionBoundPlugin = active.type === 'plugin' && active.pluginScope === 'session'
+    if (active.type === 'agent' || active.type === 'preview' || active.type === 'browser' || sessionBoundPlugin) {
+      const sessionId = active.sessionId
+      const activeSession = agentSessions.find((session) => session.id === sessionId)
+      const ownerTab = tabs.find((tab) => (tab.type === 'chat' || tab.type === 'agent') && tab.sessionId === sessionId)
+      if (ownerTab?.type === 'chat') return tabs.filter((tab) => tab.sessionId === sessionId)
+      const rootSessionId = activeSession?.parentSessionId ?? activeSession?.explorationParentSessionId ?? sessionId
+      const sessionIds = new Set(
+        agentSessions
+          .filter((session) => session.id === rootSessionId || session.parentSessionId === rootSessionId || session.explorationParentSessionId === rootSessionId)
+          .map((session) => session.id),
+      )
+      sessionIds.add(rootSessionId)
+      return tabs.filter((tab) => sessionIds.has(tab.sessionId) || tab.parentSessionId === rootSessionId)
+    }
+    return tabs.filter((tab) => tab.id === active.id)
+  }, [activeTabId, agentSessions, tabs]);
   const indicatorMap = useAtomValue(tabIndicatorMapAtom);
   const setTabMru = useSetAtom(tabMruAtom);
   const isWindows = React.useMemo(() => detectIsWindows(), []);
@@ -104,7 +125,6 @@ export function TabBar({
   const setAppMode = useSetAtom(appModeAtom);
   const setCurrentConversationId = useSetAtom(currentConversationIdAtom);
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom);
-  const agentSessions = useAtomValue(agentSessionsAtom);
   const agentWorkspaces = useAtomValue(agentWorkspacesAtom);
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom);
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom);
@@ -113,18 +133,6 @@ export function TabBar({
   // 统一关闭逻辑：关闭当前会话入口并回到 Scratch Pad，不停止后台 Agent
   const { requestClose } = useCloseTab();
   const store = useStore();
-
-  /**
-   * Tear-off：把 preview Tab 拖出 TabBar **且未落入组合投放区**时，转成右侧分屏预览。
-   * 落进投放区则走合并手势（成为组合的一栏），见 handleGroupTabDrag 的 tearOffFallback。
-   * 公共实现在 preview-opener.ts，PreviewTabContent 顶栏切换按钮共用同一份逻辑。
-   */
-  const handleTearOff = React.useCallback(
-    (tabId: string) => {
-      tearOffPreviewToSplit(store, tabId);
-    },
-    [store],
-  );
 
   const workspaceNameBySessionId = React.useMemo(() => {
     const workspaceNameMap = new Map(
@@ -227,14 +235,14 @@ export function TabBar({
       // 先同步切换主进程的前台浏览器所有权；新的 BrowserViewport 发布布局后再显示目标网页。
       const pluginApi = (window.electronAPI as Partial<typeof window.electronAPI>)
       const activePluginTab = tab.type === "plugin" && tab.pluginId && tab.pluginPageId
-        ? { pluginId: tab.pluginId, pageId: tab.pluginPageId }
+        ? { pluginId: tab.pluginId, pageId: tab.pluginPageId, instance: tab.pluginScope === 'session' ? { kind: 'tab' as const, sessionId: tab.sessionId } : { kind: 'tab' as const } }
         : null
       const hidePluginView = pluginApi.hidePluginView
       if (typeof hidePluginView === 'function') {
         for (const candidate of tabs) {
           if (candidate.type === 'plugin' && candidate.pluginId && candidate.pluginPageId
             && (!activePluginTab || candidate.id !== tab.id)) {
-            void hidePluginView(candidate.pluginId, candidate.pluginPageId).catch(() => undefined)
+            void hidePluginView(candidate.pluginId, candidate.pluginPageId, candidate.pluginScope === 'session' ? { kind: 'tab', sessionId: candidate.sessionId } : { kind: 'tab' }).catch(() => undefined)
           }
         }
       }
@@ -244,16 +252,42 @@ export function TabBar({
       if (typeof setForeground === "function") {
         setForeground(tab.type === "agent" ? tab.sessionId : null);
       }
+      // 浏览器页 Tab：激活 = 切换主进程当前页（原生视口按激活页渲染）
+      if (tab.type === "browser" && tab.browserTabId) {
+        const browserState = store.get(browserStateMapAtom).get(tab.sessionId);
+        if (browserState?.activeTabId !== tab.browserTabId) {
+          const select = (window.electronAPI as Partial<typeof window.electronAPI>).selectAgentBrowserTab;
+          if (typeof select === "function") {
+            void select({ sessionId: tab.sessionId, tabId: tab.browserTabId }).catch(() => undefined);
+          }
+        }
+      }
       setActiveTabId(tabId);
       setTabMru((previous) => promoteMru(previous, tab.sessionId));
       // 点击任意 tab 都关闭定时任务编辑表单（overlay 否则会盖在内容区上）
       setAutomationForm({ open: false, draft: null });
 
       if (tab.type === "plugin") {
-        setAppMode("scratch");
-        setCurrentConversationId(null);
-        setCurrentAgentSessionId(null);
-        setCurrentAgentWorkspaceId(null);
+        if (tab.pluginScope === 'session') {
+          const ownerTab = tabs.find((candidate) => (candidate.type === 'chat' || candidate.type === 'agent') && candidate.sessionId === tab.sessionId)
+          if (ownerTab?.type === 'chat') {
+            setAppMode("chat")
+            setCurrentConversationId(tab.sessionId)
+            setCurrentAgentSessionId(null)
+            setCurrentAgentWorkspaceId(null)
+          } else {
+            setAppMode("agent")
+            setCurrentConversationId(null)
+            setCurrentAgentSessionId(tab.sessionId)
+            const session = agentSessions.find((candidate) => candidate.id === tab.sessionId)
+            if (session?.workspaceId) setCurrentAgentWorkspaceId(session.workspaceId)
+          }
+        } else {
+          setAppMode("scratch")
+          setCurrentConversationId(null)
+          setCurrentAgentSessionId(null)
+          setCurrentAgentWorkspaceId(null)
+        }
       } else if (tab.type === "chat") {
         setAppMode("chat");
         setCurrentConversationId(tab.sessionId);
@@ -499,16 +533,12 @@ export function TabBar({
     };
   }, []);
 
-  if (tabs.length === 0)
+  if (contextTabs.length === 0)
     return (
       <div
         className="topbar-editorial relative tabbar-bg"
         style={{ height: TOPBAR_HEIGHT }}
       >
-        {/* 无 Tab 时窗口按钮由 MainArea 的通用宿主提供（不在本组件内，
-            因此无法用 --topbar-actions-width 测量），拖拽层按安全宽度避让。
-            不能让 drag 矩形压住 no-drag 的按钮矩形：Windows 125%/150%/175%
-            缩放时会被 OS 判成标题栏点击，表现为按钮单击无效。 */}
         <div
           className="topbar-drag-surface absolute inset-y-0 left-0 titlebar-drag-region"
           style={{ right: resolveWindowControlsRightInset(isWindows) }}
@@ -519,16 +549,16 @@ export function TabBar({
   return (
     <>
       <TabBarInner
-        tabs={tabs}
+        tabs={contextTabs}
         activeTabId={activeTabId}
         streamingMap={indicatorMap}
         workspaceNameBySessionId={workspaceNameBySessionId}
         automationSessionIds={automationSessionIds}
+        hasPluginPages={hasPluginPages}
         onActivate={handleActivate}
         onClose={requestClose}
         onDragStart={handleDragStart}
         onCancelSort={() => sortCancelRef.current?.()}
-        onTearOff={handleTearOff}
         teamMode={teamMode}
       />
     </>
@@ -542,11 +572,11 @@ function TabBarInner({
   streamingMap,
   workspaceNameBySessionId,
   automationSessionIds,
+  hasPluginPages,
   onActivate,
   onClose,
   onDragStart,
   onCancelSort,
-  onTearOff,
   teamMode,
 }: {
   tabs: TabItem[];
@@ -554,14 +584,17 @@ function TabBarInner({
   streamingMap: Map<string, SessionIndicatorStatus>;
   workspaceNameBySessionId: Map<string, string>;
   automationSessionIds: Set<string>;
+  hasPluginPages: boolean;
   onActivate: (tabId: string) => void;
   onClose: (tabId: string) => void;
   onDragStart: (tabId: string, e: React.PointerEvent) => void;
   /** 取消进行中的标签排序（合并手势中途接管时调用） */
   onCancelSort: () => void;
-  onTearOff: (tabId: string) => void;
   teamMode: boolean;
 }): React.ReactElement {
+  const agentSessions = useAtomValue(agentSessionsAtom);
+  const browserStateMap = useAtomValue(browserStateMapAtom);
+
   const [hoveredTabId, setHoveredTabId] = React.useState<string | null>(null);
   const store = useStore();
   const setTabMru = useSetAtom(tabMruAtom);
@@ -585,51 +618,48 @@ function TabBarInner({
   );
   const [tabGroups, setTabGroups] = useAtom(tabGroupsAtom);
   const activeGroup = findTabGroup(tabGroups, activeTabId);
-  const activeAgentSessionId =
-    activeTab?.type === "agent" ? activeTab.sessionId : null;
+  // 顶栏右侧工具是「会话上下文」动作，不是「会话 Tab」动作：
+  // 预览/浏览器等工作 Tab 激活时，入口仍归口到其宿主会话，不能凭空消失。
+  const activeSessionId = !activeTab
+    ? null
+    : (activeTab.type === 'chat' || activeTab.type === 'agent' || activeTab.type === 'preview' || activeTab.type === 'browser' || (activeTab.type === 'plugin' && activeTab.pluginScope === 'session'))
+      ? activeTab.sessionId
+      : null
+  const activeAgentSessionId = !activeTab
+    ? null
+    : activeTab.type === "agent"
+      ? activeTab.sessionId
+      : (activeTab.type === "preview" || activeTab.type === "browser") &&
+          agentSessions.some((session) => session.id === activeTab.sessionId)
+        ? activeTab.sessionId
+        : null;
   // 实际可见性（B = 展开意图 A && 窗口足够），由 usePanelAutoLayout 统一计算
   const visibility = useAtomValue(panelVisibilityAtom);
   const filePanelVisible = visibility.filePanel;
-  const browserVisible = activeAgentSessionId ? visibility.browser : false;
-  const previewOpenMap = useAtomValue(previewPanelOpenMapAtom);
-  // 预览分栏与 TabBar 同属 MainArea。预览未被浏览器替代、且文件栏未占用窗口右缘时，
-  // 它会接管窗口控制按钮；TabBar 此时不应继续留出控制区空档。
-  const previewOwnsWindowControls = Boolean(
-    isWindows &&
-    activeAgentSessionId &&
-    previewOpenMap.get(activeAgentSessionId) &&
-    !activeGroup &&
-    !filePanelVisible &&
-    !browserVisible,
-  );
   // 文件栏开关跨会话保留；草稿/Chat 等非 Agent 标签不会实际渲染右侧栏，
   // 不能因此让 TabBar 隐藏窗口控制按钮或预留不存在的侧栏空间。
   const rightSidePanelIsVisible =
     filePanelVisible && activeTab?.type === "agent";
-  const showOpenPanelButton = !filePanelVisible && activeTab?.type === "agent";
+  const showOpenPanelButton = !filePanelVisible && activeAgentSessionId !== null;
   const filePanelForcedHidden = isPanelOpen && !filePanelVisible;
   // 受管浏览器入口：仅当当前标签是 Agent 会话时展示。主进程按会话隔离浏览器。
-  const browserOpenMap = useAtomValue(browserPanelOpenMapAtom);
-  const setBrowserOpenMap = useSetAtom(browserPanelOpenMapAtom);
   const setBrowserStateMap = useSetAtom(browserStateMapAtom);
-  const [browserDismissed, setBrowserDismissed] = useAtom(
-    browserPanelDismissedSessionIdsAtom,
+  // 每页一个浏览器 Tab 后「浏览器 Tab」是一组页：首个页 Tab 用于入口聚焦，
+  // 「正在展示」指激活的本来就是该会话的浏览器页 Tab。
+  const activeBrowserTab = activeAgentSessionId
+    ? tabs.find((t) => t.type === "browser" && t.sessionId === activeAgentSessionId) ?? null
+    : null;
+  const activeIsSessionBrowserPage = activeTab?.type === "browser" && activeTab.sessionId === activeAgentSessionId;
+  // 浏览器页 Tab 正在展示时收起入口；存在但未激活时高亮提示「浏览器还在后台运行」
+  const showBrowserButton = Boolean(
+    activeAgentSessionId && !activeIsSessionBrowserPage,
   );
-  const activeBrowserIsOpen = activeAgentSessionId
-    ? browserOpenMap.get(activeAgentSessionId) === true
-    : false;
-  // 图标在「面板实际不可见」时出现；若 A 仍为 true（被迫收起），图标高亮提示存在展开意图
-  const showBrowserButton = Boolean(activeAgentSessionId && !browserVisible);
-  const browserForcedHidden = Boolean(
-    activeAgentSessionId && activeBrowserIsOpen && !browserVisible,
+  const browserBackgroundActive = Boolean(
+    activeBrowserTab && !activeIsSessionBrowserPage,
   );
-  // MainArea 的右边界会随着右侧文件面板或浏览器分栏提前结束；
-  // 这两种情况下窗口控制按钮已经不在当前 TabBar 内，工具组应贴近 MainArea 右缘。
-  const browserSidePanelVisible = browserVisible;
-  const hasRightSideContent =
-    rightSidePanelIsVisible ||
-    browserSidePanelVisible ||
-    previewOwnsWindowControls;
+  // MainArea 的右边界会随着右侧文件面板提前结束；
+  // 这种情况下窗口控制按钮已经不在当前 TabBar 内，工具组应贴近 MainArea 右缘。
+  const hasRightSideContent = rightSidePanelIsVisible;
   // 窗口按钮和顶栏入口共用同一块弹性操作面板；窗口按钮被右侧面板接管时，
   // 面板只保留工具入口，不再预留固定的 132px 空洞。
   const showTabBarWindowControls =
@@ -642,8 +672,16 @@ function TabBarInner({
     } else {
       // A=false 手动收起 → 点击打开意图；窗口不足时仅不可见并 toast，A 保持 true
       openFilePanel();
+      // 文件面板只渲染在 Agent 会话 Tab 旁（预览/浏览器 Tab 下不可见）；
+      // 从工作 Tab 打开时同时切回宿主会话 Tab，否则「意图已开但看不到」像没反应。
+      if (activeTab && activeTab.type !== "agent") {
+        const ownerTab = tabs.find(
+          (tab) => tab.type === "agent" && tab.sessionId === activeAgentSessionId,
+        );
+        if (ownerTab) onActivate(ownerTab.id);
+      }
     }
-  }, [activeAgentSessionId, isPanelOpen, setSidePanelOpen]);
+  }, [activeAgentSessionId, isPanelOpen, setSidePanelOpen, activeTab, tabs, onActivate]);
 
   const openBrowser = React.useCallback(async () => {
     if (!activeAgentSessionId) return;
@@ -663,46 +701,20 @@ function TabBarInner({
       next.set(activeAgentSessionId, state);
       return next;
     });
-    // 用户主动重新打开浏览器，清除“已手动关闭”标记，恢复后续状态推送自动打开能力。
-    setBrowserDismissed((previous) => {
-      if (!previous.has(activeAgentSessionId)) return previous;
-      const next = new Set(previous);
-      next.delete(activeAgentSessionId);
-      return next;
-    });
-    // 统一落地：置展开意图 A=true；窗口不足时暂不可见并 toast（与 Agent 驱动打开行为一致）。
-    openBrowserFromPush(activeAgentSessionId);
-  }, [activeAgentSessionId, setBrowserDismissed, setBrowserStateMap]);
+    // Tab 化：创建/聚焦浏览器页 Tab 并清除“已手动关闭”标记（reconcile 以主进程状态为准）。
+    openBrowserTabManually(activeAgentSessionId, state);
+  }, [activeAgentSessionId, setBrowserStateMap]);
 
-  // 浏览器图标在面板不可见时出现；点击按 A 状态切换：被迫收起（A=true）→ 取消展开意图；
-  // 手动收起（A=false）→ 打开。
+  // 浏览器图标在浏览器 Tab 未展示时出现：存在后台浏览器 Tab → 点击聚焦；不存在 → 打开。
   const toggleBrowser = React.useCallback(() => {
     if (!activeAgentSessionId) return;
-    if (activeBrowserIsOpen) {
-      void (
-        window.electronAPI as Partial<typeof window.electronAPI>
-      ).hideAgentBrowser?.(activeAgentSessionId);
-      setBrowserOpenMap((previous) => {
-        const next = new Map(previous);
-        next.set(activeAgentSessionId, false);
-        return next;
-      });
-      setBrowserDismissed((previous) => {
-        if (previous.has(activeAgentSessionId)) return previous;
-        const next = new Set(previous);
-        next.add(activeAgentSessionId);
-        return next;
-      });
+    if (activeBrowserTab) {
+      // 已有页 Tab：走统一激活路径（handleActivate 内含主进程激活页同步）
+      onActivate(activeBrowserTab.id);
     } else {
       void openBrowser();
     }
-  }, [
-    activeAgentSessionId,
-    activeBrowserIsOpen,
-    openBrowser,
-    setBrowserDismissed,
-    setBrowserOpenMap,
-  ]);
+  }, [activeAgentSessionId, activeBrowserTab, openBrowser, onActivate]);
 
   // ===== 组合 tab =====
   // 唯一创建入口是手势：把标签向下拖出标签栏，在主区左右投放区选位置。
@@ -745,8 +757,8 @@ function TabBarInner({
       tooltip: "打开受管浏览器",
       icon: <Globe2 className="size-3.5" />,
       onClick: toggleBrowser,
-      // 被迫收起（展开意图 A=true 但窗口不足）：图标高亮提示用户当前有展开意图
-      highlighted: browserForcedHidden,
+      // 浏览器 Tab 存在但未激活：高亮提示浏览器还在后台
+      highlighted: browserBackgroundActive,
     },
     {
       id: "file-panel",
@@ -759,6 +771,14 @@ function TabBarInner({
       badge: hasFileChanges ? (
         <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary animate-pulse" />
       ) : undefined,
+    },
+    {
+      id: "plugin-pages",
+      visible: !teamMode && activeSessionId !== null && hasPluginPages,
+      label: "打开插件页面",
+      tooltip: "打开插件页面",
+      icon: <Blocks className="size-3.5" />,
+      onClick: () => undefined,
     },
     {
       id: "tab-group",
@@ -865,28 +885,13 @@ function TabBarInner({
    * 合并永远触发不了（表现为"只有顶栏按钮生效"）。
    */
   const handleGroupTabDrag = React.useCallback(
-    (
-      tabId: string,
-      e: React.PointerEvent,
-      options: {
-        /** 未落入投放区且被拖出标签栏时，回落为原有 tear-off（预览标签 = 转内联分屏） */
-        tearOffFallback?: boolean;
-      } = {},
-    ): void => {
+    (tabId: string, e: React.PointerEvent): void => {
       if (e.button !== 0) return;
       const startX = e.clientX;
       const startY = e.clientY;
       let mode: "pending" | "group" | "sorting" = "pending";
       let hoveredSide: TabGroupSide | null = null;
       let committable = false;
-      /** 指针是否到过投放区：到过就说明用户在选落点，松手没选只是取消，不再回落成 tear-off */
-      let enteredRegion = false;
-      /** tear-off 已触发：保证只触发一次，且不再写组合状态 */
-      let torn = false;
-
-      // 拖出 TabBar 上/下边界后还需再越过这段缓冲距离才触发 tear-off，
-      // 避免在水平排序过程中轻微的垂直抖动误触发。
-      const TEAR_OFF_MARGIN = 24;
 
       const clearDropState = (): void => {
         hoveredSide = null;
@@ -894,34 +899,16 @@ function TabBarInner({
         setTabGroupDrag({ draggingTabId: null, hoveredPosition: null });
       };
 
-      /** 原有 tear-off 路径（预览标签拖出标签栏 → 转内联分屏） */
-      const fireTearOff = (): void => {
-        torn = true;
-        clearDropState();
-        setTearingOff(tabId);
-        document.removeEventListener("pointermove", handleMove);
-        document.removeEventListener("pointerup", handleUp);
-        document.removeEventListener("pointercancel", handleUp);
-        // 等下一帧再触发，避免在事件回调中同步重渲染导致 React 警告
-        requestAnimationFrame(() => {
-          onTearOff(tabId);
-          setTearingOff(null);
-        });
-      };
-
       const handleMove = (me: PointerEvent): void => {
-        if (torn) return;
         const dx = me.clientX - startX;
         const dy = me.clientY - startY;
 
         if (mode === "pending") {
           if (Math.abs(dx) <= 5 && Math.abs(dy) <= 5) return;
           // 轴向判定：纵向起步 → 合并手势；横向 → 交回排序。
-          // 预览标签向上拖也算纵向（它的 tear-off 是"拖出"，方向不限），
-          // 交给下面的越界判定决定是回落 tear-off 还是继续合并。
-          if (Math.abs(dy) > Math.abs(dx) && (dy > 0 || options.tearOffFallback)) {
+          if (Math.abs(dy) > Math.abs(dx) && dy > 0) {
             mode = "group";
-            // 复用 tear-off 的高亮反馈：让用户知道这个标签已被"拿起来"
+            // 复用高亮反馈：让用户知道这个标签已被"拿起来"
             setTearingOff(tabId);
           } else {
             mode = "sorting";
@@ -942,20 +929,6 @@ function TabBarInner({
           me.clientY <= regionRect.bottom &&
           me.clientX >= regionRect.left &&
           me.clientX <= regionRect.right;
-
-        if (insideRegion) enteredRegion = true;
-
-        // 预览标签的 tear-off 回落：不依赖投放区是否存在（该视图可能根本不支持组合）。
-        // 只要从未进过投放区、又被拖出标签栏上下边界，就保持原有"转内联分屏"语义。
-        if (options.tearOffFallback && !enteredRegion && !insideRegion) {
-          const outOfBar =
-            me.clientY < barRect.top - TEAR_OFF_MARGIN ||
-            me.clientY > barRect.bottom + TEAR_OFF_MARGIN;
-          if (outOfBar) {
-            fireTearOff();
-            return;
-          }
-        }
 
         if (!regionRect) return;
 
@@ -986,7 +959,6 @@ function TabBarInner({
         document.removeEventListener("pointermove", handleMove);
         document.removeEventListener("pointerup", handleUp);
         document.removeEventListener("pointercancel", handleUp);
-        if (torn) return;
         setTearingOff(null);
 
         const side = committable ? hoveredSide : null;
@@ -1010,25 +982,18 @@ function TabBarInner({
         const emptySide = emptyGroupSide(plan.group);
         if (emptySide) setTabGroupRatio(ratioForEmptySide(emptySide));
         setTabMru((previous) => promoteMru(previous, plan.activeTabId));
-        // 预览标签成为组合成员 = "用一栏展示这个文件"：关掉该会话的内联分屏，
-        // 避免同一个文件在两处同时显示（焦点来回切时布局也不再跳动）。
-        const dragged = tabs.find((t) => t.id === tabId);
-        if (dragged && isPreviewTab(dragged)) closeInlinePreview(dragged.sessionId);
       };
 
       document.addEventListener("pointermove", handleMove);
       document.addEventListener("pointerup", handleUp);
       document.addEventListener("pointercancel", handleUp);
     },
-    [onCancelSort, onDragStart, onTearOff, setTabGroupDrag, setTabGroupRatio, setTabMru, tabs],
+    [onCancelSort, onDragStart, setTabGroupDrag, setTabGroupRatio, setTabMru],
   );
 
   /**
    * 标签拖拽入口：可组合的标签统一交给合并手势，落点决定结果。
-   *
-   * - agent / chat：落入投放区 → 组合；没落入 → 取消（与合并手势本身一致）；
-   * - preview：落入投放区 → 成为组合的一栏；没落入且被拖出标签栏 → 回落为原有
-   *   "转预览分屏"（tearOffFallback）。两条路径共用同一次 pointerdown。
+   * 落入投放区 → 组合；没落入 → 取消。并排分屏统一由组合承担，不再有 tear-off 回落。
    */
   const handleDragStartWithTearOff = React.useCallback(
     (tabId: string, e: React.PointerEvent) => {
@@ -1038,7 +1003,7 @@ function TabBarInner({
         return;
       }
       if (isGroupEligibleTab(tab)) {
-        handleGroupTabDrag(tabId, e, { tearOffFallback: isPreviewTab(tab) });
+        handleGroupTabDrag(tabId, e);
         return;
       }
       onDragStart(tabId, e);
@@ -1262,7 +1227,7 @@ function TabBarInner({
         <div className="topbar-tabs-viewport absolute inset-0 overflow-hidden rounded-r-full">
           <div
             ref={scrollRef}
-            className="topbar-tabs-scroll flex min-w-0 items-center gap-1 overflow-x-auto px-1 scrollbar-none"
+            className="topbar-tabs-scroll flex min-w-0 items-center gap-1 overflow-x-auto pl-2 pr-1 scrollbar-none"
             style={{ height: TOPBAR_CONTENT_HEIGHT }}
           >
             {tabs.map((tab) => {
@@ -1316,6 +1281,20 @@ function TabBarInner({
                 hideRenameControl={tabCompressionLevel === "title-only"}
                 isAutomation={
                   tab.type === "agent" && automationSessionIds.has(tab.sessionId)
+                }
+                childKind={
+                  tab.type === "agent"
+                    ? agentSessions.find((session) => session.id === tab.sessionId)?.explorationParentSessionId
+                      ? "exploration"
+                      : tab.parentSessionId
+                        ? "delegation"
+                        : undefined
+                    : undefined
+                }
+                agentOwned={
+                  tab.type === "browser" && !!tab.browserTabId
+                    ? browserStateMap.get(tab.sessionId)?.tabs.find((page) => page.tabId === tab.browserTabId)?.openedByAgent
+                    : undefined
                 }
                 onRename={
                   tab.type === "agent"
@@ -1390,30 +1369,32 @@ function TopBarActions({
           role="toolbar"
           aria-label="顶栏工具"
         >
-          {visibleTools.map((tool) => (
-            <Tooltip key={tool.id}>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className={cn(
-                    "topbar-tool-button relative z-20 h-8 w-8",
-                    tool.highlighted &&
-                      "topbar-tool-button-highlighted text-accent-foreground",
-                  )}
-                  aria-label={tool.label}
-                  onClick={tool.onClick}
-                >
-                  {tool.icon}
-                  {tool.badge}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                <p>{tool.tooltip}</p>
-              </TooltipContent>
-            </Tooltip>
-          ))}
+          {visibleTools.map((tool) => tool.id === "plugin-pages"
+            ? <PluginTopBarEntries key={tool.id} />
+            : (
+              <Tooltip key={tool.id}>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "topbar-tool-button relative z-20 h-8 w-8",
+                      tool.highlighted &&
+                        "topbar-tool-button-highlighted text-accent-foreground",
+                    )}
+                    aria-label={tool.label}
+                    onClick={tool.onClick}
+                  >
+                    {tool.icon}
+                    {tool.badge}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  <p>{tool.tooltip}</p>
+                </TooltipContent>
+              </Tooltip>
+            ))}
         </div>
       )}
       {showWindowControls && children}

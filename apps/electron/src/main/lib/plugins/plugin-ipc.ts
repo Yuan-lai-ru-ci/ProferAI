@@ -4,6 +4,7 @@ import { getTaskRouting, setTaskRouting } from './plugin-routing'
 import { pluginRequests } from './plugin-requests'
 import { taskReferenceSchema } from './plugin-capabilities'
 import { BrowserWindow, ipcMain } from 'electron'
+import type { ProferPluginViewInstance } from '@profer/plugin-api'
 import {
   PROFER_PLUGIN_IPC_CHANNELS,
   type ProferPluginOperationResult,
@@ -15,18 +16,36 @@ import {
   cleanupStalePluginTempDirs,
   installPluginPackage,
   listInstalledPlugins,
+  readPluginPageIcon,
+  resolvePluginPage,
   openPluginsFolder,
   removePlugin,
   selectPluginPackage,
   setPluginEnabled,
+  setPluginPagePlacement,
   setPluginMutationListener,
   setPluginsChangedListener,
 } from './plugin-manager'
 import { pluginViewManager, registerPluginHostIpc } from './plugin-view-manager'
+import { pluginFloatingWindowManager } from './plugin-floating-window'
 import { configureWorkspaceProvider } from './workspace-provider'
 import { configurePluginCapabilityProviders } from './provider-registry'
 import type { PluginCapabilityProviders } from './ports/capabilities'
 import type { WorkspaceProvider } from './ports/workspace'
+
+function parsePluginViewInstance(value: unknown): ProferPluginViewInstance {
+  if (value === undefined) return { kind: 'tab' }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('插件页面实例非法')
+  const input = value as { kind?: unknown; sessionId?: unknown }
+  if (input.kind === 'tool') {
+    if (input.sessionId !== undefined) throw new Error('工具实例不能绑定会话')
+    return { kind: 'tool' }
+  }
+  if (input.kind !== 'tab') throw new Error('插件页面实例非法')
+  if (input.sessionId === undefined) return { kind: 'tab' }
+  if (typeof input.sessionId !== 'string' || !input.sessionId.trim() || input.sessionId.length > 200) throw new Error('插件 Tab 会话实例非法')
+  return { kind: 'tab', sessionId: input.sessionId }
+}
 
 let registered = false
 
@@ -64,6 +83,7 @@ export function registerPluginIpcHandlers(): void {
   setPluginMutationListener((pluginId) => {
     pluginRequests.cancelPlugin(pluginId)
     pluginViewManager.closePlugin(pluginId)
+    pluginFloatingWindowManager.closePlugin(pluginId)
   })
   registerPluginHostIpc()
 
@@ -89,12 +109,16 @@ export function registerPluginIpcHandlers(): void {
   ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.REVOKE, (event, pluginId: unknown) => {
     assertPluginManagerSender(event)
     if (typeof pluginId !== 'string') throw new Error('插件 ID 非法')
-    revokePluginPermissions(pluginId); pluginRequests.cancelPlugin(pluginId); pluginViewManager.closePlugin(pluginId); broadcastChanged()
+    revokePluginPermissions(pluginId); pluginRequests.cancelPlugin(pluginId); pluginViewManager.closePlugin(pluginId); pluginFloatingWindowManager.closePlugin(pluginId); broadcastChanged()
   })
-  ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.ACTIVATE, (event, pluginId: unknown, pageId: unknown, reference: unknown) => {
+  ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.ACTIVATE, (event, pluginId: unknown, pageId: unknown, reference: unknown, placement: unknown) => {
     assertPluginManagerSender(event)
     if (typeof pluginId !== 'string' || typeof pageId !== 'string') throw new Error('插件页面标识非法')
-    pluginViewManager.activate(pluginId, pageId, reference ? taskReferenceSchema.parse(reference) : null)
+    const target = placement === undefined ? 'tab' : placement
+    if (target !== 'tab' && target !== 'settings' && target !== 'sidebar') throw new Error('插件页面入口非法')
+    const context = reference ? taskReferenceSchema.parse(reference) : null
+    resolvePluginPage(pluginId, pageId, target)
+    pluginViewManager.activate(pluginId, pageId, context, context ? { kind: 'tab', sessionId: context.sessionId } : { kind: 'tab' })
   })
   ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.ROUTING_GET, (event, key: unknown) => {
     assertPluginManagerSender(event)
@@ -121,13 +145,14 @@ export function registerPluginIpcHandlers(): void {
   ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.SET_ENABLED, (event, pluginId: unknown, enabled: unknown): ProferPluginOperationResult => {
     assertPluginManagerSender(event)
     if (typeof pluginId !== 'string' || typeof enabled !== 'boolean') return { ok: false, status: 'error', message: '插件状态参数非法' }
-    if (!enabled) pluginViewManager.closePlugin(pluginId)
+    if (!enabled) { pluginViewManager.closePlugin(pluginId); pluginFloatingWindowManager.closePlugin(pluginId) }
     return setPluginEnabled(pluginId, enabled)
   })
   ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.REMOVE, (event, pluginId: unknown): ProferPluginOperationResult => {
     assertPluginManagerSender(event)
     if (typeof pluginId !== 'string') return { ok: false, status: 'error', message: '插件 ID 非法' }
     pluginViewManager.closePlugin(pluginId)
+    pluginFloatingWindowManager.closePlugin(pluginId)
     const result = removePlugin(pluginId)
     if (result.ok) { revokePluginPermissions(pluginId); removePluginCredentials(pluginId) }
     return result
@@ -136,16 +161,27 @@ export function registerPluginIpcHandlers(): void {
     assertPluginManagerSender(event)
     return openPluginsFolder()
   })
+  ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.READ_PAGE_ICON, (event, pluginId: unknown, pageId: unknown) => {
+    assertPluginManagerSender(event)
+    if (typeof pluginId !== 'string' || typeof pageId !== 'string') throw new Error('插件页面标识非法')
+    return readPluginPageIcon(pluginId, pageId)
+  })
+  ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.SET_PAGE_PLACEMENT, (event, pluginId: unknown, pageId: unknown, preference: unknown): ProferPluginOperationResult => {
+    assertPluginManagerSender(event)
+    const allowed = preference === null || preference === 'sidebar' || preference === 'tab' || preference === 'hidden'
+    if (typeof pluginId !== 'string' || typeof pageId !== 'string' || !allowed) return { ok: false, status: 'error', message: '插件入口位置参数非法' }
+    return setPluginPagePlacement(pluginId, pageId, preference as 'sidebar' | 'tab' | 'hidden' | null)
+  })
   ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.SET_VIEW_LAYOUT, (event, layout: ProferPluginViewLayout) => {
     assertPluginManagerSender(event)
     pluginViewManager.setLayout(layout)
   })
-  ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.HIDE_VIEW, (event, pluginId: unknown, pageId: unknown) => {
+  ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.HIDE_VIEW, (event, pluginId: unknown, pageId: unknown, instance: unknown) => {
     assertPluginManagerSender(event)
-    if (typeof pluginId === 'string' && typeof pageId === 'string') pluginViewManager.hide(pluginId, pageId)
+    if (typeof pluginId === 'string' && typeof pageId === 'string') pluginViewManager.hide(pluginId, pageId, parsePluginViewInstance(instance))
   })
-  ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.CLOSE_VIEW, (event, pluginId: unknown, pageId: unknown) => {
+  ipcMain.handle(PROFER_PLUGIN_IPC_CHANNELS.CLOSE_VIEW, (event, pluginId: unknown, pageId: unknown, instance: unknown) => {
     assertPluginManagerSender(event)
-    if (typeof pluginId === 'string' && typeof pageId === 'string') pluginViewManager.close(pluginId, pageId)
+    if (typeof pluginId === 'string' && typeof pageId === 'string') pluginViewManager.close(pluginId, pageId, parsePluginViewInstance(instance))
   })
 }

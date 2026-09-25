@@ -7,17 +7,14 @@
 
 import * as React from 'react'
 import { promoteMru } from '@profer/shared'
-import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   tabsAtom,
   activeTabIdAtom,
   openTab,
-  buildOpenTabRestore,
-  sessionViewStateMapAtom,
   tabMruAtom,
   type TabType,
 } from '@/atoms/tab-atoms'
-import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { automationFormAtom } from '@/atoms/automation-atoms'
@@ -32,10 +29,9 @@ import {
 import { upsertAgentSession } from '@/lib/agent-session-list'
 import { isAgentWorkspaceIdVisible } from '@/lib/product-feature-flags'
 
-type OpenSessionFn = (type: TabType, sessionId: string, title: string) => void
+type OpenSessionFn = (type: TabType, sessionId: string, title: string, parentSessionId?: string) => void
 
 export function useOpenSession(): OpenSessionFn {
-  const store = useStore()
   const [tabs, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const setTabMru = useSetAtom(tabMruAtom)
@@ -51,7 +47,7 @@ export function useOpenSession(): OpenSessionFn {
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
 
   return React.useCallback(
-    (type: TabType, sessionId: string, title: string): void => {
+    (type: TabType, sessionId: string, title: string, parentSessionId?: string): void => {
       const knownSession = type === 'agent' || type === 'preview'
         ? agentSessions.find((session) => session.id === sessionId)
         : undefined
@@ -60,15 +56,17 @@ export function useOpenSession(): OpenSessionFn {
         return
       }
 
-      // 切回 agent 会话时，若该会话上次开着预览 Tab 则一并重建并回到上次视图
-      const restore = type === 'agent'
-        ? buildOpenTabRestore(
-            sessionId,
-            store.get(sessionViewStateMapAtom),
-            store.get(previewFileMapAtom),
-          )
-        : undefined
-      const result = openTab(tabs, { type, sessionId, title }, restore)
+      // 子会话血缘（委派 parentSessionId / 探索 explorationParentSessionId）：
+      // 显式参数优先，再从会话 meta 派生，保证所有打开路径产出一致的子会话 Tab。
+      const lineageParentId = parentSessionId
+        ?? knownSession?.parentSessionId
+        ?? knownSession?.explorationParentSessionId
+      const result = openTab(tabs, {
+        type,
+        sessionId,
+        title,
+        ...(lineageParentId ? { parentSessionId: lineageParentId } : {}),
+      })
       setTabs(result.tabs)
       setActiveTabId(result.activeTabId)
       if (type === 'chat' || type === 'agent' || type === 'preview') {

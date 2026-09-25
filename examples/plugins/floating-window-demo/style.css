@@ -1,0 +1,39 @@
+:root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif; }
+html[data-profer-theme="dark"] { color-scheme: dark; }
+body { margin: 0; background: transparent; color: #1a1d26; }
+html[data-profer-theme="dark"] body { color: #e6e9f2; }
+
+/* 控制台形态（设置页/侧边栏/Tab） */
+#console-view main, main#console-view { max-width: 860px; margin: 0 auto; padding: 28px 20px 48px; }
+main#console-view header h1 { margin: 4px 0 8px; font-size: 26px; }
+main#console-view section { margin-top: 26px; padding: 16px 18px; border: 1px solid rgba(127, 137, 160, .3); border-radius: 12px; background: rgba(127, 137, 160, .06); }
+.eyebrow { font-size: 11px; letter-spacing: .14em; color: #4f6ef7; font-weight: 700; }
+.badge-row { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+.badge { padding: 3px 10px; border-radius: 999px; background: #4f6ef7; color: #fff; font-size: 12px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+button { padding: 7px 14px; border-radius: 8px; border: 1px solid rgba(127, 137, 160, .45); background: transparent; color: inherit; cursor: pointer; font-size: 13px; }
+button:hover { border-color: #4f6ef7; color: #4f6ef7; }
+pre { padding: 10px 12px; border-radius: 8px; background: rgba(127, 137, 160, .12); font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; }
+pre.ok { outline: 1px solid #2fa36b; }
+pre.error { outline: 1px solid #d64545; }
+pre.log { min-height: 60px; }
+footer { margin-top: 26px; font-size: 12px; opacity: .75; display: flex; gap: 12px; }
+code, em { color: #4f6ef7; font-style: normal; }
+
+/* 悬浮画布形态（透明窗口：body 背景透明，只画气泡） */
+body.floating { overflow: hidden; }
+#bubble-view { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+#bubble-view[hidden] { display: none; }
+#bubble {
+  width: 220px; padding: 18px 16px 14px; border-radius: 20px;
+  background: rgba(79, 110, 247, .92); color: #fff; text-align: center;
+  box-shadow: 0 12px 32px rgba(20, 30, 80, .35);
+}
+#bubble .emoji { font-size: 44px; line-height: 1; }
+#bubble p { margin: 8px 0 0; }
+#bubble .hint { font-size: 11px; opacity: .8; }
+#bubble button { border-color: rgba(255, 255, 255, .5); color: #fff; font-size: 12px; padding: 4px 10px; }
+#bubble .row { justify-content: center; }
+#bubble pre.log { background: rgba(0, 0, 0, .25); color: #dfe6ff; max-height: 90px; font-size: 11px; text-align: left; }
+.drag-region { -webkit-app-region: drag; }
+#bubble button, #bubble pre { -webkit-app-region: no-drag; }

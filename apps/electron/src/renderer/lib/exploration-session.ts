@@ -13,23 +13,13 @@ export interface ExplorationReferenceDraft {
  * - explore：Pi `/tree` 探索分支，挂在主线右侧血缘下，目前仅 Pi runtime 支持。
  */
 export function resolveForkActionAvailability(options: {
-  embedded: boolean
+  /** 当前会话自身就是探索分支（meta.explorationParentSessionId 存在） */
+  isBranch: boolean
   agentRuntime: AgentRuntime | undefined
 }): { canFork: boolean; canExplore: boolean } {
-  // 嵌入在右侧探索面板里的分支不再提供二级分叉入口。
-  if (options.embedded) return { canFork: false, canExplore: false }
+  // 探索分支不再提供二级分叉入口。
+  if (options.isBranch) return { canFork: false, canExplore: false }
   return { canFork: true, canExplore: options.agentRuntime === 'pi' }
-}
-
-/** 父会话与右侧探索分支同时挂载时，只有当前可见工作面拥有全局快捷键。 */
-export function ownsExplorationShortcut(
-  embedded: boolean,
-  sessionId: string,
-  activeSidePanelTab: string | undefined,
-): boolean {
-  return embedded
-    ? activeSidePanelTab === `exploration:${sessionId}`
-    : !activeSidePanelTab?.startsWith('exploration:')
 }
 
 /**
@@ -47,6 +37,29 @@ export function resolveLatestExplorationSourceMessageId(
     if (typeof message.uuid === 'string' && boundIds.has(message.uuid)) return message.uuid
   }
   return Object.keys(bindings ?? {}).at(-1)
+}
+
+export function mergeExplorationMessages(...messageLists: SDKMessage[][]): SDKMessage[] {
+  const merged: SDKMessage[] = []
+  const positions = new Map<string, number>()
+  for (const messages of messageLists) {
+    for (const message of messages) {
+      const uuid = (message as { uuid?: unknown }).uuid
+      if (typeof uuid !== 'string') {
+        merged.push(message)
+        continue
+      }
+      const existingIndex = positions.get(uuid)
+      if (existingIndex === undefined) {
+        positions.set(uuid, merged.length)
+        merged.push(message)
+      } else {
+        // 缓存/实时消息可能是同一条消息的更新帧；后来的版本才是最终内容。
+        merged[existingIndex] = message
+      }
+    }
+  }
+  return merged
 }
 
 function escapeHtml(value: string): string {

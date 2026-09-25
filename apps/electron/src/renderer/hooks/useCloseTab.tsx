@@ -17,10 +17,13 @@ import {
   tabsAtom,
   activeTabIdAtom,
   closeTab,
+  isBrowserTab,
   isPreviewTab,
-  sessionViewStateMapAtom,
+  selectSameModeCloseFallback,
   tabMruAtom,
 } from '@/atoms/tab-atoms'
+import { browserPanelDismissedSessionIdsAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { previewFilesByTabAtom } from '@/atoms/preview-atoms'
 import {
   agentSessionsAtom,
   agentSessionIndicatorMapAtom,
@@ -43,7 +46,8 @@ export function useCloseTab(): UseCloseTabReturn {
   const store = useStore()
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
-  const setViewStateMap = useSetAtom(sessionViewStateMapAtom)
+  const setPreviewFilesByTab = useSetAtom(previewFilesByTabAtom)
+  const setBrowserDismissed = useSetAtom(browserPanelDismissedSessionIdsAtom)
 
   const clearIdleAgentCompletionNotice = React.useCallback((sessionId: string) => {
     const indicatorMap = store.get(agentSessionIndicatorMapAtom)
@@ -71,41 +75,90 @@ export function useCloseTab(): UseCloseTabReturn {
   const executeClose = React.useCallback((tabId: string) => {
     const closingTab = tabs.find((t) => t.id === tabId)
     const result = closeTab(tabs, activeTabId, tabId, tabMru)
-    const wasActive = result.activeTabId !== activeTabId
+    // 关闭会话入口后的回退选择：同类会话优先（MRU），同类关完回 Scratch Pad，不跨模式跳转。
+    const fallbackTabId = selectSameModeCloseFallback(
+      result.tabs,
+      closingTab,
+      result.activeTabId !== activeTabId,
+      tabMru,
+      result.activeTabId,
+    )
+    const nextActiveTabId = fallbackTabId ?? result.activeTabId
+    const nextResult = nextActiveTabId === result.activeTabId
+      ? result
+      : { ...result, activeTabId: nextActiveTabId }
+    const wasActive = nextResult.activeTabId !== activeTabId
     // 原生插件 View 位于 renderer DOM 之上，先收起/销毁再切换 Tab，避免关闭瞬间
     // 仍有不可见的 native View 覆盖新激活内容。
-    if (closingTab?.type === 'plugin' && closingTab.pluginId && closingTab.pluginPageId) {
-      void window.electronAPI.closePluginView(closingTab.pluginId, closingTab.pluginPageId).catch(() => undefined)
+    const removedPluginTabs = tabs.filter((tab) => tab.type === 'plugin' && !nextResult.tabs.some((remaining) => remaining.id === tab.id))
+    for (const removed of removedPluginTabs) {
+      if (!removed.pluginId || !removed.pluginPageId) continue
+      void window.electronAPI.closePluginView(removed.pluginId, removed.pluginPageId, removed.pluginScope === 'session' ? { kind: 'tab', sessionId: removed.sessionId } : { kind: 'tab' }).catch(() => undefined)
     }
-    setTabs(result.tabs)
-    setActiveTabId(result.activeTabId)
+    if (closingTab?.type === 'plugin' && closingTab.pluginId && closingTab.pluginPageId) {
+      void window.electronAPI.closePluginView(closingTab.pluginId, closingTab.pluginPageId, closingTab.pluginScope === 'session' ? { kind: 'tab', sessionId: closingTab.sessionId } : { kind: 'tab' }).catch(() => undefined)
+    }
+    setTabs(nextResult.tabs)
+    setActiveTabId(nextResult.activeTabId)
     setTabMru(result.mru)
 
-    // 同步该会话的视图状态：
-    // - 关闭预览 Tab → 预览不再打开（保留 lastView，切回不再重建预览）
-    // - 关闭会话 Tab（连带其预览）→ 删除整条记录
-    if (closingTab) {
-      if (isPreviewTab(closingTab)) {
-        setViewStateMap((prev) => {
-          const current = prev.get(closingTab.sessionId)
-          if (!current) return prev
-          const next = new Map(prev)
-          next.set(closingTab.sessionId, { previewTabOpen: false, lastView: current.lastView })
-          return next
-        })
-      } else if (closingTab.type === 'agent') {
-        setViewStateMap((prev) => {
-          if (!prev.has(closingTab.sessionId)) return prev
-          const next = new Map(prev)
-          next.delete(closingTab.sessionId)
+    // 同步工作 Tab 的附属状态：
+    // - 关闭预览 Tab → 清理其文件元数据条目
+    // - 关闭浏览器 Tab → 记入 dismissed（浏览器进程保留在后台，推送不再自动重开）
+    // - 关闭会话 Tab（连带其工作 Tab）→ 清理该会话全部工作 Tab 元数据
+    if (closingTab && isPreviewTab(closingTab)) {
+      setPreviewFilesByTab((prev) => {
+        if (!prev.has(tabId)) return prev
+        const next = new Map(prev)
+        next.delete(tabId)
+        return next
+      })
+    } else if (closingTab && isBrowserTab(closingTab)) {
+      // 关闭顶栏 Tab = 关闭对应网页（每页一个 Tab）；主进程关到 0 页时销毁会话（返回 null），
+      // 此时清掉状态镜像，reconcile 后续会移除同会话残留的浏览器 Tab。
+      const browserSessionId = closingTab.sessionId
+      if (closingTab.browserTabId) {
+        void (window.electronAPI as Partial<typeof window.electronAPI>)
+          .closeAgentBrowserTab?.({ sessionId: browserSessionId, tabId: closingTab.browserTabId })
+          .then((nextState) => {
+            if (nextState !== null) return
+            store.set(browserStateMapAtom, (prev) => {
+              if (!prev.has(browserSessionId)) return prev
+              const next = new Map(prev)
+              next.delete(browserSessionId)
+              return next
+            })
+          })
+          .catch(() => undefined)
+      }
+      // 用户关掉该会话最后一个浏览器页 Tab：记入 dismissed，推送不再自动重开
+      const remainingBrowserTabs = nextResult.tabs.filter((tab) => isBrowserTab(tab) && tab.sessionId === browserSessionId)
+      if (remainingBrowserTabs.length === 0) {
+        void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
+        setBrowserDismissed((prev) => {
+          if (prev.has(browserSessionId)) return prev
+          const next = new Set(prev)
+          next.add(browserSessionId)
           return next
         })
       }
+    } else if (closingTab?.type === 'agent' || closingTab?.type === 'chat') {
+      setPreviewFilesByTab((prev) => {
+        const next = new Map(prev)
+        let changed = false
+        for (const key of next.keys()) {
+          if (key.startsWith(`__preview__:${closingTab.sessionId}:`)) {
+            next.delete(key)
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
     }
 
     if (wasActive) {
-      const newActiveTab = result.activeTabId
-        ? result.tabs.find((t) => t.id === result.activeTabId) ?? null
+      const newActiveTab = nextResult.activeTabId
+        ? nextResult.tabs.find((t) => t.id === nextResult.activeTabId) ?? null
         : null
       syncActiveTabSideEffects(newActiveTab)
     }
@@ -114,7 +167,7 @@ export function useCloseTab(): UseCloseTabReturn {
     if (closingTab && closingTab.type === 'agent') {
       clearIdleAgentCompletionNotice(closingTab.sessionId)
     }
-  }, [tabs, activeTabId, tabMru, setTabs, setActiveTabId, setTabMru, setViewStateMap, syncActiveTabSideEffects, clearIdleAgentCompletionNotice])
+  }, [tabs, activeTabId, tabMru, setTabs, setActiveTabId, setTabMru, setPreviewFilesByTab, setBrowserDismissed, syncActiveTabSideEffects, clearIdleAgentCompletionNotice])
 
   const requestClose = React.useCallback((tabId: string) => {
     executeClose(tabId)

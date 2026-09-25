@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>悬浮窗口验收台</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+<main id="console-view">
+  <header>
+    <span class="eyebrow">PROFER FLOATING WINDOW LAB</span>
+    <h1>悬浮窗口验收台</h1>
+    <p>用于验收全局悬浮插件窗口的全部公开能力。当前页面同时声明四种形态；悬浮画布与本页共用代码，按 <code>context.surface</code> 区分布局。</p>
+    <div class="badge-row"><span id="instance-badge" class="badge">正在读取运行形态…</span></div>
+  </header>
+
+  <section>
+    <h2>运行形态识别</h2>
+    <pre id="context-output">加载中…</pre>
+  </section>
+
+  <section>
+    <h2>窗口控制</h2>
+    <p>按顺序点击即可完成基础验收：<em>打开 → 显示/隐藏 → 位置 → 关闭</em>。每次调用结果追加到日志。</p>
+    <div class="row">
+      <button id="open">打开悬浮窗口</button>
+      <button id="show">显示</button>
+      <button id="hide">隐藏</button>
+      <button id="close">关闭</button>
+      <button id="is-visible">是否可见</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>位置与尺寸</h2>
+    <div class="row">
+      <button id="get-bounds">读取边界</button>
+      <button id="move-corner">移到右下角</button>
+      <button id="move-offscreen">尝试移出屏幕（应被钳制）</button>
+    </div>
+    <pre id="bounds-output">尚未读取</pre>
+  </section>
+
+  <section>
+    <h2>鼠标穿透</h2>
+    <p>开启穿透后悬浮画布不再响应点击（仍可收到 mousemove，可用悬停区域退出穿透）。</p>
+    <div class="row">
+      <button id="ct-on">开启穿透</button>
+      <button id="ct-off">关闭穿透</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>一键验收</h2>
+    <p>依次执行：形态识别 → 打开 → 复用检查 → 可见性 → 位置读写 → 越屏钳制 → 存储共存 → 关闭。全绿即通过。</p>
+    <div class="row">
+      <button id="run-all">运行完整验收</button>
+      <button id="clear-log">清空日志</button>
+    </div>
+    <pre id="log" class="log"></pre>
+  </section>
+
+  <section>
+    <h2>负向验收（手动）</h2>
+    <ol>
+      <li><strong>未授权</strong>：重新安装后不授权 <code>window.floating</code>，点「打开」应得到 <code>PLUGIN_PERMISSION_DENIED</code>。</li>
+      <li><strong>撤权</strong>：窗口打开状态下撤销授权，窗口应自动销毁，再调 API 返回 <code>PLUGIN_REVOKED</code>。</li>
+      <li><strong>停用</strong>：停用插件，窗口应自动销毁。</li>
+      <li><strong>替换安装</strong>：窗口打开时重新安装替换，旧窗口应关闭。</li>
+      <li><strong>隔离</strong>：安装第二个声明 floating 的插件，两边窗口互不影响。</li>
+      <li><strong>退出</strong>：窗口打开时退出 Profer，不得留下孤立窗口。</li>
+    </ol>
+  </section>
+
+  <footer><strong id="status">正在初始化…</strong><span>结果来自 Host API；日志可复制给开发者。</span></footer>
+</main>
+
+<div id="bubble-view" hidden>
+  <div id="bubble" class="drag-region">
+    <span class="emoji">🐾</span>
+    <p id="bubble-title">悬浮画布</p>
+    <p class="hint">拖动蓝色区域移动 · 双击切换穿透</p>
+    <div class="row">
+      <button id="bubble-bounds">边界</button>
+      <button id="bubble-hide">隐藏</button>
+    </div>
+    <pre id="bubble-log" class="log"></pre>
+  </div>
+</div>
+</body>
+</html>

@@ -13,12 +13,9 @@ import {
   activeTabIdAtom,
   activeSessionIdAtom,
   openTab,
-  buildOpenTabRestore,
-  sessionViewStateMapAtom,
   tabMruAtom,
   tabsAtom,
 } from '@/atoms/tab-atoms'
-import { previewFileMapAtom } from '@/atoms/preview-atoms'
 import { getInitialTabSwitchIndex, promoteTabMru } from '@/lib/tab-switching'
 import { appModeAtom } from '@/atoms/app-mode'
 import {
@@ -209,23 +206,15 @@ export function TabSwitcher(): ReactElement | null {
 
   const activateCandidate = useCallback(
     (candidate: SwitchCandidate): void => {
-      // 切回 agent 会话时，若该会话上次开着预览 Tab 则一并重建并回到上次视图
-      const restore = candidate.type === 'agent'
-        ? buildOpenTabRestore(
-            candidate.id,
-            store.get(sessionViewStateMapAtom),
-            store.get(previewFileMapAtom),
-          )
-        : undefined
       const nextTab = openTab(tabsRef.current, {
         type: candidate.type,
         sessionId: candidate.id,
         title: candidate.title,
-      }, restore)
+      })
       setTabs(nextTab.tabs)
       setActiveTabId(nextTab.activeTabId)
-      // MRU/起始定位按会话 ID 归一化：即使 restore 后激活的是预览 Tab，
-      // 也以 candidate.id（会话 ID）记账，保证与候选列表对齐。
+      // MRU/起始定位按会话 ID 归一化：激活会话后以 candidate.id（会话 ID）记账，
+      // 保证与候选列表对齐。
       activeSessionIdRef.current = candidate.id
       setTabMru((prev) => {
         const next = promoteTabMru(prev, candidate.id)

@@ -12,6 +12,8 @@ declare global {
   var __proferElectronTestHooks: {
     createdWindows: Array<{ destroyed: boolean; visible: boolean; opts: Record<string, unknown> }>
     registeredAccelerators: string[]
+    exposedApi: Record<string, unknown>
+    ipcRendererInvoke: ((channel: string, ...args: unknown[]) => Promise<unknown>) | null
     reset: () => void
   }
 }

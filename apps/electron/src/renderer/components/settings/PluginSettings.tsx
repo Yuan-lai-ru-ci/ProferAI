@@ -1,5 +1,5 @@
 import { PluginCredentialField } from '@/components/plugins/PluginCredentialField'
-import { PROFER_PLUGIN_PERMISSION_LABELS } from '@profer/plugin-api'
+import { allowsPluginPagePlacement, PROFER_PLUGIN_PERMISSION_LABELS } from '@profer/plugin-api'
 import { installedPluginsAtom } from '@/atoms/plugin-system'
 import { usePluginPage } from '@/hooks/usePluginPage'
 import * as React from 'react'
@@ -10,11 +10,19 @@ import type { ProferInstalledPlugin } from '@profer/plugin-api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SettingsCard, SettingsSection } from './primitives'
 
 function formatInstalledAt(timestamp: number): string {
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(timestamp))
 }
+
+const PAGE_PLACEMENT_OPTIONS: Array<{ value: 'default' | 'sidebar' | 'tab' | 'hidden'; label: string }> = [
+  { value: 'default', label: '按插件声明' },
+  { value: 'sidebar', label: '左侧栏' },
+  { value: 'tab', label: '顶栏' },
+  { value: 'hidden', label: '隐藏（静默生效）' },
+]
 
 export function PluginSettings(): React.ReactElement {
   const [plugins, setPlugins] = useAtom(installedPluginsAtom)
@@ -92,7 +100,7 @@ export function PluginSettings(): React.ReactElement {
   }
 
   const openPage = (plugin: ProferInstalledPlugin, pageId: string, title: string): void => {
-    void openPluginPage(plugin.manifest.id, pageId, title).catch((error: unknown) => toast.error(String(error)))
+    void openPluginPage(plugin.manifest.id, pageId, title, undefined, 'settings').catch((error: unknown) => toast.error(String(error)))
   }
   const changePermission = async (pluginId: string, revoke = false): Promise<void> => {
     setBusyKey(`permission-${pluginId}`)
@@ -101,6 +109,20 @@ export function PluginSettings(): React.ReactElement {
       else await window.electronAPI.authorizePlugin(pluginId)
       await refresh()
     } catch (error) { toast.error(error instanceof Error ? error.message : '权限操作失败') }
+    finally { setBusyKey(null) }
+  }
+  const changePagePlacement = async (plugin: ProferInstalledPlugin, pageId: string, value: string): Promise<void> => {
+    setBusyKey(`placement-${plugin.manifest.id}-${pageId}`)
+    try {
+      const preference = value === 'default' ? null : (value as 'sidebar' | 'tab' | 'hidden')
+      const result = await window.electronAPI.setPluginPagePlacement(plugin.manifest.id, pageId, preference)
+      if (!result.ok) {
+        toast.error('入口位置更新失败', { description: result.message })
+        return
+      }
+      toast.success(result.message)
+      await refresh()
+    } catch (error) { toast.error(error instanceof Error ? error.message : '入口位置更新失败') }
     finally { setBusyKey(null) }
   }
   return (
@@ -171,6 +193,9 @@ export function PluginSettings(): React.ReactElement {
             <div className="space-y-3">
               {plugins.map((plugin) => {
                 const pluginBusy = busyKey?.includes(plugin.manifest.id) ?? false
+                const enabledBusy = busyKey !== null
+                const settingsPages = (plugin.manifest.contributes.pages ?? []).filter((page) => allowsPluginPagePlacement(page, 'settings'))
+                const surfacePages = (plugin.manifest.contributes.pages ?? []).filter((page) => allowsPluginPagePlacement(page, 'sidebar') || allowsPluginPagePlacement(page, 'tab'))
                 return (
                   <SettingsCard key={plugin.manifest.id} divided={false} className="p-4">
                     <div className="flex flex-wrap items-start justify-between gap-4">
@@ -208,14 +233,40 @@ export function PluginSettings(): React.ReactElement {
                         </Button>
                       </div>
                     </div>
-                    {plugin.enabled && (plugin.manifest.contributes.pages?.length ?? 0) > 0 && (
+                    {plugin.enabled && settingsPages.length > 0 && (
                       <div className="mt-4 flex flex-wrap gap-2 border-t border-surface-border/40 pt-3">
-                        {plugin.manifest.contributes.pages?.map((page) => (
+                        {settingsPages.map((page) => (
                           <Button key={page.id} type="button" variant="outline" size="sm" onClick={() => openPage(plugin, page.id, page.title)}>
                             {page.title}
                             <ExternalLink aria-hidden="true" />
                           </Button>
                         ))}
+                      </div>
+                    )}
+                    {plugin.enabled && surfacePages.length > 0 && (
+                      <div className="mt-3 space-y-2 border-t border-surface-border/40 pt-3">
+                        <p className="text-xs text-muted-foreground">入口位置：只能收窄插件声明的入口；隐藏后插件静默生效。</p>
+                        {surfacePages.map((page) => {
+                          const options = PAGE_PLACEMENT_OPTIONS.filter((option) =>
+                            option.value === 'default' || option.value === 'hidden' || allowsPluginPagePlacement(page, option.value))
+                          return (
+                            <div key={page.id} className="flex items-center justify-between gap-3">
+                              <span className="text-sm text-foreground">{page.title}</span>
+                              <Select
+                                value={plugin.pagePlacements?.[page.id] ?? 'default'}
+                                disabled={enabledBusy}
+                                onValueChange={(value) => void changePagePlacement(plugin, page.id, value)}
+                              >
+                                <SelectTrigger className="h-8 w-44 text-xs" aria-label={`${page.title} 的入口位置`}>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {options.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )
+                        })}
                       </div>
                     )}
                   </SettingsCard>

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "com.profer.floating-window-demo",
+  "name": "悬浮窗口验收台",
+  "version": "1.0.0",
+  "description": "验收插件平台的全局悬浮窗口能力：权限边界、窗口控制、运行形态识别、多实例共存与生命周期销毁。",
+  "publisher": "Profer 内置验收样例",
+  "permissions": ["pluginStorage", "window.floating"],
+  "contributes": {
+    "pages": [
+      {
+        "id": "console",
+        "title": "悬浮窗口验收台",
+        "entry": "index.html",
+        "icon": "icon.svg",
+        "placements": ["settings", "sidebar", "tab", "floating"],
+        "floatingWindow": {
+          "width": 320,
+          "height": 300,
+          "minWidth": 48,
+          "minHeight": 48,
+          "maxWidth": 800,
+          "maxHeight": 800,
+          "transparent": true,
+          "frame": false,
+          "alwaysOnTop": true,
+          "skipTaskbar": true,
+          "resizable": true,
+          "movable": true,
+          "focusable": true,
+          "visibleOnAllWorkspaces": true,
+          "clickThrough": false
+        }
+      }
+    ]
+  }
+}

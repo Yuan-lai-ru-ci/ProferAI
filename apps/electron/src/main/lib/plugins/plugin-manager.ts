@@ -16,9 +16,10 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
+import { isAbsolute, extname, join, normalize, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
+  allowsPluginPagePlacement,
   PROFER_PLUGIN_ID_PATTERN,
   PROFER_PLUGIN_MANIFEST_FILE,
   PROFER_PLUGIN_PAGE_ID_PATTERN,
@@ -28,6 +29,8 @@ import {
   type ProferPluginManifest,
   type ProferPluginOperationResult,
   type ProferPluginPageContribution,
+  type ProferPluginPagePlacement,
+  type ProferPluginPagePlacementPreference,
   type ProferPluginPermission,
 } from '@profer/plugin-api'
 import { getPluginDataDir, getPluginsDir, getPluginsIndexPath } from '../config-paths'
@@ -53,6 +56,19 @@ const WINDOWS_RESERVED_NAME_PATTERN = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 const SAFE_RELATIVE_PATH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
 const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm'])
+const ALLOWED_ICON_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.ico'])
+const ICON_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+}
+/** 图标进入主窗口内存，文件再大也没有意义，直接设上限。 */
+const MAX_ICON_BYTES = 256 * 1024
+const PAGE_PLACEMENT_PREFERENCES = new Set(['sidebar', 'tab', 'hidden'])
 const COMPARATOR_PATTERN = /^(>=|<=|>|<|=)?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/
 
 function canonicalizeScopePrefix(value: unknown): string {
@@ -68,6 +84,8 @@ interface PluginIndexEntry {
   enabled: boolean
   installedAt: number
   updatedAt: number
+  /** 用户对页面宿主入口的摆放偏好，只收窄不放大清单声明。 */
+  pagePlacements?: Record<string, ProferPluginPagePlacementPreference>
 }
 
 interface PluginIndexFile {
@@ -110,6 +128,19 @@ function defaultIndex(): PluginIndexFile {
   return { schemaVersion: 1, plugins: {} }
 }
 
+function readPagePlacements(value: unknown): Record<string, ProferPluginPagePlacementPreference> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length > 100) return undefined
+  const result: Record<string, ProferPluginPagePlacementPreference> = {}
+  for (const [pageId, preference] of entries) {
+    if (!PROFER_PLUGIN_PAGE_ID_PATTERN.test(pageId)) continue
+    if (typeof preference !== 'string' || !PAGE_PLACEMENT_PREFERENCES.has(preference)) continue
+    result[pageId] = preference as ProferPluginPagePlacementPreference
+  }
+  return Object.keys(result).length > 0 ? result : undefined
+}
+
 function readIndex(): PluginIndexFile {
   const raw = readJsonFileSafe<Partial<PluginIndexFile>>(getPluginsIndexPath())
   if (!raw || raw.schemaVersion !== 1 || !raw.plugins || typeof raw.plugins !== 'object') return defaultIndex()
@@ -117,10 +148,12 @@ function readIndex(): PluginIndexFile {
   for (const [id, value] of Object.entries(raw.plugins)) {
     if (!PROFER_PLUGIN_ID_PATTERN.test(id) || !value || typeof value !== 'object') continue
     const entry = value as Partial<PluginIndexEntry>
+    const pagePlacements = readPagePlacements(entry.pagePlacements)
     plugins[id] = {
       enabled: entry.enabled === true,
       installedAt: typeof entry.installedAt === 'number' ? entry.installedAt : Date.now(),
       updatedAt: typeof entry.updatedAt === 'number' ? entry.updatedAt : Date.now(),
+      ...(pagePlacements && { pagePlacements }),
     }
   }
   return { schemaVersion: 1, plugins }
@@ -185,6 +218,39 @@ function assertSafeRelativePath(value: unknown, label: string): string {
   return normalized.replace(/^\.\//, '')
 }
 
+function parseFloatingWindowConfig(raw: unknown, pageId: string): ProferPluginPageContribution['floatingWindow'] {
+  if (!isRecord(raw)) throw new Error(`页面 ${pageId} 的 floatingWindow 必须是对象`)
+  const clampDimension = (value: unknown, label: string, min: number, max: number): number | undefined => {
+    if (value === undefined) return undefined
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`页面 ${pageId} 的 floatingWindow.${label} 必须是有限数字`)
+    return Math.round(Math.min(max, Math.max(min, value)))
+  }
+  const bool = (value: unknown, label: string): boolean | undefined => {
+    if (value === undefined) return undefined
+    if (typeof value !== 'boolean') throw new Error(`页面 ${pageId} 的 floatingWindow.${label} 必须是布尔值`)
+    return value
+  }
+  const config: ProferPluginPageContribution['floatingWindow'] = {
+    width: clampDimension(raw.width, 'width', 48, 1920),
+    height: clampDimension(raw.height, 'height', 48, 1920),
+    minWidth: clampDimension(raw.minWidth, 'minWidth', 48, 1920),
+    minHeight: clampDimension(raw.minHeight, 'minHeight', 48, 1920),
+    maxWidth: clampDimension(raw.maxWidth, 'maxWidth', 48, 1920),
+    maxHeight: clampDimension(raw.maxHeight, 'maxHeight', 48, 1920),
+    transparent: bool(raw.transparent, 'transparent'),
+    frame: bool(raw.frame, 'frame'),
+    alwaysOnTop: bool(raw.alwaysOnTop, 'alwaysOnTop'),
+    skipTaskbar: bool(raw.skipTaskbar, 'skipTaskbar'),
+    resizable: bool(raw.resizable, 'resizable'),
+    movable: bool(raw.movable, 'movable'),
+    showOnStart: bool(raw.showOnStart, 'showOnStart'),
+    focusable: bool(raw.focusable, 'focusable'),
+    visibleOnAllWorkspaces: bool(raw.visibleOnAllWorkspaces, 'visibleOnAllWorkspaces'),
+    clickThrough: bool(raw.clickThrough, 'clickThrough'),
+  }
+  return Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined))
+}
+
 function parsePage(raw: unknown, index: number): ProferPluginPageContribution {
   if (!isRecord(raw)) throw new Error(`contributes.pages[${index}] 必须是对象`)
   const id = typeof raw.id === 'string' ? raw.id.trim() : ''
@@ -197,12 +263,22 @@ function parsePage(raw: unknown, index: number): ProferPluginPageContribution {
   let placements: ProferPluginPageContribution['placements']
   if (raw.placements !== undefined) {
     if (!Array.isArray(raw.placements)) throw new Error(`页面 ${id} 的 placements 必须是数组`)
-    const allowed = new Set(['settings', 'tab', 'sidebar', 'panel'])
-    const parsed = raw.placements.filter((item): item is 'settings' | 'tab' | 'sidebar' | 'panel' => typeof item === 'string' && allowed.has(item))
+    const allowed = new Set(['settings', 'tab', 'sidebar', 'floating'])
+    const parsed = raw.placements.filter((item): item is 'settings' | 'tab' | 'sidebar' | 'floating' => typeof item === 'string' && allowed.has(item))
     if (parsed.length !== raw.placements.length) throw new Error(`页面 ${id} 包含未知 placement`)
     placements = [...new Set(parsed)]
   }
-  return { id, title, entry, ...(placements && { placements }) }
+  let floatingWindow: ProferPluginPageContribution['floatingWindow']
+  if (raw.floatingWindow !== undefined) {
+    floatingWindow = parseFloatingWindowConfig(raw.floatingWindow, id)
+  }
+  let icon: string | undefined
+  if (raw.icon !== undefined) {
+    icon = assertSafeRelativePath(raw.icon, `页面 ${id} 的 icon`)
+    const iconExtension = extname(icon).toLowerCase()
+    if (!ALLOWED_ICON_EXTENSIONS.has(iconExtension)) throw new Error(`页面 ${id} 的 icon 必须是图片文件（png/jpg/webp/gif/svg/ico）`)
+  }
+  return { id, title, entry, ...(placements && { placements }), ...(floatingWindow && { floatingWindow }), ...(icon && { icon }) }
 }
 
 export function parsePluginManifest(raw: unknown): ProferPluginManifest {
@@ -366,6 +442,14 @@ function scanPackage(root: string): { maxRelativePathLength: number } {
   return { maxRelativePathLength }
 }
 
+function assertPackageFileExists(root: string, relativePath: string, message: string): void {
+  const target = resolve(root, relativePath)
+  const rel = relative(root, target)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel) || !existsSync(target) || !statSync(target).isFile() || lstatSync(target).isSymbolicLink()) {
+    throw new Error(message)
+  }
+}
+
 function validatePackage(sourceRoot: string): ValidatedPluginPackage {
   const root = resolvePackageRoot(sourceRoot)
   if (!root) throw new Error(`插件包根目录必须包含 ${PROFER_PLUGIN_MANIFEST_FILE}`)
@@ -378,11 +462,8 @@ function validatePackage(sourceRoot: string): ValidatedPluginPackage {
   }
   const manifest = parsePluginManifest(raw)
   for (const page of manifest.contributes.pages ?? []) {
-    const entry = resolve(root, page.entry)
-    const rel = relative(root, entry)
-    if (!rel || rel.startsWith('..') || isAbsolute(rel) || !existsSync(entry) || !statSync(entry).isFile() || lstatSync(entry).isSymbolicLink()) {
-      throw new Error(`页面入口不存在或不安全：${page.entry}`)
-    }
+    assertPackageFileExists(root, page.entry, `页面入口不存在或不安全：${page.entry}`)
+    if (page.icon) assertPackageFileExists(root, page.icon, `页面图标不存在或不安全：${page.icon}`)
   }
   return { root, manifest, maxRelativePathLength }
 }
@@ -465,6 +546,7 @@ export function getInstalledPlugin(pluginId: string): ProferInstalledPlugin | nu
       enabled: state?.enabled ?? false,
       installedAt: state?.installedAt ?? timestamp,
       updatedAt: state?.updatedAt ?? timestamp,
+      ...(state?.pagePlacements && { pagePlacements: state.pagePlacements }),
     }
   } catch (error) {
     console.warn(`[插件] 跳过无效插件 ${pluginId}:`, error)
@@ -563,10 +645,12 @@ function installValidatedPackage(validated: ValidatedPluginPackage, replace = fa
     published = true
     const now = Date.now()
     const index = readIndex()
+    const existingPlacements = index.plugins[validated.manifest.id]?.pagePlacements
     index.plugins[validated.manifest.id] = {
       enabled: existing?.enabled ?? true,
       installedAt: existing?.installedAt ?? now,
       updatedAt: now,
+      ...(existingPlacements && { pagePlacements: existingPlacements }),
     }
     writeIndex(index)
     // 索引写入成功后再清理旧版本；清理失败不影响已经完成的更新。
@@ -611,10 +695,12 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): ProferPlug
   if (!plugin) return fail('插件不存在')
   const index = readIndex()
   const now = Date.now()
+  const existingEntry = index.plugins[pluginId]
   index.plugins[pluginId] = {
     enabled,
-    installedAt: index.plugins[pluginId]?.installedAt ?? plugin.installedAt,
+    installedAt: existingEntry?.installedAt ?? plugin.installedAt,
     updatedAt: now,
+    ...(existingEntry?.pagePlacements && { pagePlacements: existingEntry.pagePlacements }),
   }
   writeIndex(index)
   const updated = getInstalledPlugin(pluginId) ?? undefined
@@ -662,12 +748,61 @@ export async function openPluginsFolder(): Promise<void> {
   await shell.openPath(getPluginsDir())
 }
 
-export function resolvePluginPage(pluginId: string, pageId: string): { plugin: ProferInstalledPlugin; page: ProferPluginPageContribution; root: string } {
+export function resolvePluginPage(pluginId: string, pageId: string, placement?: ProferPluginPagePlacement): { plugin: ProferInstalledPlugin; page: ProferPluginPageContribution; root: string } {
   const plugin = getInstalledPlugin(pluginId)
   if (!plugin || !plugin.enabled) throw new Error('插件不存在或未启用')
   const page = plugin.manifest.contributes.pages?.find((candidate) => candidate.id === pageId)
   if (!page) throw new Error('插件页面不存在')
+  if (placement && !allowsPluginPagePlacement(page, placement)) throw new Error('插件页面未声明此入口')
   return { plugin, page, root: realpathSync(join(getPluginsDir(), pluginId)) }
+}
+
+/** 用户摆放偏好只允许在清单声明的入口范围内收窄；preference 为 null 时恢复默认。 */
+export function setPluginPagePlacement(pluginId: string, pageId: string, preference: ProferPluginPagePlacementPreference | null): ProferPluginOperationResult {
+  const plugin = getInstalledPlugin(pluginId)
+  if (!plugin) return fail('插件不存在')
+  const page = plugin.manifest.contributes.pages?.find((candidate) => candidate.id === pageId)
+  if (!page) return fail('插件页面不存在')
+  if (preference && preference !== 'hidden' && !allowsPluginPagePlacement(page, preference)) return fail('插件页面未声明此入口')
+  const index = readIndex()
+  const state = index.plugins[pluginId]
+  if (!state) return fail('插件不存在')
+  const pagePlacements = { ...(state.pagePlacements ?? {}) }
+  if (preference === null) delete pagePlacements[pageId]
+  else pagePlacements[pageId] = preference
+  index.plugins[pluginId] = {
+    ...state,
+    ...(Object.keys(pagePlacements).length > 0 ? { pagePlacements } : { pagePlacements: undefined }),
+  }
+  writeIndex(index)
+  const updated = getInstalledPlugin(pluginId) ?? undefined
+  emitChanged()
+  return ok('updated', `已更新「${page.title}」的入口位置`, updated)
+}
+
+/** 读取页面图标供主窗口渲染；只读访问，停用插件的设置卡片也能显示图标。 */
+export function readPluginPageIcon(pluginId: string, pageId: string): { mime: string; dataBase64: string } | null {
+  const plugin = getInstalledPlugin(pluginId)
+  if (!plugin) throw new Error('插件不存在')
+  const page = plugin.manifest.contributes.pages?.find((candidate) => candidate.id === pageId)
+  if (!page) throw new Error('插件页面不存在')
+  if (!page.icon) return null
+  const root = realpathSync(join(getPluginsDir(), pluginId))
+  const target = resolve(root, page.icon)
+  const rel = relative(root, target)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null
+  try {
+    if (!existsSync(target) || lstatSync(target).isSymbolicLink() || !statSync(target).isFile()) return null
+    const realTarget = realpathSync(target)
+    if (!realTarget.startsWith(`${root}${sep}`)) return null
+    const stats = statSync(realTarget)
+    if (stats.size > MAX_ICON_BYTES) return null
+    const mime = ICON_MIME_TYPES[extname(realTarget).toLowerCase()]
+    if (!mime) return null
+    return { mime, dataBase64: readFileSync(realTarget).toString('base64') }
+  } catch {
+    return null
+  }
 }
 
 /** 供插件协议在每次请求时重新解析根目录，更新插件后不会继续读取旧目录。 */

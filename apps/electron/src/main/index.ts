@@ -154,6 +154,7 @@ import { handleProferFileRequest } from './lib/local-file-protocol'
 import { handleProferSkinRequest } from './lib/skin-service'
 import { disposeAgentPreviewRenderer } from './lib/agent-preview-renderer'
 import { pluginViewManager } from './lib/plugins/plugin-view-manager'
+import { pluginFloatingWindowManager } from './lib/plugins/plugin-floating-window'
 import { registerPluginIpcHandlers } from './lib/plugins/plugin-ipc'
 
 // 处理 EPIPE 错误：当 stdout/stderr 管道被关闭时（如 electronmon 重启），忽略写入错误
@@ -1200,6 +1201,7 @@ app.on('before-quit', () => {
   disposeLarkMcpService()
   browserController.dispose()
   pluginViewManager.dispose()
+  pluginFloatingWindowManager.dispose()
   disposeAgentPreviewRenderer()
   stopAllGenerations()
   // 最后兜底：扫描并强杀所有孤儿 claude-agent-sdk 子进程（Issue #357）

@@ -7,7 +7,9 @@ import { contextBridge, ipcRenderer } from 'electron'
 import {
   PROFER_PLUGIN_HOST_CHANNELS,
   type ProferPluginContext,
+  type ProferPluginError,
   type ProferPluginHostApi,
+  type ProferPluginRpcResponse,
 } from '@profer/plugin-api'
 
 const context = (): Promise<ProferPluginContext> => ipcRenderer.invoke(PROFER_PLUGIN_HOST_CHANNELS.GET_CONTEXT)
@@ -60,13 +62,20 @@ const call = async <T>(operation: string, payload?: unknown): Promise<T> => {
     requestId: payloadRequestId ?? crypto.randomUUID().replaceAll('-', '_'),
     operation,
     payload,
-  }) as { ok: boolean; requestId: string; operation: string; value?: T; error?: { code: string; message: string } }
+  }) as ProferPluginRpcResponse<T> | null
   if (!response || response.ok !== true) {
-    const error = response?.error
-    const failure = new Error(error?.message ?? '插件宿主操作失败') as Error & { code?: string; requestId?: string; operation?: string }
-    failure.code = error?.code
-    failure.requestId = response?.requestId
-    failure.operation = response?.operation
+    // contextBridge 跨世界传递 Error 实例会丢失自定义属性（code 等），
+    // 因此以 ProferPluginError 纯对象 reject，保证错误契约完整到达插件页面。
+    const error = response?.ok === false ? response.error : undefined
+    const failure: ProferPluginError = {
+      name: 'ProferPluginError',
+      code: error?.code ?? 'PLUGIN_INTERNAL_ERROR',
+      message: error?.message ?? '插件宿主操作失败',
+      retryable: error?.retryable ?? false,
+      requestId: response?.requestId ?? 'unknown',
+      operation: response?.operation ?? operation,
+    }
+    if (error?.details) failure.details = error.details
     throw failure
   }
   return response.value as T
@@ -115,6 +124,18 @@ const api: ProferPluginHostApi = {
     get: <T = unknown>(key: string) => ipcRenderer.invoke(PROFER_PLUGIN_HOST_CHANNELS.STORAGE_GET, key) as Promise<T | null>,
     set: (key: string, value: unknown) => ipcRenderer.invoke(PROFER_PLUGIN_HOST_CHANNELS.STORAGE_SET, key, value) as Promise<void>,
     delete: (key: string) => ipcRenderer.invoke(PROFER_PLUGIN_HOST_CHANNELS.STORAGE_DELETE, key) as Promise<void>,
+  },
+  window: {
+    floating: {
+      open: () => call('window.floating.open'),
+      show: () => call('window.floating.show'),
+      hide: () => call('window.floating.hide'),
+      close: () => call('window.floating.close'),
+      isVisible: () => call('window.floating.is-visible'),
+      getBounds: () => call('window.floating.get-bounds'),
+      setBounds: (bounds) => call('window.floating.set-bounds', bounds),
+      setIgnoreMouseEvents: (ignore) => call('window.floating.set-ignore-mouse-events', { ignore }),
+    },
   },
 }
 

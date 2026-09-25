@@ -64,7 +64,8 @@ import { evaluateAutoSendTurn } from '@/lib/agent-autosend-turn'
 import { rollbackRejectedAgentRunState } from '@/lib/agent-stream-state-cleanup'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { previewPanelOpenMapAtom, autoPreviewEnabledAtom, quotedSelectionMapAtom, agentInterruptionMapAtom, getAgentInterruptionTone } from '@/atoms/preview-atoms'
+import { autoPreviewEnabledAtom, previewFileMapAtom, quotedSelectionMapAtom, agentInterruptionMapAtom, getAgentInterruptionTone } from '@/atoms/preview-atoms'
+import { openFilePreviewTabForSession } from '@/components/diff/preview-opener'
 import type { AgentInterruptionState } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
@@ -111,10 +112,6 @@ import {
   agentQueueAutoSendMapAtom,
   finalizeStreamingActivities,
   workspaceCapabilitiesVersionAtom,
-  agentSideExplorationMapAtom,
-  agentSidePanelOpenAtom,
-  agentDiffPanelTabAtom,
-  getExplorationSidePanelTab,
 } from '@/atoms/agent-atoms'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import { generateSummary } from '@profer/project-core'
@@ -122,10 +119,13 @@ import { isTaskProgressTool } from './task-progress'
 import type { AgentContextStatus } from '@/atoms/agent-atoms'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { activeViewAtom } from '@/atoms/active-view'
+import { activeTabIdAtom } from '@/atoms/tab-atoms'
+import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { channelsAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
+import { ExplorationBranchBar } from './ExplorationBranchBar'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
@@ -159,7 +159,7 @@ import {
 import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message-queue'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
-import { ownsExplorationShortcut, resolveForkActionAvailability } from '@/lib/exploration-session'
+import { resolveForkActionAvailability } from '@/lib/exploration-session'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -518,11 +518,9 @@ function ToolbarGraphButton({ onClick, sessionId }: { onClick: () => void; sessi
 
 export interface AgentViewProps {
   sessionId: string
-  /** 右侧探索 Tab 中嵌入的 Agent：隐藏重复 header，并禁止继续嵌套探索。 */
-  embedded?: boolean
 }
 
-export function AgentView({ sessionId, embedded = false }: AgentViewProps): React.ReactElement {
+export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
   const persistedSDKMessagesRef = React.useRef<SDKMessage[]>([])
   persistedSDKMessagesRef.current = persistedSDKMessages
@@ -645,9 +643,6 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const sessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
-  const setSideExplorationMap = useSetAtom(agentSideExplorationMapAtom)
-  const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
-  const setSidePanelTabMap = useSetAtom(agentDiffPanelTabAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const agentPresetsMap = useAtomValue(agentPresetsAtom)
   const loadedPresetCaches = useAtomValue(agentPresetsLoadedAtom)
@@ -665,10 +660,10 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     () => sessions.find((s) => s.id === sessionId),
     [sessions, sessionId],
   )
-  const sidePanelTabs = useAtomValue(agentDiffPanelTabAtom)
-  const shortcutOwnerSessionId = sessionMeta?.explorationParentSessionId ?? sessionId
-  const activeSidePanelTab = sidePanelTabs.get(shortcutOwnerSessionId)
-  const ownsGlobalShortcuts = ownsExplorationShortcut(embedded, sessionId, activeSidePanelTab)
+  // 全局快捷键归属：顶栏激活 Tab 即本会话时才响应（组合分屏时两个 AgentView 同屏挂载，
+  // 由 activeTabId 仲裁，不再需要旧侧面板 embedded 互斥）。
+  const activeTabId = useAtomValue(activeTabIdAtom)
+  const ownsGlobalShortcuts = activeTabId === sessionId
   const hasSessionMeta = Boolean(sessionMeta)
   // 1.6.2 每会话「队列自动发送」开关：权威来源是会话 meta（缺省开/重启保留）；map 仅为运行时缓存，
   // 首次/切会话且 meta 有值时由下方 effect 填充。用户手动关闭后会持久化为 false。
@@ -2940,16 +2935,8 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         explorationSourceLabel: '这条 Agent 回复',
       })
       setAgentSessions((prev) => prev.some((item) => item.id === meta.id) ? prev : [meta, ...prev])
-      setSideExplorationMap((prev) => {
-        const openBranches = prev.get(sessionId) ?? []
-        const next = new Map(prev)
-        next.set(sessionId, openBranches.some((item) => item.sessionId === meta.id)
-          ? openBranches
-          : [...openBranches, { sessionId: meta.id, sourceMessageId: upToMessageUuid, sourceLabel: '这条 Agent 回复' }])
-        return next
-      })
-      setSidePanelOpen(true)
-      setSidePanelTabMap((prev) => new Map(prev).set(sessionId, getExplorationSidePanelTab(meta.id)))
+      // 分支成为父会话上下文内的顶栏 Tab：激活分支，并自动与父会话并排（焦点在分支）。
+      openExplorationBranchTab(store, sessionId, { sessionId: meta.id, title: meta.title || '探索分支' }, { autoGroup: true })
       toast.success('已创建探索分支', {
         description: '分支继承此处之前的完整上下文；结论可带回主线。',
       })
@@ -2963,11 +2950,12 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
         description: friendlyDesc,
       })
     }
-  }, [sessionId, sessionAgentRuntime, setAgentSessions, setSideExplorationMap, setSidePanelOpen, setSidePanelTabMap])
+  }, [sessionId, sessionAgentRuntime, setAgentSessions, store])
 
   /** 回复操作栏两个分叉类动作的可用性：fork 面向所有 runtime，探索目前仅 Pi。 */
+  const isExplorationBranch = !!sessionMeta?.explorationParentSessionId
   const { canFork, canExplore } = resolveForkActionAvailability({
-    embedded,
+    isBranch: isExplorationBranch,
     agentRuntime: sessionAgentRuntime,
   })
 
@@ -3068,17 +3056,14 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     (allAskUserRequests.get(sessionId)?.length ?? 0) > 0 ||
     (allExitPlanRequests.get(sessionId)?.length ?? 0) > 0
 
-  // ===== 预览面板状态（toggle 快捷键，分屏布局在 MainArea；显示选项已迁至设置页） =====
-  const setPreviewOpenMap = useSetAtom(previewPanelOpenMapAtom)
+  // ===== 预览快捷键（Tab 化：打开/聚焦当前文件的预览 Tab） =====
+  const previewFileMap = useAtomValue(previewFileMapAtom)
 
   const togglePreviewPanel = React.useCallback(() => {
-    setPreviewOpenMap((prev) => {
-      const m = new Map(prev)
-      const current = m.get(sessionId) ?? false
-      m.set(sessionId, !current)
-      return m
-    })
-  }, [sessionId, setPreviewOpenMap])
+    const file = previewFileMap.get(sessionId)
+    if (!file) return
+    openFilePreviewTabForSession(sessionId, file)
+  }, [previewFileMap, sessionId])
 
   React.useEffect(() => {
     if (!ownsGlobalShortcuts) return
@@ -3092,7 +3077,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   useLoadVoiceDictationSettings()
 
   const taskGraphEnabled = Boolean(
-    !embedded
+    !isExplorationBranch
     && sessionBoundPreset
     && !isAgentPresetToolGroupDisabled(sessionBoundPreset.disabledToolGroups, 'task-graph'),
   )
@@ -3262,12 +3247,11 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     <>
     <AgentSessionProvider sessionId={sessionId}>
       <div data-profer-navigation-region="conversation" data-agent-session-id={sessionId} tabIndex={-1} className="agent-conversation flex h-full min-h-0 min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
-        {/* 探索分支已由右侧 Tab 标明归属，避免嵌入面板重复渲染全局 header。 */}
-        {!embedded && (
-          <div className="shrink-0">
-            <AgentHeader sessionId={sessionId} />
-          </div>
-        )}
+        <div className="shrink-0">
+          <AgentHeader sessionId={sessionId} />
+        </div>
+        {/* 探索分支：来源标注 + 带回主线（原侧面板分支条，随分支 Tab 化迁入） */}
+        {isExplorationBranch && <ExplorationBranchBar branchSessionId={sessionId} />}
         <div className="shrink-0">
           <GoalStatusBar sessionId={sessionId} />
         </div>
@@ -3294,7 +3278,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
           onLoadEarlierHistory={handleLoadEarlierHistory}
           historyMoreAvailable={historyHasMore}
           historyLoadingEarlier={historyLoading}
-          explorationEnabled={!embedded}
+          explorationEnabled={!isExplorationBranch}
         />
 
         {/* 权限请求横幅 */}

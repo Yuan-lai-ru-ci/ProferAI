@@ -1,4 +1,3 @@
-import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
 /**
  * expanded-sidebar.tsx — 展开态完整侧边栏
  *
@@ -6,6 +5,7 @@ import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
  */
 
 import * as React from 'react'
+import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
 import { PanelLeftClose, Plus, Search, FolderOpen, LogIn, Archive, ArchiveRestore, ArrowLeft, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -17,6 +17,7 @@ import { ConversationItem, AgentSessionItem, RelatedChildSessionItem, AgentProje
 import { WORKSPACE_SORT_LABEL } from './sidebar-utils'
 import { getRelatedSessionSummary, getSessionTreeStatus, treeContainsSessionId } from './session-tree'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
+import { useCloseTab } from '@/hooks/useCloseTab'
 import type { SidebarModel } from './use-left-sidebar'
 import { TEAM_WORKSPACE_UI_ENABLED } from '@/lib/product-feature-flags'
 
@@ -26,6 +27,9 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     setSidebarCollapsed,
     isClassic,
     mode,
+    conversations,
+    agentSessions,
+    tabs,
     handleNewAgentSession,
     handleNewConversation,
     setSearchDialogOpen,
@@ -103,7 +107,14 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     hasUpdate,
     hasEnvironmentIssues,
   } = s
-
+  const [sidebarSection, setSidebarSection] = React.useState<'pinned' | 'projects'>('projects')
+  const { requestClose: requestCloseTab } = useCloseTab()
+  const openSessionTabs = React.useMemo(() => tabs.filter((tab) => {
+    if (mode === 'chat') return tab.type === 'chat'
+    if (mode !== 'agent' || tab.type !== 'agent') return false
+    const session = agentSessions.find((item) => item.id === tab.sessionId)
+    return !session?.parentSessionId
+  }), [agentSessions, mode, tabs])
   return (
     <div className="relative h-full flex flex-col overflow-hidden">
       <SidebarWindowDragStrip
@@ -181,6 +192,62 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
       )}
 
       <PluginSidebarEntries />
+      {/* 当前会话：直接复用现有会话行组件，不另造一套 Tab 行。 */}
+      <div className="flex-none px-2 pt-2 pb-1 titlebar-no-drag">
+        <div className="mb-1 flex items-center justify-between px-2">
+          <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-foreground/40">当前会话</span>
+          <span className="text-[10px] tabular-nums text-foreground/30">{openSessionTabs.length}</span>
+        </div>
+        <div className="sidebar-session-scroll -mr-2 flex max-h-[144px] flex-col gap-0.5 overflow-y-auto pr-2 scrollbar-thin">
+          {openSessionTabs.map((tab) => {
+            const conversation = tab.type === 'chat' ? conversations.find((item) => item.id === tab.sessionId) : null
+            const session = tab.type === 'agent' ? agentSessions.find((item) => item.id === tab.sessionId) : null
+            const active = tab.sessionId === activeSessionId
+            if (conversation) return (
+              <ConversationItem
+                key={tab.id}
+                conversation={conversation}
+                active={active}
+                streaming={streamingIds.has(conversation.id)}
+                showPinIcon={false}
+                hasDraft={conversationDraftMap.has(conversation.id)}
+                relativeTimeNow={relativeTimeNow}
+                onSelect={handleSelectConversation}
+                onRequestDelete={handleRequestDelete}
+                onRename={handleRename}
+                onRegenerateTitle={handleRegenerateConversationTitle}
+                onTogglePin={handleTogglePin}
+                onToggleArchive={handleToggleArchive}
+                onCloseTab={() => requestCloseTab(tab.id)}
+              />
+            )
+            if (session) return (
+              <AgentSessionItem
+                key={tab.id}
+                session={session}
+                active={active}
+                indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                showPinIcon={false}
+                hasDraft={agentDraftIds.has(session.id)}
+                leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
+                workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
+                relativeTimeNow={relativeTimeNow}
+                onSelect={handleSelectAgentSession}
+                onRequestDelete={handleRequestDelete}
+                onRequestMove={handleRequestMove}
+                onRename={handleAgentRename}
+                onRegenerateTitle={handleAgentRegenerateTitle}
+                onTogglePin={handleTogglePinAgent}
+                onToggleArchive={handleToggleArchiveAgent}
+                onMarkUnread={handleMarkUnread}
+                onCloseTab={() => requestCloseTab(tab.id)}
+              />
+            )
+            return null
+          })}
+        </div>
+      </div>
+
       {/* Chat 模式 active 视图：置顶 + 对话历史，结构与 Agent active 视图保持一致 */}
       {mode === 'chat' && viewMode === 'active' ? (
         <div className="flex-1 flex flex-col min-h-0">
@@ -190,7 +257,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                 置顶
               </div>
               <div
-                className="overflow-y-auto scrollbar-thin"
+                className="sidebar-session-scroll overflow-y-auto scrollbar-thin"
                 style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
               >
                 <div className="px-2">
@@ -253,13 +320,10 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
         </div>
       ) : mode === 'agent' && viewMode === 'active' ? (
         <div className="flex-1 flex flex-col min-h-0">
-          {pinnedAgentSessionTrees.length > 0 && (
-            <div className="pt-2 pb-1 flex-shrink-0 titlebar-no-drag">
-              <div className="pl-[18px] pr-3.5 pb-1 text-[13px] font-medium leading-[18px] text-foreground/40 select-none">
-                置顶
-              </div>
+          {sidebarSection === 'pinned' && pinnedAgentSessionTrees.length > 0 && (
+            <div className="order-2 pt-2 pb-1 flex-shrink-0 titlebar-no-drag">
               <div
-                className="overflow-y-auto scrollbar-thin"
+                className="sidebar-session-scroll overflow-y-auto scrollbar-thin"
                 style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
               >
                 <div className="px-2">
@@ -331,10 +395,25 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
             </div>
           )}
 
-          {/* 下区标题：项目历史 */}
-          <div className="px-2 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
-            <span className="ml-[4px] px-1.5 text-[13px] font-medium leading-[18px] text-foreground/40 select-none">项目</span>
-            <div className="flex items-center gap-0.5">
+          {/* 置顶 / 项目只控制下面这块索引，不影响上面的会话区。 */}
+          <div className="order-1 px-2 pt-2 pb-1 flex items-center justify-between flex-shrink-0 titlebar-no-drag">
+            <div className="flex items-center gap-1 rounded-[8px] bg-foreground/[0.04] p-0.5">
+              {(['pinned', 'projects'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={sidebarSection === value}
+                  onClick={() => setSidebarSection(value)}
+                  className={cn(
+                    'rounded-[6px] px-2 py-[1.5px] text-[12px] transition-colors',
+                    sidebarSection === value ? 'bg-background text-foreground shadow-sm' : 'text-foreground/40 hover:text-foreground/70',
+                  )}
+                >
+                  {value === 'pinned' ? '置顶' : '项目'}
+                </button>
+              ))}
+            </div>
+            {sidebarSection === 'projects' && <div className="flex items-center gap-0.5">
               {/* 项目排序切换：默认（创建时间）/ 最近 / 名称 三种方式循环 */}
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -380,11 +459,10 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                 </TooltipTrigger>
                 <TooltipContent side="top">新建项目</TooltipContent>
               </Tooltip>
-            </div>
+              </div>}
           </div>
 
-          {/* 下区：项目分组历史 */}
-          <div className="sidebar-session-scroll flex-1 overflow-y-auto px-2 pb-3 scrollbar-thin min-h-0 titlebar-no-drag">
+          <div className={cn('order-3 sidebar-session-scroll flex-1 overflow-y-auto px-2 pb-3 scrollbar-thin min-h-0 titlebar-no-drag', sidebarSection !== 'projects' && 'hidden')}>
             {creatingProject && (
               <div className="flex items-center gap-2 px-2 py-1.5 mb-1 rounded-md bg-foreground/[0.04]">
                 <FolderOpen size={14} className="flex-shrink-0 text-foreground/40" />
