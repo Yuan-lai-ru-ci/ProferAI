@@ -2827,6 +2827,13 @@
   }
 }
 
+/* region 容器（tabindex=-1）只作键盘空间导航的回退焦点目标，
+ * 自身不画焦点环；不压制时 Chromium 会用系统强调色画默认 outline，漏出主题。 */
+[data-profer-navigation-region][tabindex="-1"]:focus,
+[data-profer-navigation-region][tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
 /* 空间导航：键盘/手柄焦点必须独立于 hover 清晰可见。 */
 [data-profer-navigation-item]:focus-visible,
 [data-profer-navigation-region] button:focus-visible,
