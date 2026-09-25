@@ -18,6 +18,7 @@
 
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
+import type { TabItem } from './tab-atoms'
 
 // ===== 类型 =====
 
@@ -54,13 +55,12 @@ export type TabGroupsState = TabGroupState[]
  * 允许参与组合的 tab 类型白名单。
  * 判据是「这个标签有独立的内容身份、可以并排看」：
  * - agent / chat：会话；
- * - preview：文件（拖进分区 = 用一栏展示这个文件；落定时会关掉该会话的内联分屏，
- *   避免同一个文件在两处同时出现）；它拖出标签栏但**未落入投放区**时仍回落为原来的
- *   "转预览分屏"，两条路径共用同一个 pointerdown，由落点决定结果；
+ * - preview：文件（拖进分区 = 用一栏展示这个文件）；
+ * - browser：受管浏览器（Agent 推送时也会经 planAutoGroupWorkTab 自动与对话成组）；
  * - scratch / tutorial：单例固定 tab，不能有两份；
  * - plugin：PluginViewport 是独立宿主视口，同屏两份会冲突。
  */
-export const GROUP_ELIGIBLE_TAB_TYPES: readonly string[] = ['agent', 'chat', 'preview']
+export const GROUP_ELIGIBLE_TAB_TYPES: readonly string[] = ['agent', 'chat', 'preview', 'browser']
 
 /** 组合内分栏缝宽度，与浏览器/预览分栏保持一致 */
 export const GROUP_SPLIT_GAP = 8
@@ -214,6 +214,52 @@ export function fillGroupSide(
   const left = side === 'left' ? tabId : group.leftTabId
   const right = side === 'right' ? tabId : group.rightTabId
   return createGroup(left, right, tabId)
+}
+
+/**
+ * 程序化「自动并排」：把会话的工作 Tab（文件预览/浏览器）与对话摆成左右两栏。
+ *
+ * 只在用户正看着该会话对话、且对话与工作 Tab 都未入组时生效——用户自己摆过
+ * 布局（已有组合）时不改写，避免推送抢布局。返回新的组合列表；不满足条件返回 null。
+ */
+export function planAutoGroupWorkTab(input: {
+  groups: TabGroupsState
+  /** 会话 agent Tab 的 id（即 sessionId） */
+  agentTabId: string
+  /** 要并到右栏的工作 Tab id */
+  workTabId: string
+  activeTabId: string | null
+}): TabGroupsState | null {
+  const { groups, agentTabId, workTabId, activeTabId } = input
+  if (activeTabId !== agentTabId) return null
+  if (findTabGroup(groups, agentTabId)) return null
+  if (findTabGroup(groups, workTabId)) return null
+  const group = createGroup(agentTabId, workTabId, agentTabId)
+  return group ? replaceTabGroup(groups, null, group) : null
+}
+
+/**
+ * 「跟随最新文件」：自动预览连续产生新文件 Tab 时的布局规划。
+ * - 没有组合 → 新建（对话左、文件右），同 planAutoGroupWorkTab；
+ * - 已有「对话左 + 同会话预览右」组合 → 把右栏换成最新文件（焦点留在对话）；
+ * - 其余布局（用户自己摆的）→ 不动。
+ */
+export function planFollowWorkTab(input: {
+  groups: TabGroupsState
+  tabs: readonly TabItem[]
+  agentTabId: string
+  workTabId: string
+  activeTabId: string | null
+}): TabGroupsState | null {
+  const { groups, agentTabId, workTabId, activeTabId } = input
+  if (activeTabId !== agentTabId) return null
+  const existing = findTabGroup(groups, agentTabId)
+  if (!existing) return planAutoGroupWorkTab({ groups, agentTabId, workTabId, activeTabId })
+  if (existing.leftTabId !== agentTabId || existing.rightTabId === workTabId) return null
+  const rightTab = input.tabs.find((tab) => tab.id === existing.rightTabId)
+  if (rightTab?.type !== 'preview' || rightTab.sessionId !== agentTabId) return null
+  const followed = createGroup(agentTabId, workTabId, agentTabId)
+  return followed ? replaceTabGroup(groups, existing, followed) : null
 }
 
 /**

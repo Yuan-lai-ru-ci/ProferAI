@@ -7,7 +7,7 @@
   "permissions": ["pluginStorage", "models.read", "models.invoke", "modelRouting.rules.write", "context.read", "attachments.read", "network.fetch", "agent.tools"],
   "network": { "origins": ["https://example.com"] },
   "contributes": {
-    "pages": [{ "id": "main", "title": "插件工具箱", "entry": "index.html", "placements": ["settings", "tab", "sidebar", "panel"] }],
+    "pages": [{ "id": "main", "title": "插件工具箱", "entry": "index.html", "icon": "icon.svg", "placements": ["settings", "tab", "sidebar"] }],
     "modelRoutingPolicies": [{ "id": "time-routing", "kind": "model-routing.rules.v1" }],
     "messageActions": [{ "id": "process", "title": "交给插件工具箱", "pageId": "main" }],
     "tools": [

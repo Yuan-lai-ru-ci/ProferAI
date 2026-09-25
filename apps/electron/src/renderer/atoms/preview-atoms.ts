@@ -34,95 +34,18 @@ export interface PreviewFile {
 
 // ===== Atoms =====
 
-/** 每会话预览面板开关 */
-export const previewPanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
-
-/** 每会话当前预览的文件（null 时显示 DiffChangesList） */
+/** 每会话当前预览的文件（null 时显示 DiffChangesList）；语义 = 该会话最近打开/聚焦的文件，供高亮与刷新检测 */
 export const previewFileMapAtom = atom<Map<string, PreviewFile | null>>(new Map())
 
-/** 分栏比例（对话占比），持久化 */
-export const previewSplitRatioAtom = atomWithStorage<number>('profer-preview-split-ratio', 0.5)
+/**
+ * 每个文件预览 Tab 的完整元数据（运行期内存态，不持久化）。
+ * key = preview Tab id（`__preview__:${sessionId}:${encodeURIComponent(filePath)}`）。
+ * 打开时写入/覆盖，关闭 Tab 时由 useCloseTab 清理；PreviewTabContent 按 tabId 读取。
+ */
+export const previewFilesByTabAtom = atom<Map<string, PreviewFile>>(new Map())
 
 /** 自动预览开关，持久化（默认关闭以减轻设备性能负担，老用户保留已设置的偏好） */
 export const autoPreviewEnabledAtom = atomWithStorage<boolean>('profer-auto-preview-enabled', false)
-
-/**
- * 预览默认展开方式，持久化。
- * - 'tab'   = 以预览标签页形式打开（旧版默认）
- * - 'split' = 在主区域右侧分屏展开（可同时看到 Agent 输出与文件内容）
- *
- * 用户仍可通过拖拽 Tab 出区域、PreviewPanel 顶栏按钮等即时切换。
- */
-export type PreviewModePreference = 'tab' | 'split'
-export const previewModePreferenceAtom = atomWithStorage<PreviewModePreference>(
-  'profer-preview-mode-pref',
-  'tab',
-)
-
-/** 读取 localStorage 中已缓存的预览展开方式。 */
-function getCachedPreviewModePreference(): PreviewModePreference | null {
-  try {
-    const raw = localStorage.getItem('profer-preview-mode-pref')
-    const value = raw ? JSON.parse(raw) : null
-    return value === 'tab' || value === 'split' ? value : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * 从主进程恢复预览默认展开方式。
- * localStorage 负责首屏无闪烁，settings.json 负责跨 renderer/重启的权威持久化。
- */
-export async function initializePreviewModePreference(
-  setPreference: (preference: PreviewModePreference) => void,
-): Promise<void> {
-  try {
-    const settings = await window.electronAPI.getSettings()
-    const stored = settings.previewModePreference
-    if (stored === 'tab' || stored === 'split') {
-      setPreference(stored)
-      try {
-        localStorage.setItem('profer-preview-mode-pref', JSON.stringify(stored))
-      } catch {
-        // localStorage 不可用时仍由 settings.json 提供持久化。
-      }
-      return
-    }
-
-    // 老版本只写 localStorage：首次启动新版本时补写到 settings.json。
-    const cached = getCachedPreviewModePreference()
-    if (cached) {
-      setPreference(cached)
-      await window.electronAPI.updateSettings({ previewModePreference: cached })
-    }
-  } catch (error) {
-    console.error('[预览展开方式] 初始化失败:', error)
-  }
-}
-
-/** 更新预览默认展开方式并写入 settings.json 与 localStorage。 */
-export async function updatePreviewModePreference(
-  preference: PreviewModePreference,
-): Promise<void> {
-  try {
-    localStorage.setItem('profer-preview-mode-pref', JSON.stringify(preference))
-  } catch {
-    // localStorage 不可用时仍由 settings.json 提供持久化。
-  }
-  try {
-    await window.electronAPI.updateSettings({ previewModePreference: preference })
-  } catch (error) {
-    console.error('[预览展开方式] 持久化失败:', error)
-  }
-}
-
-/** 当前会话的预览面板是否打开（derived） */
-export const currentSessionPreviewOpenAtom = atom<boolean>((get) => {
-  const sessionId = get(currentAgentSessionIdAtom)
-  if (!sessionId) return false
-  return get(previewPanelOpenMapAtom).get(sessionId) ?? false
-})
 
 // ===== 引用选中文本（Quoted Selection）=====
 

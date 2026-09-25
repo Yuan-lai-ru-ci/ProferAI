@@ -10,7 +10,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { Bot, Columns2, FileText, MessageSquare } from 'lucide-react'
+import { Bot, Columns2, FileText, Globe2, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { tabsAtom, type TabItem } from '@/atoms/tab-atoms'
 import { isGroupEligibleTab } from '@/atoms/tab-group-atoms'
@@ -34,6 +34,7 @@ function CandidateIcon({ tab }: { tab: TabItem }): React.ReactElement | null {
   if (tab.type === 'chat') return <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
   // 预览标签是一个文件：给个文件图标，避免候选列表里出现没有类型标识的行
   if (tab.type === 'preview') return <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+  if (tab.type === 'browser') return <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
   return null
 }
 

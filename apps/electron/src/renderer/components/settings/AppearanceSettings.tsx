@@ -35,11 +35,6 @@ import {
   updateUiScale,
   UI_SCALE_OPTIONS,
 } from '@/atoms/ui-scale'
-import {
-  previewModePreferenceAtom,
-  updatePreviewModePreference,
-  type PreviewModePreference,
-} from '@/atoms/preview-atoms'
 import { cn } from '@/lib/utils'
 import { SkinManager } from './SkinManager'
 import { detectIsWindows } from '@/lib/platform'
@@ -75,11 +70,6 @@ const MARKDOWN_FONT_SIZE_OPTIONS = [
   { value: 'large', label: '大' },
 ]
 
-/** 预览默认展开方式 */
-const PREVIEW_MODE_OPTIONS: { value: PreviewModePreference; label: string }[] = [
-  { value: 'tab', label: '标签页' },
-  { value: 'split', label: '侧边分屏' },
-]
 
 
 /** 图标变体定义 */
@@ -129,7 +119,6 @@ export function AppearanceSettings(): React.ReactElement {
   // Electron 桌面保持原版行为（Ctrl+± 浏览器级缩放），不渲染控件避免“调了无效果”。
   const isElectron = React.useMemo(() => navigator.userAgent.includes('Electron'), [])
   const [uiScale, setUiScale] = useAtom(uiScaleAtom)
-  const [previewModePref, setPreviewModePref] = useAtom(previewModePreferenceAtom)
   const scaleOptions = UI_SCALE_OPTIONS
 
   /** 切换主题模式 */
@@ -227,17 +216,6 @@ export function AppearanceSettings(): React.ReactElement {
             options={MARKDOWN_FONT_SIZE_OPTIONS}
           />
 
-          <SettingsSegmentedControl
-            label="Agent 预览展开方式"
-            description="点击文件、工具结果「预览」按钮时的默认展开位置；拖拽预览 Tab 出标签栏可即时切换为侧边分屏"
-            value={previewModePref}
-            onValueChange={(v) => {
-              const preference = v as PreviewModePreference
-              setPreviewModePref(preference)
-              void updatePreviewModePreference(preference)
-            }}
-            options={PREVIEW_MODE_OPTIONS}
-          />
         </SettingsCard>
       </SettingsSection>
 

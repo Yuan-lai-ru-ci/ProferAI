@@ -1,4 +1,3 @@
-import { PluginTaskLayout } from '@/components/plugins/PluginTaskLayout'
 /**
  * TabContent — 标签内容渲染器
  *
@@ -13,11 +12,14 @@ import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { ChatView } from '@/components/chat'
 import { AgentView } from '@/components/agent'
 import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
+import { BrowserTabContent } from '@/components/browser/BrowserTabContent'
 import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
 import { ScratchPadView } from '@/components/scratch-pad/ScratchPadView'
 import { TabErrorBoundary } from './TabErrorBoundary'
 import { PluginViewport } from './PluginViewport'
+
+const TAB_VIEW_INSTANCE = { kind: 'tab' as const }
 
 export interface TabContentProps {
   tabId: string
@@ -53,7 +55,7 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
   if (tab.type === 'chat') {
     return (
       <TabErrorBoundary key={tab.sessionId} sessionId={tab.sessionId}>
-        <PluginTaskLayout kind="chat" sessionId={tab.sessionId}><ChatView conversationId={tab.sessionId} /></PluginTaskLayout>
+        <ChatView conversationId={tab.sessionId} />
       </TabErrorBoundary>
     )
   }
@@ -61,18 +63,26 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
   if (tab.type === 'preview') {
     return (
       <TabErrorBoundary key={tab.id} sessionId={tab.sessionId}>
-        <PreviewTabContent sessionId={tab.sessionId} />
+        <PreviewTabContent tabId={tab.id} sessionId={tab.sessionId} filePath={tab.filePath ?? ''} />
+      </TabErrorBoundary>
+    )
+  }
+
+  if (tab.type === 'browser') {
+    return (
+      <TabErrorBoundary key={tab.id} sessionId={tab.sessionId}>
+        <BrowserTabContent tabId={tab.id} sessionId={tab.sessionId} browserTabId={tab.browserTabId ?? ''} />
       </TabErrorBoundary>
     )
   }
 
   if (tab.type === 'plugin' && tab.pluginId && tab.pluginPageId) {
-    return <PluginViewport pluginId={tab.pluginId} pageId={tab.pluginPageId} visible />
+    return <PluginViewport pluginId={tab.pluginId} pageId={tab.pluginPageId} instance={tab.pluginScope === 'session' ? { kind: 'tab', sessionId: tab.sessionId } : TAB_VIEW_INSTANCE} visible />
   }
 
   return (
     <TabErrorBoundary key={tab.sessionId} sessionId={tab.sessionId}>
-      <PluginTaskLayout kind="agent" sessionId={tab.sessionId}><AgentView sessionId={tab.sessionId} /></PluginTaskLayout>
+      <AgentView sessionId={tab.sessionId} />
     </TabErrorBoundary>
   )
 }

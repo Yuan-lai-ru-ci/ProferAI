@@ -1,40 +1,34 @@
 /**
  * MainArea — 主内容区域
  *
- * 组合 TabBar + TabContent。Agent 模式下若预览面板打开，则在同一个 Panel 内分屏：
- * 顶部一行：左侧 TabBar + 右侧预览顶栏（含文件名、复制按钮）
- * 主体：左侧 TabContent + 右侧预览内容
+ * 组合 TabBar + TabContent。文件预览与受管浏览器都是顶栏的工作 Tab：
+ * - 每文件一个预览 Tab，浏览器每会话单例；
+ * - 并排统一走 Tab 组合（左侧组内成员 + 右侧组内成员）；Agent 推送浏览器状态时
+ *   自动把浏览器 Tab 与对话组合（不打断对话，焦点留在对话一侧）。
  */
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom, useAtom } from 'jotai'
-import { tabsAtom, activeTabIdAtom, activeTabAtom, tabIndicatorMapAtom, isPreviewTab } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, activeTabAtom, tabIndicatorMapAtom } from '@/atoms/tab-atoms'
 import { Panel } from '@/components/app-shell/Panel'
 import { WelcomeView } from '@/components/welcome/WelcomeView'
-import { previewPanelOpenMapAtom, previewSplitRatioAtom } from '@/atoms/preview-atoms'
-import { PreviewPanel } from '@/components/diff/PreviewPanel'
-import { closeInlinePreview, closeBrowserInlinePreview } from '@/components/diff/preview-opener'
-import { browserPanelDismissedSessionIdsAtom, browserPanelOpenMapAtom, browserSplitRatioAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
-import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
-import { openBrowserFromPush } from '@/hooks/usePanelAutoLayout'
+import { browserPanelDismissedSessionIdsAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { openBrowserTabFromPush } from '@/lib/browser-tab'
+import { isBrowserTab } from '@/atoms/tab-atoms'
 import { shouldAutoOpenBrowserFromPush } from '@/lib/browser-auto-open'
-import { BrowserPanel } from '@/components/browser/BrowserPanel'
 import type { BrowserViewState } from '@profer/shared'
-import { useTrackSessionView } from '@/hooks/useTrackSessionView'
 import { TabBar } from './TabBar'
 import { TabContent } from './TabContent'
 import { AutomationFormView } from '@/components/automation/AutomationFormView'
 import { PlanningView } from '@/components/planning/PlanningView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
+import { agentSidePanelOpenAtom } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
-import { interfaceVariantAtom } from '@/atoms/theme'
 import { cn } from '@/lib/utils'
-import { resolveBrowserSplitGeometry, shouldAnimateBrowserSplitWidth } from '@/lib/browser-split-layout'
 import { resolveContentTabId } from '@/lib/active-tab-content'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
-import { PaneHeader } from './PaneHeader'
 import { EmptyPanePlaceholder } from './EmptyPanePlaceholder'
 import { useCloseTab } from '@/hooks/useCloseTab'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
@@ -56,9 +50,6 @@ import {
 } from '@/atoms/tab-group-atoms'
 
 export function MainArea(): React.ReactElement {
-  // 记录每个会话上次停留的视图（对话 / 预览），供切回时重建预览 Tab
-  useTrackSessionView()
-
   const tabs = useAtomValue(tabsAtom)
   const activeTabId = useAtomValue(activeTabIdAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
@@ -68,52 +59,50 @@ export function MainArea(): React.ReactElement {
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
   const appMode = useAtomValue(appModeAtom)
-  const interfaceVariant = useAtomValue(interfaceVariantAtom)
-  const isClassic = interfaceVariant === 'classic'
   const syncActiveTabSideEffects = useSyncActiveTabSideEffects()
 
   // 内容必须跟随同步 activeTabId 渲染。useDeferredValue 会让 TabBar 已高亮新会话时，
   // 主区域仍长期保留旧会话；昂贵子树应自行优化，不能以旧会话内容作为过渡态。
   const contentTabId = resolveContentTabId(tabs, activeTabId)
 
-  const previewOpenMap = useAtomValue(previewPanelOpenMapAtom)
-  const [splitRatio, setSplitRatio] = useAtom(previewSplitRatioAtom)
-  const previewDragging = React.useRef(false)
+  const [agentSidePanelOpen, setAgentSidePanelOpen] = useAtom(agentSidePanelOpenAtom)
 
-  // ===== 受管浏览器 =====
-  const [browserOpenMap, setBrowserOpenMap] = useAtom(browserPanelOpenMapAtom)
-  const [browserStateMap, setBrowserStateMap] = useAtom(browserStateMapAtom)
-  const [browserSplitRatio, setBrowserSplitRatio] = useAtom(browserSplitRatioAtom)
-  const browserLayoutRef = React.useRef<HTMLDivElement>(null)
-  const [browserLayoutWidth, setBrowserLayoutWidth] = React.useState(0)
-  const browserDragging = React.useRef(false)
+  // ===== 受管浏览器（Tab 化）=====
+  const setBrowserStateMap = useSetAtom(browserStateMapAtom)
+  const browserDismissed = useAtomValue(browserPanelDismissedSessionIdsAtom)
   const currentBrowserSessionIdRef = React.useRef<string | null>(null)
   const previousBrowserSessionIdRef = React.useRef<string | null>(null)
-  // 拖拽期间禁用浏览器分栏的 width 过渡：过渡动画用于展开/收起，拖拽时若保留会让面板宽度滞后于拖拽条，视觉不跟手。
-  const [isDraggingBrowser, setIsDraggingBrowser] = React.useState(false)
-  const [browserDismissed, setBrowserDismissed] = useAtom(browserPanelDismissedSessionIdsAtom)
-  // 浏览器面板仅属于 Agent 会话；必须同时满足「激活 tab 是 agent」和「当前处于 agent 模式」。
-  // 否则 toggle-mode 快捷键（只切 appMode 不切 tab）会造成 appMode 与 activeTab.type 撕裂，
-  // 让浏览器面板在已切到 Chat 的界面上错误残留。
-  const browserSessionId = appMode === 'agent' && activeTab?.type === 'agent' ? activeTab.sessionId : null
+  // 浏览器仅属于 Agent 会话；必须同时满足「激活 tab 绑定了 agent 会话」（agent / 预览 / 浏览器 Tab）
+  // 和「当前处于 agent 模式」。否则 toggle-mode 快捷键（只切 appMode 不切 tab）会造成
+  // appMode 与 activeTab 撕裂，让浏览器状态在已切到 Chat 的界面上错误残留。
+  const browserSessionId = appMode === 'agent' && activeTab && (activeTab.type === 'agent' || activeTab.type === 'preview' || activeTab.type === 'browser')
+    ? activeTab.sessionId
+    : null
   currentBrowserSessionIdRef.current = browserSessionId
 
   const publishBrowserState = React.useCallback((state: BrowserViewState, options?: { autoOpen?: boolean }) => {
     // 同步浏览器内容状态（tabs/url/标题/trace 等）。状态可以保留在后台会话，
-    // 但后台会话的状态推送不能改变当前会话的面板可见性。
+    // 但后台会话的状态推送不能改变当前会话的浏览器 Tab。
     setBrowserStateMap((previous) => { const next = new Map(previous); next.set(state.sessionId, state); return next })
     // 只有当前激活会话收到实时状态推送时才允许自动打开。切换会话时的 getState
-    // 仅用于恢复工具栏状态，不能把旧会话的浏览器预览重新唤起。
-    if (options?.autoOpen !== false && state.sessionId === currentBrowserSessionIdRef.current && !browserDismissed.has(state.sessionId)) {
-      openBrowserFromPush(state.sessionId)
-    }
-  }, [browserDismissed, browserSessionId, setBrowserStateMap])
+    // 仅用于恢复工具栏状态，不能把旧会话的浏览器 Tab 重新唤起。
+    if (state.sessionId !== currentBrowserSessionIdRef.current) return
+    const dismissed = browserDismissed.has(state.sessionId)
+    const hasBrowserTabs = tabs.some((tab) => isBrowserTab(tab) && tab.sessionId === state.sessionId)
+    // 已手动收掉且没有遗留页 Tab：不重建；仍有页 Tab 则继续同步（页面可能被 Agent 关掉）
+    if (dismissed && !hasBrowserTabs) return
+    const autoOpen = options?.autoOpen !== false && !dismissed
+    // 只读动作推送且没有既有页 Tab：不创建（保持安静）
+    if (!hasBrowserTabs && !autoOpen) return
+    // Tab 化：按页 reconcile；autoOpen 时自动与对话组合并排（对话左、浏览器右，不打断对话）。
+    openBrowserTabFromPush(state, { autoGroup: autoOpen })
+  }, [browserDismissed, setBrowserStateMap, tabs])
 
   /**
    * 订阅实时状态推送。
    *
    * 不再把「收到任意浏览器状态」当作「用户需要看浏览器」：只有 Agent 真的开始展示页面
-   * （存在工作标签 + 最近动作是 navigate/tab）才自动打开。用户点击浏览器按钮走 TabBar 的
+   * （存在工作标签 + 最近动作是 navigate/tab）才自动建组。用户点击浏览器按钮走 TabBar 的
    * 本地显式打开路径，切回会话走 getAgentBrowserState 恢复路径，两者都不受此处影响。
    */
   const handleBrowserStatePush = React.useCallback((state: BrowserViewState) => {
@@ -128,18 +117,12 @@ export function MainArea(): React.ReactElement {
 
     const previousSessionId = previousBrowserSessionIdRef.current
     if (previousSessionId && previousSessionId !== browserSessionId) {
-      // 切换会话时只收起旧会话的面板，不销毁其浏览器状态；回到该会话时，
-      // 只要用户没有主动关闭浏览器，就应恢复面板。
+      // 切换会话时只收起旧会话的原生视图，不销毁其浏览器状态；回到该会话时，
+      // 只要用户没有主动关闭浏览器 Tab，就应恢复打开。
       void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(previousSessionId)
-      setBrowserOpenMap((previous) => {
-        if (previous.get(previousSessionId) !== true) return previous
-        const next = new Map(previous)
-        next.set(previousSessionId, false)
-        return next
-      })
     }
     previousBrowserSessionIdRef.current = browserSessionId
-  }, [browserSessionId, setBrowserOpenMap])
+  }, [browserSessionId])
 
   React.useEffect(() => {
     // Vite renderer 可在 preload 热重载前先更新；旧 bridge 时浏览器功能不可用，
@@ -157,7 +140,7 @@ export function MainArea(): React.ReactElement {
     void getState(browserSessionId)
       .then((state) => {
         if (!cancelled && state) {
-          // 切回会话时重新拉起已有浏览器；用户明确关闭过的会话仍保持收起。
+          // 切回会话时重新拉起已有浏览器 Tab；用户明确关闭过的会话仍保持关闭。
           publishBrowserState(state, { autoOpen: !browserDismissed.has(browserSessionId) })
         }
       })
@@ -166,122 +149,14 @@ export function MainArea(): React.ReactElement {
     return () => { cancelled = true }
   }, [browserDismissed, browserSessionId, publishBrowserState])
 
-  const showBrowserPanel = !!browserSessionId && (browserOpenMap.get(browserSessionId) ?? false)
-  const browserState = browserSessionId ? browserStateMap.get(browserSessionId) ?? null : null
-  const BROWSER_MIN_WIDTH = 360
-  const CONVERSATION_MIN_WIDTH = 420
-  // 与 AppShell 的 p-2 面板缝隙保持一致，避免侧边栏收起时出现额外空白。
-  const BROWSER_SPLIT_GAP = 8
-
-  // ===== 统一可见性（以窗口宽度为基准，由 usePanelAutoLayout 计算）=====
-  // 浏览器可见 = 展开意图 A 为 true 且窗口宽足够；窄窗只隐藏显示，A 保持不变。
-  const visibility = useAtomValue(panelVisibilityAtom)
-  const browserVisible = !!browserSessionId && visibility.browser
-  const filePanelVisible = visibility.filePanel
-
-  const previousBrowserVisibleRef = React.useRef(browserVisible)
-  const [browserWidthTransitioning, setBrowserWidthTransitioning] = React.useState(false)
-  const browserWidthTransitionActive = shouldAnimateBrowserSplitWidth(
-    previousBrowserVisibleRef.current,
-    browserVisible,
-    isDraggingBrowser,
-  ) || browserWidthTransitioning
-
-  // 在本次提交完成后记录可见性，并为浏览器自身开关保留完整过渡窗口。
-  // 相邻面板/窗口尺寸变化不会改 browserVisible，因此不会进入这个分支。
-  React.useLayoutEffect(() => {
-    const changed = previousBrowserVisibleRef.current !== browserVisible
-    previousBrowserVisibleRef.current = browserVisible
-    if (!changed || isDraggingBrowser) {
-      if (isDraggingBrowser) setBrowserWidthTransitioning(false)
-      return
-    }
-    setBrowserWidthTransitioning(true)
-    const timeoutId = window.setTimeout(() => setBrowserWidthTransitioning(false), 300)
-    return () => window.clearTimeout(timeoutId)
-  }, [browserVisible, isDraggingBrowser])
-
-  // 以 MainArea 实际可用宽度决定浏览器分栏比例 clamp（与自适应判定正交，保留现有拖拽行为）。
-  React.useLayoutEffect(() => {
-    const element = browserLayoutRef.current
-    if (!element) return
-    const update = () => setBrowserLayoutWidth(element.clientWidth)
-    const observer = new ResizeObserver(update)
-    observer.observe(element)
-    update()
-    return () => observer.disconnect()
-  }, [])
-
-  // 组合视图本身已经占用左右两栏，不能再把当前成员的内联预览嵌套成第三栏。
-  // 这里只抑制显示意图，不清除 previewOpenMap；解散组合后原预览可以自然恢复。
-  const previewOpen =
-    activeTab?.type === 'agent'
-    && (previewOpenMap.get(activeTab.sessionId) ?? false)
-    && !showBrowserPanel
-    && !tabGroup
-  const previewSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
-
-  // 关闭动画状态：当 previewOpen 从 true → false 时，播放退出动画再移除 DOM
-  // 在 render 阶段同步派生 closing，避免中间帧出现 flex: 1 1 auto 导致左侧瞬间跳到 100% 宽
-  // （flex-basis: auto 与 calc() 之间无法插值，transition 不生效，视觉上会被解读为"重新渲染"）
-  const [closingState, setClosingState] = React.useState(false)
-  const prevPreviewStateRef = React.useRef({ open: previewOpen, sessionId: previewSessionId })
-
-  let closing = closingState
-  const prev = prevPreviewStateRef.current
-  if (prev.open && !previewOpen && prev.sessionId === previewSessionId) {
-    closing = true
-  }
-  if (previewOpen || prev.sessionId !== previewSessionId) {
-    closing = false
-  }
-  if (closing !== closingState) {
-    setClosingState(closing)
-  }
-
+  // 组合视图已经明确占用主区两栏；右侧文件面板不能以"展开意图"留在后台，
+  // 否则解散组合或切回会话时会把三栏状态再次拉回来。
   React.useEffect(() => {
-    prevPreviewStateRef.current = { open: previewOpen, sessionId: previewSessionId }
-  }, [previewOpen, previewSessionId])
+    if (!tabGroup) return
+    if (agentSidePanelOpen) setAgentSidePanelOpen(false)
+  }, [agentSidePanelOpen, setAgentSidePanelOpen, tabGroup])
 
-  const showPreview = (previewOpen || closing) && previewSessionId
-
-  const handlePreviewDragStart = React.useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    previewDragging.current = true
-    const startX = e.clientX
-    const startRatio = splitRatio
-    const containerEl = (e.currentTarget as HTMLElement).closest('[data-split-container]') as HTMLElement | null
-    const containerWidth = containerEl?.clientWidth ?? 1
-    let rafId = 0
-
-    document.body.style.userSelect = 'none'
-    document.body.style.cursor = 'col-resize'
-    document.querySelectorAll('iframe').forEach((f) => { (f as HTMLElement).style.pointerEvents = 'none' })
-
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!previewDragging.current) return
-      if (rafId) return
-      rafId = requestAnimationFrame(() => {
-        rafId = 0
-        const delta = ev.clientX - startX
-        const newRatio = Math.max(0.3, Math.min(0.8, startRatio + delta / containerWidth))
-        setSplitRatio(newRatio)
-      })
-    }
-    const onMouseUp = () => {
-      previewDragging.current = false
-      if (rafId) cancelAnimationFrame(rafId)
-      document.body.style.userSelect = ''
-      document.body.style.cursor = ''
-      document.querySelectorAll('iframe').forEach((f) => { (f as HTMLElement).style.pointerEvents = '' })
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [splitRatio, setSplitRatio])
-
-  // ===== 组合 tab（两个会话左右并排）=====
+  // ===== 组合 tab（两个标签左右并排）=====
   // 组合是一个叠加态：两个成员标签仍在 tabsAtom 里，只是顶栏渲染时折叠成一个条目。
   // 焦点 = activeTabId 属于哪一侧，因此"当前会话"（左侧栏高亮/右侧文件面板）
   // 通过既有的 useSyncActiveTabSideEffects 单点同步自动跟随焦点栏，不需要第二条真相。
@@ -298,7 +173,7 @@ export function MainArea(): React.ReactElement {
   const indicatorMap = useAtomValue(tabIndicatorMapAtom)
   const { executeClose } = useCloseTab()
   const groupContainerRef = React.useRef<HTMLDivElement>(null)
-  // 分栏像素宽由实测容器宽算出（与浏览器分栏同一做法），保证比例与最小宽度约束一致
+  // 分栏像素宽由实测容器宽算出，保证比例与最小宽度约束一致
   const [groupContainerWidth, setGroupContainerWidth] = React.useState(0)
   const groupDragging = React.useRef(false)
 
@@ -347,32 +222,17 @@ export function MainArea(): React.ReactElement {
     activateGroupTab(targetId)
   }, [activateGroupTab, activeTabId, setTabGroups, tabGroup])
 
-  /** 空栏里选中一个标签（会话或预览）：放进去并把焦点交给它 */
+  /** 空栏里选中一个标签（会话或工作 Tab）：放进去并把焦点交给它 */
   const fillGroupPane = React.useCallback((side: TabGroupSide, tabId: string): void => {
     if (!tabGroup) return
     const filledGroup = fillGroupSide(tabGroup, side, tabId)
     if (filledGroup) setTabGroups((previous) => replaceTabGroup(previous, tabGroup, filledGroup))
     activateGroupTab(tabId)
-    // 预览成员自带"用一栏展示这个文件"的语义，关掉该会话的内联分屏，避免同一文件两处显示
-    const filled = tabs.find((tab) => tab.id === tabId)
-    if (filled && isPreviewTab(filled)) closeInlinePreview(filled.sessionId)
-  }, [activateGroupTab, setTabGroups, tabGroup, tabs])
+  }, [activateGroupTab, setTabGroups, tabGroup])
 
   const dissolveGroup = React.useCallback((): void => {
     setTabGroups((previous) => removeTabGroup(previous, tabGroup))
   }, [setTabGroups, tabGroup])
-
-  // 右栏栏头动作：关闭该栏标签（关闭后由对账 effect 自动解散组合），焦点回到左栏
-  const closeRightPane = React.useCallback((): void => {
-    const group = tabGroup
-    const rightTabId = group?.rightTabId
-    if (!group || !rightTabId) return
-    const fallbackTabId = group.leftTabId
-    setTabGroups((previous) => removeTabGroup(previous, group))
-    executeClose(rightTabId)
-    // 右栏关掉后焦点回到左栏（若左栏也空着则保持现状，由标签列表决定激活项）
-    if (fallbackTabId && activeTabId !== fallbackTabId) activateGroupTab(fallbackTabId)
-  }, [activateGroupTab, activeTabId, executeClose, setTabGroups, tabGroup])
 
   const handleGroupDragStart = React.useCallback((e: React.MouseEvent): void => {
     const container = groupContainerRef.current
@@ -386,7 +246,7 @@ export function MainArea(): React.ReactElement {
 
     const onMouseMove = (moveEvent: MouseEvent): void => {
       const available = Math.max(1, rect.width - GROUP_SPLIT_GAP)
-      // 指针位置代表**左栏**占比（与浏览器分栏同一算法），而 tabGroupRatio 存的是右栏占比，取补。
+      // 指针位置代表**左栏**占比，而 tabGroupRatio 存的是右栏占比，取补。
       const pointerFraction = (moveEvent.clientX - rect.left - GROUP_SPLIT_GAP / 2) / available
       setTabGroupRatio(resolveGroupSplitGeometry(rect.width, 1 - pointerFraction).ratio)
     }
@@ -414,67 +274,8 @@ export function MainArea(): React.ReactElement {
     }
   }, [tabs, activeTabId, setActiveTabId])
 
-  // 关闭动画期间右侧面板的定位样式（脱离 flex 流，保持原宽度，translateX 向右滑出）
-  const closingOverlayStyle: React.CSSProperties | undefined = closing
-    ? {
-        position: 'absolute',
-        top: 0,
-        bottom: 0,
-        left: `${splitRatio * 100}%`,
-        width: `${(1 - splitRatio) * 100}%`,
-        zIndex: 1,
-        display: 'flex',
-        pointerEvents: 'none',
-      }
-    : undefined
-
-  // 左侧容器宽度：预览打开时固定占 splitRatio；其他情况（含 closing 动画期间）
-  // 直接 1 1 auto 占满——closing 时右侧 absolute 脱离 flex 流，所以左侧自然占 100%。
-  const leftFlexStyle: React.CSSProperties = (previewOpen && previewSessionId)
-    ? { flex: `0 0 calc(${splitRatio * 100}% - 4px)` }
-    : { flex: '1 1 auto' }
-
-  const browserSplit = resolveBrowserSplitGeometry(browserLayoutWidth, browserSplitRatio, browserVisible, {
-    resizeGap: BROWSER_SPLIT_GAP,
-    minConversationWidth: CONVERSATION_MIN_WIDTH,
-    minBrowserWidth: BROWSER_MIN_WIDTH,
-  })
-  // 对话区占满剩余（Panel flex-1），浏览器分栏以固定像素宽度占位；width 过渡形成展开/收起动画（与文件面板一致）。
-  const browserWidthPx = browserSplit.browserWidth
-  const handleBrowserDragStart = React.useCallback((event: React.MouseEvent) => {
-    event.preventDefault()
-    const container = browserLayoutRef.current
-    if (!container) return
-    browserDragging.current = true
-    setIsDraggingBrowser(true)
-    const rect = container.getBoundingClientRect()
-    document.body.style.userSelect = 'none'
-    document.body.style.cursor = 'col-resize'
-    document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = 'none' })
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const available = Math.max(1, rect.width - BROWSER_SPLIT_GAP)
-      // 分隔条本身占据 8px 中缝，比例以可用内容宽度计算；减半个中缝，
-      // 使指针位于细线中心时与两栏实际边界精确对齐。
-      const rawRatio = (moveEvent.clientX - rect.left - BROWSER_SPLIT_GAP / 2) / available
-      const minRatio = CONVERSATION_MIN_WIDTH / available
-      const maxRatio = 1 - BROWSER_MIN_WIDTH / available
-      setBrowserSplitRatio(Math.max(minRatio, Math.min(maxRatio, rawRatio)))
-    }
-    const onMouseUp = () => {
-      browserDragging.current = false
-      setIsDraggingBrowser(false)
-      document.body.style.userSelect = ''
-      document.body.style.cursor = ''
-      document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = '' })
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }, [setBrowserSplitRatio, setIsDraggingBrowser])
-
   return (
-    <div ref={browserLayoutRef} className="relative flex h-full min-w-0">
+    <div className="relative flex h-full min-w-0">
       <Panel
         variant="grow"
         className="main-content-panel relative rounded-2xl shadow-xl dark:shadow-sm"
@@ -506,11 +307,10 @@ export function MainArea(): React.ReactElement {
           <AgentSkillsView />
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            {/* 顶栏横跨整个主区：分屏时不再只覆盖左栏，预览/浏览器分屏打开时
-                两侧顶栏也共用同一条基线（旧结构下预览栏只能自带两行顶栏）。 */}
+            {/* 顶栏横跨整个主区：组合分屏时两侧顶栏共用同一条基线。 */}
             <TabBar />
             <div className="relative flex flex-1 min-h-0 overflow-hidden" data-split-container>
-              {/* 左侧区域：TabContent（单栏）+ 可选的 Tab 分屏右栏。
+              {/* 内容区：TabContent（单栏）+ 可选的组合右栏。
                   始终保持在同一 DOM 位置，避免 Tab 切换时 unmount。
                   注：左右区域宽度变化不用 transition——文字逐帧 reflow 会导致行末字符抖动，
                   视觉上像"内容从右向左推送"。 */}
@@ -521,7 +321,7 @@ export function MainArea(): React.ReactElement {
                 data-group-drop-region="true"
                 data-group-drop-split={groupGeometryReady ? Math.round(groupGeometry.leftWidth + GROUP_SPLIT_GAP / 2) : undefined}
                 className="flex h-full min-w-0 relative"
-                style={leftFlexStyle}
+                style={{ flex: '1 1 auto' }}
               >
                 {/* 左栏：组合激活时是组内左成员，否则是当前标签 */}
                 <div
@@ -529,16 +329,9 @@ export function MainArea(): React.ReactElement {
                   style={{ flex: '1 1 auto' }}
                   onPointerDownCapture={() => focusGroupSide('left')}
                 >
-                  {groupViewActive && leftGroupTab && (
-                    <PaneHeader
-                      pane="left"
-                      type={leftGroupTab.type}
-                      title={leftGroupTab.title}
-                      status={indicatorMap.get(leftGroupTab.id) ?? 'idle'}
-                      focused={activeTabId === leftGroupTab.id}
-                      onFocus={() => focusGroupSide('left')}
-                      onDissolveGroup={dissolveGroup}
-                    />
+                  {/* 焦点指示：非焦点栏轻微降对比，替代已退役的 PaneHeader 说明行 */}
+                  {groupViewActive && leftGroupTab && activeTabId !== leftGroupTab.id && (
+                    <div className="pointer-events-none absolute inset-0 z-10 bg-foreground/[0.05]" aria-hidden="true" />
                   )}
                   {automationFormOpen ? (
                     // 兼容从会话内入口打开任务设置的场景。
@@ -569,20 +362,12 @@ export function MainArea(): React.ReactElement {
                       aria-label="调整组合内两栏宽度"
                     />
                     <div
-                      className="flex flex-col min-w-0 h-full"
+                      className="flex flex-col min-w-0 h-full relative"
                       style={rightPaneStyle}
                       onPointerDownCapture={() => focusGroupSide('right')}
                     >
-                      {rightGroupTab && (
-                        <PaneHeader
-                          pane="right"
-                          type={rightGroupTab.type}
-                          title={rightGroupTab.title}
-                          status={indicatorMap.get(rightGroupTab.id) ?? 'idle'}
-                          focused={activeTabId === rightGroupTab.id}
-                          onFocus={() => focusGroupSide('right')}
-                          onClosePane={closeRightPane}
-                        />
+                      {rightGroupTab && activeTabId !== rightGroupTab.id && (
+                        <div className="pointer-events-none absolute inset-0 z-10 bg-foreground/[0.05]" aria-hidden="true" />
                       )}
                       {rightGroupTab ? (
                         <div className="flex-1 min-h-0 titlebar-no-drag">
@@ -638,83 +423,10 @@ export function MainArea(): React.ReactElement {
                   </div>
                 )}
               </div>
-
-              {/* 右侧：预览面板。关闭动画期间脱离 flex 流，向右滑出 */}
-              {showPreview && (
-                <div
-                  className={closing ? 'animate-preview-slide-out' : 'flex flex-1 min-w-0'}
-                  style={closingOverlayStyle}
-                  onAnimationEnd={(e) => {
-                    if (closing && e.target === e.currentTarget) setClosingState(false)
-                  }}
-                >
-                  {!closing && (
-                    <div
-                      // 预览面板与对话区都需要明确的可拖分界；不套 overlay，保留中心细线
-                      // （overlay 会隐藏 ::after 细线，8px 透明拖拽区几乎不可见，用户无从拖动）。
-                      className="panel-resize-handle-x titlebar-no-drag"
-                      onMouseDown={handlePreviewDragStart}
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label="调整会话与预览宽度"
-                    />
-                  )}
-                  <div className="flex-1 min-w-0 h-full overflow-hidden">
-                    <PreviewPanel sessionId={previewSessionId} />
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         )}
       </Panel>
-
-      {browserSessionId && (
-        <>
-          {browserVisible && (
-            <div
-              className="panel-resize-handle-x panel-resize-handle-overlay titlebar-no-drag"
-              onMouseDown={handleBrowserDragStart}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="调整会话与浏览器宽度"
-            />
-          )}
-          {/* 浏览器分栏常驻渲染：width 过渡形成展开/收起动画；隐藏时内容 opacity 淡出且不可交互，
-              原生 WebContentsView 由 BrowserViewport 依据容器尺寸（width 0 → visible:false）自动隐藏，不销毁会话。 */}
-          <div
-            className={cn(
-              'flex-shrink-0 min-w-0 overflow-hidden',
-              browserWidthTransitionActive && 'transition-[width] duration-300',
-            )}
-            style={{ width: browserWidthPx }}
-          >
-            <div className={cn('h-full transition-[opacity,visibility] duration-300', browserVisible ? 'opacity-100 visible' : 'opacity-0 pointer-events-none invisible')}>
-              <BrowserPanel
-              sessionId={browserSessionId}
-              state={browserState}
-              sessionTitle={activeTab?.title ?? ''}
-              // WindowControls 只会覆盖窗口最右缘。右侧文件栏实际可见时，浏览器卡片的右缘
-              // 已被侧栏隔开；继续预留 126px 会无端压扁地址栏，并在顶栏末端留下空白。
-              // （用可见性 B 而非意图 A：文件面板被迫收起时不渲染，浏览器回到窗口最右缘，需重新预留。）
-              avoidWindowControls={!filePanelVisible}
-              // 侧栏切换会改变浏览器卡片的结构性位置；重建 BrowserViewport，
-              // 让原生 frame 立即拿到新 rect，但不销毁网页 WebContents。
-              layoutKey={filePanelVisible ? 'side-panel-open' : 'side-panel-closed'}
-              onClose={() => {
-                // WebContentsView 不在 React DOM 层级内；先让主进程同步隐藏，
-                // 再卸载 BrowserViewport，避免 effect cleanup IPC 晚到时网页仍覆盖界面。
-                void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
-                closeBrowserInlinePreview(browserSessionId)
-                setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(browserSessionId, false); return next })
-                setBrowserStateMap((previous) => { const next = new Map(previous); next.delete(browserSessionId); return next })
-                setBrowserDismissed((previous) => { const next = new Set(previous); next.add(browserSessionId); return next })
-              }}
-              />
-            </div>
-          </div>
-        </>
-      )}
     </div>
   )
 }

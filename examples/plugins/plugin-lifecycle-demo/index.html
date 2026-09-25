@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>插件实例生命周期验收台</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">PROFER PLUGIN LIFECYCLE LAB</span>
+    <h1>插件实例生命周期验收台</h1>
+    <p>这不是业务插件，而是用来验证 Tab 与 tool runtime 是否互相隔离。</p>
+    <div class="badge-row"><span id="instance-badge" class="badge">正在读取实例…</span><span id="permission-badge" class="badge muted">权限状态未知</span></div>
+  </header>
+
+  <section class="hero-grid">
+    <div><h2>当前页面实例</h2><pre id="context-output">加载中…</pre></div>
+    <div><h2>验收目标</h2><ol><li>多个任务上下文通过各自的 Tab 打开时不串线。</li><li>Tab 实例之间互不覆盖上下文。</li><li>工具调用不继承任务上下文。</li></ol></div>
+  </section>
+
+  <section><h2>一键验收</h2><p>从设置页或消息动作打开本页；页面会作为独立 Tab 运行。每个按钮的结果都会追加到日志。</p><div class="row"><button id="run-basic">运行基础验收</button><button id="clear-log">清空日志</button><button id="refresh-context">刷新页面上下文</button></div><pre id="log" class="log"></pre></section>
+
+  <section><h2>任务上下文与实例</h2><div class="row"><button id="read-context">读取当前任务上下文</button><button id="read-message">读取当前消息/选区</button><button id="select-attachments">选择附件</button></div><pre id="task-output">尚未读取</pre></section>
+
+  <section><h2>请求生命周期</h2><p>使用真实模型时可验证调用取消；没有可用模型时会明确显示宿主错误，不会伪造成功。</p><div class="row"><select id="model"></select><input id="prompt" value="请用一句话回复：插件实例隔离验收" aria-label="模型请求内容"><button id="refresh-models">刷新模型</button><button id="generate">发起模型调用</button><button id="cancel">取消当前调用</button></div><pre id="request-output">尚未发起请求</pre></section>
+
+  <section><h2>权限与网络边界</h2><div class="row"><button id="fetch-allowed">请求已声明的 example.com</button><button id="fetch-denied">请求未声明的 origin</button><button id="routing-read">读取路由规则</button><button id="routing-write">写入测试路由</button></div><pre id="boundary-output">尚未测试</pre></section>
+
+  <section><h2>私有存储</h2><div class="row"><input id="storage-value" value="lifecycle-check" aria-label="存储值"><button id="storage-write">写入插件存储</button><button id="storage-read">读取插件存储</button><button id="storage-delete">删除插件存储</button></div><pre id="storage-output">尚未测试</pre></section>
+
+  <section><h2>Provider readiness 验收</h2><p>下面的能力当前契约已存在，但生产 provider 可能未接入。预期结果是稳定的 <code>PLUGIN_OPERATION_NOT_SUPPORTED</code> 或确认错误，而不是假成功。</p><div class="row"><button id="workspace-read">workspace.list</button><button id="sessions-read">sessions.list</button><button id="runtime-read">runtime.resolve</button><button id="secrets-read">secrets.listMetadata</button></div><pre id="provider-output">尚未测试</pre></section>
+
+  <section><h2>Agent 工具</h2><p>插件加载后会注册两个工具。请从 Agent 发起调用，然后关闭插件 Tab 或撤权，观察调用是否取消/失效。</p><div class="row"><input id="tool-text" value="tool-instance-check" aria-label="工具回显文本"><button id="tool-local">在当前页面模拟工具逻辑</button></div><pre id="tool-output">工具由宿主 Agent 调用；这里仅提供本地预览</pre></section>
+
+  <footer><strong id="status">正在初始化…</strong><span>页面实例信息来自 Host API；日志可复制给开发者。</span></footer>
+</main>
+</body>
+</html>

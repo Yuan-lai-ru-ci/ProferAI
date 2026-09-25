@@ -11,10 +11,7 @@ import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { Download, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const MIN_ZOOM = 0.5
-const MAX_ZOOM = 3
-const ZOOM_STEP = 1.1
+import { useSmoothZoom } from '@/hooks/useSmoothZoom'
 
 interface ImageLightboxProps {
   /** 图片 src（data URL 或普通 URL） */
@@ -36,29 +33,12 @@ export function ImageLightbox({
   onOpenChange,
   onSave,
 }: ImageLightboxProps): React.ReactElement | null {
-  const [zoom, setZoom] = React.useState(1)
-  const imageRef = React.useRef<HTMLImageElement>(null)
+  // rAF 平滑缩放 + 指针锚点（translate+scale 模型，origin 固定 0 0）+ 拖拽平移
+  const { zoom, pan, bindRef, reset, onPanMouseDown } = useSmoothZoom({ minZoom: 0.5, maxZoom: 5 })
 
   React.useEffect(() => {
-    setZoom(1)
-  }, [open, src])
-
-  // React 的 wheel 合成事件在部分 Electron 环境可能是 passive，改用原生监听器以可靠阻止默认滚动。
-  React.useEffect(() => {
-    const image = imageRef.current
-    if (!image || !open) return
-
-    const handleWheel = (event: WheelEvent): void => {
-      event.preventDefault()
-      setZoom((currentZoom) => {
-        const nextZoom = currentZoom * (event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP)
-        return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom))
-      })
-    }
-
-    image.addEventListener('wheel', handleWheel, { passive: false })
-    return () => image.removeEventListener('wheel', handleWheel)
-  }, [open, src])
+    reset(1)
+  }, [open, src, reset])
 
   if (!src) return null
 
@@ -102,11 +82,12 @@ export function ImageLightbox({
           <img
             src={src}
             alt={alt}
-            className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain shadow-2xl select-none cursor-zoom-in"
-            ref={imageRef}
-            style={{ transform: `scale(${zoom})` }}
+            className="max-w-[90vw] max-h-[90vh] rounded-lg object-contain shadow-2xl select-none cursor-grab"
+            ref={bindRef}
+            style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: '0 0' }}
+            onMouseDown={onPanMouseDown}
             draggable={false}
-            title="在图片上滚动滚轮可缩放"
+            title="滚动滚轮缩放，拖拽平移"
           />
 
           {/* 右上角关闭按钮 */}

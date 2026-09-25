@@ -1,14 +1,14 @@
-import type { ProferPluginTaskReference } from '@profer/plugin-api'
+import type { ProferPluginTaskReference, ProferPluginViewInstance } from '@profer/plugin-api'
 import { callPluginHost } from './plugin-host'
+import { pluginViewKey } from './plugin-view-instance'
 import { dispatchPluginRpc, validatePluginRpcRequest, PROTOCOL } from './plugin-host-rpc'
 import { PluginRpcError, toPluginRpcFailure } from './plugin-rpc-errors'
 import { pluginRequests } from './plugin-requests'
 import { pluginToolBroker } from './plugin-tool-broker'
 import { assertPluginPermission } from './plugin-permissions'
-import { app, ipcMain, nativeTheme, session as electronSession, View, WebContentsView, type BrowserWindow, type Session, type WebContents } from 'electron'
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { app, ipcMain, nativeTheme, View, WebContentsView, type BrowserWindow, type WebContents } from 'electron'
+import { resolve } from 'node:path'
+import { ensurePluginSession } from './plugin-session'
 import {
   PROFER_PLUGIN_HOST_CHANNELS,
   PROFER_PLUGIN_ID_PATTERN,
@@ -16,6 +16,7 @@ import {
   type ProferPluginContext,
   type ProferPluginViewLayout,
 } from '@profer/plugin-api'
+import { pluginFloatingWindowManager } from './plugin-floating-window'
 import { getSettings, subscribeSettingsChanges } from '../settings-service'
 import { resolveBrowserViewportLayout } from '../browser-view-layout'
 import { readJsonFileSafe, writeJsonFileAtomic } from '../safe-file'
@@ -30,24 +31,6 @@ function readPluginStorage(file: string): Record<string, unknown> {
 const MAX_STORAGE_BYTES = 512 * 1024
 const STORAGE_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const RESERVED_STORAGE_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
-const MIME_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.htm': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.ico': 'image/x-icon',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-}
-
 interface PluginViewRecord {
   key: string
   pluginId: string
@@ -61,71 +44,21 @@ interface PluginViewRecord {
   lastRevision: number
   lastVisible: boolean
   taskContext: ProferPluginTaskReference | null
+  instance: ProferPluginViewInstance
 }
 
-const PLUGIN_CSP = [
-  "default-src 'self'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "font-src 'self'",
-  "connect-src 'none'",
-  "media-src 'none'",
-  "object-src 'none'",
-  "frame-src 'none'",
-  "child-src 'none'",
-  "worker-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'",
-].join('; ')
-
-function pageKey(pluginId: string, pageId: string): string {
-  return `${pluginId}:${pageId}`
+function pageKey(pluginId: string, pageId: string, instance: ProferPluginViewInstance = { kind: 'tab' }): string {
+  return pluginViewKey(pluginId, pageId, instance)
 }
 
 function isSafePageIdentity(pluginId: string, pageId: string): boolean {
   return PROFER_PLUGIN_ID_PATTERN.test(pluginId) && PROFER_PLUGIN_PAGE_ID_PATTERN.test(pageId)
 }
 
-function pluginResourceResponse(request: Request, expectedPluginId: string, root: string): Response | Promise<Response> {
-  let url: URL
-  try { url = new URL(request.url) } catch { return new Response('Bad Request', { status: 400 }) }
-  if (url.hostname !== expectedPluginId || !PROFER_PLUGIN_ID_PATTERN.test(url.hostname)) return new Response('Forbidden', { status: 403 })
-
-  let relativePath: string
-  try { relativePath = decodeURIComponent(url.pathname.replace(/^\/+/, '')) } catch { return new Response('Bad Request', { status: 400 }) }
-  if (!relativePath || relativePath.includes('\0') || relativePath.includes('\\')) return new Response('Forbidden', { status: 403 })
-  const target = resolve(root, relativePath)
-  const rel = relative(root, target)
-  if (!rel || rel.startsWith('..') || isAbsolute(rel) || !target.startsWith(`${root}${sep}`)) return new Response('Forbidden', { status: 403 })
-  try {
-    if (!existsSync(target) || lstatSync(target).isSymbolicLink() || !statSync(target).isFile()) return new Response('Not Found', { status: 404 })
-    const realTarget = realpathSync(target)
-    if (!realTarget.startsWith(`${root}${sep}`)) return new Response('Forbidden', { status: 403 })
-  } catch {
-    return new Response('Not Found', { status: 404 })
-  }
-
-  const mime = MIME_TYPES[extname(target).toLowerCase()] ?? 'application/octet-stream'
-  try {
-    // 直接读取已验证文件，避免在 session 的默认拒绝 webRequest 下再发起 file:// 子请求。
-    const body = readFileSync(target)
-    const headers = new Headers({
-      'Content-Type': mime,
-      'Content-Security-Policy': PLUGIN_CSP,
-      'X-Content-Type-Options': 'nosniff',
-      'Referrer-Policy': 'no-referrer',
-      'Cross-Origin-Resource-Policy': 'same-origin',
-      'Cache-Control': 'no-store',
-    })
-    return new Response(body, { status: 200, headers })
-  } catch {
-    return new Response('Not Found', { status: 404 })
-  }
-}
-
 function validateLayout(layout: ProferPluginViewLayout): void {
   if (!isSafePageIdentity(layout.pluginId, layout.pageId)) throw new Error('插件页面标识非法')
+  if (!layout.instance || !['tab', 'tool'].includes(layout.instance.kind)) throw new Error('插件页面实例非法')
+  if ('task' in layout.instance) throw new Error('此插件页面实例不能绑定任务')
   if (!layout.rendererInstanceId || layout.rendererInstanceId.length > 100) throw new Error('rendererInstanceId 非法')
   if (!Number.isSafeInteger(layout.layoutSourceRevision) || layout.layoutSourceRevision <= 0) throw new Error('layoutSourceRevision 非法')
   if (!Number.isSafeInteger(layout.revision) || layout.revision <= 0) throw new Error('revision 非法')
@@ -138,8 +71,6 @@ export class PluginViewManager {
   private owner: BrowserWindow | null = null
   private readonly views = new Map<string, PluginViewRecord>()
   private readonly webContentsOwners = new Map<number, { pluginId: string; pageId: string; key: string }>()
-  private readonly guardedPartitions = new Set<string>()
-  private readonly protocolPartitions = new Set<string>()
 
   setOwnerWindow(window: BrowserWindow | null): void {
     if (this.owner === window) return
@@ -147,37 +78,12 @@ export class PluginViewManager {
     this.owner = window
   }
 
-  private installSessionGuards(pluginSession: Session): void {
-    pluginSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-    pluginSession.setPermissionCheckHandler(() => false)
-    pluginSession.on('will-download', (event, item) => {
-      event.preventDefault()
-      item.cancel()
-    })
-    pluginSession.webRequest.onBeforeRequest((details, callback) => {
-      callback({ cancel: !details.url.startsWith('profer-plugin://') })
-    })
-  }
-
-  private create(pluginId: string, pageId: string, toolRuntime = false): PluginViewRecord {
+  private create(pluginId: string, pageId: string, instance: ProferPluginViewInstance = { kind: 'tab' }): PluginViewRecord {
     if (!this.owner || this.owner.isDestroyed()) throw new Error('主窗口尚未就绪')
     const { page } = resolvePluginPage(pluginId, pageId)
+    // 协议 handler 与会话守卫由共享注册保证（悬浮窗口可能先于主窗口页面创建）。
+    ensurePluginSession(pluginId)
     const partition = `profer-plugin-${pluginId}`
-    const pluginSession = electronSession.fromPartition(partition, { cache: false })
-    if (!this.guardedPartitions.has(partition)) {
-      this.installSessionGuards(pluginSession)
-      this.guardedPartitions.add(partition)
-    }
-    if (!this.protocolPartitions.has(partition)) {
-      pluginSession.protocol.handle('profer-plugin', (request) => {
-        try {
-          return pluginResourceResponse(request, pluginId, resolveInstalledPluginRoot(pluginId))
-        } catch {
-          return new Response('Not Found', { status: 404 })
-        }
-      })
-      this.protocolPartitions.add(partition)
-    }
 
     const hostView = new View()
     const pageView = new WebContentsView({
@@ -195,7 +101,7 @@ export class PluginViewManager {
     hostView.setVisible(false)
     hostView.addChildView(pageView)
     this.owner.contentView.addChildView(hostView)
-    const key = pageKey(pluginId, pageId) + (toolRuntime ? ':tools' : '')
+    const key = pageKey(pluginId, pageId, instance)
     const record: PluginViewRecord = {
       key,
       pluginId,
@@ -209,6 +115,7 @@ export class PluginViewManager {
       lastRevision: 0,
       lastVisible: false,
       taskContext: null,
+      instance,
     }
     this.views.set(key, record)
     this.webContentsOwners.set(pageView.webContents.id, { pluginId, pageId, key })
@@ -247,9 +154,11 @@ export class PluginViewManager {
     return record
   }
 
-  activate(pluginId: string, pageId: string, context: ProferPluginTaskReference | null): void {
-    const record = this.views.get(pageKey(pluginId, pageId)) ?? this.create(pluginId, pageId)
-    record.taskContext = context
+  activate(pluginId: string, pageId: string, context: ProferPluginTaskReference | null, instance: ProferPluginViewInstance = { kind: 'tab' }): void {
+    const key = pageKey(pluginId, pageId, instance)
+    const record = this.views.get(key) ?? this.create(pluginId, pageId, instance)
+    record.taskContext = instance.kind === 'tool' ? null : context
+    record.instance = instance
     this.notifyContextChanged()
   }
 
@@ -266,7 +175,7 @@ export class PluginViewManager {
     const plugin = getInstalledPlugin(pluginId)
     const tool = plugin?.manifest.contributes.tools?.find((candidate) => candidate.id === toolId)
     if (!tool) throw new Error('插件工具不存在')
-    const record = this.views.get(`${pageKey(pluginId, tool.pageId)}:tools`) ?? this.create(pluginId, tool.pageId, true)
+    const record = this.views.get(pageKey(pluginId, tool.pageId, { kind: 'tool' })) ?? this.create(pluginId, tool.pageId, { kind: 'tool' })
     return pluginToolBroker.run(pluginId, toolId, args, record.pageView.webContents, signal)
   }
 
@@ -312,9 +221,9 @@ export class PluginViewManager {
 
   setLayout(layout: ProferPluginViewLayout): void {
     validateLayout(layout)
-    const key = pageKey(layout.pluginId, layout.pageId)
+    const key = pageKey(layout.pluginId, layout.pageId, layout.instance)
     if (!layout.visible && !this.views.has(key)) return
-    const record = this.views.get(key) ?? this.create(layout.pluginId, layout.pageId)
+    const record = this.views.get(key) ?? this.create(layout.pluginId, layout.pageId, layout.instance)
     if (!this.owner || this.owner.isDestroyed()) return
 
     if (record.lastRendererInstanceId !== layout.rendererInstanceId) {
@@ -360,18 +269,18 @@ export class PluginViewManager {
     record.lastVisible = visible
   }
 
-  hide(pluginId: string, pageId: string): void {
+  hide(pluginId: string, pageId: string, instance: ProferPluginViewInstance = { kind: 'tab' }): void {
     if (!isSafePageIdentity(pluginId, pageId)) return
-    const record = this.views.get(pageKey(pluginId, pageId))
+    const record = this.views.get(pageKey(pluginId, pageId, instance))
     if (!record) return
     record.hostView.setVisible(false)
     record.pageView.setVisible(false)
     record.lastVisible = false
   }
 
-  close(pluginId: string, pageId: string): void {
+  close(pluginId: string, pageId: string, instance: ProferPluginViewInstance = { kind: 'tab' }): void {
     if (!isSafePageIdentity(pluginId, pageId)) return
-    const record = this.views.get(pageKey(pluginId, pageId))
+    const record = this.views.get(pageKey(pluginId, pageId, instance))
     if (record) this.disposeRecord(record)
   }
 
@@ -413,12 +322,21 @@ export class PluginViewManager {
 
   private ownerFor(sender: WebContents, senderFrame: Electron.WebFrameMain | null, allowDisabled = false): { pluginId: string; pageId: string; key: string } {
     if (!senderFrame || senderFrame !== sender.mainFrame) throw new Error('仅允许插件主页面访问 Plugin Host API')
-    const owner = this.webContentsOwners.get(sender.id)
+    // 悬浮窗口页面的 webContents 由 PluginFloatingWindowManager 绑定，不在主窗口 View 表里。
+    const floating = pluginFloatingWindowManager.ownerForWebContents(sender.id)
+    const owner = this.webContentsOwners.get(sender.id) ?? floating
     if (!owner) throw new Error('拒绝非插件页面访问 Plugin Host API')
     const plugin = getInstalledPlugin(owner.pluginId)
     if (!plugin || !plugin.manifest.contributes.pages?.some((page) => page.id === owner.pageId)) throw new Error('插件页面不存在')
     if (!allowDisabled && !plugin.enabled) throw new Error('插件已停用')
     return owner
+  }
+
+  private surfaceFor(sender: WebContents): ProferPluginContext['surface'] {
+    if (pluginFloatingWindowManager.isFloatingWebContents(sender.id)) return 'floating'
+    const owner = this.webContentsOwners.get(sender.id)
+    if (!owner) return 'tab'
+    return this.views.get(owner.key)?.instance.kind === 'tool' ? 'tool' : 'tab'
   }
 
   getContext(sender: WebContents, senderFrame: Electron.WebFrameMain | null): ProferPluginContext {
@@ -433,6 +351,7 @@ export class PluginViewManager {
         ...(plugin.manifest.publisher && { publisher: plugin.manifest.publisher }),
       },
       pageId: owner.pageId,
+      surface: this.surfaceFor(sender),
       locale: app.getLocale() || 'zh-CN',
       theme: getSettings().themeMode === 'light' || (getSettings().themeMode === 'system' && !nativeTheme.shouldUseDarkColors)
         ? 'light'

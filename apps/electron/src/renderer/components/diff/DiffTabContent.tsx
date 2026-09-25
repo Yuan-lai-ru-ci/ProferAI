@@ -12,7 +12,8 @@ import DOMPurify from 'dompurify'
 import { File as PierreFile } from '@pierre/diffs/react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom, agentSessionsAtom, agentSDKMessagesCacheAtom, liveMessagesMapAtom, agentSideExplorationMapAtom, agentDiffPanelTabAtom, agentSidePanelOpenAtom, getExplorationSidePanelTab } from '@/atoms/agent-atoms'
+import { agentDiffViewModeAtom, agentDiffRefreshVersionAtom, agentSessionsAtom, agentSDKMessagesCacheAtom, liveMessagesMapAtom } from '@/atoms/agent-atoms'
+import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { resolvedThemeAtom } from '@/atoms/theme'
 import { quotedSelectionMapAtom } from '@/atoms/preview-atoms'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
@@ -20,6 +21,7 @@ import { useShortcut } from '@/hooks/useShortcut'
 import { usePreviewQuotedSelection } from '@/hooks/usePreviewQuotedSelection'
 import { initShortcutRegistry } from '@/lib/shortcut-registry'
 import { getFileBaseName } from '@/lib/file-utils'
+import { useSmoothZoom } from '@/hooks/useSmoothZoom'
 import { DiffView } from './DiffView'
 import { MarkdownRichEditor } from './MarkdownRichEditor'
 import { getPreviewCandidateBasePaths, isAbsoluteFilePath } from './preview-open-path'
@@ -253,14 +255,15 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const pdfIframeRef = React.useRef<HTMLIFrameElement>(null)
   const [imagePath, setImagePath] = React.useState('')
   const [imageDataUrl, setImageDataUrl] = React.useState('')
-  const MIN_IMAGE_ZOOM = 0.5
-  const MAX_IMAGE_ZOOM = 3
-  const IMAGE_ZOOM_STEP = 0.1
-  const [imageZoom, setImageZoom] = React.useState(0.5)
-  const [imageNaturalSize, setImageNaturalSize] = React.useState({ w: 0, h: 0 })
-  const imageContainerRef = React.useRef<HTMLDivElement>(null)
-  const imageDragging = React.useRef(false)
-  const imageDragStart = React.useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 })
+  // 图片缩放：useSmoothZoom 统一三处图片预览（普通滚轮直接缩放 + rAF 平滑 + 指针锚定 + 拖拽平移）
+  const {
+    zoom: imageZoom,
+    pan: imagePan,
+    bindRef: bindImageEl,
+    reset: resetImageZoom,
+    zoomBy: imageZoomBy,
+    onPanMouseDown: onImagePanMouseDown,
+  } = useSmoothZoom({ minZoom: 0.5, maxZoom: 5 })
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const [findOpen, setFindOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
@@ -282,9 +285,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const store = useStore()
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
-  const setSideExplorationMap = useSetAtom(agentSideExplorationMapAtom)
-  const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
-  const setSidePanelTab = useSetAtom(agentDiffPanelTabAtom)
   const [previewSelection, setPreviewSelection] = React.useState<PreviewSelectionSnapshot | null>(null)
 
   const ext = getExtension(filePath)
@@ -296,8 +296,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const isDocx = previewOnly && DOCX_EXTS.has(ext)
   const isOfficePreview = previewOnly && OFFICE_PREVIEW_EXTS.has(ext)
   const isLegacyOffice = previewOnly && LEGACY_OFFICE_EXTS.has(ext)
-  const isOfvBacked = previewOnly && isOfvBackedPath(filePath)
-  const isImage = previewOnly && IMAGE_PREVIEW_EXTS.has(ext)
+  // 普通图片（Chromium <img> 能解的位图）不走 OFV：OFV 的 imagePlugin 要按住 Ctrl/Cmd
+  // 滚轮才缩放、且是档位式 zoom-in/out 命令，体验不如自渲染的 useSmoothZoom（普通滚轮
+  // 直接缩放 + rAF 平滑 + 指针锚定）。故把普通图片从 OFV 承担范围里排除，交回 isImage 分支。
+  // OFV 只接管 Chromium 画不了的图片格式（.tif/.heic/.jxl…，在 OFV_EXTRA_EXTS 里）。
+  const isImageExt = IMAGE_PREVIEW_EXTS.has(ext)
+  const isOfvBacked = previewOnly && isOfvBackedPath(filePath) && !isImageExt
+  const isImage = previewOnly && isImageExt
   const isUnsupported = previewOnly && UNSUPPORTED_EXTS.has(ext)
 
   React.useEffect(() => {
@@ -380,19 +385,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
         next.set(branch.id, quotedSelection)
         return next
       })
-      setSideExplorationMap((previous) => {
-        const branches = previous.get(sessionId) ?? []
-        if (branches.some((item) => item.sessionId === branch.id)) return previous
-        const next = new Map(previous)
-        next.set(sessionId, [...branches, {
-          sessionId: branch.id,
-          sourceMessageId: resolvedSourceMessageId,
-          sourceLabel: `文件 · ${getFileBaseName(filePath)}`,
-        }])
-        return next
-      })
-      setSidePanelOpen(true)
-      setSidePanelTab((previous) => new Map(previous).set(sessionId, getExplorationSidePanelTab(branch.id)))
+      // 分支成为父会话上下文内的顶栏 Tab：激活分支，并自动与父会话并排（焦点在分支）。
+      openExplorationBranchTab(store, sessionId, { sessionId: branch.id, title: branch.title || '探索分支' }, { autoGroup: true })
       setPreviewSelection(null)
       window.getSelection()?.removeAllRanges()
       toast.success('已从文件预览创建探索分支', { description: '当前选区已带入分支。' })
@@ -400,7 +394,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       console.error('[DiffTabContent] 从文件预览创建探索分支失败:', error)
       toast.error('创建探索分支失败', { description: error instanceof Error ? error.message : undefined })
     }
-  }, [filePath, previewSelection, sessionId, sessions, setAgentSessions, setQuotedSelectionMap, setSideExplorationMap, setSidePanelOpen, setSidePanelTab, store])
+  }, [filePath, previewSelection, sessionId, sessions, setAgentSessions, setQuotedSelectionMap, store])
 
   const fileAccess = React.useMemo(() => ({
     sessionId,
@@ -462,29 +456,13 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     setPdfZoom(100)
     setImagePath('')
     setImageDataUrl('')
-    setImageZoom(0.5)
-    setImageNaturalSize({ w: 0, h: 0 })
+    resetImageZoom(1)
     setLoading(!isLegacyOffice)
     setMarkdownEditing(false)
     setMarkdownSourceMode(false)
     setMarkdownDraft('')
     setMarkdownSaving(false)
-  }, [filePath, sessionId, previewOnly, isLegacyOffice])
-
-  // 预览区域直接接管滚轮缩放；non-passive 可阻止滚轮继续滚动外层页面。
-  React.useEffect(() => {
-    const el = imageContainerRef.current
-    if (!el || !isImage || !imageDataUrl) return
-    const handler = (e: WheelEvent) => {
-      e.preventDefault()
-      setImageZoom((z) => Math.min(
-        MAX_IMAGE_ZOOM,
-        Math.max(MIN_IMAGE_ZOOM, z + (e.deltaY < 0 ? IMAGE_ZOOM_STEP : -IMAGE_ZOOM_STEP)),
-      ))
-    }
-    el.addEventListener('wheel', handler, { passive: false })
-    return () => el.removeEventListener('wheel', handler)
-  }, [isImage, imageDataUrl])
+  }, [filePath, sessionId, previewOnly, isLegacyOffice, resetImageZoom])
 
   // 监听 PDF iframe 发回的缩放百分比
   React.useEffect(() => {
@@ -533,8 +511,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setPdfZoom(100)
       setImagePath(cached.imagePath ?? '')
       setImageDataUrl(cached.imageDataUrl ?? '')
-      setImageZoom(0.5)
-      setImageNaturalSize({ w: 0, h: 0 })
+      resetImageZoom(1)
       setLoading(false)
       return // 缓存命中，直接返回，不执行 load()
     } else {
@@ -553,8 +530,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       setPdfZoom(100)
       setImagePath('')
       setImageDataUrl('')
-      setImageZoom(0.5)
-      setImageNaturalSize({ w: 0, h: 0 })
+      resetImageZoom(1)
       lastNewContentRef.current = ''
       lastOldContentRef.current = ''
       // 内容缓存被 LRU 淘汰但滚动位置仍在时（如切走会话后预览 Tab 重建），
@@ -643,6 +619,9 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
             if (isLegacyOffice) {
               return
             }
+            if (isOfvBacked) {
+              return
+            }
             const result = await window.electronAPI.resolveAndReadFile(filePath, fileAccess)
             if (cancelled) return
             // result === null ⇒ 主进程在所有授权/全局目录都没找到该文件（非空文件，而是不存在）
@@ -687,7 +666,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     load()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, sessionId, ext, getContentCacheKey])
+  }, [filePath, dirPath, gitRoot, previewOnly, previewContentVersion, fileAccess, isPdf, isDocx, isOfficePreview, isLegacyOffice, isImage, isOfvBacked, sessionId, ext, getContentCacheKey])
 
   // refreshVersion 触发的静默刷新：仅 diff 模式、内容有变化时才更新 state
   const prevRefreshRef = React.useRef(-1)
@@ -1250,63 +1229,35 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
               )
             ) : isImage ? (
               imageDataUrl ? (
-                <div className="relative h-full">
+                <div className="relative h-full overflow-hidden">
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-2 py-1 rounded-lg bg-background/80 backdrop-blur-sm border border-border/30 shadow-sm">
                   <button
                     type="button"
                     className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => setImageZoom((z) => Math.max(MIN_IMAGE_ZOOM, z - IMAGE_ZOOM_STEP))}
+                    onClick={() => imageZoomBy(1 / 1.2)}
                   >−</button>
                   <span className="text-xs text-muted-foreground min-w-[40px] text-center font-mono">{Math.round(imageZoom * 100)}%</span>
                   <button
                     type="button"
                     className="w-6 h-6 rounded border border-border/30 flex items-center justify-center text-sm text-muted-foreground hover:bg-muted/50"
-                    onClick={() => setImageZoom((z) => Math.min(MAX_IMAGE_ZOOM, z + IMAGE_ZOOM_STEP))}
+                    onClick={() => imageZoomBy(1.2)}
                   >+</button>
                 </div>
-                <div
-                  ref={imageContainerRef}
-                  className="h-full overflow-auto p-4 pt-12"
-                  style={{ cursor: imageZoom > 1 ? (imageDragging.current ? 'grabbing' : 'grab') : 'default' }}
-                  onMouseDown={(e) => {
-                    if (imageZoom <= 1 || e.button !== 0) return
-                    imageDragging.current = true
-                    imageDragStart.current = { x: e.clientX, y: e.clientY, scrollLeft: e.currentTarget.scrollLeft, scrollTop: e.currentTarget.scrollTop }
-                    e.currentTarget.style.cursor = 'grabbing'
-                    const target = e.currentTarget
-                    const onMove = (ev: MouseEvent) => {
-                      if (!imageDragging.current) return
-                      target.scrollLeft = imageDragStart.current.scrollLeft - (ev.clientX - imageDragStart.current.x)
-                      target.scrollTop = imageDragStart.current.scrollTop - (ev.clientY - imageDragStart.current.y)
-                    }
-                    const onUp = () => {
-                      imageDragging.current = false
-                      target.style.cursor = 'grab'
-                      document.removeEventListener('mousemove', onMove)
-                      document.removeEventListener('mouseup', onUp)
-                    }
-                    document.addEventListener('mousemove', onMove)
-                    document.addEventListener('mouseup', onUp)
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: '100%', minHeight: '100%', width: imageNaturalSize.w > 0 ? imageNaturalSize.w * imageZoom : undefined, height: imageNaturalSize.h > 0 ? imageNaturalSize.h * imageZoom : undefined }}>
-                    <img
-                      src={imageDataUrl}
-                      alt={getFileBaseName(filePath) || 'Image'}
-                      draggable={false}
-                      onLoad={(e) => {
-                        const img = e.currentTarget
-                        setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight })
-                      }}
-                      style={{
-                        width: imageNaturalSize.w > 0 ? imageNaturalSize.w * imageZoom : 'auto',
-                        height: imageNaturalSize.h > 0 ? imageNaturalSize.h * imageZoom : 'auto',
-                        maxWidth: imageNaturalSize.w > 0 && imageZoom <= 1 ? '100%' : 'none',
-                        maxHeight: imageNaturalSize.h > 0 && imageZoom <= 1 ? '100%' : 'none',
-                        visibility: imageNaturalSize.w > 0 ? 'visible' : 'hidden',
-                      }}
-                    />
-                  </div>
+                <div className="h-full overflow-hidden p-4 pt-12 flex items-center justify-center">
+                  <img
+                    ref={bindImageEl}
+                    src={imageDataUrl}
+                    alt={getFileBaseName(filePath) || 'Image'}
+                    draggable={false}
+                    onMouseDown={onImagePanMouseDown}
+                    className="max-w-full max-h-full object-contain select-none"
+                    style={{
+                      transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`,
+                      transformOrigin: '0 0',
+                      cursor: 'grab',
+                    }}
+                    title="滚动滚轮缩放，拖拽平移"
+                  />
                 </div>
               </div>
               ) : null

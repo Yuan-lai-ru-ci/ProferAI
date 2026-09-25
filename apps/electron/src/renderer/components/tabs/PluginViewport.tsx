@@ -1,5 +1,5 @@
 import * as React from 'react'
-import type { ProferPluginViewLayout } from '@profer/plugin-api'
+import type { ProferPluginViewInstance, ProferPluginViewLayout } from '@profer/plugin-api'
 
 const RENDERER_INSTANCE_ID = globalThis.crypto?.randomUUID?.() ?? `plugin-renderer-${Date.now()}`
 let nextRevision = 0
@@ -18,6 +18,7 @@ function hasBlockingOverlay(): boolean {
 export interface PluginViewportProps {
   pluginId: string
   pageId: string
+  instance: ProferPluginViewInstance
   visible: boolean
 }
 
@@ -26,7 +27,8 @@ export interface PluginViewportProps {
  * 真正页面由主进程 WebContentsView 绘制；这里仅提供安全的布局锚点，
  * 同时在对话框/下拉菜单等遮罩出现时及时隐藏原生 View，避免它拦截宿主交互。
  */
-export function PluginViewport({ pluginId, pageId, visible }: PluginViewportProps): React.ReactElement {
+export function PluginViewport({ pluginId, pageId, instance, visible }: PluginViewportProps): React.ReactElement {
+  const taskContext = instance.kind === 'tab' && instance.sessionId ? instance.sessionId : undefined
   const frameRef = React.useRef<HTMLDivElement>(null)
 
   React.useLayoutEffect(() => {
@@ -47,6 +49,7 @@ export function PluginViewport({ pluginId, pageId, visible }: PluginViewportProp
         const next: ProferPluginViewLayout = {
           pluginId,
           pageId,
+          instance,
           rendererInstanceId: RENDERER_INSTANCE_ID,
           layoutSourceRevision: sourceRevision,
           revision: ++nextRevision,
@@ -101,6 +104,7 @@ export function PluginViewport({ pluginId, pageId, visible }: PluginViewportProp
         void publishLayout({
           pluginId,
           pageId,
+          instance,
           rendererInstanceId: RENDERER_INSTANCE_ID,
           layoutSourceRevision: sourceRevision,
           revision: ++nextRevision,
@@ -110,7 +114,8 @@ export function PluginViewport({ pluginId, pageId, visible }: PluginViewportProp
         }).catch(() => undefined)
       }
     }
-  }, [pageId, pluginId, visible])
+  }, [instance.kind, taskContext, pageId, pluginId, visible])
+
 
   return (
     <div

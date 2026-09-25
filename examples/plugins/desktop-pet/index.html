@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Profer 桌宠</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="pet-app">
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">PROFER COMPANION</span>
+        <h1>你好，我是 <span id="pet-name-heading">小 Pro</span></h1>
+        <p id="status" role="status">正在唤醒桌宠…</p>
+      </div>
+      <button id="edit-name" class="icon-button" type="button" aria-label="修改宠物名字" title="修改名字">✎</button>
+    </header>
+
+    <section class="pet-stage" aria-label="桌宠互动区">
+      <div class="spark spark-one">✦</div>
+      <div class="spark spark-two">·</div>
+      <button id="pet" class="pet-button" type="button" aria-label="摸摸桌宠">
+        <span class="pet-shadow"></span>
+        <span class="pet-body">
+          <span class="ear ear-left"></span><span class="ear ear-right"></span>
+          <span class="face">
+            <span class="eye eye-left"></span><span class="eye eye-right"></span>
+            <span class="blush blush-left"></span><span class="blush blush-right"></span>
+            <span class="mouth"></span>
+          </span>
+          <span class="belly"></span>
+          <span class="paw paw-left"></span><span class="paw paw-right"></span>
+        </span>
+      </button>
+      <div id="speech" class="speech" aria-live="polite">今天也要加油呀！</div>
+    </section>
+
+    <section class="card stats-card" aria-labelledby="stats-title">
+      <div class="section-heading"><h2 id="stats-title">状态</h2><span id="mood-label" class="mood-label">元气满满</span></div>
+      <div class="stat"><div class="stat-label"><span>心情</span><strong id="mood-value">82</strong></div><div class="meter"><span id="mood-meter"></span></div></div>
+      <div class="stat"><div class="stat-label"><span>能量</span><strong id="energy-value">76</strong></div><div class="meter energy"><span id="energy-meter"></span></div></div>
+      <div class="stat"><div class="stat-label"><span>饱腹</span><strong id="hunger-value">68</strong></div><div class="meter hunger"><span id="hunger-meter"></span></div></div>
+    </section>
+
+    <section class="actions" aria-label="桌宠动作">
+      <button id="feed" class="action-button primary" type="button"><span>🍪</span> 喂一口</button>
+      <button id="pat" class="action-button" type="button"><span>🫶</span> 摸摸头</button>
+      <button id="rest" class="action-button" type="button"><span>🌙</span> 休息一下</button>
+    </section>
+
+    <footer><span id="save-state">状态会自动保存</span><button id="reset" class="text-button" type="button">重新开始</button></footer>
+  </main>
+</body>
+</html>

@@ -30,7 +30,6 @@ import { CompactModelSelectorCtx } from '@/components/chat/ModelSelector'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
-import { useTrackSessionView } from '@/hooks/useTrackSessionView'
 import { useDefaultAppForFile } from '@/hooks/useDefaultAppForFile'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { FilePreviewDialog } from '@/components/file-browser/FilePreviewDialog'
@@ -79,7 +78,6 @@ function clampTeamAgentPanelWidth(width: number): number {
 }
 
 export function TeamWorkspaceView(): React.ReactElement {
-  useTrackSessionView()
 
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const currentId = useAtomValue(currentAgentWorkspaceIdAtom)
@@ -121,7 +119,7 @@ export function TeamWorkspaceView(): React.ReactElement {
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   // 团队 Agent 内容必须与顶栏 active tab 同步，避免 deferred id 让旧会话长期残留。
   const activeTab = tabs.find((tab) => tab.id === activeTabId)
-  const activeTabAgentSessionId = activeTab && (activeTab.type === 'agent' || activeTab.type === 'preview')
+  const activeTabAgentSessionId = activeTab && (activeTab.type === 'agent' || activeTab.type === 'preview' || activeTab.type === 'browser')
     ? activeTab.sessionId
     : null
 
@@ -139,7 +137,7 @@ export function TeamWorkspaceView(): React.ReactElement {
   const teamAgentTab = React.useMemo(() => {
     if (!teamId) return null
     if (activeTeamTab?.type === 'agent') return activeTeamTab
-    if (activeTeamTab?.type === 'preview') {
+    if (activeTeamTab?.type === 'preview' || activeTeamTab?.type === 'browser') {
       return tabs.find((tab) => tab.type === 'agent' && tab.sessionId === activeTeamTab.sessionId) ?? null
     }
     return tabs.find((tab) => {

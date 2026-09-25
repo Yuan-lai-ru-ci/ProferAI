@@ -45,6 +45,7 @@ import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
   resolveAgentSdk1MSelection,
+  inferAgentSdkContextWindow,
   strip1MContextSuffix,
   AGENT_PRESET_CAPABILITY_GROUPS,
   createEffectiveAgentPresetPolicy,
@@ -1166,7 +1167,15 @@ export class AgentOrchestrator {
     const sdk1MSelection = resolveAgentSdk1MSelection(configuredModelId, channel.provider, context1mPreference)
     const oneMillionContextEnabled = sdk1MSelection.oneMillionContextEnabled
     const effectiveSdkModelId = sdk1MSelection.modelId
-      let sdkEnv = await this.buildSdkEnv(runtimeCredentials)
+    const initialContextWindow = inferAgentSdkContextWindow(configuredModelId, channel.provider, context1mPreference)
+    if (agentRuntime === 'claude' && initialContextWindow != null) {
+      // 兼容网关可能剥掉 [1m] 后缀或不返回 modelUsage；启动时先同步本轮最终窗口。
+      this.eventBus.emit(sessionId, {
+        kind: 'profer_event',
+        event: { type: 'context_window', contextWindow: initialContextWindow },
+      })
+    }
+    let sdkEnv = await this.buildSdkEnv(runtimeCredentials)
     applyAgentModelRoutingToEnv(sdkEnv, modelRouting)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
@@ -2137,7 +2146,7 @@ ${enrichedMessage}`
           appSettings.agentMaxBudgetUsd > 0 && {
           maxBudgetUsd: appSettings.agentMaxBudgetUsd,
         }),
-        // 仅向 Claude SDK 的已验证 provider/model 组合注入 1M beta；Pi 不接收 Claude 专用选项。
+        // 按本轮最终 1M 选择注入 beta；用户显式开启未知模型时同样生效。
         ...(agentRuntime === 'claude' &&
           oneMillionContextEnabled && {
           betas: ['context-1m-2025-08-07'] as SdkBeta[],

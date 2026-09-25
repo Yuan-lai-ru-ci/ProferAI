@@ -29,7 +29,6 @@ import { cn } from '@/lib/utils'
 import { TEAM_WORKSPACE_UI_ENABLED } from '@/lib/product-feature-flags'
 
 const MIN_RIGHT_PANEL_WIDTH = 300
-const MIN_EXPLORATION_PANEL_WIDTH = 480
 const MAX_RIGHT_PANEL_WIDTH = 560
 
 const MIN_LEFT_SIDEBAR_WIDTH = 300
@@ -104,9 +103,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   // 右侧面板可拖拽宽度
   const [rightPanelWidth, setRightPanelWidth] = useAtom(agentSidePanelWidthAtom)
   const dragging = React.useRef(false)
-  const rightPanelMinimumWidth = activeRightPanelTab.startsWith('exploration:')
-    ? MIN_EXPLORATION_PANEL_WIDTH
-    : MIN_RIGHT_PANEL_WIDTH
+  const rightPanelMinimumWidth = MIN_RIGHT_PANEL_WIDTH
   const clampCurrentRightPanelWidth = React.useCallback(
     (width: number) => Math.max(rightPanelMinimumWidth, Math.min(MAX_RIGHT_PANEL_WIDTH, width)),
     [rightPanelMinimumWidth],

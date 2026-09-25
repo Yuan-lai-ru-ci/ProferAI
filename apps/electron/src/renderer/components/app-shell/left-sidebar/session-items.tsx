@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, ChevronRight, Cloud, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, Sparkles,
+  Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, ChevronRight, Cloud, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, Sparkles, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { clearSessionReferenceDragState, setSessionReferenceDragData } from '@/lib/session-reference-drag'
@@ -162,6 +162,7 @@ export interface SessionItemActionsProps {
   archived: boolean
   onTogglePin: () => void
   onToggleArchive: () => void
+  onCloseTab?: () => void
   menuItems: (
     MenuItem: typeof DropdownMenuItem,
     MenuSeparator: typeof DropdownMenuSeparator,
@@ -254,6 +255,7 @@ export function SessionItemActions({
   archived,
   onTogglePin,
   onToggleArchive,
+  onCloseTab,
   menuItems,
   onMenuOpenChange,
 }: SessionItemActionsProps): React.ReactElement {
@@ -305,6 +307,26 @@ export function SessionItemActions({
       if (closeTimerRef.current !== null) clearTimeout(closeTimerRef.current)
     }
   }, [])
+
+  if (onCloseTab) {
+    return (
+      <div
+        className="relative flex h-[18px] w-6 flex-shrink-0 items-center justify-end opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <SafeTooltip content="关闭当前 Tab" side="top">
+          <button
+            type="button"
+            className="rounded p-0.5 text-foreground/35 transition-colors hover:bg-foreground/[0.08] hover:text-foreground/70"
+            onClick={onCloseTab}
+            aria-label="关闭当前 Tab"
+          >
+            <X size={14} />
+          </button>
+        </SafeTooltip>
+      </div>
+    )
+  }
 
   const forceVisible = archiveConfirming || menuOpen
 
@@ -399,6 +421,8 @@ interface ConversationItemProps {
   onToggleArchive: (id: string) => Promise<void>
   /** 手动重新生成标题（用前几轮有效消息重命名并重新锁定） */
   onRegenerateTitle?: (id: string) => Promise<void>
+  /** 仅当前会话 Tab 区使用：关闭入口，不删除会话数据。 */
+  onCloseTab?: () => void
 }
 
 export const ConversationItem = React.memo(function ConversationItem({
@@ -414,6 +438,7 @@ export const ConversationItem = React.memo(function ConversationItem({
   onTogglePin,
   onToggleArchive,
   onRegenerateTitle,
+  onCloseTab,
 }: ConversationItemProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -504,6 +529,13 @@ export const ConversationItem = React.memo(function ConversationItem({
           data-profer-navigation-active={active ? 'true' : undefined}
           tabIndex={0}
           onClick={() => { if (preview.shouldSuppressClick()) return; onSelect(conversation.id, conversation.title) }}
+          onMouseDown={(event) => {
+            // 中键关闭当前会话入口（与顶栏 Tab 行为一致），不删除会话数据。
+            if (event.button !== 1 || !onCloseTab) return
+            event.preventDefault()
+            event.stopPropagation()
+            onCloseTab()
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
@@ -577,6 +609,7 @@ export const ConversationItem = React.memo(function ConversationItem({
               archived={!!conversation.archived}
               onTogglePin={() => onTogglePin(conversation.id)}
               onToggleArchive={() => onToggleArchive(conversation.id)}
+              onCloseTab={onCloseTab}
               onMenuOpenChange={setMenuOpen}
               menuItems={menuItems}
             />
@@ -667,6 +700,8 @@ interface AgentSessionItemProps {
   onMarkUnread?: (id: string) => void
   /** 手动重新生成标题（用前几轮有效消息重命名并重新锁定） */
   onRegenerateTitle?: (id: string) => Promise<void>
+  /** 仅当前会话 Tab 区使用：关闭入口，不删除会话数据。 */
+  onCloseTab?: () => void
 }
 
 export const AgentSessionItem = React.memo(function AgentSessionItem({
@@ -688,6 +723,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   onToggleArchive,
   onMarkUnread,
   onRegenerateTitle,
+  onCloseTab,
 }: AgentSessionItemProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -799,6 +835,13 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
           }}
           onDragEnd={clearSessionReferenceDragState}
           onClick={() => { if (preview.shouldSuppressClick()) return; onSelect(session.id, session.title) }}
+          onMouseDown={(event) => {
+            // 中键关闭当前会话入口（与顶栏 Tab 行为一致），不删除会话数据。
+            if (event.button !== 1 || !onCloseTab) return
+            event.preventDefault()
+            event.stopPropagation()
+            onCloseTab()
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
@@ -911,6 +954,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
               archived={!!session.archived}
               onTogglePin={() => onTogglePin(session.id)}
               onToggleArchive={() => onToggleArchive(session.id)}
+              onCloseTab={onCloseTab}
               onMenuOpenChange={setMenuOpen}
               menuItems={menuItems}
             />

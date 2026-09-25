@@ -324,12 +324,17 @@ export function resolveAgentSdk1MSelection(
   }
 }
 
-/** 按实际 provider 推断 Agent SDK 上下文窗口，不向未知代理假设 1M 协议。 */
-export function inferAgentSdkContextWindow(modelId: string | undefined, provider?: ProviderType): number | undefined {
+/** 按本轮实际 1M 选择推断 Agent SDK 上下文窗口；显式偏好优先于模型名自动识别。 */
+export function inferAgentSdkContextWindow(
+  modelId: string | undefined,
+  provider?: ProviderType,
+  explicit?: boolean | null,
+): number | undefined {
   if (!modelId) return undefined
-  return resolveAgentSdkModelId(modelId, provider) !== modelId || /\[1m\]$/i.test(modelId)
-    ? ONE_MILLION_CONTEXT_WINDOW
-    : DEFAULT_CONTEXT_WINDOW
+  const decision = resolveOneMillionContextDecision(modelId, provider, explicit)
+  if (decision.enabled) return ONE_MILLION_CONTEXT_WINDOW
+  if (decision.source === 'forced-off') return DEFAULT_CONTEXT_WINDOW
+  return inferContextWindow(modelId)
 }
 
 /**

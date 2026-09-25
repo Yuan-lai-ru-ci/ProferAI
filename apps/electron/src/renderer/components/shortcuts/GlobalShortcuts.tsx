@@ -373,7 +373,7 @@ export function GlobalShortcuts(): null {
 
       store.set(activeViewAtom, 'conversations')
 
-      if (target.type === 'agent' || target.type === 'preview') {
+      if (target.type === 'agent' || target.type === 'preview' || target.type === 'browser') {
         const sessionId = target.sessionId
         store.set(appModeAtom, 'agent')
         store.set(currentAgentSessionIdAtom, sessionId)

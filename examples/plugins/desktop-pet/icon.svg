@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="桌宠图标">
+  <defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#ffd9a6"/><stop offset="1" stop-color="#ed9167"/></linearGradient></defs>
+  <rect width="64" height="64" rx="18" fill="#fff3e8"/>
+  <path d="M17 23 13 10l13 8M47 23l4-13-13 8" fill="url(#g)" stroke="#d87959" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M13 32c0-13 8-20 19-20s19 7 19 20-7 22-19 22-19-9-19-22Z" fill="url(#g)" stroke="#d87959" stroke-width="2.5"/>
+  <circle cx="25" cy="31" r="2.5" fill="#493440"/><circle cx="39" cy="31" r="2.5" fill="#493440"/>
+  <path d="M29 39c2 2 4 2 6 0" fill="none" stroke="#67414b" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M21 40h-5M43 40h5" stroke="#eb7882" stroke-width="3" stroke-linecap="round" opacity=".7"/>
+</svg>

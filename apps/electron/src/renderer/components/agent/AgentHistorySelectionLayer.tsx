@@ -6,9 +6,10 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { agentDiffPanelTabAtom, agentSessionsAtom, agentSideExplorationMapAtom, agentSidePanelOpenAtom, getExplorationSidePanelTab } from '@/atoms/agent-atoms'
+import { agentSessionsAtom } from '@/atoms/agent-atoms'
+import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { quotedSelectionMapAtom } from '@/atoms/preview-atoms'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import { SelectionActionPopover } from '@/components/selection/SelectionActionPopover'
@@ -89,11 +90,9 @@ export function AgentHistorySelectionLayer({
   explorationEnabled = true,
 }: AgentHistorySelectionLayerProps): React.ReactElement {
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
+  const store = useStore()
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
-  const setSideExplorationMap = useSetAtom(agentSideExplorationMapAtom)
-  const setSidePanelOpen = useSetAtom(agentSidePanelOpenAtom)
-  const setSidePanelTabMap = useSetAtom(agentDiffPanelTabAtom)
   const [selection, setSelection] = React.useState<AgentHistorySelection | null>(null)
   const openExplorationPendingRef = React.useRef(false)
   const pointerSelectingRef = React.useRef(false)
@@ -286,16 +285,8 @@ export function AgentHistorySelectionLayer({
       }
       setAgentSessions((prev) => prev.some((item) => item.id === branch.id) ? prev : [branch, ...prev])
       setQuotedSelectionMap((prev) => new Map(prev).set(branch.id, quotedSelection))
-      setSideExplorationMap((prev) => {
-        const next = new Map(prev)
-        const branches = prev.get(sessionId) ?? []
-        if (!branches.some((item) => item.sessionId === branch.id)) {
-          next.set(sessionId, [...branches, { sessionId: branch.id, sourceMessageId: selection.messageId!, sourceLabel }])
-        }
-        return next
-      })
-      setSidePanelOpen(true)
-      setSidePanelTabMap((prev) => new Map(prev).set(sessionId, getExplorationSidePanelTab(branch.id)))
+      // 分支成为父会话上下文内的顶栏 Tab：激活分支，并自动与父会话并排（焦点在分支）。
+      openExplorationBranchTab(store, sessionId, { sessionId: branch.id, title: branch.title || '探索分支' }, { autoGroup: true })
       window.getSelection()?.removeAllRanges()
       clearSelection()
       toast.success('已创建探索分支', { description: '它继承此回复之前的完整上下文；结论可带回主线。' })
@@ -305,7 +296,7 @@ export function AgentHistorySelectionLayer({
     } finally {
       openExplorationPendingRef.current = false
     }
-  }, [agentSessions, clearSelection, selection, sessionId, setAgentSessions, setQuotedSelectionMap, setSideExplorationMap, setSidePanelOpen, setSidePanelTabMap])
+  }, [agentSessions, clearSelection, selection, sessionId, setAgentSessions, setQuotedSelectionMap, store])
 
   return (
     <>

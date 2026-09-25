@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { Blocks, BookOpen, Bot, FileText, MessageSquare, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
+import { Blocks, BookOpen, Bot, FileText, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -39,6 +39,10 @@ export interface TabBarItemProps {
   onDragStart: (e: React.PointerEvent) => void
   /** 该 Tab 对应的会话是否由定时任务创建 */
   isAutomation?: boolean
+  /** 子会话血缘：探索分支（GitFork）或委派子会话（GitBranch），替换默认 agent 图标 */
+  childKind?: 'exploration' | 'delegation'
+  /** 浏览器页由 Agent 创建（顶栏显示 Agent 徽标） */
+  agentOwned?: boolean
   /** 在顶部标签栏中重命名 Agent 会话 */
   onRename?: (title: string) => Promise<void>
   /** hover 进入 Tab */
@@ -68,6 +72,8 @@ export function TabBarItem({
   onMiddleClick,
   onDragStart,
   isAutomation,
+  childKind,
+  agentOwned,
   onRename,
   onHoverEnter,
   onHoverLeave,
@@ -176,12 +182,18 @@ export function TabBarItem({
 
   const isScratch = type === 'scratch'
   const tabTypeIcon = type === 'agent'
-    ? <Bot className="size-3.5 shrink-0" aria-hidden="true" />
+    ? childKind === 'exploration'
+      ? <GitFork className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      : childKind === 'delegation'
+        ? <GitBranch className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        : <Bot className="size-3.5 shrink-0" aria-hidden="true" />
     : type === 'chat'
       ? <MessageSquare className="size-3.5 shrink-0" aria-hidden="true" />
       : type === 'preview'
         ? <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        : type === 'tutorial'
+        : type === 'browser'
+          ? <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          : type === 'tutorial'
           ? <BookOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           : type === 'plugin'
             ? <Blocks className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -281,6 +293,9 @@ export function TabBarItem({
         ) : (
           <span className="flex flex-1 min-w-0 items-center gap-1 text-left">
             {isAutomation && <Clock className="size-3 shrink-0 text-foreground/40" />}
+            {agentOwned && (
+              <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[9px] font-medium text-primary">Agent</span>
+            )}
             {editingTitle ? (
               <input
                 ref={titleInputRef}
@@ -291,6 +306,8 @@ export function TabBarItem({
                 className="h-5 min-w-0 flex-1 border-b border-primary/60 bg-transparent px-0 text-xs outline-none"
                 onClick={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
+                // 编辑中键也会被父按钮当成「中键关闭」，必须拦截
+                onMouseDown={(event) => event.stopPropagation()}
                 onChange={(event) => setDraftTitle(event.target.value)}
                 onBlur={() => void finishRename()}
                 onKeyDown={(event) => {
@@ -312,6 +329,8 @@ export function TabBarItem({
                 tabIndex={-1}
                 aria-label="重命名会话"
                 className="flex size-4 shrink-0 items-center justify-center rounded-sm opacity-60 transition-opacity hover:bg-muted-foreground/20 hover:opacity-100"
+                onPointerDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
                 onClick={startRename}
               >
                 <Pencil className="size-2.5" />
@@ -323,6 +342,8 @@ export function TabBarItem({
                 tabIndex={-1}
                 aria-label="保存会话标题"
                 className="flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted-foreground/20"
+                onPointerDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => { event.stopPropagation(); void finishRename() }}
               >
                 <Check className="size-2.5" />

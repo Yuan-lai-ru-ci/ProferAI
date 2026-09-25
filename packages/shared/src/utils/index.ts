@@ -24,6 +24,7 @@ export {
   strip1MContextSuffix,
   resolveOneMillionContextDecision,
   resolveAgentSdk1MSelection,
+  inferAgentSdkContextWindow,
   resolveContextWindowFromModelUsage,
 } from './context-window'
 export type { OneMillionContextSource, OneMillionContextDecision, AgentSdk1MSelection } from './context-window'

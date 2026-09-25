@@ -2,5 +2,3 @@
 import { atom } from 'jotai'
 import type { ProferInstalledPlugin } from '@profer/plugin-api'
 export const installedPluginsAtom = atom<ProferInstalledPlugin[]>([])
-
-export const pluginPanelsAtom = atom(new Map<string, { pluginId: string; pageId: string; title: string }>())

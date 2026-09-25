@@ -6,10 +6,11 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { PluginTaskControls } from '@/components/plugins/PluginTaskControls'
+import { useAtomValue } from 'jotai'
 import { Split } from 'lucide-react'
-import { agentDiffPanelTabAtom, agentSessionsAtom, agentSideExplorationMapAtom, agentSidePanelOpenAtom, getExplorationSidePanelTab } from '@/atoms/agent-atoms'
+import { agentSessionsAtom } from '@/atoms/agent-atoms'
+import { openExplorationBranchTab } from '@/lib/exploration-tab'
+import { getDefaultStore } from 'jotai'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -24,9 +25,6 @@ interface AgentHeaderProps {
 
 export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement | null {
   const sessions = useAtomValue(agentSessionsAtom)
-  const setExplorationMap = useSetAtom(agentSideExplorationMapAtom)
-  const setPanelOpen = useSetAtom(agentSidePanelOpenAtom)
-  const setPanelTab = useSetAtom(agentDiffPanelTabAtom)
   const branches = React.useMemo(
     () => sessions
       .filter((session) => session.explorationParentSessionId === sessionId && !!session.explorationSourceMessageId)
@@ -34,28 +32,16 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
     [sessionId, sessions],
   )
 
+  /** 分支是顶栏 Tab：重开 = 建 Tab 并激活（必要时自动与父会话并排）。 */
   const reopen = React.useCallback((branch: (typeof branches)[number]): void => {
     if (!branch.explorationSourceMessageId) return
-    setExplorationMap((previous) => {
-      const openBranches = previous.get(sessionId) ?? []
-      if (openBranches.some((item) => item.sessionId === branch.id)) return previous
-      const next = new Map(previous)
-      next.set(sessionId, [...openBranches, {
-        sessionId: branch.id,
-        sourceMessageId: branch.explorationSourceMessageId!,
-        sourceLabel: branch.explorationSourceLabel ?? '主线探索节点',
-      }])
-      return next
-    })
-    setPanelOpen(true)
-    setPanelTab((previous) => new Map(previous).set(sessionId, getExplorationSidePanelTab(branch.id)))
-  }, [sessionId, setExplorationMap, setPanelOpen, setPanelTab])
+    openExplorationBranchTab(getDefaultStore(), sessionId, { sessionId: branch.id, title: branch.title || '探索分支' }, { autoGroup: true })
+  }, [sessionId])
 
-  if (branches.length === 0) return <PluginTaskControls kind="agent" sessionId={sessionId} />
+  if (branches.length === 0) return null
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-    <PluginTaskControls kind="agent" sessionId={sessionId} />
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" className="titlebar-no-drag h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground" aria-label={`打开 ${branches.length} 个探索分支`}>

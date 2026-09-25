@@ -23,6 +23,8 @@ import {
   isGroupActive,
   isGroupEligibleTab,
   isGroupMember,
+  planAutoGroupWorkTab,
+  planFollowWorkTab,
   planGroupDrop,
   ratioForEmptySide,
   reconcileGroup,
@@ -45,6 +47,7 @@ test('agent/chat/preview 可以参与组合，单例与插件视口不行', () =
   // preview 有独立内容身份（一个文件），可以当作一栏展示；
   // 它的"转预览分屏"路径由落点判定保留（见 TabBar 的合并手势回落）
   expect(isGroupEligibleTab({ type: 'preview' })).toBe(true)
+  expect(isGroupEligibleTab({ type: 'browser' })).toBe(true)
   expect(isGroupEligibleTab({ type: 'scratch' })).toBe(false)
   expect(isGroupEligibleTab({ type: 'tutorial' })).toBe(false)
   expect(isGroupEligibleTab({ type: 'plugin' })).toBe(false)
@@ -442,4 +445,68 @@ test('空栏初始占比：空栏只占 1/3，且落在可拖拽边界内', () =
   // 必须能直接喂给几何函数（不被 clamp 改写）
   expect(resolveGroupSplitGeometry(1400, ratioForEmptySide('right')).ratio).toBeCloseTo(1 / 3, 6)
   expect(resolveGroupSplitGeometry(1400, ratioForEmptySide('left')).ratio).toBeCloseTo(2 / 3, 6)
+})
+
+
+// ===== 程序化自动建组（浏览器推送 / 自动预览跟随）=====
+
+test('planAutoGroupWorkTab：正看着对话且无组合时建立左右两栏，焦点在对话', () => {
+  const next = planAutoGroupWorkTab({
+    groups: [],
+    agentTabId: 's1',
+    workTabId: '__browser__:s1',
+    activeTabId: 's1',
+  })
+  expect(next).toHaveLength(1)
+  expect(next![0]).toEqual({ leftTabId: 's1', rightTabId: '__browser__:s1', focusedTabId: 's1' })
+})
+
+test('planAutoGroupWorkTab：用户不在看该对话、或任一成员已入组时不建组', () => {
+  expect(planAutoGroupWorkTab({ groups: [], agentTabId: 's1', workTabId: '__browser__:s1', activeTabId: 's2' })).toBeNull()
+  const existing = [{ leftTabId: 's1', rightTabId: 'x', focusedTabId: 's1' }]
+  expect(planAutoGroupWorkTab({ groups: existing, agentTabId: 's1', workTabId: '__browser__:s1', activeTabId: 's1' })).toBeNull()
+})
+
+test('planFollowWorkTab：对话+同会话预览组合跟随最新文件，焦点留在对话', () => {
+  const tabs = [
+    { id: 's1', type: 'agent', sessionId: 's1', title: 's1' },
+    { id: '__preview__:s1:a', type: 'preview', sessionId: 's1', title: 'a', filePath: '/w/a' },
+    { id: '__preview__:s1:b', type: 'preview', sessionId: 's1', title: 'b', filePath: '/w/b' },
+  ] as const
+  const groups = [{ leftTabId: 's1', rightTabId: '__preview__:s1:a', focusedTabId: 's1' }]
+  const next = planFollowWorkTab({
+    groups,
+    tabs,
+    agentTabId: 's1',
+    workTabId: '__preview__:s1:b',
+    activeTabId: 's1',
+  })
+  expect(next).toHaveLength(1)
+  expect(next![0]).toEqual({ leftTabId: 's1', rightTabId: '__preview__:s1:b', focusedTabId: 's1' })
+})
+
+test('planFollowWorkTab：右栏是浏览器/其他会话内容时不改写用户布局', () => {
+  const tabs = [
+    { id: 's1', type: 'agent', sessionId: 's1', title: 's1' },
+    { id: '__browser__:s1', type: 'browser', sessionId: 's1', title: '浏览器' },
+  ] as const
+  const groups = [{ leftTabId: 's1', rightTabId: '__browser__:s1', focusedTabId: 's1' }]
+  expect(planFollowWorkTab({
+    groups,
+    tabs,
+    agentTabId: 's1',
+    workTabId: '__preview__:s1:a',
+    activeTabId: 's1',
+  })).toBeNull()
+})
+
+test('planFollowWorkTab：无组合时退化为新建组合', () => {
+  const next = planFollowWorkTab({
+    groups: [],
+    tabs: [],
+    agentTabId: 's1',
+    workTabId: '__preview__:s1:a',
+    activeTabId: 's1',
+  })
+  expect(next![0]).toEqual({ leftTabId: 's1', rightTabId: '__preview__:s1:a', focusedTabId: 's1' })
 })
