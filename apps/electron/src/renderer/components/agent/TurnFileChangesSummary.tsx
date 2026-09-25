@@ -108,16 +108,16 @@ export function TurnFileChangesSummary({
 }: TurnFileChangesSummaryProps): React.ReactElement | null {
   const paths = React.useMemo(() => collectFilePaths(turnMessages), [turnMessages])
 
-  if (paths.length === 0) return null
-
   return (
     <div className="file-changes-summary pl-[46px] mt-3">
       <div className="pt-3 border-t-2 border-dashed border-border/60">
-        <div className="flex flex-wrap gap-1.5">
-          {paths.map((filePath) => (
-            <FilePathChip key={filePath} filePath={filePath} basePath={basePath} />
-          ))}
-        </div>
+        {paths.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {paths.map((filePath) => (
+              <FilePathChip key={filePath} filePath={filePath} basePath={basePath} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

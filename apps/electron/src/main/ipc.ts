@@ -12,7 +12,7 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, normalizePathForCompare, DEFAULT_PRESET_ID, type AgentThinkingLevel, type AgentEffort, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult, type OtherWorkspacePresetsGroup, type PresetReference, type PresetReferenceReport, type PresetScopeRebindResult } from '@profer/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SYNC_IPC_CHANNELS, TEAM_IPC_CHANNELS, SKILL_MARKETPLACE_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, TEAM_FILE_IPC_CHANNELS, TEAM_MEMORY_IPC_CHANNELS, isAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, normalizePathForCompare, DEFAULT_PRESET_ID, type AgentThinkingLevel, type AgentEffort, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult, type OtherWorkspacePresetsGroup, type PresetReference, type PresetReferenceReport, type PresetScopeRebindResult } from '@profer/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import type { CustomNotificationSound } from '../types'
 import { getBuildTarget } from './lib/build-target'
@@ -2731,7 +2731,14 @@ export function registerIpcHandlers(): void {
       rebindAndDisableGlobalPresetScope(workspaceSlug, source, replacement),
   )
   ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.SET_WORKSPACE_ENABLED, async (_, workspaceSlug: string, presetId: string, enabled: boolean): Promise<void> => setWorkspacePresetEnabled(workspaceSlug, presetId, enabled))
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.REBIND_SESSION_REFERENCE, async (_, sessionId: string, reference: PresetReference): Promise<AgentSessionMeta> => rebindAgentSessionPreset(sessionId, reference))
+  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.REBIND_SESSION_REFERENCE, async (_, sessionId: string, reference: PresetReference, expectedRevision?: number): Promise<AgentSessionMeta> => {
+    const session = getAgentSessionMeta(sessionId)
+    if (!session) throw new Error('会话不存在')
+    if (expectedRevision !== undefined && (session.revision ?? 0) !== expectedRevision) throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
+    const updated = rebindAgentSessionPreset(sessionId, reference)
+    publishAgentSessionProjection(updated)
+    return updated
+  })
   ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.REBIND_AUTOMATION_REFERENCE, async (_, automationId: string, reference: PresetReference | null) => rebindAutomationPreset(automationId, reference))
 
   ipcMain.handle(
@@ -2743,14 +2750,17 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AGENT_PRESET_IPC_CHANNELS.UPDATE_SESSION_PRESET,
-    async (_, sessionId: string, presetId: string): Promise<AgentSessionMeta> => {
+    async (_, sessionId: string, presetId: string, expectedRevision?: number): Promise<AgentSessionMeta> => {
       const session = getAgentSessionMeta(sessionId)
       if (!session) throw new Error('会话不存在')
+      if (expectedRevision !== undefined && (session.revision ?? 0) !== expectedRevision) throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
       // 按会话所属工作区解析；存在性校验：未知 ID 报错而非静默回退 standard
       const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
       const resolved = getAgentPreset(workspaceSlug, presetId)
       if (resolved.id !== presetId) throw new Error(`预设不存在: ${presetId}`)
-      return updateAgentSessionUiMeta(sessionId, { presetId })
+      const updated = updateAgentSessionUiMeta(sessionId, { presetId, presetReference: presetReferenceForId(workspaceSlug, presetId) })
+      publishAgentSessionProjection(updated)
+      return updated
     },
   )
 
@@ -3937,7 +3947,7 @@ export function registerIpcHandlers(): void {
   // 热切换指定会话的权限模式（运行中生效，不广播）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE,
-    async (_, sessionId: string, mode: ProferPermissionMode): Promise<void> => {
+    async (_, sessionId: string, mode: ProferPermissionMode, expectedRevision?: number): Promise<AgentSessionMeta> => {
       if (!isProferPermissionMode(mode)) {
         throw new Error(`无效的权限模式: ${mode}`)
       }
@@ -3946,6 +3956,9 @@ export function registerIpcHandlers(): void {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
       }
       const current = getAgentSessionMeta(sessionId)!
+      if (expectedRevision !== undefined && (current.revision ?? 0) !== expectedRevision) {
+        throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
+      }
       const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
       // 若 session 正在跑，同步热切换运行时模式；失败时广播回滚后的权威状态。
       if (isAgentSessionActive(sessionId)) {
@@ -3956,6 +3969,7 @@ export function registerIpcHandlers(): void {
         })
       }
       publishAgentSessionProjection(updated)
+      return updated
     }
   )
 

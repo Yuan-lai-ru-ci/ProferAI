@@ -18,6 +18,7 @@ import { agentSessionsAtom, workspaceCapabilitiesVersionAtom } from '@/atoms/age
 import type { AgentEffort, AgentPreset, PresetReference, ProferPermissionMode } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { referenceForSelectablePreset, selectablePresetMatchesReference } from './preset-selector-utils'
+import { useSessionSettingMutation } from '@/lib/use-session-setting-mutation'
 
 /** 预设特性 badge 的中文短标签 */
 const EFFORT_LABEL: Record<AgentEffort, string> = { low: '低', medium: '中', high: '高', max: '最大' }
@@ -46,6 +47,8 @@ interface PresetSelectorProps {
   persistedPresetId?: string
   /** 会话 meta 上带作用域的预设引用（当前唯一真源）。 */
   persistedPresetReference?: PresetReference
+  /** 当前会话 projection revision，用于并发修改保护。 */
+  persistedRevision?: number
   /** 会话所属工作区 slug（预设为工作区级配置） */
   workspaceSlug?: string
   /** 可选受控打开状态，供发送前提示复用同一个预设菜单。 */
@@ -55,7 +58,7 @@ interface PresetSelectorProps {
   onManagePresets?: () => void
 }
 
-export function PresetSelector({ sessionId, persistedPresetId, persistedPresetReference, workspaceSlug, open, onOpenChange, onManagePresets }: PresetSelectorProps): React.ReactElement {
+export function PresetSelector({ sessionId, persistedPresetId, persistedPresetReference, persistedRevision, workspaceSlug, open, onOpenChange, onManagePresets }: PresetSelectorProps): React.ReactElement {
   const [presets, setPresets] = useAtom(workspacePresetsAtom(workspaceSlug))
   const loadedPresetCaches = useAtomValue(agentPresetsLoadedAtom)
   const setLoadedPresetCaches = useSetAtom(agentPresetsLoadedAtom)
@@ -63,6 +66,7 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
   const [switchingReference, setSwitchingReference] = React.useState<PresetReference | null>(null)
   const isOpen = open ?? internalOpen
   const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const { pending, mutate } = useSessionSettingMutation()
   // 记住上次选择的「极简」紧凑显示偏好（localStorage 惰性初始化）
   const [compactMode, setCompactMode] = React.useState<boolean>(readStoredCompactMode)
   const toggleCompactMode = React.useCallback((on: boolean) => {
@@ -115,21 +119,24 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
     }
     setSwitchingReference(reference)
     try {
-      const updated = await window.electronAPI.rebindAgentSessionPresetReference(sessionId, reference)
-      // 用主进程返回的完整 meta 替换，保证 presetId 与 presetReference 永远同步。
-      setAgentSessions((prev) => prev.map((session) => (session.id === sessionId ? updated : session)))
-      closeMenu()
-      requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus())
-      toast.success(`已切换到「${preset.name}」`, { description: '将在下一轮消息中生效' })
-    } catch (error) {
-      console.error('[PresetSelector] 切换预设失败:', error)
-      toast.error('切换预设失败', {
-        description: error instanceof Error ? error.message : '请刷新预设列表后重试',
+      await mutate({
+      execute: () => window.electronAPI.rebindAgentSessionPresetReference(sessionId, reference, persistedRevision),
+      applyAuthoritative: (updated) => {
+        setAgentSessions((prev) => prev.map((session) => (session.id === sessionId ? updated : session)))
+        closeMenu()
+        requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus())
+        toast.success(`已切换到「${preset.name}」`, { description: '将在下一轮消息中生效' })
+      },
+      rollback: () => {},
+      onError: (error) => {
+        console.error('[PresetSelector] 切换预设失败:', error)
+        toast.error('切换预设失败', { description: error instanceof Error ? error.message : '请刷新预设列表后重试' })
+      },
       })
     } finally {
       setSwitchingReference(null)
     }
-  }, [closeMenu, persistedPresetId, persistedPresetReference, sessionId, setAgentSessions, switchingReference, workspaceSlug])
+  }, [closeMenu, mutate, persistedPresetId, persistedPresetReference, persistedRevision, sessionId, setAgentSessions, switchingReference, workspaceSlug])
 
   return (
     <AgentComposerToolPopover
@@ -171,7 +178,7 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
               <AgentComposerToolMenuItem
                 key={preset.id}
                 onClick={() => void selectPreset(preset)}
-                disabled={switchingReference !== null}
+                disabled={switchingReference !== null || pending}
                 selected={preset === current}
                 className="flex-col items-start gap-0.5 px-2 py-1.5"
               >

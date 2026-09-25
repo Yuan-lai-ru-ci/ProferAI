@@ -12,7 +12,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, ChevronRight, Cloud, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, Sparkles, X,
+  Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, Cloud, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, Sparkles, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { clearSessionReferenceDragState, setSessionReferenceDragData } from '@/lib/session-reference-drag'
@@ -670,25 +670,19 @@ interface AgentSessionItemProps {
   active: boolean
   indicatorStatus: SessionIndicatorStatus
   showPinIcon?: boolean
-  /** 输入框是否有未发送内容（草稿标记） */
   hasDraft?: boolean
-  /** 行左侧状态色块；未传则不显示 */
   leftAccent?: SessionLeftAccent
   delegationSummary?: {
     total: number
     running: number
     completed: number
     label: string
-    /** 是否显示 x/y 计数；探索分支为 false，只留展开箭头避免与父行其他操作抢位置。 */
     showCount: boolean
     expanded: boolean
     onToggle: () => void
   }
-  /** 是否禁用悬浮 Mini 地图 */
   disableMiniMap?: boolean
-  /** 项目名称 Badge（跨项目列表时显示） */
   workspaceName?: string
-  /** 用同一个时间戳刷新相对时间，避免每行独立计时 */
   relativeTimeNow: number
   onSelect: (id: string, title: string) => void
   onRequestDelete: (id: string) => void
@@ -696,10 +690,9 @@ interface AgentSessionItemProps {
   onRename: (id: string, newTitle: string) => Promise<void>
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
-  /** 标记会话为「未读」（恢复绿色完成标记） */
   onMarkUnread?: (id: string) => void
-  /** 手动重新生成标题（用前几轮有效消息重命名并重新锁定） */
   onRegenerateTitle?: (id: string) => Promise<void>
+  regeneratingTitle?: boolean
   /** 仅当前会话 Tab 区使用：关闭入口，不删除会话数据。 */
   onCloseTab?: () => void
 }
@@ -723,6 +716,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   onToggleArchive,
   onMarkUnread,
   onRegenerateTitle,
+  regeneratingTitle,
   onCloseTab,
 }: AgentSessionItemProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
@@ -906,9 +900,11 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
                   <GitBranch size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
                 ) : null}
                 {/* 该会话有活动浏览器会话/标签：在会话行上标识，便于从侧边栏识别哪个会话在用浏览器 */}
-                {hasBrowser && (
+                {regeneratingTitle ? (
+                  <Loader2 size={11} className="flex-shrink-0 text-foreground/40 animate-spin" aria-label="正在重新生成标题" />
+                ) : hasBrowser ? (
                   <Globe size={11} className="flex-shrink-0 text-foreground/40" aria-label="该会话正在使用浏览器" />
-                )}
+                ) : null}
                 <span className="truncate">{session.title}</span>
                 {/* 草稿标记：输入框有未发送内容 */}
                 {hasDraft && (
@@ -999,6 +995,7 @@ interface RelatedChildSessionItemProps {
   onToggleArchive: (id: string) => Promise<void>
   /** 标记会话为「未读」（恢复绿色完成标记） */
   onMarkUnread?: (id: string) => void
+  regeneratingTitle?: boolean
   /** 手动重新生成标题（用前几轮有效消息重命名并重新锁定） */
   onRegenerateTitle?: (id: string) => Promise<void>
 }
@@ -1018,6 +1015,7 @@ export const RelatedChildSessionItem = React.memo(function RelatedChildSessionIt
   onToggleArchive,
   onMarkUnread,
   onRegenerateTitle,
+  regeneratingTitle,
 }: RelatedChildSessionItemProps): React.ReactElement {
   const status = getRelatedChildStatus(session, agentIndicatorMap)
 
@@ -1037,6 +1035,7 @@ export const RelatedChildSessionItem = React.memo(function RelatedChildSessionIt
       onToggleArchive={onToggleArchive}
       onMarkUnread={onMarkUnread}
       onRegenerateTitle={onRegenerateTitle}
+      regeneratingTitle={regeneratingTitle}
     />
   )
 })

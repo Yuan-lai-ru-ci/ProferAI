@@ -419,9 +419,10 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
         >
           <div className="space-y-2">
             {renderContentChildren()}
-            <button
+            <div className="mt-3 flex items-center gap-2">
+              <button
                 type="button"
-                className="flex items-center gap-1 text-xs text-foreground/40 hover:text-foreground/70 transition-colors"
+                className="flex shrink-0 items-center gap-1 text-xs text-foreground/40 hover:text-foreground/70 transition-colors"
                 onClick={() => {
                   userToggledRef.current = true
                   // 1.7.2：手动收起后重置自锁，后续按 streaming 规则重新参与折叠
@@ -435,6 +436,8 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
                 <ChevronRight className="size-3 -rotate-90" />
                 <span>收起</span>
               </button>
+              <div aria-hidden="true" className="min-w-0 flex-1 border-t-2 border-dashed border-border/60" />
+            </div>
             </div>
           </div>
         )}

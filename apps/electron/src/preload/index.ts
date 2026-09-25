@@ -678,7 +678,7 @@ export interface ElectronAPI {
   disableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => Promise<void>
   rebindAndDisableGlobalPresetScope: (workspaceSlug: string, source: PresetReference, replacement?: PresetReference) => Promise<PresetScopeRebindResult>
   setWorkspacePresetEnabled: (workspaceSlug: string, presetId: string, enabled: boolean) => Promise<void>
-  rebindAgentSessionPresetReference: (sessionId: string, reference: PresetReference) => Promise<AgentSessionMeta>
+  rebindAgentSessionPresetReference: (sessionId: string, reference: PresetReference, expectedRevision?: number) => Promise<AgentSessionMeta>
   rebindAutomationPresetReference: (automationId: string, reference: PresetReference | null) => Promise<import('@profer/shared').Automation>
 
   /** 获取指定工作区的默认预设 ID（新建会话使用） */
@@ -928,7 +928,7 @@ export interface ElectronAPI {
   respondPermission: (response: PermissionResponse) => Promise<void>
 
   /** 热切换指定会话的权限模式（运行中生效，仅影响该 session） */
-  updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode) => Promise<void>
+  updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode, expectedRevision?: number) => Promise<AgentSessionMeta>
   /** 切换当前会话的 ChatGPT Codex Fast Mode。 */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
   /** 切换当前会话的 ChatGPT Codex 推理档位（跨会话持久化）。 */
@@ -2319,7 +2319,7 @@ const electronAPI: ElectronAPI = {
   disableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.DISABLE_GLOBAL_IN_WORKSPACE, workspaceSlug, reference),
   rebindAndDisableGlobalPresetScope: (workspaceSlug: string, source: PresetReference, replacement?: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_AND_DISABLE_GLOBAL_SCOPE, workspaceSlug, source, replacement),
   setWorkspacePresetEnabled: (workspaceSlug: string, presetId: string, enabled: boolean) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.SET_WORKSPACE_ENABLED, workspaceSlug, presetId, enabled),
-  rebindAgentSessionPresetReference: (sessionId: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_SESSION_REFERENCE, sessionId, reference),
+  rebindAgentSessionPresetReference: (sessionId: string, reference: PresetReference, expectedRevision?: number) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_SESSION_REFERENCE, sessionId, reference, expectedRevision),
   rebindAutomationPresetReference: (automationId: string, reference: PresetReference | null) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_AUTOMATION_REFERENCE, automationId, reference),
 
   getDefaultAgentPreset: (workspaceSlug?: string) => {
@@ -2684,8 +2684,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.PERMISSION_RESPOND, response)
   },
 
-  updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE, sessionId, mode)
+  updateSessionPermissionMode: (sessionId: string, mode: ProferPermissionMode, expectedRevision?: number) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE, sessionId, mode, expectedRevision)
   },
 
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => {

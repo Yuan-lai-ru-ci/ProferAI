@@ -706,6 +706,16 @@ export function useGlobalAgentListeners(): void {
         if (payload.kind === 'session_projection') {
           if (payload.operation === 'upsert') {
             store.set(agentSessionsAtom, (previous) => upsertAgentSessionProjection(previous, payload.session))
+            if (payload.session.permissionMode) {
+              store.set(agentPermissionModeMapAtom, (previous) => {
+                const next = new Map(previous)
+                next.set(payload.session.id, payload.session.permissionMode)
+                return next
+              })
+              store.set(agentPlanModeSessionsAtom, (previous) =>
+                updatePlanModeSessionSet(previous, payload.session.id, payload.session.permissionMode === 'plan')
+              )
+            }
             store.set(tabsAtom, (tabs) => updateTabTitle(tabs, payload.session.id, payload.session.title))
           } else {
             store.set(agentSessionsAtom, (previous) => previous.filter((session) => session.id !== payload.sessionId))
@@ -792,11 +802,24 @@ export function useGlobalAgentListeners(): void {
           } else if (proferEvent.type === 'external_run_started') {
             activateExternalAgentRun(proferEvent)
           } else if (proferEvent.type === 'delegation_session_updated' || proferEvent.type === 'session_updated') {
-            store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, proferEvent.session))
-            store.set(tabsAtom, (tabs) => updateTabTitle(tabs, proferEvent.session.id, proferEvent.session.title))
-            // 委派子会话的后台 Tab 由 0.5 节的双订阅（会话列表 × 流指示）统一补齐：
-            // 创建时刻主进程不推此事件（只在完成态转变时推），且启动时磁盘 meta 的
-            // running 可能是死委派，详见该节注释。
+            const incomingSession = proferEvent.session
+            store.set(agentSessionsAtom, (previous) => {
+              const current = previous.find((session) => session.id === incomingSession.id)
+              if (current && (incomingSession.revision ?? 0) < (current.revision ?? 0)) return previous
+              return upsertAgentSession(previous, incomingSession)
+            })
+            if (incomingSession.permissionMode) {
+              store.set(agentPermissionModeMapAtom, (previous) => {
+                const current = store.get(agentSessionsAtom).find((session) => session.id === incomingSession.id)
+                if (current && (incomingSession.revision ?? 0) < (current.revision ?? 0)) return previous
+                const next = new Map(previous)
+                next.set(incomingSession.id, incomingSession.permissionMode!)
+                return next
+              })
+              store.set(agentPlanModeSessionsAtom, (previous) => updatePlanModeSessionSet(previous, incomingSession.id, incomingSession.permissionMode === 'plan'))
+            }
+            store.set(tabsAtom, (tabs) => updateTabTitle(tabs, incomingSession.id, incomingSession.title))
+            // 委派子会话的后台 Tab 由会话列表与流指示统一补齐；本事件只负责收敛会话和权限状态。
           } else if (proferEvent.type === 'session_deleted') {
             store.set(agentSessionsAtom, (previous) => previous.filter((session) => session.id !== proferEvent.sessionId))
           }

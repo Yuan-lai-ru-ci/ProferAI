@@ -952,6 +952,7 @@ function SkillsTab({
           onToggle={onToggle}
           onUpdate={onUpdate}
           onPublish={onPublish}
+          onPromote={onPromote}
           publishingSlug={publishingSlug}
         />
       )}

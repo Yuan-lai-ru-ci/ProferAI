@@ -57,10 +57,11 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     handleRequestMove,
     handleAgentRename,
     handleAgentRegenerateTitle,
+    handleMarkUnread,
+    regeneratingTitleIds,
     handleTogglePinAgent,
     handleToggleArchiveAgent,
     handleToggleRelatedParent,
-    handleMarkUnread,
     relativeTimeNow,
     workspaceSortMode,
     handleCycleWorkspaceSort,
@@ -358,6 +359,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                             onRequestMove={handleRequestMove}
                             onRename={handleAgentRename}
                             onRegenerateTitle={handleAgentRegenerateTitle}
+                            regeneratingTitle={regeneratingTitleIds.has(item.session.id)}
                             onTogglePin={handleTogglePinAgent}
                             onToggleArchive={handleToggleArchiveAgent}
                             onMarkUnread={handleMarkUnread}
@@ -379,6 +381,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                                   onRequestMove={handleRequestMove}
                                   onRename={handleAgentRename}
                                   onRegenerateTitle={handleAgentRegenerateTitle}
+                                  regeneratingTitle={regeneratingTitleIds.has(childSession.id)}
                                   onTogglePin={handleTogglePinAgent}
                                   onToggleArchive={handleToggleArchiveAgent}
                                   onMarkUnread={handleMarkUnread}
@@ -596,6 +599,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                         onRequestMove={handleRequestMove}
                         onRename={handleAgentRename}
                         onRegenerateTitle={handleAgentRegenerateTitle}
+                        regeneratingTitle={regeneratingTitleIds.has(session.id)}
                         onTogglePin={handleTogglePinAgent}
                         onToggleArchive={handleToggleArchiveAgent}
                         onMarkUnread={handleMarkUnread}

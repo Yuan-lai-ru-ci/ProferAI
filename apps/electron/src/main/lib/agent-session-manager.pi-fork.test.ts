@@ -315,7 +315,7 @@ describe('Pi 会话分叉', () => {
     await expect(manager.forkAgentSession({
       sessionId: 'pi-no-bindings',
       upToMessageUuid: 'assistant-1',
-    })).rejects.toThrow('尚无可用的 entry ID 映射')
+    })).rejects.toThrow('尚无可用的 entry ID 映射，无法安全分叉；请在当前版本中继续一次 Pi 对话后再试')
   })
 
   test('Given Pi 会话缺 piSessionFile When 分叉 Then 拒绝', async () => {

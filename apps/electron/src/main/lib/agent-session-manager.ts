@@ -1710,7 +1710,7 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
   const targetUuid = input.upToMessageUuid
   if (!targetUuid) throw new Error('Pi 分叉需要指定一条已完成的 assistant 消息')
   const forkPoint = resolvePiForkPoint(sourceMeta, targetUuid)
-  if (!forkPoint) throw new Error('该 Pi 历史消息尚无可用的 entry ID 映射，无法安全分叉；请在新版 Profer 中继续一次对话后再试')
+  if (!forkPoint) throw new Error('该 Pi 历史消息尚无可用的 entry ID 映射，无法安全分叉；请在当前版本中继续一次 Pi 对话后再试')
   if (!sourceMeta.piSessionFile || !existsSync(sourceMeta.piSessionFile)) {
     throw new Error('未找到 Pi session artifact，无法安全分叉')
   }
@@ -1932,7 +1932,7 @@ export async function rewindPiSession(
     }
   }
   if (!entryId) {
-    throw new Error('该消息无法作为回退点（可能属于子代理执行过程或已被清理）。请选择主对话中的其他消息再试')
+    throw new Error('该 Pi 历史消息尚无可用的 entry ID 映射，无法安全回退；请在当前版本中继续一次 Pi 对话后再试')
   }
 
   // 2. 先验证目标 Pi entry，并生成准备原子替换的 transcript 内容。

@@ -110,7 +110,7 @@ html[class*="skin-"] .scroll-progress-thumb-active {
 
 /* ===== 计划模式虚线描边（深色皮肤加亮） ===== */
 html[class*="skin-"] .plan-mode-border .plan-mode-stroke {
-  stroke: var(--plan-mode-stroke-color);
+  stroke: var(--plan-mode-stroke-color, hsl(var(--primary) / 0.45));
 }
 
 /* ===== ui-classic（经典界面）TabBar 下缘阴影 =====

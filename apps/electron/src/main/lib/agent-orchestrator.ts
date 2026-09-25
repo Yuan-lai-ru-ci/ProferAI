@@ -3572,12 +3572,17 @@ ${enrichedMessage}`
     }
 
     const sessionMeta = getAgentSessionMeta(sessionId)
-    if (!sessionMeta?.sdkSessionId) {
-      throw new Error('会话没有 SDK session ID，无法回退')
+    if (!sessionMeta) {
+      throw new Error(`Agent 会话不存在: ${sessionId}`)
     }
-    // Pi runtime：物理截断 Pi session + Profer JSONL（无文件快照恢复）
-    if (normalizeAgentRuntime(sessionMeta.agentRuntime) === 'pi') {
+    const isPiSession = normalizeAgentRuntime(sessionMeta.agentRuntime) === 'pi'
+    // Pi 使用自己的 session artifact + entry binding，不依赖 Claude SDK session ID。
+    // 旧会话若尚未生成映射，会在 rewindPiSession 内返回可操作的恢复提示。
+    if (isPiSession) {
       return rewindPiSession(sessionId, assistantMessageUuid, sessionMeta)
+    }
+    if (!sessionMeta.sdkSessionId) {
+      throw new Error('Claude 会话没有 SDK session ID，无法回退；请先继续一次对话生成可恢复的 SDK 会话')
     }
     // 0.5 从 SDK session JSONL 解析对应的 user message UUID（rewindFiles 需要）
     let projectDir: string | undefined

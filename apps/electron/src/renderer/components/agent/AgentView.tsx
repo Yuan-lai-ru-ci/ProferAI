@@ -137,7 +137,7 @@ const AGENT_REFRESH_HEADROOM = 100
 /** 内存缓存只保留尾部窗口，防止随用户加载更多历史无限膨胀 */
 const AGENT_CACHE_WINDOW = DESKTOP_AGENT_PAGE_SIZE + AGENT_REFRESH_HEADROOM
 
-import { MAX_ATTACHMENT_SIZE, isAgentPresetToolGroupDisabled, resolveEffectivePermissionMode } from '@profer/shared'
+import { MAX_ATTACHMENT_SIZE, isAgentPresetToolGroupDisabled } from '@profer/shared'
 import { fileToBase64, formatFileNames, getFileBaseName, getFileParentPath } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
 import { AgentMessageQueue } from './AgentMessageQueue'
@@ -1016,13 +1016,12 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     },
     [workspacePresetList, sessionPresetId, sessionPresetReference],
   )
-  // 有效权限 = 预设上限；用户显式 override 只能在预设声明范围内收紧（不能放宽）。
-  // 避免旧工具栏在预设 auto/plan 时仍显示“完全自动”并作为 override 发回主进程。
+  // 权限模式由会话显式选择决定。预设权限仍作为未显式选择时的默认值，
+  // 但不能在这里再次把用户已选择的 plan/bypassPermissions 压回旧模式，否则
+  // 工具栏图标与输入框计划态会分叉。
   const requestedPermissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode
   const presetPermissionCapMode = sessionBoundPreset?.permissionMode ?? defaultPermissionMode
-  const permissionMode = requestedPermissionMode
-    ? resolveEffectivePermissionMode(presetPermissionCapMode, requestedPermissionMode)
-    : presetPermissionCapMode
+  const permissionMode = requestedPermissionMode ?? presetPermissionCapMode
   const isPermissionPlanMode = permissionMode === 'plan'
   const [presetMenuOpen, setPresetMenuOpen] = React.useState(false)
   const openWorkspacePresets = React.useCallback(() => {
@@ -1862,40 +1861,9 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     try {
       // 主进程在同一 IPC turn 内持久化 session runtime 与新会话默认 runtime。
       const updated = await window.electronAPI.updateSessionAgentRuntime(sessionId, runtime)
-      let nextSession = updated
-      const nextModel = resolveAgentModelSelection(
-        globalChannels,
-        runtime,
-        agentChannelIds,
-        agentChannelId && agentModelId ? { channelId: agentChannelId, modelId: agentModelId } : null,
-      )
-      const currentModelIsCompatible = nextModel?.channelId === updated.channelId && nextModel?.modelId === updated.modelId
-      if (!currentModelIsCompatible) {
-        nextSession = await window.electronAPI.updateAgentSessionModel(
-          sessionId,
-          nextModel?.channelId,
-          nextModel?.modelId,
-        )
-        setSessionChannelMap((previous) => {
-          const next = new Map(previous)
-          if (nextModel?.channelId) next.set(sessionId, nextModel.channelId)
-          else next.delete(sessionId)
-          return next
-        })
-        setSessionModelMap((previous) => {
-          const next = new Map(previous)
-          if (nextModel?.modelId) next.set(sessionId, nextModel.modelId)
-          else next.delete(sessionId)
-          return next
-        })
-        setDefaultChannelId(nextModel?.channelId ?? '')
-        setDefaultModelId(nextModel?.modelId ?? '')
-        window.electronAPI.updateSettings({
-          agentChannelId: nextModel?.channelId,
-          agentModelId: nextModel?.modelId,
-        }).catch(console.error)
-      }
-      setAgentSessions((previous) => previous.map((item) => item.id === sessionId ? nextSession : item))
+      // runtime 切换只改变 runtime。已有模型由 ModelSelector/启动前校验按新 runtime 处理，
+      // 不能因为当前 channel/model 不兼容而阻止用户切换内核。
+      setAgentSessions((previous) => previous.map((item) => item.id === sessionId ? updated : item))
     } catch (error) {
       console.error('[AgentView] 切换 Agent Runtime 失败:', error)
       setAgentRuntime(previousDefaultRuntime)
@@ -1910,7 +1878,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       setRuntimeSwitchInFlight(false)
       requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus())
     }
-  }, [agentChannelId, agentChannelIds, agentModelId, agentRuntime, backgroundWaiting, globalChannels, sessionAgentRuntime, sessionId, sessionMeta, setAgentRuntime, setAgentSessions, setDefaultChannelId, setDefaultModelId, setSessionChannelMap, setSessionModelMap, streaming])
+  }, [agentRuntime, backgroundWaiting, sessionAgentRuntime, sessionId, sessionMeta, setAgentRuntime, setAgentSessions, streaming])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const computedSelectedModel = React.useMemo(() => {
@@ -3107,8 +3075,8 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         />
       ),
     },
-    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} presetPermissionMode={sessionBoundPreset?.permissionMode} composerTool /> },
-    { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} persistedPresetReference={sessionMeta?.presetReference} workspaceSlug={workspaceSlug ?? undefined} open={presetMenuOpen} onOpenChange={setPresetMenuOpen} onManagePresets={openWorkspacePresets} /> },
+    { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} presetPermissionMode={sessionBoundPreset?.permissionMode} persistedRevision={sessionMeta?.revision} composerTool /> },
+    { key: 'preset', node: <PresetSelector sessionId={sessionId} persistedPresetId={sessionMeta?.presetId} persistedPresetReference={sessionMeta?.presetReference} persistedRevision={sessionMeta?.revision} workspaceSlug={workspaceSlug ?? undefined} open={presetMenuOpen} onOpenChange={setPresetMenuOpen} onManagePresets={openWorkspacePresets} /> },
     {
       key: 'thinking',
       node: (
@@ -3447,6 +3415,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
             {/* Footer 工具栏 — 容器变窄时尾部按钮自动折叠进「更多」Popover */}
               <InputToolbarOverflow items={inputToolbarItems} trailing={inputTrailingNode} />
             </div>
+
           </div>
         </div>
         )}

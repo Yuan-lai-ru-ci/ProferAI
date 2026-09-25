@@ -31,8 +31,8 @@ import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
 
-import { AGENT_IPC_CHANNELS, type AgentSessionMeta } from '@profer/shared'
-import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession } from './agent-service'
+import { AGENT_IPC_CHANNELS, isChannelEnabledForRuntime, type AgentSessionMeta } from '@profer/shared'
+import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession, regenerateAgentTitle } from './agent-service'
 import { publishAgentSessionProjection, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
 import { getUserProfile } from './user-profile-service'
 import {
@@ -69,6 +69,7 @@ import {
   updateAgentPreset,
   deleteAgentPreset,
   getAgentPreset,
+  presetReferenceForId,
 } from './agent-preset-manager'
 import type { AgentPresetCreateInput, AgentPresetUpdateInput } from '@profer/shared'
 import { AgentSessionDeletionCoordinator } from './agent-session-deletion'
@@ -674,6 +675,14 @@ function buildWorkspaceList() {
   }))
 }
 
+function remoteChannelProtocol(provider: string): 'openai' | 'anthropic' {
+  return new Set([
+    'anthropic', 'anthropic-compatible', 'deepseek', 'kimi-api', 'kimi-coding',
+    'zhipu-coding', 'zhipu-coding-team', 'minimax', 'xiaomi',
+    'xiaomi-token-plan', 'qwen-anthropic',
+  ]).has(provider) ? 'anthropic' : 'openai'
+}
+
 /** 渠道列表（脱敏，仅暴露移动端发消息需要的字段） */
 function buildChannelList() {
   return listSwitchableChannels().map((c) => ({
@@ -688,6 +697,8 @@ function buildChannelList() {
     serverManaged: c.serverManaged,
     managedType: c.managedType,
     familyId: c.familyId,
+    agentRuntimes: c.agentRuntimes,
+    agentExperimentalEnabled: c.agentExperimentalEnabled,
     models: getEnabledModels(c).map((m) => ({
       id: m.id,
       name: m.name,
@@ -951,16 +962,23 @@ export async function handleRemoteCommand(
 
     case 'update_session_model': {
       const sessionId = parsed.sessionId as string
-      const channelId = parsed.channelId as string
-      const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : undefined
-      if (!sessionId || !channelId) return { ok: false, error: '缺少有效 sessionId 或 channelId' }
+      const channelId = typeof parsed.channelId === 'string' && parsed.channelId ? parsed.channelId : undefined
+      const modelId = typeof parsed.modelId === 'string' && parsed.modelId ? parsed.modelId : undefined
+      if (!sessionId) return { ok: false, error: '缺少有效 sessionId' }
+      if (modelId && !channelId) return { ok: false, error: '模型必须绑定到有效渠道' }
       const modelRevisionError = validateExpectedRevision(parsed, sessionId)
       if (modelRevisionError) return modelRevisionError
       if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换模型' }
-      if (!getAgentSessionMeta(sessionId)) return { ok: false, error: '会话不存在' }
-      const channel = listSwitchableChannels().find((item) => item.id === channelId)
-      if (!channel) return { ok: false, error: '渠道不可用或不存在' }
-      if (modelId && !getEnabledModels(channel).some((model) => model.id === modelId)) return { ok: false, error: '模型不属于当前渠道或未启用' }
+      const session = getAgentSessionMeta(sessionId)
+      if (!session) return { ok: false, error: '会话不存在' }
+      if (channelId) {
+        const channel = listSwitchableChannels().find((item) => item.id === channelId)
+        if (!channel) return { ok: false, error: '渠道不可用或不存在' }
+        if (!isChannelEnabledForRuntime(channel, session.agentRuntime ?? 'claude')) {
+          return { ok: false, error: `当前会话内核不支持该渠道: ${session.agentRuntime ?? 'claude'}` }
+        }
+        if (modelId && !getEnabledModels(channel).some((model) => model.id === modelId)) return { ok: false, error: '模型不属于当前渠道或未启用' }
+      }
       const updated = updateAgentSessionUiMeta(sessionId, { channelId, modelId })
       return { ok: true, data: buildSessionItem(updated) }
     }
@@ -1036,11 +1054,13 @@ export async function handleRemoteCommand(
       if (!sessionId || !presetId) return { ok: false, error: '缺少 sessionId 或 presetId' }
       const session = getAgentSessionMeta(sessionId)
       if (!session) return { ok: false, error: '会话不存在' }
+      const presetRevisionError = validateExpectedRevision(parsed, sessionId)
+      if (presetRevisionError) return presetRevisionError
       // 按会话所属工作区解析；存在性校验：未知 ID 报错而非静默回退 standard（与桌面 UPDATE_SESSION_PRESET 同语义）
       const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
       const resolved = getAgentPreset(workspaceSlug, presetId)
       if (resolved.id !== presetId) return { ok: false, error: `预设不存在: ${presetId}` }
-      const updated = updateAgentSessionUiMeta(sessionId, { presetId })
+      const updated = updateAgentSessionUiMeta(sessionId, { presetId, presetReference: presetReferenceForId(workspaceSlug, presetId) })
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1112,6 +1132,48 @@ export async function handleRemoteCommand(
       if (!sessionId || !title) return { ok: false, error: '缺少 sessionId 或 title' }
       const meta = updateAgentSessionUiMeta(sessionId, { title })
       return { ok: true, data: buildSessionItem(meta) }
+    }
+
+    case 'regenerate_session_title': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const meta = getAgentSessionMeta(sessionId)
+      if (!meta) return { ok: false, error: '会话不存在' }
+      const channelId = typeof parsed.channelId === 'string' ? parsed.channelId : meta.channelId
+      const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : meta.modelId
+      if (!channelId) return { ok: false, error: '重新生成标题失败：当前会话没有可用渠道，请先选择模型' }
+      if (!modelId) return { ok: false, error: '重新生成标题失败：当前会话没有可用模型，请先选择模型' }
+      const channel = listSwitchableChannels().find((item) => item.id === channelId)
+      if (!channel) return { ok: false, error: '重新生成标题失败：当前模型渠道不存在或已禁用' }
+      if (!getEnabledModels(channel).some((model) => model.id === modelId)) {
+        return { ok: false, error: '重新生成标题失败：当前模型不存在或已禁用' }
+      }
+      try {
+        const result = await regenerateAgentTitle(sessionId, channelId, modelId)
+        if (!result) return { ok: false, error: '重新生成标题失败：当前会话没有可用于生成标题的有效用户消息' }
+        const updated = getAgentSessionMeta(sessionId)
+        return updated ? { ok: true, data: buildSessionItem(updated) } : { ok: false, error: '重新生成标题后会话不存在' }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : '重新生成标题失败' }
+      }
+    }
+
+    case 'mark_session_unread': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const meta = getAgentSessionMeta(sessionId)
+      if (!meta) return { ok: false, error: '会话不存在' }
+      const updated = updateAgentSessionUiMeta(sessionId, { completedButUnconfirmed: true })
+      return { ok: true, data: buildSessionItem(updated) }
+    }
+
+    case 'mark_session_read': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const meta = getAgentSessionMeta(sessionId)
+      if (!meta) return { ok: false, error: '会话不存在' }
+      const updated = updateAgentSessionUiMeta(sessionId, { completedButUnconfirmed: false })
+      return { ok: true, data: buildSessionItem(updated) }
     }
 
     case 'create_session': {

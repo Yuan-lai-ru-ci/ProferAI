@@ -1369,8 +1369,12 @@ export function useLeftSidebar() {
     }
   }, [setAgentSessions, setTabs])
 
+  /** 正在重新生成标题的会话 ID；用于行首浏览器图标位置显示 spinner */
+  const [regeneratingTitleIds, setRegeneratingTitleIds] = React.useState<Set<string>>(new Set())
+
   /** 手动重新生成 Agent 会话标题（用会话前几轮有效消息重命名） */
   const handleAgentRegenerateTitle = React.useCallback(async (id: string): Promise<void> => {
+    setRegeneratingTitleIds((prev) => new Set(prev).add(id))
     try {
       const updated = await window.electronAPI.regenerateAgentSessionTitle(id)
       if (!updated) {
@@ -1383,6 +1387,12 @@ export function useLeftSidebar() {
     } catch (error) {
       console.error('[侧边栏] 重新生成 Agent 会话标题失败:', error)
       toast.error('重新生成标题失败')
+    } finally {
+      setRegeneratingTitleIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
   }, [setAgentSessions, setTabs])
 
@@ -1793,11 +1803,12 @@ export function useLeftSidebar() {
     handleSelectAgentSession,
     handleAgentRename,
     handleAgentRegenerateTitle,
+    handleMarkUnread,
+    regeneratingTitleIds,
     handleTogglePinAgent,
     handleToggleArchiveAgent,
     handleRequestMove,
     handleToggleRelatedParent,
-    handleMarkUnread,
     expandedRelatedParentIds,
 
     // workspaces / projects
