@@ -33,18 +33,31 @@ const ELECTRON = path.join(ROOT, 'apps/electron')
 const OUT = path.join(ELECTRON, 'out')
 const TAG = `v${VERSION}`
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI'
-const HOST = process.env.PROFER_UPDATE_SSH_HOST || '47.109.108.57'
-const USER = process.env.PROFER_UPDATE_SSH_USER || 'ecs-user'
-const UPDATE_FEED_URL = 'https://profer.cn/profer-updates/'
-const UPDATE_DIR = process.env.PROFER_MAC_UPDATE_DIR || '/usr/share/nginx/html/profer-updates'
+const HOST = process.env.PROFER_UPDATE_SSH_HOST || '45.114.127.232'
+const USER = process.env.PROFER_UPDATE_SSH_USER || 'root'
+const SSH_PORT = process.env.PROFER_UPDATE_SSH_PORT || '41235'
+const UPDATE_FEED_URL = 'https://updates.profer.cn/'
+const UPDATE_DIR = process.env.PROFER_MAC_UPDATE_DIR || '/var/www/updates.profer.cn'
+// 发布目标：新机为主；旧机（profer.cn/profer-updates/ 供数）在退役前保持双写，PROFER_UPDATE_SKIP_LEGACY=1 可关闭。
+const UPDATE_TARGETS = [
+  { host: HOST, user: USER, port: SSH_PORT, dir: UPDATE_DIR },
+]
+if (!process.env.PROFER_UPDATE_SKIP_LEGACY) {
+  UPDATE_TARGETS.push({
+    host: process.env.PROFER_UPDATE_LEGACY_SSH_HOST || '47.109.108.57',
+    user: process.env.PROFER_UPDATE_LEGACY_SSH_USER || 'ecs-user',
+    port: process.env.PROFER_UPDATE_LEGACY_SSH_PORT || '22',
+    dir: process.env.PROFER_UPDATE_LEGACY_DIR || '/usr/share/nginx/html/profer-updates',
+  })
+}
 const MAC_UPDATE_METADATA = 'latest-mac.yml'
 
 function run(command, cwd = ROOT) {
   return execSync(command, { cwd, encoding: 'utf8', stdio: 'inherit' }).trim()
 }
 function sha256(filePath) { return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex') }
-function remote(command) { run(`ssh -o StrictHostKeyChecking=yes ${USER}@${HOST} ${JSON.stringify(command)}`) }
-function upload(localPath, remotePath) { run(`scp -o StrictHostKeyChecking=yes ${JSON.stringify(localPath)} ${USER}@${HOST}:${JSON.stringify(remotePath)}`) }
+function remote(command, target = UPDATE_TARGETS[0]) { run(`ssh -o StrictHostKeyChecking=yes -p ${target.port} ${target.user}@${target.host} ${JSON.stringify(command)}`) }
+function upload(localPath, remotePath, target = UPDATE_TARGETS[0]) { run(`scp -o StrictHostKeyChecking=yes -P ${target.port} ${JSON.stringify(localPath)} ${target.user}@${target.host}:${JSON.stringify(remotePath)}`) }
 function assertExists(filePath) { if (!fs.existsSync(filePath)) throw new Error(`缺少发布资产: ${filePath}`) }
 
 function findMacAssets() {
@@ -107,9 +120,13 @@ function ensureGitHubAssets(assetPaths) {
   assertWindowsReleaseReady(readReleaseAssets(), VERSION)
   console.log(`[1/2] 上传 macOS 更新资产到 ${UPDATE_FEED_URL}`)
   const uploadedNames = [metadata, zip, dmg, blockmap].map((filePath) => path.basename(filePath))
-  for (const filePath of [metadata, zip, dmg, blockmap]) upload(filePath, `/tmp/${path.basename(filePath)}`)
-  const copyCommands = uploadedNames.map((name) => `sudo cp /tmp/${name} ${UPDATE_DIR}/`).join(' && ')
-  remote(`sudo mkdir -p ${UPDATE_DIR} && ${copyCommands} && sudo chmod -R 755 ${UPDATE_DIR}`)
+  for (const target of UPDATE_TARGETS) {
+    const sudo = target.user === 'root' ? '' : 'sudo '
+    for (const filePath of [metadata, zip, dmg, blockmap]) upload(filePath, `/tmp/${path.basename(filePath)}`, target)
+    const copyCommands = uploadedNames.map((name) => `${sudo}cp /tmp/${name} ${target.dir}/`).join(' && ')
+    remote(`${sudo}mkdir -p ${target.dir} && ${copyCommands} && ${sudo}chmod -R 755 ${target.dir}`, target)
+    console.log(`  已上传到 ${target.user}@${target.host}:${target.dir}`)
+  }
 
   console.log('[2/2] 上传 GitHub Release macOS 资产')
   ensureGitHubAssets([metadata, zip, dmg, blockmap])

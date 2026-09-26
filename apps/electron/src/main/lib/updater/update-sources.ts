@@ -3,13 +3,15 @@ import type { AppUpdater } from 'electron-updater'
 type UpdateFeedConfiguration = Exclude<Parameters<AppUpdater['setFeedURL']>[0], string>
 
 export interface UpdateSource {
-  id: 'override' | 'domestic' | 'github'
+  id: 'override' | 'domestic' | 'domestic-legacy' | 'github'
   label: string
   configuration: UpdateFeedConfiguration
 }
 
-/** 国内更新源必须使用有证书的 HTTPS 域名，禁止裸 IP 和明文 HTTP。 */
-export const DOMESTIC_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/'
+/** 国内主更新源：新机专属 HTTPS 域名（45.114.127.232 / updates.profer.cn）。 */
+export const DOMESTIC_UPDATE_FEED_URL = 'https://updates.profer.cn/'
+/** 旧域名更新源：profer.cn/profer-updates/，供数端正从旧机迁往新机；过渡期作为第二源，旧机退役后移除。 */
+export const LEGACY_DOMESTIC_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/'
 export const UPDATE_REQUEST_TIMEOUT_MS = 30_000
 
 const GITHUB_UPDATE_SOURCE: UpdateSource = {
@@ -55,12 +57,14 @@ export function isSecureUpdateFeedUrl(value: unknown): value is string {
 export function getUpdateSources(overrideUrl = process.env.PROFER_UPDATE_FEED_URL): UpdateSource[] {
   const sources: UpdateSource[] = []
   const normalizedDomesticUrl = normalizeFeedUrl(DOMESTIC_UPDATE_FEED_URL)
+  const normalizedLegacyUrl = normalizeFeedUrl(LEGACY_DOMESTIC_UPDATE_FEED_URL)
 
   if (overrideUrl && !isSecureUpdateFeedUrl(overrideUrl)) {
     console.warn('[更新] 忽略不安全的 PROFER_UPDATE_FEED_URL，仅允许 HTTPS 域名')
   }
 
-  if (isSecureUpdateFeedUrl(overrideUrl) && normalizeFeedUrl(overrideUrl) !== normalizedDomesticUrl) {
+  const normalizedOverride = overrideUrl ? normalizeFeedUrl(overrideUrl) : ''
+  if (isSecureUpdateFeedUrl(overrideUrl) && normalizedOverride !== normalizedDomesticUrl && normalizedOverride !== normalizedLegacyUrl) {
     sources.push({
       id: 'override',
       label: '环境变量更新源',
@@ -78,6 +82,15 @@ export function getUpdateSources(overrideUrl = process.env.PROFER_UPDATE_FEED_UR
     configuration: {
       provider: 'generic',
       url: DOMESTIC_UPDATE_FEED_URL,
+      timeout: UPDATE_REQUEST_TIMEOUT_MS,
+    },
+  })
+  sources.push({
+    id: 'domestic-legacy',
+    label: '旧域名更新源',
+    configuration: {
+      provider: 'generic',
+      url: LEGACY_DOMESTIC_UPDATE_FEED_URL,
       timeout: UPDATE_REQUEST_TIMEOUT_MS,
     },
   })

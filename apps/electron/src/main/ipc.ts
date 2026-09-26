@@ -5592,9 +5592,9 @@ export function registerIpcHandlers(): void {
 
   // ===== GitHub Release =====
 
-  /** 商业版 releases.json 地址，可通过 PROFER_UPDATE_FEED_URL 环境变量覆盖 */
+  /** 商业版 releases.json 地址，可通过 PROFER_UPDATE_FEED_URL 环境变量覆盖；默认指向新机 HTTPS 域名，不再使用裸 IP 明文地址。 */
   const RELEASES_JSON_URL =
-    (process.env.PROFER_UPDATE_FEED_URL || 'http://47.109.108.57/profer-updates/') + 'releases.json'
+    (process.env.PROFER_UPDATE_FEED_URL || 'https://updates.profer.cn/') + 'releases.json'
 
   /** 从服务器获取 releases 列表（商业版数据源） */
   async function fetchServerReleases(): Promise<GitHubRelease[]> {

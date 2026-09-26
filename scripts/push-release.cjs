@@ -24,10 +24,23 @@ const ELECTRON = path.join(ROOT, 'apps/electron');
 const OUT = path.join(ELECTRON, 'out');
 const TAG = `v${VERSION}`;
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
-const HOST = '47.109.108.57';
-const USER = 'ecs-user';
-const UPDATE_FEED_URL = 'https://profer.cn/profer-updates/';
-const UPDATE_DIR = '/usr/share/nginx/html/profer-updates';
+const HOST = process.env.PROFER_UPDATE_SSH_HOST || '45.114.127.232';
+const USER = process.env.PROFER_UPDATE_SSH_USER || 'root';
+const SSH_PORT = process.env.PROFER_UPDATE_SSH_PORT || '41235';
+const UPDATE_FEED_URL = 'https://updates.profer.cn/';
+const UPDATE_DIR = process.env.PROFER_UPDATE_DIR || '/var/www/updates.profer.cn';
+// 发布目标：新机为主；旧机（profer.cn/profer-updates/ 供数）在退役前保持双写，PROFER_UPDATE_SKIP_LEGACY=1 可关闭。
+const UPDATE_TARGETS = [
+  { host: HOST, user: USER, port: SSH_PORT, dir: UPDATE_DIR },
+];
+if (!process.env.PROFER_UPDATE_SKIP_LEGACY) {
+  UPDATE_TARGETS.push({
+    host: process.env.PROFER_UPDATE_LEGACY_SSH_HOST || '47.109.108.57',
+    user: process.env.PROFER_UPDATE_LEGACY_SSH_USER || 'ecs-user',
+    port: process.env.PROFER_UPDATE_LEGACY_SSH_PORT || '22',
+    dir: process.env.PROFER_UPDATE_LEGACY_DIR || '/usr/share/nginx/html/profer-updates',
+  });
+}
 const BASH = 'C:/Program Files/Git/usr/bin/bash.exe';
 const RELEASE_RETRY_DELAYS_MS = [0, 15_000, 45_000, 90_000];
 
@@ -84,10 +97,10 @@ async function retryGitHub(label, action, isRecovered = () => false) {
   throw new Error(`${label} 失败: ${lastError.slice(-500)}`);
 }
 
-function scp(local, remote) {
+function scp(local, remote, target = UPDATE_TARGETS[0]) {
   return new Promise((resolve, reject) => {
     const src = local.replace(/\\/g, '/');
-    const process = spawn(BASH, ['-c', `scp -o StrictHostKeyChecking=no -q '${src.replace(/'/g, "'\\''")}' ${USER}@${HOST}:${remote}`]);
+    const process = spawn(BASH, ['-c', `scp -o StrictHostKeyChecking=no -P ${target.port} -q '${src.replace(/'/g, "'\\''")}' ${target.user}@${target.host}:${remote}`]);
     const timer = setTimeout(() => { try { process.kill(); } catch {} }, 600_000);
     process.on('close', (code) => {
       clearTimeout(timer);
@@ -96,9 +109,9 @@ function scp(local, remote) {
   });
 }
 
-function ssh(command, timeout = 30_000) {
+function ssh(command, timeout = 30_000, target = UPDATE_TARGETS[0]) {
   return new Promise((resolve, reject) => {
-    const process = spawn(BASH, ['-c', `ssh -o StrictHostKeyChecking=no ${USER}@${HOST} '${command.replace(/'/g, "'\\''")}'`]);
+    const process = spawn(BASH, ['-c', `ssh -o StrictHostKeyChecking=no -p ${target.port} ${target.user}@${target.host} '${command.replace(/'/g, "'\\''")}'`]);
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => { try { process.kill(); } catch {} }, timeout);
@@ -262,20 +275,26 @@ async function ensureGitHubRelease(assets) {
     size: installer.size,
     date: new Date().toISOString().split('T')[0],
   }));
-  await scp(metadata.path, '/tmp/latest.yml');
-  if (metadataSignature) await scp(metadataSignature.path, '/tmp/latest.yml.sig');
-  await scp(installer.path, `/tmp/${installer.name}`);
-  await scp(blockmap.path, `/tmp/${blockmap.name}`);
-  await scp(latestJsonPath, '/tmp/latest.json');
-  await ssh(
-    `sudo mkdir -p ${UPDATE_DIR} && sudo cp /tmp/latest.yml ${UPDATE_DIR}/ && ` +
-    (metadataSignature ? `sudo cp /tmp/latest.yml.sig ${UPDATE_DIR}/ && ` : '') +
-    `sudo cp /tmp/${installer.name} ${UPDATE_DIR}/ && sudo cp /tmp/${blockmap.name} ${UPDATE_DIR}/ && ` +
-    `sudo cp /tmp/latest.json ${UPDATE_DIR}/ && ` +
-    `sudo ln -sf ${UPDATE_DIR}/${installer.name} ${UPDATE_DIR}/Profer-latest.exe && ` +
-    `sudo chmod -R 755 ${UPDATE_DIR}`,
-    120_000,
-  );
+  for (const target of UPDATE_TARGETS) {
+    const sudo = target.user === 'root' ? '' : 'sudo ';
+    await scp(metadata.path, '/tmp/latest.yml', target);
+    if (metadataSignature) await scp(metadataSignature.path, '/tmp/latest.yml.sig', target);
+    await scp(installer.path, `/tmp/${installer.name}`, target);
+    await scp(blockmap.path, `/tmp/${blockmap.name}`, target);
+    await scp(latestJsonPath, '/tmp/latest.json', target);
+    await ssh(
+      `${sudo}mkdir -p ${target.dir} && ` +
+      (metadataSignature ? `${sudo}cp /tmp/latest.yml.sig ${target.dir}/ && ` : '') +
+      `${sudo}cp /tmp/latest.yml ${target.dir}/ && ` +
+      `${sudo}cp /tmp/${installer.name} ${target.dir}/ && ${sudo}cp /tmp/${blockmap.name} ${target.dir}/ && ` +
+      `${sudo}cp /tmp/latest.json ${target.dir}/ && ` +
+      `${sudo}ln -sf ${target.dir}/${installer.name} ${target.dir}/Profer-latest.exe && ` +
+      `${sudo}chmod -R 755 ${target.dir}`,
+      120_000,
+      target,
+    );
+    console.log(`  已上传到 ${target.user}@${target.host}:${target.dir}`);
+  }
 
   console.log('[3/4] 推送源码与版本 tag...');
   pushSourceAndTag();

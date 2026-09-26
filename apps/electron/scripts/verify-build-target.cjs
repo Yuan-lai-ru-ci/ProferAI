@@ -14,7 +14,7 @@ if (!['oss', 'commercial'].includes(expectedTarget)) {
 const bundle = readFileSync(resolve(bundlePath), 'utf8')
 const ossLiteral = 'false ? "oss" : "oss"'
 const commercialLiteral = 'false ? "oss" : "commercial"'
-const updateFeed = 'https://profer.cn/profer-updates/'
+const updateFeed = 'https://updates.profer.cn/'
 
 const hasOssTarget = bundle.includes(ossLiteral)
 const hasCommercialTarget = bundle.includes(commercialLiteral)
