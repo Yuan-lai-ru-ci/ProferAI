@@ -31,6 +31,7 @@ export interface ToolResultRendererProps {
 export function ToolResultRenderer({ toolName, input, result, isError, imageAttachments, basePath }: ToolResultRendererProps): React.ReactElement {
   switch (toolName) {
     case 'Bash':
+    case 'PowerShell':
       return <BashResultRenderer result={result} isError={isError} input={input} />
     case 'Read':
       return <ReadResultRenderer result={result} isError={isError} input={input} />

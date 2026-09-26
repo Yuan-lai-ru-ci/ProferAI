@@ -17,6 +17,7 @@ import {
   Brain,
   MessageSquareText,
   Download,
+  Check,
 } from 'lucide-react'
 import { useAtomValue } from 'jotai'
 import { thinkingExpandedAtom } from '@/atoms/chat-atoms'
@@ -334,6 +335,9 @@ function TaskListCollapsedSummary({ tasks }: { tasks: ParsedTaskListItem[] }): R
 
 // ===== 工具调用块 =====
 
+/** 右键复制命令后，「已复制」反馈的展示时长 */
+const COMMAND_COPIED_FEEDBACK_MS = 1500
+
 interface ToolUseBlockProps {
   block: SDKToolUseBlock
   allMessages: SDKMessage[]
@@ -380,6 +384,11 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
   // 运行中显示进行时短语，完成或非流式（已终止）显示完成态短语
   const displayLabel = (isCompleted || !isStreaming) ? phrase.label : phrase.loadingLabel
   const filePath = extractFilePath(block.input)
+  // 命令类工具（Bash / PowerShell）的命令原文：行内 label 会被字符数截断 +
+  // CSS 宽度省略双重裁剪，这里保留原文用于展开时回显完整命令。
+  const commandText = (block.name === 'Bash' || block.name === 'PowerShell') && typeof block.input.command === 'string'
+    ? block.input.command
+    : undefined
   const isPreviewable = (
     (block.name === 'Read' || block.name === 'Edit' || block.name === 'Write') &&
     isCompleted &&
@@ -395,6 +404,28 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
 
   // 子代理工具调用统计
   const childToolCount = childBlocks?.filter((b) => b.type === 'tool_use').length ?? 0
+
+  // ===== 右键复制命令 =====
+  // 命令类工具在行上右键即可复制完整命令原文；左键仍是正常的展开/收起。
+
+  const [commandCopied, setCommandCopied] = React.useState(false)
+  const commandCopiedTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+
+  React.useEffect(() => () => clearTimeout(commandCopiedTimerRef.current), [])
+
+  const handleCommandContextMenu = React.useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
+    if (!commandText) return
+    // 已选中文本时交还原生右键菜单，避免抢占用户复制选区的操作
+    if (window.getSelection()?.toString()) return
+    event.preventDefault()
+    navigator.clipboard.writeText(commandText).then(() => {
+      setCommandCopied(true)
+      clearTimeout(commandCopiedTimerRef.current)
+      commandCopiedTimerRef.current = setTimeout(() => setCommandCopied(false), COMMAND_COPIED_FEEDBACK_MS)
+    }).catch((error: unknown) => {
+      console.error('[ContentBlock] 复制命令失败:', error)
+    })
+  }, [commandText])
 
   // ===== Agent/Task 工具：特殊渲染 =====
   if (isAgentTool) {
@@ -502,6 +533,8 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
           'hover:opacity-70',
         )}
         onClick={() => setExpanded(!expanded)}
+        // 右键：复制完整命令。非命令类工具没有 commandText，保持原生右键行为
+        onContextMenu={handleCommandContextMenu}
       >
         {!isCompleted && isStreaming ? (
           <Loader2 className="size-3.5 animate-spin text-primary/50 shrink-0" />
@@ -541,6 +574,13 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
           </span>
         )}
 
+        {commandCopied && (
+          <span className="flex shrink-0 items-center gap-1 text-[11px] text-success">
+            <Check className="size-3" />
+            已复制
+          </span>
+        )}
+
         <ChevronRight
           className={cn(
             'shrink-0 size-3 text-muted-foreground/45 transition-transform duration-150',
@@ -558,6 +598,25 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
           {imageAttachments.map((image, i) => (
             <GeneratedImageThumb key={`${image.localPath}:${i}`} image={image} />
           ))}
+        </div>
+      )}
+
+      {/* 尚无结果（命令执行中/被中断）时，展开区回显完整命令。
+          命令完成后由 Bash 结果块内的 `$ command` 回显，故此处不重复渲染。 */}
+      {expanded && commandText && !shouldShowResult && (
+        <div className={cn(
+          'ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30',
+          animate && 'animate-in fade-in slide-in-from-top-1 duration-150',
+        )}>
+          <div className={cn(
+            'rounded-md border border-surface-border/60 bg-code p-3',
+            'font-mono text-[12px] leading-relaxed text-code-foreground',
+            'whitespace-pre-wrap break-all',
+          )}>
+            <span className="select-none text-muted-foreground">
+              <span className="text-success">$</span> {commandText}
+            </span>
+          </div>
         </div>
       )}
 
