@@ -48,6 +48,7 @@ import type {
 import { isAnthropicShapedEndpoint, normalizeAnthropicProviderUrl } from '@profer/core'
 import { getProviderLogo } from '@/lib/model-logo'
 import { applyModelDiscoveryResult, buildModelDiscoveryAttemptKey, shouldAutoDiscoverModels } from '@/lib/channel-model-discovery'
+import { addManualModel } from '@/lib/channel-manual-model'
 import { resolveModel1MToggleState } from '@/lib/model-1m-toggle'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -441,16 +442,19 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   /** 添加模型 */
   const handleAddModel = (): void => {
-    if (!newModelId.trim()) return
-
-    const model: ChannelModel = {
-      id: newModelId.trim(),
-      name: newModelName.trim() || newModelId.trim(),
-      enabled: true,
-      source: 'manual',
+    const result = addManualModel(models, newModelId, newModelName)
+    if (result.kind === 'empty') return
+    if (result.kind === 'invalid') {
+      toast.warning('模型 ID 不能包含空格或换行', { id: 'invalid-model-id-warn' })
+      return
+    }
+    if (result.kind === 'duplicate') {
+      toast.warning(`模型 ${result.id} 已在列表中`, { id: 'duplicate-model-warn' })
+      return
     }
 
-    setModels((prev) => [...prev, model])
+    modelsUserEditedRef.current = true
+    setModels(result.models)
     setNewModelId('')
     setNewModelName('')
   }
@@ -1028,6 +1032,8 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
               placeholder="模型 ID（如 claude-opus-4-6）"
               className="flex-1 h-8 text-sm"
               onKeyDown={(e) => {
+                // 中文输入法组词期间的 Enter 是确认候选词，不能当成「添加模型」
+                if (e.nativeEvent.isComposing) return
                 if (e.key === 'Enter') {
                   e.preventDefault()
                   handleAddModel()
@@ -1040,6 +1046,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
               placeholder="显示名称（可选）"
               className="flex-1 h-8 text-sm"
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return
                 if (e.key === 'Enter') {
                   e.preventDefault()
                   handleAddModel()
