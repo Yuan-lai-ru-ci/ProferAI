@@ -575,7 +575,7 @@ export function validateExpectedRevision(parsed: Record<string, unknown>, sessio
   return null
 }
 
-function validateWorkspaceHeatmapRequest(workspaceId: unknown): string | null {
+export function validateWorkspaceHeatmapRequest(workspaceId: unknown): string | null {
   if (typeof workspaceId !== 'string' || !workspaceId.trim()) return '缺少 workspaceId'
   return null
 }
