@@ -129,6 +129,14 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
 
   // 编辑级
   {
+    id: 'rename-item',
+    name: '重命名会话',
+    description: '重命名左侧边栏当前活跃的会话 / 对话标题',
+    defaultMac: 'F2',
+    defaultWin: 'F2',
+    category: 'edit',
+  },
+  {
     id: 'clear-context',
     name: '清除上下文',
     description: '清除当前对话的上下文',

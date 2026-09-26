@@ -15,6 +15,7 @@ import {
   Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, Cloud, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, Sparkles, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useShortcut } from '@/hooks/useShortcut'
 import { clearSessionReferenceDragState, setSessionReferenceDragData } from '@/lib/session-reference-drag'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -39,7 +40,7 @@ import {
   type SessionMiniMapType,
 } from '@/components/session-preview/SessionMiniMapPopover'
 import { browserStateMapAtom } from '@/atoms/browser-atoms'
-import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
+import { currentAgentSessionIdAtom, type SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import type { ConversationMeta, AgentSessionMeta, AgentWorkspace } from '@profer/shared'
 import { formatRelativeUpdatedAt, getRailInitial } from './sidebar-utils'
 import {
@@ -486,6 +487,9 @@ export const ConversationItem = React.memo(function ConversationItem({
     }
   }
 
+  // F2 快速重命名当前活跃对话：active 即「活跃 Tab 所属会话」，同一时刻仅一项为 true
+  useShortcut('rename-item', startEdit, active && !editing)
+
   const isPinned = !!conversation.pinned
 
   const menuItems = (
@@ -724,6 +728,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   // 该会话是否有活动浏览器会话/标签（即使面板被用户收起也保留显示，便于从侧边栏识别哪个会话正在用浏览器）
   const browserStateMap = useAtomValue(browserStateMapAtom)
   const hasBrowser = browserStateMap.has(session.id)
+  const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const [editing, setEditing] = React.useState(false)
   const [editTitle, setEditTitle] = React.useState('')
   const [menuOpen, setMenuOpen] = React.useState(false)
@@ -762,6 +767,9 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
       setEditing(false)
     }
   }
+
+  // F2 快速重命名当前活跃会话：用 id 精确匹配，避免父行（treeActive 为 true）与子行同时命中
+  useShortcut('rename-item', startEdit, currentAgentSessionId === session.id && !editing)
 
   const canMove = indicatorStatus === 'idle' || indicatorStatus === 'completed'
 

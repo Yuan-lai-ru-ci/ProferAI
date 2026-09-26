@@ -152,11 +152,6 @@ function rebuildCache(): void {
 
 // ===== 核心事件分发 =====
 
-/**
- * 全局 keydown 事件处理器
- *
- * 遍历所有注册的快捷键，匹配后执行对应 handler
- */
 /** 判断 macOS 上的 F1–F12，兼容浏览器 key/code 两种上报方式。 */
 export function isMacFunctionKeyEvent(
   event: Pick<KeyboardEvent, 'key' | 'code'>,
@@ -167,15 +162,12 @@ export function isMacFunctionKeyEvent(
     || /^F(?:[1-9]|1[0-2])$/i.test(event.code)
 }
 
+/**
+ * 全局 keydown 事件处理器
+ *
+ * 遍历所有注册的快捷键，匹配后执行对应 handler
+ */
 function dispatchShortcut(e: KeyboardEvent): void {
-  // macOS 的 Fn+F1–F12 可能被 Chromium 转成焦点导航，先在 capture 阶段吞掉，
-  // 防止窗口出现整块原生黄色焦点框。Profer 当前没有 F1–F12 快捷键。
-  if (isMacFunctionKeyEvent(e)) {
-    e.preventDefault()
-    e.stopPropagation()
-    return
-  }
-
   // 忽略输入法组合过程
   if (e.isComposing) return
 
@@ -201,9 +193,19 @@ function dispatchShortcut(e: KeyboardEvent): void {
             entry.callback()
           }
         }
+        return // 已分发，不再尝试其他定义
       }
-      return // 匹配一个即停止
+      // 命中定义但当前没有任何 handler（如未选中会话时的 rename-item）：
+      // 不再尝试其他定义，但要继续走下方兜底——F 键仍需被吞掉，否则会漏出原生焦点导航
+      break
     }
+  }
+
+  // 走到这里说明没有任何 handler 被执行：macOS 的 Fn+F1–F12 会被 Chromium 转成焦点导航，
+  // 在 capture 阶段吞掉事件，避免窗口出现整块原生黄色焦点框。
+  if (isMacFunctionKeyEvent(e)) {
+    e.preventDefault()
+    e.stopPropagation()
   }
 }
 
