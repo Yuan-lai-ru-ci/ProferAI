@@ -28,6 +28,13 @@ export interface ShortcutDefinition {
   global?: boolean
   /** 是否为只读（仅展示，不可自定义） */
   readonly?: boolean
+  /**
+   * 焦点在输入框 / 富文本编辑器内时跳过该快捷键（不执行、也不吞键）。
+   *
+   * 用于「无修饰键且本身有输入语义」的按键：registry 的判定顺序是先 preventDefault
+   * 再执行 handler，若不在分发层放行，输入框将收不到 keydown、原生删除失效。
+   */
+  skipInEditable?: boolean
 }
 
 /**
@@ -135,6 +142,17 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
     defaultMac: 'F2',
     defaultWin: 'F2',
     category: 'edit',
+  },
+  {
+    // Delete 在 macOS 主键盘上是 Backspace，前向删除（Fn+Delete）才上报 Delete，
+    // 故 mac 侧绑定实际等价于 Fn+Delete；不要改绑 Backspace，那会与输入框删字符同键。
+    id: 'delete-item',
+    name: '删除当前会话',
+    description: '删除左侧边栏当前活跃的会话 / 对话，弹出确认框后再按一次取消',
+    defaultMac: 'Delete',
+    defaultWin: 'Delete',
+    category: 'edit',
+    skipInEditable: true,
   },
   {
     id: 'clear-context',

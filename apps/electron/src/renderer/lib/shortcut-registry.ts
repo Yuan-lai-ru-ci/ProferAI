@@ -7,6 +7,7 @@
 
 import { DEFAULT_SHORTCUTS, SHORTCUT_MAP } from './shortcut-defaults'
 import type { ShortcutOverrides } from './shortcut-defaults'
+import { isEditableTarget } from './navigation-controller'
 
 // ===== 平台检测 =====
 
@@ -210,6 +211,10 @@ export function resolveShortcutDispatch(
  *
  * capture 阶段先把事件与已启用定义比对，再按 resolveShortcutDispatch 的决策
  * 执行 handler 与阻止默认行为。
+ *
+ * 另有一条前置放行规则（必须在吞键之前判定）：定义带 skipInEditable 的按键
+ * 在可编辑元素内一律不参与分发 —— 裸 Delete 这类键在输入框里属于原生输入语义，
+ * 若命中后照常 preventDefault，输入框将收不到 keydown、删字符彻底失效。
  */
 function dispatchShortcut(e: KeyboardEvent): void {
   let match: ShortcutMatchResult = 'none'
@@ -217,6 +222,10 @@ function dispatchShortcut(e: KeyboardEvent): void {
 
   for (const [id, parsed] of parsedCache) {
     if (!matchesParsed(e, parsed)) continue
+    if (SHORTCUT_MAP.get(id)?.skipInEditable && isEditableTarget(e.target)) {
+      match = 'none'
+      break
+    }
     // 匹配一个即停止。但仍要区分「命中定义但无 handler」（如未选中会话时的重命名）：
     // 它同样需要走功能键兜底，否则 F 键会漏出原生焦点导航。
     handlerEntries = Array.from(handlers.get(id) ?? [])
