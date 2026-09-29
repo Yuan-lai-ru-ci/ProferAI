@@ -21,19 +21,36 @@ function makeWindow(): { window: unknown; keydown: () => Listener | null } {
   return { window, keydown: () => listener }
 }
 
-/** 模拟一次 F2 keydown；默认无修饰键、非组合态 */
-function pressF2(listener: Listener | null): void {
+/** 一次按键事件里 preventDefault / stopPropagation 的调用次数 */
+interface PressResult {
+  prevented: number
+  stopped: number
+}
+
+interface PressOptions {
+  /** 按键名，默认 F2 */
+  key?: string
+  /** 事件目标（焦点所在元素），用于验证可编辑元素内的放行 */
+  target?: unknown
+}
+
+/** 模拟一次 keydown；默认无修饰键、非组合态、无事件目标 */
+function pressKey(listener: Listener | null, options: PressOptions = {}): PressResult {
+  const result: PressResult = { prevented: 0, stopped: 0 }
+  const key = options.key ?? 'F2'
   listener?.({
-    key: 'F2',
-    code: 'F2',
+    key,
+    code: key,
+    target: options.target,
     metaKey: false,
     ctrlKey: false,
     shiftKey: false,
     altKey: false,
     isComposing: false,
-    preventDefault: () => {},
-    stopPropagation: () => {},
+    preventDefault: () => { result.prevented++ },
+    stopPropagation: () => { result.stopped++ },
   })
+  return result
 }
 
 let cleanup: Array<() => void> = []
@@ -47,7 +64,7 @@ afterEach(() => {
  */
 async function freshRegistry(): Promise<{
   register: (id: string, cb: () => void, options?: { exclusive?: boolean }) => () => void
-  press: () => void
+  press: (options?: PressOptions) => PressResult
 }> {
   const { window, keydown } = makeWindow()
   ;(globalThis as unknown as { window: unknown }).window = window
@@ -58,7 +75,7 @@ async function freshRegistry(): Promise<{
   mod.initShortcutRegistry()
   return {
     register: (id, cb, options) => mod.registerShortcut(id, cb, options ?? {}),
-    press: () => pressF2(keydown()),
+    press: (options) => pressKey(keydown(), options),
   }
 }
 
@@ -105,5 +122,50 @@ test('Given 注销后仅剩一个 handler When 触发 Then 不再重复执行', 
   cleanup.push(reg.register('rename-item', () => { hits++ }, { exclusive: true }))
   off1()
   reg.press()
+  expect(hits).toBe(1)
+})
+
+/**
+ * skipInEditable 守卫：裸 Delete 在输入框里属于原生输入语义。分发是先吞键再执行
+ * handler，因此必须在命中处就放行，否则输入框收不到 keydown、删字符彻底失效。
+ */
+test('Given 焦点在输入框 When 按 Delete Then 不触发删除且不吞键', async () => {
+  const reg = await freshRegistry()
+  let hits = 0
+  cleanup.push(reg.register('delete-item', () => { hits++ }))
+  const result = reg.press({ key: 'Delete', target: { tagName: 'INPUT' } })
+  expect(hits).toBe(0)
+  expect(result.prevented).toBe(0)
+})
+
+test('Given 焦点在富文本编辑器 When 按 Delete Then 不触发删除且不吞键', async () => {
+  const reg = await freshRegistry()
+  let hits = 0
+  cleanup.push(reg.register('delete-item', () => { hits++ }))
+  const result = reg.press({
+    key: 'Delete',
+    target: {
+      tagName: 'DIV',
+      closest: (selector: string) => selector.includes('.ProseMirror') ? {} : null,
+    },
+  })
+  expect(hits).toBe(0)
+  expect(result.prevented).toBe(0)
+})
+
+test('Given 焦点不在可编辑元素 When 按 Delete Then 触发删除并吞键', async () => {
+  const reg = await freshRegistry()
+  let hits = 0
+  cleanup.push(reg.register('delete-item', () => { hits++ }))
+  const result = reg.press({ key: 'Delete', target: { tagName: 'BUTTON', closest: () => null } })
+  expect(hits).toBe(1)
+  expect(result.prevented).toBe(1)
+})
+
+test('Given 焦点在输入框 When 按 F2 Then 照常重命名（守卫只作用于声明过的定义）', async () => {
+  const reg = await freshRegistry()
+  let hits = 0
+  cleanup.push(reg.register('rename-item', () => { hits++ }))
+  reg.press({ target: { tagName: 'INPUT' } })
   expect(hits).toBe(1)
 })
