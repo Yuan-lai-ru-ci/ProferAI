@@ -3,7 +3,7 @@
  *
  * 承接使用中的高频开关，按场景分三个 section：
  * - 通知与声音：桌面通知、提示音与各场景音效
- * - 对话浏览：自动归档、消息悬浮置顶条
+ * - 对话浏览：自动归档、消息悬浮置顶条、手动确认已读
  * - Agent 执行展示：自动预览修改中文件、输出完保持展开
  * - 输入体验：长文本粘贴转附件、Markdown 渲染、矮窗口紧凑输入框
  * - 语音输入：豆包流式语音输入（从原 Chat 工具页迁入）
@@ -12,7 +12,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom, useSetAtom, useStore } from 'jotai'
 import { Volume2, Plus, X, Music, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -81,6 +81,9 @@ import {
 import { useWindowInnerHeight } from '@/hooks/use-window-inner-height'
 import { agentProcessGroupsKeepExpandedAtom } from '@/atoms/agent-atoms'
 import { autoPreviewEnabledAtom } from '@/atoms/preview-atoms'
+import { manualReadConfirmEnabledAtom, updateManualReadConfirmEnabled } from '@/atoms/agent-unread-settings'
+import { applyUnreadModeTransition } from '@/lib/agent-unread-transition'
+import type { AgentUnreadMode } from '@/lib/agent-unread-gate'
 import { VoiceInputSettings } from './VoiceInputSettings'
 import { Button } from '@profer/ui/primitives/button'
 import type { NotificationSoundId, NotificationSoundType, NotificationSoundSettings } from '@/types/settings'
@@ -95,6 +98,9 @@ export function UsageSettings(): React.ReactElement {
   const [richTextRenderingEnabled, setRichTextRenderingEnabled] = useAtom(richTextRenderingEnabledAtom)
   const [autoPreviewEnabled, setAutoPreviewEnabled] = useAtom(autoPreviewEnabledAtom)
   const [processGroupsKeepExpanded, setProcessGroupsKeepExpanded] = useAtom(agentProcessGroupsKeepExpandedAtom)
+  // 「手动确认已读」开关：开启态未读需要用户确认才清除（见 `requirements.md` §3.2）。
+  const [manualReadConfirmEnabled, setManualReadConfirmEnabled] = useAtom(manualReadConfirmEnabledAtom)
+  const store = useStore()
   const setComposerCompactMode = useSetAtom(composerCompactModeAtom)
   // 「矮窗口压缩输入框」三个数值字段用本地字符串态：允许中途输入空值/非法值，失焦时归一化落盘
   const [compactViewportHeightDraft, setCompactViewportHeightDraft] = React.useState(String(DEFAULT_COMPACT_VIEWPORT_HEIGHT))
@@ -262,6 +268,26 @@ export function UsageSettings(): React.ReactElement {
     }
   }
 
+  /**
+   * 切换「手动确认已读」。
+   *
+   * 开关本身先落盘（失败回滚），再做一次两向未读迁移：关 → 开补写持久化未读、
+   * 开 → 关回填内存集合，两向都不清理未读（对应 `requirements.md` §6 U-1）。
+   * 主进程读的是同步更新的设置缓存，因此无需重启，下一帧即按新模式生效。
+   */
+  const handleManualReadConfirmToggle = async (enabled: boolean): Promise<void> => {
+    const from: AgentUnreadMode = manualReadConfirmEnabled ? 'manual' : 'auto'
+    const to: AgentUnreadMode = enabled ? 'manual' : 'auto'
+    try {
+      await updateManualReadConfirmEnabled(enabled, setManualReadConfirmEnabled)
+    } catch (error) {
+      console.error('[使用偏好] 更新「手动确认已读」失败:', error)
+      toast.error('更新「手动确认已读」失败')
+      return
+    }
+    await applyUnreadModeTransition({ from, to, get: store.get, set: store.set })
+  }
+
   return (
     <div className="space-y-6">
       <SettingsSection
@@ -375,6 +401,12 @@ export function UsageSettings(): React.ReactElement {
               setStickyUserMessageEnabled(checked)
               updateStickyUserMessageEnabled(checked)
             }}
+          />
+          <SettingsToggle
+            label="手动确认已读"
+            description="开启后会话完成即产生未读（即使你正在看），打开或切换标签页不再自动清除；在最新一轮回复操作栏点「确认已读」，或用侧边栏会话菜单切换。关闭时保持现有行为。"
+            checked={manualReadConfirmEnabled}
+            onCheckedChange={(checked) => { void handleManualReadConfirmToggle(checked) }}
           />
         </SettingsCard>
       </SettingsSection>

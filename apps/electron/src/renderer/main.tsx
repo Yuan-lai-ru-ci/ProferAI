@@ -545,7 +545,7 @@ function NotificationsInitializer(): null {
 }
 
 /**
- * 「手动确认已读」开关初始化组件（设置 → 通用偏好）
+ * 「手动确认已读」开关初始化组件（设置 → 使用偏好）
  *
  * 两件事：
  * 1. 从主进程加载开关（默认 false），写入 `manualReadConfirmEnabledAtom`，渲染层判据随之就位；
