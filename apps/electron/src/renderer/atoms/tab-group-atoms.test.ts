@@ -9,6 +9,7 @@
 import { expect, test } from 'bun:test'
 import {
   GROUP_MIN_PANE_WIDTH,
+  resolveGroupDropSide,
   emptyGroupSide,
   fillGroupSide,
   clampGroupRatio,
@@ -162,6 +163,44 @@ test('落点语义：拖当前标签 / 无激活标签时只占一栏；缺被�
     focusedTabId: 'a',
   })
   expect(resolveGroupMembership({ activeTabId: 'b', draggedTabId: null, position: 'left' })).toBeNull()
+})
+
+test('拖放侧别按当前两栏 DOM 边界判定：右侧已有预览时仍能命中左栏', () => {
+  const leftPane = { left: 100, right: 680 }
+  const rightPane = { left: 688, right: 1100 }
+
+  expect(resolveGroupDropSide({ clientX: 400, leftPane, rightPane, fallbackSplitX: 700 })).toBe('left')
+  expect(resolveGroupDropSide({ clientX: 900, leftPane, rightPane, fallbackSplitX: 700 })).toBe('right')
+  // 8px gap 的中点为分界；中点本身归右侧，邻接像素两边分别命中各栏。
+  expect(resolveGroupDropSide({ clientX: 683.99, leftPane, rightPane, fallbackSplitX: 700 })).toBe('left')
+  expect(resolveGroupDropSide({ clientX: 684, leftPane, rightPane, fallbackSplitX: 700 })).toBe('right')
+})
+
+test('拖放侧别处理空栏、边界不可用和 ResizeObserver 前的 fallback', () => {
+  expect(resolveGroupDropSide({
+    clientX: 400,
+    leftPane: { left: 100, right: 680 },
+    rightPane: null,
+    fallbackSplitX: 500,
+  })).toBe('left')
+  expect(resolveGroupDropSide({
+    clientX: 600,
+    leftPane: { left: 100, right: 680 },
+    rightPane: null,
+    fallbackSplitX: 500,
+  })).toBe('right')
+  expect(resolveGroupDropSide({
+    clientX: 499,
+    leftPane: null,
+    rightPane: null,
+    fallbackSplitX: 500,
+  })).toBe('left')
+  expect(resolveGroupDropSide({
+    clientX: 500,
+    leftPane: null,
+    rightPane: null,
+    fallbackSplitX: 500,
+  })).toBe('right')
 })
 
 // ===== 对账 =====

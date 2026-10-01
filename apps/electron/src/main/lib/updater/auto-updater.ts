@@ -61,18 +61,56 @@ async function checkSource(source: UpdateSource): Promise<boolean> {
     return false
   }
 
+  const candidateVersion = result.updateInfo?.version ?? result.versionInfo?.version
+  if (candidateVersion && isBlockedInternalUpdate(candidateVersion)) {
+    console.log(`[更新] 内测包 ${getCurrentAppVersion()} 忽略同/更低正式基线 ${candidateVersion}`)
+    setStatus({ status: 'not-available' })
+    return false
+  }
+
   await autoUpdater.downloadUpdate()
   return true
 }
 
-function compareVersions(left: string, right: string): number {
-  const leftParts = left.replace(/^v/, '').split('.').map(Number)
-  const rightParts = right.replace(/^v/, '').split('.').map(Number)
+export function compareVersions(left: string, right: string): number {
+  // 内测包采用 `正式版本-internal.x`，更新判断只比较正式基线三段数字：
+  // 0.15.85-internal.4 与 0.15.85 应视为同一正式基线，不能把同基线正式包当更新。
+  const parseBaseVersion = (value: string): number[] => (value.replace(/^v/, '').split('-', 1)[0] ?? '').split('.').map((part) => {
+    const parsed = Number(part)
+    return Number.isFinite(parsed) ? parsed : 0
+  })
+  const leftParts = parseBaseVersion(left)
+  const rightParts = parseBaseVersion(right)
   for (let index = 0; index < 3; index += 1) {
     const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0)
     if (difference !== 0) return difference
   }
   return 0
+}
+
+const INTERNAL_VERSION_PATTERN = /^v?\d+\.\d+\.\d+-internal\.\d+$/i
+
+/** 只有明确的内测版本才启用“正式基线”保护，正式版行为保持 electron-updater 原样。 */
+export function isInternalVersion(version: string): boolean {
+  return INTERNAL_VERSION_PATTERN.test(version.trim())
+}
+
+/**
+ * electron-updater 使用 semver 比较时，会把同基线正式版视为高于 internal 版。
+ * 对当前内测包，仅拒绝同/更低的正式基线；更高正式版本和内测序号升级仍不拦截。
+ */
+export function shouldBlockInternalBaseline(currentVersion: string, candidateVersion: string): boolean {
+  return isInternalVersion(currentVersion)
+    && /^v?\d+\.\d+\.\d+(?:\+[\w.-]+)?$/.test(candidateVersion)
+    && compareVersions(candidateVersion, currentVersion) <= 0
+}
+
+function getCurrentAppVersion(): string {
+  return app.getVersion()
+}
+
+function isBlockedInternalUpdate(candidateVersion: string): boolean {
+  return shouldBlockInternalBaseline(getCurrentAppVersion(), candidateVersion)
 }
 
 async function checkDevelopmentUpdate(): Promise<void> {
@@ -213,6 +251,11 @@ function setupPackagedAutoUpdater(): void {
   })
 
   autoUpdater.on('update-available', (info) => {
+    if (isBlockedInternalUpdate(info.version)) {
+      console.log(`[更新] 内测包 ${getCurrentAppVersion()} 忽略同/更低正式基线 ${info.version}`)
+      setStatus({ status: 'not-available' })
+      return
+    }
     console.log('[更新] 发现新版本:', info.version)
     setStatus({
       status: 'available',
@@ -224,9 +267,17 @@ function setupPackagedAutoUpdater(): void {
   })
 
   autoUpdater.on('download-progress', (progress) => {
+    const version = (currentStatus as { version?: string }).version || ''
+    // 被拒绝的 available 事件不会留下版本；忽略其迟到的进度，避免出现空版本下载状态。
+    if (isInternalVersion(getCurrentAppVersion()) && !version) return
+    if (version && isBlockedInternalUpdate(version)) {
+      console.log(`[更新] 内测包拒绝同/更低正式基线下载进度 ${version}`)
+      setStatus({ status: 'not-available' })
+      return
+    }
     setStatus({
       status: 'downloading',
-      version: (currentStatus as { version?: string }).version || '',
+      version,
       progress: {
         percent: progress.percent,
         transferred: progress.transferred,
@@ -237,6 +288,11 @@ function setupPackagedAutoUpdater(): void {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
+    if (isBlockedInternalUpdate(info.version)) {
+      console.log(`[更新] 内测包拒绝同/更低正式基线下载完成 ${info.version}`)
+      setStatus({ status: 'not-available' })
+      return
+    }
     console.log('[更新] 下载完成:', info.version)
     setStatus({
       status: 'downloaded',

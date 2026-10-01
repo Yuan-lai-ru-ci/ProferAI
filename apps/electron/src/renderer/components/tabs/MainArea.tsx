@@ -329,6 +329,7 @@ export function MainArea(): React.ReactElement {
               >
                 {/* 左栏：组合激活时是组内左成员，否则是当前标签 */}
                 <div
+                  data-group-drop-left-pane="true"
                   className="flex flex-col min-w-0 h-full relative"
                   style={{ flex: '1 1 auto' }}
                   onPointerDownCapture={() => focusGroupSide('left')}
@@ -363,6 +364,7 @@ export function MainArea(): React.ReactElement {
                       aria-label="调整组合内两栏宽度"
                     />
                     <div
+                      data-group-drop-right-pane="true"
                       className="flex flex-col min-w-0 h-full relative"
                       style={rightPaneStyle}
                       onPointerDownCapture={() => focusGroupSide('right')}

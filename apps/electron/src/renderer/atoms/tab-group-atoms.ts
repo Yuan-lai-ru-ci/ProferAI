@@ -446,6 +446,22 @@ export function clampGroupRatio(ratio: number): number {
   return Math.max(GROUP_MIN_RATIO, Math.min(GROUP_MAX_RATIO, ratio))
 }
 
+/** 按实际 pane 边界解析拖放侧别；分隔缝以两栏边缘中点归属。 */
+export function resolveGroupDropSide(input: {
+  clientX: number
+  leftPane: { left: number; right: number } | null
+  rightPane: { left: number; right: number } | null
+  fallbackSplitX: number
+}): TabGroupSide {
+  const { clientX, leftPane, rightPane, fallbackSplitX } = input
+  const splitX = leftPane && rightPane
+    && Number.isFinite(leftPane.right)
+    && Number.isFinite(rightPane.left)
+    ? (leftPane.right + rightPane.left) / 2
+    : fallbackSplitX
+  return clientX < splitX ? 'left' : 'right'
+}
+
 export interface GroupSplitGeometry {
   /** 右栏像素宽 */
   rightWidth: number

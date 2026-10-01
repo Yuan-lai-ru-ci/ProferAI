@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test'
 import type { GitHubRelease } from '@profer/shared'
 
-// 禁止测试触发真实网络检查或下载；electron 由全局 preload 提供开发模式替身。
+// 禁止测试触发真实网络检查或下载。
 const check = mock(async () => null)
 const download = mock(async () => [])
 const on = mock(() => undefined)
@@ -12,9 +12,9 @@ mock.module('electron-updater', () => ({
   autoUpdater: { checkForUpdates: check, downloadUpdate: download, on },
 }))
 
-const { checkForUpdates, getUpdateStatus, initAutoUpdater, cleanupUpdater } = await import('./auto-updater')
+const { checkForUpdates, getUpdateStatus, initAutoUpdater, cleanupUpdater, isInternalVersion, shouldBlockInternalBaseline } = await import('./auto-updater')
 
-/** 构造一条 Release 替身；preload mock 的 app.getVersion() 为 43.0.0。 */
+/** 构造一条 Release 替身。 */
 function makeRelease(tagName: string, overrides: Partial<GitHubRelease> = {}): GitHubRelease {
   return {
     id: 1,
@@ -30,6 +30,17 @@ function makeRelease(tagName: string, overrides: Partial<GitHubRelease> = {}): G
   }
 }
 
+describe('内测版本基线门禁', () => {
+  test('只拦截内测包的同/更低正式基线，不影响更高正式版或正式包', () => {
+    expect(isInternalVersion('0.15.85-internal.4')).toBe(true)
+    expect(isInternalVersion('0.15.85')).toBe(false)
+    expect(shouldBlockInternalBaseline('0.15.85-internal.4', '0.15.85')).toBe(true)
+    expect(shouldBlockInternalBaseline('0.15.85-internal.4', '0.15.84')).toBe(true)
+    expect(shouldBlockInternalBaseline('0.15.85-internal.4', '0.16.0')).toBe(false)
+    expect(shouldBlockInternalBaseline('0.15.85-internal.4', '0.15.85-internal.5')).toBe(false)
+    expect(shouldBlockInternalBaseline('0.15.85', '0.15.85')).toBe(false)
+  })
+})
 describe('开发版更新状态', () => {
   test('Given 未打包应用 When 获取初始状态 Then 保持 idle，允许手动检查最新 Release', () => {
     expect(getUpdateStatus()).toEqual({ status: 'idle' })
@@ -119,6 +130,7 @@ describe('开发版自动检查调度', () => {
   test('Given 开发版启动 When 初始化更新器 Then 保留自动调度但不装配 electron-updater', async () => {
     await withCapturedTimers(async (timer) => {
       on.mockClear()
+      check.mockClear()
       getLatestRelease.mockClear()
       latestRelease = null
 

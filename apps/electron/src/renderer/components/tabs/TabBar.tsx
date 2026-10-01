@@ -52,6 +52,7 @@ import {
   isGroupEligibleTab,
   isSessionConsistentGroup,
   planGroupDrop,
+  resolveGroupDropSide,
   removeTabGroup,
   replaceTabGroup,
   tabGroupsAtom,
@@ -969,11 +970,17 @@ function TabBarInner({
           return;
         }
 
-        // 左右落点以真实分界线为准（由 MainArea 发布在 data-group-drop-split 上）：
-        // 比例拖过、或空栏只占 1/3 时，容器中点与两栏实际边界并不重合。
+        // 按当前真实 pane 边界判定，避免 ResizeObserver 尚未刷新时使用陈旧比例。
+        const leftPaneRect = region?.querySelector<HTMLElement>("[data-group-drop-left-pane]")?.getBoundingClientRect() ?? null;
+        const rightPaneRect = region?.querySelector<HTMLElement>("[data-group-drop-right-pane]")?.getBoundingClientRect() ?? null;
         const splitOffset = Number(region?.dataset.groupDropSplit ?? "");
-        const splitX = regionRect.left + (Number.isFinite(splitOffset) ? splitOffset : regionRect.width / 2);
-        hoveredSide = me.clientX < splitX ? "left" : "right";
+        const fallbackSplitX = regionRect.left + (Number.isFinite(splitOffset) ? splitOffset : regionRect.width / 2);
+        hoveredSide = resolveGroupDropSide({
+          clientX: me.clientX,
+          leftPane: leftPaneRect,
+          rightPane: rightPaneRect,
+          fallbackSplitX,
+        });
         committable = me.clientY >= barRect.bottom + GROUP_DROP_COMMIT_MARGIN;
         setTabGroupDrag({ draggingTabId: tabId, hoveredPosition: hoveredSide });
       };
