@@ -58,7 +58,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     handleRequestMove,
     handleAgentRename,
     handleAgentRegenerateTitle,
-    handleMarkUnread,
+    handleToggleSessionUnread,
     regeneratingTitleIds,
     handleTogglePinAgent,
     handleToggleArchiveAgent,
@@ -242,7 +242,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                 onRegenerateTitle={handleAgentRegenerateTitle}
                 onTogglePin={handleTogglePinAgent}
                 onToggleArchive={handleToggleArchiveAgent}
-                onMarkUnread={handleMarkUnread}
+                onMarkUnread={handleToggleSessionUnread}
                 onCloseTab={() => requestCloseTab(tab.id)}
               />
             )
@@ -364,7 +364,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                             regeneratingTitle={regeneratingTitleIds.has(item.session.id)}
                             onTogglePin={handleTogglePinAgent}
                             onToggleArchive={handleToggleArchiveAgent}
-                            onMarkUnread={handleMarkUnread}
+                            onMarkUnread={handleToggleSessionUnread}
                           />
 
                           {childCount > 0 && expandedChildren && (
@@ -386,7 +386,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                                   regeneratingTitle={regeneratingTitleIds.has(childSession.id)}
                                   onTogglePin={handleTogglePinAgent}
                                   onToggleArchive={handleToggleArchiveAgent}
-                                  onMarkUnread={handleMarkUnread}
+                                  onMarkUnread={handleToggleSessionUnread}
                                 />
                               ))}
                             </div>
@@ -562,7 +562,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                   onTogglePin={handleTogglePinAgent}
                   onToggleArchive={handleToggleArchiveAgent}
                   onToggleRelatedParent={handleToggleRelatedParent}
-                  onMarkUnread={handleMarkUnread}
+                  onMarkUnread={handleToggleSessionUnread}
                   workspaceSwitchTs={workspaceSwitchTs}
                 />
               ))}
@@ -637,7 +637,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                         regeneratingTitle={regeneratingTitleIds.has(session.id)}
                         onTogglePin={handleTogglePinAgent}
                         onToggleArchive={handleToggleArchiveAgent}
-                        onMarkUnread={handleMarkUnread}
+                        onMarkUnread={handleToggleSessionUnread}
                       />
                     ))}
                   </div>

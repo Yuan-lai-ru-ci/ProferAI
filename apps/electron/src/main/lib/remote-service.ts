@@ -33,7 +33,9 @@ import { app, BrowserWindow } from 'electron'
 
 import { AGENT_IPC_CHANNELS, isChannelEnabledForRuntime, type AgentSessionMeta } from '@profer/shared'
 import { agentEventBus, runAgentHeadless, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession, regenerateAgentTitle } from './agent-service'
-import { publishAgentSessionProjection, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
+import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
+import { buildArchiveToggleUpdates } from './agent-unread-policy'
+import { getAgentUnreadPolicyMode } from './agent-unread-mode'
 import { getUserProfile } from './user-profile-service'
 import {
   listAgentSessions,
@@ -1163,7 +1165,8 @@ export async function handleRemoteCommand(
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       const meta = getAgentSessionMeta(sessionId)
       if (!meta) return { ok: false, error: '会话不存在' }
-      const updated = updateAgentSessionUiMeta(sessionId, { completedButUnconfirmed: true })
+      // 与侧边栏「标记未读」同一语义，统一走唯一写入口。
+      const updated = setAgentSessionUnread(sessionId, true) ?? meta
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1172,7 +1175,14 @@ export async function handleRemoteCommand(
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       const meta = getAgentSessionMeta(sessionId)
       if (!meta) return { ok: false, error: '会话不存在' }
-      const updated = updateAgentSessionUiMeta(sessionId, { completedButUnconfirmed: false })
+      // 开启态下「已读」只能由用户显式确认触发（桌面按钮 / 显式标记）。
+      // Pocket 关闭标签页时会自动调本命令，那是导航副作用而不是用户意图，必须 no-op，
+      // 否则手机上一划就把桌面未读吃掉且无处恢复（requirements §3.2-5）。
+      // 关闭态保持原行为：无条件清（现状回归）。
+      if (getAgentUnreadPolicyMode() === 'manual' && parsed.explicit !== true) {
+        return { ok: true, data: buildSessionItem(meta) }
+      }
+      const updated = setAgentSessionUnread(sessionId, false) ?? meta
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1247,7 +1257,14 @@ export async function handleRemoteCommand(
       // 这里暂存并并入 completion 的 resultErrors，让 Pocket 能看到真实错误文案（而非只有「执行出错」）。
       let runErrorMessage: string | null = null
       void runAgentHeadless(
-        { sessionId, userMessage, channelId, modelId, workspaceId, startedAt, ...(uuid ? { uuid } : {}) },
+        {
+          sessionId, userMessage, channelId, modelId, workspaceId, startedAt,
+          // Pocket 是用户在自己手机上发的新消息：显式标为用户发起（清未读），
+          // 不能靠 `source: 'bridge'` 反推 —— 按 resolveRunInitiator 的优先级，headless source
+          // 会把它解析成 'external'，导致用户自己的新一轮不清未读。
+          initiator: 'user',
+          ...(uuid ? { uuid } : {}),
+        },
         {
           source: 'bridge',
           onError: (error) => {
@@ -1347,16 +1364,18 @@ export async function handleRemoteCommand(
       return { ok: true, data: buildSessionItem(updated) }
     }
 
-    // 归档/取消归档（对齐桌面 TOGGLE_ARCHIVE：归档时自动取消置顶）
+    // 归档/取消归档（对齐桌面 TOGGLE_ARCHIVE）：归档时自动取消置顶；开启态下归档视作已读，一并清未读。
     case 'toggle_session_archive': {
       const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       const current = listAgentSessions(true).find((s) => s.id === sessionId)
       if (!current) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
-      const newArchived = !current.archived
-      const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
-      if (newArchived && current.pinned) updates.pinned = false
-      const updated = updateAgentSessionUiMeta(sessionId, updates)
+      // 与桌面 TOGGLE_ARCHIVE 共用同一纯函数，保证「归档＝已读」口径不分端（移动端归档清未读属开启态策略，保留）。
+      const updated = updateAgentSessionUiMeta(sessionId, buildArchiveToggleUpdates({
+        archived: current.archived ?? false,
+        pinned: current.pinned ?? false,
+        completedButUnconfirmed: current.completedButUnconfirmed ?? false,
+      }, getAgentUnreadPolicyMode()))
       return { ok: true, data: buildSessionItem(updated) }
     }
 

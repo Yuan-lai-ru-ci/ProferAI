@@ -130,7 +130,7 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { ExplorationBranchBar } from './ExplorationBranchBar'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
+import type { AgentRunInitiator, AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@profer/shared'
 
 /** 桌面端 Agent 会话懒加载单页消息数（与 main/agent-session-manager 的 DESKTOP_AGENT_PAGE_SIZE 同步） */
 const DESKTOP_AGENT_PAGE_SIZE = 60
@@ -2037,8 +2037,14 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
    * 发送一条队列消息：
    * - streaming / backgroundWaiting：注入正在运行的 Agent（streaming 时软打断）
    * - 否则：新建一次 run
+   *
+   * `initiator` 用于区分「用户自己点了发送」与「队列自动续跑」：后者不得清除既有未读
+   * （开启态口径，见 `main/lib/agent-unread-policy.ts`）。缺省即用户发起。
    */
-  const sendPlainTextAgentMessage = React.useCallback(async (message: AgentQueuedMessage): Promise<void> => {
+  const sendPlainTextAgentMessage = React.useCallback(async (
+    message: AgentQueuedMessage,
+    initiator: AgentRunInitiator = 'user',
+  ): Promise<void> => {
     const quotedSelectionBlock = message.quotedSelection
       ? buildQuotedSelectionBlock(message.quotedSelection)
       : ''
@@ -2087,6 +2093,8 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
           startedAt: streamStartedAt,
           // 1.7.1：透传与乐观消息一致的 uuid，使主进程持久化后可按 uuid 与乐观气泡匹配去重
           uuid: message.id,
+          // 非用户发起的链路（队列自动续跑）不得清未读；用户直接发送缺省为 'user'。
+          ...(initiator !== 'user' && { initiator }),
           permissionModeOverride: permissionMode,
           ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
           ...(payload.mentions.mentionedSkills.length > 0 && { mentionedSkills: payload.mentions.mentionedSkills }),
@@ -2619,7 +2627,8 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     const sendEpoch = queueStopEpochRef.current
     setQueuedMessages((prev) => removeQueuedMessage(prev, message.id))
     let sentSuccessfully = false
-    sendPlainTextAgentMessage(message)
+    // 队列自动续跑不是用户发起：完成时照常产生未读，但不得清除既有未读。
+    sendPlainTextAgentMessage(message, 'automation')
       .then(() => { sentSuccessfully = true })
       .catch((error) => {
         console.error('[AgentView] 自动发送队列消息失败:', error)

@@ -7,11 +7,12 @@
  * - 关闭当前会话入口只回到 Scratch Pad，不停止后台 Agent
  * - 运行中或阻塞中的会话继续通过左侧状态 indicator 恢复
  * - idle 状态的 Agent 会话在用户主动关闭 Tab 时清除完成提醒状态
+   （仅关闭态；开启「手动确认已读」后关闭标签页不再清未读）
  * - 真正删除/归档时由侧边栏路径负责清理 per-session 状态
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { useStore } from 'jotai'
 import {
   tabsAtom,
@@ -32,6 +33,8 @@ import {
   deleteSessionMapEntry,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
+import { manualReadConfirmEnabledAtom } from '@/atoms/agent-unread-settings'
+import { shouldAutoClearUnreadOnView } from '@/lib/agent-unread-gate'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 
 interface UseCloseTabReturn {
@@ -48,6 +51,8 @@ export function useCloseTab(): UseCloseTabReturn {
   const syncActiveTabSideEffects = useSyncActiveTabSideEffects()
   const store = useStore()
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
+  // 开启态下「关闭标签页清未读」失效；内存侧由模式感知 atom 统一门控。
+  const manualReadConfirmEnabled = useAtomValue(manualReadConfirmEnabledAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setPreviewFilesByTab = useSetAtom(previewFilesByTabAtom)
   const setBrowserDismissed = useSetAtom(browserPanelDismissedSessionIdsAtom)
@@ -60,14 +65,17 @@ export function useCloseTab(): UseCloseTabReturn {
     // running 或 blocked 的会话仍需要侧边栏状态提示
     if (status === 'running' || status === 'blocked') return
 
-    // 通过 IPC 清除持久化的 completedButUnconfirmed 和旧版 manualWorking 状态
-    window.electronAPI.clearAgentCompletionState(sessionId)
-      .then((updated) => {
-        setAgentSessions((prev) =>
-          prev.map((s) => (s.id === updated.id ? updated : s))
-        )
-      })
-      .catch(console.error)
+    // 通过 IPC 清除持久化的 completedButUnconfirmed 和旧版 manualWorking 状态。
+    // 开启态下不执行：关闭标签页是导航副作用，不是用户确认已读（需求 §3.2-2）。
+    if (shouldAutoClearUnreadOnView(manualReadConfirmEnabled ? 'manual' : 'auto')) {
+      window.electronAPI.clearAgentCompletionState(sessionId)
+        .then((updated) => {
+          setAgentSessions((prev) =>
+            prev.map((s) => (s.id === updated.id ? updated : s))
+          )
+        })
+        .catch(console.error)
+    }
 
     setUnviewedCompleted((prev) => {
       if (!prev.has(sessionId)) return prev
@@ -75,7 +83,7 @@ export function useCloseTab(): UseCloseTabReturn {
       next.delete(sessionId)
       return next
     })
-  }, [store, setAgentSessions, setUnviewedCompleted])
+  }, [store, setAgentSessions, setUnviewedCompleted, manualReadConfirmEnabled])
 
   const executeClose = React.useCallback((tabId: string) => {
     const closingTab = tabs.find((t) => t.id === tabId)

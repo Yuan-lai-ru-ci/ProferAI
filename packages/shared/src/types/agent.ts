@@ -670,7 +670,7 @@ export type ProferEvent =
   | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
   | { type: 'image_generation_updated'; sessionId: string; record: AgentImageGenerationCard }
   | { type: 'title_updated'; title: string }
-  | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta }
+  | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta; initiator?: AgentRunInitiator }
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }
   // 跨端会话元数据同步：Pocket 远程命令修改会话后立即通知桌面与其他 Pocket 客户端。
   | { type: 'session_updated'; session: AgentSessionMeta }
@@ -691,6 +691,46 @@ export type ProferEvent =
 
 /** 外部入口触发 Agent 运行的来源 */
 export type AgentExternalRunSource = 'feishu' | 'dingtalk' | 'wechat' | 'bridge' | 'delegation' | 'automation' | 'goal'
+
+/**
+ * 规范化的「这一轮 run 由谁发起」信号（单一定义，主进程与渲染层共用）。
+ *
+ * 只服务一个产品口径：会话未读的产生与清除。
+ * - `'user'`：桌面用户直接发送（IPC `SEND_MESSAGE`）或 Pocket 用户发送新消息；启动时清未读。
+ * - `'delegation'`：委派子会话 / 父会话自动续跑（按会话 `delegationDepth` 判定是否产生未读）。
+ * - 其余来源完成时照常产生未读，但**不清**既有未读。
+ */
+export type AgentRunInitiator = 'user' | 'automation' | 'external' | 'goal' | 'delegation'
+
+/**
+ * 解析一次 run 的发起者；在 run 启动处解析一次，run 内不变。
+ *
+ * 优先级（先看有没有 headless source：只要走了 headless，就不是桌面用户直接发送）：
+ * 1. `headlessSource`：`delegation → delegation`；`automation → automation`；
+ *    `feishu | dingtalk | wechat | bridge → external`；
+ * 2. 否则按 `triggeredBy`：`automation → automation`；`delegation → delegation`；
+ *    `goal → goal`；`user | undefined → user`。
+ *
+ * 需要把 headless 运行标成「用户发起」（Pocket `send_message`）或标成非用户发起
+ * （渲染层队列自动续跑）时，用 `AgentSendInput.initiator` 显式覆盖，不改这里的映射规则。
+ *
+ * fail-safe：调用方必须保证「headless 但没有显式 source」时按 `'external'` 处理
+ * （见 `runAgentHeadless` 的 `?? 'external'` 兜底），绝不默认成 `'user'`。
+ */
+export function resolveRunInitiator(
+  triggeredBy: AgentSendInput['triggeredBy'],
+  headlessSource?: AgentExternalRunSource,
+): AgentRunInitiator {
+  if (headlessSource) {
+    if (headlessSource === 'delegation') return 'delegation'
+    if (headlessSource === 'automation') return 'automation'
+    return 'external'
+  }
+  if (triggeredBy === 'automation') return 'automation'
+  if (triggeredBy === 'delegation') return 'delegation'
+  if (triggeredBy === 'goal') return 'goal'
+  return 'user'
+}
 
 /** 可失效并重新拉取的目录类型（Pocket 收到失效通知后按 catalog 重新拉取列表）。 */
 export type AgentCatalogKind = 'channels' | 'presets' | 'workspace_capabilities' | 'workspaces'
@@ -1409,6 +1449,13 @@ export interface AgentSendInput {
   goalIteration?: number
   /** 标题来源覆盖文本：goal 等机器注入的 prompt 不应用作自动命名来源。 */
   titleSourceText?: string
+  /**
+   * 规范化运行发起者，用于覆盖 `resolveRunInitiator(triggeredBy, source)` 的推断结果。
+   * 只在这两种情况下设置：
+   * - Pocket `send_message`：`source` 恒为 `'bridge'`，但语义上是用户自己发送 → `'user'`；
+   * - 渲染层队列自动续跑：复用用户发送链路，但不是用户发起 → `'automation'`（不清未读）。
+   */
+  initiator?: AgentRunInitiator
   /** 前端预生成的消息 UUID（透传到持久化消息，用于队列乐观气泡与消息重载按 uuid 合并去重） */
   uuid?: string
   /** Goal 内部 prompt：传给 runtime，但不作为普通用户消息持久化。 */
@@ -1656,6 +1703,11 @@ export interface AgentStreamCompletePayload {
   endReason?: AgentEndReason
   /** 结束原因的可读短文案（AGENT_END_REASON_LABELS 之一），供 chip / toast 展示 */
   endReasonLabel?: string
+  /**
+   * 本轮 run 的规范化发起者（主进程在产生终态时写入）。
+   * 渲染层不得自行推断；缺失 / 未知值一律按「不清未读」处理。
+   */
+  initiator?: AgentRunInitiator
 }
 
 /** 更新会话中断说明状态输入：state 非 null 置位（点击记录行），null 清除（消费/移除 chip） */

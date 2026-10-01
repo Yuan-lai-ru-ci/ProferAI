@@ -26,6 +26,8 @@ import {
   agentWorkspacesAtom,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
+import { manualReadConfirmEnabledAtom } from '@/atoms/agent-unread-settings'
+import { shouldAutoClearUnreadOnView } from '@/lib/agent-unread-gate'
 import { upsertAgentSession } from '@/lib/agent-session-list'
 import { isAgentWorkspaceIdVisible } from '@/lib/product-feature-flags'
 
@@ -45,6 +47,8 @@ export function useOpenSession(): OpenSessionFn {
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setCurrentAgentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
+  // 开启态下自动清除路径失效（见 shouldAutoClearUnreadOnView）；内存侧由模式感知 atom 统一门控。
+  const manualReadConfirmEnabled = useAtomValue(manualReadConfirmEnabledAtom)
 
   return React.useCallback(
     (type: TabType, sessionId: string, title: string, parentSessionId?: string): void => {
@@ -82,7 +86,7 @@ export function useOpenSession(): OpenSessionFn {
         setAppMode('agent')
         setCurrentAgentSessionId(sessionId)
 
-        // 用户打开查看后只清除未读角标；是否完成由用户通过对勾确认。
+        // 打开查看后只清除未读角标；是否完成由用户通过对勾确认。
         setUnviewedCompleted((prev) => {
           if (!prev.has(sessionId)) return prev
           const next = new Set(prev)
@@ -92,11 +96,14 @@ export function useOpenSession(): OpenSessionFn {
 
         // 打开查看即消费持久化的「标记未读」：清除 completedButUnconfirmed，重启后绿标不"复活"。
         // IPC 幂等（未标记会话无副作用）；用 map 更新保持列表顺序不变。
-        window.electronAPI.clearAgentCompletionState(sessionId)
-          .then((meta) => {
-            setAgentSessions((prev) => prev.map((s) => (s.id === meta.id ? meta : s)))
-          })
-          .catch(console.error)
+        // 开启态下这一步不执行——看一眼会话不能算用户确认已读（需求 §3.2-2）。
+        if (shouldAutoClearUnreadOnView(manualReadConfirmEnabled ? 'manual' : 'auto')) {
+          window.electronAPI.clearAgentCompletionState(sessionId)
+            .then((meta) => {
+              setAgentSessions((prev) => prev.map((s) => (s.id === meta.id ? meta : s)))
+            })
+            .catch(console.error)
+        }
 
         // 同步 workspaceId，确保与 TabBar 切换行为一致
         const session = agentSessions.find((s) => s.id === sessionId)
@@ -124,6 +131,6 @@ export function useOpenSession(): OpenSessionFn {
         setCurrentAgentSessionId(null)
       }
     },
-    [tabs, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions],
+    [tabs, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions, manualReadConfirmEnabled],
   )
 }

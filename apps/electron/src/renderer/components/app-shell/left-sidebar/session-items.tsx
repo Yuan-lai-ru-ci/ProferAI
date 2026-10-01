@@ -12,11 +12,12 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, Cloud, FolderOpen, GripVertical, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, Sparkles, X,
+  Pin, PinOff, Pencil, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, Cloud, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, MailOpen, Sparkles, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useShortcut } from '@/hooks/useShortcut'
 import { clearSessionReferenceDragState, setSessionReferenceDragData } from '@/lib/session-reference-drag'
+import { resolveSessionUnreadMenuItem } from '@/lib/session-unread-menu'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import {
@@ -40,7 +41,7 @@ import {
   type SessionMiniMapType,
 } from '@/components/session-preview/SessionMiniMapPopover'
 import { browserStateMapAtom } from '@/atoms/browser-atoms'
-import { currentAgentSessionIdAtom, type SessionIndicatorStatus } from '@/atoms/agent-atoms'
+import { currentAgentSessionIdAtom, unviewedCompletedSessionIdsAtom, type SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import type { ConversationMeta, AgentSessionMeta, AgentWorkspace } from '@profer/shared'
 import { formatRelativeUpdatedAt, getRailInitial } from './sidebar-utils'
 import type { ShortcutRegistrationOptions } from '@/lib/shortcut-registry'
@@ -707,7 +708,8 @@ interface AgentSessionItemProps {
   onRename: (id: string, newTitle: string) => Promise<void>
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
-  onMarkUnread?: (id: string) => void
+  /** 未读状态切换：`nextUnread` 为目标状态，由菜单项按「用户能看到的未读状态」取反得到。 */
+  onMarkUnread?: (id: string, nextUnread: boolean) => void
   onRegenerateTitle?: (id: string) => Promise<void>
   regeneratingTitle?: boolean
   /** 仅当前会话 Tab 区使用：关闭入口，不删除会话数据。 */
@@ -738,6 +740,9 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
 }: AgentSessionItemProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
+  // 该会话在渲染层未读集合里吗（关闭态＝绿标/角标的判据；开启态＝持久化字段派生）。
+  // 菜单文案/图标与绿标必须同源，因此这里与 `session.completedButUnconfirmed` 取并集。
+  const unviewedSessionIds = useAtomValue(unviewedCompletedSessionIdsAtom)
   // 该会话是否有活动浏览器会话/标签（即使面板被用户收起也保留显示，便于从侧边栏识别哪个会话正在用浏览器）
   const browserStateMap = useAtomValue(browserStateMapAtom)
   const hasBrowser = browserStateMap.has(session.id)
@@ -787,6 +792,18 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
 
   const canMove = indicatorStatus === 'idle' || indicatorStatus === 'completed'
 
+  // 未读切换项：判据是「用户能看到的未读状态」——持久化字段
+  // `completedButUnconfirmed` ∪ 渲染层未读集合（关闭态下绿标看的就是内存集合，只判持久化字段
+  // 会出现「绿标亮着、菜单却写「标记未读」且点不掉」）。
+  // 刻意不用 `indicatorStatus`（该投影优先级为 blocked > running > completed，会漏掉
+  // 「运行中 / 等待权限且未读」的会话）；显示条件只有 onMarkUnread 是否存在，因此运行中 /
+  // blocked / 已归档行同样可切换。
+  const unreadMenu = resolveSessionUnreadMenuItem({
+    completedButUnconfirmed: session.completedButUnconfirmed,
+    memoryUnread: unviewedSessionIds.has(session.id),
+    hasToggleHandler: onMarkUnread !== undefined,
+  })
+
   const menuItems = (
     MenuItem: typeof ContextMenuItem | typeof DropdownMenuItem,
     MenuSeparator: typeof ContextMenuSeparator | typeof DropdownMenuSeparator,
@@ -802,10 +819,10 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
           迁移到其他项目
         </MenuItem>
       )}
-      {canMove && onMarkUnread && (
-        <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onMarkUnread(session.id)}>
-          <Mail size={14} />
-          标记未读
+      {unreadMenu.show && (
+        <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onMarkUnread?.(session.id, unreadMenu.nextUnread)}>
+          {unreadMenu.icon === 'mail-open' ? <MailOpen size={14} /> : <Mail size={14} />}
+          {unreadMenu.label}
         </MenuItem>
       )}
       <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => startEdit()}>
@@ -1015,8 +1032,8 @@ interface RelatedChildSessionItemProps {
   onRename: (id: string, newTitle: string) => Promise<void>
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
-  /** 标记会话为「未读」（恢复绿色完成标记） */
-  onMarkUnread?: (id: string) => void
+  /** 未读状态切换（`nextUnread` 为目标状态）。 */
+  onMarkUnread?: (id: string, nextUnread: boolean) => void
   regeneratingTitle?: boolean
   /** 手动重新生成标题（用前几轮有效消息重命名并重新锁定） */
   onRegenerateTitle?: (id: string) => Promise<void>
@@ -1100,8 +1117,8 @@ interface AgentProjectGroupItemProps {
   onTogglePin: (id: string) => Promise<void>
   onToggleArchive: (id: string) => Promise<void>
   onToggleRelatedParent: (id: string) => void
-  /** 标记会话为「未读」（恢复绿色完成标记） */
-  onMarkUnread?: (id: string) => void
+  /** 未读状态切换（`nextUnread` 为目标状态）。 */
+  onMarkUnread?: (id: string, nextUnread: boolean) => void
   /** 手动重新生成标题（用前几轮有效消息重命名并重新锁定） */
   onRegenerateTitle?: (id: string) => Promise<void>
   /** 工作区最近一次切换的时间戳，用于短暂高亮 */

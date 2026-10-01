@@ -392,6 +392,7 @@ class WeChatBridge {
   /** 通用命令处理器（命令路由 + Agent 消息路由 + EventBus 监听） */
   private commandHandler = new BridgeCommandHandler({
     platformName: '微信',
+    source: 'wechat',
     adapter: {
       sendText: async (chatId: string, text: string, meta?: unknown) => {
         if (!this.client) return

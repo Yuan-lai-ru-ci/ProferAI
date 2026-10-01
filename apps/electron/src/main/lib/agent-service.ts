@@ -14,7 +14,7 @@ import { join, dirname, basename, sep } from 'node:path'
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
-import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@profer/shared'
+import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE, resolveRunInitiator } from '@profer/shared'
 import type {
   AgentSendInput,
   AgentMessage,
@@ -25,6 +25,7 @@ import type {
   AgentStreamEvent,
   AgentStreamPayload,
   AgentQueueMessageInput,
+  AgentRunInitiator,
   ProferPermissionMode,
   AgentExternalRunSource,
 } from '@profer/shared'
@@ -43,7 +44,10 @@ import { getAgentSessionMeta, setAgentSessionActiveChecker, updateAgentSessionMe
 import {
   configureAgentSessionProjectionPublisher,
   publishAgentSessionProjection,
+  setAgentSessionUnread,
 } from './agent-session-ui-projection-publisher'
+import { shouldClearSessionUnreadOnRunStart, shouldMarkSessionUnreadOnCompletion } from './agent-unread-policy'
+import { getAgentUnreadPolicyMode } from './agent-unread-mode'
 import { AgentRuntimeContextStore } from './agent-runtime-context'
 
 // ===== 实例创建 =====
@@ -263,6 +267,74 @@ export function emitSessionStreamEvent(
 
 // ===== IPC 薄包装函数 =====
 
+/** 解析一轮 run 的规范化发起者：显式 initiator 优先，否则按 triggeredBy / headless source 推断。 */
+function resolveInputInitiator(input: AgentSendInput, headlessSource: AgentExternalRunSource | undefined): AgentRunInitiator {
+  return input.initiator ?? resolveRunInitiator(input.triggeredBy, headlessSource)
+}
+
+/**
+ * 关闭态（`auto`）下「开始新一轮执行时清除完成未确认标记」——**原实现的位置与原语义**。
+ *
+ * 基线实现把它放在 `runAgent()` 最开头、`orchestrator.sendMessage` 之前，无条件执行并容忍任何写入失败；
+ * 也就是说：即使请求随后被并发守卫拒绝、遇删除/分叉守卫或 preflight 失败，也会顺带清掉持久化未读。
+ * 为保证「不开开关的人行为零变化」，关闭态必须保持这一点（开启态改由 `onRunStarted` 按发起者判定）。
+ *
+ * 与原实现的两点细微差别（均不影响可观测行为）：① 写走唯一写入口 `setAgentSessionUnread`
+ * （会话不存在时返回 null 而不是抛错）；② 该写入口会同步广播一次 `session_projection`。
+ */
+function clearSessionUnreadOnRequestEntry(sessionId: string): void {
+  try {
+    if (getAgentUnreadPolicyMode() !== 'auto') return
+    setAgentSessionUnread(sessionId, false)
+  } catch { /* 与原 M1 的 try/catch 容错一致：新会话可能尚未写入索引 / 设置尚未加载 */ }
+}
+
+/**
+ * run 真正进入运行（`onRunStarted`）时按模式清未读。
+ *
+ * **只在开启态生效**：关闭态的清未读已经在 `runAgent()` 入口按原位置（原 M1）做过，这里再写
+ * 一次只会多出一次无意义的写盘与广播；headless 在基线里本就没有这一步，保持不新增。
+ * 开启态下只有用户自己发起的运行才清（Pocket `send_message` 的 `initiator === 'user'` 也算用户发起）。
+ */
+function applyRunStartUnreadPolicy(sessionId: string, initiator: AgentRunInitiator): void {
+  const mode = getAgentUnreadPolicyMode()
+  if (mode === 'auto') return
+  if (!shouldClearSessionUnreadOnRunStart(initiator, mode)) return
+  try {
+    setAgentSessionUnread(sessionId, false)
+  } catch (error) {
+    // 与既有实现一致：未读写入失败不得影响本轮 run（原 M1 的无条件写同样被 try/catch 包围）。
+    console.error(`[Agent 服务] 清除会话未读失败: sessionId=${sessionId}`, error)
+  }
+}
+
+/**
+ * 一轮 run 到达终态（完成 / 失败 / 用户停止）时按模式写入未读。
+ *
+ * 关闭态下恒不写（完成类未读由渲染层 presence 判定写入内存集合）；开启态下子会话、
+ * 后台续轮、从未启动的请求都不写。会话若已删除，`setAgentSessionUnread` 幂等返回 null。
+ */
+function applyCompletionUnreadPolicy(input: {
+  sessionId: string
+  initiator: AgentRunInitiator
+  backgroundTasksPending?: boolean
+  started?: boolean
+}): void {
+  const mode = getAgentUnreadPolicyMode()
+  if (!shouldMarkSessionUnreadOnCompletion({
+    initiator: input.initiator,
+    delegationDepth: getAgentSessionMeta(input.sessionId)?.delegationDepth,
+    backgroundTasksPending: input.backgroundTasksPending,
+    started: input.started,
+  }, mode)) return
+  try {
+    setAgentSessionUnread(input.sessionId, true)
+  } catch (error) {
+    // 未读只是 UI 状态：写入失败不得影响终态广播与用户可见的完成流程。
+    console.error(`[Agent 服务] 写入会话未读失败: sessionId=${input.sessionId}`, error)
+  }
+}
+
 /**
  * 运行 Agent 并流式推送事件到渲染进程
  *
@@ -280,10 +352,11 @@ export async function runAgent(
     activeStreamEventBacklogs.set(input.sessionId, [])
     completedStreamEventBacklogs.delete(input.sessionId)
   }
-  // 开始新一轮执行时清除"完成未确认"标记
-  try {
-    updateAgentSessionMeta(input.sessionId, { completedButUnconfirmed: false })
-  } catch { /* 新会话可能尚未写入索引 */ }
+  // 本轮发起者：run 内不变。未显式给 initiator 时按 triggeredBy 推断（桌面 IPC 发送缺省 = 用户）。
+  const initiator = resolveInputInitiator(input, undefined)
+  // 关闭态（默认）：与原实现逐点保真 —— 请求入口无条件清未读（早于并发守卫 / 删除 / 分叉 /
+  // preflight 判定，因此这些「没真正启动」的请求同样清；helper 内部按模式短路 + try/catch）。
+  clearSessionUnreadOnRequestEntry(input.sessionId)
   const outcomeReporter = createAgentRunOutcomeReporter(input.onRunOutcome)
   let runStarted = false
   try {
@@ -307,7 +380,17 @@ export async function runAgent(
           backgroundTasksPending: opts?.backgroundTasksPending,
           endReason: opts?.endReason,
           endReasonLabel: opts?.endReasonLabel,
+          initiator,
         }
+        // 未读先于终态广播落盘：渲染层收到 STREAM_COMPLETE 时侧边栏绿标与角标已经就绪。
+        // `started` 必须透传：经 `onComplete` 收敛但从未真正启动的请求（删除/分叉守卫、
+        // preflight 失败）在开启态不得写未读（`design.md` §5.4）。
+        applyCompletionUnreadPolicy({
+          sessionId: input.sessionId,
+          initiator,
+          backgroundTasksPending: opts?.backgroundTasksPending,
+          started: runStarted,
+        })
         eventBus.emit(input.sessionId, { kind: 'run_complete', completion })
         const wc = sessionWebContents.get(input.sessionId)
         if (wc && !wc.isDestroyed()) wc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, completion)
@@ -327,6 +410,8 @@ export async function runAgent(
       },
       onRunStarted: async ({ startedAt }) => {
         runStarted = true
+        // 用户自己发出新一轮：旧未读随新 run 失效（非用户发起的运行不清，见 agent-unread-policy）。
+        applyRunStartUnreadPolicy(input.sessionId, initiator)
         const beforePromotion = getAgentSessionMeta(input.sessionId)
         const session = beforePromotion?.draft
           ? updateAgentSessionMeta(input.sessionId, { draft: false })
@@ -360,8 +445,11 @@ export async function runAgent(
     outcomeReporter.onError(errorMessage)
     console.error(`[Agent 服务] errorMessage: ${errorMessage || '(空)'}`)
     console.error(`[Agent 服务] ══════════ runAgent 未处理异常 结束 ══════════`)
+    // 已经在运行的一轮以异常结束：这一轮仍需用户确认（失败不自动已读）。
+    // 从未真正启动的请求失败（runStarted === false）不算一轮，不产生未读。
+    applyCompletionUnreadPolicy({ sessionId: input.sessionId, initiator, started: runStarted })
     eventBus.emit(input.sessionId, { kind: 'run_error', error: errorMessage })
-    const completion = { sessionId: input.sessionId, messages: [], stoppedByUser: false, startedAt: input.startedAt }
+    const completion = { sessionId: input.sessionId, messages: [], stoppedByUser: false, startedAt: input.startedAt, initiator }
     eventBus.emit(input.sessionId, { kind: 'run_complete', completion })
     const currentWc = sessionWebContents.get(input.sessionId)
     if (currentWc && !currentWc.isDestroyed()) {
@@ -395,6 +483,12 @@ export async function runAgentHeadless(
   const wc = getMainRendererWebContents()
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
   const startedAt = runInput.startedAt!
+  // 本轮发起者：run 内不变。
+  // fail-safe（design §2.3）：headless 运行没有显式 source 时按 'external' 处理（不清未读），
+  // 绝不因为 triggeredBy 缺省而误判成用户发起。
+  const initiator = runInput.initiator
+    ?? (callbacks.source ? resolveRunInitiator(runInput.triggeredBy, callbacks.source) : 'external')
+  let runStarted = false
   if (wc) {
     registerWebContents(runInput.sessionId, wc)
   }
@@ -430,7 +524,14 @@ export async function runAgentHeadless(
               backgroundTasksPending: completionOpts?.backgroundTasksPending,
               endReason: completionOpts?.endReason,
               endReasonLabel: completionOpts?.endReasonLabel,
+              initiator,
             }
+            applyCompletionUnreadPolicy({
+              sessionId: runInput.sessionId,
+              initiator,
+              backgroundTasksPending: completionOpts?.backgroundTasksPending,
+              started: runStarted,
+            })
             eventBus.emit(runInput.sessionId, { kind: 'run_complete', completion })
             const currentWc = sessionWebContents.get(runInput.sessionId)
             if (currentWc && !currentWc.isDestroyed()) {
@@ -455,6 +556,9 @@ export async function runAgentHeadless(
         }
       },
       onRunStarted: ({ startedAt: persistedStartedAt }) => {
+        runStarted = true
+        // 用户自己发出新一轮（Pocket send_message）清未读；定时自动化 / 外部 IM / 委派子会话不清。
+        applyRunStartUnreadPolicy(runInput.sessionId, initiator)
         // draft 晋升（与 runAgent.onRunStarted 对齐）：对话真正开始后草稿会话转为正式，
         // 否则 ensureProjectDraftAgentSession 永远复用旧草稿——
         // runAgentHeadless 路径点击项目将不会像桌面那样产生新对话（“点击项目仍指向刚才的对话”）。
@@ -475,6 +579,7 @@ export async function runAgentHeadless(
             modelId: runInput.modelId,
             startedAt: persistedStartedAt,
             session,
+            initiator,
           },
         })
       },
@@ -492,9 +597,11 @@ export async function runAgentHeadless(
     console.error(`[Agent 服务] ══════════ runAgentHeadless 未处理异常 结束 ══════════`)
     callbacks.onError(errorMessage)
     const completion = { stoppedByUser: false, startedAt, endReason: 'error' as const, endReasonLabel: '执行出错' }
+    // 已在运行的一轮异常结束：仍需手动确认；从未启动的请求失败不产生未读。
+    applyCompletionUnreadPolicy({ sessionId: runInput.sessionId, initiator, started: runStarted })
     callbacks.onComplete([], completion)
     eventBus.emit(runInput.sessionId, { kind: 'run_error', error: errorMessage })
-    const terminal = { sessionId: runInput.sessionId, messages: [], ...completion }
+    const terminal = { sessionId: runInput.sessionId, messages: [], initiator, ...completion }
     eventBus.emit(runInput.sessionId, { kind: 'run_complete', completion: terminal })
     const currentWc = sessionWebContents.get(runInput.sessionId)
     if (currentWc && !currentWc.isDestroyed()) {

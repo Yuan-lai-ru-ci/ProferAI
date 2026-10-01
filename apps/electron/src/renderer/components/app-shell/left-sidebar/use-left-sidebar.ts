@@ -104,6 +104,8 @@ import {
 } from '@/lib/agent-session-list'
 import type { AgentSessionMeta, AgentWorkspace, WorkspaceCapabilities } from '@profer/shared'
 import { getVisibleAgentWorkspaces } from '@/lib/product-feature-flags'
+import { applySessionUnreadToMemoryIds, getSessionCompletionStateEntry } from '@/lib/session-unread-menu'
+import { noteExplicitUnreadRead } from '@/lib/agent-unread-transition'
 
 import {
   groupByDate,
@@ -1335,19 +1337,29 @@ export function useLeftSidebar() {
     })
   }, [agentSessions, openSession, setActiveView, setUnviewedCompleted, store])
 
-  /** 标记 Agent 会话为「未读」：持久化 completedButUnconfirmed + 立即恢复绿标 + 同步列表数据 */
-  const handleMarkUnread = React.useCallback((id: string): void => {
-    window.electronAPI.setAgentCompletionState(id)
+  /**
+   * 切换 Agent 会话的未读状态（侧边栏菜单按状态切换）。
+   *
+   * 目标状态由调用点按渲染时的 `session.completedButUnconfirmed` 取反后传入，避免 handler
+   * 读到可能已过期的状态。两个方向都收敛在主进程唯一写入口 `setAgentSessionUnread`：
+   * 标记未读 → `SET_COMPLETION_STATE`，标记已读 → `CLEAR_COMPLETION_STATE`；不新增 IPC。
+   *
+   * 同时双向维护渲染层内存集合：关闭态下内存集合仍是**显示权威**，只靠 IPC 返回的 projection
+   * 会让绿标晚一帧；开启态下这两行写入会被模式感知 atom 的守卫静默丢弃（刻意设计），
+   * 事实源仍只有主进程持久化字段。
+   */
+  const handleToggleSessionUnread = React.useCallback((id: string, nextUnread: boolean): void => {
+    // 显式「标记已读」：撤销「补写持久化未读未确认」的保护，避免陈旧内存副本在切回关闭态时复活。
+    if (!nextUnread) noteExplicitUnreadRead(id)
+    const request = getSessionCompletionStateEntry(nextUnread) === 'setAgentCompletionState'
+      ? window.electronAPI.setAgentCompletionState(id)
+      : window.electronAPI.clearAgentCompletionState(id)
+    request
       .then((meta) => {
         setAgentSessions((prev) => upsertAgentSession(prev, meta))
       })
       .catch(console.error)
-    setUnviewedCompleted((prev) => {
-      if (prev.has(id)) return prev
-      const next = new Set(prev)
-      next.add(id)
-      return next
-    })
+    setUnviewedCompleted((prev: Set<string>) => applySessionUnreadToMemoryIds(prev, id, nextUnread))
   }, [setAgentSessions, setUnviewedCompleted])
 
   /** 重命名工作区（项目）名称 */
@@ -1859,7 +1871,7 @@ export function useLeftSidebar() {
     handleSelectAgentSession,
     handleAgentRename,
     handleAgentRegenerateTitle,
-    handleMarkUnread,
+    handleToggleSessionUnread,
     regeneratingTitleIds,
     handleTogglePinAgent,
     handleToggleArchiveAgent,

@@ -48,7 +48,10 @@ import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom, requestModelSelectorOpen } from '@/atoms/chat-atoms'
-import { agentProcessGroupsKeepExpandedAtom, agentSessionsAtom, currentAgentSessionIdAtom, resolvedBlobMessagesAtom } from '@/atoms/agent-atoms'
+import { agentProcessGroupsKeepExpandedAtom, agentSessionsAtom, currentAgentSessionIdAtom, resolvedBlobMessagesAtom, unviewedCompletedSessionIdsAtom } from '@/atoms/agent-atoms'
+import { manualReadConfirmEnabledAtom } from '@/atoms/agent-unread-settings'
+import { shouldShowConfirmReadButton } from '@/lib/confirm-read-button'
+import { ConfirmReadButton } from './ConfirmReadButton'
 import { agentInterruptionMapAtom } from '@/atoms/preview-atoms'
 import { activeSessionIdAtom } from '@/atoms/tab-atoms'
 import { automationsAtom, automationFormAtom, automationToDraft } from '@/atoms/automation-atoms'
@@ -724,13 +727,24 @@ export interface AssistantTurnRendererProps {
   sessionModelId?: string
   /** 是否展示模型 thinking 块；Pi runtime 已通过独立过程事件呈现。 */
   showThinking?: boolean
+  /** 该 turn 是否为当前会话最新一轮 assistant 回复（「确认已读」按钮的可见性判据之一）。 */
+  isLatestAssistantTurn?: boolean
 }
 
-export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true, isLatestAssistantTurn = false }: AssistantTurnRendererProps): React.ReactElement | null {
   // 折叠区状态属于当前 turn，而不是瞬时的窗口/工具块组件；工具完成导致内容重算时保留用户选择。
   const [expandedProcessSegments, setExpandedProcessSegments] = React.useState(false)
   const [expandedReplySegments, setExpandedReplySegments] = React.useState(false)
   const channels = useAtomValue(channelsAtom)
+  // 「确认已读」按钮：开关开启 ∧ 最新一轮 ∧ 该会话有未读。
+  // 读未读集合（而非会话字段）与侧边栏菜单同源；开启态下它就是 completedButUnconfirmed 的派生。
+  const manualReadConfirmEnabled = useAtomValue(manualReadConfirmEnabledAtom)
+  const unviewedSessionIds = useAtomValue(unviewedCompletedSessionIdsAtom)
+  const showConfirmReadButton = shouldShowConfirmReadButton({
+    manualReadConfirmEnabled,
+    isLatestAssistantTurn,
+    sessionUnread: !!sessionIdProp && unviewedSessionIds.has(sessionIdProp),
+  })
   const processGroupsKeepExpanded = useAtomValue(agentProcessGroupsKeepExpandedAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const sessionId = sessionIdProp ?? currentSessionId
@@ -984,7 +998,9 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
           : undefined
         const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
         const hasDuration = durationMs != null
-        if (!hasDuration && !hasActions && !showStoppedBadge) return null
+        // 「确认已读」按钮可能在「本轮无正文但有未读」时出现；该情况也要保留整条操作栏，
+        // 否则最新一轮没有正文的会话会连按钮一起消失。
+        if (!hasDuration && !hasActions && !showConfirmReadButton && !showStoppedBadge) return null
         return (
           <MessageActions className="agent-turn-actions pl-[46px] mt-0.5 min-h-[28px] justify-start">
             {hasDuration && <DurationBadge durationMs={durationMs!} usage={usage} />}
@@ -1018,6 +1034,8 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
                 <Undo2 className="size-3.5" />
               </MessageAction>
             )}
+            {/* 「确认已读」核心按钮：位于「回退到此处」右侧，仅开关开启且有未读时出现。 */}
+            {showConfirmReadButton && sessionIdProp && <ConfirmReadButton sessionId={sessionIdProp} />}
             {showStoppedBadge && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1613,6 +1631,8 @@ export interface MessageGroupRendererProps {
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
   showThinking?: boolean
+  /** 该 group 是否为会话中最后一个 assistant-turn（「确认已读」按钮的可见性判据之一）。 */
+  isLatestAssistantTurn?: boolean
 }
 
 /**
@@ -1699,7 +1719,7 @@ export function getGroupPreview(group: MessageGroup): string {
   return preview.slice(0, GROUP_PREVIEW_LIMIT)
 }
 
-function MessageGroupRendererView({ sessionId, group, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking }: MessageGroupRendererProps): React.ReactElement | null {
+function MessageGroupRendererView({ sessionId, group, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking, isLatestAssistantTurn }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
@@ -1755,6 +1775,7 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
         stoppedByUser={stoppedByUser}
         sessionModelId={sessionModelId}
         showThinking={showThinking}
+        isLatestAssistantTurn={isLatestAssistantTurn}
       />
     </div>
   )
@@ -1808,6 +1829,7 @@ export const MessageGroupRenderer = React.memo(MessageGroupRendererView, (prev, 
   if (prev.basePaths !== next.basePaths) return false
   if (prev.isStreaming !== next.isStreaming || prev.stoppedByUser !== next.stoppedByUser) return false
   if (prev.sessionModelId !== next.sessionModelId || prev.showThinking !== next.showThinking) return false
+  if (prev.isLatestAssistantTurn !== next.isLatestAssistantTurn) return false
   return prev.onFork === next.onFork
     && prev.onExplore === next.onExplore
     && prev.onRewind === next.onRewind

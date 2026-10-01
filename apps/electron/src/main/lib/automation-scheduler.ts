@@ -256,7 +256,8 @@ export async function runAutomation(automation: Automation, manual = false): Pro
           startedAt: runAt,
         },
         {
-          source: 'bridge',
+          // 定时自动化：来源与 triggeredBy 一致标为 automation（旧实现误标成 'bridge'）。
+          source: 'automation',
           onError: (error) => finish('error', error),
           onComplete: () => finish('success'),
           onTitleUpdated: () => { /* 子会话标题不需要特殊处理 */ },

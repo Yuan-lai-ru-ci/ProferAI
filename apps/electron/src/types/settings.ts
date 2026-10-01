@@ -257,6 +257,15 @@ export interface AppSettings {
   lastEnvironmentCheck?: EnvironmentCheckResult
   /** 是否启用桌面通知 */
   notificationsEnabled?: boolean
+  /**
+   * 手动确认已读（默认 false）。
+   *
+   * 关闭（默认）时行为与既有一致：未读只在「完成时用户不在该会话」时产生，
+   * 打开/切换/关闭标签页等路径会自动清掉。
+   * 开启后「已读」只能由用户显式确认（最新一轮回复操作栏的「确认已读」按钮
+   * 或侧边栏会话菜单），用户自己发新一轮、归档/删除时也会解除。
+   */
+  manualReadConfirmEnabled?: boolean
   /** 是否启用通知提示音（阻塞 Hook 触发时播放） */
   notificationSoundEnabled?: boolean
   /** 各场景通知音选择 */

@@ -123,6 +123,7 @@ class DingTalkBridge {
     this.botConfig = botConfig
     this.commandHandler = new BridgeCommandHandler({
       platformName: `钉钉-${botConfig.name}`,
+      source: 'dingtalk',
       adapter: {
         sendText: async (chatId: string, text: string, meta?: unknown) => {
           const ctx = meta as { sessionWebhook?: string } | undefined

@@ -45,7 +45,14 @@ import {
   agentSettingsReadyAtom,
   dockBadgeCountAtom,
   unviewedCompletedSessionIdsAtom,
+  agentSessionsAtom,
+  memoryUnviewedCompletedSessionIdsAtom,
 } from './atoms/agent-atoms'
+import {
+  manualReadConfirmEnabledAtom,
+  initializeAgentUnreadSettings,
+} from './atoms/agent-unread-settings'
+import { planUnreadSeedOnInit } from './lib/agent-unread-gate'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
 import {
@@ -533,6 +540,45 @@ function NotificationsInitializer(): null {
     initializeNotifications(setEnabled, setSoundEnabled, setSounds, setCustomSounds)
     initDesktopNotificationListener()
   }, [setEnabled, setSoundEnabled, setSounds, setCustomSounds])
+
+  return null
+}
+
+/**
+ * 「手动确认已读」开关初始化组件（设置 → 通用偏好）
+ *
+ * 两件事：
+ * 1. 从主进程加载开关（默认 false），写入 `manualReadConfirmEnabledAtom`，渲染层判据随之就位；
+ * 2. 关闭态下补一次**安全回填**：把持久化未读（`completedButUnconfirmed`）补进内存集合。
+ *    与 `use-left-sidebar` 拉列表后的启动恢复同源且幂等，保证设置尚未加载完的窗口内也不丢未读。
+ *    开启态不需要（读就是持久化字段的派生）。
+ */
+function AgentUnreadSettingsInitializer(): null {
+  const store = useStore()
+  const setEnabled = useSetAtom(manualReadConfirmEnabledAtom)
+
+  useEffect(() => {
+    let cancelled = false
+    void initializeAgentUnreadSettings(setEnabled).then((enabled) => {
+      if (cancelled || enabled) return
+      const persistedUnreadIds = store.get(agentSessionsAtom)
+        .filter((session) => session.completedButUnconfirmed)
+        .map((session) => session.id)
+      if (persistedUnreadIds.length === 0) return
+      const seedIds = planUnreadSeedOnInit({
+        memoryUnreadIds: [...store.get(memoryUnviewedCompletedSessionIdsAtom)],
+        persistedUnreadIds,
+      })
+      if (seedIds.length === 0) return
+      // 直写内存集合：开启态不复存在，这里就是关闭态的事实源。
+      store.set(memoryUnviewedCompletedSessionIdsAtom, (prev) => {
+        const next = new Set(prev)
+        for (const id of seedIds) next.add(id)
+        return next
+      })
+    })
+    return () => { cancelled = true }
+  }, [store, setEnabled])
 
   return null
 }
@@ -1215,6 +1261,7 @@ if (isQuickTaskWindow) {
       <ThemeInitializer />
       <AgentSettingsInitializer />
       <NotificationsInitializer />
+      <AgentUnreadSettingsInitializer />
       <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <MarkdownFontSizeInitializer />

@@ -9,6 +9,8 @@ import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
 import type { AgentSessionMeta, AgentEvent, AgentWorkspace, AgentPendingFile, RetryAttempt, ProferPermissionMode, PermissionRequest, AskUserRequest, ExitPlanModeRequest, ThinkingConfig, AgentEffort, SDKMessage, SDKBackgroundTaskSummary, UnstagedChangesResult, AgentImageGenerationCard } from '@profer/shared'
 import { PROFER_DEFAULT_PERMISSION_MODE } from '@profer/shared'
+import { manualReadConfirmEnabledAtom } from './agent-unread-settings'
+import { deriveUnreadIdsFromSessions } from '@/lib/agent-unread-derive'
 import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-count'
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
 import type { SessionFileChange } from '@/lib/session-file-changes'
@@ -617,8 +619,40 @@ export const agentRunningSessionIdsAtom = atom<Set<string>>((get) => {
 /** 侧边栏会话指示点状态 */
 export type SessionIndicatorStatus = 'idle' | 'running' | 'blocked' | 'completed'
 
-/** 已完成但用户尚未查看的会话 ID 集合 */
-export const unviewedCompletedSessionIdsAtom = atom<Set<string>>(new Set<string>())
+/**
+ * 关闭态专用的内存未读集合（内部原子：外部一律通过 `unviewedCompletedSessionIdsAtom` 读写）。
+ *
+ * 关闭态的显示权威就是它，与既有实现逐点一致；10 处既有内存写入点（打开/切换/关闭标签页、
+ * 切换器、窗口 focus、run 首次 running、external_run_started、侧边栏打开、团队工作区切换、
+ * 完成时按 presence 判定入账）全部保留，不需要删任何一行。
+ */
+export const memoryUnviewedCompletedSessionIdsAtom = atom<Set<string>>(new Set<string>())
+
+/**
+ * 未读会话 ID 集合（对外唯一入口，**模式感知**）。
+ *
+ * - **关闭态**（`manualReadConfirmEnabled === false`，默认）：读＝内存集合，写＝内存集合。
+ *   与既有实现零语义差异，消费方（侧边栏绿标、标签页指示点、任务栏角标、排序投影）完全不变。
+ * - **开启态**：读＝由会话元数据 `completedButUnconfirmed` 派生（唯一事实源），
+ *   写＝**静默丢弃**。这是刻意设计而不是疏忽：只有一处门控，就能让全部 10 个自动清除点
+ *   在开启态失效，不需要逐个删除调用点、也不会漏点。开启态下「清未读」只剩主进程一个
+ *   写入口（`setAgentSessionUnread`），三处状态由 `session_projection` 广播同帧同步。
+ *
+ * 派生读按签名缓存引用（`deriveUnreadIdsFromSessions`），内容不变时返回同一 Set 实例，
+ * 避免下游 `useMemo` 依赖每帧失效。
+ */
+export const unviewedCompletedSessionIdsAtom = atom(
+  (get) => {
+    if (!get(manualReadConfirmEnabledAtom)) return get(memoryUnviewedCompletedSessionIdsAtom)
+    return deriveUnreadIdsFromSessions(get(agentSessionsAtom))
+  },
+  (get, set, update: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+    // 开启态：渲染层不得写本地事实源（未读事实源是主进程持久化字段）。
+    if (get(manualReadConfirmEnabledAtom)) return
+    const previous = get(memoryUnviewedCompletedSessionIdsAtom)
+    set(memoryUnviewedCompletedSessionIdsAtom, typeof update === 'function' ? update(previous) : update)
+  },
+)
 
 let lastIndicatorSignature = ''
 let lastIndicatorMap = new Map<string, SessionIndicatorStatus>()

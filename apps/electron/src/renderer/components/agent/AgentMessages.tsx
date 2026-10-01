@@ -863,6 +863,10 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
               const isLastAssistantTurn = !streaming && stoppedByUser
                 && group.type === 'assistant-turn'
                 && getGroupId(group) === getGroupId(allGroups.findLast((g) => g.type === 'assistant-turn') ?? group)
+              // 「确认已读」按钮的「最新一轮」判据：同一 findLast 口径，但不依赖中断状态
+              // （中断态不显示分叉/回退属预期，但未读仍应可确认）。
+              const isLatestAssistantTurn = group.type === 'assistant-turn'
+                && getGroupId(group) === getGroupId(allGroups.findLast((g) => g.type === 'assistant-turn') ?? group)
               return (
                 <MessageGroupRenderer
                   key={getGroupId(group)}
@@ -882,6 +886,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                   stoppedByUser={isLastAssistantTurn || undefined}
                   sessionModelId={sessionModelId}
                   showThinking={agentRuntime !== 'pi'}
+                  isLatestAssistantTurn={isLatestAssistantTurn}
                 />
               )
             })}

@@ -7,7 +7,7 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import {
   SettingsSection,
@@ -25,6 +25,9 @@ import { SHORTCUT_MAP } from '@/lib/shortcut-defaults'
 import { getAcceleratorDisplay, isMac } from '@/lib/shortcut-registry'
 import { Button } from '@profer/ui/primitives/button'
 import type { RuntimeStatus } from '@profer/shared'
+import { manualReadConfirmEnabledAtom, updateManualReadConfirmEnabled } from '@/atoms/agent-unread-settings'
+import { applyUnreadModeTransition } from '@/lib/agent-unread-transition'
+import type { AgentUnreadMode } from '@/lib/agent-unread-gate'
 
 export function GeneralSettings(): React.ReactElement {
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
@@ -45,6 +48,9 @@ export function GeneralSettings(): React.ReactElement {
   const quickTaskShortcut = getAcceleratorDisplay(quickTaskAccelerator)
   const [shellPreference, setShellPreference] = React.useState<'auto' | 'git-bash' | 'wsl'>('auto')
   const [browserHomeUrl, setBrowserHomeUrl] = React.useState('')
+  // 「手动确认已读」开关：开启态未读需要用户确认才清除（见 `requirements.md` §3.2）。
+  const [manualReadConfirmEnabled, setManualReadConfirmEnabled] = useAtom(manualReadConfirmEnabledAtom)
+  const store = useStore()
 
   // 加载设置
   React.useEffect(() => {
@@ -131,6 +137,26 @@ export function GeneralSettings(): React.ReactElement {
     }
   }
 
+  /**
+   * 切换「手动确认已读」。
+   *
+   * 开关本身先落盘（失败回滚），再做一次两向未读迁移：关 → 开补写持久化未读、
+   * 开 → 关回填内存集合，两向都不清理未读（对应 `requirements.md` §6 U-1）。
+   * 主进程读的是同步更新的设置缓存，因此无需重启，下一帧即按新模式生效。
+   */
+  const handleManualReadConfirmToggle = async (enabled: boolean): Promise<void> => {
+    const from: AgentUnreadMode = manualReadConfirmEnabled ? 'manual' : 'auto'
+    const to: AgentUnreadMode = enabled ? 'manual' : 'auto'
+    try {
+      await updateManualReadConfirmEnabled(enabled, setManualReadConfirmEnabled)
+    } catch (error) {
+      console.error('[通用设置] 更新「手动确认已读」失败:', error)
+      toast.error('更新「手动确认已读」失败')
+      return
+    }
+    await applyUnreadModeTransition({ from, to, get: store.get, set: store.set })
+  }
+
   return (
     <div className="space-y-6">
       <SettingsSection
@@ -151,6 +177,12 @@ export function GeneralSettings(): React.ReactElement {
               : '快捷键已禁用，可在快捷键管理中重新设置全局唤起组合键'}
             checked={quickTaskEnabled}
             onCheckedChange={handleQuickTaskToggle}
+          />
+          <SettingsToggle
+            label="手动确认已读"
+            description="开启后会话完成即产生未读（即使你正在看），打开或切换标签页不再自动清除；在最新一轮回复操作栏点「确认已读」，或用侧边栏会话菜单切换。关闭时保持现有行为。"
+            checked={manualReadConfirmEnabled}
+            onCheckedChange={(checked) => { void handleManualReadConfirmToggle(checked) }}
           />
           <SettingsRow
             label="界面引导"

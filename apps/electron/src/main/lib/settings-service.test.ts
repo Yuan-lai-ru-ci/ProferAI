@@ -7,6 +7,7 @@ import {
   getSettings,
   updateSettings,
 } from './settings-service'
+import { getAgentUnreadPolicyMode } from './agent-unread-mode'
 import { getSettingsPath } from './config-paths'
 
 const tempRoots: string[] = []
@@ -179,5 +180,66 @@ describe('设置服务命名收敛兼容（Tablet* → Pocket*）', () => {
 
     expect(readSettingsFile(configDir).pocketModePort).toBe(0)
     expect(getSettingsPath()).toBe(join(configDir, 'settings.json'))
+  })
+})
+
+/**
+ * 「手动确认已读」开关的配置层（`design.md` §4.1 / §10 单测第 7 组）。
+ *
+ * 口径：默认关闭；旧 `settings.json` 无该键时归一为 `false`；开关落盘后主进程读到的
+ * 策略模式立即变成 `manual`（**无需重启**，因为 updateSettings 同步更新内存缓存）。
+ */
+describe('手动确认已读开关', () => {
+  test('Given 未落盘任何设置 When 读默认值 Then manualReadConfirmEnabled 为 false', () => {
+    expect(getSettings().manualReadConfirmEnabled).toBe(false)
+    expect(getAgentUnreadPolicyMode()).toBe('auto')
+  })
+
+  test('Given 旧 settings.json 无该键 When 读取 Then 归一为 false', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+    writeSettingsFile(configDir, { themeMode: 'dark', notificationsEnabled: true })
+
+    expect(getSettings().manualReadConfirmEnabled).toBe(false)
+    expect(getAgentUnreadPolicyMode()).toBe('auto')
+  })
+
+  test('Given 旧文件写了非布尔值 When 读取 Then 归一为 false（只有字面 true 才算开启）', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+    writeSettingsFile(configDir, { manualReadConfirmEnabled: 'true' })
+
+    expect(getSettings().manualReadConfirmEnabled).toBe(false)
+    expect(getAgentUnreadPolicyMode()).toBe('auto')
+  })
+
+  test('Given 开启开关 When 更新设置 Then 落盘且策略模式立即为 manual（无需重启）', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+
+    updateSettings({ manualReadConfirmEnabled: true })
+
+    expect(readSettingsFile(configDir).manualReadConfirmEnabled).toBe(true)
+    expect(getSettings().manualReadConfirmEnabled).toBe(true)
+    expect(getAgentUnreadPolicyMode()).toBe('manual')
+  })
+
+  test('Given 开关已开启 When 再关闭 Then 策略模式立即回到 auto（不追溯清理未读由渲染层负责）', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+
+    updateSettings({ manualReadConfirmEnabled: true })
+    expect(getAgentUnreadPolicyMode()).toBe('manual')
+
+    updateSettings({ manualReadConfirmEnabled: false })
+
+    expect(readSettingsFile(configDir).manualReadConfirmEnabled).toBe(false)
+    expect(getAgentUnreadPolicyMode()).toBe('auto')
+  })
+
+  test('Given 落盘为开启 When 进程重启后重读（清缓存） Then 仍为 manual', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+    writeSettingsFile(configDir, { manualReadConfirmEnabled: true })
+
+    clearSettingsCache()
+
+    expect(getSettings().manualReadConfirmEnabled).toBe(true)
+    expect(getAgentUnreadPolicyMode()).toBe('manual')
   })
 })

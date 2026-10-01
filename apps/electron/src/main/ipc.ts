@@ -272,7 +272,9 @@ import {
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
-import { publishAgentSessionProjection, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
+import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
+import { buildArchiveToggleUpdates } from './lib/agent-unread-policy'
+import { getAgentUnreadPolicyMode } from './lib/agent-unread-mode'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
 import { isProcessHandleOwnedBySession, processHandleFromRuntimeRecord } from './lib/process-handle'
@@ -3208,18 +3210,17 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 清除 Agent 会话完成状态（兼容清除旧版 manualWorking）
+  // 清除 Agent 会话完成状态（兼容清除旧版 manualWorking）——「确认已读」的宿主写入口
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CLEAR_COMPLETION_STATE,
     async (_, id: string): Promise<AgentSessionMeta> => {
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
-      const updates: Partial<AgentSessionMeta> = {}
-      if (current.manualWorking) updates.manualWorking = false
-      if (current.completedButUnconfirmed) updates.completedButUnconfirmed = false
-      if (Object.keys(updates).length === 0) return current
-      return updateAgentSessionUiMeta(id, updates)
+      // 幂等：本来就没有未读也没有旧版 manualWorking 时直接返回，不产生多余 revision / projection。
+      if (!current.completedButUnconfirmed && !current.manualWorking) return current
+      return setAgentSessionUnread(id, false, current.manualWorking ? { manualWorking: false } : undefined)
+        ?? current
     }
   )
 
@@ -3230,7 +3231,7 @@ export function registerIpcHandlers(): void {
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
-      return updateAgentSessionUiMeta(id, { completedButUnconfirmed: true })
+      return setAgentSessionUnread(id, true) ?? current
     }
   )
 
@@ -3252,13 +3253,12 @@ export function registerIpcHandlers(): void {
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
-      const newArchived = !current.archived
-      // 归档时自动取消置顶
-      const updates: Partial<AgentSessionMeta> = { archived: newArchived }
-      if (newArchived && current.pinned) {
-        updates.pinned = false
-      }
-      return updateAgentSessionUiMeta(id, updates)
+      // 归档视作已读（仅开启态追加清未读）；关闭态保持原行为：只切 archived + 取消置顶。
+      return updateAgentSessionUiMeta(id, buildArchiveToggleUpdates({
+        archived: current.archived ?? false,
+        pinned: current.pinned ?? false,
+        completedButUnconfirmed: current.completedButUnconfirmed ?? false,
+      }, getAgentUnreadPolicyMode()))
     }
   )
 

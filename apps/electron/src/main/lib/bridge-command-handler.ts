@@ -8,7 +8,7 @@
  */
 
 import { BrowserWindow } from 'electron'
-import type { AgentStreamPayload } from '@profer/shared'
+import type { AgentExternalRunSource, AgentStreamPayload } from '@profer/shared'
 import { AGENT_IPC_CHANNELS, isVisibleAgentSession, resolveAgentAttachmentPrompt } from '@profer/shared'
 import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
 import {
@@ -50,6 +50,14 @@ export interface BridgeAttachment {
 export interface BridgeCommandHandlerConfig {
   /** 平台名称，用于日志（如 '微信', '钉钉'） */
   platformName: string
+  /**
+   * 该平台对应的 headless run 来源。
+   *
+   * **必填**：它是「未读产生 / 不清未读」口径的来源信号（`resolveRunInitiator` 把
+   * `feishu | dingtalk | wechat | bridge` 一律解析为 `'external'`）。旧实现的 `?? 'bridge'`
+   * 兜底会把所有平台记成 "bridge"，让下游无法区分来源，也无法把未读口径建立在它上面。
+   */
+  source: AgentExternalRunSource
   /** 平台适配器 */
   adapter: BridgePlatformAdapter
   /** 获取默认工作区 ID */
@@ -713,6 +721,7 @@ export class BridgeCommandHandler {
     }
 
     runAgentHeadless(input, {
+      source: this.config.source,
       onError: (error) => {
         this.log(`Agent 错误: ${error}`)
         this.send(chatId, `❌ Agent 错误: ${error}`, contextData).catch(console.error)
