@@ -20,19 +20,27 @@ export function WindowControls({
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const [isMaximized, setIsMaximized] = React.useState(false)
 
-  // 初始化最大化状态并监听窗口 resize 事件
+  // 初始化最大化状态并监听窗口 resize 事件与主进程最大化状态变更推送
   React.useEffect(() => {
     if (!isWindows) return
     window.electronAPI.windowIsMaximized().then(setIsMaximized)
-    const unsub = window.electronAPI.onWindowResize(() => {
+
+    // 订阅主进程窗口最大化状态变更推送
+    const unsubMaximize = window.electronAPI.onWindowMaximizeChanged((next) => {
+      setIsMaximized((prev) => (prev === next ? prev : next))
+    })
+
+    // 保留 onWindowResize 作为兜底
+    const unsubResize = window.electronAPI.onWindowResize(() => {
       window.electronAPI.windowIsMaximized().then((next) => {
-        // 只在状态实际变化时 setState，避免每次 resize 都触发重渲染——
-        // Windows 上每次重渲染都会让 Chromium 重算可拖拽区域，期间存在数十 ms 的 stale 窗口，
-        // 用户在此窗口内点击按钮会被 OS 误判为标题栏点击。
         setIsMaximized((prev) => (prev === next ? prev : next))
       })
     })
-    return unsub
+
+    return () => {
+      unsubMaximize()
+      unsubResize()
+    }
   }, [isWindows])
 
   if (!isWindows) return null

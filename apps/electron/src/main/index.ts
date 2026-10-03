@@ -225,6 +225,7 @@ import {
 import { registerGlobalShortcut, unregisterAllGlobalShortcuts } from './lib/global-shortcut-service'
 import { maintainDevShellShortcut } from './lib/dev-shell-shortcut'
 import { setProferVersion } from '@profer/core'
+import { IPC_CHANNELS } from '@profer/shared'
 import { TRAY_IPC_CHANNELS } from '../types'
 import {
   DEFAULT_MAIN_WINDOW_ZOOM_FACTOR,
@@ -742,6 +743,13 @@ function createWindow(): void {
   }
   mainWindow.on('resize', scheduleWindowStateSave)
   mainWindow.on('move', scheduleWindowStateSave)
+  const notifyMaximizeChanged = (): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.send(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, mainWindow.isMaximized())
+  }
+  mainWindow.on('maximize', notifyMaximizeChanged)
+  mainWindow.on('unmaximize', notifyMaximizeChanged)
+  mainWindow.on('restore', notifyMaximizeChanged)
   if (process.platform === 'darwin') {
     const notifyFullScreenChanged = (): void => {
       if (!mainWindow || mainWindow.isDestroyed()) return
