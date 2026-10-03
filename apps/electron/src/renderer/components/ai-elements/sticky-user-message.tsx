@@ -12,7 +12,7 @@
 
 import * as React from 'react'
 import { FileText, FileImage, ChevronUp } from 'lucide-react'
-import { useStickToBottomContext } from 'use-stick-to-bottom'
+import { useConversationScroll } from './conversation-scroll'
 import { useAtomValue } from 'jotai'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { userProfileAtom } from '@/atoms/user-profile'
@@ -45,7 +45,7 @@ interface StickyUserMessageProps {
 }
 
 export function StickyUserMessage({ userMessages }: StickyUserMessageProps): React.ReactElement {
-  const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
+  const { scrollRef, navigate } = useConversationScroll()
   const userProfile = useAtomValue(userProfileAtom)
   const stickyEnabled = useAtomValue(stickyUserMessageEnabledAtom)
 
@@ -121,16 +121,11 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
     )
     if (!target) return
 
-    stopScroll()
-    stickyState.animation = undefined
-    stickyState.velocity = 0
-    stickyState.accumulated = 0
-
     const containerRect = el.getBoundingClientRect()
     const targetRect = target.getBoundingClientRect()
     const targetScrollTop = el.scrollTop + (targetRect.top - containerRect.top)
-    el.scrollTo({ top: Math.max(0, targetScrollTop - 24), behavior: 'smooth' })
-  }, [scrollRef, stopScroll, stickyState, stickyMessage])
+    navigate(Math.max(0, targetScrollTop - 24))
+  }, [scrollRef, navigate, stickyMessage])
 
   const isSticky = stickyMessage !== null
   const hasContent = stickyMessage && (stickyMessage.text || stickyMessage.attachments.length > 0)
@@ -151,7 +146,16 @@ export function StickyUserMessage({ userMessages }: StickyUserMessageProps): Rea
       <div className="mx-8 px-2.5 pt-2">
         <div
           className="sticky-user-banner ml-[46px] rounded-xl bg-background/95 backdrop-blur-sm border border-border/50 shadow-sm cursor-pointer hover:bg-accent/50 transition-colors"
+          role="button"
+          tabIndex={0}
+          aria-label="回到这条用户消息"
           onClick={scrollToOriginal}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              scrollToOriginal()
+            }
+          }}
         >
           <div className="px-3.5 py-2.5">
             {/* 头部：头像 + 用户名 + 提示 */}

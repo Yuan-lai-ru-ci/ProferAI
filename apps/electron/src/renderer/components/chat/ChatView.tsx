@@ -53,6 +53,7 @@ import {
 import { registerPendingTitle } from '@/hooks/useGlobalChatListeners'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { cn } from '@/lib/utils'
+import { requestConversationFollowAtom } from '@/atoms/conversation-scroll-intents'
 import type {
   ChatMessage,
   ChatSendInput,
@@ -83,6 +84,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   const [inlineEditingMessageId, setInlineEditingMessageId] = React.useState<string | null>(null)
   const [previewReference, setPreviewReference] = React.useState<import('@profer/shared').KnowledgeReference | null>(null)
   const [historyDrawerOpen, setHistoryDrawerOpen] = React.useState(false)
+  const requestFollow = useSetAtom(requestConversationFollowAtom)
   const [branchTree, setBranchTree] = React.useState<import('@profer/shared').BranchTreeSnapshot | null>(null)
   React.useEffect(() => {
     const handlePreview = (event: Event) => setPreviewReference((event as CustomEvent<import('@profer/shared').KnowledgeReference>).detail)
@@ -354,6 +356,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
       setPendingAttachments([])
     }
 
+    requestFollow(conversationId)
     // 初始化当前对话的流式状态
     const runId = crypto.randomUUID()
     setStreamingStates((prev) => {
@@ -436,6 +439,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     })
   }, [
     conversationId,
+    requestFollow,
     selectedModel,
     messages.length,
     pendingAttachments,

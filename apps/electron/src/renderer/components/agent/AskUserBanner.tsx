@@ -6,12 +6,13 @@
  */
 
 import * as React from 'react'
-import { useAtom } from 'jotai'
+import { useAtom, useSetAtom } from 'jotai'
 import { Send, X } from 'lucide-react'
 import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Button } from '@profer/ui/primitives/button'
 import { allPendingAskUserRequestsAtom, askUserAnswersAtom, type AskUserQuestionAnswer } from '@/atoms/agent-atoms'
+import { requestConversationFollowAtom } from '@/atoms/conversation-scroll-intents'
 import { isEditableTarget } from '@/lib/navigation-controller'
 import type { AskUserQuestion } from '@profer/shared'
 
@@ -33,6 +34,7 @@ interface AskUserBannerProps {
 export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps): React.ReactElement | null {
   const [allRequests, setAllRequests] = useAtom(allPendingAskUserRequestsAtom)
   const [answersByRequest, setAnswersByRequest] = useAtom(askUserAnswersAtom)
+  const requestFollow = useSetAtom(requestConversationFollowAtom)
   const requests = allRequests.get(sessionId) ?? []
   const [submitting, setSubmitting] = React.useState(false)
   const [activeTab, setActiveTab] = React.useState(0)
@@ -228,6 +230,7 @@ export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps):
         }
       }
       await window.electronAPI.respondAskUser({ requestId: request.requestId, answers: answersRecord })
+      requestFollow(sessionId)
       setAllRequests((prev) => {
         const map = new Map(prev)
         const current = map.get(sessionId) ?? []

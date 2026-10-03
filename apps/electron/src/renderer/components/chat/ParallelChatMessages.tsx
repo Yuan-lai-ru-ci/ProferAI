@@ -9,7 +9,7 @@
  * 移植自 profer-frontend 的 parallel-chat-messages.tsx。
  */
 
-import { Fragment, useMemo, useRef, useEffect } from 'react'
+import { Fragment, useMemo } from 'react'
 import { useAtomValue } from 'jotai'
 import { Loader2 } from 'lucide-react'
 import { ChatMessageItem, formatMessageTime } from './ChatMessageItem'
@@ -30,6 +30,9 @@ import {
 } from '@/components/ai-elements/reasoning'
 import { streamingModelAtom, channelsAtom } from '@/atoms/chat-atoms'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
+import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
+import { ConversationFollowTrigger, useConversationFollowIntentBaseline } from '@/components/ai-elements/conversation-follow-trigger'
+import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import type { ChatMessage } from '@profer/shared'
 
 /** 消息段落（按分隔线分割） */
@@ -41,6 +44,7 @@ interface MessageSegment {
 
 interface ParallelChatMessagesProps {
   messages: ChatMessage[]
+  messagesLoaded?: boolean
   /** 当前对话 ID（用于迁移到 Agent 模式） */
   conversationId?: string
   streaming: boolean
@@ -135,6 +139,10 @@ interface MessageColumnProps {
   onCancelInlineEdit?: () => void
   inlineEditingMessageId?: string | null
   side: 'user' | 'assistant'
+  segmentId?: string
+  followActive?: boolean
+  initialIntent: number
+  messagesLoaded?: boolean
   /** streaming 相关 - 仅 assistant 列需要 */
   streaming?: boolean
   streamingContent?: string
@@ -153,6 +161,10 @@ function MessageColumn({
   onCancelInlineEdit,
   inlineEditingMessageId,
   side,
+  segmentId = 'tail',
+  followActive = true,
+  initialIntent,
+  messagesLoaded = true,
   streaming = false,
   streamingContent = '',
   streamingReasoning = '',
@@ -160,46 +172,28 @@ function MessageColumn({
 }: MessageColumnProps): React.ReactElement {
   const streamingModel = useAtomValue(streamingModelAtom)
   const channels = useAtomValue(channelsAtom)
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  // 消息加载后自动滚动到底部（两列都滚到最新消息）
-  useEffect(() => {
-    if (scrollRef.current && messages.length > 0) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages])
-
-  // 流式输出时自动滚动到底部（仅 assistant 列）
-  useEffect(() => {
-    if (side === 'assistant' && streaming && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [streaming, streamingContent, streamingReasoning, side])
-
-  if (messages.length === 0 && !(side === 'assistant' && streaming)) {
-    return <EmptyColumn side={side} />
-  }
 
   return (
-    <div
-      ref={scrollRef}
-      className="flex-1 min-h-0 overflow-y-auto scrollbar-none overscroll-contain"
-    >
-      <div className="flex flex-col gap-6 p-4">
+    <Conversation key={`${conversationId}:${segmentId}:${side}`} className="min-h-0 overscroll-contain">
+      {conversationId && <ConversationFollowTrigger sessionId={conversationId} loaded={messagesLoaded} active={followActive} initialIntent={initialIntent} />}
+      {conversationId && <ScrollPositionManager id={`${conversationId}:parallel:${segmentId}:${side}`} ready={messagesLoaded} />}
+      <ConversationContent className="gap-6 p-4">
+        {messages.length === 0 && !(side === 'assistant' && streaming) && <EmptyColumn side={side} />}
         {messages.map((message) => (
-          <ChatMessageItem
-            key={message.id}
-            message={message}
-            conversationId={conversationId}
-            allMessages={allMessages}
-            onDeleteMessage={onDeleteMessage}
-            onResendMessage={onResendMessage}
-            onStartInlineEdit={onStartInlineEdit}
-            onSubmitInlineEdit={onSubmitInlineEdit}
-            onCancelInlineEdit={onCancelInlineEdit}
-            isInlineEditing={message.id === inlineEditingMessageId}
-            isParallelMode
-          />
+          <div key={message.id} data-message-id={message.id}>
+            <ChatMessageItem
+              message={message}
+              conversationId={conversationId}
+              allMessages={allMessages}
+              onDeleteMessage={onDeleteMessage}
+              onResendMessage={onResendMessage}
+              onStartInlineEdit={onStartInlineEdit}
+              onSubmitInlineEdit={onSubmitInlineEdit}
+              onCancelInlineEdit={onCancelInlineEdit}
+              isInlineEditing={message.id === inlineEditingMessageId}
+              isParallelMode
+            />
+          </div>
         ))}
         {/* assistant 列：流式生成 / 停止后等待磁盘消息的临时消息 */}
         {side === 'assistant' && (streaming || streamingContent || streamingReasoning) && (
@@ -233,13 +227,15 @@ function MessageColumn({
             </MessageContent>
           </Message>
         )}
-      </div>
-    </div>
+      </ConversationContent>
+      <ConversationScrollButton />
+    </Conversation>
   )
 }
 
 export function ParallelChatMessages({
   messages,
+  messagesLoaded = true,
   conversationId,
   streaming,
   streamingContent,
@@ -255,6 +251,7 @@ export function ParallelChatMessages({
   inlineEditingMessageId,
   loadingMore = false,
 }: ParallelChatMessagesProps): React.ReactElement {
+  const initialIntent = useConversationFollowIntentBaseline(conversationId ?? '', messagesLoaded)
   // 分段消息
   const segments = useMemo(
     () => segmentMessages(messages, contextDividers),
@@ -292,7 +289,9 @@ export function ParallelChatMessages({
             </div>
             <MessageColumn
               messages={userMessages}
+              initialIntent={initialIntent}
               allMessages={messages}
+              messagesLoaded={messagesLoaded}
               conversationId={conversationId}
               onDeleteMessage={onDeleteMessage}
               onResendMessage={onResendMessage}
@@ -313,7 +312,9 @@ export function ParallelChatMessages({
             </div>
             <MessageColumn
               messages={assistantMessages}
+              initialIntent={initialIntent}
               allMessages={messages}
+              messagesLoaded={messagesLoaded}
               conversationId={conversationId}
               onDeleteMessage={onDeleteMessage}
               onResendMessage={onResendMessage}
@@ -341,7 +342,7 @@ export function ParallelChatMessages({
         {loadingMore && <LoadMoreSpinner />}
 
         {segments.map((segment, index) => (
-          <Fragment key={index}>
+          <Fragment key={segment.dividerMessageId ? `divider:${segment.dividerMessageId}` : 'tail'}>
             {/* 该段的左右并排消息 */}
             <div
               className={
@@ -361,7 +362,10 @@ export function ParallelChatMessages({
                 )}
                 <MessageColumn
                   messages={segment.userMessages}
+                  initialIntent={initialIntent}
                   allMessages={messages}
+                  messagesLoaded={messagesLoaded}
+                  followActive={index === segments.length - 1}
                   conversationId={conversationId}
                   onDeleteMessage={onDeleteMessage}
                   onResendMessage={onResendMessage}
@@ -370,6 +374,7 @@ export function ParallelChatMessages({
                   onCancelInlineEdit={onCancelInlineEdit}
                   inlineEditingMessageId={inlineEditingMessageId}
                   side="user"
+                  segmentId={segment.dividerMessageId ?? 'tail'}
                 />
               </div>
 
@@ -384,7 +389,10 @@ export function ParallelChatMessages({
                 )}
                 <MessageColumn
                   messages={segment.assistantMessages}
+                  initialIntent={initialIntent}
                   allMessages={messages}
+                  messagesLoaded={messagesLoaded}
+                  followActive={index === segments.length - 1}
                   conversationId={conversationId}
                   onDeleteMessage={onDeleteMessage}
                   onResendMessage={onResendMessage}
@@ -393,6 +401,7 @@ export function ParallelChatMessages({
                   onCancelInlineEdit={onCancelInlineEdit}
                   inlineEditingMessageId={inlineEditingMessageId}
                   side="assistant"
+                  segmentId={segment.dividerMessageId ?? 'tail'}
                   streaming={index === segments.length - 1 ? streaming : false}
                   streamingContent={index === segments.length - 1 ? streamingContent : ''}
                   streamingReasoning={index === segments.length - 1 ? streamingReasoning : ''}

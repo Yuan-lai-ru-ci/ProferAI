@@ -4,16 +4,14 @@ import { cn } from '@/lib/utils'
 import { getToolDisplayName, getToolIcon } from './tool-utils'
 import type {
   SDKContentBlock,
-  SDKMessage,
-  SDKToolResultBlock,
   SDKToolUseBlock,
-  SDKUserMessage,
 } from '@profer/shared'
 import { isGoalUpdateToolName } from '@profer/shared'
 
 interface ProcessBlockGroupProps {
   blocks: SDKContentBlock[]
   isStreaming?: boolean
+  scrollAnchorId?: string
   keepExpandedAfterComplete: boolean
   // 该过程组是否为整条消息的末尾项：是则流式中保留最后一段为正常显示，
   // 否则（最终答案已作为后续兄弟块外置）整组统一弱化。
@@ -26,159 +24,8 @@ const PROCESS_GROUP_COLLAPSE_DURATION_MS = 500
 const PROCESS_GROUP_AUTO_COLLAPSE_SOUND_DELAY_MS = 900
 const PROCESS_GROUP_AUTO_COLLAPSE_COUNTDOWN_SECONDS = 3
 
-export interface IndexedContentBlock {
-  block: SDKContentBlock
-  index: number
-}
-
-export type AssistantTurnRenderItem =
-  | { type: 'block'; item: IndexedContentBlock }
-  | { type: 'process-group'; items: IndexedContentBlock[] }
-
-interface BuildAssistantTurnRenderItemsOptions {
-  isStreaming?: boolean
-  completedToolResultIds?: Set<string>
-}
-
-export function buildCompletedToolResultIds(turnMessages: SDKMessage[]): Set<string> {
-  const ids = new Set<string>()
-  for (const msg of turnMessages) {
-    if (msg.type !== 'user') continue
-    const userMsg = msg as SDKUserMessage
-    const blocks = userMsg.message?.content
-    if (!Array.isArray(blocks)) continue
-    for (const b of blocks) {
-      if (b.type !== 'tool_result') continue
-      const rb = b as SDKToolResultBlock
-      ids.add(rb.tool_use_id)
-    }
-  }
-  return ids
-}
-
-interface TrailingOutputSplit {
-  /** 最终正文（最后一段连续 text）在原数组中的起始下标 */
-  textStartIndex: number
-  /** 最终正文结束下标（含） */
-  textEndIndex: number
-}
-
-/**
- * 定位「最终正文」区间：数组里最后一段连续的 text 块。
- *
- * 旧实现要求数组最后一个块必须是 text，否则整轮（含最终回复）会被整体折叠进「执行过程」。
- * 但真实流式数据里存在 text 之后又追加 thinking 的形态：
- *  - 同一条 assistant 消息里 reasoning 晚于正文到达（`[text, thinking]`）；
- *  - 正文之后紧跟一条只含 thinking 的收尾消息（turn 内聚合后同样以 thinking 结尾）。
- * 这两种情况下正文才是应当直接可见的交付内容，必须外置；末尾 thinking 归入过程组。
- * 若正文之后还跟着 tool_use 等块，说明这段 text 更可能是给工具看的中间说明，保持整组折叠。
- *
- * 注意：Pi runtime 下 thinking 块不渲染（showThinking={agentRuntime !== 'pi'}），
- * 一旦正文被一起折叠，用户会看到整轮只剩「执行过程：N 条消息」一行、正文彻底看不见。
- */
-function getTrailingOutputSplit(blocks: SDKContentBlock[]): TrailingOutputSplit | null {
-  let textEndIndex = -1
-  for (let index = blocks.length - 1; index >= 0; index--) {
-    if (blocks[index]?.type === 'text') {
-      textEndIndex = index
-      break
-    }
-  }
-  if (textEndIndex < 0) return null
-
-  for (let index = textEndIndex + 1; index < blocks.length; index++) {
-    if (blocks[index]?.type !== 'thinking') return null
-  }
-
-  let textStartIndex = textEndIndex
-  while (textStartIndex > 0 && blocks[textStartIndex - 1]?.type === 'text') {
-    textStartIndex -= 1
-  }
-  return { textStartIndex, textEndIndex }
-}
-
-function areToolsBeforeIndexCompleted(
-  blocks: SDKContentBlock[],
-  endIndex: number,
-  completedToolResultIds: Set<string> | undefined,
-): boolean {
-  if (!completedToolResultIds) return false
-
-  // 末尾 text 前的所有 tool_use 索引（用于区分「单工具」与「多工具收尾」场景）
-  const toolIndices: number[] = []
-  for (let index = 0; index < endIndex; index++) {
-    const block = blocks[index]
-    if (block?.type !== 'tool_use') continue
-    toolIndices.push(index)
-  }
-  if (toolIndices.length === 0) {
-    // 没有 tool_use 时不认为"工具已完成"——避免流式中只有 thinking + 尾部 text
-    // 时把还可能变成中间过程的 text 提前外置。
-    return false
-  }
-
-  // 多工具长序列：允许「最后一个工具的 result 还在路上」时也把尾部 text 外置——
-  // 此时 text 几乎可以确定是最终回复（Agent 已开始收尾输出），
-  // 不应因最后一个工具结果晚到而把整段回复折叠进执行过程。
-  // 单工具场景保持保守：仅一个 tool_use 且结果未到，text 仍可能是给工具看的中间说明。
-  for (let i = 0; i < toolIndices.length; i++) {
-    const isLastTool = i === toolIndices.length - 1
-    if (toolIndices.length > 1 && isLastTool) continue
-    const toolBlock = blocks[toolIndices[i]!] as SDKToolUseBlock
-    if (!completedToolResultIds.has(toolBlock.id)) return false
-  }
-
-  return true
-}
-
-export function buildAssistantTurnRenderItems(
-  blocks: SDKContentBlock[],
-  options: BuildAssistantTurnRenderItemsOptions = {},
-): AssistantTurnRenderItem[] {
-  const visibleBlocks = blocks
-    .map((block, index) => ({ block, index }))
-    .filter(({ block }) => block.type !== 'tool_use' || !isGoalUpdateToolName((block as SDKToolUseBlock).name))
-  if (visibleBlocks.length === 0) return []
-  const renderBlocks = visibleBlocks.map(({ block }) => block)
-
-  // 流式阶段最后的 text 还不稳定，后续工具调用可能会把它变成中间过程。
-  // 只有当前面所有工具都有结果时，才把尾部 text 视作最终输出，降低完成瞬间的跳动。
-  const hasProcessBlock = renderBlocks.some((block) => block.type === 'tool_use' || block.type === 'thinking')
-  const outputSplit = getTrailingOutputSplit(renderBlocks)
-  const canSplitStreamingFinalOutput = options.isStreaming
-    && hasProcessBlock
-    && outputSplit !== null
-    && outputSplit.textStartIndex > 0
-    && areToolsBeforeIndexCompleted(renderBlocks, outputSplit.textStartIndex, options.completedToolResultIds)
-
-  if (options.isStreaming && hasProcessBlock && !canSplitStreamingFinalOutput) {
-    return [{ type: 'process-group', items: visibleBlocks }]
-  }
-
-  if (outputSplit === null) {
-    return [{ type: 'process-group', items: visibleBlocks }]
-  }
-
-  const { textStartIndex, textEndIndex } = outputSplit
-  // 正文之前的步骤 + 正文之后仅剩的 thinking（收尾思考）统一归入过程组。
-  const processItems: IndexedContentBlock[] = []
-  for (let index = 0; index < textStartIndex; index++) {
-    const item = visibleBlocks[index]
-    if (item) processItems.push(item)
-  }
-  for (let index = textEndIndex + 1; index < visibleBlocks.length; index++) {
-    const item = visibleBlocks[index]
-    if (item) processItems.push(item)
-  }
-
-  const items: AssistantTurnRenderItem[] = []
-  if (processItems.length > 0) items.push({ type: 'process-group', items: processItems })
-  for (let index = textStartIndex; index <= textEndIndex; index++) {
-    const item = visibleBlocks[index]
-    if (item) items.push({ type: 'block', item })
-  }
-  return items
-}
+export { buildAssistantTurnRenderItems, buildCompletedToolResultIds } from './render-block-derivation'
+export type { AssistantTurnRenderItem, IndexedContentBlock } from './render-block-derivation'
 
 function buildProcessGroupSummary(blocks: SDKContentBlock[]): string {
   let toolCount = 0
@@ -216,7 +63,7 @@ export function buildProcessGroupToolNames(blocks: SDKContentBlock[]): string[] 
   return toolNames
 }
 
-export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComplete, isMessageTail = false, children }: ProcessBlockGroupProps): React.ReactElement {
+export function ProcessBlockGroup({ blocks, isStreaming, scrollAnchorId, keepExpandedAfterComplete, isMessageTail = false, children }: ProcessBlockGroupProps): React.ReactElement {
   const shouldExpandByDefault = !!isStreaming || keepExpandedAfterComplete
   const [expanded, setExpanded] = React.useState(shouldExpandByDefault)
   const [shouldRenderContent, setShouldRenderContent] = React.useState(shouldExpandByDefault)
@@ -306,15 +153,19 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
 
     // 折叠时：先测量当前高度，触发 height 过渡动画，动画结束后卸载 DOM
     const el = contentRef.current
+    let frame: number | undefined
     if (el) {
       const h = el.scrollHeight
       setMeasuredHeight(h)
-      // 强制浏览器在下一帧开始从 h → 0 的过渡
-      requestAnimationFrame(() => setMeasuredHeight(0))
+      // 展开/卸载会取消旧帧，避免迟到的折叠写入覆盖新状态。
+      frame = requestAnimationFrame(() => setMeasuredHeight(0))
     }
 
     const timer = window.setTimeout(() => setShouldRenderContent(false), PROCESS_GROUP_COLLAPSE_DURATION_MS)
-    return () => window.clearTimeout(timer)
+    return () => {
+      window.clearTimeout(timer)
+      if (frame !== undefined) cancelAnimationFrame(frame)
+    }
   }, [expanded])
 
   const summary = React.useMemo(
@@ -336,7 +187,7 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
       const dimmed = isStreaming && !(isMessageTail && isLast)
       return (
         <div
-          key={i}
+          key={React.isValidElement(child) ? child.key : i}
           className={cn(
             dimmed && 'opacity-80',
             isStreaming && 'animate-in fade-in slide-in-from-top-1 duration-200',
@@ -350,6 +201,7 @@ export function ProcessBlockGroup({ blocks, isStreaming, keepExpandedAfterComple
   return (
     <div className="space-y-1.5">
       <button
+        data-scroll-anchor={scrollAnchorId}
         type="button"
         className={cn(
           'flex max-w-full items-center gap-2 py-0.5 text-left transition-opacity group',

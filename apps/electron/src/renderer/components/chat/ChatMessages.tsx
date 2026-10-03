@@ -35,14 +35,15 @@ import {
 } from '@/components/ai-elements/conversation'
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
-import { useStickToBottomContext } from 'use-stick-to-bottom'
+import { useConversationScroll } from '@/components/ai-elements/conversation-scroll'
+import { ConversationFollowTrigger } from '@/components/ai-elements/conversation-follow-trigger'
+import { useCompletionTransition } from '@/hooks/useCompletionTransition'
 import { ContextDivider } from '@/components/ai-elements/context-divider'
 import {
   Reasoning,
   ReasoningTrigger,
   ReasoningContent,
 } from '@/components/ai-elements/reasoning'
-import { useSmoothStream } from '@profer/ui'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { useConversationParallelMode } from '@/hooks/useConversationSettings'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
@@ -71,75 +72,47 @@ interface ScrollTopLoaderProps {
  * 加载后恢复滚动位置，保证用户视角不变。
  */
 function ScrollTopLoader({ hasMore, loading, onLoadMore }: ScrollTopLoaderProps): React.ReactElement | null {
-  const { scrollRef } = useStickToBottomContext()
-  const triggeredRef = React.useRef(false)
-
-  // hasMore 变化时重置触发标记（例如切换对话）
-  React.useEffect(() => {
-    triggeredRef.current = false
-  }, [hasMore])
+  const { scrollRef, beginLayout, following } = useConversationScroll()
+  const loadRef = React.useRef(onLoadMore)
+  loadRef.current = onLoadMore
 
   React.useEffect(() => {
     const el = scrollRef.current
-    if (!el || !hasMore || triggeredRef.current) return
-
+    if (!el || !hasMore || following) return
+    let active = true
+    let inFlight = false
+    let armed = true
+    let frame: number | undefined
     const handleScroll = (): void => {
-      // 滚动到顶部 100px 以内时触发
-      if (el.scrollTop < 100 && !triggeredRef.current) {
-        triggeredRef.current = true
-        const prevHeight = el.scrollHeight
-
-        onLoadMore().then(() => {
-          // 加载完成后恢复滚动位置：新内容插入顶部，保持用户视角不变
-          requestAnimationFrame(() => {
-            el.scrollTop = el.scrollHeight - prevHeight
+      if (el.scrollTop >= 100) armed = true
+      if (el.scrollTop >= 100 || !armed || inFlight) return
+      armed = false
+      inFlight = true
+      const finishLayout = beginLayout()
+      void loadRef.current()
+        .then(() => {
+          if (!active) return
+          frame = requestAnimationFrame(() => {
+            if (active) finishLayout()
           })
         })
-      }
+        .catch(() => { armed = true })
+        .finally(() => { inFlight = false })
     }
-
     el.addEventListener('scroll', handleScroll, { passive: true })
-    return () => el.removeEventListener('scroll', handleScroll)
-  }, [scrollRef, hasMore, onLoadMore])
-
-  if (!hasMore) return null
-
-  if (loading) {
-    return (
-      <div className="flex justify-center py-3">
-        <Loader2 className="size-4 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
-
-  return null
-}
-
-/**
- * 新一轮对话自动跟随滚动控制器（必须渲染在 <Conversation>(=StickToBottom) 内部）。
- *
- * use-stick-to-bottom 的默认行为：一旦用户向上滚动离开底部（escapedFromLock=true），
- * isAtBottom 会保持 false 且不再自动恢复；此后即便内容高度增加，scrollToBottom 首帧
- * 也会因 `!state.isAtBottom` 直接中止，导致"翻看历史后再发新消息，界面不跟着往下走"。
- *
- * 这里在 streaming 由 false→true（新一轮对话开始）时主动调用 scrollToBottom()：
- * - scrollToBottom() 默认不带 preserveScrollPosition，会先把 isAtBottom 置回 true 并解锁锁定；
- * - 再平滑滚动回底部，让新消息与 assistant 输出持续自动跟随，符合"发新消息=回到最新内容"的用户预期。
- */
-function StreamScrollFollow({ streaming }: { streaming: boolean }): React.ReactElement | null {
-  const { scrollToBottom } = useStickToBottomContext()
-  const prevStreamingRef = React.useRef(streaming)
-
-  React.useEffect(() => {
-    const wasStreaming = prevStreamingRef.current
-    prevStreamingRef.current = streaming
-    // 仅在 streaming false → true（新一轮对话开始）时把视口拉回底部并恢复跟随。
-    if (streaming && !wasStreaming) {
-      scrollToBottom({ animation: 'smooth', wait: true })
+    return () => {
+      active = false
+      if (frame !== undefined) cancelAnimationFrame(frame)
+      el.removeEventListener('scroll', handleScroll)
     }
-  }, [streaming, scrollToBottom])
+  }, [scrollRef, hasMore, beginLayout, following])
 
-  return null
+  if (!hasMore || !loading) return null
+  return (
+    <div role="status" aria-label="正在加载历史消息" className="absolute inset-x-0 top-0 z-10 flex justify-center py-3 pointer-events-none">
+      <Loader2 className="size-4 animate-spin text-muted-foreground" />
+    </div>
+  )
 }
 
 // ===== 主组件 =====
@@ -218,55 +191,21 @@ export function ChatMessages({
   const channels = useAtomValue(channelsAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
 
-  // 平滑流式输出：将高频更新转为逐字渲染
-  const { displayedContent: rawSmoothContent } = useSmoothStream({
-    content: streamingContent,
-    isStreaming: streaming,
-  })
-  const { displayedContent: rawSmoothReasoning } = useSmoothStream({
-    content: streamingReasoning,
-    isStreaming: streaming,
-  })
-
-  // 防闪屏守卫：useSmoothStream 的内部状态通过 useEffect 更新，比 props 晚一帧。
-  // 当流式状态被清除（streamingContent 变为 ''）但 smoothContent 仍持有旧值时，
-  // 会导致持久化消息和流式气泡同时渲染一帧（重复内容闪烁）。
-  // 这里用原始 streamingContent 作为守卫：如果原始内容已清空且不在流式中，立即归零。
-  const smoothContent = (streaming || streamingContent) ? rawSmoothContent : ''
-  const smoothReasoning = (streaming || streamingReasoning) ? rawSmoothReasoning : ''
-  // 流式阶段直接显示最新 chunk，确保 Markdown renderer 能随每个增量及时更新。
-  const visibleContent = streamingContent || smoothContent
-  const visibleReasoning = streamingReasoning || smoothReasoning
+  // 原始累积内容就是可见正文，不再运行第二套逐字更新时钟。
+  const visibleContent = streamingContent
+  const visibleReasoning = streamingReasoning
   const [parallelMode] = useConversationParallelMode()
-
-  /** 是否正在加载更多历史 */
   const [loadingMore, setLoadingMore] = React.useState(false)
-
-  /**
-   * 流式完成过渡：streaming 结束到持久化消息加载完成之间，
-   * 强制 resize="instant" 避免中间高度变化触发平滑滚动动画。
-   *
-   * render-phase 计算保证第一帧就能切到 instant（不依赖 useEffect 延迟）。
-   */
-  const [transitioningCooldown, setTransitioningCooldown] = React.useState(false)
-  const wasStreamingRef = React.useRef(streaming)
-
-  const needsInstant = !streaming && (!!streamingContent || !!smoothContent)
-
+  const [loadError, setLoadError] = React.useState<string | null>(null)
+  const loadingRef = React.useRef(false)
+  const loadGeneration = React.useRef(0)
   React.useEffect(() => {
-    if (wasStreamingRef.current && !streaming) {
-      setTransitioningCooldown(true)
-    }
-    wasStreamingRef.current = streaming
-  }, [streaming])
-
-  React.useEffect(() => {
-    if (needsInstant) return
-    const timer = setTimeout(() => setTransitioningCooldown(false), 150)
-    return () => clearTimeout(timer)
-  }, [needsInstant])
-
-  const transitioning = needsInstant || transitioningCooldown
+    loadingRef.current = false
+    setLoadingMore(false)
+    setLoadError(null)
+    return () => { loadGeneration.current++ }
+  }, [conversationId])
+  const transitioning = useCompletionTransition(streaming, !!(visibleContent || visibleReasoning))
 
   // 缓存 streaming MessageHeader 的 props，避免每帧 re-render 导致闪烁
   const streamingTime = React.useMemo(
@@ -328,17 +267,30 @@ export function ChatMessages({
 
   /** 加载更多历史消息 */
   const handleLoadMore = React.useCallback(async () => {
-    if (!onLoadMore || loadingMore || !hasMore) return
-
+    if (!onLoadMore || loadingRef.current || !hasMore) return
+    const generation = loadGeneration.current
+    loadingRef.current = true
     setLoadingMore(true)
-    await onLoadMore()
-    setLoadingMore(false)
-  }, [onLoadMore, loadingMore, hasMore])
+    setLoadError(null)
+    try {
+      await onLoadMore()
+    } catch (error) {
+      if (generation === loadGeneration.current) {
+        setLoadError(error instanceof Error ? error.message : '历史消息加载失败')
+      }
+      throw error
+    } finally {
+      if (generation === loadGeneration.current) {
+        loadingRef.current = false
+        setLoadingMore(false)
+      }
+    }
+  }, [onLoadMore, hasMore])
 
   // 并排模式：自动加载全部历史消息（并排视图需要完整上下文）
   React.useEffect(() => {
     if (parallelMode && hasMore) {
-      handleLoadMore()
+      void handleLoadMore().catch(() => {})
     }
   }, [parallelMode, hasMore, handleLoadMore])
 
@@ -368,8 +320,16 @@ export function ChatMessages({
   // 并排模式
   if (parallelMode) {
     return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {loadError && (
+          <div role="alert" className="flex items-center justify-center gap-2 py-2 text-xs text-destructive">
+            <span>{loadError}</span>
+            <button type="button" disabled={loadingMore} onClick={() => { void handleLoadMore().catch(() => {}) }} className="underline disabled:opacity-50">重试</button>
+          </div>
+        )}
       <ParallelChatMessages
         messages={messages}
+        messagesLoaded={messagesLoaded}
         conversationId={conversationId}
         streaming={streaming}
         streamingContent={visibleContent}
@@ -385,6 +345,7 @@ export function ChatMessages({
         inlineEditingMessageId={inlineEditingMessageId}
         loadingMore={loadingMore}
       />
+      </div>
     )
   }
 
@@ -392,7 +353,7 @@ export function ChatMessages({
   const dividerSet = new Set(contextDividers)
 
   return (
-    <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
+    <Conversation key={conversationId} resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
       <ScrollPositionManager id={conversationId} ready={ready} />
       {/* 滚动到顶部时自动加载更多历史 */}
       <ScrollTopLoader
@@ -400,8 +361,14 @@ export function ChatMessages({
         loading={loadingMore}
         onLoadMore={handleLoadMore}
       />
-      <StreamScrollFollow streaming={streaming} />
+      <ConversationFollowTrigger sessionId={conversationId} loaded={messagesLoaded && ready} />
       <ConversationContent>
+        {loadError && (
+          <div role="alert" className="flex items-center justify-center gap-2 py-2 text-xs text-destructive">
+            <span>{loadError}</span>
+            <button type="button" disabled={loadingMore} onClick={() => { void handleLoadMore().catch(() => {}) }} className="underline disabled:opacity-50">重试</button>
+          </div>
+        )}
         {messages.length === 0 && !streaming ? (
           <EmptyState />
         ) : (
@@ -458,7 +425,7 @@ export function ChatMessages({
                     </Reasoning>
                   )}
 
-                  {/* 流式内容（经过平滑处理） */}
+                  {/* 最新流式 Markdown 正文 */}
                   {visibleContent ? (
                     <>
                       <MessageResponse>{visibleContent}</MessageResponse>

@@ -11,7 +11,7 @@ import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { MarkdownPreview, MARKDOWN_PREVIEW_LIGHT_COMPONENTS } from '@profer/ui'
 import { AlertTriangle, Search } from 'lucide-react'
-import { useStickToBottomContext } from 'use-stick-to-bottom'
+import { useConversationScroll } from './conversation-scroll'
 import { Input } from '@profer/ui/primitives/input'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
@@ -58,7 +58,7 @@ function escapeRegExp(str: string): string {
 // ── 主组件 ──
 
 export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement | null {
-  const { scrollRef, stopScroll, state: stickyState } = useStickToBottomContext()
+  const { scrollRef, contentRef, pause, navigate } = useConversationScroll()
   const [hovered, setHovered] = React.useState(false)
   const [isLeaving, setIsLeaving] = React.useState(false)
   const [visibleIds, setVisibleIds] = React.useState<Set<string>>(new Set())
@@ -120,12 +120,13 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
     el.addEventListener('scroll', update, { passive: true })
     const observer = new ResizeObserver(update)
     observer.observe(el)
+    if (contentRef.current) observer.observe(contentRef.current)
 
     return () => {
       el.removeEventListener('scroll', update)
       observer.disconnect()
     }
-  }, [scrollRef])
+  }, [scrollRef, contentRef, items])
 
   // ── 面板打开时自动聚焦搜索框 ──
 
@@ -224,21 +225,16 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
     )
     if (!target) return
 
-    stopScroll()
-    stickyState.animation = undefined
-    stickyState.velocity = 0
-    stickyState.accumulated = 0
-
     const offsetTop = getOffsetTopRelativeTo(target, el)
     const targetHeight = target.offsetHeight
     const viewportHeight = el.clientHeight
     const scrollTarget = targetHeight < viewportHeight
       ? offsetTop - (viewportHeight - targetHeight) / 2
       : offsetTop - 32
-    el.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' })
+    navigate(Math.max(0, scrollTarget))
 
     setHovered(false)
-  }, [scrollRef, stopScroll, stickyState])
+  }, [scrollRef, navigate])
 
   // ── 搜索过滤 ──
 
@@ -266,11 +262,7 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
     const track = trackRef.current
     if (!el || !track) return
 
-    // 停止 StickToBottom 自动滚动
-    stopScroll()
-    stickyState.animation = undefined
-    stickyState.velocity = 0
-    stickyState.accumulated = 0
+    pause()
 
     setIsDragging(true)
     const startY = e.clientY
@@ -285,7 +277,7 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
       ev.preventDefault()
       const delta = ev.clientY - startY
       const scrollDelta = scrollableTrack > 0 ? (delta / scrollableTrack) * scrollRange : 0
-      el.scrollTop = Math.max(0, Math.min(scrollRange, startScrollTop + scrollDelta))
+      navigate(Math.max(0, Math.min(scrollRange, startScrollTop + scrollDelta)), false)
     }
 
     const onMouseUp = (): void => {
@@ -300,10 +292,9 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
     document.body.style.cursor = 'grabbing'
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
-  }, [scrollRef, stopScroll, stickyState])
+  }, [scrollRef, pause, navigate])
 
   // ── 轨道点击跳转 ──
-
   const handleTrackMouseDown = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     // 只响应直接点击轨道背景，忽略点击滑块
     if (e.target !== e.currentTarget) return
@@ -312,17 +303,12 @@ export function ScrollMinimap({ items }: ScrollMinimapProps): React.ReactElement
     const el = scrollRef.current
     if (!track || !el) return
 
-    stopScroll()
-    stickyState.animation = undefined
-    stickyState.velocity = 0
-    stickyState.accumulated = 0
-
     const rect = track.getBoundingClientRect()
     const clickRatio = (e.clientY - rect.top) / rect.height
     const { scrollHeight, clientHeight } = el
     const targetTop = clickRatio * (scrollHeight - clientHeight)
-    el.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
-  }, [scrollRef, stopScroll, stickyState])
+    navigate(Math.max(0, targetTop))
+  }, [scrollRef, navigate])
 
   if (items.length < MIN_ITEMS || !canScroll) return null
 

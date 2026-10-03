@@ -1,11 +1,10 @@
 /**
  * AI Elements - 对话容器原语
  *
- * 基于 use-stick-to-bottom 实现自动滚动到底部的对话容器。
- * 移植自 profer-frontend 的 ai-elements/conversation.tsx。
+ * 由共享视口控制器管理跟随、阅读锚点与导航。
  *
  * 包含：
- * - Conversation — 根容器（StickToBottom）
+ * - Conversation — 根容器与滚动 context
  * - ConversationContent — 内容区域
  * - ConversationEmptyState — 空状态
  * - ConversationScrollButton — 滚动到底部按钮
@@ -16,35 +15,34 @@ import { cn } from '@/lib/utils'
 import { ArrowDownIcon } from 'lucide-react'
 import type { ComponentProps } from 'react'
 import { useCallback } from 'react'
-import { StickToBottom, useStickToBottomContext } from 'use-stick-to-bottom'
+import { ConversationScrollProvider, useConversationScroll, type ConversationScrollActions } from './conversation-scroll'
 
 // ===== Conversation 根容器 =====
 
-export type ConversationProps = ComponentProps<typeof StickToBottom>
+export interface ConversationProps extends Omit<ComponentProps<'div'>, 'children'> {
+  resize?: 'instant' | 'smooth'
+  children: React.ReactNode | ((context: ConversationScrollActions) => React.ReactNode)
+}
 
-export function Conversation({ className, ...props }: ConversationProps): React.ReactElement {
+export function Conversation({ className, children, resize = 'smooth', ...props }: ConversationProps): React.ReactElement {
   return (
-    <StickToBottom
-      className={cn('relative flex-1 overflow-y-hidden scrollbar-none', className)}
-      initial="instant"
-      resize="smooth"
-      role="log"
-      {...props}
-    />
+    <div className={cn('relative flex-1 overflow-y-hidden scrollbar-none', className)} role="log" {...props}>
+      <ConversationScrollProvider smoothResize={resize === 'smooth'}>{children}</ConversationScrollProvider>
+    </div>
   )
 }
 
 // ===== ConversationContent 内容区域 =====
 
-export type ConversationContentProps = ComponentProps<typeof StickToBottom.Content>
+export type ConversationContentProps = ComponentProps<'div'> & { scrollClassName?: string }
 
-export function ConversationContent({ className, ...props }: ConversationContentProps): React.ReactElement {
+export function ConversationContent({ className, scrollClassName, ...props }: ConversationContentProps): React.ReactElement {
+  const { scrollRef, contentRef } = useConversationScroll()
   return (
-    <StickToBottom.Content
-      scrollClassName="profer-scroll-region"
-      className={cn('flex flex-col gap-1 py-4 px-8', className)}
-      {...props}
-    />
+    <div ref={scrollRef} className={cn('profer-scroll-region overflow-y-auto', scrollClassName)}
+      style={{ height: '100%', width: '100%', scrollbarGutter: 'stable both-edges', overflowAnchor: 'none', scrollBehavior: 'auto' }}>
+      <div ref={contentRef} className={cn('flex flex-col gap-1 py-4 px-8', className)} {...props} />
+    </div>
   )
 }
 
@@ -95,17 +93,19 @@ export function ConversationScrollButton({
   className,
   ...props
 }: ConversationScrollButtonProps): React.ReactElement | null {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext()
+  const { following, follow } = useConversationScroll()
 
   const handleScrollToBottom = useCallback(() => {
-    scrollToBottom()
-  }, [scrollToBottom])
+    follow()
+  }, [follow])
 
-  if (isAtBottom) return null
+  if (following) return null
 
   return (
     <Button
       data-scroll-to-bottom
+      aria-label="回到最新消息"
+      title="回到最新消息"
       className={cn(
         'absolute bottom-[26px] left-1/2 z-50 -translate-x-1/2 rounded-[17px] size-9',
         'border-[0.5px] border-border bg-background/95 shadow-md backdrop-blur-sm',

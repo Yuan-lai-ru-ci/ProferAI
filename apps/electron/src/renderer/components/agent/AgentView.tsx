@@ -115,6 +115,7 @@ import {
   finalizeStreamingActivities,
   workspaceCapabilitiesVersionAtom,
 } from '@/atoms/agent-atoms'
+import { requestConversationFollowAtom } from '@/atoms/conversation-scroll-intents'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import { generateSummary } from '@profer/project-core'
 import { isTaskProgressTool } from './task-progress'
@@ -586,6 +587,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       })
   }, [sessionId])
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
+  const requestFollow = useSetAtom(requestConversationFollowAtom)
   // 按 sessionId 切片订阅：仅本 session 的 streaming state 变化才让 AgentView 重渲染。
   // 流式期间其他 session 的高频更新（每 token 一次）通过 base map atom 传播但派生
   // atom 输出引用未变，订阅者跳过通知。
@@ -1408,6 +1410,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         parent_tool_use_id: null,
         _createdAt: Date.now(),
       } as unknown as SDKMessage
+      requestFollow(sessionId)
       appendOptimisticPersistedMessage(tempUserSDKMsg)
 
       // 发送消息
@@ -1435,7 +1438,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories, revealRendererDraft])
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories, revealRendererDraft, requestFollow])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -1960,6 +1963,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       return
     }
     const quotedSelection = consumeQuotedSelection()
+    requestFollow(sessionId)
     setQueuedMessages((prev) => [
       ...prev,
       createAgentQueuedMessage(effectiveText, crypto.randomUUID(), Date.now(), quotedSelection),
@@ -1972,7 +1976,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       map.delete(sessionId)
       return map
     })
-  }, [consumeQuotedSelection, pendingFilesRef, sessionId, setInputContent, setInputHtmlContent, setPromptSuggestions, setQueuedMessages, suggestion])
+  }, [consumeQuotedSelection, pendingFilesRef, sessionId, setInputContent, setInputHtmlContent, setPromptSuggestions, setQueuedMessages, suggestion, requestFollow])
 
   /** 向 liveMessages 追加一条乐观用户消息 */
   const appendLiveUserMessage = React.useCallback((message: SDKMessage) => {
@@ -2050,6 +2054,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       : ''
     const payload = buildQueuedMessageSendPayload(message, quotedSelectionBlock)
     if (!payload.rawText || !agentChannelId || !hasAvailableModel) return
+    if (initiator === 'user') requestFollow(sessionId)
 
     // 会话级「待注入」中断说明前缀：任何一次发送发生时，若存在未消费的中断说明则拼到该条消息前缀并消费（只注入一次）。
     // 拼接顺序「中断说明 → 用户引用 → 用户文本」；已排队的旧消息不追溯修改。
@@ -2131,7 +2136,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime,
     streaming, backgroundWaiting, permissionMode, attachedDirs, attachedFileDirectories,
     clearStoppedByUser, queueMessageIntoActiveAgent, appendOptimisticPersistedMessage,
-    revealRendererDraft, sessionId, setStreamingStates, consumeAgentInterruptionBlock,
+    revealRendererDraft, sessionId, setStreamingStates, consumeAgentInterruptionBlock, requestFollow,
   ])
 
   /** 发送消息 */
@@ -2378,6 +2383,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     // 中断说明是会话级「待注入」前缀，空闲直发时随本条消息消费；streaming 入队分支不消费（留给队列 drain 首条）。
     const interruptionBlock = consumeAgentInterruptionBlock()
     const finalMessage = interruptionBlock + fileReferences + effectiveText
+    requestFollow(sessionId)
 
     // 清除打断状态（上一轮的打断标记不再显示）
     store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
@@ -2519,7 +2525,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         return map
       })
     })
-  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement])
+  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, queuedMessages, enqueueCurrentInput, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement, requestFollow])
 
   // ===== 运行中追加消息队列：控制与自动发送 =====
   const allPermissionRequestsForQueue = useAtomValue(allPendingPermissionRequestsAtom)
@@ -2804,6 +2810,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       .map(getUserTextFromSDKMessage)
       .find((text): text is string => text !== null)
     if (!lastUserMessage) return
+    requestFollow(sessionId)
 
     // 清除错误状态
     setAgentStreamErrors((prev) => {
@@ -2840,7 +2847,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
     }).catch(console.error)
-  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode])
+  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode, requestFollow])
 
   /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
@@ -2857,6 +2864,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
 
       // 发送引用旧会话的默认提示词，并通过 mentionedSessionIds 触发结构化会话引用注入
       const prompt = `请读取 &session:${sessionId} 的历史，然后从上个会话停止的位置继续。`
+      requestFollow(meta.id)
       const streamStartedAt = Date.now()
 
       // 初始化新会话流式状态
@@ -2886,7 +2894,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     } catch (error) {
       console.error('[AgentView] 在新会话中重试失败:', error)
     }
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, openSession, setAgentSessions, setStreamingStates, permissionMode])
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, openSession, setAgentSessions, setStreamingStates, permissionMode, requestFollow])
 
   /**
    * 分叉会话：从指定回复处重建一个独立的顶层会话并自动切换过去。

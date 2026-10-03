@@ -23,7 +23,8 @@ import { ImageLightbox } from '@profer/ui/primitives/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { TaskProgressCard } from './TaskProgressCard'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
-import { ProcessBlockGroup, buildAssistantTurnRenderItems, buildCompletedToolResultIds } from './ProcessBlockGroup'
+import { ProcessBlockGroup } from './ProcessBlockGroup'
+import { deriveAssistantTurnBlocks, buildAssistantTurnRenderItems, buildCompletedToolResultIds, type StableContentBlock } from './render-block-derivation'
 import { applyRenderWindow } from './render-window'
 import { FoldedSegmentsRegion } from './FoldedSegmentsRegion'
 import { extractToolResultText, isTaskProgressTool, parseTaskCreateResult } from './task-progress'
@@ -749,35 +750,10 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const sessionId = sessionIdProp ?? currentSessionId
   const setAgentInterruptionMap = useSetAtom(agentInterruptionMapAtom)
-  // 收集所有 assistant 消息的内容块，保留 parent_tool_use_id 关联
-  interface EnrichedBlock {
-    block: SDKContentBlock
-    parentToolUseId?: string | null
-  }
-
-  const enrichedBlocks: EnrichedBlock[] = []
-  let hasError = false
-  let errorContent: SDKAssistantMessage | null = null
-
-  for (const aMsg of turn.assistantMessages) {
-    if (aMsg.error) {
-      hasError = true
-      errorContent = aMsg
-      continue
-    }
-    const blocks = aMsg.message?.content
-    if (Array.isArray(blocks)) {
-      for (const block of blocks) {
-        for (const normalizedBlock of normalizeThinkTagsInContentBlocks([block], {
-          // 仅终态视觉兜底：若模型漏掉闭合标签，最终答复仍应作为正文显示。
-          // 流式中保留未闭合标签的既有思考渲染，等待可能随后到达的闭标签。
-          unclosedTagAsText: !isStreaming,
-        })) {
-          enrichedBlocks.push({ block: normalizedBlock, parentToolUseId: aMsg.parent_tool_use_id })
-        }
-      }
-    }
-  }
+  const { enrichedBlocks, topLevelItems, topLevelBlocks, childBlocksMap, hasError, errorContent } = React.useMemo(
+    () => deriveAssistantTurnBlocks(turn.assistantMessages, { isStreaming, getMessageIdentity: getAssistantMessageIdentity }),
+    [turn.assistantMessages, isStreaming],
+  )
 
   // 从 turnMessages 中提取 result 消息的耗时和用量
   const { durationMs, usage } = extractTurnUsage(turn.turnMessages, sessionModelId)
@@ -799,30 +775,6 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
     window.electronAPI.updateAgentInterruptionState({ sessionId, state }).catch(console.error)
   }, [sessionId, setAgentInterruptionMap])
 
-  // 构建 Agent/Task tool_use → 子代理内容块映射
-  const agentToolIds = new Set<string>()
-  for (const eb of enrichedBlocks) {
-    if (eb.block.type === 'tool_use') {
-      const tu = eb.block as { name: string; id: string }
-      if (tu.name === 'Agent' || tu.name === 'Task') {
-        agentToolIds.add(tu.id)
-      }
-    }
-  }
-
-  const childBlocksMap = new Map<string, SDKContentBlock[]>()
-  const topLevelBlocks: SDKContentBlock[] = []
-
-  for (const eb of enrichedBlocks) {
-    if (eb.parentToolUseId && agentToolIds.has(eb.parentToolUseId)) {
-      const children = childBlocksMap.get(eb.parentToolUseId) ?? []
-      children.push(eb.block)
-      childBlocksMap.set(eb.parentToolUseId, children)
-    } else {
-      topLevelBlocks.push(eb.block)
-    }
-  }
-
   // 检测是否有主要内容（text 块），用于决定 tool/thinking 是否 dimmed
   const hasTextContent = topLevelBlocks.some(
     (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text
@@ -836,13 +788,13 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
     return buildCompletedToolResultIds(turn.turnMessages)
   }, [turn.turnMessages])
   const renderItems = React.useMemo(() => {
-    return buildAssistantTurnRenderItems(topLevelBlocks, {
+    return buildAssistantTurnRenderItems(topLevelItems, {
       isStreaming,
       completedToolResultIds,
     })
-  }, [topLevelBlocks, isStreaming, completedToolResultIds])
+  }, [topLevelItems, isStreaming, completedToolResultIds])
   // 渲染窗口：过程与回复各自取尾部窗口，避免过程把回复挤出可视范围。
-  // 展开/收起的状态由 FoldedSegmentsRegion 自己持有，父组件不参与（否则外层折叠时无法重置）。
+  // 展开/收起状态属于 turn；裁剪与分组保留已派生的稳定块身份。
   const { items: windowedItems, foldedProcessItems, foldedReplyItems } = React.useMemo(
     () => applyRenderWindow(renderItems),
     [renderItems],
@@ -872,13 +824,14 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
   // 如果没有任何内容
   if (enrichedBlocks.length === 0 && !hasError) return null
 
-  const renderTopLevelBlock = (block: SDKContentBlock, i: number): React.ReactNode => {
+  const renderTopLevelBlock = (item: StableContentBlock): React.ReactNode => {
+    const { block, index: i, identity } = item
     // Task 工具块：聚合为卡片，此处用索引定位首个任务工具
     if (block.type === 'tool_use' && isTaskProgressTool((block as SDKToolUseBlock).name)) {
       if (i === firstTaskIndex) {
         return (
           <TaskProgressCard
-            key="task-progress-card"
+            key={identity}
             activities={taskActivities}
             streamEnded={!isStreaming}
             stoppedByUser={stoppedByUser}
@@ -896,24 +849,25 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
       : undefined
 
     return (
-      <ContentBlock
-        key={i}
-        block={block}
-        allMessages={allMessages}
-        basePath={basePath}
-        basePaths={basePaths}
-        animate={!!isStreaming}
-        index={i}
-        dimmed={hasTextContent && block.type !== 'text'}
-        childBlocks={childBlocks}
-        isStreaming={isStreaming}
-        showThinking={showThinking}
-      />
+      <div key={identity} className="empty:hidden" data-scroll-anchor={identity}>
+        <ContentBlock
+          block={block}
+          allMessages={allMessages}
+          basePath={basePath}
+          basePaths={basePaths}
+          animate={!!isStreaming}
+          index={i}
+          dimmed={hasTextContent && block.type !== 'text'}
+          childBlocks={childBlocks}
+          isStreaming={isStreaming}
+          showThinking={showThinking}
+        />
+      </div>
     )
   }
 
-  const renderProcessGroupBlock = (block: SDKContentBlock, i: number): React.ReactNode => {
-    return renderTopLevelBlock(block, i)
+  const renderProcessGroupBlock = (item: StableContentBlock): React.ReactNode => {
+    return renderTopLevelBlock(item)
   }
 
   return (
@@ -930,41 +884,40 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
             {windowedItems.map((item, itemIndex) => {
               if (item.type === 'block') {
                 return (
-                  <React.Fragment key={`reply-${item.item.index}`}>
+                  <React.Fragment key={item.item.identity}>
                     {itemIndex === firstReplyIndex && foldedReplyItems.length > 0 && (
                       <FoldedSegmentsRegion
                         count={foldedReplyItems.length}
                         expanded={expandedReplySegments}
                         onExpandedChange={setExpandedReplySegments}
-                        renderRevealed={() => foldedReplyItems.map((folded) => renderTopLevelBlock(folded.block, folded.index))}
+                        renderRevealed={() => foldedReplyItems.map((folded) => renderTopLevelBlock(folded))}
                       />
                     )}
-                    {renderTopLevelBlock(item.item.block, item.item.index)}
+                    {renderTopLevelBlock(item.item)}
                   </React.Fragment>
                 )
               }
 
               const groupBlocks = item.items.map((groupItem) => groupItem.block)
-              const firstIndex = item.items[0]?.index ?? 0
               return (
                 <ProcessBlockGroup
-                  key={`process-${firstIndex}`}
+                  key="process-group"
                   blocks={groupBlocks}
+                  scrollAnchorId={`${getGroupId(turn)}:process`}
                   isStreaming={isStreaming}
                   keepExpandedAfterComplete={processGroupsKeepExpanded}
                   isMessageTail={itemIndex === windowedItems.length - 1}
                 >
-                  {/* 折叠占位符放在过程组内部：外层折叠时它随之隐藏；
-                     外层重新展开时子元素已卸载并重建，展开状态自然回到折叠态。 */}
+                  {/* 折叠占位符随过程组隐藏，展开状态仍由 turn 保留。 */}
                   {foldedProcessItems.length > 0 && (
                     <FoldedSegmentsRegion
                       count={foldedProcessItems.length}
                       expanded={expandedProcessSegments}
                       onExpandedChange={setExpandedProcessSegments}
-                      renderRevealed={() => foldedProcessItems.map((folded) => renderProcessGroupBlock(folded.block, folded.index))}
+                      renderRevealed={() => foldedProcessItems.map((folded) => renderProcessGroupBlock(folded))}
                     />
                   )}
-                  {item.items.map((groupItem) => renderProcessGroupBlock(groupItem.block, groupItem.index))}
+                  {item.items.map((groupItem) => renderProcessGroupBlock(groupItem))}
                 </ProcessBlockGroup>
               )
             })}
@@ -1086,7 +1039,10 @@ export function SDKMessageRenderer({
 
     const rawBlocks = aMsg.message?.content
     if (!Array.isArray(rawBlocks) || rawBlocks.length === 0) return null
-    const blocks = normalizeThinkTagsInContentBlocks(rawBlocks)
+    const { topLevelItems: blocks } = deriveAssistantTurnBlocks([aMsg], {
+      isStreaming: true,
+      getMessageIdentity: getAssistantMessageIdentity,
+    })
     if (blocks.length === 0) return null
 
     const model = aMsg._channelModelId || aMsg.message?.model || sessionModelId
@@ -1094,7 +1050,7 @@ export function SDKMessageRenderer({
 
     // 检测是否有主要内容（text 块）
     const hasTextContent = blocks.some(
-      (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text
+      ({ block }) => block.type === 'text' && 'text' in block && !!(block as { text: string }).text
     )
 
     return (
@@ -1108,16 +1064,17 @@ export function SDKMessageRenderer({
         )}
         <MessageContent>
           <div className={cn('space-y-2')}>
-            {blocks.map((block, i) => (
-              <ContentBlock
-                key={i}
-                block={block}
-                allMessages={allMessages}
-                basePath={basePath}
-                basePaths={basePaths}
-                index={i}
-                dimmed={hasTextContent && block.type !== 'text'}
-              />
+            {blocks.map(({ block, index, identity }) => (
+              <div key={identity} className="empty:hidden" data-scroll-anchor={identity}>
+                <ContentBlock
+                  block={block}
+                  allMessages={allMessages}
+                  basePath={basePath}
+                  basePaths={basePaths}
+                  index={index}
+                  dimmed={hasTextContent && block.type !== 'text'}
+                />
+              </div>
             ))}
           </div>
         </MessageContent>
@@ -1642,6 +1599,13 @@ export interface MessageGroupRendererProps {
  */
 const messageIdCache = new WeakMap<object, string>()
 let fallbackIdCounter = 0
+
+function getAssistantMessageIdentity(message: SDKAssistantMessage): string {
+  if (!messageIdCache.has(message)) {
+    messageIdCache.set(message, `assistant-${++fallbackIdCounter}`)
+  }
+  return messageIdCache.get(message)!
+}
 
 /**
  * 从 MessageGroup 中提取稳定的 ID，用于 data-message-id 和迷你地图

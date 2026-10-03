@@ -21,17 +21,19 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
-import { useStickToBottomContext } from 'use-stick-to-bottom'
+import { useConversationScroll } from '@/components/ai-elements/conversation-scroll'
+import { ConversationFollowTrigger } from '@/components/ai-elements/conversation-follow-trigger'
+import { ConversationHistoryButton } from '@/components/ai-elements/conversation-history-button'
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { StickyUserMessage } from '@/components/ai-elements/sticky-user-message'
-import { useSmoothStream } from '@profer/ui'
+import { useCompletionTransition } from '@/hooks/useCompletionTransition'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import { allPendingAskUserRequestsAtom, resolvedBlobMessagesAtom } from '@/atoms/agent-atoms'
+import { resolvedBlobMessagesAtom } from '@/atoms/agent-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@profer/ui/primitives/spinner'
@@ -159,11 +161,11 @@ function TopHistoryLoader({
   historyMoreAvailable?: boolean
   historyLoadingEarlier?: boolean
 }): React.ReactElement | null {
-  const { scrollRef } = useStickToBottomContext()
+  const { scrollRef, beginLayout, following } = useConversationScroll()
   const armedRef = React.useRef(true)
 
   React.useEffect(() => {
-    if (!onLoadEarlierHistory) return
+    if (!onLoadEarlierHistory || following) return
     // 失败后允许用户仍停留在顶部时再次触发；成功后若仍有更早内容，
     // 也会在布局更新后的下一次 scroll 事件中继续分页。
     if (!historyLoadingEarlier && historyMoreAvailable !== false) armedRef.current = true
@@ -183,57 +185,13 @@ function TopHistoryLoader({
         armedRef.current
       ) {
         armedRef.current = false
+        beginLayout()
         onLoadEarlierHistory()
       }
     }
     el.addEventListener('scroll', handleScroll, { passive: true })
     return () => el.removeEventListener('scroll', handleScroll)
-  }, [onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, scrollRef])
-
-  return null
-}
-
-/**
- * 新一轮对话自动跟随滚动控制器（必须渲染在 <Conversation>(=StickToBottom) 内部）。
- *
- * use-stick-to-bottom 的默认行为：一旦用户向上滚动离开底部（escapedFromLock=true），
- * isAtBottom 会保持 false 且不再自动恢复；此后即便内容高度增加，scrollToBottom 首帧
- * 也会因 `!state.isAtBottom` 直接中止，导致"翻看历史后再输入新指令，界面不跟着往下走"。
- *
- * 两个触发信号，只要满足其一就主动调用 scrollToBottom()（scrollToBottom() 默认不带
- * preserveScrollPosition，会先把 isAtBottom 置回 true 并解锁锁定，再平滑滚回底部）：
- * 1. streaming 由 false→true：普通新一轮对话开始（用户发新消息）。
- * 2. 本 session 的 pending AskUser 请求由有→无：AskUserQuestion 追问已解决，
- *    agent 继续输出新内容时也要回到底部跟随（追问期间 streaming 一直保持 true，
- *    不会经历 false→true，必须用这个独立信号补）。
- */
-function StreamScrollFollow({ sessionId, streaming }: { sessionId: string; streaming: boolean }): React.ReactElement | null {
-  const { scrollToBottom } = useStickToBottomContext()
-  const pendingAskUsers = useAtomValue(allPendingAskUserRequestsAtom)
-  const prevStreamingRef = React.useRef(streaming)
-  const prevPendingCountRef = React.useRef(pendingAskUsers.get(sessionId)?.length ?? 0)
-
-  React.useEffect(() => {
-    // 信号1：streaming false → true（新一轮对话开始）
-    const wasStreaming = prevStreamingRef.current
-    prevStreamingRef.current = streaming
-    let shouldScroll = false
-
-    if (streaming && !wasStreaming) {
-      shouldScroll = true
-    }
-
-    // 信号2：本 session 的 AskUser 追问已解决（请求数由 >0 变 0）
-    const currentPendingCount = pendingAskUsers.get(sessionId)?.length ?? 0
-    if (prevPendingCountRef.current > 0 && currentPendingCount === 0) {
-      shouldScroll = true
-    }
-    prevPendingCountRef.current = currentPendingCount
-
-    if (shouldScroll) {
-      scrollToBottom({ animation: 'smooth', wait: true })
-    }
-  }, [streaming, pendingAskUsers, sessionId, scrollToBottom])
+  }, [onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, scrollRef, beginLayout, following])
 
   return null
 }
@@ -584,50 +542,19 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   const retrying = streamState?.retrying
   const startedAt = streamState?.startedAt
 
-  const { displayedContent: rawSmoothContent } = useSmoothStream({
-    content: streamingContent,
-    isStreaming: streaming,
-  })
-
-  // 流式阶段优先使用最新的原始 chunk，确保 Markdown renderer 能随每个增量及时更新。
-  const visibleContent = streamingContent || rawSmoothContent
+  // 直接使用最新 chunk；持久化完成清空时同帧移除 fallback，避免平滑队列残留。
+  const visibleContent = streamingContent
   const visibleContentBlocks = React.useMemo(() => {
     if (!visibleContent) return []
     return parseThinkTagsFromText(visibleContent)
   }, [visibleContent])
   const hasVisibleTextContent = visibleContentBlocks.some((block) => block.type === 'text')
 
-  /**
-   * 流式完成过渡：streaming 结束到持久化消息加载完成之间，
-   * 强制 resize="instant" 避免中间高度变化触发平滑滚动动画。
-   *
-   * 使用 render-phase 计算避免 useEffect 延迟一帧的问题：
-   * - streaming 变 false 的第一帧就能立即切到 instant，防止闪动
-   * - 后续通过 ref+timeout 延迟 150ms 才允许切回 smooth
-   */
-  const [transitioningCooldown, setTransitioningCooldown] = React.useState(false)
-  const wasStreamingRef = React.useRef(streaming)
-
-  // render-phase 判断：是否处于需要 instant resize 的过渡期
-  // liveMessages 非空说明持久化消息还没加载完（加载完后会清空 liveMessages）
-  const needsInstant = !streaming && (!!streamingContent || !!visibleContent || (liveMessages != null && liveMessages.length > 0))
-
-  React.useEffect(() => {
-    // 刚从 streaming → not-streaming：启动 cooldown
-    if (wasStreamingRef.current && !streaming) {
-      setTransitioningCooldown(true)
-    }
-    wasStreamingRef.current = streaming
-  }, [streaming])
-
-  React.useEffect(() => {
-    if (needsInstant) return
-    // 过渡完成后延迟 150ms 才关闭 cooldown，给 StickToBottom 时间稳定
-    const timer = setTimeout(() => setTransitioningCooldown(false), 150)
-    return () => clearTimeout(timer)
-  }, [needsInstant])
-
-  const transitioning = needsInstant || transitioningCooldown
+  // liveMessages 在持久化替换完成后清空；正文内容本身不代表仍在等待持久化。
+  const transitioning = useCompletionTransition(
+    streaming,
+    (liveMessages?.length ?? 0) > 0,
+  )
 
   // 合并持久化 + 实时 SDKMessage（供 ContentBlock 内查找工具结果）
   const allSDKMessagesMerged = React.useMemo(() => {
@@ -805,18 +732,18 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
     <FileAccessSessionProvider sessionId={sessionId}>
     <BasePathsProvider basePaths={resolvedBasePaths}>
     <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
-    <Conversation resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
+    <Conversation key={sessionId} resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
       <ScrollPositionManager id={sessionId} ready={ready} />
       <TopHistoryLoader
         onLoadEarlierHistory={onLoadEarlierHistory}
         historyMoreAvailable={historyMoreAvailable}
         historyLoadingEarlier={historyLoadingEarlier}
       />
-      <StreamScrollFollow sessionId={sessionId} streaming={streaming} />
+      <ConversationFollowTrigger sessionId={sessionId} loaded={messagesLoaded !== false && ready} />
       <ConversationContent>
         {onLoadEarlierHistory && hasContent && (
           <div className="flex justify-center py-3">
-            <button
+            <ConversationHistoryButton
               type="button"
               disabled={!historyMoreAvailable || historyLoadingEarlier}
               className="rounded-md border border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-60"
@@ -832,18 +759,18 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
               ) : (
                 '加载更早消息'
               )}
-            </button>
+            </ConversationHistoryButton>
           </div>
         )}
         {!onLoadEarlierHistory && hasEarlierGroups && (
           <div className="flex justify-center py-3">
-            <button
+            <ConversationHistoryButton
               type="button"
               className="rounded-md border border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={loadEarlierGroups}
             >
               加载更早消息（还剩 {resolvedVisibleGroupStart} 组）
-            </button>
+            </ConversationHistoryButton>
           </div>
         )}
         {!hasContent && !streaming && runningDelegationCount === 0 ? (

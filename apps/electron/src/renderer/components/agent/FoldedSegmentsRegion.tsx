@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useOptionalConversationScroll } from '@/components/ai-elements/conversation-scroll'
 
 /**
  * 找到最近的纵向可滚动祖先。
@@ -44,17 +45,22 @@ export function FoldedSegmentsRegion({ count, renderRevealed, expanded, onExpand
   const [internalRevealed, setInternalRevealed] = React.useState(false)
   const revealed = expanded ?? internalRevealed
   const anchorRef = React.useRef<HTMLDivElement>(null)
-  const pendingRef = React.useRef<{ top: number; scroller: HTMLElement } | null>(null)
+  const scroll = useOptionalConversationScroll()
+  const pendingRef = React.useRef<{ top: number; scroller: HTMLElement; finish?: () => void } | null>(null)
 
   const toggle = React.useCallback((next: boolean) => {
     const anchor = anchorRef.current
     const scroller = findScrollParent(anchor)
     if (anchor && scroller) {
-      pendingRef.current = { top: anchor.getBoundingClientRect().top, scroller }
+      pendingRef.current = {
+        top: anchor.getBoundingClientRect().top,
+        scroller,
+        finish: scroll?.beginLayout(anchor),
+      }
     }
     if (expanded === undefined) setInternalRevealed(next)
     onExpandedChange?.(next)
-  }, [expanded, onExpandedChange])
+  }, [expanded, onExpandedChange, scroll])
 
   // 无依赖数组：每次渲染后检查是否有待补偿的滚动量。
   // useLayoutEffect 在 DOM 变更后、浏览器 paint 前同步执行，不会看到跳动。
@@ -64,6 +70,10 @@ export function FoldedSegmentsRegion({ count, renderRevealed, expanded, onExpand
     pendingRef.current = null
     const anchor = anchorRef.current
     if (!anchor) return
+    if (pending.finish) {
+      pending.finish()
+      return
+    }
     const delta = anchor.getBoundingClientRect().top - pending.top
     if (delta !== 0) pending.scroller.scrollTop += delta
   })

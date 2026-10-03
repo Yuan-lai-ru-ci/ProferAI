@@ -7,7 +7,7 @@
  * 本模块只做「渲染裁剪」，不改动底层数据，也不影响任何派生计算（任务映射、迷你地图等）。
  * 展开/收起属于渲染层职责，这里只负责把被折叠的段原样交出去。
  */
-import type { AssistantTurnRenderItem, IndexedContentBlock } from './ProcessBlockGroup'
+import type { AssistantTurnRenderItem, IndexedContentBlock } from './render-block-derivation'
 
 /** 段窗口配置；过程与回复分别计数 */
 export interface RenderWindowLimits {
@@ -23,13 +23,13 @@ export const DEFAULT_RENDER_WINDOW: RenderWindowLimits = {
   processSegments: 20,
 }
 
-export interface WindowedTurnItems {
+export interface WindowedTurnItems<T extends IndexedContentBlock = IndexedContentBlock> {
   /** 窗口内的渲染项（保持原顺序） */
-  items: AssistantTurnRenderItem[]
+  items: AssistantTurnRenderItem<T>[]
   /** 过程区被折叠的段（最早的若干段，按原顺序） */
-  foldedProcessItems: IndexedContentBlock[]
+  foldedProcessItems: T[]
   /** 回复区被折叠的段（按原顺序） */
-  foldedReplyItems: IndexedContentBlock[]
+  foldedReplyItems: T[]
 }
 
 /**
@@ -39,10 +39,10 @@ export interface WindowedTurnItems {
  * - 过程与回复独立计数，互不挤占
  * - 不修改入参，返回新数组
  */
-export function applyRenderWindow(
-  items: AssistantTurnRenderItem[],
+export function applyRenderWindow<T extends IndexedContentBlock>(
+  items: AssistantTurnRenderItem<T>[],
   limits: RenderWindowLimits = DEFAULT_RENDER_WINDOW,
-): WindowedTurnItems {
+): WindowedTurnItems<T> {
   const processLimit = Math.max(0, limits.processSegments)
   const replyLimit = Math.max(0, limits.replySegments)
 
@@ -53,12 +53,12 @@ export function applyRenderWindow(
   }
   const replyKeepFrom = Math.max(0, replyIndexes.length - replyLimit)
   const visibleReplyIndexes = new Set(replyIndexes.slice(replyKeepFrom))
-  const foldedReplyItems: IndexedContentBlock[] = replyIndexes
+  const foldedReplyItems: T[] = replyIndexes
     .slice(0, replyKeepFrom)
-    .map((index) => (items[index] as { type: 'block'; item: IndexedContentBlock }).item)
+    .map((index) => (items[index] as { type: 'block'; item: T }).item)
 
-  const windowed: AssistantTurnRenderItem[] = []
-  let foldedProcessItems: IndexedContentBlock[] = []
+  const windowed: AssistantTurnRenderItem<T>[] = []
+  let foldedProcessItems: T[] = []
 
   for (let index = 0; index < items.length; index++) {
     const item = items[index]!
