@@ -4,7 +4,8 @@
  * 支持三种内容块类型：
  * - text: 通过 MessageResponse 渲染 Markdown
  * - tool_use: 语义化短语行（如 "读取 foo.ts 第 10-60 行"），展开显示结构化结果
- * - thinking: Claude 等提供可读 thinking 时展示；Pi/GPT 的内部概览由上层过滤，不渲染思考框
+ * - thinking: 模型提供可读 thinking 时展示；只回摘要型 reasoning 的内核+模型组合
+ *   （Pi 内核上的 GPT/Codex 系，见 shouldShowAgentThinking）由上层过滤，不渲染思考框
  */
 
 import * as React from 'react'
@@ -223,7 +224,7 @@ export interface ContentBlockProps {
   childBlocks?: SDKContentBlock[]
   /** 是否正在流式输出中（仅流式中的未完成工具调用才显示 spinner） */
   isStreaming?: boolean
-  /** 是否展示模型返回的 thinking 内容；Pi/GPT 当前仅返回不可读的内部概览时关闭。 */
+  /** 是否展示模型返回的 thinking 内容；只回摘要型 reasoning 的内核+模型组合由上层关闭。 */
   showThinking?: boolean
 }
 

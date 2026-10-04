@@ -45,6 +45,11 @@ function sanitizeQuotedText(value: string): string {
 export function buildQuotedSelectionBlock(quotedSelection: QuotedSelection): string {
   const safeText = sanitizeQuotedText(quotedSelection.text)
 
+  if (quotedSelection.sourceType === 'visualization' && quotedSelection.visualization) {
+    const quote = quotedSelection.visualization
+    return `<quoted_context source="visualization" label="${escapeXmlAttribute(quotedSelection.sourceLabel ?? quote.label)}" visualization_id="${escapeXmlAttribute(quote.visualizationId)}" revision="${escapeXmlAttribute(quote.revision)}" object_id="${escapeXmlAttribute(quote.objectId)}">\n${safeText}\n</quoted_context>\n\n`
+  }
+
   if (quotedSelection.sourceType && quotedSelection.sourceType !== 'file') {
     const safeSource = escapeXmlAttribute(quotedSelection.sourceType)
     const safeLabel = escapeXmlAttribute(quotedSelection.sourceLabel ?? quotedSelection.filePath)
@@ -58,6 +63,7 @@ export function buildQuotedSelectionBlock(quotedSelection: QuotedSelection): str
 }
 
 function normalizeContextSourceType(value: string | undefined): QuotedSelectionSourceType {
+  if (value === 'visualization') return 'visualization'
   if (value === 'scratch-pad') return 'scratch-pad'
   if (value === 'agent-interruption') return 'agent-interruption'
   return 'agent-history'

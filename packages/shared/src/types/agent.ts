@@ -669,6 +669,7 @@ export type ProferEvent =
   | { type: 'context_window'; contextWindow: number }
   | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
   | { type: 'image_generation_updated'; sessionId: string; record: AgentImageGenerationCard }
+  | { type: 'visualization_updated'; sessionId: string; record: import('./visualization').VisualizationRecord }
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta; initiator?: AgentRunInitiator }
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }

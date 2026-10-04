@@ -189,7 +189,8 @@
     "iconv-lite": "^0.6.3",
     "mammoth": "^1.12.0",
     "react-arborist": "3.15.0",
-    "typebox": "1.1.38"
+    "typebox": "1.1.38",
+    "echarts": "6.1.0"
   },
   "electronmon": {
     "patterns": [

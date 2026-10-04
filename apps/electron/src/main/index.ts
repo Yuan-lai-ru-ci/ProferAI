@@ -763,6 +763,11 @@ function createWindow(): void {
     return null
   }
 
+  // 内联可视化只能运行 srcDoc；阻止脚本 location 导航，不外发生成页面的 URL。
+  mainWindow.webContents.on('will-frame-navigate', (event) => {
+    if (!event.isMainFrame && (event.frame?.url === 'about:srcdoc' || event.frame?.name.startsWith('profer-visualization:'))) event.preventDefault()
+  })
+
   // 拦截页面内导航，外部链接用系统浏览器打开，防止 Electron 窗口被覆盖
   mainWindow.webContents.on('will-navigate', (event, url) => {
     // 允许开发模式下的 Vite HMR 热重载

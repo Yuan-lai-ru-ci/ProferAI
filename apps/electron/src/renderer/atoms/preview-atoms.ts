@@ -50,10 +50,12 @@ export const autoPreviewEnabledAtom = atomWithStorage<boolean>('profer-auto-prev
 // ===== 引用选中文本（Quoted Selection）=====
 
 /** 选中文本引用的来源 */
-export type QuotedSelectionSourceType = 'file' | 'agent-history' | 'scratch-pad' | 'agent-interruption'
+export type QuotedSelectionSourceType = 'file' | 'agent-history' | 'scratch-pad' | 'agent-interruption' | 'visualization'
 
 /** 从预览面板或 Agent 历史中选中的文本引用 */
 export interface QuotedSelection {
+  /** 可视化对象引用绑定不可变修订，兼容现有输入/队列引用快照。 */
+  visualization?: import('@profer/shared').VisualizationQuote
   /** 选中的文本内容 */
   text: string
   /** 来源文件路径；历史引用时作为兼容展示字段 */

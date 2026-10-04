@@ -291,6 +291,8 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     channelId: 'ch-1',
     workspaceId: 'ws-1',
     workspaceSlug: 'prune-ws',
+    // 可视化记录存储根与工作区分离（配置目录）；缺失时可视化工具不注册。
+    visualizationStorageDir: 'C:/safe/agent-visualizations/prune-test',
     triggeredBy: 'user' as const,
   }
 
@@ -298,6 +300,10 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, { ...baseCtx, agentCwd: 'C:/safe/session', allowedRoots: ['C:/safe/attached'] })
 
+    expect(tools.find((tool) => tool.name === 'present_visualization')).toBeDefined()
+    expect(tools.find((tool) => tool.name === 'inspect_visualization')).toBeDefined()
+    expect(tools.find((tool) => tool.name === 'present_visualization')!.description).toContain('stateUpdated')
+    expect(JSON.stringify(tools.find((tool) => tool.name === 'present_visualization')!.parameters)).toContain('baseRevision')
     const imageTool = tools.find((tool) => tool.name === 'send_local_image')
     const previewTool = tools.find((tool) => tool.name === 'inspect_preview')
     const openPreviewTool = tools.find((tool) => tool.name === 'open_file_preview')
@@ -350,6 +356,8 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, { ...baseCtx, workspaceSlug: undefined, agentCwd: 'C:/Users/test', allowedRoots: [] })
 
+    expect(tools.some((tool) => tool.name === 'present_visualization')).toBe(false)
+    expect(tools.some((tool) => tool.name === 'inspect_visualization')).toBe(false)
     expect(tools.some((tool) => tool.name === 'send_local_image')).toBe(false)
     expect(tools.some((tool) => tool.name === 'inspect_preview')).toBe(true)
   })
@@ -407,7 +415,7 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     const cases = [
       { group: 'browser', names: ['BrowserObserve', 'BrowserNavigate'] },
       { group: 'clipboard', names: ['clipboard_read_text', 'clipboard_write_text'] },
-      { group: 'preview', names: ['inspect_preview', 'open_file_preview', 'inspect_file_preview'] },
+      { group: 'preview', names: ['inspect_preview', 'open_file_preview', 'inspect_file_preview', 'present_visualization', 'inspect_visualization'] },
       { group: 'image', names: ['send_local_image', 'generate_image', 'create_skin'] },
       { group: 'web', names: ['WebSearch', 'WebFetch'] },
     ] as const

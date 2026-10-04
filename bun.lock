@@ -122,6 +122,7 @@
         "concurrently": "^9.2.1",
         "dingtalk-stream-sdk-nodejs": "^2.0.4",
         "dompurify": "^3.4.5",
+        "echarts": "6.1.0",
         "electron": "^43.2.0",
         "electron-builder": "^25.1.8",
         "electron-updater": "^6.8.9",

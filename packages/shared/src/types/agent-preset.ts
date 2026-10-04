@@ -245,6 +245,8 @@ export const AGENT_PRESET_CAPABILITY_GROUPS = [
       capabilityTool('inspect_preview', '检查文件预览', '读取授权文件的内容或视觉预览'),
       capabilityTool('open_file_preview', '打开正式预览', '在用户可见 viewer 中打开文件', 'external'),
       capabilityTool('inspect_file_preview', '检查页级预览', '读取用户可见 viewer 的页级结果'),
+      capabilityTool('present_visualization', '会话内可视化', '保存并在会话内呈现交互式可视结果', 'write'),
+      capabilityTool('inspect_visualization', '读取可视化', '读取当前会话的可视化修订与对象'),
     ],
   }),
   capabilityGroup({

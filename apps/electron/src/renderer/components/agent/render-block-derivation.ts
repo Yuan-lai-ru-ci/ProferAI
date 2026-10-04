@@ -107,11 +107,17 @@ export interface IndexedContentBlock {
 
 export type AssistantTurnRenderItem<T extends IndexedContentBlock = IndexedContentBlock> =
   | { type: 'block'; item: T }
+  | { type: 'visualization'; record: import('@profer/shared').VisualizationRecord; identity: string }
   | { type: 'process-group'; items: T[] }
 
 interface BuildAssistantTurnRenderItemsOptions {
   isStreaming?: boolean
   completedToolResultIds?: Set<string>
+  /**
+   * 上层是否展示 thinking 块；显式 false 时把 thinking 从可见块里剔除。
+   * 缺省 true 保持旧行为（不传的调用方不受影响）。
+   */
+  showThinking?: boolean
 }
 
 export function buildCompletedToolResultIds(turnMessages: SDKMessage[]): Set<string> {
@@ -147,8 +153,9 @@ interface TrailingOutputSplit {
  * 这两种情况下正文才是应当直接可见的交付内容，必须外置；末尾 thinking 归入过程组。
  * 若正文之后还跟着 tool_use 等块，说明这段 text 更可能是给工具看的中间说明，保持整组折叠。
  *
- * 注意：Pi runtime 下 thinking 块不渲染（showThinking={agentRuntime !== 'pi'}），
- * 一旦正文被一起折叠，用户会看到整轮只剩「执行过程：N 条消息」一行、正文彻底看不见。
+ * 注意：部分内核+模型组合下 thinking 块不渲染（Pi 内核上只回摘要的 GPT/Codex 系，
+ * 见 shouldShowAgentThinking）。一旦正文被一起折叠，用户会看到整轮只剩「执行过程：N 条消息」
+ * 一行、正文彻底看不见。
  */
 function getTrailingOutputSplit(blocks: SDKContentBlock[]): TrailingOutputSplit | null {
   let textEndIndex = -1
@@ -223,7 +230,13 @@ export function buildAssistantTurnRenderItems(
       if ('block' in entry && 'identity' in entry && 'index' in entry) return entry as StableContentBlock
       return { block: entry as SDKContentBlock, index }
     })
-    .filter(({ block }) => block.type !== 'tool_use' || !isGoalUpdateToolName((block as SDKToolUseBlock).name))
+    .filter(({ block }) => {
+      if (block.type === 'tool_use' && isGoalUpdateToolName((block as SDKToolUseBlock).name)) return false
+      // 上层已判定不展示思考（Pi 内核上只回摘要的 GPT/Codex 系）时，必须在派生阶段就剔除 thinking：
+      // 否则过程组会把它算进「执行过程：N 条消息」，展开后却什么都渲染不出来。
+      if (block.type === 'thinking' && options.showThinking === false) return false
+      return true
+    })
   if (visibleBlocks.length === 0) return []
   const renderBlocks = visibleBlocks.map(({ block }) => block)
 

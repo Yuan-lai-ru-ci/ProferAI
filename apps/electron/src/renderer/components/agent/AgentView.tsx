@@ -3386,7 +3386,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
                 {currentQuotedSelection && (
                   <QuotedSelectionChip
                     text={currentQuotedSelection.text}
-                    filePath={currentQuotedSelection.filePath}
+                    filePath={currentQuotedSelection.sourceLabel ?? currentQuotedSelection.filePath}
                     onRemove={handleRemoveQuotedSelection}
                   />
                 )}

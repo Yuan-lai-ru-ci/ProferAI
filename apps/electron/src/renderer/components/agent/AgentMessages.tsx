@@ -6,7 +6,8 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useStore, useAtomValue, useSetAtom } from 'jotai'
+import { visualizationsAtom, updateVisualizationSessionCache } from '@/atoms/visualization-atoms'
 import { Bot, RotateCw, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
@@ -48,7 +49,7 @@ import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import type { AgentEventUsage, RetryAttempt, SDKMessage, AgentImageGenerationCard, AgentRuntime } from '@profer/shared'
-import { isGoalIterationMessage } from '@profer/shared'
+import { isGoalIterationMessage, shouldShowAgentThinking } from '@profer/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { AgentImageGenerationCardView } from './AgentImageGenerationCard'
 import { getPendingImageGenerationCards, mergeAgentImageGenerationTimeline } from './agent-image-generation-timeline'
@@ -104,7 +105,7 @@ interface AgentMessagesProps {
   sessionId: string
   /** 用户在前端选择的模型 ID（用于显示渠道配置的 Model Name） */
   sessionModelId?: string
-  /** 当前 Agent runtime；Pi/GPT 的 reasoning 仅作为执行状态，不展示不可读的概览文本。 */
+  /** 当前 Agent runtime；与渠道 provider 一同决定 thinking 块是否渲染（见 shouldShowAgentThinking）。 */
   agentRuntime?: AgentRuntime
   /** 消息是否已完成首次加载 */
   messagesLoaded?: boolean
@@ -488,6 +489,16 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
 }
 
 export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true }: AgentMessagesProps): React.ReactElement {
+  const store = useStore()
+  React.useEffect(() => {
+    if (!window.electronAPI?.listVisualizations) return
+    let cancelled = false
+    window.electronAPI.listVisualizations(sessionId).then((records) => {
+      if (cancelled) return
+      store.set(visualizationsAtom, (previous) => updateVisualizationSessionCache(previous, sessionId, records))
+    }).catch((error: unknown) => console.error('[可视化] 加载结果失败:', error))
+    return () => { cancelled = true }
+  }, [sessionId, store])
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -541,6 +552,19 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   const agentStreamingModel = streamingModelId ? resolveModelDisplayName(streamingModelId, channels) : undefined
   const retrying = streamState?.retrying
   const startedAt = streamState?.startedAt
+
+  // 是否渲染模型的 thinking 块。
+  // 早期实现是 `agentRuntime !== 'pi'`：它把「内核」当成了「模型能力」，在 Pi 内核只承载
+  // GPT/Codex 的年代等价于「摘要型 reasoning 不展示」，但 Pi 后来接管了 deepseek / kimi /
+  // GLM / qwen 等可读 CoT 模型，一刀切会让这些模型的思考被整轮折叠进「执行过程」而看不到。
+  const showThinking = React.useMemo(
+    () => shouldShowAgentThinking({
+      agentRuntime,
+      provider: streamingModelId ? resolveModelProvider(streamingModelId, channels) : undefined,
+      modelId: streamingModelId,
+    }),
+    [agentRuntime, streamingModelId, channels],
+  )
 
   // 直接使用最新 chunk；持久化完成清空时同帧移除 fallback，避免平滑队列残留。
   const visibleContent = streamingContent
@@ -812,7 +836,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                   isStreaming={isLive || undefined}
                   stoppedByUser={isLastAssistantTurn || undefined}
                   sessionModelId={sessionModelId}
-                  showThinking={agentRuntime !== 'pi'}
+                  showThinking={showThinking}
                   isLatestAssistantTurn={isLatestAssistantTurn}
                 />
               )
@@ -852,7 +876,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                             index={index}
                             dimmed={hasVisibleTextContent && block.type !== 'text'}
                             isStreaming={streaming}
-                            showThinking={agentRuntime !== 'pi'}
+                            showThinking={showThinking}
                           />
                         ))}
                       </div>

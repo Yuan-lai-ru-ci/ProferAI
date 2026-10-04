@@ -34,21 +34,27 @@ const PROCESS_GROUP_AUTO_COLLAPSE_COUNTDOWN_SECONDS = 3
 export { buildAssistantTurnRenderItems, buildCompletedToolResultIds } from './render-block-derivation'
 export type { AssistantTurnRenderItem, IndexedContentBlock } from './render-block-derivation'
 
-function buildProcessGroupSummary(blocks: SDKContentBlock[]): string {
+export function buildProcessGroupSummary(blocks: SDKContentBlock[]): string {
   let toolCount = 0
+  let thinkingCount = 0
   let messageCount = 0
 
   for (const block of blocks) {
     if (block.type === 'tool_use') {
       if (isGoalUpdateToolName((block as SDKToolUseBlock).name)) continue
       toolCount += 1
-    } else if (block.type === 'thinking' || block.type === 'text') {
+    } else if (block.type === 'thinking') {
+      // 思考与正文分开计数：思考是可读 CoT 时的主内容，笼统写「消息」会让用户
+      // 在过程组里找不到自己期待的思考块（历史上就出现过「N 条消息」展开却空无一物）。
+      thinkingCount += 1
+    } else if (block.type === 'text') {
       messageCount += 1
     }
   }
 
   const parts: string[] = []
   if (toolCount > 0) parts.push(`${toolCount} 次工具调用`)
+  if (thinkingCount > 0) parts.push(`${thinkingCount} 段思考`)
   if (messageCount > 0) parts.push(`${messageCount} 条消息`)
   const summary = parts.join('，') || '过程'
   return `执行过程：${summary}`

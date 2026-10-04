@@ -289,6 +289,7 @@ import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
+import { registerVisualizationIpc } from './lib/visualization-ipc'
 import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
 import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getScratchPadPath, getCustomSoundsDir, getAgentWorkspacePath } from './lib/config-paths'
@@ -1280,6 +1281,8 @@ export function registerIpcHandlers(): void {
     return
   }
   _ipcHandlersRegistered = true
+
+  registerVisualizationIpc({ getMainWindow: mainWindowGetter })
 
   restoreGoalStatesOnce()
 

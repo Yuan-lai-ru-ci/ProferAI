@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import * as React from 'react'
-import { ProcessBlockGroup, buildAssistantTurnRenderItems, buildProcessGroupToolNames } from './ProcessBlockGroup'
+import { ProcessBlockGroup, buildAssistantTurnRenderItems, buildProcessGroupSummary, buildProcessGroupToolNames } from './ProcessBlockGroup'
 import { applyRenderWindow } from './render-window'
 import type { SDKContentBlock } from '@profer/shared'
 
@@ -252,6 +252,21 @@ describe('Agent 过程块折叠分组', () => {
     ])
 
     expect(toolNames).toEqual(['Grep', 'Read', 'Bash'])
+  })
+
+  test('given 只含思考的过程组 when 生成摘要 then 标为思考而非「消息」', () => {
+    expect(buildProcessGroupSummary([thinking()])).toBe('执行过程：1 段思考')
+    expect(buildProcessGroupSummary([thinking(), thinking('补充')])).toBe('执行过程：2 段思考')
+  })
+
+  test('given 思考、工具与中间说明混排 when 生成摘要 then 三类分别计数且顺序固定', () => {
+    expect(buildProcessGroupSummary([
+      thinking(),
+      tool('tool-1'),
+      text('中间说明'),
+      // Goal 内部状态工具不算普通工具过程（唯一被排除的工具名）。
+      tool('tool-2', 'update_goal'),
+    ])).toBe('执行过程：1 次工具调用，1 段思考，1 条消息')
   })
 })
 

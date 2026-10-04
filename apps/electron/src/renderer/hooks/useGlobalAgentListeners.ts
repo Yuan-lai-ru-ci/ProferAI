@@ -9,6 +9,7 @@
 
 import { useEffect } from 'react'
 import { agentGoalsAtom, hydrateAgentGoalsAtom, mergeAgentGoalAtom } from '@/atoms/goal-atoms'
+import { visualizationsAtom, updateVisualizationSessionCache } from '@/atoms/visualization-atoms'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useStore } from 'jotai'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
@@ -825,6 +826,8 @@ export function useGlobalAgentListeners(): void {
               next.set(sessionId, upsertAgentImageGeneration(previous.get(sessionId) ?? [], proferEvent.record))
               return next
             })
+          } else if (proferEvent.type === 'visualization_updated' && proferEvent.sessionId === sessionId && proferEvent.record.sessionId === sessionId) {
+            store.set(visualizationsAtom, (previous) => updateVisualizationSessionCache(previous, sessionId, [proferEvent.record]))
           } else if (proferEvent.type === 'external_run_started') {
             activateExternalAgentRun(proferEvent)
           } else if (proferEvent.type === 'delegation_session_updated' || proferEvent.type === 'session_updated') {

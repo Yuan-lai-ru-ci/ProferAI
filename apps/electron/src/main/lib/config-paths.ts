@@ -384,6 +384,27 @@ export function getPiCheckpointsDir(): string {
 }
 
 /**
+ * 某个 Agent 会话的可视化记录存储根（纯路径，不创建目录）。
+ *
+ * 刻意放在配置目录而不是会话工作区：可视化记录是会话产物，属于不可回退数据。
+ * 若落在会话工作区（曾经的 `.context/visualizations/`），文件检查点会把基线之后新增的
+ * 记录当成“本轮新增文件”，一次回退就会把残留历史引用着的记录删掉。
+ * 放在配置目录后，回退、工作区清理、fork 复制和 Agent 自己的文件工具都不会再碰它。
+ *
+ * 目录由存储层在首次发布可视化时才创建，避免列目录/建工具上下文就凭空多出空目录。
+ *
+ * @param sessionId 会话 ID（仅允许 [A-Za-z0-9_-]，防止路径逃逸）
+ * @returns ~/.profer/agent-visualizations/{sessionId}/
+ */
+export function agentSessionVisualizationsDir(sessionId: string): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) {
+    throw new Error(`可视化存储会话 ID 非法: ${sessionId}`)
+  }
+
+  return join(getConfigDir(), 'agent-visualizations', sessionId)
+}
+
+/**
  * 获取 Agent 工作区索引文件路径
  *
  * @returns ~/.profer/agent-workspaces.json

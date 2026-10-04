@@ -1,0 +1,65 @@
+import { describe, expect, test } from 'bun:test'
+import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { validateChart, validateFragment } from './visualization-validation'
+import { presentVisualization, readVisualization, listVisualizations } from './visualization-records'
+import { buildVisualizationExport } from './visualization-export'
+import { buildChartOption, init } from '../../shared/visualization-chart'
+import type { VisualizationChartSpec } from '@profer/shared'
+
+const bar: VisualizationChartSpec = { chartType: 'bar', xKey: 'name', series: [{ dataKey: 'value', label: '金额' }], data: [{ name: 'A', value: 20 }, { name: 'B', value: -10 }] }
+describe('宿主图表双路径', () => {
+  test('标准规格拒绝代码/任意选项/非有限数值/原型与映射错误', () => {
+    expect(validateChart(bar)).toEqual(bar)
+    for (const invalid of [{ ...bar, option: {} }, { ...bar, data: [{ name: 'A', value: NaN }] }, { ...bar, data: [{ name: 'A', value: 1e100 }] }, { ...bar, xKey: 'missing' }, { ...bar, series: [{ dataKey: 'value' }, { dataKey: 'value' }] }, { ...bar, chartType: 'scatter' }, { ...bar, data: [JSON.parse('{"name":"A","value":1,"__proto__":1}')] }]) expect(() => validateChart(invalid)).toThrow()
+    expect(() => validateChart({ ...bar, series: [{ dataKey: 'value', label: '重复' }, { dataKey: 'other', label: '重复' }] })).toThrow('图例')
+    expect(() => validateChart({ ...bar, chartType: 'pie', nameKey: 'name', valueKey: 'value', data: [{ name: 'A', value: 1 }, { name: 'A', value: 2 }] })).toThrow('分类')
+    expect(() => validateChart({ ...bar, chartType: 'pie', nameKey: 'name', valueKey: 'value' })).toThrow()
+  })
+  test('严格片段接受局部JS，拒绝网页外壳和内联事件', () => {
+    validateFragment('<div id="widget"><button class="btn">切换</button></div><script>document.querySelector("button").addEventListener("click",()=>{});</script>')
+    expect(() => validateFragment('<html><body>page</body></html>')).toThrow('页面外壳')
+    expect(() => validateFragment('<button onclick="alert(1)">Click</button>')).toThrow('内联事件')
+  })
+  test('无源文件发布图表，CAS更新可读旧版本，导出包含SVG且转义数据', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'profer-native-chart-'))
+    const root = join(base, 'session-workspace')
+    const store = join(base, 'agent-visualizations', 's1')
+    await mkdir(root, { recursive: true })
+    try {
+      const context = { sessionId: 's1', agentCwd: root, storageDir: store, allowedRoots: [] }
+      const first = await presentVisualization({ chart: bar, title: '对比', summary: '数据' }, context, 'call1')
+      expect(first.format).toBe('chart')
+      expect(first.objects[0]?.id).toBe('row-0')
+      expect((await listVisualizations(context))).toHaveLength(1)
+      const content = await readVisualization(context, first.id)
+      expect(content.html).toBe('')
+      expect(content.record.chart).toEqual(bar)
+      const second = await presentVisualization({ chart: { ...bar, chartType: 'line' }, title: '更新', summary: '数据', visualizationId: first.id, baseRevision: first.revision }, context, 'call2')
+      expect(second.recordVersion).toBe(2)
+      expect((await readVisualization(context, first.id, first.revision)).record.chart?.chartType).toBe('bar')
+      const exported = buildVisualizationExport({ ...content, record: { ...content.record, title: '<script>alert(1)</script>' } }, {})
+      expect(exported).toContain('<svg')
+      expect(exported).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+      const filePath = join(root, 'view.html'); await writeFile(filePath, '<div id="widget">Fragment</div>')
+      expect((await presentVisualization({ filePath, format: 'fragment', title: '片段', summary: '说明' }, context, 'call3')).format).toBe('fragment')
+      await expect(presentVisualization({ chart: bar, filePath, title: '重复', summary: '错误' }, context, 'call4')).rejects.toThrow('只能')
+      const revisionFile = join(context.storageDir, second.id, 'revisions', `${second.revision}.json`)
+      const json = JSON.parse(await Bun.file(revisionFile).text()); json.chart.data[0].value = 99; await writeFile(revisionFile, JSON.stringify(json))
+      await expect(readVisualization(context, first.id, second.revision)).rejects.toThrow('损坏')
+    } finally { await rm(base, { recursive: true }) }
+  })
+  test('四种图表使用成熟引擎生成非空SVG，bar负值不会截断', () => {
+    const option = buildChartOption(bar, { foreground: '#111', muted: '#777', border: '#ddd', background: '#fff' })
+    expect((option.yAxis as { min?: number }).min).toBeUndefined()
+    const theme = { foreground: '#111', muted: '#777', border: '#ddd', background: '#fff' }
+    const positive = { ...bar, data: [{ name: 'A', value: 20 }] }
+    expect((buildChartOption(positive, theme).yAxis as { min?: number }).min).toBe(0)
+    expect((buildChartOption({ ...positive, layout: 'vertical' }, theme).xAxis as { min?: number }).min).toBe(0)
+    for (const spec of [bar, { ...bar, chartType: 'line' as const }, { ...bar, chartType: 'pie' as const, nameKey: 'name', valueKey: 'value', data: [{ name: 'A', value: 20 }, { name: 'B', value: 10 }] }, { ...bar, chartType: 'scatter' as const, data: [{ name: 1, value: 20 }, { name: 2, value: 10 }] }]) {
+      const chart = init(null, undefined, { renderer: 'svg', ssr: true, width: 600, height: 340 })
+      try { chart.setOption(buildChartOption(spec, { foreground: '#111', muted: '#777', border: '#ddd', background: '#fff' })); expect(chart.renderToSVGString()).toContain('<path') } finally { chart.dispose() }
+    }
+  })
+})

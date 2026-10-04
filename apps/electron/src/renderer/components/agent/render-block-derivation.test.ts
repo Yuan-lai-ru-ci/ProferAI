@@ -5,6 +5,7 @@ import { applyRenderWindow } from './render-window'
 
 const text = (value: string): SDKContentBlock => ({ type: 'text', text: value })
 const tool = (id: string, name = 'Read'): SDKContentBlock => ({ type: 'tool_use', id, name, input: {} })
+const thinking = (value = '分析中'): SDKContentBlock => ({ type: 'thinking', thinking: value })
 const message = (uuid: string, content: SDKContentBlock[], extra: Partial<SDKAssistantMessage> = {}): SDKAssistantMessage => ({
   type: 'assistant', uuid, message: { content }, parent_tool_use_id: null, ...extra,
 })
@@ -86,7 +87,7 @@ describe('窗口与分组保留派生身份', () => {
     const first = render(20)
     const second = render(21)
     const third = render(22)
-    const groupItems = (result: ReturnType<typeof render>) => result.items.flatMap((item) => item.type === 'block' ? [item.item] : item.items)
+    const groupItems = (result: ReturnType<typeof render>) => result.items.flatMap((item) => item.type === 'block' ? [item.item] : item.type === 'process-group' ? item.items : [])
     const before = new Map(groupItems(first).map((item) => [item.index, item.identity]))
     for (const result of [second, third]) {
       for (const item of [...groupItems(result), ...result.foldedProcessItems]) {
@@ -107,6 +108,52 @@ describe('窗口与分组保留派生身份', () => {
     expect(reply.type).toBe('block')
     if (process.type === 'process-group' && reply.type === 'block') {
       expect(reply.item.identity).toBe(process.items[1]!.identity)
+    }
+  })
+})
+
+describe('隐藏 thinking 时过程组不空占位', () => {
+  const deriveBlocks = (blocks: SDKContentBlock[]) => derive([message('m1', blocks)]).topLevelItems
+
+  test('given thinking-only 流式一轮 when 上层不展示思考 then 不生成过程组（不会出现“1 条消息”却空无一物）', () => {
+    const items = buildAssistantTurnRenderItems(deriveBlocks([thinking('只有思考')]), {
+      isStreaming: true,
+      showThinking: false,
+    })
+
+    expect(items).toEqual([])
+  })
+
+  test('given 思考与工具混合 when 上层不展示思考 then 过程组只保留可渲染块，摘要不虚计', () => {
+    const items = buildAssistantTurnRenderItems(
+      deriveBlocks([thinking(), tool('tool-1'), text('最终输出')]),
+      { showThinking: false },
+    )
+
+    expect(items.map((item) => item.type)).toEqual(['process-group', 'block'])
+    if (items[0]?.type === 'process-group') {
+      expect(items[0].items.map((item) => item.block.type)).toEqual(['tool_use'])
+    }
+    if (items[1]?.type === 'block') {
+      expect(items[1].item.block.type).toBe('text')
+    }
+  })
+
+  test('given 隐藏的思考 + 流中正文 when 上层不展示思考 then 正文直接外置（不被折叠进过程组）', () => {
+    const items = buildAssistantTurnRenderItems(
+      deriveBlocks([thinking(), text('正在输出的正文')]),
+      { isStreaming: true, showThinking: false },
+    )
+
+    expect(items.map((item) => item.type)).toEqual(['block'])
+  })
+
+  test('given 不传 showThinking when 分组 then 保持旧行为（thinking 留在过程组里）', () => {
+    const items = buildAssistantTurnRenderItems([thinking(), text('最终输出')])
+
+    expect(items.map((item) => item.type)).toEqual(['process-group', 'block'])
+    if (items[0]?.type === 'process-group') {
+      expect(items[0].items.map((item) => item.block.type)).toEqual(['thinking'])
     }
   })
 })

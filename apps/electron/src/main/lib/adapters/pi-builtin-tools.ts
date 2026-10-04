@@ -118,6 +118,7 @@ import { normalizeGoalToolResult } from '../goal-tools'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 
+import { executePresentVisualization, executeInspectVisualization, PRESENT_VISUALIZATION_DESCRIPTION } from '../agent-visualization-tools'
 // ===== 通用 =====
 
 export interface PiBuiltinToolsContext {
@@ -139,6 +140,10 @@ export interface PiBuiltinToolsContext {
   pptCapabilityActive?: boolean
   /** 图片生命周期持久化成功后通知 renderer 的安全卡片。 */
   onImageGenerationUpdate?: (record: AgentImageGenerationCard) => void
+  onVisualizationUpdate?: (record: import('@profer/shared').VisualizationRecord) => void
+  /** 可视化记录存储根（配置目录）；缺失时不注册可视化工具。 */
+  visualizationStorageDir?: string
+  assertCanPresentVisualization?: () => void
   /** Agent 请求使用当前会话的正式文件预览入口，并等待用户可见 viewer ready/error。 */
   onPreviewRequest?: (event: Extract<ProferEvent, { type: 'preview_requested' }>) => Promise<AgentFilePreviewReport>
   /** Agent 从当前用户可见的正式 PPTX viewer 读取页级视觉。 */
@@ -733,6 +738,39 @@ function buildPiAgentImageOutputTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): T
           allowedRoots: ctx.allowedRoots ?? [],
         })) as AgentToolResult<unknown>
       },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
+export function buildPiVisualizationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
+  if (!ctx.workspaceSlug || !ctx.agentCwd || !ctx.visualizationStorageDir) return []
+  const context = { sessionId: ctx.sessionId, agentCwd: ctx.agentCwd, storageDir: ctx.visualizationStorageDir, allowedRoots: ctx.allowedRoots ?? [], onUpdate: ctx.onVisualizationUpdate, assertCanPresent: ctx.assertCanPresentVisualization }
+  return [
+    sdk.defineTool({
+      name: 'present_visualization', label: '会话内可视化', description: PRESENT_VISUALIZATION_DESCRIPTION,
+      parameters: Type.Object({
+        filePath: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+        format: Type.Optional(Type.Union([Type.Literal('html'), Type.Literal('fragment')])),
+        chart: Type.Optional(Type.Object({
+          chartType: Type.Union(['bar', 'line', 'pie', 'scatter'].map((kind) => Type.Literal(kind))),
+          xKey: Type.Optional(Type.String()), xAxisLabel: Type.Optional(Type.String()), nameKey: Type.Optional(Type.String()), valueKey: Type.Optional(Type.String()),
+          layout: Type.Optional(Type.Union([Type.Literal('horizontal'), Type.Literal('vertical')])),
+          series: Type.Array(Type.Object({ dataKey: Type.String(), label: Type.Optional(Type.String()), valuePrefix: Type.Optional(Type.String()), valueSuffix: Type.Optional(Type.String()) }), { minItems: 1, maxItems: 8 }),
+          data: Type.Array(Type.Record(Type.String(), Type.Union([Type.String(), Type.Number()])), { minItems: 1, maxItems: 200 }),
+        })),
+        title: Type.String({ minLength: 1, maxLength: 120 }),
+        summary: Type.String({ minLength: 1, maxLength: 2000 }),
+        kind: Type.Optional(Type.Union(['structure', 'comparison', 'data', 'explanation'].map((kind) => Type.Literal(kind)))),
+        objects: Type.Optional(Type.Array(Type.Object({ id: Type.String({ minLength: 1, maxLength: 120 }), label: Type.String({ minLength: 1, maxLength: 200 }), text: Type.Optional(Type.String({ maxLength: 2000 })) }), { maxItems: 200 })),
+        visualizationId: Type.Optional(Type.String()), baseRevision: Type.Optional(Type.String()),
+        sourceMessageId: Type.Optional(Type.String({ maxLength: 200 })), sourceText: Type.Optional(Type.String({ maxLength: 10000 })),
+      }),
+      async execute(toolCallId, params, signal) { return executePresentVisualization(params as import('@profer/shared').PresentVisualizationInput, context, toolCallId, signal) },
+    }),
+    sdk.defineTool({
+      name: 'inspect_visualization', label: '读取可视化', description: 'Read saved visualization HTML and object list. Content inspection only; no claim of visual verification.',
+      parameters: Type.Object({ visualizationId: Type.String({ minLength: 1, maxLength: 200 }), revision: Type.Optional(Type.String({ maxLength: 200 })) }),
+      async execute(_, params) { return executeInspectVisualization(params as { visualizationId: string; revision?: string }, context) },
     }),
   ] as unknown as ToolDefinition[]
 }
@@ -1660,6 +1698,7 @@ export async function buildPiBuiltinTools(
   if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'preview')) {
     try {
       tools.push(...buildPiAgentPreviewTools(sdk, ctx))
+      tools.push(...buildPiVisualizationTools(sdk, ctx))
     } catch (error) {
       console.error('[Pi 桥接] 注入文件预览工具失败:', error)
     }

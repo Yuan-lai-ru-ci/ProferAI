@@ -123,7 +123,7 @@ import {
   getWorkspaceMemoryArchivePath,
   ensurePluginManifest,
 } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getPiCheckpointsDir, getSdkConfigDir, getBundledCliPath } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, agentSessionVisualizationsDir, getPiCheckpointsDir, getSdkConfigDir, getBundledCliPath } from './config-paths'
 import { prepareRuntimeSkills } from './global-skill-manager'
 import { routeSkillsForTask, type SkillRoutingSnapshot } from './skill-routing'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
@@ -189,6 +189,7 @@ import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
 import { injectAgentGptImageMcpServer, isAgentGptImageAvailable } from './agent-gpt-image-tools'
 import { injectAgentSkinMcpServer } from './agent-skin-tools'
 import { injectAgentPreviewMcpServer } from './agent-preview-tools'
+import { injectVisualizationMcpServer } from './agent-visualization-tools'
 import { agentFilePreviewSessionManager } from './agent-file-preview-session'
 import { injectPptDeliveryMcpServer } from './ppt-delivery-agent-tools'
 import { browserController } from './browser-controller'
@@ -1492,6 +1493,19 @@ export class AgentOrchestrator {
           event: { type: 'image_generation_updated', sessionId, record },
         })
       }
+      let planModeEntered = presetPolicy.permissionMode === 'plan'
+      const assertCanPresentVisualization = (): void => {
+        if (this.stoppedBySessions.has(sessionId) || this.activeSessions.get(sessionId) !== runGeneration) throw new Error('本轮已取消，不能公布可视化')
+        if (planModeEntered || (this.sessionPermissionModes.get(sessionId) ?? presetPolicy.permissionMode) === 'plan') throw new Error('计划模式不能公布可视化；请先完成计划审批')
+      }
+      const emitVisualizationUpdate = (record: import('@profer/shared').VisualizationRecord): void => {
+        this.eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'visualization_updated', sessionId, record } })
+      }
+      if (agentRuntime === 'claude' && workspaceSlug && agentCwd && !disabledToolGroups.has('preview')) {
+        await injectVisualizationMcpServer(sdk, mcpServers, {
+          sessionId, agentCwd, storageDir: agentSessionVisualizationsDir(sessionId), allowedRoots: previewAllowedRoots, onUpdate: emitVisualizationUpdate, assertCanPresent: assertCanPresentVisualization,
+        }, disabledTools)
+      }
       if (agentRuntime === 'claude' && !disabledToolGroups.has('preview')) {
         await injectAgentPreviewMcpServer(sdk, mcpServers, {
           sessionId,
@@ -1689,6 +1703,9 @@ ${enrichedMessage}`
               workspaceSlug,
               agentCwd,
               allowedRoots: browserAllowedRoots,
+              visualizationStorageDir: workspaceSlug && agentCwd ? agentSessionVisualizationsDir(sessionId) : undefined,
+              onVisualizationUpdate: emitVisualizationUpdate,
+              assertCanPresentVisualization,
               onPreviewRequest: (event) => agentFilePreviewSessionManager.waitUntilReady(event, (previewEvent) => {
                 this.eventBus.emit(sessionId, { kind: 'profer_event', event: previewEvent })
               }),
@@ -1818,9 +1835,7 @@ ${enrichedMessage}`
         'RemoteTrigger',
       ])
 
-      /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
-      let planModeEntered = initialPermissionMode === 'plan'
-
+      // 计划状态供工具公布守卫和权限审批共同读取，避免进入计划后只更新 UI。
       const syncPlanModeFromToolUse = (toolName: string): void => {
         if (toolName === 'EnterPlanMode') {
           planModeEntered = true

@@ -24,7 +24,10 @@ import { ContentBlock } from './ContentBlock'
 import { TaskProgressCard } from './TaskProgressCard'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { ProcessBlockGroup } from './ProcessBlockGroup'
-import { deriveAssistantTurnBlocks, buildAssistantTurnRenderItems, buildCompletedToolResultIds, type StableContentBlock } from './render-block-derivation'
+import { VisualizationResultInline } from '@/components/visualization/InlineVisualization'
+import { visualizationsAtom } from '@/atoms/visualization-atoms'
+import { visualizationsForTurn } from '@/lib/visualization-projection'
+import { deriveAssistantTurnBlocks, buildAssistantTurnRenderItems, buildCompletedToolResultIds, type StableContentBlock, type AssistantTurnRenderItem } from './render-block-derivation'
 import { applyRenderWindow, DEFAULT_RENDER_WINDOW } from './render-window'
 import { useProcessFoldGate } from './process-fold-gate'
 import { FoldedSegmentsRegion } from './FoldedSegmentsRegion'
@@ -727,7 +730,7 @@ export interface AssistantTurnRendererProps {
   stoppedByUser?: boolean
   /** 用户在前端选择的模型 ID（优先用于显示名称） */
   sessionModelId?: string
-  /** 是否展示模型 thinking 块；Pi runtime 已通过独立过程事件呈现。 */
+  /** 是否展示模型 thinking 块；由上层按内核 + 渠道判定（只回摘要的 GPT/Codex 系不展示）。 */
   showThinking?: boolean
   /** 该 turn 是否为当前会话最新一轮 assistant 回复（「确认已读」按钮的可见性判据之一）。 */
   isLatestAssistantTurn?: boolean
@@ -788,12 +791,14 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
   const completedToolResultIds = React.useMemo(() => {
     return buildCompletedToolResultIds(turn.turnMessages)
   }, [turn.turnMessages])
+  const visualizationRecords = useAtomValue(visualizationsAtom)
+  const turnVisualizations = React.useMemo(() => visualizationsForTurn(visualizationRecords.get(sessionId ?? '') ?? [], turn.turnMessages, allMessages), [visualizationRecords, sessionId, turn.turnMessages, allMessages])
   const renderItems = React.useMemo(() => {
-    return buildAssistantTurnRenderItems(topLevelItems, {
-      isStreaming,
-      completedToolResultIds,
+    const items: AssistantTurnRenderItem<StableContentBlock>[] = buildAssistantTurnRenderItems(topLevelItems, {
+      isStreaming, completedToolResultIds, showThinking,
     })
-  }, [topLevelItems, isStreaming, completedToolResultIds])
+    return [...items, ...turnVisualizations.map((record) => ({ type: 'visualization' as const, record, identity: `visualization:${record.id}` }))]
+  }, [topLevelItems, isStreaming, completedToolResultIds, showThinking, turnVisualizations])
   // 渲染窗口：过程与回复各自取尾部窗口，避免过程把回复挤出可视范围。
   // 展开/收起状态属于 turn；裁剪与分组保留已派生的稳定块身份。
   //
@@ -807,12 +812,12 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
     return 0
   }, [renderItems])
   const processFoldGate = useProcessFoldGate(processSegmentCount, DEFAULT_RENDER_WINDOW.processSegments)
-  const { items: windowedItems, foldedProcessItems, foldedReplyItems } = React.useMemo(
+  const { items: windowedItems, foldedProcessItems, foldedReplyRenderItems } = React.useMemo(
     () => applyRenderWindow(renderItems, DEFAULT_RENDER_WINDOW, { processFoldCount: processFoldGate.foldCount }),
     [renderItems, processFoldGate.foldCount],
   )
   const firstReplyIndex = React.useMemo(
-    () => windowedItems.findIndex((item) => item.type === 'block'),
+    () => windowedItems.findIndex((item) => item.type !== 'process-group'),
     [windowedItems],
   )
   // 与本轮工具调用同源的映射，让正文内联的裸文件名可靠定位真实文件。
@@ -834,7 +839,7 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
   }
 
   // 如果没有任何内容
-  if (enrichedBlocks.length === 0 && !hasError) return null
+  if (enrichedBlocks.length === 0 && turnVisualizations.length === 0 && !hasError) return null
 
   const renderTopLevelBlock = (item: StableContentBlock): React.ReactNode => {
     const { block, index: i, identity } = item
@@ -894,20 +899,15 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
           <div className={cn('space-y-2')}>
             <ExternalizedContentNotice sessionId={sessionId ?? undefined} messages={turn.turnMessages} />
             {windowedItems.map((item, itemIndex) => {
-              if (item.type === 'block') {
-                return (
-                  <React.Fragment key={item.item.identity}>
-                    {itemIndex === firstReplyIndex && foldedReplyItems.length > 0 && (
-                      <FoldedSegmentsRegion
-                        count={foldedReplyItems.length}
-                        expanded={expandedReplySegments}
-                        onExpandedChange={setExpandedReplySegments}
-                        renderRevealed={() => foldedReplyItems.map((folded) => renderTopLevelBlock(folded))}
-                      />
-                    )}
-                    {renderTopLevelBlock(item.item)}
-                  </React.Fragment>
-                )
+              if (item.type !== 'process-group') {
+                return <React.Fragment key={item.type === 'block' ? item.item.identity : item.identity}>
+                  {itemIndex === firstReplyIndex && foldedReplyRenderItems.length > 0 && <FoldedSegmentsRegion
+                    count={foldedReplyRenderItems.length} expanded={expandedReplySegments} onExpandedChange={setExpandedReplySegments}
+                    renderRevealed={() => foldedReplyRenderItems.map((folded) => folded.type === 'block' ? renderTopLevelBlock(folded.item)
+                      : <div key={folded.identity} data-scroll-anchor={folded.identity}><VisualizationResultInline record={folded.record} sessionId={sessionId} /></div>)}
+                  />}
+                  {item.type === 'block' ? renderTopLevelBlock(item.item) : <div data-scroll-anchor={item.identity}><VisualizationResultInline record={item.record} sessionId={sessionId} /></div>}
+                </React.Fragment>
               }
 
               const groupBlocks = item.items.map((groupItem) => groupItem.block)

@@ -41,6 +41,8 @@ export interface WindowedTurnItems<T extends IndexedContentBlock = IndexedConten
   foldedProcessItems: T[]
   /** 回复区被折叠的段（按原顺序） */
   foldedReplyItems: T[]
+  /** 回复区完整折叠项（含可视结果），用于保持原有展示顺序。 */
+  foldedReplyRenderItems: Array<Extract<AssistantTurnRenderItem<T>, { type: 'block' | 'visualization' }>>
 }
 
 /**
@@ -61,20 +63,20 @@ export function applyRenderWindow<T extends IndexedContentBlock>(
   // 回复项（type === 'block'）在整轮里是连续的一段；先定位再统一取尾部窗口。
   const replyIndexes: number[] = []
   for (let index = 0; index < items.length; index++) {
-    if (items[index]!.type === 'block') replyIndexes.push(index)
+    if (items[index]!.type !== 'process-group') replyIndexes.push(index)
   }
   const replyKeepFrom = Math.max(0, replyIndexes.length - replyLimit)
   const visibleReplyIndexes = new Set(replyIndexes.slice(replyKeepFrom))
-  const foldedReplyItems: T[] = replyIndexes
-    .slice(0, replyKeepFrom)
-    .map((index) => (items[index] as { type: 'block'; item: T }).item)
+  const foldedReplyRenderItems = replyIndexes.slice(0, replyKeepFrom)
+    .map((index) => items[index] as Extract<AssistantTurnRenderItem<T>, { type: 'block' | 'visualization' }>)
+  const foldedReplyItems: T[] = foldedReplyRenderItems.flatMap((item) => item.type === 'block' ? [item.item] : [])
 
   const windowed: AssistantTurnRenderItem<T>[] = []
   let foldedProcessItems: T[] = []
 
   for (let index = 0; index < items.length; index++) {
     const item = items[index]!
-    if (item.type === 'block') {
+    if (item.type !== 'process-group') {
       if (visibleReplyIndexes.has(index)) windowed.push(item)
       continue
     }
@@ -87,5 +89,5 @@ export function applyRenderWindow<T extends IndexedContentBlock>(
     windowed.push(keepFrom === 0 ? item : { type: 'process-group', items: item.items.slice(keepFrom) })
   }
 
-  return { items: windowed, foldedProcessItems, foldedReplyItems }
+  return { items: windowed, foldedProcessItems, foldedReplyItems, foldedReplyRenderItems }
 }
