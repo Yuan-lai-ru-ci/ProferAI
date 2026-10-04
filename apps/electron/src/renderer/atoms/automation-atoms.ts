@@ -6,47 +6,15 @@
  */
 
 import { atom } from 'jotai'
-import type {
-  Automation,
-  AutomationNotificationTarget,
-  AutomationScheduleType,
-  AutomationPermissionMode,
-  AutomationSessionMode,
-  AgentRuntime,
-} from '@profer/shared'
-import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE } from '@profer/shared'
+import type { Automation } from '@profer/shared'
+import type { AutomationDraft } from '@/domains/automation/automation-draft'
+
+// 保留历史入口，现有对话与规划页面继续使用同一组 Atom 和草稿函数。
+export { createEmptyDraft, automationToDraft } from '@/domains/automation/automation-draft'
+export type { AutomationDraft } from '@/domains/automation/automation-draft'
 
 /** 全部定时任务列表 */
 export const automationsAtom = atom<Automation[]>([])
-
-/**
- * 表单草稿
- * - 无 id：创建模式
- * - 有 id：编辑模式（预填已有任务字段）
- */
-export interface AutomationDraft {
-  /** 编辑模式下的任务 id；创建模式为空 */
-  id?: string
-  name: string
-  prompt: string
-  scheduleType: AutomationScheduleType
-  intervalMinutes: number
-  timeOfDay: string[]
-  dayOfWeek: number[]
-  dayOfMonth: number[]
-  channelId: string
-  modelId?: string
-  /** 执行此任务的 Agent runtime；手动创建时必须显式保存，避免调度器回退 Claude。 */
-  agentRuntime: AgentRuntime
-  workspaceId?: string
-  /** 运行子会话绑定的 Agent 预设 ID；undefined = 跟随工作区默认预设 */
-  presetId?: string
-  permissionMode: AutomationPermissionMode
-  sessionMode: AutomationSessionMode
-  notificationTargets?: AutomationNotificationTarget[]
-  sourceSessionId?: string
-  active: boolean
-}
 
 /** 表单视图状态（覆盖在中间内容区） */
 export interface AutomationFormState {
@@ -58,51 +26,6 @@ export const automationFormAtom = atom<AutomationFormState>({
   open: false,
   draft: null,
 })
-
-/** 创建一个空白草稿（用于「+ 新建」） */
-export function createEmptyDraft(): AutomationDraft {
-  return {
-    name: '',
-    prompt: '',
-    scheduleType: 'interval',
-    intervalMinutes: 10,
-    timeOfDay: ['09:00'],
-    dayOfWeek: [1],
-    dayOfMonth: [1],
-    channelId: '',
-    agentRuntime: 'claude',
-    permissionMode: AUTOMATION_DEFAULT_PERMISSION_MODE,
-    sessionMode: AUTOMATION_DEFAULT_SESSION_MODE,
-    active: true,
-  }
-}
-
-/**
- * 把已存在的 Automation 映射成表单草稿（编辑入口共用）。
- * 集中映射避免新增字段时漏改某个调用点。
- */
-export function automationToDraft(a: Automation): AutomationDraft {
-  return {
-    id: a.id,
-    name: a.name,
-    prompt: a.prompt,
-    scheduleType: a.scheduleType,
-    intervalMinutes: a.intervalMinutes,
-    timeOfDay: Array.isArray(a.timeOfDay) ? a.timeOfDay : (a.timeOfDay ? [a.timeOfDay] : ['09:00']),
-    dayOfWeek: Array.isArray(a.dayOfWeek) ? a.dayOfWeek : (a.dayOfWeek !== undefined ? [a.dayOfWeek] : [1]),
-    dayOfMonth: Array.isArray(a.dayOfMonth) ? a.dayOfMonth : (a.dayOfMonth !== undefined ? [a.dayOfMonth] : [1]),
-    channelId: a.channelId,
-    modelId: a.modelId,
-    agentRuntime: a.agentRuntime ?? 'claude',
-    workspaceId: a.workspaceId,
-    presetId: a.presetId,
-    permissionMode: a.permissionMode ?? AUTOMATION_DEFAULT_PERMISSION_MODE,
-    sessionMode: a.sessionMode ?? AUTOMATION_DEFAULT_SESSION_MODE,
-    notificationTargets: a.notificationTargets,
-    sourceSessionId: a.sourceSessionId,
-    active: a.active,
-  }
-}
 
 /** 固定间隔选项（分钟） */
 export const AUTOMATION_INTERVAL_OPTIONS = [

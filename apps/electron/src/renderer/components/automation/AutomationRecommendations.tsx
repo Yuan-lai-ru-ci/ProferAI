@@ -1,4 +1,5 @@
 import * as React from 'react'
+import * as automationApi from '@/domains/automation/automation-api'
 import { BellRing, Check, Eye, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useSetAtom } from 'jotai'
@@ -11,14 +12,14 @@ export function AutomationRecommendations({ recommendations, onRefresh }: { reco
   if (recommendations.length === 0) return null
   const respond = async (recommendation: Recommendation, status: 'accepted' | 'dismissed'): Promise<void> => {
     try {
-      await window.electronAPI.respondToRecommendation({ id: recommendation.id, status })
+      await automationApi.respondToRecommendation({ id: recommendation.id, status })
       if (status === 'dismissed') toast.success('已忽略这条建议')
       await onRefresh()
     } catch (error) { toast.error(error instanceof Error ? error.message : '处理建议失败') }
   }
   const open = async (recommendation: Recommendation): Promise<void> => {
     if (recommendation.action.type === 'edit_automation' && recommendation.action.automationId) {
-      const item = (await window.electronAPI.listAutomations()).find((a) => a.id === recommendation.action.automationId)
+      const item = (await automationApi.listAutomations()).find((a) => a.id === recommendation.action.automationId)
       if (item) setForm({ open: true, draft: automationToDraft(item) })
     }
     await respond(recommendation, 'accepted')

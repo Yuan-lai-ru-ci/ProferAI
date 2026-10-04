@@ -12,6 +12,7 @@
  */
 
 import * as React from 'react'
+import * as automationApi from '@/domains/automation/automation-api'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { Clock, Pause, Play, Power, Plus, Trash2 } from 'lucide-react'
@@ -82,7 +83,7 @@ export function AutomationsListView({ embedded = false }: { embedded?: boolean }
         .filter((s): s is string => !!s),
     )
     for (const slug of slugs) {
-      void window.electronAPI.listAgentPresets(slug)
+      void automationApi.listAgentPresets(slug)
         .then((ps) => {
           if (cancelled) return
           setPresetNames((prev) => {
@@ -98,8 +99,8 @@ export function AutomationsListView({ embedded = false }: { embedded?: boolean }
 
   const refreshList = React.useCallback(async () => {
     const [list, suggested] = await Promise.all([
-      window.electronAPI.listAutomations(),
-      window.electronAPI.refreshRecommendations(),
+      automationApi.listAutomations(),
+      automationApi.refreshRecommendations(),
     ])
     setAutomations(list)
     setRecommendations(suggested)
@@ -107,7 +108,7 @@ export function AutomationsListView({ embedded = false }: { embedded?: boolean }
 
   React.useEffect(() => {
     void refreshList()
-    return window.electronAPI.onRecommendationsChanged(() => { void refreshList() })
+    return automationApi.onRecommendationsChanged(() => { void refreshList() })
   }, [refreshList])
 
   const current = automations.filter((a) => a.active)
@@ -175,7 +176,7 @@ function Section({ title, automations, onEdit, onRefresh, variant, presetNames }
       description: '本次任务会创建新的 Agent 会话，可在左侧会话列表查看',
     })
     try {
-      await window.electronAPI.runAutomationNow(a.id)
+      await automationApi.runAutomationNow(a.id)
     } catch (err) {
       toast.error('运行失败')
       console.error('[定时任务] 立即运行失败:', err)
@@ -191,7 +192,7 @@ function Section({ title, automations, onEdit, onRefresh, variant, presetNames }
       return
     }
     try {
-      await window.electronAPI.toggleAutomation(a.id, !a.active)
+      await automationApi.toggleAutomation(a.id, !a.active)
       await onRefresh()
       toast.success(a.active ? '已暂停' : '已启用')
     } catch (err) {
@@ -204,7 +205,7 @@ function Section({ title, automations, onEdit, onRefresh, variant, presetNames }
     e.stopPropagation()
     if (!window.confirm(`确定要删除定时任务「${a.name}」吗？`)) return
     try {
-      await window.electronAPI.deleteAutomation(a.id)
+      await automationApi.deleteAutomation(a.id)
       await onRefresh()
       toast.success('已删除')
     } catch (err) {
