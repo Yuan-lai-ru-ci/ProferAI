@@ -52,6 +52,9 @@ import {
 
 export function MainArea(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
+  // 浏览器订阅只随会话变化；标签排序/标题更新不能重新触发状态恢复。
+  const tabsRef = React.useRef(tabs)
+  tabsRef.current = tabs
   const activeTabId = useAtomValue(activeTabIdAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const activeTab = useAtomValue(activeTabAtom)
@@ -79,7 +82,7 @@ export function MainArea(): React.ReactElement {
     : null
   currentBrowserSessionIdRef.current = browserSessionId
 
-  const publishBrowserState = React.useCallback((state: BrowserViewState, options?: { autoOpen?: boolean }) => {
+  const publishBrowserState = React.useCallback((state: BrowserViewState, options?: { autoOpen?: boolean; autoGroup?: boolean }) => {
     // 同步浏览器内容状态（tabs/url/标题/trace 等）。状态可以保留在后台会话，
     // 但后台会话的状态推送不能改变当前会话的浏览器 Tab。
     setBrowserStateMap((previous) => { const next = new Map(previous); next.set(state.sessionId, state); return next })
@@ -87,15 +90,15 @@ export function MainArea(): React.ReactElement {
     // 仅用于恢复工具栏状态，不能把旧会话的浏览器 Tab 重新唤起。
     if (state.sessionId !== currentBrowserSessionIdRef.current) return
     const dismissed = browserDismissed.has(state.sessionId)
-    const hasBrowserTabs = tabs.some((tab) => isBrowserTab(tab) && tab.sessionId === state.sessionId)
+    const hasBrowserTabs = tabsRef.current.some((tab) => isBrowserTab(tab) && tab.sessionId === state.sessionId)
     // 已手动收掉且没有遗留页 Tab：不重建；仍有页 Tab 则继续同步（页面可能被 Agent 关掉）
     if (dismissed && !hasBrowserTabs) return
     const autoOpen = options?.autoOpen !== false && !dismissed
     // 只读动作推送且没有既有页 Tab：不创建（保持安静）
     if (!hasBrowserTabs && !autoOpen) return
     // Tab 化：按页 reconcile；autoOpen 时自动与对话组合并排（对话左、浏览器右，不打断对话）。
-    openBrowserTabFromPush(state, { autoGroup: autoOpen })
-  }, [browserDismissed, setBrowserStateMap, tabs])
+    openBrowserTabFromPush(state, { autoGroup: autoOpen && options?.autoGroup !== false })
+  }, [browserDismissed, setBrowserStateMap])
 
   /**
    * 订阅实时状态推送。
@@ -142,8 +145,8 @@ export function MainArea(): React.ReactElement {
     void getState(browserSessionId)
       .then((state) => {
         if (!cancelled && state) {
-          // 切回会话时重新拉起已有浏览器 Tab；用户明确关闭过的会话仍保持关闭。
-          publishBrowserState(state, { autoOpen: !browserDismissed.has(browserSessionId) })
+          // 切回会话只恢复浏览器标签，保留用户的组合/解散选择。
+          publishBrowserState(state, { autoOpen: !browserDismissed.has(browserSessionId), autoGroup: false })
         }
       })
       // 后台会话及已删除会话会被主进程拒绝或返回空状态；无需打断当前界面。

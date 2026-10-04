@@ -1,7 +1,11 @@
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test } from 'bun:test'
+import { getDefaultStore } from 'jotai'
 import type { BrowserViewState } from '@profer/shared'
-import type { TabItem } from '@/atoms/tab-atoms'
-import { activeBrowserTopTabId, planBrowserTabReconcile } from './browser-tab'
+import { activeTabIdAtom, reorderTabs, tabsAtom, type TabItem } from '@/atoms/tab-atoms'
+import { appModeAtom } from '@/atoms/app-mode'
+import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import { tabGroupsAtom } from '@/atoms/tab-group-atoms'
+import { activeBrowserTopTabId, openBrowserTabFromPush, planBrowserTabReconcile } from './browser-tab'
 
 const agentTab = (id: string): TabItem => ({ id, type: 'agent', sessionId: id, title: id })
 
@@ -110,6 +114,68 @@ test('无变化时返回引用相同的数组', () => {
     tabs: [page('t1', '页面一')],
   }), false)
   expect(again).toBe(next)
+})
+
+test('已有浏览器页重排后再次同步状态不会重新建立已解散的组合', () => {
+  const store = getDefaultStore()
+  store.set(appModeAtom, 'agent')
+  store.set(currentAgentSessionIdAtom, 's1')
+  store.set(tabsAtom, [agentTab('s1')])
+  store.set(activeTabIdAtom, 's1')
+  store.set(tabGroupsAtom, [])
+  const browserState = state({
+    sessionId: 's1',
+    activeTabId: 't1',
+    tabs: [page('t1', '页面一')],
+  })
+
+  openBrowserTabFromPush(browserState)
+  expect(store.get(tabGroupsAtom)).toHaveLength(1)
+
+  store.set(tabGroupsAtom, [])
+  const tabs = store.get(tabsAtom)
+  const reordered = reorderTabs(tabs, tabs.findIndex((tab) => tab.id === 's1'), tabs.findIndex((tab) => tab.browserTabId === 't1'))
+  store.set(tabsAtom, reordered)
+  openBrowserTabFromPush(browserState)
+
+  expect(store.get(tabGroupsAtom)).toEqual([])
+  expect(store.get(tabsAtom)).toBe(reordered)
+  expect(reordered.filter((tab) => tab.sessionId === 's1').map((tab) => tab.id)).toEqual(['__browser__:s1:t1', 's1'])
+  expect(store.get(activeTabIdAtom)).toBe('s1')
+
+  // 后续页面标题与新页面继续同步，不能撤销用户的解散选择。
+  openBrowserTabFromPush(state({
+    sessionId: 's1',
+    activeTabId: 't2',
+    tabs: [page('t1', '更新标题'), page('t2', '页面二')],
+  }))
+  expect(store.get(tabGroupsAtom)).toEqual([])
+  expect(store.get(tabsAtom).find((tab) => tab.browserTabId === 't1')?.title).toBe('更新标题')
+  expect(store.get(tabsAtom).some((tab) => tab.browserTabId === 't2')).toBe(true)
+})
+
+test('切回会话恢复浏览器标签不自动建组，后续同页推送也保留独立布局', () => {
+  const store = getDefaultStore()
+  store.set(appModeAtom, 'agent')
+  store.set(currentAgentSessionIdAtom, 's1')
+  store.set(tabsAtom, [agentTab('s1')])
+  store.set(activeTabIdAtom, 's1')
+  const browserState = state({ sessionId: 's1', activeTabId: 't1', tabs: [page('t1', '页面一')] })
+
+  openBrowserTabFromPush(browserState, { autoGroup: false })
+  expect(store.get(tabsAtom).filter((tab) => tab.sessionId === 's1').map((tab) => tab.id)).toEqual(['s1', '__browser__:s1:t1'])
+  expect(store.get(tabGroupsAtom)).toEqual([])
+  openBrowserTabFromPush(browserState)
+  expect(store.get(tabGroupsAtom)).toEqual([])
+})
+
+afterEach(() => {
+  const store = getDefaultStore()
+  store.set(appModeAtom, 'scratch')
+  store.set(currentAgentSessionIdAtom, null)
+  store.set(tabsAtom, [])
+  store.set(activeTabIdAtom, null)
+  store.set(tabGroupsAtom, [])
 })
 
 test('activeBrowserTopTabId 指向激活页', () => {

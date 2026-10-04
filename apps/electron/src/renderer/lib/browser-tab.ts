@@ -94,8 +94,8 @@ export function reconcileBrowserTabs(store: JotaiStore, state: BrowserViewState)
 /**
  * Agent 推送驱动的浏览器 Tab 打开：
  * - reconcile 同步页签（会话存在顶栏浏览器 Tab 时必经此路径保持同步）；
- * - 用户正看着该会话对话、对话与该页都未入组时，自动组合并排（对话左、浏览器右），
- *   焦点留在对话——复刻旧「侧边面板自动可见但不打断对话」的体验；
+ * - 用户正看着该会话对话、首次收到浏览器页且两者都未入组时，自动组合并排（对话左、浏览器右），
+ *   焦点留在对话；已有页面的后续推送只同步标签，保留用户的组合/解散选择；
  * - 用户自己摆过布局（已有组合）时不动布局，页面 Tab 仍出现在顶栏。
  *
  * dismissed 守卫由 reconcile 内部处理；autoOpen 判定在调用方（MainArea）。
@@ -106,8 +106,10 @@ export function openBrowserTabFromPush(state: BrowserViewState, options?: { auto
   // 只处理当前会话：后台会话的页面变化等切回时由 getState 恢复路径统一对账，
   // 避免非当前会话的推送动顶栏布局。
   if (store.get(appModeAtom) !== 'agent' || sessionId !== store.get(currentAgentSessionIdAtom)) return
+  // 自动组合仅发生在页面首次进入顶栏时；已有页的状态刷新不能撤销用户的解散/排序。
+  const hadBrowserTabs = store.get(tabsAtom).some((tab) => isBrowserTab(tab) && tab.sessionId === sessionId)
   const topTabId = reconcileBrowserTabs(store, state)
-  if (!topTabId || options?.autoGroup === false) return
+  if (!topTabId || options?.autoGroup === false || hadBrowserTabs) return
   const next = planAutoGroupWorkTab({
     groups: store.get(tabGroupsAtom),
     agentTabId: sessionId,
