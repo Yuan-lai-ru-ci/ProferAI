@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync, realpathSync } from 'node:fs'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
-import { listGlobalSkills, setGlobalSkillEnabled, copySkillDirectorySafely, createUserGlobalSkill } from './global-skill-manager'
+import { listGlobalSkills, setGlobalSkillEnabled, copySkillDirectorySafely, createUserGlobalSkill, LEDGER_FILENAMES } from './global-skill-manager'
 import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path'
 import {
   getAgentWorkspacesIndexPath,
@@ -844,8 +844,8 @@ export function importSkillFromWorkspace(
   }
   const targetPath = join(targetSkillsDir, actualSkillSlug)
 
-  // 库账本（skill.manifest.json）不属于技能本体，跨工作区导入时一并剥掉。
-  copySkillDirectorySafely(sourcePath, targetPath, { exclude: ['skill.manifest.json'] })
+  // 库账本不属于技能本体，跨工作区导入时一并剥掉。
+  copySkillDirectorySafely(sourcePath, targetPath, { exclude: LEDGER_FILENAMES })
 
   // 写入来源元数据
   const sourceWorkspace = listAgentWorkspaces().find((w) => w.slug === sourceSlug)
@@ -909,7 +909,7 @@ export function updateSkillFromSource(
   const parentDir = join(targetPath, '..')
   const tmpPath = join(parentDir, `.${actualSkillSlug}.updating`)
   try {
-    copySkillDirectorySafely(sourcePath, tmpPath, { exclude: ['skill.manifest.json'] })
+    copySkillDirectorySafely(sourcePath, tmpPath, { exclude: LEDGER_FILENAMES })
   } catch (err) {
     // 复制失败时清理临时目录，保留原目录不变
     if (existsSync(tmpPath)) rmSync(tmpPath, { recursive: true, force: true })

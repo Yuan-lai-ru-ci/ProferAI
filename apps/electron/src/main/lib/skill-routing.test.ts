@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createEffectiveAgentPresetPolicy, type AgentPreset } from '@profer/shared'
-import { createSkillRoutingSnapshot, routeSkillsForTask, type SkillRoutingSnapshot } from './skill-routing'
+import { buildSkillRoutingNotice, createSkillRoutingSnapshot, routeSkillsForTask, type SkillRoutingSnapshot } from './skill-routing'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -26,6 +26,19 @@ async function snapshot(overrides: Partial<AgentPreset> = {}, tools: string[] = 
 }
 
 describe('Skill 路由：权限先于相关性', () => {
+  test('内置 Skill 没有 SKILL.json 时仍受产品最低依赖约束（旧副本、清空卡片）', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'profer-skill-floor-'))
+    roots.push(root)
+    const slugs = ['automation', 'in-app-browser', 'pptx', 'guizang-ppt-skill']
+    for (const slug of slugs) {
+      mkdirSync(join(root, 'skills', slug), { recursive: true })
+      writeFileSync(join(root, 'skills', slug, 'SKILL.md'), `---\nname: ${slug}\ndescription: Test ${slug}\n---\n\nBODY_${slug}\n`)
+    }
+    const policy = createEffectiveAgentPresetPolicy({ id: 'test', name: 'test', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0, disabledToolGroups: ['automation', 'browser', 'ppt-materials'] }, { presetId: 'test', presetScope: 'workspace', workspaceSlug: 'ws' }, { runtimeSupportsSubagents: true, loadedMcpServerNames: [] })
+    const result = await createSkillRoutingSnapshot({ policy, toolNames: [], projection: { path: root, skills: slugs.map(slug => ({ slug, name: slug, path: join(root, 'skills', slug), version: '1', scope: 'workspace' as const, actualSource: 'workspace' as const })), diagnostics: [] } })
+    expect(result.allowedSlugs).toEqual([])
+    expect(result.skills.map(skill => skill.blocked)).toEqual(['tool-group-disabled', 'tool-group-disabled', 'tool-group-disabled', 'tool-group-disabled'])
+  })
   test('undefined 保留可用目录，[] 全禁；推荐不能扩权且不泄露正文', async () => {
     const unrestricted = await snapshot()
     expect(unrestricted.allowedSlugs).toContain('pdf')
@@ -144,5 +157,15 @@ describe('Skill 路由：权限先于相关性', () => {
     expect(result.prompt).toContain('budget-deferred')
     expect(result.prompt).toContain('SKILL.md')
     expect(s.allowedSlugs).toContain('pdf')
+  })
+})
+
+describe('Skill 未加载的用户提示', () => {
+  test('显式引用失败时给出人话原因；只是正文超预算或没有失败时不提示', async () => {
+    const closed = await snapshot({ skillSlugs: [] })
+    const denied = routeSkillsForTask(closed, { userMessage: '/skill:pdf /skill:nope 帮我处理' })
+    expect(buildSkillRoutingNotice(denied)).toBe('Skill 未加载：pdf（当前预设未启用）；nope（没有找到这个 Skill）')
+    expect(buildSkillRoutingNotice(routeSkillsForTask(await snapshot(), { userMessage: '/skill:pdf 合并 PDF' }))).toBeUndefined()
+    expect(buildSkillRoutingNotice({ prompt: '', selected: [], recommended: [], hints: [], diagnostics: [{ slug: 'pdf', code: 'budget-deferred' }] })).toBeUndefined()
   })
 })

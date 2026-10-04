@@ -10,8 +10,8 @@ import { join } from 'node:path'
 import { skillManifestToRoutingFields, type EffectiveAgentPresetPolicy, type SkillDoctorIssue, type SkillDoctorSeverity } from '@profer/shared'
 import { VISUALIZATION_HOST_PRIMITIVES } from '../../shared/visualization-style'
 import { readSkillDescriptor, SKILL_MANIFEST_FILENAME } from './skill-manifest'
-import { mergeSkillRoutingLayers, skillToolAvailable } from './skill-routing'
-import { BUILTIN_SKILL_DEPENDENCIES, type SkillRoutingRules } from './skill-routing-rules'
+import { builtinSkillRules, mergeSkillRoutingLayers, skillToolAvailable } from './skill-routing'
+import type { SkillRoutingRules } from './skill-routing-rules'
 
 // 诊断码与严重度定义在 @profer/shared：主进程产出、渲染层展示同一套码值。
 export type { SkillDoctorCode, SkillDoctorIssue, SkillDoctorSeverity } from '@profer/shared'
@@ -102,7 +102,7 @@ export function diagnoseSkill(input: SkillDoctorInput): SkillDoctorIssue[] {
   // 生效规则：内置兜底 → 旧侧车 → 模块清单 → 调用方传入（已合并的运行时规则）。
   // 清单是模块自己声明的真相，侧车只是迁移期的回退，两者同时声明会被 routing-duplicated 报出。
   const rules: SkillRoutingRules = mergeSkillRoutingLayers(
-    BUILTIN_SKILL_DEPENDENCIES[descriptor.slug] ?? {},
+    builtinSkillRules(descriptor.slug),
     input.sidecar ?? {},
     skillManifestToRoutingFields(manifest),
     input.rules ?? {},
@@ -122,6 +122,9 @@ export function diagnoseSkill(input: SkillDoctorInput): SkillDoctorIssue[] {
 
   if (rules.implicit !== false && keywords.length === 0) {
     issues.push({ code: 'keywords-missing', severity: 'info', message: '没有词表：只靠描述与模型联想命中（这是推荐做法，不用补词表）' })
+  }
+  if (keywords.length) {
+    issues.push({ code: 'keywords-deprecated', severity: 'info', message: '词表已弃用，仅为兼容保留：新 Skill 请把用户的说法写进描述，不要再写词表' })
   }
   if (keywords.length) {
     // 词表只有路由代码读得到，模型看不到。只提醒“描述里既没写、也不包含任何已写词”的那些词：

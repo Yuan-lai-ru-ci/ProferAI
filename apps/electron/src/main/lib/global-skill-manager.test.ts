@@ -265,6 +265,8 @@ version: 2.0.0
     expect(resolveEffectiveSkills('a').filter((skill) => skill.slug === 'demo')).toHaveLength(1)
     expect(resolveEffectiveSkills('a').find((skill) => skill.slug === 'demo')?.scope).toBe('workspace')
     expect(existsSync(join(paths.workspaces, 'a', 'skills', 'demo', 'SKILL.md'))).toBe(true)
+    // 库账本只属于全局库，另存为工作区副本时不能带过去。
+    expect(existsSync(join(paths.workspaces, 'a', 'skills', 'demo', 'skill-library.json'))).toBe(false)
     expect(() => editGlobalSkill(builtin.skillId, 'a', 'workspace', 'x')).not.toThrow()
   })
 
@@ -404,6 +406,26 @@ version: 1.0.1
     else process.env.PROFER_CONFIG_DIR = previousConfigRoot
   })
 
+  test('全局 Skill 系统就绪时，把工作区与用户全局 Skill 的旧路由侧车迁入 SKILL.json', () => {
+    const base = mkdtempSync(join(tmpdir(), 'profer-global-skill-sidecar-'))
+    roots.push(base)
+    const global = join(base, 'global')
+    const workspaces = join(base, 'workspaces')
+    const bundle = join(base, 'bundle')
+    mkdirSync(join(bundle, 'first-run'), { recursive: true })
+    writeFileSync(join(bundle, 'first-run', 'SKILL.md'), '---\nname: 首次运行\nversion: 1.0.0\n---\n')
+    const local = join(workspaces, 'sidecar-ws', 'skills', 'local-report')
+    mkdirSync(local, { recursive: true })
+    writeFileSync(join(local, 'SKILL.md'), '---\nname: local-report\ndescription: 报表\n---\nBODY\n')
+    writeFileSync(join(local, 'profer-routing.json'), JSON.stringify({ requiredToolGroups: ['web'] }))
+    __setGlobalSkillRoots(global, workspaces)
+    configureGlobalSkillSystem(bundle)
+
+    prepareRuntimeSkills('sidecar-ws')
+    expect(existsSync(join(local, 'profer-routing.json'))).toBe(false)
+    expect(JSON.parse(readFileSync(join(local, 'SKILL.json'), 'utf8')).dependencies).toEqual({ toolGroups: ['web'] })
+  })
+
   test('旧 schema 已完成但误标 unknown 的干净副本会重新分类为 builtin-meta 引用', () => {
     const paths = setup()
     const builtin = listGlobalSkills()[0]!
@@ -431,6 +453,30 @@ version: 1.0.1
     expect(existsSync(root)).toBe(false)
     expect(resolveEffectiveSkills('legacy-reclassified').find((skill) => skill.slug === builtin.slug)?.actualSource).toBe('global')
     expect(JSON.parse(readFileSync(join(paths.global, 'skill-system-migration.json'), 'utf8')).schemaVersion).toBe(3)
+  })
+
+  test('版本号住在 SKILL.json 时，只差版本号的副本仍视为未修改（SKILL.md 有无 version 行都一样）', () => {
+    const base = mkdtempSync(join(tmpdir(), 'profer-global-skill-card-version-'))
+    roots.push(base)
+    const global = join(base, 'global-skills')
+    const workspaces = join(base, 'workspaces')
+    const bundle = join(base, 'bundle')
+    const card = (version: string) => JSON.stringify({ schemaVersion: 1, version, dependencies: { toolGroups: ['automation'] } })
+    mkdirSync(join(bundle, 'card-demo'), { recursive: true })
+    writeFileSync(join(bundle, 'card-demo', 'SKILL.md'), '---\nname: 卡片演示\n---\n\n# 卡片演示\n')
+    writeFileSync(join(bundle, 'card-demo', 'SKILL.json'), card('1.1.0'))
+    __setGlobalSkillRoots(global, workspaces)
+    seedBuiltinGlobalSkills(bundle)
+    const builtin = listGlobalSkills().find((skill) => skill.slug === 'card-demo')!
+    const root = join(workspaces, 'card-ws', 'skills', builtin.slug)
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, 'SKILL.md'), '---\nname: 卡片演示\nversion: 1.0.0\n---\n\n# 卡片演示\n')
+    writeFileSync(join(root, 'SKILL.json'), card('1.0.0'))
+    writeFileSync(join(root, '.source.json'), JSON.stringify({ sourceKind: 'master', masterSlug: builtin.slug, importedAt: '2026-01-01T00:00:00.000Z' }))
+
+    const result = migrateLegacyWorkspaceSkills(bundle)
+    expect(result.migrated).toBe(1)
+    expect(resolveEffectiveSkills('card-ws').find((skill) => skill.slug === builtin.slug)?.actualSource).toBe('global')
   })
 
   test('B1/B2：来源可靠且内容未修改的 active/inactive 副本转为全局引用，正文备份后退出 runtime', () => {
@@ -812,23 +858,38 @@ version: 1.0.0
     expect(carded?.version).toBe('2.0.0')
   })
 
-  test('库账本不跟着技能跑：工作区副本与运行时投影都不带 skill.manifest.json', () => {
+  test('库账本不跟着技能跑：工作区副本与运行时投影都不带 skill-library.json', () => {
     const paths = setup()
     const builtin = listGlobalSkills()[0]!
-    // 库里（全局库副本）应当有账本，它是这套管理的私有记录。
-    expect(existsSync(join(paths.global, 'builtin', builtin.skillId, 'skill.manifest.json'))).toBe(true)
+    // 库里（全局库副本）应当有账本，它是这套管理的私有记录；名字与模块清单 SKILL.json 区分开。
+    expect(existsSync(join(paths.global, 'builtin', builtin.skillId, 'skill-library.json'))).toBe(true)
+    expect(existsSync(join(paths.global, 'builtin', builtin.skillId, 'skill.manifest.json'))).toBe(false)
 
     copyGlobalSkillToWorkspace(builtin.skillId, 'ledger-free')
     const copyDir = join(paths.workspaces, 'ledger-free', 'skills', builtin.slug)
     expect(existsSync(join(copyDir, 'SKILL.md'))).toBe(true)
-    expect(existsSync(join(copyDir, 'skill.manifest.json'))).toBe(false)
+    expect(existsSync(join(copyDir, 'skill-library.json'))).toBe(false)
     // 工作区自己的来源标记仍要保留（它服务于本地替换/回退）。
     expect(existsSync(join(copyDir, '.source.json'))).toBe(true)
+    // 旧版本留在工作区副本里的旧名账本也不能进投影。
+    writeFileSync(join(copyDir, 'skill.manifest.json'), '{}')
 
     const projection = prepareRuntimeSkills('ledger-free')
     const runtimeDir = join(projection.path, 'skills', builtin.slug)
     expect(existsSync(join(runtimeDir, 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(runtimeDir, 'skill-library.json'))).toBe(false)
     expect(existsSync(join(runtimeDir, 'skill.manifest.json'))).toBe(false)
     expect(existsSync(join(runtimeDir, '.source.json'))).toBe(false)
+  })
+
+  test('旧名账本 skill.manifest.json 首次读取时就地改名，技能不丢', () => {
+    const paths = setup()
+    const builtin = listGlobalSkills()[0]!
+    const dir = join(paths.global, 'builtin', builtin.skillId)
+    renameSync(join(dir, 'skill-library.json'), join(dir, 'skill.manifest.json'))
+
+    expect(listGlobalSkills().map((skill) => skill.skillId)).toContain(builtin.skillId)
+    expect(existsSync(join(dir, 'skill-library.json'))).toBe(true)
+    expect(existsSync(join(dir, 'skill.manifest.json'))).toBe(false)
   })
 })

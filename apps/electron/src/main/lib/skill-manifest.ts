@@ -1,9 +1,9 @@
 /**
  * Skill 模块清单（SKILL.json）读取与元数据优先级。
  *
- * 优先级：模块清单 > 正文 frontmatter。清单缺失或损坏时不阻断加载，只产出诊断
- * （Skill 不能被清单问题挡在门外）；本文件是 main 进程里唯一决定「元数据从哪来」
- * 的地方，config-paths / global-skill-manager / skill-routing 共用它，避免三份解析漂移。
+ * 优先级：模块清单 > 正文 frontmatter。清单缺失时不阻断加载；展示字段损坏只产出诊断，
+ * 门禁字段（依赖、策略）损坏由 skillManifestGateInvalid 交给路由拦截。
+ * 本文件是 main 进程里唯一决定「元数据从哪来」的地方，config-paths / global-skill-manager / skill-routing 共用它，避免三份解析漂移。
  */
 import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { basename, isAbsolute, join, relative } from 'node:path'
@@ -55,6 +55,18 @@ export function readSkillManifest(dir: string): SkillManifestReadResult {
   } catch (error) {
     return manifestInvalid(`SKILL.json 无法解析: ${error instanceof Error ? error.message : String(error)}`, SKILL_MANIFEST_FILENAME)
   }
+}
+
+/**
+ * 门禁字段（依赖、策略）是否读不出来：清单存在却整份不可用，或这些字段校验失败。
+ *
+ * 展示字段坏了可以回退 frontmatter，门禁字段不行——读不出依赖不等于没有依赖，
+ * 路由据此按 invalid-routing 拦截（与侧车 profer-routing.json 出错时一致）。
+ */
+export function skillManifestGateInvalid(read: SkillManifestReadResult): boolean {
+  if (!read.present) return false
+  if (!read.manifest) return true
+  return read.issues.some(issue => issue.severity === 'error' && /^(?:dependencies|policy)(?:\.|$)/.test(issue.field ?? ''))
 }
 
 export interface SkillFrontmatterFields {
@@ -157,7 +169,8 @@ export function resolveSkillDescriptor(input: { dirName: string; manifest?: Skil
   }
 }
 
-export interface SkillDescriptorReadResult {  descriptor: SkillDescriptor
+export interface SkillDescriptorReadResult {
+  descriptor: SkillDescriptor
   manifest?: SkillManifest
   manifestIssues: SkillManifestIssue[]
   manifestPresent: boolean
@@ -296,7 +309,7 @@ export function writeSkillManifest(dir: string, patch: SkillManifestPatch): Skil
     if (existsSync(path)) rmSync(path, { force: true })
     return { path, removed: true, issues }
   }
-  // 不生成 .bak：卡片目录会被复制/投影，备份文件只会成为噪音；正文里的名称/描述仍是兵底。
+  // 不生成 .bak：卡片目录会被复制/投影，备份文件只会成为噪音；正文里的名称/描述仍是兜底。
   writeJsonFileAtomic(path, merged, true)
   const written = readSkillManifest(dir)
   return { path, removed: false, manifest: written.manifest ?? parsed.manifest, issues: [...issues, ...written.issues.filter(issue => issue.severity !== 'error')] }

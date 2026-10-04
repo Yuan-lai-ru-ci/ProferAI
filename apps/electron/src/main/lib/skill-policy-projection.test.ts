@@ -44,3 +44,16 @@ test('引号 YAML key、block scalar 与 metadata 重写后仍可由 SDK 解析'
   expect(parsed.body).toContain('BODY_alpha')
   expect(readFileSync(join(dir, 'SKILL.md'), 'utf8')).toBe(content)
 })
+
+test('投影把清单解析出的描述写回 frontmatter：模型看到的描述与路由用的是同一份', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'profer-policy-description-'))
+  roots.push(root)
+  const dir = join(root, 'skills', 'alpha')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'SKILL.md'), '---\nname: alpha\ndescription: 正文里的旧描述\n---\nBODY_alpha\n')
+  writeFileSync(join(dir, 'SKILL.json'), JSON.stringify({ schemaVersion: 1, interface: { shortDescription: '清单短描述' } }))
+  const result = await preparePolicyRuntimeSkills({ path: root, skills: [{ slug: 'alpha', name: 'alpha', path: dir, version: '1', scope: 'workspace', actualSource: 'workspace' }], diagnostics: [] }, ['alpha'])
+  const projected = parseFrontmatter<{ description: string }>(readFileSync(join(result.path, 'skills', 'alpha', 'SKILL.md'), 'utf8'))
+  expect(projected.frontmatter.description).toBe('清单短描述')
+  expect(readFileSync(join(dir, 'SKILL.md'), 'utf8')).toContain('正文里的旧描述')
+})

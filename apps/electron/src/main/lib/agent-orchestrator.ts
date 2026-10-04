@@ -125,7 +125,7 @@ import {
 } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, agentSessionVisualizationsDir, getPiCheckpointsDir, getSdkConfigDir, getBundledCliPath } from './config-paths'
 import { prepareRuntimeSkills } from './global-skill-manager'
-import { routeSkillsForTask, type SkillRoutingSnapshot } from './skill-routing'
+import { buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
 import { captureSkillToolInventory } from './skill-tool-inventory'
 import { getRuntimeStatus } from './runtime-init'
@@ -861,6 +861,19 @@ export class AgentOrchestrator {
    * 只持久化 assistant、user、result 和需要长期可见的 system 消息
    * （跳过 tool_progress、compacting 等临时消息）。
    */
+  /** 用户点名的 Skill 没加载时落盘一条系统提示并推给界面；失败只记日志，不影响本轮运行。 */
+  private persistSkillRoutingNotice(sessionId: string, routed: SkillRoutingResult): void {
+    const notice = buildSkillRoutingNotice(routed)
+    if (!notice) return
+    const message = { type: 'system', subtype: 'skill_routing_notice', message: notice, _createdAt: Date.now() } as unknown as SDKMessage
+    try {
+      appendSDKMessages(sessionId, [message])
+      this.eventBus.emit(sessionId, { kind: 'sdk_message', message })
+    } catch (error) {
+      console.warn(`[Skill 路由] 未加载提示写入失败: sessionId=${sessionId}`, error)
+    }
+  }
+
   private persistSDKMessages(sessionId: string, accumulatedMessages: SDKMessage[], durationMs?: number): void {
     if (this.nonPersistingGoalSessions.has(sessionId)) return
     if (accumulatedMessages.length === 0) return
@@ -2009,12 +2022,14 @@ ${enrichedMessage}`
         workspaceSlug,
       })
       const runtimeSkills = workspaceSlug ? prepareRuntimeSkills(workspaceSlug) : undefined
+      // 快照与工具清单必须基于同一份冻结策略，否则依赖检查与预设过滤会各按一份规则判断。
+      const skillRoutingPolicy = this.activePresetPolicies.get(sessionId) ?? presetPolicy
       const skillRouting = await prepareAgentSkillRouting({
         projection: runtimeSkills,
-        policy: this.activePresetPolicies.get(sessionId) ?? presetPolicy,
+        policy: skillRoutingPolicy,
         toolNames: agentRuntime === 'pi'
           ? ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', ...(piCustomTools?.map(getMcpPolicyToolName) ?? [])]
-          : await skillToolInventory.getToolNames(mcpServers, presetPolicy),
+          : await skillToolInventory.getToolNames(mcpServers, skillRoutingPolicy),
       })
       resolveSkillRouting(skillRouting.snapshot)
       const routedSkills = routeSkillsForTask(skillRouting.snapshot, { userMessage, mentionedSkills })
@@ -2023,7 +2038,8 @@ ${enrichedMessage}`
         finalPrompt = `${routedSkills.prompt}\n\n${finalPrompt}`
         contextualMessage = `${routedSkills.prompt}\n\n${contextualMessage}`
       }
-      console.log('[Skill 路由]', JSON.stringify({ sessionId, allowed: skillRouting.snapshot.allowedSlugs, blocked: skillRouting.snapshot.skills.filter(skill => skill.blocked).map(skill => ({ slug: skill.slug, code: skill.blocked })), selected: routedSkills.selected, diagnostics: routedSkills.diagnostics }))
+      if (!isCompactCommand && !input.suppressUserMessagePersistence) this.persistSkillRoutingNotice(sessionId, routedSkills)
+      console.log('[Skill 路由]', JSON.stringify({ sessionId, allowed: skillRouting.snapshot.allowedSlugs, blocked: skillRouting.snapshot.skills.filter(skill => skill.blocked).map(skill => ({ slug: skill.slug, code: skill.blocked })), selected: routedSkills.selected, hints: routedSkills.hints, diagnostics: routedSkills.diagnostics }))
       const skillRuntimeOptions = buildSkillRuntimeOptions(skillRouting)
       const projectCandidates = detectAttachedDirectoryProjects(allAdditionalDirectories)
       const attachedDirectoriesPrompt = buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
@@ -3876,7 +3892,7 @@ ${enrichedMessage}`
     }
     const routedSkills = routeSkillsForTask(skillSnapshot, { userMessage: rawText ?? text, mentionedSkills })
     if (routedSkills.prompt) enrichedText = `${routedSkills.prompt}\n\n${enrichedText}`
-    console.log('[Skill 路由 队列]', JSON.stringify({ sessionId, selected: routedSkills.selected, diagnostics: routedSkills.diagnostics }))
+    console.log('[Skill 路由 队列]', JSON.stringify({ sessionId, selected: routedSkills.selected, hints: routedSkills.hints, diagnostics: routedSkills.diagnostics }))
     const allowedMentionedMcpServers = mentionedMcpServers?.filter((name) =>
       activePolicy?.loadedMcpServerNames?.includes(name) === true,
     ) ?? []
@@ -3940,6 +3956,8 @@ ${enrichedMessage}`
         // 注入已成功，uuid 必须保留（幂等短路），否则重试会重复注入；JSONL 缺口由会话文件后续 append 兜底。
         console.error(`[Agent 编排] 已注入消息持久化失败 (uuid=${uuid}, sessionId=${sessionId}):`, persistError)
       }
+      // 提示必须排在用户消息之后落盘，否则重载后会显示在它前面。
+      this.persistSkillRoutingNotice(sessionId, routedSkills)
     } catch (error) {
       // 仅当注入本身失败（sendQueuedMessage reject，消息未被 Agent 接收）时释放 uuid 允许重试
       uuids.delete(uuid)

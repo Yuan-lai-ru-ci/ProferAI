@@ -25,7 +25,8 @@ import {
 } from './config-paths'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { normalizeDefaultSkillSlug } from './default-skill-slugs'
-import { readSkillDescriptor } from './skill-manifest'
+import { readSkillDescriptor, SKILL_MANIFEST_FILENAME } from './skill-manifest'
+import { migrateRoutingSidecar } from './skill-sidecar-migration'
 import type {
   GlobalSkillManifest,
   GlobalSkillMeta,
@@ -90,6 +91,7 @@ export function ensureGlobalSkillSystemReady(): void {
   if (!bundledSkillsRoot) return
   seedBuiltinGlobalSkills(bundledSkillsRoot)
   const migration = migrateLegacyWorkspaceSkills(bundledSkillsRoot)
+  migrateRoutingSidecars()
   // 有失败项时下一个 Agent run 仍会重试；成功后才缓存本进程就绪状态。
   globalSkillSystemInitialized = migration.failed.length === 0
 }
@@ -193,9 +195,15 @@ function saveGlobalIndex(index: GlobalSkillIndex): void {
   writeJsonFileAtomic(getGlobalSkillsIndexPathForRoot(), index)
 }
 
+/** 库账本：全局库对每个技能的私有记录，不属于技能本体；名字刻意与模块清单 SKILL.json 区分。 */
+const LEDGER_FILENAME = 'skill-library.json'
+/** 旧名账本：首次读取时就地改名；旧版本遗留在工作区副本里的旧名文件同样不得复制或计入指纹。 */
+const LEGACY_LEDGER_FILENAME = 'skill.manifest.json'
+export const LEDGER_FILENAMES: readonly string[] = [LEDGER_FILENAME, LEGACY_LEDGER_FILENAME]
+
 function manifestPath(skillId: string, type: GlobalSkillType): string {
   const root = type === 'builtin-meta' ? builtinRoot() : userRoot()
-  return join(safeSkillPath(root, skillId, 'global skillId'), 'skill.manifest.json')
+  return join(safeSkillPath(root, skillId, 'global skillId'), LEDGER_FILENAME)
 }
 function skillPath(skillId: string, type: GlobalSkillType): string {
   return dirname(manifestPath(skillId, type))
@@ -205,6 +213,18 @@ function sourcePath(skill: GlobalSkillManifest): string {
 }
 function readManifest(skillId: string, type: GlobalSkillType): GlobalSkillManifest | null {
   const path = manifestPath(skillId, type)
+  const legacyPath = join(dirname(path), LEGACY_LEDGER_FILENAME)
+  if (!existsSync(path) && existsSync(legacyPath)) {
+    try {
+      renameSync(legacyPath, path)
+    } catch (error) {
+      console.warn(`[全局 Skill] 旧名账本改名失败，本次按旧名读取: ${skillId}`, error)
+      return parseManifest(legacyPath, skillId, type)
+    }
+  }
+  return parseManifest(path, skillId, type)
+}
+function parseManifest(path: string, skillId: string, type: GlobalSkillType): GlobalSkillManifest | null {
   if (!existsSync(path)) return null
   try {
     const value = JSON.parse(readFileSync(path, 'utf-8')) as GlobalSkillManifest
@@ -321,7 +341,7 @@ function shouldCopySkillEntry(name: string): boolean {
  * 只复制普通目录与普通文件：不跟随 symlink，且统一忽略工程产物。
  * 这避免全局/工作区复制与 runtime projection 因符号链接或 node_modules 越过 Skill 根。
  *
- * `exclude` 用于带上不属于技能本体的文件：库账本 `skill.manifest.json` 与工作区来源 `.source.json`
+ * `exclude` 用于剥掉不属于技能本体的文件：库账本（`LEDGER_FILENAMES`）与工作区来源 `.source.json`
  * 只属于“当前安装的管理层”，跟到工作区副本或运行时投影里只会变成没人读的旧数据。
  */
 export function copySkillDirectorySafely(source: string, target: string, options: { exclude?: readonly string[] } = {}): void {
@@ -493,7 +513,7 @@ export function createUserGlobalSkill(slug: string, name: string, description: s
   mkdirSync(temporarySource, { recursive: true })
   copyDirectoryAtomic(temporarySource, target, (staged) => {
     writeFileSync(join(staged, 'SKILL.md'), updateFrontmatterVersion(withFrontmatter, manifest.version), 'utf-8')
-    writeJsonFileAtomic(join(staged, 'skill.manifest.json'), manifest)
+    writeJsonFileAtomic(join(staged, LEDGER_FILENAME), manifest)
   }, () => saveGlobalIndex(index))
   rmSync(temporarySource, { recursive: true, force: true })
   return manifest
@@ -568,7 +588,7 @@ export function editGlobalSkill(
   const temporary = `${target}.${randomUUID()}.tmp`
   try {
     mkdirSync(dirname(temporary), { recursive: true })
-    copySkillDirectorySafely(sourcePath(skill), temporary)
+    copySkillDirectorySafely(sourcePath(skill), temporary, { exclude: LEDGER_FILENAMES })
     writeFileSync(join(temporary, 'SKILL.md'), content, 'utf-8')
     const workspaceSkillId = randomUUID()
     writeSource(temporary, {
@@ -711,7 +731,7 @@ export function saveGlobalSkillContent(skillId: string, content: string): Global
   nextIndex.skills[skillId] = { skillId, slug: updated.slug, type: updated.type, version: updated.version }
   copyDirectoryAtomic(dir, dir, (staged) => {
     writeFileSync(join(staged, 'SKILL.md'), updateFrontmatterVersion(content, nextVersion), 'utf-8')
-    writeJsonFileAtomic(join(staged, 'skill.manifest.json'), updated)
+    writeJsonFileAtomic(join(staged, LEDGER_FILENAME), updated)
   }, () => {
     // 索引提交失败时 replaceStagedDirectory 会把旧目录恢复回来。
     saveGlobalIndex(nextIndex)
@@ -820,7 +840,7 @@ export function seedBuiltinGlobalSkills(sourceRoot: string): void {
     const existing = readManifest(skillId, 'builtin-meta')
     if (!existing || parseSkillVersion(source) !== existing.version) {
       const manifest = { ...readSkillManifestFromDir(source, skillId, 'builtin-meta'), slug: entry.name }
-      copyDirectoryAtomic(source, target, (staged) => writeJsonFileAtomic(join(staged, 'skill.manifest.json'), manifest), () => {
+      copyDirectoryAtomic(source, target, (staged) => writeJsonFileAtomic(join(staged, LEDGER_FILENAME), manifest), () => {
         index.skills[skillId] = { skillId, slug: manifest.slug, type: manifest.type, version: manifest.version }
         saveGlobalIndex(index)
       })
@@ -860,7 +880,7 @@ export function copyGlobalSkillToUserGlobal(skillId: string, slug = `${getGlobal
     index.skills[newId] = { skillId: newId, slug: normalizedSlug, type: 'user-global', version: manifest.version }
     copyDirectoryAtomic(sourcePath(source), target, (staged) => {
       writeFileSync(join(staged, 'SKILL.md'), normalizedContent, 'utf-8')
-      writeJsonFileAtomic(join(staged, 'skill.manifest.json'), manifest)
+      writeJsonFileAtomic(join(staged, LEDGER_FILENAME), manifest)
     }, () => saveGlobalIndex(index))
     return manifest
   } catch (error) {
@@ -932,6 +952,20 @@ function writeWorkspaceSkillOverrides(workspaceSlug: string, value: WorkspaceSki
   mkdirSync(dirname(overridesPath(workspaceSlug)), { recursive: true })
   writeJsonFileAtomic(overridesPath(workspaceSlug), value)
 }
+/** 把用户全局与各工作区 Skill 的旧路由侧车迁入 SKILL.json；内置库只读，不在此处理。迁不了的原样保留，路由仍兼容读取。 */
+function migrateRoutingSidecars(): void {
+  const roots = [userRoot(), ...listWorkspaceSlugs().flatMap((slug) => [workspaceSkillsRoot(slug), workspaceInactiveRoot(slug)])]
+  for (const root of roots) {
+    if (!existsSync(root)) continue
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const result = migrateRoutingSidecar(join(root, entry.name))
+      if (result === 'migrated') console.log(`[全局 Skill] 路由侧车已迁入 SKILL.json: ${join(root, entry.name)}`)
+      else if (result === 'kept') console.warn(`[全局 Skill] 路由侧车未迁移（内容无效或清单损坏），继续兼容读取: ${join(root, entry.name)}`)
+    }
+  }
+}
+
 function listWorkspaceSlugs(): string[] {
   const root = rootsOverride?.workspacesRoot ?? getAgentWorkspacesDir()
   if (!existsSync(root)) return []
@@ -981,7 +1015,7 @@ export function copyGlobalSkillToWorkspace(skillId: string, workspaceSlug: strin
   try {
     copyDirectoryAtomic(sourcePath(source), target, (staged) => {
       // 库账本只属于全局库，带到工作区副本里只会变成没人读、还带着全局 skillId 的旧数据。
-      rmSync(join(staged, 'skill.manifest.json'), { force: true })
+      for (const name of LEDGER_FILENAMES) rmSync(join(staged, name), { force: true })
     })
     writeSource(target, { workspaceSkillId, sourceSkillId: source.skillId, sourceSkillType: source.type, sourceVersion: source.version, copiedAt, scope: 'workspace', replacementForSkillId: source.skillId, overrideReason: 'replaced-by-workspace-copy' })
     // 源在本工作区被替换而禁用；副本本身位于 active skills/，会被解析器唯一加载。
@@ -1602,14 +1636,15 @@ function cleanupStaleRuntimeProjections(workspaceSlug: string, currentFingerprin
 
 /**
  * 为一次 policy 快照提供独立目录：先过滤再交给 SDK 发现，两个 runtime 同时受约束。
- * 仅重写投影副本的 name 为唯一 slug，保留用户源正文和资源，避免 SDK 按 display name 吞项。
+ * 仅重写投影副本的 name 为唯一 slug、description 为清单优先解析出的描述（让模型与路由读同一份），
+ * 保留用户源正文和资源，避免 SDK 按 display name 吞项。
  * 子投影随父 fingerprint 一起回收；不修改 workspace 扁平兼容链接。
  */
 export async function preparePolicyRuntimeSkills(source: RuntimeSkillsProjection, allowedSlugs: readonly string[]): Promise<RuntimeSkillsProjection> {
   const { parseFrontmatter } = await import('@earendil-works/pi-coding-agent')
   const allowed = new Set(allowedSlugs)
   const selected = source.skills.filter(skill => allowed.has(skill.slug))
-  const fingerprint = createHash('sha256').update(`policy-v2:${source.path}:${selected.map(skill => skill.slug).sort().join('\n')}`).digest('hex').slice(0, 16)
+  const fingerprint = createHash('sha256').update(`policy-v3:${source.path}:${selected.map(skill => skill.slug).sort().join('\n')}`).digest('hex').slice(0, 16)
   const path = join(source.path, '.policies', fingerprint)
   if (!existsSync(path)) {
     const temporary = `${path}.${randomUUID()}.tmp`
@@ -1623,7 +1658,10 @@ export async function preparePolicyRuntimeSkills(source: RuntimeSkillsProjection
         const content = readFileSync(mdPath, 'utf8').replace(/^\uFEFF/, '')
         const parsed = parseFrontmatter<Record<string, unknown>>(content)
         // JSON 是合法 YAML；解析后序列化可正确处理引号键、block scalar、嵌套 metadata。
-        writeFileSync(mdPath, `---\n${JSON.stringify({ ...parsed.frontmatter, name: skill.slug })}\n---\n${parsed.body}`, 'utf8')
+        // 只在描述来自清单时覆盖；无清单时保留 SDK 解析的原 frontmatter，避免最小解析器改坏复杂 YAML。
+        const { description, sources } = readSkillDescriptor(target, skill.slug).descriptor
+        const projectedDescription = sources.description === 'manifest' ? { description } : {}
+        writeFileSync(mdPath, `---\n${JSON.stringify({ ...parsed.frontmatter, name: skill.slug, ...projectedDescription })}\n---\n${parsed.body}`, 'utf8')
       }
       mkdirSync(join(temporary, '.claude-plugin'), { recursive: true })
       writeJsonFileAtomic(join(temporary, '.claude-plugin', 'plugin.json'), { name: `profer-skills-${fingerprint}`, version: '1.0.0' })
@@ -1642,13 +1680,13 @@ export function getRuntimeSkillsPath(projection: RuntimeSkillsProjection): strin
 }
 
 /** 运行时投影只带技能本体：库账本与工作区来源都不属于技能。 */
-const RUNTIME_COPY_EXCLUDE = ['skill.manifest.json', '.source.json'] as const
+const RUNTIME_COPY_EXCLUDE = [...LEDGER_FILENAMES, '.source.json']
 
 function skillDirectoryHash(dir: string, normalize?: (relativePath: string, content: Buffer) => Buffer): string {
   const hash = createHash('sha256')
   const visit = (current: string, prefix: string): void => {
     for (const entry of readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.name === '.source.json' || entry.name === 'skill.manifest.json' || !shouldCopySkillEntry(entry.name) || entry.isSymbolicLink()) continue
+      if (entry.name === '.source.json' || LEDGER_FILENAMES.includes(entry.name) || !shouldCopySkillEntry(entry.name) || entry.isSymbolicLink()) continue
       const full = join(current, entry.name)
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name
       if (entry.isDirectory()) visit(full, rel)
@@ -1662,10 +1700,28 @@ function skillDirectoryHash(dir: string, normalize?: (relativePath: string, cont
   return hash.digest('hex')
 }
 
-/** bundle 只提升版本号时，旧 master 仍视为未修改；正文或资源变化仍会被识别。 */
+/**
+ * bundle 只提升版本号时，旧 master 仍视为未修改；正文、资源或卡片其他字段变化仍会被识别。
+ * 版本可能住在 SKILL.md frontmatter，也可能住在 SKILL.json，两处都去掉后再比较，
+ * 版本从 frontmatter 挪到卡片也不算修改。
+ */
 function skillDirectoryHashIgnoringVersion(dir: string): string {
   return skillDirectoryHash(dir, (relativePath, content) => {
-    if (relativePath !== 'SKILL.md') return content
-    return Buffer.from(content.toString('utf-8').replace(/^(version\s*:)\s*[^\r\n]+$/m, '$1 <bundle-version>'), 'utf-8')
+    if (relativePath === 'SKILL.md') {
+      const text = content.toString('utf-8').replace(/^---\r?\n[\s\S]*?\r?\n---/, (block) => block.replace(/^version\s*:[^\r\n]*\r?\n/m, ''))
+      return Buffer.from(text, 'utf-8')
+    }
+    if (relativePath === SKILL_MANIFEST_FILENAME) {
+      try {
+        const card: unknown = JSON.parse(content.toString('utf-8'))
+        if (card && typeof card === 'object' && !Array.isArray(card)) {
+          const { version: _version, ...rest } = card as Record<string, unknown>
+          return Buffer.from(JSON.stringify(rest), 'utf-8')
+        }
+      } catch {
+        // 坏卡片按原始字节比较
+      }
+    }
+    return content
   })
 }

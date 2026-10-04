@@ -158,6 +158,19 @@ function InterruptionRecordNotice({ message }: { message: SDKSystemMessage }): R
   )
 }
 
+/** 用户点名的 Skill 被门禁拦下时的提示：原因直接给用户看，不依赖模型转述。 */
+function SkillRoutingNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
+  const text = typeof message.message === 'string' && message.message.length > 0 ? message.message : 'Skill 未加载'
+  return (
+    <div className="my-3 pl-[46px] pr-1">
+      <div className="flex items-start gap-2.5 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs text-foreground/80">
+        <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+        <p className="min-w-0 break-words">{text}</p>
+      </div>
+    </div>
+  )
+}
+
 function PermissionDeniedNotice({ message }: { message: SDKSystemMessage }): React.ReactElement {
   const toolName = typeof message.tool_name === 'string' ? formatSystemToolName(message.tool_name) : undefined
   const denialMessage = typeof message.message === 'string' ? message.message : undefined
@@ -415,9 +428,9 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
       }
     } else if (msg.type === 'system') {
       const sysMsg = msg as SDKSystemMessage
-      // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied / interruption_record）
+      // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied / interruption_record / skill_routing_notice）
       // 其他 system 消息（如 init、task_started、task_progress）归入当前 turn，不中断分组
-      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'interruption_record') {
+      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'interruption_record' || sysMsg.subtype === 'skill_routing_notice') {
         flushTurn()
         groups.push({ type: 'system', message: sysMsg })
       } else if (sysMsg.subtype === 'task_notification') {
@@ -1122,6 +1135,9 @@ export function SDKMessageRenderer({
     if (subtype === 'interruption_record') {
       return <InterruptionRecordNotice message={sysMsg} />
     }
+    if (subtype === 'skill_routing_notice') {
+      return <SkillRoutingNotice message={sysMsg} />
+    }
 
     // compacting 事件已由 isCompacting flag 驱动的尾部指示器接管（见 AgentMessages），此处不再渲染持久条目
 
@@ -1675,6 +1691,7 @@ export function getGroupPreview(group: MessageGroup): string {
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
     if (group.message.subtype === 'interruption_record') return group.message.message ?? '任务中断'
+    if (group.message.subtype === 'skill_routing_notice') return group.message.message ?? 'Skill 未加载'
     return ''
   }
   // assistant-turn：按顺序累加 text 块，达到预览上限即返回。
@@ -1723,6 +1740,7 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
     if (subtype === 'compacting') return null
     if (subtype === 'permission_denied') return <div data-message-id={groupId}><PermissionDeniedNotice message={group.message} /></div>
     if (subtype === 'interruption_record') return <div data-message-id={groupId}><InterruptionRecordNotice message={group.message} /></div>
+    if (subtype === 'skill_routing_notice') return <div data-message-id={groupId}><SkillRoutingNotice message={group.message} /></div>
     return null
   }
 

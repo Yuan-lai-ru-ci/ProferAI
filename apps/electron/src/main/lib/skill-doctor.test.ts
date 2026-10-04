@@ -44,15 +44,14 @@ describe('Skill 医生：清单与元数据', () => {
       manifest: {
         schemaVersion: 1,
         version: '1.0.0',
-        triggers: { keywords: ['柱状图', '流程图'] },
         dependencies: { toolGroups: ['preview'], tools: ['present_visualization'] },
         requires: { hostClasses: ['.table', '.viz-badge'] },
       },
     })
     const report = doctorSkill({ dir, slug: 'demo' })
     expect(report.counts).toEqual({ error: 0, warning: 0, info: 1 })
-    // 词表只有路由代码读得到，模型读不到：医生要提醒把词也写进描述。
-    expect(report.issues.map(issue => issue.code)).toEqual(['triggers-in-manifest'])
+    // 词表已弃用：理想卡片不写词表，只剩“靠描述命中”这条推荐做法提示。
+    expect(report.issues.map(issue => issue.code)).toEqual(['keywords-missing'])
   })
 
   test('缺清单只报 info；坏清单报 error 但描述仍能回退 frontmatter', () => {
@@ -96,6 +95,12 @@ describe('Skill 医生：描述与触发词质量', () => {
     const found = codes(dir)
     expect(found).toContain('description-no-usage-marker')
     expect(found).toContain('triggers-in-manifest')
+  })
+
+  test('写了词表就提示已弃用：只为兼容保留，用户说法应写进描述', () => {
+    const dir = makeSkill('demo', { manifest: { schemaVersion: 1, triggers: { keywords: ['柱状图'] } } })
+    expect(codes(dir)).toContain('keywords-deprecated')
+    expect(codes(makeSkill('demo', { manifest: { schemaVersion: 1 } }))).not.toContain('keywords-deprecated')
   })
 
   test('没有触发词只提示 info；触发词全部包含在描述里提示无额外信息', () => {

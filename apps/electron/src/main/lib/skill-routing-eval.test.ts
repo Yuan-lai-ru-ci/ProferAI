@@ -31,6 +31,10 @@ const cases: Array<{ task: string; slug: string; expected: boolean }> = [
   { task: 'Skill 门禁的设计有什么问题？', slug: 'brainstorming', expected: false },
   { task: '帮我写一封感谢邮件', slug: 'docx', expected: false },
   { task: '创建普通 HTML 页面，不要 PPT', slug: 'pptx', expected: false },
+  { task: '我不需要定时任务，帮我理解一下日报周报自动汇总这件事的长期价值', slug: 'automation', expected: false },
+  { task: '帮我审查源码，不需要并行', slug: 'agent-collaboration', expected: false },
+  { task: '请检查 API，不需要浏览器', slug: 'in-app-browser', expected: false },
+  { task: '创建普通 HTML 页面，不需要 PPT', slug: 'pptx', expected: false },
 ]
 
 describe('Skill 触发离线评测', () => {

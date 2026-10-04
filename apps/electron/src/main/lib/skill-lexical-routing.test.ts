@@ -1,8 +1,9 @@
 /**
  * 关键词 + 字符 n-gram 两级路由的契约。
  *
- * 第一级（关键词 / 确定性信号）负责精度，第二级（字符 n-gram）负责召回，只在第一级
- * 一条都没命中时介入，并且必须过最短消息、最少命中 gram 数、领先第二名三倍多之外的闸。
+ * 第一级（关键词 / 确定性信号）负责精度，第二级（字符 n-gram）只在第一级一条都没命中时介入，
+ * 必须过最短消息、最少命中 gram 数、领先第二名的闸，而且只给提示、不注入正文：
+ * 用词相似只是猜测，是否读取交给模型判断。
  * 这些用例锁的就是"不要因为想更聪明而把噪声放进来"。
  */
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -76,15 +77,17 @@ describe('两级结合：关键词优先，n-gram 只兜底', () => {
     expect(result.selected.map(item => `${item.slug}:${item.reason}`)).toEqual(['lark-delivery:configured-keyword'])
   })
 
-  test('关键词零命中时按用词重叠兜底一次，并写明理由', async () => {
+  test('关键词零命中时按用词重叠给一次提示：写明位置，但不注入正文、不算已选中', async () => {
     const snapshot = await skillFixture([
       { slug: 'lark-delivery', description: LARK.description },
       { slug: 'theme-authoring', description: THEME.description },
     ])
     const result = routeSkillsForTask(snapshot, { userMessage: '帮我把这份会议纪要写进飞书的多维表格里' })
-    expect(result.selected.map(item => `${item.slug}:${item.reason}`)).toEqual(['lark-delivery:lexical-fallback'])
-    expect(result.prompt).toContain('BODY_lark-delivery')
-    expect(result.prompt).toContain('lark-delivery: lexical-fallback')
+    expect(result.selected).toEqual([])
+    expect(result.hints).toEqual([{ slug: 'lark-delivery', reason: 'lexical-hint' }])
+    expect(result.prompt).not.toContain('BODY_lark-delivery')
+    expect(result.prompt).toContain('lark-delivery')
+    expect(result.prompt).toContain('SKILL.md')
   })
 
   test('与用户意图无关时保持沉默', async () => {
@@ -94,6 +97,7 @@ describe('两级结合：关键词优先，n-gram 只兜底', () => {
     ])
     const result = routeSkillsForTask(snapshot, { userMessage: '帮我把这段快速排序的代码改成迭代写法' })
     expect(result.selected).toEqual([])
+    expect(result.hints).toEqual([])
     expect(result.prompt).toBe('')
   })
 
@@ -109,6 +113,36 @@ describe('两级结合：关键词优先，n-gram 只兜底', () => {
     ])
     expect(routeSkillsForTask(snapshot, { userMessage: '把这份会议纪要写进飞书的多维表格里' }).selected).toEqual([])
     expect(routeSkillsForTask(snapshot, { userMessage: '/skill:lark-delivery 写进飞书' }).selected.map(item => `${item.slug}:${item.reason}`)).toEqual(['lark-delivery:explicit'])
+  })
+
+  test('排除词命中的 Skill 不会经由兜底被召回', async () => {
+    const snapshot = await skillFixture([
+      { slug: 'lark-delivery', description: LARK.description, routing: { excludeKeywords: ['不要写飞书'] } },
+      { slug: 'theme-authoring', description: THEME.description },
+    ])
+    const result = routeSkillsForTask(snapshot, { userMessage: '这份会议纪要不要写飞书，多维表格里的东西先别动' })
+    expect(result.hints).toEqual([])
+    expect(result.prompt).toBe('')
+  })
+
+  test('内置否定信号（如「不要创建定时任务」）同样挡住兜底', async () => {
+    const snapshot = await skillFixture([
+      { slug: 'automation', description: 'Profer 定时任务：持续关注、定期检查、有变化告诉我、异常时提醒我、竞品价格监控。' },
+      { slug: 'theme-authoring', description: THEME.description },
+    ])
+    const result = routeSkillsForTask(snapshot, { userMessage: '不要创建定时任务，我只想一次性看看：持续关注竞品价格、有变化告诉我这种需求怎么评估' })
+    expect(result.hints).toEqual([])
+  })
+
+  test('兜底只看本条用户意图，不被 quoted_context 与代码块触发', async () => {
+    const snapshot = await skillFixture([
+      { slug: 'lark-delivery', description: LARK.description },
+      { slug: 'theme-authoring', description: THEME.description },
+    ])
+    const quoted = routeSkillsForTask(snapshot, { userMessage: '<quoted_context>帮我把这份会议纪要写进飞书的多维表格里</quoted_context> 这句话是什么意思' })
+    expect(quoted.hints).toEqual([])
+    const fenced = routeSkillsForTask(snapshot, { userMessage: '这段输出是什么意思\n```\n把这份会议纪要写进飞书的多维表格里\n```' })
+    expect(fenced.hints).toEqual([])
   })
 
   test('预设拒绝的 Skill 不会经由兜底被召回', async () => {

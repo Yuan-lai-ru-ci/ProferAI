@@ -61,6 +61,13 @@ describe('system 消息渲染分组', () => {
     ])
     expect(groups.map((group) => group.type)).toEqual(['user', 'assistant-turn', 'system', 'assistant-turn'])
   })
+
+  test('Skill 未加载提示独立成组，迷你地图预览显示提示原文', () => {
+    const notice = { ...systemMessage('skill_routing_notice'), message: 'Skill 未加载：pptx（所需工具组已关闭）' } as unknown as SDKMessage
+    const groups = groupIntoTurns([userText('/skill:pptx 做个 PPT'), notice, assistantText('好的')])
+    expect(groups.map((group) => group.type)).toEqual(['user', 'system', 'assistant-turn'])
+    expect(getGroupPreview(groups[1]!)).toBe('Skill 未加载：pptx（所需工具组已关闭）')
+  })
 })
 
 function assistantTurn(blocks: string[][]): MessageGroup {

@@ -2,7 +2,8 @@
  * 模块清单（SKILL.json）参与路由的契约。
  *
  * 这里钉死「清单是模块自己声明的真相」：触发词、依赖、implicit 都能只靠清单生效，
- * 旧侧车只是迁移期回退；清单坏掉时不能把 Skill 变不可用，而要退回 frontmatter + 侧车。
+ * 旧侧车只是迁移期回退。门禁字段（依赖、策略）读不出来时按 invalid-routing 拦截；
+ * 只有展示字段出错时才退回 frontmatter。
  */
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -94,11 +95,26 @@ describe('模块清单驱动的路由', () => {
     expect(routeSkillsForTask(snapshot, { userMessage: '来一张季度核算的图，不要核算' }).selected).toEqual([])
   })
 
-  test('清单损坏时退回 frontmatter + 侧车，Skill 不会被清单问题挡掉', async () => {
-    const snapshot = await createSkillRoutingSnapshot(fixture({ manifest: '{ 坏清单', sidecar: { keywords: ['季度核算'] } }))
+  test('清单损坏或版本不受支持时按 invalid-routing 拦截：读不出依赖就不能当作没有依赖', async () => {
+    for (const manifest of ['{ 坏清单', '[]', { schemaVersion: 99, dependencies: { toolGroups: ['preview'] } }]) {
+      const snapshot = await createSkillRoutingSnapshot(fixture({ manifest, sidecar: { keywords: ['季度核算'] } }))
+      expect(snapshot.skills[0]?.blocked).toBe('invalid-routing')
+      expect(snapshot.allowedSlugs).toEqual([])
+      expect(routeSkillsForTask(snapshot, { userMessage: '来一张季度核算的图' }).prompt).not.toContain('BODY_CONTRACT')
+    }
+  })
+
+  test('依赖或策略字段校验失败时拦截，不能静默丢掉该依赖', async () => {
+    const badGroup = await createSkillRoutingSnapshot(fixture({ manifest: { schemaVersion: 1, dependencies: { toolGroups: ['automaton'] } } }))
+    expect(badGroup.skills[0]?.blocked).toBe('invalid-routing')
+    const badPolicy = await createSkillRoutingSnapshot(fixture({ manifest: { schemaVersion: 1, policy: { implicit: 'no' } } }))
+    expect(badPolicy.skills[0]?.blocked).toBe('invalid-routing')
+  })
+
+  test('只是展示字段写错（如 brandColor）不影响门禁，Skill 照常可用', async () => {
+    const snapshot = await createSkillRoutingSnapshot(fixture({ manifest: { schemaVersion: 1, interface: { brandColor: 'red' } } }))
     expect(snapshot.skills[0]?.blocked).toBeUndefined()
     expect(snapshot.skills[0]?.description).toBe('用于把数据画成图表的演示技能。')
-    expect(routeSkillsForTask(snapshot, { userMessage: '来一张季度核算的图' }).selected.map(item => item.slug)).toEqual([SLUG])
   })
 
   test('清单的短描述成为路由描述文本（回退 frontmatter 描述）', async () => {

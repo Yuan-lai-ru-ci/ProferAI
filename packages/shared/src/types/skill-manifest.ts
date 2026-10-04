@@ -192,7 +192,7 @@ function readSubRecord(record: Record<string, unknown>, field: string, issues: S
   return value
 }
 
-function readSubRecordArray<T>(
+function readGroup<T>(
   record: Record<string, unknown>,
   field: string,
   issues: SkillManifestIssue[],
@@ -255,7 +255,7 @@ export function parseSkillManifest(value: unknown): SkillManifestParseResult {
     else manifest.version = version
   }
 
-  const iface = readSubRecordArray(value, 'interface', issues, 'interface', KNOWN_INTERFACE_FIELDS, (input, list, path) => {
+  const iface = readGroup(value, 'interface', issues, 'interface', KNOWN_INTERFACE_FIELDS, (input, list, path) => {
     const result: SkillManifestInterface = {}
     const displayName = readText(input, 'displayName', list, `${path}.displayName`)
     if (displayName !== undefined) result.displayName = displayName
@@ -277,7 +277,7 @@ export function parseSkillManifest(value: unknown): SkillManifestParseResult {
   })
   if (iface) manifest.interface = iface
 
-  const policy = readSubRecordArray(value, 'policy', issues, 'policy', KNOWN_POLICY_FIELDS, (input, list, path) => {
+  const policy = readGroup(value, 'policy', issues, 'policy', KNOWN_POLICY_FIELDS, (input, list, path) => {
     const result: SkillManifestPolicy = {}
     if (input.implicit !== undefined) {
       if (typeof input.implicit !== 'boolean') list.push({ code: 'invalid-field', severity: 'error', field: `${path}.implicit`, message: 'implicit 应为布尔值' })
@@ -293,7 +293,7 @@ export function parseSkillManifest(value: unknown): SkillManifestParseResult {
   })
   if (policy) manifest.policy = policy
 
-  const triggers = readSubRecordArray(value, 'triggers', issues, 'triggers', KNOWN_TRIGGER_FIELDS, (input, list, path) => {
+  const triggers = readGroup(value, 'triggers', issues, 'triggers', KNOWN_TRIGGER_FIELDS, (input, list, path) => {
     const result: SkillManifestTriggers = {}
     const keywords = readStringArray(input, 'keywords', list, `${path}.keywords`)
     if (keywords) result.keywords = Object.freeze(keywords)
@@ -303,7 +303,7 @@ export function parseSkillManifest(value: unknown): SkillManifestParseResult {
   })
   if (triggers) manifest.triggers = triggers
 
-  const dependencies = readSubRecordArray(value, 'dependencies', issues, 'dependencies', KNOWN_DEPENDENCY_FIELDS, (input, list, path) => {
+  const dependencies = readGroup(value, 'dependencies', issues, 'dependencies', KNOWN_DEPENDENCY_FIELDS, (input, list, path) => {
     const result: SkillManifestDependencies = {}
     const toolGroups = readStringArray(input, 'toolGroups', list, `${path}.toolGroups`)
     if (toolGroups) {
@@ -321,7 +321,7 @@ export function parseSkillManifest(value: unknown): SkillManifestParseResult {
   })
   if (dependencies) manifest.dependencies = dependencies
 
-  const requires = readSubRecordArray(value, 'requires', issues, 'requires', KNOWN_REQUIRES_FIELDS, (input, list, path) => {
+  const requires = readGroup(value, 'requires', issues, 'requires', KNOWN_REQUIRES_FIELDS, (input, list, path) => {
     const result: SkillManifestRequires = {}
     const hostClasses = readStringArray(input, 'hostClasses', list, `${path}.hostClasses`)
     if (hostClasses) {
@@ -333,7 +333,7 @@ export function parseSkillManifest(value: unknown): SkillManifestParseResult {
   })
   if (requires) manifest.requires = requires
 
-  const provenance = readSubRecordArray(value, 'provenance', issues, 'provenance', KNOWN_PROVENANCE_FIELDS, (input, list, path) => {
+  const provenance = readGroup(value, 'provenance', issues, 'provenance', KNOWN_PROVENANCE_FIELDS, (input, list, path) => {
     const result: SkillManifestProvenance = { kind: 'bundled' }
     const kind = readText(input, 'kind', list, `${path}.kind`, 32, true)
     if (kind !== undefined) {
@@ -404,6 +404,7 @@ export type SkillDoctorCode =
   | 'description-too-short'
   | 'description-no-usage-marker'
   | 'keywords-missing'
+  | 'keywords-deprecated'
   | 'keywords-redundant'
   | 'triggers-in-manifest'
   | 'dependency-tool-unavailable'

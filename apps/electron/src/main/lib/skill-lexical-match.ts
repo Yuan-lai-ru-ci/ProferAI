@@ -88,12 +88,7 @@ export function scoreSkillsLexically(
   return matches.sort((left, right) => right.score - left.score || left.slug.localeCompare(right.slug))
 }
 
-/** 只要原始分数（无闸），供诊断与阈值调参使用；生产路径用 `selectLexicalFallback`。 */
-export function rankSkillsLexically(query: string, documents: readonly LexicalSkillDocument[]): LexicalSkillMatch[] {
-  return scoreSkillsLexically(query, documents)
-}
-
-/** 只取唯一赢家；命中 gram 数、绝对分或领先幅度任一项不达标就返回 undefined（不猜比猜错便宜）。 */
+/** 只取唯一赢家；命中 gram 数或领先幅度任一项不达标就返回 undefined（不猜比猜错便宜）。 */
 export function selectLexicalFallback(
   query: string,
   documents: readonly LexicalSkillDocument[],
