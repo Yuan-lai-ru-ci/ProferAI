@@ -463,3 +463,95 @@ describe('GoalController 审计边界', () => {
     expect(h.controller.get('s')?.runtimeSessionId).toBeUndefined()
   })
 })
+
+
+describe('GoalController v2 生命周期审计', () => {
+  test('创建、blocked、恢复和完成有唯一有序事件，元数据 patch 不追加转移', async () => {
+    let complete = false
+    const h = controlledGoalHarness({ runTurn: async () => complete ? { status: 'complete', summary: '验收通过', evidence: ['测试通过'] } : { status: 'blocked', summary: '需要凭据', evidence: [] } })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    const blocked = h.controller.get('s')!
+    expect(blocked.lifecycle?.map((event) => event.to)).toEqual(['active', 'blocked'])
+    expect(blocked.lifecycle?.at(-1)).toMatchObject({ reason: 'blocked', detail: '需要凭据', runId: expect.any(String) })
+    h.controller.patch('s', { blockedTodoId: 'todo' })
+    expect(h.controller.get('s')?.lifecycle).toEqual(blocked.lifecycle)
+    complete = true
+    await h.controller.resume('s')
+    await h.dispatch()
+    const final = h.controller.get('s')!
+    expect(final.lifecycle?.map((event) => event.to)).toEqual(['active', 'blocked', 'active', 'completed'])
+    expect(final).toMatchObject({ reasonCode: 'completed', reasonDetail: '验收通过' })
+    const events = final.lifecycle!
+    expect(new Set(events.map((event) => event.id)).size).toBe(events.length)
+    expect(events.every((event, index) => event.goalId === final.id && event.sessionId === 's' && (!index || event.revision > events[index - 1]!.revision))).toBe(true)
+    const cleared = h.controller.clear('s')
+    expect(cleared.lifecycle?.at(-1)).toMatchObject({ from: 'completed', to: 'cleared', reason: 'cleared' })
+    expect(h.controller.get('s')).toBeUndefined()
+  })
+
+  test('重启恢复只追加一次暂停，hydrate 不投影副作用，保留崩溃 runId', () => {
+    const h = controlledGoalHarness()
+    h.controller.restore([{ ...createGoalState('s', '目标', 1000), activeRunId: 'crashed' }])
+    const paused = h.controller.get('s')!
+    expect(paused).toMatchObject({ status: 'paused', reasonCode: 'app_restart', activeRunId: undefined })
+    expect(paused.lifecycle?.at(-1)).toMatchObject({ from: 'active', to: 'paused', reason: 'app_restart', runId: 'crashed' })
+    h.controller.restore([paused])
+    expect(h.controller.get('s')?.lifecycle).toEqual(paused.lifecycle)
+    expect(h.events).toEqual([])
+  })
+
+  test('迟到 deadline/runtime/scheduler 不增加新目标审计事件，版本跨替换单调', async () => {
+    let report!: (id: string) => void
+    const turn = deferred<import('@profer/shared').AgentGoalIterationResult>()
+    const h = controlledGoalHarness({ runTurn: ({ onRuntimeSessionId }) => { report = onRuntimeSessionId; return turn.promise } })
+    await h.controller.start('s', '旧目标')
+    const scheduler = [...h.scheduled.values()][0]!.callback
+    await h.dispatch()
+    const deadline = [...h.deadlines.values()][0]!.callback
+    await h.controller.stop('s')
+    const stoppedEvents = h.controller.get('s')!.lifecycle!
+    turn.resolve({ status: 'complete', summary: '迟到完成', evidence: ['证据'] })
+    await h.flush()
+    expect(h.controller.get('s')?.lifecycle).toEqual(stoppedEvents)
+    const cleared = h.controller.clear('s')
+    const next = await h.controller.start('s', '新目标')
+    deadline(); scheduler(); report('迟到 runtime')
+    await h.flush()
+    expect(h.controller.get('s')?.lifecycle).toEqual(next.lifecycle)
+    expect(next.lifecycle?.[0]?.revision).toBeGreaterThan(cleared.revision!)
+    expect(next.lifecycle).toHaveLength(1)
+  })
+
+  test('重复 stop/pause 不追加事件，清除前归档失败保留 live Goal', async () => {
+    let denyArchive = true
+    const h = controlledGoalHarness({ onBeforeClear: () => { if (denyArchive) throw new Error('归档失败') } })
+    await h.controller.start('s', '目标')
+    await h.controller.pause('s')
+    const paused = h.controller.get('s')!
+    await h.controller.pause('s')
+    expect(h.controller.get('s')).toBe(paused)
+    await h.controller.stop('s')
+    const stopped = h.controller.get('s')!
+    await h.controller.stop('s')
+    expect(h.controller.get('s')).toBe(stopped)
+    expect(() => h.controller.clear('s')).toThrow('归档失败')
+    expect(h.controller.get('s')).toBe(stopped)
+    denyArchive = false
+    h.controller.clear('s')
+    expect(h.controller.get('s')).toBeUndefined()
+  })
+
+  test('预算拒绝恢复不会重复审计，编辑预算后恢复记录真实转移', async () => {
+    const h = controlledGoalHarness()
+    h.controller.restore([{ ...createGoalState('s', '目标', 1000), status: 'paused', iteration: 20 }])
+    await expect(h.controller.resume('s')).rejects.toThrow('预算')
+    const events = h.controller.get('s')!.lifecycle!
+    expect(events.at(-1)).toMatchObject({ from: 'paused', to: 'budget_limited', reason: 'budget_limited' })
+    await expect(h.controller.resume('s')).rejects.toThrow('预算')
+    expect(h.controller.get('s')?.lifecycle).toEqual(events)
+    h.controller.update('s', { limits: { maxIterations: 21 } })
+    await h.controller.resume('s')
+    expect(h.controller.get('s')?.lifecycle?.at(-1)).toMatchObject({ from: 'budget_limited', to: 'active', reason: 'resumed' })
+  })
+})

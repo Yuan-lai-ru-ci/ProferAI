@@ -7,6 +7,7 @@ export function noop(): void {
   // no-op
 }
 
+export { isGoalTransitionAllowed, getGoalActions, normalizeGoalReason, createGoalLifecycleEvent, applyGoalTransition, capGoalLifecycle, GOAL_LIFECYCLE_LIMIT, GOAL_STATUSES, GOAL_REASON_CODES, GOAL_REASON_LABELS } from './goal-lifecycle'
 export { diffCapabilities } from './capabilities-diff'
 export type { CapabilityChange } from './capabilities-diff'
 export { parseGoalCommand, parseGoalContractInput, parseGoalLimitsInput, getGoalBudgetExhaustedReasons, stripGoalResultBlocks, GOAL_UPDATE_TOOL_NAME, isGoalIterationMessage, isGoalUpdateToolName } from './goal-contract'

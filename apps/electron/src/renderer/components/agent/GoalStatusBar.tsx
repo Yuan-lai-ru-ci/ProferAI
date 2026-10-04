@@ -1,8 +1,8 @@
 import * as React from 'react'
 import { AlertTriangle, Check, ChevronDown, ChevronRight, CircleX, History, Pause, Pencil, Play, Square, Target } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { getGoalBudgetExhaustedReasons, parseGoalLimitsInput } from '@profer/shared'
-import type { AgentGoalState } from '@profer/shared'
+import { getGoalBudgetExhaustedReasons, GOAL_REASON_LABELS, normalizeGoalReason, parseGoalLimitsInput } from '@profer/shared'
+import type { AgentGoalReasonCode, AgentGoalState } from '@profer/shared'
 import {
   agentGoalAtomFamily, getGoalActions, GOAL_STATUS_LABELS,
   goalActionPendingAtomFamily, goalEditorAtomFamily, goalHistoryAtomFamily,
@@ -60,6 +60,42 @@ function DetailRow({ label, value }: { label: string; value: string }): React.Re
   </div>
 }
 
+function formatReason(reason: AgentGoalReasonCode, detail?: string): string {
+  const label = GOAL_REASON_LABELS[reason]
+  if (!detail || detail === reason || detail === label) return label
+  return reason === 'unknown' ? detail : `${label}：${detail}`
+}
+
+function GoalReasonDetails({ goal }: { goal: AgentGoalState }): React.ReactElement | null {
+  if (!goal.reasonCode && !goal.reasonDetail && !goal.stopReason) return null
+  const reason = goal.reasonCode ?? normalizeGoalReason(goal.stopReason)
+  const detail = goal.reasonDetail ?? (goal.reasonCode || reason === 'unknown' ? goal.stopReason : undefined)
+  return <DetailRow label="原因" value={formatReason(reason, detail)} />
+}
+
+function lifecycleTime(at: number): { iso?: string; label: string } {
+  const date = new Date(at)
+  return Number.isFinite(date.getTime()) ? { iso: date.toISOString(), label: date.toLocaleString() } : { label: '历史时间无效' }
+}
+
+export function GoalLifecycleDetails({ goal }: { goal: AgentGoalState }): React.ReactElement | null {
+  const events = (goal.lifecycle ?? []).slice(-10).reverse()
+  if (events.length === 0) return null
+  return <details className="rounded-md bg-background/50 p-2 text-[11px]">
+    <summary className="cursor-pointer font-medium">最近状态转移（{events.length}）</summary>
+    <ol className="mt-2 flex flex-col gap-2">
+      {events.map((event) => <li key={event.id} className="min-w-0">
+        <div className="font-medium">{event.from === null ? '尚未创建' : GOAL_STATUS_LABELS[event.from]} → {event.to === 'cleared' ? '已清除并归档' : GOAL_STATUS_LABELS[event.to]}</div>
+        <div className="whitespace-pre-wrap break-words text-muted-foreground">{formatReason(event.reason, event.detail)}</div>
+        <div className="break-words text-muted-foreground/70">
+          <time dateTime={lifecycleTime(event.at).iso}>{lifecycleTime(event.at).label}</time> · 版本 {event.revision}
+          {event.runId && <span className="break-all"> · 运行 {event.runId}</span>}
+        </div>
+      </li>)}
+    </ol>
+  </details>
+}
+
 function IterationHistory({ goal }: { goal: AgentGoalState }): React.ReactElement {
   return <div className="flex flex-col gap-2">
     {(goal.history ?? []).slice(-10).reverse().map((entry) => (
@@ -77,12 +113,13 @@ function IterationHistory({ goal }: { goal: AgentGoalState }): React.ReactElemen
 export function GoalHistoryDetails({ goals }: { goals: AgentGoalState[] }): React.ReactElement {
   return <div className="flex flex-col gap-2">
     {goals.map((archived) => <details key={archived.id} className="rounded-md bg-background/50 p-2 text-[11px]">
-      <summary className="cursor-pointer break-words">{archived.goal} · {GOAL_STATUS_LABELS[archived.status]} · {new Date(archived.startedAt).toLocaleString()}</summary>
+      <summary className="cursor-pointer break-words">{archived.goal} · {archived.reasonCode === 'cleared' || archived.stopReason === 'cleared' ? '已清除并归档' : GOAL_STATUS_LABELS[archived.status]} · {new Date(archived.startedAt).toLocaleString()}</summary>
       <div className="mt-2 flex flex-col gap-1">
         {archived.contract?.verification && <DetailRow label="验收" value={archived.contract.verification} />}
         {archived.contract?.constraints && <DetailRow label="约束" value={archived.contract.constraints} />}
         {archived.contract?.stopWhen && <DetailRow label="停止条件" value={archived.contract.stopWhen} />}
-        {archived.stopReason && <DetailRow label="原因" value={archived.stopReason} />}
+        <GoalReasonDetails goal={archived} />
+        <GoalLifecycleDetails goal={archived} />
         <IterationHistory goal={archived} />
       </div>
     </details>)}
@@ -122,7 +159,7 @@ function GoalEditor({ sessionId }: Props): React.ReactElement {
       const saved = await window.electronAPI.updateGoal(sessionId, { goal, contract, limits })
       setGoal(saved)
       if (resume) {
-        if (getGoalBudgetExhaustedReasons(saved).length > 0) throw new Error('预算已保存，但仍不足以恢复')
+        if (!getGoalActions(saved).canResume) throw new Error('修改已保存，但当前状态或预算仍不允许恢复')
         setGoal(await window.electronAPI.resumeGoal(sessionId))
       }
       setSnapshot(null)
@@ -155,7 +192,7 @@ function GoalEditor({ sessionId }: Props): React.ReactElement {
         <DialogFooter>
           <Button type="button" variant="ghost" disabled={pending} onClick={() => setSnapshot(null)}>取消</Button>
           <Button type="submit" variant="outline" disabled={pending}>保存</Button>
-          {(getGoalActions(snapshot).canResume || budgetRequired) && snapshot.status !== 'completed' && <Button type="submit" name="action" value="resume" disabled={pending}>{pending ? '处理中…' : '保存并恢复'}</Button>}
+          {getGoalActions(snapshot).canEdit && (getGoalActions(snapshot).canResume || budgetRequired) && snapshot.status !== 'completed' && <Button type="submit" name="action" value="resume" disabled={pending}>{pending ? '处理中…' : '保存并恢复'}</Button>}
         </DialogFooter>
       </form>}
     </DialogContent>
@@ -187,12 +224,26 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
   const archives = (history ?? []).filter((state) => state.id !== goal?.id)
   if (!goal && archives.length === 0) return null
 
-  const invoke = async (action: 'pause' | 'resume' | 'stop'): Promise<void> => {
+  const invoke = async (action: 'pause' | 'resume' | 'stop' | 'clear'): Promise<void> => {
     if (pending || !goal) return
     setPending(true)
     try {
       const current = await window.electronAPI.getGoal(sessionId)
       if (current?.id !== goal.id) throw new Error('当前 Goal 已变化，请重试')
+      if (action === 'clear') {
+        if (!getGoalActions(current).canClear) throw new Error('Goal 正在运行或停止，请结束后清除')
+        // clear 返回 void；live Goal 只由全局监听收到的 cleared 快照移除。
+        await window.electronAPI.clearGoal(sessionId)
+        toast.info('Goal 已清除并归档')
+        setHistoryError(null)
+        try {
+          const states = await window.electronAPI.getGoalHistory(sessionId)
+          setHistory(states.filter((state) => state.sessionId === sessionId))
+        } catch (cause) {
+          setHistoryError(cause instanceof Error ? cause.message : String(cause))
+        }
+        return
+      }
       if (action === 'resume' && !getGoalActions(current).canResume) {
         if (getGoalActions(current).budgetEditRequired) setEditor(current)
         throw new Error('当前 Goal 不能直接恢复，请先处理状态或预算')
@@ -210,7 +261,7 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
         {goal ? <>
           <GoalIcon status={goal.status} />
           <span className="min-w-0 flex-1 truncate text-xs font-medium" title={`${goal.goal}\n沿用当前会话上下文`}>{goal.goal}</span>
-          <span className={cn('shrink-0 text-[11px] font-medium', statusTone[goal.status])} role="status">{statusLabel}{goal.stopReason === 'app_restart' ? ' · 重启后待恢复' : ''}</span>
+          <span className={cn('shrink-0 text-[11px] font-medium', statusTone[goal.status])} role="status">{statusLabel}{(goal.reasonCode ?? normalizeGoalReason(goal.stopReason)) === 'app_restart' ? ' · 重启后待恢复' : ''}</span>
           <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums" title="累计净运行时长">第 {goal.iteration} 轮 · {formatElapsed(elapsed)}</span>
         </> : <><History className="size-3.5 text-muted-foreground" /><span className="flex-1 text-xs">已归档 Goal（{archives.length}）</span></>}
         <Button size="icon" variant="ghost" className="size-6 text-muted-foreground" aria-label={expanded ? '收起 Goal 详情' : '查看 Goal 契约与历史'} title={expanded ? '收起详情' : '查看契约、最近轮次与归档 Goal'} onClick={() => setExpanded((value) => !value)}>{expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}</Button>
@@ -218,6 +269,7 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
         {actions?.canPause && <Button size="icon" variant="ghost" className="size-6 text-muted-foreground" title="暂停 Goal" aria-label="暂停 Goal" disabled={pending} onClick={() => { void invoke('pause') }}><Pause className="size-3" /></Button>}
         {actions?.canResume && <Button size="icon" variant="ghost" className="size-6 text-muted-foreground" title="恢复 Goal" aria-label="恢复 Goal" disabled={pending} onClick={() => { void invoke('resume') }}><Play className="size-3" /></Button>}
         {actions?.canStop && <Button size="icon" variant="ghost" className="size-6 text-muted-foreground hover:text-destructive" title="停止 Goal" aria-label="停止 Goal" disabled={pending} onClick={() => { void invoke('stop') }}><Square className="size-3" /></Button>}
+        {goal && actions?.canClear && <Button size="icon" variant="ghost" className="size-6 text-muted-foreground hover:text-destructive" title="清除 Goal 状态" aria-label="清除 Goal 状态" disabled={pending} onClick={() => { void invoke('clear') }}><CircleX className="size-3" /></Button>}
       </div>
       {goal && actions?.budgetEditRequired && goal.status !== 'completed' && goal.status !== 'active' && goal.status !== 'stopping' && <div className="flex items-center gap-2 px-3 pb-2 text-[11px]">
         <span className="min-w-0 flex-1 text-amber-500 break-words">{reasons.join('；') || goal.stopReason || '预算已耗尽'}。增加预算后才能继续。</span>
@@ -233,11 +285,13 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
           {goal.lastSummary && <DetailRow label="最近进展" value={goal.lastSummary} />}
           {goal.usage && <DetailRow label="用量" value={`${goal.usage.totalTokens.toLocaleString()} tokens（输入 ${goal.usage.inputTokens.toLocaleString()} · 输出 ${goal.usage.outputTokens.toLocaleString()}）`} />}
           {goal.lastEvidence?.length ? <DetailRow label="证据" value={goal.lastEvidence.join('；')} /> : null}
-          {goal.stopReason && goal.stopReason !== 'app_restart' && <DetailRow label="原因" value={goal.stopReason} />}
+          <GoalReasonDetails goal={goal} />
+          <GoalLifecycleDetails goal={goal} />
           <div className="font-medium">最近轮次</div><IterationHistory goal={goal} />
         </>}
         <div className="font-medium">归档 Goal（{archives.length}）</div>
-        {historyError ? <p role="alert" className="text-destructive">读取历史失败：{historyError}</p> : history === null ? <p className="text-muted-foreground">正在读取历史…</p> : <GoalHistoryDetails goals={archives} />}
+        {historyError && <p role="alert" className="text-destructive">读取历史失败：{historyError}</p>}
+        {history === null ? !historyError && <p className="text-muted-foreground">正在读取历史…</p> : <GoalHistoryDetails goals={archives} />}
       </div>}
     </div>
     <GoalEditor sessionId={sessionId} />

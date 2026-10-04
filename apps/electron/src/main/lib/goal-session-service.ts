@@ -43,7 +43,7 @@ export function collectGoalRunUsage(messages: SDKMessage[]): AgentGoalUsage | un
 }
 
 function resultKey(state: AgentGoalState): string {
-  return `goal:${state.id}:${state.iteration}:${state.status}`
+  return state.lifecycle?.at(-1)?.id ?? `goal:${state.id}:${state.iteration}:${state.status}`
 }
 
 function stableUuid(key: string): string {
@@ -57,7 +57,7 @@ export class GoalSessionService {
   private readonly projecting = new Set<string>()
   private readonly todoHandled = new Set<string>()
   private readonly publishedRevision = new Map<string, number>()
-  private readonly archived = new Set<string>()
+  private readonly archived = new Map<string, number>()
   private restored = false
 
   constructor(private readonly deps: Dependencies) {
@@ -104,6 +104,7 @@ export class GoalSessionService {
       },
       stopTurn: (sessionId, runId) => runId ? deps.stopRun(sessionId, runId) : Promise.resolve(),
       onStateChange: (state) => this.onStateChange(state),
+      onBeforeClear: (state) => this.archive(state),
     })
   }
 
@@ -112,6 +113,7 @@ export class GoalSessionService {
     // hydrate 不调用 live 投影；所有状态装载完成后一次写入。
     this.controller.restore(states ?? this.deps.readStates())
     this.deps.saveStates(this.controller.list())
+    for (const state of this.controller.list()) this.todoHandled.add(resultKey(state))
     this.restored = true
   }
 
@@ -154,23 +156,19 @@ export class GoalSessionService {
     // 目标与预算修改也是用户的明确操作，保留可追溯记录。
     const changes = [patch.goal ? `目标：${patch.goal}` : '', patch.limits ? `预算：${JSON.stringify(patch.limits)}` : '', patch.contract ? `契约：${JSON.stringify(patch.contract)}` : ''].filter(Boolean).join('\n')
     this.appendUser(sessionId, `/goal update\n${changes}`)
-    this.deps.publish(state)
     return state
   }
   clear(sessionId: string): void {
-    const state = this.get(sessionId)
-    if (!state) return
-    if (state.activeRunId || state.status === 'active' || state.status === 'stopping') throw new Error('运行中的 Goal 不能直接清除')
-    this.archive(state)
-    if (state.blockedTodoId) this.deps.updateBlockedTodo(state.blockedTodoId, 'completed', '关联 Goal 已由用户清除；历史已归档。')
+    if (!this.get(sessionId)) return
     this.controller.clear(sessionId)
   }
   stopAll(): void { this.controller.stopAll() }
 
   private archive(state: AgentGoalState): void {
-    if (this.archived.has(state.id)) return
+    const revision = state.revision ?? 0
+    if ((this.archived.get(state.id) ?? -1) >= revision) return
     this.deps.archive(state)
-    this.archived.add(state.id)
+    this.archived.set(state.id, revision)
   }
 
   private appendUser(sessionId: string, text: string): void {
@@ -194,7 +192,7 @@ export class GoalSessionService {
     }
     try { this.deps.saveStates(this.controller.list()) } catch (error) { this.deps.logError(error) }
     // Todo patch 可能同步重入；只发送 controller 当前快照，不把外层旧值再次覆盖 UI。
-    const latest = state.stopReason === 'cleared' ? state : this.get(state.sessionId)
+    const latest = state.reasonCode === 'cleared' || state.stopReason === 'cleared' ? state : this.get(state.sessionId)
     if (!latest || latest.id !== state.id) return
     const revision = latest.revision ?? 0
     if ((this.publishedRevision.get(latest.id) ?? -1) >= revision) return
@@ -203,9 +201,9 @@ export class GoalSessionService {
   }
 
   private persistVisibleResult(state: AgentGoalState): void {
-    if (!['completed', 'blocked', 'failed', 'budget_limited', 'stopped'].includes(state.status) || state.stopReason === 'cleared') return
+    if (!['completed', 'blocked', 'failed', 'budget_limited', 'stopped'].includes(state.status) || state.reasonCode === 'cleared' || state.stopReason === 'cleared') return
     const record = state.history?.at(-1)
-    const summary = state.stopReason || record?.summary || state.lastSummary
+    const summary = state.reasonDetail || state.stopReason || record?.summary || state.lastSummary
     if (!summary) return
     const key = resultKey(state)
     const uuid = stableUuid(key)
@@ -225,8 +223,16 @@ export class GoalSessionService {
         this.controller.patch(state.sessionId, { blockedTodoId: todoId })
       }
       this.todoHandled.add(key)
-    } else if (state.status === 'completed' && state.blockedTodoId) {
-      this.deps.updateBlockedTodo(state.blockedTodoId, 'completed', 'Goal 已完成')
+      return
+    }
+    if (state.status === 'active' && state.blockedTodoId) {
+      this.deps.updateBlockedTodo(state.blockedTodoId, 'completed', 'Goal 已恢复执行')
+      this.todoHandled.add(key)
+      return
+    }
+    if (state.blockedTodoId && ['completed', 'failed', 'stopped', 'budget_limited'].includes(state.status)) {
+      const reason = state.stopReason === 'cleared' ? '关联 Goal 已由用户清除；历史已归档。' : state.status === 'completed' ? 'Goal 已完成' : state.status === 'budget_limited' ? 'Goal 已达到预算上限' : state.status === 'failed' ? 'Goal 已失败' : 'Goal 已停止'
+      this.deps.updateBlockedTodo(state.blockedTodoId, 'completed', reason)
       this.todoHandled.add(key)
     }
   }

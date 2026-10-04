@@ -1312,6 +1312,35 @@ export interface WorkspaceCapabilities {
 
 export type AgentGoalStatus = 'active' | 'paused' | 'completed' | 'blocked' | 'failed' | 'stopped' | 'stopping' | 'budget_limited'
 
+export type AgentGoalReasonCode =
+  | 'created'
+  | 'resumed'
+  | 'user_pause'
+  | 'user_stop'
+  | 'app_restart'
+  | 'blocked'
+  | 'failed'
+  | 'completed'
+  | 'budget_limited'
+  | 'cleared'
+  | 'superseded'
+  | 'unknown'
+
+export type AgentGoalLifecycleTarget = AgentGoalStatus | 'cleared'
+
+export interface AgentGoalLifecycleEvent {
+  id: string
+  goalId: string
+  sessionId: string
+  from: AgentGoalStatus | null
+  to: AgentGoalLifecycleTarget
+  reason: AgentGoalReasonCode
+  detail?: string
+  revision: number
+  at: number
+  runId?: string
+}
+
 export interface AgentGoalLimits {
   maxIterations: number
   maxConsecutiveFailures: number
@@ -1382,6 +1411,11 @@ export interface AgentGoalState {
   blockedTodoId?: string
   lastSummary?: string
   lastEvidence?: string[]
+  /** Goal 生命周期审计轨迹，最多保留最近若干条。 */
+  lifecycle?: AgentGoalLifecycleEvent[]
+  /** 结构化停止/暂停原因；stopReason 保留用于兼容旧数据和展示。 */
+  reasonCode?: AgentGoalReasonCode
+  reasonDetail?: string
   stopReason?: string
 }
 

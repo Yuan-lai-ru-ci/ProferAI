@@ -1,4 +1,4 @@
-import { parseGoalCommand as parseGoalCommandShared } from '@profer/shared'
+import { parseGoalCommand as parseGoalCommandShared, createGoalLifecycleEvent, applyGoalTransition } from '@profer/shared'
 import type { AgentGoalContract, AgentGoalIterationResult, AgentGoalState, AgentGoalLimits, AgentGoalCommand, AgentGoalContinuation } from '@profer/shared'
 
 export const DEFAULT_GOAL_LIMITS: AgentGoalLimits = {
@@ -58,9 +58,10 @@ export function buildGoalIterationPrompt(
   return lines.join('\n')
 }
 
-export function createGoalState(sessionId: string, goal: string, now = Date.now(), limits = DEFAULT_GOAL_LIMITS, contract?: AgentGoalContract): AgentGoalState {
+export function createGoalState(sessionId: string, goal: string, now = Date.now(), limits = DEFAULT_GOAL_LIMITS, contract?: AgentGoalContract, revision = 1): AgentGoalState {
+  const id = crypto.randomUUID()
   return {
-    id: crypto.randomUUID(),
+    id,
     sessionId,
     goal: goal.trim(),
     status: 'active',
@@ -69,7 +70,9 @@ export function createGoalState(sessionId: string, goal: string, now = Date.now(
     startedAt: now,
     updatedAt: now,
     limits: { ...limits },
-    revision: 1,
+    revision,
+    reasonCode: 'created',
+    lifecycle: [createGoalLifecycleEvent({ goalId: id, sessionId, from: null, to: 'active', reason: 'created', revision, at: now })],
     elapsedMs: 0,
     contract,
     history: [],
@@ -125,7 +128,7 @@ export function parseGoalIterationResult(text: string): AgentGoalIterationResult
 }
 
 export function stopGoalForProcessExit(goal: AgentGoalState, now = Date.now()): AgentGoalState {
-  return { ...goal, status: 'stopped', stopReason: 'process_exit', updatedAt: now }
+  return applyGoalTransition(goal, 'stopped', { at: now, reason: 'app_restart', detail: 'process_exit', runId: goal.activeRunId })
 }
 
 /**
@@ -133,5 +136,5 @@ export function stopGoalForProcessExit(goal: AgentGoalState, now = Date.now()): 
  * 降级为 paused 并标记 app_restart，重启后用户可显式 resume。
  */
 export function pauseGoalForProcessExit(goal: AgentGoalState, now = Date.now()): AgentGoalState {
-  return { ...goal, status: 'paused', stopReason: 'app_restart', updatedAt: now }
+  return applyGoalTransition(goal, 'paused', { at: now, reason: 'app_restart', detail: 'app_restart', runId: goal.activeRunId })
 }

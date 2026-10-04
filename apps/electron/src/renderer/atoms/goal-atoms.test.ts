@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { createStore } from 'jotai/vanilla'
+import { getGoalActions as getSharedGoalActions } from '@profer/shared'
 import type { AgentGoalState } from '@profer/shared'
 import {
   agentGoalAtomFamily, agentGoalsAtom, mergeAgentGoalAtom, hydrateAgentGoalsAtom,
-  getGoalActions, startGoalWithReplacement, goalEditorAtomFamily,
+  getGoalActions, startGoalWithReplacement, goalEditorAtomFamily, goalHistoryAtomFamily,
 } from './goal-atoms'
 
 const goal = (patch: Partial<AgentGoalState> = {}): AgentGoalState => ({
@@ -62,6 +63,40 @@ describe('Goal 状态归并', () => {
     expect(store.get(agentGoalAtomFamily('session-a'))).toBe(next)
   })
 
+  test('结构化 clear 快照移除 live 并保留归档，迟到事件和 null 不复活旧 owner', () => {
+    const store = createStore()
+    const other = goal({ id: 'older', startedAt: 50 })
+    store.set(goalHistoryAtomFamily('session-a'), [goal(), other])
+    store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: goal() })
+    const cleared = goal({
+      revision: 3, status: 'stopped', reasonCode: 'cleared', reasonDetail: '用户清除',
+      lifecycle: [{ id: 'clear-event', goalId: 'goal-a', sessionId: 'session-a', from: 'paused', to: 'cleared', reason: 'cleared', revision: 3, at: 300 }],
+    })
+    expect(store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: cleared })).toBe(true)
+    expect(store.get(agentGoalAtomFamily('session-a'))).toBeUndefined()
+    expect(store.get(goalHistoryAtomFamily('session-a'))).toEqual([cleared, other])
+    expect(store.get(goalHistoryAtomFamily('session-b'))).toBeNull()
+    expect(store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: cleared })).toBe(false)
+    expect(store.set(agentGoalAtomFamily('session-a'), null)).toBe(false)
+    expect(store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: goal({ revision: 99 }) })).toBe(false)
+    store.set(hydrateAgentGoalsAtom, [goal()])
+    expect(store.get(agentGoalAtomFamily('session-a'))).toBeUndefined()
+    expect(store.get(goalHistoryAtomFamily('session-a'))).toEqual([cleared, other])
+    const next = goal({ id: 'goal-b', revision: 1, startedAt: cleared.startedAt })
+    expect(store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: next })).toBe(true)
+    expect(store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: { ...cleared, revision: 100 } })).toBe(false)
+    expect(store.get(agentGoalAtomFamily('session-a'))).toBe(next)
+  })
+
+  test('clear 快照先于水合到达仍可留下历史', () => {
+    const store = createStore()
+    const cleared = goal({ status: 'stopped', stopReason: 'cleared' })
+    store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: cleared })
+    store.set(hydrateAgentGoalsAtom, [goal()])
+    expect(store.get(agentGoalAtomFamily('session-a'))).toBeUndefined()
+    expect(store.get(goalHistoryAtomFamily('session-a'))).toEqual([cleared])
+  })
+
   test('legacy 无 revision 仅按时间向前，不能覆盖已版本化状态', () => {
     const store = createStore()
     store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: goal({ revision: undefined }) })
@@ -82,6 +117,10 @@ describe('Goal 状态归并', () => {
 })
 
 describe('Goal 状态操作', () => {
+  test('旧引用入口直接 re-export shared 函数，不保留第二份权限规则', () => {
+    expect(getGoalActions).toBe(getSharedGoalActions)
+  })
+
   test('blocked/failed/stopped/paused 可恢复，active/stopping/completed 不可恢复', () => {
     for (const status of ['blocked', 'failed', 'stopped', 'paused'] as const) {
       expect(getGoalActions(goal({ status })).canResume).toBe(true)
@@ -91,9 +130,22 @@ describe('Goal 状态操作', () => {
     }
   })
 
-  test('停止超时或 deadline 后仍有 owner 时不能恢复/编辑', () => {
-    for (const status of ['paused', 'stopped', 'budget_limited'] as const) {
-      expect(getGoalActions(goal({ status, activeRunId: 'still-running' }))).toMatchObject({ canResume: false, canEdit: false })
+  test('停止超时或 deadline 后仍有 owner 时不能恢复/编辑/清除', () => {
+    for (const status of ['paused', 'blocked', 'failed', 'completed', 'stopped', 'stopping', 'budget_limited'] as const) {
+      expect(getGoalActions(goal({ status, activeRunId: 'still-running' }))).toMatchObject({ canResume: false, canEdit: false, canClear: false, canStop: false })
+    }
+  })
+
+  test('所有非运行状态可清除；completed 不恢复、不停止但可编辑归档', () => {
+    for (const status of ['paused', 'blocked', 'failed', 'completed', 'stopped', 'budget_limited'] as const) {
+      expect(getGoalActions(goal({ status })).canClear).toBe(true)
+    }
+    for (const status of ['active', 'stopping'] as const) {
+      expect(getGoalActions(goal({ status })).canClear).toBe(false)
+    }
+    expect(getGoalActions(goal({ status: 'completed' }))).toMatchObject({ canResume: false, canStop: false, canEdit: true, canClear: true })
+    for (const status of ['paused', 'blocked', 'failed', 'budget_limited'] as const) {
+      expect(getGoalActions(goal({ status })).canStop).toBe(true)
     }
   })
 
@@ -102,10 +154,24 @@ describe('Goal 状态操作', () => {
   })
 
   test('预算耗尽必须先编辑，不能盲目 resume；运行中不可编辑', () => {
-    expect(getGoalActions(goal({ status: 'budget_limited' }))).toMatchObject({ canResume: false, canEdit: true, budgetEditRequired: true })
+    expect(getGoalActions(goal({ status: 'budget_limited', iteration: 20 }))).toMatchObject({ canResume: false, canEdit: true, budgetEditRequired: true })
     expect(getGoalActions(goal({ status: 'paused', iteration: 20 })).canResume).toBe(false)
     expect(getGoalActions(goal({ status: 'active' }))).toMatchObject({ canEdit: false, canPause: true, canStop: true })
     expect(getGoalActions(goal({ status: 'stopping' }))).toMatchObject({ canEdit: false, canPause: false, canStop: false })
+  })
+
+  test('budget_limited 编辑预算后按实际余量恢复，不由状态名称永久锁死', () => {
+    const exhausted = goal({
+      status: 'budget_limited', iteration: 20, elapsedMs: 7200000,
+      usage: { inputTokens: 50, outputTokens: 50, totalTokens: 100 },
+      limits: { maxIterations: 20, maxDurationMs: 7200000, maxConsecutiveFailures: 3, maxTokens: 100 },
+    })
+    expect(getGoalActions(exhausted)).toMatchObject({ canResume: false, budgetEditRequired: true })
+    const partial = { ...exhausted, limits: { ...exhausted.limits, maxIterations: 21, maxDurationMs: 7200001 } }
+    expect(getGoalActions(partial)).toMatchObject({ canResume: false, budgetEditRequired: true })
+    const saved = { ...partial, limits: { ...partial.limits, maxTokens: 101 } }
+    expect(getGoalActions(saved)).toMatchObject({ canResume: true, budgetEditRequired: false })
+    expect(getGoalActions({ ...saved, activeRunId: 'unsettled' }).canResume).toBe(false)
   })
 })
 

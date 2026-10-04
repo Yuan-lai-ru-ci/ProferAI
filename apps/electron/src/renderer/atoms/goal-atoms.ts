@@ -1,9 +1,16 @@
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
-import { getGoalBudgetExhaustedReasons } from '@profer/shared'
 import type { AgentGoalContract, AgentGoalEvent, AgentGoalState } from '@profer/shared'
 
+// 保留 renderer 旧引用入口，操作权限统一由 shared 推导。
+export { getGoalActions } from '@profer/shared'
+
 export const agentGoalsAtom = atom<Map<string, AgentGoalState>>(new Map())
+export const goalHistoryAtomFamily = atomFamily((_sessionId: string) => atom<AgentGoalState[] | null>(null))
+
+function isClearedGoal(goal: AgentGoalState): boolean {
+  return goal.reasonCode === 'cleared' || goal.stopReason === 'cleared'
+}
 
 // 清除后仍保留版本和 owner，防止迟到事件或启动水合复活旧目标。
 const goalSnapshotsAtom = atom<Map<string, AgentGoalState>>(new Map())
@@ -18,21 +25,24 @@ export const mergeAgentGoalAtom = atom(null, (get, set, event: AgentGoalEvent): 
   if (retired?.has(incoming.id)) return false
   if (previous) {
     if (incoming.id === previous.id) {
-      if (previous.stopReason === 'cleared') return false
+      if (isClearedGoal(previous)) return false
       if (previous.revision !== undefined) {
         if (incoming.revision === undefined || incoming.revision <= previous.revision) return false
       } else if (incoming.revision === undefined && incoming.updatedAt <= previous.updatedAt) return false
     } else {
       // revision 属于单个 Goal，不能用旧 Goal 的高 revision 或 updatedAt 抢占新 owner。
       if (incoming.startedAt < previous.startedAt) return false
-      if (incoming.startedAt === previous.startedAt && previous.stopReason !== 'cleared' && previous.status !== 'completed') return false
+      if (incoming.startedAt === previous.startedAt && !isClearedGoal(previous) && previous.status !== 'completed') return false
       set(retiredGoalIdsAtom, new Map(get(retiredGoalIdsAtom)).set(event.sessionId, new Set([...(retired ?? []), previous.id])))
     }
   }
   set(goalSnapshotsAtom, new Map(get(goalSnapshotsAtom)).set(event.sessionId, incoming))
   const next = new Map(get(agentGoalsAtom))
-  if (incoming.stopReason === 'cleared') next.delete(event.sessionId)
-  else next.set(event.sessionId, incoming)
+  if (isClearedGoal(incoming)) {
+    next.delete(event.sessionId)
+    // 先展示已确认的归档快照，避免 clear 的 void 回包或历史读取失败让状态栏消失。
+    set(goalHistoryAtomFamily(event.sessionId), (history) => [incoming, ...(history ?? []).filter((state) => state.id !== incoming.id)])
+  } else next.set(event.sessionId, incoming)
   set(agentGoalsAtom, next)
   return true
 })
@@ -51,7 +61,6 @@ export const agentGoalAtomFamily = atomFamily((sessionId: string) => atom(
 ))
 
 export const goalEditorAtomFamily = atomFamily((_sessionId: string) => atom<AgentGoalState | null>(null))
-export const goalHistoryAtomFamily = atomFamily((_sessionId: string) => atom<AgentGoalState[] | null>(null))
 export const goalActionPendingAtomFamily = atomFamily((_sessionId: string) => atom(false))
 export const goalReplacementAtomFamily = atomFamily((_sessionId: string) => atom<{
   previous: AgentGoalState
@@ -62,19 +71,6 @@ export const goalReplacementAtomFamily = atomFamily((_sessionId: string) => atom
 export const GOAL_STATUS_LABELS: Record<AgentGoalState['status'], string> = {
   active: '执行中', stopping: '正在停止', paused: '已暂停', completed: '已完成',
   blocked: '等待处理', failed: '执行失败', stopped: '已停止', budget_limited: '预算已耗尽',
-}
-
-export function getGoalActions(goal: AgentGoalState) {
-  const ownerBusy = Boolean(goal.activeRunId)
-  const running = goal.status === 'active' || goal.status === 'stopping' || ownerBusy
-  const budgetEditRequired = goal.status === 'budget_limited' || getGoalBudgetExhaustedReasons(goal).length > 0
-  return {
-    canPause: goal.status === 'active',
-    canStop: goal.status === 'active' || (goal.status === 'paused' && !ownerBusy),
-    canEdit: !running,
-    canResume: !running && !budgetEditRequired && ['paused', 'blocked', 'failed', 'stopped'].includes(goal.status),
-    budgetEditRequired,
-  }
 }
 
 type GoalStartAPI = {
