@@ -37,6 +37,7 @@ const HOST = process.env.PROFER_UPDATE_SSH_HOST || '45.114.127.232'
 const USER = process.env.PROFER_UPDATE_SSH_USER || 'root'
 const SSH_PORT = process.env.PROFER_UPDATE_SSH_PORT || '41235'
 const UPDATE_FEED_URL = 'https://updates.profer.cn/'
+const LEGACY_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/'
 const UPDATE_DIR = process.env.PROFER_MAC_UPDATE_DIR || '/var/www/updates.profer.cn'
 // 发布目标：新机为主；旧机（profer.cn/profer-updates/ 供数）在退役前保持双写，PROFER_UPDATE_SKIP_LEGACY=1 可关闭。
 const UPDATE_TARGETS = [
@@ -55,10 +56,36 @@ const MAC_UPDATE_METADATA = 'latest-mac.yml'
 function run(command, cwd = ROOT) {
   return execSync(command, { cwd, encoding: 'utf8', stdio: 'inherit' }).trim()
 }
+function capture(command, cwd = ROOT) {
+  return execSync(command, { cwd, encoding: 'utf8' }).trim()
+}
 function sha256(filePath) { return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex') }
 function remote(command, target = UPDATE_TARGETS[0]) { run(`ssh -o StrictHostKeyChecking=yes -p ${target.port} ${target.user}@${target.host} ${JSON.stringify(command)}`) }
 function upload(localPath, remotePath, target = UPDATE_TARGETS[0]) { run(`scp -o StrictHostKeyChecking=yes -P ${target.port} ${JSON.stringify(localPath)} ${target.user}@${target.host}:${JSON.stringify(remotePath)}`) }
 function assertExists(filePath) { if (!fs.existsSync(filePath)) throw new Error(`缺少发布资产: ${filePath}`) }
+
+function verifyPublicFeed(feedUrl, assetPaths) {
+  const metadataPath = assetPaths.find((filePath) => path.basename(filePath) === MAC_UPDATE_METADATA)
+  if (!metadataPath) throw new Error(`发布资产缺少 ${MAC_UPDATE_METADATA}`)
+  const remoteMetadata = capture(`curl -fsSL ${JSON.stringify(`${feedUrl}${MAC_UPDATE_METADATA}`)}`)
+  const localMetadata = fs.readFileSync(metadataPath, 'utf8').trim()
+  if (remoteMetadata !== localMetadata) {
+    throw new Error(`公开更新源元数据不一致: ${feedUrl}${MAC_UPDATE_METADATA}`)
+  }
+
+  for (const filePath of assetPaths) {
+    const name = path.basename(filePath)
+    if (name === MAC_UPDATE_METADATA || name.endsWith('.blockmap')) continue
+    const headers = capture(`curl -fsSLI ${JSON.stringify(`${feedUrl}${name}`)}`)
+    const lengths = [...headers.matchAll(/(?:^|\n)content-length:\s*(\d+)/ig)].map((match) => Number(match[1]))
+    const remoteSize = lengths.at(-1)
+    const localSize = fs.statSync(filePath).size
+    if (remoteSize !== localSize) {
+      throw new Error(`公开更新源文件大小不一致: ${feedUrl}${name} (${remoteSize ?? '缺失'} != ${localSize})`)
+    }
+  }
+  console.log(`  公开更新源校验通过：${feedUrl}`)
+}
 
 function findMacAssets() {
   const metadata = path.join(OUT, MAC_UPDATE_METADATA)
@@ -126,6 +153,10 @@ function ensureGitHubAssets(assetPaths) {
     const copyCommands = uploadedNames.map((name) => `${sudo}cp /tmp/${name} ${target.dir}/`).join(' && ')
     remote(`${sudo}mkdir -p ${target.dir} && ${copyCommands} && ${sudo}chmod -R 755 ${target.dir}`, target)
     console.log(`  已上传到 ${target.user}@${target.host}:${target.dir}`)
+  }
+  verifyPublicFeed(UPDATE_FEED_URL, [metadata, zip, dmg, blockmap])
+  if (!process.env.PROFER_UPDATE_SKIP_LEGACY) {
+    verifyPublicFeed(LEGACY_UPDATE_FEED_URL, [metadata, zip, dmg, blockmap])
   }
 
   console.log('[2/2] 上传 GitHub Release macOS 资产')
