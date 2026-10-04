@@ -23,6 +23,17 @@ export const DEFAULT_RENDER_WINDOW: RenderWindowLimits = {
   processSegments: 20,
 }
 
+export interface RenderWindowOptions {
+  /**
+   * 过程区显式折叠的前导段数。
+   *
+   * 由调用方按「内容未挂载时才允许推进」冻结（见 process-fold-gate）：
+   * 折叠会移走已经渲染出来的段，只有在内容不可见时推进才不会造成可见重排。
+   * 省略时退化为按 processSegments 即时计算的尾部窗口。
+   */
+  processFoldCount?: number
+}
+
 export interface WindowedTurnItems<T extends IndexedContentBlock = IndexedContentBlock> {
   /** 窗口内的渲染项（保持原顺序） */
   items: AssistantTurnRenderItem<T>[]
@@ -42,6 +53,7 @@ export interface WindowedTurnItems<T extends IndexedContentBlock = IndexedConten
 export function applyRenderWindow<T extends IndexedContentBlock>(
   items: AssistantTurnRenderItem<T>[],
   limits: RenderWindowLimits = DEFAULT_RENDER_WINDOW,
+  options: RenderWindowOptions = {},
 ): WindowedTurnItems<T> {
   const processLimit = Math.max(0, limits.processSegments)
   const replyLimit = Math.max(0, limits.replySegments)
@@ -66,8 +78,11 @@ export function applyRenderWindow<T extends IndexedContentBlock>(
       if (visibleReplyIndexes.has(index)) windowed.push(item)
       continue
     }
-    // 过程组：取尾部窗口（一轮里至多一个过程组）
-    const keepFrom = Math.max(0, item.items.length - processLimit)
+    // 过程组：取尾部窗口（一轮里至多一个过程组）。显式折叠段数由调用方冻结，
+    // 越界时按实际段数收敛，避免段数回退后把整组折光。
+    const keepFrom = options.processFoldCount !== undefined
+      ? Math.min(Math.max(0, options.processFoldCount), item.items.length)
+      : Math.max(0, item.items.length - processLimit)
     foldedProcessItems = item.items.slice(0, keepFrom)
     windowed.push(keepFrom === 0 ? item : { type: 'process-group', items: item.items.slice(keepFrom) })
   }

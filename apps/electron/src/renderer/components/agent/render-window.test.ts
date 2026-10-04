@@ -29,7 +29,7 @@ const visibleTexts = (items: AssistantTurnRenderItem[]): string[] => {
   const texts: string[] = []
   for (const item of items) {
     if (item.type === 'block') texts.push((item.item.block as { text: string }).text)
-    else for (const groupItem of item.items) texts.push((groupItem.block as { text: string }).text)
+    else if (item.type === 'process-group') for (const groupItem of item.items) texts.push((groupItem.block as { text: string }).text)
   }
   return texts
 }
@@ -108,6 +108,47 @@ describe('渲染窗口 · 不丢段（完整性）', () => {
 
     // 索引必须是原始索引，否则展开时渲染工具结果会找错配对
     expect(foldedProcessItems.map((item) => item.index)).toEqual(Array.from({ length: 30 }, (_, i) => i))
+  })
+})
+
+describe('渲染窗口 · 过程折叠边界由调用方冻结', () => {
+  test('Given 显式折叠 0 段（内容可见期冻结）When 裁剪 Then 不折叠任何段', () => {
+    // 流式期间边界被冻结在 0：已渲染的过程段一律不被回收，新增段只追加。
+    const { items, foldedProcessItems } = applyRenderWindow(makeItems(80, 2), DEFAULT_RENDER_WINDOW, {
+      processFoldCount: 0,
+    })
+
+    expect(foldedProcessItems).toEqual([])
+    expect(visibleTexts(items).filter((t) => t.startsWith('过程'))).toHaveLength(80)
+  })
+
+  test('Given 显式折叠 N 段（内容卸载后推进）When 裁剪 Then 折叠正好前 N 段', () => {
+    const { items, foldedProcessItems } = applyRenderWindow(makeItems(50, 2), DEFAULT_RENDER_WINDOW, {
+      processFoldCount: 30,
+    })
+
+    expect(foldedProcessItems.map(textOf)).toEqual(Array.from({ length: 30 }, (_, i) => `过程${i}`))
+    expect(visibleTexts(items).filter((t) => t.startsWith('过程'))).toEqual(
+      Array.from({ length: 20 }, (_, i) => `过程${30 + i}`),
+    )
+  })
+
+  test('Given 冻结边界大于当前段数（段数回退）When 裁剪 Then 收敛到实际段数而非越界', () => {
+    const { items, foldedProcessItems } = applyRenderWindow(makeItems(3, 1), DEFAULT_RENDER_WINDOW, {
+      processFoldCount: 60,
+    })
+
+    expect(foldedProcessItems).toHaveLength(3)
+    expect(visibleTexts(items).filter((t) => t.startsWith('过程'))).toEqual([])
+    // 回复区不受过程边界影响
+    expect(visibleTexts(items).filter((t) => t.startsWith('回复'))).toEqual(['回复0'])
+  })
+
+  test('Given 未提供折叠边界 When 裁剪 Then 保持尾部窗口行为', () => {
+    const frozenOff = applyRenderWindow(makeItems(50, 2))
+    const explicit = applyRenderWindow(makeItems(50, 2), DEFAULT_RENDER_WINDOW, { processFoldCount: 30 })
+
+    expect(frozenOff.foldedProcessItems.map(textOf)).toEqual(explicit.foldedProcessItems.map(textOf))
   })
 })
 

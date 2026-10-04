@@ -25,7 +25,8 @@ import { TaskProgressCard } from './TaskProgressCard'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { ProcessBlockGroup } from './ProcessBlockGroup'
 import { deriveAssistantTurnBlocks, buildAssistantTurnRenderItems, buildCompletedToolResultIds, type StableContentBlock } from './render-block-derivation'
-import { applyRenderWindow } from './render-window'
+import { applyRenderWindow, DEFAULT_RENDER_WINDOW } from './render-window'
+import { useProcessFoldGate } from './process-fold-gate'
 import { FoldedSegmentsRegion } from './FoldedSegmentsRegion'
 import { extractToolResultText, isTaskProgressTool, parseTaskCreateResult } from './task-progress'
 import { normalizeThinkTagsInContentBlocks } from './thinking-tag-parser'
@@ -795,9 +796,20 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
   }, [topLevelItems, isStreaming, completedToolResultIds])
   // 渲染窗口：过程与回复各自取尾部窗口，避免过程把回复挤出可视范围。
   // 展开/收起状态属于 turn；裁剪与分组保留已派生的稳定块身份。
+  //
+  // 过程区的折叠边界不随渲染即时前移：折叠会把已经渲染出来的过程段从 DOM 里移走，
+  // 流式中每来一段就回收一段，用户看到的就是过程列表持续重排/闪动（而这些段早已挂载过，
+  // 裁掉省不到创建成本）。边界只在过程内容未挂载时推进，收益落在重新展开与加载历史轮。
+  const processSegmentCount = React.useMemo(() => {
+    for (const item of renderItems) {
+      if (item.type === 'process-group') return item.items.length
+    }
+    return 0
+  }, [renderItems])
+  const processFoldGate = useProcessFoldGate(processSegmentCount, DEFAULT_RENDER_WINDOW.processSegments)
   const { items: windowedItems, foldedProcessItems, foldedReplyItems } = React.useMemo(
-    () => applyRenderWindow(renderItems),
-    [renderItems],
+    () => applyRenderWindow(renderItems, DEFAULT_RENDER_WINDOW, { processFoldCount: processFoldGate.foldCount }),
+    [renderItems, processFoldGate.foldCount],
   )
   const firstReplyIndex = React.useMemo(
     () => windowedItems.findIndex((item) => item.type === 'block'),
@@ -907,6 +919,7 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
                   isStreaming={isStreaming}
                   keepExpandedAfterComplete={processGroupsKeepExpanded}
                   isMessageTail={itemIndex === windowedItems.length - 1}
+                  onContentVisibilityChange={processFoldGate.reportContentVisibility}
                 >
                   {/* 折叠占位符随过程组隐藏，展开状态仍由 turn 保留。 */}
                   {foldedProcessItems.length > 0 && (

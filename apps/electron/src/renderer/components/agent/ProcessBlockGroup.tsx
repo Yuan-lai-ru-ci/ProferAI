@@ -16,6 +16,13 @@ interface ProcessBlockGroupProps {
   // 该过程组是否为整条消息的末尾项：是则流式中保留最后一段为正常显示，
   // 否则（最终答案已作为后续兄弟块外置）整组统一弱化。
   isMessageTail?: boolean
+  /**
+   * 过程内容挂载状态变化。
+   *
+   * 上层据此决定何时推进渲染窗口的折叠边界：折叠会移走已渲染的段，
+   * 只有内容真正不在 DOM 里（收起完成后）才推进才不会造成可见重排。
+   */
+  onContentVisibilityChange?: (visible: boolean) => void
   children: React.ReactNode
 }
 
@@ -63,7 +70,7 @@ export function buildProcessGroupToolNames(blocks: SDKContentBlock[]): string[] 
   return toolNames
 }
 
-export function ProcessBlockGroup({ blocks, isStreaming, scrollAnchorId, keepExpandedAfterComplete, isMessageTail = false, children }: ProcessBlockGroupProps): React.ReactElement {
+export function ProcessBlockGroup({ blocks, isStreaming, scrollAnchorId, keepExpandedAfterComplete, isMessageTail = false, onContentVisibilityChange, children }: ProcessBlockGroupProps): React.ReactElement {
   const shouldExpandByDefault = !!isStreaming || keepExpandedAfterComplete
   const [expanded, setExpanded] = React.useState(shouldExpandByDefault)
   const [shouldRenderContent, setShouldRenderContent] = React.useState(shouldExpandByDefault)
@@ -142,6 +149,12 @@ export function ProcessBlockGroup({ blocks, isStreaming, scrollAnchorId, keepExp
   React.useEffect(() => {
     return clearAutoCollapseTimers
   }, [clearAutoCollapseTimers])
+
+  // 上报内容是否真的在 DOM 里。用 shouldRenderContent 而不是 expanded：
+  // 折叠动画期间内容还挂着，动画跑完（约 500ms）卸载后才算不可见。
+  React.useEffect(() => {
+    onContentVisibilityChange?.(shouldRenderContent)
+  }, [shouldRenderContent, onContentVisibilityChange])
 
   // 折叠前测量实际高度，用于丝滑的 height 过渡（子元素不 reflow，只裁剪边界）
   React.useEffect(() => {
