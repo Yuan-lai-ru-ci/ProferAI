@@ -1,4 +1,4 @@
-import type { ProviderType } from './channel'
+import type { AgentRuntimeMode, ProviderType } from './channel'
 import type { AgentThinkingLevel } from './agent'
 import { resolveDeepSeekV4ModelId } from './deepseek-model-alias'
 
@@ -464,4 +464,64 @@ export function normalizeReasoningLevel(
  */
 export function supportsReasoningLevel(provider: ProviderType | undefined): boolean {
   return inferReasoningTransport(provider) !== 'other'
+}
+
+/**
+ * 自建 / 未识别渠道兜底：模型 ID 形如官方 OpenAI 推理模型的（gpt-*、codex、o3/o4…）
+ * 即使走 Completions 或 Anthropic 兼容层，reasoning 仍是自动摘要。
+ */
+const OPENAI_SUMMARY_MODEL_PATTERN = /(^|[^a-z0-9])(gpt-|codex|o[1-9]-)/i
+
+/**
+ * Pi 内核下 reasoning 只回「自动生成的概览摘要」的渠道族。
+ *
+ * OpenAI / Codex 系（含 ChatGPT 后端与代管 relay）与 xAI 都不暴露思维链正文，只给
+ * summary：实体经验是大量 40～150 字的粗体标题，当思考面板没有信息量。
+ *
+ * 这里不用 `inferReasoningTransport`：它把 provider `openai` 归到 `openai-completions`
+ * （为的是请求参数编码），而官方 OpenAI 渠道实际跑的是 Codex / Responses 后端，
+ * 回的就是摘要——用协议推断会把 GPT 误判成可读 CoT。
+ */
+const SUMMARY_ONLY_REASONING_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
+  'openai',
+  'openai-codex',
+  'openai-responses',
+  'opencode-go-openai',
+  'xai',
+])
+
+/**
+ * Pi 内核下该模型的 thinking 是否只有「自动生成的概览摘要」。
+ *
+ * 判据是模型族，不是内核本身：DeepSeek / Kimi / GLM / Qwen 等经 Anthropic 兼容或
+ * Completions 端点回的是完整可读思维链，应当展示。
+ */
+export function isSummaryOnlyPiReasoning(provider: ProviderType | undefined, modelId: string | undefined): boolean {
+  if (provider !== undefined && SUMMARY_ONLY_REASONING_PROVIDERS.has(provider)) return true
+  // 第三方网关可能用 Completions 承载官方 GPT 模型，此时 reasoning 依然只是摘要。
+  if (provider === 'custom' || provider === undefined) {
+    return typeof modelId === 'string' && OPENAI_SUMMARY_MODEL_PATTERN.test(modelId)
+  }
+  return false
+}
+
+export interface AgentThinkingVisibilityInput {
+  /** 当前会话的 Agent 内核；缺省按非 Pi 处理（Claude 内核的 thinking 始终可读）。 */
+  agentRuntime?: AgentRuntimeMode
+  /** 模型所属渠道供应商；未知时按模型 ID 兜底判断。 */
+  provider?: ProviderType
+  modelId?: string
+}
+
+/**
+ * 决定消息区是否渲染模型的 thinking 块。
+ *
+ * 历史实现是 `agentRuntime !== 'pi'`：它把「内核」当成了「模型能力」，在 Pi 内核只承载
+ * GPT/Codex 的年代等价于「GPT 不展示摘要」，但 Pi 后来接管了 deepseek / kimi / GLM / qwen
+ * 等可读 CoT 模型，一刀切会让这些模型的思考被整轮折叠进「执行过程」而看不到。
+ * 现在按模型实际返回的 reasoning 形态判定。
+ */
+export function shouldShowAgentThinking(input: AgentThinkingVisibilityInput): boolean {
+  if (input.agentRuntime !== 'pi') return true
+  return !isSummaryOnlyPiReasoning(input.provider, input.modelId)
 }
