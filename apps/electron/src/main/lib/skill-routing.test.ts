@@ -15,6 +15,9 @@ function fixture(overrides: Partial<AgentPreset> = {}, tools: string[] = []) {
     mkdirSync(join(root, 'skills', slug), { recursive: true })
     writeFileSync(join(root, 'skills', slug, 'SKILL.md'), `---\nname: ${slug === 'alpha' || slug === 'beta' ? 'shared-name' : slug}\ndescription: Test ${slug}\n---\n\nBODY_${slug}\n`)
   }
+  // 依赖由模块自己声明（新约定）：夹具也不再指望代码表里的内置依赖。
+  writeFileSync(join(root, 'skills', 'automation', 'SKILL.json'), JSON.stringify({ schemaVersion: 1, dependencies: { toolGroups: ['automation'] } }))
+  writeFileSync(join(root, 'skills', 'agent-collaboration', 'SKILL.json'), JSON.stringify({ schemaVersion: 1, dependencies: { toolGroups: ['collaboration'], tools: ['delegate_agent'] } }))
   const policy = createEffectiveAgentPresetPolicy({ id: 'test', name: 'test', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0, ...overrides }, { presetId: 'test', presetScope: 'workspace', workspaceSlug: 'ws' }, { runtimeSupportsSubagents: true, loadedMcpServerNames: ['automation', 'collaboration'] })
   return { root, policy, toolNames: tools, projection: { path: root, skills: skills.map(slug => ({ slug, name: slug, path: join(root, 'skills', slug), version: '1', scope: 'workspace' as const, actualSource: 'workspace' as const })), diagnostics: [] } }
 }

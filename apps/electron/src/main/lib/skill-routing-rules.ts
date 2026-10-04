@@ -7,14 +7,20 @@ export interface SkillRoutingRules {
   requiredTools?: readonly string[]
   requiredMcpServers?: readonly string[]
   requiredToolGroups?: readonly AgentPresetToolGroup[]
+  /** 默认 true。显式写成 false 时该 Skill 只接受 `/skill:<slug>` 类显式引用，不参与关键词与字符 n-gram 召回。 */
+  implicit?: boolean
 }
 
+/**
+ * 内置 Skill 的工具依赖兜底表。
+ *
+ * 依赖应由模块自己声明（SKILL.json 的 `dependencies`）——这是管理层的基本约定：模块说清自己需要
+ * 什么，管理层只负责读取与校验。这里**只保留源码不在本仓库、因此加不了卡片的技能**（例如用户
+ * 在某工作区自建的 agent-collaboration）；其余内置技能全部已迁到卡片。
+ */
 export const BUILTIN_SKILL_DEPENDENCIES: Readonly<Record<string, SkillRoutingRules>> = {
-  automation: { requiredToolGroups: ['automation'], requiredTools: ['list_automations'] },
+  // 源码在工作区自建目录（不是随包发布的 default-skills），无法在仓库里声明卡片。
   'agent-collaboration': { requiredToolGroups: ['collaboration'], requiredTools: ['delegate_agent'] },
-  'in-app-browser': { requiredToolGroups: ['browser'], requiredTools: ['BrowserNavigate', 'BrowserObserve'] },
-  pptx: { requiredToolGroups: ['ppt-materials', 'preview'], requiredTools: ['open_file_preview', 'inspect_file_preview'] },
-  'guizang-ppt-skill': { requiredToolGroups: ['ppt-materials'] },
 }
 
 const ACTION = /(?:请|帮我|修复|排查|实现|开发|优化|修改|重构|审查|检查|生成|创建|制作|合并|拆分|提取|总结|读取|分析|导出|转换|设计|构建|完善|补充|编写|做|\b(?:fix|debug|implement|build|create|review|refactor|merge|extract|summarize|convert|read|write|design|plan)\b)/i
@@ -38,6 +44,8 @@ function containsKeyword(text: string, keyword: string): boolean {
 
 /** 返回可解释理由；undefined 表示不主动推荐，但合法 Skill 仍可发现。 */
 export function skillTaskMatch(slug: string, message: string, rules: SkillRoutingRules): string | undefined {
+  // 只允许显式引用：与 Codex 的 policy.allow_implicit_invocation=false 同义。
+  if (rules.implicit === false) return undefined
   const text = cleanSkillTaskText(message)
   if (rules.excludeKeywords?.some(word => containsKeyword(text, word))) return undefined
   if (rules.keywords?.some(word => containsKeyword(text, word))) return 'configured-keyword'

@@ -25,6 +25,8 @@ async function prepare(slugs: string[]) {
     const path = join(root, 'skills', slug)
     mkdirSync(path, { recursive: true })
     writeFileSync(join(path, 'SKILL.md'), `---\n"name": shared-name\ndescription: test skill\n---\nSECRET_${slug}\n`)
+    // 依赖由模块自己声明：automation 组被预设关闭时，这个 Skill 必须整块不可用。
+    if (slug === 'automation') writeFileSync(join(path, 'SKILL.json'), JSON.stringify({ schemaVersion: 1, dependencies: { toolGroups: ['automation'] } }))
     return { slug, name: 'shared-name', path, version: '1', scope: 'workspace' as const, actualSource: 'workspace' as const }
   })
   const policy = createEffectiveAgentPresetPolicy({ id: 'test', name: 'test', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0, skillSlugs: slugs, disabledToolGroups: ['automation'] }, { presetId: 'test', presetScope: 'workspace', workspaceSlug: 'ws' }, { runtimeSupportsSubagents: true })

@@ -2,7 +2,6 @@
 name: pptx
 description: "Use this skill whenever a PowerPoint .pptx file is involved as input or output. This includes creating, reading, editing, modifying, combining, splitting, previewing, or exporting PowerPoint files; working with templates, layouts, speaker notes, comments, charts, and native editable objects. Trigger on requests to create or handle a PowerPoint file, PPT, 幻灯片, 演示文稿, or a .pptx filename. Do not introduce extra project paperwork, specification contracts, source tracking, or confirmation workflows unless the user explicitly requests formal review or submission governance."
 license: Proprietary. LICENSE.txt has complete terms
-version: "1.2.2"
 ---
 
 # PPTX Skill

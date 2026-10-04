@@ -2,7 +2,6 @@
 name: in-app-browser
 description: Profer 内嵌受管浏览器使用指南。当用户要求打开、展示、访问、浏览或操作网页，或提到小红书、X/Twitter、LinkedIn、BOSS 直聘、登录后站内搜索、动态页面、截图或本地 HTML/React 预览时使用。对邮件、消息、文档、项目管理等已有匹配专用 MCP/API/CLI 的服务，必须优先使用专用工具；仅在没有匹配工具、工具无法完成当前能力或用户明确要求网页时改用 Browser。浏览器工具出现在当前工具列表时，必须先阅读本 Skill 再进行网页操作；不要因为工具直接可见就跳过。
 group: profer
-version: "1.0.10"
 ---
 
 # Profer In-App Browser

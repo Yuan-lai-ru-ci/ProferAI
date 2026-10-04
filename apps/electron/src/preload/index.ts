@@ -882,6 +882,12 @@ export interface ElectronAPI {
   /** 写入 SKILL.md 全文内容 */
   writeSkillContent: (workspaceSlug: string, skillSlug: string, content: string) => Promise<void>
 
+  /** 读取 Skill 路由卡片（SKILL.json） */
+  readSkillCard: (workspaceSlug: string, skillSlug: string) => Promise<import('@profer/shared').WorkspaceSkillCardState>
+
+  /** 合并写入 Skill 路由卡片（null / 空值 = 删除该字段） */
+  writeSkillCard: (workspaceSlug: string, skillSlug: string, patch: import('@profer/shared').SkillManifestPatch) => Promise<import('@profer/shared').WorkspaceSkillCardState>
+
   /** 列出 Skill 目录下的子文件树（不含 SKILL.md） */
   listSkillFiles: (workspaceSlug: string, skillSlug: string) => Promise<import('@profer/shared').SkillFileNode[]>
 
@@ -2627,6 +2633,23 @@ const electronAPI: ElectronAPI = {
       workspaceSlug,
       skillSlug,
       content,
+    )
+  },
+
+  readSkillCard: (workspaceSlug: string, skillSlug: string) => {
+    return ipcRenderer.invoke(
+      AGENT_IPC_CHANNELS.READ_SKILL_CARD,
+      workspaceSlug,
+      skillSlug,
+    )
+  },
+
+  writeSkillCard: (workspaceSlug: string, skillSlug: string, patch: import('@profer/shared').SkillManifestPatch) => {
+    return ipcRenderer.invoke(
+      AGENT_IPC_CHANNELS.WRITE_SKILL_CARD,
+      workspaceSlug,
+      skillSlug,
+      patch,
     )
   },
 

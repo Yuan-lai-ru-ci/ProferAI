@@ -15,11 +15,12 @@
  *   从而正确捕捉“改了内容但没 bump version”的情况。
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, cpSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, cpSync, copyFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { getConfigDir, getDefaultSkillsDir, getWorkspaceSkillsDir } from './config-paths'
 import { normalizeDefaultSkillSlug } from './default-skill-slugs'
+import { readSkillManifest, readSkillVersion, writeSkillManifest, SKILL_MANIFEST_FILENAME } from './skill-manifest'
 import type { MasterSkillMeta, MasterSkillVersion, SyncSkillResult, SkillConflict, SkillImportSource } from '@profer/shared'
 
 // ============================================================
@@ -125,18 +126,35 @@ export function readMasterSkillContent(slug: string): string {
   return readFileSync(p, 'utf-8')
 }
 
+/**
+ * 元 skill 当前版本：与运行时同一优先级（模块清单 > frontmatter）。
+ * 版本现在可以住在 SKILL.json 里，库不能再只解 frontmatter，否则卡片带版本的技能在元库里会显示为空。
+ */
+function masterSkillVersion(slug: string): string {
+  return readSkillVersion(join(getMasterSkillsDirBase(), slug))
+}
+
 /** 保存元 skill 当前内容，并自动创建一条新版本快照。 */
 export function saveMasterSkill(slug: string, content: string, note?: string): MasterSkillVersion {
   const dir = join(getMasterSkillsDirBase(), slug)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
-  // 版本 bump：frontmatter 里的 version patch+1，并写回
-  const bumped = bumpSkillVersion(content)
-  writeFileSync(join(dir, 'SKILL.md'), bumped, 'utf-8')
+  // 版本 bump：版本住在哪就在哪 bump——卡片里有版本就 bump 卡片，否则回退到 frontmatter。
+  const cardVersion = readSkillManifest(dir).manifest?.version
+  let bumped = content
+  let newVersion: string
+  if (cardVersion) {
+    newVersion = bumpVersion(cardVersion)
+    writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+    writeSkillManifest(dir, { version: newVersion })
+  } else {
+    bumped = bumpSkillVersion(content)
+    writeFileSync(join(dir, 'SKILL.md'), bumped, 'utf-8')
+    newVersion = parseFrontmatterVersion(bumped)
+  }
 
   // 记录快照
   const index = readMasterIndex(slug) ?? { slug, currentVersion: '', snapshots: [] }
-  const newVersion = parseFrontmatterVersion(bumped)
   const snapshotId = `v${(index.snapshots.length || 0) + 1}`
   const version: MasterSkillVersion = {
     version: newVersion,
@@ -154,6 +172,11 @@ export function saveMasterSkill(slug: string, content: string, note?: string): M
   const snapDir = join(getSkillHistoryDir(slug), snapshotId)
   if (!existsSync(snapDir)) mkdirSync(snapDir, { recursive: true })
   writeFileSync(join(snapDir, 'SKILL.md'), bumped, 'utf-8')
+  // 卡片里的版本与依赖也是这个技能的一部分，快照必须一起存，否则回退会把声明丢回去。
+  const snapshotCard = join(snapDir, SKILL_MANIFEST_FILENAME)
+  const currentCard = join(dir, SKILL_MANIFEST_FILENAME)
+  if (existsSync(currentCard)) copyFileSync(currentCard, snapshotCard)
+  else if (existsSync(snapshotCard)) rmSync(snapshotCard, { force: true })
 
   return version
 }
@@ -171,9 +194,8 @@ export function renameMasterSkillMeta(slug: string, patches: { name?: string; de
 export function listMasterSkillHistory(slug: string): MasterSkillVersion[] {
   const index = readMasterIndex(slug)
   if (!index) {
-    const content = readMasterSkillContent(slug)
     return [{
-      version: parseFrontmatterVersion(content),
+      version: masterSkillVersion(slug),
       snapshotId: 'v1',
       createdAt: new Date().toISOString(),
     }]
@@ -185,7 +207,7 @@ export function listMasterSkillHistory(slug: string): MasterSkillVersion[] {
 export function getMasterSkillCurrentVersion(slug: string): string {
   const index = readMasterIndex(slug)
   if (index?.currentVersion) return index.currentVersion
-  return parseFrontmatterVersion(readMasterSkillContent(slug))
+  return masterSkillVersion(slug)
 }
 
 /** 读取某历史快照的 SKILL.md 内容 */
@@ -201,11 +223,16 @@ export function rollbackMasterSkill(slug: string, snapshotId: string, note?: str
   const dir = join(getMasterSkillsDirBase(), slug)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
+  // 卡片同样跟着回退：快照里有就恢复，没有则删掉当前卡片，避免正文回退而声明留在新版。
+  const snapshotCard = join(getSkillHistoryDir(slug), snapshotId, SKILL_MANIFEST_FILENAME)
+  const currentCard = join(dir, SKILL_MANIFEST_FILENAME)
+  if (existsSync(snapshotCard)) copyFileSync(snapshotCard, currentCard)
+  else if (existsSync(currentCard)) rmSync(currentCard, { force: true })
 
   const index = readMasterIndex(slug) ?? { slug, currentVersion: '', snapshots: [] }
   const nextSnapshotId = `v${(index.snapshots.length || 0) + 1}`
   const version: MasterSkillVersion = {
-    version: parseFrontmatterVersion(content),
+    version: masterSkillVersion(slug),
     snapshotId: nextSnapshotId,
     createdAt: new Date().toISOString(),
     note: note ?? `回退自 ${snapshotId}`,
@@ -217,6 +244,9 @@ export function rollbackMasterSkill(slug: string, snapshotId: string, note?: str
   const snapDir = join(getSkillHistoryDir(slug), nextSnapshotId)
   if (!existsSync(snapDir)) mkdirSync(snapDir, { recursive: true })
   writeFileSync(join(snapDir, 'SKILL.md'), content, 'utf-8')
+  const rolledBackCard = join(snapDir, SKILL_MANIFEST_FILENAME)
+  if (existsSync(currentCard)) copyFileSync(currentCard, rolledBackCard)
+  else if (existsSync(rolledBackCard)) rmSync(rolledBackCard, { force: true })
   return version
 }
 
@@ -229,7 +259,7 @@ export function listMasterSkills(): MasterSkillMeta[] {
     const content = readMasterSkillContent(slug)
     const meta = parseMasterFrontmatter(content)
     const index = readMasterIndex(slug)
-    const currentVersion = parseFrontmatterVersion(content)
+    const currentVersion = masterSkillVersion(slug)
     const userModified = !!index?.baselineVersion && currentVersion !== index.baselineVersion
     return {
       slug,
@@ -369,9 +399,9 @@ export function syncMasterSkillToWorkspace(
     sourceWorkspaceSlug: 'master',
     sourceWorkspaceName: '全局元 Skill',
     importedAt: new Date().toISOString(),
-    sourceVersion: parseFrontmatterVersion(readMasterSkillContent(normalizedMasterSlug)),
+    sourceVersion: masterSkillVersion(normalizedMasterSlug),
     sourceKind: 'master',
-    baselineVersion: parseFrontmatterVersion(readMasterSkillContent(normalizedMasterSlug)),
+    baselineVersion: masterSkillVersion(normalizedMasterSlug),
     masterSlug: normalizedMasterSlug,
     baselineHash: masterHash,
     baselineHashMap: buildDirHashMap(masterDir),

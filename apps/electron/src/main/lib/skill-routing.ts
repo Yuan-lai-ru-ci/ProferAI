@@ -2,10 +2,12 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { open, readFile } from 'node:fs/promises'
 import { join, relative, isAbsolute } from 'node:path'
-import { AGENT_PRESET_CAPABILITY_GROUPS, isEffectiveAgentPresetMcpServerAllowed, isEffectiveAgentPresetToolDisabled, type AgentPresetToolGroup, type EffectiveAgentPresetPolicy, type RuntimeSkillsProjection } from '@profer/shared'
+import { AGENT_PRESET_CAPABILITY_GROUPS, isEffectiveAgentPresetMcpServerAllowed, isEffectiveAgentPresetToolDisabled, skillManifestToRoutingFields, type AgentPresetToolGroup, type EffectiveAgentPresetPolicy, type RuntimeSkillsProjection, type SkillManifest } from '@profer/shared'
 import { normalizeDefaultSkillSlug } from './default-skill-slugs'
 import { canonicalSkillSegmentKey } from './skill-path-security'
 import { BUILTIN_SKILL_DEPENDENCIES, cleanSkillTaskText, skillTaskMatch, type SkillRoutingRules } from './skill-routing-rules'
+import { resolveSkillDescriptor, readSkillManifest } from './skill-manifest'
+import { selectLexicalFallback } from './skill-lexical-match'
 
 export type SkillRoutingCode = 'preset-denied' | 'tool-group-disabled' | 'tool-unavailable' | 'mcp-unavailable' | 'unreadable' | 'invalid-routing' | 'not-found' | 'ambiguous' | 'budget-deferred'
 export interface SkillRoutingDiagnostic { slug: string; code: SkillRoutingCode }
@@ -66,6 +68,10 @@ async function readRules(root: string, directory: string): Promise<SkillRoutingR
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('路由配置应为对象')
   const record = raw as Record<string, unknown>
   const rules: SkillRoutingRules = {}
+  if (record.implicit !== undefined) {
+    if (typeof record.implicit !== 'boolean') throw new Error('路由配置 implicit 应为布尔值')
+    rules.implicit = record.implicit
+  }
   for (const field of ['keywords', 'excludeKeywords', 'requiredTools', 'requiredMcpServers', 'requiredToolGroups'] as const) {
     const value = record[field]
     if (value === undefined) continue
@@ -79,20 +85,38 @@ async function readRules(root: string, directory: string): Promise<SkillRoutingR
   return Object.freeze(rules)
 }
 
-function mergeRules(builtin: SkillRoutingRules, custom: SkillRoutingRules): SkillRoutingRules {
-  return Object.freeze({
-    ...custom,
-    requiredTools: Object.freeze([...new Set([...(builtin.requiredTools ?? []), ...(custom.requiredTools ?? [])])]),
-    requiredMcpServers: Object.freeze([...new Set([...(builtin.requiredMcpServers ?? []), ...(custom.requiredMcpServers ?? [])])]),
-    requiredToolGroups: Object.freeze([...new Set([...(builtin.requiredToolGroups ?? []), ...(custom.requiredToolGroups ?? [])])]),
-  })
+function unionList<T extends string>(left?: readonly T[], right?: readonly T[]): readonly T[] | undefined {
+  if (!left?.length) return right
+  if (!right?.length) return left
+  return Object.freeze([...new Set([...left, ...right])])
 }
 
-function toolIsAvailable(required: string, tools: ReadonlySet<string>, policy: EffectiveAgentPresetPolicy): boolean {
+/**
+ * 路由规则分层合并（内置兜底 → 侧车 → 模块清单 → 调用方覆盖）。
+ *
+ * 触发词与 implicit 按后者覆盖前者；依赖类取并集（更严格），任何一层都不能静默把另一层
+ * 声明的依赖去掉。同一字段在多处声明属于第二份真相，由 skill-doctor 报出。
+ */
+export function mergeSkillRoutingLayers(...layers: SkillRoutingRules[]): SkillRoutingRules {
+  let merged: SkillRoutingRules = {}
+  for (const layer of layers) {
+    merged = {
+      ...merged,
+      ...layer,
+      requiredTools: unionList(merged.requiredTools, layer.requiredTools),
+      requiredMcpServers: unionList(merged.requiredMcpServers, layer.requiredMcpServers),
+      requiredToolGroups: unionList(merged.requiredToolGroups, layer.requiredToolGroups),
+    }
+  }
+  return Object.freeze(merged)
+}
+
+/** 工具可用性：MCP 全名精确匹配，短名只匹配当前已注册工具，且都受预设禁用约束。doctor 与路由共用。 */
+export function skillToolAvailable(required: string, tools: ReadonlySet<string>, policy?: EffectiveAgentPresetPolicy): boolean {
   // MCP 全名必须精确匹配；短名匹配只处理当前已注册工具，不能用任意服务器冒充全名。
-  if (isEffectiveAgentPresetToolDisabled(policy, required) || policy.disabledTools?.includes(required)) return false
+  if (policy && (isEffectiveAgentPresetToolDisabled(policy, required) || policy.disabledTools?.includes(required))) return false
   const matches = [...tools].filter(tool => {
-    if (isEffectiveAgentPresetToolDisabled(policy, tool) || policy.disabledTools?.includes(tool)) return false
+    if (policy && (isEffectiveAgentPresetToolDisabled(policy, tool) || policy.disabledTools?.includes(tool))) return false
     return required.startsWith('mcp__') ? tool === required : (tool.split('__').at(-1) ?? tool).toLowerCase() === required.toLowerCase()
   })
   return new Set(matches).size === 1
@@ -123,6 +147,7 @@ export async function createSkillRoutingSnapshot(input: {
     let disableModelInvocation = false
     let blocked: SkillRoutingCode | undefined = whitelist && !whitelist.has(key(slug)) ? 'preset-denied' : undefined
     let rules: SkillRoutingRules = BUILTIN_SKILL_DEPENDENCIES[key(slug)] ?? {}
+    let manifest: SkillManifest | undefined
     // 先过滤预设，拒绝项不读取正文，诊断也不含正文/路径。
     if (!blocked) {
       try {
@@ -131,18 +156,29 @@ export async function createSkillRoutingSnapshot(input: {
         const content = bodyDeferred ? await readHeader(file.path) : await readFile(file.path, 'utf8')
         if (!bodyDeferred) bodyReadBudget -= file.size
         const parsed = parseFrontmatter<Record<string, unknown>>(content)
-        name = typeof parsed.frontmatter.name === 'string' ? parsed.frontmatter.name : slug
-        description = typeof parsed.frontmatter.description === 'string' ? parsed.frontmatter.description : ''
+        // 模块清单优先于 frontmatter：清单坏掉时不阻断加载，frontmatter 继续生效（doctor 负责报出）。
+        const manifestRead = readSkillManifest(join(root, slug))
+        manifest = manifestRead.manifest
+        const descriptor = resolveSkillDescriptor({
+          dirName: slug,
+          manifest: manifestRead.manifest,
+          frontmatter: {
+            ...(typeof parsed.frontmatter.name === 'string' ? { name: parsed.frontmatter.name } : {}),
+            ...(typeof parsed.frontmatter.description === 'string' ? { description: parsed.frontmatter.description } : {}),
+          },
+        })
+        name = descriptor.name
+        description = descriptor.description
         body = parsed.body.trim()
         disableModelInvocation = parsed.frontmatter['disable-model-invocation'] === true
         if ((!body && !bodyDeferred) || !description.trim()) blocked = 'unreadable'
       } catch { blocked = 'unreadable' }
       if (!blocked) {
-        try { rules = mergeRules(rules, await readRules(root, join(root, slug))) } catch { blocked = 'invalid-routing' }
+        try { rules = mergeSkillRoutingLayers(rules, await readRules(root, join(root, slug)), skillManifestToRoutingFields(manifest)) } catch { blocked = 'invalid-routing' }
       }
       if (!blocked && rules.requiredToolGroups?.some(group => policy.disabledToolGroups.includes(group))) blocked = 'tool-group-disabled'
       if (!blocked && rules.requiredMcpServers?.some(server => !policy.loadedMcpServerNames?.includes(server) || !isEffectiveAgentPresetMcpServerAllowed(policy, server))) blocked = 'mcp-unavailable'
-      if (!blocked && rules.requiredTools?.some(tool => !toolIsAvailable(tool, tools, policy))) blocked = 'tool-unavailable'
+      if (!blocked && rules.requiredTools?.some(tool => !skillToolAvailable(tool, tools, policy))) blocked = 'tool-unavailable'
     }
     skills.push(Object.freeze({ slug, name, description: blocked ? '' : description, filePath, body: blocked ? '' : body, bodyDeferred, disableModelInvocation, rules, ...(blocked ? { blocked } : {}) }))
   }
@@ -192,6 +228,21 @@ export function routeSkillsForTask(snapshot: SkillRoutingSnapshot, input: {
     selected.push(item)
   }
   let budget = Math.max(0, Math.min(input.maxBodyChars ?? 24_000, 64_000))
+  // 关键词/确定性信号一条都没命中时，才用字符 n-gram 兜底召回：只取一个、且必须明显领先第二名。
+  // 用户已经显式点名（无论名字是否有效）时一律不猜：失败了就报失败，替用户猜会掩盖拼写错误。
+  if (selected.length === 0 && explicit.length === 0 && limit > 0) {
+    const documents = snapshot.skills
+      .filter(skill => !skill.blocked && !skill.disableModelInvocation && skill.rules.implicit !== false)
+      .map(skill => ({ slug: skill.slug, name: skill.name || skill.slug, description: skill.description }))
+    const fallback = selectLexicalFallback(input.userMessage, documents)
+    const skill = fallback ? snapshot.skills.find(item => item.slug === fallback.slug) : undefined
+    if (skill) {
+      chosen.set(skill.slug, skill)
+      const item = { slug: skill.slug, reason: 'lexical-fallback' }
+      recommended.push(item)
+      selected.push(item)
+    }
+  }
   const blocks: string[] = []
   for (const skill of chosen.values()) {
     if (skill.bodyDeferred || skill.body.length > budget) {

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "version": "1.1.0",
+  "dependencies": {
+    "toolGroups": [
+      "automation"
+    ],
+    "tools": [
+      "list_automations"
+    ]
+  },
+  "provenance": {
+    "kind": "bundled",
+    "id": "builtin-automation"
+  }
+}

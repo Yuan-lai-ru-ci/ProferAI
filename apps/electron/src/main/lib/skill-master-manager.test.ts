@@ -175,4 +175,38 @@ describe('skill-master-manager', () => {
     expect(existsSync(join(roots.workspaces, 'ws-a', 'skills', 'profer-coach', 'SKILL.md'))).toBe(true)
     expect(source.masterSlug).toBe('profer-coach')
   })
+
+  test('版本住在卡片里时：元库读得到、bump 写在卡片、快照与回退都带卡片', () => {
+    const roots = setupSkill('1.0.0')
+    // 把版本搬到模块卡片，并从 frontmatter 去掉（与内置技能的新约定一致）。
+    const dir = join(roots.master, 'test-skill')
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: 测试技能\n---\n\n# 测试技能\n\n正文。\n')
+    writeFileSync(join(dir, 'SKILL.json'), JSON.stringify({ schemaVersion: 1, version: '2.3.4', dependencies: { toolGroups: ['preview'] } }))
+
+    expect(listMasterSkills().find((skill) => skill.slug === 'test-skill')?.version).toBe('2.3.4')
+
+    const saved = saveMasterSkill('test-skill', readFileSync(join(dir, 'SKILL.md'), 'utf-8'))
+    expect(saved.version).toBe('2.3.5')
+    const card = JSON.parse(readFileSync(join(dir, 'SKILL.json'), 'utf-8'))
+    expect(card.version).toBe('2.3.5')
+    expect(card.dependencies.toolGroups).toEqual(['preview'])
+    // frontmatter 不因为保存而被塞回一个版本（否则又变成两份说法）。
+    expect(readFileSync(join(dir, 'SKILL.md'), 'utf-8')).not.toContain('version:')
+    expect(existsSync(join(dir, '..', '..', 'default-skills-history', 'test-skill', saved.snapshotId, 'SKILL.json'))).toBe(true)
+
+    // 改了卡片版本后回退到上一个快照：正文与卡片一起回去。
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: 测试技能\n---\n\n改了正文。\n')
+    writeFileSync(join(dir, 'SKILL.json'), JSON.stringify({ schemaVersion: 1, version: '9.9.9' }))
+    const rolledBack = rollbackMasterSkill('test-skill', saved.snapshotId)
+    expect(rolledBack.version).toBe('2.3.5')
+    expect(JSON.parse(readFileSync(join(dir, 'SKILL.json'), 'utf-8')).version).toBe('2.3.5')
+    expect(readFileSync(join(dir, 'SKILL.md'), 'utf-8')).toContain('正文。')
+  })
+
+  test('没有卡片时仍按 frontmatter bump（旧路径不变）', () => {
+    const roots = setupSkill('1.0.0')
+    const saved = saveMasterSkill('test-skill', readFileSync(join(roots.master, 'test-skill', 'SKILL.md'), 'utf-8'))
+    expect(saved.version).toBe('1.0.1')
+    expect(readFileSync(join(roots.master, 'test-skill', 'SKILL.md'), 'utf-8')).toContain('version: 1.0.1')
+  })
 })

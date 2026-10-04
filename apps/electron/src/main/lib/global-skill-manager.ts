@@ -25,6 +25,7 @@ import {
 } from './config-paths'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { normalizeDefaultSkillSlug } from './default-skill-slugs'
+import { readSkillDescriptor } from './skill-manifest'
 import type {
   GlobalSkillManifest,
   GlobalSkillMeta,
@@ -236,18 +237,20 @@ function parseMeta(content: string, fallbackSlug: string): ParsedSkillMeta {
 }
 
 function readSkillManifestFromDir(dir: string, skillId: string, type: GlobalSkillType, source?: GlobalSkillSource): GlobalSkillManifest {
-  const content = readFileSync(join(dir, 'SKILL.md'), 'utf-8')
-  const meta = parseMeta(content, basename(dir))
+  // 保留原有硬约束：没有 SKILL.md 的目录不是 Skill。
+  readFileSync(join(dir, 'SKILL.md'), 'utf-8')
+  // 名称 / 描述 / 版本统一按「模块清单优先、frontmatter 回退」解析，避免与路由各算一套。
+  const descriptor = readSkillDescriptor(dir).descriptor
   const now = new Date().toISOString()
-  assertSafeSkillSegment(meta.slug, 'global Skill slug')
+  assertSafeSkillSegment(descriptor.slug, 'global Skill slug')
   return {
     schemaVersion: 1,
     skillId,
-    slug: meta.slug,
+    slug: descriptor.slug,
     type,
-    version: parseSkillVersion(dir),
-    name: meta.name,
-    ...(meta.description ? { description: meta.description } : {}),
+    version: descriptor.version,
+    name: descriptor.name,
+    ...(descriptor.description ? { description: descriptor.description } : {}),
     createdAt: now,
     updatedAt: now,
     ...(source ? { source } : {}),
@@ -317,16 +320,20 @@ function shouldCopySkillEntry(name: string): boolean {
 /**
  * 只复制普通目录与普通文件：不跟随 symlink，且统一忽略工程产物。
  * 这避免全局/工作区复制与 runtime projection 因符号链接或 node_modules 越过 Skill 根。
+ *
+ * `exclude` 用于带上不属于技能本体的文件：库账本 `skill.manifest.json` 与工作区来源 `.source.json`
+ * 只属于“当前安装的管理层”，跟到工作区副本或运行时投影里只会变成没人读的旧数据。
  */
-export function copySkillDirectorySafely(source: string, target: string): void {
+export function copySkillDirectorySafely(source: string, target: string, options: { exclude?: readonly string[] } = {}): void {
   const sourceStat = statSync(source)
   if (!sourceStat.isDirectory()) throw new Error(`Skill 来源不是目录: ${source}`)
+  const exclude = options.exclude ? new Set(options.exclude) : undefined
   mkdirSync(target, { recursive: true })
   for (const entry of readdirSync(source, { withFileTypes: true })) {
-    if (!shouldCopySkillEntry(entry.name) || entry.isSymbolicLink()) continue
+    if (!shouldCopySkillEntry(entry.name) || entry.isSymbolicLink() || exclude?.has(entry.name)) continue
     const from = join(source, entry.name)
     const to = join(target, entry.name)
-    if (entry.isDirectory()) copySkillDirectorySafely(from, to)
+    if (entry.isDirectory()) copySkillDirectorySafely(from, to, options)
     else if (entry.isFile()) copyFileSync(from, to)
   }
 }
@@ -972,7 +979,10 @@ export function copyGlobalSkillToWorkspace(skillId: string, workspaceSlug: strin
   const overrides = readWorkspaceSkillOverrides(workspaceSlug)
   const previousOverride = overrides.globalSkills[source.skillId]
   try {
-    copyDirectoryAtomic(sourcePath(source), target)
+    copyDirectoryAtomic(sourcePath(source), target, (staged) => {
+      // 库账本只属于全局库，带到工作区副本里只会变成没人读、还带着全局 skillId 的旧数据。
+      rmSync(join(staged, 'skill.manifest.json'), { force: true })
+    })
     writeSource(target, { workspaceSkillId, sourceSkillId: source.skillId, sourceSkillType: source.type, sourceVersion: source.version, copiedAt, scope: 'workspace', replacementForSkillId: source.skillId, overrideReason: 'replaced-by-workspace-copy' })
     // 源在本工作区被替换而禁用；副本本身位于 active skills/，会被解析器唯一加载。
     overrides.globalSkills[source.skillId] = { ...override, enabled: false }
@@ -1370,15 +1380,15 @@ function scanWorkspaceSkills(workspaceSlug: string, includeInactive = false): Re
       if (!entry.isDirectory()) continue
       assertSafeSkillSegment(entry.name, 'workspace Skill slug')
       if (!existsSync(join(root, entry.name, 'SKILL.md')) || (!enabled && !includeInactive)) continue
-      const content = readFileSync(join(root, entry.name, 'SKILL.md'), 'utf-8')
-      const meta = parseMeta(content, entry.name)
+      // 元数据优先级统一走 skill-manifest：有模块清单时清单优先，无清单回退 frontmatter。
+      const descriptor = readSkillDescriptor(join(root, entry.name), entry.name).descriptor
       const source = readSource(join(root, entry.name))
       const workspaceSkillId = ensureWorkspaceSkillId(join(root, entry.name), source)
       result.push({
         workspaceSkillId,
         slug: entry.name,
-        name: meta.name,
-        version: parseSkillVersion(join(root, entry.name)),
+        name: descriptor.name,
+        version: descriptor.version,
         path: join(root, entry.name),
         scope: 'workspace',
         actualSource: 'workspace',
@@ -1502,7 +1512,7 @@ export function prepareRuntimeSkills(workspaceSlug: string): RuntimeSkillsProjec
       for (const skill of resolved) {
         assertSafeSkillSegment(skill.slug, 'runtime Skill slug')
         const temporarySkills = safeSkillPath(temporary, 'skills', 'runtime skills directory')
-        copySkillDirectorySafely(skill.path, safeSkillPath(temporarySkills, skill.slug, 'runtime Skill slug'))
+        copySkillDirectorySafely(skill.path, safeSkillPath(temporarySkills, skill.slug, 'runtime Skill slug'), { exclude: RUNTIME_COPY_EXCLUDE })
       }
       mkdirSync(join(temporary, '.claude-plugin'), { recursive: true })
       writeJsonFileAtomic(join(temporary, '.claude-plugin', 'plugin.json'), {
@@ -1608,7 +1618,7 @@ export async function preparePolicyRuntimeSkills(source: RuntimeSkillsProjection
       for (const skill of selected) {
         assertSafeSkillSegment(skill.slug, 'policy Skill slug')
         const target = join(temporary, 'skills', skill.slug)
-        copySkillDirectorySafely(join(source.path, 'skills', skill.slug), target)
+        copySkillDirectorySafely(join(source.path, 'skills', skill.slug), target, { exclude: RUNTIME_COPY_EXCLUDE })
         const mdPath = join(target, 'SKILL.md')
         const content = readFileSync(mdPath, 'utf8').replace(/^\uFEFF/, '')
         const parsed = parseFrontmatter<Record<string, unknown>>(content)
@@ -1630,6 +1640,9 @@ export async function preparePolicyRuntimeSkills(source: RuntimeSkillsProjection
 export function getRuntimeSkillsPath(projection: RuntimeSkillsProjection): string {
   return join(projection.path, 'skills')
 }
+
+/** 运行时投影只带技能本体：库账本与工作区来源都不属于技能。 */
+const RUNTIME_COPY_EXCLUDE = ['skill.manifest.json', '.source.json'] as const
 
 function skillDirectoryHash(dir: string, normalize?: (relativePath: string, content: Buffer) => Buffer): string {
   const hash = createHash('sha256')

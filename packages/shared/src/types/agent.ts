@@ -2221,6 +2221,10 @@ export const AGENT_IPC_CHANNELS = {
   READ_SKILL_CONTENT: 'agent:read-skill-content',
   /** 写入 SKILL.md 全文内容 */
   WRITE_SKILL_CONTENT: 'agent:write-skill-content',
+  /** 读取 Skill 路由卡片（SKILL.json）：触发词、依赖、策略、来源 */
+  READ_SKILL_CARD: 'agent:read-skill-card',
+  /** 合并写入 Skill 路由卡片（补丁语义：null / 空值 = 删除字段） */
+  WRITE_SKILL_CARD: 'agent:write-skill-card',
   /** 列出 Skill 目录下的子文件树（不含 SKILL.md） */
   LIST_SKILL_FILES: 'agent:list-skill-files',
   /** 读取 Skill 目录下的子文件内容 */

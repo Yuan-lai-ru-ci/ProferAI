@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "version": "1.1.0",
+  "dependencies": {
+    "toolGroups": [
+      "browser"
+    ],
+    "tools": [
+      "BrowserNavigate",
+      "BrowserObserve"
+    ]
+  },
+  "provenance": {
+    "kind": "bundled",
+    "id": "builtin-in-app-browser"
+  }
+}

@@ -1,4 +1,5 @@
 /** 全局 Skill 体系共享类型。 */
+import type { SkillDoctorIssue, SkillManifest, SkillManifestIssue } from './skill-manifest'
 
 export type GlobalSkillType = 'builtin-meta' | 'user-global'
 export type SkillScope = 'global' | 'workspace'
@@ -126,6 +127,20 @@ export interface WorkspaceSkillCopyResult {
   workspaceSkillSlug: string
   workspaceSkillId: string
   override: WorkspaceGlobalSkillOverride
+}
+
+/**
+ * 工作区 Skill 的路由卡片（SKILL.json）状态。
+ *
+ * 卡片只装正文放不下的结构化信息（触发词 / 依赖 / 策略 / 宿主契约 / 来源），名称与描述仍只在正文；
+ * `present=false` 表示没有卡片，读取会回退到 frontmatter 与旧侧车。
+ */
+export interface WorkspaceSkillCardState {
+  present: boolean
+  manifest?: SkillManifest
+  issues: SkillManifestIssue[]
+  /** 医生诊断（只含 warning / error，界面直接可展示）。 */
+  doctor: SkillDoctorIssue[]
 }
 
 export interface GlobalSkillEditRequest {

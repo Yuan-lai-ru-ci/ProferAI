@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "version": "1.5.0",
+  "interface": {
+    "displayName": "会话内可视化",
+    "defaultPrompt": "把这份数据做成图表；或用可调参的交互讲清一个过程"
+  },
+  "policy": {
+    "implicit": true,
+    "surfaces": [
+      "desktop"
+    ]
+  },
+  "triggers": {
+    "keywords": [
+      "可视化",
+      "可视化一下",
+      "图表",
+      "柱状图",
+      "分组柱状图",
+      "堆叠柱状图",
+      "条形图",
+      "折线图",
+      "曲线图",
+      "饼图",
+      "散点图",
+      "趋势图",
+      "分布图",
+      "占比图",
+      "对比图",
+      "关系图",
+      "流程图",
+      "结构图",
+      "示意图",
+      "图示",
+      "画个图",
+      "画一张图",
+      "画个流程图",
+      "做成图",
+      "交互视图",
+      "交互式视图",
+      "讲解",
+      "讲清楚",
+      "讲一下",
+      "演示",
+      "动画演示",
+      "过程演示",
+      "步骤演示",
+      "模拟",
+      "动画",
+      "推导",
+      "原理",
+      "工作原理",
+      "一步步",
+      "分步",
+      "教学",
+      "入门",
+      "看懂",
+      "看明白",
+      "拆解",
+      "可调参数",
+      "参数可调",
+      "交互式讲解",
+      "chart",
+      "charts",
+      "bar chart",
+      "line chart",
+      "pie chart",
+      "scatter plot",
+      "diagram",
+      "diagrams",
+      "flowchart",
+      "flowcharts",
+      "visualization",
+      "visualisation",
+      "visualize",
+      "visualise",
+      "explain how",
+      "walk me through",
+      "step by step",
+      "step-by-step",
+      "tutorial",
+      "teach me",
+      "simulate",
+      "simulation",
+      "animate",
+      "animation",
+      "visual explanation",
+      "interactive explanation",
+      "数学公式",
+      "latex"
+    ],
+    "excludeKeywords": [
+      "不要图表",
+      "不要可视化",
+      "不用图表",
+      "不要画图",
+      "不要动画",
+      "不用动画"
+    ]
+  },
+  "dependencies": {
+    "toolGroups": [
+      "preview"
+    ],
+    "tools": [
+      "present_visualization"
+    ]
+  },
+  "requires": {
+    "hostClasses": [
+      ".viz-badge",
+      ".btn-primary",
+      ".form-check",
+      ".table",
+      "[data-profer-columns]"
+    ]
+  },
+  "provenance": {
+    "kind": "bundled",
+    "id": "builtin-present-visualization"
+  }
+}

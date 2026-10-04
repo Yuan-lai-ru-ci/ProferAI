@@ -23,9 +23,11 @@ import {
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { assertSafeSkillSegment, canonicalSkillSegmentKey } from './skill-path-security'
+import { readSkillManifest, writeSkillManifest } from './skill-manifest'
+import { diagnoseSkill } from './skill-doctor'
 import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
 import { listAgentPresets, createAgentPreset } from './agent-preset-manager'
-import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, WorkspaceSkillSource, OtherWorkspaceSkillsGroup, OtherWorkspacePresetsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, WorkspaceType } from '@profer/shared'
+import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, WorkspaceSkillSource, OtherWorkspaceSkillsGroup, OtherWorkspacePresetsGroup, WorkspaceSkillCardState, SkillManifestPatch, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, WorkspaceType } from '@profer/shared'
 import type { AgentPreset } from '@profer/shared'
 
 interface AgentWorkspacesIndex {
@@ -842,7 +844,8 @@ export function importSkillFromWorkspace(
   }
   const targetPath = join(targetSkillsDir, actualSkillSlug)
 
-  copySkillDirectorySafely(sourcePath, targetPath)
+  // 库账本（skill.manifest.json）不属于技能本体，跨工作区导入时一并剥掉。
+  copySkillDirectorySafely(sourcePath, targetPath, { exclude: ['skill.manifest.json'] })
 
   // 写入来源元数据
   const sourceWorkspace = listAgentWorkspaces().find((w) => w.slug === sourceSlug)
@@ -906,7 +909,7 @@ export function updateSkillFromSource(
   const parentDir = join(targetPath, '..')
   const tmpPath = join(parentDir, `.${actualSkillSlug}.updating`)
   try {
-    copySkillDirectorySafely(sourcePath, tmpPath)
+    copySkillDirectorySafely(sourcePath, tmpPath, { exclude: ['skill.manifest.json'] })
   } catch (err) {
     // 复制失败时清理临时目录，保留原目录不变
     if (existsSync(tmpPath)) rmSync(tmpPath, { recursive: true, force: true })
@@ -1004,6 +1007,38 @@ export function writeWorkspaceSkillContent(workspaceSlug: string, skillSlug: str
   if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
   writeFileSync(join(dir, 'SKILL.md'), content, 'utf-8')
   console.log(`[Agent 工作区] 已更新 SKILL.md: ${workspaceSlug}/${skillSlug}`)
+}
+
+// ===== Skill 路由卡片（SKILL.json）=====
+
+function workspaceSkillDirOrThrow(workspaceSlug: string, skillSlug: string): string {
+  assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
+  const dir = resolveSkillDir(workspaceSlug, skillSlug)
+  if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
+  return dir
+}
+
+function cardState(dir: string, skillSlug: string, removed: boolean): WorkspaceSkillCardState {
+  const read = readSkillManifest(dir)
+  return {
+    present: removed ? false : read.present,
+    ...(read.manifest ? { manifest: read.manifest } : {}),
+    issues: read.issues,
+    doctor: diagnoseSkill({ dir, slug: skillSlug }).filter(issue => issue.severity !== 'info'),
+  }
+}
+
+export function readWorkspaceSkillCard(workspaceSlug: string, skillSlug: string): WorkspaceSkillCardState {
+  return cardState(workspaceSkillDirOrThrow(workspaceSlug, skillSlug), skillSlug, false)
+}
+
+/**
+ * 合并写入卡片；校验不过就报错不落盘（错误信息直接可展示给用户）。
+ * 写成空内容时删除卡片，回到无卡片回退路径。
+ */
+export function writeWorkspaceSkillCard(workspaceSlug: string, skillSlug: string, patch: SkillManifestPatch): WorkspaceSkillCardState {
+  const dir = workspaceSkillDirOrThrow(workspaceSlug, skillSlug)
+  return cardState(dir, skillSlug, writeSkillManifest(dir, patch).removed)
 }
 
 // ===== Profer 工作区资料与记忆管理 =====

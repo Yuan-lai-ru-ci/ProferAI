@@ -321,6 +321,8 @@ import {
   updateSkillFromSource,
   readWorkspaceSkillContent,
   writeWorkspaceSkillContent,
+  readWorkspaceSkillCard,
+  writeWorkspaceSkillCard,
   toggleWorkspaceSkill,
   listSkillFiles,
   readSkillFile,
@@ -3647,6 +3649,20 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.WRITE_SKILL_CONTENT,
     async (_, workspaceSlug: string, skillSlug: string, content: string): Promise<void> => {
       writeWorkspaceSkillContent(workspaceSlug, skillSlug, content)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_SKILL_CARD,
+    async (_, workspaceSlug: string, skillSlug: string) => {
+      return readWorkspaceSkillCard(workspaceSlug, skillSlug)
+    }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.WRITE_SKILL_CARD,
+    async (_, workspaceSlug: string, skillSlug: string, patch: import('@profer/shared').SkillManifestPatch) => {
+      return writeWorkspaceSkillCard(workspaceSlug, skillSlug, patch)
     }
   )
 

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "version": "1.3.0",
+  "dependencies": {
+    "toolGroups": [
+      "ppt-materials",
+      "preview"
+    ],
+    "tools": [
+      "open_file_preview",
+      "inspect_file_preview"
+    ]
+  },
+  "provenance": {
+    "kind": "bundled",
+    "id": "builtin-pptx"
+  }
+}

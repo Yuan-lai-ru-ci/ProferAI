@@ -25,6 +25,7 @@ import { SkillFilesPanel } from "@/components/settings/SkillFilesPanel";
 import { cn } from "@/lib/utils";
 import type { SkillMeta } from "@profer/shared";
 import { extractSkillBody, rebuildSkillMd } from "./skillMdUtils";
+import { SkillCardSection } from "./SkillCardSection";
 
 interface SkillDetailSheetProps {
   skill: SkillMeta | null;
@@ -319,6 +320,14 @@ function SkillDetailBody({
                 />
                 <MetaRow label="位置" value={`skills/${skill.slug}`} />
               </SettingsCard>
+
+              {/* 路由卡片：触发词 / 依赖 / 触发方式（名称与描述仍由上面的元数据编辑区负责） */}
+              <SkillCardSection
+                workspaceSlug={workspaceSlug}
+                skillSlug={skill.slug}
+                canEdit={!isBuiltin}
+                onChanged={onChanged}
+              />
             </div>
 
             {/* 说明 / 资源文件 */}

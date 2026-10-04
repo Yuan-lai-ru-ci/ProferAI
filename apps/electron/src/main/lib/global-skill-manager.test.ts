@@ -798,4 +798,37 @@ version: 1.0.0
     expect(second.legacyMasters).toBe(0)
     expect(JSON.parse(readFileSync(join(paths.global, 'skill-system-migration.json'), 'utf8')).status).toBe('completed')
   })
+
+  test('工作区技能的元数据与运行路由同源：有模块清单时清单说了算', () => {
+    const paths = setup()
+    const dir = join(paths.workspaces, 'cards', 'skills', 'carded')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: 正文名字\ndescription: 用于演示\nversion: "1.0.0"\n---\n\n# 正文\n')
+    expect(resolveEffectiveSkills('cards').find((skill) => skill.slug === 'carded')?.name).toBe('正文名字')
+
+    writeFileSync(join(dir, 'SKILL.json'), JSON.stringify({ schemaVersion: 1, name: '卡片名字', version: '2.0.0' }))
+    const carded = resolveEffectiveSkills('cards').find((skill) => skill.slug === 'carded')
+    expect(carded?.name).toBe('卡片名字')
+    expect(carded?.version).toBe('2.0.0')
+  })
+
+  test('库账本不跟着技能跑：工作区副本与运行时投影都不带 skill.manifest.json', () => {
+    const paths = setup()
+    const builtin = listGlobalSkills()[0]!
+    // 库里（全局库副本）应当有账本，它是这套管理的私有记录。
+    expect(existsSync(join(paths.global, 'builtin', builtin.skillId, 'skill.manifest.json'))).toBe(true)
+
+    copyGlobalSkillToWorkspace(builtin.skillId, 'ledger-free')
+    const copyDir = join(paths.workspaces, 'ledger-free', 'skills', builtin.slug)
+    expect(existsSync(join(copyDir, 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(copyDir, 'skill.manifest.json'))).toBe(false)
+    // 工作区自己的来源标记仍要保留（它服务于本地替换/回退）。
+    expect(existsSync(join(copyDir, '.source.json'))).toBe(true)
+
+    const projection = prepareRuntimeSkills('ledger-free')
+    const runtimeDir = join(projection.path, 'skills', builtin.slug)
+    expect(existsSync(join(runtimeDir, 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(runtimeDir, 'skill.manifest.json'))).toBe(false)
+    expect(existsSync(join(runtimeDir, '.source.json'))).toBe(false)
+  })
 })

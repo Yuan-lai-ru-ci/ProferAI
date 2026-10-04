@@ -20,6 +20,7 @@
     "build": "bun run --filter='*' build",
     "typecheck": "bun run --filter='*' typecheck",
     "check:boundaries": "bun scripts/check-boundaries.ts",
+    "skill:doctor": "bun scripts/skill-doctor.ts",
     "test": "bun test --isolate"
   },
   "devDependencies": {
