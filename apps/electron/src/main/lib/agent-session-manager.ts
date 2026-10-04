@@ -8,9 +8,9 @@
  * 照搬 conversation-manager.ts 的模式。
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, createWriteStream, statSync, type WriteStream } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, createWriteStream, type WriteStream } from 'node:fs'
 import { createInterface } from 'node:readline'
-import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
+import { createAgentSessionIndexStore } from './agent-session-index'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute, join, relative, resolve, dirname } from 'node:path'
 import {
@@ -114,36 +114,10 @@ import {
 } from '@profer/project-core'
 // GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
 
-/**
- * 会话索引文件格式
- */
-interface AgentSessionsIndex {
-  /** 配置版本号 */
-  version: number
-  /** 会话元数据列表 */
-  sessions: AgentSessionMeta[]
-}
-
-/** 当前索引版本 */
-const INDEX_VERSION = 1
-
-/**
- * 会话索引的内存缓存。
- *
- * Agent 运行期间会多次读取和更新会话元数据。索引随历史会话增长后，反复同步
- * readFile + JSON.parse 会直接阻塞主进程；用 mtime 和 size 校验可保留外部修改感知。
- */
-let indexCache: { data: AgentSessionsIndex; mtimeMs: number; size: number } | null = null
-
-function cacheIndex(data: AgentSessionsIndex): void {
-  try {
-    const stat = statSync(getAgentSessionsIndexPath())
-    indexCache = { data, mtimeMs: stat.mtimeMs, size: stat.size }
-  } catch {
-    // 无法确认磁盘版本时绝不复用内存数据，交给下次读取走恢复路径。
-    indexCache = null
-  }
-}
+// 索引存储独立管理缓存与原子读写；manager 保留现有公开入口。
+const sessionIndex = createAgentSessionIndexStore(getAgentSessionsIndexPath)
+const readIndex = sessionIndex.read
+const writeIndex = sessionIndex.write
 
 /** UPDATE_SESSION_AGENT_RUNTIME 需要原子回滚的 runtime-owned 元数据快照。 */
 export interface AgentRuntimeMetaSnapshot {
@@ -198,84 +172,6 @@ export function restoreAgentRuntimeMeta(id: string, snapshot: AgentRuntimeMetaSn
   index.sessions[idx] = restored
   writeIndex(index)
   return restored
-}
-
-/**
- * 在存储边界统一补全 runtime：历史/非法值绝不进入 Pi，均回退 Claude。
- * 此处只更新内存对象，不在读取阶段改写用户索引；下一次正常元数据写入会自然持久化。
- */
-function normalizeSessionRuntime(session: AgentSessionMeta): AgentSessionMeta {
-  const agentRuntime = normalizeAgentRuntime(session.agentRuntime)
-  return session.agentRuntime === agentRuntime ? session : { ...session, agentRuntime }
-}
-
-/** 移除 Agent 知识库下线前遗留的 session allowlist，不影响 Chat 消息中的同名字段。 */
-function removeLegacyAgentKnowledgeReferences(session: AgentSessionMeta): AgentSessionMeta {
-  if (!Object.prototype.hasOwnProperty.call(session, 'knowledgeReferences')) return session
-  const { knowledgeReferences: _removed, ...withoutKnowledgeReferences } = session as AgentSessionMeta & { knowledgeReferences?: unknown }
-  return withoutKnowledgeReferences
-}
-
-/**
- * 读取会话索引文件
- */
-function readIndex(): AgentSessionsIndex {
-  const indexPath = getAgentSessionsIndexPath()
-
-  if (indexCache) {
-    try {
-      const stat = statSync(indexPath)
-      if (stat.mtimeMs === indexCache.mtimeMs && stat.size === indexCache.size) {
-        return indexCache.data
-      }
-    } catch {
-      indexCache = null
-    }
-  }
-
-  const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
-  if (data) {
-    let removedLegacyKnowledgeReferences = false
-    const sessions = Array.isArray(data.sessions)
-      ? data.sessions.map((session) => {
-          const normalized = normalizeSessionRuntime(session)
-          const cleaned = removeLegacyAgentKnowledgeReferences(normalized)
-          if (cleaned !== normalized) removedLegacyKnowledgeReferences = true
-          return cleaned
-        })
-      : []
-    const normalized: AgentSessionsIndex = { ...data, sessions }
-    let cacheNormalized = true
-    if (removedLegacyKnowledgeReferences) {
-      try {
-        writeJsonFileAtomic(indexPath, normalized)
-        console.info('[Agent 会话] 已清理下线前遗留的知识库引用字段')
-      } catch (error) {
-        cacheNormalized = false
-        console.warn('[Agent 会话] 清理遗留知识库引用字段失败，将在下次读取时重试:', error)
-      }
-    }
-    if (cacheNormalized) cacheIndex(normalized)
-    return normalized
-  }
-  return { version: INDEX_VERSION, sessions: [] }
-}
-
-/**
- * 写入会话索引文件
- */
-function writeIndex(index: AgentSessionsIndex): void {
-  const indexPath = getAgentSessionsIndexPath()
-
-  try {
-    writeJsonFileAtomic(indexPath, index)
-    cacheIndex(index)
-  } catch (error) {
-    // 调用方可能已原地修改缓存对象；写入失败后不能继续返回未落盘数据。
-    indexCache = null
-    console.error('[Agent 会话] 写入索引文件失败:', error)
-    throw new Error('写入 Agent 会话索引失败')
-  }
 }
 
 /**
@@ -341,30 +237,17 @@ export function createDelegatedChildSessionMeta(params: {
  * @param includeArchived 是否包含已归档会话；默认 false（高频侧边栏刷新只拉活跃）
  */
 export function listAgentSessions(includeArchived = false): AgentSessionMeta[] {
-  const index = readIndex()
-  return index.sessions
-    .filter((s) => includeArchived || !s.archived)
-    .sort((a, b) => b.updatedAt - a.updatedAt)
+  return sessionIndex.list(includeArchived)
 }
 
-/**
- * 已归档 Agent 会话数量（轻量计数，不排序、不返回 meta）
- */
+/** 已归档 Agent 会话数量；不含隐藏草稿。 */
 export function countArchivedAgentSessions(): number {
-  const index = readIndex()
-  let count = 0
-  for (const s of index.sessions) {
-    if (s.archived && !s.draft) count += 1
-  }
-  return count
+  return sessionIndex.countArchived()
 }
 
-/**
- * 获取单个会话的元数据
- */
+/** 获取单个会话的元数据。 */
 export function getAgentSessionMeta(id: string): AgentSessionMeta | undefined {
-  const index = readIndex()
-  return index.sessions.find((s) => s.id === id)
+  return sessionIndex.get(id)
 }
 
 /**
