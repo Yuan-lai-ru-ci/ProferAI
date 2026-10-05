@@ -31,6 +31,10 @@ Built on dual runtimes ([Claude Agent SDK](https://github.com/anthropics/claude-
 
 ---
 
+<img src="./docs/assets/features-showcase.svg" alt="Profer core capabilities" width="100%" />
+
+---
+
 ## What makes Profer different
 
 ### 🎯 Agent-first, not chat-first
@@ -154,36 +158,7 @@ Agents show you their execution plan before making irreversible changes.
 
 Profer is a **local-first Electron app** with optional cloud layer for teams.
 
-```text
-┌─────────────────────────────────────────────────────────┐
-│                     Profer Desktop                       │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Agent Runtime (Claude SDK + Pi SDK)            │   │
-│  │  ├─ Task graph orchestration                    │   │
-│  │  ├─ Parallel sub-agent spawning                 │   │
-│  │  ├─ MCP server integration                      │   │
-│  │  └─ Skill execution (workspace-scoped)          │   │
-│  └─────────────────────────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Chat & Workspace UI (React + Jotai)            │   │
-│  └─────────────────────────────────────────────────┘   │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  Local Storage (SQLite + filesystem)            │   │
-│  └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-                        ↕ (optional)
-┌─────────────────────────────────────────────────────────┐
-│  Team Sync Backend (Hono + SQLite + JWT)               │
-│  ├─ Workspace sharing                                   │
-│  ├─ Skill marketplace                                   │
-│  └─ File sync                                           │
-└─────────────────────────────────────────────────────────┘
-                        ↕ (local network / VPN)
-┌─────────────────────────────────────────────────────────┐
-│  Mobile Client (Capacitor + React)                      │
-│  └─ Chat, review agent results, trigger tasks           │
-└─────────────────────────────────────────────────────────┘
-```
+<img src="./docs/assets/architecture-diagram.svg" alt="Profer architecture diagram" width="100%" />
 
 ### Tech stack
 
@@ -237,6 +212,8 @@ bun run build:win       # Windows installer
 Artifacts appear in `apps/electron/dist`.
 
 ### Contributing
+
+<img src="./docs/assets/contributing-guide.svg" alt="Contributing to Profer" width="100%" />
 
 We welcome PRs! Before submitting:
 

@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600">
+  <defs>
+    <linearGradient id="cardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accentBlue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="accentOrange" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f97316"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="600" fill="#0B0E14"/>
+  
+  <!-- Grid pattern -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="600" fill="url(#grid)" opacity="0.3"/>
+
+  <!-- Title -->
+  <text x="600" y="60" font-family="Inter, system-ui, sans-serif" font-size="32" font-weight="700" fill="#f8fafc" text-anchor="middle">
+    Core Capabilities
+  </text>
+
+  <!-- Feature Cards -->
+  
+  <!-- Card 1: Agent-first -->
+  <g transform="translate(50, 120)">
+    <rect width="340" height="180" rx="12" fill="url(#cardBg)" stroke="#334155" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="url(#accentBlue)" filter="url(#glow)"/>
+    <path d="M 40 30 L 40 50 M 30 40 L 50 40" stroke="#0B0E14" stroke-width="3" stroke-linecap="round"/>
+    <text x="70" y="48" font-family="Inter" font-size="20" font-weight="600" fill="#f8fafc">Agent-first</text>
+    <text x="30" y="90" font-family="Inter" font-size="14" fill="#cbd5e1">Task graphs with explicit</text>
+    <text x="30" y="110" font-family="Inter" font-size="14" fill="#cbd5e1">dependencies. Parallel execution.</text>
+    <text x="30" y="130" font-family="Inter" font-size="14" fill="#cbd5e1">Checkpoint review before</text>
+    <text x="30" y="150" font-family="Inter" font-size="14" fill="#cbd5e1">irreversible changes.</text>
+  </g>
+
+  <!-- Card 2: Sub-agents -->
+  <g transform="translate(430, 120)">
+    <rect width="340" height="180" rx="12" fill="url(#cardBg)" stroke="#334155" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="url(#accentBlue)" filter="url(#glow)"/>
+    <circle cx="35" cy="35" r="6" fill="#0B0E14"/>
+    <circle cx="45" cy="35" r="6" fill="#0B0E14"/>
+    <circle cx="35" cy="45" r="6" fill="#0B0E14"/>
+    <circle cx="45" cy="45" r="6" fill="#0B0E14"/>
+    <text x="70" y="48" font-family="Inter" font-size="20" font-weight="600" fill="#f8fafc">Collaborative Sub-agents</text>
+    <text x="30" y="90" font-family="Inter" font-size="14" fill="#cbd5e1">Spawn multiple sessions for</text>
+    <text x="30" y="110" font-family="Inter" font-size="14" fill="#cbd5e1">parallel workstreams. Each</text>
+    <text x="30" y="130" font-family="Inter" font-size="14" fill="#cbd5e1">gets full context and autonomy.</text>
+    <text x="30" y="150" font-family="Inter" font-size="14" fill="#cbd5e1">Collect consolidated results.</text>
+  </g>
+
+  <!-- Card 3: Automation -->
+  <g transform="translate(810, 120)">
+    <rect width="340" height="180" rx="12" fill="url(#cardBg)" stroke="#334155" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="url(#accentOrange)" filter="url(#glow)"/>
+    <circle cx="40" cy="40" r="12" fill="none" stroke="#0B0E14" stroke-width="2"/>
+    <path d="M 40 32 L 40 40 L 46 44" stroke="#0B0E14" stroke-width="2" stroke-linecap="round"/>
+    <text x="70" y="48" font-family="Inter" font-size="20" font-weight="600" fill="#f8fafc">Scheduled Automation</text>
+    <text x="30" y="90" font-family="Inter" font-size="14" fill="#cbd5e1">Run agents unattended on</text>
+    <text x="30" y="110" font-family="Inter" font-size="14" fill="#cbd5e1">cron-like schedules. Daily</text>
+    <text x="30" y="130" font-family="Inter" font-size="14" fill="#cbd5e1">reports, monitoring, research</text>
+    <text x="30" y="150" font-family="Inter" font-size="14" fill="#cbd5e1">pipelines—all automated.</text>
+  </g>
+
+  <!-- Card 4: Dual Runtime -->
+  <g transform="translate(50, 340)">
+    <rect width="340" height="180" rx="12" fill="url(#cardBg)" stroke="#334155" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="url(#accentBlue)" filter="url(#glow)"/>
+    <rect x="30" y="30" width="20" height="20" rx="2" fill="none" stroke="#0B0E14" stroke-width="2"/>
+    <path d="M 32 40 L 38 46 L 48 34" stroke="#0B0E14" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="70" y="48" font-family="Inter" font-size="20" font-weight="600" fill="#f8fafc">Dual Runtime</text>
+    <text x="30" y="90" font-family="Inter" font-size="14" fill="#cbd5e1">Claude SDK for Anthropic</text>
+    <text x="30" y="110" font-family="Inter" font-size="14" fill="#cbd5e1">protocol. Pi SDK for OpenAI,</text>
+    <text x="30" y="130" font-family="Inter" font-size="14" fill="#cbd5e1">Google, and others. Switch</text>
+    <text x="30" y="150" font-family="Inter" font-size="14" fill="#cbd5e1">runtime per workspace.</text>
+  </g>
+
+  <!-- Card 5: Team Workspaces -->
+  <g transform="translate(430, 340)">
+    <rect width="340" height="180" rx="12" fill="url(#cardBg)" stroke="#334155" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="url(#accentOrange)" filter="url(#glow)"/>
+    <circle cx="35" cy="38" r="5" fill="#0B0E14"/>
+    <circle cx="45" cy="38" r="5" fill="#0B0E14"/>
+    <path d="M 30 48 Q 40 52 50 48" stroke="#0B0E14" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <text x="70" y="48" font-family="Inter" font-size="20" font-weight="600" fill="#f8fafc">Team Workspaces</text>
+    <text x="30" y="90" font-family="Inter" font-size="14" fill="#cbd5e1">Invite-only collaboration.</text>
+    <text x="30" y="110" font-family="Inter" font-size="14" fill="#cbd5e1">Shared skills, cloud sync,</text>
+    <text x="30" y="130" font-family="Inter" font-size="14" fill="#cbd5e1">role-based access. Self-host</text>
+    <text x="30" y="150" font-family="Inter" font-size="14" fill="#cbd5e1">the backend (Hono + SQLite).</text>
+  </g>
+
+  <!-- Card 6: Local-first -->
+  <g transform="translate(810, 340)">
+    <rect width="340" height="180" rx="12" fill="url(#cardBg)" stroke="#334155" stroke-width="1"/>
+    <circle cx="40" cy="40" r="20" fill="url(#accentBlue)" filter="url(#glow)"/>
+    <rect x="32" y="30" width="16" height="20" rx="1" fill="none" stroke="#0B0E14" stroke-width="2"/>
+    <rect x="34" y="33" width="12" height="2" fill="#0B0E14"/>
+    <rect x="34" y="37" width="12" height="2" fill="#0B0E14"/>
+    <rect x="34" y="41" width="8" height="2" fill="#0B0E14"/>
+    <text x="70" y="48" font-family="Inter" font-size="20" font-weight="600" fill="#f8fafc">Local-first</text>
+    <text x="30" y="90" font-family="Inter" font-size="14" fill="#cbd5e1">Data stays on your machine.</text>
+    <text x="30" y="110" font-family="Inter" font-size="14" fill="#cbd5e1">Electron app with SQLite.</text>
+    <text x="30" y="130" font-family="Inter" font-size="14" fill="#cbd5e1">Team sync is optional. You</text>
+    <text x="30" y="150" font-family="Inter" font-size="14" fill="#cbd5e1">control your workflows.</text>
+  </g>
+
+  <!-- Accent line at bottom -->
+  <line x1="50" y1="560" x2="1150" y2="560" stroke="url(#accentBlue)" stroke-width="2"/>
+</svg>

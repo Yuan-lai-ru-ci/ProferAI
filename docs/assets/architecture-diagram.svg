@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="700" viewBox="0 0 1000 700">
+  <defs>
+    <linearGradient id="electronBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="backendBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#134e4a"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="mobileBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e3a8a"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accentLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1000" height="700" fill="#0B0E14"/>
+  
+  <!-- Grid pattern -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  <rect width="1000" height="700" fill="url(#grid)" opacity="0.3"/>
+
+  <!-- Title -->
+  <text x="500" y="50" font-family="Inter, system-ui, sans-serif" font-size="28" font-weight="700" fill="#f8fafc" text-anchor="middle">
+    Profer Architecture
+  </text>
+
+  <!-- Desktop App -->
+  <g transform="translate(250, 100)">
+    <rect width="500" height="280" rx="12" fill="url(#electronBg)" stroke="#475569" stroke-width="2" filter="url(#shadow)"/>
+    <text x="250" y="30" font-family="Inter" font-size="18" font-weight="600" fill="#f8fafc" text-anchor="middle">Profer Desktop (Electron)</text>
+    
+    <!-- Agent Runtime -->
+    <rect x="20" y="50" width="460" height="80" rx="8" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5"/>
+    <text x="240" y="75" font-family="Inter" font-size="14" font-weight="600" fill="#38bdf8" text-anchor="middle">Agent Runtime</text>
+    <text x="30" y="95" font-family="Inter" font-size="12" fill="#cbd5e1">• Task graph orchestration</text>
+    <text x="30" y="112" font-family="Inter" font-size="12" fill="#cbd5e1">• Parallel sub-agent spawning</text>
+    <text x="260" y="95" font-family="Inter" font-size="12" fill="#cbd5e1">• MCP server integration</text>
+    <text x="260" y="112" font-family="Inter" font-size="12" fill="#cbd5e1">• Skill execution</text>
+
+    <!-- UI Layer -->
+    <rect x="20" y="145" width="220" height="60" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="130" y="165" font-family="Inter" font-size="14" font-weight="600" fill="#f59e0b" text-anchor="middle">UI Layer</text>
+    <text x="30" y="185" font-family="Inter" font-size="12" fill="#cbd5e1">React + Jotai state</text>
+    <text x="30" y="198" font-family="Inter" font-size="12" fill="#cbd5e1">Tailwind + Radix UI</text>
+
+    <!-- Storage -->
+    <rect x="260" y="145" width="220" height="60" rx="8" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="370" y="165" font-family="Inter" font-size="14" font-weight="600" fill="#f59e0b" text-anchor="middle">Local Storage</text>
+    <text x="270" y="185" font-family="Inter" font-size="12" fill="#cbd5e1">SQLite + filesystem</text>
+    <text x="270" y="198" font-family="Inter" font-size="12" fill="#cbd5e1">Encrypted credentials</text>
+
+    <!-- SDKs -->
+    <rect x="20" y="220" width="220" height="40" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+    <text x="30" y="240" font-family="Inter" font-size="11" fill="#94a3b8">Claude Agent SDK 0.3.201</text>
+    <text x="30" y="252" font-family="Inter" font-size="11" fill="#94a3b8">Pi Agent SDK 0.82.1</text>
+
+    <rect x="260" y="220" width="220" height="40" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+    <text x="270" y="240" font-family="Inter" font-size="11" fill="#94a3b8">Anthropic + OpenAI protocols</text>
+    <text x="270" y="252" font-family="Inter" font-size="11" fill="#94a3b8">Google Gemini, custom endpoints</text>
+  </g>
+
+  <!-- Backend (Optional) -->
+  <g transform="translate(250, 440)">
+    <rect width="500" height="120" rx="12" fill="url(#backendBg)" stroke="#10b981" stroke-width="2" filter="url(#shadow)" stroke-dasharray="5,5"/>
+    <text x="250" y="30" font-family="Inter" font-size="18" font-weight="600" fill="#10b981" text-anchor="middle">Team Sync Backend (Optional)</text>
+    <text x="250" y="55" font-family="Inter" font-size="13" fill="#cbd5e1" text-anchor="middle">Hono + SQLite + JWT</text>
+    
+    <rect x="20" y="70" width="140" height="30" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+    <text x="90" y="90" font-family="Inter" font-size="12" fill="#94a3b8" text-anchor="middle">Workspace sharing</text>
+
+    <rect x="180" y="70" width="140" height="30" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+    <text x="250" y="90" font-family="Inter" font-size="12" fill="#94a3b8" text-anchor="middle">Skill marketplace</text>
+
+    <rect x="340" y="70" width="140" height="30" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+    <text x="410" y="90" font-family="Inter" font-size="12" fill="#94a3b8" text-anchor="middle">File sync</text>
+  </g>
+
+  <!-- Mobile Client -->
+  <g transform="translate(50, 440)">
+    <rect width="160" height="120" rx="12" fill="url(#mobileBg)" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
+    <text x="80" y="30" font-family="Inter" font-size="16" font-weight="600" fill="#3b82f6" text-anchor="middle">Mobile Client</text>
+    <text x="80" y="55" font-family="Inter" font-size="12" fill="#cbd5e1" text-anchor="middle">Capacitor + React</text>
+    
+    <rect x="20" y="70" width="120" height="35" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1"/>
+    <text x="80" y="85" font-family="Inter" font-size="11" fill="#94a3b8" text-anchor="middle">Chat interface</text>
+    <text x="80" y="97" font-family="Inter" font-size="11" fill="#94a3b8" text-anchor="middle">Review agent work</text>
+  </g>
+
+  <!-- Connection arrows -->
+  <!-- Desktop to Backend -->
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#38bdf8"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#10b981"/>
+    </marker>
+  </defs>
+
+  <path d="M 500 380 L 500 440" stroke="#38bdf8" stroke-width="2" fill="none" marker-end="url(#arrowBlue)" stroke-dasharray="5,5"/>
+  <text x="520" y="415" font-family="Inter" font-size="11" fill="#64748b">(optional)</text>
+
+  <!-- Mobile to Desktop -->
+  <path d="M 210 500 L 250 290" stroke="#38bdf8" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+  <text x="215" y="390" font-family="Inter" font-size="11" fill="#64748b">local network</text>
+  <text x="215" y="405" font-family="Inter" font-size="11" fill="#64748b">or VPN</text>
+
+  <!-- Desktop SDK labels -->
+  <g transform="translate(50, 250)">
+    <rect width="150" height="50" rx="8" fill="#0f172a" stroke="#a855f7" stroke-width="1.5"/>
+    <text x="75" y="22" font-family="Inter" font-size="12" font-weight="600" fill="#a855f7" text-anchor="middle">Claude Runtime</text>
+    <text x="75" y="38" font-family="Inter" font-size="10" fill="#94a3b8" text-anchor="middle">Anthropic protocol</text>
+  </g>
+
+  <path d="M 125 300 L 250 240" stroke="#a855f7" stroke-width="1.5" fill="none" marker-end="url(#arrowBlue)"/>
+
+  <g transform="translate(800, 250)">
+    <rect width="150" height="50" rx="8" fill="#0f172a" stroke="#06b6d4" stroke-width="1.5"/>
+    <text x="75" y="22" font-family="Inter" font-size="12" font-weight="600" fill="#06b6d4" text-anchor="middle">Pi Runtime</text>
+    <text x="75" y="38" font-family="Inter" font-size="10" fill="#94a3b8" text-anchor="middle">Protocol-agnostic</text>
+  </g>
+
+  <path d="M 875 300 L 750 240" stroke="#06b6d4" stroke-width="1.5" fill="none" marker-end="url(#arrowBlue)"/>
+
+  <!-- Legend -->
+  <g transform="translate(50, 620)">
+    <text x="0" y="0" font-family="Inter" font-size="12" font-weight="600" fill="#f8fafc">Legend:</text>
+    <rect x="0" y="10" width="20" height="12" rx="2" fill="none" stroke="#475569" stroke-width="2"/>
+    <text x="28" y="20" font-family="Inter" font-size="11" fill="#cbd5e1">Required</text>
+
+    <rect x="120" y="10" width="20" height="12" rx="2" fill="none" stroke="#10b981" stroke-width="2" stroke-dasharray="3,3"/>
+    <text x="148" y="20" font-family="Inter" font-size="11" fill="#cbd5e1">Optional (team features)</text>
+
+    <line x1="300" y1="16" x2="320" y2="16" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrowBlue)"/>
+    <text x="328" y="20" font-family="Inter" font-size="11" fill="#cbd5e1">Network connection</text>
+  </g>
+
+  <!-- Accent line at bottom -->
+  <line x1="50" y1="680" x2="950" y2="680" stroke="url(#accentLine)" stroke-width="2"/>
+</svg>

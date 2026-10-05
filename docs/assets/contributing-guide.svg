@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400">
+  <defs>
+    <linearGradient id="cardGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e293b"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="highlight" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <filter id="cardShadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="400" fill="#0B0E14"/>
+  
+  <!-- Grid -->
+  <defs>
+    <pattern id="gridSmall" width="20" height="20" patternUnits="userSpaceOnUse">
+      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#1e293b" stroke-width="0.3"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="400" fill="url(#gridSmall)" opacity="0.4"/>
+
+  <!-- Title -->
+  <text x="600" y="50" font-family="Inter, system-ui, sans-serif" font-size="32" font-weight="700" fill="#f8fafc" text-anchor="middle">
+    Contributing to Profer
+  </text>
+  <text x="600" y="75" font-family="Inter" font-size="14" fill="#94a3b8" text-anchor="middle">
+    Help us build the future of autonomous AI agents
+  </text>
+
+  <!-- Card 1: Code -->
+  <g transform="translate(50, 120)">
+    <rect width="340" height="220" rx="12" fill="url(#cardGrad)" stroke="#475569" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="0" y="0" width="340" height="4" rx="12" fill="url(#highlight)"/>
+    
+    <circle cx="30" cy="35" r="18" fill="#38bdf8" opacity="0.2"/>
+    <text x="30" y="42" font-family="monospace" font-size="20" fill="#38bdf8" text-anchor="middle">&lt;/&gt;</text>
+    
+    <text x="60" y="42" font-family="Inter" font-size="18" font-weight="600" fill="#f8fafc">Code Contributions</text>
+    
+    <text x="20" y="75" font-family="Inter" font-size="13" fill="#cbd5e1">• Use Bun (no npm/pnpm)</text>
+    <text x="20" y="95" font-family="Inter" font-size="13" fill="#cbd5e1">• State via Jotai, no Redux</text>
+    <text x="20" y="115" font-family="Inter" font-size="13" fill="#cbd5e1">• TypeScript strict, no <tspan font-family="monospace">any</tspan></text>
+    <text x="20" y="135" font-family="Inter" font-size="13" fill="#cbd5e1">• Prefer <tspan font-family="monospace">interface</tspan> over <tspan font-family="monospace">type</tspan></text>
+    <text x="20" y="155" font-family="Inter" font-size="13" fill="#cbd5e1">• Update IPC contracts in shared/</text>
+    <text x="20" y="175" font-family="Inter" font-size="13" fill="#cbd5e1">• Bump package version</text>
+    
+    <rect x="20" y="190" width="300" height="1" fill="#334155"/>
+    <text x="170" y="208" font-family="Inter" font-size="11" fill="#64748b" text-anchor="middle">Run bun test before PR</text>
+  </g>
+
+  <!-- Card 2: Skills -->
+  <g transform="translate(430, 120)">
+    <rect width="340" height="220" rx="12" fill="url(#cardGrad)" stroke="#475569" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="0" y="0" width="340" height="4" rx="12" fill="#f59e0b"/>
+    
+    <circle cx="30" cy="35" r="18" fill="#f59e0b" opacity="0.2"/>
+    <text x="30" y="42" font-family="monospace" font-size="20" fill="#f59e0b" text-anchor="middle">⚡</text>
+    
+    <text x="60" y="42" font-family="Inter" font-size="18" font-weight="600" fill="#f8fafc">Skills &amp; Integrations</text>
+    
+    <text x="20" y="75" font-family="Inter" font-size="13" fill="#cbd5e1">• Write reusable skills</text>
+    <text x="20" y="95" font-family="Inter" font-size="13" fill="#cbd5e1">• Add MCP server support</text>
+    <text x="20" y="115" font-family="Inter" font-size="13" fill="#cbd5e1">• Improve trigger detection</text>
+    <text x="20" y="135" font-family="Inter" font-size="13" fill="#cbd5e1">• Document use cases</text>
+    <text x="20" y="155" font-family="Inter" font-size="13" fill="#cbd5e1">• Share with community</text>
+    
+    <rect x="20" y="175" width="300" height="1" fill="#334155"/>
+    <text x="170" y="193" font-family="Inter" font-size="11" fill="#64748b" text-anchor="middle">skills/ directory in workspace</text>
+    <text x="170" y="208" font-family="Inter" font-size="11" fill="#64748b" text-anchor="middle">See skill-creator skill</text>
+  </g>
+
+  <!-- Card 3: Docs & Community -->
+  <g transform="translate(810, 120)">
+    <rect width="340" height="220" rx="12" fill="url(#cardGrad)" stroke="#475569" stroke-width="1.5" filter="url(#cardShadow)"/>
+    <rect x="0" y="0" width="340" height="4" rx="12" fill="#10b981"/>
+    
+    <circle cx="30" cy="35" r="18" fill="#10b981" opacity="0.2"/>
+    <text x="30" y="42" font-family="monospace" font-size="20" fill="#10b981" text-anchor="middle">📖</text>
+    
+    <text x="60" y="42" font-family="Inter" font-size="18" font-weight="600" fill="#f8fafc">Docs &amp; Community</text>
+    
+    <text x="20" y="75" font-family="Inter" font-size="13" fill="#cbd5e1">• Improve README clarity</text>
+    <text x="20" y="95" font-family="Inter" font-size="13" fill="#cbd5e1">• Write tutorials &amp; guides</text>
+    <text x="20" y="115" font-family="Inter" font-size="13" fill="#cbd5e1">• Report bugs with context</text>
+    <text x="20" y="135" font-family="Inter" font-size="13" fill="#cbd5e1">• Answer questions</text>
+    <text x="20" y="155" font-family="Inter" font-size="13" fill="#cbd5e1">• Share your workflows</text>
+    
+    <rect x="20" y="175" width="300" height="1" fill="#334155"/>
+    <text x="170" y="193" font-family="Inter" font-size="11" fill="#64748b" text-anchor="middle">GitHub Discussions</text>
+    <text x="170" y="208" font-family="Inter" font-size="11" fill="#64748b" text-anchor="middle">issues and PRs welcome</text>
+  </g>
+
+  <!-- Bottom banner -->
+  <rect x="50" y="360" width="1100" height="2" fill="url(#highlight)"/>
+  <text x="600" y="385" font-family="Inter" font-size="12" fill="#64748b" text-anchor="middle">
+    Every contribution—code, docs, or feedback—makes Profer better for everyone
+  </text>
+</svg>
