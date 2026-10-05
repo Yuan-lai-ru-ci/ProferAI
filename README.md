@@ -105,18 +105,20 @@ Profer checks dependencies on first launch (Git, Node.js or Bun, working shell).
 
 Add one or more providers. Profer supports:
 
-| Provider | Chat | Agent | Notes |
-|----------|------|-------|-------|
-| Anthropic | ✅ | ✅ | Native Claude Messages API |
-| DeepSeek | ✅ | ✅ | Anthropic-compatible |
-| Kimi (Moonshot) | ✅ | ✅ | Anthropic-compatible |
-| OpenAI | ✅ | ❌ | Chat only, no agentic tool use |
-| Google Gemini | ✅ | ❌ | Chat only |
-| 智谱 AI | ✅ | ✅ | Anthropic-compatible |
-| MiniMax | ✅ | ✅ | Anthropic-compatible |
-| 豆包 (Doubao) | ✅ | ✅ | Anthropic-compatible |
-| 通义千问 (Qwen) | ✅ | ✅ | Anthropic-compatible |
-| Custom endpoint | ✅ | ❌ | OpenAI-compatible API |
+| Provider | Chat | Agent (Pi runtime) | Agent (Claude runtime) | Notes |
+|----------|------|-------------------|------------------------|-------|
+| Anthropic | ✅ | ✅ | ✅ | Native Claude Messages API |
+| DeepSeek | ✅ | ✅ | ✅ | Anthropic-compatible |
+| Kimi (Moonshot) | ✅ | ✅ | ✅ | Anthropic-compatible |
+| OpenAI | ✅ | ✅ | ❌ | Pi runtime supports OpenAI protocol |
+| Google Gemini | ✅ | ✅ | ❌ | Pi runtime only |
+| 智谱 AI | ✅ | ✅ | ✅ | Anthropic-compatible |
+| MiniMax | ✅ | ✅ | ✅ | Anthropic-compatible |
+| 豆包 (Doubao) | ✅ | ✅ | ❌ | Pi runtime only |
+| 通义千问 (Qwen) | ✅ | ✅ | ❌ | Pi runtime only |
+| xAI / Grok | ✅ | ✅ | ❌ | Pi runtime, experimental flag required |
+| Ollama | ✅ | ✅ | ✅ | Local models, OpenAI-compatible |
+| Custom endpoint | ✅ | ✅ | ❌ | OpenAI-compatible API |
 
 ### 3. Start working
 
