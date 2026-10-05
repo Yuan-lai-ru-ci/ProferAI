@@ -294,6 +294,8 @@ export interface AppSettings {
   sendWithCmdEnter?: boolean
   /** 用户自定义快捷键覆盖 */
   shortcutOverrides?: ShortcutOverrides
+  /** 是否在左侧栏显示我的积分（默认 true） */
+  showCreditsInSidebar?: boolean
   /** 是否显示用户消息悬浮置顶条（默认 true） */
   stickyUserMessageEnabled?: boolean
   /** 粘贴超过阈值的长文本时是否自动转为附件（默认 false） */

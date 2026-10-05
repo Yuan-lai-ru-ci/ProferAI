@@ -1,9 +1,9 @@
-import type { AgentGoalContract, AgentGoalLimits } from '@profer/shared'
+import type { AgentGoalContract, AgentGoalLimitsPatch } from '@profer/shared'
 
 export interface GoalUpdatePatch {
   goal?: string
   contract?: AgentGoalContract
-  limits?: Partial<AgentGoalLimits>
+  limits?: AgentGoalLimitsPatch
 }
 
 /** IPC 输入来自 renderer，数值和文本在修改目标前统一验证。 */
@@ -36,6 +36,8 @@ export function validateGoalUpdatePatch(value: unknown): GoalUpdatePatch {
     for (const key of ['maxIterations', 'maxDurationMs', 'maxTokens', 'maxConsecutiveFailures'] as const) {
       const number = limits[key]
       if (number === undefined) continue
+      // null 清除该项预算（不限）；连续无进展上限必须保留。
+      if (number === null && key !== 'maxConsecutiveFailures') { patch.limits[key] = null; continue }
       if (typeof number !== 'number' || !Number.isSafeInteger(number) || number <= 0) throw new Error('Goal 预算必须为有限的正整数')
       patch.limits[key] = number
     }

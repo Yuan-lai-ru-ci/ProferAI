@@ -1325,6 +1325,9 @@ export type AgentGoalReasonCode =
   | 'budget_limited'
   | 'cleared'
   | 'superseded'
+  | 'user_interrupt'
+  | 'retry_exhausted'
+  | 'run_error'
   | 'unknown'
 
 export type AgentGoalLifecycleTarget = AgentGoalStatus | 'cleared'
@@ -1343,9 +1346,12 @@ export interface AgentGoalLifecycleEvent {
 }
 
 export interface AgentGoalLimits {
-  maxIterations: number
+  /** 可选轮次上限；未设置表示不限。 */
+  maxIterations?: number
+  /** 连续无进展轮次上限（空回复 / 工具全部失败 / 运行失败）。 */
   maxConsecutiveFailures: number
-  maxDurationMs: number
+  /** 可选净运行时长上限；未设置表示不限，只在轮次边界检查。 */
+  maxDurationMs?: number
   /** 可选 token 预算；在 runtime 用量记账边界核对。 */
   maxTokens?: number
 }
@@ -1418,6 +1424,17 @@ export interface AgentGoalState {
   reasonCode?: AgentGoalReasonCode
   reasonDetail?: string
   stopReason?: string
+  /** 可重试错误的自动重试进度；成功一轮或离开 active 后清空。 */
+  retry?: AgentGoalRetryState
+  /** Goal 仍为 active 但暂不运行的原因（如计划模式下等待切换）。 */
+  waiting?: 'plan_mode'
+}
+
+export interface AgentGoalRetryState {
+  /** 已安排的第几次重试（1 起） */
+  attempt: number
+  nextAt: number
+  error: string
 }
 
 export type AgentGoalCommand =
@@ -1432,6 +1449,8 @@ export interface AgentGoalIterationResult {
   evidence: string[]
   outcome?: 'success' | 'failed' | 'stopped' | 'deferred'
   error?: string
+  /** 运行级错误分类：retryable 退避重试，fatal 直接暂停；两者都不计入无进展次数。 */
+  errorKind?: 'retryable' | 'fatal'
   /** 本轮模型 usage（由 runtime result/assistant message 归一化） */
   usage?: AgentGoalUsage
 }

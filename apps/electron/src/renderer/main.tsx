@@ -65,6 +65,7 @@ import {
 } from './atoms/notifications'
 import {
   stickyUserMessageEnabledAtom,
+  showCreditsInSidebarAtom,
   longTextPasteAsAttachmentEnabledAtom,
   richTextRenderingEnabledAtom,
   composerCompactModeAtom,
@@ -630,6 +631,7 @@ function DockBadgeInitializer(): null {
  * 从主进程加载 UI 偏好设置（悬浮置顶条等）。
  */
 function UiPreferencesInitializer(): null {
+  const setShowCreditsInSidebar = useSetAtom(showCreditsInSidebarAtom)
   const setStickyUserMessageEnabled = useSetAtom(stickyUserMessageEnabledAtom)
   const setLongTextPasteAsAttachmentEnabled = useSetAtom(longTextPasteAsAttachmentEnabledAtom)
   const setRichTextRenderingEnabled = useSetAtom(richTextRenderingEnabledAtom)
@@ -637,12 +639,13 @@ function UiPreferencesInitializer(): null {
 
   useEffect(() => {
     initializeUiPreferences(
+      setShowCreditsInSidebar,
       setStickyUserMessageEnabled,
       setLongTextPasteAsAttachmentEnabled,
       setRichTextRenderingEnabled,
       setComposerCompactMode
     )
-  }, [setStickyUserMessageEnabled, setLongTextPasteAsAttachmentEnabled, setRichTextRenderingEnabled, setComposerCompactMode])
+  }, [setShowCreditsInSidebar, setStickyUserMessageEnabled, setLongTextPasteAsAttachmentEnabled, setRichTextRenderingEnabled, setComposerCompactMode])
 
   return null
 }

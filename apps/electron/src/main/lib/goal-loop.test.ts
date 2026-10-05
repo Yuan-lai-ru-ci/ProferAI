@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import {
   DEFAULT_GOAL_LIMITS,
   buildGoalIterationPrompt,
+  goalBudgetReason,
+  isGoalNearBudget,
   createGoalState,
   evaluateGoalContinuation,
   parseGoalCommand,
@@ -37,7 +39,7 @@ describe('goal loop', () => {
   })
 
   test('iteration prompt carries contract, budget and history', () => {
-    const state = createGoalState('s1', '完成登录页', 1000, DEFAULT_GOAL_LIMITS, { verification: '测试通过', stopWhen: '需要凭据' })
+    const state = createGoalState('s1', '完成登录页', 1000, { maxIterations: 20, maxDurationMs: 7200000, maxConsecutiveFailures: 3 }, { verification: '测试通过', stopWhen: '需要凭据' })
     // state.iteration 由 GoalController 在进入本轮前自增，prompt 直接使用当前值
     const prompt = buildGoalIterationPrompt({ ...state, iteration: 3 }, { previousSummary: '上一轮完成了表单', now: 2000 })
     expect(prompt).toContain('目标：完成登录页')
@@ -49,7 +51,28 @@ describe('goal loop', () => {
     expect(prompt).not.toContain('<goal_result>')
     expect(prompt).toContain('逐项')
     expect(prompt).toContain('无进展')
-    expect(prompt).not.toContain('预算耗尽前务必收敛')
+    expect(prompt).toContain('剩余预算：约 17 轮 / 约 120 分钟')
+    expect(prompt).not.toContain('预算即将用完')
+  })
+
+  test('不再要求每轮都调用 update_goal：未完成时正常结束本轮即可', () => {
+    const prompt = buildGoalIterationPrompt({ ...createGoalState('s1', '优化性能', 1000), iteration: 1 }, {})
+    expect(prompt).not.toContain('每轮结束时必须调用')
+    expect(prompt).toContain('正常结束本轮即可')
+    expect(prompt).not.toContain('剩余预算')
+  })
+
+  test('预算接近用完时追加收尾提示', () => {
+    const base = createGoalState('s1', '迁移', 0, { maxIterations: 5, maxConsecutiveFailures: 3 })
+    expect(isGoalNearBudget({ ...base, iteration: 4 })).toBe(false)
+    expect(isGoalNearBudget({ ...base, iteration: 5 })).toBe(true)
+    expect(isGoalNearBudget({ ...base, limits: { maxConsecutiveFailures: 3, maxTokens: 100 }, usage: { inputTokens: 70, outputTokens: 10, totalTokens: 80 } })).toBe(true)
+    expect(isGoalNearBudget({ ...base, limits: { maxConsecutiveFailures: 3, maxDurationMs: 1000 }, elapsedMs: 700 })).toBe(false)
+    expect(buildGoalIterationPrompt({ ...base, iteration: 5 }, {})).toContain('预算即将用完')
+  })
+
+  test('未设置的预算不会耗尽', () => {
+    expect(goalBudgetReason({ iteration: 10_000, elapsedMs: 9e9, limits: DEFAULT_GOAL_LIMITS })).toBeUndefined()
   })
 
   test('iteration prompt asks for a verification surface when contract is missing', () => {
@@ -117,6 +140,13 @@ describe('goal loop', () => {
     expect(result).toEqual({ action: 'complete', consecutiveFailures: 0 })
   })
 
+  test('没有证据的 continue 不算失败，失败计数清零', () => {
+    const result = evaluateGoalContinuation({ status: 'continue', summary: '改了一半', evidence: [] }, {
+      iteration: 1, consecutiveFailures: 2, startedAt: 0, now: 0, limits: DEFAULT_GOAL_LIMITS,
+    })
+    expect(result).toEqual({ action: 'continue', consecutiveFailures: 0 })
+  })
+
   test('pauses after repeated failures or limits', () => {
     const result = evaluateGoalContinuation({ status: 'continue', summary: '失败', evidence: [] }, {
       iteration: 1,
@@ -132,14 +162,15 @@ describe('goal loop', () => {
       iteration: 1,
       consecutiveFailures: 0,
       startedAt: 1000,
-      now: 1000 + DEFAULT_GOAL_LIMITS.maxDurationMs + 1,
-      limits: DEFAULT_GOAL_LIMITS,
+      now: 1000 + 7200000 + 1,
+      limits: { ...DEFAULT_GOAL_LIMITS, maxDurationMs: 7200000 },
     })
     expect(timedOut.action).toBe('limit_reached')
   })
 
   test('最后一轮验收通过优先 complete，空白证据不能完成', () => {
-    const context = { iteration: 20, consecutiveFailures: 0, startedAt: 0, now: DEFAULT_GOAL_LIMITS.maxDurationMs, elapsedMs: DEFAULT_GOAL_LIMITS.maxDurationMs, limits: DEFAULT_GOAL_LIMITS }
+    const limits = { maxIterations: 20, maxDurationMs: 7200000, maxConsecutiveFailures: 3 }
+    const context = { iteration: 20, consecutiveFailures: 0, startedAt: 0, now: 7200000, elapsedMs: 7200000, limits }
     expect(evaluateGoalContinuation({ status: 'complete', summary: '完成', evidence: ['测试通过'] }, context).action).toBe('complete')
     expect(evaluateGoalContinuation({ status: 'complete', summary: '完成', evidence: ['   '] }, context).action).toBe('limit_reached')
   })
@@ -153,7 +184,7 @@ describe('goal loop', () => {
 
   test('无进展与无证据 complete 按失败策略记账', () => {
     const context = { iteration: 1, consecutiveFailures: 2, startedAt: 0, now: 0, elapsedMs: 0, limits: DEFAULT_GOAL_LIMITS }
-    expect(evaluateGoalContinuation({ status: 'continue', summary: '只提供计划', evidence: [] }, context).action).toBe('failed')
+    expect(evaluateGoalContinuation({ status: 'continue', outcome: 'failed', summary: '空回复', evidence: [] }, context).action).toBe('failed')
     expect(evaluateGoalContinuation({ status: 'complete', summary: '声称完成', evidence: [''] }, context).action).toBe('failed')
   })
 

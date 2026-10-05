@@ -16,11 +16,13 @@ describe('GoalController', () => {
       runTurn: async ({ state }) => { runs.push(`run-${state.iteration}`); await completions.promise; return { status: 'continue', summary: '继续', evidence: ['已执行'] } },
       stopTurn: async () => {},
       onStateChange: () => {},
-      schedule: (callback) => { queueMicrotask(callback); return 1 },
-      cancelSchedule: () => {},
+      // 默认不限轮次：用宏任务调度，避免 continue 循环饿死测试计时器。
+      schedule: (callback) => setTimeout(callback, 0),
+      cancelSchedule: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     })
 
     await controller.start('session-1', '完成目标')
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(runs).toEqual(['run-1'])
     completions.resolve()
     await new Promise((resolve) => setTimeout(resolve, 10))
@@ -218,7 +220,7 @@ describe('GoalController 审计边界', () => {
   test('dispatch 前检查预算；耗尽后加预算才能恢复', async () => {
     let runs = 0
     const h = controlledGoalHarness({ runTurn: async () => { runs++; return { status: 'continue', summary: '推进', evidence: ['证据'] } } })
-    h.controller.restore([{ ...createGoalState('s', '目标'), status: 'paused', iteration: 20 }])
+    h.controller.restore([{ ...createGoalState('s', '目标', 1000, { maxIterations: 20, maxConsecutiveFailures: 3 }), status: 'paused', iteration: 20 }])
     await expect(h.controller.resume('s')).rejects.toThrow('预算')
     expect(h.controller.get('s')?.status).toBe('budget_limited')
     expect(runs).toBe(0)
@@ -380,7 +382,7 @@ describe('GoalController 审计边界', () => {
     await h.flush()
   })
 
-  test('hydrate 清除残留owner，迟到 deadline 不能停止恢复后的运行', async () => {
+  test('hydrate 清除残留owner，恢复后可再次暂停与恢复', async () => {
     const h = controlledGoalHarness()
     h.controller.restore([{ ...createGoalState('s', '目标'), status: 'stopped', activeRunId: 'crashed-owner' }])
     expect(h.controller.get('s')?.activeRunId).toBeUndefined()
@@ -430,22 +432,22 @@ describe('GoalController 审计边界', () => {
     expect(h.controller.get('s')?.id).toBe(replacement.id)
   })
 
-  test('执行 deadline 调用带 runId 的取消，净执行时间落盘', async () => {
+  test('时长预算不在轮中砍断：本轮自然结束后才转 budget_limited', async () => {
     const turn = deferred<import('@profer/shared').AgentGoalIterationResult>()
     const stopped: Array<string | undefined> = []
     const h = controlledGoalHarness({ runTurn: () => turn.promise, stopTurn: async (_sessionId, runId) => { stopped.push(runId) } })
-    await h.controller.start('s', '目标')
+    h.controller.restore([{ ...createGoalState('s', '目标', 1000, { maxDurationMs: 60_000, maxConsecutiveFailures: 3 }), status: 'paused' }])
+    await h.controller.resume('s')
     await h.dispatch()
-    const runId = h.controller.get('s')?.activeRunId
-    expect(runId).toBeString()
-    h.advance(2 * 60 * 60 * 1000)
-    for (const timer of [...h.deadlines.values()]) if (timer.delay === 2 * 60 * 60 * 1000) timer.callback()
+    h.advance(120_000)
     await h.flush()
-    expect(stopped).toEqual([runId])
-    expect(h.controller.get('s')?.status).toBe('budget_limited')
-    expect(h.controller.get('s')?.elapsedMs).toBe(2 * 60 * 60 * 1000)
-    turn.resolve({ status: 'continue', summary: '迟到', evidence: [] })
+    expect(h.deadlines.size).toBe(0)
+    expect(stopped).toEqual([])
+    expect(h.controller.get('s')?.status).toBe('active')
+    turn.resolve({ status: 'continue', summary: '收尾', evidence: [] })
     await h.flush()
+    expect(h.controller.get('s')).toMatchObject({ status: 'budget_limited', elapsedMs: 120_000 })
+    expect(h.scheduled.size).toBe(0)
   })
 
   test('旧 runtime callback 和旧 scheduler callback 不能污染替换后的 Goal', async () => {
@@ -501,14 +503,13 @@ describe('GoalController v2 生命周期审计', () => {
     expect(h.events).toEqual([])
   })
 
-  test('迟到 deadline/runtime/scheduler 不增加新目标审计事件，版本跨替换单调', async () => {
+  test('迟到 runtime/scheduler 不增加新目标审计事件，版本跨替换单调', async () => {
     let report!: (id: string) => void
     const turn = deferred<import('@profer/shared').AgentGoalIterationResult>()
     const h = controlledGoalHarness({ runTurn: ({ onRuntimeSessionId }) => { report = onRuntimeSessionId; return turn.promise } })
     await h.controller.start('s', '旧目标')
     const scheduler = [...h.scheduled.values()][0]!.callback
     await h.dispatch()
-    const deadline = [...h.deadlines.values()][0]!.callback
     await h.controller.stop('s')
     const stoppedEvents = h.controller.get('s')!.lifecycle!
     turn.resolve({ status: 'complete', summary: '迟到完成', evidence: ['证据'] })
@@ -516,7 +517,7 @@ describe('GoalController v2 生命周期审计', () => {
     expect(h.controller.get('s')?.lifecycle).toEqual(stoppedEvents)
     const cleared = h.controller.clear('s')
     const next = await h.controller.start('s', '新目标')
-    deadline(); scheduler(); report('迟到 runtime')
+    scheduler(); report('迟到 runtime')
     await h.flush()
     expect(h.controller.get('s')?.lifecycle).toEqual(next.lifecycle)
     expect(next.lifecycle?.[0]?.revision).toBeGreaterThan(cleared.revision!)
@@ -544,7 +545,7 @@ describe('GoalController v2 生命周期审计', () => {
 
   test('预算拒绝恢复不会重复审计，编辑预算后恢复记录真实转移', async () => {
     const h = controlledGoalHarness()
-    h.controller.restore([{ ...createGoalState('s', '目标', 1000), status: 'paused', iteration: 20 }])
+    h.controller.restore([{ ...createGoalState('s', '目标', 1000, { maxIterations: 20, maxConsecutiveFailures: 3 }), status: 'paused', iteration: 20 }])
     await expect(h.controller.resume('s')).rejects.toThrow('预算')
     const events = h.controller.get('s')!.lifecycle!
     expect(events.at(-1)).toMatchObject({ from: 'paused', to: 'budget_limited', reason: 'budget_limited' })
@@ -553,5 +554,68 @@ describe('GoalController v2 生命周期审计', () => {
     h.controller.update('s', { limits: { maxIterations: 21 } })
     await h.controller.resume('s')
     expect(h.controller.get('s')?.lifecycle?.at(-1)).toMatchObject({ from: 'budget_limited', to: 'active', reason: 'resumed' })
+  })
+
+  test('可重试错误按 1/5/15 分钟退避，不占轮次和无进展次数，第 4 次失败后暂停', async () => {
+    const h = controlledGoalHarness({
+      random: () => 0.5,
+      runTurn: async () => ({ status: 'continue', outcome: 'failed', errorKind: 'retryable', summary: '网络错误', error: 'ECONNRESET', evidence: [] }),
+    })
+    await h.controller.start('s', '目标')
+    const delays: number[] = []
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await h.dispatch()
+      expect(h.controller.get('s')).toMatchObject({ status: 'active', iteration: 0, consecutiveFailures: 0, retry: { attempt, error: 'ECONNRESET' } })
+      delays.push([...h.scheduled.values()][0]!.delay)
+    }
+    expect(delays).toEqual([60_000, 300_000, 900_000])
+    await h.dispatch()
+    expect(h.controller.get('s')).toMatchObject({ status: 'paused', reasonCode: 'retry_exhausted', reasonDetail: 'ECONNRESET', retry: undefined })
+    expect(h.scheduled.size).toBe(0)
+  })
+
+  test('重试后成功一轮会清空重试状态', async () => {
+    let fail = true
+    const h = controlledGoalHarness({
+      runTurn: async () => fail
+        ? { status: 'continue', outcome: 'failed', errorKind: 'retryable', summary: '限流', error: '429', evidence: [] }
+        : { status: 'continue', summary: '推进', evidence: [] },
+    })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    fail = false
+    await h.dispatch()
+    expect(h.controller.get('s')).toMatchObject({ status: 'active', iteration: 1, retry: undefined })
+  })
+
+  test('不可恢复错误直接暂停并保留错误原因', async () => {
+    const h = controlledGoalHarness({ runTurn: async () => ({ status: 'continue', outcome: 'failed', errorKind: 'fatal', summary: '鉴权失败', error: '401 invalid api key', evidence: [] }) })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    expect(h.controller.get('s')).toMatchObject({ status: 'paused', reasonCode: 'run_error', reasonDetail: '401 invalid api key', iteration: 0, consecutiveFailures: 0 })
+  })
+
+  test('用户中断只暂停，原因码 user_interrupt', async () => {
+    const turn = deferred<import('@profer/shared').AgentGoalIterationResult>()
+    const h = controlledGoalHarness({ runTurn: () => turn.promise, stopTurn: async () => { turn.resolve({ status: 'continue', outcome: 'stopped', summary: '中断', evidence: [] }) } })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    await h.controller.pauseForInterrupt('s')
+    await h.flush()
+    expect(h.controller.get('s')).toMatchObject({ status: 'paused', reasonCode: 'user_interrupt', activeRunId: undefined })
+  })
+
+  test('等待计划模式时保持 active 但不运行、不计轮次，切换后自动继续', async () => {
+    let waiting: 'plan_mode' | undefined = 'plan_mode'
+    let runs = 0
+    const h = controlledGoalHarness({ waitingReason: () => waiting, runTurn: async () => { runs++; return { status: 'complete', summary: '完成', evidence: ['测试通过'] } } })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    expect(h.controller.get('s')).toMatchObject({ status: 'active', iteration: 0, waiting: 'plan_mode' })
+    expect(runs).toBe(0)
+    waiting = undefined
+    await h.dispatch()
+    expect(runs).toBe(1)
+    expect(h.controller.get('s')).toMatchObject({ status: 'completed', waiting: undefined })
   })
 })

@@ -53,6 +53,13 @@ import { AgentRuntimeContextStore } from './agent-runtime-context'
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
+
+/** 订阅任意会话的运行结束（含桌面与 headless 入口），回传本轮发起者。返回取消函数。 */
+export function onAgentRunComplete(listener: (sessionId: string, initiator: AgentRunInitiator | undefined) => void): () => void {
+  return eventBus.on((sessionId, payload) => {
+    if (payload.kind === 'run_complete') listener(sessionId, payload.completion.initiator)
+  })
+}
 configureAgentSessionProjectionPublisher(eventBus)
 // 目录失效发布器单例：ipc.ts / remote-service.ts / workspace-watcher.ts 共享同一 revision 序列，
 // 保证 Pocket 按 (catalog, workspaceSlug) 去重时看到的 revision 单调可信。

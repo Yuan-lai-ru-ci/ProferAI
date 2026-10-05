@@ -1,12 +1,12 @@
 ---
 name: present-visualization
-description: 会话内可视化（present_visualization）手册：何时该画、选哪种形式（原生图表 / 受约束片段 / 带状态的交互）、片段与状态的写法（含 LaTeX 公式）、如何更新。用户要图表、图示、流程图、关系图、对比视图、可调参的解释，或要讲解/演示一个过程时用。用户常这么说：柱状图、分组柱状图、条形图、折线图、饼图、散点图、趋势图、分布图、占比图、对比图、示意图、结构图、画个图、做成图、可视化一下、动画演示、过程演示、模拟一遍、一步步讲、分步看、看懂原理、参数可调；英文常见说法：chart、bar chart、line chart、pie chart、scatter plot、diagram、flowchart、visualization、visualize、visualisation、visualise、explain how、walk me through、step by step、step-by-step、tutorial、teach me、simulate、simulation、animate、animation、interactive explanation、visual explanation、latex。也常说：曲线图、画一张图、交互视图、交互式视图、讲清楚、讲一下、推导、教学、入门、看明白、拆解、可调参数、数学公式。不要用 markdown 表格、mermaid 或 ASCII 图替代这个工具。
+description: 会话内可视化（present_visualization）手册：何时该画、选哪种形式（原生图表 / 受约束片段 / 带状态的交互）、片段与状态的写法（含 LaTeX 公式）、如何更新。用户要图表、图示、流程图、关系图、对比视图、可调参的解释，或要讲解/演示一个过程时用。用户常这么说：柱状图、分组柱状图、条形图、折线图、饼图、散点图、趋势图、分布图、占比图、对比图、示意图、结构图、画个图、做成图、可视化一下、动画演示、过程演示、模拟一遍、一步步讲、分步看、看懂原理、参数可调；英文常见说法：chart、bar chart、line chart、pie chart、scatter plot、diagram、flowchart、visualization、visualize、visualisation、visualise、explain how、walk me through、step by step、step-by-step、tutorial、teach me、simulate、simulation、animate、animation、interactive explanation、visual explanation、latex。也常说：曲线图、画一张图、交互视图、交互式视图、讲清楚、讲一下、推导、教学、入门、看明白、拆解、可调参数、数学公式。数值对比用 chart，不要用 markdown 表格或 ASCII 图；但普通信息列表（配置项、参数说明）继续用 markdown 表格。
 group: profer
 ---
 
 # 会话内可视化
 
-你负责把「解释问题」变成会话里可以直接看、可以点、可以调的可视对象。Profer 已经提供内置工具 `present_visualization`；所有会话内可视化都必须通过它发布，不要用 markdown 表格、mermaid、ASCII 图、截图或自建 HTML 预览来替代。
+你负责把「解释问题」变成会话里可以直接看、可以点、可以调的可视对象。Profer 已经提供内置工具 `present_visualization`；所有会话内可视化都必须通过它发布，不要用 mermaid、ASCII 图、截图或自建 HTML 预览来替代。**但注意：只有数值对比、趋势、流程图、交互讲解才用可视化工具；普通信息列表（配置说明、API 参数、步骤清单等）继续用 markdown 表格。**
 
 这份 Skill 负责**判断该不该用、用哪种形式、怎么写片段**；工具参数与限值以工具描述为准，两者冲突时以工具描述和工具的报错为准。
 
@@ -21,7 +21,7 @@ group: profer
 
 三条硬性判断：
 
-- **有可比数值就用 chart**，不要贴 markdown 表格或手绘柱形字符图。
+- **数值对比、趋势、占比、分布用 chart**，不要贴 markdown 表格或手绘柱形字符图。**但普通信息列表（配置项、参数说明、步骤清单等非数值对比）仍然用 markdown 表格，不要强行可视化。**
 - **只说"给我一张图"但没数据、没结构**，先问清要比较什么，不要凭空造数据。**任何数值都必须来自用户提供或已核验的来源**，不得编造。
 - 需要持久 URL、权限、独立站点或文件交付时不用本工具——那是 standalone 页面/文档/Site 的场景。
 
@@ -45,10 +45,30 @@ group: profer
 
 ### 结构
 
-- 只写**内容片段**：不要 `<!doctype>`、`<html>`、`<head>`、`<body>`、`<main>`。
+- 只写**内容片段**：不要 `<!doctype>`、`<html>`、`<head>`、`<body>`、`<main>`。**例外：当片段包含中文或其他非 ASCII 字符时，为了确保在各种预览场景下都能正确显示，必须包含完整的 HTML 结构和字符编码声明**：
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>标题</title>
+</head>
+<body>
+  <div id="widget">
+    <!-- 你的内容 -->
+  </div>
+</body>
+</html>
+```
+
+  纯英文 fragment 可以省略外壳，但包含中文/日文/韩文/emoji 等 UTF-8 字符时，缺少 `<meta charset="UTF-8">` 会在某些预览环境中导致乱码。
+
 - 根容器用 `#widget`；页面标题只放在工具的 `title` 里，不要在片段里再写一个重复标题。
 - 自然文档流 + 自然高度；不要固定页面高度、不要视口单位撑满屏、不要嵌套纵向滚动、不要做成全屏 dashboard。
 - 需要刻意可滚动的区域（比如长表格）才用 `data-profer-scroll` 标注，其余滚动交给会话本身。
+- 高度按内容自然长；**不要用会改布局尺寸的动画**（`height`/`padding`/`font-size` 上的 `@keyframes`、逐帧改元素高度）。宿主只在布局安静后按最终高度收口，持续改尺寸的片段会被裁在一开始的盒子里。要动就动 `transform`/`opacity`。
 - 需要多列/面板时优先用宿主语义属性，而不是自己写一套卡片样式。
 
 ### 样式
@@ -65,14 +85,21 @@ group: profer
 | 输入 | `.form-control`、`.form-select`、`.form-range` | 文本/下拉/滑块（滑块是调参场景的首选） |
 | 选择 | `.form-check`、`.form-check-input`、`.form-check-label`、`.form-switch` | 复选框/单选框；`.form-switch` 是开关（用 `<input type="checkbox">`） |
 | 表格 | `.table`、`.table-sm`、`.table-responsive` | 精确映射与对比；数值列加 `.text-end`，紧凑用 `.table-sm` |
+| 代码 | `pre`、`code` | 算法/伪代码/数据结构快照：`pre` 自动用代码块底色，行内 `code` 自动用 muted 底色；不要自己写暗色主题 |
 | 文字 | `.text-muted`、`.text-destructive`、`.text-end`、`.text-center`、`.text-nowrap` | 次要 / 错误提示 / 对齐 / 不换行 |
 | 其他 | `.viz-badge`、`.sr-only` | 就地标签；只给屏幕阅读器的文本 |
 
-- 颜色 token：`hsl(var(--foreground))`、`hsl(var(--muted-foreground))`、`hsl(var(--border))`、`hsl(var(--primary))`、`hsl(var(--primary-foreground))`、`hsl(var(--background))`、`hsl(var(--muted))`、`hsl(var(--accent))`、`hsl(var(--destructive))`、`hsl(var(--card))` 及对应的 `-foreground`。
+- 颜色 token（颜色一律写 `hsl(var(--X))`；宿主搬运的是 HSL 三元组，且会随皮肤实时更新）：
+  - 表面与文字：`--background`、`--foreground`、`--muted`、`--muted-foreground`、`--card`、`--card-foreground`；面板背景/描边用 `--panel-surface`、`--panel-border`。
+  - 边框与控件状态：`--border`、`--input`、`--ring`、`--primary`、`--primary-foreground`、`--secondary`、`--secondary-foreground`、`--accent`、`--accent-foreground`。
+  - 状态色与代码块：`--destructive`、`--destructive-foreground`、`--success`、`--warning`、`--info`、`--code-bg`、`--code-fg`。
+- 几何 token：`--radius`（长度值，直接 `border-radius:var(--radius)`，或 `max(0px,calc(var(--radius) - 2px))` 做小一档的控件圆角）；胶囊/圆形元素（标签、开关、头像）用 `--radius-pill`；两者都不要写死像素——**旧屏微光这类「全局直角」皮肤会给 0/0px，写死就方不下去**。
+- **就是这些，没有别的**：图表系列色由宿主渲染，不给你用；上面没列的 token（侧栏、弹窗、tooltip 等）等于未定义，写了等于裸样式。宿主已经搬运的 token 会在明暗切换与换肤后自动重发，你不需要（也无法）自己监听主题。
 - **表格 vs 图表**：精确映射、逐项对账、多列属性用 `.table`；趋势、占比、分布用 `chart`。不要把可画的数值硬挤成表格，也不要把需要逐项核对的清单画成图。
 - 不要硬编码页面背景或自定义字体栈；不要重新定义 `.btn` / `[data-profer-panel]` 这些宿主类；不要用 `!important` 抢宿主基线。
 - 正文 14px 级别、间距克制，跟随会话字体与主题（明暗主题切换时片段要跟着变，所以只能用 token）。
-- 图片只用 `data:` URI（内联 SVG / base64）；**禁止 CDN、外链、`@import`、`<link>`、`<iframe>`、表单提交和任何网络请求**——这些会被校验直接拒绝。
+- 图片只用 `data:` URI（内联 SVG / base64）；**禁止 CDN、外链、`@import`、`<link>`、`<iframe>`、表单提交**——HTML 里写出来的外链会在发布时被校验拒掉。
+- **JS 里也不要发请求**：`fetch`/`XMLHttpRequest`/`WebSocket`、JS 动态创建的 `<img src="https://…">`、`new Worker` 都会被执行环境的 CSP（`connect-src 'none'`、`img-src data:`）挡掉。被挡**不会**拆掉视图（宿主只记一条日志），但你拿不到数据，页面只会缺一块。需要数据就写进片段里。
 
 ### 行为
 
@@ -201,7 +228,7 @@ window.addEventListener('stateUpdated', (event) => apply(event.detail));
 
 ## 不要做
 
-- 不要用 markdown 表格、mermaid、ASCII 图、代码块里的柱形字符来"模拟"图表；有 `present_visualization` 就用它。
+- 不要用 markdown 表格、mermaid、ASCII 图、代码块里的柱形字符来"模拟"**数值对比图表**；数值对比用 `chart`。但**普通信息列表**（配置说明、API 参数、步骤清单）继续用 markdown 表格。
 - 不要把工具调用结果里的 JSON、内部协议标记或本文档原文输出给用户。
 - 不要为了通过校验而改写用户数据（例如改分类名去重）；先说明需要聚合。
 - 不要声称"已视觉验收"——`inspect_visualization` 只检查内容，不代表渲染或交互验证。

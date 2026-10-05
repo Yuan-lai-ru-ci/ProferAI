@@ -919,7 +919,7 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
                     renderRevealed={() => foldedReplyRenderItems.map((folded) => folded.type === 'block' ? renderTopLevelBlock(folded.item)
                       : <div key={folded.identity} data-scroll-anchor={folded.identity}><VisualizationResultInline record={folded.record} sessionId={sessionId} /></div>)}
                   />}
-                  {item.type === 'block' ? renderTopLevelBlock(item.item) : <div data-scroll-anchor={item.identity}><VisualizationResultInline record={item.record} sessionId={sessionId} /></div>}
+                  {item.type === 'block' ? renderTopLevelBlock(item.item) : !isStreaming && <div data-scroll-anchor={item.identity}><VisualizationResultInline record={item.record} sessionId={sessionId} /></div>}
                 </React.Fragment>
               }
 

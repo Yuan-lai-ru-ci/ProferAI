@@ -1,11 +1,13 @@
-import { parseGoalCommand as parseGoalCommandShared, createGoalLifecycleEvent, applyGoalTransition } from '@profer/shared'
+import { parseGoalCommand as parseGoalCommandShared, createGoalLifecycleEvent, applyGoalTransition, getGoalBudgetDimensions, getGoalBudgetExhaustedReasons } from '@profer/shared'
 import type { AgentGoalContract, AgentGoalIterationResult, AgentGoalState, AgentGoalLimits, AgentGoalCommand, AgentGoalContinuation } from '@profer/shared'
 
+/** 默认不限轮次、时长与 token（对齐 Codex）；只靠连续无进展次数兜底。 */
 export const DEFAULT_GOAL_LIMITS: AgentGoalLimits = {
-  maxIterations: 20,
   maxConsecutiveFailures: 3,
-  maxDurationMs: 2 * 60 * 60 * 1000,
 }
+
+/** 预算已用比例达到该值后，prompt 要求本轮收尾。 */
+const WRAP_UP_RATIO = 0.8
 
 /** Goal 迭代历史保留上限，防止长期运行的 Goal 状态无限膨胀 */
 export const GOAL_HISTORY_LIMIT = 20
@@ -15,8 +17,21 @@ export function parseGoalCommand(input: string): AgentGoalCommand {
   return parseGoalCommandShared(input)
 }
 
+/** 本轮是否应收尾：剩最后一轮，或时长/token 预算已用到 80%。 */
+export function isGoalNearBudget(state: Pick<AgentGoalState, 'iteration' | 'elapsedMs' | 'usage' | 'limits'>): boolean {
+  return getGoalBudgetDimensions(state).some((item) => item.used >= (item.kind === 'iterations' ? item.limit : item.limit * WRAP_UP_RATIO))
+}
+
+function describeRemainingBudget(state: Pick<AgentGoalState, 'iteration' | 'elapsedMs' | 'usage' | 'limits'>): string | undefined {
+  const parts = getGoalBudgetDimensions(state).map(({ kind, used, limit }) => {
+    const remaining = Math.max(0, limit - used)
+    return kind === 'iterations' ? `约 ${remaining} 轮` : kind === 'duration' ? `约 ${Math.round(remaining / 60000)} 分钟` : `${remaining} tokens`
+  })
+  return parts.length ? parts.join(' / ') : undefined
+}
+
 /**
- * 组装 Goal 单轮迭代 prompt（Codex 式 plan→act→verify→review 循环）。
+ * 组装 Goal 单轮迭代 prompt（对齐 Codex continuation：plan→act→verify→review）。
  * 注入目标契约与剩余预算，让 Agent 在明确的验收标准与边界内工作。
  */
 export function buildGoalIterationPrompt(
@@ -24,18 +39,15 @@ export function buildGoalIterationPrompt(
   input: { previousSummary?: string; now?: number },
 ): string {
   // 调用方在进入本轮前已经自增轮次；暂停与空闲时间不消耗预算。
-  const iteration = state.iteration
-  const remainingIterations = Math.max(0, state.limits.maxIterations - iteration)
-  const remainingMinutes = Math.max(0, Math.round((state.limits.maxDurationMs - (state.elapsedMs ?? 0)) / 60000))
-  const displayIteration = Math.max(1, iteration)
+  const displayIteration = Math.max(1, state.iteration)
   const lines = [
     `你正在持续执行一个 Goal（长时自主任务）。目标：${state.goal}`,
   ]
   if (state.contract?.verification) lines.push(`验收标准（verify）：${state.contract.verification}`)
   if (state.contract?.constraints) lines.push(`约束（constraint）：${state.contract.constraints}`)
   if (state.contract?.stopWhen) lines.push(`停止条件（stop）：${state.contract.stopWhen}`)
-  lines.push(`这是第 ${displayIteration} 轮。剩余预算：约 ${remainingIterations} 轮 / ${remainingMinutes} 分钟。预算不足不等于完成，不得缩小目标来迎合预算。`)
-  if (state.limits.maxTokens !== undefined) lines.push(`剩余 token 预算：${Math.max(0, state.limits.maxTokens - (state.usage?.totalTokens ?? 0))}（在用量记账边界检查）。`)
+  const remaining = describeRemainingBudget(state)
+  lines.push(`这是第 ${displayIteration} 轮。${remaining ? `剩余预算：${remaining}。` : ''}不得缩小目标来迎合预算。`)
   if (input.previousSummary) lines.push(`上一轮摘要：${input.previousSummary}`)
   const recentHistory = (state.history ?? []).slice(-3)
   if (recentHistory.length > 0) {
@@ -46,15 +58,17 @@ export function buildGoalIterationPrompt(
   }
   lines.push(
     [
-      '工作方式：先规划本轮动作，再实际执行（不要只给建议），然后验证结果并复盘。多步任务请用任务图拆解并与 Goal 对齐。',
+      '工作方式：以工作区的真实状态为准，先判断上一轮属于「有进展 / 已核实的等待 / 无进展」，再规划本轮动作并实际执行（不要只给建议），然后验证结果。多步任务请用任务图拆解并与 Goal 对齐。',
       state.contract?.verification
-        ? '完成判定：只有当验收标准被真实证据满足时才允许 complete。'
-        : '完成判定：本轮请先为这个目标拟定可验证的验收标准并写入 summary，后续轮次以证据满足它为准。',
-      '完成前逐项核对原目标与验收标准：列出每项要求、实际证据、尚未完成的部分；不得只用本轮局部成功代表整个目标完成。',
-      'continue 需要实际进展证据。无进展时如实说明尝试、失败原因和下一步；重复无进展会由宿主停止。blocked 需要说明确切缺口及恢复条件。',
-      '每轮结束时必须调用 update_goal 报告结构化结果（status=continue|complete|blocked、summary、evidence）。这是内部控制通道，不要在普通回复中输出 XML/JSON 协议。只有逐项验收完成且 evidence 包含非空真实证据时才使用 complete；预算不足保持诚实的未完成报告，不得冒充 complete。若工具不可用，说明问题，由宿主按报告缺失处理。',
+        ? '完成判定：只有当验收标准被真实证据满足时才算完成。'
+        : '完成判定：请先为这个目标拟定可验证的验收标准，后续轮次以证据满足它为准。',
+      '完成前逐项核对原目标与验收标准：列出每项要求、实际证据、尚未完成的部分；证据不足就继续做，不得只用本轮局部成功代表整个目标完成。',
+      '汇报方式：目标逐项验收完成时调用 update_goal(status=complete, summary, evidence)，evidence 必须是真实证据；确实需要用户输入或外部状态变化才能继续时调用 update_goal(status=blocked) 并说明缺口与恢复条件。其余情况正常结束本轮即可，宿主会自动开始下一轮；连续无进展会被宿主停止。update_goal 是内部控制通道，不要在普通回复中输出 XML/JSON 协议。',
     ].join('\n'),
   )
+  if (isGoalNearBudget(state)) {
+    lines.push('预算即将用完：本轮请收尾，不要开始新的大块工作；整理已完成的部分与证据，如实说明尚未完成的部分。预算不足不等于完成，不得冒充 complete。')
+  }
   return lines.join('\n')
 }
 
@@ -79,11 +93,9 @@ export function createGoalState(sessionId: string, goal: string, now = Date.now(
   }
 }
 
+/** 第一条预算耗尽原因；判定规则与 renderer 共用 shared 实现。 */
 export function goalBudgetReason(state: Pick<AgentGoalState, 'iteration' | 'elapsedMs' | 'usage' | 'limits'>): string | undefined {
-  if ((state.elapsedMs ?? 0) >= state.limits.maxDurationMs) return '已达到 Goal 最大运行时长'
-  if (state.iteration >= state.limits.maxIterations) return '已达到 Goal 最大迭代轮次'
-  if (state.limits.maxTokens !== undefined && (state.usage?.totalTokens ?? 0) >= state.limits.maxTokens) return '已达到 Goal token 预算'
-  return undefined
+  return getGoalBudgetExhaustedReasons(state)[0]
 }
 
 export function evaluateGoalContinuation(
@@ -93,14 +105,15 @@ export function evaluateGoalContinuation(
   if (result.outcome === 'deferred') return { action: 'deferred', consecutiveFailures: context.consecutiveFailures }
   if (result.outcome === 'stopped') return { action: 'stopped', consecutiveFailures: context.consecutiveFailures, reason: result.error ?? '用户停止执行' }
   const hasEvidence = result.evidence.some((item) => typeof item === 'string' && item.trim().length > 0)
-  const failed = context.turnFailed || result.outcome === 'failed' || (result.status !== 'blocked' && !hasEvidence)
+  // continue 不要求证据（对齐 Codex）；只有运行失败/无进展，或无证据声称完成才计入失败。
+  const failed = context.turnFailed || result.outcome === 'failed' || (result.status === 'complete' && !hasEvidence)
   const failures = failed ? context.consecutiveFailures + 1 : 0
-  // 完整最后一轮仍可完成；运行 deadline 已取消的结果由 Controller fence 丢弃。
+  // 完整最后一轮仍可完成：预算只在轮次边界检查。
   if (!failed && result.status === 'complete') return { action: 'complete', consecutiveFailures: 0 }
   if (!failed && result.status === 'blocked') return { action: 'blocked', consecutiveFailures: failures, reason: result.summary }
   const reason = goalBudgetReason({ iteration: context.iteration, elapsedMs: context.elapsedMs ?? Math.max(0, context.now - context.startedAt), usage: { inputTokens: 0, outputTokens: 0, totalTokens: context.totalTokens ?? 0 }, limits: context.limits })
   if (reason) return { action: 'limit_reached', consecutiveFailures: failures, reason }
-  if (failures >= context.limits.maxConsecutiveFailures) return { action: 'failed', consecutiveFailures: failures, reason: result.error ?? '连续执行失败或无进展次数达到上限' }
+  if (failures >= context.limits.maxConsecutiveFailures) return { action: 'failed', consecutiveFailures: failures, reason: result.error ?? '连续无进展次数达到上限' }
   return { action: 'continue', consecutiveFailures: failures }
 }
 

@@ -164,7 +164,8 @@ export interface ElectronAPI {
   readVisualization: (input: { sessionId: string; id: string; revision?: string }) => Promise<VisualizationContent>
   readVisualizationViewState: (input: { sessionId: string; id: string; revision: string }) => Promise<VisualizationViewState>
   saveVisualizationViewState: (input: { sessionId: string; id: string; revision: string; state: VisualizationViewState }) => Promise<void>
-  exportVisualization: (input: { sessionId: string; id: string; revision: string }) => Promise<string | null>
+  /** theme 为渲染进程当前生效的宿主 token（含皮肤）；缺省时导出页走浅色基线 */
+  exportVisualization: (input: { sessionId: string; id: string; revision: string; theme?: Record<string, string> }) => Promise<string | null>
 
   /** 获取宿主操作系统和 CPU 架构，供安装包选择使用 */
   getPlatformInfo: () => { platform: NodeJS.Platform; arch: string }
@@ -794,7 +795,7 @@ export interface ElectronAPI {
   stopAgent: (sessionId: string) => Promise<void>
   startGoal: (sessionId: string, goal: string, contract?: import('@profer/shared').AgentGoalContract) => Promise<import('@profer/shared').AgentGoalState>
   getGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState | null>
-  updateGoal: (sessionId: string, patch: { goal?: string; contract?: import('@profer/shared').AgentGoalContract; limits?: Partial<import('@profer/shared').AgentGoalLimits> }) => Promise<import('@profer/shared').AgentGoalState>
+  updateGoal: (sessionId: string, patch: { goal?: string; contract?: import('@profer/shared').AgentGoalContract; limits?: import('@profer/shared').AgentGoalLimitsPatch }) => Promise<import('@profer/shared').AgentGoalState>
   getGoalHistory: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState[]>
   listGoals: () => Promise<import('@profer/shared').AgentGoalState[]>
   pauseGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState>

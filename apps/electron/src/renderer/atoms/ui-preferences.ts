@@ -16,6 +16,9 @@ import {
 
 // ===== Jotai Atoms =====
 
+/** 是否在左侧栏显示我的积分条 */
+export const showCreditsInSidebarAtom = atom<boolean>(true)
+
 /** 是否显示用户消息悬浮置顶条 */
 export const stickyUserMessageEnabledAtom = atom<boolean>(true)
 
@@ -48,6 +51,7 @@ export const composerCompactModeAtom = atom<ComposerCompactModeSettings>({
  * 从主进程加载 UI 偏好设置
  */
 export async function initializeUiPreferences(
+  setShowCreditsInSidebar: (enabled: boolean) => void,
   setStickyUserMessageEnabled: (enabled: boolean) => void,
   setLongTextPasteAsAttachmentEnabled?: (enabled: boolean) => void,
   setRichTextRenderingEnabled?: (enabled: boolean) => void,
@@ -55,6 +59,7 @@ export async function initializeUiPreferences(
 ): Promise<void> {
   try {
     const settings = await window.electronAPI.getSettings()
+    setShowCreditsInSidebar(settings.showCreditsInSidebar ?? true)
     setStickyUserMessageEnabled(settings.stickyUserMessageEnabled ?? true)
     setLongTextPasteAsAttachmentEnabled?.(settings.longTextPasteAsAttachmentEnabled ?? false)
     setRichTextRenderingEnabled?.(settings.richTextRenderingEnabled ?? false)
@@ -69,6 +74,17 @@ export async function initializeUiPreferences(
 }
 
 // ===== 持久化更新 =====
+
+/**
+ * 更新侧栏积分条开关并持久化
+ */
+export async function updateShowCreditsInSidebar(enabled: boolean): Promise<void> {
+  try {
+    await window.electronAPI.updateSettings({ showCreditsInSidebar: enabled })
+  } catch (error) {
+    console.error('[UI偏好] 更新侧栏积分条设置失败:', error)
+  }
+}
 
 /**
  * 更新悬浮置顶条开关并持久化

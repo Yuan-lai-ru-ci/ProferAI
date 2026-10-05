@@ -56,6 +56,8 @@ import {
 } from '@/atoms/notifications'
 import type { NotificationSoundMeta } from '@/atoms/notifications'
 import {
+  showCreditsInSidebarAtom,
+  updateShowCreditsInSidebar,
   stickyUserMessageEnabledAtom,
   updateStickyUserMessageEnabled,
   longTextPasteAsAttachmentEnabledAtom,
@@ -93,6 +95,7 @@ export function UsageSettings(): React.ReactElement {
   const [notificationSoundEnabled, setNotificationSoundEnabled] = useAtom(notificationSoundEnabledAtom)
   const [notificationSounds, setNotificationSounds] = useAtom(notificationSoundsAtom)
   const [customSounds, setCustomSounds] = useAtom(customNotificationSoundsAtom)
+  const [showCreditsInSidebar, setShowCreditsInSidebar] = useAtom(showCreditsInSidebarAtom)
   const [stickyUserMessageEnabled, setStickyUserMessageEnabled] = useAtom(stickyUserMessageEnabledAtom)
   const [longTextPasteAsAttachmentEnabled, setLongTextPasteAsAttachmentEnabled] = useAtom(longTextPasteAsAttachmentEnabledAtom)
   const [richTextRenderingEnabled, setRichTextRenderingEnabled] = useAtom(richTextRenderingEnabledAtom)
@@ -393,6 +396,15 @@ export function UsageSettings(): React.ReactElement {
               </SelectContent>
             </Select>
           </SettingsRow>
+          <SettingsToggle
+            label="侧栏显示我的积分"
+            description="关闭后隐藏左侧栏底部的积分余额条，不影响积分与用量页面"
+            checked={showCreditsInSidebar}
+            onCheckedChange={(checked) => {
+              setShowCreditsInSidebar(checked)
+              void updateShowCreditsInSidebar(checked)
+            }}
+          />
           <SettingsToggle
             label="消息悬浮置顶条"
             description="滚动浏览对话时，在顶部显示最近的用户消息摘要"

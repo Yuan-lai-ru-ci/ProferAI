@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { AlertTriangle, Check, ChevronDown, ChevronRight, CircleX, History, Pause, Pencil, Play, Square, Target } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { getGoalBudgetExhaustedReasons, GOAL_REASON_LABELS, normalizeGoalReason, parseGoalLimitsInput } from '@profer/shared'
+import { applyGoalLimitsPatch, getGoalBudgetExhaustedReasons, GOAL_REASON_LABELS, isGoalResumableByMessage, normalizeGoalReason, parseGoalLimitsInput } from '@profer/shared'
 import type { AgentGoalReasonCode, AgentGoalState } from '@profer/shared'
 import {
   agentGoalAtomFamily, getGoalActions, GOAL_STATUS_LABELS,
@@ -14,6 +14,7 @@ import { Textarea } from '@profer/ui/primitives/textarea'
 import { toast } from 'sonner'
 import { allPendingAskUserRequestsAtom, allPendingPermissionRequestsAtom } from '@/atoms/agent-atoms'
 import { cn } from '@/lib/utils'
+import { formatTokens } from '@/lib/format-tokens'
 
 type Props = { sessionId: string }
 
@@ -31,18 +32,25 @@ function GoalIcon({ status }: { status: AgentGoalState['status'] }): React.React
   return <Target className={cls} aria-hidden="true" />
 }
 
-/** 只在明确存在 Goal run owner 时递增，暂停与启动水合不计墙钟时间。 */
-function useGoalElapsed(goal: AgentGoalState | undefined): number {
+/** 需要时每秒刷新的当前时间；运行计时与重试倒计时共用一个计时器。 */
+function useNow(enabled: boolean): number {
   const [now, setNow] = React.useState(() => Date.now())
-  const active = (goal?.status === 'active' || goal?.status === 'stopping') && Boolean(goal.activeRunId)
   React.useEffect(() => {
-    if (!active) return
+    if (!enabled) return
     setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
-  }, [active, goal?.activeRunId])
-  if (!goal) return 0
-  return Math.max(0, goal.elapsedMs ?? 0) + (active ? Math.max(0, now - goal.updatedAt) : 0)
+  }, [enabled])
+  return now
+}
+
+/** 只在明确存在 Goal run owner 时累加，暂停与启动水合不计墙钟时间。 */
+function isGoalRunning(goal: AgentGoalState | undefined): boolean {
+  return (goal?.status === 'active' || goal?.status === 'stopping') && Boolean(goal.activeRunId)
+}
+
+function goalElapsed(goal: AgentGoalState, now: number): number {
+  return Math.max(0, goal.elapsedMs ?? 0) + (isGoalRunning(goal) ? Math.max(0, now - goal.updatedAt) : 0)
 }
 
 function formatElapsed(ms: number): string {
@@ -51,6 +59,30 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m${seconds % 60 > 0 ? `${seconds % 60}s` : ''}`
   return `${Math.floor(minutes / 60)}h${minutes % 60 > 0 ? `${minutes % 60}m` : ''}`
+}
+
+function formatBudget(limits: AgentGoalState['limits']): string {
+  const parts = [
+    limits.maxIterations === undefined ? '' : `${limits.maxIterations} 轮`,
+    limits.maxDurationMs === undefined ? '' : formatElapsed(limits.maxDurationMs),
+    limits.maxTokens === undefined ? '' : `${limits.maxTokens.toLocaleString()} tokens`,
+  ].filter(Boolean)
+  return `${parts.length ? parts.join(' · ') : '不限'}（连续 ${limits.maxConsecutiveFailures} 轮无进展时停止）`
+}
+
+/** active 期间区分真实运行与各种等待，非 active 时补充可操作提示。 */
+function goalStatusLabel(goal: AgentGoalState, waits: { askUser: number; permission: number }, now: number): string {
+  if (goal.status === 'active') {
+    if (waits.askUser > 0) return '等待你的回答'
+    if (waits.permission > 0) return '等待审批'
+    if (goal.waiting === 'plan_mode') return '计划模式中，切换为可执行模式后自动继续'
+    if (goal.retry && !goal.activeRunId) return `运行出错，${formatElapsed(Math.max(0, goal.retry.nextAt - now))}后第 ${goal.retry.attempt} 次重试`
+    return goal.activeRunId ? GOAL_STATUS_LABELS.active : '等待会话空闲'
+  }
+  if (isGoalResumableByMessage(goal)) return `${GOAL_STATUS_LABELS[goal.status]} · ${goal.status === 'blocked' ? '发消息补充后自动继续' : '发消息即可继续'}`
+  // 旧数据只有 stopReason，按共享规则归一化。
+  if ((goal.reasonCode ?? normalizeGoalReason(goal.stopReason)) === 'app_restart') return `${GOAL_STATUS_LABELS[goal.status]} · 重启后待恢复`
+  return GOAL_STATUS_LABELS[goal.status]
 }
 
 function DetailRow({ label, value }: { label: string; value: string }): React.ReactElement {
@@ -151,10 +183,8 @@ function GoalEditor({ sessionId }: Props): React.ReactElement {
       const current = await window.electronAPI.getGoal(sessionId)
       if (!current || current.id !== snapshot.id || current.revision !== snapshot.revision) throw new Error('Goal 已变化，请关闭编辑器后重新打开')
       if (!getGoalActions(current).canEdit) throw new Error('Goal 正在运行或停止，请结束后编辑')
-      if (resume && budgetRequired) {
-        const merged = { ...current, limits: { ...current.limits, ...limits } }
-        if (getGoalBudgetExhaustedReasons(merged).length > 0) throw new Error('请将已耗尽的预算提高到当前用量以上')
-        if (getGoalBudgetExhaustedReasons(current).length > 0 && !(merged.limits.maxIterations > current.limits.maxIterations || merged.limits.maxDurationMs > current.limits.maxDurationMs || (merged.limits.maxTokens ?? 0) > (current.limits.maxTokens ?? 0))) throw new Error('请先扩大预算再恢复')
+      if (resume && budgetRequired && getGoalBudgetExhaustedReasons({ ...current, limits: applyGoalLimitsPatch(current.limits, limits) }).length > 0) {
+        throw new Error('请将已耗尽的预算提高到当前用量以上，或留空改为不限')
       }
       const saved = await window.electronAPI.updateGoal(sessionId, { goal, contract, limits })
       setGoal(saved)
@@ -182,12 +212,12 @@ function GoalEditor({ sessionId }: Props): React.ReactElement {
           <Textarea name={name} defaultValue={snapshot.contract?.[name] ?? ''} maxLength={240} className="mt-1 min-h-12" disabled={pending} />
         </label>)}
         <div className="grid grid-cols-2 gap-3">
-          <label className="text-xs">轮次上限<Input name="maxIterations" inputMode="numeric" defaultValue={snapshot.limits.maxIterations} required disabled={pending} className="mt-1" /></label>
-          <label className="text-xs">净运行时长（分钟）<Input name="maxDurationMinutes" inputMode="decimal" defaultValue={snapshot.limits.maxDurationMs / 60000} required disabled={pending} className="mt-1" /></label>
-          <label className="text-xs">连续失败上限<Input name="maxConsecutiveFailures" inputMode="numeric" defaultValue={snapshot.limits.maxConsecutiveFailures} required disabled={pending} className="mt-1" /></label>
-          <label className="text-xs">Token 上限（可选）<Input name="maxTokens" inputMode="numeric" defaultValue={snapshot.limits.maxTokens ?? ''} placeholder={snapshot.limits.maxTokens ? '留空保留原上限' : '未设置'} disabled={pending} className="mt-1" /></label>
+          <label className="text-xs">轮次上限（可选）<Input name="maxIterations" inputMode="numeric" defaultValue={snapshot.limits.maxIterations ?? ''} placeholder="不限" disabled={pending} className="mt-1" /></label>
+          <label className="text-xs">净运行时长（分钟，可选）<Input name="maxDurationMinutes" inputMode="decimal" defaultValue={snapshot.limits.maxDurationMs === undefined ? '' : snapshot.limits.maxDurationMs / 60000} placeholder="不限" disabled={pending} className="mt-1" /></label>
+          <label className="text-xs">连续无进展上限<Input name="maxConsecutiveFailures" inputMode="numeric" defaultValue={snapshot.limits.maxConsecutiveFailures} required disabled={pending} className="mt-1" /></label>
+          <label className="text-xs">Token 上限（可选）<Input name="maxTokens" inputMode="numeric" defaultValue={snapshot.limits.maxTokens ?? ''} placeholder="不限" disabled={pending} className="mt-1" /></label>
         </div>
-        <p className="text-[11px] text-muted-foreground">已执行 {snapshot.iteration} 轮 · {formatElapsed(snapshot.elapsedMs ?? 0)} · {(snapshot.usage?.totalTokens ?? 0).toLocaleString()} tokens。Token 字段留空保留原上限。</p>
+        <p className="text-[11px] text-muted-foreground">已执行 {snapshot.iteration} 轮 · {formatElapsed(snapshot.elapsedMs ?? 0)} · {(snapshot.usage?.totalTokens ?? 0).toLocaleString()} tokens。预算留空表示不限；时长与 token 在每轮结束时检查，快用完时会提示 Agent 收尾。</p>
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
         <DialogFooter>
           <Button type="button" variant="ghost" disabled={pending} onClick={() => setSnapshot(null)}>取消</Button>
@@ -207,12 +237,11 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
   const [history, setHistory] = useAtom(goalHistoryAtomFamily(sessionId))
   const [expanded, setExpanded] = React.useState(false)
   const [historyError, setHistoryError] = React.useState<string | null>(null)
-  const elapsed = useGoalElapsed(goal)
+  const now = useNow(isGoalRunning(goal) || (goal?.status === 'active' && goal.retry !== undefined))
+  const elapsed = goal ? goalElapsed(goal, now) : 0
   const askUserPending = useAtomValue(allPendingAskUserRequestsAtom).get(sessionId)?.length ?? 0
   const permissionPending = useAtomValue(allPendingPermissionRequestsAtom).get(sessionId)?.length ?? 0
-  const statusLabel = goal?.status === 'active'
-    ? askUserPending > 0 ? '等待你的回答' : permissionPending > 0 ? '等待审批' : !goal.activeRunId ? '等待会话空闲' : GOAL_STATUS_LABELS.active
-    : goal ? GOAL_STATUS_LABELS[goal.status] : ''
+  const statusLabel = goal ? goalStatusLabel(goal, { askUser: askUserPending, permission: permissionPending }, now) : ''
   React.useEffect(() => {
     let active = true
     setHistoryError(null)
@@ -261,8 +290,8 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
         {goal ? <>
           <GoalIcon status={goal.status} />
           <span className="min-w-0 flex-1 truncate text-xs font-medium" title={`${goal.goal}\n沿用当前会话上下文`}>{goal.goal}</span>
-          <span className={cn('shrink-0 text-[11px] font-medium', statusTone[goal.status])} role="status">{statusLabel}{(goal.reasonCode ?? normalizeGoalReason(goal.stopReason)) === 'app_restart' ? ' · 重启后待恢复' : ''}</span>
-          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums" title="累计净运行时长">第 {goal.iteration} 轮 · {formatElapsed(elapsed)}</span>
+          <span className={cn('shrink-0 text-[11px] font-medium', statusTone[goal.status])} role="status">{statusLabel}</span>
+          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums" title="轮次 · 累计净运行时长 · token 用量">第 {goal.iteration} 轮 · {formatElapsed(elapsed)}{goal.usage || goal.limits.maxTokens !== undefined ? ` · ${formatTokens(goal.usage?.totalTokens ?? 0)}${goal.limits.maxTokens === undefined ? '' : ` / ${formatTokens(goal.limits.maxTokens)}`} tokens` : ''}</span>
         </> : <><History className="size-3.5 text-muted-foreground" /><span className="flex-1 text-xs">已归档 Goal（{archives.length}）</span></>}
         <Button size="icon" variant="ghost" className="size-6 text-muted-foreground" aria-label={expanded ? '收起 Goal 详情' : '查看 Goal 契约与历史'} title={expanded ? '收起详情' : '查看契约、最近轮次与归档 Goal'} onClick={() => setExpanded((value) => !value)}>{expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}</Button>
         {goal && actions?.canEdit && <Button size="icon" variant="ghost" className="size-6 text-muted-foreground" title="编辑目标、契约与预算" aria-label="编辑目标、契约与预算" disabled={pending} onClick={() => setEditor(goal)}><Pencil className="size-3" /></Button>}
@@ -281,7 +310,7 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
           {goal.contract?.verification && <DetailRow label="验收" value={goal.contract.verification} />}
           {goal.contract?.constraints && <DetailRow label="约束" value={goal.contract.constraints} />}
           {goal.contract?.stopWhen && <DetailRow label="停止条件" value={goal.contract.stopWhen} />}
-          <DetailRow label="预算" value={`${goal.limits.maxIterations} 轮 · ${formatElapsed(goal.limits.maxDurationMs)}${goal.limits.maxTokens === undefined ? '' : ` · ${goal.limits.maxTokens.toLocaleString()} tokens`}`} />
+          <DetailRow label="预算" value={formatBudget(goal.limits)} />
           {goal.lastSummary && <DetailRow label="最近进展" value={goal.lastSummary} />}
           {goal.usage && <DetailRow label="用量" value={`${goal.usage.totalTokens.toLocaleString()} tokens（输入 ${goal.usage.inputTokens.toLocaleString()} · 输出 ${goal.usage.outputTokens.toLocaleString()}）`} />}
           {goal.lastEvidence?.length ? <DetailRow label="证据" value={goal.lastEvidence.join('；')} /> : null}

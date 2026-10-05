@@ -11,6 +11,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { Coins } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
+import { showCreditsInSidebarAtom } from '@/atoms/ui-preferences'
 import {
   creditsPointsAtom,
   creditCycleSummaryAtom,
@@ -35,6 +36,7 @@ function formatPoints(n: number): string {
 export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps): React.ReactElement | null {
   useCreditsLoader(60_000)
 
+  const showCreditsInSidebar = useAtomValue(showCreditsInSidebarAtom)
   const points = useAtomValue(creditsPointsAtom)
   const cycleSummary = useAtomValue(creditCycleSummaryAtom)
   const isLow = useAtomValue(creditsLowAtom)
@@ -46,8 +48,8 @@ export function SidebarBalanceBar({ collapsed = false }: SidebarBalanceBarProps)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const setSettingsTab = useSetAtom(settingsTabAtom)
 
-  // 未加载到余额（非代管 / 未登录 / 拉取失败）不显示
-  if (points === null) return null
+  // 用户可在「设置 → 使用偏好」中隐藏；默认保持原有显示行为。
+  if (!showCreditsInSidebar || points === null) return null
 
   const openCredits = (): void => {
     setSettingsTab('credits')

@@ -7,11 +7,11 @@ export function noop(): void {
   // no-op
 }
 
-export { isGoalTransitionAllowed, getGoalActions, normalizeGoalReason, createGoalLifecycleEvent, applyGoalTransition, capGoalLifecycle, GOAL_LIFECYCLE_LIMIT, GOAL_STATUSES, GOAL_REASON_CODES, GOAL_REASON_LABELS } from './goal-lifecycle'
+export { isGoalTransitionAllowed, getGoalActions, normalizeGoalReason, isGoalResumableByMessage, createGoalLifecycleEvent, applyGoalTransition, capGoalLifecycle, GOAL_LIFECYCLE_LIMIT, GOAL_STATUSES, GOAL_REASON_CODES, GOAL_REASON_LABELS } from './goal-lifecycle'
 export { diffCapabilities } from './capabilities-diff'
 export type { CapabilityChange } from './capabilities-diff'
-export { parseGoalCommand, parseGoalContractInput, parseGoalLimitsInput, getGoalBudgetExhaustedReasons, stripGoalResultBlocks, GOAL_UPDATE_TOOL_NAME, isGoalIterationMessage, isGoalUpdateToolName } from './goal-contract'
-export type { GoalLimitsInput } from './goal-contract'
+export { parseGoalCommand, parseGoalContractInput, parseGoalLimitsInput, applyGoalLimitsPatch, isValidGoalLimits, getGoalBudgetDimensions, getGoalBudgetExhaustedReasons, stripGoalResultBlocks, GOAL_UPDATE_TOOL_NAME, isGoalIterationMessage, isGoalUpdateToolName } from './goal-contract'
+export type { GoalLimitsInput, AgentGoalLimitsPatch, GoalBudgetDimension } from './goal-contract'
 export {
   DEFAULT_CONTEXT_WINDOW,
   ONE_MILLION_CONTEXT_WINDOW,

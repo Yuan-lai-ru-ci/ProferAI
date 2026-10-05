@@ -65,6 +65,25 @@ describe('Goal 状态栏渲染', () => {
     expect(render({ ...goal('paused'), reasonCode: 'user_pause', stopReason: 'app_restart' })).not.toContain('重启后待恢复')
   })
 
+  test('中断与重试用尽提示发消息即可继续，受阻提示补充后自动继续', () => {
+    expect(render({ ...goal('paused'), reasonCode: 'user_interrupt' })).toContain('发消息即可继续')
+    expect(render({ ...goal('paused'), reasonCode: 'retry_exhausted' })).toContain('发消息即可继续')
+    expect(render({ ...goal('paused'), reasonCode: 'user_pause' })).not.toContain('发消息即可继续')
+    expect(render(goal('blocked'))).toContain('发消息补充后自动继续')
+  })
+
+  test('active 时区分计划模式等待与错误重试倒计时', () => {
+    expect(render({ ...goal('active'), waiting: 'plan_mode' })).toContain('计划模式中，切换为可执行模式后自动继续')
+    const html = render({ ...goal('active'), retry: { attempt: 2, nextAt: Date.now() + 180_000, error: 'ECONNRESET' } })
+    expect(html).toContain('第 2 次重试')
+  })
+
+  test('显示 token 用量与预算；未设置的预算显示不限', () => {
+    expect(render({ ...goal('active'), usage: { inputTokens: 9000, outputTokens: 3000, totalTokens: 12000 }, limits: { maxConsecutiveFailures: 3, maxTokens: 50000 } })).toContain('12.0k / 50.0k tokens')
+    expect(render({ ...goal('active'), usage: { inputTokens: 9000, outputTokens: 3000, totalTokens: 12000 }, limits: { maxConsecutiveFailures: 3 } })).toContain('12.0k tokens')
+    expect(render({ ...goal('active'), limits: { maxConsecutiveFailures: 3 } })).not.toContain('tokens')
+  })
+
   test('cleared 快照不再显示 live 按钮，但状态栏保留归档入口', () => {
     const store = createStore()
     store.set(mergeAgentGoalAtom, { sessionId: 's', state: goal('paused') })

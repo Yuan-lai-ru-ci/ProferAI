@@ -271,7 +271,7 @@ import {
   countArchivedAgentSessions,
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
-import { runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
+import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
 import { buildArchiveToggleUpdates } from './lib/agent-unread-policy'
 import { getAgentUnreadPolicyMode } from './lib/agent-unread-mode'
@@ -282,7 +282,7 @@ import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { GoalSessionService } from './lib/goal-session-service'
 import { loadGoalStates, saveGoalStates, archiveGoalState, loadGoalHistory } from './lib/goal-store'
 import { resolveEffectivePermissionMode } from '@profer/shared'
-import type { AgentGoalContract, AgentGoalLimits, AgentGoalState } from '@profer/shared'
+import type { AgentGoalContract, AgentGoalLimitsPatch, AgentGoalState } from '@profer/shared'
 import { getAgentPresetByReference, presetReferenceForId } from './lib/agent-preset-manager'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
@@ -426,14 +426,12 @@ const GOAL_STORE_PATH = () => join(app.getPath('userData'), 'goals.json')
 const goalSessionService = new GoalSessionService({
   getSession: (sessionId) => getAgentSessionMeta(sessionId),
   isSessionActive: isAgentSessionActive,
-  permissionError: (sessionId) => {
+  isPlanMode: (sessionId) => {
     const session = getAgentSessionMeta(sessionId)
     const workspaceSlug = session?.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
     const reference = session?.presetReference ?? presetReferenceForId(workspaceSlug, session?.presetId)
     const preset = getAgentPresetByReference(reference, workspaceSlug)
     return resolveEffectivePermissionMode(preset.permissionMode, session?.permissionMode) === 'plan'
-      ? '当前预设为计划模式，请先切换为可执行模式再启动或恢复 Goal'
-      : undefined
   },
   run: async (input) => {
     const mainWindow = getMainWindow()
@@ -459,6 +457,9 @@ const goalSessionService = new GoalSessionService({
   },
   logError: (error) => { console.error('[goal] 会话状态同步失败', error) },
 })
+
+// 人发起的运行结束后，受阻 / 被中断的 Goal 自动续上（桌面、Pocket、IM 入口共用）。
+onAgentRunComplete((sessionId, initiator) => { void goalSessionService.onRunFinished(sessionId, initiator) })
 
 function restoreGoalStatesOnce(): void {
   try { goalSessionService.restore() } catch (error) { console.error('[goal] 状态恢复失败', error) }
@@ -3862,7 +3863,7 @@ export function registerIpcHandlers(): void {
     assertSensitiveAgentIpcSender(event)
     goalSessionService.clear(sessionId)
   })
-  ipcMain.handle(AGENT_IPC_CHANNELS.UPDATE_GOAL, async (event, sessionId: string, patch: { goal?: string; contract?: AgentGoalContract; limits?: Partial<AgentGoalLimits> }): Promise<AgentGoalState> => {
+  ipcMain.handle(AGENT_IPC_CHANNELS.UPDATE_GOAL, async (event, sessionId: string, patch: { goal?: string; contract?: AgentGoalContract; limits?: AgentGoalLimitsPatch }): Promise<AgentGoalState> => {
     assertSensitiveAgentIpcSender(event)
     if (typeof sessionId !== 'string' || !patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('无效的 Goal 更新参数')
     return goalSessionService.update(sessionId, patch)
@@ -3881,8 +3882,9 @@ export function registerIpcHandlers(): void {
       const goal = goalSessionService.get(sessionId)
       const ownedByGoal = isGoalRunActive(sessionId, goal?.activeRunId)
       const ordinaryStop = ownedByGoal ? Promise.resolve() : stopAgentAndWait(sessionId)
-      const goalStop = goal?.status === 'active' || goal?.status === 'stopping'
-        ? goalSessionService.stop(sessionId)
+      // 中断只暂停 Goal（对齐 Codex），用户再发消息即可续上；真停止走 /goal stop。
+      const goalStop = goal?.status === 'active'
+        ? goalSessionService.pauseForInterrupt(sessionId)
         : Promise.resolve()
       // 点击当刻就请求停止普通 owner；不在另一个 await 后按 sessionId 停掉新运行。
       await Promise.all([ordinaryStop, goalStop])
@@ -4008,6 +4010,8 @@ export function registerIpcHandlers(): void {
         })
       }
       publishAgentSessionProjection(updated)
+      // 计划模式下等待的 Goal 在切换为可执行模式后立即继续。
+      goalSessionService.nudge(sessionId)
       return updated
     }
   )

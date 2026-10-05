@@ -269,8 +269,12 @@ export async function presentVisualization(input: PresentVisualizationInput, con
   const { visualizationId, baseRevision } = input
   if ((visualizationId === undefined) !== (baseRevision === undefined)) throw new Error('更新可视化必须同时提供 visualizationId 和 baseRevision')
   if (visualizationId !== undefined) { checkId(visualizationId); checkRevision(baseRevision) }
-  const html = chart ? '' : await readSource(input.filePath!, context, await sourceRoot(context))
+  let html = chart ? '' : await readSource(input.filePath!, context, await sourceRoot(context))
   if (format === 'fragment') validateFragment(html)
+  // 确保 HTML 内容包含字符编码声明，避免直接访问文件时出现乱码
+  if (html && !html.toLowerCase().includes('charset')) {
+    html = `<meta charset="UTF-8">\n${html}`
+  }
   const id = visualizationId ?? randomUUID()
   // 输入全部校验通过后才创建存储目录，失败的调用不留下空目录。
   const root = await storageRoot(context, true)

@@ -3,7 +3,7 @@ import { getGoalBudgetExhaustedReasons } from './goal-contract'
 
 export const GOAL_LIFECYCLE_LIMIT = 100
 export const GOAL_STATUSES: readonly AgentGoalStatus[] = ['active', 'paused', 'completed', 'blocked', 'failed', 'stopped', 'stopping', 'budget_limited']
-export const GOAL_REASON_CODES: readonly AgentGoalReasonCode[] = ['created', 'resumed', 'user_pause', 'user_stop', 'app_restart', 'blocked', 'failed', 'completed', 'budget_limited', 'cleared', 'superseded', 'unknown']
+export const GOAL_REASON_CODES: readonly AgentGoalReasonCode[] = ['created', 'resumed', 'user_pause', 'user_stop', 'app_restart', 'blocked', 'failed', 'completed', 'budget_limited', 'cleared', 'superseded', 'user_interrupt', 'retry_exhausted', 'run_error', 'unknown']
 const RESUMABLE: readonly AgentGoalStatus[] = ['paused', 'blocked', 'failed', 'stopped', 'budget_limited']
 
 /** 状态层规则；owner 与预算由操作能力和 Controller 准入共同约束。 */
@@ -31,6 +31,13 @@ export function getGoalActions(goal: AgentGoalState) {
     canClear: !running,
     budgetEditRequired,
   }
+}
+
+/** 用户发消息即可自动续上的 Goal：受阻，或被中断 / 重试用尽而暂停。显式暂停与重启暂停需手动恢复。 */
+export function isGoalResumableByMessage(goal: Pick<AgentGoalState, 'status' | 'reasonCode' | 'stopReason'>): boolean {
+  if (goal.status === 'blocked') return true
+  const reason = goal.reasonCode ?? normalizeGoalReason(goal.stopReason)
+  return goal.status === 'paused' && (reason === 'user_interrupt' || reason === 'retry_exhausted')
 }
 
 /** 旧原因字符串保留在 detail 中；不从模型正文猜测 reason。 */
@@ -87,5 +94,6 @@ export function applyGoalTransition(
 export const GOAL_REASON_LABELS: Record<AgentGoalReasonCode, string> = {
   created: '创建目标', resumed: '恢复执行', user_pause: '用户暂停', user_stop: '用户停止',
   app_restart: '应用退出或重启后暂停', blocked: '等待处理', failed: '执行失败', completed: '验收完成',
-  budget_limited: '预算已耗尽', cleared: '清除并归档', superseded: '被新目标替换', unknown: '历史原因',
+  budget_limited: '预算已耗尽', cleared: '清除并归档', superseded: '被新目标替换',
+  user_interrupt: '用户中断，发消息即可继续', retry_exhausted: '自动重试 3 次仍失败', run_error: '运行出错', unknown: '历史原因',
 }

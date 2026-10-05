@@ -24,6 +24,7 @@ function harness(goalOwner = false) {
       pause: async () => { calls.push('pause'); return state },
       resume: async () => { calls.push('resume'); return state },
       stop: async () => { calls.push('goal-stop'); return state },
+      pauseForInterrupt: async () => { calls.push('goal-interrupt'); return state },
       clear: () => { calls.push('clear') },
       update: () => { calls.push('update'); return state },
       history: () => { calls.push('history'); return [state] },
@@ -47,15 +48,15 @@ describe('Goal IPC 控制路由', () => {
     await h.invoke(AGENT_IPC_CHANNELS.GET_GOAL_HISTORY, 's')
     expect(h.calls).toEqual(['guard', 'update', 'guard', 'history'])
   })
-  test('普通 Stop 在 Goal owner 时只停止明确目标，不在 await 后误停新 owner', async () => {
+  test('普通 Stop 在 Goal owner 时只中断（暂停）明确目标，不在 await 后误停新 owner', async () => {
     const h = harness(true)
     await h.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, 's')
-    expect(h.calls).toEqual(['guard', 'mirror-stop', 'goal-stop'])
+    expect(h.calls).toEqual(['guard', 'mirror-stop', 'goal-interrupt'])
   })
-  test('等待中的 Goal 和当前普通运行都接受用户 Stop', async () => {
+  test('等待中的 Goal 和当前普通运行都接受用户 Stop；Goal 只暂停不终止', async () => {
     const h = harness(false)
     await h.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, 's')
-    expect(h.calls).toEqual(['guard', 'mirror-stop', 'ordinary-stop', 'goal-stop'])
+    expect(h.calls).toEqual(['guard', 'mirror-stop', 'ordinary-stop', 'goal-interrupt'])
   })
   test('非法 start/update/history 不调用服务', async () => {
     const h = harness()

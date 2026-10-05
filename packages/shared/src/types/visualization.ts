@@ -83,7 +83,14 @@ export const VISUALIZATION_LIMITS = {
   maxHtmlBytes: 512 * 1024,
   maxObjects: 200,
   maxStateBytes: 16 * 1024,
-  maxActiveInstances: 2,
+  /**
+   * 同时存活的会话内可视化实例数。
+   * 2 太小：来回滚动时会不断换手 → 正在看的/刚看过的那块会被卸载、滚回来再从零重建
+   * （新文档 + bridge 求值 + 状态恢复，实测每次 ~25ms，且片段内部状态归零）。
+   */
+  maxActiveInstances: 4,
+  /** 渲染侧的内容缓存条数（内容寻址且不可变，缓存命中可跳过 IPC 往返） */
+  maxCachedContents: 8,
   maxResultsPerSession: 128,
   maxSessionStorageBytes: 64 * 1024 * 1024,
   maxCachedSessions: 24,

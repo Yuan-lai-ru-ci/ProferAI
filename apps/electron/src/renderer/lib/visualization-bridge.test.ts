@@ -125,6 +125,7 @@ describe('visualization bridge', () => {
       },
       queueMicrotask: (handler: () => void) => handler(),
       setTimeout: (handler: () => void) => { timers.push(handler); return timers.length },
+      clearTimeout: () => {},
       requestAnimationFrame: (handler: () => void) => { frames.push(handler); return frames.length },
     }
     const fakeDocument = {
@@ -135,7 +136,7 @@ describe('visualization bridge', () => {
         documentListeners.set(name, [...(documentListeners.get(name) ?? []), handler])
       },
     }
-    const context = createContext({ window: fakeWindow, document: fakeDocument, TextEncoder, ResizeObserver: class { observe() {} }, MutationObserver: class { observe() {} }, CustomEvent: class {
+    const context = createContext({ window: fakeWindow, document: fakeDocument, TextEncoder, performance: { now: () => 0 }, ResizeObserver: class { observe() {} }, MutationObserver: class { observe() {} }, CustomEvent: class {
       constructor(public type: string, public detailOptions: { detail: unknown }) {}
       get detail() { return this.detailOptions.detail }
     } })
@@ -176,9 +177,14 @@ describe('visualization bridge', () => {
     const selected = posted.at(-1)
     expect(selected?.label).toBeUndefined()
     expect(selected?.text).toBeUndefined()
-    sendParent(message('theme', { theme: { '--background': '0 0% 7%', '--evil': 'url(https://evil)' } }))
+    sendParent(message('theme', { theme: { '--background': '0 0% 7%', '--radius': '0.5rem', '--evil': 'url(https://evil)' }, fontFamily: 'Inter' }))
     expect(style.get('--background')).toBe('0 0% 7%')
+    // 长度值与字体族也要落地：皮肤可以同时改圆角与字体栈
+    expect(style.get('--radius')).toBe('0.5rem')
+    expect(style.get('--profer-font-family')).toBe('Inter')
     expect(style.has('--evil')).toBe(false)
+    sendParent(message('theme', { theme: { '--background': 'red; background:url(http://evil)' } }))
+    expect(style.get('--background')).toBe('0 0% 7%')
     let blocked = 0
     for (const handler of documentListeners.get('submit') ?? []) handler({ preventDefault: () => blocked++ })
     for (const handler of documentListeners.get('click') ?? []) handler({ target: { closest: (selector: string) => selector === 'a' ? {} : null }, preventDefault: () => blocked++ })
@@ -196,14 +202,17 @@ describe('visualization bridge', () => {
     for (let index = 0; index < 20; index++) {
       for (const handler of documentListeners.get('wheel') ?? []) handler(wheelEvent)
     }
-    expect(posted).toHaveLength(beforeWheel)
+    // 混合滚动策略：监听是 passive 的，片段不 preventDefault（内部滚动交给浏览器合成器），
+    // 未被子滚动区消费的增量按 rAF 聚合后转交宿主。转发链路不要删：
+    // 2026-10-05 滚动卡住调查已排除「iframe 吞滚轮」，根因在宿主的阅读锚点回写（见
+    // workspace-files/.context/2026-10-05-visualization-wheel-scroll-stuck-investigation.md）。
+    expect(blockedWheel).toBe(0)
     expect(frames).toHaveLength(1)
-    expect(blockedWheel).toBe(20)
     frames.shift()?.()
     const wheelMessages = posted.filter((item) => item.type === 'wheel')
     expect(wheelMessages).toHaveLength(1)
-    expect(wheelMessages[0]?.deltaX).toBe(640)
-    expect(wheelMessages[0]?.deltaY).toBe(960)
+    expect(wheelMessages[0]).toMatchObject({ deltaX: 40, deltaY: 60 })
+    expect(posted).toHaveLength(beforeWheel + 1)
     const beforeError = posted.length
     api.setState(runInContext('({ big: "你".repeat(6000) })', context) as Record<string, unknown>)
     expect(posted).toHaveLength(beforeError + 1)
@@ -211,7 +220,61 @@ describe('visualization bridge', () => {
     expect(api.getState().tab).toBe('data')
   })
 
+  test('CSP/网络失败按非致命 notice 处理，报错时带上当前高度', () => {
+    const srcDoc = buildVisualizationSrcDoc(content, identity)
+    const script = srcDoc.match(/<script>([\s\S]*?)<\/script>/)?.[1]
+    const posted: Array<Record<string, unknown>> = []
+    const windowListeners = new Map<string, Array<(event: Record<string, unknown>) => void>>()
+    const fakeWindow = {
+      parent: { postMessage: (value: Record<string, unknown>) => posted.push(value) },
+      innerHeight: 500,
+      addEventListener: (name: string, handler: (event: Record<string, unknown>) => void) => {
+        windowListeners.set(name, [...(windowListeners.get(name) ?? []), handler])
+      },
+      queueMicrotask: (handler: () => void) => handler(),
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      requestAnimationFrame: () => 0,
+      getComputedStyle: () => ({ overflowY: 'visible' }),
+    }
+    const listeners = new Map<string, Array<(event: Record<string, unknown>) => void>>()
+    const fakeDocument = {
+      body: { getBoundingClientRect: () => ({ height: 900 }), scrollHeight: 900 },
+      querySelectorAll: () => [],
+      documentElement: { style: { setProperty: () => {} } },
+      addEventListener: (name: string, handler: (event: Record<string, unknown>) => void) => {
+        listeners.set(name, [...(listeners.get(name) ?? []), handler])
+      },
+    }
+    const context = createContext({
+      window: fakeWindow, document: fakeDocument, TextEncoder, performance: { now: () => 0 },
+      HTMLElement: class {}, ResizeObserver: class { observe() {} }, MutationObserver: class { observe() {} },
+      CustomEvent: class { constructor(public type: string) {} },
+    })
+    runInContext(script ?? '', context)
+    // 被 CSP 挡住的 fetch → unhandledrejection：非致命，不进 UI
+    for (const handler of windowListeners.get('unhandledrejection') ?? []) {
+      handler({ reason: new Error('Failed to fetch') })
+    }
+    expect(posted.filter((item) => item.type === 'notice').map((item) => item.message)).toEqual(['Failed to fetch'])
+    expect(posted.some((item) => item.type === 'error')).toBe(false)
+    // 同一句只报一次
+    for (const handler of windowListeners.get('unhandledrejection') ?? []) handler({ reason: new Error('Failed to fetch') })
+    expect(posted.filter((item) => item.type === 'notice')).toHaveLength(1)
+    // 外链资源失败（error 事件没有 message）也是 notice
+    for (const handler of windowListeners.get('error') ?? []) handler({ message: undefined })
+    expect(posted.filter((item) => item.type === 'notice')).toHaveLength(2)
+    expect(posted.some((item) => item.type === 'error')).toBe(false)
+    // 真正的片段错误仍是 error，但要带上当前高度（容器不该因为出错就塔掉）
+    for (const handler of windowListeners.get('error') ?? []) handler({ message: 'Uncaught TypeError: x is not a function' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', message: 'Uncaught TypeError: x is not a function', height: 900 })
+  })
+
   test('passes only bounded theme tokens', () => {
     expect(normalizeVisualizationTheme({ '--background': '0 0% 100%', '--evil': 'url(https://evil)' })).toEqual({ '--background': '0 0% 100%' })
+    // 几何 token 是长度值，不能被当成非法颜色丢掉
+    expect(normalizeVisualizationTheme({ '--radius': '0.625rem' })).toEqual({ '--radius': '0.625rem' })
+    expect(isVisualizationBridgeMessage(message('theme', { theme: { '--radius': '0.625rem' }, fontFamily: 'Inter' }))).toBe(true)
+    expect(isVisualizationBridgeMessage(message('theme', { theme: { '--radius': '0.625rem' }, fontFamily: 'x'.repeat(600) }))).toBe(false)
   })
 })

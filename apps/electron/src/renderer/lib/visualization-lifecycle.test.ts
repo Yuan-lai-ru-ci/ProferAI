@@ -1,6 +1,6 @@
 import { mergeVisualizations, updateVisualizationSessionCache } from '../atoms/visualization-atoms'
 import { describe, expect, test } from 'bun:test'
-import { chooseVisualizationInstances } from './visualization-lifecycle'
+import { ACTIVATION_GRACE_MS, chooseVisualizationInstances, resolveCandidateFocus } from './visualization-lifecycle'
 import { visualizationsForTurn } from './visualization-projection'
 import { applyRenderWindow } from '../components/agent/render-window'
 import { buildQuotedSelectionBlock, parseQuotedSelectionRefs } from './quoted-selection'
@@ -17,10 +17,50 @@ describe('会话内可视结果生命周期', () => {
     expect(cache.has('s0')).toBe(false)
     expect(cache.has('s29')).toBe(true)
   })
-  test('历史展开时活动预算保持两份，焦点结果优先于距离', () => {
-    const candidates = Array.from({ length: 50 }, (_, index) => ({ id: `v${index}`, distance: index, focused: index === 49 }))
-    expect([...chooseVisualizationInstances(candidates)]).toEqual(['v49', 'v0'])
-    expect(chooseVisualizationInstances([]).size).toBe(0)
+  test('按 limit 取前 N，焦点结果优先于距离', () => {
+    const candidates = Array.from({ length: 50 }, (_, index) => ({ id: `v${index}`, distance: index, focused: index === 49, live: false }))
+    expect([...chooseVisualizationInstances(candidates, 2)]).toEqual(['v49', 'v0'])
+    expect(chooseVisualizationInstances([], 2).size).toBe(0)
+  })
+  test('滚动时正在渲染的实例不被刚滑进来的邻居抢走名额', () => {
+    // 旧规则：距离 0 的新邻居会把距离 64 的当前实例挤出名额 → 当前实例中途变回占位。
+    const scrolled = [
+      { id: 'current', distance: 64, focused: false, live: true },
+      { id: 'newcomer', distance: 0, focused: false, live: false },
+      { id: 'far', distance: 4096, focused: false, live: true },
+    ]
+    expect([...chooseVisualizationInstances(scrolled, 2)]).toEqual(['current', 'newcomer'])
+  })
+  test('惯性不是锁死：滑远之后照常被换下', () => {
+    const scrolled = [
+      { id: 'current', distance: 2048, focused: false, live: true },
+      { id: 'newcomer', distance: 0, focused: false, live: false },
+    ]
+    expect([...chooseVisualizationInstances(scrolled, 2)]).toEqual(['newcomer', 'current'])
+    const crowded = [
+      ...scrolled,
+      { id: 'closer', distance: 64, focused: false, live: false },
+    ]
+    expect([...chooseVisualizationInstances(crowded, 2)]).toEqual(['newcomer', 'closer'])
+  })
+  test('指针停在片段上滚动时，可见且已渲染的实例不会被十几个非可见邻居挤掉名额', () => {
+    // 真实现场：一个会话里 17 个可视化、只有 4 个名额。滚动时距离每跨一个桶就重排，
+    // 旧规则会把指针正下方那个 iframe 换掉；Chromium 已 latch 到它上面的滚轮手势剩余部分
+    // 会被整段丢弃 —— 「滚轮上下都不动，动一下鼠标才好」，而渲染主线程一直活着。
+    const underPointer = { id: 'under-pointer', distance: 320, focused: false, live: true }
+    const neighbors = Array.from({ length: 13 }, (_, index) => ({ id: `neighbor-${index}`, distance: 0, focused: false, live: false }))
+    const chosen = chooseVisualizationInstances([underPointer, ...neighbors], 4)
+    expect(chosen.has('under-pointer')).toBe(true)
+    expect(chosen.size).toBe(4) // 预算仍然硬约束
+  })
+
+  test('正在操作的实例（focused）压过惯性', () => {
+    const candidates = [
+      { id: 'live', distance: 0, focused: false, live: true },
+      { id: 'touched', distance: 2048, focused: true, live: false },
+      { id: 'other', distance: 64, focused: false, live: false },
+    ]
+    expect([...chooseVisualizationInstances(candidates, 2)]).toEqual(['touched', 'live'])
   })
   test('独立可视化回复段参与窗口裁剪，折叠项不丢身份或记录', () => {
     const result = applyRenderWindow([
@@ -53,5 +93,20 @@ describe('会话内可视结果生命周期', () => {
     expect(block).toContain('object_id="a"')
     expect(block).toContain('</quoted_context_>')
     expect(parseQuotedSelectionRefs(block).quotes[0]?.sourceType).toBe('visualization')
+  })
+})
+
+describe('「激活交互」的意图不能被同一次 publish 撤销', () => {
+  test('宽限期内即使 DOM focus 已经掉回 body（占位按钮被替换掉）也算正在操作', () => {
+    const now = 10_000
+    expect(resolveCandidateFocus({ activationAt: now - 80, domFocused: false, now })).toBe(true)
+    expect(resolveCandidateFocus({ activationAt: now - ACTIVATION_GRACE_MS + 1, domFocused: false, now })).toBe(true)
+  })
+
+  test('宽限期过后恢复成按 DOM focus 判定，不形成永久占用名额', () => {
+    const now = 10_000
+    expect(resolveCandidateFocus({ activationAt: now - ACTIVATION_GRACE_MS, domFocused: false, now })).toBe(false)
+    expect(resolveCandidateFocus({ activationAt: 0, domFocused: false, now })).toBe(false)
+    expect(resolveCandidateFocus({ activationAt: now - ACTIVATION_GRACE_MS, domFocused: true, now })).toBe(true)
   })
 })

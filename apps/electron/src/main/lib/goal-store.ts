@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { capGoalLifecycle, GOAL_REASON_CODES, GOAL_STATUSES, isGoalTransitionAllowed, normalizeGoalReason } from '@profer/shared'
+import { capGoalLifecycle, GOAL_REASON_CODES, GOAL_STATUSES, isGoalTransitionAllowed, isValidGoalLimits, normalizeGoalReason } from '@profer/shared'
 import type { AgentGoalState, AgentGoalStatus, AgentGoalReasonCode, AgentGoalIterationRecord, AgentGoalUsage } from '@profer/shared'
 import { GOAL_HISTORY_LIMIT } from './goal-loop'
 
@@ -14,7 +14,6 @@ interface GoalStorePayload { version: number; goals: unknown[]; history?: unknow
 
 function nonNegativeInteger(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 }
 function validTimestamp(value: unknown): value is number { return nonNegativeInteger(value) && value <= 8_640_000_000_000_000 }
-function positiveNumber(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) && value > 0 }
 function record(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === 'object' && !Array.isArray(value)) }
 function nonEmptyString(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0 }
 function evidence(value: unknown): value is string[] { return Array.isArray(value) && value.every((item) => typeof item === 'string') }
@@ -58,8 +57,9 @@ function isGoalState(value: unknown): value is AgentGoalState {
   if (!nonEmptyString(value.id) || !nonEmptyString(value.sessionId) || !nonEmptyString(value.goal) || !validStatus(value.status)) return false
   if (!nonNegativeInteger(value.iteration) || !nonNegativeInteger(value.consecutiveFailures) || !nonNegativeInteger(value.startedAt) || !nonNegativeInteger(value.updatedAt)) return false
   const limits = value.limits
-  if (!record(limits) || !nonNegativeInteger(limits.maxIterations) || limits.maxIterations === 0 || !nonNegativeInteger(limits.maxConsecutiveFailures) || limits.maxConsecutiveFailures === 0 || !positiveNumber(limits.maxDurationMs)) return false
-  if (limits.maxTokens !== undefined && (!nonNegativeInteger(limits.maxTokens) || limits.maxTokens === 0)) return false
+  if (!isValidGoalLimits(limits)) return false
+  if (value.waiting !== undefined && value.waiting !== 'plan_mode') return false
+  if (value.retry !== undefined && (!record(value.retry) || !nonNegativeInteger(value.retry.attempt) || !nonNegativeInteger(value.retry.nextAt) || typeof value.retry.error !== 'string')) return false
   if (value.revision !== undefined && !nonNegativeInteger(value.revision)) return false
   if (value.lifecycle !== undefined && !validLifecycle(value.lifecycle, value.id, value.sessionId, value.revision ?? 1)) return false
   if (value.reasonCode !== undefined && !validReason(value.reasonCode)) return false

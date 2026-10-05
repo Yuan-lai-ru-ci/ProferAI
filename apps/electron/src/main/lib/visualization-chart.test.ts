@@ -17,10 +17,20 @@ describe('宿主图表双路径', () => {
     expect(() => validateChart({ ...bar, chartType: 'pie', nameKey: 'name', valueKey: 'value', data: [{ name: 'A', value: 1 }, { name: 'A', value: 2 }] })).toThrow('分类')
     expect(() => validateChart({ ...bar, chartType: 'pie', nameKey: 'name', valueKey: 'value' })).toThrow()
   })
-  test('严格片段接受局部JS，拒绝网页外壳和内联事件', () => {
+  test('严格片段接受局部JS，拒绝不完整HTML和内联事件，但允许带charset的完整HTML', () => {
+    // 接受纯片段
     validateFragment('<div id="widget"><button class="btn">切换</button></div><script>document.querySelector("button").addEventListener("click",()=>{});</script>')
-    expect(() => validateFragment('<html><body>page</body></html>')).toThrow('页面外壳')
+    // 接受带 charset 的完整 HTML
+    validateFragment('<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body><div id="widget">内容</div></body></html>')
+    validateFragment('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>标题</title></head><body><div id="widget">中文内容</div></body></html>')
+    // 拒绝不完整的 HTML 结构（只有部分标签）
+    expect(() => validateFragment('<html><body>page</body></html>')).toThrow('完整文档')
+    expect(() => validateFragment('<head><meta charset="UTF-8"></head><div id="widget">内容</div>')).toThrow('完整文档')
+    expect(() => validateFragment('<!DOCTYPE html><html><body><div id="widget">缺少head和charset</div></body></html>')).toThrow('charset')
+    // 拒绝内联事件
     expect(() => validateFragment('<button onclick="alert(1)">Click</button>')).toThrow('内联事件')
+    // 拒绝 <main> 标签
+    expect(() => validateFragment('<main id="widget">内容</main>')).toThrow('main')
   })
   test('无源文件发布图表，CAS更新可读旧版本，导出包含SVG且转义数据', async () => {
     const base = await mkdtemp(join(tmpdir(), 'profer-native-chart-'))

@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@profer/shared'
 import { usePlanQuota } from '@/hooks/use-plan-quota'
+import { formatTokens } from '@/lib/format-tokens'
 
 /** 不支持 Plan 额度时主进程返回的统一消息，renderer 端用于判断应不展示额度区 */
 const UNSUPPORTED_PLAN_QUOTA_MESSAGE = '当前渠道不支持订阅 Plan 额度查询'
@@ -54,17 +55,6 @@ interface ContextUsageBadgeProps {
   sessionId?: string
   /** Agent Composer 传入时，使用统一触发器的 hover/focus/尺寸外壳。 */
   composerTool?: boolean
-}
-
-/** 格式化 token 数为可读字符串（如 1234 → "1.2k"） */
-function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) {
-    return `${(tokens / 1_000_000).toFixed(1)}M`
-  }
-  if (tokens >= 1_000) {
-    return `${(tokens / 1_000).toFixed(1)}k`
-  }
-  return `${tokens}`
 }
 
 /** 圆环进度指示器 — 16×16 SVG，描边 2px */

@@ -1,19 +1,22 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { AgentGoalContract, AgentGoalIterationResult, AgentGoalLimits, AgentGoalState, AgentGoalUsage, AgentSendInput, SDKMessage } from '@profer/shared'
+import { isGoalResumableByMessage, isGoalUpdateToolName } from '@profer/shared'
+import type { AgentGoalContract, AgentGoalIterationResult, AgentGoalLimitsPatch, AgentGoalState, AgentGoalUsage, AgentRunInitiator, AgentSendInput, SDKMessage } from '@profer/shared'
+import { extractApiError, isAutoRetryableCatchError } from './agent-retry-utils'
 import { GoalController } from './goal-controller'
 import { buildGoalIterationPrompt } from './goal-loop'
 import { normalizeGoalToolResult } from './goal-tools'
 import { validateGoalUpdatePatch } from './goal-update-validation'
 
 type GoalSession = Partial<Pick<AgentSendInput, 'channelId' | 'modelId' | 'workspaceId' | 'agentRuntime'>> & { title?: string; permissionMode?: AgentSendInput['permissionModeOverride'] }
-type GoalPatch = { goal?: string; contract?: AgentGoalContract; limits?: Partial<AgentGoalLimits> }
+type GoalPatch = { goal?: string; contract?: AgentGoalContract; limits?: AgentGoalLimitsPatch }
 
 type Dependencies = {
   getSession: (sessionId: string) => GoalSession | undefined
   run: (input: AgentSendInput) => Promise<void>
   isSessionActive: (sessionId: string) => boolean
   stopRun: (sessionId: string, runId: string) => Promise<void>
-  permissionError: (sessionId: string) => string | undefined
+  /** 计划模式下 Goal 保持 active 但等待，切换为可执行模式后自动继续。 */
+  isPlanMode: (sessionId: string) => boolean
   readStates: () => AgentGoalState[]
   saveStates: (states: AgentGoalState[]) => void
   archive: (state: AgentGoalState) => void
@@ -42,6 +45,47 @@ export function collectGoalRunUsage(messages: SDKMessage[]): AgentGoalUsage | un
   return undefined
 }
 
+export type GoalTurnProgress = 'progress' | 'empty' | 'all_tools_failed'
+
+type ContentBlock = { type?: string; text?: string; name?: string; is_error?: boolean }
+
+function contentBlocks(message: SDKMessage): ContentBlock[] {
+  const content = (message as { message?: { content?: unknown } }).message?.content
+  return Array.isArray(content) ? content as ContentBlock[] : []
+}
+
+/**
+ * 依据本轮真实 runtime 消息判断有无进展（对齐 Codex 的空回复 / exec 全失败判定）。
+ * Goal 内部 update_goal 工具不算工作进展。
+ */
+export function assessGoalTurnProgress(messages: SDKMessage[]): GoalTurnProgress {
+  let hasText = false
+  let toolCalls = 0
+  let toolResults = 0
+  let failedResults = 0
+  for (const message of messages) {
+    for (const block of contentBlocks(message)) {
+      if (message.type === 'assistant' && block.type === 'text' && block.text?.trim()) hasText = true
+      if (message.type === 'assistant' && block.type === 'tool_use' && !isGoalUpdateToolName(block.name)) toolCalls++
+      if (message.type === 'user' && block.type === 'tool_result') {
+        toolResults++
+        if (block.is_error) failedResults++
+      }
+    }
+  }
+  if (toolCalls === 0) return hasText ? 'progress' : 'empty'
+  return toolResults > 0 && failedResults === toolResults ? 'all_tools_failed' : 'progress'
+}
+
+/** orchestrator 短重试预算（约 5 分钟）用尽后仍可能在分钟级恢复的限额类错误，交给 Goal 的长退避。 */
+const RATE_OR_USAGE_LIMIT_PATTERN = /rate.?limit|usage.?limit/i
+
+/** 运行级错误分类：沿用 orchestrator 自动重试判定（429 / 5xx / 网络抖动 / 上游繁忙）并补充限额类；其余直接暂停。 */
+export function classifyGoalRunError(error: string | undefined): 'retryable' | 'fatal' {
+  if (!error) return 'retryable'
+  return isAutoRetryableCatchError(extractApiError(error), error) || RATE_OR_USAGE_LIMIT_PATTERN.test(error) ? 'retryable' : 'fatal'
+}
+
 function resultKey(state: AgentGoalState): string {
   return state.lifecycle?.at(-1)?.id ?? `goal:${state.id}:${state.iteration}:${state.status}`
 }
@@ -63,11 +107,10 @@ export class GoalSessionService {
   constructor(private readonly deps: Dependencies) {
     this.controller = new GoalController({
       canRun: (sessionId) => !deps.isSessionActive(sessionId),
+      waitingReason: (sessionId) => deps.isPlanMode(sessionId) ? 'plan_mode' : undefined,
       runTurn: async ({ sessionId, state, previousSummary, runId }) => {
         const session = deps.getSession(sessionId)
         if (!session?.channelId) throw new Error('Goal 会话缺少渠道配置')
-        const permissionError = deps.permissionError(sessionId)
-        if (permissionError) return { status: 'blocked', summary: permissionError, evidence: [] }
         let report: AgentGoalIterationResult | undefined
         let outcome: { status: 'completed' | 'failed' | 'stopped'; error?: string } | undefined
         const messages: SDKMessage[] = []
@@ -78,8 +121,8 @@ export class GoalSessionService {
             channelId: session.channelId,
             permissionModeOverride: session.permissionMode,
             userMessage: state.goal,
+            // 持久化的 user 消息带 _goalIteration 标记，只渲染为轮次分隔条；runtime 只收 internalPrompt。
             internalPrompt: buildGoalIterationPrompt(state, { previousSummary }),
-            suppressUserMessagePersistence: true,
             triggeredBy: 'goal',
             goalIteration: state.iteration,
             goalRunId: runId,
@@ -97,10 +140,14 @@ export class GoalSessionService {
         }
         const usage = collectGoalRunUsage(messages)
         if (outcome?.status === 'stopped') return { status: 'continue', summary: '用户已停止 Goal', evidence: [], outcome: 'stopped', usage }
-        if (outcome?.status === 'failed') return { status: 'continue', summary: outcome.error || 'Goal 本轮执行失败', error: outcome.error, evidence: [], outcome: 'failed', usage }
-        if (!outcome) return { status: 'continue', summary: '运行没有产生终态，不能采信完成报告', evidence: [], outcome: 'failed', usage }
-        if (!report) return { status: 'continue', summary: '本轮未提交有效的 update_goal 报告，不能判定完成', evidence: [], outcome: 'failed', usage }
-        return { ...report, usage, outcome: report.outcome ?? 'success' }
+        if (outcome?.status === 'failed') return { status: 'continue', summary: outcome.error || 'Goal 本轮执行失败', error: outcome.error, errorKind: classifyGoalRunError(outcome.error), evidence: [], outcome: 'failed', usage }
+        if (!outcome) return { status: 'continue', summary: '运行没有产生终态', error: '运行没有产生终态', errorKind: 'retryable', evidence: [], outcome: 'failed', usage }
+        if (report) return { ...report, usage, outcome: report.outcome ?? 'success' }
+        // 未汇报不是失败：有真实进展就自动续跑，只有空回复 / 工具全部失败才计入无进展。
+        const progress = assessGoalTurnProgress(messages)
+        if (progress === 'progress') return { status: 'continue', summary: '本轮已推进，未提交汇报', evidence: [], outcome: 'success', usage }
+        const summary = progress === 'empty' ? '本轮没有任何输出或工具调用' : '本轮工具调用全部失败'
+        return { status: 'continue', summary, error: summary, evidence: [], outcome: 'failed', usage }
       },
       stopTurn: (sessionId, runId) => runId ? deps.stopRun(sessionId, runId) : Promise.resolve(),
       onStateChange: (state) => this.onStateChange(state),
@@ -128,8 +175,6 @@ export class GoalSessionService {
   async start(sessionId: string, goal: string, contract?: AgentGoalContract): Promise<AgentGoalState> {
     if (!goal.trim()) throw new Error('Goal 不能为空')
     if (!this.deps.getSession(sessionId)?.channelId) throw new Error('Goal 会话缺少渠道配置')
-    const permissionError = this.deps.permissionError(sessionId)
-    if (permissionError) throw new Error(permissionError)
     const existing = this.get(sessionId)
     if (existing && existing.status !== 'completed') throw new Error('当前会话有未完成的 Goal，请先恢复或明确清除它')
     if (existing) this.archive(existing)
@@ -144,12 +189,25 @@ export class GoalSessionService {
   }
 
   async pause(sessionId: string): Promise<AgentGoalState> { return this.controller.pause(sessionId) }
-  async resume(sessionId: string): Promise<AgentGoalState> {
-    const permissionError = this.deps.permissionError(sessionId)
-    if (permissionError) throw new Error(permissionError)
-    return this.controller.resume(sessionId)
-  }
+  async resume(sessionId: string): Promise<AgentGoalState> { return this.controller.resume(sessionId) }
   async stop(sessionId: string): Promise<AgentGoalState> { return this.controller.stop(sessionId) }
+  /** 普通停止按钮打断 Goal 轮次：只暂停，发消息即可续上。 */
+  async pauseForInterrupt(sessionId: string): Promise<AgentGoalState> { return this.controller.pauseForInterrupt(sessionId) }
+
+  /**
+   * 人发起的运行（桌面、Pocket、飞书等 IM）结束后：受阻或被中断的 Goal 自动续上，
+   * 由 Controller 的空闲等待接着跑（对齐 Codex 空闲续跑 / Claude Code 发消息继续）。
+   */
+  async onRunFinished(sessionId: string, initiator: AgentRunInitiator | undefined): Promise<void> {
+    if (initiator !== 'user' && initiator !== 'external') return
+    const goal = this.get(sessionId)
+    if (!goal || goal.activeRunId || !isGoalResumableByMessage(goal)) return
+    try { await this.controller.resume(sessionId) } catch (error) { this.deps.logError(error) }
+  }
+
+  /** 权限模式等外部条件变化后立即唤醒等待中的 Goal。 */
+  nudge(sessionId: string): void { this.controller.nudge(sessionId) }
+
   update(sessionId: string, input: GoalPatch): AgentGoalState {
     const patch = validateGoalUpdatePatch(input)
     const state = this.controller.update(sessionId, patch)

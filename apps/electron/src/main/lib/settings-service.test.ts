@@ -184,6 +184,35 @@ describe('设置服务命名收敛兼容（Tablet* → Pocket*）', () => {
 })
 
 /**
+ * 侧栏积分条显隐设置：默认显示，关闭后持久化并在重读时保持关闭。
+ */
+describe('侧栏积分条显隐设置', () => {
+  test('Given 旧 settings.json 无该键 When 读取 Then 默认显示积分条', () => {
+    writeSettingsFile(process.env.PROFER_CONFIG_DIR!, {})
+
+    expect(getSettings().showCreditsInSidebar).toBe(true)
+  })
+
+  test('Given 关闭积分条 When 更新设置 Then 立即落盘并保持关闭', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+
+    updateSettings({ showCreditsInSidebar: false })
+
+    expect(getSettings().showCreditsInSidebar).toBe(false)
+    expect(readSettingsFile(configDir).showCreditsInSidebar).toBe(false)
+  })
+
+  test('Given 积分条已关闭 When 清缓存重读 Then 仍保持关闭', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+    writeSettingsFile(configDir, { showCreditsInSidebar: false })
+
+    clearSettingsCache()
+
+    expect(getSettings().showCreditsInSidebar).toBe(false)
+  })
+})
+
+/**
  * 「手动确认已读」开关的配置层（`design.md` §4.1 / §10 单测第 7 组）。
  *
  * 口径：默认关闭；旧 `settings.json` 无该键时归一为 `false`；开关落盘后主进程读到的

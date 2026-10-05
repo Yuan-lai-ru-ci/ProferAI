@@ -9,6 +9,7 @@ import {
   resolveVisualizationQuote,
   serializeVisualizationState,
 } from '@/lib/visualization-bridge'
+import { useVisualizationHostTheme } from '@/hooks/useVisualizationHostTheme'
 
 export interface VisualizationHostProps {
   content: VisualizationContent
@@ -36,6 +37,8 @@ export function VisualizationHost(props: VisualizationHostProps) {
     generation: createVisualizationToken(),
     revision: content.record.revision,
   }), [content.record.id, content.record.revision, content.html])
+  // 主题（含皮肤）统一走宿主主题通道：皮肤 CSS 异步落地后由通道补发，不再各自挂 MutationObserver。
+  const hostTheme = useVisualizationHostTheme()
   const documentResult = useMemo(() => {
     try {
       return { html: buildVisualizationSrcDoc(content, { ...instance, theme: readVisualizationThemeTokens(), fontFamily: getComputedStyle(document.documentElement).fontFamily }), error: null }
@@ -120,13 +123,8 @@ export function VisualizationHost(props: VisualizationHostProps) {
   }, [instance, state])
 
   useEffect(() => {
-    const publishTheme = () => {
-      iframeRef.current?.contentWindow?.postMessage({ ...instance, type: 'theme', theme: readVisualizationThemeTokens() }, '*')
-    }
-    const observer = new MutationObserver(publishTheme)
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
-    return () => observer.disconnect()
-  }, [instance])
+    iframeRef.current?.contentWindow?.postMessage({ ...instance, type: 'theme', theme: { ...hostTheme.tokens }, fontFamily: hostTheme.fontFamily }, '*')
+  }, [instance, hostTheme])
 
   if (documentResult.error) return null
   return (

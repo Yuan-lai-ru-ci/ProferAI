@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AgentGoalState } from '../types/agent'
-import { applyGoalTransition, capGoalLifecycle, createGoalLifecycleEvent, getGoalActions, GOAL_LIFECYCLE_LIMIT, GOAL_STATUSES, isGoalTransitionAllowed, normalizeGoalReason } from './goal-lifecycle'
+import { applyGoalTransition, capGoalLifecycle, createGoalLifecycleEvent, getGoalActions, GOAL_LIFECYCLE_LIMIT, GOAL_STATUSES, isGoalResumableByMessage, isGoalTransitionAllowed, normalizeGoalReason } from './goal-lifecycle'
 
 const goal = (patch: Partial<AgentGoalState> = {}): AgentGoalState => ({
   id: 'g', sessionId: 's', goal: '目标', status: 'active', revision: 1, iteration: 0,
@@ -51,6 +51,7 @@ describe('Goal 共享生命周期契约', () => {
     expect(resumed).toMatchObject({ reasonCode: 'resumed', stopReason: undefined, updatedAt: 200 })
     expect(normalizeGoalReason('任意旧原因')).toBe('unknown')
     expect(normalizeGoalReason('需要输入', 'blocked')).toBe('blocked')
+    for (const code of ['user_interrupt', 'retry_exhausted', 'run_error'] as const) expect(normalizeGoalReason(code)).toBe(code)
     expect(() => applyGoalTransition(goal({ status: 'completed' }), 'active', { at: 200 })).toThrow('非法')
   })
 
@@ -69,5 +70,13 @@ describe('Goal 共享生命周期契约', () => {
     expect(capped[0]).toBe(events[0])
     expect(capped[1]).toBe(events[1])
     expect(capped.at(-1)).toBe(events.at(-1))
+  })
+
+  test('发消息可续上：受阻、用户中断、重试用尽；显式暂停、重启暂停与运行出错不行', () => {
+    expect(isGoalResumableByMessage(goal({ status: 'blocked' }))).toBe(true)
+    expect(isGoalResumableByMessage(goal({ status: 'paused', reasonCode: 'user_interrupt' }))).toBe(true)
+    expect(isGoalResumableByMessage(goal({ status: 'paused', reasonCode: 'retry_exhausted' }))).toBe(true)
+    for (const reasonCode of ['user_pause', 'app_restart', 'run_error'] as const) expect(isGoalResumableByMessage(goal({ status: 'paused', reasonCode }))).toBe(false)
+    expect(isGoalResumableByMessage(goal({ status: 'failed' }))).toBe(false)
   })
 })

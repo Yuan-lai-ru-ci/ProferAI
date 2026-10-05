@@ -166,7 +166,28 @@ function validateCss(css: string): void {
 }
 
 export function validateFragment(html: string): void {
-  if (/<\s*!doctype\b|<\s*\/?\s*(?:html|head|body|main)\b/i.test(html)) throw new Error('可视化片段不能包含完整页面外壳；只写内容片段')
+  // 允许两种形式：
+  // 1. 纯片段（不含 doctype/html/head/body）
+  // 2. 完整 HTML 文档（包含 doctype/html/head/body，且必须有 <meta charset="UTF-8">）
+  const hasDoctype = /<\s*!doctype\b/i.test(html)
+  const hasHtmlTags = /<\s*\/?\s*(?:html|head|body)\b/i.test(html)
+  const hasMain = /<\s*\/?\s*main\b/i.test(html)
+
+  if (hasMain) {
+    throw new Error('可视化片段不能包含 <main> 标签；根容器用 #widget')
+  }
+
+  // 如果包含任何完整 HTML 结构标签，就要求必须是完整的、带 charset 的文档
+  if (hasDoctype || hasHtmlTags) {
+    if (!hasDoctype || !hasHtmlTags) {
+      throw new Error('可视化片段如果包含 HTML 结构标签，必须是完整文档（doctype + html + head + body）')
+    }
+    // 检查是否有 <meta charset="UTF-8"> 或 <meta charset='UTF-8'>
+    if (!/<meta\s+charset=["']?utf-8["']?\s*\/?>|<meta\s+[^>]*charset=["']?utf-8["']?[^>]*>/i.test(html)) {
+      throw new Error('包含中文或非 ASCII 字符的完整 HTML 文档必须在 <head> 中声明 <meta charset="UTF-8">')
+    }
+  }
+
   validateHtml(html)
   const tree = rehypeRaw()({ type: 'root', children: [{ type: 'raw', value: html }] }, undefined!)
   type Node = typeof tree | typeof tree.children[number]

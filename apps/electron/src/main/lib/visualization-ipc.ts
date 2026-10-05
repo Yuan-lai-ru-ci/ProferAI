@@ -156,7 +156,8 @@ export function createVisualizationIpcHandlers(deps: VisualizationIpcDependencie
           })
       if (result.canceled || !result.filePath) return null
       const state = await readViewState(ctx, id, revision)
-      await write(result.filePath, buildVisualizationExport(content, state), 'utf-8')
+      // 主题来自渲染进程当前生效的 token（含皮肤）；buildVisualizationExport 内部再做一次名单与值校验。
+      await write(result.filePath, buildVisualizationExport(content, state, input.theme), 'utf-8')
       return basename(result.filePath)
     },
   }
