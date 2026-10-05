@@ -1,5 +1,27 @@
 [
   {
+    "id": "RE_kwDOTfo-884YEsOG",
+    "tag_name": "v0.16.0",
+    "name": "Profer v0.16.0",
+    "body": "## What's Changed\n* Fix title bar buttons by @Nya-Angle in https://github.com/Yuan-lai-ru-ci/ProferAI/pull/144\n\n## New Contributors\n* @Nya-Angle made their first contribution in https://github.com/Yuan-lai-ru-ci/ProferAI/pull/144\n\n**Full Changelog**: https://github.com/Yuan-lai-ru-ci/ProferAI/compare/v0.15.88...v0.16.0",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-10-05T14:51:09Z",
+    "published_at": "2026-10-05T15:48:11Z",
+    "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.16.0"
+  },
+  {
+    "id": "RE_kwDOTfo-884X6Y4a",
+    "tag_name": "v0.15.88",
+    "name": "Profer v0.15.88",
+    "body": "## Windows x64 stable package\n\n- Windows x64 NSIS installer for `0.15.88`.\n- This draft currently contains the local unsigned Windows package only. macOS assets will be added to this same tag after the final macOS build is ready.\n- Domestic update sources are intentionally not uploaded yet.\n\n### Windows assets\n\n- `Profer-Setup-0.15.88.exe` — 222232112 bytes\n  - SHA256: `f2e520986a23dfcf59eaede6a42ce9f544963e68849af1c266ad76bbbf556219`\n- `Profer-Setup-0.15.88.exe.blockmap`\n- `latest.yml`\n- `SHA256SUMS.txt`\n\nSource commit: `96f81524462eac37b2fa8749d7ee6a56715fce07`\n\n\n\n## macOS Apple Silicon stable package\n\n- macOS arm64 DMG and ZIP package for `0.15.88`.\n- Built from source commit `96f81524462eac37b2fa8749d7ee6a56715fce07`.\n- Supports Apple Silicon (`darwin-arm64`) only.\n- Uses ad-hoc signing with designated requirement `identifier \"com.profer.app\"`; no Developer ID signature or notarization. Gatekeeper may require manual approval on first launch.\n\n### macOS assets\n\n- `Profer-0.15.88-arm64.dmg` — 264170771 bytes\n  - SHA256: `c70827c5d14203b5508a828b2ede60fc90d10de39c71ba02c4a05bbc96f333c2`\n- `Profer-0.15.88-arm64-mac.zip` — 255677043 bytes\n  - SHA256: `28cf056a7b6f291bdecd12d14d4fbd4f8faab8485e3e2c9a37af6257f37cb6d6`\n- `Profer-0.15.88-arm64-mac.zip.blockmap`\n- `latest-mac.yml`\n",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-10-01T17:06:03Z",
+    "published_at": "2026-10-01T17:21:52Z",
+    "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.15.88"
+  },
+  {
     "id": "RE_kwDOTfo-884Xq6Fr",
     "tag_name": "v0.15.85",
     "name": "Profer v0.15.85",
