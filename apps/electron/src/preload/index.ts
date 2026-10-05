@@ -293,6 +293,8 @@ export interface ElectronAPI {
   onWindowResize: (callback: () => void) => () => void
   /** 订阅 macOS 原生全屏状态变化 */
   onWindowFullScreenChanged: (callback: (isFullScreen: boolean) => void) => () => void
+  /** 订阅窗口最大化/还原状态变化 */
+  onWindowMaximizeChanged: (callback: (isMaximized: boolean) => void) => () => void
 
   // ===== 渠道管理相关 =====
 
@@ -1834,6 +1836,12 @@ const electronAPI: ElectronAPI = {
     const handler = (_event: Electron.IpcRendererEvent, isFullScreen: boolean): void => callback(isFullScreen)
     ipcRenderer.on(IPC_CHANNELS.WINDOW_FULL_SCREEN_CHANGED, handler)
     return () => ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_FULL_SCREEN_CHANGED, handler)
+  },
+
+  onWindowMaximizeChanged: (callback: (isMaximized: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, isMaximized: boolean): void => callback(isMaximized)
+    ipcRenderer.on(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, handler)
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, handler)
   },
 
   onWindowResize: (callback: () => void) => {
