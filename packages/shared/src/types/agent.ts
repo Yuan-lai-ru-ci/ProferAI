@@ -1634,8 +1634,13 @@ export interface ForkSessionInput {
 export interface RewindSessionInput {
   /** Profer 会话 ID */
   sessionId: string
-  /** 回退到哪条 assistant message（inclusive，截断该消息之后的一切） */
-  assistantMessageUuid: string
+  /**
+   * 回退到哪条 assistant message（inclusive，截断该消息之后的一切）。
+   *
+   * 省略时表示**清空整个对话**（重置到会话起点）：用于首轮就失败、没有可保留锚点的场景。
+   * 清空会同时重置运行时会话（Claude 丢弃 sdkSessionId、Pi 截断到 header），使下一轮从头开始。
+   */
+  assistantMessageUuid?: string
 }
 
 /** 快照回退结果 */

@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import * as React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { Provider, createStore } from 'jotai'
 import type { SDKMessage } from '@profer/shared'
-import { groupIntoTurns, getGroupPreview, parseAttachedFiles, buildHistoricalTaskSubjects, type MessageGroup } from './SDKMessageRenderer'
+import { groupIntoTurns, getGroupPreview, getLatestUserGroupId, MessageGroupRenderer, parseAttachedFiles, buildHistoricalTaskSubjects, type MessageGroup } from './SDKMessageRenderer'
 
 function userText(text: string): SDKMessage {
   return {
@@ -197,5 +200,78 @@ describe('buildHistoricalTaskSubjects', () => {
     ])
     expect(map.get('1')).toBe('甲')
     expect(map.get('2')).toBe('B')
+  })
+})
+
+describe('最后一条用户消息定位（重新生成入口挂载点）', () => {
+  function userWithUuid(text: string, uuid: string): SDKMessage {
+    return {
+      type: 'user',
+      uuid,
+      message: { content: [{ type: 'text', text }] },
+      parent_tool_use_id: null,
+    } as unknown as SDKMessage
+  }
+
+  test('返回最后一条真实用户消息的 group id，忽略其后的 assistant turn', () => {
+    const groups = groupIntoTurns([
+      userWithUuid('第一条', 'u1'),
+      assistantText('回复一'),
+      userWithUuid('第二条', 'u2'),
+      assistantText('回复二'),
+    ])
+    expect(getLatestUserGroupId(groups)).toBe('u2')
+  })
+
+  test('Goal 自动迭代分隔条不计入用户发言', () => {
+    const goalIteration = {
+      type: 'user',
+      uuid: 'goal-1',
+      _goalIteration: 2,
+      message: { content: [{ type: 'text', text: '继续' }] },
+      parent_tool_use_id: null,
+    } as unknown as SDKMessage
+    const groups = groupIntoTurns([
+      userWithUuid('真实发言', 'u1'),
+      assistantText('回复'),
+      goalIteration,
+    ])
+    expect(getLatestUserGroupId(groups)).toBe('u1')
+  })
+
+  test('没有用户消息时返回 undefined', () => {
+    expect(getLatestUserGroupId(groupIntoTurns([assistantText('只有回复')]))).toBeUndefined()
+  })
+})
+
+describe('最后一条用户消息的重新生成入口渲染', () => {
+  function renderUserGroup(onRegenerate?: () => void): string {
+    const message = {
+      type: 'user',
+      uuid: 'u1',
+      message: { content: [{ type: 'text', text: '帮我改成 TypeScript' }] },
+      parent_tool_use_id: null,
+    } as unknown as SDKMessage
+    const groups = groupIntoTurns([message])
+    return renderToStaticMarkup(
+      React.createElement(
+        Provider,
+        { store: createStore() },
+        React.createElement(MessageGroupRenderer, {
+          group: groups[0]!,
+          allMessages: [],
+          historicalTaskSubjects: new Map<string, string>(),
+          ...(onRegenerate ? { onRegenerateLastUserMessage: onRegenerate } : {}),
+        }),
+      ),
+    )
+  }
+
+  test('传入重新生成回调时渲染入口', () => {
+    expect(renderUserGroup(() => {})).toContain('重新生成')
+  })
+
+  test('非最后一条用户消息（无回调）不渲染入口', () => {
+    expect(renderUserGroup()).not.toContain('重新生成')
   })
 })
