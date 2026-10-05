@@ -91,6 +91,7 @@ import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
 import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
+import { useShortcut } from '@/hooks/useShortcut'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 import { detectIsMac } from '@profer/ui'
@@ -115,6 +116,7 @@ import {
   sliceGroupsByCount,
   workspaceNameCollator,
   getNextWorkspaceSortMode,
+  resolveDeleteShortcutAction,
 } from './sidebar-utils'
 import {
   collectDelegatedDeletionSessionIds,
@@ -726,6 +728,35 @@ export function useLeftSidebar() {
   const handleRequestDelete = React.useCallback((id: string): void => {
     setPendingDeleteId(id)
   }, [])
+
+  /**
+   * Delete 快捷键作用的会话：未选中、草稿未落盘、或不属于当前模式列表时传 null。
+   *
+   * 后半条是防御性的：activeSessionId 是全局「活跃 Tab 所属会话」，与侧边栏当前模式
+   * 未必同源；而确认框最终按 mode 分派 chat / agent 两套 API，拿错 id 会调错接口。
+   */
+  const deleteShortcutTargetId = React.useMemo((): string | null => {
+    if (!activeSessionId || draftSessionIds.has(activeSessionId)) return null
+    const exists = mode === 'agent'
+      ? agentSessions.some((session) => session.id === activeSessionId)
+      : conversations.some((conversation) => conversation.id === activeSessionId)
+    return exists ? activeSessionId : null
+  }, [activeSessionId, draftSessionIds, mode, agentSessions, conversations])
+
+  /** Delete 快捷键：同一个键开 / 关删除确认框 */
+  const handleDeleteShortcut = React.useCallback((): void => {
+    const action = resolveDeleteShortcutAction(pendingDeleteId, deleteShortcutTargetId)
+    if (action === 'close') {
+      setPendingDeleteId(null)
+      return
+    }
+    if (action === 'open') setPendingDeleteId(deleteShortcutTargetId)
+  }, [pendingDeleteId, deleteShortcutTargetId, setPendingDeleteId])
+
+  // 只在侧边栏注册一次，不像 F2 那样落在每个列表行上：第二次按下要能关掉确认框，
+  // 判定必须同时看到「确认框状态」与「活跃会话」，而列表行的 handler 只拿得到自己这行。
+  // 输入框 / 富文本内的 Delete 由 registry 的 skipInEditable 守卫放行，走不到这里。
+  useShortcut('delete-item', handleDeleteShortcut)
 
   /** 重命名对话标题 */
   const handleRename = React.useCallback(async (id: string, newTitle: string): Promise<void> => {

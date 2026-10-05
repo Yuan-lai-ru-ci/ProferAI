@@ -102,6 +102,27 @@ export function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
   return next
 }
 
+/** 「删除当前会话」快捷键的决策结果 */
+export type DeleteShortcutAction = 'open' | 'close' | 'none'
+
+/**
+ * 「删除当前会话」快捷键的开关决策。
+ *
+ * 同一个按键承担开与关：确认框已打开时再按一次即取消，否则为当前活跃会话打开确认框。
+ *
+ * @param pendingDeleteId 当前确认框的目标会话 id（null 表示未打开），已打开时优先关闭，
+ *   保证「第二次按下」总能关掉眼前的弹窗，而不受活跃会话变化影响。
+ * @param targetSessionId 当前可删除的活跃会话 id；调用方需预先过滤（未选中 / 草稿 /
+ *   不属于当前模式的会话），不可删除时传 null，此时快捷键不响应。
+ */
+export function resolveDeleteShortcutAction(
+  pendingDeleteId: string | null,
+  targetSessionId: string | null,
+): DeleteShortcutAction {
+  if (pendingDeleteId !== null) return 'close'
+  return targetSessionId ? 'open' : 'none'
+}
+
 /**
  * 列表渐进渲染辅助：按累计条数切分组列表（先渲染可见数量，空闲时补全）。
  * 避免切换模式/视图时全量渲染大量会话导致主线程卡顿。
