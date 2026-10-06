@@ -13,7 +13,9 @@ Built for people who need AI to *do* things, not just chat. Profer runs autonomo
 [![Stars](https://img.shields.io/github/stars/Yuan-lai-ru-ci/ProferAI?style=flat-square)](https://github.com/Yuan-lai-ru-ci/ProferAI)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/Yuan-lai-ru-ci/ProferAI/pulls)
 
-[Download for macOS / Windows](https://github.com/Yuan-lai-ru-ci/ProferAI/releases) · [Documentation](./docs) · [Join Community](#community)
+[下载 macOS / Windows 版本](https://github.com/Yuan-lai-ru-ci/ProferAI/releases) · [文档](./docs) · [加入社区](#community)
+
+English | [简体中文](./README.zh-CN.md)
 
 </div>
 
