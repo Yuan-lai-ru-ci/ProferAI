@@ -15,7 +15,7 @@ import { PluginMessageActions } from '@/components/plugins/PluginEntries'
 import * as React from 'react'
 import { extractUserText, isUserInputMessage } from '@profer/session-core'
 import { isGoalIterationMessage } from '@profer/shared'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, GitFork, Undo2, RotateCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet, Cpu, PackageOpen, Target } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, GitFork, Undo2, RotateCw, RefreshCw, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet, Cpu, PackageOpen, Target } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { parseQuotedSelectionRefs, type ParsedQuotedSelectionRef } from '@/lib/quoted-selection'
@@ -1320,7 +1320,7 @@ function ScheduledRunBadge(): React.ReactElement {
   )
 }
 
-function UserInputMessage({ message, basePath, basePaths }: { message: SDKUserMessage; basePath?: string; basePaths?: string[] }): React.ReactElement {
+function UserInputMessage({ message, basePath, basePaths, onRegenerate }: { message: SDKUserMessage; basePath?: string; basePaths?: string[]; onRegenerate?: () => void }): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
   const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
@@ -1377,6 +1377,12 @@ function UserInputMessage({ message, basePath, basePaths }: { message: SDKUserMe
       {text && (
         <MessageActions className="pl-[46px] mt-0.5">
           <CopyButton content={text} copyAsPlainText />
+          {/* 重新生成：只挂在会话最后一条用户消息下，截断最后一轮后重发该消息 */}
+          {onRegenerate && (
+            <MessageAction tooltip="重新生成" onClick={onRegenerate}>
+              <RefreshCw className="size-4" />
+            </MessageAction>
+          )}
         </MessageActions>
       )}
     </Message>
@@ -1610,6 +1616,8 @@ export interface MessageGroupRendererProps {
   onRetryInNewSession?: () => void
   /** 压缩上下文回调（仅 prompt_too_long 错误使用） */
   onCompact?: () => void
+  /** 会话最后一条用户消息的重新生成回调（仅该条消息显示入口，点击后需回退截断再重发） */
+  onRegenerateLastUserMessage?: () => void
   /** 是否正在流式输出中（隐藏操作栏） */
   isStreaming?: boolean
   /** 是否被用户中断 */
@@ -1672,6 +1680,16 @@ export function getGroupId(group: MessageGroup): string {
   return `turn-empty-${++fallbackIdCounter}`
 }
 
+/**
+ * 会话最后一条用户消息的 group id。
+ *
+ * Goal 自动迭代分隔条不是用户发言，不计入；供「重新生成」入口判定只挂在这一条下。
+ */
+export function getLatestUserGroupId(groups: MessageGroup[]): string | undefined {
+  const last = groups.findLast((group) => group.type === 'user' && !isGoalIterationMessage(group.message))
+  return last ? getGroupId(last) : undefined
+}
+
 /** 预览文本最大长度（user 与 assistant-turn 共用） */
 const GROUP_PREVIEW_LIMIT = 200
 
@@ -1713,7 +1731,7 @@ export function getGroupPreview(group: MessageGroup): string {
   return preview.slice(0, GROUP_PREVIEW_LIMIT)
 }
 
-function MessageGroupRendererView({ sessionId, group, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking, isLatestAssistantTurn }: MessageGroupRendererProps): React.ReactElement | null {
+function MessageGroupRendererView({ sessionId, group, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, onRegenerateLastUserMessage, isStreaming, stoppedByUser, sessionModelId, showThinking, isLatestAssistantTurn }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
 
   if (group.type === 'user') {
@@ -1727,7 +1745,7 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
     }
     return (
       <div data-message-id={groupId} data-message-role="user">
-        <UserInputMessage message={group.message} basePath={basePath} basePaths={basePaths} />
+        <UserInputMessage message={group.message} basePath={basePath} basePaths={basePaths} onRegenerate={onRegenerateLastUserMessage} />
       </div>
     )
   }
@@ -1831,4 +1849,5 @@ export const MessageGroupRenderer = React.memo(MessageGroupRendererView, (prev, 
     && prev.onRetry === next.onRetry
     && prev.onRetryInNewSession === next.onRetryInNewSession
     && prev.onCompact === next.onCompact
+    && prev.onRegenerateLastUserMessage === next.onRegenerateLastUserMessage
 })

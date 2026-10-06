@@ -109,9 +109,11 @@ import {
   getAgentSessionSDKMessages,
   isAgentSessionForking,
   truncateSDKMessages,
+  resetClaudeSession,
   resolveUserUuidFromSDK,
   rewindFilesFromSnapshot,
   rewindPiSession,
+  resetPiSession,
   collectForeignCheckpointPaths,
 } from './agent-session-manager'
 import { normalizeAgentEndReason } from './agent-end-reason'
@@ -3713,8 +3715,9 @@ ${enrichedMessage}`
    *
    * 文件恢复通过解析 SDK JSONL 中的快照完成，无需运行中的 Query。
    * 文件恢复失败时仍然截断对话（优雅降级）。
+   * 省略 `assistantMessageUuid` 时清空整段对话（见 `resetClaudeSession`）。
    */
-  async rewindSession(sessionId: string, assistantMessageUuid: string): Promise<RewindSessionResult> {
+  async rewindSession(sessionId: string, assistantMessageUuid?: string): Promise<RewindSessionResult> {
     // 0. 阻止运行中会话回退（JSONL 并发写入会损坏文件）
     if (this.activeSessions.has(sessionId)) {
       throw new Error('会话正在运行中，请停止后再回退')
@@ -3728,11 +3731,17 @@ ${enrichedMessage}`
     // Pi 使用自己的 session artifact + entry binding，不依赖 Claude SDK session ID。
     // 旧会话若尚未生成映射，会在 rewindPiSession 内返回可操作的恢复提示。
     if (isPiSession) {
-      return rewindPiSession(sessionId, assistantMessageUuid, sessionMeta)
+      return assistantMessageUuid
+        ? rewindPiSession(sessionId, assistantMessageUuid, sessionMeta)
+        : resetPiSession(sessionId, sessionMeta)
     }
-    if (!sessionMeta.sdkSessionId) {
-      throw new Error('Claude 会话没有 SDK session ID，无法回退；请先继续一次对话生成可恢复的 SDK 会话')
+    // 没有锚点（首轮就失败）：清空整段对话，回到会话起点
+    if (!assistantMessageUuid) {
+      return resetClaudeSession(sessionId, sessionMeta)
     }
+    // sdkSessionId 只影响「文件恢复」和「resume 截断点」：对话截断本身只看 Profer JSONL。
+    // 所以缺失时降级为「只截断对话」而不是直接拒绝（例如 session-not-found 恢复过它的会话）。
+    const sdkSessionId = sessionMeta.sdkSessionId
     // 0.5 从 SDK session JSONL 解析对应的 user message UUID（rewindFiles 需要）
     let projectDir: string | undefined
     let workspaceSlug: string | undefined
@@ -3743,7 +3752,9 @@ ${enrichedMessage}`
         projectDir = getAgentSessionWorkspacePath(ws.slug, sessionMeta.id)
       }
     }
-    const userMessageUuid = resolveUserUuidFromSDK(sessionMeta.sdkSessionId, assistantMessageUuid, projectDir, sessionMeta.forkSourceSdkSessionId)
+    const userMessageUuid = sdkSessionId
+      ? resolveUserUuidFromSDK(sdkSessionId, assistantMessageUuid, projectDir, sessionMeta.forkSourceSdkSessionId)
+      : undefined
     console.log(
       `[Agent 编排] 回退: 解析 user uuid=${userMessageUuid || '未找到'} (assistant uuid=${assistantMessageUuid}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'})`,
     )
@@ -3758,7 +3769,11 @@ ${enrichedMessage}`
           deletions?: number
         }
       | undefined
-    if (userMessageUuid === '__LAST_TURN__') {
+    if (!sdkSessionId) {
+      // 没有 SDK session 就没有 file-history-snapshot，只能降级；对话仍按下方完整截断
+      console.log(`[Agent 编排] 回退: 会话没有 SDK session ID，跳过文件恢复`)
+      fileRewindResult = { canRewind: false, error: '会话没有 SDK session ID，文件未回退' }
+    } else if (userMessageUuid === '__LAST_TURN__') {
       // 最后一个 turn：当前文件系统已是该 turn 完成后的状态，无需回退文件
       console.log(`[Agent 编排] 回退: 最后一个 turn，跳过文件恢复`)
       fileRewindResult = { canRewind: true, filesChanged: [] }
@@ -3777,7 +3792,7 @@ ${enrichedMessage}`
           `[Agent 编排] 回退: 直接从 snapshot 恢复文件 (cwd=${cwd}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'}, attachedDirs=${rewindAttachedDirs.length})`,
         )
         fileRewindResult = rewindFilesFromSnapshot(
-          sessionMeta.sdkSessionId,
+          sdkSessionId,
           userMessageUuid,
           cwd,
           projectDir,
@@ -3800,9 +3815,11 @@ ${enrichedMessage}`
     // 2. 截断 Profer JSONL
     const kept = truncateSDKMessages(sessionId, assistantMessageUuid)
 
-    // 3. 记录 resumeAtMessageUuid，下次发消息时 SDK 从此点继续
+    // 3. 记录 resumeAtMessageUuid，下次发消息时 SDK 从此点继续。
+    //    没有 sdkSessionId 时不存在可 resume 的 SDK 会话（清掉残留值），
+    //    下一轮会作为新 SDK 会话按已截断的 Profer 历史回填上下文。
     updateAgentSessionMeta(sessionId, {
-      resumeAtMessageUuid: assistantMessageUuid,
+      resumeAtMessageUuid: sdkSessionId ? assistantMessageUuid : undefined,
     })
 
     console.log(`[Agent 编排] 回退完成: sessionId=${sessionId}, 保留 ${kept.length} 条消息, 文件恢复=${fileRewindResult?.canRewind ?? '跳过'}`)

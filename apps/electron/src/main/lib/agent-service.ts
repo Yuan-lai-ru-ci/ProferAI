@@ -708,11 +708,14 @@ export function endAgentSessionDeletion(sessionId: string): void {
 }
 
 /**
- * 快照回退：回退到指定消息点，恢复文件 + 截断对话
+ * 快照回退 / 清空对话：截断到指定消息点，恢复文件 + 截断对话。
+ *
+ * `assistantMessageUuid` 省略时表示清空整个对话（重置到会话起点），
+ * 用于首轮就失败、没有可保留锚点的场景。
  */
 export async function rewindAgentSession(
   sessionId: string,
-  assistantMessageUuid: string,
+  assistantMessageUuid?: string,
 ): Promise<import('@profer/shared').RewindSessionResult> {
   return orchestrator.rewindSession(sessionId, assistantMessageUuid)
 }

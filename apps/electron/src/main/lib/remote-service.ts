@@ -1337,11 +1337,13 @@ export async function handleRemoteCommand(
       }
     }
 
-    // 快照回退：同一会话内回退到指定点（恢复文件 + 截断对话；对齐桌面 REWIND_SESSION IPC）
+    // 快照回退 / 清空对话（同一会话内回退到指定点；无 assistantMessageUuid 时清空整段对话）
     case 'rewind_session': {
       const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
-      const assistantMessageUuid = typeof parsed.assistantMessageUuid === 'string' ? parsed.assistantMessageUuid : ''
-      if (!sessionId || !assistantMessageUuid) return { ok: false, error: '缺少 sessionId 或 assistantMessageUuid' }
+      const assistantMessageUuid = typeof parsed.assistantMessageUuid === 'string' && parsed.assistantMessageUuid
+        ? parsed.assistantMessageUuid
+        : undefined
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       try {
         const result = await rewindAgentSession(sessionId, assistantMessageUuid)
         return { ok: true, data: result }

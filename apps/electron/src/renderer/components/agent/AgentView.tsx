@@ -163,6 +163,7 @@ import type { AgentQueuedMessage, QueueDropPlacement } from '@/lib/agent-message
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
 import { resolveForkActionAvailability } from '@/lib/exploration-session'
+import { getUserTextFromSDKMessage, resolveRegenerateTarget } from '@/lib/agent-regenerate-anchor'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -183,36 +184,6 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
 function buildAgentInterruptionText(state: AgentInterruptionState): string {
   const time = new Date(state.at).toLocaleString('zh-CN', { hour12: false, second: undefined })
   return `上次任务被中断（${state.label}，${time}），可能未完成。\n请先查看对话历史中你上一条收到的用户消息，继续完成该任务。`
-}
-
-interface SDKMessageRecord {
-  type?: string
-  parent_tool_use_id?: string | null
-  isSynthetic?: boolean
-  message?: {
-    content?: unknown
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function getUserTextFromSDKMessage(message: SDKMessage): string | null {
-  const sdkMessage = message as unknown as SDKMessageRecord
-  if (sdkMessage.type !== 'user' || sdkMessage.parent_tool_use_id || sdkMessage.isSynthetic) {
-    return null
-  }
-
-  const content = sdkMessage.message?.content
-  if (!Array.isArray(content)) return null
-  if (content.some((block) => isRecord(block) && block.type === 'tool_result')) return null
-
-  const texts = content
-    .filter((block) => isRecord(block) && block.type === 'text' && typeof block.text === 'string')
-    .map((block) => (block as { text: string }).text)
-
-  return texts.length > 0 ? texts.join('\n') : null
 }
 
 // ===== 思考模式 Hover Popover =====
@@ -2800,16 +2771,13 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     }
   }, [agentError])
 
-  /** 重试：在当前会话中重新发送最后一条用户消息 */
-  const handleRetry = React.useCallback((): void => {
+  /**
+   * 在当前会话里把文本作为新一轮用户消息发出。
+   *
+   * 只做渲染侧的副作用（跟随滚动、清错、置流式态）；消息本身由主进程持久化后回传。
+   */
+  const sendUserMessageInCurrentSession = React.useCallback((userMessage: string): void => {
     if (!agentChannelId || streaming || backgroundWaiting) return
-
-    // 找到最后一条用户消息
-    const lastUserMessage = [...persistedSDKMessages]
-      .reverse()
-      .map(getUserTextFromSDKMessage)
-      .find((text): text is string => text !== null)
-    if (!lastUserMessage) return
     requestFollow(sessionId)
 
     // 清除错误状态
@@ -2837,17 +2805,42 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       return map
     })
 
+    // 与 handleSend 一致：先上屏乐观用户气泡，并把同一 uuid 透传给主进程（持久化后按 uuid 去重）。
+    // 重新生成场景下这一步尤其重要：回退刚把这条消息从历史里截断，没有乐观气泡就会出现
+    // 「消息消失 → 本轮结束才回来」的空窗。
+    const messageUuid = crypto.randomUUID()
+    appendOptimisticPersistedMessage(createUserSDKMessage(userMessage, messageUuid, streamStartedAt))
+
     window.electronAPI.sendAgentMessage({
       sessionId,
-      userMessage: lastUserMessage,
+      userMessage,
       channelId: agentChannelId,
       modelId: agentModelId || undefined,
       workspaceId: currentWorkspaceId || undefined,
       agentRuntime: sessionAgentRuntime,
       startedAt: streamStartedAt,
+      uuid: messageUuid,
       permissionModeOverride: permissionMode,
     }).catch(console.error)
-  }, [persistedSDKMessages, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode, requestFollow])
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode, requestFollow, appendOptimisticPersistedMessage])
+
+  /** 重试：在当前会话中重新发送最后一条用户消息（不截断历史，追加新一轮） */
+  const handleRetry = React.useCallback((): void => {
+    const lastUserMessage = [...persistedSDKMessages]
+      .reverse()
+      .map(getUserTextFromSDKMessage)
+      .find((text): text is string => text !== null)
+    if (!lastUserMessage) return
+    sendUserMessageInCurrentSession(lastUserMessage)
+  }, [persistedSDKMessages, sendUserMessageInCurrentSession])
+
+  /**
+   * 「重新生成」是否可用：存在最后一条用户输入消息即可（无锚点时会走「清空整段对话」）。
+   */
+  const canRegenerateLastTurn = React.useMemo(
+    () => resolveRegenerateTarget(persistedSDKMessages) !== undefined,
+    [persistedSDKMessages],
+  )
 
   /** 在新对话继续：创建新会话 + 切换 tab + 使用 &session 引用旧会话 */
   const handleRetryInNewSession = React.useCallback(async (): Promise<void> => {
@@ -2976,24 +2969,59 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     agentRuntime: sessionAgentRuntime,
   })
 
-  /** 快照回退：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
-  const [rewindTargetUuid, setRewindTargetUuid] = React.useState<string | null>(null)
+  /**
+   * 快照回退：「回退」与「重新生成」共用同一弹窗，mode 决定确认后的动作。
+   *
+   * `targetUuid` 省略仅出现在 `regenerate`：首轮就失败、没有可保留锚点，
+   * 此时主进程会清空整段对话（而不是截断到某个点）。
+   */
+  const [rewindRequest, setRewindRequest] = React.useState<{ targetUuid?: string; mode: 'rewind' | 'regenerate' } | null>(null)
   const [graphDialogOpen, setGraphDialogOpen] = React.useState(false)
   const [graphRefreshVersion, setGraphRefreshVersion] = React.useState(0)
 
   const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
-    setRewindTargetUuid(assistantMessageUuid)
+    setRewindRequest({ targetUuid: assistantMessageUuid, mode: 'rewind' })
   }, [])
 
+  /**
+   * 重新生成最后一轮：截断最后一轮（一问一答）后重发该用户消息；
+   * 首轮就失败时没有锚点，改为清空整段对话后重发。
+   *
+   * 两个入口共用它：最后一条用户消息下的重新生成按钮，以及最新一轮错误卡片的「重试」。
+   * 复用回退能力完成截断（含文件快照恢复），所以需要确认弹窗。
+   */
+  const handleRegenerateLastTurn = React.useCallback((): void => {
+    if (streaming || backgroundWaiting) return
+    const target = resolveRegenerateTarget(persistedSDKMessages)
+    if (!target) {
+      toast.info('暂不支持重新生成', {
+        description: '当前会话里没有可重发的用户消息。',
+      })
+      return
+    }
+    setRewindRequest(target.kind === 'rewind'
+      ? { targetUuid: target.rewindToAssistantUuid, mode: 'regenerate' }
+      : { mode: 'regenerate' })
+  }, [persistedSDKMessages, streaming, backgroundWaiting])
+
   const handleRewindConfirm = React.useCallback(async (): Promise<void> => {
-    if (!rewindTargetUuid) return
-    const targetUuid = rewindTargetUuid
-    setRewindTargetUuid(null)
+    if (!rewindRequest) return
+    const { targetUuid, mode } = rewindRequest
+    setRewindRequest(null)
+
+    // 重发的文本要在回退前取：回退后这条用户消息已从历史里消失。
+    const regenerateText = mode === 'regenerate'
+      ? resolveRegenerateTarget(persistedSDKMessages)?.userMessage
+      : undefined
+    if (mode === 'regenerate' && !regenerateText) {
+      toast.error('重新生成失败', { description: '未找到要重发的用户消息' })
+      return
+    }
 
     try {
       const result = await window.electronAPI.rewindSession({
         sessionId,
-        assistantMessageUuid: targetUuid,
+        ...(targetUuid ? { assistantMessageUuid: targetUuid } : {}),
       })
 
       // 刷新消息列表
@@ -3008,40 +3036,48 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
       })
 
-      if (result.fileRewind?.canRewind) {
-        const fileCount = result.fileRewind.filesChanged?.length ?? 0
-        // 被浏览器/数据库等进程占用的文件无法进入快照，回退时必须明确告知，
-        // 否则用户会误以为工作区已完全回到该时刻
-        const skippedCount = result.fileRewind.skippedFiles?.length ?? 0
-        const incomplete = result.fileRewind.incomplete === true
-        if (skippedCount > 0 || incomplete) {
-          const details = [
-            `${fileCount} 个文件已恢复`,
-            ...(skippedCount > 0 ? [`${skippedCount} 个文件被占用或过大而未回退`] : []),
-            ...(incomplete ? ['基线不完整，未确认的新增文件已保留'] : []),
-          ]
+      const fileRewind = result.fileRewind
+      const fileCount = fileRewind?.filesChanged?.length ?? 0
+      // 被浏览器/数据库等进程占用的文件无法进入快照，或根本没有可用快照时必须明确告知，
+      // 否则用户会误以为工作区已完全回到该时刻
+      const warnings = [
+        ...(fileRewind && !fileRewind.canRewind && fileRewind.error ? [`文件未回退：${fileRewind.error}`] : []),
+        ...((fileRewind?.skippedFiles?.length ?? 0) > 0 ? [`${fileRewind!.skippedFiles!.length} 个文件被占用或过大而未回退`] : []),
+        ...(fileRewind?.incomplete ? ['基线不完整，未确认的新增文件已保留'] : []),
+      ]
+
+      if (mode === 'regenerate') {
+        if (warnings.length > 0) {
+          toast.warning('已重新生成，但文件未完全回退', { description: warnings.join('；') })
+        }
+        sendUserMessageInCurrentSession(regenerateText!)
+        return
+      }
+
+      if (fileRewind?.canRewind) {
+        if (warnings.length > 0) {
           toast.warning('已回退到此处', {
-            description: details.join('；'),
+            description: [`${fileCount} 个文件已恢复`, ...warnings].join('；'),
           })
         } else {
           toast.success('已回退到此处', {
             description: fileCount > 0 ? `${fileCount} 个文件已恢复` : '文件无变化',
           })
         }
-      } else if (result.fileRewind?.error) {
+      } else if (fileRewind?.error) {
         toast.warning('已回退对话', {
-          description: `文件恢复不可用：${result.fileRewind.error}`,
+          description: `文件恢复不可用：${fileRewind.error}`,
         })
       } else {
         toast.success('已回退到此处')
       }
     } catch (error) {
       console.error('[AgentView] 回退失败:', error)
-      toast.error('回退失败', {
+      toast.error(mode === 'regenerate' ? '重新生成失败' : '回退失败', {
         description: error instanceof Error ? error.message : '未知错误',
       })
     }
-  }, [rewindTargetUuid, sessionId, store])
+  }, [rewindRequest, persistedSDKMessages, sendUserMessageInCurrentSession, sessionId, store])
 
   // 父会话与右侧探索分支会同时挂载；快捷键只归当前可见工作面，避免一次停止两个并行 run。
   React.useEffect(() => {
@@ -3316,6 +3352,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
           stoppedByUser={stoppedByUser}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
+          onRegenerateLastTurn={canRegenerateLastTurn ? handleRegenerateLastTurn : undefined}
           onFork={canFork ? handleFork : undefined}
           onExplore={canExplore ? handleExplore : undefined}
           onRewind={handleRewindRequest}
@@ -3509,18 +3546,20 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       </DialogContent>
     </Dialog>
 
-    {/* 回退确认弹窗 */}
+    {/* 回退 / 重新生成确认弹窗 */}
     <AlertDialog
-      open={rewindTargetUuid !== null}
-      onOpenChange={(v) => { if (!v) setRewindTargetUuid(null) }}
+      open={rewindRequest !== null}
+      onOpenChange={(v) => { if (!v) setRewindRequest(null) }}
     >
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>确认回退</AlertDialogTitle>
+          <AlertDialogTitle>{rewindRequest?.mode === 'regenerate' ? '确认重新生成' : '确认回退'}</AlertDialogTitle>
           <AlertDialogDescription>
-            {sessionAgentRuntime === 'pi'
-              ? '回退将截断该消息之后的所有对话（Pi 会话不支持文件恢复，工作区文件不会被改动）。此操作不可撤销，确定要回退吗？'
-              : '回退将截断该消息之后的所有对话，并恢复文件到该时刻的状态。此操作不可撤销，确定要回退吗？'}
+            {rewindRequest?.mode === 'regenerate'
+              ? (rewindRequest.targetUuid
+                  ? '重新生成会先截断最后一轮对话（整个一问一答）再重发该消息，并恢复工作区文件。此操作不可撤销，确定要继续吗？'
+                  : '这条消息前面还没有可保留的回复（首轮就失败了）：重新生成会清空整段对话后重发该消息，并恢复文件到会话开始时的状态。此操作不可撤销，确定要继续吗？')
+              : '回退将截断该消息之后的所有对话，并恢复工作区文件。此操作不可撤销，确定要回退吗？'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -3529,7 +3568,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
             onClick={handleRewindConfirm}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            回退
+            {rewindRequest?.mode === 'regenerate' ? '重新生成' : '回退'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
