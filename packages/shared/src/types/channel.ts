@@ -166,12 +166,23 @@ export function inferAgentRuntimeModes(
  *
  * 勾选优先；缺失时回退到 provider 推导，保证未迁移的老配置行为不变。
  */
+/** Chat 不接受仅供 Pi 的订阅凭据；历史 xAI OAuth 标识由主进程读取时补齐。 */
+export function isChannelEnabledForChat(
+  channel: Pick<Channel, 'provider' | 'enabled' | 'credentialMode'>,
+): boolean {
+  return channel.enabled && channel.provider !== 'openai-codex'
+    && !(channel.provider === 'xai' && channel.credentialMode === 'oauth')
+}
+
 export function isChannelEnabledForRuntime(
   channel: Pick<Channel, 'provider' | 'enabled' | 'agentExperimentalEnabled' | 'agentRuntimes'>,
   runtime: AgentRuntimeMode,
 ): boolean {
   if (!channel.enabled) return false
   const modes = channel.agentRuntimes ?? inferAgentRuntimeModes(channel)
+  // 原生订阅/xAI adapter 只有 Pi 实现，手工勾选不能创造 Claude 协议。
+  if ((channel.provider === 'xai' || channel.provider === 'openai-codex') && runtime === 'claude') return false
+  // 显式内核优先；实验开关仅用于旧配置推导，UI 修改时同步两份字段。
   return modes.includes(runtime)
 }
 
@@ -437,6 +448,8 @@ export interface ChannelsConfig {
  * 连接测试结果
  */
 export interface ChannelTestResult {
+  /** 请求主动取消；不作为供应商故障展示。 */
+  cancelled?: boolean
   /** 是否成功 */
   success: boolean
   /** 结果消息 */
@@ -471,16 +484,26 @@ export interface OfficialChannelHealth {
  * 拉取模型的输入参数（无需已保存的渠道，直接传入凭证）
  */
 export interface FetchModelsInput {
+  /** 可选请求标识；取消仅作用于发起该请求的窗口。 */
+  requestId?: string
   provider: ProviderType
   baseUrl: string
   /** 明文 API Key */
   apiKey: string
+  /** 连接测试可选：验证指定模型生成；未指定时仅检查模型目录。 */
+  modelId?: string
+  /** 连接测试可选：Claude 使用独立 Anthropic 端点，Pi 使用渠道原生协议。 */
+  runtime?: AgentRuntimeMode
+  /** 连接测试可选：独立 Claude 端点；模型发现仍使用 baseUrl。 */
+  agentBaseUrl?: string
 }
 
 /**
  * 拉取模型的结果
  */
 export interface FetchModelsResult {
+  /** 请求主动取消；取消时不返回部分模型目录。 */
+  cancelled?: boolean
   /** 是否成功 */
   success: boolean
   /** 结果消息 */
@@ -488,6 +511,12 @@ export interface FetchModelsResult {
   /** 获取到的模型列表 */
   models: ChannelModel[]
 }
+
+/** xAI 已有渠道重新授权，或授权成功后创建新渠道。 */
+export type XaiOAuthLoginInput = string | Omit<ChannelCreateInput, 'apiKey' | 'provider' | 'credentialMode'>
+
+/** 已有渠道重新授权，或授权成功后才创建新渠道；不从 Renderer 接收 OAuth 凭据。 */
+export type CodexOAuthLoginInput = string | Omit<ChannelCreateInput, 'apiKey' | 'provider'>
 
 /**
  * 渠道相关 IPC 通道常量
@@ -513,13 +542,25 @@ export const CHANNEL_IPC_CHANNELS = {
   TEST_DIRECT: 'channel:test-direct',
   /** 从服务端同步渠道 */
   SYNC_FROM_SERVER: 'channel:sync-from-server',
+  /** ChatGPT Codex 登录成功后才创建或更新渠道。 */
+  CODEX_LOGIN: 'channel:codex-login',
+  /** 按当前窗口与 requestId 取消测试/发现，不影响其它请求。 */
+  CANCEL_REQUEST: 'channel:cancel-request',
+  /** 取消当前进行中的 ChatGPT Codex OAuth 登录。 */
+  CODEX_LOGIN_CANCEL: 'channel:codex-login-cancel',
+  /** 获取 Pi 当前内置的 ChatGPT Codex 模型目录。 */
+  CODEX_MODELS: 'channel:codex-models',
   /** 检查是否处于商业模式 */
   GET_COMMERCIAL_MODE: 'channel:get-commercial-mode',
   /** 获取构建目标（oss/commercial） */
   GET_BUILD_TARGET: 'channel:get-build-target',
-  /** 在已保存的 xAI 渠道上启动订阅 OAuth 登录，并由主进程加密保存凭据。 */
+  /** xAI 授权成功后创建或更新渠道，由主进程加密保存。 */
   XAI_LOGIN: 'channel:xai-login',
   /** 获取账号能力（商业模式+自配权限+账号类型） */
+  /** 取消当前 xAI 订阅授权。 */
+  XAI_LOGIN_CANCEL: 'channel:xai-login-cancel',
+  /** Pi 内置 xAI 目录，订阅模型可用性仍取决于账号。 */
+  XAI_MODELS: 'channel:xai-models',
   GET_ACCOUNT_CAPABILITIES: 'channel:get-account-capabilities',
   /** 查询订阅 Plan 额度 */
   GET_PLAN_QUOTA: 'channel:get-plan-quota',

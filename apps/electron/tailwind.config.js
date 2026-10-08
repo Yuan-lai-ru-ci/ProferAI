@@ -182,6 +182,10 @@ export default {
         'out': 'slide-out-to-right 0.2s ease-in',
         'preview-slide-out': 'preview-slide-out 0.25s ease-out forwards',
       },
+      transitionTimingFunction: {
+        // 展开/收起类微动效：快速起步、缓收尾，到位那一帧不硬停。
+        'out-quint': 'cubic-bezier(0.22, 1, 0.36, 1)',
+      },
     },
   },
   plugins: [

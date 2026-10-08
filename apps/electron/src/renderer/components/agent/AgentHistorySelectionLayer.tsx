@@ -12,8 +12,13 @@ import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { quotedSelectionMapAtom } from '@/atoms/preview-atoms'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
-import { SelectionActionPopover } from '@/components/selection/SelectionActionPopover'
-import { SELECTION_ACTION_POPOVER_SELECTOR } from '@/lib/quoted-selection'
+import { SELECTION_ACTION_TARGET_SELECTOR } from '@/lib/quoted-selection'
+import {
+  AGENT_BLOCK_ID_ATTRIBUTE,
+  AGENT_BLOCK_SELECTION_EVENT,
+  AGENT_SELECTION_EXPLORE_EVENT,
+  AGENT_SELECTION_QUOTE_EVENT,
+} from '@/components/ai-elements/agent-block-copy'
 
 const MAX_AGENT_HISTORY_QUOTED_CHARS = 2000
 
@@ -88,7 +93,7 @@ export function AgentHistorySelectionLayer({
   sessionId,
   rootRef,
   explorationEnabled = true,
-}: AgentHistorySelectionLayerProps): React.ReactElement {
+}: AgentHistorySelectionLayerProps): React.ReactElement | null {
   const setQuotedSelectionMap = useSetAtom(quotedSelectionMapAtom)
   const store = useStore()
   const agentSessions = useAtomValue(agentSessionsAtom)
@@ -101,13 +106,14 @@ export function AgentHistorySelectionLayer({
 
   const clearSelection = React.useCallback((): void => {
     setSelection(null)
+    window.dispatchEvent(new CustomEvent(AGENT_BLOCK_SELECTION_EVENT, { detail: { blockId: null } }))
   }, [])
 
   const captureSelection = React.useCallback((): void => {
     const root = rootRef.current
     if (!root) return
     const activeEl = document.activeElement
-    if (activeEl?.closest?.(`.ProseMirror, [data-input-mode], ${SELECTION_ACTION_POPOVER_SELECTOR}`)) return
+    if (activeEl?.closest?.(`.ProseMirror, [data-input-mode], ${SELECTION_ACTION_TARGET_SELECTOR}`)) return
 
     const sel = window.getSelection()
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
@@ -122,6 +128,9 @@ export function AgentHistorySelectionLayer({
       clearSelection()
       return
     }
+
+    const startBlockEl = startEl.closest(`[${AGENT_BLOCK_ID_ATTRIBUTE}]`)
+    const selectionBlockId = startBlockEl?.getAttribute(AGENT_BLOCK_ID_ATTRIBUTE) ?? null
 
     const startMessageEl = startEl.closest('[data-message-id]')
     const endMessageEl = endEl.closest('[data-message-id]')
@@ -164,6 +173,9 @@ export function AgentHistorySelectionLayer({
       messageRole: role ?? undefined,
     })
 
+    // 让选区所在的消息块把工具栏固定显示出来，划词后无需 hover 就能点「引用」。
+    window.dispatchEvent(new CustomEvent(AGENT_BLOCK_SELECTION_EVENT, { detail: { blockId: selectionBlockId } }))
+
     if (truncated) {
       toast.warning(`已选中超过 ${MAX_AGENT_HISTORY_QUOTED_CHARS} 字符，仅引用前 ${MAX_AGENT_HISTORY_QUOTED_CHARS} 字符`, {
         id: `agent-history-selection-cap:${sessionId}`,
@@ -190,7 +202,7 @@ export function AgentHistorySelectionLayer({
     }
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target
-      if (target instanceof Element && target.closest(SELECTION_ACTION_POPOVER_SELECTOR)) return
+      if (target instanceof Element && target.closest(SELECTION_ACTION_TARGET_SELECTOR)) return
       if (target instanceof Element && rootRef.current?.contains(target)) {
         pointerSelectingRef.current = true
         pointerUpYRef.current = null
@@ -254,6 +266,12 @@ export function AgentHistorySelectionLayer({
     toast.success('已添加到 Agent 引用')
   }, [clearSelection, selection, sessionId, setQuotedSelectionMap])
 
+  React.useEffect(() => {
+    const onQuoteCurrentSelection = (): void => handleAddToAgent()
+    window.addEventListener(AGENT_SELECTION_QUOTE_EVENT, onQuoteCurrentSelection)
+    return () => window.removeEventListener(AGENT_SELECTION_QUOTE_EVENT, onQuoteCurrentSelection)
+  }, [handleAddToAgent])
+
   const handleOpenExplorationBranch = React.useCallback(async (): Promise<void> => {
     if (!selection || openExplorationPendingRef.current) return
     if (selection.messageRole !== 'assistant' || !selection.messageId) {
@@ -298,19 +316,18 @@ export function AgentHistorySelectionLayer({
     }
   }, [agentSessions, clearSelection, selection, sessionId, setAgentSessions, setQuotedSelectionMap, store])
 
-  return (
-    <>
-      {selection && (
-        <SelectionActionPopover
-          x={selection.x}
-          y={selection.y}
-          direction={selection.direction}
-          onAddToAgent={handleAddToAgent}
-          {...(explorationEnabled && selection.messageRole === 'assistant' && selection.messageId
-            ? { onOpenExplorationBranch: handleOpenExplorationBranch }
-            : {})}
-        />
-      )}
-    </>
-  )
+  // 工具栏「探索」按钮接手划词：嵌入的探索分支内不再允许二级探索。
+  React.useEffect(() => {
+    const onExploreCurrentSelection = (): void => {
+      if (!explorationEnabled) {
+        toast.info('探索分支内不能再创建二级探索分支')
+        return
+      }
+      void handleOpenExplorationBranch()
+    }
+    window.addEventListener(AGENT_SELECTION_EXPLORE_EVENT, onExploreCurrentSelection)
+    return () => window.removeEventListener(AGENT_SELECTION_EXPLORE_EVENT, onExploreCurrentSelection)
+  }, [explorationEnabled, handleOpenExplorationBranch])
+
+  return null
 }

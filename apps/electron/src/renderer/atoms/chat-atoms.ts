@@ -6,7 +6,9 @@
  */
 
 import { atom } from 'jotai'
-import { atomWithStorage } from 'jotai/utils'
+import { atomFamily, atomWithStorage } from 'jotai/utils'
+import { isChannelEnabledForChat } from '@profer/shared'
+import { authStatusAtom } from './identity-atoms'
 import { getDefaultStore } from 'jotai'
 import type { ConversationMeta, ChatMessage, FileAttachment, ChatToolActivity, Channel, KnowledgeReference } from '@profer/shared'
 
@@ -15,6 +17,9 @@ export const channelsAtom = atom<Channel[]>([])
 
 /** 渠道列表是否已完成首次加载 */
 export const channelsLoadedAtom = atom(false)
+
+/** 显式刷新请求由全局目录监听统一消费，仅重新读取本地目录。 */
+export const channelCatalogRefreshAtom = atom(0)
 
 /** 模型选择器打开请求（ErrorMessage 的 select_model 恢复操作等全局触发入口）。
  * 用对象而非纯计数：请求携带自增 seq，消费方记录已消费的 seq，
@@ -279,6 +284,23 @@ export const pendingAgentRecommendationAtom = atom<AgentRecommendation | null>(n
 
 /** 每个对话的模型选择 */
 export const conversationModelsAtom = atom<Map<string, SelectedModel | null>>(new Map())
+
+/** 历史绑定优先于新会话默认；显式 null 也必须保留，不回落其它模型。 */
+export const conversationModelAtomFamily = atomFamily((conversationId: string | null) => atom((get) => {
+  const overrides = get(conversationModelsAtom)
+  const conversation = get(conversationsAtom).find((item) => item.id === conversationId)
+  const selection = conversationId && overrides.has(conversationId)
+    ? overrides.get(conversationId) ?? null
+    : conversation?.channelId && conversation.modelId
+      ? { channelId: conversation.channelId, modelId: conversation.modelId }
+      : get(selectedModelAtom)
+  if (!selection || !get(channelsLoadedAtom)) return null
+  const channel = get(channelsAtom).find((item) => item.id === selection.channelId)
+  if (!channel || !isChannelEnabledForChat(channel)
+    || (!get(authStatusAtom).isLoggedIn && (channel.serverManaged || channel.id.startsWith('newapi-')))
+    || !channel.models.some((model) => model.id === selection.modelId && model.enabled)) return null
+  return selection
+}))
 
 /** 每个对话的上下文长度 */
 export const conversationContextLengthAtom = atom<Map<string, ContextLengthValue>>(new Map())

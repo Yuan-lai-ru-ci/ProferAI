@@ -29,6 +29,7 @@ export function mergeSystemPromptUpdate(
 export interface PromptSaveQueueOptions {
   /** 最长延迟（ms）：连续输入不停时也保证至少每该时长落盘一次 */
   maxWaitMs?: number
+  onError?: (error: unknown) => void
 }
 
 export interface PromptSaveQueue {
@@ -47,24 +48,37 @@ export function createPromptSaveQueue(
 ): PromptSaveQueue {
   const pending = new Map<string, SystemPromptUpdateInput>()
 
-  const drain = async (): Promise<void> => {
-    if (pending.size === 0) return
-    // 先取出并清空：即使 save 抛错也不会重复提交，也不会阻塞后续条目
-    const entries = Array.from(pending.entries())
-    pending.clear()
-
-    for (const [id, input] of entries) {
-      try {
-        await save(id, input)
-      } catch (error) {
-        console.error('[提示词自动保存] 保存失败:', error)
+  let inFlight: Promise<void> | null = null
+  const drain = (): Promise<void> => {
+    if (inFlight) return inFlight
+    const run = async (): Promise<void> => {
+      const failed = new Set<string>()
+      let firstError: unknown
+      while ([...pending.keys()].some((id) => !failed.has(id))) {
+        const ids = [...pending.keys()].filter((id) => !failed.has(id))
+        for (const id of ids) {
+          const input = pending.get(id)
+          if (!input) continue
+          pending.delete(id)
+          try {
+            await save(id, input)
+          } catch (error) {
+            if (firstError === undefined) firstError = error
+            failed.add(id)
+            const newer = pending.get(id)
+            pending.set(id, { ...input, ...newer })
+          }
+        }
       }
+      if (failed.size) throw firstError
     }
+    inFlight = run().finally(() => { inFlight = null })
+    return inFlight
   }
 
   const debounced = createDebouncedCallback(
     () => {
-      void drain()
+      void drain().catch((error: unknown) => options.onError?.(error))
     },
     waitMs,
     { maxWait: options.maxWaitMs }

@@ -60,6 +60,46 @@ describe('applyModelDiscoveryResult', () => {
       { id: 'brand-new', name: '新模型', enabled: false, source: 'fetched' },
     ])
   })
+
+  test('Given 手动模型与远端同 ID When 刷新 Then 保留手动来源和用户设置', () => {
+    const configured: ChannelModel[] = [
+      { id: 'manual-model', name: '我的别名', enabled: true, context1m: true, source: 'manual' },
+      { id: 'stale-fetched', name: '旧发现', enabled: true, source: 'fetched' },
+    ]
+    const discovered: ChannelModel[] = [
+      { id: 'manual-model', name: '供应商名称', enabled: false },
+      { id: 'fresh-model', name: '新模型', enabled: true },
+    ]
+
+    expect(applyModelDiscoveryResult(configured, result(true, discovered))).toEqual([
+      { id: 'manual-model', name: '我的别名', enabled: true, context1m: true, source: 'manual' },
+      { id: 'fresh-model', name: '新模型', enabled: false, source: 'fetched' },
+    ])
+  })
+
+  test('Given 历史未标记模型与手工模型 When 目录先同 ID 后为空 Then 两次刷新都保留本地配置', () => {
+    const configured: ChannelModel[] = [
+      { id: 'legacy', name: '历史别名', enabled: false, context1m: false },
+      { id: 'manual', name: '手工别名', enabled: true, source: 'manual' },
+    ]
+    const refreshed = applyModelDiscoveryResult(configured, result(true, [
+      { id: 'legacy', name: '远端别名', enabled: true },
+      { id: 'manual', name: '远端别名', enabled: false },
+    ]))
+    expect(refreshed).toEqual(configured)
+    expect(applyModelDiscoveryResult(refreshed, result(true))).toEqual(configured)
+  })
+
+  test('Given 远端目录包含重复 ID When 刷新 Then 只保留一条发现模型', () => {
+    const discovered: ChannelModel[] = [
+      { id: 'duplicate', name: '先出现', enabled: true },
+      { id: 'duplicate', name: '后出现', enabled: false },
+    ]
+
+    expect(applyModelDiscoveryResult([], result(true, discovered))).toEqual([
+      { id: 'duplicate', name: '后出现', enabled: false, source: 'fetched' },
+    ])
+  })
 })
 
 describe('buildModelDiscoveryAttemptKey', () => {

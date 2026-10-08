@@ -51,7 +51,6 @@ describe('Pi Harness orchestrator bridge', () => {
     const goal = Object.values(snapshot.goals)[0]!
     expect(goal.activeTaskId).toBeDefined()
     expect(goal.rootTaskId).toBe(goal.activeTaskId)
-    expect(goal.autonomyUsage.taskTransitions).toBe(0)
   })
 
   test('attributes same-Turn facts to the Host root when the user declares finite verification markers', () => {
@@ -70,7 +69,6 @@ describe('Pi Harness orchestrator bridge', () => {
 
     const snapshot = loadPiHarnessSnapshot('declared-root')
     expect(snapshot.verificationByTask[scope.activeTaskId!]).toMatchObject({ state: 'verified' })
-    expect(snapshot.goals[scope.goalId]?.autonomyUsage.taskTransitions).toBe(0)
     expect(Object.keys(snapshot.turns)).toHaveLength(1)
   })
 
@@ -83,6 +81,22 @@ describe('Pi Harness orchestrator bridge', () => {
     expect(snapshot.goals).toEqual({})
     expect(snapshot.turns).toEqual({})
     expect(getActivePiHarnessRunForTest('compact')).toBeUndefined()
+  })
+
+  test('deduplicates repeated tool facts within a turn and after resuming the same session', () => {
+    useTempConfig()
+    const scope = startPiHarnessRun({ sessionId: 'dedupe', ...base })!
+    scope.observeToolResult({ toolUseId: 'same-tool', toolName: 'Write', input: { file_path: 'same.txt', content: 'bounded' }, result: 'wrote' })
+    scope.observeToolResult({ toolUseId: 'same-tool', toolName: 'Write', input: { file_path: 'same.txt', content: 'bounded' }, result: 'wrote' })
+
+    expect(Object.keys(loadPiHarnessSnapshot('dedupe').facts)).toHaveLength(1)
+    settlePiHarnessRun('dedupe', 'completed')
+    const resumed = startPiHarnessRun({ sessionId: 'dedupe', ...base })!
+    resumed.observeToolResult({ toolUseId: 'same-tool', toolName: 'Write', input: { file_path: 'same.txt', content: 'bounded' }, result: 'wrote' })
+    resumed.observeToolResult({ toolUseId: 'new-tool', toolName: 'Read', input: { file_path: 'same.txt' }, result: 'read back' })
+    const snapshot = loadPiHarnessSnapshot('dedupe')
+    expect(Object.keys(snapshot.facts)).toHaveLength(2)
+    expect(Object.values(snapshot.facts).filter((fact) => fact.turnId === resumed.turnId)).toHaveLength(1)
   })
 
   test('native retry and compaction remain inside the same Turn and consume no Goal transition', () => {
@@ -101,7 +115,7 @@ describe('Pi Harness orchestrator bridge', () => {
     const turn = snapshot.turns[scope.turnId]!
     const goal = snapshot.goals[scope.goalId]!
     expect(turn).toMatchObject({ state: 'settled', usage: { modelCalls: 1, retries: 1, compactions: 1, inputTokens: 12, outputTokens: 34 } })
-    expect(goal).toMatchObject({ state: 'active', autonomyUsage: { taskTransitions: 0 } })
+    expect(goal).toMatchObject({ state: 'active' })
     expect(Object.keys(snapshot.turns)).toHaveLength(1)
     expect(getActivePiHarnessRunForTest('lifecycle')).toBeUndefined()
   })
@@ -139,7 +153,7 @@ describe('Pi Harness orchestrator bridge', () => {
     expect(snapshot.turns[scope.turnId]).toMatchObject({
       state: 'interrupted', endReason: 'user_stop', usage: { modelCalls: 1 },
     })
-    expect(snapshot.goals[scope.goalId]).toMatchObject({ state: 'paused', autonomyUsage: { taskTransitions: 0 } })
+    expect(snapshot.goals[scope.goalId]).toMatchObject({ state: 'paused' })
     expect(Object.keys(snapshot.turns)).toHaveLength(1)
   })
 
@@ -189,7 +203,6 @@ describe('Pi Harness orchestrator bridge', () => {
     expect(snapshot.verificationByTask['task-verify']).toMatchObject({ state: 'verified' })
     expect(Object.keys(snapshot.facts)).toHaveLength(3)
     expect(Object.keys(snapshot.turns)).toHaveLength(1)
-    expect(snapshot.goals[scope.goalId]?.autonomyUsage.taskTransitions).toBe(0)
   })
 
   test('continues only a user-selected ready_task shadow candidate in a new Pi Turn', () => {
@@ -218,7 +231,6 @@ describe('Pi Harness orchestrator bridge', () => {
     expect(scope.activeTaskId).toBe('follow')
     expect(Object.keys(snapshot.turns)).toHaveLength(1)
     expect(snapshot.manuallyContinuedCandidateFingerprints).toEqual(['ready:follow'])
-    expect(snapshot.goals.goal?.autonomyUsage.taskTransitions).toBe(0)
     expect(() => prepareManualPiHarnessCandidateContinuation('manual', 'follow')).toThrow('会话仍在处理中')
     settlePiHarnessRun('manual', 'completed')
     expect(() => prepareManualPiHarnessCandidateContinuation('manual', 'follow')).toThrow('不是可继续')

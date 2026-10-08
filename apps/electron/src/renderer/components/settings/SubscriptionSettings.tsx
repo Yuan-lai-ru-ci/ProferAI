@@ -2,14 +2,16 @@
  * SubscriptionSettings — 套餐订阅页
  *
  * 定价从服务端 /v1/account/config/plans 动态获取，Admin 操控面板可实时调整。
- * 加载失败时回退到硬编码默认值。
+ * 价格未就绪时不展示兜底报价，不允许创建付费订单。
  *
  * 支持在线订单和管理员手动收款，支付完成后刷新套餐权益。
  */
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { toast } from 'sonner'
-import { Check, Copy, Users, Zap, Gift, Crown, Loader2 } from 'lucide-react'
+import { Check, Copy, Users, Gift, Crown, Loader2, RefreshCw } from 'lucide-react'
+import { Button } from '@profer/ui/primitives/button'
+import { SettingsSection } from './primitives'
 import { cn } from '@/lib/utils'
 import { RechargeSection } from './RechargeSection'
 import {
@@ -25,8 +27,6 @@ import {
 import type { PricingData, SubscriptionPurchaseInput } from '@/domains/credits/credits-types'
 import { useCreditsLoader } from '@/hooks/useCreditsLoader'
 
-/** 联系管理员微信号（默认值，从 API 动态获取） */
-const ADMIN_WECHAT_DEFAULT = 'CYBER_YLRC'
 
 /** 套餐定义 */
 interface PlanDef {
@@ -40,35 +40,11 @@ interface PlanDef {
   featured?: boolean
 }
 
-/** 硬编码兜底套餐（API 加载失败时使用） */
-const PLANS_FALLBACK: PlanDef[] = [
-  {
-    id: 'free', name: 'Free', monthlyRmb: 0, yearlyRmb: 0,
-    welcomeBonus: 0, dailyDrip: 0,
-    features: ['注册赠 10 积分体验', '自配 API Key（自带 Key 全模型自由）', '平台渠道全模型（Claude / GPT / Gemini 等）', 'Agent / Skill / MCP / 自动化全开'],
-  },
-  {
-    id: 'standard', name: 'Standard', monthlyRmb: 29, yearlyRmb: 296,
-    welcomeBonus: 60, dailyDrip: 8,
-    features: ['首购红包 60 积分', '每日 drip 8 积分', '自配 API Key（自带 Key 全模型自由）', '平台渠道全模型（Claude / GPT / Gemini 等）', 'Agent / Skill / MCP / 自动化全开'],
-  },
-  {
-    id: 'plus', name: 'Plus', monthlyRmb: 49, yearlyRmb: 500,
-    welcomeBonus: 200, dailyDrip: 20,
-    features: ['首购红包 200 积分', '每日 drip 20 积分', '平台渠道全模型（Claude / GPT / Gemini 等）', 'Agent / Skill / MCP / 自动化全开'],
-    featured: true,
-  },
-  {
-    id: 'pro', name: 'Pro', monthlyRmb: 99, yearlyRmb: 1010,
-    welcomeBonus: 450, dailyDrip: 40,
-    features: ['首购红包 450 积分', '每日 drip 40 积分', '平台渠道全模型 + 自配 API Key', 'Agent / Skill / MCP / 自动化全开'],
-  },
-]
-
-/** VIP 兜底值 */
-const VIP_PRICE_DEFAULT = 698
-const VIP_DISCOUNT_DEFAULT = 0.9
-const VIP_EXTRA_DRIP_DEFAULT = 20
+const FREE_PLAN: PlanDef = {
+  id: 'free', name: 'Free', monthlyRmb: 0, yearlyRmb: 0,
+  welcomeBonus: 0, dailyDrip: 0,
+  features: ['已有账户权益以账户状态为准', '模型与工具以渠道、预设和权限配置为准'],
+}
 
 interface PurchaseState {
   orderId: string
@@ -78,60 +54,41 @@ interface PurchaseState {
 
 /** 将 API 返回的分值价格转换为元（API 返回人民币分） */
 function rmbToYuan(fen: number): number {
-  return Math.round(fen / 100)
+  return fen / 100
 }
 
-/** 从 API 数据构建 PLAN_DEF 数组，features 从兜底值合并 */
+/** 只采用完整、有限的服务端报价，避免损坏响应进入购买界面。 */
 function buildPlans(data: PricingData): PlanDef[] {
-  const apiPlans = data.plans
-  const standard = apiPlans.standard
-  const plus = apiPlans.plus
-  const pro = apiPlans.pro
-  return [
-    {
-      id: 'free', name: 'Free', monthlyRmb: 0, yearlyRmb: 0,
-      welcomeBonus: 0, dailyDrip: 0,
-      features: PLANS_FALLBACK[0]!.features,
-    },
-    {
-      id: 'standard', name: 'Standard',
-      monthlyRmb: rmbToYuan(standard.monthlyRmb),
-      yearlyRmb: rmbToYuan(standard.yearlyRmb),
-      welcomeBonus: standard.welcomeBonus,
-      dailyDrip: standard.dailyDrip,
-      features: PLANS_FALLBACK[1]!.features,
-    },
-    {
-      id: 'plus', name: 'Plus',
-      monthlyRmb: rmbToYuan(plus.monthlyRmb),
-      yearlyRmb: rmbToYuan(plus.yearlyRmb),
-      welcomeBonus: plus.welcomeBonus,
-      dailyDrip: plus.dailyDrip,
-      features: PLANS_FALLBACK[2]!.features,
-      featured: true,
-    },
-    {
-      id: 'pro', name: 'Pro',
-      monthlyRmb: rmbToYuan(pro.monthlyRmb),
-      yearlyRmb: rmbToYuan(pro.yearlyRmb),
-      welcomeBonus: pro.welcomeBonus,
-      dailyDrip: pro.dailyDrip,
-      features: PLANS_FALLBACK[3]!.features,
-    },
-  ]
+  const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0
+  if (!data.vip || !finite(data.vip.price) || !finite(data.vip.discount) || data.vip.discount > 1 || !finite(data.vip.extraDrip)) throw new Error('无效的 VIP 报价')
+  const paid = (['standard', 'plus', 'pro'] as const).map((id) => {
+    const plan = data.plans?.[id]
+    if (!plan || ![plan.monthlyRmb, plan.yearlyRmb, plan.welcomeBonus, plan.dailyDrip].every(finite)) throw new Error('无效的套餐报价')
+    return {
+      id, name: id[0]!.toUpperCase() + id.slice(1),
+      monthlyRmb: rmbToYuan(plan.monthlyRmb), yearlyRmb: rmbToYuan(plan.yearlyRmb),
+      welcomeBonus: plan.welcomeBonus, dailyDrip: plan.dailyDrip,
+      features: [`首购红包 ${plan.welcomeBonus} 积分`, `每日 drip ${plan.dailyDrip} 积分`, '模型与工具以渠道、预设和权限配置为准'],
+      featured: id === 'plus',
+    }
+  })
+  return [FREE_PLAN, ...paid]
 }
 
 /** 兑换码输入组件 */
 function RedeemInput({ onRedeemed }: { onRedeemed: () => Promise<void> }): React.ReactElement {
   const [code, setCode] = React.useState('')
   const [loading, setLoading] = React.useState(false)
+  const redeemRef = React.useRef(false)
 
   const handleRedeem = React.useCallback(async () => {
     const trimmed = code.trim()
+    if (redeemRef.current) return
     if (!trimmed) {
       toast.error('请输入兑换码')
       return
     }
+    redeemRef.current = true
     setLoading(true)
     try {
       const result = await redeemCredits(trimmed)
@@ -149,19 +106,21 @@ function RedeemInput({ onRedeemed }: { onRedeemed: () => Promise<void> }): React
     } catch {
       toast.error('兑换失败，请检查网络后重试')
     } finally {
+      redeemRef.current = false
       setLoading(false)
     }
   }, [code, onRedeemed])
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <input
+        aria-label="兑换码"
         type="text"
         value={code}
         onChange={(e) => setCode(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') handleRedeem() }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) void handleRedeem() }}
         placeholder="输入兑换码"
-        className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
+        className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors"
         disabled={loading}
       />
       <button
@@ -179,38 +138,52 @@ export function SubscriptionSettings(): React.ReactElement {
   const { reload: reloadCredits } = useCreditsLoader(60_000)
   const inviteCode = useAtomValue(inviteCodeAtom)
 
-  const [plans, setPlans] = React.useState<PlanDef[]>(PLANS_FALLBACK)
-  const [vipPrice, setVipPrice] = React.useState(VIP_PRICE_DEFAULT)
-  const [vipDiscount, setVipDiscount] = React.useState(VIP_DISCOUNT_DEFAULT)
-  const [vipExtraDrip, setVipExtraDrip] = React.useState(VIP_EXTRA_DRIP_DEFAULT)
-  const [adminWechat, setAdminWechat] = React.useState(ADMIN_WECHAT_DEFAULT)
-  const [pricingLoaded, setPricingLoaded] = React.useState(false)
+  const [plans, setPlans] = React.useState<PlanDef[]>([FREE_PLAN])
+  const [pricing, setPricing] = React.useState<PricingData | null>(null)
+  const [adminWechat, setAdminWechat] = React.useState('')
+  const [pricingLoading, setPricingLoading] = React.useState(true)
+  const [pricingError, setPricingError] = React.useState(false)
+  const [purchasing, setPurchasing] = React.useState(false)
+  const purchasingRef = React.useRef(false)
+  const alive = React.useRef(true)
+  const pricingRequest = React.useRef(0)
   const [purchaseState, setPurchaseState] = React.useState<PurchaseState | null>(null)
 
-  // 加载服务端定价
-  React.useEffect(() => {
-    let cancelled = false
-    requestSubscriptionPricing().then((data) => {
-      if (cancelled || !data) return
-      setPlans(buildPlans(data))
-      setVipPrice(rmbToYuan(data.vip.price))
-      setVipDiscount(data.vip.discount)
-      setVipExtraDrip(data.vip.extraDrip)
-      if (data.adminWechat) setAdminWechat(data.adminWechat)
-      setPricingLoaded(true)
-    }).catch(() => {
-      if (!cancelled) setPricingLoaded(true) // 用兜底值
-    })
-    return () => { cancelled = true }
+  const loadPricing = React.useCallback(async () => {
+    const request = ++pricingRequest.current
+    setPricingLoading(true)
+    setPricingError(false)
+    try {
+      const data = await requestSubscriptionPricing()
+      if (request !== pricingRequest.current) return
+      if (!data) throw new Error('价格未返回')
+      const nextPlans = buildPlans(data)
+      setPlans(nextPlans)
+      setPricing(data)
+      setAdminWechat(data.adminWechat || '')
+    } catch {
+      if (request === pricingRequest.current) {
+        setPricingError(true)
+        setPricing(null)
+        setPlans([FREE_PLAN])
+      }
+    } finally {
+      if (request === pricingRequest.current) setPricingLoading(false)
+    }
   }, [])
+
+  React.useEffect(() => {
+    alive.current = true
+    void loadPricing()
+    return () => { alive.current = false; pricingRequest.current += 1 }
+  }, [loadPricing])
 
   const vipFeatures = React.useMemo(() => [
     '终身买断，一次付费永久有效',
-    `模型消耗 ${(1 / 0.8).toFixed(1)}x 倍率（八折）`,
-    `套餐购买 ${Math.round(vipDiscount * 100)} 折`,
-    `每日额外 +${vipExtraDrip} drip`,
+    `套餐购买 ${(pricing ? pricing.vip.discount * 10 : 0).toLocaleString()} 折`,
+    `每日额外 +${pricing?.vip.extraDrip ?? 0} drip`,
     '需另购套餐（VIP 不替代套餐）',
-  ], [vipDiscount, vipExtraDrip])
+  ], [pricing])
 
   const copyWechat = React.useCallback(async (note?: string) => {
     try {
@@ -222,6 +195,9 @@ export function SubscriptionSettings(): React.ReactElement {
   }, [adminWechat])
 
   const startPurchase = React.useCallback(async (input: Omit<SubscriptionPurchaseInput, 'payType'> & { label: string }) => {
+    if (!pricing || pricingLoading || pricingError || purchasingRef.current || purchaseState) return
+    purchasingRef.current = true
+    setPurchasing(true)
     try {
       const result = await createSubscriptionPurchase({
         product: input.product, plan: input.plan, cycle: input.cycle, payType: 'wxpay',
@@ -234,6 +210,7 @@ export function SubscriptionSettings(): React.ReactElement {
         toast.error(result.message || '创建订单失败，请稍后重试')
         return
       }
+      if (!alive.current) return
       const data = result.data
 
       if (data.payInfo?.method === 'manual') {
@@ -260,7 +237,9 @@ export function SubscriptionSettings(): React.ReactElement {
       const readStatus = await createSubscriptionStatusReader(data.orderId)
       for (let i = 0; i < 30; i++) {
         await new Promise((resolve) => setTimeout(resolve, 5000))
+        if (!alive.current) return
         const status = await readStatus?.()
+        if (!alive.current) return
         if (status?.status === 'paid') {
           await reloadCredits()
           setPurchaseState(null)
@@ -275,9 +254,32 @@ export function SubscriptionSettings(): React.ReactElement {
       }
       toast.info('仍在等待支付结果，可稍后刷新额度查看')
     } catch {
-      toast.error('购买失败，请检查网络后重试')
+      if (alive.current) toast.error('购买失败，请检查网络后重试')
+    } finally {
+      purchasingRef.current = false
+      if (alive.current) setPurchasing(false)
     }
-  }, [reloadCredits])
+  }, [pricing, pricingLoading, pricingError, purchaseState, reloadCredits])
+
+  const checkPendingOrder = async (): Promise<void> => {
+    if (!purchaseState || purchasingRef.current) return
+    purchasingRef.current = true
+    setPurchasing(true)
+    try {
+      const read = await createSubscriptionStatusReader(purchaseState.orderId)
+      const status = await read?.()
+      if (!alive.current) return
+      if (status?.status === 'paid') {
+        await reloadCredits()
+        setPurchaseState(null)
+        toast.success('支付已确认，账户权益已刷新')
+      } else if (status?.status === 'cancelled' || status?.status === 'expired') {
+        setPurchaseState(null)
+        toast.info('订单已结束，可重新购买')
+      } else toast.info(status ? '订单仍待支付' : '订单状态暂不可用，请重试')
+    } catch { toast.error('订单查询失败，请重试') }
+    finally { purchasingRef.current = false; if (alive.current) setPurchasing(false) }
+  }
 
   const handleSubscribe = React.useCallback(async (plan: PlanDef, cycle: 'monthly' | 'yearly') => {
     await startPurchase({ product: 'subscription', plan: plan.id, cycle, label: `${plan.name} ${cycle === 'yearly' ? '年付' : '月付'}` })
@@ -288,28 +290,35 @@ export function SubscriptionSettings(): React.ReactElement {
   }, [startPurchase])
 
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-8">
       {/* ---- 四档定价卡 ---- */}
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <Zap size={16} className="text-primary" />
-          <h3 className="text-sm font-semibold">选择套餐</h3>
-        </div>
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+      <SettingsSection title="选择套餐" description="价格与积分权益来自当前服务端配置" action={
+        <Button variant="outline" size="sm" onClick={() => void loadPricing()} disabled={pricingLoading || purchasing}>
+          <RefreshCw size={14} className={pricingLoading ? 'animate-spin' : ''} />刷新价格
+        </Button>
+      }>
+        {pricingLoading && <p role="status" className="text-sm text-muted-foreground">正在获取套餐价格…</p>}
+        {pricingError && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-l-2 border-destructive pl-3 text-sm">
+            <span className="text-destructive">价格加载失败，套餐和 VIP 购买暂不可用。</span>
+            <Button variant="outline" size="sm" onClick={() => void loadPricing()}>重试价格</Button>
+          </div>
+        )}
+        <div aria-busy={pricingLoading} className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,180px),1fr))] gap-3">
           {plans.map((plan) => (
             <div
               key={plan.id}
               className={cn(
-                'rounded-xl border p-4 flex flex-col',
+                'min-w-0 rounded-lg border p-4 flex flex-col',
                 plan.featured
-                  ? 'bg-primary text-primary-foreground border-primary shadow-lg'
+                  ? 'bg-primary/5 text-foreground border-primary/40'
                   : 'bg-card border-border',
               )}
             >
               <div className="mb-2">
                 <div className="text-base font-bold">{plan.name}</div>
                 {plan.id !== 'free' && (
-                  <div className={cn('text-[11px]', plan.featured ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
+                  <div className="text-xs text-muted-foreground">
                     红包 {plan.welcomeBonus} · 日领 {plan.dailyDrip} 积分
                   </div>
                 )}
@@ -321,12 +330,12 @@ export function SubscriptionSettings(): React.ReactElement {
               ) : (
                 <div className="mb-1">
                   <span className="text-2xl font-bold">¥{plan.monthlyRmb}</span>
-                  <span className={cn('text-xs ml-1', plan.featured ? 'text-primary-foreground/70' : 'text-muted-foreground')}>/月</span>
+                  <span className="text-xs ml-1 text-muted-foreground">/月</span>
                 </div>
               )}
               {plan.id !== 'free' && (
-                <div className={cn('text-[11px] mb-3', plan.featured ? 'text-primary-foreground/70' : 'text-muted-foreground')}>
-                  年付 ¥{plan.yearlyRmb}/年（85 折）
+                <div className="text-xs mb-3 text-muted-foreground">
+                  年付 ¥{plan.yearlyRmb}/年
                 </div>
               )}
               {plan.id === 'free' && <div className="mb-3" />}
@@ -334,8 +343,8 @@ export function SubscriptionSettings(): React.ReactElement {
               <ul className="space-y-1.5 mb-4 flex-1">
                 {plan.features.map((feat) => (
                   <li key={feat} className="flex items-start gap-1.5 text-xs">
-                    <Check size={12} className={cn('mt-0.5 shrink-0', plan.featured ? 'text-primary-foreground' : 'text-primary')} />
-                    <span className={plan.featured ? 'text-primary-foreground/90' : 'text-foreground/75'}>{feat}</span>
+                    <Check size={12} className="mt-0.5 shrink-0 text-primary" />
+                    <span className="text-muted-foreground break-words">{feat}</span>
                   </li>
                 ))}
               </ul>
@@ -344,36 +353,28 @@ export function SubscriptionSettings(): React.ReactElement {
                 <div className="flex flex-col gap-1.5">
                   <button
                     onClick={() => handleSubscribe(plan, 'monthly')}
-                    className={cn(
-                      'w-full rounded-lg py-2 text-xs font-medium transition-colors',
-                      plan.featured
-                        ? 'bg-primary-foreground text-primary hover:bg-primary-foreground/90'
-                        : 'bg-muted text-foreground hover:bg-muted/70',
-                    )}
+                    disabled={purchasing || !!purchaseState || pricingLoading || pricingError}
+                    className="w-full rounded-md bg-primary py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                   >
                     月付 · ¥{plan.monthlyRmb}
                   </button>
                   <button
                     onClick={() => handleSubscribe(plan, 'yearly')}
-                    className={cn(
-                      'w-full rounded-lg py-2 text-xs font-medium transition-colors',
-                      plan.featured
-                        ? 'bg-primary-foreground/85 text-primary hover:bg-primary-foreground'
-                        : 'bg-muted/70 text-muted-foreground hover:bg-muted',
-                    )}
+                    disabled={purchasing || !!purchaseState || pricingLoading || pricingError}
+                    className="w-full rounded-md bg-muted py-2 text-xs font-medium hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                   >
-                    年付 · ¥{plan.yearlyRmb}（85折）
+                    年付 · ¥{plan.yearlyRmb}
                   </button>
                 </div>
               )}
             </div>
           ))}
         </div>
-      </div>
+      </SettingsSection>
 
       {/* ---- 待支付订单 ---- */}
       {purchaseState && (
-        <div className="rounded-xl border border-primary/30 bg-primary/[0.04] p-4 flex items-center gap-4">
+        <div role="status" className="rounded-lg border border-primary/30 bg-primary/5 p-4 flex flex-wrap items-center gap-4">
           {purchaseState.qrcode ? (
             <img src={purchaseState.qrcode} alt="支付二维码" className="size-28 rounded bg-white object-contain" />
           ) : (
@@ -382,6 +383,10 @@ export function SubscriptionSettings(): React.ReactElement {
           <div className="min-w-0">
             <div className="text-sm font-semibold">等待支付：{purchaseState.label}</div>
             <div className="mt-1 text-xs text-muted-foreground">完成支付后，权益会自动刷新。订单号：{purchaseState.orderId.slice(0, 8)}…</div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" disabled={purchasing} onClick={() => void checkPendingOrder()}>检查支付结果</Button>
+              <Button size="sm" variant="ghost" disabled={purchasing} onClick={() => setPurchaseState(null)}>隐藏订单状态</Button>
+            </div>
           </div>
         </div>
       )}
@@ -390,44 +395,40 @@ export function SubscriptionSettings(): React.ReactElement {
       <RechargeSection />
 
       {/* ---- VIP 叠加层 ---- */}
-      <div className="rounded-xl border border-yellow-400/40 bg-yellow-50/30 dark:bg-yellow-950/10 p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Crown size={18} className="text-yellow-600" />
+      <SettingsSection title="VIP 终身会员" description="VIP 为叠加权益，不替代套餐">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-y border-border py-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <Crown size={18} className="text-muted-foreground" />
               <span className="text-base font-bold">VIP 终身会员</span>
-              <span className="text-2xl font-bold text-yellow-700 dark:text-yellow-300">¥{vipPrice}</span>
+              <span className="text-lg font-semibold">{pricing ? `¥${rmbToYuan(pricing.vip.price)}` : '价格暂不可用'}</span>
             </div>
-            <ul className="space-y-1">
+            {pricing && <ul className="space-y-1">
               {vipFeatures.map((f) => (
                 <li key={f} className="flex items-start gap-1.5 text-xs text-foreground/70">
-                  <Check size={12} className="mt-0.5 shrink-0 text-yellow-600" />
+                  <Check size={12} className="mt-0.5 shrink-0 text-primary" />
                   {f}
                 </li>
               ))}
-            </ul>
+            </ul>}
           </div>
           <button
             onClick={handleBuyVip}
-            className="shrink-0 rounded-lg bg-yellow-600 text-white px-5 py-2 text-sm font-medium hover:bg-yellow-700 transition-colors"
+            disabled={!pricing || pricingLoading || pricingError || purchasing || !!purchaseState}
+            className="shrink-0 rounded-md bg-primary text-primary-foreground px-5 py-2 text-sm font-medium hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             购买 VIP
           </button>
         </div>
-      </div>
+      </SettingsSection>
 
       {/* ---- 兑换码 ---- */}
-      <div className="rounded-xl border border-border bg-card p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Gift size={16} className="text-primary" />
-          <h3 className="text-sm font-semibold">兑换码</h3>
-          <span className="text-[11px] text-muted-foreground">输入管理员发放的兑换码</span>
-        </div>
+      <SettingsSection title={<span className="flex items-center gap-2"><Gift size={16} />兑换码</span>} description="管理员发放的套餐或积分兑换码">
         <RedeemInput onRedeemed={reloadCredits} />
-      </div>
+      </SettingsSection>
 
       {/* ---- 团队版 banner ---- */}
-      <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-4 flex items-center justify-between gap-4">
+      {adminWechat && <div className="border-y border-border py-4 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-full bg-green-500/15 flex items-center justify-center shrink-0">
             <Users size={18} className="text-green-600" />
@@ -441,20 +442,22 @@ export function SubscriptionSettings(): React.ReactElement {
         </div>
         <button
           onClick={() => void copyWechat()}
+          aria-label="复制管理员微信号" title="复制管理员微信号"
           className="shrink-0 rounded-md p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         >
           <Copy size={15} />
         </button>
-      </div>
+      </div>}
 
       {/* ---- 邀请码 ---- */}
       {inviteCode && (
-        <div className="rounded-xl border border-border bg-muted/20 p-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="border-b border-border pb-4 flex items-center justify-between gap-3">
+          <div className="min-w-0 flex flex-wrap items-center gap-2 break-all">
             <Users size={16} className="text-muted-foreground" />
             <span className="text-sm">你的邀请码：<span className="font-mono font-bold">{inviteCode}</span></span>
           </div>
           <button
+            aria-label="复制我的邀请码" title="复制我的邀请码"
             onClick={() => {
               void (async () => {
                 try {

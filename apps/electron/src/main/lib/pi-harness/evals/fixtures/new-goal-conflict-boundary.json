@@ -17,6 +17,6 @@
     "focusTaskId": "old-task",
     "focusKind": "previous_focus",
     "assuranceByTask": { "old-task": "not_required" },
-    "telemetry": { "modelCalls": 0, "candidateCount": 0, "pauses": 1, "turnsStartedAfterPause": 0, "taskTransitions": 0 }
+    "telemetry": { "modelCalls": 0, "candidateCount": 0, "pauses": 1, "turnsStartedAfterPause": 0 }
   }
 }

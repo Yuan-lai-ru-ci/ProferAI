@@ -183,17 +183,17 @@ function LogoCard({ logo }: { logo: LogoVariant }): React.ReactElement {
   }, [logo])
 
   return (
-    <div className="flex flex-col items-center gap-2">
+    <div className="flex flex-col gap-2 rounded-xl border border-border/50 p-3">
       <div
         className={cn(
-          'w-20 h-20 rounded-xl overflow-hidden border border-border/50 flex items-center justify-center',
+          'flex h-24 w-full items-center justify-center overflow-hidden rounded-lg',
           logo.previewBg,
         )}
       >
         <img
           src={logo.src}
-          alt={logo.name}
-          className="w-full h-full object-contain"
+          alt=""
+          className="h-full w-full object-contain"
           draggable={false}
         />
       </div>
@@ -202,12 +202,13 @@ function LogoCard({ logo }: { logo: LogoVariant }): React.ReactElement {
         <div className="text-[10px] text-muted-foreground">{logo.description}</div>
       </div>
       <Button
+        type="button"
         size="sm"
         variant="outline"
-        className="w-full gap-1.5 h-7 text-xs"
-        onClick={handleDownload}
+        className="w-full gap-1.5 text-xs"
+        onClick={() => void handleDownload()}
       >
-        <Download size={12} />
+        <Download size={12} aria-hidden="true" />
         下载
       </Button>
     </div>
@@ -221,7 +222,7 @@ export function ProferLogoSettings(): React.ReactElement {
         title="品牌 Logo"
         description="下载 Profer Logo 用作机器人头像，让用户一眼认出你的 AI 助手"
       >
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-4">
           {LOGO_VARIANTS.map((logo) => (
             <LogoCard key={logo.id} logo={logo} />
           ))}

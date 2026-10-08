@@ -166,6 +166,11 @@ function writeTokens(tokens: AuthTokenStore): void {
 let authSessionGeneration = 0
 let logoutInProgress = false
 
+/** 渠道等后台任务复用同一会话代际，隔离登出后同账号重登的 ABA 竞态。 */
+export function getAuthSessionGeneration(): number | null {
+  return logoutInProgress ? null : authSessionGeneration
+}
+
 interface LoginResult {
   success: boolean
   teamAccountId?: string

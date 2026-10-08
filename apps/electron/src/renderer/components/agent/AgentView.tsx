@@ -25,7 +25,7 @@ import { agentGoalAtomFamily, getGoalActions, GOAL_STATUS_LABELS, goalEditorAtom
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
-import { nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from '@/lib/agent-channel-selection'
+import { isAgentModelSelectionValid, nextAgentChannelIdsAfterModelSelect } from '@/lib/agent-channel-selection'
 import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { BackgroundTaskControls } from './BackgroundTaskControls'
@@ -663,8 +663,8 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
   }, [sessionId, sessionMeta?.autoQueueSendEnabled, setAutoSendMap])
   const sessionMetaChannelId = sessionMeta?.channelId
   const sessionMetaModelId = sessionMeta?.modelId
-  const agentChannelId = sessionMetaChannelId ?? sessionChannelMap.get(sessionId) ?? defaultChannelId
-  const agentModelId = sessionMetaModelId ?? sessionModelMap.get(sessionId) ?? defaultModelId
+  const agentChannelId = sessionMeta ? sessionMetaChannelId ?? null : sessionChannelMap.get(sessionId) ?? defaultChannelId
+  const agentModelId = sessionMeta ? sessionMetaModelId ?? null : sessionModelMap.get(sessionId) ?? defaultModelId
   // 从会话元数据派生 workspaceId：会话数据已加载时以自身为准，未加载时回退全局 atom
   const currentWorkspaceId = sessionMeta ? sessionMeta.workspaceId ?? null : globalWorkspaceId
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
@@ -871,45 +871,13 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
 
   // 检查当前 Agent runtime 是否存在协议兼容的可用模型。
   const hasAvailableModel = React.useMemo(
-    () => resolveAgentModelSelection(globalChannels, sessionAgentRuntime, agentChannelIds) !== null,
-    [globalChannels, agentChannelIds, sessionAgentRuntime],
+    () => agentChannelId && agentModelId
+      ? isAgentModelSelectionValid(globalChannels, sessionAgentRuntime, agentChannelIds, { channelId: agentChannelId, modelId: agentModelId })
+      : false,
+    [globalChannels, agentChannelIds, sessionAgentRuntime, agentChannelId, agentModelId],
   )
-  React.useEffect(() => {
-    // 历史空模型会话仅在空闲时自动补全，不能与运行中的本轮 binding 竞争。
-    if (agentModelId || streaming || backgroundWaiting) return
-
-    const selection = resolveAgentModelSelection(
-      globalChannels,
-      sessionAgentRuntime,
-      agentChannelIds,
-      agentChannelId ? { channelId: agentChannelId, modelId: '' } : null,
-    )
-    if (!selection) return
-
-    if (defaultChannelId !== selection.channelId || defaultModelId !== selection.modelId) {
-      setDefaultChannelId(selection.channelId)
-      setDefaultModelId(selection.modelId)
-      window.electronAPI.updateSettings({
-        agentChannelId: selection.channelId,
-        agentModelId: selection.modelId,
-      }).catch(console.error)
-    }
-    window.electronAPI.updateAgentSessionModel(sessionId, selection.channelId, selection.modelId)
-      .then((updated) => {
-        setSessionChannelMap((prev) => {
-          const map = new Map(prev)
-          if (updated.channelId) map.set(sessionId, updated.channelId)
-          return map
-        })
-        setSessionModelMap((prev) => {
-          const map = new Map(prev)
-          map.set(sessionId, updated.modelId ?? selection.modelId)
-          return map
-        })
-        setAgentSessions((prev) => prev.map((session) => session.id === updated.id ? updated : session))
-      })
-      .catch((error) => console.error('[AgentView] 自动补全会话模型持久化失败:', error))
-  }, [agentChannelId, agentModelId, agentChannelIds, streaming, backgroundWaiting, globalChannels, sessionAgentRuntime, sessionId, defaultChannelId, defaultModelId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, setAgentSessions])
+  // 目录变化只影响可用性；历史空绑定也由用户明确选择模型后持久化。
+  // 默认模型在启动 initializer 中解析，不通过历史会话反向改写默认或 metadata。
 
   // 获取当前 session 的工作路径（文件浏览器需要）
   React.useEffect(() => {
@@ -1341,7 +1309,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     if (!messagesLoaded) return
     if (!pendingPrompt) return
     if (pendingPrompt.sessionId !== sessionId) return
-    if (!agentChannelId || streaming) return
+    if (!agentChannelId || !hasAvailableModel || streaming) return
 
     // 快照当前上下文
     const snapshot = {
@@ -1409,7 +1377,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         })
       })
     })
-  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories, revealRendererDraft, requestFollow])
+  }, [messagesLoaded, pendingPrompt, sessionId, agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime, streaming, setPendingPrompt, setStreamingStates, permissionMode, attachedDirs, attachedFileDirectories, revealRendererDraft, requestFollow])
   // ===== 附件处理 =====
 
   /** 为文件生成唯一文件名（避免粘贴多张图片时文件名重复导致覆盖） */
@@ -1875,10 +1843,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     return { channelId: agentChannelId, modelId: agentModelId }
   }, [agentChannelId, agentModelId])
 
-  // 防止瞬态 null 传递给 ModelSelector（防御 overflow remount 时 stableModelInfoRef 丢失）
-  const stableSelectedModelRef = React.useRef(computedSelectedModel)
-  if (computedSelectedModel) stableSelectedModelRef.current = computedSelectedModel
-  const externalSelectedModel = computedSelectedModel ?? stableSelectedModelRef.current
+  const externalSelectedModel = computedSelectedModel
 
   // ===== 运行中追加消息队列：注入/发送辅助 =====
 
@@ -2674,7 +2639,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
   const handleCompact = React.useCallback((): void => {
     // 防护：streaming（active turn 进行中）或 backgroundWaiting（后台任务等待态）
     // 都不允许发送 /compact，避免与活跃的 agent session 冲突导致卡死
-    if (!agentChannelId || streaming || backgroundWaiting) return
+    if (!agentChannelId || !hasAvailableModel || streaming || backgroundWaiting) return
     // 防重入：压缩 run 在飞行中（乐观 isCompacting 尚未生效的毫秒级窗口 + 整个压缩 run 期间）
     // 拒绝第二次压缩指令，避免一次按压（touch + 合成 mouse 等）发出两条 /compact。
     if (compactInFlightRef.current) return
@@ -2756,7 +2721,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       // 压缩 run 结束后才释放防重入锁（sendAgentMessage 的 promise 在整轮 run 完成后 resolve）
       compactInFlightRef.current = false
     })
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setStreamingStates, store, permissionMode])
+  }, [sessionId, agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setStreamingStates, store, permissionMode])
 
   /** 复制错误信息到剪贴板 */
   const handleCopyError = React.useCallback(async (): Promise<void> => {
@@ -2777,7 +2742,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
    * 只做渲染侧的副作用（跟随滚动、清错、置流式态）；消息本身由主进程持久化后回传。
    */
   const sendUserMessageInCurrentSession = React.useCallback((userMessage: string): void => {
-    if (!agentChannelId || streaming || backgroundWaiting) return
+    if (!agentChannelId || !hasAvailableModel || streaming || backgroundWaiting) return
     requestFollow(sessionId)
 
     // 清除错误状态
@@ -2822,7 +2787,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       uuid: messageUuid,
       permissionModeOverride: permissionMode,
     }).catch(console.error)
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode, requestFollow, appendOptimisticPersistedMessage])
+  }, [sessionId, agentChannelId, agentModelId, hasAvailableModel, currentWorkspaceId, sessionAgentRuntime, streaming, backgroundWaiting, setAgentStreamErrors, setStreamingStates, permissionMode, requestFollow, appendOptimisticPersistedMessage])
 
   /** 重试：在当前会话中重新发送最后一条用户消息（不截断历史，追加新一轮） */
   const handleRetry = React.useCallback((): void => {

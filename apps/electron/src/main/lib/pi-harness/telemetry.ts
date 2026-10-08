@@ -11,10 +11,10 @@ import type {
   ToolFact,
 } from './types'
 
-export const PI_HARNESS_TELEMETRY_VERSION = 1 as const
+export const PI_HARNESS_TELEMETRY_VERSION = 2 as const
 
 type CountBy<T extends string> = Record<T, number>
-type CandidateBlockedReason = 'shadow_mode' | 'permission_mode' | 'repeat_failed_verification' | 'other'
+type CandidateBlockedReason = 'shadow_mode' | 'permission_mode' | 'other'
 
 export interface PiHarnessGoalTelemetry {
   state: PiHarnessGoal['state']
@@ -25,10 +25,6 @@ export interface PiHarnessGoalTelemetry {
   retries: number
   compactions: number
   durationMs: number
-  estimatedCostUsd?: number
-  taskTransitions: number
-  repairAttempts: number
-  equivalentVerificationRuns: number
   candidateCount: number
   paused: boolean
 }
@@ -42,12 +38,7 @@ export interface PiHarnessTelemetry {
   sessionId: string
   goals: CountBy<PiHarnessGoal['state']> & { total: number }
   turns: CountBy<PiHarnessTurn['state']> & { total: number }
-  usage: PiTurnUsage & { estimatedCostUsd: number }
-  autonomy: {
-    taskTransitions: number
-    repairAttempts: number
-    equivalentVerificationRuns: number
-  }
+  usage: PiTurnUsage
   candidates: {
     total: number
     requiredVerification: number
@@ -88,14 +79,9 @@ function emptyStateCounts<T extends string>(states: readonly T[]): CountBy<T> {
   return Object.fromEntries(states.map((state) => [state, 0])) as CountBy<T>
 }
 
-function sumRecord(record: Record<string, number>): number {
-  return Object.values(record).reduce((total, value) => total + value, 0)
-}
-
 function candidateBlockedReason(candidate: GovernorCandidateRecord): CandidateBlockedReason {
   if (candidate.blockedReason === 'shadow_mode') return 'shadow_mode'
   if (candidate.blockedReason === 'permission_mode') return 'permission_mode'
-  if (candidate.blockedReason === 'repeat_failed_verification') return 'repeat_failed_verification'
   return 'other'
 }
 
@@ -139,14 +125,13 @@ export function collectPiHarnessTelemetry(options: {
   const goals = { total: 0, ...emptyStateCounts(goalStates) }
   const turns = { total: 0, ...emptyStateCounts(turnStates) }
   const verification = { tracked: 0, requiredTasks: 0, coverageRatio: 1, falseVerified: 0, ...emptyStateCounts(assuranceStates) }
-  const usage: PiTurnUsage & { estimatedCostUsd: number } = {
+  const usage: PiTurnUsage = {
     modelCalls: 0,
     inputTokens: 0,
     outputTokens: 0,
     retries: 0,
     compactions: 0,
     durationMs: 0,
-    estimatedCostUsd: 0,
   }
   const byGoal: Record<string, PiHarnessGoalTelemetry> = {}
 
@@ -155,8 +140,6 @@ export function collectPiHarnessTelemetry(options: {
     goals[goal.state] += 1
     const turnsForGoal = Object.values(snapshot.turns).filter((turn) => turn.goalId === goal.id)
     const candidatesForGoal = snapshot.governorCandidates.filter((candidate) => candidate.goalId === goal.id)
-    const autonomy = goal.autonomyUsage
-    const cost = autonomy.estimatedCostUsd
     byGoal[goal.id] = {
       state: goal.state,
       turnCount: turnsForGoal.length,
@@ -166,10 +149,6 @@ export function collectPiHarnessTelemetry(options: {
       retries: turnsForGoal.reduce((total, turn) => total + usageOf(turn).retries, 0),
       compactions: turnsForGoal.reduce((total, turn) => total + usageOf(turn).compactions, 0),
       durationMs: turnsForGoal.reduce((total, turn) => total + usageOf(turn).durationMs, 0),
-      ...(cost === undefined ? {} : { estimatedCostUsd: cost }),
-      taskTransitions: autonomy.taskTransitions,
-      repairAttempts: sumRecord(autonomy.repairAttemptsByTask),
-      equivalentVerificationRuns: sumRecord(autonomy.equivalentVerificationRuns),
       candidateCount: candidatesForGoal.length,
       paused: goal.state === 'paused',
     }
@@ -186,14 +165,6 @@ export function collectPiHarnessTelemetry(options: {
     usage.compactions += turnUsage.compactions
     usage.durationMs += turnUsage.durationMs
   }
-
-  const autonomy = Object.values(snapshot.goals).reduce((result, goal) => {
-    result.taskTransitions += goal.autonomyUsage.taskTransitions
-    result.repairAttempts += sumRecord(goal.autonomyUsage.repairAttemptsByTask)
-    result.equivalentVerificationRuns += sumRecord(goal.autonomyUsage.equivalentVerificationRuns)
-    usage.estimatedCostUsd += goal.autonomyUsage.estimatedCostUsd ?? 0
-    return result
-  }, { taskTransitions: 0, repairAttempts: 0, equivalentVerificationRuns: 0 })
 
   for (const stored of Object.values(snapshot.verificationByTask)) {
     verification.tracked += 1
@@ -212,7 +183,7 @@ export function collectPiHarnessTelemetry(options: {
     ? 1
     : verification.verified / verification.requiredTasks
 
-  const candidateReasons = emptyStateCounts(['shadow_mode', 'permission_mode', 'repeat_failed_verification', 'other'] as const)
+  const candidateReasons = emptyStateCounts(['shadow_mode', 'permission_mode', 'other'] as const)
   let requiredVerification = 0
   let readyTask = 0
   for (const candidate of snapshot.governorCandidates) {
@@ -247,7 +218,6 @@ export function collectPiHarnessTelemetry(options: {
     goals,
     turns,
     usage,
-    autonomy,
     candidates: {
       total: snapshot.governorCandidates.length,
       requiredVerification,

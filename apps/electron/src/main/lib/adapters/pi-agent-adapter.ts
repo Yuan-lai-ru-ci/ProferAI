@@ -92,6 +92,7 @@ import {
 } from './pi-request-proxy'
 import { registerPendingPiRuntimeProcess, registerPiRuntimeProcessShell } from '../runtime-process-registry'
 import { piBackgroundTaskManager } from '../pi-background-task-manager'
+import { compactPiToolDefinitions } from '../pi-tool-definition-compaction'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -144,6 +145,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
     options: CanUseToolOptions,
   ) => Promise<PermissionResult>
   systemPrompt: string
+  /** 本轮工具装载；空数组表示纯对话，不改变预设权限。 */
+  tools?: string[]
   /** Profer 已验证的项目根 instruction files；不触发 Pi 的磁盘自动发现。 */
   projectInstructionFiles?: ProferProjectInstructionFile[]
   /** 用于 typed 文件工具的会话级子目录指令激活；不会解析 Bash。 */
@@ -2165,7 +2168,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       )
       let compactContextRequested = false
       let automaticCompactionContinuations = 0
-      const customTools = [
+      const proferTools = compactPiToolDefinitions([
         buildCurrentSessionCompactionTool(
           sdk,
           () => { compactContextRequested = true },
@@ -2180,6 +2183,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           input.onToolExecutionResult,
         ),
         ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
+      ])
+      const customTools = input.tools?.length === 0 ? [] : [
+        ...proferTools,
         ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
       ]
 
@@ -2271,6 +2277,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         model,
         thinkingLevel: input.thinkingLevel ?? 'off',
         noTools: 'builtin',
+        ...(input.tools !== undefined ? { tools: input.tools } : {}),
         customTools,
       })
       session.agent.toolExecution = 'sequential'

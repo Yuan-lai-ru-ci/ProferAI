@@ -7,7 +7,6 @@ function snapshot(): PiHarnessSnapshot {
   value.goals.goal = {
     id: 'goal', sessionId: 'session', activeTaskId: 'task', state: 'paused', createdAt: 1, updatedAt: 5,
     policy: { governorMode: 'shadow', permissionMode: 'bypassPermissions', maxFocusChars: 1200 },
-    autonomyUsage: { taskTransitions: 0, repairAttemptsByTask: {}, equivalentVerificationRuns: {} },
   }
   value.goalPauseReasons.goal = 'user_stop'
   value.turns.turn = { id: 'turn', goalId: 'goal', activeTaskId: 'task', state: 'interrupted', startedAt: 2, endedAt: 4, endReason: 'user_stop', usage: { modelCalls: 1, inputTokens: 2, outputTokens: 3, retries: 0, compactions: 0, durationMs: 4 } }

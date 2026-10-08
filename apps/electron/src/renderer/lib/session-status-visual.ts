@@ -10,9 +10,9 @@ import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 
 export const SESSION_STATUS_DOT_CLASS: Record<SessionIndicatorStatus, string> = {
   idle: '',
-  running: 'bg-blue-500 animate-pulse',
-  blocked: 'bg-orange-500',
-  completed: 'bg-emerald-500',
+  running: 'bg-info animate-pulse',
+  blocked: 'bg-warning',
+  completed: 'bg-success',
 }
 
 export const SESSION_STATUS_LABEL: Record<SessionIndicatorStatus, string> = {

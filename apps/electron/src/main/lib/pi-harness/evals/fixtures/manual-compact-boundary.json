@@ -12,7 +12,6 @@
       "inputTokens": 0,
       "outputTokens": 0,
       "candidateCount": 0,
-      "taskTransitions": 0,
       "turnsStartedAfterPause": 0
     }
   }

@@ -38,23 +38,31 @@ export function SettingsSegmentedControl({
   options,
   disabled,
 }: SettingsSegmentedControlProps): React.ReactElement {
+  const id = React.useId()
+  const descriptionId = `${id}-description`
   return (
     <div className="px-4 py-3 space-y-2">
       <div>
-        <div className={LABEL_CLASS}>{label}</div>
+        <div id={id} className={LABEL_CLASS}>{label}</div>
         {description && (
-          <div className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
+          <div id={descriptionId} className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
         )}
       </div>
-      <div className="inline-flex rounded-lg bg-muted p-1 gap-0.5">
+      <div
+        role="group"
+        aria-labelledby={id}
+        aria-describedby={description ? descriptionId : undefined}
+        className="inline-flex max-w-full flex-wrap gap-0.5 rounded-lg bg-muted p-1"
+      >
         {options.map((option) => (
           <button
             key={option.value}
             type="button"
             disabled={disabled}
+            aria-pressed={value === option.value}
             onClick={() => onValueChange(option.value)}
             className={cn(
-              'px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
+              'px-3 py-1.5 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-focus/15',
               'disabled:cursor-not-allowed disabled:opacity-50',
               value === option.value
                 ? 'bg-background text-foreground shadow-sm'

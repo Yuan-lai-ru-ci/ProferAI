@@ -7,6 +7,25 @@
 
 import type { ProviderType } from '@profer/shared'
 
+/** 只变换 pathname，查询路由与 fragment 始终留在端点末尾。 */
+function mapUrlPath(rawUrl: string, transform: (path: string) => string): string {
+  const trimmed = rawUrl.trim()
+  const separatorIndex = trimmed.search(/[?#]/)
+  const head = separatorIndex === -1 ? trimmed : trimmed.slice(0, separatorIndex)
+  const tail = separatorIndex === -1 ? '' : trimmed.slice(separatorIndex)
+  try {
+    const parsed = new URL(head)
+    parsed.pathname = transform(parsed.pathname.replace(/\/+$/, '')) || '/'
+    return `${parsed.toString().replace(/\/+$/, '')}${tail}`
+  } catch {
+    return `${transform(head.replace(/\/+$/, ''))}${tail}`
+  }
+}
+
+function appendUrlPath(rawUrl: string, suffix: string): string {
+  return mapUrlPath(rawUrl, (path) => `${path}${suffix}`)
+}
+
 function trimTrailingUrlPathSlash(rawUrl: string): string {
   const trimmed = rawUrl.trim()
   const separatorIndex = trimmed.search(/[?#]/)
@@ -29,33 +48,20 @@ function hasPathSuffix(rawUrl: string, suffix: string): boolean {
 }
 
 function replacePathSuffix(rawUrl: string, suffix: string, replacement: string): string {
-  const trimmed = rawUrl.trim()
-  try {
-    const parsed = new URL(trimmed)
-    const pathname = parsed.pathname.replace(/\/+$/, '')
-    if (!pathname.endsWith(suffix)) return trimTrailingUrlPathSlash(trimmed)
-    parsed.pathname = `${pathname.slice(0, -suffix.length)}${replacement}`
-    return parsed.toString()
-  } catch {
-    const separatorIndex = trimmed.search(/[?#]/)
-    const pathPart = separatorIndex === -1 ? trimmed : trimmed.slice(0, separatorIndex)
-    const tail = separatorIndex === -1 ? '' : trimmed.slice(separatorIndex)
-    const normalizedPath = pathPart.replace(/\/+$/, '')
-    if (!normalizedPath.endsWith(suffix)) return trimTrailingUrlPathSlash(trimmed)
-    return `${normalizedPath.slice(0, -suffix.length)}${replacement}${tail}`
-  }
+  return mapUrlPath(rawUrl, (path) => path.endsWith(suffix)
+    ? `${path.slice(0, -suffix.length)}${replacement}`
+    : path)
 }
 
 function removePathSuffixForSdkBaseUrl(rawUrl: string, suffix: string): string {
   const trimmed = rawUrl.trim()
+  assertSdkBaseUrlSupportsRouting(trimmed)
   try {
     const parsed = new URL(trimmed)
     const pathname = parsed.pathname.replace(/\/+$/, '')
     if (!pathname.endsWith(suffix)) return normalizeBaseUrl(trimmed)
 
     parsed.pathname = pathname.slice(0, -suffix.length) || '/'
-    parsed.search = ''
-    parsed.hash = ''
     return trimTrailingUrlPathSlash(parsed.toString())
   } catch {
     const pathPart = trimmed.split(/[?#]/, 1)[0] ?? trimmed
@@ -101,20 +107,10 @@ export function isAnthropicShapedEndpoint(baseUrl?: string): boolean {
  * - "https://api.deepseek.com/anthropic" → 不变（已有非版本路径）
  */
 export function normalizeAnthropicBaseUrl(baseUrl: string): string {
-  let url = baseUrl.trim().replace(/\/+$/, '')
-  url = url.replace(/\/messages$/, '')
-  if (!url.match(/\/v\d+$/)) {
-    // 仅对根路径或纯域名追加 /v1；已有路径（如 deepseek /anthropic）保持原样
-    try {
-      const pathname = new URL(url).pathname
-      if (pathname === '/' || pathname === '') {
-        url = `${url}/v1`
-      }
-    } catch {
-      url = `${url}/v1`
-    }
-  }
-  return url
+  return mapUrlPath(baseUrl, (path) => {
+    const root = path.replace(/\/(messages|models)$/, '')
+    return root || '/v1'
+  })
 }
 
 /**
@@ -129,12 +125,10 @@ export function normalizeAnthropicBaseUrl(baseUrl: string): string {
  * - "https://api.kimi.com/coding/v1" → 不变（已有版本路径）
  */
 export function normalizeVersionedAnthropicBaseUrl(baseUrl: string): string {
-  let url = baseUrl.trim().replace(/\/+$/, '')
-  url = url.replace(/\/messages$/, '')
-  if (!url.match(/\/v\d+$/)) {
-    url = `${url}/v1`
-  }
-  return url
+  return mapUrlPath(baseUrl, (path) => {
+    const root = path.replace(/\/(messages|models)$/, '')
+    return /\/v\d+$/.test(root) ? root : `${root}/v1`
+  })
 }
 
 /**
@@ -151,6 +145,7 @@ export function normalizeVersionedAnthropicBaseUrl(baseUrl: string): string {
  * - "https://gateway.example.com/anthropic/" → "https://gateway.example.com/anthropic"
  */
 export function normalizeAnthropicBaseUrlForSdk(baseUrl: string): string {
+  assertSdkBaseUrlSupportsRouting(baseUrl)
   return baseUrl
     .trim()
     .replace(/\/+$/, '')
@@ -164,7 +159,15 @@ export function normalizeAnthropicBaseUrlForSdk(baseUrl: string): string {
  * 仅去除尾部斜杠，适用于 OpenAI / Google 等。
  */
 export function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, '')
+  return trimTrailingUrlPathSlash(baseUrl)
+}
+
+/** SDK 使用字符串拼接请求路径，不能安全传递 Base URL 上的 query/hash。 */
+export function assertSdkBaseUrlSupportsRouting(baseUrl: string): void {
+  if (/[?#]/.test(baseUrl.trim())) {
+    // 不回显地址，query 中可能含路由凭据。
+    throw new Error('Agent SDK 暂不支持端点中的 query/hash 路由，请使用不含 ? 或 # 的协议根地址；Chat 与模型发现仍可使用原地址')
+  }
 }
 
 /**
@@ -174,6 +177,7 @@ export function normalizeBaseUrl(baseUrl: string): string {
  * 渠道若保存的是完整端点，这里需要还原成协议根地址，避免重复拼接。
  */
 export function normalizeOpenAIBaseUrlForSdk(baseUrl: string): string {
+  assertSdkBaseUrlSupportsRouting(baseUrl)
   if (hasPathSuffix(baseUrl, '/chat/completions')) {
     return removePathSuffixForSdkBaseUrl(baseUrl, '/chat/completions')
   }
@@ -193,8 +197,7 @@ export function normalizeOpenAIBaseUrlForSdk(baseUrl: string): string {
  */
 export function resolveOpenAIChatCompletionsUrl(baseUrl: string, provider: ProviderType = 'openai'): string {
   if (provider === 'ollama') {
-    const rootUrl = normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')
-    return `${rootUrl}/v1/chat/completions`
+    return mapUrlPath(baseUrl, (path) => `${path.replace(/\/v1$/, '')}/v1/chat/completions`)
   }
   if (provider === 'custom') {
     return trimTrailingUrlPathSlash(baseUrl)
@@ -202,7 +205,7 @@ export function resolveOpenAIChatCompletionsUrl(baseUrl: string, provider: Provi
   if (hasPathSuffix(baseUrl, '/chat/completions')) {
     return trimTrailingUrlPathSlash(baseUrl)
   }
-  return `${normalizeBaseUrl(baseUrl)}/chat/completions`
+  return appendUrlPath(baseUrl, '/chat/completions')
 }
 
 /**
@@ -214,7 +217,7 @@ export function resolveOpenAIResponsesUrl(baseUrl: string, _provider: ProviderTy
   if (hasPathSuffix(baseUrl, '/responses')) {
     return trimTrailingUrlPathSlash(baseUrl)
   }
-  return `${normalizeBaseUrl(baseUrl)}/responses`
+  return appendUrlPath(baseUrl, '/responses')
 }
 
 /**
@@ -229,7 +232,8 @@ export function resolveOpenAIModelsUrl(baseUrl: string): string {
   if (hasPathSuffix(baseUrl, '/responses')) {
     return replacePathSuffix(baseUrl, '/responses', '/models')
   }
-  return `${normalizeBaseUrl(baseUrl)}/models`
+  if (hasPathSuffix(baseUrl, '/models')) return trimTrailingUrlPathSlash(baseUrl)
+  return appendUrlPath(baseUrl, '/models')
 }
 
 /**
@@ -273,19 +277,18 @@ export function normalizeAnthropicProviderUrl(baseUrl: string, provider: Provide
  */
 export function resolveAnthropicMessagesUrl(baseUrl: string, provider: ProviderType): string {
   if (provider === 'ollama') {
-    const normalized = normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')
-    return `${normalized}/v1/messages`
+    return mapUrlPath(baseUrl, (path) => `${path.replace(/\/v1$/, '')}/v1/messages`)
   }
   if (provider === 'anthropic-compatible') {
     return trimTrailingUrlPathSlash(baseUrl)
   }
   if (provider === 'xiaomi' || provider === 'xiaomi-token-plan') {
-    return `${new URL(baseUrl.trim()).origin}/anthropic/v1/messages`
+    return mapUrlPath(baseUrl, () => '/anthropic/v1/messages')
   }
   if (hasPathSuffix(baseUrl, '/messages')) {
     return trimTrailingUrlPathSlash(baseUrl)
   }
-  return `${normalizeAnthropicProviderUrl(baseUrl, provider)}/messages`
+  return appendUrlPath(normalizeAnthropicProviderUrl(baseUrl, provider), '/messages')
 }
 
 /**
@@ -296,12 +299,13 @@ export function resolveAnthropicMessagesUrl(baseUrl: string, provider: ProviderT
  */
 export function resolveAnthropicModelsUrl(baseUrl: string, provider: ProviderType): string {
   if (provider === 'ollama') {
-    return `${normalizeBaseUrl(baseUrl).replace(/\/v1$/, '')}/v1/models`
+    return mapUrlPath(baseUrl, (path) => `${path.replace(/\/v1$/, '')}/v1/models`)
   }
   if (hasPathSuffix(baseUrl, '/messages')) {
     return replacePathSuffix(baseUrl, '/messages', '/models')
   }
-  return `${normalizeAnthropicProviderUrl(baseUrl, provider)}/models`
+  if (hasPathSuffix(baseUrl, '/models')) return trimTrailingUrlPathSlash(baseUrl)
+  return appendUrlPath(normalizeAnthropicProviderUrl(baseUrl, provider), '/models')
 }
 
 /**
@@ -334,14 +338,14 @@ export function migrateCompatibleChannelBaseUrl(baseUrl: string, provider: Provi
     if (hasPathSuffix(trimmed, '/chat/completions')) {
       return trimTrailingUrlPathSlash(trimmed)
     }
-    return `${normalizeBaseUrl(trimmed)}/chat/completions`
+    return appendUrlPath(trimmed, '/chat/completions')
   }
 
   if (provider === 'anthropic-compatible') {
     if (hasPathSuffix(trimmed, '/messages')) {
       return trimTrailingUrlPathSlash(trimmed)
     }
-    return `${normalizeVersionedAnthropicBaseUrl(trimmed)}/messages`
+    return appendUrlPath(normalizeVersionedAnthropicBaseUrl(trimmed), '/messages')
   }
 
   // 其他 provider 的 URL 语义未改变，原样返回

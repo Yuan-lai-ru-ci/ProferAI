@@ -19,6 +19,17 @@ export interface AgentModelSelection {
   modelId: string
 }
 
+/** 历史会话仅校验，不自动替换其绑定模型。 */
+export function isAgentModelSelectionValid(
+  channels: Channel[], runtime: AgentRuntime, claudeChannelIds: string[], selection: AgentModelSelection,
+): boolean {
+  const channel = channels.find((item) => item.id === selection.channelId)
+  if (!channel?.enabled) return false
+  if (runtime === 'claude' && channel.agentRuntimes === undefined && !claudeChannelIds.includes(channel.id)) return false
+  return isChannelEnabledForRuntime(channel, runtime)
+    && channel.models.some((model) => model.id === selection.modelId && model.enabled)
+}
+
 /** Resolve a model that is valid for the selected Agent runtime. */
 export function resolveAgentModelSelection(
   channels: Channel[],
@@ -26,7 +37,6 @@ export function resolveAgentModelSelection(
   claudeChannelIds: string[],
   current?: AgentModelSelection | null,
 ): AgentModelSelection | null {
-  const preferredProtocol = runtime === 'pi' ? 'openai' : 'anthropic'
   /**
    * 可用性判定改为按渠道上用户勾选的 Agent 内核（`agentRuntimes`），不再按渠道类型。
    * 未迁移的老配置（agentRuntimes === undefined）仍用历史 Claude 白名单兜底，
@@ -34,7 +44,7 @@ export function resolveAgentModelSelection(
    */
   const isEligibleChannel = (channel: Channel): boolean => {
     if (!channel.enabled) return false
-    if (runtime !== 'pi' && channel.agentRuntimes === undefined) return claudeChannelIds.includes(channel.id)
+    if (runtime !== 'pi' && channel.agentRuntimes === undefined && !claudeChannelIds.includes(channel.id)) return false
     return isChannelEnabledForRuntime(channel, runtime === 'pi' ? 'pi' : 'claude')
   }
 

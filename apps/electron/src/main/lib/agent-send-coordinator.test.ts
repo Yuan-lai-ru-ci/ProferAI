@@ -4,7 +4,7 @@ import { coordinateAgentSend } from './agent-send-coordinator'
 
 const input = { sessionId: 's1', workspaceId: 'ws1', channelId: 'ch1' } as AgentSendInput
 const session = { id: 's1', workspaceId: 'ws1' } as AgentSessionMeta
-const channel = { id: 'ch1', enabled: true } as Channel
+const channel = { id: 'ch1', provider: 'anthropic', enabled: true } as Channel
 
 function deps(overrides: Partial<Parameters<typeof coordinateAgentSend>[1]> = {}) {
   const calls: string[] = []
@@ -26,6 +26,12 @@ describe('SEND_MESSAGE 协调器', () => {
   test('Given 绑定校验失败 When 协调发送 Then 不启动镜像或 Agent', async () => {
     const d = deps({ getSession: () => undefined })
     await expect(coordinateAgentSend(input, d.value)).rejects.toThrow('AGENT_SESSION_NOT_FOUND')
+    expect(d.calls).toEqual([])
+  })
+
+  test('Given 渠道禁用当前内核 When 协调发送 Then 不启动 Agent 或镜像', async () => {
+    const d = deps({ getChannel: () => ({ ...channel, agentRuntimes: ['pi'] }) })
+    await expect(coordinateAgentSend(input, d.value)).rejects.toThrow('AGENT_CHANNEL_RUNTIME_DISABLED')
     expect(d.calls).toEqual([])
   })
 

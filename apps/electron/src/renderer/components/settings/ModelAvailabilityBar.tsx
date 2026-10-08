@@ -10,14 +10,14 @@ interface ModelAvailabilityBarProps {
 }
 
 function statusColor(status: ModelAvailability['samples'][number]['status']): string {
-  if (status === 'failure') return 'bg-red-500'
-  if (status === 'degraded') return 'bg-amber-400'
-  return 'bg-lime-500'
+  if (status === 'failure') return 'bg-destructive'
+  if (status === 'degraded') return 'bg-warning'
+  return 'bg-success'
 }
 
 export function ModelAvailabilityBar({ model, compact = false, samples: samplesProp }: ModelAvailabilityBarProps): React.ReactElement {
   const percentage = model.availability
-  const tone = percentage === null ? 'text-muted-foreground' : percentage >= 90 ? 'text-lime-600 dark:text-lime-400' : percentage >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'
+  const tone = percentage === null ? 'text-muted-foreground' : percentage >= 90 ? 'text-success' : percentage >= 70 ? 'text-warning' : 'text-destructive'
   const samples = samplesProp ?? (model.samples.length ? model.samples : Array.from({ length: 32 }, () => null))
 
   return (

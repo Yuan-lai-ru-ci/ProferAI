@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import {
   findAgentSelectionToolbarAnchor,
+  findPinnedBlockIndex,
   markdownToPlainText,
   parseAgentMarkdownBlocks,
+  resolveToolbarBlock,
   serializeAgentSelection,
   tableMarkdownToTsv,
   toggleAgentBlockSelection,
@@ -28,13 +30,41 @@ describe('agent block copy serialization', () => {
     expect(source).not.toContain('group-[.is-selected]/agent-block:opacity-100')
     expect(source).toContain('pointer-events-none absolute -inset-x-1 top-0 z-0 border-x-[3px] border-primary/60 bg-primary/[0.06]')
     expect(source).toContain('border-2 border-dashed border-primary/40 bg-primary/[0.025]')
-    expect(source).toContain('previewVisible={!selecting && toolbarExpanded && toolbarBlock?.id === block.id}')
+    expect(source).toContain('previewVisible={!selecting && pinnedToolbarIndex < 0 && toolbarExpanded && toolbarBlock?.id === block.id}')
+    // 划词后工具栏固定到选中的块，「引用」按钮不必 hover 就能点到。
+    expect(source).toContain('AGENT_BLOCK_SELECTION_EVENT')
+    expect(source).toContain('quoteEnabled &&')
+    // 引用 / 探索常态只占图标宽度，hover 或聚焦才展开文字。
+    expect(source).toContain('function SelectionToolbarButton')
+    expect(source).toContain('label="引用"')
+    expect(source).toContain('label="探索"')
+    expect(source).toContain('group-hover/selection-action:max-w-')
     expect(source).toContain("selectionGroupStart && 'rounded-t-md border-t-[3px]'")
     expect(source).toContain("selectionGroupEnd ? 'bottom-0 rounded-b-md border-b-[3px]' : selectionBridgeAfterClassName")
     expect(source).toContain("selecting && 'select-none'")
     expect(source).not.toContain('group/table')
     expect(source).not.toContain('before:absolute')
     expect(source).not.toContain('absolute -top-8 right-0')
+  })
+
+  test('划词固定的操作条只渲染在选中块上，多选中未选块仍隐藏', () => {
+    const blocks = parseAgentMarkdownBlocks('一\n\n二\n\n三')
+    const base = { selecting: false, selectedIds: new Set<string>(), toolbarAnchorIndex: -1, hoveredBlock: null }
+
+    const pinnedIndex = findPinnedBlockIndex(blocks, blocks[1]!.id)
+    expect(pinnedIndex).toBe(1)
+    expect(resolveToolbarBlock({ ...base, block: blocks[1]!, index: 1, pinnedIndex })).toBe(blocks[1]!)
+    expect(resolveToolbarBlock({ ...base, block: blocks[0]!, index: 0, pinnedIndex })).toBeNull()
+
+    // 固定的块不属于本条消息时退回 hover 锚点块。
+    expect(findPinnedBlockIndex(blocks, 'not-in-this-message')).toBe(-1)
+    expect(resolveToolbarBlock({ ...base, block: blocks[0]!, index: 0, pinnedIndex: -1, toolbarAnchorIndex: 0, hoveredBlock: blocks[0]! })).toBe(blocks[0]!)
+
+    const selectedIds = new Set([blocks[0]!.id])
+    expect(resolveToolbarBlock({ ...base, selecting: true, selectedIds, block: blocks[1]!, index: 1, pinnedIndex })).toBeNull()
+    // 多选时不看划词固定：控制权交回多选锚点，否则工具栏会跳到选区外的块上。
+    expect(resolveToolbarBlock({ ...base, selecting: true, selectedIds, block: blocks[0]!, index: 0, pinnedIndex, toolbarAnchorIndex: 0, hoveredBlock: blocks[0]! })).toBe(blocks[0]!)
+    expect(resolveToolbarBlock({ ...base, selecting: true, selectedIds, block: blocks[0]!, index: 0, pinnedIndex, toolbarAnchorIndex: 1, hoveredBlock: blocks[1]! })).toBeNull()
   })
 
   test('首次跨块点击按文档顺序补选闭区间', () => {
@@ -56,7 +86,7 @@ describe('agent block copy serialization', () => {
     expect(source).toContain('if (currentAnchor === nextAnchor && currentId !== block.id)')
     expect(source).toContain('}, 180)')
     expect(source).toContain('onMouseEnter={onToolbarEnter}')
-    expect(source).toContain('selecting && !selectedIds.has(block.id)')
+    expect(source).toContain('resolveToolbarBlock({')
     expect(source).toContain('{!selecting && <button')
     expect(source).toContain('aria-label="退出多选"')
     expect(source).toContain('selectionFormatMode')
@@ -110,6 +140,14 @@ describe('agent block copy serialization', () => {
     expect(source).toContain('closest(AGENT_BLOCK_INTERACTION_SELECTOR)')
     expect(source).toContain('img: MarkdownImage')
     expect(source).toContain('<span role="img" aria-label={alt} />')
+  })
+
+  test('本地 Markdown 图片误指向 HTML/SVG 等文件时降级为文件链接，避免破损图片图标', async () => {
+    const source = await Bun.file(`${import.meta.dir}/message.tsx`).text()
+    expect(source).toContain('function isLocalNonImageMarkdownSource')
+    expect(source).toContain('return <MarkdownLink href={src}>{alt || src}</MarkdownLink>')
+    expect(source).toContain("/\\.(?:png|jpe?g|gif|webp)(?:[?#].*)?$/i.test(localPath) === false")
+    expect(source).toContain('isBareLocalFile || /^[A-Za-z]:[\\\\/]/.test(href)')
   })
 
   test('普通格式是共享状态，表格格式仅由当前表格操作条切换', async () => {

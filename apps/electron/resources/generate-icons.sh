@@ -30,29 +30,10 @@ fi
 echo "📦 Generating icon.png (1024x1024)..."
 rsvg-convert -w 1024 -h 1024 icon.svg -o icon.png
 
-# 2. Generate menubar/tray icons (multi-resolution for Retina displays)
-echo "📦 Generating tray icons..."
-
-# macOS 托盘图标规范：
-# - 标准尺寸: 22x22pt（点）
-# - @2x Retina: 44x44px
-# - @3x 高分辨率: 66x66px
-# 使用 "Template" 命名让 macOS 自动适配深色/浅色菜单栏
-TRAY_SVG="profer-logos/icon.svg"
-
-if [ ! -f "$TRAY_SVG" ]; then
-  echo "⚠️  Tray icon SVG not found at $TRAY_SVG, skipping tray icon generation"
-else
-  # 生成多分辨率 Template 图标（macOS 会自动选择合适的版本）
-  rsvg-convert -w 22 -h 22 "$TRAY_SVG" -o profer-logos/iconTemplate.png
-  rsvg-convert -w 44 -h 44 "$TRAY_SVG" -o "profer-logos/iconTemplate@2x.png"
-  rsvg-convert -w 66 -h 66 "$TRAY_SVG" -o "profer-logos/iconTemplate@3x.png"
-
-  echo "✅ Tray icons generated:"
-  echo "   - profer-logos/iconTemplate.png (22x22 @1x)"
-  echo "   - profer-logos/iconTemplate@2x.png (44x44 @2x Retina)"
-  echo "   - profer-logos/iconTemplate@3x.png (66x66 @3x)"
-fi
+# 2. 菜单栏托盘图标与品牌素材 Logo 不在本脚本范围内：
+#    它们由 scripts/generate-brand-logos.mjs 统一生成（同一份标记几何 → 托盘 3 个尺寸 + 14 个变体），
+#    避免两处各自生成导致托盘图标与品牌素材标记不一致。
+#    运行：cd apps/electron && bun run generate:brand-logos
 
 # 3. Generate .icns (macOS app icon)
 if command -v iconutil &> /dev/null; then
@@ -97,6 +78,5 @@ echo "Generated files:"
 echo "  - icon.png (1024x1024) - Linux & macOS Dock"
 echo "  - icon.icns - macOS app icon"
 echo "  - icon.ico - Windows app icon"
-echo "  - profer-logos/iconTemplate.png - macOS tray (22x22 @1x)"
-echo "  - profer-logos/iconTemplate@2x.png - macOS tray (44x44 @2x Retina)"
-echo "  - profer-logos/iconTemplate@3x.png - macOS tray (66x66 @3x)"
+echo ""
+echo "菜单栏托盘图标与品牌素材 Logo 不在此处列出，请运行：bun run generate:brand-logos"

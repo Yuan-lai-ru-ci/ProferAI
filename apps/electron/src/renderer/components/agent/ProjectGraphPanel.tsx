@@ -36,11 +36,11 @@ import { GraphQuestionInput } from './GraphQuestionInput'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { presentPiHarnessTask, type PiHarnessTaskPresentation } from '@/lib/pi-harness-view-model'
 
-// 呼吸动画样式（注入一次）—— 4s 周期，柔和渐变
+// 呼吸动画样式（注入一次）—— 4s 周期，柔和渐变；颜色跟随 info 语义 token。
 const breatheStyle = `
 @keyframes breathe {
-  0%, 100% { box-shadow: 0 0 4px rgba(96,165,250,0.05), 0 0 8px rgba(96,165,250,0.03); }
-  50% { box-shadow: 0 0 10px rgba(96,165,250,0.14), 0 0 20px rgba(96,165,250,0.05); }
+  0%, 100% { box-shadow: 0 0 4px hsl(var(--info) / 0.05), 0 0 8px hsl(var(--info) / 0.03); }
+  50% { box-shadow: 0 0 10px hsl(var(--info) / 0.14), 0 0 20px hsl(var(--info) / 0.05); }
 }
 .animate-breathe { animation: breathe 4s ease-in-out infinite; }
 `
@@ -66,11 +66,11 @@ const MAX_SCALE = 2.5
 const DOT_R = 5
 
 const statusConfig: Record<TaskStatus, { icon: React.ReactElement; color: string; border: string; lineColor: string }> = {
-  pending:     { icon: <Circle className="size-4" />,                color: 'text-muted-foreground', border: 'border-border',                lineColor: 'hsl(var(--muted-foreground)/0.4)' },
-  in_progress: { icon: <Loader2 className="size-4 animate-spin" />, color: 'text-blue-400',           border: 'border-blue-400/40',          lineColor: '#60a5fa' },
-  completed:   { icon: <CheckCircle2 className="size-4" />,          color: 'text-emerald-500',        border: 'border-emerald-400/40',       lineColor: '#34d399' },
-  failed:      { icon: <XCircle className="size-4" />,               color: 'text-red-400',            border: 'border-red-400/40',           lineColor: '#f87171' },
-  cancelled:   { icon: <AlertCircle className="size-4" />,           color: 'text-amber-500',          border: 'border-amber-400/40',         lineColor: '#fbbf24' },
+  pending:     { icon: <Circle className="size-4" />,                color: 'text-muted-foreground', border: 'border-border',            lineColor: 'hsl(var(--muted-foreground) / 0.4)' },
+  in_progress: { icon: <Loader2 className="size-4 animate-spin" />, color: 'text-info',              border: 'border-info/40',           lineColor: 'hsl(var(--info))' },
+  completed:   { icon: <CheckCircle2 className="size-4" />,          color: 'text-success',          border: 'border-success/40',        lineColor: 'hsl(var(--success))' },
+  failed:      { icon: <XCircle className="size-4" />,               color: 'text-destructive',      border: 'border-destructive/40',    lineColor: 'hsl(var(--destructive))' },
+  cancelled:   { icon: <AlertCircle className="size-4" />,           color: 'text-warning',          border: 'border-warning/40',        lineColor: 'hsl(var(--warning))' },
 }
 
 // ===== 数据 hook =====
@@ -141,7 +141,7 @@ interface NodePosition { id: string; x: number; y: number }
 const EMPTY_POSITIONS: NodePosition[] = []
 
 // 分叉边配色：琥珀色，与依赖边的状态色区分
-const FORK_LINE_COLOR = '#fbbf24'
+const FORK_LINE_COLOR = 'hsl(var(--warning))'
 // ===== 节点卡片（不透明、实色背景） =====
 
 function NodeCard({ node, harness, x, y, selected, onClick }: { node: TaskNode; harness: PiHarnessTaskPresentation; x: number; y: number; selected: boolean; onClick: () => void }) {
@@ -166,10 +166,10 @@ function NodeCard({ node, harness, x, y, selected, onClick }: { node: TaskNode; 
             : 'hover:border-foreground/30 hover:shadow-md',
           node.status === 'in_progress' && !selected && 'animate-breathe',
           isCancelled && 'opacity-50',
-          isAbandoned && !selected && 'opacity-40 border-dashed !border-amber-400/50',
+          isAbandoned && !selected && 'opacity-40 border-dashed !border-warning/50',
         )}
       >
-        <span className={cn('flex-shrink-0 mt-0.5', isAbandoned ? 'text-amber-500/70' : cfg.color)}>
+        <span className={cn('flex-shrink-0 mt-0.5', isAbandoned ? 'text-warning/70' : cfg.color)}>
           {isAbandoned ? <CircleSlash className="size-4" /> : cfg.icon}
         </span>
         <div className="flex-1 min-w-0">
@@ -181,7 +181,7 @@ function NodeCard({ node, harness, x, y, selected, onClick }: { node: TaskNode; 
             {node.subject}
           </div>
           {isAbandoned ? (
-            <div className="mt-1 text-[11px] text-amber-600/80 leading-tight line-clamp-2">
+            <div className="mt-1 text-[11px] text-warning/80 leading-tight line-clamp-2">
               放弃：{node.abandonReason}
             </div>
           ) : showDesc && (
@@ -198,10 +198,10 @@ function NodeCard({ node, harness, x, y, selected, onClick }: { node: TaskNode; 
           {harness.badge && (
             <span className={cn(
               'inline-flex mt-1.5 px-1.5 py-0.5 rounded text-[9px] font-medium',
-              harness.badge.tone === 'emerald' && 'bg-emerald-400/10 text-emerald-600 dark:text-emerald-400',
-              harness.badge.tone === 'amber' && 'bg-amber-400/10 text-amber-700 dark:text-amber-400',
-              harness.badge.tone === 'red' && 'bg-red-400/10 text-red-600 dark:text-red-400',
-              harness.badge.tone === 'blue' && 'bg-blue-400/10 text-blue-600 dark:text-blue-400',
+              harness.badge.tone === 'emerald' && 'bg-success/10 text-success',
+              harness.badge.tone === 'amber' && 'bg-warning/10 text-warning',
+              harness.badge.tone === 'red' && 'bg-destructive/10 text-destructive',
+              harness.badge.tone === 'blue' && 'bg-info/10 text-info',
               harness.badge.tone === 'muted' && 'bg-muted text-muted-foreground',
             )}>{harness.badge.label}</span>
           )}
@@ -286,7 +286,7 @@ function DetailPanel({ node, harness, onClose, onContinueCandidate }: {
             <button
               type="button"
               onClick={handleJumpToSession}
-              className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-blue-500 hover:text-blue-400 transition-colors"
+              className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-info hover:text-info/80 transition-colors"
             >
               <ExternalLink className="size-3" />
               跳转到执行会话
@@ -299,17 +299,17 @@ function DetailPanel({ node, harness, onClose, onContinueCandidate }: {
       <div className="flex-1 px-4 py-3 space-y-4">
         {/* 放弃原因（回溯抽取标注的枯死支线） */}
         {node.abandonReason && (
-          <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2.5">
+          <div className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5">
             <div className="flex items-center gap-1.5 mb-1">
-              <CircleSlash className="size-3.5 text-amber-500/80" />
-              <span className="text-[10px] font-medium text-amber-600/90 uppercase tracking-wider">放弃原因</span>
+              <CircleSlash className="size-3.5 text-warning/80" />
+              <span className="text-[10px] font-medium text-warning/90 uppercase tracking-wider">放弃原因</span>
               {typeof node.abandonConfidence === 'number' && (
-                <span className="ml-auto text-[10px] font-mono text-amber-600/60">
+                <span className="ml-auto text-[10px] font-mono text-warning/60">
                   置信 {Math.round(node.abandonConfidence * 100)}%
                 </span>
               )}
             </div>
-            <p className="text-xs text-amber-700/90 dark:text-amber-300/90 leading-relaxed">{node.abandonReason}</p>
+            <p className="text-xs text-warning/90 leading-relaxed">{node.abandonReason}</p>
             {node.abandonEvidence && node.abandonEvidence.length > 0 && (
               <div className="mt-1.5 text-[10px] text-muted-foreground/60">
                 证据轮次：{node.abandonEvidence.map((t) => `Turn ${t}`).join('、')}
@@ -333,7 +333,7 @@ function DetailPanel({ node, harness, onClose, onContinueCandidate }: {
                   type="button"
                   onClick={handleContinueCandidate}
                   disabled={continuing}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-blue-500 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-info px-2.5 py-1.5 text-xs font-medium text-info-foreground transition-colors hover:bg-info/90 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {continuing && <Loader2 className="size-3 animate-spin" />}
                   {continuing ? '正在启动…' : '继续此任务'}
@@ -341,7 +341,7 @@ function DetailPanel({ node, harness, onClose, onContinueCandidate }: {
                 <p className="mt-1.5 text-[10px] text-muted-foreground/70">仅由你的点击启动新的 Pi Turn；不会自动继续。</p>
               </div>
             )}
-            {continuationError && <p className="text-xs text-red-500">{continuationError}</p>}
+            {continuationError && <p className="text-xs text-destructive">{continuationError}</p>}
           </div>
         )}
 
@@ -624,7 +624,7 @@ export function ProjectGraphPanel({ refreshVersion = 0 }: { refreshVersion?: num
           <div className="flex-shrink-0 pl-5 pr-[80px] py-3 border-b border-border/30 flex items-center gap-4">
             <span className="text-xs text-muted-foreground flex-shrink-0">任务进度 {completed}/{nodes.length} · {progress}%</span>
             <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-              <div className="h-full bg-emerald-400 rounded-full transition-all duration-700 ease-out" style={{ width: `${progress}%` }} />
+              <div className="h-full bg-success rounded-full transition-all duration-700 ease-out" style={{ width: `${progress}%` }} />
             </div>
             {sessionId && <GraphRefreshButton sessionId={sessionId} />}
           </div>

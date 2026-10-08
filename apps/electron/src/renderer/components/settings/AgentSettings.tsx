@@ -18,6 +18,8 @@ import { chatToolsAtom } from '@/atoms/chat-tool-atoms'
 import { agentEffortAtom } from '@/atoms/agent-atoms'
 import { SettingsSection, SettingsCard, SettingsSegmentedControl } from './primitives'
 import type { AgentEffort } from '@profer/shared'
+import { toast } from 'sonner'
+import { useSessionSettingMutation } from '@/lib/use-session-setting-mutation'
 
 const EFFORT_OPTIONS: { value: AgentEffort; label: string }[] = [
   { value: 'low', label: '低' },
@@ -30,12 +32,20 @@ export function AgentSettings(): React.ReactElement {
   const tools = useAtomValue(chatToolsAtom)
   const setSettingsTab = useSetAtom(settingsTabAtom)
   const [effort, setEffort] = useAtom(agentEffortAtom)
+  const { pending, mutate } = useSessionSettingMutation()
 
   const handleEffortChange = React.useCallback((value: string) => {
-    const v = value as AgentEffort
-    setEffort(v)
-    window.electronAPI.updateSettings({ agentEffort: v }).catch(console.error)
-  }, [setEffort])
+    const next = EFFORT_OPTIONS.find((option) => option.value === value)?.value
+    if (!next || pending) return
+    const previous = effort
+    void mutate({
+      execute: () => window.electronAPI.updateSettings({ agentEffort: next }),
+      applyOptimistic: () => setEffort(next),
+      applyAuthoritative: () => setEffort(next),
+      rollback: () => setEffort(previous),
+      onError: () => toast.error('思考强度保存失败，请重试'),
+    })
+  }, [effort, pending, mutate, setEffort])
 
   const gptImageTool = tools.find((t) => t.meta.id === 'gpt-image')
   const webSearchTool = tools.find((t) => t.meta.id === 'web-search')
@@ -70,13 +80,14 @@ export function AgentSettings(): React.ReactElement {
 
   return (
     <div className="space-y-6">
-      <SettingsSection title="Agent 配置" description="调整 Agent 的推理行为和资源限制">
+      <SettingsSection title="默认推理行为" description="作为会话未单独指定时的默认值；会话和预设中的选择优先。">
         <SettingsCard>
           <SettingsSegmentedControl
             label="思考强度"
-            description="控制 Agent 推理深度。低强度响应更快，高强度更适合复杂任务（仅 Claude Opus 4.6+ 支持 max）"
+            description="低强度响应更快，高强度适合复杂任务。实际支持的档位由内核与模型决定。"
             value={effort ?? 'high'}
             onValueChange={handleEffortChange}
+            disabled={pending}
             options={EFFORT_OPTIONS}
           />
         </SettingsCard>
@@ -84,7 +95,7 @@ export function AgentSettings(): React.ReactElement {
 
       <SettingsSection
         title="内置工具"
-        description="启用后自动注入到 Agent 会话，在工具设置中配置。Skills 与 MCP 已移至侧边栏的「Agent 技能」。"
+        description="在 Chat 工具中配置；Agent 是否可用还受当前预设能力范围限制。Skills、MCP 与预设在侧边栏的「Agent 技能」管理。"
         action={
           <Button size="sm" variant="outline" onClick={() => setSettingsTab('tools')}>
             <Pencil size={14} />
@@ -100,11 +111,11 @@ export function AgentSettings(): React.ReactElement {
                 <div className="flex items-center gap-3 min-w-0">
                   <span className={cn('shrink-0', !isActive && 'opacity-40')}>{tool.icon}</span>
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className={cn('text-sm font-medium', !isActive && 'text-muted-foreground')}>{tool.name}</span>
                       <span className={cn(
                         'text-[10px] px-1.5 py-0.5 rounded-full',
-                        isActive ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground',
+                        isActive ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground',
                       )}>
                         {isActive ? '已启用' : !tool.available ? '需配置' : '未启用'}
                       </span>

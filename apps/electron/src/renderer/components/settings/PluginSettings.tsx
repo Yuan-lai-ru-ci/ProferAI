@@ -3,7 +3,8 @@ import { allowsPluginPagePlacement, PROFER_PLUGIN_PERMISSION_LABELS } from '@pro
 import { installedPluginsAtom } from '@/atoms/plugin-system'
 import { usePluginPage } from '@/hooks/usePluginPage'
 import * as React from 'react'
-import { useAtom } from 'jotai'
+import { useAtom, useAtomValue } from 'jotai'
+import { developerModeEnabledAtom } from '@/atoms/developer-mode'
 import { Blocks, ExternalLink, FolderOpen, Loader2, PackagePlus, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { ProferInstalledPlugin } from '@profer/plugin-api'
@@ -12,6 +13,7 @@ import { Badge } from '@profer/ui/primitives/badge'
 import { Switch } from '@profer/ui/primitives/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@profer/ui/primitives/select'
 import { SettingsCard, SettingsSection } from './primitives'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@profer/ui/primitives/alert-dialog'
 
 function formatInstalledAt(timestamp: number): string {
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(timestamp))
@@ -25,37 +27,53 @@ const PAGE_PLACEMENT_OPTIONS: Array<{ value: 'default' | 'sidebar' | 'tab' | 'hi
 ]
 
 export function PluginSettings(): React.ReactElement {
+  const developerModeEnabled = useAtomValue(developerModeEnabledAtom)
+  if (!developerModeEnabled) return <SettingsSection title="插件系统" description="插件管理仅在开发者模式中可用。"><SettingsCard divided={false} className="p-4 text-sm text-muted-foreground">当前入口已关闭；此页不会读取插件凭据或修改插件状态。</SettingsCard></SettingsSection>
+  return <PluginSettingsContent />
+}
+
+function PluginSettingsContent(): React.ReactElement {
   const [plugins, setPlugins] = useAtom(installedPluginsAtom)
   const openPluginPage = usePluginPage()
   const [loading, setLoading] = React.useState(true)
   const [busyKey, setBusyKey] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const [confirmation, setConfirmation] = React.useState<{ kind: 'replace'; path: string } | { kind: 'remove' | 'revoke'; plugin: ProferInstalledPlugin } | null>(null)
+  const [operationError, setOperationError] = React.useState<string | null>(null)
+  const busyRef = React.useRef(false)
+  const generationRef = React.useRef(0)
   const refresh = React.useCallback(async (): Promise<void> => {
+    const generation = ++generationRef.current
+    setLoading(true)
     setError(null)
     try {
       const nextPlugins = await window.electronAPI.listPlugins()
-      setPlugins(nextPlugins)
+      if (generation === generationRef.current) setPlugins(nextPlugins)
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : '无法读取插件列表'
-      setError(message)
+      if (generation === generationRef.current) setError(message)
     } finally {
-      setLoading(false)
+      if (generation === generationRef.current) setLoading(false)
     }
   }, [setPlugins])
 
   React.useEffect(() => {
     void refresh()
-    return window.electronAPI.onPluginsChanged(() => { void refresh() })
+    const unsubscribe = window.electronAPI.onPluginsChanged(() => { void refresh() })
+    return () => { generationRef.current += 1; unsubscribe() }
   }, [refresh])
 
   const install = async (kind: 'zip' | 'folder'): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusyKey(`install-${kind}`)
     try {
       const path = await window.electronAPI.selectPluginPackage(kind)
       if (!path) return
-      let result = await window.electronAPI.installPlugin(path)
-      if (!result.ok && result.status === 'conflict' && window.confirm(`${result.message}。确定替换已安装版本吗？`)) {
-        result = await window.electronAPI.installPlugin(path, true)
+      const result = await window.electronAPI.installPlugin(path)
+      if (!result.ok && result.status === 'conflict') {
+        setConfirmation({ kind: 'replace', path })
+        return
       }
       if (!result.ok) {
         toast.error(result.status === 'conflict' ? '插件已存在' : '插件安装失败', { description: result.message })
@@ -66,11 +84,14 @@ export function PluginSettings(): React.ReactElement {
     } catch (cause) {
       toast.error('插件安装失败', { description: cause instanceof Error ? cause.message : String(cause) })
     } finally {
+      busyRef.current = false
       setBusyKey(null)
     }
   }
 
   const toggle = async (plugin: ProferInstalledPlugin, enabled: boolean): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusyKey(`toggle-${plugin.manifest.id}`)
     try {
       const result = await window.electronAPI.setPluginEnabled(plugin.manifest.id, enabled)
@@ -80,38 +101,51 @@ export function PluginSettings(): React.ReactElement {
     } catch (cause) {
       toast.error('插件状态更新失败', { description: cause instanceof Error ? cause.message : String(cause) })
     } finally {
+      busyRef.current = false
       setBusyKey(null)
     }
   }
 
-  const remove = async (plugin: ProferInstalledPlugin): Promise<void> => {
-    if (!window.confirm(`确定卸载「${plugin.manifest.name}」吗？插件私有数据会保留。`)) return
-    setBusyKey(`remove-${plugin.manifest.id}`)
+  const confirmOperation = async (): Promise<void> => {
+    if (!confirmation || busyRef.current) return
+    busyRef.current = true
+    const action = confirmation
+    setOperationError(null)
+    setBusyKey(action.kind === 'replace' ? 'install-replace' : `remove-${action.plugin.manifest.id}`)
     try {
-      const result = await window.electronAPI.removePlugin(plugin.manifest.id)
-      if (!result.ok) toast.error('插件卸载失败', { description: result.message })
-      else toast.success(result.message)
+      if (action.kind === 'revoke') {
+        await window.electronAPI.revokePluginPermissions(action.plugin.manifest.id)
+      } else {
+        const result = action.kind === 'replace'
+          ? await window.electronAPI.installPlugin(action.path, true)
+          : await window.electronAPI.removePlugin(action.plugin.manifest.id)
+        if (!result.ok) throw new Error(result.message)
+        toast.success(result.message)
+      }
+      setConfirmation(null)
       await refresh()
     } catch (cause) {
-      toast.error('插件卸载失败', { description: cause instanceof Error ? cause.message : String(cause) })
-    } finally {
-      setBusyKey(null)
-    }
+      setOperationError(cause instanceof Error ? cause.message : String(cause))
+      toast.error('插件操作失败', { description: cause instanceof Error ? cause.message : String(cause) })
+    } finally { busyRef.current = false; setBusyKey(null) }
   }
 
   const openPage = (plugin: ProferInstalledPlugin, pageId: string, title: string): void => {
     void openPluginPage(plugin.manifest.id, pageId, title, undefined, 'settings').catch((error: unknown) => toast.error(String(error)))
   }
-  const changePermission = async (pluginId: string, revoke = false): Promise<void> => {
+  const changePermission = async (pluginId: string): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusyKey(`permission-${pluginId}`)
     try {
-      if (revoke) await window.electronAPI.revokePluginPermissions(pluginId)
-      else await window.electronAPI.authorizePlugin(pluginId)
+      await window.electronAPI.authorizePlugin(pluginId)
       await refresh()
     } catch (error) { toast.error(error instanceof Error ? error.message : '权限操作失败') }
-    finally { setBusyKey(null) }
+    finally { busyRef.current = false; setBusyKey(null) }
   }
   const changePagePlacement = async (plugin: ProferInstalledPlugin, pageId: string, value: string): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusyKey(`placement-${plugin.manifest.id}-${pageId}`)
     try {
       const preference = value === 'default' ? null : (value as 'sidebar' | 'tab' | 'hidden')
@@ -123,7 +157,7 @@ export function PluginSettings(): React.ReactElement {
       toast.success(result.message)
       await refresh()
     } catch (error) { toast.error(error instanceof Error ? error.message : '入口位置更新失败') }
-    finally { setBusyKey(null) }
+    finally { busyRef.current = false; setBusyKey(null) }
   }
   return (
     <div className="space-y-6">
@@ -132,11 +166,11 @@ export function PluginSettings(): React.ReactElement {
         description="通过插件扩展 Profer 的能力；插件管理使用 Profer 原生控件，插件页面在独立标签页和任务入口中运行。"
         action={(
           <div className="flex flex-wrap justify-end gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
+            <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} disabled={loading || busyKey !== null}>
               <RefreshCw className={loading ? 'animate-spin' : undefined} aria-hidden="true" />
               刷新
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => void window.electronAPI.openPluginsFolder()}>
+            <Button type="button" variant="outline" size="sm" disabled={busyKey !== null} onClick={() => void window.electronAPI.openPluginsFolder().catch(() => toast.error('打开插件目录失败，请重试'))}>
               <FolderOpen aria-hidden="true" />
               插件目录
             </Button>
@@ -174,7 +208,7 @@ export function PluginSettings(): React.ReactElement {
           )}
           {!loading && error && (
             <SettingsCard divided={false} className="p-6 text-center">
-              <p className="text-sm text-destructive">{error}</p>
+              <p role="alert" className="text-sm text-destructive">{error}</p>
               <Button className="mt-3" type="button" variant="outline" size="sm" onClick={() => void refresh()}>重试</Button>
             </SettingsCard>
           )}
@@ -192,7 +226,7 @@ export function PluginSettings(): React.ReactElement {
           {!loading && !error && plugins.length > 0 && (
             <div className="space-y-3">
               {plugins.map((plugin) => {
-                const pluginBusy = busyKey?.includes(plugin.manifest.id) ?? false
+                const pluginBusy = busyKey !== null
                 const enabledBusy = busyKey !== null
                 const settingsPages = (plugin.manifest.contributes.pages ?? []).filter((page) => allowsPluginPagePlacement(page, 'settings'))
                 const surfacePages = (plugin.manifest.contributes.pages ?? []).filter((page) => allowsPluginPagePlacement(page, 'sidebar') || allowsPluginPagePlacement(page, 'tab'))
@@ -216,9 +250,9 @@ export function PluginSettings(): React.ReactElement {
                         </div>
                         {!!plugin.manifest.network?.origins.length && <p className="mt-2 text-xs text-muted-foreground">网络服务：{plugin.manifest.network.origins.join('、')}</p>}
                         {plugin.manifest.network?.credentials?.map((credential) => <PluginCredentialField key={credential.id} pluginId={plugin.manifest.id} {...credential} />)}
-                        <div className="mt-3 flex gap-2">
+                        <div className="mt-3 flex flex-wrap gap-2">
                           <Button size="sm" variant="outline" disabled={busyKey !== null} onClick={() => void changePermission(plugin.manifest.id)}>查看并授权能力</Button>
-                          <Button size="sm" variant="ghost" disabled={busyKey !== null} onClick={() => void changePermission(plugin.manifest.id, true)}>撤销授权</Button>
+                          <Button size="sm" variant="ghost" disabled={busyKey !== null} onClick={() => { setOperationError(null); setConfirmation({ kind: 'revoke', plugin }) }}>撤销授权</Button>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -228,7 +262,7 @@ export function PluginSettings(): React.ReactElement {
                           onCheckedChange={(checked) => void toggle(plugin, checked)}
                           aria-label={`${plugin.manifest.name}${plugin.enabled ? '停用' : '启用'}`}
                         />
-                        <Button type="button" variant="ghost" size="icon-sm" disabled={pluginBusy} onClick={() => void remove(plugin)} aria-label={`卸载 ${plugin.manifest.name}`}>
+                        <Button type="button" variant="ghost" size="icon-sm" disabled={pluginBusy} onClick={() => { setOperationError(null); setConfirmation({ kind: 'remove', plugin }) }} aria-label={`卸载 ${plugin.manifest.name}`}>
                           {pluginBusy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
                         </Button>
                       </div>
@@ -236,7 +270,7 @@ export function PluginSettings(): React.ReactElement {
                     {plugin.enabled && settingsPages.length > 0 && (
                       <div className="mt-4 flex flex-wrap gap-2 border-t border-surface-border/40 pt-3">
                         {settingsPages.map((page) => (
-                          <Button key={page.id} type="button" variant="outline" size="sm" onClick={() => openPage(plugin, page.id, page.title)}>
+                          <Button key={page.id} type="button" variant="outline" size="sm" disabled={busyKey !== null} onClick={() => openPage(plugin, page.id, page.title)}>
                             {page.title}
                             <ExternalLink aria-hidden="true" />
                           </Button>
@@ -250,14 +284,14 @@ export function PluginSettings(): React.ReactElement {
                           const options = PAGE_PLACEMENT_OPTIONS.filter((option) =>
                             option.value === 'default' || option.value === 'hidden' || allowsPluginPagePlacement(page, option.value))
                           return (
-                            <div key={page.id} className="flex items-center justify-between gap-3">
+                            <div key={page.id} className="flex flex-wrap items-center justify-between gap-3">
                               <span className="text-sm text-foreground">{page.title}</span>
                               <Select
                                 value={plugin.pagePlacements?.[page.id] ?? 'default'}
                                 disabled={enabledBusy}
                                 onValueChange={(value) => void changePagePlacement(plugin, page.id, value)}
                               >
-                                <SelectTrigger className="h-8 w-44 text-xs" aria-label={`${page.title} 的入口位置`}>
+                                <SelectTrigger className="h-9 w-full sm:w-44 text-xs" aria-label={`${page.title} 的入口位置`}>
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -276,6 +310,19 @@ export function PluginSettings(): React.ReactElement {
           )}
         </div>
       </SettingsSection>
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setConfirmation(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmation?.kind === 'replace' ? '替换已安装插件？' : confirmation?.kind === 'revoke' ? '撤销插件授权？' : '卸载插件？'}</AlertDialogTitle>
+            <AlertDialogDescription>{confirmation?.kind === 'replace' ? '将覆盖同一插件的安装文件；插件私有数据保留。' : confirmation?.kind === 'revoke' ? `将撤销「${confirmation.plugin.manifest.name}」的已授权能力，插件调用将被阻止；数据和凭据保留。` : `将卸载「${confirmation?.plugin.manifest.name ?? ''}」。plugin-data 保留，授权及已存凭据会移除。`}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {operationError && <p role="alert" className="text-sm text-destructive">操作失败：{operationError}。可重试或取消。</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busyKey !== null}>取消</AlertDialogCancel>
+            <AlertDialogAction disabled={busyKey !== null} onClick={(event) => { event.preventDefault(); void confirmOperation() }}>{busyKey !== null ? '处理中…' : confirmation?.kind === 'replace' ? '替换插件' : confirmation?.kind === 'revoke' ? '撤销授权' : '卸载插件'}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

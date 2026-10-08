@@ -80,7 +80,7 @@ extraResources:
   # 教程文件（教程查看器 + 欢迎对话使用）
   - from: ../../tutorial/tutorial-v2.md
     to: tutorial.md
-  # Proma 品牌 Logo 素材（品牌素材下载功能使用）
+  # Profer 品牌 Logo 素材与菜单栏托盘图标（品牌素材下载、应用图标变体使用）
   - from: resources/profer-logos
     to: profer-logos
     filter:
@@ -130,6 +130,7 @@ mac:
     - resources/bin/profer
   extendInfo:
     NSMicrophoneUsageDescription: "Profer 需要访问麦克风，用于将你的语音实时转写为文本。"
+    NSAppleEventsUsageDescription: "Profer 需要通过系统事件将你确认的文本粘贴到当前应用的光标位置。"
   target:
     - target: dmg
       arch:

@@ -34,8 +34,17 @@ export const settingsTabAtom = atom<SettingsTab>('general')
 /** 设置浮窗是否打开 */
 export const settingsOpenAtom = atom(false)
 
-/** 渠道创建表单是否有未保存内容（用于拦截导航离开） */
+/** 渠道表单是否有未保存或正在保存的内容（用于拦截导航离开） */
 export const channelFormDirtyAtom = atom(false)
 
 /** 外部请求关闭设置面板（如 Cmd+W），SettingsPanel 监听后弹出确认对话框 */
 export const settingsCloseRequestedAtom = atom(false)
+
+export interface ChannelFormController {
+  busy: boolean
+  flush: () => Promise<boolean>
+  discard: () => Promise<void>
+}
+
+/** 当前渠道表单注册的离开控制器，供设置导航在卸载前保存或明确丢弃。 */
+export const channelFormControllerAtom = atom<ChannelFormController | null>(null)

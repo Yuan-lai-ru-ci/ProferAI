@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { validateChart, validateFragment } from './visualization-validation'
 import { presentVisualization, readVisualization, listVisualizations } from './visualization-records'
 import { buildVisualizationExport } from './visualization-export'
-import { buildChartOption, init } from '../../shared/visualization-chart'
+import { buildChartOption, chartThemeFromTokens, DEFAULT_CHART_PALETTE, init } from '../../shared/visualization-chart'
 import type { VisualizationChartSpec } from '@profer/shared'
 
 const bar: VisualizationChartSpec = { chartType: 'bar', xKey: 'name', series: [{ dataKey: 'value', label: '金额' }], data: [{ name: 'A', value: 20 }, { name: 'B', value: -10 }] }
@@ -71,5 +71,20 @@ describe('宿主图表双路径', () => {
       const chart = init(null, undefined, { renderer: 'svg', ssr: true, width: 600, height: 340 })
       try { chart.setOption(buildChartOption(spec, { foreground: '#111', muted: '#777', border: '#ddd', background: '#fff' })); expect(chart.renderToSVGString()).toContain('<path') } finally { chart.dispose() }
     }
+  })
+
+  test('图表系列色跟随主题 token：皮肤覆写 --chart-* 时不再回落默认调色板', () => {
+    const ocean = chartThemeFromTokens({ '--chart-1': '205 58% 42%', '--chart-2': '188 55% 38%' })
+    const terminal = chartThemeFromTokens({ '--chart-1': '100 40% 52%', '--chart-2': '70 35% 58%' })
+    expect(ocean.palette?.[0]).toBe('hsl(205 58% 42%)')
+    expect(ocean.palette?.[1]).toBe('hsl(188 55% 38%)')
+    expect(terminal.palette?.[0]).toBe('hsl(100 40% 52%)')
+    // 皮肤未覆写的槽位仍保留默认兜底值，且两套皮肤确实不同
+    expect(ocean.palette?.[7]).toBe(DEFAULT_CHART_PALETTE[7])
+    expect(ocean.palette?.[0]).not.toBe(terminal.palette?.[0])
+  })
+
+  test('完全无 token 时回落到默认调色板（导出静态页/旧调用方路径）', () => {
+    expect(chartThemeFromTokens({}).palette).toEqual([...DEFAULT_CHART_PALETTE])
   })
 })

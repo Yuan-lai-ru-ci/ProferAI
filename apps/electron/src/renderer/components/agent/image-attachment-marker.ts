@@ -35,12 +35,19 @@ function parseImageValue(value: unknown): ParsedAgentImageAttachment | undefined
 /** 从主进程工具结果的结构化 details 中提取图片；兼容 send_local_image 与 generate_image。 */
 export function parseAgentImageAttachmentDetails(value: unknown): ParsedAgentImageAttachment[] {
   if (!value || typeof value !== 'object') return []
-  const record = value as Record<string, unknown>
-  const candidates: unknown[] = [
-    record.image,
-    (record.output && typeof record.output === 'object') ? (record.output as Record<string, unknown>).image : undefined,
-    ...(Array.isArray(record.imageAttachments) ? record.imageAttachments : []),
-  ]
+  const candidates: unknown[] = []
+  const seen = new Set<object>()
+  const collect = (candidate: unknown, depth = 0): void => {
+    if (!candidate || typeof candidate !== 'object' || depth > 4 || seen.has(candidate)) return
+    seen.add(candidate)
+    const record = candidate as Record<string, unknown>
+    if (record.image !== undefined) candidates.push(record.image)
+    if (Array.isArray(record.imageAttachments)) candidates.push(...record.imageAttachments)
+    // Claude MCP may wrap tool details in structuredContent; Pi exposes them directly.
+    for (const key of ['output', 'details', 'structuredContent']) collect(record[key], depth + 1)
+  }
+  collect(value)
+
   const images: ParsedAgentImageAttachment[] = []
   for (const candidate of candidates) {
     const image = parseImageValue(candidate)

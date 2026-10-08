@@ -37,17 +37,22 @@ export function SettingsSecretInput({
   disabled,
 }: SettingsSecretInputProps): React.ReactElement {
   const [visible, setVisible] = React.useState(false)
+  const id = React.useId()
+  const descriptionId = `${id}-description`
 
   return (
     <div className="px-4 py-3 space-y-2">
       <div>
-        <div className={LABEL_CLASS}>{label}</div>
+        <label htmlFor={id} className={LABEL_CLASS}>{label}</label>
         {description && (
-          <div className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
+          <div id={descriptionId} className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
         )}
       </div>
       <div className="relative">
         <Input
+          id={id}
+          aria-describedby={description ? descriptionId : undefined}
+          autoComplete="off"
           type={visible ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -58,9 +63,12 @@ export function SettingsSecretInput({
         />
         <button
           type="button"
-          onClick={() => setVisible(!visible)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
-          tabIndex={-1}
+          onClick={() => setVisible((previous) => !previous)}
+          disabled={disabled}
+          aria-label={`${visible ? '隐藏' : '显示'}${label}`}
+          aria-pressed={visible}
+          title={`${visible ? '隐藏' : '显示'}${label}`}
+          className="absolute right-1 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-focus/15 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {visible ? <EyeOff size={16} /> : <Eye size={16} />}
         </button>

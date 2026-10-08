@@ -47,8 +47,8 @@ describe('xAI 凭据模式与 Agent 内核资格', () => {
     expect(isAgentEnabledForChannel(channel({ provider: 'anthropic' }))).toBe(true)
   })
 
-  test('Given 渠道显式勾选 Claude 内核 When 判断 Claude 内核资格 Then 允许（不看渠道类型）', () => {
-    expect(isAgentEnabledForChannel(channel({ agentRuntimes: ['pi', 'claude'] }))).toBe(true)
+  test('Given xAI 勾选 Claude When 判断资格 Then 与真实发送守卫一致拒绝', () => {
+    expect(isAgentEnabledForChannel(channel({ agentRuntimes: ['pi', 'claude'] }))).toBe(false)
   })
 
   test('Given 渠道只勾选 Pi 内核 When 判断 Claude 内核资格 Then 拒绝', () => {

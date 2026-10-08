@@ -29,13 +29,6 @@ export interface PiTurnUsage {
   durationMs: number
 }
 
-export interface PiGoalAutonomyUsage {
-  taskTransitions: number
-  repairAttemptsByTask: Record<string, number>
-  equivalentVerificationRuns: Record<string, number>
-  estimatedCostUsd?: number
-}
-
 export interface PiHarnessGoal {
   id: string
   sessionId: string
@@ -45,7 +38,6 @@ export interface PiHarnessGoal {
   createdAt: number
   updatedAt: number
   policy: PiHarnessPolicySnapshot
-  autonomyUsage: PiGoalAutonomyUsage
 }
 
 export interface PiHarnessTurn {
@@ -95,6 +87,7 @@ export type PiHarnessEvent =
       payload: { rootTaskId?: string; activeTaskId?: string; policy: PiHarnessPolicySnapshot }
     })
   | (PiHarnessEventBase & {
+      /** 兼容旧账本；新运行的焦点随 turn_started 写入。 */
       type: 'task_focus_changed'
       turnId?: string
       payload: { activeTaskId?: string; reason: string }
@@ -131,15 +124,11 @@ export type PiHarnessEvent =
       payload: { candidateFingerprint: string }
     })
   | (PiHarnessEventBase & {
-      type: 'autonomy_budget_consumed'
-      taskId?: string
-      payload: { kind: 'task_transition' | 'repair_attempt' | 'verification_run'; estimatedCostUsd?: number }
-    })
-  | (PiHarnessEventBase & {
       type: 'goal_paused'
       payload: { reason: string }
     })
   | (PiHarnessEventBase & {
+      /** 兼容旧账本的 fork 边界；shadow 不创建此事件。 */
       type: 'goal_settled'
       payload: { reason: string }
     })

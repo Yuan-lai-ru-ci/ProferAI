@@ -1538,7 +1538,32 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
     ...session,
     workspaceId: targetWorkspaceId,
     sdkSessionId: undefined, // SDK 上下文与工作区 cwd 绑定，必须清空
+    ...(normalizeAgentRuntime(session.agentRuntime) === 'pi'
+      ? { piSessionFile: undefined, piEntryBindings: undefined, piFileCheckpoints: undefined }
+      : {}),
     updatedAt: Date.now(),
+  }
+  if (normalizeAgentRuntime(session.agentRuntime) === 'pi') {
+    // Pi transcript 与文件检查点包含旧 cwd 的状态；迁移后重建 runtime，避免在新工作区恢复旧目录快照。
+    const piSessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
+    const oldPiSessionFile = session.piSessionFile && isPathWithin(piSessionDir, session.piSessionFile)
+      ? session.piSessionFile
+      : session.sdkSessionId
+        ? findPiSessionJsonl(session.sdkSessionId)
+        : undefined
+    if (oldPiSessionFile && existsSync(oldPiSessionFile)) {
+      try {
+        unlinkSync(oldPiSessionFile)
+      } catch (error) {
+        console.warn(`[Agent 会话] 迁移工作区时清理旧 Pi transcript 失败: ${oldPiSessionFile}`, error)
+      }
+    }
+    try {
+      const keepPaths = collectForeignCheckpointPaths(sessionId)
+      prunePiFileCheckpoints(getPiCheckpointsDir(), sessionId, { keepPaths })
+    } catch (error) {
+      console.warn(`[Agent 会话] 迁移工作区时清理旧 Pi 检查点失败: sessionId=${sessionId}`, error)
+    }
   }
   index.sessions[idx] = updated
   writeIndex(index)

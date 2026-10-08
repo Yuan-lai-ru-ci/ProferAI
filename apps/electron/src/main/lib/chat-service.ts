@@ -15,9 +15,9 @@ import { routePluginModel } from './plugins/plugin-routing'
 
 import { randomUUID } from 'node:crypto'
 import type { WebContents } from 'electron'
-import { CHAT_IPC_CHANNELS, resolveXaiCredentialMode } from '@profer/shared'
+import { CHAT_IPC_CHANNELS, isChannelEnabledForChat, resolveXaiCredentialMode } from '@profer/shared'
 import { pushChatStream } from './chat-stream-bus'
-import type { ChatSendInput, ChatMessage, ConversationMeta, GenerateTitleInput, FileAttachment, ChatToolActivity, KnowledgeReference } from '@profer/shared'
+import type { Channel, ChatSendInput, ChatMessage, ConversationMeta, GenerateTitleInput, FileAttachment, ChatToolActivity, KnowledgeReference } from '@profer/shared'
 import {
   getAdapter,
   streamSSE,
@@ -70,6 +70,12 @@ const ANTHROPIC_PROXY_PROVIDERS = new Set([
   'xiaomi-token-plan',
   'zhipu-coding',
 ])
+
+/** 标题和故障重试仍使用原绑定，禁止回落到其它模型。 */
+function isChatModelAvailable(channel: Channel, modelId: string): boolean {
+  return isChannelEnabledForChat(channel)
+    && channel.models.some((model) => model.id === modelId && model.enabled)
+}
 
 function isInvalidRelayTokenError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
@@ -251,11 +257,13 @@ export async function sendMessage(
     })
     return
   }
-  if (!channel.enabled) {
+  if (!isChannelEnabledForChat(channel)) {
     pushChatStream(webContents, conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
       conversationId,
       runId,
-      error: '当前渠道已停用，请重新选择可用模型',
+      error: channel.enabled
+        ? '当前渠道仅支持 Pi Agent，不能用于 Chat，请重新选择可用模型'
+        : '当前渠道已停用，请重新选择可用模型',
     })
     return
   }
@@ -420,7 +428,8 @@ export async function sendMessage(
             console.warn('[聊天服务] 直连失败后的 Relay 渠道同步失败:', syncError)
           }
           const fallbackChannel = listChannels().find((candidate) => candidate.id === channelId)
-          if (!fallbackChannel || fallbackChannel.directDataPlane === true) throw error
+          if (!fallbackChannel || fallbackChannel.directDataPlane === true
+            || !isChatModelAvailable(fallbackChannel, modelId)) throw error
           const fallbackApiKey = decryptApiKey(channelId)
           const fallbackAdapter = getAdapter(fallbackChannel.provider)
           const fallbackRequest = fallbackAdapter.buildStreamRequest({
@@ -440,6 +449,8 @@ export async function sendMessage(
           return streamSSE({ request: fallbackRequest, adapter: fallbackAdapter, signal: controller.signal, fetchFn, onEvent: handleStreamEvent })
         }
 
+        const currentChannel = listChannels().find((candidate) => candidate.id === channelId)
+        if (!currentChannel || !isChatModelAvailable(currentChannel, modelId)) throw error
         proxyBaseUrl = `${recovered.baseUrl}${ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'}`
         apiKey = recovered.proxyToken || recovered.token
         request.url = proxyBaseUrl
@@ -742,6 +753,14 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
   const { userMessage, channelId, modelId, contextMessages } = input
   console.log('[标题生成] 开始生成标题:', { channelId, modelId, sourceCount: contextMessages?.length ?? 1, userMessage: userMessage.slice(0, 50) })
 
+  // 即使是本地短标题，也先确认原绑定仍是启用且可用于 Chat 的模型。
+  const channels = listChannels()
+  const channel = channels.find((candidate) => candidate.id === channelId)
+  if (!channel || !isChatModelAvailable(channel, modelId)) {
+    console.warn('[标题生成] 渠道或模型不可用于 Chat:', { channelId, modelId })
+    return null
+  }
+
   // 短消息直接使用原文作为标题，避免 AI 幻觉。
   // 窗口路径（contextMessages）已经在收集阶段过滤过信息量，不再走这条短路。
   const trimmedMessage = userMessage.trim()
@@ -754,14 +773,6 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
   const titlePrompt = contextMessages && contextMessages.length > 0
     ? buildWindowTitlePrompt(contextMessages)
     : buildTitlePrompt(userMessage)
-
-  // 查找渠道
-  const channels = listChannels()
-  const channel = channels.find((c) => c.id === channelId)
-  if (!channel) {
-    console.warn('[标题生成] 渠道不存在:', channelId)
-    return null
-  }
 
   try {
     const storedSecret = decryptApiKey(channelId)

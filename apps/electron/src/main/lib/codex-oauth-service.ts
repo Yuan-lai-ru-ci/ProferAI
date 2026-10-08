@@ -59,9 +59,10 @@ function normalizeCredentials(value: unknown): CodexOAuthCredentials {
 
   const credential = value as Partial<OAuthCredential>
   if (
-    typeof credential.access !== 'string'
-    || typeof credential.refresh !== 'string'
-    || typeof credential.expires !== 'number'
+    typeof credential.access !== 'string' || !credential.access
+    || typeof credential.refresh !== 'string' || !credential.refresh
+    || typeof credential.expires !== 'number' || !Number.isFinite(credential.expires)
+    || credential.expires <= Date.now()
   ) {
     throw new Error('Pi OAuth 返回的凭据缺少 access、refresh 或 expires')
   }
@@ -92,16 +93,17 @@ export interface CodexLoginCallbacks {
  * Pi 的公开 OAuth API 由 ModelRuntime 承载；它会启动本地回调服务并完成 code 交换。
  */
 export async function loginCodexOAuth(callbacks?: CodexLoginCallbacks): Promise<CodexOAuthCredentials> {
-  const sdk = await loadPiSdk()
-
-  activeLoginAbort?.abort()
+  if (activeLoginAbort) throw new Error('Codex 登录正在进行，请先完成或取消')
   const abort = new AbortController()
   activeLoginAbort = abort
 
   try {
+    const sdk = await loadPiSdk()
+    if (abort.signal.aborted) throw new Error('登录已取消')
     const runtime = await sdk.ModelRuntime.create(createIsolatedModelRuntimeOptions(
       createEphemeralCredentialStore(),
     ))
+    if (abort.signal.aborted) throw new Error('登录已取消')
     const credentials = await runtime.login('openai-codex', 'oauth', {
       signal: abort.signal,
       prompt: async (prompt) => {
@@ -109,11 +111,16 @@ export async function loginCodexOAuth(callbacks?: CodexLoginCallbacks): Promise<
         if (prompt.type === 'select') return 'browser'
         return new Promise<string>((_resolve, reject) => {
           const rejectCancelled = () => reject(new Error('登录已取消'))
+          if (prompt.signal?.aborted || abort.signal.aborted) {
+            rejectCancelled()
+            return
+          }
           prompt.signal?.addEventListener('abort', rejectCancelled, { once: true })
           abort.signal.addEventListener('abort', rejectCancelled, { once: true })
         })
       },
       notify: (event) => {
+        if (abort.signal.aborted) return
         if (event.type === 'auth_url') {
           callbacks?.onAuthUrl?.(event.url)
           shell.openExternal(event.url).catch((err) => {
@@ -125,6 +132,7 @@ export async function loginCodexOAuth(callbacks?: CodexLoginCallbacks): Promise<
         }
       },
     })
+    if (abort.signal.aborted) throw new Error('登录已取消')
     return normalizeCredentials(credentials)
   } finally {
     if (activeLoginAbort === abort) {
@@ -136,7 +144,6 @@ export async function loginCodexOAuth(callbacks?: CodexLoginCallbacks): Promise<
 /** 取消进行中的 Codex OAuth 登录流程（若有）。 */
 export function cancelCodexOAuthLogin(): void {
   activeLoginAbort?.abort()
-  activeLoginAbort = undefined
 }
 
 /** 使用 refresh token 刷新 Codex OAuth 凭据。 */

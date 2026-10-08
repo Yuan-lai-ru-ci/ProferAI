@@ -35,6 +35,8 @@ export function parsePiHarnessEvents(jsonl: string): ParsedPiHarnessEvents {
         diagnostics.push({ line: index + 1, code: 'unsupported_version', message: '忽略未知 Pi Harness 事件版本' })
         continue
       }
+      // 已退役的自治预算只属于旧账本，不进入当前 shadow 事件模型。
+      if ((parsed as { type?: unknown }).type === 'autonomy_budget_consumed') continue
       if (!isEvent(parsed)) {
         diagnostics.push({ line: index + 1, code: 'invalid_event', message: '忽略格式无效的 Pi Harness 事件' })
         continue

@@ -165,10 +165,14 @@ import {
   getChannelById,
   syncChannelsFromServer,
   isCommercialMode,
-  persistXaiOAuthCredentials,
+  loginXaiChannel,
+  loginCodexChannel,
 } from './lib/channel-manager'
+import { ChannelNetworkRequests } from './lib/channel-network-requests'
 import { listChannelsWithBackgroundSync } from './lib/local-first-channel-listing'
-import { loginXaiOAuth } from './lib/xai-oauth-service'
+import { cancelXaiOAuthLogin } from './lib/xai-oauth-service'
+import { cancelCodexOAuthLogin } from './lib/codex-oauth-service'
+import { listCodexModels, listXaiModels } from './lib/adapters/pi-model-registry'
 import {
   listConversations,
   createConversation,
@@ -417,6 +421,7 @@ import { wechatBridge } from './lib/wechat-bridge'
 
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
+const channelNetworkRequests = new ChannelNetworkRequests()
 
 /** 同一会话的并发删除合并为一条 stop-and-wait 生命周期。 */
 const agentSessionDeletionCoordinator = new AgentSessionDeletionCoordinator()
@@ -1581,17 +1586,19 @@ export function registerIpcHandlers(): void {
   // 不能因商业渠道认证/同步的网络等待阻塞对话模型选择器。
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.LIST,
-    (): Channel[] => {
-      const { getTeamAuthWithRefresh } = require('./lib/auth-service')
+    (_, options?: { localOnly?: boolean }): Channel[] => {
+      const { getTeamAuth, getTeamAuthWithRefresh, getAuthSessionGeneration } = require('./lib/auth-service') as typeof import('./lib/auth-service')
       return listChannelsWithBackgroundSync({
         listLocalChannels: listChannels,
         isCommercialMode,
+        getTeamAuth,
+        getSessionGeneration: getAuthSessionGeneration,
         getTeamAuthWithRefresh,
         syncChannelsFromServer,
         onSyncFailure: (error) => {
           console.warn('[渠道管理] 后台同步渠道失败，继续使用本地缓存:', error)
         },
-      })
+      }, options?.localOnly !== true)
     }
   )
 
@@ -1663,18 +1670,22 @@ export function registerIpcHandlers(): void {
   // 直接测试连接（无需已保存渠道，传入明文凭证）
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.TEST_DIRECT,
-    async (_, input: FetchModelsInput): Promise<ChannelTestResult> => {
-      return testChannelDirect(input)
+    async (event, input: FetchModelsInput): Promise<ChannelTestResult> => {
+      return channelNetworkRequests.run(event.sender, input.requestId, (signal) => testChannelDirect(input, signal))
     }
   )
 
   // 从供应商拉取可用模型列表（直接传入凭证，无需已保存渠道）
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.FETCH_MODELS,
-    async (_, input: FetchModelsInput): Promise<FetchModelsResult> => {
-      return fetchModels(input)
+    async (event, input: FetchModelsInput): Promise<FetchModelsResult> => {
+      return channelNetworkRequests.run(event.sender, input.requestId, (signal) => fetchModels(input, signal))
     }
   )
+
+  ipcMain.handle(CHANNEL_IPC_CHANNELS.CANCEL_REQUEST, (event, requestId: string): void => {
+    channelNetworkRequests.cancel(event.sender.id, requestId)
+  })
 
   // 查询订阅 Plan 额度
   ipcMain.handle(
@@ -1688,7 +1699,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.SYNC_FROM_SERVER,
     async (_, serverBaseUrl: string, accessToken: string): Promise<void> => {
-      return syncChannelsFromServer(serverBaseUrl, accessToken)
+      await syncChannelsFromServer(serverBaseUrl, accessToken)
     }
   )
 
@@ -1727,19 +1738,39 @@ export function registerIpcHandlers(): void {
   // xAI 订阅 OAuth 登录：凭据只在主进程内流转并写入 safeStorage。
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.XAI_LOGIN,
-    async (_, channelId: string): Promise<Channel> => {
-      const channel = getChannelById(channelId)
-      if (!channel || channel.provider !== 'xai') throw new Error('xAI 渠道不存在或类型不匹配')
-      const credentials = await loginXaiOAuth()
-      persistXaiOAuthCredentials(channelId, credentials)
-      const updated = getChannelById(channelId)
-      if (!updated) throw new Error('xAI 登录完成，但渠道读取失败')
-      return updated
+    async (_, input: import('@profer/shared').XaiOAuthLoginInput): Promise<Channel> => {
+      const channel = await loginXaiChannel(input)
+      agentCatalogInvalidationPublisher.invalidate('channels')
+      return channel
     }
   )
 
-  // ===== 对话管理相关 =====
+  ipcMain.handle(CHANNEL_IPC_CHANNELS.XAI_LOGIN_CANCEL, async (): Promise<void> => {
+    cancelXaiOAuthLogin()
+  })
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.XAI_MODELS,
+    async (): Promise<import('@profer/shared').ChannelModel[]> =>
+      (await listXaiModels()).map((model) => ({ ...model, enabled: true, source: 'fetched' as const })),
+  )
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.CODEX_LOGIN,
+    async (_, input: import('@profer/shared').CodexOAuthLoginInput): Promise<Channel> => {
+      const channel = await loginCodexChannel(input)
+      agentCatalogInvalidationPublisher.invalidate('channels')
+      return channel
+    },
+  )
+  ipcMain.handle(CHANNEL_IPC_CHANNELS.CODEX_LOGIN_CANCEL, async (): Promise<void> => {
+    cancelCodexOAuthLogin()
+  })
+  ipcMain.handle(
+    CHANNEL_IPC_CHANNELS.CODEX_MODELS,
+    async (): Promise<import('@profer/shared').ChannelModel[]> =>
+      (await listCodexModels()).map((model) => ({ ...model, enabled: true, source: 'fetched' as const })),
+  )
 
+  // ===== 对话管理相关 =====
   // 获取对话列表
   ipcMain.handle(
     CHAT_IPC_CHANNELS.LIST_CONVERSATIONS,

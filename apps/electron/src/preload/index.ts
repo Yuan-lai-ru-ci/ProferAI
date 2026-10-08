@@ -299,7 +299,7 @@ export interface ElectronAPI {
   // ===== 渠道管理相关 =====
 
   /** 获取所有渠道列表（apiKey 保持加密态） */
-  listChannels: () => Promise<Channel[]>
+  listChannels: (options?: { localOnly?: boolean }) => Promise<Channel[]>
   /** 获取官方模型最近可用性 */
   getOfficialModelHealth: () => Promise<import('@profer/shared').OfficialChannelHealth[]>
 
@@ -324,6 +324,9 @@ export interface ElectronAPI {
   /** 从供应商拉取可用模型列表（直接传入凭证，无需已保存渠道） */
   fetchModels: (input: FetchModelsInput) => Promise<FetchModelsResult>
 
+  /** 取消本窗口发起的渠道测试/发现请求。 */
+  cancelChannelRequest: (requestId: string) => Promise<void>
+
   /** 查询渠道订阅 Plan 额度 */
   getChannelPlanQuota: (channelId: string) => Promise<ChannelPlanQuotaResult>
 
@@ -338,8 +341,18 @@ export interface ElectronAPI {
 
   /** 获取构建目标 */
   getBuildTarget: () => Promise<'oss' | 'commercial'>
-  /** 在已保存的 xAI 渠道上启动订阅 OAuth 登录。 */
-  loginXaiOAuth: (channelId: string) => Promise<Channel>
+  /** xAI 订阅授权成功后创建或更新渠道。 */
+  loginXaiOAuth: (input: import('@profer/shared').XaiOAuthLoginInput) => Promise<Channel>
+  /** 取消 xAI 订阅授权。 */
+  cancelXaiOAuthLogin: () => Promise<void>
+  /** 获取 Pi 内置 xAI 模型目录。 */
+  listXaiModels: () => Promise<import('@profer/shared').ChannelModel[]>
+  /** ChatGPT Codex 登录成功后才创建或更新渠道，不回传明文凭据。 */
+  loginCodexOAuth: (input: import('@profer/shared').CodexOAuthLoginInput) => Promise<Channel>
+  /** 取消当前进行中的 ChatGPT Codex OAuth 登录。 */
+  cancelCodexOAuthLogin: () => Promise<void>
+  /** 获取 Pi 当前内置的 ChatGPT Codex 模型目录。 */
+  listCodexModels: () => Promise<import('@profer/shared').ChannelModel[]>
 
   // ===== 对话管理相关 =====
 
@@ -1851,8 +1864,8 @@ const electronAPI: ElectronAPI = {
   },
 
   // 渠道管理
-  listChannels: () => {
-    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.LIST)
+  listChannels: (options?: { localOnly?: boolean }) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.LIST, options)
   },
   getOfficialModelHealth: () => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_OFFICIAL_HEALTH)
@@ -1886,6 +1899,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.FETCH_MODELS, input)
   },
 
+  cancelChannelRequest: (requestId: string) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.CANCEL_REQUEST, requestId)
+  },
+
   getChannelPlanQuota: (channelId: string) => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_PLAN_QUOTA, channelId)
   },
@@ -1906,9 +1923,16 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.GET_BUILD_TARGET)
   },
 
-  loginXaiOAuth: (channelId: string) => {
-    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.XAI_LOGIN, channelId)
+  loginXaiOAuth: (input: import('@profer/shared').XaiOAuthLoginInput) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.XAI_LOGIN, input)
   },
+  cancelXaiOAuthLogin: () => ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.XAI_LOGIN_CANCEL),
+  listXaiModels: () => ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.XAI_MODELS),
+  loginCodexOAuth: (input: import('@profer/shared').CodexOAuthLoginInput) => {
+    return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.CODEX_LOGIN, input)
+  },
+  cancelCodexOAuthLogin: () => ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.CODEX_LOGIN_CANCEL),
+  listCodexModels: () => ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.CODEX_MODELS),
 
   // 对话管理
   listConversations: (includeArchived?: boolean) => {

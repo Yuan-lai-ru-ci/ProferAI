@@ -20,17 +20,16 @@ function event(overrides: Partial<PiHarnessEvent> = {}): PiHarnessEvent {
 }
 
 describe('Pi Harness telemetry', () => {
-  test('attributes model/token/cost usage to the owning Goal without exposing facts', () => {
+  test('attributes model/token usage to the owning Goal without exposing facts', () => {
     const events: PiHarnessEvent[] = [
       event(),
       event({ eventId: 'turn', timestamp: 2, type: 'turn_started', turnId: 'turn', payload: { activeTaskId: 'task' } }),
       event({ eventId: 'settled', timestamp: 3, type: 'turn_state_changed', turnId: 'turn', payload: { state: 'settled', usage: { modelCalls: 2, inputTokens: 20, outputTokens: 10, retries: 1, compactions: 1, durationMs: 40 } } }),
-      event({ eventId: 'cost', timestamp: 4, taskId: 'task', type: 'autonomy_budget_consumed', payload: { kind: 'verification_run', estimatedCostUsd: 0.12 } }),
     ]
     const telemetry = collectPiHarnessTelemetry({ snapshot: replayPiHarnessEvents('session', events), graph, events })
 
-    expect(telemetry.usage).toMatchObject({ modelCalls: 2, inputTokens: 20, outputTokens: 10, retries: 1, compactions: 1, estimatedCostUsd: 0.12 })
-    expect(telemetry.byGoal.goal).toMatchObject({ modelCalls: 2, equivalentVerificationRuns: 1, estimatedCostUsd: 0.12 })
+    expect(telemetry.usage).toMatchObject({ modelCalls: 2, inputTokens: 20, outputTokens: 10, retries: 1, compactions: 1 })
+    expect(telemetry.byGoal.goal).toMatchObject({ modelCalls: 2 })
     expect(serializePiHarnessTelemetry(telemetry)).not.toContain('commandHash')
   })
 

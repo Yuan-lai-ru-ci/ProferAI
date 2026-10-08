@@ -1,7 +1,8 @@
 import * as React from 'react'
-import { useSetAtom } from 'jotai'
-import { createPromptSaveQueue } from '@/lib/prompt-save-queue'
-import { promptConfigAtom } from '@/atoms/system-prompt-atoms'
+import { atom, useStore } from 'jotai'
+import { toast } from 'sonner'
+import { createPromptSaveQueue, type PromptSaveQueue } from '@/lib/prompt-save-queue'
+import { promptConfigAtom, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import type { SystemPromptUpdateInput } from '@profer/shared'
 
 /** 提示词自动保存的防抖延迟（ms） */
@@ -17,30 +18,92 @@ export const PROMPT_SAVE_MAX_WAIT_MS = 2000
  * 行为测试覆盖（见 `lib/prompt-save-queue.test.ts`）；这里只负责接线：
  * 调用 IPC 落盘、把返回值同步回全局配置、组件卸载时 flush。
  */
-export function useSystemPromptAutosave(): (id: string, input: SystemPromptUpdateInput) => void {
-  const setConfig = useSetAtom(promptConfigAtom)
+export interface SystemPromptAutosave {
+  (id: string, input: SystemPromptUpdateInput): void
+  flush: () => Promise<void>
+  remove: (id: string) => Promise<void>
+}
 
-  const queue = React.useMemo(
-    () =>
-      createPromptSaveQueue(async (id, input) => {
-        const updated = await window.electronAPI.updateSystemPrompt(id, input)
-        setConfig((prev) => ({
-          ...prev,
-          prompts: prev.prompts.map((p) => (p.id === updated.id ? updated : p)),
+export const promptSaveStateAtom = atom<'saved' | 'pending' | 'saving' | 'error'>('saved')
+export const promptDeletingIdsAtom = atom<readonly string[]>([])
+const queues = new WeakMap<ReturnType<typeof useStore>, SystemPromptAutosave>()
+
+export function getSystemPromptAutosave(store: ReturnType<typeof useStore>): SystemPromptAutosave {
+  const existing = queues.get(store)
+  if (existing) return existing
+  const revisions = new Map<string, number>()
+  const deletions = new Map<string, Promise<void>>()
+  const reportFailure = (): void => {
+    store.set(promptSaveStateAtom, 'error')
+    toast.error('提示词保存失败，草稿已保留，请重试保存')
+  }
+  let queue: PromptSaveQueue
+  queue = createPromptSaveQueue(async (id, input) => {
+    const revision = revisions.get(id)
+    store.set(promptSaveStateAtom, 'saving')
+    try {
+      const updated = await window.electronAPI.updateSystemPrompt(id, input)
+      if (revision === revisions.get(id)) {
+        store.set(promptConfigAtom, (previous) => ({
+          ...previous,
+          prompts: previous.prompts.map((prompt) => prompt.id === updated.id ? updated : prompt),
         }))
-      }, PROMPT_SAVE_DEBOUNCE_MS, { maxWaitMs: PROMPT_SAVE_MAX_WAIT_MS }),
-    [setConfig]
-  )
-
-  // 卸载时立即落盘：切走提示词或关闭面板不会丢掉最后一次编辑
-  React.useEffect(() => {
-    return () => {
-      void queue.flush()
+      }
+      if (queue.pendingCount() === 0) store.set(promptSaveStateAtom, 'saved')
+    } catch (error) {
+      store.set(promptSaveStateAtom, 'error')
+      throw error
     }
-  }, [queue])
+  }, PROMPT_SAVE_DEBOUNCE_MS, { maxWaitMs: PROMPT_SAVE_MAX_WAIT_MS, onError: reportFailure })
+  const autosave = ((id: string, input: SystemPromptUpdateInput): void => {
+    if (store.get(promptDeletingIdsAtom).includes(id) || !store.get(promptConfigAtom).prompts.some((prompt) => prompt.id === id)) return
+    revisions.set(id, (revisions.get(id) ?? 0) + 1)
+    store.set(promptConfigAtom, (previous) => ({
+      ...previous,
+      prompts: previous.prompts.map((prompt) => prompt.id === id ? { ...prompt, ...input } : prompt),
+    }))
+    store.set(promptSaveStateAtom, 'pending')
+    queue.queue(id, input)
+  }) as SystemPromptAutosave
+  autosave.flush = async () => {
+    try {
+      await queue.flush()
+      store.set(promptSaveStateAtom, 'saved')
+    } catch (error) {
+      reportFailure()
+      throw error
+    }
+  }
+  autosave.remove = (id) => {
+    const existing = deletions.get(id)
+    if (existing) return existing
+    const prompt = store.get(promptConfigAtom).prompts.find((item) => item.id === id)
+    if (!prompt || prompt.isBuiltin) return Promise.reject(new Error('无法删除该提示词'))
+    store.set(promptDeletingIdsAtom, (ids) => [...ids, id])
+    // 先锁定两处编辑器，再提交已有草稿；失败时解除锁并保留条目供重试。
+    const deletion = autosave.flush().then(async () => {
+      await window.electronAPI.deleteSystemPrompt(id)
+      store.set(promptConfigAtom, (previous) => ({
+        ...previous,
+        prompts: previous.prompts.filter((item) => item.id !== id),
+        defaultPromptId: previous.defaultPromptId === id ? 'builtin-default' : previous.defaultPromptId,
+      }))
+      if (store.get(selectedPromptIdAtom) === id) store.set(selectedPromptIdAtom, 'builtin-default')
+      revisions.delete(id)
+    }).finally(() => {
+      deletions.delete(id)
+      store.set(promptDeletingIdsAtom, (ids) => ids.filter((item) => item !== id))
+    })
+    deletions.set(id, deletion)
+    return deletion
+  }
+  queues.set(store, autosave)
+  return autosave
+}
 
-  return React.useCallback(
-    (id: string, input: SystemPromptUpdateInput): void => queue.queue(id, input),
-    [queue]
-  )
+export function useSystemPromptAutosave(): SystemPromptAutosave {
+  const store = useStore()
+  const autosave = React.useMemo(() => getSystemPromptAutosave(store), [store])
+  React.useEffect(() => () => { void autosave.flush().catch(() => {}) }, [autosave])
+  return autosave
 }

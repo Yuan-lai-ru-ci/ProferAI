@@ -18,7 +18,6 @@ function numericTelemetry(telemetry: ReturnType<typeof collectPiHarnessTelemetry
     blockedNoChangeFailedVerificationLoops: telemetry.safety.blockedNoChangeFailedVerificationLoops,
     pauses: telemetry.safety.pauses,
     turnsStartedAfterPause: telemetry.safety.turnsStartedAfterPause,
-    taskTransitions: telemetry.autonomy.taskTransitions,
   }
 }
 

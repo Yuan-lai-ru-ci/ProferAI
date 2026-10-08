@@ -22,6 +22,7 @@
  * - 必须发送自有 User-Agent（部分渠道白名单校验）
  * - UA 产品名保持「Proma」以兼容渠道白名单（kimi-coding/zhipu-coding/xiaomi-token-plan）
  */
+import { extractZhipuCodingTeamApiToken } from '@profer/shared'
 
 import type { ProviderType } from '@profer/shared'
 import type {
@@ -34,7 +35,7 @@ import type {
   ToolDefinition,
   ContinuationMessage,
 } from './types.ts'
-import { normalizeAnthropicProviderUrl } from './url-utils.ts'
+import { resolveAnthropicMessagesUrl } from './url-utils.ts'
 import { detectThinkingCapability } from './thinking-capability.ts'
 import { getProferUserAgent } from './user-agent.ts'
 
@@ -266,7 +267,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   /** 根据 provider 类型选择 URL 规范化方式 */
   private normalizeUrl(baseUrl: string): string {
-    return normalizeAnthropicProviderUrl(baseUrl, this.providerType)
+    return resolveAnthropicMessagesUrl(baseUrl, this.providerType)
   }
 
   /**
@@ -277,11 +278,12 @@ export class AnthropicAdapter implements ProviderAdapter {
    * - User-Agent 产品名保持「Proma」以兼容渠道白名单（通过 setProferVersion 初始化）
    */
   private buildHeaders(apiKey: string): Record<string, string> {
+    apiKey = this.providerType === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
     const base: Record<string, string> = {
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     }
-    if (this.providerType === 'kimi-coding' || this.providerType === 'zhipu-coding') {
+    if (this.providerType === 'kimi-coding' || this.providerType === 'zhipu-coding' || this.providerType === 'zhipu-coding-team') {
       base['Authorization'] = `Bearer ${apiKey}`
       base['User-Agent'] = getProferUserAgent()
       return base
@@ -377,7 +379,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
 
     return {
-      url: `${url}/messages`,
+      url,
       headers: this.buildHeaders(input.apiKey),
       body: requestBody,
     }
@@ -458,7 +460,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
 
     return {
-      url: `${url}/messages`,
+      url,
       headers: this.buildHeaders(input.apiKey),
       body: JSON.stringify(body),
     }

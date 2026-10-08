@@ -685,6 +685,16 @@ describe('Pi runtime OpenAI Responses 渠道', () => {
 })
 
 describe('ChatGPT Codex 模型目录补丁', () => {
+  test('Given Codex 目录含 Astra When 列出 Then 所有条目都使用 Codex provider/协议/端点', async () => {
+    const models = await getCodexCatalogModels()
+    expect(models.some((model) => model.id === 'gpt-6-astra')).toBe(true)
+    for (const model of models) {
+      expect(model.provider).toBe('openai-codex')
+      expect(model.api).toBe('openai-codex-responses')
+      expect(model.baseUrl).toBe('https://chatgpt.com/backend-api')
+    }
+  })
+
   test('Given Pi SDK 内置目录缺少 5.6 When listCodexModels Then 补齐 5.6 系列', async () => {
     const models = await listCodexModels()
     const ids = models.map((model) => model.id)

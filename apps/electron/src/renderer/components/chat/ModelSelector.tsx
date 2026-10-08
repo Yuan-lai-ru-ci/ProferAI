@@ -9,7 +9,8 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
+import { toast } from 'sonner'
 import { ChevronDown, Cpu, Search, Layers2 } from 'lucide-react'
 import {
   Dialog,
@@ -22,6 +23,7 @@ import {
   selectedModelAtom,
   channelsAtom,
   channelsLoadedAtom,
+  channelCatalogRefreshAtom,
   modelSelectorRequestAtom,
 } from '@/atoms/chat-atoms'
 import { authStatusAtom } from '@/atoms/identity-atoms'
@@ -32,7 +34,7 @@ import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import { AgentComposerToolTooltip, getAgentComposerToolTriggerClass } from '@/components/ai-elements/composer/ComposerTool'
-import type { Channel, ModelOption } from '@profer/shared'
+import { isChannelEnabledForChat, type Channel, type ModelOption } from '@profer/shared'
 import { getChannelProtocol, getChannelSource, getOfficialChannelDisplayName, isOfficialChannel, isModelFamilyChannel, supportsChannelProtocol, type ChannelProtocol } from '@/lib/channel-model-groups'
 
 /** 紧凑模式 Context — 窄面板中 ModelSelector 只显示圆形 logo */
@@ -56,6 +58,7 @@ function buildModelOptions(
 
   for (const channel of channels) {
     if (!channel.enabled) continue
+    if (!strictProtocolFilter && !isChannelEnabledForChat(channel)) continue
     if (filterChannelId && channel.id !== filterChannelId) continue
     if (filterChannelIds && filterChannelIds.length > 0 && !filterChannelIds.includes(channel.id)) continue
 
@@ -148,10 +151,20 @@ export function ModelSelector({
   const channels = useAtomValue(channelsAtom)
   const authStatus = useAtomValue(authStatusAtom)
   const channelsLoaded = useAtomValue(channelsLoadedAtom)
-  const setChannels = useSetAtom(channelsAtom)
   const modelSelectorRequest = useAtomValue(modelSelectorRequestAtom)
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
+  const [saving, setSaving] = React.useState(false)
+  const selectionInFlightRef = React.useRef(false)
+  const store = useStore()
+  const requestCatalogRefresh = useSetAtom(channelCatalogRefreshAtom)
+  const selectionGenerationRef = React.useRef(0)
+  const mountedRef = React.useRef(true)
+  React.useEffect(() => {
+    mountedRef.current = true
+    const unsubscribe = store.sub(authStatusAtom, () => { selectionGenerationRef.current += 1 })
+    return () => { mountedRef.current = false; selectionGenerationRef.current += 1; unsubscribe() }
+  }, [store, conversationId])
 
   // 外部请求打开（ErrorMessage 的 select_model 恢复操作）：seq 变化时打开 Dialog。
   // 组件挂载时先记录当前 seq（不弹窗），后续新请求（seq+1）才会触发。
@@ -166,13 +179,12 @@ export function ModelSelector({
   // 外部模型优先 → per-conversation 模型
   const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : conversationModel
 
-  // 每次打开 Dialog 时刷新渠道列表，确保最新
+  // 目录由全局 catalog listener 统一水合和刷新，弹窗只读当前快照。
   React.useEffect(() => {
-    if (open) {
-      window.electronAPI.listChannels().then(setChannels).catch(console.error)
-      setSearch('')
-    }
-  }, [open, setChannels])
+    if (!open) return
+    setSearch('')
+    requestCatalogRefresh((revision) => revision + 1)
+  }, [open, requestCatalogRefresh])
 
   // 未登录时隐藏服务端托管的官方渠道，避免残留缓存渠道展示给未登录用户
   const visibleChannels = React.useMemo(() => {
@@ -234,16 +246,14 @@ export function ModelSelector({
 
   // 查找当前选中的模型信息
   const currentModelInfo = React.useMemo(() => {
-    if (!selectedModel) return null
-    return modelOptions.find(
-      (o) => o.channelId === selectedModel.channelId && o.modelId === selectedModel.modelId
-    ) ?? null
-  }, [selectedModel, modelOptions])
+    if (!selectedModel || (filterChannelId && filterChannelId !== selectedModel.channelId)) return null
+    // 官方池只合并菜单项；已有有效绑定仍显示自己的渠道，不依赖代表渠道。
+    return buildModelOptions(visibleChannels, selectedModel.channelId, filterChannelIds, preferredProtocol, strictProtocolFilter)
+      .find((option) => option.modelId === selectedModel.modelId) ?? null
+  }, [selectedModel, visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter])
 
-  // 保持上次有效的模型信息，避免渠道未加载时闪烁"选择模型"
-  const stableModelInfoRef = React.useRef(currentModelInfo)
-  if (currentModelInfo) stableModelInfoRef.current = currentModelInfo
-  const displayModelInfo = currentModelInfo ?? stableModelInfoRef.current
+  // 账号切换/目录重载期间也不展示上个账号的缓存模型。
+  const displayModelInfo = channelsLoaded ? currentModelInfo : null
   const displayChannelName = displayModelInfo
     ? getOfficialChannelDisplayName(channels.find((channel) => channel.id === displayModelInfo.channelId) ?? {
       id: displayModelInfo.channelId,
@@ -254,30 +264,43 @@ export function ModelSelector({
 
   /** 选择模型并持久化到当前对话 */
   const handleSelect = (option: ModelOption): void => {
+    if (selectionInFlightRef.current || !store.get(channelsLoadedAtom)) return
+    const currentChannels = store.get(channelsAtom).filter((channel) => store.get(authStatusAtom).isLoggedIn || !isOfficialChannel(channel))
+    const currentOption = buildModelOptions(currentChannels, option.channelId, filterChannelIds, preferredProtocol, strictProtocolFilter)
+      .find((item) => item.modelId === option.modelId)
+    if (!currentOption) {
+      toast.error('模型配置已变化，请重新选择')
+      return
+    }
     if (onModelSelect) {
-      onModelSelect(option)
+      onModelSelect(currentOption)
       setOpen(false)
       return
     }
 
-    // Chat 模式：写入 per-conversation Map + 同步全局默认值
-    if (setConversationModel) {
-      setConversationModel({ channelId: option.channelId, modelId: option.modelId })
+    const commit = (): void => {
+      setConversationModel?.({ channelId: option.channelId, modelId: option.modelId })
+      setGlobalModel({ channelId: option.channelId, modelId: option.modelId })
+      setOpen(false)
     }
-    setGlobalModel({ channelId: option.channelId, modelId: option.modelId })
-    setOpen(false)
+    if (!conversationId) { commit(); return }
 
-    // 将模型/渠道选择保存到当前对话元数据
-    if (conversationId) {
-      window.electronAPI
-        .updateConversationModel(conversationId, option.modelId, option.channelId)
-        .then((updated) => {
-          setConversations((prev) =>
-            prev.map((c) => (c.id === updated.id ? updated : c))
-          )
-        })
-        .catch(console.error)
-    }
+    // 保存成功才提交选择；失败保留原绑定，连续点击不能产生乱序 metadata 回执。
+    selectionInFlightRef.current = true
+    setSaving(true)
+    const generation = selectionGenerationRef.current
+    window.electronAPI.updateConversationModel(conversationId, option.modelId, option.channelId)
+      .then((updated) => {
+        if (generation !== selectionGenerationRef.current) return
+        setConversations((prev) => prev.map((conversation) => conversation.id === updated.id ? updated : conversation))
+        commit()
+      })
+      .catch((error: unknown) => {
+        if (generation !== selectionGenerationRef.current) return
+        console.error('[模型选择] 保存会话模型失败:', error)
+        toast.error('模型选择保存失败，请重试')
+      })
+      .finally(() => { selectionInFlightRef.current = false; if (mountedRef.current) setSaving(false) })
   }
 
   /** 搜索框键盘导航 */
@@ -404,6 +427,7 @@ export function ModelSelector({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={handleSearchKeyDown}
+              aria-label="搜索模型"
               placeholder="搜索模型..."
               className="flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground/50"
               autoFocus
@@ -463,6 +487,7 @@ export function ModelSelector({
                             else itemRefs.current.delete(currentFlatIndex)
                           }}
                           type="button"
+                          disabled={saving}
                           onClick={() => handleSelect(option)}
                           onMouseEnter={() => setHighlightIndex(currentFlatIndex)}
                           className={cn(

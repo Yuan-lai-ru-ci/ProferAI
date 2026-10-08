@@ -51,6 +51,23 @@ describe('Claude 适配器 Skill 白名单最终透传', () => {
   }
 })
 
+describe('Claude 本轮工具装载', () => {
+  test('纯对话空工具数组透传，后续标准请求省略该覆盖', async () => {
+    const adapter = new ClaudeAgentAdapter()
+    const input: ClaudeAgentQueryOptions = {
+      sessionId: 'light-tools', prompt: '你好', sdkCliPath: '/unused/mock-claude', env: {},
+      sdkPermissionMode: 'auto', allowDangerouslySkipPermissions: false, systemPrompt: 'short prompt', tools: [],
+    }
+    try {
+      for await (const _message of adapter.query(input)) { /* 消费 */ }
+      expect(capturedSdkQueryOptions?.tools).toEqual([])
+      const standardInput: ClaudeAgentQueryOptions = { ...input, tools: undefined }
+      for await (const _message of adapter.query(standardInput)) { /* 消费 */ }
+      expect(capturedSdkQueryOptions).not.toHaveProperty('tools')
+    } finally { adapter.dispose() }
+  })
+})
+
 describe('Claude 适配器 Windows 清理命令', () => {
   test('Given PowerShell 未加入 PATH 但系统组件存在 When 解析 Then 使用 SystemRoot 下的绝对路径', () => {
     const path = getWindowsPowerShellPath(

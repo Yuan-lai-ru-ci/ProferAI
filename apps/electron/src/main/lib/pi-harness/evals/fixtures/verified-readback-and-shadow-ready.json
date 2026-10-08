@@ -21,6 +21,6 @@
     "focusTaskId": "implement",
     "focusKind": "in_progress",
     "assuranceByTask": { "implement": "verified", "document": "not_required" },
-    "telemetry": { "modelCalls": 1, "inputTokens": 100, "outputTokens": 50, "candidateCount": 1, "falseVerified": 0, "taskTransitions": 0 }
+    "telemetry": { "modelCalls": 1, "inputTokens": 100, "outputTokens": 50, "candidateCount": 1, "falseVerified": 0 }
   }
 }

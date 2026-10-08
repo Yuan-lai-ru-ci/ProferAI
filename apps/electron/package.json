@@ -47,6 +47,7 @@
     "test:memory-search": "node scripts/memory-search-verify.mjs",
     "diagnose:openai-reasoning": "node scripts/diagnose-openai-reasoning.mjs",
     "generate:icons": "cd resources && ./generate-icons.sh",
+    "generate:brand-logos": "node scripts/generate-brand-logos.mjs",
     "verify:build-target:oss": "node scripts/verify-build-target.cjs oss dist/main.cjs",
     "verify:build-target:commercial": "node scripts/verify-build-target.cjs commercial dist/main.cjs",
     "pack": "bun run build && bun run sync:runtime-deps && node scripts/run-electron-builder.cjs --dir",

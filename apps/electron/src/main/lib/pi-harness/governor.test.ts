@@ -6,7 +6,6 @@ import type { PiHarnessGoal, ToolFact } from './types'
 const goal: PiHarnessGoal = {
   id: 'goal', sessionId: 'session', activeTaskId: 'active', state: 'active', createdAt: 1, updatedAt: 1,
   policy: { governorMode: 'shadow', permissionMode: 'bypassPermissions', maxFocusChars: 1200 },
-  autonomyUsage: { taskTransitions: 0, repairAttemptsByTask: {}, equivalentVerificationRuns: {} },
 }
 const active: TaskNode = { id: 'active', subject: 'active', description: '', status: 'in_progress', dependsOn: [], dependedBy: [], artifact: [], reviewStatus: 'none', createdAt: 1, updatedAt: 1 }
 const ready: TaskNode = { id: 'ready', subject: 'ready', description: '', status: 'pending', dependsOn: [], dependedBy: [], artifact: [], reviewStatus: 'none', createdAt: 2, updatedAt: 2 }
@@ -35,6 +34,5 @@ describe('Pi Harness shadow governor', () => {
   test('does not consume a transition; it only reports a ready-task candidate', () => {
     const candidate = decideShadowGovernorCandidate({ graph, goal, assurance: { taskId: 'active', state: 'verified', reason: 'ok', evidenceFactIds: [], updatedAt: 1 }, facts: [], existingFingerprints: new Set() })
     expect(candidate).toMatchObject({ taskId: 'ready', action: 'ready_task', blockedReason: 'shadow_mode' })
-    expect(goal.autonomyUsage.taskTransitions).toBe(0)
   })
 })

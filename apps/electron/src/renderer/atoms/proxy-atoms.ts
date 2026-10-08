@@ -23,6 +23,7 @@ export const loadProxyConfigAtom = atom(null, async (get, set) => {
     set(proxyConfigAtom, config)
   } catch (error) {
     console.error('[代理配置] 加载失败:', error)
+    throw error
   }
 })
 

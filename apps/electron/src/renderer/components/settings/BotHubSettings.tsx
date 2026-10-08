@@ -7,8 +7,8 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { ScrollArea } from '@profer/ui/primitives/scroll-area'
 import { cn } from '@/lib/utils'
+import { BriefcaseBusiness, ChevronRight, Image, Smartphone } from 'lucide-react'
 import { feishuBotStatesAtom } from '@/atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from '@/atoms/dingtalk-atoms'
 import { wechatBridgeStateAtom } from '@/atoms/wechat-atoms'
@@ -32,9 +32,7 @@ interface BotPlatformDef {
   name: string
   /** Logo 图片 src（有图片时使用） */
   iconSrc?: string
-  /** 无图片时显示的字符 */
-  iconChar?: string
-  iconBgClass: string
+  icon?: React.ReactNode
   iconTextClass?: string
 }
 
@@ -44,40 +42,35 @@ const PLATFORMS: readonly BotPlatformDef[] = [
   {
     id: 'pocket',
     name: '移动模式（试验版）',
-    iconChar: '▣',
-    iconBgClass: 'bg-violet-500/15',
+    icon: <Smartphone size={16} aria-hidden="true" />,
     iconTextClass: 'text-violet-600',
   },
   {
     id: 'feishu',
     name: '飞书',
     iconSrc: feishuLogo,
-    iconBgClass: 'bg-blue-500/15',
   },
   {
     id: 'wechat',
     name: '微信',
     iconSrc: wechatLogo,
-    iconBgClass: 'bg-green-500/15',
   },
   {
     id: 'dingtalk',
     name: '钉钉',
     iconSrc: dingtalkLogo,
-    iconBgClass: 'bg-orange-500/15',
   },
   {
     id: 'defaults',
     name: '用法',
-    iconChar: '⚙',
-    iconBgClass: 'bg-muted',
+    icon: <BriefcaseBusiness size={16} aria-hidden="true" />,
     iconTextClass: 'text-muted-foreground',
   },
   {
     id: 'logos',
     name: '品牌素材',
+    icon: <Image size={16} aria-hidden="true" />,
     iconSrc: proferModelLogo,
-    iconBgClass: 'bg-muted',
   },
 ] as const
 
@@ -107,7 +100,12 @@ function PlatformStatusDot({ platformId }: { platformId: BotPlatformId }): React
   const status = statusMap[platformId] ?? 'disconnected'
   const colorClass = BRIDGE_STATUS_COLORS[status as keyof typeof BRIDGE_STATUS_COLORS] ?? 'bg-gray-400'
 
-  return <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', colorClass)} />
+  return (
+    <span
+      aria-label={`连接状态：${status}`}
+      className={cn('h-1.5 w-1.5 shrink-0 rounded-full', colorClass)}
+    />
+  )
 }
 
 /** 从多 Bot 状态推导平台级状态：任一 connected → connected，否则按 error > connecting > disconnected 优先级 */
@@ -135,34 +133,29 @@ function PlatformSidebarItem({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex min-w-0 shrink-0 items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+        'flex min-w-0 shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
         isActive
-          ? 'bg-muted text-foreground'
-          : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground',
       )}
+      id={`bot-settings-tab-${platform.id}`}
+      aria-current={isActive ? 'page' : undefined}
+      aria-controls={`bot-settings-panel-${platform.id}`}
+      aria-label={platform.name}
     >
       {/* 平台图标 */}
       {platform.iconSrc ? (
-        <div className="flex items-center justify-center w-8 h-8 flex-shrink-0">
-          <img src={platform.iconSrc} alt={platform.name} className="w-8 h-8 rounded-lg object-contain" />
-        </div>
+        <img src={platform.iconSrc} alt="" className="h-5 w-5 rounded object-contain" />
       ) : (
-        <div className={cn(
-          'flex items-center justify-center w-8 h-8 rounded-lg text-base flex-shrink-0',
-          platform.iconBgClass,
-          platform.iconTextClass,
-        )}>
-          {platform.iconChar}
-        </div>
+        <span className={cn('flex h-5 w-5 items-center justify-center', platform.iconTextClass)}>
+          {platform.icon}
+        </span>
       )}
 
       {/* 名称 */}
-      <span className="text-sm min-w-0 truncate">
-        {platform.name}
-      </span>
-
-      {/* 状态点 */}
+      <span className="min-w-0 truncate">{platform.name}</span>
       <PlatformStatusDot platformId={platform.id} />
+      {isActive && <ChevronRight size={14} className="ml-auto shrink-0" aria-hidden="true" />}
     </button>
   )
 }
@@ -191,27 +184,25 @@ export function BotHubSettings(): React.ReactElement {
   const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('pocket')
 
   return (
-    <div className="-mx-6 -my-5 flex h-full min-h-0 flex-col">
-      {/* 平台选择条：横向排列，避免远程连接页面出现一整列空白 */}
-      <div className="shrink-0 border-b border-border/50 px-4 py-2">
-        <nav className="flex flex-wrap items-center gap-1" aria-label="远程连接平台">
-          {PLATFORMS.map((p) => (
-            <PlatformSidebarItem
-              key={p.id}
-              platform={p}
-              isActive={selectedPlatform === p.id}
-              onClick={() => setSelectedPlatform(p.id)}
-            />
-          ))}
-        </nav>
+    <div className="space-y-5">
+      <nav className="-mx-1 flex min-w-0 gap-1 overflow-x-auto border-b border-border/60 px-1" aria-label="远程连接平台">
+        {PLATFORMS.map((p) => (
+          <PlatformSidebarItem
+            key={p.id}
+            platform={p}
+            isActive={selectedPlatform === p.id}
+            onClick={() => setSelectedPlatform(p.id)}
+          />
+        ))}
+      </nav>
+      <div
+        id={`bot-settings-panel-${selectedPlatform}`}
+        role="region"
+        aria-labelledby={`bot-settings-tab-${selectedPlatform}`}
+        aria-live="polite"
+      >
+        {renderPlatformPanel(selectedPlatform)}
       </div>
-
-      {/* 内容面板 */}
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="px-6 py-5">
-          {renderPlatformPanel(selectedPlatform)}
-        </div>
-      </ScrollArea>
     </div>
   )
 }

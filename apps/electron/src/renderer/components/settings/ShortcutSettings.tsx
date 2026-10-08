@@ -13,6 +13,8 @@ import { useAtom } from 'jotai'
 import { RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@profer/ui/primitives/alert-dialog'
+import { SettingsSection, SettingsCard } from './primitives'
 import { Switch } from '@profer/ui/primitives/switch'
 import {
   Tooltip,
@@ -29,6 +31,7 @@ import {
   getActiveAccelerator,
   getAcceleratorDisplay,
   checkConflict,
+  registerShortcut,
   updateShortcutOverrides,
   isMac,
 } from '@/lib/shortcut-registry'
@@ -43,6 +46,7 @@ interface ShortcutRecorderProps {
   /** 保存录制结果 */
   onSave: (shortcutId: string, accelerator: string) => Promise<boolean>
   /** 录制/pending 状态变化时通知父组件，便于父组件隐藏并列操作按钮 */
+  disabled?: boolean
   onActiveChange?: (active: boolean) => void
 }
 
@@ -51,6 +55,7 @@ function ShortcutRecorder({
   currentAccelerator,
   onSave,
   onActiveChange,
+  disabled,
 }: ShortcutRecorderProps): React.ReactElement {
   const [recording, setRecording] = React.useState(false)
   const [pendingKeys, setPendingKeys] = React.useState('')
@@ -64,10 +69,11 @@ function ShortcutRecorder({
   }, [])
 
   const handleStartRecording = React.useCallback(() => {
+    if (disabled || saving) return
     setRecording(true)
     setPendingAccelerator('')
     setConflict(null)
-  }, [setPendingAccelerator])
+  }, [setPendingAccelerator, disabled, saving])
 
   const handleCancel = React.useCallback(() => {
     setRecording(false)
@@ -122,7 +128,9 @@ function ShortcutRecorder({
 
     const handleKeyDown = (e: KeyboardEvent): void => {
       e.preventDefault()
-      e.stopPropagation()
+      e.stopImmediatePropagation()
+      if (e.key === 'Escape') { handleCancel(); return }
+      if (e.isComposing || e.repeat) return
 
       // 构建 accelerator 字符串
       const parts: string[] = []
@@ -151,14 +159,6 @@ function ShortcutRecorder({
       finishCapture(accelerator)
     }
 
-    // Escape 取消录制
-    const handleEsc = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        handleCancel()
-      }
-    }
-
     const handleKeyUp = (e: KeyboardEvent): void => {
       if (!pendingKeysRef.current) return
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
@@ -169,11 +169,9 @@ function ShortcutRecorder({
     }
 
     window.addEventListener('keydown', handleKeyDown, true)
-    window.addEventListener('keydown', handleEsc, true)
     window.addEventListener('keyup', handleKeyUp, true)
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true)
-      window.removeEventListener('keydown', handleEsc, true)
       window.removeEventListener('keyup', handleKeyUp, true)
     }
   }, [
@@ -189,8 +187,8 @@ function ShortcutRecorder({
 
   // 同步录制/pending 状态给父组件，避免父组件在录制期间渲染会改写 override 的按钮
   React.useEffect(() => {
-    onActiveChange?.(recording || !!pendingKeys)
-  }, [recording, pendingKeys, onActiveChange])
+    onActiveChange?.(recording || !!pendingKeys || saving)
+  }, [recording, pendingKeys, saving, onActiveChange])
 
   const handleSave = React.useCallback(async () => {
     if (!canSave) return
@@ -207,7 +205,7 @@ function ShortcutRecorder({
 
   if (recording || pendingKeys) {
     return (
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2" aria-live="polite" aria-busy={saving}>
         {conflict ? (
           <span className="text-xs px-2 py-1 rounded bg-destructive/10 text-destructive border border-destructive/20">
             {getAcceleratorDisplay(pendingKeys)} 与「{conflict}」冲突
@@ -225,7 +223,7 @@ function ShortcutRecorder({
               : getAcceleratorDisplay(pendingKeys)}
           </span>
         )}
-        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={handleCancel}>
+        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={handleCancel} disabled={saving}>
           取消
         </Button>
         <Button
@@ -245,6 +243,8 @@ function ShortcutRecorder({
     return (
       <button
         type="button"
+        disabled={disabled}
+        aria-label={`录制 ${shortcutId} 的快捷键`}
         className="text-xs px-2.5 py-1 rounded-md bg-muted/40 text-muted-foreground/70 italic transition-colors hover:bg-muted hover:text-foreground/80"
         onClick={handleStartRecording}
         title="点击录制新快捷键"
@@ -257,6 +257,8 @@ function ShortcutRecorder({
   return (
     <button
       type="button"
+      disabled={disabled}
+      aria-label={`录制 ${shortcutId} 的快捷键`}
       className="text-xs px-2.5 py-1 rounded-md bg-muted hover:bg-muted/80 text-foreground/80 font-mono transition-colors"
       onClick={handleStartRecording}
       title="点击自定义快捷键"
@@ -273,6 +275,17 @@ export function ShortcutSettings(): React.ReactElement {
   const [sendWithCmdEnter, setSendWithCmdEnter] = useAtom(sendWithCmdEnterAtom)
   // 当前正在录制的快捷键 id，用于隐藏并列操作按钮，避免与录制中途的 state 冲突
   const [recordingId, setRecordingId] = React.useState<string | null>(null)
+  const [saving, setSaving] = React.useState(false)
+  const savingRef = React.useRef(false)
+  const [resetOpen, setResetOpen] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  // 临时独占应用内 handler，阻止录制按键触发已有操作；缓存和绑定保持不变。
+  React.useEffect(() => {
+    if (!recordingId) return
+    const releases = DEFAULT_SHORTCUTS.filter((item) => !item.global).map((item) => registerShortcut(item.id, () => {}, { exclusive: true }))
+    return () => releases.forEach((release) => release())
+  }, [recordingId])
 
   const handleRecordingChange = React.useCallback(
     (shortcutId: string, active: boolean) => {
@@ -295,211 +308,69 @@ export function ShortcutSettings(): React.ReactElement {
     return groups
   }, [])
 
-  const reregisterGlobalShortcut = React.useCallback(
-    async (shortcutId: string): Promise<boolean> => {
-      const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
-      if (!def?.global) return true
-
-      const results = await window.electronAPI.reregisterGlobalShortcuts()
-      return results[shortcutId] !== false
-    },
-    [],
-  )
-
-  // 保存录制结果：持久化后更新 App 内快捷键缓存；全局快捷键额外重新注册。
-  const handleSaveShortcut = React.useCallback(
-    async (shortcutId: string, accelerator: string): Promise<boolean> => {
-      const key = isMac ? 'mac' : 'win'
-      const newOverrides: ShortcutOverrides = {
-        ...overrides,
-        [shortcutId]: {
-          ...overrides[shortcutId],
-          [key]: accelerator,
-        },
-      }
-
-      try {
-        await window.electronAPI.updateSettings({ shortcutOverrides: newOverrides })
-        setOverrides(newOverrides)
-        // App 内快捷键通过重建 shortcut-registry 缓存立即生效；handler 不需要重挂。
-        updateShortcutOverrides(newOverrides)
-
-        const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
-        if (def?.global) {
-          try {
-            const registered = await reregisterGlobalShortcut(shortcutId)
-            if (!registered) {
-              toast.warning('快捷键已保存，但全局快捷键当前未注册', {
-                id: 'shortcut-save-warning',
-                description: '可能是功能未启用，或该组合已被系统/其他应用占用。',
-              })
-              return true
-            }
-          } catch (error) {
-            console.error(error)
-            toast.warning('快捷键已保存，但全局快捷键当前未注册', {
-              id: 'shortcut-save-warning',
-              description: '重新注册全局快捷键时出错，请重试或换一个组合。',
-            })
+  const commitOverrides = React.useCallback(async (next: ShortcutOverrides, message: string, shortcutId?: string, disabling = false): Promise<boolean> => {
+    if (savingRef.current || recordingId && shortcutId !== recordingId) return false
+    savingRef.current = true
+    setSaving(true)
+    setError(null)
+    try {
+      const settings = await window.electronAPI.updateSettings({ shortcutOverrides: next })
+      const saved = settings.shortcutOverrides ?? next
+      setOverrides(saved)
+      updateShortcutOverrides(saved)
+      const global = shortcutId ? DEFAULT_SHORTCUTS.find((item) => item.id === shortcutId)?.global : true
+      if (global) {
+        try {
+          const results = await window.electronAPI.reregisterGlobalShortcuts()
+          if (!disabling && (shortcutId ? results[shortcutId] === false : Object.values(results).some((value) => !value))) {
+            toast.warning(`${message}；部分全局快捷键当前未注册`, { description: '对应功能可能未启用，或组合已被系统/其他应用占用。' })
             return true
           }
+        } catch {
+          toast.warning(`${message}；全局快捷键重新注册失败，请重试`)
+          return true
         }
-
-        toast.success('快捷键已保存', { id: 'shortcut-save-success' })
-        return true
-      } catch (error) {
-        console.error(error)
-        toast.error('快捷键保存失败', { id: 'shortcut-save-error' })
-        return false
       }
-    },
-    [overrides, reregisterGlobalShortcut, setOverrides],
-  )
-
-  // 恢复单个快捷键默认值
-  const handleReset = React.useCallback(
-    async (shortcutId: string) => {
-      const newOverrides = { ...overrides }
-      delete newOverrides[shortcutId]
-
-      try {
-        await window.electronAPI.updateSettings({ shortcutOverrides: newOverrides })
-        setOverrides(newOverrides)
-        updateShortcutOverrides(newOverrides)
-
-        const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
-        if (def?.global) {
-          try {
-            const registered = await reregisterGlobalShortcut(shortcutId)
-            if (!registered) {
-              toast.warning('已恢复默认，但全局快捷键当前未注册', {
-                id: 'shortcut-save-warning',
-                description: '可能是功能未启用，或默认组合已被系统/其他应用占用。',
-              })
-              return
-            }
-          } catch (error) {
-            console.error(error)
-            toast.warning('已恢复默认，但全局快捷键重新注册失败', {
-              id: 'shortcut-save-warning',
-            })
-            return
-          }
-        }
-
-        toast.success('已恢复默认快捷键', { id: 'shortcut-save-success' })
-      } catch (error) {
-        console.error(error)
-        toast.error('恢复默认快捷键失败', { id: 'shortcut-save-error' })
-      }
-    },
-    [overrides, reregisterGlobalShortcut, setOverrides],
-  )
-
-  // 禁用单个快捷键：将当前平台 override 置为 null
-  const handleDisable = React.useCallback(
-    async (shortcutId: string) => {
-      const key = isMac ? 'mac' : 'win'
-      const newOverrides: ShortcutOverrides = {
-        ...overrides,
-        [shortcutId]: {
-          ...overrides[shortcutId],
-          [key]: null,
-        },
-      }
-
-      try {
-        await window.electronAPI.updateSettings({ shortcutOverrides: newOverrides })
-        setOverrides(newOverrides)
-        updateShortcutOverrides(newOverrides)
-
-        const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
-        if (def?.global) {
-          try {
-            // 禁用语义下主进程会跳过 register，对应 reregisterGlobalShortcut 返回 false，
-            // 这是期望结果，因此这里不像 handleSaveShortcut 那样把 false 当 warning。
-            await reregisterGlobalShortcut(shortcutId)
-          } catch (error) {
-            console.error(error)
-            toast.warning('快捷键已禁用，但主进程重新注册时出错', {
-              id: 'shortcut-save-warning',
-            })
-            return
-          }
-        }
-
-        toast.success('快捷键已禁用', { id: 'shortcut-save-success' })
-      } catch (error) {
-        console.error(error)
-        toast.error('禁用快捷键失败', { id: 'shortcut-save-error' })
-      }
-    },
-    [overrides, reregisterGlobalShortcut, setOverrides],
-  )
-
-  // 恢复所有默认值（同时会清除所有"已禁用"标记）
-  const handleResetAll = React.useCallback(async () => {
-    const hadDisabled = Object.values(overrides).some(
-      (o) => o?.mac === null || o?.win === null,
-    )
-    try {
-      await window.electronAPI.updateSettings({ shortcutOverrides: {} })
-      setOverrides({})
-      updateShortcutOverrides({})
-
-      try {
-        const results = await window.electronAPI.reregisterGlobalShortcuts()
-        const hasUnregisteredGlobal = Object.values(results).some((registered) => !registered)
-        if (hasUnregisteredGlobal) {
-          toast.warning('已恢复全部默认；部分全局快捷键当前未注册', {
-            id: 'shortcut-save-warning',
-            description: '可能是对应功能未启用，或默认组合已被系统/其他应用占用。',
-          })
-          return
-        }
-      } catch (error) {
-        console.error(error)
-        toast.warning('已恢复全部默认，但全局快捷键重新注册失败', {
-          id: 'shortcut-save-warning',
-        })
-        return
-      }
-
-      toast.success('已恢复全部默认快捷键', {
-        id: 'shortcut-save-success',
-        description: hadDisabled ? '已禁用的快捷键也已重新启用' : undefined,
-      })
-    } catch (error) {
-      console.error(error)
-      toast.error('恢复全部默认快捷键失败', { id: 'shortcut-save-error' })
-    }
-  }, [overrides, setOverrides])
-
+      toast.success(message)
+      return true
+    } catch (cause) {
+      setError(`快捷键保存失败，原绑定已保留：${cause instanceof Error ? cause.message : String(cause)}`)
+      toast.error('快捷键保存失败，原绑定已保留')
+      return false
+    } finally { savingRef.current = false; setSaving(false) }
+  }, [recordingId, setOverrides])
+  const handleSaveShortcut = (id: string, accelerator: string) => commitOverrides({ ...overrides, [id]: { ...overrides[id], [isMac ? 'mac' : 'win']: accelerator } }, '快捷键已保存', id)
+  const handleReset = (id: string) => {
+    const next = { ...overrides }
+    delete next[id]
+    return commitOverrides(next, '已恢复默认快捷键', id)
+  }
+  const handleDisable = (id: string) => commitOverrides({ ...overrides, [id]: { ...overrides[id], [isMac ? 'mac' : 'win']: null } }, '快捷键已禁用', id, true)
+  const handleResetAll = async () => { if (await commitOverrides({}, '已恢复全部默认快捷键')) setResetOpen(false) }
   const hasOverrides = Object.keys(overrides).length > 0
-
-  // 切换发送快捷键
-  const handleToggleSendKey = React.useCallback(() => {
-    const newValue = !sendWithCmdEnter
-    setSendWithCmdEnter(newValue)
-    window.electronAPI
-      .updateSettings({ sendWithCmdEnter: newValue })
-      .then(() => {
-        toast.success('发送快捷键已保存', { id: 'shortcut-save-success' })
-      })
-      .catch((error) => {
-        setSendWithCmdEnter(sendWithCmdEnter)
-        console.error(error)
-        toast.error('发送快捷键保存失败', { id: 'shortcut-save-error' })
-      })
-  }, [sendWithCmdEnter, setSendWithCmdEnter])
+  const handleToggleSendKey = async () => {
+    if (savingRef.current || recordingId) return
+    savingRef.current = true
+    setSaving(true)
+    setError(null)
+    try {
+      const settings = await window.electronAPI.updateSettings({ sendWithCmdEnter: !sendWithCmdEnter })
+      setSendWithCmdEnter(settings.sendWithCmdEnter ?? !sendWithCmdEnter)
+      toast.success('发送快捷键已保存')
+    } catch (cause) {
+      setError(`发送快捷键保存失败：${cause instanceof Error ? cause.message : String(cause)}`)
+      toast.error('发送快捷键保存失败，原设置已保留')
+    } finally { savingRef.current = false; setSaving(false) }
+  }
 
   // 分类顺序
   const categoryOrder: ShortcutCategory[] = ['app', 'navigation', 'edit', 'global']
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" aria-busy={saving}>
+      {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       {/* 描述 + 恢复全部按钮 */}
-      <div className="flex items-center justify-between">
+      <SettingsSection title="快捷键" description="点击绑定开始录制；保存后生效，Esc 取消。录制草稿期间不会修改已有绑定。"><div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           点击快捷键可自定义，录制后点击保存生效，按 Esc 取消录制
         </p>
@@ -508,27 +379,28 @@ export function ShortcutSettings(): React.ReactElement {
             variant="ghost"
             size="sm"
             className="text-xs text-muted-foreground"
-            onClick={handleResetAll}
+            disabled={saving || recordingId !== null}
+            onClick={() => setResetOpen(true)}
           >
             <RotateCcw size={12} className="mr-1" />
             恢复全部默认
           </Button>
         )}
-      </div>
+      </div></SettingsSection>
 
       {/* 发送消息快捷键切换 */}
       <div>
         <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
           发送消息
         </h3>
-        <div className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-muted/50 transition-colors">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg bg-surface-raised">
           <div className="flex-1 min-w-0">
             <div className="text-sm font-medium text-foreground">发送 / 换行快捷键</div>
             <div className="text-xs text-muted-foreground mt-0.5">
               切换 Enter 发送消息或换行的行为
             </div>
           </div>
-          <div className="flex items-center gap-1 ml-4 rounded-lg bg-muted/60 p-0.5">
+          <div className="flex flex-wrap items-center gap-1 rounded-lg bg-muted/60 p-0.5">
             <button
               type="button"
               className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
@@ -536,6 +408,8 @@ export function ShortcutSettings(): React.ReactElement {
                   ? 'bg-background text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
+              disabled={saving || recordingId !== null}
+              aria-pressed={!sendWithCmdEnter}
               onClick={() => sendWithCmdEnter && handleToggleSendKey()}
             >
               Enter 发送
@@ -547,6 +421,8 @@ export function ShortcutSettings(): React.ReactElement {
                   ? 'bg-background text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
+              disabled={saving || recordingId !== null}
+              aria-pressed={sendWithCmdEnter}
               onClick={() => !sendWithCmdEnter && handleToggleSendKey()}
             >
               {isMac ? '⌘' : 'Ctrl'}+Enter 发送
@@ -561,16 +437,13 @@ export function ShortcutSettings(): React.ReactElement {
         if (!shortcuts) return null
 
         return (
-          <div key={category}>
-            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
-              {SHORTCUT_CATEGORY_LABELS[category]}
-            </h3>
+          <SettingsSection key={category} title={SHORTCUT_CATEGORY_LABELS[category]}>
             {category === 'global' && (
               <p className="text-xs text-muted-foreground/70 mb-2">
                 全局快捷键在应用未聚焦时也能触发，可能与系统或其他应用冲突
               </p>
             )}
-            <div className="space-y-1">
+            <SettingsCard>
               {shortcuts.filter((def) => !def.readonly || (isMac ? def.defaultMac : def.defaultWin)).map((def) => {
                 const currentAccel = getActiveAccelerator(def.id)
                 const platformOverride = overrides[def.id]?.[isMac ? 'mac' : 'win']
@@ -580,7 +453,7 @@ export function ShortcutSettings(): React.ReactElement {
                 return (
                   <div
                     key={def.id}
-                    className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-muted/50 transition-colors group"
+                    className="flex flex-wrap items-center justify-between gap-3 p-4 group"
                   >
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-foreground">
@@ -590,7 +463,7 @@ export function ShortcutSettings(): React.ReactElement {
                         {def.description}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 ml-4">
+                    <div className="flex flex-wrap items-center gap-2">
                       {def.readonly ? (
                         <span className="text-xs px-2.5 py-1 rounded-md bg-muted text-foreground/60 font-mono">
                           {getAcceleratorDisplay(isMac ? def.defaultMac : def.defaultWin)}
@@ -600,6 +473,7 @@ export function ShortcutSettings(): React.ReactElement {
                           <ShortcutRecorder
                             shortcutId={def.id}
                             currentAccelerator={currentAccel}
+                            disabled={saving || (recordingId !== null && recordingId !== def.id)}
                             onSave={handleSaveShortcut}
                             onActiveChange={(active) => handleRecordingChange(def.id, active)}
                           />
@@ -609,6 +483,7 @@ export function ShortcutSettings(): React.ReactElement {
                                 <span className="inline-flex">
                                   <Switch
                                     checked={!isDisabled}
+                                    disabled={saving || recordingId !== null}
                                     onCheckedChange={(checked) => {
                                       if (checked) {
                                         handleReset(def.id)
@@ -616,7 +491,7 @@ export function ShortcutSettings(): React.ReactElement {
                                         handleDisable(def.id)
                                       }
                                     }}
-                                    aria-label={isDisabled ? '启用此快捷键' : '禁用此快捷键'}
+                                    aria-label={`${isDisabled ? '启用' : '禁用'} ${def.name}`}
                                   />
                                 </span>
                               </TooltipTrigger>
@@ -633,7 +508,9 @@ export function ShortcutSettings(): React.ReactElement {
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="size-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground"
+                                  className="size-8 text-muted-foreground"
+                                  disabled={saving || recordingId !== null}
+                                  aria-label={`恢复 ${def.name} 默认快捷键`}
                                   onClick={() => handleReset(def.id)}
                                 >
                                   <RotateCcw size={12} />
@@ -648,10 +525,16 @@ export function ShortcutSettings(): React.ReactElement {
                   </div>
                 )
               })}
-            </div>
-          </div>
+            </SettingsCard>
+          </SettingsSection>
         )
       })}
+      <AlertDialog open={resetOpen} onOpenChange={(open) => { if (!saving) setResetOpen(open) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>恢复全部默认快捷键？</AlertDialogTitle><AlertDialogDescription>将清除所有平台的自定义绑定，并重新启用已禁用的快捷键。发送 / 换行偏好不受影响。</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel disabled={saving}>取消</AlertDialogCancel><AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); void handleResetAll() }}>{saving ? '保存中…' : '恢复全部默认'}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

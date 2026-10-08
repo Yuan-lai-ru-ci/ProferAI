@@ -20,7 +20,7 @@ type Props = { sessionId: string }
 
 const statusTone: Record<AgentGoalState['status'], string> = {
   active: 'text-primary', stopping: 'text-muted-foreground', paused: 'text-muted-foreground',
-  completed: 'text-emerald-500', blocked: 'text-amber-500', budget_limited: 'text-amber-500',
+  completed: 'text-success', blocked: 'text-warning', budget_limited: 'text-warning',
   failed: 'text-destructive', stopped: 'text-muted-foreground',
 }
 
@@ -301,7 +301,7 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
         {goal && actions?.canClear && <Button size="icon" variant="ghost" className="size-6 text-muted-foreground hover:text-destructive" title="清除 Goal 状态" aria-label="清除 Goal 状态" disabled={pending} onClick={() => { void invoke('clear') }}><CircleX className="size-3" /></Button>}
       </div>
       {goal && actions?.budgetEditRequired && goal.status !== 'completed' && goal.status !== 'active' && goal.status !== 'stopping' && <div className="flex items-center gap-2 px-3 pb-2 text-[11px]">
-        <span className="min-w-0 flex-1 text-amber-500 break-words">{reasons.join('；') || goal.stopReason || '预算已耗尽'}。增加预算后才能继续。</span>
+        <span className="min-w-0 flex-1 text-warning break-words">{reasons.join('；') || goal.stopReason || '预算已耗尽'}。增加预算后才能继续。</span>
         <Button variant="outline" size="sm" className="h-6 text-[11px]" disabled={pending || !actions.canEdit} onClick={() => setEditor(goal)}>{actions.canEdit ? '修改预算后恢复' : '等待本轮停止'}</Button>
       </div>}
       {expanded && <div className="flex flex-col gap-2 border-t border-border/40 px-3 py-2 text-[11px]">

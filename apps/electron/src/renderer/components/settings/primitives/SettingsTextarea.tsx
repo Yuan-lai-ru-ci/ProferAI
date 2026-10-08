@@ -36,15 +36,21 @@ export function SettingsTextarea({
   disabled,
   error,
 }: SettingsTextareaProps): React.ReactElement {
+  const id = React.useId()
+  const descriptionId = `${id}-description`
+  const errorId = `${id}-error`
   return (
     <div className="px-4 py-3 space-y-2">
       <div>
-        <div className={LABEL_CLASS}>{label}</div>
+        <label htmlFor={id} className={LABEL_CLASS}>{label}</label>
         {description && (
-          <div className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
+          <div id={descriptionId} className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
         )}
       </div>
       <Textarea
+        id={id}
+        aria-describedby={[description && descriptionId, error && errorId].filter(Boolean).join(' ') || undefined}
+        aria-invalid={Boolean(error)}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -56,7 +62,7 @@ export function SettingsTextarea({
         style={{ minHeight }}
       />
       {error && (
-        <p className="text-xs text-destructive">{error}</p>
+        <p id={errorId} role="alert" className="text-xs text-destructive">{error}</p>
       )}
     </div>
   )

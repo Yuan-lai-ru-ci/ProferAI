@@ -1,0 +1,135 @@
+import { expect, test } from 'bun:test'
+import { readFileSync, existsSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { PROVIDER_LABELS, isChannelEnabledForChat, isChannelEnabledForRuntime } from '@profer/shared'
+
+const repoRoot = resolve(import.meta.dir, '..', '..', '..')
+const resourcePath = resolve(repoRoot, 'apps/electron/resources/tutorial.md')
+const sourcePath = resolve(repoRoot, 'tutorial/tutorial-v2.md')
+const channelFormPath = resolve(repoRoot, 'apps/electron/src/renderer/components/settings/ChannelForm.tsx')
+const channelTypesPath = resolve(repoRoot, 'packages/shared/src/types/channel.ts')
+const tokenCryptoPath = resolve(repoRoot, 'apps/electron/src/main/lib/token-crypto.ts')
+const settingsPanelPath = resolve(repoRoot, 'apps/electron/src/renderer/components/settings/SettingsPanel.tsx')
+
+function read(path: string): string {
+  expect(existsSync(path)).toBe(true)
+  return readFileSync(path, 'utf8')
+}
+
+test('tutorial resources stay identical and contain current entry points', () => {
+  const resource = read(resourcePath)
+  const source = read(sourcePath)
+
+  expect(resource).toBe(source)
+  expect(resource).toContain('设置 → 帮助 → Profer 教程')
+  expect(resource).toContain('设置 → 模型与能力 → 模型配置')
+  expect(resource).toContain('设置 → 模型与能力 → Chat 工具')
+  expect(resource).toContain('设置 → 连接 → 远程连接')
+  expect(resource).toContain('Agent 技能')
+  expect(resource).toContain('Claude')
+  expect(resource).toContain('Pi')
+  expect(resource).toContain('Goal')
+  expect(resource).toContain('任务图')
+  expect(resource).toContain('团队市场')
+  expect(resource).toContain('PLUGIN_OPERATION_NOT_SUPPORTED')
+  expect(resource).not.toMatch(/!\[[^\]]*\]\([^)]*\)/)
+})
+
+test('tutorial claims map to the local provider, credential, save, and settings contracts', () => {
+  const tutorial = read(resourcePath)
+  const channelForm = read(channelFormPath)
+  const channelTypes = read(channelTypesPath)
+  const tokenCrypto = read(tokenCryptoPath)
+  const settingsPanel = read(settingsPanelPath)
+
+  expect(Object.keys(PROVIDER_LABELS)).toHaveLength(23)
+  expect(isChannelEnabledForChat({ provider: 'openai-codex', enabled: true })).toBe(false)
+  expect(isChannelEnabledForChat({ provider: 'xai', credentialMode: 'oauth', enabled: true })).toBe(false)
+  expect(isChannelEnabledForChat({ provider: 'xai', credentialMode: 'api-key', enabled: true })).toBe(true)
+  for (const provider of ['xai', 'openai-codex'] as const) {
+    expect(isChannelEnabledForRuntime({ provider, enabled: true, agentRuntimes: ['claude', 'pi'] }, 'claude')).toBe(false)
+  }
+  expect(tutorial).toContain('23 个 provider 类型')
+  expect(tutorial).toContain('Agent-only')
+  expect(tutorial).toContain('只供 Pi Agent')
+  expect(channelTypes).toContain("channel.provider !== 'openai-codex'")
+  expect(channelTypes).toContain("channel.provider === 'xai' && channel.credentialMode === 'oauth'")
+  expect(channelForm).toContain('cancelCodexOAuthLogin')
+  expect(channelForm).toContain('cancelXaiOAuthLogin')
+  expect(channelForm).toContain('listCodexModels')
+  expect(channelForm).toContain('listXaiModels')
+  expect(tutorial).toContain('只读取 Pi 内置 **catalog（模型目录）**')
+  expect(tutorial).toContain('没有启用模型时仅检查目录可达')
+  expect(tutorial).toContain('第一个启用模型')
+  expect(tutorial).toContain('普通 MCP 测试成功后才能启用')
+  expect(tutorial).toContain('保存并离开')
+  expect(tutorial).toContain('放弃并离开')
+  expect(settingsPanel).toContain('保存并离开')
+  expect(settingsPanel).toContain('放弃并离开')
+  expect(channelForm).toContain('重试保存')
+  expect(channelForm).toContain('原凭据不会被覆盖')
+  expect(tokenCrypto).toContain("const SAFE_STORAGE_PREFIX = 'proferss1:'")
+  expect(tokenCrypto).toContain("const AES_PREFIX = 'proferv1:'")
+  expect(tokenCrypto).toContain('不支持的令牌密文格式')
+  expect(tutorial).toContain('不承诺任意版本无损降级')
+  expect(tutorial).toContain('当前轮能力不会因此扩大')
+  expect(tutorial).toContain('关闭后，Agent 不能自行恢复或改用旁路工具')
+  expect(tutorial).toContain('自动化与规划、受管浏览器、剪贴板和 PPT 交付')
+})
+
+test('tutorial settings map covers every current navigation label without inventing hidden routes', () => {
+  const tutorial = read(resourcePath)
+  const panel = read(settingsPanelPath)
+  const labels = [...panel.matchAll(/\{ id: "[^"]+"(?: as const)?, label: "([^"]+)"/g)].map((match) => match[1]!)
+  expect(labels.length).toBeGreaterThan(10)
+  for (const label of labels) expect(tutorial).toContain(label)
+  expect(tutorial).toContain('窄窗口用顶部分类选择器')
+  expect(tutorial).toContain('登录设备管理嵌在已登录的账户页')
+  expect(tutorial).toContain('没有普通设置导航入口')
+  expect(tutorial).toContain('开发者模式下可见')
+})
+
+test('tutorial banner points to the real settings route and resources remain the loading source', () => {
+  const banner = read(resolve(repoRoot, 'apps/electron/src/renderer/components/tutorial/TutorialBanner.tsx'))
+  const service = read(resolve(repoRoot, 'apps/electron/src/main/lib/tutorial-service.ts'))
+  expect(banner).toContain('设置 → 帮助 → Profer 教程')
+  expect(banner).not.toContain('顶栏「教程」标签')
+  expect(service).toContain("join(__dirname, 'resources/tutorial.md')")
+  expect(service).toContain("join(process.resourcesPath, 'tutorial.md')")
+  expect(read(resourcePath)).toContain('客户端教程真源是 `apps/electron/resources/tutorial.md`')
+})
+
+test('tutorial distinguishes plain MCP fields, paid generation checks, and real authorization', () => {
+  const tutorial = read(resourcePath)
+  expect(tutorial).toContain('`env`、HTTP headers 等是普通配置字段')
+  expect(tutorial).toContain('不要把账户密码、长期令牌或不必要的秘密写入其中')
+  expect(tutorial).toContain('不承诺通用 MCP 密钥保险箱')
+  expect(tutorial).toContain('两条加密链路都失败时中止保存，不落明文')
+  expect(tutorial).toContain('生成测试会发出真实供应商请求，可能消耗额度')
+  expect(tutorial).toContain('批量获取目录也不是批量生成测试')
+  expect(tutorial).toContain('取消或授权失败不是创建成功')
+  expect(tutorial).toContain('授权在系统浏览器完成，成功后才创建渠道')
+  expect(tutorial).not.toContain('填入下方环境变量后启用')
+})
+
+test('tutorial browser identity and local-network boundaries match the current implementation', () => {
+  const tutorial = read(resourcePath)
+  const profile = read(resolve(repoRoot, 'apps/electron/src/main/lib/browser-profile-policy.ts'))
+  const policy = read(resolve(repoRoot, 'apps/electron/src/main/lib/browser-policy.ts'))
+  expect(profile).toContain("const GLOBAL_BROWSER_PROFILE_KEY = 'global-browser-profile'")
+  expect(policy).toContain('公网页面不得访问本机或私网子资源')
+  expect(tutorial).toContain('共用本机持久化登录身份')
+  expect(tutorial).toContain('受管浏览器会拦截下载')
+  expect(tutorial).not.toContain('按会话隔离网页状态')
+})
+
+test('tutorial documents current cancellation, SDK routing and hidden integration boundaries', () => {
+  const tutorial = read(resourcePath)
+  expect(tutorial).toContain('取消测试')
+  expect(tutorial).toContain('取消获取')
+  expect(tutorial).toContain('15 秒超时仍有效')
+  expect(tutorial).toContain('Agent 地址不支持 query/hash 路由')
+  expect(tutorial).toContain('不会偷偷换用另一个模型')
+  expect(tutorial).toContain('当前普通飞书设置页不提供配置或授权入口')
+  expect(read(resolve(repoRoot, 'apps/electron/src/renderer/components/settings/FeishuSettings.tsx'))).not.toContain('<LarkMcpSection />')
+})

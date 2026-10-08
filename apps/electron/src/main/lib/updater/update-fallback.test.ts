@@ -9,12 +9,12 @@ describe('更新源回退', () => {
       getUpdateSources(undefined),
       async (source) => {
         attempted.push(source.id)
-        if (source.id === 'domestic' || source.id === 'domestic-legacy') throw new Error('ECONNRESET')
+        if (source.id === 'domestic' || source.id === 'domestic-fallback') throw new Error('ECONNRESET')
         return source.id
       },
     )
 
-    expect(attempted).toEqual(['domestic', 'domestic-legacy', 'github'])
+    expect(attempted).toEqual(['domestic', 'domestic-fallback', 'github'])
     expect(result).toBe('github')
   })
 
@@ -24,12 +24,12 @@ describe('更新源回退', () => {
       getUpdateSources(undefined),
       async (source) => {
         attempted.push(source.id)
-        if (source.id === 'domestic' || source.id === 'domestic-legacy') return false
+        if (source.id === 'domestic' || source.id === 'domestic-fallback') return false
         return source.id
       },
     )
 
-    expect(attempted).toEqual(['domestic', 'domestic-legacy', 'github'])
+    expect(attempted).toEqual(['domestic', 'domestic-fallback', 'github'])
     expect(result).toBe('github')
   })
 
@@ -46,6 +46,6 @@ describe('更新源回退', () => {
     await expect(runWithUpdateSourceFallback(
       getUpdateSources(undefined),
       async (source) => { throw new Error(`${source.id} unavailable`) },
-    )).rejects.toThrow('国内更新服务器: domestic unavailable；旧域名更新源: domestic-legacy unavailable；GitHub Releases: github unavailable')
+    )).rejects.toThrow('国内更新服务器: domestic unavailable；备用国内更新源: domestic-fallback unavailable；GitHub Releases: github unavailable')
   })
 })

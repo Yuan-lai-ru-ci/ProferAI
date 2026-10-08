@@ -49,7 +49,7 @@ describe('Pi Harness sidecar store', () => {
     }))
 
     const snapshot = loadPiHarnessSnapshot('source')
-    expect(snapshot.goals['goal-1']).toMatchObject({ state: 'active', policy })
+    expect(snapshot.goals['goal-1']).toMatchObject({ state: 'active', activeTaskId: 'task-1', policy })
     expect(snapshot.turns['turn-1']).toMatchObject({ state: 'settled', usage: { modelCalls: 1, inputTokens: 2, outputTokens: 3, retries: 0 } })
     expect(snapshot.diagnostics).toEqual([])
     expect(readFileSync(getPiHarnessEventsPath('source'), 'utf-8')).toContain('goal_created')
@@ -88,6 +88,25 @@ describe('Pi Harness sidecar store', () => {
     expect(Object.values(destination.goals)[0]).toMatchObject({ state: 'settled', sessionId: 'destination' })
     expect(Object.values(destination.turns)[0]?.id).not.toBe('old-turn')
     expect(existsSync(getPiHarnessEventsPath('destination'))).toBe(true)
+  })
+
+  test('ignores retired budget events while replaying legacy focus and settled fork boundaries', () => {
+    useTempConfig()
+    const retiredBudget = {
+      version: 1, eventId: 'budget', timestamp: 101, sessionId: 'source', goalId: 'goal-1',
+      type: 'autonomy_budget_consumed', payload: { kind: 'verification_run', estimatedCostUsd: 0.12 },
+    }
+    const legacyFocus = event({
+      eventId: 'focus', timestamp: 102, type: 'task_focus_changed',
+      payload: { activeTaskId: 'old-task', reason: 'legacy' },
+    })
+    writeFileSync(getPiHarnessEventsPath('source'), [event(), retiredBudget, legacyFocus]
+      .map((item) => JSON.stringify(item)).join('\n'), 'utf-8')
+
+    const snapshot = loadPiHarnessSnapshot('source')
+    expect(snapshot.goals['goal-1']).toMatchObject({ state: 'active', activeTaskId: 'old-task' })
+    expect(snapshot.goals['goal-1']).not.toHaveProperty('autonomyUsage')
+    expect(snapshot.diagnostics).toEqual([])
   })
 
   test('returns parse diagnostics without throwing for an empty or malformed ledger', () => {

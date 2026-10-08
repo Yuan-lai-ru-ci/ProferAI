@@ -16,6 +16,7 @@ import {
   SettingsRow,
 } from './primitives'
 import { Button } from '@profer/ui/primitives/button'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@profer/ui/primitives/alert-dialog'
 import { Textarea } from '@profer/ui/primitives/textarea'
 import { Input } from '@profer/ui/primitives/input'
 import { Label } from '@profer/ui/primitives/label'
@@ -56,19 +57,38 @@ function UpdateCard(): React.ReactElement | null {
   const [checking, setChecking] = React.useState(false)
   const [showReleaseNotes, setShowReleaseNotes] = React.useState(false)
   const [latestNotes, setLatestNotes] = React.useState<string | null>(null)
+  const [checkError, setCheckError] = React.useState<string | null>(null)
+  const checkingRef = React.useRef(false)
+  const [restartOpen, setRestartOpen] = React.useState(false)
+  const [restarting, setRestarting] = React.useState(false)
+  const restartRef = React.useRef(false)
 
   const handleCheck = async (): Promise<void> => {
+    if (checkingRef.current) return
+    checkingRef.current = true
     setChecking(true)
+    setCheckError(null)
     try {
       await checkForUpdates()
+    } catch (cause) {
+      setCheckError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      // 状态由 atom 订阅自动更新，延迟重置 checking 避免按钮闪烁
-      setTimeout(() => setChecking(false), 1000)
+      checkingRef.current = false
+      setChecking(false)
     }
   }
 
-  const handleQuitAndInstall = (): void => {
-    window.electronAPI.updater?.quitAndInstall()
+  const handleQuitAndInstall = async (): Promise<void> => {
+    if (restartRef.current) return
+    restartRef.current = true
+    setRestarting(true)
+    setCheckError(null)
+    try {
+      if (!window.electronAPI.updater) throw new Error('当前构建不支持应用内安装')
+      await window.electronAPI.updater.quitAndInstall()
+      setRestartOpen(false)
+    } catch (cause) { setCheckError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { restartRef.current = false; setRestarting(false) }
   }
 
   const handleOpenManualUpdate = (): void => {
@@ -79,34 +99,29 @@ function UpdateCard(): React.ReactElement | null {
     })
   }
 
-  // 当检测到新版本时，从本地内置 CHANGELOG 获取最新版本的更新内容
+  // 本地日志只匹配当前目标版本；旧请求不能覆盖新版本的说明。
   React.useEffect(() => {
-    if (status.status === 'available' && status.version && latestNotes === null) {
-      window.electronAPI.updater
-        ?.getChangelog()
-        .then((entries) => {
-          const match = entries.find((e) => e.version === status.version)
-          if (match?.notes) {
-            setLatestNotes(match.notes)
-            setShowReleaseNotes(true)
-          }
-        })
-        .catch((err) => {
-          console.error('[更新] 获取本地更新日志失败:', err)
-        })
+    setLatestNotes(null)
+    let cancelled = false
+    if (status.status === 'available' && status.version && !status.releaseNotes) {
+      window.electronAPI.updater?.getChangelog().then((entries) => {
+        if (cancelled) return
+        const match = entries.find((entry) => entry.version === status.version)
+        if (match?.notes) { setLatestNotes(match.notes); setShowReleaseNotes(true) }
+      }).catch(() => { /* 缺少本地日志时保留版本和下载入口 */ })
     }
-  }, [status.status, status.version, latestNotes])
+    return () => { cancelled = true }
+  }, [status.status, status.version, status.releaseNotes])
 
-  // updater 不可用时不渲染；所有 Hook 保持固定调用顺序。
-  if (!available) return null
+  if (!available) return <SettingsCard><SettingsRow label="软件更新" description="当前构建未提供应用内更新，可打开官方发布页查看安装包。"><Button size="sm" variant="outline" onClick={() => void window.electronAPI.openExternal(GITHUB_RELEASES_URL).catch(() => toast.error('无法打开发布页'))}><ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />官方发布页</Button></SettingsRow></SettingsCard>
 
   const isChecking = checking || status.status === 'checking' || status.status === 'downloading'
   const hasReleaseNotes = status.releaseNotes || latestNotes
 
   return (
-    <SettingsCard>
+    <SettingsCard divided={false}>
       <SettingsRow label="软件更新">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {/* 状态文字 */}
           <StatusText status={status.status} version={status.version} error={status.error} manual={!!status.manualUrl} />
 
@@ -121,7 +136,7 @@ function UpdateCard(): React.ReactElement | null {
             </button>
           ) : status.status === 'downloaded' ? (
             <button
-              onClick={handleQuitAndInstall}
+              onClick={() => setRestartOpen(true)}
               className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
             >
               <RotateCw className="h-3.5 w-3.5" />
@@ -143,11 +158,13 @@ function UpdateCard(): React.ReactElement | null {
           )}
         </div>
       </SettingsRow>
+      {checkError && <div role="alert" className="flex flex-wrap items-center gap-2 px-4 pb-3 text-xs text-destructive"><AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />检查更新失败：{checkError}<Button size="sm" variant="outline" onClick={() => void handleCheck()}>重试</Button></div>}
 
       {/* Release Notes（新版本可用时显示） */}
       {status.status === 'available' && hasReleaseNotes && (
         <div className="px-4 pb-4 border-t">
           <button
+            aria-expanded={showReleaseNotes}
             onClick={() => setShowReleaseNotes(!showReleaseNotes)}
             className="w-full flex items-center justify-between py-3 text-left hover:opacity-80 transition-opacity"
           >
@@ -176,6 +193,13 @@ function UpdateCard(): React.ReactElement | null {
           )}
         </div>
       )}
+      <AlertDialog open={restartOpen} onOpenChange={(open) => { if (!restartRef.current) setRestartOpen(open) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>重启并安装更新？</AlertDialogTitle><AlertDialogDescription>应用将关闭并安装已下载的版本。请先完成或保存正在进行的工作。</AlertDialogDescription></AlertDialogHeader>
+          {checkError && <p role="alert" className="text-sm text-destructive">{checkError}</p>}
+          <AlertDialogFooter><AlertDialogCancel disabled={restarting}>取消</AlertDialogCancel><AlertDialogAction disabled={restarting} onClick={(event) => { event.preventDefault(); void handleQuitAndInstall() }}>{restarting ? '正在重启…' : '重启并安装'}</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SettingsCard>
   )
 }
@@ -222,9 +246,9 @@ function StatusText({ status, version, error, manual }: {
       )
     case 'error':
       return (
-        <span className="text-xs text-destructive flex items-center gap-1" title={error}>
+        <span role="alert" className="text-xs text-destructive flex items-center gap-1" title={error}>
           <AlertCircle className="h-3 w-3" />
-          检查失败
+          {error ? `检查失败：${error}` : '检查失败，可重试'}
         </span>
       )
     default:
@@ -238,6 +262,7 @@ function EnvironmentCard(): React.ReactElement {
   const setEnvironmentResult = useSetAtom(environmentCheckResultAtom)
   const [result, setResult] = React.useState<EnvironmentCheckResult | null>(null)
   const [isChecking, setIsChecking] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
 
   // 初始化时加载缓存的检测结果
   React.useEffect(() => {
@@ -246,18 +271,23 @@ function EnvironmentCard(): React.ReactElement {
         setResult(settings.lastEnvironmentCheck)
         setEnvironmentResult(settings.lastEnvironmentCheck)
       }
+    }).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : String(cause))
     })
   }, [])
 
   // 执行环境检测
   const handleCheck = async () => {
     setIsChecking(true)
+    setError(null)
     try {
       const checkResult = await window.electronAPI.checkEnvironment()
       setResult(checkResult)
       setEnvironmentResult(checkResult)
-    } catch (error) {
-      console.error('[环境检测] 检测失败:', error)
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      setError(message)
+      console.error('[环境检测] 检测失败:', cause)
     } finally {
       setIsChecking(false)
     }
@@ -284,7 +314,7 @@ function EnvironmentCard(): React.ReactElement {
   return (
     <SettingsCard>
       <div className="p-4 border-b">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-medium">环境检测</h3>
             {hasIssues && <Badge variant="destructive">!</Badge>}
@@ -303,11 +333,14 @@ function EnvironmentCard(): React.ReactElement {
           </button>
         </div>
         <p className="text-xs text-muted-foreground mt-1">
-          Agent 模式需要 Node.js 和 Git 支持
+          Node.js 与 Git 的安装检查；实际使用的 Bun、Shell 与运行时可用性见上方摘要。
         </p>
       </div>
 
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3" aria-busy={isChecking}>
+        {error && <div role="alert" className="rounded-lg bg-destructive/10 p-3 text-xs text-destructive">环境检测失败：{error}。请点击“重新检查”。</div>}
+        {!result && <p role="status" className="text-sm text-muted-foreground">{isChecking ? '正在检测本地运行环境…' : '尚无检测结果，请点击“重新检查”。'}</p>}
+        {result && <>
         {/* Node.js 检测卡片 */}
         <EnvironmentCheckCard
           name="Node.js"
@@ -351,31 +384,73 @@ function EnvironmentCard(): React.ReactElement {
             </AlertDescription>
           </Alert>
         )}
+        </>}
       </div>
     </SettingsCard>
   )
+}
+
+/** 只读主进程已检测的运行时快照，不初始化、安装或修改运行时。 */
+function RuntimeSummaryCard(): React.ReactElement {
+  const [status, setStatus] = React.useState<RuntimeStatus | null>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
+  const requestRef = React.useRef(0)
+  const read = React.useCallback(async () => {
+    const request = ++requestRef.current
+    setLoading(true)
+    setError(null)
+    try {
+      const next = await window.electronAPI.getRuntimeStatus()
+      if (request === requestRef.current) setStatus(next)
+    } catch (cause) {
+      if (request === requestRef.current) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally { if (request === requestRef.current) setLoading(false) }
+  }, [])
+  React.useEffect(() => { void read(); return () => { requestRef.current += 1 } }, [read])
+  return <SettingsCard divided={false}>
+    <SettingsRow label="运行时摘要" description="主进程已检测的本地快照；可用不代表模型渠道已配置。">
+      <Button size="sm" variant="outline" disabled={loading} onClick={() => void read()}><RefreshCw size={14} aria-hidden="true" />{loading ? '读取中…' : '重新读取'}</Button>
+    </SettingsRow>
+    <div className="space-y-3 px-4 pb-4" aria-busy={loading}>
+      {error && <p role="alert" className="text-sm text-destructive">读取运行时失败：{error}。请重新读取。</p>}
+      {!loading && !error && !status && <p role="status" className="text-sm text-muted-foreground">主进程尚未提供运行时状态。</p>}
+      {status && <dl className="space-y-3">{(['node', 'bun', 'git'] as const).map((key) => {
+        const runtime = status[key]
+        return <div key={key} className="flex flex-col gap-1 sm:flex-row sm:gap-4">
+          <dt className="w-16 shrink-0 text-sm font-medium">{key === 'node' ? 'Node.js' : key === 'bun' ? 'Bun' : 'Git'}</dt>
+          <dd className="min-w-0 text-sm"><span className={runtime.available ? 'text-foreground' : 'text-destructive'}>{runtime.available ? `可用${runtime.version ? ` · ${runtime.version}` : ''}` : `不可用${runtime.error ? ` · ${runtime.error}` : ''}`}</span>{runtime.path && <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{runtime.path}</p>}</dd>
+        </div>
+      })}</dl>}
+    </div>
+  </SettingsCard>
 }
 
 /** Shell 环境卡片（Windows 平台）*/
 function ShellEnvironmentCard(): React.ReactElement | null {
   const [runtimeStatus, setRuntimeStatus] = React.useState<RuntimeStatus | null>(null)
   const [isChecking, setIsChecking] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
 
   // 初始化时加载运行时状态
   React.useEffect(() => {
     window.electronAPI.getRuntimeStatus().then((status) => {
       setRuntimeStatus(status)
+    }).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : String(cause))
     })
   }, [])
 
   // 重新检测
   const handleCheck = async () => {
     setIsChecking(true)
+    setError(null)
     try {
       const status = await window.electronAPI.reinitRuntime()
       setRuntimeStatus(status)
-    } catch (error) {
-      console.error('[Shell 环境检测] 检测失败:', error)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+      console.error('[Shell 环境检测] 检测失败:', cause)
     } finally {
       setIsChecking(false)
     }
@@ -383,6 +458,7 @@ function ShellEnvironmentCard(): React.ReactElement | null {
 
   // 非 Windows 平台不显示
   if (!runtimeStatus || !runtimeStatus.shell) {
+    if (error && window.electronAPI.getPlatformInfo().platform === 'win32') return <SettingsCard divided={false} className="p-4"><p role="alert" className="text-sm text-destructive">Shell 状态读取失败：{error}</p><Button className="mt-3" size="sm" variant="outline" disabled={isChecking} onClick={() => void handleCheck()}>重新检查 Shell</Button></SettingsCard>
     return null
   }
 
@@ -392,7 +468,7 @@ function ShellEnvironmentCard(): React.ReactElement | null {
   return (
     <SettingsCard>
       <div className="p-4 border-b">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Terminal className="h-4 w-4 text-muted-foreground" />
             <h3 className="text-sm font-medium">Shell 环境（Windows）</h3>
@@ -417,6 +493,7 @@ function ShellEnvironmentCard(): React.ReactElement | null {
       </div>
 
       <div className="p-4 space-y-3">
+        {error && <div role="alert" className="rounded-lg bg-destructive/10 p-3 text-xs text-destructive">Shell 环境检测失败：{error}。请点击“重新检查”。</div>}
         {/* Git Bash 检测卡片 */}
         <EnvironmentCheckCard
           name="Git Bash"
@@ -492,6 +569,7 @@ export function AboutSettings(): React.ReactElement {
     unlockPendingRef.current = true
     window.electronAPI.updateSettings({ developerModeEnabled: true })
       .then((settings) => {
+        if (settings.developerModeEnabled !== true) throw new Error('应用未确认启用开发者模式')
         setDeveloperModeEnabled(settings.developerModeEnabled === true)
         setOpenEpistemicModeEnabled(settings.openEpistemicModeEnabled === true)
         toast.success('开发者模式已启用')
@@ -528,15 +606,17 @@ export function AboutSettings(): React.ReactElement {
           </SettingsRow>
         </SettingsCard>
 
-        {/* 自动更新与更新历史：保留在同一语义分组，避免打断关于页其余设置 */}
+      </SettingsSection>
+      <SettingsSection title="软件更新" description="根据当前构建显示应用内更新或官方发布页；检查不会修改安装版本。">
         <UpdateCard />
-        <VersionHistory />
-
-        {/* 环境检测卡片 */}
+      </SettingsSection>
+      <SettingsSection title="运行环境" description="查看本地 Agent 所需的运行时状态；检测失败可重试。">
+        <RuntimeSummaryCard />
         <EnvironmentCard />
-
-        {/* Shell 环境卡片（仅 Windows） */}
         <ShellEnvironmentCard />
+      </SettingsSection>
+      <SettingsSection title="版本记录" description="查看当前应用随包提供的更新历史。">
+        <VersionHistory />
       </SettingsSection>
 
       <FeedbackSection />
@@ -561,6 +641,7 @@ function FeedbackSection(): React.ReactElement {
   const [category, setCategory] = React.useState('general')
   const [submitState, setSubmitState] = React.useState<SubmitState>('idle')
   const [errorMsg, setErrorMsg] = React.useState('')
+  const submittingRef = React.useRef(false)
 
   const getAuth = React.useCallback(async () => {
     try {
@@ -571,13 +652,14 @@ function FeedbackSection(): React.ReactElement {
   }, [])
 
   const handleSubmit = React.useCallback(async () => {
-    if (!content.trim()) return
+    if (!content.trim() || submittingRef.current) return
+    submittingRef.current = true
     setSubmitState('submitting')
     setErrorMsg('')
     try {
       const auth = await getAuth()
       if (!auth?.baseUrl) {
-        setErrorMsg('未连接到 Profer 服务端，请先在通用设置中登录团队账号。')
+        setErrorMsg('未连接到 Profer 服务端，请先在账户设置中登录团队账号。')
         setSubmitState('error')
         return
       }
@@ -596,16 +678,16 @@ function FeedbackSection(): React.ReactElement {
       })
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({ error: '请求失败' }))
-        throw new Error(d.error || `请求失败 (${resp.status})`)
+        throw new Error(typeof d?.error === 'string' ? d.error : `请求失败 (${resp.status})`)
       }
       setSubmitState('success')
       setContent('')
       setContact('')
       setCategory('general')
-    } catch (err: any) {
-      setErrorMsg(err.message || '提交失败，请稍后重试')
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : '提交失败，请稍后重试')
       setSubmitState('error')
-    }
+    } finally { submittingRef.current = false }
   }, [content, contact, category, getAuth])
 
   const handleReset = React.useCallback(() => {
@@ -617,8 +699,8 @@ function FeedbackSection(): React.ReactElement {
     <SettingsSection title="意见反馈" description="告诉我们你的想法、建议或遇到的问题。每一条反馈我们都会认真阅读。">
       <SettingsCard>
         {submitState === 'success' ? (
-          <div className="flex flex-col items-center justify-center py-10 gap-3">
-            <CheckCircle2 size={40} className="text-green-500" />
+          <div role="status" className="flex flex-col items-center justify-center py-10 gap-3">
+            <CheckCircle2 size={40} className="text-primary" />
             <p className="text-base font-medium text-foreground">感谢你的反馈！</p>
             <p className="text-sm text-muted-foreground">我们已收到你的意见，会尽快处理。</p>
             <Button variant="outline" size="sm" onClick={handleReset} className="mt-2">
@@ -626,11 +708,11 @@ function FeedbackSection(): React.ReactElement {
             </Button>
           </div>
         ) : (
-          <div className="flex flex-col gap-4 p-1">
+          <div className="flex flex-col gap-4 p-4" aria-busy={submitState === 'submitting'}>
             {submitState === 'error' && errorMsg && (
               <Alert variant="destructive">
                 <AlertCircle size={16} />
-                <AlertDescription>{errorMsg}</AlertDescription>
+                <AlertDescription id="feedback-error" role="alert">{errorMsg} 输入内容已保留，可重试提交。</AlertDescription>
               </Alert>
             )}
             <div className="flex flex-col gap-1.5">
@@ -638,6 +720,9 @@ function FeedbackSection(): React.ReactElement {
                 意见内容 <span className="text-destructive">*</span>
               </Label>
               <Textarea
+                aria-describedby={submitState === 'error' ? 'feedback-content-hint feedback-error' : 'feedback-content-hint'}
+                required
+                aria-invalid={submitState === 'error' && !content.trim()}
                 id="feedback-content"
                 placeholder="请详细描述你的想法、建议或遇到的问题..."
                 value={content}
@@ -647,14 +732,14 @@ function FeedbackSection(): React.ReactElement {
                 disabled={submitState === 'submitting'}
                 className="resize-none"
               />
-              <p className="text-xs text-muted-foreground self-end">
+              <p id="feedback-content-hint" className="text-xs text-muted-foreground self-end" aria-live="polite">
                 {content.length}/5000
               </p>
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="feedback-category" className="text-sm font-medium">分类</Label>
               <Select value={category} onValueChange={setCategory} disabled={submitState === 'submitting'}>
-                <SelectTrigger id="feedback-category" className="w-[200px]">
+                <SelectTrigger id="feedback-category" className="w-full sm:w-[200px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -680,7 +765,7 @@ function FeedbackSection(): React.ReactElement {
             <Button
               onClick={handleSubmit}
               disabled={!content.trim() || submitState === 'submitting'}
-              className="self-start mt-2"
+              className="w-full sm:w-auto sm:self-start mt-2"
             >
               {submitState === 'submitting' ? (
                 <>

@@ -27,6 +27,7 @@ let root = ''
 let sessions: typeof import('./agent-session-manager')
 let configPaths: typeof import('./config-paths')
 let graphService: typeof import('./project-graph-service')
+let workspaces: typeof import('./agent-workspace-manager')
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), 'profer-pi-session-test-'))
@@ -35,6 +36,7 @@ beforeEach(async () => {
   sessions = await import(`./agent-session-manager?pi-runtime-test=${cacheKey}`)
   configPaths = await import(`./config-paths?pi-runtime-test=${cacheKey}`)
   graphService = await import(`./project-graph-service?pi-runtime-test=${cacheKey}`)
+  workspaces = await import(`./agent-workspace-manager?pi-runtime-test=${cacheKey}`)
 })
 
 afterEach(() => {
@@ -96,27 +98,60 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(sessions.getAgentSessionMeta(second.id)?.sdkSessionId).toBe('pi-keep-id')
   })
 
-  test('Given nested delegated children When resolving deletion order Then only delegated descendants are leaf-first', () => {
-    const parent = sessions.createAgentSession('parent')
-    const childId = 'delegated-child'
-    const grandchildId = 'delegated-grandchild'
-    sessions.createDelegatedChildSessionMeta({
-      childSessionId: childId,
-      parentSessionId: parent.id,
-      sourceDelegationId: 'delegation-child',
-      title: 'child',
+  test('Given a Pi session moves from an external cwd into a workspace When migrating Then old runtime artifacts are discarded but Profer history remains', () => {
+    const workspace = workspaces.createAgentWorkspace('Migrated workspace')
+    const meta = sessions.createAgentSession('Migrated Pi', undefined, undefined, undefined, 'pi')
+    const oldCwd = join(root, 'external-cwd')
+    mkdirSync(oldCwd)
+    writeFileSync(join(oldCwd, 'keep-me.txt'), 'outside workspace')
+    const checkpoint = createPiFileCheckpoint(meta.id, oldCwd, configPaths.getPiCheckpointsDir())
+    const transcript = writePiTranscript('pi-migrated-session')
+    sessions.appendSDKMessages(meta.id, [{
+      type: 'user', uuid: 'user-before-move', message: { content: [{ type: 'text', text: '继续签名任务' }] },
+    } as never])
+    sessions.updateAgentSessionMeta(meta.id, {
+      sdkSessionId: 'pi-migrated-session',
+      piSessionFile: transcript,
+      piEntryBindings: { 'assistant-before-move': 'entry-before-move' },
+      piFileCheckpoints: { 'entry-before-move': checkpoint.path },
     })
-    sessions.createDelegatedChildSessionMeta({
-      childSessionId: grandchildId,
-      parentSessionId: childId,
-      sourceDelegationId: 'delegation-grandchild',
-      title: 'grandchild',
-    })
-    const unrelated = sessions.createAgentSession('unrelated')
-    sessions.updateAgentSessionMeta(unrelated.id, { parentSessionId: parent.id })
 
-    expect(sessions.getAgentSessionDeletionOrder(parent.id)).toEqual([grandchildId, childId, parent.id])
-    expect(sessions.getAgentSessionDeletionOrder(unrelated.id)).toEqual([unrelated.id])
+    const moved = sessions.moveSessionToWorkspace(meta.id, workspace.id)
+
+    expect(moved.workspaceId).toBe(workspace.id)
+    expect(moved.sdkSessionId).toBeUndefined()
+    expect(moved.piSessionFile).toBeUndefined()
+    expect(moved.piEntryBindings).toBeUndefined()
+    expect(moved.piFileCheckpoints).toBeUndefined()
+    expect(existsSync(transcript)).toBe(false)
+    expect(existsSync(checkpoint.path)).toBe(false)
+    expect(sessions.getAgentSessionSDKMessages(meta.id)).toHaveLength(1)
+    expect(readFileSync(join(oldCwd, 'keep-me.txt'), 'utf8')).toBe('outside workspace')
+  })
+
+  describe('delegated session deletion order', () => {
+    test('Given nested delegated children When resolving deletion order Then only delegated descendants are leaf-first', () => {
+      const parent = sessions.createAgentSession('parent')
+      const childId = 'delegated-child'
+      const grandchildId = 'delegated-grandchild'
+      sessions.createDelegatedChildSessionMeta({
+        childSessionId: childId,
+        parentSessionId: parent.id,
+        sourceDelegationId: 'delegation-child',
+        title: 'child',
+      })
+      sessions.createDelegatedChildSessionMeta({
+        childSessionId: grandchildId,
+        parentSessionId: childId,
+        sourceDelegationId: 'delegation-grandchild',
+        title: 'grandchild',
+      })
+      const unrelated = sessions.createAgentSession('unrelated')
+      sessions.updateAgentSessionMeta(unrelated.id, { parentSessionId: parent.id })
+
+      expect(sessions.getAgentSessionDeletionOrder(parent.id)).toEqual([grandchildId, childId, parent.id])
+      expect(sessions.getAgentSessionDeletionOrder(unrelated.id)).toEqual([unrelated.id])
+    })
   })
 
   test('Given a session is created with a preset When re-reading index Then the preset and reference persist', () => {

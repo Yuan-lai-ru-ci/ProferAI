@@ -9,6 +9,7 @@ import { Monitor, Loader2, LogOut, RefreshCw, AlertCircle } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { SettingsSection, SettingsCard } from './primitives'
 import { Alert, AlertDescription } from '@profer/ui/primitives/alert'
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from '@profer/ui/primitives/alert-dialog'
 
 type DeviceRow = {
   id: string
@@ -35,6 +36,7 @@ export function DevicesSettings(): React.ReactElement {
   const [currentDeviceId, setCurrentDeviceId] = React.useState<string | null>(null)
   const [error, setError] = React.useState('')
   const [revoking, setRevoking] = React.useState<string | null>(null)
+  const [revokeTarget, setRevokeTarget] = React.useState<DeviceRow | null>(null)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -62,6 +64,7 @@ export function DevicesSettings(): React.ReactElement {
       const res = await window.electronAPI.auth.revokeDevice(slotId)
       if (res.ok) {
         setDevices((prev) => prev.filter((d) => d.id !== slotId))
+        setRevokeTarget(null)
       } else {
         setError(res.error || '登出失败')
       }
@@ -117,7 +120,7 @@ export function DevicesSettings(): React.ReactElement {
                       variant="outline"
                       size="sm"
                       disabled={isCurrent || revoking !== null}
-                      onClick={() => handleRevoke(d.id)}
+                      onClick={() => setRevokeTarget(d)}
                       title={isCurrent ? '当前设备请使用「退出登录」' : '登出该设备'}
                     >
                       {revoking === d.id
@@ -135,6 +138,23 @@ export function DevicesSettings(): React.ReactElement {
           )}
         </SettingsCard>
       </SettingsSection>
+      <AlertDialog open={revokeTarget !== null} onOpenChange={(open) => { if (!open && !revoking) setRevokeTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>登出此设备？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{revokeTarget?.deviceName}」上的登录会话将被撤销，需要重新登录才能使用账户服务。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={revoking !== null}>取消</AlertDialogCancel>
+            <AlertDialogAction disabled={revoking !== null} onClick={(event) => {
+              event.preventDefault()
+              if (revokeTarget) void handleRevoke(revokeTarget.id)
+            }}>{revoking ? '处理中…' : '确认登出'}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -2,7 +2,7 @@
  * AppearanceSettings - 外观设置页
  *
  * 主题模式切换与本地皮肤管理（浅色/深色/跟随系统）。
- * 通过 Jotai atom 管理状态，持久化到 ~/.proma/settings.json。
+ * 通过 Jotai atom 管理状态，持久化到 ~/.profer/settings.json。
  */
 
 import * as React from 'react'
@@ -20,19 +20,16 @@ import {
   themeModeAtom,
   themeStyleAtom,
   systemIsDarkAtom,
-  updateThemeMode,
-  updateThemeStyle,
   applyThemeToDOM,
   skinsAtom,
   refreshSkinRegistry,
 } from '@/atoms/theme'
 import {
   markdownFontSizeAtom,
-  updateMarkdownFontSize,
+  applyMarkdownFontSizeToDOM,
 } from '@/atoms/markdown-font-size'
 import {
   uiScaleAtom,
-  updateUiScale,
   UI_SCALE_OPTIONS,
 } from '@/atoms/ui-scale'
 import { cn } from '@/lib/utils'
@@ -51,7 +48,7 @@ import proferVeriPeriLogo from '@/assets/bots/profer-logos/profer-veri-peri.png'
 import proferVivaMagentaLogo from '@/assets/bots/profer-logos/profer-viva-magenta.png'
 import proferMochaMousseLogo from '@/assets/bots/profer-logos/profer-mocha-mousse.png'
 import proferEmeraldLogo from '@/assets/bots/profer-logos/profer-emerald.png'
-import proma8bitLogo from '@/assets/bots/profer-logos/profer-8bit.png'
+import profer8bitLogo from '@/assets/bots/profer-logos/profer-8bit.png'
 import proferCyberpunkLogo from '@/assets/bots/profer-logos/profer-cyberpunk.png'
 import proferFuturisticLogo from '@/assets/bots/profer-logos/profer-futuristic.png'
 
@@ -92,7 +89,7 @@ const ICON_VARIANTS: readonly IconVariant[] = [
   { id: 'viva-magenta', name: '非凡洋红', src: proferVivaMagentaLogo, previewBg: 'bg-[#BB2649]' },
   { id: 'mocha-mousse', name: '摩卡慕斯', src: proferMochaMousseLogo, previewBg: 'bg-[#A47764]' },
   { id: 'emerald', name: '翡翠绿', src: proferEmeraldLogo, previewBg: 'bg-[#009473]' },
-  { id: '8bit', name: '8bit 像素', src: proma8bitLogo, previewBg: 'bg-[#1a1a2e]' },
+  { id: '8bit', name: '8bit 像素', src: profer8bitLogo, previewBg: 'bg-[#1a1a2e]' },
   { id: 'cyberpunk', name: '赛博朋克', src: proferCyberpunkLogo, previewBg: 'bg-[#0d0221]' },
   { id: 'futuristic', name: '未来质感', src: proferFuturisticLogo, previewBg: 'bg-[#4a4a4a]' },
 ] as const
@@ -110,10 +107,15 @@ export function AppearanceSettings(): React.ReactElement {
   const [themeMode, setThemeMode] = useAtom(themeModeAtom)
   const [themeStyle, setThemeStyle] = useAtom(themeStyleAtom)
   const systemIsDark = useAtomValue(systemIsDarkAtom)
-  const skins = useAtomValue(skinsAtom)
+  const [skins, setSkins] = useAtom(skinsAtom)
   const [deleteTarget, setDeleteTarget] = React.useState<SkinInfo | null>(null)
   const [conflict, setConflict] = React.useState<{ path: string; kind: 'zip' | 'folder' } | null>(null)
   const [busy, setBusy] = React.useState(false)
+  const busyRef = React.useRef(false)
+  const [skinLoading, setSkinLoading] = React.useState(true)
+  const [skinError, setSkinError] = React.useState<string | null>(null)
+  const skinRequestRef = React.useRef(0)
+  const [error, setError] = React.useState<string | null>(null)
   const [markdownFontSize, setMarkdownFontSize] = useAtom(markdownFontSizeAtom)
   // 界面大小控件仅面向移动端/浏览器端（UiScaleContainer 等比缩放）；
   // Electron 桌面保持原版行为（Ctrl+± 浏览器级缩放），不渲染控件避免“调了无效果”。
@@ -121,64 +123,102 @@ export function AppearanceSettings(): React.ReactElement {
   const [uiScale, setUiScale] = useAtom(uiScaleAtom)
   const scaleOptions = UI_SCALE_OPTIONS
 
-  /** 切换主题模式 */
-  const handleThemeChange = React.useCallback((value: string) => {
-    const mode = value as ThemeMode
-    setThemeMode(mode)
-    updateThemeMode(mode)
-    setThemeStyle('default')
-    updateThemeStyle('default')
-    applyThemeToDOM(mode, 'default', systemIsDark)
-  }, [setThemeMode, setThemeStyle, systemIsDark])
-
-  /** 从皮肤管理器选择皮肤 */
-  const handleStyleSelect = React.useCallback((style: ThemeStyle) => {
-    setThemeMode('special')
-    setThemeStyle(style)
-    updateThemeMode('special')
-    updateThemeStyle(style)
-    applyThemeToDOM('special', style, systemIsDark)
-  }, [setThemeMode, setThemeStyle, systemIsDark])
-
-  const refreshSkins = React.useCallback(async () => {
+  // 页面写入统一串行；先确认持久化成功，再改 atom、缓存和 DOM。
+  const run = React.useCallback(async (action: () => Promise<void>, failure: string) => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusy(true)
-    try { await refreshSkinRegistry(themeStyle); toast.success('皮肤库已刷新') } catch { toast.error('刷新皮肤库失败') } finally { setBusy(false) }
-  }, [themeStyle])
-  const importSkin = React.useCallback(async (kind: 'zip' | 'folder', replace = false, existingPath?: string) => {
-    setBusy(true)
+    setError(null)
+    try { await action() }
+    catch (cause) {
+      const message = `${failure}：${cause instanceof Error ? cause.message : String(cause)}`
+      setError(message)
+      toast.error(failure)
+    } finally { busyRef.current = false; setBusy(false) }
+  }, [])
+  const saveTheme = React.useCallback(async (mode: ThemeMode, style: ThemeStyle) => {
+    await run(async () => {
+      await window.electronAPI.updateSettings({ themeMode: mode, themeStyle: style })
+      setThemeMode(mode)
+      setThemeStyle(style)
+      try { localStorage.setItem('profer-theme-mode', mode); localStorage.setItem('profer-theme-style', style) } catch { /* 缓存不可用不影响已保存设置 */ }
+      applyThemeToDOM(mode, style, systemIsDark)
+    }, '外观保存失败，原设置已保留')
+  }, [run, setThemeMode, setThemeStyle, systemIsDark])
+  const handleThemeChange = (value: string) => { void saveTheme(value as ThemeMode, 'default') }
+  const handleStyleSelect = (style: ThemeStyle) => { void saveTheme('special', style) }
+
+  const readSkins = React.useCallback(async () => {
+    const request = ++skinRequestRef.current
+    setSkinLoading(true)
+    setSkinError(null)
     try {
+      // 原有 helper 负责更新主题模块缓存及当前皮肤 CSS；显式 IPC 读取提供真实失败状态。
+      const next = await window.electronAPI.refreshSkins()
+      if (request !== skinRequestRef.current) return
+      await refreshSkinRegistry(themeMode === 'special' ? themeStyle : undefined)
+      if (request === skinRequestRef.current) setSkins(next)
+    } catch (cause) {
+      if (request === skinRequestRef.current) setSkinError(`读取皮肤库失败：${cause instanceof Error ? cause.message : String(cause)}`)
+    } finally { if (request === skinRequestRef.current) setSkinLoading(false) }
+  }, [setSkins, themeMode, themeStyle])
+  const refreshSkins = React.useCallback(async () => {
+    await run(readSkins, '读取皮肤库失败，请重试')
+  }, [readSkins, run])
+  React.useEffect(() => {
+    const request = ++skinRequestRef.current
+    window.electronAPI.getSkins().then((next) => { if (request === skinRequestRef.current) setSkins(next) })
+      .catch((cause: unknown) => { if (request === skinRequestRef.current) setSkinError(`读取皮肤库失败：${cause instanceof Error ? cause.message : String(cause)}`) })
+      .finally(() => { if (request === skinRequestRef.current) setSkinLoading(false) })
+    return () => { skinRequestRef.current += 1 }
+  }, [setSkins])
+  const importSkin = React.useCallback(async (kind: 'zip' | 'folder', replace = false, existingPath?: string) => {
+    await run(async () => {
       const path = existingPath ?? (kind === 'zip' ? await window.electronAPI.selectSkinZip() : await window.electronAPI.selectSkinFolder())
       if (!path) return
       const result = kind === 'zip' ? await window.electronAPI.installSkinZip(path, replace) : await window.electronAPI.installSkinFolder(path, replace)
       if (result.status === 'conflict') { setConflict({ path, kind }); return }
-      if (!result.ok) { toast.error(result.message ?? '导入失败'); return }
-      await refreshSkinRegistry(themeStyle)
+      if (!result.ok) throw new Error(result.message ?? '导入失败')
+      setConflict(null)
+      await readSkins()
       toast.success(result.message ?? '皮肤已导入')
-    } catch { toast.error('导入皮肤失败') } finally { setBusy(false) }
-  }, [themeStyle])
+    }, '导入皮肤失败')
+  }, [readSkins, run])
   const confirmDelete = React.useCallback(async () => {
     if (!deleteTarget) return
     if (themeMode === 'special' && themeStyle === deleteTarget.id) { toast.error('请先恢复默认主题，再删除当前皮肤'); setDeleteTarget(null); return }
-    setBusy(true)
-    try { const result = await window.electronAPI.deleteUserSkin(deleteTarget.id); if (!result.ok) toast.error(result.message ?? '删除失败'); else { await refreshSkinRegistry(); toast.success('皮肤已删除') } } finally { setBusy(false); setDeleteTarget(null) }
-  }, [deleteTarget, themeMode, themeStyle])
+    await run(async () => {
+      const result = await window.electronAPI.deleteUserSkin(deleteTarget.id)
+      if (!result.ok) throw new Error(result.message ?? '删除失败')
+      setDeleteTarget(null)
+      await readSkins()
+      toast.success('皮肤已删除')
+    }, '删除皮肤失败')
+  }, [deleteTarget, themeMode, themeStyle, readSkins, run])
 
   /** 切换 Markdown 字号 */
-  const handleMarkdownFontSizeChange = React.useCallback((value: string) => {
+  const handleMarkdownFontSizeChange = (value: string) => {
     const size = value as MarkdownFontSize
-    setMarkdownFontSize(size)
-    updateMarkdownFontSize(size)
-  }, [setMarkdownFontSize])
+    void run(async () => {
+      await window.electronAPI.updateSettings({ markdownFontSize: size })
+      setMarkdownFontSize(size)
+      applyMarkdownFontSizeToDOM(size)
+    }, '字号保存失败，原设置已保留')
+  }
 
   /** 切换界面大小 */
-  const handleUiScaleChange = React.useCallback((value: string) => {
+  const handleUiScaleChange = (value: string) => {
     const scale = value as UiScale
-    setUiScale(scale)
-    updateUiScale(scale)
-  }, [setUiScale])
+    void run(async () => {
+      await window.electronAPI.updateSettings({ uiScale: scale })
+      setUiScale(scale)
+      try { localStorage.setItem('profer-ui-scale', scale) } catch { /* 缓存不可用不影响设置 */ }
+    }, '界面大小保存失败，原设置已保留')
+  }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" aria-busy={busy}>
+      {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       <SettingsSection
         title="外观设置"
         description="自定义应用的视觉风格"
@@ -191,6 +231,7 @@ export function AppearanceSettings(): React.ReactElement {
             value={themeMode}
             onValueChange={handleThemeChange}
             options={THEME_OPTIONS}
+            disabled={busy}
           />
 
           {isElectron ? (
@@ -205,6 +246,7 @@ export function AppearanceSettings(): React.ReactElement {
               value={uiScale}
               onValueChange={handleUiScaleChange}
               options={scaleOptions}
+              disabled={busy}
             />
           )}
 
@@ -214,18 +256,19 @@ export function AppearanceSettings(): React.ReactElement {
             value={markdownFontSize}
             onValueChange={handleMarkdownFontSizeChange}
             options={MARKDOWN_FONT_SIZE_OPTIONS}
+            disabled={busy}
           />
 
         </SettingsCard>
       </SettingsSection>
 
-      <SkinManager skins={skins} themeMode={themeMode} themeStyle={themeStyle} busy={busy} onSelect={handleStyleSelect} onImport={importSkin} onRefresh={refreshSkins} onOpenFolder={() => window.electronAPI.openUserSkinsFolder()} onDelete={setDeleteTarget} />
+      <SkinManager skins={skins} themeMode={themeMode} themeStyle={themeStyle} busy={busy} loading={skinLoading} error={skinError} onSelect={handleStyleSelect} onImport={importSkin} onRefresh={refreshSkins} onOpenFolder={() => { void run(() => window.electronAPI.openUserSkinsFolder(), '打开皮肤目录失败') }} onDelete={setDeleteTarget} />
 
-      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
-        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>删除皮肤？</AlertDialogTitle><AlertDialogDescription>将永久删除「{deleteTarget?.name}」，此操作不可恢复。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={confirmDelete}>删除</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setDeleteTarget(null) }}>
+        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>删除皮肤？</AlertDialogTitle><AlertDialogDescription>将永久删除「{deleteTarget?.name}」，此操作不可恢复。</AlertDialogDescription></AlertDialogHeader>{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<AlertDialogFooter><AlertDialogCancel disabled={busy}>取消</AlertDialogCancel><AlertDialogAction disabled={busy} onClick={(event) => { event.preventDefault(); void confirmDelete() }}>{busy ? '删除中…' : '删除皮肤'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
       </AlertDialog>
-      <AlertDialog open={conflict !== null} onOpenChange={(open) => { if (!open) setConflict(null) }}>
-        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>皮肤已存在</AlertDialogTitle><AlertDialogDescription>是否以新导入的皮肤替换同名用户皮肤？</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => { const item = conflict; setConflict(null); if (item) void importSkin(item.kind, true, item.path) }}>替换</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+      <AlertDialog open={conflict !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setConflict(null) }}>
+        <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>皮肤已存在</AlertDialogTitle><AlertDialogDescription>是否以新导入的皮肤替换同名用户皮肤？原皮肤文件会被覆盖。</AlertDialogDescription></AlertDialogHeader>{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<AlertDialogFooter><AlertDialogCancel disabled={busy}>取消</AlertDialogCancel><AlertDialogAction disabled={busy} onClick={(event) => { event.preventDefault(); if (conflict) void importSkin(conflict.kind, true, conflict.path) }}>{busy ? '替换中…' : '替换皮肤'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
       </AlertDialog>
       {SHOW_MACOS_SETTINGS && <AppIconPicker />}
     </div>

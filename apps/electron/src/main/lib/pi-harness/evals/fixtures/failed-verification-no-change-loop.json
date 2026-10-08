@@ -18,6 +18,6 @@
     "focusTaskId": "task",
     "focusKind": "in_progress",
     "assuranceByTask": { "task": "failed" },
-    "telemetry": { "modelCalls": 1, "candidateCount": 0, "duplicateNoChangeFailedVerificationCandidates": 0, "blockedNoChangeFailedVerificationLoops": 1, "falseVerified": 0, "taskTransitions": 0 }
+    "telemetry": { "modelCalls": 1, "candidateCount": 0, "duplicateNoChangeFailedVerificationCandidates": 0, "blockedNoChangeFailedVerificationLoops": 1, "falseVerified": 0 }
   }
 }

@@ -45,15 +45,21 @@ export function SettingsInput({
   error,
   type = 'text',
 }: SettingsInputProps): React.ReactElement {
+  const id = React.useId()
+  const descriptionId = `${id}-description`
+  const errorId = `${id}-error`
   return (
     <div className="px-4 py-3 space-y-2">
       <div>
-        <div className={LABEL_CLASS}>{label}</div>
+        <label htmlFor={id} className={LABEL_CLASS}>{label}</label>
         {description && (
-          <div className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
+          <div id={descriptionId} className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
         )}
       </div>
       <Input
+        id={id}
+        aria-describedby={[description && descriptionId, error && errorId].filter(Boolean).join(' ') || undefined}
+        aria-invalid={Boolean(error)}
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -64,7 +70,7 @@ export function SettingsInput({
         className={cn(error && 'border-destructive focus-visible:ring-destructive')}
       />
       {error && (
-        <p className="text-xs text-destructive">{error}</p>
+        <p id={errorId} role="alert" className="text-xs text-destructive">{error}</p>
       )}
     </div>
   )

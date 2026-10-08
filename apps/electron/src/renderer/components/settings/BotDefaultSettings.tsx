@@ -20,6 +20,8 @@ export function BotDefaultSettings(): React.ReactElement {
 
   const [defaultWorkspaceId, setDefaultWorkspaceId] = React.useState('')
   const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
+  const [saving, setSaving] = React.useState(false)
 
   // 加载当前设置
   React.useEffect(() => {
@@ -27,7 +29,10 @@ export function BotDefaultSettings(): React.ReactElement {
       const savedWorkspaceId = settings.agentWorkspaceId
       setDefaultWorkspaceId(workspaces.some((workspace) => workspace.id === savedWorkspaceId) ? savedWorkspaceId ?? '' : '')
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch(() => {
+      setError('加载默认工作区失败，请重试')
+      setLoading(false)
+    })
   }, [workspaces])
 
   const workspaceOptions = React.useMemo(
@@ -36,17 +41,22 @@ export function BotDefaultSettings(): React.ReactElement {
   )
 
   const handleSave = React.useCallback(async () => {
+    setSaving(true)
+    setError(null)
     try {
       await window.electronAPI.updateSettings({
         agentWorkspaceId: defaultWorkspaceId || undefined,
       })
       toast.success('默认配置已保存')
     } catch {
+      setError('保存失败，请重试')
       toast.error('保存失败')
+    } finally {
+      setSaving(false)
     }
   }, [defaultWorkspaceId])
 
-  if (loading) return <div className="py-8 text-center text-muted-foreground text-sm">加载中...</div>
+  if (loading) return <div className="py-8 text-center text-muted-foreground text-sm" role="status">加载中...</div>
 
   return (
     <>
@@ -70,10 +80,11 @@ export function BotDefaultSettings(): React.ReactElement {
             </div>
           )}
         </SettingsCard>
+        {error && <p className="mt-3 text-sm text-destructive" role="alert">{error}</p>}
 
-        <div className="flex items-center mt-3">
-          <Button size="sm" onClick={handleSave}>
-            保存默认配置
+        <div className="mt-3 flex items-center">
+          <Button size="sm" onClick={() => void handleSave()} disabled={saving}>
+            {saving ? '保存中...' : '保存默认配置'}
           </Button>
         </div>
       </SettingsSection>
@@ -86,7 +97,7 @@ export function BotDefaultSettings(): React.ReactElement {
       >
         <SettingsCard divided={false}>
           <div className="px-4 py-3 space-y-2 text-sm text-muted-foreground">
-            <div className="grid grid-cols-[140px_1fr] gap-y-1.5 gap-x-4">
+            <div className="grid grid-cols-[minmax(110px,140px)_minmax(0,1fr)] gap-x-4 gap-y-1.5">
               <code className="text-foreground/80 font-mono">/help (/h)</code>
               <span>显示帮助</span>
               <code className="text-foreground/80 font-mono">/new (/n)</code>

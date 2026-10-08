@@ -21,7 +21,7 @@ import {
   resolveReasoningProfile,
   type ReasoningCapability,
 } from '@profer/shared'
-import { getProferUserAgent, isAnthropicShapedEndpoint, normalizeAnthropicBaseUrlForSdk, normalizeOpenAIBaseUrlForSdk, resolveAnthropicMessagesUrl } from '@profer/core'
+import { assertSdkBaseUrlSupportsRouting, getProferUserAgent, isAnthropicShapedEndpoint, normalizeAnthropicBaseUrlForSdk, normalizeOpenAIBaseUrlForSdk, resolveAnthropicMessagesUrl } from '@profer/core'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import type { PiAgentQueryOptions } from './pi-agent-adapter'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from '../xai-oauth-credentials'
@@ -81,9 +81,9 @@ const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
   {
     id: GPT_6_ASTRA_MODEL_ID,
     name: 'GPT-6 Astra',
-    api: 'openai-responses',
-    provider: 'openai',
-    baseUrl: 'https://api.openai.com/v1',
+    api: 'openai-codex-responses',
+    provider: 'openai-codex',
+    baseUrl: CODEX_BASE_URL,
     reasoning: true,
     thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
     input: ['text', 'image'],
@@ -457,6 +457,7 @@ function applyModel1MContextPreferenceToModel(
 
 function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType): string | undefined {
   if (!baseUrl) return undefined
+  assertSdkBaseUrlSupportsRouting(baseUrl)
   if (provider === 'ollama' && !isLocalOllamaBaseUrl(baseUrl)) {
     return `${baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`
   }
@@ -470,7 +471,7 @@ function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType)
   }
   // DeepSeek 走 OpenAI 兼容端点时，若用户填了完整 `/chat/completions`，
   // 需先还原成协议根地址，避免 Pi 重复拼接。
-  if (provider === 'custom' || provider === 'openai-responses' || provider === 'deepseek') {
+  if (api === 'openai-completions' || api === 'openai-responses') {
     return normalizeOpenAIBaseUrlForSdk(baseUrl)
   }
   return baseUrl.trim().replace(/\/$/, '')
@@ -539,7 +540,9 @@ function mergeCodexModels(models: readonly PiCatalogModel[]): PiCatalogModel[] {
       merged.push(patch)
     }
   }
-  return merged
+  // Codex OAuth 只可交给 Codex 协议，不能把 token 注入公共 OpenAI API。
+  return merged.filter((model) => model.provider === 'openai-codex'
+    && model.api === 'openai-codex-responses' && model.baseUrl === CODEX_BASE_URL)
 }
 
 function isCompleteCatalogModel(model: PiCatalogModelPatch): model is PiCatalogModel {
@@ -549,6 +552,17 @@ function isCompleteCatalogModel(model: PiCatalogModelPatch): model is PiCatalogM
 export async function getCodexCatalogModels(): Promise<PiCatalogModel[]> {
   const { getModels } = await loadPiAiCompat()
   return mergeCodexModels(getModels('openai-codex'))
+}
+
+/** 明确选择仅接受当前 Codex catalog，未指定时才使用目录默认模型。 */
+function selectCodexModel(models: readonly PiCatalogModel[], modelId: string | undefined): PiCatalogModel {
+  const model = modelId === undefined ? models[0] : findCatalogModelById(models, modelId)
+  if (!model) {
+    throw new Error(modelId === undefined
+      ? '未找到可用的 ChatGPT (Codex) 模型，请升级 Pi 运行时'
+      : `所选 ChatGPT (Codex) 模型不在当前目录中，请重新读取 Codex 模型目录并选择模型。可用 ID：${models.map((item) => item.id).join('、')}`)
+  }
+  return model
 }
 
 /**
@@ -569,14 +583,7 @@ async function buildCodexModelWithRuntimeKey(sdk: PiSdk, input: PiAgentQueryOpti
 
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const codexModels = await getCodexCatalogModels()
-  const model =
-    (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined) ??
-    (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined) ??
-    // 指定模型缺失时回退到首个内置 codex 模型，避免因模型 ID 漂移直接失败。
-    modelRuntime.getModels('openai-codex')[0]
-  if (!model) {
-    throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
-  }
+  const model = selectCodexModel(codexModels, resolvedModelId)
   return { modelRuntime, model: applyModel1MContextPreferenceToModel(applyVerifiedGpt56ContextWindow(model), input.context1m) }
 }
 
@@ -738,14 +745,7 @@ export async function buildCodexModel(sdk: PiSdk, input: CodexModelInput) {
 
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
   const codexModels = await getCodexCatalogModels()
-  const model =
-    (resolvedModelId ? modelRuntime.getModel('openai-codex', resolvedModelId) : undefined) ??
-    (resolvedModelId ? findCatalogModelById(codexModels, resolvedModelId) : undefined) ??
-    // 指定模型缺失时回退到首个内置 codex 模型，避免因模型 ID 漂移直接失败。
-    modelRuntime.getModels('openai-codex')[0]
-  if (!model) {
-    throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
-  }
+  const model = selectCodexModel(codexModels, resolvedModelId)
   return { modelRuntime, model: applyModel1MContextPreferenceToModel(applyVerifiedGpt56ContextWindow(model), input.context1m) }
 }
 

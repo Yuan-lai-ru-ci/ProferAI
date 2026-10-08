@@ -135,6 +135,18 @@ function readQuoteEnd(lines: string[], start: number): number {
   return i
 }
 
+/** 划词所在块变化事件：Agent 历史选区层派发，消息块工具栏据此固定显示在选中的块上。 */
+export const AGENT_BLOCK_SELECTION_EVENT = 'profer:agent-block-selection'
+
+/** 工具栏「引用」按钮触发：由 Agent 历史选区层接手当前划词并写入引用。 */
+export const AGENT_SELECTION_QUOTE_EVENT = 'profer:quote-current-selection'
+
+/** 工具栏「探索分支」按钮触发：由 Agent 历史选区层接手当前划词并创建分支。 */
+export const AGENT_SELECTION_EXPLORE_EVENT = 'profer:explore-current-selection'
+
+/** 块元素的 DOM 属性名，用于从文本选区回溯到所属 Markdown 块。 */
+export const AGENT_BLOCK_ID_ATTRIBUTE = 'data-agent-block-id'
+
 /** 将回答按 Markdown 块级节点切分；代码块、表格、列表和引用始终保持整体。 */
 export function parseAgentMarkdownBlocks(markdown: string): AgentMarkdownBlock[] {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
@@ -297,6 +309,27 @@ export function findAgentSelectionToolbarAnchor(
   if (index < 0 || !selecting || !selectedIds.has(blocks[index]!.id)) return index
   while (index > 0 && selectedIds.has(blocks[index - 1]!.id)) index--
   return index
+}
+
+/** 划词固定显示操作条时返回该块下标；未固定或块不属于本条消息时返回 -1。 */
+export function findPinnedBlockIndex(blocks: readonly AgentMarkdownBlock[], pinnedBlockId: string | null): number {
+  if (!pinnedBlockId) return -1
+  return blocks.findIndex((block) => block.id === pinnedBlockId)
+}
+
+/** 决定单个块是否渲染操作条：划词固定优先（仅非多选），其次 hover 锚点；多选中未选块不渲染。 */
+export function resolveToolbarBlock(params: {
+  block: AgentMarkdownBlock
+  index: number
+  selecting: boolean
+  selectedIds: ReadonlySet<string>
+  pinnedIndex: number
+  toolbarAnchorIndex: number
+  hoveredBlock: AgentMarkdownBlock | null
+}): AgentMarkdownBlock | null {
+  if (params.selecting && !params.selectedIds.has(params.block.id)) return null
+  if (!params.selecting && params.pinnedIndex >= 0) return params.index === params.pinnedIndex ? params.block : null
+  return params.index === params.toolbarAnchorIndex ? params.hoveredBlock : null
 }
 
 export interface AgentCopySelection {

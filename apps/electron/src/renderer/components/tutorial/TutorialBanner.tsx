@@ -4,7 +4,7 @@
  * 固定在右下角的浮动卡片，引导用户查看教程。
  * - 不区分新老用户，使用 tutorialBannerDismissed 字段控制
  * - 用户点击「立即学习」或「稍后再学」后永不再显示
- * - 明确告知教程的下次访问位置：设置 > 教程
+ * - 明确告知教程的下次访问位置：设置 > 帮助 > Profer 教程
  */
 
 import * as React from 'react'
@@ -99,7 +99,7 @@ export function TutorialBanner(): React.ReactElement | null {
 
         {/* 提示文字 */}
         <p className="text-[11px] text-muted-foreground/60 mt-3 text-center">
-          你可以随时点击顶栏「教程」标签重新打开
+          可从「设置 → 帮助 → Profer 教程」重新打开
         </p>
       </div>
     </div>

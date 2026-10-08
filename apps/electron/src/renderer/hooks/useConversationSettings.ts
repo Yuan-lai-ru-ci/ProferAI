@@ -13,6 +13,7 @@ import {
   contextLengthAtom,
   thinkingEnabledAtom,
   conversationModelsAtom,
+  conversationModelAtomFamily,
   conversationContextLengthAtom,
   conversationThinkingEnabledAtom,
   conversationParallelModeAtom,
@@ -61,7 +62,7 @@ function useMapSetter<T>(
 export function useConversationModel(): [SelectedModel | null, (m: SelectedModel | null) => void] {
   const conversationId = useConversationId()
   const defaultModel = useAtomValue(selectedModelAtom)
-  const value = useMapValue(conversationModelsAtom, conversationId, defaultModel)
+  const value = useAtomValue(conversationModelAtomFamily(conversationId))
   const setter = useMapSetter(conversationModelsAtom, conversationId, defaultModel)
   return [value, setter]
 }
@@ -69,11 +70,9 @@ export function useConversationModel(): [SelectedModel | null, (m: SelectedModel
 /** 可选版本：在 Provider 外返回 null（ModelSelector 双模式用） */
 export function useConversationModelOptional(): [SelectedModel | null, ((m: SelectedModel | null) => void) | null] {
   const conversationId = useConversationIdOptional()
-  const defaultModel = useAtomValue(selectedModelAtom)
-  const map = useAtomValue(conversationModelsAtom)
   const setMap = useSetAtom(conversationModelsAtom)
 
-  const value = conversationId ? (map.get(conversationId) ?? defaultModel) : null
+  const value = useAtomValue(conversationModelAtomFamily(conversationId))
 
   const setter = React.useCallback(
     (model: SelectedModel | null) => {

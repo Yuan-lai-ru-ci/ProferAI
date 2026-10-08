@@ -18,10 +18,10 @@ export const SECTION_TITLE_CLASS = 'text-base font-semibold text-foreground'
 export const SECTION_DESCRIPTION_CLASS = 'text-sm text-muted-foreground mt-1'
 
 /** 卡片容器样式 - 只有默认深色主题用透明，其他都用卡片背景 */
-export const CARD_CLASS = 'rounded-xl settings-card'
+export const CARD_CLASS = 'rounded-lg settings-card'
 
 /** 卡片内行样式 */
-export const ROW_CLASS = 'flex items-center justify-between px-4 py-3'
+export const ROW_CLASS = 'settings-row flex flex-wrap items-center justify-between gap-y-3 px-4 py-3'
 
 /** 卡片内分隔线样式 */
 export const DIVIDER_CLASS = 'border-surface-border/50'

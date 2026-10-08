@@ -506,7 +506,7 @@ function Kbd({ children }: { children: ReactNode }): ReactElement {
 
 function getIndicatorColor(status: SessionIndicatorStatus): string | undefined {
   if (status === 'idle') return undefined
-  if (status === 'completed') return 'bg-green-500'
-  if (status === 'blocked') return 'bg-orange-500'
-  return 'bg-blue-500'
+  if (status === 'completed') return 'bg-success'
+  if (status === 'blocked') return 'bg-warning'
+  return 'bg-info'
 }

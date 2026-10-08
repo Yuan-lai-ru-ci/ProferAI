@@ -448,4 +448,12 @@ button.bg-secondary:hover {
   --warning-foreground: 26 83% 14%;
   --info: var(--primary);
   --info-foreground: var(--primary-foreground);
+  --chart-1: 100 40% 52%;
+  --chart-2: 70 35% 58%;
+  --chart-3: 150 34% 48%;
+  --chart-4: 190 38% 52%;
+  --chart-5: 38 58% 54%;
+  --chart-6: 270 34% 58%;
+  --chart-7: 18 52% 54%;
+  --chart-8: 145 38% 56%;
 }

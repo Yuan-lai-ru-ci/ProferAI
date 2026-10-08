@@ -6,6 +6,7 @@ const input = { sessionId: 's1', workspaceId: 'ws1', channelId: 'ch2' } as Agent
 const session = { id: 's1', workspaceId: 'ws1', channelId: 'ch1' } as AgentSessionMeta
 const channel = {
   id: 'ch2',
+  provider: 'anthropic',
   enabled: true,
   models: [
     { id: 'model-enabled', name: 'Enabled model', enabled: true },
@@ -44,5 +45,28 @@ describe('Agent 消息发送归属校验', () => {
       .toMatchObject({ ok: false, code: 'AGENT_MODEL_NOT_IN_CHANNEL' })
     expect(validateAgentSendBinding({ ...input, modelId: 'model-disabled' }, session, true, channel))
       .toMatchObject({ ok: false, code: 'AGENT_MODEL_DISABLED' })
+  })
+
+  test.each(['pi', 'claude'] as const)('Given 渠道关闭 %s When 旧会话发送 Then 在 main 拒绝', (runtime) => {
+    const runtimeSession = { ...session, agentRuntime: runtime }
+    const otherRuntime = runtime === 'pi' ? 'claude' : 'pi'
+    expect(validateAgentSendBinding(input, runtimeSession, true, { ...channel, agentRuntimes: [otherRuntime] }))
+      .toMatchObject({ ok: false, code: 'AGENT_CHANNEL_RUNTIME_DISABLED' })
+    expect(validateAgentSendBinding(input, runtimeSession, true, { ...channel, agentRuntimes: [] }))
+      .toMatchObject({ ok: false, code: 'AGENT_CHANNEL_RUNTIME_DISABLED' })
+    expect(validateAgentSendBinding(input, runtimeSession, true, { ...channel, agentRuntimes: [runtime] }))
+      .toEqual({ ok: true })
+  })
+
+  test('Given 老 Codex 渠道 When Claude/Pi 会话发送 Then 按历史内核资格校验', () => {
+    const codex = { ...channel, provider: 'openai-codex' as const }
+    expect(validateAgentSendBinding(input, session, true, codex))
+      .toMatchObject({ ok: false, code: 'AGENT_CHANNEL_RUNTIME_DISABLED' })
+    expect(validateAgentSendBinding(input, { ...session, agentRuntime: 'pi' }, true, codex)).toEqual({ ok: true })
+  })
+
+  test('Given xAI 错误勾选 Claude When main 校验 Then 拒绝无 Anthropic 协议的请求', () => {
+    expect(validateAgentSendBinding(input, session, true, { ...channel, provider: 'xai', agentRuntimes: ['claude'] }))
+      .toMatchObject({ ok: false, code: 'AGENT_CHANNEL_RUNTIME_DISABLED' })
   })
 })

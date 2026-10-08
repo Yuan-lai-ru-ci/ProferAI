@@ -29,7 +29,6 @@ describe('Pi Harness replay eval fixtures', () => {
       expect(first).toEqual(second)
       expect(first.failures).toEqual([])
       expect(first.passed).toBe(true)
-      expect(first.actual.telemetry.taskTransitions).toBe(0)
     })
   }
 })

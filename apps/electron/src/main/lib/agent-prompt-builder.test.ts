@@ -36,7 +36,48 @@ mock.module('electron', () => ({
 
 const { buildSystemPrompt, buildDynamicContext } = await import('./agent-prompt-builder')
 const { buildPiTaskPrompt } = await import('./pi-task-prompt')
+const { assembleAgentSystemPrompt } = await import('./agent-prompt-assembly')
 const { getConfigDirName } = await import('./config-paths')
+
+describe('模块化提示词装配', () => {
+  const context = {
+    workspaceName: 'Demo', workspaceSlug: 'demo', sessionId: 'hello',
+    permissionMode: 'auto' as const, isPiRuntime: true, presetName: '标准',
+    platform: 'darwin' as const, shellPath: '/bin/bash', agentCwd: '/demo/session',
+  }
+  const input = {
+    runtime: 'pi' as const, policy: { epistemicMode: 'open' as const, useClaudeCodePreset: false },
+    context: { ...context, epistemicMode: 'open' as const }, userMessage: '你好', toolNames: [],
+    skillCatalog: '<skill_catalog>CATALOG</skill_catalog>',
+    attachedDirectories: '<attached_directories>DIRECTORIES</attached_directories>',
+  }
+  test('轻量装配不会重新加回目录和工作区模块；标准模式仍完整', () => {
+    const light = assembleAgentSystemPrompt({ ...input, mode: 'light' })
+    const standard = assembleAgentSystemPrompt({ ...input, mode: 'standard' })
+    expect(light.text).not.toContain('CATALOG')
+    expect(light.text).not.toContain('DIRECTORIES')
+    expect(light.text).not.toContain('workspace-profile.md')
+    expect(light.systemPrompt).toBe(light.text)
+    expect(standard.text).toContain('CATALOG')
+    expect(standard.text).toContain('DIRECTORIES')
+    expect(standard.text).toContain('workspace-profile.md')
+    expect(light.chars).toBe(light.text.length)
+    expect(light.chars).toBeLessThan(standard.chars / 5)
+    expect(standard.chars).toBeLessThan(6500)
+    console.log(`[Prompt 字符对照] standard=${standard.chars}, light=${light.chars}`)
+  })
+  test('自定义预设段不被轻量化吞掉，Claude 轻量不追加 claude_code', () => {
+    const light = assembleAgentSystemPrompt({ ...input, runtime: 'claude', mode: 'light',
+      policy: { epistemicMode: 'grounded', useClaudeCodePreset: true }, customSections: ['CUSTOM_PRESET'],
+    })
+    expect(light.text).toContain('CUSTOM_PRESET')
+    expect(light.systemPrompt).toBe(light.text)
+    const standard = assembleAgentSystemPrompt({ ...input, runtime: 'claude', mode: 'standard',
+      policy: { epistemicMode: 'grounded', useClaudeCodePreset: true },
+    })
+    expect(standard.systemPrompt).toMatchObject({ type: 'preset', preset: 'claude_code' })
+  })
+})
 
 describe('buildSystemPrompt', () => {
   test('默认使用求实姿态并保留不可变执行底线', () => {
@@ -165,7 +206,9 @@ describe('buildSystemPrompt', () => {
     const workspaceRoot = join(homedir(), configDirName, 'agent-workspaces', slug)
     const workspaceProfile = join(workspaceRoot, 'workspace-profile.md')
     expect(prompt).toContain(`**Profer 工作区资料**: ${workspaceProfile}`)
-    expect(prompt).toContain(`③ Profer 工作区资料（\`${workspaceProfile}\``)
+    expect(prompt).toContain('再读工作区资料（缺失才读旧版）、Memory 索引和相关 Skill')
+    // 绝对路径只在工作区段声明，恢复指引引用该段，不再每处重复长路径。
+    expect(prompt.split(workspaceProfile)).toHaveLength(2)
     expect(prompt).toContain('旧版 Profer 工作区资料（仅兼容读取）')
     expect(prompt).toContain('项目中的 `AGENTS.md` / `CLAUDE.md` 属于用户资产')
     expect(prompt).toContain('不要读取当前 cwd 下不存在的相对路径 `CLAUDE.md`')
@@ -216,8 +259,8 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).toContain('mcp__task-graph__proma_task_create')
     expect(piPrompt).toContain('mcp__agent-presets__preset_list')
     expect(piPrompt).not.toContain('mcp__agent-presets__preset_create')
-    expect(piPrompt).not.toContain('用 `proma_task_create` 创建子任务')
-    expect(claudePrompt).toContain('用 `proma_task_create` 创建子任务')
+    expect(piPrompt).not.toContain('用 `proma_task_create` 创建节点')
+    expect(claudePrompt).toContain('用 `proma_task_create` 创建节点')
     expect(claudePrompt).toContain('写入口只在当前用户消息明确要求对应操作时按轮注册')
     expect(claudePrompt).toContain('更新和设为默认先返回影响摘要，只有用户下一条消息明确确认后才提交')
     expect(claudePrompt).not.toContain('mcp__agent-presets__preset_create')

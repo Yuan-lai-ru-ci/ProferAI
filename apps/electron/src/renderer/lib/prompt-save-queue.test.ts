@@ -9,6 +9,67 @@ interface RecordedSave {
   input: SystemPromptUpdateInput
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+describe('串行提示词保存与失败草稿', () => {
+  test('并发 flush 共享在途写入，直到最新字段全部保存', async () => {
+    const response = deferred<void>()
+    const calls: RecordedSave[] = []
+    const queue = createPromptSaveQueue(async (id, input) => {
+      calls.push({ id, input })
+      if (calls.length === 1) await response.promise
+    }, 10000)
+    queue.queue('p1', { content: 'A' })
+    const first = queue.flush()
+    queue.queue('p1', { content: 'B' })
+    const second = queue.flush()
+    expect(calls).toHaveLength(1)
+    response.resolve()
+    await Promise.all([first, second])
+    expect(calls).toEqual([{ id: 'p1', input: { content: 'A' } }, { id: 'p1', input: { content: 'B' } }])
+    expect(queue.pendingCount()).toBe(0)
+  })
+
+  test('失败字段与在途新字段合并，重试不丢名称或内容', async () => {
+    const response = deferred<void>()
+    const calls: RecordedSave[] = []
+    const queue = createPromptSaveQueue(async (id, input) => {
+      calls.push({ id, input })
+      if (calls.length === 1) await response.promise
+    }, 10000)
+    queue.queue('p1', { name: 'A', content: 'old' })
+    const first = queue.flush()
+    queue.queue('p1', { content: 'new' })
+    response.reject(new Error('fixture failure'))
+    await expect(first).rejects.toThrow('fixture failure')
+    expect(queue.pendingCount()).toBe(1)
+    await queue.flush()
+    expect(calls[1]!.input).toEqual({ name: 'A', content: 'new' })
+    expect(queue.pendingCount()).toBe(0)
+  })
+
+  test('其它条目在等待期间收到新字段，读取最新待写值而不是旧快照', async () => {
+    const response = deferred<void>()
+    const calls: RecordedSave[] = []
+    const queue = createPromptSaveQueue(async (id, input) => {
+      calls.push({ id, input })
+      if (id === 'p1') await response.promise
+    }, 10000)
+    queue.queue('p1', { content: 'A' })
+    queue.queue('p2', { content: 'old' })
+    const saving = queue.flush()
+    queue.queue('p2', { name: 'Name', content: 'new' })
+    response.resolve()
+    await saving
+    expect(calls[1]).toEqual({ id: 'p2', input: { name: 'Name', content: 'new' } })
+  })
+})
+
 /** 记录落盘调用的假 save */
 function createRecorder(failFor: string[] = []): {
   calls: RecordedSave[]
@@ -104,7 +165,7 @@ describe('createPromptSaveQueue 行为', () => {
     expect(calls.every((c) => c.id === 'p1')).toBe(true)
   })
 
-  test('单条落盘失败不阻塞其它条目，且不会重复提交', async () => {
+  test('单条落盘失败不阻塞其它条目，失败草稿保留供重试', async () => {
     const { calls, save } = createRecorder(['p2'])
     const queue = createPromptSaveQueue(save, 30)
 
@@ -122,7 +183,7 @@ describe('createPromptSaveQueue 行为', () => {
     }
 
     expect(calls.map((c) => c.id)).toEqual(['p1', 'p3'])
-    expect(queue.pendingCount()).toBe(0)
+    expect(queue.pendingCount()).toBe(1)
   })
 })
 

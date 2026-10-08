@@ -22,6 +22,12 @@ const updater = {
 mock.module('electron-updater', () => ({ autoUpdater: updater }))
 mock.module('../github-release-service', () => ({ getLatestRelease: mock(async () => null) }))
 mock.module('../proxy-settings-service', () => ({ getEffectiveProxyUrl: async () => undefined }))
+// 探活会发真实 HTTP 请求，测试里固定为「全部可达、保持声明顺序」，
+// 既不依赖网络，也保持本用例原本要验证的三源串行回退语义。
+mock.module('./update-probe', () => ({
+  orderSourcesByReachability: async (sources: unknown[]) => sources,
+  describeProbeOutcomes: () => '测试固定顺序',
+}))
 const { checkForUpdates, getUpdateStatus, initAutoUpdater, cleanupUpdater } = await import('./auto-updater')
 
 test('包态：内测同/低正式基线零提示零下载；多源回退、更高版本及正式包保真', async () => {

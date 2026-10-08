@@ -25,6 +25,10 @@ import { toast } from 'sonner'
 import { SettingsSection, SettingsCard, SettingsRow, SettingsToggle } from './primitives'
 import { Button } from '@profer/ui/primitives/button'
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@profer/ui/primitives/alert-dialog'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -141,9 +145,15 @@ const BAR_COLORS = [
 
 export function DataManagementSettings(): React.ReactElement {
   return (
-    <div className="space-y-8">
-      <MigrationSection />
-      <StorageSection />
+    <div className="min-w-0 space-y-8">
+      <div className="space-y-6">
+        <h2 className="text-base font-semibold">备份与迁移</h2>
+        <MigrationSection />
+      </div>
+      <div className="space-y-6 border-t border-border pt-6">
+        <h2 className="text-base font-semibold">磁盘与清理</h2>
+        <StorageSection />
+      </div>
     </div>
   )
 }
@@ -156,11 +166,13 @@ function MigrationSection(): React.ReactElement {
     new Set(['sessions', 'skills', 'mcp'])
   )
   const [exporting, setExporting] = React.useState(false)
+  const exportRef = React.useRef(false)
   const [exportResult, setExportResult] = React.useState<ExportResult | null>(null)
 
   const [shareDetailMode, setShareDetailMode] = React.useState<ShareDetailMode>('default')
   const [sharePreview, setSharePreview] = React.useState<ShareExportPreview | null>(null)
   const [sharePreviewLoading, setSharePreviewLoading] = React.useState(false)
+  const [sharePreviewError, setSharePreviewError] = React.useState(false)
   const [wsSelections, setWsSelections] = React.useState<Map<string, WsSelection>>(new Map())
   const [expandedWorkspaces, setExpandedWorkspaces] = React.useState<Set<string>>(new Set())
 
@@ -172,6 +184,7 @@ function MigrationSection(): React.ReactElement {
 
   const loadSharePreview = React.useCallback(async () => {
     setSharePreviewLoading(true)
+    setSharePreviewError(false)
     try {
       const preview = await window.electronAPI.migrationGetShareExportPreview() as ShareExportPreview
       setSharePreview(preview)
@@ -184,26 +197,37 @@ function MigrationSection(): React.ReactElement {
       }
       setWsSelections(selections)
     } catch {
-      // 静默失败
+      setSharePreviewError(true)
     } finally {
       setSharePreviewLoading(false)
     }
   }, [])
 
   React.useEffect(() => {
-    if (exportMode === 'share' && shareDetailMode === 'custom' && !sharePreview) {
+    if (exportMode === 'share' && shareDetailMode === 'custom' && !sharePreview && !sharePreviewError) {
       loadSharePreview()
     }
-  }, [exportMode, shareDetailMode, sharePreview, loadSharePreview])
+  }, [exportMode, shareDetailMode, sharePreview, sharePreviewError, loadSharePreview])
 
   const handleExport = async (): Promise<void> => {
-    if (!currentWorkspace) return
+    if (!currentWorkspace || exportRef.current || (exportMode === 'share' && hasSkillsOrMcp && shareDetailMode === 'custom' && (!sharePreview || sharePreviewLoading || sharePreviewError))) return
+    // main 将空的工作区选择解释为「全部」，这里必须明确阻断，不能扩大用户选择范围。
+    if (exportMode === 'share' && hasSkillsOrMcp && shareDetailMode === 'custom' && sharePreview &&
+      !sharePreview.workspaces.some((ws) => {
+        const sel = wsSelections.get(ws.workspace.id)
+        return (shareComponents.has('skills') && !!sel?.skills.size) || (shareComponents.has('mcp') && !!sel?.mcpServers.size)
+      })) {
+      setExportResult({ success: false, error: '请至少选择一个工作区项目；空选择不会导出全部工作区' })
+      return
+    }
+    exportRef.current = true
     setExporting(true)
     setExportResult(null)
 
     try {
       const outputPath = await window.electronAPI.migrationSaveFileDialog(exportMode)
       if (!outputPath) {
+        exportRef.current = false
         setExporting(false)
         return
       }
@@ -237,19 +261,20 @@ function MigrationSection(): React.ReactElement {
           components,
           outputPath,
           workspaceSelections,
-        }) as { success: boolean; filePath: string; warnings?: string[] }
-        setExportResult({ success: true, filePath: result.filePath, warnings: result.warnings })
+        }) as ExportResult
+        setExportResult(result)
       } else {
         const result = await window.electronAPI.migrationExportV2({
           mode: exportMode,
           components,
           outputPath,
-        }) as { success: boolean; filePath: string; warnings?: string[] }
-        setExportResult({ success: true, filePath: result.filePath, warnings: result.warnings })
+        }) as ExportResult
+        setExportResult(result)
       }
     } catch (err) {
       setExportResult({ success: false, error: err instanceof Error ? err.message : '导出失败' })
     } finally {
+      exportRef.current = false
       setExporting(false)
     }
   }
@@ -316,13 +341,13 @@ function MigrationSection(): React.ReactElement {
       {/* ── 导出区块 ── */}
       <SettingsSection
         title="导出备份"
-        description="将当前工作区的数据导出为可移植的备份文件"
+        description="将本机数据导出为可移植文件；个人备份包含敏感凭据"
       >
         <div className="space-y-4">
           {/* 模式选择 */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">导出模式</label>
-            <div className="grid grid-cols-2 gap-3">
+            <p className="text-sm font-medium text-foreground">导出模式</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <ModeCard
                 active={exportMode === 'personal'}
                 onClick={() => setExportMode('personal')}
@@ -343,7 +368,7 @@ function MigrationSection(): React.ReactElement {
           {/* Share 模式组件选择 */}
           {exportMode === 'share' && (
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">导出内容</label>
+              <p className="text-sm font-medium text-foreground">导出内容</p>
               <div className="rounded-lg border border-border/50 divide-y divide-border/30">
                 {(Object.keys(COMPONENT_LABELS) as MigrationComponent[]).map((comp) => (
                   <label
@@ -372,9 +397,10 @@ function MigrationSection(): React.ReactElement {
           {/* Share 模式：多工作区选择 */}
           {exportMode === 'share' && hasSkillsOrMcp && (
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">工作区范围</label>
-              <div className="grid grid-cols-2 gap-3">
+              <p className="text-sm font-medium text-foreground">工作区范围</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
+                  aria-pressed={shareDetailMode === 'default'}
                   onClick={() => setShareDetailMode('default')}
                   className={cn(
                     'text-left px-3 py-2.5 rounded-lg border text-sm transition-colors',
@@ -387,6 +413,7 @@ function MigrationSection(): React.ReactElement {
                   <p className="text-xs text-muted-foreground mt-0.5">导出全部工作区的 Skills 和 MCP</p>
                 </button>
                 <button
+                  aria-pressed={shareDetailMode === 'custom'}
                   onClick={() => setShareDetailMode('custom')}
                   className={cn(
                     'text-left px-3 py-2.5 rounded-lg border text-sm transition-colors',
@@ -419,15 +446,12 @@ function MigrationSection(): React.ReactElement {
 
                         return (
                           <div key={wsId}>
-                            <div
-                              className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/30 transition-colors"
-                              onClick={() => toggleWsExpand(wsId)}
-                            >
-                              {expanded ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronRight size={14} className="text-muted-foreground" />}
-                              <span className="text-sm font-medium text-foreground flex-1">{ws.workspace.name}</span>
-                              <span className="text-xs text-muted-foreground">
-                                {selectedItems}/{totalItems} 项
-                              </span>
+                            <div className="flex items-center gap-3 px-4 py-3">
+                              <button type="button" aria-expanded={expanded} onClick={() => toggleWsExpand(wsId)} className="min-w-0 flex flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                                {expanded ? <ChevronDown size={14} className="shrink-0 text-muted-foreground" /> : <ChevronRight size={14} className="shrink-0 text-muted-foreground" />}
+                                <span className="min-w-0 break-words text-sm font-medium">{ws.workspace.name}</span>
+                                <span className="shrink-0 text-xs text-muted-foreground">{selectedItems}/{totalItems} 项</span>
+                              </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
@@ -485,7 +509,10 @@ function MigrationSection(): React.ReactElement {
                       })}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted-foreground text-center py-4">加载预览失败</p>
+                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 text-sm">
+                      <span className="text-destructive">加载预览失败，自定义导出已暂停</span>
+                      <Button size="sm" variant="outline" onClick={() => void loadSharePreview()}>重试预览</Button>
+                    </div>
                   )}
                 </div>
               )}
@@ -503,10 +530,10 @@ function MigrationSection(): React.ReactElement {
           )}
 
           {/* 导出按钮 */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={handleExport}
-              disabled={exporting || !currentWorkspace || (exportMode === 'share' && shareComponents.size === 0)}
+              disabled={exporting || !currentWorkspace || (exportMode === 'share' && (shareComponents.size === 0 || (hasSkillsOrMcp && shareDetailMode === 'custom' && (!sharePreview || sharePreviewLoading || sharePreviewError))))}
               className={cn(
                 'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
                 'bg-primary text-primary-foreground hover:bg-primary/90',
@@ -579,26 +606,61 @@ function StorageSection(): React.ReactElement {
   const [compactionPreview, setCompactionPreview] = React.useState<SessionCompactionResult | null>(null)
   const [compactionResult, setCompactionResult] = React.useState<SessionCompactionResult | null>(null)
   const [compacting, setCompacting] = React.useState(false)
+  const [statsError, setStatsError] = React.useState(false)
+  const [settingsLoaded, setSettingsLoaded] = React.useState(false)
+  const [settingsError, setSettingsError] = React.useState(false)
+  const [savingSettings, setSavingSettings] = React.useState(false)
+  const settingsBusy = React.useRef(false)
+  const [confirmation, setConfirmation] = React.useState<{ label: string; description: string; run: () => Promise<void> } | null>(null)
+  const [confirming, setConfirming] = React.useState(false)
+  const operationBusy = React.useRef(false)
 
   const loadStats = React.useCallback(async () => {
     setLoading(true)
+    setStatsError(false)
     try {
       const result = await window.electronAPI.getStorageStats() as StorageStats
       setStats(result)
     } catch (e) {
       console.error('[存储管理] 获取统计失败:', e)
+      setStatsError(true)
     } finally {
       setLoading(false)
     }
   }, [])
 
-  React.useEffect(() => {
-    loadStats()
-    window.electronAPI.getSettings().then((settings) => {
+  const loadCleanupSettings = React.useCallback(async () => {
+    setSettingsError(false)
+    setSettingsLoaded(false)
+    try {
+      const settings = await window.electronAPI.getSettings()
       setAutoCleanupTemp(settings.autoCleanupTempOnStart !== false)
       setAutoCleanupDays(settings.autoCleanupArchivedDays ?? 0)
-    }).catch(console.error)
-  }, [loadStats])
+      setSettingsLoaded(true)
+    } catch {
+      setSettingsError(true)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    void loadStats()
+    void loadCleanupSettings()
+  }, [loadStats, loadCleanupSettings])
+
+  const runConfirmed = async (): Promise<void> => {
+    if (!confirmation || operationBusy.current) return
+    operationBusy.current = true
+    setConfirming(true)
+    try {
+      await confirmation.run()
+      setConfirmation(null)
+    } catch {
+      toast.error('操作失败，未完成的操作可在此重试')
+    } finally {
+      operationBusy.current = false
+      setConfirming(false)
+    }
+  }
 
   const handleCleanCategory = async (key: string, orphansOnly: boolean): Promise<void> => {
     setCleaningKey(key)
@@ -613,6 +675,7 @@ function StorageSection(): React.ReactElement {
       await loadStats()
     } catch (e) {
       console.error('[存储管理] 清理失败:', e)
+      throw e
     } finally {
       setCleaningKey(null)
     }
@@ -627,6 +690,7 @@ function StorageSection(): React.ReactElement {
       await loadStats()
     } catch (e) {
       console.error('[存储管理] 清理临时文件失败:', e)
+      throw e
     } finally {
       setCleaningKey(null)
     }
@@ -645,27 +709,43 @@ function StorageSection(): React.ReactElement {
       await loadStats()
     } catch (e) {
       console.error('[存储管理] 清理孤儿数据失败:', e)
+      throw e
     } finally {
       setCleaningKey(null)
     }
   }
 
   const handleAutoCleanupTempChange = async (enabled: boolean): Promise<void> => {
-    setAutoCleanupTemp(enabled)
+    if (!settingsLoaded || settingsBusy.current) return
+    settingsBusy.current = true
+    setSavingSettings(true)
     try {
       await window.electronAPI.updateSettings({ autoCleanupTempOnStart: enabled })
+      setAutoCleanupTemp(enabled)
     } catch (e) {
       console.error('[存储管理] 更新自动清理设置失败:', e)
+      toast.error('自动清理设置保存失败，保留原设置')
+    } finally {
+      settingsBusy.current = false
+      setSavingSettings(false)
     }
   }
 
   const handleAutoCleanupDaysChange = async (value: string): Promise<void> => {
+    if (!settingsLoaded || settingsBusy.current) return
     const days = parseInt(value, 10)
-    setAutoCleanupDays(days)
+    settingsBusy.current = true
+    setSavingSettings(true)
     try {
       await window.electronAPI.updateSettings({ autoCleanupArchivedDays: days })
+      setAutoCleanupDays(days)
     } catch (e) {
       console.error('[存储管理] 更新自动清理天数失败:', e)
+      toast.error('归档清理设置保存失败，保留原设置')
+      throw e
+    } finally {
+      settingsBusy.current = false
+      setSavingSettings(false)
     }
   }
 
@@ -673,6 +753,7 @@ function StorageSection(): React.ReactElement {
   const handlePreviewCompaction = async (): Promise<void> => {
     setCompacting(true)
     setCompactionResult(null)
+    setCompactionPreview(null)
     try {
       const result = await window.electronAPI.previewSessionCompaction() as SessionCompactionResult
       setCompactionPreview(result)
@@ -719,6 +800,7 @@ function StorageSection(): React.ReactElement {
     } catch (e) {
       console.error('[存储管理] 执行会话整理失败:', e)
       toast.error('整理失败')
+      throw e
     } finally {
       setCompacting(false)
     }
@@ -732,7 +814,7 @@ function StorageSection(): React.ReactElement {
       {/* 存储用量 */}
       <SettingsSection
         title="存储用量"
-        description={stats ? `总计 ${formatBytes(stats.totalBytes)}` : '正在计算...'}
+        description={stats ? `总计 ${formatBytes(stats.totalBytes)}` : loading ? '正在计算…' : '尚未获取存储统计'}
         action={
           <Button
             variant="ghost"
@@ -746,6 +828,9 @@ function StorageSection(): React.ReactElement {
           </Button>
         }
       >
+        {statsError && <div role="alert" className="text-sm text-destructive">存储统计加载失败，点击刷新重试。已有结果可能已过期。</div>}
+        {loading && !stats && <p role="status" className="text-sm text-muted-foreground">正在计算存储用量…</p>}
+        {!loading && !statsError && stats?.categories.length === 0 && <p className="text-sm text-muted-foreground">暂无存储数据</p>}
         {stats && (
           <div className="mb-4">
             <StorageBar categories={stats.categories} totalBytes={stats.totalBytes} />
@@ -754,8 +839,8 @@ function StorageSection(): React.ReactElement {
         <SettingsCard>
           {stats?.categories.map((cat, i) => (
             <SettingsRow key={cat.key} label={cat.label}>
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   <span
                     className={cn('inline-block h-2.5 w-2.5 rounded-full', BAR_COLORS[i % BAR_COLORS.length])}
                   />
@@ -773,8 +858,8 @@ function StorageSection(): React.ReactElement {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={handleCleanTemp}
-                    disabled={cleaningKey !== null || cat.bytes === 0}
+                    onClick={() => setConfirmation({ label: '清理临时文件', description: '删除预览与安装缓存，无法撤销；不会删除会话记录。', run: handleCleanTemp })}
+                    disabled={confirming || cleaningKey !== null || compacting || loading || statsError || cat.bytes === 0}
                     className="h-7 gap-1 text-xs"
                   >
                     <Trash2 size={12} />
@@ -784,8 +869,8 @@ function StorageSection(): React.ReactElement {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleCleanCategory(cat.key, true)}
-                    disabled={cleaningKey !== null}
+                    onClick={() => setConfirmation({ label: `清理${cat.label}孤儿数据`, description: '永久删除已失去会话或工作区关联的文件，无法撤销。请先导出需要保留的数据。', run: () => handleCleanCategory(cat.key, true) })}
+                    disabled={confirming || cleaningKey !== null || compacting || loading || statsError}
                     className="h-7 gap-1 text-xs"
                   >
                     <Trash2 size={12} />
@@ -803,15 +888,23 @@ function StorageSection(): React.ReactElement {
         title="自动清理"
         description="配置启动时和定期的自动清理规则"
       >
+        {settingsError && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 text-sm text-destructive">
+          <span>自动清理配置加载失败，不会写入默认值。</span>
+          <Button size="sm" variant="outline" onClick={() => void loadCleanupSettings()}>重试清理配置</Button>
+        </div>}
         <SettingsCard>
           <SettingsToggle
             label="启动时清理临时文件"
             description="每次启动时自动删除预览和安装缓存"
             checked={autoCleanupTemp}
+            disabled={!settingsLoaded || savingSettings}
             onCheckedChange={handleAutoCleanupTempChange}
           />
           <SettingsRow label="清理已归档会话数据" description="自动清理超过指定天数的已归档会话消息和 SDK 数据">
-            <Select value={String(autoCleanupDays)} onValueChange={handleAutoCleanupDaysChange}>
+            <Select value={String(autoCleanupDays)} disabled={!settingsLoaded || savingSettings} onValueChange={(value) => {
+              if (value === '0') void handleAutoCleanupDaysChange(value).catch(() => {})
+              else setConfirmation({ label: '启用归档数据自动清理', description: `将自动删除超过 ${value} 天的已归档会话消息和 SDK 数据，删除后不可恢复。请先备份。`, run: () => handleAutoCleanupDaysChange(value) })
+            }}>
               <SelectTrigger className="w-28">
                 <SelectValue />
               </SelectTrigger>
@@ -836,7 +929,7 @@ function StorageSection(): React.ReactElement {
             label="孤儿数据"
             description="删除会话后残留的消息文件、SDK 缓存和工作目录"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               {hasOrphans && (
                 <span className="flex items-center gap-1 text-sm text-amber-500">
                   <AlertTriangle size={14} />
@@ -846,8 +939,8 @@ function StorageSection(): React.ReactElement {
               <Button
                 variant={hasOrphans ? 'default' : 'ghost'}
                 size="sm"
-                onClick={handleCleanAllOrphans}
-                disabled={cleaningKey !== null || !hasOrphans}
+                onClick={() => setConfirmation({ label: '清理全部孤儿数据', description: '永久删除已删除会话遗留的消息、SDK 缓存、工作目录和独立载荷，无法撤销。请先备份。', run: handleCleanAllOrphans })}
+                disabled={confirming || cleaningKey !== null || compacting || loading || statsError || !hasOrphans}
                 className="gap-1.5"
               >
                 <HardDrive size={14} />
@@ -868,7 +961,7 @@ function StorageSection(): React.ReactElement {
             label="可整理的会话数据"
             description="检测历史会话中超过存储上限的单条消息（通常是体积很大的工具输出或内嵌图片）。整理后打开这些会话不再需要把巨型内容读进内存"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               {compactionPreview && (
                 <span
                   className={cn(
@@ -885,7 +978,7 @@ function StorageSection(): React.ReactElement {
                 variant="ghost"
                 size="sm"
                 onClick={handlePreviewCompaction}
-                disabled={compacting}
+                disabled={confirming || cleaningKey !== null || compacting}
                 className="h-7 gap-1 text-xs"
               >
                 <RefreshCw size={12} className={cn(compacting && 'animate-spin')} />
@@ -894,8 +987,8 @@ function StorageSection(): React.ReactElement {
               <Button
                 variant={compactionPreview && compactionPreview.rewrittenFiles > 0 ? 'default' : 'ghost'}
                 size="sm"
-                onClick={handleApplyCompaction}
-                disabled={compacting || !compactionPreview || compactionPreview.rewrittenFiles === 0}
+                onClick={() => setConfirmation({ label: '整理历史数据', description: `将重写 ${compactionPreview?.rewrittenFiles ?? 0} 个会话文件；原文搬入独立存储，并保留原文件备份。请确认检测规模后继续。`, run: handleApplyCompaction })}
+                disabled={confirming || cleaningKey !== null || compacting || !compactionPreview || compactionPreview.rewrittenFiles === 0}
                 className="h-7 gap-1 text-xs"
               >
                 <PackageOpen size={12} />
@@ -955,6 +1048,20 @@ function StorageSection(): React.ReactElement {
           )}
         </div>
       )}
+      <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open && !operationBusy.current) setConfirmation(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmation?.label}？</AlertDialogTitle>
+            <AlertDialogDescription>{confirmation?.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={confirming}>取消</AlertDialogCancel>
+            <AlertDialogAction disabled={confirming} onClick={(event) => { event.preventDefault(); void runConfirmed() }}>
+              {confirming ? '处理中…' : '确认执行'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
@@ -994,6 +1101,7 @@ interface ModeCardProps {
 function ModeCard({ active, onClick, title, subtitle, description }: ModeCardProps): React.ReactElement {
   return (
     <button
+      aria-pressed={active}
       onClick={onClick}
       className={cn(
         'relative flex flex-col items-start gap-1 p-4 rounded-lg border text-left transition-colors',

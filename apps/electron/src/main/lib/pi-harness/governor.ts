@@ -6,7 +6,7 @@ export interface GovernorCandidate {
   taskId?: string
   action: 'required_verification' | 'ready_task'
   reason: string
-  blockedReason: 'shadow_mode' | 'permission_mode' | 'repeat_failed_verification'
+  blockedReason: 'shadow_mode' | 'permission_mode'
   estimatedPromptChars: number
   fingerprint: string
 }

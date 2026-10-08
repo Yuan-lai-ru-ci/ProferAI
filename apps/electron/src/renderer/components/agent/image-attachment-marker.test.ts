@@ -45,6 +45,21 @@ describe('parseAgentImageAttachmentMarkers', () => {
     }])
   })
 
+  test('Given Claude MCP wraps the image in structuredContent When parsing Then it still returns a verified image', () => {
+    const parsed = parseAgentImageAttachmentDetails({
+      content: [{ type: 'text', text: 'image generated' }],
+      structuredContent: {
+        image: { localPath: 'C:/safe/image.png', filename: 'image.png', mediaType: 'image/png' },
+      },
+    })
+
+    expect(parsed).toEqual([{
+      localPath: 'C:/safe/image.png',
+      filename: 'image.png',
+      mediaType: 'image/png',
+    }])
+  })
+
   test('Given nested generated-image details When parsing Then it supports the shared output shape', () => {
     const parsed = parseAgentImageAttachmentDetails({
       output: { image: { localPath: 'C:/safe/generated.webp', filename: 'generated.webp', mediaType: 'image/webp' } },

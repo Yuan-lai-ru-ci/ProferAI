@@ -25,7 +25,9 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useSetAtom } from 'jotai'
-import { channelFormDirtyAtom } from '@/atoms/settings-tab'
+import { channelFormControllerAtom, channelFormDirtyAtom } from '@/atoms/settings-tab'
+import { channelsAtom } from '@/atoms/chat-atoms'
+import { buildChannelDraftPatch, createSerialDraftQueue, isCurrentAsyncRequest, usesOAuthCredentials, validateChannelCreation } from '@/lib/channel-form-async'
 import { cn } from '@/lib/utils'
 import { Button } from '@profer/ui/primitives/button'
 import { Input } from '@profer/ui/primitives/input'
@@ -35,17 +37,19 @@ import {
   PROVIDER_LABELS,
   inferAgentRuntimeModes,
   isAgentEnabledForChannel,
+  isChannelEnabledForRuntime,
 } from '@profer/shared'
 import type {
   AgentRuntimeMode,
   Channel,
   ChannelCreateInput,
+  ChannelUpdateInput,
   ChannelModel,
   ChannelTestResult,
   FetchModelsResult,
   ProviderType,
 } from '@profer/shared'
-import { isAnthropicShapedEndpoint, normalizeAnthropicProviderUrl } from '@profer/core'
+import { isAnthropicShapedEndpoint, resolveAnthropicMessagesUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl } from '@profer/core'
 import { getProviderLogo } from '@/lib/model-logo'
 import { applyModelDiscoveryResult, buildModelDiscoveryAttemptKey, shouldAutoDiscoverModels } from '@/lib/channel-model-discovery'
 import { addManualModel } from '@/lib/channel-manual-model'
@@ -80,10 +84,10 @@ interface ChannelFormProps {
 }
 
 /** 国内供应商（优先推荐） */
-const CN_PROVIDERS: ProviderType[] = ['deepseek', 'qwen', 'zhipu', 'doubao', 'kimi-api', 'kimi-coding', 'zhipu-coding', 'minimax', 'xiaomi', 'xiaomi-token-plan']
+const CN_PROVIDERS: ProviderType[] = ['deepseek', 'qwen', 'qwen-anthropic', 'zhipu', 'zhipu-coding', 'zhipu-coding-team', 'doubao', 'ark-coding-plan', 'kimi-api', 'kimi-coding', 'minimax', 'xiaomi', 'xiaomi-token-plan']
 
 /** 境外供应商 */
-const GLOBAL_PROVIDERS: ProviderType[] = ['anthropic', 'openai', 'google', 'xai', 'anthropic-compatible', 'ollama', 'custom']
+const GLOBAL_PROVIDERS: ProviderType[] = ['anthropic', 'openai', 'openai-responses', 'opencode-go-openai', 'google', 'xai', 'anthropic-compatible', 'openai-codex', 'ollama', 'custom']
 
 /** 所有可选供应商 */
 const PROVIDER_OPTIONS: ProviderType[] = [...CN_PROVIDERS, ...GLOBAL_PROVIDERS]
@@ -134,6 +138,9 @@ const ANTHROPIC_PROTOCOL_PROVIDERS: ReadonlySet<ProviderType> = new Set<Provider
   'kimi-api',
   'kimi-coding',
   'zhipu-coding',
+  'zhipu-coding-team',
+  'ark-coding-plan',
+  'qwen-anthropic',
   'minimax',
   'xiaomi',
   'xiaomi-token-plan',
@@ -156,7 +163,7 @@ function getOllamaNetworkScope(baseUrl: string): string {
 /**
  * 生成 API 端点预览 URL
  *
- * Anthropic 协议供应商：复用 normalizeAnthropicProviderUrl 计算 base，再拼 /messages，
+ * 复用真实 adapter 的端点解析函数，完整端点与 query 不重复拼接，
  * 与运行时 channel-manager / AnthropicAdapter 的规范化逻辑保持一致。
  */
 function buildPreviewUrl(baseUrl: string, provider: ProviderType): string {
@@ -164,13 +171,10 @@ function buildPreviewUrl(baseUrl: string, provider: ProviderType): string {
   if (provider === 'ollama') {
     return `${trimmed.replace(/\/v1$/, '')}/v1/chat/completions（Agent: /v1/messages）`
   }
-  // custom 渠道在注册表里由 `new OpenAIAdapter()` 创建（providerType 为 'openai'），
-  // 运行时会在地址后自动补 /chat/completions；因此填协议根（如 …/v1）是正确的。
+  // 通用兼容渠道填写完整请求端点，与真实 adapter 共用 URL 解析。
   if (provider === 'custom') {
     // 只填站点根地址时，拼接后的端点会落到站点页面而不是 API，这里给出显式提示。
-    const looksLikeSiteRoot = !/^https?:\/\/[^/]+\/[^/]+/.test(trimmed)
-    const hint = looksLikeSiteRoot ? '；该地址看起来是站点根地址，多数 OpenAI 兼容网关需要携带 /v1' : ''
-    return `${trimmed}${PROVIDER_CHAT_PATHS[provider]}${hint}`
+    return `${resolveOpenAIChatCompletionsUrl(baseUrl, provider)}；请填写完整 /chat/completions 请求端点`
   }
   if (provider === 'deepseek') {
     // DeepSeek 的协议跟随端点形态：官方/`/anthropic` 走 Anthropic，
@@ -190,9 +194,11 @@ function buildPreviewUrl(baseUrl: string, provider: ProviderType): string {
     return `Chat：${trimmed}${PROVIDER_CHAT_PATHS.deepseek}；Agent：${agentEndpoint}（${agentProtocol}）${hint}`
   }
   if (ANTHROPIC_PROTOCOL_PROVIDERS.has(provider)) {
-    return `${normalizeAnthropicProviderUrl(baseUrl, provider)}/messages`
+    return resolveAnthropicMessagesUrl(baseUrl, provider)
   }
-  return `${trimmed}${PROVIDER_CHAT_PATHS[provider]}`
+  if (provider === 'xai' || provider === 'openai-responses') return resolveOpenAIResponsesUrl(baseUrl, provider)
+  if (provider === 'google') return `${trimmed}${PROVIDER_CHAT_PATHS[provider]}`
+  return resolveOpenAIChatCompletionsUrl(baseUrl, provider)
 }
 
 /** auto-save 防抖延迟 */
@@ -201,8 +207,8 @@ const AUTO_SAVE_DELAY = 600
 /** 自动模型发现的防抖延迟：等用户把 API Key / 地址敲完再请求端点 */
 const AUTO_DISCOVERY_DELAY = 700
 
-function isAgentEligibleChannel(channel: Pick<Channel, 'provider' | 'enabled' | 'agentExperimentalEnabled'>): boolean {
-  return isAgentEnabledForChannel(channel)
+function isAgentEligibleChannel(channel: Pick<Channel, 'provider' | 'enabled' | 'agentExperimentalEnabled' | 'agentRuntimes'>): boolean {
+  return isChannelEnabledForRuntime(channel, 'pi') || isAgentEnabledForChannel(channel)
 }
 
 /**
@@ -253,7 +259,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   const [baseUrl, setBaseUrl] = React.useState(channel?.baseUrl ?? PROVIDER_DEFAULT_URLS.anthropic)
   const [credentialMode, setCredentialMode] = React.useState<'api-key' | 'oauth'>(channel?.credentialMode ?? 'api-key')
   const [oauthConfigured, setOauthConfigured] = React.useState(channel?.provider === 'xai' && channel.credentialMode === 'oauth')
-  const [agentExperimentalEnabled, setAgentExperimentalEnabled] = React.useState(channel?.agentExperimentalEnabled === true)
+  const [agentExperimentalEnabled, setAgentExperimentalEnabled] = React.useState(channel?.provider === 'xai' && (channel.agentRuntimes ?? inferAgentRuntimeModes(channel)).includes('pi'))
   const [agentBaseUrl, setAgentBaseUrl] = React.useState(channel?.agentBaseUrl ?? '')
   /** 用户是否手改过 Anthropic 端点；未改过就不回传，交给主进程按 OpenAI 端点推导。 */
   const agentBaseUrlEditedRef = React.useRef(false)
@@ -267,10 +273,11 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
       : inferAgentRuntimeModes({ provider: 'anthropic' }),
   )
   const toggleAgentRuntime = React.useCallback((mode: AgentRuntimeMode, enabled: boolean): void => {
+    if (provider === 'xai' && mode === 'pi') setAgentExperimentalEnabled(enabled)
     setAgentRuntimes((prev) => enabled
       ? (prev.includes(mode) ? prev : [...prev, mode])
       : prev.filter((item) => item !== mode))
-  }, [])
+  }, [provider])
   /**
    * 地址框跟着内核勾选显隐：勾了 Pi 才显示 OpenAI 端点，勾了 Claude 才显示 Anthropic 端点。
    *
@@ -278,17 +285,31 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
    * 全隐会让不做 Agent 的纯 Chat 渠道没法配地址。
    */
   const piEnabled = agentRuntimes.includes('pi')
-  const claudeEnabled = agentRuntimes.includes('claude')
+  const claudeEnabled = provider !== 'xai' && provider !== 'openai-codex' && agentRuntimes.includes('claude')
   const showOpenAIEndpoint = piEnabled || !claudeEnabled
   const showAnthropicEndpoint = claudeEnabled
   const [apiKey, setApiKey] = React.useState('')
+  const keyEditedRef = React.useRef(false)
+  const keyRevisionRef = React.useRef(0)
+  const [keyEdited, setKeyEdited] = React.useState(false)
+  const oauthCredentials = usesOAuthCredentials(provider, credentialMode)
   const [showApiKey, setShowApiKey] = React.useState(false)
   const [oauthLoggingIn, setOauthLoggingIn] = React.useState(false)
+  const oauthLoginActiveRef = React.useRef(false)
+  const [oauthError, setOauthError] = React.useState<string | null>(null)
+  const creationRef = React.useRef<Promise<Channel | null> | null>(null)
+  const createdChannelRef = React.useRef<Channel | null>(null)
   const handleCredentialModeChange = (value: string): void => {
+    if (value === credentialMode || oauthLoginActiveRef.current) return
+    discoveryRequestRef.current += 1
+    testRequestRef.current += 1
     const nextMode = value as 'api-key' | 'oauth'
     setCredentialMode(nextMode)
     setOauthConfigured(nextMode === 'oauth' && channel?.provider === 'xai' && channel.credentialMode === 'oauth')
-    if (nextMode === 'oauth') setApiKey('')
+    keyRevisionRef.current += 1
+    keyEditedRef.current = true
+    setKeyEdited(true)
+    setApiKey('')
   }
   const [models, setModels] = React.useState<ChannelModel[]>(channel?.models ?? [])
   const [enabled, setEnabled] = React.useState(channel?.enabled ?? true)
@@ -314,108 +335,175 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   const [showExitDialog, setShowExitDialog] = React.useState(false)
 
   const setChannelFormDirty = useSetAtom(channelFormDirtyAtom)
+  const setFormController = useSetAtom(channelFormControllerAtom)
+  const setChannels = useSetAtom(channelsAtom)
   const lastAgentEligibleRef = React.useRef(channel ? isAgentEligibleChannel(channel) : false)
 
   React.useEffect(() => {
     lastAgentEligibleRef.current = channel ? isAgentEligibleChannel(channel) : false
   }, [channel])
 
-  /** 编辑模式下加载明文 API Key */
+  const mountedRef = React.useRef(true)
+  const discoveryRequestRef = React.useRef(0)
+  const testRequestRef = React.useRef(0)
+  const formRequestScopeRef = React.useRef<string>()
+  formRequestScopeRef.current ??= crypto.randomUUID()
+  const activeNetworkRequestsRef = React.useRef(new Map<string, 'discovery' | 'test'>())
+  const cancelNetworkRequests = React.useCallback((kind?: 'discovery' | 'test'): void => {
+    for (const [id, requestKind] of activeNetworkRequestsRef.current) {
+      if (kind && requestKind !== kind) continue
+      activeNetworkRequestsRef.current.delete(id)
+      void window.electronAPI.cancelChannelRequest(id).catch(() => {})
+    }
+  }, [])
+  const requestKey = JSON.stringify([provider, baseUrl, apiKey, credentialMode])
+  const requestKeyRef = React.useRef(requestKey)
+  requestKeyRef.current = requestKey
+  const testKey = JSON.stringify([requestKey, agentBaseUrl, agentRuntimes, models.find((model) => model.enabled)?.id])
+  const testKeyRef = React.useRef(testKey)
+  testKeyRef.current = testKey
+  const discardedRef = React.useRef(false)
   React.useEffect(() => {
-    if (isEdit && channel && !apiKeyLoaded && channel.provider === 'xai' && channel.credentialMode === 'oauth') {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      discoveryRequestRef.current += 1
+      testRequestRef.current += 1
+      cancelNetworkRequests()
+      if (oauthLoginActiveRef.current) {
+        void window.electronAPI.cancelCodexOAuthLogin().catch(() => {})
+        void window.electronAPI.cancelXaiOAuthLogin().catch(() => {})
+      }
+    }
+  }, [])
+
+  /** OAuth 只由授权链路管理；慢解密不能覆盖用户输入或切供应商后的草稿。 */
+  React.useEffect(() => {
+    if (!channel || usesOAuthCredentials(channel.provider, channel.credentialMode)) {
       setApiKeyLoaded(true)
       return
     }
-    if (isEdit && channel && !apiKeyLoaded) {
-      window.electronAPI.decryptApiKey(channel.id).then((key) => {
-        setApiKey(key)
-        setApiKeyLoaded(true)
-      }).catch(() => {
-        setApiKeyLoaded(true)
-      })
-    }
-  }, [isEdit, channel, apiKeyLoaded])
+    let cancelled = false
+    const revision = keyRevisionRef.current
+    void window.electronAPI.decryptApiKey(channel.id).then((key) => {
+      if (!cancelled && revision === keyRevisionRef.current && !keyEditedRef.current) setApiKey(key)
+    }).catch(() => {
+      if (!cancelled) toast.error('凭据读取失败；原凭据不会被覆盖，可输入新 Key 后重试')
+    }).finally(() => {
+      if (!cancelled) setApiKeyLoaded(true)
+    })
+    return () => { cancelled = true }
+  }, [channel?.id])
 
-  // ===== Auto-save（仅编辑模式） =====
+  // 返回和导航读取同一份 latest draft，不依赖防抖闭包。
+  const draft = React.useMemo<ChannelUpdateInput>(() => ({
+    name, provider, baseUrl, agentRuntimes, models, enabled,
+    ...(agentBaseUrlEditedRef.current ? { agentBaseUrl: agentBaseUrl.trim() } : {}),
+    ...(provider === 'xai' && (credentialMode !== 'oauth' || oauthConfigured)
+      ? { credentialMode, agentExperimentalEnabled } : {}),
+    ...(!oauthCredentials && keyEdited && apiKey.trim() ? { apiKey } : {}),
+  }), [name, provider, baseUrl, agentBaseUrl, agentRuntimes, models, enabled, credentialMode, agentExperimentalEnabled, oauthConfigured, oauthCredentials, keyEdited, apiKey])
+  const draftRef = React.useRef(draft)
+  draftRef.current = draft
+  const baselineRef = React.useRef<ChannelUpdateInput>(draft)
+  const [saveRevision, setSaveRevision] = React.useState(0)
+  const [saveError, setSaveError] = React.useState<string | null>(null)
+  const [leaving, setLeaving] = React.useState(false)
   const autoSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** 初始化完成标志，避免加载时触发 auto-save */
-  const initializedRef = React.useRef(false)
-
-  /** 执行 auto-save */
-  const doAutoSave = React.useCallback(async (
-    currentModels: ChannelModel[],
-    currentName: string,
-    currentProvider: ProviderType,
-    currentBaseUrl: string,
-    currentApiKey: string,
-    currentEnabled: boolean,
-  ) => {
-    if (!isEdit || !channel) return
+  const saveDraftRef = React.useRef<(next: ChannelUpdateInput) => Promise<void>>(async () => {})
+  const queue = React.useMemo(() => createSerialDraftQueue<ChannelUpdateInput>((next) => saveDraftRef.current(next)), [channel?.id])
+  saveDraftRef.current = async (next) => {
+    if (!channel) return
+    if (next.provider === 'xai' && next.credentialMode === 'api-key' && channel.credentialMode === 'oauth' && !next.apiKey) {
+      throw new Error('切换 API Key 认证后请填写新的 API Key')
+    }
+    const patch = buildChannelDraftPatch(baselineRef.current, next)
+    if (Object.keys(patch).length === 0) return
+    if (next.provider !== channel.provider && next.provider !== 'ollama' && !next.apiKey && !usesOAuthCredentials(next.provider!, next.credentialMode)) {
+      throw new Error('更换供应商后请填写新的 API Key')
+    }
+    setSaving(true)
     try {
-      const savedChannel = await window.electronAPI.updateChannel(channel.id, {
-        name: currentName,
-        provider: currentProvider,
-        baseUrl: currentBaseUrl,
-        // 用户改过 Anthropic 端点才回传；没改过则不发送，让主进程按 OpenAI 端点重新推导。
-        ...(agentBaseUrlEditedRef.current ? { agentBaseUrl: agentBaseUrl.trim() } : {}),
-        agentRuntimes,
-        ...((currentProvider !== 'xai' || credentialMode === 'api-key'
-          ? (credentialMode === 'api-key' && (currentApiKey.trim() || channel?.credentialMode !== 'oauth'))
-          : oauthConfigured)
-          ? (currentProvider === 'xai' ? { credentialMode, agentExperimentalEnabled } : {})
-          : {}),
-        apiKey: currentProvider === 'xai' && credentialMode === 'oauth' ? undefined : (currentApiKey || undefined),
-        models: currentModels,
-        enabled: currentEnabled,
-      })
+      const savedChannel = await window.electronAPI.updateChannel(channel.id, patch)
+      setChannels((current) => current.map((item) => item.id === savedChannel.id ? savedChannel : item))
       const eligible = isAgentEligibleChannel(savedChannel)
       if (eligible !== lastAgentEligibleRef.current) {
-        lastAgentEligibleRef.current = eligible
         await onAgentEligibilityChange?.(savedChannel, eligible)
+        lastAgentEligibleRef.current = eligible
       }
-      toast.success('已保存', { id: 'auto-save-success' })
-    } catch (error) {
-      console.error('[模型配置表单] auto-save 失败:', error)
-      toast.error('自动保存失败，请检查后手动重试', { id: 'auto-save-error' })
+      baselineRef.current = next
+      if (mountedRef.current) {
+        setSaveError(null)
+        setSaveRevision((revision) => revision + 1)
+      }
+    } finally {
+      if (mountedRef.current) setSaving(false)
     }
-  }, [isEdit, channel, agentBaseUrl, agentRuntimes, credentialMode, oauthConfigured, agentExperimentalEnabled, onAgentEligibilityChange])
-
-  /** 触发防抖 auto-save */
-  const scheduleAutoSave = React.useCallback((
-    nextModels: ChannelModel[],
-    nextName: string,
-    nextProvider: ProviderType,
-    nextBaseUrl: string,
-    nextApiKey: string,
-    nextEnabled: boolean,
-  ) => {
-    if (!isEdit || !initializedRef.current) return
+  }
+  const pendingOAuth = isEdit && provider === 'xai' && credentialMode === 'oauth' && !oauthConfigured
+  const pendingOAuthRef = React.useRef(pendingOAuth)
+  pendingOAuthRef.current = pendingOAuth
+  const flushEdit = React.useCallback(async (): Promise<boolean> => {
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
-    autoSaveTimerRef.current = setTimeout(() => {
-      doAutoSave(nextModels, nextName, nextProvider, nextBaseUrl, nextApiKey, nextEnabled)
-    }, AUTO_SAVE_DELAY)
-  }, [isEdit, doAutoSave])
-
-  // API Key 加载完成后标记初始化
-  React.useEffect(() => {
-    if (isEdit && apiKeyLoaded) {
-      // 延迟标记，避免加载时触发
-      const t = setTimeout(() => { initializedRef.current = true }, 100)
-      return () => clearTimeout(t)
+    if (pendingOAuthRef.current) {
+      setSaveError('请先完成订阅登录，再保存认证方式变更')
+      return false
     }
-    if (!isEdit) {
-      initializedRef.current = true
+    queue.replace(draftRef.current)
+    try {
+      await queue.flush()
+      return true
+    } catch (error) {
+      if (mountedRef.current) setSaveError(error instanceof Error ? error.message : '保存失败，请重试')
+      return false
     }
-  }, [isEdit, apiKeyLoaded])
+  }, [queue])
 
-  // 监听字段变化触发 auto-save（agentRuntimes 必须在依赖里：只切内核勾选也要落盘）
   React.useEffect(() => {
-    scheduleAutoSave(models, name, provider, baseUrl, apiKey, enabled)
+    if (!isEdit || discardedRef.current || oauthLoggingIn) return
+    if (Object.keys(buildChannelDraftPatch(baselineRef.current, draft)).length === 0 && !saving) {
+      queue.cancel()
+      return
+    }
+    queue.replace(draft)
+    // 失败草稿保持 dirty，由用户重试；不在错误状态循环发请求。
+    if (saveError) return
+    autoSaveTimerRef.current = setTimeout(() => { void flushEdit() }, AUTO_SAVE_DELAY)
     return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current) }
-  }, [models, name, provider, baseUrl, credentialMode, oauthConfigured, agentExperimentalEnabled, apiKey, enabled, agentRuntimes, scheduleAutoSave])
+  }, [isEdit, draft, queue, flushEdit, saveRevision, saveError, saving, oauthLoggingIn])
+
+  React.useEffect(() => () => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+    queue.cancel()
+  }, [queue])
+
+  // 配置改变后旧测试/发现不再属于当前草稿，允许立即发起新请求。
+  React.useEffect(() => {
+    discoveryRequestRef.current += 1
+    testRequestRef.current += 1
+    cancelNetworkRequests()
+    setFetchingModels(false)
+    setTesting(false)
+    setFetchResult(null)
+    setTestResult(null)
+  }, [requestKey])
+
+  React.useEffect(() => {
+    testRequestRef.current += 1
+    cancelNetworkRequests('test')
+    setTesting(false)
+    setTestResult(null)
+  }, [testKey, cancelNetworkRequests])
 
   // 切换供应商时自动更新 Base URL 与名称，Anthropic 兼容渠道自动添加预设模型
   const handleProviderChange = (newProvider: string): void => {
+    if (isEdit && newProvider === 'openai-codex' && channel.provider !== 'openai-codex') {
+      toast.info('请新建 ChatGPT 订阅渠道并完成授权')
+      return
+    }
+    if (oauthLoginActiveRef.current) return
+    discoveryRequestRef.current += 1
+    testRequestRef.current += 1
     const p = newProvider as ProviderType
     // 若 name 为空或仍是上一个 provider 的默认名称，则用新 provider 的名称覆盖；用户手动改过的 name 不动
     const trimmedName = name.trim()
@@ -424,6 +512,12 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     }
     setProvider(p)
     setBaseUrl(PROVIDER_DEFAULT_URLS[p])
+    keyRevisionRef.current += 1
+    keyEditedRef.current = true
+    setKeyEdited(true)
+    setApiKey('')
+    autoDiscoveryKeyRef.current = null
+    modelsUserEditedRef.current = false
     setCredentialMode('api-key')
     setOauthConfigured(false)
     setAgentExperimentalEnabled(false)
@@ -492,7 +586,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
    */
   const canDiscoverModels = Boolean(baseUrl.trim())
     && (provider === 'ollama' || Boolean(apiKey.trim()))
-    && !(provider === 'xai' && credentialMode === 'oauth')
+    && !oauthCredentials
 
   /**
    * 从供应商 API 拉取可用模型列表（自动发现与手动点击共用）。
@@ -502,17 +596,24 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
    */
   const runModelDiscovery = React.useCallback(async (options?: { keepPreviousResult?: boolean }): Promise<void> => {
     if (!canDiscoverModels) return
+    cancelNetworkRequests('discovery')
+    const requestId = ++discoveryRequestRef.current
+    const networkId = `${formRequestScopeRef.current}-discovery-${requestId}`
+    activeNetworkRequestsRef.current.set(networkId, 'discovery')
+    const key = requestKeyRef.current
 
     setFetchingModels(true)
     if (!options?.keepPreviousResult) setFetchResult(null)
 
     try {
       const result = await window.electronAPI.fetchModels({
+        requestId: networkId,
         provider,
         baseUrl,
         apiKey,
       })
 
+      if (!mountedRef.current || !isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) return
       setFetchResult(result)
 
       if (!result.success) return
@@ -520,9 +621,11 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
       setModels((prev) => applyModelDiscoveryResult(prev, result))
     } catch (error) {
       // IPC 异常同样只显示失败，保留用户当前全部模型配置。
+      if (!mountedRef.current || !isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) return
       setFetchResult({ success: false, message: '拉取模型请求失败', models: [] })
     } finally {
-      setFetchingModels(false)
+      activeNetworkRequestsRef.current.delete(networkId)
+      if (mountedRef.current && isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) setFetchingModels(false)
     }
   }, [canDiscoverModels, provider, baseUrl, apiKey])
 
@@ -561,102 +664,229 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   /** 测试连接（直接使用表单当前值，无需先保存） */
   const handleTest = async (): Promise<void> => {
-    if (provider === 'xai' && credentialMode === 'oauth') return
+    if (oauthCredentials) return
     if ((provider !== 'ollama' && !apiKey.trim()) || !baseUrl.trim()) return
 
+    cancelNetworkRequests('test')
     setTesting(true)
+    const requestId = ++testRequestRef.current
+    const networkIds: string[] = []
+    const key = testKeyRef.current
     setTestResult(null)
 
     try {
-      const result = await window.electronAPI.testChannelDirect({
-        provider,
-        baseUrl,
-        apiKey,
-      })
-      setTestResult(result)
+      const selectedModel = models.find((model) => model.enabled)?.id
+      const runtimes: Array<AgentRuntimeMode | undefined> = agentRuntimes.length ? agentRuntimes : [undefined]
+      const results = await Promise.all(runtimes.map(async (runtime) => {
+        const networkId = `${formRequestScopeRef.current}-test-${requestId}-${runtime ?? 'chat'}`
+        networkIds.push(networkId)
+        activeNetworkRequestsRef.current.set(networkId, 'test')
+        const result = await window.electronAPI.testChannelDirect({
+          requestId: networkId,
+          provider, baseUrl, apiKey, runtime,
+          ...(selectedModel ? { modelId: selectedModel } : {}),
+          ...(runtime === 'claude' ? { agentBaseUrl } : {}),
+        })
+        return { ...result, message: `${runtime === 'claude' ? 'Claude' : runtime === 'pi' ? 'Pi / Chat' : 'Chat'}：${result.message}` }
+      }))
+      const result = {
+        success: results.every((item) => item.success),
+        cancelled: results.some((item) => item.cancelled),
+        message: results.map((item) => item.message).join('；'),
+      }
+      if (mountedRef.current && isCurrentAsyncRequest(requestId, testRequestRef.current, key, testKeyRef.current)) setTestResult(result)
     } catch (error) {
-      setTestResult({ success: false, message: '测试请求失败' })
+      // 某一 IPC 异常时也中断同轮尚未结束的其它内核请求，不影响新一轮。
+      for (const id of networkIds) {
+        if (!activeNetworkRequestsRef.current.has(id)) continue
+        activeNetworkRequestsRef.current.delete(id)
+        void window.electronAPI.cancelChannelRequest(id).catch(() => {})
+      }
+      if (mountedRef.current && isCurrentAsyncRequest(requestId, testRequestRef.current, key, testKeyRef.current)) setTestResult({ success: false, message: '测试请求失败' })
     } finally {
-      setTesting(false)
+      for (const id of networkIds) activeNetworkRequestsRef.current.delete(id)
+      if (mountedRef.current && isCurrentAsyncRequest(requestId, testRequestRef.current, key, testKeyRef.current)) setTesting(false)
+    }
+  }
+
+  const loadCodexModels = React.useCallback(async (): Promise<void> => {
+    const requestId = ++discoveryRequestRef.current
+    const key = requestKeyRef.current
+    setFetchingModels(true)
+    try {
+      const catalog = await window.electronAPI.listCodexModels()
+      if (!mountedRef.current || !isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) return
+      setModels((previous) => applyModelDiscoveryResult(previous, { success: true, message: 'Pi Codex 模型目录', models: catalog }))
+      setFetchResult({ success: true, message: 'Pi Codex 模型目录（账号可用性以实际订阅为准）', models: catalog })
+    } catch {
+      if (mountedRef.current && isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) {
+        setFetchResult({ success: false, message: 'Codex 模型目录读取失败，请重试', models: [] })
+      }
+    } finally {
+      if (mountedRef.current && isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) setFetchingModels(false)
+    }
+  }, [])
+  const loadXaiModels = React.useCallback(async (): Promise<void> => {
+    const requestId = ++discoveryRequestRef.current
+    const key = requestKeyRef.current
+    setFetchingModels(true)
+    try {
+      const catalog = await window.electronAPI.listXaiModels()
+      if (!mountedRef.current || !isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) return
+      setModels((previous) => applyModelDiscoveryResult(previous, { success: true, message: 'Pi xAI 模型目录', models: catalog }))
+      setFetchResult({ success: true, message: 'Pi xAI 模型目录（账号可用性以实际订阅为准）', models: catalog })
+    } catch {
+      if (mountedRef.current && isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) setFetchResult({ success: false, message: 'xAI 模型目录读取失败，请重试', models: [] })
+    } finally {
+      if (mountedRef.current && isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) setFetchingModels(false)
+    }
+  }, [])
+  React.useEffect(() => {
+    if (provider === 'openai-codex') void loadCodexModels()
+    if (provider === 'xai' && credentialMode === 'oauth') void loadXaiModels()
+  }, [provider, credentialMode, loadCodexModels, loadXaiModels])
+
+  const handleCodexReauthorize = async (): Promise<void> => {
+    if (!channel) {
+      await handleCreate()
+      return
+    }
+    if (!channel || oauthLoginActiveRef.current) return
+    oauthLoginActiveRef.current = true
+    setOauthLoggingIn(true)
+    setOauthError(null)
+    try {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+      queue.cancel()
+      await queue.settle()
+      const updated = await window.electronAPI.loginCodexOAuth(channel.id)
+      if (!mountedRef.current) return
+      setChannels((current) => current.map((item) => item.id === updated.id ? updated : item))
+      toast.success('ChatGPT 订阅授权成功')
+    } catch (error) {
+      if (mountedRef.current) setOauthError(error instanceof Error ? error.message : 'Codex 授权失败，请重试')
+    } finally {
+      oauthLoginActiveRef.current = false
+      if (mountedRef.current) setOauthLoggingIn(false)
+    }
+  }
+  const handleCancelCodexLogin = async (): Promise<void> => {
+    try {
+      await window.electronAPI.cancelCodexOAuthLogin()
+    } catch {
+      setOauthError('取消授权失败，请重试')
     }
   }
 
   /** 执行创建渠道 */
   const doCreate = React.useCallback(async (): Promise<Channel | null> => {
-    if (!name.trim() || (provider !== 'ollama' && !(provider === 'xai' && credentialMode === 'oauth') && !apiKey.trim())) return null
-
+    if (createdChannelRef.current) return createdChannelRef.current
+    if (creationRef.current) return creationRef.current
+    if (saving || oauthLoginActiveRef.current) return null
+    const input: ChannelCreateInput = {
+      name,
+      provider,
+      baseUrl,
+      agentBaseUrl: agentBaseUrl.trim() || undefined,
+      agentRuntimes,
+      ...(provider === 'xai' && { credentialMode, agentExperimentalEnabled }),
+      apiKey,
+      models,
+      enabled,
+    }
+    const validation = validateChannelCreation(input)
+    if (validation) {
+      toast.warning(validation, { id: 'channel-validation' })
+      return null
+    }
     setSaving(true)
+    setOauthError(null)
+    if (oauthCredentials) {
+      oauthLoginActiveRef.current = true
+      setOauthLoggingIn(true)
+    }
+    const operation = (async (): Promise<Channel | null> => {
     try {
-      const input: ChannelCreateInput = {
-        name,
-        provider,
-        baseUrl,
-        agentBaseUrl: agentBaseUrl.trim() || undefined,
-        agentRuntimes,
-        ...(provider === 'xai' && { credentialMode, agentExperimentalEnabled }),
-        apiKey,
-        models,
-        enabled,
-      }
-      let savedChannel = await window.electronAPI.createChannel(input)
-      if (provider === 'xai' && credentialMode === 'oauth') {
-        savedChannel = await window.electronAPI.loginXaiOAuth(savedChannel.id)
-      }
+      const { apiKey: _key, provider: _provider, credentialMode: _mode, ...oauthInput } = input
+      const savedChannel = provider === 'openai-codex'
+        ? await window.electronAPI.loginCodexOAuth(oauthInput)
+        : provider === 'xai' && credentialMode === 'oauth'
+          ? await window.electronAPI.loginXaiOAuth(oauthInput)
+          : await window.electronAPI.createChannel(input)
+      createdChannelRef.current = savedChannel
       if (isAgentEligibleChannel(savedChannel)) {
-        await onAgentEligibilityChange?.(savedChannel, true)
+        try {
+          await onAgentEligibilityChange?.(savedChannel, true)
+        } catch {
+          toast.error('渠道已创建，但 Agent 默认配置更新失败')
+        }
       }
       toast.success('渠道创建成功')
       return savedChannel
     } catch (error) {
       console.error('[模型配置表单] 创建失败:', error)
       toast.error('渠道创建失败，请检查配置后重试')
+      if (oauthCredentials && mountedRef.current) setOauthError(error instanceof Error ? error.message : '订阅授权失败，请重试')
       return null
     } finally {
-      setSaving(false)
+      oauthLoginActiveRef.current = false
+      if (mountedRef.current) { setSaving(false); setOauthLoggingIn(false) }
     }
-  }, [name, provider, baseUrl, agentBaseUrl, credentialMode, agentExperimentalEnabled, apiKey, models, enabled, onAgentEligibilityChange])
+    })()
+    creationRef.current = operation
+    try { return await operation }
+    finally { if (creationRef.current === operation) creationRef.current = null }
+  }, [name, provider, baseUrl, agentBaseUrl, agentRuntimes, credentialMode, agentExperimentalEnabled, apiKey, models, enabled, saving, oauthCredentials, onAgentEligibilityChange])
 
   /** 创建渠道（仅新建模式） */
   const handleCreate = async (): Promise<void> => {
-    // 模型清单来自端点发现，用户必须至少启用一个，否则渠道创建后在选择列表里也不可用。
-    if (!models.some((model) => model.enabled)) {
-      toast.warning(
-        models.length === 0
-          ? '尚未配置模型，请先从供应商获取或手动添加'
-          : '尚未启用任何模型，请从可用模型中至少启用一个',
-        { id: 'no-models-warn' },
-      )
-      return
-    }
     const savedChannel = await doCreate()
     if (savedChannel) onSaved(savedChannel)
   }
 
   /** 检测表单是否有未保存内容 */
-  const isDirty = !isEdit && (name.trim() !== '' || apiKey.trim() !== '' || models.length > 0)
+  const isDirty = isEdit
+    ? saving || pendingOAuth || saveError !== null || Object.keys(buildChannelDraftPatch(baselineRef.current, draft)).length > 0
+    : name.trim() !== '' || apiKey.trim() !== '' || models.length > 0 || provider !== 'anthropic' || baseUrl !== PROVIDER_DEFAULT_URLS.anthropic || agentBaseUrl.trim() !== '' || !enabled || JSON.stringify(agentRuntimes) !== JSON.stringify(inferAgentRuntimeModes({ provider: 'anthropic' }))
   const hasNoModels = !isEdit && !models.some((model) => model.enabled)
 
   /** 返回按钮：创建模式下有未保存内容时拦截 */
-  const handleBack = (): void => {
+  const handleBack = async (): Promise<void> => {
+    if (leaving) return
     if (!isEdit && isDirty) {
       setShowExitDialog(true)
       return
     }
     if (isEdit) {
-      onSaved()
+      setLeaving(true)
+      const success = await flushEdit()
+      setLeaving(false)
+      if (success) onSaved()
+      else setShowExitDialog(true)
     } else {
       onCancel()
     }
   }
 
   /** 放弃编辑 */
-  const handleDiscard = (): void => {
+  const handleDiscard = async (): Promise<void> => {
+    discardedRef.current = true
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+    queue.cancel()
+    discoveryRequestRef.current += 1
+    testRequestRef.current += 1
+    cancelNetworkRequests()
+    await queue.settle()
     setShowExitDialog(false)
     onCancel()
   }
 
   /** 保存并关闭（从弹窗触发） */
   const handleSaveAndClose = async (): Promise<void> => {
+    if (isEdit) {
+      if (await flushEdit()) { setShowExitDialog(false); onSaved() }
+      return
+    }
     const savedChannel = await doCreate()
     if (savedChannel) {
       setShowExitDialog(false)
@@ -664,8 +894,25 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     }
   }
 
+  React.useLayoutEffect(() => {
+    setFormController({
+      busy: saving || leaving || oauthLoggingIn,
+      flush: isEdit ? flushEdit : async () => (await doCreate()) !== null,
+      discard: async () => {
+        discardedRef.current = true
+        if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+        queue.cancel()
+        discoveryRequestRef.current += 1
+        testRequestRef.current += 1
+        cancelNetworkRequests()
+        await queue.settle()
+      },
+    })
+    return () => setFormController(null)
+  }, [isEdit, flushEdit, doCreate, queue, setFormController, saving, leaving, oauthLoggingIn])
+
   // 同步表单 dirty 状态到全局 atom（供 SettingsPanel 拦截侧边栏导航）
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     setChannelFormDirty(isDirty)
     return () => { setChannelFormDirty(false) }
   }, [isDirty, setChannelFormDirty])
@@ -701,6 +948,9 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           size="icon"
           className="h-8 w-8"
           onClick={handleBack}
+          disabled={leaving || (!isEdit && saving) || oauthLoggingIn}
+          aria-label="返回渠道列表"
+          title="返回渠道列表"
         >
           <ArrowLeft size={18} />
         </Button>
@@ -708,23 +958,35 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           {isEdit ? '编辑模型配置' : '添加模型配置'}
         </h3>
         {/* 新建模式：创建按钮 */}
+        {isEdit && (
+          <Button size="sm" onClick={() => { void flushEdit() }} disabled={saving || leaving || oauthLoggingIn || !isDirty}>
+            {saving && <Loader2 size={14} className="animate-spin" />}
+            <span>{saveError ? '重试保存' : '保存'}</span>
+          </Button>
+        )}
         {!isEdit && (
           <Button
             size="sm"
             onClick={handleCreate}
-            disabled={saving || !name.trim() || (!isEdit && provider !== 'ollama' && !(provider === 'xai' && credentialMode === 'oauth') && !apiKey.trim())}
+            disabled={saving || oauthLoggingIn || !name.trim() || (provider !== 'ollama' && !oauthCredentials && !apiKey.trim())}
           >
             {saving && <Loader2 size={14} className="animate-spin" />}
-            <span>创建</span>
+            <span>{oauthCredentials ? '登录并创建' : '创建'}</span>
           </Button>
         )}
       </div>
 
       {/* 基本信息卡片 */}
+      {isEdit && (
+        <div role={saveError ? 'alert' : 'status'} aria-live="polite" className={cn('text-sm', saveError ? 'text-destructive' : 'text-muted-foreground')}>
+          {saveError ? `未保存：${saveError}` : saving ? '保存中…' : isDirty ? '有未保存的更改' : '已保存'}
+        </div>
+      )}
       <SettingsSection title="基本信息">
         <SettingsCard>
           <SettingsSelect
             label="供应商类型"
+            disabled={oauthLoggingIn || saving}
             value={provider}
             onValueChange={handleProviderChange}
             options={PROVIDER_SELECT_OPTIONS}
@@ -740,6 +1002,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           {provider === 'xai' && (
             <SettingsSelect
               label="xAI 认证方式"
+              disabled={oauthLoggingIn || saving}
               value={credentialMode}
               onValueChange={handleCredentialModeChange}
               options={[
@@ -752,21 +1015,23 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           {/* Agent 内核勾选：能不能用由用户决定，不按渠道类型加门禁 */}
           <SettingsToggle
             label="Pi 模式"
-            description="Pi 内核可用"
+            description={provider === 'xai' ? '启用实验性 Pi Agent；订阅渠道仅用于 Pi' : 'Pi 内核可用'}
+            disabled={oauthLoggingIn || saving}
             checked={agentRuntimes.includes('pi')}
             onCheckedChange={(checked) => toggleAgentRuntime('pi', checked)}
           />
           <SettingsToggle
             label="Claude 模式"
-            description="Claude 内核可用"
-            checked={agentRuntimes.includes('claude')}
+            description={provider === 'xai' || provider === 'openai-codex' ? '此供应商仅支持 Pi 内核' : 'Claude 内核需要 Anthropic 兼容端点'}
+            disabled={oauthLoggingIn || saving || provider === 'xai' || provider === 'openai-codex'}
+            checked={provider !== 'xai' && provider !== 'openai-codex' && agentRuntimes.includes('claude')}
             onCheckedChange={(checked) => toggleAgentRuntime('claude', checked)}
           />
-          {showOpenAIEndpoint && (
+          {showOpenAIEndpoint && provider !== 'openai-codex' && (
             <SettingsInput
               label="OpenAI 端点"
               value={baseUrl}
-              onChange={setBaseUrl}
+              onChange={(value) => { discoveryRequestRef.current += 1; testRequestRef.current += 1; setBaseUrl(value) }}
               placeholder="https://api.example.com/v1"
               description={baseUrl.trim()
                 ? provider === 'ollama'
@@ -798,13 +1063,18 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           {/* API Key + 测试连接同行 */}
           <div className="px-4 py-3 space-y-2">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-foreground">{provider === 'xai' && credentialMode === 'oauth' ? 'Grok/X 订阅' : `API Key${provider === 'ollama' ? '（可选）' : ''}`}</div>
+              <label htmlFor={oauthCredentials ? undefined : 'channel-api-key'} className="text-sm font-medium text-foreground">{oauthCredentials ? '订阅凭据' : `API Key${provider === 'ollama' ? '（可选）' : ''}`}</label>
               <Button
                 variant="outline"
                 size="sm"
                 type="button"
-                onClick={handleTest}
-                disabled={testing || (provider === 'xai' && credentialMode === 'oauth') || (provider !== 'ollama' && !(provider === 'xai' && credentialMode === 'oauth') && !apiKey.trim()) || !baseUrl.trim()}
+                onClick={testing ? () => {
+                  testRequestRef.current += 1
+                  cancelNetworkRequests('test')
+                  setTesting(false)
+                  setTestResult({ success: false, cancelled: true, message: '测试已取消' })
+                } : handleTest}
+                disabled={oauthCredentials || (provider !== 'ollama' && !apiKey.trim()) || !baseUrl.trim()}
                 className="h-7 text-xs"
               >
                 {testing ? (
@@ -812,33 +1082,64 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
                 ) : (
                   <Zap size={12} />
                 )}
-                <span>测试连接</span>
+                <span>{testing ? '取消测试' : '测试连接'}</span>
               </Button>
             </div>
             {provider === 'xai' && credentialMode === 'oauth' ? (
-              <Button type="button" variant="outline" className="w-full" disabled={oauthLoggingIn} onClick={async () => {
-                if (!channel) return
+              <div className="space-y-2" aria-busy={oauthLoggingIn}>
+              <Button type="button" variant="outline" className="w-full" disabled={oauthLoggingIn || saving} onClick={async () => {
+                if (!channel) { await handleCreate(); return }
+                if (oauthLoginActiveRef.current) return
+                oauthLoginActiveRef.current = true
+                const loginKey = requestKeyRef.current
                 setOauthLoggingIn(true)
+                setOauthError(null)
                 try {
+                  if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+                  queue.cancel()
+                  await queue.settle()
                   const updated = await window.electronAPI.loginXaiOAuth(channel.id)
+                  if (!mountedRef.current || loginKey !== requestKeyRef.current) return
                   setOauthConfigured(true)
                   setApiKey('')
                   setModels(updated.models)
+                  setChannels((current) => current.map((item) => item.id === updated.id ? updated : item))
+                  setSaveError(null)
                   toast.success('xAI 订阅登录成功')
                 } catch (error) {
-                  toast.error(error instanceof Error ? error.message : 'xAI 订阅登录失败')
+                  if (mountedRef.current) setOauthError(error instanceof Error ? error.message : 'xAI 订阅登录失败，请重试')
                 } finally {
-                  setOauthLoggingIn(false)
+                  oauthLoginActiveRef.current = false
+                  if (mountedRef.current) setOauthLoggingIn(false)
                 }
               }}>
                 {oauthLoggingIn ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-                <span>{oauthLoggingIn ? '等待浏览器授权...' : '登录 Grok/X 订阅'}</span>
+                <span>{oauthLoggingIn ? '等待浏览器授权...' : isEdit ? '重新授权 Grok/X 订阅' : '登录并创建 Grok/X 订阅'}</span>
               </Button>
+              {oauthLoggingIn && <Button type="button" variant="outline" className="w-full" onClick={async () => {
+                try { await window.electronAPI.cancelXaiOAuthLogin() }
+                catch { setOauthError('取消授权失败，请重试') }
+              }}>取消授权</Button>}
+              {oauthLoggingIn && <p role="status" aria-live="polite" className="sr-only">等待 Grok/X 订阅授权</p>}
+              {oauthError && <p role="alert" className="text-xs text-destructive">{oauthError}</p>}
+              </div>
+            ) : provider === 'openai-codex' ? (
+              <div className="space-y-2">
+                <Button type="button" variant="outline" className="w-full" disabled={oauthLoggingIn || saving}
+                  onClick={handleCodexReauthorize}>
+                  {oauthLoggingIn ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                  <span>{oauthLoggingIn ? '等待 ChatGPT 授权...' : isEdit ? '重新授权 ChatGPT 订阅' : '创建时登录 ChatGPT 订阅'}</span>
+                </Button>
+                {oauthLoggingIn && <Button type="button" variant="outline" className="w-full" onClick={handleCancelCodexLogin}>取消授权</Button>}
+                {oauthLoggingIn && <p role="status" aria-live="polite" className="sr-only">等待 ChatGPT 订阅授权</p>}
+                {oauthError && <p role="alert" className="text-xs text-destructive">{oauthError}</p>}
+              </div>
             ) : <div className="relative">
               <Input
+                id="channel-api-key"
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => { discoveryRequestRef.current += 1; testRequestRef.current += 1; keyRevisionRef.current += 1; keyEditedRef.current = true; setKeyEdited(true); setApiKey(e.target.value) }}
                 placeholder={provider === 'ollama' ? 'Ollama 默认使用本地认证标识，无需填写' : (isEdit ? '留空则不更新' : '输入 API Key')}
                 required={!isEdit && provider !== 'ollama'}
                 className="pr-10"
@@ -847,7 +1148,8 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
                 type="button"
                 onClick={() => setShowApiKey(!showApiKey)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
-                tabIndex={-1}
+                aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
+                aria-pressed={showApiKey}
               >
                 {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
@@ -856,9 +1158,9 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
               <div className="text-xs text-muted-foreground">OAuth 凭据只保存在本机加密存储中，Chat 需要单独配置 xAI API Key。</div>
             )}
             {testResult && (
-              <div className={cn(
+              <div role="status" aria-live="polite" className={cn(
                 'flex items-center gap-1.5 text-xs',
-                testResult.success ? 'text-emerald-600' : 'text-destructive'
+                testResult.cancelled ? 'text-muted-foreground' : testResult.success ? 'text-emerald-600' : 'text-destructive'
               )}>
                 {testResult.success ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
                 <span>{testResult.message}</span>
@@ -891,7 +1193,9 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           {enabledModels.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
               {models.length === 0
-                ? '还没有模型清单：填写 API Key 后会自动从供应商获取，也可以手动添加模型 ID'
+                ? provider === 'openai-codex'
+                  ? 'Codex 模型目录尚未加载'
+                  : '还没有模型清单：填写 API Key 后会自动从供应商获取，也可以手动添加模型 ID'
                 : '还没有启用任何模型，从下方可用模型中选择'}
             </div>
           ) : (
@@ -932,8 +1236,13 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             variant="outline"
             size="sm"
             type="button"
-            onClick={handleFetchModels}
-            disabled={fetchingModels || !canDiscoverModels}
+            onClick={fetchingModels ? () => {
+              discoveryRequestRef.current += 1
+              cancelNetworkRequests('discovery')
+              setFetchingModels(false)
+              setFetchResult({ success: false, cancelled: true, message: '模型获取已取消', models: [] })
+            } : provider === 'openai-codex' ? loadCodexModels : provider === 'xai' && credentialMode === 'oauth' ? loadXaiModels : handleFetchModels}
+            disabled={!fetchingModels && !oauthCredentials && !canDiscoverModels}
             className="h-7 text-xs"
           >
             {fetchingModels ? (
@@ -941,15 +1250,15 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             ) : (
               <Download size={12} />
             )}
-            <span>{provider === 'ollama' ? '读取本机模型' : '从供应商获取'}</span>
+            <span>{fetchingModels ? '取消获取' : provider === 'openai-codex' ? '读取 Codex 目录' : provider === 'xai' && credentialMode === 'oauth' ? '读取 xAI 目录' : provider === 'ollama' ? '读取本机模型' : '从供应商获取'}</span>
           </Button>
         }
       >
         {/* 拉取结果提示 */}
         {fetchResult && (
-          <div className={cn(
+          <div role="status" aria-live="polite" className={cn(
             'flex items-center gap-1.5 text-xs px-1',
-            fetchResult.success ? 'text-emerald-600' : 'text-destructive'
+            fetchResult.cancelled ? 'text-muted-foreground' : fetchResult.success ? 'text-emerald-600' : 'text-destructive'
           )}>
             {fetchResult.success ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
             <span>{fetchResult.message}</span>
@@ -1079,10 +1388,10 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleDiscard}>放弃编辑</AlertDialogCancel>
+            <AlertDialogCancel onClick={(event) => { event.preventDefault(); void handleDiscard() }}>放弃未保存更改</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleSaveAndClose}
-              disabled={saving || !name.trim() || (!isEdit && provider !== 'ollama' && !(provider === 'xai' && credentialMode === 'oauth') && !apiKey.trim())}
+              onClick={(event) => { event.preventDefault(); void handleSaveAndClose() }}
+              disabled={saving || oauthLoggingIn || !name.trim() || (!isEdit && provider !== 'ollama' && !oauthCredentials && !apiKey.trim())}
             >
               {saving ? <><Loader2 size={14} className="animate-spin" /> 保存中...</> : '保存并关闭'}
             </AlertDialogAction>

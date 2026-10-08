@@ -17,6 +17,6 @@
     "goalIntakeKind": "existing_graph",
     "focusTaskId": "task",
     "focusKind": "in_progress",
-    "telemetry": { "modelCalls": 2, "inputTokens": 300, "outputTokens": 120, "retries": 1, "compactions": 1, "candidateCount": 0, "taskTransitions": 0 }
+    "telemetry": { "modelCalls": 2, "inputTokens": 300, "outputTokens": 120, "retries": 1, "compactions": 1, "candidateCount": 0 }
   }
 }

@@ -29,6 +29,10 @@ import {
 } from '@profer/ui/primitives/select'
 import { SettingsSection, SettingsCard } from './primitives'
 import { chatToolsAtom } from '@/atoms/chat-tool-atoms'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@profer/ui/primitives/alert-dialog'
 
 /** 刷新全局工具列表 atom */
 async function refreshChatTools(
@@ -41,6 +45,7 @@ async function refreshChatTools(
     setter(tools)
   } catch (err) {
     console.error('[ToolSettings] 刷新工具列表失败:', err)
+    toast.error('工具列表刷新失败，请重新打开设置重试')
   }
 }
 
@@ -50,18 +55,25 @@ function WebSearchSettings(): React.ReactElement {
   const [showApiKey, setShowApiKey] = React.useState(false)
   const [enabled, setEnabled] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState('')
+  const [loadVersion, setLoadVersion] = React.useState(0)
   const [testing, setTesting] = React.useState(false)
   const [testResult, setTestResult] = React.useState<{
     success: boolean
     message: string
   } | null>(null)
   const setChatTools = useSetAtom(chatToolsAtom)
+  const apiKeyId = React.useId()
+  const saveFlightRef = React.useRef<Promise<boolean> | null>(null)
+  const [saving, setSaving] = React.useState(false)
 
   // 已保存的 API Key（用于判断是否有变更）
   const savedApiKeyRef = React.useRef('')
 
   // 从主进程加载当前配置 + 凭据
   React.useEffect(() => {
+    setLoading(true)
+    setLoadError('')
     Promise.all([
       window.electronAPI.getChatTools(),
       window.electronAPI.getChatToolCredentials('web-search'),
@@ -78,27 +90,39 @@ function WebSearchSettings(): React.ReactElement {
       })
       .catch((err: unknown) => {
         console.error('[联网搜索设置] 加载失败:', err)
+        setLoadError('联网搜索设置加载失败')
+        toast.error('联网搜索设置加载失败，请重试')
       })
       .finally(() => {
         setLoading(false)
       })
-  }, [])
+  }, [loadVersion])
 
-  /** 静默保存 API Key（blur 时触发） */
-  const handleBlurSave = React.useCallback(async (): Promise<void> => {
+  /** 失焦保存 API Key；测试前也复用此结果，失败不测试旧凭据。 */
+  const handleBlurSave = React.useCallback(async (): Promise<boolean> => {
+    if (saveFlightRef.current) return saveFlightRef.current
     const trimmed = apiKey.trim()
-    if (trimmed === savedApiKeyRef.current) return
-    try {
-      await window.electronAPI.updateChatToolCredentials('web-search', {
-        apiKey: trimmed,
-      })
-      savedApiKeyRef.current = trimmed
-      // 刷新全局工具列表（available 状态可能变化）
-      await refreshChatTools(setChatTools)
-      toast.success('联网搜索设置已保存')
-    } catch (error) {
-      console.error('[联网搜索设置] 保存失败:', error)
-    }
+    if (trimmed === savedApiKeyRef.current) return true
+    setSaving(true)
+    // blur 与点击测试共享在途保存，避免重复提交和测试旧凭据。
+    const flight = (async () => {
+      try {
+        await window.electronAPI.updateChatToolCredentials('web-search', { apiKey: trimmed })
+        savedApiKeyRef.current = trimmed
+        await refreshChatTools(setChatTools)
+        toast.success('联网搜索设置已保存')
+        return true
+      } catch (error) {
+        console.error('[联网搜索设置] 保存失败:', error)
+        toast.error('联网搜索设置保存失败，输入已保留，请重新失焦或测试重试')
+        return false
+      } finally {
+        saveFlightRef.current = null
+        setSaving(false)
+      }
+    })()
+    saveFlightRef.current = flight
+    return flight
   }, [apiKey, setChatTools])
 
   const handleToggle = async (checked: boolean): Promise<void> => {
@@ -110,27 +134,15 @@ function WebSearchSettings(): React.ReactElement {
       await refreshChatTools(setChatTools)
     } catch (error) {
       console.error('[联网搜索设置] 切换失败:', error)
+      toast.error('联网搜索开关保存失败，请重试')
     }
   }
 
   const handleTest = async (): Promise<void> => {
-    // 先保存可能的变更
-    const trimmed = apiKey.trim()
-    if (trimmed !== savedApiKeyRef.current) {
-      try {
-        await window.electronAPI.updateChatToolCredentials('web-search', {
-          apiKey: trimmed,
-        })
-        savedApiKeyRef.current = trimmed
-        await refreshChatTools(setChatTools)
-      } catch (error) {
-        console.error('[联网搜索设置] 保存失败:', error)
-      }
-    }
-
     setTesting(true)
     setTestResult(null)
     try {
+      if (!(await handleBlurSave())) return
       const result = await window.electronAPI.testChatTool('web-search')
       setTestResult(result)
     } catch (error) {
@@ -151,11 +163,13 @@ function WebSearchSettings(): React.ReactElement {
     )
   }
 
+  if (loadError) return <div role="alert" className="space-y-3 py-6 text-sm text-destructive"><p>{loadError}</p><Button type="button" variant="outline" onClick={() => setLoadVersion((version) => version + 1)}>重试加载</Button></div>
+
   return (
     <SettingsSection
       title="联网搜索"
       description="启用后 AI 可以实时搜索互联网获取最新信息"
-      action={<Switch checked={enabled} onCheckedChange={handleToggle} />}
+      action={<Switch aria-label="启用联网搜索" checked={enabled} onCheckedChange={handleToggle} />}
     >
       <SettingsCard divided={false}>
         <div className="space-y-4 p-4">
@@ -188,7 +202,7 @@ function WebSearchSettings(): React.ReactElement {
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-sm font-medium">API Key</label>
+              <label htmlFor={apiKeyId} className="text-sm font-medium">API Key</label>
               <Button
                 size="sm"
                 variant="outline"
@@ -207,18 +221,21 @@ function WebSearchSettings(): React.ReactElement {
             </div>
             <div className="relative">
               <Input
+                id={apiKeyId}
+                disabled={testing}
+                readOnly={saving}
                 type={showApiKey ? 'text' : 'password'}
                 placeholder="tvly-..."
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                onBlur={handleBlurSave}
+                onBlur={() => { void handleBlurSave() }}
                 className="pr-10"
               />
               <button
                 type="button"
                 onClick={() => setShowApiKey(!showApiKey)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
-                tabIndex={-1}
+                aria-label={showApiKey ? '隐藏联网搜索 API Key' : '显示联网搜索 API Key'}
               >
                 {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
@@ -227,6 +244,7 @@ function WebSearchSettings(): React.ReactElement {
 
           {testResult && (
             <div
+              role="status"
               className={`flex items-start gap-2 rounded-lg p-3 text-sm ${testResult.success ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-destructive/10 text-destructive'}`}
             >
               {testResult.success ? (
@@ -261,12 +279,19 @@ function GptImageSettings(): React.ReactElement {
   const [showApiKey, setShowApiKey] = React.useState(false)
   const [enabled, setEnabled] = React.useState(false)
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState('')
+  const [loadVersion, setLoadVersion] = React.useState(0)
   const [testing, setTesting] = React.useState(false)
   const [testResult, setTestResult] = React.useState<{
     success: boolean
     message: string
   } | null>(null)
   const setChatTools = useSetAtom(chatToolsAtom)
+  const fieldId = React.useId()
+  const saveFlightRef = React.useRef<Promise<void> | null>(null)
+  const [saving, setSaving] = React.useState(false)
+  const modeSavingRef = React.useRef(false)
+  const [modeSaving, setModeSaving] = React.useState(false)
   const savedCredentialsRef = React.useRef({
     provider: 'openai' as GptImageProvider,
     mode: 'official' as 'official' | 'byok',
@@ -275,6 +300,8 @@ function GptImageSettings(): React.ReactElement {
   })
 
   React.useEffect(() => {
+    setLoading(true)
+    setLoadError('')
     Promise.all([
       window.electronAPI.getChatTools(),
       window.electronAPI.getChatToolCredentials('gpt-image'),
@@ -296,12 +323,20 @@ function GptImageSettings(): React.ReactElement {
           model: credentials.model || '',
         }
       })
-      .catch((err: unknown) => console.error('[图片生成设置] 加载失败:', err))
+      .catch((err: unknown) => {
+        console.error('[图片生成设置] 加载失败:', err)
+        setLoadError('图片生成设置加载失败')
+        toast.error('图片生成设置加载失败，请重试')
+      })
       .finally(() => setLoading(false))
-  }, [])
+  }, [loadVersion])
 
   const saveCredentials = React.useCallback(
     async (nextMode = mode): Promise<void> => {
+      if (saveFlightRef.current) {
+        await saveFlightRef.current
+        if (nextMode === mode) return
+      }
       const current = {
         provider,
         mode: nextMode,
@@ -318,23 +353,36 @@ function GptImageSettings(): React.ReactElement {
         current.model === saved.model
       )
         return
-      await window.electronAPI.updateChatToolCredentials('gpt-image', current)
-      savedCredentialsRef.current = {
-        provider: current.provider,
-        mode: current.mode,
-        baseUrl: current.baseUrl,
-        model: current.model,
-      }
-      if (current.apiKey) {
-        setHasApiKey(true)
-        setApiKey('')
-      }
-      await refreshChatTools(setChatTools)
+      setSaving(true)
+      const flight = (async () => {
+        try {
+          await window.electronAPI.updateChatToolCredentials('gpt-image', current)
+          savedCredentialsRef.current = {
+            provider: current.provider,
+            mode: current.mode,
+            baseUrl: current.baseUrl,
+            model: current.model,
+          }
+          if (current.apiKey) {
+            setHasApiKey(true)
+            setApiKey('')
+          }
+          await refreshChatTools(setChatTools)
+        } finally {
+          saveFlightRef.current = null
+          setSaving(false)
+        }
+      })()
+      saveFlightRef.current = flight
+      await flight
     },
     [apiKey, baseUrl, mode, model, provider, setChatTools],
   )
 
   const handleProviderChange = async (nextProvider: GptImageProvider): Promise<void> => {
+    if (modeSavingRef.current || testing || nextProvider === provider) return
+    modeSavingRef.current = true
+    setModeSaving(true)
     try {
       // 先保存当前 provider，保证切换时不会丢失刚输入但尚未 blur 的内容。
       await saveCredentials()
@@ -362,17 +410,23 @@ function GptImageSettings(): React.ReactElement {
     } catch (error) {
       console.error('[图片生成设置] provider 切换失败:', error)
       toast.error('图片 provider 切换失败')
+    } finally {
+      modeSavingRef.current = false
+      setModeSaving(false)
     }
   }
 
   const handleModeChange = async (
     nextMode: 'official' | 'byok',
   ): Promise<void> => {
-    setMode(nextMode)
+    if (modeSavingRef.current || nextMode === mode) return
+    modeSavingRef.current = true
+    setModeSaving(true)
     setTestResult(null)
     try {
       // saveCredentials 使用当前 provider，并显式覆盖本次切换后的 mode。
       await saveCredentials(nextMode)
+      setMode(nextMode)
       toast.success(
         nextMode === 'official'
           ? '已切换为 Profer 官方生图'
@@ -381,6 +435,9 @@ function GptImageSettings(): React.ReactElement {
     } catch (error) {
       console.error('[图片生成设置] 模式切换失败:', error)
       toast.error('图片生成模式切换保存失败')
+    } finally {
+      modeSavingRef.current = false
+      setModeSaving(false)
     }
   }
   const handleBlurSave = async (): Promise<void> => {
@@ -401,20 +458,17 @@ function GptImageSettings(): React.ReactElement {
       await refreshChatTools(setChatTools)
     } catch (error) {
       console.error('[图片生成设置] 切换失败:', error)
+      toast.error('图片生成开关保存失败，请重试')
     }
   }
   const handleTest = async (): Promise<void> => {
-    try {
-      await saveCredentials()
-    } catch (error) {
-      console.error('[图片生成设置] 测试前保存失败:', error)
-      return
-    }
     setTesting(true)
     setTestResult(null)
     try {
+      await saveCredentials()
       setTestResult(await window.electronAPI.testChatTool('gpt-image'))
     } catch (error) {
+      toast.error('图片生成配置保存或连接测试失败，请重试')
       setTestResult({
         success: false,
         message: error instanceof Error ? error.message : String(error),
@@ -430,19 +484,21 @@ function GptImageSettings(): React.ReactElement {
       </div>
     )
 
+  if (loadError) return <div role="alert" className="space-y-3 py-6 text-sm text-destructive"><p>{loadError}</p><Button type="button" variant="outline" onClick={() => setLoadVersion((version) => version + 1)}>重试加载</Button></div>
+
   return (
     <SettingsSection
       title="AI 图片生成"
       description="在 Chat 和已启用工具的 Agent 会话中生成图片或编辑参考图"
-      action={<Switch checked={enabled} onCheckedChange={handleToggle} />}
+      action={<Switch aria-label="启用 AI 图片生成" checked={enabled} onCheckedChange={handleToggle} />}
     >
       <SettingsCard divided={false}>
         <div className="space-y-4 p-4">
           {mode === 'byok' && (
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">图片 provider</label>
-              <Select value={provider} onValueChange={(value) => void handleProviderChange(value as GptImageProvider)}>
-                <SelectTrigger>
+              <label htmlFor={`${fieldId}-provider`} className="text-sm font-medium">图片 provider</label>
+              <Select disabled={modeSaving || testing || saving} value={provider} onValueChange={(value) => void handleProviderChange(value as GptImageProvider)}>
+                <SelectTrigger id={`${fieldId}-provider`}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -459,6 +515,8 @@ function GptImageSettings(): React.ReactElement {
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               type="button"
+              aria-pressed={mode === 'official'}
+              disabled={modeSaving || testing}
               onClick={() => void handleModeChange('official')}
               className={`rounded-lg border p-3 text-left transition-colors ${mode === 'official' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}
             >
@@ -469,6 +527,8 @@ function GptImageSettings(): React.ReactElement {
             </button>
             <button
               type="button"
+              aria-pressed={mode === 'byok'}
+              disabled={modeSaving || testing}
               onClick={() => void handleModeChange('byok')}
               className={`rounded-lg border p-3 text-left transition-colors ${mode === 'byok' ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}
             >
@@ -496,7 +556,7 @@ function GptImageSettings(): React.ReactElement {
                 Key。
               </div>
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">
+                <label htmlFor={`${fieldId}-key`} className="text-sm font-medium">
                   {provider === 'xai' ? 'xAI API Key' : 'OpenAI API Key'}{' '}
                   {hasApiKey && (
                     <span className="text-xs font-normal text-muted-foreground">
@@ -506,6 +566,9 @@ function GptImageSettings(): React.ReactElement {
                 </label>
                 <div className="relative">
                   <Input
+                    id={`${fieldId}-key`}
+                    disabled={modeSaving || testing}
+                    readOnly={saving}
                     type={showApiKey ? 'text' : 'password'}
                     placeholder={hasApiKey ? '填写新 Key 以替换' : provider === 'xai' ? 'xai-...' : 'sk-...'}
                     value={apiKey}
@@ -517,15 +580,18 @@ function GptImageSettings(): React.ReactElement {
                     type="button"
                     onClick={() => setShowApiKey(!showApiKey)}
                     className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
-                    tabIndex={-1}
+                    aria-label={showApiKey ? '隐藏图片生成 API Key' : '显示图片生成 API Key'}
                   >
                     {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
                 </div>
               </div>
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">API 地址</label>
+                <label htmlFor={`${fieldId}-url`} className="text-sm font-medium">API 地址</label>
                 <Input
+                  id={`${fieldId}-url`}
+                  disabled={modeSaving || testing}
+                  readOnly={saving}
                   placeholder={provider === 'xai' ? 'https://api.x.ai' : 'https://api.openai.com'}
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
@@ -536,8 +602,11 @@ function GptImageSettings(): React.ReactElement {
                 </p>
               </div>
               <div className="space-y-1.5">
-                <label className="text-sm font-medium">模型</label>
+                <label htmlFor={`${fieldId}-model`} className="text-sm font-medium">模型</label>
                 <Input
+                  id={`${fieldId}-model`}
+                  disabled={modeSaving || testing}
+                  readOnly={saving}
                   placeholder={provider === 'xai' ? 'grok-imagine-image-2.0' : 'gpt-image-2'}
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
@@ -551,7 +620,7 @@ function GptImageSettings(): React.ReactElement {
               size="sm"
               variant="outline"
               disabled={
-                testing || (mode === 'byok' && !hasApiKey && !apiKey.trim())
+                modeSaving || testing || (mode === 'byok' && !hasApiKey && !apiKey.trim())
               }
               onClick={() => void handleTest()}
             >
@@ -567,6 +636,7 @@ function GptImageSettings(): React.ReactElement {
           </div>
           {testResult && (
             <div
+              role="status"
               className={`flex items-start gap-2 rounded-lg p-3 text-sm ${testResult.success ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-destructive/10 text-destructive'}`}
             >
               {testResult.success ? (
@@ -587,6 +657,9 @@ function GptImageSettings(): React.ReactElement {
 function CustomToolsSection(): React.ReactElement | null {
   const tools = useAtomValue(chatToolsAtom)
   const setChatTools = useSetAtom(chatToolsAtom)
+  const [deleteTarget, setDeleteTarget] = React.useState<{ id: string; name: string } | null>(null)
+  const [deleting, setDeleting] = React.useState(false)
+  const deletingRef = React.useRef(false)
 
   const customTools = tools.filter((t) => t.meta.category === 'custom')
   if (customTools.length === 0) return null
@@ -602,6 +675,7 @@ function CustomToolsSection(): React.ReactElement | null {
       await refreshChatTools(setChatTools)
     } catch (error) {
       console.error('[自定义工具] 切换失败:', error)
+      toast.error('自定义工具开关保存失败，请重试')
     }
   }
 
@@ -609,13 +683,20 @@ function CustomToolsSection(): React.ReactElement | null {
     toolId: string,
     toolName: string,
   ): Promise<void> => {
+    if (deletingRef.current) return
+    deletingRef.current = true
+    setDeleting(true)
     try {
       await window.electronAPI.deleteCustomChatTool(toolId)
       await refreshChatTools(setChatTools)
       toast.success(`已删除工具: ${toolName}`)
+      setDeleteTarget(null)
     } catch (error) {
       console.error('[自定义工具] 删除失败:', error)
       toast.error('删除工具失败')
+    } finally {
+      deletingRef.current = false
+      setDeleting(false)
     }
   }
 
@@ -650,6 +731,7 @@ function CustomToolsSection(): React.ReactElement | null {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Switch
+                aria-label={`启用${tool.meta.name}`}
                 checked={tool.enabled}
                 onCheckedChange={(checked) =>
                   handleToggle(tool.meta.id, checked)
@@ -659,7 +741,8 @@ function CustomToolsSection(): React.ReactElement | null {
                 size="icon"
                 variant="ghost"
                 className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                onClick={() => handleDelete(tool.meta.id, tool.meta.name)}
+                aria-label={`删除工具${tool.meta.name}`}
+                onClick={() => setDeleteTarget({ id: tool.meta.id, name: tool.meta.name })}
               >
                 <Trash2 size={14} />
               </Button>
@@ -667,6 +750,25 @@ function CustomToolsSection(): React.ReactElement | null {
           </div>
         ))}
       </SettingsCard>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open && !deleting) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除自定义工具？</AlertDialogTitle>
+            <AlertDialogDescription>将删除「{deleteTarget?.name}」及其配置，此操作无法撤销。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(event) => {
+                event.preventDefault()
+                if (deleteTarget && !deleting) void handleDelete(deleteTarget.id, deleteTarget.name)
+              }}
+            >{deleting ? '删除中…' : '删除工具'}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SettingsSection>
   )
 }

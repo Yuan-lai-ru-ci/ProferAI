@@ -14,7 +14,7 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { AlertCircle, X, Wallet } from 'lucide-react'
 import { ChatHeader } from './ChatHeader'
@@ -32,10 +32,9 @@ import {
   chatStreamErrorCodesAtom,
   chatMessageRefreshAtom,
   pendingAgentRecommendationAtom,
-  conversationModelsAtom,
+  conversationModelAtomFamily,
   chatPendingMessageAtom,
   chatPendingKnowledgeReferencesAtom,
-  channelsAtom,
   INITIAL_MESSAGE_LIMIT,
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment, ChatPendingMessage } from '@/atoms/chat-atoms'
@@ -95,7 +94,8 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   }, [])
 
   // ===== Per-conversation hooks（分屏独立） =====
-  const [selectedModel, setSelectedModel] = useConversationModel()
+  const [selectedModel] = useConversationModel()
+  const store = useStore()
   const [contextLength] = useConversationContextLength()
   const [thinkingEnabled] = useConversationThinkingEnabled()
   const [conversationPromptId] = useConversationPromptId()
@@ -106,7 +106,6 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const streamingStates = useAtomValue(streamingStatesAtom)
   const setStreamingStates = useSetAtom(streamingStatesAtom)
-  const setConversationModels = useSetAtom(conversationModelsAtom)
   const setChatStreamErrors = useSetAtom(chatStreamErrorsAtom)
   const chatStreamErrors = useAtomValue(chatStreamErrorsAtom)
   const chatStreamErrorCodes = useAtomValue(chatStreamErrorCodesAtom)
@@ -115,7 +114,6 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   const refreshMap = useAtomValue(chatMessageRefreshAtom)
   const promptConfig = useAtomValue(promptConfigAtom)
   const userProfile = useAtomValue(userProfileAtom)
-  const channels = useAtomValue(channelsAtom)
   const promptSidebarOpen = useAtomValue(promptSidebarOpenAtom)
   const activeToolIds = useAtomValue(activeToolIdsAtom)
   const setPendingRecommendation = useSetAtom(pendingAgentRecommendationAtom)
@@ -208,21 +206,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     }
   }, [conversation?.contextDividers])
 
-  // 从对话元数据恢复模型/渠道选择（写入 per-conversation Map）
-  const conversationChannelId = conversation?.channelId
-  const conversationModelId = conversation?.modelId
-  React.useEffect(() => {
-    if (conversationChannelId && conversationModelId) {
-      setConversationModels((prev) => {
-        const map = new Map(prev)
-        map.set(conversationId, {
-          channelId: conversationChannelId,
-          modelId: conversationModelId,
-        })
-        return map
-      })
-    }
-  }, [conversationId, conversationChannelId, conversationModelId, setConversationModels])
+  // 模型从 metadata/会话覆盖值派生，目录失效只改变可用性，不改写历史绑定。
 
   const syncContextDividers = React.useCallback(async (
     convId: string,
@@ -251,29 +235,10 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
       pendingUserMessageId?: string
     },
   ): Promise<void> => {
+    // 每次发送读取最新 store，附件保存/分支重发期间的目录变化也会阻止旧绑定。
+    const selectedModel = store.get(conversationModelAtomFamily(conversationId))
     if (!selectedModel) {
-      toast.error('暂无可用模型，请先在设置中添加 AI 渠道')
-      return
-    }
-    const channel = channels.find((c) => c.id === selectedModel.channelId)
-    const model = channel?.models.find((m) => m.id === selectedModel.modelId)
-    if (!channel?.enabled || !model?.enabled) {
-      toast.error('当前模型配置已失效，请重新选择可用模型')
-      setSelectedModel(null)
-      setConversationModels((prev) => {
-        if (!prev.has(conversationId)) return prev
-        const map = new Map(prev)
-        map.delete(conversationId)
-        return map
-      })
-      window.electronAPI
-        .updateConversationModel(conversationId, undefined, undefined)
-        .then((updated) => {
-          setConversations((prev) =>
-            prev.map((c) => (c.id === updated.id ? updated : c))
-          )
-        })
-        .catch(console.error)
+      toast.error('当前模型不可用，请重新选择已启用的 Chat 模型')
       return
     }
 
@@ -346,6 +311,12 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
         }
       }
 
+      const latestSelection = store.get(conversationModelAtomFamily(conversationId))
+      if (latestSelection?.channelId !== selectedModel.channelId || latestSelection?.modelId !== selectedModel.modelId) {
+        toast.error('模型配置已变化，请重新发送')
+        return
+      }
+
       // 清理 pending 附件和临时缓存
       for (const att of currentAttachments) {
         if (att.previewUrl?.startsWith('blob:')) {
@@ -354,6 +325,12 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
         window.__pendingAttachmentData?.delete(att.id)
       }
       setPendingAttachments([])
+    }
+
+    const latestSelection = store.get(conversationModelAtomFamily(conversationId))
+    if (latestSelection?.channelId !== selectedModel.channelId || latestSelection?.modelId !== selectedModel.modelId) {
+      toast.error('模型配置已变化，请重新发送')
+      return
     }
 
     requestFollow(conversationId)
@@ -451,9 +428,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     promptConfig,
     userProfile.userName,
     activeToolIds,
-    channels,
-    setSelectedModel,
-    setConversationModels,
+    store,
     setChatStreamErrors,
     setStreamingStates,
     setConversations,
@@ -579,6 +554,10 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
   /** 重新发送：在该 user message 的兄弟位置 fork 一条新 user message 并触发重发 */
   const handleResendMessage = React.useCallback(async (message: { id: string; content: string }): Promise<void> => {
     if (isStreaming) return
+    if (!store.get(conversationModelAtomFamily(conversationId))) {
+      toast.error('当前模型不可用，请重新选择已启用的 Chat 模型')
+      return
+    }
 
     try {
       const target = messages.find((m) => m.id === message.id)
@@ -598,7 +577,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     } catch (error) {
       console.error('[ChatView] 重新发送失败:', error)
     }
-  }, [isStreaming, forkFromMessage, handleSend, messages])
+  }, [isStreaming, forkFromMessage, handleSend, messages, store, conversationId])
 
   /** 开始原地编辑 */
   const handleStartInlineEdit = React.useCallback((message: { id: string }): void => {
@@ -619,6 +598,10 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     payload: InlineEditSubmitPayload,
   ): Promise<void> => {
     if (isStreaming || inlineEditSubmitRef.current) return
+    if (!store.get(conversationModelAtomFamily(conversationId))) {
+      toast.error('当前模型不可用，请重新选择已启用的 Chat 模型')
+      return
+    }
     inlineEditSubmitRef.current = true
     const trimmed = payload.content.trim()
     if (!trimmed && payload.keepExistingAttachments.length === 0 && payload.newAttachments.length === 0) {
@@ -669,7 +652,7 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
     } finally {
       inlineEditSubmitRef.current = false
     }
-  }, [conversationId, isStreaming, forkFromMessage, handleSend])
+  }, [conversationId, isStreaming, forkFromMessage, handleSend, store])
 
   /** 清除上下文（toggle 最后消息的分隔线） */
   const handleClearContext = React.useCallback((): void => {

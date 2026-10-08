@@ -1,4 +1,4 @@
-import { normalizeAgentRuntime, type AgentSendInput, type AgentSessionMeta, type Channel } from '@profer/shared'
+import { isChannelEnabledForRuntime, normalizeAgentRuntime, type AgentSendInput, type AgentSessionMeta, type Channel } from '@profer/shared'
 
 export type AgentSendBindingResult =
   | { ok: true }
@@ -32,6 +32,10 @@ export function validateAgentSendBinding(
   }
   if (!channel.enabled) {
     return { ok: false, code: 'AGENT_CHANNEL_DISABLED', message: `Agent 渠道已停用: ${input.channelId}` }
+  }
+  const runtime = normalizeAgentRuntime(session.agentRuntime)
+  if (!isChannelEnabledForRuntime(channel, runtime) || (channel.provider === 'xai' && runtime !== 'pi')) {
+    return { ok: false, code: 'AGENT_CHANNEL_RUNTIME_DISABLED', message: '当前渠道未启用此 Agent 内核，请重新选择渠道' }
   }
   if (input.modelId) {
     const model = channel.models?.find((candidate) => candidate.id === input.modelId)

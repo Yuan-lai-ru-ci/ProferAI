@@ -6,6 +6,43 @@
  */
 
 import type { WorkspaceSortMode } from '@/atoms/sidebar-atoms'
+import type { AppMode } from '@/atoms/app-mode'
+import type { TabItem } from '@/atoms/tab-atoms'
+import type { AgentSessionMeta, ConversationMeta } from '@profer/shared'
+import { buildAgentSessionTrees } from './session-tree'
+
+export type OpenSessionEntry =
+  | { type: 'chat'; tab: TabItem; conversation: ConversationMeta }
+  | { type: 'agent'; tab: TabItem; session: AgentSessionMeta }
+
+/** 当前会话只统计可渲染入口；关联子会话与项目树采用同一根节点口径。 */
+export function getOpenSessionEntries(
+  mode: AppMode,
+  tabs: readonly TabItem[],
+  conversations: readonly ConversationMeta[],
+  agentSessions: AgentSessionMeta[],
+): OpenSessionEntry[] {
+  if (mode !== 'chat' && mode !== 'agent') return []
+  const conversationById = new Map(conversations.map((item) => [item.id, item]))
+  const rootSessionById = new Map(buildAgentSessionTrees(agentSessions).map((item) => [item.session.id, item.session]))
+  const seen = new Set<string>()
+  const entries: OpenSessionEntry[] = []
+
+  for (const tab of tabs) {
+    if (tab.type !== mode || seen.has(tab.sessionId)) continue
+    if (mode === 'chat') {
+      const conversation = conversationById.get(tab.sessionId)
+      if (!conversation) continue
+      entries.push({ type: 'chat', tab, conversation })
+    } else {
+      const session = rootSessionById.get(tab.sessionId)
+      if (!session) continue
+      entries.push({ type: 'agent', tab, session })
+    }
+    seen.add(tab.sessionId)
+  }
+  return entries
+}
 
 export function formatAutomationCount(count: number): string {
   return count > 99 ? '99+' : String(count)

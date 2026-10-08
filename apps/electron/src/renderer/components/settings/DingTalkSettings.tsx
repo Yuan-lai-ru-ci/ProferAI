@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtomValue } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { Loader2, ExternalLink, Power, PowerOff, Plus, Trash2, CheckCircle2, XCircle } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
@@ -27,6 +27,7 @@ import {
   AlertDialogTrigger,
 } from '@profer/ui/primitives/alert-dialog'
 import { cn } from '@/lib/utils'
+import { IntegrationSettingsFeedback, useIntegrationAction } from './IntegrationSettingsFeedback'
 import type { DingTalkBotConfig, DingTalkBotBridgeState, DingTalkBridgeStatus, DingTalkTestResult } from '@profer/shared'
 
 /** 安全地用系统浏览器打开链接 */
@@ -62,25 +63,25 @@ export function DingTalkSettings(): React.ReactElement {
   const botStates = useAtomValue(dingtalkBotStatesAtom)
   const [bots, setBots] = React.useState<DingTalkBotConfig[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState('')
+  const { busy: adding, run: runAdd } = useIntegrationAction()
 
   const loadBots = React.useCallback(async () => {
+    setLoadError('')
     try {
       const config = await window.electronAPI.getDingTalkMultiConfig()
       setBots(config.bots)
     } catch {
-      // fallback: 旧 API
       try {
-        const oldConfig = await window.electronAPI.getDingTalkConfig()
-        if (oldConfig.clientId) {
-          setBots([{
-            id: 'legacy',
-            name: '钉钉助手',
-            enabled: oldConfig.enabled,
-            clientId: oldConfig.clientId,
-            clientSecret: oldConfig.clientSecret,
-          }])
+        const legacy = await window.electronAPI.getDingTalkConfig()
+        if (legacy.clientId) {
+          setBots([{ id: 'legacy', name: '钉钉助手', enabled: legacy.enabled, clientId: legacy.clientId, clientSecret: legacy.clientSecret }])
+        } else {
+          setBots([])
         }
-      } catch { /* ignore */ }
+      } catch {
+        setLoadError('无法读取钉钉 Bot 配置，请重试。')
+      }
     } finally {
       setLoading(false)
     }
@@ -88,7 +89,7 @@ export function DingTalkSettings(): React.ReactElement {
 
   React.useEffect(() => { loadBots() }, [loadBots])
 
-  const handleAddBot = React.useCallback(async () => {
+  const handleAddBot = React.useCallback(() => runAdd(async () => {
     try {
       const saved = await window.electronAPI.saveDingTalkBotConfig({
         name: `钉钉助手 ${bots.length + 1}`,
@@ -100,30 +101,27 @@ export function DingTalkSettings(): React.ReactElement {
     } catch {
       toast.error('创建 Bot 失败')
     }
-  }, [bots.length])
+  }), [bots.length, runAdd])
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 size={24} className="animate-spin text-muted-foreground" />
-      </div>
-    )
+    return <IntegrationSettingsFeedback loading message="正在加载钉钉 Bot 配置…" />
   }
 
   return (
-    <div className="space-y-8">
+    <div className="min-w-0 space-y-6">
+      {loadError && <IntegrationSettingsFeedback message={loadError} onRetry={() => void loadBots()} />}
       {/* Bot 列表 */}
       <SettingsSection
         title="钉钉 Bot 列表"
         description="管理多个钉钉机器人，每个 Bot 可绑定不同的工作区和模型"
         action={
-          <Button size="sm" variant="outline" onClick={handleAddBot}>
+          <Button size="sm" variant="outline" onClick={handleAddBot} disabled={adding || Boolean(loadError)}>
             <Plus size={14} className="mr-1.5" />
             添加 Bot
           </Button>
         }
       >
-        {bots.length === 0 ? (
+        {loadError && bots.length === 0 ? null : bots.length === 0 ? (
           <SettingsCard divided={false}>
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
               还没有配置钉钉 Bot。点击「添加 Bot」开始。
@@ -225,32 +223,52 @@ interface BotConfigCardProps {
 }
 
 function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): React.ReactElement {
+  const setBotStates = useSetAtom(dingtalkBotStatesAtom)
   const [name, setName] = React.useState(bot.name)
   const [clientId, setClientId] = React.useState(bot.clientId)
   const [clientSecret, setClientSecret] = React.useState('')
   const [testing, setTesting] = React.useState(false)
   const [testResult, setTestResult] = React.useState<DingTalkTestResult | null>(null)
   const [expanded, setExpanded] = React.useState(!bot.clientId) // 新建的 Bot 默认展开
+  const { busy, run } = useIntegrationAction()
+  const [actionError, setActionError] = React.useState('')
+  const [secretError, setSecretError] = React.useState('')
+  const secretEdited = React.useRef(false)
+  const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const panelId = React.useId()
+  const connectionGeneration = React.useRef(0)
 
   // 加载已有 secret（使用 bot-specific API）
-  React.useEffect(() => {
-    if (bot.clientSecret && bot.id) {
-      window.electronAPI.getDecryptedDingTalkBotSecret?.(bot.id)
-        .then((s: string) => { if (s) setClientSecret(s) })
-        .catch(() => {
-          // 回退到旧 API（兼容迁移前的首个 Bot）
-          window.electronAPI.getDecryptedDingTalkSecret?.()
-            .then((s: string) => { if (s) setClientSecret(s) })
-            .catch(() => {})
-        })
+  const loadSecret = React.useCallback(async () => {
+    if (!bot.clientSecret) return
+    setSecretError('')
+    try {
+      const secret = await window.electronAPI.getDecryptedDingTalkBotSecret(bot.id)
+      if (!secretEdited.current) setClientSecret(secret)
+    } catch {
+      if (bot.id === 'legacy' && window.electronAPI.getDecryptedDingTalkSecret) {
+        try {
+          const legacySecret = await window.electronAPI.getDecryptedDingTalkSecret()
+          if (!secretEdited.current) setClientSecret(legacySecret)
+          return
+        } catch { /* 继续显示具体错误 */ }
+      }
+      setSecretError('无法读取此 Bot 的 Secret。可重试或输入新的 Secret；留空将保留原凭据。')
     }
   }, [bot.id, bot.clientSecret])
+  React.useEffect(() => { void loadSecret() }, [loadSecret])
 
   const statusConfig = state ? STATUS_CONFIG[state.status] : STATUS_CONFIG.disconnected
   const isConnected = state?.status === 'connected' || state?.status === 'connecting'
+  React.useEffect(() => {
+    if (state?.status !== 'connecting') return
+    const timeout = window.setTimeout(() => setActionError('等待连接已超时，可停止后重试。当前配置已保留。'), 60_000)
+    return () => window.clearTimeout(timeout)
+  }, [state?.status])
 
-  const handleSave = React.useCallback(async () => {
+  const handleSave = React.useCallback(() => run(async () => {
     if (!clientId.trim() || !name.trim()) return
+    setActionError('')
     try {
       await window.electronAPI.saveDingTalkBotConfig({
         id: bot.id,
@@ -258,13 +276,16 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
         enabled: true,
         clientId: clientId.trim(),
         clientSecret: clientSecret || '',
+        defaultWorkspaceId: bot.defaultWorkspaceId,
+        defaultChannelId: bot.defaultChannelId,
+        defaultModelId: bot.defaultModelId,
       })
       toast.success(`Bot "${name}" 已保存`)
       onSaved()
     } catch {
-      toast.error('保存配置失败')
+      setActionError('保存配置失败，输入已保留。请重试保存。')
     }
-  }, [bot.id, name, clientId, clientSecret, onSaved])
+  }), [bot, name, clientId, clientSecret, onSaved, run])
 
   const handleTest = React.useCallback(async () => {
     if (!clientId.trim() || !clientSecret.trim()) return
@@ -280,63 +301,67 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
     }
   }, [clientId, clientSecret])
 
-  const handleToggle = React.useCallback(async () => {
-    if (isConnected) {
-      await window.electronAPI.stopDingTalkBot(bot.id)
-      toast.success(`Bot "${bot.name}" 已停止`)
-    } else {
-      try {
-        await window.electronAPI.startDingTalkBot(bot.id)
-        toast.success(`Bot "${bot.name}" 启动中...`)
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : '启动失败')
-      }
-    }
-  }, [bot.id, bot.name, isConnected])
-
-  const handleRemove = React.useCallback(async () => {
+  const handleToggle = React.useCallback(() => run(async () => {
+    setActionError('')
+    const generation = ++connectionGeneration.current
     try {
-      await window.electronAPI.removeDingTalkBot(bot.id)
+      if (isConnected) {
+        await window.electronAPI.stopDingTalkBot(bot.id)
+        toast.success(`Bot "${bot.name}" 已停止`)
+      } else {
+        setBotStates((previous) => ({ ...previous, [bot.id]: { botId: bot.id, botName: bot.name, status: 'connecting' } }))
+        void window.electronAPI.startDingTalkBot(bot.id).catch(() => {
+          if (generation !== connectionGeneration.current) return
+          setActionError('启动失败，当前配置已保留。请重试。')
+          setBotStates((previous) => ({ ...previous, [bot.id]: { botId: bot.id, botName: bot.name, status: 'error', errorMessage: '启动失败' } }))
+        })
+        toast.success(`Bot "${bot.name}" 启动中...`)
+      }
+    } catch { setActionError('连接操作失败，当前配置已保留。可再次启动或停止。') }
+  }), [bot.id, bot.name, isConnected, run, setBotStates])
+
+  const handleRemove = React.useCallback(() => run(async () => {
+    setActionError('')
+    try {
+      if (!await window.electronAPI.removeDingTalkBot(bot.id)) throw new Error('Bot 不存在或未删除')
       toast.success(`Bot "${bot.name}" 已删除`)
+      setDeleteOpen(false)
       onRemoved()
     } catch {
-      toast.error('删除失败')
+      setActionError('删除失败，Bot 已保留。请重试。')
     }
-  }, [bot.id, bot.name, onRemoved])
+  }), [bot.id, bot.name, onRemoved, run])
 
   return (
     <SettingsCard>
       {/* 头部：名称 + 状态 + 展开/折叠 */}
-      <button
-        type="button"
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/30 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setExpanded(!expanded)} aria-expanded={expanded} aria-controls={panelId}>
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusConfig.color}`} />
-          <span className="font-medium text-sm">{bot.name || '未命名 Bot'}</span>
-          <span className="text-xs text-muted-foreground">{bot.clientId ? bot.clientId.slice(0, 12) + '...' : '未配置'}</span>
-        </div>
+          <span className="min-w-0 truncate font-medium text-sm">{bot.name || '未命名 Bot'}</span>
+          <span className="text-xs text-muted-foreground">{statusConfig.label}</span>
+          <span className="text-xs text-muted-foreground">{expanded ? '▾' : '▸'}</span>
+        </button>
         <div className="flex items-center gap-2">
           {isConnected ? (
-            <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleToggle() }}>
+            <Button size="sm" variant="outline" onClick={handleToggle} disabled={busy || testing}>
               <PowerOff size={14} className="mr-1" />
               停止
             </Button>
           ) : bot.clientId ? (
-            <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleToggle() }}
-              disabled={state?.status === 'connecting'}>
+            <Button size="sm" variant="outline" onClick={handleToggle} disabled={busy || testing}>
               {state?.status === 'connecting' ? <Loader2 size={14} className="animate-spin mr-1" /> : <Power size={14} className="mr-1" />}
               启动
             </Button>
           ) : null}
-          <span className="text-xs text-muted-foreground">{expanded ? '▾' : '▸'}</span>
         </div>
-      </button>
+      </div>
+      {actionError && <IntegrationSettingsFeedback message={actionError} />}
 
       {/* 展开的配置表单 */}
       {expanded && (
-        <div className="px-4 pb-4 space-y-4 border-t border-border pt-4">
+        <div id={panelId} className="pb-4 space-y-3" aria-busy={busy}>
+          {secretError && <IntegrationSettingsFeedback message={secretError} onRetry={() => void loadSecret()} />}
           <SettingsInput
             label="Bot 名称"
             value={name}
@@ -352,22 +377,22 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
           <SettingsSecretInput
             label="Client Secret (AppSecret)"
             value={clientSecret}
-            onChange={setClientSecret}
+            onChange={(value) => { secretEdited.current = true; setClientSecret(value) }}
             placeholder="输入 Client Secret"
           />
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 px-4">
             <Button size="sm" variant="outline" onClick={handleTest}
-              disabled={testing || !clientId.trim() || !clientSecret.trim()}>
+              disabled={busy || testing || !clientId.trim() || !clientSecret.trim()}>
               {testing && <Loader2 size={14} className="animate-spin" />}
               <span>{testing ? '测试中...' : '测试连接'}</span>
             </Button>
-            <Button size="sm" onClick={handleSave} disabled={!clientId.trim() || !name.trim()}>
-              保存配置
+            <Button size="sm" onClick={handleSave} disabled={busy || testing || !clientId.trim() || !name.trim() || (!bot.clientSecret && !clientSecret.trim())}>
+              {busy ? '处理中…' : '保存配置'}
             </Button>
-            <AlertDialog>
+            <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
               <AlertDialogTrigger asChild>
-                <Button size="sm" variant="destructive">
+                <Button size="sm" variant="ghost" disabled={busy || testing}>
                   <Trash2 size={14} className="mr-1" />
                   删除
                 </Button>
@@ -379,9 +404,10 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
                     删除 Bot &quot;{bot.name}&quot; 将同时断开连接。此操作不可撤销。
                   </AlertDialogDescription>
                 </AlertDialogHeader>
+                {actionError && <IntegrationSettingsFeedback message={actionError} />}
                 <AlertDialogFooter>
-                  <AlertDialogCancel>取消</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleRemove}>删除</AlertDialogAction>
+                  <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+                  <AlertDialogAction disabled={busy} onClick={(event) => { event.preventDefault(); void handleRemove() }}>删除</AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
@@ -389,7 +415,7 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
 
           {testResult && (
             <div className={cn(
-              'p-3 rounded-lg flex items-start gap-2 text-sm',
+              'mx-4 p-3 rounded-lg flex items-start gap-2 text-sm',
               testResult.success ? 'bg-green-500/10 text-green-700 dark:text-green-400' : 'bg-red-500/10 text-red-700 dark:text-red-400'
             )}>
               {testResult.success

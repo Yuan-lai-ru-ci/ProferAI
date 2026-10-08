@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import * as fs from 'node:fs'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { prepareAgentSkillRouting } from './skill-runtime-routing'
+import { DOMParser } from '@xmldom/xmldom'
 import { join } from 'node:path'
 import { createEffectiveAgentPresetPolicy, type AgentPreset } from '@profer/shared'
-import { buildSkillRoutingNotice, createSkillRoutingSnapshot, routeSkillsForTask, type SkillRoutingSnapshot } from './skill-routing'
+import { buildSkillCatalog, buildSkillRoutingNotice, createSkillRoutingSnapshot, routeSkillsForTask, type SkillRoutingSnapshot } from './skill-routing'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -104,7 +107,7 @@ describe('Skill 路由：权限先于相关性', () => {
   })
   test('队列复用快照，后续磁盘编辑不能改变本轮正文与策略', async () => {
     const f = fixture({ skillSlugs: ['pdf'] })
-    const s = await createSkillRoutingSnapshot(f)
+    const { snapshot: s } = await prepareAgentSkillRouting(f)
     writeFileSync(join(f.root, 'skills', 'pdf', 'SKILL.md'), 'CHANGED')
     const result = routeSkillsForTask(s, { userMessage: '/skill:pdf /skill:alpha' })
     expect(result.prompt).toContain('BODY_pdf')
@@ -141,14 +144,95 @@ describe('Skill 路由：权限先于相关性', () => {
     writeFileSync(config, JSON.stringify({ requiredTools: ['mcp__a__fetch_report'] }))
     expect((await createSkillRoutingSnapshot(f)).allowedSlugs).toContain('pdf')
   })
-  test('聚合正文读取预算不足仍保留合法 catalog，仅延后正文', async () => {
-    const s = await createSkillRoutingSnapshot({ ...fixture({ skillSlugs: ['pdf'] }), scanBodyBudgetBytes: 0 })
+  test('快照只持有摘要与规则；正文在选中后读取，超预算返回引用', async () => {
+    const s = await createSkillRoutingSnapshot(fixture({ skillSlugs: ['pdf'] }))
     expect(s.allowedSlugs).toContain('pdf')
-    expect(s.skills.find(skill => skill.slug === 'pdf')?.body).toBe('')
-    expect(s.skills.find(skill => skill.slug === 'pdf')?.bodyDeferred).toBe(true)
-    const routed = routeSkillsForTask(s, { userMessage: '/skill:pdf' })
+    expect(s.skills.find(skill => skill.slug === 'pdf')?.description).toContain('Test pdf')
+    expect(s.skills.find(skill => skill.slug === 'pdf')).not.toHaveProperty('body')
+    expect(s.skills.find(skill => skill.slug === 'pdf')).not.toHaveProperty('bodyDeferred')
+    const routed = routeSkillsForTask(s, { userMessage: '/skill:pdf', maxBodyChars: 2 })
     expect(routed.prompt).toContain('budget-deferred')
     expect(routed.prompt).not.toContain('BODY_pdf')
+  })
+  test('目录保留合法未选中项，隐藏禁用和禁止模型调用项；目录不读取正文', async () => {
+    const f = fixture({ skillSlugs: ['pdf', 'alpha', 'beta'] })
+    writeFileSync(join(f.root, 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: secret alpha\ndisable-model-invocation: true\n---\nBODY_alpha')
+    const s = await createSkillRoutingSnapshot(f)
+    // 已拿到摘要后删除正文文件，目录构建仍然不需要读取它。
+    rmSync(join(f.root, 'skills', 'beta', 'SKILL.md'))
+    const catalog = buildSkillCatalog(s)
+    expect(catalog).toContain('name="pdf"')
+    expect(catalog).toContain('name="beta"')
+    expect(catalog).not.toContain('name="alpha"')
+    expect(catalog).not.toContain('name="automation"')
+    expect(catalog).not.toContain('BODY_')
+  })
+  test('共享长路径只声明一次，完整描述和特殊字符可以无损还原', async () => {
+    const s = await createSkillRoutingSnapshot(fixture({ skillSlugs: ['pdf', 'beta'] }))
+    const description = 'Use "quotes", apostrophe\'s, <xml> & 中文；完整触发说明。'.repeat(12)
+    const skills = s.skills.filter(skill => !skill.blocked).map(skill => ({ ...skill, description }))
+    const catalog = buildSkillCatalog({ ...s, skills })
+    const document = new DOMParser().parseFromString(catalog, 'text/xml')
+    const groups = document.getElementsByTagName('skill_root')
+    expect(groups.length).toBe(1)
+    expect(catalog.split(skills[0]!.rootPath)).toHaveLength(2)
+    expect(catalog).not.toContain('&quot;quotes&quot;')
+    for (const element of Array.from(document.getElementsByTagName('skill'))) {
+      const skill = skills.find(item => item.slug === element.getAttribute('name'))!
+      const root = element.parentNode as Element
+      expect(join(root.getAttribute('path')!, element.getAttribute('location')!)).toBe(skill.filePath)
+      expect(element.textContent).toBe(description)
+    }
+    expect(catalog).not.toContain('<xml>')
+    const escapeXml = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
+    const oldEntries = skills.map(skill => `<skill name="${escapeXml(skill.slug)}" location="${escapeXml(skill.filePath)}">${escapeXml(description)}</skill>`).join('\n')
+    expect(catalog.length).toBeLessThan(oldEntries.length)
+  })
+  test('多根目录各自还原，单项和不在根内的路径保留绝对位置，不扩权', async () => {
+    const s = await createSkillRoutingSnapshot(fixture({ skillSlugs: ['pdf', 'beta'] }))
+    const visible = s.skills.filter(skill => !skill.blocked)
+    const otherRoot = '/very/long/path/to/another/authorized/skill/root'
+    const skills = [
+      ...visible,
+      ...visible.map(skill => ({ ...skill, slug: `other-${skill.slug}`, rootPath: otherRoot, filePath: join(otherRoot, skill.slug, 'SKILL.md') })),
+      { ...visible[0]!, slug: 'single', rootPath: '/single', filePath: '/single/one/SKILL.md' },
+      { ...visible[0]!, slug: 'outside', rootPath: '/root', filePath: '/root-other/outside/SKILL.md' },
+      { ...visible[1]!, slug: 'inside', rootPath: '/root', filePath: '/root/inside/SKILL.md' },
+    ]
+    const catalog = buildSkillCatalog({ skills, allowedSlugs: skills.map(skill => skill.slug) })
+    const document = new DOMParser().parseFromString(catalog, 'text/xml')
+    expect(document.getElementsByTagName('skill_root').length).toBe(2)
+    for (const element of Array.from(document.getElementsByTagName('skill'))) {
+      const skill = skills.find(item => item.slug === element.getAttribute('name'))!
+      const parent = element.parentNode as Element
+      const path = element.getAttribute('location')!
+      expect(parent.tagName === 'skill_root' ? join(parent.getAttribute('path')!, path) : path).toBe(skill.filePath)
+    }
+    expect(buildSkillCatalog({ skills: [], allowedSlugs: [] })).toBe('')
+  })
+  test('实际文件读取：目录构建不读完整 SKILL.md，选中后只读该 Skill 正文', async () => {
+    const f = fixture({ skillSlugs: ['pdf', 'beta'] })
+    const read = spyOn(fs, 'readFileSync')
+    const bodiesRead = () => read.mock.calls
+      .map(([path]) => path)
+      .filter((path): path is string => typeof path === 'string' && path.endsWith('SKILL.md'))
+    try {
+      const s = await createSkillRoutingSnapshot(f)
+      buildSkillCatalog(s)
+      expect(bodiesRead()).toEqual([])
+      routeSkillsForTask(s, { userMessage: '/skill:pdf', maxRecommendations: 0 })
+      expect(bodiesRead()).toEqual([fs.realpathSync(join(f.root, 'skills', 'pdf', 'SKILL.md'))])
+    } finally {
+      read.mockRestore()
+    }
+  })
+  test('选中时正文已不可读给出诊断，普通任务不被阻断', async () => {
+    const f = fixture({ skillSlugs: ['pdf'] })
+    const s = await createSkillRoutingSnapshot(f)
+    rmSync(join(f.root, 'skills', 'pdf', 'SKILL.md'))
+    const result = routeSkillsForTask(s, { userMessage: '/skill:pdf' })
+    expect(result.diagnostics).toContainEqual({ slug: 'pdf', code: 'unreadable' })
+    expect(result.prompt).not.toContain('BODY_pdf')
   })
   test('正文超预算不截断半份规则，返回读取指引且保留可用目录', async () => {
     const s = await snapshot()

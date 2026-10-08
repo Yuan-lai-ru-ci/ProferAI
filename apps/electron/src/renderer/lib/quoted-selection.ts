@@ -10,6 +10,7 @@ export interface ParsedQuotedSelectionRef {
 }
 
 export const SELECTION_ACTION_POPOVER_SELECTOR = '[data-selection-action-popover]'
+export const SELECTION_ACTION_TARGET_SELECTOR = `${SELECTION_ACTION_POPOVER_SELECTOR}, [data-agent-toolbar-corridor]`
 
 const QUOTED_FILE_REGEX = /<quoted_file[^>]*>[\s\S]*?<\/quoted_file>\n*/g
 const QUOTED_CONTEXT_REGEX = /<quoted_context[^>]*>[\s\S]*?<\/quoted_context>\n*/g

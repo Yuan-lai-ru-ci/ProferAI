@@ -17,6 +17,6 @@
     "focusTaskId": "task",
     "focusKind": "in_progress",
     "assuranceByTask": { "task": "not_required" },
-    "telemetry": { "modelCalls": 1, "candidateCount": 0, "pauses": 1, "turnsStartedAfterPause": 0, "taskTransitions": 0 }
+    "telemetry": { "modelCalls": 1, "candidateCount": 0, "pauses": 1, "turnsStartedAfterPause": 0 }
   }
 }

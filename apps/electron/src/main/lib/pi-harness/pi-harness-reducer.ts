@@ -1,17 +1,10 @@
 import {
   createEmptyPiHarnessSnapshot,
-  type PiGoalAutonomyUsage,
   type PiHarnessDiagnostic,
   type PiHarnessEvent,
   type PiHarnessSnapshot,
   type PiTurnUsage,
 } from './types'
-
-const EMPTY_AUTONOMY_USAGE: PiGoalAutonomyUsage = {
-  taskTransitions: 0,
-  repairAttemptsByTask: {},
-  equivalentVerificationRuns: {},
-}
 
 function mergeUsage(previous: PiTurnUsage | undefined, next: Partial<PiTurnUsage> | undefined): PiTurnUsage | undefined {
   if (!next) return previous
@@ -56,7 +49,6 @@ export function replayPiHarnessEvents(
           createdAt: event.timestamp,
           updatedAt: event.timestamp,
           policy: event.payload.policy,
-          autonomyUsage: { ...EMPTY_AUTONOMY_USAGE, repairAttemptsByTask: {}, equivalentVerificationRuns: {} },
         }
         break
       case 'task_focus_changed': {
@@ -69,7 +61,10 @@ export function replayPiHarnessEvents(
       }
       case 'turn_started': {
         const goal = snapshot.goals[event.goalId]
-        if (goal) goal.updatedAt = event.timestamp
+        if (goal) {
+          goal.activeTaskId = event.payload.activeTaskId
+          goal.updatedAt = event.timestamp
+        }
         snapshot.turns[event.turnId] = {
           id: event.turnId,
           goalId: event.goalId,
@@ -103,22 +98,6 @@ export function replayPiHarnessEvents(
           updatedAt: event.timestamp,
         }
         break
-      case 'autonomy_budget_consumed': {
-        const goal = snapshot.goals[event.goalId]
-        if (!goal) break
-        const usage = goal.autonomyUsage
-        if (event.payload.kind === 'task_transition') usage.taskTransitions += 1
-        if (event.payload.kind === 'repair_attempt' && event.taskId) {
-          usage.repairAttemptsByTask[event.taskId] = (usage.repairAttemptsByTask[event.taskId] ?? 0) + 1
-        }
-        if (event.payload.kind === 'verification_run' && event.taskId) {
-          usage.equivalentVerificationRuns[event.taskId] = (usage.equivalentVerificationRuns[event.taskId] ?? 0) + 1
-        }
-        if (event.payload.estimatedCostUsd !== undefined) {
-          usage.estimatedCostUsd = (usage.estimatedCostUsd ?? 0) + event.payload.estimatedCostUsd
-        }
-        break
-      }
       case 'goal_paused': {
         const goal = snapshot.goals[event.goalId]
         if (goal) {

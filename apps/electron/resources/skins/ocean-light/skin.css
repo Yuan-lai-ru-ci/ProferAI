@@ -99,4 +99,12 @@
   --warning-foreground: 26 83% 14%;
   --info: var(--primary);
   --info-foreground: var(--primary-foreground);
+  --chart-1: 205 58% 42%;
+  --chart-2: 188 55% 38%;
+  --chart-3: 160 42% 36%;
+  --chart-4: 232 48% 54%;
+  --chart-5: 42 68% 43%;
+  --chart-6: 270 42% 55%;
+  --chart-7: 18 62% 48%;
+  --chart-8: 145 50% 42%;
 }

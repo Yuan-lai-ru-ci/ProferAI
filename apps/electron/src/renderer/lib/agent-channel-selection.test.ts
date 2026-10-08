@@ -1,7 +1,22 @@
 import { describe, expect, test } from 'bun:test'
 import type { Channel } from '@profer/shared'
-import { nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from './agent-channel-selection'
+import { isAgentModelSelectionValid, nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection } from './agent-channel-selection'
 
+describe('历史会话模型有效性', () => {
+  test('已停用模型不静默替换为其它模型', () => {
+    const disabled = channel('openai', 'openai', ['gpt-5.5'])
+    disabled.models[0]!.enabled = false
+    expect(isAgentModelSelectionValid([disabled], 'pi', [], { channelId: 'openai', modelId: 'gpt-5.5' })).toBe(false)
+  })
+  test('已删除渠道报告无效', () => {
+    expect(isAgentModelSelectionValid([], 'pi', [], { channelId: 'missing', modelId: 'model' })).toBe(false)
+  })
+  test('同一渠道 Pi 有效但 Claude 内核关闭时按会话 runtime 判断', () => {
+    const enabled = { ...channel('openai', 'openai', ['model']), agentRuntimes: ['pi' as const] }
+    expect(isAgentModelSelectionValid([enabled], 'pi', [], { channelId: 'openai', modelId: 'model' })).toBe(true)
+    expect(isAgentModelSelectionValid([enabled], 'claude', [], { channelId: 'openai', modelId: 'model' })).toBe(false)
+  })
+})
 function channel(id: string, provider: Channel['provider'], models: string[]): Channel {
   return {
     id,
@@ -15,6 +30,13 @@ function channel(id: string, provider: Channel['provider'], models: string[]): C
     models: models.map((modelId) => ({ id: modelId, name: modelId, enabled: true })),
   }
 }
+
+describe('原生Pi订阅不能由旧Claude白名单创造协议', () => {
+  test('Codex/xAI即使在旧白名单中，Claude默认也不得选中', () => {
+    expect(resolveAgentModelSelection([channel('codex', 'openai-codex', ['model'])], 'claude', ['codex'])).toBeNull()
+    expect(resolveAgentModelSelection([channel('xai', 'xai', ['model'])], 'claude', ['xai'])).toBeNull()
+  })
+})
 
 describe('nextAgentChannelIdsAfterModelSelect', () => {
   test('adds the selected channel for Claude runtime', () => {

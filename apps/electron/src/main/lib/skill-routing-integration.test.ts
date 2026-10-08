@@ -2,11 +2,12 @@ import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DefaultResourceLoader, SettingsManager, formatSkillsForPrompt, loadSkillsFromDir } from '@earendil-works/pi-coding-agent'
+import { DefaultResourceLoader, SettingsManager, AgentSession, ModelRuntime, SessionManager, formatSkillsForPrompt, loadSkillsFromDir } from '@earendil-works/pi-coding-agent'
+import { Agent } from '@earendil-works/pi-agent-core'
 import { createEffectiveAgentPresetPolicy } from '@profer/shared'
 import { prepareAgentSkillRouting, buildSkillRuntimeOptions } from './skill-runtime-routing'
 import { routeSkillsForTask } from './skill-routing'
-import { createPromaSkillsOverride } from './adapters/pi-skill-resources'
+import { createPromaSkillsOverride, preparePromptWithPromaSkills } from './adapters/pi-skill-resources'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 
 let captured: { options: Record<string, unknown>; prompt: unknown } | undefined
@@ -63,6 +64,54 @@ describe('共享策略 → 实际 adapter/SDK Skill 链路', () => {
     expect(queued.prompt).toContain('preset-denied')
     expect(queued.prompt).not.toContain('SECRET_')
   })
+  test('方式 A 的实际 Pi system prompt 仅有 Profer catalog，SDK 不再发现或展开', async () => {
+    const { root, routing, loader: legacyLoader } = await prepare(['beta', 'pdf', 'automation'])
+    const runtime = buildSkillRuntimeOptions(routing, 'pi')
+    expect(runtime.skills).toEqual([])
+    expect(runtime.skillSlugs).toEqual([])
+    expect(runtime.additionalSkillPaths).toEqual([])
+    expect(runtime.plugins).toEqual([])
+    expect(runtime.skillMentions).toEqual([])
+
+    const loader = new DefaultResourceLoader({
+      cwd: root, agentDir: root, noContextFiles: true, noExtensions: true, noSkills: true,
+      noThemes: true, noPromptTemplates: true, appendSystemPrompt: [], additionalSkillPaths: [],
+      settingsManager: SettingsManager.inMemory(),
+      skillsOverride: createPromaSkillsOverride(runtime.additionalSkillPaths, runtime.skillSlugs, loadSkillsFromDir),
+      systemPromptOverride: () => runtime.skillCatalogPrompt,
+    })
+    await loader.reload()
+    const modelRuntime = await ModelRuntime.create({
+      authPath: join(root, 'test-auth.json'), modelsPath: null,
+      modelsStorePath: join(root, 'model-cache'), refreshOnCreate: false, allowModelNetwork: false,
+    })
+    const makeSession = (resourceLoader: DefaultResourceLoader) => new AgentSession({
+      agent: new Agent({ streamFn: () => { throw new Error('本测试禁止模型请求') } }),
+      sessionManager: SessionManager.inMemory(), settingsManager: SettingsManager.inMemory(),
+      cwd: root, resourceLoader, modelRuntime, initialActiveToolNames: ['read'],
+    })
+    const legacySession = makeSession(legacyLoader)
+    const session = makeSession(loader)
+    try {
+      // 对照证明旧 SDK 装配确实生成目录；不是仅根据 options 推断。
+      expect(legacySession.systemPrompt).toContain('<available_skills>')
+      expect(session.systemPrompt).toContain('<skill_catalog>')
+      expect(session.systemPrompt).not.toContain('<available_skills>')
+      expect(session.systemPrompt.match(/<skill_catalog>/g)).toHaveLength(1)
+      expect(session.systemPrompt).toContain('name="beta"')
+      expect(session.systemPrompt).toContain('name="pdf"')
+      expect(session.systemPrompt).not.toContain('name="automation"')
+      expect(session.systemPrompt).not.toContain('SECRET_')
+      const route = routeSkillsForTask(routing.snapshot, { userMessage: '/skill:beta', maxRecommendations: 0 })
+      expect(route.prompt.match(/SECRET_beta/g)).toHaveLength(1)
+      expect(route.prompt).not.toContain('SECRET_pdf')
+      expect(await preparePromptWithPromaSkills(loader, route.prompt, runtime.skillMentions)).toBe(route.prompt)
+    } finally {
+      legacySession.dispose()
+      session.dispose()
+    }
+  })
+
   test('全禁不会通过 loader 或 options 退回默认全部 Skill', async () => {
     const { routing, runtime, loader } = await prepare([])
     expect(runtime.skills).toEqual([])

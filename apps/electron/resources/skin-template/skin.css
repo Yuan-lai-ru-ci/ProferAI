@@ -73,6 +73,16 @@
   --info: 212 85% 61%;
   --info-foreground: 0 0% 100%;
 
+  /* 图表系列色：皮肤可覆写，原生图表与导出图表共用。 */
+  --chart-1: 212 85% 61%;
+  --chart-2: 188 62% 58%;
+  --chart-3: 150 50% 52%;
+  --chart-4: 270 58% 70%;
+  --chart-5: 42 78% 60%;
+  --chart-6: 330 56% 66%;
+  --chart-7: 18 72% 64%;
+  --chart-8: 100 48% 58%;
+
   /* 外壳缝隙背景；AppShell 的 .shell-bg 会使用它。 */
   --shell-bg-gradient: linear-gradient(145deg, hsl(222 32% 7%), hsl(222 24% 12%));
 }

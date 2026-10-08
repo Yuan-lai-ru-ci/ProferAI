@@ -138,6 +138,8 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
     input: Record<string, unknown>,
     options: CanUseToolOptions,
   ) => Promise<PermissionResult>
+  /** 本轮工具装载；空数组表示纯对话，不改变预设权限。 */
+  tools?: string[]
   /** 只读工具白名单 */
   allowedTools?: string[]
   /** SDK Skill 白名单；undefined 表示不覆盖 SDK 默认行为，空数组表示显式禁用 */
@@ -954,6 +956,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
 
         // 条件字段
         ...(options.canUseTool && { canUseTool: options.canUseTool }),
+        ...(options.tools !== undefined && { tools: [...options.tools] }),
         ...(options.allowedTools && { allowedTools: options.allowedTools }),
         ...(options.skills !== undefined && { skills: [...options.skills] }),
         ...(options.resumeSessionId ? { resume: options.resumeSessionId } : {}),

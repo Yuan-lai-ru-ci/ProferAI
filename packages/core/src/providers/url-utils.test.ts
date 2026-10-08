@@ -415,3 +415,47 @@ describe('migrateCompatibleChannelBaseUrl', () => {
     )
   })
 })
+
+describe('query/hash 仅属于 URL 尾部，不参与端点拼接', () => {
+  test('Anthropic 根/版本/完整端点的 query 路由一致', () => {
+    expect(normalizeAnthropicBaseUrl('https://fixture.invalid/?route=fixture#anchor')).toBe('https://fixture.invalid/v1?route=fixture#anchor')
+    expect(normalizeVersionedAnthropicBaseUrl('https://fixture.invalid/anthropic/?route=fixture#anchor')).toBe('https://fixture.invalid/anthropic/v1?route=fixture#anchor')
+    expect(resolveAnthropicMessagesUrl('https://fixture.invalid/v1/?route=fixture#anchor', 'anthropic')).toBe('https://fixture.invalid/v1/messages?route=fixture#anchor')
+    expect(resolveAnthropicModelsUrl('https://fixture.invalid/v1/messages/?route=fixture#anchor', 'anthropic')).toBe('https://fixture.invalid/v1/models?route=fixture#anchor')
+    expect(resolveAnthropicModelsUrl('https://fixture.invalid/v1/?route=fixture#anchor', 'anthropic')).toBe('https://fixture.invalid/v1/models?route=fixture#anchor')
+    expect(resolveAnthropicMessagesUrl('https://fixture.invalid/tenant/messages/?route=fixture#anchor', 'anthropic-compatible')).toBe('https://fixture.invalid/tenant/messages?route=fixture#anchor')
+  })
+
+  test('OpenAI 请求/目录只在 pathname 拼接，不重复 models', () => {
+    expect(resolveOpenAIModelsUrl('https://fixture.invalid/v1/?route=fixture#anchor')).toBe('https://fixture.invalid/v1/models?route=fixture#anchor')
+    expect(resolveOpenAIModelsUrl('https://fixture.invalid/v1/models/?route=fixture#anchor')).toBe('https://fixture.invalid/v1/models?route=fixture#anchor')
+    expect(resolveOpenAIModelsUrl('https://fixture.invalid/v1/responses/?route=fixture#anchor')).toBe('https://fixture.invalid/v1/models?route=fixture#anchor')
+    expect(resolveOpenAIChatCompletionsUrl('https://fixture.invalid/v1/?route=fixture#anchor')).toBe('https://fixture.invalid/v1/chat/completions?route=fixture#anchor')
+    expect(resolveOpenAIResponsesUrl('https://fixture.invalid/v1/?route=fixture#anchor')).toBe('https://fixture.invalid/v1/responses?route=fixture#anchor')
+  })
+})
+
+test('Ollama/小米/旧兼容迁移的 query/hash 不参与 pathname 拼接', () => {
+  expect(resolveAnthropicMessagesUrl('http://127.0.0.1:11434/v1/?route=fixture#anchor', 'ollama')).toBe('http://127.0.0.1:11434/v1/messages?route=fixture#anchor')
+  expect(resolveAnthropicModelsUrl('http://127.0.0.1:11434/v1/?route=fixture#anchor', 'ollama')).toBe('http://127.0.0.1:11434/v1/models?route=fixture#anchor')
+  expect(resolveOpenAIChatCompletionsUrl('http://127.0.0.1:11434/v1/?route=fixture#anchor', 'ollama')).toBe('http://127.0.0.1:11434/v1/chat/completions?route=fixture#anchor')
+  expect(resolveAnthropicMessagesUrl('https://fixture.invalid/v1/?route=fixture#anchor', 'xiaomi')).toBe('https://fixture.invalid/anthropic/v1/messages?route=fixture#anchor')
+  expect(migrateCompatibleChannelBaseUrl('https://fixture.invalid/v1/?route=fixture#anchor', 'custom')).toBe('https://fixture.invalid/v1/chat/completions?route=fixture#anchor')
+  expect(migrateCompatibleChannelBaseUrl('https://fixture.invalid/anthropic/?route=fixture#anchor', 'anthropic-compatible')).toBe('https://fixture.invalid/anthropic/v1/messages?route=fixture#anchor')
+})
+
+test('F20：SDK helper 显式拒绝根/完整端点的 query/hash，保留无路由的完整端点规范化', () => {
+  for (const normalize of [normalizeAnthropicBaseUrlForSdk, normalizeOpenAIBaseUrlForSdk]) {
+    for (const path of ['', '/v1/', '/v1/messages/', '/v1/chat/completions/', '/v1/responses/']) {
+      for (const suffix of ['?route=fixture-secret', '#fixture-secret', '?', '#']) {
+        try { normalize(`https://fixture.invalid${path}${suffix}`); throw new Error('未拒绝 SDK 路由') }
+        catch (error) {
+          expect((error as Error).message).toContain('query/hash')
+          expect((error as Error).message).not.toContain('fixture-secret')
+        }
+      }
+    }
+  }
+  expect(normalizeAnthropicBaseUrlForSdk('https://fixture.invalid/anthropic/v1/messages/')).toBe('https://fixture.invalid/anthropic')
+  expect(normalizeOpenAIBaseUrlForSdk('https://fixture.invalid/v1/responses/')).toBe('https://fixture.invalid/v1')
+})

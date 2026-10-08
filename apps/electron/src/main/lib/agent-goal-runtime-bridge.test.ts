@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { resolveRunInitiator } from '@profer/shared'
+import { isChannelEnabledForRuntime, resolveRunInitiator } from '@profer/shared'
 import type { AgentMessage, AgentSendInput, AgentStreamPayload, SDKMessage } from '@profer/shared'
 import type { AgentOrchestrator, SessionCallbacks } from './agent-orchestrator'
 import { AgentRunAlreadyActiveError, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
@@ -81,7 +81,8 @@ function ownerFixture() {
     },
     createCommandExecutionLedger: () => new Map(),
     updateAgentSessionMeta() {}, appendSDKMessages() {},
-    getChannelById: () => ({ provider: 'anthropic' }),
+    getChannelById: () => ({ provider: 'anthropic', enabled: true, agentRuntimes: ['pi', 'claude'] }),
+    isChannelEnabledForRuntime,
     isXaiChannelAvailableForRuntime: () => true,
     DEFAULT_MODEL_ID: 'test',
     resolveRuntimeCredentials: () => credentials.promise,

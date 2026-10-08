@@ -15,6 +15,8 @@ import { SettingsCard } from './primitives/SettingsCard'
 import { SettingsRow } from './primitives/SettingsRow'
 import { wechatBridgeStateAtom } from '@/atoms/wechat-atoms'
 import type { WeChatBridgeStatus } from '@profer/shared'
+import { IntegrationSettingsFeedback, useIntegrationAction } from './IntegrationSettingsFeedback'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@profer/ui/primitives/alert-dialog'
 
 /** 安全地用系统浏览器打开链接 */
 function openLink(url: string): void {
@@ -35,18 +37,23 @@ export function WeChatSettings(): React.ReactElement {
   const [bridgeState, setBridgeState] = useAtom(wechatBridgeStateAtom)
   const [hasCredentials, setHasCredentials] = React.useState(false)
   const [loaded, setLoaded] = React.useState(false)
+  const [loadError, setLoadError] = React.useState('')
+  const [actionError, setActionError] = React.useState('')
+  const [logoutOpen, setLogoutOpen] = React.useState(false)
+  const { busy, run } = useIntegrationAction()
+  const loginGeneration = React.useRef(0)
 
   // 加载配置和状态
-  React.useEffect(() => {
-    Promise.all([
-      window.electronAPI.getWeChatConfig(),
-      window.electronAPI.getWeChatStatus(),
-    ]).then(([config, status]) => {
+  const load = React.useCallback(async () => {
+    setLoadError('')
+    try {
+      const [config, status] = await Promise.all([window.electronAPI.getWeChatConfig(), window.electronAPI.getWeChatStatus()])
       setHasCredentials(!!config.credentials)
       setBridgeState(status)
       setLoaded(true)
-    })
+    } catch { setLoadError('无法读取微信配置和连接状态，请重试。') }
   }, [setBridgeState])
+  React.useEffect(() => { void load() }, [load])
 
   // 订阅状态变化
   React.useEffect(() => {
@@ -59,51 +66,63 @@ export function WeChatSettings(): React.ReactElement {
         // 可能是登出
         window.electronAPI.getWeChatConfig().then((config) => {
           setHasCredentials(!!config.credentials)
-        })
+        }).catch(() => setLoadError('无法刷新微信凭证状态，请重试。'))
       }
     })
     return unsubscribe
   }, [setBridgeState])
 
   // 开始扫码登录
-  const handleLogin = React.useCallback(async () => {
-    try {
-      await window.electronAPI.startWeChatLogin()
-    } catch (error) {
-      toast.error(`登录失败: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }, [])
+  const handleLogin = React.useCallback(() => run(async () => {
+    setActionError('')
+    const generation = ++loginGeneration.current
+    setBridgeState({ status: 'waiting_scan' })
+    // IPC 等到扫码/授权结束才返回；保留取消和刷新入口，不锁住整个等待流程。
+    void window.electronAPI.startWeChatLogin().catch((error: unknown) => {
+      if (generation !== loginGeneration.current) return
+      const message = error instanceof Error ? error.message : String(error)
+      setActionError(`登录失败: ${message}。可重新扫码。`)
+      setBridgeState({ status: 'error', errorMessage: message })
+    })
+  }), [run, setBridgeState])
 
   // 启动 Bridge
-  const handleStart = React.useCallback(async () => {
+  const handleStart = React.useCallback(() => run(async () => {
+    setActionError('')
     try {
       await window.electronAPI.startWeChatBridge()
       toast.success('微信 Bridge 已启动')
     } catch (error) {
-      toast.error(`启动失败: ${error instanceof Error ? error.message : String(error)}`)
+      setActionError(`启动失败: ${error instanceof Error ? error.message : String(error)}。凭证已保留，可重试。`)
     }
-  }, [])
+  }), [run])
 
   // 停止 Bridge
-  const handleStop = React.useCallback(async () => {
+  const handleStop = React.useCallback(() => run(async () => {
+    setActionError('')
+    loginGeneration.current += 1
     try {
       await window.electronAPI.stopWeChatBridge()
+      setBridgeState({ status: 'disconnected' })
       toast.info('微信 Bridge 已停止')
     } catch (error) {
-      toast.error(`停止失败: ${error instanceof Error ? error.message : String(error)}`)
+      setActionError(`停止失败: ${error instanceof Error ? error.message : String(error)}。请重试。`)
     }
-  }, [])
+  }), [run, setBridgeState])
 
   // 登出
-  const handleLogout = React.useCallback(async () => {
+  const handleLogout = React.useCallback(() => run(async () => {
+    setActionError('')
     try {
       await window.electronAPI.logoutWeChat()
       setHasCredentials(false)
+      setBridgeState({ status: 'disconnected' })
+      setLogoutOpen(false)
       toast.info('已退出微信登录')
     } catch (error) {
-      toast.error(`登出失败: ${error instanceof Error ? error.message : String(error)}`)
+      setActionError(`登出失败: ${error instanceof Error ? error.message : String(error)}。凭证未清除，可重试。`)
     }
-  }, [])
+  }), [run, setBridgeState])
 
   const statusConfig = STATUS_CONFIG[bridgeState.status]
   const isConnected = bridgeState.status === 'connected'
@@ -111,10 +130,12 @@ export function WeChatSettings(): React.ReactElement {
   const isConnecting = bridgeState.status === 'connecting'
   const showQRCode = isLoggingIn && bridgeState.qrCodeData
 
-  if (!loaded) return <div />
+  if (!loaded) return <IntegrationSettingsFeedback loading={!loadError} message={loadError || '正在加载微信配置…'} onRetry={loadError ? () => void load() : undefined} />
 
   return (
-    <div className="space-y-8">
+    <div className="min-w-0 space-y-6">
+      {loadError && <IntegrationSettingsFeedback message={loadError} onRetry={() => void load()} />}
+      {actionError && <IntegrationSettingsFeedback message={actionError} />}
       {/* 连接状态 */}
       <SettingsSection
         title="微信集成"
@@ -122,20 +143,16 @@ export function WeChatSettings(): React.ReactElement {
       >
         <SettingsCard>
           <SettingsRow label="Bridge 状态">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-3" aria-busy={busy}>
+              <div className="flex items-center gap-2" role="status">
                 <span className={`w-2 h-2 rounded-full ${statusConfig.color}`} />
                 <span className="text-sm text-muted-foreground">{statusConfig.label}</span>
               </div>
               {isConnected ? (
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="outline" onClick={handleStop}>
+                  <Button size="sm" variant="outline" onClick={handleStop} disabled={busy}>
                     <PowerOff size={14} className="mr-1.5" />
                     停止
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={handleLogout}>
-                    <LogOut size={14} className="mr-1.5" />
-                    登出
                   </Button>
                 </div>
               ) : hasCredentials && !isLoggingIn ? (
@@ -144,7 +161,7 @@ export function WeChatSettings(): React.ReactElement {
                     size="sm"
                     variant="outline"
                     onClick={handleStart}
-                    disabled={isConnecting}
+                    disabled={busy || isConnecting || Boolean(loadError)}
                   >
                     {isConnecting ? (
                       <Loader2 size={14} className="animate-spin mr-1.5" />
@@ -153,24 +170,28 @@ export function WeChatSettings(): React.ReactElement {
                     )}
                     启动
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={handleLogout}>
-                    <LogOut size={14} className="mr-1.5" />
-                    登出
-                  </Button>
                 </div>
               ) : !isLoggingIn ? (
-                <Button size="sm" onClick={handleLogin}>
+                <Button size="sm" onClick={handleLogin} disabled={busy || Boolean(loadError)}>
                   <QrCode size={14} className="mr-1.5" />
                   扫码登录
                 </Button>
-              ) : null}
+              ) : <Button size="sm" variant="outline" onClick={handleStop} disabled={busy}>取消扫码</Button>}
+              {hasCredentials && <AlertDialog open={logoutOpen} onOpenChange={setLogoutOpen}>
+                <AlertDialogTrigger asChild><Button size="sm" variant="ghost" disabled={busy}><LogOut size={14} />登出</Button></AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader><AlertDialogTitle>退出微信登录？</AlertDialogTitle><AlertDialogDescription>将断开连接并清除本机登录凭证，再次使用需要重新扫码。</AlertDialogDescription></AlertDialogHeader>
+                  {actionError && <IntegrationSettingsFeedback message={actionError} />}
+                  <AlertDialogFooter><AlertDialogCancel disabled={busy}>取消</AlertDialogCancel><AlertDialogAction disabled={busy} onClick={(event) => { event.preventDefault(); void handleLogout() }}>确认登出</AlertDialogAction></AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>}
             </div>
           </SettingsRow>
         </SettingsCard>
 
         {/* 错误信息 */}
         {bridgeState.status === 'error' && bridgeState.errorMessage && (
-          <div className="mt-2 px-3 py-2.5 rounded-lg bg-red-500/10 text-red-700 dark:text-red-400 text-sm">
+          <div role="alert" className="mt-2 px-3 py-2.5 rounded-lg bg-red-500/10 text-red-700 dark:text-red-400 text-sm">
             {bridgeState.errorMessage}
           </div>
         )}
@@ -184,21 +205,21 @@ export function WeChatSettings(): React.ReactElement {
       </SettingsSection>
 
       {/* QR 码显示区域 */}
-      {showQRCode && (
+      {(showQRCode || isLoggingIn) && (
         <SettingsSection
           title="扫码登录"
           description="使用微信扫描下方二维码"
         >
           <SettingsCard divided={false}>
             <div className="flex flex-col items-center py-8 px-4">
-              <div className="bg-white rounded-xl p-4 shadow-sm">
+              {showQRCode ? <div className="bg-white rounded-xl p-4 shadow-sm">
                 <img
                   src={bridgeState.qrCodeData}
                   alt="微信登录二维码"
-                  className="w-52 h-52"
+                  className="h-auto w-52 max-w-full"
                 />
-              </div>
-              <p className="mt-4 text-sm text-muted-foreground">
+              </div> : <IntegrationSettingsFeedback loading message="正在获取微信登录二维码…" />}
+              <p role="status" className="mt-4 text-sm text-muted-foreground">
                 {bridgeState.status === 'scanned' ? (
                   <span className="text-blue-500 font-medium">已扫码，请在手机上确认登录</span>
                 ) : (
@@ -210,6 +231,7 @@ export function WeChatSettings(): React.ReactElement {
                 variant="ghost"
                 className="mt-2"
                 onClick={handleLogin}
+                disabled={busy}
               >
                 刷新二维码
               </Button>
@@ -217,6 +239,7 @@ export function WeChatSettings(): React.ReactElement {
           </SettingsCard>
         </SettingsSection>
       )}
+      {bridgeState.status === 'error' && <Button size="sm" variant="outline" onClick={handleLogin} disabled={busy}>重新扫码登录</Button>}
 
       {/* 使用说明 */}
       <SettingsSection

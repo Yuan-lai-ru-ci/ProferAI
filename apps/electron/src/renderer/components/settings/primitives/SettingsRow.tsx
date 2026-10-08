@@ -38,7 +38,7 @@ export function SettingsRow({
           <div className={cn(DESCRIPTION_CLASS, 'mt-0.5')}>{description}</div>
         )}
       </div>
-      {children && <div className="flex-shrink-0">{children}</div>}
+      {children && <div className="settings-row-control min-w-0 max-w-full flex-shrink-0">{children}</div>}
     </div>
   )
 }

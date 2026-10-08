@@ -5,7 +5,7 @@
  * 统一使用"积分"作为展示单位（与侧栏积分条一致）。
  */
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtomValue } from 'jotai'
 import { toast } from 'sonner'
 import { RefreshCw, Zap, BarChart3, Gift, Clock } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
@@ -50,11 +50,16 @@ export function CreditsSettings(): React.ReactElement {
   const { reload: reloadCredits } = useCreditsLoader(60_000)
   const points = useAtomValue(creditsPointsAtom)
   const lifetimeConsumedPoints = useAtomValue(creditsLifetimeConsumedPointsAtom)
-  const [loading, setLoading] = useAtom(creditsLoadingAtom)
+  const loading = useAtomValue(creditsLoadingAtom)
   const isLow = useAtomValue(creditsLowAtom)
   const isExhausted = useAtomValue(creditsExhaustedAtom)
   const [requestLogs, setRequestLogs] = React.useState<CreditsUsageLog[]>([])
   const [modelUsage, setModelUsage] = React.useState<CreditsModelUsage[]>([])
+  const [usageLoading, setUsageLoading] = React.useState(true)
+  const [usageError, setUsageError] = React.useState(false)
+  const [claiming, setClaiming] = React.useState(false)
+  const claimRef = React.useRef(false)
+  const usageRequest = React.useRef(0)
   // 订阅 + Drip + 分桶
   const subscription = useAtomValue(subscriptionAtom)
   const dripAvailable = useAtomValue(dripAvailablePointsAtom)
@@ -69,16 +74,26 @@ export function CreditsSettings(): React.ReactElement {
   const tier = useAtomValue(membershipTierAtom)
 
   const loadAll = React.useCallback(async () => {
-    setLoading(true)
+    const request = ++usageRequest.current
+    setUsageLoading(true)
+    setUsageError(false)
     try {
       const usage = await requestCreditsUsage()
+      if (request !== usageRequest.current) return
       if (usage.logs !== undefined) setRequestLogs(usage.logs)
       if (usage.modelUsage !== undefined) setModelUsage(usage.modelUsage)
-    } catch { /* 静默 */ }
-    finally { setLoading(false) }
-  }, [setLoading])
+      setUsageError(usage.logs === undefined || usage.modelUsage === undefined)
+    } catch {
+      if (request === usageRequest.current) setUsageError(true)
+    } finally {
+      if (request === usageRequest.current) setUsageLoading(false)
+    }
+  }, [])
 
-  React.useEffect(() => { loadAll() }, [loadAll])
+  React.useEffect(() => {
+    void loadAll()
+    return () => { usageRequest.current += 1 }
+  }, [loadAll])
 
   // ---- 派生值 ----
   // 分母必须来自服务端按账期汇总，不能混入全历史累计消耗。
@@ -94,19 +109,13 @@ export function CreditsSettings(): React.ReactElement {
       : ''
   const balanceLoaded = points !== null
 
-  // 水印色（与 SubscriptionSettings 一致）
-  const watermarkColors: Record<string, string> = {
-    free: 'text-gray-100 dark:text-gray-800',
-    standard: 'text-blue-100 dark:text-blue-950',
-    plus: 'text-violet-100 dark:text-violet-950',
-    pro: 'text-amber-100 dark:text-amber-950',
-  }
   const currentTierName = subscription?.hasSubscription ? (subscription.plan || 'free') : (tier || 'free')
-  const watermarkColor = watermarkColors[currentTierName] || watermarkColors.free
 
   // Drip 领取
   const handleClaimDrip = React.useCallback(async () => {
-    if (dripAvailable <= 0) return
+    if (dripAvailable <= 0 || claimRef.current) return
+    claimRef.current = true
+    setClaiming(true)
     try {
       const result = await claimCreditsDrip()
       if (!result) {
@@ -121,29 +130,24 @@ export function CreditsSettings(): React.ReactElement {
       }
     } catch {
       toast.error('领取失败，请重试')
+    } finally {
+      claimRef.current = false
+      setClaiming(false)
     }
   }, [dripAvailable, reloadCredits])
 
   return (
-    <div className="space-y-8">
+    <div className="min-w-0 space-y-8">
       {/* ---- 余额总览卡 ---- */}
-      <SettingsSection title="积分概览" description="我的账户积分余额，按实际用量实时扣减">
-        {/* 富余额卡：tier 水印 + 总额 + 分桶 + 透支 */}
-        <div className="relative rounded-xl border border-border bg-card px-5 py-4 overflow-hidden">
-          {/* 水印 */}
-          <span
-            className={cn(
-              'absolute top-0 right-0 z-0 select-none pointer-events-none font-black tracking-[0.1em] leading-none',
-              watermarkColor,
-            )}
-            style={{ fontSize: 'clamp(56px, 14vw, 110px)', padding: '0.15em 0.25em 0 0' }}
-          >
-            {currentTierName.toUpperCase()}
-          </span>
-
-          <div className="relative z-10">
+      <SettingsSection title="积分概览" description="账户余额与当前结算周期" action={
+        <Button variant="outline" size="sm" onClick={() => void Promise.all([reloadCredits(), loadAll()])} disabled={loading || usageLoading}>
+          <RefreshCw size={14} className={loading || usageLoading ? 'animate-spin' : ''} />刷新账户
+        </Button>
+      }>
+        <div className="border-y border-border py-5" aria-busy={loading} aria-live="polite">
+          <div>
             {/* 订阅状态行 */}
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground mb-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mb-3">
               {subscription?.hasSubscription ? (
                 <>
                   <span>{subscription.cycle === 'yearly' ? '年付' : '月付'}</span>
@@ -160,21 +164,21 @@ export function CreditsSettings(): React.ReactElement {
                   )}
                 </>
               ) : (
-                <span>免费版 · 购买套餐解锁更多能力{isVip && <span className="ml-1 font-medium text-rose-600 dark:text-rose-300">（VIP 已激活）</span>}</span>
+                <span>{balanceLoaded ? currentTierName.toUpperCase() : '账户状态待同步'}{isVip && <span className="ml-1 font-medium">（VIP 已激活）</span>}</span>
               )}
             </div>
 
             {/* 总余额 */}
             <div className="mb-2">
               <div className="text-[10px] text-muted-foreground tracking-wide">总可用额度</div>
-              <div className={cn('text-[34px] font-bold leading-none tracking-tight tabular-nums', isOverdraft && 'text-red-500')}>
-                {fmtPointsNum(points ?? 0)}
+              <div className={cn('break-words text-3xl font-semibold leading-tight tabular-nums', isOverdraft && 'text-destructive')}>
+                {points === null ? (loading ? '同步中…' : '暂不可用') : fmtPointsNum(points)}
                 <span className="text-sm font-normal text-muted-foreground ml-1.5">积分</span>
               </div>
             </div>
 
             {/* 分桶明细 */}
-            <div className="flex items-center gap-5">
+            {balanceLoaded && <div className="grid grid-cols-3 gap-x-4 gap-y-2 pt-3">
               <div>
                 <div className="text-[10px] text-muted-foreground mb-0.5">套餐积分</div>
                 <div className="text-sm font-semibold tabular-nums">{fmtPointsNum(pkgPts)}</div>
@@ -187,7 +191,7 @@ export function CreditsSettings(): React.ReactElement {
                 <div className="text-[10px] text-muted-foreground mb-0.5">充值积分</div>
                 <div className="text-sm font-semibold tabular-nums">{fmtPointsNum(purPts)}</div>
               </div>
-            </div>
+            </div>}
 
             {/* 透支告警 */}
             {isOverdraft && (
@@ -221,7 +225,7 @@ export function CreditsSettings(): React.ReactElement {
                 </div>
               </>
             ) : (
-              <div className="text-sm text-muted-foreground">正在同步本周期额度…</div>
+              <div className="text-sm text-muted-foreground">本周期额度汇总暂不可用</div>
             )}
             <div className="pt-0.5 text-[11px] text-muted-foreground tabular-nums">
               历史累计消耗 {fmtPointsNum(lifetimeConsumedPoints ?? 0)} 积分
@@ -241,11 +245,17 @@ export function CreditsSettings(): React.ReactElement {
             <Zap size={14} /> 积分偏低，建议尽快联系管理员充值
           </div>
         )}
+        {!balanceLoaded && !loading && (
+          <div role="status" className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>余额未获取，请确认登录状态后重试。</span>
+            <Button variant="outline" size="sm" onClick={() => void reloadCredits()}>重试余额</Button>
+          </div>
+        )}
       </SettingsSection>
 
       {/* ---- Drip 领取卡（仅活跃订阅显示）---- */}
       {subscription?.status === 'active' && dripRate > 0 && (
-        <div className="rounded-xl border border-border bg-card p-4 flex items-center justify-between">
+        <div className="border-y border-border py-4 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center shrink-0">
               <Gift size={20} className="text-green-600" />
@@ -261,7 +271,7 @@ export function CreditsSettings(): React.ReactElement {
           </div>
           <button
             onClick={handleClaimDrip}
-            disabled={dripAvailable <= 0}
+            disabled={dripAvailable <= 0 || claiming}
             className={cn(
               'rounded-lg px-5 py-2 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-100',
               dripAvailable > 0
@@ -269,12 +279,22 @@ export function CreditsSettings(): React.ReactElement {
                 : 'bg-muted text-muted-foreground',
             )}
           >
-            {dripAvailable > 0 ? `领取本周 ${fmtPointsNum(dripAvailable)} 积分` : '暂无待领取额度'}
+            {claiming ? '领取中…' : dripAvailable > 0 ? `领取本周 ${fmtPointsNum(dripAvailable)} 积分` : '暂无待领取额度'}
           </button>
         </div>
       )}
 
       {/* 按模型用量统计 */}
+      <div aria-live="polite" aria-busy={usageLoading} className="text-sm text-muted-foreground">
+        {usageLoading && '正在加载用量明细…'}
+        {!usageLoading && !usageError && modelUsage.length === 0 && requestLogs.length === 0 && '近 30 天暂无用量记录'}
+      </div>
+      {usageError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-l-2 border-destructive pl-3 text-sm">
+          <span className="text-destructive">部分用量明细无法获取，已保留上次结果。</span>
+          <Button variant="outline" size="sm" onClick={() => void loadAll()} disabled={usageLoading}>重试用量</Button>
+        </div>
+      )}
       {modelUsage.length > 0 && (
         <SettingsSection title="用量分布" description={`近 30 天按模型统计 · 共 ${modelUsage.reduce((s, m) => s + m.requests, 0)} 次请求`}>
           <SettingsCard divided={false}>
@@ -288,7 +308,7 @@ export function CreditsSettings(): React.ReactElement {
                   <div key={m.model} className="flex items-center gap-3 py-2 px-2 rounded hover:bg-foreground/[0.02]">
                     <BarChart3 size={14} className="text-muted-foreground shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <div className="flex justify-between text-sm mb-1">
+                      <div className="flex flex-wrap justify-between gap-1 text-sm mb-1">
                         <span className="font-medium truncate">{m.model}</span>
                         <span className="text-muted-foreground shrink-0 ml-2">{fmtPointsDecimal(costPoints)}</span>
                       </div>
@@ -317,7 +337,7 @@ export function CreditsSettings(): React.ReactElement {
                 // cost_credits 来自服务端是原始 quota，需转换为积分
                 const costPoints = quotaToPoints(log.cost_credits)
                 return (
-                  <div key={log.id} className="flex items-center justify-between px-4 py-2.5">
+                  <div key={log.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium truncate">{log.model}</span>
@@ -343,13 +363,6 @@ export function CreditsSettings(): React.ReactElement {
         </SettingsSection>
       )}
 
-      {/* 刷新 */}
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={loadAll} disabled={loading}>
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          <span>刷新</span>
-        </Button>
-      </div>
     </div>
   )
 }

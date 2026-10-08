@@ -304,7 +304,7 @@ async function createSkin(
 }
 
 export const AGENT_SKIN_TOOL_NAME = 'create_skin'
-export const AGENT_SKIN_TOOL_DESCRIPTION = 'Create and install a Profer user skin from manifest metadata, complete skin.css, and an optional authorized local wallpaper. skinCss must include a :root token table and may only reference local assets/ images. The wallpaper is copied into assets/ and the CSS must reference it as url("assets/<filename>"). A skin-library thumbnail is written to the package root as preview.<ext>: pass previewPath to use a specific authorized image, otherwise one is derived from the wallpaper automatically (omitting both leaves the skin card thumbnail blank). Validation, installation and library refresh all happen inside this tool; the result returns installedPath, so never search the filesystem (find/ls/recursive scan) to locate the skin directory afterwards. Use only when the user explicitly asks to create or apply a Profer skin.'
+export const AGENT_SKIN_TOOL_DESCRIPTION = 'Create/install a Profer skin only on explicit user request. Read profer-theme-authoring Skill first. Complete skinCss needs :root tokens and local assets/ only; authorized wallpaper is copied there, CSS url("assets/<filename>"). previewPath supplies a thumbnail, otherwise wallpaper derives preview.<ext>; neither means blank thumbnail. This tool validates, installs and refreshes the library; use returned installedPath, never find/ls/recursive scan afterwards. replace only with explicit overwrite authorization.'
 
 type AgentSkinToolContext = { agentCwd?: string; allowedRoots?: string[]; workspaceSlug?: string }
 

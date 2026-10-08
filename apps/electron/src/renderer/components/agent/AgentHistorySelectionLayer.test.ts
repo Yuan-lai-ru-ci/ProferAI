@@ -32,3 +32,13 @@ describe('pickSelectionAnchor', () => {
     expect(pickSelectionAnchor(rect(), null)).toEqual({ x: 200, y: 136, direction: 'up' })
   })
 })
+
+describe('划词操作已移入消息块工具栏', () => {
+  test('不再渲染划词浮层，引用与探索都由工具栏事件驱动', async () => {
+    const source = await Bun.file(`${import.meta.dir}/AgentHistorySelectionLayer.tsx`).text()
+    expect(source).not.toContain('SelectionActionPopover')
+    expect(source).toContain('AGENT_BLOCK_SELECTION_EVENT')
+    expect(source).toContain('AGENT_SELECTION_QUOTE_EVENT')
+    expect(source).toContain('AGENT_SELECTION_EXPLORE_EVENT')
+  })
+})

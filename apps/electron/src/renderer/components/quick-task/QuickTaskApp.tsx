@@ -9,6 +9,8 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { fileToBase64, formatFileNames } from '@/lib/file-utils'
 import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
 import { toast } from 'sonner'
+import { resolveQuickTaskModelInfo } from './quick-task-model-eligibility'
+import type { QuickTaskModelInfo, QuickTaskSelectedModel } from './quick-task-model-eligibility'
 
 /** 任务模式 */
 type TaskMode = 'chat' | 'agent'
@@ -24,21 +26,16 @@ interface QuickAttachment {
   previewUrl?: string
 }
 
-/** 模型展示信息 */
-interface ModelInfo {
-  channelName: string
-  modelId: string
-}
-
 export function QuickTaskApp(): React.ReactElement {
   const [mode, setMode] = useState<TaskMode>('agent')
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<QuickAttachment[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
+  const [modelInfo, setModelInfo] = useState<QuickTaskModelInfo | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const modelLoadGeneration = useRef(0)
 
   // 设置透明背景
   useEffect(() => {
@@ -46,47 +43,37 @@ export function QuickTaskApp(): React.ReactElement {
     document.documentElement.style.background = 'transparent'
   }, [])
 
-  // 加载默认模型信息
-  useEffect(() => {
-    loadModelInfo()
-  }, [mode])
-
-  async function loadModelInfo(): Promise<void> {
+  // 模式切换和重新显示都开启新加载；旧响应和卸载后响应不能回写。
+  const loadModelInfo = useCallback(async (): Promise<void> => {
+    const generation = ++modelLoadGeneration.current
+    setModelInfo(null)
     try {
       const [settings, channels] = await Promise.all([
         window.electronAPI.getSettings(),
         window.electronAPI.listChannels(),
       ])
+      if (generation !== modelLoadGeneration.current) return
 
-      if (mode === 'agent') {
-        const channelId = settings.agentChannelId
-        const modelId = settings.agentModelId
-        if (channelId && modelId) {
-          const channel = channels.find((c) => c.id === channelId)
-          if (channel) {
-            setModelInfo({ channelName: channel.name, modelId })
-            return
-          }
-        }
-      } else {
-        // Chat 模式读取 localStorage 中的 selectedModel
+      let selectedModel: QuickTaskSelectedModel | undefined
+      if (mode === 'chat') {
+        // 沿用 Chat 新会话的既有默认绑定，不回落到其他模型。
         const raw = localStorage.getItem('profer-selected-model')
         if (raw) {
           try {
-            const selected = JSON.parse(raw) as { channelId: string; modelId: string }
-            const channel = channels.find((c) => c.id === selected.channelId)
-            if (channel) {
-              setModelInfo({ channelName: channel.name, modelId: selected.modelId })
-              return
-            }
+            selectedModel = JSON.parse(raw) as QuickTaskSelectedModel
           } catch { /* 忽略解析错误 */ }
         }
       }
-      setModelInfo(null)
+      setModelInfo(resolveQuickTaskModelInfo(mode, settings, channels, selectedModel))
     } catch {
-      setModelInfo(null)
+      if (generation === modelLoadGeneration.current) setModelInfo(null)
     }
-  }
+  }, [mode])
+
+  useEffect(() => {
+    void loadModelInfo()
+    return () => { modelLoadGeneration.current += 1 }
+  }, [loadModelInfo])
 
   // 聚焦输入框
   const focusInput = useCallback(() => {
@@ -101,10 +88,10 @@ export function QuickTaskApp(): React.ReactElement {
       setText('')
       setAttachments([])
       focusInput()
-      loadModelInfo()
+      void loadModelInfo()
     })
     return cleanup
-  }, [focusInput])
+  }, [focusInput, loadModelInfo])
 
   // 初始聚焦
   useEffect(() => {

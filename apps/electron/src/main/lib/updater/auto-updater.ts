@@ -10,7 +10,8 @@ import { BrowserWindow, app } from 'electron'
 import type { UpdateStatus } from './updater-types'
 import { UPDATER_IPC_CHANNELS } from './updater-types'
 import { runWithUpdateSourceFallback } from './update-fallback'
-import { getUpdateSources, type UpdateSource } from './update-sources'
+import { orderSourcesByReachability, describeProbeOutcomes } from './update-probe'
+import { getUpdateSources, UPDATE_PROBE_TIMEOUT_MS, type UpdateSource } from './update-sources'
 import { canReplaceUpdateStatus } from './update-state'
 import { getLatestRelease } from '../github-release-service'
 
@@ -139,12 +140,37 @@ async function checkDevelopmentUpdate(): Promise<void> {
   })
 }
 
+/**
+ * 探活单个更新源的元数据地址。
+ *
+ * 只判断「有没有拿到 HTTP 响应」：拿到任何状态码都算可达——4xx（例如 mac 通道历史上
+ * 长期 404）在真实检查时会快速失败，代价远小于黑洞 IP 吃满 30s 超时，因此不需要在
+ * 这里提前判定内容有效性。只捕获网络层异常（DNS 失败、连接超时、TLS 错误）。
+ */
+async function probeSourceReachable(source: UpdateSource): Promise<boolean> {
+  if (!source.probeUrl) return false
+  try {
+    const response = await fetch(source.probeUrl, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS),
+    })
+    return response.status > 0
+  } catch {
+    return false
+  }
+}
+
 async function runUpdateCheck(): Promise<void> {
   setStatus({ status: 'checking' })
 
   try {
+    // 先并发探活再决定顺序：串行回退遇到黑洞 IP 时，每次检查都会先白等满 30s 超时。
+    const declaredSources = getUpdateSources()
+    const sources = await orderSourcesByReachability(declaredSources, probeSourceReachable)
+    console.log(`[更新] 源可达性探测：${describeProbeOutcomes(declaredSources, sources)}`)
+
     const didDownload = await runWithUpdateSourceFallback(
-      getUpdateSources(),
+      sources,
       checkSource,
       (source, error) => {
         console.warn(`[更新] ${source.label} 不可用，切换备用源:`, errorMessage(error))

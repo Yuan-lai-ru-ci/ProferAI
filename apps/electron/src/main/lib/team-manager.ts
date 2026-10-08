@@ -104,7 +104,8 @@ export async function createTeamWorkspace(name: string): Promise<AgentWorkspace>
 /** 删除团队工作区 */
 export async function deleteTeamWorkspace(workspaceId: string): Promise<void> {
   // 1. 远程删除
-  await authedFetch(`/v1/workspaces/${workspaceId}`, { method: 'DELETE' })
+  const res = await authedFetch(`/v1/workspaces/${workspaceId}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`删除工作区失败: HTTP ${res.status}`)
 
   // 2. 本地标记删除
   const index = readIndex()
@@ -139,13 +140,11 @@ export async function restoreTeamWorkspace(workspaceId: string): Promise<void> {
 
 /** 获取工作区成员列表 */
 export async function getMembers(workspaceId: string): Promise<unknown[]> {
-  try {
-    const res = await authedFetch(`/v1/workspaces/${workspaceId}/members`)
-    if (!res.ok) return []
-    return (await res.json()) as unknown[]
-  } catch {
-    return []
-  }
+  const res = await authedFetch(`/v1/workspaces/${workspaceId}/members`)
+  if (!res.ok) throw new Error(`读取成员失败: HTTP ${res.status}`)
+  const members: unknown = await res.json()
+  if (!Array.isArray(members)) throw new Error('成员响应格式无效')
+  return members
 }
 
 /** 邀请成员 */
@@ -179,13 +178,14 @@ export async function updateMemberRole(
   userId: string,
   role: string,
 ): Promise<void> {
-  await authedFetch(
+  const res = await authedFetch(
     `/v1/workspaces/${workspaceId}/members/${userId}`,
     {
       method: 'PATCH',
       body: JSON.stringify({ role }),
     },
   )
+  if (!res.ok) throw new Error(`更新成员角色失败: HTTP ${res.status}`)
 }
 
 /** 移除成员 */
@@ -193,18 +193,20 @@ export async function removeMember(
   workspaceId: string,
   userId: string,
 ): Promise<void> {
-  await authedFetch(
+  const res = await authedFetch(
     `/v1/workspaces/${workspaceId}/members/${userId}`,
     { method: 'DELETE' },
   )
+  if (!res.ok) throw new Error(`移除成员失败: HTTP ${res.status}`)
 }
 
 /** 退出工作区 */
 export async function leaveWorkspace(workspaceId: string): Promise<void> {
   // 远程移除自己
-  await authedFetch(`/v1/workspaces/${workspaceId}/leave`, {
+  const res = await authedFetch(`/v1/workspaces/${workspaceId}/leave`, {
     method: 'POST',
   })
+  if (!res.ok) throw new Error(`退出工作区失败: HTTP ${res.status}`)
 
   // 本地清理
   const index = readIndex()
@@ -222,10 +224,11 @@ export async function transferOwnership(
   workspaceId: string,
   targetUserId: string,
 ): Promise<void> {
-  await authedFetch(`/v1/workspaces/${workspaceId}/transfer-ownership`, {
+  const res = await authedFetch(`/v1/workspaces/${workspaceId}/transfer-ownership`, {
     method: 'POST',
     body: JSON.stringify({ targetUserId }),
   })
+  if (!res.ok) throw new Error(`转让工作区失败: HTTP ${res.status}`)
 
   // 更新本地角色
   const index = readIndex()
@@ -321,36 +324,37 @@ export async function listInvitations(
   workspaceId: string,
   options?: { status?: string; page?: number; limit?: number }
 ): Promise<any> {
-  try {
-    const params = new URLSearchParams()
-    if (options?.status) params.set('status', options.status)
-    if (options?.page) params.set('page', String(options.page))
-    if (options?.limit) params.set('limit', String(options.limit))
-    const queryStr = params.toString()
-    const path = `/v1/workspaces/${workspaceId}/invitations${queryStr ? '?' + queryStr : ''}`
-
-    const res = await authedFetch(path)
-    if (!res.ok) {
-      // 无参数时返回空数组（向后兼容），有参数时返回分页空结构
-      return options ? { invitations: [], total: 0, page: options.page || 1, limit: options.limit || 20, totalPages: 0 } : []
-    }
-    return (await res.json()) as any
-  } catch {
-    return options ? { invitations: [], total: 0, page: options.page || 1, limit: options.limit || 20, totalPages: 0 } : []
+  const params = new URLSearchParams()
+  if (options?.status) params.set('status', options.status)
+  if (options?.page) params.set('page', String(options.page))
+  if (options?.limit) params.set('limit', String(options.limit))
+  const queryStr = params.toString()
+  const path = `/v1/workspaces/${workspaceId}/invitations${queryStr ? '?' + queryStr : ''}`
+  const res = await authedFetch(path)
+  if (!res.ok) throw new Error(`读取邀请失败: HTTP ${res.status}`)
+  const data: unknown = await res.json()
+  if (options) {
+    if (!data || typeof data !== 'object' || !Array.isArray(Reflect.get(data, 'invitations'))) throw new Error('邀请响应格式无效')
+  } else if (!Array.isArray(data)) {
+    throw new Error('邀请响应格式无效')
   }
+  return data
 }
 
 /** 获取工作区使用统计 */
 export async function getWorkspaceStats(workspaceId: string): Promise<{
   totalSize: number; fileCount: number; dirCount: number; memberCount: number; onlineCount: number; pendingInvites: number
 } | null> {
-  try {
-    const res = await authedFetch(`/v1/workspaces/${workspaceId}/stats`)
-    if (!res.ok) return null
-    return (await res.json()) as any
-  } catch {
-    return null
+  const res = await authedFetch(`/v1/workspaces/${workspaceId}/stats`)
+  if (!res.ok) throw new Error(`读取工作区统计失败: HTTP ${res.status}`)
+  const data: unknown = await res.json()
+  if (!data || typeof data !== 'object') throw new Error('统计响应格式无效')
+  const fields = ['totalSize', 'fileCount', 'dirCount', 'memberCount', 'onlineCount', 'pendingInvites'] as const
+  for (const field of fields) {
+    const value: unknown = Reflect.get(data, field)
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('统计响应格式无效')
   }
+  return data as { totalSize: number; fileCount: number; dirCount: number; memberCount: number; onlineCount: number; pendingInvites: number }
 }
 
 // ===== 公告 =====

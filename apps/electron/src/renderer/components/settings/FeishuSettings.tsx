@@ -47,6 +47,7 @@ import { agentPendingPromptAtom, agentWorkspacesAtom, agentSessionsAtom, current
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { cn } from '@/lib/utils'
+import { IntegrationSettingsFeedback, useIntegrationAction } from './IntegrationSettingsFeedback'
 import { isVisibleAgentSession, type FeishuTestResult, type FeishuChatBinding, type FeishuBotConfig, type FeishuBotBridgeState, type FeishuRegisterAppQRCode, type FeishuRegisterAppStatus, type FeishuSessionMirrorSettings, type FeishuSessionSyncMode, type LarkCliStatus, type LarkLoginEvent, type LarkMcpStatus } from '@profer/shared'
 
 // ===== 常量 =====
@@ -358,7 +359,7 @@ function FeishuCliSection(): React.ReactElement {
       setPendingPrompt({ sessionId, message: FEISHU_CLI_WORKSPACE_PROMPT })
       setSettingsOpen(false)
       toast.success(`已在「${currentWorkspace.name}」开始配置`)
-    } finally {
+    } catch { toast.error('创建配置会话失败，请重试。') } finally {
       setWorking(false)
     }
   }, [createAgent, currentWorkspace, setPendingPrompt, setSettingsOpen])
@@ -391,16 +392,18 @@ function FeishuCliSection(): React.ReactElement {
 
 function LarkCloudCapabilitiesSection(): React.ReactElement {
   const [status, setStatus] = React.useState<LarkCliStatus | null>(null)
+  const [loadError, setLoadError] = React.useState('')
   const [loginEvent, setLoginEvent] = React.useState<LarkLoginEvent | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [working, setWorking] = React.useState(false)
 
   const refresh = React.useCallback(async () => {
     setLoading(true)
+    setLoadError('')
     try {
       setStatus(await window.electronAPI.refreshLarkCliStatus())
     } catch {
-      toast.error('无法检测 Lark CLI')
+      setLoadError('无法检测 Lark CLI，请重试。')
     } finally {
       setLoading(false)
     }
@@ -425,7 +428,7 @@ function LarkCloudCapabilitiesSection(): React.ReactElement {
       const result = await window.electronAPI.installLarkCli()
       result.success ? toast.success('Lark CLI 安装完成') : toast.error(result.message)
       if (result.success) await refresh()
-    } finally {
+    } catch { toast.error('Lark CLI 安装失败，请重试。') } finally {
       setWorking(false)
     }
   }, [refresh])
@@ -463,20 +466,21 @@ function LarkCloudCapabilitiesSection(): React.ReactElement {
     <SettingsSection title="飞书云端能力（Lark 用户授权）" description="通过官方 Lark CLI 使用你的用户身份访问云文档、表格和其他云端资源。凭据只保留在 CLI 的安全存储中，Profer 不读取或展示 token。">
       <SettingsCard divided={false}>
         <div className="px-4 py-4 space-y-4 text-sm">
-          <div className="flex items-center justify-between gap-3">
+          {loadError && <IntegrationSettingsFeedback message={loadError} onRetry={() => void refresh()} />}
+          <div className="flex flex-wrap items-center justify-between gap-3" role="status">
             <div className="flex items-center gap-2">
-              {loading ? <Loader2 size={16} className="animate-spin text-muted-foreground" /> : status?.error ? <XCircle size={16} className="text-red-500" /> : <CheckCircle2 size={16} className="text-green-500" />}
-              <span className="font-medium">Lark CLI：{ready ? `已安装（${status.cli.version}）` : '未检测到'}</span>
+              {loading ? <Loader2 size={16} className="animate-spin text-muted-foreground" /> : status?.error || !ready ? <XCircle size={16} className="text-red-500" /> : <CheckCircle2 size={16} className="text-green-500" />}
+              <span className="font-medium">Lark CLI：{loading ? '正在检测…' : loadError ? '检测失败' : ready ? `已安装（${status.cli.version}）` : '未检测到'}</span>
             </div>
             <Button size="sm" variant="outline" onClick={() => void refresh()} disabled={loading} className="gap-1.5"><RefreshCw size={14} />检测</Button>
           </div>
 
-          <div className="rounded-md bg-muted/50 p-3 space-y-1.5 text-xs text-muted-foreground">
+          {status && <div className="rounded-md bg-muted/50 p-3 space-y-1.5 text-xs text-muted-foreground">
             <div>用户授权：<span className="text-foreground font-medium">{authLabel}</span>{status?.auth.userLabel ? ` · ${status.auth.userLabel}` : ''}</div>
             <div>Node.js：{status?.node.version ?? '未检测到'} · npm：{status?.npm.version ?? '未检测到'} · npx：{status?.npx.version ?? '未检测到'}</div>
             {status?.auth.scopeCount != null && <div>已授权范围：{status.auth.scopeCount} 项（具体 token/权限内容不会展示）</div>}
             {status?.error && <div className="text-red-600 dark:text-red-400">诊断：{status.error}</div>}
-          </div>
+          </div>}
 
           <div className="flex flex-wrap gap-2">
             {nodeMissing && isMac && (
@@ -484,18 +488,19 @@ function LarkCloudCapabilitiesSection(): React.ReactElement {
                 <ExternalLink size={14} />下载 macOS Node.js
               </Button>
             )}
-            {!ready && <Button size="sm" onClick={() => void install()} disabled={working || nodeMissing} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}安装官方 CLI</Button>}
-            <Button size="sm" onClick={() => void login()} disabled={!ready || working} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}重新登录 / 授权</Button>
+            {!ready && <Button size="sm" onClick={() => void install()} disabled={working || loading || Boolean(loadError) || nodeMissing} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}安装官方 CLI</Button>}
+            <Button size="sm" onClick={() => void login()} disabled={!ready || working || loading || Boolean(loadError)} className="gap-1.5">{working && <Loader2 size={14} className="animate-spin" />}重新登录 / 授权</Button>
             {status?.cli.path && <span className="self-center text-xs text-muted-foreground">路径：{status.cli.path}</span>}
           </div>
 
-          {loginEvent?.authorizationUrl && (
+          {loginEvent?.type === 'failed' && <IntegrationSettingsFeedback message={loginEvent.message} onRetry={() => void login()} />}
+          {loginEvent?.authorizationUrl && loginEvent.type !== 'failed' && loginEvent.type !== 'completed' && (
             <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2">
               <div className="text-xs text-foreground">{loginEvent.message}</div>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => openLink(loginEvent.authorizationUrl!)} className="gap-1.5"><ExternalLink size={14} />打开授权页</Button>
                 <Button size="sm" variant="outline" onClick={copyUrl} className="gap-1.5"><Copy size={14} />复制链接</Button>
-                <Button size="sm" variant="ghost" onClick={() => void window.electronAPI.cancelLarkLogin()}>取消</Button>
+                <Button size="sm" variant="ghost" onClick={() => void window.electronAPI.cancelLarkLogin().then(() => setLoginEvent(null)).catch(() => toast.error('取消授权失败，请重试。'))}>取消</Button>
               </div>
             </div>
           )}
@@ -508,6 +513,9 @@ function LarkCloudCapabilitiesSection(): React.ReactElement {
 function LarkMcpSection(): React.ReactElement {
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const [status, setStatus] = React.useState<LarkMcpStatus | null>(null)
+  const [loadError, setLoadError] = React.useState('')
+  const [loading, setLoading] = React.useState(true)
+  const [actionError, setActionError] = React.useState('')
   const [appId, setAppId] = React.useState('')
   const [appSecret, setAppSecret] = React.useState('')
   const [workspaceSlug, setWorkspaceSlug] = React.useState('')
@@ -515,13 +523,14 @@ function LarkMcpSection(): React.ReactElement {
   const [saving, setSaving] = React.useState(false)
 
   const refresh = React.useCallback(async () => {
+    setLoadError('')
     try {
       const next = await window.electronAPI.getLarkMcpStatus()
       setStatus(next)
       if (!workspaceSlug && workspaces[0]) setWorkspaceSlug(workspaces[0].slug)
     } catch {
-      toast.error('无法读取 Lark MCP 配置')
-    }
+      setLoadError('无法读取 Lark MCP 配置，请重试。')
+    } finally { setLoading(false) }
   }, [workspaceSlug, workspaces])
 
   React.useEffect(() => { void refresh() }, [refresh])
@@ -534,31 +543,34 @@ function LarkMcpSection(): React.ReactElement {
 
   const saveCredentials = React.useCallback(async () => {
     setSaving(true)
+    setActionError('')
     try {
       const result = await window.electronAPI.saveLarkMcpCredentials({ appId, appSecret })
-      if (!result.success) { toast.error(result.message); return }
+      if (!result.success) { setActionError(result.message); return }
       setAppSecret('')
       toast.success('MCP 应用凭据已安全保存')
       await refresh()
-    } finally { setSaving(false) }
+    } catch { setActionError('MCP 凭据保存失败，输入已保留。请重试。') } finally { setSaving(false) }
   }, [appId, appSecret, refresh])
 
   const testConnection = React.useCallback(async () => {
     setSaving(true)
+    setActionError('')
     try {
       const result = await window.electronAPI.testLarkMcpConnection()
-      result.success ? toast.success('官方 Lark MCP 协议握手成功') : toast.error(result.message)
-    } finally { setSaving(false) }
+      result.success ? toast.success('官方 Lark MCP 协议握手成功') : setActionError(result.message)
+    } catch { setActionError('MCP 连接测试失败，请重试。') } finally { setSaving(false) }
   }, [])
 
   const login = React.useCallback(async () => {
     setSaving(true)
+    setActionError('')
     setLoginEvent(null)
     try {
       const result = await window.electronAPI.startLarkMcpLogin()
-      if (!result.started) toast.error(result.message)
+      if (!result.started) setActionError(result.message)
       else toast.info('MCP 授权流程已启动，请在浏览器中完成确认')
-    } finally { setSaving(false) }
+    } catch { setActionError('MCP 授权启动失败，请重试。') } finally { setSaving(false) }
   }, [])
 
   const copyLoginUrl = React.useCallback(() => {
@@ -570,21 +582,24 @@ function LarkMcpSection(): React.ReactElement {
   const enable = React.useCallback(async () => {
     if (!workspaceSlug) { toast.error('请选择工作区'); return }
     setSaving(true)
+    setActionError('')
     try {
       const result = await window.electronAPI.enableLarkMcpForWorkspace(workspaceSlug)
-      result.success ? toast.success('已为工作区启用官方 Lark MCP') : toast.error(result.message)
+      result.success ? toast.success('已为工作区启用官方 Lark MCP') : setActionError(result.message)
       if (result.success) await refresh()
-    } finally { setSaving(false) }
+    } catch { setActionError('启用 Lark MCP 失败，请重试。') } finally { setSaving(false) }
   }, [refresh, workspaceSlug])
 
   const disable = React.useCallback(async () => {
     if (!workspaceSlug) return
     setSaving(true)
+    setActionError('')
     try {
       const result = await window.electronAPI.disableLarkMcpForWorkspace(workspaceSlug)
-      result.success ? toast.success('已从工作区停用 Lark MCP') : toast.error(result.message)
-    } finally { setSaving(false) }
-  }, [workspaceSlug])
+      result.success ? toast.success('已从工作区停用 Lark MCP') : setActionError(result.message)
+      if (result.success) await refresh()
+    } catch { setActionError('停用 Lark MCP 失败，请重试。') } finally { setSaving(false) }
+  }, [workspaceSlug, refresh])
 
   return (
     <SettingsSection title="官方 Lark MCP（实验性）" description="为选定工作区接入官方 OpenAPI MCP。App Secret 使用系统加密存储，运行时注入，不会写入工作区 mcp.json、Skill 或聊天消息。">
@@ -593,35 +608,43 @@ function LarkMcpSection(): React.ReactElement {
           <div className="rounded-md bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300">
             官方 MCP 仍处于 Beta。请创建或选择一个专用于 MCP 的飞书应用，配置 OAuth 回调地址 <code>http://localhost:3000/callback</code>，并为该应用开通文档、Base/多维表格和日历所需权限。日历通常需要用户权限 <code>calendar:calendar</code>、<code>calendar:calendar:read</code>；不要复用或粘贴 CLI token。
           </div>
-          {status?.configured ? (
+          {actionError && <IntegrationSettingsFeedback message={actionError} />}
+          {loading || loadError ? <IntegrationSettingsFeedback loading={loading} message={loadError || '正在读取 Lark MCP 配置…'} onRetry={loadError ? () => void refresh() : undefined} /> : status?.configured ? (
             <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
               <div>MCP 应用已配置：<span className="font-medium text-foreground">{status.appId}</span>（Secret 已加密保存，不可查看）</div>
               <div>已启用工作区：{status.enabledWorkspaces.length ? status.enabledWorkspaces.join('、') : '无'}</div>
             </div>
           ) : (
             <div className="space-y-2">
-              <SettingsInput label="MCP App ID" value={appId} onChange={setAppId} placeholder="cli_xxxxx" />
-              <SettingsSecretInput label="MCP App Secret" value={appSecret} onChange={setAppSecret} placeholder="仅保存到本机加密存储" />
+              <SettingsInput label="MCP App ID" value={appId} onChange={setAppId} disabled={saving} placeholder="cli_xxxxx" />
+              <SettingsSecretInput label="MCP App Secret" value={appSecret} onChange={setAppSecret} disabled={saving} placeholder="仅保存到本机加密存储" />
               <Button size="sm" onClick={() => void saveCredentials()} disabled={saving || !appId.trim() || !appSecret.trim()} className="gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />}安全保存 MCP 凭据</Button>
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2">
             <Select value={workspaceSlug} onValueChange={setWorkspaceSlug}>
-              <SelectTrigger className="h-8 w-[190px]"><SelectValue placeholder="选择工作区" /></SelectTrigger>
+              <SelectTrigger aria-label="Lark MCP 目标工作区" className="h-8 w-full sm:w-48"><SelectValue placeholder="选择工作区" /></SelectTrigger>
               <SelectContent>{workspaces.map((workspace) => <SelectItem key={workspace.slug} value={workspace.slug}>{workspace.name}</SelectItem>)}</SelectContent>
             </Select>
-            <Button size="sm" variant="outline" onClick={() => void testConnection()} disabled={saving || !status?.configured} className="gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />}测试连接</Button>
-            <Button size="sm" onClick={() => void login()} disabled={saving || !status?.configured} className="gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />}进行用户授权</Button>
-            <Button size="sm" onClick={() => void enable()} disabled={saving || !status?.configured || !workspaceSlug}>启用到工作区</Button>
-            <Button size="sm" variant="outline" onClick={() => void disable()} disabled={saving || !workspaceSlug}>停用</Button>
+            <Button size="sm" variant="outline" onClick={() => void testConnection()} disabled={saving || Boolean(loadError) || !status?.configured} className="gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />}测试连接</Button>
+            <Button size="sm" onClick={() => void login()} disabled={saving || Boolean(loadError) || !status?.configured} className="gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />}进行用户授权</Button>
+            <Button size="sm" onClick={() => void enable()} disabled={saving || Boolean(loadError) || !status?.configured || !workspaceSlug}>启用到工作区</Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild><Button size="sm" variant="outline" disabled={saving || !workspaceSlug || !status?.configured}>停用</Button></AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader><AlertDialogTitle>停用工作区 Lark MCP？</AlertDialogTitle><AlertDialogDescription>将从选定工作区移除 Lark MCP 配置；需要时可重新启用。</AlertDialogDescription></AlertDialogHeader>
+                <AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => void disable()}>确认停用</AlertDialogAction></AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
-          {loginEvent?.authorizationUrl && (
+          {loginEvent?.type === 'failed' && <IntegrationSettingsFeedback message={loginEvent.message} onRetry={() => void login()} />}
+          {loginEvent?.authorizationUrl && loginEvent.type !== 'failed' && loginEvent.type !== 'completed' && (
             <div className="rounded-md border border-primary/30 bg-primary/5 p-3 space-y-2">
               <div className="text-xs text-foreground">{loginEvent.message}</div>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => openLink(loginEvent.authorizationUrl!)} className="gap-1.5"><ExternalLink size={14} />打开授权页</Button>
                 <Button size="sm" variant="outline" onClick={copyLoginUrl} className="gap-1.5"><Copy size={14} />复制链接</Button>
-                <Button size="sm" variant="ghost" onClick={() => void window.electronAPI.cancelLarkMcpLogin()}>取消</Button>
+                <Button size="sm" variant="ghost" onClick={() => void window.electronAPI.cancelLarkMcpLogin().then(() => setLoginEvent(null)).catch(() => toast.error('取消授权失败，请重试。'))}>取消</Button>
               </div>
             </div>
           )}
@@ -638,9 +661,10 @@ interface FeishuBindingCardProps {
   binding: FeishuChatBinding
   onUpdate: (chatId: string, updates: { workspaceId?: string; sessionId?: string }) => void
   onRemove: (chatId: string) => void
+  disabled: boolean
 }
 
-function FeishuBindingCard({ binding, onUpdate, onRemove }: FeishuBindingCardProps): React.ReactElement {
+function FeishuBindingCard({ binding, onUpdate, onRemove, disabled }: FeishuBindingCardProps): React.ReactElement {
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const sessions = useAtomValue(agentSessionsAtom)
 
@@ -677,7 +701,7 @@ function FeishuBindingCard({ binding, onUpdate, onRemove }: FeishuBindingCardPro
 
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive">
+            <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive" disabled={disabled} aria-label={`解除${displayName}绑定`}>
               <Trash2 size={14} />
             </Button>
           </AlertDialogTrigger>
@@ -703,9 +727,10 @@ function FeishuBindingCard({ binding, onUpdate, onRemove }: FeishuBindingCardPro
         <span className="text-muted-foreground">工作区</span>
         <Select
           value={binding.workspaceId}
+          disabled={disabled}
           onValueChange={(value) => onUpdate(binding.chatId, { workspaceId: value })}
         >
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger aria-label={`${displayName}工作区`} className="h-8 text-xs">
             <SelectValue placeholder="选择工作区">
               {currentWorkspace?.name ?? '未知工作区'}
             </SelectValue>
@@ -721,9 +746,10 @@ function FeishuBindingCard({ binding, onUpdate, onRemove }: FeishuBindingCardPro
         <span className="text-muted-foreground">会话</span>
         <Select
           value={binding.sessionId}
+          disabled={disabled}
           onValueChange={(value) => onUpdate(binding.chatId, { sessionId: value })}
         >
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger aria-label={`${displayName}会话`} className="h-8 text-xs">
             <SelectValue placeholder="选择会话">
               {currentSession?.title ?? binding.sessionId.slice(0, 8)}
             </SelectValue>
@@ -747,18 +773,21 @@ function FeishuBindingsTab(): React.ReactElement {
   const bindings = useAtomValue(feishuBindingsAtom)
   const setBindings = useSetAtom(feishuBindingsAtom)
   const botStates = useAtomValue(feishuBotStatesAtom)
-  const [refreshing, setRefreshing] = React.useState(false)
+  const [refreshing, setRefreshing] = React.useState(true)
+  const [loadError, setLoadError] = React.useState('')
+  const { busy, run } = useIntegrationAction()
 
   const anyConnected = Object.values(botStates).some((b) => b.status === 'connected')
 
   // 刷新绑定列表
   const refreshBindings = React.useCallback(async () => {
     setRefreshing(true)
+    setLoadError('')
     try {
       const list = await window.electronAPI.listFeishuBindings()
       setBindings(list)
     } catch {
-      toast.error('获取绑定列表失败')
+      setLoadError('获取绑定列表失败，保留上次读取结果。请刷新重试。')
     } finally {
       setRefreshing(false)
     }
@@ -777,30 +806,32 @@ function FeishuBindingsTab(): React.ReactElement {
   }, [anyConnected, refreshBindings])
 
   // 更新绑定
-  const handleUpdate = React.useCallback(async (chatId: string, updates: { workspaceId?: string; sessionId?: string }) => {
+  const handleUpdate = React.useCallback((chatId: string, updates: { workspaceId?: string; sessionId?: string }) => run(async () => {
     try {
       const result = await window.electronAPI.updateFeishuBinding({ chatId, ...updates })
+      if (!result) throw new Error('未更新绑定')
       if (result) {
         setBindings((prev) => prev.map((b) => b.chatId === chatId ? result : b))
         toast.success('绑定已更新')
       }
     } catch {
-      toast.error('更新绑定失败')
+      toast.error('更新绑定失败，保留原绑定。请重新选择以重试。')
     }
-  }, [setBindings])
+  }), [setBindings, run])
 
   // 移除绑定
-  const handleRemove = React.useCallback(async (chatId: string) => {
+  const handleRemove = React.useCallback((chatId: string) => run(async () => {
     try {
       const ok = await window.electronAPI.removeFeishuBinding(chatId)
+      if (!ok) throw new Error('未解除绑定')
       if (ok) {
         setBindings((prev) => prev.filter((b) => b.chatId !== chatId))
         toast.success('绑定已解除')
       }
     } catch {
-      toast.error('解除绑定失败')
+      toast.error('解除绑定失败，绑定已保留。请重试。')
     }
-  }, [setBindings])
+  }), [setBindings, run])
 
   // 按类型分组：群聊 + 单聊
   const groupBindings = bindings.filter((b) => b.chatType === 'group')
@@ -823,7 +854,8 @@ function FeishuBindingsTab(): React.ReactElement {
           </Button>
         }
       >
-        {bindings.length === 0 ? (
+        {loadError && <IntegrationSettingsFeedback message={loadError} onRetry={() => void refreshBindings()} />}
+        {refreshing && bindings.length === 0 ? <IntegrationSettingsFeedback loading message="正在读取飞书绑定…" /> : loadError && bindings.length === 0 ? null : bindings.length === 0 ? (
           <SettingsCard divided={false}>
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
               暂无活跃绑定。启动 Bridge 后在飞书中发消息即可自动创建绑定。
@@ -842,6 +874,7 @@ function FeishuBindingsTab(): React.ReactElement {
                     <FeishuBindingCard
                       key={binding.chatId}
                       binding={binding}
+                      disabled={busy || refreshing || Boolean(loadError)}
                       onUpdate={handleUpdate}
                       onRemove={handleRemove}
                     />
@@ -861,6 +894,7 @@ function FeishuBindingsTab(): React.ReactElement {
                     <FeishuBindingCard
                       key={binding.chatId}
                       binding={binding}
+                      disabled={busy || refreshing || Boolean(loadError)}
                       onUpdate={handleUpdate}
                       onRemove={handleRemove}
                     />
@@ -881,14 +915,18 @@ interface RegisterFeishuDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** 注册成功后回调，返回主进程拿到的 App ID/Secret；上层应在此处保存配置并启动 Bot */
-  onSuccess: (result: { appId: string; appSecret: string }) => void
+  onSuccess: (result: { appId: string; appSecret: string }) => Promise<void>
 }
 
 /** 扫码注册飞书 Bot：弹窗内全程引导，扫码成功后自动保存配置并启动 Bot */
 function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuDialogProps): React.ReactElement {
   const [qrcode, setQrcode] = React.useState<FeishuRegisterAppQRCode | null>(null)
   const [status, setStatus] = React.useState<FeishuRegisterAppStatus | null>(null)
-  const [phase, setPhase] = React.useState<'idle' | 'qrcode' | 'success' | 'error'>('idle')
+  const [phase, setPhase] = React.useState<'idle' | 'qrcode' | 'saving' | 'success' | 'error'>('idle')
+  const [attempt, setAttempt] = React.useState(0)
+  const qrExpired = React.useRef(false)
+  const credentials = React.useRef<{ appId: string; appSecret: string } | null>(null)
+  const { busy: persisting, run: runPersist } = useIntegrationAction()
   const [errorMsg, setErrorMsg] = React.useState<string>('')
 
   // 用 ref 持有最新的 onSuccess，避免依赖 onSuccess 后回调引用变化触发整个 effect 重启
@@ -898,11 +936,26 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
     onSuccessRef.current = onSuccess
   })
 
+  const persist = React.useCallback(() => runPersist(async () => {
+    if (!credentials.current) return
+    setPhase('saving')
+    try {
+      await onSuccessRef.current(credentials.current)
+      credentials.current = null
+      setPhase('success')
+    } catch {
+      setPhase('error')
+      setErrorMsg('应用已创建，但保存失败。凭据保留在当前弹窗，请重试保存。')
+    }
+  }), [runPersist])
+
   // 弹窗打开 → 监听推送 + 启动注册；关闭 → 解监听 + 取消
   React.useEffect(() => {
     if (!open) return
 
     let cancelled = false
+    credentials.current = null
+    qrExpired.current = false
     setPhase('idle')
     setErrorMsg('')
     setQrcode(null)
@@ -918,9 +971,9 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
 
     window.electronAPI.registerFeishuApp()
       .then((result) => {
-        if (cancelled) return
-        setPhase('success')
-        onSuccessRef.current({ appId: result.appId, appSecret: result.appSecret })
+        if (cancelled || qrExpired.current) return
+        credentials.current = { appId: result.appId, appSecret: result.appSecret }
+        void persist()
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -933,11 +986,23 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
 
     return () => {
       cancelled = true
+      credentials.current = null
       offQr()
       offStatus()
       window.electronAPI.cancelFeishuRegistration().catch(() => {})
     }
-  }, [open])
+  }, [open, attempt, persist])
+
+  React.useEffect(() => {
+    if (phase !== 'qrcode' || !qrcode) return
+    const timeout = window.setTimeout(() => {
+      setPhase('error')
+      qrExpired.current = true
+      setErrorMsg('二维码已过期，请重新获取。')
+      void window.electronAPI.cancelFeishuRegistration().catch(() => {})
+    }, Math.max(0, qrcode.expireIn) * 1_000)
+    return () => window.clearTimeout(timeout)
+  }, [phase, qrcode])
 
   const handleOpenInBrowser = React.useCallback(() => {
     if (qrcode?.url) {
@@ -946,7 +1011,7 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
   }, [qrcode])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!persisting) onOpenChange(next) }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -958,7 +1023,8 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col items-center gap-3 py-2">
+        <div className="flex flex-col items-center gap-3 py-2" aria-live="polite" aria-busy={phase === 'idle' || phase === 'saving'}>
+          {phase === 'saving' && <IntegrationSettingsFeedback loading message="应用已创建，正在安全保存凭据…" />}
           {phase === 'idle' && (
             <div className="flex flex-col items-center gap-2 py-12 text-sm text-muted-foreground">
               <Loader2 size={24} className="animate-spin" />
@@ -973,7 +1039,7 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
                   <img
                     src={qrcode.dataUrl}
                     alt="飞书扫码注册二维码"
-                    className="w-[240px] h-[240px] block"
+                    className="block h-auto w-60 max-w-full"
                   />
                 ) : (
                   <div className="w-[240px] h-[240px] flex items-center justify-center text-xs text-muted-foreground">
@@ -1025,7 +1091,8 @@ function RegisterFeishuDialog({ open, onOpenChange, onSuccess }: RegisterFeishuD
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          {phase === 'error' && <Button onClick={() => { if (credentials.current) void persist(); else setAttempt((previous) => previous + 1) }} disabled={persisting}>{credentials.current ? '重试保存' : '重新获取二维码'}</Button>}
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={persisting}>
             {phase === 'success' ? '关闭' : '取消'}
           </Button>
         </DialogFooter>
@@ -1053,58 +1120,60 @@ function normalizeSessionMirrorSettings(settings: FeishuSessionMirrorSettings | 
 }
 
 function SessionMirrorSection({ bots }: { bots: FeishuBotConfig[] }): React.ReactElement {
-  const [settings, setSettings] = React.useState<FeishuSessionMirrorSettings>({ mode: 'off' })
+  const [settings, setSettings] = React.useState<FeishuSessionMirrorSettings | null>(null)
+  const [loadError, setLoadError] = React.useState('')
+  const [saveError, setSaveError] = React.useState('')
+  const { busy: saving, run } = useIntegrationAction()
   const [bindings, setBindings] = React.useState<FeishuChatBinding[]>([])
   const enabledBots = React.useMemo(
     () => bots.filter((bot) => bot.enabled && bot.appId),
     [bots],
   )
   const selectedBot = React.useMemo(
-    () => enabledBots.find((bot) => bot.id === settings.botId),
-    [enabledBots, settings.botId],
+    () => enabledBots.find((bot) => bot.id === settings?.botId),
+    [enabledBots, settings?.botId],
   )
   const selectedBotHasBinding = React.useMemo(
-    () => Boolean(settings.botId && bindings.some((binding) =>
-      binding.botId === settings.botId && binding.userId && binding.userId !== 'unknown'
+    () => Boolean(settings?.botId && bindings.some((binding) =>
+      binding.botId === settings?.botId && binding.userId && binding.userId !== 'unknown'
     )),
-    [bindings, settings.botId],
+    [bindings, settings?.botId],
   )
-  const showBotBindingWarning = settings.mode === 'stream' && Boolean(settings.botId) && !selectedBotHasBinding
+  const showBotBindingWarning = settings?.mode === 'stream' && Boolean(settings?.botId) && !selectedBotHasBinding
 
-  React.useEffect(() => {
-    window.electronAPI.getSettings()
-      .then((appSettings) => {
-        setSettings(normalizeSessionMirrorSettings(appSettings.feishuSessionMirror))
-      })
-      .catch(() => {})
-
-    window.electronAPI.listFeishuBindings()
-      .then(setBindings)
-      .catch(() => {})
+  const load = React.useCallback(async () => {
+    setLoadError('')
+    try {
+      const [appSettings, list] = await Promise.all([window.electronAPI.getSettings(), window.electronAPI.listFeishuBindings()])
+      setSettings(normalizeSessionMirrorSettings(appSettings.feishuSessionMirror))
+      setBindings(list)
+    } catch { setLoadError('无法读取 Session 镜像配置和绑定，未使用默认值。请重试。') }
   }, [])
+  React.useEffect(() => { void load() }, [load])
 
-  const saveSettings = React.useCallback(async (next: FeishuSessionMirrorSettings) => {
-    setSettings(next)
+  const saveSettings = React.useCallback((next: FeishuSessionMirrorSettings) => run(async () => {
+    setSaveError('')
     try {
       await window.electronAPI.updateSettings({ feishuSessionMirror: next })
+      setSettings(next)
       toast.success('飞书 Session 镜像设置已更新')
-    } catch {
-      toast.error('保存飞书 Session 镜像设置失败')
-    }
-  }, [])
+    } catch { setSaveError('保存飞书 Session 镜像设置失败，保留已保存值。请重新选择以重试。') }
+  }), [run])
 
   const handleModeChange = React.useCallback((value: string) => {
     const mode = value as FeishuSessionSyncMode
-    const fallbackBotId = settings.botId ?? enabledBots[0]?.id
+    const fallbackBotId = settings?.botId ?? enabledBots[0]?.id
     const next: FeishuSessionMirrorSettings = mode === 'stream'
       ? { mode, botId: fallbackBotId }
-      : { mode, botId: settings.botId }
+      : { mode, botId: settings?.botId }
     saveSettings(next).catch(() => {})
-  }, [enabledBots, saveSettings, settings.botId])
+  }, [enabledBots, saveSettings, settings?.botId])
 
   const handleBotChange = React.useCallback((botId: string) => {
-    saveSettings({ ...settings, botId }).catch(() => {})
+    if (settings) void saveSettings({ ...settings, botId })
   }, [saveSettings, settings])
+
+  if (!settings || loadError) return <IntegrationSettingsFeedback loading={!loadError} message={loadError || '正在读取 Session 镜像配置…'} onRetry={loadError ? () => void load() : undefined} />
 
   return (
     <SettingsSection
@@ -1113,10 +1182,11 @@ function SessionMirrorSection({ bots }: { bots: FeishuBotConfig[] }): React.Reac
     >
       <SettingsCard divided={false}>
         <div className="px-4 py-4 space-y-4">
+          {saveError && <IntegrationSettingsFeedback message={saveError} />}
           <div className="grid gap-3 md:grid-cols-[180px_1fr] md:items-center">
             <div className="text-sm font-medium text-foreground">同步方式</div>
-            <Select value={settings.mode} onValueChange={handleModeChange}>
-              <SelectTrigger className="h-9">
+            <Select value={settings.mode} onValueChange={handleModeChange} disabled={saving}>
+              <SelectTrigger aria-label="同步方式" className="h-9">
                 <SelectValue>{SESSION_SYNC_LABELS[settings.mode]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -1129,11 +1199,11 @@ function SessionMirrorSection({ bots }: { bots: FeishuBotConfig[] }): React.Reac
           <div className="grid gap-3 md:grid-cols-[180px_1fr] md:items-center">
             <div className="text-sm font-medium text-foreground">同步 Bot</div>
             <Select
-              value={settings.botId ?? ''}
+              value={settings?.botId ?? ''}
               onValueChange={handleBotChange}
-              disabled={enabledBots.length === 0}
+              disabled={saving || enabledBots.length === 0}
             >
-              <SelectTrigger className="h-9">
+              <SelectTrigger aria-label="同步 Bot" className="h-9">
                 <SelectValue placeholder={enabledBots.length === 0 ? '先启用一个 Bot' : '选择同步 Bot'} />
               </SelectTrigger>
               <SelectContent>
@@ -1205,25 +1275,38 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
   const [testing, setTesting] = React.useState(false)
   const [testResult, setTestResult] = React.useState<FeishuTestResult | null>(null)
   const [expanded, setExpanded] = React.useState(!bot.appId) // 新建的 Bot 默认展开
+  const { busy, run } = useIntegrationAction()
+  const [actionError, setActionError] = React.useState('')
+  const [secretError, setSecretError] = React.useState('')
+  const secretEdited = React.useRef(false)
+  const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const panelId = React.useId()
+  const connectionGeneration = React.useRef(0)
 
-  // 加载已有 secret（使用 bot-specific API）
-  React.useEffect(() => {
-    if (bot.appSecret && bot.id) {
-      window.electronAPI.getDecryptedFeishuBotSecret?.(bot.id)
-        .then((s: string) => { if (s) setAppSecret(s) })
-        .catch(() => {
-          // 回退到旧 API（兼容迁移前的首个 Bot）
-          window.electronAPI.getDecryptedFeishuSecret?.()
-            .then((s: string) => { if (s) setAppSecret(s) })
-            .catch(() => {})
-        })
+  const loadSecret = React.useCallback(async () => {
+    if (!bot.appSecret) return
+    setSecretError('')
+    try {
+      const secret = await window.electronAPI.getDecryptedFeishuBotSecret(bot.id)
+      if (!secretEdited.current) setAppSecret(secret)
+    } catch {
+      if (bot.id === 'legacy' && window.electronAPI.getDecryptedFeishuSecret) {
+        try {
+          const legacySecret = await window.electronAPI.getDecryptedFeishuSecret()
+          if (!secretEdited.current) setAppSecret(legacySecret)
+          return
+        } catch { /* 继续显示具体错误 */ }
+      }
+      setSecretError('无法读取此 Bot 的 Secret。可重试或输入新的 Secret；留空将保留原凭据。')
     }
   }, [bot.id, bot.appSecret])
+  React.useEffect(() => { void loadSecret() }, [loadSecret])
 
   const statusConfig = state ? STATUS_CONFIG[state.status] : STATUS_CONFIG.disconnected
   const isConnected = state?.status === 'connected' || state?.status === 'connecting'
 
-  const handleSave = React.useCallback(async () => {
+  const handleSave = React.useCallback(() => run(async () => {
+    setActionError('')
     if (!appId.trim() || !name.trim()) return
     try {
       await window.electronAPI.saveFeishuBotConfig({
@@ -1239,9 +1322,9 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
       toast.success(`Bot "${name}" 已保存`)
       onSaved()
     } catch {
-      toast.error('保存配置失败')
+      setActionError('保存配置失败，输入已保留。请重试保存。')
     }
-  }, [bot.id, name, appId, appSecret, onSaved])
+  }), [bot, name, appId, appSecret, onSaved, run])
 
   const handleTest = React.useCallback(async () => {
     if (!appId.trim() || !appSecret.trim()) return
@@ -1264,82 +1347,78 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
       if (multiState?.bots) {
         setBotStates(multiState.bots)
       }
-    } catch { /* 忽略 */ }
+    } catch { setActionError('无法读取连接状态，请重试。') }
   }, [setBotStates])
 
-  const handleToggle = React.useCallback(async () => {
-    if (isConnected) {
-      await window.electronAPI.stopFeishuBot(bot.id)
-      toast.success(`Bot "${bot.name}" 已停止`)
-      await refreshBotStates()
-    } else {
-      // 启动是异步的（10-15秒），不阻塞等待完成
-      // 先发起启动请求，然后轮询状态直到连接成功或失败
-      window.electronAPI.startFeishuBot(bot.id).catch((err: unknown) => {
-        toast.error(err instanceof Error ? err.message : '启动失败')
-        refreshBotStates()
-      })
-      // 短暂等待让主进程设置 connecting 状态
-      await new Promise((r) => setTimeout(r, 300))
-      await refreshBotStates()
-      // 轮询直到状态不再是 connecting
-      const poll = setInterval(async () => {
-        try {
-          const multiState = await window.electronAPI.getFeishuMultiStatus?.()
-          if (multiState?.bots) {
-            setBotStates(multiState.bots)
-            const botState = multiState.bots[bot.id]
-            if (!botState || botState.status !== 'connecting') {
-              clearInterval(poll)
-              if (botState?.status === 'connected') {
-                toast.success(`Bot "${bot.name}" 已连接`)
-              }
-            }
-          }
-        } catch {
-          clearInterval(poll)
-        }
-      }, 1000)
-      // 安全超时：60秒后停止轮询
-      setTimeout(() => clearInterval(poll), 60_000)
-    }
-  }, [bot.id, bot.name, isConnected, refreshBotStates, setBotStates])
+  // 连接中的短轮询随组件卸载/终态清理，超时提供可见的重试信息。
+  React.useEffect(() => {
+    if (state?.status !== 'connecting') return
+    const timer = window.setInterval(() => void refreshBotStates(), 1_000)
+    const timeout = window.setTimeout(() => {
+      window.clearInterval(timer)
+      setActionError('等待连接已超时，可停止连接后重试；当前配置已保留。')
+    }, 60_000)
+    return () => { window.clearInterval(timer); window.clearTimeout(timeout) }
+  }, [state?.status, refreshBotStates])
 
-  const handleRemove = React.useCallback(async () => {
+  const handleToggle = React.useCallback(() => run(async () => {
+    setActionError('')
+    const generation = ++connectionGeneration.current
     try {
-      await window.electronAPI.removeFeishuBot(bot.id)
+      if (isConnected) {
+        await window.electronAPI.stopFeishuBot(bot.id)
+        toast.success(`Bot "${bot.name}" 已停止`)
+        await refreshBotStates()
+      } else {
+        setBotStates((previous) => ({ ...previous, [bot.id]: { botId: bot.id, botName: bot.name, status: 'connecting', activeBindings: 0 } }))
+        // 保留停止入口；真实连接结果由状态订阅与轮询返回。
+        void window.electronAPI.startFeishuBot(bot.id).then(refreshBotStates).catch(() => {
+          if (generation !== connectionGeneration.current) return
+          setActionError('启动失败，可再次启动。当前配置已保留。')
+          void refreshBotStates()
+        })
+      }
+    } catch { setActionError('连接操作失败，当前配置已保留。请重试。') }
+  }), [bot.id, bot.name, isConnected, refreshBotStates, setBotStates, run])
+
+  const handleRemove = React.useCallback(() => run(async () => {
+    setActionError('')
+    try {
+      if (!await window.electronAPI.removeFeishuBot(bot.id)) throw new Error('Bot 未删除')
       toast.success(`Bot "${bot.name}" 已删除`)
+      setDeleteOpen(false)
       onRemoved()
     } catch {
-      toast.error('删除失败')
+      setActionError('删除失败，Bot 已保留。请重试。')
     }
-  }, [bot.id, bot.name, onRemoved])
+  }), [bot.id, bot.name, onRemoved, run])
 
   return (
     <SettingsCard>
       {/* 头部：名称 + 状态 + 展开/折叠 */}
-      <div className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/30 transition-colors">
+      <div className="w-full px-4 py-3 flex flex-wrap gap-3 items-center justify-between">
         <button
           type="button"
-          className="min-w-0 flex flex-1 items-center gap-3 text-left"
+          className="min-w-0 flex flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => setExpanded(!expanded)}
           aria-expanded={expanded}
+          aria-controls={panelId}
           aria-label={`${bot.name || '未命名 Bot'}配置详情`}
         >
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusConfig.color}`} />
           <span className="font-medium text-sm truncate">{bot.name || '未命名 Bot'}</span>
-          <span className="text-xs text-muted-foreground truncate">{bot.appId ? bot.appId.slice(0, 12) + '...' : '未配置'}</span>
+          <span className="text-xs text-muted-foreground truncate">{statusConfig.label}</span>
           <span className="text-xs text-muted-foreground">{expanded ? '▾' : '▸'}</span>
         </button>
         <div className="ml-3 flex items-center gap-2">
           {isConnected ? (
-            <Button size="sm" variant="outline" onClick={() => void handleToggle()}>
+            <Button size="sm" variant="outline" onClick={() => void handleToggle()} disabled={busy || testing}>
               <PowerOff size={14} className="mr-1" />
               停止
             </Button>
           ) : bot.appId ? (
             <Button size="sm" variant="outline" onClick={() => void handleToggle()}
-              disabled={state?.status === 'connecting'}>
+              disabled={busy || testing}>
               {state?.status === 'connecting' ? <Loader2 size={14} className="animate-spin mr-1" /> : <Power size={14} className="mr-1" />}
               启动
             </Button>
@@ -1347,9 +1426,11 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
         </div>
       </div>
 
+      {actionError && <IntegrationSettingsFeedback message={actionError} />}
       {/* 展开的配置表单 */}
       {expanded && (
-        <div className="px-4 pb-4 space-y-4 border-t border-border pt-4">
+        <div id={panelId} className="pb-4 space-y-3" aria-busy={busy}>
+          {secretError && <IntegrationSettingsFeedback message={secretError} onRetry={() => void loadSecret()} />}
           <SettingsInput
             label="Bot 名称"
             value={name}
@@ -1365,22 +1446,22 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
           <SettingsSecretInput
             label="App Secret"
             value={appSecret}
-            onChange={setAppSecret}
+            onChange={(value) => { secretEdited.current = true; setAppSecret(value) }}
             placeholder="输入 App Secret"
           />
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 px-4">
             <Button size="sm" variant="outline" onClick={handleTest}
-              disabled={testing || !appId.trim() || !appSecret.trim()}>
+              disabled={busy || testing || !appId.trim() || !appSecret.trim()}>
               {testing && <Loader2 size={14} className="animate-spin" />}
               <span>{testing ? '测试中...' : '测试连接'}</span>
             </Button>
-            <Button size="sm" onClick={handleSave} disabled={!appId.trim() || !name.trim()}>
-              保存配置
+            <Button size="sm" onClick={handleSave} disabled={busy || testing || !appId.trim() || !name.trim() || (!bot.appSecret && !appSecret.trim())}>
+              {busy ? '处理中…' : '保存配置'}
             </Button>
-            <AlertDialog>
+            <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
               <AlertDialogTrigger asChild>
-                <Button size="sm" variant="destructive">
+                <Button size="sm" variant="ghost" disabled={busy || testing}>
                   <Trash2 size={14} className="mr-1" />
                   删除
                 </Button>
@@ -1392,9 +1473,10 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
                     删除 Bot "{bot.name}" 将同时断开连接并清除所有绑定。此操作不可撤销。
                   </AlertDialogDescription>
                 </AlertDialogHeader>
+                {actionError && <IntegrationSettingsFeedback message={actionError} />}
                 <AlertDialogFooter>
-                  <AlertDialogCancel>取消</AlertDialogCancel>
-                  <AlertDialogAction onClick={handleRemove}>删除</AlertDialogAction>
+                  <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
+                  <AlertDialogAction disabled={busy} onClick={(event) => { event.preventDefault(); void handleRemove() }}>删除</AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
@@ -1434,16 +1516,17 @@ interface FeishuQuickStartProps {
   onRefresh: () => void
   onTest: () => void
   testing: boolean
+  disabled: boolean
 }
 
-function FeishuQuickStart({ bots, botStates, onRegister, onManualAdd, onRefresh, onTest, testing }: FeishuQuickStartProps): React.ReactElement {
+function FeishuQuickStart({ bots, botStates, onRegister, onManualAdd, onRefresh, onTest, testing, disabled }: FeishuQuickStartProps): React.ReactElement {
   const connectedBot = bots.find((bot) => botStates[bot.id]?.status === 'connected')
   const configuredBot = bots.find((bot) => bot.appId)
   const activeBot = connectedBot ?? configuredBot
   const status = connectedBot
     ? '已连接，可以开始使用'
     : configuredBot
-      ? 'Bot 已保存，正在等待连接'
+      ? STATUS_CONFIG[botStates[configuredBot.id]?.status ?? 'disconnected'].label
       : '还没有连接飞书 Bot'
   const statusTone = connectedBot
     ? 'bg-green-500/10 text-green-700 dark:text-green-400'
@@ -1500,15 +1583,15 @@ function FeishuQuickStart({ bots, botStates, onRegister, onManualAdd, onRefresh,
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={onRegister} className="gap-1.5">
+            <Button size="sm" onClick={onRegister} disabled={disabled} className="gap-1.5">
               <QrCode size={14} />
               {bots.length ? '再创建一个 Bot' : '扫码创建飞书 Bot'}
             </Button>
-            <Button size="sm" variant="outline" onClick={onTest} disabled={!activeBot || testing} className="gap-1.5">
+            <Button size="sm" variant="outline" onClick={onTest} disabled={disabled || !activeBot || testing} className="gap-1.5">
               {testing ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
               {testing ? '测试中…' : '测试连接'}
             </Button>
-            <Button size="sm" variant="outline" onClick={onManualAdd} className="gap-1.5">
+            <Button size="sm" variant="outline" onClick={onManualAdd} disabled={disabled} className="gap-1.5">
               <Plus size={14} />
               使用已有 Bot
             </Button>
@@ -1526,27 +1609,28 @@ function FeishuConfigTab(): React.ReactElement {
   const setBotStates = useSetAtom(feishuBotStatesAtom)
   const [bots, setBots] = React.useState<FeishuBotConfig[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState('')
+  const [stateError, setStateError] = React.useState('')
+  const { busy: adding, run: runAdd } = useIntegrationAction()
   const [testing, setTesting] = React.useState(false)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
 
   const loadBots = React.useCallback(async () => {
+    setLoadError('')
     try {
       const config = await window.electronAPI.getFeishuMultiConfig()
       setBots(config.bots)
     } catch {
-      // fallback: 旧 API
       try {
-        const oldConfig = await window.electronAPI.getFeishuConfig()
-        if (oldConfig.appId) {
-          setBots([{
-            id: 'legacy',
-            name: '飞书助手',
-            enabled: oldConfig.enabled,
-            appId: oldConfig.appId,
-            appSecret: oldConfig.appSecret,
-          }])
+        const legacy = await window.electronAPI.getFeishuConfig()
+        if (legacy.appId) {
+          setBots([{ id: 'legacy', name: '飞书助手', enabled: legacy.enabled, appId: legacy.appId, appSecret: legacy.appSecret }])
+        } else {
+          setBots([])
         }
-      } catch { /* ignore */ }
+      } catch {
+        setLoadError('无法读取飞书 Bot 配置，请重试。')
+      }
     } finally {
       setLoading(false)
     }
@@ -1554,12 +1638,13 @@ function FeishuConfigTab(): React.ReactElement {
 
   // 进入 Tab 时同步最新状态，避免因启动时序问题导致颜色显示错误
   const refreshStates = React.useCallback(async () => {
+    setStateError('')
     try {
       const multiState = await window.electronAPI.getFeishuMultiStatus?.()
       if (multiState?.bots) {
         setBotStates(multiState.bots)
       }
-    } catch { /* 忽略 */ }
+    } catch { setStateError('无法读取飞书连接状态，请刷新重试。') }
   }, [setBotStates])
 
   React.useEffect(() => {
@@ -1567,7 +1652,7 @@ function FeishuConfigTab(): React.ReactElement {
     refreshStates()
   }, [loadBots, refreshStates])
 
-  const handleAddBot = React.useCallback(async () => {
+  const handleAddBot = React.useCallback(() => runAdd(async () => {
     try {
       const saved = await window.electronAPI.saveFeishuBotConfig({
         name: defaultBotName(bots.length),
@@ -1582,7 +1667,7 @@ function FeishuConfigTab(): React.ReactElement {
     } catch {
       toast.error('创建 Bot 失败')
     }
-  }, [bots.length])
+  }), [bots.length, runAdd])
 
   const [registerOpen, setRegisterOpen] = React.useState(false)
 
@@ -1620,20 +1705,19 @@ function FeishuConfigTab(): React.ReactElement {
         toast.error(err instanceof Error ? err.message : '自动启动失败，请手动启动')
       })
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '保存配置失败')
+      toast.error('保存配置失败，扫码取得的凭据保留在当前弹窗，可重试保存。')
+      throw err
     }
   }, [bots.length])
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 size={24} className="animate-spin text-muted-foreground" />
-      </div>
-    )
+    return <IntegrationSettingsFeedback loading message="正在加载飞书 Bot 配置…" />
   }
 
   return (
-    <div className="space-y-8">
+    <div className="min-w-0 space-y-6">
+      {loadError && <IntegrationSettingsFeedback message={loadError} onRetry={() => void loadBots()} />}
+      {stateError && <IntegrationSettingsFeedback message={stateError} onRetry={() => void refreshStates()} />}
       {/* 视频教程（顶部最显眼处，未配置 URL 时自动隐藏） */}
       <FeishuTutorialVideo />
 
@@ -1651,6 +1735,7 @@ function FeishuConfigTab(): React.ReactElement {
         onRefresh={() => { void refreshStates(); void loadBots() }}
         onTest={() => void handleQuickTest()}
         testing={testing}
+        disabled={adding || Boolean(loadError)}
       />
 
       <details
@@ -1811,8 +1896,7 @@ function FeishuConfigTab(): React.ReactElement {
           <FeishuCliSection />
           <LarkCloudCapabilitiesSection />
 
-          {/* MCP 当前不展示给普通用户：它与 CLI 能力重叠且需要第二套 App/OAuth 配置。
-              现有实现保留在代码中，待 CLI 覆盖不足时再作为实验性兜底入口开放。 */}
+          {/* 官方 Lark MCP 暂不向普通用户展示，不挂载其状态与授权入口。 */}
         </div>
       </details>
 

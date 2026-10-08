@@ -80,9 +80,9 @@ export const PINNED_SESSION_MAX_HEIGHT = PINNED_SESSION_VISIBLE_LIMIT * PINNED_S
 
 const RAIL_STATUS_CLASS: Record<SessionIndicatorStatus, string> = {
   idle: 'hidden',
-  running: 'border-blue-500 animate-pulse',
-  blocked: 'border-orange-500',
-  completed: 'border-emerald-500',
+  running: 'border-info animate-pulse',
+  blocked: 'border-warning',
+  completed: 'border-success',
 }
 
 export interface AgentProjectGroup {
@@ -583,7 +583,7 @@ export const ConversationItem = React.memo(function ConversationItem({
             <span
               className={cn(
                 'absolute inset-y-0 left-0 w-[3px] rounded-l-md pointer-events-none',
-                streaming ? 'bg-blue-500 animate-pulse' : 'bg-primary',
+                streaming ? 'bg-info animate-pulse' : 'bg-primary',
               )}
               aria-hidden="true"
             />
@@ -658,22 +658,22 @@ export const ConversationItem = React.memo(function ConversationItem({
 /** 会话行左侧状态条的颜色 — 与 SessionIndicatorStatus 呼应 */
 type SessionLeftAccent = 'orange' | 'blue' | 'green'
 const SESSION_ACCENT_ROW_CLASS: Record<SessionLeftAccent, string> = {
-  orange: 'bg-orange-500/[0.08] text-foreground font-medium',
+  orange: 'bg-warning/[0.08] text-foreground font-medium',
   blue: 'text-foreground font-medium hover:bg-foreground/[0.03]',
   green: 'text-foreground font-medium hover:bg-foreground/[0.03]',
 }
 
 const SESSION_ACCENT_INDICATOR_CLASS: Record<SessionLeftAccent, string> = {
-  orange: 'bg-orange-500',
-  blue: 'bg-blue-500',
-  green: 'bg-green-500',
+  orange: 'bg-warning',
+  blue: 'bg-info',
+  green: 'bg-success',
 }
 
 const DELEGATION_STATUS_ICON_CLASS: Record<SessionIndicatorStatus, string> = {
   idle: 'text-foreground/40',
-  running: 'text-blue-500',
-  blocked: 'text-orange-500',
-  completed: 'text-green-500',
+  running: 'text-info',
+  blocked: 'text-warning',
+  completed: 'text-success',
 }
 
 export function getSessionLeftAccent(status: SessionIndicatorStatus): SessionLeftAccent | undefined {

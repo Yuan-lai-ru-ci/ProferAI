@@ -8,7 +8,9 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Plus, Trash2, Star, X } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
+import { AlertDialog, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogHeader, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from '@profer/ui/primitives/alert-dialog'
 import { Input } from '@profer/ui/primitives/input'
 import { Textarea } from '@profer/ui/primitives/textarea'
 import { Separator } from '@profer/ui/primitives/separator'
@@ -21,7 +23,7 @@ import {
   defaultPromptIdAtom,
   promptSidebarOpenAtom,
 } from '@/atoms/system-prompt-atoms'
-import { useSystemPromptAutosave } from '@/hooks/useSystemPromptAutosave'
+import { promptDeletingIdsAtom, promptSaveStateAtom, useSystemPromptAutosave } from '@/hooks/useSystemPromptAutosave'
 import type { SystemPrompt, SystemPromptCreateInput, SystemPromptUpdateInput } from '@profer/shared'
 
 export function PromptEditorSidebar(): React.ReactElement {
@@ -30,9 +32,16 @@ export function PromptEditorSidebar(): React.ReactElement {
   const defaultPromptId = useAtomValue(defaultPromptIdAtom)
   const setPromptSidebarOpen = useSetAtom(promptSidebarOpenAtom)
 
+  const saveState = useAtomValue(promptSaveStateAtom)
+  const deletingIds = useAtomValue(promptDeletingIdsAtom)
+  const debounceSave = useSystemPromptAutosave()
   const [editName, setEditName] = React.useState('')
   const [editContent, setEditContent] = React.useState('')
   const [hoveredId, setHoveredId] = React.useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = React.useState<string | null>(null)
+  const [deleting, setDeleting] = React.useState(false)
+  const nameId = React.useId()
+  const contentId = React.useId()
 
   const selectedPrompt = React.useMemo(
     () => config.prompts.find((p) => p.id === selectedId),
@@ -62,23 +71,22 @@ export function PromptEditorSidebar(): React.ReactElement {
       setSelectedId(created.id)
     } catch (error) {
       console.error('[提示词侧栏] 创建失败:', error)
+      toast.error('创建提示词失败，请重试')
     }
   }
 
   /** 删除提示词 */
   const handleDelete = async (id: string): Promise<void> => {
+    if (deleting) return
+    setDeleting(true)
     try {
-      await window.electronAPI.deleteSystemPrompt(id)
-      setConfig((prev) => {
-        const newPrompts = prev.prompts.filter((p) => p.id !== id)
-        const newDefaultId = prev.defaultPromptId === id ? 'builtin-default' : prev.defaultPromptId
-        return { ...prev, prompts: newPrompts, defaultPromptId: newDefaultId }
-      })
-      if (selectedId === id) {
-        setSelectedId('builtin-default')
-      }
+      await debounceSave.remove(id)
+      setDeleteTarget(null)
     } catch (error) {
       console.error('[提示词侧栏] 删除失败:', error)
+      toast.error('删除前保存或删除失败，请重试')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -89,6 +97,7 @@ export function PromptEditorSidebar(): React.ReactElement {
       setConfig((prev) => ({ ...prev, defaultPromptId: id }))
     } catch (error) {
       console.error('[提示词侧栏] 设置默认失败:', error)
+      toast.error('设置默认提示词失败，请重试')
     }
   }
 
@@ -96,7 +105,6 @@ export function PromptEditorSidebar(): React.ReactElement {
    * 防抖自动保存：同一提示词的字段变更合并提交，切换提示词互不覆盖，卸载时自动 flush。
    * 详见 useSystemPromptAutosave。
    */
-  const debounceSave = useSystemPromptAutosave()
 
   /** 名称变更 */
   const handleNameChange = (value: string): void => {
@@ -139,6 +147,10 @@ export function PromptEditorSidebar(): React.ReactElement {
         </div>
       </div>
 
+      <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-muted-foreground" role="status" aria-live="polite">
+        <span>{saveState === 'error' ? '保存失败，草稿已保留' : saveState === 'saved' ? '已保存' : '等待保存'}</span>
+        {saveState === 'error' && <Button type="button" size="sm" variant="outline" onClick={() => { void debounceSave.flush().catch(() => {}) }}>重试保存</Button>}
+      </div>
       {/* 提示词列表 */}
       <ScrollArea className="max-h-[200px] shrink-0">
         <div className="py-1">
@@ -150,7 +162,7 @@ export function PromptEditorSidebar(): React.ReactElement {
               isDefault={prompt.id === defaultPromptId}
               isHovered={prompt.id === hoveredId}
               onSelect={(id) => setSelectedId(id)}
-              onDelete={handleDelete}
+              onDelete={setDeleteTarget}
               onSetDefault={handleSetDefault}
               onHoverChange={setHoveredId}
             />
@@ -164,21 +176,23 @@ export function PromptEditorSidebar(): React.ReactElement {
       {selectedPrompt && (
         <div className="flex-1 min-h-0 flex flex-col overflow-y-auto p-3 gap-3">
           <div>
-            <label className="text-xs font-medium text-muted-foreground mb-1.5 block">名称</label>
+            <label htmlFor={nameId} className="text-xs font-medium text-muted-foreground mb-1.5 block">名称</label>
             <Input
+              id={nameId}
               value={editName}
               onChange={(e) => handleNameChange(e.target.value)}
-              readOnly={selectedPrompt.isBuiltin}
+              readOnly={selectedPrompt.isBuiltin || deleting || deletingIds.includes(selectedPrompt.id)}
               className={cn('h-8 text-sm', selectedPrompt.isBuiltin && 'opacity-60 cursor-not-allowed')}
               maxLength={50}
             />
           </div>
           <div className="flex-1 min-h-0 flex flex-col">
-            <label className="text-xs font-medium text-muted-foreground mb-1.5 block">内容</label>
+            <label htmlFor={contentId} className="text-xs font-medium text-muted-foreground mb-1.5 block">内容</label>
             <Textarea
+              id={contentId}
               value={editContent}
               onChange={(e) => handleContentChange(e.target.value)}
-              readOnly={selectedPrompt.isBuiltin}
+              readOnly={selectedPrompt.isBuiltin || deleting || deletingIds.includes(selectedPrompt.id)}
               className={cn(
                 'flex-1 min-h-[120px] resize-none text-sm',
                 selectedPrompt.isBuiltin && 'opacity-60 cursor-not-allowed'
@@ -199,6 +213,18 @@ export function PromptEditorSidebar(): React.ReactElement {
           />
         </label>
       </div>
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open && !deleting) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除提示词？</AlertDialogTitle>
+            <AlertDialogDescription>此操作无法撤销；默认提示词删除后将恢复为内置默认。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction disabled={deleting} onClick={(event) => { event.preventDefault(); if (deleteTarget) void handleDelete(deleteTarget) }}>确认删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

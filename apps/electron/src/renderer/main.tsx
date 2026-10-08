@@ -29,20 +29,11 @@ import {
   handleSkinsChanged,
 } from './atoms/theme'
 import {
-  agentChannelIdAtom,
-  agentModelIdAtom,
-  agentChannelIdsAtom,
-  agentRuntimeAtom,
   agentWorkspacesAtom,
   currentAgentWorkspaceIdAtom,
   currentAgentSessionIdAtom,
   workspaceCapabilitiesVersionAtom,
   workspaceFilesVersionAtom,
-  agentThinkingAtom,
-  agentEffortAtom,
-  agentMaxBudgetUsdAtom,
-  agentMaxTurnsAtom,
-  agentSettingsReadyAtom,
   dockBadgeCountAtom,
   unviewedCompletedSessionIdsAtom,
   agentSessionsAtom,
@@ -106,7 +97,8 @@ import type { TabItem } from './atoms/tab-atoms'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
-import { currentConversationIdAtom, channelsAtom, channelsLoadedAtom, selectedModelAtom } from './atoms/chat-atoms'
+import { currentConversationIdAtom } from './atoms/chat-atoms'
+import { initializeAgentSettings } from './lib/agent-settings-initialization'
 import { appModeAtom } from './atoms/app-mode'
 import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@profer/shared'
 import { Toaster } from '@profer/ui'
@@ -130,15 +122,6 @@ import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
 import './styles/globals.css'
 import './styles/skin-base.css'
 import 'katex/dist/katex.min.css'
-
-function hasEnabledModel(
-  channels: Awaited<ReturnType<typeof window.electronAPI.listChannels>>,
-  selection: { channelId: string; modelId: string } | null,
-): boolean {
-  if (!selection) return false
-  const channel = channels.find((c) => c.id === selection.channelId)
-  return !!channel?.enabled && !!channel.models.find((m) => m.id === selection.modelId && m.enabled)
-}
 
 // ===== 窗口类型检测 =====
 const isQuickTaskWindow = new URLSearchParams(window.location.search).get('window') === 'quick-task'
@@ -220,22 +203,8 @@ function ThemeInitializer(): null {
  * 从主进程加载 Agent 渠道/模型设置并写入 atoms。
  */
 function AgentSettingsInitializer(): null {
-  const setAgentChannelId = useSetAtom(agentChannelIdAtom)
-  const setAgentModelId = useSetAtom(agentModelIdAtom)
-  const setAgentChannelIds = useSetAtom(agentChannelIdsAtom)
-  const setAgentRuntime = useSetAtom(agentRuntimeAtom)
-  const setAgentWorkspaces = useSetAtom(agentWorkspacesAtom)
-  const setCurrentWorkspaceId = useSetAtom(currentAgentWorkspaceIdAtom)
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom)
   const bumpFiles = useSetAtom(workspaceFilesVersionAtom)
-  const setThinking = useSetAtom(agentThinkingAtom)
-  const setEffort = useSetAtom(agentEffortAtom)
-  const setMaxBudget = useSetAtom(agentMaxBudgetUsdAtom)
-  const setMaxTurns = useSetAtom(agentMaxTurnsAtom)
-
-  const setAgentSettingsReady = useSetAtom(agentSettingsReadyAtom)
-  const setChannels = useSetAtom(channelsAtom)
-  const setChannelsLoaded = useSetAtom(channelsLoadedAtom)
   const store = useStore()
 
   // 读取当前工作区信息（用于能力变化 diff）
@@ -247,103 +216,11 @@ function AgentSettingsInitializer(): null {
   // 初次加载标记 — 应用启动或切换工作区时不显示 toast
   const suppressToastRef = useRef(true)
 
-  useEffect(() => {
-    // 并行加载渠道列表和设置，确保两者都就绪后再验证渠道有效性
-    Promise.all([
-      window.electronAPI.listChannels(),
-      window.electronAPI.getSettings(),
-    ]).then(([channels, settings]) => {
-      // 缓存渠道列表
-      setChannels(channels)
-      setChannelsLoaded(true)
-
-      const channelIds = new Set(channels.map((c) => c.id))
-
-      // 验证 Chat 模式的全局默认模型（localStorage 持久化的可能指向已删除渠道）
-      const chatModel = store.get(selectedModelAtom)
-      if (chatModel && !hasEnabledModel(channels, chatModel)) {
-        console.warn('[AgentSettings] Chat selectedModel 指向已删除、停用或无效的模型配置，清除')
-        store.set(selectedModelAtom, null)
-      }
-
-      // 验证并加载 Agent 渠道/模型
-      if (settings.agentChannelId && channelIds.has(settings.agentChannelId)) {
-        setAgentChannelId(settings.agentChannelId)
-      } else if (settings.agentChannelId && !channelIds.has(settings.agentChannelId)) {
-        // 渠道已删除，清除无效设置
-        console.warn('[AgentSettings] agentChannelId 指向已删除的渠道，清除')
-        window.electronAPI.updateSettings({ agentChannelId: undefined, agentModelId: undefined }).catch(console.error)
-      }
-      if (settings.agentModelId && (!settings.agentChannelId || channelIds.has(settings.agentChannelId))) {
-        setAgentModelId(settings.agentModelId)
-      }
-      setAgentRuntime(settings.agentRuntime ?? 'claude')
-
-      // 加载 Agent 启用渠道列表，过滤已删除的渠道
-      if (settings.agentChannelIds && settings.agentChannelIds.length > 0) {
-        const validIds = settings.agentChannelIds.filter((id) => channelIds.has(id))
-        setAgentChannelIds(validIds)
-        // 如果有渠道被清理，持久化更新后的列表
-        if (validIds.length !== settings.agentChannelIds.length) {
-          console.warn('[AgentSettings] 清理了已删除的 agentChannelIds')
-          window.electronAPI.updateSettings({ agentChannelIds: validIds }).catch(console.error)
-        }
-      } else if (settings.agentChannelId && channelIds.has(settings.agentChannelId)) {
-        // 迁移：旧版本只有 agentChannelId，自动转为数组
-        const migrated = [settings.agentChannelId]
-        setAgentChannelIds(migrated)
-        window.electronAPI.updateSettings({ agentChannelIds: migrated }).catch(console.error)
-      }
-
-      // 兜底：agentChannelId 存在但不在 agentChannelIds 白名单中，自动修复不一致
-      if (settings.agentChannelId && channelIds.has(settings.agentChannelId)) {
-        const currentIds = settings.agentChannelIds?.filter((id) => channelIds.has(id)) ?? []
-        if (!currentIds.includes(settings.agentChannelId)) {
-          const fixedIds = [...currentIds, settings.agentChannelId]
-          setAgentChannelIds(fixedIds)
-          window.electronAPI.updateSettings({ agentChannelIds: fixedIds }).catch(console.error)
-        }
-      }
-
-      if (settings.agentThinking) {
-        setThinking(settings.agentThinking)
-      }
-      if (settings.agentEffort) {
-        setEffort(settings.agentEffort)
-      }
-      if (settings.agentMaxBudgetUsd != null) {
-        setMaxBudget(settings.agentMaxBudgetUsd)
-      }
-      if (settings.agentMaxTurns != null) {
-        setMaxTurns(settings.agentMaxTurns)
-      }
-
-      // 加载工作区列表并恢复上次选中的工作区
-      window.electronAPI.listAgentWorkspaces().then((workspaces) => {
-        setAgentWorkspaces(workspaces)
-        const visibleWorkspaces = getVisibleAgentWorkspaces(workspaces)
-        const savedWorkspace = settings.agentWorkspaceId
-          ? workspaces.find((workspace) => workspace.id === settings.agentWorkspaceId)
-          : undefined
-        const nextWorkspaceId = savedWorkspace && isAgentWorkspaceVisible(savedWorkspace)
-          ? savedWorkspace.id
-          : visibleWorkspaces[0]?.id ?? null
-        setCurrentWorkspaceId(nextWorkspaceId)
-
-        // 旧版本可能把团队工作区记在了默认 Agent 工作区设置里；隐藏入口时回落到个人项目。
-        if (settings.agentWorkspaceId && settings.agentWorkspaceId !== nextWorkspaceId) {
-          window.electronAPI.updateSettings({ agentWorkspaceId: nextWorkspaceId ?? undefined }).catch(console.error)
-        }
-        setAgentSettingsReady(true)
-      }).catch((err) => {
-        console.error(err)
-        setAgentSettingsReady(true) // 即使出错也标记就绪，避免永远阻塞
-      })
-    }).catch((err) => {
-      console.error(err)
-      setAgentSettingsReady(true) // 即使出错也标记就绪，避免永远阻塞
-    })
-  }, [setAgentChannelId, setAgentModelId, setAgentChannelIds, setAgentRuntime, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setChannels, setChannelsLoaded, setAgentSettingsReady])
+  useEffect(() => initializeAgentSettings(store, {
+    getSettings: window.electronAPI.getSettings,
+    listWorkspaces: window.electronAPI.listAgentWorkspaces,
+    onFailure: (error) => console.error('[AgentSettings] 启动设置加载失败:', error),
+  }), [store])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {

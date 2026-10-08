@@ -35,6 +35,13 @@ export function RechargeSection(): React.ReactElement {
   const { reload: reloadCredits } = useCreditsLoader(0)
   const [config, setConfig] = React.useState<RechargeConfig>(DEFAULT_CONFIG)
   const [configLoaded, setConfigLoaded] = React.useState(false)
+  const [configError, setConfigError] = React.useState('')
+  const submittingRef = React.useRef(false)
+  const pendingOrderRef = React.useRef<string | null>(null)
+  const mountedRef = React.useRef(false)
+  const pollGenerationRef = React.useRef(0)
+  const pollWaitRef = React.useRef<{ timer: ReturnType<typeof setTimeout>; resolve: () => void } | null>(null)
+  const customAmountId = React.useId()
 
   const [amountYuan, setAmountYuan] = React.useState<number>(0)
   const [customAmount, setCustomAmount] = React.useState<string>('')
@@ -42,22 +49,38 @@ export function RechargeSection(): React.ReactElement {
   const [submitting, setSubmitting] = React.useState(false)
   const [pendingOrderId, setPendingOrderId] = React.useState<string | null>(null)
   const [pendingQrcode, setPendingQrcode] = React.useState<string>('')
+  const [orderMessage, setOrderMessage] = React.useState('')
 
-  // 加载充值配置
-  React.useEffect(() => {
-    let cancelled = false
-    requestRechargeConfig().then((data) => {
-      if (cancelled) return
-      if (data) setConfig({ ...DEFAULT_CONFIG, ...data })
-      setConfigLoaded(true)
-    }).catch(() => {
-      if (!cancelled) setConfigLoaded(true)
-    })
-    return () => { cancelled = true }
+  const loadConfig = React.useCallback(async (): Promise<void> => {
+    setConfigLoaded(false)
+    setConfigError('')
+    try {
+      const data = await requestRechargeConfig()
+      if (!data || !Number.isFinite(data.rate) || data.rate <= 0 || !Number.isFinite(data.customMinRmb) || !Number.isFinite(data.customMaxRmb) || data.customMinRmb <= 0 || data.customMaxRmb < data.customMinRmb || !Array.isArray(data.presetsRmb) || data.presetsRmb.some((amount) => !Number.isFinite(amount) || amount <= 0)) {
+        throw new Error('无效充值配置')
+      }
+      if (mountedRef.current && data) setConfig({ ...DEFAULT_CONFIG, ...data })
+    } catch {
+      if (mountedRef.current) setConfigError('充值配置读取失败，请重试；配置未确认前不能下单')
+    } finally {
+      if (mountedRef.current) setConfigLoaded(true)
+    }
   }, [])
 
+  React.useEffect(() => {
+    mountedRef.current = true
+    void loadConfig()
+    return () => {
+      mountedRef.current = false
+      pollGenerationRef.current++
+      if (pollWaitRef.current) clearTimeout(pollWaitRef.current.timer)
+      pollWaitRef.current?.resolve()
+      pollWaitRef.current = null
+    }
+  }, [loadConfig])
+
   // 当前选中金额（元）
-  const effectiveAmount = amountYuan > 0 ? amountYuan : (parseInt(customAmount, 10) || 0)
+  const effectiveAmount = amountYuan > 0 ? amountYuan : Number(customAmount)
   // 等值积分
   const estimatedPoints = config.rate * effectiveAmount
 
@@ -100,27 +123,50 @@ export function RechargeSection(): React.ReactElement {
   }, [])
 
   const pollStatus = React.useCallback(async (orderId: string): Promise<boolean> => {
+    const generation = ++pollGenerationRef.current
+    const current = () => mountedRef.current && generation === pollGenerationRef.current
+    setOrderMessage('订单已生成，等待付款确认')
     try {
       const readStatus = await createRechargeStatusReader(orderId)
-      if (!readStatus) return false
+      if (!current()) return false
+      if (!readStatus) throw new Error('无法读取订单')
       for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 5000))
+        if (i > 0) await new Promise<void>((resolve) => {
+          pollWaitRef.current = { timer: setTimeout(() => { pollWaitRef.current = null; resolve() }, 5000), resolve }
+        })
+        if (!current()) return false
         const d = await readStatus()
+        if (!current()) return false
         if (d?.status === 'paid') {
           toast.success(`充值成功，已到账 ${Math.round(((d.amountRmb ?? 0) / 100) * config.rate)} 积分`)
           await reloadCredits()
+          if (!current()) return false
+          pendingOrderRef.current = null
           setPendingOrderId(null)
           setPendingQrcode('')
+          setOrderMessage('充值已到账')
           return true
         }
+        if (d?.status === 'cancelled' || d?.status === 'expired') {
+          pendingOrderRef.current = null
+          setPendingOrderId(null)
+          setPendingQrcode('')
+          setOrderMessage(d.status === 'expired' ? '充值订单已过期' : '充值订单已取消')
+          return false
+        }
       }
-    } catch { /* 轮询超时静默 */ }
+    } catch {
+      if (current()) setOrderMessage('订单查询失败，可重试查询；请勿重复下单')
+      return false
+    }
+    if (current()) setOrderMessage('暂未确认到账，可重试查询；请勿重复下单')
     return false
   }, [config.rate, reloadCredits])
 
   const handleRecharge = React.useCallback(async () => {
+    if (submittingRef.current || !configLoaded || configError || pendingOrderRef.current) return
     const amount = effectiveAmount
-    if (!amount || amount <= 0) {
+    if (!Number.isFinite(amount) || !Number.isInteger(amount) || amount <= 0) {
       toast.error('请选择充值金额')
       return
     }
@@ -128,9 +174,11 @@ export function RechargeSection(): React.ReactElement {
       toast.error(`充值金额需在 ${config.customMinRmb}～${config.customMaxRmb} 元之间`)
       return
     }
+    submittingRef.current = true
     setSubmitting(true)
     try {
       const result = await createRechargeOrder(amount * 100, payType)
+      if (!mountedRef.current) return
       if (result.kind === 'unauthenticated') {
         toast.error('未登录，请先登录团队工作区')
         return
@@ -145,6 +193,7 @@ export function RechargeSection(): React.ReactElement {
           toast.error('充值订单响应无效，请重试')
           return
         }
+        pendingOrderRef.current = d.orderId
         setPendingOrderId(d.orderId)
         await openPay(d.payInfo.payUrl || '', d.payInfo.qrcode || '')
         // 打开支付页后轮询到账
@@ -157,9 +206,10 @@ export function RechargeSection(): React.ReactElement {
     } catch {
       toast.error('充值下单失败，请检查网络后重试')
     } finally {
+      submittingRef.current = false
       setSubmitting(false)
     }
-  }, [effectiveAmount, config.customMinRmb, config.customMaxRmb, config.rate, payType, openPay, pollStatus, copyWechat])
+  }, [pendingOrderId, configLoaded, configError, effectiveAmount, config.customMinRmb, config.customMaxRmb, config.rate, payType, openPay, pollStatus, copyWechat])
 
   if (!configLoaded) {
     return (
@@ -171,12 +221,23 @@ export function RechargeSection(): React.ReactElement {
 
   const onlineEnabled = config.enabled
 
+  if (configError) {
+    return (
+      <div className="rounded-lg border border-destructive/40 p-4 text-sm">
+        <p role="alert" className="text-destructive">{configError}</p>
+        <button type="button" onClick={() => void loadConfig()} className="mt-3 rounded-lg border border-border bg-card px-3 py-1.5 text-sm hover:bg-muted focus-visible:outline focus-visible:outline-ring">
+          重试读取充值配置
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="rounded-xl border border-primary/30 bg-gradient-to-br from-primary/[0.05] to-transparent p-5">
       <div className="flex items-center gap-2 mb-1">
         <Zap size={16} className="text-primary" />
         <h3 className="text-sm font-semibold">充值积分</h3>
-        <span className="text-[11px] text-muted-foreground">1 元 = {config.rate} 积分 · 即时到账充值积分桶</span>
+        <span className="text-[11px] text-muted-foreground">1 元 = {config.rate} 积分 · 付款确认后到账</span>
       </div>
 
       {/* 档位 */}
@@ -199,10 +260,12 @@ export function RechargeSection(): React.ReactElement {
 
       {/* 自定义金额 */}
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-sm text-muted-foreground">自定义</span>
+        <label htmlFor={customAmountId} className="text-sm text-muted-foreground">自定义</label>
         <div className="flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 focus-within:border-primary">
           <span className="text-sm text-muted-foreground">¥</span>
           <input
+            id={customAmountId}
+            disabled={submitting || Boolean(pendingOrderId)}
             type="number"
             min={config.customMinRmb}
             max={config.customMaxRmb}
@@ -240,7 +303,7 @@ export function RechargeSection(): React.ReactElement {
 
         <button
           onClick={handleRecharge}
-          disabled={submitting || effectiveAmount <= 0}
+          disabled={submitting || !Number.isFinite(effectiveAmount) || !Number.isInteger(effectiveAmount) || effectiveAmount <= 0 || Boolean(pendingOrderId)}
           className="ml-auto rounded-lg bg-primary text-primary-foreground px-5 py-2 text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {submitting ? (
@@ -252,6 +315,13 @@ export function RechargeSection(): React.ReactElement {
       </div>
 
       {/* 二维码（在线支付展示） */}
+      {orderMessage && <p role="status" aria-live="polite" className="mt-3 text-sm text-muted-foreground">{orderMessage}</p>}
+      {pendingOrderId && <button type="button" onClick={() => {
+        if (pollWaitRef.current) clearTimeout(pollWaitRef.current.timer)
+        pollWaitRef.current?.resolve()
+        pollWaitRef.current = null
+        void pollStatus(pendingOrderId)
+      }} className="mt-2 rounded-lg border border-border px-3 py-1.5 text-sm focus-visible:outline focus-visible:outline-ring">重试查询订单</button>}
       {pendingQrcode && (
         <div className="mt-3 flex items-center gap-3 rounded-lg border border-border bg-card p-3">
           <img src={pendingQrcode} alt="收款二维码" className="w-32 h-32 object-contain rounded bg-white" />

@@ -5,6 +5,8 @@ import { Button } from '@profer/ui/primitives/button'
 import { Input } from '@profer/ui/primitives/input'
 import { SettingsCard, SettingsSection, SettingsToggle } from './primitives'
 import type { PocketModeStatus } from '../../../types'
+import { IntegrationSettingsFeedback } from './IntegrationSettingsFeedback'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@profer/ui/primitives/alert-dialog'
 
 /** 安卓版 APK 扫码下载信息 */
 interface ApkQrInfo {
@@ -39,6 +41,11 @@ function ConnectionValue({ label, value, secret = false }: { label: string; valu
 /** 局域网移动端的连接与凭据设置。 */
 export function PocketModeSettings(): React.ReactElement {
   const [status, setStatus] = React.useState<PocketModeStatus | null>(null)
+  const [loadError, setLoadError] = React.useState('')
+  const [actionError, setActionError] = React.useState('')
+  const [disableOpen, setDisableOpen] = React.useState(false)
+  const [listenTimedOut, setListenTimedOut] = React.useState(false)
+  const operationPending = React.useRef(false)
   const [saving, setSaving] = React.useState(false)
   const [portInput, setPortInput] = React.useState('')
   const [savingPort, setSavingPort] = React.useState(false)
@@ -47,15 +54,18 @@ export function PocketModeSettings(): React.ReactElement {
   /** 安卓版 APK 扫码下载信息（含二维码 dataURL），服务运行且找到 APK 时存在 */
   const [apkQr, setApkQr] = React.useState<ApkQrInfo | null>(null)
   const [apkLoading, setApkLoading] = React.useState(false)
+  const [apkError, setApkError] = React.useState('')
+  const [apkAttempt, setApkAttempt] = React.useState(0)
 
   const refresh = React.useCallback(async (): Promise<PocketModeStatus | null> => {
+    setLoadError('')
     try {
       const next = await window.electronAPI.getPocketModeStatus()
       setStatus(next)
       return next
     } catch (error) {
       console.error('[移动模式] 读取状态失败:', error)
-      toast.error('读取移动模式状态失败')
+      setLoadError('读取移动模式状态失败，请重试。')
       return null
     }
   }, [])
@@ -71,43 +81,53 @@ export function PocketModeSettings(): React.ReactElement {
 
   // 服务监听是异步的；启用后短暂轮询，直到主进程回传局域网地址与 Token。
   React.useEffect(() => {
-    if (!status?.enabled || status.running) return
+    if (!status?.enabled || status.running || status.error) return
+    setListenTimedOut(false)
     const timer = window.setInterval(() => void refresh(), 500)
-    const timeout = window.setTimeout(() => window.clearInterval(timer), 5_000)
+    const timeout = window.setTimeout(() => { window.clearInterval(timer); setListenTimedOut(true) }, 5_000)
     return () => {
       window.clearInterval(timer)
       window.clearTimeout(timeout)
     }
-  }, [refresh, status?.enabled, status?.running])
+  }, [refresh, status?.enabled, status?.running, status?.error])
 
   // 拉取安卓版 APK 扫码下载信息（地址 + 二维码，指向官网 profer.cn 域名）。
   // 官网直链随时可用，不依赖移动模式服务是否运行。
   React.useEffect(() => {
     let cancelled = false
     setApkLoading(true)
+    setApkError('')
     void window.electronAPI.getProferApkQr().then((info) => {
       if (cancelled) return
       setApkQr(info)
+      if (!info) setApkError('暂未提供安卓版下载信息。')
       setApkLoading(false)
     }).catch(() => {
-      if (!cancelled) { setApkQr(null); setApkLoading(false) }
+      if (!cancelled) { setApkQr(null); setApkLoading(false); setApkError('安卓版下载信息加载失败，请重试。') }
     })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [apkAttempt])
 
   const toggle = async (enabled: boolean): Promise<void> => {
+    if (operationPending.current) return
+    operationPending.current = true
     setSaving(true)
+    setActionError('')
     try {
       const next = await window.electronAPI.setPocketModeEnabled(enabled)
       setStatus(next)
+      setDisableOpen(false)
+      setListenTimedOut(false)
       toast.success(enabled ? '移动模式已开启' : '移动模式已关闭')
     } catch (error) {
       console.error('[移动模式] 切换失败:', error)
       toast.error(error instanceof Error ? error.message : '切换移动模式失败')
+      setActionError('切换失败，保留上次读取的状态。请重试。')
       await refresh()
     } finally {
       setSaving(false)
+      operationPending.current = false
     }
   }
 
@@ -121,11 +141,14 @@ export function PocketModeSettings(): React.ReactElement {
   const isCustomPort = status != null && status.port !== status.defaultPort
 
   const savePort = async (): Promise<void> => {
+    if (operationPending.current) return
     if (!portValid) {
       toast.error('端口必须是 1024-65535 之间的整数')
       return
     }
     setSavingPort(true)
+    operationPending.current = true
+    setActionError('')
     try {
       const wasRunning = status?.running === true
       const next = await window.electronAPI.setPocketModePort(parsedPort)
@@ -140,15 +163,20 @@ export function PocketModeSettings(): React.ReactElement {
     } catch (error) {
       console.error('[移动模式] 保存端口失败:', error)
       toast.error(error instanceof Error ? error.message : '保存端口失败')
+      setActionError('保存端口失败，端口草稿已保留。请重试保存。')
       await refresh()
     } finally {
       setSavingPort(false)
+      operationPending.current = false
     }
   }
 
   // 恢复默认端口（正式版 7788 / 开发版 7789）
   const resetPort = async (): Promise<void> => {
+    if (operationPending.current) return
     setSavingPort(true)
+    operationPending.current = true
+    setActionError('')
     try {
       const wasRunning = status?.running === true
       const next = await window.electronAPI.setPocketModePort(0)
@@ -163,26 +191,37 @@ export function PocketModeSettings(): React.ReactElement {
     } catch (error) {
       console.error('[移动模式] 恢复默认端口失败:', error)
       toast.error(error instanceof Error ? error.message : '恢复默认端口失败')
+      setActionError('恢复默认端口失败，当前端口与草稿已保留。请重试。')
       await refresh()
     } finally {
       setSavingPort(false)
+      operationPending.current = false
     }
   }
 
   if (!status) {
-    return <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />正在加载移动模式...</div>
+    return <IntegrationSettingsFeedback loading={!loadError} message={loadError || '正在加载移动模式…'} onRetry={loadError ? () => void refresh() : undefined} />
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
+      {loadError && <IntegrationSettingsFeedback message={loadError} onRetry={() => void refresh()} />}
+      {actionError && <IntegrationSettingsFeedback message={actionError} />}
+      <AlertDialog open={disableOpen} onOpenChange={setDisableOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>关闭移动端连接？</AlertDialogTitle><AlertDialogDescription>当前移动端连接会立即断开。之后可重新开启。</AlertDialogDescription></AlertDialogHeader>
+          {actionError && <IntegrationSettingsFeedback message={actionError} />}
+          <AlertDialogFooter><AlertDialogCancel disabled={saving}>取消</AlertDialogCancel><AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); void toggle(false) }}>关闭连接</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <SettingsSection title="移动模式（试验版）" description="将 Agent 工作区连接到同一局域网内的移动设备浏览器。">
         <SettingsCard divided>
           <SettingsToggle
             label="启用移动端连接"
             description="开启后立即启动本机服务，并在下次启动 Profer 时自动恢复。"
             checked={status.enabled}
-            onCheckedChange={(enabled) => void toggle(enabled)}
-            disabled={saving}
+            onCheckedChange={(enabled) => { if (!enabled) setDisableOpen(true); else void toggle(true) }}
+            disabled={saving || savingPort || Boolean(loadError)}
           />
           {status.error && (
             <div className="border-t border-destructive/20 bg-destructive/5 px-4 py-3 text-xs leading-5 text-destructive">
@@ -203,7 +242,7 @@ export function PocketModeSettings(): React.ReactElement {
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Input
                 type="text"
                 inputMode="numeric"
@@ -220,6 +259,7 @@ export function PocketModeSettings(): React.ReactElement {
                   if (e.key === 'Enter' && portChanged && !savingPort) void savePort()
                 }}
                 aria-label="移动模式服务端口"
+                disabled={saving || savingPort || Boolean(loadError)}
                 aria-invalid={!portValid && !portEmpty}
                 className={`w-32 flex-shrink-0 tabular-nums ${
                   !portValid && !portEmpty ? 'border-destructive focus-visible:ring-destructive/30' : ''
@@ -228,7 +268,7 @@ export function PocketModeSettings(): React.ReactElement {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={!portChanged || savingPort}
+                disabled={!portChanged || savingPort || saving || Boolean(loadError)}
                 onClick={() => void savePort()}
               >
                 {savingPort ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
@@ -238,7 +278,7 @@ export function PocketModeSettings(): React.ReactElement {
                 <Button
                   variant="ghost"
                   size="sm"
-                  disabled={savingPort}
+                  disabled={savingPort || saving || Boolean(loadError)}
                   onClick={() => void resetPort()}
                 >
                   <RotateCcw className="size-3.5" />
@@ -259,7 +299,7 @@ export function PocketModeSettings(): React.ReactElement {
       {status.enabled && (
         <SettingsSection
           title="连接信息"
-          description={status.running ? '请在移动设备浏览器打开以下局域网地址，并输入连接 Token。' : '正在启动服务，请稍候...'}
+          description={status.running ? '请在移动设备浏览器打开以下局域网地址，并输入连接 Token。' : status.error || listenTimedOut ? '服务尚未就绪。检查端口或重试启动。' : '正在启动服务，请稍候…'}
         >
           <SettingsCard divided={false}>
             {status.running && status.lanUrl ? (
@@ -267,6 +307,8 @@ export function PocketModeSettings(): React.ReactElement {
                 <ConnectionValue label="移动端访问地址" value={status.lanUrl} />
                 {status.token && <ConnectionValue label="连接 Token" value={status.token} secret />}
               </>
+            ) : status.error || listenTimedOut ? (
+              <IntegrationSettingsFeedback loading={saving} message={status.error || '启动等待已超时，请重试启动或更换端口。'} onRetry={() => void toggle(true)} />
             ) : (
               <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />正在监听端口 {status.port}...</div>
             )}
@@ -284,20 +326,21 @@ export function PocketModeSettings(): React.ReactElement {
         description="用手机扫码，或点按钮/复制链接到手机浏览器打开，即可下载安装 Profer 移动版（安卓）。"
       >
         <SettingsCard divided={false}>
-          <div className="flex items-center gap-5 px-4 py-4">
+          {apkError && <IntegrationSettingsFeedback message={apkError} onRetry={() => setApkAttempt((previous) => previous + 1)} />}
+          <div className="flex flex-wrap items-center gap-5 px-4 py-4">
             <div className="flex shrink-0 flex-col items-center gap-1.5">
-              {apkLoading || !apkQr ? (
+              {apkLoading ? (
                 <div className="flex size-[104px] items-center justify-center rounded-xl border border-border bg-muted/40">
                   <Loader2 className="size-7 animate-spin text-muted-foreground" />
                 </div>
-              ) : apkQr.dataUrl ? (
+              ) : apkQr?.dataUrl ? (
                 <img src={apkQr.dataUrl} alt="安卓版 App 下载二维码" className="size-[104px] shrink-0 rounded-xl border border-border" />
               ) : (
                 <QrCode className="size-[104px] text-muted-foreground/40" />
               )}
               {apkQr && <span className="px-0.5 text-center text-[11px] leading-4 text-muted-foreground">{apkQr.fileName}</span>}
             </div>
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 basis-48">
               <p className="text-sm text-foreground">Profer 移动版（安卓）</p>
               <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
                 在手机上安装后，即可通过远程连接接入电脑上的 Agent。
@@ -318,6 +361,7 @@ export function PocketModeSettings(): React.ReactElement {
                   variant="ghost"
                   size="sm"
                   className="h-7 gap-1.5 px-0 text-xs text-muted-foreground hover:text-foreground"
+                  disabled={apkLoading || !apkQr}
                   onClick={async () => {
                     if (!apkQr) return
                     try {

@@ -17,7 +17,7 @@ import {
 } from './preview-inspection-service'
 
 export const AGENT_INSPECT_PREVIEW_TOOL_NAME = 'inspect_preview'
-export const AGENT_INSPECT_PREVIEW_DESCRIPTION = 'Inspect an authorized local file using current on-disk content and, when requested or appropriate, visual preview images. Use for Markdown, HTML, images, PDF, DOCX, XLSX, or text. Do not use this tool for PPTX; use open_file_preview so the user and Agent stay in Profer’s official file preview workflow. mode is content, visual, or both; scope is overview, page (with 1-based page), or all. Every call returns the current revision, and previousRevision tells whether the file changed since the last observation. The tool never accepts arbitrary file URLs or paths outside the Agent workspace and attached directories.'
+export const AGENT_INSPECT_PREVIEW_DESCRIPTION = 'Inspect current local Markdown/HTML/image/PDF/DOCX/XLSX/text content or visuals. Authorized workspace/attached paths only, no arbitrary file URLs. PPTX uses open_file_preview then inspect_file_preview, not this tool. mode: content/visual/both; scope: overview/page/all, 1-based page. Returns current revision; previousRevision detects changes.'
 
 type RuntimeImageBlock = { type: 'image'; data: string; mimeType: string }
 type RuntimeTextBlock = { type: 'text'; text: string }

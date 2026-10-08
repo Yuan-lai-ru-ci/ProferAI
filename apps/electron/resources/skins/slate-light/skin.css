@@ -112,4 +112,12 @@ html.skin-slate-light .heatmap-empty-cell {
   --warning-foreground: 26 83% 14%;
   --info: var(--primary);
   --info-foreground: var(--primary-foreground);
+  --chart-1: 210 38% 46%;
+  --chart-2: 335 38% 50%;
+  --chart-3: 160 32% 40%;
+  --chart-4: 275 34% 54%;
+  --chart-5: 38 56% 46%;
+  --chart-6: 185 34% 42%;
+  --chart-7: 18 42% 46%;
+  --chart-8: 245 34% 54%;
 }
