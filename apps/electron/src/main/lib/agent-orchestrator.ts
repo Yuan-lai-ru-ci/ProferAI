@@ -2211,7 +2211,6 @@ export class AgentOrchestrator {
             },
             channel.provider,
           ),
-          deepSeekV4ThinkingEnabled: appSettings.agentThinking?.type !== 'disabled',
           additionalSkillPaths: skillRuntimeOptions.additionalSkillPaths,
           skillSlugs: skillRuntimeOptions.skillSlugs,
           skillMentions: skillRuntimeOptions.skillMentions,

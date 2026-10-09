@@ -63,7 +63,7 @@ import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi
 import { createCodexRequestSettingsExtension } from './pi-codex-request-settings'
 import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
-import { inferReasoningTransport, resolveReasoningProfile, calculatePiAutoCompactionReserveTokens } from '@profer/shared'
+import { inferReasoningTransport, isLocalOllamaBaseUrl, resolveReasoningProfile, calculatePiAutoCompactionReserveTokens } from '@profer/shared'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
 import { commandExecutionErrorCode, createCommandExecutionFailure, type CommandExecutionCallbacks, type CommandExecutionErrorKind, type CommandExecutionResult, type StructuredExecRequest } from '../command-execution'
 import {
@@ -170,12 +170,6 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   /** Passive lifecycle feed for Pi Host Harness; observers cannot control Session or queue prompts. */
   onHarnessLifecycle?: PiHarnessLifecycleObserver
   thinkingLevel?: AgentThinkingLevel
-  /**
-   * DeepSeek V4 思考总开关（已废弃：思考强度与开关统一由 thinkingLevel 驱动，
-   * 通过 createDeepSeekReasoningRequestExtension 注入 output_config.effort）。
-   * 保留字段仅为兼容 orchestrator 旧传参，adapter 不再消费。
-   */
-  deepSeekV4ThinkingEnabled?: boolean
   maxBudgetUsd?: number
   outputFormat?: JsonSchemaOutputFormat
   /** Proma 聚合的附加目录；Pi 内置工具 factory 不接收多 root 参数，编排层会把它们注入 systemPrompt。 */
@@ -288,15 +282,6 @@ function isNonNegativeFiniteNumber(value: number | undefined): value is number {
   return value !== undefined && Number.isFinite(value) && value >= 0
 }
 
-function isLocalOllamaBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false
-  try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase()
-    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
-  } catch {
-    return false
-  }
-}
 
 export function buildPiRemoteConnectionSettings(
   input: Pick<

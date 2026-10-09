@@ -163,8 +163,8 @@ function isRelayProxy(baseUrl: string): boolean {
   return baseUrl.trim().replace(/\/+$/, '').endsWith('/v1/proxy')
 }
 
-/** 是否本机 Ollama 地址（按 hostname 判定）。 */
-function isLocalOllama(baseUrl?: string): boolean {
+/** 是否本机 Ollama 地址（按 hostname 判定）。共享给各运行时,替代两处逐字重复。 */
+export function isLocalOllamaBaseUrl(baseUrl?: string): boolean {
   if (!baseUrl) return false
   try {
     const hostname = new URL(baseUrl).hostname.toLowerCase()
@@ -187,7 +187,7 @@ export function resolveProviderNativeProtocol(provider: ProviderType, baseUrl?: 
   const capability = PROVIDER_CAPABILITIES[provider]
   if (provider === 'ollama') {
     // 远程 Ollama 走 OpenAI 兼容；本机保持静态默认（anthropic-messages 供 Agent）。
-    return isLocalOllama(baseUrl) ? capability.nativeProtocol : 'openai-completions'
+    return isLocalOllamaBaseUrl(baseUrl) ? capability.nativeProtocol : 'openai-completions'
   }
   if (provider === 'deepseek') {
     // 商业 relay 或显式 /anthropic 端点保持静态默认；其余第三方网关走 OpenAI。

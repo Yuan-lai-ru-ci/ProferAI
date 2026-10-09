@@ -21,6 +21,7 @@ import {
   resolveReasoningProfile,
   type ReasoningCapability,
   resolveProviderNativeProtocol,
+  isLocalOllamaBaseUrl,
 } from '@profer/shared'
 import { assertSdkBaseUrlSupportsRouting, getProferUserAgent, normalizeAnthropicBaseUrlForSdk, normalizeOpenAIBaseUrlForSdk, resolveAnthropicMessagesUrl } from '@profer/core'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
@@ -206,15 +207,7 @@ function compilePiReasoningCapabilities(api: Api, modelId: string | undefined): 
   }
 }
 
-function isLocalOllamaBaseUrl(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false
-  try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase()
-    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
-  } catch {
-    return false
-  }
-}
+
 
 /**
  * 解析 Pi 请求使用的协议。
