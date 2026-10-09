@@ -1,4 +1,5 @@
 import type { AgentStreamEvent, Channel } from '@profer/shared'
+import { isOfficialChannel } from '@/lib/channel-model-groups'
 
 interface AccountSnapshot { isLoggedIn: boolean; teamAccountId?: string; teamEmail?: string }
 interface ChannelCatalogListenerDeps {
@@ -35,7 +36,7 @@ export function subscribeChannelCatalog(deps: ChannelCatalogListenerDeps): () =>
         deps.apply(currentSnapshot)
         return
       }
-      const visible = deps.getAccount().isLoggedIn ? channels : channels.filter((channel) => !channel.serverManaged && !channel.id.startsWith('newapi-'))
+      const visible = deps.getAccount().isLoggedIn ? channels : channels.filter((channel) => !isOfficialChannel(channel))
       deps.apply(visible)
     }).catch((error: unknown) => {
       if (active && request === generation && account === accountKey()) deps.onFailure(error)

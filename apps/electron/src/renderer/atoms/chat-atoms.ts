@@ -8,6 +8,7 @@
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
 import { isChannelEnabledForChat } from '@profer/shared'
+import { isOfficialChannel } from '@/lib/channel-model-groups'
 import { authStatusAtom } from './identity-atoms'
 import { getDefaultStore } from 'jotai'
 import type { ConversationMeta, ChatMessage, FileAttachment, ChatToolActivity, Channel, KnowledgeReference } from '@profer/shared'
@@ -297,7 +298,7 @@ export const conversationModelAtomFamily = atomFamily((conversationId: string | 
   if (!selection || !get(channelsLoadedAtom)) return null
   const channel = get(channelsAtom).find((item) => item.id === selection.channelId)
   if (!channel || !isChannelEnabledForChat(channel)
-    || (!get(authStatusAtom).isLoggedIn && (channel.serverManaged || channel.id.startsWith('newapi-')))
+    || (!get(authStatusAtom).isLoggedIn && isOfficialChannel(channel))
     || !channel.models.some((model) => model.id === selection.modelId && model.enabled)) return null
   return selection
 }))

@@ -177,7 +177,7 @@ function assertChannelsConfig(value: unknown): asserts value is ChannelsConfig {
       if (!isRecord(model) || typeof model.id !== 'string' || !model.id || modelIds.has(model.id)
         || typeof model.name !== 'string' || typeof model.enabled !== 'boolean'
         || (model.context1m !== undefined && typeof model.context1m !== 'boolean')
-        || (model.source !== undefined && model.source !== 'manual' && model.source !== 'fetched')) {
+        || (model.source !== undefined && model.source !== 'manual' && model.source !== 'fetched' && model.source !== 'builtin-catalog')) {
         throw new Error('渠道配置包含无效模型')
       }
       modelIds.add(model.id)

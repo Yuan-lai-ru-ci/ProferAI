@@ -6,12 +6,12 @@
 
 import { getChannelById } from './channel-manager'
 import { isChannelEnabledForRuntime } from '@profer/shared'
-import type { AgentRuntime, ProviderType } from '@profer/shared'
+import type { AgentRuntime, ChannelModel, ProviderType } from '@profer/shared'
 
 export interface AvailableAgentModel {
   id: string
   name: string
-  source?: 'manual' | 'fetched'
+  source?: ChannelModel['source']
 }
 
 export interface AvailableAgentModelsForChannel {

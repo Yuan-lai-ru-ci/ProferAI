@@ -337,8 +337,14 @@ export interface ChannelModel {
    * - false：强制关闭（即使模型 / 渠道验证支持也不按 1M 处理）
    */
   context1m?: boolean
-  /** 来源标记：手动添加的模型在拉取供应商列表时保留，不会被覆盖清除 */
-  source?: 'manual' | 'fetched'
+  /**
+   * 来源标记：手动添加的模型在拉取供应商列表时保留，不会被覆盖清除。
+   * - 'fetched'：从供应商公网 API 实时拉取
+   * - 'manual'：用户手填
+   * - 'builtin-catalog'：OAuth 订阅的内置目录（Codex / xAI 订阅），
+   *   不是用户可拉取的 vendor API，此前被误标为 'fetched'
+   */
+  source?: 'manual' | 'fetched' | 'builtin-catalog'
   /** 服务端代管模式下，当前登录用户实际可见的模型倍率。 */
   multiplier?: number
 }

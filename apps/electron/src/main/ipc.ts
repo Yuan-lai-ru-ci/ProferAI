@@ -1751,7 +1751,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.XAI_MODELS,
     async (): Promise<import('@profer/shared').ChannelModel[]> =>
-      (await listXaiModels()).map((model) => ({ ...model, enabled: true, source: 'fetched' as const })),
+      (await listXaiModels()).map((model) => ({ ...model, enabled: true, source: 'builtin-catalog' as const })),
   )
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.CODEX_LOGIN,
@@ -1767,7 +1767,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNEL_IPC_CHANNELS.CODEX_MODELS,
     async (): Promise<import('@profer/shared').ChannelModel[]> =>
-      (await listCodexModels()).map((model) => ({ ...model, enabled: true, source: 'fetched' as const })),
+      (await listCodexModels()).map((model) => ({ ...model, enabled: true, source: 'builtin-catalog' as const })),
   )
 
   // ===== 对话管理相关 =====
