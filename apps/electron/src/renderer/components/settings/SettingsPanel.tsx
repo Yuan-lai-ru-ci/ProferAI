@@ -72,12 +72,15 @@ import { PluginSettings } from "./PluginSettings";
 import { DeveloperSettings } from "./DeveloperSettings";
 import { TEAM_WORKSPACE_UI_ENABLED } from "@/lib/product-feature-flags";
 import { DevicesSettings } from "./DevicesSettings";
+import { matchesSettingsSearch } from "./settings-search";
 
 /** 设置 Tab 定义 */
 export interface SettingsTabItem {
   id: SettingsTab;
   label: string;
   icon: React.ReactNode;
+  /** 页面内的常用配置名称和同义词，用于设置导航搜索。 */
+  searchTerms?: readonly string[];
 }
 
 /** 导航分组：标题 + 该分组内的 tab */
@@ -89,55 +92,57 @@ export interface SettingsTabGroup {
 
 /** 账户：身份、额度、订阅和团队能力。开放 API 暂不开放入口。 */
 const ACCOUNT_GROUP_ITEMS: SettingsTabItem[] = [
-  { id: "account", label: "账户与资料", icon: <UserRound size={16} /> },
-  { id: "credits", label: "额度与用量", icon: <Coins size={16} /> },
-  { id: "subscription", label: "订阅方案", icon: <CreditCard size={16} /> },
+  { id: "account", label: "账户与资料", icon: <UserRound size={16} />, searchTerms: ["登录", "注册", "用户名", "头像", "个人信息", "团队账户"] },
+  { id: "credits", label: "额度与用量", icon: <Coins size={16} />, searchTerms: ["积分", "余额", "用量", "API 请求", "请求历史"] },
+  { id: "subscription", label: "订阅方案", icon: <CreditCard size={16} />, searchTerms: ["套餐", "会员", "VIP", "兑换码", "价格"] },
   ...(TEAM_WORKSPACE_UI_ENABLED
-    ? [{ id: "team" as const, label: "团队管理", icon: <Users size={16} /> }]
+    ? [{ id: "team" as const, label: "团队管理", icon: <Users size={16} />, searchTerms: ["团队工作区", "成员", "邀请", "邀请码", "权限"] }]
     : []),
 ];
 
 /** 模型与能力：渠道 / Agent / 提示词 / Chat 工具 */
 const MODEL_GROUP_ITEMS: SettingsTabItem[] = [
-  { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
-  { id: "agent", label: "Agent 配置", icon: <Plug size={16} /> },
-  { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
-  { id: "tools", label: "Chat 工具", icon: <Wrench size={16} /> },
+  { id: "channels", label: "模型配置", icon: <Radio size={16} />, searchTerms: ["渠道", "供应商", "模型", "API Key", "密钥", "Base URL", "endpoint", "Claude", "OpenAI", "DeepSeek"] },
+  { id: "agent", label: "Agent 配置", icon: <Plug size={16} />, searchTerms: ["Agent", "代理", "推理", "内置工具", "运行时", "Claude", "Pi"] },
+  { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} />, searchTerms: ["系统提示词", "提示词内容", "prompt", "默认提示词", "用户名", "日期时间"] },
+  { id: "tools", label: "Chat 工具", icon: <Wrench size={16} />, searchTerms: ["工具", "联网搜索", "Tavily", "AI 图片生成", "图片", "自定义工具", "HTTP API"] },
 ];
 
 /** 体验：外观 / 快捷键 */
 const EXPERIENCE_GROUP_ITEMS: SettingsTabItem[] = [
-  { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
-  { id: "shortcuts", label: "快捷键管理", icon: <Keyboard size={16} /> },
+  { id: "appearance", label: "外观设置", icon: <Palette size={16} />, searchTerms: ["主题", "深色", "浅色", "暗色", "亮色", "缩放", "字体", "字号", "皮肤", "Logo", "图标", "Dock"] },
+  { id: "shortcuts", label: "快捷键管理", icon: <Keyboard size={16} />, searchTerms: ["快捷键", "键盘", "快捷方式", "录制"] },
 ];
 
 /** 连接：远程连接 / 代理 */
 const CONNECTION_GROUP_ITEMS: SettingsTabItem[] = [
-  { id: "bots", label: "远程连接", icon: <Bot size={16} /> },
-  { id: "proxy", label: "代理设置", icon: <Network size={16} /> },
+  { id: "bots", label: "远程连接", icon: <Bot size={16} />, searchTerms: ["机器人", "Bot", "飞书", "钉钉", "微信", "远程", "工作区", "默认工作区", "绑定"] },
+  { id: "proxy", label: "代理设置", icon: <Network size={16} />, searchTerms: ["网络代理", "HTTP proxy", "HTTPS proxy", "代理地址", "端口"] },
 ];
 
 /** 系统：数据管理 / 隐藏插件入口 */
 const SYSTEM_GROUP_ITEMS: SettingsTabItem[] = [
-  { id: "data-management", label: "数据管理", icon: <Database size={16} /> },
+  { id: "data-management", label: "数据管理", icon: <Database size={16} />, searchTerms: ["备份", "导入", "导出", "迁移", "存储", "自动清理", "孤儿数据", "历史数据"] },
 ];
 
 /** 帮助：教程 / 关于与更新 */
 const HELP_GROUP_ITEMS: SettingsTabItem[] = [
-  { id: "tutorial", label: "Profer 教程", icon: <GraduationCap size={16} /> },
-  { id: "about", label: "关于/更新", icon: <Info size={16} /> },
+  { id: "tutorial", label: "Profer 教程", icon: <GraduationCap size={16} />, searchTerms: ["教程", "帮助", "入门", "使用说明"] },
+  { id: "about", label: "关于/更新", icon: <Info size={16} />, searchTerms: ["版本", "更新", "运行环境", "反馈", "关于 Profer"] },
 ];
 
 const DEVELOPER_MODE_ITEM: SettingsTabItem = {
   id: "developer",
   label: "开发者",
   icon: <FlaskConical size={16} />,
+  searchTerms: ["开发者模式", "开放认识论", "实验性能力", "运行时边界"],
 };
 
 const PLUGIN_SYSTEM_ITEM: SettingsTabItem = {
   id: "plugins",
   label: "插件",
   icon: <Blocks size={16} />,
+  searchTerms: ["插件系统", "安装插件", "已安装插件", "扩展"],
 };
 
 /** 依赖团队账号登录的 Tab（未登录时不展示） */
@@ -287,7 +292,7 @@ export function SettingsPanel({
       : SYSTEM_GROUP_ITEMS
 
     const allGroups: SettingsTabGroup[] = [
-      { items: [{ id: "general", label: "通用", icon: <Settings size={16} /> }, { id: "usage", label: "使用偏好", icon: <SlidersHorizontal size={16} /> }] },
+      { items: [{ id: "general", label: "通用", icon: <Settings size={16} />, searchTerms: ["语言", "启动", "开机启动", "Shell", "终端", "新标签页", "URL"] }, { id: "usage", label: "使用偏好", icon: <SlidersHorizontal size={16} />, searchTerms: ["通知", "声音", "归档", "会话", "对话", "输入框", "粘贴", "Markdown", "预览", "紧凑模式"] }] },
       { title: "账户", items: ACCOUNT_GROUP_ITEMS },
       { title: "模型与能力", items: modelItems },
       { title: "体验", items: EXPERIENCE_GROUP_ITEMS },
@@ -311,12 +316,11 @@ export function SettingsPanel({
   )
 
   const filteredGroups = React.useMemo(() => {
-    const query = navQuery.trim().toLocaleLowerCase()
-    if (!query) return groups
+    if (!navQuery.trim()) return groups
     return groups
       .map((group) => ({
         ...group,
-        items: group.items.filter((item) => item.label.toLocaleLowerCase().includes(query)),
+        items: group.items.filter((item) => matchesSettingsSearch(item, group.title, navQuery)),
       }))
       .filter((group) => group.items.length > 0)
   }, [groups, navQuery]);
