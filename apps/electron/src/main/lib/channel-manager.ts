@@ -24,7 +24,7 @@ import type {
   ProviderType,
   XaiOAuthCredentials,
 } from '@profer/shared'
-import { PROVIDER_DEFAULT_URLS, extractZhipuCodingTeamApiToken, isAgentEnabledForChannel, isCodexCredentialExpired, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, resolveXaiCredentialMode, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
+import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_URLS, extractZhipuCodingTeamApiToken, isAgentEnabledForChannel, isCodexCredentialExpired, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, resolveProviderNativeProtocol, resolveXaiCredentialMode, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { assertSdkBaseUrlSupportsRouting, isAnthropicShapedEndpoint, resolveAnthropicMessagesUrl, resolveAnthropicModelsUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl, resolveOpenAIModelsUrl, getProferUserAgent } from '@profer/core'
@@ -103,6 +103,22 @@ function withPlanQuotaTimeout(init: RequestInit): RequestInit {
 
 export function resolveChannelAgentBaseUrl(channel: Pick<Channel, 'provider' | 'baseUrl' | 'agentBaseUrl'>): string | undefined {
   return inferAgentBaseUrl(channel.provider, channel.baseUrl, channel.agentBaseUrl)
+}
+
+/**
+ * Chat 抓取器/测试器分派：把 provider 归类到具体请求实现。
+ * 规则与能力描述符 chatProtocol 对齐（单一事实源），三处 switch（testChannel /
+ * testChannelDirect / fetchModels）共用，不再各写一份 provider 枚举。
+ * ollama 与 google 有独立实现，单列；deepseek 走 OpenAI 兼容（chatProtocol=openai）。
+ */
+type ChatAdapterKind = 'anthropic' | 'openai' | 'google' | 'ollama' | 'unsupported'
+function resolveChatAdapterKind(provider: ProviderType): ChatAdapterKind {
+  // openai-codex 走 OAuth 内置目录，没有可用的 vendor Chat/抓取 API，原 switch
+  // 落 default 返回「不支持」；分派表保持这个行为。
+  if (provider === 'openai-codex') return 'unsupported'
+  if (provider === 'ollama') return 'ollama'
+  if (provider === 'google') return 'google'
+  return PROVIDER_CAPABILITIES[provider].chatProtocol === 'anthropic' ? 'anthropic' : 'openai'
 }
 
 /**
@@ -992,29 +1008,12 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
   const proxyUrl = await getEffectiveProxyUrl()
 
   try {
-    switch (channel.provider) {
+    // ollama 无独立测试实现，沿用 Anthropic 兼容测试（与原 switch 一致）。
+    const adapterKind = channel.provider === 'ollama' ? 'anthropic' : resolveChatAdapterKind(channel.provider)
+    switch (adapterKind) {
       case 'anthropic':
-      case 'anthropic-compatible':
-      case 'kimi-api':
-      case 'kimi-coding':
-      case 'zhipu-coding':
-      case 'zhipu-coding-team':
-      case 'ark-coding-plan':
-      case 'qwen-anthropic':
-      case 'minimax':
-      case 'xiaomi':
-      case 'xiaomi-token-plan':
-      case 'ollama':
         return await testAnthropicCompatible(channel.baseUrl, apiKey, proxyUrl, channel.provider)
       case 'openai':
-      case 'openai-responses':
-      case 'xai':
-      case 'opencode-go-openai':
-      case 'deepseek':
-      case 'zhipu':
-      case 'doubao':
-      case 'qwen':
-      case 'custom':
         return await testOpenAICompatible(channel.baseUrl, apiKey, proxyUrl)
       case 'google':
         return await testGoogle(channel.baseUrl, apiKey, proxyUrl)
@@ -1701,9 +1700,15 @@ export async function testChannelDirect(input: FetchModelsInput, signal?: AbortS
   try {
     signal?.throwIfAborted()
     // Agent 测试不能把直接 fetch 成功误报为 SDK 路由可用。
+    // 测试地址必须与运行时实际消费的派生地址一致（resolveRuntimeBaseUrl 的分派）：
+    // Claude 用 inferAgentBaseUrl；Pi 对 Anthropic 协议渠道也吃 agentBaseUrl，
+    // 不能只用 input.baseUrl——否则「测试通过 ≠ Agent 可用」。
     if (input.runtime) {
       const runtimeUrl = input.runtime === 'claude'
-        ? inferAgentBaseUrl(input.provider, input.baseUrl, input.agentBaseUrl) : input.baseUrl
+        ? inferAgentBaseUrl(input.provider, input.baseUrl, input.agentBaseUrl)
+        : resolveProviderNativeProtocol(input.provider, input.baseUrl) === 'anthropic-messages'
+          ? inferAgentBaseUrl(input.provider, input.baseUrl, input.agentBaseUrl)
+          : input.baseUrl
       try {
         if (runtimeUrl) assertSdkBaseUrlSupportsRouting(runtimeUrl)
       } catch (error) {
@@ -1729,29 +1734,12 @@ export async function testChannelDirect(input: FetchModelsInput, signal?: AbortS
     if (input.provider === 'deepseek' && isAnthropicShapedEndpoint(input.baseUrl)) {
       return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider, input.modelId, signal)
     }
-    switch (input.provider) {
+    // ollama 无独立测试实现，沿用 Anthropic 兼容测试（与原 switch 一致）。
+    const directAdapterKind = input.provider === 'ollama' ? 'anthropic' : resolveChatAdapterKind(input.provider)
+    switch (directAdapterKind) {
       case 'anthropic':
-      case 'anthropic-compatible':
-      case 'kimi-api':
-      case 'kimi-coding':
-      case 'zhipu-coding':
-      case 'zhipu-coding-team':
-      case 'ark-coding-plan':
-      case 'qwen-anthropic':
-      case 'minimax':
-      case 'xiaomi':
-      case 'xiaomi-token-plan':
-      case 'ollama':
         return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider, input.modelId, signal)
       case 'openai':
-      case 'openai-responses':
-      case 'xai':
-      case 'opencode-go-openai':
-      case 'deepseek':
-      case 'zhipu':
-      case 'doubao':
-      case 'qwen':
-      case 'custom':
         return await testOpenAICompatible(input.baseUrl, input.apiKey, proxyUrl, input.modelId, input.provider, signal)
       case 'google':
         return await testGoogle(input.baseUrl, input.apiKey, proxyUrl, input.modelId, signal)
@@ -1777,34 +1765,16 @@ export async function fetchModels(input: FetchModelsInput, signal?: AbortSignal)
     signal?.throwIfAborted()
     const proxyUrl = await getEffectiveProxyUrl()
     signal?.throwIfAborted()
-    switch (input.provider) {
+    switch (resolveChatAdapterKind(input.provider)) {
       case 'anthropic':
-      case 'anthropic-compatible':
-      case 'kimi-api':
-      case 'kimi-coding':
-      case 'zhipu-coding':
-      case 'zhipu-coding-team':
-      case 'ark-coding-plan':
-      case 'qwen-anthropic':
-      case 'minimax':
-      case 'xiaomi':
-      case 'xiaomi-token-plan':
         return await fetchAnthropicCompatibleModels(input.baseUrl, input.apiKey, proxyUrl, input.provider, signal)
       case 'ollama':
         return await fetchOllamaModels(input.baseUrl, input.apiKey, proxyUrl, signal)
       case 'openai':
-      case 'openai-responses':
-      case 'xai':
-      case 'opencode-go-openai':
-      case 'deepseek':
-      case 'zhipu':
-      case 'doubao':
-      case 'qwen':
-      case 'custom':
         return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl, signal)
       case 'google':
         return await fetchGoogleModels(input.baseUrl, input.apiKey, proxyUrl, signal)
-      default:
+      case 'unsupported':
         return { success: false, message: `不支持的供应商: ${input.provider}`, models: [] }
     }
   } catch (error) {
