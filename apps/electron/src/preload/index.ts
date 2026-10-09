@@ -969,7 +969,7 @@ export interface ElectronAPI {
   /** 切换当前会话的推理强度覆盖（Claude/Pi 通用；null=清除覆盖，运行中拒绝，下一轮生效）。 */
   updateSessionAgentEffort: (sessionId: string, effort: AgentEffort | null) => Promise<AgentSessionMeta>
   /** 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单动态展示）。 */
-  getPiReasoningCapability: (provider: ProviderType, modelId: string | undefined) => Promise<ReasoningCapability | undefined>
+  getPiReasoningCapability: (provider: ProviderType, modelId: string | undefined, baseUrl?: string) => Promise<ReasoningCapability | undefined>
 
   /** 切换空闲会话的 Agent runtime；跨 runtime 时清除旧 SDK session ID。 */
   updateSessionAgentRuntime: (sessionId: string, runtime: AgentRuntime) => Promise<AgentSessionMeta>
@@ -2776,8 +2776,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_EFFORT, sessionId, effort)
   },
 
-  getPiReasoningCapability: (provider: ProviderType, modelId: string | undefined) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY, provider, modelId)
+  getPiReasoningCapability: (provider: ProviderType, modelId: string | undefined, baseUrl?: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY, provider, modelId, baseUrl)
   },
 
   updateSessionAgentRuntime: (sessionId: string, runtime: AgentRuntime) => {

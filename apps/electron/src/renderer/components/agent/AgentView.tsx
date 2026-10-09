@@ -721,7 +721,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       return
     }
     let cancelled = false
-    window.electronAPI.getPiReasoningCapability(channel.provider, agentModelId)
+    window.electronAPI.getPiReasoningCapability(channel.provider, agentModelId, channel.baseUrl)
       .then((capability) => { if (!cancelled) setPiReasoningCapability(capability) })
       .catch(() => { if (!cancelled) setPiReasoningCapability(undefined) })
     return () => { cancelled = true }

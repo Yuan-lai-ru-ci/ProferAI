@@ -1,5 +1,5 @@
 import type { Channel, ChannelsConfig, ProviderType } from '@profer/shared'
-import { PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, inferAgentRuntimeModes, isAgentCompatibleProvider } from '@profer/shared'
+import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_AGENT_URLS, PROVIDER_DEFAULT_URLS, inferAgentRuntimeModes, isAgentCompatibleProvider } from '@profer/shared'
 import { isAnthropicShapedEndpoint, normalizeBaseUrl } from '@profer/core'
 
 /** 是否指向 DeepSeek 官方域名；第三方网关不得被官方默认值迁移逻辑覆盖。 */
@@ -31,17 +31,18 @@ function isOfficialDeepSeekAgentUrl(baseUrl?: string): boolean {
   return normalized === '/anthropic' || normalized === '/anthropic/v1' || normalized === '/anthropic/v1/messages'
 }
 
-const PI_NATIVE_BASE_URL_PROVIDERS = new Set<ProviderType>([
-  'openai',
-  'openai-responses',
-  'opencode-go-openai',
-  'zhipu',
-  'doubao',
-  'qwen',
-  'google',
-  'custom',
-  'xai',
-])
+// Pi 原生 API 渠道（Pi 直接消费 baseUrl 而不是 agentBaseUrl）从能力描述符派生：
+// 即「原生协议不是 anthropic-messages」的 provider。原先手工枚举的 openai /
+// openai-responses / opencode-go-openai / zhipu / doubao / qwen / google / custom / xai
+// 正好是「非 anthropic 协议」集合，与派生结果等价，不再单独维护。
+const PI_NATIVE_BASE_URL_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>(
+  (Object.keys(PROVIDER_CAPABILITIES) as ProviderType[]).filter(
+    (provider) => !PROVIDER_CAPABILITIES[provider].isAnthropicProtocol
+      // openai-codex 虽非 anthropic 协议，但走 OAuth 内置目录、baseUrl 为空，
+      // 不属于「Pi 复用用户配置 baseUrl」的场景，与原手工集合保持一致排除。
+      && provider !== 'openai-codex',
+  ),
+)
 
 function isOfficialDeepSeekV1Url(baseUrl?: string): boolean {
   if (!baseUrl) return false

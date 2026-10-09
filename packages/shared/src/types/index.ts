@@ -15,6 +15,9 @@ export * from './runtime'
 // 渠道（AI 供应商）相关类型
 export * from './channel'
 
+// per-provider 能力描述符（模型配置单一事实源）
+export * from './provider-capability'
+
 // 代理配置相关类型
 export * from './proxy'
 

@@ -4091,8 +4091,8 @@ export function registerIpcHandlers(): void {
   // 查询某 Pi 模型可用的推理档位能力（renderer 思考档位菜单动态展示）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY,
-    async (_, provider: ProviderType, modelId: string | undefined): Promise<ReasoningCapability | undefined> => {
-      return resolvePiReasoningCapability(provider, modelId)
+    async (_, provider: ProviderType, modelId: string | undefined, baseUrl?: string): Promise<ReasoningCapability | undefined> => {
+      return resolvePiReasoningCapability(provider, modelId, baseUrl)
     },
   )
 

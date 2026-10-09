@@ -1,5 +1,5 @@
 import type { Channel, ChannelModel } from '@profer/shared'
-import { isChannelEnabledForRuntime } from '@profer/shared'
+import { isChannelEnabledForRuntime, getProviderChatProtocol } from '@profer/shared'
 
 export type ChannelSource = 'official' | 'self-configured'
 export type ChannelProtocol = 'openai' | 'anthropic'
@@ -38,12 +38,11 @@ export function getChannelSource(channel: Pick<Channel, 'id' | 'serverManaged'>)
 }
 
 export function getChannelProtocol(provider: Channel['provider']): ChannelProtocol {
-  const anthropicProviders = new Set([
-    'anthropic', 'anthropic-compatible', 'kimi-api', 'kimi-coding',
-    'zhipu-coding', 'zhipu-coding-team', 'minimax', 'xiaomi',
-    'xiaomi-token-plan', 'qwen-anthropic',
-  ])
-  return anthropicProviders.has(provider) ? 'anthropic' : 'openai'
+  // 展示维度协议从能力描述符的 chatProtocol 派生，替代手工枚举：原先这张
+  // 私有表漏了 ark-coding-plan，把它误判成 openai。注意这是 Chat/展示维度，
+  // 与 Agent 原生协议是两个轴（DeepSeek/Ollama 展示 openai、Agent 可走 Anthropic）。
+  const chatProtocol = getProviderChatProtocol(provider)
+  return chatProtocol === 'google' ? 'openai' : chatProtocol
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { AgentRuntimeMode, ProviderType } from './channel'
 import type { AgentThinkingLevel } from './agent'
 import { resolveDeepSeekV4ModelId } from './deepseek-model-alias'
+import { resolveProviderNativeProtocol } from './provider-capability'
 
 /** Proma 可识别的 reasoning 请求协议族。 */
 export type ReasoningTransport =
@@ -15,20 +16,18 @@ export type ReasoningTransport =
  * 渠道名不能直接决定请求字段；profile 必须同时匹配模型 ID 和 transport，
  * 才能避免把 OpenAI 的 reasoning_effort 发送到 Anthropic endpoint。
  */
-export function inferReasoningTransport(provider: ProviderType | undefined): ReasoningTransport {
-  switch (provider) {
-    case 'openai':
-    case 'opencode-go-openai':
-    case 'zhipu':
-    case 'doubao':
-    case 'qwen':
-    case 'custom':
+export function inferReasoningTransport(provider: ProviderType | undefined, baseUrl?: string): ReasoningTransport {
+  // 与 normalizePiApi 共用同一份协议判定（resolveProviderNativeProtocol），
+  // 避免渲染层思考档位菜单与运行时请求注入各猜各的：deepseek 接第三方
+  // OpenAI 网关时，菜单判成 anthropic-messages 而请求按 openai-completions
+  // 跳过注入，会让用户选的档位静默无效。baseUrl 缺省时退化为静态默认。
+  if (!provider) return 'anthropic-messages'
+  switch (resolveProviderNativeProtocol(provider, baseUrl)) {
+    case 'openai-completions':
       return 'openai-completions'
-    case 'openai-codex':
     case 'openai-responses':
-    case 'xai':
       return 'openai-responses'
-    case 'google':
+    case 'google-generative-ai':
       return 'other'
     default:
       return 'anthropic-messages'

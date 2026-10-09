@@ -1,17 +1,23 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { PROVIDER_DEFAULT_URLS, PROVIDER_LABELS, inferAgentRuntimeModes, isChannelEnabledForChat, isChannelEnabledForRuntime, type ProviderType } from '@profer/shared'
+import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_URLS, PROVIDER_LABELS, getProviderChatProtocol, inferAgentRuntimeModes, isChannelEnabledForChat, isChannelEnabledForRuntime, type ProviderType } from '@profer/shared'
 import { getAdapter } from '@profer/core'
 
-const nativeProtocols = {
-  anthropic: 'anthropic', 'anthropic-compatible': 'anthropic', openai: 'openai',
-  'openai-responses': 'responses', deepseek: 'openai', google: 'google',
-  'kimi-api': 'anthropic', 'kimi-coding': 'anthropic', 'opencode-go-openai': 'openai',
-  zhipu: 'openai', 'zhipu-coding': 'anthropic', 'zhipu-coding-team': 'anthropic',
-  'ark-coding-plan': 'anthropic', minimax: 'anthropic', doubao: 'openai', qwen: 'openai',
-  'qwen-anthropic': 'anthropic', xiaomi: 'anthropic', 'xiaomi-token-plan': 'anthropic',
-  'openai-codex': 'oauth', xai: 'responses', ollama: 'ollama', custom: 'openai',
-} satisfies Record<ProviderType, string>
+// 测试用的协议标签从能力描述符派生（单一事实源），不再维护私有副本。
+// Chat adapter 维度的分类与 chatProtocol 对齐；Codex 无 Chat adapter 单列 'oauth'，
+// xAI 用 Responses adapter，Ollama 有自己的 adapter，均按测试原语义标注。
+const nativeProtocols = Object.fromEntries(
+  (Object.keys(PROVIDER_CAPABILITIES) as ProviderType[]).map((provider) => {
+    if (provider === 'openai-codex') return [provider, 'oauth']
+    if (provider === 'xai') return [provider, 'responses']
+    if (provider === 'ollama') return [provider, 'ollama']
+    // Chat adapter 维度：deepseek 走 OpenAI 兼容（chatProtocol=openai），
+    // openai-responses 的 Chat 也是 responses adapter，单独标出。
+    if (provider === 'openai-responses') return [provider, 'responses']
+    const chatProtocol = getProviderChatProtocol(provider)
+    return [provider, chatProtocol === 'anthropic' ? 'anthropic' : chatProtocol === 'google' ? 'google' : 'openai']
+  }),
+) as Record<ProviderType, string>
 const requests: Array<{ url: string; init: RequestInit }> = []
 let payload: unknown
 mock.module('./proxy-settings-service', () => ({ getEffectiveProxyUrl: async () => undefined }))
