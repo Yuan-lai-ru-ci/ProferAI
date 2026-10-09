@@ -39,7 +39,7 @@ describe('Codex IPC/preload 接线（fixture transport）', () => {
     expect(await bridge.loginCodexOAuth('fixture-codex')).toEqual(channel)
     await expect(bridge.loginCodexOAuth('fixture-denied')).rejects.toThrow('fixture-denied')
     await bridge.cancelCodexOAuthLogin()
-    expect(await bridge.listCodexModels()).toEqual([{ id: 'gpt-6-astra', name: 'Fixture Astra', enabled: true, source: 'fetched' }])
+    expect(await bridge.listCodexModels()).toEqual([{ id: 'gpt-6-astra', name: 'Fixture Astra', enabled: true, source: 'builtin-catalog' }])
     expect(inputs).toEqual([input, 'fixture-codex', 'fixture-denied'])
     expect(invalidations).toEqual(['channels', 'channels'])
     expect(cancelled).toBe(1)

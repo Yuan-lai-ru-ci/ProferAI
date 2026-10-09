@@ -39,7 +39,7 @@ describe('Xai IPC/preload 接线（fixture transport）', () => {
     expect(await bridge.loginXaiOAuth('fixture-xai')).toEqual(channel)
     await expect(bridge.loginXaiOAuth('fixture-denied')).rejects.toThrow('fixture-denied')
     await bridge.cancelXaiOAuthLogin()
-    expect(await bridge.listXaiModels()).toEqual([{ id: 'gpt-6-astra', name: 'Fixture Astra', enabled: true, source: 'fetched' }])
+    expect(await bridge.listXaiModels()).toEqual([{ id: 'gpt-6-astra', name: 'Fixture Astra', enabled: true, source: 'builtin-catalog' }])
     expect(inputs).toEqual([input, 'fixture-xai', 'fixture-denied'])
     expect(invalidations).toEqual(['channels', 'channels'])
     expect(cancelled).toBe(1)
