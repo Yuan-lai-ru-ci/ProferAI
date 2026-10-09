@@ -90,14 +90,20 @@ describe('applyModelDiscoveryResult', () => {
     expect(applyModelDiscoveryResult(refreshed, result(true))).toEqual(configured)
   })
 
-  test('Given 远端目录包含重复 ID When 刷新 Then 只保留一条发现模型', () => {
-    const discovered: ChannelModel[] = [
-      { id: 'duplicate', name: '先出现', enabled: true },
-      { id: 'duplicate', name: '后出现', enabled: false },
+  test('Given builtin catalog When refreshing with a reduced list Then remove stale catalog models and preserve source', () => {
+    const configured: ChannelModel[] = [
+      { id: 'removed', name: '已下线', enabled: true, source: 'builtin-catalog' },
+      { id: 'kept', name: '旧名称', enabled: false, context1m: true, source: 'builtin-catalog' },
+      { id: 'manual', name: '手动模型', enabled: true, source: 'manual' },
     ]
 
-    expect(applyModelDiscoveryResult([], result(true, discovered))).toEqual([
-      { id: 'duplicate', name: '后出现', enabled: false, source: 'fetched' },
+    expect(applyModelDiscoveryResult(configured, result(true, [
+      { id: 'kept', name: '新名称', enabled: true },
+      { id: 'new', name: '新模型', enabled: true },
+    ]), 'builtin-catalog')).toEqual([
+      { id: 'manual', name: '手动模型', enabled: true, source: 'manual' },
+      { id: 'kept', name: '新名称', enabled: false, context1m: true, source: 'builtin-catalog' },
+      { id: 'new', name: '新模型', enabled: false, source: 'builtin-catalog' },
     ])
   })
 })

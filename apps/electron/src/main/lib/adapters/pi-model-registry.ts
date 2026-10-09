@@ -431,7 +431,8 @@ function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType)
   if (!baseUrl) return undefined
   assertSdkBaseUrlSupportsRouting(baseUrl)
   if (provider === 'ollama' && !isLocalOllamaBaseUrl(baseUrl)) {
-    return `${baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`
+    const normalized = normalizeOpenAIBaseUrlForSdk(baseUrl)
+    return /\/v1$/i.test(normalized) ? normalized : `${normalized}/v1`
   }
   const api = normalizePiApi(provider, baseUrl)
   if (api === 'anthropic-messages') {

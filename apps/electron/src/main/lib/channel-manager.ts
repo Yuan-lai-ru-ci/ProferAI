@@ -24,7 +24,7 @@ import type {
   ProviderType,
   XaiOAuthCredentials,
 } from '@profer/shared'
-import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_URLS, extractZhipuCodingTeamApiToken, isAgentEnabledForChannel, isCodexCredentialExpired, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, resolveProviderNativeProtocol, resolveXaiCredentialMode, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
+import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_URLS, extractZhipuCodingTeamApiToken, isAgentEnabledForChannel, isCodexCredentialExpired, isLocalOllamaBaseUrl, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, resolveProviderNativeProtocol, resolveXaiCredentialMode, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { assertSdkBaseUrlSupportsRouting, isAnthropicShapedEndpoint, resolveAnthropicMessagesUrl, resolveAnthropicModelsUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl, resolveOpenAIModelsUrl, getProferUserAgent } from '@profer/core'
@@ -1734,8 +1734,11 @@ export async function testChannelDirect(input: FetchModelsInput, signal?: AbortS
     if (input.provider === 'deepseek' && isAnthropicShapedEndpoint(input.baseUrl)) {
       return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider, input.modelId, signal)
     }
-    // ollama 无独立测试实现，沿用 Anthropic 兼容测试（与原 switch 一致）。
-    const directAdapterKind = input.provider === 'ollama' ? 'anthropic' : resolveChatAdapterKind(input.provider)
+    // 远程 Ollama 的 Pi runtime 使用 OpenAI Chat Completions；本机 Ollama 保留
+    // 现有 Anthropic 兼容测试路径，避免把本机 Agent sentinel 当成网络协议。
+    const directAdapterKind = input.provider === 'ollama' && input.runtime === 'pi' && !isLocalOllamaBaseUrl(input.baseUrl)
+      ? 'openai'
+      : input.provider === 'ollama' ? 'anthropic' : resolveChatAdapterKind(input.provider)
     switch (directAdapterKind) {
       case 'anthropic':
         return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider, input.modelId, signal)

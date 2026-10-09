@@ -53,7 +53,7 @@ export function injectOpenAIReasoningLevel(
   const { mode: _unsupportedReasoningMode, ...reasoningWithoutMode } = existingReasoning
   const reasoning = {
     ...reasoningWithoutMode,
-    ...(effort === 'none' || existingReasoning.effort === undefined ? { effort } : {}),
+    effort,
   }
   return { ...payload, reasoning }
 }

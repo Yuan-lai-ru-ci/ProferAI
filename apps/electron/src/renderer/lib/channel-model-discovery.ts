@@ -9,12 +9,13 @@ import type { ChannelModel, FetchModelsResult } from '@profer/shared'
 export function applyModelDiscoveryResult(
   current: ChannelModel[],
   result: FetchModelsResult,
+  discoveredSource: 'fetched' | 'builtin-catalog' = 'fetched',
 ): ChannelModel[] {
   if (!result.success) return current
 
   // 只有明确标记为远端发现过的旧模型才会随成功刷新被替换；
   // 未标记的历史模型兼容旧配置，视为用户本地配置并予以保留。
-  const locallyConfigured = current.filter((model) => model.source !== 'fetched')
+  const locallyConfigured = current.filter((model) => model.source !== 'fetched' && model.source !== 'builtin-catalog')
   const localIds = new Set(locallyConfigured.map((model) => model.id))
   const discoveredById = new Map(result.models.map((model) => [model.id, model]))
 
@@ -26,7 +27,7 @@ export function applyModelDiscoveryResult(
       // 1M 勾选是用户显式设置，远端发现只负责「清单里有哪些模型」，
       // 不能因为重新拉取就把它洗掉。
       ...(previous?.context1m !== undefined && { context1m: previous.context1m }),
-      source: 'fetched' as const,
+      source: discoveredSource,
     }
   })
 

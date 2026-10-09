@@ -919,15 +919,15 @@ export async function handleRemoteCommand(
     }
 
     // 查询某 Pi 模型可用的推理档位能力（Pocket 思考档位菜单与服务端同源，避免两端快照漂移）。
-    // 入参只接受 provider / modelId：档位由主进程的 pi-model-registry 级联解析
-    // （reasoning-profile 纯函数 + pi-ai 目录），渲染端拿不到该目录，因此不能本地推导。
+    // baseUrl 可选，旧版 Pocket 不传时仍按 provider 的静态默认协议处理。
     case 'get_pi_reasoning_capability': {
       const provider = typeof parsed.provider === 'string' ? parsed.provider : ''
       const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : undefined
+      const baseUrl = typeof parsed.baseUrl === 'string' ? parsed.baseUrl : undefined
       if (!provider) return { ok: false, error: '缺少 provider' }
       // resolvePiReasoningCapability 是异步的（需读 pi-ai 目录），必须 await，
       // 否则 data 会变成 Promise 而被 JSON 序列化成 {}。
-      return { ok: true, data: await resolvePiReasoningCapability(provider as import('@profer/shared').ProviderType, modelId) }
+      return { ok: true, data: await resolvePiReasoningCapability(provider as import('@profer/shared').ProviderType, modelId, baseUrl) }
     }
 
     // 工作区文件检索（Pocket `@` 引用）：桌面端由 renderer 提交 rootPath/additionalPaths

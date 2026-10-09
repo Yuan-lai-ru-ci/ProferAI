@@ -81,6 +81,27 @@ describe('F14：请求超时与测试能力边界', () => {
     expect((await fetchModels(input('openai'))).success).toBe(true)
   })
 
+  test('Given 远程 Ollama + Pi runtime When 测试连接 Then 使用 OpenAI Chat Completions', async () => {
+    responder = async () => json({ choices: [{ message: { content: 'fixture' } }] })
+    const result = await testChannelDirect(input('ollama', {
+      baseUrl: 'https://remote.example/v1',
+      modelId: 'fixture-model',
+      runtime: 'pi',
+    }))
+    expect(result).toMatchObject({ success: true, message: '模型 fixture-model 生成测试成功' })
+    expect(requests[0]!.url).toBe('https://remote.example/v1/chat/completions')
+  })
+
+  test('Given 本机 Ollama + Pi runtime When 测试连接 Then 保留 Anthropic 兼容测试路径', async () => {
+    responder = async () => json({ content: [{ type: 'text', text: 'fixture' }] })
+    const result = await testChannelDirect(input('ollama', {
+      baseUrl: 'http://127.0.0.1:11434',
+      modelId: 'fixture-model',
+      runtime: 'pi',
+    }))
+    expect(result).toMatchObject({ success: true, message: '模型 fixture-model 生成测试成功' })
+    expect(requests[0]!.url).toBe('http://127.0.0.1:11434/v1/messages')
+  })
   test('Given 用户手工模型 When Anthropic 测试 Then 仅发送指定模型、不要求目录或硬编码模型', async () => {
     responder = async () => json({ type: 'message', content: [{ type: 'text', text: 'fixture' }] })
     const result = await testChannelDirect(input('anthropic-compatible', {

@@ -244,6 +244,24 @@ describe('Pi runtime Ollama 双协议注册', () => {
     expect(result.model.id).toBe('qwen3:8b')
   })
 
+  test('Given 远程 Ollama 完整 Chat Completions 地址 When buildModel Then 不重复追加 /v1', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-ollama-remote-full-endpoint',
+      prompt: 'hi',
+      apiKey: '',
+      provider: 'ollama',
+      baseUrl: 'https://ollama.example.com/v1/chat/completions',
+      model: 'qwen3:8b',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.api).toBe('openai-completions')
+    expect(result.model.baseUrl).toBe('https://ollama.example.com/v1')
+  })
   test('Given 远程 Ollama channel When buildModel Then use OpenAI completions with /v1 Base URL', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     const result = await buildModel(sdk, {

@@ -697,7 +697,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     try {
       const catalog = await window.electronAPI.listCodexModels()
       if (!mountedRef.current || !isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) return
-      setModels((previous) => applyModelDiscoveryResult(previous, { success: true, message: 'Pi Codex 模型目录', models: catalog }))
+      setModels((previous) => applyModelDiscoveryResult(previous, { success: true, message: 'Pi Codex 模型目录', models: catalog }, 'builtin-catalog'))
       setFetchResult({ success: true, message: 'Pi Codex 模型目录（账号可用性以实际订阅为准）', models: catalog })
     } catch {
       if (mountedRef.current && isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) {
@@ -714,7 +714,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     try {
       const catalog = await window.electronAPI.listXaiModels()
       if (!mountedRef.current || !isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) return
-      setModels((previous) => applyModelDiscoveryResult(previous, { success: true, message: 'Pi xAI 模型目录', models: catalog }))
+      setModels((previous) => applyModelDiscoveryResult(previous, { success: true, message: 'Pi xAI 模型目录', models: catalog }, 'builtin-catalog'))
       setFetchResult({ success: true, message: 'Pi xAI 模型目录（账号可用性以实际订阅为准）', models: catalog })
     } catch {
       if (mountedRef.current && isCurrentAsyncRequest(requestId, discoveryRequestRef.current, key, requestKeyRef.current)) setFetchResult({ success: false, message: 'xAI 模型目录读取失败，请重试', models: [] })
