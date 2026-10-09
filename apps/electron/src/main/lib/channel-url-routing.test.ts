@@ -85,6 +85,15 @@ describe('渠道 Chat/Agent URL 路由', () => {
     expect(agentUrl).toBe('https://gateway.example.com/anthropic')
   })
 
+  test('Given Anthropic 渠道指向自建网关 When 推导 Agent URL Then 优先用户 Base URL 而非官方默认', () => {
+    // 回归：此前直接返回 PROVIDER_DEFAULT_AGENT_URLS.anthropic，Pi-only 的自建
+    // Anthropic 网关渠道会被静默打到 api.anthropic.com。
+    expect(inferAgentBaseUrl('anthropic', 'https://cn.clawnode.cn')).toBe('https://cn.clawnode.cn')
+    // 用户填的就是官方地址时，仍返回官方默认（行为不变）。
+    expect(inferAgentBaseUrl('anthropic', 'https://api.anthropic.com')).toBe('https://api.anthropic.com')
+    expect(inferAgentBaseUrl('anthropic', '')).toBe('https://api.anthropic.com')
+  })
+
   test('Given OpenAI 渠道没有单独 Agent URL When Pi runtime 请求 Then 复用用户配置的 OpenAI Base URL', () => {
     const agentUrl = inferAgentBaseUrl('openai', 'https://cn.clawnode.cn/v1')
 

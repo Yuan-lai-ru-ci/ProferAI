@@ -79,6 +79,13 @@ export function inferAgentBaseUrl(provider: ProviderType, baseUrl?: string, agen
     return baseUrl?.trim() ? normalizeBaseUrl(baseUrl) : undefined
   }
 
+  // 用户显式填了主地址时优先于官方默认入口：否则 Pi-only 的 Anthropic 渠道指向
+  // 自建网关时，Pi 请求会被静默打到官方地址，而能覆盖这个行为的 agentBaseUrl
+  // 字段此前在 UI 上被隐藏（该字段现已对勾 Pi 的 Anthropic 协议渠道可见）。
+  if (baseUrl?.trim() && PROVIDER_DEFAULT_AGENT_URLS[provider] && baseUrl.trim() !== PROVIDER_DEFAULT_URLS[provider]) {
+    return normalizeBaseUrl(baseUrl)
+  }
+
   // Pi 原生 API 渠道没有独立的 Anthropic Agent endpoint，必须复用用户配置的
   // Base URL；否则会把 undefined 传入模型注册层。
   return PROVIDER_DEFAULT_AGENT_URLS[provider]

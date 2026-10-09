@@ -39,6 +39,7 @@ import {
   inferAgentRuntimeModes,
   isAgentEnabledForChannel,
   isChannelEnabledForRuntime,
+  resolveProviderNativeProtocol,
 } from '@profer/shared'
 import type {
   AgentRuntimeMode,
@@ -256,8 +257,18 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
    */
   const piEnabled = agentRuntimes.includes('pi')
   const claudeEnabled = provider !== 'xai' && provider !== 'openai-codex' && agentRuntimes.includes('claude')
+  // Pi 实际消费哪个地址由协议决定：Anthropic 协议 provider 在 Pi 下吃 agentBaseUrl
+  // （与主进程 resolveRuntimeBaseUrl 一致），因此勾 Pi 的 Anthropic 协议渠道也必须
+  // 暴露 Anthropic 端点字段——否则它的 Pi 请求地址来自一个 UI 上不可见的字段。
+  const piConsumesAnthropicEndpoint = piEnabled && resolveProviderNativeProtocol(provider, baseUrl) === 'anthropic-messages'
   const showOpenAIEndpoint = piEnabled || !claudeEnabled
-  const showAnthropicEndpoint = claudeEnabled
+  const showAnthropicEndpoint = claudeEnabled || piConsumesAnthropicEndpoint
+  // 端点字段标签按协议语义动态化，不再固定叫「OpenAI 端点」：Anthropic 协议渠道
+  // 的主地址其实是 Anthropic 端点，写「OpenAI 端点」是误导（「Pi 必须配 OpenAI 端点」
+  // 这个表象的根源）。
+  const primaryEndpointLabel = PROVIDER_CAPABILITIES[provider].chatProtocol === 'anthropic'
+    ? 'Anthropic 端点'
+    : 'OpenAI 端点'
   const [apiKey, setApiKey] = React.useState('')
   const keyEditedRef = React.useRef(false)
   const keyRevisionRef = React.useRef(0)
@@ -999,7 +1010,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           />
           {showOpenAIEndpoint && provider !== 'openai-codex' && (
             <SettingsInput
-              label="OpenAI 端点"
+              label={primaryEndpointLabel}
               value={baseUrl}
               onChange={(value) => { discoveryRequestRef.current += 1; testRequestRef.current += 1; setBaseUrl(value) }}
               placeholder="https://api.example.com/v1"
@@ -1024,10 +1035,10 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
               onChange={(value) => { agentBaseUrlEditedRef.current = true; setAgentBaseUrl(value) }}
               placeholder={PROVIDER_DEFAULT_AGENT_URLS[provider]}
               description={provider === 'deepseek'
-                ? 'Claude 内核使用；留空自动推导：官方地址用官方入口，第三方地址沿用 OpenAI 端点'
+                ? 'Claude/Pi 内核使用；留空自动推导：官方地址用官方入口，第三方地址沿用主地址'
                 : PROVIDER_DEFAULT_AGENT_URLS[provider]
-                  ? 'Claude 内核使用；留空用官方默认入口'
-                  : 'Claude 内核使用；留空沿用渠道的 OpenAI 端点'}
+                  ? 'Claude/Pi 内核使用；留空用官方默认入口'
+                  : 'Claude/Pi 内核使用；留空沿用主地址'}
             />
           )}
           {/* API Key + 测试连接同行 */}

@@ -56,7 +56,11 @@ function buildModelOptions(
 ): ModelOption[] {
   const optionsByModel = new Map<string, ModelOption>()
 
-  for (const channel of channels) {
+  // 官方同名模型「保留第一个匹配项作为代表渠道」，遍历顺序直接决定发送落点。
+  // 按 channel.id 排序让代表渠道确定，避免渠道列表顺序变化导致同一模型的
+  // 发送落点漂移（last-writer-wins 不确定性）。
+  const orderedChannels = [...channels].sort((a, b) => a.id.localeCompare(b.id))
+  for (const channel of orderedChannels) {
     if (!channel.enabled) continue
     if (!strictProtocolFilter && !isChannelEnabledForChat(channel)) continue
     if (filterChannelId && channel.id !== filterChannelId) continue
@@ -123,9 +127,15 @@ interface ModelSelectorProps {
   showChannelInTrigger?: boolean
   /** 紧凑模式：只显示圆形 logo，不显示文字（窄面板用） */
   compact?: boolean
-  /** 当前调用运行时需要的协议；Pi/Chat 为 OpenAI，Claude Agent 为 Anthropic。 */
+  /**
+   * 目标内核对应的协议标识：'openai' 代指 Pi 内核，'anthropic' 代指 Claude 内核。
+   * 注意这里「协议」只是内核的标签——严格过滤实际走的是
+   * supportsChannelProtocol → isChannelEnabledForRuntime（按用户勾选的内核判定），
+   * 不是按渠道的真实请求协议。Pi 对 Anthropic 协议渠道同样合法，勾了 Pi 的
+   * Anthropic 渠道在 'openai' 下仍会正确通过（判的是 Pi 勾选，不是协议）。
+   */
   preferredProtocol?: 'openai' | 'anthropic'
-  /** Agent runtime 严格限制协议；Chat 等通用选择器默认保留多协议模型。 */
+  /** Agent runtime 按目标内核严格过滤；Chat 等通用选择器默认保留多协议模型。 */
   strictProtocolFilter?: boolean
   /** Agent 输入区使用统一的 Composer hover/focus/Tooltip 外壳，Chat 默认不变。 */
   composerTool?: boolean
