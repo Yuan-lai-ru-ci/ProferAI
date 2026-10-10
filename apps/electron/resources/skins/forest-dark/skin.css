@@ -121,8 +121,8 @@
   --success-foreground: 0 0% 100%;
   --warning: 38 92% 50%;
   --warning-foreground: 26 83% 14%;
-  --info: var(--primary);
-  --info-foreground: var(--primary-foreground);
+  --info: 217 91% 60%;
+  --info-foreground: 0 0% 100%;
   --chart-1: 150 56% 62%;
   --chart-2: 172 50% 58%;
   --chart-3: 92 48% 58%;
