@@ -127,6 +127,10 @@ function resolveChatAdapterKind(provider: ProviderType): ChatAdapterKind {
  * 服务端只负责「有哪些模型」，以下两项属于用户本地决定，不得被同步洗掉：
  * - 模型级 enabled（用户启停）
  * - 模型上的 1M 勾选（context1m）
+ *
+ * 注意：这里的 localModels 只会是「同 ID 的服务端渠道」上次同步留下的本地记录
+ * （官方/模型族渠道在 UI 上没有 1M 开关，用户改不了 context1m），
+ * 不会与用户自配渠道（id 不同）发生交叉。
  */
 export function mergeServerChannelModels(
   serverModels: readonly Partial<ChannelModel>[],

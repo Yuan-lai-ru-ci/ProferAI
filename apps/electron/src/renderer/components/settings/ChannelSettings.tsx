@@ -490,28 +490,44 @@ function OfficialChannelGroupRow({ channels, health, isModelFamily, onToggleChan
   const groupedHealth = new Map([...modelsById].map(([modelId, models]) => [modelId, aggregateModelHealth(models)]))
   const supportsClaude = channels.some((channel) => isChannelEnabledForRuntime(channel, 'claude'))
   const multiple = channels.length > 1
+  // 模型族是服务端合成的虚拟渠道，"渠道级开关"与模型级开关语义重叠、层级平级，
+  // 会让用户分不清。这里把模型族的渠道开关提到折叠头部行（整族启停），
+  // 展开区只保留模型级开关；非模型族（含自配渠道）保持原有两层结构。
+  const familyChannel = isModelFamily ? channels[0] : null
   return (
     <div className="group border-b border-border/50 last:border-b-0">
-      <button type="button" onClick={() => setExpanded((value) => !value)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30" aria-expanded={expanded}>
-        <img src={getChannelLogo(representative)} alt="" className="h-8 w-8 shrink-0 rounded" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium">{isModelFamily ? getOfficialChannelDisplayName(representative) : `${representative.name} · 官方`}{multiple ? ` · ${channels.length} 个渠道` : ''}</span>
-          <span className="block truncate text-xs text-muted-foreground">{isModelFamily ? `${PROVIDER_LABELS[representative.provider]} 协议 · 当前账号 ${enabledModels.size} 个模型可用` : `${PROVIDER_LABELS[representative.provider]} · ${enabledModels.size} 个模型已启用`}</span>
-        </span>
-        <span className="flex items-center gap-1 shrink-0">
-          {supportsClaude && <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-600">Claude</span>}
-          {channels.some((channel) => isChannelEnabledForRuntime(channel, 'pi')) && <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-success/10 text-success">Pi</span>}
-          <ChevronDown size={16} className={`ml-1 transition-transform ${expanded ? 'rotate-180' : ''}`} />
-        </span>
-      </button>
+      <div className="flex w-full items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/30">
+        <button type="button" onClick={() => setExpanded((value) => !value)} className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-expanded={expanded}>
+          <img src={getChannelLogo(representative)} alt="" className="h-8 w-8 shrink-0 rounded" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium">{isModelFamily ? getOfficialChannelDisplayName(representative) : `${representative.name} · 官方`}{multiple ? ` · ${channels.length} 个渠道` : ''}</span>
+            <span className="block truncate text-xs text-muted-foreground">{isModelFamily ? `${PROVIDER_LABELS[representative.provider]} 协议 · 当前账号 ${enabledModels.size} 个模型可用` : `${PROVIDER_LABELS[representative.provider]} · ${enabledModels.size} 个模型已启用`}</span>
+          </span>
+          <span className="flex items-center gap-1 shrink-0">
+            {supportsClaude && <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-600">Claude</span>}
+            {channels.some((channel) => isChannelEnabledForRuntime(channel, 'pi')) && <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] bg-success/10 text-success">Pi</span>}
+            <ChevronDown size={16} className={`ml-1 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          </span>
+        </button>
+        {familyChannel && (
+          <Switch
+            disabled={busy}
+            checked={familyChannel.enabled}
+            onCheckedChange={() => { void runUpdate(() => onToggleChannel(familyChannel)) }}
+            aria-label={`启用 ${getOfficialChannelDisplayName(representative)} 模型池`}
+          />
+        )}
+      </div>
       {expanded && <div className="border-t border-border/50 bg-muted/20 px-5 py-3 pl-[68px] space-y-2">
         {isModelFamily ? <p className="text-xs text-muted-foreground">这是服务端汇流的模型池；普通/VIP 路由、上游主备与故障重试由后台自动处理。</p> : multiple ? <p className="text-xs text-muted-foreground">已合并 {channels.length} 个同名官方渠道；上游主备与重试由 New API 自动处理。</p> : null}
         {channels.map((channel) => (
           <div key={channel.id} className="space-y-3 py-2">
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="min-w-0 break-words font-medium">{channel.name}</span>
-              <Switch disabled={busy} checked={channel.enabled} onCheckedChange={() => { void runUpdate(() => onToggleChannel(channel)) }} aria-label={`启用 ${channel.name} 渠道`} />
-            </div>
+            {!isModelFamily && (
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="min-w-0 break-words font-medium">{channel.name}</span>
+                <Switch disabled={busy} checked={channel.enabled} onCheckedChange={() => { void runUpdate(() => onToggleChannel(channel)) }} aria-label={`启用 ${channel.name} 渠道`} />
+              </div>
+            )}
             {channel.models.length === 0 && <p className="text-xs text-muted-foreground">当前渠道暂无模型</p>}
             {channel.models.map((model) => {
               const summary = groupedHealth.get(model.id)
