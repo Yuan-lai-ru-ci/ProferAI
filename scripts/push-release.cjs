@@ -1,10 +1,13 @@
 /**
  * Profer Windows 发布（本地构建 + 双通道上传）
  *
- * 用法: node scripts/push-release.cjs <版本号>
+ * 用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only]
  *
  * GitHub Release 只由本脚本写入。release.yml 仅保留手动构建验证，避免本地
  * 上传与 tag 触发的 CI 同时创建、删除或上传同一个 Release。
+ *
+ * --github-only: 只推送源码/tag 并创建 GitHub Release，跳过国内更新源上传；
+ *   releases.json 仅本地生成，待更新源可达后自行补传。
  */
 const { execSync, spawn } = require('child_process');
 const crypto = require('crypto');
@@ -14,8 +17,9 @@ const path = require('path');
 const VERSION = process.argv[2];
 const UNSIGNED_RELEASE = process.argv.includes('--unsigned');
 const ARTIFACTS_ONLY = process.argv.includes('--artifacts-only');
+const GITHUB_ONLY = process.argv.includes('--github-only');
 if (!VERSION) {
-  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only]');
+  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only]');
   process.exit(1);
 }
 
@@ -260,7 +264,7 @@ async function ensureGitHubRelease(assets) {
   if (!UPDATE_FEED_URL.startsWith('https://')) {
     throw new Error('更新源必须为 HTTPS，拒绝发布。');
   }
-  console.log(`[2/5] 上传国内自动更新源（${UPDATE_FEED_URL}）...`);
+  console.log(`[2/5] ${GITHUB_ONLY ? '按 --github-only 跳过国内自动更新源上传' : `上传国内自动更新源（${UPDATE_FEED_URL}）`}...`);
   const installer = assets.find((asset) => asset.name === `Profer-Setup-${VERSION}.exe`);
   const metadata = assets.find((asset) => asset.name === 'latest.yml');
   const metadataSignature = assets.find((asset) => asset.name === 'latest.yml.sig');
@@ -275,7 +279,7 @@ async function ensureGitHubRelease(assets) {
     size: installer.size,
     date: new Date().toISOString().split('T')[0],
   }));
-  for (const target of UPDATE_TARGETS) {
+  for (const target of (GITHUB_ONLY ? [] : UPDATE_TARGETS)) {
     const sudo = target.user === 'root' ? '' : 'sudo ';
     await scp(metadata.path, '/tmp/latest.yml', target);
     if (metadataSignature) await scp(metadataSignature.path, '/tmp/latest.yml.sig', target);
@@ -306,8 +310,8 @@ async function ensureGitHubRelease(assets) {
   // 的 fetchServerReleases），它只能从 GitHub Releases 生成。此前没有脚本也没有任何发布
   // 步骤维护它，两台更新服务器上长期是 404。这里在 Release 落地后立刻刷新，保证版本历史
   // 不会落后于刚发布的版本。
-  console.log('[5/5] 刷新商业版版本历史数据源 releases.json...');
-  run(`node scripts/build-releases-json.cjs --upload`);
+  console.log(`[5/5] 刷新商业版版本历史数据源 releases.json${GITHUB_ONLY ? '（--github-only：仅本地生成）' : ''}...`);
+  run(`node scripts/build-releases-json.cjs${GITHUB_ONLY ? '' : ' --upload'}`);
   // macOS 包只能在 Apple Silicon 上构建，Windows 发布流程无法代劳。历史上 v0.15.84 / v0.15.85
   // 就是漏了这一步：GitHub Release 与更新源都只有 Windows 资产，macOS 客户端从 0.15.84 起
   // 再也收不到更新。这里显式提示，避免再次漏发。
