@@ -1,9 +1,20 @@
 [
   {
+    "id": "RE_kwDOTfo-884YXmYY",
+    "tag_name": "v0.16.2",
+    "name": "Profer v0.16.2",
+    "body": "**Full Changelog**: https://github.com/Yuan-lai-ru-ci/ProferAI/compare/v0.16.0...v0.16.2",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-10-10T09:27:37Z",
+    "published_at": "2026-10-10T09:30:34Z",
+    "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.16.2"
+  },
+  {
     "id": "RE_kwDOTfo-884YEsOG",
     "tag_name": "v0.16.0",
     "name": "Profer v0.16.0",
-    "body": "## What's Changed\n* Fix title bar buttons by @Nya-Angle in https://github.com/Yuan-lai-ru-ci/ProferAI/pull/144\n\n## New Contributors\n* @Nya-Angle made their first contribution in https://github.com/Yuan-lai-ru-ci/ProferAI/pull/144\n\n**Full Changelog**: https://github.com/Yuan-lai-ru-ci/ProferAI/compare/v0.15.88...v0.16.0",
+    "body": "## What's Changed\n* Fix title bar buttons by @Nya-Angle in https://github.com/Yuan-lai-ru-ci/ProferAI/pull/144\n\n## New Contributors\n* @Nya-Angle made their first contribution in https://github.com/Yuan-lai-ru-ci/ProferAI/pull/144\n\n**Full Changelog**: https://github.com/Yuan-lai-ru-ci/ProferAI/compare/v0.15.88...v0.16.0\n\n## macOS（Apple Silicon）\n\n- `Profer-0.16.0-arm64.dmg`（264,648,906 B，SHA-256 `ac2addc1ed78e0481878e7659fa21a41ebb7b142246554beceb8091d1df195dc`）—— 推荐手动安装\n- `Profer-0.16.0-arm64-mac.zip`（256,112,770 B，SHA-256 `cb820c28f38e6d4eb715be2cee8d8b6bca1e633e65dd79cc9ce205a7c42ee9e6`）—— 自动更新使用\n- `latest-mac.yml` + `Profer-0.16.0-arm64-mac.zip.blockmap`\n- 仅支持 Apple Silicon（arm64），未提供 Intel 版本\n- 未使用 Developer ID 签名、未做公证（采用 ad-hoc 签名并钉死 designated requirement，可正常自更新）；首次打开若提示未知开发者，请在「系统设置 → 隐私与安全性」中允许\n",
     "draft": false,
     "prerelease": false,
     "created_at": "2026-10-05T14:51:09Z",
