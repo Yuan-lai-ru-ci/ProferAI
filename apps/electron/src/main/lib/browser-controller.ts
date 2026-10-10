@@ -16,6 +16,9 @@ import { resolveAppThemeIsDark } from './app-theme-service'
 import { handleProferFileRequest } from './local-file-protocol'
 import { BrowserCdpTimeoutError, BrowserOperationAbortedError, BROWSER_OBSERVE_TIMEOUT_MS, resolveBrowserObserveAxDepth, throwIfBrowserOperationAborted, withBrowserCdpTimeout } from './browser-cdp'
 import { parseBrowserPressAction } from './browser-key-policy'
+import { BrowserActionGuard, type BrowserActionGuardKey } from './browser-action-guards'
+import { browserActionSnapshotChanged, classifyBrowserClickRisk, createBrowserActionSnapshot, resolveBrowserActionStatus, type BrowserActionSnapshot } from './browser-action-verification'
+import { BrowserStabilityProbe } from './browser-stabilization'
 import { browserObservationNameLimit, prioritizeBrowserObservationCandidates, resolveBrowserObserveMaxElements } from './browser-observation-policy'
 import { buildPersistentBrowserPartition, resolveBrowserProfileKey } from './browser-profile-policy'
 import { hasAcknowledgedBrowserRiskDisclaimer } from './browser-risk-disclaimer'
@@ -59,6 +62,12 @@ type BrowserTabRecord = {
   refs: Map<string, RefEntry>
   /** 页面文档/观察代际；导航、关闭、调试器恢复后即失效。 */
   generation: number
+  /** 当前页面 frame 树中可观测的 frame 数量。 */
+  frameCount: number
+  /** 尚未完成的网络请求 ID，用于动作后的稳态判断。 */
+  pendingNetworkRequestIds: Set<string>
+  /** 当前文档已见的 frame ID，用于跨 frame 稳态判断。 */
+  frameIds: Set<string>
   /** 防止 UI 与 Agent 在同一 Tab 上交错下发命令。 */
   commandTail: Promise<void>
   isLocalPreview: boolean
@@ -249,6 +258,8 @@ export class BrowserController {
   private owner: BrowserWindow | null = null
   private foregroundSessionId: string | null = null
   private readonly sessions = new Map<string, BrowserSessionRecord>()
+  /** 已派发但结果未知的不可逆动作，按 session/tab/ref 隔离，禁止隐式重复执行。 */
+  private readonly actionGuards = new BrowserActionGuard()
   private readonly configurations = new Map<string, BrowserSessionConfiguration>()
   /** Electron persistent partition 生命周期长于 Agent session；同一 Session 只安装一次 guard。 */
   private readonly guardedSessions = new WeakSet<Session>()
@@ -747,6 +758,9 @@ export class BrowserController {
       state: emptyTabState(tabId),
       refs: new Map(),
       generation: 0,
+      frameCount: 0,
+      frameIds: new Set<string>(),
+      pendingNetworkRequestIds: new Set<string>(),
       commandTail: Promise.resolve(),
       isLocalPreview,
       localFilePath: null,
@@ -774,9 +788,24 @@ export class BrowserController {
       void this.openExternalLinkInDisplayTab(browserSession, tab, url)
       return { action: 'deny' }
     })
+    const onDebuggerMessage = (_event: Electron.Event, method: string, rawParams: unknown): void => {
+      const params = rawParams && typeof rawParams === 'object' ? rawParams as Record<string, unknown> : {}
+      const requestId = typeof params.requestId === 'string' ? params.requestId : null
+      if (method === 'Network.requestWillBeSent' && requestId) tab.pendingNetworkRequestIds.add(requestId)
+      if ((method === 'Network.loadingFinished' || method === 'Network.loadingFailed') && requestId) tab.pendingNetworkRequestIds.delete(requestId)
+      if (method === 'Page.frameAttached' || method === 'Page.frameNavigated') {
+        const frame = params.frame && typeof params.frame === 'object' ? params.frame as Record<string, unknown> : null
+        const frameId = typeof params.frameId === 'string' ? params.frameId : typeof frame?.id === 'string' ? frame.id : null
+        if (frameId) tab.frameIds.add(frameId)
+      }
+      if (method === 'Page.frameDetached' && typeof params.frameId === 'string') tab.frameIds.delete(params.frameId)
+    }
+    view.webContents.debugger.on('message', onDebuggerMessage)
     view.webContents.on('will-navigate', (event, url) => {
       // 在校验及真正导航前失效，避免 Observe 后在新页面按旧坐标操作。
       this.invalidateTabDocument(tab)
+      tab.frameIds.clear()
+      tab.pendingNetworkRequestIds.clear()
       try {
         if (url === BROWSER_LOCAL_FILE_OPEN_DEFAULT_URL) {
           this.openLocalFileWithDefaultApp(browserSession, tab)
@@ -813,6 +842,8 @@ export class BrowserController {
       // 重新开始加载意味着用户已重试或发起了新导航，旧的失败态不应继续遮住页面。
       tab.state.loadError = null
       this.invalidateTabDocument(tab)
+      tab.frameIds.clear()
+      tab.pendingNetworkRequestIds.clear()
       this.updateNavigationState(browserSession, tab)
     })
     view.webContents.on('did-stop-loading', () => {
@@ -826,6 +857,8 @@ export class BrowserController {
     view.webContents.on('destroyed', () => {
       if (this.sessions.get(browserSession.sessionId) !== browserSession || !browserSession.tabs.has(tab.tabId)) return
       const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
+      view.webContents.debugger.removeListener('message', onDebuggerMessage)
+      this.actionGuards.clearTab(browserSession.sessionId, tab.tabId)
       browserSession.tabs.delete(tab.tabId)
       if (browserSession.tabs.size === 0) {
         // WebContents 可能因 renderer crash 等原因绕过 closeTab。最后一个 tab 消失时仍必须
@@ -838,7 +871,11 @@ export class BrowserController {
       if (browserSession.agentTabId === tab.tabId) browserSession.agentTabId = null
       this.emit(browserSession)
     })
-    try { view.webContents.debugger.attach('1.3') } catch (error) { console.warn('[受管浏览器] CDP attach 失败:', error) }
+    try {
+      view.webContents.debugger.attach('1.3')
+      void view.webContents.debugger.sendCommand('Page.enable').catch(() => undefined)
+      void view.webContents.debugger.sendCommand('Network.enable').catch(() => undefined)
+    } catch (error) { console.warn('[受管浏览器] CDP attach 失败:', error) }
     browserSession.tabs.set(tabId, tab)
     if (!browserSession.activeTabId) {
       browserSession.activeTabId = tabId
@@ -897,6 +934,10 @@ export class BrowserController {
     try {
       if (debuggerClient.isAttached()) debuggerClient.detach()
       debuggerClient.attach('1.3')
+      tab.frameIds.clear()
+      tab.pendingNetworkRequestIds.clear()
+      void debuggerClient.sendCommand('Page.enable').catch(() => undefined)
+      void debuggerClient.sendCommand('Network.enable').catch(() => undefined)
       console.warn(`[受管浏览器] CDP ${timedOutMethod} 超时，已重连调试通道。`)
     } catch (error) {
       console.warn(`[受管浏览器] CDP ${timedOutMethod} 超时后无法重连调试通道:`, error)
@@ -1230,6 +1271,7 @@ export class BrowserController {
     const browserSession = this.getSession(sessionId)
     const tab = this.getDisplayTab(browserSession, tabId)
     const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
+    this.actionGuards.clearTab(browserSession.sessionId, tab.tabId)
     this.disposeTab(browserSession, tab)
     if (browserSession.tabs.size === 0) {
       this.disposeSession(browserSession)
@@ -1646,6 +1688,8 @@ export class BrowserController {
         })
         elements.push({ ref, role: candidate.role, name: candidate.name, editable: candidate.editable })
       }
+      // 新快照代表调用方已经重新看过页面，允许它基于新 ref 再次决定是否执行动作。
+      this.actionGuards.clearTab(browserSession.sessionId, tab.tabId)
       this.updateNavigationState(browserSession, tab)
       this.trace(browserSession, tab, 'observe', `读取到 ${elements.length}/${maxElements} 个元素（可交互优先，AX 深度 ${observeDepth}）`)
       return { tabId: tab.tabId, url: tab.state.url, title: tab.state.title, generation: tab.generation, elements }
@@ -1718,21 +1762,124 @@ export class BrowserController {
     return { x: ((quad[0] as number) + (quad[2] as number) + (quad[4] as number) + (quad[6] as number)) / 4, y: ((quad[1] as number) + (quad[3] as number) + (quad[5] as number) + (quad[7] as number)) / 4 }
   }
 
+  private async readBrowserActionSnapshot(tab: BrowserTabRecord, signal?: AbortSignal): Promise<BrowserActionSnapshot | null> {
+    try {
+      const result = await this.executePageExpression(tab, '(() => ({ url: location.href, title: document.title, text: (document.body?.innerText || "").slice(0, 20000) }))()', signal)
+      if (!result || typeof result !== 'object') return null
+      const record = result as Record<string, unknown>
+      return createBrowserActionSnapshot({
+        url: typeof record.url === 'string' ? record.url : tab.state.url,
+        title: typeof record.title === 'string' ? record.title : tab.state.title,
+        text: typeof record.text === 'string' ? record.text : '',
+        loading: tab.state.loading,
+        pendingNetworkRequests: tab.pendingNetworkRequestIds.size,
+        frameCount: tab.frameIds.size,
+        generation: tab.generation,
+      })
+    } catch {
+      // 导航刚开始或页面暂时不可观测时，调用方仍可用地址栏状态和 trace 判断未知结果。
+      return null
+    }
+  }
+
+  private async waitForBrowserActionStabilization(tab: BrowserTabRecord, signal?: AbortSignal): Promise<BrowserActionSnapshot | null> {
+    const probe = new BrowserStabilityProbe({ requiredUnchangedSamples: 2 })
+    let lastSnapshot: BrowserActionSnapshot | null = null
+    const deadline = Date.now() + 1_500
+    while (Date.now() <= deadline) {
+      throwIfBrowserOperationAborted(signal)
+      const snapshot = await this.readBrowserActionSnapshot(tab, signal)
+      if (!snapshot) return lastSnapshot
+      lastSnapshot = snapshot
+      if (probe.push({ snapshot }).stable) return snapshot
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort)
+          resolve()
+        }, 150)
+        const onAbort = () => {
+          clearTimeout(timer)
+          signal?.removeEventListener('abort', onAbort)
+          reject(new BrowserOperationAbortedError())
+        }
+        if (signal?.aborted) {
+          onAbort()
+          return
+        }
+        signal?.addEventListener('abort', onAbort, { once: true })
+      })
+    }
+    return lastSnapshot
+  }
+
+  /** 优先用 DOM 原生 click；只有明确允许重试时才进入一次 CDP 坐标 fallback。 */
+  private async dispatchSyntheticClick(tab: BrowserTabRecord, target: RefEntry, generation: number, signal?: AbortSignal): Promise<boolean> {
+    this.assertCurrentDocument(tab, generation, signal)
+    const resolved = await this.cdp(tab, 'DOM.resolveNode', { backendNodeId: target.backendNodeId }, undefined, signal)
+    this.assertCurrentDocument(tab, generation, signal)
+    const remote = resolved.object as Record<string, unknown> | undefined
+    const objectId = typeof remote?.objectId === 'string' ? remote.objectId : undefined
+    if (!objectId) return false
+    const response = await this.cdp(tab, 'Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: 'function () { if (!(this instanceof HTMLElement)) return false; this.click(); return true; }',
+      returnByValue: true,
+      userGesture: true,
+    }, undefined, signal)
+    const result = response.result as Record<string, unknown> | undefined
+    return result?.value === true && !response.exceptionDetails
+  }
+
   async click(sessionId: string, ref: string, tabId?: string, signal?: AbortSignal): Promise<BrowserViewState> {
     const browserSession = this.getOrCreateSession(sessionId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
+    const guard: BrowserActionGuardKey = { sessionId, tabId: tab.tabId, ref, action: 'click' }
+    if (this.actionGuards.isBlocked(guard)) {
+      throw new Error('上一次点击已发送但结果未知；请先重新调用 BrowserObserve，确认页面状态后再决定是否操作。')
+    }
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
       const generation = tab.generation
       const target = this.resolveRef(tab, ref)
-      const { x, y } = await this.centerForRef(tab, ref, operationSignal, generation)
-      this.assertCurrentDocument(tab, generation, operationSignal)
+      const risk = classifyBrowserClickRisk(target.label)
+      const before = await this.readBrowserActionSnapshot(tab, operationSignal)
       await this.highlightAgentTarget(tab, target.backendNodeId)
-      this.assertCurrentDocument(tab, generation, operationSignal)
-      await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, undefined, operationSignal)
-      this.assertCurrentDocument(tab, generation, operationSignal)
-      await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, undefined, operationSignal)
-      this.trace(browserSession, tab, 'click', `点击 ${target.label}`, 'dispatched')
+      let dispatched = false
+      let effect: 'none' | 'url-changed' = 'none'
+
+      try {
+        dispatched = await this.dispatchSyntheticClick(tab, target, generation, operationSignal)
+      } catch (error) {
+        if (risk === 'non-retryable') {
+          this.trace(browserSession, tab, 'click', `点击 ${target.label} 未完成，未自动重试`, 'failed')
+          throw error
+        }
+      }
+
+      const afterSynthetic = await this.waitForBrowserActionStabilization(tab, operationSignal)
+      if (before && afterSynthetic && browserActionSnapshotChanged(before, afterSynthetic)) effect = 'url-changed'
+      if (before && tab.state.url !== before.url) effect = 'url-changed'
+
+      if (effect === 'none' && risk === 'safe-retry') {
+        // 只允许一次 fallback；第一次 DOM click 可能已触发副作用，但低风险分类才允许承担该不确定性。
+        const { x, y } = await this.centerForRef(tab, ref, operationSignal, generation)
+        this.assertCurrentDocument(tab, generation, operationSignal)
+        await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, undefined, operationSignal)
+        dispatched = true
+        this.assertCurrentDocument(tab, generation, operationSignal)
+        await this.cdp(tab, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, undefined, operationSignal)
+        const afterFallback = await this.waitForBrowserActionStabilization(tab, operationSignal)
+        if (before && afterFallback && browserActionSnapshotChanged(before, afterFallback)) effect = 'url-changed'
+        if (before && tab.state.url !== before.url) effect = 'url-changed'
+      }
+
+      const status = resolveBrowserActionStatus('click', { dispatched, effect, rejected: !dispatched && risk === 'non-retryable' })
+      if (status === 'unknown') this.actionGuards.markUncertain(guard)
+      this.trace(browserSession, tab, 'click', status === 'verified'
+        ? `点击 ${target.label} 已确认页面发生变化`
+        : status === 'unknown'
+          ? `点击 ${target.label} 结果未知，请重新观察`
+          : `点击 ${target.label} 未发送`, status)
       return structuredClone(this.buildState(browserSession))
     })
   }
@@ -2003,6 +2150,7 @@ export class BrowserController {
    */
   private disposeSession(browserSession: BrowserSessionRecord): void {
     if (this.sessions.get(browserSession.sessionId) !== browserSession) return
+    this.actionGuards.clearSession(browserSession.sessionId)
     this.sessions.delete(browserSession.sessionId)
     browserSession.lastVisible = false
     try {

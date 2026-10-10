@@ -1,11 +1,10 @@
 /**
- * 会话标题生成：提示词、清洗、信息量判定与「前几轮定稿窗口」策略的唯一定义处。
+ * 会话标题生成：提示词、清洗、信息量判定与首条有效来源定稿策略的唯一定义处。
  *
  * Chat（chat-service）与 Agent（agent-orchestrator）两条链路都从这里取用，
  * 避免此前在三处各写一份、且内联正则被编码往返损坏的问题。
  *
- * 命名策略（2026-09 起）：标题不再由「首条消息」一次性定死，而是在会话最初几轮里
- * 用积累到的「有信息量」用户消息逐步精修，累计到 TITLE_LOCK_MIN_SOURCES 条即定稿锁定。
+ * 命名策略（2026-10 起）：标题在首条「有信息量」用户消息后立即生成并定稿，避免等待后续轮次或因失败次数耗尽而长期保留默认名。
  * 只由该窗口写出的标题会被标记为自动生成；用户手动改名一律视为人工决定，永不覆盖。
  */
 import { stripScheduledRunMarker } from '@profer/session-core'
@@ -104,18 +103,15 @@ export function createFallbackTitle(userMessage: string): string | null {
   return cleaned.slice(0, MAX_TITLE_LENGTH) || null
 }
 
-// ===== 自动命名窗口（前几轮定稿）策略 =====
+// ===== 自动命名策略 =====
 
 /**
- * 窗口内最多发起的模型调用次数（含首次）。
- *
- * 用尽后停止自动改名——会话可能长期停留在默认名或一个不完美的标题，
- * 但它不会在每一轮都偷偷烧一次标题请求；用户可用「重新生成标题」手动补救。
+ * 兼容旧会话元数据的最大尝试次数。新会话在首条有效来源后直接定稿。
  */
 export const TITLE_REFINE_MAX_ATTEMPTS = 3
 
-/** 累计到这么多条「有信息量」的用户消息即定稿，此后不再自动改名。 */
-export const TITLE_LOCK_MIN_SOURCES = 2
+/** 首条有信息量的用户消息即可完成自动命名。 */
+export const TITLE_LOCK_MIN_SOURCES = 1
 
 /** 参与命名的来源消息条数上限（只取最早的若干条，避免长会话把窗口拖长）。 */
 export const TITLE_SOURCE_MAX_COUNT = 4
@@ -141,10 +137,13 @@ const WINDOW_TITLE_PROMPT = '根据用户在会话最初几轮的消息，生成
  * 这些块是 Profer 自己拼上去的（附件清单、引用片段、探索分支增量说明等），
  * 不属于用户意图；命名前必须剥离，否则会把注入内容当主题。
  */
-const INJECTED_BLOCK = /<(attached_files|quoted_file|exploration_delta|mentioned_tools|session_recovery|knowledge_context|user_browser_context|attached_directories|workspace_state|working_directory)[^>]*>[\s\S]*?<\/\1>/gi
+const INJECTED_BLOCK = /<(graph_focus|skill_routing|skill|attached_files|quoted_file|exploration_delta|mentioned_tools|session_recovery|knowledge_context|user_browser_context|attached_directories|workspace_state|working_directory)[^>]*>[\s\S]*?<\/\1>/gi
 
 /** 剥离注入块后可能残留的孤立标签。 */
-const INJECTED_TAG = /<\/?(?:attached_files|quoted_file|exploration_delta|mentioned_tools|session_recovery|knowledge_context|user_browser_context|attached_directories|workspace_state|working_directory|scheduled_run)[^>]*>/gi
+const INJECTED_TAG = /<\/?(?:graph_focus|skill_routing|skill|attached_files|quoted_file|exploration_delta|mentioned_tools|session_recovery|knowledge_context|user_browser_context|attached_directories|workspace_state|working_directory|scheduled_run)[^>]*>/gi
+
+/** Profer 动态上下文中的时间行不是用户意图。 */
+const INJECTED_TIME_LINE = /^\*\*当前时间:[^\n]*\*\*\s*$/gim
 
 /**
  * 纯斜杠命令前缀：整条消息只有 `/命令`，或 `/命令 载荷`。
@@ -204,6 +203,7 @@ function stripInjectedContext(raw: string): string {
   return stripScheduledRunMarker(raw)
     .replace(INJECTED_BLOCK, '')
     .replace(INJECTED_TAG, '')
+    .replace(INJECTED_TIME_LINE, '')
 }
 
 /** 单条候选消息的信息量判定结果。 */
@@ -269,7 +269,7 @@ export function createWindowFallbackTitle(sources: string[]): string | null {
   return null
 }
 
-/** 应用完本轮标题后是否应当定稿（累计到 TITLE_LOCK_MIN_SOURCES 条有效来源）。 */
+/** 应用本轮标题后是否应当定稿。 */
 export function shouldLockTitle(sourceCount: number): boolean {
   return sourceCount >= TITLE_LOCK_MIN_SOURCES
 }
@@ -322,15 +322,16 @@ export function planTitleWindow(input: TitleWindowInput): TitleWindowDecision {
   }
 
   const attempts = input.titleRefineAttempts ?? 0
-  if (attempts >= TITLE_REFINE_MAX_ATTEMPTS) return { action: 'lock', reason: 'attempts-exhausted' }
+  // 旧会话可能记录了失败尝试，但默认标题仍必须允许首次成功命名。
+  if (attempts >= TITLE_REFINE_MAX_ATTEMPTS && !isDefaultTitle) return { action: 'lock', reason: 'attempts-exhausted' }
 
   // 无有效来源（纯寒暄/命令）不消耗调用次数，也不关窗，等下一个有内容的轮次。
   if (input.sourceCount <= 0) return { action: 'skip', reason: 'no-source' }
 
   return {
     action: 'generate',
-    attempts: attempts + 1,
-    lockAfterApply: shouldLockTitle(input.sourceCount),
+    attempts: Math.min(attempts + 1, TITLE_REFINE_MAX_ATTEMPTS),
+    lockAfterApply: true,
   }
 }
 

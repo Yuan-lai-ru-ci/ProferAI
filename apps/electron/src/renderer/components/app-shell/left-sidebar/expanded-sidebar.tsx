@@ -47,6 +47,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     handleRequestDelete,
     handleRename,
     handleRegenerateConversationTitle,
+    regeneratingConversationTitleIds,
     handleTogglePin,
     handleToggleArchive,
     pinnedAgentSessionTrees,
@@ -218,6 +219,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                   onRequestDelete={handleRequestDelete}
                   onRename={handleRename}
                   onRegenerateTitle={handleRegenerateConversationTitle}
+                  regeneratingTitle={regeneratingConversationTitleIds.has(conversation.id)}
                   onTogglePin={handleTogglePin}
                   onToggleArchive={handleToggleArchive}
                   onCloseTab={() => requestCloseTab(tab.id)}
@@ -278,6 +280,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                         onRequestDelete={handleRequestDelete}
                         onRename={handleRename}
                         onRegenerateTitle={handleRegenerateConversationTitle}
+                        regeneratingTitle={regeneratingConversationTitleIds.has(conv.id)}
                         onTogglePin={handleTogglePin}
                         onToggleArchive={handleToggleArchive}
                       />
@@ -312,6 +315,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                       onRequestDelete={handleRequestDelete}
                       onRename={handleRename}
                       onRegenerateTitle={handleRegenerateConversationTitle}
+                      regeneratingTitle={regeneratingConversationTitleIds.has(conv.id)}
                       onTogglePin={handleTogglePin}
                       onToggleArchive={handleToggleArchive}
                     />
@@ -603,6 +607,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                         onRequestDelete={handleRequestDelete}
                         onRename={handleRename}
                         onRegenerateTitle={handleRegenerateConversationTitle}
+                        regeneratingTitle={regeneratingConversationTitleIds.has(conv.id)}
                         onTogglePin={handleTogglePin}
                         onToggleArchive={handleToggleArchive}
                       />

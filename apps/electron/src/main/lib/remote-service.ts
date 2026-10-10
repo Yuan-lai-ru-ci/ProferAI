@@ -98,7 +98,7 @@ import {
   updateContextDividers,
   searchConversationMessages,
 } from './conversation-manager'
-import { sendMessage, stopGeneration, generateTitle } from './chat-service'
+import { sendMessage, stopGeneration, generateTitle, autoTitleConversation, regenerateConversationTitle } from './chat-service'
 import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './attachment-service'
 import { chatEventBus } from './chat-stream-bus'
 import { resolveAndReadFile, readFileAsDataUrl } from './file-preview-service'
@@ -1132,7 +1132,7 @@ export async function handleRemoteCommand(
       const sessionId = parsed.sessionId as string
       const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
       if (!sessionId || !title) return { ok: false, error: '缺少 sessionId 或 title' }
-      const meta = updateAgentSessionUiMeta(sessionId, { title })
+      const meta = updateAgentSessionUiMeta(sessionId, { title, titleLockedAt: Date.now() })
       return { ok: true, data: buildSessionItem(meta) }
     }
 
@@ -1499,7 +1499,21 @@ export async function handleRemoteCommand(
       const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
       if (!id || !title) return { ok: false, error: '缺少 conversationId 或 title' }
       if (!listConversations(true).some((c) => c.id === id)) return { ok: false, error: '对话不存在' }
-      return { ok: true, data: updateConversationMeta(id, { title }) }
+      return { ok: true, data: updateConversationMeta(id, { title, titleLockedAt: Date.now() }) }
+    }
+
+    case 'regenerate_conversation_title': {
+      const conversationId = typeof parsed.conversationId === 'string' ? parsed.conversationId : ''
+      if (!conversationId) return { ok: false, error: '缺少 conversationId' }
+      const meta = listConversations(true).find((conversation) => conversation.id === conversationId)
+      if (!meta) return { ok: false, error: '对话不存在' }
+      const channelId = typeof parsed.channelId === 'string' ? parsed.channelId : meta.channelId
+      const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : meta.modelId
+      if (!channelId || !modelId) return { ok: false, error: '重新生成标题失败：当前对话没有可用模型' }
+      const updated = await regenerateConversationTitle(conversationId, channelId, modelId)
+      return updated
+        ? { ok: true, data: updated }
+        : { ok: false, error: '重新生成标题失败：当前对话没有有效消息或模型不可用' }
     }
 
     case 'update_conversation_model': {
@@ -1665,6 +1679,15 @@ export async function handleRemoteCommand(
       if (!conversationId || !dividers) return { ok: false, error: '缺少 conversationId 或 dividers' }
       if (!listConversations(true).some((c) => c.id === conversationId)) return { ok: false, error: '对话不存在' }
       return { ok: true, data: updateContextDividers(conversationId, dividers) }
+    }
+
+    case 'chat_auto_title': {
+      const conversationId = typeof parsed.conversationId === 'string' ? parsed.conversationId : ''
+      const channelId = typeof parsed.channelId === 'string' ? parsed.channelId : ''
+      const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : ''
+      if (!conversationId || !channelId || !modelId) return { ok: false, error: '缺少 conversationId / channelId / modelId' }
+      const updated = await autoTitleConversation({ conversationId, channelId, modelId })
+      return { ok: true, data: updated }
     }
 
     case 'chat_generate_title': {

@@ -7,6 +7,7 @@
  */
 
 import type { ProviderType } from '@profer/shared'
+import { resolveReasoningProfile } from '@profer/shared'
 import type {
   ContinuationMessage,
   ImageAttachmentData,
@@ -387,17 +388,24 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = resolveOpenAIResponsesUrl(input.baseUrl, this.providerType)
 
+    const body: Record<string, unknown> = {
+      model: input.modelId,
+      input: [{ role: 'user', content: input.prompt }],
+      max_output_tokens: 50,
+    }
+    const reasoningEffort = resolveReasoningProfile({ modelId: input.modelId, transport: 'openai-responses' })
+      ?.encodings['openai-responses']?.effortMap.off
+    if (typeof reasoningEffort === 'string') {
+      body.reasoning = { effort: reasoningEffort }
+    }
+
     return {
       url,
       headers: {
         Authorization: `Bearer ${input.apiKey}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        model: input.modelId,
-        input: [{ role: 'user', content: input.prompt }],
-        max_output_tokens: 50,
-      }),
+      body: JSON.stringify(body),
     }
   }
 

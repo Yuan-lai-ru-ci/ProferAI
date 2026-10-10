@@ -741,8 +741,15 @@ export function useLeftSidebar() {
     }
   }, [setConversations, setTabs])
 
+  /** 正在重新生成 Chat 标题的会话 ID */
+  const [regeneratingConversationTitleIds, setRegeneratingConversationTitleIds] = React.useState<Set<string>>(new Set())
+
   /** 手动重新生成对话标题（用激活分支前几轮有效消息重命名） */
   const handleRegenerateConversationTitle = React.useCallback(async (id: string): Promise<void> => {
+    if (regeneratingConversationTitleIds.has(id)) return
+    setRegeneratingConversationTitleIds((prev) => new Set(prev).add(id))
+    const loadingToastId = `regenerate-title:${id}`
+    toast.loading('正在生成标题…', { id: loadingToastId, duration: Infinity })
     try {
       // 侧边栏不在会话内部，模型选择以 composer 的 per-conversation 状态为准；
       // 取不到时主进程会回退到对话元数据上记录的上次选择。
@@ -762,8 +769,15 @@ export function useLeftSidebar() {
     } catch (error) {
       console.error('[侧边栏] 重新生成对话标题失败:', error)
       toast.error('重新生成标题失败')
+    } finally {
+      toast.dismiss(loadingToastId)
+      setRegeneratingConversationTitleIds((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
-  }, [setConversations, setTabs, store])
+  }, [regeneratingConversationTitleIds, setConversations, setTabs, store])
 
   /** 切换对话置顶状态 */
   const handleTogglePin = React.useCallback(async (id: string): Promise<void> => {
@@ -1442,7 +1456,10 @@ export function useLeftSidebar() {
 
   /** 手动重新生成 Agent 会话标题（用会话前几轮有效消息重命名） */
   const handleAgentRegenerateTitle = React.useCallback(async (id: string): Promise<void> => {
+    if (regeneratingTitleIds.has(id)) return
     setRegeneratingTitleIds((prev) => new Set(prev).add(id))
+    const loadingToastId = `regenerate-title:${id}`
+    toast.loading('正在生成标题…', { id: loadingToastId, duration: Infinity })
     try {
       const updated = await window.electronAPI.regenerateAgentSessionTitle(id)
       if (!updated) {
@@ -1456,6 +1473,7 @@ export function useLeftSidebar() {
       console.error('[侧边栏] 重新生成 Agent 会话标题失败:', error)
       toast.error('重新生成标题失败')
     } finally {
+      toast.dismiss(loadingToastId)
       setRegeneratingTitleIds((prev) => {
         const next = new Set(prev)
         next.delete(id)
@@ -1851,6 +1869,7 @@ export function useLeftSidebar() {
     handleRequestDelete,
     handleRename,
     handleRegenerateConversationTitle,
+    regeneratingConversationTitleIds,
     handleTogglePin,
     handleToggleArchive,
 

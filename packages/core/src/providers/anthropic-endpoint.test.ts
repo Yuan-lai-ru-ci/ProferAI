@@ -16,3 +16,12 @@ test('Anthropic 根地址只在 pathname 添加 messages，不插到 query 后',
   const title = adapter.buildTitleRequest({ baseUrl: 'https://fixture.invalid?route=fixture', apiKey: 'fixture-key', modelId: 'fixture-model', prompt: 'fixture' })
   expect(title.url).toBe('https://fixture.invalid/v1/messages?route=fixture')
 })
+
+test('Anthropic 标题请求使用小预算并关闭思考', () => {
+  const adapter = new AnthropicAdapter('anthropic')
+  const title = adapter.buildTitleRequest({ baseUrl: 'https://fixture.invalid/v1/messages', apiKey: 'fixture-key', modelId: 'claude-sonnet-4-6', prompt: 'fixture' })
+  expect(JSON.parse(title.body)).toMatchObject({
+    max_tokens: 128,
+    thinking: { type: 'disabled' },
+  })
+})

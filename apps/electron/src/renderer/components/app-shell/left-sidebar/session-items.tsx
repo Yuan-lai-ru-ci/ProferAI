@@ -434,6 +434,8 @@ interface ConversationItemProps {
   onToggleArchive: (id: string) => Promise<void>
   /** 手动重新生成标题（用前几轮有效消息重命名并重新锁定） */
   onRegenerateTitle?: (id: string) => Promise<void>
+  /** 标题正在重新生成 */
+  regeneratingTitle?: boolean
   /** 仅当前会话 Tab 区使用：关闭入口，不删除会话数据。 */
   onCloseTab?: () => void
 }
@@ -451,6 +453,7 @@ export const ConversationItem = React.memo(function ConversationItem({
   onTogglePin,
   onToggleArchive,
   onRegenerateTitle,
+  regeneratingTitle,
   onCloseTab,
 }: ConversationItemProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
@@ -520,9 +523,9 @@ export const ConversationItem = React.memo(function ConversationItem({
         重命名
       </MenuItem>
       {onRegenerateTitle && (
-        <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => { void onRegenerateTitle(conversation.id) }}>
-          <Sparkles size={14} />
-          重新生成标题
+        <MenuItem disabled={regeneratingTitle} className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => { if (!regeneratingTitle) void onRegenerateTitle(conversation.id) }}>
+          {regeneratingTitle ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          {regeneratingTitle ? '正在生成标题…' : '重新生成标题'}
         </MenuItem>
       )}
       <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onToggleArchive(conversation.id)}>
@@ -609,6 +612,12 @@ export const ConversationItem = React.memo(function ConversationItem({
                 {showPinIcon && (
                   <Pin size={11} className="flex-shrink-0 text-primary/60" />
                 )}
+                {regeneratingTitle ? (
+                  <>
+                    <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
+                    <span className="flex-shrink-0 text-[11px] text-info">正在生成标题…</span>
+                  </>
+                ) : null}
                 <span className="truncate">{conversation.title}</span>
                 {/* 草稿标记：输入框有未发送内容 */}
                 {hasDraft && (
@@ -830,9 +839,9 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
         重命名
       </MenuItem>
       {onRegenerateTitle && (
-        <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => { void onRegenerateTitle(session.id) }}>
-          <Sparkles size={14} />
-          重新生成标题
+        <MenuItem disabled={regeneratingTitle} className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => { if (!regeneratingTitle) void onRegenerateTitle(session.id) }}>
+          {regeneratingTitle ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+          {regeneratingTitle ? '正在生成标题…' : '重新生成标题'}
         </MenuItem>
       )}
       <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onToggleArchive(session.id)}>
@@ -940,7 +949,10 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
                 ) : null}
                 {/* 该会话有活动浏览器会话/标签：在会话行上标识，便于从侧边栏识别哪个会话在用浏览器 */}
                 {regeneratingTitle ? (
-                  <Loader2 size={11} className="flex-shrink-0 text-foreground/40 animate-spin" aria-label="正在重新生成标题" />
+                  <>
+                    <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
+                    <span className="flex-shrink-0 text-[11px] text-info">正在生成标题…</span>
+                  </>
                 ) : hasBrowser ? (
                   <Globe size={11} className="flex-shrink-0 text-foreground/40" aria-label="该会话正在使用浏览器" />
                 ) : null}

@@ -64,7 +64,11 @@ export function detectThinkingCapability(
 ): ThinkingCapability {
   // DeepSeek v4 系列（按模型 ID 识别，不依赖 providerType）：
   // effort-based-max 模式会在思考关闭时显式发 `{type:'disabled'}`，这是 DeepSeek v4 的硬要求
-  if (startsWith(modelId, 'deepseek-v4')) {
+  if (
+    startsWith(modelId, 'deepseek-v4')
+    || startsWith(modelId, 'deepseek-flash')
+    || startsWith(modelId, 'deepseek-pro')
+  ) {
     return { mode: 'effort-based-max', disableStrategy: 'explicit-disabled' }
   }
 

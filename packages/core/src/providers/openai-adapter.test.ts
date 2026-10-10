@@ -27,5 +27,29 @@ describe('OpenAIAdapter Ollama Chat', () => {
 
     expect(request.url).toBe('http://127.0.0.1:11434/v1/chat/completions')
     expect(request.headers.Authorization).toBe('Bearer local-key')
+    expect(JSON.parse(request.body)).toMatchObject({ max_tokens: 128 })
+  })
+
+  test('reasoning 模型标题请求显式关闭推理', () => {
+    const request = new OpenAIAdapter('deepseek').buildTitleRequest({
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'key',
+      modelId: 'deepseek-flash',
+      prompt: 'title',
+    })
+    expect(JSON.parse(request.body)).toMatchObject({
+      max_tokens: 128,
+      thinking: { type: 'disabled' },
+    })
+  })
+
+  test('GPT-6 系列标题请求显式关闭 reasoning', () => {
+    const request = new OpenAIAdapter('custom').buildTitleRequest({
+      baseUrl: 'https://fixture.invalid/v1',
+      apiKey: 'key',
+      modelId: 'gpt-6.1-sol',
+      prompt: 'title',
+    })
+    expect(JSON.parse(request.body)).toMatchObject({ reasoning_effort: 'none' })
   })
 })

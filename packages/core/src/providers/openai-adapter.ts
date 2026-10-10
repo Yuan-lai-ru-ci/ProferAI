@@ -11,6 +11,7 @@
  */
 
 import type { ProviderType } from '@profer/shared'
+import { resolveReasoningProfile } from '@profer/shared'
 import type {
   ProviderAdapter,
   ProviderRequest,
@@ -277,6 +278,11 @@ export class OpenAIAdapter implements ProviderAdapter {
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = resolveOpenAIChatCompletionsUrl(input.baseUrl, this.providerType)
     const apiKey = this.providerType === 'ollama' ? (input.apiKey || 'ollama') : input.apiKey
+    const modelId = input.modelId.toLowerCase()
+    const isDeepSeekV4 = this.providerType === 'deepseek'
+      && /^(?:deepseek-(?:v4-)?(?:flash|pro)|deepseek-v4)/.test(modelId)
+    const reasoningProfile = resolveReasoningProfile({ modelId, transport: 'openai-completions' })
+    const isLikelyOpenAIReasoning = Boolean(reasoningProfile) || /^gpt-6(?:\.\d+)?(?:-|$)/.test(modelId)
 
     return {
       url,
@@ -287,7 +293,9 @@ export class OpenAIAdapter implements ProviderAdapter {
       body: JSON.stringify({
         model: input.modelId,
         messages: [{ role: 'user', content: input.prompt }],
-        max_tokens: 300,
+        max_tokens: 128,
+        ...(isDeepSeekV4 ? { thinking: { type: 'disabled' } } : {}),
+        ...(isLikelyOpenAIReasoning ? { reasoning_effort: 'none' } : {}),
       }),
     }
   }

@@ -453,10 +453,14 @@ export class AnthropicAdapter implements ProviderAdapter {
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = this.normalizeUrl(input.baseUrl)
 
+    const capability = detectThinkingCapability(this.providerType, input.modelId)
     const body: Record<string, unknown> = {
       model: input.modelId,
-      max_tokens: 300,
+      max_tokens: 128,
       messages: [{ role: 'user', content: input.prompt }],
+    }
+    if (capability.disableStrategy === 'explicit-disabled') {
+      body.thinking = { type: 'disabled' }
     }
 
     return {
