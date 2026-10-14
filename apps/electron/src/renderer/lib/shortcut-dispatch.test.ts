@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { initShortcutRegistry, registerShortcut } from './shortcut-registry'
+import { initShortcutRegistry, registerShortcut, suppressShortcutDispatch } from './shortcut-registry'
 
 /**
  * 分发层的 handler 执行次数。
@@ -32,9 +32,11 @@ interface PressOptions {
   key?: string
   /** 事件目标（焦点所在元素），用于验证可编辑元素内的放行 */
   target?: unknown
+  /** 键盘按住时的自动重复事件，默认 false */
+  repeat?: boolean
 }
 
-/** 模拟一次 keydown；默认无修饰键、非组合态、无事件目标 */
+/** 模拟一次 keydown；默认无修饰键、非组合态、无事件目标、非自动重复 */
 function pressKey(listener: Listener | null, options: PressOptions = {}): PressResult {
   const result: PressResult = { prevented: 0, stopped: 0 }
   const key = options.key ?? 'F2'
@@ -47,6 +49,7 @@ function pressKey(listener: Listener | null, options: PressOptions = {}): PressR
     shiftKey: false,
     altKey: false,
     isComposing: false,
+    repeat: options.repeat ?? false,
     preventDefault: () => { result.prevented++ },
     stopPropagation: () => { result.stopped++ },
   })
@@ -65,17 +68,20 @@ afterEach(() => {
 async function freshRegistry(): Promise<{
   register: (id: string, cb: () => void, options?: { exclusive?: boolean }) => () => void
   press: (options?: PressOptions) => PressResult
+  suppress: () => () => void
 }> {
   const { window, keydown } = makeWindow()
   ;(globalThis as unknown as { window: unknown }).window = window
   const mod = await import(`./shortcut-registry.ts?probe=${Date.now()}-${Math.random()}`) as {
     initShortcutRegistry: typeof initShortcutRegistry
     registerShortcut: typeof registerShortcut
+    suppressShortcutDispatch: typeof suppressShortcutDispatch
   }
   mod.initShortcutRegistry()
   return {
     register: (id, cb, options) => mod.registerShortcut(id, cb, options ?? {}),
     press: (options) => pressKey(keydown(), options),
+    suppress: () => mod.suppressShortcutDispatch(),
   }
 }
 
@@ -167,5 +173,47 @@ test('Given 焦点在输入框 When 按 F2 Then 照常重命名（守卫只作�
   let hits = 0
   cleanup.push(reg.register('rename-item', () => { hits++ }))
   reg.press({ target: { tagName: 'INPUT' } })
+  expect(hits).toBe(1)
+})
+
+/**
+ * 自动重复守卫：按住键盘时系统每秒重发几十次 keydown，toggle 类快捷键
+ *（删除确认框、侧边栏、面板）会因此高频闪烁，松手后停在哪一态是随机的。
+ * 重复事件不重复执行 handler，但吞键判定照常（macOS 按住 F 键不能漏给 Chromium）。
+ */
+test('Given 按住 Delete 自动重复 When repeat 事件到达 Then 不重复执行 handler', async () => {
+  const reg = await freshRegistry()
+  let hits = 0
+  cleanup.push(reg.register('delete-item', () => { hits++ }))
+  reg.press({ key: 'Delete' })
+  reg.press({ key: 'Delete', repeat: true })
+  reg.press({ key: 'Delete', repeat: true })
+  expect(hits).toBe(1)
+})
+
+test('Given 录制抑制已挂起 When 按已绑定的 Delete Then 不触发且不吞键，解除后恢复', async () => {
+  const reg = await freshRegistry()
+  let hits = 0
+  cleanup.push(reg.register('delete-item', () => { hits++ }))
+  const release = reg.suppress()
+  const suppressed = reg.press({ key: 'Delete' })
+  expect(hits).toBe(0)
+  expect(suppressed.prevented).toBe(0)
+  release()
+  reg.press({ key: 'Delete' })
+  expect(hits).toBe(1)
+})
+
+test('Given 两层抑制挂起 When 只解除一层 Then 分发仍挂起（计数式语义）', async () => {
+  const reg = await freshRegistry()
+  let hits = 0
+  cleanup.push(reg.register('delete-item', () => { hits++ }))
+  const releaseA = reg.suppress()
+  const releaseB = reg.suppress()
+  releaseA()
+  reg.press({ key: 'Delete' })
+  expect(hits).toBe(0)
+  releaseB()
+  reg.press({ key: 'Delete' })
   expect(hits).toBe(1)
 })

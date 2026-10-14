@@ -39,6 +39,13 @@ let currentOverrides: ShortcutOverrides = {}
 /** 是否已初始化 */
 let initialized = false
 
+/**
+ * 分发抑制计数（供设置页录制器挂起全局快捷键）。
+ *
+ * 计数而非布尔：多个录制器并发挂起时，需全部释放后才恢复分发。
+ */
+let suppressionCount = 0
+
 // ===== 快捷键匹配 =====
 
 interface ParsedAccelerator {
@@ -217,6 +224,10 @@ export function resolveShortcutDispatch(
  * 若命中后照常 preventDefault，输入框将收不到 keydown、删字符彻底失效。
  */
 function dispatchShortcut(e: KeyboardEvent): void {
+  // 录制新快捷键期间挂起全局分发：否则按下的已绑定键会真实触发动作
+  //（例如给某快捷键录制 Delete 时，删除确认框会被一并弹出）。
+  if (suppressionCount > 0) return
+
   let match: ShortcutMatchResult = 'none'
   let handlerEntries: ShortcutHandlerEntry[] = []
 
@@ -238,7 +249,10 @@ function dispatchShortcut(e: KeyboardEvent): void {
     e.preventDefault()
     e.stopPropagation()
   }
-  if (!plan.runHandlers) return
+  // 按住键盘的自动重复不重复执行 handler —— toggle 类快捷键（删除确认框、
+  // 侧边栏、面板）会因此高频闪烁。但吞键判定照常：macOS 按住 F 键时的重复
+  // 事件也必须吞掉，不能漏给 Chromium 的原生焦点导航。
+  if (!plan.runHandlers || e.repeat) return
 
   // 独占模式：只执行最后注册的 exclusive handler，其余（含非 exclusive）均跳过
   for (let i = handlerEntries.length - 1; i >= 0; i--) {
@@ -292,6 +306,20 @@ export function registerShortcut(
 }
 
 /**
+ * 挂起全局快捷键分发（供设置页录制器在录制期间调用）。
+ *
+ * 计数式语义：每次调用 +1，返回的恢复函数 -1，归零才恢复分发。
+ *
+ * @returns 恢复函数，必须与调用配对执行（建议放在 effect cleanup 里）
+ */
+export function suppressShortcutDispatch(): () => void {
+  suppressionCount += 1
+  return () => {
+    suppressionCount = Math.max(0, suppressionCount - 1)
+  }
+}
+
+/**
  * 更新用户自定义快捷键配置
  *
  * 配置变更后自动重建匹配缓存
@@ -338,6 +366,7 @@ export function getAcceleratorDisplay(accelerator: string | null): string {
         if (normalized === 'shift') return '⇧'
         if (['alt', 'option'].includes(normalized)) return '⌥'
         if (normalized === 'backspace') return '⌫'
+        if (normalized === 'delete') return '⌦'
         return part
       })
       .join('')

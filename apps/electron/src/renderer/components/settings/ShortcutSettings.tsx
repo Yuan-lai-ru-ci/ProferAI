@@ -33,6 +33,7 @@ import {
   checkConflict,
   registerShortcut,
   updateShortcutOverrides,
+  suppressShortcutDispatch,
   isMac,
 } from '@/lib/shortcut-registry'
 
@@ -127,6 +128,10 @@ function ShortcutRecorder({
   React.useEffect(() => {
     if (!recording) return
 
+    // 录制期间挂起全局快捷键分发：否则按下的已绑定键会真实触发动作
+    //（例如录制 Delete 时弹出删除确认框）。
+    const releaseSuppression = suppressShortcutDispatch()
+
     const handleKeyDown = (e: KeyboardEvent): void => {
       e.preventDefault()
       e.stopImmediatePropagation()
@@ -172,6 +177,7 @@ function ShortcutRecorder({
     window.addEventListener('keydown', handleKeyDown, true)
     window.addEventListener('keyup', handleKeyUp, true)
     return () => {
+      releaseSuppression()
       window.removeEventListener('keydown', handleKeyDown, true)
       window.removeEventListener('keyup', handleKeyUp, true)
     }
