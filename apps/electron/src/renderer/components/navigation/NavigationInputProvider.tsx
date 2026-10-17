@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { NavigationAction } from '@/lib/navigation-actions'
-import { isEditableTarget, navigationController } from '@/lib/navigation-controller'
+import { hasOpenAlertDialog, isEditableTarget, navigationController } from '@/lib/navigation-controller'
 import { findSpatialNavigationTarget } from '@/lib/spatial-navigation'
 
 function keyboardAction(event: KeyboardEvent): NavigationAction | null {
@@ -266,6 +266,13 @@ export function NavigationInputProvider(): null {
       if (event.defaultPrevented || event.isComposing) return
       const action = keyboardAction(event)
       if (!action) return
+
+      // ===== 0. 模态确认框打开时放行 Escape（back） =====
+      // Radix 的 AlertDialog 在 document 层监听 Escape 关闭弹层，而本监听在
+      // window capture 先于其执行——若按 back 消费（聚焦输入框 + 停止传播），
+      // 确认框将永远无法用 Esc 关闭。SearchDialog / ModelSelector 这类自带
+      // 高优先级 consumer 的自定义弹层不受影响（role 是 dialog，不匹配此处）。
+      if (action === 'back' && hasOpenAlertDialog(document)) return
 
       const isDirection = action === 'previous' || action === 'next' || action === 'left' || action === 'right'
 

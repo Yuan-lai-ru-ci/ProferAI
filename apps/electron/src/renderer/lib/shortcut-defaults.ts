@@ -28,6 +28,13 @@ export interface ShortcutDefinition {
   global?: boolean
   /** 是否为只读（仅展示，不可自定义） */
   readonly?: boolean
+  /**
+   * 焦点在输入框 / 富文本编辑器内时跳过该快捷键（不执行、也不吞键）。
+   *
+   * 用于「无修饰键且本身有输入语义」的按键：registry 的判定顺序是先 preventDefault
+   * 再执行 handler，若不在分发层放行，输入框将收不到 keydown、原生删除失效。
+   */
+  skipInEditable?: boolean
 }
 
 /**
@@ -135,6 +142,22 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
     defaultMac: 'F2',
     defaultWin: 'F2',
     category: 'edit',
+  },
+  {
+    // mac 侧用 Cmd+Backspace：MacBook 没有独立前向删除键（裸 Delete 实际要按
+    // Fn+Delete，手感差且隐蔽），而 Cmd+Backspace 是 macOS 原生删除手势（Finder
+    // 删文件），内置 / 外置键盘键位一致；PC 外置键盘的 Win 键即 Cmd，肌肉记忆
+    // 无缝平移。skipInEditable 保证焦点在输入框时该组合仍是原生删整行。
+    // 不要绑裸 Backspace：那会与输入框删字符同键。
+    // 与 stop-generation（Cmd+Shift+Backspace）同键位递进：Cmd+Backspace 删会话、
+    // Cmd+Shift+Backspace 停 Agent。
+    id: 'delete-item',
+    name: '删除当前会话',
+    description: '删除左侧边栏当前活跃的会话 / 对话，弹出确认框后再按一次取消',
+    defaultMac: 'Cmd+Backspace',
+    defaultWin: 'Delete',
+    category: 'edit',
+    skipInEditable: true,
   },
   {
     id: 'clear-context',
