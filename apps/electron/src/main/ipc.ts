@@ -1429,7 +1429,8 @@ export function registerIpcHandlers(): void {
       if (newPinned && current.archived) {
         updates.archived = false
       }
-      return updateConversationMeta(id, updates)
+      // 置顶是展示状态切换，不算对话活跃：不刷新 updatedAt，避免置顶把旧对话顶成「刚刚」
+      return updateConversationMeta(id, updates, { touchUpdatedAt: false })
     }
   )
 
@@ -1446,7 +1447,8 @@ export function registerIpcHandlers(): void {
       if (newArchived && current.pinned) {
         updates.pinned = false
       }
-      return updateConversationMeta(id, updates)
+      // 归档是展示状态切换，不算对话活跃：不刷新 updatedAt（取消归档不会把旧对话顶成「刚刚」）
+      return updateConversationMeta(id, updates, { touchUpdatedAt: false })
     }
   )
 
@@ -2322,7 +2324,9 @@ export function registerIpcHandlers(): void {
       if (newPinned && current.archived) {
         updates.archived = false
       }
-      return updateAgentSessionUiMeta(id, updates)
+      // 置顶是展示状态切换，不算会话活跃：不刷新 updatedAt，否则侧栏「最近」排序
+      // 会把整个项目因为这个动作顶到最前面。
+      return updateAgentSessionUiMeta(id, updates, { touchUpdatedAt: false })
     }
   )
 
@@ -2370,11 +2374,12 @@ export function registerIpcHandlers(): void {
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
       // 归档视作已读（仅开启态追加清未读）；关闭态保持原行为：只切 archived + 取消置顶。
+      // 归档是展示状态切换，不算会话活跃：不刷新 updatedAt，取消归档不会把旧会话顶成「刚刚」。
       return updateAgentSessionUiMeta(id, buildArchiveToggleUpdates({
         archived: current.archived ?? false,
         pinned: current.pinned ?? false,
         completedButUnconfirmed: current.completedButUnconfirmed ?? false,
-      }, getAgentUnreadPolicyMode()))
+      }, getAgentUnreadPolicyMode()), { touchUpdatedAt: false })
     }
   )
 

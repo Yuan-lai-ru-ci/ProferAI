@@ -1694,7 +1694,8 @@ export async function handleRemoteCommand(
       const newPinned = !current.pinned
       const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
       if (newPinned && current.archived) updates.archived = false
-      const updated = updateAgentSessionUiMeta(sessionId, updates)
+      // 与桌面 TOGGLE_PIN 同口径：置顶不刷新 updatedAt，不改变「最近」排序
+      const updated = updateAgentSessionUiMeta(sessionId, updates, { touchUpdatedAt: false })
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1705,11 +1706,12 @@ export async function handleRemoteCommand(
       const current = listAgentSessions(true).find((s) => s.id === sessionId)
       if (!current) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
       // 与桌面 TOGGLE_ARCHIVE 共用同一纯函数，保证「归档＝已读」口径不分端（移动端归档清未读属开启态策略，保留）。
+      // 归档不刷新 updatedAt：与置顶同口径，状态切换不算会话活跃。
       const updated = updateAgentSessionUiMeta(sessionId, buildArchiveToggleUpdates({
         archived: current.archived ?? false,
         pinned: current.pinned ?? false,
         completedButUnconfirmed: current.completedButUnconfirmed ?? false,
-      }, getAgentUnreadPolicyMode()))
+      }, getAgentUnreadPolicyMode()), { touchUpdatedAt: false })
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1873,7 +1875,8 @@ export async function handleRemoteCommand(
       const newPinned = !current.pinned
       const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
       if (newPinned && current.archived) updates.archived = false
-      return { ok: true, data: updateConversationMeta(id, updates) }
+      // 与桌面 TOGGLE_PIN 同口径：置顶不刷新 updatedAt，不改变「最近」排序
+      return { ok: true, data: updateConversationMeta(id, updates, { touchUpdatedAt: false }) }
     }
 
     case 'toggle_conversation_archive': {
@@ -1884,7 +1887,8 @@ export async function handleRemoteCommand(
       const newArchived = !current.archived
       const updates: { archived: boolean; pinned?: boolean } = { archived: newArchived }
       if (newArchived && current.pinned) updates.pinned = false
-      return { ok: true, data: updateConversationMeta(id, updates) }
+      // 与桌面 TOGGLE_ARCHIVE 同口径：归档不刷新 updatedAt
+      return { ok: true, data: updateConversationMeta(id, updates, { touchUpdatedAt: false }) }
     }
 
     case 'search_chat_messages': {

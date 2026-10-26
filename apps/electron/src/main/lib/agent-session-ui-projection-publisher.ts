@@ -34,8 +34,9 @@ export function publishAgentSessionProjection(meta: AgentSessionMeta): void {
 export function updateAgentSessionUiMeta(
   id: string,
   updates: Parameters<typeof updateAgentSessionMeta>[1],
+  options?: Parameters<typeof updateAgentSessionMeta>[2],
 ): AgentSessionMeta {
-  const updated = updateAgentSessionMeta(id, updates)
+  const updated = updateAgentSessionMeta(id, updates, options)
   publishAgentSessionProjection(updated)
   return updated
 }
