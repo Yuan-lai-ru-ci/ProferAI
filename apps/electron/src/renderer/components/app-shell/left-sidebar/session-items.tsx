@@ -82,34 +82,58 @@ export interface AgentProjectGroup {
 }
 
 /**
- * 置顶标记：实心大头针。
+ * 置顶入口：固定在标题左侧的留白里，hover 时显形，不再挤进右侧操作区。
  *
- * 缩进行（depth=1）把大头针放进左侧 26px 缩进留白里，绝对定位、不占标题宽度，
- * 这样置顶行与普通行的标题仍然左对齐；非缩进行没有留白可用，退回标题前内联显示。
+ * 留白常驻（不 hover 也占位），所以按钮出现/消失不会让标题横向跳动；已置顶时大头针
+ * 常显作为状态标记，hover 变成可点击的「取消置顶」。
+ * 缩进行（depth=1）把入口放进左侧 26px 缩进留白里（绝对定位，不占标题宽度）；其余行
+ * 用 18px 内联留白，并用 -mr-1.5 抵掉行内 gap，两类行的标题起点因此都落在 26px 上。
  */
-function PinnedPin({ gutter }: { gutter: boolean }): React.ReactElement {
+function SessionLeadingPin({
+  pinned,
+  markerVisible,
+  gutter,
+  onTogglePin,
+}: {
+  pinned: boolean
+  /** 已置顶时是否常显大头针（置顶分区由分区标题表达状态，传 false） */
+  markerVisible: boolean
+  /** 缩进行：入口落在左侧缩进留白里，不参与行内布局 */
+  gutter: boolean
+  onTogglePin: () => void
+}): React.ReactElement {
+  const alwaysVisible = pinned && markerVisible
   return (
-    <Pin
-      size={11}
-      aria-label="已置顶"
+    <button
+      type="button"
+      aria-label={pinned ? '取消置顶' : '置顶'}
+      title={pinned ? '取消置顶' : '置顶'}
+      onClick={(event) => {
+        event.stopPropagation()
+        onTogglePin()
+      }}
       className={cn(
-        'fill-current text-primary/60',
-        gutter ? 'pointer-events-none absolute left-[7px] top-1/2 -translate-y-1/2' : 'flex-shrink-0',
+        'flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded transition-opacity duration-100',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:opacity-100 focus-visible:pointer-events-auto',
+        gutter ? 'absolute left-[7px] top-1/2 -translate-y-1/2' : '-mr-1.5',
+        pinned ? 'text-primary/60 hover:text-primary' : 'text-foreground/30 hover:text-foreground/60',
+        'hover:bg-foreground/[0.08]',
+        alwaysVisible ? 'opacity-100' : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100',
       )}
-    />
+    >
+      <Pin size={11} className={pinned ? 'fill-current' : undefined} />
+    </button>
   )
 }
 
-// ===== 列表项操作按钮（时间/置顶/归档/三点菜单） =====
+// ===== 列表项操作按钮（时间/归档/三点菜单） =====
 
 export interface SessionItemActionsProps {
   updatedAt: number
   relativeTimeNow: number
-  pinned: boolean
   archived: boolean
-  /** 当前项：时间常显；非当前项只在 hover 时出按钮 */
+  /** 当前项：时间用更高的对比度，与非当前项区分 */
   active?: boolean
-  onTogglePin: () => void
   onToggleArchive: () => void
   onCloseTab?: () => void
   menuItems: (
@@ -194,17 +218,16 @@ function SafeTooltip({ children, content, side = 'top' }: SafeTooltipProps): Rea
 }
 
 /**
- * 列表项右侧操作区：当前项常显相对更新时间，hover / 聚焦时切换为「置顶 / 归档 / 三点菜单」按钮组。
- * 非当前项默认两侧都不显示（行内只留标题），hover 时才换成按钮，避免同时叠时间与按钮。
+ * 列表项右侧操作区：所有项都常显相对更新时间（当前项对比度更高），hover / 聚焦时切换为
+ * 「归档 / 三点菜单」按钮组，避免同时叠时间与按钮。置顶入口在标题左侧（SessionLeadingPin），
+ * 不占这一侧的位置。
  * 归档需要二次确认；进入确认态后强制保持按钮可见，避免鼠标移开后用户失去反馈。
  */
 export function SessionItemActions({
   updatedAt,
   relativeTimeNow,
-  pinned,
   archived,
   active = false,
-  onTogglePin,
   onToggleArchive,
   onCloseTab,
   menuItems,
@@ -289,8 +312,9 @@ export function SessionItemActions({
       <span
         title={`最后更新：${new Date(updatedAt).toLocaleString('zh-CN')}`}
         className={cn(
-          'pointer-events-none absolute inset-y-0 right-0 block w-full text-right text-[11px] leading-[18px] tabular-nums text-foreground/[0.26] transition-opacity duration-100',
-          forceVisible ? 'opacity-0' : active ? 'opacity-100 group-hover:opacity-0' : 'opacity-0',
+          'pointer-events-none absolute inset-y-0 right-0 block w-full text-right text-[11px] leading-[18px] tabular-nums transition-opacity duration-100',
+          active ? 'text-foreground/[0.38]' : 'text-foreground/[0.26]',
+          forceVisible ? 'opacity-0' : 'opacity-100 group-hover:opacity-0',
         )}
       >
         {formatRelativeUpdatedAt(updatedAt, relativeTimeNow)}
@@ -303,19 +327,6 @@ export function SessionItemActions({
             : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto',
         )}
       >
-        <SafeTooltip content={pinned ? '取消置顶' : '置顶'} side="top">
-          <button
-            className={cn(
-              'p-0.5 rounded transition-colors',
-              pinned
-                ? 'text-primary/60 hover:bg-foreground/[0.08] hover:text-primary'
-                : 'text-foreground/30 hover:bg-foreground/[0.08] hover:text-foreground/60',
-            )}
-            onClick={onTogglePin}
-          >
-            {pinned ? <Pin size={14} className="fill-current" /> : <Pin size={14} />}
-          </button>
-        </SafeTooltip>
         <SafeTooltip
           content={archiveConfirming ? '再次点击确认归档' : archived ? '取消归档' : '归档'}
           side="top"
@@ -589,8 +600,13 @@ export const ConversationItem = React.memo(function ConversationItem({
                 'truncate text-[13px] leading-[18px] flex items-center gap-1.5',
                 active ? 'text-foreground' : 'text-foreground/[0.62]'
               )}>
-                {/* 置顶标记：大头针落在左侧缩进留白里，不挤动标题 */}
-                {showPinIcon && <PinnedPin gutter={depth === 1} />}
+                {/* 置顶入口：标题左侧留白，hover 显形；已置顶时大头针常显 */}
+                <SessionLeadingPin
+                  pinned={isPinned}
+                  markerVisible={showPinIcon}
+                  gutter={depth === 1}
+                  onTogglePin={() => onTogglePin(conversation.id)}
+                />
                 {regeneratingTitle ? (
                   <>
                     <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
@@ -612,9 +628,7 @@ export const ConversationItem = React.memo(function ConversationItem({
               updatedAt={conversation.updatedAt}
               relativeTimeNow={relativeTimeNow}
               active={active}
-              pinned={isPinned}
               archived={!!conversation.archived}
-              onTogglePin={() => onTogglePin(conversation.id)}
               onToggleArchive={() => onToggleArchive(conversation.id)}
               onCloseTab={onCloseTab}
               onMenuOpenChange={setMenuOpen}
@@ -922,7 +936,13 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
                 'truncate text-[13px] leading-[18px] flex items-center gap-1.5',
                 active ? 'text-foreground' : 'text-foreground/[0.62]'
               )}>
-                {showPinIcon && <PinnedPin gutter={depth === 1} />}
+                {/* 置顶入口：标题左侧留白，hover 显形；已置顶时大头针常显 */}
+                <SessionLeadingPin
+                  pinned={!!session.pinned}
+                  markerVisible={!!showPinIcon}
+                  gutter={depth === 1}
+                  onTogglePin={() => onTogglePin(session.id)}
+                />
                 {session.sourceAutomationId && !session.sourceDelegationId && (
                   <Clock size={11} className="flex-shrink-0 text-foreground/40" />
                 )}
@@ -983,9 +1003,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
               updatedAt={session.updatedAt}
               relativeTimeNow={relativeTimeNow}
               active={active}
-              pinned={!!session.pinned}
               archived={!!session.archived}
-              onTogglePin={() => onTogglePin(session.id)}
               onToggleArchive={() => onToggleArchive(session.id)}
               onCloseTab={onCloseTab}
               onMenuOpenChange={setMenuOpen}
