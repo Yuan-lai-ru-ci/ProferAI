@@ -9,6 +9,8 @@ import { createStore } from 'jotai'
 import { previewOpenModeAtom } from '@/atoms/ui-preferences'
 import { activeTabIdAtom, createPreviewTabId, tabsAtom } from '@/atoms/tab-atoms'
 import { tabGroupsAtom } from '@/atoms/tab-group-atoms'
+import { previewFilesByTabAtom } from '@/atoms/preview-atoms'
+import { agentSessionPathMapAtom } from '@/atoms/agent-atoms'
 import { openFilePreviewTab } from './preview-opener'
 
 /** preview-opener 的 store 形参类型取自 React useStore，测试里用 vanilla store 桥接 */
@@ -79,4 +81,17 @@ test('分屏模式：自动预览（activate:false）不抢视图，仅后台开
   expect(tabId).toBe(createPreviewTabId('s1', '/w/a.ts'))
   expect(store.get(tabGroupsAtom)).toEqual([])
   expect(store.get(activeTabIdAtom)).toBeNull()
+})
+
+test('相对父级路径先折叠再落 Tab：路径不再带 /../，同一文件两种写法共享一个 Tab', () => {
+  const { store, openerStore } = setup('tab')
+  store.set(agentSessionPathMapAtom, new Map([['s1', 'C:\\ws\\5714\\8333efcc']]))
+
+  const relativeTabId = openFilePreviewTab(openerStore, 's1', file('../合并_20261027_时间轴.txt'))
+  expect(store.get(previewFilesByTabAtom).get(relativeTabId)?.filePath).toBe('C:/ws/5714/合并_20261027_时间轴.txt')
+
+  // 同一文件的绝对写法聚焦同一个 Tab，而不是再开一个
+  const absoluteTabId = openFilePreviewTab(openerStore, 's1', file('C:/ws/5714/合并_20261027_时间轴.txt'))
+  expect(absoluteTabId).toBe(relativeTabId)
+  expect(store.get(tabsAtom).filter((t) => t.type === 'preview')).toHaveLength(1)
 })

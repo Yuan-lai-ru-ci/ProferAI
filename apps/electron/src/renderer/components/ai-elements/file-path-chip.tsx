@@ -2,7 +2,7 @@ import * as React from 'react'
 import { toast } from 'sonner'
 import { Copy, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { getFileBaseName, isAbsoluteFilePath as isAbsoluteFilePathCore, resolveRelativeToAbsolute } from '@/lib/file-utils'
+import { getFileBaseName, isAbsoluteFilePath as isAbsoluteFilePathCore, normalizeFilePathSegments, resolveRelativeToAbsolute } from '@/lib/file-utils'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { useFileAccessSessionId } from './file-access-context'
@@ -85,8 +85,14 @@ export function FilePathChip({ filePath, basePath, basePaths, className }: FileP
     () => searchCacheKey(sessionId, cleanPath, candidateBases),
     [candidateBases, cleanPath, sessionId],
   )
-  const fallbackDisplayPath = isAbsolute ? cleanPath : resolveRelativeToAbsolute(cleanPath, candidateBases)
-  const displayPath = stateCacheKey === cacheKey ? (selectedPath ?? fallbackDisplayPath) : fallbackDisplayPath
+  // 展示与复制用的完整路径必须是规范形态：Agent 写的 `../x.md` 拼上 base 后会带 `/../`，
+  // 直接展示/复制出去就是一条半截路径（用户会当成“原封不动复制了个怪路径”）。
+  const fallbackDisplayPath = isAbsolute
+    ? normalizeFilePathSegments(cleanPath)
+    : resolveRelativeToAbsolute(cleanPath, candidateBases)
+  const displayPath = normalizeFilePathSegments(
+    stateCacheKey === cacheKey ? (selectedPath ?? fallbackDisplayPath) : fallbackDisplayPath,
+  )
 
   React.useEffect(() => {
     const activeRequestId = requestIdRef.current

@@ -49,6 +49,74 @@ export function getLastPathSegments(path: string | null | undefined, n = 2): str
   return parts.length > n ? `.../${parts.slice(-n).join('/')}` : path
 }
 
+const SEPARATOR_PATTERN = /[\\/]+/
+
+/** 路径中是否含 `.` / `..` 段；用于判断是否需要折叠（避免无谓改写分隔符风格）。 */
+function hasDotSegments(filePath: string): boolean {
+  return filePath.split(SEPARATOR_PATTERN).some((segment) => segment === '.' || segment === '..')
+}
+
+/**
+ * 拆出路径根前缀（`~`、盘符、UNC、根斜杠），并给出重建时使用的分隔符。
+ * 根前缀不需要折叠，也不允许被 `..` 弹出。
+ */
+function splitPathRoot(filePath: string): { root: string; rest: string; separator: '/' | '\\' } {
+  if (filePath.startsWith('~/') || filePath.startsWith('~\\')) {
+    return { root: '~', rest: filePath.slice(2), separator: '/' }
+  }
+  if (/^[A-Za-z]:[\\/]/.test(filePath)) {
+    // 盘符后的第一个分隔符决定重建风格，保持用户/Agent 原本的写法。
+    return { root: filePath.slice(0, 2), rest: filePath.slice(3), separator: filePath[2] === '/' ? '/' : '\\' }
+  }
+  if (filePath.startsWith('\\\\')) {
+    const segments = filePath.slice(2).split(SEPARATOR_PATTERN).filter(Boolean)
+    const share = segments.slice(0, 2)
+    return {
+      root: share.length === 2 ? `\\\\${share[0]}\\${share[1]}` : '\\\\',
+      rest: segments.slice(2).join('/'),
+      separator: '\\',
+    }
+  }
+  if (filePath.startsWith('/') || filePath.startsWith('\\')) {
+    return { root: '/', rest: filePath.slice(1), separator: '/' }
+  }
+  return { root: '', rest: filePath, separator: '/' }
+}
+
+function joinPathRoot(root: string, body: string, separator: '/' | '\\'): string {
+  if (!root) return body
+  if (root === '/') return body ? `/${body}` : '/'
+  if (root === '~') return body ? `~/${body}` : '~'
+  return body ? `${root}${separator}${body}` : root
+}
+
+/**
+ * 折叠路径里的 `.` / `..` 段，返回可直接展示、复制、粘贴回终端的规范化路径。
+ *
+ * 只在路径确实含 `.`/`..` 段时重建，其余情况原样返回（保留调用方原有的分隔符混用写法）。
+ * 相对路径开头无法回退的 `..` 会被保留（`../a/../../b` → `../../b`），
+ * 绝对路径根之上的 `..` 直接丢弃（`/../a` → `/a`），`~` 缩写不被展开。
+ */
+export function normalizeFilePathSegments(filePath: string): string {
+  if (!filePath || !hasDotSegments(filePath)) return filePath
+
+  const { root, rest, separator } = splitPathRoot(filePath)
+  const segments: string[] = []
+  for (const segment of rest.split(SEPARATOR_PATTERN)) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      if (segments.length > 0 && segments[segments.length - 1] !== '..') {
+        segments.pop()
+      } else if (!root) {
+        segments.push('..')
+      }
+      continue
+    }
+    segments.push(segment)
+  }
+  return joinPathRoot(root, segments.join(separator), separator)
+}
+
 /**
  * 相对路径基于候选 base 目录解析为绝对路径（全 renderer 层唯一实现，R4 统一收敛）。
  *
@@ -56,6 +124,9 @@ export function getLastPathSegments(path: string | null | undefined, n = 2): str
  * 优先匹配「首段与 base 目录名相同」的候选（如 base `C:/ws/profer` + 相对路径 `profer/src/a.md`
  * → `C:/ws/profer/src/a.md`，避免多套一层目录），再退化到第一个候选；无候选或无法匹配时返回原路径
  * （保持相对，由主进程继续兜底解析）。
+ *
+ * 拼接结果会折叠 `.`/`..` 段：Agent 常写 `../兄弟文件.txt`（文件在会话工作目录的上一级），
+ * 不折叠就会把 `C:\ws\<会话目录>/../兄弟文件.txt` 这种半截路径直接显示并复制给用户。
  */
 export function resolveRelativeToAbsolute(cleanPath: string, candidateBases: string[]): string {
   if (candidateBases.length === 0) return cleanPath
@@ -70,12 +141,12 @@ export function resolveRelativeToAbsolute(cleanPath: string, candidateBases: str
       const baseName = getFileBaseName(normalizedBase)
       if (baseName === firstSegment) {
         const parentDir = getFileParentPath(normalizedBase)
-        return parentDir ? `${parentDir}/${relativePath}` : relativePath
+        return normalizeFilePathSegments(parentDir ? `${parentDir}/${relativePath}` : relativePath)
       }
     }
   }
   const base = candidateBases[0]!.replace(/[\\/]+$/, '')
-  return `${base}/${relativePath}`
+  return normalizeFilePathSegments(`${base}/${relativePath}`)
 }
 
 export function getFileParentPath(filePath: string): string | null {

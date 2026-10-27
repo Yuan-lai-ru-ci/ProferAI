@@ -15,7 +15,7 @@ import { getDefaultStore, useStore } from 'jotai'
 import { previewFileMapAtom, previewFilesByTabAtom, type PreviewFile } from '@/atoms/preview-atoms'
 import { agentSessionPathMapAtom } from '@/atoms/agent-atoms'
 import { previewOpenModeAtom } from '@/atoms/ui-preferences'
-import { isAbsoluteFilePath } from '@/lib/file-utils'
+import { isAbsoluteFilePath, normalizeFilePathSegments } from '@/lib/file-utils'
 import {
   activeTabIdAtom,
   createPreviewTabId,
@@ -40,13 +40,16 @@ function normalizePreviewPath(filePath: string): string {
 }
 
 function joinPreviewPath(basePath: string, filePath: string): string {
-  return normalizePreviewPath(`${basePath.replace(/[\\/]+$/, '')}/${filePath.replace(/^[\\/]+/, '')}`)
+  const joined = `${basePath.replace(/[\\/]+$/, '')}/${filePath.replace(/^[\\/]+/, '')}`
+  // 折叠 `..`：调用方常传 `../同名兄弟文件`（文件在会话目录上一级），不折叠会让预览 Tab
+  // 顶着一条带 `/../` 的路径（顶栏点击复制也是它），且同一文件两种写法会开成两个 Tab。
+  return normalizeFilePathSegments(normalizePreviewPath(joined))
 }
 
 /** 将所有预览入口的相对路径归一为真实绝对路径，保证默认应用探测使用同一目标。 */
 function normalizePreviewFile(store: JotaiStore, sessionId: string, file: PreviewFile): PreviewFile {
   if (isAbsoluteFilePath(file.filePath)) {
-    const filePath = normalizePreviewPath(file.filePath)
+    const filePath = normalizeFilePathSegments(normalizePreviewPath(file.filePath))
     return filePath === file.filePath ? file : { ...file, filePath }
   }
 

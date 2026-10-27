@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getFileBaseName, getFileParentPath, getLastPathSegments, isAbsoluteFilePath, isMissingAttachmentData, resolveRelativeToAbsolute } from './file-utils'
+import { getFileBaseName, getFileParentPath, getLastPathSegments, isAbsoluteFilePath, isMissingAttachmentData, normalizeFilePathSegments, resolveRelativeToAbsolute } from './file-utils'
 
 describe('isMissingAttachmentData（附件数据完整性）', () => {
   test('Given 0 字节文件 When 数据为空 Then 不判定为失效附件', () => {
@@ -119,6 +119,53 @@ describe('resolveRelativeToAbsolute（R4 统一拼接实现）', () => {
 
   test('尾部斜杠 base', () => {
     expect(resolveRelativeToAbsolute('src/a.md', ['C:/ws/profer/'])).toBe('C:/ws/profer/src/a.md')
+  })
+
+  test('父级相对路径折叠到 base 上一级（回归：展示/复制带 /../ 的半截路径）', () => {
+    expect(resolveRelativeToAbsolute('../合并_20261027_时间轴.txt', ['C:\\Users\\Admin\\.profer\\agent-workspaces\\5714\\8333efcc']))
+      .toBe('C:\\Users\\Admin\\.profer\\agent-workspaces\\5714\\合并_20261027_时间轴.txt')
+    expect(resolveRelativeToAbsolute('../out/a.md', ['/Users/mac/ws/session']))
+      .toBe('/Users/mac/ws/out/a.md')
+  })
+
+  test('当前目录与嵌套父级相对路径同样折叠', () => {
+    expect(resolveRelativeToAbsolute('./a/b.md', ['/Users/mac/ws/session'])).toBe('/Users/mac/ws/session/a/b.md')
+    expect(resolveRelativeToAbsolute('a/../../b.md', ['/Users/mac/ws/session'])).toBe('/Users/mac/ws/b.md')
+  })
+})
+
+describe('normalizeFilePathSegments（展示/复制路径规范化）', () => {
+  test('不含点段时原样返回（保留调用方分隔符风格）', () => {
+    expect(normalizeFilePathSegments('C:\\ws\\项目\\workspace-files/docs/方案.md'))
+      .toBe('C:\\ws\\项目\\workspace-files/docs/方案.md')
+    expect(normalizeFilePathSegments('/Users/mac/ws/a.md')).toBe('/Users/mac/ws/a.md')
+    expect(normalizeFilePathSegments('report.md')).toBe('report.md')
+    expect(normalizeFilePathSegments('')).toBe('')
+  })
+
+  test('Windows 盘符路径折叠并沿盘符后的分隔符风格重建', () => {
+    expect(normalizeFilePathSegments('C:\\ws\\5714\\8333efcc/../合并.txt')).toBe('C:\\ws\\5714\\合并.txt')
+    expect(normalizeFilePathSegments('C:/ws/5714/8333efcc/../合并.txt')).toBe('C:/ws/5714/合并.txt')
+  })
+
+  test('UNC 路径保留 server\\share 根', () => {
+    expect(normalizeFilePathSegments('\\\\server\\share\\a\\..\\b.md')).toBe('\\\\server\\share\\b.md')
+    expect(normalizeFilePathSegments('\\\\server\\share\\..\\..\\b.md')).toBe('\\\\server\\share\\b.md')
+  })
+
+  test('主目录缩写不展开', () => {
+    expect(normalizeFilePathSegments('~/.profer/skins/../skins/demo/skin.css'))
+      .toBe('~/.profer/skins/demo/skin.css')
+  })
+
+  test('绝对路径根之上的 .. 丢弃，相对路径开头的 .. 保留', () => {
+    expect(normalizeFilePathSegments('/../a.md')).toBe('/a.md')
+    expect(normalizeFilePathSegments('../a/../../b.md')).toBe('../../b.md')
+  })
+
+  test('连续分隔符与末尾点段一并收敛', () => {
+    expect(normalizeFilePathSegments('/ws//a///./b.md')).toBe('/ws/a/b.md')
+    expect(normalizeFilePathSegments('/ws/a/..')).toBe('/ws')
   })
 })
 
