@@ -12,6 +12,7 @@ import { X, Paperclip } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ImageLightbox } from '@profer/ui/primitives/image-lightbox'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
+import { ChatImageContextMenu, useCopyChatImageAction } from './chat-image-context-menu'
 
 interface AttachmentPreviewItemProps {
   /** 原始文件名 */
@@ -41,6 +42,10 @@ export function AttachmentPreviewItem({
   className,
 }: AttachmentPreviewItemProps): React.ReactElement {
   const [lightboxOpen, setLightboxOpen] = React.useState(false)
+  const copyImage = useCopyChatImageAction()
+  const handleCopy = React.useCallback((): void => {
+    if (previewUrl) void copyImage({ src: previewUrl })
+  }, [copyImage, previewUrl])
   const handleRemoveClick = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     onRemove()
@@ -50,42 +55,45 @@ export function AttachmentPreviewItem({
   }, [])
 
   if (isImage(mediaType) && previewUrl) {
-    // 图片预览 — 紧凑缩略图，点击可预览大图
+    // 图片预览 — 紧凑缩略图，点击可预览大图；右键复制（待发送附件尚未落盘，走预览 URL）
     return (
-      <div
-        className={cn(
-          'group/attachment relative size-[72px] shrink-0 rounded-lg overflow-hidden',
-          className
-        )}
-      >
-        <img
-          src={previewUrl}
-          alt={filename}
-          className="size-full object-cover cursor-pointer"
-          onClick={() => setLightboxOpen(true)}
-        />
-        {/* hover 关闭按钮 */}
-        <button
-          type="button"
-          onClick={handleRemoveClick}
-          onKeyDown={handleRemoveKeyDown}
+      <ChatImageContextMenu src={previewUrl}>
+        <div
           className={cn(
-            'absolute top-1 right-1 size-[18px] rounded-full',
-            'bg-black/50 text-white backdrop-blur-sm',
-            'flex items-center justify-center',
-            'opacity-0 group-hover/attachment:opacity-100 transition-opacity duration-200',
-            'hover:bg-black/70'
+            'group/attachment relative size-[72px] shrink-0 rounded-lg overflow-hidden',
+            className
           )}
         >
-          <X className="size-3" />
-        </button>
-        <ImageLightbox
-          src={previewUrl}
-          alt={filename}
-          open={lightboxOpen}
-          onOpenChange={setLightboxOpen}
-        />
-      </div>
+          <img
+            src={previewUrl}
+            alt={filename}
+            className="size-full object-cover cursor-pointer"
+            onClick={() => setLightboxOpen(true)}
+          />
+          {/* hover 关闭按钮 */}
+          <button
+            type="button"
+            onClick={handleRemoveClick}
+            onKeyDown={handleRemoveKeyDown}
+            className={cn(
+              'absolute top-1 right-1 size-[18px] rounded-full',
+              'bg-black/50 text-white backdrop-blur-sm',
+              'flex items-center justify-center',
+              'opacity-0 group-hover/attachment:opacity-100 transition-opacity duration-200',
+              'hover:bg-black/70'
+            )}
+          >
+            <X className="size-3" />
+          </button>
+          <ImageLightbox
+            src={previewUrl}
+            alt={filename}
+            open={lightboxOpen}
+            onOpenChange={setLightboxOpen}
+            onCopy={handleCopy}
+          />
+        </div>
+      </ChatImageContextMenu>
     )
   }
 
