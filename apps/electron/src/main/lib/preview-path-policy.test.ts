@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { getConfigDir } from './config-paths'
 import {
   isCredentialSensitivePath,
+  isPathInsideAnyRoot,
+  isPathInsideRoot,
   isReadOnlyPreviewPathAllowed,
   isSystemSensitivePath,
   type PreviewPathPolicy,
@@ -73,5 +75,56 @@ describe('isCredentialSensitivePath 默认边界', () => {
 
   test('不放宽到整个配置文件目录（皮肤目录仍可预览）', () => {
     expect(isCredentialSensitivePath(join(getConfigDir(), 'skins', 'demo-skin', 'skin.css'))).toBe(false)
+  })
+})
+
+/**
+ * 回归：路径前缀判定必须容忍大小写差异。
+ *
+ * Windows 上 `realpathSync` 不归一大小写（小写输入原样返回），而文件系统大小写不敏感。
+ * 曾经直接用 `startsWith` 比较，导致 Agent 输出的小写盘符路径（`c:/users/...`）
+ * 被判定为「越界」——表现为预览正常、但「用默认应用打开」静默失败；
+ * 反过来，靠改大小写还能绕过 ~/.ssh 这类凭据目录拦截。
+ */
+describe('isPathInsideRoot 大小写', () => {
+  const insideFixture = (): { file: string; root: string } => {
+    const file = createFixtureFile('workspace', 'nested', 'image.png')
+    return { file, root: join(dirname(file), '..') }
+  }
+
+  test('根内路径判定为在根内', () => {
+    const { file, root } = insideFixture()
+    expect(isPathInsideRoot(file, root)).toBe(true)
+    expect(isPathInsideAnyRoot(file, [join(tmpdir(), 'unrelated-root'), root])).toBe(true)
+  })
+
+  test('根外路径仍拒绝（修复后不放宽边界）', () => {
+    const { file } = insideFixture()
+    const outsideRoot = createFixtureFile('another-workspace', 'placeholder.txt')
+    expect(isPathInsideRoot(file, dirname(outsideRoot))).toBe(false)
+  })
+
+  test('根目录本身（文件系统根）不应拼出双分隔符', () => {
+    const { file } = insideFixture()
+    const fsRoot = file.slice(0, file.indexOf(sep) + 1) || sep
+    expect(isPathInsideRoot(file, fsRoot)).toBe(true)
+  })
+
+  const windowsOnly = process.platform === 'win32' ? test : test.skip
+
+  windowsOnly('全小写目标路径仍判定在根内（本次「打开无反应」的根因）', () => {
+    const { file, root } = insideFixture()
+    expect(isPathInsideRoot(file.toLowerCase(), root)).toBe(true)
+    expect(isPathInsideAnyRoot(file.replace(/\\/g, '/').toLowerCase(), [root])).toBe(true)
+  })
+
+  windowsOnly('凭据目录换大小写后仍被拦截（安全边界不能被绕过）', () => {
+    const secret = createFixtureFile('.ssh', 'id_ed25519')
+    const credentialRoot = dirname(secret)
+    expect(isCredentialSensitivePath(secret, [credentialRoot])).toBe(true)
+    expect(isCredentialSensitivePath(secret.toLowerCase(), [credentialRoot])).toBe(true)
+    expect(
+      isReadOnlyPreviewPathAllowed(secret.toLowerCase(), { credentialSensitiveRoots: [credentialRoot] }),
+    ).toBe(false)
   })
 })

@@ -74,24 +74,56 @@ function realpathOrResolve(path: string): string {
   }
 }
 
-function isInsideAnyRoot(resolvedPath: string, roots: string[]): boolean {
-  return roots.some((root) => {
-    // realpath 归一化两侧：macOS 上 /etc → /private/etc，Windows 上大小写也可能不一致
-    const normalized = realpathOrResolve(root)
-    return resolvedPath === normalized || resolvedPath.startsWith(normalized + sep)
-  })
+/**
+ * 比较用的路径大小写归一。
+ *
+ * 必须显式做，不能指望 realpath：Windows 上 `realpathSync` 只解析符号链接/junction，
+ * **不会**把大小写归一为磁盘上的真实形态（实测 `c:/users/x` 仍返回 `c:\users\x`），
+ * 而 Windows 文件系统本身大小写不敏感。若不归一会造成两类错误：
+ *   1. 误拒——Agent 输出常带小写盘符（`c:/users/...`），会被判成不在授权根内，
+ *      表现为「预览正常、但用默认应用打开/保存静默失败」；
+ *   2. 漏拦——凭据目录用不同大小写就能绕过前缀拦截（安全边界）。
+ * macOS/Linux 保持区分大小写，不能放松。
+ */
+function normalizePathCase(path: string): string {
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
+function matchesRoot(normalizedTarget: string, normalizedRoot: string): boolean {
+  if (normalizedTarget === normalizedRoot) return true
+  // 根目录可能是文件系统根（`C:\`、`/`），本身已带分隔符，避免拼出 `C:\\`
+  const base = normalizedRoot.endsWith(sep) ? normalizedRoot : normalizedRoot + sep
+  return normalizedTarget.startsWith(base)
+}
+
+/**
+ * 目标路径是否落在根目录内。两侧都会 realpath（消解符号链接）并做平台大小写归一。
+ *
+ * 供主进程各处「授权根 / 敏感目录」前缀判定复用，避免各写一份 `startsWith` 时漏掉大小写。
+ */
+export function isPathInsideRoot(targetPath: string, root: string): boolean {
+  return matchesRoot(
+    normalizePathCase(realpathOrResolve(targetPath)),
+    normalizePathCase(realpathOrResolve(root)),
+  )
+}
+
+/** 目标路径是否落在任一根目录内（目标只 realpath 一次，根逐个比对）。 */
+export function isPathInsideAnyRoot(targetPath: string, roots: string[]): boolean {
+  const normalizedTarget = normalizePathCase(realpathOrResolve(targetPath))
+  return roots.some((root) => matchesRoot(normalizedTarget, normalizePathCase(realpathOrResolve(root))))
 }
 
 /**
  * 系统敏感位置判定。传入未 realpath 的路径也能正确判定（内部会归一化）。
  */
 export function isSystemSensitivePath(path: string): boolean {
-  return isInsideAnyRoot(realpathOrResolve(path), SYSTEM_SENSITIVE_ROOTS)
+  return isPathInsideAnyRoot(path, SYSTEM_SENSITIVE_ROOTS)
 }
 
 /** 凭据与隐私位置判定（同样不要求调用方先 realpath）。 */
 export function isCredentialSensitivePath(path: string, roots: string[] = getCredentialSensitiveRoots()): boolean {
-  return isInsideAnyRoot(realpathOrResolve(path), roots)
+  return isPathInsideAnyRoot(path, roots)
 }
 
 export interface PreviewPathPolicy {
@@ -113,7 +145,7 @@ export function isReadOnlyPreviewPathAllowed(filePath: string, policy?: PreviewP
   if (!existsSync(filePath)) return false
   const resolved = realpathOrResolve(filePath)
   if (!existsSync(resolved)) return false
-  if (isInsideAnyRoot(resolved, policy?.systemSensitiveRoots ?? SYSTEM_SENSITIVE_ROOTS)) return false
-  if (isInsideAnyRoot(resolved, policy?.credentialSensitiveRoots ?? getCredentialSensitiveRoots())) return false
+  if (isPathInsideAnyRoot(resolved, policy?.systemSensitiveRoots ?? SYSTEM_SENSITIVE_ROOTS)) return false
+  if (isPathInsideAnyRoot(resolved, policy?.credentialSensitiveRoots ?? getCredentialSensitiveRoots())) return false
   return true
 }

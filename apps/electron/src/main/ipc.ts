@@ -105,7 +105,7 @@ import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
 import { listBookmarks, addBookmark, removeBookmark, listHistory, clearHistory } from './lib/browser-start-page-store'
 import { getMainRepoRoot } from './lib/git-diff-service'
 import { registerProferDirectoryPath, registerProferFilePath } from './lib/local-file-protocol'
-import { isReadOnlyPreviewPathAllowed } from './lib/preview-path-policy'
+import { isPathInsideAnyRoot, isReadOnlyPreviewPathAllowed } from './lib/preview-path-policy'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import { registerChannelIpc } from './lib/channel-ipc'
 import { listChannels,
@@ -460,11 +460,6 @@ function getAuthorizedRoots(options?: FileAccessOptions): string[] {
   return roots
 }
 
-function isUnderRoot(resolvedPath: string, root: string): boolean {
-  const resolvedRoot = realpathOrResolve(root)
-  return resolvedPath === resolvedRoot || resolvedPath.startsWith(resolvedRoot + sep)
-}
-
 function isResolvedPathInsideRoot(targetPath: string, root: string): boolean {
   const relativePath = relative(resolve(root), resolve(targetPath))
   return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
@@ -655,7 +650,7 @@ function isPathAllowed(filePath: string, options?: FileAccessOptions): boolean {
   }
 
   // 1. 优先检查标准授权根目录（工作区 + 常用用户目录）
-  if (getAuthorizedRoots(options).some((root) => isUnderRoot(resolved, root))) {
+  if (isPathInsideAnyRoot(resolved, getAuthorizedRoots(options))) {
     return true
   }
 
