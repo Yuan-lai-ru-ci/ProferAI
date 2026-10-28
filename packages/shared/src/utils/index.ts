@@ -32,6 +32,7 @@ export {
   resolveContextWindowFromModelUsage,
 } from './context-window'
 export type { OneMillionContextSource, OneMillionContextDecision, AgentSdk1MSelection } from './context-window'
+export { parseVersionSegments, isVersionAtLeast, extractVersionAfterPrefix } from './model-version'
 export { calculateContextUsageRatio } from './context-usage'
 export {
   THINKING_SIGNATURE_ERROR_CODE,

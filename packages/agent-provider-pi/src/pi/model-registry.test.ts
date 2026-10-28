@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { CreateModelRuntimeOptions } from '@earendil-works/pi-coding-agent'
 import type { XaiOAuthCredentials } from '@profer/shared'
-import { buildModel, buildXaiOAuthModel, buildCodexModel, getCodexCatalogModels } from './model-registry'
+import { buildModel, buildXaiOAuthModel, buildCodexModel, getCodexCatalogModels, resolvePiReasoningCapability } from './model-registry'
 
 function fakeSdk() {
   const configurations: CreateModelRuntimeOptions[] = []
@@ -88,5 +88,32 @@ describe('Pi model registry host boundaries', () => {
       expect(fixture.models[0]?.baseUrl).toBe(expected)
       expect(fixture.models[0]?.api).toBe('google-generative-ai')
     }
+  })
+})
+
+describe('DeepSeek 档位与目录归一', () => {
+  test('Given deepseek-v4.1-flash 走官方 DeepSeek 渠道 When 解析能力 Then 与 deepseek-flash 完全一致（含关闭思考）', async () => {
+    const flash = await resolvePiReasoningCapability('deepseek', 'deepseek-flash')
+    const versioned = await resolvePiReasoningCapability('deepseek', 'deepseek-v4.1-flash')
+
+    expect(versioned).toEqual(flash)
+    // DeepSeek 官方 effort 只有 low / high / max，加关闭思考共四档。
+    expect(versioned?.levels).toEqual(['off', 'low', 'high', 'max'])
+  })
+
+  test('Given deepseek-v4-pro When 解析能力 Then 不暴露会映射到同一个请求值的档位', async () => {
+    const pro = await resolvePiReasoningCapability('deepseek', 'deepseek-v4-pro')
+
+    // Pro 官方只有 high / max：产品「低」和「更高」都会落到同一个值，因此不再单列。
+    expect(pro?.levels).toEqual(['off', 'high', 'max'])
+    expect(pro?.effortMap).toEqual({ high: 'high', max: 'max' })
+  })
+
+  test('Given 第三方网关有自己的 deepseek-v4.1-flash 条目 When 解析能力 Then 不被官方条目覆盖', async () => {
+    const qwen = await resolvePiReasoningCapability('qwen', 'deepseek-v4.1-flash')
+
+    // qwen-token-plan 的条目禁止关闭思考（off: null），原始 ID 必须优先于归一后的官方 ID。
+    expect(qwen?.source).toBe('pi-catalog')
+    expect(qwen?.levels).toEqual(['low', 'high', 'max'])
   })
 })

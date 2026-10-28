@@ -158,6 +158,26 @@ function isAnthropicShaped(baseUrl?: string): boolean {
   }
 }
 
+/**
+ * 地址是否以 `/responses` 结尾。
+ *
+ * 第三方网关（CLIProxyAPI / Codex 反代等）的用户常把文档里的完整端点
+ * `https://host/v1/responses` 直接填进渠道。OpenAI 兼容渠道若照旧按
+ * Chat Completions 发请求，请求体会带 `messages` 而没有 `input`，网关往往
+ * 仍返回 200 和一条空流——表现为「连上了但没输出」。端点形态本身就是协议
+ * 事实，因此这里把它当作可嗅探信号，不改写用户配置。
+ */
+export function isResponsesShapedEndpoint(baseUrl?: string): boolean {
+  const raw = baseUrl?.trim()
+  if (!raw) return false
+  const matchPath = (path: string): boolean => /\/responses$/i.test(path.replace(/\/+$/, ''))
+  try {
+    return matchPath(new URL(raw).pathname)
+  } catch {
+    return matchPath(raw.split(/[?#]/, 1)[0] ?? '')
+  }
+}
+
 /** 商业代管 relay（`…/v1/proxy`）由服务端路由决定协议，不适用端点形态推断。 */
 function isRelayProxy(baseUrl: string): boolean {
   return baseUrl.trim().replace(/\/+$/, '').endsWith('/v1/proxy')
@@ -205,6 +225,11 @@ export function resolveProviderNativeProtocol(
       return 'openai-completions'
     }
     return capability.nativeProtocol
+  }
+  if ((provider === 'custom' || provider === 'openai') && isResponsesShapedEndpoint(baseUrl)) {
+    // 用户把完整 /responses 端点填进了 OpenAI 兼容渠道：按 Responses 协议发请求，
+    // 否则会以 Chat Completions 请求体打 Responses 端点，拿到 200 空流。
+    return 'openai-responses'
   }
   return capability.nativeProtocol
 }

@@ -27,6 +27,31 @@ describe('provider adapter instances', () => {
     expect(request.url).toBe('https://relay.example.com/v1/chat/completions')
   })
 
+  test('完整 /responses 端点覆盖 OpenAI 兼容渠道的静态协议', () => {
+    // 第三方网关（CLIProxyAPI / Codex 反代）用户常把文档里的完整端点直接填进渠道。
+    // 若仍按 Chat Completions 发 messages 请求体，网关会回 200 + 空流。
+    const adapter = getAdapter('custom', undefined, 'https://codex.diraw.top/v1/responses')
+    expect(adapter).toBeInstanceOf(OpenAIResponsesAdapter)
+    const request = adapter.buildStreamRequest({
+      baseUrl: 'https://codex.diraw.top/v1/responses',
+      apiKey: 'fixture-key',
+      modelId: 'gpt-6-luna',
+      history: [],
+      userMessage: 'hi',
+      readImageAttachments: () => [],
+    })
+    expect(request.url).toBe('https://codex.diraw.top/v1/responses')
+    const body = JSON.parse(request.body) as Record<string, unknown>
+    expect(body.input).toBeDefined()
+    expect(body.messages).toBeUndefined()
+    expect(body.stream).toBe(true)
+  })
+
+  test('协议根地址不会被误判为 Responses', () => {
+    expect(getAdapter('custom', undefined, 'https://gateway.example.com/v1')).toBeInstanceOf(OpenAIAdapter)
+    expect(getAdapter('openai', undefined, 'https://api.openai.com/v1')).toBeInstanceOf(OpenAIAdapter)
+  })
+
   test('23 种 Provider：22 个 Chat adapter 与 Pi-only Codex 边界', () => {
     const providers: ProviderType[] = [
       'anthropic', 'anthropic-compatible', 'openai', 'openai-responses', 'deepseek', 'google',

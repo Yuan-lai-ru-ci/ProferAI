@@ -77,6 +77,7 @@ export const CODEX_FAST_MODE_MODEL_IDS = [
   'gpt-5.6-terra',
   'gpt-5.6-luna',
   'gpt-6-astra',
+  'gpt-6.1-sol',
 ] as const
 
 export function isCodexFastModeSupportedModel(modelId: string | undefined): boolean {
@@ -764,6 +765,7 @@ export interface AgentSessionUiProjection {
   presetReference: import('./agent-preset').PresetReference | null
   openAIThinkingLevel: AgentThinkingLevel | null
   codexFastMode: boolean
+  autoQueueSendEnabled: boolean
   agentEffort: AgentEffort | null
   attachedDirectories: string[]
   attachedFiles: string[]
@@ -889,6 +891,8 @@ export interface AgentSessionMeta {
   lastInterruptLabel?: string
   /** 最近中断时间戳 */
   lastInterruptAt?: number
+  /** 队列「自动发送」开关：轮结束是否自动发送队首消息。per-session 持久化，新会话及历史缺省为开（true），用户手动关闭后保持关闭。手动停止会自动置为 false。 */
+  autoQueueSendEnabled?: boolean
   /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
   permissionMode?: ProferPermissionMode
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
@@ -2092,6 +2096,12 @@ export const AGENT_IPC_CHANNELS = {
   LIST_SESSIONS: 'agent:list-sessions',
   /** 获取单个会话 meta（归档会话兜底读取；不存在返回 null） */
   GET_SESSION_META: 'agent:get-session-meta',
+  /** 更新会话「队列自动发送」开关（per-session 持久化，重启保留） */
+  UPDATE_QUEUE_AUTO_SEND: 'agent:update-queue-auto-send',
+  /** 渲染进程上报「当前选区是否位于可引用区域」，用于决定右键菜单是否出现「引用到输入框」 */
+  SET_QUOTEABLE_SELECTION: 'agent:set-quoteable-selection',
+  /** 主进程 → 渲染进程：用户在右键菜单里点了「引用到输入框」 */
+  QUOTE_SELECTION_REQUEST: 'agent:quote-selection-request',
   /** 创建会话 */
   CREATE_SESSION: 'agent:create-session',
   /** 为项目创建或复用隐藏的 Agent 草稿会话 */

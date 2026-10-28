@@ -8,7 +8,13 @@
 
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import type { AgentThinkingLevel } from '@profer/shared'
-import { isCodexFastModeSupportedModel, isDeepSeekV4Model } from '@profer/shared'
+import {
+  clampReasoningProfileLevel,
+  isCodexFastModeSupportedModel,
+  isDeepSeekV4Model,
+  resolveLowestReasoningEffort,
+  resolveReasoningProfile,
+} from '@profer/shared'
 import { injectCodexFastMode as doInjectCodexFastMode } from './codex-fast-mode'
 
 type ProviderPayload = Record<string, unknown>
@@ -56,11 +62,16 @@ export function injectOpenAIThinkingLevel(
   const modelId = typeof payload.model === 'string' ? payload.model : undefined
   if (!isCodexFastModeSupportedModel(modelId)) return payload
 
-  const isGpt6Astra = modelId?.toLowerCase() === 'gpt-6-astra'
-  // GPT-6 Astra 不支持 none/minimal；关闭或最小档位统一降级为 low，避免发送非法 effort。
-  const effort = isGpt6Astra
-    ? (thinkingLevel === 'off' || thinkingLevel === 'minimal' ? 'low' : THINKING_LEVEL_TO_EFFORT[thinkingLevel] ?? 'low')
-    : THINKING_LEVEL_TO_EFFORT[thinkingLevel] ?? 'none'
+  // 档位映射统一走模型能力家族 profile，不再按型号硬编码：
+  // GPT-6 代际取消了 none / minimal，GPT-5.5 没有 max——直接透传会发服务端不接受的 effort。
+  const profile = resolveReasoningProfile({ modelId, transport: 'openai-responses' })
+  const effectiveLevel = profile ? clampReasoningProfileLevel(profile, thinkingLevel) : thinkingLevel
+  const mapped = profile?.encodings['openai-responses']?.effortMap[effectiveLevel]
+  const effort = typeof mapped === 'string'
+    ? mapped
+    : mapped === null
+      ? resolveLowestReasoningEffort(profile, 'openai-responses') ?? 'low'
+      : THINKING_LEVEL_TO_EFFORT[effectiveLevel] ?? 'none'
 
   // 剥离 reasoning.mode（OAuth 不支持），写入 reasoning.effort
   return {

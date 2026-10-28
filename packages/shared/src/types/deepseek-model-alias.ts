@@ -24,6 +24,10 @@ export const DEEPSEEK_V4_MODEL_ALIASES: Readonly<Record<string, string>> = Objec
   // 0.86 起 Flash 的 catalog ID 已去掉版本号；旧代写法统一归一到新 ID，
   // 否则 catalog 查不到条目，模型会丢掉窗口 / 成本 / 图片能力，只剩 fallback 默认值。
   'deepseek-v4-flash': 'deepseek-flash',
+  // 部分网关（如 qwen-token-plan / openrouter）把同一个 V4.1 Flash 写成带版本号的 ID；
+  // 官方目录只有 deepseek-flash，不归一就会查到别的 provider 的条目，
+  // 连带丢掉「可关闭思考」等官方能力。
+  'deepseek-v4.1-flash': 'deepseek-flash',
   // deepseek-pro 是官方无版本号短名，正式 ID 仍带版本号。
   'deepseek-pro': 'deepseek-v4-pro',
 })

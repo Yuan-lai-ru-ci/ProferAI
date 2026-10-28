@@ -6,7 +6,7 @@
  */
 
 import type { ProviderType, XaiApiProtocol } from '@profer/shared'
-import { PROVIDER_CAPABILITIES } from '@profer/shared'
+import { PROVIDER_CAPABILITIES, resolveProviderNativeProtocol } from '@profer/shared'
 import type { ProviderAdapter } from './types.ts'
 import { AnthropicAdapter } from './anthropic-adapter.ts'
 import { OpenAIAdapter } from './openai-adapter.ts'
@@ -61,10 +61,20 @@ const adapterRegistry = new Map<ProviderType, () => ProviderAdapter>([
  * @returns 对应的适配器实例
  * @throws Error 如果供应商类型不支持
  */
-export function getAdapter(provider: ProviderType, xaiApiProtocol?: XaiApiProtocol): ProviderAdapter {
+export function getAdapter(provider: ProviderType, xaiApiProtocol?: XaiApiProtocol, baseUrl?: string): ProviderAdapter {
   // xAI 渠道的协议由用户在渠道上选择：官方默认 Responses，只支持 Chat Completions
   // 的第三方中转可切到 OpenAI 兼容适配器，不再要求中转去实现 /responses。
   if (provider === 'xai' && xaiApiProtocol === 'chat-completions') return new OpenAIAdapter('xai')
+  // 用户把完整 /responses 端点填进了 OpenAI 兼容渠道时，端点形态会覆盖静态归属：
+  // 否则请求以 Chat Completions 的 messages 请求体打到 Responses 端点，
+  // 网关通常回 200 + 空流，界面上只表现为「连上了但没输出」。
+  if (
+    provider !== 'openai-responses' &&
+    provider !== 'openai-codex' &&
+    resolveProviderNativeProtocol(provider, baseUrl, xaiApiProtocol) === 'openai-responses'
+  ) {
+    return new OpenAIResponsesAdapter(provider)
+  }
   const createAdapter = adapterRegistry.get(provider)
   if (!createAdapter) {
     throw new Error(`不支持的供应商: ${provider}。你可能过去使用的是 Profer 商业版，请重新下载商业版覆盖安装，当前版本为开源版本。`)

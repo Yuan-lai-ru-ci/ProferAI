@@ -8,6 +8,7 @@
 
 import type { ProviderType } from '../types/channel'
 import { DEEPSEEK_V4_SHORT_MODEL_NAMES, resolveDeepSeekV4ModelId, normalizeModelIdTail } from '../types/deepseek-model-alias'
+import { isVersionAtLeast, parseVersionSegments } from './model-version'
 
 /** 默认上下文窗口（无法识别模型时使用） */
 export const DEFAULT_CONTEXT_WINDOW = 200_000
@@ -56,25 +57,6 @@ export function isDeepSeekV4Model(modelId?: string): boolean {
   return model != null && /^(?:deepseek-flash|deepseek-v4-pro)$/.test(model)
 }
 
-/** 把 "4.6" / "5-4" 这类版本串解析为可逐位比较的数字段。 */
-function parseVersionSegments(version: string): number[] {
-  const segments: number[] = []
-  for (const segment of version.split(/[.\-_]/)) {
-    if (!/^\d+$/.test(segment)) break
-    segments.push(Number(segment))
-  }
-  return segments
-}
-
-/** 逐位比较版本：缺失段按 0 处理，返回 a >= b。 */
-function isVersionAtLeast(a: readonly number[], b: readonly number[]): boolean {
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const left = a[i] ?? 0
-    const right = b[i] ?? 0
-    if (left !== right) return left > right
-  }
-  return true
-}
 
 /**
  * 1M 上下文代际规则。

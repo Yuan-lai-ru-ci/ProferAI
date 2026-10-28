@@ -13,9 +13,21 @@ describe('resolveReasoningCapability', () => {
     })
 
     expect(capability?.source).toBe('profile')
-    expect(capability?.levels).toEqual(['off', 'low', 'high', 'xhigh', 'max'])
-    expect(capability?.effortMap?.low).toBe('high')
-    expect(capability?.effortMap?.xhigh).toBe('max')
+    // DeepSeek Pro 官方只有 high / max：不再暴露会映射到同一个值的 low / xhigh。
+    expect(capability?.levels).toEqual(['off', 'high', 'max'])
+    expect(capability?.effortMap).toEqual({ high: 'high', max: 'max' })
+  })
+
+  test('Given DeepSeek Flash When 解析 Then 只保留能产生不同请求值的四档', () => {
+    const profile = resolveReasoningProfile({ modelId: 'deepseek-flash', transport: 'anthropic-messages' })
+    const capability = resolveReasoningCapability({
+      profile,
+      encoding: profile?.encodings['anthropic-messages'],
+      catalog: { reasoning: true },
+    })
+
+    expect(capability?.levels).toEqual(['off', 'low', 'high', 'max'])
+    expect(capability?.effortMap).toEqual({ low: 'low', high: 'high', max: 'max' })
   })
 
   test('Given catalog 显式把 xhigh 标为 null When 解析 Then 只剔除该档位', () => {
@@ -39,8 +51,8 @@ describe('resolveReasoningCapability', () => {
       catalog: { reasoning: true, thinkingLevelMap: { high: null } },
     })
 
-    expect(capability?.levels).toEqual(['off'])
-    expect(capability?.defaultLevel).toBe('off')
+    expect(capability?.levels).toEqual(['low', 'max'])
+    expect(capability?.defaultLevel).toBe('max')
   })
 
   test('Given catalog 明确 reasoning=false When 解析 Then 不暴露任何档位', () => {

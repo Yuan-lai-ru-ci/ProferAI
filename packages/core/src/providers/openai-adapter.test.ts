@@ -56,13 +56,14 @@ describe('OpenAIAdapter Ollama Chat', () => {
     })
   })
 
-  test('GPT-6 系列标题请求显式关闭 reasoning', () => {
+  test('GPT-6 系列标题请求降到最低可用档位而不是 none', () => {
     const request = new OpenAIAdapter('custom').buildTitleRequest({
       baseUrl: 'https://fixture.invalid/v1',
       apiKey: 'key',
       modelId: 'gpt-6.1-sol',
       prompt: 'title',
     })
-    expect(JSON.parse(request.body)).toMatchObject({ reasoning_effort: 'none' })
+    // GPT-6 代际已取消 none / minimal：发 none 会被服务端拒绝，最低档是 low。
+    expect(JSON.parse(request.body)).toMatchObject({ reasoning_effort: 'low' })
   })
 })

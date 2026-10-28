@@ -1,7 +1,12 @@
 import type { AgentRuntimeMode, ProviderType, XaiApiProtocol } from './channel'
 import type { AgentThinkingLevel } from './agent'
-import { resolveDeepSeekV4ModelId } from './deepseek-model-alias'
+import type { ReasoningModelTag } from './reasoning-model-tag'
+import { resolveReasoningModelTag } from './reasoning-model-tag'
 import { resolveProviderNativeProtocol } from './provider-capability'
+
+/** 家族 tag 判定与 Claude adaptive 判定在 reasoning-model-tag 里维护，这里继续对外导出。 */
+export { isClaudeAdaptiveThinkingModel, resolveReasoningModelTag } from './reasoning-model-tag'
+export type { ReasoningModelTag, ReasoningModelTagRule } from './reasoning-model-tag'
 
 /** Proma 可识别的 reasoning 请求协议族。 */
 export type ReasoningTransport =
@@ -43,8 +48,9 @@ export type ReasoningEncodingKind =
   | 'adaptive-effort'
   | 'deepseek-output-effort'
   | 'openai-reasoning-effort'
+  | 'qwen-thinking-effort'
   | 'zai-thinking-effort'
-  | 'zai-toggle'
+  | 'provider-toggle'
   | 'anthropic-manual'
 
 /** 每个产品等级映射为目标协议可接受的 effort 值。 */
@@ -56,7 +62,7 @@ export interface ReasoningEncoding {
 }
 
 export interface ReasoningProfile {
-  id: 'deepseek-v4-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'grok-4.6' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'claude-adaptive'
+  id: 'deepseek-v4-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'kimi-k2.6-toggle' | 'kimi-k2.7-always-on' | 'glm-5.2' | 'glm-5.3' | 'glm-legacy-toggle' | 'grok-4.3' | 'grok-4.5' | 'grok-4.6' | 'qwen-3.8' | 'qwen-toggle' | 'mimo-toggle' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-gpt6' | 'claude-adaptive'
   levels: readonly AgentThinkingLevel[]
   defaultLevel: AgentThinkingLevel
   normalize(level: AgentThinkingLevel | undefined): AgentThinkingLevel
@@ -96,10 +102,22 @@ export interface ResolveReasoningProfileInput {
   transport: ReasoningTransport
 }
 
-const DEEPSEEK_V4_LEVELS = ['off', 'low', 'high', 'xhigh', 'max'] as const satisfies readonly AgentThinkingLevel[]
-const K3_LEVELS = ['off', 'low', 'high', 'max'] as const satisfies readonly AgentThinkingLevel[]
+// DeepSeek 官方 effort 只有 low / high / max 三个值（Pro 只有 high / max）。
+// 只暴露能产生不同请求值的档位：Flash 的「更高」与「高」同值、Pro 的「低」与「高」同值，
+// 留着会让界面出现两个选不同档位、实际发同一个值的假档。
+const DEEPSEEK_V4_FLASH_LEVELS = ['off', 'low', 'high', 'max'] as const satisfies readonly AgentThinkingLevel[]
+const DEEPSEEK_V4_PRO_LEVELS = ['off', 'high', 'max'] as const satisfies readonly AgentThinkingLevel[]
+// Kimi K3/K3.1 始终思考，只有 low/high/max 三档（官方默认 max）。
+const K3_LEVELS = ['low', 'high', 'max'] as const satisfies readonly AgentThinkingLevel[]
+// Kimi K2.6：thinking 开关；K2.7 Code：思考强制开启，没有可选档位。
+const KIMI_K2_6_LEVELS = ['off', 'high'] as const satisfies readonly AgentThinkingLevel[]
+const KIMI_K2_7_LEVELS = ['high'] as const satisfies readonly AgentThinkingLevel[]
 const GLM_52_LEVELS = ['off', 'high', 'max'] as const satisfies readonly AgentThinkingLevel[]
-const GLM_53_LEVELS = ['off', 'high'] as const satisfies readonly AgentThinkingLevel[]
+// GLM-5.3 起思考强制开启，官方 reasoning_effort 为 low/high/max。
+const GLM_53_LEVELS = ['low', 'high', 'max'] as const satisfies readonly AgentThinkingLevel[]
+const QWEN_38_LEVELS = ['low', 'medium', 'high'] as const satisfies readonly AgentThinkingLevel[]
+// 只有 thinking 开关的家族（MiMo / 旧 GLM / Qwen3.x / Kimi K2.6）共用的两档。
+const TOGGLE_LEVELS = ['off', 'high'] as const satisfies readonly AgentThinkingLevel[]
 const OPENAI_STANDARD_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly AgentThinkingLevel[]
 const OPENAI_MAX_LEVELS = [...OPENAI_STANDARD_LEVELS, 'max'] as const satisfies readonly AgentThinkingLevel[]
 
@@ -124,6 +142,8 @@ const DEEPSEEK_V4_PRO_EFFORT_MAP: ReasoningEffortMap = {
 }
 
 const K3_EFFORT_MAP: ReasoningEffortMap = {
+  // 思考始终开启：off 必须为 null，Pi 才会省略 thinking 字段而不是发 disabled。
+  off: null,
   minimal: 'low',
   low: 'low',
   medium: 'high',
@@ -150,13 +170,48 @@ const GLM_52_ANTHROPIC_EFFORT_MAP: ReasoningEffortMap = {
   max: 'max',
 }
 
-// GLM-5.3 accepts a thinking toggle, not reasoning_effort. Null removes unsupported levels.
+// GLM-5.3 起取消关闭思考，官方只接受 reasoning_effort 的 low / high / max；
+// 产品档位里的 medium 向上映射到 high，xhigh 映射到 max（官方没有 xhigh）。
 const GLM_53_THINKING_LEVEL_MAP: ReasoningEffortMap = {
+  off: null,
+  minimal: 'low',
+  low: 'low',
+  medium: 'high',
+  high: 'high',
+  xhigh: 'max',
+  max: 'max',
+}
+
+// Kimi K2.x 只有 thinking 开关：off 必须留空（Pi 据此发 thinking.type=disabled），
+// 其余档位显式置 null，避免界面把同一个「开」拆成四个假档位。
+const THINKING_TOGGLE_LEVEL_MAP: ReasoningEffortMap = {
   minimal: null,
   low: null,
   medium: null,
   xhigh: null,
   max: null,
+}
+
+// K2.7 Code 只接受 thinking.type=enabled，off 也必须被拒绝。
+const THINKING_ALWAYS_ON_LEVEL_MAP: ReasoningEffortMap = {
+  off: null,
+  minimal: null,
+  low: null,
+  medium: null,
+  xhigh: null,
+  max: null,
+}
+
+// Qwen3.8 官方档位是 low / medium / xhigh：产品的「高」落到 xhigh（官方最高档），
+// 没有独立的 medium 以上档位，因此不再单列 xhigh / max。
+const QWEN_38_EFFORT_MAP: ReasoningEffortMap = {
+  off: null,
+  minimal: 'low',
+  low: 'low',
+  medium: 'medium',
+  high: 'xhigh',
+  xhigh: 'xhigh',
+  max: 'xhigh',
 }
 
 // Pi uses this sparse map as an override for its native level mapping. In particular,
@@ -171,13 +226,40 @@ const OPENAI_MAX_EFFORT_MAP: ReasoningEffortMap = {
   max: 'max',
 }
 
-const GROK_46_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly AgentThinkingLevel[]
+const GROK_46_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const satisfies readonly AgentThinkingLevel[]
+// Grok 4.6 起思考始终开启，官方只有 low/medium/high/xhigh（没有 off / max）。
 const GROK_46_EFFORT_MAP: ReasoningEffortMap = {
-  off: 'none',
+  off: null,
+  minimal: 'low',
   low: 'low',
   medium: 'medium',
   high: 'high',
   xhigh: 'xhigh',
+  max: 'xhigh',
+}
+
+// Grok 4.5：最高只到 high，同样不能关闭思考。
+const GROK_45_LEVELS = ['low', 'medium', 'high'] as const satisfies readonly AgentThinkingLevel[]
+const GROK_45_EFFORT_MAP: ReasoningEffortMap = {
+  off: null,
+  minimal: 'low',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'high',
+  max: 'high',
+}
+
+// Grok 4.3：可关闭思考（off → none），最高只到 high。
+const GROK_43_LEVELS = ['off', 'low', 'medium', 'high'] as const satisfies readonly AgentThinkingLevel[]
+const GROK_43_EFFORT_MAP: ReasoningEffortMap = {
+  off: 'none',
+  minimal: 'low',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'high',
+  max: 'high',
 }
 
 function normalizeDeepSeekV4Level(level: AgentThinkingLevel | undefined): AgentThinkingLevel {
@@ -202,7 +284,6 @@ function normalizeDeepSeekV4Level(level: AgentThinkingLevel | undefined): AgentT
 function normalizeK3Level(level: AgentThinkingLevel | undefined): AgentThinkingLevel {
   switch (level) {
     case 'off':
-      return 'off'
     case 'minimal':
     case 'low':
       return 'low'
@@ -223,7 +304,42 @@ function normalizeGlm52Level(level: AgentThinkingLevel | undefined): AgentThinki
 }
 
 function normalizeGlm53Level(level: AgentThinkingLevel | undefined): AgentThinkingLevel {
+  switch (level) {
+    case 'off':
+    case 'minimal':
+    case 'low':
+      return 'low'
+    case 'medium':
+    case 'high':
+      return 'high'
+    case 'xhigh':
+    case 'max':
+      return 'max'
+    default:
+      return 'high'
+  }
+}
+
+/** Kimi K2.6 / MiMo：只有开关，没有中间档。 */
+function normalizeToggleLevel(level: AgentThinkingLevel | undefined): AgentThinkingLevel {
   return level === 'off' ? 'off' : 'high'
+}
+
+/** Kimi K2.7 Code：思考强制开启，任何输入都落到唯一的「开」。 */
+function normalizeAlwaysOnLevel(_level: AgentThinkingLevel | undefined): AgentThinkingLevel {
+  return 'high'
+}
+
+function normalizeQwen38Level(level: AgentThinkingLevel | undefined): AgentThinkingLevel {
+  switch (level) {
+    case 'minimal':
+    case 'low':
+      return 'low'
+    case 'medium':
+      return 'medium'
+    default:
+      return 'high'
+  }
 }
 
 function normalizeOpenAIStandardLevel(level: AgentThinkingLevel | undefined): AgentThinkingLevel {
@@ -240,7 +356,7 @@ function normalizeOpenAIMaxLevel(level: AgentThinkingLevel | undefined): AgentTh
 
 const DEEPSEEK_V4_FLASH_PROFILE: ReasoningProfile = {
   id: 'deepseek-v4-flash',
-  levels: DEEPSEEK_V4_LEVELS,
+  levels: DEEPSEEK_V4_FLASH_LEVELS,
   defaultLevel: 'high',
   normalize: normalizeDeepSeekV4Level,
   encodings: {
@@ -250,7 +366,7 @@ const DEEPSEEK_V4_FLASH_PROFILE: ReasoningProfile = {
 
 const DEEPSEEK_V4_PRO_PROFILE: ReasoningProfile = {
   id: 'deepseek-v4-pro',
-  levels: DEEPSEEK_V4_LEVELS,
+  levels: DEEPSEEK_V4_PRO_LEVELS,
   defaultLevel: 'high',
   normalize: normalizeDeepSeekV4Level,
   encodings: {
@@ -269,6 +385,30 @@ const K3_PROFILE: ReasoningProfile = {
   },
 }
 
+/** Kimi K2.6：thinking 开关；具体请求格式沿用 catalog 的 thinkingFormat=deepseek。 */
+const KIMI_K2_6_PROFILE: ReasoningProfile = {
+  id: 'kimi-k2.6-toggle',
+  levels: KIMI_K2_6_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeToggleLevel,
+  encodings: {
+    'anthropic-messages': { kind: 'provider-toggle', effortMap: THINKING_TOGGLE_LEVEL_MAP },
+    'openai-completions': { kind: 'provider-toggle', effortMap: THINKING_TOGGLE_LEVEL_MAP },
+  },
+}
+
+/** Kimi K2.7 Code：思考强制开启，只接受 thinking.type=enabled。 */
+const KIMI_K2_7_PROFILE: ReasoningProfile = {
+  id: 'kimi-k2.7-always-on',
+  levels: KIMI_K2_7_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeAlwaysOnLevel,
+  encodings: {
+    'anthropic-messages': { kind: 'provider-toggle', effortMap: THINKING_ALWAYS_ON_LEVEL_MAP },
+    'openai-completions': { kind: 'provider-toggle', effortMap: THINKING_ALWAYS_ON_LEVEL_MAP },
+  },
+}
+
 const GLM_53_PROFILE: ReasoningProfile = {
   id: 'glm-5.3',
   levels: GLM_53_LEVELS,
@@ -276,7 +416,29 @@ const GLM_53_PROFILE: ReasoningProfile = {
   normalize: normalizeGlm53Level,
   encodings: {
     'anthropic-messages': { kind: 'anthropic-manual', effortMap: GLM_53_THINKING_LEVEL_MAP },
-    'openai-completions': { kind: 'zai-toggle', effortMap: GLM_53_THINKING_LEVEL_MAP },
+    'openai-completions': { kind: 'zai-thinking-effort', effortMap: GLM_53_THINKING_LEVEL_MAP },
+  },
+}
+
+/** Qwen3.8 起 reasoning_effort 为 low / medium / xhigh，思考仍可关闭。 */
+const QWEN_38_PROFILE: ReasoningProfile = {
+  id: 'qwen-3.8',
+  levels: QWEN_38_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeQwen38Level,
+  encodings: {
+    'openai-completions': { kind: 'qwen-thinking-effort', effortMap: QWEN_38_EFFORT_MAP },
+  },
+}
+
+/** 小米 MiMo V2.5+：thinking.type 开关，没有 effort 档位。 */
+const MIMO_PROFILE: ReasoningProfile = {
+  id: 'mimo-toggle',
+  levels: TOGGLE_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeToggleLevel,
+  encodings: {
+    'openai-completions': { kind: 'provider-toggle', effortMap: THINKING_TOGGLE_LEVEL_MAP },
   },
 }
 
@@ -301,6 +463,49 @@ const GROK_46_PROFILE: ReasoningProfile = {
   },
 }
 
+const GROK_45_PROFILE: ReasoningProfile = {
+  id: 'grok-4.5',
+  levels: GROK_45_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeOpenAIStandardLevel,
+  encodings: {
+    'openai-responses': { kind: 'openai-reasoning-effort', effortMap: GROK_45_EFFORT_MAP },
+  },
+}
+
+const GROK_43_PROFILE: ReasoningProfile = {
+  id: 'grok-4.3',
+  levels: GROK_43_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeOpenAIStandardLevel,
+  encodings: {
+    'openai-responses': { kind: 'openai-reasoning-effort', effortMap: GROK_43_EFFORT_MAP },
+  },
+}
+
+/** 更早的 GLM（4.x / 5-turbo）：只有 thinking 开关。 */
+const GLM_LEGACY_TOGGLE_PROFILE: ReasoningProfile = {
+  id: 'glm-legacy-toggle',
+  levels: TOGGLE_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeToggleLevel,
+  encodings: {
+    'anthropic-messages': { kind: 'provider-toggle', effortMap: THINKING_TOGGLE_LEVEL_MAP },
+    'openai-completions': { kind: 'provider-toggle', effortMap: THINKING_TOGGLE_LEVEL_MAP },
+  },
+}
+
+/** Qwen3.0–3.7：enable_thinking 开关，没有 effort。 */
+const QWEN_TOGGLE_PROFILE: ReasoningProfile = {
+  id: 'qwen-toggle',
+  levels: TOGGLE_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeToggleLevel,
+  encodings: {
+    'openai-completions': { kind: 'provider-toggle', effortMap: THINKING_TOGGLE_LEVEL_MAP },
+  },
+}
+
 const OPENAI_STANDARD_PROFILE: ReasoningProfile = {
   id: 'openai-reasoning-standard',
   levels: OPENAI_STANDARD_LEVELS,
@@ -312,8 +517,9 @@ const OPENAI_STANDARD_PROFILE: ReasoningProfile = {
   },
 }
 
-const OPENAI_ASTRA_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly AgentThinkingLevel[]
-const OPENAI_ASTRA_EFFORT_MAP = {
+const OPENAI_GPT6_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly AgentThinkingLevel[]
+// GPT-6 代际取消了 none / minimal：off 不产生参数，minimal 向上归到 low。
+const OPENAI_GPT6_EFFORT_MAP = {
   off: null,
   minimal: 'low',
   low: 'low',
@@ -323,14 +529,14 @@ const OPENAI_ASTRA_EFFORT_MAP = {
   max: 'max',
 } as const satisfies Record<AgentThinkingLevel, string | null>
 
-const OPENAI_ASTRA_PROFILE: ReasoningProfile = {
-  id: 'openai-reasoning-astra',
-  levels: OPENAI_ASTRA_LEVELS,
+const OPENAI_GPT6_PROFILE: ReasoningProfile = {
+  id: 'openai-reasoning-gpt6',
+  levels: OPENAI_GPT6_LEVELS,
   defaultLevel: 'high',
   normalize: normalizeOpenAIMaxLevel,
   encodings: {
-    'openai-completions': { kind: 'openai-reasoning-effort', effortMap: OPENAI_ASTRA_EFFORT_MAP },
-    'openai-responses': { kind: 'openai-reasoning-effort', effortMap: OPENAI_ASTRA_EFFORT_MAP },
+    'openai-completions': { kind: 'openai-reasoning-effort', effortMap: OPENAI_GPT6_EFFORT_MAP },
+    'openai-responses': { kind: 'openai-reasoning-effort', effortMap: OPENAI_GPT6_EFFORT_MAP },
   },
 }
 
@@ -348,23 +554,8 @@ const OPENAI_MAX_PROFILE: ReasoningProfile = {
 /**
  * Claude 5.x（含 Haiku/Sonnet/Opus/Fable）与 Opus 4.7/4.8 只接受 adaptive thinking。
  *
- * Anthropic 对这些模型发送旧版 `{ type: 'enabled', budget_tokens }` 会直接 400：
- * 「requires adaptive thinking; omit thinking or use thinking.type=adaptive and output_config.effort」。
- * 旧版 Claude 4.5 及以下仍走 manual，不能误伤。
+ * 判定逻辑在 reasoning-model-tag（家族 tag 的单一事实源），此处不再重复实现。
  */
-export function isClaudeAdaptiveThinkingModel(modelId: string): boolean {
-  // 中转站常把模型写成 `anthropic/claude-haiku-5-5` 这类带 provider 前缀的 ID；
-  // 能力判定只看模型族，不能因为前缀漏掉 adaptive 要求。
-  const normalized = modelId.trim().toLowerCase()
-  const id = normalized.includes('/') ? normalized.slice(normalized.lastIndexOf('/') + 1) : normalized
-  if (!id.startsWith('claude-')) return false
-  if (id.startsWith('claude-mythos-preview')) return true
-  // claude-<family>-5...：fable / haiku / opus / sonnet 的 5.x 代际。
-  if (/^claude-[a-z]+-5(?:-|$)/.test(id)) return true
-  // Opus 4.7 / 4.8 已切到 adaptive-only。
-  if (/^claude-opus-4-(?:7|8)(?:-|$)/.test(id)) return true
-  return false
-}
 
 const CLAUDE_ADAPTIVE_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly AgentThinkingLevel[]
 
@@ -403,47 +594,59 @@ export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   DEEPSEEK_V4_FLASH_PROFILE,
   DEEPSEEK_V4_PRO_PROFILE,
   K3_PROFILE,
+  KIMI_K2_6_PROFILE,
+  KIMI_K2_7_PROFILE,
   GLM_52_PROFILE,
   GLM_53_PROFILE,
+  GLM_LEGACY_TOGGLE_PROFILE,
+  GROK_43_PROFILE,
+  GROK_45_PROFILE,
   GROK_46_PROFILE,
+  QWEN_38_PROFILE,
+  QWEN_TOGGLE_PROFILE,
+  MIMO_PROFILE,
   OPENAI_STANDARD_PROFILE,
   OPENAI_MAX_PROFILE,
-  OPENAI_ASTRA_PROFILE,
+  OPENAI_GPT6_PROFILE,
   CLAUDE_ADAPTIVE_PROFILE,
 ]
 
-/** 仅按模型 ID 匹配，再以实际 transport 确认该模型是否有已验证的协议 encoding。 */
+/** 能力家族 tag → 档位 profile。同族不同 SKU 共用同一份档位语义。 */
+const TAG_TO_PROFILE: Readonly<Record<ReasoningModelTag, ReasoningProfile>> = {
+  'openai-gpt-5-standard': OPENAI_STANDARD_PROFILE,
+  'openai-gpt-5-max': OPENAI_MAX_PROFILE,
+  'openai-gpt-6': OPENAI_GPT6_PROFILE,
+  'openai-o-series': OPENAI_STANDARD_PROFILE,
+  'claude-adaptive': CLAUDE_ADAPTIVE_PROFILE,
+  'deepseek-v4-flash': DEEPSEEK_V4_FLASH_PROFILE,
+  'deepseek-v4-pro': DEEPSEEK_V4_PRO_PROFILE,
+  'kimi-k3': K3_PROFILE,
+  'kimi-k2-6-toggle': KIMI_K2_6_PROFILE,
+  'kimi-k2-7-always-on': KIMI_K2_7_PROFILE,
+  'glm-5.2': GLM_52_PROFILE,
+  'glm-5.3': GLM_53_PROFILE,
+  'glm-legacy-toggle': GLM_LEGACY_TOGGLE_PROFILE,
+  'grok-4.3': GROK_43_PROFILE,
+  'grok-4.5': GROK_45_PROFILE,
+  'grok-4.6': GROK_46_PROFILE,
+  'qwen-3.8': QWEN_38_PROFILE,
+  'qwen-toggle': QWEN_TOGGLE_PROFILE,
+  'mimo-toggle': MIMO_PROFILE,
+}
+
+/**
+ * 解析模型当前 transport 的推理 profile。
+ *
+ * 先由 reasoning-model-tag 把模型 ID 归入能力家族（代际继承新 SKU），
+ * 再用实际 transport 确认该家族有没有已验证的请求编码：
+ * 同一模型在 Anthropic / OpenAI 两套端点上可用档位可以不同（如 Kimi K3）。
+ * 未打标或该 transport 无编码时返回 undefined，由调用方回退到 Pi catalog。
+ */
 export function resolveReasoningProfile(input: ResolveReasoningProfileInput): ReasoningProfile | undefined {
-  const modelId = input.modelId?.toLowerCase()
-  if (!modelId) return undefined
-
-  const isOpenAITransport = input.transport === 'openai-completions' || input.transport === 'openai-responses'
-  const isOpenAIReasoningModel = !modelId.endsWith('-chat-latest')
-    && (modelId.startsWith('gpt-5') || modelId === 'gpt-6-astra' || /^(o1|o3|o4)(?:-|$)/.test(modelId))
-  // DeepSeek 的 catalog ID、旧代写法与官方短名同代同协议，
-  // 先归一再匹配档位，避免写法不同丢失 output_config.effort 映射。
-  // 归一后 Flash 档的 ID 形如 `deepseek-flash`（0.86 起）或 `deepseek-flash-*`。
-  const deepseekModelId = resolveDeepSeekV4ModelId(modelId) ?? modelId
-  const profile = /^deepseek-flash(?:-|$)/.test(deepseekModelId)
-    ? DEEPSEEK_V4_FLASH_PROFILE
-    : /^deepseek-v4-pro(?:-|$)/.test(deepseekModelId)
-      ? DEEPSEEK_V4_PRO_PROFILE
-      : /^(?:k3(?:-256k)?|kimi-k3)$/.test(modelId)
-        ? K3_PROFILE
-        : modelId === 'glm-5.3'
-          ? GLM_53_PROFILE
-          : modelId === 'glm-5.2'
-            ? GLM_52_PROFILE
-            : modelId === 'grok-4.6'
-              ? GROK_46_PROFILE
-              : isClaudeAdaptiveThinkingModel(modelId)
-                ? CLAUDE_ADAPTIVE_PROFILE
-                : isOpenAITransport && isOpenAIReasoningModel
-                  ? modelId === 'gpt-6-astra' ? OPENAI_ASTRA_PROFILE
-                    : /^gpt-5\.6(?:-|$)/.test(modelId) ? OPENAI_MAX_PROFILE : OPENAI_STANDARD_PROFILE
-                  : undefined
-
-  return profile?.encodings[input.transport] ? profile : undefined
+  const tag = resolveReasoningModelTag(input.modelId)
+  if (!tag) return undefined
+  const profile = TAG_TO_PROFILE[tag]
+  return profile.encodings[input.transport] ? profile : undefined
 }
 
 const PI_EXTENDED_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly AgentThinkingLevel[]
@@ -563,6 +766,51 @@ export function normalizeReasoningLevel(
   level: AgentThinkingLevel | undefined,
 ): AgentThinkingLevel | undefined {
   return profile ? profile.normalize(level) : level
+}
+
+/**
+ * 把请求档位收敛到 profile 实际支持的档位（与 Pi clampThinkingLevel 同序：先向上、再向下）。
+ *
+ * 全局设置可能是上一个模型留下的档位（例如从 GPT-6 切到 GPT-5.5 时仍带 max），
+ * 直接透传会发出服务端不接受的 effort。
+ */
+export function clampReasoningProfileLevel(
+  profile: ReasoningProfile,
+  level: AgentThinkingLevel,
+): AgentThinkingLevel {
+  if (profile.levels.includes(level)) return level
+  const requestedIndex = PI_EXTENDED_THINKING_LEVELS.indexOf(level)
+  if (requestedIndex === -1) return profile.defaultLevel
+  for (let index = requestedIndex; index < PI_EXTENDED_THINKING_LEVELS.length; index += 1) {
+    const candidate = PI_EXTENDED_THINKING_LEVELS[index]
+    if (candidate && profile.levels.includes(candidate)) return candidate
+  }
+  for (let index = requestedIndex - 1; index >= 0; index -= 1) {
+    const candidate = PI_EXTENDED_THINKING_LEVELS[index]
+    if (candidate && profile.levels.includes(candidate)) return candidate
+  }
+  return profile.defaultLevel
+}
+
+/**
+ * 取某个 profile 在当前 transport 上「最低的非关闭档位」实际请求值。
+ *
+ * 标题生成这类辅助请求需要尽量便宜的思考：不能直接发 `none`，
+ * 因为 GPT-6 / o 系列 / Grok 等服务端会拒绝该值；也不能发 `off`，
+ * 因为部分模型（GPT-6、Grok、Kimi K3）根本不支持关闭思考。
+ */
+export function resolveLowestReasoningEffort(
+  profile: ReasoningProfile | undefined,
+  transport: ReasoningTransport,
+): string | undefined {
+  const encoding = profile?.encodings[transport]
+  if (!profile || !encoding) return undefined
+  for (const level of profile.levels) {
+    if (level === 'off') continue
+    const mapped = encoding.effortMap[level]
+    if (typeof mapped === 'string') return mapped
+  }
+  return undefined
 }
 
 /**

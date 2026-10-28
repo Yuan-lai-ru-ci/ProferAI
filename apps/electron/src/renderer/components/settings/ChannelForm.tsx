@@ -255,7 +255,13 @@ function describeEndpointMismatch(baseUrl: string, provider: ProviderType, xaiAp
   if ((provider === 'openai' || provider === 'deepseek') && /\/messages$/.test(path)) {
     return '；这是 Anthropic 协议的端点，此渠道走 OpenAI 兼容协议，请改用「Anthropic 兼容格式」'
   }
-  if ((provider === 'openai' || provider === 'deepseek') && /\/responses$/.test(path)) {
+  if (provider === 'openai' && /\/responses$/.test(path)) {
+    return '；检测到 Responses 端点，将按 Responses 协议请求'
+  }
+  if (provider === 'custom' && /\/responses$/.test(path)) {
+    return '；检测到 Responses 端点，将按 Responses 协议请求，无需改用其他渠道类型'
+  }
+  if (provider === 'deepseek' && /\/responses$/.test(path)) {
     return '；这是 Responses 协议的端点，请改用「OpenAI Responses 格式」渠道'
   }
   if (provider === 'xai' && xaiApiProtocol === 'chat-completions' && /\/responses$/.test(path)) {

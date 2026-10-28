@@ -7,7 +7,7 @@
  */
 
 import type { ProviderType } from '@profer/shared'
-import { resolveReasoningProfile } from '@profer/shared'
+import { resolveLowestReasoningEffort, resolveReasoningProfile } from '@profer/shared'
 import type {
   ContinuationMessage,
   ImageAttachmentData,
@@ -395,8 +395,13 @@ export class OpenAIResponsesAdapter implements ProviderAdapter {
       // 与 Chat Completions 同理：显式关闭流式，避免网关返回 SSE。
       stream: false,
     }
-    const reasoningEffort = resolveReasoningProfile({ modelId: input.modelId, transport: 'openai-responses' })
-      ?.encodings['openai-responses']?.effortMap.off
+    const reasoningProfile = resolveReasoningProfile({ modelId: input.modelId, transport: 'openai-responses' })
+    // 优先用 off 的显式值（gpt-5.x 的 none）；GPT-6 / Grok / o 系列没有 off，
+    // 退回最低的非关闭档位，避免标题请求拿到服务端不接受的 effort。
+    const offEffort = reasoningProfile?.encodings['openai-responses']?.effortMap.off
+    const reasoningEffort = typeof offEffort === 'string'
+      ? offEffort
+      : resolveLowestReasoningEffort(reasoningProfile, 'openai-responses')
     if (typeof reasoningEffort === 'string') {
       body.reasoning = { effort: reasoningEffort }
     }

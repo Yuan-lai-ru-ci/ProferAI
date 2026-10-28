@@ -7,13 +7,15 @@ describe('xAI Grok reasoning profile', () => {
 
     expect(inferReasoningTransport('xai')).toBe('openai-responses')
     expect(profile?.id).toBe('grok-4.6')
-    expect(profile?.levels).toEqual(['off', 'low', 'medium', 'high', 'xhigh'])
+    // xAI 当前模型「始终推理」：没有关闭档，官方只列 low/medium/high/xhigh（无 max）。
+    expect(profile?.levels).toEqual(['low', 'medium', 'high', 'xhigh'])
     expect(profile?.encodings['openai-responses']?.effortMap).toMatchObject({
-      off: 'none',
+      off: null,
       low: 'low',
       medium: 'medium',
       high: 'high',
       xhigh: 'xhigh',
+      max: 'xhigh',
     })
   })
 })

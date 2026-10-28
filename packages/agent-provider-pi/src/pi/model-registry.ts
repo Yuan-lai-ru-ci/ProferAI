@@ -10,6 +10,7 @@ import {
   CODEX_GPT_54_MINI_CONTEXT_WINDOW,
   extractZhipuCodingTeamApiToken,
   isDeepSeekV4Model,
+  normalizeModelIdTail,
   resolveDeepSeekV4ModelId,
   supportsVerified1MContext,
   type CodexOAuthCredentials,
@@ -88,6 +89,11 @@ interface PiModelDefaults {
   maxTokens: number
 }
 
+/** resolvePiModelDefaults 实际会读取的 catalog 字段（允许来自 SKU 元数据补齐）。 */
+type PiModelMetadata = Partial<Pick<PiCatalogModel, 'reasoning' | 'thinkingLevelMap' | 'input' | 'cost' | 'contextWindow' | 'maxTokens'>> & {
+  compat?: PiCatalogModel['compat']
+}
+
 const ZERO_MODEL_COST: PiModelCost = {
   input: 0,
   output: 0,
@@ -105,6 +111,39 @@ const CODEX_56_CONTEXT_WINDOW = 1_050_000
 const CODEX_THINKING_LEVEL_MAP = { xhigh: 'xhigh', minimal: 'low' } as const
 const OFFICIAL_GPT_56_MODEL_IDS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])
 const GPT_6_ASTRA_MODEL_ID = 'gpt-6-astra'
+/**
+ * 官方渠道已确认 1.05M 上下文的 GPT-6 代际 SKU。
+ *
+ * gpt-6.1-sol 尚未进入 Pi catalog，不靠 catalog 的 272K 兜底，也不对自建网关做能力假设：
+ * 只有官方代管渠道按已验证的 1.05M 注册（与 GPT-5.6 系列同一规则）。
+ */
+const OFFICIAL_GPT_6_MODEL_IDS = new Set([GPT_6_ASTRA_MODEL_ID, 'gpt-6.1-sol'])
+
+/**
+ * 尚未进入 Pi catalog 的官方 SKU 元数据（按模型 ID 归一后匹配）。
+ *
+ * 这些数据来自厂商官方文档，用作「catalog 未收录时的权威补齐」：
+ * 没有它们，新模型会静默拿到 200K 窗口 / 64K 输出 / 零成本 / 无图片能力。
+ * 刻意不写 contextWindow 的 SKU 表示「只在官方渠道按已验证明细注册」，
+ * 自建网关仍保留保守默认值。
+ */
+const KNOWN_MODEL_METADATA: Readonly<Record<string, PiModelMetadata>> = {
+  'gpt-6.1-sol': {
+    reasoning: true,
+    input: ['text', 'image'],
+    // 官方价：输入 $2 / 缓存命中 $0.10 / 缓存写入 $2.50 / 输出 $10（每 1M token）。
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+    maxTokens: 128_000,
+  },
+  'kimi-k3.1-pro': {
+    reasoning: true,
+    input: ['text', 'image'],
+    // 官方价：输入 $2 / 缓存命中 $0.20 / 输出 $10；上下文 1M，默认输出 131072。
+    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 131_072,
+  },
+}
 
 /** Pi 内置 OpenAI/Codex catalog 当前把这三个已验证 SKU 误标为 272K。 */
 function resolveVerifiedGpt56ContextWindow(modelId?: string): number | undefined {
@@ -147,6 +186,20 @@ const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
   {
     id: 'gpt-5.5',
     contextWindow: CODEX_56_CONTEXT_WINDOW,
+  },
+  {
+    id: 'gpt-6.1-sol',
+    name: 'GPT-6.1 Sol',
+    api: 'openai-codex-responses',
+    provider: 'openai-codex',
+    baseUrl: CODEX_BASE_URL,
+    reasoning: true,
+    // GPT-6 代际：取消 none / minimal，只保留 low/medium/high/xhigh/max。
+    thinkingLevelMap: { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+    input: ['text', 'image'],
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
   },
   {
     id: 'gpt-5.6-sol',
@@ -210,7 +263,11 @@ function toReasoningTransport(api: Api): ReasoningTransport {
 }
 
 /** Compiles the shared model profile into Pi catalog compatibility metadata. */
-function compilePiReasoningCapabilities(api: Api, modelId: string | undefined): Pick<PiModelDefaults, 'compat' | 'thinkingLevelMap'> | undefined {
+function compilePiReasoningCapabilities(
+  api: Api,
+  modelId: string | undefined,
+  catalogCompat?: PiModelDefaults['compat'],
+): Pick<PiModelDefaults, 'compat' | 'thinkingLevelMap'> | undefined {
   const transport = toReasoningTransport(api)
   const profile = resolveReasoningProfile({ modelId, transport })
   const encoding = profile?.encodings[transport]
@@ -219,15 +276,21 @@ function compilePiReasoningCapabilities(api: Api, modelId: string | undefined): 
   const thinkingLevelMap = encoding.effortMap as PiCatalogModel['thinkingLevelMap']
   switch (encoding.kind) {
     case 'adaptive-effort':
-      return { compat: { forceAdaptiveThinking: true }, thinkingLevelMap }
+      return { compat: { ...catalogCompat, forceAdaptiveThinking: true }, thinkingLevelMap }
     case 'deepseek-output-effort':
     case 'anthropic-manual':
-      return { thinkingLevelMap }
+      return { compat: catalogCompat, thinkingLevelMap }
     case 'openai-reasoning-effort':
-      return { compat: { supportsReasoningEffort: true }, thinkingLevelMap }
+      return { compat: { ...catalogCompat, supportsReasoningEffort: true }, thinkingLevelMap }
+    case 'qwen-thinking-effort':
+      return {
+        compat: { ...catalogCompat, supportsReasoningEffort: true, thinkingFormat: 'qwen' },
+        thinkingLevelMap,
+      }
     case 'zai-thinking-effort':
       return {
         compat: {
+          ...catalogCompat,
           supportsDeveloperRole: false,
           supportsReasoningEffort: true,
           thinkingFormat: 'zai',
@@ -235,16 +298,10 @@ function compilePiReasoningCapabilities(api: Api, modelId: string | undefined): 
         },
         thinkingLevelMap,
       }
-    case 'zai-toggle':
-      return {
-        compat: {
-          supportsDeveloperRole: false,
-          supportsReasoningEffort: false,
-          thinkingFormat: 'zai',
-          zaiToolStream: true,
-        },
-        thinkingLevelMap,
-      }
+    case 'provider-toggle':
+      // 只有开关的模型：请求格式完全沿用上游 catalog（thinkingFormat / maxTokensField 等），
+      // 这里只覆写档位表。丢掉 catalog compat 会让 Kimi K2.x 的 thinking 参数消失。
+      return { compat: catalogCompat, thinkingLevelMap }
   }
 }
 
@@ -317,19 +374,29 @@ async function findPiCatalogModel(provider: ProviderType, modelId: string): Prom
   // DeepSeek 旧代写法（deepseek-v4-flash）与官方短名（deepseek-pro）先归一到 catalog 正式 ID：
   // 只借它的元数据（窗口/成本/最大输出/思考档位/图片能力），注册与请求仍用用户填的原始 ID。
   const catalogModelId = resolveDeepSeekV4ModelId(modelId) ?? modelId
+  // 查找顺序：原始 ID 优先（第三方网关常有自己的同名条目与 thinkingFormat），
+  // 归一后的官方 ID 只作为兜底——否则 deepseek-v4.1-flash 在 qwen-token-plan 里
+  // 会先命中 DeepSeek 官方条目，把网关需要的 thinkingFormat=qwen 换掉。
+  const catalogIds = catalogModelId === modelId ? [modelId] : [modelId, catalogModelId]
+  const candidateProviders = candidatePiProviders(provider)
   const checked = new Set<string>()
-  for (const candidate of candidatePiProviders(provider)) {
-    checked.add(candidate)
-    const model = findCatalogModelById(await getCatalogModels(candidate), catalogModelId)
-    if (model) return model
+
+  for (const catalogId of catalogIds) {
+    for (const candidate of candidateProviders) {
+      checked.add(candidate)
+      const model = findCatalogModelById(await getCatalogModels(candidate), catalogId)
+      if (model) return model
+    }
   }
 
-  // 兼容自定义代理和 Anthropic-compatible：模型 id 常常仍是官方 id。
   const { getProviders } = await loadPiAiCompat()
-  for (const candidate of getProviders()) {
-    if (checked.has(candidate)) continue
-    const model = findCatalogModelById(await getCatalogModels(candidate), catalogModelId)
-    if (model) return model
+  for (const catalogId of catalogIds) {
+    // 兼容自定义代理和 Anthropic-compatible：模型 id 常常仍是官方 id。
+    for (const candidate of getProviders()) {
+      if (checked.has(candidate)) continue
+      const model = findCatalogModelById(await getCatalogModels(candidate), catalogId)
+      if (model) return model
+    }
   }
   return undefined
 }
@@ -401,18 +468,29 @@ async function resolvePiModelDefaults(
   host: PiModelRegistryHost = {},
 ): Promise<PiModelDefaults> {
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
+  // 官方新 SKU 常常还没进 Pi catalog：用 Profer 维护的元数据补齐窗口 / 输出 / 价格，
+  // 否则新模型会静默拿到 200K / 64K / 零成本，与它实际的官方规格不符。
+  const knownMetadata = input.model
+    ? KNOWN_MODEL_METADATA[normalizeModelIdTail(input.model) ?? '']
+    : undefined
+  const modelMetadata: PiModelMetadata | undefined = catalogModel && knownMetadata
+    ? { ...catalogModel, ...knownMetadata }
+    : catalogModel ?? knownMetadata
   const api = normalizePiApi(input.provider, input.baseUrl)
-  const providerSpecificCapabilities = compilePiReasoningCapabilities(api, input.model)
+  // catalog compat 必须参与合并：profile 只负责档位与 effort 编码，
+  // thinkingFormat / requiresReasoningContentOnAssistantMessages 等上游字段不能因命中 profile 而丢。
+  const providerSpecificCapabilities = compilePiReasoningCapabilities(api, input.model, modelMetadata?.compat)
   const modelId = input.model?.toLowerCase()
   const isOfficialGpt56 = input.provider === 'openai'
     && input.channelId != null
     && host.isOfficialManagedChannel?.({ id: input.channelId }) === true
     && modelId != null
     && OFFICIAL_GPT_56_MODEL_IDS.has(modelId)
-  const isOfficialGpt6Astra = input.provider === 'openai'
+  const isOfficialGpt6 = input.provider === 'openai'
     && input.channelId != null
     && host.isOfficialManagedChannel?.({ id: input.channelId }) === true
-    && modelId === GPT_6_ASTRA_MODEL_ID
+    && modelId != null
+    && OFFICIAL_GPT_6_MODEL_IDS.has(modelId)
   const isGlm53 = modelId === 'glm-5.3'
   const isVolcengineGlm5x = (input.provider === 'doubao' || input.provider === 'ark-coding-plan') && (modelId === 'glm-5.2' || modelId === 'glm-5.3')
   // 1M 按「代际默认」判定，但同样要求 provider 已验证（如 deepseek / zhipu-coding / xiaomi…）：
@@ -426,8 +504,8 @@ async function resolvePiModelDefaults(
     && supportsVerified1MContext(input.model, 'deepseek')
   const rawCatalogContextWindow = isRelayedDeepSeekGeneration
     ? DEFAULT_CONTEXT_WINDOW
-    : (catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW)
-  const computedContextWindow = isOfficialGpt56 || isOfficialGpt6Astra
+    : (modelMetadata?.contextWindow ?? DEFAULT_CONTEXT_WINDOW)
+  const computedContextWindow = isOfficialGpt56 || isOfficialGpt6
     ? CODEX_56_CONTEXT_WINDOW
     : isVerifiedOneMillionContext
       ? Math.max(rawCatalogContextWindow, ONE_MILLION_CONTEXT_WINDOW)
@@ -435,17 +513,17 @@ async function resolvePiModelDefaults(
   // 渠道模型上的 1M 勾选最后统一生效（强开抬到 1M、强关压回保守窗口）。
   const contextWindow = applyModel1MContextPreference(computedContextWindow, input.context1m)
   return {
-    reasoning: catalogModel?.reasoning ?? true,
-    thinkingLevelMap: providerSpecificCapabilities?.thinkingLevelMap ?? catalogModel?.thinkingLevelMap,
+    reasoning: modelMetadata?.reasoning ?? true,
+    thinkingLevelMap: providerSpecificCapabilities?.thinkingLevelMap ?? modelMetadata?.thinkingLevelMap,
     compat: applyOpenAICompatibleFinishReasonFallback(
       input,
       api,
-      providerSpecificCapabilities?.compat,
+      providerSpecificCapabilities?.compat ?? modelMetadata?.compat,
     ),
-    input: catalogModel ? [...catalogModel.input] : ['text', 'image'],
-    cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
+    input: modelMetadata?.input ? [...modelMetadata.input] : ['text', 'image'],
+    cost: modelMetadata?.cost ? { ...modelMetadata.cost } : { ...ZERO_MODEL_COST },
     contextWindow,
-    maxTokens: isVolcengineGlm5x ? VOLCENGINE_GLM_MAX_TOKENS : (catalogModel?.maxTokens ?? (isGlm53 ? GLM_53_MAX_TOKENS : DEFAULT_MAX_TOKENS)),
+    maxTokens: isVolcengineGlm5x ? VOLCENGINE_GLM_MAX_TOKENS : (modelMetadata?.maxTokens ?? (isGlm53 ? GLM_53_MAX_TOKENS : DEFAULT_MAX_TOKENS)),
   }
 }
 

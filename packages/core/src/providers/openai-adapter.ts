@@ -11,7 +11,7 @@
  */
 
 import type { ProviderType } from '@profer/shared'
-import { resolveReasoningProfile } from '@profer/shared'
+import { resolveLowestReasoningEffort, resolveReasoningProfile } from '@profer/shared'
 import type {
   ProviderAdapter,
   ProviderRequest,
@@ -281,7 +281,10 @@ export class OpenAIAdapter implements ProviderAdapter {
     const modelId = input.modelId.toLowerCase()
     const isDeepSeekV4 = /^(?:deepseek-(?:v4-)?(?:flash|pro)|deepseek-v4)/.test(modelId)
     const reasoningProfile = resolveReasoningProfile({ modelId, transport: 'openai-completions' })
-    const isLikelyOpenAIReasoning = Boolean(reasoningProfile) || /^gpt-6(?:\.\d+)?(?:-|$)/.test(modelId)
+    // 标题请求只要最便宜的一档思考。不能硬发 `none`：GPT-6 代际与 o 系列已取消该值，
+    // 发了会被服务端拒绝，标题生成直接失败。
+    const titleReasoningEffort = resolveLowestReasoningEffort(reasoningProfile, 'openai-completions')
+      ?? (/^gpt-6(?:\.\d+)?(?:-|$)/.test(modelId) ? 'low' : undefined)
 
     return {
       url,
@@ -297,7 +300,7 @@ export class OpenAIAdapter implements ProviderAdapter {
         // 标题请求按 JSON 解析会报 `Unexpected token 'd'`。
         stream: false,
         ...(isDeepSeekV4 ? { thinking: { type: 'disabled' } } : {}),
-        ...(isLikelyOpenAIReasoning ? { reasoning_effort: 'none' } : {}),
+        ...(titleReasoningEffort ? { reasoning_effort: titleReasoningEffort } : {}),
       }),
     }
   }

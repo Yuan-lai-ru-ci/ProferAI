@@ -40,6 +40,9 @@ export * from './lark'
 // 推理 profile 相关类型
 export * from './reasoning-profile'
 
+// 模型能力家族 tag（推理档位的家族判定单一事实源）
+export * from './reasoning-model-tag'
+
 // DeepSeek 官方短名 ↔ 正式 ID 别名
 export * from './deepseek-model-alias'
 
