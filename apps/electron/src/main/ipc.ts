@@ -227,6 +227,7 @@ import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaul
 import { getAgentSessionNavigationIndex } from './lib/agent-navigation-index'
 import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
+import { setQuoteableSelection } from './menu'
 import { buildArchiveToggleUpdates } from './lib/agent-unread-policy'
 import { getAgentUnreadPolicyMode } from './lib/agent-unread-mode'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
@@ -1806,6 +1807,32 @@ export function registerIpcHandlers(): void {
     async (_, id: string): Promise<AgentSessionMeta | null> => {
       if (typeof id !== 'string' || !id.trim()) return null
       return getAgentSessionMeta(id) ?? null
+    }
+  )
+
+  // 渲染进程上报「当前选区是否可引用」：只用于右键菜单是否出现「引用到输入框」。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SET_QUOTEABLE_SELECTION,
+    async (event, enabled: boolean): Promise<void> => {
+      setQuoteableSelection(event.sender.id, Boolean(enabled))
+    }
+  )
+
+  // 更新会话队列自动发送开关。该设置与 Agent 是否运行无关，停止按钮必须始终能完成。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_QUEUE_AUTO_SEND,
+    async (event, sessionId: string, enabled: boolean): Promise<AgentSessionMeta> => {
+      assertSensitiveAgentIpcSender(event)
+      if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 200) {
+        throw new Error('Agent 会话标识无效')
+      }
+      if (typeof enabled !== 'boolean') {
+        throw new Error(`无效的队列自动发送状态: ${String(enabled)}`)
+      }
+      if (!getAgentSessionMeta(sessionId)) {
+        throw new Error(`Agent 会话不存在: ${sessionId}`)
+      }
+      return updateAgentSessionUiMeta(sessionId, { autoQueueSendEnabled: enabled })
     }
   )
 

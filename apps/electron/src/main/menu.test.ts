@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createTextContextMenuTemplate, type TextContextMenuParams } from './menu'
+import { createTextContextMenuTemplate, QUOTE_SELECTION_MENU_ID, type TextContextMenuParams } from './menu'
 
 function makeParams(overrides: Partial<TextContextMenuParams> = {}): TextContextMenuParams {
   return {
@@ -66,5 +66,44 @@ describe('文本右键菜单', () => {
       label: '粘贴并匹配样式',
       enabled: true,
     })
+  })
+})
+
+describe('右键菜单：引用到输入框', () => {
+  test('Given 可引用区域的文本选区 When 右键 Then 菜单顶部出现引用项，复制仍然保留', () => {
+    const template = createTextContextMenuTemplate(
+      makeParams({
+        selectionText: '要引用的文字',
+        editFlags: { ...makeParams().editFlags, canCopy: true },
+      }),
+      'win32',
+      { quoteSelectionEnabled: true },
+    )
+
+    expect(template[0]).toMatchObject({ id: QUOTE_SELECTION_MENU_ID, label: '引用到输入框', enabled: true })
+    expect(template[1]).toMatchObject({ type: 'separator' })
+    expect(template[2]).toMatchObject({ role: 'copy', label: '复制' })
+  })
+
+  test('Given 不可引用区域 When 右键 Then 不出现引用项', () => {
+    const template = createTextContextMenuTemplate(
+      makeParams({ selectionText: '文字', editFlags: { ...makeParams().editFlags, canCopy: true } }),
+      'win32',
+      { quoteSelectionEnabled: false },
+    )
+    expect(template.some((item) => item.id === QUOTE_SELECTION_MENU_ID)).toBe(false)
+  })
+
+  test('Given 可引用标记但当前没有选区 When 右键 Then 不创建菜单', () => {
+    expect(createTextContextMenuTemplate(makeParams(), 'win32', { quoteSelectionEnabled: true })).toEqual([])
+  })
+
+  test('Given 输入框内选区 When 右键 Then 走编辑菜单，不加引用项', () => {
+    const template = createTextContextMenuTemplate(
+      makeParams({ isEditable: true, selectionText: '草稿' }),
+      'win32',
+      { quoteSelectionEnabled: true },
+    )
+    expect(template.some((item) => item.id === QUOTE_SELECTION_MENU_ID)).toBe(false)
   })
 })

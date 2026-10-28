@@ -4,8 +4,8 @@ import { buildQuotedSelectionsPrefix } from '@/lib/quoted-selection'
 /**
  * 发送前的文本拼装：正文 + 待发送引用列表 → 最终交给主进程的文本。
  *
- * 引用列表是会话级待发送缓冲（见 `quotedSelectionsMapAtom`），发送时整组消费；
- * 这里只负责按列表顺序把引用块前缀拼到正文前面，不持有任何队列状态。
+ * 引用以 `[n]` 胶囊内联在正文里（编辑器节点），发送时按编号取出；
+ * 这里只负责按 ref 顺序把引用块前缀拼到正文前面，不持有任何引用状态。
  */
 
 /**
@@ -70,10 +70,12 @@ export interface AgentMessageSendPayload {
 }
 
 /**
- * 拼装最终发送文本：顺序固定为「引用块们 → 正文」。
+ * 拼装最终发送文本：顺序固定为「引用块们 → 正文（含 `[n]` 标记）」。
  *
- * `rawText` 保留 mention 原文（用于持久化气泡展示），`sdkText` 剥掉 mention 标记
- * （模型只需要结构化字段，不需要 `/skill:` 这类前缀）。
+ * - 引用块按 `ref` 升序展开，块上带同一个 `ref`，模型据此把正文里的 `[2]` 对上具体哪段。
+ * - 正文里的 `[n]` **必须保留**：用户就是靠它指代引用的（「按 [2] 改」），删掉等于毁掉语义。
+ * - `rawText` 保留 mention 原文（用于持久化气泡展示），`sdkText` 剥掉 mention 标记
+ *   （模型只需要结构化字段，不需要 `/skill:` 这类前缀）。
  */
 export function buildAgentMessagePayload(
   text: string,
@@ -81,7 +83,8 @@ export function buildAgentMessagePayload(
 ): AgentMessageSendPayload {
   const trimmed = text.trim()
   const mentions = parseMessageMentions(trimmed)
-  const prefix = buildQuotedSelectionsPrefix(quotedSelections)
+  const ordered = [...quotedSelections].sort((a, b) => (a.ref ?? 0) - (b.ref ?? 0))
+  const prefix = buildQuotedSelectionsPrefix(ordered)
 
   return {
     rawText: `${prefix}${trimmed}`.trim(),

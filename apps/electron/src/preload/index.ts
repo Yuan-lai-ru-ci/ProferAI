@@ -732,6 +732,14 @@ export interface ElectronAPI {
   /** 获取单个 Agent 会话 meta（归档会话兜底读取；不存在返回 null） */
   getAgentSessionMeta: (id: string) => Promise<AgentSessionMeta | null>
 
+  /** 上报当前选区是否位于可引用区域（决定右键菜单是否出现「引用到输入框」） */
+  setQuoteableSelection: (enabled: boolean) => Promise<void>
+  /** 用户从右键菜单点了「引用到输入框」 */
+  onAgentQuoteSelection: (callback: () => void) => () => void
+
+  /** 更新指定会话的队列自动发送开关 */
+  updateAgentQueueAutoSend: (sessionId: string, enabled: boolean) => Promise<import('@profer/shared').AgentSessionMeta>
+
   /** 轻量：对话 + Agent 会话的归档计数（不传输 meta 列表） */
   getArchivedCounts: () => Promise<{ conversations: number; agentSessions: number }>
 
@@ -2361,6 +2369,20 @@ const electronAPI: ElectronAPI = {
 
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, presetId)
+  },
+
+  updateAgentQueueAutoSend: (sessionId: string, enabled: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_QUEUE_AUTO_SEND, sessionId, enabled)
+  },
+
+  setQuoteableSelection: (enabled: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_QUOTEABLE_SELECTION, enabled)
+  },
+
+  onAgentQuoteSelection: (callback: () => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(AGENT_IPC_CHANNELS.QUOTE_SELECTION_REQUEST, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.QUOTE_SELECTION_REQUEST, listener)
   },
 
   // Agent 预设

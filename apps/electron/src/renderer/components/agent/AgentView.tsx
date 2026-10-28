@@ -68,7 +68,7 @@ import { countRunningDelegations } from '@/domains/agent-runtime/agent-runtime-d
 import { updateComposerRuntime, updateComposerSettings, openComposerFileDialog, openComposerFolderDialog, updateAgentComposerModel, listComposerPresets, rebindComposerPreset, getComposerReasoningCapability, attachComposerDirectory } from '@/domains/composer/composer-api'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
-import { autoPreviewEnabledAtom, previewFileMapAtom, quotedSelectionsMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
+import { autoPreviewEnabledAtom, previewFileMapAtom, pendingQuoteInsertMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
 import { openFilePreviewTabForSession } from '@/components/diff/preview-opener'
 import type { AgentInterruptionState } from '@/atoms/preview-atoms'
 import {
@@ -113,6 +113,8 @@ import {
   allPendingExitPlanRequestsAtom,
   finalizeStreamingActivities,
   workspaceCapabilitiesVersionAtom,
+  agentMessageQueueAtomFamily,
+  agentQueueAutoSendMapAtom,
 } from '@/atoms/agent-atoms'
 import { requestConversationFollowAtom } from '@/atoms/conversation-scroll-intents'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
@@ -143,16 +145,26 @@ const AGENT_REFRESH_HEADROOM = 100
 /** 内存缓存只保留尾部窗口，防止随用户加载更多历史无限膨胀 */
 const AGENT_CACHE_WINDOW = DESKTOP_AGENT_PAGE_SIZE + AGENT_REFRESH_HEADROOM
 /** 无待发送引用时复用的稳定空数组，避免每次渲染产生新引用 */
-const EMPTY_QUOTED_SELECTIONS: QuotedSelection[] = []
 
 import { canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, MAX_ATTACHMENT_SIZE, isAgentPresetToolGroupDisabled, parseGoalCommand } from '@profer/shared'
 import { fileToBase64, formatFileNames, getFileBaseName, getFileParentPath, isMissingAttachmentData } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
-import { QuotedSelectionList } from './QuotedSelectionList'
 import { AgentSendButton } from './AgentSendButton'
 import { normalizeAgentHistoryRefresh, normalizeAgentHistoryResult } from './agent-history-pagination'
 import { clearSessionReferenceDragState, getSessionReferenceDragData, canReferenceDraggedSession } from '@/lib/session-reference-drag'
-import { buildQuotedSelectionBlock, buildQuotedSelectionsPrefix, getQuotedSelectionKey } from '@/lib/quoted-selection'
+import { buildQuotedSelectionBlock, buildQuotedSelectionsPrefix, collectQuotedSelectionsFromTexts, parseQuotedSelectionRefs, quotedSelectionFromParsedRef, stripQuoteMarkers } from '@/lib/quoted-selection'
+import {
+  createAgentQueuedMessage,
+  moveQueuedMessage,
+  removeQueuedMessage,
+  restoreQueuedMessageToFront,
+  shouldRestoreQueuedMessageAfterFailure,
+  queuedTextToParagraphHtml,
+  type QueueDropPlacement,
+} from '@/lib/agent-message-queue'
+import { AUTO_SEND_RETRY_INTERVAL_MS, shouldAutoSendQueueHead } from '@/lib/agent-autosend-turn'
+import { AgentMessageQueue } from './AgentMessageQueue'
+import { useQuoteSourceHighlight } from '@/hooks/useQuoteSourceHighlight'
 import {
   buildAgentMessagePayload,
   isAgentRunAlreadyActiveError,
@@ -552,46 +564,44 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
   const planModeSessions = useAtomValue(agentPlanModeSessionsAtom)
   const isPlanMode = planModeSessions.has(sessionId)
   const store = useStore()
-  // 嵌入右侧探索分支时 currentAgentSessionIdAtom 仍指向父会话，必须按 prop sessionId 取会话级输入状态。
-  const currentQuotedSelections = useAtomValue(quotedSelectionsMapAtom).get(sessionId) ?? EMPTY_QUOTED_SELECTIONS
-  const setQuotedSelectionsMap = useSetAtom(quotedSelectionsMapAtom)
+  // 划词组件（历史消息 / 浏览器列 / 可视化）把引用投到这里，由本组件落进编辑器
+  const pendingQuoteInserts = useAtomValue(pendingQuoteInsertMapAtom).get(sessionId)
+  const setPendingQuoteInsertMap = useSetAtom(pendingQuoteInsertMapAtom)
+  // 运行中追加消息队列（前端托管，轮结束后按条件 auto-drain）
+  const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
+  const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
+  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? true
+  const queueSendInFlightRef = React.useRef(false)
+  const queueStopEpochRef = React.useRef(0)
+  const lastQueueFailureAtRef = React.useRef(0)
+  const [queueRetryTick, setQueueRetryTick] = React.useState(0)
+  // 切会话/首次：map 无值而 meta 有值 → 用 meta 填充运行时缓存（每个会话独立记忆）
+  React.useEffect(() => {
+    const metaValue = sessionMeta?.autoQueueSendEnabled
+    if (metaValue === undefined) return
+    if (store.get(agentQueueAutoSendMapAtom).has(sessionId)) return
+    setAutoSendMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, metaValue)
+      return map
+    })
+  }, [sessionId, sessionMeta?.autoQueueSendEnabled, setAutoSendMap, store])
   const openPreview = useOpenPreview()
   const richTextInputRef = React.useRef<RichTextInputHandle>(null)
 
-  /** 移除一条待发送引用（按去重键匹配） */
-  const handleRemoveQuotedSelection = React.useCallback((target: QuotedSelection) => {
-    const key = getQuotedSelectionKey(target)
-    setQuotedSelectionsMap((prev) => {
-      const list = prev.get(sessionId) ?? []
-      const next = list.filter((item) => getQuotedSelectionKey(item) !== key)
+  // 把待插入的引用落进正文：编辑器是引用的唯一真源，落进去就从队列里删掉请求
+  React.useEffect(() => {
+    if (!pendingQuoteInserts || pendingQuoteInserts.length === 0) return
+    const editor = richTextInputRef.current
+    if (!editor) return
+    for (const quote of pendingQuoteInserts) editor.insertQuoteReference(quote)
+    setPendingQuoteInsertMap((prev) => {
+      if (!prev.has(sessionId)) return prev
       const map = new Map(prev)
-      if (next.length === 0) map.delete(sessionId)
-      else map.set(sessionId, next)
+      map.delete(sessionId)
       return map
     })
-  }, [sessionId, setQuotedSelectionsMap])
-
-  /** 拖拽调整引用顺序：顺序决定模型读到的先后 */
-  const handleMoveQuotedSelection = React.useCallback((
-    sourceKey: string,
-    targetKey: string,
-    placement: 'before' | 'after',
-  ): void => {
-    setQuotedSelectionsMap((prev) => {
-      const list = prev.get(sessionId) ?? []
-      const sourceIndex = list.findIndex((item) => getQuotedSelectionKey(item) === sourceKey)
-      const sourceItem = list[sourceIndex]
-      if (!sourceItem || !list.some((item) => getQuotedSelectionKey(item) === targetKey)) return prev
-      const next = [...list]
-      next.splice(sourceIndex, 1)
-      const insertAt = next.findIndex((item) => getQuotedSelectionKey(item) === targetKey)
-      if (insertAt < 0) return prev
-      next.splice(placement === 'after' ? insertAt + 1 : insertAt, 0, sourceItem)
-      const map = new Map(prev)
-      map.set(sessionId, next)
-      return map
-    })
-  }, [sessionId, setQuotedSelectionsMap])
+  }, [pendingQuoteInserts, sessionId, setPendingQuoteInsertMap])
 
   // 会话加载/重启恢复：meta 中仍有未消费的中断（lastInterruptReason 非 completed）且 atom 无值时，从 meta 填充。
   // 发送时仍会消费该状态并注入上下文，但不在输入区显示中断 Chip。
@@ -648,6 +658,25 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     })
   }, [sessionId, setDraftsMap])
   const inputHtmlContent = useAtomValue(agentSessionDraftHtmlAtomFamily(sessionId))
+  // 原文标记 = 草稿里的引用 + 历史消息里已发出的引用（后者从消息文本反解，无需额外存储）
+  const persistedUserTexts = React.useMemo(
+    () => persistedSDKMessages
+      .map((message) => getUserTextFromSDKMessage(message))
+      .filter((text): text is string => Boolean(text)),
+    [persistedSDKMessages],
+  )
+  const persistedQuoteSelections = React.useMemo(
+    () => collectQuotedSelectionsFromTexts(persistedUserTexts),
+    [persistedUserTexts],
+  )
+  const getVisibleQuoteSelections = React.useCallback((): QuotedSelection[] => {
+    const draft = richTextInputRef.current?.getQuoteSelections() ?? []
+    const keyOf = (quote: QuotedSelection): string => `${quote.messageId ?? ''}\u0000${quote.text}\u0000${quote.ref ?? ''}`
+    const draftKeys = new Set(draft.map(keyOf))
+    return [...draft, ...persistedQuoteSelections.filter((quote) => !draftKeys.has(keyOf(quote)))]
+  }, [persistedQuoteSelections])
+  const quoteMarkerVersion = `${inputHtmlContent.length}:${persistedQuoteSelections.length}`
+  useQuoteSourceHighlight(sessionId, quoteMarkerVersion, getVisibleQuoteSelections)
   const setDraftHtmlMap = useSetAtom(agentSessionDraftHtmlAtom)
   /** 当前处于「修改重发」原地编辑态的用户消息 uuid（同一时刻只允许一条）。 */
   const [editingUserMessageUuid, setEditingUserMessageUuid] = React.useState<string | null>(null)
@@ -1672,42 +1701,6 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
 
   // ===== 运行中注入 / 发送辅助 =====
 
-  /**
-   * 取出当前会话的全部待发送引用并消费掉它们。
-   *
-   * 只移除本次实际取出的条目：发送期间用户新追加的引用会留在列表里等下一次发送，
-   * 避免「发送瞬间又引用了一段」被静默吞掉或重复带进本轮。
-   */
-  const takeQuotedSelections = React.useCallback((): QuotedSelection[] => {
-    const snapshot = store.get(quotedSelectionsMapAtom).get(sessionId) ?? []
-    if (snapshot.length === 0) return []
-    const consumedKeys = new Set(snapshot.map((item) => getQuotedSelectionKey(item)))
-    store.set(quotedSelectionsMapAtom, (prev) => {
-      const current = prev.get(sessionId)
-      if (!current) return prev
-      const remaining = current.filter((item) => !consumedKeys.has(getQuotedSelectionKey(item)))
-      const map = new Map(prev)
-      if (remaining.length === 0) map.delete(sessionId)
-      else map.set(sessionId, remaining)
-      return map
-    })
-    return snapshot
-  }, [sessionId, store])
-
-  /** 发送失败时把已消费的引用放回列表前端（去重，保留用户发送期间新加的） */
-  const restoreQuotedSelections = React.useCallback((restored: QuotedSelection[]): void => {
-    if (restored.length === 0) return
-    setQuotedSelectionsMap((prev) => {
-      const current = prev.get(sessionId) ?? []
-      const existingKeys = new Set(current.map((item) => getQuotedSelectionKey(item)))
-      const missing = restored.filter((item) => !existingKeys.has(getQuotedSelectionKey(item)))
-      if (missing.length === 0) return prev
-      const map = new Map(prev)
-      map.set(sessionId, [...missing, ...current])
-      return map
-    })
-  }, [sessionId, setQuotedSelectionsMap])
-
   /** 消费当前会话的待注入中断说明：读取并清空 atom + 同步清 meta；返回序列化块（无则空串） */
   const consumeAgentInterruptionBlock = React.useCallback((): string => {
     const state = store.get(agentInterruptionMapAtom).get(sessionId)
@@ -1888,6 +1881,122 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     revealRendererDraft, sessionId, setStreamingStates, consumeAgentInterruptionBlock, requestFollow,
   ])
 
+  // ===== 队列操作（运行中追加的消息）=====
+
+  /** 队列在空闲且前置满足时可以发送（运行中置灰） */
+  const canSendQueuedNow = !runtimeSwitchInFlight && messagesLoaded && !presetSelectionRequired
+    && Boolean(agentChannelId) && hasAvailableModel && !streaming && !backgroundWaiting
+    && streamState?.stopping !== true
+
+  /** 立即发送某条队列消息：出队后发送，失败按 stop epoch 判定是否回队首 */
+  const handleSendQueuedNow = React.useCallback((messageId: string): void => {
+    if (!canSendQueuedNow || queueSendInFlightRef.current) return
+    const message = queuedMessages.find((item) => item.id === messageId)
+    if (!message) return
+    const sendEpoch = queueStopEpochRef.current
+    setQueuedMessages((prev) => removeQueuedMessage(prev, messageId))
+    queueSendInFlightRef.current = true
+    sendPlainTextAgentMessage(message.text).catch((error) => {
+      console.error('[AgentView] 队列消息发送失败:', error)
+      if (shouldRestoreQueuedMessageAfterFailure(sendEpoch, queueStopEpochRef.current, streamState?.stopping === true || stoppedByUser)) {
+        setQueuedMessages((prev) => restoreQueuedMessageToFront(prev, message))
+      }
+    }).finally(() => {
+      queueSendInFlightRef.current = false
+    })
+  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streamState?.stopping])
+
+  /** 撤回队列消息：出队并追加到当前草稿后面 */
+  const handleRecallQueuedMessage = React.useCallback((messageId: string): void => {
+    const message = queuedMessages.find((item) => item.id === messageId)
+    if (!message) return
+    setQueuedMessages((prev) => removeQueuedMessage(prev, messageId))
+    // 队列里存的是发送用文本（引用块 + 带 [n] 的正文）：正文回填到草稿，引用重新变成胶囊节点
+    const parsed = parseQuotedSelectionRefs(message.text)
+    const recalledText = stripQuoteMarkers(parsed.text, parsed.quotes.map((quote) => quote.ref)) || parsed.text
+    const hasDraft = inputContent.trim().length > 0
+    setInputContent(hasDraft ? `${inputContent.trimEnd()}\n\n${recalledText}` : recalledText)
+    const draftHtml = inputHtmlContent.trim().length > 0 ? inputHtmlContent : queuedTextToParagraphHtml(inputContent)
+    setInputHtmlContent(hasDraft ? `${draftHtml}${queuedTextToParagraphHtml(recalledText)}` : queuedTextToParagraphHtml(recalledText))
+    // 引用走「待插入」通道：等编辑器把回填的正文同步完，再由 drain effect 落成胶囊节点
+    const recalledQuotes = parsed.quotes
+      .map((parsedRef) => quotedSelectionFromParsedRef(parsedRef))
+      .filter((quote): quote is QuotedSelection => quote !== null)
+    if (recalledQuotes.length > 0) {
+      setPendingQuoteInsertMap((prev) => {
+        const next = new Map(prev)
+        next.set(sessionId, [...(prev.get(sessionId) ?? []), ...recalledQuotes])
+        return next
+      })
+    }
+  }, [inputContent, inputHtmlContent, queuedMessages, sessionId, setInputContent, setInputHtmlContent, setPendingQuoteInsertMap, setQueuedMessages])
+
+  const handleRemoveQueuedMessage = React.useCallback((messageId: string): void => {
+    setQueuedMessages((prev) => removeQueuedMessage(prev, messageId))
+  }, [setQueuedMessages])
+
+  const handleMoveQueuedMessage = React.useCallback((
+    sourceId: string,
+    targetId: string,
+    placement: QueueDropPlacement,
+  ): void => {
+    setQueuedMessages((prev) => moveQueuedMessage(prev, sourceId, targetId, placement))
+  }, [setQueuedMessages])
+
+  /** 自动发送开关：运行时缓存 + meta 持久化（与队列面板/设置页共用写入路径） */
+  const handleToggleAutoSend = React.useCallback((): void => {
+    const next = !autoSendEnabled
+    setAutoSendMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, next)
+      return map
+    })
+    void Promise.resolve()
+      .then(() => window.electronAPI.updateAgentQueueAutoSend(sessionId, next))
+      .catch(console.error)
+  }, [autoSendEnabled, sessionId, setAutoSendMap])
+
+  /**
+   * 队列自动发送：纯条件判定，不依赖「轮结束版本号」。
+   *
+   * 旧实现用一次性信号 + 消费即作废，任何一次 gate 失败都会让队列永久停摆（D3）。
+   * 这里每次满足「队列非空 + 开关开 + 空闲可发」就发，失败回队首并退避重试。
+   */
+  React.useEffect(() => {
+    if (queueSendInFlightRef.current) return
+    const head = queuedMessages[0]
+    if (!head) return
+    if (!shouldAutoSendQueueHead({
+      autoSendEnabled,
+      queuedCount: queuedMessages.length,
+      liveMessagesPending: liveMessages.length > 0,
+      streaming,
+      stoppedByUser,
+      canSendQueuedNow,
+      sendInFlight: queueSendInFlightRef.current,
+      lastFailureAt: lastQueueFailureAtRef.current,
+      now: Date.now(),
+    })) return
+    const sendEpoch = queueStopEpochRef.current
+    queueSendInFlightRef.current = true
+    sendPlainTextAgentMessage(head.text).then(() => {
+      setQueuedMessages((prev) => removeQueuedMessage(prev, head.id))
+      lastQueueFailureAtRef.current = 0
+    }).catch((error) => {
+      console.error('[AgentView] 队列自动发送失败:', error)
+      if (shouldRestoreQueuedMessageAfterFailure(sendEpoch, queueStopEpochRef.current, streamState?.stopping === true || stoppedByUser)) {
+        setQueuedMessages((prev) => restoreQueuedMessageToFront(prev, head))
+      }
+      lastQueueFailureAtRef.current = Date.now()
+      window.setTimeout(() => setQueueRetryTick((tick) => tick + 1), AUTO_SEND_RETRY_INTERVAL_MS)
+    }).finally(() => {
+      queueSendInFlightRef.current = false
+    })
+  }, [
+    autoSendEnabled, canSendQueuedNow, liveMessages.length, queuedMessages, queueRetryTick,
+    sendPlainTextAgentMessage, sessionId, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping,
+  ])
+
   /** 发送消息 */
   const handleSend = React.useCallback(async (latestText = richTextInputRef.current?.getMarkdown() ?? inputContent): Promise<void> => {
     if (runtimeSwitchInFlightRef.current) {
@@ -1936,9 +2045,13 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       }
       return
     }
-    // 正文优先；无正文时，攒了引用就只发引用，不再把系统建议搭进去。
+    // 引用已经是正文的一部分（内联 [n] 胶囊），发送时从编辑器按文档顺序取出
     const pendingFilesSnapshot = pendingFilesRef.current
-    const hasQuotedSelections = (store.get(quotedSelectionsMapAtom).get(sessionId) ?? []).length > 0
+    const quotedSelections = richTextInputRef.current?.getQuoteSelections() ?? []
+    const hasQuotedSelections = quotedSelections.length > 0
+    // 发送失败要还原草稿（含引用节点），所以先留一份 HTML 快照
+    const draftHtmlSnapshot = inputHtmlContent
+    // 插入过引用时正文至少是 `[n]`，非空，因此不会再被系统建议顶替
     const effectiveText = text || (hasQuotedSelections ? '' : suggestion) || ''
     if (!messagesLoaded || (!effectiveText && pendingFilesSnapshot.length === 0 && !hasQuotedSelections) || !agentChannelId || !hasAvailableModel) return
     if (presetSelectionRequired) {
@@ -1955,15 +2068,20 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       additionalDirectoriesForRun.add(dir)
     }
 
-    // streaming：直接插入正在运行的 Agent（软打断当前 turn），不再排队等本轮结束。
+    // streaming：入队，等本轮结束后按条件自动发送（不做软打断）。
     if (streaming) {
       if (pendingFilesSnapshot.length > 0) {
         toast.info('Agent 运行中暂不支持追加发送附件', {
-          description: '请等待本轮结束后再发送附件，或先撤除附件仅发送文本与引用。',
+          description: '请等待本轮结束后再发送附件，或先撤除附件只发文本与引用。',
         })
         return
       }
-      const quotedSelections = takeQuotedSelections()
+      // 引用块在入队时就展开进文本，保证轮结束后发出去的仍是用户当时看到的那条
+      const queuedText = buildAgentMessagePayload(effectiveText, quotedSelections).rawText
+      setQueuedMessages((prev) => [
+        ...prev,
+        createAgentQueuedMessage(queuedText, crypto.randomUUID(), Date.now()),
+      ])
       requestFollow(sessionId)
       setInputContent('')
       setInputHtmlContent('')
@@ -1972,13 +2090,6 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         const map = new Map(prev)
         map.delete(sessionId)
         return map
-      })
-      sendPlainTextAgentMessage(effectiveText, quotedSelections).catch((error) => {
-        console.error('[AgentView] 运行中插入消息失败:', error)
-        toast.error('插入消息失败', { description: String(error) })
-        setInputContent(effectiveText)
-        setInputHtmlContent('')
-        restoreQuotedSelections(quotedSelections)
       })
       return
     }
@@ -1991,7 +2102,6 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         })
         return
       }
-      const quotedSelections = takeQuotedSelections()
       setInputContent('')
       setInputHtmlContent('')
       setPromptSuggestions((prev) => {
@@ -2004,8 +2114,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         console.error('[AgentView] 追加消息失败:', error)
         toast.error('追加消息失败', { description: String(error) })
         setInputContent(effectiveText)
-        setInputHtmlContent('')
-        restoreQuotedSelections(quotedSelections)
+        setInputHtmlContent(draftHtmlSnapshot)
       })
       return
     }
@@ -2136,8 +2245,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       setPendingFiles([])
     }
 
-    // 消费全部待发送引用：按列表顺序拼成前缀块（顺序即用户看到的顺序）。
-    const quotedSelections = takeQuotedSelections()
+    // 引用块按编辑器里的编号顺序拼成前缀（顺序即正文里 [n] 的顺序）。
     if (quotedSelections.length > 0) {
       fileReferences += buildQuotedSelectionsPrefix(quotedSelections)
     }
@@ -2213,8 +2321,8 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     setInputHtmlContent('')
 
     window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch(async (error) => {
-      // 发送失败：引用同草稿一起恢复，避免用户重选一遍。
-      restoreQuotedSelections(quotedSelections)
+      // 发送失败：草稿（含引用节点）原样还原，避免用户重选一遍
+      setInputHtmlContent(draftHtmlSnapshot)
       if (isAgentRunAlreadyActiveError(error)) {
         // renderer 曾短暂误判为空闲；先恢复 owner run 的代次，使其后续事件和真实
         // completion 仍能被接收，再把本条消息追加到该 run。若 run 恰好结束，降级重试为新 run。
@@ -2290,12 +2398,23 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         return map
       })
     })
-  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement, requestFollow, takeQuotedSelections, restoreQuotedSelections, sendPlainTextAgentMessage])
+  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement, requestFollow, sendPlainTextAgentMessage])
 
   /** 经唯一入口请求停止；只有主进程 STREAM_COMPLETE 才能将 UI 收敛为空闲。 */
   const handleStop = React.useCallback((): void => {
     if (stopInFlightRef.current || streamState?.stopping) return
     stopInFlightRef.current = true
+    // 停止即取消「自动发送」，并让此前已取出但未 settle 的队列消息失去回队资格
+    queueStopEpochRef.current += 1
+    setAutoSendMap((prev) => {
+      if (prev.get(sessionId) === false) return prev
+      const map = new Map(prev)
+      map.set(sessionId, false)
+      return map
+    })
+    void Promise.resolve()
+      .then(() => window.electronAPI.updateAgentQueueAutoSend(sessionId, false))
+      .catch(console.error)
 
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
@@ -2314,7 +2433,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
       .finally(() => {
         stopInFlightRef.current = false
       })
-  }, [sessionId, streamState?.stopping, setStreamingStates])
+  }, [sessionId, setAutoSendMap, streamState?.stopping, setStreamingStates])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -2867,7 +2986,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
 
   const hasTextInput = hasInputDraft
   const isCompacting = contextStatus.isCompacting
-  const canSend = !runtimeSwitchInFlight && messagesLoaded && !presetSelectionRequired && (hasTextInput || pendingFiles.length > 0 || currentQuotedSelections.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput || currentQuotedSelections.length > 0) && !isCompacting && !streamState?.stopping
+  const canSend = !runtimeSwitchInFlight && messagesLoaded && !presetSelectionRequired && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting && !streamState?.stopping
   const voiceDictationEnabled = useAtomValue(voiceDictationEnabledAtom)
   const composerToolbarPreferences = useAtomValue(composerToolbarPreferencesAtom)
   useLoadVoiceDictationSettings()
@@ -3156,7 +3275,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
               </div>
             )}
 
-            {/* 附件 Chip（引用单独一块面板，见下方 QuotedSelectionList） */}
+            {/* 附件 Chip（引用已内联进正文，见输入框里的 [n] 胶囊） */}
             {pendingFiles.length > 0 && (
               <div className="flex flex-wrap gap-2 px-3 pt-2.5 pb-1.5">
                 {pendingFiles.map((file) => (
@@ -3172,10 +3291,15 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
               </div>
             )}
 
-            <QuotedSelectionList
-              items={currentQuotedSelections}
-              onRemove={handleRemoveQuotedSelection}
-              onMove={handleMoveQuotedSelection}
+            <AgentMessageQueue
+              items={queuedMessages}
+              canSendNow={canSendQueuedNow}
+              autoSend={autoSendEnabled}
+              onToggleAutoSend={handleToggleAutoSend}
+              onSendNow={handleSendQueuedNow}
+              onRecall={handleRecallQueuedMessage}
+              onRemove={handleRemoveQueuedMessage}
+              onMove={handleMoveQueuedMessage}
             />
 
             {/* Agent 建议提示 */}

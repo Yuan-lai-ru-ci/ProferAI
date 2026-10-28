@@ -53,6 +53,7 @@ export function buildAgentSessionUiProjection(meta: AgentSessionMeta): AgentSess
     automationGraduated: meta.automationGraduated ?? false,
     completedButUnconfirmed: meta.completedButUnconfirmed ?? false,
     stoppedByUser: meta.stoppedByUser ?? false,
+    autoQueueSendEnabled: meta.autoQueueSendEnabled ?? true,
     lastInterruptReason: meta.lastInterruptReason ?? null,
     lastInterruptLabel: meta.lastInterruptLabel ?? null,
     lastInterruptAt: meta.lastInterruptAt ?? null,

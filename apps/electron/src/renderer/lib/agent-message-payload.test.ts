@@ -50,6 +50,15 @@ describe('发送文本拼装', () => {
     expect(payload.sdkText.startsWith('<quoted_file')).toBe(true)
   })
 
+  test('引用块按 ref 升序展开，正文里的 [n] 原样保留', () => {
+    const payload = buildAgentMessagePayload('这两处 [1] 和 [2] 不一致，按 [2] 改', [
+      quote({ ref: 2, filePath: '/b.md', text: 'B' }),
+      quote({ ref: 1, filePath: '/a.md', text: 'A' }),
+    ])
+    expect(payload.rawText.indexOf('ref="1"')).toBeLessThan(payload.rawText.indexOf('ref="2"'))
+    expect(payload.rawText).toContain('按 [2] 改')
+  })
+
   test('正文与引用都为空时拼出空串', () => {
     expect(buildAgentMessagePayload('', []).rawText).toBe('')
   })

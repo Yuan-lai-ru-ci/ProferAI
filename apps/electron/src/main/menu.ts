@@ -1,4 +1,5 @@
 import { app, Menu, shell, BrowserWindow } from 'electron'
+import { AGENT_IPC_CHANNELS } from '@profer/shared'
 import { DEFAULT_MAIN_WINDOW_ZOOM_FACTOR, resetWindowZoom } from './lib/mac-traffic-light'
 
 export type TextContextMenuParams = Pick<
@@ -11,15 +12,34 @@ export type TextContextMenuParams = Pick<
  *
  * 非编辑区域只有存在文本选区时才返回菜单，避免盖住 Renderer 中已有的业务右键菜单。
  */
+export interface TextContextMenuOptions {
+  /**
+   * 当前选区是否落在「可引用」区域（Agent 对话正文）。
+   * 由渲染进程上报，避免在设置页/无关面板里也冒出「引用到输入框」这种死菜单项。
+   */
+  quoteSelectionEnabled?: boolean
+}
+
+export const QUOTE_SELECTION_MENU_ID = 'agent-quote-selection'
+
 export function createTextContextMenuTemplate(
   params: TextContextMenuParams,
   platform: NodeJS.Platform = process.platform,
+  options: TextContextMenuOptions = {},
 ): Electron.MenuItemConstructorOptions[] {
   const { editFlags } = params
 
   if (!params.isEditable) {
     if (params.selectionText.length === 0) return []
-    return [{ role: 'copy', label: '复制', enabled: editFlags.canCopy }]
+    return [
+      ...(options.quoteSelectionEnabled
+        ? [
+            { id: QUOTE_SELECTION_MENU_ID, label: '引用到输入框', enabled: true },
+            { type: 'separator' as const },
+          ]
+        : []),
+      { role: 'copy', label: '复制', enabled: editFlags.canCopy },
+    ]
   }
 
   return [
@@ -38,6 +58,14 @@ export function createTextContextMenuTemplate(
   ]
 }
 
+/** 哪些 webContents 当前选区可引用（渲染进程上报，右键菜单据此加项）。 */
+const quoteableSelections = new Set<number>()
+
+export function setQuoteableSelection(webContentsId: number, enabled: boolean): void {
+  if (enabled) quoteableSelections.add(webContentsId)
+  else quoteableSelections.delete(webContentsId)
+}
+
 let textContextMenusInstalled = false
 
 /** 为 Profer 创建的所有 WebContents 安装通用复制/粘贴右键菜单。 */
@@ -47,8 +75,20 @@ export function installTextContextMenus(): void {
 
   app.on('web-contents-created', (_event, webContents) => {
     webContents.on('context-menu', (_contextMenuEvent, params) => {
-      const template = createTextContextMenuTemplate(params)
+      const template = createTextContextMenuTemplate(params, process.platform, {
+        quoteSelectionEnabled: quoteableSelections.has(webContents.id),
+      })
       if (template.length === 0) return
+      // 「引用到输入框」由渲染进程完成（它才知道选区落在哪条消息上），
+      // 主进程只负责把点击转成事件；原生菜单不会清掉 DOM 选区。
+      for (const item of template) {
+        if (item.id !== QUOTE_SELECTION_MENU_ID) continue
+        item.click = () => {
+          if (!webContents.isDestroyed()) {
+            webContents.send(AGENT_IPC_CHANNELS.QUOTE_SELECTION_REQUEST)
+          }
+        }
+      }
 
       const ownerWindow = BrowserWindow.fromWebContents(webContents) ?? BrowserWindow.getFocusedWindow()
       const popupOptions: Electron.PopupOptions = {

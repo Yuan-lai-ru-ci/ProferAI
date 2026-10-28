@@ -308,6 +308,42 @@ export const agentPendingFilesAtomFamily = atomFamily((sessionId: string) =>
   ),
 )
 
+// ===== 运行中追加消息队列 Atoms =====
+
+/** 全局队列 Map — 以 sessionId 为 key，存运行中用户追加、待发送的消息 */
+export const agentSessionMessageQueueAtom = atom<Map<string, import('@/lib/agent-message-queue').AgentQueuedMessage[]>>(new Map())
+
+/**
+ * 单个 session 的追加消息队列派生 atom（读写）— 按 sessionId 切片
+ *
+ * read：返回当前 session 的数组（空数组兜底）
+ * write：接受新数组或 updater 函数，写回时空数组转为 delete，避免 Map 长期残留空 entry
+ */
+export const agentMessageQueueAtomFamily = atomFamily((sessionId: string) =>
+  atom(
+    (get) => get(agentSessionMessageQueueAtom).get(sessionId) ?? [],
+    (_get, set, update: import('@/lib/agent-message-queue').AgentQueuedMessage[] | ((prev: import('@/lib/agent-message-queue').AgentQueuedMessage[]) => import('@/lib/agent-message-queue').AgentQueuedMessage[])) => {
+      set(agentSessionMessageQueueAtom, (prev) => {
+        const current = prev.get(sessionId) ?? []
+        const next = typeof update === 'function' ? update(current) : update
+        const map = new Map(prev)
+        if (next.length === 0) {
+          map.delete(sessionId)
+        } else {
+          map.set(sessionId, next)
+        }
+        return map
+      })
+    },
+  ),
+)
+
+/**
+ * 每会话「队列自动发送」开关的运行时缓存：权威值持久化在会话 meta（`autoQueueSendEnabled`）。
+ * 停止会话时写 false，重启后从 meta 恢复。
+ */
+export const agentQueueAutoSendMapAtom = atom<Map<string, boolean>>(new Map())
+
 /** 工作区能力版本号 — 每次修改 MCP/Skills 后自增，触发侧边栏重新获取 */
 export const workspaceCapabilitiesVersionAtom = atom(0)
 
