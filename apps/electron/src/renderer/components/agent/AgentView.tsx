@@ -165,6 +165,7 @@ import {
 import { AUTO_SEND_RETRY_INTERVAL_MS, shouldAutoSendQueueHead } from '@/lib/agent-autosend-turn'
 import { AgentMessageQueue } from './AgentMessageQueue'
 import { useQuoteSourceHighlight } from '@/hooks/useQuoteSourceHighlight'
+import { QuoteSourceMarkers } from './QuoteSourceMarkers'
 import {
   buildAgentMessagePayload,
   isAgentRunAlreadyActiveError,
@@ -677,6 +678,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
   }, [persistedQuoteSelections])
   const quoteMarkerVersion = `${inputHtmlContent.length}:${persistedQuoteSelections.length}`
   useQuoteSourceHighlight(sessionId, quoteMarkerVersion, getVisibleQuoteSelections)
+  // 原文批注栏（竖条 + 编号）由该组件自己管理 DOM，避免滚动时走 React 重渲染
   const setDraftHtmlMap = useSetAtom(agentSessionDraftHtmlAtom)
   /** 当前处于「修改重发」原地编辑态的用户消息 uuid（同一时刻只允许一条）。 */
   const [editingUserMessageUuid, setEditingUserMessageUuid] = React.useState<string | null>(null)
@@ -3150,6 +3152,11 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
 
   return (
     <>
+    <QuoteSourceMarkers
+      sessionId={sessionId}
+      version={quoteMarkerVersion}
+      getQuotes={getVisibleQuoteSelections}
+    />
     <AgentSessionProvider sessionId={sessionId}>
       <div data-profer-navigation-region="conversation" data-agent-session-id={sessionId} tabIndex={-1} className="agent-conversation flex h-full min-h-0 min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
         <div className="shrink-0">

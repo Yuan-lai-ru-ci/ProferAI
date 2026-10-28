@@ -3351,6 +3351,145 @@
 
 /* 草稿期引用高亮：引用落进输入框后，来源消息里的那段文字用 CSS Highlight 标出来。
    走 Custom Highlight API，不改 DOM，避免与 React 渲染/流式增量更新冲突。 */
+/* 原文批注栏：引用段落左侧竖条 + 顶端编号。
+   位置由 JS 直接写 transform（滚动同步），这里只管长相。 */
+.quote-source-markers {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+
+/* 胶囊悬停预览：按 Markdown 渲染原文，浮层不可交互（pointer-events: none） */
+.quote-ref-preview {
+  position: fixed;
+  z-index: 80;
+  /* 宽度跟内容走：几个字就窄，长文才到 max-width 换行 */
+  width: max-content;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background-color: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 12px 32px rgba(17, 24, 39, 0.16);
+  font-size: 13px;
+  line-height: 1.6;
+  pointer-events: none;
+  /* 进场：淡入比位移略快，收尾用长尾缓动，避免「弹出来」的生硬感 */
+  opacity: 0;
+  transition:
+    opacity 140ms cubic-bezier(0.33, 1, 0.68, 1),
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.quote-ref-preview--above {
+  transform: translateY(10px) scale(0.965);
+  transform-origin: bottom left;
+}
+
+.quote-ref-preview--below {
+  transform: translateY(-10px) scale(0.965);
+  transform-origin: top left;
+}
+
+.quote-ref-preview.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.quote-ref-preview.is-closing {
+  opacity: 0;
+  transform: translateY(4px) scale(0.985);
+  transition:
+    opacity 140ms ease-in,
+    transform 140ms cubic-bezier(0.4, 0, 1, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quote-ref-preview,
+  .quote-ref-preview.is-closing {
+    transition: opacity 100ms linear;
+    transform: none;
+  }
+}
+
+.quote-ref-preview__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+}
+
+.quote-ref-preview__n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground, 0 0% 100%));
+  font-size: 9.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.quote-ref-preview__source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quote-ref-preview__body > :first-child { margin-top: 0; }
+.quote-ref-preview__body > :last-child { margin-bottom: 0; }
+
+/* 挂进滚动容器时用内容坐标：随内容滚动，滚动过程零重算 */
+.quote-source-markers--content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 0;
+  z-index: 5;
+}
+
+.quote-source-marker__bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background-color: hsl(var(--primary) / 0.55);
+  will-change: transform;
+}
+
+.quote-source-marker__num {
+  position: absolute;
+  top: -1px;
+  /* 贴竖条左侧，宽度随 "3·4" 这类合并编号自适应 */
+  right: 100%;
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground, 0 0% 100%));
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.16);
+}
+
 ::highlight(profer-quote-source) {
   background-color: hsl(var(--primary) / 0.24);
   color: inherit;
