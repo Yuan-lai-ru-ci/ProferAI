@@ -71,9 +71,9 @@ describe('getOpenSessionEntries — 当前会话列表与计数共用数据', ()
 })
 
 describe('sidebarRowClass — 侧栏行视觉契约', () => {
-  test('Given 默认行 When 生成 Then 30px 高、7px 圆角、左右 8px 内边距', () => {
+  test('Given 默认行 When 生成 Then 28px 高、7px 圆角、左右 8px 内边距', () => {
     const cls = sidebarRowClass()
-    expect(cls).toContain('h-[30px]')
+    expect(cls).toContain('h-[28px]')
     expect(cls).toContain('rounded-[7px]')
     expect(cls).toContain('px-2')
     expect(cls).toContain('text-[13px]')
@@ -87,9 +87,49 @@ describe('sidebarRowClass — 侧栏行视觉契约', () => {
     expect(sidebarRowClass({ depth: 0 })).not.toContain('pl-[26px]')
   })
 
+  test('Given 项目内会话 When 生成 Then 块左边界缩进 4px 且宽度同步回收', () => {
+    const cls = sidebarRowClass({ depth: 1 })
+    expect(cls).toContain('ml-1')
+    expect(cls).toContain('w-[calc(100%-0.25rem)]')
+    expect(cls).not.toContain('w-full')
+    // 顶层行（项目行、入口行）不缩进
+    expect(sidebarRowClass({ depth: 0 })).toContain('w-full')
+  })
+
   test('Given 当前项与项目行 When 生成 Then 选中底色与 32px 行高互不干扰', () => {
     expect(sidebarRowClass({ active: true })).toContain('bg-foreground/[0.07]')
     expect(sidebarRowClass({ tall: true })).toContain('h-8')
     expect(sidebarRowClass({ muted: true })).toContain('text-foreground/[0.38]')
+  })
+
+  test('Given 会话行与非会话行 When 生成 Then 会话行无底色、只有底边分隔线', () => {
+    const session = sidebarRowClass({ session: true })
+    expect(session).not.toContain('bg-foreground/[0.03]')
+    expect(session).toContain('after:h-px')
+    expect(session).toContain('after:bottom-0')
+    expect(session).toContain('after:inset-x-2')
+    expect(session).toContain('after:bg-foreground/[0.06]')
+    // hover 仍给一层极淡底色便于定位
+    expect(session).toContain('hover:bg-foreground/[0.04]')
+    // 项目行、入口行不带分隔线
+    expect(sidebarRowClass({ tall: true })).not.toContain('after:h-px')
+    expect(sidebarRowClass()).not.toContain('after:h-px')
+  })
+
+  test('Given 会话行处于当前项 When 生成 Then 选中底色仍高于无底色会话行', () => {
+    const activeSession = sidebarRowClass({ session: true, active: true })
+    expect(activeSession).toContain('bg-foreground/[0.07]')
+    expect(activeSession).not.toContain('bg-foreground/[0.03]')
+  })
+
+  test('Given 项目行 When 生成 Then 常显底色比会话行深、当前项目更深', () => {
+    const project = sidebarRowClass({ tall: true })
+    expect(project).toContain('bg-foreground/[0.05]')
+    expect(project).toContain('hover:bg-foreground/[0.07]')
+
+    const currentProject = sidebarRowClass({ tall: true, active: true })
+    expect(currentProject).toContain('bg-foreground/[0.09]')
+    // 入口行（非会话、非项目）保持无底色
+    expect(sidebarRowClass()).not.toContain('bg-foreground/[0.05]')
   })
 })

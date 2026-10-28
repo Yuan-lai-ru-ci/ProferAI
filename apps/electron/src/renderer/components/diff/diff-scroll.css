@@ -1,7 +1,10 @@
-/* Diff 滚动条 — overlay 在代码上方，不占布局空间 */
+/* Diff 滚动条 — overlay 在代码上方，不占布局空间
+ * 尺寸吃 globals.css 的平台 token（mac 6px / win 10px 紧凑命中区），
+ * 不再单独写死 6px，避免 Windows 上只有一半可点面积。
+ * 颜色比正文滚动条更淡：diff 背景本身有红绿块，滚动条不能抢。 */
 .diff-scroll::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size-compact);
+  height: var(--scrollbar-size-compact);
 }
 
 .diff-scroll::-webkit-scrollbar-track {
@@ -9,12 +12,12 @@
 }
 
 .diff-scroll::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.2);
-  border-radius: 3px;
+  background: hsl(var(--muted-foreground) / 0.28);
+  border-radius: 999px;
 }
 
 .diff-scroll::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.35);
+  background: hsl(var(--muted-foreground) / 0.45);
 }
 
 .diff-scroll::-webkit-scrollbar-corner {

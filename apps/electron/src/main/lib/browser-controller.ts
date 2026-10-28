@@ -61,13 +61,17 @@ svg{width:48%;height:48%;display:block}
 <script>document.querySelector('button').addEventListener('click',function(){location.href='https://profer.local/split-close'})</script>
 </body></html>`)}`
 
-/** 受管网页使用与 Profer 一致的细滚动条；仅影响展示，不修改页面滚动行为或内容。 */
+/** 受管网页使用与 Profer 一致的滚动条；仅影响展示，不修改页面滚动行为或内容。
+ * 与渲染进程同一套平台差异（见 docs/design/2026-10-27-scrollbar-spec.md）：
+ * Windows 给 12px 命中区 + 3px 透明 border（视觉 4px），悬停展开；macOS 保持 6px overlay 尺寸。
+ * 这里不能用 scrollbar-width: thin——Chromium 会改走 Fluent overlay，后面的伪元素宽度全部失效。 */
+const PROFER_BROWSER_IS_WINDOWS = process.platform === 'win32'
 const PROFER_BROWSER_SCROLLBAR_CSS = `
-  html, body, * { scrollbar-width: thin !important; scrollbar-color: rgba(113, 113, 122, .42) transparent !important; }
-  ::-webkit-scrollbar { width: 6px !important; height: 6px !important; }
+  html, body, * { scrollbar-width: auto !important; scrollbar-color: auto !important; }
+  ::-webkit-scrollbar { width: ${PROFER_BROWSER_IS_WINDOWS ? 12 : 6}px !important; height: ${PROFER_BROWSER_IS_WINDOWS ? 12 : 6}px !important; }
   ::-webkit-scrollbar-track { background: transparent !important; }
-  ::-webkit-scrollbar-thumb { background: rgba(113, 113, 122, .42) !important; border-radius: 999px !important; border: 1px solid transparent !important; background-clip: padding-box !important; }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(113, 113, 122, .62) !important; }
+  ::-webkit-scrollbar-thumb { background: rgba(113, 113, 122, .42) !important; border-radius: 999px !important; border: ${PROFER_BROWSER_IS_WINDOWS ? 3 : 0}px solid transparent !important; background-clip: content-box !important; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(113, 113, 122, .62) !important;${PROFER_BROWSER_IS_WINDOWS ? ' border-width: 2px !important;' : ''} }
   ::-webkit-scrollbar-button, ::-webkit-scrollbar-corner { display: none !important; }
 `
 

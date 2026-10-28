@@ -73,8 +73,8 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
         --diffs-scrollbar-thumb-hover: light-dark(hsl(var(--muted-foreground) / 0.8), hsl(var(--muted-foreground) / 0.35));
       }
       .diff-scroll [data-code]::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
+        width: var(--scrollbar-size-compact, 6px);
+        height: var(--scrollbar-size-compact, 6px);
       }
       .diff-scroll [data-code]::-webkit-scrollbar-track {
         background: transparent;

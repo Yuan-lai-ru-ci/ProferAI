@@ -5,6 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Profer</title>
     <script>
+      // 平台标记：滚动条尺寸、命中区、常驻/按需显隐按 macOS / Windows 分叉（见 globals.css
+      // 「全局 Profer 滚动条」一段）。必须在首帧前写入，否则会先按 macOS 默认闪一帧。
+      ;(function() {
+        var ua = navigator.userAgent || ''
+        var platform = /Win/i.test(ua) ? 'win32' : /Mac/i.test(ua) ? 'darwin' : 'linux'
+        document.documentElement.setAttribute('data-platform', platform)
+      })()
+    </script>
+    <script>
       // 窗口标题初始化（在 React 加载前执行，避免标题闪烁）
       // 兼容旧 key（proma-→profer- 迁移，一两个版本后移除旧读）
       ;(function() {

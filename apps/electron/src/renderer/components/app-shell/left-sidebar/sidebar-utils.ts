@@ -142,8 +142,10 @@ export function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
  * 只统一 className，不抽组件：ConversationItem 内含编辑态、右键菜单、中键关闭、
  * 迷你地图预览与 F2 快捷键，抽组件会强制重排这些逻辑，风险大于收益。
  *
- * 约定：行高 30（项目 32），圆角 7，左右内边距 8，子会话缩进 26；
+ * 约定：行高 28（项目 32），圆角 7，左右内边距 8，子会话缩进（块左 4 + 文字 26）；
  * 除 focus ring 外不使用描边与阴影，层级只靠背景灰度与文字灰度区分。
+ * 会话行不常显底色，改用底边一条极淡分隔线拉开行间距；分隔线左右内缩避开圆角。
+ * 灰度层级：项目行 5%（当前 9%）> 会话行当前 7% > 入口行无底色。
  */
 export function sidebarRowClass(options: {
   active?: boolean
@@ -153,20 +155,28 @@ export function sidebarRowClass(options: {
   muted?: boolean
   /** 项目行等 32px 行 */
   tall?: boolean
+  /** 会话行：底边极淡分隔线，不常显底色 */
+  session?: boolean
 } = {}): string {
-  const { active, depth = 0, muted, tall } = options
+  const { active, depth = 0, muted, tall, session } = options
   return cn(
     // shrink-0：行必须保持固定高度。列表容器有 max-height 时（当前会话区 144px），
-    // flex 子项默认会被压扁去「塞进」容器，导致行高从 30px 塌成 20px 左右且不再滚动。
+    // flex 子项默认会被压扁去「塞进」容器，导致行高从 28px 塌成 20px 左右且不再滚动。
     'group relative flex w-full shrink-0 items-center gap-2 rounded-[7px] px-2 text-[13px] transition-colors duration-100',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
-    tall ? 'h-8' : 'h-[30px]',
-    depth === 1 && 'pl-[26px]',
+    tall ? 'h-8' : 'h-[28px]',
+    depth === 1 && 'ml-1 w-[calc(100%-0.25rem)] pl-[26px]',
     active
-      ? 'bg-foreground/[0.07] text-foreground'
+      ? tall
+        ? 'bg-foreground/[0.09] text-foreground'
+        : 'bg-foreground/[0.07] text-foreground'
       : muted
         ? 'text-foreground/[0.38] hover:bg-foreground/[0.04] hover:text-foreground/[0.62]'
-        : 'text-foreground/[0.62] hover:bg-foreground/[0.04] hover:text-foreground',
+        : tall
+          ? 'bg-foreground/[0.05] text-foreground/[0.62] hover:bg-foreground/[0.07] hover:text-foreground'
+          : session
+            ? 'text-foreground/[0.62] hover:bg-foreground/[0.04] hover:text-foreground after:pointer-events-none after:absolute after:inset-x-2 after:bottom-0 after:h-px after:bg-foreground/[0.06]'
+            : 'text-foreground/[0.62] hover:bg-foreground/[0.04] hover:text-foreground',
   )
 }
 

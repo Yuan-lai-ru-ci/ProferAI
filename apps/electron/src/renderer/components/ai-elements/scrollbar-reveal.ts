@@ -10,8 +10,12 @@
  * 只有 wheel / 触摸滑动 / 键盘翻页 / 直接操作滚动条才会露出滚动条。
  */
 
-/** 最后一次滚动后保持可见的时长，给用户一个"刚滚过"的视觉落点。 */
-export const SCROLLBAR_REVEAL_IDLE_MS = 700
+/** 最后一次滚动后保持可见的时长，给用户一个"刚滚过"的视觉落点。
+ * 1250ms：700ms 在长文快速扫读时几乎“刚停手就消失”，想回看位置只能再滚一下。 */
+export const SCROLLBAR_REVEAL_IDLE_MS = 1250
+
+/** 右边缘滚动条热区的最小宽度：macOS overlay 条只有 6px，按 6px 判定等于要求用户压中线。 */
+const SCROLLBAR_HOVER_MIN_PX = 12
 
 /** 与浏览器滚动行为一致的翻页键。 */
 const SCROLL_KEYS = ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']
@@ -81,6 +85,48 @@ function bindUserScroll(el: HTMLElement, reveal: () => void): () => void {
   }
 }
 
+/** 指针是否落在容器右边缘的滚动条热区。
+ * 只算右边缘：不能把“鼠标在整个对话区”都当成悬停滚动条——那样条子等于常驻。 */
+function isPointerOnScrollbarArea(el: HTMLElement, event: PointerEvent): boolean {
+  const rect = el.getBoundingClientRect()
+  if (event.clientY < rect.top || event.clientY > rect.bottom) return false
+  let size = 6
+  try {
+    const parsed = Number.parseFloat(getComputedStyle(el).getPropertyValue('--scrollbar-size'))
+    if (parsed > 0) size = parsed
+  } catch {
+    /* 非浏览器环境（单测 mock）取不到 token，回退到 6px */
+  }
+  return event.clientX >= rect.right - Math.max(size, SCROLLBAR_HOVER_MIN_PX)
+}
+
+/** 鼠标进入/离开右侧滚动条热区时给容器打 data-scrollbar-hover（纯 CSS 控不到的 overlay 滚动条需要）。
+ * 滚动条本身是伪元素，`:hover` 只会在滑块上触发、盖不到整条轨道，所以用指针坐标自己判。 */
+function bindScrollbarHover(el: HTMLElement): () => void {
+  /* Windows 的条常驻可见，不需要指针追踪；省掉每帧 getBoundingClientRect。 */
+  if (typeof document !== 'undefined' && document.documentElement.getAttribute('data-platform') === 'win32') {
+    return () => {}
+  }
+  const onPointerMove = (event: PointerEvent): void => {
+    const onBar = isPointerOnScrollbarArea(el, event)
+    if (onBar) {
+      if (el.dataset.scrollbarHover !== 'true') el.dataset.scrollbarHover = 'true'
+    } else if (el.dataset.scrollbarHover) {
+      delete el.dataset.scrollbarHover
+    }
+  }
+  const onPointerLeave = (): void => {
+    delete el.dataset.scrollbarHover
+  }
+  el.addEventListener('pointermove', onPointerMove, { passive: true })
+  el.addEventListener('pointerleave', onPointerLeave, { passive: true })
+  return () => {
+    el.removeEventListener('pointermove', onPointerMove)
+    el.removeEventListener('pointerleave', onPointerLeave)
+    delete el.dataset.scrollbarHover
+  }
+}
+
 export function attachScrollbarReveal(
   el: HTMLElement,
   options: ScrollbarRevealOptions = {}
@@ -105,12 +151,16 @@ export function attachScrollbarReveal(
   }
 
   const detach = options.watchElement ? bindUserScroll(options.watchElement, reveal) : null
+  /* 自己就是滚动容器（对话区原生滚动条）时，补一条右边缘悬停检测；
+   * 进度条场景（传了 watchElement）不需要——它自己就是 11px 的 DOM 元素，CSS :hover 足够。 */
+  const detachHover = options.watchElement ? null : bindScrollbarHover(el)
 
   return {
     reveal,
     isVisible: () => el.dataset.scrolling === 'true',
     dispose: () => {
       detach?.()
+      detachHover?.()
       clear()
       delete el.dataset.scrolling
     },

@@ -568,7 +568,7 @@ export const ConversationItem = React.memo(function ConversationItem({
             startEdit()
           }}
           className={cn(
-            sidebarRowClass({ active, depth }),
+            sidebarRowClass({ active, depth, session: true }),
             'titlebar-no-drag text-left',
             active && 'session-item-selected',
             streaming && 'font-medium',
@@ -661,10 +661,13 @@ export const ConversationItem = React.memo(function ConversationItem({
 /** 会话行左侧状态条的颜色 — 与 SessionIndicatorStatus 呼应 */
 type SessionLeftAccent = 'orange' | 'blue' | 'green'
 const SESSION_ACCENT_ROW_CLASS: Record<SessionLeftAccent, string> = {
-  orange: 'bg-warning/[0.08] text-foreground font-medium',
-  blue: 'text-foreground font-medium hover:bg-foreground/[0.03]',
-  green: 'text-foreground font-medium hover:bg-foreground/[0.03]',
+  orange: 'bg-warning/[0.08] hover:bg-warning/[0.11]',
+  blue: 'bg-info/[0.06] hover:bg-info/[0.09]',
+  green: 'bg-success/[0.06] hover:bg-success/[0.09]',
 }
+
+/** 有色标会话的文字层级：与选中行一致地提亮，但不覆盖选中底色 */
+const SESSION_ACCENT_TEXT_CLASS = 'text-foreground font-medium'
 
 const SESSION_ACCENT_INDICATOR_CLASS: Record<SessionLeftAccent, string> = {
   orange: 'bg-warning',
@@ -905,10 +908,12 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
             startEdit()
           }}
           className={cn(
-            sidebarRowClass({ active, depth }),
+            sidebarRowClass({ active, depth, session: true }),
             'titlebar-no-drag text-left',
             active && 'agent-session-item-active',
-            leftAccent && SESSION_ACCENT_ROW_CLASS[leftAccent],
+            leftAccent && SESSION_ACCENT_TEXT_CLASS,
+            // 有色标的会话常显一层淡底色（与色标同色相）；选中行保持 0.07 优先，不被覆盖
+            leftAccent && !active && SESSION_ACCENT_ROW_CLASS[leftAccent],
           )}
         >
           {(leftAccent || (isClassic && active)) && (
@@ -1302,14 +1307,14 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               isCurrent && 'agent-project-item-current',
             )}
           >
-            {renderWorkspaceIcon(13, 'flex-shrink-0 text-foreground/40')}
+            {renderWorkspaceIcon(14, 'flex-shrink-0 text-foreground/40')}
             <input
               ref={workspaceEditRef}
               value={workspaceEditName}
               onChange={(e) => setWorkspaceEditName(e.target.value)}
               onKeyDown={handleWorkspaceRenameKeyDown}
               onBlur={() => void handleWorkspaceRenameCommit()}
-              className="flex-1 min-w-0 bg-transparent text-[13px] font-medium text-foreground border-b border-primary/50 outline-none px-0.5 leading-[18px]"
+              className="flex-1 min-w-0 bg-transparent text-[14px] font-medium text-foreground border-b border-primary/50 outline-none px-0.5 leading-[19px]"
               maxLength={50}
             />
           </div>
@@ -1347,8 +1352,8 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               justSwitchedTo && 'animate-workspace-highlight bg-primary/15',
             )}
           >
-            {renderWorkspaceIcon(13, 'flex-shrink-0 text-foreground/40')}
-            <span className="flex-1 min-w-0 truncate text-[13px] font-medium leading-[18px]">
+            {renderWorkspaceIcon(14, 'flex-shrink-0 text-foreground/40')}
+            <span className="flex-1 min-w-0 truncate text-[14px] font-medium leading-[19px]">
               {group.workspace.name}
             </span>
             <span
@@ -1493,7 +1498,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 <button
                   type="button"
                   onClick={() => onShowMore(group.workspace.id)}
-                  className="flex h-[26px] w-full items-center rounded-[7px] pl-[26px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
+                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[26px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
                 >
                   显示更多
                 </button>
@@ -1503,7 +1508,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 <button
                   type="button"
                   onClick={() => onCollapseExtra(group.workspace.id)}
-                  className="flex h-[26px] w-full items-center rounded-[7px] pl-[26px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
+                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[26px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
                 >
                   收起
                 </button>

@@ -10,6 +10,7 @@
  * - ConversationScrollButton — 滚动到底部按钮
  */
 
+import { detectIsWindows } from '@profer/ui'
 import { Button } from '@profer/ui/primitives/button'
 import { cn } from '@/lib/utils'
 import { ArrowDownIcon } from 'lucide-react'
@@ -18,6 +19,10 @@ import { useCallback } from 'react'
 import { ConversationScrollProvider, useConversationScroll, type ConversationScrollActions } from './conversation-scroll'
 
 // ===== Conversation 根容器 =====
+
+/* 滚动条槽位：macOS 用 both-edges 让正文在两侧槽位间居中（滚动条出现时内容不偏移）；
+ * Windows 只用单侧——both-edges 会左右各留一条，12px 时内容白缩 24px。 */
+const CONVERSATION_SCROLLBAR_GUTTER = detectIsWindows() ? 'stable' : 'stable both-edges'
 
 export interface ConversationProps extends Omit<ComponentProps<'div'>, 'children'> {
   resize?: 'instant' | 'smooth'
@@ -40,7 +45,7 @@ export function ConversationContent({ className, scrollClassName, ...props }: Co
   const { scrollRef, contentRef } = useConversationScroll()
   return (
     <div ref={scrollRef} className={cn('profer-scroll-region overflow-y-auto', scrollClassName)}
-      style={{ height: '100%', width: '100%', scrollbarGutter: 'stable both-edges', overflowAnchor: 'none', scrollBehavior: 'auto' }}>
+      style={{ height: '100%', width: '100%', scrollbarGutter: CONVERSATION_SCROLLBAR_GUTTER, overflowAnchor: 'none', scrollBehavior: 'auto' }}>
       <div ref={contentRef} className={cn('flex flex-col gap-1 py-4 px-8', className)} {...props} />
     </div>
   )

@@ -1724,80 +1724,121 @@
   display: none;
 }
 
-/* ===== 全局 Profer 滚动条 =====
- * 应用内所有滚动容器默认使用 6px 细滚动条，中性灰（--muted-foreground），
- * 随主题/皮肤 token 自动适配明暗；平时透明，鼠标移入容器时淡入显示，
- * 悬停 thumb 加深。显式隐藏仍用 .scrollbar-none。
- * 代码中的 .scrollbar-thin 类名保留作语义兼容，样式已由本全局规则接管。
+/* ===== 全局 Profer 滚动条（分平台） =====
+ * 一套自绘滚动条，按平台分叉两套参数：尺寸、命中区、是否常驻可见。
+ * 尺寸/颜色只由下面的 token 决定，具体容器不要再写死像素值。
+ *
+ * 为什么不用 scrollbar-width: thin：
+ * Chromium 一旦同时看到标准属性 thin 和 ::-webkit-scrollbar 伪元素，会优先走原生
+ * Fluent overlay（Windows 11）——不占布局、宽度无视伪元素、JS 也改不了显隐。
+ * 所以这里统一 `scrollbar-width/color: auto`，把滚动条完全交给伪元素自绘。
+ * 同理，::-webkit-scrollbar-thumb 上不要写 opacity/transition：那组伪元素只认颜色、
+ * 圆角、border 等绘制属性，opacity 会被直接忽略（旧规则就是这么失效的）。
+ *
+ * darwin：6px、满圆角、轨道透明，常态 0.3 淡显，悬停 thumb 加深（macOS overlay 习惯）。
+ * win32：12px 命中区（Windows 11 建议的可点面积），视觉只占 4px
+ *        （3px 透明 border + content-box 裁切），悬停展开到 8px；
+ *        常态可见——Windows 用户靠常驻滚动条判断“还能滚多少”，纯按需显隐会被当成没有内容。
+ *
+ * 显式隐藏仍用 .scrollbar-none；.scrollbar-thin 类名保留作语义兼容，样式由本段接管。
  */
+:root {
+  --scrollbar-size: 6px;
+  --scrollbar-size-compact: 6px;
+  --scrollbar-thumb-idle: hsl(var(--muted-foreground) / 0.3);
+  --scrollbar-thumb-hover: hsl(var(--muted-foreground) / 0.5);
+  --scrollbar-thumb-active: hsl(var(--muted-foreground) / 0.62);
+  --scrollbar-inset: 0px;
+  --scrollbar-radius: 999px;
+}
+
+:root[data-platform='win32'] {
+  --scrollbar-size: 12px;
+  --scrollbar-size-compact: 10px;
+  --scrollbar-thumb-idle: hsl(var(--muted-foreground) / 0.42);
+  --scrollbar-thumb-hover: hsl(var(--muted-foreground) / 0.62);
+  --scrollbar-thumb-active: hsl(var(--muted-foreground) / 0.72);
+  --scrollbar-inset: 3px;
+}
+
 * {
-  scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--muted-foreground) / 0.3);
-  border-radius: 999px;
-  opacity: 0;
-  transition: opacity 0.16s ease;
-}
-*:hover {
-  scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent; /* Firefox：hover 加深 */
-}
-*:hover::-webkit-scrollbar-thumb {
-  opacity: 1;
+  background-color: var(--scrollbar-thumb-idle);
+  /* 透明 border + content-box：在固定命中区里做出更细的视觉条。 */
+  border: var(--scrollbar-inset) solid transparent;
+  background-clip: content-box;
+  border-radius: var(--scrollbar-radius);
 }
 *::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--muted-foreground) / 0.5);
+  background-color: var(--scrollbar-thumb-hover);
+}
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active);
 }
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* ===== 对话区滚动条：滚动时才出现 =====
- * 不滚动时完全透明，用户滚动时露出，停手约 0.7s 后隐藏（macOS 习惯）。
+/* Windows：悬停滚动条本体时展开（Fluent 行为），命中区不变、视觉变宽。 */
+:root[data-platform='win32'] *::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+}
+
+/* ===== 对话区滚动条：mac 滚动或悬停时出现 / win 常驻可见 =====
+ * macOS 习惯：不滚动、不悬停时透明；滚动露出来，鼠标移到右侧滚动条热区（到右边缘 12px）时
+ * 也显示，而不是“鼠标在对话区任意位置就常驻”——那样条子等于一直开着。
+ * 移出热区且超过 1.25s 没新滚动后消失。
  * JS 侧见 components/ai-elements/scrollbar-reveal.ts：只给滚动容器打 data-scrolling，
  * 程序性滚动（流式跟随、内容变高）不触发。
  *
- * 必须把 scrollbar-width/color 交回 auto 才能自己控制显隐：
- * 全局 `*` 规则里的 scrollbar-width/color 会让 Chromium 走系统 overlay 滚动条，
- * 那种滚动条由 macOS 自己决定何时出现，JS 改不动；只有 ::-webkit-scrollbar
- * 伪元素样式才是应用可控的。代价是滚动条占 6px（对话区本来就用
- * scrollbarGutter: stable both-edges 保留槽位，所以内容不会左右跳动）。
+ * 容器级再声明一次 scrollbar-width/color: auto：全局已是 auto，但这里必须抵抗
+ * 将来任何回退到 thin 的改动——一旦变 thin，Chromium 会改走系统 overlay 滚动条，
+ * 伪元素失效，data-scrolling 就控不动显隐了。
  */
 .profer-scroll-region {
   scrollbar-width: auto;
   scrollbar-color: auto;
 }
-.profer-scroll-region:hover {
-  /* 覆盖全局 `*:hover` 的加深规则：悬停本身不显示滚动条。 */
-  scrollbar-width: auto;
-  scrollbar-color: auto;
-}
 .profer-scroll-region::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
 .profer-scroll-region::-webkit-scrollbar-track {
   background: transparent;
 }
-.profer-scroll-region::-webkit-scrollbar-thumb,
-.profer-scroll-region:hover::-webkit-scrollbar-thumb,
-.profer-scroll-region::-webkit-scrollbar-thumb:hover {
+
+/* macOS：按需显隐，透明度用 background-color 实现（伪元素不支持 opacity）。 */
+:root[data-platform='darwin'] .profer-scroll-region::-webkit-scrollbar-thumb,
+:root[data-platform='darwin'] .profer-scroll-region::-webkit-scrollbar-thumb:hover {
   background-color: transparent;
-  opacity: 0;
 }
-.profer-scroll-region[data-scrolling='true']::-webkit-scrollbar-thumb,
-.profer-scroll-region[data-scrolling='true']:hover::-webkit-scrollbar-thumb,
-.profer-scroll-region[data-scrolling='true']::-webkit-scrollbar-thumb:hover {
+/* 鼠标进入右侧滚动条热区（12px）时露出：数据由 scrollbar-reveal.ts 的 pointermove 检测。
+ * 不用容器 :hover——那会让鼠标在对话区任何位置都把条子点亮，等于常驻。 */
+:root[data-platform='darwin'] .profer-scroll-region[data-scrollbar-hover='true']::-webkit-scrollbar-thumb,
+:root[data-platform='darwin'] .profer-scroll-region[data-scrollbar-hover='true']::-webkit-scrollbar-thumb:hover {
   background-color: hsl(var(--muted-foreground) / 0.45);
-  opacity: 1;
+}
+:root[data-platform='darwin'] .profer-scroll-region[data-scrolling='true']::-webkit-scrollbar-thumb,
+:root[data-platform='darwin'] .profer-scroll-region[data-scrolling='true']::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.45);
+}
+
+/* Windows：常驻可见（Fluent），滚动中加深；悬停展开仍由全局规则负责。 */
+:root[data-platform='win32'] .profer-scroll-region::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-idle);
+}
+:root[data-platform='win32'] .profer-scroll-region[data-scrolling='true']::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 /* 有右侧进度条的对话区：隐藏原生滚动条，避免两条叠在一起。
@@ -1811,17 +1852,19 @@
   height: 0;
 }
 
-/* 左侧会话/项目列表：默认不露出滚动条，鼠标进入列表后才显示，仍支持滚轮和触控板滚动。
+/* 左侧会话/项目列表：mac 鼠标进入列表才显示；win 常驻可见（悬停加深），仍支持滚轮和触控板滚动。
  *
- * 必须把 scrollbar-width/color 交回 auto（同上方对话区）：一旦设成 thin，Chromium
+ * 必须把 scrollbar-width/color 交回 auto（同对话区）：一旦设成 thin，Chromium
  * 走 Fluent overlay 滚动条——不占布局空间、直接画在会话行右侧，且 ::-webkit-scrollbar
- * 的宽度被忽略（列表里原本那行 `width: 6px` 从来没生效）。
+ * 的宽度被忽略。
  *
- * 占位槽位不能留在列表内边缘，否则 6px 会从内容里扣、行右边缘整体左移。
- * 用 margin-right 把容器伸进侧栏自身 px-2.5 的右侧留白，padding-right 只留 2px 作
- * 行与滚动条的间隔：内容宽度仍是 281px（行、悬停底、操作按钮位置都不动），
- * 6px 滚动条落在留白里，距侧栏边缘 2px。改留白/条宽时这两个数字要一起调。
- * scrollbar-gutter: stable 让槽位常驻，列表从「不满」变「可滚」时内容不左右跳。 */
+ * 占位槽位不能留在列表内边缘，否则条宽会从内容里扣、行右边缘整体左移。
+ * 用 margin-right 把容器伸进侧栏自身 px-2.5（10px）的右侧留白，padding-right 只留 2px 作
+ * 行与滚动条的间隔：
+ * - mac：6px 条，margin -8px，条落在 [2, 8]，距侧栏边缘 2px；
+ * - win：10px 紧凑条（不用主内容区的 12px，否则挤出留白），margin 仍是 -8px，条落在 [2, 10]。
+ * scrollbar-gutter: stable 让槽位常驻，列表从「不满」变「可滚」时内容不左右跳。
+ * 改留白 / 条宽时这几个数字要一起调。 */
 .sidebar-session-scroll {
   scrollbar-width: auto;
   scrollbar-color: auto;
@@ -1830,27 +1873,32 @@
   padding-right: 2px;
   -ms-overflow-style: none;
 }
-.sidebar-session-scroll:hover {
-  /* 覆盖全局 `*:hover` 的 scrollbar-color 加深规则：保持 auto，否则又回 overlay。 */
-  scrollbar-width: auto;
-  scrollbar-color: auto;
-}
 .sidebar-session-scroll::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size-compact);
+  height: var(--scrollbar-size-compact);
 }
 .sidebar-session-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
-.sidebar-session-scroll::-webkit-scrollbar-thumb {
+
+/* macOS：默认透明，鼠标进入列表才露出。 */
+:root[data-platform='darwin'] .sidebar-session-scroll::-webkit-scrollbar-thumb {
   background-color: transparent;
 }
-.sidebar-session-scroll:hover::-webkit-scrollbar-thumb {
+:root[data-platform='darwin'] .sidebar-session-scroll:hover::-webkit-scrollbar-thumb {
   /* 与对话区滚动时的 0.45 对齐；旧 overlay 条实际约 0.5，别调太淡。 */
   background-color: hsl(var(--muted-foreground) / 0.45);
 }
-.sidebar-session-scroll::-webkit-scrollbar-thumb:hover {
+:root[data-platform='darwin'] .sidebar-session-scroll::-webkit-scrollbar-thumb:hover {
   background-color: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Windows：常驻淡显，悬停列表加深；悬停条本体仍是全局的 Fluent 展开。 */
+:root[data-platform='win32'] .sidebar-session-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-idle);
+}
+:root[data-platform='win32'] .sidebar-session-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 /* ===== 面板分隔拖动条 =====
@@ -1946,26 +1994,31 @@
 
 .code-block-wrapper pre.shiki,
 .mermaid-block-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  /* 不能用 thin：会改走 Fluent overlay，宽度无视伪元素（同全局段注释）。 */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
 }
 
 :is(.code-block-wrapper pre.shiki, .mermaid-block-scroll)::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: var(--scrollbar-size-compact);
+  height: var(--scrollbar-size-compact);
 }
 
 :is(.code-block-wrapper pre.shiki, .mermaid-block-scroll)::-webkit-scrollbar-track {
   background: transparent;
 }
 
+/* 代码块背景恒为深色，不跟 --scrollbar-thumb-idle 的分平台透明度：
+ * 深底上 0.3 太淡，统一提到 0.42。 */
 :is(.code-block-wrapper pre.shiki, .mermaid-block-scroll)::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--muted-foreground) / 0.3);
+  background-color: hsl(var(--muted-foreground) / 0.42);
   border-radius: 999px;
 }
 
-:is(.code-block-wrapper pre.shiki, .mermaid-block-scroll)::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--muted-foreground) / 0.5);
+:is(.code-block-wrapper pre.shiki, .mermaid-block-scroll)::-webkit-scrollbar-thumb:hover,
+:root[data-platform='win32'] :is(.code-block-wrapper pre.shiki, .mermaid-block-scroll)::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.6);
+  border-radius: 999px;
 }
 
 :is(.code-block-wrapper pre.shiki, .mermaid-block-scroll)::-webkit-scrollbar-corner {
@@ -2063,10 +2116,11 @@
 
 /* ===== 滚动进度条 — 适配所有主题（无轨道背景，仅滑块） ===== */
 
-/* 按需显隐：不滚动时完全隐藏，用户滚动时露出，停手约 0.7s 后隐藏。
+/* 按需显隐：不滚动、不悬停时隐藏；滚动时露出，鼠标停在右侧滚动条热区时也显示。
  * 标记由 components/ai-elements/scrollbar-reveal.ts 打在轨道元素上；
  * 用 opacity 而不是背景色，避免和皮肤/主题的 --scroll-thumb-bg 配色打架。 */
 .scroll-progress-track {
+  width: 7px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease;
@@ -2075,6 +2129,37 @@
 .scroll-progress-track[data-dragging='true'] {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* macOS：视觉 7px 的条放进 15px 热区（含到右边缘的 4px 留白）——
+ * 鼠标只要到最右侧就能唤出来，不用瞄中线；也能直接拖。
+ * pointer-events 常开：透明时也必须能被指针命中，否则鼠标移上去唤不出来。
+ * 注意不能用 [role='log']:hover——那等于“鼠标在对话区就常驻”，不是这里要的。 */
+:root[data-platform='darwin'] .scroll-progress-track {
+  right: 0;
+  width: 15px;
+  pointer-events: auto;
+}
+:root[data-platform='darwin'] .scroll-progress-thumb {
+  left: 4px;
+  right: 4px;
+}
+:root[data-platform='darwin'] .scroll-progress-track:hover {
+  opacity: 1;
+}
+
+/* Windows：这条自绘滚动条是对话区唯一的位置指示（有它时原生滚动条被隐藏，
+ * 见上方 `[role='log']:has(.scroll-progress-track)`），所以必须常驻可见，
+ * 不能走 mac 的“滚动时才浮出”——否则 Windows 用户看不到“还能滚多少”。
+ * 12px 命中区，滑块两侧各留 3px，视觉仍是 6px 细条。 */
+:root[data-platform='win32'] .scroll-progress-track {
+  width: 12px;
+  opacity: 1;
+  pointer-events: auto;
+}
+:root[data-platform='win32'] .scroll-progress-thumb {
+  left: 3px;
+  right: 3px;
 }
 
 /* 默认亮色主题 */
@@ -3263,3 +3348,12 @@
   margin: 2.2em 0;
   border-color: hsl(var(--border) / 0.7);
 }
+
+/* 草稿期引用高亮：引用落进输入框后，来源消息里的那段文字用 CSS Highlight 标出来。
+   走 Custom Highlight API，不改 DOM，避免与 React 渲染/流式增量更新冲突。 */
+::highlight(profer-quote-source) {
+  background-color: hsl(var(--primary) / 0.24);
+  color: inherit;
+}
+
+

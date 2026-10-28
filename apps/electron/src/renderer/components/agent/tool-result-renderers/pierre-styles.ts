@@ -19,8 +19,8 @@ export const PIERRE_DIFF_CSS = `
     --diffs-scrollbar-thumb-hover: light-dark(hsl(var(--muted-foreground) / 0.8), hsl(var(--muted-foreground) / 0.35));
   }
   [data-code]::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: var(--scrollbar-size-compact, 6px);
+    height: var(--scrollbar-size-compact, 6px);
   }
   [data-code]::-webkit-scrollbar-track {
     background: transparent;
@@ -76,8 +76,8 @@ export const PIERRE_FILE_CSS = `
     --diffs-scrollbar-thumb-hover: light-dark(hsl(var(--muted-foreground) / 0.8), hsl(var(--muted-foreground) / 0.35));
   }
   [data-code]::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: var(--scrollbar-size-compact, 6px);
+    height: var(--scrollbar-size-compact, 6px);
   }
   [data-code]::-webkit-scrollbar-track {
     background: transparent;

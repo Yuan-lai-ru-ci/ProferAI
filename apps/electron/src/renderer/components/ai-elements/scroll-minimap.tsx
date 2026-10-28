@@ -209,7 +209,7 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
   const trackRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
 
-  /** 滚动进度条按需显隐：只有用户滚动时才露出，停手约 0.7s 后隐藏。 */
+  /** 滚动进度条按需显隐：只有用户滚动时才露出，停手约 1.25s 后隐藏。 */
   React.useEffect(() => {
     if (!canScroll) return
     const track = trackRef.current
@@ -718,7 +718,6 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
           ref={trackRef}
           data-dragging={isDragging || undefined}
           className="scroll-progress-track relative h-full rounded-full cursor-pointer"
-          style={{ width: 7 }}
           onMouseDown={handleTrackMouseDown}
         >
           <div
