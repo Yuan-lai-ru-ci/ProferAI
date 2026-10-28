@@ -363,8 +363,22 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
   }
 }
 
-export function useGlobalAgentListeners(): void {
+/** 删除 Map 中的会话条目；不存在时保留原引用，避免无意义重渲染。 */
+function removeSessionEntry<T>(map: Map<string, T>, sessionId: string): Map<string, T> {
+  if (!map.has(sessionId)) return map
+  const next = new Map(map)
+  next.delete(sessionId)
+  return next
+}
+
+export interface GlobalAgentListenerOptions {
+  /** 独立会话窗口：只接管该会话，并禁用依赖顶栏 Tab 的导航/自动开 Tab */
+  standaloneSessionId?: string
+}
+
+export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): void {
   const store = useStore()
+  const standaloneSessionId = options?.standaloneSessionId
 
   useEffect(() => subscribeChannelCatalog({
     subscribe: window.electronAPI.onAgentStreamEvent,
@@ -466,6 +480,8 @@ export function useGlobalAgentListeners(): void {
 
     /** 构建导航到指定会话的回调 */
     const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
+      // 独立会话窗口只承载自己的会话；其他会话的导航交给主窗口，避免把当前视图切到不存在的 Tab。
+      if (standaloneSessionId && sessionId !== standaloneSessionId) return
       const sessions = store.get(agentSessionsAtom)
       const session = sessions.find((s) => s.id === sessionId)
       if (!isAgentWorkspaceIdVisible(session?.workspaceId, store.get(agentWorkspacesAtom))) return
@@ -686,6 +702,8 @@ export function useGlobalAgentListeners(): void {
           if (openSurface) {
             // Tab 化：后台开/更新该文件的预览 Tab，并让用户当前布局「跟随最新文件」
             // （对话左 + 预览右；用户自定义布局不打扰，焦点始终留在对话）。
+            // 独立会话窗口没有 TabContent，不自动开预览 Tab；文件仍会进入预览映射供内联展示。
+            if (standaloneSessionId) return previewFile
             const tabId = openFilePreviewTab(store, sid, previewFile, { activate: false })
             const next = planFollowWorkTab({
               groups: store.get(tabGroupsAtom),
@@ -720,6 +738,8 @@ export function useGlobalAgentListeners(): void {
     // 用「血缘 + 实时指示」作为唯一判据：创建、阻塞、重跑都能覆盖；死委派不冒 Tab。
     const ensureDelegationChildTabs = (): void => {
       if (!effectActive) return
+      // 独立会话窗口没有顶栏 Tab，不自动为委派子会话建 Tab。
+      if (standaloneSessionId) return
       const sessions = store.get(agentSessionsAtom)
       const indicatorMap = store.get(agentSessionIndicatorMapAtom)
       store.set(tabsAtom, (tabs) => {
@@ -822,6 +842,10 @@ export function useGlobalAgentListeners(): void {
               })
               // 正式预览（PPTX 回执链路）：开成预览 Tab 并激活——OfficePreview 必须在
               // 可见 pane 里渲染并回执 ready/error，激活保证它落在当前渲染的 pane 上。
+              // 独立会话窗口没有 TabContent，无法满足回执契约；明确报错而不是让主进程等待超时。
+              if (standaloneSessionId) {
+                throw new Error('独立会话窗口暂不支持正式 PPTX 预览，请在主窗口打开')
+              }
               openFilePreviewTab(store, sessionId, nextFile)
             }).catch((error: unknown) => {
               if (!effectActive) return
@@ -1321,7 +1345,8 @@ export function useGlobalAgentListeners(): void {
       (sessionId) => store.get(agentStreamingStatesAtom).get(sessionId) !== undefined,
     )
 
-    window.electronAPI.restoreActiveAgentStreams()
+    // 独立会话窗口只接管自己的会话；主窗口保持「恢复全部活跃流」的刷新语义。
+    window.electronAPI.restoreActiveAgentStreams(standaloneSessionId ? [standaloneSessionId] : undefined)
       .then((snapshots) => {
         store.set(agentStreamingStatesAtom, (prev) => {
           let next: Map<string, AgentStreamState> | null = null
@@ -1570,6 +1595,15 @@ export function useGlobalAgentListeners(): void {
         }) // unstable_batchedUpdates
     }
 
+    // 会话流被其他窗口接管（拆窗 / 重新绑定）时，本窗口清理该会话的运行态，
+    // 避免侧边栏一直停留在“运行中”或保留已在新窗口处理的待确认请求。
+    const cleanupSessionReleased = window.electronAPI.onAgentSessionReleased((sessionId) => {
+      store.set(agentStreamingStatesAtom, (prev) => removeSessionEntry(prev, sessionId))
+      store.set(allPendingPermissionRequestsAtom, (prev) => removeSessionEntry(prev, sessionId))
+      store.set(allPendingAskUserRequestsAtom, (prev) => removeSessionEntry(prev, sessionId))
+      store.set(allPendingExitPlanRequestsAtom, (prev) => removeSessionEntry(prev, sessionId))
+    })
+
     const cleanupComplete = window.electronAPI.onAgentStreamComplete(
       (data: AgentStreamCompletePayload) => {
         if (restoreTerminalGate.defer(data.sessionId, () => handleStreamComplete(data))) return
@@ -1638,6 +1672,8 @@ export function useGlobalAgentListeners(): void {
     // 与 PlanningView.startTodoInWorkspace（主窗口中启动）保持同等效果，补齐跨窗口断链。
     const cleanupTodoSessionReady = window.electronAPI.onTodoAgentSessionReady(
       ({ todo, session }) => {
+        // Todo Agent 交接是主窗口职责：需要侧边栏/Tab 定位；独立会话窗口不接管。
+        if (standaloneSessionId) return
         if (!isAgentWorkspaceIdVisible(session.workspaceId, store.get(agentWorkspacesAtom))) return
         store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, session))
         if (session.workspaceId) {
@@ -1748,6 +1784,7 @@ export function useGlobalAgentListeners(): void {
       streamStateBatcher.flushAll()
       cleanupGoal()
       cleanupEvent()
+      cleanupSessionReleased()
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()
@@ -1758,5 +1795,5 @@ export function useGlobalAgentListeners(): void {
       unsubscribeDelegationIndicatorTabs()
       window.removeEventListener('focus', onWindowFocus)
     }
-  }, [store]) // store 引用稳定，effect 只执行一次
+  }, [store, standaloneSessionId]) // store 引用稳定；独立窗口的 sessionId 在窗口生命周期内不变
 }

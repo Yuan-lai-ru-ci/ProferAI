@@ -2116,6 +2116,8 @@ export const AGENT_IPC_CHANNELS = {
   RETRY_IMAGE_GENERATION: 'agent:retry-image-generation',
   /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
   RESTORE_ACTIVE_STREAMS: 'agent:restore-active-streams',
+  /** 主进程 → renderer：该会话的流已转移到其他窗口，本窗口清理本地运行态 */
+  SESSION_RELEASED: 'agent:session-released',
   /** renderer → main：读取授权文件当前 SHA-256，供 viewer 加载前后校验 revision。 */
   FILE_PREVIEW_REVISION: 'agent:file-preview-revision',
   /** renderer → main：当前用户可见的正式 PPTX viewer 已 ready/error。 */

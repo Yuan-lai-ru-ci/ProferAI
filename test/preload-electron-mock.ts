@@ -77,6 +77,7 @@ class MockBrowserWindow {
   loadFile(): Promise<void> { return Promise.resolve() }
   on(): void {}
   once(): void {}
+  setMenuBarVisibility(): void {}
   static getAllWindows(): unknown[] { return [] }
   static fromWebContents(): undefined { return undefined }
 }

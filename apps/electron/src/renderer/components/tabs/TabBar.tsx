@@ -21,6 +21,7 @@ import {
   activeTabIdAtom,
   tabIndicatorMapAtom,
   closeTab,
+  isMovableSessionTab,
   reorderTabs,
   updateTabTitle,
   tabMruAtom,
@@ -71,6 +72,7 @@ import { WindowControlsHost } from "@/components/WindowControlsTemplate";
 import { TabBarItem } from "./TabBarItem";
 import { TabGroupItem } from "./TabGroupItem";
 import { useCloseTab } from "@/hooks/useCloseTab";
+import { useMoveTabToNewWindow } from "@/hooks/useMoveTabToNewWindow";
 import { detectIsWindows } from "@profer/ui";
 import { registerShortcut } from "@/lib/shortcut-registry";
 import { cn } from "@/lib/utils";
@@ -130,6 +132,7 @@ export function TabBar(): React.ReactElement {
 
   // 统一关闭逻辑：关闭当前会话入口并回到 Scratch Pad，不停止后台 Agent
   const { requestClose } = useCloseTab();
+  const moveTabToNewWindow = useMoveTabToNewWindow();
   const store = useStore();
 
   const workspaceNameBySessionId = React.useMemo(() => {
@@ -558,6 +561,7 @@ export function TabBar(): React.ReactElement {
         onActivate={handleActivate}
         onClose={requestClose}
         onDragStart={handleDragStart}
+        onMoveToNewWindow={moveTabToNewWindow}
         onCancelSort={() => sortCancelRef.current?.()}
       />
     </>
@@ -576,6 +580,7 @@ function TabBarInner({
   onClose,
   onDragStart,
   onCancelSort,
+  onMoveToNewWindow,
 }: {
   tabs: TabItem[];
   activeTabId: string | null;
@@ -588,6 +593,8 @@ function TabBarInner({
   onDragStart: (tabId: string, e: React.PointerEvent) => void;
   /** 取消进行中的标签排序（合并手势中途接管时调用） */
   onCancelSort: () => void;
+  /** 把会话 Tab 移到独立主窗口 */
+  onMoveToNewWindow: (tabId: string) => void;
 }): React.ReactElement {
   const agentSessions = useAtomValue(agentSessionsAtom);
   const browserStateMap = useAtomValue(browserStateMapAtom);
@@ -890,6 +897,65 @@ function TabBarInner({
   /** 落定前需要在标签栏下方越过的距离，避免一次潦草的纵向拖动就误合并 */
   const GROUP_DROP_COMMIT_MARGIN = 8;
 
+  /** 拖出窗口时高亮的 Tab；pointerup 时指针仍在窗口外才真正创建新窗口。 */
+  const [tearOffHint, setTearOffHint] = React.useState<string | null>(null);
+
+  /**
+   * 标签拖出窗口手势。
+   *
+   * 只监听「指针是否离开窗口边界」，不改变原有排序 / 合并手势：
+   * - 拖到窗口内松手 → 原逻辑（排序或合并）照常执行；
+   * - 拖出窗口松手 → 取消进行中的手势，把该 Tab 移到新窗口。
+   * pointer capture 由 TabBarItem 设置，指针离开窗口后仍能收到 move/up。
+   */
+  const attachTearOffMonitor = React.useCallback((tabId: string, e: React.PointerEvent): void => {
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let armed = false;
+    let cleaned = false;
+
+    const isOutsideWindow = (x: number, y: number): boolean => (
+      x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight
+    );
+
+    const cleanup = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      document.removeEventListener("pointermove", handleMove);
+      document.removeEventListener("pointerup", handleUp);
+      document.removeEventListener("pointercancel", handleCancel);
+      window.removeEventListener("blur", handleCancel);
+      setTearOffHint(null);
+    };
+
+    const handleMove = (me: PointerEvent): void => {
+      if (Math.hypot(me.clientX - startX, me.clientY - startY) < 8) return;
+      const outside = isOutsideWindow(me.clientX, me.clientY);
+      if (outside === armed) return;
+      armed = outside;
+      setTearOffHint(outside ? tabId : null);
+    };
+
+    const handleUp = (me: PointerEvent): void => {
+      const shouldTearOff = armed || isOutsideWindow(me.clientX, me.clientY);
+      cleanup();
+      if (!shouldTearOff) return;
+      // 先取消排序 / 清掉合并投放高亮，避免源窗口残留 transform 或虚线框。
+      onCancelSort();
+      setTabGroupDrag({ draggingTabId: null, hoveredPosition: null });
+      onMoveToNewWindow(tabId);
+    };
+
+    const handleCancel = (): void => {
+      cleanup();
+    };
+
+    document.addEventListener("pointermove", handleMove);
+    document.addEventListener("pointerup", handleUp);
+    document.addEventListener("pointercancel", handleCancel);
+    window.addEventListener("blur", handleCancel);
+  }, [onCancelSort, onMoveToNewWindow, setTabGroupDrag]);
+
   /**
    * 合并手势：把标签向下拖出标签栏，在主区左右投放区里选位置。
    *
@@ -1018,8 +1084,9 @@ function TabBarInner({
   );
 
   /**
-   * 标签拖拽入口：可组合的标签统一交给合并手势，落点决定结果。
-   * 落入投放区 → 组合；没落入 → 取消。并排分屏统一由组合承担，不再有 tear-off 回落。
+   * 标签拖拽入口：
+   * - 会话 Tab（未加入组合）额外挂拖出窗口监听；
+   * - 可组合的标签统一交给合并手势，落点决定结果。
    */
   const handleDragStartWithTearOff = React.useCallback(
     (tabId: string, e: React.PointerEvent) => {
@@ -1028,13 +1095,17 @@ function TabBarInner({
         onDragStart(tabId, e);
         return;
       }
+      // 组合中的 Tab 拖动代表整组，不参与单 Tab 拖出；避免把一半分屏带走。
+      if (isMovableSessionTab(tab) && !findTabGroup(tabGroups, tabId)) {
+        attachTearOffMonitor(tabId, e);
+      }
       if (isGroupEligibleTab(tab)) {
         handleGroupTabDrag(tabId, e);
         return;
       }
       onDragStart(tabId, e);
     },
-    [tabs, onDragStart, handleGroupTabDrag],
+    [tabs, tabGroups, onDragStart, handleGroupTabDrag, attachTearOffMonitor],
   );
 
   // 滚轮 / 触控板横向滚动：按主轴方向分流。
@@ -1248,6 +1319,14 @@ function TabBarInner({
         <div className="pointer-events-none absolute -bottom-px left-0 right-0 h-px bg-primary/60 shadow-[0_0_8px_rgba(0,0,0,0.2)]" />
       )}
 
+      {tearOffHint && (
+        <div className="pointer-events-none absolute inset-x-0 top-full z-50 flex justify-center pt-2">
+          <div className="rounded-full bg-foreground/90 px-3 py-1 text-xs text-background shadow-lg">
+            松开鼠标，在新窗口打开
+          </div>
+        </div>
+      )}
+
       {/* 40px 外框中的 37px 内容行；偏移取整数（见 TOPBAR_CONTENT_OFFSET），
           Tab viewport 与右侧控件独立，避免两者共享直角接缝。 */}
       <div
@@ -1341,11 +1420,16 @@ function TabBarInner({
                 isStreaming={streamingMap.get(tab.id) ?? "idle"}
                 isHovered={hoveredTabId === tab.id}
                 isLeaving={hoveredTabId === tab.id && isLeaving}
-                isTearingOff={tearingOff === tab.id}
+                isTearingOff={tearingOff === tab.id || tearOffHint === tab.id}
                 onActivate={() => onActivate(tab.id)}
                 onClose={() => onClose(tab.id)}
                 onMiddleClick={() => onClose(tab.id)}
                 onDragStart={(e) => handleDragStartWithTearOff(tab.id, e)}
+                onOpenInNewWindow={
+                  isMovableSessionTab(tab) && !tabGroup
+                    ? () => onMoveToNewWindow(tab.id)
+                    : undefined
+                }
                 onHoverEnter={() => handleTabHoverEnter(tab.id)}
                 onHoverLeave={handleTabHoverLeave}
                 onPanelHoverEnter={handlePanelHoverEnter}

@@ -280,9 +280,11 @@ function ToolbarGraphButton({ onClick, sessionId }: { onClick: () => void; sessi
 
 export interface AgentViewProps {
   sessionId: string
+  /** 独立会话窗口：不渲染依赖顶栏 Tab 的分支/分叉入口 */
+  standalone?: boolean
 }
 
-export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
+export function AgentView({ sessionId, standalone = false }: AgentViewProps): React.ReactElement {
   const [pendingGoalReplacement, setPendingGoalReplacement] = useAtom(goalReplacementAtomFamily(sessionId))
   const [replacingGoal, setReplacingGoal] = React.useState(false)
   const setCurrentGoal = useSetAtom(agentGoalAtomFamily(sessionId))
@@ -604,6 +606,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     })
   }, [pendingQuoteInserts, sessionId, setPendingQuoteInsertMap])
 
+
   // 会话加载/重启恢复：meta 中仍有未消费的中断（lastInterruptReason 非 completed）且 atom 无值时，从 meta 填充。
   // 发送时仍会消费该状态并注入上下文，但不在输入区显示中断 Chip。
   React.useEffect(() => {
@@ -815,6 +818,10 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
   const isPermissionPlanMode = permissionMode === 'plan'
   const [presetMenuOpen, setPresetMenuOpen] = React.useState(false)
   const openWorkspacePresets = React.useCallback(() => {
+    if (standalone) {
+      toast.info('请在主窗口打开 Agent 技能页')
+      return
+    }
     setActiveView('agent-skills')
     // AgentSkillsView 的预设 tab 是现有页面内部状态；等页面挂载后复用其既有 tab 按钮完成定位。
     requestAnimationFrame(() => {
@@ -822,7 +829,7 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
         document.querySelector<HTMLElement>('[data-agent-skill-tab="presets"]')?.click()
       })
     })
-  }, [setActiveView])
+  }, [setActiveView, standalone])
   const openPresetMenu = React.useCallback(() => setPresetMenuOpen(true), [])
   React.useEffect(() => {
     if (!workspaceSlug) {
@@ -3160,11 +3167,12 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
     <AgentSessionProvider sessionId={sessionId}>
       <div data-profer-navigation-region="conversation" data-agent-session-id={sessionId} tabIndex={-1} className="agent-conversation flex h-full min-h-0 min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
         <div className="shrink-0">
-          <AgentHeader sessionId={sessionId} />
+          {!standalone && <AgentHeader sessionId={sessionId} />}
         </div>
         {delegationRuntimeDisplay && <div className="shrink-0"><DelegationRuntimeBar display={delegationRuntimeDisplay} /></div>}
-        {/* 探索分支：来源标注 + 带回主线（原侧面板分支条，随分支 Tab 化迁入） */}
-        {isExplorationBranch && <ExplorationBranchBar branchSessionId={sessionId} />}
+        {/* 探索分支：来源标注 + 带回主线（原侧面板分支条，随分支 Tab 化迁入）。
+            独立会话窗口没有父会话 Tab，避免把引用写进本窗口的临时草稿。 */}
+        {!standalone && isExplorationBranch && <ExplorationBranchBar branchSessionId={sessionId} />}
         <div className="shrink-0">
           <GoalStatusBar sessionId={sessionId} />
         </div>
@@ -3213,14 +3221,14 @@ export function AgentView({ sessionId }: AgentViewProps): React.ReactElement {
           stoppedByUser={stoppedByUser}
           streamError={agentError}
           onRetry={handleRetry}
-          onRetryInNewSession={handleRetryInNewSession}
+          onRetryInNewSession={standalone ? undefined : handleRetryInNewSession}
           onRegenerateLastTurn={canRegenerateLastTurn ? handleRegenerateLastTurn : undefined}
           onEditUserMessage={handleEditUserMessage}
           onSubmitEditUserMessage={handleSubmitEditUserMessage}
           onCancelEditUserMessage={handleCancelEditUserMessage}
           editingUserMessageUuid={editingUserMessageUuid}
-          onFork={canFork ? handleFork : undefined}
-          onExplore={canExplore ? handleExplore : undefined}
+          onFork={!standalone && canFork ? handleFork : undefined}
+          onExplore={!standalone && canExplore ? handleExplore : undefined}
           onRewind={handleRewindRequest}
           onCompact={handleCompact}
           onLoadEarlierHistory={handleLoadEarlierHistory}

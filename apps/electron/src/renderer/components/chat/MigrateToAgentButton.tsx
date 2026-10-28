@@ -29,12 +29,21 @@ interface MigrateToAgentButtonProps {
   conversationId: string
 }
 
-export function MigrateToAgentButton({ conversationId }: MigrateToAgentButtonProps): React.ReactElement {
+/** 独立会话窗口没有 Tab 栏，跨模式迁移只能在主窗口完成。 */
+const isSessionWindow = typeof window !== 'undefined' && window.location?.search?.includes('window=session')
+
+export function MigrateToAgentButton({ conversationId }: MigrateToAgentButtonProps): React.ReactElement | null {
   const store = useStore()
   const [migrating, setMigrating] = React.useState(false)
 
   const handleMigrate = async (): Promise<void> => {
     if (migrating) return
+
+    // 独立会话窗口没有 Tab 栏，跨模式迁移必须在主窗口完成。
+    if (typeof window !== 'undefined' && window.location?.search?.includes('window=session')) {
+      toast.info('独立窗口暂不支持切换到 Agent 模式，请在主窗口操作')
+      return
+    }
 
     const agentChannelId = store.get(agentChannelIdAtom)
     if (!agentChannelId) {
@@ -98,6 +107,7 @@ export function MigrateToAgentButton({ conversationId }: MigrateToAgentButtonPro
   }
 
   return (
+    isSessionWindow ? null : (
     <MessageAction
       tooltip={migrating ? '切换中...' : '切换到 Agent 模式'}
       onClick={() => { void handleMigrate() }}
@@ -109,5 +119,6 @@ export function MigrateToAgentButton({ conversationId }: MigrateToAgentButtonPro
         <Bot className="size-3.5" />
       )}
     </MessageAction>
+    )
   )
 }

@@ -465,6 +465,46 @@ export function selectSameModeCloseFallback(
   return sameKind?.id ?? null
 }
 
+/** 会话 Tab 是否可以被拆到独立窗口。
+ * 浏览器 / 插件页依赖主窗口的原生 View；文件预览属于会话工作 Tab。
+ * 这些暂不参与多窗口迁移。 */
+export function isMovableSessionTab(tab: TabItem | null | undefined): tab is TabItem & { type: 'chat' | 'agent' } {
+  return !!tab && (tab.type === 'chat' || tab.type === 'agent')
+}
+
+/**
+ * 把 Tab 从当前窗口摘除（移动到新窗口时使用）。
+ *
+ * 与 closeTab 的区别：
+ * - 不连带关闭同会话的工作 Tab（浏览器/预览留在原窗口，仍可独立使用）；
+ * - 不触发未读清除、消息缓存释放等“用户关闭”语义。
+ */
+export function detachTab(
+  tabs: TabItem[],
+  activeTabId: string | null,
+  tabId: string,
+  mru: readonly string[] = [],
+): { tabs: TabItem[]; activeTabId: string | null; mru: string[] } {
+  const tab = tabs.find((item) => item.id === tabId)
+  if (!isMovableSessionTab(tab)) return { tabs, activeTabId, mru: [...mru] }
+
+  const tabIndex = tabs.findIndex((item) => item.id === tabId)
+  const nextTabs = tabs.filter((item) => item.id !== tabId)
+  const nextMru = removeMruId(mru, tab.sessionId)
+  let nextActiveTabId = activeTabId
+  const activeTabWasRemoved = activeTabId !== null && !nextTabs.some((item) => item.id === activeTabId)
+  if (activeTabId === tabId || activeTabWasRemoved) {
+    const mruTarget = selectMruFallbackId(nextMru, tab.sessionId, nextTabs.flatMap((item) => [item.id, item.sessionId]))
+    const targetTab = mruTarget
+      ? nextTabs.find((item) => item.id === mruTarget || item.sessionId === mruTarget)
+      : undefined
+    // MRU 为空时按原位置就近回退，避免把用户直接丢回 Scratch Pad。
+    nextActiveTabId = targetTab?.id ?? nextTabs[Math.min(tabIndex, nextTabs.length - 1)]?.id ?? null
+  }
+
+  return { tabs: nextTabs, activeTabId: nextActiveTabId, mru: nextMru }
+}
+
 /** 关闭标签页（scratch tab 不可关闭） */
 export function closeTab(
   tabs: TabItem[],

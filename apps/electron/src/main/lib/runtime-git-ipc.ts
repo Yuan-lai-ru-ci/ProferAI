@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import type { WebContents } from 'electron'
 import { IPC_CHANNELS } from '@profer/shared'
 import type { FileAccessOptions, GetFileDiffInput, GitRepoStatus, RuntimeStatus, RevertFileInput } from '@profer/shared'
 import { SETTINGS_IPC_CHANNELS } from '../../types'
@@ -10,12 +11,12 @@ export interface RuntimeGitIpcContext {
   ensurePathAllowed: (filePath: string, options?: FileAccessOptions) => boolean
   isPathAllowed: (filePath: string, options?: FileAccessOptions) => boolean
   ensurePathAllowedWithWorktree: (filePath: string, options?: FileAccessOptions) => Promise<boolean>
-  onRendererReady: () => void
+  onRendererReady: (sender: WebContents) => void
 }
 
 export function registerRuntimeGitIpc(context: RuntimeGitIpcContext): void {
-  ipcMain.on(SETTINGS_IPC_CHANNELS.RENDERER_READY, () => {
-    context.onRendererReady()
+  ipcMain.on(SETTINGS_IPC_CHANNELS.RENDERER_READY, (event) => {
+    context.onRendererReady(event.sender)
   })
 
   ipcMain.handle(IPC_CHANNELS.GET_RUNTIME_STATUS, async (): Promise<RuntimeStatus | null> => getRuntimeStatus())

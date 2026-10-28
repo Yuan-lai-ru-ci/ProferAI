@@ -9,7 +9,14 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { Blocks, BookOpen, Bot, FileText, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, Clock, Pencil, Check } from 'lucide-react'
+import { Blocks, BookOpen, Bot, FileText, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, Clock, Pencil, Check, AppWindow } from 'lucide-react'
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from '@profer/ui/primitives/context-menu'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -38,6 +45,8 @@ export interface TabBarItemProps {
   onClose: () => void
   onMiddleClick: () => void
   onDragStart: (e: React.PointerEvent) => void
+  /** 右键菜单「在新窗口打开」；仅会话 Tab 由 TabBar 传入 */
+  onOpenInNewWindow?: () => void
   /** 该 Tab 对应的会话是否由定时任务创建 */
   isAutomation?: boolean
   /** 子会话血缘：探索分支（GitFork）或委派子会话（GitBranch），替换默认 agent 图标 */
@@ -72,6 +81,7 @@ export function TabBarItem({
   onClose,
   onMiddleClick,
   onDragStart,
+  onOpenInNewWindow,
   isAutomation,
   childKind,
   agentOwned,
@@ -252,7 +262,7 @@ export function TabBarItem({
     )
   }
 
-  return (
+  const tabBody = (
     <div
       data-tab-id={id}
       className={cn(
@@ -399,6 +409,25 @@ export function TabBarItem({
         />
       )}
     </div>
+  )
+
+  if (!onOpenInNewWindow) return tabBody
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{tabBody}</ContextMenuTrigger>
+      <ContextMenuContent className="z-[9999] w-44 min-w-0 p-0.5">
+        <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onOpenInNewWindow}>
+          <AppWindow size={14} />
+          在新窗口打开
+        </ContextMenuItem>
+        <ContextMenuSeparator className="my-0.5" />
+        <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onClose}>
+          <X size={14} />
+          关闭
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

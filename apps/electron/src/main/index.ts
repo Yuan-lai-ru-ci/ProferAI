@@ -190,6 +190,7 @@ import { seedDefaultSkills, VITE_DEV_SERVER_URL } from './lib/config-paths'
 import { configureGlobalSkillSystem, ensureGlobalSkillSystemReady } from './lib/global-skill-manager'
 import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
+import { focusSessionWindow, getSessionWindowSummaries, hasOtherVisibleMainWindow, registerMainAppWindow, setMainAppWindowsChangedHandler } from './lib/main-app-windows'
 import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { disposeLarkCliService } from './lib/lark-cli-service'
@@ -503,6 +504,9 @@ function createWindow(): void {
     },
     ...titleBarOptions,
   })
+  // 主窗口必须先注册到多窗口注册表，renderer 才能读到窗口引导信息；
+  // 后续次级窗口（标签拖出 / 右键在新窗口打开）共用同一套注册表。
+  registerMainAppWindow(mainWindow, { isPrimary: true })
   // 主界面保持 100% 页面缩放：非整数缩放（如 110%）会与系统 DPI 相乘得到 1.375，
   // Chromium 会把 border-radius 圆角光栅成 45° 斜切（圆角被“切掉”）。
   // 详见 DEFAULT_MAIN_WINDOW_ZOOM_FACTOR 注释。
@@ -642,7 +646,10 @@ function createWindow(): void {
     }, remaining)
   }
 
-  setRendererReadyHandler(() => {
+  setRendererReadyHandler((sender) => {
+    // 只有主窗口的首次 ready 才驱动启动闪屏/最大化；
+    // 次级窗口也会发送同一个信号，不能让它重复 show/maximize 主窗口。
+    if (!mainWindow || mainWindow.isDestroyed() || sender !== mainWindow.webContents) return
     rendererReady = true
     showWhenReady()
   })
@@ -868,7 +875,9 @@ function createWindow(): void {
         }
         saveMainWindowState()
         mainWindow?.hide()
-        app.hide()
+        // 还有其他主应用窗口时只隐藏主窗口，不把整个 App 一起隐藏；
+        // 否则用户关掉主窗口会连次级窗口一起看不见。
+        if (mainWindow && !hasOtherVisibleMainWindow(mainWindow)) app.hide()
       }
     })
   }
@@ -953,6 +962,22 @@ async function bootstrap(): Promise<void> {
   // Create application menu
   const menu = createApplicationMenu()
   Menu.setApplicationMenu(menu)
+  // 独立会话窗口创建/关闭/标题变化时重建 Window 菜单，保证最小化后仍能从菜单恢复。
+  const refreshWindowMenu = (): void => {
+    Menu.setApplicationMenu(createApplicationMenu())
+    if (process.platform === 'darwin' && app.dock) {
+      const sessions = getSessionWindowSummaries()
+      app.dock.setMenu(Menu.buildFromTemplate([
+        { label: '显示主窗口', click: () => showAndFocusMainWindow() },
+        ...sessions.map((session) => ({
+          label: `${session.title}${session.minimized ? '（已最小化）' : ''}`,
+          click: () => { focusSessionWindow(session.id) },
+        })),
+      ]))
+    }
+  }
+  setMainAppWindowsChangedHandler(refreshWindowMenu)
+  refreshWindowMenu()
 
   // 仅注入全局 Skill 的 bundle 来源；真正的 seed/迁移必须在窗口创建后执行。
   // Agent 首次运行前仍会通过 prepareRuntimeSkills / AgentOrchestrator 的幂等 ready gate 保证一致性。

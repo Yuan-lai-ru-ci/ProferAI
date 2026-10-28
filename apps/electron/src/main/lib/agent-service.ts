@@ -232,6 +232,16 @@ const wcWithCleanupHook = new WeakSet<WebContents>()
  * webContents 提前销毁的场景——destroyed 事件兜底。
  */
 export function registerWebContents(sessionId: string, wc: WebContents): void {
+  // 同一 sessionId 切换 webContents（拆窗 / 刷新）时通知旧窗口释放本地运行态，
+  // 否则旧窗口的侧边栏会一直停在“运行中”，直到下一次整页刷新。
+  const previous = sessionWebContents.get(sessionId)
+  if (previous && previous !== wc && !previous.isDestroyed()) {
+    try {
+      previous.send(AGENT_IPC_CHANNELS.SESSION_RELEASED, sessionId)
+    } catch {
+      // 旧窗口可能正在关闭；释放通知失败不影响新绑定。
+    }
+  }
   // 同一 sessionId 切换 webContents 时直接覆盖；旧 wc 的 destroyed 钩子仍由 WeakSet 持有，
   // 触发时会扫描 sessionWebContents 清理所有指向旧 wc 的条目（见下方实现）。
   sessionWebContents.set(sessionId, wc)
@@ -253,6 +263,12 @@ export function unregisterWebContents(sessionId: string): void {
   sessionWebContents.delete(sessionId)
 }
 
+/** 当前会话已绑定的 renderer（可能来自任一主应用窗口）；未绑定或已销毁时返回 null。 */
+export function getSessionWebContents(sessionId: string): WebContents | null {
+  const wc = sessionWebContents.get(sessionId)
+  return wc && !wc.isDestroyed() ? wc : null
+}
+
 function isAgentExecutionActive(sessionId: string): boolean {
   return orchestrator.isActive(sessionId) || runtimeCoordinator.isRunning(sessionId)
 }
@@ -271,13 +287,43 @@ function finishActiveStreamBacklog(sessionId: string): void {
   activeStreamEventBacklogs.delete(sessionId)
 }
 
+function isSessionWindowContents(wc: WebContents | null): boolean {
+  if (!wc || wc.isDestroyed()) return false
+  try {
+    return wc.getURL().includes('window=session')
+  } catch {
+    return false
+  }
+}
+
 /**
  * renderer 刷新后的重连入口：先把当前 webContents 绑定为活跃 run 的接收方，
  * 再同步回放本轮事件。调用方必须先安装 STREAM_EVENT listener，避免回放丢失。
+ *
+ * `sessionIds` 用于多窗口：次级窗口只接管自己标签页上的会话，
+ * 否则新窗口启动时会把主窗口正在运行的流全部“抢”过来。
  */
-export function restoreActiveAgentStreams(webContents: WebContents): AgentRuntimeRestoreSnapshot[] {
+export function restoreActiveAgentStreams(
+  webContents: WebContents,
+  sessionIds?: readonly string[],
+): AgentRuntimeRestoreSnapshot[] {
   const restored: AgentRuntimeRestoreSnapshot[] = []
+  const allowed = sessionIds ? new Set(sessionIds) : null
   const snapshots = new Map([...completedStreamEventBacklogs, ...activeStreamEventBacklogs])
+  if (allowed) {
+    for (const sessionId of [...snapshots.keys()]) {
+      if (!allowed.has(sessionId)) snapshots.delete(sessionId)
+    }
+  } else {
+    // 主窗口刷新/启动时不要把手动拆到独立会话窗口里的活跃流抢回来：
+    // 否则会话窗口会收到 SESSION_RELEASED，正在看的流和引用高亮都会被打断。
+    for (const sessionId of [...snapshots.keys()]) {
+      const owner = getSessionWebContents(sessionId)
+      if (owner && owner !== webContents && isSessionWindowContents(owner)) {
+        snapshots.delete(sessionId)
+      }
+    }
+  }
   const contextSnapshots = new Map(runtimeContextStore.list().map((snapshot) => [snapshot.sessionId, snapshot]))
   for (const [sessionId, backlog] of snapshots) {
     if (!isAgentExecutionActive(sessionId) && !completedStreamEventBacklogs.has(sessionId)) continue
@@ -313,6 +359,20 @@ export function restoreActiveAgentStreams(webContents: WebContents): AgentRuntim
     }
     if (!isAgentExecutionActive(sessionId)) completedStreamEventBacklogs.delete(sessionId)
   }
+  // 活跃但尚未产出事件的会话不在 backlog 里，也必须完成绑定；否则第一次事件会丢。
+  if (allowed) {
+    for (const sessionId of allowed) {
+      if (snapshots.has(sessionId) || !isAgentExecutionActive(sessionId)) continue
+      registerWebContents(sessionId, webContents)
+      const context = contextSnapshots.get(sessionId)
+      restored.push({
+        sessionId,
+        active: true,
+        hasTerminalEvent: false,
+        ...(context ? { contextWindow: context.contextWindow, contextUpdatedAt: context.updatedAt } : {}),
+      })
+    }
+  }
   return restored
 }
 
@@ -324,6 +384,8 @@ function isMainRendererWindow(win: BrowserWindow): boolean {
   return !url.includes('window=quick-task')
     && !url.includes('window=voice-dictation')
     && !url.includes('window=detached-preview')
+    // 独立会话窗口不是完整主界面，headless / 自动化事件仍应优先落到主窗口。
+    && !url.includes('window=session')
 }
 
 export function getMainRendererWebContents(): WebContents | null {

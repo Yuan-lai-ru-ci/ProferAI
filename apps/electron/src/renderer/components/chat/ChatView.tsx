@@ -63,20 +63,22 @@ import type {
 
 interface ChatViewProps {
   conversationId: string
+  /** 独立会话窗口：不渲染跨模式迁移等依赖主窗口 Tab 的入口 */
+  standalone?: boolean
 }
 
 /** 稳定空数组引用，避免每次渲染生成新数组触发 effect 重跑 */
 const EMPTY_CHAT_MESSAGES: ChatMessage[] = []
 
-export function ChatView({ conversationId }: ChatViewProps): React.ReactElement {
+export function ChatView({ conversationId, standalone = false }: ChatViewProps): React.ReactElement {
   return (
     <ConversationProvider conversationId={conversationId}>
-      <ChatViewInner conversationId={conversationId} />
+      <ChatViewInner conversationId={conversationId} standalone={standalone} />
     </ConversationProvider>
   )
 }
 
-function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
+function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): React.ReactElement {
   // ===== 本地状态（每个实例独立） =====
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [contextDividers, setContextDividers] = React.useState<string[]>([])
@@ -825,8 +827,8 @@ function ChatViewInner({ conversationId }: ChatViewProps): React.ReactElement {
             </div>
           )}
 
-          {/* Agent 模式推荐横幅 */}
-          <AgentRecommendBanner />
+          {/* Agent 模式推荐横幅：独立会话窗口不接管跨模式迁移 */}
+          {!standalone && <AgentRecommendBanner />}
 
           {/* 底部：输入框 */}
           <ChatInput

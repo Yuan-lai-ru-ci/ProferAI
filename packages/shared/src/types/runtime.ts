@@ -407,11 +407,61 @@ export const IPC_CHANNELS = {
   WINDOW_FULL_SCREEN_CHANGED: 'window:full-screen-changed',
   /** 窗口最大化状态变化通知（主进程 → 渲染进程） */
   WINDOW_MAXIMIZE_CHANGED: 'window:maximize-changed',
+  /** 读取当前主应用窗口的引导信息（窗口 ID、是否主窗口、初始 Tab） */
+  WINDOW_GET_BOOTSTRAP: 'window:get-bootstrap',
+  /** 把当前窗口的会话 Tab 移动到一个新主窗口 */
+  WINDOW_OPEN_TAB_IN_NEW_WINDOW: 'window:open-tab-in-new-window',
+  /** 独立会话窗口把当前会话移回主窗口（renderer → main） */
+  WINDOW_RETURN_TO_MAIN: 'window:return-to-main',
+  /** 主窗口接收独立窗口回归的 Tab（main → renderer） */
+  WINDOW_REATTACH_TAB: 'window:reattach-tab',
   /** 截图导出：将 HTML 渲染为 PNG 图片 */
   SCREENSHOT_CAPTURE: 'screenshot:capture',
   /** 使 git diff 缓存失效（Agent 写文件/git 突变后调用，传 changedPath 可定向失效） */
   INVALIDATE_GIT_DIFF_CACHE: 'git:invalidate-diff-cache',
 } as const
+
+/**
+ * 可被移动到独立主窗口的 Tab 类型。
+ *
+ * 浏览器 / 插件页依赖主窗口的原生 View，文件预览属于会话工作 Tab；
+ * 这些暂不参与多窗口迁移。
+ */
+export type MainWindowTabType = 'chat' | 'agent'
+
+/** 移动到一个新主窗口时携带的 Tab 快照 */
+export interface MainWindowTabPayload {
+  id: string
+  type: MainWindowTabType
+  sessionId: string
+  title: string
+  parentSessionId?: string
+  /** 未发送的输入草稿（纯文本）；拆窗时随 Tab 一起带走，避免用户输入丢失 */
+  draft?: string
+  /** 未发送的富文本草稿（含引用胶囊等结构）；与 draft 一起拆窗，避免划词引用退化 */
+  draftHtml?: string
+}
+
+/** 主应用窗口类型：完整主界面 / 独立会话窗口 */
+export type MainWindowKind = 'main' | 'session'
+
+/** 主应用窗口启动时向主进程读取的引导信息 */
+export interface MainWindowBootstrap {
+  /** 主进程分配的窗口 ID；主窗口固定为 'primary' */
+  windowId: string
+  /** 窗口类型：main = 完整主界面，session = 单会话独立窗口 */
+  kind: MainWindowKind
+  /** 是否是应用主窗口（负责持久化 Tab 状态与启动闪屏） */
+  isPrimary: boolean
+  /** 会话窗口创建时指定要打开的 Tab；主窗口为 null */
+  initialTab: MainWindowTabPayload | null
+}
+
+/** 「在新窗口打开」的结果 */
+export interface OpenTabInNewWindowResult {
+  ok: boolean
+  error?: string
+}
 
 /**
  * IPC 通道名称类型

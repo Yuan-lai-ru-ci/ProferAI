@@ -17,6 +17,8 @@ import { listVisualizations, readVisualization, readVisualizationViewState, save
 
 interface VisualizationIpcDependencies {
   getMainWindow: MainWindowGetter
+  /** 多窗口：任意主应用窗口都允许调用；未提供时退回单主窗口校验。 */
+  isAllowedSender?: (sender: MainFrameEvent['sender']) => boolean
   getSession?: typeof getAgentSessionMeta
   getWorkspace?: typeof getAgentWorkspace
   getSessionWorkspacePath?: typeof getAgentSessionWorkspacePath
@@ -101,6 +103,7 @@ export function createVisualizationIpcHandlers(deps: VisualizationIpcDependencie
 
   const authorize = (event: MainFrameEvent): void => {
     assertMainFrame(event)
+    if (deps.isAllowedSender?.(event.sender)) return
     assertMainWindowSender(event, deps.getMainWindow)
   }
 

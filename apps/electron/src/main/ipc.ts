@@ -5,6 +5,7 @@
  */
 
 import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app, Notification } from 'electron'
+import type { WebContents } from 'electron'
 import { isAbsolute, join, relative, resolve, sep, dirname, basename, extname } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
@@ -225,7 +226,7 @@ import {
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { getAgentSessionNavigationIndex } from './lib/agent-navigation-index'
-import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
+import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
 import { setQuoteableSelection } from './menu'
 import { buildArchiveToggleUpdates } from './lib/agent-unread-policy'
@@ -250,6 +251,7 @@ import { registerSettingsIpc } from './lib/settings-ipc'
 import { registerHeatmapMigrationIpc } from './lib/heatmap-migration-ipc'
 import type { MainWindowGetter } from './lib/ipc-sender-guard'
 import { getMainWindow } from './lib/main-window-state'
+import { isMainAppWindowSender } from './lib/main-app-windows'
 import { registerAppIconIpc } from './lib/app-icon-ipc'
 import { registerPenOcrIpc } from './lib/pen-ocr-ipc'
 import { registerDockBadgeIpc } from './lib/dock-badge-ipc'
@@ -343,9 +345,13 @@ const goalSessionService = new GoalSessionService({
     return resolveEffectivePermissionMode(preset.permissionMode, session?.permissionMode) === 'plan'
   },
   run: async (input) => {
+    // 多窗口：优先把 Goal 本轮事件发给该会话当前绑定的窗口；
+    // 没有绑定（例如从未在本进程跑过）时回退主窗口。
+    const bound = getSessionWebContents(input.sessionId)
     const mainWindow = getMainWindow()
-    if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Profer 主窗口不可用，Goal 已停止')
-    await runAgent(input, mainWindow.webContents)
+    const target = bound ?? (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null)
+    if (!target) throw new Error('Profer 窗口不可用，Goal 已停止')
+    await runAgent(input, target)
   },
   stopRun: stopGoalRunAndWait,
   readStates: () => loadGoalStates(GOAL_STORE_PATH()),
@@ -362,7 +368,12 @@ const goalSessionService = new GoalSessionService({
   }).id,
   updateBlockedTodo: (id, status, notes) => { updateTodo({ id, status, notes }) },
   publish: (state) => {
-    getMainWindow()?.webContents.send(AGENT_IPC_CHANNELS.GOAL_EVENT, { sessionId: state.sessionId, state })
+    // 多窗口：Goal 状态跟着会话绑定窗口走；未绑定时回退主窗口，
+    // 避免向所有窗口广播导致每个窗口都弹一次完成/受阻提示。
+    const target = getSessionWebContents(state.sessionId) ?? getMainWindow()?.webContents
+    if (target && !target.isDestroyed()) {
+      target.send(AGENT_IPC_CHANNELS.GOAL_EVENT, { sessionId: state.sessionId, state })
+    }
   },
   logError: (error) => { console.error('[goal] 会话状态同步失败', error) },
 })
@@ -1158,10 +1169,13 @@ export function setIpcMainWindowGetter(getter: MainWindowGetter): void {
 }
 
 function assertSensitiveAgentIpcSender(event: { sender: { isDestroyed(): boolean } }): void {
+  // 多窗口：任意已注册的主应用窗口都是合法来源；
+  // 保留 getter 兼容测试注入与单窗口降级路径。
+  if (isMainAppWindowSender(event.sender as import('electron').WebContents)) return
   assertMainWindowSender(event, mainWindowGetter)
 }
 
-let rendererReadyHandler: (() => void) | null = null
+let rendererReadyHandler: ((sender: WebContents) => void) | null = null
 
 /** 向仍存活的 renderer 广播工作区列表变化；与 preload 监听保持同一契约。 */
 function broadcastAgentWorkspacesChanged(): void {
@@ -1172,7 +1186,7 @@ function broadcastAgentWorkspacesChanged(): void {
   }
 }
 
-export function setRendererReadyHandler(handler: (() => void) | null): void {
+export function setRendererReadyHandler(handler: ((sender: WebContents) => void) | null): void {
   rendererReadyHandler = handler
 }
 
@@ -1186,7 +1200,10 @@ export function registerIpcHandlers(): void {
   }
   _ipcHandlersRegistered = true
 
-  registerVisualizationIpc({ getMainWindow: mainWindowGetter })
+  registerVisualizationIpc({
+    getMainWindow: mainWindowGetter,
+    isAllowedSender: (sender) => isMainAppWindowSender(sender),
+  })
 
   restoreGoalStatesOnce()
 
@@ -1206,7 +1223,7 @@ export function registerIpcHandlers(): void {
     ensurePathAllowed,
     isPathAllowed,
     ensurePathAllowedWithWorktree,
-    onRendererReady: () => rendererReadyHandler?.(),
+    onRendererReady: (sender) => rendererReadyHandler?.(sender),
   })
 
   // 打开独立预览窗口
@@ -2252,7 +2269,13 @@ export function registerIpcHandlers(): void {
   // renderer 刷新后重新绑定所有仍活跃的 Agent 流，并回放本轮实时事件。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RESTORE_ACTIVE_STREAMS,
-    async (event): Promise<import('@profer/shared').AgentRuntimeRestoreSnapshot[]> => restoreActiveAgentStreams(event.sender),
+    async (event, sessionIds?: unknown): Promise<import('@profer/shared').AgentRuntimeRestoreSnapshot[]> => {
+      // 次级窗口只恢复自己标签页上的会话；主窗口不传参数，保持刷新恢复全部活跃流的旧行为。
+      const ids = Array.isArray(sessionIds)
+        ? sessionIds.filter((id): id is string => typeof id === 'string' && id.length > 0).slice(0, 100)
+        : undefined
+      return restoreActiveAgentStreams(event.sender, ids)
+    },
   )
   ipcMain.handle(AGENT_IPC_CHANNELS.FILE_PREVIEW_REVISION, async (event, filePath: string, access?: FileAccessOptions | string[]): Promise<string | null> => {
     assertSensitiveAgentIpcSender(event)
@@ -2904,6 +2927,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(AGENT_IPC_CHANNELS.START_GOAL, async (event, sessionId: string, goal: string, contract?: AgentGoalContract): Promise<AgentGoalState> => {
     assertSensitiveAgentIpcSender(event)
     if (typeof sessionId !== 'string' || typeof goal !== 'string' || !goal.trim()) throw new Error('Goal 不能为空')
+    // 从哪个窗口发起，Goal 本轮事件就回到哪个窗口（多窗口下不能固定发主窗口）。
+    registerWebContents(sessionId, event.sender)
     return goalSessionService.start(sessionId, goal, contract)
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.GET_GOAL, async (event, sessionId: string): Promise<AgentGoalState | null> => {
@@ -2920,6 +2945,7 @@ export function registerIpcHandlers(): void {
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.RESUME_GOAL, async (event, sessionId: string): Promise<AgentGoalState> => {
     assertSensitiveAgentIpcSender(event)
+    registerWebContents(sessionId, event.sender)
     return goalSessionService.resume(sessionId)
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.STOP_GOAL, async (event, sessionId: string): Promise<AgentGoalState> => {

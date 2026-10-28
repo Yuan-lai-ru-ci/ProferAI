@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { closeTab, closeTabs, createPluginTabId, getPersistableTabState, openPluginTab, openTab, selectSameModeCloseFallback, tabContextSessionId, FRP_GUIDE_TAB_ID, FRP_GUIDE_TAB_TITLE, TUTORIAL_TAB_ID, type TabItem } from './tab-atoms'
+import { closeTab, closeTabs, createPluginTabId, detachTab, getPersistableTabState, isMovableSessionTab, openPluginTab, openTab, selectSameModeCloseFallback, tabContextSessionId, FRP_GUIDE_TAB_ID, FRP_GUIDE_TAB_TITLE, TUTORIAL_TAB_ID, type TabItem } from './tab-atoms'
 
 const tab = (id: string): TabItem => ({ id, type: 'agent', sessionId: id, title: id })
 
@@ -224,4 +224,37 @@ test('Scratch Pad 不参与批量关闭，也不产生任何变更', () => {
   expect(result.closedTabs).toEqual([])
   expect(result.tabs).toBe(tabs)
   expect(result.activeTabId).toBe('a')
+})
+
+// ===== 多窗口：把会话 Tab 拆到独立窗口 =====
+
+test('detachTab 只移除会话 Tab，保留同会话的预览工作 Tab', () => {
+  const opened = openTab([tab('a')], { type: 'preview', sessionId: 'a', title: '预览：a.ts', filePath: '/w/a.ts' })
+  const previewId = opened.tabs.find((item) => item.type === 'preview')!.id
+  const result = detachTab(opened.tabs, 'a', 'a', ['a'])
+  expect(result.tabs.map((item) => item.id)).toEqual(['__scratch-pad__', previewId])
+  expect(result.activeTabId).toBe(previewId)
+  expect(result.mru).toEqual([])
+})
+
+test('detachTab 移除非活动 Tab 不改变当前激活项', () => {
+  const result = detachTab([SCRATCH, tab('a'), tab('b')], 'a', 'b', ['a', 'b'])
+  expect(result.tabs.map((item) => item.id)).toEqual(['__scratch-pad__', 'a'])
+  expect(result.activeTabId).toBe('a')
+})
+
+test('detachTab 对不可迁移的 Tab 原样返回', () => {
+  const tabs = [SCRATCH, { ...tab('a'), type: 'preview' as const }]
+  const result = detachTab(tabs, 'a', 'a', ['a'])
+  expect(result.tabs).toBe(tabs)
+  expect(result.activeTabId).toBe('a')
+})
+
+test('isMovableSessionTab 只允许 chat / agent', () => {
+  expect(isMovableSessionTab(tab('a'))).toBe(true)
+  expect(isMovableSessionTab({ ...tab('a'), type: 'chat' })).toBe(true)
+  expect(isMovableSessionTab({ ...tab('a'), type: 'preview' })).toBe(false)
+  expect(isMovableSessionTab({ ...tab('a'), type: 'browser' })).toBe(false)
+  expect(isMovableSessionTab(SCRATCH)).toBe(false)
+  expect(isMovableSessionTab(null)).toBe(false)
 })

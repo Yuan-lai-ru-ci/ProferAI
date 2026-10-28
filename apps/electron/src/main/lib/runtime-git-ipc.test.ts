@@ -20,7 +20,7 @@ describe('Runtime/Git IPC 注册（结构检查）', () => {
     expect(source).toContain('RuntimeGitIpcContext')
     expect(source).toContain('context.ensurePathAllowedWithWorktree')
     expect(source).toContain('context.isPathAllowed')
-    expect(source).toContain('context.onRendererReady()')
+    expect(source).toContain('context.onRendererReady(event.sender)')
     expect(source).toContain('invalidateGitDiffCache(filePath)')
   })
   test('ipc.ts 只保留注册入口', () => {

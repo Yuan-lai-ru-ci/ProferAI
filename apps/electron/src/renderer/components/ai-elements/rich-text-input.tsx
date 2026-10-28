@@ -766,9 +766,12 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
       const isRichTextModeChanged = lastRichTextModeRef.current !== richTextEnabled
       editorInstanceRef.current = currentEditor
       lastRichTextModeRef.current = richTextEnabled
-      // 如果值是编辑器自己设置的，跳过同步；但编辑器重建或 Markdown 开关切换后，
-      // 即使 value 未变也必须重新解析，避免富文本/纯文本模式显示错误。
-      if (!isEditorRecreated && !isRichTextModeChanged && controllerValue === lastEditorValueRef.current) {
+      // 外部 HTML 草稿可能晚于编辑器挂载才到（独立会话窗口先挂载、再从 bootstrap 恢复）。
+      // 这种情况 value 可能没变，但必须用 HTML 重放，否则引用/mention 节点会退化成纯文本。
+      const htmlChanged = htmlValue != null && htmlValue !== latestHtmlRef.current
+      // 如果值是编辑器自己设置的，跳过同步；但编辑器重建、Markdown 开关切换或外部 HTML
+      // 草稿到达后，即使 value 未变也必须重新解析，避免富文本/纯文本模式显示错误。
+      if (!isEditorRecreated && !isRichTextModeChanged && controllerValue === lastEditorValueRef.current && !htmlChanged) {
         return
       }
       // 连续输入尚未同步到外层时，外层仍持有上一次已同步值；不能反向覆盖编辑器。
@@ -811,7 +814,7 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
         draftPresenceRef.current = controllerValue.trim().length > 0
       }
     }
-  }, [editor, value, richTextEnabled])
+  }, [editor, value, htmlValue, richTextEnabled])
   useEffect(() => {
     if (editor) {
       editor.setEditable(!disabled)

@@ -337,6 +337,14 @@ export interface ElectronAPI {
   onWindowFullScreenChanged: (callback: (isFullScreen: boolean) => void) => () => void
   /** 订阅窗口最大化/还原状态变化 */
   onWindowMaximizeChanged: (callback: (isMaximized: boolean) => void) => () => void
+  /** 读取当前主应用窗口的引导信息（窗口 ID、是否主窗口、初始 Tab） */
+  getWindowBootstrap: () => Promise<import('@profer/shared').MainWindowBootstrap>
+  /** 把当前窗口的会话 Tab 移动到一个新主窗口 */
+  openTabInNewWindow: (tab: import('@profer/shared').MainWindowTabPayload) => Promise<import('@profer/shared').OpenTabInNewWindowResult>
+  /** 独立会话窗口把当前会话移回主窗口 */
+  returnTabToMain: (tab: import('@profer/shared').MainWindowTabPayload) => Promise<import('@profer/shared').OpenTabInNewWindowResult>
+  /** 主窗口接收独立窗口回归的 Tab */
+  onReattachTab: (callback: (tab: import('@profer/shared').MainWindowTabPayload) => void) => () => void
 
   // ===== 渠道管理相关 =====
 
@@ -993,8 +1001,8 @@ export interface ElectronAPI {
   /** 重命名/移动 Skill 目录下的文件或目录 */
   renameSkillEntry: (workspaceSlug: string, skillSlug: string, fromRelative: string, toRelative: string) => Promise<void>
 
-  /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
-  restoreActiveAgentStreams: () => Promise<AgentRuntimeRestoreSnapshot[]>
+  /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流；多窗口下可限定本窗口拥有的会话 */
+  restoreActiveAgentStreams: (sessionIds?: readonly string[]) => Promise<AgentRuntimeRestoreSnapshot[]>
 
   /** 读取授权文件当前 SHA-256 revision，供正式 viewer 加载前后校验。 */
   getAgentFilePreviewRevision: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<string | null>
@@ -1005,6 +1013,9 @@ export interface ElectronAPI {
 
   /** 订阅 Agent 流式事件（返回清理函数） */
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => () => void
+
+  /** 订阅「会话流已转移到其他窗口」通知；本窗口应清理该会话的运行态 */
+  onAgentSessionReleased: (callback: (sessionId: string) => void) => () => void
 
   /** 订阅 Agent 流式完成事件 */
   onAgentStreamComplete: (callback: (data: AgentStreamCompletePayload) => void) => () => void
@@ -1857,6 +1868,24 @@ const electronAPI: ElectronAPI = {
     return () => window.removeEventListener('resize', handler)
   },
 
+  getWindowBootstrap: () => {
+    return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_GET_BOOTSTRAP)
+  },
+
+  openTabInNewWindow: (tab: import('@profer/shared').MainWindowTabPayload) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_OPEN_TAB_IN_NEW_WINDOW, tab)
+  },
+
+  returnTabToMain: (tab: import('@profer/shared').MainWindowTabPayload) => {
+    return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_RETURN_TO_MAIN, tab)
+  },
+
+  onReattachTab: (callback: (tab: import('@profer/shared').MainWindowTabPayload) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, tab: import('@profer/shared').MainWindowTabPayload): void => callback(tab)
+    ipcRenderer.on(IPC_CHANNELS.WINDOW_REATTACH_TAB, listener)
+    return () => { ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_REATTACH_TAB, listener) }
+  },
+
   // 渠道管理
   listChannels: (options?: { localOnly?: boolean }) => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.LIST, options)
@@ -2460,8 +2489,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_NAVIGATION_INDEX, id)
   },
 
-  restoreActiveAgentStreams: () => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTORE_ACTIVE_STREAMS)
+  restoreActiveAgentStreams: (sessionIds?: readonly string[]) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTORE_ACTIVE_STREAMS, sessionIds ? [...sessionIds] : undefined)
   },
 
   getAgentFilePreviewRevision: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
@@ -2754,6 +2783,12 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, event: AgentStreamEvent): void => callback(event)
     ipcRenderer.on(AGENT_IPC_CHANNELS.STREAM_EVENT, listener)
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.STREAM_EVENT, listener) }
+  },
+
+  onAgentSessionReleased: (callback: (sessionId: string) => void) => {
+    const listener = (_: unknown, sessionId: string): void => callback(sessionId)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.SESSION_RELEASED, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.SESSION_RELEASED, listener) }
   },
 
   onAgentStreamComplete: (callback: (data: AgentStreamCompletePayload) => void) => {

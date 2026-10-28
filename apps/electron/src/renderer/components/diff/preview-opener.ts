@@ -12,6 +12,7 @@
 
 import * as React from 'react'
 import { getDefaultStore, useStore } from 'jotai'
+import { toast } from 'sonner'
 import { previewFileMapAtom, previewFilesByTabAtom, type PreviewFile } from '@/atoms/preview-atoms'
 import { agentSessionPathMapAtom } from '@/atoms/agent-atoms'
 import { previewOpenModeAtom } from '@/atoms/ui-preferences'
@@ -79,6 +80,11 @@ export function openFilePreviewTab(
   file: PreviewFile,
   options: { activate?: boolean } = {},
 ): string {
+  // 独立会话窗口没有 TabContent 承载预览页；直接提示回主窗口，避免创建看不见的预览 Tab。
+  if (typeof window !== 'undefined' && window.location?.search?.includes('window=session')) {
+    toast.info('独立窗口暂不支持文件预览，请在主窗口打开')
+    return ''
+  }
   const normalizedFile = normalizePreviewFile(store, sessionId, file)
   store.set(previewFileMapAtom, (prev) => {
     const m = new Map(prev)

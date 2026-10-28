@@ -1,6 +1,7 @@
 import { app, Menu, shell, BrowserWindow } from 'electron'
 import { AGENT_IPC_CHANNELS } from '@profer/shared'
 import { DEFAULT_MAIN_WINDOW_ZOOM_FACTOR, resetWindowZoom } from './lib/mac-traffic-light'
+import { focusSessionWindow, getSessionWindowSummaries } from './lib/main-app-windows'
 
 export type TextContextMenuParams = Pick<
   Electron.ContextMenuParams,
@@ -113,6 +114,7 @@ export function createApplicationMenu(): Menu {
    * 改为通知渲染进程关闭当前标签页。
    */
 
+  const sessionWindows = getSessionWindowSummaries()
   const template: Electron.MenuItemConstructorOptions[] = [
     // 应用菜单 (仅 macOS)
     ...(isMac
@@ -205,12 +207,23 @@ export function createApplicationMenu(): Menu {
       submenu: [
         { role: 'minimize' as const, label: '最小化' },
         { role: 'zoom' as const, label: '缩放' },
+        ...(sessionWindows.length > 0
+          ? [
+              { type: 'separator' as const },
+              ...sessionWindows.map((session) => ({
+                label: `${session.title}${session.minimized ? '（已最小化）' : ''}`,
+                click: () => { focusSessionWindow(session.id) },
+              })),
+              {
+                label: '显示全部独立窗口',
+                click: () => { for (const session of sessionWindows) focusSessionWindow(session.id) },
+              },
+            ]
+          : []),
         ...(isMac
           ? [
               { type: 'separator' as const },
               { role: 'front' as const, label: '前置全部窗口' },
-              { type: 'separator' as const },
-              { role: 'window' as const, label: '窗口' },
             ]
           : [{ role: 'close' as const, label: '关闭' }]),
       ],

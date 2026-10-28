@@ -10,6 +10,7 @@
  */
 
 import { useStore } from 'jotai'
+import { toast } from 'sonner'
 import { activeTabIdAtom, openTab, tabsAtom } from '@/atoms/tab-atoms'
 import { createGroup, findTabGroup, replaceTabGroup, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 
@@ -29,6 +30,11 @@ export function openExplorationBranchTab(
   branch: { sessionId: string; title: string },
   options: { autoGroup?: boolean } = {},
 ): string {
+  // 独立会话窗口没有 Tab 栏；分支 Tab 只能回主窗口打开。
+  if (typeof window !== 'undefined' && window.location?.search?.includes('window=session')) {
+    toast.info('独立窗口暂不支持打开分支 Tab，请在主窗口打开')
+    return branch.sessionId
+  }
   const tabs = store.get(tabsAtom)
   const result = openTab(tabs, {
     type: 'agent',

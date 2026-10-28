@@ -6,6 +6,7 @@
  */
 
 import * as React from 'react'
+import { toast } from 'sonner'
 import { promoteMru } from '@profer/shared'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
@@ -52,6 +53,11 @@ export function useOpenSession(): OpenSessionFn {
 
   return React.useCallback(
     (type: TabType, sessionId: string, title: string, parentSessionId?: string): void => {
+      // 独立会话窗口没有 Tab 栏；跨会话导航交给主窗口，避免创建看不见的 Tab。
+      if (typeof window !== 'undefined' && window.location?.search?.includes('window=session')) {
+        toast.info('独立窗口暂不支持切换会话，请在主窗口打开')
+        return
+      }
       const knownSession = type === 'agent' || type === 'preview'
         ? agentSessions.find((session) => session.id === sessionId)
         : undefined

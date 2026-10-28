@@ -42,6 +42,8 @@ import {
   unviewedCompletedSessionIdsAtom,
   agentSessionsAtom,
   memoryUnviewedCompletedSessionIdsAtom,
+  agentSessionDraftsAtom,
+  agentSessionDraftHtmlAtom,
 } from './atoms/agent-atoms'
 import {
   manualReadConfirmEnabledAtom,
@@ -82,6 +84,7 @@ import { installedPluginsAtom } from './atoms/plugin-system'
 import { composerToolbarPreferencesAtom, initializeComposerToolbarPreferences } from './atoms/composer-toolbar-preferences'
 import { developerModeEnabledAtom } from './atoms/developer-mode'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
+import { useOpenSession } from './hooks/useOpenSession'
 import { useBrowserLocalFileSelectionQuote } from './hooks/useBrowserLocalFileSelectionQuote'
 import { useBrowserPreviewThemeSync } from './hooks/useBrowserPreviewThemeSync'
 import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
@@ -106,7 +109,7 @@ import type { TabItem } from './atoms/tab-atoms'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
-import { currentConversationIdAtom } from './atoms/chat-atoms'
+import { conversationDraftsAtom, currentConversationIdAtom } from './atoms/chat-atoms'
 import { initializeAgentSettings } from './lib/agent-settings-initialization'
 import { appModeAtom } from './atoms/app-mode'
 import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@profer/shared'
@@ -127,6 +130,10 @@ import { UpdateDialog } from './components/settings/UpdateDialog'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { NavigationInputProvider } from './components/navigation/NavigationInputProvider'
+import { SessionWindowApp } from './components/session-window/SessionWindowApp'
+import { TooltipProvider } from '@profer/ui/primitives/tooltip'
+import { settingsOpenAtom } from './atoms/settings-tab'
+import { sendWithCmdEnterAtom, shortcutOverridesAtom } from './atoms/shortcut-atoms'
 import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
 import './styles/globals.css'
 import './styles/skin-base.css'
@@ -138,6 +145,9 @@ const isVoiceDictationWindow = new URLSearchParams(window.location.search).get('
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isAgentPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'agent-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
+const isSessionWindow = new URLSearchParams(window.location.search).get('window') === 'session'
+const sessionWindowId = new URLSearchParams(window.location.search).get('sessionId')
+const sessionWindowType = new URLSearchParams(window.location.search).get('sessionType')
 
 /**
  * 主题初始化组件
@@ -639,6 +649,85 @@ function AgentListenersInitializer(): null {
   return null
 }
 
+/** 主窗口接收「移回主窗口」的会话：先恢复草稿，再打开/聚焦 Tab。 */
+function ReattachTabListener(): null {
+  const store = useStore()
+  const openSession = useOpenSession()
+  useEffect(() => {
+    return window.electronAPI.onReattachTab((tab) => {
+      if (tab.type === 'agent') {
+        if (tab.draft) {
+          store.set(agentSessionDraftsAtom, (previous) => new Map(previous).set(tab.sessionId, tab.draft!))
+        }
+        if (tab.draftHtml) {
+          store.set(agentSessionDraftHtmlAtom, (previous) => new Map(previous).set(tab.sessionId, tab.draftHtml!))
+        }
+      } else if (tab.draft) {
+        store.set(conversationDraftsAtom, (previous) => new Map(previous).set(tab.sessionId, tab.draft!))
+      }
+      openSession(tab.type, tab.sessionId, tab.title, tab.parentSessionId)
+      // 会话窗口关闭后，活跃流要重新绑回主窗口，否则重新打开 Tab 只会停在旧快照。
+      if (tab.type === 'agent') {
+        void window.electronAPI.restoreActiveAgentStreams([tab.sessionId]).catch(console.error)
+      }
+    })
+  }, [openSession, store])
+  return null
+}
+
+/** 独立会话窗口：只接管该会话，不挂载浏览器/插件相关的全局桥接。 */
+function SessionAgentListenersInitializer({ sessionId }: { sessionId: string }): null {
+  useGlobalAgentListeners({ standaloneSessionId: sessionId })
+  return null
+}
+
+/** 独立会话窗口的键盘快捷键：只保留关闭窗口，Tab 相关快捷键由主窗口负责。 */
+function SessionWindowShortcuts(): null {
+  const setSendWithCmdEnter = useSetAtom(sendWithCmdEnterAtom)
+  const setShortcutOverrides = useSetAtom(shortcutOverridesAtom)
+  useEffect(() => {
+    // Agent/Chat 视图内部通过 registerShortcut 注册的快捷键需要 dispatcher。
+    initShortcutRegistry()
+    // 会话窗口不挂 GlobalShortcuts，但发送键与自定义快捷键仍需与主窗口一致。
+    void window.electronAPI.getSettings().then((settings) => {
+      if (settings.shortcutOverrides) {
+        setShortcutOverrides(settings.shortcutOverrides)
+        updateShortcutOverrides(settings.shortcutOverrides)
+      }
+      setSendWithCmdEnter(settings.sendWithCmdEnter ?? false)
+    }).catch(console.error)
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      if (event.key.toLowerCase() !== 'w') return
+      event.preventDefault()
+      void window.electronAPI.windowClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    // 应用菜单的 CmdOrCtrl+W 加速器会先于 DOM keydown 触发；主窗口由 GlobalShortcuts
+    // 处理 close-tab，轻量窗口没有挂它，这里直接把“关闭标签页”解释为关闭当前窗口。
+    const unsubMenuCloseTab = window.electronAPI.onMenuCloseTab(() => {
+      void window.electronAPI.windowClose()
+    })
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      unsubMenuCloseTab()
+    }
+  }, [setSendWithCmdEnter, setShortcutOverrides])
+  return null
+}
+
+/** 独立会话窗口没有设置页：把“前往设置”的意图明确引导回主窗口。 */
+function SessionWindowSettingsGuard(): null {
+  const settingsOpen = useAtomValue(settingsOpenAtom)
+  const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  useEffect(() => {
+    if (!settingsOpen) return
+    setSettingsOpen(false)
+    toast.info('请在主窗口修改设置')
+  }, [settingsOpen, setSettingsOpen])
+  return null
+}
+
 /**
  * Chat 工具初始化组件
  *
@@ -1029,8 +1118,7 @@ function ScratchPadPersistence(): null {
           store.set(tabsAtom, newTabs)
         }
 
-        // 恢复 scratch 激活状态：如果上次关闭时在 scratch 页，则激活它
-        // 不改变 appMode，保留原有的 chat/agent 侧边栏状态
+        // 恢复 scratch 激活状态：如果上次关闭时在 scratch 页，则激活它。
         if (settings.scratchPadActive) {
           store.set(activeTabIdAtom, SCRATCH_PAD_ID)
         }
@@ -1146,6 +1234,40 @@ if (isQuickTaskWindow) {
       </React.StrictMode>
     )
   })
+} else if (isSessionWindow) {
+  // ===== 独立会话窗口：只渲染单个会话，不挂载主界面壳与全局业务初始化器 =====
+  const sessionId = sessionWindowId
+  const sessionType = sessionWindowType === 'chat' ? 'chat' : 'agent'
+  if (!sessionId) {
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <div className="flex h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+        会话窗口参数缺失
+      </div>,
+    )
+  } else {
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <TooltipProvider delayDuration={200}>
+          <ThemeInitializer />
+          <AgentSettingsInitializer />
+          <NotificationsInitializer />
+          <AgentUnreadSettingsInitializer />
+          <UiPreferencesInitializer />
+          <SmoothWheelInitializer />
+          <ComposerToolbarPreferencesInitializer />
+          <MarkdownFontSizeInitializer />
+          <UiScaleInitializer />
+          <ChatToolInitializer />
+          <ChatListenersInitializer />
+          <SessionAgentListenersInitializer sessionId={sessionId} />
+          <SessionWindowSettingsGuard />
+          <SessionWindowShortcuts />
+          <SessionWindowApp sessionId={sessionId} type={sessionType} />
+          <ProferToaster position="top-right" offset={16} />
+        </TooltipProvider>
+      </React.StrictMode>
+    )
+  }
 } else {
   // ===== 主窗口：完整渲染 =====
   ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -1163,6 +1285,7 @@ if (isQuickTaskWindow) {
       <PluginSystemInitializer />
       <ChatListenersInitializer />
       <AgentListenersInitializer />
+      <ReattachTabListener />
       <ChatToolInitializer />
       <UpdaterInitializer />
       <AutomationInitializer />
