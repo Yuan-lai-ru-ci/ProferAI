@@ -22,7 +22,7 @@ export async function generatePluginModel(raw: unknown, signal: AbortSignal): Pr
   const channel = listChannels().find((candidate) => candidate.id === input.channelId && candidate.enabled)
   if (!channel?.models.some((model) => model.enabled && model.id === input.modelId)) throw new Error('所选模型已不可用')
   if (!supportsPluginModel(channel, 'chat')) throw new Error('此渠道仅支持 Agent；插件生成请选择 Chat 模型')
-  const adapter = getAdapter(channel.provider, channel.apiProtocol)
+  const adapter = getAdapter(channel.provider, channel.apiProtocol, channel.baseUrl)
   let apiKey: string, baseUrl = channel.baseUrl, commercial = false
   if (editionProviders.credentials.shouldUseManagedRoute(channel)) {
     const auth = await editionProviders.account.getSession()

@@ -3,7 +3,7 @@ import { injectCodexFastMode, withCodexFastModeServiceTier } from './pi-codex-fa
 import { injectOpenAIThinkingLevel, injectDeepSeekV4ThinkingSettings } from './pi-codex-request-settings'
 
 describe('Pi Codex Fast Mode', () => {
-  test.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra'])(
+  test.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra', 'gpt-6.1-sol'])(
     'Given supported %s When injecting Then requests priority tier',
     (model) => {
       expect(injectCodexFastMode({ model })).toEqual({ model, service_tier: 'priority' })
@@ -51,6 +51,20 @@ describe('Pi Codex Thinking Level', () => {
   test('Given GPT-6 Astra 不支持关闭推理 When thinkingLevel=off Then 使用 low', () => {
     const result = injectOpenAIThinkingLevel({ model: 'gpt-6-astra' }, 'off') as Record<string, unknown>
     expect(result.reasoning).toEqual({ effort: 'low', summary: 'detailed' })
+  })
+
+  test('Given GPT-6.1 Sol 不支持 none/minimal When thinkingLevel=off Then 同样降到 low', () => {
+    for (const level of ['off', 'minimal'] as const) {
+      const result = injectOpenAIThinkingLevel({ model: 'gpt-6.1-sol' }, level) as Record<string, unknown>
+      expect(result.reasoning).toEqual({ effort: 'low', summary: 'detailed' })
+    }
+    const max = injectOpenAIThinkingLevel({ model: 'gpt-6.1-sol' }, 'max') as Record<string, unknown>
+    expect(max.reasoning).toEqual({ effort: 'max', summary: 'detailed' })
+  })
+
+  test('Given GPT-5.5 不支持 max When thinkingLevel=max Then 收敛到 xhigh 而不是发送非法值', () => {
+    const result = injectOpenAIThinkingLevel({ model: 'gpt-5.5' }, 'max') as Record<string, unknown>
+    expect(result.reasoning).toEqual({ effort: 'xhigh', summary: 'detailed' })
   })
 
   test('Given 推理关闭 + Codex 模型 Then 显式写入 none（GPT-5.x 默认 medium）', () => {

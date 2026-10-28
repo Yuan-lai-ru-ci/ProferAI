@@ -613,7 +613,7 @@ describe('Pi runtime Claude adaptive thinking metadata', () => {
 })
 
 describe('Pi runtime GLM-5.3 fallback and reasoning metadata', () => {
-  test('Given GLM-5.3 is absent from the Pi catalog When registered for Zhipu Then preserves 1M context, 128K output, and official thinking toggle', async () => {
+  test('Given GLM-5.3 When registered for Zhipu Then uses the official low/high/max reasoning_effort encoding', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     const result = await buildModel(sdk, {
       sessionId: 'session-glm-5.3',
@@ -630,16 +630,19 @@ describe('Pi runtime GLM-5.3 fallback and reasoning metadata', () => {
 
     expect(result.model.contextWindow).toBe(1_000_000)
     expect(result.model.maxTokens).toBe(131_072)
+    // 官方文档：GLM-5.3 思考强制开启，reasoning_effort 为 low / high / max。
     expect(result.model.thinkingLevelMap).toMatchObject({
-      minimal: null,
-      low: null,
-      medium: null,
-      xhigh: null,
-      max: null,
+      off: null,
+      minimal: 'low',
+      low: 'low',
+      medium: 'high',
+      high: 'high',
+      xhigh: 'max',
+      max: 'max',
     })
     expect(result.model.compat).toMatchObject({
       supportsDeveloperRole: false,
-      supportsReasoningEffort: false,
+      supportsReasoningEffort: true,
       thinkingFormat: 'zai',
       zaiToolStream: true,
     })
@@ -665,6 +668,75 @@ describe('Pi runtime GLM-5.3 fallback and reasoning metadata', () => {
     // 差异只影响展示与压缩阈值的尾数，因此跟随 catalog 声明值。
     expect(result.model.contextWindow).toBe(1_048_576)
     expect(result.model.maxTokens).toBe(128_000)
+  })
+})
+
+describe('Pi runtime Kimi 模型数据补齐', () => {
+  test('Given Kimi K3.1 Pro 尚未进 catalog When 注册到 Kimi API Then 按官方规格补齐窗口 / 输出 / 价格', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-kimi-k3.1-pro',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'kimi-api',
+      baseUrl: 'https://api.moonshot.cn/anthropic',
+      model: 'kimi-k3.1-pro',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.contextWindow).toBe(1_048_576)
+    expect(result.model.maxTokens).toBe(131_072)
+    expect(result.model.cost).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 })
+    expect(result.model.input).toEqual(['text', 'image'])
+    // K3 代际思考始终开启，只暴露 low / high / max。
+    expect(result.model.thinkingLevelMap).toMatchObject({ off: null, low: 'low', high: 'high', max: 'max' })
+  })
+
+  test('Given Kimi K3 命中 profile When 注册 Then 保留 catalog 的 reasoning_content 回传要求', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-kimi-k3',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'kimi-api',
+      baseUrl: 'https://api.moonshot.cn/anthropic',
+      model: 'kimi-k3',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    // profile 只负责档位编码，不能把 catalog 的 thinkingFormat / reasoning_content 要求覆盖掉。
+    expect(result.model.compat).toMatchObject({ forceAdaptiveThinking: true })
+  })
+
+  test('Given Kimi K2.6 开关模型 When 注册 Then 保留 catalog 的 deepseek thinking 格式', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-kimi-k2.6',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'kimi-api',
+      baseUrl: 'https://api.moonshot.cn/anthropic',
+      model: 'kimi-k2.6',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.thinkingLevelMap).toMatchObject({
+      minimal: null,
+      low: null,
+      medium: null,
+      xhigh: null,
+      max: null,
+    })
+    expect(result.model.thinkingLevelMap?.off).toBeUndefined()
   })
 })
 
@@ -760,6 +832,27 @@ describe('Pi runtime OpenAI Responses 渠道', () => {
     expect(result.model.api).toBe('openai-responses')
     expect(result.model.baseUrl).toBe('https://api.openai.com/v1')
   })
+
+  test('Given OpenAI 兼容渠道填了完整 /responses 端点 When buildModel Then 按 Responses 协议注册', async () => {
+    // 用户照网关文档把 `…/v1/responses` 直接填进渠道：端点形态必须覆盖静态协议，
+    // 否则 Agent 会向 Responses 端点发 Chat Completions 请求体。
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-custom-responses',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'custom',
+      baseUrl: 'https://codex.diraw.top/v1/responses',
+      model: 'gpt-6-luna',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.api).toBe('openai-responses')
+    expect(result.model.baseUrl).toBe('https://codex.diraw.top/v1')
+  })
 })
 
 describe('ChatGPT Codex 模型目录补丁', () => {
@@ -781,7 +874,21 @@ describe('ChatGPT Codex 模型目录补丁', () => {
     expect(ids).toContain('gpt-5.6-terra')
     expect(ids).toContain('gpt-5.6-luna')
     expect(ids).toContain('gpt-6-astra')
+    // GPT-6.1 Sol 尚未进 Pi catalog，必须由 Profer 补丁补回，否则 Codex 用户看不到该型号。
+    expect(ids).toContain('gpt-6.1-sol')
     expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  test('Given gpt-6.1-sol When 读取 Codex 目录 Then 使用官方 1.05M / 128K 与 GPT-6 档位', async () => {
+    const models = await getCodexCatalogModels()
+    const sol = models.find((model) => model.id === 'gpt-6.1-sol')
+
+    expect(sol?.name).toBe('GPT-6.1 Sol')
+    expect(sol?.contextWindow).toBe(1_050_000)
+    expect(sol?.maxTokens).toBe(128_000)
+    expect(sol?.cost).toEqual({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 })
+    // GPT-6 代际不支持 none / minimal。
+    expect(sol?.thinkingLevelMap).toMatchObject({ off: null, minimal: 'low', low: 'low', max: 'max' })
   })
 
   test('Given 选择 SDK 未收录的 5.6 模型 When buildModel Then 保留用户选择的模型 ID', async () => {

@@ -256,7 +256,7 @@ async function oneShotJsonCall(systemPrompt: string, userPrompt: string): Promis
     apiKey = decryptApiKey(channelId)
   }
 
-  const adapter = getAdapter(channel.provider, channel.apiProtocol)
+  const adapter = getAdapter(channel.provider, channel.apiProtocol, proxyBaseUrl || channel.baseUrl)
   // 借 buildTitleRequest 拿到正确的 url + 鉴权头 + provider 请求体骨架，再改写 body
   const req = adapter.buildTitleRequest({
     baseUrl: proxyBaseUrl || channel.baseUrl,

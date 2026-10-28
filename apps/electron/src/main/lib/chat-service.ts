@@ -403,7 +403,7 @@ export async function sendMessage(
 
   try {
     // 7. 获取适配器
-    const adapter = getAdapter(channel.provider, channel.apiProtocol)
+    const adapter = getAdapter(channel.provider, channel.apiProtocol, proxyBaseUrl || channel.baseUrl)
 
     // 8. 从工具注册表获取启用的工具
     const { tools, systemPromptAppend } = getEnabledTools(enabledToolIds)
@@ -439,7 +439,7 @@ export async function sendMessage(
           if (!fallbackChannel || fallbackChannel.directDataPlane === true
             || !isChatModelAvailable(fallbackChannel, modelId)) throw error
           const fallbackApiKey = decryptApiKey(channelId)
-          const fallbackAdapter = getAdapter(fallbackChannel.provider, fallbackChannel.apiProtocol)
+          const fallbackAdapter = getAdapter(fallbackChannel.provider, fallbackChannel.apiProtocol, fallbackChannel.baseUrl)
           const fallbackRequest = fallbackAdapter.buildStreamRequest({
             baseUrl: fallbackChannel.baseUrl,
             apiKey: fallbackApiKey,
@@ -819,7 +819,7 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
   }
 
   try {
-    const adapter = getAdapter(channel.provider, channel.apiProtocol)
+    const adapter = getAdapter(channel.provider, channel.apiProtocol, proxyBaseUrl || channel.baseUrl)
     const request = adapter.buildTitleRequest({
       baseUrl: proxyBaseUrl || resolveTitleBaseUrl(channel.provider, channel.baseUrl, channel.apiProtocol) || channel.baseUrl,
       apiKey,
