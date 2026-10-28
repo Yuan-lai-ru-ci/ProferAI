@@ -38,7 +38,7 @@ import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
-import type { AgentSendInput } from '@profer/shared'
+import type { AgentRuntime, AgentSendInput } from '@profer/shared'
 import { agentEventBus, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
 import { buildArchiveToggleUpdates } from './agent-unread-policy'
@@ -826,6 +826,7 @@ export function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]
     agentEffort: s.agentEffort ?? null,
     completedButUnconfirmed: s.completedButUnconfirmed ?? false,
     stoppedByUser: s.stoppedByUser ?? false,
+    autoQueueSendEnabled: s.autoQueueSendEnabled ?? true,
     lastInterruptReason: s.lastInterruptReason ?? null,
     lastInterruptLabel: s.lastInterruptLabel ?? null,
     lastInterruptAt: s.lastInterruptAt ?? null,
@@ -937,6 +938,51 @@ function buildChannelList() {
       source: m.source,
     })),
   }))
+}
+
+/**
+ * 在候选渠道里挑出「新建会话」要用的渠道与模型（纯函数，便于单测）。
+ *
+ * 优先级：客户端显式指定 → 桌面默认（上次使用的渠道/模型）→ 该内核首个可用渠道。
+ * 模型必须属于最终渠道，否则回落到渠道首个启用模型——手机不该带着一个不存在的
+ * 模型建出「看着有模型、发消息才报错」的空会话。
+ */
+export function pickAgentSelection(
+  channels: ReadonlyArray<{ id: string; models: ReadonlyArray<{ id: string; enabled: boolean }> }>,
+  requested: { channelId?: string; modelId?: string },
+  fallback: { channelId?: string; modelId?: string },
+): { channelId?: string; modelId?: string } {
+  const channel = channels.find((item) => item.id === requested.channelId)
+    ?? channels.find((item) => item.id === fallback.channelId)
+    ?? channels[0]
+  if (!channel) return { channelId: requested.channelId, modelId: requested.modelId }
+  const models = channel.models.filter((model) => model.enabled)
+  const modelId = [requested.modelId, fallback.modelId]
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    .find((id) => models.some((model) => model.id === id))
+    ?? models[0]?.id
+  return { channelId: channel.id, modelId }
+}
+
+/**
+ * 新建会话时解析渠道/模型：候选渠道按会话内核过滤，默认值取桌面设置里的「上次使用」。
+ *
+ * 移动端没有默认模型设置页，也不该自己猜第一个渠道：桌面每次切换模型都会写进
+ * settings.agentChannelId / agentModelId，新会话继承的正是这份记录。
+ */
+function resolveRemoteAgentSelection(
+  requestedChannelId: string | undefined,
+  requestedModelId: string | undefined,
+  agentRuntime: AgentRuntime,
+): { channelId?: string; modelId?: string } {
+  const runtimeChannels = listSwitchableChannels(agentRuntime)
+  const channels = runtimeChannels.length > 0 ? runtimeChannels : listSwitchableChannels()
+  const settings = getSettings()
+  return pickAgentSelection(
+    channels,
+    { channelId: requestedChannelId, modelId: requestedModelId },
+    { channelId: settings.agentChannelId, modelId: settings.agentModelId },
+  )
 }
 
 /**
@@ -1072,6 +1118,15 @@ export async function handleRemoteCommand(
 
     case 'list_channels': {
       return { ok: true, data: buildChannelList() }
+    }
+
+    // 桌面「上次使用的渠道/模型」：移动端新建会话继承它，而不是自己猜第一个渠道。
+    // 旧版桌面不认识本命令（返回 ok:false），移动端按「首个可用渠道」兜底。
+    case 'get_agent_defaults': {
+      const settings = getSettings()
+      const runtime = normalizeAgentRuntime(settings.agentRuntime)
+      const selection = resolveRemoteAgentSelection(undefined, undefined, runtime)
+      return { ok: true, data: { channelId: selection.channelId ?? null, modelId: selection.modelId ?? null } }
     }
 
     // Chat 工具（function calling）：与桌面共用 ~/.profer/chat-tools.json 的开关。
@@ -1261,6 +1316,15 @@ export async function handleRemoteCommand(
         if (modelId && !getEnabledModels(channel).some((model) => model.id === modelId)) return { ok: false, error: '模型不属于当前渠道或未启用' }
       }
       const updated = updateAgentSessionUiMeta(sessionId, { channelId, modelId })
+      // 与桌面 ModelSelector 一致：切换模型同时更新全局默认（新会话继承）。
+      // 移动端没有本地设置页，不写回 settings 的话「上次使用的模型」只在桌面生效，
+      // 手机上连建两个会话就会回到第一个渠道的首个模型。
+      if (updated.channelId && updated.modelId) {
+        const current = getSettings()
+        if (current.agentChannelId !== updated.channelId || current.agentModelId !== updated.modelId) {
+          updateSettings({ agentChannelId: updated.channelId, agentModelId: updated.modelId })
+        }
+      }
       return { ok: true, data: buildSessionItem(updated) }
     }
 
@@ -1495,18 +1559,23 @@ export async function handleRemoteCommand(
 
     case 'create_session': {
       const title = (parsed.title as string) || undefined
-      const channelId = parsed.channelId as string | undefined
       const workspaceId = typeof parsed.workspaceId === 'string' ? parsed.workspaceId : undefined
-      const modelId = typeof parsed.modelId === 'string' ? parsed.modelId : undefined
       const requestedPresetId = typeof parsed.presetId === 'string' ? parsed.presetId : undefined
       const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
       const presetId = requestedPresetId ?? getDefaultPresetId(workspaceSlug)
+      // 缺省渠道/模型时继承桌面「上次使用」：手机只发 title 也能建出可发消息的会话。
+      const agentRuntime = normalizeAgentRuntime(getSettings().agentRuntime)
+      const selection = resolveRemoteAgentSelection(
+        typeof parsed.channelId === 'string' ? parsed.channelId : undefined,
+        typeof parsed.modelId === 'string' ? parsed.modelId : undefined,
+        agentRuntime,
+      )
       let meta = createAgentSession(
         title,
-        channelId,
+        selection.channelId,
         workspaceId,
-        modelId,
-        getSettings().agentRuntime ?? 'claude',
+        selection.modelId,
+        agentRuntime,
         false,
         presetId,
       )
@@ -1541,14 +1610,18 @@ export async function handleRemoteCommand(
     // 语义对齐桌面 ensureProjectDraftAgentSession：项目已有草稿会话则复用（发过消息则晋升正式），否则创建
     case 'ensure_project_draft_session': {
       const workspaceId = parsed.workspaceId as string
-      const channelId = parsed.channelId as string | undefined
-      const modelId = parsed.modelId as string | undefined
       if (!workspaceId) return { ok: false, error: '缺少 workspaceId' }
+      const agentRuntime = normalizeAgentRuntime(getSettings().agentRuntime)
+      const selection = resolveRemoteAgentSelection(
+        typeof parsed.channelId === 'string' ? parsed.channelId : undefined,
+        typeof parsed.modelId === 'string' ? parsed.modelId : undefined,
+        agentRuntime,
+      )
       const meta = ensureProjectDraftAgentSession(
         workspaceId,
-        channelId,
-        modelId,
-        getSettings().agentRuntime ?? 'claude',
+        selection.channelId,
+        selection.modelId,
+        agentRuntime,
       )
       publishSessionUpdated(meta)
       // 与 create_session 同一形状；draft 仍显式保留，旧客户端依赖该字段判断草稿复用。
