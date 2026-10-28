@@ -45,8 +45,8 @@ describe('remote-service 新增 WS 命令', () => {
     // 关键回归：resolvePiReasoningCapability 是异步的，未 await 时 data 会是 Promise 并被序列化成 {}。
     expect(data === undefined || typeof (data as { then?: unknown }).then !== 'function').toBe(true)
     expect(Array.isArray(data?.levels)).toBe(true)
-    expect(data?.levels as string[]).toContain('off')
-    expect(data?.levels as string[]).toContain('high')
+    // GLM-5.3 思考强制开启：官方只有 low / high / max，不再有 off。
+    expect(data?.levels as string[]).toEqual(['low', 'high', 'max'])
     expect(typeof data?.defaultLevel).toBe('string')
   })
 

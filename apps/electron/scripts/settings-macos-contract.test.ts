@@ -33,8 +33,12 @@ describe('Mac 设置页接线契约', () => {
     const confirmed = between(panel, 'const executePendingAction', '/** 取消待处理')
     expect(confirmed).toContain('navigateToTab(pendingAction.tabId)')
     const navigate = between(panel, 'const navigateToTab', '/** 执行待处理')
-    expect(navigate).toContain("if (tabId === 'tutorial')")
+    // 教程与 FRP 教程是文档入口：由 DOC_SETTINGS_TABS 打开主区单例 Tab，再关闭设置面板
+    expect(navigate).toContain('const docTab = DOC_SETTINGS_TABS[tabId]')
+    expect(navigate).toContain('openTab(mainTabs, docTab)')
     expect(navigate).toContain('setSettingsOpen(false)')
+    const docTabs = between(panel, 'const DOC_SETTINGS_TABS', '\n};')
+    expect(docTabs).toContain('tutorial: { type: "tutorial", sessionId: TUTORIAL_TAB_ID')
   })
 
   test('Given Mac 通用设置 When 渲染 Shell 控件 Then 仅 Windows 条件允许显示', () => {

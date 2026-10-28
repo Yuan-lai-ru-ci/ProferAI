@@ -24,7 +24,9 @@ function availableShell(): string | null {
     if (candidate && existsSync(candidate)) return candidate
   }
   for (const name of ['bash', 'sh']) {
-    if (!spawnSync(name, ['-c', 'exit 0'], { shell: false }).error) return name
+    // 返回绝对路径：空 PATH 的用例仍要能启动同一个 shell，而不是被 PATH 查找挡住。
+    const resolved = Bun.which(name)
+    if (resolved && !spawnSync(resolved, ['-c', 'exit 0'], { shell: false }).error) return resolved
   }
   return null
 }
@@ -72,14 +74,15 @@ test('deployment instruction and zip share one renderer: byte-equal, TOML-parsea
     const start = script.indexOf(open) + open.length
     return script.slice(start, script.indexOf(`\n${marker}\n`, start))
   }
+  const shell = availableShell()
   for (const ip of ['192.0.2.1', '2001:db8::1']) {
     const config = pinnedConfig(ip)
     const files = deploymentFiles(config, material, serverAssets)
     // “复制部署指令”与 zip 内 deploy.sh 必须字节等价
     expect(renderDeploymentInstructions(config, material, serverAssets)).toBe(files['deploy.sh']!)
     const script = files['deploy.sh']!
-    const syntax = spawnSync('C:/Users/Administrator/PortableGit/bin/bash.exe', ['-n'], { input: script, encoding: 'utf8', shell: false })
-    expect(syntax.status).toBe(0)
+    // 没有可用 POSIX shell 的环境跳过语法校验，不硬编码某个平台的路径
+    if (shell) expect(spawnSync(shell, ['-n'], { input: script, encoding: 'utf8', shell: false }).status).toBe(0)
     // 指令包含真实生成秘密
     expect(heredoc(script, 'PROFER_FRPS_TOML')).toBe(files['frps.toml']!.trim())
     expect(heredoc(script, 'PROFER_CA_CRT')).toBe(material.caCert.trim())

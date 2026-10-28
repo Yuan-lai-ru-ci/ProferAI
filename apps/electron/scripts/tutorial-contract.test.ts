@@ -95,8 +95,10 @@ test('tutorial banner points to the real settings route and resources remain the
   const service = read(resolve(repoRoot, 'apps/electron/src/main/lib/tutorial-service.ts'))
   expect(banner).toContain('设置 → 帮助 → Profer 教程')
   expect(banner).not.toContain('顶栏「教程」标签')
-  expect(service).toContain("join(__dirname, 'resources/tutorial.md')")
-  expect(service).toContain("join(process.resourcesPath, 'tutorial.md')")
+  // 开发模式读 dist/resources，打包后读 extraResources；两条路径共用同一个 readResource 加载器
+  expect(service).toContain("join(__dirname, 'resources', fileName)")
+  expect(service).toContain("join(process.resourcesPath, fileName)")
+  expect(service).toContain("readResource('tutorial.md', '教程服务')")
   expect(read(resourcePath)).toContain('客户端教程真源是 `apps/electron/resources/tutorial.md`')
 })
 

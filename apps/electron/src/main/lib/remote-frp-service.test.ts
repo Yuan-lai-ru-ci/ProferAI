@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
 import AdmZip from 'adm-zip'
+import { create as createTar } from 'tar'
 import { parse } from 'smol-toml'
 const root = mkdtempSync(join(tmpdir(), 'profer-frp-test-'))
 const app = new EventEmitter() as EventEmitter & { getPath(name: string): string }
@@ -32,13 +33,27 @@ const config = { serverAddr: 'frp.example.com', serverPort: 7000, remotePort: 17
 writeFileSync(join(root, 'test-ca.crt'), 'synthetic test CA\n')
 const originalFetch = globalThis.fetch
 let interrupt = false; let corrupt = false
-function archive(version: string): Buffer { const zip = new AdmZip(); zip.addFile(`frp_${version}_windows_amd64/frpc.exe`, Buffer.from('mock executable')); return zip.toBuffer() }
+/** 安装走 selectFrpAsset 的宿主平台分支：Windows 取 zip，其它平台取 tar.gz。 */
+const hostOs = ({ win32: 'windows', darwin: 'darwin', linux: 'linux' } as Record<string, string>)[process.platform]
+const hostCpu = ({ x64: 'amd64', arm64: 'arm64', ia32: '386', arm: 'arm' } as Record<string, string>)[process.arch]
+function archive(version: string): Buffer {
+  const root = `frp_${version}_${hostOs}_${hostCpu}`
+  if (hostOs === 'windows') { const zip = new AdmZip(); zip.addFile(`${root}/frpc.exe`, Buffer.from('mock executable')); return zip.toBuffer() }
+  const work = mkdtempSync(join(tmpdir(), 'frp-archive-'))
+  try {
+    mkdirSync(join(work, root)); writeFileSync(join(work, root, 'frpc'), 'mock executable')
+    const out = join(work, 'archive.tar.gz'); createTar({ gzip: true, file: out, cwd: work, sync: true }, [root])
+    return readFileSync(out)
+  } finally { rmSync(work, { recursive: true, force: true }) }
+}
 let linuxDigest = true
 function releaseAssets(v: string, data: Buffer) {
   const digest = `sha256:${createHash('sha256').update(data).digest('hex')}`
   const asset = (name: string) => ({ name: `frp_${v}_${name}`, browser_download_url: `https://github.com/fatedier/frp/releases/download/v${v}/frp_${v}_${name}`, digest, size: data.length })
   // linux 归档摘要供“一条命令自举”部署指令使用；linuxDigest=false 模拟官方未提供摘要 → 导出必须 fail closed
-  return [asset('windows_amd64.zip'), ...(linuxDigest ? [asset('linux_amd64.tar.gz'), asset('linux_arm64.tar.gz'), asset('linux_arm.tar.gz')] : [])]
+  const hostAsset = `${hostOs}_${hostCpu}.${hostOs === 'windows' ? 'zip' : 'tar.gz'}`
+  const names = [...new Set([hostAsset, ...(linuxDigest ? ['linux_amd64.tar.gz', 'linux_arm64.tar.gz', 'linux_arm.tar.gz'] : [])])]
+  return names.map(asset)
 }
 globalThis.fetch = (async (url: string | URL | Request) => {
   const value = String(url); const v = value.match(/v(0\.\d+\.\d+)/)?.[1] ?? version; const data = archive(v)
