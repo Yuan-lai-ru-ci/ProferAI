@@ -11,17 +11,28 @@ export function NativeVisualizationChart({ spec, content, state, onState, onQuot
   callbacks.current = { state, onState, onQuote, content, onHeight }
   const ref = React.useRef<HTMLDivElement>(null)
   const chartRef = React.useRef<ReturnType<typeof init> | null>(null)
+  /**
+   * 最近一次构建出的 option 与它的序列化签名。
+   *
+   * init effect 必然先于 setOption effect 执行，而 dev 下 React.StrictMode 会把 effect 整体跑两遍
+   * （mount → cleanup dispose → 再 mount）：第二次 init 得到的是**空实例**，此时 setOption effect
+   * 的签名闸门认为「option 没变」直接 return，新实例永远收不到 option——表现为容器高度正常、
+   * 「查看数据」表格正常，画布里却连坐标轴都没有。所以 init 完成后必须用这里存下的最新 option 重放一次。
+   */
+  const optionRef = React.useRef<{ signature: string; option: ReturnType<typeof buildChartOption> } | null>(null)
+  const lastOptionRef = React.useRef('')
   // 主题（含皮肤）由 useVisualizationHostTheme 统一搬运：换肤后 token 落地才发布，不再各自挂 Observer。
   const hostTheme = useVisualizationHostTheme()
-  const [theme, setTheme] = React.useState<ChartTheme>(() => chartThemeFromTokens(hostTheme.tokens, hostTheme.fontFamily))
-  React.useEffect(() => {
-    setTheme(chartThemeFromTokens(hostTheme.tokens, hostTheme.fontFamily))
-  }, [hostTheme])
+  // 纯派生：不再用 state + effect 转一手。旧写法每次换肤要多跑一轮渲染，
+  // 而图表重绘的闸门是 option 签名，多这一轮只会把同一个 option 算两次。
+  const theme = React.useMemo<ChartTheme>(() => chartThemeFromTokens(hostTheme.tokens, hostTheme.fontFamily), [hostTheme])
   const height = nativeChartHeight(spec)
   React.useEffect(() => {
     if (!ref.current) return
     const chart = init(ref.current, undefined, { renderer: 'svg' })
     chartRef.current = chart
+    // 新实例先落一次当前 option：重挂载后各 effect 的依赖没变，下面的签名闸门会跳过重绘。
+    if (optionRef.current) chart.setOption(optionRef.current.option, { notMerge: true, silent: true })
     const onLegend = (event: unknown) => {
       if (!event || typeof event !== 'object' || !('selected' in event) || !event.selected || typeof event.selected !== 'object') return
       const selected = event.selected as Record<string, boolean>
@@ -37,12 +48,12 @@ export function NativeVisualizationChart({ spec, content, state, onState, onQuot
     resize.observe(ref.current)
     return () => { chartRef.current = null; chart.off('legendselectchanged', onLegend); resize.disconnect(); chart.dispose() }
   }, [])
-  const lastOptionRef = React.useRef('')
   React.useEffect(() => {
     // state/spec/theme 的**对象身份**会因父层无关重渲染而变（例如滚动更新候选集合）。
     // 用序列化结果做闸门：内容没变就不重建图表，否则 ECharts 会在每帧整块重绘（看着就是在抖）。
     const option = buildChartOption(spec, theme, state)
     const signature = JSON.stringify([option, theme.palette, theme.barRadius])
+    optionRef.current = { signature, option }
     if (signature === lastOptionRef.current) return
     lastOptionRef.current = signature
     chartRef.current?.setOption(option, { notMerge: true, silent: true })

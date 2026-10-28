@@ -20,8 +20,6 @@ export interface VisualizationHostProps {
   onError: (message: string) => void
   onReady?: () => void
   onHeight?: (height: number) => void
-  /** 将 iframe 内聚合后的像素滚轮增量交给外层会话滚动容器。 */
-  onWheel?: (deltaX: number, deltaY: number) => void
   className?: string
 }
 
@@ -98,7 +96,6 @@ export function VisualizationHost(props: VisualizationHostProps) {
           callbacks.onQuote(quote)
           break
         }
-        case 'wheel': callbacks.onWheel?.(message.deltaX, message.deltaY); break
         case 'interaction': callbacks.onInteraction(); break
       }
     }

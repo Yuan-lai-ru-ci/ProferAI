@@ -22,6 +22,9 @@ import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import Mention from '@tiptap/extension-mention'
+import { QuoteRef, QUOTE_REF_NODE_NAME, type QuoteRefPayload } from './quote-ref-node'
+import type { QuotedSelection } from '@/atoms/preview-atoms'
+import { getQuotedSelectionKey } from '@/lib/quoted-selection'
 import { renderSessionMention, handleSessionMentionMouseDown, handleSessionMentionClick, handleSessionMentionKeyDown } from './session-mention'
 import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
@@ -205,6 +208,10 @@ export interface RichTextInputHandle {
   insertSessionMention: (item: SessionReferenceDragItem) => boolean
   /** 在光标处插入纯文本（手写识别结果回填用） */
   insertText: (text: string) => boolean
+  /** 在光标处插入一条内联引用（`[n] 文件名` 胶囊） */
+  insertQuoteReference: (quote: QuotedSelection) => boolean
+  /** 按文档顺序取出正文里的全部引用（编号由节点维护，1..k） */
+  getQuoteSelections: () => QuotedSelection[]
 }
 
 /**
@@ -369,6 +376,8 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
         placeholder,
         emptyEditorClass: 'is-editor-empty',
       }),
+      // 内联引用节点：与 Mention 同理始终注册，纯文本模式也保留
+      QuoteRef,
       // Mention 扩展：启用时注册，路径/slug 后续通过 ref 异步更新
       // @ 引用文件、/ 触发 Skill、# 触发 MCP
       // 纯文本模式下仍然保留，确保引用功能可用
@@ -777,9 +786,11 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
         onDraftPresenceChangeRef.current?.(false)
         setIsExpanded(false)
         setIsManuallyCollapsed(false)
-      } else if (htmlValue && richTextEnabled && !isRichTextModeChanged) {
-        // 优先使用 HTML 草稿恢复（保留 mention 等富文本节点）。开关刚切换时不能
-        // 使用旧 HTML，否则纯文本模式下的 **粗体** 会继续保留为富文本，反之亦然。
+      } else if (htmlValue && !isRichTextModeChanged) {
+        // 优先使用 HTML 草稿恢复：Markdown 只保留了 `[n]` 文本，按 Markdown 重建会把
+        // 内联引用节点（以及 mention 的附加属性）冲掉——用户输入文字后引用就消失。
+        // 纯文本模式同样适用：HTML 就是这份纯文本的转义结果，不含富文本语义。
+        // 仅在「富文本开关刚切换」时才必须走 Markdown 重新解析，避免模式间残留格式。
         setEditorContentSafely(currentEditor, htmlValue)
         lastEditorValueRef.current = controllerValue
         lastSyncedValueRef.current = controllerValue
@@ -887,6 +898,46 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
       editor.chain().focus().insertContent(trimmed).run()
       return true
     },
+    insertQuoteReference: (quote) => {
+      if (!editor || editor.isDestroyed || !editor.isEditable) return false
+      const { ref: _ref, ...payload } = quote
+      const targetKey = getQuotedSelectionKey(quote)
+
+      // 同一个来源 + 同一段文本只保留一个标记；浏览器划词则替换上一条自动引用
+      const duplicatePositions: number[] = []
+      const autoPositions: number[] = []
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name !== QUOTE_REF_NODE_NAME) return
+        const existing = node.attrs.quote as QuoteRefPayload | null
+        if (!existing) return
+        if (getQuotedSelectionKey(existing) === targetKey) duplicatePositions.push(pos)
+        if (payload.origin === 'browser-selection' && existing.origin === 'browser-selection') autoPositions.push(pos)
+      })
+      if (duplicatePositions.length > 0) return false
+
+      const removals = [...new Set([...autoPositions])].sort((a, b) => b - a)
+      let chain = editor.chain().focus()
+      for (const pos of removals) {
+        chain = chain.deleteRange({ from: pos, to: pos + 1 })
+      }
+      chain
+        // n 由 renumber 插件按文档顺序重排，这里给个占位值即可
+        .insertContent({ type: QUOTE_REF_NODE_NAME, attrs: { n: 1, quote: payload as QuoteRefPayload } })
+        .insertContent(' ')
+        .run()
+      return true
+    },
+    getQuoteSelections: () => {
+      if (!editor || editor.isDestroyed) return []
+      const collected: QuotedSelection[] = []
+      editor.state.doc.descendants((node) => {
+        if (node.type.name !== QUOTE_REF_NODE_NAME) return
+        const payload = node.attrs.quote as QuoteRefPayload | null
+        if (!payload) return
+        collected.push({ ...payload, ref: Number(node.attrs.n) || collected.length + 1 })
+      })
+      return collected
+    },
   }), [editor])
 
   return (
@@ -961,6 +1012,49 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
         }
         .ProseMirror::-webkit-scrollbar {
           width: 3px;
+        }
+        .quote-ref-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          height: 18px;
+          margin: 0 1px;
+          padding: 0 6px 0 2px;
+          border-radius: 4px;
+          background-color: hsl(var(--primary) / 0.1);
+          color: hsl(var(--primary));
+          font-size: 11.5px;
+          font-weight: 500;
+          line-height: 1;
+          white-space: nowrap;
+          vertical-align: 1px;
+          cursor: default;
+          user-select: none;
+        }
+        .quote-ref-chip__n {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 14px;
+          height: 14px;
+          padding: 0 3px;
+          border-radius: 3px;
+          background-color: hsl(var(--primary));
+          color: hsl(var(--primary-foreground, 0 0% 100%));
+          font-size: 9.5px;
+          font-weight: 600;
+          font-variant-numeric: tabular-nums;
+        }
+        .quote-ref-chip__sep {
+          width: 1px;
+          height: 9px;
+          background-color: currentColor;
+          opacity: 0.28;
+        }
+        .quote-ref-chip__label {
+          max-width: 120px;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .mention-chip {
           background-color: hsl(var(--primary) / 0.1);

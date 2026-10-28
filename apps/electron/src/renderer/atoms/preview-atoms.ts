@@ -79,18 +79,28 @@ export interface QuotedSelection {
    * 缺省/`manual` 表示用户手动点的引用（独立累积，不互相覆盖）。
    */
   origin?: 'manual' | 'browser-selection'
+  /**
+   * 该引用在当前消息里的编号（1..k），由编辑器里的 `quoteRef` 节点维护。
+   * 只有发送时从编辑器取出的引用才带值；编辑器外暂存的引用没有编号。
+   */
+  ref?: number
 }
 
-/** 每会话的待发送引用列表：按添加顺序累积，发送时整组消费清空 */
-export const quotedSelectionsMapAtom = atom<Map<string, QuotedSelection[]>>(new Map())
+/**
+ * 待插入编辑器的引用（跨组件桥）。
+ *
+ * 划词组件（Agent 历史、浏览器列、可视化）不在输入框内部，无法直接操作编辑器，
+ * 因此把引用塞进这里，由 AgentView 取出后调用 `insertQuoteReference` 落到正文。
+ * 落到正文后这条记录即被删除——编辑器文档是引用的唯一真源。
+ */
+export const pendingQuoteInsertMapAtom = atom<Map<string, QuotedSelection[]>>(new Map())
 
 // ===== 中断说明 chip（Agent 任务非正常结束时显示）=====
 
 /**
  * 中断说明 chip 状态：会话级「待注入前缀」
  *
- * 独立于用户主动引用（quotedSelectionsMapAtom），两者在同一 chip 行并排显示、
- * 各自独立移除/注入，互不覆盖。
+ * 独立于用户主动引用（编辑器里的 `quoteRef` 节点），两者互不覆盖。
  */
 export interface AgentInterruptionState {
   /** 中断原因（completed 不会进入此状态） */

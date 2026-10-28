@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { markdownToHtml, markdownToSafeDisplayHtml, normalizeClipboardHtml } from './markdown-rich-text'
+import { markdownToHtml, markdownToSafeDisplayHtml, normalizeClipboardHtml, quoteRefMarkdownToken } from './markdown-rich-text'
 import { unescapeMarkdownTextForClipboard } from '@/components/chat/CopyButton'
 
 describe('message copy plain-text normalization', () => {
@@ -147,5 +147,17 @@ describe('markdownToHtml rich preview blocks', () => {
     expect(html).toContain('<h1>安全标题</h1>')
     // 原始 HTML 会以转义的 data-* 源文本留给编辑器使用；展示 DOM 中不能出现可执行节点、事件或危险链接。
     expect(html).not.toMatch(/<(?:script|iframe)\b|\sonerror\s*=|href\s*=\s*["']?\s*javascript:/i)
+  })
+})
+
+describe('内联引用胶囊 → Markdown', () => {
+  test('Given 引用编号 When 生成标记 Then 只留 [n]（文件名与内容不进 Markdown）', () => {
+    expect(quoteRefMarkdownToken('2')).toBe('[2]')
+    expect(quoteRefMarkdownToken('12')).toBe('[12]')
+  })
+
+  test('Given 缺少编号 When 生成标记 Then 仍产出可解析的空标记而不是崩溃', () => {
+    expect(quoteRefMarkdownToken(null)).toBe('[]')
+    expect(quoteRefMarkdownToken(undefined)).toBe('[]')
   })
 })

@@ -3,8 +3,11 @@ import {
   appendQuotedSelection,
   buildQuotedSelectionBlock,
   buildQuotedSelectionsPrefix,
+  describeQuoteChipDetail,
+  describeQuoteChipLabel,
   getQuotedSelectionKey,
   parseQuotedSelectionRefs,
+  truncateMiddle,
 } from './quoted-selection'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
 
@@ -20,7 +23,7 @@ describe('quoted selection XML', () => {
 
     expect(block).toContain('path="/tmp/demo &amp; draft.md"')
     expect(block).toContain('</quoted_file_>')
-    expect(parsed.quotes).toEqual([
+    expect(parsed.quotes).toMatchObject([
       {
         path: '/tmp/demo & draft.md',
         filename: 'demo & draft.md',
@@ -40,7 +43,7 @@ describe('quoted selection XML', () => {
 
     const parsed = parseQuotedSelectionRefs(content)
 
-    expect(parsed.quotes).toEqual([
+    expect(parsed.quotes).toMatchObject([
       {
         path: 'Agent 历史 · Agent 回复',
         filename: 'Agent 历史 · Agent 回复',
@@ -67,7 +70,7 @@ describe('quoted selection XML', () => {
 
     const parsed = parseQuotedSelectionRefs(content)
 
-    expect(parsed.quotes).toEqual([
+    expect(parsed.quotes).toMatchObject([
       {
         path: 'Agent 历史 · Agent 回复',
         filename: 'Agent 历史 · Agent 回复',
@@ -181,5 +184,77 @@ describe('引用去重', () => {
   test('追加保持顺序：新条目在末尾', () => {
     const appended = appendQuotedSelection([fileQuote()], historyQuote())
     expect(appended.list.map((item) => item.sourceType)).toEqual(['file', 'agent-history'])
+  })
+})
+
+describe('带编号的引用块（内联 [n] 模型）', () => {
+  test('Given 带 ref 的文件引用 When 构建 Then 块上带同一个编号与行号', () => {
+    const block = buildQuotedSelectionBlock({
+      text: 'const a = 1',
+      filePath: '/src/a.ts',
+      sourceType: 'file',
+      startLine: 12,
+      endLine: 14,
+      ref: 2,
+      capturedAt: 1,
+    })
+    expect(block).toContain('ref="2"')
+    expect(block).toContain('start_line="12"')
+    expect(block).toContain('end_line="14"')
+  })
+
+  test('Given 带 ref 的引用块 When 解析 Then 能取回编号、正文与消息定位', () => {
+    const block = buildQuotedSelectionBlock({
+      text: '历史里的一段',
+      filePath: 'Agent 历史',
+      sourceType: 'agent-history',
+      sourceLabel: 'Agent 历史',
+      messageId: 'm-1',
+      messageRole: 'assistant',
+      ref: 3,
+      capturedAt: 1,
+    })
+    const parsed = parseQuotedSelectionRefs(`${block}继续`)
+    expect(parsed.quotes[0]).toMatchObject({
+      ref: 3,
+      text: '历史里的一段',
+      messageId: 'm-1',
+      messageRole: 'assistant',
+      sourceType: 'agent-history',
+    })
+  })
+})
+
+describe('胶囊文案（编号 + 一个短词）', () => {
+  test('Given 各来源 When 取短词 Then 固定词、不拼接 sourceLabel', () => {
+    expect(describeQuoteChipLabel({ sourceType: 'agent-history', filePath: 'Agent 历史' })).toBe('历史')
+    expect(describeQuoteChipLabel({ sourceType: 'scratch-pad', filePath: '草稿纸' })).toBe('草稿')
+    expect(describeQuoteChipLabel({ sourceType: 'visualization', filePath: '' })).toBe('图表')
+    expect(describeQuoteChipLabel({ sourceType: 'agent-interruption', filePath: '中断' })).toBe('中断')
+    expect(describeQuoteChipLabel({ sourceType: 'file', filePath: '/a/b/截图.png' })).toBe('截图.png')
+  })
+
+  test('Given 超长文件名 When 取短词 Then 中段省略到 14 字符以内', () => {
+    const label = describeQuoteChipLabel({ sourceType: 'file', filePath: '/a/very-long-file-name-for-test.ts' })
+    expect(label.length).toBeLessThanOrEqual(14)
+    expect(label).toContain('…')
+  })
+
+  test('Given 中段省略 When 边界长度 Then 原样返回', () => {
+    expect(truncateMiddle('abc', 14)).toBe('abc')
+    expect(truncateMiddle('a'.repeat(20), 14)).toBe('aaaaaaa…aaaaaa')
+  })
+
+  test('Given Agent 历史 When 取 hover 细节 Then 用角色文案而不是重复的复合串', () => {
+    expect(describeQuoteChipDetail({
+      text: 'x', filePath: 'Agent 历史', sourceType: 'agent-history',
+      sourceLabel: 'Agent 历史 · Agent 回复', messageRole: 'assistant', capturedAt: 1,
+    })).toBe('Agent 回复')
+  })
+
+  test('Given 文件引用 When 取 hover 细节 Then 是路径 + 行号', () => {
+    expect(describeQuoteChipDetail({
+      text: 'x', filePath: '/a/b.ts', sourceType: 'file', startLine: 12, endLine: 14, capturedAt: 1,
+    })).toBe('/a/b.ts · 12–14 行')
   })
 })

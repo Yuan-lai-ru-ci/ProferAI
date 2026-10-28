@@ -423,6 +423,16 @@ export function markdownToSafeDisplayHtml(markdown: string): string {
 }
 
 /** 将 TipTap 输出的 HTML 转换为 Markdown 格式 */
+/**
+ * 内联引用节点在 Markdown 里的唯一形态：`[n]`。
+ *
+ * 正文里的这个编号是引用块（`<quoted_* ref="n">`）的索引，必须原样保留——
+ * 用户就是靠「按 [2] 改」指代引用的。抽成纯函数便于单测（转换器本身依赖 DOM）。
+ */
+export function quoteRefMarkdownToken(number: string | null | undefined): string {
+  return `[${number ?? ''}]`
+}
+
 export function htmlToMarkdown(html: string, options?: { skipMarkdownEscape?: boolean }): string {
   if (!html || html === '<p></p>') return ''
   if (typeof document === 'undefined') return html
@@ -551,6 +561,10 @@ export function htmlToMarkdown(html: string, options?: { skipMarkdownEscape?: bo
       case 'h6': return `###### ${children}\n`
       case 'hr': return '---\n'
       case 'span': {
+        // 内联引用胶囊：Markdown 里只留编号，引用块由发送时按 ref 展开
+        if (el.hasAttribute('data-quote-ref')) {
+          return quoteRefMarkdownToken(el.getAttribute('data-quote-n'))
+        }
         if (el.getAttribute('data-type') === 'raw-html-inline') {
           return el.getAttribute('data-html') || ''
         }

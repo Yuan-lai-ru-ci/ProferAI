@@ -197,22 +197,25 @@ describe('visualization bridge', () => {
     timers[0]?.()
     expect(posted.filter((item) => item.type === 'interaction')).toHaveLength(1)
     const beforeWheel = posted.length
+    const framesBeforeWheel = frames.length
+    const timersBeforeWheel = timers.length
     let blockedWheel = 0
     const wheelEvent = { isTrusted: true, deltaX: 2, deltaY: 3, deltaMode: 1, preventDefault: () => { blockedWheel++ } }
     for (let index = 0; index < 20; index++) {
       for (const handler of documentListeners.get('wheel') ?? []) handler(wheelEvent)
     }
-    // 混合滚动策略：监听是 passive 的，片段不 preventDefault（内部滚动交给浏览器合成器），
-    // 未被子滚动区消费的增量按 rAF 聚合后转交宿主。转发链路不要删：
-    // 2026-10-05 滚动卡住调查已排除「iframe 吞滚轮」，根因在宿主的阅读锚点回写（见
-    // workspace-files/.context/2026-10-05-visualization-wheel-scroll-stuck-investigation.md）。
+    // 滚轮只上报 interaction，不改写位移、也不排 rAF：
+    // 片段文档不可滚（scrolling="no"），浏览器会把滚轮沿 frame 树链给会话滚动容器，
+    // 全程在合成器线程完成。宿主再写一次 scrollTop 会让同一次滚轮被算两遍（实测 1181px vs 833px、
+    // 步长 19±7 vs 14±0），既重复又破坏平滑滚动，所以这里必须什么都不转发。
     expect(blockedWheel).toBe(0)
-    expect(frames).toHaveLength(1)
-    frames.shift()?.()
-    const wheelMessages = posted.filter((item) => item.type === 'wheel')
-    expect(wheelMessages).toHaveLength(1)
-    expect(wheelMessages[0]).toMatchObject({ deltaX: 40, deltaY: 60 })
+    expect(frames).toHaveLength(framesBeforeWheel)
+    expect(posted.filter((item) => item.type === 'wheel')).toHaveLength(0)
+    // 连续滚轮共用节流器：20 次只补一个 interaction，供宿主停跟随。
+    expect(timers).toHaveLength(timersBeforeWheel + 1)
+    timers.at(-1)?.()
     expect(posted).toHaveLength(beforeWheel + 1)
+    expect(posted.at(-1)).toMatchObject({ type: 'interaction', kind: 'wheel' })
     const beforeError = posted.length
     api.setState(runInContext('({ big: "你".repeat(6000) })', context) as Record<string, unknown>)
     expect(posted).toHaveLength(beforeError + 1)

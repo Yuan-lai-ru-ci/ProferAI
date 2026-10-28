@@ -274,11 +274,11 @@ export interface BrowserDownloadBlockedEvent {
  *
  * 那条链路跨越了进程边界：选区在**无 preload 的沙箱 viewer 页**里，
  * 页面只能把文本以哨兵 URL 回投给主进程，主进程再转给渲染进程，
- * 渲染进程按预览面板同一套字段写进 `quotedSelectionMapAtom`。
+ * 渲染进程把它转成一条引用插入输入框正文（`[n]` 胶囊）。
  */
 export interface BrowserLocalFileSelectionEvent {
   sessionId: string
-  /** 选中的文本（已按上限截断）；空串表示选区已清空，渲染进程据此撤掉引用胶囊。 */
+  /** 选中的文本（已按上限截断）；空串表示选区已清空，渲染进程不再插入新引用。 */
   text: string
   /** 预览中的文件绝对路径，与预览面板引用的 filePath 同口径。 */
   filePath: string

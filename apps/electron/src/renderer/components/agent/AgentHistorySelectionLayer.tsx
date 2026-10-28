@@ -10,9 +10,8 @@ import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
-import { quotedSelectionsMapAtom } from '@/atoms/preview-atoms'
+import { pendingQuoteInsertMapAtom } from '@/atoms/preview-atoms'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
-import { appendQuotedSelection } from '@/lib/quoted-selection'
 import { SELECTION_ACTION_TARGET_SELECTOR } from '@/lib/quoted-selection'
 import {
   AGENT_BLOCK_ID_ATTRIBUTE,
@@ -95,7 +94,7 @@ export function AgentHistorySelectionLayer({
   rootRef,
   explorationEnabled = true,
 }: AgentHistorySelectionLayerProps): React.ReactElement | null {
-  const setQuotedSelectionsMap = useSetAtom(quotedSelectionsMapAtom)
+  const setPendingQuoteInsert = useSetAtom(pendingQuoteInsertMapAtom)
   const store = useStore()
   const agentSessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
@@ -202,6 +201,8 @@ export function AgentHistorySelectionLayer({
       if (!sel || sel.isCollapsed) clearSelection()
     }
     const onPointerDown = (event: PointerEvent): void => {
+      // 右键用于弹「引用到输入框」：必须保留当前选区与已捕获的选区状态
+      if (event.button === 2) return
       const target = event.target
       if (target instanceof Element && target.closest(SELECTION_ACTION_TARGET_SELECTOR)) return
       if (target instanceof Element && rootRef.current?.contains(target)) {
@@ -258,27 +259,39 @@ export function AgentHistorySelectionLayer({
       messageRole: selection.messageRole,
       capturedAt: Date.now(),
     }
-    let duplicate = false
-    setQuotedSelectionsMap((prev) => {
-      const list = prev.get(sessionId) ?? []
-      const appended = appendQuotedSelection(list, quotedSelection)
-      duplicate = appended.duplicate
-      if (appended.duplicate) return prev
+    // 引用直接落到输入框正文里（内联 [n] 胶囊），这里只把请求交给 AgentView
+    setPendingQuoteInsert((prev) => {
       const next = new Map(prev)
-      next.set(sessionId, appended.list)
+      next.set(sessionId, [...(prev.get(sessionId) ?? []), quotedSelection])
       return next
     })
     window.getSelection()?.removeAllRanges()
     clearSelection()
-    if (duplicate) toast.info('这段已经在引用列表里')
-    else toast.success('已添加到 Agent 引用')
-  }, [clearSelection, selection, sessionId, setQuotedSelectionsMap])
+  }, [clearSelection, selection, sessionId, setPendingQuoteInsert])
 
   React.useEffect(() => {
     const onQuoteCurrentSelection = (): void => handleAddToAgent()
     window.addEventListener(AGENT_SELECTION_QUOTE_EVENT, onQuoteCurrentSelection)
     return () => window.removeEventListener(AGENT_SELECTION_QUOTE_EVENT, onQuoteCurrentSelection)
   }, [handleAddToAgent])
+
+  // 右键菜单「引用到输入框」：主进程只转发点击，选区仍留在 DOM 里
+  React.useEffect(() => {
+    const subscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onAgentQuoteSelection
+    if (!subscribe) return
+    return subscribe(() => handleAddToAgent())
+  }, [handleAddToAgent])
+
+  // 告诉主进程当前选区是否可引用：只有可引用时才往右键菜单里加项，
+  // 避免在设置页、无关面板里出现点不动的菜单。
+  React.useEffect(() => {
+    const setQuoteable = (window.electronAPI as Partial<typeof window.electronAPI>).setQuoteableSelection
+    if (!setQuoteable) return
+    void setQuoteable(Boolean(selection)).catch(() => {})
+    return () => {
+      void setQuoteable(false).catch(() => {})
+    }
+  }, [selection])
 
   const handleOpenExplorationBranch = React.useCallback(async (): Promise<void> => {
     if (!selection || openExplorationPendingRef.current) return
@@ -310,7 +323,7 @@ export function AgentHistorySelectionLayer({
         capturedAt: Date.now(),
       }
       setAgentSessions((prev) => prev.some((item) => item.id === branch.id) ? prev : [branch, ...prev])
-      setQuotedSelectionsMap((prev) => new Map(prev).set(branch.id, [quotedSelection]))
+      setPendingQuoteInsert((prev) => new Map(prev).set(branch.id, [quotedSelection]))
       // 分支成为父会话上下文内的顶栏 Tab：激活分支，并自动与父会话并排（焦点在分支）。
       openExplorationBranchTab(store, sessionId, { sessionId: branch.id, title: branch.title || '探索分支' }, { autoGroup: true })
       window.getSelection()?.removeAllRanges()
@@ -322,7 +335,7 @@ export function AgentHistorySelectionLayer({
     } finally {
       openExplorationPendingRef.current = false
     }
-  }, [agentSessions, clearSelection, selection, sessionId, setAgentSessions, setQuotedSelectionsMap, store])
+  }, [agentSessions, clearSelection, selection, sessionId, setAgentSessions, setPendingQuoteInsert, store])
 
   // 工具栏「探索」按钮接手划词：嵌入的探索分支内不再允许二级探索。
   React.useEffect(() => {

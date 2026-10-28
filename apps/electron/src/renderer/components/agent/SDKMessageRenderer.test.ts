@@ -42,7 +42,7 @@ describe('用户消息引用上下文渲染', () => {
       '像这种和引用发送后到对话框里是这样的',
     ].join('\n'))
 
-    expect(parsed.quotes).toEqual([
+    expect(parsed.quotes).toMatchObject([
       {
         path: '已被用户中断',
         filename: '已被用户中断',

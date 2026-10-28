@@ -47,7 +47,6 @@ export type VisualizationBridgeMessage = VisualizationMessageIdentity & (
   | { type: 'state'; state: VisualizationViewState }
   | { type: 'interaction'; kind: 'keyboard' | 'pointer' | 'selection' | 'wheel' }
   | { type: 'selection'; objectId: string }
-  | { type: 'wheel'; deltaX: number; deltaY: number }
   | { type: 'theme'; theme: VisualizationThemeTokens; fontFamily?: string }
 )
 
@@ -162,9 +161,6 @@ function createBridgeScript(options: VisualizationSrcDocOptions, revision: strin
   var localState = {};
   var restored = false;
   var interactionTimer = 0;
-  var wheelTimer = 0;
-  var pendingWheelX = 0;
-  var pendingWheelY = 0;
   var stateEventName = config.eventName;
   var lastUserInput = 0;
   var lastSelectionAt = -Infinity;
@@ -241,20 +237,6 @@ function createBridgeScript(options: VisualizationSrcDocOptions, revision: strin
       interactionTimer = 0;
       post({ type: 'interaction', kind: kind });
     }, config.interactionInterval);
-  }
-  function scheduleWheel(deltaX, deltaY) {
-    pendingWheelX += Number.isFinite(deltaX) ? deltaX : 0;
-    pendingWheelY += Number.isFinite(deltaY) ? deltaY : 0;
-    if (wheelTimer) return;
-    wheelTimer = window.requestAnimationFrame(function () {
-      var nextX = pendingWheelX;
-      var nextY = pendingWheelY;
-      pendingWheelX = 0;
-      pendingWheelY = 0;
-      wheelTimer = 0;
-      post({ type: 'wheel', kind: 'wheel', deltaX: nextX, deltaY: nextY });
-      scheduleInteraction('wheel');
-    });
   }
   function applyTheme(theme, fontFamily) {
     if (isRecord(theme)) Object.keys(theme).forEach(function (name) {
@@ -342,21 +324,15 @@ function createBridgeScript(options: VisualizationSrcDocOptions, revision: strin
     scheduleInteraction('selection');
   }
   /*
-   * 只有**显式声明的**滚动区才允许吃掉滚轮（见 SKILL：需要刻意可滚动的区域用 data-profer-scroll 标注）。
-   * 旧实现是拿计算样式找「任何 overflow:auto|scroll 的祖先」：html/body 的 used value 就是 auto，
-   * 而文档几乎总有几像素溢出（body 外边距、取整），于是循环总在根元素上命中并 return，
-   * 滚轮被片段内部吃掉、永远转交不到会话 —— 表现就是「鼠标停在内建网页上就滚不动」。
+   * 滚轮不拦、不转发：片段文档本身不可滚（scrolling="no"，body 随内容伸展），
+   * 浏览器会把滚轮沿 frame 树链给会话滚动容器，全程在合成器线程完成。
+   *
+   * 旧实现把未消费增量 rAF 聚合后 postMessage 给宿主，由宿主写 scrollTop。
+   * 那条链有两个问题：滚轮变成主线程滚动（无法与合成器平滑滚动同步，长会话里还会
+   * 每帧重跑一次阅读锚点取样）；并且原生链同时生效，一次滚轮被算两遍（实测同输入
+   * 下位移 1181px vs 原生 833px，逐帧步长 19±7 vs 14±0，手感发飘）。
+   * 现在只上报一次 interaction，让宿主停跟随；位移完全交给原生滚动。
    */
-  function innerRegionConsumesWheel(target, delta) {
-    var node = target && target.nodeType === 1 ? target : (target && target.parentElement) || null;
-    var region = node && node.closest ? node.closest('[data-profer-scroll]') : null;
-    if (!region) return false;
-    var horizontal = Math.abs(delta.x) > Math.abs(delta.y);
-    var size = horizontal ? region.scrollWidth - region.clientWidth : region.scrollHeight - region.clientHeight;
-    var position = horizontal ? region.scrollLeft : region.scrollTop;
-    if (size <= 1) return false;
-    return horizontal ? (delta.x > 0 ? position < size - 1 : position > 0) : (delta.y > 0 ? position < size - 1 : position > 0);
-  }
   function blockNavigation(event) {
     var target = event.target && event.target.closest ? event.target.closest('a') : null;
     if (target) event.preventDefault();
@@ -397,24 +373,16 @@ function createBridgeScript(options: VisualizationSrcDocOptions, revision: strin
       lastUserInput = Date.now();
       scheduleInteraction('pointer');
     }, true);
-    /* 混合滚动策略：内部可滚动区域自己消费；滚到边界时把未消费增量转交宿主。
+    /* 滚轮只用来“告诉宿主用户在动”：不 preventDefault、不转发位移。
 
-       纯原生滚动链的问题：iframe 滚到顶/底后，外层会话容器无法继续滚动，用户感觉「卡住」。
-       纯 postMessage 转发的问题：Chromium 把滚轮手势 latch 到 iframe，名额换手时卸载会丢弃整段手势。
-
-       当前方案：检查内部滚动区是否到边界，未消费的增量才转发，既能让内部滚动流畅（原生合成器），
-       又能在边界处继续推动外层（宿主接管）。latch 问题通过候选管理的「滚轮钉住」机制缓解。 */
+       片段的文档高度跟着内容走（scrolling="no"），自身不可滚，浏览器会把滚轮沿 frame 树
+       链给会话滚动容器，全程在合成器线程完成——这是唯一能跟手的高频路径。
+       旧实现额外把增量 rAF 聚合后 postMessage 给宿主写 scrollTop，等于让同一次滚轮
+       既走原生链又走主线程，既重复计算又破坏平滑滚动（实测 1181px vs 833px、步长 19±7）。 */
     document.addEventListener('wheel', function (event) {
       if (!event.isTrusted) return;
       lastUserInput = Date.now();
       scheduleInteraction('wheel');
-
-      // 检查是否有内部可滚动区域消费了滚轮
-      var delta = { x: event.deltaX, y: event.deltaY };
-      if (innerRegionConsumesWheel(event.target, delta)) return;
-
-      // 未被消费，转发给宿主
-      scheduleWheel(event.deltaX, event.deltaY);
     }, { passive: true, capture: true });
     document.addEventListener('click', function (event) {
       var target = event.target && event.target.closest ? event.target.closest('[data-profer-object-id]') : null;
@@ -495,7 +463,6 @@ export function isVisualizationBridgeMessage(value: unknown): value is Visualiza
       return typeof value.message === 'string' && value.message.length <= MAX_MESSAGE_TEXT_CHARS &&
         (value.height === undefined || (typeof value.height === 'number' && Number.isFinite(value.height) && value.height > 0 && value.height <= 1_000_000))
     case 'notice': return typeof value.message === 'string' && value.message.length > 0 && value.message.length <= MAX_MESSAGE_TEXT_CHARS
-    case 'wheel': return typeof value.deltaX === 'number' && Number.isFinite(value.deltaX) && typeof value.deltaY === 'number' && Number.isFinite(value.deltaY)
     case 'interaction': return ['keyboard', 'pointer', 'selection', 'wheel'].includes(String(value.kind))
     case 'theme':
       return isRecord(value.theme) &&

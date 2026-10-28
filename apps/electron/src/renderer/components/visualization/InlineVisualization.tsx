@@ -2,10 +2,14 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { Download, RotateCcw } from 'lucide-react'
 import type { VisualizationRecord, VisualizationContent, VisualizationViewState, VisualizationQuote } from '@profer/shared'
-import { visualizationViewStatesAtom, visualizationHeightsAtom } from '@/atoms/visualization-atoms'
+import {
+  visualizationHeightAtomFamily,
+  visualizationHeightsAtom,
+  visualizationViewStateAtomFamily,
+  visualizationViewStatesAtom,
+} from '@/atoms/visualization-atoms'
 import { visualizationStateKey } from '@/lib/visualization-lifecycle'
-import { quotedSelectionsMapAtom } from '@/atoms/preview-atoms'
-import { appendQuotedSelection } from '@/lib/quoted-selection'
+import { pendingQuoteInsertMapAtom } from '@/atoms/preview-atoms'
 import { useOptionalConversationScroll } from '@/components/ai-elements/conversation-scroll'
 import { VisualizationHost } from './VisualizationHost'
 
@@ -16,12 +20,11 @@ export function VisualizationResultInline({ record, sessionId }: { record: Visua
   const key = visualizationStateKey(owner, record.id, record.revision)
   const ref = React.useRef<HTMLDivElement>(null)
   const scroll = useOptionalConversationScroll()
-  const heights = useAtomValue(visualizationHeightsAtom)
+  const height = useAtomValue(visualizationHeightAtomFamily(key)) ?? 240
   const setHeights = useSetAtom(visualizationHeightsAtom)
-  const height = heights.get(key) ?? 240
-  const states = useAtomValue(visualizationViewStatesAtom)
+  const state = useAtomValue(visualizationViewStateAtomFamily(key))
   const setStates = useSetAtom(visualizationViewStatesAtom)
-  const setQuotes = useSetAtom(quotedSelectionsMapAtom)
+  const setPendingQuoteInsert = useSetAtom(pendingQuoteInsertMapAtom)
   const [content, setContent] = React.useState<VisualizationContent | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [reload, setReload] = React.useState(0)
@@ -32,8 +35,6 @@ export function VisualizationResultInline({ record, sessionId }: { record: Visua
 
   // 组件挂载后就激活，不再基于滚动位置动态管理
   const active = true
-
-  const state = states.get(key) ?? {}
 
   // 加载视图状态
   React.useEffect(() => {
@@ -97,22 +98,18 @@ export function VisualizationResultInline({ record, sessionId }: { record: Visua
   }
   const quote = () => {
     if (!selectedQuote || owner !== record.sessionId) return
-    setQuotes((previous) => {
-      const list = previous.get(owner) ?? []
-      const appended = appendQuotedSelection(list, {
-        sourceType: 'visualization',
-        filePath: '',
-        sourceLabel: `${record.title} · ${selectedQuote.label}`,
-        text: selectedQuote.text,
-        visualization: selectedQuote,
-        capturedAt: Date.now(),
-      })
-      if (!appended.duplicate) {
-        const next = new Map(previous)
-        next.set(owner, appended.list)
-        return next
-      }
-      return previous
+    const quoteSelection = {
+      sourceType: 'visualization' as const,
+      filePath: '',
+      sourceLabel: `${record.title} · ${selectedQuote.label}`,
+      text: selectedQuote.text,
+      visualization: selectedQuote,
+      capturedAt: Date.now(),
+    }
+    setPendingQuoteInsert((previous) => {
+      const next = new Map(previous)
+      next.set(owner, [...(previous.get(owner) ?? []), quoteSelection])
+      return next
     })
   }
   // 可视化在会话流里是一个独立对象，不是回复正文的延续：外框沿用代码块/Mermaid 的
@@ -133,10 +130,7 @@ export function VisualizationResultInline({ record, sessionId }: { record: Visua
       </div>
       <div className="bg-muted/20 p-3">
         <div style={{ height }} className="relative">
-          {content && !error ? content.record.chart ? <React.Suspense fallback={<p className="py-6 text-sm text-muted-foreground">正在加载图表…</p>}><NativeVisualizationChart key={key} spec={content.record.chart} content={content} state={state} onState={updateState} onQuote={setSelectedQuote} onHeight={updateHeight} /></React.Suspense> : <VisualizationHost content={content} state={state} onState={updateState} onQuote={setSelectedQuote} onInteraction={() => scroll?.pause()} onError={setError} onHeight={updateHeight} onWheel={(_, deltaY) => {
-            const viewport = scroll?.scrollRef.current
-            if (viewport) scroll?.navigate(viewport.scrollTop + deltaY, false)
-          }} className="block h-full w-full border-0" /> : <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+          {content && !error ? content.record.chart ? <React.Suspense fallback={<p className="py-6 text-sm text-muted-foreground">正在加载图表…</p>}><NativeVisualizationChart key={key} spec={content.record.chart} content={content} state={state} onState={updateState} onQuote={setSelectedQuote} onHeight={updateHeight} /></React.Suspense> : <VisualizationHost content={content} state={state} onState={updateState} onQuote={setSelectedQuote} onInteraction={() => scroll?.pause()} onError={setError} onHeight={updateHeight} className="block h-full w-full border-0" /> : <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <p className="max-w-lg text-sm text-muted-foreground">{record.summary}</p>
             {error ? <><p role="alert" className="text-xs text-destructive">{error}</p><button type="button" onClick={() => { setError(null); setReload((value) => value + 1) }} className="flex items-center gap-1 text-xs"><RotateCcw className="size-3" />重新加载</button></> : <p className="text-xs text-muted-foreground">正在加载交互视图…</p>}
           </div>}
