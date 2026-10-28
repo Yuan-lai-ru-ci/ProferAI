@@ -903,28 +903,53 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
       const { ref: _ref, ...payload } = quote
       const targetKey = getQuotedSelectionKey(quote)
 
-      // 同一个来源 + 同一段文本只保留一个标记；浏览器划词则替换上一条自动引用
-      const duplicatePositions: number[] = []
-      const autoPositions: number[] = []
+      // 引用统一排在正文最前面的一行里：先收齐现有引用，按文档顺序 + 新条目重排，
+      // 再整体删掉旧节点、在文档开头重新插入。这样编号顺序 = 行内顺序 = 插入顺序。
+      const existing: QuoteRefPayload[] = []
+      const positions: number[] = []
       editor.state.doc.descendants((node, pos) => {
         if (node.type.name !== QUOTE_REF_NODE_NAME) return
-        const existing = node.attrs.quote as QuoteRefPayload | null
-        if (!existing) return
-        if (getQuotedSelectionKey(existing) === targetKey) duplicatePositions.push(pos)
-        if (payload.origin === 'browser-selection' && existing.origin === 'browser-selection') autoPositions.push(pos)
+        const current = node.attrs.quote as QuoteRefPayload | null
+        if (!current) return
+        positions.push(pos)
+        existing.push(current)
       })
-      if (duplicatePositions.length > 0) return false
+      if (existing.some((current) => getQuotedSelectionKey(current) === targetKey)) return false
 
-      const removals = [...new Set([...autoPositions])].sort((a, b) => b - a)
-      let chain = editor.chain().focus()
-      for (const pos of removals) {
-        chain = chain.deleteRange({ from: pos, to: pos + 1 })
+      // 浏览器自动划词只保留最新一条，不累积
+      const kept = existing.filter((current) => !(payload.origin === 'browser-selection' && current.origin === 'browser-selection'))
+      const nextQuotes = [...kept, payload as QuoteRefPayload]
+
+      if (positions.length > 0) {
+        let removal = editor.chain()
+        for (const pos of [...positions].sort((a, b) => b - a)) {
+          removal = removal.deleteRange({ from: pos, to: pos + 1 })
+        }
+        removal.run()
       }
-      chain
+
+      const chipContent = nextQuotes.flatMap((current) => ([
         // n 由 renumber 插件按文档顺序重排，这里给个占位值即可
-        .insertContent({ type: QUOTE_REF_NODE_NAME, attrs: { n: 1, quote: payload as QuoteRefPayload } })
-        .insertContent(' ')
-        .run()
+        { type: QUOTE_REF_NODE_NAME, attrs: { n: 1, quote: current } },
+        { type: 'text' as const, text: ' ' },
+      ]))
+
+      // 删掉旧胶囊后，如果首段正好空出来了（它就是引用行），直接复用它——
+      // 否则每加一条引用都会在最上面多留一个空段落。
+      const firstBlock = editor.state.doc.firstChild
+      const canReuseFirst = firstBlock?.type.name === 'paragraph' && firstBlock.content.size === 0
+
+      if (canReuseFirst) {
+        editor.chain().insertContentAt(1, chipContent).run()
+        // 整篇只有这一行（用户还没写正文）：光标落到引用行末尾，接着写
+        if (editor.state.doc.childCount === 1) {
+          const end = 1 + (editor.state.doc.firstChild?.content.size ?? 0)
+          editor.commands.setTextSelection(end)
+        }
+      } else {
+        // 已有正文：引用单独占**最前面一行**，正文整体下移，避免胶囊混在句子里
+        editor.chain().insertContentAt(0, { type: 'paragraph', content: chipContent }).run()
+      }
       return true
     },
     getQuoteSelections: () => {
@@ -1014,12 +1039,14 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           width: 3px;
         }
         .quote-ref-chip {
+          position: relative;
           display: inline-flex;
           align-items: center;
           gap: 4px;
           height: 18px;
           margin: 0 1px;
-          padding: 0 6px 0 2px;
+          /* 右侧常驻 15px：给 × 留位，避免 hover 时才挤开或压到下一个胶囊 */
+          padding: 0 15px 0 2px;
           border-radius: 4px;
           background-color: hsl(var(--primary) / 0.1);
           color: hsl(var(--primary));
@@ -1055,6 +1082,40 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           max-width: 120px;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+        /* 悬停才出现的移除按钮：落在胶囊内部预留的 15px 里，不遮挡相邻胶囊 */
+        .quote-ref-chip__remove {
+          position: absolute;
+          right: 2px;
+          top: 50%;
+          transform: translateY(-50%);
+          z-index: 2;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 12px;
+          height: 12px;
+          padding: 0;
+          border: none;
+          border-radius: 3px;
+          background-color: transparent;
+          color: currentColor;
+          font-size: 11px;
+          line-height: 1;
+          cursor: pointer;
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 100ms ease, background-color 120ms ease, color 120ms ease;
+        }
+        .quote-ref-chip:hover .quote-ref-chip__remove,
+        .quote-ref-chip__remove:focus-visible {
+          opacity: 0.75;
+          pointer-events: auto;
+        }
+        .quote-ref-chip__remove:hover {
+          opacity: 1;
+          background-color: hsl(var(--destructive) / 0.14);
+          color: hsl(var(--destructive, 0 70% 50%));
         }
         .mention-chip {
           background-color: hsl(var(--primary) / 0.1);

@@ -104,7 +104,7 @@ function isPointerOnScrollbarArea(el: HTMLElement, event: PointerEvent): boolean
  * 滚动条本身是伪元素，`:hover` 只会在滑块上触发、盖不到整条轨道，所以用指针坐标自己判。 */
 function bindScrollbarHover(el: HTMLElement): () => void {
   /* Windows 的条常驻可见，不需要指针追踪；省掉每帧 getBoundingClientRect。 */
-  if (typeof document !== 'undefined' && document.documentElement.getAttribute('data-platform') === 'win32') {
+  if (typeof document !== 'undefined' && document.documentElement?.getAttribute('data-platform') === 'win32') {
     return () => {}
   }
   const onPointerMove = (event: PointerEvent): void => {
