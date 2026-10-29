@@ -9,7 +9,7 @@
 
 import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { Download, X } from 'lucide-react'
+import { Copy, Download, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { useSmoothZoom } from '../hooks/use-smooth-zoom'
 
@@ -24,6 +24,8 @@ interface ImageLightboxProps {
   onOpenChange: (open: boolean) => void
   /** 下载回调（可选） */
   onSave?: () => void
+  /** 复制到剪贴板回调（可选） */
+  onCopy?: () => void
 }
 
 export function ImageLightbox({
@@ -32,6 +34,7 @@ export function ImageLightbox({
   open,
   onOpenChange,
   onSave,
+  onCopy,
 }: ImageLightboxProps): React.ReactElement | null {
   // rAF 平滑缩放 + 指针锚点（translate+scale 模型，origin 固定 0 0）+ 拖拽平移
   const { zoom, pan, bindRef, reset, onPanMouseDown } = useSmoothZoom({ minZoom: 0.5, maxZoom: 5 })
@@ -101,6 +104,24 @@ export function ImageLightbox({
           >
             <X className="size-5" />
           </DialogPrimitive.Close>
+
+          {/* 底部操作按钮（可选）：复制在左、保存在右 */}
+          {onCopy && (
+            <button
+              type="button"
+              onClick={onCopy}
+              className={cn(
+                'absolute bottom-6 p-2.5 rounded-full',
+                'bg-black/50 text-white/80 backdrop-blur-sm',
+                'hover:bg-black/70 hover:text-white transition-colors',
+                'focus:outline-none',
+                onSave ? 'right-[4.5rem]' : 'right-6'
+              )}
+              title="复制图片"
+            >
+              <Copy className="size-5" />
+            </button>
+          )}
 
           {/* 底部下载按钮（可选） */}
           {onSave && (

@@ -5,10 +5,9 @@
  */
 
 import * as React from 'react'
-import { Download } from 'lucide-react'
-import { ImageLightbox } from '@profer/ui/primitives/image-lightbox'
 import { CollapsibleResult } from './collapsible-result'
 import { parseAgentImageAttachmentMarkers, type ParsedAgentImageAttachment } from '../image-attachment-marker'
+import { GeneratedImageThumb } from '../generated-image-thumb'
 
 interface DefaultResultRendererProps {
   result: string
@@ -31,53 +30,6 @@ function tryParseKeyValue(text: string): Array<{ key: string; value: string }> |
     // 非 JSON
   }
   return null
-}
-
-/** 生成图片缩略图 */
-function GeneratedImageThumb({ image }: { image: ParsedAgentImageAttachment }): React.ReactElement {
-  const [imageSrc, setImageSrc] = React.useState<string | null>(null)
-  const [lightboxOpen, setLightboxOpen] = React.useState(false)
-
-  React.useEffect(() => {
-    window.electronAPI
-      .readAttachment(image.localPath)
-      .then((base64) => setImageSrc(`data:${image.mediaType};base64,${base64}`))
-      .catch((err) => console.error('[DefaultResult] 读取图片失败:', err))
-  }, [image.localPath, image.mediaType])
-
-  const handleSave = React.useCallback((): void => {
-    window.electronAPI.saveImageAs(image.localPath, image.filename)
-  }, [image.localPath, image.filename])
-
-  if (!imageSrc) {
-    return <div className="w-full max-w-[240px] h-[160px] rounded-lg bg-muted/30 animate-pulse shrink-0" />
-  }
-
-  return (
-    <div className="relative group inline-block">
-      <img
-        src={imageSrc}
-        alt={image.filename}
-        className="max-w-[300px] max-h-[250px] rounded-lg object-contain cursor-pointer border border-border/50"
-        onClick={() => setLightboxOpen(true)}
-      />
-      <button
-        type="button"
-        onClick={handleSave}
-        className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
-        title="保存图片"
-      >
-        <Download className="size-4" />
-      </button>
-      <ImageLightbox
-        src={imageSrc}
-        alt={image.filename}
-        open={lightboxOpen}
-        onOpenChange={setLightboxOpen}
-        onSave={handleSave}
-      />
-    </div>
-  )
 }
 
 export function DefaultResultRenderer({ result, isError, imageAttachments = [] }: DefaultResultRendererProps): React.ReactElement {
@@ -141,7 +93,7 @@ export function DefaultResultRenderer({ result, isError, imageAttachments = [] }
     <div className="space-y-3">
       <div className="flex flex-wrap gap-3">
         {images.map((img, i) => (
-          <GeneratedImageThumb key={`${img.localPath}:${i}`} image={img} />
+          <GeneratedImageThumb key={`${img.localPath}:${i}`} image={img} variant="compact" />
         ))}
       </div>
       {cleanText && (

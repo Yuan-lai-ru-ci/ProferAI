@@ -1639,6 +1639,22 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 复制图片到系统剪贴板。
+  // 走主进程 clipboard.writeImage 而非渲染层 navigator.clipboard.write：后者依赖窗口聚焦
+  // 与剪贴板权限，Electron 里窗口失焦时静默失败；主进程没有这个限制。
+  // 复用 readAttachmentAsBase64 的安全目录校验，非法路径直接抛错由渲染层提示。
+  ipcMain.handle(
+    CHAT_IPC_CHANNELS.COPY_IMAGE,
+    async (_, localPath: string): Promise<boolean> => {
+      const base64 = readAttachmentAsBase64(localPath)
+      const { clipboard, nativeImage } = await import('electron')
+      const image = nativeImage.createFromBuffer(Buffer.from(base64, 'base64'))
+      if (image.isEmpty()) return false
+      clipboard.writeImage(image)
+      return true
+    }
+  )
+
   // 另存图片到用户选择的位置（原生 Save As 对话框）
   ipcMain.handle(
     CHAT_IPC_CHANNELS.SAVE_IMAGE_AS,

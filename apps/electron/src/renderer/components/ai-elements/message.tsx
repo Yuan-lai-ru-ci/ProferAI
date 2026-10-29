@@ -43,6 +43,7 @@ import { detectLanguage } from '@profer/core'
 import { FilePathChip, isAbsoluteFilePath, isRelativeFilePath } from './file-path-chip'
 import { useFileAccessSessionId } from './file-access-context'
 import { useOpenPreview } from '@/components/diff/preview-opener'
+import { ChatImageContextMenu, useCopyChatImageAction } from '@/components/chat/chat-image-context-menu'
 import type { HTMLAttributes, ComponentProps, ReactNode } from 'react'
 import type { FileAttachment } from '@profer/shared'
 import {
@@ -781,7 +782,15 @@ const MarkdownImage = React.memo(function MarkdownImage({ src, alt }: React.ImgH
     return <MarkdownLink href={src}>{alt || src}</MarkdownLink>
   }
 
-  return resolvedSrc ? <img src={resolvedSrc} alt={alt} /> : <span role="img" aria-label={alt} />
+  if (!resolvedSrc) return <span role="img" aria-label={alt} />
+
+  // 本地图经 file:resolve-path 得到 profer-file:// URL（协议带 supportFetchAPI，可被 fetch），
+  // 右键复制走 renderer ClipboardItem 回退路径；http(s)/data/blob 地址同理。
+  return (
+    <ChatImageContextMenu src={resolvedSrc}>
+      <img src={resolvedSrc} alt={alt} />
+    </ChatImageContextMenu>
+  )
 })
 
 /** GFM 表格本身只负责布局；复制与格式选择由外层块右上角统一操作条提供。 */
@@ -1450,6 +1459,12 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
     window.electronAPI.saveImageAs(attachment.localPath, attachment.filename)
   }, [attachment.localPath, attachment.filename])
 
+  /** 复制图片到剪贴板（主进程 clipboard.writeImage） */
+  const copyImage = useCopyChatImageAction()
+  const handleCopy = React.useCallback((): void => {
+    void copyImage({ localPath: attachment.localPath })
+  }, [copyImage, attachment.localPath])
+
   if (!imageSrc) {
     return (
       <div className={cn(
@@ -1476,24 +1491,27 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
   )
 
   return (
-    <div className="relative group inline-block">
-      {imgElement}
-      <button
-        type="button"
-        onClick={handleSave}
-        className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
-        title="保存图片"
-      >
-        <Download className="size-4" />
-      </button>
-      <ImageLightbox
-        src={imageSrc}
-        alt={attachment.filename}
-        open={lightboxOpen}
-        onOpenChange={setLightboxOpen}
-        onSave={handleSave}
-      />
-    </div>
+    <ChatImageContextMenu localPath={attachment.localPath} onSave={handleSave}>
+      <div className="relative group inline-block">
+        {imgElement}
+        <button
+          type="button"
+          onClick={handleSave}
+          className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+          title="保存图片"
+        >
+          <Download className="size-4" />
+        </button>
+        <ImageLightbox
+          src={imageSrc}
+          alt={attachment.filename}
+          open={lightboxOpen}
+          onOpenChange={setLightboxOpen}
+          onSave={handleSave}
+          onCopy={handleCopy}
+        />
+      </div>
+    </ChatImageContextMenu>
   )
 }
 

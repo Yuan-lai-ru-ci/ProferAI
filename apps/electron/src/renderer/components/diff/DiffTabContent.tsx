@@ -31,6 +31,7 @@ import { OfficePreview } from '@/components/file-browser/office-preview/OfficePr
 import { OfvPreview } from '@/components/file-browser/ofv-preview/OfvPreview'
 import { EDITABLE_TEXT_EXTS, IMAGE_PREVIEW_EXTS, UNSUPPORTED_EXTS } from '@/lib/preview-extension-sets'
 import { isOfvBackedPath } from '@/lib/ofv-extensions'
+import { ChatImageContextMenu } from '@/components/chat/chat-image-context-menu'
 
 const MD_EXTS = new Set(['.md', '.markdown'])
 const HTML_EXTS = new Set(['.html', '.htm'])
@@ -1172,20 +1173,24 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                   >+</button>
                 </div>
                 <div className="h-full overflow-hidden p-4 pt-12 flex items-center justify-center">
-                  <img
-                    ref={bindImageEl}
-                    src={imageDataUrl}
-                    alt={getFileBaseName(filePath) || 'Image'}
-                    draggable={false}
-                    onMouseDown={onImagePanMouseDown}
-                    className="max-w-full max-h-full object-contain select-none"
-                    style={{
-                      transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`,
-                      transformOrigin: '0 0',
-                      cursor: 'grab',
-                    }}
-                    title="滚动滚轮缩放，拖拽平移"
-                  />
+                  {/* 右键复制：imageDataUrl 是 profer-file:// URL（协议带 supportFetchAPI），
+                      走 fetch + ClipboardItem 回退路径；此处非附件，无 saveImageAs 可用的本地路径 */}
+                  <ChatImageContextMenu src={imageDataUrl}>
+                    <img
+                      ref={bindImageEl}
+                      src={imageDataUrl}
+                      alt={getFileBaseName(filePath) || 'Image'}
+                      draggable={false}
+                      onMouseDown={onImagePanMouseDown}
+                      className="max-w-full max-h-full object-contain select-none"
+                      style={{
+                        transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`,
+                        transformOrigin: '0 0',
+                        cursor: 'grab',
+                      }}
+                      title="滚动滚轮缩放，拖拽平移；右键复制图片"
+                    />
+                  </ChatImageContextMenu>
                 </div>
               </div>
               ) : null

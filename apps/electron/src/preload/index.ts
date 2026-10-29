@@ -515,6 +515,9 @@ export interface ElectronAPI {
   /** 读取附件（返回 base64 字符串） */
   readAttachment: (localPath: string) => Promise<string>
 
+  /** 复制图片到系统剪贴板（主进程 clipboard.writeImage，返回是否成功） */
+  copyImage: (localPath: string) => Promise<boolean>
+
   /** 另存图片到用户选择的位置（原生 Save As 对话框） */
   saveImageAs: (localPath: string, defaultFilename: string) => Promise<boolean>
 
@@ -2098,6 +2101,10 @@ const electronAPI: ElectronAPI = {
 
   readAttachment: (localPath: string) => {
     return ipcRenderer.invoke(CHAT_IPC_CHANNELS.READ_ATTACHMENT, localPath)
+  },
+
+  copyImage: (localPath: string) => {
+    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.COPY_IMAGE, localPath)
   },
 
   saveImageAs: (localPath: string, defaultFilename: string) => {

@@ -17,17 +17,16 @@ import {
   Loader2,
   Brain,
   MessageSquareText,
-  Download,
   Check,
 } from 'lucide-react'
 import { useAtomValue } from 'jotai'
 import { thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
-import { ImageLightbox } from '@profer/ui/primitives/image-lightbox'
 import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
+import { GeneratedImageThumb } from './generated-image-thumb'
 import { parseAgentImageAttachmentMarkers, type ParsedAgentImageAttachment } from './image-attachment-marker'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
@@ -735,53 +734,7 @@ function ThinkingBlock({ block, dimmed = false, streaming = false }: ThinkingBlo
 }
 
 // ===== Agent 图片附件解析与渲染 =====
-
-/** 生成图片缩略图组件（点击可预览大图） */
-function GeneratedImageThumb({ image }: { image: ParsedAgentImageAttachment }): React.ReactElement {
-  const [imageSrc, setImageSrc] = React.useState<string | null>(null)
-  const [lightboxOpen, setLightboxOpen] = React.useState(false)
-
-  React.useEffect(() => {
-    window.electronAPI
-      .readAttachment(image.localPath)
-      .then((base64) => setImageSrc(`data:${image.mediaType};base64,${base64}`))
-      .catch((err) => console.error('[GeneratedImage] 读取图片失败:', err))
-  }, [image.localPath, image.mediaType])
-
-  const handleSave = React.useCallback((): void => {
-    window.electronAPI.saveImageAs(image.localPath, image.filename)
-  }, [image.localPath, image.filename])
-
-  if (!imageSrc) {
-    return <div className="w-full max-w-[300px] h-[200px] rounded-lg bg-muted/30 animate-pulse shrink-0" />
-  }
-
-  return (
-    <div className="relative group inline-block">
-      <img
-        src={imageSrc}
-        alt={image.filename}
-        className="max-w-[400px] max-h-[350px] rounded-lg object-contain cursor-pointer border border-border/50"
-        onClick={() => setLightboxOpen(true)}
-      />
-      <button
-        type="button"
-        onClick={handleSave}
-        className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
-        title="保存图片"
-      >
-        <Download className="size-4" />
-      </button>
-      <ImageLightbox
-        src={imageSrc}
-        alt={image.filename}
-        open={lightboxOpen}
-        onOpenChange={setLightboxOpen}
-        onSave={handleSave}
-      />
-    </div>
-  )
-}
+// 图片缩略图组件已抽取至 ./generated-image-thumb（与 default-result.tsx 共用，带右键复制菜单）
 
 // ===== ContentBlock 主组件 =====
 

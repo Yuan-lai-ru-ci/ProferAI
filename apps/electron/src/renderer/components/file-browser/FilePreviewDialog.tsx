@@ -18,6 +18,7 @@ import { Button } from '@profer/ui/primitives/button'
 import { cn } from '@/lib/utils'
 import { OfficePreview } from './office-preview/OfficePreview'
 import { useSmoothZoom } from '@profer/ui'
+import { ChatImageContextMenu } from '@/components/chat/chat-image-context-menu'
 import type { FileAccessOptions } from '@profer/shared'
 
 interface FilePreviewDialogProps {
@@ -212,16 +213,19 @@ export function FilePreviewDialog({ open, filePath, fileName, onClose, teamDownl
           )}
           {state.status === 'image' && (
             <div className="flex h-full min-h-full w-full min-w-full items-center justify-center overflow-hidden">
-              <img
-                ref={bindImagePreview}
-                src={state.src}
-                alt={fileName}
-                className="max-w-full max-h-full object-contain select-none cursor-grab"
-                style={{ transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`, transformOrigin: '0 0' }}
-                onMouseDown={onImagePanMouseDown}
-                draggable={false}
-                title="滚动滚轮缩放，拖拽平移"
-              />
+              {/* 右键复制：state.src 是 profer-file:// URL（支持 fetch），走 ClipboardItem 回退路径 */}
+              <ChatImageContextMenu src={state.src}>
+                <img
+                  ref={bindImagePreview}
+                  src={state.src}
+                  alt={fileName}
+                  className="max-w-full max-h-full object-contain select-none cursor-grab"
+                  style={{ transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`, transformOrigin: '0 0' }}
+                  onMouseDown={onImagePanMouseDown}
+                  draggable={false}
+                  title="滚动滚轮缩放，拖拽平移；右键复制图片"
+                />
+              </ChatImageContextMenu>
             </div>
           )}
           {state.status === 'html' && (
