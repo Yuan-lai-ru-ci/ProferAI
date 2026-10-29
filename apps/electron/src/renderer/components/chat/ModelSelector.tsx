@@ -416,7 +416,7 @@ export function ModelSelector({
             {displayModelInfo ? (
               <img src={getModelLogo(displayModelInfo.modelId, displayModelInfo.provider)} alt={displayModelInfo.modelName} className="size-5 rounded object-cover" />
             ) : <Cpu className="size-5" />}
-            {!compact && <><span className="max-w-[220px] truncate">{displayModelInfo ? (showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName) : '选择模型'}</span>{triggerExtra}<ChevronDown className="size-3" /></>}
+            {!compact && <><span className="max-w-[200px] truncate">{displayModelInfo ? (showChannelInTrigger ? `${displayChannelName} · ${displayModelInfo.modelName}` : displayModelInfo.modelName) : '选择模型'}</span>{triggerExtra}<ChevronDown className="size-3" /></>}
           </button>
         </AgentComposerToolTooltip>
       )}

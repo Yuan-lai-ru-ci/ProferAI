@@ -75,7 +75,7 @@ export function PluginTopBarEntries(): React.ReactElement | null {
             type="button"
             variant="ghost"
             size="icon"
-            className="topbar-tool-button relative z-20 h-8 w-8"
+            className="topbar-tool-button relative z-20 h-7 w-7"
             aria-label={entry.page.title}
             onClick={() => void open(entry.pluginId, entry.page.id, entry.page.title, undefined, 'tab').catch(report)}
           >

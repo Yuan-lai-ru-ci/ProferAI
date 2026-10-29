@@ -1,7 +1,7 @@
 /**
  * CoachTourOverlay — 界面蒙层引导（Coach Tour）
  *
- * 触发：coachTourOpenAtom（顶栏「界面引导」测试按钮 / Onboarding 完成后自动接力 /
+ * 触发：coachTourOpenAtom（设置页「重新播放界面引导」/ 教程横幅 / Onboarding 完成后自动接力 /
  * 启动时引导版本偏低的自动重播）。
  *
  * 引擎行为：

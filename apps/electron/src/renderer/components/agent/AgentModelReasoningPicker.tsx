@@ -221,7 +221,7 @@ export function AgentModelReasoningPicker({
                 )}
 
                 {/* 模型名称 */}
-                <span className="max-w-[130px] truncate text-foreground/90 whitespace-nowrap font-medium">
+                <span className="max-w-[180px] truncate text-foreground/90 whitespace-nowrap font-medium">
                   {modelDisplayName}
                 </span>
 

@@ -14,7 +14,7 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { PluginTopBarEntries } from '@/components/plugins/PluginEntries'
 import { resolvePluginPageSurfaceVisibility } from '@profer/plugin-api'
 import { installedPluginsAtom } from '@/atoms/plugin-system'
-import { Globe2, PanelRight, Ungroup, Blocks, Compass } from "lucide-react";
+import { Globe2, PanelRight, Ungroup, Blocks } from "lucide-react";
 import { toast } from "sonner";
 import {
   tabsAtom,
@@ -42,7 +42,6 @@ import {
   seenFilesVersionAtom,
 } from "@/atoms/agent-atoms";
 import { browserStateMapAtom } from "@/atoms/browser-atoms";
-import { coachTourOpenAtom } from "@/atoms/coach-tour-atoms";
 import { appModeAtom } from "@/atoms/app-mode";
 import { openFilePanel } from "@/hooks/usePanelAutoLayout";
 import { openBrowserTabManually } from "@/lib/browser-tab";
@@ -648,12 +647,6 @@ function TabBarInner({
   const filePanelForcedHidden = isPanelOpen && !filePanelVisible;
   // 受管浏览器入口：仅当当前标签是 Agent 会话时展示。主进程按会话隔离浏览器。
   const setBrowserStateMap = useSetAtom(browserStateMapAtom);
-  // 界面蒙层引导：顶栏指南针按钮触发，Overlay 在 App 顶层渲染
-  const [coachTourOpen, setCoachTourOpen] = useAtom(coachTourOpenAtom);
-  const coachTourLaunchPendingRef = React.useRef(false);
-  React.useEffect(() => {
-    if (!coachTourOpen) coachTourLaunchPendingRef.current = false;
-  }, [coachTourOpen]);
   // 每页一个浏览器 Tab 后「浏览器 Tab」是一组页：首个页 Tab 用于入口聚焦，
   // 「正在展示」指激活的本来就是该会话的浏览器页 Tab。
   const activeBrowserTab = activeAgentSessionId
@@ -778,7 +771,7 @@ function TabBarInner({
       onClick: togglePanel,
       highlighted: filePanelForcedHidden,
       badge: hasFileChanges ? (
-        <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary animate-pulse" />
+        <span className="absolute right-1 top-1 size-[6px] rounded-full bg-primary ring-2 ring-[hsl(var(--control-surface))]" />
       ) : undefined,
     },
     {
@@ -788,18 +781,6 @@ function TabBarInner({
       tooltip: "打开插件页面",
       icon: <Blocks className="size-3.5" />,
       onClick: () => undefined,
-    },
-    {
-      id: "coach-tour",
-      visible: true,
-      label: "界面引导",
-      tooltip: "播放界面引导（Esc 退出）",
-      icon: <Compass className="size-3.5" />,
-      onClick: () => {
-        if (coachTourOpen || coachTourLaunchPendingRef.current) return;
-        coachTourLaunchPendingRef.current = true;
-        setCoachTourOpen(true);
-      },
     },
     {
       id: "tab-group",
@@ -1481,11 +1462,18 @@ function TopBarActions({
   const visibleTools = tools.filter((tool) => tool.visible);
   if (visibleTools.length === 0 && !showWindowControls) return null;
 
+  // 只有一个控件时不再画容器：右上角一颗孤零零的图标包在胶囊里，看起来像空盒子；
+  // 两个以上（或与窗口按钮共存）才需要胶囊把它们圈成一组。
+  const bare = visibleTools.length + (showWindowControls ? 1 : 0) <= 1;
+
   return (
-    <div className="topbar-actions-slot relative z-20 flex items-center gap-1 titlebar-no-drag">
+    <div
+      className="topbar-actions-slot relative z-20 flex items-center gap-1 titlebar-no-drag"
+      data-bare={bare ? "true" : undefined}
+    >
       {visibleTools.length > 0 && (
         <div
-          className="topbar-tool-group relative z-10 flex h-[31px] items-center gap-0.5"
+          className="topbar-tool-group relative z-10 flex h-7 items-center gap-0.5"
           role="toolbar"
           aria-label="顶栏工具"
         >
@@ -1499,7 +1487,7 @@ function TopBarActions({
                     variant="ghost"
                     size="icon"
                     className={cn(
-                      "topbar-tool-button relative z-20 h-8 w-8",
+                      "topbar-tool-button relative z-20 h-7 w-7",
                       tool.highlighted &&
                         "topbar-tool-button-highlighted text-accent-foreground",
                     )}
