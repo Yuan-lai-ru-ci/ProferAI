@@ -302,8 +302,8 @@ describe('微信连接与扫码', () => {
 
 for (const kind of ['DingTalk', 'Feishu'] as const) {
   describe(`${kind} Bot 配置`, () => {
-    const bot = kind === 'DingTalk' ? { id: 'fixture-bot', name: 'Fixture bot', enabled: true, clientId: 'fixture-app', clientSecret: 'encrypted', defaultWorkspaceId: 'w', defaultChannelId: 'c', defaultModelId: 'm' } : { id: 'fixture-bot', name: 'Fixture bot', enabled: true, appId: 'fixture-app', appSecret: 'encrypted', defaultWorkspaceId: 'w', defaultChannelId: 'c', defaultModelId: 'm' }
-    test('保存失败保草稿、重复在途写去重、成功保存保默认工作区/渠道/模型', async () => {
+    const bot = kind === 'DingTalk' ? { id: 'fixture-bot', name: 'Fixture bot', enabled: true, clientId: 'fixture-app', clientSecret: 'encrypted', defaultWorkspaceId: 'w' } : { id: 'fixture-bot', name: 'Fixture bot', enabled: true, appId: 'fixture-app', appSecret: 'encrypted', defaultWorkspaceId: 'w', defaultChannelId: 'c', defaultModelId: 'm' }
+    test('保存失败保草稿、重复在途写去重、成功保存保默认配置', async () => {
       let calls = 0; let written: unknown
       api({ [`get${kind}MultiConfig`]: async () => ({ bots: [bot] }), [`save${kind}BotConfig`]: async (input: unknown) => { written = input; if (++calls === 1) throw new Error('fixture'); return bot } })
       const parent = kind === 'DingTalk' ? mount(DingTalkSettings) : feishuConfig(); await tick(); parent.render()
@@ -313,7 +313,9 @@ for (const kind of ['DingTalk', 'Feishu'] as const) {
       click(card.button('保存配置')); click(card.button('保存配置')); await tick(); card.render()
       expect(calls).toBe(1); expect(card.field('Bot 名称').value).toBe('New bot'); expect(feedback(card, '输入已保留')).toBeTruthy()
       click(card.button('保存配置')); await tick(); card.render()
-      expect(written).toMatchObject({ name: 'New bot', defaultWorkspaceId: 'w', defaultChannelId: 'c', defaultModelId: 'm' })
+      expect(written).toMatchObject(kind === 'DingTalk'
+        ? { name: 'New bot', defaultWorkspaceId: 'w' }
+        : { name: 'New bot', defaultWorkspaceId: 'w', defaultChannelId: 'c', defaultModelId: 'm' })
     })
     test('Secret 读取失败不回退其他 Bot 的 Secret；删除 false 当作失败', async () => {
       let legacy = 0; let removes = 0

@@ -44,10 +44,6 @@ export interface DingTalkBotConfig {
   clientSecret: string
   /** 该 Bot 的默认工作区 ID */
   defaultWorkspaceId?: string
-  /** 该 Bot 的默认渠道 ID */
-  defaultChannelId?: string
-  /** 该 Bot 的默认模型 ID */
-  defaultModelId?: string
 }
 
 /** 多 Bot 配置文件（~/.proma/dingtalk.json 新格式） */
@@ -70,10 +66,6 @@ export interface DingTalkBotConfigInput {
   clientSecret: string
   /** 默认工作区 ID */
   defaultWorkspaceId?: string
-  /** 默认渠道 ID */
-  defaultChannelId?: string
-  /** 默认模型 ID */
-  defaultModelId?: string
 }
 
 // ===== Bridge 连接状态 =====

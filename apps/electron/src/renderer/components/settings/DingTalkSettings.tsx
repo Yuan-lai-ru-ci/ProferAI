@@ -113,7 +113,7 @@ export function DingTalkSettings(): React.ReactElement {
       {/* Bot 列表 */}
       <SettingsSection
         title="钉钉 Bot 列表"
-        description="管理多个钉钉机器人，每个 Bot 可绑定不同的工作区和模型"
+        description="管理多个钉钉机器人，每个 Bot 可绑定不同的工作区"
         action={
           <Button size="sm" variant="outline" onClick={handleAddBot} disabled={adding || Boolean(loadError)}>
             <Plus size={14} className="mr-1.5" />
@@ -277,8 +277,6 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
         clientId: clientId.trim(),
         clientSecret: clientSecret || '',
         defaultWorkspaceId: bot.defaultWorkspaceId,
-        defaultChannelId: bot.defaultChannelId,
-        defaultModelId: bot.defaultModelId,
       })
       toast.success(`Bot "${name}" 已保存`)
       onSaved()
