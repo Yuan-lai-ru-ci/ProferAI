@@ -958,6 +958,9 @@ export class AgentOrchestrator {
     let piHarnessScope: ReturnType<typeof startPiHarnessRun> | undefined
     let harnessStopped = false
     const executionResultsByToolUse = createCommandExecutionLedger()
+    // 受控写入事实：toolCallId → 本轮确定写过的路径。
+    // 渲染层只信这份账本，不再从 Bash 命令文本推断路径。
+    const fileWritesByToolUse = new Map<string, Array<{ path: string; source: string }>>()
 
     try {
       // 在任何 await 之前锁定；preflight 失败、停止、重启都不能再次选择另一内核。
@@ -2071,6 +2074,13 @@ export class AgentOrchestrator {
           onToolExecutionResult: (toolCallId: string, result: CommandExecutionResult) => {
             executionResultsByToolUse.set(toolCallId, result)
           },
+          onFileWrite: (toolCallId: string, fact: { path: string; source: string }) => {
+            const existing = fileWritesByToolUse.get(toolCallId) ?? []
+            if (!existing.some((item) => item.path === fact.path)) {
+              existing.push(fact)
+              fileWritesByToolUse.set(toolCallId, existing)
+            }
+          },
           onHarnessLifecycle: (event: import('./adapters/pi-harness-lifecycle').PiHarnessLifecycleEvent) => {
             piHarnessScope?.observeLifecycle(event)
           },
@@ -2554,6 +2564,13 @@ export class AgentOrchestrator {
               ).message?.content
               for (const block of content ?? []) {
                 if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue
+                // 把本轮确定发生过的写入挂到 tool_result block 上：
+                // 渲染层据此出 chip，历史会话回放时也随 JSONL 一起恢复。
+                const writes = fileWritesByToolUse.get(block.tool_use_id)
+                if (writes && writes.length > 0) {
+                  ;(block as Record<string, unknown>).proferFileChanges = writes
+                  fileWritesByToolUse.delete(block.tool_use_id)
+                }
                 const invocation = taskToolUses.get(block.tool_use_id)
                 if (!invocation) continue
                 invocation.result = block.content

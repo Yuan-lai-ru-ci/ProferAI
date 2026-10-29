@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@profer/shared'
-import { buildTurnFileNameMap, collectModifiedFilePaths, extractBashWritePaths } from './TurnFileChangesSummary'
+import { buildTurnFileNameMap, collectAuthoritativeFileChanges, collectModifiedFilePaths } from './TurnFileChangesSummary'
 
 function toolUse(id: string, name: string, input: Record<string, unknown>): SDKMessage {
   return {
@@ -16,6 +16,18 @@ function failedToolResult(toolUseId: string): SDKMessage {
     type: 'user',
     message: {
       content: [{ type: 'tool_result', tool_use_id: toolUseId, is_error: true, content: 'failed' }],
+    },
+  } as unknown as SDKMessage
+}
+
+function toolResultWithChanges(
+  toolUseId: string,
+  changes: Array<{ path: string; source: 'write' | 'edit' | 'bash' }>,
+): SDKMessage {
+  return {
+    type: 'user',
+    message: {
+      content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'ok', proferFileChanges: changes }],
     },
   } as unknown as SDKMessage
 }
@@ -46,7 +58,53 @@ describe('buildTurnFileNameMap', () => {
     expect(result.has('config.json')).toBe(false)
   })
 
-  test('collects Pi runtime lowercase write/edit tool calls', () => {
+  test('maps a lowercase Pi read to its absolute path for inline filename resolution', () => {
+    const result = buildTurnFileNameMap([
+      toolUse('read-1', 'read', { path: '/tmp/project/src/pi-settings.ts' }),
+    ])
+
+    expect(result.get('pi-settings.ts')).toBe('/tmp/project/src/pi-settings.ts')
+  })
+
+  test('does not map a file whose tool call failed', () => {
+    const result = buildTurnFileNameMap([
+      toolUse('read-1', 'Read', { file_path: '/tmp/project/missing.md' }),
+      failedToolResult('read-1'),
+    ])
+
+    expect(result.has('missing.md')).toBe(false)
+  })
+})
+
+describe('collectAuthoritativeFileChanges', () => {
+  test('reads the main-process ledger from tool_result blocks in order', () => {
+    const result = collectAuthoritativeFileChanges([
+      toolResultWithChanges('write-1', [{ path: '/repo/a.ts', source: 'write' }]),
+      toolResultWithChanges('bash-1', [
+        { path: '/repo/b.ts', source: 'bash' },
+        { path: '/repo/a.ts', source: 'bash' },
+      ]),
+    ])
+
+    expect(result).toEqual(['/repo/a.ts', '/repo/b.ts'])
+  })
+
+  test('ignores turns without ledger data', () => {
+    expect(collectAuthoritativeFileChanges([toolUse('write-1', 'write', { path: '/repo/a.ts' })])).toEqual([])
+  })
+})
+
+describe('collectModifiedFilePaths', () => {
+  test('prefers the ledger over tool_use arguments', () => {
+    const result = collectModifiedFilePaths([
+      toolUse('write-1', 'write', { path: '/repo/from-input.ts', content: 'a' }),
+      toolResultWithChanges('write-1', [{ path: '/repo/from-ledger.ts', source: 'write' }]),
+    ])
+
+    expect(result).toEqual(['/repo/from-ledger.ts'])
+  })
+
+  test('collects Pi runtime lowercase write/edit tool calls when no ledger exists', () => {
     const result = collectModifiedFilePaths([
       toolUse('write-1', 'write', { path: '/tmp/project/a.ts', content: 'a' }),
       toolUse('edit-1', 'edit', { path: '/tmp/project/b.ts', oldText: 'b', newText: 'c' }),
@@ -66,51 +124,21 @@ describe('buildTurnFileNameMap', () => {
     expect(result).toEqual([])
   })
 
-  test('maps a lowercase Pi read to its absolute path for inline filename resolution', () => {
-    const result = buildTurnFileNameMap([
-      toolUse('read-1', 'read', { path: '/tmp/project/src/pi-settings.ts' }),
-    ])
-
-    expect(result.get('pi-settings.ts')).toBe('/tmp/project/src/pi-settings.ts')
-  })
-
-  test('extracts python Path write_text files from a bash command', () => {
-    const command = `cd /Users/mac/profer/profer-main/apps/electron && python3 - <<'PY'
-from pathlib import Path
-p = Path('src/renderer/components/agent/TurnFileChangesSummary.tsx')
-p.write_text('x')
-PY`
-    expect(extractBashWritePaths(command)).toEqual([
-      '/Users/mac/profer/profer-main/apps/electron/src/renderer/components/agent/TurnFileChangesSummary.tsx',
-    ])
-  })
-
-  test('extracts sed -i and cat redirect paths from bash commands', () => {
-    expect(extractBashWritePaths(`cd /repo && sed -i '' 's/a/b/' src/a.ts`)).toEqual(['/repo/src/a.ts'])
-    expect(extractBashWritePaths(`cd /repo && cat > src/b.ts <<'EOF'\nhello\nEOF`)).toEqual(['/repo/src/b.ts'])
-  })
-
-  test('ignores read-only bash commands', () => {
-    expect(extractBashWritePaths(`cd /repo && grep -n "write" src/a.ts`)).toEqual([])
-    expect(extractBashWritePaths(`cd /repo && git status --porcelain`)).toEqual([])
-  })
-
-  test('collects bash write paths but excludes a failed bash call', () => {
+  test('never derives paths from bash command text', () => {
     const result = collectModifiedFilePaths([
       toolUse('bash-1', 'Bash', { command: `cd /repo && sed -i '' 's/a/b/' src/a.ts` }),
-      toolUse('bash-2', 'Bash', { command: `cd /repo && sed -i '' 's/a/b/' src/b.ts` }),
-      failedToolResult('bash-2'),
+      toolUse('bash-2', 'Bash', { command: `curl -sS -o /dev/null -w "%{http_code}" https://example.com` }),
     ])
 
-    expect(result).toEqual(['/repo/src/a.ts'])
+    expect(result).toEqual([])
   })
 
-  test('does not map a file whose tool call failed', () => {
-    const result = buildTurnFileNameMap([
-      toolUse('read-1', 'Read', { file_path: '/tmp/project/missing.md' }),
-      failedToolResult('read-1'),
+  test('keeps bash writes that the main process observed through snapshots', () => {
+    const result = collectModifiedFilePaths([
+      toolUse('bash-1', 'bash', { command: 'python3 -c "open(\'report.md\',\'w\').write(\'x\')"' }),
+      toolResultWithChanges('bash-1', [{ path: '/repo/report.md', source: 'bash' }]),
     ])
 
-    expect(result.has('missing.md')).toBe(false)
+    expect(result).toEqual(['/repo/report.md'])
   })
 })

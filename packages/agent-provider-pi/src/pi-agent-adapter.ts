@@ -8,6 +8,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { CommandExecutionPort, BackgroundTaskPort, ProcessRegistrationPort, AgentRuntimePreparedContext } from '@profer/agent-runtime'
 import { createPiCommandBashOperations } from './pi/command-bash'
+import { diffSnapshots, snapshotTree } from './pi/file-write-snapshot'
 import { FileReadTracker, isTruncatedReadOutput, readFileState } from './pi/file-read-tracker'
 import type { PiAgentAdapterPorts, PiProviderHostDependencies } from './ports'
 import type { Dispatcher } from 'undici'
@@ -15,8 +16,8 @@ import { buildWslBashArgs, windowsPathToWslPath, executeWslBashCommand, executeL
 export { buildWslBashArgs, windowsPathToWslPath, executeWslBashCommand, executeLocalBashCommand, waitForLocalBashProcess } from './pi/shell-execution'
 export type { ExecuteWslBashOptions } from './pi/shell-execution'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
-import { stat as statAsync, writeFile as writeFileAsync } from 'node:fs/promises'
+import { existsSync, constants as fsConstants, mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { access as accessAsync, readFile as readFileAsync, stat as statAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type {
@@ -122,6 +123,17 @@ const PI_NATIVE_MAX_RETRIES = 8
 const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
 const piToolExecutionContext = new AsyncLocalStorage<{ toolCallId: string }>()
 
+/**
+ * 一次受控写入的事实。
+ *
+ * `source` 只用于 UI 归因（write/edit 与 bash 提升后的写入区分展示），
+ * 不参与任何判断：所有写入路径都是 Profer 自己调用出来的，不需要二次校验。
+ */
+export interface FileWriteFact {
+  path: string
+  source: 'write' | 'edit' | 'bash'
+}
+
 type PiRetrySettings = {
   enabled: boolean
   maxRetries?: number
@@ -187,6 +199,11 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onNativeRetryOutcome?: (outcome: import('./pi/retry-control').PiNativeRetryOutcome) => void
   /** Structured local command evidence, keyed by the exact Pi tool call id. */
   onToolExecutionResult?: (toolCallId: string, result: CommandExecutionResult) => void
+  /**
+   * 受控写入事实：工具执行期间 Profer 自己写盘的路径，按 tool call id 上报。
+   * 渲染层用它替代「从命令文本猜路径」，因此这里只报确定发生过的写入。
+   */
+  onFileWrite?: (toolCallId: string, fact: FileWriteFact) => void
   /** Passive lifecycle feed for Pi Host Harness; observers cannot control Session or queue prompts. */
   onHarnessLifecycle?: PiHarnessLifecycleObserver
   thinkingLevel?: AgentThinkingLevel
@@ -1411,6 +1428,26 @@ function reportCommandExecutionResult(
   }
 }
 
+/**
+ * 上报一次确定发生过的受控写入。
+ *
+ * 只由 Profer 自己的 operations 调用，所以不需要再判断「文件是否真的变了」；
+ * 观察者抛错也绝不能影响写入本身。
+ */
+function reportFileWrite(
+  onFileWrite: PiAgentQueryOptions['onFileWrite'] | undefined,
+  path: string,
+  source: FileWriteFact['source'],
+): void {
+  const toolCallId = piToolExecutionContext.getStore()?.toolCallId
+  if (!toolCallId) return
+  try {
+    onFileWrite?.(toolCallId, { path, source })
+  } catch (error) {
+    console.warn(`[Pi adapter] file write observer 失败，忽略 (${toolCallId}):`, error)
+  }
+}
+
 function commandExecutionFailureError(result: CommandExecutionResult): Error {
   const message = result.errorKind === 'shell_not_found'
     ? `Bash 启动失败：shell_not_found（未找到可用的 Bash）`
@@ -1499,6 +1536,34 @@ export function createControlledLocalBashOperations(
   }
 }
 
+/**
+ * 给任意 BashOperations 包一层「执行前后工作目录快照」。
+ *
+ * Bash 里的 `sed -i`、`python3 -c "open(...)"`、heredoc 不经过受控 operations，
+ * 只能靠前后对比拿到真实写入。快照失败/超预算时安静跳过，不影响命令本身。
+ */
+function withWriteTracking(
+  operations: BashOperations,
+  onFileWrite: PiAgentQueryOptions['onFileWrite'] | undefined,
+): BashOperations {
+  if (!onFileWrite) return operations
+  return {
+    async exec(command, cwd, options) {
+      const before = await snapshotTree(cwd)
+      try {
+        return await operations.exec(command, cwd, options)
+      } finally {
+        if (before) {
+          const after = await snapshotTree(cwd)
+          if (after) {
+            for (const path of diffSnapshots(before, after)) reportFileWrite(onFileWrite, path, 'bash')
+          }
+        }
+      }
+    },
+  }
+}
+
 function createPromaBashToolOptions(
   sessionId: string,
   runtimeEnv: AgentRuntimeEnv | undefined,
@@ -1506,6 +1571,7 @@ function createPromaBashToolOptions(
   commands?: CommandExecutionPort,
   backgroundTasks: BackgroundTaskPort = noOpBackgroundTasks,
   processRegistration: ProcessRegistrationPort = defaultProcessRegistrationPort,
+  onFileWrite?: PiAgentQueryOptions['onFileWrite'],
 ): BashToolOptions | undefined {
   const taskIds = new Map<string, string>()
   const currentToolCallId = (): string | undefined => piToolExecutionContext.getStore()?.toolCallId
@@ -1537,7 +1603,7 @@ function createPromaBashToolOptions(
   if (commands) {
     return {
       spawnHook,
-      operations: createPiCommandBashOperations({
+      operations: withWriteTracking(createPiCommandBashOperations({
         commands,
         prepare(_command, cwd) {
           if (runtimeEnv?.shellKind === 'wsl') {
@@ -1573,28 +1639,36 @@ function createPromaBashToolOptions(
             clearTaskId()
           }
         },
-      }),
+      }), onFileWrite),
     }
   }
 
   if (runtimeEnv?.shellKind === 'wsl') {
     return {
-      operations: createWslBashOperations(runtimeEnv, sessionId, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
+      operations: withWriteTracking(
+        createWslBashOperations(runtimeEnv, sessionId, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
+        onFileWrite,
+      ),
       spawnHook,
     }
   }
 
   return {
-    operations: createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
+    operations: withWriteTracking(
+      createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
+      onFileWrite,
+    ),
     spawnHook,
   }
 }
 
 
-function createStrictWriteOperations() {
+function createStrictWriteOperations(onFileWrite?: PiAgentQueryOptions['onFileWrite']) {
   return {
     async writeFile(path: string, content: string): Promise<void> {
       await writeFileAsync(path, content, 'utf-8')
+      // 落盘成功后再上报：失败写入不应该出现在「本轮改动」里。
+      reportFileWrite(onFileWrite, path, 'write')
     },
     async mkdir(dir: string): Promise<void> {
       const info = await statAsync(dir).catch(() => undefined)
@@ -1602,6 +1676,23 @@ function createStrictWriteOperations() {
         throw new Error(`Write target parent directory does not exist: ${dir}. Create it explicitly before writing.`)
       }
     },
+  }
+}
+
+/**
+ * edit 工具的受控写入层。
+ *
+ * 行为与 SDK 默认的 `defaultEditOperations` 一致（读 Buffer、写 utf-8、R/W 校验），
+ * 只在写盘后多上报一次路径，让渲染层无需再从消息文本推断。
+ */
+function createTrackedEditOperations(onFileWrite?: PiAgentQueryOptions['onFileWrite']) {
+  return {
+    readFile: (path: string) => readFileAsync(path),
+    writeFile: async (path: string, content: string): Promise<void> => {
+      await writeFileAsync(path, content, 'utf-8')
+      reportFileWrite(onFileWrite, path, 'edit')
+    },
+    access: (path: string) => accessAsync(path, fsConstants.R_OK | fsConstants.W_OK),
   }
 }
 
@@ -1700,16 +1791,17 @@ export function buildBuiltinToolDefinitions(
   commands?: CommandExecutionPort,
   backgroundTasks?: BackgroundTaskPort,
   processRegistration?: ProcessRegistrationPort,
+  onFileWrite?: PiAgentQueryOptions['onFileWrite'],
 ): ToolDefinition[] {
   const powerShellTool = commands
     ? createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId, commands, backgroundTasks, processRegistration)
     : createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId)
-  const writeTool = sdk.createWriteToolDefinition(cwd, { operations: createStrictWriteOperations() })
+  const writeTool = sdk.createWriteToolDefinition(cwd, { operations: createStrictWriteOperations(onFileWrite) })
   const definitions = [
     sdk.createReadToolDefinition(cwd),
-    sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult, commands, backgroundTasks, processRegistration)),
+    sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult, commands, backgroundTasks, processRegistration, onFileWrite)),
     ...(powerShellTool ? [powerShellTool] : []),
-    sdk.createEditToolDefinition(cwd),
+    sdk.createEditToolDefinition(cwd, { operations: createTrackedEditOperations(onFileWrite) }),
     {
       ...writeTool,
       description: 'Write content to a file. Creates the file if it does not exist, overwrites if it does. The parent directory must already exist; Profer will not create it implicitly.',
@@ -1891,6 +1983,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           input.commands,
           input.backgroundTasks,
           input.processRegistration,
+          input.onFileWrite,
         ),
         ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
       ])
