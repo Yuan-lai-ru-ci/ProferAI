@@ -160,10 +160,11 @@ function SearchResultRow({
         ref={preview.setAnchorRef}
         data-index={index}
         onClick={() => onSelect(result)}
-        onMouseEnter={() => {
+        onMouseEnter={(event) => {
           onHover(index)
-          preview.handleMouseEnter()
+          preview.handleMouseEnter(event)
         }}
+        onMouseMove={preview.handleMouseMove}
         onMouseLeave={preview.handleMouseLeave}
         className={cn(
           'w-full px-4 py-2 text-left transition-colors',
@@ -206,6 +207,7 @@ function SearchResultRow({
           workspaceName: wsName,
         }}
         anchorRef={preview.anchorRef}
+        panelRef={preview.panelRef}
         open={preview.isOpen}
         isLeaving={preview.isLeaving}
         onMouseEnter={preview.handlePanelMouseEnter}

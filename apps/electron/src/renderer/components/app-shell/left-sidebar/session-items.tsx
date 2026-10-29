@@ -448,8 +448,9 @@ export const ConversationItem = React.memo(function ConversationItem({
   const [menuOpen, setMenuOpen] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
-  // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动
-  const preview = useSessionMiniMapHover(600, menuOpen)
+  // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动；
+  // 当前会话行不预览（刚点开的会话再弹一遍预览 = 纯干扰）
+  const preview = useSessionMiniMapHover(600, menuOpen || active)
 
   /** 进入编辑模式 */
   const startEdit = (): void => {
@@ -550,6 +551,7 @@ export const ConversationItem = React.memo(function ConversationItem({
             }
           }}
           onMouseEnter={preview.handleMouseEnter}
+          onMouseMove={preview.handleMouseMove}
           onMouseLeave={preview.handleMouseLeave}
           onTouchStart={preview.handleTouchStart}
           onTouchMove={preview.handleTouchMove}
@@ -639,6 +641,7 @@ export const ConversationItem = React.memo(function ConversationItem({
           title: conversation.title,
         }}
         anchorRef={preview.anchorRef}
+        panelRef={preview.panelRef}
         open={preview.isOpen}
         isLeaving={preview.isLeaving}
         onMouseEnter={preview.handlePanelMouseEnter}
@@ -756,8 +759,9 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   const [menuOpen, setMenuOpen] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
-  // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动
-  const preview = useSessionMiniMapHover(600, disableMiniMap || menuOpen)
+  // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动；
+  // 当前会话不预览（顶部「当前会话」与列表可能各渲染一行，按 sessionId 精确判定）
+  const preview = useSessionMiniMapHover(600, disableMiniMap || menuOpen || currentAgentSessionId === session.id)
 
   const startEdit = (): void => {
     setEditTitle(session.title)
@@ -887,6 +891,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
             }
           }}
           onMouseEnter={preview.handleMouseEnter}
+          onMouseMove={preview.handleMouseMove}
           onMouseLeave={preview.handleMouseLeave}
           onTouchStart={preview.handleTouchStart}
           onTouchMove={preview.handleTouchMove}
@@ -1018,6 +1023,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
             workspaceName,
           }}
           anchorRef={preview.anchorRef}
+          panelRef={preview.panelRef}
           open={preview.isOpen}
           isLeaving={preview.isLeaving}
           onMouseEnter={preview.handlePanelMouseEnter}

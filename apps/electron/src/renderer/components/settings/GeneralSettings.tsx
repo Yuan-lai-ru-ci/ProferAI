@@ -19,6 +19,10 @@ import {
 } from './primitives'
 import { detectIsWindows } from '@profer/ui'
 import { shortcutOverridesAtom } from '@/atoms/shortcut-atoms'
+import {
+  sessionHoverPreviewEnabledAtom,
+  updateSessionHoverPreviewEnabled,
+} from '@/atoms/session-preview-settings'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { coachTourOpenAtom } from '@/atoms/coach-tour-atoms'
 import { replayIntroOpenAtom } from '@/atoms/intro-atoms'
@@ -38,6 +42,9 @@ export function GeneralSettings(): React.ReactElement {
   const isWindows = detectIsWindows()
   const [quickTaskEnabled, setQuickTaskEnabled] = React.useState(false)
   const shortcutOverrides = useAtomValue(shortcutOverridesAtom)
+  const hoverPreviewEnabled = useAtomValue(sessionHoverPreviewEnabledAtom)
+  const setHoverPreviewEnabled = useSetAtom(sessionHoverPreviewEnabledAtom)
+  const [hoverPreviewBusy, setHoverPreviewBusy] = React.useState(false)
   const quickTaskOverride = shortcutOverrides['quick-task']?.[isMac ? 'mac' : 'win']
   const quickTaskDefault = SHORTCUT_MAP.get('quick-task')
   // 尊重用户自定义和显式禁用，不把默认键写死在文案中。
@@ -176,6 +183,20 @@ export function GeneralSettings(): React.ReactElement {
     }
   }
 
+  /** 切换会话悬浮预览（atom 先改，侧栏立即生效；落盘失败由 update 回滚） */
+  const handleHoverPreviewToggle = async (enabled: boolean): Promise<void> => {
+    if (settingsLoading || settingsError || hoverPreviewBusy) return
+    setHoverPreviewBusy(true)
+    try {
+      await updateSessionHoverPreviewEnabled(enabled, setHoverPreviewEnabled)
+    } catch (error) {
+      console.error('[通用设置] 更新会话悬浮预览失败:', error)
+      toast.error('会话悬浮预览设置保存失败，请重试')
+    } finally {
+      setHoverPreviewBusy(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {settingsError && <p role="alert" className="text-sm text-destructive">{settingsError}</p>}
@@ -237,6 +258,21 @@ export function GeneralSettings(): React.ReactElement {
               重新播放
             </Button>
           </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection
+        title="界面交互"
+        description="控制常用区域的悬停与显示行为"
+      >
+        <SettingsCard>
+          <SettingsToggle
+            label="会话悬浮预览"
+            description="鼠标在侧栏会话上停住时弹出内容迷你预览；关闭后不再弹出（全局搜索同样生效）"
+            checked={hoverPreviewEnabled}
+            disabled={settingsLoading || Boolean(settingsError) || hoverPreviewBusy}
+            onCheckedChange={handleHoverPreviewToggle}
+          />
         </SettingsCard>
       </SettingsSection>
 

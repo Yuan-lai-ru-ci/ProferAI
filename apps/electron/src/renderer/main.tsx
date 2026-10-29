@@ -49,6 +49,10 @@ import {
   manualReadConfirmEnabledAtom,
   initializeAgentUnreadSettings,
 } from './atoms/agent-unread-settings'
+import {
+  sessionHoverPreviewEnabledAtom,
+  initializeSessionHoverPreviewEnabled,
+} from './atoms/session-preview-settings'
 import { planUnreadSeedOnInit } from './lib/agent-unread-gate'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
@@ -464,6 +468,22 @@ function AgentUnreadSettingsInitializer(): null {
     })
     return () => { cancelled = true }
   }, [store, setEnabled])
+
+  return null
+}
+
+/**
+ * 「会话悬浮预览」开关初始化组件（设置 → 通用）
+ *
+ * 只做一件事：把持久化开关（默认开启）写进 `sessionHoverPreviewEnabledAtom`，
+ * 侧栏会话列表与全局搜索结果里的 `useSessionMiniMapHover` 随之生效。
+ */
+function SessionPreviewSettingsInitializer(): null {
+  const setEnabled = useSetAtom(sessionHoverPreviewEnabledAtom)
+
+  useEffect(() => {
+    void initializeSessionHoverPreviewEnabled(setEnabled)
+  }, [setEnabled])
 
   return null
 }
@@ -1308,6 +1328,7 @@ if (isQuickTaskWindow) {
       <AgentSettingsInitializer />
       <NotificationsInitializer />
       <AgentUnreadSettingsInitializer />
+      <SessionPreviewSettingsInitializer />
       <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <SmoothWheelInitializer />

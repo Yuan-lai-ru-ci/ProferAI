@@ -315,6 +315,8 @@ export interface AppSettings {
   shortcutOverrides?: ShortcutOverrides
   /** 是否在左侧栏显示我的积分（默认 true） */
   showCreditsInSidebar?: boolean
+  /** 鼠标悬停侧栏会话时是否弹出会话内容迷你预览（默认 true，缺省按开启处理） */
+  sessionHoverPreviewEnabled?: boolean
   /** 是否显示用户消息悬浮置顶条（默认 true） */
   stickyUserMessageEnabled?: boolean
   /** 用户消息与头像的显示位置（默认右侧） */
@@ -324,9 +326,11 @@ export interface AppSettings {
   /** 输入框是否渲染 Markdown 富文本格式（默认 false，关闭后为纯文本模式，仍保留 Mention 引用） */
   richTextRenderingEnabled?: boolean
   /**
-   * Windows 鼠标滚轮平滑滚动（默认 true，仅 Windows 生效）。
+   * Windows 鼠标滚轮平滑滚动（默认 false，仅 Windows 生效）。
    *
    * 开启后用弹簧曲线接管离散滚轮刻度，补上 macOS 那样的速度加速与惯性；
+   * 但接管需要非 passive 的 wheel 监听，会让滚动离开合成器线程改由主线程逐帧写，
+   * 流式输出等重负载场景可能比原生更卡，因此默认关闭、由用户显式开启。
    * 触控板 / 高精度滚轮的像素级输入始终直通原生。
    */
   smoothScrollEnabled?: boolean

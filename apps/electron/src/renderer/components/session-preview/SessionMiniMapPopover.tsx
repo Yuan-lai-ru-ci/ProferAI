@@ -14,6 +14,8 @@ import { AlertTriangle, Bot, Loader2, MessageSquare } from 'lucide-react'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { tabMinimapCacheAtom, type TabMinimapItem } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
+import { sessionHoverPreviewEnabledAtom } from '@/atoms/session-preview-settings'
+import { isHoverIntentMove } from '@/lib/session-preview-intent'
 import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { cn } from '@/lib/utils'
@@ -40,13 +42,19 @@ export interface SessionMiniMapTarget {
 
 interface UseSessionMiniMapHoverReturn {
   anchorRef: React.MutableRefObject<HTMLElement | null>
+  /** 预览面板根节点：面板内滚轮/点击不触发全局关闭 */
+  panelRef: React.MutableRefObject<HTMLDivElement | null>
   setAnchorRef: (node: HTMLElement | null) => void
   isOpen: boolean
   isLeaving: boolean
-  handleMouseEnter: () => void
+  /** 悬停意图采样：列表行需在 onMouseMove 中转发，指针仍在移动时重新计时 */
+  handleMouseEnter: (event?: React.MouseEvent) => void
+  handleMouseMove: (event: React.MouseEvent) => void
   handleMouseLeave: () => void
   handlePanelMouseEnter: () => void
   handlePanelMouseLeave: () => void
+  /** 立即淡出关闭，并抑制本次悬停期间的再次弹出（Esc / 点击 / 滚动用） */
+  dismiss: () => void
   // ---- 触屏长按预览（轻触不触发；长按后抬起保持预览，并拦截随后的 click 避免误打开会话） ----
   handleTouchStart: (e: React.TouchEvent) => void
   handleTouchMove: (e: React.TouchEvent) => void
@@ -60,6 +68,12 @@ interface UseSessionMiniMapHoverReturn {
 const TOUCH_ONLY_MEDIA = '(hover: none)'
 /** 长按后手指位移超过该阈值视为滚动/取消 */
 const TOUCH_MOVE_TOLERANCE = 12
+/** 指针离开列表行后的宽限：够斜向移到右侧面板，又不会赖着不走 */
+const ROW_LEAVE_GRACE_MS = 160
+/** 指针离开面板后的宽限：面板在「侧栏 → 内容区」的必经路径上，必须尽快让路 */
+const PANEL_LEAVE_GRACE_MS = 80
+/** 淡出时长：与 globals.css 的 session-minimap-popover-out 对齐 */
+const FADE_OUT_MS = 90
 
 const isTouchOnly = (): boolean =>
   typeof window !== 'undefined' && window.matchMedia?.(TOUCH_ONLY_MEDIA)?.matches === true
@@ -67,6 +81,8 @@ const isTouchOnly = (): boolean =>
 interface SessionMiniMapPopoverProps {
   target: SessionMiniMapTarget
   anchorRef: React.MutableRefObject<HTMLElement | null>
+  /** 面板根节点引用（可选）：用于区分面板内滚轮与面板外滚动 */
+  panelRef?: React.MutableRefObject<HTMLDivElement | null>
   open: boolean
   isLeaving: boolean
   onMouseEnter: () => void
@@ -93,12 +109,20 @@ const PREVIEW_MD_COMPONENTS: Components = {
 }
 
 export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSessionMiniMapHoverReturn {
+  const hoverPreviewEnabled = useAtomValue(sessionHoverPreviewEnabledAtom)
+  // 开关关闭与外部 disabled（菜单打开、当前会话行等）同一条禁用路径
+  const blocked = disabled || !hoverPreviewEnabled
   const anchorRef = React.useRef<HTMLElement | null>(null)
+  const panelRef = React.useRef<HTMLDivElement | null>(null)
   const [isOpen, setIsOpen] = React.useState(false)
   const [isLeaving, setIsLeaving] = React.useState(false)
   const enterTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const leaveTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
   const fadeTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
+  /** 悬停意图采样点：指针相对该点位移超容差 = 仍在移动，重新计时 */
+  const intentPointRef = React.useRef<{ x: number; y: number } | null>(null)
+  /** 本次悬停已被主动关掉（Esc / 点击 / 滚动）：指针离开前不再弹，避免关完立刻又弹 */
+  const dismissedUntilLeaveRef = React.useRef(false)
 
   // ---- 触屏长按状态 ----
   const longPressTimerRef = React.useRef<ReturnType<typeof setTimeout>>()
@@ -121,48 +145,129 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
   }, [])
 
   React.useEffect(() => {
-    if (!disabled) return
+    if (!blocked) return
     if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
     if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    intentPointRef.current = null
+    dismissedUntilLeaveRef.current = false
     setIsOpen(false)
     setIsLeaving(false)
-  }, [disabled])
+  }, [blocked])
 
   const setAnchorRef = React.useCallback((node: HTMLElement | null): void => {
     anchorRef.current = node
   }, [])
 
+  /** 淡出关闭；graceMs 是「离开后多久开始淡出」的宽限 */
+  const closeWithFade = React.useCallback((graceMs: number): void => {
+    if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    leaveTimerRef.current = setTimeout(() => {
+      setIsLeaving(true)
+      fadeTimerRef.current = setTimeout(() => {
+        setIsOpen(false)
+        setIsLeaving(false)
+      }, FADE_OUT_MS)
+    }, graceMs)
+  }, [])
+
+  /** 主动关闭（Esc / 点击 / 滚动 / 窗口失焦）：立即淡出，并压住本次悬停的重弹 */
+  const dismiss = React.useCallback((): void => {
+    if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
+    if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
+    dismissedUntilLeaveRef.current = true
+    intentPointRef.current = null
+    setIsLeaving(true)
+    fadeTimerRef.current = setTimeout(() => {
+      setIsOpen(false)
+      setIsLeaving(false)
+    }, FADE_OUT_MS)
+  }, [])
+
   // 触屏上忽略合成 mouseenter（纯触屏只能长按触发预览，避免轻触/滑动时预览误弹出）
-  const handleMouseEnter = React.useCallback((): void => {
-    if (disabled) return
+  const handleMouseEnter = React.useCallback((event?: React.MouseEvent): void => {
+    if (blocked) return
     if (touchOnlyRef.current) return
+    // 按住鼠标拖动（排序、拖拽引用）时不弹预览
+    if (event && event.buttons !== 0) return
+    dismissedUntilLeaveRef.current = false
+    intentPointRef.current = event ? { x: event.clientX, y: event.clientY } : null
     if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
     setIsLeaving(false)
     if (isOpen) return
     if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
     enterTimerRef.current = setTimeout(() => setIsOpen(true), delayMs)
-  }, [delayMs, disabled, isOpen])
+  }, [blocked, delayMs, isOpen])
 
-  const closeWithDelay = React.useCallback((): void => {
+  /** 悬停意图：指针在行内还在动就是「路过」，每次移动都重新计时，停住才弹 */
+  const handleMouseMove = React.useCallback((event: React.MouseEvent): void => {
+    if (blocked || isOpen || dismissedUntilLeaveRef.current) return
+    if (touchOnlyRef.current) return
+    const point = { x: event.clientX, y: event.clientY }
+    if (!intentPointRef.current) {
+      intentPointRef.current = point
+      return
+    }
+    if (!isHoverIntentMove(intentPointRef.current, point)) return
+    intentPointRef.current = point
+    if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
+    enterTimerRef.current = setTimeout(() => setIsOpen(true), delayMs)
+  }, [blocked, delayMs, isOpen])
+
+  const handleMouseLeave = React.useCallback((): void => {
+    dismissedUntilLeaveRef.current = false
+    intentPointRef.current = null
+    // 离开一定取消待触发的悬停计时，否则面板会在指针已经离开后才弹出来
     if (enterTimerRef.current) clearTimeout(enterTimerRef.current)
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
-    leaveTimerRef.current = setTimeout(() => {
-      setIsLeaving(true)
-      fadeTimerRef.current = setTimeout(() => {
-        setIsOpen(false)
-        setIsLeaving(false)
-      }, 90)
-    }, 160)
-  }, [])
+    // 指针只是路过、预览未打开时不排定时器，避免列表项无意义的二次渲染
+    if (!isOpen) return
+    closeWithFade(ROW_LEAVE_GRACE_MS)
+  }, [closeWithFade, isOpen])
 
   const handlePanelMouseEnter = React.useCallback((): void => {
     if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current)
     if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current)
     setIsLeaving(false)
   }, [])
+
+  const handlePanelMouseLeave = React.useCallback((): void => {
+    // 面板不在鼠标通往内容区的必经路径上停留：离开后几乎立刻淡出
+    closeWithFade(PANEL_LEAVE_GRACE_MS)
+  }, [closeWithFade])
+
+  // 打开期间的全局关闭入口：Esc / 任意点击 / 面板外滚轮 / 窗口失焦。
+  // 面板自己不会因为“鼠标停在上面”而赖着不走，用户不必再回到侧栏才能关掉。
+  React.useEffect(() => {
+    if (!isOpen) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') dismiss()
+    }
+    const onPointerDown = (): void => dismiss()
+    const onWheel = (event: WheelEvent): void => {
+      // 面板内滚动用于翻看预览内容，不关闭
+      if (panelRef.current?.contains(event.target as Node)) return
+      dismiss()
+    }
+    const onBlur = (): void => dismiss()
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('wheel', onWheel, { passive: true, capture: true })
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('wheel', onWheel, true)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [dismiss, isOpen])
 
   // ---- 触屏长按 ----
 
@@ -188,7 +293,7 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
   }, [])
 
   const handleTouchStart = React.useCallback((e: React.TouchEvent): void => {
-    if (disabled) return
+    if (blocked) return
     // 触摸任意列表项：若已有预览打开，先关闭（新的长按 600ms 后才打开新预览）
     if (isOpen) {
       setIsOpen(false)
@@ -208,7 +313,7 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
       setIsOpen(true)
       armOutsideClose()
     }, delayMs)
-  }, [disabled, delayMs, isOpen, armOutsideClose])
+  }, [blocked, delayMs, isOpen, armOutsideClose])
 
   const handleTouchMove = React.useCallback((e: React.TouchEvent): void => {
     // 长按未触发时位移超阈值视为滚动，取消长按；长按已触发（预览已开）时位移也视为取消（手指滑动离开）
@@ -255,13 +360,16 @@ export function useSessionMiniMapHover(delayMs = 600, disabled = false): UseSess
 
   return {
     anchorRef,
+    panelRef,
     setAnchorRef,
     isOpen,
     isLeaving,
     handleMouseEnter,
-    handleMouseLeave: closeWithDelay,
+    handleMouseMove,
+    handleMouseLeave,
     handlePanelMouseEnter,
-    handlePanelMouseLeave: closeWithDelay,
+    handlePanelMouseLeave,
+    dismiss,
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,
@@ -421,6 +529,7 @@ export function SessionMiniMapPopover(props: SessionMiniMapPopoverProps): React.
 function SessionMiniMapPopoverContent({
   target,
   anchorRef,
+  panelRef,
   open,
   isLeaving,
   onMouseEnter,
@@ -483,6 +592,7 @@ function SessionMiniMapPopoverContent({
 
   return createPortal(
     <div
+      ref={panelRef}
       className="fixed z-[9999] titlebar-no-drag transition-[top,height] duration-150 ease-out pointer-events-auto"
       style={{ top: position.top, left: position.left, width: PANEL_WIDTH, height: position.height }}
       onMouseEnter={onMouseEnter}
