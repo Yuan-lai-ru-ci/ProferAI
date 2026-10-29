@@ -10,6 +10,8 @@ export interface ConversationScrollActions {
   pause: () => void
   navigate: (top: number, smooth?: boolean) => void
   beginLayout: (anchor?: HTMLElement) => () => void
+  beginPrepend: () => void
+  endPrepend: () => void
   restore: (position: ReadingPosition) => void
   snapshot: () => ReadingPosition | null
 }
@@ -136,6 +138,8 @@ export function ConversationScrollProvider({ children, smoothResize }: {
     pause: () => controller.current?.pause(),
     navigate: (top, smooth = true) => controller.current?.navigate(top, smooth),
     beginLayout: (anchor) => controller.current?.beginLayout(anchor) ?? (() => {}),
+    beginPrepend: () => controller.current?.beginPrepend(),
+    endPrepend: () => controller.current?.endPrepend(),
     restore: (position) => controller.current?.restore(position),
     snapshot: () => controller.current ? controller.current.snapshot() : (disposedSnapshot.current?.position ?? null),
   })

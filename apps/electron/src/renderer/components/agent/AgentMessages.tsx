@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { useStore, useAtomValue, useSetAtom } from 'jotai'
 import { visualizationsAtom, updateVisualizationSessionCache } from '@/atoms/visualization-atoms'
-import { Bot, RotateCw, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { Bot, RotateCw, AlertTriangle, ChevronDown, ChevronRight, ArrowUp } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
   Message,
@@ -179,14 +179,14 @@ function TopHistoryLoader({
   historyMoreAvailable?: boolean
   historyLoadingEarlier?: boolean
 }): React.ReactElement | null {
-  const { scrollRef, beginLayout, following } = useConversationScroll()
+  const { scrollRef, beginPrepend, following } = useConversationScroll()
   const armedRef = React.useRef(true)
 
   React.useEffect(() => {
     if (!onLoadEarlierHistory || following) return
-    // 失败后允许用户仍停留在顶部时再次触发；成功后若仍有更早内容，
-    // 也会在布局更新后的下一次 scroll 事件中继续分页。
-    if (!historyLoadingEarlier && historyMoreAvailable !== false) armedRef.current = true
+    // 不在加载完成后无条件重新武装：分页结果落到 DOM 前 scrollTop 仍停在顶部，
+    // 无条件武装会让一次触顶连续拉完整个历史（用户看到的就是「直接跳到第一条」）。
+    // 只由用户真正滚离顶部（top > 40）时重新武装；按钮始终保留手动入口。
     const el = scrollRef.current
     if (!el) return
     const handleScroll = (): void => {
@@ -203,13 +203,13 @@ function TopHistoryLoader({
         armedRef.current
       ) {
         armedRef.current = false
-        beginLayout()
+        beginPrepend()
         onLoadEarlierHistory()
       }
     }
     el.addEventListener('scroll', handleScroll, { passive: true })
     return () => el.removeEventListener('scroll', handleScroll)
-  }, [onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, scrollRef, beginLayout, following])
+  }, [onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, scrollRef, beginPrepend, following])
 
   return null
 }
@@ -863,7 +863,10 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
               ) : historyMoreAvailable === false ? (
                 '已到最早消息'
               ) : (
-                '加载更早消息'
+                <span className="inline-flex items-center gap-1">
+                  <ArrowUp size={12} className="shrink-0" aria-hidden />
+                  加载更早消息
+                </span>
               )}
             </ConversationHistoryButton>
           </div>

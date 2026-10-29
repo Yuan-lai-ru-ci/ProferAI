@@ -2,6 +2,18 @@ export interface ReadingAnchor {
   kind?: 'message' | 'block'
   id: string
   offset: number
+  /**
+   * 同位置的消息级兜底锚点。
+   *
+   * 块锚点（`data-scroll-anchor`，如过程块）会在上方内容被 prepend 后重建/消失：
+   * 过程组按当前轮次重新分组，旧锚点 id 不再存在于 DOM，`readingTarget` 只能退回
+   * 绝对 scrollTop——用户看到的就是「加载更早消息后直接跳到第一条」，并且因为仍停在
+   * 顶部，触顶自动加载会连续触发把整段历史拉完。消息组以 uuid 为 key，跨 prepend 稳定，
+   * 因此记录同一条消息的 id 作为兜底。
+   */
+  messageId?: string
+  /** 兜底消息锚点相对视口顶部的偏移 */
+  messageOffset?: number
 }
 
 export interface ReadingPosition {
@@ -31,21 +43,41 @@ export function captureReadingPosition(viewport: HTMLElement, top = viewport.scr
   const node = block ?? message
   const kind = block ? 'block' as const : 'message' as const
   const id = node?.getAttribute(block ? 'data-scroll-anchor' : 'data-message-id')
-  return {
-    top,
-    anchor: node && id ? { kind, id, offset: node.getBoundingClientRect().top - bounds.top - delta } : null,
+  const anchor: ReadingAnchor | null = node && id
+    ? { kind, id, offset: node.getBoundingClientRect().top - bounds.top - delta }
+    : null
+  // 块锚点额外记一份所属消息的锚点：块被重建时用它保持阅读位置。
+  if (anchor && block && message) {
+    const messageId = message.getAttribute('data-message-id')
+    if (messageId) {
+      anchor.messageId = messageId
+      anchor.messageOffset = message.getBoundingClientRect().top - bounds.top - delta
+    }
   }
+  return { top, anchor }
+}
+
+function findAnchorNode(viewport: HTMLElement, attribute: string, id: string): HTMLElement | null {
+  const nodes = Array.from(viewport.querySelectorAll<HTMLElement>(`[${attribute}]`))
+  return nodes.find((candidate) => candidate.getAttribute(attribute) === id) ?? null
 }
 
 export function readingTarget(viewport: HTMLElement, position: ReadingPosition): number {
   if (position.anchor) {
-    const id = position.anchor.id
-    const attribute = position.anchor.kind === 'block' ? 'data-scroll-anchor' : 'data-message-id'
-    const nodes = Array.from(viewport.querySelectorAll<HTMLElement>(`[${attribute}]`))
-    const node = nodes.find((candidate) => candidate.getAttribute(attribute) === id)
+    const { anchor } = position
+    const attribute = anchor.kind === 'block' ? 'data-scroll-anchor' : 'data-message-id'
+    const node = findAnchorNode(viewport, attribute, anchor.id)
     if (node) {
       return Math.max(0, viewport.scrollTop + node.getBoundingClientRect().top
-        - viewport.getBoundingClientRect().top - position.anchor.offset)
+        - viewport.getBoundingClientRect().top - anchor.offset)
+    }
+    // 块锚点随内容重建消失：退回同一条消息，仍保持用户正在看的那条回复。
+    if (anchor.messageId) {
+      const fallback = findAnchorNode(viewport, 'data-message-id', anchor.messageId)
+      if (fallback) {
+        return Math.max(0, viewport.scrollTop + fallback.getBoundingClientRect().top
+          - viewport.getBoundingClientRect().top - (anchor.messageOffset ?? 0))
+      }
     }
   }
   // 锚点被裁剪时保持绝对位置，不把同期尾部输出当作顶部插入。
@@ -65,6 +97,10 @@ export class ConversationScrollController {
   private viewportHeight: number
   private writtenTop: number | null = null
   private layoutAnchor: { element: HTMLElement; top: number } | null = null
+  /** prepend 事务基线：内容在上方插入时按 scrollHeight 增量保持视口，不依赖 DOM 锚点。 */
+  private prependBaseline: { height: number; top: number } | null = null
+  /** prepend 收尾定时器：加载稳定后释放基线，避免后续尾部增长被误当插入补偿。 */
+  private prependTimer: ReturnType<typeof setTimeout> | null = null
   private userIntent = false
   private frame: number | null = null
   private lastTick: number | null = null
@@ -89,10 +125,50 @@ export class ConversationScrollController {
     this.port.changed()
   }
 
+  /**
+   * 开始一次「向顶部插入历史」的事务。
+   *
+   * 分页 prepend 会重新分组过程块：块锚点可能消失、消息组也可能被重建，
+   * 此时按锚点恢复会退回绝对位置，用户看到的就是「加载更早消息后跳到第一条」。
+   * 因此 prepend 期间改用 scrollHeight 增量补偿——插入多少、视口就下移多少。
+   * 基线只在加载停稳（1.2s 无新增长）或主动导航/跟随最新时释放：
+   * 滚轮惯性会在加载过程中持续产生 scroll/resize，此时清基线会退回归锚点并跳回顶部。
+   */
+  beginPrepend(): void {
+    this.pause()
+    const el = this.port.viewport
+    this.prependBaseline = { height: el.scrollHeight, top: el.scrollTop }
+  }
+
+  endPrepend(): void {
+    this.clearPrepend()
+  }
+
+  private clearPrepend(): void {
+    this.prependBaseline = null
+    if (this.prependTimer !== null) {
+      clearTimeout(this.prependTimer)
+      this.prependTimer = null
+    }
+  }
+
+  /**
+   * 补偿后顺延收尾：滚轮惯性期间会连续产生 resize，
+   * 只要还在长高就继续按增量保持；停稳 1.2s 后释放基线。
+   */
+  private schedulePrependSettle(): void {
+    if (this.prependTimer !== null) clearTimeout(this.prependTimer)
+    this.prependTimer = setTimeout(() => {
+      this.prependBaseline = null
+      this.prependTimer = null
+    }, 1200)
+  }
+
   follow(smooth = true): void {
     this.cancelAnimation()
     this.revision++
     this.layoutAnchor = null
+    this.clearPrepend()
     this.destination = null
     this.mode = 'following'
     this.position = null
@@ -106,6 +182,7 @@ export class ConversationScrollController {
   }
 
   navigate(top: number, smooth = true): void {
+    this.clearPrepend()
     this.pause()
     const target = this.clamp(top)
     this.destination = captureReadingPosition(this.port.viewport, target)
@@ -114,6 +191,7 @@ export class ConversationScrollController {
   }
 
   restore(position: ReadingPosition): void {
+    this.clearPrepend()
     this.pause()
     this.position = position
     this.write(readingTarget(this.port.viewport, position))
@@ -138,6 +216,7 @@ export class ConversationScrollController {
 
   dispose(): void {
     this.disposed = true
+    this.clearPrepend()
     this.revision++
     this.cancelAnimation()
   }
@@ -176,7 +255,14 @@ export class ConversationScrollController {
     this.height = el.scrollHeight
     this.viewportHeight = el.clientHeight
     if (this.mode === 'reading') {
-      if (this.layoutAnchor) {
+      if (this.prependBaseline) {
+        const growth = el.scrollHeight - this.prependBaseline.height
+        if (growth > 0) {
+          this.write(this.prependBaseline.top + growth)
+          this.prependBaseline = { height: el.scrollHeight, top: el.scrollTop }
+          this.schedulePrependSettle()
+        }
+      } else if (this.layoutAnchor) {
         this.write(el.scrollTop + this.layoutAnchor.element.getBoundingClientRect().top - this.layoutAnchor.top)
       } else if (this.position) this.write(readingTarget(el, this.position))
     } else {

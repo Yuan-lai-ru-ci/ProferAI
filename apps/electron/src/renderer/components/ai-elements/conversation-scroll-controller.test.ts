@@ -397,3 +397,102 @@ describe('Conversation scroll policy', () => {
     expect(controller.snapshot()).toEqual(saved)
   })
 })
+
+describe('Conversation reading anchors — 块锚点重建后的兜底', () => {
+  /** 模拟真实 DOM：块锚点位于消息内部，prepend 后可被重建移除。 */
+  function anchorViewport() {
+    const state = {
+      scrollTop: 80,
+      scrollHeight: 2000,
+      clientHeight: 400,
+      messageTop: 200,
+      messageHeight: 1000,
+      blockTop: 200,
+      blockHeight: 40,
+      blockAlive: true,
+    }
+    const node = (id: string, attribute: string, top: () => number, height: number, contained: boolean) => ({
+      getAttribute: (name: string) => (name === attribute ? id : null),
+      contains: (candidate: unknown) => contained && (candidate as { __block?: boolean })?.__block === true,
+      getBoundingClientRect: () => ({ top: 100 + top() - state.scrollTop, bottom: 100 + top() + height - state.scrollTop }),
+    })
+    const message = node('msg-1', 'data-message-id', () => state.messageTop, state.messageHeight, true)
+    const block = { ...node('block-1', 'data-scroll-anchor', () => state.blockTop, state.blockHeight, false), __block: true }
+    const viewport = {
+      get scrollTop() { return state.scrollTop },
+      set scrollTop(value: number) { state.scrollTop = value },
+      get scrollHeight() { return state.scrollHeight },
+      get clientHeight() { return state.clientHeight },
+      getBoundingClientRect: () => ({ top: 100, bottom: 100 + state.clientHeight }),
+      querySelectorAll: (selector: string) => {
+        if (selector === '[data-scroll-anchor]') return state.blockAlive ? [block] : []
+        if (selector === '[data-message-id]') return [message]
+        return []
+      },
+    }
+    return { state, viewport: viewport as unknown as HTMLElement }
+  }
+
+  test('Given 过程块锚点被 prepend 重建 When 计算阅读位置 Then 回退到所属消息锚点', () => {
+    const { state, viewport } = anchorViewport()
+    const saved = captureReadingPosition(viewport)
+    expect(saved.anchor?.kind).toBe('block')
+    expect(saved.anchor?.messageId).toBe('msg-1')
+
+    // prepend 后过程组重建：旧块锚点消失，消息整体下移 600。
+    state.blockAlive = false
+    state.messageTop += 600
+    state.scrollHeight += 600
+
+    expect(readingTarget(viewport, saved)).toBe(680)
+  })
+
+  test('Given 块锚点与消息锚点都消失 When 计算阅读位置 Then 保持绝对位置', () => {
+    const { state, viewport } = anchorViewport()
+    const saved = captureReadingPosition(viewport)
+    state.blockAlive = false
+    state.messageTop = -100000 // 消息已不在渲染窗口
+    state.scrollHeight += 600
+    // 消息节点仍返回，但不在视口内；这里直接让查询结果为空。
+    const emptyViewport = {
+      ...viewport,
+      querySelectorAll: () => [],
+      getBoundingClientRect: () => ({ top: 100, bottom: 500 }),
+    } as unknown as HTMLElement
+    expect(readingTarget(emptyViewport, saved)).toBe(80)
+  })
+})
+
+describe('Conversation prepend 事务 — 分页加载更早历史', () => {
+  test('Given 过程块锚点在 prepend 后消失 When 内容在上方插入 Then 按 scrollHeight 增量保持视口', () => {
+    const { geometry, controller } = setup()
+    controller.beginPrepend()
+    // 模拟 prepend：旧锚点被重建移除，内容整体下移 600。
+    geometry.nodes = []
+    geometry.scrollHeight += 600
+    controller.resized()
+    expect(geometry.scrollTop).toBe(680)
+    expect(controller.following).toBe(false)
+  })
+
+  test('Given prepend 后图片继续撑高 When 再次 resize Then 继续补偿且不会累积漂移', () => {
+    const { geometry, controller } = setup()
+    controller.beginPrepend()
+    geometry.scrollHeight += 600
+    controller.resized()
+    expect(geometry.scrollTop).toBe(680)
+    geometry.scrollHeight += 100
+    controller.resized()
+    expect(geometry.scrollTop).toBe(780)
+  })
+
+  test('Given 用户显式回到最新 When follow Then prepend 基线失效并滚到底部', () => {
+    const { geometry, controller, drain } = setup()
+    controller.beginPrepend()
+    geometry.scrollHeight += 600
+    controller.resized()
+    controller.follow()
+    drain()
+    expect(geometry.scrollTop).toBe(2200)
+  })
+})

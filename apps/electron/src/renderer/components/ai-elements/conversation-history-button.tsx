@@ -1,11 +1,11 @@
 import type { ComponentProps } from 'react'
 import { useConversationScroll } from './conversation-scroll'
 
-/** 同步状态更新和异步 prepend 都由共享 content observer 完成锚点恢复。 */
+/** prepend 期间按 scrollHeight 增量保持视口（块锚点会随过程组重建消失）。 */
 export function ConversationHistoryButton({ onClick, ...props }: ComponentProps<'button'>): React.ReactElement {
-  const { beginLayout } = useConversationScroll()
+  const { beginPrepend } = useConversationScroll()
   return <button {...props} onClick={(event) => {
-    beginLayout()
+    beginPrepend()
     onClick?.(event)
   }} />
 }
