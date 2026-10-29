@@ -32,8 +32,15 @@ export const longTextPasteAsAttachmentEnabledAtom = atom<boolean>(false)
 /** 输入框是否渲染 Markdown 富文本格式（默认关闭，纯文本模式；开启后渲染富文本，仍保留 Mention 引用） */
 export const richTextRenderingEnabledAtom = atom<boolean>(false)
 
-/** Windows 鼠标滚轮平滑滚动（默认开启，仅 Windows 生效） */
-export const smoothScrollEnabledAtom = atom<boolean>(true)
+/**
+ * Windows 鼠标滚轮平滑滚动（默认关闭，仅 Windows 生效）
+ *
+ * 自绘弹簧接管必须挂非 passive 的 wheel 监听并 preventDefault，代价是整页失去
+ * Chromium 合成器线程的滚动快速路径：滚动改由主线程逐帧写 scrollTop。流式输出
+ * 期间主线程被渲染占满时，接管反而比原生更卡（Windows 用户实测反馈）。
+ * 因此默认交回 Chromium 自带的合成器平滑滚动，需要 macOS 式惯性加速的用户再手动开启。
+ */
+export const smoothScrollEnabledAtom = atom<boolean>(false)
 
 /** 是否强制接管像素级输入（触控板 / 高精度滚轮），默认关闭 */
 export const smoothScrollForceAtom = atom<boolean>(false)
@@ -91,7 +98,7 @@ export async function initializeUiPreferences(
       maxHeight: normalizeCompactMaxHeight(settings.inputCompactMaxHeight),
     })
     setPreviewOpenMode?.(settings.previewModePreference === 'split' ? 'split' : DEFAULT_PREVIEW_OPEN_MODE)
-    setSmoothScrollEnabled?.(settings.smoothScrollEnabled ?? true)
+    setSmoothScrollEnabled?.(settings.smoothScrollEnabled ?? false)
     setSmoothScrollForce?.(settings.smoothScrollForceEnabled ?? false)
   } catch (error) {
     console.error('[UI偏好] 初始化失败:', error)

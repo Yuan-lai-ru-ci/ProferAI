@@ -567,7 +567,7 @@ export function UsageSettings(): React.ReactElement {
           {isWindows && (
             <SettingsToggle
               label="平滑滚动"
-              description="接管鼠标滚轮的离散刻度，补上 macOS 那样的速度加速与惯性：连转更快、停手自然减速。触控板、高精度滚轮与 Ctrl+滚轮缩放不受影响。"
+              description="默认关闭，滚轮交给 Chromium 合成器线程，最顺也最省主线程。开启后用自绘弹簧接管鼠标滚轮的离散刻度，补上 macOS 那样的速度加速与惯性（连转更快、停手自然减速）；代价是滚动改为逐帧写主线程，流式输出或长会话重负载时可能比关闭更卡。触控板、高精度滚轮与 Ctrl+滚轮缩放不受影响。"
               checked={smoothScrollEnabled}
               onCheckedChange={(checked) => {
                 setSmoothScrollEnabled(checked)
