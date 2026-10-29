@@ -133,7 +133,7 @@ export interface FeishuUpdateBindingInput {
   sessionId?: string
 }
 
-/** 飞书聊天 → Profer 会话绑定（内存态，不持久化） */
+/** 飞书聊天 → Profer 会话绑定（由 feishu-bridge 持久化到 `~/.profer/feishu-bindings-{botId}.json`） */
 export interface FeishuChatBinding {
   /** 飞书 chat_id（单聊或群聊） */
   chatId: string
