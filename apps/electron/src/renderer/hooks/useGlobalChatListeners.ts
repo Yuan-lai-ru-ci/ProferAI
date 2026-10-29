@@ -20,6 +20,7 @@ import {
   pendingAgentRecommendationAtom,
 } from '@/atoms/chat-atoms'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
+import { createSessionUpdateBatcher } from '@/lib/session-update-batcher'
 import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
 import { refreshCreditsInto } from '@/domains/credits/credits-state'
 import type { ConversationStreamState } from '@/atoms/chat-atoms'
@@ -91,28 +92,60 @@ export function useGlobalChatListeners(): void {
     }
 
     // ===== 1. 流式内容块 =====
+    //
+    // 模型每秒会吐几十到上百个 delta；每个 delta 直接写 atom 会让 ChatView 按 token
+    // 重渲染（markdown 解析 + 整列表 diff）。这里按对话合并到一帧提交，与 Agent 侧的
+    // streamStateBatcher 同一套机制。终态（complete / error）先 flush，尾帧不会丢。
+    const deltaBatcher = createSessionUpdateBatcher<{
+      runId: string
+      content?: string
+      reasoning?: string
+    }>((conversationId, updates) => {
+      store.set(streamingStatesAtom, (prev) => {
+        const current = prev.get(conversationId)
+        let next = current
+        for (const update of updates) {
+          // 旧 run 的迟到增量不能污染新一轮内容。
+          if (next?.runId && next.runId !== update.runId) continue
+          const base: ConversationStreamState = next ?? {
+            runId: update.runId,
+            streaming: false,
+            content: '',
+            reasoning: '',
+            toolActivities: [],
+            startedAt: Date.now(),
+          }
+          next = {
+            ...base,
+            content: update.content ? base.content + update.content : base.content,
+            reasoning: update.reasoning ? base.reasoning + update.reasoning : base.reasoning,
+          }
+        }
+        if (!next || next === current) return prev
+        const map = new Map(prev)
+        map.set(conversationId, next)
+        return map
+      })
+    })
+
     const cleanupChunk = window.electronAPI.onStreamChunk(
       (event: StreamChunkEvent) => {
-        updateState(event.conversationId, event.runId, (s) => ({
-          ...s,
-          content: s.content + event.delta,
-        }))
+        deltaBatcher.enqueue(event.conversationId, { runId: event.runId, content: event.delta })
       },
     )
 
     // ===== 2. 流式推理内容 =====
     const cleanupReasoning = window.electronAPI.onStreamReasoning(
       (event: StreamReasoningEvent) => {
-        updateState(event.conversationId, event.runId, (s) => ({
-          ...s,
-          reasoning: s.reasoning + event.delta,
-        }))
+        deltaBatcher.enqueue(event.conversationId, { runId: event.runId, reasoning: event.delta })
       },
     )
 
     // ===== 3. 流式完成 =====
     const cleanupComplete = window.electronAPI.onStreamComplete(
       (event: StreamCompleteEvent) => {
+        // 先把挂起的增量落盘，否则尾帧会晚于 streaming=false 到达，续写已结束的态。
+        deltaBatcher.flush(event.conversationId)
         // 旧 run 的完成事件不能关闭当前新 run。
         if (store.get(streamingStatesAtom).get(event.conversationId)?.runId !== event.runId) return
         // 标记 streaming=false，但保留 content/reasoning 作为过渡气泡
@@ -169,6 +202,7 @@ export function useGlobalChatListeners(): void {
     // ===== 4. 流式错误 =====
     const cleanupError = window.electronAPI.onStreamError(
       (event: StreamErrorEvent) => {
+        deltaBatcher.flush(event.conversationId)
         if (store.get(streamingStatesAtom).get(event.conversationId)?.runId !== event.runId) return
         console.error('[GlobalChatListeners] 流式错误:', event.error)
 
@@ -275,6 +309,7 @@ export function useGlobalChatListeners(): void {
     )
 
     return () => {
+      deltaBatcher.flushAll()
       cleanupChunk()
       cleanupReasoning()
       cleanupComplete()

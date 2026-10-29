@@ -28,6 +28,7 @@ import type { InlineEditSubmitPayload } from './ChatMessageItem'
 import {
   conversationsAtom,
   streamingStatesAtom,
+  conversationStreamStateAtomFamily,
   chatStreamErrorsAtom,
   chatStreamErrorCodesAtom,
   chatMessageRefreshAtom,
@@ -110,7 +111,6 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
   const conversations = useAtomValue(conversationsAtom)
   const setConversations = useSetAtom(conversationsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
-  const streamingStates = useAtomValue(streamingStatesAtom)
   const setStreamingStates = useSetAtom(streamingStatesAtom)
   const setChatStreamErrors = useSetAtom(chatStreamErrorsAtom)
   const chatStreamErrors = useAtomValue(chatStreamErrorsAtom)
@@ -146,8 +146,9 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
   }, [conversationId, globalPendingKnowledge, setGlobalPendingKnowledge])
 
   // ===== 从 Map 派生当前对话状态 =====
+  // 按 conversationId 切片订阅：其他对话（分屏 pane、后台会话）的增量不再唤醒本视图。
+  const streamState = useAtomValue(conversationStreamStateAtomFamily(conversationId))
   const conversation = conversations.find((c) => c.id === conversationId) ?? null
-  const streamState = streamingStates.get(conversationId)
   const isStreaming = streamState?.streaming ?? false
   const streamingContent = streamState?.content ?? ''
   const streamingReasoning = streamState?.reasoning ?? ''

@@ -906,7 +906,7 @@ function agentBlockMargin(block: AgentMarkdownBlock, previous?: AgentMarkdownBlo
 interface CopyableMarkdownBlockProps {
   block: AgentMarkdownBlock
   components: React.ComponentProps<typeof Markdown>['components']
-  remarkPlugins: NonNullable<React.ComponentProps<typeof Markdown>['remarkPlugins']>
+  remarkPlugins?: RemarkPluginFn[]
   selected: boolean
   selectedBefore: boolean
   selectedAfter: boolean
@@ -966,6 +966,40 @@ function SelectionToolbarButton({ label, icon, onClick }: {
   )
 }
 
+interface MarkdownBlockBodyProps {
+  source: string
+  components: React.ComponentProps<typeof Markdown>['components']
+  extraRemarkPlugins?: RemarkPluginFn[]
+}
+
+function sameRemarkPlugins(previous?: RemarkPluginFn[], next?: RemarkPluginFn[]): boolean {
+  if (previous === next) return true
+  if (!previous || !next || previous.length !== next.length) return false
+  return previous.every((plugin, index) => plugin === next[index])
+}
+
+/**
+ * 单个 Markdown 块的渲染体。
+ *
+ * 流式输出时父组件每帧都会重建 blocks、工具栏回调和块包装 DOM，但已定稿的块
+ * source 不变。这里按 source / components / 额外插件做记忆化，避免每帧把整条
+ * 回答的所有块重新交给 react-markdown 解析（长回答里这是主线程的主要开销）。
+ */
+const MarkdownBlockBody = React.memo(function MarkdownBlockBody({ source, components, extraRemarkPlugins }: MarkdownBlockBodyProps): React.ReactElement {
+  const plugins: NonNullable<React.ComponentProps<typeof Markdown>['remarkPlugins']> = React.useMemo(
+    () => [
+      ...(extraRemarkPlugins?.length ? [...REMARK_PLUGINS, ...extraRemarkPlugins] : REMARK_PLUGINS),
+      remarkTableSource(source),
+    ],
+    [extraRemarkPlugins, source],
+  )
+  return (
+    <Markdown remarkPlugins={plugins} rehypePlugins={REHYPE_PLUGINS} urlTransform={mentionUrlTransform} components={components}>{source}</Markdown>
+  )
+}, (previous, next) => previous.source === next.source
+  && previous.components === next.components
+  && sameRemarkPlugins(previous.extraRemarkPlugins, next.extraRemarkPlugins))
+
 function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, selectedBefore, selectedAfter, selecting, toolbarVisible, toolbarBlock, toolbarBlockSelected, marginClassName, selectionBridgeAfterClassName, markdownFormat, onSelect, onHover, onToolbarEnter, onToolbarLeave, toolbarExpanded, previewVisible, onCopy, onEnterSelection, onExitSelection, quoteEnabled, onQuoteSelection, onExploreSelection, onMarkdownFormatChange, tableFormat, onTableFormatChange, selectionFormatMode, copied }: CopyableMarkdownBlockProps): React.ReactElement {
   const selectionGroupStart = selected && !selectedBefore
   const selectionGroupEnd = selected && !selectedAfter
@@ -1024,7 +1058,7 @@ function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, sel
         </div>
       )}
       <div className="relative z-10 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-        <Markdown remarkPlugins={remarkPlugins} rehypePlugins={REHYPE_PLUGINS} urlTransform={mentionUrlTransform} components={components}>{block.source}</Markdown>
+        <MarkdownBlockBody source={block.source} components={components} extraRemarkPlugins={remarkPlugins} />
       </div>
     </div>
   )
@@ -1235,7 +1269,6 @@ export const MessageResponse = React.memo(
       <>
         <div className={cn(containerClassName, selecting && 'select-none')} onPointerLeave={() => { clearHoverSwitchTimer(); scheduleHoverLeave() }}>
           {blocks.map((block, index) => {
-            const plugins = [...(remarkPlugins ? [...REMARK_PLUGINS, ...remarkPlugins] : [...REMARK_PLUGINS]), remarkTableSource(block.source)]
             const toolbarBlock = resolveToolbarBlock({
               block,
               index,
@@ -1251,7 +1284,7 @@ export const MessageResponse = React.memo(
             const margin = agentBlockMargin(block, previousBlock, nextBlock)
             const nextMargin = nextBlock ? agentBlockMargin(nextBlock, block, blocks[index + 2]) : margin
             const bridgeClassName = margin.bottomRank >= nextMargin.topRank ? margin.bottomBridgeClassName : nextMargin.topBridgeClassName
-            return <CopyableMarkdownBlock key={block.id} block={block} components={components} remarkPlugins={plugins} selected={selectedIds.has(block.id)} selectedBefore={selectedIds.has(previousBlock?.id ?? '')} selectedAfter={selectedIds.has(nextBlock?.id ?? '')} selecting={selecting} toolbarVisible={toolbarBlock !== null} toolbarBlock={toolbarBlock} toolbarBlockSelected={selectedIds.has(toolbarTarget.id)} copied={copied} toolbarExpanded={toolbarExpanded} previewVisible={!selecting && pinnedToolbarIndex < 0 && toolbarExpanded && toolbarBlock?.id === block.id} marginClassName={margin.className} selectionBridgeAfterClassName={bridgeClassName} markdownFormat={markdownFormat} selectionFormatMode={selectionFormatMode} onSelect={(event) => toggleBlock(block, event)} onHover={() => hoverBlock(block)} onToolbarEnter={enterToolbar} onToolbarLeave={leaveToolbar} onCopy={() => void (selecting ? copySelected() : copyBlock(toolbarTarget))} onEnterSelection={(event) => enterSelection(toolbarTarget, event)} onExitSelection={exitSelectionFromButton} onMarkdownFormatChange={setMarkdownFormat} quoteEnabled={pinnedToolbarIndex >= 0} onQuoteSelection={() => { window.dispatchEvent(new CustomEvent(AGENT_SELECTION_QUOTE_EVENT)) }} onExploreSelection={() => { window.dispatchEvent(new CustomEvent(AGENT_SELECTION_EXPLORE_EVENT)) }} tableFormat={tableFormatFor(toolbarTarget)} onTableFormatChange={(format) => updateTableFormat(toolbarTarget.id, format)} />
+            return <CopyableMarkdownBlock key={block.id} block={block} components={components} remarkPlugins={remarkPlugins} selected={selectedIds.has(block.id)} selectedBefore={selectedIds.has(previousBlock?.id ?? '')} selectedAfter={selectedIds.has(nextBlock?.id ?? '')} selecting={selecting} toolbarVisible={toolbarBlock !== null} toolbarBlock={toolbarBlock} toolbarBlockSelected={selectedIds.has(toolbarTarget.id)} copied={copied} toolbarExpanded={toolbarExpanded} previewVisible={!selecting && pinnedToolbarIndex < 0 && toolbarExpanded && toolbarBlock?.id === block.id} marginClassName={margin.className} selectionBridgeAfterClassName={bridgeClassName} markdownFormat={markdownFormat} selectionFormatMode={selectionFormatMode} onSelect={(event) => toggleBlock(block, event)} onHover={() => hoverBlock(block)} onToolbarEnter={enterToolbar} onToolbarLeave={leaveToolbar} onCopy={() => void (selecting ? copySelected() : copyBlock(toolbarTarget))} onEnterSelection={(event) => enterSelection(toolbarTarget, event)} onExitSelection={exitSelectionFromButton} onMarkdownFormatChange={setMarkdownFormat} quoteEnabled={pinnedToolbarIndex >= 0} onQuoteSelection={() => { window.dispatchEvent(new CustomEvent(AGENT_SELECTION_QUOTE_EVENT)) }} onExploreSelection={() => { window.dispatchEvent(new CustomEvent(AGENT_SELECTION_EXPLORE_EVENT)) }} tableFormat={tableFormatFor(toolbarTarget)} onTableFormatChange={(format) => updateTableFormat(toolbarTarget.id, format)} />
           })}
         </div>
       </>

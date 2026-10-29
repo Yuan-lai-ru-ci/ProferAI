@@ -76,15 +76,43 @@ export interface ConversationStreamState {
 export const streamingStatesAtom = atom<Map<string, ConversationStreamState>>(new Map())
 
 /**
+ * 单个对话的流式状态切片 — 按 conversationId 订阅。
+ *
+ * 直接订阅 streamingStatesAtom 会让任意对话的增量都触发 ChatView 整树重渲染：
+ * 分屏时另一个 pane 的流式输出、以及每次 chunk 写 Map 都会唤醒所有订阅者。
+ * 本 family 只在对应 conversationId 的 state 引用变化时通知，其余写入由 jotai
+ * 按引用相等自动跳过。与 agentSessionStreamingStateAtomFamily 保持同一模式。
+ */
+export const conversationStreamStateAtomFamily = atomFamily((conversationId: string) =>
+  atom((get) => get(streamingStatesAtom).get(conversationId)),
+)
+
+/**
  * 当前正在流式输出的对话 ID 集合（派生只读原子）
  * 用于侧边栏绿色呼吸点指示器
+ *
+ * 每次 chunk 都会改写 streamingStatesAtom，若每次都返回新 Set，侧栏、标签栏、
+ * 移动端标签这些订阅者会跟着每个 token 重渲染一遍。集合内容未变时复用上一次的
+ * 引用，让“内容增量”不波及任何“流式集合”订阅者。
  */
+let cachedStreamingConversationIds: Set<string> = new Set()
 export const streamingConversationIdsAtom = atom<Set<string>>((get) => {
   const states = get(streamingStatesAtom)
   const ids = new Set<string>()
   for (const [id, state] of states) {
     if (state.streaming) ids.add(id)
   }
+  if (ids.size === cachedStreamingConversationIds.size) {
+    let identical = true
+    for (const id of ids) {
+      if (!cachedStreamingConversationIds.has(id)) {
+        identical = false
+        break
+      }
+    }
+    if (identical) return cachedStreamingConversationIds
+  }
+  cachedStreamingConversationIds = ids
   return ids
 })
 
