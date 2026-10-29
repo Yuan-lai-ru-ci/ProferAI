@@ -109,10 +109,11 @@ import type { TabItem } from './atoms/tab-atoms'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
+import { wechatBridgeStateAtom } from './atoms/wechat-atoms'
 import { conversationDraftsAtom, currentConversationIdAtom } from './atoms/chat-atoms'
 import { initializeAgentSettings } from './lib/agent-settings-initialization'
 import { appModeAtom } from './atoms/app-mode'
-import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@profer/shared'
+import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState, WeChatBridgeState } from '@profer/shared'
 import { Toaster } from '@profer/ui'
 
 /** 桌面壳 Toaster：把皮肤系统解析出的主题注入通用基元（基元本身已不含 jotai 依赖） */
@@ -880,6 +881,37 @@ function DingTalkInitializer(): null {
 }
 
 /**
+ * WeChatInitializer
+ *
+ * - 加载微信 Bridge 初始状态
+ * - 订阅微信 Bridge 状态变化
+ *
+ * 微信状态此前只在 WeChatSettings 挂载时加载并订阅，导致未进入「微信」页时
+ * 侧栏状态点恒为未连接、离开页面后也不再更新。这里与飞书/钉钉对齐到根组件。
+ */
+function WeChatInitializer(): null {
+  const store = useStore()
+
+  useEffect(() => {
+    window.electronAPI.getWeChatStatus()
+      .then((state: WeChatBridgeState) => {
+        store.set(wechatBridgeStateAtom, state)
+      })
+      .catch((err: unknown) => console.error('[WeChatInitializer] 加载状态失败:', err))
+
+    const cleanupStatus = window.electronAPI.onWeChatStatusChanged((state: WeChatBridgeState) => {
+      store.set(wechatBridgeStateAtom, state)
+    })
+
+    return () => {
+      cleanupStatus()
+    }
+  }, [store])
+
+  return null
+}
+
+/**
  * 标签页持久化组件
  *
  * 启动时从 settings.tabState 恢复上次打开的标签页；
@@ -1293,6 +1325,7 @@ if (isQuickTaskWindow) {
       <PlanningShortcutInitializer />
       <FeishuInitializer />
       <DingTalkInitializer />
+      <WeChatInitializer />
       <TabStatePersistenceInitializer />
       <ScratchPadPersistence />
       <GlobalShortcuts />
