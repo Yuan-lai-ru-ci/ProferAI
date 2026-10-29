@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   buildAgentSessionTrees,
   collectDelegatedDeletionSessionIds,
+  computeProjectSessionVisibility,
   getDelegatedChildStatus,
   getRelatedSessionSummary,
   getSessionTreeStatus,
@@ -226,5 +227,97 @@ describe('getSessionTreeStatus — 父会话状态聚合', () => {
 
     expect(getDelegatedChildStatus(child, new Map())).toBe('running')
     expect(getSessionTreeStatus(item, new Map())).toBe('running')
+  })
+})
+
+describe('computeProjectSessionVisibility — 项目内折叠切片', () => {
+  const DAY = 86_400_000
+
+  function items(count: number, options: { ageDays?: number; pinned?: boolean } = {}): AgentSessionTreeItem[] {
+    const { ageDays = 0, pinned = false } = options
+    return Array.from({ length: count }, (_, index) => ({
+      session: makeSession({
+        id: `s-${index}`,
+        title: `会话 ${index}`,
+        updatedAt: NOW - ageDays * DAY - index,
+        ...(pinned ? { pinned: true } : {}),
+      }),
+      childSessions: [],
+    }))
+  }
+
+  const idle = (): SessionIndicatorStatus => 'idle'
+
+  test('Given 项目会话全是旧会话 When 计算可见切片 Then 仍展示最近 8 条而不是只剩“显示更多”', () => {
+    const result = computeProjectSessionVisibility({
+      treeItems: items(12, { ageDays: 30 }),
+      getStatus: idle,
+    })
+
+    expect(result.fill).toHaveLength(8)
+    expect(result.fill[0]?.session.id).toBe('s-0')
+    expect(result.hiddenCount).toBe(4)
+  })
+
+  test('Given 项目会话数不超过预览上限 When 计算可见切片 Then 不折叠、不出现“显示更多”', () => {
+    const result = computeProjectSessionVisibility({
+      treeItems: items(8, { ageDays: 90 }),
+      getStatus: idle,
+    })
+
+    expect(result.fill).toHaveLength(8)
+    expect(result.hiddenCount).toBe(0)
+  })
+
+  test('Given 置顶与运行中会话 When 计算可见切片 Then 它们常显且不占预览上限', () => {
+    const makeRoot = (id: string, pinned = false): AgentSessionTreeItem => ({
+      session: makeSession({ id, title: id, ...(pinned ? { pinned: true } : {}) }),
+      childSessions: [],
+    })
+    const result = computeProjectSessionVisibility({
+      treeItems: [makeRoot('pinned', true), makeRoot('running'), ...items(8)],
+      getStatus: (item) => (item.session.id === 'running' ? 'running' : 'idle'),
+    })
+
+    expect(result.pinned.map((item) => item.session.id)).toEqual(['pinned'])
+    expect(result.active.map((item) => item.session.id)).toEqual(['running'])
+    expect(result.fill).toHaveLength(8)
+    expect(result.hiddenCount).toBe(0)
+  })
+
+  test('Given 剩余只有 2 条 When 计算可见切片 Then 直接展示尾巴，不折叠', () => {
+    const result = computeProjectSessionVisibility({ treeItems: items(10), getStatus: idle })
+
+    expect(result.trailing).toHaveLength(2)
+    expect(result.hiddenCount).toBe(0)
+  })
+
+  test('Given 剩余 3 条 When 计算可见切片 Then 折叠 3 条并可从“显示更多”展开', () => {
+    const collapsed = computeProjectSessionVisibility({ treeItems: items(11), getStatus: idle })
+    expect(collapsed.trailing).toHaveLength(0)
+    expect(collapsed.hiddenCount).toBe(3)
+
+    const expanded = computeProjectSessionVisibility({ treeItems: items(11), getStatus: idle, extraCount: 10 })
+    expect(expanded.extra).toHaveLength(3)
+    expect(expanded.hiddenCount).toBe(0)
+  })
+
+  test('Given 多个活跃会话 When 计算可见切片 Then 按 blocked > running > completed 排序', () => {
+    const make = (id: string): AgentSessionTreeItem => ({
+      session: makeSession({ id, title: id }),
+      childSessions: [],
+    })
+    const statuses: Record<string, SessionIndicatorStatus> = {
+      'done': 'completed',
+      'run': 'running',
+      'blocked': 'blocked',
+    }
+    const result = computeProjectSessionVisibility({
+      treeItems: [make('done'), make('idle'), make('run'), make('blocked')],
+      getStatus: (item) => statuses[item.session.id] ?? 'idle',
+    })
+
+    expect(result.active.map((item) => item.session.id)).toEqual(['blocked', 'run', 'done'])
+    expect(result.fill.map((item) => item.session.id)).toEqual(['idle'])
   })
 })

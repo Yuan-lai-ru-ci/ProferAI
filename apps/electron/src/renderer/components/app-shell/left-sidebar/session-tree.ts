@@ -21,6 +21,10 @@ export const ACTIVE_SESSION_STATUSES: ReadonlySet<SessionIndicatorStatus> = new 
 
 /** 点击"显示更多"时每次额外展开的会话数量 */
 export const PROJECT_SESSION_EXPAND_STEP = 10
+/** 折叠时保留的最近会话数（置顶与活跃会话不计入此上限） */
+export const PROJECT_SESSION_PREVIEW_LIMIT = 8
+/** 剩余不足该数量时直接展示，避免出现"显示更多（1）"这类无意义折叠 */
+export const PROJECT_SESSION_TAIL_ALWAYS_VISIBLE = 2
 
 export const ACTIVE_SESSION_STATUS_PRIORITY: Record<SessionIndicatorStatus, number> = {
   blocked: 0,
@@ -253,4 +257,75 @@ export function getSyncableDelegatedChildren(
     && !child.draft
     && !draftSessionIds.has(child.id)
   ))
+}
+
+export interface ProjectSessionVisibility {
+  /** 置顶会话，固定在项目内最前，不占预览上限 */
+  pinned: AgentSessionTreeItem[]
+  /** 活跃会话（运行中 / 阻塞 / 未查看的已完成），折叠时也常显 */
+  active: AgentSessionTreeItem[]
+  /** 按 updatedAt 倒序补足的最近会话，上限 previewLimit */
+  fill: AgentSessionTreeItem[]
+  /** 用户点击「显示更多」后额外展开的会话 */
+  extra: AgentSessionTreeItem[]
+  /** 剩余不足 tailAlwaysVisible 条时直接展示的尾巴 */
+  trailing: AgentSessionTreeItem[]
+  /** 仍被折叠的会话数（仅计根节点） */
+  hiddenCount: number
+}
+
+/**
+ * 计算项目内会话的可见切片。
+ *
+ * 规则（对齐主流侧栏习惯）：
+ * - 置顶会话与活跃会话永远可见，且不占预览上限；
+ * - 其余按 updatedAt 倒序补足到 previewLimit 条，不叠加时间窗口——
+ *   项目里全是旧会话时仍能看到最近若干条，不会只剩一行「显示更多」；
+ * - 只有超出预览上限时才折叠；剩余不足 tailAlwaysVisible 条直接展示；
+ * - 用户展开后每次追加 extraCount 条。
+ */
+export function computeProjectSessionVisibility(params: {
+  treeItems: readonly AgentSessionTreeItem[]
+  getStatus: (item: AgentSessionTreeItem) => SessionIndicatorStatus
+  previewLimit?: number
+  extraCount?: number
+  tailAlwaysVisible?: number
+}): ProjectSessionVisibility {
+  const {
+    treeItems,
+    getStatus,
+    previewLimit = PROJECT_SESSION_PREVIEW_LIMIT,
+    extraCount = 0,
+    tailAlwaysVisible = PROJECT_SESSION_TAIL_ALWAYS_VISIBLE,
+  } = params
+
+  const pinned = treeItems.filter((item) => !!item.session.pinned)
+  const unpinned = treeItems.filter((item) => !item.session.pinned)
+  const active = unpinned
+    .filter((item) => ACTIVE_SESSION_STATUSES.has(getStatus(item)))
+    .slice()
+    .sort((a, b) => {
+      const delta = ACTIVE_SESSION_STATUS_PRIORITY[getStatus(a)] - ACTIVE_SESSION_STATUS_PRIORITY[getStatus(b)]
+      if (delta !== 0) return delta
+      return b.session.updatedAt - a.session.updatedAt
+    })
+  const activeIds = collectTreeSessionIds(active)
+  const fill = unpinned
+    .filter((item) => !activeIds.has(item.session.id))
+    .slice(0, Math.max(0, previewLimit))
+
+  const baselineIds = new Set([...pinned, ...active, ...fill].map((item) => item.session.id))
+  const remaining = unpinned.filter((item) => !baselineIds.has(item.session.id))
+  const extra = remaining.slice(0, Math.max(0, extraCount))
+  const rest = remaining.slice(extra.length)
+  const trailing = rest.length <= Math.max(0, tailAlwaysVisible) ? rest : []
+
+  return {
+    pinned,
+    active,
+    fill,
+    extra,
+    trailing,
+    hiddenCount: rest.length - trailing.length,
+  }
 }

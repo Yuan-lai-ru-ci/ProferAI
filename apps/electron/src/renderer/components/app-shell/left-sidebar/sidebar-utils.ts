@@ -144,7 +144,8 @@ export function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
  *
  * 约定：行高 28（项目 32），圆角 7，左右内边距 8，子会话缩进（块左 4 + 文字 26）；
  * 除 focus ring 外不使用描边与阴影，层级只靠背景灰度与文字灰度区分。
- * 会话行不常显底色，改用底边一条极淡分隔线拉开行间距；分隔线左右内缩避开圆角。
+ * 会话行与入口行同为默认行：不常显底色、不画分隔线，行间距靠列表 gap；
+ * 有色标的会话由调用方（AgentSessionItem）另加同色相淡底色。
  * 灰度层级：项目行 5%（当前 9%）> 会话行当前 7% > 入口行无底色。
  */
 export function sidebarRowClass(options: {
@@ -155,10 +156,8 @@ export function sidebarRowClass(options: {
   muted?: boolean
   /** 项目行等 32px 行 */
   tall?: boolean
-  /** 会话行：底边极淡分隔线，不常显底色 */
-  session?: boolean
 } = {}): string {
-  const { active, depth = 0, muted, tall, session } = options
+  const { active, depth = 0, muted, tall } = options
   return cn(
     // shrink-0：行必须保持固定高度。列表容器有 max-height 时（当前会话区 144px），
     // flex 子项默认会被压扁去「塞进」容器，导致行高从 28px 塌成 20px 左右且不再滚动。
@@ -174,9 +173,7 @@ export function sidebarRowClass(options: {
         ? 'text-foreground/[0.38] hover:bg-foreground/[0.04] hover:text-foreground/[0.62]'
         : tall
           ? 'bg-foreground/[0.05] text-foreground/[0.62] hover:bg-foreground/[0.07] hover:text-foreground'
-          : session
-            ? 'text-foreground/[0.62] hover:bg-foreground/[0.04] hover:text-foreground after:pointer-events-none after:absolute after:inset-x-2 after:bottom-0 after:h-px after:bg-foreground/[0.06]'
-            : 'text-foreground/[0.62] hover:bg-foreground/[0.04] hover:text-foreground',
+          : 'text-foreground/[0.62] hover:bg-foreground/[0.04] hover:text-foreground',
   )
 }
 

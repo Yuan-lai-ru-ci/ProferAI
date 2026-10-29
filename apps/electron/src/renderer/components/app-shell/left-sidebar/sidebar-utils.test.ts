@@ -102,22 +102,17 @@ describe('sidebarRowClass — 侧栏行视觉契约', () => {
     expect(sidebarRowClass({ muted: true })).toContain('text-foreground/[0.38]')
   })
 
-  test('Given 会话行与非会话行 When 生成 Then 会话行无底色、只有底边分隔线', () => {
-    const session = sidebarRowClass({ session: true })
-    expect(session).not.toContain('bg-foreground/[0.03]')
-    expect(session).toContain('after:h-px')
-    expect(session).toContain('after:bottom-0')
-    expect(session).toContain('after:inset-x-2')
-    expect(session).toContain('after:bg-foreground/[0.06]')
-    // hover 仍给一层极淡底色便于定位
+  test('Given 项目内会话行 When 生成 Then 无底色、无分隔线，仅 hover 给灰', () => {
+    const session = sidebarRowClass({ depth: 1 })
+    const tokens = session.split(' ')
+    expect(tokens.some((t) => t.startsWith('bg-foreground/'))).toBe(false)
+    expect(tokens.some((t) => t.startsWith('after:'))).toBe(false)
+    // 行间分隔只靠列表 gap，hover 仍给一层极淡底色便于定位
     expect(session).toContain('hover:bg-foreground/[0.04]')
-    // 项目行、入口行不带分隔线
-    expect(sidebarRowClass({ tall: true })).not.toContain('after:h-px')
-    expect(sidebarRowClass()).not.toContain('after:h-px')
   })
 
-  test('Given 会话行处于当前项 When 生成 Then 选中底色仍高于无底色会话行', () => {
-    const activeSession = sidebarRowClass({ session: true, active: true })
+  test('Given 会话行处于当前项 When 生成 Then 只有选中态带底色', () => {
+    const activeSession = sidebarRowClass({ depth: 1, active: true })
     expect(activeSession).toContain('bg-foreground/[0.07]')
     expect(activeSession).not.toContain('bg-foreground/[0.03]')
   })

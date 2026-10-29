@@ -44,18 +44,15 @@ import type { ConversationMeta, AgentSessionMeta, AgentWorkspace } from '@profer
 import { formatRelativeUpdatedAt, sidebarRowClass } from './sidebar-utils'
 import type { ShortcutRegistrationOptions } from '@/lib/shortcut-registry'
 import {
-  ACTIVE_SESSION_STATUSES,
-  ACTIVE_SESSION_STATUS_PRIORITY,
   buildAgentSessionTrees,
   collectTreeSessionIds,
+  computeProjectSessionVisibility,
   getRelatedChildStatus,
   getRelatedSessionSummary,
   getSessionTreeStatus,
   treeContainsSessionId,
   type AgentSessionTreeItem,
 } from './session-tree'
-
-const PROJECT_SESSION_PREVIEW_LIMIT = 5
 
 /**
  * 重命名快捷键走独占模式。
@@ -66,11 +63,6 @@ const PROJECT_SESSION_PREVIEW_LIMIT = 5
  */
 const RENAME_SHORTCUT_OPTIONS: ShortcutRegistrationOptions = { exclusive: true }
 
-// Electron 不提供系统双击间隔；使用保守窗口避免慢双击先打开项目。
-const PROJECT_TITLE_DOUBLE_CLICK_DELAY_MS = 500
-const PROJECT_SESSION_RECENT_WINDOW_MS = 3 * 86_400_000
-/** 点击"显示更多"时每次额外展开的会话数量 */
-const PROJECT_SESSION_EXPAND_STEP = 10
 /** Chat「置顶」区最多占用约 6 条会话的高度，超过后在置顶区内部滚动 */
 const PINNED_SESSION_VISIBLE_LIMIT = 6
 const PINNED_SESSION_ROW_HEIGHT_PX = 32
@@ -568,7 +560,7 @@ export const ConversationItem = React.memo(function ConversationItem({
             startEdit()
           }}
           className={cn(
-            sidebarRowClass({ active, depth, session: true }),
+            sidebarRowClass({ active, depth }),
             'titlebar-no-drag text-left',
             active && 'session-item-selected',
             streaming && 'font-medium',
@@ -660,11 +652,8 @@ export const ConversationItem = React.memo(function ConversationItem({
 
 /** 会话行左侧状态条的颜色 — 与 SessionIndicatorStatus 呼应 */
 type SessionLeftAccent = 'orange' | 'blue' | 'green'
-const SESSION_ACCENT_ROW_CLASS: Record<SessionLeftAccent, string> = {
-  orange: 'bg-warning/[0.08] hover:bg-warning/[0.11]',
-  blue: 'bg-info/[0.06] hover:bg-info/[0.09]',
-  green: 'bg-success/[0.06] hover:bg-success/[0.09]',
-}
+/** 有色标的会话统一用中性淡底，不跟随状态色相；色相只留在左侧竖条与状态图标上 */
+const SESSION_ACCENT_ROW_CLASS = 'bg-foreground/[0.04] hover:bg-foreground/[0.07]'
 
 /** 有色标会话的文字层级：与选中行一致地提亮，但不覆盖选中底色 */
 const SESSION_ACCENT_TEXT_CLASS = 'text-foreground font-medium'
@@ -908,12 +897,12 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
             startEdit()
           }}
           className={cn(
-            sidebarRowClass({ active, depth, session: true }),
+            sidebarRowClass({ active, depth }),
             'titlebar-no-drag text-left',
             active && 'agent-session-item-active',
             leftAccent && SESSION_ACCENT_TEXT_CLASS,
-            // 有色标的会话常显一层淡底色（与色标同色相）；选中行保持 0.07 优先，不被覆盖
-            leftAccent && !active && SESSION_ACCENT_ROW_CLASS[leftAccent],
+            // 有色标的会话常显一层中性淡底；选中行保持 0.07 优先，不被覆盖
+            leftAccent && !active && SESSION_ACCENT_ROW_CLASS,
           )}
         >
           {(leftAccent || (isClassic && active)) && (
@@ -1194,11 +1183,6 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   const [workspaceEditName, setWorkspaceEditName] = React.useState('')
   const workspaceEditRef = React.useRef<HTMLInputElement>(null)
   const justStartedRenamingRef = React.useRef(false)
-  const projectClickTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  React.useEffect(() => () => {
-    if (projectClickTimerRef.current) clearTimeout(projectClickTimerRef.current)
-  }, [])
 
   const handleStartWorkspaceRename = (): void => {
     setWorkspaceEditName(group.workspace.name)
@@ -1231,49 +1215,30 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
       setRenamingWorkspace(false)
     }
   }
-  const recentCutoff = relativeTimeNow - PROJECT_SESSION_RECENT_WINDOW_MS
-  // 折叠时：所有"活跃"会话（运行中 / 阻塞 / 未查看的已完成）必须展示，
-  // 不受 PROJECT_SESSION_PREVIEW_LIMIT 与 3 天窗口限制；活跃部分内部按
-  // blocked > running > completed 优先级排序（与 rail 的状态优先级一致），
-  // 同优先级保留 group.sessions 的 updatedAt 倒序。
-  // 非活跃部分仍保留原"最近 3 天 + 至多 5 条"预览策略，作为额外补充展示。
-  // 用户点击"显示更多"会在折叠基线之上每次再额外展开 PROJECT_SESSION_EXPAND_STEP 条。
+  // 折叠策略见 computeProjectSessionVisibility：置顶与活跃会话常显且不占预览上限，
+  // 其余按 updatedAt 倒序补足到上限（不再叠加时间窗口），超出才折叠。
   const treeItems = buildAgentSessionTrees(group.sessions)
-  // 置顶会话固定展示在项目内最前，不受「最近 3 天 + 至多 5 条」预览窗口限制。
-  // 委派/探索子会话即使置顶也跟随母会话层级，不单独抽到项目顶部。
-  const pinnedSessions = treeItems.filter((item) => !!item.session.pinned)
-  const unpinnedItems = treeItems.filter((item) => !item.session.pinned)
-  const activeSessions = unpinnedItems
-    .filter((item) => ACTIVE_SESSION_STATUSES.has(getSessionTreeStatus(item, agentIndicatorMap)))
-    .slice()
-    .sort((a, b) => {
-      const delta = ACTIVE_SESSION_STATUS_PRIORITY[getSessionTreeStatus(a, agentIndicatorMap)]
-        - ACTIVE_SESSION_STATUS_PRIORITY[getSessionTreeStatus(b, agentIndicatorMap)]
-      if (delta !== 0) return delta
-      return b.session.updatedAt - a.session.updatedAt
-    })
-  const activeIds = collectTreeSessionIds(activeSessions)
-  const fillSessions = unpinnedItems
-    .filter((item) =>
-      !activeIds.has(item.session.id)
-      && item.session.updatedAt >= recentCutoff
-    )
-    .slice(0, PROJECT_SESSION_PREVIEW_LIMIT)
-  // 先拼不含选中会话的可见列表（含 extraSessions），再判断选中会话是否已可见。
-  const collapsedSessions = [...pinnedSessions, ...activeSessions, ...fillSessions]
-  const collapsedIds = new Set(collapsedSessions.map((item) => item.session.id))
-  const remainingSessions = unpinnedItems.filter((item) => !collapsedIds.has(item.session.id))
-  const extraSessions = remainingSessions.slice(0, extraCount)
-  const sessionsWithoutCurrent = [...collapsedSessions, ...extraSessions]
-  const visibleIds = collectTreeSessionIds(sessionsWithoutCurrent)
+  const visibility = computeProjectSessionVisibility({
+    treeItems,
+    getStatus: (item) => getSessionTreeStatus(item, agentIndicatorMap),
+    extraCount,
+  })
+  const visibleSessions = [
+    ...visibility.pinned,
+    ...visibility.active,
+    ...visibility.fill,
+    ...visibility.extra,
+    ...visibility.trailing,
+  ]
+  const visibleIds = collectTreeSessionIds(visibleSessions)
   // 仅当选中会话不在当前完整可见列表（含 extra 区）中时才临时展示（如搜索结果打开旧会话），
   // 已可见则保持原位不强制置顶（#958）。
   const currentSession = activeSessionId && !visibleIds.has(activeSessionId)
     ? treeItems.find((item) => treeContainsSessionId(item, activeSessionId)) ?? null
     : null
   const sessions = currentSession
-    ? [...pinnedSessions, currentSession, ...activeSessions, ...fillSessions, ...extraSessions]
-    : sessionsWithoutCurrent
+    ? [...visibility.pinned, currentSession, ...visibleSessions.slice(visibility.pinned.length)]
+    : visibleSessions
   const hiddenCount = Math.max(0, treeItems.length - sessions.length)
 
   return (
@@ -1331,19 +1296,8 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 onToggleProjectCollapse(group.workspace.id)
                 return
               }
-              if (projectClickTimerRef.current) clearTimeout(projectClickTimerRef.current)
-              projectClickTimerRef.current = setTimeout(() => {
-                projectClickTimerRef.current = null
-                void onSelectProject(group.workspace.id)
-              }, PROJECT_TITLE_DOUBLE_CLICK_DELAY_MS)
-            }}
-            onDoubleClick={(e) => {
-              e.stopPropagation()
-              if (projectClickTimerRef.current) {
-                clearTimeout(projectClickTimerRef.current)
-                projectClickTimerRef.current = null
-              }
-              onToggleProjectCollapse(group.workspace.id)
+              // 切换项目不再等双击窗口：折叠只走右侧 chevron，单击立即生效。
+              void onSelectProject(group.workspace.id)
             }}
             className={cn(
               sidebarRowClass({ active: isCurrent, tall: true }),
@@ -1359,7 +1313,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
             <span
               data-project-collapse
               title={collapsed ? '展开项目会话' : '收起项目会话'}
-              className="flex-shrink-0 text-foreground/30 transition-colors hover:text-foreground/70"
+              className="-m-1 flex-shrink-0 p-1 text-foreground/30 transition-colors hover:text-foreground/70"
             >
               <ChevronRight
                 size={12}
@@ -1500,7 +1454,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                   onClick={() => onShowMore(group.workspace.id)}
                   className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[26px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
                 >
-                  显示更多
+                  显示更多（{hiddenCount}）
                 </button>
               )}
 
@@ -1510,7 +1464,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                   onClick={() => onCollapseExtra(group.workspace.id)}
                   className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[26px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
                 >
-                  收起
+                  收起已展开的会话
                 </button>
               )}
             </div>
