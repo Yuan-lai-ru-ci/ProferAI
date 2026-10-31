@@ -156,7 +156,7 @@ export function OpenApiSettings(): React.ReactElement {
   return (
     <div className="space-y-8">
       {/* API 使用说明 */}
-      <SettingsSection title="API" description="管理您的 API 密钥，用于访问 Profer API">
+      <SettingsSection title="API" description="管理你的 API 密钥，用于访问 Profer API">
         <div className="rounded-xl border border-border bg-muted/20 overflow-hidden">
           <button
             onClick={() => setDocOpen((v) => !v)}

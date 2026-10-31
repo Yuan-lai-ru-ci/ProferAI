@@ -23,7 +23,7 @@ import Markdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { ChevronDown, ChevronUp, Paperclip, FileText, Sparkles, Server, Download, MessageSquareText, MessageSquarePlus, Link2, Copy, Check, ListChecks, X, Quote } from 'lucide-react'
+import { ChevronDown, ChevronUp, Paperclip, FileText, FileImage, Sparkles, Server, Download, MessageSquareText, MessageSquarePlus, Link2, Copy, Check, ListChecks, X, Quote } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { userMessagePositionAtom } from '@/atoms/ui-preferences'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
@@ -1465,9 +1465,11 @@ interface MessageAttachmentImageProps {
 /** 图片附件展示（单图: max 500px，多图: 280px 方块），点击可预览大图 */
 function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachmentImageProps): React.ReactElement {
   const [imageSrc, setImageSrc] = React.useState<string | null>(null)
+  const [loadFailed, setLoadFailed] = React.useState(false)
   const [lightboxOpen, setLightboxOpen] = React.useState(false)
 
   React.useEffect(() => {
+    setLoadFailed(false)
     window.electronAPI
       .readAttachment(attachment.localPath)
       .then((base64) => {
@@ -1475,6 +1477,7 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
       })
       .catch((error) => {
         console.error('[MessageAttachmentImage] 读取附件失败:', error)
+        setLoadFailed(true)
       })
   }, [attachment.localPath, attachment.mediaType])
 
@@ -1482,6 +1485,20 @@ function MessageAttachmentImage({ attachment, isSingle = false }: MessageAttachm
   const handleSave = React.useCallback((): void => {
     window.electronAPI.saveImageAs(attachment.localPath, attachment.filename)
   }, [attachment.localPath, attachment.filename])
+
+  // 附件文件被删除时给出明确状态，不要用无限 skeleton 冒充「加载中」。
+  if (loadFailed) {
+    return (
+      <div
+        className="inline-flex max-w-[280px] items-center gap-2 rounded-lg border border-dashed border-surface-border/70 bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground"
+        title={`附件文件已丢失：${attachment.localPath}`}
+      >
+        <FileImage className="size-4 shrink-0 opacity-70" />
+        <span className="truncate">{attachment.filename}</span>
+        <span className="shrink-0 text-muted-foreground/70">文件已丢失</span>
+      </div>
+    )
+  }
 
   if (!imageSrc) {
     return (

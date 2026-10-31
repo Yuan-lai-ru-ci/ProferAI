@@ -1454,6 +1454,12 @@ export interface ElectronAPI {
   stopDingTalkBot: (botId: string) => Promise<void>
   /** 获取多 Bot 状态 */
   getDingTalkMultiStatus: () => Promise<import('@profer/shared').DingTalkMultiBridgeState>
+  /** 列出钉钉聊天绑定 */
+  listDingTalkBindings: () => Promise<import('@profer/shared').DingTalkChatBinding[]>
+  /** 更新钉钉聊天绑定 */
+  updateDingTalkBinding: (input: import('@profer/shared').DingTalkUpdateBindingInput) => Promise<import('@profer/shared').DingTalkChatBinding | null>
+  /** 解除钉钉聊天绑定 */
+  removeDingTalkBinding: (chatId: string) => Promise<boolean>
 
   // ===== 微信集成 =====
 
@@ -1471,6 +1477,12 @@ export interface ElectronAPI {
   getWeChatStatus: () => Promise<WeChatBridgeState>
   /** 订阅微信 Bridge 状态变化 */
   onWeChatStatusChanged: (callback: (state: WeChatBridgeState) => void) => () => void
+  /** 列出微信聊天绑定 */
+  listWeChatBindings: () => Promise<import('@profer/shared').WeChatChatBinding[]>
+  /** 更新微信聊天绑定 */
+  updateWeChatBinding: (input: import('@profer/shared').WeChatUpdateBindingInput) => Promise<import('@profer/shared').WeChatChatBinding | null>
+  /** 解除微信聊天绑定 */
+  removeWeChatBinding: (chatId: string) => Promise<boolean>
 
   /** 订阅菜单关闭标签页事件（Cmd+W 被菜单拦截后转发） */
   onMenuCloseTab: (callback: () => void) => () => void
@@ -3414,6 +3426,18 @@ const electronAPI: ElectronAPI = {
     return () => { ipcRenderer.removeListener(WECHAT_IPC_CHANNELS.STATUS_CHANGED, listener) }
   },
 
+  listWeChatBindings: () => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.LIST_BINDINGS)
+  },
+
+  updateWeChatBinding: (input) => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.UPDATE_BINDING, input)
+  },
+
+  removeWeChatBinding: (chatId: string) => {
+    return ipcRenderer.invoke(WECHAT_IPC_CHANNELS.REMOVE_BINDING, chatId)
+  },
+
   // ===== 钉钉集成 =====
 
   getDingTalkConfig: () => {
@@ -3478,6 +3502,18 @@ const electronAPI: ElectronAPI = {
 
   getDingTalkMultiStatus: () => {
     return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.GET_MULTI_STATUS)
+  },
+
+  listDingTalkBindings: () => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.LIST_BINDINGS)
+  },
+
+  updateDingTalkBinding: (input) => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.UPDATE_BINDING, input)
+  },
+
+  removeDingTalkBinding: (chatId: string) => {
+    return ipcRenderer.invoke(DINGTALK_IPC_CHANNELS.REMOVE_BINDING, chatId)
   },
 
   onMenuCloseTab: (callback: () => void) => {

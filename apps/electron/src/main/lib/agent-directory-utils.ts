@@ -3,11 +3,22 @@
  *
  * 从 agent-orchestrator.ts 提取的纯函数，用于聚合 SDK 调用涉及的附加目录。
  */
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative } from 'node:path'
 import { statSync } from 'node:fs'
 import type { AgentSessionMeta } from '@profer/shared'
 import { getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getConfigDir, getWorkspaceFilesDir } from './config-paths'
+
+/**
+ * 路径是否位于指定目录内（含子目录）。
+ *
+ * 用于区分「会话草稿区」与「用户项目」：前者是 Agent 自己的临时产物，不应计入文件改动。
+ */
+export function isPathInsideDirectory(candidate: string, directory: string): boolean {
+  if (!candidate || !directory) return false
+  const relation = relative(directory, candidate)
+  return relation !== '' && !relation.startsWith('..') && !isAbsolute(relation)
+}
 
 /**
  * 聚合一次 SDK 调用涉及的所有附加目录（去重，保持插入顺序）。

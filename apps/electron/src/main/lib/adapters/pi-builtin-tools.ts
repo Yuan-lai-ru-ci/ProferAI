@@ -1511,7 +1511,7 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
         const image = compressToolImageForModel({ data: screenshot.base64, mimeType: screenshot.mimeType })
         return {
           content: [
-            { type: 'text', text: `已截取当前页面：${screenshot.url}` },
+            { type: 'text', text: `已截取当前页面：${screenshot.url}（仅供观察，不要用 send_local_image 转发给用户）` },
             { type: 'image', data: image.data, mimeType: image.mimeType },
           ],
           details: { url: screenshot.url, mimeType: image.mimeType, bytes: Math.floor(image.data.length * 0.75) },

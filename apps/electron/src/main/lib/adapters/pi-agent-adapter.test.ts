@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 // 只验证 Pi 侧 AskUserQuestion 工具注册契约与权限包装闭环，不启动真实 Pi SDK。
-const { buildPromaProductToolDefinitions, shouldBlockToolForAskUserQuestion, mapSDKErrorToTypedError } = await import('./pi-agent-adapter')
+const { buildProferProductToolDefinitions, shouldBlockToolForAskUserQuestion, mapSDKErrorToTypedError } = await import('./pi-agent-adapter')
 
 interface CapturedTool {
   name: string
@@ -41,7 +41,7 @@ describe('Pi AskUserQuestion 提问闭环（工具注册契约）', () => {
   test('Given Pi runtime When building Proma product tools Then AskUserQuestion is registered with the interactive question schema', () => {
     const { sdk } = createPiSdkStub()
 
-    const definitions = buildPromaProductToolDefinitions(sdk, async () => ({ behavior: 'allow' }))
+    const definitions = buildProferProductToolDefinitions(sdk, async () => ({ behavior: 'allow' }))
 
     const askUser = (definitions as unknown as CapturedTool[]).find((tool) => tool.name === 'AskUserQuestion')
     expect(askUser).toBeDefined()
@@ -56,7 +56,7 @@ describe('Pi AskUserQuestion 提问闭环（工具注册契约）', () => {
     const { sdk } = createPiSdkStub()
     const calls: Array<{ toolName: string; input: Record<string, unknown>; toolUseID: string; displayName: string }> = []
 
-    const definitions = buildPromaProductToolDefinitions(sdk, async (toolName, input, options) => {
+    const definitions = buildProferProductToolDefinitions(sdk, async (toolName, input, options) => {
       calls.push({
         toolName,
         input,
@@ -87,7 +87,7 @@ describe('Pi AskUserQuestion 提问闭环（工具注册契约）', () => {
   test('Given 用户未回答即拒绝 When AskUserQuestion executes Then 抛出拒绝消息并中断工具执行', async () => {
     const { sdk } = createPiSdkStub()
 
-    const definitions = buildPromaProductToolDefinitions(sdk, async () => ({
+    const definitions = buildProferProductToolDefinitions(sdk, async () => ({
       behavior: 'deny',
       message: '用户取消回答',
     }))

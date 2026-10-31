@@ -18,9 +18,12 @@ import type {
 } from '@profer/shared'
 import { DINGTALK_IPC_CHANNELS } from '@profer/shared'
 import { getDecryptedBotClientSecret } from './dingtalk-config'
-import { BridgeCommandHandler, type BridgeAttachment } from './bridge-command-handler'
+import { BridgeCommandHandler, type BridgeAttachment, type BridgeChatBinding } from './bridge-command-handler'
 import { inferImageMediaType, saveImageToSession, inferExtension, MAX_IMAGE_SIZE } from './bridge-attachment-utils'
 import { getAgentWorkspace } from './agent-workspace-manager'
+import { getAgentSessionMeta } from './agent-session-manager'
+import { getDingTalkBotBindingsPath } from './config-paths'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { getSettings } from './settings-service'
 
 // ===== 类型声明 =====
@@ -119,6 +122,13 @@ class DingTalkBridge {
   /** 通用命令处理器 */
   private commandHandler: BridgeCommandHandler
 
+  /** chatId → 绑定（持久化到 ~/.profer/dingtalk-bindings-{botId}.json） */
+  private readonly chatBindings = new Map<string, BridgeChatBinding>()
+  /** sessionId → chatId 反向索引 */
+  private readonly sessionToChat = new Map<string, string>()
+  /** 绑定是否已从磁盘加载（start 可能被多次调用） */
+  private bindingsLoaded = false
+
   constructor(botConfig: DingTalkBotConfig) {
     this.botConfig = botConfig
     this.commandHandler = new BridgeCommandHandler({
@@ -150,6 +160,9 @@ class DingTalkBridge {
         },
       },
       getDefaultWorkspaceId: () => this.botConfig.defaultWorkspaceId,
+      bindings: this.chatBindings,
+      sessionToChat: this.sessionToChat,
+      afterBindingChanged: () => this.saveBindings(),
       onWorkspaceSwitched: async (workspaceId) => {
         const { saveDingTalkBotConfig } = await import('./dingtalk-config')
         saveDingTalkBotConfig({
@@ -175,6 +188,84 @@ class DingTalkBridge {
     return { ...this.state }
   }
 
+  // ===== 绑定持久化 =====
+
+  /** 从磁盘恢复聊天绑定（应用重启后延续之前的会话） */
+  private loadBindings(): void {
+    const bindingsPath = getDingTalkBotBindingsPath(this.botConfig.id)
+    if (!existsSync(bindingsPath)) return
+
+    try {
+      const bindings = JSON.parse(readFileSync(bindingsPath, 'utf-8')) as BridgeChatBinding[]
+      for (const binding of bindings) {
+        // 会话已被删除时丢弃该绑定，避免指向不存在的会话
+        if (!getAgentSessionMeta(binding.sessionId)) continue
+        this.chatBindings.set(binding.chatId, binding)
+        this.sessionToChat.set(binding.sessionId, binding.chatId)
+      }
+      if (this.chatBindings.size > 0) {
+        console.log(`[钉钉 Bridge/${this.botConfig.name}] 已恢复 ${this.chatBindings.size} 个聊天绑定`)
+      }
+    } catch (error) {
+      console.error('[钉钉 Bridge] 加载绑定失败:', error)
+    }
+  }
+
+  /** 持久化聊天绑定到磁盘 */
+  private saveBindings(): void {
+    try {
+      writeFileSync(
+        getDingTalkBotBindingsPath(this.botConfig.id),
+        JSON.stringify(Array.from(this.chatBindings.values()), null, 2),
+        'utf-8',
+      )
+    } catch (error) {
+      console.error('[钉钉 Bridge] 保存绑定失败:', error)
+    }
+  }
+
+  /** 列出当前绑定（设置页使用） */
+  listBindings(): BridgeChatBinding[] {
+    return Array.from(this.chatBindings.values())
+  }
+
+  /** 修改绑定的工作区/会话（设置页使用） */
+  updateBinding(
+    chatId: string,
+    input: { workspaceId?: string; sessionId?: string },
+  ): BridgeChatBinding | null {
+    const binding = this.chatBindings.get(chatId)
+    if (!binding) return null
+
+    if (input.workspaceId !== undefined && !getAgentWorkspace(input.workspaceId)) return null
+    if (input.sessionId !== undefined) {
+      if (!getAgentSessionMeta(input.sessionId)) return null
+      const owner = this.sessionToChat.get(input.sessionId)
+      if (owner && owner !== chatId) return null
+    }
+
+    if (input.workspaceId !== undefined) binding.workspaceId = input.workspaceId
+    if (input.sessionId !== undefined) {
+      this.sessionToChat.delete(binding.sessionId)
+      binding.sessionId = input.sessionId
+      this.sessionToChat.set(input.sessionId, chatId)
+    }
+
+    this.saveBindings()
+    return { ...binding }
+  }
+
+  /** 解除绑定（设置页使用） */
+  removeBinding(chatId: string): boolean {
+    const binding = this.chatBindings.get(chatId)
+    if (!binding) return false
+
+    this.sessionToChat.delete(binding.sessionId)
+    this.chatBindings.delete(chatId)
+    this.saveBindings()
+    return true
+  }
+
   /** 启动 Stream 连接 */
   async start(): Promise<void> {
     if (!this.botConfig.clientId || !this.botConfig.clientSecret) {
@@ -184,6 +275,11 @@ class DingTalkBridge {
     // 如果已连接，先停止
     if (this.client) {
       this.stop()
+    }
+
+    if (!this.bindingsLoaded) {
+      this.loadBindings()
+      this.bindingsLoaded = true
     }
 
     this.updateStatus({ status: 'connecting' })

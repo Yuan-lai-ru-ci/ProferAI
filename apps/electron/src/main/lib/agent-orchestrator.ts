@@ -181,7 +181,7 @@ import {
   MAX_CONTEXT_MESSAGES,
 } from './agent-prompt-utils'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
-import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
+import { collectAttachedDirectories, collectProductArtifactDirectories, isPathInsideDirectory } from './agent-directory-utils'
 import { resolveHostAgentRuntimeEnv } from './agent-runtime-env-host'
 import { buildAgentSdkEnv } from './agent-sdk-env'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
@@ -1111,10 +1111,13 @@ export class AgentOrchestrator {
     // 5. 持久化用户消息（SDKMessage 格式）——在所有 preflight 检查之前写入。
     // Goal 内部 turn 使用 internalPrompt，仅供 runtime 消费，不写入 Profer 普通对话 transcript。
     if (!input.suppressUserMessagePersistence) {
+      // 气泡/transcript 只存用户原文：IM 桥与桌面都会把 prompt 工程块放进 userMessage，
+      // 直接持久化会让桌面端看到一大段本应对用户不可见的注入内容。
+      const displayText = input.rawUserMessage ?? userMessage
       const userSDKMsg: SDKMessage = {
         type: 'user',
         message: {
-          content: [{ type: 'text', text: userMessage }],
+          content: [{ type: 'text', text: displayText }],
         },
         parent_tool_use_id: null,
         // 1.7.1：透传前端预生成的 uuid，使乐观气泡与持久化消息可按 uuid 匹配去重
@@ -2075,6 +2078,9 @@ export class AgentOrchestrator {
             executionResultsByToolUse.set(toolCallId, result)
           },
           onFileWrite: (toolCallId: string, fact: { path: string; source: string }) => {
+            // 会话工作目录是 Agent 的草稿区：截图、临时产物、.context 草稿都不是用户要 review 的改动。
+            // 在这里就不入账，历史记录与 chip 都不会被草稿污染。
+            if (isPathInsideDirectory(fact.path, agentCwd)) return
             const existing = fileWritesByToolUse.get(toolCallId) ?? []
             if (!existing.some((item) => item.path === fact.path)) {
               existing.push(fact)

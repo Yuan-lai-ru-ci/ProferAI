@@ -119,12 +119,13 @@ describe('sidebarRowClass — 侧栏行视觉契约', () => {
 
   test('Given 项目行 When 生成 Then 常显底色比会话行深、当前项目更深', () => {
     const project = sidebarRowClass({ tall: true })
-    expect(project).toContain('bg-foreground/[0.05]')
+    // 用行首/空格边界匹配：默认行与 muted 行带 hover:bg-foreground/[0.04]，只比子串会误判
+    expect(project).toMatch(/(?:^|\s)bg-foreground\/\[0\.04\]/)
     expect(project).toContain('hover:bg-foreground/[0.07]')
 
     const currentProject = sidebarRowClass({ tall: true, active: true })
     expect(currentProject).toContain('bg-foreground/[0.09]')
     // 入口行（非会话、非项目）保持无底色
-    expect(sidebarRowClass()).not.toContain('bg-foreground/[0.05]')
+    expect(sidebarRowClass()).not.toMatch(/(?:^|\s)bg-foreground\/\[0\.04\]/)
   })
 })

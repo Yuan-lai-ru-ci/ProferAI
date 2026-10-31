@@ -131,6 +131,14 @@ export function formatAgentPreviewToolResult(result: PreviewInspectionResult): A
   for (const image of includedImages) {
     content.push({ type: 'image', data: image.data, mimeType: image.mediaType })
   }
+  if (includedImages.length > 0) {
+    // 观察图属于思考过程：模型自己看即可，不要用 send_local_image 转发到会话回复里。
+    // 这条约束紧跟在图片后面，是模型最容易遵守的位置。
+    content.push({
+      type: 'text',
+      text: '[Profer] 以上图片仅供你观察核验，属于思考过程，不要用 send_local_image 转发给用户；只有用户明确要求查看这张图时才单独发送。',
+    })
+  }
   if (includedImages.length < images.length) {
     content.push({
       type: 'text',

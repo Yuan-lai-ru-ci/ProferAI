@@ -1428,8 +1428,15 @@ export type AgentGoalContinuation =
 export interface AgentSendInput {
   /** 会话 ID */
   sessionId: string
-  /** 用户消息内容 */
+  /** 用户消息内容（发给模型，可能含 prompt 工程块） */
   userMessage: string
+  /**
+   * 原始用户输入（仅用于持久化 / 气泡展示）；省略时回退到 userMessage。
+   *
+   * IM 桥会把 bridge_context、引用消息、附件路径等工程块拼进 userMessage，
+   * 若不单独提供本字段，桌面端会话里会直接看到这一大段注入内容。
+   */
+  rawUserMessage?: string
   /** 渠道 ID（用于获取 API Key） */
   channelId: string
   /** 模型 ID */

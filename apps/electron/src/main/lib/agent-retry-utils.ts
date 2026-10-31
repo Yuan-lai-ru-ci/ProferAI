@@ -4,7 +4,7 @@
  * 从 agent-orchestrator.ts 提取的纯函数，用于自动重试决策和延迟计算。
  */
 import type { TypedError, ProferPermissionMode } from '@profer/shared'
-import { PROFER_PERMISSION_MODE_CONFIG } from '@profer/shared'
+import { PROFER_PERMISSION_MODE_CONFIG, OPENAI_UPSTREAM_BUSY_MESSAGE } from '@profer/shared'
 import { isTransientNetworkError, isMalformedResponseError, isTransientUpstreamText, classifyNetworkError, getCategoryRetryDelayMultiplier, type NetworkErrorCategory } from './error-patterns'
 
 /** 可自动重试的 TypedError 错误码 */
@@ -83,10 +83,10 @@ export function isAutoRetryableTypedError(error: TypedError): boolean {
 }
 
 /**
- * OpenAI 官方上游繁忙时统一使用面向用户的提示，避免把网关/SDK 原始文案
- * 误解为账户或卡扣问题。只对明确的官方上游过载语义命中，不影响其他渠道。
+ * OpenAI 官方上游繁忙时统一使用面向用户的提示（单一事实源在 @profer/shared），
+ * 避免把网关/SDK 原始文案误解为账户或本地配置问题。
  */
-export const OPENAI_UPSTREAM_BUSY_MESSAGE = 'OpenAI 官方上游服务当前请求量较大，暂时无法及时响应，本次情况与您的账户及卡扣AI无关，请稍候片刻后再重试。'
+export { OPENAI_UPSTREAM_BUSY_MESSAGE }
 
 export function isOpenAIUpstreamBusyError(provider: string | undefined, ...messages: Array<string | undefined>): boolean {
   const text = messages.filter(Boolean).join('\n')

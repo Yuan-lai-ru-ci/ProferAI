@@ -8,7 +8,7 @@ import { createEffectiveAgentPresetPolicy } from '@profer/shared'
 import type { ClaudeSdkModule } from '@profer/agent-provider-claude'
 import { prepareAgentSkillRouting, buildSkillRuntimeOptions } from './skill-runtime-routing'
 import { routeSkillsForTask } from './skill-routing'
-import { createPromaSkillsOverride, preparePromptWithPromaSkills } from './adapters/pi-skill-resources'
+import { createProferSkillsOverride, preparePromptWithProferSkills } from './adapters/pi-skill-resources'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 
 let captured: { options: Record<string, unknown>; prompt: unknown } | undefined
@@ -36,7 +36,7 @@ async function prepare(slugs: string[]) {
   const policy = createEffectiveAgentPresetPolicy({ id: 'test', name: 'test', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0, skillSlugs: slugs, disabledToolGroups: ['automation'] }, { presetId: 'test', presetScope: 'workspace', workspaceSlug: 'ws' }, { runtimeSupportsSubagents: true })
   const routing = await prepareAgentSkillRouting({ projection: { path: root, skills, diagnostics: [] }, policy, toolNames: ['Read', 'Bash'] })
   const runtime = buildSkillRuntimeOptions(routing)
-  const loader = new DefaultResourceLoader({ cwd: root, agentDir: root, noContextFiles: true, noExtensions: true, noSkills: true, additionalSkillPaths: [], settingsManager: SettingsManager.inMemory(), skillsOverride: createPromaSkillsOverride(runtime.additionalSkillPaths, runtime.skillSlugs, loadSkillsFromDir) })
+  const loader = new DefaultResourceLoader({ cwd: root, agentDir: root, noContextFiles: true, noExtensions: true, noSkills: true, additionalSkillPaths: [], settingsManager: SettingsManager.inMemory(), skillsOverride: createProferSkillsOverride(runtime.additionalSkillPaths, runtime.skillSlugs, loadSkillsFromDir) })
   await loader.reload()
   return { root, routing, runtime, loader }
 }
@@ -80,7 +80,7 @@ describe('共享策略 → 实际 adapter/SDK Skill 链路', () => {
       cwd: root, agentDir: root, noContextFiles: true, noExtensions: true, noSkills: true,
       noThemes: true, noPromptTemplates: true, appendSystemPrompt: [], additionalSkillPaths: [],
       settingsManager: SettingsManager.inMemory(),
-      skillsOverride: createPromaSkillsOverride(runtime.additionalSkillPaths, runtime.skillSlugs, loadSkillsFromDir),
+      skillsOverride: createProferSkillsOverride(runtime.additionalSkillPaths, runtime.skillSlugs, loadSkillsFromDir),
       systemPromptOverride: () => runtime.skillCatalogPrompt,
     })
     await loader.reload()
@@ -108,7 +108,7 @@ describe('共享策略 → 实际 adapter/SDK Skill 链路', () => {
       const route = routeSkillsForTask(routing.snapshot, { userMessage: '/skill:beta', maxRecommendations: 0 })
       expect(route.prompt.match(/SECRET_beta/g)).toHaveLength(1)
       expect(route.prompt).not.toContain('SECRET_pdf')
-      expect(await preparePromptWithPromaSkills(loader, route.prompt, runtime.skillMentions)).toBe(route.prompt)
+      expect(await preparePromptWithProferSkills(loader, route.prompt, runtime.skillMentions)).toBe(route.prompt)
     } finally {
       legacySession.dispose()
       session.dispose()

@@ -8,6 +8,7 @@ import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { Plus, Search, FolderOpen, Archive, ArchiveRestore, ArrowLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { Popover, PopoverTrigger, PopoverContent } from '@profer/ui/primitives/popover'
 import { ModeSwitcher } from '../ModeSwitcher'
@@ -154,7 +155,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
             <span className={SIDEBAR_SECTION_TITLE_CLASS}>当前会话</span>
             <span className="text-[10.5px] tabular-nums text-foreground/[0.26]">{openSessionEntries.length}</span>
           </div>
-          <div className={cn('sidebar-session-scroll flex max-h-[144px] flex-col gap-px overflow-y-auto scrollbar-thin')}>
+          <ScrollRegion className={cn('sidebar-session-scroll flex max-h-[144px] flex-col gap-px overflow-y-auto scrollbar-thin')}>
             {openSessionEntries.map((entry) => {
               const { tab } = entry
               const active = tab.sessionId === activeSessionId
@@ -208,7 +209,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                 />
               )
             })}
-          </div>
+          </ScrollRegion>
         </div>
       )}
 
@@ -220,7 +221,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
               <div className={cn('flex h-[26px] items-center px-2', SIDEBAR_SECTION_TITLE_CLASS)}>
                 置顶
               </div>
-              <div
+              <ScrollRegion
                 className="sidebar-session-scroll overflow-y-auto scrollbar-thin"
                 style={{ maxHeight: PINNED_SESSION_MAX_HEIGHT }}
               >
@@ -244,7 +245,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                     />
                   ))}
                 </div>
-              </div>
+              </ScrollRegion>
             </div>
           )}
 
@@ -252,7 +253,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
             <span className={SIDEBAR_SECTION_TITLE_CLASS}>对话</span>
           </div>
 
-          <div className="sidebar-session-scroll min-h-0 flex-1 overflow-y-auto pb-2 scrollbar-thin titlebar-no-drag">
+          <ScrollRegion className="sidebar-session-scroll min-h-0 flex-1 overflow-y-auto pb-2 scrollbar-thin titlebar-no-drag">
             {progressiveConversationGroups.map((group) => (
               <div key={group.label} className="mb-1">
                 <div className={cn('flex h-[26px] items-center px-2', SIDEBAR_SECTION_TITLE_CLASS)}>
@@ -280,7 +281,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                 </div>
               </div>
             ))}
-          </div>
+          </ScrollRegion>
         </div>
       ) : mode === 'agent' && viewMode === 'active' ? (
         <div className="flex-1 flex flex-col min-h-0">
@@ -356,7 +357,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
             </div>
           </div>
 
-          <div className="sidebar-session-scroll min-h-0 flex-1 overflow-y-auto pb-2 scrollbar-thin titlebar-no-drag">
+          <ScrollRegion className="sidebar-session-scroll min-h-0 flex-1 overflow-y-auto pb-2 scrollbar-thin titlebar-no-drag">
             {creatingProject && (
               <div className="flex items-center gap-2 px-2 py-1.5 mb-1 rounded-md bg-foreground/[0.04]">
                 <FolderOpen size={14} className="flex-shrink-0 text-foreground/40" />
@@ -419,7 +420,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                 />
               ))}
             </div>
-          </div>
+          </ScrollRegion>
         </div>
       ) : (
         <>
@@ -433,7 +434,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
           )}
 
           {/* 归档视图：单列表布局 */}
-          <div className="sidebar-session-scroll flex-1 overflow-y-auto pb-2 pt-1 scrollbar-thin titlebar-no-drag">
+          <ScrollRegion className="sidebar-session-scroll flex-1 overflow-y-auto pb-2 pt-1 scrollbar-thin titlebar-no-drag">
             {mode === 'chat' ? (
               /* Chat 归档：对话按日期分组 */
               progressiveConversationGroups.map((group) => (
@@ -497,7 +498,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                 </div>
               ))
             )}
-          </div>
+          </ScrollRegion>
         </>
       )}
 

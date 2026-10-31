@@ -64,6 +64,12 @@ export function BotDefaultSettings(): React.ReactElement {
         title="默认配置"
         description="所有机器人平台发起新会话时使用的默认设置"
       >
+        <div className="mb-3 rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
+          工作区按三层决定，优先级从高到低：
+          <br />1. 该聊天的绑定（在「远程连接」对应平台的「聊天绑定」里查看或解除）
+          <br />2. 该 Bot 的默认工作区（在聊天里用 <code className="font-mono">/ws</code> 切换会写回 Bot 配置）
+          <br />3. 这里的全局默认工作区（上面两层都没设置时才生效）
+        </div>
         <SettingsCard>
           {workspaceOptions.length > 0 ? (
             <SettingsSelect

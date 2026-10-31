@@ -46,7 +46,7 @@ function diagnostic(message: string): SkillLoadResult['diagnostics'][number] {
  * 在 override 中逐目录调用 SDK parser，恢复 loadSkills 按 name 去重丢失的项。
  * base 的无盘上文件 fixture 仍可使用两参数同步接口；盘上加载注入已动态 import 的 SDK parser。
  */
-export function createPromaSkillsOverride(
+export function createProferSkillsOverride(
   additionalSkillPaths: string[] | undefined,
   skillSlugs?: string[],
   loadDirectory?: SkillDirectoryLoader,
@@ -153,7 +153,7 @@ export function preparePromptForPiSkillQueue(prompt: string): string {
 }
 
 /** [] 显式不引用；只有 undefined 才保留 direct adapter 的旧 prompt 扫描行为。 */
-export async function preparePromptWithPromaSkills(resourceLoader: ResourceLoader, prompt: string, explicitSkillNames?: string[]): Promise<string> {
+export async function preparePromptWithProferSkills(resourceLoader: ResourceLoader, prompt: string, explicitSkillNames?: string[]): Promise<string> {
   const names = explicitSkillNames ?? [...prompt.matchAll(SKILL_COMMAND_PATTERN)].map((match) => match[1]!)
   if (names.length === 0) return prompt
   try {

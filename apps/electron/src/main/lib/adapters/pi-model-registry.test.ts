@@ -7,7 +7,7 @@ import {
   getCodexCatalogModels,
   listCodexModels,
   normalizePiApi,
-  requiresPromaUserAgent,
+  requiresWhitelistUserAgent,
   resolvePiApiKey,
   stripAgentSdkContextSuffix,
 } from './pi-model-registry'
@@ -82,7 +82,7 @@ describe('Pi runtime 智谱团队版认证', () => {
     expect(resolvePiApiKey('zhipu-coding-team', secret)).toBe('model-key')
   })
 
-  test('Given 团队版复合凭据 When buildPiRequestHeaders Then Bearer 头只含真实 token 且带 Proma UA', () => {
+  test('Given 团队版复合凭据 When buildPiRequestHeaders Then Bearer 头只含真实 token 且带白名单 UA', () => {
     const secret = 'apiKey=model-key; bigmodel_organization=org'
     const resolved = resolvePiApiKey('zhipu-coding-team', secret)
 
@@ -93,17 +93,17 @@ describe('Pi runtime 智谱团队版认证', () => {
     expect(headers?.['User-Agent']).toBeDefined()
   })
 
-  test('Given zhipu-coding-team When requiresPromaUserAgent Then true', () => {
-    expect(requiresPromaUserAgent('zhipu-coding-team')).toBe(true)
+  test('Given zhipu-coding-team When requiresWhitelistUserAgent Then true', () => {
+    expect(requiresWhitelistUserAgent('zhipu-coding-team')).toBe(true)
   })
 
-  test.each(['kimi-coding', 'zhipu-coding', 'xiaomi-token-plan'] as const)('Given %s When requiresPromaUserAgent Then true', (provider) => {
-      expect(requiresPromaUserAgent(provider)).toBe(true)
+  test.each(['kimi-coding', 'zhipu-coding', 'xiaomi-token-plan'] as const)('Given %s When requiresWhitelistUserAgent Then true', (provider) => {
+      expect(requiresWhitelistUserAgent(provider)).toBe(true)
   })
 
   test('Given 普通 anthropic 渠道 When resolvePiApiKey Then 原样返回', () => {
     expect(resolvePiApiKey('anthropic', 'plain-key')).toBe('plain-key')
-    expect(requiresPromaUserAgent('anthropic')).toBe(false)
+    expect(requiresWhitelistUserAgent('anthropic')).toBe(false)
   })
 
   test('Given Ollama Agent When resolving empty key Then use local sentinel', () => {

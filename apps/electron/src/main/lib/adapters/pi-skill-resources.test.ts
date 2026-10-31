@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ResourceLoader, Skill } from '@earendil-works/pi-coding-agent'
-import { createPromaSkillsOverride, preparePromptForPiSkillQueue, preparePromptWithPromaSkills } from './pi-skill-resources'
+import { createProferSkillsOverride, preparePromptForPiSkillQueue, preparePromptWithProferSkills } from './pi-skill-resources'
 
 const roots: string[] = []
 function root(): string {
@@ -24,7 +24,7 @@ async function loader(path: string, slugs?: string[]) {
   return new sdk.DefaultResourceLoader({ cwd: path, agentDir: join(path, '.agent'),
     settingsManager: sdk.SettingsManager.inMemory(), noExtensions: true, noSkills: true,
     noContextFiles: true, noThemes: true, noPromptTemplates: true, appendSystemPrompt: [],
-    additionalSkillPaths: [], skillsOverride: createPromaSkillsOverride([path], slugs, sdk.loadSkillsFromDir) })
+    additionalSkillPaths: [], skillsOverride: createProferSkillsOverride([path], slugs, sdk.loadSkillsFromDir) })
 }
 afterEach(() => {
   for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true })
@@ -60,7 +60,7 @@ describe('Pi Skill 安全边界', () => {
 
   test('缺失/不可读根目录返回无路径诊断，不抛异常', () => {
     const path = root()
-    const result = createPromaSkillsOverride([join(path, 'missing')])({ skills: [], diagnostics: [] })
+    const result = createProferSkillsOverride([join(path, 'missing')])({ skills: [], diagnostics: [] })
     expect(result.skills).toEqual([])
     expect(result.diagnostics.length).toBeGreaterThan(0)
     expect(JSON.stringify(result.diagnostics)).not.toContain(path)
@@ -77,7 +77,7 @@ describe('Pi Skill 安全边界', () => {
       await resource.reload()
       expect(resource.getSkills().skills).toEqual([])
       expect(resource.getSkills().diagnostics.length).toBeGreaterThan(0)
-      expect(await preparePromptWithPromaSkills(resource, '继续普通任务', ['unreadable']))
+      expect(await preparePromptWithProferSkills(resource, '继续普通任务', ['unreadable']))
         .toContain('继续普通任务')
     } finally {
       chmodSync(skill.filePath, 0o600)
@@ -90,10 +90,10 @@ describe('Pi Skill 安全边界', () => {
     writeSkill(path, 'beta', 'common')
     writeSkill(path, 'common', 'another-label')
     const resource = await loader(path)
-    const canonical = await preparePromptWithPromaSkills(resource, '任务', ['common'])
+    const canonical = await preparePromptWithProferSkills(resource, '任务', ['common'])
     expect(canonical).toContain('正文 common')
     expect(canonical).not.toContain('正文 alpha')
-    const ambiguous = await preparePromptWithPromaSkills(await loader(path, ['alpha', 'beta']), '任务', ['common'])
+    const ambiguous = await preparePromptWithProferSkills(await loader(path, ['alpha', 'beta']), '任务', ['common'])
     expect(ambiguous).toContain('多个匹配项')
     expect(ambiguous).not.toContain('<skill name=')
     expect(ambiguous).not.toContain(path)
@@ -103,8 +103,8 @@ describe('Pi Skill 安全边界', () => {
     const path = root()
     writeSkill(path, 'profer-coach', '教练')
     const resource = await loader(path, ['proma-coach'])
-    expect(await preparePromptWithPromaSkills(resource, '任务', ['教练'])).toContain('<skill name="profer-coach"')
-    expect(await preparePromptWithPromaSkills(resource, '任务', ['proma-coach'])).toContain('正文 profer-coach')
+    expect(await preparePromptWithProferSkills(resource, '任务', ['教练'])).toContain('<skill name="profer-coach"')
+    expect(await preparePromptWithProferSkills(resource, '任务', ['proma-coach'])).toContain('正文 profer-coach')
   })
 
   test('同目录 slug 跨根冲突不任意选赢家', async () => {
@@ -113,7 +113,7 @@ describe('Pi Skill 安全边界', () => {
     const second = root()
     writeSkill(first, 'same')
     writeSkill(second, 'same')
-    const result = createPromaSkillsOverride([first, second], undefined, loadSkillsFromDir)({ skills: [], diagnostics: [] })
+    const result = createProferSkillsOverride([first, second], undefined, loadSkillsFromDir)({ skills: [], diagnostics: [] })
     expect(result.skills).toEqual([])
     expect(result.diagnostics.length).toBeGreaterThan(0)
     expect(JSON.stringify(result.diagnostics)).not.toContain(first)
@@ -142,7 +142,7 @@ describe('Pi Skill 安全边界', () => {
       await session.steer(original)
       expect(session.getSteeringMessages()[0]).toContain('正文 alpha')
       session.clearQueue()
-      const prepared = await preparePromptWithPromaSkills(resource, original, [])
+      const prepared = await preparePromptWithProferSkills(resource, original, [])
       await session.steer(preparePromptForPiSkillQueue(prepared))
       await session.followUp(preparePromptForPiSkillQueue(prepared))
       expect(session.getSteeringMessages()[0]).toBe(`\n${original}`)
@@ -159,8 +159,8 @@ describe('Pi Skill 安全边界', () => {
     const resource = await loader(path, ['alpha'])
     for (const punctuation of ['，', '。', '；', '！', '？', '、', ',', ';', '!', '?', ')', ']', '”', '’']) {
       const prompt = `/skill:alpha${punctuation}继续`
-      expect(await preparePromptWithPromaSkills(resource, prompt)).toContain('正文 alpha')
-      expect(await preparePromptWithPromaSkills(resource, prompt, [])).toBe(prompt)
+      expect(await preparePromptWithProferSkills(resource, prompt)).toContain('正文 alpha')
+      expect(await preparePromptWithProferSkills(resource, prompt, [])).toBe(prompt)
     }
   })
 
@@ -168,7 +168,7 @@ describe('Pi Skill 安全边界', () => {
     const path = root()
     writeSkill(path, 'alpha')
     const resource = await loader(path, ['alpha'])
-    const result = await preparePromptWithPromaSkills(resource, '/skill:alpha:daily')
+    const result = await preparePromptWithProferSkills(resource, '/skill:alpha:daily')
     expect(result).toContain('Skill 引用诊断')
     expect(result).not.toContain('正文 alpha')
   })
@@ -181,8 +181,8 @@ describe('Pi Skill 安全边界', () => {
     })
     resource.reload = async () => { throw new Error('私有路径 /secret/path') }
     const prompt = '任务含 /skill:secret'
-    expect(await preparePromptWithPromaSkills(resource, prompt, [])).toBe(prompt)
-    const result = await preparePromptWithPromaSkills(resource, prompt, ['secret'])
+    expect(await preparePromptWithProferSkills(resource, prompt, [])).toBe(prompt)
+    const result = await preparePromptWithProferSkills(resource, prompt, ['secret'])
     expect(result).toContain('Skill 引用诊断')
     expect(result).toContain(prompt)
     expect(result).not.toContain('/secret/path')

@@ -1,5 +1,5 @@
 import type { ProviderType } from '@profer/shared'
-import { getProferUserAgent } from '@profer/core/providers'
+import { getWhitelistCompatUserAgent } from '@profer/core/providers'
 
 /**
  * Claude Agent SDK 认证环境。
@@ -9,7 +9,7 @@ import { getProferUserAgent } from '@profer/core/providers'
  * 显式传入应用版本以保持既有 User-Agent 行为逐字节一致。
  */
 
-/** 这些 Anthropic-compatible 计划渠道要求 Bearer token 和固定 User-Agent。 */
+/** 这些 Anthropic-compatible 计划渠道要求 Bearer token 和固定 User-Agent（白名单登记的是旧产品名）。 */
 export function usesAgentSdkBearerWithUserAgent(provider: ProviderType): boolean {
   return provider === 'kimi-coding'
     || provider === 'zhipu-coding'
@@ -41,7 +41,7 @@ export function applyAgentSdkAuthEnv(
   if (forceBearerAuth || usesAgentSdkBearerWithUserAgent(provider)) {
     target.ANTHROPIC_AUTH_TOKEN = apiKey
     if (usesAgentSdkBearerWithUserAgent(provider)) {
-      target.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getProferUserAgent(userAgentVersion)}`
+      target.ANTHROPIC_CUSTOM_HEADERS = `User-Agent: ${getWhitelistCompatUserAgent(userAgentVersion)}`
     }
     return
   }

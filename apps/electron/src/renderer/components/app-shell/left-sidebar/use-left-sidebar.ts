@@ -122,7 +122,7 @@ import {
   PROJECT_SESSION_EXPAND_STEP,
   sortProjectSessions,
 } from './session-tree'
-import { focusEnterableViewItem, planningSectionOf } from './navigation-items'
+import { enterableViewSelector, focusEnterableViewItem, planningSectionOf } from './navigation-items'
 import type { AgentProjectGroup } from './session-items'
 
 
@@ -232,13 +232,14 @@ export function useLeftSidebar() {
         current.click()
         return true
       }
-      // 全屏可进入视图（规划中心三入口 / Agent 技能）的“进入/返回”：
+      // 全屏可进入视图（规划中心三入口 / Agent 技能 / Agent 记忆）的“进入/返回”：
       // - right（→/手柄右拨）：进入对应视图并移交焦点进内容区；已激活则只移交焦点，
       //   绝不靠再次 right 切回对话区（否则会“按一下右又跳回对话”）。
       // - left（←）：仅当已在对应视图时返回对话区（复用 onClick toggle 语义）。
       const navItem = current.dataset.proferNavigationItem
       const planningSection = planningSectionOf(navItem)
-      if ((planningSection || navItem === 'agent-skills') && (action === 'left' || action === 'right')) {
+      const isEnterableView = Boolean(navItem && enterableViewSelector(navItem))
+      if ((planningSection || isEnterableView) && (action === 'left' || action === 'right')) {
         // 规划中心三个入口共享 activeView='planning'，选中态还要看当前分区，
         // 否则在 Todo 页按 → 到「日程」只会移交焦点而不切分区。
         const isActive = planningSection
@@ -679,6 +680,15 @@ export function useLeftSidebar() {
       return
     }
     setActiveView('agent-skills')
+  }, [activeView, setActiveView])
+
+  /** 打开 Agent 记忆视图（与技能页同一套 toggle 语义：再次点击回对话列表） */
+  const handleOpenMemory = React.useCallback((): void => {
+    if (activeView === 'agent-memory') {
+      setActiveView('conversations')
+      return
+    }
+    setActiveView('agent-memory')
   }, [activeView, setActiveView])
 
   // 切换模式时重置归档视图
@@ -1742,6 +1752,7 @@ export function useLeftSidebar() {
     capabilities,
     handleOpenPlanning,
     handleOpenSkills,
+    handleOpenMemory,
 
     // tab 状态
     tabs,

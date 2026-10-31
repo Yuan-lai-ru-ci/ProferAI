@@ -8,13 +8,14 @@
 import * as React from 'react'
 import { useAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Loader2, Power, PowerOff, LogOut, QrCode, ExternalLink } from 'lucide-react'
+import { Loader2, Power, PowerOff, LogOut, QrCode, ExternalLink, ChevronRight } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { SettingsSection } from './primitives/SettingsSection'
 import { SettingsCard } from './primitives/SettingsCard'
 import { SettingsRow } from './primitives/SettingsRow'
 import { wechatBridgeStateAtom } from '@/atoms/wechat-atoms'
-import type { WeChatBridgeStatus } from '@profer/shared'
+import { ImBindingsPanel } from './ImBindingsPanel'
+import type { WeChatBridgeStatus, WeChatChatBinding } from '@profer/shared'
 import { IntegrationSettingsFeedback, useIntegrationAction } from './IntegrationSettingsFeedback'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@profer/ui/primitives/alert-dialog'
 
@@ -40,7 +41,33 @@ export function WeChatSettings(): React.ReactElement {
   const [loadError, setLoadError] = React.useState('')
   const [actionError, setActionError] = React.useState('')
   const [logoutOpen, setLogoutOpen] = React.useState(false)
+  const [bindings, setBindings] = React.useState<WeChatChatBinding[]>([])
+  const [bindingsLoading, setBindingsLoading] = React.useState(true)
+  const [bindingsError, setBindingsError] = React.useState('')
   const { busy, run } = useIntegrationAction()
+
+  const refreshBindings = React.useCallback(async () => {
+    setBindingsError('')
+    setBindingsLoading(true)
+    try {
+      setBindings(await window.electronAPI.listWeChatBindings())
+    } catch {
+      setBindingsError('无法读取聊天绑定，请重试。')
+    } finally {
+      setBindingsLoading(false)
+    }
+  }, [])
+
+  const removeBinding = React.useCallback(async (chatId: string) => {
+    try {
+      await window.electronAPI.removeWeChatBinding(chatId)
+      await refreshBindings()
+    } catch {
+      setBindingsError('解除绑定失败，请重试。')
+    }
+  }, [refreshBindings])
+
+  React.useEffect(() => { void refreshBindings() }, [refreshBindings])
   const loginGeneration = React.useRef(0)
 
   // 加载配置和状态
@@ -301,6 +328,25 @@ export function WeChatSettings(): React.ReactElement {
           </div>
         </SettingsCard>
       </SettingsSection>
+
+      <details className="group rounded-lg border border-border/60 bg-muted/10">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
+          <span>聊天绑定</span>
+          <ChevronRight size={16} className="text-muted-foreground transition-transform group-open:rotate-90" />
+        </summary>
+        <div className="border-t border-border/50 px-4 py-4">
+          <ImBindingsPanel
+            title="微信聊天绑定"
+            description="每个微信联系人对应一个 Profer 工作区与会话；解除后下次发消息会重新创建"
+            bindings={bindings}
+            loading={bindingsLoading}
+            error={bindingsError}
+            emptyHint="暂无聊天绑定。在微信里给机器人发一条消息后会自动创建。"
+            onRefresh={() => void refreshBindings()}
+            onRemove={removeBinding}
+          />
+        </div>
+      </details>
     </div>
   )
 }

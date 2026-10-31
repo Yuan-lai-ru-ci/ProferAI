@@ -4,7 +4,7 @@
  * 侧栏改成「rail 常驻 + 列表可收起」后，rail 是唯一的全局导航层：
  *   panel toggle
  *   ── Agent / Chat
- *   ── Todo / 日程 / 定时任务 / Agent 技能 / 插件
+ *   ── Todo / 日程 / 定时任务 / Agent 技能 / Agent 记忆 / 插件
  *   （弹性留白）
  *   余额 / 头像（设置）
  *
@@ -17,7 +17,7 @@
 
 import * as React from 'react'
 import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
-import { PanelLeftClose, PanelLeftOpen, Bot, MessageSquare, Plus, Search, CalendarDays, Clock, ListTodo, Blocks } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Bot, MessageSquare, Plus, Search, CalendarDays, Clock, ListTodo, Blocks, Brain } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { CollapsedWorkspacePopover } from '@/components/agent/CollapsedWorkspacePopover'
@@ -50,6 +50,7 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
     handleOpenPlanning,
     activeView,
     handleOpenSkills,
+    handleOpenMemory,
     capabilities,
     setSettingsOpen,
     userProfile,
@@ -151,9 +152,10 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
         <RailSeparator className="mt-[2px]" />
       )}
 
-      {/* 功能入口：Todo / 日程 / 定时任务 / Agent 技能 / 插件页面。
+      {/* 功能入口：Todo / 日程 / 定时任务 / Agent 技能 / Agent 记忆 / 插件页面。
           规划中心原先是一个入口 + 内部三个 tab；拆分后 rail 直接给出三个并列入口，
-          主窗口内的 tab 条随之下线（独立规划窗口仍保留 tab）。 */}
+          主窗口内的 tab 条随之下线（独立规划窗口仍保留 tab）。
+          记忆原先也是技能页里的一个 tab，拆出来后与技能页并列，不再需要先进能力管理页。 */}
       <SidebarRailEntry
         icon={<ListTodo size={19} />}
         label={`Todo，${todoOpenCount} 项待完成`}
@@ -187,6 +189,16 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
           dot={skillsUpdateCount > 0}
           onClick={handleOpenSkills}
           navigationItem="agent-skills"
+        />
+      )}
+      {mode === 'agent' && (
+        <SidebarRailEntry
+          icon={<Brain size={19} />}
+          label="Agent 记忆"
+          tooltip="Agent 记忆（工作区长期记忆）"
+          active={activeView === 'agent-memory'}
+          onClick={handleOpenMemory}
+          navigationItem="agent-memory"
         />
       )}
       <PluginSidebarEntries collapsed />

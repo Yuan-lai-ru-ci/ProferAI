@@ -1207,6 +1207,7 @@ export function isImageFile(filename: string): boolean {
 /** 图片附件缩略图，点击可预览大图 */
 function AttachedImageThumb({ file }: { file: AttachedFileRef }): React.ReactElement {
   const [imageSrc, setImageSrc] = React.useState<string | null>(null)
+  const [loadFailed, setLoadFailed] = React.useState(false)
   const [lightboxOpen, setLightboxOpen] = React.useState(false)
 
   React.useEffect(() => {
@@ -1217,15 +1218,34 @@ function AttachedImageThumb({ file }: { file: AttachedFileRef }): React.ReactEle
     }
     const mediaType = mimeMap[ext] ?? 'image/png'
 
+    setLoadFailed(false)
     window.electronAPI
       .readAttachment(file.path)
       .then((base64) => setImageSrc(`data:${mediaType};base64,${base64}`))
-      .catch((err) => console.error('[AttachedImageThumb] 读取附件失败:', err))
+      .catch((err) => {
+        console.error('[AttachedImageThumb] 读取附件失败:', err)
+        setLoadFailed(true)
+      })
   }, [file.path, file.filename])
 
   const handleSave = React.useCallback((): void => {
     window.electronAPI.saveImageAs(file.path, file.filename)
   }, [file.path, file.filename])
+
+  // 附件可能已被删除（模型清理临时文件时误删、会话目录被手动清理）。
+  // 这里必须给出明确状态：无限 skeleton 会让用户以为 Profer 连自己的截图都渲染不了。
+  if (loadFailed) {
+    return (
+      <div
+        className="inline-flex max-w-[260px] items-center gap-2 rounded-lg border border-dashed border-surface-border/70 bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground"
+        title={`附件文件已丢失：${file.path}`}
+      >
+        <FileImage className="size-4 shrink-0 opacity-70" />
+        <span className="truncate">{file.filename}</span>
+        <span className="shrink-0 text-muted-foreground/70">文件已丢失</span>
+      </div>
+    )
+  }
 
   if (!imageSrc) {
     return <div className="w-[200px] h-[140px] rounded-lg bg-muted/30 animate-pulse shrink-0" />
@@ -1785,7 +1805,7 @@ function getAssistantMessageIdentity(message: SDKAssistantMessage): string {
 export function getGroupId(group: MessageGroup): string {
   if (group.type === 'user') {
     if (group.message.uuid) return group.message.uuid
-    const stableKey = (group.message as unknown as Record<string, unknown>)._promaStableKey
+    const stableKey = (group.message as unknown as Record<string, unknown>)._proferStableKey
     if (typeof stableKey === 'string') return stableKey
     // 没有 uuid：使用基于 message 对象引用的缓存 ID（message 引用在重渲染间稳定）
     if (!messageIdCache.has(group.message)) {
@@ -1802,7 +1822,7 @@ export function getGroupId(group: MessageGroup): string {
   // assistant-turn：取首条 assistant 消息的 uuid
   const first = group.assistantMessages[0]
   if (first?.uuid) return first.uuid
-  const stableKey = first ? (first as unknown as Record<string, unknown>)._promaStableKey : undefined
+  const stableKey = first ? (first as unknown as Record<string, unknown>)._proferStableKey : undefined
   if (typeof stableKey === 'string') return stableKey
   // 没有 uuid：使用基于首条 assistant message 对象引用的缓存 ID
   if (first) {

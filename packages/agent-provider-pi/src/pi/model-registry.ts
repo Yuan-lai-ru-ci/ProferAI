@@ -25,7 +25,7 @@ import {
   resolveProviderNativeProtocol,
   isLocalOllamaBaseUrl,
 } from '@profer/shared'
-import { assertSdkBaseUrlSupportsRouting, getProferUserAgent, normalizeAnthropicBaseUrlForSdk, normalizeGoogleBaseUrl, normalizeOpenAIBaseUrlForSdk } from '@profer/core/providers'
+import { assertSdkBaseUrlSupportsRouting, getWhitelistCompatUserAgent, normalizeAnthropicBaseUrlForSdk, normalizeGoogleBaseUrl, normalizeOpenAIBaseUrlForSdk } from '@profer/core/providers'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import { createIsolatedModelRuntimeOptions } from './model-runtime-options'
 
@@ -586,12 +586,12 @@ function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType)
   return baseUrl.trim().replace(/\/$/, '')
 }
 
-export function requiresPromaUserAgent(provider: ProviderType): boolean {
+export function requiresWhitelistUserAgent(provider: ProviderType): boolean {
   return provider === 'kimi-coding' || provider === 'xiaomi-token-plan' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team'
 }
 
 function usesBearerOnlyAnthropicAuth(provider: ProviderType): boolean {
-  return requiresPromaUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic'
+  return requiresWhitelistUserAgent(provider) || provider === 'minimax' || provider === 'qwen-anthropic'
 }
 
 export function buildPiRequestHeaders(provider: ProviderType, apiKey: string, baseUrl?: string): PiRequestHeaders | undefined {
@@ -601,8 +601,8 @@ export function buildPiRequestHeaders(provider: ProviderType, apiKey: string, ba
     Authorization: `Bearer ${apiKey || 'ollama'}`,
   }
 
-  if (requiresPromaUserAgent(provider)) {
-    headers['User-Agent'] = getProferUserAgent()
+  if (requiresWhitelistUserAgent(provider)) {
+    headers['User-Agent'] = getWhitelistCompatUserAgent()
   }
 
   return headers

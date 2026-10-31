@@ -7,6 +7,7 @@
 
 import type {
   DingTalkBridgeState,
+  DingTalkChatBinding,
   DingTalkMultiBridgeState,
   DingTalkBotBridgeState,
   DingTalkTestResult,
@@ -14,6 +15,8 @@ import type {
 } from '@profer/shared'
 import { DingTalkBridge } from './dingtalk-bridge'
 import { getDingTalkMultiBotConfig, getDingTalkBotById } from './dingtalk-config'
+import { getDingTalkBotBindingsPath } from './config-paths'
+import { existsSync, readFileSync } from 'node:fs'
 
 class DingTalkBridgeManager {
   /** botId → Bridge 实例 */
@@ -136,6 +139,51 @@ class DingTalkBridgeManager {
     const tempBridge = new DingTalkBridge(tempConfig)
     return tempBridge.testConnection(clientId, clientSecret)
   }
+
+  // ===== 聊天绑定（设置页）=====
+
+  /**
+   * 汇总所有 Bot 的聊天绑定。
+   *
+   * 运行中的 Bot 从内存读；未启动/已停用的 Bot 直接从落盘文件读，
+   * 避免“停用后绑定列表凭空消失”。
+   */
+  listAllBindings(): DingTalkChatBinding[] {
+    const result: DingTalkChatBinding[] = []
+    const config = getDingTalkMultiBotConfig()
+
+    for (const bot of config.bots) {
+      const bridge = this.bridges.get(bot.id)
+      if (bridge) {
+        for (const binding of bridge.listBindings()) {
+          result.push({ ...binding, botId: bot.id, botName: bot.name })
+        }
+        continue
+      }
+
+      const path = getDingTalkBotBindingsPath(bot.id)
+      if (!existsSync(path)) continue
+      try {
+        const bindings = JSON.parse(readFileSync(path, 'utf-8')) as DingTalkChatBinding[]
+        for (const binding of bindings) {
+          result.push({ ...binding, botId: bot.id, botName: bot.name })
+        }
+      } catch (error) {
+        console.error(`[钉钉 BridgeManager] 读取 Bot ${bot.id} 绑定失败:`, error)
+      }
+    }
+
+    return result
+  }
+
+  /** 按 chatId 找到所属 Bot 的 Bridge */
+  findBridgeByChatId(chatId: string): DingTalkBridge | undefined {
+    for (const bridge of this.bridges.values()) {
+      if (bridge.listBindings().some((binding) => binding.chatId === chatId)) return bridge
+    }
+    return undefined
+  }
+
 }
 
 export const dingtalkBridgeManager = new DingTalkBridgeManager()

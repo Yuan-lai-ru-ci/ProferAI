@@ -23,6 +23,9 @@ describe('DingTalk IPC 注册（结构检查）', () => {
       'START_BOT',
       'STOP_BOT',
       'GET_MULTI_STATUS',
+      'LIST_BINDINGS',
+      'UPDATE_BINDING',
+      'REMOVE_BINDING',
     ] as const) {
       expect(source).toContain(`DINGTALK_IPC_CHANNELS.${key}`)
       expect(DINGTALK_IPC_CHANNELS[key]).toBeDefined()

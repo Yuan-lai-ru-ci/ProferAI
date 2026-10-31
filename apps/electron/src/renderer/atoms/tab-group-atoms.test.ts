@@ -8,6 +8,8 @@
 
 import { expect, test } from 'bun:test'
 import {
+  GROUP_COLLAPSE_HINT_OVERSHOOT,
+  GROUP_COLLAPSE_OVERSHOOT,
   GROUP_MIN_ADJUSTABLE_BAND,
   GROUP_MIN_PANE_WIDTH,
   resolveGroupDropSide,
@@ -38,6 +40,7 @@ import {
   replaceTabGroup,
   resolveGroupMembership,
   resolveGroupPaneFocusTarget,
+  resolveGroupCollapseIntent,
   resolveGroupSplitGeometry,
   toPersistedTabGroup,
   toPersistedTabGroups,
@@ -327,6 +330,80 @@ test('几何：容器偏窄时不再等分锁死，分栏缝保留保底可调�
 
   expect(resolveGroupSplitGeometry(0, 0.5)).toEqual({ rightWidth: 0, leftWidth: 0, ratio: 0.5 })
   expect(resolveGroupSplitGeometry(-100, 0.5)).toEqual({ rightWidth: 0, leftWidth: 0, ratio: 0.5 })
+})
+
+// ===== 拖到极限后的收起手势 =====
+
+test('收起意图：分栏缝未到极限时没有收起意图', () => {
+  // 1400px 容器：左栏极限宽 420，指针落在 700 处离极限还很远。
+  expect(resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 700 })).toBeNull()
+  // 刚好停在极限上（左栏 420px）只是“拖到头”，还不算收起手势。
+  expect(resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 424 })).toBeNull()
+})
+
+test('收起意图：越过提示阈值先给提示，越过收起阈值才 ready', () => {
+  const hint = resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 410 })
+  expect(hint).not.toBeNull()
+  expect(hint!.side).toBe('left')
+  expect(hint!.ready).toBe(false)
+  expect(hint!.overshoot).toBeCloseTo(14, 6)
+
+  const ready = resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 390 })
+  expect(ready).not.toBeNull()
+  expect(ready!.side).toBe('left')
+  expect(ready!.ready).toBe(true)
+  expect(ready!.overshoot).toBeCloseTo(34, 6)
+
+  // 阈值边界：刚好 32px 就收起，31px 仍只是提示。
+  const atThreshold = resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 424 - GROUP_COLLAPSE_OVERSHOOT })
+  expect(atThreshold!.ready).toBe(true)
+  const belowThreshold = resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 424 - GROUP_COLLAPSE_OVERSHOOT + 1 })
+  expect(belowThreshold!.ready).toBe(false)
+  expect(GROUP_COLLAPSE_HINT_OVERSHOOT).toBeLessThan(GROUP_COLLAPSE_OVERSHOOT)
+})
+
+test('收起意图：向右侧外拖时被挤压的是右栏', () => {
+  // 1400px 容器：右栏极限宽 420，指针 976 是极限位置；往右继续拖就挤压右栏。
+  expect(resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 976 })).toBeNull()
+  const hint = resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 990 })
+  expect(hint!.side).toBe('right')
+  expect(hint!.ready).toBe(false)
+  const ready = resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 1010 })
+  expect(ready!.side).toBe('right')
+  expect(ready!.ready).toBe(true)
+})
+
+test('收起意图：容器够宽时极限由 0.25/0.75 比例 clamp 决定，而不是 420px', () => {
+  // 1920px 容器：available 1912，0.25 比例对应 478px > 420px，所以左栏实际只能拖到 478。
+  expect(resolveGroupCollapseIntent({ containerWidth: 1920, pointerX: 482 })).toBeNull()
+  expect(resolveGroupCollapseIntent({ containerWidth: 1920, pointerX: 470 })!.ready).toBe(false)
+  const ready = resolveGroupCollapseIntent({ containerWidth: 1920, pointerX: 448 })
+  expect(ready!.side).toBe('left')
+  expect(ready!.ready).toBe(true)
+})
+
+test('收起意图：容器偏窄时按保底可调区间（而非 420px）算极限', () => {
+  // 862px 容器（侧栏 + 文件面板让位后）：保底下限是 available * 0.375 = 320.25。
+  const containerWidth = 862
+  const available = containerWidth - 8
+  const minPaneWidth = available * ((1 - GROUP_MIN_ADJUSTABLE_BAND) / 2)
+  const extremePointerX = minPaneWidth + 4
+  expect(resolveGroupCollapseIntent({ containerWidth, pointerX: extremePointerX })).toBeNull()
+  const ready = resolveGroupCollapseIntent({ containerWidth, pointerX: extremePointerX - GROUP_COLLAPSE_OVERSHOOT - 4 })
+  expect(ready!.side).toBe('left')
+  expect(ready!.ready).toBe(true)
+})
+
+test('收起意图：容器宽为 0 / 指针拖到容器外都不会误判', () => {
+  expect(resolveGroupCollapseIntent({ containerWidth: 0, pointerX: 0 })).toBeNull()
+  expect(resolveGroupCollapseIntent({ containerWidth: 8, pointerX: 0 })).toBeNull()
+  // 指针跑到容器外仍按「继续外拖」理解：往右外拖挤压右栏，往左外拖挤压左栏。
+  const outsideRight = resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: 1600 })
+  expect(outsideRight!.side).toBe('right')
+  expect(outsideRight!.ready).toBe(true)
+  const outsideLeft = resolveGroupCollapseIntent({ containerWidth: 1400, pointerX: -200 })
+  expect(outsideLeft!.side).toBe('left')
+  expect(outsideLeft!.ready).toBe(true)
 })
 
 // ===== 合并手势落定语义 =====

@@ -345,7 +345,7 @@ describe('ChannelForm 真实事件与退出控制器接线（隔离 hook 宿主�
   test('F21：地址形态与渠道协议错配时预览明确提示', () => {
     const cases: Array<[string, string, string, string]> = [
       ['anthropic-compatible', 'Anthropic 端点', 'https://fixture.invalid/v1', '/v1/messages 结尾'],
-      ['openai', 'OpenAI 端点', 'https://fixture.invalid/v1/responses', '请改用「OpenAI Responses 格式」'],
+      ['openai', 'OpenAI 端点', 'https://fixture.invalid/v1/responses', '检测到 Responses 端点，将按 Responses 协议请求'],
       ['openai', 'OpenAI 端点', 'https://fixture.invalid/v1/messages', '请改用「Anthropic 兼容格式」'],
       ['openai-responses', 'OpenAI 端点', 'https://fixture.invalid/v1/chat/completions', '不要填写 Chat Completions 端点'],
       ['google', 'OpenAI 端点', 'https://fixture.invalid/v1/chat/completions', 'Gemini 渠道应填协议根地址'],

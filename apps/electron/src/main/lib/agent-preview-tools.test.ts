@@ -114,8 +114,9 @@ describe('Agent preview Claude adapter', () => {
           }),
         },
       )
-      expect(result.content).toHaveLength(2)
+      expect(result.content).toHaveLength(3)
       expect(result.content[1]).toEqual({ type: 'image', data: 'PNG_BYTES', mimeType: 'image/png' })
+      expect((result.content[2] as { text: string }).text).toContain('不要用 send_local_image')
       expect(result.details).toMatchObject({ visual: { scope: 'page', page: 2, images: [{ page: 2 }] } })
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -136,10 +137,11 @@ describe('Agent preview Claude adapter', () => {
       file: { name: 'deck.pptx', kind: 'presentation', size: 42, modifiedAt: '2026-09-03T00:00:00.000Z', revision: 'sha256:abc' },
       visual: { scope: 'page', page: 2, images: [{ data: 'PNG_BYTES', mediaType: 'image/png', filename: 'deck.pptx', page: 2 }] },
     })
-    expect(formatted.content).toHaveLength(2)
+    expect(formatted.content).toHaveLength(3)
     expect(formatted.content[0]).toMatchObject({ type: 'text' })
     expect((formatted.content[0] as { text: string }).text).not.toContain('PNG_BYTES')
     expect(formatted.content[1]).toEqual({ type: 'image', data: 'PNG_BYTES', mimeType: 'image/png' })
+    expect((formatted.content[2] as { text: string }).text).toContain('仅供你观察核验')
   })
 
   test('caps preview images per model result by base64 byte budget', () => {

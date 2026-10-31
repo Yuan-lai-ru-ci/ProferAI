@@ -160,21 +160,41 @@ function PlatformSidebarItem({
   )
 }
 
+/** 平台能力提示：不同平台的接入方式和能力边界差别很大，进面板先讲清楚 */
+const PLATFORM_CAPABILITY_NOTES: Record<BotPlatformId, string> = {
+  pocket: '手机 / 平板连接本机 Profer：扫码配对，需同一局域网或自建公网入口。',
+  feishu: '扫码创建自建应用即可接入 · 支持多 Bot、群聊、会话绑定管理与会话镜像。',
+  wechat: '扫码登录你的微信账号 · 单账号、仅单聊，不支持多 Bot 与群聊。',
+  dingtalk: '需先在钉钉开放平台创建企业内部应用 · 支持多 Bot 与群聊。',
+  defaults: '所有平台共享的默认工作区与命令说明。',
+  logos: '机器人回复中使用的品牌素材。',
+}
+
+function PlatformCapabilityNote({ text }: { text: string }): React.ReactElement {
+  return (
+    <p className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
+      {text}
+    </p>
+  )
+}
+
 /** 根据平台 ID 渲染对应设置组件 */
 function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
+  const note = <PlatformCapabilityNote text={PLATFORM_CAPABILITY_NOTES[id]} />
+
   switch (id) {
     case 'feishu':
-      return <FeishuSettings />
+      return <div className="space-y-5">{note}<FeishuSettings /></div>
     case 'dingtalk':
-      return <DingTalkSettings />
+      return <div className="space-y-5">{note}<DingTalkSettings /></div>
     case 'wechat':
-      return <WeChatSettings />
+      return <div className="space-y-5">{note}<WeChatSettings /></div>
     case 'pocket':
-      return <PocketModeSettings />
+      return <div className="space-y-5">{note}<PocketModeSettings /></div>
     case 'defaults':
-      return <BotDefaultSettings />
+      return <div className="space-y-5">{note}<BotDefaultSettings /></div>
     case 'logos':
-      return <ProferLogoSettings />
+      return <div className="space-y-5">{note}<ProferLogoSettings /></div>
   }
 }
 

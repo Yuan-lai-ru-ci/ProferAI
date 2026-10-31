@@ -1800,6 +1800,22 @@
   background: transparent;
 }
 
+/* ===== 硬规则：界面里永远不绘制横向滚动条（但不禁止横向滚动） =====
+ * 触控板横滑、Shift+滚轮、拖拽内容、程序性 scrollLeft 都照常工作：这里只把条的高度压成 0，
+ * 滚动能力一点不少。内容该横着看的（代码块、宽表格、日历）继续横着滚。
+ * 理由：横向条在 Profer 的窄栏、消息气泡、多栏布局里几乎总是布局溢出的副产品，
+ * 而不是用户想用的交互入口；一旦出现就是“内容被撑破”的视觉噪音。
+ * 不要为了“看不到横条”去加 `overflow-x: hidden` 裁掉内容、禁用横向滚动，
+ * 也不要用强制换行把代码/表格折得没法读——隐藏的是条，不是能力。
+ *
+ * :horizontal 伪类的优先级高于 `*::-webkit-scrollbar`，所以必须逐个覆盖带类的容器规则，
+ * 否则 .profer-scroll-region 等容器上的 `height` 会把条又画回来。 */
+*::-webkit-scrollbar:horizontal,
+.profer-scroll-region::-webkit-scrollbar:horizontal,
+.sidebar-session-scroll::-webkit-scrollbar:horizontal {
+  height: 0;
+}
+
 /* Windows：悬停滚动条本体时展开（Fluent 行为），命中区不变、视觉变宽。 */
 :root[data-platform='win32'] *::-webkit-scrollbar-thumb:hover {
   border-width: 2px;
@@ -1833,15 +1849,15 @@
 :root[data-platform='darwin'] .profer-scroll-region::-webkit-scrollbar-thumb:hover {
   background-color: transparent;
 }
-/* 鼠标进入右侧滚动条热区（12px）时露出：数据由 scrollbar-reveal.ts 的 pointermove 检测。
- * 不用容器 :hover——那会让鼠标在对话区任何位置都把条子点亮，等于常驻。 */
+/* 显隐只由 scrollbar-reveal.ts 的 data-* 控制；颜色只由 --scrollbar-thumb-* 决定，
+ * 与侧栏列表、对话区进度条共用同一组 token，避免同屏出现两套灰。 */
 :root[data-platform='darwin'] .profer-scroll-region[data-scrollbar-hover='true']::-webkit-scrollbar-thumb,
-:root[data-platform='darwin'] .profer-scroll-region[data-scrollbar-hover='true']::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--muted-foreground) / 0.45);
+:root[data-platform='darwin'] .profer-scroll-region[data-scrolling='true']::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-idle);
 }
-:root[data-platform='darwin'] .profer-scroll-region[data-scrolling='true']::-webkit-scrollbar-thumb,
+:root[data-platform='darwin'] .profer-scroll-region[data-scrollbar-hover='true']::-webkit-scrollbar-thumb:hover,
 :root[data-platform='darwin'] .profer-scroll-region[data-scrolling='true']::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--muted-foreground) / 0.45);
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 /* Windows：常驻可见（Fluent），滚动中加深；悬停展开仍由全局规则负责。 */
@@ -1863,7 +1879,11 @@
   height: 0;
 }
 
-/* 左侧会话/项目列表：mac 鼠标进入列表才显示；win 常驻可见（悬停加深），仍支持滚轮和触控板滚动。
+/* 左侧会话/项目列表：显隐与对话区共用同一套 reveal 逻辑（见 components/ai-elements/scroll-region.tsx）。
+ *
+ * 这里只管槽位与留白，不再写颜色，也不再靠 :hover 露出——CSS :hover 的语义是
+ * “鼠标在列表里”，结果条子会一直亮着；reveal 的语义是“刚滚动过或贴着右边缘”，
+ * 停手 1.25s 自动淡出，和对话区一致。颜色统一由 .profer-scroll-region 决定。
  *
  * 必须把 scrollbar-width/color 交回 auto（同对话区）：一旦设成 thin，Chromium
  * 走 Fluent overlay 滚动条——不占布局空间、直接画在会话行右侧，且 ::-webkit-scrollbar
@@ -1882,7 +1902,6 @@
   scrollbar-gutter: stable;
   margin-right: -8px;
   padding-right: 2px;
-  -ms-overflow-style: none;
 }
 .sidebar-session-scroll::-webkit-scrollbar {
   width: var(--scrollbar-size-compact);
@@ -1890,26 +1909,6 @@
 }
 .sidebar-session-scroll::-webkit-scrollbar-track {
   background: transparent;
-}
-
-/* macOS：默认透明，鼠标进入列表才露出。 */
-:root[data-platform='darwin'] .sidebar-session-scroll::-webkit-scrollbar-thumb {
-  background-color: transparent;
-}
-:root[data-platform='darwin'] .sidebar-session-scroll:hover::-webkit-scrollbar-thumb {
-  /* 与对话区滚动时的 0.45 对齐；旧 overlay 条实际约 0.5，别调太淡。 */
-  background-color: hsl(var(--muted-foreground) / 0.45);
-}
-:root[data-platform='darwin'] .sidebar-session-scroll::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--muted-foreground) / 0.5);
-}
-
-/* Windows：常驻淡显，悬停列表加深；悬停条本体仍是全局的 Fluent 展开。 */
-:root[data-platform='win32'] .sidebar-session-scroll::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb-idle);
-}
-:root[data-platform='win32'] .sidebar-session-scroll:hover::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb-hover);
 }
 
 /* ===== 面板分隔拖动条 =====
@@ -2173,27 +2172,18 @@
   right: 3px;
 }
 
-/* 默认亮色主题 */
+/* 默认亮色主题：与原生滚动条同一组 token，全应用只一套滚动指示色 */
 .scroll-progress-thumb {
-  background-color: hsl(var(--foreground) / 0.14);
+  background-color: var(--scrollbar-thumb-idle);
 }
 .scroll-progress-thumb:hover {
-  background-color: hsl(var(--foreground) / 0.25);
+  background-color: var(--scrollbar-thumb-hover);
 }
 .scroll-progress-thumb-active {
-  background-color: hsl(var(--foreground) / 0.32) !important;
+  background-color: var(--scrollbar-thumb-active) !important;
 }
 
-/* 默认深色主题 */
-.dark:not([class*="theme-"]) .scroll-progress-thumb {
-  background-color: hsl(var(--foreground) / 0.12);
-}
-.dark:not([class*="theme-"]) .scroll-progress-thumb:hover {
-  background-color: hsl(var(--foreground) / 0.22);
-}
-.dark:not([class*="theme-"]) .scroll-progress-thumb-active {
-  background-color: hsl(var(--foreground) / 0.30) !important;
-}
+/* 默认深色主题：颜色已由 --scrollbar-thumb-* token 按主题解析，无需单独覆写 */
 
 /* 晴空碧海 ocean-light */
 .theme-ocean-light .scroll-progress-thumb {

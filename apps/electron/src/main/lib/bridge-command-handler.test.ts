@@ -103,11 +103,29 @@ mock.module('./agent-session-manager', () => ({
   getAgentSessionMeta: (id: string) => sessionMetas.get(id),
 }))
 
-const headlessCalls: Array<{ sessionId: string; channelId: string; modelId?: string }> = []
+const headlessCalls: Array<{
+  sessionId: string
+  channelId: string
+  modelId?: string
+  userMessage?: string
+  rawUserMessage?: string
+}> = []
 
 mock.module('./agent-service', () => ({
-  runAgentHeadless: async (input: { sessionId: string; channelId: string; modelId?: string }) => {
-    headlessCalls.push({ sessionId: input.sessionId, channelId: input.channelId, modelId: input.modelId })
+  runAgentHeadless: async (input: {
+    sessionId: string
+    channelId: string
+    modelId?: string
+    userMessage?: string
+    rawUserMessage?: string
+  }) => {
+    headlessCalls.push({
+      sessionId: input.sessionId,
+      channelId: input.channelId,
+      modelId: input.modelId,
+      userMessage: input.userMessage,
+      rawUserMessage: input.rawUserMessage,
+    })
   },
   agentEventBus: { on: () => () => {} },
   stopAgent: () => {},
@@ -265,5 +283,199 @@ describe('旧 binding 发送时渠道回退', () => {
     expect(headlessCalls[0]?.channelId).toBe('pi-only')
     // 回退后必须按新渠道重新解析模型，不能把 undefined/旧渠道模型交给 orchestrator。
     expect(headlessCalls[0]?.modelId).toBe('pi-only-model')
+  })
+})
+
+describe('卡片渲染钩子', () => {
+  interface CardHandlerOptions {
+    withSendCard?: boolean
+  }
+
+  function createCardHandler(options: CardHandlerOptions = {}): {
+    handler: InstanceType<typeof BridgeCommandHandler>
+    sent: string[]
+    cards: unknown[]
+  } {
+    const sent: string[] = []
+    const cards: unknown[] = []
+    const handler = new BridgeCommandHandler({
+      platformName: '测试',
+      source: 'dingtalk',
+      adapter: {
+        sendText: async (_chatId: string, text: string) => {
+          sent.push(text)
+        },
+        ...(options.withSendCard === false
+          ? {}
+          : {
+              sendCard: async (_chatId: string, card: unknown) => {
+                cards.push(card)
+              },
+            }),
+      },
+      renderers: {
+        help: () => ({ kind: 'help' }),
+        sessionList: (input) => ({ kind: 'sessionList', input }),
+        channelList: (input) => ({ kind: 'channelList', input }),
+        now: (snapshot) => ({ kind: 'now', snapshot }),
+      },
+    })
+    return { handler, sent, cards }
+  }
+
+  test('提供 sendCard 与渲染器时 /help 发卡片且不发文本', async () => {
+    const { handler, sent, cards } = createCardHandler()
+    await handler.handleIncomingMessage('card-1', '/help')
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toEqual({ kind: 'help' })
+    expect(sent).toHaveLength(0)
+  })
+
+  test('平台未提供 sendCard 时回退纯文本', async () => {
+    const { handler, sent, cards } = createCardHandler({ withSendCard: false })
+    await handler.handleIncomingMessage('card-2', '/help')
+    expect(cards).toHaveLength(0)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('/help')
+  })
+
+  test('/list 卡片收到分组与当前标记', async () => {
+    const { handler, cards } = createCardHandler()
+    await handler.handleIncomingMessage('card-3', '/new 卡片会话')
+    await handler.handleIncomingMessage('card-3', '/list')
+
+    const card = cards.at(-1) as { kind: string; input: { groups: Array<{ name: string; sessions: Array<{ active: boolean; title: string }> }> } }
+    expect(card.kind).toBe('sessionList')
+    expect(card.input.groups[0]?.name).toBe('未分配工作区')
+    expect(card.input.groups[0]?.sessions[0]?.title).toBe('卡片会话')
+    expect(card.input.groups[0]?.sessions[0]?.active).toBe(true)
+  })
+
+  test('/model 卡片收到按内核过滤后的渠道列表', async () => {
+    const { handler, cards } = createCardHandler()
+    await handler.handleIncomingMessage('card-4', 'hi')
+    await handler.handleIncomingMessage('card-4', '/model')
+
+    const card = cards.at(-1) as { kind: string; input: { items: Array<{ name: string; isCurrent: boolean }> } }
+    expect(card.kind).toBe('channelList')
+    const names = card.input.items.map((item) => item.name)
+    expect(names).toContain('pi-only')
+    expect(names).not.toContain('claude-only')
+  })
+})
+
+describe('/now 文本输出保持不变', () => {
+  test('无渲染器时 /now 仍是纯文本状态摘要', async () => {
+    const { handler, sent } = createHandler()
+    await handler.handleIncomingMessage('now-1', '/new 状态会话')
+    await handler.handleIncomingMessage('now-1', '/now')
+
+    const reply = sent.at(-1) ?? ''
+    expect(reply).toContain('📊 当前状态:')
+    expect(reply).toContain('会话: 状态会话')
+    expect(reply).toContain('内核:')
+    // 测试夹具没有工作区，走「未设置」分支
+    expect(reply).toContain('工作区: 未设置')
+  })
+})
+
+describe('绑定与停止钩子', () => {
+  function createHookHandler(): {
+    handler: InstanceType<typeof BridgeCommandHandler>
+    sent: string[]
+    enriched: Array<{ binding: unknown; contextData: unknown }>
+    bindingChanges: number[]
+    stopped: string[]
+  } {
+    const sent: string[] = []
+    const enriched: Array<{ binding: unknown; contextData: unknown }> = []
+    const bindingChanges: number[] = []
+    const stopped: string[] = []
+    const handler = new BridgeCommandHandler({
+      platformName: '测试',
+      source: 'dingtalk',
+      adapter: {
+        sendText: async (_chatId: string, text: string) => {
+          sent.push(text)
+        },
+      },
+      enrichBinding: (binding, contextData) => {
+        enriched.push({ binding, contextData })
+      },
+      afterBindingChanged: () => {
+        bindingChanges.push(bindingChanges.length + 1)
+      },
+      afterStop: (sessionId) => {
+        stopped.push(sessionId)
+      },
+    })
+    return { handler, sent, enriched, bindingChanges, stopped }
+  }
+
+  test('/new 触发 enrichBinding 并收到透传的平台上下文', async () => {
+    const { handler, enriched, bindingChanges } = createHookHandler()
+    const ctx = { senderOpenId: 'ou_1', chatType: 'group' }
+
+    await handler.handleIncomingMessage('hook-1', '/new', ctx)
+
+    expect(enriched).toHaveLength(1)
+    expect(enriched[0]?.contextData).toBe(ctx)
+    expect((enriched[0]?.binding as { chatId: string }).chatId).toBe('hook-1')
+    expect(bindingChanges.length).toBeGreaterThan(0)
+  })
+
+  test('/ws 无工作区时不会误删绑定', async () => {
+    const { handler, bindingChanges } = createHookHandler()
+    await handler.handleIncomingMessage('hook-2', '/new')
+    const before = bindingChanges.length
+    // 夹具里没有工作区，走「暂无工作区」分支，绑定必须原样保留
+    await handler.handleIncomingMessage('hook-2', '/ws')
+    expect(bindingChanges.length).toBe(before)
+  })
+
+  test('/stop 触发 afterStop 并传入会话 ID', async () => {
+    const { handler, stopped } = createHookHandler()
+    await handler.handleIncomingMessage('hook-3', '/new')
+    const sessionId = handler.getBinding('hook-3')?.sessionId
+    expect(sessionId).toBeDefined()
+
+    await handler.handleIncomingMessage('hook-3', '/stop')
+
+    expect(stopped).toEqual([sessionId as string])
+  })
+})
+
+describe('可注入的绑定存储', () => {
+  test('注入 Map 后命令写入的是同一份数据', async () => {
+    const bindings = new Map<string, { chatId: string; sessionId: string; workspaceId: string; channelId: string }>()
+    const sessionToChat = new Map<string, string>()
+    const handler = new BridgeCommandHandler({
+      platformName: '测试',
+      source: 'feishu',
+      adapter: { sendText: async () => {} },
+      bindings: bindings as unknown as Map<string, import('./bridge-command-handler').BridgeChatBinding>,
+      sessionToChat,
+    })
+
+    await handler.handleIncomingMessage('inject-1', '/new')
+
+    expect(bindings.size).toBe(1)
+    const sessionId = bindings.get('inject-1')?.sessionId as string
+    expect(sessionToChat.get(sessionId)).toBe('inject-1')
+  })
+})
+
+
+describe('IM 消息进桌面端的展示文本', () => {
+  test('带附件时 userMessage 含 attached_files，rawUserMessage 只保留用户文本', async () => {
+    const { handler } = createHandler()
+
+    await handler.handleIncomingMessage('display-1', '看一下这个文件', undefined, [
+      { absolutePath: '/tmp/a.png', label: 'a.png', kind: 'image' },
+    ])
+
+    const call = headlessCalls.at(-1)
+    expect(call?.userMessage).toContain('<attached_files>')
+    expect(call?.rawUserMessage).toBe('看一下这个文件')
   })
 })

@@ -29,6 +29,7 @@ import type {
   FileDialogSkippedFile,
 } from '@profer/shared'
 import { MAX_ATTACHMENT_SIZE } from '@profer/shared'
+import { resolveAgentAttachmentBackup, ensureAgentAttachmentBackup } from './agent-attachment-backup'
 
 /** 支持的图片 MIME 类型 */
 const IMAGE_MIME_TYPES = new Set([
@@ -193,10 +194,16 @@ export function readAttachmentAsBase64(localPath: string): string {
   }
 
   if (!existsSync(fullPath)) {
-    throw new Error(`附件文件不存在: ${localPath}`)
+    // 用户附件写在 Agent 会话 cwd 里，模型可能把它当临时文件删掉；备份能救回预览。
+    const backupPath = isAbsolute(localPath) ? resolveAgentAttachmentBackup(fullPath) : undefined
+    if (!backupPath) throw new Error(`附件文件不存在: ${localPath}`)
+    console.warn(`[附件服务] 附件已被删除，改用备份读取: ${localPath} → ${backupPath}`)
+    fullPath = backupPath
   }
 
   const buffer = readFileSync(fullPath)
+  // 旧附件在修复前没有备份：读到一次就补建，之后即使被删也能回退预览。
+  if (isAbsolute(localPath)) ensureAgentAttachmentBackup(fullPath)
   return buffer.toString('base64')
 }
 

@@ -49,6 +49,7 @@ import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, type HeadlessAg
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir, getSdkConfigDir } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { getAgentSessionMeta, getAgentSessionMessages, setAgentSessionActiveChecker, updateAgentSessionMeta } from './agent-session-manager'
+import { backupAgentAttachment } from './agent-attachment-backup'
 import {
   configureAgentSessionProjectionPublisher,
   publishAgentSessionProjection,
@@ -1318,6 +1319,8 @@ export function saveFilesToAgentSession(input: AgentSaveFilesInput): AgentSavedF
 
     const buffer = Buffer.from(file.data, 'base64')
     writeFileSync(targetPath, buffer)
+    // 会话 cwd 对 Agent 可写：留一份 cwd 外的备份，避免模型清理临时文件时把用户附件一起删掉。
+    backupAgentAttachment(input.sessionId, targetPath)
 
     const actualFilename = targetPath.slice(sessionDir.length + 1)
     results.push({ filename: actualFilename, targetPath })

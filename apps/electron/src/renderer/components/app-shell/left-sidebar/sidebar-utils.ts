@@ -146,7 +146,7 @@ export function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
  * 除 focus ring 外不使用描边与阴影，层级只靠背景灰度与文字灰度区分。
  * 会话行与入口行同为默认行：不常显底色、不画分隔线，行间距靠列表 gap；
  * 有色标的会话由调用方（AgentSessionItem）另加同色相淡底色。
- * 灰度层级：项目行 5%（当前 9%）> 会话行当前 7% > 入口行无底色。
+ * 灰度层级：项目行 4%（当前 9%）> 会话行当前 7% > 入口行无底色。
  */
 export function sidebarRowClass(options: {
   active?: boolean
@@ -172,7 +172,7 @@ export function sidebarRowClass(options: {
       : muted
         ? 'text-foreground/[0.38] hover:bg-foreground/[0.04] hover:text-foreground/[0.62]'
         : tall
-          ? 'bg-foreground/[0.05] text-foreground/[0.62] hover:bg-foreground/[0.07] hover:text-foreground'
+          ? 'bg-foreground/[0.04] text-foreground/[0.62] hover:bg-foreground/[0.07] hover:text-foreground'
           : 'text-foreground/[0.62] hover:bg-foreground/[0.04] hover:text-foreground',
   )
 }

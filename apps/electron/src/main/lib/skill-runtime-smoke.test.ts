@@ -7,7 +7,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, wr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Skill } from '@earendil-works/pi-coding-agent'
-import { createPromaSkillsOverride } from './adapters/pi-agent-adapter'
+import { createProferSkillsOverride } from './adapters/pi-agent-adapter'
 import {
   __resetGlobalSkillRoots,
   __setGlobalSkillRoots,
@@ -58,7 +58,7 @@ describe('全局 Skill 运行时加载链路冒烟（Claude + Pi）', () => {
     const projection = prepareRuntimeSkills('ws-a')
     const piRoot = getRuntimeSkillsPath(projection)
     const skill = makePiSkill(piRoot, 'demo')
-    const result = createPromaSkillsOverride([piRoot], undefined)({ skills: [skill], diagnostics: [] })
+    const result = createProferSkillsOverride([piRoot], undefined)({ skills: [skill], diagnostics: [] })
 
     expect(existsSync(join(projection.path, '.claude-plugin', 'plugin.json'))).toBe(true)
     expect(existsSync(join(piRoot, 'demo', 'SKILL.md'))).toBe(true)
@@ -107,7 +107,7 @@ describe('全局 Skill 运行时加载链路冒烟（Claude + Pi）', () => {
     const projection = prepareRuntimeSkills('ws-empty')
     const piRoot = getRuntimeSkillsPath(projection)
     const skill = makePiSkill(piRoot, 'demo')
-    const result = createPromaSkillsOverride([piRoot], [])({ skills: [skill], diagnostics: [] })
+    const result = createProferSkillsOverride([piRoot], [])({ skills: [skill], diagnostics: [] })
     expect(result.skills).toEqual([])
   })
 })

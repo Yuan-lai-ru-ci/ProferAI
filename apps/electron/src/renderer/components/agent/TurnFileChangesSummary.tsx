@@ -13,6 +13,9 @@
  * 消息同样存在于 turn.turnMessages 中（通过 parent_tool_use_id 关联）。
  *
  * 文件 chip 直接复用 FilePathChip（与 Agent 消息中的渲染完全一致）。
+ *
+ * 会话工作目录内的写入不计入：截图、临时产物、`.context` 草稿都是 Agent 的草稿区产物，
+ * 不是用户要 review 的改动。
  */
 
 import * as React from 'react'
@@ -24,7 +27,7 @@ import type {
   SDKToolResultBlock,
 } from '@profer/shared'
 import { FilePathChip } from '@/components/ai-elements/file-path-chip'
-import { getFileBaseName } from '@/lib/file-utils'
+import { getFileBaseName, isAbsoluteFilePath, isPathInsideDirectory } from '@/lib/file-utils'
 
 // Claude Code 用 Edit/Write/...；Pi runtime 内置工具名是小写 edit/write/...。
 // 两套名字都要收进来，否则 Pi 会话的文件改动汇总永远是空的。
@@ -156,18 +159,34 @@ export interface TurnFileChangesSummaryProps {
   basePath?: string
 }
 
+/**
+ * 算出本轮要展示的文件改动 chip。
+ *
+ * 会话工作目录是 Agent 的草稿区：截图、临时产物、`.context` 草稿全落在那里，
+ * 它们不是用户要 review 的改动，一律不追踪（历史会话里已落盘的旧记录同样过滤）。
+ * 相对路径脱离 basePath 无法判断归属，保持可见。
+ */
+export function resolveVisibleFileChanges(
+  paths: readonly string[],
+  sessionPath?: string,
+): string[] {
+  if (!sessionPath) return [...paths]
+  return paths.filter((path) => !isAbsoluteFilePath(path) || !isPathInsideDirectory(path, sessionPath))
+}
+
 export function TurnFileChangesSummary({
   turnMessages,
   basePath,
 }: TurnFileChangesSummaryProps): React.ReactElement | null {
   const paths = React.useMemo(() => collectModifiedFilePaths(turnMessages), [turnMessages])
+  const visiblePaths = resolveVisibleFileChanges(paths, basePath)
 
   return (
     <div className="file-changes-summary pl-[46px] mt-3">
       <div className="pt-3 border-t-2 border-dashed border-border/60">
-        {paths.length > 0 && (
+        {visiblePaths.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {paths.map((filePath) => (
+            {visiblePaths.map((filePath) => (
               <FilePathChip key={filePath} filePath={filePath} basePath={basePath} />
             ))}
           </div>

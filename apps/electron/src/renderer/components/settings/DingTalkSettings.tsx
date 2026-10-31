@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { Loader2, ExternalLink, Power, PowerOff, Plus, Trash2, CheckCircle2, XCircle } from 'lucide-react'
+import { Loader2, ExternalLink, Power, PowerOff, Plus, Trash2, CheckCircle2, XCircle, ChevronRight } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { SettingsSection } from './primitives/SettingsSection'
 import { SettingsCard } from './primitives/SettingsCard'
@@ -28,7 +28,8 @@ import {
 } from '@profer/ui/primitives/alert-dialog'
 import { cn } from '@/lib/utils'
 import { IntegrationSettingsFeedback, useIntegrationAction } from './IntegrationSettingsFeedback'
-import type { DingTalkBotConfig, DingTalkBotBridgeState, DingTalkBridgeStatus, DingTalkTestResult } from '@profer/shared'
+import type { DingTalkBotConfig, DingTalkBotBridgeState, DingTalkBridgeStatus, DingTalkChatBinding, DingTalkTestResult } from '@profer/shared'
+import { ImBindingsPanel } from './ImBindingsPanel'
 
 /** 安全地用系统浏览器打开链接 */
 function openLink(url: string): void {
@@ -64,7 +65,33 @@ export function DingTalkSettings(): React.ReactElement {
   const [bots, setBots] = React.useState<DingTalkBotConfig[]>([])
   const [loading, setLoading] = React.useState(true)
   const [loadError, setLoadError] = React.useState('')
+  const [bindings, setBindings] = React.useState<DingTalkChatBinding[]>([])
+  const [bindingsLoading, setBindingsLoading] = React.useState(true)
+  const [bindingsError, setBindingsError] = React.useState('')
   const { busy: adding, run: runAdd } = useIntegrationAction()
+
+  const refreshBindings = React.useCallback(async () => {
+    setBindingsError('')
+    setBindingsLoading(true)
+    try {
+      setBindings(await window.electronAPI.listDingTalkBindings())
+    } catch {
+      setBindingsError('无法读取聊天绑定，请重试。')
+    } finally {
+      setBindingsLoading(false)
+    }
+  }, [])
+
+  const removeBinding = React.useCallback(async (chatId: string) => {
+    try {
+      await window.electronAPI.removeDingTalkBinding(chatId)
+      await refreshBindings()
+    } catch {
+      setBindingsError('解除绑定失败，请重试。')
+    }
+  }, [refreshBindings])
+
+  React.useEffect(() => { void refreshBindings() }, [refreshBindings])
 
   const loadBots = React.useCallback(async () => {
     setLoadError('')
@@ -209,6 +236,25 @@ export function DingTalkSettings(): React.ReactElement {
           </div>
         </SettingsCard>
       </SettingsSection>
+
+      <details className="group rounded-lg border border-border/60 bg-muted/10">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
+          <span>聊天绑定</span>
+          <ChevronRight size={16} className="text-muted-foreground transition-transform group-open:rotate-90" />
+        </summary>
+        <div className="border-t border-border/50 px-4 py-4">
+          <ImBindingsPanel
+            title="钉钉聊天绑定"
+            description="每个钉钉会话对应一个 Profer 工作区与会话；解除后下次发消息会重新创建"
+            bindings={bindings}
+            loading={bindingsLoading}
+            error={bindingsError}
+            emptyHint="暂无聊天绑定。在钉钉里给机器人发一条消息后会自动创建。"
+            onRefresh={() => void refreshBindings()}
+            onRemove={removeBinding}
+          />
+        </div>
+      </details>
     </div>
   )
 }

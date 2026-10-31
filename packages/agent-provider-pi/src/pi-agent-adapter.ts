@@ -48,8 +48,8 @@ import {
 } from '@profer/shared'
 import type { PiCanUseToolOptions, PiPermissionResult } from './permission'
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError, isTransientUpstreamText } from '@profer/agent-runtime/error-patterns'
-import { createPromaSkillsOverride, preparePromptForPiSkillQueue, preparePromptWithPromaSkills } from './pi/skill-resources'
-export { createPromaSkillsOverride, preparePromptForPiSkillQueue, preparePromptWithPromaSkills } from './pi/skill-resources'
+import { createProferSkillsOverride, preparePromptForPiSkillQueue, preparePromptWithProferSkills } from './pi/skill-resources'
+export { createProferSkillsOverride, preparePromptForPiSkillQueue, preparePromptWithProferSkills } from './pi/skill-resources'
 
 import type {
   AgentSession,
@@ -1124,7 +1124,7 @@ function normalizeStringArray(value: unknown): string[] | undefined {
   return items.length > 0 ? items : undefined
 }
 
-export function buildPromaProductToolDefinitions(
+export function buildProferProductToolDefinitions(
   sdk: PiSdk,
   canUseTool: PiAgentQueryOptions['canUseTool'],
 ): ToolDefinition[] {
@@ -1564,7 +1564,7 @@ function withWriteTracking(
   }
 }
 
-function createPromaBashToolOptions(
+function createProferBashToolOptions(
   sessionId: string,
   runtimeEnv: AgentRuntimeEnv | undefined,
   onToolExecutionResult?: PiAgentQueryOptions['onToolExecutionResult'],
@@ -1799,7 +1799,7 @@ export function buildBuiltinToolDefinitions(
   const writeTool = sdk.createWriteToolDefinition(cwd, { operations: createStrictWriteOperations(onFileWrite) })
   const definitions = [
     sdk.createReadToolDefinition(cwd),
-    sdk.createBashToolDefinition(cwd, createPromaBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult, commands, backgroundTasks, processRegistration, onFileWrite)),
+    sdk.createBashToolDefinition(cwd, createProferBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult, commands, backgroundTasks, processRegistration, onFileWrite)),
     ...(powerShellTool ? [powerShellTool] : []),
     sdk.createEditToolDefinition(cwd, { operations: createTrackedEditOperations(onFileWrite) }),
     {
@@ -1985,7 +1985,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           input.processRegistration,
           input.onFileWrite,
         ),
-        ...buildPromaProductToolDefinitions(sdk, input.canUseTool),
+        ...buildProferProductToolDefinitions(sdk, input.canUseTool),
       ])
       const customTools = input.tools?.length === 0 ? [] : [
         ...proferTools,
@@ -2053,7 +2053,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         settingsManager,
         // Skill 由 override 在目录 slug 门禁后加载，避免 SDK 预先读取禁用项并按 name 去重。
         additionalSkillPaths: [],
-        skillsOverride: createPromaSkillsOverride(input.additionalSkillPaths, input.skillSlugs, sdk.loadSkillsFromDir),
+        skillsOverride: createProferSkillsOverride(input.additionalSkillPaths, input.skillSlugs, sdk.loadSkillsFromDir),
         ...createProferManagedResourceLoaderOptions(),
         agentsFilesOverride: input.projectInstructionFiles && input.projectInstructionFiles.length > 0
           ? createProferProjectInstructionFilesOverride(input.projectInstructionFiles)
@@ -2492,7 +2492,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               {
                 // 受管 Skill 已在 prepareInitialPrompt 处理，禁止 SDK 按文本再展开一次。
                 prompt: (prompt) => session.prompt(prompt, { source: 'rpc', expandPromptTemplates: false }),
-                prepareInitialPrompt: (prompt) => preparePromptWithPromaSkills(resourceLoader, prompt, input.skillMentions),
+                prepareInitialPrompt: (prompt) => preparePromptWithProferSkills(resourceLoader, prompt, input.skillMentions),
                 shouldStopBeforeNextTurn: () => runtimeGuard.shouldStopBeforeNextTurn(),
                 rejectPendingInterruptPrompts: (error) => rejectPendingInterruptPrompts(active, error),
                 createAbortError,
@@ -2626,7 +2626,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       // Must reserve before any async skill preparation or abort. Otherwise the prompt chain may finish
       // between the abort and reservation, making the first "send now" click disappear.
       const contentReady = active.resourceLoader
-        ? preparePromptWithPromaSkills(active.resourceLoader, message.message.content, options?.skillMentions)
+        ? preparePromptWithProferSkills(active.resourceLoader, message.message.content, options?.skillMentions)
         : Promise.resolve(message.message.content)
       const accepted = new Promise<void>((resolve, reject) => {
         active.pendingInterruptPrompts.push({
@@ -2656,7 +2656,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       return
     }
     const content = active.resourceLoader
-      ? await preparePromptWithPromaSkills(active.resourceLoader, message.message.content, options?.skillMentions)
+      ? await preparePromptWithProferSkills(active.resourceLoader, message.message.content, options?.skillMentions)
       : message.message.content
     if (active.runtimeGuard?.shouldStopBeforeNextTurn()) {
       session.agent.clearAllQueues()

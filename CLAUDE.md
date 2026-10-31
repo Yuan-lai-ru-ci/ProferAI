@@ -10,6 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 这是个开源项目，本地存储优先，善用配置文件优于大部分默认采用 localstorage，不采用本地数据库方案。
 - 保证充分的组件化以及人类的可读性，每次完成改动后都要思考这一点，运行@code-simplifier 来简化优化代码，保持简单直接不过渡设计的风格。
 - 在 UI 设计上采用更现代的方案，UI 组件推荐采用 ShadcnUI，在合适的情况下，用卡片和阴影取代边框，用符合主题的饱满色彩，设置界面要设置背景，为未来做不同主题留下空间。
+- 同一个交互/同一类 UI 元素只允许一套实现、一套视觉：滚动条、悬停、显隐等行为必须复用现成组件与 token（滚动统一走 `<ScrollRegion>` + `--scrollbar-thumb-*`，见 `docs/design/2026-10-27-scrollbar-spec.md`），不得为单个区域另写 CSS/JS 或另定颜色；发现两套并存时先合并，再继续改功能。
+- 界面里绝对禁止出现横向滚动条，但**不禁止横向滚动**：内容必须仍能横向滚动（触控板横滑 / Shift+滚轮 / 拖拽 / `scrollLeft`），只是不绘制横条（全局 `::-webkit-scrollbar:horizontal` 已强制 `height: 0`）；不得用 `overflow-x: hidden` 或强行换行来“消灭”横条。
 - 采用 BDD 行为驱动开发的方案。
 
 ## 项目概述

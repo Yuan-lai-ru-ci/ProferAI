@@ -648,7 +648,7 @@ describe('Claude provider：错误映射与平台 helper', () => {
     const error = mapSDKErrorToTypedError('unknown', message, message)
     expect(error.code).toBe('provider_error')
     expect(error.title).toBe('OpenAI 官方服务繁忙')
-    expect(error.message).toContain('与您的账户及卡扣AI无关')
+    expect(error.message).toContain('与你的账户无关')
     expect(error.canRetry).toBe(true)
   })
 

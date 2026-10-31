@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { DINGTALK_IPC_CHANNELS, type DingTalkConfig, type DingTalkConfigInput, type DingTalkBridgeState, type DingTalkTestResult, type DingTalkBotConfigInput } from '@profer/shared'
+import { DINGTALK_IPC_CHANNELS, type DingTalkConfig, type DingTalkConfigInput, type DingTalkBridgeState, type DingTalkTestResult, type DingTalkBotConfigInput, type DingTalkChatBinding, type DingTalkUpdateBindingInput } from '@profer/shared'
 import {
   getDingTalkConfig,
   saveDingTalkConfig,
@@ -106,5 +106,33 @@ export function registerDingTalkIpc(): void {
   ipcMain.handle(
     DINGTALK_IPC_CHANNELS.GET_MULTI_STATUS,
     async () => dingtalkBridgeManager.getStates(),
+  )
+
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.LIST_BINDINGS,
+    async (): Promise<DingTalkChatBinding[]> => dingtalkBridgeManager.listAllBindings(),
+  )
+
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.UPDATE_BINDING,
+    async (_, input: DingTalkUpdateBindingInput): Promise<DingTalkChatBinding | null> => {
+      const existing = dingtalkBridgeManager
+        .listAllBindings()
+        .find((binding) => binding.chatId === input.chatId)
+      const bridge = dingtalkBridgeManager.findBridgeByChatId(input.chatId)
+      if (!existing || !bridge) return null
+
+      const updated = bridge.updateBinding(input.chatId, {
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+      })
+      return updated ? { ...updated, botId: existing.botId, botName: existing.botName } : null
+    },
+  )
+
+  ipcMain.handle(
+    DINGTALK_IPC_CHANNELS.REMOVE_BINDING,
+    async (_, chatId: string): Promise<boolean> =>
+      dingtalkBridgeManager.findBridgeByChatId(chatId)?.removeBinding(chatId) ?? false,
   )
 }

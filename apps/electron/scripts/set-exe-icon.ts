@@ -6,11 +6,11 @@ import { rcedit } from 'rcedit'
 import { existsSync, copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const exePath = join(import.meta.dirname, '..', 'out', 'win-unpacked', 'Proma.exe')
+const exePath = join(import.meta.dirname, '..', 'out', 'win-unpacked', 'Profer.exe')
 const icoPath = join(import.meta.dirname, '..', 'resources', 'icon.ico')
 
 if (!existsSync(exePath)) {
-  console.error('ERROR: Proma.exe not found at', exePath)
+  console.error('ERROR: Profer.exe not found at', exePath)
   process.exit(1)
 }
 if (!existsSync(icoPath)) {
@@ -23,10 +23,10 @@ console.log('Icon:', icoPath)
 
 await rcedit(exePath, {
   'version-string': {
-    ProductName: 'Proma',
-    FileDescription: 'Proma',
-    CompanyName: 'Proma Team',
-    LegalCopyright: 'Copyright © 2024-2026 Erlich Liu',
+    ProductName: 'Profer',
+    FileDescription: 'Profer',
+    CompanyName: 'Profer Team',
+    LegalCopyright: 'Copyright © 2024-2026 Profer',
   },
   icon: icoPath,
 })

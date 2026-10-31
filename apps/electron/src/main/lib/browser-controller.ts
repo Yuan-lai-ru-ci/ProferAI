@@ -23,7 +23,7 @@ import { BrowserStabilityProbe } from './browser-stabilization'
 import { browserObservationNameLimit, prioritizeBrowserObservationCandidates, resolveBrowserObserveMaxElements } from './browser-observation-policy'
 import { buildPersistentBrowserPartition, resolveBrowserProfileKey } from './browser-profile-policy'
 import { hasAcknowledgedBrowserRiskDisclaimer } from './browser-risk-disclaimer'
-import { buildPromaBrowserUserAgent } from './browser-identity'
+import { buildProferBrowserUserAgent } from './browser-identity'
 import { assertBrowserScript, buildBrowserDomActionExpression, type BrowserDomActionInput, BUILD_READ_ELEMENT_VALUE_FUNCTION, BUILD_WRITE_ELEMENT_VALUE_FUNCTION, normalizeFilledText } from './browser-script-policy'
 import { getSettings } from './settings-service'
 import { getBrowserHostSurfaceColor } from './titlebar-overlay'
@@ -849,7 +849,7 @@ export class BrowserController {
     const partition = buildPersistentBrowserPartition(profileKey)
     const browserSession = electronSession.fromPartition(partition)
     // 默认 UA 会暴露 Electron；受管网页改为诚实的 Proma 标识，并保留 Chromium token 保证站点兼容。
-    browserSession.setUserAgent(buildPromaBrowserUserAgent(browserSession.getUserAgent(), app.getVersion()))
+    browserSession.setUserAgent(buildProferBrowserUserAgent(browserSession.getUserAgent(), app.getVersion()))
     const record: BrowserSessionRecord = {
       sessionId,
       partition,

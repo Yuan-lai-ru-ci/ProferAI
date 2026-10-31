@@ -158,17 +158,19 @@ export function SidebarWindowDragStrip({ height }: { height: number }): React.Re
   )
 }
 
-/** 全屏可进入视图（规划中心三入口 / Agent 技能）对应的 navigation-region 选择器 */
+/** 全屏可进入视图（规划中心三入口 / Agent 技能 / Agent 记忆）对应的 navigation-region 选择器 */
 export function enterableViewSelector(item: string): string | null {
   if (planningSectionOf(item)) return '[data-profer-navigation-region="planning"]'
   if (item === 'agent-skills') return '[data-profer-navigation-region="agent-skills"]'
+  if (item === 'agent-memory') return '[data-profer-navigation-region="agent-memory"]'
   return null
 }
 
 /** 进入全屏视图后把焦点移交进其内容区，让用户能在视图内继续用方向键/手柄操作。
  *  React 渲染是异步的，点击触发视图切换后需等下一帧再聚焦，否则找不到刚渲染的 region。
- *  对 agent-skills 优先聚焦当前激活的顶部 tab（Skills/市场/MCP/记忆/预设，默认进入即 Skills），
- *  因为 region 内首个可聚焦控件是工作区切换下拉，不是 tab。 */
+ *  对 agent-skills 优先聚焦当前激活的顶部 tab（Skills/市场/MCP/预设，默认进入即 Skills），
+ *  因为 region 内首个可聚焦控件是工作区切换下拉，不是 tab。
+ *  对 agent-memory 直接聚焦搜索框：进记忆页多半是为了找内容，不是切工作区。 */
 export function focusEnterableViewItem(item: string): void {
   const selector = enterableViewSelector(item)
   if (!selector) return
@@ -188,6 +190,10 @@ export function focusEnterableViewItem(item: string): void {
       target = region?.querySelector<HTMLElement>(
         '[data-agent-skill-tab][aria-selected="true"]',
       ) ?? region?.querySelector<HTMLElement>('[data-agent-skill-tab="skills"]')
+    }
+    // 记忆页：直接落到搜索框
+    if (!target && item === 'agent-memory') {
+      target = region?.querySelector<HTMLElement>('[data-agent-memory-search]')
     }
     if (!target) {
       // 通用回退：region 内首个 focusable（tablist/按钮等）；无则可聚焦的 region 容器（tabIndex=-1）。

@@ -27,7 +27,7 @@ import type {
 import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_URLS, extractZhipuCodingTeamApiToken, isChannelEnabledForAnyRuntime, isCodexCredentialExpired, isLocalOllamaBaseUrl, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, resolveProviderNativeProtocol, resolveXaiCredentialMode, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { assertSdkBaseUrlSupportsRouting, isAnthropicShapedEndpoint, normalizeGoogleBaseUrl, resolveAnthropicMessagesUrl, resolveAnthropicModelsUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl, resolveOpenAIModelsUrl, getProferUserAgent } from '@profer/core'
+import { assertSdkBaseUrlSupportsRouting, isAnthropicShapedEndpoint, normalizeGoogleBaseUrl, resolveAnthropicMessagesUrl, resolveAnthropicModelsUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl, resolveOpenAIModelsUrl, getProferUserAgent, getWhitelistCompatUserAgent } from '@profer/core'
 import type { AnthropicEndpointMode } from '@profer/core'
 import { parseMiniMaxGeneralQuotaWindows } from './channel-plan-quota-parsers'
 import { parseCodexPlanQuotaResponse } from './codex-plan-quota'
@@ -1044,7 +1044,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
  * 测试 Anthropic 兼容 API 连接（Anthropic / DeepSeek / Kimi API / Kimi Coding Plan / MiniMax）
  *
  * 未指定模型时只校验目录；指定模型时调用真实的 Messages 端点。
- * Kimi Coding Plan 必须发送 Profer User-Agent，否则返回 403。
+ * Kimi Coding Plan 必须发送白名单 UA（旧产品名，见 getWhitelistCompatUserAgent），否则返回 403。
  *
  * `endpointMode` 决定端点推导语义（见 core 的 resolveAnthropicProtocolUrl）：
  * Chat 直连用 `chat`，Claude/Pi 运行时（SDK 自行拼 /v1/messages）必须用 `sdk`。
@@ -1075,10 +1075,10 @@ async function testAnthropicCompatible(
   } else if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team') {
     const token = provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
     headers.Authorization = `Bearer ${token}`
-    headers['User-Agent'] = getProferUserAgent(pkg.version)
+    headers['User-Agent'] = getWhitelistCompatUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getProferUserAgent(pkg.version)
+    headers['User-Agent'] = getWhitelistCompatUserAgent(pkg.version)
   } else if (provider === 'minimax') {
     headers.Authorization = `Bearer ${apiKey}`
   } else {
@@ -1229,7 +1229,7 @@ async function queryKimiPlanQuota(apiKey: string, proxyUrl?: string): Promise<im
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': getProferUserAgent(pkg.version),
+      'User-Agent': getWhitelistCompatUserAgent(pkg.version),
       Authorization: `Bearer ${apiKey}`,
     },
   }))
@@ -1525,7 +1525,7 @@ async function fetchZhipuQuota(
     headers: {
       Authorization: apiKey,
       'Content-Type': 'application/json',
-      'User-Agent': getProferUserAgent(pkg.version),
+      'User-Agent': getWhitelistCompatUserAgent(pkg.version),
     },
   }))
   const responseText = await response.text()
@@ -1986,10 +1986,10 @@ async function fetchAnthropicCompatibleModels(
   if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team') {
     const token = provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
     headers.Authorization = `Bearer ${token}`
-    headers['User-Agent'] = getProferUserAgent(pkg.version)
+    headers['User-Agent'] = getWhitelistCompatUserAgent(pkg.version)
   } else if (provider === 'xiaomi-token-plan') {
     headers.Authorization = `Bearer ${apiKey}`
-    headers['User-Agent'] = getProferUserAgent(pkg.version)
+    headers['User-Agent'] = getWhitelistCompatUserAgent(pkg.version)
   } else if (provider === 'minimax') {
     headers.Authorization = `Bearer ${apiKey}`
   } else {

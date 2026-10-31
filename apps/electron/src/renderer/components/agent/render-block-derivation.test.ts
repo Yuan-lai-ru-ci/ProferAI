@@ -47,8 +47,8 @@ describe('稳定渲染块派生', () => {
     expect(derive([message('m2', [text('正文')])]).topLevelItems[0]!.identity).not.toBe(before.identity)
   })
 
-  test('同一消息 UUID 缺失时支持 _promaStableKey，复制消息对象后身份保持', () => {
-    const stable = { ...message('unused', [text('<think>分析')]), uuid: undefined, _promaStableKey: 'stream-key' }
+  test('同一消息 UUID 缺失时支持 _proferStableKey，复制消息对象后身份保持', () => {
+    const stable = { ...message('unused', [text('<think>分析')]), uuid: undefined, _proferStableKey: 'stream-key' }
     const options = { getMessageIdentity: () => 'object-fallback', isStreaming: true }
     const first = deriveAssistantTurnBlocks([stable], options).topLevelItems[0]!
     const second = deriveAssistantTurnBlocks([{ ...stable, message: { content: [text('<think>分析</think>正文')] } }], options).topLevelItems[0]!
@@ -167,6 +167,29 @@ describe('隐藏 thinking 时过程组不空占位', () => {
     expect(items.map((item) => item.type)).toEqual(['process-group', 'image-output', 'block'])
     expect(items[1]?.type === 'image-output' && items[1].images).toEqual([image])
     expect(items[0]?.type === 'process-group' && items[0].items.map((item) => item.block.type)).toEqual(['thinking', 'tool_use'])
+  })
+
+  test('图片按原始顺序插在文字之间，支持图文混排', () => {
+    const derived = derive([message('m1', [text('第一段'), tool('image-1', 'send_local_image'), text('第二段')])])
+    const image = { localPath: '/tmp/a.png', filename: 'a.png', mediaType: 'image/png' as const }
+    const items = buildAssistantTurnRenderItems(derived.topLevelItems, {
+      imageOutputsByToolUseId: new Map([['image-1', [image]]]),
+    })
+
+    expect(items.map((item) => item.type)).toEqual(['block', 'image-output', 'block'])
+    expect(items[0]?.type === 'block' && items[0].item.block.type).toBe('text')
+    expect(items[2]?.type === 'block' && items[2].item.block.type).toBe('text')
+  })
+
+  test('与图片之间隔着工具调用的文字仍留在过程组', () => {
+    const derived = derive([message('m1', [text('我先看看'), tool('bash-1', 'Bash'), tool('image-1', 'send_local_image'), text('结果如下')])])
+    const image = { localPath: '/tmp/a.png', filename: 'a.png', mediaType: 'image/png' as const }
+    const items = buildAssistantTurnRenderItems(derived.topLevelItems, {
+      imageOutputsByToolUseId: new Map([['image-1', [image]]]),
+    })
+
+    expect(items.map((item) => item.type)).toEqual(['process-group', 'image-output', 'block'])
+    expect(items[0]?.type === 'process-group' && items[0].items.map((item) => item.block.type)).toEqual(['text', 'tool_use'])
   })
 
   test('图片工具没有结构化图片时保持普通过程行（保留失败审计）', () => {

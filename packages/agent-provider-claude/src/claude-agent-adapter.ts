@@ -27,6 +27,8 @@ import type {
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
+  OPENAI_UPSTREAM_BUSY_MESSAGE,
+  isOpenAIUpstreamBusyText,
   isThinkingSignatureError as matchesThinkingSignatureError,
   resolveContextWindowFromModelUsage,
 } from '@profer/shared'
@@ -417,7 +419,7 @@ export function mapSDKErrorToTypedError(
     'billing_error': {
       code: 'billing_error',
       title: '账单错误',
-      message: '您的账户存在账单问题',
+      message: '你的账户存在账单问题',
       canRetry: false,
     },
     'model_not_found': {
@@ -489,12 +491,12 @@ export function mapSDKErrorToTypedError(
   }
 
   // OpenAI 官方上游繁忙统一使用固定用户文案，避免把临时服务问题误导为
-  // 账户、卡扣或本地配置故障；编排层会据此展示「重试 n/8」。
-  if (/OpenAI 官方上游服务当前请求量较大|OpenAI.*(?:overloaded|too many requests|rate.?limit)/i.test(`${detailedMessage}\n${originalError}`)) {
+  // 账户或本地配置故障；编排层会据此展示「重试 n/8」。
+  if (isOpenAIUpstreamBusyText(`${detailedMessage}\n${originalError}`)) {
     return {
       code: 'provider_error',
       title: 'OpenAI 官方服务繁忙',
-      message: 'OpenAI 官方上游服务当前请求量较大，暂时无法及时响应，本次情况与您的账户及卡扣AI无关，请稍候片刻后再重试。',
+      message: OPENAI_UPSTREAM_BUSY_MESSAGE,
       actions: [
         { key: 's', label: '设置', action: 'settings' },
         { key: 'r', label: '重试', action: 'retry' },

@@ -93,10 +93,15 @@ mock.module('./agent-session-manager', () => ({
   getAgentSessionMeta: (id: string) => sessionMetas.get(id),
 }))
 
+const headlessInputs: Array<{ userMessage: string; rawUserMessage?: string; titleSourceText?: string }> = []
+
 mock.module('./agent-service', () => ({
   agentEventBus: { on: () => () => {} },
-  runAgentHeadless: async () => {},
+  runAgentHeadless: async (input: { userMessage: string; rawUserMessage?: string; titleSourceText?: string }) => {
+    headlessInputs.push(input)
+  },
   stopAgent: () => {},
+  isAgentSessionActive: () => false,
 }))
 
 mock.module('./agent-workspace-manager', () => ({
@@ -117,7 +122,12 @@ const botConfig: FeishuBotConfig = {
 }
 
 interface BridgeInternals {
-  createNewSession(ctx: { chatId: string; senderOpenId: string; chatType: 'p2p' | 'group' }, title?: string): Promise<void>
+  commandHandler: {
+    ensureBinding(
+      chatId: string,
+      ctx: { chatId: string; senderOpenId: string; chatType: 'p2p' | 'group' },
+    ): unknown
+  }
   loadBindings(): void
 }
 
@@ -130,6 +140,7 @@ beforeEach(() => {
   writeChannels()
   settings = { agentRuntime: 'pi', agentChannelId: 'pi-only' }
   createdSessionCalls.length = 0
+  headlessInputs.length = 0
   sessionMetas.clear()
   sessionSeq = 0
   rmSync(getFeishuBotBindingsPath(botConfig.id), { force: true })
@@ -145,7 +156,7 @@ describe('飞书 Bot 建会话使用全局 Agent 内核', () => {
   test('Given 全局内核 Pi 且默认渠道 Pi-only When 建会话 Then 传 pi 并写入 binding', async () => {
     const bridge = createBridge()
 
-    await (bridge as unknown as BridgeInternals).createNewSession({
+    ;(bridge as unknown as BridgeInternals).commandHandler.ensureBinding('oc_1', {
       chatId: 'oc_1',
       senderOpenId: 'ou_1',
       chatType: 'p2p',
@@ -163,7 +174,7 @@ describe('飞书 Bot 建会话使用全局 Agent 内核', () => {
   test('Given Bot 默认渠道只勾选 Claude 而全局内核是 Pi When 建会话 Then 回退到 Pi 可用渠道', async () => {
     const bridge = new FeishuBridge({ ...botConfig, defaultChannelId: 'claude-only' })
 
-    await (bridge as unknown as BridgeInternals).createNewSession({
+    ;(bridge as unknown as BridgeInternals).commandHandler.ensureBinding('oc_2', {
       chatId: 'oc_2',
       senderOpenId: 'ou_1',
       chatType: 'p2p',
@@ -193,5 +204,29 @@ describe('飞书 Bot 建会话使用全局 Agent 内核', () => {
     ;(bridge as unknown as BridgeInternals).loadBindings()
 
     expect(bridge.listBindings()[0]?.agentRuntime).toBe('pi')
+  })
+})
+
+
+describe('飞书消息进桌面端的展示文本', () => {
+  test('userMessage 带 bridge 工程块，rawUserMessage 只保留用户原文', async () => {
+    const bridge = createBridge()
+    ;(bridge as unknown as Record<string, unknown>).sendMessage = async () => {}
+    ;(bridge as unknown as Record<string, unknown>).sendCardMessage = async () => {}
+
+    await (bridge as unknown as {
+      handleUserMessage(
+        ctx: { chatId: string; senderOpenId: string; chatType: 'p2p' | 'group'; messageId: string },
+        text: string,
+      ): Promise<void>
+    }).handleUserMessage(
+      { chatId: 'oc_display', senderOpenId: 'ou_1', chatType: 'p2p', messageId: 'm1' },
+      '帮我看下这个报错',
+    )
+
+    const input = headlessInputs.at(-1)
+    expect(input?.userMessage).toContain('<bridge_context>')
+    expect(input?.rawUserMessage).toBe('帮我看下这个报错')
+    expect(input?.titleSourceText).toBe('帮我看下这个报错')
   })
 })

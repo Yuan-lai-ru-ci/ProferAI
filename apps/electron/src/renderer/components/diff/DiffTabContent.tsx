@@ -225,8 +225,28 @@ interface DiffTabContentProps {
 
 export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions, hideToolbar = false, baseRef, agentPreviewSession }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
-  const [oldContent, setOldContent] = React.useState('')
-  const [newContent, setNewContent] = React.useState('')
+  const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
+  const setRefreshVersionMap = useSetAtom(agentDiffRefreshVersionAtom)
+  const refreshVersion = refreshVersionMap.get(sessionId) ?? 0
+  const previewContentVersion = previewOnly ? refreshVersion : 0
+  // 缓存 key 的上下文（目录/仓库/候选根）必须先于内容状态算出来：
+  // 预览子树在分屏↔全屏、组合解散、切走再切回等场景会被整体重建，
+  // 首帧就要能直接命中缓存，否则会先渲染一帧「加载中...」，视觉上就是一次白闪。
+  const contentCacheScope = React.useMemo(() => JSON.stringify({
+    dirPath,
+    gitRoot: gitRoot ?? '',
+    basePaths: basePaths ?? [],
+  }), [basePaths, dirPath, gitRoot])
+  const getContentCacheKey = React.useCallback((mode: 'preview' | 'diff', version: number) => (
+    `${sessionId}:${mode}:${filePath}@v${version}:${contentCacheScope}`
+  ), [contentCacheScope, filePath, sessionId])
+  // 挂载瞬间读一次缓存：命中时首帧就有内容（Tiptap 直接带着文档建编辑器），
+  // 不会出现「加载中 → 内容」的那一帧。
+  const [initialCache] = React.useState(() => cacheGet(
+    previewOnly ? getContentCacheKey('preview', previewContentVersion) : getContentCacheKey('diff', refreshVersion),
+  ))
+  const [oldContent, setOldContent] = React.useState(() => initialCache?.oldContent ?? '')
+  const [newContent, setNewContent] = React.useState(() => initialCache?.newContent ?? '')
   const [markdownEditing, setMarkdownEditing] = React.useState(false)
   const [markdownSourceMode, setMarkdownSourceMode] = React.useState(false)
   const [markdownDraft, setMarkdownDraft] = React.useState('')
@@ -236,19 +256,19 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   const filePathRef = React.useRef(filePath)
   filePathRef.current = filePath
   const autosaveTimerRef = React.useRef<number | null>(null)
-  const [docxHtml, setDocxHtml] = React.useState('')
-  const [officeHtml, setOfficeHtml] = React.useState('')
-  const [officeText, setOfficeText] = React.useState('')
-  const [officeFallbackHtml, setOfficeFallbackHtml] = React.useState('')
+  const [docxHtml, setDocxHtml] = React.useState(() => initialCache?.docxHtml ?? '')
+  const [officeHtml, setOfficeHtml] = React.useState(() => initialCache?.officeHtml ?? '')
+  const [officeText, setOfficeText] = React.useState(() => initialCache?.officeText ?? '')
+  const [officeFallbackHtml, setOfficeFallbackHtml] = React.useState(() => initialCache?.officeHtml ?? '')
   // HTML 默认展示运行后的页面；用户可随时切换回源码高亮预览。
-  const [htmlPreviewUrl, setHtmlPreviewUrl] = React.useState('')
+  const [htmlPreviewUrl, setHtmlPreviewUrl] = React.useState(() => initialCache?.htmlPreviewUrl ?? '')
   const [htmlSourceMode, setHtmlSourceMode] = React.useState(false)
-  const [pdfSrc, setPdfSrc] = React.useState('')
+  const [pdfSrc, setPdfSrc] = React.useState(() => initialCache?.pdfSrc ?? '')
   const [pdfError, setPdfError] = React.useState('')
   const [pdfZoom, setPdfZoom] = React.useState(100)
   const pdfIframeRef = React.useRef<HTMLIFrameElement>(null)
-  const [imagePath, setImagePath] = React.useState('')
-  const [imageDataUrl, setImageDataUrl] = React.useState('')
+  const [imagePath, setImagePath] = React.useState(() => initialCache?.imagePath ?? '')
+  const [imageDataUrl, setImageDataUrl] = React.useState(() => initialCache?.imageDataUrl ?? '')
   // 图片缩放：useSmoothZoom 统一三处图片预览（普通滚轮直接缩放 + rAF 平滑 + 指针锚定 + 拖拽平移）
   const {
     zoom: imageZoom,
@@ -260,16 +280,12 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   } = useSmoothZoom({ minZoom: 0.5, maxZoom: 5 })
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const [findOpen, setFindOpen] = React.useState(false)
-  const [loading, setLoading] = React.useState(true)
+  const [loading, setLoading] = React.useState(() => !initialCache)
   const [copied, setCopied] = React.useState(false)
   // 文件解析失败（主进程 resolveAndReadFile 返回 null）：区别于「文件存在但内容为空」
   const [notFound, setNotFound] = React.useState(false)
   // 预览目标类型：目录链接展示目录清单；denied 区分「越权被拒」与「真的不存在」
   const [pathKind, setPathKind] = React.useState<'file' | 'directory' | 'denied'>('file')
-  const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
-  const setRefreshVersionMap = useSetAtom(agentDiffRefreshVersionAtom)
-  const refreshVersion = refreshVersionMap.get(sessionId) ?? 0
-  const previewContentVersion = previewOnly ? refreshVersion : 0
   const theme = useAtomValue(resolvedThemeAtom)
   // md 文档预览代码块背景统一为深色 --code-bg（与聊天消息代码块一致），
   // 因此 Shiki 恒用深色主题，避免浅色主题下代码块文字变黑。
@@ -333,16 +349,6 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
       isAbsoluteFilePath(filePath) ? undefined : dirPath,
     ),
   }), [sessionId, basePaths, dirPath, filePath])
-
-  const contentCacheScope = React.useMemo(() => JSON.stringify({
-    dirPath,
-    gitRoot: gitRoot ?? '',
-    basePaths: basePaths ?? [],
-  }), [basePaths, dirPath, gitRoot])
-
-  const getContentCacheKey = React.useCallback((mode: 'preview' | 'diff', version: number) => (
-    `${sessionId}:${mode}:${filePath}@v${version}:${contentCacheScope}`
-  ), [contentCacheScope, filePath, sessionId])
 
   // PierreFile props 缓存，避免每次渲染创建新对象导致内部重新高亮
   const pierreFile = React.useMemo(() => ({
@@ -409,6 +415,23 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   // 滚动位置持久化 key（sessionId:filePath）。主加载 effect 在缓存未命中时
   // 也会读它判断是否需要恢复滚动，故声明须早于该 effect。
   const scrollKey = scrollCacheKey(sessionId, filePath)
+
+  // 缓存命中挂载时，先把滚动位置放回去再上屏。
+  // 预览子树在分屏↔全屏、组合解散、切走再切回时会整体重建，
+  // 若等下面的 rAF 收敛（3 帧）再恢复，用户会先看到文档顶部再跳回原位，同样像闪了一下。
+  // 首帧内容已经由 initialCache 同步就位（Tiptap 带内容建编辑器），
+  // 这里在 layout 阶段设 scrollTop 就能做到“第一帧就在原位”。
+  const initialScrollRestoredRef = React.useRef(false)
+  React.useLayoutEffect(() => {
+    if (initialScrollRestoredRef.current) return
+    initialScrollRestoredRef.current = true
+    if (!initialCache) return
+    const el = scrollContainerRef.current
+    const pos = scrollPositionCache.get(scrollKey)
+    if (!el || !pos) return
+    el.scrollTop = pos.top
+    el.scrollLeft = pos.left
+  }, [initialCache, scrollKey])
 
   // 主加载 effect：上下文变化（filePath/dirPath/gitRoot/previewOnly）时触发；
   // 纯预览模式也跟随 refreshVersion 失效，保证同一文件二次写入后重新读盘。

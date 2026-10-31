@@ -76,7 +76,7 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId)
   // 定时任务表单打开时隐藏右侧文件面板，让中间区域扩展到全宽（表单内含自己的右栏配置）
   const activeView = useAtomValue(activeViewAtom)
-  const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills'
+  const showRightPanel = appMode === 'agent' && !!currentSessionId && !automationForm.open && activeView !== 'planning' && activeView !== 'agent-skills' && activeView !== 'agent-memory'
   // 文件面板/浏览器仅在 agent 个人视图参与布局判定（团队/规划/自动化表单时右侧面板不渲染）
   const filePanelActive = showRightPanel
   // 统一自适应可见性：窗口 resize 监听 + 浏览器/文件面板可见性计算（挂载于此布局容器）

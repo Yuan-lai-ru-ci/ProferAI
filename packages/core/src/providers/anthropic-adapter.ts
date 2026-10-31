@@ -37,7 +37,7 @@ import type {
 } from './types.ts'
 import { resolveAnthropicMessagesUrl } from './url-utils.ts'
 import { detectThinkingCapability } from './thinking-capability.ts'
-import { getProferUserAgent } from './user-agent.ts'
+import { getProferUserAgent, getWhitelistCompatUserAgent } from './user-agent.ts'
 
 // ===== Anthropic 特有类型 =====
 
@@ -281,6 +281,7 @@ export class AnthropicAdapter implements ProviderAdapter {
    * Kimi Coding Plan 要求：
    * - 只使用 Bearer（服务端校验 User-Agent 白名单）
    * - User-Agent 产品名保持「Proma」以兼容渠道白名单（通过 setProferVersion 初始化）
+   *   其余渠道一律发「Profer」，品牌不再外泄。
    */
   private buildHeaders(apiKey: string): Record<string, string> {
     apiKey = this.providerType === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
@@ -290,12 +291,12 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
     if (this.providerType === 'kimi-coding' || this.providerType === 'zhipu-coding' || this.providerType === 'zhipu-coding-team') {
       base['Authorization'] = `Bearer ${apiKey}`
-      base['User-Agent'] = getProferUserAgent()
+      base['User-Agent'] = getWhitelistCompatUserAgent()
       return base
     }
     if (this.providerType === 'xiaomi-token-plan') {
       base['Authorization'] = `Bearer ${apiKey}`
-      base['User-Agent'] = getProferUserAgent()
+      base['User-Agent'] = getWhitelistCompatUserAgent()
       return base
     }
     if (this.providerType === 'minimax') {

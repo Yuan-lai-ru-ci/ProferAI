@@ -42,6 +42,7 @@ export function buildPresetToolList(
 }
 
 const TOOL_USAGE_GUIDELINES = `- **大文件写入**：使用 Write 写入超过约 10,000 字（特别是中文/日文/韩文等 CJK 字符）时，主动拆分为多次写入——先 Write 首段，再用 Edit 追加后续段落，避免 token 截断导致文件内容不完整
+- **用户附件是用户资产**：会话目录中出现在 \`<attached_files>\` 里的文件属于用户上传的附件，不要删除、移动或覆盖；清理临时文件（截图、导出图、草稿）时先确认目标文件名不在附件列表里，不要用 \`rm -f *.png\` 这类通配清理
 - **文件内容与视觉预览**：Markdown、HTML、SVG、图片、PDF、DOCX、XLSX 等通用文件可按需使用 \`inspect_preview\`；**HTML/SVG 网页必须用文件链接（例如 \`[打开网页](index.html)\`）交付，不能写成 Markdown 图片（\`![...](index.html)\`），只有 PNG/JPEG/GIF/WebP 等图片文件才使用图片语法**；**PPTX 必须先用 \`open_file_preview\` 打开 Profer 正式文件预览，再用 \`inspect_file_preview\` 从同一用户可见 viewer 读取页级视觉**。不得为 PPTX 创建 \`Preview.html\`、使用 \`BrowserPreviewOpen\`、调用浏览器截图或另建隐藏截图链路。PPTX 修改后再次调用 \`open_file_preview\` 等待新 revision ready，再重新观察受影响页。
 - **回复中的代码块必须标语言**：在 Markdown 回复里写 fenced code block 时，开头围栏一定要紧跟语言标识（\`\`\`ts / \`\`\`python / \`\`\`json / \`\`\`bash 等），Mermaid 图必须用 \`\`\`mermaid，纯文本/日志/未知格式用 \`\`\`text。不写语言会导致前端无法语法高亮，用户体验下降；如果实在不知道语言，宁可写 \`\`\`text 也不要留空围栏`
 

@@ -54,7 +54,7 @@ export async function injectClaudeBrowserMcpServer(
       sdk.tool('BrowserScreenshot', 'Capture the Agent working in-app browser page as an image.', { tabId: optionalTabId }, async ({ tabId }) => {
         const shot = await browserController.screenshot(ctx.sessionId, tabId)
         const image = compressToolImageForModel({ data: shot.base64, mimeType: shot.mimeType })
-        return { content: [{ type: 'text', text: `已截取当前页面：${shot.url}` }, { type: 'image', data: image.data, mimeType: image.mimeType }] }
+        return { content: [{ type: 'text', text: `已截取当前页面：${shot.url}（仅供观察，不要用 send_local_image 转发给用户）` }, { type: 'image', data: image.data, mimeType: image.mimeType }] }
       }, readOnly),
       sdk.tool('BrowserPreviewOpen', 'Open an authorized local file in the visible in-app browser tab. HTML files load directly; other extensions render through the built-in viewer page (documents, archives, designs, 3D, GIS, media). Read-only; never expose absolute paths.', { path: z.string().min(1), tabId: optionalTabId }, async ({ path, tabId }) => textResult(await browserController.previewOpen(ctx.sessionId, path, tabId, ctx.allowedRoots, ctx.agentCwd)), readOnly),
       sdk.tool('BrowserListTabs', 'List current in-app browser tabs.', {}, async () => textResult(browserController.listTabs(ctx.sessionId)), readOnly),

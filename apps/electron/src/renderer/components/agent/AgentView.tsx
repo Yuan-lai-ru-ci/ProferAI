@@ -3279,7 +3279,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
             {(!agentChannelId || !hasAvailableModel) && (
               <div className="flex items-center gap-2 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">
                 <Settings size={14} />
-                <span>{!agentChannelId ? '请在设置中选择 Agent 供应商' : '暂无可用模型，请在设置中启用 Agent 渠道并配置模型'}</span>
+                <span>{!agentChannelId ? '请在设置中选择 Agent 渠道' : '暂无可用模型，请在设置中启用 Agent 渠道并配置模型'}</span>
                 <button
                   type="button"
                   className="text-xs underline underline-offset-2 hover:text-foreground transition-colors"

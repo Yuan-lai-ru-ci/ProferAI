@@ -1,5 +1,5 @@
 /**
- * createPromaSkillsOverride 语义测试
+ * createProferSkillsOverride 语义测试
  *
  * 覆盖 skillSlugs 三种语义（三层一致的关键一环）：
  * - undefined = 不裁剪（全量注入）
@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Skill } from '@earendil-works/pi-coding-agent'
-import { createPromaSkillsOverride, preparePromptWithPromaSkills } from './pi-agent-adapter'
+import { createProferSkillsOverride, preparePromptWithProferSkills } from './pi-agent-adapter'
 
 let skillsRoot: string
 let realSkillsRoot: string
@@ -66,27 +66,27 @@ afterAll(() => {
   rmSync(realSkillsRoot, { recursive: true, force: true })
 })
 
-describe('createPromaSkillsOverride skillSlugs 语义', () => {
+describe('createProferSkillsOverride skillSlugs 语义', () => {
   test('skillSlugs=undefined 时不裁剪（全量注入）', () => {
-    const override = createPromaSkillsOverride([skillsRoot], undefined)
+    const override = createProferSkillsOverride([skillsRoot], undefined)
     const result = override(makeBase([alpha, beta]))
     expect(result.skills.map((s) => s.name).sort()).toEqual(['alpha', 'beta'])
   })
 
   test('skillSlugs=[] 时 0 个 skill（全部隐藏）', () => {
-    const override = createPromaSkillsOverride([skillsRoot], [])
+    const override = createProferSkillsOverride([skillsRoot], [])
     const result = override(makeBase([alpha, beta]))
     expect(result.skills).toEqual([])
   })
 
   test('skillSlugs 非空时只保留白名单内的 skill', () => {
-    const override = createPromaSkillsOverride([skillsRoot], ['alpha'])
+    const override = createProferSkillsOverride([skillsRoot], ['alpha'])
     const result = override(makeBase([alpha, beta]))
     expect(result.skills.map((s) => s.name)).toEqual(['alpha'])
   })
 
   test('根目录之外的 skill 即使白名单命中也被路径守卫过滤', () => {
-    const override = createPromaSkillsOverride([skillsRoot], ['alpha'])
+    const override = createProferSkillsOverride([skillsRoot], ['alpha'])
     const result = override(makeBase([alpha, outside]))
     expect(result.skills.map((s) => s.name)).toEqual(['alpha'])
   })
@@ -94,13 +94,13 @@ describe('createPromaSkillsOverride skillSlugs 语义', () => {
   test('历史 Coach 白名单解析为新 slug，且新旧目录并存时只注入新副本', () => {
     const legacyCoach = makeSkill('proma-coach', skillsRoot)
     const currentCoach = makeSkill('profer-coach', skillsRoot)
-    expect(createPromaSkillsOverride([skillsRoot], ['proma-coach'])(makeBase([legacyCoach, currentCoach]))
+    expect(createProferSkillsOverride([skillsRoot], ['proma-coach'])(makeBase([legacyCoach, currentCoach]))
       .skills.map((skill) => skill.name)).toEqual(['profer-coach'])
   })
 
   test('synthetic fixture 的 name 不能扩宽规范目录白名单', () => {
     const namedAlpha = { ...beta, name: 'alpha' }
-    expect(createPromaSkillsOverride([skillsRoot], ['alpha'])(makeBase([namedAlpha])).skills).toEqual([])
+    expect(createProferSkillsOverride([skillsRoot], ['alpha'])(makeBase([namedAlpha])).skills).toEqual([])
   })
 })
 
@@ -115,7 +115,7 @@ async function makeLoader(slugs?: string[], sdkLoadsRoot = true) {
     additionalSkillPaths: sdkLoadsRoot
       ? ['same-a', 'same-b', 'ambiguous', 'ambiguous-copy'].map((slug) => join(realSkillsRoot, slug))
       : [],
-    skillsOverride: createPromaSkillsOverride([realSkillsRoot], slugs, loadSkillsFromDir),
+    skillsOverride: createProferSkillsOverride([realSkillsRoot], slugs, loadSkillsFromDir),
   })
 }
 
@@ -170,20 +170,20 @@ describe('真实 DefaultResourceLoader Skill 门禁', () => {
   test('显式空引用不从 enriched prompt 扫描，undefined 保持旧扫描', async () => {
     const loader = await makeLoader(['same-b'])
     const prompt = '历史模板里有 /skill:same-b，当前用户只说你好'
-    expect(await preparePromptWithPromaSkills(loader, prompt, [])).toBe(prompt)
-    expect(await preparePromptWithPromaSkills(loader, prompt)).toContain('<skill name="same-b"')
+    expect(await preparePromptWithProferSkills(loader, prompt, [])).toBe(prompt)
+    expect(await preparePromptWithProferSkills(loader, prompt)).toContain('<skill name="same-b"')
   })
 
   test('同 label 显式展开两个 canonical slug，不按 name 吞掉其一', async () => {
     const loader = await makeLoader(['same-a', 'same-b'])
-    const prompt = await preparePromptWithPromaSkills(loader, '你好', ['same-a', 'same-b'])
+    const prompt = await preparePromptWithProferSkills(loader, '你好', ['same-a', 'same-b'])
     expect(prompt).toContain('<skill name="same-a"')
     expect(prompt).toContain('<skill name="same-b"')
   })
 
   test('歧义与不存在引用返回安全诊断，普通任务仍保留', async () => {
     const loader = await makeLoader()
-    const prompt = await preparePromptWithPromaSkills(loader, '继续任务', ['alias', 'missing'])
+    const prompt = await preparePromptWithProferSkills(loader, '继续任务', ['alias', 'missing'])
     expect(prompt).toContain('Skill 引用')
     expect(prompt).toContain('继续任务')
     expect(prompt).not.toContain(realSkillsRoot)

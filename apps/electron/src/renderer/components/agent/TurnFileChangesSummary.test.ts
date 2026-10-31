@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@profer/shared'
-import { buildTurnFileNameMap, collectAuthoritativeFileChanges, collectModifiedFilePaths } from './TurnFileChangesSummary'
+import { buildTurnFileNameMap, collectAuthoritativeFileChanges, collectModifiedFilePaths, resolveVisibleFileChanges } from './TurnFileChangesSummary'
 
 function toolUse(id: string, name: string, input: Record<string, unknown>): SDKMessage {
   return {
@@ -140,5 +140,26 @@ describe('collectModifiedFilePaths', () => {
     ])
 
     expect(result).toEqual(['/repo/report.md'])
+  })
+})
+
+describe('文件改动 chip 不追踪会话工作目录里的草稿文件', () => {
+  const sessionPath = '/Users/me/.profer/agent-workspaces/profer/0ad480b7'
+
+  test('会话目录内的截图与临时产物不显示，项目改动保留', () => {
+    expect(resolveVisibleFileChanges(
+      [`${sessionPath}/mem-v2.png`, '/Users/me/profer/profer-main/src/a.ts', `${sessionPath}/.context/plan/x.md`],
+      sessionPath,
+    )).toEqual(['/Users/me/profer/profer-main/src/a.ts'])
+  })
+
+  test('会话目录前缀相同但并非子目录时不误伤', () => {
+    expect(resolveVisibleFileChanges(['/Users/me/.profer/agent-workspaces/profer/0ad480b7-backup/a.ts'], sessionPath))
+      .toEqual(['/Users/me/.profer/agent-workspaces/profer/0ad480b7-backup/a.ts'])
+  })
+
+  test('没有会话目录时保持原样；相对路径无法判断归属，保持可见', () => {
+    expect(resolveVisibleFileChanges([`${sessionPath}/mem-v2.png`])).toEqual([`${sessionPath}/mem-v2.png`])
+    expect(resolveVisibleFileChanges(['src/a.ts'], sessionPath)).toEqual(['src/a.ts'])
   })
 })

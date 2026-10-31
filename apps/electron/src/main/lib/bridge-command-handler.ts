@@ -44,6 +44,88 @@ import {
 export interface BridgePlatformAdapter {
   /** 发送纯文本回复。meta 是平台专属的上下文数据（如微信的 contextToken） */
   sendText(chatId: string, text: string, meta?: unknown): Promise<void>
+  /**
+   * 发送富文本卡片（可选）。
+   *
+   * 只有同时提供本方法与 `BridgeCommandHandlerConfig.renderers` 的平台才会走卡片路径；
+   * 其余平台保持纯文本，行为不变。
+   */
+  sendCard?(chatId: string, card: BridgeCard, meta?: unknown): Promise<void>
+}
+
+/** 平台私有卡片结构。公共层不解释其内容，只负责传递。 */
+export type BridgeCard = unknown
+
+/** /list 中的单条会话 */
+export interface BridgeSessionItem {
+  /** 完整会话 ID */
+  id: string
+  /** 全局序号（与 /switch 的序号一致） */
+  index: number
+  title: string
+  /** 会话 ID 前 8 位 */
+  idPrefix: string
+  /** 是否为当前绑定的会话 */
+  active: boolean
+}
+
+/** /list 中的工作区分组（含“未分配工作区”伪分组） */
+export interface BridgeSessionGroup {
+  /** 工作区 ID；伪分组为空串 */
+  id: string
+  name: string
+  sessions: BridgeSessionItem[]
+}
+
+/** /workspace 列表项 */
+export interface BridgeWorkspaceItem {
+  index: number
+  name: string
+  isCurrent: boolean
+}
+
+/** /model 渠道列表项 */
+export interface BridgeChannelItem {
+  index: number
+  name: string
+  modelCount: number
+  isCurrent: boolean
+}
+
+/** /model 模型列表项 */
+export interface BridgeModelItem {
+  index: number
+  name: string
+  isCurrent: boolean
+}
+
+/** /now 的结构化快照 */
+export interface BridgeNowSnapshot {
+  session?: { title: string; idPrefix: string }
+  model?: { channelName: string; modelName: string; valid: boolean }
+  runtimeLabel?: string
+  workspace?: { name: string; slug: string }
+  mcpServers: Array<{ name: string; enabled: boolean }>
+  skills: Array<{ name: string; enabled: boolean }>
+  workspaceFiles: string[]
+  sessionFiles: string[]
+}
+
+/**
+ * 可选渲染钩子。
+ *
+ * 钩子返回 `null`/`undefined` 时回退到纯文本；只有同时提供 `adapter.sendCard` 时生效。
+ * 平台可按需实现其中任意几个，未实现的命令继续走文本。
+ */
+export interface BridgeCommandRenderers {
+  help?(): BridgeCard | null
+  sessionList?(input: { groups: BridgeSessionGroup[]; currentWorkspaceId?: string }): BridgeCard | null
+  workspaceList?(input: { items: BridgeWorkspaceItem[]; currentWorkspaceId?: string }): BridgeCard | null
+  workspaceSwitched?(input: { workspaceName: string; recentSessions: BridgeSessionItem[] }): BridgeCard | null
+  now?(snapshot: BridgeNowSnapshot): BridgeCard | null
+  channelList?(input: { runtimeLabel: string; items: BridgeChannelItem[] }): BridgeCard | null
+  modelList?(input: { channelName: string; channelIndex: number; items: BridgeModelItem[] }): BridgeCard | null
+  modelSwitched?(input: { channelName: string; modelName: string }): BridgeCard | null
 }
 
 /** 已保存到磁盘的附件引用，由各 Bridge 预处理后传入 handler */
@@ -74,6 +156,43 @@ export interface BridgeCommandHandlerConfig {
   getDefaultWorkspaceId?: () => string | undefined
   /** 工作区切换后的回调 */
   onWorkspaceSwitched?: (workspaceId: string) => void
+  /** 可选渲染钩子：实现后该命令改发卡片，否则保持纯文本 */
+  renderers?: BridgeCommandRenderers
+  /**
+   * 绑定写入前的补充钩子。
+   *
+   * 飞书用它补 `botId/userId/chatType/groupName/source` 等平台字段；`contextData` 是调用方透传的平台上下文。
+   */
+  enrichBinding?: (binding: BridgeChatBinding, contextData?: unknown) => void
+  /** 绑定新增 / 删除 / 字段变更后触发（飞书用它落盘并推送状态） */
+  afterBindingChanged?: () => void
+  /** 停止 Agent 之后触发（飞书用它标记流式卡片中断） */
+  afterStop?: (sessionId: string) => void
+  /** 平台级默认渠道（飞书 Bot 的 defaultChannelId）；缺省用全局 agentChannelId */
+  getPreferredChannelId?: () => string | undefined
+  /** 平台级默认模型（飞书 Bot 的 defaultModelId）；缺省用全局 agentModelId */
+  getPreferredModelId?: () => string | undefined
+  /** `/now` 文件树的图标（飞书传空串，保持卡片内无 emoji） */
+  fileTreeOptions?: { dirIcon?: string; fileIcon?: string }
+  /**
+   * 全局默认工作区也为空时的最后兜底（飞书用它回退到 default 或最近工作区）。
+   * 不提供时保持原有行为：建无工作区会话。
+   */
+  fallbackWorkspaceId?: () => string | undefined
+  /**
+   * 自定义新会话标题。不提供时为 `title || '新会话'`；
+   * 飞书传 `(title) => title`，保持“首轮后自动生成标题”的原有行为。
+   */
+  sessionTitle?: (title?: string) => string | undefined
+  /**
+   * 可注入的绑定存储。
+   *
+   * 平台已经有自己的绑定 Map（如飞书的 `chatBindings`）时传进来，保证命令处理与
+   * 消息路由读写的是同一份数据；不传则内部新建。
+   */
+  bindings?: Map<string, BridgeChatBinding>
+  /** 可注入的反向索引（sessionId → chatId），与 `bindings` 配套使用 */
+  sessionToChat?: Map<string, string>
 }
 
 /** 通用聊天绑定 */
@@ -120,10 +239,10 @@ export class BridgeCommandHandler {
   private readonly config: BridgeCommandHandlerConfig
   private readonly log: (msg: string) => void
 
-  /** chatId → 聊天绑定 */
-  private chatBindings = new Map<string, BridgeChatBinding>()
-  /** sessionId → chatId（反向索引） */
-  private sessionToChat = new Map<string, string>()
+  /** chatId → 聊天绑定（可由平台注入，与平台共享同一份数据） */
+  private chatBindings: Map<string, BridgeChatBinding>
+  /** sessionId → chatId（反向索引，可由平台注入） */
+  private sessionToChat: Map<string, string>
   /** sessionId → 回复缓冲 */
   private sessionBuffers = new Map<string, SessionBuffer>()
   /** EventBus 取消订阅 */
@@ -131,6 +250,8 @@ export class BridgeCommandHandler {
 
   constructor(config: BridgeCommandHandlerConfig) {
     this.config = config
+    this.chatBindings = config.bindings ?? new Map<string, BridgeChatBinding>()
+    this.sessionToChat = config.sessionToChat ?? new Map<string, string>()
     this.log = (msg: string) => console.log(`[${config.platformName} Bridge] ${msg}`)
   }
 
@@ -156,23 +277,30 @@ export class BridgeCommandHandler {
    * 用于 Bridge 在保存图片/文件前预先拿到 sessionId 和 workspaceId
    * 如果未配置 Agent 渠道，返回 null
    */
-  ensureBinding(chatId: string): BridgeChatBinding | null {
+  ensureBinding(chatId: string, contextData?: unknown): BridgeChatBinding | null {
     const existing = this.chatBindings.get(chatId)
     if (existing) return existing
 
     const settings = getSettings()
-    if (!settings.agentChannelId) return null
+    const preferredChannelId = this.config.getPreferredChannelId?.() ?? settings.agentChannelId
+    if (!preferredChannelId) return null
 
     const agentRuntime = normalizeAgentRuntime(settings.agentRuntime)
-    const picked = this.pickChannelForRuntime(agentRuntime)
+    const picked = resolveChannelIdForRuntime(preferredChannelId, agentRuntime)
     if (!picked) return null
     const channelId = picked.channelId
-    const modelId = resolveModelIdForChannel(channelId, picked.fellBack ? undefined : settings.agentModelId)
+    const modelId = resolveModelIdForChannel(
+      channelId,
+      picked.fellBack ? undefined : this.config.getPreferredModelId?.() ?? settings.agentModelId,
+    )
 
-    const workspaceId = this.config.getDefaultWorkspaceId?.() ?? settings.agentWorkspaceId ?? ''
+    const workspaceId = this.config.getDefaultWorkspaceId?.() ?? settings.agentWorkspaceId ?? this.config.fallbackWorkspaceId?.() ?? ''
 
+    const sessionTitle = this.config.sessionTitle
+      ? this.config.sessionTitle()
+      : `${this.config.platformName}会话`
     const session = createAgentSession(
-      `${this.config.platformName}会话`,
+      sessionTitle,
       channelId,
       workspaceId || undefined,
       modelId,
@@ -187,8 +315,10 @@ export class BridgeCommandHandler {
       modelId,
       agentRuntime,
     }
+    this.config.enrichBinding?.(binding, contextData)
     this.chatBindings.set(chatId, binding)
     this.sessionToChat.set(session.id, chatId)
+    this.config.afterBindingChanged?.()
     this.log(`为 ${chatId.slice(0, 8)}... 创建会话: ${session.id.slice(0, 8)}`)
     this.notifySessionCreated(session.id, session.title)
     return binding
@@ -311,6 +441,7 @@ export class BridgeCommandHandler {
   // ===== 命令实现 =====
 
   private async sendHelp(chatId: string, contextData?: unknown): Promise<void> {
+    if (await this.trySendCard(chatId, this.config.renderers?.help?.(), contextData)) return
     const lines = [
       '📋 可用命令（斜杠后为简写）:',
       '',
@@ -328,14 +459,15 @@ export class BridgeCommandHandler {
 
   private async createNewSession(chatId: string, title?: string, contextData?: unknown): Promise<void> {
     const settings = getSettings()
-    if (!settings.agentChannelId) {
+    const preferredChannelId = this.config.getPreferredChannelId?.() ?? settings.agentChannelId
+    if (!preferredChannelId) {
       await this.send(chatId, '请先在 Profer 设置中选择 Agent 渠道。', contextData)
       return
     }
 
     // 会话内核跟随全局设置，不能隐式退回 Claude（Pi-only 渠道会发送失败）
     const agentRuntime = normalizeAgentRuntime(settings.agentRuntime)
-    const picked = this.pickChannelForRuntime(agentRuntime)
+    const picked = resolveChannelIdForRuntime(preferredChannelId, agentRuntime)
     if (!picked) {
       await this.send(
         chatId,
@@ -345,13 +477,16 @@ export class BridgeCommandHandler {
       return
     }
     const channelId = picked.channelId
-    const modelId = resolveModelIdForChannel(channelId, picked.fellBack ? undefined : settings.agentModelId)
+    const modelId = resolveModelIdForChannel(
+      channelId,
+      picked.fellBack ? undefined : this.config.getPreferredModelId?.() ?? settings.agentModelId,
+    )
 
     // 确定工作区
-    const workspaceId = this.config.getDefaultWorkspaceId?.() ?? settings.agentWorkspaceId ?? ''
+    const workspaceId = this.config.getDefaultWorkspaceId?.() ?? settings.agentWorkspaceId ?? this.config.fallbackWorkspaceId?.() ?? ''
 
     const session = createAgentSession(
-      title || '新会话',
+      this.config.sessionTitle ? this.config.sessionTitle(title) : title || '新会话',
       channelId,
       workspaceId || undefined,
       modelId,
@@ -372,8 +507,10 @@ export class BridgeCommandHandler {
       modelId,
       agentRuntime,
     }
+    this.config.enrichBinding?.(binding, contextData)
     this.chatBindings.set(chatId, binding)
     this.sessionToChat.set(session.id, chatId)
+    this.config.afterBindingChanged?.()
 
     // 通知渲染进程刷新会话列表
     this.notifySessionCreated(session.id, session.title)
@@ -397,23 +534,24 @@ export class BridgeCommandHandler {
     }
 
     const MAX_PER_WS = 5
-    const lines: string[] = ['📋 会话列表:']
 
-    // 按工作区分组
+    const toItem = (s: (typeof sessions)[number]): BridgeSessionItem => ({
+      id: s.id,
+      index: sessions.indexOf(s) + 1,
+      title: s.title,
+      idPrefix: s.id.slice(0, 8),
+      active: binding?.sessionId === s.id,
+    })
+
+    // 先组装与平台无关的分组结构，卡片与文本共用同一份数据
+    const groups: BridgeSessionGroup[] = []
     for (const ws of workspaces) {
       const wsSessions = sessions
         .filter((s) => s.workspaceId === ws.id)
         .slice(0, MAX_PER_WS)
 
       if (wsSessions.length === 0) continue
-
-      lines.push('')
-      lines.push(`【${ws.name}】`)
-      for (const s of wsSessions) {
-        const globalIdx = sessions.indexOf(s) + 1
-        const marker = binding?.sessionId === s.id ? ' ← 当前' : ''
-        lines.push(`  ${globalIdx}. ${s.title} (${s.id.slice(0, 8)})${marker}`)
-      }
+      groups.push({ id: ws.id, name: ws.name, sessions: wsSessions.map(toItem) })
     }
 
     // 未归属工作区的会话
@@ -422,12 +560,21 @@ export class BridgeCommandHandler {
       .slice(0, MAX_PER_WS)
 
     if (orphans.length > 0) {
+      groups.push({ id: '', name: '未分配工作区', sessions: orphans.map(toItem) })
+    }
+
+    const card = this.config.renderers?.sessionList?.({
+      groups,
+      currentWorkspaceId: binding?.workspaceId,
+    })
+    if (await this.trySendCard(chatId, card, contextData)) return
+
+    const lines: string[] = ['📋 会话列表:']
+    for (const group of groups) {
       lines.push('')
-      lines.push('【未分配工作区】')
-      for (const s of orphans) {
-        const globalIdx = sessions.indexOf(s) + 1
-        const marker = binding?.sessionId === s.id ? ' ← 当前' : ''
-        lines.push(`  ${globalIdx}. ${s.title} (${s.id.slice(0, 8)})${marker}`)
+      lines.push(`【${group.name}】`)
+      for (const s of group.sessions) {
+        lines.push(`  ${s.index}. ${s.title} (${s.idPrefix})${s.active ? ' ← 当前' : ''}`)
       }
     }
 
@@ -444,6 +591,7 @@ export class BridgeCommandHandler {
       return
     }
     stopAgent(binding.sessionId)
+    this.config.afterStop?.(binding.sessionId)
     await this.send(chatId, '✅ 已停止 Agent', contextData)
   }
 
@@ -471,7 +619,7 @@ export class BridgeCommandHandler {
     // 会话内核以会话元数据为准（切换到的会话可能本来就是 Pi 会话）
     const agentRuntime = normalizeAgentRuntime(match.agentRuntime ?? settings.agentRuntime)
     // 会话历史渠道可能未启用该内核，此时回退到第一个可用渠道，避免切过去就发送失败
-    const preferredChannelId = match.channelId ?? settings.agentChannelId ?? ''
+    const preferredChannelId = match.channelId ?? this.config.getPreferredChannelId?.() ?? settings.agentChannelId ?? ''
     const picked = preferredChannelId
       ? resolveChannelIdForRuntime(preferredChannelId, agentRuntime)
       : null
@@ -490,11 +638,16 @@ export class BridgeCommandHandler {
       workspaceId: match.workspaceId ?? this.config.getDefaultWorkspaceId?.() ?? settings.agentWorkspaceId ?? '',
       channelId: picked.channelId,
       // 优先保留目标会话自己的模型；不属于回退渠道时取该渠道第一个启用模型。
-      modelId: resolveModelIdForChannel(picked.channelId, match.modelId ?? settings.agentModelId),
+      modelId: resolveModelIdForChannel(
+        picked.channelId,
+        match.modelId ?? this.config.getPreferredModelId?.() ?? settings.agentModelId,
+      ),
       agentRuntime,
     }
+    this.config.enrichBinding?.(binding, contextData)
     this.chatBindings.set(chatId, binding)
     this.sessionToChat.set(match.id, chatId)
+    this.config.afterBindingChanged?.()
 
     const fallbackNotice = picked.fellBack ? `\n${this.describeChannelFallback(agentRuntime)}` : ''
     await this.send(
@@ -515,11 +668,20 @@ export class BridgeCommandHandler {
         await this.send(chatId, '暂无工作区。', contextData)
         return
       }
+
+      const items: BridgeWorkspaceItem[] = workspaces.map((w, i) => ({
+        index: i + 1,
+        name: w.name,
+        isCurrent: w.id === currentWorkspaceId,
+      }))
+
+      const card = this.config.renderers?.workspaceList?.({ items, currentWorkspaceId })
+      if (await this.trySendCard(chatId, card, contextData)) return
+
       const lines = ['📋 工作区列表:']
-      workspaces.forEach((w, i) => {
-        const marker = w.id === currentWorkspaceId ? ' ← 当前' : ''
-        lines.push(`  ${i + 1}. ${w.name}${marker}`)
-      })
+      for (const item of items) {
+        lines.push(`  ${item.index}. ${item.name}${item.isCurrent ? ' ← 当前' : ''}`)
+      }
       lines.push('')
       lines.push('使用 /workspace <序号或名称> 切换')
       await this.send(chatId, lines.join('\n'), contextData)
@@ -544,6 +706,7 @@ export class BridgeCommandHandler {
     if (binding) {
       this.sessionToChat.delete(binding.sessionId)
       this.chatBindings.delete(chatId)
+      this.config.afterBindingChanged?.()
     }
 
     // 通知平台持久化
@@ -555,14 +718,27 @@ export class BridgeCommandHandler {
       .filter((s) => s.workspaceId === match.id)
       .slice(0, 5)
 
+    const recentItems: BridgeSessionItem[] = recentSessions.map((s) => ({
+      id: s.id,
+      index: sessions.indexOf(s) + 1,
+      title: s.title,
+      idPrefix: s.id.slice(0, 8),
+      active: false,
+    }))
+
+    const card = this.config.renderers?.workspaceSwitched?.({
+      workspaceName: match.name,
+      recentSessions: recentItems,
+    })
+    if (await this.trySendCard(chatId, card, contextData)) return
+
     const lines = [`✅ 已切换到工作区: ${match.name}`]
-    if (recentSessions.length > 0) {
+    if (recentItems.length > 0) {
       lines.push('')
       lines.push('最近会话:')
-      recentSessions.forEach((s) => {
-        const globalIdx = sessions.indexOf(s) + 1
-        lines.push(`  ${globalIdx}. ${s.title} (${s.id.slice(0, 8)})`)
-      })
+      for (const s of recentItems) {
+        lines.push(`  ${s.index}. ${s.title} (${s.idPrefix})`)
+      }
       lines.push('')
       lines.push('使用 /switch <序号> 切换，或发送消息自动创建新会话')
     } else {
@@ -574,61 +750,51 @@ export class BridgeCommandHandler {
 
   private async handleNowCommand(chatId: string, contextData?: unknown): Promise<void> {
     const binding = this.chatBindings.get(chatId)
-    const lines: string[] = ['📊 当前状态:']
 
-    // 会话信息
+    // 先组装结构化快照，卡片与文本共用同一份数据
+    const snapshot: BridgeNowSnapshot = {
+      mcpServers: [],
+      skills: [],
+      workspaceFiles: [],
+      sessionFiles: [],
+    }
+
     if (binding) {
       const session = getAgentSessionMeta(binding.sessionId)
-      lines.push(`会话: ${session?.title ?? '未知'} (${binding.sessionId.slice(0, 8)})`)
-      // 与发送路径同序解析：binding > 应用设置
       const nowSettings = getSettings()
-      const effChannelId = binding.channelId || nowSettings.agentChannelId
-      const effModelId = binding.modelId ?? nowSettings.agentModelId
+      // 与发送路径同序解析：binding > 应用设置
+      const effChannelId = binding.channelId || this.config.getPreferredChannelId?.() || nowSettings.agentChannelId
+      const effModelId = binding.modelId ?? this.config.getPreferredModelId?.() ?? nowSettings.agentModelId
       const modelInfo = describeBindingModel(effChannelId, effModelId)
-      lines.push(`模型: ${modelInfo.channelName} / ${modelInfo.modelName}${modelInfo.valid ? '' : '（已失效）'}`)
-      lines.push(`内核: ${describeAgentRuntime(this.resolveChatRuntime(binding))}`)
-    } else {
-      lines.push('会话: 未绑定（发送消息将自动创建）')
+      snapshot.session = { title: session?.title ?? '未知', idPrefix: binding.sessionId.slice(0, 8) }
+      snapshot.model = {
+        channelName: modelInfo.channelName,
+        modelName: modelInfo.modelName,
+        valid: modelInfo.valid,
+      }
+      snapshot.runtimeLabel = describeAgentRuntime(this.resolveChatRuntime(binding))
     }
 
     // 工作区信息
     const workspaceId = binding?.workspaceId
     const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
     if (workspace) {
-      lines.push(`工作区: ${workspace.name} (${workspace.slug})`)
+      snapshot.workspace = { name: workspace.name, slug: workspace.slug }
 
-      // MCP Servers
       const capabilities = getWorkspaceCapabilities(workspace.slug)
-      if (capabilities.mcpServers.length > 0) {
-        lines.push('')
-        lines.push('MCP Servers:')
-        for (const mcp of capabilities.mcpServers) {
-          const status = mcp.enabled !== false ? '✅' : '⏸️'
-          lines.push(`  ${status} ${mcp.name}`)
-        }
-      }
-
-      // Skills
-      if (capabilities.skills.length > 0) {
-        lines.push('')
-        lines.push('Skills:')
-        for (const skill of capabilities.skills) {
-          const status = skill.enabled !== false ? '✅' : '⏸️'
-          lines.push(`  ${status} ${skill.name}`)
-        }
-      }
+      snapshot.mcpServers = capabilities.mcpServers.map((mcp) => ({
+        name: mcp.name,
+        enabled: mcp.enabled !== false,
+      }))
+      snapshot.skills = capabilities.skills.map((skill) => ({
+        name: skill.name,
+        enabled: skill.enabled !== false,
+      }))
 
       // 工作区文件（递归，体现文件夹-文件层级）
       try {
         const wsPath = resolveWorkspaceFilesDir(workspace.slug)
-        const treeLines = buildFileTree(wsPath)
-        if (treeLines.length > 0) {
-          lines.push('')
-          lines.push('工作区文件:')
-          for (const l of treeLines) {
-            lines.push(`  ${l}`)
-          }
-        }
+        snapshot.workspaceFiles = buildFileTree(wsPath, this.config.fileTreeOptions)
       } catch {
         // 忽略
       }
@@ -636,16 +802,63 @@ export class BridgeCommandHandler {
       // 会话文件（体现文件夹-文件层级）
       if (binding) {
         try {
-          const treeLines = buildSessionFileTree(workspace.slug, binding.sessionId)
-          if (treeLines.length > 0) {
-            lines.push('')
-            lines.push('会话文件:')
-            for (const l of treeLines) {
-              lines.push(`  ${l}`)
-            }
-          }
+          snapshot.sessionFiles = buildSessionFileTree(
+            workspace.slug,
+            binding.sessionId,
+            this.config.fileTreeOptions,
+          )
         } catch {
           // 忽略
+        }
+      }
+    }
+
+    const card = this.config.renderers?.now?.(snapshot)
+    if (await this.trySendCard(chatId, card, contextData)) return
+
+    const lines: string[] = ['📊 当前状态:']
+    if (snapshot.session && snapshot.model) {
+      lines.push(`会话: ${snapshot.session.title} (${snapshot.session.idPrefix})`)
+      lines.push(
+        `模型: ${snapshot.model.channelName} / ${snapshot.model.modelName}${snapshot.model.valid ? '' : '（已失效）'}`,
+      )
+      lines.push(`内核: ${snapshot.runtimeLabel}`)
+    } else {
+      lines.push('会话: 未绑定（发送消息将自动创建）')
+    }
+
+    if (snapshot.workspace) {
+      lines.push(`工作区: ${snapshot.workspace.name} (${snapshot.workspace.slug})`)
+
+      if (snapshot.mcpServers.length > 0) {
+        lines.push('')
+        lines.push('MCP Servers:')
+        for (const mcp of snapshot.mcpServers) {
+          lines.push(`  ${mcp.enabled ? '✅' : '⏸️'} ${mcp.name}`)
+        }
+      }
+
+      if (snapshot.skills.length > 0) {
+        lines.push('')
+        lines.push('Skills:')
+        for (const skill of snapshot.skills) {
+          lines.push(`  ${skill.enabled ? '✅' : '⏸️'} ${skill.name}`)
+        }
+      }
+
+      if (snapshot.workspaceFiles.length > 0) {
+        lines.push('')
+        lines.push('工作区文件:')
+        for (const l of snapshot.workspaceFiles) {
+          lines.push(`  ${l}`)
+        }
+      }
+
+      if (snapshot.sessionFiles.length > 0) {
+        lines.push('')
+        lines.push('会话文件:')
+        for (const l of snapshot.sessionFiles) {
+          lines.push(`  ${l}`)
         }
       }
     } else {
@@ -680,11 +893,20 @@ export class BridgeCommandHandler {
 
     // /model — 列出渠道
     if (parts.length === 0) {
+      const items: BridgeChannelItem[] = channels.map((c, i) => ({
+        index: i + 1,
+        name: c.name,
+        modelCount: getEnabledModels(c).length,
+        isCurrent: binding?.channelId === c.id,
+      }))
+
+      const card = this.config.renderers?.channelList?.({ runtimeLabel, items })
+      if (await this.trySendCard(chatId, card, contextData)) return
+
       const lines = [`📡 可用渠道（当前内核: ${runtimeLabel}）:`]
-      channels.forEach((c, i) => {
-        const marker = binding?.channelId === c.id ? ' ← 当前' : ''
-        lines.push(`  ${i + 1}. ${c.name}（${getEnabledModels(c).length} 个模型）${marker}`)
-      })
+      for (const item of items) {
+        lines.push(`  ${item.index}. ${item.name}（${item.modelCount} 个模型）${item.isCurrent ? ' ← 当前' : ''}`)
+      }
       lines.push('')
       lines.push('使用 /model <渠道序号> 查看模型')
       await this.send(chatId, lines.join('\n'), contextData)
@@ -717,11 +939,23 @@ export class BridgeCommandHandler {
 
     // /model <渠道> — 列出该渠道模型
     if (parts.length === 1) {
-      const lines = [`🤖 ${channel.name} 的可用模型:`]
-      models.forEach((m, i) => {
-        const isCurrent = binding?.channelId === channel.id && binding?.modelId === m.id
-        lines.push(`  ${i + 1}. ${m.name}${isCurrent ? ' ← 当前' : ''}`)
+      const items: BridgeModelItem[] = models.map((m, i) => ({
+        index: i + 1,
+        name: m.name,
+        isCurrent: binding?.channelId === channel.id && binding?.modelId === m.id,
+      }))
+
+      const card = this.config.renderers?.modelList?.({
+        channelName: channel.name,
+        channelIndex: channelIdx,
+        items,
       })
+      if (await this.trySendCard(chatId, card, contextData)) return
+
+      const lines = [`🤖 ${channel.name} 的可用模型:`]
+      for (const item of items) {
+        lines.push(`  ${item.index}. ${item.name}${item.isCurrent ? ' ← 当前' : ''}`)
+      }
       lines.push('')
       lines.push(`使用 /model ${channelIdx} <模型序号> 切换`)
       await this.send(chatId, lines.join('\n'), contextData)
@@ -743,7 +977,7 @@ export class BridgeCommandHandler {
     // 切换需要一个 binding 承载；没有则自动创建
     let targetBinding = this.chatBindings.get(chatId)
     if (!targetBinding) {
-      targetBinding = this.ensureBinding(chatId) ?? undefined
+      targetBinding = this.ensureBinding(chatId, contextData) ?? undefined
       if (!targetBinding) {
         await this.send(chatId, '请先发送一条消息创建会话，或在 Profer 设置中选择 Agent 渠道。', contextData)
         return
@@ -752,6 +986,13 @@ export class BridgeCommandHandler {
 
     targetBinding.channelId = channel.id
     targetBinding.modelId = model.id
+    this.config.afterBindingChanged?.()
+
+    const switchedCard = this.config.renderers?.modelSwitched?.({
+      channelName: channel.name,
+      modelName: model.name,
+    })
+    if (await this.trySendCard(chatId, switchedCard, contextData)) return
 
     await this.send(
       chatId,
@@ -779,7 +1020,7 @@ export class BridgeCommandHandler {
 
     // 自动创建会话（复用 ensureBinding）
     if (!binding) {
-      const result = this.ensureBinding(chatId)
+      const result = this.ensureBinding(chatId, contextData)
       if (!result) {
         await this.send(chatId, '请先在 Profer 设置中选择 Agent 渠道。', contextData)
         return
@@ -840,6 +1081,9 @@ export class BridgeCommandHandler {
     const input = {
       sessionId: binding.sessionId,
       userMessage,
+      // 气泡只展示用户原文，<attached_files> 路径块不进 transcript
+      rawUserMessage: effectiveText,
+      titleSourceText: effectiveText,
       channelId: latestChannelId,
       modelId,
       workspaceId: binding.workspaceId,
@@ -904,6 +1148,21 @@ export class BridgeCommandHandler {
 
   private async send(chatId: string, text: string, contextData?: unknown): Promise<void> {
     await this.config.adapter.sendText(chatId, text, contextData)
+  }
+
+  /**
+   * 尝试用卡片发送。
+   *
+   * 平台未提供 `sendCard`、或渲染器返回空时返回 false，调用方回退到原有的纯文本分支。
+   */
+  private async trySendCard(
+    chatId: string,
+    card: BridgeCard | null | undefined,
+    contextData?: unknown,
+  ): Promise<boolean> {
+    if (!card || !this.config.adapter.sendCard) return false
+    await this.config.adapter.sendCard(chatId, card, contextData)
+    return true
   }
 
   private notifySessionCreated(sessionId: string, title: string): void {

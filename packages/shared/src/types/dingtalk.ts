@@ -1,3 +1,5 @@
+import type { AgentRuntime } from './agent-provider'
+
 /**
  * 钉钉集成相关类型定义
  *
@@ -66,6 +68,35 @@ export interface DingTalkBotConfigInput {
   clientSecret: string
   /** 默认工作区 ID */
   defaultWorkspaceId?: string
+}
+
+// ===== 聊天绑定 =====
+
+/** 钉钉聊天 → Profer 会话绑定（持久化到 ~/.profer/dingtalk-bindings-{botId}.json） */
+export interface DingTalkChatBinding {
+  /** 钉钉 conversationId（单聊或群聊） */
+  chatId: string
+  /** 所属 Bot ID */
+  botId: string
+  /** Bot 显示名称（设置页展示用） */
+  botName?: string
+  /** 绑定的 Profer 会话 ID */
+  sessionId: string
+  /** 绑定的工作区 ID */
+  workspaceId: string
+  /** 渠道 ID */
+  channelId: string
+  /** 模型 ID */
+  modelId?: string
+  /** 会话使用的 Agent 内核 */
+  agentRuntime?: AgentRuntime
+}
+
+/** 更新绑定请求（渲染进程 → 主进程） */
+export interface DingTalkUpdateBindingInput {
+  chatId: string
+  workspaceId?: string
+  sessionId?: string
 }
 
 // ===== Bridge 连接状态 =====
@@ -142,4 +173,13 @@ export const DINGTALK_IPC_CHANNELS = {
   GET_MULTI_STATUS: 'dingtalk:get-multi-status',
   /** 多 Bot 状态变化推送 */
   MULTI_STATUS_CHANGED: 'dingtalk:multi-status-changed',
+
+  // ===== 聊天绑定（v2）=====
+
+  /** 列出聊天绑定 */
+  LIST_BINDINGS: 'dingtalk:list-bindings',
+  /** 更新绑定（工作区/会话） */
+  UPDATE_BINDING: 'dingtalk:update-binding',
+  /** 解除绑定 */
+  REMOVE_BINDING: 'dingtalk:remove-binding',
 } as const

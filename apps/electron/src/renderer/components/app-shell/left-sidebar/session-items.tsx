@@ -592,7 +592,7 @@ export const ConversationItem = React.memo(function ConversationItem({
             ) : (
               <div className={cn(
                 'truncate text-[13px] leading-[18px] flex items-center gap-1.5',
-                active ? 'text-foreground' : 'text-foreground/[0.62]'
+                active ? 'text-foreground' : 'text-foreground/[0.75] [.skin-slate-light_&]:text-foreground/[0.85]'
               )}>
                 {/* 置顶入口：标题左侧留白，hover 显形；已置顶时大头针常显 */}
                 <SessionLeadingPin
@@ -933,7 +933,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
             ) : (
               <div className={cn(
                 'truncate text-[13px] leading-[18px] flex items-center gap-1.5',
-                active ? 'text-foreground' : 'text-foreground/[0.62]'
+                active ? 'text-foreground' : 'text-foreground/[0.75] [.skin-slate-light_&]:text-foreground/[0.85]'
               )}>
                 {/* 置顶入口：标题左侧留白，hover 显形；已置顶时大头针常显 */}
                 <SessionLeadingPin

@@ -1,3 +1,5 @@
+import type { AgentRuntime } from './agent-provider'
+
 /**
  * 微信集成相关类型定义
  *
@@ -29,6 +31,31 @@ export interface WeChatConfig {
   credentials: WeChatCredentials | null
   /** 默认绑定的工作区 ID */
   defaultWorkspaceId?: string
+}
+
+// ===== 聊天绑定 =====
+
+/** 微信聊天 → Profer 会话绑定（持久化到 ~/.profer/wechat-bindings.json） */
+export interface WeChatChatBinding {
+  /** 微信会话 ID（对端 user id） */
+  chatId: string
+  /** 绑定的 Profer 会话 ID */
+  sessionId: string
+  /** 绑定的工作区 ID */
+  workspaceId: string
+  /** 渠道 ID */
+  channelId: string
+  /** 模型 ID */
+  modelId?: string
+  /** 会话使用的 Agent 内核 */
+  agentRuntime?: AgentRuntime
+}
+
+/** 更新绑定请求（渲染进程 → 主进程） */
+export interface WeChatUpdateBindingInput {
+  chatId: string
+  workspaceId?: string
+  sessionId?: string
 }
 
 // ===== Bridge 连接状态 =====
@@ -126,4 +153,13 @@ export const WECHAT_IPC_CHANNELS = {
   GET_STATUS: 'wechat:get-status',
   /** Bridge 状态变化（主进程 → 渲染进程推送） */
   STATUS_CHANGED: 'wechat:status-changed',
+
+  // ===== 聊天绑定 =====
+
+  /** 列出聊天绑定 */
+  LIST_BINDINGS: 'wechat:list-bindings',
+  /** 更新绑定（工作区/会话） */
+  UPDATE_BINDING: 'wechat:update-binding',
+  /** 解除绑定 */
+  REMOVE_BINDING: 'wechat:remove-binding',
 } as const

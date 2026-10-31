@@ -99,10 +99,17 @@ export const COACH_TOUR_STEPS: CoachTourStep[] = [
   {
     key: 'skills-view',
     title: '技能库与岗位',
-    body: 'Skills、MCP、工作区记忆和岗位预设集中在这里，开关控制它在哪些会话生效。',
+    body: 'Skills、MCP 和岗位预设集中在这里，开关控制它在哪些会话生效。',
     selectors: [],
     unionSelectors: ['[data-tour="agent-skills-header"]', '[data-tour="agent-skills-panel"]'],
     placement: 'auto',
+  },
+  {
+    key: 'memory-enter',
+    title: 'Agent 记忆',
+    body: '工作区记忆已经独立成入口：项目规则、稳定偏好和踩过的坑都沉淀在这里，随时可查可改。',
+    selectors: ['[data-profer-navigation-item="agent-memory"]'],
+    placement: 'right',
   },
   {
     key: 'outro',
@@ -115,4 +122,4 @@ export const COACH_TOUR_STEPS: CoachTourStep[] = [
 ]
 
 /** 引导内容版本：增删步骤/大改文案时 +1，老用户升级后自动重播一次新指引 */
-export const CURRENT_COACH_TOUR_VERSION = 7
+export const CURRENT_COACH_TOUR_VERSION = 8

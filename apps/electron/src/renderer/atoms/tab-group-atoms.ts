@@ -93,6 +93,12 @@ export const GROUP_MIN_ADJUSTABLE_BAND = 0.25
 export const GROUP_MIN_RATIO = 0.25
 export const GROUP_MAX_RATIO = 0.75
 
+/** 分栏缝拖到极限后，越过这么多像素开始提示「继续拖动可收起该栏」 */
+export const GROUP_COLLAPSE_HINT_OVERSHOOT = 8
+
+/** 分栏缝拖过极限这么多像素，自动收起被挤压的一栏（解散分栏，另一栏独占） */
+export const GROUP_COLLAPSE_OVERSHOOT = 32
+
 // ===== 纯函数 =====
 
 /** 是否可以参与组合 */
@@ -604,6 +610,53 @@ export function resolveGroupSplitGeometry(
   const effective = Math.max(lower, Math.min(upper, base))
   const rightWidth = available * effective
   return { rightWidth, leftWidth: available - rightWidth, ratio: effective }
+}
+
+export interface GroupCollapseIntent {
+  /** 被挤压、即将被收起的一栏 */
+  side: TabGroupSide
+  /** 越过极限的像素数（> 0） */
+  overshoot: number
+  /** 是否已经越过收起阈值 */
+  ready: boolean
+}
+
+/**
+ * 分栏缝拖过「最小栏宽」极限后的收起意图。
+ *
+ * 分栏缝到达最小栏宽后就 clamp 住不再移动，用户继续外拖时指针会离开这条线——
+ * 这段「线不动、指针还在走」的距离就是收起手势的判定依据：
+ * - 越过 GROUP_COLLAPSE_HINT_OVERSHOOT：返回意图（ready=false），调用方据此显示提示；
+ * - 越过 GROUP_COLLAPSE_OVERSHOOT：ready=true，调用方立即收起被挤压的一栏。
+ *
+ * 极限取 resolveGroupSplitGeometry 的实际生效下限，与渲染宽度同源：
+ * 容器够宽时是 GROUP_MIN_PANE_WIDTH，容器偏窄时是保底可调区间对应的栏宽。
+ */
+export function resolveGroupCollapseIntent(input: {
+  containerWidth: number
+  /** 指针相对分栏容器左缘的 x；外拖时可以为负或大于容器宽 */
+  pointerX: number
+  gap?: number
+  hintOvershoot?: number
+  collapseOvershoot?: number
+}): GroupCollapseIntent | null {
+  const gap = input.gap ?? GROUP_SPLIT_GAP
+  const hintOvershoot = input.hintOvershoot ?? GROUP_COLLAPSE_HINT_OVERSHOOT
+  const collapseOvershoot = input.collapseOvershoot ?? GROUP_COLLAPSE_OVERSHOOT
+  const available = Math.max(0, input.containerWidth - gap)
+  if (available <= 0) return null
+  // ratio=0 会被 clamp 到下限，此时右栏宽度就是「一栏能达到的最小宽度」；两栏对称。
+  const minPaneWidth = resolveGroupSplitGeometry(input.containerWidth, 0, { gap }).rightWidth
+  if (minPaneWidth <= 0) return null
+  const leftWidth = input.pointerX - gap / 2
+  const rightWidth = available - leftWidth
+  const leftOvershoot = minPaneWidth - leftWidth
+  const rightOvershoot = minPaneWidth - rightWidth
+  // minPaneWidth < available/2，两侧不可能同时越界，取越界更多的一侧即可。
+  const side: TabGroupSide = leftOvershoot >= rightOvershoot ? 'left' : 'right'
+  const overshoot = Math.max(leftOvershoot, rightOvershoot)
+  if (overshoot < hintOvershoot) return null
+  return { side, overshoot, ready: overshoot >= collapseOvershoot }
 }
 
 // ===== Atoms =====

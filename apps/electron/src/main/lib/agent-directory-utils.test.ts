@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { getAgentWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
+import { collectAttachedDirectories, collectProductArtifactDirectories, isPathInsideDirectory } from './agent-directory-utils'
 
 let testDir: string | undefined
 let previousConfigRoot: string | undefined
@@ -117,5 +117,25 @@ describe('collectProductArtifactDirectories', () => {
     const result = collectProductArtifactDirectories()
 
     expect(result.some((dir) => dir.includes('channels') || dir.includes('auth-tokens') || dir.includes('sdk-config'))).toBe(false)
+  })
+})
+
+describe('isPathInsideDirectory', () => {
+  const sessionDir = '/Users/me/.profer/agent-workspaces/profer/0ad480b7'
+
+  test('会话目录内的截图与临时产物判为内部路径', () => {
+    expect(isPathInsideDirectory(`${sessionDir}/mem-v2.png`, sessionDir)).toBe(true)
+    expect(isPathInsideDirectory(`${sessionDir}/.context/plan/x.md`, sessionDir)).toBe(true)
+  })
+
+  test('用户项目路径与同前缀兄弟目录不算内部', () => {
+    expect(isPathInsideDirectory('/Users/me/profer/profer-main/src/a.ts', sessionDir)).toBe(false)
+    expect(isPathInsideDirectory(`${sessionDir}-backup/a.ts`, sessionDir)).toBe(false)
+  })
+
+  test('目录自身与空值不算内部路径', () => {
+    expect(isPathInsideDirectory(sessionDir, sessionDir)).toBe(false)
+    expect(isPathInsideDirectory('', sessionDir)).toBe(false)
+    expect(isPathInsideDirectory('/tmp/a.png', '')).toBe(false)
   })
 })

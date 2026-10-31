@@ -40,6 +40,22 @@ export function isAbsoluteFilePath(filePath: string): boolean {
 }
 
 /**
+ * 路径是否位于指定目录内（含子目录，目录自身不算）。
+ *
+ * 统一分隔符，Windows 盘符路径按小写比较；不做真实路径解析（不需要文件存在）。
+ */
+export function isPathInsideDirectory(filePath: string, directory: string): boolean {
+  const normalize = (value: string): string => {
+    const unified = value.replace(/\\/g, '/').replace(/\/+$/, '')
+    return /^[A-Za-z]:/.test(unified) ? unified.toLowerCase() : unified
+  }
+  const target = normalize(filePath)
+  const root = normalize(directory)
+  if (!target || !root) return false
+  return target.startsWith(`${root}/`)
+}
+
+/**
  * 面包屑显示：取路径末尾 n 段（默认 2 段）。
  * 段数不足 n 时按原样返回；空串返回空串。分隔符处理与既有实现保持一致（按正斜杠切分）。
  */

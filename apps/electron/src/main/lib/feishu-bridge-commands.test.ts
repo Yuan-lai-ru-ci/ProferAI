@@ -87,6 +87,7 @@ mock.module('./agent-service', () => ({
   agentEventBus: { on: () => () => {} },
   runAgentHeadless: async () => {},
   stopAgent: () => { stopCalls += 1 },
+  isAgentSessionActive: () => false,
 }))
 
 mock.module('./agent-workspace-manager', () => ({
@@ -107,7 +108,10 @@ const botConfig: FeishuBotConfig = {
 
 interface SentItem { kind: 'text' | 'card'; payload: unknown }
 interface BridgeInternals {
-  handleCommand(ctx: { chatId: string; senderOpenId: string; chatType: 'p2p' | 'group' }, text: string): Promise<void>
+  handleCommand(
+    ctx: { chatId: string; senderOpenId: string; chatType: 'p2p' | 'group'; groupName?: string },
+    text: string,
+  ): Promise<void>
 }
 
 function createBridge(config: Partial<FeishuBotConfig> = {}): { bridge: InstanceType<typeof FeishuBridge>; sent: SentItem[] } {
@@ -184,7 +188,10 @@ describe('飞书命令：用户可见行为基线', () => {
     await run(bridge, '/new')
     await run(bridge, '/stop')
     expect(stopCalls).toBe(1)
-    expect(sent.at(-1)).toEqual({ kind: 'text', payload: '已停止 Agent' })
+    // 命令实现统一到公共层后，回复文案与微信/钉钉一致（多了 ✅ 前缀）
+    const reply = sent.at(-1)
+    expect(reply?.kind).toBe('text')
+    expect(String(reply?.payload)).toContain('已停止 Agent')
   })
 
   test('/workspace 1 写回 Bot 默认工作区', async () => {
@@ -209,5 +216,33 @@ describe('飞书命令：用户可见行为基线', () => {
     await run(bridge, '/model')
     expect(sent.at(-1)?.kind).toBe('card')
     expect(JSON.stringify(sent.at(-1)?.payload)).toContain('pi-only')
+  })
+})
+
+describe('绑定字段在迁移后保持完整', () => {
+  test('/new 写入的绑定保留 botId/userId/chatType/groupName/source 并落盘', async () => {
+    const { bridge } = createBridge()
+    await (bridge as unknown as BridgeInternals).handleCommand(
+      { chatId: 'oc_group', senderOpenId: 'ou_9', chatType: 'group', groupName: '测试群' },
+      '/new',
+    )
+
+    const binding = bridge.listBindings().find((item) => item.chatId === 'oc_group')
+    expect(binding?.botId).toBe(botConfig.id)
+    expect(binding?.userId).toBe('ou_9')
+    expect(binding?.chatType).toBe('group')
+    expect(binding?.groupName).toBe('测试群')
+    expect(binding?.source).toBe('feishu')
+
+    const persisted = JSON.parse(readFileSync(getFeishuBotBindingsPath(botConfig.id), 'utf-8')) as Array<{
+      chatId: string
+      chatType?: string
+      groupName?: string
+      source?: string
+    }>
+    const saved = persisted.find((item) => item.chatId === 'oc_group')
+    expect(saved?.chatType).toBe('group')
+    expect(saved?.groupName).toBe('测试群')
+    expect(saved?.source).toBe('feishu')
   })
 })

@@ -1,11 +1,10 @@
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
 import { toast } from 'sonner'
-import { BookOpen, Brain, ChevronDown, ChevronRight, Code2, Eye, FileText, FolderOpen, Loader2, RefreshCw, Save, Search, Sparkles } from 'lucide-react'
+import { ChevronDown, ChevronRight, Code2, Eye, FileText, FolderOpen, Loader2, RefreshCw, Save, Search, Sparkles } from 'lucide-react'
 import type { SkillFileNode, WorkspaceMemorySummary, MemoryWikilinkTarget, MemoryBacklink } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@profer/ui/primitives/select'
-import { SettingsCard } from '@/components/settings/primitives'
 import { DefaultAppOpenButton } from '@/components/diff/DefaultAppOpenButton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
 import { MessageResponse, remarkWikilinks, WikilinkClickProvider } from '@/components/ai-elements/message'
@@ -113,6 +112,11 @@ function joinArchivePath(summary: WorkspaceMemorySummary, relativePath: string):
 }
 
 /** 取绝对路径的父目录，兼容 / 与 \ 两种分隔符 */
+/** 头部展示用：把 home 目录压成 ~，避免一行全是绝对路径。 */
+function shortDisplayPath(absolutePath: string): string {
+  return absolutePath.replace(/^\/(?:Users|home)\/[^/]+/, '~')
+}
+
 function dirnameOf(absolutePath: string): string {
   const idx = Math.max(absolutePath.lastIndexOf('/'), absolutePath.lastIndexOf('\\'))
   return idx < 0 ? absolutePath : absolutePath.slice(0, idx)
@@ -523,53 +527,34 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
   )
 
   if (loading || !summary) {
-    return <div className="py-20 text-center text-sm text-muted-foreground">加载工作区记忆中...</div>
+    return (
+      <div className="flex items-center justify-center gap-2 py-24 text-sm text-muted-foreground">
+        <Loader2 size={15} className="animate-spin" />
+        加载工作区记忆...
+      </div>
+    )
   }
 
   return (
-    <div className="flex flex-col gap-5">
-      <SettingsCard divided={false} className="overflow-hidden">
-        <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <div className="text-base font-semibold text-foreground">工作区记忆</div>
-            <div className="mt-1 text-xs text-muted-foreground">规则负责约束，主题负责积累；搜索框可直接查找记忆正文。</div>
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <MemorySummaryButton label="工作区资料" value={summary.workspaceProfile.exists ? formatBytes(summary.workspaceProfile.size) : '未创建'} active={selected?.kind === 'claude'} onClick={() => void openClaude(summary)} />
-            <MemorySummaryButton label="自动记忆" value={`${summary.autoMemory.fileCount} 文件`} active={selected?.kind === 'auto'} onClick={() => void openAutoFile(AUTO_MEMORY_INDEX, summary)} />
-            <MemorySummaryButton label="长期经验" value={`${archiveFiles.filter((node) => node.type === 'file').length} 主题`} active={selected?.kind === 'archive'} onClick={() => {
-              const first = archiveFiles.find((node) => node.type === 'file')
-              if (first) void openArchiveFile(first.relativePath, summary)
-            }} />
-          </div>
-        </div>
-        <div className="flex flex-col gap-3 border-t border-border/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-xs text-muted-foreground">从历史会话生成并更新工作区记忆（{historyRangeLabel}）</div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Select value={historyRange} onValueChange={(value) => setHistoryRange(value as MemoryHistoryRange)} disabled={initializing}>
-              <SelectTrigger className="h-8 w-[108px] text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>{MEMORY_HISTORY_RANGE_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
-            </Select>
-            <Button size="sm" onClick={handleInitializeMemory} disabled={initializing}>
-              <Sparkles size={14} className="mr-1.5" />{initializing ? '生成中...' : '生成记忆'}
-            </Button>
-          </div>
-        </div>
-      </SettingsCard>
-
-      <div className="grid min-h-[520px] gap-4 min-[900px]:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]">
-        <SettingsCard divided={false} className="min-h-[180px] overflow-hidden min-[900px]:min-h-0">
-          <div className="flex h-full min-h-0 flex-col">
-            <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
-              <div className="text-[13px] font-medium text-foreground/75">记忆文件</div>
-              <button
-                type="button"
-                title="刷新"
-                onClick={() => void refresh()}
-                className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <RefreshCw size={14} />
-              </button>
+    /* 整页只有一块面板，直接撑满可用高度；标题/统计都不再占版面。 */
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-surface-border/50 bg-surface-raised shadow-sm">
+        <div className="flex min-h-0 flex-1 flex-col min-[900px]:flex-row">
+          <div className="flex min-h-0 flex-col border-b border-surface-border/50 min-[900px]:w-[240px] min-[900px]:shrink-0 min-[900px]:border-b-0 min-[900px]:border-r">
+            <div className="flex items-center justify-between gap-2 border-b border-surface-border/50 px-3 py-2.5">
+              <div className="text-[13px] font-medium text-foreground/80">记忆文件</div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="刷新记忆文件列表"
+                    onClick={() => void refresh()}
+                    className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <RefreshCw size={14} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">刷新列表</TooltipContent>
+              </Tooltip>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               <FileButton
@@ -579,8 +564,10 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                 meta="工作区项目指令"
                 onClick={() => void openClaude(summary)}
               />
-              <div className="mt-3 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                Auto Memory
+              <div className="mt-4 flex items-center gap-1.5 px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60">
+                <span>Auto Memory</span>
+                <span className="tabular-nums">{visibleAutoFiles.length}</span>
+                <span className="h-px flex-1 bg-surface-border/60" />
               </div>
               <div className="space-y-0.5">
                 {visibleAutoFiles.length === 0 ? (
@@ -606,8 +593,10 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                   ))
                 )}
               </div>
-              <div className="mt-3 px-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                Memory Archive
+              <div className="mt-4 flex items-center gap-1.5 px-2 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60">
+                <span>Memory Archive</span>
+                <span className="tabular-nums">{visibleArchiveFiles.length}</span>
+                <span className="h-px flex-1 bg-surface-border/60" />
               </div>
               {visibleArchiveFiles.length === 0 ? (
                 <div className="px-2 py-6 text-center text-xs text-muted-foreground">暂无主题记忆文件</div>
@@ -634,28 +623,54 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                 </div>
               )}
             </div>
+            <div className="flex shrink-0 items-center gap-1.5 border-t border-surface-border/50 p-2">
+              <Select value={historyRange} onValueChange={(value) => setHistoryRange(value as MemoryHistoryRange)} disabled={initializing}>
+                <SelectTrigger className="h-8 flex-1 text-xs" aria-label="生成记忆的历史范围"><SelectValue /></SelectTrigger>
+                <SelectContent>{MEMORY_HISTORY_RANGE_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+              </Select>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="sm" className="shrink-0" onClick={handleInitializeMemory} disabled={initializing}>
+                    <Sparkles size={13} className="mr-1.5" />{initializing ? '生成中...' : '生成记忆'}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">从历史会话生成并更新工作区记忆（{historyRangeLabel}）</TooltipContent>
+              </Tooltip>
+            </div>
           </div>
-        </SettingsCard>
 
-        <SettingsCard divided={false} className="min-h-[360px] overflow-hidden min-[900px]:min-h-0">
-          <div className="flex h-full min-h-0 flex-col">
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/50 px-3 py-3 sm:px-4">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-foreground">
-                  {selected?.title ?? '未选择文件'}
-                </div>
-                <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                  {selected?.absolutePath ?? '从左侧选择一个记忆文件'}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-surface-border/50 px-3 py-2.5 sm:px-4">
+              <div className="flex min-w-0 items-center gap-2">
+                <FileText size={14} className="shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-[13px] font-medium text-foreground">
+                      {search.trim() ? '正文搜索结果' : (selected?.title ?? '未选择文件')}
+                    </span>
+                    {isDirty && (
+                      <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                        未保存
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground/80" title={selected?.absolutePath}>
+                    {search.trim()
+                      ? `「${search.trim()}」`
+                      : (selected ? shortDisplayPath(selected.absolutePath) : '')}
+                  </div>
                 </div>
               </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                 {selected && (
-                  <div className="flex items-center gap-1 rounded-lg bg-muted p-0.5">
+                  <div className="flex items-center gap-0.5 rounded-lg bg-foreground/[0.05] p-0.5">
                     <button
                       type="button"
+                      aria-pressed={viewMode === 'preview'}
+                      aria-label="预览模式"
                       onClick={() => setViewMode('preview')}
                       className={cn(
-                        'flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors',
+                        'flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
                         viewMode === 'preview' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
                       )}
                     >
@@ -664,9 +679,11 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                     </button>
                     <button
                       type="button"
+                      aria-pressed={viewMode === 'edit'}
+                      aria-label="编辑模式"
                       onClick={() => setViewMode('edit')}
                       className={cn(
-                        'flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors',
+                        'flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
                         viewMode === 'edit' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
                       )}
                     >
@@ -676,24 +693,30 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                   </div>
                 )}
                 {selected && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="text-muted-foreground"
+                        aria-label="在文件夹中显示"
+                        onClick={() => window.electronAPI.showItemInFolder(selected.absolutePath)}
+                      >
+                        <FolderOpen size={14} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">在文件夹中显示</TooltipContent>
+                  </Tooltip>
+                )}
+                {selected && (
                   <DefaultAppOpenButton
                     filePath={selected.absolutePath}
                     // SYSTEM_OPEN_FILE 采用默认拒绝策略；记忆文件不属于会话目录，
                     // 必须显式携带工作区授权上下文，否则按钮可渲染但主进程会静默拒绝打开。
                     access={{ workspaceSlug }}
                     variant="labeled"
-                    className="h-8 max-w-[170px] border border-border/60 bg-background px-2 shadow-sm"
+                    className="h-8 max-w-[150px] border border-border/60 bg-background px-2 shadow-sm"
                   />
-                )}
-                {selected && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => window.electronAPI.showItemInFolder(selected.absolutePath)}
-                  >
-                    <FolderOpen size={14} className="mr-1.5" />
-                    打开文件夹
-                  </Button>
                 )}
                 {selected && (
                   <Tooltip>
@@ -757,8 +780,12 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                       {editText}
                     </MessageResponse>
                   ) : (
-                    <div className="flex h-full min-h-[240px] items-center justify-center rounded-lg border border-dashed border-border/70 text-sm text-muted-foreground">
-                      当前文件为空，切换到编辑后可以写入 Markdown 内容。
+                    <div className="flex h-full min-h-[240px] flex-col items-center justify-center gap-3 px-6 text-center">
+                      <div className="text-sm text-muted-foreground">还没有内容</div>
+                      <Button size="sm" variant="outline" onClick={() => setViewMode('edit')}>
+                        <Code2 size={14} className="mr-1.5" />
+                        开始编辑
+                      </Button>
                     </div>
                   )}
                 </WikilinkClickProvider>
@@ -790,62 +817,20 @@ export function WorkspaceMemoryTab({ workspaceSlug, search }: WorkspaceMemoryTab
                 )}
               </div>
             ) : (
-              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">从左侧选择一个记忆文件</div>
+              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+                <div className="text-[13px] text-muted-foreground">还没有打开文件</div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void openAutoFile(AUTO_MEMORY_INDEX, summary)}
+                >
+                  打开 MEMORY.md
+                </Button>
+              </div>
             )}
           </div>
-        </SettingsCard>
-      </div>
-    </div>
-  )
-}
-
-function MemorySummaryButton({ label, value, active, onClick }: { label: string; value: string; active: boolean; onClick: () => void }): React.ReactElement {
-  return (
-    <button type="button" onClick={onClick} className={cn('rounded-md border px-3 py-2 text-left transition-colors', active ? 'border-primary/50 bg-primary/[0.06]' : 'border-border/60 hover:bg-foreground/[0.03]')}>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="mt-0.5 text-xs font-medium text-foreground">{value}</div>
-    </button>
-  )
-}
-
-function MemoryStatCard({
-  icon,
-  title,
-  subtitle,
-  value,
-  detail,
-  active,
-  onClick,
-}: {
-  icon: React.ReactNode
-  title: string
-  subtitle: string
-  value: string
-  detail: string
-  active: boolean
-  onClick: () => void
-}): React.ReactElement {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex items-center gap-3 rounded-lg border bg-content-area p-4 text-left shadow-sm transition-colors',
-        active ? 'border-primary/50 bg-primary/[0.04]' : 'border-border/60 hover:bg-foreground/[0.03]',
-      )}
-    >
-      <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <div className="text-sm font-medium text-foreground">{title}</div>
-          <div className="text-xs font-medium tabular-nums text-foreground/65">{value}</div>
         </div>
-        <div className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</div>
-        <div className="mt-1 text-[11px] text-muted-foreground/80">{detail}</div>
-      </div>
-    </button>
+    </section>
   )
 }
 
@@ -867,7 +852,7 @@ function FileButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
+        'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
         active ? 'bg-accent text-accent-foreground' : 'text-foreground/80 hover:bg-accent/60',
       )}
     >
@@ -904,7 +889,7 @@ function MemoryTreeNode({
         type="button"
         onClick={() => isDirectory ? onToggle(node.relativePath) : onOpen(node.relativePath)}
         className={cn(
-          'flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] transition-colors',
+          'flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
           isActive ? 'bg-accent text-accent-foreground' : 'text-foreground/80 hover:bg-accent/60',
         )}
         style={{ paddingLeft }}

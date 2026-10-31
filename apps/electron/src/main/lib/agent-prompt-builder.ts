@@ -297,7 +297,7 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
   const canGenerateImage = imageGroupEnabled && !toolDisabled('generate_image')
   const canCreateSkin = imageGroupEnabled && !toolDisabled('create_skin') && !!ctx.workspaceSlug && !!ctx.agentCwd
   if (canSendLocalImage) {
-    sections.push(`8. **发送既有本地图片**：用户要求把已有的 PNG/JPEG/GIF/WebP 图片放入本轮回复，且 \`send_local_image\` 可用时调用该工具。\`path\` 可用相对当前会话工作目录的路径或绝对路径，但必须位于会话工作目录或用户已授权附加目录内。${AGENT_IMAGE_OUTPUT_TEXT_RULE}不要发送 SVG 或未知格式，也不要构造路径绕过限制。`)
+    sections.push(`8. **发送既有本地图片**：用户要求把已有的 PNG/JPEG/GIF/WebP 图片放入本轮回复，且 \`send_local_image\` 可用时调用该工具。\`path\` 可用相对当前会话工作目录的路径或绝对路径，但必须位于会话工作目录或用户已授权附加目录内。**图片位置由你调用工具的时机决定**：图片会插在这一轮输出中该工具调用所在的位置，需要图文混排时把调用夹在对应文字之间。**只发用户要看的结果图**：自查/验证用的截图、用户自己刚上传的附件、以及仅为“我看一眼”而截的图都不要发，直接用文字描述结论；同一轮不要把同一张图重复发。${AGENT_IMAGE_OUTPUT_TEXT_RULE}不要发送 SVG 或未知格式，也不要构造路径绕过限制。`)
   }
   if (canGenerateImage) {
     sections.push(`9. **AI 生图**：当实际工具列表包含 \`generate_image\` 时，用户要求画画、生成图片、P 图、修图等应直接调用该工具；需要编辑时仅可传入当前会话工作目录或用户已授权附加目录内的本地 PNG/JPEG/GIF/WebP 路径。用户说“修改上一张图”时，使用 \`useLastGeneratedImage: true\`，它只指本当前会话中最近一张成功的 Agent 生成图，不能与 \`referenceImagePaths\` 同时传入，也不适用于用户上传图、\`send_local_image\` 或其他会话的图片。工具结果会返回生成文件相对当前会话 cwd 的路径；后续文件工作（例如制作皮肤壁纸）必须使用该路径读取或复制，不要猜测文件名。制作皮肤相关的图片与 CSS 规则见 \`profer-theme-authoring\` skill。${AGENT_IMAGE_OUTPUT_TEXT_RULE}不要尝试用代码、ASCII art 等伪造图片。`)

@@ -51,7 +51,7 @@ import { ContentBlock } from './ContentBlock'
 import { parseThinkTagsFromText } from './thinking-tag-parser'
 import { AgentHistorySelectionLayer } from './AgentHistorySelectionLayer'
 import type { AgentEventUsage, RetryAttempt, SDKMessage, AgentImageGenerationCard, AgentRuntime, AgentNavigationIndexEntry, AgentNavigationIndexPayload } from '@profer/shared'
-import { isGoalIterationMessage, shouldShowAgentThinking } from '@profer/shared'
+import { isGoalIterationMessage, shouldShowAgentThinking, OPENAI_UPSTREAM_BUSY_MESSAGE, isOpenAIUpstreamBusyText } from '@profer/shared'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { AgentImageGenerationCardView } from './AgentImageGenerationCard'
 import { getPendingImageGenerationCards, mergeAgentImageGenerationTimeline } from './agent-image-generation-timeline'
@@ -237,7 +237,7 @@ function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['
   const [expanded, setExpanded] = React.useState(false)
   const [countdown, setCountdown] = React.useState(0)
   const latestReason = retrying.history[retrying.history.length - 1]?.reason ?? ''
-  const isOpenAIUpstreamBusy = /OpenAI 官方上游服务当前请求量较大|OpenAI.*(?:overloaded|too many requests|rate.?limit)/i.test(latestReason)
+  const isOpenAIUpstreamBusy = isOpenAIUpstreamBusyText(latestReason)
 
   // 倒计时逻辑
   React.useEffect(() => {
@@ -303,8 +303,7 @@ function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['
 
       {isOpenAIUpstreamBusy && (
         <div className="mt-2 border-t border-amber-200/80 dark:border-amber-800/80 pt-2 text-xs text-amber-800 dark:text-amber-200 space-y-0.5">
-          <div>OpenAI 官方上游服务当前请求量较大</div>
-          <div>本次情况与您的账户及卡扣AI无关，请稍候片刻后再重试。</div>
+          <div className="leading-relaxed">{OPENAI_UPSTREAM_BUSY_MESSAGE}</div>
         </div>
       )}
 
@@ -603,11 +602,11 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
     const live = liveMessages ?? []
     const stampStableKey = (message: SDKMessage): SDKMessage => {
       const key = getSDKMessageStableKey(message)
-      ;(message as Record<string, unknown>)._promaStableKey = key
+      ;(message as Record<string, unknown>)._proferStableKey = key
       return message
     }
     const keyOf = (message: SDKMessage): string =>
-      (message as Record<string, unknown>)._promaStableKey as string
+      (message as Record<string, unknown>)._proferStableKey as string
 
     const persistedWithKeys = persisted.map(stampStableKey)
     const liveWithKeys = live.map(stampStableKey)

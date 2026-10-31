@@ -5,8 +5,9 @@
  * 以及 <attached_files> XML 构建能力。
  */
 
-import { mkdirSync, writeFileSync, readdirSync } from 'node:fs'
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve, basename, relative } from 'node:path'
+import { backupAgentAttachment } from './agent-attachment-backup'
 import { getAgentSessionWorkspacePath, resolveAgentSessionWorkspacePath } from './config-paths'
 
 /** 图片大小警告阈值 */
@@ -91,6 +92,7 @@ export function saveImageToSession(
 
   mkdirSync(sessionDir, { recursive: true })
   writeFileSync(targetPath, data)
+  backupAgentAttachment(sessionId, targetPath)
   console.log(`[Bridge 附件] 图片已保存: ${targetPath} (${data.length} bytes)`)
 
   return targetPath
@@ -113,6 +115,7 @@ export function saveFileToSession(
 
   mkdirSync(sessionDir, { recursive: true })
   writeFileSync(targetPath, data)
+  backupAgentAttachment(sessionId, targetPath)
   console.log(`[Bridge 附件] 文件已保存: ${targetPath} (${data.length} bytes)`)
 
   return targetPath

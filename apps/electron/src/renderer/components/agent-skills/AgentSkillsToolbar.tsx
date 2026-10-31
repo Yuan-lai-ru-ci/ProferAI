@@ -10,8 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type AgentSkillsToolbarDomain =
-  "skills" | "marketplace" | "mcp" | "memory" | "presets";
+export type AgentSkillsToolbarDomain = "skills" | "marketplace" | "mcp" | "presets";
 export type AgentSkillsToolbarScope = "workspace" | "global";
 
 export interface AgentSkillsToolbarTab {

@@ -25,6 +25,7 @@ import {
   getAgentWorkspacePath,
   getPiCheckpointsDir,
   getSdkConfigDir,
+  getAgentAttachmentBackupsRoot,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { collectAttachedDirectories } from './agent-directory-utils'
@@ -925,6 +926,14 @@ export function deleteAgentSession(id: string): void {
         console.warn(`[Agent 会话] 清理 session 工作目录失败 (${id}):`, error)
       }
     }
+  }
+
+  // 用户附件备份也按会话存放，随会话一起清理，避免残留占盘。
+  try {
+    const backupDir = join(getAgentAttachmentBackupsRoot(), id)
+    if (existsSync(backupDir)) rmSync(backupDir, { recursive: true, force: true })
+  } catch (error) {
+    console.warn(`[Agent 会话] 清理用户附件备份失败 (${id}):`, error)
   }
 
   // 新版检查点位于配置目录，删除会话后必须显式清理；旧版 cwd 内快照已随工作区删除。

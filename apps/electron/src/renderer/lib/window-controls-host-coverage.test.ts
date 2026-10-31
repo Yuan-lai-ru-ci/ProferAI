@@ -25,6 +25,11 @@ const FULLSCREEN_VIEWS: Array<{ path: string; minHosts: number; why: string }> =
     minHosts: 2,
     why: 'Agent 技能全屏视图（含未选工作区空态）',
   },
+  {
+    path: '../components/agent-skills/AgentMemoryView.tsx',
+    minHosts: 1,
+    why: 'Agent 记忆全屏视图',
+  },
 ]
 
 function readSource(relativePath: string): string {

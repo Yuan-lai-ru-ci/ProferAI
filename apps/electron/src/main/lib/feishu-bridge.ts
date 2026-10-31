@@ -27,15 +27,16 @@ import type {
   SDKAssistantMessage,
   SDKUserMessage,
 } from '@profer/shared'
-import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS, isChannelEnabledForRuntime, isVisibleAgentSession, normalizeAgentRuntime, resolveAgentAttachmentPrompt } from '@profer/shared'
+import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS, normalizeAgentRuntime, resolveAgentAttachmentPrompt } from '@profer/shared'
 import type { AgentRuntime } from '@profer/shared'
-import { getDecryptedBotAppSecret } from './feishu-config'
+import { getDecryptedBotAppSecret, saveFeishuBotConfig } from './feishu-config'
+import { BridgeCommandHandler } from './bridge-command-handler'
+import type { BridgeChatBinding, BridgeNowSnapshot } from './bridge-command-handler'
 import { agentEventBus, runAgentHeadless, stopAgent } from './agent-service'
-import { createAgentSession, listAgentSessions, getAgentSessionMeta } from './agent-session-manager'
+import { createAgentSession, getAgentSessionMeta } from './agent-session-manager'
 import {
   listAgentWorkspacesByUpdatedAt,
   getAgentWorkspace,
-  getWorkspaceCapabilities,
 } from './agent-workspace-manager'
 import { getFeishuBotBindingsPath, getFeishuBotMetadataPath } from './config-paths'
 import { writeFileSync, readFileSync, existsSync } from 'node:fs'
@@ -44,8 +45,6 @@ import {
   saveImageToSession as saveImageToSessionShared,
   saveFileToSession as saveFileToSessionShared,
   inferExtension,
-  buildSessionFileTree,
-  buildFileTree,
 } from './bridge-attachment-utils'
 import { getSettings } from './settings-service'
 import {
@@ -62,11 +61,6 @@ import {
   splitLongContent,
 } from './feishu-message'
 import {
-  listSwitchableChannels,
-  getEnabledModels,
-  resolveChannelByIndex,
-  resolveModelByIndex,
-  describeBindingModel,
   describeAgentRuntime,
   resolveChannelIdForRuntime,
   resolveModelIdForChannel,
@@ -141,6 +135,9 @@ class FeishuBridge {
   /** Bot 配置（构造时注入，workspace 切换时同步更新） */
   private botConfig: FeishuBotConfig
 
+  /** 命令处理（与微信/钉钉共用同一套实现，通过 renderers 保留飞书卡片） */
+  private readonly commandHandler: BridgeCommandHandler
+
   /** SDK Client（发消息用，等于 channel.rawClient） */
   private client: InstanceType<typeof import('@larksuiteoapi/node-sdk').Client> | null = null
   /** LarkChannel（统一 WebSocket + 卡片回调路由） */
@@ -207,6 +204,87 @@ class FeishuBridge {
 
   constructor(botConfig: FeishuBotConfig) {
     this.botConfig = botConfig
+    this.commandHandler = new BridgeCommandHandler({
+      platformName: '飞书',
+      source: 'feishu',
+      adapter: {
+        sendText: (chatId, text) => this.sendMessage(chatId, text),
+        sendCard: (chatId, card) => this.sendCardMessage(chatId, card as Record<string, unknown>),
+      },
+      // 工作区：Bot 默认 > 全局默认 > default/最近工作区（与迁移前一致）
+      getDefaultWorkspaceId: () => this.botConfig.defaultWorkspaceId,
+      // 渠道/模型：Bot 默认 > 全局设置（与迁移前一致）
+      getPreferredChannelId: () => this.botConfig.defaultChannelId,
+      getPreferredModelId: () => this.botConfig.defaultModelId,
+      fallbackWorkspaceId: () => {
+        const byTime = listAgentWorkspacesByUpdatedAt()
+        const def = byTime.find((w) => w.slug === 'default')
+        return def?.id ?? byTime[0]?.id
+      },
+      // 飞书保留“不预设标题，首轮后自动生成”的行为
+      sessionTitle: (title) => title,
+      onWorkspaceSwitched: (workspaceId) => {
+        saveFeishuBotConfig({
+          id: this.botConfig.id,
+          name: this.botConfig.name,
+          enabled: this.botConfig.enabled,
+          appId: this.botConfig.appId,
+          appSecret: '', // 空字符串表示不修改
+          defaultWorkspaceId: workspaceId,
+          defaultChannelId: this.botConfig.defaultChannelId,
+          defaultModelId: this.botConfig.defaultModelId,
+        })
+        this.botConfig = { ...this.botConfig, defaultWorkspaceId: workspaceId }
+      },
+      // 飞书绑定比通用绑定多 botId/userId/chatType/groupName/source/createdAt
+      enrichBinding: (binding, contextData) => {
+        const ctx = contextData as FeishuMessageContext | undefined
+        const target = binding as FeishuChatBinding
+        target.botId = this.botConfig.id
+        target.userId = ctx?.senderOpenId ?? 'unknown'
+        target.source = 'feishu'
+        target.chatType = ctx?.chatType
+        target.groupName = ctx?.groupName
+        target.createdAt = Date.now()
+      },
+      afterBindingChanged: () => {
+        this.updateStatus({ activeBindings: this.chatBindings.size })
+        this.saveBindings()
+      },
+      afterStop: (sessionId) => this.markStreamingInterrupted(sessionId),
+      // 卡片里的文件树不带 emoji（与迁移前一致）
+      fileTreeOptions: { dirIcon: '', fileIcon: '' },
+      bindings: this.chatBindings as unknown as Map<string, BridgeChatBinding>,
+      sessionToChat: this.sessionToChat,
+      renderers: {
+        help: () => buildHelpCard(),
+        sessionList: ({ groups, currentWorkspaceId }) =>
+          buildSessionListCard(
+            groups.map((group) => ({
+              id: group.id,
+              name: group.name,
+              sessions: group.sessions.map((s) => ({
+                id: s.id,
+                title: s.title,
+                active: s.active,
+                index: s.index,
+              })),
+            })),
+            currentWorkspaceId,
+          ),
+        workspaceList: ({ items }) => buildWorkspaceListCard(items),
+        workspaceSwitched: ({ workspaceName, recentSessions }) =>
+          buildWorkspaceSwitchedCard(
+            workspaceName,
+            recentSessions.map((s) => ({ id: s.id, title: s.title, index: s.index })),
+          ),
+        now: (snapshot) => this.buildNowCard(snapshot),
+        channelList: ({ items }) => buildChannelListCard(items),
+        modelList: ({ channelName, channelIndex, items }) =>
+          buildModelListCard(channelName, channelIndex, items),
+        modelSwitched: ({ channelName, modelName }) => buildModelSwitchedCard(channelName, modelName),
+      },
+    })
   }
 
   /** 获取 Bot 配置 */
@@ -972,152 +1050,81 @@ class FeishuBridge {
   }
 
   private async handleCommand(msgCtx: FeishuMessageContext, text: string): Promise<void> {
-    const { chatId } = msgCtx
-    const [command, ...args] = text.split(/\s+/)
-    const arg = args.join(' ').trim()
+    // 命令实现已统一到 BridgeCommandHandler；飞书通过 renderers / 钩子保留卡片与绑定字段
+    await this.commandHandler.handleIncomingMessage(msgCtx.chatId, text, msgCtx)
+  }
 
-    switch (command?.toLowerCase()) {
-      case '/help':
-      case '/h':
-        await this.sendCardMessage(chatId, buildHelpCard())
-        break
+  /**
+   * `/now` 的飞书卡片。
+   *
+   * 排版与迁移前一致：字段加粗、MCP/Skills 用「启用/停用」文字、空态显式写「无」。
+   */
+  private buildNowCard(snapshot: BridgeNowSnapshot): Record<string, unknown> {
+    const lines: string[] = []
 
-      case '/new':
-      case '/n':
-        await this.createNewSession(msgCtx, arg || undefined)
-        break
+    if (snapshot.session && snapshot.model) {
+      lines.push(`**会话**: ${snapshot.session.title} (\`${snapshot.session.idPrefix}\`)`)
+      lines.push(
+        `**模型**: ${snapshot.model.channelName} / ${snapshot.model.modelName}${snapshot.model.valid ? '' : '（已失效）'}`,
+      )
+      lines.push(`**内核**: ${snapshot.runtimeLabel}`)
+    } else {
+      lines.push('**会话**: 未绑定（发送消息将自动创建）')
+    }
 
-      case '/list':
-      case '/ls':
-        await this.handleListCommand(msgCtx)
-        break
+    if (snapshot.workspace) {
+      lines.push(`**工作区**: ${snapshot.workspace.name} (\`${snapshot.workspace.slug}\`)`)
 
-      case '/stop':
-      case '/s':
-        await this.handleStopCommand(msgCtx)
-        break
-
-      case '/switch':
-      case '/sw': {
-        if (!arg) {
-          await this.sendMessage(chatId, '用法: /switch <序号>（先用 /list 查看）')
-          return
+      if (snapshot.mcpServers.length > 0) {
+        lines.push('')
+        lines.push('**MCP Servers**:')
+        for (const mcp of snapshot.mcpServers) {
+          lines.push(`  ${mcp.enabled ? '启用' : '停用'} ${mcp.name}`)
         }
-        await this.handleSwitchCommand(msgCtx, arg)
-        break
+      } else {
+        lines.push('**MCP Servers**: 无')
       }
 
-      case '/workspace':
-      case '/ws': {
-        await this.handleWorkspaceCommand(msgCtx, arg || undefined)
-        break
+      if (snapshot.skills.length > 0) {
+        lines.push('')
+        lines.push('**Skills**:')
+        for (const skill of snapshot.skills) {
+          lines.push(`  ${skill.enabled ? '启用' : '停用'} ${skill.name}`)
+        }
+      } else {
+        lines.push('**Skills**: 无')
       }
 
-      case '/now':
-        await this.handleNowCommand(msgCtx)
-        break
+      if (snapshot.workspaceFiles.length > 0) {
+        lines.push('')
+        lines.push('**工作区文件**:')
+        for (const line of snapshot.workspaceFiles) {
+          lines.push(`  ${line}`)
+        }
+      }
 
-      case '/model':
-      case '/m':
-        await this.handleModelCommand(msgCtx, arg)
-        break
+      if (snapshot.sessionFiles.length > 0) {
+        lines.push('')
+        lines.push('**会话文件**:')
+        for (const line of snapshot.sessionFiles) {
+          lines.push(`  ${line}`)
+        }
+      }
+    } else {
+      lines.push('**工作区**: 未设置')
+    }
 
-      default:
-        await this.sendMessage(chatId, `未知命令: ${command}。输入 /help 查看帮助。`)
+    return {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: 'plain_text', content: '当前状态' },
+        template: 'blue',
+      },
+      elements: [{ tag: 'markdown', content: lines.join('\n') }],
     }
   }
 
   // ===== 会话管理 =====
-
-  private async createNewSession(
-    msgCtx: FeishuMessageContext,
-    title?: string,
-    overrideWorkspaceId?: string,
-  ): Promise<void> {
-    const { chatId } = msgCtx
-    const appSettings = getSettings()
-
-    // 选择工作区：显式指定 > Bot 默认 > 应用设置 > 第一个工作区
-    let workspaceId = overrideWorkspaceId ?? this.botConfig.defaultWorkspaceId ?? appSettings.agentWorkspaceId
-    if (!workspaceId) {
-      const byTime = listAgentWorkspacesByUpdatedAt()
-      const def = byTime.find((w) => w.slug === 'default')
-      workspaceId = def?.id ?? byTime[0]?.id
-    }
-
-    if (!workspaceId) {
-      await this.sendMessage(chatId, '请先在 Profer 设置中创建工作区。')
-      return
-    }
-
-    // 渠道/模型：Bot 配置 > 应用设置
-    const preferredChannelId = this.botConfig.defaultChannelId ?? appSettings.agentChannelId
-    if (!preferredChannelId) {
-      await this.sendMessage(chatId, '请先在 Profer Agent 设置中选择渠道。')
-      return
-    }
-
-    // 会话内核跟随全局设置，不能隐式退回 Claude（Pi-only 渠道会发送失败）
-    const agentRuntime = normalizeAgentRuntime(appSettings.agentRuntime)
-    const picked = resolveChannelIdForRuntime(preferredChannelId, agentRuntime)
-    if (!picked) {
-      await this.sendMessage(
-        chatId,
-        `暂无同时启用 ${describeAgentRuntime(agentRuntime)} 内核的可用渠道，请先在 Profer 渠道设置中启用。`,
-      )
-      return
-    }
-    const channelId = picked.channelId
-    const modelId = resolveModelIdForChannel(
-      channelId,
-      this.botConfig.defaultModelId ?? appSettings.agentModelId,
-    )
-
-    // 创建会话（使用默认标题，首次对话完成后会自动生成标题）
-    const session = await createAgentSession(
-      title,
-      channelId,
-      workspaceId,
-      modelId,
-      agentRuntime,
-    )
-
-    // 绑定
-    const binding: FeishuChatBinding = {
-      chatId,
-      botId: this.botConfig.id,
-      userId: msgCtx.senderOpenId,
-      sessionId: session.id,
-      workspaceId,
-      channelId,
-      modelId,
-      agentRuntime,
-      source: 'feishu',
-      chatType: msgCtx.chatType,
-      groupName: msgCtx.groupName,
-      createdAt: Date.now(),
-    }
-    this.chatBindings.set(chatId, binding)
-    this.sessionToChat.set(session.id, chatId)
-    this.updateStatus({ activeBindings: this.chatBindings.size })
-    this.saveBindings()
-
-    // 通知渲染进程刷新会话列表（复用 TITLE_UPDATED 通道触发列表刷新）
-    const windows = BrowserWindow.getAllWindows()
-    if (windows.length > 0 && !windows[0]!.isDestroyed()) {
-      windows[0]!.webContents.send(AGENT_IPC_CHANNELS.TITLE_UPDATED, {
-        sessionId: session.id,
-        title: session.title,
-      })
-    }
-
-    await this.sendMessage(
-      chatId,
-      picked.fellBack
-        ? `已创建会话 (${session.id.slice(0, 8)})\n⚠️ 默认渠道未启用 ${describeAgentRuntime(agentRuntime)} 内核，已自动改用其它可用渠道。可用 /model 重新选择。`
-        : `已创建会话 (${session.id.slice(0, 8)})`,
-    )
-  }
 
   /**
    * 解析某个 chat 当前应使用的 Agent 内核。
@@ -1214,403 +1221,6 @@ class FeishuBridge {
     }
   }
 
-  private async handleListCommand(msgCtx: FeishuMessageContext): Promise<void> {
-    const { chatId } = msgCtx
-    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
-    const workspaces = listAgentWorkspacesByUpdatedAt()
-    const binding = this.chatBindings.get(chatId)
-    const currentWorkspaceId = binding?.workspaceId
-
-    // 每个工作区最多展示最近 5 个会话
-    const MAX_SESSIONS_PER_WS = 5
-
-    // 为所有会话建立全局序号映射（序号 = 全局排序位置，从 1 开始）
-    const sessionIndexMap = new Map<string, number>()
-    sessions.forEach((s, i) => sessionIndexMap.set(s.id, i + 1))
-
-    // 按工作区分组
-    const wsItems: WorkspaceListItem[] = workspaces.map((ws) => {
-      const wsSessions = sessions
-        .filter((s) => s.workspaceId === ws.id)
-        .slice(0, MAX_SESSIONS_PER_WS)
-        .map((s) => ({
-          id: s.id,
-          title: s.title,
-          active: binding?.sessionId === s.id,
-          index: sessionIndexMap.get(s.id) ?? 0,
-        }))
-
-      return { id: ws.id, name: ws.name, sessions: wsSessions }
-    })
-
-    // 未归属工作区的会话
-    const orphanSessions = sessions
-      .filter((s) => !s.workspaceId || !workspaces.some((w) => w.id === s.workspaceId))
-      .slice(0, MAX_SESSIONS_PER_WS)
-      .map((s) => ({
-        id: s.id,
-        title: s.title,
-        active: binding?.sessionId === s.id,
-        index: sessionIndexMap.get(s.id) ?? 0,
-      }))
-
-    if (orphanSessions.length > 0) {
-      wsItems.push({ id: '', name: '未分配工作区', sessions: orphanSessions })
-    }
-
-    await this.sendCardMessage(chatId, buildSessionListCard(wsItems, currentWorkspaceId))
-  }
-
-  private async handleStopCommand(msgCtx: FeishuMessageContext): Promise<void> {
-    const { chatId } = msgCtx
-    const binding = this.chatBindings.get(chatId)
-    if (!binding) {
-      await this.sendMessage(chatId, '当前没有绑定的会话。')
-      return
-    }
-
-    stopAgent(binding.sessionId)
-    this.markStreamingInterrupted(binding.sessionId)
-    await this.sendMessage(chatId, '已停止 Agent')
-  }
-
-  private async handleSwitchCommand(msgCtx: FeishuMessageContext, arg: string): Promise<void> {
-    const { chatId } = msgCtx
-    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
-
-    // 支持序号（如 /switch 1）和 ID 前缀两种方式
-    const index = Number(arg)
-    const match = Number.isInteger(index) && index >= 1 && index <= sessions.length
-      ? sessions[index - 1]
-      : sessions.find((s) => s.id.startsWith(arg))
-
-    if (!match) {
-      await this.sendMessage(chatId, `未找到会话。使用 /list 查看可用会话。`)
-      return
-    }
-
-    // 清理旧绑定的反向索引
-    const oldBinding = this.chatBindings.get(chatId)
-    if (oldBinding) {
-      this.sessionToChat.delete(oldBinding.sessionId)
-    }
-
-    const appSettings = getSettings()
-    // 切换到的会话可能本来就是 Pi 会话，内核以会话元数据为准
-    const agentRuntime = normalizeAgentRuntime(match.agentRuntime ?? appSettings.agentRuntime)
-    // 会话历史渠道可能未启用该内核，此时回退到第一个可用渠道，避免切过去就发送失败
-    const preferredChannelId = match.channelId ?? this.botConfig.defaultChannelId ?? appSettings.agentChannelId ?? ''
-    const picked = preferredChannelId
-      ? resolveChannelIdForRuntime(preferredChannelId, agentRuntime)
-      : null
-    if (!picked) {
-      await this.sendMessage(
-        chatId,
-        `会话「${match.title}」使用 ${describeAgentRuntime(agentRuntime)} 内核，但暂无同时启用该内核的可用渠道，请先在 Profer 渠道设置中启用。`,
-      )
-      return
-    }
-
-    const modelId = resolveModelIdForChannel(
-      picked.channelId,
-      match.modelId ?? this.botConfig.defaultModelId ?? appSettings.agentModelId,
-    )
-    const binding: FeishuChatBinding = {
-      chatId,
-      botId: this.botConfig.id,
-      userId: msgCtx.senderOpenId,
-      sessionId: match.id,
-      workspaceId: match.workspaceId ?? this.botConfig.defaultWorkspaceId ?? appSettings.agentWorkspaceId ?? '',
-      channelId: picked.channelId,
-      modelId,
-      agentRuntime,
-      source: 'feishu',
-      chatType: msgCtx.chatType,
-      groupName: msgCtx.groupName,
-      createdAt: Date.now(),
-    }
-    this.chatBindings.set(chatId, binding)
-    this.sessionToChat.set(match.id, chatId)
-    this.updateStatus({ activeBindings: this.chatBindings.size })
-    this.saveBindings()
-
-    await this.sendMessage(
-      chatId,
-      picked.fellBack
-        ? `已切换到会话: ${match.title} (${match.id.slice(0, 8)})\n⚠️ 会话原渠道未启用 ${describeAgentRuntime(agentRuntime)} 内核，已自动改用其它可用渠道。可用 /model 重新选择。`
-        : `已切换到会话: ${match.title} (${match.id.slice(0, 8)})`,
-    )
-  }
-
-  private async handleWorkspaceCommand(msgCtx: FeishuMessageContext, arg?: string): Promise<void> {
-    const { chatId } = msgCtx
-    const workspaces = listAgentWorkspacesByUpdatedAt()
-    const binding = this.chatBindings.get(chatId)
-    const currentWorkspaceId = binding?.workspaceId
-
-    // 无参数 → 列出所有工作区供选择
-    if (!arg) {
-      const items = workspaces.map((w, i) => ({
-        index: i + 1,
-        name: w.name,
-        isCurrent: w.id === currentWorkspaceId,
-      }))
-      await this.sendCardMessage(chatId, buildWorkspaceListCard(items))
-      return
-    }
-
-    // 支持序号（如 /workspace 1）和名称两种方式
-    const index = Number(arg)
-    const match = Number.isInteger(index) && index >= 1 && index <= workspaces.length
-      ? workspaces[index - 1]
-      : workspaces.find(
-          (w) => w.name.toLowerCase() === arg.toLowerCase() || w.slug === arg.toLowerCase(),
-        )
-
-    if (!match) {
-      const available = workspaces.map((w, i) => `${i + 1}. ${w.name}`).join(', ')
-      await this.sendMessage(chatId, `未找到工作区 "${arg}"。可用: ${available}`)
-      return
-    }
-
-    // 清理旧绑定（切换工作区后需要用户选择或新建会话）
-    if (binding) {
-      this.sessionToChat.delete(binding.sessionId)
-      this.chatBindings.delete(chatId)
-      this.updateStatus({ activeBindings: this.chatBindings.size })
-      this.saveBindings()
-    }
-
-    // 更新 Bot 配置的默认工作区（下次自动创建会话时使用）
-    const { saveFeishuBotConfig } = await import('./feishu-config')
-    saveFeishuBotConfig({
-      id: this.botConfig.id,
-      name: this.botConfig.name,
-      enabled: this.botConfig.enabled,
-      appId: this.botConfig.appId,
-      appSecret: '', // 空字符串表示不修改
-      defaultWorkspaceId: match.id,
-      defaultChannelId: this.botConfig.defaultChannelId,
-      defaultModelId: this.botConfig.defaultModelId,
-    })
-    // 同步更新内存中的 botConfig，避免后续读到旧快照
-    this.botConfig = { ...this.botConfig, defaultWorkspaceId: match.id }
-
-    // 列出该工作区下最近 10 条会话（序号为全局排序位置）
-    const sessions = listAgentSessions(true).filter(isVisibleAgentSession)
-    const recentSessions = sessions
-      .filter((s) => s.workspaceId === match.id)
-      .slice(0, 10)
-      .map((s) => ({
-        id: s.id,
-        title: s.title,
-        index: sessions.indexOf(s) + 1,
-      }))
-
-    await this.sendCardMessage(chatId, buildWorkspaceSwitchedCard(match.name, recentSessions))
-  }
-
-  private async handleNowCommand(msgCtx: FeishuMessageContext): Promise<void> {
-    const { chatId } = msgCtx
-    const binding = this.chatBindings.get(chatId)
-
-    const lines: string[] = []
-
-    // 会话信息
-    if (binding) {
-      const session = getAgentSessionMeta(binding.sessionId)
-      lines.push(`**会话**: ${session?.title ?? '未知'} (\`${binding.sessionId.slice(0, 8)}\`)`)
-
-      // 模型信息（与发送路径同序解析：binding > Bot 配置 > 应用设置）
-      const nowSettings = getSettings()
-      const effChannelId = binding.channelId || this.botConfig.defaultChannelId || nowSettings.agentChannelId
-      const effModelId = binding.modelId || this.botConfig.defaultModelId || nowSettings.agentModelId
-      const modelInfo = describeBindingModel(effChannelId, effModelId)
-      lines.push(`**模型**: ${modelInfo.channelName} / ${modelInfo.modelName}${modelInfo.valid ? '' : '（已失效）'}`)
-      lines.push(`**内核**: ${describeAgentRuntime(this.resolveChatRuntime(binding))}`)
-    } else {
-      lines.push('**会话**: 未绑定（发送消息将自动创建）')
-    }
-
-    // 工作区信息
-    const workspaceId = binding?.workspaceId
-    const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
-    if (workspace) {
-      lines.push(`**工作区**: ${workspace.name} (\`${workspace.slug}\`)`)
-
-      // MCP Servers
-      const capabilities = getWorkspaceCapabilities(workspace.slug)
-      if (capabilities.mcpServers.length > 0) {
-        lines.push('')
-        lines.push('**MCP Servers**:')
-        for (const mcp of capabilities.mcpServers) {
-          const status = mcp.enabled !== false ? '启用' : '停用'
-          lines.push(`  ${status} ${mcp.name}`)
-        }
-      } else {
-        lines.push('**MCP Servers**: 无')
-      }
-
-      // Skills
-      if (capabilities.skills.length > 0) {
-        lines.push('')
-        lines.push('**Skills**:')
-        for (const skill of capabilities.skills) {
-          const status = skill.enabled !== false ? '启用' : '停用'
-          lines.push(`  ${status} ${skill.name}`)
-        }
-      } else {
-        lines.push('**Skills**: 无')
-      }
-
-      // 工作区文件列表（递归，体现文件夹-文件层级）
-      const { resolveWorkspaceFilesDir: resolveWsFilesDir } = await import('./config-paths')
-      const wsPath = resolveWsFilesDir(workspace.slug)
-      try {
-        const treeLines = buildFileTree(wsPath, { dirIcon: '', fileIcon: '' })
-        if (treeLines.length > 0) {
-          lines.push('')
-          lines.push('**工作区文件**:')
-          for (const l of treeLines) {
-            lines.push(`  ${l}`)
-          }
-        }
-      } catch {
-        // 目录不存在或无法读取，忽略
-      }
-
-      // 会话文件（体现文件夹-文件层级）
-      if (binding) {
-        try {
-          const treeLines = buildSessionFileTree(workspace.slug, binding.sessionId, {
-            dirIcon: '',
-            fileIcon: '',
-          })
-          if (treeLines.length > 0) {
-            lines.push('')
-            lines.push('**会话文件**:')
-            for (const l of treeLines) {
-              lines.push(`  ${l}`)
-            }
-          }
-        } catch {
-          // 忽略
-        }
-      }
-    } else {
-      lines.push('**工作区**: 未设置')
-    }
-
-    const card: Record<string, unknown> = {
-      config: { wide_screen_mode: true },
-      header: {
-        title: { tag: 'plain_text', content: '当前状态' },
-        template: 'blue',
-      },
-      elements: [
-        { tag: 'markdown', content: lines.join('\n') },
-      ],
-    }
-    await this.sendCardMessage(chatId, card)
-  }
-
-  /**
-   * /model 命令：罗列渠道 / 罗列模型 / 切换模型（per-chat）
-   * - /model            列出可用渠道
-   * - /model <渠道序号>  列出该渠道下的模型
-   * - /model <渠道> <模型> 切换到该渠道的该模型
-   */
-  private async handleModelCommand(msgCtx: FeishuMessageContext, arg: string): Promise<void> {
-    const { chatId } = msgCtx
-    const binding = this.chatBindings.get(chatId)
-    // 渠道列表必须按当前会话内核过滤：否则会把 Pi 会话切到只勾了 Claude 的渠道
-    const agentRuntime = this.resolveChatRuntime(binding)
-    const runtimeLabel = describeAgentRuntime(agentRuntime)
-    const channels = listSwitchableChannels(agentRuntime)
-    if (channels.length === 0) {
-      await this.sendMessage(
-        chatId,
-        `当前会话使用 ${runtimeLabel} 内核，暂无同时启用该内核的可用渠道。请先在 Profer 设置中配置并启用渠道（需填入 API Key、至少启用一个模型，并勾选 ${runtimeLabel} 内核）。`,
-      )
-      return
-    }
-
-    const parts = arg.split(/\s+/).filter(Boolean)
-
-    // /model — 列出渠道
-    if (parts.length === 0) {
-      const items = channels.map((c, i) => ({
-        index: i + 1,
-        name: c.name,
-        modelCount: getEnabledModels(c).length,
-        isCurrent: binding?.channelId === c.id,
-      }))
-      await this.sendCardMessage(chatId, buildChannelListCard(items))
-      return
-    }
-
-    // 解析渠道（序号基于已按内核过滤的列表，与用户看到的一致）
-    const channelIdx = Number(parts[0])
-    const channel = resolveChannelByIndex(channelIdx, agentRuntime)
-    if (!channel) {
-      await this.sendMessage(
-        chatId,
-        `未找到渠道 "${parts[0]}"（当前内核: ${runtimeLabel}）。使用 /model 查看可用渠道。`,
-      )
-      return
-    }
-
-    // 防御：列表与切换之间渠道配置可能被改，明确拒绝而不是静默失败
-    if (!isChannelEnabledForRuntime(channel, agentRuntime)) {
-      await this.sendMessage(
-        chatId,
-        `渠道「${channel.name}」未启用 ${runtimeLabel} 内核，无法用于当前会话。请选择其它渠道，或在 Profer 渠道设置中启用 ${runtimeLabel} 内核。`,
-      )
-      return
-    }
-
-    const models = getEnabledModels(channel)
-
-    // /model <渠道> — 列出该渠道模型
-    if (parts.length === 1) {
-      const items = models.map((m, i) => ({
-        index: i + 1,
-        name: m.name,
-        isCurrent: binding?.channelId === channel.id && binding?.modelId === m.id,
-      }))
-      await this.sendCardMessage(chatId, buildModelListCard(channel.name, channelIdx, items))
-      return
-    }
-
-    // /model <渠道> <模型> — 切换
-    const modelIdx = Number(parts[1])
-    const model = resolveModelByIndex(channel, modelIdx)
-    if (!model) {
-      await this.sendMessage(
-        chatId,
-        `未找到模型 "${parts[1]}"。使用 /model ${channelIdx} 查看该渠道的模型。`,
-      )
-      return
-    }
-
-    // 切换需要一个 binding 承载；没有则自动创建
-    let targetBinding = binding
-    if (!targetBinding) {
-      await this.createNewSession(msgCtx)
-      targetBinding = this.chatBindings.get(chatId)
-      if (!targetBinding) {
-        await this.sendMessage(chatId, '请先发送一条消息创建会话，或在 Profer 设置中选择 Agent 渠道。')
-        return
-      }
-    }
-
-    targetBinding.channelId = channel.id
-    targetBinding.modelId = model.id
-    this.saveBindings()
-
-    await this.sendCardMessage(chatId, buildModelSwitchedCard(channel.name, model.name))
-  }
-
   // ===== 用户消息处理 =====
 
   private async handleUserMessage(
@@ -1623,11 +1233,11 @@ class FeishuBridge {
     const { chatId } = msgCtx
     let binding = this.chatBindings.get(chatId)
 
-    // 自动创建会话
+    // 自动创建会话（与命令层共用同一套建会话逻辑）
     if (!binding) {
-      await this.createNewSession(msgCtx)
-      binding = this.chatBindings.get(chatId)
-      if (!binding) return
+      const created = this.commandHandler.ensureBinding(chatId, msgCtx)
+      if (!created) return
+      binding = created as FeishuChatBinding
     }
 
     // 注：之前在此处有 isAgentSessionActive silent skip 兜底，会在
@@ -1798,6 +1408,9 @@ class FeishuBridge {
     const input: AgentSendInput = {
       sessionId: binding.sessionId,
       userMessage: agentMessage,
+      // 桌面端只展示用户原文；prompt 工程块（bridge_context/引用/附件）不进气泡
+      rawUserMessage: userText,
+      titleSourceText: userText,
       channelId,
       modelId,
       workspaceId: binding.workspaceId,

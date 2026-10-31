@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getFileBaseName, getFileParentPath, getLastPathSegments, isAbsoluteFilePath, isMissingAttachmentData, normalizeFilePathSegments, resolveRelativeToAbsolute } from './file-utils'
+import { getFileBaseName, getFileParentPath, getLastPathSegments, isAbsoluteFilePath, isMissingAttachmentData, isPathInsideDirectory, normalizeFilePathSegments, resolveRelativeToAbsolute } from './file-utils'
 
 describe('isMissingAttachmentData（附件数据完整性）', () => {
   test('Given 0 字节文件 When 数据为空 Then 不判定为失效附件', () => {
@@ -177,5 +177,21 @@ describe('getFileParentPath', () => {
 
   test('无分隔符返回 null', () => {
     expect(getFileParentPath('report.md')).toBe(null)
+  })
+})
+
+describe('isPathInsideDirectory（会话草稿区判定）', () => {
+  test('Given 子目录文件 When 判断归属 Then 判为内部路径', () => {
+    expect(isPathInsideDirectory('/ws/session/mem-v2.png', '/ws/session')).toBe(true)
+    expect(isPathInsideDirectory('/ws/session/.context/plan/a.md', '/ws/session/')).toBe(true)
+  })
+
+  test('Given 同前缀兄弟目录 When 判断归属 Then 不误判', () => {
+    expect(isPathInsideDirectory('/ws/session-backup/a.ts', '/ws/session')).toBe(false)
+    expect(isPathInsideDirectory('/ws/session', '/ws/session')).toBe(false)
+  })
+
+  test('Given Windows 路径 When 判断归属 Then 统一分隔符与盘符大小写', () => {
+    expect(isPathInsideDirectory('C:\\Work\\session\\a.png', 'c:\\work\\session')).toBe(true)
   })
 })

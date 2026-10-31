@@ -4,35 +4,23 @@
  * 由侧边栏「Agent 技能」入口触发，全屏占据中间内容区（隐藏 TabBar 与右侧文件面板）。
  *
  * 结构：
- * - 顶部：标题 + 工作区切换下拉
- * - 工具条：Skills / MCP 切换 + 搜索 + 社区市场（占位）+ 新增入口
+ * - 顶部：标题 + 工作区切换下拉（AgentWorkspaceSwitcher，与 Agent 记忆共用）
+ * - 工具条：Skills / MCP / 预设切换 + 搜索 + 新增入口
  * - 内容：能力卡片网格（商店风），点击卡片打开右侧详情抽屉
+ *
+ * 工作区记忆已拆成独立的「Agent 记忆」视图（AgentMemoryView），不在这里。
  */
 
 import * as React from "react";
 import { useSetAtom, useAtomValue } from "jotai";
 import { toast } from "sonner";
-import {
-  ArrowLeft,
-  Blocks,
-  ChevronDown,
-  Search,
-  Plus,
-  FolderOpen,
-  Check,
-  Globe2,
-} from "lucide-react";
+import { ArrowLeft, Blocks, Search, Plus, Globe2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@profer/ui/primitives/tooltip";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@profer/ui/primitives/popover";
 import { ConfirmDialog } from "@profer/ui/primitives/confirm-dialog";
 import { activeViewAtom } from "@/atoms/active-view";
 import { workspaceCapabilitiesVersionAtom } from "@/atoms/agent-atoms";
@@ -48,7 +36,7 @@ import { McpCard } from "./McpCard";
 import { SkillDetailSheet } from "./SkillDetailSheet";
 import { McpDetailSheet } from "./McpDetailSheet";
 import { ImportSkillDialog } from "./ImportSkillDialog";
-import { WorkspaceMemoryTab } from "./WorkspaceMemoryTab";
+import { AgentWorkspaceSwitcher } from "./AgentWorkspaceSwitcher";
 import { AgentPresetSettings } from "./AgentPresetSettings";
 import { ImportPresetDialog } from "./ImportPresetDialog";
 import { GlobalCapabilitiesView } from "./GlobalCapabilitiesView";
@@ -65,7 +53,7 @@ import {
   partitionSkills,
 } from "./skillListSections";
 
-type CapabilityTab = "skills" | "mcp" | "memory" | "presets";
+type CapabilityTab = "skills" | "mcp" | "presets";
 
 export function AgentSkillsView(): React.ReactElement {
   const data = useAgentSkillsData();
@@ -100,7 +88,6 @@ export function AgentSkillsView(): React.ReactElement {
     React.useState(0);
   const [workspaceExportPresetToken, setWorkspaceExportPresetToken] =
     React.useState(0);
-  const [wsPopoverOpen, setWsPopoverOpen] = React.useState(false);
   const [pendingDeleteSkill, setPendingDeleteSkill] =
     React.useState<SkillMeta | null>(null);
   const [pendingDeleteMcpName, setPendingDeleteMcpName] = React.useState<
@@ -153,26 +140,13 @@ export function AgentSkillsView(): React.ReactElement {
     [data.mcpConfig],
   );
 
-  const [memoryCount, setMemoryCount] = React.useState(0);
-  React.useEffect(() => {
-    if (!data.workspaceSlug) return;
-    window.electronAPI
-      .getWorkspaceMemorySummary(data.workspaceSlug)
-      .then((mem) => {
-        setMemoryCount(
-          (mem.workspaceProfile.exists ? 1 : 0) + (mem.autoMemory.fileCount ?? 0),
-        );
-      })
-      .catch(() => {});
-  }, [data.workspaceSlug, data.loading]);
-
-  // 顶部 Skills/MCP/记忆/预设切换按钮：支持 ←/→ 循环切换 + Home/End。
+  // 顶部 Skills/MCP/预设切换按钮：支持 ←/→ 循环切换 + Home/End。
+  // 记忆已拆成 rail 上的独立「Agent 记忆」视图，不再作为本页标签。
   const tabButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
   const tabList: Array<{ value: CapabilityTab; label: string; count: number }> =
     [
       { value: "skills", label: "Skills", count: data.skills.length },
       { value: "mcp", label: "MCP", count: mcpCount },
-      { value: "memory", label: "记忆", count: memoryCount },
       { value: "presets", label: "预设", count: presetList.length },
     ];
   const handleTabKeyDown = React.useCallback(
@@ -311,50 +285,15 @@ export function AgentSkillsView(): React.ReactElement {
           </div>
           <div className="titlebar-no-drag flex shrink-0 items-center justify-end gap-2 whitespace-nowrap">
             {!globalConfigOpen && (
-              <Popover open={wsPopoverOpen} onOpenChange={setWsPopoverOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 py-1.5 text-[13px] font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.04]"
-                  >
-                    <FolderOpen size={14} className="text-foreground/45" />
-                    <span className="max-w-[180px] truncate">
-                      {data.workspaceName}
-                    </span>
-                    <ChevronDown size={14} className="text-foreground/45" />
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="end"
-                  className="max-h-[320px] w-56 overflow-y-auto scrollbar-thin p-1"
-                >
-                  {workspaces.map((w) => (
-                    <button
-                      key={w.id}
-                      type="button"
-                      onClick={() => {
-                        setGlobalConfigOpen(false);
-                        if (w.id !== currentWorkspaceId) {
-                          selectProject(w.id, { resetView: false });
-                          toast.success(`已切换到工作区「${w.name}」`);
-                        }
-                        setWsPopoverOpen(false);
-                      }}
-                      className={cn(
-                        "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors",
-                        w.id === currentWorkspaceId
-                          ? "bg-accent text-accent-foreground"
-                          : "text-foreground/80 hover:bg-accent/50",
-                      )}
-                    >
-                      <span className="truncate">{w.name}</span>
-                      {w.id === currentWorkspaceId && (
-                        <Check size={14} className="shrink-0 text-primary" />
-                      )}
-                    </button>
-                  ))}
-                </PopoverContent>
-              </Popover>
+              <AgentWorkspaceSwitcher
+                workspaces={workspaces}
+                currentWorkspaceId={currentWorkspaceId}
+                workspaceName={data.workspaceName}
+                onSelect={(workspaceId) => {
+                  setGlobalConfigOpen(false);
+                  selectProject(workspaceId, { resetView: false });
+                }}
+              />
             )}
             <button
               type="button"
@@ -395,9 +334,7 @@ export function AgentSkillsView(): React.ReactElement {
               ? "搜索 Skills..."
               : tab === "mcp"
                 ? "搜索 MCP 服务器..."
-                : tab === "memory"
-                  ? "搜索记忆正文..."
-                  : "搜索预设..."
+                : "搜索预设..."
         }
         onDomainChange={(value) => {
           if (globalConfigOpen)
@@ -491,11 +428,6 @@ export function AgentSkillsView(): React.ReactElement {
               onToggle={data.toggleSkill}
               onUpdate={data.updateSkill}
               onPromote={(skill) => setPromoteSkill(skill)}
-            />
-          ) : tab === "memory" ? (
-            <WorkspaceMemoryTab
-              workspaceSlug={data.workspaceSlug}
-              search={search}
             />
           ) : (
             <McpTab

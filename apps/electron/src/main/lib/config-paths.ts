@@ -223,6 +223,34 @@ export function resolveAttachmentPath(localPath: string): string {
 }
 
 /**
+ * 用户附件备份根目录
+ *
+ * 刻意放在 agent-workspaces 之外：Agent 只被授予会话 cwd 的写权限，
+ * 它在 cwd 里的 `rm` 删不掉这里的备份，历史消息里的附件缩略图才不会永久失效。
+ *
+ * @returns ~/.profer/agent-attachment-backups/
+ */
+export function getAgentAttachmentBackupsRoot(): string {
+  return join(getConfigDir(), 'agent-attachment-backups')
+}
+
+/**
+ * 获取会话级用户附件备份目录（按需创建）
+ *
+ * @param sessionId 会话 ID
+ * @returns ~/.profer/agent-attachment-backups/{sessionId}/
+ */
+export function getAgentAttachmentBackupDir(sessionId: string): string {
+  const dir = join(getAgentAttachmentBackupsRoot(), sessionId)
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+
+  return dir
+}
+
+/**
  * 获取应用设置文件路径
  *
  * @returns ~/.profer/settings.json
@@ -1049,12 +1077,30 @@ export function getWeChatSyncPath(): string {
 }
 
 /**
+ * 获取微信聊天绑定持久化路径
+ *
+ * @returns ~/.profer/wechat-bindings.json
+ */
+export function getWeChatBindingsPath(): string {
+  return join(getConfigDir(), 'wechat-bindings.json')
+}
+
+/**
  * 获取钉钉配置文件路径
  *
  * @returns ~/.profer/dingtalk.json
  */
 export function getDingTalkConfigPath(): string {
   return join(getConfigDir(), 'dingtalk.json')
+}
+
+/**
+ * 获取某个钉钉 Bot 的聊天绑定持久化路径
+ *
+ * @returns ~/.profer/dingtalk-bindings-{botId}.json
+ */
+export function getDingTalkBotBindingsPath(botId: string): string {
+  return join(getConfigDir(), `dingtalk-bindings-${botId}.json`)
 }
 
 /**

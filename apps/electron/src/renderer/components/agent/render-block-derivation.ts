@@ -50,7 +50,7 @@ export function deriveAssistantTurnBlocks(
     }
     const blocks = message.message?.content
     if (!Array.isArray(blocks)) continue
-    const stableKey = (message as unknown as { _promaStableKey?: unknown })._promaStableKey
+    const stableKey = (message as unknown as { _proferStableKey?: unknown })._proferStableKey
     const messageIdentity = message.uuid
       || (typeof stableKey === 'string' ? stableKey : options.getMessageIdentity(message))
     for (const [rawIndex, rawBlock] of blocks.entries()) {
@@ -125,35 +125,6 @@ interface BuildAssistantTurnRenderItemsOptions {
    * 缺省 true 保持旧行为（不传的调用方不受影响）。
    */
   showThinking?: boolean
-}
-
-interface PartitionedTurnBlocks<T extends IndexedContentBlock> {
-  /** 普通过程块：保持原先单一过程组的形态，不因图片输出被切成多段。 */
-  processItems: T[]
-  imageOutputs: Array<Extract<AssistantTurnRenderItem<T>, { type: 'image-output' }>>
-}
-
-function partitionProcessBlocks<T extends IndexedContentBlock>(
-  blocks: T[],
-  imageOutputsByToolUseId?: Map<string, ParsedAgentImageAttachment[]>,
-): PartitionedTurnBlocks<T> {
-  const processItems: T[] = []
-  const imageOutputs: Array<Extract<AssistantTurnRenderItem<T>, { type: 'image-output' }>> = []
-
-  for (const item of blocks) {
-    const block = item.block
-    const toolUse = block.type === 'tool_use' ? block as SDKToolUseBlock : undefined
-    const images = toolUse && typeof toolUse.id === 'string'
-      ? imageOutputsByToolUseId?.get(toolUse.id)
-      : undefined
-    if (images && images.length > 0 && toolUse && typeof toolUse.id === 'string') {
-      imageOutputs.push({ type: 'image-output', toolUseId: toolUse.id, images, identity: `image-output:${toolUse.id}` })
-      continue
-    }
-    processItems.push(item)
-  }
-
-  return { processItems, imageOutputs }
 }
 
 export function buildCompletedToolResultIds(turnMessages: SDKMessage[]): Set<string> {
@@ -286,36 +257,53 @@ export function buildAssistantTurnRenderItems(
     && outputSplit.textStartIndex > 0
     && areToolsBeforeIndexCompleted(renderBlocks, outputSplit.textStartIndex, options.completedToolResultIds)
 
-  if (options.isStreaming && hasProcessBlock && !canSplitStreamingFinalOutput) {
-    const { processItems, imageOutputs } = partitionProcessBlocks(visibleBlocks, options.imageOutputsByToolUseId)
-    return [...(processItems.length > 0 ? [{ type: 'process-group' as const, items: processItems }] : []), ...imageOutputs]
+  // 图片输出按它在原始输出里的位置参与渲染，而不是统一堆到正文前面。
+  const imageItems = new Map<number, Extract<AssistantTurnRenderItem, { type: 'image-output' }>>()
+  for (const [index, entry] of visibleBlocks.entries()) {
+    const block = entry.block
+    if (block.type !== 'tool_use' || typeof block.id !== 'string') continue
+    const images = options.imageOutputsByToolUseId?.get(block.id)
+    if (!images || images.length === 0) continue
+    imageItems.set(index, { type: 'image-output', toolUseId: block.id, images, identity: `image-output:${block.id}` })
   }
 
-  if (outputSplit === null) {
-    const { processItems, imageOutputs } = partitionProcessBlocks(visibleBlocks, options.imageOutputsByToolUseId)
-    return [...(processItems.length > 0 ? [{ type: 'process-group' as const, items: processItems }] : []), ...imageOutputs]
+  const replyTextIndexes = new Set<number>()
+  // 没有过程块时（例如思考被隐藏）尾部 text 始终是正文；流式中只有工具都完成才提前外置。
+  const canTreatTrailingTextAsReply = !options.isStreaming || canSplitStreamingFinalOutput || !hasProcessBlock
+  if (outputSplit && canTreatTrailingTextAsReply) {
+    for (let index = outputSplit.textStartIndex; index <= outputSplit.textEndIndex; index++) {
+      if (renderBlocks[index]?.type === 'text') replyTextIndexes.add(index)
+    }
+  }
+  // 图文混排：紧邻图片的连续 text 也算正文，保证「文字 → 图 → 文字」按原顺序呈现。
+  // 图片前后没有直接相邻 text 的中间说明仍然留在过程组，不把长叙述搬进正文。
+  for (const imageIndex of imageItems.keys()) {
+    for (const step of [-1, 1]) {
+      let index = imageIndex + step
+      while (index >= 0 && index < renderBlocks.length && renderBlocks[index]?.type === 'text') {
+        replyTextIndexes.add(index)
+        index += step
+      }
+    }
   }
 
-  const { textStartIndex, textEndIndex } = outputSplit
-  // 正文之前的步骤 + 正文之后仅剩的 thinking（收尾思考）统一归入过程组。
   const processItems: IndexedContentBlock[] = []
-  for (let index = 0; index < textStartIndex; index++) {
-    const item = visibleBlocks[index]
-    if (item) processItems.push(item)
-  }
-  for (let index = textEndIndex + 1; index < visibleBlocks.length; index++) {
-    const item = visibleBlocks[index]
-    if (item) processItems.push(item)
+  const contentItems: AssistantTurnRenderItem[] = []
+  for (const [index, entry] of visibleBlocks.entries()) {
+    const imageItem = imageItems.get(index)
+    if (imageItem) {
+      contentItems.push(imageItem)
+      continue
+    }
+    if (replyTextIndexes.has(index)) {
+      contentItems.push({ type: 'block', item: entry })
+      continue
+    }
+    processItems.push(entry)
   }
 
-  const { processItems: processBlocks, imageOutputs } = partitionProcessBlocks(processItems, options.imageOutputsByToolUseId)
-  const items: AssistantTurnRenderItem[] = [
-    ...(processBlocks.length > 0 ? [{ type: 'process-group' as const, items: processBlocks }] : []),
-    ...imageOutputs,
+  return [
+    ...(processItems.length > 0 ? [{ type: 'process-group' as const, items: processItems }] : []),
+    ...contentItems,
   ]
-  for (let index = textStartIndex; index <= textEndIndex; index++) {
-    const item = visibleBlocks[index]
-    if (item) items.push({ type: 'block', item })
-  }
-  return items
 }
