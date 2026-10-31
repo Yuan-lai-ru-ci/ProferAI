@@ -5,7 +5,7 @@
  * 未确认的提醒会由渲染进程从 SQLite 恢复为固定通知条。
  */
 
-import { BrowserWindow, Notification } from 'electron'
+import { app, BrowserWindow, Notification } from 'electron'
 import { claimDuePlanningReminders } from './planning-manager'
 import { getSettings } from './settings-service'
 import { broadcastPlanningChanged, broadcastPlanningRemindersDue } from './planning-events'
@@ -18,6 +18,10 @@ let checking = false
 /** 原生通知由主进程发送，窗口被隐藏或未聚焦时也不依赖渲染进程的 Web Notification。 */
 function showPlanningSystemNotification(reminder: ActivePlanningReminder): void {
   if (!getSettings().notificationsEnabled || !Notification.isSupported()) return
+  // macOS：Electron 的 willPresentNotification 固定返回 UNNotificationPresentationOptionSound，
+  // 前台呈现通知必然播放系统提示音（silent 无效）。前台已有常驻提醒条与可配置提示音，
+  // 这里跳过系统通知；后台走系统投递时 content.sound 为 nil，不会出声。
+  if (process.platform === 'darwin' && app.isActive()) return
 
   const notification = new Notification({
     title: reminder.targetType === 'todo' ? 'Todo 提醒' : '日程提醒',
