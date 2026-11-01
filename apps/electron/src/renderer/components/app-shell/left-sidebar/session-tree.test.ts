@@ -168,6 +168,19 @@ describe('sortProjectSessions — 项目内置顶优先', () => {
     expect(sortProjectSessions([normalOld, pinnedOld, normalNew, pinnedNew]).map((session) => session.id))
       .toEqual(['pinned-new', 'pinned-old', 'normal-new', 'normal-old'])
   })
+
+  test('Given 子会话带残留置顶字段 When 排序 Then 仍按更新时间而不是置顶优先', () => {
+    const child = makeSession({
+      id: 'child',
+      pinned: true,
+      parentSessionId: 'parent',
+      sourceDelegationId: 'deleg-1',
+      updatedAt: NOW - 20_000,
+    })
+    const recent = makeSession({ id: 'recent', updatedAt: NOW })
+
+    expect(sortProjectSessions([child, recent]).map((session) => session.id)).toEqual(['recent', 'child'])
+  })
 })
 
 describe('getSessionTreeStatus — 父会话状态聚合', () => {

@@ -8,9 +8,10 @@
  * 这里只放无 React/Jotai 依赖的纯函数，便于单测锁住计数与去重语义。
  * 唯一键的实现抽在 `@/lib/navigation-item-key`，与面板列表共用同一份，避免两处各抄一份。
  */
-import type { AgentNavigationIndexEntry } from '@profer/shared'
+import type { AgentNavigationIndexEntry, SDKMessage, SDKSystemMessage } from '@profer/shared'
 import { stripUserContextBlocks } from '@profer/session-core'
 import { getGroupNavKey, getGroupPreview, type MessageGroup } from './SDKMessageRenderer'
+import { isTaskSourceInput, projectTaskInputTimeline } from '@/lib/task-input-timeline'
 import { navigationItemKey } from '@/lib/navigation-item-key'
 
 /** 与 ScrollMinimap 的 MinimapItem 结构一致（只取导航需要的最小字段）。 */
@@ -23,6 +24,8 @@ export interface NavigationItem {
   model?: string
   /** 无 id 时的稳定匹配键（`${role}:${subtype}:${createdAt}`） */
   matchKey?: string
+  /** 状态类来源卡也可能开启独立导航轮。 */
+  startsTurn?: boolean
 }
 
 /** 导航条目的唯一键（有 uuid 用 uuid，无 uuid 用匹配键）；与面板列表共用同一实现。 */
@@ -42,13 +45,19 @@ function groupIdentity(group: MessageGroup): { uuid: string | null; subtype: str
 /** 本地分组 → 导航条目的基础字段（不含头像，头像由调用方按 id/匹配键补）。 */
 export function navigationItemFromGroup(group: MessageGroup): NavigationItem {
   const { uuid } = groupIdentity(group)
+  const returnReferences = group.type === 'user' && Array.isArray(group.message._taskReturnReferences)
+    ? group.message._taskReturnReferences
+    : undefined
   return {
     // 磁盘上没有 uuid 的分组（interruption_record 等）在渲染层会拿到一个会话顺序相关的
     // 回退 id；那是 DOM 内部的 key，**不能**当导航身份（与主进程索引对不上），所以置 null，
     // 改用 matchKey 回退匹配。
     id: uuid,
-    role: group.type === 'user' ? 'user' : group.type === 'system' ? 'status' : 'assistant',
-    preview: getGroupPreview(group),
+    role: group.type === 'user' ? isTaskSourceInput(group.message) ? 'status' : 'user' : group.type === 'system' ? 'status' : 'assistant',
+    preview: returnReferences?.length
+      ? `子会话返回：${returnReferences.map(reference => reference.title).join('、')}`
+      : getGroupPreview(group),
+    startsTurn: !!returnReferences?.length,
     model: group.type === 'assistant-turn' ? group.model : undefined,
     matchKey: getGroupNavKey(group),
   }
@@ -95,7 +104,14 @@ export function buildNavigationItems(
   indexEntries: ReadonlyArray<AgentNavigationIndexEntry> | null,
   localGroups: ReadonlyArray<MessageGroup>,
   userAvatar: string | undefined,
+  messages: readonly SDKMessage[] = [],
 ): NavigationItem[] {
+  const taskSourceKeys = new Set(localGroups.filter(group => group.type === 'user' && isTaskSourceInput(group.message)).map(group => navItemKey(navigationItemFromGroup(group))))
+  const visible = new Set(projectTaskInputTimeline(messages))
+  const hiddenKeys = new Set(messages.filter(message => !visible.has(message)).map(message => navItemKey(navigationItemFromGroup({ type: 'system', message: message as SDKSystemMessage }))))
+  const project = (items: NavigationItem[]): NavigationItem[] => items
+    .filter(item => !hiddenKeys.has(navItemKey(item)))
+    .map(item => taskSourceKeys.has(navItemKey(item)) ? { ...item, role: 'status', avatar: undefined } : item)
   if (indexEntries && indexEntries.length > 0) {
     const skeleton: NavigationItem[] = indexEntries.map((entry) => ({
       id: entry.id,
@@ -117,8 +133,8 @@ export function buildNavigationItems(
       }
     }
     const withAv = withAvatars(skeleton, (item) => item.id ? avatarByUuid.get(item.id) : undefined)
-    return [...withAv, ...appendLocalOnlyItems(skeleton, localGroups)]
+    return project([...withAv, ...appendLocalOnlyItems(skeleton, localGroups)])
   }
 
-  return withAvatars(localGroups.map(navigationItemFromGroup), () => userAvatar)
+  return project(withAvatars(localGroups.map(navigationItemFromGroup), () => userAvatar))
 }

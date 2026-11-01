@@ -14,8 +14,11 @@ import { PluginMessageActions } from '@/components/plugins/PluginEntries'
 
 import * as React from 'react'
 import { extractUserText, isUserInputMessage, stripUserContextBlocks } from '@profer/session-core'
-import { isGoalIterationMessage } from '@profer/shared'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, GitFork, Undo2, RotateCw, Pencil, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, Wallet, Cpu, PackageOpen, Target } from 'lucide-react'
+import { isGoalIterationMessage, projectMessageProvenance } from '@profer/shared'
+import { isScheduledTaskInput, isTaskSourceInput, projectTaskInputTimeline } from '@/lib/task-input-timeline'
+import { getAgentMessageIdentity } from '@/lib/agent-message-identity'
+import { useOpenSession } from '@/hooks/useOpenSession'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, GitFork, Undo2, RotateCw, Pencil, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, GitBranch, Wallet, Cpu, PackageOpen, Target } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { parseQuotedSelectionRefs, type ParsedQuotedSelectionRef } from '@/lib/quoted-selection'
@@ -23,6 +26,7 @@ import { ImageLightbox } from '@profer/ui/primitives/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { AgentTurnImageOutput } from './AgentTurnImageOutput'
 import { collectTurnImageOutputs } from './turn-image-outputs'
+import { TimelineNoticeCard } from './TimelineNoticeCard'
 import { TaskProgressCard } from './TaskProgressCard'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
 import { ProcessBlockGroup } from './ProcessBlockGroup'
@@ -107,6 +111,15 @@ export interface SDKMessageRendererProps {
 
 // ===== system 消息：上下文压缩分割线 =====
 
+function getProvenanceAuthorLabel(message: SDKMessage | undefined): string {
+  const author = projectMessageProvenance(message?._provenance)?.author
+  if (!author) return '未知作者'
+  const labels: Record<string, string> = {
+    user: '用户', agent: 'Agent', automation: '定时任务', external: '外部请求', system: 'Profer', unknown: '未知作者',
+  }
+  return labels[author.type] ?? '未知作者'
+}
+
 function CompactBoundaryDivider(): React.ReactElement {
   return (
     <div className="flex items-center gap-3 my-4 px-1">
@@ -148,12 +161,82 @@ function formatSystemToolName(toolName: string): string {
 function AgentNotice({ message, fallback }: { message: SDKSystemMessage; fallback: string }): React.ReactElement {
   const text = typeof message.message === 'string' && message.message.length > 0 ? message.message : fallback
   return (
-    <div className="my-3 pl-[46px] pr-1">
-      <div className="flex items-start gap-2.5 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs text-foreground/80">
-        <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+    <TimelineNoticeCard tone="warning">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
         <p className="min-w-0 break-words">{text}</p>
       </div>
-    </div>
+    </TimelineNoticeCard>
+  )
+}
+
+/** 来源事实展示复用中性 token，不使用警告样式或推断可访问的跳转链接。 */
+function TaskTriggerNotice({ message, taskInput, basePath, basePaths }: { message: SDKSystemMessage | SDKUserMessage; taskInput?: SDKUserMessage; basePath?: string; basePaths?: string[] }): React.ReactElement {
+  const provenance = projectMessageProvenance(message._provenance)
+  const sourceReference = provenance?.source
+  const sourceSessionId = sourceReference?.type === 'session' ? sourceReference.id
+    : sourceReference?.type === 'run' && provenance?.author.type === 'agent' ? provenance.author.id
+      : undefined
+  const sessions = useAtomValue(agentSessionsAtom)
+  const automations = useAtomValue(automationsAtom)
+  const openSession = useOpenSession()
+  const setForm = useSetAtom(automationFormAtom)
+  const setActiveView = useSetAtom(activeViewAtom)
+  const setPlanningTab = useSetAtom(planningTabAtom)
+  const sourceSession = sourceSessionId ? sessions.find(session => session.id === sourceSessionId) : undefined
+  const sourceAutomation = sourceReference?.type === 'automation'
+    ? automations.find(automation => automation.id === sourceReference.id) : undefined
+  const actorLabels: Record<string, string> = {
+    user: '用户输入', agent: 'Agent 任务交接', automation: '定时任务触发',
+    external: '外部请求', system: '系统任务接续', unknown: '未知来源',
+  }
+  const readableSource = sourceSessionId
+    ? sourceSession ? `来自会话「${sourceSession.title}」` : '来源会话不可访问'
+    : sourceReference?.type === 'automation'
+      ? sourceAutomation ? `来自定时任务「${sourceAutomation.name}」` : '来源定时任务不可访问'
+      : sourceReference?.type === 'task' ? '来自上级任务'
+        : sourceReference?.type === 'request' ? '来自外部请求'
+          : sourceReference?.type === 'message' ? '关联到来源消息'
+            : undefined
+  const scheduled = taskInput && isScheduledTaskInput(taskInput)
+  const readableSummary = scheduled ? '定时任务触发' : provenance
+    ? actorLabels[provenance.author.type] ?? '未知来源'
+    : '历史任务来源'
+  const taskText = taskInput ? stripUserContextBlocks(stripScheduledRunMarker(extractUserText(taskInput) ?? '')) : undefined
+  const createdAt = extractMeta(message).createdAt
+  const taskReturnReferences = '_taskReturnReferences' in message && Array.isArray(message._taskReturnReferences) ? message._taskReturnReferences : []
+  const hasTaskReturns = taskReturnReferences.length > 0
+  return (
+    <TimelineNoticeCard data-testid="task-trigger-notice">
+      <div>
+        <div className="flex items-center gap-2 font-medium text-foreground/80">
+          {scheduled ? <Clock className="size-4 shrink-0" aria-hidden="true" /> : <Bot className="size-4 shrink-0" aria-hidden="true" />}
+          <span>{hasTaskReturns ? '子会话返回' : readableSummary}</span>
+          {createdAt !== undefined && <span className="ml-auto text-xs font-normal text-muted-foreground">{formatMessageTime(createdAt)}</span>}
+        </div>
+        {!hasTaskReturns && readableSource && <p className="mt-1.5 break-words text-muted-foreground">{readableSource}</p>}
+        {!provenance && !taskInput && !hasTaskReturns && <p className="mt-1.5 text-muted-foreground">此历史来源记录缺少可验证的来源信息。</p>}
+        {taskText && !hasTaskReturns && <div className="mt-3"><MessageResponse basePath={basePath} basePaths={basePaths}>{taskText}</MessageResponse></div>}
+        {sourceSession && <Button variant="ghost" size="sm" className="mt-2 h-8 px-2 text-[length:inherit]" onClick={() => openSession('agent', sourceSession.id, sourceSession.title)}><ExternalLink className="mr-1.5 size-4" />查看来源会话</Button>}
+        {sourceAutomation && <Button variant="ghost" size="sm" className="mt-2 h-8 px-2 text-[length:inherit]" onClick={() => {
+          setPlanningTab('automations')
+          setActiveView('planning')
+          setForm({ open: true, draft: automationToDraft(sourceAutomation) })
+        }}><Clock className="mr-1.5 size-4" />查看定时任务</Button>}
+        {hasTaskReturns && <div className="mt-2 space-y-2" data-testid="task-return-section">
+          {taskReturnReferences.map((reference, index) => {
+            const sourceSession = sessions.find(session => session.id === reference.sessionId)
+            const status = reference.status === 'completed' ? '已完成' : reference.status === 'failed' ? '失败' : reference.status === 'cancelled' ? '已取消' : '已中断'
+            return <Button key={`${reference.sessionId}:${index}`} variant="ghost" className="flex h-auto min-h-12 w-full min-w-0 justify-start gap-2 rounded-md bg-background/55 px-3 py-2 text-left" data-testid="task-return-card" title={`返回子会话「${reference.title}」查看`} onClick={() => openSession('agent', reference.sessionId, sourceSession?.title ?? reference.title)}>
+              <GitBranch className="size-4 shrink-0 text-primary/80" />
+              <span className="min-w-0 flex-1 truncate font-medium">{reference.title}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">子会话返回 · {status}</span>
+              <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
+            </Button>
+          })}
+        </div>}
+      </div>
+    </TimelineNoticeCard>
   )
 }
 
@@ -163,9 +246,9 @@ function PermissionDeniedNotice({ message }: { message: SDKSystemMessage }): Rea
   const reason = typeof message.decision_reason === 'string' ? message.decision_reason : undefined
 
   return (
-    <div className="my-3 pl-[46px] pr-1">
-      <div className="flex items-start gap-2.5 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs text-foreground/80">
-        <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+    <TimelineNoticeCard tone="warning">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">自动审批已拒绝操作</span>
@@ -183,7 +266,7 @@ function PermissionDeniedNotice({ message }: { message: SDKSystemMessage }): Rea
           )}
         </div>
       </div>
-    </div>
+    </TimelineNoticeCard>
   )
 }
 
@@ -416,7 +499,7 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
       const sysMsg = msg as SDKSystemMessage
       // 仅需要独立渲染的 system 消息才中断 turn（compact_boundary / compacting / permission_denied / interruption_record / skill_routing_notice / compact_skipped）
       // 其他 system 消息（如 init、task_started、task_progress）归入当前 turn，不中断分组
-      if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'interruption_record' || sysMsg.subtype === 'skill_routing_notice' || sysMsg.subtype === 'compact_skipped') {
+      if (sysMsg.subtype === 'task_trigger' || sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'compacting' || sysMsg.subtype === 'permission_denied' || sysMsg.subtype === 'interruption_record' || sysMsg.subtype === 'skill_routing_notice' || sysMsg.subtype === 'compact_skipped') {
         flushTurn()
         groups.push({ type: 'system', message: sysMsg })
       } else if (sysMsg.subtype === 'task_notification') {
@@ -481,7 +564,7 @@ function mergeAdjacentTurns(groups: MessageGroup[]): MessageGroup[] {
     for (let i = result.length - 1; i >= 0; i--) {
       const prev = result[i]!
       if (prev.type === 'user') break // 真正的用户输入阻断合并
-      if (prev.type === 'system' && ['compact_boundary', 'permission_denied', 'compact_skipped'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
+      if (prev.type === 'system' && ['task_trigger', 'compact_boundary', 'permission_denied', 'compact_skipped'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
       if (prev.type === 'assistant-turn') {
         mergeTargetIdx = i
         break
@@ -1121,6 +1204,7 @@ export function SDKMessageRenderer({
       const iteration = (uMsg as unknown as Record<string, unknown>)._goalIteration
       return <GoalIterationDivider iteration={typeof iteration === 'number' ? iteration : undefined} />
     }
+    if (isTaskSourceInput(uMsg)) return <TaskTriggerNotice message={uMsg} taskInput={uMsg} basePath={basePath} basePaths={basePaths} />
     if (isUserInputMessage(uMsg)) {
       return <UserInputMessage message={uMsg} basePath={basePath} basePaths={basePaths} />
     }
@@ -1132,6 +1216,7 @@ export function SDKMessageRenderer({
     const sysMsg = message as SDKSystemMessage
     const subtype = sysMsg.subtype
 
+    if (subtype === 'task_trigger') return projectTaskInputTimeline([...allMessages, sysMsg]).includes(sysMsg) ? <TaskTriggerNotice message={sysMsg} /> : null
     if (subtype === 'compact_boundary') {
       return <CompactBoundaryDivider />
     }
@@ -1310,45 +1395,6 @@ function stripScheduledRunMarker(text: string): string {
   return text.replaceAll(SCHEDULED_RUN_MARKER, '').trim()
 }
 
-function ScheduledRunBadge(): React.ReactElement {
-  const activeSessionId = useAtomValue(activeSessionIdAtom)
-  const sessions = useAtomValue(agentSessionsAtom)
-  const automations = useAtomValue(automationsAtom)
-  const setForm = useSetAtom(automationFormAtom)
-  const setActiveView = useSetAtom(activeViewAtom)
-  const setPlanningTab = useSetAtom(planningTabAtom)
-
-  const session = sessions.find((s) => s.id === activeSessionId)
-  // 委派子会话恰由定时任务触发的父会话创建时会同时带 sourceAutomationId 与
-  // sourceDelegationId 两个来源标记。统一为 sourceDelegationId 优先：有委派来源
-  // 时不再展示定时任务徽章，避免被误判为定时任务（#993）。
-  const automation = session?.sourceAutomationId && !session.sourceDelegationId
-    ? automations.find((a) => a.id === session.sourceAutomationId)
-    : undefined
-
-  const handleClick = (): void => {
-    if (!automation) return
-    setPlanningTab('automations')
-    setActiveView('planning')
-    setForm({
-      open: true,
-      draft: automationToDraft(automation),
-    })
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      className="inline-flex items-center gap-1 text-[10px] text-primary/70 hover:text-primary transition-colors"
-      title="来自 Profer 定时任务，点击查看设置"
-    >
-      <Clock className="size-3" />
-      <span>来自 Profer 定时任务</span>
-    </button>
-  )
-}
-
 /**
  * 「修改重发」提交时回传的内容。
  *
@@ -1460,28 +1506,30 @@ function UserInputMessage({ message, basePath, basePaths, onEdit, isEditing = fa
 }): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const rawText = extractUserText(message) ?? ''
-  const isScheduledRun = rawText.includes(SCHEDULED_RUN_MARKER)
   const { files: attachedFiles, quotes, text } = parseAttachedFiles(stripScheduledRunMarker(rawText))
   const imageFiles = attachedFiles.filter((f) => isImageFile(f.filename))
   const nonImageFiles = attachedFiles.filter((f) => !isImageFile(f.filename))
+  const provenanceAuthor = projectMessageProvenance(message._provenance)?.author
+  const authorLabel = !provenanceAuthor
+    ? '未知作者'
+    : provenanceAuthor.type === 'user'
+      ? userProfile.userName
+      : getProvenanceAuthorLabel(message as unknown as SDKMessage)
   const meta = extractMeta(message as unknown as SDKMessage)
 
   return (
     <Message from="user">
       <div className="flex items-start gap-2.5 mb-2.5 group-[.user-message-right]:flex-row-reverse">
-        <UserAvatar avatar={userProfile.avatar} size={35} />
+        {provenanceAuthor?.type === 'user' ? (
+          <UserAvatar avatar={userProfile.avatar} size={35} />
+        ) : (
+          <div className="flex size-[35px] shrink-0 items-center justify-center rounded-[25%] bg-muted text-muted-foreground">
+            <Bot size={18} />
+          </div>
+        )}
         <div className="flex flex-col justify-between h-[35px] group-[.user-message-right]:items-end">
-          <span className="text-sm font-semibold text-foreground/60 leading-none">{userProfile.userName}</span>
-          {(meta.createdAt || isScheduledRun) && (
-            <span className="flex items-center gap-2 leading-none">
-              {meta.createdAt && (
-                <span className="message-time text-[10px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>
-              )}
-              {isScheduledRun && (
-                <ScheduledRunBadge />
-              )}
-            </span>
-          )}
+          <span className="text-sm font-semibold text-foreground/60 leading-none">{authorLabel}</span>
+          {meta.createdAt !== undefined && <span className="message-time text-[10px] text-foreground/[0.38]">{formatMessageTime(meta.createdAt)}</span>}
         </div>
       </div>
       <MessageContent>
@@ -1803,6 +1851,10 @@ function getAssistantMessageIdentity(message: SDKAssistantMessage): string {
  * 从 MessageGroup 中提取稳定的 ID，用于 data-message-id 和迷你地图
  */
 export function getGroupId(group: MessageGroup): string {
+  if (group.type !== 'assistant-turn') {
+    const identity = getAgentMessageIdentity(group.message)
+    if (identity && !group.message.uuid) return identity
+  }
   if (group.type === 'user') {
     if (group.message.uuid) return group.message.uuid
     const stableKey = (group.message as unknown as Record<string, unknown>)._proferStableKey
@@ -1814,6 +1866,7 @@ export function getGroupId(group: MessageGroup): string {
     return messageIdCache.get(group.message)!
   }
   if (group.type === 'system') {
+    if (group.message.subtype === 'task_trigger' && group.message.uuid) return group.message.uuid
     if (!messageIdCache.has(group.message)) {
       messageIdCache.set(group.message, `system-${group.message.subtype ?? 'unknown'}-${++fallbackIdCounter}`)
     }
@@ -1822,6 +1875,8 @@ export function getGroupId(group: MessageGroup): string {
   // assistant-turn：取首条 assistant 消息的 uuid
   const first = group.assistantMessages[0]
   if (first?.uuid) return first.uuid
+  const identity = first ? getAgentMessageIdentity(first) : undefined
+  if (identity) return identity
   const stableKey = first ? (first as unknown as Record<string, unknown>)._proferStableKey : undefined
   if (typeof stableKey === 'string') return stableKey
   // 没有 uuid：使用基于首条 assistant message 对象引用的缓存 ID
@@ -1867,6 +1922,7 @@ export function getGroupPreview(group: MessageGroup): string {
     return stripUserContextBlocks(parseAttachedFiles(stripScheduledRunMarker(extractUserText(group.message) ?? '')).text).slice(0, GROUP_PREVIEW_LIMIT)
   }
   if (group.type === 'system') {
+    if (group.message.subtype === 'task_trigger') return (group.message.message ?? '任务来源').slice(0, GROUP_PREVIEW_LIMIT)
     if (group.message.subtype === 'compact_boundary') return '上下文已压缩'
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
@@ -1908,6 +1964,10 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
         </div>
       )
     }
+    const returnReferences = (group.message as SDKUserMessage)._taskReturnReferences
+    if (isTaskSourceInput(group.message) || (Array.isArray(returnReferences) && returnReferences.length > 0)) {
+      return <div data-message-id={groupId} data-message-nav-key={navKey} data-message-role="status"><TaskTriggerNotice message={group.message} taskInput={group.message} basePath={basePath} basePaths={basePaths} /></div>
+    }
     return (
       <div data-message-id={groupId} data-message-nav-key={navKey} data-message-role="user">
         <UserInputMessage
@@ -1925,6 +1985,7 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
 
   if (group.type === 'system') {
     const subtype = group.message.subtype
+    if (subtype === 'task_trigger') return projectTaskInputTimeline([...allMessages, group.message]).includes(group.message) ? <div data-message-id={groupId} data-message-nav-key={navKey}><TaskTriggerNotice message={group.message} /></div> : null
     if (subtype === 'compact_boundary') return <div data-message-id={groupId} data-message-nav-key={navKey}><CompactBoundaryDivider /></div>
     // `compacting` remains in the message stream to drive live state, but its sole
     // visible indicator is rendered at the list tail by AgentMessages from isCompacting.

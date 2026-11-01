@@ -234,6 +234,7 @@ import { getAgentUnreadPolicyMode } from './lib/agent-unread-mode'
 import { mapSdkShellTasks, isSameProcess, terminateProcessTreeGracefully, type MonitoredProcess } from './lib/process-monitor'
 import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProcessRegistryChanged } from './lib/runtime-process-registry'
 import { isProcessHandleOwnedBySession, processHandleFromRuntimeRecord } from './lib/process-handle'
+import { normalizeUserSendInput } from './lib/agent-input-origin'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { GoalSessionService } from './lib/goal-session-service'
 import { loadGoalStates, saveGoalStates, archiveGoalState, loadGoalHistory } from './lib/goal-store'
@@ -2368,6 +2369,9 @@ export function registerIpcHandlers(): void {
       const sessions = listAgentSessions(true)
       const current = sessions.find((s) => s.id === id)
       if (!current) throw new Error(`Agent session not found: ${id}`)
+      // 子会话（委派 / 探索分支）归并在母会话下，位置由母会话决定，不允许单独置顶。
+      // UI 已隐藏入口；这里兜底拦断命令面板、自动化等其它调用方，返回原状态。
+      if (current.parentSessionId || current.explorationParentSessionId) return current
       const newPinned = !current.pinned
       // 置顶时自动取消归档
       const updates: Partial<AgentSessionMeta> = { pinned: newPinned }
@@ -2888,6 +2892,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: AgentSendInput): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
+      input = normalizeUserSendInput(input)
       await coordinateAgentSend(input, {
         getSession: getAgentSessionMeta,
         workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),

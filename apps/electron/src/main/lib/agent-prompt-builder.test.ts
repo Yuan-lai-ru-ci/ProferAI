@@ -36,10 +36,37 @@ mock.module('electron', () => ({
 
 const { buildSystemPrompt, buildDynamicContext } = await import('./agent-prompt-builder')
 const { buildPiTaskPrompt } = await import('./pi-task-prompt')
-const { assembleAgentSystemPrompt } = await import('./agent-prompt-assembly')
+const { assembleAgentSystemPrompt, appendAgentTaskPrompt } = await import('./agent-prompt-assembly')
 const { getConfigDirName } = await import('./config-paths')
 
 describe('模块化提示词装配', () => {
+  test('Pi 任务指导只描述实际注册的派工入口', () => {
+    const input = {
+      mode: 'standard' as const, runtime: 'pi' as const, policy: { useClaudeCodePreset: true },
+      context: { workspaceName: 'Demo', workspaceSlug: 'demo', sessionId: 'source', permissionMode: 'auto' as const, isPiRuntime: true },
+      userMessage: '委派一个当前会话任务',
+    }
+    const absent = assembleAgentSystemPrompt({ ...input, toolNames: ['mcp__collaboration__list_delegations'] })
+    expect(absent.taskPrompt).not.toContain('placement=current')
+    expect(absent.taskPrompt).not.toContain('mcp__collaboration__delegate_agent')
+    const partial = assembleAgentSystemPrompt({ ...input, toolNames: ['mcp__collaboration__delegate_agents'] })
+    expect(partial.taskPrompt).toContain('placement=current')
+    expect(partial.taskPrompt).toContain('`mcp__collaboration__delegate_agents`')
+    expect(partial.taskPrompt).not.toContain('`mcp__collaboration__delegate_agent`')
+  })
+  test('Claude/Pi 按实际工具解释位置与关系，禁用后不泄露派工指引', () => {
+    for (const isPiRuntime of [false, true]) {
+      const base = { workspaceName: 'Demo', workspaceSlug: 'demo', sessionId: 'source', permissionMode: 'auto' as const, isPiRuntime }
+      const prompt = buildSystemPrompt(base)
+      expect(prompt).toContain('placement=current')
+      expect(prompt).toContain('relation=independent')
+      expect(prompt).toContain('用户指定承接位置时优先遵从')
+      expect(prompt).toContain('已有明确执行依据时直接推进')
+      expect(buildSystemPrompt({ ...base, disabledToolGroups: ['collaboration'] })).not.toContain('placement=current')
+      expect(buildSystemPrompt({ ...base, disabledTools: ['delegate_agent', 'delegate_agents'] })).not.toContain('placement=current')
+    }
+  })
+
   const context = {
     workspaceName: 'Demo', workspaceSlug: 'demo', sessionId: 'hello',
     permissionMode: 'auto' as const, isPiRuntime: true, presetName: '标准',
@@ -51,6 +78,48 @@ describe('模块化提示词装配', () => {
     skillCatalog: '<skill_catalog>CATALOG</skill_catalog>',
     attachedDirectories: '<attached_directories>DIRECTORIES</attached_directories>',
   }
+  test('Pi 代码→网页→代码保持 system 相同，任务 SOP 只随本轮用户指导变化', () => {
+    const turns = ['检查 TypeScript 类型错误。', '打开 https://example.com 网页。', '继续检查 TypeScript 类型错误。']
+      .map((userMessage) => assembleAgentSystemPrompt({
+        ...input, mode: 'standard', userMessage, toolNames: ['BrowserObserve'],
+      }))
+    expect(turns[1]!.systemPrompt).toEqual(turns[0]!.systemPrompt)
+    expect(turns[2]!.systemPrompt).toEqual(turns[0]!.systemPrompt)
+    expect(turns[0]!.taskPrompt).toBe('')
+    expect(turns[1]!.taskPrompt).toContain('## Profer 受管浏览器')
+    expect(turns[2]!.taskPrompt).toBe('')
+    expect(turns[0]!.text).toContain('## Profer 知识维护架构')
+    expect(turns[0]!.text).not.toContain('## Profer 受管浏览器')
+    expect(turns[0]!.text).toContain('修改后必须闭环')
+  })
+
+  test('Pi 工具门禁关闭时没有任务 SOP；轻量与 Claude 不拆分原系统规则', () => {
+    const task = { ...input, userMessage: '打开网页并每天自动检查、用子 Agent 并行研究。' }
+    const gated = assembleAgentSystemPrompt({ ...task, mode: 'standard', toolNames: [] })
+    expect(gated.taskPrompt).toBe('')
+    const light = assembleAgentSystemPrompt({ ...task, mode: 'light', toolNames: ['BrowserObserve'] })
+    expect(light.taskPrompt).toBe('')
+    const claude = assembleAgentSystemPrompt({ ...task, mode: 'standard', runtime: 'claude', context: { ...context, isPiRuntime: false } })
+    expect(claude.taskPrompt).toBe('')
+    expect(claude.text).toContain('## Profer 受管浏览器')
+  })
+
+  test('任务指导只追加到新用户消息，常规与 recovery 同源且 /compact 保持原指令', () => {
+    const previousUserMessage = '检查代码。'
+    const guidance = '## Profer 受管浏览器\n仅在本轮使用浏览器工具。'
+    const currentUserMessage = '打开网页。'
+    const contextualMessage = appendAgentTaskPrompt(currentUserMessage, guidance, false)
+    const finalPrompt = appendAgentTaskPrompt('恢复上下文\n\n打开网页。', guidance, false)
+    const history = [previousUserMessage, contextualMessage]
+    expect(history[0]).toBe(previousUserMessage)
+    expect(history[1]).toStartWith(currentUserMessage)
+    expect(history[1]).toContain(guidance)
+    expect(finalPrompt).toEndWith(contextualMessage.slice(currentUserMessage.length))
+    expect(appendAgentTaskPrompt('/compact', guidance, true)).toBe('/compact')
+    expect(appendAgentTaskPrompt(currentUserMessage, guidance, true)).toBe(currentUserMessage)
+    expect(appendAgentTaskPrompt(currentUserMessage, '', false)).toBe(currentUserMessage)
+  })
+
   test('轻量装配不会重新加回目录和工作区模块；标准模式仍完整', () => {
     const light = assembleAgentSystemPrompt({ ...input, mode: 'light' })
     const standard = assembleAgentSystemPrompt({ ...input, mode: 'standard' })

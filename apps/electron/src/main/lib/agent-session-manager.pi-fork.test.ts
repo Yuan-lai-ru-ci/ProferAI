@@ -204,6 +204,12 @@ describe('Pi 会话分叉', () => {
     mkdirSync(join(tempHome, '.profer', 'agent-workspaces', 'workspace-a', 'pi-source-session'), { recursive: true })
     // 源 Pi session artifact 必须真实存在，forkPiAgentSession 会 existsSync 校验。
     writeFileSync(join(tempHome, 'pi-session.jsonl'), '', 'utf-8')
+    mkdirSync(join(tempHome, 'config', 'agent-sessions'), { recursive: true })
+    const sourceProvenance = { schemaVersion: 1, messageId: 'user-origin', author: { type: 'agent', id: 'worker' }, runId: 'origin-run', taskId: 'origin-task', triggerId: 'origin-trigger' }
+    writeFileSync(join(tempHome, 'config', 'agent-sessions', 'pi-source-session.jsonl'), [
+      JSON.stringify({ type: 'user', uuid: 'user-origin', _provenance: sourceProvenance, message: { content: [{ type: 'text', text: 'handoff' }] } }),
+      JSON.stringify({ type: 'assistant', uuid: 'assistant-1', message: { content: [{ type: 'text', text: 'reply' }] } }),
+    ].join('\n') + '\n', 'utf-8')
 
     const policy = { governorMode: 'shadow' as const, permissionMode: 'bypassPermissions' as const, maxFocusChars: 1200 }
     const settledHarnessEvents: PiHarnessEvent[] = [
@@ -239,6 +245,10 @@ describe('Pi 会话分叉', () => {
     expect(Object.keys(forkHarness.goals)).toHaveLength(1)
     expect(forkHarness.goals['source-settled-goal']).toBeUndefined()
     expect(Object.values(forkHarness.goals)[0]).toMatchObject({ sessionId: forked.id, state: 'settled' })
+
+    expect(manager.getAgentSessionSDKMessages(forked.id)[0]).toMatchObject({
+      uuid: 'user-origin', _provenance: sourceProvenance,
+    })
 
     const persisted = manager.getAgentSessionMeta(forked.id)
     expect(persisted).toMatchObject({

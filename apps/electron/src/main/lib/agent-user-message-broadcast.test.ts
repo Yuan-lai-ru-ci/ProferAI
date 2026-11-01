@@ -28,8 +28,8 @@ describe('用户消息广播', () => {
   test('Given 一轮新运行 When 持久化用户消息 Then 同一条消息同时进入事件流', async () => {
     const source = await readOrchestrator()
     const body = slice(source, 'export class AgentOrchestrator')
-    const persistAt = body.indexOf('this.sessionPort.appendMessages(sessionId, [userSDKMsg])')
-    const emitAt = body.indexOf("this.eventPort.emit(sessionId, { kind: 'sdk_message', message: userSDKMsg })")
+    const persistAt = body.indexOf('this.sessionPort.appendMessages(sessionId, [inputMessage])')
+    const emitAt = body.indexOf("this.eventPort.emit(sessionId, { kind: 'sdk_message', message: inputMessage })")
     expect(persistAt).toBeGreaterThan(-1)
     expect(emitAt).toBeGreaterThan(persistAt)
   })
@@ -37,6 +37,6 @@ describe('用户消息广播', () => {
   test('Given 运行中追加的用户消息 When 持久化成功 Then 同样广播给远程客户端', async () => {
     const source = await readOrchestrator()
     const body = slice(source, 'const persistMsg: SDKMessage = {', 'this.persistSkillRoutingNotice(sessionId, routedSkills)')
-    expect(body).toContain("this.eventPort.emit(sessionId, { kind: 'sdk_message', message: persistMsg })")
+    expect(body).toContain("this.eventPort.emit(sessionId, { kind: 'sdk_message', message: sourcedMessage })")
   })
 })

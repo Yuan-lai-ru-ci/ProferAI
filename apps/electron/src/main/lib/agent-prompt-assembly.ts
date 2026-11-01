@@ -1,7 +1,8 @@
-/** 唯一的本轮 system prompt 装配入口。模块负责内容，编排器只传运行事实。 */
+/** 本轮提示词装配入口：稳定 system 与随新用户消息追加的任务指导分开返回。 */
 import { buildSystemPrompt, type SystemPromptContext } from './agent-prompt-builder'
 import { buildLightSystemPrompt, type AgentPromptMode } from './agent-prompt-mode'
-import { buildPiTaskPrompt } from './pi-task-prompt'
+import { splitPiTaskPrompt } from './pi-task-prompt'
+export { appendAgentTaskPrompt } from '@profer/shared'
 import type { AgentRuntime } from '@profer/shared'
 import { resolveAgentRuntimeSystemPrompt, type AgentSystemPromptPolicy } from './agent-system-prompt-policy'
 
@@ -22,18 +23,29 @@ export interface AgentPromptAssemblyInput {
 export function assembleAgentSystemPrompt(input: AgentPromptAssemblyInput) {
   const core = input.mode === 'light'
     ? buildLightSystemPrompt({ presetName: input.context.presetName })
-    : buildSystemPrompt(input.context)
-  const base = input.mode === 'standard' && input.runtime === 'pi'
-    ? buildPiTaskPrompt({
-        basePrompt: core,
-        userMessage: input.userMessage,
-        toolNames: input.toolNames,
-        forceAutomation: input.forceAutomation,
-        pptCapabilityActive: input.context.pptCapabilityActive,
-      })
-    : core
+    : buildSystemPrompt({
+      ...input.context,
+      ...(input.runtime === 'pi' ? {
+        collaborationToolNames: input.toolNames
+          .filter((name) => name.startsWith('mcp__collaboration__'))
+          .map((name) => name.split('__').at(-1)!),
+      } : {}),
+    })
+  const taskPromptOptions = {
+    basePrompt: core,
+    toolNames: [...input.toolNames],
+    forceAutomation: input.forceAutomation,
+    pptCapabilityActive: input.context.pptCapabilityActive,
+  }
+  const useTaskPrompt = input.mode === 'standard' && input.runtime === 'pi'
+  const taskPromptForMessage = (userMessage: string): string => useTaskPrompt
+    ? splitPiTaskPrompt({ ...taskPromptOptions, userMessage }).taskPrompt
+    : ''
+  const piPrompt = useTaskPrompt
+    ? splitPiTaskPrompt({ ...taskPromptOptions, userMessage: input.userMessage })
+    : { systemPrompt: core, taskPrompt: '' }
   const text = [
-    base,
+    piPrompt.systemPrompt,
     ...(input.mode === 'standard' ? [input.skillCatalog, input.attachedDirectories] : []),
     ...(input.customSections ?? []),
     ...(input.automationContext ? [`## 定时任务执行上下文\n\n${input.automationContext}`] : []),
@@ -42,6 +54,9 @@ export function assembleAgentSystemPrompt(input: AgentPromptAssemblyInput) {
   return {
     text,
     systemPrompt: resolveAgentRuntimeSystemPrompt(input.runtime, policy, text),
+    taskPrompt: piPrompt.taskPrompt,
+    // 运行中追加消息复用同一份 core 与工具快照，不重算权限或把动态指导写回 system。
+    taskPromptForMessage,
     // 字符数是装配诊断，不冒充 provider tokenizer 的 token 统计。
     chars: text.length,
   }

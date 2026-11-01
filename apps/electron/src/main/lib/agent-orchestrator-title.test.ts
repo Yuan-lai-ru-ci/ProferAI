@@ -17,7 +17,7 @@ mock.module('./agent-service', () => ({
   listActiveAgentRuntimeContexts: () => [], updateAgentPermissionMode: async () => {},
   queueAgentMessage: async () => {}, beginAgentSessionDeletion() {}, endAgentSessionDeletion() {},
   stopAgentAndWait: async () => {}, rewindAgentSession: async () => {}, regenerateAgentTitle: async () => null,
-  peekAgentRunClaimFailureForSession: () => undefined, describeAgentRunRejection: () => 'fixture rejection',
+  peekAgentRunClaimFailureForSession: () => undefined, findAgentRunForTrigger: () => undefined, describeAgentRunRejection: () => 'fixture rejection',
 }))
 const { AgentOrchestrator } = await import('./agent-orchestrator')
 const sessions = await import('./agent-session-manager')

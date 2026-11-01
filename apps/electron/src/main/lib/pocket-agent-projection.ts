@@ -1,3 +1,4 @@
+import { projectMessageProvenance } from '@profer/shared'
 import type { AgentStreamPayload, SDKMessage } from '@profer/shared'
 
 /** 只保留上下文用量需要的四个 token 计数，避免把完整 usage 形状带进 WS。 */
@@ -76,9 +77,11 @@ function collectPocketImageRefs(
 export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
   const record = message as Record<string, unknown>
   const base: Record<string, unknown> = { type: message.type }
-  for (const key of ['uuid', 'session_id', 'parent_tool_use_id', '_createdAt', '_partial', '_channelModelId', 'isReplay', 'isSynthetic']) {
+  for (const key of ['uuid', 'session_id', 'parent_tool_use_id', '_createdAt', '_partial', '_channelModelId', 'isReplay', 'isSynthetic', '_goalIteration']) {
     if (record[key] !== undefined) base[key] = record[key]
   }
+  const provenance = projectMessageProvenance(record._provenance)
+  if (provenance) base._provenance = provenance
 
   if (message.type === 'assistant') {
     const inner = record.message && typeof record.message === 'object' ? record.message as Record<string, unknown> : {}
@@ -171,6 +174,12 @@ export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
   }
 
   if (message.type === 'system') {
+    if (record.subtype === 'task_trigger') {
+      // 来源通知只带可读说明；不继承其他 system 工具/路径/授权字段。
+      base.subtype = 'task_trigger'
+      if (typeof record.message === 'string') base.message = record.message
+      return base as SDKMessage
+    }
     for (const key of ['subtype', 'model', 'task_id', 'description', 'task_type', 'tool_use_id', 'status', 'summary', 'output_file', 'last_tool_name', 'tool_name', 'message', 'decision_reason', 'estimated_tokens', 'estimated_tokens_delta', 'usage']) {
       if (record[key] !== undefined) base[key] = record[key]
     }
@@ -181,6 +190,47 @@ export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
     if (record[key] !== undefined) base[key] = record[key]
   }
   return base as SDKMessage
+}
+
+export interface PocketAgentViewMessage {
+  id: string
+  role: 'user' | 'assistant' | 'status'
+  content: string
+  createdAt: number
+  model?: string
+  subtype?: 'task_trigger'
+  _provenance?: SDKMessage['_provenance']
+}
+
+/** 详情视图与实时/分页消息共用白名单，system 来源通知保留为可读 status。 */
+export function projectSdkMessagesToPocketView(messages: readonly SDKMessage[]): PocketAgentViewMessage[] {
+  return messages.flatMap((message): PocketAgentViewMessage[] => {
+    const projected = projectSdkMessageForPocket(message)
+    const record = projected as Record<string, unknown>
+    const inner = record.message && typeof record.message === 'object' ? record.message as Record<string, unknown> : undefined
+    const isTrigger = projected.type === 'system' && record.subtype === 'task_trigger'
+    const role = isTrigger ? 'status' : projected.type === 'user' || projected.type === 'assistant' ? projected.type : undefined
+    if (!role) return []
+    const content = isTrigger
+      ? typeof record.message === 'string' ? record.message : '任务来源'
+      : Array.isArray(inner?.content)
+        ? inner.content.flatMap((block): string[] => {
+          if (!block || typeof block !== 'object') return []
+          const item = block as Record<string, unknown>
+          return item.type === 'text' && typeof item.text === 'string' ? [item.text] : []
+        }).join('')
+        : ''
+    if (role === 'user' && !content.trim()) return []
+    return [{
+      id: typeof record.uuid === 'string' ? record.uuid : projected._provenance?.messageId ?? `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      role,
+      content,
+      createdAt: typeof record._createdAt === 'number' ? record._createdAt : Date.now(),
+      ...(typeof inner?.model === 'string' ? { model: inner.model } : {}),
+      ...(isTrigger ? { subtype: 'task_trigger' as const } : {}),
+      ...(projected._provenance ? { _provenance: projected._provenance } : {}),
+    }]
+  })
 }
 
 export function projectAgentPayloadForPocket(payload: AgentStreamPayload): AgentStreamPayload {

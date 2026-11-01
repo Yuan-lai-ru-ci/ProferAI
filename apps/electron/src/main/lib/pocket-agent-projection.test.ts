@@ -132,6 +132,18 @@ describe('Pocket 远程 Agent 投影', () => {
     expect(images.map((item) => item.filename)).toEqual(['img-2.png', 'img-3.png', 'img-4.png', 'img-5.png'])
   })
 
+  test('SDK 消息投影只透传 provenance，不透传授权、凭据或路径字段', () => {
+    const provenance = { schemaVersion: 1, messageId: 'm1', author: { type: 'agent', id: 'worker' }, runId: 'run-1', taskId: 'task-1', triggerId: 'trigger-1', source: { type: 'session', id: 'source' } }
+    const projected = projectSdkMessageForPocket({
+      type: 'user', uuid: 'm1', _provenance: provenance,
+      authorization: { token: 'secret' }, absolutePath: '/private/root',
+      message: { content: [{ type: 'text', text: '交接' }] },
+    } as never) as never as Record<string, unknown>
+    expect(projected._provenance).toEqual(provenance)
+    expect(projected).not.toHaveProperty('authorization')
+    expect(projected).not.toHaveProperty('absolutePath')
+  })
+
   test('非 SDK 事件保持原样，SDK 事件经过投影', () => {
     const proferEvent = { kind: 'profer_event', event: { type: 'run_resumed' } } as never
     expect(projectAgentPayloadForPocket(proferEvent)).toBe(proferEvent)

@@ -6,6 +6,7 @@ type Item = {
   role: 'user' | 'assistant' | 'status'
   preview: string
   matchKey?: string
+  startsTurn?: boolean
 }
 
 const user = (id: string, preview = `问 ${id}`): Item => ({ id, role: 'user', preview })
@@ -70,6 +71,16 @@ describe('groupNavigationTurns', () => {
     expect(new Set(turns.map((turn) => turn.key)).size).toBe(turns.length)
   })
 
+  test('子会话返回状态卡单独开一轮，普通状态仍并入前一轮', () => {
+    const returned: Item = { id: 'return-1', role: 'status', preview: '子会话返回：检索、核对', startsTurn: true }
+    const turns = groupNavigationTurns([user('u1'), assistant('a1'), returned, assistant('a2')])
+
+    expect(turns).toHaveLength(2)
+    expect(turns[0]!.items.map((item) => item.id)).toEqual(['u1', 'a1'])
+    expect(turns[1]!.anchor.id).toBe('return-1')
+    expect(turns[1]!.status?.id).toBe('return-1')
+    expect(turns[1]!.assistant?.id).toBe('a2')
+  })
   test('空输入返回空数组', () => {
     expect(groupNavigationTurns([])).toEqual([])
   })

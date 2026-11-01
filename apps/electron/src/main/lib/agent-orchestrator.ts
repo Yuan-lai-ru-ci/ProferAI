@@ -31,6 +31,7 @@ import type {
   TypedError,
   RetryAttempt,
   SDKMessage,
+  SDKUserMessage,
   SDKAssistantMessage,
   AgentStreamPayload,
   RewindSessionResult,
@@ -66,9 +67,9 @@ import {
   resolveCodexOAuthCredentials,
 } from './channel-manager'
 import { AgentEventBus } from './agent-event-bus'
-import { createAgentQueryPreparationPort, createAgentRunOwnershipRegistry, createAgentRunOwnershipView, createAgentRunRejectionError, createAgentStreamDrainController, readAgentStreamNext, waitForRetryDelay } from '@profer/agent-runtime'
+import { appendRunOriginPrompt, createRunTriggerMessage, createAgentRunContext, resolveAgentInputOperationSource, stampRunMessage, createAgentQueryPreparationPort, createAgentRunOwnershipRegistry, createAgentRunOwnershipView, createAgentRunRejectionError, createAgentStreamDrainController, readAgentStreamNext, waitForRetryDelay } from '@profer/agent-runtime'
 import type { AgentRunOwnershipRegistry, AgentRunOwnershipView, AgentRuntimeQuery, AgentRuntimeQueryPreparationPort, AgentStreamDrainState } from '@profer/agent-runtime'
-import type { AgentRuntimePorts, CredentialPort, EventPort, PermissionPort, PreviewPort, ResourcePort, RuntimeCanUseTool, RuntimePermissionResult, SessionPort, ToolAssemblyPort } from '@profer/agent-runtime'
+import type { AgentRunLedger, AgentRunContext, AgentRun, AgentRuntimePorts, CredentialPort, EventPort, PermissionPort, PreviewPort, ResourcePort, RuntimeCanUseTool, RuntimePermissionResult, SessionPort, ToolAssemblyPort } from '@profer/agent-runtime'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
@@ -141,7 +142,7 @@ import { createCommandExecutionLedger } from './pi-execution-ledger'
 import { getSettings } from './settings-service'
 import { buildDynamicContext } from './agent-prompt-context'
 import { selectAgentPromptMode, type AgentPromptMode } from './agent-prompt-mode'
-import { assembleAgentSystemPrompt } from './agent-prompt-assembly'
+import { assembleAgentSystemPrompt, appendAgentTaskPrompt } from './agent-prompt-assembly'
 import { resolveAgentSystemPromptPolicy } from './agent-system-prompt-policy'
 import { injectPlanningMcpServer } from './planning-agent-tools'
 import { ensurePresetSystemReady, getAgentPresetByReference, presetReferenceForId } from './agent-preset-manager'
@@ -219,6 +220,23 @@ import { detectAttachedDirectoryProjects } from './attached-directory-project-de
 
 // ===== 类型定义 =====
 
+export type AgentOrchestratorPorts = Pick<AgentRuntimePorts, 'sessions' | 'credentials' | 'resources' | 'permissions' | 'events' | 'toolAssembly' | 'preview' | 'queryPreparation'> & {
+  runLedger?: AgentRunLedger
+}
+
+interface OrchestratorRunFacts {
+  run: AgentRun
+  context: AgentRunContext
+  started: boolean
+  onStart(): void | Promise<void>
+  messageIds: WeakMap<object, string>
+  logicalMessageIds: Map<string, string>
+  pendingAssistantId?: string
+  preparationError?: unknown
+  finished?: boolean
+  pendingApprovalRequestIds?: Set<string>
+}
+
 /**
  * 会话控制信号回调
  *
@@ -232,6 +250,9 @@ export interface SessionCallbacks {
   onComplete: (
     messages?: AgentMessage[],
     opts?: {
+      runId?: string
+      taskId?: string
+      triggerId?: string
       stoppedByUser?: boolean
       startedAt?: number
       resultSubtype?: string
@@ -246,7 +267,7 @@ export interface SessionCallbacks {
   /** 已获得本轮运行权；并发拒绝不会调用。 */
   onRunOwned?: () => void
   /** 用户消息已持久化，外部入口可据此通知前端切到实时会话 */
-  onRunStarted?: (opts: { startedAt: number }) => void | Promise<void>
+  onRunStarted?: (opts: { startedAt: number; runId?: string; taskId?: string; triggerId?: string }) => void | Promise<void>
 }
 
 // ===== 错误诊断工具 =====
@@ -302,6 +323,9 @@ export class AgentOrchestrator {
   private readonly toolAssemblyPort?: ToolAssemblyPort
   private readonly queryPreparationPort: AgentRuntimeQueryPreparationPort
   private readonly queryPreparations = new Map<string, AbortController>()
+  private readonly runLedger?: AgentRunLedger
+  private readonly activeRunFacts = new Map<string, OrchestratorRunFacts>()
+  private readonly stampedMessages = new WeakSet<object>()
   private readonly previewPort: PreviewPort
   /**
    * 共享执行权登记表（唯一事实源）。注入同一个实例即获得跨引擎互斥；
@@ -336,11 +360,13 @@ export class AgentOrchestrator {
 
   /** 运行期间的装配模式，确保插队任务不会沿用无工具的问候上下文。 */
   private activePromptModes = new Map<string, AgentPromptMode>()
+  /** 队列使用当前 run 冻结的提示词与工具快照选择任务指导。 */
+  private activeTaskPromptSelectors = new Map<string, Promise<((message: string) => string) | undefined>>()
   /** 队列复用当前 run 的 Skill 快照；初始化失败 resolve(undefined)，不得悬挂或放宽策略。 */
   private activeSkillRoutings = new Map<string, Promise<SkillRoutingSnapshot | undefined>>()
   private activeRuntimeRegistrations = new Map<string, Promise<boolean>>()
 
-  constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus, ports?: Pick<AgentRuntimePorts, 'sessions' | 'credentials' | 'resources' | 'permissions' | 'events' | 'toolAssembly' | 'preview' | 'queryPreparation'>, ownership: AgentRunOwnershipRegistry = createAgentRunOwnershipRegistry()) {
+  constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus, ports?: AgentOrchestratorPorts, ownership: AgentRunOwnershipRegistry = createAgentRunOwnershipRegistry()) {
     // ⚠️ 必须在构造函数体内赋值：字段初始化器先于参数属性赋值执行。
     this.ownership = ownership
     this.activeSessions = createAgentRunOwnershipView(ownership)
@@ -372,11 +398,21 @@ export class AgentOrchestrator {
     }
     this.adapter = adapter
     this.eventBus = eventBus
-    this.sessionPort = ports?.sessions ?? legacyPorts.sessions
+    this.runLedger = ports?.runLedger
+    const sessions = ports?.sessions ?? legacyPorts.sessions
+    this.sessionPort = this.runLedger ? {
+      ...sessions,
+      appendMessages: (sessionId, messages) => sessions.appendMessages(sessionId, messages.map(message => this.stampMessage(sessionId, message))),
+    } : sessions
     this.credentialPort = ports?.credentials ?? legacyPorts.credentials
     this.resourcePort = ports?.resources ?? legacyPorts.resources
     this.permissionPort = ports?.permissions ?? legacyPorts.permissions
-    this.eventPort = ports?.events ?? legacyPorts.events
+    const events = ports?.events ?? legacyPorts.events
+    this.eventPort = this.runLedger ? {
+      ...events,
+      emit: (sessionId, payload) => events.emit(sessionId, payload.kind === 'sdk_message'
+        ? { ...payload, message: this.stampMessage(sessionId, payload.message) } : payload),
+    } : events
     this.toolAssemblyPort = ports?.toolAssembly
     this.queryPreparationPort = ports?.queryPreparation ?? createAgentQueryPreparationPort({
       credentials: this.credentialPort, resources: this.resourcePort,
@@ -399,6 +435,124 @@ export class AgentOrchestrator {
     })
   }
 
+  /** 审批请求只投影真实的 request/response 生命周期；abort 和 stop 不生成恢复触发。 */
+  private createRunScopedCanUseTool(
+    sessionId: string,
+    facts: OrchestratorRunFacts | undefined,
+    permissions: PermissionPort,
+    sendPermissionRequest: (request: PermissionRequest) => void,
+    sendAskUserRequest: (request: AskUserRequest) => void,
+  ): RuntimeCanUseTool {
+    return (toolName, toolInput, options) => this.runApprovalWithLifecycle(sessionId, facts, options.signal, publish => {
+      const callback = permissions.createCanUseTool?.({
+        sessionId,
+        sendPermissionRequest: request => publish(request.requestId, () => sendPermissionRequest(request)),
+        handleAskUser: (sid, askInput, signal, sendAskUser) => permissions.handleAskUserQuestion?.({
+          sessionId: sid,
+          toolInput: askInput,
+          signal,
+          sendToRenderer: request => publish(request.requestId, () => sendAskUser(request)),
+        }) ?? Promise.resolve({ behavior: 'deny' as const, message: 'AskUser 服务不可用' }),
+        sendAskUserRequest: request => publish(request.requestId, () => sendAskUserRequest(request)),
+      })
+      return callback ? callback(toolName, toolInput, options) : Promise.resolve({ behavior: 'deny', message: '权限服务不可用' })
+    })
+  }
+
+  private createApprovalLifecycle(sessionId: string, facts?: OrchestratorRunFacts): {
+    wait(requestId: string): void
+    resume(requestId: string, signal: AbortSignal): void
+    clear(): void
+  } {
+    const pending = facts?.pendingApprovalRequestIds ?? new Set<string>()
+    if (facts) facts.pendingApprovalRequestIds = pending
+    return {
+      wait: (requestId) => {
+        if (!this.runLedger || !facts || facts.finished || !facts.started || this.stoppedBySessions.has(sessionId) || pending.has(requestId)) return
+        facts.run = this.runLedger.wait(facts.run.id, { type: 'request', id: requestId })
+        pending.add(requestId)
+      },
+      resume: (requestId, signal) => {
+        if (!pending.has(requestId)) return
+        pending.delete(requestId)
+        if (!this.runLedger || !facts || facts.finished || signal.aborted || this.stoppedBySessions.has(sessionId)) return
+        if (facts.run.status === 'completed' || facts.run.status === 'failed' || facts.run.status === 'stopped') return
+        facts.run = this.runLedger.resume(facts.run.id, {
+          schemaVersion: 1,
+          id: `resume:${facts.run.id}:${requestId}`,
+          kind: 'resume',
+          actor: { type: 'system' },
+          source: { type: 'request', id: requestId },
+          createdAt: Date.now(),
+        })
+        const remaining = [...pending].at(-1)
+        if (remaining) facts.run = this.runLedger.wait(facts.run.id, { type: 'request', id: remaining })
+      },
+      clear: () => { pending.clear() },
+    }
+  }
+
+  private async runApprovalWithLifecycle<T>(
+    sessionId: string,
+    facts: OrchestratorRunFacts | undefined,
+    signal: AbortSignal,
+    operation: (publish: (requestId: string, emit: () => void) => void) => Promise<T>,
+  ): Promise<T> {
+    const requests = new Set<string>()
+    const lifecycle = this.createApprovalLifecycle(sessionId, facts)
+    const publish = (requestId: string, emit: () => void): void => {
+      if (requestId) {
+        requests.add(requestId)
+        lifecycle.wait(requestId)
+      }
+      emit()
+    }
+    let pending: Promise<T>
+    try {
+      pending = operation(publish)
+    } catch (error) {
+      pending = Promise.reject(error)
+    }
+    try {
+      return await pending
+    } finally {
+      for (const requestId of requests) lifecycle.resume(requestId, signal)
+    }
+  }
+
+  /** 同一逻辑输出的预览/终稿共用来源 ID；不向 Provider uuid 写入产品身份。 */
+  private stampMessage(sessionId: string, message: SDKMessage, author?: AgentRunContext['messageAuthor'], facts = this.activeRunFacts.get(sessionId)): SDKMessage {
+    if (this.stampedMessages.has(message)) return message
+    if (!facts) return message
+    const knownProvenanceId = message._provenance?.runId === facts.run.id ? message._provenance.messageId : undefined
+    const record = message as SDKMessage & { uuid?: string; message?: { id?: string }; _errorCode?: string; error?: unknown }
+    const logicalKey = record.message?.id ? `${message.type}:${record.message.id}` : undefined
+    let messageId = facts.messageIds.get(message) ?? (logicalKey ? facts.logicalMessageIds.get(logicalKey) : undefined)
+      ?? (record.uuid ? facts.logicalMessageIds.get(`uuid:${record.uuid}`) : undefined)
+    if (!messageId && knownProvenanceId && facts.logicalMessageIds.has(`provenance:${knownProvenanceId}`)) messageId = knownProvenanceId
+    if (!messageId && message.type === 'assistant') messageId = facts.pendingAssistantId
+    messageId ??= record.uuid ?? randomUUID()
+    facts.messageIds.set(message, messageId)
+    if (logicalKey) facts.logicalMessageIds.set(logicalKey, messageId)
+    if (record.uuid) facts.logicalMessageIds.set(`uuid:${record.uuid}`, messageId)
+    facts.logicalMessageIds.set(`provenance:${messageId}`, messageId)
+    if (message.type === 'assistant') facts.pendingAssistantId = isPartialSDKMessage(message) ? messageId : undefined
+    const stampedMessage = stampRunMessage(message, facts.run, author ?? (message.type === 'assistant' && !record.error && !record._errorCode
+      ? { type: 'agent', id: sessionId } : { type: 'system' }), () => messageId!, facts.context.trigger)
+    const stamped: SDKMessage = { ...stampedMessage, _provenance: { ...stampedMessage._provenance!, messageId } }
+    facts.messageIds.set(stamped, messageId)
+    this.stampedMessages.add(stamped)
+    return stamped
+  }
+
+  /** 保存终态只尝试一次；失败由调用方报告并对账，不能重放 provider。 */
+  private finishLedgerRun(facts: OrchestratorRunFacts, outcome: Parameters<AgentRunLedger['finish']>[1]): AgentRun {
+    if (!this.runLedger || facts.finished) return facts.run
+    facts.finished = true
+    facts.run = this.runLedger.finish(facts.run.id, outcome)
+    return facts.run
+  }
+
   /** 每次重试都使用当前凭据和已冻结策略；停止可中断异步准备。 */
   private async prepareProviderQuery(input: AgentRuntimeQuery) {
     const controller = new AbortController()
@@ -415,7 +569,21 @@ export class AgentOrchestrator {
 
   /** provider options 保持宿主字段，prepared 快照通过同一生产入口交给 adapter。 */
   private async queryPreparedProvider(input: AgentRuntimeQuery, options: AgentQueryInput) {
-    const prepared = await this.prepareProviderQuery(input)
+    const facts = this.activeRunFacts.get(input.sessionId)
+    let prepared: Awaited<ReturnType<AgentOrchestrator['prepareProviderQuery']>>
+    try {
+      prepared = await this.prepareProviderQuery(input)
+      if (facts && !facts.started && this.runLedger) {
+        facts.run = this.runLedger.start(facts.run.id)
+        if (facts.run.status !== 'running') throw new Error(`Run ${facts.run.id} 已结束或未进入运行态`)
+        facts.started = true
+        await facts.onStart()
+        if (this.stoppedBySessions.has(input.sessionId)) throw new DOMException('Agent query preparation was stopped', 'AbortError')
+      }
+    } catch (error) {
+      if (facts) facts.preparationError = error
+      throw error
+    }
     const providerQuery = { ...options, prepared }
     return this.adapter.query(providerQuery)
   }
@@ -933,9 +1101,15 @@ export class AgentOrchestrator {
       promise: completion,
       resolve: resolveCompletion,
     })
-    callbacks.onRunOwned?.()
+    let runFacts: OrchestratorRunFacts | undefined
+    let ownsLedgerRun = false
+    let failureReason: string | undefined
+    let ledgerFinishError: unknown
+    const runToolContext: { sourceRunId?: string } = {}
     let resolveSkillRouting!: (snapshot: SkillRoutingSnapshot | undefined) => void
     this.activeSkillRoutings.set(sessionId, new Promise(resolve => { resolveSkillRouting = resolve }))
+    let resolveTaskPromptSelector!: (selector: ((message: string) => string) | undefined) => void
+    this.activeTaskPromptSelectors.set(sessionId, new Promise(resolve => { resolveTaskPromptSelector = resolve }))
     let resolveRuntimeRegistered!: (ready: boolean) => void
     this.activeRuntimeRegistrations.set(sessionId, new Promise(resolve => { resolveRuntimeRegistered = resolve }))
     const releaseActiveRun = (): boolean => this.ownership.release(sessionId, runGeneration)
@@ -963,6 +1137,24 @@ export class AgentOrchestrator {
     const fileWritesByToolUse = new Map<string, Array<{ path: string; source: string }>>()
 
     try {
+      if (this.runLedger) {
+        const context = createAgentRunContext(input, randomUUID)
+        const begun = this.runLedger.begin({ taskId: context.taskId, trigger: context.trigger, sessionRef: sessionId, executorRef: sessionId, runtime: agentRuntime })
+        if (begun.deduplicated) {
+          if (begun.run.status === 'queued' || begun.run.status === 'running' || begun.run.status === 'waiting') throw new Error(`Run ${begun.run.id} 仍未结束，需确认恢复后继续`)
+          if (begun.run.status === 'failed') { runEndedWithError = true; callbacks.onError(begun.run.failureReason ?? '既有运行已失败') }
+          pendingTerminalCompletion = { messages: [], opts: { startedAt: input.startedAt, stoppedByUser: begun.run.status === 'stopped' } }
+          return
+        }
+        ownsLedgerRun = true
+        runFacts = {
+          run: begun.run, context, started: false, messageIds: new WeakMap(), logicalMessageIds: new Map(),
+          onStart: () => callbacks.onRunStarted?.({ startedAt: streamStartedAt, runId: begun.run.id, taskId: begun.run.taskId, triggerId: context.trigger.id }),
+        }
+        this.activeRunFacts.set(sessionId, runFacts)
+        runToolContext.sourceRunId = begun.run.id
+      }
+      callbacks.onRunOwned?.()
       // 在任何 await 之前锁定；preflight 失败、停止、重启都不能再次选择另一内核。
       if (boundSession && boundSession.agentRuntimeLocked !== true) {
         if (!this.sessionPort.lockRuntime) throw new Error('SessionPort 缺少同步内核绑定能力')
@@ -981,6 +1173,7 @@ export class AgentOrchestrator {
     // 环境 / 配置类错误的统一上报：持久化为 TypedError 消息，由 SDKMessageRenderer 渲染
     const reportPreflightError = (typedError: TypedError) => {
         const errorContent = typedError.title ? `${typedError.title}: ${typedError.message}` : typedError.message
+        failureReason = errorContent
       const errorSDKMsg: SDKMessage = {
         type: 'assistant',
         message: {
@@ -995,8 +1188,9 @@ export class AgentOrchestrator {
         _errorCanRetry: typedError.canRetry,
         _errorActions: typedError.actions,
       } as unknown as SDKMessage
+      const stamped = this.stampMessage(sessionId, errorSDKMsg, { type: 'system' })
         try {
-          this.sessionPort.appendMessages(sessionId, [errorSDKMsg])
+          this.sessionPort.appendMessages(sessionId, [stamped])
         } catch (e) {
         console.error('[Agent 编排] 持久化 preflight error 失败:', e)
       }
@@ -1111,6 +1305,12 @@ export class AgentOrchestrator {
     // 5. 持久化用户消息（SDKMessage 格式）——在所有 preflight 检查之前写入。
     // Goal 内部 turn 使用 internalPrompt，仅供 runtime 消费，不写入 Profer 普通对话 transcript。
     if (!input.suppressUserMessagePersistence) {
+      const triggerNotice = runFacts ? createRunTriggerMessage(runFacts.run, runFacts.context, randomUUID) : undefined
+      if (triggerNotice) {
+        this.stampedMessages.add(triggerNotice)
+        this.sessionPort.appendMessages(sessionId, [triggerNotice])
+        this.eventPort.emit(sessionId, { kind: 'sdk_message', message: triggerNotice })
+      }
       // 气泡/transcript 只存用户原文：IM 桥与桌面都会把 prompt 工程块放进 userMessage，
       // 直接持久化会让桌面端看到一大段本应对用户不可见的注入内容。
       const displayText = input.rawUserMessage ?? userMessage
@@ -1126,13 +1326,17 @@ export class AgentOrchestrator {
         ...(input.triggeredBy === 'goal' ? { _goalIteration: input.goalIteration ?? true } : {}),
         _createdAt: Date.now(),
       } as unknown as SDKMessage
-      this.sessionPort.appendMessages(sessionId, [userSDKMsg])
+      const inputMessage = this.stampMessage(sessionId, userSDKMsg, runFacts?.context.messageAuthor ?? runFacts?.context.trigger.actor)
+      if (input.taskReturnReferences?.length) {
+        ;(inputMessage as SDKUserMessage)._taskReturnReferences = input.taskReturnReferences.map(reference => ({ ...reference }))
+      }
+      this.sessionPort.appendMessages(sessionId, [inputMessage])
       // 运行中的用户输入只有本地乐观气泡是不够的：手机端（Pocket）没有这份本地状态，
       // 只能靠事件流看到电脑端发起的指令。桌面渲染层不消费 user 文本事件、乐观气泡
       // 按 uuid 去重，因此这里广播不会在电脑上产生重复气泡。
-      this.eventPort.emit(sessionId, { kind: 'sdk_message', message: userSDKMsg })
+      this.eventPort.emit(sessionId, { kind: 'sdk_message', message: inputMessage })
     }
-    await callbacks.onRunStarted?.({ startedAt: streamStartedAt })
+    if (!this.runLedger) await callbacks.onRunStarted?.({ startedAt: streamStartedAt })
       const completeRun = (messages?: AgentMessage[], opts?: CompleteOptions): void => {
       // 真正的 complete 必须等 owner finally 释放 activeSessions 后才通知 renderer，
       // 否则 UI 会先开放发送、主进程仍拒绝，导致用户草稿被清空。
@@ -1151,11 +1355,13 @@ export class AgentOrchestrator {
         },
     ): void => {
         callbacks.onComplete(messages, {
+          ...(runFacts ? { runId: runFacts.run.id, taskId: runFacts.run.taskId, triggerId: runFacts.context.trigger.id } : {}),
           ...opts,
           backgroundTasksPending: true,
         })
     }
       const failRun = (error: string, messages?: AgentMessage[], opts?: CompleteOptions): void => {
+      failureReason = error
       callbacks.onError(error)
       runEndedWithError = true
       completeRun(messages, opts)
@@ -1342,7 +1548,7 @@ export class AgentOrchestrator {
           // 会话可能在并发删除；本轮仍使用已计算的 gate 结果。
         }
       }
-      const presetOperationSource = input.triggeredBy ?? 'user'
+      const presetOperationSource = resolveAgentInputOperationSource(input)
       const pendingPresetChange = getPendingPresetChange(sessionId)
       const userConfirmedPresetChange = presetOperationSource === 'user'
         && pendingPresetChange !== undefined
@@ -1402,6 +1608,7 @@ export class AgentOrchestrator {
             sdk,
             mcpServers,
             {
+            ...runToolContext,
             sessionId,
             channelId,
             modelId,
@@ -1416,6 +1623,7 @@ export class AgentOrchestrator {
             sdk,
             mcpServers,
             {
+            ...runToolContext,
             memoryArchivePath: workspaceSlug ? getWorkspaceMemoryArchivePath(workspaceSlug) : undefined,
             workspaceSlug,
             },
@@ -1427,26 +1635,29 @@ export class AgentOrchestrator {
             sdk,
             mcpServers,
             {
+            ...runToolContext,
             sessionId,
             channelId,
             modelId,
             workspaceId,
-            permissionMode: input.permissionModeOverride,
+            permissionMode: presetPolicy.permissionMode,
             triggeredBy: input.triggeredBy,
             },
             disabledTools,
           )
         }
         if (!disabledToolGroups.has('task-graph')) {
-          await injectTaskGraphMcpServer(sdk, mcpServers, { sessionId }, disabledTools)
+          await injectTaskGraphMcpServer(sdk, mcpServers, { ...runToolContext, sessionId }, disabledTools)
         }
         if (agentRuntime === 'claude' && input.reportGoalResult) {
           await injectGoalMcpServer(sdk, mcpServers, {
+            ...runToolContext,
             iteration: input.goalIteration ?? 0,
             report: input.reportGoalResult,
           })
         }
         await injectAgentPresetMcpServer(sdk, mcpServers, {
+          ...runToolContext,
           sessionId,
           workspaceSlug,
           source: presetOperationSource,
@@ -1457,6 +1668,7 @@ export class AgentOrchestrator {
         })
         if (agentRuntime === 'claude' && !disabledToolGroups.has('automation')) {
           await injectPlanningMcpServer(sdk, mcpServers, {
+            ...runToolContext,
             sessionId,
             workspaceId,
             disabledTools,
@@ -1494,11 +1706,13 @@ export class AgentOrchestrator {
       if (promptMode === 'standard') {
         if (agentRuntime === 'claude' && workspaceSlug && agentCwd && !disabledToolGroups.has('preview')) {
           await injectVisualizationMcpServer(sdk, mcpServers, {
+            ...runToolContext,
             sessionId, agentCwd, storageDir: agentSessionVisualizationsDir(sessionId), allowedRoots: previewAllowedRoots, onUpdate: emitVisualizationUpdate, assertCanPresent: assertCanPresentVisualization,
           }, disabledTools)
         }
         if (agentRuntime === 'claude' && !disabledToolGroups.has('preview')) {
           await injectAgentPreviewMcpServer(sdk, mcpServers, {
+            ...runToolContext,
             sessionId,
             agentCwd: workspaceSlug ? agentCwd : '',
             allowedRoots: previewAllowedRoots,
@@ -1508,11 +1722,13 @@ export class AgentOrchestrator {
         }
         if (agentCwd && imageOutputAllowedRoots.length > 0 && !disabledToolGroups.has('image')) {
           await injectAgentImageOutputMcpServer(sdk, mcpServers, {
+            ...runToolContext,
             agentCwd,
             allowedRoots: imageOutputAllowedRoots,
           }, disabledTools)
           if (agentRuntime === 'claude' && isAgentGptImageAvailable()) {
             await injectAgentGptImageMcpServer(sdk, mcpServers, {
+              ...runToolContext,
               sessionId,
               agentCwd,
               allowedRoots: imageOutputAllowedRoots,
@@ -1521,6 +1737,7 @@ export class AgentOrchestrator {
           }
           if (agentRuntime === 'claude') {
             await injectAgentSkinMcpServer(sdk, mcpServers, {
+              ...runToolContext,
               agentCwd,
               allowedRoots: imageOutputAllowedRoots,
               workspaceSlug,
@@ -1537,6 +1754,7 @@ export class AgentOrchestrator {
         }
         if (agentRuntime === 'claude' && !disabledToolGroups.has('browser')) {
           await injectClaudeBrowserMcpServer(sdk, mcpServers, {
+            ...runToolContext,
             sessionId,
             workspaceId,
             agentCwd,
@@ -1597,7 +1815,7 @@ export class AgentOrchestrator {
       })
 
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅引用当前预设实际可用的能力。
-      let enrichedMessage = runtimeUserMessage
+      let enrichedMessage = runFacts ? appendRunOriginPrompt(runtimeUserMessage, runFacts.context) : runtimeUserMessage
       const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
       if (referencedSessionsBlock) {
         enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
@@ -1682,6 +1900,7 @@ export class AgentOrchestrator {
         ? await (async () => {
             const piSdk = await import('@earendil-works/pi-coding-agent')
             const builtin = await this.buildPiBuiltinTools(piSdk, {
+              ...runToolContext,
               sessionId,
               channelId,
               modelId,
@@ -1709,6 +1928,7 @@ export class AgentOrchestrator {
             })
             const mcpTools = await buildPiMcpTools(mcpServers, presetPolicy)
             const preparedToolsContext = {
+              ...runToolContext,
               sessionId,
               channelId,
               modelId,
@@ -1749,44 +1969,27 @@ export class AgentOrchestrator {
 
       /** 读取当前会话的实时权限模式（支持运行中切换） */
       const getPermissionMode = (): ProferPermissionMode => this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode
-
-      // ExitPlanMode 拦截器：plan 模式下走 UI 审批流程
-      const handleExitPlanMode = (toolInput: Record<string, unknown>, signal: AbortSignal): Promise<ExitPlanPermissionResult> => {
-        return this.permissionPort.handleExitPlanMode?.({
-          sessionId,
-          toolInput,
-          signal,
-          sendToRenderer: (request: ExitPlanModeRequest) => {
-            this.eventPort.emit(sessionId, {
-              kind: 'profer_event',
-              event: { type: 'exit_plan_mode_request', request },
-            })
-          },
-        }) as Promise<ExitPlanPermissionResult>
-      }
-
-      // 始终创建 auto 权限回调（运行中可能切换到 auto）
-      const autoCanUseTool = this.permissionPort.createCanUseTool?.({
+      const handleExitPlanMode = (toolInput: Record<string, unknown>, signal: AbortSignal): Promise<ExitPlanPermissionResult> =>
+        this.runApprovalWithLifecycle(sessionId, runFacts, signal, publish => this.permissionPort.handleExitPlanMode?.({
+          sessionId, toolInput, signal,
+          sendToRenderer: request => publish(request.requestId, () => this.eventPort.emit(sessionId, {
+            kind: 'profer_event', event: { type: 'exit_plan_mode_request', request },
+          })),
+        }) as Promise<ExitPlanPermissionResult>)
+      const handleAskUserWithApproval = (toolInput: Record<string, unknown>, signal: AbortSignal): Promise<PermissionResult> =>
+        this.runApprovalWithLifecycle(sessionId, runFacts, signal, publish => this.permissionPort.handleAskUserQuestion?.({
+          sessionId, toolInput, signal,
+          sendToRenderer: request => publish(request.requestId, () => this.eventPort.emit(sessionId, {
+            kind: 'profer_event', event: { type: 'ask_user_request', request },
+          })),
+        }) ?? Promise.resolve({ behavior: 'deny' as const, message: 'AskUser 服务不可用' }))
+      const runAutoCanUseTool: RuntimeCanUseTool = this.createRunScopedCanUseTool(
         sessionId,
-        sendPermissionRequest: (request: PermissionRequest) => {
-          this.eventPort.emit(sessionId, {
-            kind: 'profer_event',
-            event: { type: 'permission_request', request },
-          })
-        },
-          handleAskUser: (sid, toolInput, signal, sendAskUser) => this.permissionPort.handleAskUserQuestion?.({
-          sessionId: sid,
-          toolInput,
-          signal,
-          sendToRenderer: sendAskUser,
-        }) ?? Promise.resolve({ behavior: 'deny' as const, message: 'AskUser 服务不可用' }),
-        sendAskUserRequest: (request: AskUserRequest) => {
-          this.eventPort.emit(sessionId, {
-            kind: 'profer_event',
-            event: { type: 'ask_user_request', request },
-          })
-        },
-      }) as RuntimeCanUseTool
+        runFacts,
+        this.permissionPort,
+        request => this.eventPort.emit(sessionId, { kind: 'profer_event', event: { type: 'permission_request', request } }),
+        request => this.eventPort.emit(sessionId, { kind: 'profer_event', event: { type: 'ask_user_request', request } }),
+      )
 
       // 计划模式只读工具面（Bash 只读判定 / 白名单 / 延迟工具）的唯一实现已提取到
       // `plan-mode-tool-policy.ts`（GAP-5），此处只持有共享策略实例，不再保留局部副本。
@@ -1875,7 +2078,6 @@ export class AgentOrchestrator {
           }
           return result
         }
-
         // EnterPlanMode：标记进入状态，通知渲染进程
         if (toolName === 'EnterPlanMode') {
           planModeEntered = true
@@ -1889,17 +2091,9 @@ export class AgentOrchestrator {
 
         // AskUserQuestion：始终走交互式问答流程，不受权限模式影响
         if (toolName === 'AskUserQuestion') {
-          return this.permissionPort.handleAskUserQuestion?.({
-            sessionId,
-            toolInput: input,
-            signal: options.signal,
-            sendToRenderer: (request: AskUserRequest) => {
-              this.eventPort.emit(sessionId, {
-                kind: 'profer_event',
-                event: { type: 'ask_user_request', request },
-              })
-            },
-          }) as Promise<PermissionResult>
+          const result = await handleAskUserWithApproval(input, options.signal)
+          return result
+
         }
 
         // ── 受管浏览器：计划模式只读门禁 ──
@@ -1938,7 +2132,7 @@ export class AgentOrchestrator {
           }
 
           case 'auto':
-            return autoCanUseTool(toolName, input, options)
+            return runAutoCanUseTool(toolName, input, options)
 
           default:
             return { behavior: 'allow' as const, updatedInput: input }
@@ -2022,6 +2216,10 @@ export class AgentOrchestrator {
         customSections: presetPolicy.preset.promptSections,
         automationContext,
       })
+      resolveTaskPromptSelector(promptAssembly.taskPromptForMessage)
+      // 任务 SOP 只追加到本轮新用户消息，保持 system 前缀稳定；recovery 也使用同一指导。
+      finalPrompt = appendAgentTaskPrompt(finalPrompt, promptAssembly.taskPrompt, isCompactCommand)
+      contextualMessage = appendAgentTaskPrompt(contextualMessage, promptAssembly.taskPrompt, isCompactCommand)
       console.log('[Agent 提示词]', JSON.stringify({
         sessionId, mode: promptMode, chars: promptAssembly.chars,
         permissionMode: presetPolicy.permissionMode, hasRuntimeSession: !!existingSdkSessionId,
@@ -2069,6 +2267,7 @@ export class AgentOrchestrator {
           // Pi 不做 SDK 侧 beta 協商，只用 1M 偏好决定注册的上下文窗口（影响压缩阈值与用量环）。
           ...(context1mPreference !== null && { context1m: context1mPreference }),
           permissionMode: initialPermissionMode,
+          taskPrompt: promptAssembly.taskPrompt,
           piAgentDir: getSdkConfigDir(),
           // Keep Pi JSONL session files below the SDK-isolated config directory, never in another workspace.
           piSessionDir: join(getSdkConfigDir(), 'sessions', 'pi'),
@@ -2121,7 +2320,8 @@ export class AgentOrchestrator {
         // Claude 默认沿用 claude_code preset；Profer 只追加本轮按能力与策略组装的 prompt。
         systemPrompt: promptAssembly.systemPrompt,
         resumeSessionId: existingSdkSessionId,
-        onRuntimeMessage: input.onRuntimeMessage,
+        onRuntimeMessage: runFacts && input.onRuntimeMessage
+          ? message => input.onRuntimeMessage?.(this.stampMessage(sessionId, message, undefined, runFacts)) : input.onRuntimeMessage,
         ...(input.isolatedRuntimeSession && {
           isolatedRuntimeSession: true,
           onRuntimeSessionId: input.onRuntimeSessionId,
@@ -2438,6 +2638,7 @@ export class AgentOrchestrator {
           // 获取异步迭代器（手动 .next() 以支持 Promise.race 中断）
           const queryIterable = await this.queryPreparedProvider({
             sessionId, runtime: agentRuntime, prompt: queryOptions.prompt,
+            ...(runFacts ? { runId: runFacts.run.id, taskId: runFacts.run.taskId, trigger: runFacts.context.trigger, context: runFacts.context } : {}),
             channelId, modelId, cwd: agentCwd,
             prepared: {
               credentials: runtimeCredentials,
@@ -2501,7 +2702,7 @@ export class AgentOrchestrator {
               break
             }
 
-            const msg = nextResult.value
+            const msg = this.stampMessage(sessionId, nextResult.value, undefined, runFacts)
             if (msg.type === 'result' && configuredModelId) {
               const resultRecord = msg as Record<string, unknown>
               if (!resultRecord._channelModelId) resultRecord._channelModelId = configuredModelId
@@ -3151,6 +3352,8 @@ export class AgentOrchestrator {
             return
           }
 
+          // 准备/账本保存失败不是 provider 网络错误，不能进入重试重放准备或开始副作用。
+          if (runFacts && Object.hasOwn(runFacts, 'preparationError') && runFacts.preparationError === error) throw error
           // 从 stderr 提取 API 错误
           const stderrOutput = stderrChunks.join('').trim()
           const apiError = extractApiError(stderrOutput)
@@ -3382,8 +3585,36 @@ export class AgentOrchestrator {
       // setup/query 失败可能发生在 Pi query 启动之前；Harness 仍必须看到 failed，
       // 不能让 finally 把已创建的 scope 误结算为 completed。
       runEndedWithError = true
+      failureReason = error instanceof Error ? error.message : String(error)
       throw error
     } finally {
+      // retry/compact/后台轻量完成不经过这里，只在逻辑执行真正退出时结算一次。
+      if (this.runLedger && runFacts && ownsLedgerRun) {
+        runFacts.pendingApprovalRequestIds?.clear()
+        const opts = pendingTerminalCompletion?.opts
+        const stopped = opts?.stoppedByUser === true || this.stoppedBySessions.has(sessionId) || harnessStopped
+        const resultFailed = opts?.resultSubtype !== undefined && opts.resultSubtype !== 'success'
+        const failed = runEndedWithError || resultFailed || (opts?.resultErrors?.length ?? 0) > 0 || !pendingTerminalCompletion
+        try {
+          const recorded = this.finishLedgerRun(runFacts, stopped ? { status: 'stopped' }
+            : failed ? { status: 'failed', error: failureReason ?? opts?.resultErrors?.join('\n') ?? 'Agent 运行未成功' }
+              : { status: 'completed' })
+          if (recorded.status === 'stopped') {
+            pendingTerminalCompletion ??= { messages: [] }
+            pendingTerminalCompletion.opts = { ...pendingTerminalCompletion.opts, stoppedByUser: true }
+          } else if (recorded.status === 'failed') {
+            runEndedWithError = true
+            failureReason = recorded.failureReason
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          ledgerFinishError = failureReason ? new Error(`${failureReason}\n${message}`, { cause: error }) : error
+          runEndedWithError = true
+          failureReason = ledgerFinishError instanceof Error ? ledgerFinishError.message : String(ledgerFinishError)
+          pendingTerminalCompletion ??= { messages: [], opts: { startedAt: streamStartedAt } }
+          try { callbacks.onError(failureReason) } catch { /* 保存失败仍通过 sendMessage rejection 交付。 */ }
+        }
+      }
       // 凭证仅存在于 queryOptions.env；这里只清理本轮运行态。
       if (piHarnessScope && !harnessStopped) {
         try {
@@ -3400,9 +3631,11 @@ export class AgentOrchestrator {
         }
         this.nonPersistingGoalSessions.delete(sessionId)
         resolveSkillRouting(undefined)
+        resolveTaskPromptSelector(undefined)
         resolveRuntimeRegistered(false)
         this.activeRuntimeRegistrations.delete(sessionId)
         this.activeSkillRoutings.delete(sessionId)
+        this.activeTaskPromptSelectors.delete(sessionId)
         this.activePromptModes.delete(sessionId)
         this.activePresetPolicies.delete(sessionId)
         this.sessionPermissionModes.delete(sessionId)
@@ -3450,12 +3683,12 @@ export class AgentOrchestrator {
           } else {
             // 1.3 追加对话记录条目（在 onComplete 前落盘，保证 STREAM_COMPLETE 触发的消息重载能看到）
             const now = Date.now()
-            const record: SDKMessage = {
+            const record = this.stampMessage(sessionId, {
               type: 'system',
               subtype: 'interruption_record',
               message: label,
               _createdAt: now,
-            } as unknown as SDKMessage
+            } as unknown as SDKMessage)
             try {
               this.sessionPort.appendMessages(sessionId, [record])
               if (completion.messages) completion.messages.push(record as unknown as AgentMessage)
@@ -3475,22 +3708,26 @@ export class AgentOrchestrator {
           }
 
           // D9 透传 endReason（completed 时前端据此清除旧 chip；非 completed 时置位并驱动 toast）
-          const finalOpts: CompleteOptions = {
+          const finalOpts: CompleteOptions & { runId?: string; taskId?: string; triggerId?: string } = {
+            ...(runFacts ? { runId: runFacts.run.id, taskId: runFacts.run.taskId, triggerId: runFacts.context.trigger.id } : {}),
             ...opts,
             endReason: reason,
             endReasonLabel: label,
           }
+          if (this.activeRunFacts.get(sessionId) === runFacts) this.activeRunFacts.delete(sessionId)
           callbacks.onComplete(completion.messages, finalOpts)
         }
         // 会话已空闲：通知协作层重查「父会话自动续跑」。
         // 场景：父会话发起 delegation 后结束等待子会话，期间用户手动压缩（/compact 占用了
         // active ownership）→ 子会话完成触发的 scheduleParentAutoContinuation 因 parent_active
         // 被跳过；此事件在压缩 run 结束后发出，协作层据此重新检查并续跑父会话，避免结果丢失。
+        if (this.activeRunFacts.get(sessionId) === runFacts) this.activeRunFacts.delete(sessionId)
         this.eventPort.emit(sessionId, {
           kind: 'profer_event',
           event: { type: 'run_idle', sessionId },
         })
       }
+      if (ledgerFinishError) throw ledgerFinishError
     }
   }
 
@@ -3528,6 +3765,7 @@ export class AgentOrchestrator {
   stop(sessionId: string): void {
     if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
     this.stoppedBySessions.add(sessionId)
+    this.activeRunFacts.get(sessionId)?.pendingApprovalRequestIds?.clear()
     this.queryPreparations.get(sessionId)?.abort()
     pauseActivePiHarnessRun(sessionId, 'user_stop')
     browserController.cancelSession(sessionId)
@@ -3753,7 +3991,7 @@ export class AgentOrchestrator {
     rawText?: string,
     _priority?: string,
     presetUuid?: string,
-    opts?: { interrupt?: boolean },
+    opts?: { interrupt?: boolean } & Pick<AgentSendInput, 'taskOrigin' | 'taskAuthorization' | 'messageAuthor' | 'triggerId'>,
     mentionedSkills?: string[],
     mentionedMcpServers?: string[],
     mentionedSessionIds?: string[],
@@ -3775,6 +4013,9 @@ export class AgentOrchestrator {
 
     const uuid = presetUuid || randomUUID()
 
+    const queueFacts = this.activeRunFacts.get(sessionId)
+    const queueContext = queueFacts ? createAgentRunContext({ sessionId, uuid, taskId: queueFacts.run.taskId, ...opts }, randomUUID) : undefined
+
     // 同一 UUID 的重试必须是幂等的：已被当前 run 接收的消息不再重复注入或落盘。
     const uuids = this.queuedMessageUuids.get(sessionId) ?? new Set<string>()
     if (!tryReserveQueuedMessage(uuids, uuid)) return uuid
@@ -3787,10 +4028,12 @@ export class AgentOrchestrator {
     const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
     // 运行中的 Agent 收到队列消息时也必须看到用户刚刚主动打开的页面。
     // 未打开浏览器时保持既有消息形态，避免给每条插队消息重复注入无关环境块。
-    const [skillSnapshot, runtimeRegistered] = await Promise.all([
-      this.activeSkillRoutings.get(sessionId), this.activeRuntimeRegistrations.get(sessionId),
+    const [skillSnapshot, runtimeRegistered, taskPromptSelector] = await Promise.all([
+      this.activeSkillRoutings.get(sessionId),
+      this.activeRuntimeRegistrations.get(sessionId),
+      this.activeTaskPromptSelectors.get(sessionId),
     ])
-    if (!skillSnapshot || !runtimeRegistered || this.activeSessions.get(sessionId) !== queueRunId || this.stoppedBySessions.has(sessionId)) {
+    if (!skillSnapshot || !runtimeRegistered || !taskPromptSelector || this.activeSessions.get(sessionId) !== queueRunId || this.stoppedBySessions.has(sessionId)) {
       uuids.delete(uuid)
       throw new Error('当前 Skill 能力快照未就绪或所属运行已结束，请在下一轮重试')
     }
@@ -3808,6 +4051,7 @@ export class AgentOrchestrator {
     let enrichedText = userBrowserContext
       ? `${buildDynamicContext({ userBrowserContext, mcpServerNames: activePolicy?.loadedMcpServerNames ? [...activePolicy.loadedMcpServerNames] : undefined, disabledToolGroups: activePolicy ? [...activePolicy.disabledToolGroups] : undefined, disabledTools: activePolicy?.disabledTools })}\n\n${text}`
       : text
+    if (queueContext) enrichedText = appendRunOriginPrompt(enrichedText, queueContext)
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
     if (referencedSessionsBlock) {
       enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`
@@ -3825,6 +4069,8 @@ export class AgentOrchestrator {
     if (toolLines.length > 0) {
       enrichedText = `<mentioned_tools>\n用户在消息中明确引用了以下当前预设可用的工具，请在本次回复中主动调用：\n${toolLines.join('\n')}\n</mentioned_tools>\n\n${enrichedText}`
     }
+    const queuedTaskPrompt = taskPromptSelector(rawText ?? text)
+    enrichedText = appendAgentTaskPrompt(enrichedText, queuedTaskPrompt, (rawText ?? text).trim() === '/compact')
 
     // 构造 SDKUserMessage 并注入（'next' 优先级 = 等当前 turn 完成再处理）
     const sdkMessage = {
@@ -3836,6 +4082,7 @@ export class AgentOrchestrator {
       session_id: sessionId,
     }
 
+    let injected = false
     try {
       // Claude 需要先软中断再注入；Pi 的 interrupt 路径必须由 adapter 自己先 reservation 再 abort，
       // 否则 prompt chain 会在 reservation 前结束，导致 IPC 永久等待。
@@ -3848,11 +4095,22 @@ export class AgentOrchestrator {
         }
       }
 
-      await this.adapter.sendQueuedMessage(sessionId, sdkMessage, {
+      const queuedInput = queueFacts && queueContext
+        ? { ...sdkMessage, _provenance: stampRunMessage(sdkMessage as SDKMessage, queueFacts.run,
+          queueContext.messageAuthor ?? queueContext.trigger.actor, randomUUID, queueContext.trigger)._provenance }
+        : sdkMessage
+      await this.adapter.sendQueuedMessage(sessionId, queuedInput, {
         interrupt: opts?.interrupt,
         // 已按冻结快照处理引用/推荐，禁止 adapter 再扫描 enrichedText 中的历史示例。
         skillMentions: [],
       })
+      injected = true
+      let attachError: unknown
+      if (queueFacts && queueContext && this.runLedger) {
+        try {
+          if (!this.runLedger.attachInput(queueFacts.run.id, queueContext.trigger)) throw new Error('已接收的追加输入未能关联至原 Run，需对账')
+        } catch (error) { attachError = error }
+      }
       // 消息已注入 Agent 会话（Pi interrupt 路径 reservation 已消费）。
       // 即使 run 在 await 期间已停止/被替换，本条消息仍必须持久化到同一会话文件，
       // 否则出现“Agent 已收到但 JSONL 无记录”的上下文缺口；持久化失败时保留 uuid，
@@ -3872,19 +4130,24 @@ export class AgentOrchestrator {
         parent_tool_use_id: null,
         _createdAt: Date.now(),
       } as unknown as SDKMessage
+      const sourcedMessage = queueFacts && queueContext ? stampRunMessage(persistMsg, queueFacts.run,
+        queueContext.messageAuthor ?? queueContext.trigger.actor, randomUUID, queueContext.trigger) : persistMsg
+      this.stampedMessages.add(sourcedMessage)
       try {
-        this.sessionPort.appendMessages(sessionId, [persistMsg])
+        this.sessionPort.appendMessages(sessionId, [sourcedMessage])
         // 追加消息同样要进事件流：手机端要靠它看到电脑端在运行中补发的指令。
-        this.eventPort.emit(sessionId, { kind: 'sdk_message', message: persistMsg })
+        this.eventPort.emit(sessionId, { kind: 'sdk_message', message: sourcedMessage })
       } catch (persistError) {
         // 注入已成功，uuid 必须保留（幂等短路），否则重试会重复注入；JSONL 缺口由会话文件后续 append 兜底。
         console.error(`[Agent 编排] 已注入消息持久化失败 (uuid=${uuid}, sessionId=${sessionId}):`, persistError)
+        if (queueFacts) throw persistError
       }
+      if (attachError) throw attachError
       // 提示必须排在用户消息之后落盘，否则重载后会显示在它前面。
       this.persistSkillRoutingNotice(sessionId, routedSkills)
     } catch (error) {
       // 仅当注入本身失败（sendQueuedMessage reject，消息未被 Agent 接收）时释放 uuid 允许重试
-      uuids.delete(uuid)
+      if (!injected) uuids.delete(uuid)
       throw error
     }
 

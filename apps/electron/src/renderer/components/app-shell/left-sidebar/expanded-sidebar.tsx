@@ -20,12 +20,116 @@ import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-regi
 import { useCloseTab } from '@/hooks/useCloseTab'
 import type { SidebarModel } from './use-left-sidebar'
 
-export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement {
+function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
   const {
     mode,
     conversations,
     agentSessions,
     tabs,
+    activeSessionId,
+    conversationDraftMap,
+    streamingIds,
+    handleSelectConversation,
+    handleRequestDelete,
+    handleRename,
+    handleRegenerateConversationTitle,
+    regeneratingConversationTitleIds,
+    handleTogglePin,
+    handleToggleArchive,
+    agentIndicatorMap,
+    agentDraftIds,
+    workspaceNameMap,
+    handleSelectAgentSession,
+    handleRequestMove,
+    handleAgentRename,
+    handleAgentRegenerateTitle,
+    handleToggleSessionUnread,
+    handleTogglePinAgent,
+    handleToggleArchiveAgent,
+    relativeTimeNow,
+  } = s
+  const { requestClose: requestCloseTab, requestCloseMany: requestCloseTabs } = useCloseTab()
+  const openSessionEntries = React.useMemo(
+    () => getOpenSessionEntries(mode, tabs, conversations, agentSessions),
+    [agentSessions, conversations, mode, tabs],
+  )
+  /** 关闭本区除 keepTabId 以外的入口（不删除会话数据）。 */
+  const closeOtherOpenSessions = React.useCallback((keepTabId: string) => {
+    requestCloseTabs(openSessionEntries.filter((entry) => entry.tab.id !== keepTabId).map((entry) => entry.tab.id))
+  }, [openSessionEntries, requestCloseTabs])
+  /** 关闭本区全部入口（不删除会话数据，关联的预览/浏览器 Tab 随会话一并关闭）。 */
+  const closeAllOpenSessions = React.useCallback(() => {
+    requestCloseTabs(openSessionEntries.map((entry) => entry.tab.id))
+  }, [openSessionEntries, requestCloseTabs])
+
+  return (
+    <div className="flex-none pb-1 titlebar-no-drag">
+      <div className="flex h-[26px] items-center justify-between px-2">
+        <span className={SIDEBAR_SECTION_TITLE_CLASS}>当前会话</span>
+        <span className="text-[10.5px] tabular-nums text-foreground/[0.26]">{openSessionEntries.length}</span>
+      </div>
+      <ScrollRegion className={cn('sidebar-session-scroll flex max-h-[144px] flex-col gap-px overflow-y-auto scrollbar-thin')}>
+        {openSessionEntries.map((entry) => {
+          const { tab } = entry
+          const active = tab.sessionId === activeSessionId
+          if (entry.type === 'chat') {
+            const { conversation } = entry
+            return (
+              <ConversationItem
+                key={tab.id}
+                conversation={conversation}
+                active={active}
+                streaming={streamingIds.has(conversation.id)}
+                showPinIcon={false}
+                hasDraft={conversationDraftMap.has(conversation.id)}
+                relativeTimeNow={relativeTimeNow}
+                onSelect={handleSelectConversation}
+                onRequestDelete={handleRequestDelete}
+                onRename={handleRename}
+                onRegenerateTitle={handleRegenerateConversationTitle}
+                regeneratingTitle={regeneratingConversationTitleIds.has(conversation.id)}
+                onTogglePin={handleTogglePin}
+                onToggleArchive={handleToggleArchive}
+                onCloseTab={() => requestCloseTab(tab.id)}
+                onCloseOtherTabs={openSessionEntries.length > 1 ? () => closeOtherOpenSessions(tab.id) : undefined}
+                onCloseAllTabs={closeAllOpenSessions}
+              />
+            )
+          }
+          const { session } = entry
+          return (
+            <AgentSessionItem
+              key={tab.id}
+              session={session}
+              active={active}
+              indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+              showPinIcon={false}
+              hasDraft={agentDraftIds.has(session.id)}
+              leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
+              workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
+              relativeTimeNow={relativeTimeNow}
+              onSelect={handleSelectAgentSession}
+              onRequestDelete={handleRequestDelete}
+              onRequestMove={handleRequestMove}
+              onRename={handleAgentRename}
+              onRegenerateTitle={handleAgentRegenerateTitle}
+              onTogglePin={handleTogglePinAgent}
+              onToggleArchive={handleToggleArchiveAgent}
+              onMarkUnread={handleToggleSessionUnread}
+              onCloseTab={() => requestCloseTab(tab.id)}
+              onCloseOtherTabs={openSessionEntries.length > 1 ? () => closeOtherOpenSessions(tab.id) : undefined}
+              onCloseAllTabs={closeAllOpenSessions}
+            />
+          )
+        })}
+      </ScrollRegion>
+    </div>
+  )
+}
+
+export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement {
+  const {
+    mode,
     handleNewAgentSession,
     handleNewConversation,
     setSearchDialogOpen,
@@ -95,19 +199,6 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
   } = s
   /** 顶部「当前会话」区显隐（设置 → 外观设置 → 侧边栏） */
   const showCurrentSessionSection = useAtomValue(showCurrentSessionSectionAtom)
-  const { requestClose: requestCloseTab, requestCloseMany: requestCloseTabs } = useCloseTab()
-  const openSessionEntries = React.useMemo(
-    () => getOpenSessionEntries(mode, tabs, conversations, agentSessions),
-    [agentSessions, conversations, mode, tabs],
-  )
-  /** 关闭本区除 keepTabId 以外的入口（不删除会话数据）。 */
-  const closeOtherOpenSessions = React.useCallback((keepTabId: string) => {
-    requestCloseTabs(openSessionEntries.filter((entry) => entry.tab.id !== keepTabId).map((entry) => entry.tab.id))
-  }, [openSessionEntries, requestCloseTabs])
-  /** 关闭本区全部入口（不删除会话数据，关联的预览/浏览器 Tab 随会话一并关闭）。 */
-  const closeAllOpenSessions = React.useCallback(() => {
-    requestCloseTabs(openSessionEntries.map((entry) => entry.tab.id))
-  }, [openSessionEntries, requestCloseTabs])
   return (
     <div className="relative flex h-full flex-col overflow-hidden px-2.5 pb-2.5">
       {/* Agent / Chat 切换 + 搜索：Profer 的标志性分段控件固定在列表顶部，
@@ -148,70 +239,8 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
 
       <div aria-hidden="true" className="mx-2 my-[7px] h-px flex-none bg-foreground/[0.045]" />
 
-      {/* 当前会话：直接复用现有会话行组件，不另造一套 Tab 行。 */}
-      {showCurrentSessionSection && (
-        <div className="flex-none pb-1 titlebar-no-drag">
-          <div className="flex h-[26px] items-center justify-between px-2">
-            <span className={SIDEBAR_SECTION_TITLE_CLASS}>当前会话</span>
-            <span className="text-[10.5px] tabular-nums text-foreground/[0.26]">{openSessionEntries.length}</span>
-          </div>
-          <ScrollRegion className={cn('sidebar-session-scroll flex max-h-[144px] flex-col gap-px overflow-y-auto scrollbar-thin')}>
-            {openSessionEntries.map((entry) => {
-              const { tab } = entry
-              const active = tab.sessionId === activeSessionId
-              if (entry.type === 'chat') {
-                const { conversation } = entry
-                return (
-                  <ConversationItem
-                    key={tab.id}
-                    conversation={conversation}
-                    active={active}
-                    streaming={streamingIds.has(conversation.id)}
-                    showPinIcon={false}
-                    hasDraft={conversationDraftMap.has(conversation.id)}
-                    relativeTimeNow={relativeTimeNow}
-                    onSelect={handleSelectConversation}
-                    onRequestDelete={handleRequestDelete}
-                    onRename={handleRename}
-                    onRegenerateTitle={handleRegenerateConversationTitle}
-                    regeneratingTitle={regeneratingConversationTitleIds.has(conversation.id)}
-                    onTogglePin={handleTogglePin}
-                    onToggleArchive={handleToggleArchive}
-                    onCloseTab={() => requestCloseTab(tab.id)}
-                    onCloseOtherTabs={openSessionEntries.length > 1 ? () => closeOtherOpenSessions(tab.id) : undefined}
-                    onCloseAllTabs={closeAllOpenSessions}
-                  />
-                )
-              }
-              const { session } = entry
-              return (
-                <AgentSessionItem
-                  key={tab.id}
-                  session={session}
-                  active={active}
-                  indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
-                  showPinIcon={false}
-                  hasDraft={agentDraftIds.has(session.id)}
-                  leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
-                  workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
-                  relativeTimeNow={relativeTimeNow}
-                  onSelect={handleSelectAgentSession}
-                  onRequestDelete={handleRequestDelete}
-                  onRequestMove={handleRequestMove}
-                  onRename={handleAgentRename}
-                  onRegenerateTitle={handleAgentRegenerateTitle}
-                  onTogglePin={handleTogglePinAgent}
-                  onToggleArchive={handleToggleArchiveAgent}
-                  onMarkUnread={handleToggleSessionUnread}
-                  onCloseTab={() => requestCloseTab(tab.id)}
-                  onCloseOtherTabs={openSessionEntries.length > 1 ? () => closeOtherOpenSessions(tab.id) : undefined}
-                  onCloseAllTabs={closeAllOpenSessions}
-                />
-              )
-            })}
-          </ScrollRegion>
-        </div>
-      )}
+      {/* 当前会话区域按设置独立挂载；关闭后释放其 Tab/缓存订阅与关闭处理器。 */}
+      {showCurrentSessionSection && <CurrentSessionSection s={s} />}
 
       {/* Chat 模式 active 视图：置顶 + 对话历史，结构与 Agent active 视图保持一致 */}
       {mode === 'chat' && viewMode === 'active' ? (

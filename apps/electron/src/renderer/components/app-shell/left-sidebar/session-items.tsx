@@ -50,6 +50,7 @@ import {
   getRelatedChildStatus,
   getRelatedSessionSummary,
   getSessionTreeStatus,
+  isPinnableSession,
   treeContainsSessionId,
   type AgentSessionTreeItem,
 } from './session-tree'
@@ -74,46 +75,32 @@ export interface AgentProjectGroup {
 }
 
 /**
- * 置顶入口：固定在标题左侧的留白里，hover 时显形，不再挤进右侧操作区。
+ * 已置顶标记：标题左侧常显的大头针，点击取消置顶。
  *
- * 留白常驻（不 hover 也占位），所以按钮出现/消失不会让标题横向跳动；已置顶时大头针
- * 常显作为状态标记，hover 变成可点击的「取消置顶」。
- * 缩进行（depth=1）把入口放进左侧 26px 缩进留白里（绝对定位，不占标题宽度）；其余行
- * 用 18px 内联留白，并用 -mr-1.5 抵掉行内 gap，两类行的标题起点因此都落在 26px 上。
+ * 只在会话已置顶时渲染——未置顶不占位，标题贴左；置顶后才让出 14px。
+ * 置顶入口本身走右键 / 三点菜单，避免 hover 时按钮浮在标题上或把标题挤跳。
  */
 function SessionLeadingPin({
-  pinned,
-  markerVisible,
-  gutter,
   onTogglePin,
 }: {
-  pinned: boolean
-  /** 已置顶时是否常显大头针（置顶分区由分区标题表达状态，传 false） */
-  markerVisible: boolean
-  /** 缩进行：入口落在左侧缩进留白里，不参与行内布局 */
-  gutter: boolean
   onTogglePin: () => void
 }): React.ReactElement {
-  const alwaysVisible = pinned && markerVisible
   return (
     <button
       type="button"
-      aria-label={pinned ? '取消置顶' : '置顶'}
-      title={pinned ? '取消置顶' : '置顶'}
+      aria-label="取消置顶"
+      title="取消置顶"
       onClick={(event) => {
         event.stopPropagation()
         onTogglePin()
       }}
       className={cn(
-        'flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded transition-opacity duration-100',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:opacity-100 focus-visible:pointer-events-auto',
-        gutter ? 'absolute left-[7px] top-1/2 -translate-y-1/2' : '-mr-1.5',
-        pinned ? 'text-primary/60 hover:text-primary' : 'text-foreground/30 hover:text-foreground/60',
-        'hover:bg-foreground/[0.08]',
-        alwaysVisible ? 'opacity-100' : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100',
+        'flex h-[14px] w-[14px] flex-shrink-0 items-center justify-center rounded',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+        'text-primary/60 hover:text-primary hover:bg-foreground/[0.08]',
       )}
     >
-      <Pin size={11} className={pinned ? 'fill-current' : undefined} />
+      <Pin size={10} className="fill-current" />
     </button>
   )
 }
@@ -594,13 +581,12 @@ export const ConversationItem = React.memo(function ConversationItem({
                 'truncate text-[13px] leading-[18px] flex items-center gap-1.5',
                 active ? 'text-foreground' : 'text-foreground/[0.75] [.skin-slate-light_&]:text-foreground/[0.85]'
               )}>
-                {/* 置顶入口：标题左侧留白，hover 显形；已置顶时大头针常显 */}
-                <SessionLeadingPin
-                  pinned={isPinned}
-                  markerVisible={showPinIcon}
-                  gutter={depth === 1}
-                  onTogglePin={() => onTogglePin(conversation.id)}
-                />
+                {/* 已置顶标记：只有置顶时才占位显示，未置顶标题贴左 */}
+                {isPinned && showPinIcon && (
+                  <SessionLeadingPin
+                    onTogglePin={() => onTogglePin(conversation.id)}
+                  />
+                )}
                 {regeneratingTitle ? (
                   <>
                     <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
@@ -799,6 +785,33 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   useShortcut('rename-item', startEdit, currentAgentSessionId === session.id && !editing, RENAME_SHORTCUT_OPTIONS)
 
   const canMove = indicatorStatus === 'idle' || indicatorStatus === 'completed'
+  // 子会话（委派 / 探索分支）归并到母会话行下，位置由母会话决定，本身不参与置顶；
+  // 隐藏行内入口与菜单项，避免置顶后既不在项目顶部、又让母行状态与排序失真。
+  const pinnable = isPinnableSession(session)
+
+  // 行首状态图标：置顶 / 定时 / 委派·探索 / 浏览器 / 生成标题。
+  // 项目列表行（depth=1）把它们放进左侧缩进留白的绝对定位槽，标题起点固定，
+  // 不再因为图标数量不同而左右跳动；其他行保持内联。
+  const leadingIcons = (
+    <>
+      {pinnable && session.pinned && showPinIcon && (
+        <SessionLeadingPin onTogglePin={() => onTogglePin(session.id)} />
+      )}
+      {session.sourceAutomationId && !session.sourceDelegationId && (
+        <Clock size={11} className="flex-shrink-0 text-foreground/40" />
+      )}
+      {session.explorationParentSessionId && session.explorationSourceMessageId ? (
+        <GitFork size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
+      ) : session.sourceDelegationId ? (
+        <GitBranch size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
+      ) : null}
+      {regeneratingTitle ? (
+        <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
+      ) : hasBrowser ? (
+        <Globe size={11} className="flex-shrink-0 text-foreground/40" aria-label="该会话正在使用浏览器" />
+      ) : null}
+    </>
+  )
 
   // 未读切换项：判据是「用户能看到的未读状态」——持久化字段
   // `completedButUnconfirmed` ∪ 渲染层未读集合（关闭态下绿标看的就是内存集合，只判持久化字段
@@ -818,10 +831,12 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   ) => (
     <>
       {renderCloseMenuGroup(MenuItem, MenuSeparator, { onCloseTab, onCloseOtherTabs, onCloseAllTabs })}
-      <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onTogglePin(session.id)}>
-        {session.pinned ? <Pin size={14} className="fill-current" /> : <Pin size={14} />}
-        {session.pinned ? '取消置顶' : '置顶会话'}
-      </MenuItem>
+      {pinnable && (
+        <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onTogglePin(session.id)}>
+          {session.pinned ? <Pin size={14} className="fill-current" /> : <Pin size={14} />}
+          {session.pinned ? '取消置顶' : '置顶会话'}
+        </MenuItem>
+      )}
       {canMove && (
         <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onRequestMove(session.id)}>
           <ArrowRightLeft size={14} />
@@ -899,6 +914,9 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
           onTouchCancel={preview.handleTouchCancel}
           onDoubleClick={(e) => {
             e.stopPropagation()
+            // 双击行内按钮（展开/收起子会话、归档、三点菜单等）只执行按钮动作，
+            // 不能连带进入标题重命名。
+            if ((e.target as HTMLElement).closest('button')) return
             startEdit()
           }}
           className={cn(
@@ -935,30 +953,17 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
                 'truncate text-[13px] leading-[18px] flex items-center gap-1.5',
                 active ? 'text-foreground' : 'text-foreground/[0.75] [.skin-slate-light_&]:text-foreground/[0.85]'
               )}>
-                {/* 置顶入口：标题左侧留白，hover 显形；已置顶时大头针常显 */}
-                <SessionLeadingPin
-                  pinned={!!session.pinned}
-                  markerVisible={!!showPinIcon}
-                  gutter={depth === 1}
-                  onTogglePin={() => onTogglePin(session.id)}
-                />
-                {session.sourceAutomationId && !session.sourceDelegationId && (
-                  <Clock size={11} className="flex-shrink-0 text-foreground/40" />
+                {/* 行首状态图标：项目列表行放进左侧缩进留白的绝对定位槽，标题起点固定；其他行内联 */}
+                {depth === 1 ? (
+                  <span className="absolute left-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+                    {leadingIcons}
+                  </span>
+                ) : (
+                  leadingIcons
                 )}
-                {session.explorationParentSessionId && session.explorationSourceMessageId ? (
-                  <GitFork size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
-                ) : session.sourceDelegationId ? (
-                  <GitBranch size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
-                ) : null}
-                {/* 该会话有活动浏览器会话/标签：在会话行上标识，便于从侧边栏识别哪个会话在用浏览器 */}
-                {regeneratingTitle ? (
-                  <>
-                    <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
-                    <span className="flex-shrink-0 text-[12px] text-info">正在生成标题…</span>
-                  </>
-                ) : hasBrowser ? (
-                  <Globe size={11} className="flex-shrink-0 text-foreground/40" aria-label="该会话正在使用浏览器" />
-                ) : null}
+                {regeneratingTitle && depth !== 1 && (
+                  <span className="flex-shrink-0 text-[12px] text-info">正在生成标题…</span>
+                )}
                 {/* 会话名占满剩余空间（flex-1），右侧只留给子会话箭头/数字 */}
                 <span className="flex-1 min-w-0 truncate">{session.title}</span>
                 {/* 草稿标记：输入框有未发送内容 */}
@@ -978,6 +983,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
                       event.stopPropagation()
                       delegationSummary.onToggle()
                     }}
+                    onDoubleClick={(event) => event.stopPropagation()}
                     className="ml-auto flex-shrink-0 inline-flex items-center gap-0.5 text-[12px] leading-4 text-foreground/45 hover:text-foreground/65 transition-colors"
                   >
                     <ChevronRight
@@ -1429,7 +1435,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                     />
 
                     {childCount > 0 && expandedChildren && (
-                      <div className="ml-3 border-l border-foreground/10 pl-2 flex flex-col gap-0.5">
+                      <div className="ml-3 border-l border-foreground/10 pl-4 flex flex-col gap-0.5">
                         {item.childSessions.map((childSession) => (
                           <RelatedChildSessionItem
                             key={childSession.id}
@@ -1458,7 +1464,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 <button
                   type="button"
                   onClick={() => onShowMore(group.workspace.id)}
-                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[26px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
+                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[30px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
                 >
                   显示更多（{hiddenCount}）
                 </button>
@@ -1468,7 +1474,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 <button
                   type="button"
                   onClick={() => onCollapseExtra(group.workspace.id)}
-                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[26px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
+                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[30px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
                 >
                   收起已展开的会话
                 </button>

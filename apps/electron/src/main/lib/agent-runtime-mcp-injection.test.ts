@@ -221,3 +221,19 @@ describe('默认端口：确实接线到生产注入器（不是空实现）', (
     expect((mcpServers.goal as { name?: string }).name).toBe('goal')
   })
 })
+
+describe('内置 MCP 的真实运行引用', () => {
+  test('automation 与 collaboration 收到源 Run，未提供时保持旧参数形状', async () => {
+    const received: Record<string, unknown>[] = []
+    const port = createElectronBuiltinMcpInjectionPort({
+      injectors: Object.fromEntries(BUILTIN_MCP_INJECTION_ORDER.map(id => [id, async (_sdk: unknown, table: McpServerTable, ctx: unknown) => {
+        if (id === 'automation' || id === 'collaboration') received.push(ctx as Record<string, unknown>)
+        table[id] = { type: 'sdk' }
+      }])) as NonNullable<Parameters<typeof createElectronBuiltinMcpInjectionPort>[0]>['injectors'],
+      resolveMemoryArchivePath: () => '/tmp/fixture',
+    })
+    await runBuiltinMcpInjection(port, request(context({ sourceRunId: 'admitted-run' }), planInput()))
+    expect(received).toHaveLength(2)
+    expect(received.every(ctx => ctx.sourceRunId === 'admitted-run')).toBe(true)
+  })
+})

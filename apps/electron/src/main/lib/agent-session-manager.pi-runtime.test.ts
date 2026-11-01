@@ -154,6 +154,21 @@ describe('Pi runtime 会话持久化隔离', () => {
     })
   })
 
+  test('Given task origin metadata When updating and reloading Then source and delegation placement persist', () => {
+    const meta = sessions.createAgentSession('origin metadata')
+    const updated = sessions.updateAgentSessionMeta(meta.id, {
+      sourceSessionId: 'source-session',
+      sourceRunId: 'source-run',
+      delegationRelation: 'independent',
+      delegationPlacement: 'independent',
+    })
+    expect(updated).toMatchObject({
+      sourceSessionId: 'source-session', sourceRunId: 'source-run',
+      delegationRelation: 'independent', delegationPlacement: 'independent',
+    })
+    expect(sessions.getAgentSessionMeta(meta.id)).toMatchObject(updated)
+  })
+
   test('Given a session is created with a preset When re-reading index Then the preset and reference persist', () => {
     const session = sessions.createAgentSession('delegation preset', undefined, undefined, undefined, 'pi', false, 'minimal')
     expect(sessions.getAgentSessionMeta(session.id)).toMatchObject({

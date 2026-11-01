@@ -72,7 +72,8 @@ import {
   browserPanelDismissedSessionIdsAtom,
   browserStateMapAtom,
 } from '@/atoms/browser-atoms'
-import { clearPreviewCacheForSession } from '@/components/diff/DiffTabContent'
+// 只从 preview-cache 取清缓存入口：直接 import DiffTabContent 会把整棵预览子树拖进入口 chunk
+import { clearPreviewCacheForSession } from '@/components/diff/preview-cache'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -1476,55 +1477,26 @@ export function useLeftSidebar() {
     syncActiveTabSideEffects(nextActiveTabId ? nextTabs.find((tab) => tab.id === nextActiveTabId) ?? null : null)
   }, [cleanupMapAtoms, setActiveTabId, setTabs, store, syncActiveTabSideEffects])
 
-  /** 切换 Agent 会话置顶状态 */
+  /** 切换 Agent 会话置顶状态。子会话不可置顶，因此不做子会话同步。 */
   const handleTogglePinAgent = React.useCallback(async (id: string): Promise<void> => {
-    const sessions = store.get(agentSessionsAtom)
-    const original = sessions.find((s) => s.id === id)
-    const delegatedChildren = getSyncableDelegatedChildren(sessions, id, draftSessionIds)
+    const original = store.get(agentSessionsAtom).find((s) => s.id === id)
     try {
       const updated = await window.electronAPI.togglePinAgentSession(id)
-      const targetPinned = !!updated.pinned
-      for (const child of delegatedChildren) {
-        if (!!child.pinned !== targetPinned) {
-          await window.electronAPI.togglePinAgentSession(child.id)
-        }
-      }
-      const refreshedSessions = delegatedChildren.length > 0
-        ? await window.electronAPI.listAgentSessions(viewMode === 'archived')
-        : null
-      if (refreshedSessions) {
-        setAgentSessions(refreshedSessions)
-      } else {
-        setAgentSessions((prev) => replaceAgentSessionInFreshnessOrder(prev, updated))
-      }
+      setAgentSessions((prev) => replaceAgentSessionInFreshnessOrder(prev, updated))
       if (updated.pinned) {
         if (original?.archived && !updated.archived) {
           toast.success('已置顶', { description: '已自动取消归档' })
           refreshArchivedCounts()
-        } else if (delegatedChildren.length > 0) {
-          toast.success('已置顶', { description: `已同步 ${delegatedChildren.length} 个子会话` })
         } else {
           toast.success('已置顶')
         }
       } else {
-        toast.success(
-          '已取消置顶',
-          delegatedChildren.length > 0
-            ? { description: `已同步 ${delegatedChildren.length} 个子会话` }
-            : undefined,
-        )
+        toast.success('已取消置顶')
       }
     } catch (error) {
       console.error('[侧边栏] 切换 Agent 会话置顶失败:', error)
-      if (delegatedChildren.length > 0) {
-        try {
-          setAgentSessions(await window.electronAPI.listAgentSessions(viewMode === 'archived'))
-        } catch (refreshError) {
-          console.error('[侧边栏] 置顶失败后刷新会话列表失败:', refreshError)
-        }
-      }
     }
-  }, [draftSessionIds, store, setAgentSessions, viewMode, refreshArchivedCounts])
+  }, [store, setAgentSessions, refreshArchivedCounts])
 
   /** 切换 Agent 会话归档状态 */
   const handleToggleArchiveAgent = React.useCallback(async (id: string): Promise<void> => {

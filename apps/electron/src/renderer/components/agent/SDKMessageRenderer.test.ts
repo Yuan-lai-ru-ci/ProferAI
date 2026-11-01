@@ -268,11 +268,13 @@ describe('用户消息操作入口渲染（修改重发）', () => {
     isEditing?: boolean
     uuid?: string | undefined
     text?: string
+    provenance?: SDKMessage['_provenance']
   } = {}): string {
     const message = {
       type: 'user',
       ...(options.uuid === undefined ? { uuid: 'u1' } : options.uuid ? { uuid: options.uuid } : {}),
       message: { content: [{ type: 'text', text: options.text ?? '帮我改成 TypeScript' }] },
+      ...(options.provenance ? { _provenance: options.provenance } : {}),
       parent_tool_use_id: null,
     } as unknown as SDKMessage
     const groups = groupIntoTurns([message])
@@ -292,6 +294,30 @@ describe('用户消息操作入口渲染（修改重发）', () => {
     )
   }
 
+  test('普通 assistant 回复保留模型标题，不额外展示作者或内部标识', () => {
+    const provenanceMessage = {
+      ...assistantText('来自执行 Agent 的回复'),
+      _provenance: { schemaVersion: 1, messageId: 'assistant-origin', author: { type: 'agent', id: 'worker-7' }, runId: 'run-7' },
+    } as SDKMessage
+    const group = groupIntoTurns([provenanceMessage])[0]!
+    const markup = renderToStaticMarkup(
+      React.createElement(Provider, { store: createStore() }, React.createElement(MessageGroupRenderer, {
+        group,
+        allMessages: [provenanceMessage],
+        historicalTaskSubjects: new Map<string, string>(),
+      })),
+    )
+    expect(markup).toContain('message-header-model')
+    expect(markup).not.toContain('message-header-author')
+    expect(markup).not.toContain('worker-7')
+  })
+
+  test('协议 user 消息带 Agent provenance 时展示真实作者', () => {
+    const markup = renderUserGroup({ provenance: { schemaVersion: 1, messageId: 'm1', author: { type: 'agent', id: 'handoff-agent' }, runId: 'run-1' } })
+    expect(markup).toContain('Agent')
+    expect(markup).not.toContain('handoff-agent')
+  })
+
   test('传入修改回调时渲染修改重发入口', () => {
     expect(renderUserGroup({ onEdit: () => {} })).toContain('修改重发')
   })
@@ -306,7 +332,7 @@ describe('用户消息操作入口渲染（修改重发）', () => {
     expect(markup).toContain('opacity-0 group-hover:opacity-100 focus-within:opacity-100')
   })
 
-  test('用户名字与时间在居右时右对齐（居左时保持左对齐）', () => {
+  test('消息名字与时间在居右时右对齐（居左时保持左对齐）', () => {
     const markup = renderUserGroup({ onEdit: () => {} })
 
     expect(markup).toContain('group-[.user-message-right]:items-end')

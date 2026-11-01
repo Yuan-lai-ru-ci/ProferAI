@@ -7,6 +7,7 @@ describe('单行 JSONL 匹配', () => {
     expect(matchAgentJsonlLine(line, 'hello', 5)).toEqual({
       messageId: 'u1',
       role: 'user',
+      author: { type: 'unknown' },
       snippet: 'say Hello world',
       matchStart: 4,
     })
@@ -25,6 +26,18 @@ describe('单行 JSONL 匹配', () => {
       message: { role: 'user', id: 'm1', content: [{ type: 'text', text: 'alpha' }, { type: 'tool_use' }, { type: 'text', text: 'beta NEEDLE' }] },
     })
     expect(matchAgentJsonlLine(line, 'needle', 6)?.snippet).toBe('alpha\nbeta NEEDLE')
+  })
+
+  test('search recognizes SDK protocol role first and includes author provenance separately', () => {
+    const provenance = { schemaVersion: 1, messageId: 'm1', author: { type: 'agent', id: 'worker' }, runId: 'run-1' }
+    const result = matchAgentJsonlLine(JSON.stringify({
+      type: 'user',
+      role: 'assistant',
+      uuid: 'sdk-uuid',
+      _provenance: provenance,
+      message: { role: 'assistant', content: [{ type: 'text', text: 'needle in handoff' }] },
+    }), 'needle', 6)
+    expect(result).toMatchObject({ messageId: 'sdk-uuid', role: 'user', provenance, author: { type: 'agent', id: 'worker' } })
   })
 
   test('角色不在白名单时退化为 assistant', () => {

@@ -5,13 +5,14 @@ import { isChannelEnabledForRuntime, resolveRunInitiator, normalizeAgentRuntime,
 import { buildAgentSessionUiProjection } from './agent-session-ui-projection'
 import type { AgentSessionMeta, AgentMessage, AgentSendInput, AgentStreamPayload, SDKMessage } from '@profer/shared'
 import type { AgentOrchestrator, SessionCallbacks } from './agent-orchestrator'
-import { AgentRunAlreadyActiveError, releaseActiveSession, tryAcquireActiveSession } from './agent-orchestrator-p0-guards'
+import { AgentRunAlreadyActiveError, releaseActiveSession, tryAcquireActiveSession, isPartialSDKMessage } from './agent-orchestrator-p0-guards'
 import { normalizeAgentEndReason } from './agent-end-reason'
 import { shouldClearSessionUnreadOnRunStart, shouldMarkSessionUnreadOnCompletion } from './agent-unread-policy'
 import { createAgentRunOutcomeReporter } from './agent-run-outcome'
-import { createAgentQueryPreparationPort, createAgentRunOwnershipRegistry, createAgentRunOwnershipView, createAgentRunRejectionError } from '@profer/agent-runtime'
+import { AgentRunLedger, createInMemoryRunLedgerPort, createAgentRunContext, stampRunMessage, appendRunOriginPrompt, createRunTriggerMessage, createAgentQueryPreparationPort, createAgentRunOwnershipRegistry, createAgentRunOwnershipView, createAgentRunRejectionError } from '@profer/agent-runtime'
 import { createElectronPermissionPort } from './agent-runtime-permission-port'
 import { resolveCredentialPreflightTypedError } from './agent-preflight-typed-errors'
+import { normalizeHeadlessSendInput } from './agent-input-origin'
 import { forwardHeadlessAgentCompletion } from './agent-headless-runner-registry'
 
 // 编译真实 service 函数和 orchestrator 类，显式注入边界依赖。
@@ -103,6 +104,7 @@ test('桌面与 headless 的内核不匹配拒绝不广播假终态，也不清�
   const source = `${activeSessionHelpersSource}\n${unreadPolicyHelpersSource}\n${headlessGateSource}\n${serviceSlice('runAgentHeadless', 'export async function runAgentHeadless(', '// headless run 的渲染进程 completion')}`
   const headless = compile<(input: AgentSendInput, callbacks: { onError: () => void; onComplete: () => void; onTitleUpdated: () => void }) => Promise<void>>(source, 'runAgentHeadless', {
     getMainRendererWebContents: () => undefined,
+    normalizeHeadlessSendInput,
     resolveRunInitiator,
     orchestrator: { isActive: () => true, sendMessage: async () => { throw new AgentSessionRuntimeMismatchError('pi', 'claude') } },
     runtimeCoordinator: { isRunning: () => false },
@@ -134,7 +136,7 @@ test('桌面与 headless 的内核不匹配拒绝不广播假终态，也不清�
   expect(backlog.get('session')).toHaveLength(1)
 })
 
-function ownerFixture(initialSession?: AgentSessionMeta) {
+function ownerFixture(initialSession?: AgentSessionMeta, runLedger?: AgentRunLedger) {
   let session = initialSession
   let bindingFailure = false
   const events: AgentStreamPayload[] = []
@@ -174,7 +176,7 @@ function ownerFixture(initialSession?: AgentSessionMeta) {
     settlePiHarnessRun() {}, pauseActivePiHarnessRun() {},
     browserController: { cancelSession() {} }, stopDelegationsForParent() {},
     createElectronPermissionPort,
-    createAgentQueryPreparationPort,
+    createAgentQueryPreparationPort, createAgentRunContext, stampRunMessage, appendRunOriginPrompt, createRunTriggerMessage, isPartialSDKMessage,
     resolveCredentialPreflightTypedError,
     permissionService: { clearSessionPending() {} }, exitPlanService: { clearSessionPending() {} },
     normalizeAgentEndReason,
@@ -183,6 +185,7 @@ function ownerFixture(initialSession?: AgentSessionMeta) {
   // 只触发本测试覆盖的 preflight/stop 边界，adapter.query 不会执行。
   const adapter = { abort: (id: string) => { aborted.push(id) }, errorHelpers: {} }
   const ports = {
+    runLedger,
     sessions: {
       getMeta: () => session,
       appendMessages(): undefined {},
@@ -207,6 +210,66 @@ function ownerFixture(initialSession?: AgentSessionMeta) {
   const input: AgentSendInput = { sessionId: 'session', channelId: 'channel', userMessage: '', triggeredBy: 'goal', goalRunId: 'goal-run-1' }
   return { instance, input, credentials, callbacks, aborted, events, bindingCalls, permissionCleanup, getSession: () => session, failBinding: () => { bindingFailure = true }, failRouting: () => { routingFailure = true } }
 }
+
+describe('旧编排器持久 Run 生命周期', () => {
+  test.each(['pi', 'claude'] as const)('%s claim 后同步 queued，preflight 失败仅 finish 一次且无 startedAt', async runtime => {
+    const port = createInMemoryRunLedgerPort()
+    const ledger = new AgentRunLedger(port)
+    let finishes = 0
+    const finish = ledger.finish.bind(ledger)
+    ledger.finish = (id, outcome) => { finishes++; return finish(id, outcome) }
+    const f = ownerFixture(undefined, ledger)
+    const run = f.instance.sendMessage({ ...f.input, agentRuntime: runtime, uuid: 'user-message' }, f.callbacks)
+    expect(ledger.list()).toHaveLength(1)
+    expect(ledger.list()[0]).toMatchObject({ status: 'queued', triggerId: 'message:session:user-message', executorRef: 'session', sessionRef: 'session', runtime })
+    expect(ledger.list()[0]!.id).not.toBe((f.instance as unknown as { activeSessions: { get(id: string): string } }).activeSessions.get('session'))
+    f.credentials.resolve({ ok: false, code: 'token_expired' })
+    await run
+    expect(ledger.list()[0]!.status).toBe('failed')
+    expect(ledger.list()[0]!.startedAt).toBeUndefined()
+    expect(port.load().events.map(event => event.type)).toEqual(['queued', 'failed'])
+    expect(finishes).toBe(1)
+    expect(f.instance.isActive('session')).toBe(false)
+  })
+
+  test('准备中停止后发生 preflight 错误仍只记 stopped', async () => {
+    const port = createInMemoryRunLedgerPort()
+    const ledger = new AgentRunLedger(port)
+    const f = ownerFixture(undefined, ledger)
+    const run = f.instance.sendMessage({ ...f.input, agentRuntime: 'pi' }, f.callbacks)
+    f.instance.stop('session')
+    f.credentials.resolve({ ok: false, code: 'token_expired' })
+    await run
+    expect(ledger.list()[0]!.status).toBe('stopped')
+    expect(ledger.list()[0]!.startedAt).toBeUndefined()
+    expect(port.load().events.map(event => event.type)).toEqual(['queued', 'stopped'])
+  })
+
+  test('begin/finish 保存失败均可见且 owner 释放，finish 不重试', async () => {
+    for (const failAt of [1, 2]) {
+      const port = createInMemoryRunLedgerPort()
+      let saves = 0
+      const ledger = new AgentRunLedger({ load: port.load, save: snapshot => {
+        if (++saves === failAt) throw new Error('ledger save failed')
+        port.save(snapshot)
+      } })
+      const f = ownerFixture(undefined, ledger)
+      f.credentials.resolve({ ok: false, code: 'token_expired' })
+      await expect(f.instance.sendMessage({ ...f.input, agentRuntime: 'pi' }, f.callbacks)).rejects.toThrow('ledger save failed')
+      expect(f.instance.isActive('session')).toBe(false)
+      expect(saves).toBe(failAt)
+      if (failAt === 2) expect(ledger.list()[0]!.status).toBe('queued')
+    }
+  })
+
+  test('run owned 回调抛错也收束 failed 并释放 owner', async () => {
+    const ledger = new AgentRunLedger(createInMemoryRunLedgerPort())
+    const f = ownerFixture(undefined, ledger)
+    await expect(f.instance.sendMessage({ ...f.input, agentRuntime: 'pi' }, { ...f.callbacks, onRunOwned: () => { throw new Error('owned observer failed') } })).rejects.toThrow('owned observer failed')
+    expect(ledger.list()[0]!.status).toBe('failed')
+    expect(f.instance.isActive('session')).toBe(false)
+  })
+})
 
 test('run finally 清 turn pending，不清除会话白名单', async () => {
   const h = ownerFixture({ id: 'session', title: 'fixture', createdAt: 1, updatedAt: 1, agentRuntime: 'pi', agentRuntimeLocked: true })
@@ -340,8 +403,9 @@ describe('会话内核绑定与 owner 顺序', () => {
 
 test('Claude/Pi 共用 query bridge，消息回调不依赖 isolatedRuntimeSession', () => {
   const resumeOptions = orchestratorSource.slice(orchestratorSource.indexOf('resumeSessionId: existingSdkSessionId,'), orchestratorSource.indexOf('// 回退后 resume', orchestratorSource.indexOf('resumeSessionId: existingSdkSessionId,')))
-  expect(resumeOptions).toContain('onRuntimeMessage: input.onRuntimeMessage')
-  expect(resumeOptions.indexOf('onRuntimeMessage: input.onRuntimeMessage')).toBeLessThan(resumeOptions.indexOf('...(input.isolatedRuntimeSession'))
+  expect(resumeOptions).toContain('input.onRuntimeMessage?.(this.stampMessage(sessionId, message, undefined, runFacts))')
+  expect(resumeOptions).toContain(': input.onRuntimeMessage,')
+  expect(resumeOptions.indexOf('onRuntimeMessage:')).toBeLessThan(resumeOptions.indexOf('...(input.isolatedRuntimeSession'))
 })
 
 test('Goal 真实 onRunStarted 才建立前端运行态', async () => {

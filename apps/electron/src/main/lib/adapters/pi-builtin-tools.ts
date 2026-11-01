@@ -124,6 +124,8 @@ import { executePresentVisualization, executeInspectVisualization, PRESENT_VISUA
 
 export interface PiBuiltinToolsContext {
   sessionId: string
+  /** 宿主提供的当前真实 run 引用，用于派工来源追溯。 */
+  sourceRunId?: string
   channelId: string
   modelId?: string
   agentRuntime?: AgentRuntime
@@ -1022,6 +1024,8 @@ function summarizeAutomation(a: import('@profer/shared').Automation, includeHist
     presetId: a.presetId,
     workspaceId: a.workspaceId,
     sourceSessionId: a.sourceSessionId,
+    boundSessionId: a.boundSessionId,
+    dispatchBlockReason: a.dispatchBlockReason,
     lastSessionId: a.lastSessionId,
     createdAt: a.createdAt,
     updatedAt: a.updatedAt,
@@ -1161,6 +1165,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
         agentRuntime: Type.Optional(Type.Union([Type.Literal('claude'), Type.Literal('pi')], { description: '运行该任务的 Agent runtime；不传则继承当前会话 runtime' })),
         sessionMode: Type.Optional(Type.Union([Type.Literal('daily'), Type.Literal('reuse')], { description: '会话模式' })),
         presetId: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: '运行该任务的 Agent 预设 ID（内置 standard/code/minimal 或任务工作区的自定义预设）。不传则继承当前会话预设；未知 ID 回退 standard' })),
+        boundSessionId: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: '可选的固定目标会话 ID；指定后忙碌时排队，目标失效时不静默换会话' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as Record<string, unknown>
@@ -1184,6 +1189,8 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           sessionMode: args.sessionMode as 'daily' | 'reuse' | undefined,
           presetId: (args.presetId as string | undefined) ?? getAgentSessionMeta(ctx.sessionId)?.presetId,
           sourceSessionId: ctx.sessionId,
+          boundSessionId: args.boundSessionId as string | undefined,
+          promptAuthor: { type: 'agent', id: ctx.sessionId },
           active: (args.active as boolean) ?? true,
         }
         validateScheduleFields(input)
@@ -1232,6 +1239,7 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
         agentRuntime: Type.Optional(Type.Union([Type.Literal('claude'), Type.Literal('pi')], { description: '新的 Agent runtime' })),
         sessionMode: Type.Optional(Type.Union([Type.Literal('daily'), Type.Literal('reuse')])),
         presetId: Type.Optional(Type.String({ maxLength: 200, description: '新的 Agent 预设 ID（内置或任务工作区的自定义预设）；下次触发生效。传空字符串恢复跟随工作区默认' })),
+        boundSessionId: Type.Optional(Type.String({ maxLength: 200, description: '新的固定目标会话 ID；传空字符串清除绑定' })),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as Record<string, unknown>
@@ -1252,6 +1260,8 @@ function buildAutomationTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefin
           agentRuntime: args.agentRuntime as AgentRuntime | undefined,
           sessionMode: args.sessionMode as 'daily' | 'reuse' | undefined,
           presetId: args.presetId as string | undefined,
+          boundSessionId: args.boundSessionId as string | undefined,
+          ...(args.prompt !== undefined ? { promptAuthor: { type: 'agent', id: ctx.sessionId } } : {}),
         }
         if (input.name !== undefined) assertNonBlank(input.name, 'name')
         if (input.prompt !== undefined) assertNonBlank(input.prompt, 'prompt')
@@ -1723,12 +1733,16 @@ export async function buildPiBuiltinTools(
   }
 
   // collaboration 桥接
-  const collaborationAvailable = !!ctx.workspaceId && ctx.triggeredBy !== 'delegation' && !disabled.has('collaboration')
+  const collaborationSession = ctx.triggeredBy === 'delegation' ? getAgentSessionMeta(ctx.sessionId) : undefined
+  const delegatedExecution = ctx.triggeredBy === 'delegation'
+    && (!collaborationSession || !!collaborationSession.sourceDelegationId || (collaborationSession.delegationDepth ?? 0) > 0)
+  const collaborationAvailable = !!ctx.workspaceId && !delegatedExecution && !disabled.has('collaboration')
 
   if (collaborationAvailable) {
     try {
       const collaborationTools = buildPiCollaborationTools(sdk, {
         sessionId: ctx.sessionId,
+        sourceRunId: ctx.sourceRunId,
         channelId: ctx.channelId,
         modelId: ctx.modelId,
         workspaceId: ctx.workspaceId,

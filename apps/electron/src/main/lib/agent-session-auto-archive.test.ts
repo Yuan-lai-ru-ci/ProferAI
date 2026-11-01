@@ -155,6 +155,23 @@ describe('Agent 会话自动归档', () => {
     expect(archivedIds()).toEqual(['sess-done'])
   })
 
+  test('子会话残留的置顶字段不豁免自动归档', () => {
+    const now = Date.now()
+    writeSessions([
+      session({ id: 'sess-user-new', updatedAt: now - DAY }),
+      session({
+        id: 'sess-delegated-pinned',
+        updatedAt: now - 60 * DAY,
+        pinned: true,
+        parentSessionId: 'sess-user-new',
+        sourceDelegationId: 'd-1',
+      }),
+    ])
+
+    expect(autoArchiveAgentSessions(7, 1)).toBe(1)
+    expect(archivedIds()).toEqual(['sess-delegated-pinned'])
+  })
+
   test('定时任务与委派子会话不占保留名额，仍按时间阈值归档', () => {
     const now = Date.now()
     writeSessions([

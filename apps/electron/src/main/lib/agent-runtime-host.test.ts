@@ -164,14 +164,16 @@ describe('Electron Agent host ports', () => {
       preset,
       presetReference: { presetId: 'preset-policy', presetScope: 'user-global' },
     })
-    setAgentRuntimeRunFacts('session-1', { triggeredBy: 'user', userMessage: 'hello' })
+    setAgentRuntimeRunFacts('session-1', { triggeredBy: 'user', userMessage: 'hello', sourceRunId: 'host-run' })
 
     const injected: string[] = []
+    const sourceRuns: unknown[] = []
     const injectors = Object.fromEntries(
       BUILTIN_MCP_INJECTION_ORDER.map(id => [
         id,
-        async (_sdk: unknown, table: Record<string, Record<string, unknown>>) => {
+        async (_sdk: unknown, table: Record<string, Record<string, unknown>>, ctx: { sourceRunId?: string }) => {
           injected.push(id)
+          if (id === 'automation' || id === 'collaboration') sourceRuns.push(ctx.sourceRunId)
           table[id] = { type: 'sdk', name: id }
         },
       ]),
@@ -187,6 +189,7 @@ describe('Electron Agent host ports', () => {
       'automation', 'memory-archive', 'collaboration', 'task-graph', 'agent-presets', 'planning',
     ])
     expect(injected).toEqual(['automation', 'memory-archive', 'collaboration', 'task-graph', 'agent-presets', 'planning'])
+    expect(sourceRuns).toEqual(['host-run', 'host-run'])
 
     // 无策略快照：不猜、不注入（与「策略缺失不得静默放行」同一原则）。
     agentRuntimePolicyRuns.releaseRun('session-1')
@@ -761,8 +764,8 @@ describe('B8 · 产品 MCP 注入的宿主接线', () => {
     expect(noEvents.browser).toBeDefined()
   })
 
-  test('Given 显式权限模式覆盖 When 内置 collaboration 注入 Then 透传与旧链一致（不再是 undefined）', async () => {
-    prepareRun('collab-session')
+  test('Given 本轮冻结权限为 plan When 内置 collaboration 注入 Then 继承冻结快照而不重算权限', async () => {
+    prepareRun('collab-session', { ...enabledPolicy, permissionModeOverride: 'plan' })
     // 入口顺序：先由 createRuntimeEntryQuery 写基本事实，再由 query 构造补运行级事实。
     createElectronAgentRuntimeQuery({
       sessionId: 'collab-session',
@@ -787,7 +790,7 @@ describe('B8 · 产品 MCP 注入的宿主接线', () => {
 
     const collaboration = captured.find(call => call.serverId === 'collaboration')
     expect((collaboration?.args[0] as { permissionMode?: string } | undefined)?.permissionMode).toBe('plan')
-    // 未提供覆盖时不凭空给值（保持旧链的 undefined 语义）。
+    // 其他来源字段仍保持本轮原有事实。
     const automation = captured.find(call => call.serverId === 'automation')
     expect((automation?.args[0] as { triggeredBy?: string } | undefined)?.triggeredBy).toBe('user')
     clearAgentRuntimeRunFacts('collab-session')
@@ -832,5 +835,45 @@ describe('B8 · 产品 MCP 注入的宿主接线', () => {
       clipboard: true,
     })
     expect(resources).toEqual([])
+  })
+})
+
+describe('trusted runtime Run context', () => {
+  test('query 构造真实来源但不预造 Run ID，准入回写后资源可见同一 ID', async () => {
+    const input = createElectronAgentRuntimeQuery({
+      sessionId: 'trusted-query', userMessage: 'scheduled work', channelId: 'channel-1', uuid: 'trusted-message',
+      taskId: 'task', triggerId: 'schedule-trigger', triggeredBy: 'automation',
+      taskOrigin: { actor: { type: 'automation', id: 'schedule' }, source: { type: 'automation', id: 'schedule' } },
+      taskAuthorization: { kind: 'scheduled' }, messageAuthor: { type: 'user' },
+    }, { runtime: 'pi', toolAssemblyContext: { sessionId: 'trusted-query' } })
+    expect(input.runId).toBeUndefined()
+    expect(input.context).toMatchObject({ taskId: 'task', messageAuthor: { type: 'user' }, trigger: { id: 'schedule-trigger', actor: { type: 'automation', id: 'schedule' }, authorization: { kind: 'scheduled' } } })
+    expect(getAgentRuntimeRunFacts('trusted-query')?.sourceRunId).toBeUndefined()
+    await input.onRunAdmitted?.({ ...input, runId: 'real-run' })
+    expect(getAgentRuntimeRunFacts('trusted-query')).toMatchObject({ sourceRunId: 'real-run' })
+    clearAgentRuntimeRunFacts('trusted-query')
+  })
+})
+
+describe('真实权限请求的运行生命周期', () => {
+  test('只读自动放行不写 waiting，真实审批请求与完成才通知等待和恢复', async () => {
+    const { permissionService } = await import('./agent-permission-service')
+    const transitions: string[] = []
+    const { AgentEventBus } = await import('./agent-event-bus')
+    const host = createElectronAgentHost({ eventBus: new AgentEventBus() })
+    const prepared = await host.ports.queryPreparation!.prepare({
+      sessionId: 'permission-lifecycle', runtime: 'pi', prompt: 'fixture', prepared: { resources: {} },
+      runLifecycle: { wait: id => { transitions.push(`wait:${id}`) }, resume: id => { transitions.push(`resume:${id}`) } },
+    }, new AbortController().signal)
+    await prepared.canUseTool!('Read', { file_path: '/tmp/read' }, { signal: new AbortController().signal })
+    expect(transitions).toEqual([])
+    const pending = prepared.canUseTool!('Write', { file_path: '/tmp/write', content: 'fixture' }, { signal: new AbortController().signal })
+    await Promise.resolve()
+    const request = permissionService.getPendingRequests().find(item => item.sessionId === 'permission-lifecycle')!
+    expect(request).toBeDefined()
+    expect(transitions).toEqual([`wait:${request.requestId}`])
+    permissionService.respondToPermission(request.requestId, 'allow', false)
+    await pending
+    expect(transitions).toEqual([`wait:${request.requestId}`, `resume:${request.requestId}`])
   })
 })

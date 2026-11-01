@@ -1,10 +1,12 @@
+import { getAgentMessageIdentity } from './agent-message-identity'
+
 /**
- * 将持久化与实时转录合并，同时以 type + uuid 为消息身份去重。
+ * 将持久化与实时转录合并，同时以产品消息身份（兼容 UUID）去重。
  *
  * 实时消息会覆盖同 UUID 的持久化副本，但保留该消息在持久化转录中的原有位置。
  * 这样切换会话后既不会重复渲染 `/compact`，也不会把 live 副本错误挪到对话末尾。
  */
-export function mergeMessagesByUuid<T extends { type?: unknown; uuid?: unknown }>(
+export function mergeMessagesByUuid<T extends { type?: unknown; uuid?: unknown; _provenance?: unknown }>(
   persisted: readonly T[],
   live: readonly T[],
 ): T[] {
@@ -12,12 +14,12 @@ export function mergeMessagesByUuid<T extends { type?: unknown; uuid?: unknown }
   const indexByUuid = new Map<string, number>()
 
   const appendOrReplace = (message: T): void => {
-    if (typeof message.uuid !== 'string' || message.uuid.length === 0) {
+    const key = getAgentMessageIdentity(message)
+    if (!key) {
       merged.push(message)
       return
     }
 
-    const key = `${String(message.type)}:${message.uuid}`
     const existingIndex = indexByUuid.get(key)
     if (existingIndex == null) {
       indexByUuid.set(key, merged.length)

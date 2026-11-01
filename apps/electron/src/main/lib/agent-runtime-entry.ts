@@ -39,6 +39,7 @@ import type {
   AgentRunOutcome,
   SessionPort,
 } from '@profer/agent-runtime'
+import { resolveAgentInputOperationSource } from '@profer/agent-runtime'
 import { createElectronAgentRuntimeQuery, clearAgentRuntimeRunFacts, setAgentRuntimeRunFacts } from './agent-runtime-host'
 import { resolveCredentialPreflightTypedError } from './agent-preflight-typed-errors'
 import {
@@ -160,7 +161,7 @@ export function createRuntimeEntryQuery(
   // 内置 MCP 注入所需的运行事实（GAP-4）：与策略快照同一生命周期（入口写 / `resources.load` 读 /
   // run 结束清理）。不把这些字段加进 `ResourceRequest` / `AgentRuntimeQuery`，避免改 runtime 契约。
   setAgentRuntimeRunFacts(input.sessionId, {
-    triggeredBy: input.triggeredBy ?? 'user',
+    triggeredBy: resolveAgentInputOperationSource(input),
     userMessage: input.userMessage,
   })
 

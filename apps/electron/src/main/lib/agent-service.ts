@@ -35,6 +35,11 @@ import type {
 import { normalizeAgentRuntime } from '@profer/shared'
 import type { AgentRuntime, AgentRuntimeCallbacks, AgentRuntimeQuery, AgentRunOutcome, AgentRuntimePreparedContext } from '@profer/agent-runtime'
 import { AgentRuntimeCoordinator, createAgentRunOwnershipRegistry, createAgentRunRejectionError, createAgentRuntimeProviderAdapter, peekAgentRunClaimFailure } from '@profer/agent-runtime'
+import { createDesktopRunLedger } from './agent-run-ledger-host'
+import { getConfigDir } from './config-paths'
+import { normalizeHeadlessSendInput } from './agent-input-origin'
+import { queueRuntimeUserMessage } from './agent-runtime-queue'
+import { buildReferencedSessionsPrompt } from './agent-prompt-utils'
 import type { AgentRunClaimFailure } from '@profer/agent-runtime'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
 import { PiAgentAdapter } from './adapters/pi-agent-adapter'
@@ -124,7 +129,15 @@ const adapter = new RuntimeRoutingAgentAdapter({ claude: claudeAdapter, pi: piAd
  * stop/wait 路由与诊断，不再承担互斥。
  */
 const runOwnership = createAgentRunOwnershipRegistry()
+const desktopRuns = createDesktopRunLedger(() => join(getConfigDir(), 'agent-runs.json'))
+/** 启动与首次执行共用幂等对账；读取失败会阻止后续执行。 */
+export function initializeAgentRunLedger(): void { desktopRuns.initialize() }
+/** 定时调度按已持久化 Trigger 对账；查询不授予任何执行权限。 */
+export function findAgentRunForTrigger(triggerId: string): import('@profer/agent-runtime').AgentRun | undefined {
+  return desktopRuns.ledger.findByTrigger(triggerId)
+}
 const orchestrator = new AgentOrchestrator(adapter, eventBus, {
+  runLedger: desktopRuns.ledger,
   sessions: agentRuntimeHost.sessions,
   credentials: agentRuntimeHost.credentials,
   resources: agentRuntimeHost.resources,
@@ -141,6 +154,7 @@ const runtimeCoordinator = new AgentRuntimeCoordinator({
   },
   ports: agentRuntimeHost.ports,
   ownership: runOwnership,
+  runLedger: desktopRuns.ledger,
 })
 /**
  * 只读的「是否有活跃 run」查询（backlog / 恢复路由用）。
@@ -778,6 +792,7 @@ export async function runAgentRuntimeHeadless(
   input: AgentSendInput,
   callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
+  input = normalizeHeadlessSendInput(input, callbacks.source)
   const wc = getMainRendererWebContents()
   if (wc) registerWebContents(input.sessionId, wc)
   beginActiveStreamBacklog(input.sessionId)
@@ -972,6 +987,7 @@ export async function runAgentHeadless(
   input: AgentSendInput,
   callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
+  input = normalizeHeadlessSendInput(input, callbacks.source)
   if (canUseRuntimeHeadless(input)) {
     await runAgentRuntimeHeadless(input, callbacks)
     return
@@ -1260,6 +1276,21 @@ export async function queueAgentMessage(
   input: AgentQueueMessageInput,
   _webContents: WebContents,
 ): Promise<string> {
+  if (runtimeCoordinator.isRunning(input.sessionId)) {
+    return queueRuntimeUserMessage(input, {
+      runtime: normalizeAgentRuntime(getAgentSessionMeta(input.sessionId)?.agentRuntime),
+      queue: queued => runtimeCoordinator.queueMessage(queued),
+      send: (sessionId, message, options) => {
+        if (!adapter.sendQueuedMessage) return Promise.reject(new Error('当前适配器不支持流式追加消息'))
+        return adapter.sendQueuedMessage(sessionId, message, options)
+      },
+      interrupt: sessionId => adapter.interruptQuery?.(sessionId) ?? Promise.resolve(),
+      enrich: queued => {
+        const references = buildReferencedSessionsPrompt(queued.sessionId, queued.mentionedSessionIds, getAgentSessionMeta(queued.sessionId)?.workspaceId)
+        return references ? `${references}\n\n${queued.userMessage}` : queued.userMessage
+      },
+    })
+  }
   return orchestrator.queueMessage(
     input.sessionId,
     input.userMessage,

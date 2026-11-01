@@ -48,7 +48,6 @@ import {
   listAgentSessions,
   getAgentSessionMeta,
   getAgentSessionDeletionOrder,
-  getAgentSessionMessages,
   getAgentSessionSDKMessages,
   createAgentSession,
   ensureProjectDraftAgentSession,
@@ -62,7 +61,7 @@ import {
 } from './agent-session-manager'
 import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getAgentWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getSettings, updateSettings } from './settings-service'
-import { projectAgentPayloadForPocket, projectSdkMessageForPocket } from './pocket-agent-projection'
+import { projectAgentPayloadForPocket, projectSdkMessageForPocket, projectSdkMessagesToPocketView } from './pocket-agent-projection'
 import {
   listAgentWorkspaces,
   createAgentWorkspace,
@@ -688,73 +687,6 @@ function checkToken(req: IncomingMessage): boolean {
 
 // ===== 指令处理：移动端客户端 → 主进程 Agent =====
 
-/**
- * 从 SDK 消息对象提取文本（content 可为字符串或 [{type:'text'|'thinking', text|thinking}] 数组）。
- * 与移动端前端 parseSdkMessage 保持一致；这里用于服务端把持久化 SDK 消息转成移动端可读结构。
- */
-function extractSdkText(m: Record<string, unknown>): string {
-  const c = m.content
-  if (typeof c === 'string') return c
-  if (Array.isArray(c)) {
-    let text = ''
-    for (const b of c) {
-      if (typeof b === 'string') { text += b; continue }
-      if (typeof b === 'object' && b !== null) {
-        const blk = b as Record<string, unknown>
-        if (typeof blk.text === 'string') text += blk.text
-        // thinking / tool_use / tool_result 不进入正文
-      }
-    }
-    return text
-  }
-  if (typeof m.text === 'string') return m.text
-  if (typeof m.message === 'string') return m.message
-  return ''
-}
-
-/**
- * 把持久化 SDK 消息（getAgentSessionMessages 返回的原生结构）转成移动端可见消息。
- * 真实结构：{ type:'user'|'assistant', message:{ role, content:[{type:'text',text}] }, _createdAt }
- */
-function sdkMessagesToViewMessages(rawMessages: Array<Record<string, unknown>>): Array<{
-  id: string
-  role: string
-  content: string
-  createdAt: number
-  model?: string
-}> {
-  const out: Array<{ id: string; role: string; content: string; createdAt: number; model?: string }> = []
-  for (const m of rawMessages) {
-    let role: string | undefined
-    let content: string = ''
-    let model: string | undefined
-    let ts = typeof m._createdAt === 'number' ? m._createdAt : Date.now()
-
-    const outerType = m.type
-    const inner = m.message && typeof m.message === 'object' ? (m.message as Record<string, unknown>) : null
-    if (inner) {
-      role = (inner.role as string) || (outerType as string)
-      content = extractSdkText(inner)
-      model = inner.model as string | undefined
-    } else {
-      role = outerType as string
-      content = extractSdkText(m)
-    }
-    // 工具结果块(tool_result)角色标记为 user，但其内容是工具输出，通常不作为对话文本展示；
-    // 这里对含 tool_result 且无文本的消息跳过，避免污染对话。
-    const hasUserText = role === 'user' && content.trim().length > 0 && !content.includes('[tool_result')
-    if (role !== 'assistant' && !hasUserText) continue
-    if (!content && role !== 'assistant') continue
-    out.push({
-      id: (m.uuid as string) || `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      role: role === 'user' ? 'user' : 'assistant',
-      content,
-      createdAt: ts,
-      model,
-    })
-  }
-  return out
-}
 /** 轻量封装的 JSON 响应交互类型 */
 type CommandResult =
   | { ok: true; data: unknown }
@@ -835,6 +767,10 @@ export function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]
     delegationStatus: s.delegationStatus,
     delegationDepth: s.delegationDepth,
     sourceAutomationId: s.sourceAutomationId,
+    sourceSessionId: s.sourceSessionId,
+    sourceRunId: s.sourceRunId,
+    delegationRelation: s.delegationRelation,
+    delegationPlacement: s.delegationPlacement,
     automationGraduated: s.automationGraduated ?? false,
     // 与桌面 LeftSidebar 相同的父子 Agent 会话关联；仅用于树形导航，不暴露委派内容。
     parentSessionId: s.parentSessionId,
@@ -1226,7 +1162,6 @@ export async function handleRemoteCommand(
       if (!id) return { ok: false, error: '缺少 sessionId' }
       const meta = getAgentSessionMeta(id)
       if (!meta) return { ok: false, error: '会话不存在' }
-      const messages = getAgentSessionMessages(id)
       return {
         ok: true,
         data: {
@@ -1239,6 +1174,11 @@ export async function handleRemoteCommand(
             workspaceId: meta.workspaceId,
             agentRuntime: meta.agentRuntime,
             permissionMode: meta.permissionMode,
+            sourceAutomationId: meta.sourceAutomationId,
+            sourceSessionId: meta.sourceSessionId,
+            sourceRunId: meta.sourceRunId,
+            delegationRelation: meta.delegationRelation,
+            delegationPlacement: meta.delegationPlacement,
             pinned: meta.pinned ?? false,
             archived: meta.archived ?? false,
             draft: meta.draft ?? false,
@@ -1247,7 +1187,7 @@ export async function handleRemoteCommand(
             updatedAt: meta.updatedAt,
             active: isAgentSessionActive(id),
           },
-          messages: sdkMessagesToViewMessages(messages as unknown as Array<Record<string, unknown>>),
+          messages: projectSdkMessagesToPocketView(getAgentSessionSDKMessages(id)),
         },
       }
     }
@@ -1764,6 +1704,10 @@ export async function handleRemoteCommand(
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       const current = listAgentSessions(true).find((s) => s.id === sessionId)
       if (!current) return { ok: false, error: `Agent 会话不存在: ${sessionId}` }
+      // 子会话不允许单独置顶：位置由母会话决定，与桌面 TOGGLE_PIN 同口径。
+      if (current.parentSessionId || current.explorationParentSessionId) {
+        return { ok: false, error: '子会话不支持置顶' }
+      }
       const newPinned = !current.pinned
       const updates: { pinned: boolean; archived?: boolean } = { pinned: newPinned }
       if (newPinned && current.archived) updates.archived = false

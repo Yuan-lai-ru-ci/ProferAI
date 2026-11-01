@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { createAgentRunContext } from '@profer/agent-runtime'
 import type {
   AgentRuntimeEvent,
   BackgroundTaskPort,
@@ -228,6 +230,8 @@ export function createElectronCredentialPort(): CredentialPort {
  * 与策略快照同一模式：入口写、`load()` 按 sessionId 读、run 结束清理。
  */
 export interface AgentRuntimeRunFacts {
+  /** Ledger 准入后写入的真实业务 Run；query 构造阶段不生成。 */
+  sourceRunId?: string
   triggeredBy?: AgentPresetOperationSource
   userMessage?: string
   /**
@@ -340,10 +344,10 @@ export async function loadBuiltinMcpResources(
     ...(meta?.workspaceId ? { workspaceId: meta.workspaceId } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
     runtime: meta?.agentRuntime ?? 'claude',
+    ...(facts.sourceRunId ? { sourceRunId: facts.sourceRunId } : {}),
     triggeredBy: presetOperationSource,
-    // 旧链把 `input.permissionModeOverride` 透传给 collaboration 上下文；这里从同一份运行事实读，
-    // 避免「新路径少了这个字段」被当成无条件允许。
-    ...(facts.permissionModeOverride ? { permissionModeOverride: facts.permissionModeOverride } : {}),
+    // 委派继承本轮冻结的有效权限模式，下一轮的预设修改不影响当前输入。
+    permissionModeOverride: snapshot.policy.permissionMode,
     ...(snapshot.policy.disabledTools ? { disabledTools: [...snapshot.policy.disabledTools] } : {}),
     preset: {
       source: presetOperationSource,
@@ -803,14 +807,20 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
     ? undefined
     : {
         type: 'user' as const,
-        message: { content: [{ type: 'text' as const, text: input.userMessage }] },
+        message: { content: [{ type: 'text' as const, text: input.rawUserMessage ?? input.userMessage }] },
         parent_tool_use_id: null,
         ...(input.uuid ? { uuid: input.uuid } : {}),
+        ...(input.taskReturnReferences?.length ? { _taskReturnReferences: input.taskReturnReferences.map(reference => ({ ...reference })) } : {}),
         ...(input.triggeredBy === 'goal' ? { _goalIteration: input.goalIteration ?? true } : {}),
         _createdAt: Date.now(),
       } as unknown as import('@profer/shared').SDKMessage
   return {
     sessionId: input.sessionId,
+    context: createAgentRunContext(input, randomUUID),
+    ...(input.taskId ? { taskId: input.taskId } : {}),
+    onRunAdmitted: admitted => {
+      mergeAgentRuntimeRunFacts(admitted.sessionId, { sourceRunId: admitted.runId })
+    },
     prompt,
     runtime: options.runtime,
     channelId: input.channelId,
@@ -863,6 +873,42 @@ export function createElectronAgentHost(options: ElectronAgentHostOptions = {}):
       ? createElectronToolAssemblyPort(options.toolAssemblyBuild, { productCapabilities })
       : undefined)
   const permissions = createElectronPermissionPort(options.permission)
+  const preparationPorts = { credentials, resources, permissions, events, toolAssembly }
+  const defaultPreparation = createElectronQueryPreparationPort(preparationPorts)
+  const queryPreparation: NonNullable<AgentRuntimePorts['queryPreparation']> = options.queryPreparation ?? {
+    prepare(input, signal) {
+      const lifecycle = input.runLifecycle
+      if (!lifecycle || !permissions.createCanUseTool) return defaultPreparation.prepare(input, signal)
+      const scopedPermissions: PermissionPort = {
+        ...permissions,
+        createCanUseTool: config => async (toolName, toolInput, toolOptions) => {
+          const requests = new Set<string>()
+          const waiting = (requestId: string) => {
+            lifecycle.wait(requestId)
+            requests.add(requestId)
+          }
+          const callback = permissions.createCanUseTool!({
+            ...config,
+            sendPermissionRequest: request => {
+              waiting(request.requestId)
+              config.sendPermissionRequest(request)
+            },
+            sendAskUserRequest: request => {
+              waiting(request.requestId)
+              config.sendAskUserRequest?.(request)
+            },
+          })
+          try {
+            return await callback(toolName, toolInput, toolOptions)
+          } finally {
+            // abort 表示运行正在停止；不把取消审批伪造为继续执行。
+            if (!toolOptions.signal.aborted) for (const id of requests) lifecycle.resume(id)
+          }
+        },
+      }
+      return createElectronQueryPreparationPort({ ...preparationPorts, permissions: scopedPermissions }).prepare(input, signal)
+    },
+  }
   return {
     sessions,
     sessionStore,
@@ -882,13 +928,7 @@ export function createElectronAgentHost(options: ElectronAgentHostOptions = {}):
       ...(options.files ? { files: options.files } : {}),
       processLifecycle: options.processLifecycle,
       processRegistration: options.processRegistration ?? createElectronProcessRegistrationPort(),
-      queryPreparation: options.queryPreparation ?? createElectronQueryPreparationPort({
-        credentials,
-        resources,
-        permissions,
-        events,
-        toolAssembly,
-      }),
+      queryPreparation,
       providerQueryPreparation: options.providerQueryPreparation ?? createElectronProviderQueryPreparation(),
     },
   }

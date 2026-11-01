@@ -5,10 +5,13 @@
  * 同时兼容旧 AgentMessage 与新 SDKMessage 两种历史格式。
  */
 import type { AgentMessageSearchResult } from '@profer/shared'
+import { getMessageAuthor, readMessageProvenance } from '@profer/shared'
 
 export interface AgentJsonlMatch {
   messageId: string
   role: AgentMessageSearchResult['role']
+  author?: AgentMessageSearchResult['author']
+  provenance?: AgentMessageSearchResult['provenance']
   snippet: string
   matchStart: number
 }
@@ -17,16 +20,23 @@ export interface AgentJsonlMatch {
 export function extractTextFromPersistedMessage(parsed: unknown): string {
   if (!parsed || typeof parsed !== 'object') return ''
   const record = parsed as {
+    type?: string
+    subtype?: string
     content?: unknown
-    message?: { content?: Array<{ type: string; text?: string }> }
+    message?: string | { content?: Array<{ type: string; text?: string }> }
   }
 
   if (typeof record.content === 'string') {
     return record.content
   }
 
-  if (Array.isArray(record.message?.content)) {
-    return record.message.content
+  if (record.type === 'system' && record.subtype === 'task_trigger' && typeof record.message === 'string') {
+    return record.message
+  }
+
+  if (Array.isArray(typeof record.message === 'object' ? record.message?.content : undefined)) {
+    const content = (record.message as { content: Array<{ type: string; text?: string }> }).content
+    return content
       .filter((b) => b.type === 'text' && b.text)
       .map((b) => b.text!)
       .join('\n')
@@ -54,10 +64,13 @@ export function matchAgentJsonlLine(line: string, queryLower: string, queryLengt
 
   let parsed: {
     role?: string
+    type?: string
+    subtype?: string
     id?: string
     uuid?: string
     content?: unknown
-    message?: { role?: string; id?: string; content?: Array<{ type: string; text?: string }> }
+    _provenance?: unknown
+    message?: string | { role?: string; id?: string; content?: Array<{ type: string; text?: string }> }
   }
   try {
     parsed = JSON.parse(line)
@@ -65,23 +78,24 @@ export function matchAgentJsonlLine(line: string, queryLower: string, queryLengt
     return null
   }
 
-  const rawRole = parsed.role ?? parsed.message?.role ?? 'assistant'
+  if (!parsed || typeof parsed !== 'object') return null
+  const innerMessage = typeof parsed.message === 'object' ? parsed.message : undefined
+  const protocolRole = parsed.type === 'user' || parsed.type === 'assistant'
+    ? parsed.type
+    : parsed.type === 'tool_progress' || parsed.type === 'tool_use_summary'
+      ? 'tool'
+      : parsed.type === 'system' || parsed.type === 'result' || parsed.type === 'prompt_suggestion'
+        ? 'status'
+        : undefined
+  const rawRole = protocolRole ?? parsed.role ?? innerMessage?.role ?? 'assistant'
   // 收窄到 AgentMessageSearchResult.role 允许的联合类型；不在白名单的退化为 assistant
   const role: AgentMessageSearchResult['role'] =
     rawRole === 'user' || rawRole === 'assistant' || rawRole === 'tool' || rawRole === 'status'
       ? rawRole
       : 'assistant'
-  const messageId = parsed.id ?? parsed.uuid ?? parsed.message?.id ?? ''
+  const messageId = parsed.id ?? parsed.uuid ?? innerMessage?.id ?? ''
 
-  let textContent = ''
-  if (typeof parsed.content === 'string') {
-    textContent = parsed.content
-  } else if (Array.isArray(parsed.message?.content)) {
-    textContent = parsed.message.content
-      .filter((b) => b.type === 'text' && b.text)
-      .map((b) => b.text!)
-      .join('\n')
-  }
+  const textContent = extractTextFromPersistedMessage(parsed)
   if (!textContent) return null
 
   const contentLower = textContent.toLowerCase()
@@ -95,5 +109,10 @@ export function matchAgentJsonlLine(line: string, queryLower: string, queryLengt
     (snippetEnd < textContent.length ? '...' : '')
   const matchStart = matchIndex - snippetStart + (snippetStart > 0 ? 3 : 0)
 
-  return { messageId, role, snippet, matchStart }
+  const provenance = readMessageProvenance(parsed._provenance)
+  return {
+    messageId, role, snippet, matchStart,
+    author: getMessageAuthor(parsed._provenance),
+    ...(provenance ? { provenance } : {}),
+  }
 }

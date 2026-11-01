@@ -13,6 +13,8 @@ import { navigationItemKey, type NavigationKeyedItem } from './navigation-item-k
 export interface NavigationTurnItem extends NavigationKeyedItem {
   role: 'user' | 'assistant' | 'status'
   preview: string
+  /** true 时作为独立一轮的起点，避免有内容的状态卡被并入前一轮。 */
+  startsTurn?: boolean
 }
 
 export interface NavigationTurn<T extends NavigationTurnItem = NavigationTurnItem> {
@@ -46,7 +48,7 @@ export function groupNavigationTurns<T extends NavigationTurnItem>(
   const turns: NavigationTurn<T>[] = []
 
   for (const item of items) {
-    if (item.role === 'user' || turns.length === 0) {
+    if (item.role === 'user' || item.startsTurn || turns.length === 0) {
       turns.push({
         key: navigationItemKey(item),
         anchor: item,

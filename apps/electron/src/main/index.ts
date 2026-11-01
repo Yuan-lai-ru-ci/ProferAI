@@ -191,7 +191,7 @@ import { configureGlobalSkillSystem, ensureGlobalSkillSystemReady } from './lib/
 import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
 import { focusSessionWindow, getSessionWindowSummaries, hasOtherVisibleMainWindow, registerMainAppWindow, setMainAppWindowsChangedHandler } from './lib/main-app-windows'
-import { stopAllAgents, killOrphanedClaudeSubprocesses } from './lib/agent-service'
+import { stopAllAgents, killOrphanedClaudeSubprocesses, initializeAgentRunLedger } from './lib/agent-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { disposeLarkCliService } from './lib/lark-cli-service'
 import { disposeLarkMcpService } from './lib/lark-mcp-service'
@@ -541,6 +541,16 @@ function createWindow(): void {
           sourceId,
           line,
           payload: parseDiagnosticPayload(message.slice('[CONVERSATION-SCROLL-DEBUG] '.length)),
+        })
+      }
+
+      // 「一条用户消息两个模型头像」的现场采集：renderer 发现同轮多个助手块时上报，
+      // 无条件落盘（无需 PROFER_DEV_DIAGNOSTICS），便于直接读取真实断组来源。
+      if (message.startsWith('[AGENT-TURN-DEBUG] ')) {
+        appendDevDiagnostic(diagnosticsDir, 'agent-turn-debug.jsonl', {
+          timestamp: new Date().toISOString(),
+          severity,
+          payload: parseDiagnosticPayload(message.slice('[AGENT-TURN-DEBUG] '.length)),
         })
       }
     })
@@ -958,6 +968,7 @@ async function bootstrap(): Promise<void> {
   // 从旧 Proma 数据目录迁移到 Profer（一次性）
   const { migrateFromProferIfNeeded } = require('./lib/config-paths')
   safeRun('migrateFromProfer', migrateFromProferIfNeeded)
+  safeRun('initializeAgentRunLedger', initializeAgentRunLedger)
 
   // Create application menu
   const menu = createApplicationMenu()

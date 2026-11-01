@@ -45,6 +45,9 @@ import { shouldRegenerateFromRetry } from '@/lib/agent-regenerate-anchor'
 import { buildLiveGroupSet, findStreamingTurnGroup, hasAssistantTurnInCurrentTurn } from './live-group-set'
 import { mergeMessagesByUuid } from '@/lib/agent-message-merge'
 import { applyResolvedBlobMessages } from '@/lib/resolved-blob-messages'
+import { orderTranscriptMessages } from '@/lib/agent-transcript-order'
+import { getAgentMessageIdentity } from '@/lib/agent-message-identity'
+import { isTaskSourceInput, projectTaskInputTimeline } from '@/lib/task-input-timeline'
 import { deriveAgentRuntimeDisplay } from '@/domains/agent-runtime/agent-runtime-display-policy'
 import { AgentRuntimeStatus } from './AgentRuntimeStatus'
 import { ContentBlock } from './ContentBlock'
@@ -69,10 +72,9 @@ const stableKeyCache = new WeakMap<object, string>()
 let stableKeyFallbackCounter = 0
 
 function getSDKMessageStableKey(message: SDKMessage): string {
+  const identity = getAgentMessageIdentity(message)
+  if (identity) return identity
   const record = message as Record<string, unknown>
-  if (typeof record.uuid === 'string' && record.uuid.length > 0) {
-    return `${message.type}:uuid:${record.uuid}`
-  }
 
   // 已缓存的消息对象直接返回，保证跨渲染稳定
   if (stableKeyCache.has(message)) {
@@ -652,6 +654,12 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
       : allSDKMessagesMerged,
     [allSDKMessagesMerged, resolvedBlobMessages],
   )
+  // 分组前先归一化：分页 prepend / 实时副本 / 外置覆盖三处拼接都可能让数组乱序或重复，
+  // 而分组只看顺序——乱序会让同一轮被拆成两个模型头像（且头图时间是中间某个时刻）。
+  const orderedSDKMessages = React.useMemo(
+    () => orderTranscriptMessages(allSDKMessages) as SDKMessage[],
+    [allSDKMessages],
+  )
   const hasContent = allSDKMessages.length > 0 || (imageGenerations?.length ?? 0) > 0
 
   // 压缩流程进行中（含收尾窗口：compact_boundary 已到但 result 未到）
@@ -662,8 +670,62 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
 
   // 统一分组：将持久化 + 实时消息合并后再分组，确保 system 消息（如压缩分割线）出现在正确位置
   const allGroups = React.useMemo(() => {
-    return groupIntoTurns(allSDKMessages, sessionModelId)
-  }, [allSDKMessages, sessionModelId])
+    return groupIntoTurns(projectTaskInputTimeline(orderedSDKMessages), sessionModelId)
+  }, [orderedSDKMessages, sessionModelId])
+
+  // 诊断：同一条用户消息后面出现多个助手块时，把中间的分隔组落盘（dev 下由主进程写入
+  // userData/diagnostics/agent-turn-debug.jsonl）。用于定位“一条消息两个模型头像”的真实断组来源，
+  // 生产构建不执行。
+  const turnSplitSignatureRef = React.useRef<string>('')
+  React.useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const anomalies: Array<Record<string, unknown>> = []
+    let turnsInUser = 0
+    let between: Array<Record<string, unknown>> = []
+    for (const group of allGroups) {
+      if (group.type === 'user') {
+        turnsInUser = 0
+        between = []
+        continue
+      }
+      if (group.type === 'system') {
+        between.push({
+          subtype: (group.message as { subtype?: string }).subtype,
+          createdAt: (group.message as { _createdAt?: number })._createdAt,
+          uuid: (group.message as { uuid?: string }).uuid,
+        })
+        continue
+      }
+      turnsInUser += 1
+      if (turnsInUser > 1) {
+        const first = group.assistantMessages[0] as unknown as { uuid?: string; _createdAt?: number } | undefined
+        anomalies.push({
+          boundary: between,
+          model: group.model,
+          createdAt: group.createdAt,
+          startsAfterWake: group.startsAfterWake === true,
+          firstUuid: first?.uuid,
+          firstCreatedAt: first?._createdAt,
+          assistantCount: group.assistantMessages.length,
+        })
+        between = []
+      }
+    }
+    if (anomalies.length === 0) {
+      turnSplitSignatureRef.current = ''
+      return
+    }
+    const signature = JSON.stringify(anomalies)
+    if (signature === turnSplitSignatureRef.current) return
+    turnSplitSignatureRef.current = signature
+    console.warn(`[AGENT-TURN-DEBUG] ${JSON.stringify({
+      sessionId,
+      streaming,
+      liveCount: liveMessages?.length ?? 0,
+      persistedCount: persistedSDKMessages?.length ?? 0,
+      anomalies,
+    })}`)
+  }, [allGroups, sessionId, streaming, liveMessages, persistedSDKMessages])
 
   // 分页模式（服务端懒加载，onLoadEarlierHistory 存在时）：显示全部已加载消息，
   // 触顶/按钮加载更早后 prepend 到头部，用户从上方看到新历史；
@@ -701,8 +763,8 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   // 都对全量 allMessages 做 O(M) 扫描（流式期间 useMemo 因 allMessages 引用变化失效，
   // 长会话会触发 O(T × M) 雪崩）。
   const historicalTaskSubjects = React.useMemo(() => {
-    return buildHistoricalTaskSubjects(allSDKMessages)
-  }, [allSDKMessages])
+    return buildHistoricalTaskSubjects(orderedSDKMessages)
+  }, [orderedSDKMessages])
 
   // 标记哪些 group 属于实时流式消息（用于 isStreaming / onFork 差异化渲染）
   const liveGroupSet = React.useMemo(() => {
@@ -758,8 +820,8 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   }, [sessionId, persistedNavSignature])
 
   const minimapItems: MinimapItem[] = React.useMemo(
-    () => buildNavigationItems(sessionNavEntries, visibleGroups, userProfile.avatar),
-    [sessionNavEntries, visibleGroups, userProfile.avatar],
+    () => buildNavigationItems(sessionNavEntries, visibleGroups, userProfile.avatar, orderedSDKMessages),
+    [sessionNavEntries, visibleGroups, userProfile.avatar, orderedSDKMessages],
   )
 
   // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）
@@ -776,7 +838,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   // 所有用户消息的数据 — 供 StickyUserMessage 使用（Goal 迭代分隔条不是用户发言，不参与）
   const allUserMessagesData = React.useMemo(() => {
     return visibleGroups
-      .filter((g): g is MessageGroup & { type: 'user' } => g.type === 'user' && !isGoalIterationMessage(g.message))
+      .filter((g): g is MessageGroup & { type: 'user' } => g.type === 'user' && !isGoalIterationMessage(g.message) && !isTaskSourceInput(g.message))
       .map((g) => {
         const rawText = extractUserText(g.message) ?? ''
         const { files, text } = sdkParseAttachedFiles(rawText)
@@ -912,6 +974,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
               //（流式/后台任务/子 Agent）时不暴露入口，避免与正在运行的 agent session 冲突。
               const canEditUserMessage = group.type === 'user'
                 && !isGoalIterationMessage(group.message)
+                && !isTaskSourceInput(group.message)
                 && !shouldDisableActions
                 && !isSessionActive
               return (
@@ -919,7 +982,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                   key={getGroupId(group)}
                   sessionId={sessionId}
                   group={group}
-                  allMessages={allSDKMessages}
+                  allMessages={orderedSDKMessages}
                   historicalTaskSubjects={historicalTaskSubjects}
                   basePath={sessionPath || undefined}
                   basePaths={resolvedBasePaths}
@@ -976,7 +1039,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                           <ContentBlock
                             key={index}
                             block={block}
-                            allMessages={allSDKMessages}
+                            allMessages={orderedSDKMessages}
                             basePath={sessionPath || undefined}
                             basePaths={resolvedBasePaths}
                             index={index}

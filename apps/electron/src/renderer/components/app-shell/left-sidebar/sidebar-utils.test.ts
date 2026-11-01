@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 import type { AgentSessionMeta, ConversationMeta } from '@profer/shared'
 import type { TabItem } from '@/atoms/tab-atoms'
@@ -12,6 +13,24 @@ const conversation = (id: string): ConversationMeta => ({
 })
 const tab = (id: string, type: TabItem['type'] = 'agent', sessionId = id): TabItem => ({
   id, type, sessionId, title: id,
+})
+
+describe('ExpandedSidebar — 当前会话区域按设置挂载', () => {
+  test('Given 关闭当前会话显示 When 渲染侧栏 Then 当前会话计算与关闭处理器随子组件卸载', () => {
+    const source = readFileSync(new URL('./expanded-sidebar.tsx', import.meta.url), 'utf8')
+    const sectionStart = source.indexOf('function CurrentSessionSection')
+    const parentStart = source.indexOf('export function ExpandedSidebar')
+    const section = source.slice(sectionStart, parentStart)
+    const parent = source.slice(parentStart)
+
+    expect(sectionStart).toBeGreaterThanOrEqual(0)
+    expect(parentStart).toBeGreaterThan(sectionStart)
+    expect(section).toContain('useCloseTab()')
+    expect(section).toContain('getOpenSessionEntries(')
+    expect(parent).toContain('{showCurrentSessionSection && <CurrentSessionSection s={s} />}')
+    expect(parent).not.toContain('useCloseTab()')
+    expect(parent).not.toContain('getOpenSessionEntries(')
+  })
 })
 
 describe('getOpenSessionEntries — 当前会话列表与计数共用数据', () => {
@@ -82,9 +101,9 @@ describe('sidebarRowClass — 侧栏行视觉契约', () => {
     expect(cls).not.toContain('shadow')
   })
 
-  test('Given 项目内会话 When 生成 Then 增加 26px 缩进且不影响默认行', () => {
-    expect(sidebarRowClass({ depth: 1 })).toContain('pl-[26px]')
-    expect(sidebarRowClass({ depth: 0 })).not.toContain('pl-[26px]')
+  test('Given 项目内会话 When 生成 Then 增加 30px 缩进且不影响默认行', () => {
+    expect(sidebarRowClass({ depth: 1 })).toContain('pl-[30px]')
+    expect(sidebarRowClass({ depth: 0 })).not.toContain('pl-[30px]')
   })
 
   test('Given 项目内会话 When 生成 Then 块左边界缩进 4px 且宽度同步回收', () => {

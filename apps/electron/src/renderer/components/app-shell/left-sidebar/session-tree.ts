@@ -38,6 +38,17 @@ export function isDelegatedChildSession(session: AgentSessionMeta): boolean {
   return !!session.parentSessionId && !!session.sourceDelegationId
 }
 
+/**
+ * 能否参与置顶。
+ *
+ * 子会话（委派 / 探索分支）归并在母会话行下，位置由母会话决定，本身不具备置顶能力；
+ * 历史残留的 `pinned` 字段不能让它单独进置顶区。这里用「有任一父会话字段」的宽判据，
+ * 与 IPC / 投影层保持同口径，避免脏数据（缺 sourceDelegationId）绕过。
+ */
+export function isPinnableSession(session: AgentSessionMeta): boolean {
+  return !session.parentSessionId && !session.explorationParentSessionId
+}
+
 /** 探索分支使用独立血缘字段，不参与委派删除级联。 */
 export function isExplorationChildSession(session: AgentSessionMeta): boolean {
   return !!session.explorationParentSessionId && !!session.explorationSourceMessageId
@@ -57,7 +68,7 @@ export function getRelatedParentSessionId(session: AgentSessionMeta): string | u
  */
 export function sortProjectSessions(sessions: readonly AgentSessionMeta[]): AgentSessionMeta[] {
   return [...sessions].sort((a, b) => {
-    const pinnedDelta = Number(!!b.pinned) - Number(!!a.pinned)
+    const pinnedDelta = Number(!!b.pinned && isPinnableSession(b)) - Number(!!a.pinned && isPinnableSession(a))
     return pinnedDelta !== 0 ? pinnedDelta : b.updatedAt - a.updatedAt
   })
 }
@@ -299,8 +310,8 @@ export function computeProjectSessionVisibility(params: {
     tailAlwaysVisible = PROJECT_SESSION_TAIL_ALWAYS_VISIBLE,
   } = params
 
-  const pinned = treeItems.filter((item) => !!item.session.pinned)
-  const unpinned = treeItems.filter((item) => !item.session.pinned)
+  const pinned = treeItems.filter((item) => !!item.session.pinned && isPinnableSession(item.session))
+  const unpinned = treeItems.filter((item) => !(!!item.session.pinned && isPinnableSession(item.session)))
   const active = unpinned
     .filter((item) => ACTIVE_SESSION_STATUSES.has(getStatus(item)))
     .slice()

@@ -6,6 +6,7 @@
 import { getAgentSessionSDKMessages, getAgentSessionMeta } from './agent-session-manager'
 import { getBundledCliPath, getConfigDirName } from './config-paths'
 import type { SDKMessage, AgentSessionMeta } from '@profer/shared'
+import { readMessageProvenance } from '@profer/shared'
 
 /** 最大回填消息条数 */
 export const MAX_CONTEXT_MESSAGES = 20
@@ -62,7 +63,11 @@ export function buildContextPrompt(sessionId: string, currentUserMessage: string
       const text = textParts.join('\n')
       if (!text) return null
 
-      let line = `[${m.type}]: ${text}`
+      const provenance = readMessageProvenance(m._provenance)
+      const author = provenance?.author
+      const source = provenance?.source
+      const identity = author ? `${author.type}${author.id ? `:${author.id}` : ''}` : 'unknown'
+      let line = `[${m.type}; author=${identity}${source ? `; source=${source.type}:${source.id}` : ''}${provenance ? `; run=${provenance.runId}` : ''}]: ${text}`
       if (m.type === 'assistant') {
         const toolSummary = extractSDKToolSummary(content)
         if (toolSummary) {

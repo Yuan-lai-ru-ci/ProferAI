@@ -9,7 +9,7 @@
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
-import { DELEGATION_GUIDELINES, buildTaskGraphGuideline, buildPlanningTodoGuideline, buildPresetToolList, buildToolUsageGuidelines, buildWebSearchGuideline, buildBrowserGuideline } from './agent-prompt-tools'
+import { COLLABORATION_PLACEMENT_GUIDELINES, DELEGATION_GUIDELINES, buildTaskGraphGuideline, buildPlanningTodoGuideline, buildPresetToolList, buildToolUsageGuidelines, buildWebSearchGuideline, buildBrowserGuideline } from './agent-prompt-tools'
 import { buildCoreAgentPrompt } from './agent-prompt-core'
 import { AGENT_IMAGE_OUTPUT_TEXT_RULE } from './agent-image-output-contract'
 import { AGENT_PRESET_CAPABILITY_GROUPS, isAgentPresetToolGroupDisabled } from '@profer/shared'
@@ -39,6 +39,8 @@ export interface SystemPromptContext {
   claudeAvailable?: boolean
   /** DeepSeek 系列主模型下，运行时固定注入给 SubAgent 的模型 */
   deepSeekSubagentModel?: string
+  /** 本轮实际可用的派工工具短名；宿主已知时传入，避免描述未注册入口。 */
+  collaborationToolNames?: readonly string[]
   /** 当前 runtime 是否为 Pi（影响记忆/文件提示词） */
   isPiRuntime?: boolean
   /** 预设硬禁用的能力组；组内工具与对应 SOP 均不可用。 */
@@ -125,21 +127,28 @@ ${suppress.has('task-graph') || capabilityDisabled('task-graph') ? '' : `${build
 
   // SubAgent 委派策略（Pi 无 SDK 内置 SubAgent，委派走 Profer 协作子会话；极简类预设可隐藏）
   const claudeAvailable = ctx.claudeAvailable !== false
+  const availableDelegationTools = ['delegate_agent', 'delegate_agents'].filter((name) => !capabilityDisabled('collaboration')
+    && !toolDisabled(name)
+    && (ctx.collaborationToolNames === undefined || ctx.collaborationToolNames.includes(name)))
+  const collaborationPlacementGuidance = availableDelegationTools.length > 0
+    ? `\n\n${COLLABORATION_PLACEMENT_GUIDELINES}`
+    : ''
+  const piDelegationToolGuidance = availableDelegationTools.length > 0
+    ? `Pi 会话没有 SDK 内置 SubAgent 工具，委派通过 ${availableDelegationTools.map((name) => `\`mcp__collaboration__${name}\``).join(' / ')} 创建隔离的真实会话。需要结果时使用本轮实际提供的等待或结果查询工具。
+
+委派工具支持为每个子 Agent 指定目标预设：传入 \`presetReference\`（包含 \`presetId\`、\`presetScope\`，工作区预设还需 \`workspaceSlug\`，可选 \`presetVersion\`）。\`workspaceSlug\` 只对 \`presetScope=workspace\` 有效，内置/全局预设不要带。不传时子 Agent 继承当前父会话的稳定预设引用；目标预设必须是当前父会话工作区内可用且未禁用的预设。需要选择预设时直接照抄预设列表返回的 \`presetReference\`，不要自行补字段、猜测或只传裸 ID。`
+    : '当前会话未提供派工工具；直接完成任务。'
   if (!suppress.has('subagents')) {
   if (ctx.isPiRuntime) {
     sections.push(`## SubAgent 委派策略
 
-${DELEGATION_GUIDELINES}
+${DELEGATION_GUIDELINES}${collaborationPlacementGuidance}
 
-Pi 会话没有 SDK 内置 SubAgent 工具，子 Agent 委派通过 Profer 协作子会话完成：用 \`mcp__collaboration__delegate_agent\`（单个）或 \`mcp__collaboration__delegate_agents\`（批量）创建真实可见、可追踪的子会话，再用 \`mcp__collaboration__wait_for_delegations\` / \`mcp__collaboration__get_delegation_results\` 收集结果。
-
-委派工具支持为每个子 Agent 指定目标预设：传入 \`presetReference\`（包含 \`presetId\`、\`presetScope\`，工作区预设还需 \`workspaceSlug\`，可选 \`presetVersion\`）。\`workspaceSlug\` 只对 \`presetScope=workspace\` 有效，内置/全局预设不要带。不传时子 Agent 继承当前父会话的稳定预设引用；目标预设必须是当前父会话工作区内可用且未禁用的预设。需要选择预设时直接照抄预设列表返回的 \`presetReference\`，不要自行补字段、猜测或只传裸 ID。
-
-当前会话未提供 \`mcp__collaboration__\` 工具（预设禁用了协作能力，或会话无工作区）时，不要尝试委派，直接自己完成任务。`)
+${piDelegationToolGuidance}`)
   } else if (ctx.deepSeekSubagentModel === DEEPSEEK_SUBAGENT_MODEL_ID) {
     sections.push(`## SubAgent 委派策略
 
-${DELEGATION_GUIDELINES}
+${DELEGATION_GUIDELINES}${collaborationPlacementGuidance}
 
 Profer 没有预定义内置 SubAgent。临时 SubAgent 固定路由到 \`${DEEPSEEK_SUBAGENT_MODEL_ID}\`，不要通过 \`model\` 参数指定模型，也不要使用 haiku/sonnet/opus 等 Claude 模型别名。
 
@@ -147,13 +156,13 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 固定路由到 \`${DEEP
   } else if (claudeAvailable) {
     sections.push(`## SubAgent 委派策略
 
-${DELEGATION_GUIDELINES}
+${DELEGATION_GUIDELINES}${collaborationPlacementGuidance}
 
 代码审查或简化任务可使用当前实际提供的相应 Skill；未提供时直接审查，不假定 SDK 自带特定 Skill。`)
   } else {
     sections.push(`## SubAgent 委派策略
 
-${DELEGATION_GUIDELINES}
+${DELEGATION_GUIDELINES}${collaborationPlacementGuidance}
 
 Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，不要通过 \`model\` 参数指定 haiku/sonnet/opus 等 Claude 模型别名，否则会导致调用失败。`)
   }

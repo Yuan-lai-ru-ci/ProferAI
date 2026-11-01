@@ -164,7 +164,7 @@ export function sidebarRowClass(options: {
     'group relative flex w-full shrink-0 items-center gap-2 rounded-[7px] px-2 text-[13px] transition-colors duration-100',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
     tall ? 'h-8' : 'h-[28px]',
-    depth === 1 && 'ml-1 w-[calc(100%-0.25rem)] pl-[26px]',
+    depth === 1 && 'ml-1 w-[calc(100%-0.25rem)] pl-[30px]',
     active
       ? tall
         ? 'bg-foreground/[0.09] text-foreground'

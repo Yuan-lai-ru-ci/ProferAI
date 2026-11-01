@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { buildPiTaskPrompt } from './pi-task-prompt'
+import { buildPiTaskPrompt, splitPiTaskPrompt } from './pi-task-prompt'
 
 const BASE_PROMPT = `# Core
 
@@ -53,6 +53,32 @@ const ALL_TOOLS = [
   'open_file_preview',
   'inspect_file_preview',
 ]
+
+describe('splitPiTaskPrompt', () => {
+  test('任务关键词只改变本轮指导，知识治理与基础执行约束留在稳定 system', () => {
+    const turns = ['检查代码。', '打开网页。', '继续检查代码。'].map((userMessage) =>
+      splitPiTaskPrompt({ basePrompt: BASE_PROMPT, userMessage, toolNames: ALL_TOOLS }))
+    expect(turns[1]!.systemPrompt).toBe(turns[0]!.systemPrompt)
+    expect(turns[2]!.systemPrompt).toBe(turns[0]!.systemPrompt)
+    expect(turns[0]!.systemPrompt).toContain('CORE_PI_RULES')
+    expect(turns[0]!.systemPrompt).toContain('DELIVERY_CORE')
+    expect(turns[0]!.systemPrompt).toContain('KNOWLEDGE_GOVERNANCE_RULES')
+    expect(turns[0]!.taskPrompt).toBe('')
+    expect(turns[1]!.taskPrompt).toContain('BROWSER_RULES')
+    expect(turns[1]!.taskPrompt).not.toContain('KNOWLEDGE_GOVERNANCE_RULES')
+    expect(turns[2]!.taskPrompt).toBe('')
+  })
+
+  test('所有任务 SOP 仍遵守原工具门禁', () => {
+    const result = splitPiTaskPrompt({
+      basePrompt: BASE_PROMPT,
+      userMessage: '打开网页并每天自动检查，用子 Agent 并行研究，记住结果并生成图片及 pptx。',
+      toolNames: [], pptCapabilityActive: false,
+    })
+    expect(result.taskPrompt).toBe('')
+    expect(result.systemPrompt).toContain('KNOWLEDGE_GOVERNANCE_RULES')
+  })
+})
 
 describe('buildPiTaskPrompt', () => {
   test('普通本地任务不携带低频产品 SOP，但保留 Pi 核心规则', () => {

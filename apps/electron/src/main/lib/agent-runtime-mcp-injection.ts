@@ -143,6 +143,8 @@ export function planBuiltinMcpServers(input: BuiltinMcpPlanInput): readonly Buil
 /** 本轮注入所需的完整上下文（决定项之外的「构造参数」都在这里）。 */
 export interface BuiltinMcpInjectionContext {
   sessionId: string
+  /** Ledger 准入后注入的业务 Run 引用；不接受任务正文自述。 */
+  sourceRunId?: string
   channelId: string
   modelId?: string
   workspaceId?: string
@@ -351,6 +353,7 @@ export async function buildBuiltinMcpInjectorArgs(
       return [
         {
           sessionId: ctx.sessionId,
+          ...(ctx.sourceRunId ? { sourceRunId: ctx.sourceRunId } : {}),
           channelId: ctx.channelId,
           modelId: ctx.modelId,
           workspaceId: ctx.workspaceId,
@@ -367,6 +370,7 @@ export async function buildBuiltinMcpInjectorArgs(
       return [
         {
           sessionId: ctx.sessionId,
+          ...(ctx.sourceRunId ? { sourceRunId: ctx.sourceRunId } : {}),
           channelId: ctx.channelId,
           modelId: ctx.modelId,
           workspaceId: ctx.workspaceId,

@@ -91,6 +91,8 @@ export function Message({ className, from, ...props }: MessageProps): React.Reac
 interface MessageHeaderProps extends HTMLAttributes<HTMLDivElement> {
   /** 模型名称 */
   model?: string
+  /** 消息作者显示名；仅由可信 provenance 传入。 */
+  author?: string
   /** 头像元素 */
   logo?: ReactNode
   /** 消息时间戳 */
@@ -100,6 +102,7 @@ interface MessageHeaderProps extends HTMLAttributes<HTMLDivElement> {
 /** 消息头部（user 时自动隐藏） */
 export function MessageHeader({
   model,
+  author,
   logo,
   time,
   className,
@@ -121,7 +124,8 @@ export function MessageHeader({
           {logo}
         </div>
       )}
-      <div className="flex flex-col justify-between h-[35px]">
+      <div className={cn('flex flex-col', author ? 'min-h-[35px] h-auto justify-start gap-1' : 'justify-between h-[35px]')}>
+        {author && <span className="message-header-author text-sm font-semibold text-foreground/60 leading-none">{author}</span>}
         {model && <span className="message-header-model text-sm font-semibold text-foreground/60 leading-none">{model}</span>}
         {time && <span className="message-time text-[10px] text-foreground/[0.38] leading-none">{time}</span>}
       </div>

@@ -2,9 +2,9 @@
  * Pi 的按需提示词注入。
  *
  * Pi 不使用 Claude 的 preset，因此完整 Profer prompt 会在每一轮随 Pi systemPrompt
- * 进入模型上下文。这里保留运行安全与交付底线，将低频产品 SOP 仅在用户任务命中且
- * 对应工具实际注册时追加。工具本身始终由 ToolDefinition 暴露，漏判只会少辅助说明，
- * 不会隐藏能力或改变权限。
+ * 进入模型上下文。这里保留运行安全与交付底线，将低频产品 SOP 分离为本轮用户指导，
+ * 仅在用户任务命中且对应工具实际注册时注入。工具本身始终由 ToolDefinition 暴露，
+ * 漏判只会少辅助说明，不会隐藏能力或改变权限。
  */
 
 export interface PiTaskPromptOptions {
@@ -56,13 +56,13 @@ function matches(text: string, pattern: RegExp): boolean {
 }
 
 /**
- * 返回本轮 Pi 实际使用的 system prompt。
+ * 分离稳定 system prompt 与本轮任务指导，避免任务关键词变化改写历史请求前缀。
  *
- * 低频 SOP 从基础 prompt 中取出后按任务恢复，以保持其文案与 Claude 的完整版本一致，
+ * 低频 SOP 从基础 prompt 中取出后按任务选择，以保持其文案与 Claude 的完整版本一致，
  * 不在两个文件里复制长规则。所有 marker 都是本模块控制的稳定 heading；如果以后某段
  * 文案变更导致未找到 marker，函数保守地保留原始 prompt，绝不静默丢失安全指令。
  */
-export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
+export function splitPiTaskPrompt(options: PiTaskPromptOptions): { systemPrompt: string; taskPrompt: string } {
   const tools = new Set(options.toolNames)
   const task = options.userMessage
   const lowFrequency: string[] = []
@@ -92,12 +92,7 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     prompt = teamMemory.rest
   }
 
-  const knowledgeGovernance = removeSection(prompt, '## Profer 知识维护架构', '## 任务完成标准')
-  if (knowledgeGovernance) {
-    prompt = knowledgeGovernance.rest
-    // 知识维护是跨任务的常驻行为约束，不能只在出现“记忆”关键词时注入。
-    lowFrequency.push(knowledgeGovernance.text)
-  }
+  // 「Profer 知识维护架构」是跨任务的常驻约束，原位留在 system，不进入任务指导。
 
   const automation = removeSection(prompt, '7. **定时任务**', '8. **发送既有本地图片**')
   if (automation) {
@@ -135,5 +130,11 @@ export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
     if (needsBrowser) lowFrequency.push(browser.text)
   }
 
-  return lowFrequency.length > 0 ? `${prompt.trim()}\n\n${lowFrequency.join('\n\n')}` : prompt.trim()
+  return { systemPrompt: prompt.trim(), taskPrompt: lowFrequency.join('\n\n') }
+}
+
+/** 兼容需要合并文本的调用方；运行时装配应使用 splitPiTaskPrompt，避免动态 SOP 进入 system。 */
+export function buildPiTaskPrompt(options: PiTaskPromptOptions): string {
+  const { systemPrompt, taskPrompt } = splitPiTaskPrompt(options)
+  return [systemPrompt, taskPrompt].filter(Boolean).join('\n\n')
 }

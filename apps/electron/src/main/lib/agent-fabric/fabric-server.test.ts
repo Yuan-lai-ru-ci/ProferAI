@@ -206,9 +206,9 @@ describe('任务生命周期（Phase 1 验收主路径）', () => {
     const submitBody = await submitRes.json()
     const task = submitBody.payload.task
     expect(task.status).toBe('running')
-    // actor 必须以认证身份为准，payload 伪造不生效
-    expect(executor.started[0]!.task.request.requesterAgentId).toBe('spoofed-attacker')
-    // （requester 是任务内容字段；envelope.actor 已被服务端覆盖为配对身份——见 submit 实现）
+    // actor 与 requester 都以认证身份为准，payload 伪造不生效。
+    expect(executor.started[0]!.task.request.requesterAgentId).toBe('hermes-test')
+    expect(executor.started[0]!.task.request.origin?.actor).toEqual({ type: 'external', id: 'hermes-test' })
 
     // SSE：从 0 订阅，收全生命周期事件直到终态
     const events = await readSseUntilTerminal(task.request.taskId)
