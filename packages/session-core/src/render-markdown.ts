@@ -32,6 +32,10 @@ export function renderTranscriptMarkdown(turns: TranscriptTurn[], opts: RenderMa
       lines.push(HEADING[t.role], '')
       currentRole = t.role
     }
+    if (t.author) {
+      const author = t.author.id ? `${t.author.type} (${t.author.id})` : t.author.type
+      lines.push(`> 来源作者: ${author}`, '')
+    }
     if (t.text) {
       lines.push(t.text, '')
     }

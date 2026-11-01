@@ -1,8 +1,12 @@
+import type { ActorRef, MessageProvenance } from '@profer/shared'
 import type { TranscriptTurn, TurnRole } from './transcript'
+import { getMessageAuthor, projectMessageProvenance } from '@profer/shared'
 
 export interface SearchHit {
   index: number
   role: TurnRole
+  author: ActorRef
+  provenance?: MessageProvenance
   /** 命中处上下文片段。 */
   snippet: string
   /** 该 turn 内匹配次数。 */
@@ -49,7 +53,10 @@ export function searchTurns(turns: TranscriptTurn[], query: string, opts: Search
       haystackRaw.slice(start, end).replace(/\s+/g, ' ').trim() +
       (end < haystackRaw.length ? '…' : '')
 
-    hits.push({ index: t.index, role: t.role, snippet, matchCount })
+    hits.push({ index: t.index, role: t.role, snippet, matchCount,
+      author: t.author ?? getMessageAuthor(undefined),
+      ...(t.provenance ? { provenance: projectMessageProvenance(t.provenance) } : {}),
+    })
     if (limit && hits.length >= limit) break
   }
 

@@ -15,8 +15,26 @@ function jsonl(rows: unknown[]): string {
   return rows.map((r) => JSON.stringify(r)).join('\n')
 }
 
+describe('provenance author retention', () => {
+  test('JSONL read retains provenance through grouping, search, and export projection', () => {
+    const provenance = { schemaVersion: 1, messageId: 'sdk-message-id', author: { type: 'agent', id: 'worker' }, runId: 'run-1', taskId: 'task-1', triggerId: 'trigger-1', source: { type: 'session', id: 'source-session' } }
+    const messages = readSessionMessagesFromString(jsonl([
+      { type: 'user', uuid: 'sdk-message-id', _provenance: provenance, message: { content: [{ type: 'text', text: '交接正文' }] }, parent_tool_use_id: null },
+    ]))
+    expect(messages[0]).toMatchObject({ uuid: 'sdk-message-id', _provenance: provenance })
+    expect(groupIntoTurns(messages)[0]).toMatchObject({ type: 'user', message: { _provenance: provenance } })
+    const turns = toTranscript(groupIntoTurns(messages))
+    expect(turns[0]).toMatchObject({ provenance, author: { type: 'agent', id: 'worker' } })
+    expect(renderTranscriptMarkdown(turns, { header: false })).toContain('来源作者: agent (worker)')
+    expect(searchTurns(turns, '交接正文')[0]).toMatchObject({ author: { type: 'agent', id: 'worker' }, provenance })
+    const legacy = toTranscript(groupIntoTurns(readSessionMessagesFromString(jsonl([
+      { type: 'user', message: { content: [{ type: 'text', text: 'old' }] }, parent_tool_use_id: null },
+    ]))))
+    expect(legacy[0]?.author).toEqual({ type: 'unknown' })
+  })
+})
+
 describe('快照去重（格式 B）', () => {
-  // 同一 assistant 回合的 3 行递增快照，共享 message.id='m1'
   const raw = jsonl([
     { type: 'user', message: { content: [{ type: 'text', text: '读取文件' }] }, parent_tool_use_id: null },
     { type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Hel' }] }, parent_tool_use_id: null },

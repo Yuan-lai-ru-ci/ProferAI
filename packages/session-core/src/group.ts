@@ -88,7 +88,8 @@ export type MessageGroup =
  *
  * 渲染层为了把「已被用户中断」这类提示渲染成独立分隔条，把 interruption_record /
  * skill_routing_notice 也当作断组边界；而本模块的历史默认口径（回溯水位、CLI outline）
- * 只认 compact_boundary / compacting / permission_denied。
+ * 保持 compact_boundary / compacting / permission_denied 的历史口径；task_trigger
+ * 在两端都必须独立成组，保留新 Run 的来源边界。
  *
  * 两者都是既成事实，不能互相覆盖：回溯水位用本模块默认口径（countTurns 合同已写明
  * 必须与主进程 retrospective-service 一致），导航计数用渲染口径。
@@ -100,6 +101,7 @@ const NAVIGATION_BREAKING_SUBTYPES: ReadonlySet<string> = new Set([
   'interruption_record',
   'skill_routing_notice',
   'compact_skipped',
+  'task_trigger',
 ])
 
 /** 历史默认断组集合（回溯水位 / CLI outline 沿用）。 */
@@ -107,6 +109,7 @@ const DEFAULT_BREAKING_SUBTYPES: ReadonlySet<string> = new Set([
   'compact_boundary',
   'compacting',
   'permission_denied',
+  'task_trigger',
 ])
 
 /**
@@ -115,7 +118,7 @@ const DEFAULT_BREAKING_SUBTYPES: ReadonlySet<string> = new Set([
  * 规则：
  * 1. user（真正用户输入）→ 单独的 user group
  * 2. assistant + user(tool_result) + assistant... → 合并为一个 assistant-turn
- * 3. system（compact_boundary / compacting / permission_denied）→ 独立渲染，其他归入当前 turn
+ * 3. system（task_trigger / compact_boundary / compacting / permission_denied）→ 独立渲染，其他归入当前 turn
  * 4. 其他类型（result, tool_progress 等）→ 归入当前 assistant-turn
  * 5. 后处理：合并相邻同模型的 assistant-turn（处理子代理切换模型导致的碎片化）
  *
@@ -188,7 +191,7 @@ export function groupIntoTurns(
       const sysMsg = msg as SDKSystemMessage
       // 仅需要独立渲染的 system 消息才中断 turn；其他 system 消息（如 init、task_started、
       // task_progress）归入当前 turn，不中断分组。集合按 breakingSubtypes 决定（见函数头）。
-      if (sysMsg.subtype && breakingSubtypes.has(sysMsg.subtype)) {
+      if (sysMsg.subtype === 'task_trigger' || (sysMsg.subtype && breakingSubtypes.has(sysMsg.subtype))) {
         flushTurn()
         groups.push({ type: 'system', message: sysMsg })
       } else if (sysMsg.subtype === 'task_notification') {
@@ -279,6 +282,7 @@ function navigationIdentity(group: MessageGroup): {
  */
 function navigationSystemPreview(sysMsg: SDKSystemMessage): string | null {
   switch (sysMsg.subtype) {
+    case 'task_trigger': return (sysMsg.message ?? '任务来源').slice(0, 200)
     case 'compact_boundary': return '上下文已压缩'
     case 'permission_denied': return '自动审批已拒绝操作'
     // `compacting` 只驱动实时状态，渲染层返回 null（不占行）。
@@ -355,7 +359,7 @@ function mergeAdjacentSameModelTurns(groups: MessageGroup[]): MessageGroup[] {
     for (let i = result.length - 1; i >= 0; i--) {
       const prev = result[i]!
       if (prev.type === 'user') break // 真正的用户输入阻断合并
-      if (prev.type === 'system' && ['compact_boundary', 'permission_denied'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
+      if (prev.type === 'system' && ['task_trigger', 'compact_boundary', 'permission_denied'].includes((prev.message as SDKSystemMessage).subtype ?? '')) break
       if (prev.type === 'assistant-turn') {
         if (prev.model === group.model) {
           mergeTargetIdx = i
@@ -418,6 +422,7 @@ export function getGroupPreview(group: MessageGroup): string {
       .slice(0, 200)
   }
   if (group.type === 'system') {
+    if (group.message.subtype === 'task_trigger') return (group.message.message ?? '任务来源').slice(0, 200)
     if (group.message.subtype === 'compact_boundary') return '上下文已压缩'
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'

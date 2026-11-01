@@ -6,8 +6,9 @@
  * （每行共享同一 message.id，是逐步增长的完整快照）。本层按 message.id 取最后一条
  * （最完整）快照来消除「拼接单字 / 重复段落」，这是会话「快照去重」的落地实现。
  */
-import type { SDKAssistantMessage, SDKContentBlock, SDKToolUseBlock } from '@profer/shared'
-import { isGoalIterationMessage } from '@profer/shared'
+import type { ActorRef, MessageProvenance } from '@profer/shared'
+import type { SDKAssistantMessage, SDKContentBlock, SDKMessage, SDKToolUseBlock } from '@profer/shared'
+import { getMessageAuthor, isGoalIterationMessage, readMessageProvenance } from '@profer/shared'
 import { type MessageGroup, extractUserText, getGroupPreview, stripScheduledRunMarker } from './group'
 import { estimateTokens } from './tokens'
 
@@ -27,6 +28,9 @@ export interface TranscriptTurn {
   preview: string
   /** 近似 token 数（正文 + 工具摘要）。 */
   tokens: number
+  /** 产品作者事实；不从 role 推断。 */
+  author?: ActorRef
+  provenance?: MessageProvenance
 }
 
 /** 把工具 input 压缩成可读单行摘要：name key=value …（空值跳过，超 80 字符截断）。 */
@@ -110,6 +114,8 @@ export function toTranscript(groups: MessageGroup[]): TranscriptTurn[] {
           toolSummaries: [],
           preview,
           tokens: estimateTokens(preview),
+          author: getMessageAuthor(group.message._provenance),
+          provenance: readMessageProvenance(group.message._provenance),
         }
       }
       const text = stripScheduledRunMarker(extractUserText(group.message) ?? '')
@@ -124,17 +130,23 @@ export function toTranscript(groups: MessageGroup[]): TranscriptTurn[] {
         toolSummaries: [],
         preview: getGroupPreview(group),
         tokens: estimateTokens(text),
+        author: getMessageAuthor(group.message._provenance),
+        provenance: readMessageProvenance(group.message._provenance),
       }
     }
     if (group.type === 'system') {
       const preview = getGroupPreview(group)
+      const text = group.message.subtype === 'task_trigger' ? group.message.message ?? '任务来源' : preview
       return {
         index,
         role: 'system' as const,
-        text: preview,
+        createdAt: (group.message as SDKMessage & { _createdAt?: number })._createdAt,
+        author: getMessageAuthor(group.message._provenance),
+        provenance: readMessageProvenance(group.message._provenance),
+        text,
         toolSummaries: [],
         preview,
-        tokens: estimateTokens(preview),
+        tokens: estimateTokens(text),
       }
     }
     const { text, toolSummaries } = buildAssistantContent(group.assistantMessages)
@@ -147,6 +159,8 @@ export function toTranscript(groups: MessageGroup[]): TranscriptTurn[] {
       toolSummaries,
       preview: getGroupPreview(group),
       tokens: estimateTokens(text + ' ' + toolSummaries.join(' ')),
+      author: getMessageAuthor(group.assistantMessages.at(-1)?._provenance),
+      provenance: readMessageProvenance(group.assistantMessages.at(-1)?._provenance),
     }
   })
 }
