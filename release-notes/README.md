@@ -14,7 +14,8 @@
 - 文件名必须与 git tag 严格一致：tag `v0.16.0` → `release-notes/v0.16.0.md`。
 - 内容为 Markdown，面向 GitHub Release 正文；首个标题建议 `# Profer vX.Y.Z`。
 - 章节建议：`## 新功能` / `## 修复` / `## 数据保护` / `## 升级提示`（按需取用）。
-- **它是发版流程的活跃输入**：`scripts/push-release.cjs` 在创建 GitHub Release 时读取
+- **它是发版流程的活跃输入**：`scripts/push-release.cjs`（Windows）与
+  `scripts/push-mac-release.cjs`（macOS）在创建 GitHub Release 时都会读取
   `release-notes/<tag>.md` 作为 `--notes-file`；文件不存在时回退为 `--generate-notes`（自动生成）。
 
 因此：新增版本时**必须同步补齐本目录的 `vX.Y.Z.md`**，否则该次发布只能回退到自动生成的简略说明。

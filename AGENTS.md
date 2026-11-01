@@ -552,15 +552,19 @@ bun run generate:icons    # 生成应用图标
 
 **早期实现曾用"无条件 cpSync"绕开 seed 约束**，但每次启动同步 4MB+ 文件会阻塞主进程导致启动卡顿，已恢复为 semver 比较（见 `config-paths.ts:seedDefaultSkills`）。
 
-### 发版流程（本地唯一发布者，2026-08-18 起）
+### 发版流程（本地发布，顺序不固定，2026-08-18 起；2026-10-31 起允许 macOS 先发）
 
-正式 Windows 发版由本地 `scripts/push-release.cjs` 单独完成：构建一次签名 Windows x64 安装包、上传国内更新源、推送源码/tag、创建或补齐 GitHub Release。`release.yml` 改为仅手动触发的构建验证，绝不因 tag 自动构建或写入 GitHub Release，避免双重构建和两个发布者竞争同一 Release。
+正式发版由本地脚本完成，macOS 与 Windows 可以任意顺序执行：先跑的一方负责推送源码/tag、创建并发布 GitHub Release；后跑的一方检测到已发布 Release 后只补充自己的资产，不重复创建。`release.yml` 仅保留手动触发的构建验证，绝不因 tag 自动构建或写入 GitHub Release，避免双重构建和两个发布者竞争同一 Release。
 
-macOS arm64 目前走独立的手动验收流程：先运行 `.github/workflows/macos-package.yml`，成功后可在用户明确确认的前提下，把同一 Actions Artifact 中的 DMG/ZIP 作为测试资产加入对应 GitHub Pre-release。它不进入 Windows 国内更新源。无签名 Windows 测试包若需同步国内源，也只能走明确确认的临时测试流程，不能调用正式 `push-release.cjs`，不能伪造 `latest.yml.sig`：
+- Windows x64：`node scripts/push-release.cjs X.Y.Z`，构建签名安装包、上传国内更新源、创建或补充 Windows 资产。
+- macOS arm64（Apple Silicon）：`node scripts/push-mac-release.cjs X.Y.Z`，构建 ad-hoc 签名包、上传 macOS 更新源、创建或补充 macOS 资产；允许先创建 tag/Release。
+
+两者都要求 tag 与 package.json/CHANGELOG 首条版本一致，已存在的本地/远端 tag 必须指向 HEAD；脚本不 rebase、不强推 tag。`--allow-published-release` 只用于“补充已发布 Release”，不会放宽版本与 tag 一致性。无签名 Windows 测试包若需同步国内源，也只能走明确确认的临时测试流程，不能调用正式 `push-release.cjs`，不能伪造 `latest.yml.sig`。`.github/workflows/macos-package.yml` 仅做手动构建验收，不写入 GitHub Release。
 
 ```bash
 # 1) 先提交 package.json、CHANGELOG.json 和本次客户端代码；工作树必须干净
-# 2) 本地构建一次并发布两个通道（GitHub 登录或 GITHUB_TOKEN 需有效）
+# 2) 任意顺序执行（示例：macOS 先创建 tag/Release，Windows 后补资产）
+node scripts/push-mac-release.cjs X.Y.Z
 node scripts/push-release.cjs X.Y.Z
 # 脚本不 rebase、不强推 tag；远端 main 或同名 tag 不一致会明确失败。
 ```
