@@ -9,11 +9,14 @@
  *       避免运行刚开始就触发 SDK 自动压缩。
  *     · reuse：始终复用同一个子会话（用户主动选择，长期 token 成本由用户承担）
  * - 强制 bypassPermissions，否则无人值守时写操作会因权限弹窗永久阻塞
- * - 来源会话/目标会话忙时跳过本轮，不排队堆积
+ * - 来源会话/目标会话忙时保留持久 queued trigger，下一次 tick 重试，不跳过或改写 occurrence 时间
  * - 连续失败达上限自动暂停
- * - 启动时恢复：已过期的 nextRunAt 顺延到下一个完整间隔，避免重启雪崩触发
+ * - 启动时恢复：queued 保留重试，running 收敛 interrupted；已有共享 Run 先对账，不重放副作用
  */
 
+import type { AgentRun } from '@profer/agent-runtime'
+import type { HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
+import { randomUUID } from 'node:crypto'
 import { BrowserWindow } from 'electron'
 import {
   AUTOMATION_MAX_CONSECUTIVE_FAILURES,
@@ -29,17 +32,25 @@ import {
 import {
   listAutomations,
   getAutomation,
-  appendRun,
+  settleAutomationTrigger,
+  linkAutomationTriggerRun,
   updateAutomation,
-  setNextRunAt,
   setLastSessionId,
   computeNextRunAt,
+  enqueueAutomationTrigger,
+  getPendingAutomationTrigger,
+  getAutomationTrigger,
+  listAutomationTriggers,
+  transitionAutomationTriggerRecord,
+  setNextRunAt,
 } from './automation-manager'
+import { createAutomationTriggerId, buildAutomationDispatchMetadata, validateBoundAutomationChannel, validateBoundAutomationSession, isSettledAutomationTrigger } from './automation-dispatch'
 import { createAgentSession, updateAgentSessionMeta, getAgentSessionMeta } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
+import { getChannelById } from './channel-manager'
 import { resolvePresetId, getDefaultPresetId } from './agent-preset-manager'
 import { getSessionContextUsageRatio } from './agent-session-usage'
-import { runAgentHeadless, runAgentRuntimeHeadless, isAgentSessionActive, peekAgentRunClaimFailureForSession, describeAgentRunRejection } from './agent-service'
+import { runAgentHeadless, runAgentRuntimeHeadless, isAgentSessionActive, peekAgentRunClaimFailureForSession, findAgentRunForTrigger } from './agent-service'
 import { notifyAutomationRunFinished } from './automation-notification-service'
 
 /** tick 周期：每 30s 检查一次到期任务（短轮询，抗休眠漂移） */
@@ -118,20 +129,90 @@ export function broadcastChanged(): void {
  * @param manual 是否手动「立即运行」（手动运行也走同一路径，但不影响调度计时由 appendRun 统一推进）
  */
 export async function runAutomation(automation: Automation, manual = false): Promise<void> {
+  const scheduledAt = manual ? Date.now() : automation.nextRunAt
+  const triggerId = manual
+    ? `${automation.id}:manual:${scheduledAt}:${randomUUID()}`
+    : createAutomationTriggerId(automation.id, scheduledAt)
+  const existingTrigger = manual ? undefined : getPendingAutomationTrigger(automation.id)
+  let trigger = existingTrigger ?? enqueueAutomationTrigger({
+    triggerId,
+    occurrenceId: triggerId,
+    automationId: automation.id,
+    kind: manual ? 'manual' : 'scheduled',
+    scheduledAt,
+    status: 'queued',
+    ...(automation.boundSessionId ? { boundSessionId: automation.boundSessionId } : {}),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+  if (!existingTrigger) broadcastChanged()
   if (runningAutomations.has(automation.id)) {
-    console.log(`[定时任务] ${automation.name} 上一轮尚未结束，跳过本轮`)
-    appendRun(automation.id, {
-      runAt: Date.now(),
-      sessionId: '',
-      status: 'skipped',
-      skipReason: '上一轮尚未结束',
-    })
-    broadcastChanged()
+    console.log(`[定时任务] ${automation.name} 目标仍在运行，保留 queued trigger: ${trigger.triggerId}`)
     return
   }
 
-  runningAutomations.add(automation.id)
+  if (isSettledAutomationTrigger(trigger) || trigger.status === 'cancelled') return
   const runAt = Date.now()
+  let executionStarted = false
+
+  const recordResult = (status: 'success' | 'error', error?: string, sharedRun?: AgentRun, sessionId?: string): void => {
+    const startedAt = sharedRun?.startedAt ?? runAt
+    const run: AutomationRun = {
+      runAt: startedAt,
+      sessionId: sharedRun?.sessionRef ?? sessionId ?? trigger.targetSessionId ?? '',
+      status,
+      durationMs: Math.max(0, (sharedRun?.finishedAt ?? Date.now()) - startedAt),
+      error,
+      triggerId: trigger.triggerId,
+      runId: sharedRun?.id ?? trigger.runId,
+    }
+    const latest = settleAutomationTrigger(trigger.triggerId, run)
+    if (!latest) return
+    broadcastChanged()
+    void notifyAutomationRunFinished({ automation, run }).catch((notifyError) => {
+      console.error(`[定时任务] 发送完成通知失败: ${automation.name}`, notifyError)
+    })
+    if (latest.active && (latest.consecutiveFailures ?? 0) >= AUTOMATION_MAX_CONSECUTIVE_FAILURES) {
+      updateAutomation({ id: automation.id, active: false })
+      broadcastChanged()
+    }
+  }
+  const linkRun = (run: AgentRun): void => {
+    const changed = trigger.runId !== run.id || (run.sessionRef !== undefined && trigger.targetSessionId !== run.sessionRef)
+    trigger = linkAutomationTriggerRun(trigger.triggerId, run.id, run.sessionRef) ?? trigger
+    if (changed) broadcastChanged()
+  }
+  const blockTrigger = (reason: string): void => {
+    trigger = transitionAutomationTriggerRecord(trigger.triggerId, 'blocked', { error: reason }) ?? trigger
+    broadcastChanged()
+  }
+  const reconcileRun = (run: AgentRun): void => {
+    linkRun(run)
+    if (run.status === 'completed' && run.finishedAt !== undefined) {
+      recordResult('success', undefined, run)
+      return
+    }
+    if (run.status === 'failed' || run.status === 'stopped') {
+      recordResult('error', run.failureReason ?? (run.status === 'stopped' ? '共享 Run 已停止' : '共享 Run 执行失败'), run)
+      return
+    }
+    blockTrigger(`共享 Run ${run.id} 状态 ${run.status}，执行终态无法确认；等待对账，不自动重放`)
+  }
+
+  try {
+    const previousRun = findAgentRunForTrigger(trigger.triggerId)
+    if (previousRun) {
+      reconcileRun(previousRun)
+      return
+    }
+    if (trigger.runId || trigger.targetSessionId) {
+      blockTrigger('无法确认此前执行状态：共享 Run 不存在；不自动重放')
+      return
+    }
+  } catch (error) {
+    blockTrigger(`共享 Run 对账失败，不自动重放：${error instanceof Error ? error.message : String(error)}`)
+    return
+  }
 
   try {
     // 根据 sessionMode 决定新建或复用子会话
@@ -169,7 +250,19 @@ export async function runAutomation(automation: Automation, manual = false): Pro
     }
 
     let targetSessionId: string
-    if (reuseSessionId) {
+    if (automation.boundSessionId) {
+      const bound = getAgentSessionMeta(automation.boundSessionId)
+      const workspaceSlug = automation.workspaceId ? getAgentWorkspace(automation.workspaceId)?.slug : undefined
+      const expectedPresetId = automation.presetId?.trim()
+        ? resolvePresetId(workspaceSlug, automation.presetId.trim())
+        : getDefaultPresetId(workspaceSlug)
+      const validation = validateBoundAutomationSession(automation, bound, expectedPresetId)
+      if (!validation.valid) throw new Error(`定时任务目标会话不可用：${validation.reason}`)
+      if (!bound) throw new Error('定时任务目标会话不可用：绑定会话不存在或不可访问')
+      const boundAvailability = validateBoundAutomationChannel(automation, bound, getChannelById(automation.channelId))
+      if (!boundAvailability.valid) throw new Error(`定时任务目标会话不可用：${boundAvailability.reason}`)
+      targetSessionId = automation.boundSessionId
+    } else if (reuseSessionId) {
       targetSessionId = reuseSessionId
     } else {
       // 预设解析：任务指定 → 直接绑定；未指定 → 跟随任务工作区的默认预设（无则 standard）。
@@ -183,6 +276,15 @@ export async function runAutomation(automation: Automation, manual = false): Pro
     }
 
     const targetSessionMeta = getAgentSessionMeta(targetSessionId)
+    if (!targetSessionMeta) throw new Error(`定时任务目标会话不存在：${targetSessionId}`)
+    if (trigger.status === 'blocked') {
+      trigger = transitionAutomationTriggerRecord(trigger.triggerId, 'queued', { error: undefined }) ?? { ...trigger, status: 'queued', error: undefined }
+      broadcastChanged()
+    }
+    if (isAgentSessionActive(targetSessionId)) {
+      console.log(`[定时任务] ${automation.name} 目标会话忙，保留 queued trigger: ${trigger.triggerId}`)
+      return
+    }
     // 复用会话时同步任务预设：用户改了任务 presetId，下一轮消息就按新预设生效
     //（与「会话内切换预设，下一轮消息完整生效」语义一致）。未指定 presetId 时不覆盖会话现状。
     if (reuseSessionId && automation.presetId?.trim()) {
@@ -194,48 +296,61 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       }
     }
 
-    await new Promise<void>((resolveRun) => {
+    await new Promise<void>((resolveRun, rejectRun) => {
       let settled = false
-      const finish = (status: 'success' | 'error', error?: string): void => {
+      let observedError: string | undefined
+      const release = (): void => {
         if (settled) return
         settled = true
-        if (timeoutTimer) clearTimeout(timeoutTimer)
-        const run: AutomationRun = {
-          runAt,
-          sessionId: targetSessionId,
-          status,
-          durationMs: Date.now() - runAt,
-          error,
-        }
-        appendRun(automation.id, run)
-        broadcastChanged()
-        void notifyAutomationRunFinished({ automation, run }).catch((err) => {
-          console.error(`[定时任务] 发送完成通知失败: ${automation.name}`, err)
-        })
-        // 失败退避：连续失败达上限自动暂停
-        const latest = getAutomation(automation.id)
-        if (
-          latest &&
-          latest.active &&
-          (latest.consecutiveFailures ?? 0) >= AUTOMATION_MAX_CONSECUTIVE_FAILURES
-        ) {
-          updateAutomation({ id: automation.id, active: false })
-          console.warn(`[定时任务] ${automation.name} 连续失败 ${latest.consecutiveFailures} 次，已自动暂停`)
-          broadcastChanged()
-        }
+        clearTimeout(timeoutTimer)
         resolveRun()
       }
+      const observeSharedRun = (): AgentRun | undefined => {
+        const run = findAgentRunForTrigger(trigger.triggerId)
+        if (run) linkRun(run)
+        return run
+      }
+      const complete = (fallbackError?: string, runnerFinished = false, rejected = false): void => {
+        if (settled) return
+        try {
+          const sharedRun = observeSharedRun()
+          if (rejected) {
+            recordResult('error', fallbackError ?? observedError ?? 'Agent 执行失败', sharedRun, targetSessionId)
+          } else if (sharedRun?.status === 'completed' && sharedRun.finishedAt !== undefined) {
+            recordResult('success', undefined, sharedRun, targetSessionId)
+          } else if (sharedRun?.status === 'failed' || sharedRun?.status === 'stopped') {
+            recordResult('error', sharedRun.failureReason ?? (sharedRun.status === 'stopped' ? '共享 Run 已停止' : fallbackError ?? observedError ?? '共享 Run 执行失败'), sharedRun, targetSessionId)
+          } else if (!sharedRun && fallbackError) {
+            recordResult('error', fallbackError ?? observedError ?? 'Agent 执行失败', sharedRun, targetSessionId)
+          } else if (runnerFinished || !sharedRun) {
+            blockTrigger(sharedRun
+              ? `共享 Run ${sharedRun.id} 状态 ${sharedRun.status}，执行终态无法确认；不自动重放`
+              : '无法确认真实 Run 终态：共享账本记录不存在；不自动重放')
+          } else {
+            // completion 可能早于账本写回；只等待同一 headless promise，不新派发。
+            return
+          }
+          release()
+        } catch (error) {
+          try {
+            blockTrigger(`共享 Run 终态对账失败，不自动重放：${error instanceof Error ? error.message : String(error)}`)
+            release()
+          } catch (persistError) {
+            clearTimeout(timeoutTimer)
+            settled = true
+            rejectRun(persistError)
+          }
+        }
+      }
 
-      // 超时保护：先终止 Agent 再标记失败，避免遗留进程继续执行
+      // 超时仍先停止真实 Agent；异常收束不伪造共享 ledger 成功。
       const timeoutTimer = setTimeout(async () => {
         try {
           await import('./agent-service').then(m => m.stopAgent(targetSessionId))
-          await new Promise(r => setTimeout(r, 3000))
         } catch (e) {
           console.warn(`[定时任务] ${automation.name} 停止 Agent 异常:`, e)
         }
-        finish('error', `执行超时（超过 ${RUN_TIMEOUT_MS / 3600_000} 小时）`)
-        console.warn(`[定时任务] ${automation.name} 执行超时，强制结束`)
+        complete(`执行超时（超过 ${RUN_TIMEOUT_MS / 3600_000} 小时）`, true, true)
       }, RUN_TIMEOUT_MS)
 
       const headlessInput: AgentSendInput = {
@@ -249,57 +364,63 @@ export async function runAutomation(automation: Automation, manual = false): Pro
         permissionModeOverride: automation.permissionMode ?? 'bypassPermissions',
         triggeredBy: 'automation',
         startedAt: runAt,
+        ...buildAutomationDispatchMetadata({ automation, triggerId: trigger.triggerId }),
       }
-      const callbacks = {
-        source: 'automation' as const,
-        onError: (error: string) => finish('error', error),
-        onComplete: () => finish('success'),
-        onTitleUpdated: () => { /* 子会话标题不需要特殊处理 */ },
+      const callbacks: HeadlessAgentRunCallbacks = {
+        source: 'automation',
+        onError: (error) => { observedError = error },
+        onComplete: (_messages, opts) => {
+          if (settled) return
+          if (opts?.backgroundTasksPending) {
+            try { observeSharedRun() } catch { /* 只关联 runId；轻量完成不承担终态或失败收束。 */ }
+            return
+          }
+          const completionError = opts?.resultErrors?.length ? opts.resultErrors.join('\n')
+            : opts?.stoppedByUser ? 'Agent 已停止'
+              : opts?.resultSubtype && opts.resultSubtype !== 'success' ? observedError ?? `Agent 执行失败：${opts.resultSubtype}`
+                : opts?.endReason && opts.endReason !== 'completed' ? observedError ?? opts.endReasonLabel ?? `Agent 执行结束：${opts.endReason}`
+                  : undefined
+          complete(completionError ?? observedError)
+        },
+        onTitleUpdated: () => { /* 自动任务标题不影响运行终态 */ },
       }
-      // 开关只读一次：既保证「全仓只有本入口读它」的可审计性，也让预检与分支使用同一个值。
+      // 使用当前功能开关路由 Runtime；ownership 预检与路由开关无关。
       const useRuntimeAutomation = process.env.PROFER_RUNTIME_AUTOMATION === '1'
-      // 未取得执行权：按既有 skipped 语义记录，**不**写失败运行、**不**计连续失败。
-      // 预检与 runAgentRuntimeHeadless 之间全是同步语句，互斥由 coordinator 的 claim 最终保证。
-      const automationBlocked = useRuntimeAutomation
-        ? peekAgentRunClaimFailureForSession(targetSessionId, agentRuntime)
-        : undefined
+      // ownership 预检对 legacy orchestrator 与 Runtime coordinator 共用；两条路径都应把 busy 保留为 queued。
+      // 预检与 runAgentHeadless/runAgentRuntimeHeadless 之间没有 await，最终 claim 仍负责互斥。
+      const automationBlocked = peekAgentRunClaimFailureForSession(targetSessionId, agentRuntime)
       if (automationBlocked) {
-        appendRun(automation.id, {
-          runAt,
-          sessionId: targetSessionId,
-          status: 'skipped',
-          skipReason: describeAgentRunRejection(automationBlocked),
-        })
-        broadcastChanged()
+        clearTimeout(timeoutTimer)
         resolveRun()
         return
       }
-      // 新旧两条分支共用同一组 callbacks：终态字段集不再随入口漂移（旧分支也是 onError/onComplete）。
-      // cwd 不再由入口覆写：统一 host/context 按会话级工作目录推导（与旧链同源）。
-      const runtimeRun = useRuntimeAutomation
-        ? runAgentRuntimeHeadless(
-            headlessInput,
-            callbacks,
-          )
-        : runAgentHeadless(headlessInput, callbacks)
-      runtimeRun.catch((err) => {
-        finish('error', err instanceof Error ? err.message : '未知错误')
-      })
+      runningAutomations.add(automation.id)
+      trigger = transitionAutomationTriggerRecord(trigger.triggerId, 'running', { targetSessionId }) ?? trigger
+      broadcastChanged()
+      executionStarted = true
+      try {
+        const runtimeRun = useRuntimeAutomation
+          ? runAgentRuntimeHeadless(headlessInput, callbacks)
+          : runAgentHeadless(headlessInput, callbacks)
+        try { observeSharedRun() } catch { /* 等真实终态或 Promise settle 再执行完整对账。 */ }
+        void runtimeRun.then(
+          () => complete(undefined, true),
+          (error) => complete(error instanceof Error ? error.message : '未知错误', true, true),
+        )
+      } catch (error) {
+        complete(error instanceof Error ? error.message : '未知错误', true, true)
+      }
     })
   } catch (err) {
-    console.error(`[定时任务] ${automation.name} 执行异常:`, err)
-    const run: AutomationRun = {
-      runAt,
-      sessionId: '',
-      status: 'error',
-      durationMs: Date.now() - runAt,
-      error: err instanceof Error ? err.message : '未知错误',
+    const triggerError = err instanceof Error ? err.message : '未知错误'
+    if (!executionStarted && automation.boundSessionId) {
+      blockTrigger(triggerError)
+      return
     }
-    appendRun(automation.id, run)
-    broadcastChanged()
-    void notifyAutomationRunFinished({ automation, run }).catch((notifyError) => {
-      console.error(`[定时任务] 发送异常通知失败: ${automation.name}`, notifyError)
-    })
+    const currentTrigger = getAutomationTrigger(trigger.triggerId)
+    if (currentTrigger && !isSettledAutomationTrigger(currentTrigger) && currentTrigger.status !== 'cancelled') {
+      recordResult('error', triggerError)
+    }
   } finally {
     runningAutomations.delete(automation.id)
   }
@@ -323,13 +444,13 @@ function tick(): void {
     if (!automation.active) continue
     // 完整度兜底：老用户可能存在「active=true 但缺工作区 / 渠道」的历史数据，跳过避免运行时崩溃
     if (!automation.channelId || !automation.workspaceId) continue
-    if (now < automation.nextRunAt) continue
+    const queued = listAutomationTriggers().some((trigger) =>
+      trigger.automationId === automation.id && (trigger.status === 'queued' || trigger.status === 'blocked'),
+    )
+    if (now < automation.nextRunAt && !queued) continue
     if (runningAutomations.has(automation.id)) continue
-    // 来源会话忙时跳过（极端情况下的额外保险，主要靠新建子会话规避）
-    if (automation.sourceSessionId && isAgentSessionActive(automation.sourceSessionId)) {
-      continue
-    }
-    // 不 await，让多个任务可以并行触发；各自有 runningAutomations 重入保护
+    // 不 await，让多个任务可以并行触发；各自有 runningAutomations 重入保护。
+    // 目标会话 busy 时由 runAutomation 留下持久 queued trigger。
     void runAutomation(automation)
   }
 }
@@ -345,10 +466,31 @@ export function startScheduler(): void {
   const now = Date.now()
   for (const automation of listAutomations()) {
     if (automation.active && automation.nextRunAt <= now) {
-      setNextRunAt(automation.id, computeNextRunAt(automation, now))
+      const triggerId = createAutomationTriggerId(automation.id, automation.nextRunAt)
+      const previous = getAutomationTrigger(triggerId)
+      if (previous && isSettledAutomationTrigger(previous)) {
+        if (automation.scheduleType === 'once') {
+          updateAutomation({ id: automation.id, active: false })
+        } else {
+          setNextRunAt(automation.id, computeNextRunAt(automation, now))
+        }
+        continue
+      }
+      enqueueAutomationTrigger({
+        triggerId,
+        occurrenceId: triggerId,
+        automationId: automation.id,
+        scheduledAt: automation.nextRunAt,
+        status: 'queued',
+        ...(automation.boundSessionId ? { boundSessionId: automation.boundSessionId } : {}),
+        createdAt: now,
+        updatedAt: now,
+      })
     }
   }
   tickTimer = setInterval(tick, TICK_INTERVAL_MS)
+  // LIST 的运行态投影也包含启动迁移得到的 interrupted 记录。
+  broadcastChanged()
   console.log(`[定时任务] 调度器已启动，tick 周期 ${TICK_INTERVAL_MS / 1000}s`)
 }
 

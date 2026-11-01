@@ -12,6 +12,7 @@ import {
   type Automation,
   type CreateAutomationInput,
   type UpdateAutomationInput,
+  type AgentSessionMeta,
 } from '@profer/shared'
 import {
   createAutomation,
@@ -22,6 +23,11 @@ import {
 import { runAutomationNow, broadcastChanged as broadcastAutomationsChanged } from './automation-scheduler'
 import { applyRecommendationFeedback, listRecommendations } from './recommendation-manager'
 import { refreshAutomationRecommendations } from './recommendation-engine'
+import { getAgentSessionMeta, listAgentSessions } from './agent-session-manager'
+import { getAgentWorkspace } from './agent-workspace-manager'
+import { getChannelById } from './channel-manager'
+import { resolvePresetId, getDefaultPresetId } from './agent-preset-manager'
+import { validateBoundAutomationChannel, validateBoundAutomationSession, withTrustedAutomationPromptAuthor } from './automation-dispatch'
 
 export function registerAutomationIpc(): void {
 
@@ -100,7 +106,37 @@ export function registerAutomationIpc(): void {
     if (i.sessionMode !== undefined && i.sessionMode !== 'daily' && i.sessionMode !== 'reuse') {
       throw new Error(`非法的 sessionMode: ${String(i.sessionMode)}`)
     }
+    if (i.boundSessionId !== undefined && (typeof i.boundSessionId !== 'string' || i.boundSessionId.length > 200)) {
+      throw new Error('boundSessionId 必须是有效的会话 ID 字符串')
+    }
     validateAutomationNotificationTargets(i.notificationTargets)
+  }
+
+  const validateBoundSession = (input: Partial<CreateAutomationInput | UpdateAutomationInput>, existing?: Automation): void => {
+    const requested = input.boundSessionId !== undefined
+      ? (input.boundSessionId || undefined)
+      : (input as CreateAutomationInput).boundSessionId ?? existing?.boundSessionId
+    if (!requested) return
+    const workspaceId = input.workspaceId !== undefined ? (input.workspaceId || undefined) : existing?.workspaceId
+    const channelId = input.channelId ?? existing?.channelId
+    if (!workspaceId || !channelId) throw new Error('绑定目标会话前必须配置工作区与渠道')
+    const automation = {
+      workspaceId,
+      channelId,
+      agentRuntime: input.agentRuntime ?? existing?.agentRuntime ?? 'claude',
+      presetId: input.presetId !== undefined ? (input.presetId || undefined) : existing?.presetId,
+    }
+    const session: AgentSessionMeta | undefined = getAgentSessionMeta(requested)
+    if (!session) throw new Error('目标会话绑定无效：绑定会话不存在或不可访问')
+    const workspaceSlug = getAgentWorkspace(workspaceId)?.slug
+    const expectedPresetId = automation.presetId
+      ? resolvePresetId(workspaceSlug, automation.presetId)
+      : getDefaultPresetId(workspaceSlug)
+    const result = validateBoundAutomationSession(automation, session, expectedPresetId)
+    if (!result.valid) throw new Error(`目标会话绑定无效：${result.reason}`)
+    const channel = getChannelById(channelId)
+    const availability = validateBoundAutomationChannel({ ...automation, modelId: input.modelId ?? existing?.modelId }, session, channel)
+    if (!availability.valid) throw new Error(`目标会话绑定无效：${availability.reason}`)
   }
 
   ipcMain.handle(RECOMMENDATION_IPC_CHANNELS.LIST, async () => listRecommendations())
@@ -128,11 +164,12 @@ export function registerAutomationIpc(): void {
       if (!isNonEmptyString(input.prompt)) throw new Error('prompt 必填')
       // channelId / workspaceId 允许为空（草稿态），但此时任务不能被启用
       validateAutomationFields(input)
+      validateBoundSession(input)
       if (input.scheduleType === 'interval' && !isFiniteInt(input.intervalMinutes)) throw new Error('scheduleType=interval 时 intervalMinutes 必填')
       if ((input.scheduleType === 'daily' || input.scheduleType === 'weekly' || input.scheduleType === 'monthly') && !validTimeOfDayArr(input.timeOfDay)) throw new Error('scheduleType=daily/weekly/monthly 时 timeOfDay 必填（支持数组）')
       if (input.scheduleType === 'weekly' && !validDayOfWeekArr(input.dayOfWeek)) throw new Error('scheduleType=weekly 时 dayOfWeek 必填（支持数组）')
       if (input.scheduleType === 'monthly' && !validDayOfMonthArr(input.dayOfMonth)) throw new Error('scheduleType=monthly 时 dayOfMonth 必填（支持数组）')
-      const a = createAutomation(input)
+      const a = createAutomation(withTrustedAutomationPromptAuthor(input, { type: 'user' }))
       broadcastAutomationsChanged()
       return a
     }
@@ -146,7 +183,18 @@ export function registerAutomationIpc(): void {
       if (input.name !== undefined && !isNonBlankString(input.name)) throw new Error('name 不能为空')
       if (input.prompt !== undefined && !isNonBlankString(input.prompt)) throw new Error('prompt 不能为空')
       validateAutomationFields(input)
-      const a = updateAutomation(input)
+      const existing = listAutomations().find((automation) => automation.id === input.id)
+      const normalizeOptional = (value: string | undefined): string | undefined => value?.trim() || undefined
+      const routeChanged = !!existing && (
+        (input.boundSessionId !== undefined && normalizeOptional(input.boundSessionId) !== existing.boundSessionId)
+        || (input.workspaceId !== undefined && normalizeOptional(input.workspaceId) !== existing.workspaceId)
+        || (input.channelId !== undefined && input.channelId !== existing.channelId)
+        || (input.agentRuntime !== undefined && input.agentRuntime !== existing.agentRuntime)
+        || (input.presetId !== undefined && normalizeOptional(input.presetId) !== existing.presetId)
+        || (input.modelId !== undefined && input.modelId !== existing.modelId)
+      )
+      if (routeChanged) validateBoundSession(input, existing)
+      const a = updateAutomation(withTrustedAutomationPromptAuthor(input, { type: 'user' }))
       broadcastAutomationsChanged()
       return a
     }

@@ -9,6 +9,7 @@
  */
 
 import * as React from 'react'
+import { AutomationPendingTriggers } from './AutomationPendingTriggers'
 import * as automationApi from '@/domains/automation/automation-api'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
@@ -160,6 +161,7 @@ export function AutomationFormView(): React.ReactElement | null {
   const openSession = useOpenSession()
 
   const [form, setForm] = React.useState<AutomationDraft | null>(null)
+  const [bindToSession, setBindToSession] = React.useState(false)
 
   // 任务已绑定的工作区可能已被收纳：选项里必须保留它，
   // 否则 Select 会因缺少对应 value 而显示空白，用户看不清任务归属。
@@ -195,6 +197,7 @@ export function AutomationFormView(): React.ReactElement | null {
   React.useEffect(() => {
     if (formState.open && formState.draft) {
       setForm({ ...formState.draft })
+      setBindToSession(Boolean(formState.draft.boundSessionId))
       lastSavedSignatureRef.current = formState.draft.id && canPersistDraft(formState.draft)
         ? getDraftSignature(formState.draft)
         : ''
@@ -202,6 +205,13 @@ export function AutomationFormView(): React.ReactElement | null {
       setLastSavedAt(null)
     }
   }, [formState.open, formState.draft])
+
+  React.useEffect(() => {
+    if (!formState.open) return
+    automationApi.listAgentSessions(true)
+      .then(setAgentSessions)
+      .catch((err: unknown) => console.error('[定时任务] 获取目标会话失败:', err))
+  }, [formState.open, setAgentSessions])
 
   // 新建模式下若 workspaceId 为空，按优先级填入默认值：
   // 1. 当前 Agent 模式选中的工作区（≈ 当前会话所在工作区）
@@ -414,7 +424,7 @@ export function AutomationFormView(): React.ReactElement | null {
 
     setRunningNow(true)
     toast.success('已开始运行定时任务', {
-      description: '本次任务会创建新的 Agent 会话，可在左侧会话列表查看',
+      description: latest.boundSessionId ? '任务将在指定会话中执行，忙碌时会排队。' : '本次任务会创建新的 Agent 会话，可在左侧会话列表查看',
     })
     try {
       const automationId = await persistDraft(latest)
@@ -431,19 +441,19 @@ export function AutomationFormView(): React.ReactElement | null {
     }
   }
 
-  /** 跳到运行历史中的某次子会话，先关掉表单 overlay 再 openSession */
-  const handleOpenRunSession = async (run: AutomationRun): Promise<void> => {
-    if (!run.sessionId) {
+  /** 跳到目标会话，先关掉表单 overlay，再复用现有 openSession。 */
+  const handleOpenTargetSession = async (sessionId: string): Promise<void> => {
+    if (!sessionId) {
       toast.error('这条记录没有可打开的会话')
       return
     }
 
-    let session = agentSessions.find((s) => s.id === run.sessionId)
+    let session = agentSessions.find((s) => s.id === sessionId)
     if (!session) {
       // 运行历史会话可能已归档：拉全量（含归档）查找
       const sessions = await automationApi.listAgentSessions(true)
       setAgentSessions(sessions)
-      session = sessions.find((s) => s.id === run.sessionId)
+      session = sessions.find((s) => s.id === sessionId)
     }
 
     if (!session) {
@@ -485,6 +495,13 @@ export function AutomationFormView(): React.ReactElement | null {
 
   const isEdit = !!form.id
 
+  const compatibleBoundSessions = agentSessions.filter((session) =>
+    session.workspaceId === form.workspaceId
+    && session.channelId === form.channelId
+    && (session.agentRuntime ?? 'claude') === form.agentRuntime
+    && (!form.modelId || session.modelId === form.modelId)
+    && (session.presetId ?? defaultPresetId) === (form.presetId ?? defaultPresetId),
+  )
   const selectedModel = form.channelId && form.modelId
     ? { channelId: form.channelId, modelId: form.modelId }
     : null
@@ -622,7 +639,20 @@ export function AutomationFormView(): React.ReactElement | null {
                   {live?.active ? formatTime(live?.nextRunAt) : '已暂停'}
                 </span>
               </div>
+              {live?.dispatchBlockReason && !live.pendingTriggers?.length && (
+                <div className="mt-1 rounded-md bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-400">
+                  目标会话暂不可用，任务已保留待处理：{live.dispatchBlockReason}
+                </div>
+              )}
             </div>
+          )}
+
+          {isEdit && live && (
+            <AutomationPendingTriggers
+              triggers={live.pendingTriggers}
+              formatTime={formatTime}
+              onOpenSession={(sessionId) => { void handleOpenTargetSession(sessionId) }}
+            />
           )}
 
           {/* 调度模式 */}
@@ -1021,6 +1051,42 @@ export function AutomationFormView(): React.ReactElement | null {
             )}
           </div>
 
+          {/* 指定会话绑定：开启后忙碌/失效只保留排队或失败原因，不静默新建会话 */}
+          <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor="auto-bound-session">在指定会话中执行</Label>
+                <span className="text-xs text-muted-foreground">目标会话忙时排队，不会改投其他会话</span>
+              </div>
+              <Switch
+                id="auto-bound-session"
+                checked={bindToSession}
+                onCheckedChange={(checked) => {
+                  setBindToSession(checked)
+                  update({ bindToSession: checked, boundSessionId: checked ? form.boundSessionId : undefined })
+                }}
+              />
+            </div>
+            {bindToSession && (
+              <Select
+                value={form.boundSessionId ?? ''}
+                onValueChange={(value) => update({ boundSessionId: value })}
+              >
+                <SelectTrigger><SelectValue placeholder="选择目标会话" /></SelectTrigger>
+                <SelectContent>
+                  {compatibleBoundSessions.map((session) => (
+                    <SelectItem key={session.id} value={session.id}>{session.title}</SelectItem>
+                  ))}
+                  {form.boundSessionId && !compatibleBoundSessions.some((session) => session.id === form.boundSessionId) && (
+                    <SelectItem value={form.boundSessionId} disabled>
+                      目标会话不可用或配置不匹配
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
           {/* 预设：决定子会话的岗位能力（提示词段/工具裁剪/推理档位），权限与推理以本任务配置优先 */}
           <div className="flex flex-col gap-2">
             <Label>预设</Label>
@@ -1167,7 +1233,7 @@ export function AutomationFormView(): React.ReactElement | null {
                         <TooltipTrigger asChild>
                           <button
                             type="button"
-                            onClick={() => { void handleOpenRunSession(run) }}
+                            onClick={() => { void handleOpenTargetSession(run.sessionId) }}
                             disabled={!hasSessionId}
                             title={hasSessionId ? undefined : '这条记录没有可打开的会话'}
                             className="flex items-center gap-2 px-1.5 py-1 -mx-1.5 rounded-md text-[11px] text-foreground/60 text-left transition-colors enabled:hover:bg-foreground/[0.04] enabled:hover:text-foreground/80 disabled:cursor-not-allowed disabled:opacity-50"

@@ -27,6 +27,8 @@ export interface AutomationDraft {
   sessionMode: AutomationSessionMode
   notificationTargets?: AutomationNotificationTarget[]
   sourceSessionId?: string
+  boundSessionId?: string
+  bindToSession: boolean
   active: boolean
 }
 
@@ -44,6 +46,7 @@ export function createEmptyDraft(): AutomationDraft {
     agentRuntime: 'claude',
     permissionMode: AUTOMATION_DEFAULT_PERMISSION_MODE,
     sessionMode: AUTOMATION_DEFAULT_SESSION_MODE,
+    bindToSession: false,
     active: true,
   }
 }
@@ -68,6 +71,8 @@ export function automationToDraft(a: Automation): AutomationDraft {
     sessionMode: a.sessionMode ?? AUTOMATION_DEFAULT_SESSION_MODE,
     notificationTargets: a.notificationTargets,
     sourceSessionId: a.sourceSessionId,
+    boundSessionId: a.boundSessionId,
+    bindToSession: Boolean(a.boundSessionId),
     active: a.active,
   }
 }

@@ -37,6 +37,8 @@ function completeDraft(): AutomationDraft {
     workspaceId: 'workspace-1',
     notificationTargets: [createFeishuTarget(binding)],
     sourceSessionId: 'source-1',
+    boundSessionId: 'bound-1',
+    bindToSession: true,
     active: true,
   }
 }
@@ -58,9 +60,26 @@ test('创建和更新 payload 保留字段并 trim 文本', () => {
   expect(draftToCreateInput(draft)).toMatchObject({
     name: '每日检查', prompt: '检查 issue', channelId: 'channel-1', workspaceId: 'workspace-1',
     sourceSessionId: 'source-1', active: true,
+    boundSessionId: 'bound-1',
   })
   expect(draftToCreateInput(draft)).not.toHaveProperty('id')
-  expect(draftToUpdateInput(draft)).toMatchObject({ id: 'automation-1', name: '每日检查', prompt: '检查 issue' })
+  expect(draftToUpdateInput(draft)).toMatchObject({ id: 'automation-1', name: '每日检查', prompt: '检查 issue', boundSessionId: 'bound-1' })
+})
+
+test('指定绑定未选择目标时不能运行，且会提示补全目标会话', () => {
+  const draft = {
+    ...createEmptyDraft(), name: '任务', prompt: '执行', channelId: 'channel', workspaceId: 'workspace',
+    bindToSession: true,
+  }
+  expect(isReadyToRun(draft)).toBe(false)
+  expect(listMissingFields(draft)).toContain('目标会话')
+})
+
+test('boundSessionId 随绑定开关保存或清除，且开关变化进入 signature', () => {
+  const draft = { ...completeDraft(), bindToSession: true, boundSessionId: 'bound-1' }
+  expect(draftToCreateInput(draft).boundSessionId).toBe('bound-1')
+  expect(draftToUpdateInput({ ...draft, bindToSession: false }).boundSessionId).toBe('')
+  expect(getDraftSignature({ ...draft, bindToSession: false })).not.toBe(getDraftSignature(draft))
 })
 
 test('signature 忽略名称和描述两端空格，但保留配置变化', () => {

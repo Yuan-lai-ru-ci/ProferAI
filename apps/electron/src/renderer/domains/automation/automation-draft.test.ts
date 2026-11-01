@@ -31,12 +31,12 @@ test('旧任务缺省配置按原表单规则映射，显式空数组保留', ()
 
 test('Pi、reuse、来源会话和通知配置沿用既有保存字段', () => {
   const draft = automationToDraft({ ...task, agentRuntime: 'pi', modelId: 'model', sessionMode: 'reuse',
-    workspaceId: 'workspace', sourceSessionId: 'source', presetId: 'preset',
+    workspaceId: 'workspace', sourceSessionId: 'source', boundSessionId: 'bound', presetId: 'preset',
     timeOfDay: ['18:00', '09:00'], dayOfWeek: [0, 6], dayOfMonth: [1, 31],
     notificationTargets: [{ type: 'feishu', enabled: false, trigger: 'error', botId: 'bot', chatId: 'chat' }],
   })
   expect(draftToCreateInput(draft)).toMatchObject({
-    agentRuntime: 'pi', sessionMode: 'reuse', modelId: 'model', sourceSessionId: 'source',
+    agentRuntime: 'pi', sessionMode: 'reuse', modelId: 'model', sourceSessionId: 'source', boundSessionId: 'bound',
     presetId: 'preset', workspaceId: 'workspace', timeOfDay: ['18:00', '09:00'], dayOfWeek: [0, 6], dayOfMonth: [1, 31],
     notificationTargets: draft.notificationTargets,
   })
@@ -49,13 +49,21 @@ test('更新的空值显式清除工作区、预设、通知，创建保留缺�
   expect(draftToCreateInput(draft)).toMatchObject({ workspaceId: undefined, presetId: undefined, notificationTargets: undefined })
 })
 
+test('运行态投影通过 LIST 返回，不进入草稿或创建/更新 payload', () => {
+  const projected: Automation = { ...task, pendingTriggers: [{ triggerId: 'slot', scheduledAt: 1, updatedAt: 1, status: 'queued' }] }
+  const draft = automationToDraft(projected)
+  expect(draft).not.toHaveProperty('pendingTriggers')
+  expect(draftToCreateInput(draft)).not.toHaveProperty('pendingTriggers')
+  expect(draftToUpdateInput(draft)).not.toHaveProperty('pendingTriggers')
+})
+
 test('每个已保存配置字段变化都使 signature 失效，防止漏保存', () => {
   const draft = { ...createEmptyDraft(), name: '任务', prompt: '检查' }
   const patches: Array<Partial<typeof draft>> = [
     { id: 'task' }, { name: '新名称' }, { prompt: '新指令' }, { scheduleType: 'weekly' },
     { intervalMinutes: 30 }, { timeOfDay: ['18:00'] }, { dayOfWeek: [0] }, { dayOfMonth: [31] },
     { channelId: 'channel' }, { modelId: 'model' }, { agentRuntime: 'pi' }, { workspaceId: 'workspace' },
-    { presetId: 'preset' }, { sessionMode: 'reuse' }, { active: false },
+    { presetId: 'preset' }, { sessionMode: 'reuse' }, { boundSessionId: 'bound' }, { active: false },
     { notificationTargets: [{ type: 'feishu', enabled: true, trigger: 'always', botId: 'bot', chatId: 'chat' }] },
   ]
   for (const patch of patches) expect(getDraftSignature({ ...draft, ...patch })).not.toBe(getDraftSignature(draft))

@@ -15,7 +15,10 @@ export function canPersistDraft(draft: AutomationDraft): boolean {
 
 /** 任务是否具备运行 / 启用所需的最小完整度（模型 + 工作区） */
 export function isReadyToRun(draft: AutomationDraft): boolean {
-  return canPersistDraft(draft) && !!draft.channelId && !!draft.workspaceId
+  return canPersistDraft(draft)
+    && !!draft.channelId
+    && !!draft.workspaceId
+    && (!draft.bindToSession || !!draft.boundSessionId)
 }
 
 /** 列出当前还缺哪些必填项（用于"运行一次" Tooltip 与关闭时的 toast 提示） */
@@ -25,6 +28,7 @@ export function listMissingFields(draft: AutomationDraft): string[] {
   if (!draft.prompt.trim()) missing.push('任务描述')
   if (!draft.channelId) missing.push('模型')
   if (!draft.workspaceId) missing.push('工作区')
+  if (draft.bindToSession && !draft.boundSessionId) missing.push('目标会话')
   return missing
 }
 
@@ -45,6 +49,8 @@ export function getDraftSignature(draft: AutomationDraft): string {
     permissionMode: draft.permissionMode,
     presetId: draft.presetId ?? '',
     sessionMode: draft.sessionMode,
+    bindToSession: draft.bindToSession,
+    boundSessionId: draft.boundSessionId ?? '',
     notificationTargets: draft.notificationTargets ?? [],
     active: draft.active,
   })
@@ -68,6 +74,7 @@ export function draftToCreateInput(draft: AutomationDraft): CreateAutomationInpu
     sessionMode: draft.sessionMode,
     notificationTargets: draft.notificationTargets,
     sourceSessionId: draft.sourceSessionId,
+    boundSessionId: draft.bindToSession ? draft.boundSessionId : undefined,
     active: draft.active,
   }
 }
@@ -89,6 +96,7 @@ export function draftToUpdateInput(draft: AutomationDraft): UpdateAutomationInpu
     permissionMode: draft.permissionMode,
     presetId: draft.presetId ?? '',
     sessionMode: draft.sessionMode,
+    boundSessionId: draft.bindToSession ? draft.boundSessionId ?? undefined : '',
     notificationTargets: draft.notificationTargets ?? [],
     active: draft.active,
   }

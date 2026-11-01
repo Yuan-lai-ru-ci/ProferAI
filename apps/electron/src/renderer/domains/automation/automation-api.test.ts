@@ -24,6 +24,12 @@ const task: Automation = {
   timeOfDay: ['09:00', '18:00'], dayOfWeek: [0, 3], dayOfMonth: [1],
 }
 
+test('LIST 将宿主派生的待执行投影原样交给 Jotai 刷新调用方', async () => {
+  const snapshot: Automation = { ...task, pendingTriggers: [{ triggerId: 'slot', status: 'blocked', scheduledAt: 1, updatedAt: 2, error: '目标忙', targetSessionId: 'target' }] }
+  installHost({ listAutomations: async () => [snapshot] })
+  expect(await api.listAutomations()).toEqual([snapshot])
+})
+
 test('写入保留完整 payload 与返回快照，更新清除语义不被 facade 丢弃', async () => {
   const writes: unknown[] = []
   installHost({

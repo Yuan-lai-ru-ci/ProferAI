@@ -128,6 +128,8 @@ function summarizeAutomation(a: Automation, includeHistory: boolean): Record<str
     presetId: a.presetId,
     workspaceId: a.workspaceId,
     sourceSessionId: a.sourceSessionId,
+    boundSessionId: a.boundSessionId,
+    dispatchBlockReason: a.dispatchBlockReason,
     lastSessionId: a.lastSessionId,
     createdAt: a.createdAt,
     updatedAt: a.updatedAt,
@@ -183,6 +185,7 @@ function buildAutomationSchemas(z: ZodModule['z']) {
       agentRuntime: agentRuntime.optional().describe('运行该任务的 Agent runtime：claude 或 pi。不传则继承当前会话 runtime'),
       sessionMode: sessionMode.optional().describe('会话模式：daily=同一自然日内的触发复用同一个子会话，跨日新建（默认）；reuse=始终复用同一个子会话（保留长期上下文，token 成本更高）'),
       presetId: z.string().min(1).max(200).optional().describe('运行该任务的 Agent 预设 ID（内置 standard/code/minimal 或任务工作区的自定义预设）。不传则继承当前会话预设；未知 ID 会回退 standard'),
+      boundSessionId: z.string().min(1).max(200).optional().describe('可选的固定目标会话 ID；指定后忙碌时排队，目标失效时不静默换会话'),
     },
     update: {
       id: z.string().optional().describe('定时任务 ID；定时任务自动执行中可省略以更新当前任务'),
@@ -202,6 +205,7 @@ function buildAutomationSchemas(z: ZodModule['z']) {
       agentRuntime: agentRuntime.optional().describe('新的 Agent runtime：claude 或 pi'),
       sessionMode: sessionMode.optional().describe('新的会话模式：daily=同一自然日内复用，跨日新建；reuse=始终复用同一个子会话'),
       presetId: z.string().max(200).optional().describe('新的 Agent 预设 ID（内置或任务工作区的自定义预设）；下次触发生效。传空字符串恢复跟随工作区默认'),
+      boundSessionId: z.string().max(200).optional().describe('新的固定目标会话 ID；传空字符串清除绑定'),
     },
     delete: {
       id: z.string().describe('要删除的定时任务 ID'),
@@ -272,6 +276,8 @@ export async function injectAutomationMcpServer(
             sessionMode: args.sessionMode,
             presetId: args.presetId ?? getAgentSessionMeta(ctx.sessionId)?.presetId,
             sourceSessionId: ctx.sessionId,
+            boundSessionId: args.boundSessionId,
+            promptAuthor: { type: 'agent', id: ctx.sessionId },
             active: args.active ?? true,
           }
           validateScheduleFields(input)
@@ -317,6 +323,8 @@ export async function injectAutomationMcpServer(
             agentRuntime: args.agentRuntime,
             sessionMode: args.sessionMode,
             presetId: args.presetId,
+            boundSessionId: args.boundSessionId,
+            ...(args.prompt !== undefined ? { promptAuthor: { type: 'agent', id: ctx.sessionId } } : {}),
           }
           if (input.name !== undefined) assertNonBlank(input.name, 'name')
           if (input.prompt !== undefined) assertNonBlank(input.prompt, 'prompt')

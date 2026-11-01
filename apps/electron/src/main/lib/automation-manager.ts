@@ -24,16 +24,20 @@ import {
   type AutomationRun,
   type CreateAutomationInput,
   type UpdateAutomationInput,
+  type AutomationTriggerRecord,
+  type AutomationPendingTrigger,
 } from '@profer/shared'
 import { presetReferenceForId, resolvePresetReference } from './agent-preset-manager'
+import { enqueueAutomationTrigger as enqueueTrigger, normalizeAutomationTriggerRecords, transitionAutomationTrigger, validateBoundAutomationChannel, validateBoundAutomationSession } from './automation-dispatch'
 
 /** 索引文件格式 */
 interface AutomationsIndex {
   version: number
   automations: Automation[]
+  triggers?: AutomationTriggerRecord[]
 }
 
-const INDEX_VERSION = 3
+const INDEX_VERSION = 4
 
 /**
  * 把自动任务的预设 ID 解析为引用，并拒绝停用或不存在的预设。
@@ -45,9 +49,26 @@ function presetReferenceForAutomation(workspaceId: string | undefined, presetId:
   // 停用是按工作区判定的：没有工作区上下文时无法确认预设可用，草稿也不能携带未校验的预设引用
   if (!workspaceSlug) throw new Error('指定预设前需要先选择工作区')
   const reference = presetReferenceForId(workspaceSlug, presetId)
-  // 严格解析会对停用（含已解除生效范围）的预设抛错，阻止写入不可运行的引用
   resolvePresetReference(reference, workspaceSlug)
   return reference
+}
+
+function assertValidBoundAutomation(automation: Pick<Automation, 'boundSessionId' | 'workspaceId' | 'channelId' | 'modelId' | 'agentRuntime' | 'presetId'>): void {
+  if (!automation.boundSessionId) return
+  const { getAgentSessionMeta } = require('./agent-session-manager') as typeof import('./agent-session-manager')
+  const { getAgentWorkspace } = require('./agent-workspace-manager') as typeof import('./agent-workspace-manager')
+  const { resolvePresetId, getDefaultPresetId } = require('./agent-preset-manager') as typeof import('./agent-preset-manager')
+  const { getChannelById } = require('./channel-manager') as typeof import('./channel-manager')
+  const session = getAgentSessionMeta(automation.boundSessionId)
+  const workspaceSlug = automation.workspaceId ? getAgentWorkspace(automation.workspaceId)?.slug : undefined
+  const expectedPresetId = automation.presetId
+    ? resolvePresetId(workspaceSlug, automation.presetId)
+    : getDefaultPresetId(workspaceSlug)
+  const result = validateBoundAutomationSession(automation, session, expectedPresetId)
+  if (!result.valid) throw new Error(`目标会话绑定无效：${result.reason}`)
+  const channel = getChannelById(automation.channelId)
+  const availability = validateBoundAutomationChannel(automation, session!, channel)
+  if (!availability.valid) throw new Error(`目标会话绑定无效：${availability.reason}`)
 }
 
 /**
@@ -116,12 +137,12 @@ function readIndex(): AutomationsIndex {
 
   const data = readJsonFileSafe<AutomationsIndex>(getAutomationsPath())
   if (!data) {
-    cachedIndex = { version: INDEX_VERSION, automations: [] }
+    cachedIndex = { version: INDEX_VERSION, automations: [], triggers: [] }
     return cachedIndex
   }
   if (typeof data.version !== 'number') {
     console.warn(`[定时任务] 索引文件缺少有效 version 字段，将忽略其内容`)
-    cachedIndex = { version: INDEX_VERSION, automations: [] }
+    cachedIndex = { version: INDEX_VERSION, automations: [], triggers: [] }
     return cachedIndex
   }
   if (data.version > INDEX_VERSION) {
@@ -139,10 +160,13 @@ function readIndex(): AutomationsIndex {
     return cachedIndex
   }
   if (!Array.isArray(data.automations)) {
-    cachedIndex = { version: INDEX_VERSION, automations: [] }
+    cachedIndex = { version: INDEX_VERSION, automations: [], triggers: [] }
     return cachedIndex
   }
-  const migrated = migrateLegacyFields(data)
+  const needsTriggerMigration = !Array.isArray(data.triggers)
+    || data.triggers.some((trigger) => trigger.status === 'running')
+  data.triggers = normalizeAutomationTriggerRecords(Array.isArray(data.triggers) ? data.triggers : [], Date.now())
+  const migrated = migrateLegacyFields(data) || needsTriggerMigration
   cachedIndex = data
   if (migrated) {
     writeIndex(data)
@@ -301,12 +325,36 @@ function computeNextRunAtMulti(
 
 /** 获取全部定时任务（按 createdAt 升序，保持列表稳定） */
 export function listAutomations(): Automation[] {
-  return readIndex().automations.sort((a, b) => a.createdAt - b.createdAt)
+  const index = readIndex()
+  return index.automations.map((automation) => {
+    const pendingTriggers = Object.freeze((index.triggers ?? [])
+      .filter((trigger) => trigger.automationId === automation.id)
+      .flatMap((trigger): AutomationPendingTrigger[] => {
+        const { status } = trigger
+        if (status !== 'queued' && status !== 'blocked' && status !== 'running' && status !== 'interrupted') return []
+        return [Object.freeze({
+          triggerId: trigger.triggerId,
+          scheduledAt: trigger.scheduledAt,
+          status,
+          boundSessionId: trigger.boundSessionId,
+          targetSessionId: trigger.targetSessionId,
+          runId: trigger.runId,
+          error: trigger.error,
+          updatedAt: trigger.updatedAt,
+        })]
+      })
+      .sort((a, b) => a.scheduledAt - b.scheduledAt || a.triggerId.localeCompare(b.triggerId)))
+    return {
+      ...automation,
+      pendingTriggers,
+      dispatchBlockReason: pendingTriggers.find((trigger) => trigger.status === 'blocked')?.error,
+    }
+  }).sort((a, b) => a.createdAt - b.createdAt)
 }
 
 /** 按 ID 获取单个定时任务 */
 export function getAutomation(id: string): Automation | undefined {
-  return readIndex().automations.find((a) => a.id === id)
+  return listAutomations().find((a) => a.id === id)
 }
 
 /** 任务是否具备运行所需的最小完整度（channelId + workspaceId） */
@@ -387,6 +435,8 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     sessionMode: input.sessionMode,
     notificationTargets: input.notificationTargets,
     sourceSessionId: input.sourceSessionId,
+    boundSessionId: input.boundSessionId?.trim() || undefined,
+    promptAuthor: input.promptAuthor,
     createdAt: now,
     updatedAt: now,
     nextRunAt: computeNextRunAt({
@@ -398,6 +448,7 @@ export function createAutomation(input: CreateAutomationInput): Automation {
     runCount: 0,
     runHistory: [],
   }
+  assertValidBoundAutomation(automation)
 
   index.automations.push(automation)
   writeIndex(index)
@@ -412,6 +463,30 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
   if (!target) return undefined
 
   const now = Date.now()
+  const nextRoute = {
+    workspaceId: input.workspaceId !== undefined ? (input.workspaceId || undefined) : target.workspaceId,
+    channelId: input.channelId ?? target.channelId,
+    modelId: input.modelId ?? target.modelId,
+    agentRuntime: input.agentRuntime ?? target.agentRuntime,
+    presetId: input.presetId !== undefined ? (input.presetId.trim() || undefined) : target.presetId,
+    boundSessionId: input.boundSessionId !== undefined ? (input.boundSessionId.trim() || undefined) : target.boundSessionId,
+  }
+  const routeChanged = nextRoute.workspaceId !== target.workspaceId
+    || nextRoute.channelId !== target.channelId
+    || nextRoute.modelId !== target.modelId
+    || nextRoute.agentRuntime !== target.agentRuntime
+    || nextRoute.presetId !== target.presetId
+    || nextRoute.boundSessionId !== target.boundSessionId
+  if (routeChanged) assertValidBoundAutomation({ ...target, ...nextRoute })
+  if (routeChanged) {
+    index.triggers = (index.triggers ?? []).map((trigger) => {
+      if (trigger.automationId !== target.id || (trigger.status !== 'queued' && trigger.status !== 'blocked')) return trigger
+      const routePatch = { boundSessionId: nextRoute.boundSessionId, error: undefined }
+      return trigger.status === 'blocked'
+        ? transitionAutomationTrigger(trigger, 'queued', now, routePatch)
+        : { ...trigger, ...routePatch, updatedAt: now }
+    })
+  }
   if (input.name !== undefined) target.name = input.name
   if (input.prompt !== undefined) target.prompt = input.prompt
   if (input.agentRuntime !== undefined) target.agentRuntime = input.agentRuntime
@@ -434,6 +509,10 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
   }
   if (input.sessionMode !== undefined) target.sessionMode = input.sessionMode
   if (input.notificationTargets !== undefined) target.notificationTargets = input.notificationTargets
+  if (input.boundSessionId !== undefined) {
+    target.boundSessionId = input.boundSessionId.trim() || undefined
+  }
+  if (input.promptAuthor !== undefined) target.promptAuthor = input.promptAuthor
   if (input.maxRuns !== undefined) applyMaxRunsUpdate(target, input.maxRuns)
 
   // 调度参数变化：重算下次运行时间（从现在起算，避免旧时间戳立即触发）
@@ -452,6 +531,13 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
     (nextDayOfWeek !== undefined && !arraysEqual(nextDayOfWeek, target.dayOfWeek ?? [])) ||
     (nextDayOfMonth !== undefined && !arraysEqual(nextDayOfMonth, target.dayOfMonth ?? [])) ||
     (input.scheduledAt !== undefined && input.scheduledAt !== target.scheduledAt)
+  if (scheduleChanged) {
+    index.triggers = (index.triggers ?? []).map((trigger) =>
+      trigger.automationId === target.id && (trigger.status === 'queued' || trigger.status === 'blocked')
+        ? transitionAutomationTrigger(trigger, 'cancelled', now, { error: '调度配置已变更' })
+        : trigger,
+    )
+  }
   if (input.scheduleType !== undefined) target.scheduleType = input.scheduleType
   if (input.intervalMinutes !== undefined) target.intervalMinutes = input.intervalMinutes
   if (nextTimeOfDay !== undefined) target.timeOfDay = nextTimeOfDay
@@ -464,6 +550,13 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
 
   // 启用状态变化
   if (input.active !== undefined && input.active !== target.active) {
+    if (!input.active) {
+      index.triggers = (index.triggers ?? []).map((trigger) =>
+        trigger.automationId === target.id && (trigger.status === 'queued' || trigger.status === 'blocked')
+          ? transitionAutomationTrigger(trigger, 'failed', now, { error: '定时任务已暂停' })
+          : trigger,
+      )
+    }
     // 启用要求 channelId + workspaceId 齐全，否则拒绝（兜底前端校验，避免空配置任务进入调度）
     if (input.active && !isAutomationRunnable(target)) {
       throw new Error('启用定时任务前必须配置模型与工作区')
@@ -484,10 +577,9 @@ export function updateAutomation(input: UpdateAutomationInput): Automation | und
   if (target.active && !isAutomationRunnable(target)) {
     target.active = false
   }
-
   target.updatedAt = now
   writeIndex(index)
-  return target
+  return getAutomation(target.id) ?? target
 }
 
 /** 删除定时任务 */
@@ -496,13 +588,123 @@ export function deleteAutomation(id: string): boolean {
   const before = index.automations.length
   index.automations = index.automations.filter((a) => a.id !== id)
   if (index.automations.length === before) return false
+  index.triggers = (index.triggers ?? []).filter((trigger) => trigger.automationId !== id)
   writeIndex(index)
   console.log(`[定时任务] 已删除: ${id}`)
   return true
 }
 
-/**
- * 记录一次运行结果并推进下次触发时间
+export function getAutomationTrigger(triggerId: string): AutomationTriggerRecord | undefined {
+  return readIndex().triggers?.find((trigger) => trigger.triggerId === triggerId)
+}
+
+export function listAutomationTriggers(status?: AutomationTriggerRecord['status']): AutomationTriggerRecord[] {
+  const records = readIndex().triggers ?? []
+  return records.filter((record) => status === undefined || record.status === status)
+}
+
+/** 持久化触发去重与首次 occurrence；重复投递返回原记录，不改状态或时间。 */
+export function enqueueAutomationTrigger(record: AutomationTriggerRecord): AutomationTriggerRecord {
+  const index = readIndex()
+  const before = index.triggers ?? []
+  const existing = before.find((trigger) => trigger.triggerId === record.triggerId)
+  if (existing && !(existing.status === 'cancelled' && record.status === 'queued')) return existing
+  const base = existing ? before.filter((trigger) => trigger.triggerId !== record.triggerId) : before
+  index.triggers = enqueueTrigger(base, record, Date.now())
+  writeIndex(index)
+  return index.triggers[index.triggers.length - 1]!
+}
+
+export function transitionAutomationTriggerRecord(
+  triggerId: string,
+  status: AutomationTriggerRecord['status'],
+  patch: Partial<Pick<AutomationTriggerRecord, 'boundSessionId' | 'targetSessionId' | 'runId' | 'error'>> = {},
+): AutomationTriggerRecord | undefined {
+  const index = readIndex()
+  const position = (index.triggers ?? []).findIndex((trigger) => trigger.triggerId === triggerId)
+  if (position < 0) return undefined
+  const next = transitionAutomationTrigger(index.triggers![position]!, status, Date.now(), patch)
+  index.triggers![position] = next
+  writeIndex(index)
+  return next
+}
+
+export function linkAutomationTriggerRun(
+  triggerId: string,
+  runId: string,
+  targetSessionId?: string,
+): AutomationTriggerRecord | undefined {
+  const index = readIndex()
+  const trigger = index.triggers?.find((record) => record.triggerId === triggerId)
+  if (!trigger) return undefined
+  if (trigger.runId && trigger.runId !== runId) throw new Error('同一自动化 trigger 不能关联另一个 Run')
+  if (trigger.runId === runId && (!targetSessionId || trigger.targetSessionId === targetSessionId)) return trigger
+  trigger.runId = runId
+  if (targetSessionId) trigger.targetSessionId = targetSessionId
+  trigger.updatedAt = Date.now()
+  writeIndex(index)
+  return trigger
+}
+
+/** trigger 与运行历史在同一次原子写入中结算；重复终态不重复计数。 */
+export function settleAutomationTrigger(triggerId: string, run: AutomationRun): Automation | undefined {
+  const index = readIndex()
+  const trigger = index.triggers?.find((record) => record.triggerId === triggerId)
+  const target = trigger ? index.automations.find((automation) => automation.id === trigger.automationId) : undefined
+  if (!trigger || !target || !['queued', 'blocked', 'running'].includes(trigger.status)) return undefined
+  if (run.status === 'skipped') throw new Error('自动化 trigger 终态不能使用 skipped')
+  if (trigger.runId && run.runId && trigger.runId !== run.runId) throw new Error('自动化终态 Run 与 trigger 已关联的 Run 不一致')
+  const now = Date.now()
+  const next = transitionAutomationTrigger(trigger, run.status === 'success' ? 'completed' : 'failed', now, {
+    runId: run.runId ?? trigger.runId,
+    targetSessionId: run.sessionId || trigger.targetSessionId,
+    error: run.error,
+  })
+  Object.assign(trigger, next)
+  applyAutomationRun(target, { ...run, triggerId, runId: next.runId }, now)
+  writeIndex(index)
+  return target
+}
+
+/** 当前 automation 的唯一未完成触发；同一 occurrence 重放不会创建第二条。 */
+export function getPendingAutomationTrigger(automationId: string): AutomationTriggerRecord | undefined {
+  return (readIndex().triggers ?? []).find((trigger) =>
+    trigger.automationId === automationId && (trigger.status === 'queued' || trigger.status === 'blocked' || trigger.status === 'running'),
+  )
+}
+
+/** 清除已暂停/删除前仍 queued 的触发；running 保留以便结算。 */
+export function cancelQueuedAutomationTriggers(automationId: string, reason = '定时任务已暂停'): void {
+  const index = readIndex()
+  let changed = false
+  index.triggers = (index.triggers ?? []).map((trigger) => {
+    if (trigger.automationId !== automationId || trigger.status !== 'queued') return trigger
+    changed = true
+    return transitionAutomationTrigger(trigger, 'failed', Date.now(), { error: reason })
+  })
+  if (changed) writeIndex(index)
+}
+
+export function unblockAutomationTriggers(automationId: string): void {
+  const index = readIndex()
+  let changed = false
+  index.triggers = (index.triggers ?? []).map((trigger) => {
+    if (trigger.automationId !== automationId || trigger.status !== 'blocked') return trigger
+    changed = true
+    return transitionAutomationTrigger(trigger, 'queued', Date.now(), { error: undefined })
+  })
+  if (changed) writeIndex(index)
+}
+
+/** 最近 trigger ledger 为独立运行事实，不写入 AutomationRun history。 */
+export function removeAutomationTriggers(automationId: string): void {
+  const index = readIndex()
+  const before = index.triggers ?? []
+  index.triggers = before.filter((trigger) => trigger.automationId !== automationId)
+  if (index.triggers.length !== before.length) writeIndex(index)
+}
+
+/** 记录一次运行结果并推进下次触发时间
  *
  * 由调度器在运行完成/失败/跳过后调用。
  * - 成功/失败：从「现在」起算下次触发时间，并累加 runCount
@@ -516,7 +718,12 @@ export function appendRun(id: string, run: AutomationRun): Automation | undefine
   const target = index.automations.find((a) => a.id === id)
   if (!target) return undefined
 
-  const now = Date.now()
+  applyAutomationRun(target, run, Date.now())
+  writeIndex(index)
+  return target
+}
+
+function applyAutomationRun(target: Automation, run: AutomationRun, now: number): void {
   target.runHistory.unshift(run)
   if (target.runHistory.length > AUTOMATION_MAX_HISTORY) {
     target.runHistory = target.runHistory.slice(0, AUTOMATION_MAX_HISTORY)
@@ -543,8 +750,6 @@ export function appendRun(id: string, run: AutomationRun): Automation | undefine
   }
 
   target.updatedAt = now
-  writeIndex(index)
-  return target
 }
 
 /** 设置 nextRunAt（调度器恢复过期任务时用，避免重启雪崩触发） */
