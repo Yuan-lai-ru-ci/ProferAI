@@ -10,6 +10,7 @@
  */
 
 import type { CapabilityValue } from './capabilities'
+import type { TaskAuthorization, TaskOrigin } from './origin'
 import { ProtocolError, ProtocolErrorCode } from './protocol'
 
 // ===== 状态（迁移规则见 state-machine.ts） =====
@@ -119,6 +120,10 @@ export interface TaskContext {
 }
 
 export interface TaskRequest {
+  /** 旧请求允许缺省；新来源契约使用版本 1。 */
+  schemaVersion?: 1
+  origin?: TaskOrigin
+  authorization?: TaskAuthorization
   taskId: string
   parentTaskId?: string
   rootTaskId: string
@@ -149,6 +154,8 @@ export interface TaskLease {
 /** 任务实体 = 请求 + 生命周期状态 + 租约。 */
 export interface AgentTask {
   request: TaskRequest
+  /** 关联的逻辑执行轮次；Task 不拥有整个 Session 的运行历史。 */
+  runIds?: readonly string[]
   status: TaskStatusValue
   createdAt: number
   updatedAt: number
@@ -157,6 +164,52 @@ export interface AgentTask {
   pendingInputRequestId?: string
   lease?: TaskLease
   failureReason?: string
+}
+
+// ===== 工作目标的只读投影 =====
+
+export type TaskState = 'open' | 'completed' | 'cancelled'
+
+/** 不改变旧协议状态：失败/过期表示一次执行结束，工作目标仍开放。 */
+export function deriveTaskState(task: Pick<AgentTask, 'status'>): TaskState {
+  if (task.status === TaskStatus.COMPLETED) return 'completed'
+  if (task.status === TaskStatus.CANCELLED) return 'cancelled'
+  return 'open'
+}
+
+/** 从唯一可写 AgentTask 派生；不提供第二个 Task 存储或修改入口。 */
+export interface TaskView {
+  readonly id: string
+  readonly objective: string
+  readonly origin: { readonly actor: Readonly<TaskOrigin['actor']>; readonly source?: Readonly<NonNullable<TaskOrigin['source']>> }
+  readonly authorization?: { readonly kind: TaskAuthorization['kind']; readonly sourceRef?: Readonly<NonNullable<TaskAuthorization['sourceRef']>> }
+  readonly parentTaskId?: string
+  readonly workspaceRef: string
+  readonly state: TaskState
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly runIds?: readonly string[]
+}
+
+export function createTaskView(task: AgentTask): TaskView {
+  const { request } = task
+  return {
+    id: request.taskId,
+    objective: request.objective,
+    origin: request.origin
+      ? { actor: { ...request.origin.actor }, ...(request.origin.source ? { source: { ...request.origin.source } } : {}) }
+      : { actor: { type: 'unknown' } },
+    ...(request.authorization ? { authorization: {
+      kind: request.authorization.kind,
+      ...(request.authorization.sourceRef ? { sourceRef: { ...request.authorization.sourceRef } } : {}),
+    } } : {}),
+    ...(request.parentTaskId ? { parentTaskId: request.parentTaskId } : {}),
+    workspaceRef: request.workspaceId,
+    state: deriveTaskState(task),
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    ...(task.runIds ? { runIds: [...task.runIds] } : {}),
+  }
 }
 
 // ===== 校验 =====
@@ -194,6 +247,9 @@ function scanForForbiddenKeys(value: unknown, path: string, hits: string[]): voi
 
 /** 校验任务请求结构与边界；不合法抛 ProtocolError。 */
 export function validateTaskRequest(request: TaskRequest): void {
+  if (request.schemaVersion !== undefined && request.schemaVersion !== 1) {
+    throw new ProtocolError(ProtocolErrorCode.VALIDATION_FAILED, `不支持的任务来源版本：${request.schemaVersion}`)
+  }
   if (!request.taskId || request.taskId.trim() === '') {
     throw new ProtocolError(ProtocolErrorCode.VALIDATION_FAILED, 'taskId 不能为空')
   }

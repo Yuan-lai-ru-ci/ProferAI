@@ -5,6 +5,7 @@
  * 只包含类型与纯函数行为，不绑定 Electron / Claude SDK / Pi runtime。
  */
 
+export * from './origin'
 export * from './protocol'
 export * from './capabilities'
 export * from './node'

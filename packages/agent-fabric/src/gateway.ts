@@ -95,8 +95,16 @@ export function createInMemoryTaskStore(): GatewayTaskStore {
 
 // ===== 执行器端口 =====
 
+export interface TaskRunAdmission {
+  runId: string
+  sessionId?: string
+  triggerId?: string
+}
+
 /** 执行器上报通道：实现方（headless runner 等）必须最终 complete 或 fail 一次。 */
 export interface TaskReporter {
+  /** 仅受信 executor 从宿主运行事实报告；不从任务正文或远程 metadata 推断。 */
+  runAdmitted?(reference: TaskRunAdmission): void
   progress(payload: Record<string, unknown>): void
   artifactCreated(ref: ArtifactRef): void
   complete(result: TaskResult): void
@@ -188,17 +196,30 @@ export class AgentFabricGateway {
    */
   submitTask(envelope: ProtocolEnvelope<TaskRequest>, caller: CallerContext): SubmitTaskOutput {
     validateEnvelope(envelope)
+    if (envelope.actor.agentId !== caller.agentId) {
+      throw new ProtocolError(ProtocolErrorCode.CALLER_NOT_PAIRED, 'envelope.actor 与认证调用方不一致')
+    }
 
     // 1) 跨重启幂等：存储层已有同 requestId 的任务，直接返回。
     const persisted = this.deps.store.findByRequestId(envelope.requestId)
     if (persisted) {
+      const owner = persisted.request.origin?.actor.id ?? persisted.request.requesterAgentId
+      if (owner !== caller.agentId) {
+        throw new ProtocolError(ProtocolErrorCode.CALLER_NOT_PAIRED, 'requestId 已属于其他认证调用方')
+      }
       return { task: persisted, deduplicated: true }
     }
     // 2) 进程内幂等：执行中并发重试 / 已完成重试。
     const cached = this.ledger.begin(envelope.requestId)
     if (cached) {
       const task = this.deps.store.get(cached.result ?? '')
-      if (task) return { task, deduplicated: true }
+      if (task) {
+        const owner = task.request.origin?.actor.id ?? task.request.requesterAgentId
+        if (owner !== caller.agentId) {
+          throw new ProtocolError(ProtocolErrorCode.CALLER_NOT_PAIRED, 'requestId 已属于其他认证调用方')
+        }
+        return { task, deduplicated: true }
+      }
     }
 
     try {
@@ -212,7 +233,15 @@ export class AgentFabricGateway {
   }
 
   private acceptNewTask(envelope: ProtocolEnvelope<TaskRequest>, caller: CallerContext): AgentTask {
-    const request = envelope.payload
+    // 当前 Gateway 是 Agent 认证入口。payload 的用户身份/确认文字不能成为真实来源或授权。
+    const source = { type: 'request', id: envelope.requestId } as const
+    const request: TaskRequest = {
+      ...envelope.payload,
+      schemaVersion: 1,
+      requesterAgentId: caller.agentId,
+      origin: { actor: { type: 'external', id: caller.agentId }, source },
+      authorization: { kind: 'external', sourceRef: source },
+    }
     validateTaskRequest(request)
 
     // 路由：目标只能来自注册表，payload 不允许自带 endpoint。
@@ -300,15 +329,16 @@ export class AgentFabricGateway {
 
     const wasRunning = task.status === TaskStatus.RUNNING
     const node = this.deps.registry.get(task.request.targetAgentId)
-    if (wasRunning && node) {
-      this.deps.resolveExecutor(node)?.cancel(taskId)
-      this.releaseRunning(node.agentId)
-    }
-    this.releaseWriterLease(task)
-
+    // 先封存，再通知 executor；stop 可能同步投递完成/关联回调。
     const cancelled = this.move(task, TaskStatus.CANCELLED, caller.agentId)
     this.deps.store.save(cancelled)
-    this.pump()
+    if (wasRunning && node) this.releaseRunning(node.agentId)
+    this.releaseWriterLease(cancelled)
+    try {
+      if (wasRunning && node) this.deps.resolveExecutor(node)?.cancel(taskId)
+    } finally {
+      this.pump()
+    }
     return cancelled
   }
 
@@ -412,8 +442,7 @@ export class AgentFabricGateway {
     try {
       executor.start({ task: current, reporter })
     } catch (error) {
-      // start 同步抛错视为执行失败。
-      this.finishRunning(current, node)
+      // start 同步抛错视为执行失败，由 reporter 统一释放一次。
       reporter.fail(error instanceof Error ? error.message : String(error))
     }
   }
@@ -422,19 +451,40 @@ export class AgentFabricGateway {
     const taskId = task.request.taskId
     let settled = false
 
-    const settle = (fn: () => void): void => {
-      if (settled) return
+    const liveTask = (): AgentTask | undefined => {
+      const current = this.deps.store.get(taskId)
+      return !settled && current && !isTerminalStatus(current.status) ? current : undefined
+    }
+    const settle = (fn: (current: AgentTask) => void): void => {
+      const current = liveTask()
+      if (!current) return
       settled = true
-      fn()
+      fn(current)
       this.finishRunning(this.requireTask(taskId), node)
       this.pump()
     }
 
     return {
+      runAdmitted: (reference) => {
+        const current = liveTask()
+        if (!current || typeof reference.runId !== 'string' || !reference.runId.trim()
+          || reference.runId.length > 256 || /[\u0000-\u001f\u007f]/.test(reference.runId)
+          || current.runIds?.includes(reference.runId)) return
+        // 在当前权威记录上追加，不能用 executor 启动时的旧快照覆写状态和策略。
+        this.deps.store.save({ ...current, runIds: [...(current.runIds ?? []), reference.runId], updatedAt: this.deps.now() })
+        this.appendEvent(taskId, TaskEventType.PROGRESS, node.agentId, {
+          kind: 'run_admitted',
+          runId: reference.runId,
+          ...(typeof reference.sessionId === 'string' && reference.sessionId.trim() ? { sessionId: reference.sessionId } : {}),
+          ...(typeof reference.triggerId === 'string' && reference.triggerId.trim() ? { triggerId: reference.triggerId } : {}),
+        })
+      },
       progress: (payload) => {
+        if (!liveTask()) return
         this.appendEvent(taskId, TaskEventType.PROGRESS, node.agentId, payload)
       },
       artifactCreated: (ref) => {
+        if (!liveTask()) return
         this.deps.store.saveArtifact(ref)
         this.appendEvent(taskId, TaskEventType.ARTIFACT_CREATED, node.agentId, {
           artifactId: ref.artifactId,
@@ -443,15 +493,15 @@ export class AgentFabricGateway {
         })
       },
       complete: (result) => {
-        settle(() => {
+        settle((task) => {
+          const current = this.move(task, TaskStatus.COMPLETED, node.agentId)
           this.deps.store.saveResult(taskId, result)
-          const current = this.move(this.requireTask(taskId), TaskStatus.COMPLETED, node.agentId)
           this.deps.store.save(current)
         })
       },
       fail: (reason) => {
-        settle(() => {
-          const current = this.move(this.requireTask(taskId), TaskStatus.FAILED, node.agentId, { failureReason: reason })
+        settle((task) => {
+          const current = this.move(task, TaskStatus.FAILED, node.agentId, { failureReason: reason })
           this.deps.store.save(current)
         })
       },

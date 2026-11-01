@@ -63,6 +63,19 @@ describe('session index store', () => {
 })
 
 describe('session message store', () => {
+  test('provenance is retained across append, pagination and reload', async () => {
+    const paths = await setup()
+    const store = createSessionMessageStore(paths)
+    const provenance = { schemaVersion: 1, messageId: 'u1', author: { type: 'agent', id: 'worker' }, runId: 'run-1', taskId: 'task-1', triggerId: 'trigger-1' }
+    await store.append('s1', [{
+      type: 'user', uuid: 'sdk-u1', _provenance: provenance,
+      message: { content: [{ type: 'text', text: 'handoff' }] },
+    } as never])
+    const page = await store.readPage('s1', { tail: 1 })
+    expect(page.messages[0]).toMatchObject({ uuid: 'sdk-u1', _provenance: provenance })
+    expect((await store.read('s1'))[0]).toMatchObject({ uuid: 'sdk-u1', _provenance: provenance })
+  })
+
   test('appends, pages, replaces and clears JSONL while tolerating malformed lines', async () => {
     const paths = await setup()
     const store = createSessionMessageStore(paths)

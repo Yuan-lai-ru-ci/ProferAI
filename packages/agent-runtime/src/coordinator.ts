@@ -1,3 +1,4 @@
+import type { ActorRef } from '@profer/agent-fabric'
 import type { AgentRuntime, SDKMessage } from '@profer/shared'
 import { AgentSessionRuntimeMismatchError, normalizeAgentRuntime } from '@profer/shared'
 import type { AgentRuntimeEvent, AgentRunOutcome } from './events'
@@ -9,7 +10,24 @@ import type { AgentRunOwnershipRegistry, AgentRunOwnershipToken } from './run-ow
 import { readAgentStreamNext } from './stream-reader'
 import { canRetry, getRetryDelayMs, isRetryableError, waitForRetryDelay } from './retry'
 import type { RetryPolicy } from './retry'
-import type { AgentRuntimeAdapter, AgentRuntimeCallbacks, AgentRuntimePorts, AgentRuntimeQuery } from './contract'
+import type { AgentRuntimeAdapter, AgentRuntimeCallbacks, AgentRuntimePorts, AgentRuntimeQuery, AgentRuntimeRunReference, AgentRuntimeQueuedInput, AgentRuntimeQueuedInputResult } from './contract'
+import { createAgentRunContext, stampRunMessage } from './run-context'
+import { appendRunOriginPrompt, createRunTriggerMessage } from './run-origin-prompt'
+import type { AgentRunLedger, AgentRun, BeginAgentRunInput } from './run-ledger'
+
+/** 保留追加输入、等待审批和恢复的端口；只有真实宿主 hook 才能写入这些状态。 */
+export type AgentRuntimeRunLedgerPort = Pick<AgentRunLedger, 'begin' | 'start' | 'finish' | 'attachInput' | 'wait' | 'resume'>
+
+function ledgerOutcome(run: AgentRun): AgentRunOutcome | undefined {
+  if (run.status === 'completed' || run.status === 'stopped') return { status: run.status }
+  if (run.status === 'failed') return { status: 'failed', error: run.failureReason ?? 'Agent 执行失败' }
+  return undefined
+}
+
+function withRunIdentity(context: unknown, runId: string): unknown {
+  return context && typeof context === 'object' && !Array.isArray(context)
+    ? { ...context, runId, sourceRunId: runId } : context
+}
 
 /** 准备阶段失败的结构化描述；未知错误归入 `unknown` 阶段但仍如实上报。 */
 function preparationFailureFrom(error: unknown, message: string): AgentRuntimePreparationFailure {
@@ -136,6 +154,10 @@ export interface AgentRuntimeCoordinatorOptions {
   ports?: AgentRuntimePorts
   retry?: RetryPolicy & { shouldRetry?: (error: string) => boolean }
   now?: () => number
+  /** 可选持久化生命周期端口；未注入时不创建业务 Run、不改变原回调形状。 */
+  runLedger?: AgentRuntimeRunLedgerPort
+  /** 受信宿主补充执行主体与来源；省略时沿用 query.context/trigger 或已有 initiator 映射。 */
+  createRunContext?: (input: AgentRuntimeQuery) => AgentRuntimeQuery['context']
   /**
    * 共享执行权登记表。宿主把同一个实例同时注入新旧两条执行链即可获得跨引擎互斥；
    * 不注入时 coordinator 自建一份（只在本协调器内互斥，与改造前等价）。
@@ -150,6 +172,7 @@ interface AgentRunControlEntry {
   /** 已经进入停止流程（stop() 已调用、run 尚未 settle）；只影响拒绝文案。 */
   stopping: boolean
   stop(reason: string): Promise<void>
+  queue?(input: AgentRuntimeQueuedInput): Promise<AgentRuntimeQueuedInputResult>
   wait?: Promise<AgentRunOutcome>
 }
 
@@ -195,31 +218,117 @@ export class AgentRuntimeCoordinator {
       return { sessionId: input.sessionId, runtime: input.runtime, promise, stop: async () => {} }
     }
 
-    // 核心独立保证 mismatch 不变量：SessionPort 未提供可选 lockRuntime 时，仍按会话元数据拒绝跨内核请求。
-    // 提供 lockRuntime 时由端口判定（端口自身必须在写盘前抛 mismatch），避免把判定权交给 Electron 包装层。
-    const boundRuntime = session?.getMeta(input.sessionId)?.agentRuntime
-    if (session && !session.lockRuntime && boundRuntime !== undefined && normalizeAgentRuntime(boundRuntime) !== input.runtime) {
-      this.ownership.release(input.sessionId, token)
-      const promise = Promise.reject<AgentRunOutcome>(
-        new AgentSessionRuntimeMismatchError(normalizeAgentRuntime(boundRuntime), input.runtime),
-      )
-      return { sessionId: input.sessionId, runtime: input.runtime, promise, stop: async () => {} }
+    const ledger = this.options.runLedger
+    const existingControl = this.active.get(input.sessionId)
+    if (ledger && claim.adopted && existingControl?.token === token && existingControl.wait) {
+      return { sessionId: input.sessionId, runtime: input.runtime, promise: existingControl.wait, stop: existingControl.stop }
     }
-
+    if (!ledger) {
+      // 兼容既有入口的同步元数据读取与 mismatch 拒绝行为。
+      const boundRuntime = session?.getMeta(input.sessionId)?.agentRuntime
+      if (session && !session.lockRuntime && boundRuntime !== undefined && normalizeAgentRuntime(boundRuntime) !== input.runtime) {
+        this.ownership.release(input.sessionId, token)
+        const promise = Promise.reject<AgentRunOutcome>(
+          new AgentSessionRuntimeMismatchError(normalizeAgentRuntime(boundRuntime), input.runtime),
+        )
+        return { sessionId: input.sessionId, runtime: input.runtime, promise, stop: async () => {} }
+      }
+    }
+    let run: AgentRun | undefined
+    let ownsLedgerRun = false
+    let admissionFailed = false
+    let admissionError: unknown
+    let deduplicatedOutcome: AgentRunOutcome | undefined
+    // claim 成功后、任何异步准备或可见开始事件之前同步落下 queued。
+    if (ledger) {
+      try {
+        const context: NonNullable<AgentRuntimeQuery['context']> = this.options.createRunContext?.(input) ?? input.context
+          ?? (input.trigger ? { trigger: input.trigger, taskId: input.taskId }
+            : createAgentRunContext(input, () => globalThis.crypto.randomUUID(), this.now))
+        const begin: BeginAgentRunInput = {
+          id: input.runId,
+          taskId: input.taskId ?? context.taskId,
+          trigger: context.trigger,
+          sessionRef: input.sessionId,
+          executorRef: context.executorRef ?? input.sessionId,
+          runtime: input.runtime,
+        }
+        const result = ledger.begin(begin)
+        run = result.run
+        input = {
+          ...input, runId: run.id, taskId: run.taskId, trigger: context.trigger, context,
+          prompt: appendRunOriginPrompt(input.prompt, context),
+          ...(input.toolAssemblyContext ? { toolAssemblyContext: { ...input.toolAssemblyContext, context: withRunIdentity(input.toolAssemblyContext.context, run.id) } } : {}),
+          ...(input.deferredToolAssemblyContext !== undefined ? { deferredToolAssemblyContext: withRunIdentity(input.deferredToolAssemblyContext, run.id) } : {}),
+        }
+        if (result.deduplicated) {
+          // 重复触发不能重放副作用；运行中的旧记录必须由宿主确认接管，不能凭 claim 推断可恢复。
+          deduplicatedOutcome = ledgerOutcome(run)
+          if (!deduplicatedOutcome) throw new Error(`Run ${run.id} 已存在且尚未结束，需由宿主确认恢复`)
+        } else {
+          ownsLedgerRun = true
+        }
+      } catch (error) {
+        admissionFailed = true
+        admissionError = error
+      }
+    }
+    const runReference: AgentRuntimeRunReference = run
+      ? { runId: run.id, ...(run.taskId !== undefined ? { taskId: run.taskId } : {}), triggerId: run.triggerId }
+      : {}
     const controller = new AbortController()
 
-    // lockRuntime must happen before any async credential/provider work.
+    // 无 ledger 保留原有同步 lock 失败拒绝；有 ledger 的准入失败统一走终态清理。
     try {
-      session?.lockRuntime?.(input.sessionId, input.runtime)
+      if (!admissionFailed && !deduplicatedOutcome) {
+        // SessionPort 没有 lockRuntime 时由核心拒绝跨内核请求；存在时仍由端口在写盘前判定。
+        if (ledger) {
+          const boundRuntime = session?.getMeta(input.sessionId)?.agentRuntime
+          if (session && !session.lockRuntime && boundRuntime !== undefined && normalizeAgentRuntime(boundRuntime) !== input.runtime) {
+            throw new AgentSessionRuntimeMismatchError(normalizeAgentRuntime(boundRuntime), input.runtime)
+          }
+        }
+        session?.lockRuntime?.(input.sessionId, input.runtime)
+      }
     } catch (error) {
-      this.ownership.release(input.sessionId, token)
-      const promise = Promise.reject<AgentRunOutcome>(error)
-      return { sessionId: input.sessionId, runtime: input.runtime, promise, stop: async () => {} }
+      if (!ledger) {
+        this.ownership.release(input.sessionId, token)
+        const promise = Promise.reject<AgentRunOutcome>(error)
+        return { sessionId: input.sessionId, runtime: input.runtime, promise, stop: async () => {} }
+      }
+      admissionFailed = true
+      admissionError = error
     }
 
     const reporter = createAgentRunOutcomeReporter()
     let providerAttemptActive = false
     let finished = false
+    let acceptingInput = false
+    const pendingInputs = new Set<Promise<AgentRuntimeQueuedInputResult>>()
+    const queuedInputs = new Map<string, Promise<AgentRuntimeQueuedInputResult>>()
+    let inputRecordingError: unknown
+    const messageIds = new WeakMap<SDKMessage, string>()
+    const logicalMessageIds = new Map<string, string>()
+    let pendingAssistantId: string | undefined
+    const stamp = (message: SDKMessage, author?: ActorRef, context = input.context): SDKMessage => {
+      if (!run || !context) return message
+      const record = message as SDKMessage & { uuid?: string; message?: { id?: string }; _partial?: boolean; error?: unknown; _errorCode?: unknown }
+      const key = record.message?.id ? `${message.type}:${record.message.id}` : undefined
+      let id = messageIds.get(message) ?? (key ? logicalMessageIds.get(key) : undefined)
+        ?? (record.uuid ? logicalMessageIds.get(`uuid:${record.uuid}`) : undefined)
+      if (!id && message.type === 'assistant') id = pendingAssistantId
+      id ??= record.uuid ?? globalThis.crypto.randomUUID()
+      messageIds.set(message, id)
+      if (key) logicalMessageIds.set(key, id)
+      if (record.uuid) logicalMessageIds.set(`uuid:${record.uuid}`, id)
+      if (message.type === 'assistant') pendingAssistantId = record._partial ? id : undefined
+      const stamped = stampRunMessage(message, run, author ?? (message.type === 'assistant' && !record.error && !record._errorCode
+        ? { type: 'agent', id: input.sessionId } : { type: 'system' }), () => id, context.trigger)
+      // 部分帧可能没有 UUID，终稿才有。Provider UUID 原样保留，产品消息身份沿用已分配的 ID。
+      const sourced = { ...stamped, _provenance: { ...stamped._provenance!, messageId: id } }
+      messageIds.set(sourced, id)
+      return sourced
+    }
     const stop = async (reason: string): Promise<void> => {
       if (finished || this.active.get(input.sessionId)?.token !== token || controller.signal.aborted) return
       const control = this.active.get(input.sessionId)
@@ -240,16 +349,20 @@ export class AgentRuntimeCoordinator {
     const startedAt = typeof input.metadata?.startedAt === 'number' && Number.isFinite(input.metadata.startedAt)
       ? input.metadata.startedAt
       : this.now()
-    const emit = (event: AgentRuntimeEvent): void | Promise<void> => this.options.ports?.host?.emit(event)
+    const emit = (event: AgentRuntimeEvent): void | Promise<void> => this.options.ports?.host?.emit({ ...event, ...runReference })
     const runCallbacks: AgentRuntimeCallbacks = {
       onEvent: async (event) => {
         if (finished) return
-        await emit(event)
-        await callbacks.onEvent(event)
+        const sourced = event.type === 'message' ? { ...event, sessionId: input.sessionId, message: stamp(event.message) }
+          : event.type === 'stream_payload' && event.payload.kind === 'sdk_message'
+            ? { ...event, sessionId: input.sessionId, payload: { ...event.payload, message: stamp(event.payload.message) } } : event
+        await emit(sourced)
+        await callbacks.onEvent({ ...sourced, ...runReference })
       },
       onMessage: async (message: SDKMessage) => {
         if (finished) return
-        const runtimeMessage = addRuntimeDuration(message, startedAt, this.now())
+        // 先用原对象分配来源 ID，再附加运行耗时，避免重复 result 投影丢失稳定 ID。
+        const runtimeMessage = addRuntimeDuration(stamp(message), startedAt, this.now())
         if (isPersistableRuntimeMessage(runtimeMessage)) {
           session?.appendMessages(input.sessionId, [normalizeRuntimeMessage(runtimeMessage, input.modelId, this.now())])
         }
@@ -271,7 +384,67 @@ export class AgentRuntimeCoordinator {
       },
     }
 
+    const current = () => !finished && !controller.signal.aborted && this.active.get(input.sessionId)?.token === token
+      && this.ownership.getOwner(input.sessionId)?.token === token
+    const permissionRequests = new Set<string>()
+    if (ledger && run && ownsLedgerRun) input = { ...input, runLifecycle: {
+      wait: requestId => {
+        if (!current() || !run || permissionRequests.has(requestId)) return
+        run = ledger.wait(run.id, { type: 'request', id: requestId })
+        permissionRequests.add(requestId)
+      },
+      resume: requestId => {
+        if (!current() || !run || !permissionRequests.has(requestId)) return
+        run = ledger.resume(run.id, { schemaVersion: 1, id: `resume:${run.id}:${requestId}`, kind: 'resume',
+          actor: { type: 'system' }, source: { type: 'request', id: requestId }, createdAt: this.now() })
+        permissionRequests.delete(requestId)
+        const remaining = [...permissionRequests].at(-1)
+        if (remaining) run = ledger.wait(run.id, { type: 'request', id: remaining })
+      },
+    } }
+    const ownerControl = this.active.get(input.sessionId)!
+    ownerControl.queue = queued => {
+      if (!current() || !acceptingInput || ownerControl.stopping) return Promise.reject(new Error('当前 Run 已结束或未接收输入'))
+      if (queued.ownershipToken !== undefined && queued.ownershipToken !== token) return Promise.reject(new Error('追加输入的执行权 token 已过期'))
+      const record = queued.message as SDKMessage & { uuid?: string }
+      const key = record.uuid ?? queued.context.trigger.id
+      const existing = queuedInputs.get(key)
+      if (existing) return existing
+      if (!session) return Promise.reject(new Error('追加输入持久化需要 SessionPort'))
+      const sourceRun = run
+      const message = stamp(queued.message, queued.context.messageAuthor ?? queued.context.trigger.actor, queued.context)
+      let accepted = false
+      const delivery = Promise.resolve().then(async () => {
+        if (!current() || !acceptingInput || ownerControl.stopping) throw new Error('当前 Run 已结束或未接收输入')
+        await queued.receive({ ...runReference, message, isCurrent: () => current() && acceptingInput && !ownerControl.stopping })
+        accepted = true
+        // 接收后即使 stop/settle，仍保存到捕获的原 Run；绝不按 session 查找新 Run。
+        let attachError: unknown
+        if (ledger && sourceRun) {
+          try {
+            if (!ledger.attachInput(sourceRun.id, queued.context.trigger)) throw new Error('已接收输入无法关联原 Run，需对账')
+          } catch (error) { attachError = error }
+        }
+        session.appendMessages(input.sessionId, [message])
+        await emit({ type: 'message', sessionId: input.sessionId, message })
+        await callbacks.onMessage?.(message)
+        if (attachError) throw attachError
+        return { ...runReference, messageId: message._provenance?.messageId ?? record.uuid ?? queued.context.trigger.id }
+      })
+      queuedInputs.set(key, delivery)
+      pendingInputs.add(delivery)
+      void delivery.then(() => { pendingInputs.delete(delivery) }, () => {
+        pendingInputs.delete(delivery)
+        if (!accepted) queuedInputs.delete(key)
+        else inputRecordingError ??= new Error('已接收的追加输入记账或持久化失败，需对账')
+      })
+      return delivery
+    }
+
     const rawPromise = (async (): Promise<AgentRunOutcome> => {
+      if (admissionFailed) throw admissionError
+      if (deduplicatedOutcome) return deduplicatedOutcome
+      if (run) await input.onRunAdmitted?.({ ...input, runId: run.id })
       // claim/active 与「provider 真正启动」是两件事：先只声明执行权已被本轮 run 取得。
       // 凭证 / 资源 / 工具装配可能失败，此时 provider 从未参与，宿主不得据此清未读、晋升 draft
       // 或建立 UI running 态（那些副作用统一挂在下面的 `runtime_started` 上）。
@@ -301,6 +474,12 @@ export class AgentRuntimeCoordinator {
         // 该落盘仍在第一个 provider await 之前完成，因此持久化失败不会产生半轮运行。
         if (input.persistedUserMessage && !userMessagePersisted) {
           if (!session) throw new AgentRuntimePreparationError('Persisted user message requires a SessionPort', 'session_port_missing', 'persistence')
+          const notice = run && input.context ? createRunTriggerMessage(run, input.context, () => globalThis.crypto.randomUUID(), this.now()) : undefined
+          if (notice) {
+            session.appendMessages(input.sessionId, [notice])
+            await emit({ type: 'message', sessionId: input.sessionId, message: notice })
+          }
+          input.persistedUserMessage = stamp(input.persistedUserMessage, input.context?.messageAuthor ?? input.context?.trigger.actor)
           session.appendMessages(input.sessionId, [input.persistedUserMessage])
           userMessagePersisted = true
           // 用户气泡也是事件流的一部分：桌面渲染层有乐观气泡并按 uuid 去重，
@@ -310,13 +489,19 @@ export class AgentRuntimeCoordinator {
           await emit({ type: 'message', sessionId: input.sessionId, message: input.persistedUserMessage })
         }
         if (!providerStarted) {
+          // 先保存 running，再发布开始副作用；保存失败时 provider 从未启动。
+          if (ledger && run && ownsLedgerRun) {
+            run = ledger.start(run.id)
+            if (run.status !== 'running') return ledgerOutcome(run) ?? { status: 'failed', error: `Run ${run.id} 未进入运行态` }
+          }
           // 「真正运行开始」的唯一触发点：准备已经成功，provider 随即启动。
           providerStarted = true
           await emit({ type: 'runtime_started', sessionId: input.sessionId, runtime: input.runtime, startedAt, title: input.title, workspaceId: input.workspaceId, modelId: input.modelId, initiator: input.initiator })
-          await callbacks.onRunStarted?.({ startedAt })
+          await callbacks.onRunStarted?.({ startedAt, ...runReference })
           if (controller.signal.aborted) return { status: 'stopped' }
         }
         providerAttemptActive = true
+        acceptingInput = true
         let outcome: AgentRunOutcome
         try {
           outcome = await (adapter.stream
@@ -328,8 +513,12 @@ export class AgentRuntimeCoordinator {
         } catch (error) {
           outcome = { status: 'failed', error: error instanceof Error ? error.message : String(error) }
         } finally {
+          acceptingInput = false
           providerAttemptActive = false
+          // Provider 接收与 settle 竞态时，先保存已接收的输入，再封存原 Run。
+          await Promise.allSettled([...pendingInputs])
         }
+        if (inputRecordingError) return { status: 'failed', error: inputRecordingError instanceof Error ? inputRecordingError.message : String(inputRecordingError) }
         if (outcome.status !== 'failed' || controller.signal.aborted) return controller.signal.aborted ? { status: 'stopped' } : outcome
 
         const shouldRetry = this.options.retry?.shouldRetry ?? ((error: string) => isRetryableError({ message: error }))
@@ -351,21 +540,39 @@ export class AgentRuntimeCoordinator {
         }
         return reporter.finish() ?? outcome
       })
-      .catch(async (error) => {
+      .catch(async (error): Promise<AgentRunOutcome> => {
         const message = error instanceof Error ? error.message : String(error)
         reporter.onError(message)
-        // 准备阶段失败（provider 未产生终态）：把结构化失败码交给宿主。
-        // 终态仍由 onComplete 统一给出，本回调不替代它、也不产生第二个终态。
-        await callbacks.onPreparationFailure?.(preparationFailureFrom(error, message))
+        if (!ledger) {
+          await callbacks.onPreparationFailure?.(preparationFailureFrom(error, message))
+          return reporter.finish() ?? { status: 'failed', error: message }
+        }
+        // 失败通知异常也不能跳过账本终态或 owner 清理；同时保留两项错误。
+        try {
+          await callbacks.onPreparationFailure?.(preparationFailureFrom(error, message))
+        } catch (notificationError) {
+          return { status: 'failed', error: `${message}\n${notificationError instanceof Error ? notificationError.message : String(notificationError)}` }
+        }
         return reporter.finish() ?? ({ status: 'failed', error: message } satisfies AgentRunOutcome)
       })
     let finalOutcome: AgentRunOutcome | undefined
     const promise = rawPromise
       .then(async (outcome) => {
-        finalOutcome = outcome
         finished = true
+        // 唯一的 finish 调用点；保存失败不能报告成功，也不能重跑 provider 或重试终态副作用。
+        if (ledger && run && ownsLedgerRun) {
+          try {
+            const recorded = ledger.finish(run.id, outcome)
+            outcome = ledgerOutcome(recorded) ?? outcome
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            outcome = { status: 'failed', error: outcome.status === 'failed' ? `${outcome.error}\n${message}` : message }
+            try { await callbacks.onError?.(message) } catch { /* 账本错误仍由最终 outcome 可见。 */ }
+          }
+        }
+        finalOutcome = outcome
         try {
-          await callbacks.onComplete?.(outcome)
+          await callbacks.onComplete?.(run ? { ...outcome, ...runReference } : outcome)
         } catch {
           // 终态观察者异常不撤销已经确定的 outcome。
         }
@@ -391,6 +598,13 @@ export class AgentRuntimeCoordinator {
       promise,
       stop: async (reason = 'stopped_by_user') => stop(reason),
     }
+  }
+
+  /** 只向当前活跃 Provider 追加；不建立 Run，也不在 settled 后排队下一轮。 */
+  queueMessage(input: AgentRuntimeQueuedInput): Promise<AgentRuntimeQueuedInputResult> {
+    const control = this.active.get(input.sessionId)
+    if (!control?.queue) return Promise.reject(new Error('会话未运行，无法追加消息'))
+    return control.queue(input)
   }
 
   private async prepare(input: AgentRuntimeQuery, signal: AbortSignal): Promise<AgentRuntimeQuery> {

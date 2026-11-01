@@ -34,6 +34,8 @@ export {
 export type { OneMillionContextSource, OneMillionContextDecision, AgentSdk1MSelection } from './context-window'
 export { parseVersionSegments, isVersionAtLeast, extractVersionAfterPrefix } from './model-version'
 export { calculateContextUsageRatio } from './context-usage'
+export { appendAgentTaskPrompt, prependPiCompactionTaskGuidance } from './task-prompt-guidance'
+export { readMessageProvenance, getMessageAuthor, projectMessageProvenance } from './message-provenance'
 export {
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_TITLE,

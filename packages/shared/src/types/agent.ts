@@ -5,6 +5,8 @@
  */
 
 import type { AgentRuntime } from './agent-provider'
+import type { ActorRef, MessageProvenance, TaskAuthorization, TaskOrigin } from '@profer/agent-fabric'
+export type { ActorRef, MessageProvenance, ResourceRef, TaskAuthorization, TaskOrigin } from '@profer/agent-fabric'
 
 // ===== Agent 工作区 =====
 
@@ -224,10 +226,18 @@ export interface SDKAssistantMessage {
   session_id?: string
   /** SDK 消息唯一标识，用于 forkSession / resumeSessionAt */
   uuid?: string
+  _provenance?: MessageProvenance
   error?: { message: string; errorType?: string }
   isReplay?: boolean
   /** 渠道配置的模型 ID，持久化/流式期间注入，用于正确匹配模型显示名 */
   _channelModelId?: string
+}
+
+export interface AgentTaskReturnReference {
+  sessionId: string
+  title: string
+  status: 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  summary: string
 }
 
 /** SDK user 消息 */
@@ -240,6 +250,9 @@ export interface SDKUserMessage {
   session_id?: string
   /** SDK 消息唯一标识 */
   uuid?: string
+  _provenance?: MessageProvenance
+  /** 只用于呈现宿主兜底回传的逐子会话跳转入口；不进入 Provider prompt。 */
+  _taskReturnReferences?: AgentTaskReturnReference[]
   tool_use_result?: unknown
   isReplay?: boolean
   /** SDK 合成的消息（如 Skill 展开 prompt），非人类用户输入 */
@@ -263,15 +276,20 @@ export interface SDKResultMessage {
   background_tasks?: SDKBackgroundTaskSummary[]
   session_crons?: SDKSessionCronSummary[]
   session_id?: string
+  _provenance?: MessageProvenance
   /** 渠道配置的主模型 ID，用于多模型 usage 中定位主模型。 */
   _channelModelId?: string
 }
 
-/** SDK system 消息（init / compact_boundary / compacting / permission_denied / interruption_record / task_started / task_progress / task_notification） */
+/** SDK system 消息（含 Profer task_trigger 来源通知） */
 export interface SDKSystemMessage {
   type: 'system'
   subtype?: string
+  /** Provider uuid 或宿主生成的产品消息 UUID；来源通知不会借用 Provider 消息身份。 */
+  uuid?: string
+  _createdAt?: number
   session_id?: string
+  _provenance?: MessageProvenance
   /** init: 确认的模型 */
   model?: string
   /** task 相关字段 */
@@ -290,6 +308,14 @@ export interface SDKSystemMessage {
   decision_reason?: string
   usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number }
   [key: string]: unknown
+}
+
+/** 新 Run 的首个非 user Trigger 的可读来源通知；正文作者独立保存。 */
+export interface SDKTaskTriggerMessage extends SDKSystemMessage {
+  subtype: 'task_trigger'
+  uuid: string
+  message: string
+  _provenance: MessageProvenance
 }
 
 /** SDK thinking token 估算消息（Claude Agent SDK 0.3.156+） */
@@ -351,7 +377,7 @@ export interface SDKToolUseSummaryMessage {
 }
 
 /** SDK 消息联合类型（v1 query + includePartialMessages: false 返回的完整 JSON 对象） */
-export type SDKMessage =
+export type SDKMessage = (
   | SDKAssistantMessage
   | SDKUserMessage
   | SDKResultMessage
@@ -361,6 +387,7 @@ export type SDKMessage =
   | SDKPromptSuggestionMessage
   | SDKToolUseSummaryMessage
   | { type: string; session_id?: string; parent_tool_use_id?: string | null; [key: string]: unknown }
+) & { _provenance?: MessageProvenance }
 
 // ===== Agent 事件类型 =====
 
@@ -783,6 +810,10 @@ export interface AgentSessionUiProjection {
   delegationStatus: string | null
   delegationDepth: number | null
   sourceAutomationId: string | null
+  sourceSessionId?: string | null
+  sourceRunId?: string | null
+  delegationRelation?: 'subtask' | 'independent' | null
+  delegationPlacement?: 'current' | 'child' | 'independent' | null
   automationGraduated: boolean
   completedButUnconfirmed: boolean
   stoppedByUser: boolean
@@ -897,6 +928,11 @@ export interface AgentSessionMeta {
   permissionMode?: ProferPermissionMode
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
   sourceAutomationId?: string
+  /** 创建该会话的来源会话/执行轮次与派工关系。 */
+  sourceSessionId?: string
+  sourceRunId?: string
+  delegationRelation?: 'subtask' | 'independent'
+  delegationPlacement?: 'current' | 'child' | 'independent'
   /** 父会话 ID（委派子会话使用，指向母会话） */
   parentSessionId?: string
   /** 根会话 ID（委派链中的最初母会话，跨级委派时标记） */
@@ -974,8 +1010,11 @@ export interface AgentMessageSearchResult {
   sessionTitle: string
   /** 消息 ID */
   messageId: string
-  /** 消息角色 */
+  /** Provider 协议角色，与产品作者相互独立。 */
   role: 'user' | 'assistant' | 'tool' | 'status'
+  /** 可验证 provenance 才有作者；历史未知作者保持缺省。 */
+  author?: ActorRef
+  provenance?: MessageProvenance
   /** 匹配上下文片段（约 80 字符） */
   snippet: string
   /** snippet 内匹配起始位置 */
@@ -1426,6 +1465,17 @@ export type AgentGoalContinuation =
  * Agent 发送消息的输入参数
  */
 export interface AgentSendInput {
+  /** 宿主入口核实的来源；Renderer/外部 payload 不可直接提供受信身份。 */
+  taskOrigin?: TaskOrigin
+  /** 启动依据只作追溯，不改变既有权限与能力门禁。 */
+  taskAuthorization?: TaskAuthorization
+  taskId?: string
+  /** 业务触发幂等键；定时任务使用 automation ID 与 occurrence。 */
+  triggerId?: string
+  /** 正文作者可与触发者不同（例如保存的定时任务正文）。 */
+  messageAuthor?: ActorRef
+  /** 子会话兜底回传时逐条关联的执行会话；正常工具读取不设置。 */
+  taskReturnReferences?: AgentTaskReturnReference[]
   /** 会话 ID */
   sessionId: string
   /** 用户消息内容（发给模型，可能含 prompt 工程块） */

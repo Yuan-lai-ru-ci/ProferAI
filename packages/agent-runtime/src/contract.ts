@@ -11,6 +11,8 @@ import type {
   TypedError,
 } from '@profer/shared'
 import type { AgentRuntimeEvent, AgentRunOutcome } from './events'
+import type { AgentRunContext } from './run-context'
+import type { TaskTrigger } from './run-ledger'
 import type {
   RuntimeCredential,
   RuntimeResources,
@@ -60,6 +62,12 @@ export interface AgentRuntimeProviderQueryPreparationPort {
 
 export interface AgentRuntimeQuery {
   sessionId: string
+  /** 业务 Run 身份，与 ownershipToken、Provider 会话或进程身份无关。 */
+  runId?: string
+  taskId?: string
+  trigger?: TaskTrigger
+  /** 由受信宿主入口解析的来源上下文；runtime 不从 Provider role 或正文推断身份。 */
+  context?: AgentRunContext & { executorRef?: string }
   prompt: string
   runtime: AgentRuntime
   modelId?: string
@@ -79,7 +87,14 @@ export interface AgentRuntimeQuery {
   /** 延迟到 provider adapter 拿到 SDK 后再装配宿主工具的 opaque context。 */
   deferredToolAssemblyContext?: unknown
   prepared?: AgentRuntimePreparedContext
-  /** 可选的宿主已构造 user transcript；coordinator 在准备成功之后、provider 启动之前同步落盘，且每次 run 至多一次。 */
+  /** Ledger 准入后的宿主回写；先于资源加载，不创建或猜测 Run 身份。 */
+  onRunAdmitted?(input: AgentRuntimeQuery & { runId: string }): void | Promise<void>
+  /** 仅真实宿主权限请求与其完成回调调用；不按工具名称或等待时长推断。 */
+  runLifecycle?: {
+    wait(requestId: string): void
+    resume(requestId: string): void
+  }
+  /** 可选的宿主已构造输入；准备成功后、provider 启动前按真实作者标记并落盘一次。 */
   persistedUserMessage?: SDKMessage
   /**
    * 上层入口已经持有的执行权 token（嵌套入口用，例如 runAgentHeadless 委派到 runtime 入口）。
@@ -89,13 +104,34 @@ export interface AgentRuntimeQuery {
   ownershipToken?: import('./run-ownership').AgentRunOwnershipToken
 }
 
+/** 可选 ledger 关联；未注入 ledger 时回调保持原有形状。 */
+export interface AgentRuntimeRunReference {
+  runId?: string
+  taskId?: string
+  triggerId?: string
+}
+
+export interface AgentRuntimeQueuedInput {
+  sessionId: string
+  ownershipToken?: import('./run-ownership').AgentRunOwnershipToken
+  context: AgentRunContext
+  /** 对话中持久化的原始输入；Provider prompt 可由 receive 闭包自行装配。 */
+  message: SDKMessage
+  /** resolve 表示 Provider 已接收；拒绝或 settled 必须 reject，不能转为新 Run。 */
+  receive(input: AgentRuntimeRunReference & { message: SDKMessage; isCurrent(): boolean }): Promise<void>
+}
+
+export interface AgentRuntimeQueuedInputResult extends AgentRuntimeRunReference {
+  messageId: string
+}
+
 /** Runtime 执行过程中可观察的回调；回调不携带窗口对象或渲染层对象。 */
 export interface AgentRuntimeCallbacks {
   onEvent(event: AgentRuntimeEvent): void | Promise<void>
-  onRunStarted?(input: { startedAt: number }): void | Promise<void>
+  onRunStarted?(input: { startedAt: number } & AgentRuntimeRunReference): void | Promise<void>
   onMessage?(message: SDKMessage): void | Promise<void>
   onError?(error: unknown): void | Promise<void>
-  onComplete?(outcome: AgentRunOutcome): void | Promise<void>
+  onComplete?(outcome: AgentRunOutcome & AgentRuntimeRunReference): void | Promise<void>
   /**
    * 准备阶段失败（provider 未启动）的结构化通知：凭证解析 / 资源加载 / 工具装配 / 权限宿主缺失。
    *

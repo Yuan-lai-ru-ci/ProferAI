@@ -15,6 +15,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@profer/agent-fabric": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "^5.0.0"
   }

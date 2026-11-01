@@ -5,7 +5,7 @@ export type AgentRunOutcome =
   | { status: 'failed'; error: string }
   | { status: 'stopped' }
 
-export type AgentRuntimeEvent =
+export type AgentRuntimeEvent = (
   /**
    * 内核产出的一条消息（含 `_partial` 增量帧）。
    *
@@ -31,6 +31,7 @@ export type AgentRuntimeEvent =
   | { type: 'runtime_claimed'; sessionId: string; runtime: string; startedAt: number; title?: string; workspaceId?: string; modelId?: string; initiator?: import('@profer/shared').AgentRunInitiator }
   | { type: 'runtime_started'; sessionId: string; runtime: string; startedAt: number; title?: string; workspaceId?: string; modelId?: string; initiator?: import('@profer/shared').AgentRunInitiator }
   | { type: 'runtime_finished'; sessionId: string; runtime?: string; outcome: AgentRunOutcome; finishedAt: number; title?: string; workspaceId?: string; modelId?: string; initiator?: import('@profer/shared').AgentRunInitiator }
+) & { runId?: string; taskId?: string; triggerId?: string }
 
 export interface AgentRuntimeCompletionSignal {
   stoppedByUser?: boolean

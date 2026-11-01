@@ -219,6 +219,7 @@
       "name": "@profer/agent-runtime",
       "version": "0.1.0",
       "dependencies": {
+        "@profer/agent-fabric": "workspace:*",
         "@profer/shared": "workspace:*",
       },
       "devDependencies": {
@@ -294,6 +295,7 @@
       "name": "@profer/session-store",
       "version": "0.1.0",
       "dependencies": {
+        "@profer/agent-runtime": "workspace:*",
         "@profer/project-core": "workspace:*",
         "@profer/session-core": "workspace:*",
         "@profer/shared": "workspace:*",
@@ -305,6 +307,9 @@
     "packages/shared": {
       "name": "@profer/shared",
       "version": "0.1.47",
+      "dependencies": {
+        "@profer/agent-fabric": "workspace:*",
+      },
       "devDependencies": {
         "typescript": "^5.0.0",
       },

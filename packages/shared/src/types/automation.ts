@@ -17,6 +17,10 @@ export interface AutomationRun {
   durationMs?: number
   /** 失败原因（status === 'error' 时） */
   error?: string
+  /** 稳定的调度触发 ID；用于跨重启去重。 */
+  triggerId?: string
+  /** 本次实际逻辑执行轮次 ID，由 Agent runtime ledger 生成。 */
+  runId?: string
   /** 跳过原因（status === 'skipped' 时，如来源会话忙） */
   skipReason?: string
 }
@@ -109,6 +113,14 @@ export interface Automation {
   notificationTargets?: AutomationNotificationTarget[]
   /** 创建来源会话 ID（作为模板，运行时不复用而是新建子会话） */
   sourceSessionId?: string
+  /** 用户明确绑定的执行会话；存在时优先于 sessionMode/lastSessionId。 */
+  boundSessionId?: string
+  /** 最近调度阻塞原因；存在时表示未静默改道，等待用户修复配置。 */
+  dispatchBlockReason?: string
+  /** 仅 LIST/GET 派生的运行态快照；事实来自顶层 triggers，不写回任务配置。 */
+  readonly pendingTriggers?: readonly AutomationPendingTrigger[]
+  /** 保存 prompt 的产品作者。旧任务缺省时按 automation actor 兼容。 */
+  promptAuthor?: import('@profer/agent-fabric').ActorRef
   /** 创建时间 */
   createdAt: number
   /** 更新时间 */
@@ -209,6 +221,8 @@ export interface CreateAutomationInput {
   sessionMode?: AutomationSessionMode
   notificationTargets?: AutomationNotificationTarget[]
   sourceSessionId?: string
+  boundSessionId?: string
+  promptAuthor?: import('@profer/agent-fabric').ActorRef
   /** 创建后是否立即启用（默认 true） */
   active?: boolean
 }
@@ -243,8 +257,32 @@ export interface UpdateAutomationInput {
   presetReference?: import('./agent-preset').PresetReference
   sessionMode?: AutomationSessionMode
   notificationTargets?: AutomationNotificationTarget[]
+  /** undefined 表示不修改，空字符串清除绑定。 */
+  boundSessionId?: string
+  promptAuthor?: import('@profer/agent-fabric').ActorRef
   active?: boolean
 }
+
+/** 持久化调度 occurrence；不等同于已启动的 AutomationRun。 */
+export interface AutomationTriggerRecord {
+  triggerId: string
+  occurrenceId: string
+  automationId: string
+  kind?: 'scheduled' | 'manual'
+  scheduledAt: number
+  status: 'queued' | 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  boundSessionId?: string
+  targetSessionId?: string
+  runId?: string
+  error?: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** 待执行/受阻/运行中及需处理的中断记录；只暴露 UI 所需的安全字段。 */
+export type AutomationPendingTrigger = Readonly<Pick<AutomationTriggerRecord,
+  'triggerId' | 'scheduledAt' | 'boundSessionId' | 'targetSessionId' | 'runId' | 'error' | 'updatedAt'
+> & { status: 'queued' | 'blocked' | 'running' | 'interrupted' }>
 
 /** Automation 相关 IPC 通道常量 */
 export const AUTOMATION_IPC_CHANNELS = {

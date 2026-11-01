@@ -21,6 +21,8 @@ export const REMOVED_PROVIDER_EXPORTS = [
 
 /** 宿主注入脊柱所依赖的核心出口，必须继续可用。 */
 export const REQUIRED_CORE_EXPORTS = [
+  'AgentRunLedger',
+  'createInMemoryRunLedgerPort',
   'AgentRuntimeCoordinator',
   'createAgentRuntimeCoordinator',
   'RuntimeRoutingAgentAdapter',

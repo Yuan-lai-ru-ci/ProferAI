@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./error-patterns": "./src/error-patterns.ts",
     "./runtime-guards": "./src/runtime-guards.ts",
-    "./runtime-routing-adapter": "./src/runtime-routing-adapter.ts"
+    "./runtime-routing-adapter": "./src/runtime-routing-adapter.ts",
+    "./run-ledger": "./src/run-ledger.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -18,6 +19,7 @@
     "check:isolation": "bun run test/isolation/run-isolation-check.ts"
   },
   "dependencies": {
+    "@profer/agent-fabric": "workspace:*",
     "@profer/shared": "workspace:*"
   },
   "devDependencies": {

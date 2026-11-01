@@ -33,6 +33,10 @@ describe('core dependency boundary', () => {
     const visited = graph.files.map((file) => formatRelative(repoRoot, file))
     expect(visited).toContain('packages/agent-runtime/src/index.ts')
     expect(visited.some((file) => file.startsWith('packages/shared/src/'))).toBe(true)
+    expect(visited.some((file) => file.startsWith('packages/agent-fabric/src/'))).toBe(true)
+    const fabric = collectDependencyGraph(join(repoRoot, 'packages', 'agent-fabric', 'src', 'index.ts'), repoRoot)
+    expect(fabric.edges.filter((edge) => edge.specifier.startsWith('@profer/agent-runtime'))).toEqual([])
+    expect(fabric.files.some((file) => file.startsWith(join(repoRoot, 'packages', 'agent-runtime')))).toBe(false)
   })
 
   test('Given the core entry When resolving the runtime closure Then it needs no bare external package', () => {
@@ -41,7 +45,7 @@ describe('core dependency boundary', () => {
     expect(graph.externalSpecifiers.filter(isDeniedSpecifier)).toEqual([])
   })
 
-  test('Given the package manifest When declaring dependencies Then only the shared workspace package remains', () => {
+  test('Given the package manifest When declaring dependencies Then only shared and fabric workspace packages remain', () => {
     const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
       peerDependencies?: Record<string, string>
@@ -52,7 +56,7 @@ describe('core dependency boundary', () => {
       ...Object.keys(manifest.peerDependencies ?? {}),
     ]
     expect(declared.filter(isDeniedSpecifier)).toEqual([])
-    expect(Object.keys(manifest.dependencies ?? {})).toEqual(['@profer/shared'])
+    expect(manifest.dependencies).toEqual({ '@profer/agent-fabric': 'workspace:*', '@profer/shared': 'workspace:*' })
     const exportedSubpaths = Object.keys(manifest.exports ?? {})
     expect(exportedSubpaths.filter((subpath) => subpath.startsWith('./pi'))).toEqual([])
     expect(exportedSubpaths).toContain('.')
