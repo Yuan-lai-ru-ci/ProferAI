@@ -15,6 +15,7 @@ import { getUpdateSources, UPDATE_PROBE_TIMEOUT_MS, type UpdateSource } from './
 import { canReplaceUpdateStatus } from './update-state'
 import { withDeadline, UpdateTimeoutError } from './update-deadline'
 import { getLatestRelease } from '../github-release-service'
+import { logLifecycle } from '../lifecycle-diagnostics'
 
 const GITHUB_RELEASES_URL = 'https://github.com/Yuan-lai-ru-ci/ProferAI/releases'
 
@@ -68,7 +69,11 @@ let inFlightDownload: Promise<unknown> | null = null
 /** 当前正在等元数据的 checkForUpdates() promise，总预算判死时用它清掉内部缓存。 */
 let inFlightCheck: Promise<unknown> | null = null
 let lastDownloadProgressAt = 0
-let downloadWatchdog: ReturnType<typeof setInterval> | null = null
+/**
+ * 换源重检期间屏蔽 checking/available/not-available 事件对状态的覆盖。
+ * 否则界面会从「下载中」被拽回「检查中」，用户以为进度丢了。
+ */
+let quietStatusUpdates = false
 
 /** 更新状态并推送给渲染进程 */
 function setStatus(status: UpdateStatus): void {
@@ -96,73 +101,121 @@ function lateEventIgnored(event: string): boolean {
   return true
 }
 
-function stopDownloadWatchdog(): void {
-  if (downloadWatchdog) {
-    clearInterval(downloadWatchdog)
-    downloadWatchdog = null
-  }
-}
-
 /**
- * 下载看门狗：electron-updater 的下载同样没有超时，连接僵死后 download-progress
- * 会彻底静默。这里用「多久没有新进度」判定停滞，把状态收敛成可重试的错误，
- * 而不是让进度条永远停在某个百分比。
- */
-function startDownloadWatchdog(attempt: number): void {
-  stopDownloadWatchdog()
-  downloadWatchdog = setInterval(() => {
-    if (attempt !== downloadAttempt) {
-      stopDownloadWatchdog()
-      return
-    }
-    const idleMs = Date.now() - lastDownloadProgressAt
-    if (idleMs < UPDATE_DOWNLOAD_STALL_MS) return
-    downloadAttempt += 1
-    stopDownloadWatchdog()
-    // 下载同样会在 electron-updater 内部缓存 promise，不清掉的话重试只会拿到同一个死 promise。
-    if (inFlightDownload) {
-      releaseStuckUpdaterPromise('downloadPromise', inFlightDownload)
-      inFlightDownload = null
-    }
-    console.warn(`[更新] 下载停滞 ${Math.round(idleMs / 1000)}s，放弃本次下载`)
-    setStatus({
-      status: 'error',
-      error: `下载停滞超过 ${Math.round(UPDATE_DOWNLOAD_STALL_MS / 1000)}s，请检查网络后重试`,
-    })
-  }, 5_000)
-  ;(downloadWatchdog as unknown as { unref?: () => void }).unref?.()
-}
-
-/**
- * 检查阶段结束后在后台下载。
+ * 检查阶段结束后在后台下载，并在下载失败时按可达性顺序换源。
  *
  * 以前 `checkSource` 里是 `await downloadUpdate()`，于是「检查更新」这个 IPC 要等
  * 整个安装包下载完才返回，界面上按钮就一直在转。现在检查一有结论就返回，
  * 下载进度完全由状态事件驱动。
+ *
+ * 下载阶段原本没有源回退：检查阶段会按探活顺序挑源，但一旦挑中的源在下载时抽风
+ * （国内源掉速、GitHub 兜底只有百 KB/s），用户只能看到「下载失败」，重试仍然打回同一个源。
+ * 这里按「检查成功的源 + 其后的备用源」逐个尝试。
  */
-function startBackgroundDownload(version: string): void {
+function startBackgroundDownload(version: string, sources: readonly UpdateSource[], usedSource: UpdateSource): void {
   if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
     console.log('[更新] 已在下载中或已下载完成，跳过重复下载')
     return
   }
+  const usedIndex = sources.indexOf(usedSource)
+  const candidates = usedIndex >= 0 ? sources.slice(usedIndex) : [usedSource]
+  void runDownloadWithFallback(version, candidates)
+}
+
+/** 逐个源尝试下载；只有全部失败才把状态收敛成 error。 */
+async function runDownloadWithFallback(version: string, candidates: readonly UpdateSource[]): Promise<void> {
+  const failures: string[] = []
+  for (const [index, source] of candidates.entries()) {
+    if (index > 0) {
+      // 换源必须重新检查：electron-updater 的下载地址是检查结果里的绝对 URL，
+      // 只改 feed 不会改变已缓存的 updateInfo，重试仍会打回那个失败的源。
+      autoUpdater.setFeedURL(source.configuration)
+      logLifecycle('update.download-switch-source', { source: source.id, previousFailures: failures.length })
+      // 换源期间的 checking/available 事件不该把界面从「下载中」拽回「检查中」。
+      quietStatusUpdates = true
+      try {
+        const probe = await withDeadline(
+          autoUpdater.checkForUpdates(),
+          UPDATE_CHECK_DEADLINE_MS,
+          `检查${source.label}元数据`,
+        )
+        if (!probe?.isUpdateAvailable) {
+          failures.push(`${source.label}: 该源没有可用更新`)
+          continue
+        }
+        // 备用源的版本可能比已发现的新版本旧（镜像滞后）：宁可继续换源，也不能把用户
+        // 降级成旧版，否则状态里说的版本和实际下载的包会对不上。
+        const probeVersion = probe.updateInfo?.version ?? probe.versionInfo?.version
+        if (probeVersion && probeVersion !== version) {
+          failures.push(`${source.label}: 版本不一致（${probeVersion}）`)
+          continue
+        }
+      } catch (error) {
+        failures.push(`${source.label}: ${errorMessage(error)}`)
+        continue
+      } finally {
+        quietStatusUpdates = false
+      }
+    }
+
+    setStatus({
+      status: 'downloading',
+      version,
+      progress: { percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 },
+    })
+    logLifecycle('update.download-start', { source: source.id, version })
+    try {
+      await downloadOnce()
+      return
+    } catch (error) {
+      if (currentStatus.status === 'downloaded') return
+      failures.push(`${source.label}: ${errorMessage(error)}`)
+      console.warn(`[更新] ${source.label} 下载失败，尝试下一个源:`, errorMessage(error))
+      logLifecycle('update.download-failed', { source: source.id, error: errorMessage(error) })
+    }
+  }
+
+  const detail = failures.join('；') || '所有更新源均不可用'
+  console.error('[更新] 所有更新源下载均失败:', detail)
+  logLifecycle('update.download-exhausted', { detail })
+  setStatus({ status: 'error', error: `下载更新失败：${detail}` })
+}
+
+/**
+ * 单次下载：用「多久没有新进度」判定停滞。
+ *
+ * electron-updater 的下载没有超时，连接僵死后 download-progress 会彻底静默。
+ * 停滞必须 reject 出去让上层换源，而不是把进度条永远停在某个百分比。
+ */
+function downloadOnce(): Promise<void> {
   const attempt = ++downloadAttempt
   lastDownloadProgressAt = Date.now()
-  setStatus({
-    status: 'downloading',
-    version,
-    progress: { percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 },
-  })
-  startDownloadWatchdog(attempt)
   const pendingDownload = autoUpdater.downloadUpdate()
   inFlightDownload = pendingDownload
-  void pendingDownload.then(() => {
-    if (inFlightDownload === pendingDownload) inFlightDownload = null
-  }).catch((error) => {
-    if (inFlightDownload === pendingDownload) inFlightDownload = null
-    if (attempt !== downloadAttempt) return
-    stopDownloadWatchdog()
-    console.error('[更新] 下载更新失败:', error)
-    setStatus({ status: 'error', error: `下载更新失败：${errorMessage(error)}` })
+  return new Promise<void>((resolve, reject) => {
+    let settled = false
+    const finish = (error?: unknown): void => {
+      if (settled) return
+      settled = true
+      clearInterval(watchdog)
+      if (inFlightDownload === pendingDownload) inFlightDownload = null
+      if (error === undefined) resolve()
+      else reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    const watchdog = setInterval(() => {
+      if (attempt !== downloadAttempt) {
+        finish(new Error('下载已被新一轮取代'))
+        return
+      }
+      const idleMs = Date.now() - lastDownloadProgressAt
+      if (idleMs < UPDATE_DOWNLOAD_STALL_MS) return
+      // 放弃这一轮：electron-updater 会把 downloadUpdate() 的 promise 缓存在实例上，
+      // 不清掉的话换源重试只会拿到同一个死 promise。
+      releaseStuckUpdaterPromise('downloadPromise', pendingDownload)
+      finish(new UpdateTimeoutError('下载停滞', UPDATE_DOWNLOAD_STALL_MS))
+    }, 1_000)
+    ;(watchdog as unknown as { unref?: () => void }).unref?.()
+    pendingDownload.then(() => finish(), (error: unknown) => finish(error ?? new Error('下载更新失败')))
   })
 }
 
@@ -192,7 +245,7 @@ function releaseStuckUpdaterPromise(
  * 下载不再在这里 await：检查有结论就返回，下载交给 startBackgroundDownload。
  * 每个源的元数据请求都用 withDeadline 强制截断，避免一个挂死的源吃掉整轮检查。
  */
-async function checkSource(source: UpdateSource, round: number): Promise<boolean> {
+async function checkSource(source: UpdateSource, round: number, sources: readonly UpdateSource[]): Promise<boolean> {
   autoUpdater.setFeedURL(source.configuration)
   console.log(`[更新] 尝试更新源: ${source.label}`)
 
@@ -226,7 +279,7 @@ async function checkSource(source: UpdateSource, round: number): Promise<boolean
     return false
   }
 
-  startBackgroundDownload(candidateVersion ?? '')
+  startBackgroundDownload(candidateVersion ?? '', sources, source)
   return true
 }
 
@@ -327,12 +380,16 @@ async function runUpdateCheck(): Promise<void> {
     const declaredSources = getUpdateSources()
     const sources = await orderSourcesByReachability(declaredSources, probeSourceReachable)
     console.log(`[更新] 源可达性探测：${describeProbeOutcomes(declaredSources, sources)}`)
+    logLifecycle('update.check-sources', {
+      order: sources.map((source) => source.id),
+      dropped: declaredSources.filter((source) => !sources.includes(source)).map((source) => source.id),
+    })
 
     // 总预算：多个源各自超时叠加起来仍可能让用户等上几分钟，必须在整轮上再封一道顶。
     const foundUpdate = await withDeadline(
       runWithUpdateSourceFallback(
         sources,
-        (source) => checkSource(source, round),
+        (source) => checkSource(source, round, sources),
         (source, error) => {
           console.warn(`[更新] ${source.label} 不可用，切换备用源:`, errorMessage(error))
         },
@@ -432,6 +489,45 @@ export async function checkForUpdates(): Promise<void> {
   return trackInFlight(runUpdateCheck())
 }
 
+/**
+ * 安装器接管后，主进程迟迟不退出时强制结束的预算。
+ *
+ * electron-updater 的 `quitAndInstall()` 是「先拉起安装器，再 app.quit()」：
+ * - macOS：Squirrel 的 ShipIt 要等旧进程退出才替换 /Applications；
+ * - Windows：NSIS 已经在 `doInstall()` 里启动，会一直等旧进程释放被占用的 exe。
+ * 退出清理一旦被拖住（远控/FRP 队列挂起），用户看到的就是「点了重启没反应」
+ * 「装完还是旧版本」。这里兼底硬退出：安装器已经接管，进程继续活着只会阻碍安装。
+ */
+export const QUIT_AND_INSTALL_FORCE_EXIT_MS = timingFromEnv('PROFER_UPDATE_FORCE_EXIT_MS', 12_000)
+
+let installForceExitTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 仅测试使用：重置模块级更新状态。
+ *
+ * 更新状态机是进程级的（同一时间只允许一个检查/下载流程），测试里连续跑多个场景时
+ * 必须显式归零，否则第二个场景会被「已在下载中」的守卫挡住。
+ */
+export function __resetUpdaterStateForTest(): void {
+  currentStatus = { status: 'idle' }
+  inFlightUpdateCheck = null
+  inFlightStartedAt = 0
+  inFlightDownload = null
+  inFlightCheck = null
+  currentRound = 0
+  abandonedRound = -1
+  downloadAttempt = 0
+  lastDownloadProgressAt = 0
+  quietStatusUpdates = false
+  cancelInstallForceExit()
+}
+
+function cancelInstallForceExit(): void {
+  if (!installForceExitTimer) return
+  clearTimeout(installForceExitTimer)
+  installForceExitTimer = null
+}
+
 /** 退出并安装已下载的更新 */
 export function quitAndInstall(): void {
   // 移除所有窗口的 close 监听器，避免 preventDefault 阻止退出
@@ -441,7 +537,17 @@ export function quitAndInstall(): void {
 
   // 延迟调用确保 IPC 响应已发送回渲染进程
   setImmediate(() => {
+    const version = (currentStatus as { version?: string }).version
+    logLifecycle('update.install-start', { version })
     autoUpdater.quitAndInstall(true, true)
+    cancelInstallForceExit()
+    installForceExitTimer = setTimeout(() => {
+      installForceExitTimer = null
+      console.error(`[更新] ${QUIT_AND_INSTALL_FORCE_EXIT_MS}ms 内未退出，强制退出以完成安装`)
+      logLifecycle('update.install-force-exit', { version, timeoutMs: QUIT_AND_INSTALL_FORCE_EXIT_MS })
+      app.exit(0)
+    }, QUIT_AND_INSTALL_FORCE_EXIT_MS)
+    ;(installForceExitTimer as unknown as { unref?: () => void }).unref?.()
   })
 }
 
@@ -451,7 +557,6 @@ export function cleanupUpdater(): void {
     clearInterval(checkInterval)
     checkInterval = null
   }
-  stopDownloadWatchdog()
 }
 
 /**
@@ -488,12 +593,14 @@ function setupPackagedAutoUpdater(): void {
   // 监听更新事件
   autoUpdater.on('checking-for-update', () => {
     if (lateEventIgnored('checking-for-update')) return
+    if (quietStatusUpdates) return
     console.log('[更新] 正在检查更新...')
     setStatus({ status: 'checking' })
   })
 
   autoUpdater.on('update-available', (info) => {
     if (lateEventIgnored('update-available')) return
+    if (quietStatusUpdates) return
     if (isBlockedInternalUpdate(info.version)) {
       console.log(`[更新] 内测包 ${getCurrentAppVersion()} 忽略同/更低正式基线 ${info.version}`)
       setStatus({ status: 'not-available' })
@@ -533,7 +640,6 @@ function setupPackagedAutoUpdater(): void {
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    stopDownloadWatchdog()
     if (lateEventIgnored('update-downloaded')) return
     if (isBlockedInternalUpdate(info.version)) {
       console.log(`[更新] 内测包拒绝同/更低正式基线下载完成 ${info.version}`)
@@ -549,13 +655,17 @@ function setupPackagedAutoUpdater(): void {
 
   autoUpdater.on('update-not-available', () => {
     if (lateEventIgnored('update-not-available')) return
+    if (quietStatusUpdates) return
     console.log('[更新] 已是最新版本')
     setStatus({ status: 'not-available' })
   })
 
   autoUpdater.on('error', (err) => {
+    // 安装器根本没拉起来时不能留着强制退出定时器：否则会把正常运行的进程杀掉。
+    cancelInstallForceExit()
     if (lateEventIgnored('error')) return
     console.error('[更新] 更新出错:', err)
+    logLifecycle('update.error', { message: err.message })
     // 当前检查流程会捕获此错误并切换备用源。只有脱离该流程的异常才直接展示。
     if (!inFlightUpdateCheck) setStatus({ status: 'error', error: err.message })
   })

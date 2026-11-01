@@ -201,6 +201,8 @@ import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
+import { awaitQuitCleanup, resolveQuitCleanupTimeoutMs } from './lib/quit-cleanup'
+import { logLifecycle } from './lib/lifecycle-diagnostics'
 import {
   registerBridge,
   startAllBridges,
@@ -1234,14 +1236,34 @@ let remoteExitPending = false
 app.on('before-quit', (event) => {
   if (!remoteExitComplete) {
     event.preventDefault()
-    if (!remoteExitPending) {
-      remoteExitPending = true
-      void stopRemoteService().then(() => { remoteExitComplete = true; app.quit() }).catch(() => { remoteExitPending = false; dialog.showErrorBox('远控进程尚未停止', '未退出应用，请稍后重试。只会停止本应用拥有的 FRP 进程。') })
-    }
+    // 清理进行中时再次点退出直接吞掉：重复调用 stopRemoteService() 会排队，反而更慢。
+    if (remoteExitPending) return
+    remoteExitPending = true
+    const timeoutMs = resolveQuitCleanupTimeoutMs()
+    void awaitQuitCleanup(stopRemoteService(), timeoutMs).then((result) => {
+      remoteExitPending = false
+      remoteExitComplete = true
+      if (result.outcome === 'completed') {
+        console.log(`[退出] 远控服务已停止（${result.elapsedMs}ms）`)
+      } else {
+        // 超时或失败都继续退出：卡住的 FRP 不值得让用户只能强制退出，更不能让已下载的
+        // 更新因为旧进程没退而装不上（Windows NSIS 会一直等旧进程释放 exe）。
+        // 残留的 frpc 由下次启动的孤儿清理兜底，这里只留证据。
+        console.error(`[退出] 远控服务清理未完成（${result.outcome}，${result.elapsedMs}ms）：${result.error ?? '超过预算'}；继续退出`)
+      }
+      logLifecycle('quit.remote-cleanup', {
+        outcome: result.outcome,
+        elapsedMs: result.elapsedMs,
+        timeoutMs,
+        error: result.error,
+      })
+      app.quit()
+    })
     return
   }
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
+  logLifecycle('quit.cleanup-start', {})
 
   // 中止所有活跃的 Goal、Agent 和 Chat 子进程
   stopAllGoalsForProcessExit()
