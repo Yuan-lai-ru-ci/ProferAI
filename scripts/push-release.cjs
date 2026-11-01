@@ -3,16 +3,19 @@
  *
  * 用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only]
  *
- * GitHub Release 只由本脚本写入。release.yml 仅保留手动构建验证，避免本地
- * 上传与 tag 触发的 CI 同时创建、删除或上传同一个 Release。
+ * 发布顺序不固定：macOS 可以先创建 tag/Release，本脚本随后只补充 Windows 资产；
+ * 也可以先跑本脚本、再由 Apple Silicon 补 macOS 资产。release.yml 仅保留手动
+ * 构建验证，避免 tag 触发的 CI 与本地发布同时写入同一个 Release。
  *
  * --github-only: 只推送源码/tag 并创建 GitHub Release，跳过国内更新源上传；
  *   releases.json 仅本地生成，待更新源可达后自行补传。
  */
-const { execSync, spawn } = require('child_process');
+const { execFileSync, execSync, spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { hasMacReleaseAssets, hasWindowsReleaseAssets } = require('./release-asset-contract.cjs');
+const { assertPreviousBlockmapPublished, findPurgedBlockmaps } = require('./update-feed-contract.cjs');
 
 const VERSION = process.argv[2];
 const UNSIGNED_RELEASE = process.argv.includes('--unsigned');
@@ -29,6 +32,8 @@ const OUT = path.join(ELECTRON, 'out');
 const TAG = `v${VERSION}`;
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
 const UPDATE_FEED_URL = 'https://updates.profer.cn/';
+const LEGACY_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/';
+const WINDOWS_UPDATE_METADATA = 'latest.yml';
 
 /**
  * 生产主机、SSH 用户与端口一律由环境变量提供，仓库内不保存任何默认值。
@@ -76,6 +81,12 @@ function getUpdateTargets() {
 
 const BASH = 'C:/Program Files/Git/usr/bin/bash.exe';
 const RELEASE_RETRY_DELAYS_MS = [0, 15_000, 45_000, 90_000];
+/**
+ * curl 一律用 execFileSync 直呼：本脚本在 Windows 上通过 cmd.exe 执行 `run()`，
+ * 单引号会被原样传给 curl（`-w '%{http_code}'` 输出 `'200'` → Number() 得 NaN），
+ * 且 `/dev/null` 在 Windows 上不是空设备。绕过 shell 才能两端一致。
+ */
+const NULL_DEVICE = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
 function run(command, cwd = ROOT) {
   return execSync(command, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
@@ -91,6 +102,72 @@ function tryRun(command, cwd = ROOT) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 读取更新源当前的 metadata；源不可达或目录为空时返回 null（首次发布到该源）。 */
+function readServedMetadata(feedUrl, metadataName) {
+  try {
+    return execFileSync('curl', ['-fsSL', '--max-time', '20', `${feedUrl}${metadataName}`], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** 取公网 URL 的 HTTP 状态码；拿不到状态码直接抛错，不能把「连不上」当成「存在」。 */
+function fetchPublicStatus(url) {
+  const output = execFileSync(
+    'curl',
+    ['-sS', '-I', '-o', NULL_DEVICE, '--max-time', '20', '-w', '%{http_code}', url],
+    { encoding: 'utf8' },
+  );
+  const status = Number(output.trim());
+  if (!Number.isFinite(status) || status === 0) throw new Error(`无法访问 ${url}（curl 不可用或网络不通）`);
+  return status;
+}
+
+/**
+ * 差分门禁：确认上一版本的 blockmap 仍在更新源上。
+ *
+ * Windows 的 NSIS 差分（`NsisUpdater.differentialDownloadInstaller`）同样要旧 blockmap；
+ * 缺它不会报错，只会让每次更新静默退化成 220MB+ 全量下载。
+ */
+function assertDifferentialPrerequisite(feedUrl, metadataName, { warnOnly = false } = {}) {
+  const metadataText = readServedMetadata(feedUrl, metadataName);
+  if (metadataText === null) {
+    console.warn(`[差分门禁] ${feedUrl}${metadataName} 不可读，跳过校验（首次发布到该源？）`);
+    return;
+  }
+  const result = assertPreviousBlockmapPublished({
+    feedUrl,
+    metadataText,
+    version: VERSION,
+    fetchStatus: fetchPublicStatus,
+    allowMissing: warnOnly || process.env.PROFER_UPDATE_ALLOW_MISSING_PREVIOUS_BLOCKMAP === '1',
+  });
+  if (result.checked && result.ok) console.log(`  上一版本 blockmap 可用：${result.url}`);
+}
+
+/**
+ * 告警：最近几个版本的 blockmap 是否已被清理（不阻断发布）。
+ *
+ * 跨了多个版本的用户发现自己的 blockmap 404 时只能全量下载 224MB。
+ */
+function warnPurgedBlockmaps(feedUrl) {
+  const releasesJson = readServedMetadata(feedUrl, 'releases.json');
+  if (releasesJson === null) return;
+  const { checked, missing } = findPurgedBlockmaps({
+    feedUrl,
+    releasesJsonText: releasesJson,
+    currentVersion: VERSION,
+    installerName: (version) => `Profer-Setup-${version}.exe`,
+    fetchStatus: fetchPublicStatus,
+  });
+  if (missing.length === 0) {
+    if (checked.length > 0) console.log(`  最近 ${checked.length} 个版本的 blockmap 都在`);
+    return;
+  }
+  console.warn(`[差分告警] 最近 ${checked.length} 个版本里有 ${missing.length} 个 blockmap 已被清理（这些版本的用户只能全量下载）：`);
+  for (const item of missing) console.warn(`  - ${item.version}: ${item.blockmap} → HTTP ${item.status}`);
 }
 
 function assertReleaseSigningConfiguration() {
@@ -264,11 +341,30 @@ async function ensureGitHubRelease(assets) {
 
 (async () => {
   console.log(`=== Profer 本地发布 ${TAG} ===`);
+  // macOS 允许先发布；检测到已发布但缺 Windows 资产时，本次按“补充资产”处理。
+  const existingRelease = readReleaseAssets();
+  const supplementingPublishedRelease = Boolean(
+    existingRelease && existingRelease.isDraft === false && !hasWindowsReleaseAssets(existingRelease, VERSION),
+  );
+  if (supplementingPublishedRelease) {
+    console.log(`[发布模式] ${TAG} 已由 macOS 发布，本次仅补充 Windows 资产。`);
+  }
   // 必须先完成所有只读预检；随后才允许构建、上传或 Git/GitHub 写入。
-  run(`node scripts/verify-release-preflight.cjs ${VERSION}`);
+  run(`node scripts/verify-release-preflight.cjs ${VERSION}${supplementingPublishedRelease ? ' --allow-published-release' : ''}`);
 
   console.log(`[1/5] ${ARTIFACTS_ONLY ? '校验已有本地产物' : '执行发布验证门禁'}（Windows x64${UNSIGNED_RELEASE ? ' 未签名' : ' 签名'}正式包）...`);
   if (!UNSIGNED_RELEASE) assertReleaseSigningConfiguration();
+  if (!GITHUB_ONLY) {
+    // 先校验差分前提再构建：缺上一版本 blockmap 会让所有存量用户下次更新
+    // 静默退化成 224MB 全量下载，这属于发布前置条件。
+    console.log('[0/5] 校验分块差分前提（上一版本 blockmap）...');
+    assertDifferentialPrerequisite(UPDATE_FEED_URL, WINDOWS_UPDATE_METADATA);
+    if (process.env.PROFER_UPDATE_SKIP_LEGACY !== '1') {
+      // 旧机只是备用源：差分失效不影响兜底可用性，不拿它阻断正式发布。
+      assertDifferentialPrerequisite(LEGACY_UPDATE_FEED_URL, WINDOWS_UPDATE_METADATA, { warnOnly: true });
+    }
+    warnPurgedBlockmaps(UPDATE_FEED_URL);
+  }
   if (ARTIFACTS_ONLY) {
     run(`bun run ${UNSIGNED_RELEASE ? 'verify:release-assets:unsigned' : 'verify:release-assets'}`, ELECTRON);
     run('bun run verify:packaged-pi-runtime', ELECTRON);
@@ -329,10 +425,18 @@ async function ensureGitHubRelease(assets) {
     console.log(`  已上传到 ${target.user}@${target.host}:${target.dir}`);
   }
 
+  if (!GITHUB_ONLY) {
+    // 上传后确认当前 blockmap 真的可访问：下次发版的差分完全依赖它。
+    const currentBlockmapUrl = `${UPDATE_FEED_URL}${blockmap.name}`;
+    const status = fetchPublicStatus(currentBlockmapUrl);
+    if (status !== 200) throw new Error(`更新源缺少本次 blockmap：${currentBlockmapUrl}（HTTP ${status}）`);
+    console.log(`  本次 blockmap 已公开：${currentBlockmapUrl}`);
+  }
+
   console.log('[3/5] 推送源码与版本 tag...');
   pushSourceAndTag();
 
-  console.log('[4/5] 上传 GitHub Release（本地唯一写入者）...');
+  console.log('[4/5] 上传 GitHub Release（创建或补充 Windows 资产）...');
   await ensureGitHubRelease(assets);
 
   // 商业版「版本历史」的数据源是服务器上的 releases.json（apps/electron/src/main/ipc.ts
@@ -343,11 +447,13 @@ async function ensureGitHubRelease(assets) {
   run(`node scripts/build-releases-json.cjs${GITHUB_ONLY ? '' : ' --upload'}`);
   // macOS 包只能在 Apple Silicon 上构建，Windows 发布流程无法代劳。历史上 v0.15.84 / v0.15.85
   // 就是漏了这一步：GitHub Release 与更新源都只有 Windows 资产，macOS 客户端从 0.15.84 起
-  // 再也收不到更新。这里显式提示，避免再次漏发。
-  console.log(
-    `[提示] 还需在一台 Apple Silicon 机器上补发 macOS 资产：` +
-    `node scripts/push-mac-release.cjs ${VERSION}（缺 latest-mac.yml 时 macOS 自动更新会直接失败）`,
-  );
+  // 再也收不到更新。这里按实际资产状态提示，避免重复提示已补齐的版本。
+  if (!hasMacReleaseAssets(readReleaseAssets(), VERSION)) {
+    console.log(
+      `[提示] 还需在一台 Apple Silicon 机器上补发 macOS 资产：` +
+      `node scripts/push-mac-release.cjs ${VERSION}（缺 latest-mac.yml 时 macOS 自动更新会直接失败）`,
+    );
+  }
   console.log(`=== 发布完成 ${TAG} ===`);
 })().catch((error) => {
   console.error(`发布失败: ${error.message}`);

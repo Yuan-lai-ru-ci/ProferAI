@@ -4,7 +4,11 @@
  *
  * 在任何 SSH/SCP、git push/tag 或 GitHub Release 写入之前执行，
  * 防止 tag/Release 冲突留下半发布状态。
- * 用法：node scripts/verify-release-preflight.cjs <版本号>
+ *
+ * 发布顺序不固定：macOS 与 Windows 都可以先创建 tag/Release，后跑的一方只补充
+ * 自己的资产。因此 --allow-published-release 表示「本次允许补充已发布 Release」，
+ * 但不会放宽版本号、工作树或 tag 目标的一致性约束。
+ * 用法：node scripts/verify-release-preflight.cjs <版本号> [--allow-published-release]
  */
 const { execSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -73,7 +77,7 @@ function assertExistingRelease() {
   }
   const release = JSON.parse(result.out)
   if (!release.isDraft && !allowPublishedRelease) {
-    throw new Error(`GitHub Release ${tag} 已发布；拒绝覆盖已发布版本。`)
+    throw new Error(`GitHub Release ${tag} 已发布；如需补充本平台资产请显式允许补充已发布 Release。`)
   }
 }
 
@@ -81,14 +85,14 @@ assertMetadata()
 assertCleanWorktree()
 run('git fetch origin --prune')
 if (!tryRun('git merge-base --is-ancestor origin/main HEAD').ok) {
-  // 回填已发布版本的补充资产（典型场景：Windows Release 已发布后，在 Apple Silicon 上
-  // 用 tag 工作树补 macOS 资产）时，HEAD 会停在 tag 上、落后于 origin/main。
-  // 允许这种分叉，但不能因此放宽“tag 必须指向 HEAD / 工作树必须干净”的约束——
-  // 否则就可能把非 tag 内容冒充成该版本发出去。
+  // 回填已发布版本的补充资产（典型场景：另一平台已发布后，在 tag 工作树上补本平台
+  // 资产）时，HEAD 会停在 tag 上、落后于 origin/main。允许这种分叉，但不能因此
+  // 放宽“tag 必须指向 HEAD / 工作树必须干净”的约束——否则就可能把非 tag 内容
+  // 冒充成该版本发出去。
   if (!allowPublishedRelease) {
     throw new Error('本地 main 未包含最新 origin/main；请先人工处理分叉，发布脚本不会 rebase 活跃分支。')
   }
-  console.warn('[release-preflight] HEAD 落后于 origin/main，按「回填已发布版本资产」处理（仅允许补充资产，不改动版本与 tag）。')
+  console.warn('[release-preflight] HEAD 落后于 origin/main，按「补充已发布版本资产」处理（仅允许补充资产，不改动版本与 tag）。')
 }
 const head = run('git rev-parse HEAD')
 assertTagTargets(head)

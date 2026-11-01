@@ -1,50 +1,86 @@
 import { describe, expect, test } from 'bun:test'
 import contract from './release-asset-contract.cjs'
 
-const { assertWindowsReleaseReady, requiredWindowsReleaseAssetNames } = contract
+const {
+  assertReleasePublished,
+  hasMacReleaseAssets,
+  hasWindowsReleaseAssets,
+  requiredMacReleaseAssetNames,
+  requiredWindowsReleaseAssetNames,
+} = contract
 
-describe('macOS 补充发布资产前置条件', () => {
-  const expectedNames = [
-    'latest.yml',
-    'Profer-Setup-0.15.68.exe',
-    'Profer-Setup-0.15.68.exe.blockmap',
-  ]
+const VERSION = '0.15.68'
+const WINDOWS_ASSETS = [
+  'latest.yml',
+  'Profer-Setup-0.15.68.exe',
+  'Profer-Setup-0.15.68.exe.blockmap',
+]
+const MAC_ASSETS = [
+  'latest-mac.yml',
+  'Profer-0.15.68-arm64-mac.zip',
+  'Profer-0.15.68-arm64-mac.zip.blockmap',
+  'Profer-0.15.68-arm64.dmg',
+]
 
-  test('要求已发布版本包含完整 Windows 资产', () => {
-    expect(requiredWindowsReleaseAssetNames('0.15.68')).toEqual(expectedNames)
-    const assets = expectedNames.map((name) => ({ name, size: 1, state: 'uploaded' }))
+function uploaded(names: string[]) {
+  return names.map((name) => ({ name, size: 1, state: 'uploaded' }))
+}
 
-    expect(assertWindowsReleaseReady({ isDraft: false, assets }, '0.15.68')).toEqual({
-      isDraft: false,
-      assets,
-    })
+describe('发布资产契约', () => {
+  test('两个平台的必需资产名固定', () => {
+    expect(requiredWindowsReleaseAssetNames(VERSION)).toEqual(WINDOWS_ASSETS)
+    expect(requiredMacReleaseAssetNames(VERSION)).toEqual(MAC_ASSETS)
   })
 
-  test('拒绝在 Windows Release 不存在或仍为草稿时抢先发布', () => {
-    expect(() => assertWindowsReleaseReady(null, '0.15.68')).toThrow('请先完成 Windows 发布')
-    expect(() => assertWindowsReleaseReady({ isDraft: true, assets: [] }, '0.15.68')).toThrow('尚未确认已发布')
-    expect(() => assertWindowsReleaseReady({ assets: [] }, '0.15.68')).toThrow('尚未确认已发布')
-  })
+  test('完整上传的 Windows 资产才算就绪', () => {
+    expect(hasWindowsReleaseAssets({ isDraft: false, assets: uploaded(WINDOWS_ASSETS) }, VERSION)).toBe(true)
+    expect(hasWindowsReleaseAssets(null, VERSION)).toBe(false)
+    expect(hasWindowsReleaseAssets({ isDraft: false, assets: [] }, VERSION)).toBe(false)
 
-  test('拒绝缺少任一 Windows 发布资产的版本', () => {
-    for (const missingName of expectedNames) {
-      const assets = expectedNames
-        .filter((name) => name !== missingName)
-        .map((name) => ({ name, size: 1, state: 'uploaded' }))
-      expect(() => assertWindowsReleaseReady({ isDraft: false, assets }, '0.15.68'))
-        .toThrow(missingName)
+    for (const missingName of WINDOWS_ASSETS) {
+      const assets = uploaded(WINDOWS_ASSETS.filter((name) => name !== missingName))
+      expect(hasWindowsReleaseAssets({ isDraft: false, assets }, VERSION)).toBe(false)
     }
   })
 
-  test('拒绝空文件或尚未完成上传的 Windows 资产', () => {
-    const assets = expectedNames.map((name) => ({ name, size: 1, state: 'uploaded' }))
-    expect(() => assertWindowsReleaseReady({
+  test('完整上传的 macOS 资产才算就绪', () => {
+    expect(hasMacReleaseAssets({ isDraft: false, assets: uploaded(MAC_ASSETS) }, VERSION)).toBe(true)
+    expect(hasMacReleaseAssets(null, VERSION)).toBe(false)
+
+    for (const missingName of MAC_ASSETS) {
+      const assets = uploaded(MAC_ASSETS.filter((name) => name !== missingName))
+      expect(hasMacReleaseAssets({ isDraft: false, assets }, VERSION)).toBe(false)
+    }
+  })
+
+  test('空文件或尚未完成上传的资产不算就绪', () => {
+    const windows = uploaded(WINDOWS_ASSETS)
+    expect(hasWindowsReleaseAssets({
       isDraft: false,
-      assets: assets.map((asset) => asset.name === 'latest.yml' ? { ...asset, size: 0 } : asset),
-    }, '0.15.68')).toThrow('latest.yml')
-    expect(() => assertWindowsReleaseReady({
+      assets: windows.map((asset) => asset.name === 'latest.yml' ? { ...asset, size: 0 } : asset),
+    }, VERSION)).toBe(false)
+    expect(hasWindowsReleaseAssets({
       isDraft: false,
-      assets: assets.map((asset) => asset.name.endsWith('.exe') ? { ...asset, state: 'new' } : asset),
-    }, '0.15.68')).toThrow('Profer-Setup-0.15.68.exe')
+      assets: windows.map((asset) => asset.name.endsWith('.exe') ? { ...asset, state: 'new' } : asset),
+    }, VERSION)).toBe(false)
+
+    const mac = uploaded(MAC_ASSETS)
+    expect(hasMacReleaseAssets({
+      isDraft: false,
+      assets: mac.map((asset) => asset.name.endsWith('.dmg') ? { ...asset, size: 0 } : asset),
+    }, VERSION)).toBe(false)
+    expect(hasMacReleaseAssets({
+      isDraft: false,
+      assets: mac.map((asset) => asset.name.endsWith('.zip') ? { ...asset, state: 'new' } : asset),
+    }, VERSION)).toBe(false)
+  })
+
+  test('发布终态要求 Release 存在且非草稿', () => {
+    expect(() => assertReleasePublished(null, VERSION)).toThrow('未找到')
+    expect(() => assertReleasePublished({ isDraft: true, assets: [] }, VERSION)).toThrow('仍是草稿')
+    expect(() => assertReleasePublished({ assets: [] }, VERSION)).toThrow('仍是草稿')
+
+    const release = { isDraft: false, assets: uploaded(MAC_ASSETS) }
+    expect(assertReleasePublished(release, VERSION)).toEqual(release)
   })
 })
