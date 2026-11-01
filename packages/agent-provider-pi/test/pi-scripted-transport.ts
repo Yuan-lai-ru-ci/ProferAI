@@ -29,8 +29,8 @@ export interface ScriptedTurn {
 export interface ScriptedTransport {
   /** 注入到真实 ModelRuntime 实例上的脚本化 streamSimple。 */
   streamSimple(model: Model<never>, context: unknown, options?: { signal?: AbortSignal }): unknown
-  /** 已发起的模型请求次数与看到的上下文长度。 */
-  calls: Array<{ turn: number; messageCount: number }>
+  /** 已发起的模型请求数、消息数及测试用的 system/user 文本快照。 */
+  calls: Array<{ turn: number; messageCount: number; systemPrompt?: string; userTexts: string[] }>
   /** 手动释放 pending 轮（取消场景的兜底，避免测试悬挂）。 */
   releasePending(): void
   /** 剩余未消费脚本轮次。 */
@@ -73,8 +73,16 @@ export function createScriptedTransport(turns: ScriptedTurn[]): ScriptedTranspor
   const streamSimple: ScriptedTransport['streamSimple'] = (model, context, options) => {
     const stream = createAssistantMessageEventStream()
     const turnIndex = calls.length
-    const contextMessages = (context as { messages?: unknown[] } | undefined)?.messages
-    calls.push({ turn: turnIndex, messageCount: Array.isArray(contextMessages) ? contextMessages.length : 0 })
+    const contextMessages = (context as { messages?: Array<{ role?: string; content?: unknown }> } | undefined)?.messages
+    const systemMessage = contextMessages?.find(message => message.role === 'system')
+    calls.push({
+      turn: turnIndex,
+      messageCount: Array.isArray(contextMessages) ? contextMessages.length : 0,
+      ...(typeof systemMessage?.content === 'string' ? { systemPrompt: systemMessage.content } : {}),
+      userTexts: (contextMessages ?? [])
+        .filter(message => message.role === 'user')
+        .map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)),
+    })
     const turn = queue.shift()
 
     const emitText = (partial: AssistantMessage, chunks: string[]): void => {

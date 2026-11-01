@@ -283,8 +283,8 @@ describe('sanitizePiContextMessages', () => {
     expect(result[0]).toBe(validImage)
   })
 
-  test('旧工具结果超预算时保留头尾并插入说明，最近两组（按 assistant 回复）保持完整', () => {
-    const long = 'A'.repeat(20_000)
+  test('总文本超预算时整理旧组并保留头尾，最近两组（按 assistant 回复）保持完整', () => {
+    const long = 'A'.repeat(80_000)
     const messages = [
       assistantCalling(['old']),
       bashResult('old', long),
@@ -308,7 +308,7 @@ describe('sanitizePiContextMessages', () => {
   })
 
   test('同一条 assistant 回复的并行工具结果成组保留，不按条数劈开', () => {
-    const long = 'P'.repeat(20_000)
+    const long = 'P'.repeat(50_000)
     const messages = [
       assistantCalling(['old']),
       bashResult('old', long),
@@ -329,8 +329,8 @@ describe('sanitizePiContextMessages', () => {
     for (const index of [3, 4, 5, 7]) expect(textAt(index)).toBe(long)
   })
 
-  test('内容本身包含预算标记字面量时仍会被裁剪', () => {
-    const embedded = `${TOOL_RESULT_BUDGET_MARKER} 已省略 123 个字符以节省上下文；如仍需完整内容，请重新调用工具或分页读取。]\n${'C'.repeat(20_000)}`
+  test('内容本身包含预算标记字面量时超预算仍会被裁剪', () => {
+    const embedded = `${TOOL_RESULT_BUDGET_MARKER} 已省略 123 个字符以节省上下文；如仍需完整内容，请重新调用工具或分页读取。]\n${'C'.repeat(210_000)}`
     const messages = [
       assistantCalling(['old']),
       bashResult('old', embedded),
@@ -348,7 +348,7 @@ describe('sanitizePiContextMessages', () => {
     expect(firstText.length).toBeLessThan(9_000)
   })
 
-  test('全局只保留最近 6 张工具图片，旧图片替换为一条说明', () => {
+  test('图片超过 6 张时成批整理旧图片并留出续轮空间', () => {
     const messages = Array.from({ length: 8 }, (_, index) => ({
       role: 'toolResult',
       toolCallId: `call-image-${index}`,
@@ -366,7 +366,8 @@ describe('sanitizePiContextMessages', () => {
       return count + content.filter((block) => block.type === 'image').length
     }, 0)
 
-    expect(images).toBe(6)
+    // 第七张到来时整理到三张，第八张加入后共四张，未回填被省略的历史。
+    expect(images).toBe(4)
     const firstContent = (result[0] as unknown as { content: Array<Record<string, unknown>> }).content
     expect(firstContent.some((block) => block.type === 'text' && String(block.text).includes(OMITTED_TOOL_IMAGE_TEXT))).toBe(true)
     const lastContent = (result[7] as unknown as { content: Array<Record<string, unknown>> }).content
@@ -503,7 +504,7 @@ describe('sanitizePiContextMessagesWithImages', () => {
     }, 0)
   }
 
-  test('最近两张图走高清档，其余保留图走低清档', async () => {
+  test('预算内图片使用稳定高清档，不随新增图片滑动改变旧图编码', async () => {
     const calls: Array<{ maxSide: number; quality: number }> = []
     const transcoder: PiImageTranscoderPort = {
       async transcode(_input, options) {
@@ -515,15 +516,15 @@ describe('sanitizePiContextMessagesWithImages', () => {
 
     const result = await sanitizePiContextMessagesWithImages(messages, transcoder)
 
-    expect(calls.map((call) => call.maxSide)).toEqual([1600, 1600, 1024, 1024, 1024, 1024])
-    expect(calls.map((call) => call.quality)).toEqual([82, 82, 70, 70, 70, 70])
+    expect(calls.map((call) => call.maxSide)).toEqual([1600, 1600, 1600, 1600, 1600, 1600])
+    expect(calls.map((call) => call.quality)).toEqual([82, 82, 82, 82, 82, 82])
     expect(imageCount(result)).toBe(6)
     // 不修改原始消息对象。
     const originalContent = (messages[0] as unknown as { content: Array<Record<string, unknown>> }).content
     expect(originalContent.find((block) => block.type === 'image')!.data).toBe('A'.repeat(1_000))
   })
 
-  test('超过 6 张时只保留最近 6 张，更旧的图替换为说明', async () => {
+  test('超过 6 张时成批省略旧图，最新图片仍保留', async () => {
     const transcoder: PiImageTranscoderPort = {
       async transcode() {
         return { data: 'B'.repeat(100), mimeType: 'image/jpeg' }
@@ -533,7 +534,7 @@ describe('sanitizePiContextMessagesWithImages', () => {
 
     const result = await sanitizePiContextMessagesWithImages(messages, transcoder)
 
-    expect(imageCount(result)).toBe(6)
+    expect(imageCount(result)).toBe(4)
     const oldest = (result[0] as unknown as { content: Array<Record<string, unknown>> }).content
     expect(oldest.some((block) => block.type === 'text' && String(block.text).includes(OMITTED_TOOL_IMAGE_TEXT))).toBe(true)
   })
@@ -561,7 +562,7 @@ describe('sanitizePiContextMessagesWithImages', () => {
 
     const result = await sanitizePiContextMessagesWithImages(messages)
 
-    expect(imageCount(result)).toBe(6)
+    expect(imageCount(result)).toBe(4)
   })
 
   test('同一原始图片跨轮复用转码缓存，不重复编码', async () => {
