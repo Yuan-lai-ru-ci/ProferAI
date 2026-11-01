@@ -28,9 +28,26 @@ import { MarkdownToc } from './MarkdownToc'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
 import { PIERRE_FILE_CSS } from '@/components/agent/tool-result-renderers/pierre-styles'
 import { OfficePreview } from '@/components/file-browser/office-preview/OfficePreview'
-import { OfvPreview } from '@/components/file-browser/ofv-preview/OfvPreview'
 import { EDITABLE_TEXT_EXTS, IMAGE_PREVIEW_EXTS, UNSUPPORTED_EXTS } from '@/lib/preview-extension-sets'
 import { isOfvBackedPath } from '@/lib/ofv-extensions'
+import {
+  PREVIEW_CACHE_MAX,
+  previewContentCache as contentCache,
+  previewScrollPositions as scrollPositionCache,
+  previewScrollKey as scrollCacheKey,
+  type PreviewCacheEntry,
+} from './preview-cache'
+
+/**
+ * Open File Viewer 宿主按需加载。
+ *
+ * `@open-file-viewer/core` 连同 docx-preview / pako / jszip 打包约 800kB，而它只服务长尾格式的
+ * 回退预览（见 `lib/ofv-extensions.ts`）。静态 import 会把这整块拖进入口 chunk、冷启动就要解析，
+ * 所以这里改成动态 import：只有真的打开 OFV 格式文件时才加载。
+ */
+const OfvPreview = React.lazy(() =>
+  import('@/components/file-browser/ofv-preview/OfvPreview').then((module) => ({ default: module.OfvPreview })),
+)
 
 const MD_EXTS = new Set(['.md', '.markdown'])
 const HTML_EXTS = new Set(['.html', '.htm'])
@@ -60,22 +77,10 @@ const FILE_FIND_SHORTCUT_OPTIONS = { exclusive: true }
  * - preview 模式：`${sessionId}:preview:${filePath}@v${refreshVersion}:${scope}`
  * refreshVersion 变化时（agent 写文件、git 突变）key 自然变化，
  * 老 entry 不会被命中，最终被 LRU 淘汰；无需主动失效。
+ *
+ * 缓存本体在 `preview-cache.ts`：左侧栏清缓存时不能把整棵预览子树拖进入口 chunk。
  */
-type CacheEntry = {
-  oldContent: string
-  newContent: string
-  /** 非文本文件预览数据 */
-  pdfSrc?: string
-  imageDataUrl?: string
-  imagePath?: string
-  docxHtml?: string
-  officeHtml?: string
-  officeText?: string
-  /** HTML 预览的目录级 token URL，允许加载同目录相对资源 */
-  htmlPreviewUrl?: string
-}
-const CACHE_MAX = 50
-const contentCache = new Map<string, CacheEntry>()
+const CACHE_MAX = PREVIEW_CACHE_MAX
 
 /** 超过此字符数的文本文件将跳过 PierreFile 高亮，直接以纯文本展示，避免大文件卡顿 */
 const MAX_PREVIEW_CHARS = 500_000
@@ -83,31 +88,7 @@ const MAX_PREVIEW_CHARS = 500_000
 /** 选中文本最大字符数（与 Bozeman DOM 模式一致） */
 const MAX_QUOTED_CHARS = 2000
 
-/** 滚动位置持久化：key = `${sessionId}:${filePath}` */
-const scrollPositionCache = new Map<string, { top: number; left: number }>()
-
-function scrollCacheKey(sessionId: string, filePath: string): string {
-  return `${sessionId}:${filePath}`
-}
-
-/** 获取缓存的滚动位置 */
-export function getPreviewScrollPosition(sessionId: string, filePath: string): { top: number; left: number } | undefined {
-  return scrollPositionCache.get(scrollCacheKey(sessionId, filePath))
-}
-
-/**
- * 清除指定 session 的预览缓存，供 useCloseTab 调用。
- */
-export function clearPreviewCacheForSession(sessionId: string): void {
-  const prefix = `${sessionId}:`
-  for (const key of scrollPositionCache.keys()) {
-    if (key.startsWith(prefix)) scrollPositionCache.delete(key)
-  }
-  for (const key of contentCache.keys()) {
-    if (key.startsWith(prefix)) contentCache.delete(key)
-  }
-}
-function cacheGet(key: string): CacheEntry | undefined {
+function cacheGet(key: string): PreviewCacheEntry | undefined {
   const v = contentCache.get(key)
   if (!v) return undefined
   // 重新插入到末尾，更新 LRU 位置
@@ -115,7 +96,7 @@ function cacheGet(key: string): CacheEntry | undefined {
   contentCache.set(key, v)
   return v
 }
-function cacheSet(key: string, value: CacheEntry): void {
+function cacheSet(key: string, value: PreviewCacheEntry): void {
   if (contentCache.has(key)) contentCache.delete(key)
   contentCache.set(key, value)
   if (contentCache.size > CACHE_MAX) {
@@ -1234,7 +1215,16 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
                 ) : undefined}
               />
             ) : isOfvBacked ? (
-              <OfvPreview filePath={filePath} access={fileAccess} className="h-full" />
+              <React.Suspense
+                fallback={
+                  <div className="flex h-full items-center justify-center gap-2 text-[13px] text-muted-foreground">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    正在准备预览…
+                  </div>
+                }
+              >
+                <OfvPreview filePath={filePath} access={fileAccess} className="h-full" />
+              </React.Suspense>
             ) : isLegacyOffice ? null : isHtml && !htmlSourceMode ? (
               htmlPreviewUrl ? (
                 <iframe

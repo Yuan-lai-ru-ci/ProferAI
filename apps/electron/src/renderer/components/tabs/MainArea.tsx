@@ -11,7 +11,6 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
 import { tabsAtom, activeTabIdAtom, activeTabAtom, tabIndicatorMapAtom, createBrowserTabId } from '@/atoms/tab-atoms'
 import { Panel } from '@/components/app-shell/Panel'
-import { WelcomeView } from '@/components/welcome/WelcomeView'
 import { browserNativePaneTabIdsAtom, browserPanelDismissedSessionIdsAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
 import { openBrowserTabFromPush } from '@/lib/browser-tab'
 import { isBrowserTab } from '@/atoms/tab-atoms'
@@ -19,10 +18,6 @@ import { shouldAutoOpenBrowserFromPush } from '@/lib/browser-auto-open'
 import type { BrowserViewState } from '@profer/shared'
 import { TabBar } from './TabBar'
 import { TabContent } from './TabContent'
-import { AutomationFormView } from '@/components/automation/AutomationFormView'
-import { PlanningView } from '@/components/planning/PlanningView'
-import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
-import { AgentMemoryView } from '@/components/agent-skills/AgentMemoryView'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
@@ -53,6 +48,32 @@ import {
   tabGroupRatioAtom,
   type TabGroupSide,
 } from '@/atoms/tab-group-atoms'
+
+/**
+ * 全屏视图与欢迎页按需加载。
+ *
+ * 它们都不是首屏（规划中心 / 技能 / 记忆 / 定时任务表单 / 无 Tab 时的欢迎页），
+ * 静态 import 会把整棵子树（含 CalendarWorkspace、AgentPresetSettings 等）钉进入口 chunk。
+ * 切成动态 import 后，只有真的切到那个视图才会拉对应块；本地磁盘下通常一帧内完成。
+ */
+const WelcomeView = React.lazy(() =>
+  import('@/components/welcome/WelcomeView').then((module) => ({ default: module.WelcomeView })),
+)
+const AutomationFormView = React.lazy(() =>
+  import('@/components/automation/AutomationFormView').then((module) => ({ default: module.AutomationFormView })),
+)
+const PlanningView = React.lazy(() =>
+  import('@/components/planning/PlanningView').then((module) => ({ default: module.PlanningView })),
+)
+const AgentSkillsView = React.lazy(() =>
+  import('@/components/agent-skills/AgentSkillsView').then((module) => ({ default: module.AgentSkillsView })),
+)
+const AgentMemoryView = React.lazy(() =>
+  import('@/components/agent-skills/AgentMemoryView').then((module) => ({ default: module.AgentMemoryView })),
+)
+
+/** 懒加载视图的占位：与内容区同色、无文字，避免出现“加载中”闪烁。 */
+const LAZY_VIEW_FALLBACK = <div className="h-full w-full bg-content-area" />
 
 /**
  * 分栏收起的抽屉动画时长与缓动：与左侧栏/抽屉的收起动画（300ms + cubic-bezier(0.32,0.72,0,1)）
@@ -470,17 +491,25 @@ export function MainArea(): React.ReactElement {
         {activeView === 'planning' ? (
           automationFormOpen ? (
             // 规划中心内的定时任务设置页：与列表同层级替换中间区，不经过 TabBar。
-            <AutomationFormView />
+            <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
+              <AutomationFormView />
+            </React.Suspense>
           ) : (
             // 规划中心视图（Task · 日历 · 定时任务）全屏取代 TabBar + TabContent
-            <PlanningView />
+            <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
+              <PlanningView />
+            </React.Suspense>
           )
         ) : activeView === 'agent-skills' ? (
           // Agent 技能视图：全屏取代 TabBar + TabContent
-          <AgentSkillsView />
+          <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
+            <AgentSkillsView />
+          </React.Suspense>
         ) : activeView === 'agent-memory' ? (
           // Agent 记忆视图：同样全屏取代 TabBar + TabContent
-          <AgentMemoryView />
+          <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
+            <AgentMemoryView />
+          </React.Suspense>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
             {/* 顶栏横跨整个主区：组合分屏时两侧顶栏共用同一条基线。 */}
@@ -509,9 +538,13 @@ export function MainArea(): React.ReactElement {
                 >
                   {automationFormOpen ? (
                     // 兼容从会话内入口打开任务设置的场景。
-                    <AutomationFormView />
+                    <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
+                      <AutomationFormView />
+                    </React.Suspense>
                   ) : tabs.length === 0 ? (
-                    <WelcomeView />
+                    <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
+                      <WelcomeView />
+                    </React.Suspense>
                   ) : leftPaneTabId ? (
                     <div className="flex-1 min-h-0 titlebar-no-drag">
                       <TabContent tabId={leftPaneTabId} />

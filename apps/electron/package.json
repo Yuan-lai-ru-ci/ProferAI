@@ -24,7 +24,7 @@
     "watch:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='\"oss\"' --watch=forever",
     "watch:main-commercial": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --outfile=dist/main.cjs --external:electron --external:@anthropic-ai/claude-agent-sdk --external:@earendil-works/pi-coding-agent --external:@earendil-works/pi-agent-core --external:@earendil-works/pi-ai --define:__PROFER_BUILD_TARGET__='\"commercial\"' --watch=forever",
     "watch:preload": "concurrently -k -n app-preload,plugin-preload -c magenta,blue \"esbuild src/preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/preload.cjs --external:electron --watch=forever\" \"esbuild src/plugin-preload/index.ts --bundle --platform=node --format=cjs --outfile=dist/plugin-preload.cjs --external:electron --watch=forever\"",
-    "build:renderer": "bun run build:ooxml && vite build",
+    "build:renderer": "bun run build:ooxml && vite build && node scripts/check-startup-budget.mjs",
     "build:resources": "bun run scripts/copy-resources.ts",
     "build:cli": "bun run scripts/build-cli.ts",
     "build:pen-ocr": "node scripts/build-pen-ocr.cjs",

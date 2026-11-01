@@ -14,6 +14,15 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, 'dist/renderer'),
     emptyOutDir: true,
+    // Vite 默认的 500kB 逐块阈值是按浏览器首屏设计的，对 Electron 会持续误报：
+    // mermaid/zenuml/three/heic2any/shiki 语言包/pdf/xlsx 这些都是**按需块**，只在用户
+    // 真的用到对应功能时才加载，拆小它们既不减包也不提速。所以逐块警告放宽到 4MB
+    // （当前最大的按需块 zenuml 约 3.3MB）。
+    //
+    // 真正要守的边界改成了「入口图」：`scripts/check-startup-budget.mjs` 只校验
+    // index.html 同步加载的 script + modulepreload + stylesheet 的原始/gzip 体积，
+    // 谁再把大依赖静态 import 回入口，构建会直接失败。
+    chunkSizeWarningLimit: 4096,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'src/renderer/index.html'),

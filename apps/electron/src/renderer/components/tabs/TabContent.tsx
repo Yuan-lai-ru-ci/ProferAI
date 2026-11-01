@@ -11,13 +11,33 @@ import { tabsAtom } from '@/atoms/tab-atoms'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { ChatView } from '@/components/chat'
 import { AgentView } from '@/components/agent'
-import { PreviewTabContent } from '@/components/diff/PreviewTabContent'
-import { BrowserTabContent } from '@/components/browser/BrowserTabContent'
 import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
-import { ScratchPadView } from '@/components/scratch-pad/ScratchPadView'
 import { TabErrorBoundary } from './TabErrorBoundary'
-import { PluginViewport } from './PluginViewport'
+
+/**
+ * 非默认 Tab 类型按需加载。
+ *
+ * 对话 / Agent 是首屏，保持静态（实测：把 ChatView 也拆出去，因为 AgentView 和
+ * app-shell 都引用了 chat 的内部模块，入口体积零收益，故不做）；文件预览、浏览器、
+ * 白板、插件页只在用户真的切到对应 Tab 时才需要，静态 import 会把它们（含
+ * DiffTabContent / OfficePreview）钉进入口 chunk。
+ */
+const PreviewTabContent = React.lazy(() =>
+  import('@/components/diff/PreviewTabContent').then((module) => ({ default: module.PreviewTabContent })),
+)
+const BrowserTabContent = React.lazy(() =>
+  import('@/components/browser/BrowserTabContent').then((module) => ({ default: module.BrowserTabContent })),
+)
+const ScratchPadView = React.lazy(() =>
+  import('@/components/scratch-pad/ScratchPadView').then((module) => ({ default: module.ScratchPadView })),
+)
+const PluginViewport = React.lazy(() =>
+  import('./PluginViewport').then((module) => ({ default: module.PluginViewport })),
+)
+
+/** 懒加载 Tab 的占位：无文字，避免切换时出现“加载中”闪烁。 */
+const LAZY_TAB_FALLBACK = <div className="h-full w-full" />
 
 const TAB_VIEW_INSTANCE = { kind: 'tab' as const }
 
@@ -45,7 +65,11 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
   }
 
   if (tab.type === 'scratch') {
-    return <ScratchPadView />
+    return (
+      <React.Suspense fallback={LAZY_TAB_FALLBACK}>
+        <ScratchPadView />
+      </React.Suspense>
+    )
   }
 
   if (tab.type === 'tutorial') {
@@ -67,7 +91,9 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
   if (tab.type === 'preview') {
     return (
       <TabErrorBoundary key={tab.id} sessionId={tab.sessionId}>
-        <PreviewTabContent tabId={tab.id} sessionId={tab.sessionId} filePath={tab.filePath ?? ''} />
+        <React.Suspense fallback={LAZY_TAB_FALLBACK}>
+          <PreviewTabContent tabId={tab.id} sessionId={tab.sessionId} filePath={tab.filePath ?? ''} />
+        </React.Suspense>
       </TabErrorBoundary>
     )
   }
@@ -75,13 +101,19 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
   if (tab.type === 'browser') {
     return (
       <TabErrorBoundary key={tab.id} sessionId={tab.sessionId}>
-        <BrowserTabContent tabId={tab.id} sessionId={tab.sessionId} browserTabId={tab.browserTabId ?? ''} />
+        <React.Suspense fallback={LAZY_TAB_FALLBACK}>
+          <BrowserTabContent tabId={tab.id} sessionId={tab.sessionId} browserTabId={tab.browserTabId ?? ''} />
+        </React.Suspense>
       </TabErrorBoundary>
     )
   }
 
   if (tab.type === 'plugin' && tab.pluginId && tab.pluginPageId) {
-    return <PluginViewport pluginId={tab.pluginId} pageId={tab.pluginPageId} instance={tab.pluginScope === 'session' ? { kind: 'tab', sessionId: tab.sessionId } : TAB_VIEW_INSTANCE} visible />
+    return (
+      <React.Suspense fallback={LAZY_TAB_FALLBACK}>
+        <PluginViewport pluginId={tab.pluginId} pageId={tab.pluginPageId} instance={tab.pluginScope === 'session' ? { kind: 'tab', sessionId: tab.sessionId } : TAB_VIEW_INSTANCE} visible />
+      </React.Suspense>
+    )
   }
 
   return (
