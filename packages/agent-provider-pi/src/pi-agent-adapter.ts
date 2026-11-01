@@ -8,6 +8,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { CommandExecutionPort, BackgroundTaskPort, ProcessRegistrationPort, AgentRuntimePreparedContext } from '@profer/agent-runtime'
 import { createPiCommandBashOperations } from './pi/command-bash'
+import { prependPiCompactionTaskGuidance } from '@profer/shared'
+
 import { diffSnapshots, snapshotTree } from './pi/file-write-snapshot'
 import { FileReadTracker, isTruncatedReadOutput, readFileState } from './pi/file-read-tracker'
 import type { PiAgentAdapterPorts, PiProviderHostDependencies } from './ports'
@@ -209,6 +211,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   thinkingLevel?: AgentThinkingLevel
   maxBudgetUsd?: number
   outputFormat?: JsonSchemaOutputFormat
+  /** 本轮指导仅用于压缩后的自动续跑，不改写稳定 system 或已持久化历史。 */
+  taskPrompt?: string
   /** Proma 聚合的附加目录；Pi 内置工具 factory 不接收多 root 参数，编排层会把它们注入 systemPrompt。 */
   additionalDirectories?: string[]
   additionalSkillPaths?: string[]
@@ -970,6 +974,7 @@ export function planPiCompactionContinuation(options: {
   continuationCount: number
   abortRequested: boolean
   runtimeLimitReached: boolean
+  taskPrompt?: string
 }):
   | { shouldContinue: true; prompt: string }
   | { shouldContinue: false; reason: 'aborted' | 'runtime_limit' | 'continuation_limit' } {
@@ -978,7 +983,12 @@ export function planPiCompactionContinuation(options: {
   if (options.continuationCount >= MAX_AUTOMATIC_COMPACTION_CONTINUATIONS) {
     return { shouldContinue: false, reason: 'continuation_limit' }
   }
-  return { shouldContinue: true, prompt: PI_COMPACTION_CONTINUATION_PROMPT }
+  return {
+    shouldContinue: true,
+    prompt: options.taskPrompt
+      ? prependPiCompactionTaskGuidance(PI_COMPACTION_CONTINUATION_PROMPT, options.taskPrompt)
+      : PI_COMPACTION_CONTINUATION_PROMPT,
+  }
 }
 
 export function canRunCurrentSessionCompaction(toolNames: string[]): boolean {
@@ -2530,6 +2540,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               continuationCount: automaticCompactionContinuations,
               abortRequested: active.abortRequested,
               runtimeLimitReached: runtimeGuard.shouldStopBeforeNextTurn(),
+              taskPrompt: input.taskPrompt,
             })
             if (continuation.shouldContinue) {
               automaticCompactionContinuations += 1
