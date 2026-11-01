@@ -8,8 +8,6 @@ import * as React from 'react'
 import { useAtom } from 'jotai'
 import { Camera, ImagePlus, LogIn, LogOut, RefreshCw, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import Picker from '@emoji-mart/react'
-import data from '@emoji-mart/data'
 import { SettingsSection, SettingsCard } from './primitives'
 import { Popover, PopoverTrigger, PopoverContent } from '@profer/ui/primitives/popover'
 import { UserAvatar } from '../chat/UserAvatar'
@@ -19,14 +17,13 @@ import { LoginDialog } from '@/components/auth/LoginDialog'
 import { DevicesSettings } from './DevicesSettings'
 import { cn } from '@/lib/utils'
 
-interface EmojiMartEmoji {
-  id: string
-  name: string
-  native: string
-  unified: string
-  keywords: string[]
-  shortcodes: string
-}
+/**
+ * 表情选择器懒加载：`@emoji-mart/react` + 原生表情集 JSON 合计约 600kB，
+ * 只有点开头像选择器时才拉，不跟着设置面板一起下载。
+ */
+const EmojiAvatarPicker = React.lazy(() =>
+  import('./EmojiAvatarPicker').then((module) => ({ default: module.EmojiAvatarPicker })),
+)
 
 export function AccountSettings(): React.ReactElement {
   const [userProfile, setUserProfile] = useAtom(userProfileAtom)
@@ -148,6 +145,7 @@ export function AccountSettings(): React.ReactElement {
     try {
       const result = await window.electronAPI.auth.logout()
       if (result && result.warning) toast.warning(result.warning)
+      else toast.success('已退出登录，自配模型渠道已保留')
       setAuthStatus({ isLoggedIn: false })
     } catch {
       toast.error('退出登录未能完成，正在重新读取登录状态')
@@ -189,15 +187,15 @@ export function AccountSettings(): React.ReactElement {
                 </button>
               </PopoverTrigger>
               <PopoverContent side="right" align="start" sideOffset={12} className="w-auto p-0 border-none shadow-xl">
-                <Picker
-                  data={data}
-                  onEmojiSelect={(emoji: EmojiMartEmoji) => void handleAvatarChange(emoji.native)}
-                  locale="zh"
-                  theme="auto"
-                  previewPosition="none"
-                  skinTonePosition="search"
-                  perLine={8}
-                />
+                <React.Suspense
+                  fallback={
+                    <div className="flex h-[320px] w-[280px] items-center justify-center text-[13px] text-muted-foreground">
+                      正在加载表情…
+                    </div>
+                  }
+                >
+                  <EmojiAvatarPicker onEmojiSelect={(emoji) => void handleAvatarChange(emoji.native)} />
+                </React.Suspense>
                 <div className="px-3 p-2">
                   <button
                     type="button"

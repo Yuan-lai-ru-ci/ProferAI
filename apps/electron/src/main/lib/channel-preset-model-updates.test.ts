@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Channel, ChannelsConfig } from '@profer/shared'
-import { applyPresetModelCandidateUpdates, getUserManagedChannelsForLogout } from './channel-manager'
+import { applyPresetModelCandidateUpdates, filterUserManagedChannels } from './channel-manager'
 
 function createChannel(overrides: Partial<Channel> = {}): Channel {
   return {
@@ -17,15 +17,15 @@ function createChannel(overrides: Partial<Channel> = {}): Channel {
   }
 }
 
-describe('logout channel ownership', () => {
-  test('keeps self-configured channels and excludes official managed channels from logout backup', () => {
+describe('渠道归属：用户自配 vs 官方代管', () => {
+  test('keeps self-configured channels and excludes official managed channels', () => {
     const channels = [
       createChannel({ id: 'local-channel' }),
       createChannel({ id: 'newapi-gpt', serverManaged: true }),
       createChannel({ id: 'newapi-legacy' }),
     ]
 
-    expect(getUserManagedChannelsForLogout(channels).map((channel) => channel.id)).toEqual(['local-channel'])
+    expect(filterUserManagedChannels(channels).map((channel) => channel.id)).toEqual(['local-channel'])
   })
 })
 

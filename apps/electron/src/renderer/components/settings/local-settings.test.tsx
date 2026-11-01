@@ -25,7 +25,12 @@ mock.module('jotai', () => ({
   useStore: () => store,
 }))
 const errors: string[] = []
-mock.module('sonner', () => ({ Toaster: () => null, toast: { error: (message: string) => errors.push(message), success() {}, warning() {} } }))
+const successes: string[] = []
+mock.module('sonner', () => ({ Toaster: () => null, toast: {
+  error: (message: string) => errors.push(message),
+  success: (message: string) => successes.push(message),
+  warning() {},
+} }))
 const promptAutosaveFixture = Object.assign(() => {}, {
   flush: async () => {},
   remove: async (id: string) => {
@@ -168,6 +173,7 @@ const click = (props: Props) => (props.onClick as (event: { preventDefault: () =
 afterEach(() => {
   hosts.splice(0).forEach((host) => host.dispose())
   errors.length = 0
+  successes.length = 0
   store.set(showCurrentSessionSectionAtom, true)
 })
 
@@ -192,6 +198,18 @@ test('账户刷新失效清除旧显示；退出失败以重新读取的状态�
   reject(new Error('fixture failure')); await tick(); second.render()
   expect(store.get(authStatusAtom).isLoggedIn).toBe(true)
   expect(errors.some((message) => message.includes('退出登录未能完成'))).toBe(true)
+})
+
+test('退出成功时提示自配渠道已保留', async () => {
+  store.set(authStatusAtom, { isLoggedIn: true, teamAccountId: 'fixture-account', teamEmail: 'fixture@invalid' })
+  api({ auth: {
+    logout: async () => ({ channelsCleared: false, channelsBackedUp: false }),
+    getAuthStatus: async () => ({ isLoggedIn: false }),
+  } })
+  const host = mount(AccountSettings)
+  click(host.button('退出登录')); await tick(); host.render()
+  expect(store.get(authStatusAtom).isLoggedIn).toBe(false)
+  expect(successes.some((message) => message.includes('自配模型渠道已保留'))).toBe(true)
 })
 
 test('不支持格式或超过5MB的头像在文件读取前被拒绝', () => {

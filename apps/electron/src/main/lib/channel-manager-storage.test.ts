@@ -36,10 +36,18 @@ mock.module('./codex-oauth-service', () => ({
   },
 }))
 const {
-  backupChannelsForAccount, createChannel, decryptApiKey, deleteChannel, getChannelById,
-  getChannelPlanQuota, listChannels, persistXaiOAuthCredentials, restoreChannelsForAccount, updateChannel,
+  createChannel, decryptApiKey, deleteChannel, getChannelById, getChannelsLogoutBackupPath,
+  getChannelPlanQuota, listChannels, persistXaiOAuthCredentials, pruneOfficialChannelsOnLogout,
+  restoreChannelsForAccount, updateChannel,
 } = await import('./channel-manager')
 const { encryptToken } = await import('./token-crypto')
+
+/** 按旧版本格式写入一份加密登出备份（新版本不再生成，仅用于验证兼容恢复）。 */
+function writeLegacyLogoutBackup(accountId: string, channels: Channel[]): string {
+  const backupPath = getChannelsLogoutBackupPath(accountId)
+  writeFileSync(backupPath, encryptToken(JSON.stringify({ version: 1, channels })), 'utf-8')
+  return backupPath
+}
 
 const originalConfigDir = process.env.PROFER_CONFIG_DIR
 let configDir: string
@@ -162,8 +170,6 @@ describe('渠道存储 fail-closed 与原子写', () => {
     identityFails = true
     expect(() => updateChannel(channel.id, { apiKey: 'sk-fixture-new-secret' })).toThrow('加密令牌失败')
     expect(readFileSync(channelsPath, 'utf8')).toBe(original)
-    expect(() => backupChannelsForAccount('fixture-account')).toThrow('加密令牌失败')
-    expect(existsSync(channelsPath + '.logout-backup-fixture-account')).toBe(false)
   })
 
   test('Given 坏密文 When 普通字段修改 Then 保留原密文且查看明确失败', () => {
@@ -176,12 +182,40 @@ describe('渠道存储 fail-closed 与原子写', () => {
   })
 
   test('Given 本地配置损坏 When 恢复合法加密备份 Then 保留两份文件并返回错误', () => {
-    writeConfig([fixtureChannel()])
-    const backupPath = backupChannelsForAccount('fixture-account')!
+    const backupPath = writeLegacyLogoutBackup('fixture-account', [fixtureChannel()])
     writeFileSync(channelsPath, '{broken')
     expect(restoreChannelsForAccount('fixture-account')).toMatchObject({ restored: 0, backupRetained: true })
     expect(readFileSync(channelsPath, 'utf8')).toBe('{broken')
     expect(existsSync(backupPath)).toBe(true)
+  })
+})
+
+describe('登出渠道归属', () => {
+  test('Given 官方渠道与自配渠道 When 登出清理 Then 只移除官方渠道且自配凭据原样保留', () => {
+    const selfChannel = fixtureChannel({ id: 'fixture-self' })
+    writeConfig([
+      selfChannel,
+      fixtureChannel({ id: 'fixture-managed', serverManaged: true }),
+      fixtureChannel({ id: 'newapi-legacy' }),
+    ])
+
+    expect(pruneOfficialChannelsOnLogout()).toEqual({ removed: 2 })
+
+    const after = JSON.parse(readFileSync(channelsPath, 'utf-8')) as ChannelsConfig
+    expect(after.channels.map((channel) => channel.id)).toEqual(['fixture-self'])
+    // 自配渠道的密文凭据不被重写、不被清空
+    expect(after.channels[0]?.apiKey).toBe(selfChannel.apiKey)
+    expect(decryptApiKey('fixture-self')).toBe('sk-fixture-secret')
+  })
+
+  test('Given 只有自配渠道 When 登出清理 Then 不写盘且渠道全部保留', () => {
+    writeConfig([fixtureChannel({ id: 'fixture-self' })])
+    listChannels() // 先让读取期迁移落盘，避免把迁移误判为登出写盘
+    const before = readFileSync(channelsPath, 'utf-8')
+
+    expect(pruneOfficialChannelsOnLogout()).toEqual({ removed: 0 })
+    expect(readFileSync(channelsPath, 'utf-8')).toBe(before)
+    expect(listChannels().map((channel) => channel.id)).toEqual(['fixture-self'])
   })
 })
 

@@ -301,7 +301,8 @@ export async function login(
     // 启动主动 token 续期：过期前自动刷新，用户无感
     scheduleAutoRefresh()
 
-    // 恢复该账号上次登出时的加密渠道备份（仅当本地无渠道时生效）
+    // 兼容旧版本登出时留下的加密渠道备份（新版本登出不再清空自配渠道，不会再产生备份）。
+    // 备份中的自配渠道会合并回本地配置，同 ID 不覆盖；恢复成功后备份文件才被删除。
     // teamAccountId 存的就是 data.userId，与备份/恢复的文件名 key 恒等，保证能对上。
     let channelRestore: LoginResult['channelRestore']
     try {
@@ -590,15 +591,20 @@ export function getAuthStatus(): {
  * 注销返回信息（用于渲染进程提示，向后兼容——渲染端只需读取新增的可选字段）
  */
 export interface LogoutResult {
-  /** 自配/活跃渠道在登出时是否被清空 */
+  /** 登出时是否有渠道被移除（仅限官方代管渠道；用户自配渠道始终保留） */
   channelsCleared: boolean
-  /** 渠道留下但被保留（备份失败或本地无账号）时给用户的提示 */
+  /** 非空时为需要提示用户的问题（不影响自配渠道保留） */
   warning?: string
-  /** 渠道是否已成功加密备份 */
+  /** @deprecated 新版本登出不再加密备份自配渠道，恒为 false（保留字段仅为渲染端兼容） */
   channelsBackedUp: boolean
 }
 
-/** 注销（清除本地令牌和渠道，并通知服务端吊销） */
+/**
+ * 注销：清除本地令牌并通知服务端吊销。
+ *
+ * 渠道策略：用户自配渠道是本地资产，登出后**原样保留**；
+ * 仅官方代管渠道（服务端下发的 relay 凭据）会被清理，下次登录自动重新同步。
+ */
 export async function logout(): Promise<LogoutResult> {
   // 先让所有已在飞行中的 refresh 结果失效，并停止后续自动续期。
   // 否则 refresh 在 logout 网络请求期间完成时会把旧 token 写回磁盘。
@@ -609,74 +615,53 @@ export async function logout(): Promise<LogoutResult> {
     _autoRefreshTimer = null
   }
 
-  // 通知服务端吊销 accessToken
-  const tokens = readTokens()
-  const servers = listTeamServers()
-  for (const server of servers) {
-    const token = tokens[server.id]
-    if (token) {
-      try {
-        await (undiciFetch as unknown as typeof fetch)(`${server.baseUrl}${API_PREFIX}/auth/logout`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token.accessToken}` },
-          body: JSON.stringify({ deviceId: getDeviceAuthInfo().deviceId }),
-        })
-      } catch { /* 网络错误忽略 */ }
+  try {
+    // 通知服务端吊销 accessToken
+    const tokens = readTokens()
+    const servers = listTeamServers()
+    for (const server of servers) {
+      const token = tokens[server.id]
+      if (token) {
+        try {
+          await (undiciFetch as unknown as typeof fetch)(`${server.baseUrl}${API_PREFIX}/auth/logout`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token.accessToken}` },
+            body: JSON.stringify({ deviceId: getDeviceAuthInfo().deviceId }),
+          })
+        } catch { /* 网络错误忽略 */ }
+      }
     }
-  }
 
-  writeTokens({})
-  // 令牌已清空；此后新的 refresh 不会再取得可用 refreshToken。
-  // logoutInProgress 继续保持为 true，直到渠道备份/清空也完成，避免登录或后台任务插入中间态。
+    writeTokens({})
+    // 令牌已清空；此后新的 refresh 不会再取得可用 refreshToken。
+    // logoutInProgress 继续保持为 true，直到渠道清理完成，避免登录或后台任务插入中间态。
 
-  // 渠道处理策略：
-  //  1) 有账号标识 → 先加密备份当前 channels.json，**备份成功才清空活跃文件**；备份失败则保留活跃文件并提示。
-  //  2) 无账号标识（本地/未登录团队账号）→ 不备份也不清空，自配渠道本就不应随账号登出被销毁。
-  //
-  // 历史 bug 背景：旧实现把「备份」和「清空」拆成两个独立 try/catch 且都静默吞错，
-  // 备份一旦失败仍会继续清空 channels.json，用户重登后无备份可恢复 → 自配渠道永久丢失。
-  const { backupChannelsForAccount } = require('./channel-manager')
-  const accountId = Object.keys(tokens)
-    .map((id) => tokens[id]?.teamAccountId)
-    .find((id) => !!id)
+    // 渠道处理策略：
+    //  - 用户自配渠道：**登出后原样保留**。旧实现会先加密备份再清空 channels.json，
+    //    导致用户账号一下线就失去全部自配 API；该限制已取消。
+    //  - 官方代管渠道：凭据随账号会话下发，登出后移除（下次登录重新同步）。
+    // 清理失败时保持原配置不动，绝不因为登出破坏用户的自配渠道。
+    let channelsCleared = false
+    let warning: string | undefined
+    try {
+      const { pruneOfficialChannelsOnLogout } = require('./channel-manager') as typeof import('./channel-manager')
+      const pruned = pruneOfficialChannelsOnLogout()
+      channelsCleared = pruned.removed > 0
+      if (pruned.error) {
+        warning = `登出时未能清理官方渠道：${pruned.error}（你的自配渠道未受影响）`
+        console.warn('[认证]', warning)
+      }
+    } catch (err) {
+      console.warn('[认证] 登出清理官方渠道异常（非致命）:', err)
+    }
 
-  if (!accountId) {
-    // 本地无账号：保留渠道文件不清空
+    return { channelsCleared, channelsBackedUp: false, ...(warning ? { warning } : {}) }
+  } finally {
+    // 清除服务端内存缓存：防止登出后 _servers 残留
     _servers = null
     logoutInProgress = false
-    console.log('[认证] 已注销（本地模式，未清空渠道）')
-    return { channelsCleared: false, channelsBackedUp: false, warning: '当前为本地模式，登出未清空自配渠道。' }
+    console.log('[认证] 已注销（自配渠道已保留在本地）')
   }
-
-  try {
-    backupChannelsForAccount(accountId)
-  } catch (err) {
-    // 备份失败（加密/写盘/校验）→ 不清空活跃渠道，避免丢失
-    _servers = null
-    logoutInProgress = false
-    console.warn('[认证] 渠道备份失败，已保留活跃渠道不清空:', (err as Error).message)
-    return {
-      channelsCleared: false,
-      channelsBackedUp: false,
-      warning: '登出时渠道备份失败，已保留你的渠道配置（未清空）。请检查后重试。',
-    }
-  }
-
-  // 备份成功 → 才清空活跃配置文件，防止旧渠道残留磁盘
-  try {
-    const { writeFileSync } = require('node:fs')
-    const { getChannelsPath } = require('./config-paths')
-    writeFileSync(getChannelsPath(), JSON.stringify({ version: 1, channels: [] }), 'utf-8')
-  } catch (err) {
-    console.warn('[认证] 清空渠道配置失败（非致命，渠道备份已保留）:', err)
-  }
-
-  // 清除服务端内存缓存：防止登出后 _servers 残留
-  _servers = null
-
-  logoutInProgress = false
-  console.log('[认证] 已注销（渠道已加密备份并清空活跃文件）')
-  return { channelsCleared: true, channelsBackedUp: true }
 }
 
 // 自动续期定时器引用

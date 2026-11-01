@@ -272,68 +272,68 @@ function decryptKey(encryptedKey: string): string {
 }
 
 /**
- * 登出渠道备份文件的路径（按账号隔离）。
- * 备份/恢复/校验共用此函数，避免文件名拼写漂移。
+ * 旧版登出渠道备份文件的路径（按账号隔离）。
+ *
+ * 新版本登出不再备份自配渠道（它们原样保留在 channels.json 中），
+ * 但历史版本留下的备份文件仍需要被登录流程读取并恢复，因此路径规则保持不变。
  */
 export function getChannelsLogoutBackupPath(accountId: string): string {
   const safeId = accountId.replace(/[^A-Za-z0-9._-]/g, '_')
   return `${getChannelsPath()}.logout-backup-${safeId}`
 }
 
-/** 登出备份只保存用户自配渠道，官方渠道由登录后的服务端同步重新生成。 */
-export function getUserManagedChannelsForLogout(channels: Channel[]): Channel[] {
+/** 从渠道列表中筛出用户自配渠道（官方代管渠道由服务端下发，不属于用户本地资产）。 */
+export function filterUserManagedChannels(channels: Channel[]): Channel[] {
   return channels.filter((channel) => !isOfficialManagedChannel(channel))
 }
 
+/** 登出清理官方代管渠道的结果 */
+export interface PruneOfficialChannelsResult {
+  /** 被移除的官方渠道数量（0 = 无需清理或清理失败） */
+  removed: number
+  /** 非空时表示清理失败，原配置保持不变 */
+  error?: string
+}
+
 /**
- * 将当前渠道配置加密备份到磁盘（按账号隔离）
+ * 登出时清理官方代管渠道，保留用户自配渠道
  *
- * logout 时调用：把整个 channels.json（含渠道元数据）用 token-crypto 整体加密后
- * 写入 channels.json.logout-backup-{accountId}。加密密钥由 deviceId 派生
- * （注册表/Keychain，仅当前用户可读），其他用户/进程拿到备份文件也无法解密。
+ * 渠道归属规则：
+ *  - 用户自配渠道是用户本地资产：登出后**原样保留**，不加密备份、不清空。
+ *    （旧版本会在登出时把自配渠道加密备份后清空 channels.json，
+ *    导致「账号一下线，全部自配 API 就消失」，该限制已取消。）
+ *  - 官方代管渠道的凭据（relay token 等）随账号会话由服务端下发，登出后不应继续留在本地；
+ *    下次登录会由 syncChannelsFromServer 重新同步。
  *
- * 安全语义：**备份必须成功，失败一律抛错**，由调用方决定是否继续清空活跃文件。
- * 绝不静默吞掉失败——否则「重登恢复」会因无备份而丢渠道。
- *
- * @returns 写出的备份文件绝对路径；无渠道/无文件时返回 null
- * @throws 加密失败/写盘失败/写回校验失败时抛错，调用方应据此中止清空活跃渠道
+ * 失败时保持原配置不动：宁可暂时留下官方渠道，也不破坏用户的自配配置。
  */
-export function backupChannelsForAccount(accountId: string | undefined | null): string | null {
-  const configPath = getChannelsPath()
-  if (!existsSync(configPath)) return null
-
-  const raw = readFileSync(configPath, 'utf-8')
-  const parsed: unknown = JSON.parse(raw)
-  assertChannelsConfig(parsed)
-  const userManagedChannels = getUserManagedChannelsForLogout(parsed.channels || [])
-  if (userManagedChannels.length === 0) {
-    // 无自配渠道时无需备份，也不应视为失败（清空官方渠道无损失）
-    return null
-  }
-  if (!accountId) {
-    throw new Error('无法获取账号标识，无法为渠道创建隔离备份')
+export function pruneOfficialChannelsOnLogout(): PruneOfficialChannelsResult {
+  let current: ChannelsConfig
+  try {
+    current = readConfig()
+  } catch (err) {
+    return { removed: 0, error: `读取渠道配置失败: ${(err as Error).message}` }
   }
 
-  const backupPath = getChannelsLogoutBackupPath(accountId)
-  const backupConfig: ChannelsConfig = {
-    ...parsed,
-    channels: userManagedChannels,
-  }
-  const encrypted = encryptToken(JSON.stringify(backupConfig))
-  if (!encrypted || encrypted.length === 0) {
-    throw new Error('渠道加密备份生成为空，已中止（避免覆盖丢失）')
-  }
+  const keptChannels = current.channels.filter((channel) => !isOfficialManagedChannel(channel))
+  const removed = current.channels.length - keptChannels.length
+  if (removed === 0) return { removed: 0 }
 
-  writeFileSync(backupPath, encrypted, 'utf-8')
-
-  // 写回校验：确认备份确实落盘且非空，杜绝「以为备份了其实没写进去」
-  const verified = readFileSync(backupPath, 'utf-8')
-  if (!verified || verified.length === 0) {
-    throw new Error('渠道备份写回校验失败（文件为空），已中止清空')
+  try {
+    writeConfig({ ...current, channels: keptChannels })
+  } catch (err) {
+    return { removed: 0, error: `写入渠道配置失败: ${(err as Error).message}` }
   }
 
-  console.log(`[渠道管理] 已为账号 ${accountId.replace(/[^A-Za-z0-9._-]/g, '_')} 加密备份 ${userManagedChannels.length} 个自配渠道 → ${backupPath}`)
-  return backupPath
+  console.log(`[渠道管理] 登出已移除 ${removed} 个官方渠道，保留 ${keptChannels.length} 个自配渠道`)
+
+  // 通知渲染进程刷新渠道目录；通知失败不影响登出结果。
+  try {
+    const { agentCatalogInvalidationPublisher } = require('./agent-service') as typeof import('./agent-service')
+    agentCatalogInvalidationPublisher.invalidate('channels')
+  } catch { /* 目录通知失败忽略 */ }
+
+  return { removed }
 }
 
 /**
@@ -351,8 +351,9 @@ export interface RestoreChannelsResult {
 /**
  * 从加密备份恢复渠道配置（按账号隔离）
  *
- * login 成功后调用：仅当 channels.json 为空时才恢复对应账号的备份，
- * 避免覆盖用户已有配置；恢复成功且落盘后才删除备份文件。
+ * 仅用于兼容**旧版本**登出时留下的加密备份（新版本登出不再清空自配渠道，因此不再产生备份）。
+ * login 成功后调用：把备份中的自配渠道合并进当前配置（同 ID 不覆盖），
+ * 恢复成功且落盘后才删除备份文件。
  * 任何失败（解密/解析/落盘）都**保留备份文件**，不静默丢弃，便于用户二次抢救。
  */
 export function restoreChannelsForAccount(accountId: string): RestoreChannelsResult {
@@ -383,7 +384,7 @@ export function restoreChannelsForAccount(accountId: string): RestoreChannelsRes
     return { restored: 0, error: `渠道备份解析失败（已保留备份文件供抢救）: ${(err as Error).message}`, backupRetained: true }
   }
 
-  const backedUpChannels = getUserManagedChannelsForLogout(parsed.channels || [])
+  const backedUpChannels = filterUserManagedChannels(parsed.channels || [])
   if (backedUpChannels.length === 0) {
     // 兼容旧版“整份配置备份”：解密确认有效后清理仅含官方渠道的旧备份。
     rmSync(backupPath, { force: true })
