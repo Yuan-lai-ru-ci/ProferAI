@@ -14,7 +14,8 @@
 
 import type { SDKMessage, SDKAssistantMessage, SDKUserMessage, ProviderType } from '@profer/shared'
 import { groupIntoTurns, extractUserText, summarizeToolInput } from '@profer/session-core'
-import { getAdapter } from '@profer/core'
+import { AnthropicAdapter, getAdapter, GoogleAdapter, OpenAIResponsesAdapter } from '@profer/core'
+import type { ProviderAdapter } from '@profer/core'
 import type { TaskGraph, TaskNode, GraphEvent, RetrospectiveResult, UnmappedAbandonment } from '@profer/project-core'
 import { listChannels, decryptApiKey } from './channel-manager'
 import { getTeamAuthWithRefresh } from './auth-service'
@@ -227,6 +228,92 @@ ${transcript}
 
 // ===== 一次性 LLM 调用（复用 generateTitle 的渠道/鉴权链，改写 body） =====
 
+/**
+ * 把标题请求的骨架改写成「一次性的 JSON 抽取请求」。
+ *
+ * 不能只看 URL 二分判断协议：Google 的生成端点是 `:generateContent`，Responses 是
+ * `/responses`，两者既不是 `/chat/completions`，也不该被当成 Anthropic messages——
+ * 之前一律塞 `system` + `messages`，Google 渠道会因为未知字段直接 400
+ * （内置 google 渠道一直如此，custom + 官方 Gemini 也踩同一条）。
+ *
+ * 也不能靠骨架字段猜：Chat Completions 与 Anthropic messages 的骨架都是
+ * `{model, messages, max_tokens, stream}`，形状完全一样。协议由调用方从适配器实例
+ * 判定后传入（`resolveOneShotProtocol`），这里只负责按协议改写。
+ */
+export type OneShotProtocol = 'openai-chat' | 'anthropic' | 'google' | 'responses'
+
+export function buildOneShotBody(
+  skeleton: Record<string, unknown>,
+  protocol: OneShotProtocol,
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...skeleton }
+
+  if (protocol === 'google') {
+    // Google 原生协议：顶层只认 contents / systemInstruction / generationConfig，
+    // 其余字段（messages、system、max_tokens、temperature、stream）都是非法字段。
+    const generationConfig = isRecord(body.generationConfig) ? { ...body.generationConfig } : {}
+    generationConfig.maxOutputTokens = maxTokens
+    generationConfig.temperature = 0
+    generationConfig.responseMimeType = 'application/json'
+    body.contents = [{ role: 'user', parts: [{ text: userPrompt }] }]
+    body.systemInstruction = { parts: [{ text: systemPrompt }] }
+    body.generationConfig = generationConfig
+    delete body.max_tokens
+    delete body.temperature
+    delete body.stream
+    return body
+  }
+
+  if (protocol === 'responses') {
+    // OpenAI Responses 协议：system → instructions，上限 → max_output_tokens。
+    body.instructions = systemPrompt
+    body.input = [{ role: 'user', content: userPrompt }]
+    body.max_output_tokens = maxTokens
+    body.temperature = 0
+    delete body.max_tokens
+    return body
+  }
+
+  if (protocol === 'openai-chat') {
+    body.messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ]
+    body.max_tokens = maxTokens
+    body.temperature = 0
+    body.response_format = { type: 'json_object' }
+    return body
+  }
+
+  // Anthropic messages：system 是顶层字段，messages 只放对话。
+  body.system = systemPrompt
+  body.messages = [{ role: 'user', content: userPrompt }]
+  body.max_tokens = maxTokens
+  body.temperature = 0
+  return body
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * 从适配器实例判定一次性调用该用哪种请求体形态。
+ *
+ * 不能用 URL 或骨架字段猜：商业代管路由会把 url 换成 `/v1/proxy/chat` / `/v1/proxy/messages`，
+ * 而 Chat Completions 与 Anthropic 的骨架字段完全一样，猜错就会把 `system` 塞进
+ * OpenAI 请求体（或反之）。适配器类就是协议的单一事实源。
+ */
+export function resolveOneShotProtocol(adapter: ProviderAdapter): OneShotProtocol {
+  if (adapter instanceof GoogleAdapter) return 'google'
+  if (adapter instanceof OpenAIResponsesAdapter) return 'responses'
+  if (adapter instanceof AnthropicAdapter) return 'anthropic'
+  return 'openai-chat'
+}
+
 async function oneShotJsonCall(systemPrompt: string, userPrompt: string): Promise<string | null> {
   const settings = getSettings()
   const channelId = settings.agentChannelId
@@ -266,27 +353,19 @@ async function oneShotJsonCall(systemPrompt: string, userPrompt: string): Promis
   })
   if (proxyBaseUrl) req.url = proxyBaseUrl
 
-  const isOpenAiChat = req.url.includes('/chat/completions')
   let bodyObj: Record<string, unknown>
   try {
     bodyObj = JSON.parse(req.body) as Record<string, unknown>
   } catch {
     bodyObj = { model: modelId }
   }
-  bodyObj['max_tokens'] = MAX_TOKENS
-  bodyObj['temperature'] = 0
-  if (isOpenAiChat) {
-    bodyObj['messages'] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ]
-    bodyObj['response_format'] = { type: 'json_object' }
-  } else {
-    // Anthropic messages 协议：system 顶层字段 + messages
-    bodyObj['system'] = systemPrompt
-    bodyObj['messages'] = [{ role: 'user', content: userPrompt }]
-  }
-  req.body = JSON.stringify(bodyObj)
+  req.body = JSON.stringify(buildOneShotBody(
+    bodyObj,
+    resolveOneShotProtocol(adapter),
+    systemPrompt,
+    userPrompt,
+    MAX_TOKENS,
+  ))
 
   try {
     const fetchFn = getFetchFn(await getEffectiveProxyUrl())

@@ -361,6 +361,25 @@ describe('ChannelForm 真实事件与退出控制器接线（隔离 hook 宿主�
     }
   })
 
+  test('F21：custom 填官方厂商端点时预览跟随原生协议', () => {
+    // Chat 适配器已按官方端点切原生协议（见 core 的 getAdapter），预览必须显示真实请求地址，
+    // 不能再把并不存在的 /chat/completions 展示给用户。
+    const cases: Array<[string, string]> = [
+      ['https://api.anthropic.com', 'https://api.anthropic.com/v1/messages'],
+      ['https://generativelanguage.googleapis.com', '/v1beta/models/'],
+      // 中转站不受影响：仍按 OpenAI 兼容协议补全 /chat/completions
+      ['https://anthropic-relay.example.com/v1', 'https://anthropic-relay.example.com/v1/chat/completions'],
+    ]
+    for (const [url, expected] of cases) {
+      const form = setup(null)
+      ;(form.field('供应商类型').onValueChange as (value: string) => void)('custom')
+      form.render()
+      ;(form.field('OpenAI 端点').onChange as (value: string) => void)(url)
+      form.render()
+      expect(String(form.field('OpenAI 端点').description)).toContain(expected)
+    }
+  })
+
   test('xAI OAuth 新建读取本地目录，取消失败无普通 create，重试与重复点击只创建一次', async () => {
     const pending = deferred<Channel>()
     let attempts = 0

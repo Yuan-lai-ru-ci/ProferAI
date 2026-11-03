@@ -37,7 +37,7 @@ process.env.PROFER_DEV = '1'
 process.env.PROFER_CONFIG_DIR = configRoot
 
 const { deleteAgentSession, getAgentSessionMeta, listAgentSessions, moveSessionToWorkspace, findOrphanSessions } = await import('./agent-session-manager')
-const { ProjectPathDeletionError } = await import('./workspace-delete-guard')
+const { ProjectPathDeletionError, assertNotProjectLifecyclePath } = await import('./workspace-delete-guard')
 const { invalidateWorkspaceLocation } = await import('./workspace-locator')
 
 const indexPath = join(configRoot, 'agent-workspaces.json')
@@ -100,7 +100,7 @@ function makeProject(name: string, extraFiles: string[] = []): string {
   return realpathSync(root)
 }
 
-/** 项目根快照：相对路径列表（含内容长度），用于断言「一个字节都没动」。 */
+/** 项目根快照：相对路径列表（含内容长度），用于断言「用户文件一个字节都没动」。 */
 function snapshotTree(root: string): string[] {
   const entries: string[] = []
   const walk = (dir: string): void => {
@@ -119,9 +119,19 @@ function snapshotTree(root: string): string[] {
   return entries.sort()
 }
 
-/** project 会话的中央 storageDir（`<config>/agent-workspaces/<slug>/sessions/<id>`）。 */
+/** 用户项目文件快照：忽略 Profer 会话目录（会话是工作区资产，不算用户文件改动）。 */
+function snapshotProjectTree(root: string): string[] {
+  return snapshotTree(root).filter((entry) => !entry.startsWith('.profer/sessions'))
+}
+
+/** project 会话的 storageDir（`<root>/.profer/sessions/<id>`）。 */
 function projectStorageDir(slug: string, sessionId: string): string {
-  return join(workspacesDir, slug, 'sessions', sessionId)
+  const index = JSON.parse(readFileSync(indexPath, 'utf-8')) as {
+    workspaces: Array<{ slug: string; rootPath?: string }>
+  }
+  const rootPath = index.workspaces.find((workspace) => workspace.slug === slug)?.rootPath
+  if (!rootPath) throw new Error(`project root not found: ${slug}`)
+  return join(rootPath, '.profer', 'sessions', sessionId)
 }
 
 function managedStorageDir(slug: string, sessionId: string): string {
@@ -142,9 +152,9 @@ function seedMessages(sessionId: string): string {
 }
 
 describe('deleteAgentSession：project 会话', () => {
-  test('Given project 会话 When 删除 Then 只删中央 storageDir，项目根与 .profer 完整', () => {
+  test('Given project 会话 When 删除 Then 只删中央 storageDir，项目根与 .profer 完整', async () => {
     const root = makeProject('session-delete')
-    const before = snapshotTree(root)
+    const before = snapshotProjectTree(root)
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
     writeSessionsIndex([{ id: 'sess-p', title: 'project session', workspaceId: 'id-p1', createdAt: 1, updatedAt: 1 }])
 
@@ -152,7 +162,7 @@ describe('deleteAgentSession：project 会话', () => {
     seedStorageDir(storageDir)
     const messagesPath = seedMessages('sess-p')
 
-    deleteAgentSession('sess-p')
+    await deleteAgentSession('sess-p')
 
     // 索引与消息被清理
     expect(getAgentSessionMeta('sess-p')).toBeUndefined()
@@ -164,38 +174,35 @@ describe('deleteAgentSession：project 会话', () => {
 
     // 项目根一个字节都没动（含 .profer）
     expect(existsSync(root)).toBe(true)
-    expect(snapshotTree(root)).toEqual(before)
+    expect(snapshotProjectTree(root)).toEqual(before)
   })
 
-  test('Given managed 会话 When 删除 Then session 目录仍在原位被删（I1 回归）', () => {
+  test('Given managed 会话 When 删除 Then session 目录仍在原位被删（I1 回归）', async () => {
     const root = makeProject('managed-session')
-    const before = snapshotTree(root)
+    const before = snapshotProjectTree(root)
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
     writeSessionsIndex([{ id: 'sess-m', title: 'managed session', workspaceId: 'id-default', createdAt: 1, updatedAt: 1 }])
 
     const storageDir = managedStorageDir('default', 'sess-m')
     seedStorageDir(storageDir)
 
-    deleteAgentSession('sess-m')
+    await deleteAgentSession('sess-m')
 
     expect(existsSync(storageDir)).toBe(false)
     expect(getAgentSessionMeta('sess-m')).toBeUndefined()
-    expect(snapshotTree(root)).toEqual(before)
+    expect(snapshotProjectTree(root)).toEqual(before)
   })
-  test('Given 索引损坏（project root 包住了会话存储）When 删会话 Then 守卫在删目录前抛错（正向控制）', () => {
-    // 正常创建流程不允许 rootPath 包含配置根，但索引可被手改。
-    // 这验证 `assertNotProjectLifecyclePath` 确实接在删 session 目录的链路上。
+  test('Given 项目路径契约 When 检查生命周期守卫 Then 会话目录放行、sessions 容器与 .profer 仍受保护', () => {
+    // 会话数据已迁到项目内 `.profer/sessions/<sid>`，删会话/迁移必须能清理；
+    // 但整个 sessions 容器、.profer 与项目根仍属于用户资产。
     writeWorkspacesIndex([projectEntry('bad-root', sandbox), managedEntry('default')])
-    writeSessionsIndex([{ id: 'sess-bad', title: 'bad root', workspaceId: 'id-bad-root', createdAt: 1, updatedAt: 1 }])
 
-    const storageDir = projectStorageDir('bad-root', 'sess-bad')
-    seedStorageDir(storageDir)
-
-    expect(() => deleteAgentSession('sess-bad')).toThrow(ProjectPathDeletionError)
-    expect(existsSync(join(storageDir, 'marker.txt'))).toBe(true)
+    expect(() => assertNotProjectLifecyclePath(join(sandbox, '.profer', 'sessions', 'sess-bad'))).not.toThrow()
+    expect(() => assertNotProjectLifecyclePath(join(sandbox, '.profer', 'sessions'))).toThrow(ProjectPathDeletionError)
+    expect(() => assertNotProjectLifecyclePath(join(sandbox, '.profer'))).toThrow(ProjectPathDeletionError)
   })
 
-  test('Given 项目根已被移走（rootPath 不存在）When 删会话 Then 不抛错，索引与中央 storageDir 都被清理', () => {
+  test('Given 项目根已被移走（rootPath 不存在）When 删会话 Then 不抛错，索引与中央 storageDir 都被清理', async () => {
     // P1-6：project 的会话数据在中央 runtimeDir，与 rootPath 是否存在无关。
     // 修复前这里会因 `getAgentSessionWorkspacePath` 要求 root 存在而在索引/消息已删后抛错，
     // 留下 `sessions/<id>` 残目录。
@@ -210,7 +217,7 @@ describe('deleteAgentSession：project 会话', () => {
     // 模拟项目目录被用户在 Finder 里移走 / 重命名
     rmSync(root, { recursive: true, force: true })
 
-    expect(() => deleteAgentSession('sess-gone')).not.toThrow()
+    await deleteAgentSession('sess-gone')
 
     expect(getAgentSessionMeta('sess-gone')).toBeUndefined()
     expect(listAgentSessions(true)).toEqual([])
@@ -221,7 +228,7 @@ describe('deleteAgentSession：project 会话', () => {
     expect(existsSync(projectStorageDir('p1', 'sess-gone'))).toBe(false)
   })
 
-  test('Given 项目根已被移走 When 扫描孤儿会话 Then 不抛错，按中央目录判定工作区目录', () => {
+  test('Given 项目根已被移走 When 扫描孤儿会话 Then 不抛错，项目内会话目录随项目消失', () => {
     const root = makeProject('orphan-scan')
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
     writeSessionsIndex([
@@ -237,17 +244,18 @@ describe('deleteAgentSession：project 会话', () => {
     const health = findOrphanSessions()
 
     expect(health.map((item) => item.sessionId).sort()).toEqual(['sess-alive', 'sess-missing'])
-    expect(health.find((item) => item.sessionId === 'sess-alive')!.hasWorkspaceDir).toBe(true)
+    // 会话数据在项目内，root 被移走后两个会话目录都不存在；扫描本身不能抛错。
+    expect(health.find((item) => item.sessionId === 'sess-alive')!.hasWorkspaceDir).toBe(false)
     expect(health.find((item) => item.sessionId === 'sess-missing')!.hasWorkspaceDir).toBe(false)
   })
 })
 
-describe('moveSessionToWorkspace：project 参与时只改索引', () => {
-  test('Given project → project When 迁移 Then 索引更新且项目根不变、不搬迁目录', () => {
+describe('moveSessionToWorkspace：会话目录跟随归属迁移', () => {
+  test('Given project → project When 迁移 Then 索引更新、目录搬到目标项目内', () => {
     const rootA = makeProject('move-a')
     const rootB = makeProject('move-b')
-    const beforeA = snapshotTree(rootA)
-    const beforeB = snapshotTree(rootB)
+    const beforeA = snapshotProjectTree(rootA)
+    const beforeB = snapshotProjectTree(rootB)
     writeWorkspacesIndex([projectEntry('pa', rootA), projectEntry('pb', rootB), managedEntry('default')])
     writeSessionsIndex([{ id: 'sess-1', title: 'move me', workspaceId: 'id-pa', createdAt: 1, updatedAt: 1 }])
 
@@ -258,29 +266,34 @@ describe('moveSessionToWorkspace：project 参与时只改索引', () => {
 
     expect(moved.workspaceId).toBe('id-pb')
     expect(getAgentSessionMeta('sess-1')!.workspaceId).toBe('id-pb')
-    // 目录零操作：源目录原样保留（由中央存储托管，不属于项目）
-    expect(existsSync(join(sourceDir, 'marker.txt'))).toBe(true)
-    expect(snapshotTree(rootA)).toEqual(beforeA)
-    expect(snapshotTree(rootB)).toEqual(beforeB)
+    // 目录跟着搬：源目录消失，目标项目内出现完整会话数据
+    expect(existsSync(sourceDir)).toBe(false)
+    expect(existsSync(join(projectStorageDir('pb', 'sess-1'), 'marker.txt'))).toBe(true)
+    // 用户项目文件不变
+    expect(snapshotProjectTree(rootA)).toEqual(beforeA)
+    expect(snapshotProjectTree(rootB)).toEqual(beforeB)
   })
 
-  test('Given project → managed When 迁移 Then 索引更新且项目根不变', () => {
+  test('Given project → managed When 迁移 Then 索引更新、目录搬到中央会话目录', () => {
     const root = makeProject('move-to-managed')
-    const before = snapshotTree(root)
+    const before = snapshotProjectTree(root)
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
     writeSessionsIndex([{ id: 'sess-2', title: 'project to managed', workspaceId: 'id-p1', createdAt: 1, updatedAt: 1 }])
 
-    seedStorageDir(projectStorageDir('p1', 'sess-2'))
+    const sourceDir = projectStorageDir('p1', 'sess-2')
+    seedStorageDir(sourceDir)
 
     const moved = moveSessionToWorkspace('sess-2', 'id-default')
 
     expect(moved.workspaceId).toBe('id-default')
-    expect(snapshotTree(root)).toEqual(before)
+    expect(existsSync(sourceDir)).toBe(false)
+    expect(existsSync(join(managedStorageDir('default', 'sess-2'), 'marker.txt'))).toBe(true)
+    expect(snapshotProjectTree(root)).toEqual(before)
   })
 
-  test('Given managed → project When 迁移 Then 索引更新、项目根不变、目标存储落在中央目录', () => {
+  test('Given managed → project When 迁移 Then 索引更新、目录搬进目标项目内', () => {
     const root = makeProject('move-to-project')
-    const before = snapshotTree(root)
+    const before = snapshotProjectTree(root)
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
     writeSessionsIndex([{ id: 'sess-3', title: 'managed to project', workspaceId: 'id-default', createdAt: 1, updatedAt: 1 }])
 
@@ -289,8 +302,29 @@ describe('moveSessionToWorkspace：project 参与时只改索引', () => {
     const moved = moveSessionToWorkspace('sess-3', 'id-p1')
 
     expect(moved.workspaceId).toBe('id-p1')
-    // 目标会话目录由 getAgentSessionStorageDir 在中央 runtimeDir 下重建，不进入项目
-    expect(existsSync(projectStorageDir('p1', 'sess-3'))).toBe(true)
-    expect(snapshotTree(root)).toEqual(before)
+    expect(existsSync(join(projectStorageDir('p1', 'sess-3'), 'marker.txt'))).toBe(true)
+    expect(snapshotProjectTree(root)).toEqual(before)
+  })
+
+  test('Given 父会话带委派子会话 When 迁移 Then 子会话与目录一起跟随，树不断', () => {
+    const rootA = makeProject('move-tree-a')
+    const rootB = makeProject('move-tree-b')
+    writeWorkspacesIndex([projectEntry('pa', rootA), projectEntry('pb', rootB)])
+    writeSessionsIndex([
+      { id: 'sess-parent', title: 'parent', workspaceId: 'id-pa', createdAt: 1, updatedAt: 1 },
+      { id: 'sess-child', title: 'child', workspaceId: 'id-pa', parentSessionId: 'sess-parent', sourceDelegationId: 'deleg-1', rootSessionId: 'sess-parent', createdAt: 2, updatedAt: 2 },
+      { id: 'sess-grandchild', title: 'grandchild', workspaceId: 'id-pa', parentSessionId: 'sess-child', sourceDelegationId: 'deleg-2', rootSessionId: 'sess-parent', createdAt: 3, updatedAt: 3 },
+    ])
+    for (const id of ['sess-parent', 'sess-child', 'sess-grandchild']) {
+      seedStorageDir(projectStorageDir('pa', id))
+    }
+
+    moveSessionToWorkspace('sess-parent', 'id-pb')
+
+    for (const id of ['sess-parent', 'sess-child', 'sess-grandchild']) {
+      expect(getAgentSessionMeta(id)!.workspaceId).toBe('id-pb')
+      expect(existsSync(join(projectStorageDir('pb', id), 'marker.txt'))).toBe(true)
+      expect(existsSync(projectStorageDir('pa', id))).toBe(false)
+    }
   })
 })

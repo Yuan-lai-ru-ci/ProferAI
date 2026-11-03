@@ -22,6 +22,7 @@ export type ProviderNativeProtocol =
   | 'openai-responses'
   | 'anthropic-messages'
   | 'google-generative-ai'
+  | 'mistral-conversations'
 
 /** 模型目录来源。 */
 export type ProviderCatalogKind =
@@ -231,5 +232,98 @@ export function resolveProviderNativeProtocol(
     // 否则会以 Chat Completions 请求体打 Responses 端点，拿到 200 空流。
     return 'openai-responses'
   }
+  // 官方厂商端点：OpenAI 兼容层是方言（Mistral 严格 schema、Anthropic/Google 无
+  // /chat/completions），命中官方 host 后改用原生协议。未命中返回 undefined，
+  // 保持静态归属，中转站不受影响。
+  if (capability.nativeProtocol === 'openai-completions') {
+    return resolveOfficialVendorProtocol(baseUrl) ?? capability.nativeProtocol
+  }
   return capability.nativeProtocol
+}
+
+/** 官方厂商端点识别出的原生协议（Pi 侧 Api 的子集）。 */
+export type OfficialVendorProtocol =
+  | 'mistral-conversations'
+  | 'anthropic-messages'
+  | 'google-generative-ai'
+
+interface OfficialVendorEndpointRule {
+  readonly vendor: string
+  readonly protocol: OfficialVendorProtocol
+  /** 精确 host 或 `*.suffix` 通配；不做关键词包含匹配。 */
+  readonly matchesHost: (host: string) => boolean
+  /** 用户显式填了该厂商的 OpenAI 兼容层路径时保持 OpenAI 协议。 */
+  readonly openAICompatPath?: RegExp
+}
+
+/**
+ * 官方厂商端点 → 原生协议表。
+ *
+ * 为什么需要：`custom` 渠道默认按“标准 OpenAI”发请求，但各家官方 API 的
+ * OpenAI 兼容层都是方言——Mistral 对请求体做 extra_forbidden 校验、流式
+ * content 返回内容块数组；Anthropic / Google 根本没有 `/chat/completions`。
+ * 这些差异无法在通用 OpenAI 适配器里消除，只能命中官方端点后改用原生协议。
+ *
+ * 三条入选判据（同时成立才加行）：
+ * 1. 该厂商官方 API 的 OpenAI 兼容层与 pi-ai 的 openai-completions 行为不兼容；
+ * 2. pi-ai 有对应原生适配器，且 Profer 已处理其 baseUrl 形态（见 normalizePiBaseUrl）；
+ * 3. 命中条件只能是官方 host，用户手填的中转域名不会误入。
+ *
+ * 未入选的厂商及其原因：
+ * - OpenAI / DeepSeek / Moonshot / Z.ai / OpenRouter / Together / Cerebras /
+ *   NVIDIA / Cloudflare / Chutes / AntLing / xAI：OpenAI 兼容层与标准足够接近，
+ *   pi-ai 的 detectCompat 已按 baseUrl 识别方言，走 openai-completions 即正确；
+ * - Azure OpenAI（需 deployment + api-version）、Bedrock（SigV4 签名）：
+ *   无法从 baseUrl 推导，仍由专用 provider 承担。
+ *
+ * 只做加法：未命中一律返回 undefined，调用方保持原判定，中转站连通性零回归。
+ */
+const OFFICIAL_VENDOR_ENDPOINTS: readonly OfficialVendorEndpointRule[] = [
+  {
+    vendor: 'mistral',
+    protocol: 'mistral-conversations',
+    matchesHost: (host) => host === 'api.mistral.ai' || host.endsWith('.mistral.ai'),
+  },
+  {
+    vendor: 'anthropic',
+    protocol: 'anthropic-messages',
+    matchesHost: (host) => host === 'api.anthropic.com',
+  },
+  {
+    vendor: 'google',
+    protocol: 'google-generative-ai',
+    matchesHost: (host) => host === 'generativelanguage.googleapis.com',
+    // Google 另有一个官方 OpenAI 兼容层（/v1beta/openai/），用户填了它就别切。
+    openAICompatPath: /\/openai(\/|$)/i,
+  },
+]
+
+/** 把 baseUrl 拆成 host 与 path；无 scheme 的裸域名也要能识别。 */
+function splitEndpoint(baseUrl: string): { host: string; path: string } {
+  const raw = baseUrl.trim()
+  try {
+    const url = new URL(raw)
+    return { host: url.hostname.toLowerCase(), path: url.pathname }
+  } catch {
+    const bare = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    const slash = bare.indexOf('/')
+    const host = (slash === -1 ? bare : bare.slice(0, slash)).replace(/:\d+$/, '').toLowerCase()
+    return { host, path: slash === -1 ? '' : bare.slice(slash) }
+  }
+}
+
+/**
+ * 识别 baseUrl 是否指向某家官方厂商，返回其原生协议。
+ *
+ * 只在调用方已经准备按 openai-completions 发请求时才有意义；返回 undefined
+ * 表示“没认出来，保持原样”。
+ */
+export function resolveOfficialVendorProtocol(baseUrl?: string): OfficialVendorProtocol | undefined {
+  if (!baseUrl?.trim()) return undefined
+  const { host, path } = splitEndpoint(baseUrl)
+  if (!host) return undefined
+  const rule = OFFICIAL_VENDOR_ENDPOINTS.find((candidate) => candidate.matchesHost(host))
+  if (!rule) return undefined
+  if (rule.openAICompatPath?.test(path)) return undefined
+  return rule.protocol
 }

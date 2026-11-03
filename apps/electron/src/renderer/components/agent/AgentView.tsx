@@ -131,7 +131,7 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { ExplorationBranchBar } from './ExplorationBranchBar'
 import { DelegationRuntimeBar } from './DelegationRuntimeBar'
-import { resolveDelegationRuntimeDisplay } from '@/domains/agent-runtime/delegation-runtime-display'
+import { resolveDelegationConversationRunState, resolveDelegationRuntimeDisplay } from '@/domains/agent-runtime/delegation-runtime-display'
 import { AgentModelReasoningPicker } from './AgentModelReasoningPicker'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
@@ -429,6 +429,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     if (!meta) return null
     return resolveDelegationRuntimeDisplay({
       parentSessionId: meta.parentSessionId,
+      sourceSessionId: meta.sourceSessionId,
       sourceDelegationId: meta.sourceDelegationId,
       delegationStatus: meta.delegationStatus,
       liveRunning: streamState?.running === true,
@@ -438,6 +439,21 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       now: Date.now(),
     })
   }, [sessions, sessionId, streamState?.running, streamState?.startedAt, delegationFallbackStartedAt])
+  /**
+   * 对话区使用的运行态：实时流优先，持久化委派状态兜底。
+   *
+   * 子会话页可能完全没有实时流（打开时机 / 跨窗口绑定 / 事件缺失），此时只按
+   * `streamState.running` 判断会让过程区永远折叠、连“运行中”都看不出来。
+   * 这里只驱动对话区渲染，不改发送/停止等其它以实时流为准的门禁。
+   */
+  const conversationRunState = React.useMemo(
+    () => resolveDelegationConversationRunState({
+      liveRunning: streamState?.running === true,
+      liveStartedAt: streamState?.startedAt,
+      delegation: delegationRuntimeDisplay,
+    }),
+    [streamState?.running, streamState?.startedAt, delegationRuntimeDisplay],
+  )
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const agentPresetsMap = useAtomValue(agentPresetsAtom)
@@ -696,6 +712,19 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       return map
     })
   }, [sessionId, setDraftHtmlMap])
+  /**
+   * 清空输入区：显式命令编辑器清空，不能只把受控 value 置空。
+   *
+   * 草稿同步有 180ms 防抖：卡顿或 IME 组合输入时，发送那一刻外层 value 可能
+   * 还没上浮（仍是空串），发送后再次写入空值不产生变化，RichTextInput 的
+   * value 同步 effect 不会执行——文字会残留在编辑器里，而按钮状态已被置为
+   * 无草稿，于是发送按钮禁用，直到下一次按键触发 onUpdate 才恢复。
+   */
+  const clearComposer = React.useCallback((): void => {
+    setInputContent('')
+    setInputHtmlContent('')
+    richTextInputRef.current?.clear()
+  }, [setInputContent, setInputHtmlContent])
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
   const setSessionPathMap = useSetAtom(agentSessionPathMapAtom)
   const sessionPath = sessionPathMap.get(sessionId) ?? null
@@ -1984,6 +2013,11 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
    *
    * 旧实现用一次性信号 + 消费即作废，任何一次 gate 失败都会让队列永久停摆（D3）。
    * 这里每次满足「队列非空 + 开关开 + 空闲可发」就发，失败回队首并退避重试。
+   *
+   * 出队时机与「立即发送」一致：**先出队再发送**。队列是「待发送」清单，不是投递日志；
+   * `sendPlainTextAgentMessage` 要等整轮 run 结束才 resolve（主进程 await orchestrator.sendMessage），
+   * 若等它 resolve 后再出队，整轮运行期间队列里会挂着一条已经出现在对话里的消息，
+   * 用户会以为它没发出去、进而再点一次「立即发送」造成重复发送。
    */
   React.useEffect(() => {
     if (queueSendInFlightRef.current) return
@@ -2002,8 +2036,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     })) return
     const sendEpoch = queueStopEpochRef.current
     queueSendInFlightRef.current = true
+    // 先出队再发送：发送动作一旦发起，这条就从待发清单消失；失败再按原顺序回到队首。
+    setQueuedMessages((prev) => removeQueuedMessage(prev, head.id))
     sendPlainTextAgentMessage(head.text).then(() => {
-      setQueuedMessages((prev) => removeQueuedMessage(prev, head.id))
       lastQueueFailureAtRef.current = 0
     }).catch((error) => {
       console.error('[AgentView] 队列自动发送失败:', error)
@@ -2061,8 +2096,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           if (result.state) setCurrentGoal(result.state)
           toast.success('Goal 已启动', { description: `${goalCommand.goal} · 沿用当前会话上下文与工作历史` })
         }
-        setInputContent('')
-        setInputHtmlContent('')
+        clearComposer()
       } catch (error) {
         toast.error('Goal 操作失败', { description: error instanceof Error ? error.message : String(error) })
       }
@@ -2106,8 +2140,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         createAgentQueuedMessage(queuedText, crypto.randomUUID(), Date.now()),
       ])
       requestFollow(sessionId)
-      setInputContent('')
-      setInputHtmlContent('')
+      clearComposer()
       setPromptSuggestions((prev) => {
         if (!prev.has(sessionId)) return prev
         const map = new Map(prev)
@@ -2125,8 +2158,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         })
         return
       }
-      setInputContent('')
-      setInputHtmlContent('')
+      clearComposer()
       setPromptSuggestions((prev) => {
         if (!prev.has(sessionId)) return prev
         const map = new Map(prev)
@@ -2340,8 +2372,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       })(),
     }
 
-    setInputContent('')
-    setInputHtmlContent('')
+    clearComposer()
 
     window.electronAPI.sendAgentMessage(input).then(revealRendererDraft).catch(async (error) => {
       // 发送失败：草稿（含引用节点）原样还原，避免用户重选一遍
@@ -2421,7 +2452,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         return map
       })
     })
-  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement, requestFollow, sendPlainTextAgentMessage])
+  }, [attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, sessionAgentRuntime, workspaces, streaming, backgroundWaiting, suggestion, hasAvailableModel, streamState?.stopping, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setInputHtmlContent, clearComposer, setLiveMessagesMap, revealRendererDraft, permissionMode, messagesLoaded, consumeAgentInterruptionBlock, removeOptimisticPersistedMessage, setCurrentGoal, setGoalEditor, setPendingGoalReplacement, requestFollow, sendPlainTextAgentMessage])
 
   /** 经唯一入口请求停止；只有主进程 STREAM_COMPLETE 才能将 UI 收敛为空闲。 */
   const handleStop = React.useCallback((): void => {
@@ -3208,8 +3239,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
                 void startGoalWithReplacement(window.electronAPI, sessionId, pending, pending.previous.id).then((result) => {
                   if (result.state) setCurrentGoal(result.state)
                   setPendingGoalReplacement(null)
-                  setInputContent('')
-                  setInputHtmlContent('')
+                  clearComposer()
                   toast.success('旧 Goal 已归档，新 Goal 已启动')
                 }).catch((error) => {
                   toast.error('Goal 替换失败', { description: error instanceof Error ? error.message : String(error) })
@@ -3226,7 +3256,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           agentRuntime={sessionAgentRuntime}
           messagesLoaded={messagesLoaded}
           persistedSDKMessages={persistedSDKMessages}
-          streaming={streaming}
+          streaming={conversationRunState.streaming}
+          runStartedAtFallback={conversationRunState.startedAt}
           streamState={streamState}
           runningDelegationCount={runningDelegationCount}
           liveMessages={liveMessages}

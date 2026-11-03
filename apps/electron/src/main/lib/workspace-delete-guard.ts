@@ -17,7 +17,8 @@
  * 反向引用会形成环，也会把「守卫」变成「管理器语义」的从属物。
  */
 
-import { sep } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
+import { realpathSync } from 'node:fs'
 import type { AgentWorkspace } from '@profer/shared'
 import { canonicalizeWorkspaceRootPath, listProjectWorkspaceRoots, resolveWorkspaceLocation } from './workspace-locator'
 
@@ -43,18 +44,48 @@ function isSameOrInside(target: string, root: string): boolean {
 }
 
 /**
+ * 守卫专用归一化：路径不存在时 realpath 最近的已存在祖先，再拼回剩余段。
+ *
+ * `canonicalizeWorkspaceRootPath` 对不存在路径退化为 `resolve`，在 `/var → /private/var`
+ * 这类符号链接下会与已 realpath 的 rootPath 前缀不一致，导致守卫漏判。
+ * 这里只影响守卫的比较，不改变索引落盘值。
+ */
+function canonicalizeForGuard(targetPath: string): string {
+  try {
+    return realpathSync(targetPath)
+  } catch { /* 不存在：继续找祖先 */ }
+  const resolved = resolve(targetPath)
+  const tail: string[] = []
+  let current = resolved
+  while (current !== dirname(current)) {
+    try {
+      const real = realpathSync(current)
+      return tail.length > 0 ? join(real, ...tail.reverse()) : real
+    } catch {
+      tail.push(basename(current))
+      current = dirname(current)
+    }
+  }
+  return resolved
+}
+
+/**
  * 生命周期删除的硬护栏。
  *
  * 遍历所有 project 工作区的 rootPath：`target === root` 或 `target` 在 root 之内 → 抛错。
  * 路径先 realpath（不存在时退化为 `resolve`），避免符号链接绕过前缀判定。
  *
- * 注意：本函数**不**判断「是不是会话存储目录」。它只回答一个问题：
- * 「这次删除会不会碰到用户项目」。返回即代表安全。
+ * 唯一豁免：`<rootPath>/.profer/sessions/<sid>` 及其子路径。会话运行时数据已迁到项目内，
+ * 属于 Profer 私有数据，删会话/迁移/fork 回滚必须能清理；但整个 `sessions/` 容器、
+ * `.profer` 与项目根本身仍受保护。
  */
 export function assertNotProjectLifecyclePath(targetPath: string): void {
-  const target = canonicalizeWorkspaceRootPath(targetPath)
+  const target = canonicalizeForGuard(targetPath)
   for (const project of listProjectWorkspaceRoots()) {
-    if (!isSameOrInside(target, project.rootPath)) continue
+    if (!isSameOrInside(target, canonicalizeForGuard(project.rootPath))) continue
+    const configDir = canonicalizeForGuard(resolveWorkspaceLocation(project.slug).configDir)
+    const sessionsDir = join(configDir, 'sessions')
+    if (isSameOrInside(target, sessionsDir) && target !== sessionsDir) return
     throw new ProjectPathDeletionError(
       `拒绝删除项目路径: ${target}（属于项目工作区 ${project.slug}，rootPath=${project.rootPath}）`,
     )

@@ -117,6 +117,11 @@ interface AgentMessagesProps {
   /** Phase 4: 持久化的 SDKMessage（新格式） */
   persistedSDKMessages?: SDKMessage[]
   streaming: boolean
+  /**
+   * 运行态兜底起点：渲染层没有实时流状态时（委派子会话常见），用它代替
+   * `streamState.startedAt` 驱动运行计时与「本轮仍是 live」的时间判据。
+   */
+  runStartedAtFallback?: number
   streamState?: AgentStreamState
   /** 仍在运行中的直接协作子会话数；父会话本轮结束后用于展示等待态。 */
   runningDelegationCount?: number
@@ -553,7 +558,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, runStartedAtFallback, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true }: AgentMessagesProps): React.ReactElement {
   const store = useStore()
   // 草稿区基准（storageDir）：显式传入优先，否则按会话所属工作区只读解析。
   const resolvedDraftRoot = useAgentSessionDraftRoot(sessionId, draftRoot)
@@ -618,7 +623,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   const streamingModelId = streamState?.model || sessionModelId
   const agentStreamingModel = streamingModelId ? resolveModelDisplayName(streamingModelId, channels) : undefined
   const retrying = streamState?.retrying
-  const startedAt = streamState?.startedAt
+  const startedAt = streamState?.startedAt ?? runStartedAtFallback
 
   // 是否渲染模型的 thinking 块。
   // 早期实现是 `agentRuntime !== 'pi'`：它把「内核」当成了「模型能力」，在 Pi 内核只承载

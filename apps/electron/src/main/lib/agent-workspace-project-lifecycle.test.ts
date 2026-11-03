@@ -45,6 +45,7 @@ const {
   createProjectWorkspace,
   openProjectWorkspace,
   removeProjectWorkspace,
+  relocateProjectWorkspace,
   listAgentWorkspaces,
   ProjectWorkspaceError,
 } = await import('./agent-workspace-manager')
@@ -133,7 +134,7 @@ describe('创建项目工作区', () => {
       disabledGlobalPresetIds: [],
       disabledWorkspacePresetIds: [],
     })
-    expect(readFileSync(join(proferDir, '.gitignore'), 'utf-8')).toBe('sessions/\ncache/\nworkspace-files/\n*.local.json\n.lock\n')
+    expect(readFileSync(join(proferDir, '.gitignore'), 'utf-8')).toBe('sessions/\ncache/\nworkspace-files/\n.runtime/\nskill-overrides.json\n*.local.json\n.lock\n')
     expect(readFileSync(join(proferDir, 'profile.md'), 'utf-8')).toContain('# 我的项目')
 
     const index = readIndexFile()
@@ -376,5 +377,61 @@ describe('移除项目工作区', () => {
 
     expect(() => removeProjectWorkspace('id-managed')).toThrow('不是项目模式工作区')
     expect(listAgentWorkspaces()).toHaveLength(1)
+  })
+})
+
+describe('重新定位项目工作区', () => {
+  test('Given 目录被移动 When 重新定位 Then 保留 id/slug 只换 rootPath，会话归属不断', () => {
+    const oldRoot = makeProjectRoot('relocate-old')
+    const created = createProjectWorkspace({ rootPath: oldRoot, proferVersion: '0.16.17' })
+    const newRoot = makeProjectRoot('relocate-new')
+
+    const result = relocateProjectWorkspace({ id: created.workspace.id, rootPath: newRoot, proferVersion: '0.16.17' })
+
+    expect(result.created).toBe(false)
+    expect(result.workspace.id).toBe(created.workspace.id)
+    expect(result.workspace.slug).toBe(created.workspace.slug)
+    expect(result.workspace.rootPath).toBe(realpathSync(newRoot))
+    expect(result.workspace.storageMode).toBe('project')
+    // 新目录补齐骨架；旧目录完全不动
+    expect(existsSync(join(realpathSync(newRoot), '.profer', 'profer.json'))).toBe(true)
+    expect(existsSync(join(realpathSync(oldRoot), '.profer', 'profer.json'))).toBe(true)
+
+    const listed = listAgentWorkspaces()
+    expect(listed).toHaveLength(1)
+    expect(listed[0]!.id).toBe(created.workspace.id)
+    expect(listed[0]!.rootPath).toBe(realpathSync(newRoot))
+  })
+
+  test('Given 新目录已绑定其他项目 When 重新定位 Then 拒绝，不产生双绑定', () => {
+    const rootA = makeProjectRoot('relocate-a')
+    const rootB = makeProjectRoot('relocate-b')
+    const a = createProjectWorkspace({ rootPath: rootA, proferVersion: '0.16.17' })
+    const b = createProjectWorkspace({ rootPath: rootB, proferVersion: '0.16.17' })
+
+    expect(() => relocateProjectWorkspace({ id: a.workspace.id, rootPath: rootB, proferVersion: '0.16.17' }))
+      .toThrow('已绑定为项目')
+    expect(listAgentWorkspaces()).toHaveLength(2)
+    expect(listAgentWorkspaces().find((workspace) => workspace.id === b.workspace.id)?.rootPath).toBe(realpathSync(rootB))
+  })
+
+  test('Given 索引里的项目缺 rootPath（降级）When 重新定位 Then 恢复绑定并清除降级标记', () => {
+    // 模拟索引损坏：storageMode=project 但 rootPath 丢失（UI 据此显示「重新定位」）
+    mkdirSync(configRoot, { recursive: true })
+    writeFileSync(indexPath, JSON.stringify({
+      version: 4,
+      workspaces: [{ id: 'ws-degraded', name: '丢失项目', slug: 'ws-degraded', createdAt: 1, updatedAt: 1, type: 'personal', storageMode: 'project' }],
+    }, null, 2), 'utf-8')
+    invalidateWorkspaceLocation()
+
+    const degraded = listAgentWorkspaces().find((workspace) => workspace.id === 'ws-degraded')
+    expect(degraded?.rootPath).toBeUndefined()
+
+    const newRoot = makeProjectRoot('relocate-degraded-new')
+    const result = relocateProjectWorkspace({ id: 'ws-degraded', rootPath: newRoot, proferVersion: '0.16.17' })
+
+    expect(result.workspace.id).toBe('ws-degraded')
+    expect(result.workspace.slug).toBe('ws-degraded')
+    expect(result.workspace.rootPath).toBe(realpathSync(newRoot))
   })
 })

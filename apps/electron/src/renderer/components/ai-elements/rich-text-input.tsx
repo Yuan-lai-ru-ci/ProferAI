@@ -212,6 +212,14 @@ export interface RichTextInputHandle {
   insertQuoteReference: (quote: QuotedSelection) => boolean
   /** 按文档顺序取出正文里的全部引用（编号由节点维护，1..k） */
   getQuoteSelections: () => QuotedSelection[]
+  /**
+   * 立即清空编辑器并重置内部同步状态。
+   *
+   * 发送后不能只依赖外部 value 变空来清空编辑器：草稿同步有 180ms 防抖，
+   * 卡顿或 IME 输入时外层 value 可能还没上浮（仍为空），发送后再次写入空值
+   * 不产生变化，同步 effect 不会执行，编辑器里的文字就会残留。
+   */
+  clear: () => void
 }
 
 /**
@@ -965,6 +973,34 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
         collected.push({ ...payload, ref: Number(node.attrs.n) || collected.length + 1 })
       })
       return collected
+    },
+    clear: () => {
+      if (draftSyncTimerRef.current !== null) {
+        clearTimeout(draftSyncTimerRef.current)
+        draftSyncTimerRef.current = null
+      }
+      if (lineCheckHandleRef.current !== null) {
+        cancelAnimationFrame(lineCheckHandleRef.current)
+        lineCheckHandleRef.current = null
+      }
+      hasPendingLocalDraftRef.current = false
+      lastEditorValueRef.current = ''
+      lastSyncedValueRef.current = ''
+      latestHtmlRef.current = ''
+      if (draftPresenceRef.current) {
+        draftPresenceRef.current = false
+        onDraftPresenceChangeRef.current?.(false)
+      }
+      if (isExpandedRef.current) {
+        isExpandedRef.current = false
+        setIsExpanded(false)
+      }
+      setIsManuallyCollapsed(false)
+      if (editor && !editor.isDestroyed) {
+        clearEditorContentSafely(editor)
+      }
+      onChangeRef.current('')
+      onHtmlChangeRef.current?.('')
     },
   }), [editor])
 

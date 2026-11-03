@@ -835,6 +835,9 @@ export interface ElectronAPI {
   /** 删除 Agent 会话 */
   deleteAgentSession: (id: string) => Promise<void>
 
+  /** 某条回复是否有可用的 Pi 分叉节点（列表投影不下发 piEntryBindings） */
+  hasAgentSessionPiForkEntry: (id: string, messageId: string) => Promise<boolean>
+
   /** 迁移 Chat 对话记录到 Agent 会话 */
   migrateChatToAgent: (conversationId: string, agentSessionId: string) => Promise<void>
 
@@ -935,6 +938,9 @@ export interface ElectronAPI {
 
   /** 移除项目工作区（只删索引，不碰项目文件） */
   removeProjectWorkspace: (id: string) => Promise<void>
+
+  /** 重新定位项目工作区（保留 id/slug，只换 rootPath；用于目录被移动/重命名后恢复绑定） */
+  relocateProjectWorkspace: (input: { id: string; rootPath: string }) => Promise<ProjectWorkspaceOpenResult>
 
   /** 重排工作区顺序 */
   reorderAgentWorkspaces: (orderedIds: string[]) => Promise<AgentWorkspace[]>
@@ -2561,6 +2567,10 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_SESSION, id)
   },
 
+  hasAgentSessionPiForkEntry: (id: string, messageId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.HAS_PI_FORK_ENTRY, id, messageId)
+  },
+
   migrateChatToAgent: (conversationId: string, agentSessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.MIGRATE_CHAT_TO_AGENT, conversationId, agentSessionId)
   },
@@ -2702,6 +2712,10 @@ const electronAPI: ElectronAPI = {
 
   removeProjectWorkspace: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_PROJECT_WORKSPACE, id)
+  },
+
+  relocateProjectWorkspace: (input: { id: string; rootPath: string }) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RELOCATE_PROJECT_WORKSPACE, input)
   },
 
   reorderAgentWorkspaces: (orderedIds: string[]) => {

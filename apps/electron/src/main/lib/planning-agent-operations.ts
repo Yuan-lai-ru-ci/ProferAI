@@ -74,7 +74,9 @@ export async function createPlanningTodo(ctx: PlanningAgentToolContext, input: O
 export async function updatePlanningTodo(ctx: PlanningAgentToolContext, input: Omit<UpdateTodoInput, 'workspaceId'>): Promise<Todo> {
   await getPlanningTodo(ctx, input.id)
   if (input.expectedUpdatedAt === undefined) throw new Error('更新 Todo 前必须提供 expectedUpdatedAt；请先读取 Todo 的最新记录')
-  const updated = updateTodo({ ...input, ...(ctx.workspaceId ? { workspaceId: ctx.workspaceId } : {}) })
+  // 更新不改绑工作区：workspaceId 属于归属信息，由用户显式改绑（IPC UPDATE_TODO），
+  // Agent 在别的项目里按 id 更新时不能把 Todo 静默搬到当前项目。
+  const updated = updateTodo({ ...input })
   if (!updated) throw new Error('Todo 不存在')
   touchTodoSession(updated.id, ctx.sessionId)
   broadcastPlanningChanged(['todos', 'reminders'])
@@ -109,7 +111,8 @@ export async function createPlanningCalendarEvent(ctx: PlanningAgentToolContext,
 
 export async function updatePlanningCalendarEvent(ctx: PlanningAgentToolContext, input: Omit<UpdateCalendarEventInput, 'workspaceId'>): Promise<CalendarEvent> {
   await getPlanningCalendarEvent(ctx, input.id)
-  const updated = updateCalendarEvent({ ...input, ...(ctx.workspaceId ? { workspaceId: ctx.workspaceId } : {}) })
+  // 同 Todo：更新日程不改变归属项目。
+  const updated = updateCalendarEvent({ ...input })
   if (!updated) throw new Error('日程不存在')
   broadcastPlanningChanged(['calendar_events', 'reminders'])
   broadcastPlanningAgentOperation({ sessionId: ctx.sessionId, target: 'calendar_event', action: 'updated', title: updated.title })

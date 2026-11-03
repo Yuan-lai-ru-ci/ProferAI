@@ -570,8 +570,10 @@ async function calcWorkspacesCategory(): Promise<StorageCategory> {
             const entryPath = join(slugDir, entry)
             try {
               if (!(await fsPromises.lstat(entryPath)).isDirectory()) continue
-              // workspace-files, skills, skills-inactive 等元目录不算孤儿
-              if (['workspace-files', 'skills', 'skills-inactive', '.claude-plugin'].includes(entry)) {
+              // workspace-files, skills, skills-inactive 等元目录不算孤儿；
+              // sessions 是 project 旧布局的会话容器（新布局已进项目内），
+              // 整体计入占用、不按孤儿处理，避免把旧会话运行时数据当垃圾删掉。
+              if (['workspace-files', 'skills', 'skills-inactive', '.claude-plugin', 'sessions'].includes(entry)) {
                 const sub = await getDirSize(entryPath)
                 bytes += sub.bytes
                 count += sub.count
@@ -815,7 +817,7 @@ async function cleanupOrphanWorkspaces(): Promise<CleanupResult> {
         if (!(await fsPromises.lstat(slugDir)).isDirectory()) continue
         const entries = await fsPromises.readdir(slugDir)
         for (const entry of entries) {
-          if (['workspace-files', 'skills', 'skills-inactive', '.claude-plugin', '.claude'].includes(entry)) continue
+          if (['workspace-files', 'skills', 'skills-inactive', '.claude-plugin', '.claude', 'sessions'].includes(entry)) continue
           const entryPath = join(slugDir, entry)
           try {
             if (!(await fsPromises.lstat(entryPath)).isDirectory()) continue

@@ -43,17 +43,22 @@ export function deriveAssistantTurnBlocks(
   let errorContent: SDKAssistantMessage | null = null
 
   for (const message of messages) {
-    if (message.error) {
+    const isError = !!message.error
+    if (isError) {
       hasError = true
       errorContent = message
-      continue
     }
     const blocks = message.message?.content
     if (!Array.isArray(blocks)) continue
+    // 空输出回合：模型的思考就是这一轮唯一的产出，保留思考块让用户看到它想了什么。
+    // 其余错误消息的 content 仍整条跳过，错误文案由 error 字段单独渲染。
+    const keepThinkingOnly = isError && (message as { _errorCode?: string })._errorCode === 'empty_output'
+    if (isError && !keepThinkingOnly) continue
     const stableKey = (message as unknown as { _proferStableKey?: unknown })._proferStableKey
     const messageIdentity = message.uuid
       || (typeof stableKey === 'string' ? stableKey : options.getMessageIdentity(message))
     for (const [rawIndex, rawBlock] of blocks.entries()) {
+      if (keepThinkingOnly && rawBlock.type !== 'thinking') continue
       const toolId = rawBlock.type === 'tool_use' && typeof rawBlock.id === 'string' ? rawBlock.id : undefined
       const source = toolId ? `tool:${encodeURIComponent(toolId)}` : `block:${rawIndex}`
       const occurrences = new Map<string, number>()
@@ -125,6 +130,11 @@ interface BuildAssistantTurnRenderItemsOptions {
    * 缺省 true 保持旧行为（不传的调用方不受影响）。
    */
   showThinking?: boolean
+  /**
+   * 思考是本轮唯一可见产出时，把思考块提到正文位置，而不是留在默认折叠的过程组里。
+   * 否则「模型只回了思考」的回合收起来只剩一行「执行过程：1 段思考」。
+   */
+  promoteThinkingAsReply?: boolean
 }
 
 export function buildCompletedToolResultIds(turnMessages: SDKMessage[]): Set<string> {
@@ -263,6 +273,34 @@ function collectPromotedImageOutputs(
   return promoted
 }
 
+/** thinking 块是否有可展示内容。上游偶尔回只有空白的块，字段类型也可能不是字符串。 */
+export function hasRenderableThinking(block: SDKContentBlock): boolean {
+  const thinking = (block as { thinking?: unknown }).thinking
+  return typeof thinking === 'string' && thinking.trim().length > 0
+}
+
+/**
+ * 本轮是否该把思考块默认展开。
+ *
+ * 只在「本轮唯一可见产出就是思考」时成立：既没有正文，也没有工具调用。纯工具轮次同样带思考块，
+ * 但那不是空回合，把思考摊开会淹没真正要看的过程。goal 更新工具不计入可见产出（它不渲染）。
+ * empty_output 的合成错误消息只有提示文案，也不算正文。
+ */
+export function shouldExpandThinkingByDefault(blocks: SDKContentBlock[], messages: SDKMessage[]): boolean {
+  if (!blocks.some((block) => block.type === 'thinking' && hasRenderableThinking(block))) return false
+  const hasVisibleToolUse = blocks.some(
+    (block) => block.type === 'tool_use' && !isGoalUpdateToolName((block as SDKToolUseBlock).name),
+  )
+  if (hasVisibleToolUse) return false
+  return !messages.some((message) => {
+    if (message.type !== 'assistant') return false
+    if (typeof (message as { _errorCode?: string })._errorCode === 'string') return false
+    const content = (message as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content
+    return Array.isArray(content)
+      && content.some((block) => block.type === 'text' && typeof block.text === 'string' && block.text.trim().length > 0)
+  })
+}
+
 export function buildAssistantTurnRenderItems(
   blocks: StableContentBlock[],
   options?: BuildAssistantTurnRenderItemsOptions,
@@ -275,17 +313,21 @@ export function buildAssistantTurnRenderItems(
   blocks: SDKContentBlock[] | StableContentBlock[],
   options: BuildAssistantTurnRenderItemsOptions = {},
 ): AssistantTurnRenderItem[] {
-  const visibleBlocks = blocks
+  const mappedBlocks = blocks
     .map((entry, index): IndexedContentBlock => {
       // 新渲染链直接传派生 item，分组保持同一对象与身份；兼容既有纯 block 调用。
       if ('block' in entry && 'identity' in entry && 'index' in entry) return entry as StableContentBlock
       return { block: entry as SDKContentBlock, index }
     })
+  const visibleBlocks = mappedBlocks
     .filter(({ block }) => {
       if (block.type === 'tool_use' && isGoalUpdateToolName((block as SDKToolUseBlock).name)) return false
       // 上层已判定不展示思考（Pi 内核上只回摘要的 GPT/Codex 系）时，必须在派生阶段就剔除 thinking：
       // 否则过程组会把它算进「执行过程：N 条消息」，展开后却什么都渲染不出来。
       if (block.type === 'thinking' && options.showThinking === false) return false
+      // 上游（DeepSeek 系、部分 OpenAI 兼容网关）会回一个只有空白字符的 thinking 块。
+      // 它既渲染不出内容，又会被算成「N 段思考」并撑出一个空的虚线框，直接剔除。
+      if (block.type === 'thinking' && !hasRenderableThinking(block)) return false
       return true
     })
   if (visibleBlocks.length === 0) return []
@@ -293,7 +335,18 @@ export function buildAssistantTurnRenderItems(
 
   // 流式阶段最后的 text 还不稳定，后续工具调用可能会把它变成中间过程。
   // 只有当前面所有工具都有结果时，才把尾部 text 视作最终输出，降低完成瞬间的跳动。
-  const hasProcessBlock = renderBlocks.some((block) => block.type === 'tool_use' || block.type === 'thinking')
+  //
+  // 这里特意用「剔除空白思考之前」的块集：空白思考只说明思考内容还没到（或上游就没给），
+  // 不代表本轮没有过程阶段。否则 [空白思考, 正文] 会先把正文外置、等首个 tool_use 到达
+  // 又收回过程组，用户在流式中看到正文先跳到正文区再缩回折叠行。
+  const processBlocks = mappedBlocks
+    .filter(({ block }) => {
+      if (block.type === 'tool_use' && isGoalUpdateToolName((block as SDKToolUseBlock).name)) return false
+      if (block.type === 'thinking' && options.showThinking === false) return false
+      return true
+    })
+    .map(({ block }) => block)
+  const hasProcessBlock = processBlocks.some((block) => block.type === 'tool_use' || block.type === 'thinking')
   const outputSplit = getTrailingOutputSplit(renderBlocks)
   const canSplitStreamingFinalOutput = options.isStreaming
     && hasProcessBlock
@@ -333,6 +386,11 @@ export function buildAssistantTurnRenderItems(
       continue
     }
     if (replyTextIndexes.has(index)) {
+      contentItems.push({ type: 'block', item: entry })
+      continue
+    }
+    // 思考是本轮唯一可见产出时提到正文位置：留在过程组里只会被折叠成一行摘要。
+    if (options.promoteThinkingAsReply && renderBlocks[index]?.type === 'thinking') {
       contentItems.push({ type: 'block', item: entry })
       continue
     }

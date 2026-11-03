@@ -41,3 +41,36 @@ describe('飞书流式卡片运行状态', () => {
     expect(state.blocks[0]).toMatchObject({ kind: 'text', content: '第一段\n\n第二段' })
   })
 })
+
+function thinkingAssistant(thinking: string, uuid: string): AgentStreamPayload {
+  return {
+    kind: 'sdk_message',
+    message: {
+      type: 'assistant',
+      message: { content: [{ type: 'thinking', thinking }] },
+      parent_tool_use_id: null,
+      uuid,
+      _partial: true,
+    } as unknown as SDKAssistantMessage,
+  }
+}
+
+describe('飞书卡片的思考面板', () => {
+  test('只有空白的思考不产生空的思考面板', () => {
+    let state = createInitialState()
+
+    state = reduce(state, thinkingAssistant(' ', 'assistant-1'))
+
+    expect(state.reasoning.content).toBe('')
+    expect(state.reasoning.active).toBe(false)
+  })
+
+  test('有内容的思考正常累加并标记进行中', () => {
+    let state = createInitialState()
+
+    state = reduce(state, thinkingAssistant('先确认口径', 'assistant-1'))
+
+    expect(state.reasoning.content).toBe('先确认口径')
+    expect(state.reasoning.active).toBe(true)
+  })
+})

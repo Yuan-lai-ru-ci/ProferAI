@@ -10,6 +10,7 @@
 
 import { createHash } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { PiToolResultPersistPort } from '@profer/agent-provider-pi'
@@ -28,6 +29,15 @@ export function getToolResultDir(sessionId: string): string {
 export function removeToolResultDir(sessionId: string): void {
   try {
     rmSync(getToolResultDir(sessionId), { recursive: true, force: true })
+  } catch {
+    /* 清理失败不阻断会话删除 */
+  }
+}
+
+/** 异步版：会话删除路径避免同步递归删除阻塞主线程。 */
+export async function removeToolResultDirAsync(sessionId: string): Promise<void> {
+  try {
+    await rm(getToolResultDir(sessionId), { recursive: true, force: true })
   } catch {
     /* 清理失败不阻断会话删除 */
   }

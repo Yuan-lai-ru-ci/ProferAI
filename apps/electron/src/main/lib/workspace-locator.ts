@@ -44,7 +44,8 @@ export interface WorkspaceLocation {
    * 索引声明这是 project，但 `rootPath` 已缺失/非绝对：位置只能按 managed 解释。
    *
    * 调用方（尤其删除入口）必须把它当「项目绑定已损坏」处理，而不是普通的托管工作区：
-   * 该条目的会话数据仍在中央 runtimeDir 下，级联删除会真删掉用户的项目会话历史。
+   * 该条目的旧布局会话数据仍在中央 runtimeDir 下（新布局在项目内，root 丢失后随项目不可达），
+   * 级联删除会真删掉用户的项目会话历史。
    */
   degradedFromProject?: boolean
 }

@@ -30,6 +30,7 @@ import type {
 import { FEISHU_IPC_CHANNELS, AGENT_IPC_CHANNELS, normalizeAgentRuntime, resolveAgentAttachmentPrompt } from '@profer/shared'
 import type { AgentRuntime } from '@profer/shared'
 import { getDecryptedBotAppSecret, saveFeishuBotConfig } from './feishu-config'
+import { describeFeishuTokenFailure } from './feishu-token-error'
 import { BridgeCommandHandler } from './bridge-command-handler'
 import type { BridgeChatBinding, BridgeNowSnapshot } from './bridge-command-handler'
 import { agentEventBus, runAgentHeadless, stopAgent } from './agent-service'
@@ -300,7 +301,7 @@ class FeishuBridge {
       throw new Error('请先配置 App ID 和 App Secret')
     }
 
-    this.updateStatus({ status: 'connecting' })
+    this.updateStatus({ status: 'connecting', warningMessage: undefined })
 
     try {
       const plainSecret = getDecryptedBotAppSecret(this.botConfig.id)
@@ -346,7 +347,15 @@ class FeishuBridge {
           console.warn('[飞书 Bridge] 未能获取 Bot open_id，群聊 @Bot 检测将使用回退策略')
         }
       } catch (error) {
-        console.warn('[飞书 Bridge] 获取 Bot info 失败（非致命）:', error)
+        // 21001（平台策略拒绝签发 token）是「入站正常、出站全挂」的典型半瘫，
+        // 只写 console 会让用户以为 Bot 已连上却永远收不到回复。
+        const warning = describeFeishuTokenFailure(error)
+        if (warning) {
+          this.updateStatus({ warningMessage: warning })
+          console.warn(`[飞书 Bridge] ${warning}`)
+        } else {
+          console.warn('[飞书 Bridge] 获取 Bot info 失败（非致命）:', error)
+        }
       }
 
       // 注册消息接收（cardAction 暂时不接：飞书 cardAction 不通过长连接推送，
@@ -1235,9 +1244,15 @@ class FeishuBridge {
 
     // 自动创建会话（与命令层共用同一套建会话逻辑）
     if (!binding) {
-      const created = this.commandHandler.ensureBinding(chatId, msgCtx)
-      if (!created) return
-      binding = created as FeishuChatBinding
+      try {
+        const created = this.commandHandler.ensureBinding(chatId, msgCtx)
+        if (!created) return
+        binding = created as FeishuChatBinding
+      } catch (error) {
+        // 建会话失败（典型：项目工作区目录被移走）必须回可见原因，不能已读不回。
+        if (await this.commandHandler.reportSessionCreationError(chatId, error, msgCtx)) return
+        throw error
+      }
     }
 
     // 注：之前在此处有 isAgentSessionActive silent skip 兜底，会在

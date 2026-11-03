@@ -2310,6 +2310,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_SESSION_MODEL: 'agent:update-session-model',
   /** 删除会话 */
   DELETE_SESSION: 'agent:delete-session',
+  /** 查询某条回复是否有可用的 Pi 分叉节点（列表投影不再下发 piEntryBindings） */
+  HAS_PI_FORK_ENTRY: 'agent:has-pi-fork-entry',
   /** 迁移 Chat 对话记录到 Agent 会话 */
   MIGRATE_CHAT_TO_AGENT: 'agent:migrate-chat-to-agent',
   /** 切换会话置顶状态 */
@@ -2358,6 +2360,8 @@ export const AGENT_IPC_CHANNELS = {
   OPEN_PROJECT_WORKSPACE: 'agent:open-project-workspace',
   /** 移除项目工作区（只删索引，不碰项目文件） */
   REMOVE_PROJECT_WORKSPACE: 'agent:remove-project-workspace',
+  /** 重新定位项目工作区（保留 id/slug，只换 rootPath） */
+  RELOCATE_PROJECT_WORKSPACE: 'agent:relocate-project-workspace',
   /** 更新工作区 */
   UPDATE_WORKSPACE: 'agent:update-workspace',
   /** 删除工作区 */

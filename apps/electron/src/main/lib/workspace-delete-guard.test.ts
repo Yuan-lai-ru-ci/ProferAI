@@ -159,7 +159,7 @@ describe('assertProjectFileDeletionAllowed', () => {
 })
 
 describe('deleteAgentWorkspace：project 只删索引', () => {
-  test('Given project 工作区含会话 When 移除 Then 索引消失、项目与 .profer 完整、会话保留', () => {
+  test('Given project 工作区含会话 When 移除 Then 索引消失、项目与 .profer 完整、会话保留', async () => {
     const project = makeProject('remove')
     const messagesPath = join(configRoot, 'agent-sessions', 'sess-1.jsonl')
     mkdirSync(dirname(messagesPath), { recursive: true })
@@ -170,7 +170,7 @@ describe('deleteAgentWorkspace：project 只删索引', () => {
       { id: 'sess-1', title: 'project session', workspaceId: 'id-p1', createdAt: 1, updatedAt: 1 },
     ])
 
-    deleteAgentWorkspace('id-p1')
+    await deleteAgentWorkspace('id-p1')
 
     // ① 索引条目消失
     expect(getAgentWorkspace('id-p1')).toBeUndefined()
@@ -190,17 +190,17 @@ describe('deleteAgentWorkspace：project 只删索引', () => {
     expect(existsSync(messagesPath)).toBe(true)
   })
 
-  test('Given project 工作区的 rootPath 已被拔掉 When 移除 Then 成功且不重建目录', () => {
+  test('Given project 工作区的 rootPath 已被拔掉 When 移除 Then 成功且不重建目录', async () => {
     const root = join(sandbox, 'projects', 'unplugged')
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
 
-    deleteAgentWorkspace('id-p1')
+    await deleteAgentWorkspace('id-p1')
 
     expect(getAgentWorkspace('id-p1')).toBeUndefined()
     expect(existsSync(root)).toBe(false)
   })
 
-  test('Given managed 工作区 When 删除 Then 目录被删、会话级联仍生效（I1 回归）', () => {
+  test('Given managed 工作区 When 删除 Then 目录被删、会话级联仍生效（I1 回归）', async () => {
     const workspaceDir = join(configRoot, 'agent-workspaces', 'managed-2')
     mkdirSync(join(workspaceDir, 'skills'), { recursive: true })
     writeFileSync(join(workspaceDir, 'mcp.json'), '{}\n', 'utf-8')
@@ -210,7 +210,7 @@ describe('deleteAgentWorkspace：project 只删索引', () => {
       { id: 'sess-m', title: 'managed session', workspaceId: 'id-managed-2', createdAt: 1, updatedAt: 1 },
     ])
 
-    deleteAgentWorkspace('id-managed-2')
+    await deleteAgentWorkspace('id-managed-2')
 
     expect(existsSync(workspaceDir)).toBe(false)
     expect(getAgentWorkspace('id-managed-2')).toBeUndefined()
@@ -218,16 +218,16 @@ describe('deleteAgentWorkspace：project 只删索引', () => {
     expect(sessions.sessions).toEqual([])
   })
 
-  test('Given project 是唯一剩余工作区 When 移除 Then 仍抛「至少保留一个」', () => {
+  test('Given project 是唯一剩余工作区 When 移除 Then 仍抛「至少保留一个」', async () => {
     const project = makeProject('only')
     writeWorkspacesIndex([projectEntry('p1', project.root)])
 
-    expect(() => deleteAgentWorkspace('id-p1')).toThrow('至少需要保留一个项目')
+    await expect(deleteAgentWorkspace('id-p1')).rejects.toThrow('至少需要保留一个项目')
     expect(existsSync(project.file)).toBe(true)
     expect(basename(project.root)).toBe('only')
   })
 
-  test('Given 索引损坏（project root 包住了配置目录）When 删 managed Then 兜底守卫真的会拦（正向控制）', () => {
+  test('Given 索引损坏（project root 包住了配置目录）When 删 managed Then 兜底守卫真的会拦（正向控制）', async () => {
     // 这个形态不合法（创建时就会拒绝），但索引可能被手改/旧版本写脏。
     // 断言重点：`assertNotProjectLifecyclePath` 确实接在 managed 删除链路上，而不是死代码。
     const workspaceDir = join(configRoot, 'agent-workspaces', 'managed-2')
@@ -236,7 +236,7 @@ describe('deleteAgentWorkspace：project 只删索引', () => {
 
     writeWorkspacesIndex([projectEntry('bad-root', sandbox), managedEntry('default'), managedEntry('managed-2')])
 
-    expect(() => deleteAgentWorkspace('id-managed-2')).toThrow(ProjectPathDeletionError)
+    await expect(deleteAgentWorkspace('id-managed-2')).rejects.toThrow(ProjectPathDeletionError)
     // 抛错发生在任何副作用之前：索引仍在、目录仍在
     expect(getAgentWorkspace('id-managed-2')).toBeDefined()
     expect(existsSync(workspaceDir)).toBe(true)

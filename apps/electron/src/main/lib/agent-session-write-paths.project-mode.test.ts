@@ -9,7 +9,7 @@
  * - 计划目录只有一套真相：`agent-session-manager` 的写入布局与提示词里给模型的计划路径相同。
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -121,19 +121,29 @@ function readSettings(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>
 }
 
+/** project 会话数据现在落在项目内 `.profer/sessions`（随文件夹迁移）。 */
+function projectSessionsDir(root: string): string {
+  return join(root, '.profer', 'sessions')
+}
+
+/** 项目根快照，忽略 Profer 会话目录：会话是工作区资产，不算用户项目文件的改动。 */
+function snapshotProjectTree(root: string): string[] {
+  return snapshotTree(root).filter((entry) => !entry.startsWith('.profer/sessions'))
+}
+
 /** 会话创建时可能落在会话目录里的历史落点（本次要求全部不进项目根）。 */
 const SESSION_ARTIFACTS = ['agent-output-images', 'session-errors.log'] as const
 
-describe('project：会话创建只写中央 storageDir', () => {
-  test('Given project 工作区 When 创建会话 Then rootPath 不出现任何会话产物', () => {
+describe('project：会话创建写入项目内 `.profer/sessions`', () => {
+  test('Given project 工作区 When 创建会话 Then 项目用户文件不动，会话只落在 .profer/sessions', () => {
     const root = makeProject('write-session')
-    const before = snapshotTree(root)
+    const before = snapshotProjectTree(root)
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
 
     const meta = createAgentSession('project session', undefined, 'id-p1', undefined, 'claude', false)
 
-    // 项目根一个字节都没动：没有 .claude/、没有 .context/、没有日志与生图目录
-    expect(snapshotTree(root)).toEqual(before)
+    // 用户项目文件一个字节都没动：没有根级 .claude/、没有根级 .context/
+    expect(snapshotProjectTree(root)).toEqual(before)
     expect(existsSync(join(root, '.claude'))).toBe(false)
     expect(existsSync(join(root, '.context'))).toBe(false)
     for (const artifact of SESSION_ARTIFACTS) {
@@ -141,19 +151,20 @@ describe('project：会话创建只写中央 storageDir', () => {
       expect(existsSync(join(root, artifact))).toBe(false)
     }
 
-    // cwd 仍是项目根（只作为运行时基准，不作为写目标）
+    // 会话产物在项目内 `.profer/sessions`，cwd 仍是项目根
+    expect(existsSync(join(projectSessionsDir(root), meta.id))).toBe(true)
     expect(resolveAgentSessionCwd('p1', meta.id)).toBe(root)
   })
 
-  test('Given project 工作区 When 创建会话 Then settings / context / plan 全部落在 storageDir', () => {
+  test('Given project 工作区 When 创建会话 Then settings / context / plan 全部落在项目内 storageDir', () => {
     const root = makeProject('write-layout')
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
 
     const meta = createAgentSession('project session', undefined, 'id-p1', undefined, 'claude', false)
     const layout = resolveAgentSessionWriteLayout('p1', meta.id)
 
-    expect(layout.storageDir).toBe(join(workspacesDir, 'p1', 'sessions', meta.id))
-    expect(layout.storageDir.startsWith(root)).toBe(false)
+    expect(layout.storageDir).toBe(join(projectSessionsDir(root), meta.id))
+    expect(layout.storageDir.startsWith(projectSessionsDir(root))).toBe(true)
 
     // 1) SDK settings
     expect(existsSync(layout.claudeSettingsPath)).toBe(true)
@@ -161,7 +172,7 @@ describe('project：会话创建只写中央 storageDir', () => {
     expect(settings.skipWebFetchPreflight).toBe(true)
 
     // 2) plansDirectory 必须能在「相对项目根」语义下解析回 storageDir：
-    //    join 与 resolve 两种实现都要落到中央目录，绝不能落进项目根
+    //    join 与 resolve 两种实现都要落到项目内 `.profer/sessions`
     const plansDirectory = settings.plansDirectory
     expect(typeof plansDirectory).toBe('string')
     expect(isAbsolute(plansDirectory as string)).toBe(false)
@@ -172,13 +183,13 @@ describe('project：会话创建只写中央 storageDir', () => {
     expect(existsSync(layout.contextDir)).toBe(true)
     expect(existsSync(layout.plansDir)).toBe(true)
 
-    // 4) 生图输出与诊断日志的落点也在 storageDir，且不在项目内
+    // 4) 生图输出与诊断日志的落点也在 storageDir，且不在用户项目文件区
     for (const dir of [layout.plansDir, layout.imageOutputDir]) {
       expect(dir.startsWith(layout.storageDir)).toBe(true)
-      expect(dir.startsWith(root)).toBe(false)
+      expect(dir.startsWith(projectSessionsDir(root))).toBe(true)
     }
     expect(layout.errorsLogPath.startsWith(layout.storageDir)).toBe(true)
-    expect(layout.errorsLogPath.startsWith(root)).toBe(false)
+    expect(layout.errorsLogPath.startsWith(projectSessionsDir(root))).toBe(true)
   })
 
   test('Given project 工作区 When 提示词带计划的绝对路径 Then 与写入布局同一目录', () => {
@@ -194,10 +205,10 @@ describe('project：会话创建只写中央 storageDir', () => {
       permissionMode: 'plan',
     })
 
-    // 计划文件路径 = 写入布局的 plansDir（唯一真相），且不复用项目根的相对路径
+    // 计划文件路径 = 写入布局的 plansDir（唯一真相），且落在项目内会话目录
     expect(prompt).toContain(layout.plansDir)
     expect(prompt).not.toContain('将计划文件写入当前工作目录的 `.context/plan/`')
-    expect(layout.plansDir.startsWith(root)).toBe(false)
+    expect(layout.plansDir.startsWith(projectSessionsDir(root))).toBe(true)
 
     // 非计划模式不打印中央运行目录：工作区段的「单一路径语义」不许把模型引回 managed 形状路径
     const idlePrompt = buildSystemPrompt({
@@ -269,5 +280,40 @@ describe('布局辅助函数的边界', () => {
 
     expect(() => resolveAgentSessionWriteLayout('p-missing', 'sess-x')).toThrow()
     expect(existsSync(missingRoot)).toBe(false)
+  })
+})
+
+describe('project：创建失败与只读回退', () => {
+  test('Given project 根已被移走 When 创建会话 Then 抛错且不留孤儿会话索引', () => {
+    const root = makeProject('gone-project')
+    writeWorkspacesIndex([projectEntry('p-gone', root)])
+    rmSync(root, { recursive: true, force: true })
+    invalidateWorkspaceLocation()
+
+    expect(() => createAgentSession('gone session', undefined, 'id-p-gone', undefined, 'claude', false)).toThrow()
+
+    const sessions = existsSync(sessionsIndexPath)
+      ? (JSON.parse(readFileSync(sessionsIndexPath, 'utf-8')) as { sessions?: unknown[] }).sessions ?? []
+      : []
+    expect(sessions).toHaveLength(0)
+  })
+
+  test('Given project 目录不可写 When 创建会话 Then 回退中央目录而不是报“存储目录不一致”', () => {
+    const root = makeProject('readonly-project')
+    writeWorkspacesIndex([projectEntry('p-ro', root)])
+    const proferDir = join(root, '.profer')
+    chmodSync(proferDir, 0o500)
+    try {
+      const meta = createAgentSession('readonly session', undefined, 'id-p-ro', undefined, 'claude', false)
+
+      // 会话数据落在中央 runtimeDir，项目内没有半成品
+      expect(existsSync(join(workspacesDir, 'p-ro', 'sessions', meta.id, '.context', 'plan'))).toBe(true)
+      expect(existsSync(join(root, '.profer', 'sessions', meta.id))).toBe(false)
+      // 会话索引正常写入（创建成功，不是孤儿）
+      const sessions = (JSON.parse(readFileSync(sessionsIndexPath, 'utf-8')) as { sessions: Array<{ id: string }> }).sessions
+      expect(sessions.some((session) => session.id === meta.id)).toBe(true)
+    } finally {
+      chmodSync(proferDir, 0o700)
+    }
   })
 })

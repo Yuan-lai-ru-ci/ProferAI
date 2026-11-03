@@ -155,6 +155,16 @@ describe('定时任务复用会话遵守内核归属', () => {
     expect(f.inputs[0]?.sessionId).toBe('new')
     expect(f.sessions.get('old')).toEqual(f.original)
   })
+
+  test('旧会话被移动到别的项目后不再复用，避免在旧项目里执行', async () => {
+    const f = fixture('claude', 'claude', 'reuse')
+    f.sessions.set('old', { ...f.original, workspaceId: 'other-project' })
+
+    await f.run()
+
+    expect(f.inputs[0]?.sessionId).toBe('new')
+    expect(f.lastIds).toEqual(['new'])
+  })
 })
 
 describe('Automation session binding and queue', () => {

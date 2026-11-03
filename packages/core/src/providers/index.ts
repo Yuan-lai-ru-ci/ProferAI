@@ -65,13 +65,16 @@ export function getAdapter(provider: ProviderType, xaiApiProtocol?: XaiApiProtoc
   // xAI 渠道的协议由用户在渠道上选择：官方默认 Responses，只支持 Chat Completions
   // 的第三方中转可切到 OpenAI 兼容适配器，不再要求中转去实现 /responses。
   if (provider === 'xai' && xaiApiProtocol === 'chat-completions') return new OpenAIAdapter('xai')
+  // 真实协议只判定一次：端点形态（/responses）与官方厂商端点共用 shared 的同一份事实源，
+  // 避免 Chat 与 Pi 运行时/连接测试各自维护一套 host 判断而漂移。
+  const nativeProtocol = resolveProviderNativeProtocol(provider, baseUrl, xaiApiProtocol)
   // 用户把完整 /responses 端点填进了 OpenAI 兼容渠道时，端点形态会覆盖静态归属：
   // 否则请求以 Chat Completions 的 messages 请求体打到 Responses 端点，
   // 网关通常回 200 + 空流，界面上只表现为「连上了但没输出」。
   if (
     provider !== 'openai-responses' &&
     provider !== 'openai-codex' &&
-    resolveProviderNativeProtocol(provider, baseUrl, xaiApiProtocol) === 'openai-responses'
+    nativeProtocol === 'openai-responses'
   ) {
     return new OpenAIResponsesAdapter(provider)
   }
@@ -79,6 +82,26 @@ export function getAdapter(provider: ProviderType, xaiApiProtocol?: XaiApiProtoc
   if (!createAdapter) {
     throw new Error(`不支持的供应商: ${provider}。你可能过去使用的是 Profer 商业版，请重新下载商业版覆盖安装，当前版本为开源版本。`)
   }
+
+  // 官方厂商端点覆盖：custom 渠道指向 Anthropic / Google 官方 API 时，静态归属仍是
+  // OpenAI 兼容，但对方根本没有 /chat/completions，请求必然 404（表现为「Agent 能用、
+  // Chat 不通」）。这里复用与 Pi 运行时同一份端点表，只对静态协议为 openai-completions
+  // 的渠道生效，因此 deepseek 这类自带 Anthropic 入口的供应商不受影响。
+  // Mistral 故意不覆盖：它的原生对话端点与 OpenAI 路径一致，Chat 请求体
+  // （model/messages/stream/tools）也被接受，切协议只会多出一份要维护的转换。
+  if (PROVIDER_CAPABILITIES[provider].nativeProtocol === 'openai-completions') {
+    if (nativeProtocol === 'anthropic-messages') {
+      // 按官方 Anthropic 语义构造：端点推导（协议根补 /v1/messages）、双认证头、
+      // 思考协议都走 anthropic 分支。若沿用 'custom'，Claude 5.x 会收到旧版
+      // budget_tokens 而 400（见 detectThinkingCapability 的 providerType 兜底）。
+      return new AnthropicAdapter('anthropic')
+    }
+    if (nativeProtocol === 'google-generative-ai') {
+      // GoogleAdapter 内部已 normalizeGoogleBaseUrl 并拼 /v1beta/models/…，裸域名可用。
+      return new GoogleAdapter()
+    }
+  }
+
   return createAdapter()
 }
 

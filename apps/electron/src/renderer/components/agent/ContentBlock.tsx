@@ -45,6 +45,7 @@ import type {
   SDKSystemMessage,
 } from '@profer/shared'
 import { isGoalUpdateToolName, stripGoalResultBlocks } from '@profer/shared'
+import { hasRenderableThinking } from './render-block-derivation'
 
 // ===== useToolResult Hook =====
 
@@ -671,7 +672,7 @@ interface ThinkingBlockProps {
   block: SDKThinkingBlock
   dimmed?: boolean
   streaming?: boolean
-  /** 本轮没有正文时强制展开，并提示这是模型唯一产出的内容 */
+  /** 本轮只有思考、没有任何可见产出时强制展开，让用户看到模型唯一的产出 */
   forceExpanded?: boolean
 }
 
@@ -693,10 +694,11 @@ function ThinkingBlock({ block, dimmed = false, streaming = false, forceExpanded
     setShouldCollapse(el.scrollHeight > maxHeight + 10)
   }, [block.thinking])
 
-  // 当全局偏好变更时同步（仅在"应折叠"时生效）
+  // forceExpanded 只作挂载初值：流式中它会随首个工具调用或正文出现由 true 翻 false，
+  // 若跟着重算，长思考会在过程正被阅读时被突然夹回 4 行。全局偏好仍然实时生效。
   React.useEffect(() => {
-    setIsExpanded(forceExpanded || thinkingExpanded)
-  }, [thinkingExpanded, forceExpanded])
+    setIsExpanded(thinkingExpanded)
+  }, [thinkingExpanded])
 
   const toggleExpand = React.useCallback(() => {
     setIsExpanded((prev) => !prev)
@@ -707,7 +709,7 @@ function ThinkingBlock({ block, dimmed = false, streaming = false, forceExpanded
       <div className="flex items-center gap-1.5 mb-1.5">
         <Brain className={cn('size-3.5', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')} />
         <span className={cn('text-[14px] uppercase tracking-wider', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
-          {forceExpanded ? '思考通道（本轮没有正文）' : '思考摘要'}
+          思考摘要
         </span>
       </div>
       <div
@@ -829,7 +831,8 @@ const ContentBlockView = function ContentBlock({ block, allMessages, basePath, b
             ))}
           </div>
         )}
-        {cleanText && (
+        {/* 只有空白字符的正文不渲染：既撑不出内容，还会让其他块被误判成 dimmed。 */}
+        {cleanText.trim() && (
           <MessageResponse basePath={basePath} basePaths={basePaths} enableBlockCopy={!isStreaming}>{cleanText}</MessageResponse>
         )}
       </>
@@ -859,7 +862,8 @@ const ContentBlockView = function ContentBlock({ block, allMessages, basePath, b
   // thinking 块
   if (block.type === 'thinking') {
     const thinkingBlock = block as SDKThinkingBlock
-    if (!showThinking || !thinkingBlock.thinking) return null
+    // 只有空白字符（或非字符串）的思考块渲染出来就是空框，按「没有思考」处理。
+    if (!showThinking || !hasRenderableThinking(thinkingBlock)) return null
     return <ThinkingBlock block={thinkingBlock} dimmed={dimmed} streaming={isStreaming} forceExpanded={forceExpandThinking} />
   }
 

@@ -61,6 +61,8 @@ interface CreatedSessionCall {
 const createdSessionCalls: CreatedSessionCall[] = []
 const sessionMetas = new Map<string, AgentSessionMeta>()
 let sessionSeq = 0
+/** 模拟建会话失败（project 根被移走 / 目录不可写）。 */
+let failSessionCreation: Error | null = null
 
 function seedSession(meta: Partial<AgentSessionMeta> & { id: string }): AgentSessionMeta {
   const full = {
@@ -89,6 +91,7 @@ mock.module('./agent-session-manager', () => ({
     modelId?: string,
     agentRuntime?: AgentRuntime,
   ) => {
+    if (failSessionCreation) throw failSessionCreation
     createdSessionCalls.push({ title, channelId, workspaceId, modelId, agentRuntime })
     const id = `session-${++sessionSeq}`
     return seedSession({
@@ -162,6 +165,7 @@ beforeEach(() => {
   headlessCalls.length = 0
   sessionMetas.clear()
   sessionSeq = 0
+  failSessionCreation = null
 })
 
 afterAll(() => {
@@ -477,5 +481,30 @@ describe('IM 消息进桌面端的展示文本', () => {
     const call = headlessCalls.at(-1)
     expect(call?.userMessage).toContain('<attached_files>')
     expect(call?.rawUserMessage).toBe('看一下这个文件')
+  })
+})
+
+describe('建会话失败必须回可见原因', () => {
+  test('Given 建会话抛错 When 收到普通消息 Then 回一条带原因的提示且不写入 binding', async () => {
+    const { handler, sent } = createHandler()
+    failSessionCreation = new Error('项目目录不存在，且不会被自动创建: /gone/project')
+
+    await handler.handleIncomingMessage('fail-1', '你好')
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toContain('无法创建 Agent 会话')
+    expect(sent[0]).toContain('/gone/project')
+    expect(handler.getBinding('fail-1')).toBeUndefined()
+    expect(headlessCalls).toHaveLength(0)
+  })
+
+  test('Given 建会话抛错 When /new Then 同样回提示', async () => {
+    const { handler, sent } = createHandler()
+    failSessionCreation = new Error('EACCES: permission denied')
+
+    await handler.handleIncomingMessage('fail-2', '/new 新会话')
+
+    expect(sent.at(-1)).toContain('无法创建 Agent 会话')
+    expect(handler.getBinding('fail-2')).toBeUndefined()
   })
 })

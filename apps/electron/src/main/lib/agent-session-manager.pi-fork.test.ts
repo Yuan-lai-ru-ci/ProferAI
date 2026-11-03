@@ -302,7 +302,7 @@ describe('Pi 会话分叉', () => {
     const forkCwd = join(tempHome, 'fork-workspace')
     mkdirSync(forkCwd, { recursive: true })
     writeFileSync(join(forkCwd, 'file.txt'), '分叉会话里又被改了一轮')
-    manager.deleteAgentSession(sourceSessionId)
+    await manager.deleteAgentSession(sourceSessionId)
     expect(existsSync(join(checkpointRoot, sourceSessionId))).toBe(false)
     expect(existsSync(sourceDir)).toBe(false)
 

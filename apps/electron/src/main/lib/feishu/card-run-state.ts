@@ -99,6 +99,8 @@ function appendText(state: RunState, delta: string, sourceId?: string): RunState
 }
 
 function appendThinking(state: RunState, delta: string): RunState {
+  // 上游会回只有空白的思考增量；累加进去只会在卡片里多一个空的「思考」折叠面板。
+  if (!delta.trim()) return state
   return {
     ...state,
     reasoning: { content: state.reasoning.content + delta, active: true },
@@ -147,7 +149,7 @@ function replaceAssistantSnapshot(state: RunState, sourceId: string, blocks: Blo
     assistantThinking,
     reasoning: {
       content: assistantSourceOrder.map((id) => assistantThinking[id] ?? '').join(''),
-      active: thinking.length > 0,
+      active: thinking.trim().length > 0,
     },
     footer: blocks.some((block) => block.kind === 'tool') ? 'tool_running' : 'streaming',
   }
@@ -214,7 +216,8 @@ export function reduce(state: RunState, payload: AgentStreamPayload): RunState {
             }
           } else if (block.type === 'thinking') {
             const value = (block as { thinking?: unknown }).thinking
-            if (typeof value === 'string') thinking += value
+            // 快照路径同样跳过纯空白思考，否则 reasoning.content 里会留下一个空格。
+            if (typeof value === 'string' && value.trim()) thinking += value
           } else if (block.type === 'tool_use') {
             const tb = block as { id?: unknown; name?: unknown; input?: unknown }
             if (typeof tb.id === 'string' && typeof tb.name === 'string') {

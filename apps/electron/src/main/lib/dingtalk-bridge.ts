@@ -505,7 +505,13 @@ class DingTalkBridge {
       return
     }
 
-    const binding = this.commandHandler.ensureBinding(chatId)
+    let binding: ReturnType<BridgeCommandHandler['ensureBinding']> = null
+    try {
+      binding = this.commandHandler.ensureBinding(chatId)
+    } catch (error) {
+      if (await this.commandHandler.reportSessionCreationError(chatId, error, { sessionWebhook: data.sessionWebhook })) return
+      throw error
+    }
     if (!binding) {
       await this.replyTextViaWebhook(data.sessionWebhook, '请先在 Profer 设置中选择 Agent 渠道。')
       return

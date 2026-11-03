@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtomValue, useSetAtom, useStore } from 'jotai'
+import { useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
@@ -96,7 +96,6 @@ export function AgentHistorySelectionLayer({
 }: AgentHistorySelectionLayerProps): React.ReactElement | null {
   const setPendingQuoteInsert = useSetAtom(pendingQuoteInsertMapAtom)
   const store = useStore()
-  const agentSessions = useAtomValue(agentSessionsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const [selection, setSelection] = React.useState<AgentHistorySelection | null>(null)
   const openExplorationPendingRef = React.useRef(false)
@@ -299,8 +298,11 @@ export function AgentHistorySelectionLayer({
       toast.info('请在一条已完成的 Agent 回复中选择内容，再从该节点探索')
       return
     }
-    const parentSession = agentSessions.find((item) => item.id === sessionId)
-    if (!parentSession?.piEntryBindings?.[selection.messageId]) {
+    // 列表投影已裁掉 piEntryBindings（避免每次列表刷新传输十几 MB），改走专用查询。
+    const hasForkNode = await window.electronAPI
+      .hasAgentSessionPiForkEntry(sessionId, selection.messageId)
+      .catch(() => false)
+    if (!hasForkNode) {
       toast.warning('这个回复没有可用的 Pi 分叉节点，暂时无法从这里探索')
       return
     }
@@ -335,7 +337,7 @@ export function AgentHistorySelectionLayer({
     } finally {
       openExplorationPendingRef.current = false
     }
-  }, [agentSessions, clearSelection, selection, sessionId, setAgentSessions, setPendingQuoteInsert, store])
+  }, [clearSelection, selection, sessionId, setAgentSessions, setPendingQuoteInsert, store])
 
   // 工具栏「探索」按钮接手划词：嵌入的探索分支内不再允许二级探索。
   React.useEffect(() => {

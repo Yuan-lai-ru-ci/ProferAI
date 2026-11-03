@@ -38,6 +38,10 @@ export function inferReasoningTransport(
       return 'openai-responses'
     case 'google-generative-ai':
       return 'other'
+    case 'mistral-conversations':
+      // Mistral 原生协议的思考开关是 prompt_mode，未开通时直接 400，
+      // 且它不是档位式推理，渲染层不提供思考档位菜单。
+      return 'other'
     default:
       return 'anthropic-messages'
   }

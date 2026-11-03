@@ -565,16 +565,24 @@ export function resolveWorkspaceFilesDir(slug: string): string {
 const SESSION_STORAGE_DIR_NAME = 'sessions'
 
 /**
- * 会话运行时存储目录（纯计算）：managed = `<configDir>/<sid>`，project = `<configDir>/sessions/<sid>`。
+ * 会话运行时存储目录（只读探测，不 mkdir）：
+ *
+ * - managed：`<configDir>/<sid>`（与改造前一致）；
+ * - project：`<root>/.profer/sessions/<sid>`（项目内，随文件夹一起迁移）。
+ *
+ * 旧布局兼容：项目模式早期版本把会话数据放在中央
+ * `~/.profer/agent-workspaces/<slug>/sessions/<sid>`。项目内还没有、中央旧目录仍存在时
+ * 继续返回旧路径，保证老会话仍能读取与续聊；两者都不存在才按新布局创建。
  *
  * 这个目录只放 Profer 会话私有数据（checkpoint、临时产物等），**永远不是 cwd**。
  */
 function resolveSessionStorageDir(location: WorkspaceLocation, sessionId: string): string {
-  // project 的 configDir 在项目内（<root>/.profer），会话运行数据必须落中央 runtimeDir，
-  // 否则每个会话目录、附件与日志都会进用户仓库（I3）。
-  return location.mode === 'project'
-    ? join(location.runtimeDir, SESSION_STORAGE_DIR_NAME, sessionId)
-    : join(location.runtimeDir, sessionId)
+  if (location.mode !== 'project') return join(location.runtimeDir, sessionId)
+
+  const projectSessionDir = join(location.configDir, SESSION_STORAGE_DIR_NAME, sessionId)
+  const legacySessionDir = join(location.runtimeDir, SESSION_STORAGE_DIR_NAME, sessionId)
+  if (!existsSync(projectSessionDir) && existsSync(legacySessionDir)) return legacySessionDir
+  return projectSessionDir
 }
 
 /**
@@ -589,6 +597,16 @@ function resolveSessionStorageDir(location: WorkspaceLocation, sessionId: string
  */
 export function resolveAgentSessionWorkspacePath(slug: string, sessionId: string): string {
   return resolveSessionStorageDir(resolveWorkspaceLocation(slug), sessionId)
+}
+
+/**
+ * project 只读时会话数据的中央回退目录。
+ *
+ * 与 `getAgentSessionStorageDir` 的 EACCES/EPERM/EROFS 回退同一来源：
+ * 写入布局的一致性校验用它识别「合法回退」与「路径契约被改坏」。
+ */
+export function resolveProjectSessionFallbackDir(slug: string, sessionId: string): string {
+  return join(resolveWorkspaceLocation(slug).runtimeDir, SESSION_STORAGE_DIR_NAME, sessionId)
 }
 
 /**
@@ -613,9 +631,10 @@ export function getAgentSessionCwd(slug: string, sessionId: string): string {
  * 获取 Agent 会话运行时存储目录（允许 mkdir）
  *
  * - managed：`<configDir>/<sessionId>`
- * - project：`~/.profer/agent-workspaces/<slug>/sessions/<sessionId>`（中央 runtimeDir）
+ * - project：`<root>/.profer/sessions/<sessionId>`（项目内）；旧中央目录仍存在时继续沿用
  *
- * 与 cwd 严格分离：project 模式下它永远落在中央配置目录里，不进入用户项目（I3）。
+ * 与 cwd 严格分离：cwd 是项目根，会话私有数据在 `.profer/sessions`，不能把二者混用。
+ * 只读项目（挂载卷 / 权限受限）写不进项目时自动回退中央 runtimeDir，保证仍能创建与续聊。
  *
  * @throws WorkspaceRootMissingError project 的 rootPath 不存在（不会自动创建）
  */
@@ -624,12 +643,22 @@ export function getAgentSessionStorageDir(slug: string, sessionId: string): stri
   requireExistingWorkspaceRoot(location)
 
   const dir = resolveSessionStorageDir(location, sessionId)
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-    console.log(`[配置] 已创建 Agent 会话工作目录: ${dir}`)
+  try {
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true })
+      console.log(`[配置] 已创建 Agent 会话工作目录: ${dir}`)
+    }
+    return dir
+  } catch (error) {
+    if (location.mode !== 'project') throw error
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code !== 'EACCES' && code !== 'EPERM' && code !== 'EROFS') throw error
+    // 只读项目：会话数据回退中央，不能让只读挂载把会话创建整个卡死。
+    const fallback = resolveProjectSessionFallbackDir(slug, sessionId)
+    if (!existsSync(fallback)) mkdirSync(fallback, { recursive: true })
+    console.warn(`[配置] 项目目录不可写，会话数据回退中央目录: ${fallback}`)
+    return fallback
   }
-
-  return dir
 }
 
 /**
@@ -1203,11 +1232,10 @@ export function getFeishuBotMetadataPath(botId: string): string {
  * 获取指定 Agent 会话的运行时存储目录（会话私有数据落点，**禁止当 cwd 用**）
  *
  * - managed：`<runtimeDir>/<sessionId>`，与改造前完全一致（历史上它同时也是 cwd）
- * - project：`<runtimeDir>/sessions/<sessionId>`，即
- *   `~/.profer/agent-workspaces/<slug>/sessions/<sessionId>`（**仍在中央配置目录，不进项目根**，I3）
+ * - project：`<root>/.profer/sessions/<sessionId>`（项目内，随文件夹迁移）；
+ *   旧布局 `~/.profer/agent-workspaces/<slug>/sessions/<sessionId>` 仍存在时继续沿用
  *
- * 注意 project 的 `configDir` 是 `<root>/.profer`，但会话运行数据不用它；这里刻意使用
- * `runtimeDir`，避免会话目录、附件与日志写进用户仓库。
+ * 只读项目写不进 `.profer/sessions` 时自动回退中央 runtimeDir。
  *
  * 本函数带 mkdir 副作用，且被删除 / 复制路径复用，因此**永远不能返回 rootPath**（I2）。
  * 需要 cwd 请用 `getAgentSessionCwd`；需要只读路径请用 `resolveAgentSessionWorkspacePath`。

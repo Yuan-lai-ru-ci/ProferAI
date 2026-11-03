@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { SDKAssistantMessage, SDKContentBlock } from '@profer/shared'
-import { deriveAssistantTurnBlocks, buildAssistantTurnRenderItems } from './render-block-derivation'
+import { deriveAssistantTurnBlocks, buildAssistantTurnRenderItems, hasRenderableThinking, shouldExpandThinkingByDefault } from './render-block-derivation'
 import { applyRenderWindow } from './render-window'
 
 const text = (value: string): SDKContentBlock => ({ type: 'text', text: value })
@@ -222,5 +222,117 @@ describe('隐藏 thinking 时过程组不空占位', () => {
 
     expect(items.map((item) => item.type)).toEqual(['process-group', 'block'])
     expect(items[0]?.type === 'process-group' && items[0].items.map((item) => item.block.type)).toEqual(['tool_use'])
+  })
+})
+describe('空白思考块', () => {
+  const deriveBlocks = (blocks: SDKContentBlock[]) => derive([message('m1', blocks)]).topLevelItems
+
+  test('只有空白字符的思考块被剔除，不会撑出空的思考框', () => {
+    expect(buildAssistantTurnRenderItems(deriveBlocks([thinking(' ')]))).toEqual([])
+    expect(buildAssistantTurnRenderItems(deriveBlocks([thinking('\n  \n')]))).toEqual([])
+    expect(hasRenderableThinking(thinking(' '))).toBe(false)
+    expect(hasRenderableThinking(thinking('真思考'))).toBe(true)
+    // 畸形数据（字段不是字符串）也不能让渲染崩掉。
+    expect(hasRenderableThinking({ type: 'thinking' } as unknown as SDKContentBlock)).toBe(false)
+  })
+
+  test('空白思考不计入过程组，摘要里只剩真实过程块', () => {
+    const items = buildAssistantTurnRenderItems(deriveBlocks([thinking(' '), tool('tool-1'), text('最终输出')]))
+
+    expect(items.map((item) => item.type)).toEqual(['process-group', 'block'])
+    if (items[0]?.type === 'process-group') {
+      expect(items[0].items.map((item) => item.block.type)).toEqual(['tool_use'])
+    }
+  })
+
+  test('流式中正文不因空白思考先外置再被工具收回过程组', () => {
+    // 空白思考只说明思考内容还没到，不代表本轮没有过程阶段：正文应全程留在过程组，
+    // 避免「正文跳到正文区 → 首个工具到达又缩回折叠行」的跳动。
+    const onlyText = buildAssistantTurnRenderItems(deriveBlocks([thinking(' '), text('正在输出的正文')]), {
+      isStreaming: true,
+      completedToolResultIds: new Set(),
+    })
+    const withTool = buildAssistantTurnRenderItems(deriveBlocks([thinking(' '), text('正在输出的正文'), tool('tool-1')]), {
+      isStreaming: true,
+      completedToolResultIds: new Set(),
+    })
+
+    expect(onlyText.map((item) => item.type)).toEqual(['process-group'])
+    expect(withTool.map((item) => item.type)).toEqual(['process-group'])
+  })
+
+  test('showThinking=false 与空白思考叠加时过程组仍不空占位', () => {
+    const items = buildAssistantTurnRenderItems(deriveBlocks([thinking(' '), tool('tool-1')]), {
+      showThinking: false,
+    })
+
+    expect(items.map((item) => item.type)).toEqual(['process-group'])
+    if (items[0]?.type === 'process-group') {
+      expect(items[0].items.map((item) => item.block.type)).toEqual(['tool_use'])
+    }
+  })
+})
+
+describe('思考块默认展开判定', () => {
+  const messages = (content: SDKContentBlock[], extra: Partial<SDKAssistantMessage> = {}) => [message('m1', content, extra)]
+
+  test('本轮只有可读思考时展开', () => {
+    expect(shouldExpandThinkingByDefault([thinking('真思考')], messages([thinking('真思考')]))).toBe(true)
+  })
+
+  test('有工具调用时不展开（纯工具轮次不是空回合）', () => {
+    const blocks = [thinking('真思考'), tool('tool-1')]
+    expect(shouldExpandThinkingByDefault(blocks, messages(blocks))).toBe(false)
+  })
+
+  test('有正文时不展开', () => {
+    const blocks = [thinking('真思考'), text('正文')]
+    expect(shouldExpandThinkingByDefault(blocks, messages(blocks))).toBe(false)
+  })
+
+  test('只有空白思考时不展开', () => {
+    expect(shouldExpandThinkingByDefault([thinking(' ')], messages([thinking(' ')]))).toBe(false)
+  })
+
+  test('goal 更新工具与空白正文都不算可见产出', () => {
+    const blocks = [thinking('真思考'), tool('goal-1', 'update_goal')]
+    expect(shouldExpandThinkingByDefault(blocks, messages(blocks))).toBe(true)
+    expect(shouldExpandThinkingByDefault([thinking('真思考')], messages([text('   ')]))).toBe(true)
+    expect(shouldExpandThinkingByDefault([thinking('真思考')], messages([text('正文')]))).toBe(false)
+  })
+})
+
+describe('空输出回合的思考', () => {
+  const emptyOutput = (content: SDKContentBlock[]) => message('m1', content, {
+    error: { message: '模型未生成可见回复', errorType: 'empty_output' },
+    _errorCode: 'empty_output',
+  } as Partial<SDKAssistantMessage>)
+
+  test('保留空输出消息里的思考块，错误文案不当作正文', () => {
+    const derived = derive([emptyOutput([
+      thinking('我算了一下，结论是 A'),
+      text('模型未生成可见回复，请重试或更换模型。'),
+    ])])
+
+    expect(derived.hasError).toBe(true)
+    expect(derived.topLevelBlocks.map((block) => block.type)).toEqual(['thinking'])
+  })
+
+  test('普通错误消息的正文仍整条跳过', () => {
+    const derived = derive([message('m1', [thinking('思考'), text('网络错误')], {
+      error: { message: '网络错误', errorType: 'network_error' },
+    } as Partial<SDKAssistantMessage>)])
+
+    expect(derived.hasError).toBe(true)
+    expect(derived.topLevelBlocks).toEqual([])
+  })
+
+  test('思考提到正文位置后不再被折叠进过程组', () => {
+    const derived = derive([emptyOutput([thinking('我算了一下，结论是 A')])])
+    const folded = buildAssistantTurnRenderItems(derived.topLevelItems)
+    const promoted = buildAssistantTurnRenderItems(derived.topLevelItems, { promoteThinkingAsReply: true })
+
+    expect(folded.map((item) => item.type)).toEqual(['process-group'])
+    expect(promoted.map((item) => item.type)).toEqual(['block'])
   })
 })

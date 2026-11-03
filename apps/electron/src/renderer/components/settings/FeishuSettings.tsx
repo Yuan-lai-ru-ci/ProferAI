@@ -1480,6 +1480,12 @@ function BotConfigCard({ bot, state, onSaved, onRemoved }: BotConfigCardProps): 
               {state.errorMessage}
             </div>
           )}
+
+          {state?.warningMessage && (
+            <div className="p-2.5 rounded-lg bg-amber-500/10 text-amber-700 dark:text-amber-400 text-sm">
+              {state.warningMessage}
+            </div>
+          )}
         </div>
       )}
     </SettingsCard>

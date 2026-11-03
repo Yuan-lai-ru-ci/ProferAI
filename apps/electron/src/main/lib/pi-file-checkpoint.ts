@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { rm } from 'node:fs/promises'
 import {
   checkpointRef,
   commitTree,
@@ -947,6 +948,22 @@ export function removePiFileCheckpoints(rootDir: string, sessionId: string): voi
   try {
     // 影子仓库里的对象文件在 Windows 上可能是只读属性，放宽重试
     rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+  } catch (error) {
+    console.warn(`[Pi 检查点] 删除检查点目录失败 ${path}: ${describeError(error)}`)
+  }
+}
+
+/**
+ * 异步版检查点目录清理。
+ *
+ * 单个会话的检查点目录可能包含十几万个文件（本机最大 2.4GB / 15 万文件），
+ * 同步 rmSync 会把主进程事件循环按住数秒。删除会话改走这里。
+ */
+export async function removePiFileCheckpointsAsync(rootDir: string, sessionId: string): Promise<void> {
+  const path = join(rootDir, sessionId)
+  if (!existsSync(path)) return
+  try {
+    await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
   } catch (error) {
     console.warn(`[Pi 检查点] 删除检查点目录失败 ${path}: ${describeError(error)}`)
   }

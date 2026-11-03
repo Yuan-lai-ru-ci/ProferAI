@@ -28,8 +28,8 @@ export function isPathInsideDirectory(candidate: string, directory: string): boo
  *
  * project 模式下 cwd 就是项目根，工作区配置在 `<rootPath>/.profer` 之内：
  * - 加入 `rootPath`（Agent 必须能访问项目根；`.profer` 已在其内，不重复追加）；
- * - 加入 `runtimeDir`（中央 `~/.profer/agent-workspaces/<slug>`）：会话产物与附件落在项目之外，
- *   不加入的话 Agent 读不到自己收到的附件，也无法预览自己生成的产物。
+ * - 加入 `runtimeDir`（中央 `~/.profer/agent-workspaces/<slug>`）：旧布局会话的附件与产物在这里；
+ *   新布局已进项目内 `.profer/sessions`，由 cwd 覆盖。两处都加入才能让迁移期的会话都读得到自己的产物。
  */
 export function collectAttachedDirectories(params: {
   sessionMeta?: AgentSessionMeta

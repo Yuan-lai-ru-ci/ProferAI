@@ -4,13 +4,14 @@
  * 目的：把「改造前 managed 的返回值」逐字固化下来（I1），并锁住 project 模式的新语义：
  * - configDir = <rootPath>/.profer
  * - 会话 cwd = rootPath（≠ storageDir）
- * - storageDir = <configRoot>/agent-workspaces/<slug>/sessions/<sid>，永不进入项目（I3）
+ * - storageDir = <rootPath>/.profer/sessions/<sid>（项目内，随文件夹迁移）；
+ *   旧中央目录 `agent-workspaces/<slug>/sessions/<sid>` 仍存在时继续沿用（兼容）
  * - rootPath 不存在时任何函数都不 mkdir（I4）
  *
  * 这里的期望值全部写成硬编码字面量（只跟随临时夹具根），不从被测函数推导。
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -115,7 +116,7 @@ describe('project 模式路径', () => {
     expect(getInactiveSkillsDir(SLUG)).toBe(`${proferDir}/skills-inactive`)
   })
 
-  test('Given project When 取会话 cwd 与 storageDir Then cwd=rootPath 且 storageDir 不含项目源码（I2）', () => {
+  test('Given project When 取会话 cwd 与 storageDir Then cwd=rootPath、storageDir 在项目内 .profer/sessions', () => {
     const projectDir = join(root, 'my-project')
     mkdirSync(projectDir, { recursive: true })
     const projectRoot = realpathSync(projectDir)
@@ -125,11 +126,55 @@ describe('project 模式路径', () => {
     const storageDir = getAgentSessionStorageDir(SLUG, SESSION_ID)
 
     expect(cwd).toBe(projectRoot)
-    expect(storageDir).toBe(`${configRoot}/agent-workspaces/${SLUG}/sessions/${SESSION_ID}`)
+    expect(storageDir).toBe(`${projectRoot}/.profer/sessions/${SESSION_ID}`)
     expect(storageDir).not.toBe(projectRoot)
-    expect(storageDir.startsWith(projectRoot)).toBe(false)
-    expect(storageDir.startsWith(configRoot)).toBe(true)
+    expect(storageDir.startsWith(`${projectRoot}/.profer/sessions`)).toBe(true)
+    expect(storageDir.startsWith(configRoot)).toBe(false)
     expect(existsSync(storageDir)).toBe(true)
+  })
+
+  test('Given project 旧中央目录存在 When 解析 storageDir Then 继续沿用旧路径（兼容）', () => {
+    const projectDir = join(root, 'my-project')
+    mkdirSync(projectDir, { recursive: true })
+    const projectRoot = realpathSync(projectDir)
+    writeProjectIndex(projectDir)
+
+    const legacy = join(configRoot, 'agent-workspaces', SLUG, 'sessions', SESSION_ID)
+    mkdirSync(legacy, { recursive: true })
+
+    // 项目内还没有该会话，但中央旧目录存在 → 继续用旧路径，旧会话仍可读可续聊。
+    expect(resolveAgentSessionWorkspacePath(SLUG, SESSION_ID)).toBe(legacy)
+    expect(getAgentSessionStorageDir(SLUG, SESSION_ID)).toBe(legacy)
+    expect(existsSync(join(projectRoot, '.profer', 'sessions', SESSION_ID))).toBe(false)
+  })
+
+  test('Given project 新会话（项目内与旧中央都不存在）When 解析 storageDir Then 指向项目内', () => {
+    const projectDir = join(root, 'my-project')
+    mkdirSync(projectDir, { recursive: true })
+    const projectRoot = realpathSync(projectDir)
+    writeProjectIndex(projectDir)
+
+    expect(resolveAgentSessionWorkspacePath(SLUG, SESSION_ID)).toBe(`${projectRoot}/.profer/sessions/${SESSION_ID}`)
+  })
+
+  test('Given project 目录不可写 When 取 storageDir Then 自动回退中央 runtimeDir', () => {
+    // root 用户不受目录权限限制，跳过（CI 以 root 跑时）。
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return
+
+    const projectDir = join(root, 'readonly-project')
+    mkdirSync(projectDir, { recursive: true })
+    const projectRoot = realpathSync(projectDir)
+    writeProjectIndex(projectDir)
+    const proferDir = join(projectRoot, '.profer')
+    mkdirSync(proferDir, { recursive: true })
+    chmodSync(proferDir, 0o555)
+    try {
+      const storageDir = getAgentSessionStorageDir(SLUG, SESSION_ID)
+      expect(storageDir).toBe(join(configRoot, 'agent-workspaces', SLUG, 'sessions', SESSION_ID))
+      expect(existsSync(storageDir)).toBe(true)
+    } finally {
+      chmodSync(proferDir, 0o755)
+    }
   })
 
   test('Given project When 只读解析 Then 不创建任何目录', () => {
@@ -138,7 +183,7 @@ describe('project 模式路径', () => {
     const projectRoot = realpathSync(projectDir)
     writeProjectIndex(projectDir)
 
-    expect(resolveAgentSessionWorkspacePath(SLUG, SESSION_ID)).toBe(`${configRoot}/agent-workspaces/${SLUG}/sessions/${SESSION_ID}`)
+    expect(resolveAgentSessionWorkspacePath(SLUG, SESSION_ID)).toBe(`${projectRoot}/.profer/sessions/${SESSION_ID}`)
     expect(resolveWorkspaceFilesDir(SLUG)).toBe(`${projectRoot}/.profer/workspace-files`)
     expect(getWorkspaceRootPath(SLUG)).toBe(projectRoot)
 

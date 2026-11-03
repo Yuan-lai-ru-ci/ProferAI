@@ -131,7 +131,9 @@ export interface ProjectPickerDeps {
   openProjectWorkspace: (input: { rootPath: string; name?: string }) => Promise<ProjectWorkspaceOpenResult>
   /** 探测路径类型（存在性）；不存在的路径不会出现在返回数组里 */
   checkPathsType: (paths: string[]) => Promise<{ directories: string[]; files: string[] }>
-  /** 仅用于「重新定位」：移除旧的索引绑定 */
+  /** 仅用于「重新定位」：保留工作区 id/slug，只把 rootPath 指向新目录 */
+  relocateProjectWorkspace: (input: { id: string; rootPath: string }) => Promise<ProjectWorkspaceOpenResult>
+  /** 仅用于「重新定位」的旧链路（已由 relocateProjectWorkspace 取代，保留兼容） */
   removeProjectWorkspace: (id: string) => Promise<void>
 }
 
@@ -227,27 +229,12 @@ export async function relocateProjectFromPicker(
   if (!rootPath) return { kind: 'cancelled' }
 
   const recognized = await hasProjectConfigDir(deps, rootPath)
-  let result: ProjectWorkspaceOpenResult
   try {
-    result = await deps.openProjectWorkspace({ rootPath, name: target.name })
+    // 保留旧 id/slug：会话、定时任务、Todo、子会话都按 id 归属，换 id 会让它们集体失效。
+    const result = await deps.relocateProjectWorkspace({ id: target.id, rootPath })
+    return { kind: 'opened', result, recognized }
   } catch (error) {
     return { kind: 'failed', message: toProjectErrorMessage(error, '重新定位项目失败') }
-  }
-
-  if (result.workspace.id === target.id) {
-    return { kind: 'opened', result, recognized }
-  }
-
-  try {
-    await deps.removeProjectWorkspace(target.id)
-    return { kind: 'opened', result, recognized }
-  } catch (error) {
-    return {
-      kind: 'opened',
-      result,
-      recognized,
-      cleanupError: toProjectErrorMessage(error, '移除旧项目绑定失败'),
-    }
   }
 }
 
@@ -258,6 +245,7 @@ export function createProjectPickerDeps(): ProjectPickerDeps {
     createProjectWorkspace: (input) => window.electronAPI.createProjectWorkspace(input),
     openProjectWorkspace: (input) => window.electronAPI.openProjectWorkspace(input),
     checkPathsType: (paths) => window.electronAPI.checkPathsType(paths),
+    relocateProjectWorkspace: (input) => window.electronAPI.relocateProjectWorkspace(input),
     removeProjectWorkspace: (id) => window.electronAPI.removeProjectWorkspace(id),
   }
 }

@@ -7,7 +7,7 @@ function controlledDeps(calls: string[], stop: () => Promise<void>) {
     endDeletion: () => calls.push('end'),
     stopAndWait: async () => { calls.push('stop'); await stop() },
     clearState: () => calls.push('clear'),
-    deleteSession: () => calls.push('delete'),
+    deleteSession: async () => { calls.push('delete') },
   }
 }
 
@@ -51,7 +51,7 @@ describe('Agent session 删除协调器', () => {
       endDeletion: (id) => calls.push(`end:${id}`),
       stopAndWait: async (id) => { calls.push(`stop:${id}`) },
       clearState: (id) => calls.push(`clear:${id}`),
-      deleteSession: (id) => calls.push(`delete:${id}`),
+      deleteSession: async (id) => { calls.push(`delete:${id}`) },
     })
 
     await deletion
@@ -77,7 +77,7 @@ describe('Agent session 删除协调器', () => {
         if (id === 'child') throw new Error('child timeout')
       },
       clearState: (id) => calls.push(`clear:${id}`),
-      deleteSession: (id) => calls.push(`delete:${id}`),
+      deleteSession: async (id) => { calls.push(`delete:${id}`) },
     })).rejects.toThrow('child timeout')
 
     expect(calls).toEqual(['begin:child', 'begin:parent', 'stop:child', 'end:child', 'end:parent'])
@@ -97,7 +97,7 @@ describe('Agent session 删除协调器', () => {
         if (id === 'child') await stopGate
       },
       clearState: (id) => calls.push(`clear:${id}`),
-      deleteSession: (id) => calls.push(`delete:${id}`),
+      deleteSession: async (id) => { calls.push(`delete:${id}`) },
     })
     const childDeletion = coordinator.delete('child', controlledDeps(calls, async () => {}))
 
@@ -105,5 +105,31 @@ describe('Agent session 删除协调器', () => {
     releaseStop?.()
     await parentDeletion
     expect(calls.filter((call) => call === 'delete:child')).toHaveLength(1)
+  })
+
+  test('Given 打开强制删除 When 停止失败 Then 仍完成清理与删除并记录失败', async () => {
+    const calls: string[] = []
+    const failures: string[] = []
+    const coordinator = new AgentSessionDeletionCoordinator()
+    await coordinator.delete('s1', {
+      ...controlledDeps(calls, async () => { throw new Error('stop failed') }),
+      forceDeleteOnStopFailure: true,
+      onStopFailure: (id) => failures.push(id),
+    })
+
+    expect(failures).toEqual(['s1'])
+    expect(calls).toEqual(['begin', 'stop', 'clear', 'delete', 'end'])
+  })
+
+  test('Given 停止永不返回 When 超过 stopTimeoutMs Then 强制删除而不是无限等待', async () => {
+    const calls: string[] = []
+    const coordinator = new AgentSessionDeletionCoordinator()
+    await coordinator.delete('s1', {
+      ...controlledDeps(calls, () => new Promise<void>(() => {})),
+      forceDeleteOnStopFailure: true,
+      stopTimeoutMs: 20,
+    })
+
+    expect(calls).toEqual(['begin', 'stop', 'clear', 'delete', 'end'])
   })
 })

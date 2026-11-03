@@ -208,6 +208,8 @@ import {
 import { broadcastPlanningChanged } from './lib/planning-events'
 import {
   listAgentSessions,
+  toAgentSessionSummary,
+  backfillPiSessionFiles,
   createAgentSession,
   ensureProjectDraftAgentSession,
   getAgentSessionMeta,
@@ -216,8 +218,6 @@ import {
   getAgentSessionSDKMessages,
   appendSDKMessages,
   updateAgentSessionMeta,
-  deleteAgentSession,
-  getAgentSessionDeletionOrder,
   migrateChatToAgentSession,
   moveSessionToWorkspace,
   forkAgentSession,
@@ -231,8 +231,9 @@ import {
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { getAgentSessionNavigationIndex } from './lib/agent-navigation-index'
-import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, beginAgentSessionDeletion, endAgentSessionDeletion, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
+import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
+import { requestSessionDeletion, requestSessionDeletions, resumePendingSessionDeletions, waitForSessionDeletions } from './lib/agent-session-deletion-service'
 import { setQuoteableSelection } from './menu'
 import { buildArchiveToggleUpdates } from './lib/agent-unread-policy'
 import { getAgentUnreadPolicyMode } from './lib/agent-unread-mode'
@@ -246,7 +247,6 @@ import { loadGoalStates, saveGoalStates, archiveGoalState, loadGoalHistory } fro
 import { resolveEffectivePermissionMode } from '@profer/shared'
 import type { AgentGoalContract, AgentGoalLimitsPatch, AgentGoalState, McpConnectionSnapshot, McpProbeFailureReason, McpServerRestartResult, McpToolSummary } from '@profer/shared'
 import { getAgentPresetByReference, presetReferenceForId } from './lib/agent-preset-manager'
-import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
@@ -276,9 +276,11 @@ import {
   createProjectWorkspace,
   openProjectWorkspace,
   removeProjectWorkspace,
+  relocateProjectWorkspace,
   ProjectWorkspaceError,
   reorderAgentWorkspaces,
   ensureDefaultWorkspace,
+  ensureProjectWorkspaceGitignores,
   getWorkspaceMcpConfig,
   saveWorkspaceMcpConfig,
   saveMcpServerTestResult,
@@ -345,7 +347,6 @@ const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
 const channelNetworkRequests = new ChannelNetworkRequests()
 
 /** 同一会话的并发删除合并为一条 stop-and-wait 生命周期。 */
-const agentSessionDeletionCoordinator = new AgentSessionDeletionCoordinator()
 
 const GOAL_STORE_PATH = () => join(app.getPath('userData'), 'goals.json')
 
@@ -1839,7 +1840,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_SESSIONS,
     async (_, includeArchived?: boolean): Promise<AgentSessionMeta[]> => {
-      const sessions = listAgentSessions(includeArchived ?? false)
+      // 列表不下发 Pi 检查点/分叉映射（约占载荷 90%），需要的界面走专用查询。
+      const sessions = listAgentSessions(includeArchived ?? false).map(toAgentSessionSummary)
       // 启动所有已有附加目录的文件监听
       for (const session of sessions) {
         if (session.attachedDirectories) {
@@ -2376,25 +2378,19 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 删除 Agent 会话：运行中时先中止并等待 finally 完整退出，避免删除后仍写入 JSONL/工作目录。
+  // 查询某条回复是否有可用的 Pi 分叉节点（列表投影已裁掉 piEntryBindings）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.HAS_PI_FORK_ENTRY,
+    async (_, id: string, messageId: string): Promise<boolean> => {
+      return Boolean(getAgentSessionMeta(id)?.piEntryBindings?.[messageId])
+    }
+  )
+
+  // 删除 Agent 会话：入队即隐藏并返回，停止/清理/索引移除由后台队列串行完成。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.DELETE_SESSION,
     async (_, id: string): Promise<void> => {
-      return agentSessionDeletionCoordinator.delete(id, {
-        getDeletionOrder: getAgentSessionDeletionOrder,
-        beginDeletion: beginAgentSessionDeletion,
-        endDeletion: endAgentSessionDeletion,
-        stopAndWait: stopAgentAndWait,
-        // 运行已完全结束后再撤销交互状态并删除持久化数据。
-        clearState: (sessionId) => {
-          permissionService.clearSessionWhitelist(sessionId)
-          permissionService.clearSessionPending(sessionId)
-          askUserService.clearSessionPending(sessionId)
-          exitPlanService.clearSessionPending(sessionId)
-          void browserController.close(sessionId)
-        },
-        deleteSession: deleteAgentSession,
-      })
+      requestSessionDeletion({ sessionId: id, reason: 'user' })
     }
   )
 
@@ -2643,6 +2639,18 @@ export function registerIpcHandlers(): void {
 
   // 确保默认工作区存在
   ensureDefaultWorkspace()
+  // 上次退出/崩溃前已接受但未完成的删除请求，启动后继续执行，避免会话复活。
+  resumePendingSessionDeletions()
+  // 空闲时补齐历史 Pi 会话的 transcript 路径：删除/健康检查就不必回退到目录扫描。
+  setTimeout(() => {
+    try {
+      backfillPiSessionFiles()
+    } catch (error) {
+      console.warn('[Agent 会话] 补齐 Pi transcript 路径失败:', error)
+    }
+  }, 3000).unref?.()
+  // 旧项目不会重新走 open，启动时幂等补齐 .profer/.gitignore（会话/运行时投影不应进仓库）
+  ensureProjectWorkspaceGitignores()
 
   // 获取 Agent 工作区列表
   ipcMain.handle(
@@ -2714,29 +2722,21 @@ export function registerIpcHandlers(): void {
         .filter((automation) => automation.workspaceId === id)
         .map((automation) => automation.id)
 
-      for (const sessionId of affectedSessionIds) {
-        await agentSessionDeletionCoordinator.delete(sessionId, {
-          getDeletionOrder: getAgentSessionDeletionOrder,
-          beginDeletion: beginAgentSessionDeletion,
-          endDeletion: endAgentSessionDeletion,
-          stopAndWait: stopAgentAndWait,
-          clearState: (id) => {
-            permissionService.clearSessionWhitelist(id)
-            permissionService.clearSessionPending(id)
-            askUserService.clearSessionPending(id)
-            exitPlanService.clearSessionPending(id)
-            void browserController.close(id)
-          },
-          deleteSession: deleteAgentSession,
-        })
-      }
+      // 批量入队：一次持久化 + 一次广播，避免上百个会话各写一次队列文件。
+      requestSessionDeletions(affectedSessionIds, 'workspace')
       for (const automationId of affectedAutomationIds) {
         deleteAutomation(automationId)
       }
       if (affectedAutomationIds.length > 0) {
         broadcastAutomationsChanged()
       }
-      deleteAgentWorkspace(id)
+      // 会话已交给删除队列；先等它们真正停止并清理完，再删工作区目录，
+      // 否则仍在收尾的 run 会把文件写回已删除的目录。超时也继续删除目录（残留目录无害）。
+      const allStopped = await waitForSessionDeletions(affectedSessionIds, 30_000)
+      if (!allStopped) {
+        console.warn(`[Agent 工作区] 仍有会话未完成删除，继续移除工作区索引: ${id}`)
+      }
+      await deleteAgentWorkspace(id, { cascadeSessions: false })
       broadcastAgentWorkspacesChanged()
     }
   )
@@ -2825,8 +2825,24 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.REMOVE_PROJECT_WORKSPACE,
     async (_, id: string): Promise<void> => {
       return withProjectWorkspaceErrorCode(() => {
+        // 先停用绑定任务：移除后调度侧解析不到工作区，任务不能再跑。
+        if (pauseAutomationsForWorkspace(id).length > 0) {
+          broadcastAutomationsChanged()
+        }
         removeProjectWorkspace(id)
         broadcastAgentWorkspacesChanged()
+      })
+    }
+  )
+
+  // 重新定位项目工作区：保留 id/slug，只把 rootPath 指向新目录
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RELOCATE_PROJECT_WORKSPACE,
+    async (_, input: { id: string; rootPath: string }): Promise<ProjectWorkspaceOpenResult> => {
+      return withProjectWorkspaceErrorCode(() => {
+        const result = relocateProjectWorkspace({ ...input, proferVersion: app.getVersion() })
+        broadcastAgentWorkspacesChanged()
+        return result
       })
     }
   )

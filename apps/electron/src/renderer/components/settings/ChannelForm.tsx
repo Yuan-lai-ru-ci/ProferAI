@@ -148,6 +148,19 @@ function buildPreviewUrl(baseUrl: string, provider: ProviderType, xaiApiProtocol
   if (provider === 'ollama') {
     return `${trimmed.replace(/\/v1$/, '')}/v1/chat/completions（Agent: /v1/messages）`
   }
+  // 官方厂商端点（Anthropic / Gemini）挂在 OpenAI 兼容渠道上时，运行时按原生协议发请求
+  // （见 core 的 getAdapter）；预览必须跟着切，否则会把并不存在的 /chat/completions
+  // 展示成真实地址。只对静态协议为 openai-completions 的渠道生效，DeepSeek 等
+  // 自带 Anthropic 入口的供应商仍走下方各自的专门分支。
+  if (PROVIDER_CAPABILITIES[provider].nativeProtocol === 'openai-completions') {
+    const nativeProtocol = resolveProviderNativeProtocol(provider, baseUrl, xaiApiProtocol)
+    if (nativeProtocol === 'anthropic-messages') {
+      return `${resolveAnthropicMessagesUrl(baseUrl, 'anthropic')}；官方 Anthropic 端点，按 Messages 协议请求`
+    }
+    if (nativeProtocol === 'google-generative-ai') {
+      return `${normalizeGoogleBaseUrl(trimmed)}${PROVIDER_CHAT_PATHS.google}；官方 Gemini 端点，按原生协议请求`
+    }
+  }
   // 通用兼容渠道填写完整请求端点，与真实 adapter 共用 URL 解析。
   if (provider === 'custom') {
     const resolved = resolveOpenAIChatCompletionsUrl(baseUrl, provider)

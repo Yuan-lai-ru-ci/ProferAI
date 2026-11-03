@@ -1603,7 +1603,7 @@ export class AgentOrchestrator {
       // fork 后的会话直接使用自己的 cwd，无需回退到源目录。
       // forkSourceDir 仅作为备用参考字段保留，不再影响 agentCwd。
 
-      // 会话写入布局（唯一真相源）：project 下所有会话产物落在中央 storageDir，
+      // 会话写入布局（唯一真相源）：project 下所有会话产物落在项目内 `.profer/sessions`，
       // managed 下等价于会话目录（cwd）。后续写入一律不得用 agentCwd 拼路径。
       const sessionWriteLayout = workspaceSlug ? resolveAgentSessionWriteLayout(workspaceSlug, sessionId) : undefined
       const agentSessionStorageDir = sessionWriteLayout?.storageDir ?? agentStorageDir
@@ -3187,10 +3187,17 @@ export class AgentOrchestrator {
                   }
 
                   const emptyOutputErrorContent = '模型未生成可见回复，请重试或更换模型。'
+                  // 思考是这一轮唯一的产出：把它挂在错误消息上带给渲染层，否则用户只看到
+                  // 「未生成回复」，看不到模型到底想了什么（渲染层只保留这里的思考块，不渲染错误文案）。
+                  const emptyOutputThinking = (assistantMsg.message?.content ?? []).flatMap((block) => {
+                    if (block.type !== 'thinking') return []
+                    const thinking = (block as { thinking?: unknown }).thinking
+                    return typeof thinking === 'string' && thinking.trim() ? [{ type: 'thinking' as const, thinking }] : []
+                  })
                   const emptyOutputErrorSDKMsg: SDKMessage = {
                     type: 'assistant',
                     message: {
-                      content: [{ type: 'text', text: emptyOutputErrorContent }],
+                      content: [...emptyOutputThinking, { type: 'text', text: emptyOutputErrorContent }],
                     },
                     parent_tool_use_id: null,
                     error: {

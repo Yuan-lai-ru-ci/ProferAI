@@ -10,12 +10,13 @@
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, createWriteStream, type WriteStream } from 'node:fs'
 import { createInterface } from 'node:readline'
+import { rm as rmAsync } from 'node:fs/promises'
 import { createAgentSessionIndexStore } from './agent-session-index'
 import { createSyncSessionMessageStore } from '@profer/session-store'
 import { createSnippet, extractTextFromPersistedMessage, matchAgentJsonlLine } from './agent-session-search'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { isAbsolute, join, relative, resolve, dirname } from 'node:path'
+import { isAbsolute, join, relative, resolve, dirname, sep } from 'node:path'
 import {
   getAgentSessionsIndexPath,
   getAgentSessionsDir,
@@ -24,23 +25,26 @@ import {
   getAgentSessionCwd,
   getAgentSessionWorkspacePath,
   resolveAgentSessionWorkspacePath,
+  resolveProjectSessionFallbackDir,
   getAgentWorkspacePath,
   getPiCheckpointsDir,
   getSdkConfigDir,
   getAgentAttachmentBackupsRoot,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
-import { resolveWorkspaceLocation, requireExistingWorkspaceRoot } from './workspace-locator'
+import { resolveWorkspaceLocation, requireExistingWorkspaceRoot, type WorkspaceLocation } from './workspace-locator'
 import { collectAttachedDirectories } from './agent-directory-utils'
 import { assertEnabledModelForChannel } from './agent-model-selection'
 import { copyForkWorkspaceFiles } from './agent-fork-workspace-copy'
-import { copyForkFile, buildForkProjectKey, renameForkFile, removeForkPath } from './fork-file-ops'
+import { copyForkFile, buildForkProjectKey, renameForkFile, removeForkPathAsync } from './fork-file-ops'
 import { listAgentPresets, normalizeSessionPresetId, presetReferenceForId } from './agent-preset-manager'
 import { copySettledPiHarnessEventsForFork } from './pi-harness/pi-harness-store'
 import { forkPiSessionArtifact } from './pi-session-fork'
 import { isRecoveredEphemeralTransportError } from './error-patterns'
-import { adoptPiFileCheckpoints, loadPiFileCheckpoint, restorePiFileCheckpoint, prunePiFileCheckpoints, removePiFileCheckpoints } from './pi-file-checkpoint'
-import { removeToolResultDir } from './agent-tool-result-store'
+import { adoptPiFileCheckpoints, loadPiFileCheckpoint, restorePiFileCheckpoint, prunePiFileCheckpoints, removePiFileCheckpointsAsync } from './pi-file-checkpoint'
+import { getPiTranscriptIndex, invalidatePiTranscriptCache, resolvePiTranscriptPath } from './pi-session-files'
+import { isSessionDeletionPending } from './agent-session-deletion-queue'
+import { removeToolResultDirAsync } from './agent-tool-result-store'
 import { assertNotProjectLifecyclePath } from './workspace-delete-guard'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
@@ -137,6 +141,24 @@ const syncMessageStore = createSyncSessionMessageStore(
     serializeMessage: (sessionId, message) => serializeSDKMessageForStorage(message, undefined, undefined),
   },
 )
+
+/**
+ * 本进程内已删除的会话。
+ *
+ * 强制删除时 run 可能还没真正退出，后续 append 会把刚删掉的 JSONL 重新创建出来。
+ * 删除时先登记，写入侧直接丢弃，保证「删了就是删了」。
+ */
+const deletedSessionIds = new Set<string>()
+
+/** 供运行收尾/写入路径判断会话是否已被删除。 */
+export function isAgentSessionDeleted(id: string): boolean {
+  return deletedSessionIds.has(id)
+}
+
+/** 删除被放弃（会话仍在索引里）时撤销墓碑，恢复它的消息写入。 */
+export function clearAgentSessionDeletionTombstone(id: string): void {
+  deletedSessionIds.delete(id)
+}
 
 /** UPDATE_SESSION_AGENT_RUNTIME 需要原子回滚的 runtime-owned 元数据快照。 */
 export interface AgentRuntimeMetaSnapshot {
@@ -275,13 +297,62 @@ export function createDelegatedChildSessionMeta(params: {
  *
  * @param includeArchived 是否包含已归档会话；默认 false（高频侧边栏刷新只拉活跃）
  */
-export function listAgentSessions(includeArchived = false): AgentSessionMeta[] {
-  return sessionIndex.list(includeArchived)
+/**
+ * 为历史上没有记录 piSessionFile 的 Pi 会话补齐 transcript 路径。
+ *
+ * 删除与健康检查都优先用 `piSessionFile`，缺失时才回退到目录扫描（本机冷扫 2.9s）。
+ * 启动后空闲时段跑一次批量补齐，把回退路径压到接近零。
+ *
+ * @returns 补齐的会话数
+ */
+export function backfillPiSessionFiles(): number {
+  const index = readIndex()
+  const candidates = index.sessions.filter((session) => normalizeAgentRuntime(session.agentRuntime) === 'pi'
+    && session.sdkSessionId
+    && !session.piSessionFile)
+  if (candidates.length === 0) return 0
+
+  // 一次扫描建索引，避免每个会话各扫一遍。
+  const matches = getPiTranscriptIndex({ force: true })
+  let updated = 0
+  for (const session of candidates) {
+    const paths = matches.get(session.sdkSessionId!)
+    if (!paths || paths.length !== 1) continue
+    const idx = index.sessions.findIndex((item) => item.id === session.id)
+    if (idx < 0) continue
+    index.sessions[idx] = { ...index.sessions[idx]!, piSessionFile: paths[0] }
+    updated += 1
+  }
+  if (updated > 0) {
+    writeIndex(index)
+    console.log(`[Agent 会话] 已补齐 ${updated} 个 Pi 会话的 transcript 路径`)
+  }
+  return updated
 }
 
-/** 已归档 Agent 会话数量；不含隐藏草稿。 */
+/**
+ * 列表投影：侧栏 / 标签页 / 自动化选择器都不需要 Pi 状态。
+ *
+ * 索引拆分只解决磁盘写放大；合并后的完整对象仍会经 LIST_SESSIONS 传输（本机约 20MB）。
+ * 在 IPC 边界裁掉两个大字段，载荷回到 ~1.5MB。类型仍是 AgentSessionMeta（字段可选），
+ * 因此渲染层调用方不需要大规模改类型。
+ */
+export function toAgentSessionSummary(meta: AgentSessionMeta): AgentSessionMeta {
+  if (meta.piFileCheckpoints === undefined && meta.piEntryBindings === undefined) return meta
+  const { piFileCheckpoints: _fileCheckpoints, piEntryBindings: _entryBindings, ...rest } = meta
+  return rest
+}
+
+export function listAgentSessions(includeArchived = false): AgentSessionMeta[] {
+  // 已接受删除但还没清理完的会话不再对外可见：入队即隐藏，避免刷新后复活。
+  return sessionIndex.list(includeArchived).filter((session) => !isSessionDeletionPending(session.id))
+}
+
+/** 已归档 Agent 会话数量；不含隐藏草稿与待删除会话。 */
 export function countArchivedAgentSessions(): number {
-  return sessionIndex.countArchived()
+  return sessionIndex.list(true)
+    .filter((session) => session.archived && !session.draft && !isSessionDeletionPending(session.id))
+    .length
 }
 
 /** 将会话 runtime 固定为当前值；历史会话缺省锁定，只有新建且尚未运行的会话可选。 */
@@ -316,6 +387,7 @@ export function collectForeignCheckpointPaths(excludeSessionId: string): Set<str
   return referenced
 }
 
+/** 归一化路径包含判定；仅用于历史脏路径兜底，热路径走前缀比较。 */
 function isPathWithin(root: string, candidate: string): boolean {
   const relativePath = relative(resolve(root), resolve(candidate))
   return Boolean(relativePath)
@@ -356,7 +428,7 @@ export function getAgentSessionDeletionOrder(id: string): string[] {
  *
  * 一份数据只有一套落点，全部在 `storageDir` 之内：
  * - managed：`storageDir` 就是 cwd（`<configDir>/<sessionId>`），与改造前逐字一致；
- * - project：`storageDir` 在中央 runtimeDir，**永不指向项目根**（不变量 I3）。
+ * - project：`storageDir` 在项目内 `<root>/.profer/sessions/<sid>`（旧中央目录仍存在时沿用）。
  *
  * 为什么需要这张表：project 下 cwd = 项目根，任何 `join(cwd, '.context')` 都会把会话产物
  * 写进用户仓库。写入方（会话创建 / 计划模式 / 生图 / 诊断）必须从这里取路径，
@@ -398,7 +470,11 @@ export function resolveAgentSessionWriteLayout(workspaceSlug: string, sessionId:
   // project 的 rootPath 缺失时直接抛错（WorkspaceRootMissingError，不会自动创建）：
   // 绝不回退到「写 cwd」这种会污染项目的做法。
   requireExistingWorkspaceRoot(location)
-  const storageDir = resolveAgentSessionWorkspacePath(workspaceSlug, sessionId)
+  return buildAgentSessionWriteLayout(location, resolveAgentSessionWorkspacePath(workspaceSlug, sessionId))
+}
+
+/** 按给定 storageDir 计算布局（纯计算）；project 的 plansDirectory 必须是相对项目根的路径。 */
+function buildAgentSessionWriteLayout(location: WorkspaceLocation, storageDir: string): AgentSessionWriteLayout {
   const contextDir = join(storageDir, '.context')
   const plansDir = join(contextDir, 'plan')
 
@@ -436,29 +512,37 @@ export function resolveAgentSessionWriteLayout(workspaceSlug: string, sessionId:
  * **禁止**把这里的目标换成 cwd：project 下 cwd 是用户项目根，会直接改用户仓库。
  */
 export function ensureAgentSessionWriteLayout(workspaceSlug: string, sessionId: string): AgentSessionWriteLayout {
+  const location = resolveWorkspaceLocation(workspaceSlug)
   const layout = resolveAgentSessionWriteLayout(workspaceSlug, sessionId)
-  // storageDir 带 mkdir 副作用；两者必须一致，否则说明路径契约被改坏（下面的写入会落到项目里）。
+  // storageDir 带 mkdir 副作用；project 目录不可写时它会回退到中央 runtimeDir（见 getAgentSessionStorageDir）。
   const created = getAgentSessionWorkspacePath(workspaceSlug, sessionId)
+  let effective = layout
   if (resolve(created) !== resolve(layout.storageDir)) {
-    throw new Error(`会话存储目录解析不一致，拒绝写入: ${created} ≠ ${layout.storageDir}`)
+    // 唯一允许的偏差：project 只读 → 会话数据回退中央。其它任何不一致都说明路径契约被改坏，
+    // 继续写就可能落进项目根（I3），必须拒绝。
+    const fallbackDir = resolve(resolveProjectSessionFallbackDir(workspaceSlug, sessionId))
+    if (location.mode !== 'project' || resolve(created) !== fallbackDir) {
+      throw new Error(`会话存储目录解析不一致，拒绝写入: ${created} ≠ ${layout.storageDir}`)
+    }
+    effective = buildAgentSessionWriteLayout(location, created)
   }
-  assertNotProjectLifecyclePath(layout.storageDir)
+  assertNotProjectLifecyclePath(effective.storageDir)
 
-  const claudeDir = dirname(layout.claudeSettingsPath)
+  const claudeDir = dirname(effective.claudeSettingsPath)
   if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true })
   let sdkSettings: Record<string, unknown> = {}
   try {
-    sdkSettings = JSON.parse(readFileSync(layout.claudeSettingsPath, 'utf-8'))
+    sdkSettings = JSON.parse(readFileSync(effective.claudeSettingsPath, 'utf-8'))
   } catch { /* 文件不存在或解析失败 */ }
   let needsWrite = false
-  if (layout.plansDirectory === undefined) {
+  if (effective.plansDirectory === undefined) {
     // 无合法相对路径时不写该键，让 SDK 用默认（项目之外）目录
     if ('plansDirectory' in sdkSettings) {
       delete sdkSettings.plansDirectory
       needsWrite = true
     }
-  } else if (sdkSettings.plansDirectory !== layout.plansDirectory) {
-    sdkSettings.plansDirectory = layout.plansDirectory
+  } else if (sdkSettings.plansDirectory !== effective.plansDirectory) {
+    sdkSettings.plansDirectory = effective.plansDirectory
     needsWrite = true
   }
   if (sdkSettings.skipWebFetchPreflight !== true) {
@@ -466,13 +550,13 @@ export function ensureAgentSessionWriteLayout(workspaceSlug: string, sessionId: 
     needsWrite = true
   }
   if (needsWrite) {
-    writeFileSync(layout.claudeSettingsPath, JSON.stringify(sdkSettings, null, 2))
+    writeFileSync(effective.claudeSettingsPath, JSON.stringify(sdkSettings, null, 2))
   }
 
-  if (!existsSync(layout.contextDir)) mkdirSync(layout.contextDir, { recursive: true })
-  if (!existsSync(layout.plansDir)) mkdirSync(layout.plansDir, { recursive: true })
+  if (!existsSync(effective.contextDir)) mkdirSync(effective.contextDir, { recursive: true })
+  if (!existsSync(effective.plansDir)) mkdirSync(effective.plansDir, { recursive: true })
 
-  return layout
+  return effective
 }
 
 /**
@@ -516,18 +600,21 @@ export function createAgentSession(
     updatedAt: now,
   }
 
+  // 先准备会话私有写入布局（.claude/settings.json + .context/ + .context/plan/），再写索引。
+  // 全部落在 storageDir：project 下 cwd 是项目根，绝不能把会话产物写进用户仓库（I3）。
+  //
+  // 顺序不能反：project 根被移走 / 目录不可写时这里会抛 WorkspaceRootMissingError，
+  // 若先写索引就会留下一条指向「从未真正创建成功」的孤儿会话（IM Bot 建会话失败时尤其明显）。
+  if (workspaceId) {
+    const ws = getAgentWorkspace(workspaceId)
+    if (ws) ensureAgentSessionWriteLayout(ws.slug, meta.id)
+  }
+
   index.sessions.push(meta)
   writeIndex(index)
 
   // 确保消息目录存在
   getAgentSessionsDir()
-
-  // 若有工作区，准备会话私有写入布局（.claude/settings.json + .context/ + .context/plan/）
-  // 全部落在 storageDir：project 下 cwd 是项目根，绝不能把会话产物写进用户仓库（I3）。
-  if (workspaceId) {
-    const ws = getAgentWorkspace(workspaceId)
-    if (ws) ensureAgentSessionWriteLayout(ws.slug, meta.id)
-  }
 
   console.log(`[Agent 会话] 已创建会话: ${meta.title} (${meta.id})`)
   return meta
@@ -682,6 +769,10 @@ export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
   // 网络错误在历史里彻底消失，用户看到的是「Agent Running 一闪就什么都没有了」。
   const persistentMessages = messages
   if (persistentMessages.length === 0) return
+  if (deletedSessionIds.has(id)) {
+    console.warn(`[Agent 会话] 会话已删除，丢弃后续消息写入: ${id}`)
+    return
+  }
   // 导入/分叉也可能直接写 user 历史；写入前绑定，不能留下可切换的已用会话。
   if (persistentMessages.some((message) => message.type === 'user')) {
     const session = getAgentSessionMeta(id)
@@ -936,15 +1027,77 @@ export function updateAgentSessionMeta(
   return updated
 }
 
+export interface DeleteAgentSessionOptions {
+  /** 索引条目已被移除时（崩溃重试），用它解析 session 目录继续清理。 */
+  workspaceId?: string
+}
+
+/**
+ * 索引条目已不存在时仍能执行的幂等清理。
+ *
+ * 场景：上次删除已把索引写盘、但进程在清理文件前退出。队列会重试，
+ * 此时必须继续清掉检查点等大目录，否则它们永远没有引用可回收。
+ */
+export async function cleanupResidualSessionFiles(id: string, workspaceId?: string): Promise<void> {
+  for (const [label, filePath] of [
+    ['消息', getAgentSessionMessagesPath(id)],
+    ['任务图', getGraphJsonlPath(getAgentSessionsDir(), id)],
+    ['Pi Harness 账本', getPiHarnessEventsPath(id)],
+  ] as const) {
+    if (!existsSync(filePath)) continue
+    try {
+      await rmAsync(filePath, { force: true })
+    } catch (error) {
+      console.warn(`[Agent 会话] 删除${label}文件失败 (${id}):`, error)
+    }
+  }
+
+  let sessionDir: string | undefined
+  const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
+  if (workspace) {
+    try {
+      const candidate = resolveAgentSessionWorkspacePath(workspace.slug, id)
+      assertNotProjectLifecyclePath(candidate)
+      sessionDir = candidate
+    } catch (error) {
+      console.warn(`[Agent 会话] 解析残留 session 目录失败 (${id}):`, error)
+    }
+  }
+
+  await Promise.all([
+    (async () => {
+      if (!sessionDir || !existsSync(sessionDir)) return
+      try { await removeForkPathAsync(sessionDir) } catch (error) {
+        console.warn(`[Agent 会话] 清理残留 session 工作目录失败 (${id}):`, error)
+      }
+    })(),
+    (async () => {
+      try {
+        const backupDir = join(getAgentAttachmentBackupsRoot(), id)
+        if (existsSync(backupDir)) await rmAsync(backupDir, { recursive: true, force: true })
+      } catch (error) {
+        console.warn(`[Agent 会话] 清理残留附件备份失败 (${id}):`, error)
+      }
+    })(),
+    removePiFileCheckpointsAsync(getPiCheckpointsDir(), id),
+    removeToolResultDirAsync(id),
+  ])
+}
+
 /**
  * 删除会话
  */
-export function deleteAgentSession(id: string): void {
+export async function deleteAgentSession(
+  id: string,
+  options: DeleteAgentSessionOptions = {},
+): Promise<void> {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
 
   if (idx === -1) {
-    console.warn(`[Agent 会话] 会话不存在，跳过删除: ${id}`)
+    // 索引已无条目：可能是重复删除，也可能是上次崩溃留下的半成品，继续幂等清理。
+    console.warn(`[Agent 会话] 会话不存在，继续清理残留文件: ${id}`)
+    await cleanupResidualSessionFiles(id, options.workspaceId)
     return
   }
 
@@ -958,10 +1111,24 @@ export function deleteAgentSession(id: string): void {
   const legacySourceCheckpointRoot = removedWorkspace
     ? join(resolveAgentSessionWorkspacePath(removedWorkspace.slug, id), '.profer-pi-checkpoints')
     : undefined
+  // 删除路径是热路径：预建 Set + 预归一化根路径，避免 96k 次 Object.values().includes()
+  // 与 2×96k 次 path.resolve()（实测 470ms）。判定语义与 isPathWithin 保持一致：
+  // 相等不算命中（检查点必须是根目录下的文件）。
+  const removedCheckpoints = new Set(Object.values(removed.piFileCheckpoints ?? {}))
+  const normalizedSourceCheckpointRoot = resolve(sourceCheckpointRoot)
+  const normalizedLegacyCheckpointRoot = legacySourceCheckpointRoot ? resolve(legacySourceCheckpointRoot) : undefined
+  const isUnderNormalizedRoot = (root: string, candidate: string): boolean => {
+    if (candidate === root) return false
+    if (candidate.startsWith(root.endsWith(sep) ? root : `${root}${sep}`)) return true
+    // 历史脏路径（含 `..` / 双斜杠）退回归一化判定，避免漏迁移导致分叉回退点被删。
+    return (candidate.includes('/..') || candidate.includes('//')) && isPathWithin(root, candidate)
+  }
   const isSourceCheckpoint = (checkpointPath: string): boolean =>
-    Object.values(removed.piFileCheckpoints ?? {}).includes(checkpointPath)
-    || isPathWithin(sourceCheckpointRoot, checkpointPath)
-    || (legacySourceCheckpointRoot ? isPathWithin(legacySourceCheckpointRoot, checkpointPath) : false)
+    removedCheckpoints.has(checkpointPath)
+    || isUnderNormalizedRoot(normalizedSourceCheckpointRoot, checkpointPath)
+    || (normalizedLegacyCheckpointRoot
+      ? isUnderNormalizedRoot(normalizedLegacyCheckpointRoot, checkpointPath)
+      : false)
 
   try {
     const bySession = new Map<string, Array<{ entryId: string; checkpointPath: string }>>()
@@ -1010,7 +1177,9 @@ export function deleteAgentSession(id: string): void {
       }
     }
   }
+  // 索引落盘成功后才登记删除墓碑：写盘失败时队列会重试，不能提前吞掉后续消息。
   writeIndex(index)
+  deletedSessionIds.add(id)
 
   // 删除消息与任务图文件。任务图和会话消息均属于该 Profer session，删除必须同步清理。
   for (const [label, filePath] of [
@@ -1027,41 +1196,49 @@ export function deleteAgentSession(id: string): void {
   }
 
   // 清理 session 工作目录
-  // 只读解析 storageDir：project 的会话数据在中央 runtimeDir，与 rootPath 是否存在无关。
-  // 用带 mkdir / 要求 root 存在的 `getAgentSessionWorkspacePath` 会让「项目已被移走」的会话
-  // 在索引与消息都删完之后抛错，留下 sessions/<id> 残目录（P1-6）。
+  // 只读解析 storageDir：新布局在项目内 `.profer/sessions`，旧布局仍在中央 runtimeDir。
+  // 用纯查询解析，避免「项目已被移走」的会话在索引与消息都删完之后抛错。
+  let sessionDirToRemove: string | undefined
   if (removedWorkspace) {
     const sessionDir = resolveAgentSessionWorkspacePath(removedWorkspace.slug, id)
-    // I2 硬护栏：project 的会话运行数据在中央 runtimeDir（永不进项目）。
-    // 若路径契约被改坏、sessionDir 落进了某个项目根，仍要在递归删除前抛错。
+    // I2 硬护栏：会话目录只能落在 `.profer/sessions/<sid>` 或中央 runtimeDir；
+    // 若路径契约被改坏、sessionDir 落进了项目根，仍要在递归删除前抛错。
     assertNotProjectLifecyclePath(sessionDir)
-    try {
-      if (existsSync(sessionDir)) {
-        removeForkPath(sessionDir)
-        console.log(`[Agent 会话] 已清理 session 工作目录: ${sessionDir}`)
+    sessionDirToRemove = sessionDir
+  }
+
+  // 大目录递归删除全部走异步：单个会话的检查点目录最大 2.4GB / 15 万文件，
+  // 同步 rmSync 会把主进程事件循环按住数秒（实测 3 万文件 1.1s）。
+  await Promise.all([
+    (async () => {
+      if (!sessionDirToRemove || !existsSync(sessionDirToRemove)) return
+      try {
+        await removeForkPathAsync(sessionDirToRemove)
+        console.log(`[Agent 会话] 已清理 session 工作目录: ${sessionDirToRemove}`)
+      } catch (error) {
+        console.warn(`[Agent 会话] 清理 session 工作目录失败 (${id}):`, error)
       }
-    } catch (error) {
-      console.warn(`[Agent 会话] 清理 session 工作目录失败 (${id}):`, error)
-    }
-  }
-
-  // 用户附件备份也按会话存放，随会话一起清理，避免残留占盘。
-  try {
-    const backupDir = join(getAgentAttachmentBackupsRoot(), id)
-    if (existsSync(backupDir)) rmSync(backupDir, { recursive: true, force: true })
-  } catch (error) {
-    console.warn(`[Agent 会话] 清理用户附件备份失败 (${id}):`, error)
-  }
-
-  // 新版检查点位于配置目录，删除会话后必须显式清理；旧版 cwd 内快照已随工作区删除。
-  try {
-    removePiFileCheckpoints(getPiCheckpointsDir(), id)
-  } catch (error) {
-    console.warn(`[Agent 会话] 清理 Pi 文件检查点失败 (${id}):`, error)
-  }
-
-  // 历史工具结果落盘副本：独立目录，不随会话工作区/checkpoint 清理，必须显式删除。
-  removeToolResultDir(id)
+    })(),
+    // 用户附件备份也按会话存放，随会话一起清理，避免残留占盘。
+    (async () => {
+      try {
+        const backupDir = join(getAgentAttachmentBackupsRoot(), id)
+        if (existsSync(backupDir)) await rmAsync(backupDir, { recursive: true, force: true })
+      } catch (error) {
+        console.warn(`[Agent 会话] 清理用户附件备份失败 (${id}):`, error)
+      }
+    })(),
+    // 新版检查点位于配置目录，删除会话后必须显式清理；旧版 cwd 内快照已随工作区删除。
+    (async () => {
+      try {
+        await removePiFileCheckpointsAsync(getPiCheckpointsDir(), id)
+      } catch (error) {
+        console.warn(`[Agent 会话] 清理 Pi 文件检查点失败 (${id}):`, error)
+      }
+    })(),
+    // 历史工具结果落盘副本：独立目录，不随会话工作区/checkpoint 清理，必须显式删除。
+    removeToolResultDirAsync(id),
+  ])
 
   console.log(`[Agent 会话] 已删除会话: ${removed.title} (${removed.id})`)
 
@@ -1081,7 +1258,7 @@ export function deleteAgentSession(id: string): void {
       const histDir = join(fileHistoryDir, sid)
       if (existsSync(histDir)) {
         try {
-          rmSync(histDir, { recursive: true, force: true })
+          await rmAsync(histDir, { recursive: true, force: true })
           console.log(`[Agent 会话] 已清理 file-history: ${sid}`)
         } catch (e) {
           console.warn(`[Agent 会话] 清理 file-history 失败 (${sid}):`, e)
@@ -1093,15 +1270,25 @@ export function deleteAgentSession(id: string): void {
     // 禁止按文件名片段匹配以避免误删另一会话。
     if (normalizeAgentRuntime(removed.agentRuntime) === 'pi') {
       for (const sid of sdkSessionIds) {
-        const piSessionFile = findPiSessionJsonl(sid)
+        // 索引已记录 piSessionFile 时直接校验使用，避免每次删除都全盘扫描 2.8GB transcript。
+        // 有 piSessionFile 时保持 O(1)；只有缺路径的极少数历史会话才强制重建一次缓存
+        // （启动 backfill 之后这类会话应接近于零）。
+        const knownTranscript = sid === removed.sdkSessionId ? removed.piSessionFile : undefined
+        const piSessionFile = resolvePiTranscriptPath(
+          sid,
+          knownTranscript,
+          knownTranscript ? undefined : { refreshOnFallback: true },
+        )
         if (!piSessionFile) continue
         try {
-          unlinkSync(piSessionFile)
+          await rmAsync(piSessionFile, { force: true })
           console.log(`[Agent 会话] 已清理 Pi session 文件: ${piSessionFile}`)
         } catch (e) {
           console.warn('[Agent 会话] 清理 Pi session 文件失败:', e)
         }
       }
+      // 已删除的文件可能仍在扫描缓存里，立即失效避免后续健康检查误判。
+      invalidatePiTranscriptCache()
     }
 
     const projectsDir = join(sdkConfigDir, 'projects')
@@ -1113,7 +1300,7 @@ export function deleteAgentSession(id: string): void {
             const sessionFile = join(projPath, `${sid}.jsonl`)
             if (existsSync(sessionFile)) {
               try {
-                unlinkSync(sessionFile)
+                await rmAsync(sessionFile, { force: true })
                 console.log(`[Agent 会话] 已清理 SDK session 文件: ${sessionFile}`)
               } catch (e) {
                 console.warn('[Agent 会话] 清理 SDK session 文件失败:', e)
@@ -1121,7 +1308,7 @@ export function deleteAgentSession(id: string): void {
             }
           }
           try {
-            if (readdirSync(projPath).length === 0) rmSync(projPath, { recursive: true })
+            if (readdirSync(projPath).length === 0) await rmAsync(projPath, { recursive: true })
           } catch { /* ignore */ }
         }
       } catch { /* ignore */ }
@@ -1139,12 +1326,12 @@ export function deleteAgentSession(id: string): void {
  *
  * @returns 删除的会话数量
  */
-export function deleteAgentSessionsByWorkspace(workspaceId: string): number {
+export async function deleteAgentSessionsByWorkspace(workspaceId: string): Promise<number> {
   const index = readIndex()
   const affected = index.sessions.filter((s) => s.workspaceId === workspaceId)
   if (affected.length === 0) return 0
   for (const session of affected) {
-    deleteAgentSession(session.id)
+    await deleteAgentSession(session.id)
   }
   console.log(`[Agent 会话] 已级联删除工作区 ${workspaceId} 的 ${affected.length} 个会话`)
   return affected.length
@@ -1161,7 +1348,15 @@ export function deleteAgentSessionsByWorkspace(workspaceId: string): number {
  * @returns 所有会话的健康状态列表，按严重程度排序（孤儿在前）
  */
 export function findOrphanSessions(): SessionHealth[] {
-  const index = readIndex()
+  // 已入队待删除的会话不参与健康检查：它们正处于「索引还在、文件已在清」的中间态。
+  const index = { ...readIndex() }
+  index.sessions = index.sessions.filter((session) => !isSessionDeletionPending(session.id))
+  // 只有缺少 piSessionFile 的历史会话才需要扫描 transcript 目录；
+  // 大多数会话都能直接用索引里的路径，避免健康检查阻塞主线程。
+  const needsTranscriptScan = index.sessions.some((session) => session.sdkSessionId
+    && normalizeAgentRuntime(session.agentRuntime) === 'pi'
+    && !session.piSessionFile)
+  if (needsTranscriptScan) invalidatePiTranscriptCache()
   const results: SessionHealth[] = []
 
   for (const session of index.sessions) {
@@ -1182,7 +1377,7 @@ export function findOrphanSessions(): SessionHealth[] {
     // 检查 runtime 对应的原生 session JSONL。Claude 与 Pi 的持久化目录和文件名规则不同。
     if (session.sdkSessionId) {
       health.hasSdkJsonl = normalizeAgentRuntime(session.agentRuntime) === 'pi'
-        ? findPiSessionJsonl(session.sdkSessionId) !== undefined
+        ? resolvePiTranscriptPath(session.sdkSessionId, session.piSessionFile) !== undefined
         : findSdkSessionJsonl(session.sdkSessionId) !== undefined
     }
 
@@ -1295,22 +1490,49 @@ export function resolveAgentSessionStoragePath(workspaceId: string, sessionId: s
 }
 
 /**
+ * 收集某个会话的全部委派后代（按 parentSessionId 递归）。
+ * 只认真正的委派子会话（带 sourceDelegationId），不把 fork 源误当子会话。
+ */
+function collectDelegatedDescendantIds(sessions: AgentSessionMeta[], rootId: string): string[] {
+  const childrenByParentId = new Map<string, string[]>()
+  for (const session of sessions) {
+    if (!session.parentSessionId || !session.sourceDelegationId) continue
+    const list = childrenByParentId.get(session.parentSessionId) ?? []
+    list.push(session.id)
+    childrenByParentId.set(session.parentSessionId, list)
+  }
+  const result: string[] = []
+  const seen = new Set<string>([rootId])
+  const queue = [rootId]
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    for (const childId of childrenByParentId.get(current) ?? []) {
+      if (seen.has(childId)) continue
+      seen.add(childId)
+      result.push(childId)
+      queue.push(childId)
+    }
+  }
+  return result
+}
+
+/**
  * 迁移 Agent 会话到另一个工作区
  * 操作步骤：
  * 1. 验证会话和目标工作区存在
  * 2. 源 == 目标 → no-op
- * 3. 移动会话工作目录到目标工作区（project 参与时跳过：只改索引）
+ * 3. 先递归迁移委派子会话，再迁移当前会话的运行时目录
  * 4. 更新元数据（workspaceId + 清空 sdkSessionId）
  * 5. JSONL 消息文件保持原位（全局目录）
  */
 export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: string): AgentSessionMeta {
-  const index = readIndex()
-  const idx = index.sessions.findIndex((s) => s.id === sessionId)
+  let index = readIndex()
+  let idx = index.sessions.findIndex((s) => s.id === sessionId)
   if (idx === -1) {
     throw new Error(`Agent 会话不存在: ${sessionId}`)
   }
 
-  const session = index.sessions[idx]!
+  let session = index.sessions[idx]!
 
   // 源 == 目标 → 直接返回
   if (session.workspaceId === targetWorkspaceId) return session
@@ -1320,54 +1542,62 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
     throw new Error(`目标工作区不存在: ${targetWorkspaceId}`)
   }
 
-  // 移动工作目录（如果源工作区存在）
+  // 委派子会话必须跟随父会话：session-tree 要求父子同工作区才归并，
+  // 否则子会话会降级成独立根节点；父会话离开旧项目后子会话还会变成孤儿。
+  for (const childId of collectDelegatedDescendantIds(index.sessions, sessionId)) {
+    moveSessionToWorkspace(childId, targetWorkspaceId)
+  }
+  // 子会话迁移会各自写盘；重新读索引，避免用旧快照覆盖它们的 workspaceId 更新。
+  index = readIndex()
+  idx = index.sessions.findIndex((s) => s.id === sessionId)
+  if (idx === -1) {
+    throw new Error(`Agent 会话在迁移子会话后消失: ${sessionId}`)
+  }
+  session = index.sessions[idx]!
+
+  // 移动会话运行时目录（源工作区存在时）。
+  // 新布局下 project 的会话数据在项目内 `.profer/sessions/<sid>`，managed 在中央
+  // `<config>/agent-workspaces/<slug>/<sid>`，两者都必须跟随会话归属迁移；
+  // 旧中央布局由 resolveAgentSessionWorkspacePath 自动回退，搬到新布局即可。
   if (session.workspaceId) {
     const sourceWs = getAgentWorkspace(session.workspaceId)
     if (sourceWs) {
-      // project 参与时只改索引、不动任何目录：
-      // 1) 项目的会话运行数据在中央 runtimeDir（`~/.profer/agent-workspaces/<slug>/sessions/<id>`），不在项目内；
-      // 2) 历史实现用 `getAgentWorkspacePath(slug) + sessionId` 拼路径，project 下会得到
-      //    `<rootPath>/.profer/<sessionId>`，后续 rmSync / renameSync 就会改写项目内路径（违反 I2）；
-      // 3) 目标会话目录在下次使用时由 `getAgentSessionStorageDir` 按新 slug 重建（缺失的只是会话私有缓存）。
-      if (isProjectStoredWorkspace(sourceWs) || isProjectStoredWorkspace(targetWs)) {
-        console.log(`[Agent 会话] 项目工作区会话迁移：仅更新索引，不迁移运行时目录 (${sessionId})`)
-      } else {
-        const srcDir = join(getAgentWorkspacePath(sourceWs.slug), sessionId)
-        if (existsSync(srcDir)) {
-          const destDir = join(getAgentWorkspacePath(targetWs.slug), sessionId)
-          // managed 分支的兜底：任何一侧落进项目根都直接拒绝（正常路径下不会触发）
-          assertNotProjectLifecyclePath(srcDir)
-          assertNotProjectLifecyclePath(destDir)
-          // 清理已存在的空目标目录，防止 renameSync 抛出 ENOTEMPTY/EEXIST
-          if (existsSync(destDir)) {
-            try {
-              const contents = readdirSync(destDir)
-              if (contents.length === 0) {
-                rmSync(destDir, { recursive: true })
-                console.log(`[Agent 会话] 已清理空目标目录: ${destDir}`)
-              } else {
-                // 目标目录非空，合并：先移除目标，再移动源
-                rmSync(destDir, { recursive: true })
-                console.log(`[Agent 会话] 已清理非空目标目录（以源目录为准）: ${destDir}`)
-              }
-            } catch (cleanupError) {
-              console.warn(`[Agent 会话] 清理目标目录失败，跳过目录迁移:`, cleanupError)
-            }
-          }
+      const srcDir = resolveAgentSessionWorkspacePath(sourceWs.slug, sessionId)
+      const destDir = resolveAgentSessionWorkspacePath(targetWs.slug, sessionId)
+      if (resolve(srcDir) !== resolve(destDir) && existsSync(srcDir)) {
+        assertNotProjectLifecyclePath(srcDir)
+        assertNotProjectLifecyclePath(destDir)
+        // rename 的目标父目录必须已存在；destDir 本身不能提前创建。
+        mkdirSync(dirname(destDir), { recursive: true })
+        // 清理已存在的目标目录，防止 renameSync 抛出 ENOTEMPTY/EEXIST
+        if (existsSync(destDir)) {
           try {
-            renameSync(srcDir, destDir)
-          } catch (renameErr) {
-            // 跨文件系统（EXDEV）时 renameSync 会失败，回退到 copy + delete
-            if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
-              console.log(`[Agent 会话] 跨设备移动，使用复制+删除: ${srcDir} → ${destDir}`)
-              cpSync(srcDir, destDir, { recursive: true })
-              rmSync(srcDir, { recursive: true, force: true })
+            const contents = readdirSync(destDir)
+            if (contents.length === 0) {
+              rmSync(destDir, { recursive: true })
+              console.log(`[Agent 会话] 已清理空目标目录: ${destDir}`)
             } else {
-              throw renameErr
+              // 目标目录非空，合并：先移除目标，再移动源
+              rmSync(destDir, { recursive: true })
+              console.log(`[Agent 会话] 已清理非空目标目录（以源目录为准）: ${destDir}`)
             }
+          } catch (cleanupError) {
+            console.warn(`[Agent 会话] 清理目标目录失败，跳过目录迁移:`, cleanupError)
           }
-          console.log(`[Agent 会话] 已移动工作目录: ${srcDir} → ${destDir}`)
         }
+        try {
+          renameSync(srcDir, destDir)
+        } catch (renameErr) {
+          // 跨文件系统（EXDEV）时 renameSync 会失败，回退到 copy + delete
+          if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+            console.log(`[Agent 会话] 跨设备移动，使用复制+删除: ${srcDir} → ${destDir}`)
+            cpSync(srcDir, destDir, { recursive: true })
+            rmSync(srcDir, { recursive: true, force: true })
+          } else {
+            throw renameErr
+          }
+        }
+        console.log(`[Agent 会话] 已移动会话目录: ${srcDir} → ${destDir}`)
       }
     }
   }
@@ -1387,12 +1617,9 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
   }
   if (normalizeAgentRuntime(session.agentRuntime) === 'pi') {
     // Pi transcript 与文件检查点包含旧 cwd 的状态；迁移后重建 runtime，避免在新工作区恢复旧目录快照。
-    const piSessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
-    const oldPiSessionFile = session.piSessionFile && isPathWithin(piSessionDir, session.piSessionFile)
-      ? session.piSessionFile
-      : session.sdkSessionId
-        ? findPiSessionJsonl(session.sdkSessionId)
-        : undefined
+    const oldPiSessionFile = session.sdkSessionId
+      ? resolvePiTranscriptPath(session.sdkSessionId, session.piSessionFile, { refreshOnFallback: true })
+      : undefined
     if (oldPiSessionFile && existsSync(oldPiSessionFile)) {
       try {
         unlinkSync(oldPiSessionFile)
@@ -1565,7 +1792,7 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
     return newMeta
   } catch (error) {
     // 尚未对外返回的新 session 可安全清理，避免留下会被侧栏打开的半成品。
-    try { deleteAgentSession(newMeta.id) } catch { /* 保留原始错误 */ }
+    try { await deleteAgentSession(newMeta.id) } catch { /* 保留原始错误 */ }
     throw error
   }
 }
@@ -2291,7 +2518,7 @@ async function forkAgentSessionUnlocked(sourceMeta: AgentSessionMeta, input: For
     // 回滚：删除已创建的 Profer 会话记录，避免孤儿条目
     console.error(`[Agent 会话] fork 关键步骤失败，回滚会话记录 (${newMeta.id}):`, err)
     try {
-      deleteAgentSession(newMeta.id)
+      await deleteAgentSession(newMeta.id)
     } catch (rollbackErr) {
       console.error(`[Agent 会话] fork 回滚失败:`, rollbackErr)
     }
@@ -2710,36 +2937,6 @@ function findSdkSessionJsonl(sdkSessionId: string, _projectDir?: string): string
   }
 
   return undefined
-}
-
-/** Pi SessionManager 将 session ID 写入 JSONL 首行 header，而文件名带时间前缀。
- * 读取 header 做精确匹配，避免损坏/截短 ID 时把其他会话误 resume 或误删除。 */
-function findPiSessionJsonl(sdkSessionId: string): string | undefined {
-  const piSessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
-  if (!existsSync(piSessionDir)) return undefined
-
-  const matches: string[] = []
-  const scanDirectory = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const candidate = join(directory, entry.name)
-      if (entry.isDirectory()) {
-        scanDirectory(candidate)
-        continue
-      }
-      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      try {
-        const headerLine = readFileSync(candidate, 'utf-8').split('\n', 1)[0]
-        const header = headerLine ? JSON.parse(headerLine) as { type?: unknown; id?: unknown } : undefined
-        if (header?.type === 'session' && header.id === sdkSessionId) matches.push(candidate)
-      } catch {
-        // 损坏或非 Pi 的 JSONL 不参与匹配。
-      }
-    }
-  }
-  scanDirectory(piSessionDir)
-
-  // 正常 UUID 不应重复；遇到重复文件时拒绝恢复/删除，避免任意选择一个产生跨会话混淆。
-  return matches.length === 1 ? matches[0] : undefined
 }
 
 /**

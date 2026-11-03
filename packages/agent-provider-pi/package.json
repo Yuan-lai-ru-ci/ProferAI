@@ -1,6 +1,6 @@
 {
   "name": "@profer/agent-provider-pi",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "AGPL-3.0-only",
   "description": "Host-independent Pi Agent SDK provider: full agent adapter, message conversion and Pi tool integration.",
   "type": "module",

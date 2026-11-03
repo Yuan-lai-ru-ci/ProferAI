@@ -69,7 +69,7 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(health?.orphanReason).toBeUndefined()
   })
 
-  test('Given Pi session with task graph When deleting Then removes Pi transcript and graph without touching other sessions', () => {
+  test('Given Pi session with task graph When deleting Then removes Pi transcript and graph without touching other sessions', async () => {
     const first = sessions.createAgentSession('Pi delete', undefined, undefined, undefined, 'pi')
     const second = sessions.createAgentSession('Pi keep', undefined, undefined, undefined, 'pi')
     sessions.updateAgentSessionMeta(first.id, { sdkSessionId: 'pi-delete-id' })
@@ -88,7 +88,7 @@ describe('Pi runtime 会话持久化隔离', () => {
     appendPiHarnessEvent(first.id, harnessEvent)
     const harnessPath = configPaths.getPiHarnessEventsPath(first.id)
 
-    sessions.deleteAgentSession(first.id)
+    await sessions.deleteAgentSession(first.id)
 
     expect(existsSync(deletedTranscript)).toBe(false)
     expect(existsSync(graphPath)).toBe(false)
@@ -299,7 +299,7 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(sessions.getAgentSessionMeta(meta.id)?.agentRuntime).toBe('claude')
   })
 
-  test('Given a legacy fork still references source checkpoints When deleting source Then references are migrated before source cleanup', () => {
+  test('Given a legacy fork still references source checkpoints When deleting source Then references are migrated before source cleanup', async () => {
     const source = sessions.createAgentSession('checkpoint source', undefined, undefined, undefined, 'pi')
     const target = sessions.createAgentSession('legacy checkpoint fork', undefined, undefined, undefined, 'pi')
     const cwd = join(root, 'cwd')
@@ -308,7 +308,7 @@ describe('Pi runtime 会话持久化隔离', () => {
     const checkpoint = createPiFileCheckpoint(source.id, cwd, configPaths.getPiCheckpointsDir())
     sessions.updateAgentSessionMeta(target.id, { piFileCheckpoints: { 'entry-1': checkpoint.path } })
 
-    sessions.deleteAgentSession(source.id)
+    await sessions.deleteAgentSession(source.id)
     const migrated = sessions.getAgentSessionMeta(target.id)?.piFileCheckpoints?.['entry-1']
     expect(migrated).toBeTruthy()
     expect(migrated).not.toBe(checkpoint.path)
@@ -320,13 +320,13 @@ describe('Pi runtime 会话持久化隔离', () => {
     expect(readFileSync(join(cwd, 'file.txt'), 'utf8')).toBe('baseline')
   })
 
-  test('Given a legacy fork references a missing source checkpoint When deleting source Then its stale binding is removed', () => {
+  test('Given a legacy fork references a missing source checkpoint When deleting source Then its stale binding is removed', async () => {
     const source = sessions.createAgentSession('missing checkpoint source', undefined, undefined, undefined, 'pi')
     const target = sessions.createAgentSession('missing checkpoint fork', undefined, undefined, undefined, 'pi')
     const missing = join(configPaths.getPiCheckpointsDir(), source.id, 'missing.json')
     sessions.updateAgentSessionMeta(target.id, { piFileCheckpoints: { 'entry-1': missing } })
 
-    sessions.deleteAgentSession(source.id)
+    await sessions.deleteAgentSession(source.id)
     expect(sessions.getAgentSessionMeta(target.id)?.piFileCheckpoints).toBeUndefined()
   })
 

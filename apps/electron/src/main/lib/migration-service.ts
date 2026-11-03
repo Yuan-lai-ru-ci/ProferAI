@@ -52,6 +52,7 @@ import {
   getGlobalSkillsDir,
   getWorkspaceAgentPresetsPath,
   getWorkspaceFilesDir,
+  resolveAgentSessionWorkspacePath,
   getPlanningDatabasePath,
   getWeChatConfigPath,
   getDingTalkConfigPath,
@@ -66,6 +67,14 @@ import { assertSafeSkillSegment } from './skill-path-security'
 import { copySkillDirectorySafely } from './global-skill-manager'
 import { blobPathFor, blobRootDir } from './blob-store'
 import { ZipStreamWriter } from './zip-stream-writer'
+import { isSessionDeletionPending } from './agent-session-deletion-queue'
+import {
+  EXPORTED_PI_STATE_ENTRY,
+  mergePiStatesForImport,
+  pickPiStatesForExport,
+  readExportedPiState,
+  splitInlinePiState,
+} from './session-index-pi-state-export'
 import { extractZipEntries, readZipEntries } from './zip-stream-reader'
 import {
   assertPassphrase,
@@ -732,6 +741,7 @@ function _sdkProjectKey(projectDir: string): string {
   return `${sanitized.slice(0, 200)}-${Math.abs(hash).toString(36)}`
 }
 
+
 /** 导入新版本运行时的 Claude/Pi 原生会话文件；旧备份没有该字段时安全空操作。 */
 function _importRuntimeArtifacts(
   tempDir: string,
@@ -810,7 +820,8 @@ async function _addSessions(
   const sessionsIndexPath = getAgentSessionsIndexPath()
   if (existsSync(sessionsIndexPath)) {
     const index = readJsonSafe<{ version: number; sessions: Array<{ id: string; workspaceId: string }> }>(sessionsIndexPath)
-    const sessions = (index?.sessions ?? []).filter((s) => s.workspaceId === workspace.id)
+    // 待删除会话正处于中间态，文件可能已清一半，不导出。
+    const sessions = (index?.sessions ?? []).filter((s) => s.workspaceId === workspace.id && !isSessionDeletionPending(s.id))
     const targets = filterIds ? sessions.filter((s) => filterIds.includes(s.id)) : sessions
     const exportedIds = new Set<string>()
 
@@ -819,7 +830,7 @@ async function _addSessions(
       if (existsSync(msgPath)) {
         if (await _addSessionMessages(writer, msgPath, warnings, blobRefs)) exportedIds.add(session.id)
       }
-      const workDir = join(getAgentWorkspacePath(workspace.slug), session.id)
+      const workDir = resolveAgentSessionWorkspacePath(workspace.slug, session.id)
       if (existsSync(workDir)) {
         await _addDirToZip(writer, workDir, `sessions/workspace-data/${session.id}`, warnings)
       }
@@ -828,6 +839,8 @@ async function _addSessions(
     if (index) {
       const filtered = { ...index, sessions: index.sessions.filter((s) => exportedIds.has(s.id)) }
       await writer.addBuffer(JSON.stringify(filtered, null, 2), 'sessions/agent-sessions-index.json')
+      const piState = pickPiStatesForExport(sessionsIndexPath, exportedIds)
+      if (piState) await writer.addBuffer(JSON.stringify(piState), EXPORTED_PI_STATE_ENTRY)
     }
   }
 
@@ -866,7 +879,7 @@ async function _addSessionsMultiWorkspace(
   const sessionsIndexPath = getAgentSessionsIndexPath()
   if (existsSync(sessionsIndexPath)) {
     const index = readJsonSafe<{ version: number; sessions: Array<{ id: string; workspaceId: string }> }>(sessionsIndexPath)
-    const sessions = (index?.sessions ?? []).filter((s) => wsIds.has(s.workspaceId))
+    const sessions = (index?.sessions ?? []).filter((s) => wsIds.has(s.workspaceId) && !isSessionDeletionPending(s.id))
     const targets = filterIds ? sessions.filter((s) => filterIds.includes(s.id)) : sessions
     const exportedIds = new Set<string>()
 
@@ -877,7 +890,7 @@ async function _addSessionsMultiWorkspace(
       }
       const ws = workspaces.find((w) => w.id === session.workspaceId)
       if (ws) {
-        const workDir = join(getAgentWorkspacePath(ws.slug), session.id)
+        const workDir = resolveAgentSessionWorkspacePath(ws.slug, session.id)
         if (existsSync(workDir)) {
           await _addDirToZip(writer, workDir, `sessions/workspace-data/${session.id}`, warnings)
         }
@@ -887,6 +900,8 @@ async function _addSessionsMultiWorkspace(
     if (index) {
       const filtered = { ...index, sessions: index.sessions.filter((s) => exportedIds.has(s.id)) }
       await writer.addBuffer(JSON.stringify(filtered, null, 2), 'sessions/agent-sessions-index.json')
+      const piState = pickPiStatesForExport(sessionsIndexPath, exportedIds)
+      if (piState) await writer.addBuffer(JSON.stringify(piState), EXPORTED_PI_STATE_ENTRY)
     }
   }
 
@@ -1772,16 +1787,26 @@ async function _importSessions(
     const current = readJsonSafe<{ version: number; sessions: Array<Record<string, unknown>> }>(currentIndexPath) ?? { version: 1, sessions: [] }
     const currentIds = new Set(current.sessions.map((s) => s['id']))
 
+    const addedSessionIds = new Set<string>()
+    const inlinePiStates = new Map<string, NonNullable<ReturnType<typeof splitInlinePiState>['inline']>>()
     for (const s of imported?.sessions ?? []) {
       if (!currentIds.has(s.id)) {
+        // 旧备份把 Pi 大字段内联在索引里：拆出来单独合并，避免重新灌进轻索引。
+        const { inline, rest } = splitInlinePiState(s as Record<string, unknown>)
+        if (inline) inlinePiStates.set(s.id, inline)
         current.sessions.push({
-          ...s,
+          ...rest,
           workspaceId: targetWorkspace.id,
           ...(s.agentRuntime === 'pi' ? { piSessionFile: s.sdkSessionId ? runtimeSessionFiles.get(s.sdkSessionId) : undefined } : {}),
         })
+        addedSessionIds.add(s.id)
       }
     }
     writeFileSync(currentIndexPath, JSON.stringify(current, null, 2), 'utf-8')
+    mergePiStatesForImport(currentIndexPath, addedSessionIds, [
+      inlinePiStates.size > 0 ? { version: 1, states: Object.fromEntries(inlinePiStates) } : null,
+      readExportedPiState(tempDir),
+    ])
   }
 
   // 会话工作目录
@@ -2367,16 +2392,25 @@ async function _importSessionsV2(
     const current = readJsonSafe<{ version: number; sessions: Array<Record<string, unknown>> }>(currentIndexPath) ?? { version: 1, sessions: [] }
     const currentIds = new Set(current.sessions.map((s) => s['id']))
 
+    const addedSessionIds = new Set<string>()
+    const inlinePiStates = new Map<string, NonNullable<ReturnType<typeof splitInlinePiState>['inline']>>()
     for (const s of imported?.sessions ?? []) {
       if (currentIds.has(s.id)) continue
       const target = wsIdMap.get(s.workspaceId) ?? fallbackWorkspace
+      const { inline, rest } = splitInlinePiState(s as Record<string, unknown>)
+      if (inline) inlinePiStates.set(s.id, inline)
       current.sessions.push({
-        ...s,
+        ...rest,
         workspaceId: target.id,
         ...(s.agentRuntime === 'pi' ? { piSessionFile: s.sdkSessionId ? runtimeSessionFiles.get(s.sdkSessionId) : undefined } : {}),
       })
+      addedSessionIds.add(s.id)
     }
     writeFileSync(currentIndexPath, JSON.stringify(current, null, 2), 'utf-8')
+    mergePiStatesForImport(currentIndexPath, addedSessionIds, [
+      inlinePiStates.size > 0 ? { version: 1, states: Object.fromEntries(inlinePiStates) } : null,
+      readExportedPiState(tempDir),
+    ])
   }
 
   const workspaceDataDir = join(tempDir, 'sessions/workspace-data')

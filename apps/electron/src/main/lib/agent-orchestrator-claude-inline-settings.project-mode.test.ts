@@ -151,8 +151,8 @@ describe('project 下 Claude SDK settings 内联透传', () => {
 
     const meta = createAgentSession('project session', undefined, 'id-p1', undefined, 'claude', false)
     const layout = resolveAgentSessionWriteLayout('p1', meta.id)
-    expect(layout.storageDir.startsWith(root)).toBe(false)
-    expect(layout.contextDir.startsWith(root)).toBe(false)
+    expect(layout.storageDir.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
+    expect(layout.contextDir.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
 
     const autoMemoryDirectory = join(root, '.profer', 'memory')
     // orchestrator 9.5 写盘的同一组值（唯一真相源仍是 layout）

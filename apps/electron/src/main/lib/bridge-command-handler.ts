@@ -220,6 +220,28 @@ interface SessionBuffer {
   startedAt: number
 }
 
+/**
+ * 建 Agent 会话失败（工作区根被移走、目录不可写等）。
+ *
+ * 与「未配置渠道」不同：这是可解释的配置/环境错误，调用方必须把原因回给用户，
+ * 不能静默丢弃（IM 里表现为「已读不回」，只能翻控制台才看得到）。
+ */
+export class BridgeSessionCreationError extends Error {
+  constructor(readonly detail: string, options?: { cause?: unknown }) {
+    super(detail, options)
+    this.name = 'BridgeSessionCreationError'
+  }
+}
+
+/** 把任意建会话异常归一成 BridgeSessionCreationError（保留原始信息）。 */
+export function toBridgeSessionCreationError(error: unknown): BridgeSessionCreationError {
+  if (error instanceof BridgeSessionCreationError) return error
+  return new BridgeSessionCreationError(
+    error instanceof Error ? error.message : String(error),
+    { cause: error },
+  )
+}
+
 /** Agent SDK 消息中的内容块 */
 interface ContentBlock {
   type: string
@@ -264,12 +286,39 @@ export class BridgeCommandHandler {
     contextData?: unknown,
     attachments?: BridgeAttachment[],
   ): Promise<void> {
-    if (text.trimStart().startsWith('/')) {
-      // 命令消息不携带附件（附件由 Bridge 缓冲，等普通消息触发）
-      await this.handleCommand(chatId, text, contextData)
-    } else {
-      await this.handleUserMessage(chatId, text, contextData, attachments)
+    try {
+      if (text.trimStart().startsWith('/')) {
+        // 命令消息不携带附件（附件由 Bridge 缓冲，等普通消息触发）
+        await this.handleCommand(chatId, text, contextData)
+      } else {
+        await this.handleUserMessage(chatId, text, contextData, attachments)
+      }
+    } catch (error) {
+      // 建会话失败必须回一条可见原因；其它异常保持原有抛给平台层的行为。
+      if (await this.reportSessionCreationError(chatId, error, contextData)) return
+      throw error
     }
+  }
+
+  /**
+   * 建会话失败时给用户一条可见原因。
+   *
+   * @returns 已处理（已发出提示）返回 true；不是建会话错误返回 false，由调用方继续抛出。
+   */
+  async reportSessionCreationError(
+    chatId: string,
+    error: unknown,
+    contextData?: unknown,
+  ): Promise<boolean> {
+    if (!(error instanceof BridgeSessionCreationError)) return false
+    await this.send(
+      chatId,
+      `⚠️ 无法创建 Agent 会话：${error.detail}\n\n`
+      + '请检查当前工作区目录是否存在（项目工作区被移动/删除后需要重新定位），'
+      + '或用 /workspace 切换到其它工作区。',
+      contextData,
+    )
+    return true
   }
 
   /**
@@ -299,13 +348,21 @@ export class BridgeCommandHandler {
     const sessionTitle = this.config.sessionTitle
       ? this.config.sessionTitle()
       : `${this.config.platformName}会话`
-    const session = createAgentSession(
-      sessionTitle,
-      channelId,
-      workspaceId || undefined,
-      modelId,
-      agentRuntime,
-    )
+    let session
+    try {
+      session = createAgentSession(
+        sessionTitle,
+        channelId,
+        workspaceId || undefined,
+        modelId,
+        agentRuntime,
+      )
+    } catch (error) {
+      // 建会话失败（典型：project 工作区目录被移走）不能静默：交给调用方转成可见提示。
+      const failure = toBridgeSessionCreationError(error)
+      this.log(`创建会话失败: ${failure.detail}`)
+      throw failure
+    }
 
     const binding: BridgeChatBinding = {
       chatId,
@@ -485,13 +542,19 @@ export class BridgeCommandHandler {
     // 确定工作区
     const workspaceId = this.config.getDefaultWorkspaceId?.() ?? settings.agentWorkspaceId ?? this.config.fallbackWorkspaceId?.() ?? ''
 
-    const session = createAgentSession(
-      this.config.sessionTitle ? this.config.sessionTitle(title) : title || '新会话',
-      channelId,
-      workspaceId || undefined,
-      modelId,
-      agentRuntime,
-    )
+    let session
+    try {
+      session = createAgentSession(
+        this.config.sessionTitle ? this.config.sessionTitle(title) : title || '新会话',
+        channelId,
+        workspaceId || undefined,
+        modelId,
+        agentRuntime,
+      )
+    } catch (error) {
+      if (await this.reportSessionCreationError(chatId, toBridgeSessionCreationError(error), contextData)) return
+      throw error
+    }
 
     // 清理旧绑定
     const oldBinding = this.chatBindings.get(chatId)

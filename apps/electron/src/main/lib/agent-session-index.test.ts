@@ -91,8 +91,12 @@ test('清理遗留知识库字段时保留其他元数据与索引扩展字段',
   expect(store.get('legacy')).not.toHaveProperty('knowledgeReferences')
   const saved = JSON.parse(readFileSync(path, 'utf8'))
   expect(saved.extra).toBe('keep')
-  expect(saved.sessions[0]).toMatchObject({ workspaceId: 'workspace', piEntryBindings: { user: 'entry' } })
+  expect(saved.sessions[0]).toMatchObject({ workspaceId: 'workspace' })
+  // Pi 大字段已拆到独立文件，索引只保留轻量元数据
+  expect(saved.sessions[0]).not.toHaveProperty('piEntryBindings')
   expect(saved.sessions[0]).not.toHaveProperty('knowledgeReferences')
+  const piState = JSON.parse(readFileSync(path.replace(/\.json$/, '-pi-state.json'), 'utf8'))
+  expect(piState.states.legacy).toMatchObject({ piEntryBindings: { user: 'entry' } })
 })
 
 test('主文件损坏时沿用 safe-file 的备份恢复', () => {

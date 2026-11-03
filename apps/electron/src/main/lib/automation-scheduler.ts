@@ -242,6 +242,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
     }
     // 任务改内核时另开会话；旧会话及其 transcript/检查点保留。
     if (automation.lastSessionId && lastSessionMeta && !lastSessionMeta.automationGraduated
+      && lastSessionMeta.workspaceId === automation.workspaceId
       && normalizeAgentRuntime(lastSessionMeta.agentRuntime) === agentRuntime) {
       if (sessionMode === 'reuse') {
         reuseSessionId = automation.lastSessionId

@@ -1,6 +1,6 @@
 {
   "name": "@profer/core",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "license": "AGPL-3.0-only",
   "description": "profer core types,storage and core logic with agents",
   "type": "module",

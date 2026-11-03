@@ -147,7 +147,8 @@ function snapshotTree(root: string): string[] {
     }
   }
   walk(root)
-  return entries.sort()
+  // 会话运行时数据现在位于 `.profer/sessions`，属于工作区资产；这里断言的是「用户项目文件零污染」。
+  return entries.filter((entry) => !entry.startsWith('.profer/sessions')).sort()
 }
 
 /** 最小合法 PNG（detectAgentImage 只需要签名）。 */
@@ -239,7 +240,7 @@ describe('新链 project：计划模式写入白名单以 storage 计划目录�
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
     const meta = createAgentSession('plan session', undefined, 'id-p1', undefined, 'claude', false)
     const layout = resolveAgentSessionWriteLayout('p1', meta.id)
-    expect(layout.storageDir.startsWith(root)).toBe(false)
+    expect(layout.storageDir.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
     mkdirSync(layout.plansDir, { recursive: true })
     const before = snapshotTree(root)
 
@@ -319,7 +320,7 @@ describe('新链 project：生图产物与记录落 storageDir', () => {
       const imageDir = realpathSync(layout.imageOutputDir)
       expect(result.output.image.localPath.startsWith(imageDir)).toBe(true)
       // 产物不在项目根内（project 的 cwd 是用户仓库）。
-      expect(result.output.image.localPath.startsWith(root)).toBe(false)
+      expect(result.output.image.localPath.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
       expect(result.output.image.relativePath.startsWith('.context/agent-output-images/')).toBe(true)
 
       const recordsPath = await getAgentImageGenerationRecordsPath(root, layout.storageDir)
@@ -371,7 +372,7 @@ describe('新链 project：skin 参考图能读 storageDir 里的生成图', () 
       allowedRoots: [],
     }, 'generated-image-skinref.png')
     expect(generated.image.localPath.startsWith(realpathSync(layout.imageOutputDir))).toBe(true)
-    expect(generated.image.localPath.startsWith(root)).toBe(false)
+    expect(generated.image.localPath.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
 
     const capabilities = await createElectronProductMcpCapabilities({ isPlanModeActive: () => false })({
       sessionId: meta.id,

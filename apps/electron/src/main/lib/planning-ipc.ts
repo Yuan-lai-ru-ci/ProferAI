@@ -100,6 +100,7 @@ export function registerPlanningIpc(): void {
     if (input.priority !== undefined && !isTodoPriority(input.priority)) throw new Error('Todo priority 非法')
     if (input.dueAt !== undefined && !isPlanningTimestamp(input.dueAt)) throw new Error('Todo dueAt 非法')
     if (input.sessionId !== undefined && (typeof input.sessionId !== 'string' || !input.sessionId.trim())) throw new Error('Todo sessionId 非法')
+    if (input.workspaceId && !getAgentWorkspace(input.workspaceId)) throw new Error('所选项目已不可用，请重新选择')
     const todo = createTodo(input)
     broadcastPlanningChanged(['todos', 'reminders'])
     return todo
@@ -161,6 +162,9 @@ export function registerPlanningIpc(): void {
     if (input.status !== undefined && !isTodoStatus(input.status)) throw new Error('Todo status 非法')
     if (input.dueAt !== undefined && input.dueAt !== null && !isPlanningTimestamp(input.dueAt)) throw new Error('Todo dueAt 非法')
     if (input.expectedUpdatedAt !== undefined && !isPlanningTimestamp(input.expectedUpdatedAt)) throw new Error('Todo expectedUpdatedAt 非法')
+    if (typeof input.workspaceId === 'string' && input.workspaceId.trim() && !getAgentWorkspace(input.workspaceId)) {
+      throw new Error('所选项目已不可用，请重新选择')
+    }
     const todo = updateTodo(input)
     if (todo) broadcastPlanningChanged(['todos', 'reminders'])
     return todo

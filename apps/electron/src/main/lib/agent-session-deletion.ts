@@ -5,7 +5,33 @@ export type AgentSessionDeletionDependencies = {
   endDeletion: (id: string) => void
   stopAndWait: (id: string) => Promise<void>
   clearState: (id: string) => void
-  deleteSession: (id: string) => void
+  deleteSession: (id: string) => Promise<void>
+  /**
+   * 停止失败/超时后是否继续删除，默认 false。
+   *
+   * 打开后语义是「先尽量优雅停止，停不下来也把数据删掉」：仍在运行的 run
+   * 由 append 侧的删除墓碑兜底，不会再写出新的消息文件。
+   */
+  forceDeleteOnStopFailure?: boolean
+  /** 停止等待上限，默认 8s。 */
+  stopTimeoutMs?: number
+  /** 强制删除前的观测回调（记录超时原因）。 */
+  onStopFailure?: (id: string, error: unknown) => void
+}
+
+const DEFAULT_STOP_TIMEOUT_MS = 8_000
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  if (timeoutMs <= 0) return promise
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
 }
 
 /**
@@ -32,11 +58,23 @@ export class AgentSessionDeletionCoordinator {
     const deletion = (async () => {
       for (const sessionId of lockedIds) deps.beginDeletion(sessionId)
       try {
-        // 先停止整棵树。任一个超时/失败时，不会进入下面的清理和删除阶段。
-        for (const sessionId of lockedIds) await deps.stopAndWait(sessionId)
+        // 先停止整棵树。默认任一个超时/失败都不会进入清理阶段；
+        // 显式打开 forceDeleteOnStopFailure 时记录失败并继续删除。
+        for (const sessionId of lockedIds) {
+          try {
+            await withTimeout(
+              deps.stopAndWait(sessionId),
+              deps.stopTimeoutMs ?? DEFAULT_STOP_TIMEOUT_MS,
+              `停止 Agent 会话超时: ${sessionId}`,
+            )
+          } catch (error) {
+            if (!deps.forceDeleteOnStopFailure) throw error
+            deps.onStopFailure?.(sessionId, error)
+          }
+        }
         for (const sessionId of order) {
           deps.clearState(sessionId)
-          deps.deleteSession(sessionId)
+          await deps.deleteSession(sessionId)
         }
       } finally {
         for (const sessionId of lockedIds) deps.endDeletion(sessionId)

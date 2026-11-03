@@ -24,6 +24,8 @@ export const DELEGATION_RUNNING_STALE_MS = 10 * 60_000
 
 export interface DelegationRuntimeDisplayInput {
   parentSessionId?: string | null
+  /** 独立工作关系（placement=independent）没有父会话，用来源会话表达血缘。 */
+  sourceSessionId?: string | null
   sourceDelegationId?: string | null
   delegationStatus?: string | null
   /** 渲染层实时流状态是否在运行。 */
@@ -67,18 +69,28 @@ const TERMINAL_LABELS: Partial<Record<PersistedDelegationStatus, string>> = {
   interrupted: '子代理已中断',
 }
 
-/** 判断会话是否为委派子会话（探索分支走自己的血缘字段，不算委派）。 */
+/**
+ * 判断会话是否为委派子会话（探索分支走自己的血缘字段，不算委派）。
+ *
+ * 血缘不能只看 `parentSessionId`：`placement=independent` 的委派只写
+ * `sourceSessionId` + `sourceDelegationId`（见 `startDelegation` 里
+ * `parentSessionId: relation === 'subtask' ? ctx.sessionId : undefined`）。
+ * 只看 parentSessionId 会让这类子会话永远拿不到运行态显示，表现成
+ * 「子会话没有 runtime」。
+ */
 export function isDelegatedChildSessionLike(input: {
   parentSessionId?: string | null
+  sourceSessionId?: string | null
   sourceDelegationId?: string | null
 }): boolean {
-  return Boolean(input.parentSessionId && input.sourceDelegationId)
+  return Boolean(input.sourceDelegationId && (input.parentSessionId || input.sourceSessionId))
 }
 
 export function resolveDelegationRuntimeDisplay(
   input: DelegationRuntimeDisplayInput,
 ): DelegationRuntimeDisplay {
   if (!isDelegatedChildSessionLike(input)) return HIDDEN
+
 
   if (input.liveRunning) {
     return {
@@ -108,6 +120,48 @@ export function resolveDelegationRuntimeDisplay(
   }
 
   return HIDDEN
+}
+
+export interface DelegationConversationRunStateInput {
+  /** 渲染层实时流状态是否在运行。 */
+  liveRunning: boolean
+  /** 实时流状态记录的运行起点。 */
+  liveStartedAt?: number
+  /** 由 `resolveDelegationRuntimeDisplay` 推导的运行状态（可能缺失）。 */
+  delegation?: DelegationRuntimeDisplay | null
+}
+
+export interface DelegationConversationRunState {
+  /** 对话区应视为「本轮仍在运行」的流式态。 */
+  streaming: boolean
+  /** 本轮起点：实时优先，其次委派状态给出的回退起点。 */
+  startedAt?: number
+  /** true 表示运行态由持久化委派状态兜底（渲染层没有实时流）。 */
+  fromDelegationStatus: boolean
+}
+
+/**
+ * 把「实时流 + 持久化委派状态」收敛成对话区使用的运行态。
+ *
+ * 为什么要兜底：子会话页可能根本没有实时流（打开时机、跨窗口绑定、事件缺失都发生过）。
+ * 只按实时流判断时，过程区会一直折叠、没有 spinner、操作栏提前出现，用户看到的就是
+ * 「子会话没有 runtime，一直是折叠态」。委派状态 running 是持久化事实，可以直接驱动
+ * 展开与运行指示；时间起点仍优先用实时流，缺失时才用委派回退起点。
+ */
+export function resolveDelegationConversationRunState(
+  input: DelegationConversationRunStateInput,
+): DelegationConversationRunState {
+  if (input.liveRunning) {
+    return { streaming: true, startedAt: input.liveStartedAt, fromDelegationStatus: false }
+  }
+  if (input.delegation?.visible && input.delegation.phase === 'running') {
+    return {
+      streaming: true,
+      startedAt: input.delegation.startedAt ?? input.liveStartedAt,
+      fromDelegationStatus: true,
+    }
+  }
+  return { streaming: false, startedAt: input.liveStartedAt, fromDelegationStatus: false }
 }
 
 /** 运行计时的展示文本：小于一分钟按秒，之后按 分:秒。 */

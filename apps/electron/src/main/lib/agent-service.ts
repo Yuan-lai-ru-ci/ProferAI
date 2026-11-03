@@ -11,7 +11,7 @@
  */
 
 import { join, dirname, basename, sep } from 'node:path'
-import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE, resolveRunInitiator, AgentSessionRuntimeMismatchError } from '@profer/shared'
@@ -239,6 +239,29 @@ function preserveCompletedBacklog(sessionId: string): void {
 const wcWithCleanupHook = new WeakSet<WebContents>()
 
 /**
+ * 记录会话流绑定的变更（谁在什么时候把会话绑到/解绑自哪个窗口）。
+ *
+ * 为什么需要：子会话页「冻结在打开时快照、过程区一直折叠」的根因类是绑定被别的窗口
+ * 抢走（改绑会向旧窗口发 SESSION_RELEASED，旧窗口随后收不到任何事件）。这条链路
+ * 完全在运行时隐式发生，没有日志就只能靠猜。
+ * 只写 append，失败不影响主流程。
+ */
+function recordStreamBinding(event: Record<string, unknown>): void {
+  try {
+    const dir = join(getConfigDir(), 'diagnostics')
+    mkdirSync(dir, { recursive: true })
+    const stack = new Error().stack?.split('\n').slice(2, 9).join(' | ') ?? ''
+    appendFileSync(
+      join(dir, 'stream-binding.log'),
+      `${JSON.stringify({ ...event, at: Date.now(), stack })}\n`,
+      'utf8',
+    )
+  } catch {
+    // 诊断日志失败不得影响主流程
+  }
+}
+
+/**
  * 注册 sessionId → webContents 映射，并在 webContents 销毁时自动清理所有相关条目。
  *
  * 仅依赖 finally 块清理无法覆盖窗口关闭、渲染进程崩溃、headless 路径主窗口被替换等
@@ -249,11 +272,14 @@ export function registerWebContents(sessionId: string, wc: WebContents): void {
   // 否则旧窗口的侧边栏会一直停在“运行中”，直到下一次整页刷新。
   const previous = sessionWebContents.get(sessionId)
   if (previous && previous !== wc && !previous.isDestroyed()) {
+    recordStreamBinding({ kind: 'rebind', sessionId, from: previous.id, to: wc.id })
     try {
       previous.send(AGENT_IPC_CHANNELS.SESSION_RELEASED, sessionId)
     } catch {
       // 旧窗口可能正在关闭；释放通知失败不影响新绑定。
     }
+  } else if (!previous) {
+    recordStreamBinding({ kind: 'bind', sessionId, to: wc.id })
   }
   // 同一 sessionId 切换 webContents 时直接覆盖；旧 wc 的 destroyed 钩子仍由 WeakSet 持有，
   // 触发时会扫描 sessionWebContents 清理所有指向旧 wc 的条目（见下方实现）。
@@ -273,6 +299,7 @@ export function registerWebContents(sessionId: string, wc: WebContents): void {
  * 用于子会话 headless runner 完成后的清理，避免映射残留。
  */
 export function unregisterWebContents(sessionId: string): void {
+  if (sessionWebContents.has(sessionId)) recordStreamBinding({ kind: 'unbind', sessionId })
   sessionWebContents.delete(sessionId)
 }
 
@@ -295,6 +322,7 @@ function beginActiveStreamBacklog(sessionId: string): void {
 function finishActiveStreamBacklog(sessionId: string): void {
   if (isAgentExecutionActive(sessionId)) return
   runtimeContextStore.clear(sessionId)
+  if (sessionWebContents.has(sessionId)) recordStreamBinding({ kind: 'unbind-on-finish', sessionId })
   sessionWebContents.delete(sessionId)
   preserveCompletedBacklog(sessionId)
   activeStreamEventBacklogs.delete(sessionId)
@@ -315,6 +343,10 @@ function isSessionWindowContents(wc: WebContents | null): boolean {
  *
  * `sessionIds` 用于多窗口：次级窗口只接管自己标签页上的会话，
  * 否则新窗口启动时会把主窗口正在运行的流全部“抢”过来。
+ *
+ * 注意：不传 sessionIds 等于「声称自己是主窗口，打包接管所有会话」。任何非主窗口
+ * 用这种形式调用，都会把其它窗口正在展示的会话 release 掉，使它们冻结在快照上
+ * （现象：过程区一直折叠、没有 spinner、消息不再增长）。
  */
 export function restoreActiveAgentStreams(
   webContents: WebContents,
@@ -792,8 +824,14 @@ export async function runAgentRuntimeHeadless(
   callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
   input = normalizeHeadlessSendInput(input, callbacks.source)
-  const wc = getMainRendererWebContents()
-  if (wc) registerWebContents(input.sessionId, wc)
+  // 已有窗口绑定时不得改绑到主窗口：会话可能正被独立会话窗口展示。
+  // 改绑会给旧窗口发 SESSION_RELEASED（清掉它的运行态与实时消息），而新绑的主窗口
+  // 并没有在展示这个会话——用户看到的子会话页从此收不到任何事件，过程区永远折叠。
+  const existingOwner = getSessionWebContents(input.sessionId)
+  if (!existingOwner) {
+    const wc = getMainRendererWebContents()
+    if (wc) registerWebContents(input.sessionId, wc)
+  }
   beginActiveStreamBacklog(input.sessionId)
   // 本轮发起者：run 内不变。headless 运行没有显式 initiator 时按 source 推断（缺省 external，不清未读）。
   const initiator = input.initiator ?? resolveRunInitiator(input.triggeredBy, callbacks.source)
@@ -1014,9 +1052,12 @@ export async function runAgentHeadless(
     await runAgentRuntimeHeadless(input, callbacks)
     return
   }
-  // 尝试注册主窗口 webContents，让流式事件同步推送到桌面端
-  const wc = getMainRendererWebContents()
+  // 尝试注册 webContents，让流式事件同步推送到正在展示该会话的窗口。
+  // 已有绑定时保持不动：改绑到主窗口会 release 掉真正的展示窗口，子会话页随后
+  // 收不到任何运行事件（过程区一直折叠、看不出在运行）。
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
+  const existingOwner = getSessionWebContents(runInput.sessionId)
+  const wc = existingOwner ?? getMainRendererWebContents()
   const startedAt = runInput.startedAt!
   // 本轮发起者：run 内不变。
   // fail-safe（design §2.3）：headless 运行没有显式 source 时按 'external' 处理（不清未读），
@@ -1024,7 +1065,7 @@ export async function runAgentHeadless(
   const initiator = runInput.initiator
     ?? (callbacks.source ? resolveRunInitiator(runInput.triggeredBy, callbacks.source) : 'external')
   let runStarted = false
-  if (wc) {
+  if (wc && !existingOwner) {
     registerWebContents(runInput.sessionId, wc)
   }
   // 同理：外部入口的重复请求不得覆盖仍在运行的会话快照。

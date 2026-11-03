@@ -173,7 +173,7 @@ describe('headless 链：project 下 Claude options 内联 SDK settings', () => 
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
     const meta = createAgentSession('settings session', undefined, 'id-p1', undefined, 'claude', false)
     const layout = resolveAgentSessionWriteLayout('p1', meta.id)
-    expect(layout.storageDir.startsWith(root)).toBe(false)
+    expect(layout.storageDir.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
 
     const query = await captureHeadlessQuery(
       { sessionId: meta.id, userMessage: '继续', channelId: 'channel-1', workspaceId: 'id-p1', triggeredBy: 'user' },

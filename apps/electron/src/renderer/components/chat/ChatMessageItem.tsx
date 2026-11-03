@@ -209,7 +209,7 @@ export const ChatMessageItem = React.memo(function ChatMessageItem({
               )}
 
               {/* 推理折叠区域 */}
-              {message.reasoning && (
+              {message.reasoning?.trim() && (
                 <Reasoning
                   isStreaming={isStreaming && !message.content}
                   defaultOpen={isStreaming && !message.content}

@@ -934,7 +934,13 @@ class WeChatBridge {
     }
 
     // 确保 binding 存在，保存媒体到会话目录
-    const binding = this.commandHandler.ensureBinding(chatId)
+    let binding: ReturnType<BridgeCommandHandler['ensureBinding']> = null
+    try {
+      binding = this.commandHandler.ensureBinding(chatId)
+    } catch (error) {
+      if (await this.commandHandler.reportSessionCreationError(chatId, error, { contextToken })) return
+      throw error
+    }
     if (!binding) {
       await this.client.sendText(chatId, '请先在 Profer 设置中选择 Agent 渠道。', contextToken)
       return

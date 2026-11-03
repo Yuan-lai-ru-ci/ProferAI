@@ -39,7 +39,7 @@ import { app, BrowserWindow } from 'electron'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
 import type { AgentRuntime, AgentSendInput } from '@profer/shared'
-import { agentEventBus, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait, rewindAgentSession, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
+import { agentEventBus, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, rewindAgentSession, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
 import { buildArchiveToggleUpdates } from './agent-unread-policy'
 import { getUserProfile } from './user-profile-service'
@@ -47,12 +47,10 @@ import { getAgentUnreadPolicyMode } from './agent-unread-mode'
 import {
   listAgentSessions,
   getAgentSessionMeta,
-  getAgentSessionDeletionOrder,
   getAgentSessionSDKMessages,
   createAgentSession,
   ensureProjectDraftAgentSession,
   updateAgentSessionMeta,
-  deleteAgentSession,
   migrateChatToAgentSession,
   forkAgentSession,
   moveSessionToWorkspace,
@@ -82,7 +80,7 @@ import {
   presetReferenceForId,
 } from './agent-preset-manager'
 import type { AgentPresetCreateInput, AgentPresetUpdateInput } from '@profer/shared'
-import { AgentSessionDeletionCoordinator } from './agent-session-deletion'
+import { onSessionDeletionCommitted, requestSessionDeletion } from './agent-session-deletion-service'
 import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
 import { searchRemoteWorkspaceFiles } from './remote-workspace-file-search'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
@@ -280,6 +278,10 @@ const remoteAgentEventLog = new RemoteAgentEventLog()
  * 两者都不复制桌面的 webContents backlog 机制。
  */
 const remoteAgentReplayRegistry = new RemoteAgentReplayRegistry()
+// 删除请求可能排队到本次连接之后才真正落盘（含重启续跑），完成时统一释放回放登记。
+onSessionDeletionCommitted((sessionIds) => {
+  for (const sessionId of sessionIds) remoteAgentReplayRegistry.clearSession(sessionId)
+})
 
 type AgentReplayState = {
   /** 本连接的客户端标识：绑定 / 回放登记按它归属，多客户端互不干扰。 */
@@ -300,8 +302,7 @@ let isStarted = false
 /** 由设置页在当前运行期显式开启；启动参数仍保持兼容。 */
 let runtimeEnabled = false
 
-/** 移动端会话删除协调器：合并并发删除 + stop-and-wait 成功前绝不清理持久化数据（对齐桌面 IPC 语义） */
-const agentSessionDeletionCoordinator = new AgentSessionDeletionCoordinator()
+/** 移动端会话删除：提交到统一删除队列，立即返回并广播隐藏（对齐桌面 IPC 语义） */
 
 /**
  * send_message 幂等去重表：key = 客户端生成的 clientMessageId，value = 首次接收时间戳。
@@ -1084,20 +1085,7 @@ export async function handleRemoteCommand(
       const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       try {
-        await agentSessionDeletionCoordinator.delete(sessionId, {
-          getDeletionOrder: getAgentSessionDeletionOrder,
-          beginDeletion: beginAgentSessionDeletion,
-          endDeletion: endAgentSessionDeletion,
-          stopAndWait: stopAgentAndWait,
-          // 运行已完全结束后再撤销交互状态并删除持久化数据（与桌面 DELETE_SESSION IPC 同语义）
-          clearState: (id) => {
-            permissionService.clearSessionWhitelist(id)
-            permissionService.clearSessionPending(id)
-            askUserService.clearSessionPending(id)
-            exitPlanService.clearSessionPending(id)
-          },
-          deleteSession: deleteAgentSession,
-        })
+        requestSessionDeletion({ sessionId, reason: 'user' })
         // 会话已删：同时释放它的回放登记，避免刷新后的 Pocket 拿到已删会话的在飞事件。
         remoteAgentReplayRegistry.clearSession(sessionId)
         publishSessionDeleted(sessionId)

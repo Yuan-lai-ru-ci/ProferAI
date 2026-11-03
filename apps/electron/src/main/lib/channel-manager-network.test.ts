@@ -202,6 +202,35 @@ describe('F15：严格模型目录与完整分页', () => {
     ])
   })
 
+  test('Given 官方 /models 混入非对话模型 When 拉取 Then 只保留可用于对话的模型', async () => {
+    // Mistral 这类官方目录会同时列出 embedding / OCR / TTS / 转写 / 审核 / 实时语音模型，
+    // 勾选后每次请求都是 400，必须在目录层就滤掉（Google 目录早已只保留 generateContent）。
+    responder = async () => json({
+      object: 'list',
+      data: [
+        { id: 'mistral-large-latest' },
+        { id: 'codestral-latest' },
+        { id: 'mistral-embed' },
+        { id: 'codestral-embed' },
+        { id: 'mistral-ocr-2512' },
+        { id: 'voxtral-mini-tts-latest' },
+        { id: 'voxtral-mini-transcribe-3' },
+        { id: 'mistral-moderation-2603' },
+        { id: 'voxtral-mini-realtime-2602' },
+      ],
+    })
+    const result = await fetchModels(input('custom'))
+    expect(result.success).toBe(true)
+    expect(result.models.map((model) => model.id)).toEqual(['codestral-latest', 'mistral-large-latest'])
+  })
+
+  test('Given 目录里全是非对话模型 When 拉取 Then 回退原始列表而不是变成空目录', async () => {
+    responder = async () => json({ object: 'list', data: [{ id: 'mistral-embed' }, { id: 'mistral-ocr-latest' }] })
+    const result = await fetchModels(input('custom'))
+    expect(result.success).toBe(true)
+    expect(result.models.map((model) => model.id)).toEqual(['mistral-embed', 'mistral-ocr-latest'])
+  })
+
   test('Given Anthropic has_more When 翻页 Then after_id 保留路由并共享 signal、最终去重', async () => {
     responder = async ({ url }) => json(new URL(url).searchParams.has('after_id')
       ? { data: [{ id: 'a' }, { id: 'b', display_name: 'B' }], has_more: false }

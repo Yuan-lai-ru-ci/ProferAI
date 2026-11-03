@@ -116,7 +116,7 @@ describe('P1-5 缺 storageMode 但有 rootPath 的条目', () => {
     expect(entry?.rootPath).toBe(root)
   })
 
-  test('When 删除该工作区 Then 只删索引，不级联删会话、不碰项目目录', () => {
+  test('When 删除该工作区 Then 只删索引，不级联删会话、不碰项目目录', async () => {
     const fixture = makeProject('corrupt-delete', 'id-corrupt')
     const canonicalRoot = realpathSync(fixture.root)
     writeRawIndex([
@@ -124,7 +124,7 @@ describe('P1-5 缺 storageMode 但有 rootPath 的条目', () => {
       { id: 'id-corrupt', name: '损坏项目', slug: 'corrupt', createdAt: 1, updatedAt: 1, type: 'personal', rootPath: canonicalRoot },
     ])
 
-    deleteAgentWorkspace('id-corrupt')
+    await deleteAgentWorkspace('id-corrupt')
 
     // 索引条目消失
     expect(readIndexFile().workspaces.map((workspace) => workspace.id)).toEqual(['id-default'])
@@ -189,7 +189,7 @@ describe('I1：正常 managed 条目的行为逐字不变', () => {
     expect(readIndex().workspaces[0]?.rootPath).toBeUndefined()
   })
 
-  test('无 rootPath 的 managed 条目 When 删除 Then 仍走 managed 分支（删自己的工作区目录）', () => {
+  test('无 rootPath 的 managed 条目 When 删除 Then 仍走 managed 分支（删自己的工作区目录）', async () => {
     const managedDir = join(configRoot, 'agent-workspaces', 'managed-ws')
     mkdirSync(managedDir, { recursive: true })
     writeFileSync(join(managedDir, 'profile.md'), '# profile\n', 'utf-8')
@@ -198,7 +198,7 @@ describe('I1：正常 managed 条目的行为逐字不变', () => {
       { id: 'id-managed', name: '托管', slug: 'managed-ws', createdAt: 1, updatedAt: 1, type: 'personal', storageMode: 'managed' },
     ])
 
-    deleteAgentWorkspace('id-managed')
+    await deleteAgentWorkspace('id-managed')
 
     expect(readIndexFile().workspaces.map((workspace) => workspace.id)).toEqual(['id-default'])
     expect(existsSync(managedDir)).toBe(false)
@@ -224,7 +224,7 @@ describe('P1-残留-2：project 条目丢失 rootPath 时不得静默级联删�
     expect(location.degradedFromProject).toBe(true)
   })
 
-  test('When 删除该工作区 Then 只删索引，会话与消息文件全部保留', () => {
+  test('When 删除该工作区 Then 只删索引，会话与消息文件全部保留', async () => {
     const fixture = makeProject('degraded-delete', 'id-degraded')
     const canonicalRoot = realpathSync(fixture.root)
     writeRawIndex([
@@ -232,7 +232,7 @@ describe('P1-残留-2：project 条目丢失 rootPath 时不得静默级联删�
       { id: 'id-degraded', name: '丢根项目', slug: 'degraded', createdAt: 1, updatedAt: 1, type: 'personal', storageMode: 'project' },
     ])
 
-    deleteAgentWorkspace('id-degraded')
+    await deleteAgentWorkspace('id-degraded')
 
     // 索引条目消失（只删索引）
     expect(readIndexFile().workspaces.map((workspace) => workspace.id)).toEqual(['id-default'])

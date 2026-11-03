@@ -7,6 +7,7 @@
 export * from './contracts'
 export * from './paths'
 export * from './sync-index-store'
+export * from './pi-state-split'
 export * from './message-store'
 export * from './sync-message-store'
 export * from './metadata-store'

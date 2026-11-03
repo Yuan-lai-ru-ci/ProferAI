@@ -913,10 +913,21 @@ export function useLeftSidebar() {
       : new Set<string>()
   ), [agentSessions, mode, pendingDeleteId])
   const pendingDeleteDelegatedChildCount = Math.max(0, pendingDeleteSessionIds.size - 1)
+  /** 删除按钮可能被 Enter + 点击双触发；用 ref 保证一笔删除只提交一次。 */
+  const deleteInFlightRef = React.useRef(false)
 
   /** 确认删除对话 */
   const handleConfirmDelete = async (): Promise<void> => {
-    if (!pendingDeleteId) return
+    if (!pendingDeleteId || deleteInFlightRef.current) return
+    deleteInFlightRef.current = true
+    try {
+      await runConfirmDelete(pendingDeleteId)
+    } finally {
+      deleteInFlightRef.current = false
+    }
+  }
+
+  const runConfirmDelete = async (pendingDeleteId: string): Promise<void> => {
     const deletedSessionIds = mode === 'agent'
       ? collectDelegatedDeletionSessionIds(agentSessions, pendingDeleteId)
       : new Set([pendingDeleteId])
@@ -963,24 +974,25 @@ export function useLeftSidebar() {
     }
 
     if (mode === 'agent') {
+      // 乐观删除：主进程入队即返回，磁盘清理在后台进行；失败再回滚。
+      const targetId = pendingDeleteId
+      removeDeletedClientState()
+      setPendingDeleteId(null)
+      refreshArchivedCounts()
       try {
-        await window.electronAPI.deleteAgentSession(pendingDeleteId)
-        removeDeletedClientState()
-        // 按当前视图刷新确保与后端同步（不捎带归档数据）
-        const sessions = await window.electronAPI.listAgentSessions(viewMode === 'archived')
-        setAgentSessions(sessions)
+        await window.electronAPI.deleteAgentSession(targetId)
+        // 入队完成后再刷一次计数：主进程已按 pending 过滤，避免先刷到旧值。
         refreshArchivedCounts()
       } catch (error) {
         console.error('[侧边栏] 删除 Agent 会话失败:', error)
-        // 树级删除在 stopAndWait 失败时不会删除任何持久化数据；重新拉取以恢复侧栏。
+        toast.error('删除失败，会话已恢复')
         try {
           const sessions = await window.electronAPI.listAgentSessions(viewMode === 'archived')
           setAgentSessions(sessions)
+          refreshArchivedCounts()
         } catch (refreshError) {
           console.error('[侧边栏] 删除失败后刷新 Agent 会话失败:', refreshError)
         }
-      } finally {
-        setPendingDeleteId(null)
       }
       return
     }

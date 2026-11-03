@@ -170,8 +170,11 @@ function collectWorkspaceSearchDirs(configDir: string): string[] {
     const location = resolveWorkspaceLocation(slug)
     if (location.mode === 'project') {
       if (existsSync(location.rootPath)) dirs.push(location.rootPath)
-      const sessionsDir = join(location.runtimeDir, 'sessions')
-      if (existsSync(sessionsDir)) pushChildDirs(sessionsDir)
+      // 会话运行时目录：新布局在项目内 `.profer/sessions`，旧布局在中央 runtimeDir。
+      // 两处都扫，保证迁移期的旧会话文件仍能被预览/相对路径解析找到。
+      for (const sessionsDir of [join(location.configDir, 'sessions'), join(location.runtimeDir, 'sessions')]) {
+        if (existsSync(sessionsDir)) pushChildDirs(sessionsDir)
+      }
       continue
     }
     if (!existsSync(location.configDir)) continue

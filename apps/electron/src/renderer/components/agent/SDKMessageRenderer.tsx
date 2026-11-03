@@ -33,7 +33,7 @@ import { ProcessBlockGroup } from './ProcessBlockGroup'
 import { VisualizationResultInline } from '@/components/visualization/InlineVisualization'
 import { visualizationsAtom } from '@/atoms/visualization-atoms'
 import { visualizationsForTurn } from '@/lib/visualization-projection'
-import { deriveAssistantTurnBlocks, buildAssistantTurnRenderItems, buildCompletedToolResultIds, type StableContentBlock, type AssistantTurnRenderItem } from './render-block-derivation'
+import { deriveAssistantTurnBlocks, buildAssistantTurnRenderItems, buildCompletedToolResultIds, shouldExpandThinkingByDefault, type StableContentBlock, type AssistantTurnRenderItem } from './render-block-derivation'
 import { applyRenderWindow, DEFAULT_RENDER_WINDOW } from './render-window'
 import { useProcessFoldGate } from './process-fold-gate'
 import { FoldedSegmentsRegion } from './FoldedSegmentsRegion'
@@ -869,24 +869,15 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
 
   // 检测是否有主要内容（text 块），用于决定 tool/thinking 是否 dimmed
   const hasTextContent = topLevelBlocks.some(
-    (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text
+    (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text?.trim()
   )
 
-  // 本轮只有思考、没有任何正常正文（empty_output 的合成错误消息不算正文）：
-  // 把思考块默认展开并换标题，否则用户只看到 4 行「思考摘要」加一句「未生成回复」。
-  const expandThinkingByDefault = React.useMemo(() => {
-    const hasThinking = topLevelBlocks.some(
-      (b) => b.type === 'thinking' && !!(b as { thinking?: string }).thinking
-    )
-    if (!hasThinking) return false
-    return !turn.turnMessages.some((m) => {
-      if (m.type !== 'assistant') return false
-      if (typeof (m as { _errorCode?: string })._errorCode === 'string') return false
-      const content = (m as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content
-      return Array.isArray(content)
-        && content.some((b) => b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0)
-    })
-  }, [topLevelBlocks, turn.turnMessages])
+  // 本轮唯一可见产出就是思考（既没正文也没工具调用）时把思考块默认展开。
+  // 纯工具轮次也有思考块，但那不是空回合，不应强行摊开。
+  const expandThinkingByDefault = React.useMemo(
+    () => shouldExpandThinkingByDefault(topLevelBlocks, turn.turnMessages),
+    [topLevelBlocks, turn.turnMessages],
+  )
 
   // Task 聚合数据（useMemo 防止每次渲染重算）
   const { taskActivities, firstTaskIndex } = React.useMemo(() => {
@@ -901,9 +892,10 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
   const renderItems = React.useMemo(() => {
     const items: AssistantTurnRenderItem<StableContentBlock>[] = buildAssistantTurnRenderItems(topLevelItems, {
       isStreaming, completedToolResultIds, imageOutputsByToolUseId, showThinking,
+      promoteThinkingAsReply: expandThinkingByDefault,
     })
     return [...items, ...turnVisualizations.map((record) => ({ type: 'visualization' as const, record, identity: `visualization:${record.id}` }))]
-  }, [topLevelItems, isStreaming, completedToolResultIds, imageOutputsByToolUseId, showThinking, turnVisualizations])
+  }, [topLevelItems, isStreaming, completedToolResultIds, imageOutputsByToolUseId, showThinking, expandThinkingByDefault, turnVisualizations])
   // 渲染窗口：过程与回复各自取尾部窗口，避免过程把回复挤出可视范围。
   // 展开/收起状态属于 turn；裁剪与分组保留已派生的稳定块身份。
   //
@@ -951,6 +943,9 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
 
   // 如果没有任何内容
   if (enrichedBlocks.length === 0 && turnVisualizations.length === 0 && !hasError) return null
+  // 块都在但全部不可渲染（典型：只剩空白思考、或被过滤掉的 goal 更新工具）时，
+  // 不再挂一个「头像 + 时间 + 空内容」的空壳消息。流式中不早退，避免首帧闪烁。
+  if (!isStreaming && renderItems.length === 0 && turnVisualizations.length === 0 && !hasError) return null
 
   const renderTopLevelBlock = (item: StableContentBlock): React.ReactNode => {
     const { block, index: i, identity } = item

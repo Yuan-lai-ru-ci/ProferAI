@@ -132,15 +132,15 @@ describe('project：cwd 共享项目根（设计 §7.1 / §7.3）', () => {
     expect(resolveAgentSessionCwd(SLUG, SESSION_B)).toBe(rootPath)
   })
 
-  test('Given project When 取 storageDir Then 在中央目录、≠ cwd、不在项目内', () => {
+  test('Given project When 取 storageDir Then 在项目内 .profer/sessions、≠ cwd', () => {
     const rootPath = writeProjectIndex()
     const cwd = getAgentSessionCwd(SLUG, SESSION_A)
     const storageDir = getAgentSessionStorageDir(SLUG, SESSION_A)
 
-    expect(storageDir).toBe(join(configRoot, 'agent-workspaces', SLUG, 'sessions', SESSION_A))
+    expect(storageDir).toBe(join(rootPath, '.profer', 'sessions', SESSION_A))
     expect(storageDir).not.toBe(rootPath)
     expect(storageDir).not.toBe(cwd)
-    expect(storageDir.startsWith(rootPath)).toBe(false)
+    expect(storageDir.startsWith(join(rootPath, '.profer', 'sessions'))).toBe(true)
     // 每个会话仍有独立存储目录（附件 / 检查点互不串线）
     expect(getAgentSessionStorageDir(SLUG, SESSION_B)).not.toBe(storageDir)
   })

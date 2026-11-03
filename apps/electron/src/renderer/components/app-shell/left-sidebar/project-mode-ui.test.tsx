@@ -56,6 +56,7 @@ function createDeps(overrides: Partial<ProjectPickerDeps> = {}): {
     createProjectWorkspace: async () => openResult(projectWorkspace()),
     openProjectWorkspace: async () => openResult(projectWorkspace()),
     checkPathsType: async () => ({ directories: [], files: [] }),
+    relocateProjectWorkspace: async () => openResult(projectWorkspace()),
     removeProjectWorkspace: async () => {},
     ...overrides,
   }
@@ -79,6 +80,10 @@ function createDeps(overrides: Partial<ProjectPickerDeps> = {}): {
     removeProjectWorkspace: async (id) => {
       calls.push(`remove:${id}`)
       return raw.removeProjectWorkspace(id)
+    },
+    relocateProjectWorkspace: async (input) => {
+      calls.push(`relocate:${input.id}:${input.rootPath}`)
+      return raw.relocateProjectWorkspace(input)
     },
   }
   return { deps, calls }
@@ -188,25 +193,26 @@ describe('打开已有项目分支', () => {
 })
 
 describe('重新定位失效项目', () => {
-  test('Given 新目录绑定成功 When 重新定位 Then 先建立新绑定再移除旧索引', async () => {
-    const relocated = projectWorkspace({ id: 'ws-new', rootPath: '/Users/mac/code/demo-app-moved' })
+  test('Given 新目录绑定成功 When 重新定位 Then 保留旧 id 只换 rootPath，不再新建+删旧', async () => {
+    const relocated = projectWorkspace({ id: 'ws-project', rootPath: '/Users/mac/code/demo-app-moved' })
     const { deps, calls } = createDeps({
-      openProjectWorkspace: async () => openResult(relocated),
+      relocateProjectWorkspace: async () => openResult(relocated, { created: false }),
     })
 
     const outcome = await relocateProjectFromPicker(deps, { id: 'ws-project', name: 'demo-app' })
 
     expect(outcome.kind).toBe('opened')
-    expect(calls).toContain('open:/Users/mac/code/demo-app')
-    expect(calls).toContain('remove:ws-project')
-    expect(calls.indexOf('open:/Users/mac/code/demo-app')).toBeLessThan(calls.indexOf('remove:ws-project'))
+    expect(calls).toContain('relocate:ws-project:/Users/mac/code/demo-app')
+    expect(calls.some((call) => call.startsWith('open:'))).toBe(false)
+    expect(calls.some((call) => call.startsWith('remove:'))).toBe(false)
   })
 
-  test('Given 选回同一路径 When 重新定位 Then 不重复移除当前绑定', async () => {
+  test('Given 选回同一路径 When 重新定位 Then 幂等更新绑定，不重复移除', async () => {
     const { deps, calls } = createDeps()
 
     await relocateProjectFromPicker(deps, { id: 'ws-project', name: 'demo-app' })
 
+    expect(calls).toContain('relocate:ws-project:/Users/mac/code/demo-app')
     expect(calls.some((call) => call.startsWith('remove:'))).toBe(false)
   })
 

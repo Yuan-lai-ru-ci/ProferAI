@@ -39,7 +39,7 @@
     },
     "apps/electron": {
       "name": "@profer/electron",
-      "version": "0.16.17",
+      "version": "0.16.19",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.316",
         "@anthropic-ai/sdk": "^0.93.0",
@@ -198,7 +198,7 @@
     },
     "packages/agent-provider-pi": {
       "name": "@profer/agent-provider-pi",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "dependencies": {
         "@profer/agent-runtime": "workspace:*",
         "@profer/core": "workspace:*",
@@ -228,7 +228,7 @@
     },
     "packages/core": {
       "name": "@profer/core",
-      "version": "0.2.12",
+      "version": "0.2.13",
       "dependencies": {
         "@profer/shared": "workspace:*",
         "highlight.js": "^11.11.1",
@@ -293,7 +293,7 @@
     },
     "packages/session-store": {
       "name": "@profer/session-store",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@profer/agent-runtime": "workspace:*",
         "@profer/project-core": "workspace:*",
@@ -306,7 +306,7 @@
     },
     "packages/shared": {
       "name": "@profer/shared",
-      "version": "0.1.47",
+      "version": "0.1.48",
       "dependencies": {
         "@profer/agent-fabric": "workspace:*",
       },

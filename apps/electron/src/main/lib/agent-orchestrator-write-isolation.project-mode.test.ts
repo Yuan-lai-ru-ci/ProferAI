@@ -123,7 +123,8 @@ function snapshotTree(root: string): string[] {
     }
   }
   walk(root)
-  return entries.sort()
+  // 会话运行时数据现在位于 `.profer/sessions`，属于工作区资产；这里断言的是「用户项目文件零污染」。
+  return entries.filter((entry) => !entry.startsWith('.profer/sessions')).sort()
 }
 
 /** 最小合法 PNG（只有签名 + 少量字节，足够 detectAgentImage 判定）。 */
@@ -143,7 +144,7 @@ describe('project：一轮写入后 rootPath 零污染', () => {
 
     const meta = createAgentSession('project session', undefined, 'id-p1', undefined, 'claude', false)
     const layout = resolveAgentSessionWriteLayout('p1', meta.id)
-    expect(layout.storageDir.startsWith(root)).toBe(false)
+    expect(layout.storageDir.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
 
     // 1) orchestrator 9.5：SDK settings（含 autoMemoryDirectory）
     const settings = ensureAgentSessionSdkSettings({

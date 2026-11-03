@@ -319,17 +319,11 @@ function compilePiReasoningCapabilities(
  */
 export function normalizePiApi(provider: ProviderType, baseUrl?: string): Api {
   // 协议判定整体收口到 shared 的 resolveProviderNativeProtocol（单一事实源）：
-  // 静态归属来自能力描述符，deepseek/ollama 的端点形态嗅探也在那里完成。
+  // 静态归属来自能力描述符，deepseek/ollama 的端点形态嗅探、官方厂商端点（Mistral /
+  // Anthropic / Google）的原生协议切换都在那里完成。
   // DeepSeek 第三方网关若误判为 Anthropic，Agent 会发送 `/v1/messages` 而完全不可用，
   // 而 Chat 走 OpenAI 适配器却正常——协议必须跟随配置的端点，而不是写死 provider。
-  const native = resolveProviderNativeProtocol(provider, baseUrl)
-  // 官方 Mistral 的 OpenAI 兼容层有两处无法在 openai-completions 适配器里消化的硬差异：
-  // 1) 请求体做 extra_forbidden 校验（store / stream_options / max_completion_tokens → 422）；
-  // 2) 流式 delta.content 可能是内容块数组（text / thinking），按字符串拼接会变成
-  //    `[object Object]`，把整段思考内容当正文渲染。
-  // Pi 自带 mistral-conversations 适配器按官方协议处理这两点，官方端点直接切过去。
-  if (native === 'openai-completions' && isOfficialMistralEndpoint(baseUrl)) return 'mistral-conversations'
-  return native
+  return resolveProviderNativeProtocol(provider, baseUrl)
 }
 
 function candidatePiProviders(provider: ProviderType): KnownProvider[] {
@@ -469,18 +463,6 @@ function applyOpenAICompatibleFinishReasonFallback(
   return { ...(compat ?? {}), supportsFinishReason: false } as PiModelDefaults['compat']
 }
 
-/** 是否官方 Mistral 端点（含 .mistral.ai 子域）；第三方中转不适用其严格协议差异。 */
-function isOfficialMistralEndpoint(baseUrl?: string): boolean {
-  const raw = baseUrl?.trim()
-  if (!raw) return false
-  try {
-    const host = new URL(raw).hostname.toLowerCase()
-    return host === 'api.mistral.ai' || host.endsWith('.mistral.ai')
-  } catch {
-    return /(^|\/\/)([^/]*\.)?mistral\.ai([:/]|$)/i.test(raw)
-  }
-}
-
 async function resolvePiModelDefaults(
   input: PiModelRegistryInput,
   explicit1MContext = false,
@@ -531,9 +513,17 @@ async function resolvePiModelDefaults(
       : rawCatalogContextWindow
   // 渠道模型上的 1M 勾选最后统一生效（强开抬到 1M、强关压回保守窗口）。
   const contextWindow = applyModel1MContextPreference(computedContextWindow, input.context1m)
+  // 官方 Mistral 的推理开关是模型/账号维度的能力（prompt_mode / reasoning_effort），
+  // 未开通时直接 400（`Reasoning prompt mode is not enabled for this model`，code 3051）。
+  // 同一个渠道里还可能启用 deepseek / glm 等第三方模型 id，它们从共享 catalog 拿到的
+  // reasoning 标记在 Mistral 网关上没有意义，却会让 SDK 发出 prompt_mode。
+  // 因此官方端点一律不声明推理能力：模型自己流式返回的 thinking 内容仍会被解析并展示。
+  const mistralNative = api === 'mistral-conversations'
   return {
-    reasoning: modelMetadata?.reasoning ?? true,
-    thinkingLevelMap: providerSpecificCapabilities?.thinkingLevelMap ?? modelMetadata?.thinkingLevelMap,
+    reasoning: mistralNative ? false : (modelMetadata?.reasoning ?? true),
+    thinkingLevelMap: mistralNative
+      ? undefined
+      : (providerSpecificCapabilities?.thinkingLevelMap ?? modelMetadata?.thinkingLevelMap),
     compat: applyOpenAICompatibleFinishReasonFallback(
       input,
       api,

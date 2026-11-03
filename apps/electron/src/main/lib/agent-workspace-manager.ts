@@ -7,6 +7,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs'
+import { rm as rmAsync } from 'node:fs/promises'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
 import { listGlobalSkills, setGlobalSkillEnabled, copySkillDirectorySafely, createUserGlobalSkill, LEDGER_FILENAMES } from './global-skill-manager'
@@ -488,7 +489,10 @@ export function updateAgentWorkspace(
 }
 
 /** 删除工作区索引条目及其本地目录 */
-export function deleteAgentWorkspace(id: string): void {
+export async function deleteAgentWorkspace(
+  id: string,
+  options: { cascadeSessions?: boolean } = {},
+): Promise<void> {
   const index = readIndex()
   const idx = index.workspaces.findIndex((w) => w.id === id)
 
@@ -508,8 +512,8 @@ export function deleteAgentWorkspace(id: string): void {
   // 必须在任何级联清理与工作区派生路径计算之前分流：
   //   - 不调 deleteAgentSessionsByWorkspace（会话记录保留，仍可按 sessionId 访问）
   //   - 不 rmSync / renameSync / mkdirSync（rootPath 与 <rootPath>/.profer 都不碰）
-  // 降级条目（project 但 rootPath 丢失）同样只删索引：会话数据在中央 runtimeDir，
-  // 按 managed 级联会真删掉用户的项目会话历史（P1-残留-2）。
+  // 降级条目（project 但 rootPath 丢失）同样只删索引：旧布局会话数据在中央 runtimeDir，
+  // 新布局已随项目不可达；按 managed 级联会真删掉用户的项目会话历史（P1-残留-2）。
   if (target.storageMode === 'project' || target.degradedFromProject === true) {
     if (target.degradedFromProject === true) {
       console.warn(
@@ -537,7 +541,8 @@ export function deleteAgentWorkspace(id: string): void {
   // 归纳成“幽灵项目”显示（electronapi-stub 的 list_workspaces 回退路径）。
   // 注意：必须在移除索引条目之前执行，deleteAgentSession 需要依赖工作区解析 session 工作目录。
   try {
-    deleteAgentSessionsByWorkspace(id)
+    // 调用方已把会话交给删除队列时传 cascadeSessions: false，避免重复遍历。
+    if (options.cascadeSessions !== false) await deleteAgentSessionsByWorkspace(id)
   } catch (error) {
     console.warn(`[Agent 工作区] 级联清理会话失败 (${target.slug}):`, error)
   }
@@ -552,7 +557,7 @@ export function deleteAgentWorkspace(id: string): void {
 
   if (existsSync(workspaceDir)) {
     try {
-      rmSync(workspaceDir, { recursive: true, force: true })
+      await rmAsync(workspaceDir, { recursive: true, force: true })
       console.log(`[Agent 工作区] 已删除工作区目录: ${workspaceDir}`)
     } catch (error) {
       console.warn(`[Agent 工作区] 删除工作区目录失败，已残留无引用目录 (${target.slug}):`, error)
@@ -579,10 +584,19 @@ const PROJECT_PRESETS_CONFIG = {
   disabledGlobalPresetIds: [] as string[],
   disabledWorkspacePresetIds: [] as string[],
 }
-/** `.profer/.gitignore`：会话、缓存、产物区与本机覆盖层都不提交。 */
-const PROJECT_GITIGNORE_CONTENT = ['sessions/', 'cache/', 'workspace-files/', '*.local.json', '.lock', ''].join('\n')
+/** `.profer/.gitignore`：会话、缓存、运行时投影与本机覆盖层都不提交。 */
+const PROJECT_GITIGNORE_LINES = [
+  'sessions/',
+  'cache/',
+  'workspace-files/',
+  '.runtime/',
+  'skill-overrides.json',
+  '*.local.json',
+  '.lock',
+]
+const PROJECT_GITIGNORE_CONTENT = [...PROJECT_GITIGNORE_LINES, ''].join('\n')
 /** 骨架目录（相对 `.profer/`）；`profer.json` 单独处理，已存在时不覆盖。 */
-const PROJECT_SKELETON_DIRS = ['memory', 'skills', 'skills-inactive', 'workspace-files'] as const
+const PROJECT_SKELETON_DIRS = ['sessions', 'memory', 'skills', 'skills-inactive', 'workspace-files'] as const
 
 /**
  * 项目工作区生命周期错误。
@@ -737,6 +751,25 @@ function rollbackCreatedProjectPaths(createdPaths: string[]): void {
   }
 }
 
+/**
+ * 补齐 `.profer/.gitignore` 的默认条目（旧项目增量迁移）。
+ *
+ * 只追加缺失行，保留用户已有内容与顺序；文件不存在时由骨架整体写入。
+ * 只读项目补不了 ignore 不影响使用，不能让打开流程失败。
+ */
+function mergeProjectGitignore(filePath: string): void {
+  try {
+    const existing = readFileSync(filePath, 'utf-8')
+    const present = new Set(existing.split(/\r?\n/u).map((line) => line.trim()))
+    const missing = PROJECT_GITIGNORE_LINES.filter((line) => !present.has(line))
+    if (missing.length === 0) return
+    const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
+    writeFileSync(filePath, `${existing}${separator}${missing.join('\n')}\n`, 'utf-8')
+  } catch {
+    // 只读 / 权限受限：忽略
+  }
+}
+
 function buildProjectSkeletonFiles(name: string, includePresets: boolean): Array<{ relativePath: string; content: string }> {
   const files: Array<{ relativePath: string; content: string }> = [
     { relativePath: 'profile.md', content: `# ${name}\n\n项目资料与工作方式约定；Agent 会自动读取本文件。\n` },
@@ -794,7 +827,11 @@ function materializeProjectSkeleton(configDir: string, options: MaterializeProje
 
     for (const file of buildProjectSkeletonFiles(options.name, !hasLegacyPresets)) {
       const filePath = join(configDir, file.relativePath)
-      if (existsSync(filePath)) continue
+      if (existsSync(filePath)) {
+        // 旧项目增量补齐：只追加缺失的 ignore 行，不覆盖用户已有内容。
+        if (file.relativePath === '.gitignore') mergeProjectGitignore(filePath)
+        continue
+      }
       writeFileSync(filePath, file.content, 'utf-8')
       createdPaths.push(filePath)
     }
@@ -958,6 +995,70 @@ function removeProjectIndexEntry(index: AgentWorkspacesIndex, target: AgentWorks
 }
 
 /**
+ * 重新定位项目工作区：保留 id / slug，只把 rootPath 换成新目录。
+ *
+ * 为什么不走「open 新目录 + remove 旧索引」：那会换掉工作区 id，
+ * 会话 / 定时任务 / Todo / 子会话全部指向旧 id，重新定位后集体失效。
+ * 项目数据（含 `.profer/sessions`）通常已随文件夹移动到新路径，
+ * 这里只需要把绑定指过去，不搬任何会话文件。
+ */
+export function relocateProjectWorkspace(input: { id: string; rootPath: string; proferVersion?: string }): ProjectWorkspaceOpenResult {
+  const canonicalRoot = resolveProjectRootPath(input?.rootPath)
+  const index = readIndex()
+  const target = index.workspaces.find((workspace) => workspace.id === input?.id)
+  if (!target) {
+    throw new ProjectWorkspaceError('workspace-not-found', `项目工作区不存在：${input?.id}`)
+  }
+  if (target.storageMode !== 'project' && target.degradedFromProject !== true) {
+    throw new ProjectWorkspaceError('not-a-project-workspace', `「${target.name}」不是项目模式工作区，不能重新定位`)
+  }
+  const conflict = findProjectWorkspaceByRootPath(index, canonicalRoot)
+  if (conflict && conflict.id !== target.id) {
+    throw new ProjectWorkspaceError('already-bound', `该目录已绑定为项目「${conflict.name}」，不能重复绑定：${canonicalRoot}`)
+  }
+
+  const configDir = join(canonicalRoot, PROJECT_CONFIG_DIR_NAME)
+  const manifestPath = join(configDir, PROJECT_MANIFEST_FILE)
+  const existingManifest = readProjectManifest(manifestPath)
+  const warnings: string[] = []
+  let writeManifest = true
+  if (existingManifest && !isCurrentManifestSchema(existingManifest.schema)) {
+    writeManifest = false
+    warnings.push(isFutureManifestSchema(existingManifest.schema)
+      ? `项目清单 schema 版本较新（${String(existingManifest.schema)}），已只读打开，未改写 profer.json；请升级 Profer`
+      : `项目清单 schema 无法识别（${String(existingManifest.schema)}），已只读打开，未改写 profer.json`)
+  }
+  const manifestName = typeof existingManifest?.name === 'string' ? existingManifest.name.trim() : ''
+  const resolvedName = manifestName || target.name
+  const proferVersion = typeof input?.proferVersion === 'string' && input.proferVersion.trim().length > 0
+    ? input.proferVersion.trim()
+    : 'unknown'
+
+  try {
+    materializeProjectSkeleton(configDir, { name: resolvedName, proferVersion, writeManifest })
+  } catch (error) {
+    if (error instanceof ProjectWorkspaceError) throw error
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
+      throw new ProjectWorkspaceError('path-not-writable', `项目目录不可写，无法补齐 .profer 骨架：${configDir}`)
+    }
+    throw error
+  }
+
+  const previousRoot = target.rootPath
+  target.rootPath = canonicalRoot
+  target.storageMode = 'project'
+  target.name = resolvedName
+  delete target.degradedFromProject
+  target.updatedAt = Date.now()
+  writeIndex(index)
+  invalidateWorkspaceLocation(target.slug)
+
+  console.log(`[Agent 工作区] 已重新定位项目工作区（保留 id/slug）: ${target.name} ${previousRoot ?? '(无)'} → ${canonicalRoot}`)
+  return { workspace: target, created: false, warnings }
+}
+
+/**
  * 移除项目工作区（设计 §6.3）。
  *
  * 项目是外部资产，允许移除最后一个 project（managed 的「至少保留一个」规则不适用）。
@@ -973,6 +1074,23 @@ export function removeProjectWorkspace(id: string): void {
     throw new ProjectWorkspaceError('not-a-project-workspace', `「${target.name}」不是项目模式工作区，不能按项目移除`)
   }
   removeProjectIndexEntry(index, target, 'remove')
+}
+
+/**
+ * 启动时补齐所有 project 工作区的 `.profer/.gitignore`（幂等）。
+ *
+ * 已绑定的旧项目不会重新走 `openProjectWorkspace`，必须单独补；
+ * 只在文件已存在时追加缺失行，不在启动路径凭空造骨架，也不因只读项目失败。
+ */
+export function ensureProjectWorkspaceGitignores(): void {
+  for (const workspace of listAgentWorkspaces()) {
+    if (workspace.storageMode !== 'project') continue
+    const location = resolveWorkspaceLocation(workspace.slug)
+    if (location.mode !== 'project') continue
+    const gitignorePath = join(location.configDir, '.gitignore')
+    if (!existsSync(gitignorePath)) continue
+    mergeProjectGitignore(gitignorePath)
+  }
 }
 
 /** 确保默认工作区存在，首次启动时自动创建（slug: default） */

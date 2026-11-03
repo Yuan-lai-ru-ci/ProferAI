@@ -800,7 +800,7 @@ describe('一致性', () => {
 // ===== 9. 删除 =====
 
 describe('删除', () => {
-  test('删除 managed 工作区会带走自己的记忆，不影响其他工作区', () => {
+  test('删除 managed 工作区会带走自己的记忆，不影响其他工作区', async () => {
     const a = makeWorkspace('Delete A')
     const b = makeWorkspace('Delete B')
     writeWorkspaceAutoMemoryFile(a.slug, 'MEMORY.md', '# A\n')
@@ -808,7 +808,7 @@ describe('删除', () => {
     const dirA = getWorkspaceAutoMemoryDir(a.slug)
     const dirB = getWorkspaceAutoMemoryDir(b.slug)
 
-    deleteAgentWorkspace(a.id)
+    await deleteAgentWorkspace(a.id)
 
     expect(existsSync(dirA)).toBe(false)
     expect(readFileSync(join(dirB, 'MEMORY.md'), 'utf-8')).toBe('# B\n')
@@ -828,12 +828,12 @@ describe('删除', () => {
     expect(index.workspaces.some((entry) => entry.slug === 'proj-del')).toBe(false)
   })
 
-  test('删除会话不影响工作区记忆', () => {
+  test('删除会话不影响工作区记忆', async () => {
     const ws = makeWorkspace('Delete Session')
     writeWorkspaceAutoMemoryFile(ws.slug, 'MEMORY.md', '# 会话无关\n')
     const session = createAgentSession('待删会话', undefined, ws.id)
 
-    deleteAgentSession(session.id)
+    await deleteAgentSession(session.id)
 
     expect(readWorkspaceAutoMemoryFile(ws.slug, 'MEMORY.md').content).toBe('# 会话无关\n')
     expect(listWorkspaceAutoMemoryFiles(ws.slug).some((n) => n.relativePath === 'MEMORY.md')).toBe(true)

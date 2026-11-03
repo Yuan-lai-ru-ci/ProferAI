@@ -196,7 +196,7 @@ describe('旧链 project：skin 参考图能读 storageDir 里的生成图', () 
       allowedRoots: [],
     }, 'generated-image-skinref.png')
     expect(generated.image.localPath.startsWith(realpathSync(layout.imageOutputDir))).toBe(true)
-    expect(generated.image.localPath.startsWith(root)).toBe(false)
+    expect(generated.image.localPath.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
 
     const attachedDirectories: string[] = []
     const productArtifactDirectories: string[] = []
@@ -230,28 +230,26 @@ describe('旧链 project：skin 参考图能读 storageDir 里的生成图', () 
     expect(existsSync(join(root, '.context'))).toBe(false)
   })
 
-  test('Given 旧行为（不给 storageDir）When 用 storageDir 里的生成图做皮肤 Then 判越权', async () => {
+  test('Given 项目外的生成图 When 不传 storageDir 做皮肤 Then 判越权', async () => {
     const root = makeProject('legacy-skin-negative')
     writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
     const meta = createAgentSession('legacy skin negative', undefined, 'id-p1', undefined, 'claude', false)
     ensureAgentSessionWriteLayout('p1', meta.id)
-    const layout = resolveAgentSessionWriteLayout('p1', meta.id)
     const agentCwd = resolveAgentSessionCwd('p1', meta.id)
 
-    const generated = await writeAgentImageOutput(pngBytes(), 'image/png', {
-      agentCwd,
-      storageDir: layout.storageDir,
-      allowedRoots: [],
-    }, 'generated-image-outside.png')
+    // 会话数据现在在项目内，项目根授权已覆盖 storageDir；
+    // 用项目外的图片验证授权边界仍然生效。
+    const outsideImage = join(sandbox, 'outside-image.png')
+    writeFileSync(outsideImage, pngBytes())
 
     const { result } = await runLegacyCreateSkin({
       context: {
         agentCwd,
-        // 刻意省略 storageDir：这是改造前的旧链参数，必须复现越权。
+        // 刻意省略 storageDir：这是改造前的旧链参数
         allowedRoots: [agentCwd],
         workspaceSlug: 'p1',
       },
-      wallpaperPath: generated.image.localPath,
+      wallpaperPath: outsideImage,
     })
     expect(result.isError).toBe(true)
     expect(result.content[0]!.text).toContain('不在当前会话或用户已授权目录内')

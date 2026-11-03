@@ -104,6 +104,7 @@ test('桌面与 headless 的内核不匹配拒绝不广播假终态，也不清�
   const source = `${activeSessionHelpersSource}\n${unreadPolicyHelpersSource}\n${headlessGateSource}\n${serviceSlice('runAgentHeadless', 'export async function runAgentHeadless(', '// headless run 的渲染进程 completion')}`
   const headless = compile<(input: AgentSendInput, callbacks: { onError: () => void; onComplete: () => void; onTitleUpdated: () => void }) => Promise<void>>(source, 'runAgentHeadless', {
     getMainRendererWebContents: () => undefined,
+    getSessionWebContents: () => null,
     normalizeHeadlessSendInput,
     resolveRunInitiator,
     orchestrator: { isActive: () => true, sendMessage: async () => { throw new AgentSessionRuntimeMismatchError('pi', 'claude') } },

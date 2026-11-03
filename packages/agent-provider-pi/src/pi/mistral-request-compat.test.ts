@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { stream } from '@earendil-works/pi-ai/compat'
+import { stream, streamSimple } from '@earendil-works/pi-ai/compat'
 import type { CreateModelRuntimeOptions } from '@earendil-works/pi-coding-agent'
 import { buildModel, normalizePiApi } from './model-registry'
 
@@ -33,14 +33,14 @@ function fakeSdk() {
   return { sdk, models }
 }
 
-async function registerCustomModel(baseUrl: string) {
+async function registerCustomModel(baseUrl: string, modelId = 'mistral-large-latest') {
   const fixture = fakeSdk()
   await buildModel(fixture.sdk, {
     sessionId: 'fixture-mistral',
     apiKey: 'fixture-key',
     provider: 'custom',
     baseUrl,
-    model: 'mistral-large-latest',
+    model: modelId,
   })
   const registered = fixture.models.at(-1)!
   return { ...registered, provider: 'profer-custom-fixture' } as Parameters<typeof stream>[0]
@@ -57,6 +57,8 @@ const mistralChunkedSse = [
 async function runStream(
   model: Parameters<typeof stream>[0],
   sse: unknown[],
+  streamFn: typeof stream = stream,
+  extraOptions: Record<string, unknown> = {},
 ): Promise<{ request: CapturedRequest; message: { content: Array<Record<string, unknown>> } }> {
   const requests: CapturedRequest[] = []
   const fixtureFetch = (async (url: unknown, init?: RequestInit) => {
@@ -64,12 +66,12 @@ async function runStream(
     const payload = sse.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n'
     return new Response(payload, { status: 200, headers: { 'content-type': 'text/event-stream' } })
   }) as typeof fetch
-  const events = stream(model, {
+  const events = streamFn(model, {
     messages: [
       { role: 'system', content: 'fixture system', timestamp: Date.now() },
       { role: 'user', content: 'hi', timestamp: Date.now() },
     ],
-  } as never, { apiKey: 'fixture-key', fetch: fixtureFetch, maxTokens: 256 } as never)
+  } as never, { apiKey: 'fixture-key', fetch: fixtureFetch, maxTokens: 256, ...extraOptions } as never)
   let message: { content: Array<Record<string, unknown>> } | undefined
   for await (const event of events as AsyncIterable<{
     type: string
@@ -124,6 +126,16 @@ describe('官方 Mistral 端点使用原生 mistral-conversations 协议', () =>
     expect(toolCall?.id).toBe('abc123456')
   })
 
+  test('Given 渠道启用了非 Mistral 模型 id 且会话带思考档位 When 请求 Then 不发 prompt_mode / reasoning_effort', async () => {
+    // 同一个 Mistral 渠道里可能启用 deepseek / glm 等模型 id，它们从共享 catalog 拿到的
+    // reasoning 标记在 Mistral 网关上无效，发 prompt_mode 会直接 400（code 3051）。
+    const model = await registerCustomModel('https://api.mistral.ai/v1', 'deepseek-v4-1-flash-1017')
+    expect(model.reasoning).toBe(false)
+    const { request } = await runStream(model, mistralChunkedSse, streamSimple as typeof stream, { reasoning: 'medium' })
+    expect(request.body.prompt_mode).toBeUndefined()
+    expect(request.body.reasoning_effort).toBeUndefined()
+  })
+
   test('Given 自建 OpenAI 兼容网关 When 发起请求 Then 仍走 openai-completions', async () => {
     expect(normalizePiApi('custom', 'https://gateway.invalid/v1')).toBe('openai-completions')
 
@@ -134,5 +146,23 @@ describe('官方 Mistral 端点使用原生 mistral-conversations 协议', () =>
     const { request } = await runStream(model, mistralChunkedSse)
     expect(request.body.stream_options).toEqual({ include_usage: true })
     expect(request.body.max_completion_tokens).toBe(256)
+  })
+
+  test('Given 中转站域名里带 mistral 字样 When 发起请求 Then 仍走 openai-completions 且路径不被改写', async () => {
+    // 域名表只能做「精确命中官方 host」的加法，不能把含关键词的中转域名一并吞掉：
+    // 中转站往往只实现 OpenAI 兼容层，误切到原生协议会直接断掉连通性。
+    for (const relay of [
+      'https://mistral-relay.example.com/v1',
+      'https://api.mistral.ai.proxy.example.com/v1',
+      'https://mistral.example.com/v1',
+    ]) {
+      expect(normalizePiApi('custom', relay)).toBe('openai-completions')
+      const model = await registerCustomModel(relay)
+      expect(model.api).toBe('openai-completions')
+      expect(model.baseUrl).toBe(relay)
+      const { request } = await runStream(model, mistralChunkedSse)
+      expect(request.url).toBe(`${relay}/chat/completions`)
+      expect(request.body.stream_options).toEqual({ include_usage: true })
+    }
   })
 })

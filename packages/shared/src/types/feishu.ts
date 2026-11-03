@@ -103,6 +103,13 @@ export interface FeishuBridgeState {
   connectedAt?: number
   /** 错误信息 */
   errorMessage?: string
+  /**
+   * 非致命但会导致收发异常的告警（如飞书拒绝签发访问凭证 21001）。
+   *
+   * 与 `errorMessage` 分开：长连接可能仍然正常（入站收得到），但出站全部失败，
+   * 状态不能简单置为 error，否则会误导用户以为 Bot 完全没连上。
+   */
+  warningMessage?: string
   /** 当前活跃的聊天绑定数量 */
   activeBindings: number
 }

@@ -22,6 +22,7 @@ import type {
   FetchModelsInput,
   FetchModelsResult,
   ProviderType,
+  XaiApiProtocol,
   XaiOAuthCredentials,
 } from '@profer/shared'
 import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_URLS, extractZhipuCodingTeamApiToken, isChannelEnabledForAnyRuntime, isCodexCredentialExpired, isLocalOllamaBaseUrl, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, resolveProviderNativeProtocol, resolveXaiCredentialMode, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
@@ -145,6 +146,31 @@ function resolveChatAdapterKind(provider: ProviderType): ChatAdapterKind {
   if (provider === 'ollama') return 'ollama'
   if (provider === 'google') return 'google'
   return PROVIDER_CAPABILITIES[provider].chatProtocol === 'anthropic' ? 'anthropic' : 'openai'
+}
+
+/**
+ * 连接测试的分派：先看 provider 静态归属，再看运行时真正会用的协议。
+ *
+ * 官方厂商端点（api.anthropic.com / generativelanguage.googleapis.com）虽然挂在
+ * custom 渠道上，运行时已按原生协议发请求（见 shared 的 resolveOfficialVendorProtocol），
+ * 测试必须跟同一份判定，否则会出现「测试连接 404、Agent 却能用」的错觉。
+ * Mistral 不在此列：它的原生协议与 OpenAI 路径是同一个 URL，仍走 OpenAI 探活。
+ */
+function resolveTestAdapterKind(
+  provider: ProviderType,
+  baseUrl: string,
+  apiProtocol?: XaiApiProtocol,
+): ChatAdapterKind {
+  const kind = resolveChatAdapterKind(provider)
+  if (kind !== 'openai') return kind
+  switch (resolveProviderNativeProtocol(provider, baseUrl, apiProtocol)) {
+    case 'anthropic-messages':
+      return 'anthropic'
+    case 'google-generative-ai':
+      return 'google'
+    default:
+      return kind
+  }
 }
 
 /**
@@ -1049,7 +1075,9 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
 
   try {
     // ollama 无独立测试实现，沿用 Anthropic 兼容测试（与原 switch 一致）。
-    const adapterKind = channel.provider === 'ollama' ? 'anthropic' : resolveChatAdapterKind(channel.provider)
+    const adapterKind = channel.provider === 'ollama'
+      ? 'anthropic'
+      : resolveTestAdapterKind(channel.provider, channel.baseUrl, channel.apiProtocol)
     switch (adapterKind) {
       case 'anthropic':
         return await testAnthropicCompatible(channel.baseUrl, apiKey, proxyUrl, channel.provider)
@@ -1829,7 +1857,7 @@ export async function testChannelDirect(input: FetchModelsInput, signal?: AbortS
     // Anthropic 协议（Pi）或下面的 Chat 路径处理，避免把本机 Agent sentinel 当成网络协议。
     const directAdapterKind = input.provider === 'ollama' && input.runtime === 'pi' && !isLocalOllamaBaseUrl(input.baseUrl)
       ? 'openai'
-      : input.provider === 'ollama' ? 'anthropic' : resolveChatAdapterKind(input.provider)
+      : input.provider === 'ollama' ? 'anthropic' : resolveTestAdapterKind(input.provider, input.baseUrl, input.apiProtocol)
     switch (directAdapterKind) {
       case 'anthropic':
         return await testAnthropicCompatible(input.baseUrl, input.apiKey, proxyUrl, input.provider, input.modelId, signal)
@@ -1892,7 +1920,7 @@ export async function fetchModels(input: FetchModelsInput, signal?: AbortSignal)
       if (!piUrl) return { success: false, message: '未配置 Agent 端点', models: [] }
       return await fetchAnthropicCompatibleModels(piUrl, input.apiKey, proxyUrl, input.provider, signal, 'sdk')
     }
-    switch (resolveChatAdapterKind(input.provider)) {
+    switch (resolveTestAdapterKind(input.provider, input.baseUrl, input.apiProtocol)) {
       case 'anthropic':
         return await fetchAnthropicCompatibleModels(input.baseUrl, input.apiKey, proxyUrl, input.provider, signal)
       case 'ollama':
@@ -2086,12 +2114,33 @@ async function fetchOpenAICompatibleModels(baseUrl: string, apiKey: string, prox
   const { data, items } = modelPage(await response.json(), 'data')
   // 标准 OpenAI /models 无分页；未知兼容分页协议不可把首页冒充完整清单。
   if ((data.has_more !== undefined && data.has_more !== false) || data.nextPageToken || data.next) throw new Error('此 OpenAI 模型目录分页协议不受支持')
-  return modelsResult(items.map((item) => {
+  const fetched = items.map((item) => {
     if (item.object !== undefined && item.object !== 'model') throw new Error('模型目录条目 object 无效')
     const id = modelString(item.id, 'id')
     if (item.name !== undefined) modelString(item.name, 'name')
     return fetchedModel(id)
-  }), true)
+  })
+  return modelsResult(filterChatCapableModels(fetched), true)
+}
+
+/**
+ * 非对话模型的 ID 族名。
+ *
+ * 官方 `/models` 会把 embedding / OCR / TTS / 语音转写 / 审核 / 实时语音模型
+ * 一并列出来（Mistral 一个渠道就有 60+ 条），用户勾选后每次请求都是 400，
+ * 而 UI 上完全看不出来。Google 目录早就只保留 generateContent 模型，这里对齐。
+ */
+const NON_CHAT_MODEL_ID = /(^|[-_/])(embed|embedding|embeddings|ocr|tts|transcribe|transcription|moderation|realtime)([-_/]|$)/i
+
+/**
+ * 只保留能用于对话的模型。
+ *
+ * 过滤后为空时回退原始列表：不能把一个「只提供非对话模型」的网关
+ * 变成「拉不到任何模型」，那会让用户以为目录接口坏了。
+ */
+function filterChatCapableModels(models: ChannelModel[]): ChannelModel[] {
+  const chatOnly = models.filter((model) => !NON_CHAT_MODEL_ID.test(model.id))
+  return chatOnly.length > 0 ? chatOnly : models
 }
 
 /**

@@ -96,7 +96,7 @@ describe('resolveAgentSessionUiRootPath', () => {
 
     expect(uiRoot).toBe(rootPath)
     expect(uiRoot).not.toBe(storageDir)
-    expect(storageDir.startsWith(rootPath)).toBe(false)
+    expect(storageDir.startsWith(join(rootPath, '.profer', 'sessions'))).toBe(true)
     // 与会话 cwd 一致（project 下 cwd 就是项目根）
     expect(resolveAgentSessionCwd(PROJECT_SLUG, SESSION_ID)).toBe(uiRoot!)
   })
@@ -142,15 +142,17 @@ describe('resolveAgentSessionUiRootPath', () => {
  * 用 UI 根（项目根）当草稿区会把项目内改动全部隐藏，chip 变空。
  */
 describe('resolveAgentSessionStoragePath（草稿区基准）', () => {
-  test('Given project When 解析草稿区 Then 是中央 sessions/<sid>，与 UI 根互不相交且不建目录', () => {
+  test('Given project When 解析草稿区 Then 是项目内 .profer/sessions/<sid>，与 UI 根不同且不建目录', () => {
     const rootPath = writeProjectIndex()
 
     const storagePath = resolveAgentSessionStoragePath(PROJECT_ID, SESSION_ID)
 
     expect(storagePath).toBe(resolveAgentSessionWorkspacePath(PROJECT_SLUG, SESSION_ID))
+    expect(storagePath).toBe(join(rootPath, '.profer', 'sessions', SESSION_ID))
     expect(storagePath).not.toBe(rootPath)
-    expect(rootPath.startsWith(storagePath!)).toBe(false)
-    // 纯查询：只读解析不得因为「问一下路径」就创建会话目录
+    // 纯查询：先清掉前序用例可能创建的目录，再确认解析不会创建它
+    rmSync(storagePath!, { recursive: true, force: true })
+    expect(resolveAgentSessionStoragePath(PROJECT_ID, SESSION_ID)).toBe(storagePath)
     expect(existsSync(storagePath!)).toBe(false)
   })
 
