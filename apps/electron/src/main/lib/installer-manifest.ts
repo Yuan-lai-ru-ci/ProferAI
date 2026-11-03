@@ -32,7 +32,7 @@ export const BUILTIN_INSTALLER_FALLBACK: InstallerManifest = {
       platform: 'win32',
       arch: 'x64',
       version: '2.54.0',
-      downloadUrl: '',
+      downloadUrl: 'https://mirrors.huaweicloud.com/git-for-windows/v2.54.0.windows.1/Git-2.54.0-64-bit.exe',
       fallbackUrl:
         'https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/Git-2.54.0-64-bit.exe',
       sha256: '2b96e7854f0520f0f6b709c21041d9801b1be44d5e1a0d9fa621b2fbc40f1983',
@@ -44,7 +44,7 @@ export const BUILTIN_INSTALLER_FALLBACK: InstallerManifest = {
       platform: 'win32',
       arch: 'arm64',
       version: '2.54.0',
-      downloadUrl: '',
+      downloadUrl: 'https://mirrors.huaweicloud.com/git-for-windows/v2.54.0.windows.1/Git-2.54.0-arm64.exe',
       fallbackUrl:
         'https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/Git-2.54.0-arm64.exe',
       sha256: '97bf63e5c65152c14b488e191c107aa1ccbeae2435690693241be4b2b5edd0d2',
