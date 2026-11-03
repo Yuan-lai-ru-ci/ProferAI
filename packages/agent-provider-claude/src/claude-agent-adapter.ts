@@ -240,6 +240,15 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   sdkSessionId?: string
   /** 附加的外部目录（SDK additionalDirectories） */
   additionalDirectories?: string[]
+  /**
+   * 内联 SDK 设置（等价 CLI `--settings`，落在 **flag settings** 层，优先级高于所有用户可控层）。
+   *
+   * 存在的理由：SDK 只从 `cwd/.claude/settings.json` 读项目设置。宿主在 project 模式下 cwd 是用户
+   * 项目根，而 Profer 自己的设置（plansDirectory / autoMemoryDirectory / skipWebFetchPreflight）写在
+   * 中央 storageDir，那份文件对 SDK 是惰性的；把同一组值内联透传才能让它们真正生效。
+   * managed 模式不传（文件就在 cwd 下，`settingSources: ['project']` 已经读得到）。
+   */
+  settings?: import('@anthropic-ai/claude-agent-sdk').Settings
   prepared?: AgentRuntimePreparedContext
   processLifecycle?: ProcessLifecyclePort
 }
@@ -1066,6 +1075,11 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         systemPrompt: options.systemPrompt,
         // 仅加载当前 Agent cwd 的项目级设置；禁止读取用户全局 ~/.claude/settings.json。
         settingSources: SDK_SETTING_SOURCES,
+        // cwd 之外的项目设置（project 模式下 Profer 的 settings 落在中央 storageDir，
+        // SDK 只读 cwd 下的 `.claude/settings.json`）：走 flag settings 内联下发。
+        // 不传时行为与改造前逐字一致（managed 依赖 cwd 文件）；与 settingSources 共存时
+        // flag 层优先级更高，同名键以内联值为准。
+        ...(options.settings && { settings: options.settings }),
 
         // 条件字段
         ...(options.canUseTool && { canUseTool: options.canUseTool }),

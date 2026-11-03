@@ -57,4 +57,11 @@ describe('shouldCompactByRealUsage', () => {
     expect(shouldCompactByRealUsage(messages, WINDOW, 0.4)).toBe(true)
     expect(shouldCompactByRealUsage(messages, WINDOW, 0.6)).toBe(false)
   })
+
+  test('1M 窗口也受软上限约束，超过 250k 就压缩', () => {
+    const oneMillion = 1_000_000
+    // 260k / 1M = 26%，远低于 80%，但已过软上限。
+    expect(shouldCompactByRealUsage([assistant(200_000, 60_000)], oneMillion)).toBe(true)
+    expect(shouldCompactByRealUsage([assistant(150_000, 90_000)], oneMillion)).toBe(false)
+  })
 })

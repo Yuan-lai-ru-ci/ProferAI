@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { parseAgentImageAttachmentDetails, parseAgentImageAttachmentMarkers } from './image-attachment-marker'
 
-const validMarker = '[PROMA_IMAGE_ATTACHMENT:{"localPath":"C:/Users/test/.profer/agent-workspaces/ws/session/.context/agent-output-images/id.png","filename":"chart.png","mediaType":"image/png"}]'
+const validMarker = '[PROFER_IMAGE_ATTACHMENT:{"localPath":"C:/Users/test/.profer/agent-workspaces/ws/session/.context/agent-output-images/id.png","filename":"chart.png","mediaType":"image/png"}]'
 
 describe('parseAgentImageAttachmentMarkers', () => {
   test('Given a supported image marker in final text When parsing Then it returns an image and clean text', () => {
@@ -17,8 +17,8 @@ describe('parseAgentImageAttachmentMarkers', () => {
   })
 
   test('Given an SVG or malformed marker When parsing Then it removes the marker without exposing an image', () => {
-    const svg = '[PROMA_IMAGE_ATTACHMENT:{"localPath":"C:/unsafe.svg","filename":"unsafe.svg","mediaType":"image/svg+xml"}]'
-    const malformed = '[PROMA_IMAGE_ATTACHMENT:not-json]'
+    const svg = '[PROFER_IMAGE_ATTACHMENT:{"localPath":"C:/unsafe.svg","filename":"unsafe.svg","mediaType":"image/svg+xml"}]'
+    const malformed = '[PROFER_IMAGE_ATTACHMENT:not-json]'
 
     const parsed = parseAgentImageAttachmentMarkers(`before ${svg} ${malformed} after`)
 
@@ -27,10 +27,19 @@ describe('parseAgentImageAttachmentMarkers', () => {
   })
 
   test('Given a legacy marker missing mandatory fields When parsing Then it does not pass it to the image loader', () => {
-    const parsed = parseAgentImageAttachmentMarkers('[PROMA_IMAGE_ATTACHMENT:{"localPath":"C:/safe.png","mediaType":"image/png"}]')
+    const parsed = parseAgentImageAttachmentMarkers('[PROFER_IMAGE_ATTACHMENT:{"localPath":"C:/safe.png","mediaType":"image/png"}]')
 
     expect(parsed.images).toEqual([])
     expect(parsed.cleanText).toBe('')
+  })
+
+  test('Given a pre-rename PROMA marker from a historical session When parsing Then it still yields the image', () => {
+    const legacyMarker = validMarker.replace('PROFER_IMAGE_ATTACHMENT', 'PROMA_IMAGE_ATTACHMENT')
+    const parsed = parseAgentImageAttachmentMarkers(`旧会话图片。\n${legacyMarker}`)
+
+    expect(parsed.images).toHaveLength(1)
+    expect(parsed.images[0]?.filename).toBe('chart.png')
+    expect(parsed.cleanText).toBe('旧会话图片。')
   })
 
   test('Given structured tool details When parsing Then it returns a verified image without a marker', () => {

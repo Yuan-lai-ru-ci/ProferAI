@@ -211,7 +211,7 @@ export interface FileAccessOptions {
   preflight?: boolean
 }
 
-/** 已授权本地文件的 proma-file URL */
+/** 已授权本地文件的 profer-file URL */
 export interface ResolvedFileUrl {
   url: string
   /** 主进程最终解析到的本地绝对路径，供路径 chip 展示和预览标题使用。 */

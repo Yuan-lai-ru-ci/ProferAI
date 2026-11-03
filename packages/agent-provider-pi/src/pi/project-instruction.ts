@@ -39,7 +39,7 @@ export interface ProjectInstructionManifest {
 }
 
 export interface ResolveProjectInstructionsOptions {
-  /** The user-authorized project root. Proma never walks above it. */
+  /** The user-authorized project root. Profer never walks above it. */
   projectRoot: string
   /**
    * Resolve the effective instructions for this path. Defaults to the project

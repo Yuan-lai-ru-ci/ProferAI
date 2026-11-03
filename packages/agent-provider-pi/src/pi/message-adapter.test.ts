@@ -30,7 +30,7 @@ function writeToolCall(content: string): AssistantMessage {
       id: 'tool-call-1',
       name: 'write',
       arguments: {
-        path: 'C:\\Users\\WNI10\\.proma\\agent-workspaces\\moneybull\\workspace-files\\large.md',
+        path: 'C:\\Users\\WNI10\\.profer\\agent-workspaces\\moneybull\\workspace-files\\large.md',
         content,
       },
     }],
@@ -48,6 +48,82 @@ describe('convertPiMessage', () => {
 
     expect(message.error).toEqual({ message: EMPTY_OUTPUT_ERROR_MESSAGE, errorType: 'empty_output' })
     expect(message._emptyOutput).toBe(true)
+  })
+
+  test('Given thinking-only 但思考里已写好正文 When 转换 Then 只提升正文、丢掉汇报提纲', () => {
+    const preamble = '现在汇报。要清晰、有判断。\n\n结构：\n1. 结论\n2. 证据\n\n篇幅 800 字左右。\n\n写。'
+    const answer = '这轮的重点是先堵住会删用户项目、会污染用户项目的坑，而不是急着做入口。\n\n- typecheck 通过\n- 聚焦测试累计 1000+ 用例 0 fail\n- 根目录全量 5968 pass / 4 skip\n\n交接文档在 `workspace-files/.context/project-mode-p0-handoff-2026-11-03.md`。'
+    const message = convertPiMessage(
+      thinkingOnlyAssistant({ content: [{ type: 'thinking', thinking: `${preamble}${answer}` }] }),
+      'session-promote',
+      undefined,
+      { final: true, uuid: 'assistant-promote' },
+    ) as {
+      error?: unknown
+      _emptyOutput?: boolean
+      _promotedFromThinking?: boolean
+      message: { content: Array<{ type: string; text?: string }> }
+    }
+
+    expect(message.error).toBeUndefined()
+    expect(message._emptyOutput).toBeUndefined()
+    expect(message._promotedFromThinking).toBe(true)
+    // 汇报提纲（“结构：1. 结论…”）不能出现在正文里。
+    expect(message.message.content).toEqual([{ type: 'text', text: answer }])
+  })
+
+  test('Given 书写边界后只剩短指令 When 转换 Then 仍标记 empty_output', () => {
+    const thinking = '检查完了，接下来只需要把结论写出来。\n\n写。Go.\n\n嗯，另外，用户情绪不太好，我应该先承认错误，再给根因和证据，最后说明修复和测试结果，不要辩解，也不要再解释一遍背景。'
+    const message = convertPiMessage(
+      thinkingOnlyAssistant({ content: [{ type: 'thinking', thinking }] }),
+      'session-short-cue',
+      undefined,
+      { final: true, uuid: 'assistant-short-cue' },
+    ) as { error?: { message: string; errorType: string }; _promotedFromThinking?: boolean }
+
+    expect(message.error).toEqual({ message: EMPTY_OUTPUT_ERROR_MESSAGE, errorType: 'empty_output' })
+    expect(message._promotedFromThinking).toBeUndefined()
+  })
+
+  test('Given 思考只是叙述没有书写边界 When 转换 Then 不猜正文、仍标记 empty_output', () => {
+    const narration = 'Examining the file system for a specific pattern within the specified directory. The initial scan found 3 candidate files, and I need to confirm which one owns the runtime guard before editing anything at all.'
+    const message = convertPiMessage(
+      thinkingOnlyAssistant({ content: [{ type: 'thinking', thinking: narration }] }),
+      'session-narration',
+      undefined,
+      { final: true, uuid: 'assistant-narration' },
+    ) as { error?: { message: string; errorType: string }; _emptyOutput?: boolean; _promotedFromThinking?: boolean }
+
+    expect(message.error).toEqual({ message: EMPTY_OUTPUT_ERROR_MESSAGE, errorType: 'empty_output' })
+    expect(message._emptyOutput).toBe(true)
+    expect(message._promotedFromThinking).toBeUndefined()
+  })
+
+  test('Given 思考很长但截断在半句 When 转换 Then 仍标记 empty_output', () => {
+    const truncated = '现在汇报。这轮做了独立审查，发现 2 个 P0 和 6 条 P1，已全部修复并复现验证；全量 6118 pass / 0 fail。接下来需要把验证证据和遗留风险整理清楚，然后逐条对照交接文档确认没有遗漏，最后给出下一步建议。全量 61'
+    const message = convertPiMessage(
+      thinkingOnlyAssistant({ content: [{ type: 'thinking', thinking: truncated }] }),
+      'session-truncated',
+      undefined,
+      { final: true, uuid: 'assistant-truncated' },
+    ) as { error?: { message: string; errorType: string }; _emptyOutput?: boolean; _promotedFromThinking?: boolean }
+
+    expect(message.error).toEqual({ message: EMPTY_OUTPUT_ERROR_MESSAGE, errorType: 'empty_output' })
+    expect(message._emptyOutput).toBe(true)
+    expect(message._promotedFromThinking).toBeUndefined()
+  })
+
+  test('Given 思考已提升为正文 When 转换 result Then 按成功结束', () => {
+    const preamble = '现在汇报。要清晰、有判断。\n\n结构：\n1. 结论\n2. 证据\n\n篇幅 800 字左右。\n\n写。'
+    const answer = '这轮的重点是先堵住会删用户项目、会污染用户项目的坑，而不是急着做入口。\n\n- typecheck 通过\n- 聚焦测试累计 1000+ 用例 0 fail\n- 根目录全量 5968 pass / 4 skip\n\n交接文档在 `workspace-files/.context/project-mode-p0-handoff-2026-11-03.md`。'
+    const result = convertResultMessage(
+      [thinkingOnlyAssistant({ content: [{ type: 'thinking', thinking: `${preamble}${answer}` }] })],
+      'session-promote',
+    ) as { subtype?: string; terminal_reason?: string; errors?: string[] }
+
+    expect(result.subtype).toBe('success')
+    expect(result.terminal_reason).toBe('completed')
+    expect(result.errors).toBeUndefined()
   })
 
   test('omits cumulative write content from partial tool-call frames', () => {
@@ -69,8 +145,8 @@ describe('convertPiMessage', () => {
     }) as { message: { content: Array<{ input?: Record<string, unknown> }> } }
 
     expect(message.message.content[0]?.input).toEqual({
-      path: 'C:\\Users\\WNI10\\.proma\\agent-workspaces\\moneybull\\workspace-files\\large.md',
-      file_path: 'C:\\Users\\WNI10\\.proma\\agent-workspaces\\moneybull\\workspace-files\\large.md',
+      path: 'C:\\Users\\WNI10\\.profer\\agent-workspaces\\moneybull\\workspace-files\\large.md',
+      file_path: 'C:\\Users\\WNI10\\.profer\\agent-workspaces\\moneybull\\workspace-files\\large.md',
       content,
     })
     expect(JSON.stringify(message).length).toBeGreaterThan(content.length)

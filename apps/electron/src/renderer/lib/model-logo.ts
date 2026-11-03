@@ -353,7 +353,7 @@ export function getProviderLogo(provider: ProviderType): string {
  * 服务（常以 /anthropic 结尾）不应被误判为 Claude（见 #659）。
  */
 const URL_LOGO_MAP: Array<[RegExp, string]> = [
-  [/proma\.cool/i, ProferLogo],
+  [/profer\.cn/i, ProferLogo],
   [/moonshot\.cn|kimi/i, KimiLogo],
   [/bigmodel\.cn|zhipuai/i, ZhipuLogo],
   [/minimax/i, MiniMaxLogo],

@@ -28,13 +28,13 @@ export function injectCodexFastMode(payload: unknown): unknown {
 /**
  * Pi Agent 的公开 streamFn 类型只暴露通用 SimpleStreamOptions，未包含 provider
  * 专属 serviceTier。运行时仍会把此字段完整传给 Codex Responses provider；保留它可
- * 让 Pi 按 priority tier 正确计算 usage.cost 与 Proma 预算守卫。
+ * 让 Pi 按 priority tier 正确计算 usage.cost 与 Profer 预算守卫。
  */
 export function withCodexFastModeServiceTier<T extends object | undefined>(options: T): T & { serviceTier: typeof CODEX_FAST_MODE_SERVICE_TIER } {
   return { ...options, serviceTier: CODEX_FAST_MODE_SERVICE_TIER } as T & { serviceTier: typeof CODEX_FAST_MODE_SERVICE_TIER }
 }
 
-/** Pi 内联扩展：Proma 不依赖用户安装第三方 Pi extension。 */
+/** Pi 内联扩展：Profer 不依赖用户安装第三方 Pi extension。 */
 export function createCodexFastModeExtension(): (pi: ExtensionAPI) => void {
   return (pi) => {
     pi.on('before_provider_request', (event) => {

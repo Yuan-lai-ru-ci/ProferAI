@@ -383,10 +383,12 @@ function mergeAdjacentSameModelTurns(groups: MessageGroup[]): MessageGroup[] {
 
 // ===== 预览/摘要 =====
 
-const SCHEDULED_RUN_MARKER = '<!--PROMA_SCHEDULED_RUN-->'
+const SCHEDULED_RUN_MARKER = '<!--PROFER_SCHEDULED_RUN-->'
+/** 旧版（改名前的 proma）定时标记：历史消息里持久化的是它，必须继续剥离。 */
+const LEGACY_SCHEDULED_RUN_MARKER = '<!--PROMA_SCHEDULED_RUN-->'
 
 export function stripScheduledRunMarker(text: string): string {
-  return text.replaceAll(SCHEDULED_RUN_MARKER, '').trim()
+  return text.replaceAll(SCHEDULED_RUN_MARKER, '').replaceAll(LEGACY_SCHEDULED_RUN_MARKER, '').trim()
 }
 
 /**

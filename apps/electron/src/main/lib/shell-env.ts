@@ -83,7 +83,7 @@ function parseEnvOutput(output: string): Record<string, string> {
  * 使用非交互 login shell，避免 zsh 的 zle/bindkey 初始化在 GUI 进程中报错。
  */
 export function buildShellEnvInvocation(): { args: string[]; marker: string } {
-  const marker = '__PROMA_ENV_START__'
+  const marker = '__PROFER_ENV_START__'
   return {
     args: ['-l', '-c', `printf '%s\\n' '${marker}' && env`],
     marker,

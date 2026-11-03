@@ -294,11 +294,11 @@ async function main(): Promise<void> {
       channelId: settings.agentChannelId,
       workspaceSlug,
       triggeredBy: 'user',
-      disabledTools: ['proma_task_create'],
+      disabledTools: ['profer_task_create'],
     })
-    toolFilterOk = !probe.tools.some((t) => t.name === 'mcp__task-graph__proma_task_create')
-      && probe.tools.some((t) => t.name === 'mcp__task-graph__proma_task_update')
-    console.log(`[冒烟] 单工具裁剪自检: ${toolFilterOk ? '是 ✅' : '否 ❌'}（proma_task_create 被过滤，proma_task_update 保留）`)
+    toolFilterOk = !probe.tools.some((t) => t.name === 'mcp__task-graph__profer_task_create')
+      && probe.tools.some((t) => t.name === 'mcp__task-graph__profer_task_update')
+    console.log(`[冒烟] 单工具裁剪自检: ${toolFilterOk ? '是 ✅' : '否 ❌'}（profer_task_create 被过滤，profer_task_update 保留）`)
   } catch (err) {
     console.log(`[冒烟] 单工具裁剪自检异常: ${err instanceof Error ? err.message : String(err)}`)
   }

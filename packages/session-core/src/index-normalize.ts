@@ -1,7 +1,7 @@
 /**
  * 会话索引（agent-sessions.json）的格式归一。纯函数，无文件 IO，浏览器安全。
  *
- * 主进程（读取后按需回写清理）与 proma CLI（只读）共用这里，避免两边对同一份文件给出不同结果。
+ * 主进程（读取后按需回写清理）与 profer CLI（只读）共用这里，避免两边对同一份文件给出不同结果。
  * 读盘、缓存与回写仍由各自的调用方负责。
  */
 import type { AgentSessionMeta } from '@profer/shared'

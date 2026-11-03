@@ -67,3 +67,20 @@ describe('OpenAIAdapter Ollama Chat', () => {
     expect(JSON.parse(request.body)).toMatchObject({ reasoning_effort: 'low' })
   })
 })
+
+describe('OpenAIAdapter 流式 content 内容块', () => {
+  test('Given 内容块数组 When 解析 Then 正文与思考分开且不出现 [object Object]', () => {
+    const adapter = new OpenAIAdapter('custom')
+    const chunk = (delta: unknown): string => JSON.stringify({ choices: [{ index: 0, delta }] })
+
+    expect(adapter.parseSSELine(chunk({ content: [{ type: 'text', text: '你好' }] }))).toEqual([
+      { type: 'chunk', delta: '你好' },
+    ])
+    expect(adapter.parseSSELine(chunk({ content: [{ type: 'thinking', thinking: [{ type: 'text', text: '想一想' }] }] }))).toEqual([
+      { type: 'reasoning', delta: '想一想' },
+    ])
+    // 字符串增量保持原行为
+    expect(adapter.parseSSELine(chunk({ content: 'hi' }))).toEqual([{ type: 'chunk', delta: 'hi' }])
+    expect(adapter.parseSSELine(chunk({ content: '' }))).toEqual([])
+  })
+})

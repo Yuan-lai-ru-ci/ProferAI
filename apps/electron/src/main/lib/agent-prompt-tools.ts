@@ -1,5 +1,6 @@
 /** 按实际能力构建工具指南，与身份和工作区上下文分离。 */
 import type { AgentPresetMutationOperation } from './agent-preset-operations'
+import { TASK_GRAPH_TOOL_CREATE, TASK_GRAPH_TOOL_UPDATE } from '@profer/shared'
 
 /** 委派判断在各运行时一致，具体工具和模型路由由下方分支补充。 */
 export const DELEGATION_GUIDELINES = `- 当任务包含可独立推进的子问题，且并行能节省时间或独立审查能提高可靠性时，考虑委派；简单任务直接完成。
@@ -17,8 +18,8 @@ export const COLLABORATION_PLACEMENT_GUIDELINES = `当前实际提供的 Profer 
 
 /** 任务图指南：Pi 运行时工具名带 mcp__task-graph__ 前缀，与 Claude 侧 in-process MCP 裸名不同 */
 export function buildTaskGraphGuideline(isPiRuntime: boolean | undefined): string {
-  const create = isPiRuntime ? 'mcp__task-graph__proma_task_create' : 'proma_task_create'
-  const update = isPiRuntime ? 'mcp__task-graph__proma_task_update' : 'proma_task_update'
+  const create = isPiRuntime ? `mcp__task-graph__${TASK_GRAPH_TOOL_CREATE}` : TASK_GRAPH_TOOL_CREATE
+  const update = isPiRuntime ? `mcp__task-graph__${TASK_GRAPH_TOOL_UPDATE}` : TASK_GRAPH_TOOL_UPDATE
   return `- **任务图**：多步骤任务用 \`${create}\` 创建节点、\`${update}\` 更新状态并补遗漏依赖；\`dependsOn\` 指向本序列前置任务。完成一步后新建下一步也要补边，新方向先建节点再分叉。简单一步不创建；不要用 TaskCreate/TaskUpdate。`
 }
 

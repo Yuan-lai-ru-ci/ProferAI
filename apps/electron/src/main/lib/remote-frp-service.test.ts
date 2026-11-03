@@ -42,7 +42,10 @@ function archive(version: string): Buffer {
   const work = mkdtempSync(join(tmpdir(), 'frp-archive-'))
   try {
     mkdirSync(join(work, root)); writeFileSync(join(work, root, 'frpc'), 'mock executable')
-    const out = join(work, 'archive.tar.gz'); createTar({ gzip: true, file: out, cwd: work, sync: true }, [root])
+    const out = join(work, 'archive.tar.gz')
+    // portable + 固定 mtime：tar 默认写入当前时间，两次生成会得到不同字节和 SHA256，
+    // 导致「zip 与剪贴板部署指令一致」变成跨秒才失败的 flaky。
+    createTar({ gzip: true, file: out, cwd: work, sync: true, portable: true, mtime: new Date(0) }, [root])
     return readFileSync(out)
   } finally { rmSync(work, { recursive: true, force: true }) }
 }

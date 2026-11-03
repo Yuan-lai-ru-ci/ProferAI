@@ -798,6 +798,8 @@ export interface AssistantTurnRendererProps {
   basePath?: string
   /** 附加目录候选，用于解析相对文件路径。 */
   basePaths?: string[]
+  /** 草稿区判定基准（storageDir）；与 `basePath`（UI 根）不是同一个语义，见 TurnFileChangesSummary */
+  draftRoot?: string
   /** 分叉回调（传入最后一条 assistant 消息的 uuid） */
   onFork?: (upToMessageUuid: string) => void
   /** 探索分支回调（Pi `/tree`；hover 分叉按钮时可用） */
@@ -822,7 +824,7 @@ export interface AssistantTurnRendererProps {
   isLatestAssistantTurn?: boolean
 }
 
-export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true, isLatestAssistantTurn = false }: AssistantTurnRendererProps): React.ReactElement | null {
+export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessages, historicalTaskSubjects, basePath, basePaths, draftRoot, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, isStreaming, stoppedByUser, sessionModelId, showThinking = true, isLatestAssistantTurn = false }: AssistantTurnRendererProps): React.ReactElement | null {
   // 折叠区状态属于当前 turn，而不是瞬时的窗口/工具块组件；工具完成导致内容重算时保留用户选择。
   const [expandedProcessSegments, setExpandedProcessSegments] = React.useState(false)
   const [expandedReplySegments, setExpandedReplySegments] = React.useState(false)
@@ -869,6 +871,22 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
   const hasTextContent = topLevelBlocks.some(
     (b) => b.type === 'text' && 'text' in b && !!(b as { text: string }).text
   )
+
+  // 本轮只有思考、没有任何正常正文（empty_output 的合成错误消息不算正文）：
+  // 把思考块默认展开并换标题，否则用户只看到 4 行「思考摘要」加一句「未生成回复」。
+  const expandThinkingByDefault = React.useMemo(() => {
+    const hasThinking = topLevelBlocks.some(
+      (b) => b.type === 'thinking' && !!(b as { thinking?: string }).thinking
+    )
+    if (!hasThinking) return false
+    return !turn.turnMessages.some((m) => {
+      if (m.type !== 'assistant') return false
+      if (typeof (m as { _errorCode?: string })._errorCode === 'string') return false
+      const content = (m as { message?: { content?: Array<{ type?: string; text?: string }> } }).message?.content
+      return Array.isArray(content)
+        && content.some((b) => b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0)
+    })
+  }, [topLevelBlocks, turn.turnMessages])
 
   // Task 聚合数据（useMemo 防止每次渲染重算）
   const { taskActivities, firstTaskIndex } = React.useMemo(() => {
@@ -971,6 +989,10 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
           childBlocks={childBlocks}
           isStreaming={isStreaming}
           showThinking={showThinking}
+          forceExpandThinking={expandThinkingByDefault}
+          imageAttachments={block.type === 'tool_use'
+            ? imageOutputsByToolUseId.get((block as SDKToolUseBlock).id)
+            : undefined}
         />
       </div>
     )
@@ -1049,7 +1071,7 @@ export function AssistantTurnRenderer({ sessionId: sessionIdProp, turn, allMessa
       </MessageContent>
       {/* 文件改动汇总：流式结束后展示本轮所有 Edit/Write/MultiEdit/NotebookEdit 文件 */}
       {!isStreaming && (
-        <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} />
+        <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} draftRoot={draftRoot} />
       )}
       {/* 操作栏：流式输出完成后显示操作按钮 */}
       {!isStreaming && (() => {
@@ -1389,10 +1411,12 @@ function QuoteChip({ quote }: { quote: QuotedFileRef }): React.ReactElement {
 // ===== 用户输入消息渲染 =====
 
 
-const SCHEDULED_RUN_MARKER = '<!--PROMA_SCHEDULED_RUN-->'
+const SCHEDULED_RUN_MARKER = '<!--PROFER_SCHEDULED_RUN-->'
+/** 旧版（改名前的 proma）定时标记：历史消息里持久化的是它，必须继续剥离。 */
+const LEGACY_SCHEDULED_RUN_MARKER = '<!--PROMA_SCHEDULED_RUN-->'
 
 function stripScheduledRunMarker(text: string): string {
-  return text.replaceAll(SCHEDULED_RUN_MARKER, '').trim()
+  return text.replaceAll(SCHEDULED_RUN_MARKER, '').replaceAll(LEGACY_SCHEDULED_RUN_MARKER, '').trim()
 }
 
 /**
@@ -1801,6 +1825,8 @@ export interface MessageGroupRendererProps {
   historicalTaskSubjects: Map<string, string>
   basePath?: string
   basePaths?: string[]
+  /** 草稿区判定基准（storageDir）；缺省时文件改动 chip 不做草稿过滤 */
+  draftRoot?: string
   /** 当前 Agent session；嵌入右侧探索分支时不能依赖全局父 session。 */
   sessionId?: string
   onFork?: (upToMessageUuid: string) => void
@@ -1950,7 +1976,7 @@ export function getGroupPreview(group: MessageGroup): string {
   return preview.slice(0, GROUP_PREVIEW_LIMIT)
 }
 
-function MessageGroupRendererView({ sessionId, group, allMessages, historicalTaskSubjects, basePath, basePaths, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, isStreaming, stoppedByUser, sessionModelId, showThinking, isLatestAssistantTurn }: MessageGroupRendererProps): React.ReactElement | null {
+function MessageGroupRendererView({ sessionId, group, allMessages, historicalTaskSubjects, basePath, basePaths, draftRoot, onFork, onExplore, onRewind, onRetry, onRetryInNewSession, onCompact, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, isStreaming, stoppedByUser, sessionModelId, showThinking, isLatestAssistantTurn }: MessageGroupRendererProps): React.ReactElement | null {
   const groupId = getGroupId(group)
   // 主进程导航索引与本地 DOM 的共同匹配键（无 uuid 的系统消息靠它对上号）。
   const navKey = getGroupNavKey(group)
@@ -2015,6 +2041,7 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
         historicalTaskSubjects={historicalTaskSubjects}
         basePath={basePath}
         basePaths={basePaths}
+        draftRoot={draftRoot}
         onFork={onFork}
         onExplore={onExplore}
         onRewind={onRewind}
@@ -2076,6 +2103,7 @@ export const MessageGroupRenderer = React.memo(MessageGroupRendererView, (prev, 
   }
   if (!sameStringMap(prev.historicalTaskSubjects, next.historicalTaskSubjects)) return false
   if (prev.basePath !== next.basePath || prev.sessionId !== next.sessionId) return false
+  if (prev.draftRoot !== next.draftRoot) return false
   if (prev.basePaths !== next.basePaths) return false
   if (prev.isStreaming !== next.isStreaming || prev.stoppedByUser !== next.stoppedByUser) return false
   if (prev.sessionModelId !== next.sessionModelId || prev.showThinking !== next.showThinking) return false

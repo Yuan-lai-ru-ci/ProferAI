@@ -1070,7 +1070,7 @@ function CopyableMarkdownBlock({ block, components, remarkPlugins, selected, sel
 
 export const MessageResponse = React.memo(
   function MessageResponse({ children, className, basePath, basePaths, remarkPlugins, enableBlockCopy = false }: MessageResponseProps): React.ReactElement {
-    const processed = React.useMemo(() => normalizeMarkdownEmphasisWhitespace(normalizeLatexDelimiters(children.replace(/<!--PROMA_AUTOMATION:[\s\S]*?-->/g, '').trim())), [children])
+    const processed = React.useMemo(() => normalizeMarkdownEmphasisWhitespace(normalizeLatexDelimiters(children.replace(/<!--(?:PROMA|PROFER)_AUTOMATION:[\s\S]*?-->/g, '').trim())), [children])
     const blocks = React.useMemo(() => parseAgentMarkdownBlocks(processed), [processed])
     const [selection, setSelection] = React.useState<AgentBlockSelectionUpdate>({ selectedIds: new Set(), selecting: false })
     const { selectedIds, selecting } = selection

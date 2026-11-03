@@ -55,7 +55,7 @@ const SUPPORT_PACKAGES = ['typescript', '@types']
  */
 const WORKSPACE_SUPPORT_SPECIFIERS = ['dompurify']
 
-const WORKSPACE_PACKAGES = ['shared', 'agent-runtime', 'core', 'agent-provider-pi']
+const WORKSPACE_PACKAGES = ['shared', 'agent-fabric', 'agent-runtime', 'core', 'agent-provider-pi']
 
 const ADAPTER_EXPORT = 'PiAgentAdapter'
 const RUNNER_PATH = 'test/minimal-pi-runner.ts'
@@ -147,7 +147,7 @@ function prepareSandbox(): string {
   for (const name of WORKSPACE_PACKAGES) {
     copyTree(join(laneRoot, 'packages', name), join(sandbox, 'packages', name))
   }
-  for (const name of ['shared', 'agent-runtime', 'core']) {
+  for (const name of ['shared', 'agent-fabric', 'agent-runtime', 'core']) {
     symlinkSync(join(sandbox, 'packages', name), join(sandbox, 'node_modules', '@profer', name), 'dir')
   }
 

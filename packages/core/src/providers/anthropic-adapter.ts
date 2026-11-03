@@ -20,7 +20,7 @@
  * Kimi Coding Plan 特殊要求：
  * - Base URL：`https://api.kimi.com/coding/v1`
  * - 必须发送自有 User-Agent（部分渠道白名单校验）
- * - UA 产品名保持「Proma」以兼容渠道白名单（kimi-coding/zhipu-coding/xiaomi-token-plan）
+ * - UA 产品名保持「Profer」以兼容渠道白名单（kimi-coding/zhipu-coding/xiaomi-token-plan）
  */
 import { extractZhipuCodingTeamApiToken } from '@profer/shared'
 
@@ -280,7 +280,7 @@ export class AnthropicAdapter implements ProviderAdapter {
    *
    * Kimi Coding Plan 要求：
    * - 只使用 Bearer（服务端校验 User-Agent 白名单）
-   * - User-Agent 产品名保持「Proma」以兼容渠道白名单（通过 setProferVersion 初始化）
+   * - User-Agent 产品名保持「Profer」以兼容渠道白名单（通过 setProferVersion 初始化）
    *   其余渠道一律发「Profer」，品牌不再外泄。
    */
   private buildHeaders(apiKey: string): Record<string, string> {
@@ -383,9 +383,9 @@ export class AnthropicAdapter implements ProviderAdapter {
 
     const requestBody = JSON.stringify(body)
 
-    // 调试：开启 PROMA_DEBUG_REQUEST 时打印请求体，便于排查思考+工具场景的消息结构
+    // 调试：开启 PROFER_DEBUG_REQUEST 时打印请求体，便于排查思考+工具场景的消息结构
     const procReq = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
-    if (procReq?.env?.PROMA_DEBUG_REQUEST) {
+    if (procReq?.env?.PROFER_DEBUG_REQUEST) {
       console.log('[Request]', this.providerType, input.modelId, '→', requestBody.slice(0, 4000))
     }
 
@@ -401,9 +401,9 @@ export class AnthropicAdapter implements ProviderAdapter {
       const event = JSON.parse(jsonLine) as AnthropicSSEEvent
       const events: StreamEvent[] = []
 
-      // 调试：开启 PROMA_DEBUG_SSE 时打印原始事件，便于排查 Provider 的 SSE 格式差异
+      // 调试：开启 PROFER_DEBUG_SSE 时打印原始事件，便于排查 Provider 的 SSE 格式差异
       const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
-      if (proc?.env?.PROMA_DEBUG_SSE) {
+      if (proc?.env?.PROFER_DEBUG_SSE) {
         console.log('[SSE]', jsonLine.slice(0, 400))
       }
 

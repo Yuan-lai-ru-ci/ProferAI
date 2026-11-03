@@ -19,11 +19,11 @@ const CASE_INSENSITIVE_MERGE_KEYS = new Set([
   'https_proxy',
   'all_proxy',
   'no_proxy',
-  'proma_cli',
+  'profer_cli',
   'claude_code_shell',
   'shell',
-  'proma_windows_shell',
-  'proma_wsl_distro',
+  'profer_windows_shell',
+  'profer_wsl_distro',
 ])
 
 function getCaseInsensitiveEnvValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
@@ -66,7 +66,7 @@ export function dirnameForPlatform(path: string, platform: NodeJS.Platform): str
  * 解析 Agent Bash 的 POSIX 执行路径。
  *
  * 环境加载 shell 与 Agent Bash 执行 shell 必须分离：macOS 用户默认 shell
- * 通常是 zsh，但 Bash 工具的语义应保持 Bash。Codex/Proma 都采用“用用户
+ * 通常是 zsh，但 Bash 工具的语义应保持 Bash。Codex/Profer 都采用“用用户
  * shell 准备环境、用确定的 Bash 执行命令”的边界，避免把 zsh glob/options
  * 隐式带进名为 Bash 的工具。
  *

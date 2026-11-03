@@ -382,7 +382,8 @@ export function SearchDialog(): React.ReactElement {
     )
     const channelId = deepseekChannel?.id ?? currentAgentChannelId ?? undefined
 
-    const configDir = import.meta.env.DEV ? '.profer-dev' : '.proma'
+    // 提示词里的会话文件目录必须与 config-paths 一致（正式版 ~/.profer，开发版 ~/.profer-dev）。
+    const configDir = import.meta.env.DEV ? '.profer-dev' : '.profer'
     const visibleAgentSessionIds = agentSessions
       .filter((session) => !hiddenAgentSessionIds.has(session.id))
       .map((session) => session.id)

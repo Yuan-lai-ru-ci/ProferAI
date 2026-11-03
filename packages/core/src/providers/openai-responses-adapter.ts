@@ -20,7 +20,7 @@ import type {
 } from './types.ts'
 import { resolveOpenAIResponsesUrl } from './url-utils.ts'
 
-// ===== Responses API 类型（只声明 Proma 需要的字段） =====
+// ===== Responses API 类型（只声明 Profer 需要的字段） =====
 
 interface ResponsesInputTextPart {
   type: 'input_text' | 'output_text'

@@ -49,11 +49,26 @@ interface OpenAIMessage {
   tool_call_id?: string
 }
 
+/**
+ * 流式增量 content。
+ *
+ * 绝大多数供应商直接给字符串，但 Mistral 等供应商会把同一段增量拆成内容块数组：
+ * `[{ type: 'text', text }]`，思考块则是 `[{ type: 'thinking', thinking: [{ text }] }]`。
+ * 只当字符串拼会把整个对象变成 `[object Object]`，所以必须先按块展开。
+ */
+type OpenAIStreamContent =
+  | string
+  | Array<
+    | string
+    | { type: 'text'; text?: string }
+    | { type: 'thinking'; thinking?: Array<{ type?: string; text?: string }> }
+  >
+
 /** OpenAI SSE 数据块 */
 interface OpenAIChunkData {
   choices?: Array<{
     delta?: {
-      content?: string
+      content?: OpenAIStreamContent
       reasoning_content?: string
       tool_calls?: Array<{
         index?: number
@@ -184,6 +199,35 @@ function appendContinuationMessages(
   }
 }
 
+/**
+ * 把流式 content（字符串或内容块数组）统一拆成正文与思考两段文本。
+ *
+ * Mistral 等供应商的思考内容就夹在同一个 content 数组里；不拆会把整块思考当正文渲染，
+ * 或者把对象直接拼成 `[object Object]`。
+ */
+function readStreamContent(
+  content: OpenAIStreamContent | undefined,
+): { text: string; reasoning: string } {
+  if (content === undefined || content === null) return { text: '', reasoning: '' }
+  if (typeof content === 'string') return { text: content, reasoning: '' }
+  let text = ''
+  let reasoning = ''
+  for (const item of content) {
+    if (typeof item === 'string') {
+      text += item
+      continue
+    }
+    if (item.type === 'text') {
+      text += item.text ?? ''
+      continue
+    }
+    if (item.type === 'thinking') {
+      reasoning += (item.thinking ?? []).map((part) => part.text ?? '').join('')
+    }
+  }
+  return { text, reasoning }
+}
+
 // ===== 适配器实现 =====
 
 export class OpenAIAdapter implements ProviderAdapter {
@@ -230,13 +274,15 @@ export class OpenAIAdapter implements ProviderAdapter {
       const delta = chunk.choices?.[0]?.delta
       const events: StreamEvent[] = []
 
-      if (delta?.content) {
-        events.push({ type: 'chunk', delta: delta.content })
+      const { text: textDelta, reasoning: contentReasoning } = readStreamContent(delta?.content)
+      if (textDelta) {
+        events.push({ type: 'chunk', delta: textDelta })
       }
 
-      // DeepSeek 等供应商的推理内容
-      if (delta?.reasoning_content) {
-        events.push({ type: 'reasoning', delta: delta.reasoning_content })
+      // DeepSeek 等供应商的推理内容（也有供应商把思考放在 content 内容块里）
+      const reasoningDelta = contentReasoning || delta?.reasoning_content || ''
+      if (reasoningDelta) {
+        events.push({ type: 'reasoning', delta: reasoningDelta })
       }
 
       // 工具调用

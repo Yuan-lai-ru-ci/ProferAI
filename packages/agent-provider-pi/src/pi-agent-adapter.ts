@@ -1,7 +1,7 @@
 /**
  * Pi Agent SDK 适配器
  *
- * Proma 内部继续使用 SDKMessage 兼容协议，避免渲染层、Jotai 状态、
+ * Profer 内部继续使用 SDKMessage 兼容协议，避免渲染层、Jotai 状态、
  * JSONL 持久化和历史会话展示在 SDK 迁移时一起改名。
  */
 
@@ -213,7 +213,7 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   outputFormat?: JsonSchemaOutputFormat
   /** 本轮指导仅用于压缩后的自动续跑，不改写稳定 system 或已持久化历史。 */
   taskPrompt?: string
-  /** Proma 聚合的附加目录；Pi 内置工具 factory 不接收多 root 参数，编排层会把它们注入 systemPrompt。 */
+  /** Profer 聚合的附加目录；Pi 内置工具 factory 不接收多 root 参数，编排层会把它们注入 systemPrompt。 */
   additionalDirectories?: string[]
   additionalSkillPaths?: string[]
   /** 当前用户输入显式引用的 Skill name（兼容历史 slug 已在编排层归一化） */
@@ -924,6 +924,24 @@ export function shouldDeferPiOverflowTerminalMessage(
 export const PI_REAL_USAGE_COMPACTION_RATIO = 0.8
 
 /**
+ * 真实占用的软上限（token）。
+ *
+ * 即使模型声明了 1M 窗口，真实占用超过这个量级后网关侧的 100 秒超时（524）、
+ * 上游限流与「把回答写进 reasoning_content」的概率都会明显上升。实测一个 353k
+ * 占用的会话，单轮稳定 60–100 秒，并反复超时中断。所以 80% 窗口与这个绝对上限取小值。
+ */
+export const PI_SOFT_CONTEXT_COMPACTION_TOKENS = 250_000
+
+/** 返回真实占用触发压缩的 token 阈值。 */
+export function calculatePiRealUsageCompactionThreshold(
+  contextWindow: number,
+  ratio: number = PI_REAL_USAGE_COMPACTION_RATIO,
+): number {
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0 || ratio <= 0) return 0
+  return Math.min(contextWindow * ratio, PI_SOFT_CONTEXT_COMPACTION_TOKENS)
+}
+
+/**
  * 用服务端返回的真实 usage 判断是否需要压缩。
  *
  * Pi SDK 自带的 `shouldCompact` 只用 `chars / 4` 估算上下文；实测（1097 个样本）真实
@@ -939,13 +957,14 @@ export function shouldCompactByRealUsage(
   ratio: number = PI_REAL_USAGE_COMPACTION_RATIO,
 ): boolean {
   if (!contextWindow || contextWindow <= 0 || ratio <= 0) return false
+  const threshold = calculatePiRealUsageCompactionThreshold(contextWindow, ratio)
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]
     if (message?.role !== 'assistant') continue
     const usage = message.usage
     if (!usage) continue
     const used = (usage.input ?? 0) + (usage.cacheRead ?? 0)
-    return used >= contextWindow * ratio
+    return used >= threshold
   }
   return false
 }
@@ -1868,7 +1887,7 @@ export function installRuntimeGuardHooks(session: AgentSession, guard: AgentRunt
   session.agent.prepareNextTurnWithContext = async (context, signal) => {
     const previousSnapshot = await previousPrepareNextTurnWithContext?.(context, signal)
     if (guard.shouldStopBeforeNextTurn()) {
-      // Pi 的 steer/follow-up 队列在 turn 完成后才 drain；达到 Proma 上限时必须在这里清空，
+      // Pi 的 steer/follow-up 队列在 turn 完成后才 drain；达到 Profer 上限时必须在这里清空，
       // 否则纯文本 turn 之后追加的队列消息会绕过 afterToolCall 继续进入下一轮。
       session.agent.clearAllQueues()
     }
@@ -2268,7 +2287,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               })
               const isRetryableAssistantError = isAssistant && (event.message as AssistantMessage).stopReason === 'error'
               if (isRetryableAssistantError && converted?.type === 'assistant' && assistantUuid) {
-                // Native retry 会丢弃该失败 assistant；不应消耗 Proma 的 turn/budget 配额。
+                // Native retry 会丢弃该失败 assistant；不应消耗 Profer 的 turn/budget 配额。
                 // 关键：此处不能重置 UUID。retry 后的新 partial/final 必须原地替换此前
                 // 已经展示的 partial，避免用户同时看到断流残片和恢复后的完整回答。
                 retryTerminalGate.defer({
@@ -2688,7 +2707,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
   }
 
   async setPermissionMode(_sessionId: string, _mode: string): Promise<void> {
-    // Proma 权限由工具包装层实时读取 sessionPermissionModes，自身无需同步给 Pi。
+    // Profer 权限由工具包装层实时读取 sessionPermissionModes，自身无需同步给 Pi。
   }
 
   async getTaskOutput(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<GetTaskOutputResult> {

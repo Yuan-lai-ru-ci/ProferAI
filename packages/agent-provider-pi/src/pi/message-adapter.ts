@@ -723,11 +723,85 @@ export function dropTrailingAbortedAssistant(messages: AgentMessage[]): AgentMes
 
 export const EMPTY_OUTPUT_ERROR_MESSAGE = '模型未生成可见回复'
 
+/**
+ * thinking-only 空输出里，思考内容至少要有这么多字才可能是一篇完整回答。
+ * 低于这个长度的思考基本都是「想了两句就停了」，仍应走 empty_output 恢复。
+ */
+const MIN_PROMOTABLE_THINKING_CHARS = 120
+
 function hasVisiblePiAssistantOutput(message: AssistantMessage): boolean {
   return message.content.some((block) => {
     if (block.type === 'text') return typeof block.text === 'string' && block.text.trim().length > 0
     return block.type === 'toolCall'
   })
+}
+
+function thinkingTextOf(message: AssistantMessage): string {
+  return message.content
+    .map((block) => (block.type === 'thinking' && typeof block.thinking === 'string' ? block.thinking : ''))
+    .filter(Boolean)
+    .join('\n\n')
+    .trim()
+}
+
+/**
+ * 模型在 reasoning 里往往先写「准备怎么答」，再在「写。」这类提示后开始正文。
+ * 下面三个正则分别定位：写作提示语、「篇幅/长度 N 字」这类自用要求、「不要以…结尾」这类指令行。
+ */
+const PLANNING_CUE = /(?:^|\n)[ \t]*(?:写|开始写|直接写|输出|汇报|答复|正文)[^\n]{0,8}[。：:][ \t]*/g
+const PLANNING_LINE = /(?:^|\n)[ \t]*[^\n]{0,8}(?:篇幅|长度)[^\n]{0,24}?字[^\n]{0,12}?[。.][ \t]*/g
+const PLANNING_INSTRUCTION = /(?:^|\n)[ \t]*不要(?:以|问|复述)[^\n]*/g
+/** 收尾像完整回答的字符：句末标点、引号/反引号/括号。 */
+const ANSWER_TAIL = /[。！？.!?）)」』”"'`~|]\s*$/
+/** 正文首行至少像个句子（或 Markdown 结构），不能是「Go.」「写。」这种短指令。 */
+const ANSWER_HEAD = /^(?:#{1,6}\s|[-*+]\s|\||>|\d+[.、]\s)/
+
+function lastMatchEnd(pattern: RegExp, text: string): number {
+  let end = -1
+  for (const match of text.matchAll(pattern)) {
+    end = Math.max(end, (match.index ?? 0) + match[0].length)
+  }
+  return end
+}
+
+/**
+ * 只取「模型明确从筹划切换到书写」之后的内容。
+ *
+ * 实测泄漏的思考形如：先列汇报结构（“结构：1. 结论 2. 证据…篇幅 800 字左右”），
+ * 再写「写。」或「写最终回复。」，后面才是真正给用户看的正文。
+ *
+ * 找不到这种边界就不提升：纯思考叙述（“Examining the file system…”、“Now let me
+ * write the summary…Key points:”）不是答复，误当正文反而更差，宁交给 empty_output 重试。
+ */
+export function extractWrittenAnswer(text: string): string | null {
+  const cut = Math.max(
+    lastMatchEnd(PLANNING_CUE, text),
+    lastMatchEnd(PLANNING_LINE, text),
+    lastMatchEnd(PLANNING_INSTRUCTION, text),
+  )
+  if (cut <= 0) return null
+  const tail = text.slice(cut).trim()
+  if (tail.length < MIN_PROMOTABLE_THINKING_CHARS) return null
+  if (!ANSWER_TAIL.test(tail)) return null
+  const firstLine = tail.split('\n')[0]?.trim() ?? ''
+  const startsLikeAnswer = firstLine.length >= 10 || ANSWER_HEAD.test(firstLine)
+  return startsLikeAnswer ? tail : null
+}
+
+/**
+ * 判断 thinking-only 空输出里的思考内容能否直接当正文。
+ *
+ * DeepSeek 系在长上下文里会把整篇回答写进 reasoning_content，再以 finish_reason=stop
+ * 结束、content 为空。实测一个会话里 8 例全部是这种形态：思考里先写汇报提纲，
+ * 再「写。」，然后就是完整正文。直接提升为正文，比「报错 + 原样重发 30 万 token」划算得多。
+ * 截断在半句、或只是思考叙述的，仍交给 empty_output 恢复逻辑。
+ */
+export function promotableThinkingText(message: AssistantMessage): string | null {
+  if (message.stopReason === 'aborted' || message.stopReason === 'error' || message.errorMessage) return null
+  if (hasVisiblePiAssistantOutput(message)) return null
+  const thinking = thinkingTextOf(message)
+  if (thinking.length < MIN_PROMOTABLE_THINKING_CHARS) return null
+  return extractWrittenAnswer(thinking)
 }
 
 function usageFromAssistant(message: AssistantMessage): {
@@ -777,7 +851,10 @@ export function convertPiMessage(
     //   Pi SDK 认定本轮已成功，不应在渲染层误导用户。
     // 上述非终态情况的 errorMessage 只写主进程 console，供开发排查；用户侧完全无感知。
     const isTerminalError = assistant.stopReason === 'error'
+    // thinking-only 且思考内容已是完整答复时，提升为正文，不再当空输出处理。
+    const promotedThinking = final ? promotableThinkingText(assistant) : null
     const isEmptyVisibleOutput = final
+      && !promotedThinking
       && assistant.stopReason !== 'aborted'
       && !assistant.errorMessage
       && !hasVisiblePiAssistantOutput(assistant)
@@ -789,21 +866,23 @@ export function convertPiMessage(
     return {
       type: 'assistant',
       message: {
-        content: assistant.content.map((block) => {
-          if (block.type === 'text') return { type: 'text', text: block.text }
-          if (block.type === 'thinking') return { type: 'thinking', thinking: block.thinking }
-          if (block.type === 'toolCall') {
-            return {
-              type: 'tool_use',
-              id: block.id,
-              name: displayToolName(block.name, block.arguments as Record<string, unknown>),
-              // Pi 的 toolcall_delta 每帧携带累计 arguments。大 Write content 会随每个 token
-              // 反复穿过 IPC、Jotai 和 React；预览帧只需保留工具身份，最终帧再提供完整 input。
-              input: final ? normalizeToolUseInput(block.name, block.arguments as Record<string, unknown>) : {},
+        content: promotedThinking
+          ? [{ type: 'text', text: promotedThinking }]
+          : assistant.content.map((block) => {
+            if (block.type === 'text') return { type: 'text', text: block.text }
+            if (block.type === 'thinking') return { type: 'thinking', thinking: block.thinking }
+            if (block.type === 'toolCall') {
+              return {
+                type: 'tool_use',
+                id: block.id,
+                name: displayToolName(block.name, block.arguments as Record<string, unknown>),
+                // Pi 的 toolcall_delta 每帧携带累计 arguments。大 Write content 会随每个 token
+                // 反复穿过 IPC、Jotai 和 React；预览帧只需保留工具身份，最终帧再提供完整 input。
+                input: final ? normalizeToolUseInput(block.name, block.arguments as Record<string, unknown>) : {},
+              }
             }
-          }
-          return block as unknown as Record<string, unknown>
-        }),
+            return block as unknown as Record<string, unknown>
+          }),
         usage: usageFromAssistant(assistant),
         model: assistant.model,
         stop_reason: assistant.stopReason,
@@ -819,6 +898,7 @@ export function convertPiMessage(
         error: { message: EMPTY_OUTPUT_ERROR_MESSAGE, errorType: 'empty_output' },
         _emptyOutput: true,
       }),
+      ...(promotedThinking && { _promotedFromThinking: true }),
       ...(channelModelId && { _channelModelId: channelModelId }),
     } as unknown as SDKMessage
   }
@@ -925,8 +1005,11 @@ export function convertResultMessage(
   )
   const lastAssistant = assistants[assistants.length - 1]
   const assistantError = lastAssistant?.errorMessage
+  // 思考内容已提升为正文时，本轮不算空输出。
+  const promotedThinking = lastAssistant ? promotableThinkingText(lastAssistant) : null
   const isEmptyVisibleOutput = Boolean(
     lastAssistant
+    && !promotedThinking
     && lastAssistant.stopReason !== 'aborted'
     && !hasVisiblePiAssistantOutput(lastAssistant)
     && !assistantError,

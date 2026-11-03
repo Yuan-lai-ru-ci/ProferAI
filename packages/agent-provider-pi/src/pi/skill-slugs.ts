@@ -1,11 +1,9 @@
 /**
  * Profer 自带默认 Skill 的历史 slug 兼容。
  *
- * 仅维护应用明确改名过的默认 Skill；绝不对用户自建 Skill 做模糊替换。
+ * 仅维护应用明确改名过的默认 Skill；当前没有待归一化的历史 slug。
  */
-export const RENAMED_DEFAULT_SKILLS: ReadonlyMap<string, string> = new Map([
-  ['proma-coach', 'profer-coach'],
-])
+export const RENAMED_DEFAULT_SKILLS: ReadonlyMap<string, string> = new Map()
 
 /** 将历史默认 Skill slug 归一化为当前 slug；未知 slug 原样返回。 */
 export function normalizeDefaultSkillSlug(slug: string): string {

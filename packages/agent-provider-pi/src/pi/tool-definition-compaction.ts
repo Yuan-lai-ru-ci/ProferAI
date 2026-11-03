@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
+import { TASK_GRAPH_TOOL_CREATE, normalizeTaskGraphShortName } from '@profer/shared'
 
 /**
  * Pi 每轮都会把工具描述和 TypeBox schema 一起送给模型。
@@ -99,7 +100,9 @@ const COMPACT_BROWSER_DESCRIPTIONS: Record<string, string> = {
 
 function compactMcpDescription(name: string): string | undefined {
   if (name.startsWith('mcp__task-graph__')) {
-    return name.endsWith('proma_task_create') ? '创建任务图节点；dependsOn 直接填写依赖。' : '更新任务图节点、依赖或放弃状态。'
+    return normalizeTaskGraphShortName(name) === TASK_GRAPH_TOOL_CREATE
+      ? '创建任务图节点；dependsOn 直接填写依赖。'
+      : '更新任务图节点、依赖或放弃状态。'
   }
   if (name === 'update_goal') return COMPACT_DESCRIPTIONS.update_goal
 

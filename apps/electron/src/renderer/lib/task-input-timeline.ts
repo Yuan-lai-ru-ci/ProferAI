@@ -9,7 +9,8 @@ export function isScheduledTaskInput(message: SDKMessage): boolean {
   if (!isUserInputMessage(userMessage)) return false
   const provenance = readMessageProvenance(message._provenance)
   if (provenance) return provenance.source?.type === 'automation' || provenance.author.type === 'automation'
-  return (extractUserText(userMessage) ?? '').includes('<!--PROMA_SCHEDULED_RUN-->')
+  return (extractUserText(userMessage) ?? '').includes('<!--PROFER_SCHEDULED_RUN-->')
+    || (extractUserText(userMessage) ?? '').includes('<!--PROMA_SCHEDULED_RUN-->')
 }
 
 export function isTaskSourceInput(message: SDKMessage): boolean {

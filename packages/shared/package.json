@@ -2,7 +2,7 @@
   "name": "@profer/shared",
   "version": "0.1.47",
   "license": "AGPL-3.0-only",
-  "description": "Shared types, configs and utilities for proma",
+  "description": "Shared types, configs and utilities for profer",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

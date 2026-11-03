@@ -7,8 +7,8 @@
 
 import type { InstallerManifest, InstallerSource } from '@profer/shared'
 
-const PROMA_API_BASE = 'https://api.proma.cool'
-const MANIFEST_URL = `${PROMA_API_BASE}/api/v1/installers/manifest`
+const PROFER_API_BASE = 'https://api.profer.cn'
+const MANIFEST_URL = `${PROFER_API_BASE}/api/v1/installers/manifest`
 const CACHE_TTL_MS = 5 * 60 * 1000
 
 interface ManifestCache {

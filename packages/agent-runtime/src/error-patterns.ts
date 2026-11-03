@@ -24,7 +24,7 @@ export function isTransientNetworkError(message?: string, stderr?: string): bool
   )
 }
 
-// ===== 网络异常细分类（Proma #1267 对齐） =====
+// ===== 网络异常细分类（Profer #1267 对齐） =====
 
 /**
  * 网络错误子类型

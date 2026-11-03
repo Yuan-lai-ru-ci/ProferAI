@@ -1,10 +1,10 @@
 /**
  * Agent runtime 行为守卫。
  *
- * 这层只表达 Proma 自己承诺的语义，不绑定某个 SDK 的入口调用方式：
+ * 这层只表达 Profer 自己承诺的语义，不绑定某个 SDK 的入口调用方式：
  * - 最大轮次：在 turn 完成后、下一轮 prompt / steer / follow-up 前停止。
  * - 最大预算：在 runtime 返回已知费用后，停止后续工具批次、prompt 与队列消息。
- * - 结构化输出：provider 没有统一的 schema response format，Proma 用提示词约束
+ * - 结构化输出：provider 没有统一的 schema response format，Profer 用提示词约束
  *   加最终结果校验补齐兼容行为。
  *
  * 依赖边界：守卫只读消息的 role / content / usage 三个结构位置，因此契约用本地结构类型

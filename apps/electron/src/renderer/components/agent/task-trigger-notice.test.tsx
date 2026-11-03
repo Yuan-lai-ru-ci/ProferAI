@@ -82,7 +82,7 @@ describe('task_trigger 来源卡渲染', () => {
     const scheduled = { ...notice, _provenance: { ...notice._provenance!, author: { type: 'automation' as const }, source: { type: 'automation' as const, id: 'schedule' } } }
     const input = {
       type: 'user', parent_tool_use_id: null, _createdAt: 1793512920000,
-      message: { content: [{ type: 'text', text: '获取当前本地时间，并追加一条测试日志。\n<!--PROMA_SCHEDULED_RUN-->' }] },
+      message: { content: [{ type: 'text', text: '获取当前本地时间，并追加一条测试日志。\n<!--PROFER_SCHEDULED_RUN-->' }] },
       _provenance: { ...scheduled._provenance!, messageId: 'task-input', author: { type: 'user' as const } },
     } as SDKMessage
     const store = createStore()
@@ -97,7 +97,7 @@ describe('task_trigger 来源卡渲染', () => {
       expect(html).toContain('获取当前本地时间，并追加一条测试日志。')
       expect(html).toContain('查看定时任务')
       expect(html).not.toContain('data-message-role="user"')
-      expect(html).not.toContain('PROMA_SCHEDULED_RUN')
+      expect(html).not.toContain('PROFER_SCHEDULED_RUN')
       expect(html).not.toContain('修改重发')
       expect(html).not.toContain('原配置已更新')
     }

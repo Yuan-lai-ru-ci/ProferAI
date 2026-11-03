@@ -1,5 +1,5 @@
 /**
- * Shared type definitions for proma
+ * Shared type definitions for profer
  */
 
 // Placeholder types - will be expanded as needed
@@ -65,6 +65,7 @@ export * from './changelog'
 export * from './system-prompt'
 export * from './agent-preset'
 export * from './agent-preset-policy'
+export * from './task-graph-tools'
 
 // Chat 工具（function calling）相关类型
 export * from './chat-tool'

@@ -8,7 +8,7 @@ import { resolveProviderNativeProtocol } from './provider-capability'
 export { isClaudeAdaptiveThinkingModel, resolveReasoningModelTag } from './reasoning-model-tag'
 export type { ReasoningModelTag, ReasoningModelTagRule } from './reasoning-model-tag'
 
-/** Proma 可识别的 reasoning 请求协议族。 */
+/** Profer 可识别的 reasoning 请求协议族。 */
 export type ReasoningTransport =
   | 'anthropic-messages'
   | 'openai-completions'

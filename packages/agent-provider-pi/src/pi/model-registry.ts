@@ -1,7 +1,7 @@
 /**
  * Pi 模型注册与渠道兼容层。
  *
- * Pi SDK 需要把 Proma 渠道临时注册成 runtime provider；这里集中处理
+ * Pi SDK 需要把 Profer 渠道临时注册成 runtime provider；这里集中处理
  * ProviderType 到 Pi API 协议、baseUrl、认证头和模型 catalog 默认值的映射。
  */
 
@@ -322,7 +322,14 @@ export function normalizePiApi(provider: ProviderType, baseUrl?: string): Api {
   // 静态归属来自能力描述符，deepseek/ollama 的端点形态嗅探也在那里完成。
   // DeepSeek 第三方网关若误判为 Anthropic，Agent 会发送 `/v1/messages` 而完全不可用，
   // 而 Chat 走 OpenAI 适配器却正常——协议必须跟随配置的端点，而不是写死 provider。
-  return resolveProviderNativeProtocol(provider, baseUrl)
+  const native = resolveProviderNativeProtocol(provider, baseUrl)
+  // 官方 Mistral 的 OpenAI 兼容层有两处无法在 openai-completions 适配器里消化的硬差异：
+  // 1) 请求体做 extra_forbidden 校验（store / stream_options / max_completion_tokens → 422）；
+  // 2) 流式 delta.content 可能是内容块数组（text / thinking），按字符串拼接会变成
+  //    `[object Object]`，把整段思考内容当正文渲染。
+  // Pi 自带 mistral-conversations 适配器按官方协议处理这两点，官方端点直接切过去。
+  if (native === 'openai-completions' && isOfficialMistralEndpoint(baseUrl)) return 'mistral-conversations'
+  return native
 }
 
 function candidatePiProviders(provider: ProviderType): KnownProvider[] {
@@ -462,6 +469,18 @@ function applyOpenAICompatibleFinishReasonFallback(
   return { ...(compat ?? {}), supportsFinishReason: false } as PiModelDefaults['compat']
 }
 
+/** 是否官方 Mistral 端点（含 .mistral.ai 子域）；第三方中转不适用其严格协议差异。 */
+function isOfficialMistralEndpoint(baseUrl?: string): boolean {
+  const raw = baseUrl?.trim()
+  if (!raw) return false
+  try {
+    const host = new URL(raw).hostname.toLowerCase()
+    return host === 'api.mistral.ai' || host.endsWith('.mistral.ai')
+  } catch {
+    return /(^|\/\/)([^/]*\.)?mistral\.ai([:/]|$)/i.test(raw)
+  }
+}
+
 async function resolvePiModelDefaults(
   input: PiModelRegistryInput,
   explicit1MContext = false,
@@ -563,6 +582,15 @@ function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType)
     return /\/v1$/i.test(normalized) ? normalized : `${normalized}/v1`
   }
   const api = normalizePiApi(provider, baseUrl)
+  if (api === 'mistral-conversations') {
+    // Pi 的 Mistral 适配器自己拼 `/v1/chat/completions`，baseUrl 只能是站点根：
+    // 留着 `/v1` 会拼成 `/v1/v1/chat/completions`（Mistral 的 Kong 直接 404）。
+    try {
+      return new URL(baseUrl.trim()).origin
+    } catch {
+      return baseUrl.trim().replace(/\/+$/, '').replace(/\/v\d+$/i, '')
+    }
+  }
   if (api === 'anthropic-messages') {
     // Pi's Anthropic SDK appends `/v1/messages` itself. Do not first resolve
     // the complete endpoint: that turns the commercial relay base

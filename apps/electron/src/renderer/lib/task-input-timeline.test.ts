@@ -7,7 +7,7 @@ import { isScheduledTaskInput, isTaskSourceInput, projectTaskInputTimeline } fro
 
 const input = (runId = 'run-1', messageId = 'input-1'): SDKMessage => ({
   type: 'user', parent_tool_use_id: null, _createdAt: 100,
-  message: { content: [{ type: 'text', text: '获取时间并写入日志\n<!--PROMA_SCHEDULED_RUN-->' }] },
+  message: { content: [{ type: 'text', text: '获取时间并写入日志\n<!--PROFER_SCHEDULED_RUN-->' }] },
   _provenance: { schemaVersion: 1, messageId, runId, triggerId: `${runId}-trigger`, author: { type: 'user' }, source: { type: 'automation', id: 'schedule' } },
 }) as SDKMessage
 const notice = (runId = 'run-1'): SDKMessage => ({

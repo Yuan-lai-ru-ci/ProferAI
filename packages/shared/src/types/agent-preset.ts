@@ -15,6 +15,7 @@
 
 import type { AgentEffort, ProferPermissionMode } from "./agent";
 import type { AgentRuntime } from "./agent-provider";
+import { TASK_GRAPH_TOOL_CREATE, TASK_GRAPH_TOOL_UPDATE, normalizeTaskGraphShortName } from "./task-graph-tools";
 
 /** 预设实体作用域；builtin-meta 由 Profer 维护且只读。 */
 export type AgentPresetScope = "builtin-meta" | "user-global" | "workspace";
@@ -158,8 +159,8 @@ export const AGENT_PRESET_CAPABILITY_GROUPS = [
   capabilityGroup({
     id: 'task-graph', label: '任务图', hint: '子任务图工具', suppressPromptSection: 'task-graph',
     tools: [
-      capabilityTool('proma_task_create', '创建任务', '创建结构化任务图节点', 'write'),
-      capabilityTool('proma_task_update', '更新任务', '更新任务状态或依赖', 'write'),
+      capabilityTool(TASK_GRAPH_TOOL_CREATE, '创建任务', '创建结构化任务图节点', 'write'),
+      capabilityTool(TASK_GRAPH_TOOL_UPDATE, '更新任务', '更新任务状态或依赖', 'write'),
     ],
   }),
   capabilityGroup({
@@ -306,15 +307,15 @@ export function getAgentPresetCapabilityTools(
     : tools.filter((tool) => tool.runtimes.includes(runtime));
 }
 
-/** 按 disabledTools 短名过滤工具定义（Claude/Pi 注册点共用）。 */
+/** 按 disabledTools 短名过滤工具定义（Claude/Pi 注册点共用）。旧名先折叠成正式名。 */
 export function filterDisabledTools<T extends { name: string }>(
   tools: T[],
   disabledTools: readonly string[] | undefined,
 ): T[] {
   if (!disabledTools?.length) return tools;
-  const disabled = new Set(disabledTools);
+  const disabled = new Set(disabledTools.map(normalizeTaskGraphShortName));
   return tools.filter(
-    (tool) => !disabled.has(tool.name.split("__").at(-1) ?? tool.name),
+    (tool) => !disabled.has(normalizeTaskGraphShortName(tool.name)),
   );
 }
 

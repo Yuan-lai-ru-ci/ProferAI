@@ -187,7 +187,7 @@ async function renderWithOfficialMermaid(code: string): Promise<string> {
     },
   })
 
-  const id = `proma-mermaid-${Date.now()}-${mermaidRenderId++}`
+  const id = `profer-mermaid-${Date.now()}-${mermaidRenderId++}`
   const { svg } = await mermaid.render(id, code)
   if (!isUsableSvg(svg)) throw new Error('Mermaid 输出了无效 SVG')
   return svg

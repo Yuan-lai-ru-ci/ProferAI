@@ -92,6 +92,8 @@ describe('Claude provider：SDK 查询选项透传', () => {
       expect(sdkOptions.promptSuggestions).toBe(false)
       // SDK 不认识这个选项，传了会被静默忽略；断言不存在，防止再把无效开关当成串行控制。
       expect('toolUseConcurrency' in sdkOptions).toBe(false)
+      // 未传内联 settings（managed 路径）：不得凭空造出 `settings` 键，保持只读 cwd 文件的旧行为。
+      expect('settings' in sdkOptions).toBe(false)
       expect(sdkOptions.settingSources).toEqual(['project'])
       expect(sdkOptions.cwd).toBe('/fixture/cwd')
       expect(sdkOptions.resume).toBe('resume-fixture')
@@ -114,6 +116,31 @@ describe('Claude provider：SDK 查询选项透传', () => {
       const done = await stream.next()
       expect(done.done).toBe(true)
       expect(harness.double.state.returnCalls).toBe(1)
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test('Given 内联 settings When 发起 query Then 以 SDK settings 选项透传且保留 settingSources', async () => {
+    const harness = createHarness()
+    // project 路径：SDK 只读 cwd 下的 `.claude/settings.json`，storageDir 那份必须内联下发才生效。
+    const inlineSettings = {
+      plansDirectory: '../../../../sessions/session-fixture/.context',
+      skipWebFetchPreflight: true,
+      autoMemoryDirectory: '/fixture/project/.profer/memory',
+    }
+    try {
+      const stream = harness.adapter.query(baseInput('inline-settings', { settings: inlineSettings }))[Symbol.asyncIterator]()
+      const pending = stream.next()
+      await waitUntil(() => harness.double.state.options !== undefined)
+      const sdkOptions = harness.double.state.options!
+      expect(sdkOptions.settings).toEqual(inlineSettings)
+      // settingSources 不动：cwd 的项目设置照旧读取，同名键由 flag 层（内联）覆盖。
+      expect(sdkOptions.settingSources).toEqual(['project'])
+      harness.double.push({ type: 'result', subtype: 'success', session_id: 'sdk-inline', terminal_reason: 'completed' })
+      const message = await pending
+      expect(message.done).toBe(false)
+      await stream.next()
     } finally {
       harness.dispose()
     }

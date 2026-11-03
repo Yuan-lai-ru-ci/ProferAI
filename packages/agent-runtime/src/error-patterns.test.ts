@@ -109,7 +109,7 @@ describe('isMalformedResponseError', () => {
   })
 })
 
-// ===== 网络异常细分类测试（Proma #1267 对齐） =====
+// ===== 网络异常细分类测试（Profer #1267 对齐） =====
 
 describe('classifyNetworkError', () => {
   test('Given DNS 错误 Then 分类为 dns', () => {

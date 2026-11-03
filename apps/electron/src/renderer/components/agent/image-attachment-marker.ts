@@ -1,5 +1,5 @@
-/** Agent 文本/工具结果中的历史本地图片附件协议标记（仅用于兼容旧会话）。 */
-export const IMAGE_ATTACHMENT_MARKER_PREFIX = '[PROMA_IMAGE_ATTACHMENT:'
+/** Agent 文本/工具结果中的历史本地图片附件协议标记（兼容旧会话）。 */
+export const IMAGE_ATTACHMENT_MARKER_PREFIX = '[PROFER_IMAGE_ATTACHMENT:'
 
 export type AgentImageAttachmentMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'
 
@@ -17,7 +17,8 @@ const SUPPORTED_MEDIA_TYPES = new Set<AgentImageAttachmentMediaType>([
 ])
 
 // 该 marker 来自受控主进程工具；renderer 仍仅接受已知的非执行型位图 MIME。
-const MARKER_REGEX = /\[PROMA_IMAGE_ATTACHMENT:(.+?)\]/g
+// 旧会话消息里持久化的是改名前的 `[PROMA_IMAGE_ATTACHMENT:`，必须继续识别，否则历史图片会退化成裸标记文本。
+const MARKER_REGEX = /\[(?:PROMA|PROFER)_IMAGE_ATTACHMENT:(.+?)\]/g
 
 function isSupportedImageMediaType(value: unknown): value is AgentImageAttachmentMediaType {
   return typeof value === 'string' && SUPPORTED_MEDIA_TYPES.has(value as AgentImageAttachmentMediaType)

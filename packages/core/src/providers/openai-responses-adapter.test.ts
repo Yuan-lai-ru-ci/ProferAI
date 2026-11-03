@@ -50,7 +50,7 @@ describe('OpenAIResponsesAdapter', () => {
       modelId: 'gpt-5.1',
       history: [{ id: 'm1', parentId: null, role: 'assistant', content: '历史回复', createdAt: 1 }],
       userMessage: '你好',
-      systemMessage: '你是 Proma',
+      systemMessage: '你是 Profer',
       readImageAttachments: () => [],
     })
 
@@ -60,7 +60,7 @@ describe('OpenAIResponsesAdapter', () => {
     expect(body.model).toBe('gpt-5.1')
     expect(body.stream).toBe(true)
     expect(body.input).toEqual([
-      { role: 'system', content: '你是 Proma' },
+      { role: 'system', content: '你是 Profer' },
       { role: 'assistant', content: '历史回复' },
       { role: 'user', content: '你好' },
     ])
@@ -81,7 +81,7 @@ describe('OpenAIResponsesAdapter', () => {
     const delta = adapter.parseSSELine(JSON.stringify({
       type: 'response.function_call_arguments.delta',
       output_index: 0,
-      delta: '{"query":"Proma"}',
+      delta: '{"query":"Profer"}',
     }))
 
     expect(start).toEqual([{
@@ -93,7 +93,7 @@ describe('OpenAIResponsesAdapter', () => {
     expect(delta).toEqual([{
       type: 'tool_call_delta',
       toolCallId: '',
-      argumentsDelta: '{"query":"Proma"}',
+      argumentsDelta: '{"query":"Profer"}',
       metadata: { outputIndex: 0 },
     }])
   })
@@ -107,7 +107,7 @@ describe('OpenAIResponsesAdapter', () => {
         { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'read' } },
         { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"query"' },
         { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"path"' },
-        { type: 'response.function_call_arguments.delta', output_index: 0, delta: ':"Proma"}' },
+        { type: 'response.function_call_arguments.delta', output_index: 0, delta: ':"Profer"}' },
         { type: 'response.function_call_arguments.delta', output_index: 1, delta: ':"README.md"}' },
         { type: 'response.completed', response: { status: 'completed' } },
       ]),
@@ -116,7 +116,7 @@ describe('OpenAIResponsesAdapter', () => {
 
     expect(result.stopReason).toBe('tool_use')
     expect(result.toolCalls).toEqual([
-      { id: 'call_1|fc_1', name: 'search', arguments: { query: 'Proma' }, metadata: { itemId: 'fc_1', outputIndex: 0 } },
+      { id: 'call_1|fc_1', name: 'search', arguments: { query: 'Profer' }, metadata: { itemId: 'fc_1', outputIndex: 0 } },
       { id: 'call_2|fc_2', name: 'read', arguments: { path: 'README.md' }, metadata: { itemId: 'fc_2', outputIndex: 1 } },
     ])
   })
@@ -128,14 +128,14 @@ describe('OpenAIResponsesAdapter', () => {
       fetchFn: createSSEFetch([
         { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'search' } },
         { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"query":"partial"' },
-        { type: 'response.function_call_arguments.done', output_index: 0, arguments: '{"query":"Proma"}' },
+        { type: 'response.function_call_arguments.done', output_index: 0, arguments: '{"query":"Profer"}' },
         { type: 'response.completed', response: { status: 'completed' } },
       ]),
       onEvent: () => {},
     })
 
     expect(result.toolCalls).toEqual([
-      { id: 'call_1|fc_1', name: 'search', arguments: { query: 'Proma' }, metadata: { itemId: 'fc_1', outputIndex: 0 } },
+      { id: 'call_1|fc_1', name: 'search', arguments: { query: 'Profer' }, metadata: { itemId: 'fc_1', outputIndex: 0 } },
     ])
   })
 
@@ -144,14 +144,14 @@ describe('OpenAIResponsesAdapter', () => {
       request: buildRequest(),
       adapter,
       fetchFn: createSSEFetch([
-        { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'search', arguments: '{"query":"Proma"}' } },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'search', arguments: '{"query":"Profer"}' } },
         { type: 'response.completed', response: { status: 'completed' } },
       ]),
       onEvent: () => {},
     })
 
     expect(result.toolCalls).toEqual([
-      { id: 'call_1|fc_1', name: 'search', arguments: { query: 'Proma' }, metadata: { itemId: 'fc_1', outputIndex: 0 } },
+      { id: 'call_1|fc_1', name: 'search', arguments: { query: 'Profer' }, metadata: { itemId: 'fc_1', outputIndex: 0 } },
     ])
   })
 

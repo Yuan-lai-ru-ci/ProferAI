@@ -9,7 +9,7 @@ import type { AgentRuntime } from './agent-provider'
 
 // ===== 飞书 Bot 配置 =====
 
-/** 飞书 Bot 应用配置（持久化到 ~/.proma/feishu.json）— 旧格式，向后兼容 */
+/** 飞书 Bot 应用配置（持久化到 ~/.profer/feishu.json）— 旧格式，向后兼容 */
 export interface FeishuConfig {
   /** 是否启用飞书集成 */
   enabled: boolean
@@ -52,7 +52,7 @@ export interface FeishuBotConfig {
   defaultModelId?: string
 }
 
-/** 多 Bot 配置文件（~/.proma/feishu.json 新格式） */
+/** 多 Bot 配置文件（~/.profer/feishu.json 新格式） */
 export interface FeishuMultiBotConfig {
   version: 2
   bots: FeishuBotConfig[]
