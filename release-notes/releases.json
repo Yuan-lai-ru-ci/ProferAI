@@ -1,5 +1,16 @@
 [
   {
+    "id": "RE_kwDOTfo-884Z0GmA",
+    "tag_name": "v0.16.19",
+    "name": "Profer v0.16.19",
+    "body": "# Profer v0.16.19\n\n## 优化\n\n- **项目会话随目录迁移**：新项目会话私有数据存放于项目的 `.profer/sessions/`，兼容旧中央存储布局；只读项目回退中央目录，默认忽略规则补齐会话、缓存和运行时文件。\n- **项目重新定位**：项目移动后可重新绑定目录，保留工作区 id 与 slug，避免会话和定时任务的关联失效。\n- **会话索引减负**：Pi 检查点与条目绑定状态拆分存储，会话列表不再传输这两个大字段。\n- **异步删除**：会话删除改为队列清理，入队后立即从列表隐藏；停止失败或超时可继续清理，减少同步文件操作阻塞。\n\n## 修复\n\n- **子会话运行展示**：headless 运行保留已有窗口绑定；委派运行状态补齐持久化兜底，避免过程区一直折叠。\n- **思考块与输入框**：忽略空白正文和思考块，调整流式思考展开行为；发送后主动清空编辑器及草稿同步状态，减少文字残留。\n- **官方端点兼容**：Chat、Pi 与连接测试统一识别官方 Anthropic、Gemini、Mistral 端点；Mistral 原生请求不再强制声明未启用的推理能力。\n- **回顾请求协议**：一次性 JSON 请求按实际适配器构造，兼容 Google 原生、OpenAI Responses、Chat Completions 与 Anthropic Messages。\n- **IM 错误反馈**：建会话失败时返回可见原因，补齐飞书凭据错误提示与卡片运行状态处理。\n",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-11-03T18:21:35Z",
+    "published_at": "2026-11-03T18:52:18Z",
+    "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.16.19"
+  },
+  {
     "id": "RE_kwDOTfo-884ZzN1c",
     "tag_name": "v0.16.18",
     "name": "Profer v0.16.18",
