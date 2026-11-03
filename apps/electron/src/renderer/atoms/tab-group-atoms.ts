@@ -93,11 +93,11 @@ export const GROUP_MIN_ADJUSTABLE_BAND = 0.25
 export const GROUP_MIN_RATIO = 0.25
 export const GROUP_MAX_RATIO = 0.75
 
-/** 分栏缝拖到极限后，越过这么多像素开始提示「继续拖动可收起该栏」 */
-export const GROUP_COLLAPSE_HINT_OVERSHOOT = 8
-
-/** 分栏缝拖过极限这么多像素，自动收起被挤压的一栏（解散分栏，另一栏独占） */
-export const GROUP_COLLAPSE_OVERSHOOT = 32
+/**
+ * 收起手势的行程 = 被挤压那一栏的完整宽度（没有单独的阈值常量）：
+ * 指针再往左/右走 1px，栏位边缘也跟着走 1px（1:1 跟手）；
+ * 边缘被推到容器左/右边缘时，这一栏正好完全滑出——松手才落定。
+ */
 
 // ===== 纯函数 =====
 
@@ -563,9 +563,12 @@ export function resolveGroupDropSide(input: {
   fallbackSplitX: number
 }): TabGroupSide {
   const { clientX, leftPane, rightPane, fallbackSplitX } = input
-  const splitX = leftPane && rightPane
-    && Number.isFinite(leftPane.right)
-    && Number.isFinite(rightPane.left)
+  // 0 宽的栏（display:none / 已收起的栏）不能参与中点计算：否则右栏起点会变成 0，
+  // 整片投放区都会被判成同一侧。不可用时回落到 fallbackSplitX。
+  const usable = (pane: { left: number; right: number }): boolean => (
+    Number.isFinite(pane.left) && Number.isFinite(pane.right) && pane.right - pane.left > 0
+  )
+  const splitX = leftPane && rightPane && usable(leftPane) && usable(rightPane)
     ? (leftPane.right + rightPane.left) / 2
     : fallbackSplitX
   return clientX < splitX ? 'left' : 'right'
@@ -613,50 +616,55 @@ export function resolveGroupSplitGeometry(
 }
 
 export interface GroupCollapseIntent {
-  /** 被挤压、即将被收起的一栏 */
+  /** 被挤压、正在滑出的一栏 */
   side: TabGroupSide
-  /** 越过极限的像素数（> 0） */
-  overshoot: number
-  /** 是否已经越过收起阈值 */
-  ready: boolean
+  /** 这一栏滑出了多少 px（0 = 刚好拖到极限） */
+  slide: number
+  /** 这一栏的完整宽度（滑满即完全收起） */
+  paneWidth: number
+  /** 收起进度 0..1（1 = 已完全滑出） */
+  progress: number
 }
 
 /**
- * 分栏缝拖过「最小栏宽」极限后的收起意图。
+ * 分栏缝拖过「最小栏宽」极限后的收起进度。
  *
- * 分栏缝到达最小栏宽后就 clamp 住不再移动，用户继续外拖时指针会离开这条线——
- * 这段「线不动、指针还在走」的距离就是收起手势的判定依据：
- * - 越过 GROUP_COLLAPSE_HINT_OVERSHOOT：返回意图（ready=false），调用方据此显示提示；
- * - 越过 GROUP_COLLAPSE_OVERSHOOT：ready=true，调用方立即收起被挤压的一栏。
+ * 滑出量与指针 **1:1**：指针再往左走 1px，被挤压那一栏的右边缘也往左 1px（右栏对称）。
+ * 所以拖动过程和拖分栏缝本身完全同感，不会出现“线跑得比手快”。
+ * 行程就是这一栏的宽度：边缘被推到容器边缘时正好滑满（progress = 1）。
+ * 调用方可以更早磁吸收起（MainArea 在一半处吸附）；拉回去就原路滑回，不收起。
  *
- * 极限取 resolveGroupSplitGeometry 的实际生效下限，与渲染宽度同源：
- * 容器够宽时是 GROUP_MIN_PANE_WIDTH，容器偏窄时是保底可调区间对应的栏宽。
+ * 只在栏位已经 clamp 在最小宽度（到达极限）时才返回意图：正常拖宽时两栏宽度跟着指针走，
+ * 不会因为渲染滞后一帧就把普通拖动误判成收起手势。
  */
 export function resolveGroupCollapseIntent(input: {
   containerWidth: number
   /** 指针相对分栏容器左缘的 x；外拖时可以为负或大于容器宽 */
   pointerX: number
+  /** 左栏当前宽度（拖动中会冻结在极限宽度） */
+  leftPaneWidth: number
+  /** 右栏当前宽度 */
+  rightPaneWidth: number
   gap?: number
-  hintOvershoot?: number
-  collapseOvershoot?: number
 }): GroupCollapseIntent | null {
   const gap = input.gap ?? GROUP_SPLIT_GAP
-  const hintOvershoot = input.hintOvershoot ?? GROUP_COLLAPSE_HINT_OVERSHOOT
-  const collapseOvershoot = input.collapseOvershoot ?? GROUP_COLLAPSE_OVERSHOOT
-  const available = Math.max(0, input.containerWidth - gap)
-  if (available <= 0) return null
-  // ratio=0 会被 clamp 到下限，此时右栏宽度就是「一栏能达到的最小宽度」；两栏对称。
-  const minPaneWidth = resolveGroupSplitGeometry(input.containerWidth, 0, { gap }).rightWidth
+  const { containerWidth, leftPaneWidth, rightPaneWidth } = input
+  if (containerWidth <= gap || leftPaneWidth <= 0 || rightPaneWidth <= 0) return null
+  // 最小栏宽（与渲染同源）：只有已经 clamp 到它的那一栏才可能进入收起手势。
+  const minPaneWidth = resolveGroupSplitGeometry(containerWidth, 0, { gap }).rightWidth
   if (minPaneWidth <= 0) return null
-  const leftWidth = input.pointerX - gap / 2
-  const rightWidth = available - leftWidth
-  const leftOvershoot = minPaneWidth - leftWidth
-  const rightOvershoot = minPaneWidth - rightWidth
-  // minPaneWidth < available/2，两侧不可能同时越界，取越界更多的一侧即可。
-  const side: TabGroupSide = leftOvershoot >= rightOvershoot ? 'left' : 'right'
-  const overshoot = Math.max(leftOvershoot, rightOvershoot)
-  if (overshoot < hintOvershoot) return null
-  return { side, overshoot, ready: overshoot >= collapseOvershoot }
+  // 栏位边缘当前应该在的位置：左栏 = 指针左侧半个缝隙，右栏 = 指针右侧半个缝隙。
+  const leftSlide = leftPaneWidth - (input.pointerX - gap / 2)
+  const rightSlide = input.pointerX + gap / 2 - (containerWidth - rightPaneWidth)
+  if (leftSlide > 0 && leftPaneWidth <= minPaneWidth + 0.5) {
+    const slide = Math.min(leftPaneWidth, leftSlide)
+    return { side: 'left', slide, paneWidth: leftPaneWidth, progress: slide / leftPaneWidth }
+  }
+  if (rightSlide > 0 && rightPaneWidth <= minPaneWidth + 0.5) {
+    const slide = Math.min(rightPaneWidth, rightSlide)
+    return { side: 'right', slide, paneWidth: rightPaneWidth, progress: slide / rightPaneWidth }
+  }
+  return null
 }
 
 // ===== Atoms =====

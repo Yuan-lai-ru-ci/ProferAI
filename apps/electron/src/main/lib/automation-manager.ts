@@ -2,7 +2,7 @@
  * 定时任务（Automation）管理器
  *
  * 负责定时任务的 CRUD 与运行历史持久化。
- * - 索引文件：~/.proma/automations.json
+ * - 索引文件：~/.profer/automations.json
  *
  * 照搬 agent-session-manager.ts 的原子写模式（safe-file）。
  * 调度逻辑见 automation-scheduler.ts，本文件只管数据。
@@ -592,6 +592,28 @@ export function deleteAutomation(id: string): boolean {
   writeIndex(index)
   console.log(`[定时任务] 已删除: ${id}`)
   return true
+}
+
+/**
+ * 停用绑定到指定工作区的全部定时任务。
+ *
+ * 工作区被移除后 `getAgentWorkspace(workspaceId)` 再也解析不到，调度侧会以用户主目录
+ * 作 cwd 执行无人值守任务（P1-3）。所以移除时必须先把任务停掉：
+ * `updateAutomation({ active: false })` 同时会把该任务的 queued / blocked trigger 标记为失败，
+ * 不会在下次 tick 被重拉起来。
+ *
+ * @returns 被本函数停用的任务 id（调用方负责广播 CHANGED）
+ */
+export function pauseAutomationsForWorkspace(workspaceId: string): string[] {
+  const paused: string[] = []
+  for (const automation of readIndex().automations) {
+    if (automation.workspaceId !== workspaceId || !automation.active) continue
+    if (updateAutomation({ id: automation.id, active: false })) paused.push(automation.id)
+  }
+  if (paused.length > 0) {
+    console.log(`[定时任务] 工作区 ${workspaceId} 已移除，停用 ${paused.length} 个绑定任务`)
+  }
+  return paused
 }
 
 export function getAutomationTrigger(triggerId: string): AutomationTriggerRecord | undefined {

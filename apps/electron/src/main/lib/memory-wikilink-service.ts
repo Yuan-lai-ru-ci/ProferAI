@@ -98,7 +98,16 @@ function indexMemoryDir(directory: string, kind: 'archive' | 'auto'): MemoryFile
 }
 
 function indexAll(archiveDir: string, autoDir: string): MemoryFileMeta[] {
-  return [...indexMemoryDir(archiveDir, 'archive'), ...(autoDir ? indexMemoryDir(autoDir, 'auto') : [])]
+  // 同一目录可能被两个域同时传入（统一记忆目录）：按绝对路径去重，
+  // 否则反链/解析会返回两条同文件记录。
+  const seen = new Set<string>()
+  const all: MemoryFileMeta[] = []
+  for (const meta of [...indexMemoryDir(archiveDir, 'archive'), ...(autoDir ? indexMemoryDir(autoDir, 'auto') : [])]) {
+    if (seen.has(meta.absolutePath)) continue
+    seen.add(meta.absolutePath)
+    all.push(meta)
+  }
+  return all
 }
 
 function escapeRegExp(s: string): string {

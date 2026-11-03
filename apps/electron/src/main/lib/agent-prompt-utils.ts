@@ -113,6 +113,22 @@ export function buildRecoveryPrompt(
   return `${recoveryBlock}\n\n${currentUserMessage}`
 }
 
+/**
+ * 空输出重试 prompt。
+ *
+ * 模型上一轮只产出了思考（reasoning_content），正文为空。原样重发大概率得到同样的空输出，
+ * 而长上下文下重发一次就是几十万 token，所以这里改成定向催答：只要正文，不要继续思考。
+ */
+export function buildEmptyOutputRetryPrompt(currentUserMessage: string): string {
+  const nudge =
+    `<empty_output_retry>\n` +
+    `上一轮你只输出了思考过程，正文为空，用户什么也没看到。\n` +
+    `请直接输出最终的答复正文：不要复述思考过程，不要以「继续思考」开头，也不要用工具探测。\n` +
+    `如果你已经想清楚了，就把结论、证据和下一步写成完整的回复。\n` +
+    `</empty_output_retry>`
+  return `${nudge}\n\n${currentUserMessage}`
+}
+
 export function escapeContextAttr(value: string): string {
   return value
     .replace(/&/g, '&amp;')

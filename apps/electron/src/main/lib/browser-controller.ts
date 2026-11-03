@@ -848,7 +848,7 @@ export class BrowserController {
     const profileKey = configuration?.profileKey ?? resolveBrowserProfileKey(undefined, sessionId)
     const partition = buildPersistentBrowserPartition(profileKey)
     const browserSession = electronSession.fromPartition(partition)
-    // 默认 UA 会暴露 Electron；受管网页改为诚实的 Proma 标识，并保留 Chromium token 保证站点兼容。
+    // 默认 UA 会暴露 Electron；受管网页改为诚实的 Profer 标识，并保留 Chromium token 保证站点兼容。
     browserSession.setUserAgent(buildProferBrowserUserAgent(browserSession.getUserAgent(), app.getVersion()))
     const record: BrowserSessionRecord = {
       sessionId,

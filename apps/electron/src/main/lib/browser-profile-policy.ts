@@ -21,5 +21,5 @@ export function resolveBrowserProfileKey(_workspaceId?: string, _sessionId?: str
 /** 将 profile 标识转换为稳定、不可反推工作区 ID 的 Electron 持久 partition。 */
 export function buildPersistentBrowserPartition(profileKey: string): string {
   const digest = createHash('sha256').update(profileKey).digest('hex').slice(0, 32)
-  return `persist:proma-browser-${digest}`
+  return `persist:profer-browser-${digest}`
 }

@@ -168,7 +168,7 @@ describe('skill-master-manager', () => {
     )
     __setSkillMasterRoots(roots.master, roots.workspaces)
 
-    const result = syncMasterSkillToWorkspace('proma-coach', 'ws-a')
+    const result = syncMasterSkillToWorkspace('profer-coach', 'ws-a')
     const source = JSON.parse(readFileSync(join(roots.workspaces, 'ws-a', 'skills', 'profer-coach', '.source.json'), 'utf-8'))
 
     expect(result.success).toBe(true)

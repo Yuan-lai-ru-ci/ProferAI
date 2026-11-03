@@ -4,8 +4,8 @@
  * 管理团队账户的登录、注销和 JWT 令牌。
  * 令牌使用 Electron safeStorage 加密存储。
  *
- * 路由结构（nginx 反代 /proma/ → :3456/）：
- *   baseUrl = https://profer.cn/proma
+ * 路由结构（nginx 反代 /profer/ → :3456/）：
+ *   baseUrl = https://profer.cn/profer
  *   login → POST {baseUrl}/v1/auth/login
  */
 
@@ -18,9 +18,9 @@ import { encryptToken, decryptToken } from './token-crypto'
 import type { TeamServerConfig } from '@profer/shared'
 
 /** 默认团队服务地址（商业版内置，认证页不向用户暴露服务器配置）。 */
-export const DEFAULT_TEAM_SERVER_URL = 'https://profer.cn/proma'
+export const DEFAULT_TEAM_SERVER_URL = 'https://profer.cn/profer'
 
-/** 默认 API 路径（服务器端已去除 /api 前缀，通过 /proma → :3456 反代） */
+/** 默认 API 路径（服务器端已去除 /api 前缀，通过 /profer → :3456 反代） */
 const API_PREFIX = '/v1'
 
 // ===== 团队服务器配置管理 =====

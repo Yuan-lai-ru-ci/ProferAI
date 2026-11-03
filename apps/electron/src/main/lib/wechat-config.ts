@@ -3,7 +3,7 @@
  *
  * 负责微信 iLink 凭证的持久化存储。
  * Bot Token 使用 Electron safeStorage 加密。
- * 数据持久化到 ~/.proma/wechat.json。
+ * 数据持久化到 ~/.profer/wechat.json。
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'

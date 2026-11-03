@@ -102,9 +102,9 @@ describe('Pi Skill 安全边界', () => {
   test('单一 name alias direct 调用保持兼容，旧 slug 指向规范目录', async () => {
     const path = root()
     writeSkill(path, 'profer-coach', '教练')
-    const resource = await loader(path, ['proma-coach'])
+    const resource = await loader(path, ['profer-coach'])
     expect(await preparePromptWithProferSkills(resource, '任务', ['教练'])).toContain('<skill name="profer-coach"')
-    expect(await preparePromptWithProferSkills(resource, '任务', ['proma-coach'])).toContain('正文 profer-coach')
+    expect(await preparePromptWithProferSkills(resource, '任务', ['profer-coach'])).toContain('正文 profer-coach')
   })
 
   test('同目录 slug 跨根冲突不任意选赢家', async () => {

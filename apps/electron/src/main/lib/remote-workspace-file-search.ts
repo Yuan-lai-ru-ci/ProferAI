@@ -9,6 +9,13 @@
  *
  * 语义与桌面端 handler 保持一致（session / workspace 两组、目录优先、同名前缀优先），
  * 以便同一会话在桌面与 Pocket 上看到的 `@` 候选集合相同。
+ *
+ * 例外：project 工作区的 `sessionRoot` 就是项目根，扫描时会剪掉 `<root>/.profer` 下的
+ * Profer 内部条目（`presets/`、`skills/`、`sessions/`、`cache/` 等），只保留 `profile.md`、
+ * `memory/`、`workspace-files/` 这类用户会主动引用的内容。managed 不剪，结果逐字不变。
+ *
+ * 桌面端（`ipc.ts` 的 `SEARCH_WORKSPACE_FILES`）与远端共用本文件的 `scanWorkspaceRoot`
+ * 与 `shouldSkipProjectInternalEntry`，避免两端 `@` 可见集合再次漂移。
  */
 
 import { basename, relative, resolve } from 'node:path'
@@ -39,30 +46,81 @@ const BROWSE_TOTAL_CAP = 3000
 const DEFAULT_LIMIT = 200
 const MAX_LIMIT = 500
 
+/** project 工作区的配置目录名（位于项目根下）。 */
+const PROJECT_CONFIG_DIR_NAME = '.profer'
+
+/**
+ * project 模式下 `<root>/.profer` 里不对用户暴露的内部条目。
+ *
+ * 这些是 Profer 自己的状态（岗位/技能/会话/缓存/MCP 配置），在 `@` 引用里既无用
+ * 又会泄露内部结构；`profile.md`、`memory/`、`workspace-files/` 不在集合里，保留。
+ * 只作用于 `.profer` 这一层，项目自身同名目录（如 `docs/presets/`）不受影响。
+ */
+export const PROJECT_INTERNAL_ENTRY_NAMES: ReadonlySet<string> = new Set([
+  'presets',
+  'skills',
+  'skills-inactive',
+  'sessions',
+  'cache',
+  '.claude-plugin',
+  'config.json',
+  'mcp.json',
+  'mcp.local.json',
+])
+
 type EntrySource = 'session' | 'workspace'
 type Entry = FileIndexEntry
 
-/** 远程检索输入：所有 roots 均由服务端推导，客户端不参与。 */
-export interface RemoteWorkspaceFileSearchInput {
-  query?: string
-  limit?: number
-  /** 会话工作目录：条目以相对路径返回（与桌面端 SEARCH_WORKSPACE_FILES 一致）。 */
-  sessionRoot: string
-  /** 工作区文件目录（workspace files）：绝对路径，条目名对齐桌面的「工作文件」。 */
-  workspaceRoot: string
-  /** 会话级附加目录 / 附加文件。 */
-  sessionAttachedPaths?: readonly string[]
-  /** 工作区级附加目录 / 附加文件。 */
-  workspaceAttachedPaths?: readonly string[]
+/**
+ * project 模式下不向用户暴露的 `.profer` 内部条目谓词。
+ *
+ * 桌面端 `SEARCH_WORKSPACE_FILES` 与远端搜索共用这一份判据：只在扫描目录**正好是**
+ * `<root>/.profer` 这一层时剪掉内部条目；`profile.md`、`memory/`、`workspace-files/`
+ * 不在集合里，所以保留。`projectInternalDir` 为 undefined 时恒为 false（managed 逐字不变）。
+ */
+export function shouldSkipProjectInternalEntry(
+  dir: string,
+  name: string,
+  projectInternalDir: string | undefined,
+): boolean {
+  if (!projectInternalDir) return false
+  if (!samePath(resolve(dir), projectInternalDir)) return false
+  return PROJECT_INTERNAL_ENTRY_NAMES.has(name)
 }
 
-function scanDirectory(
+/** project 工作区里 `<root>/.profer` 的绝对路径（仅由 project 根推导，不做存在性检查）。 */
+export function resolveProjectInternalEntryDir(rootPath: string): string {
+  return resolve(rootPath, PROJECT_CONFIG_DIR_NAME)
+}
+
+/**
+ * 通用目录递归扫描（桌面端与远端共用）。
+ *
+ * 返回目录下的全部条目（不含 `dir` 自身），行为与原桌面端 `scan()` 逐字一致：
+ * 忽略目录/忽略文件、最大深度 10、相对路径基于 `baseRoot`。
+ * `projectInternalDir` 只影响该目录这一层的 `.profer` 内部条目剪枝。
+ */
+export interface ScanWorkspaceRootOptions {
+  /** 相对路径的基准（通常是调用方传入的根目录）。 */
+  baseRoot: string
+  /** true：返回绝对路径（附加目录）；false：返回相对路径（会话根）。 */
+  useAbsolutePath: boolean
+  source: EntrySource
+  /** project 模式下 `<root>/.profer` 的绝对路径；无此参数则不做 `.profer` 剪枝。 */
+  projectInternalDir?: string
+}
+
+export function scanWorkspaceRoot(root: string, options: ScanWorkspaceRootOptions): Entry[] {
+  const entries: Entry[] = []
+  scanDirectoryInto(root, 0, options, entries)
+  return entries
+}
+
+function scanDirectoryInto(
   dir: string,
   depth: number,
-  baseRoot: string,
+  options: ScanWorkspaceRootOptions,
   target: Entry[],
-  useAbsolutePath: boolean,
-  source: EntrySource,
 ): void {
   if (depth > MAX_DEPTH) return
   // 不预先声明类型（readdirSync 重载在 ReturnType 下会选到 Buffer 变体）。
@@ -78,18 +136,64 @@ function scanDirectory(
   for (const item of items) {
     if (IGNORE_FILES.has(item.name)) continue
     if (item.isDirectory() && IGNORE_DIRS.has(item.name)) continue
+    if (shouldSkipProjectInternalEntry(dir, item.name, options.projectInternalDir)) continue
     const fullPath = resolve(dir, item.name)
     const isDirectory = item.isDirectory()
     target.push({
       name: item.name,
-      path: useAbsolutePath ? fullPath : relative(baseRoot, fullPath),
+      path: options.useAbsolutePath ? fullPath : relative(options.baseRoot, fullPath),
       type: isDirectory ? 'dir' : 'file',
-      source,
+      source: options.source,
     })
     if (isDirectory) {
-      scanDirectory(fullPath, depth + 1, baseRoot, target, useAbsolutePath, source)
+      scanDirectoryInto(fullPath, depth + 1, options, target)
     }
   }
+}
+
+/** 远程检索输入：所有 roots 均由服务端推导，客户端不参与。 */
+export interface RemoteWorkspaceFileSearchInput {
+  query?: string
+  limit?: number
+  /** 会话工作目录：条目以相对路径返回（与桌面端 SEARCH_WORKSPACE_FILES 一致）。 */
+  sessionRoot: string
+  /** 工作区文件目录（workspace files）：绝对路径，条目名对齐桌面的「工作文件」。 */
+  workspaceRoot: string
+  /** 会话级附加目录 / 附加文件。 */
+  sessionAttachedPaths?: readonly string[]
+  /** 工作区级附加目录 / 附加文件。 */
+  workspaceAttachedPaths?: readonly string[]
+  /**
+   * 是否为 project 工作区（`sessionRoot` 即项目根）。
+   *
+   * 开启后会在扫描时剪掉 `<sessionRoot>/.profer` 下的 Profer 内部条目
+   * （`presets/`、`skills/`、`sessions/`、`cache/` 等），保留 `profile.md` / `memory/` /
+   * `workspace-files/`。managed 不传，扫描结果逐字不变。
+   */
+  isProjectWorkspace?: boolean
+}
+
+/** 同一路径比较；Windows 大小写不敏感。 */
+function samePath(a: string, b: string): boolean {
+  if (a === b) return true
+  return process.platform === 'win32' && a.toLowerCase() === b.toLowerCase()
+}
+
+function scanDirectory(
+  dir: string,
+  baseRoot: string,
+  target: Entry[],
+  useAbsolutePath: boolean,
+  source: EntrySource,
+  /** project 模式下 `<项目根>/.profer` 的绝对路径；命中时剪掉内部条目 */
+  projectInternalDir?: string,
+): void {
+  target.push(...scanWorkspaceRoot(dir, {
+    baseRoot,
+    useAbsolutePath,
+    source,
+    projectInternalDir,
+  }))
 }
 
 /** 附加路径：目录/文件本身作为一条条目（与桌面端 `addAttachedPath` 等价）。 */
@@ -115,7 +219,7 @@ function addAttachedPath(pathValue: string, target: Entry[], source: EntrySource
     type: 'dir',
     source,
   })
-  scanDirectory(attachedPath, 0, attachedPath, target, true, source)
+  scanDirectory(attachedPath, attachedPath, target, true, source)
 }
 
 /**
@@ -129,8 +233,12 @@ export function searchRemoteWorkspaceFiles(input: RemoteWorkspaceFileSearchInput
   const sessionEntries: Entry[] = []
   const workspaceEntries: Entry[] = []
 
-  // session 分组：相对路径（与桌面端一致）
-  scanDirectory(resolve(input.sessionRoot), 0, resolve(input.sessionRoot), sessionEntries, false, 'session')
+  // session 分组：相对路径（与桌面端一致）；project 额外剪掉 `.profer` 内部条目。
+  const resolvedSessionRoot = resolve(input.sessionRoot)
+  const projectInternalDir = input.isProjectWorkspace
+    ? resolve(resolvedSessionRoot, PROJECT_CONFIG_DIR_NAME)
+    : undefined
+  scanDirectory(resolvedSessionRoot, resolvedSessionRoot, sessionEntries, false, 'session', projectInternalDir)
   for (const attached of input.sessionAttachedPaths ?? []) {
     addAttachedPath(attached, sessionEntries, 'session')
   }

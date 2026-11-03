@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import { createAgentRunContext } from '@profer/agent-runtime'
 import type {
   AgentRuntimeEvent,
@@ -21,7 +22,7 @@ import type {
 import type { AgentRuntime, AgentSessionMeta, AgentSendInput, SDKMessage, AgentStreamPayload, ProferPermissionMode } from '@profer/shared'
 import type { SessionStore } from '@profer/session-store'
 import { createElectronSessionStore } from './session-store-host'
-import { appendSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime } from './agent-session-manager'
+import { appendSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime, resolveAgentSessionWriteLayout } from './agent-session-manager'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { getChannelById } from './channel-manager'
 import { getWorkspaceMcpConfig, getWorkspaceSkills, getAgentWorkspace, readWorkspaceProfile } from './agent-workspace-manager'
@@ -376,6 +377,45 @@ export async function loadBuiltinMcpResources(
 }
 
 /**
+ * 新 runtime 链的会话写入布局解析（唯一入口）。
+ *
+ * 规则：
+ * 1. 宿主已解析的 `storageDir` 优先（桌面 / headless 入口或 Pi 装配 context 已经给出时）；
+ * 2. 否则用 `resolveAgentSessionWriteLayout(workspaceSlug, sessionId)` 取真相源；
+ * 3. 无工作区或布局解析失败（project rootPath 缺失 / 索引不可用）时返回 `undefined`，
+ *    调用方回落旧行为（cwd 语义），**绝不**猜一个写入落点。
+ *
+ * managed 下 `storageDir === cwd`，`plansDir = cwd/.context/plan`，因此旧行为零变化。
+ */
+export interface RuntimeSessionWriteLayoutInput {
+  sessionId: string
+  /** 已解析的会话存储根（优先）。 */
+  storageDir?: string
+  workspaceSlug?: string
+}
+
+export interface RuntimeSessionWriteLayout {
+  storageDir: string
+  /** 计划文件白名单目录（`<storageDir>/.context/plan`）。 */
+  plansDir: string
+}
+
+export function resolveRuntimeSessionWriteLayout(
+  input: RuntimeSessionWriteLayoutInput,
+): RuntimeSessionWriteLayout | undefined {
+  const explicit = input.storageDir?.trim()
+  if (explicit) return { storageDir: explicit, plansDir: join(explicit, '.context', 'plan') }
+  if (!input.workspaceSlug) return undefined
+  try {
+    const layout = resolveAgentSessionWriteLayout(input.workspaceSlug, input.sessionId)
+    return { storageDir: layout.storageDir, plansDir: layout.plansDir }
+  } catch {
+    // 工作区根缺失 / 索引不可用：不创建目录、不猜路径，交给调用方回落旧行为。
+    return undefined
+  }
+}
+
+/**
  * 产品 MCP 服务器（B8）需要的宿主资源。
  *
  * 定位：`createElectronResourcePort` 只负责「读一轮资源并组装」，**「本机到底能提供哪些产品能力」
@@ -390,6 +430,8 @@ export interface ElectronProductMcpCapabilityInput {
   workspaceId?: string
   workspaceSlug?: string
   cwd?: string
+  /** 已解析的会话存储根（优先）；缺省时按 `workspaceSlug + sessionId` 从会话写入布局取。 */
+  storageDir?: string
   /** 运行来源（受管浏览器的 `executionSource`）。 */
   triggeredBy?: AgentPresetOperationSource
   /** 运行级附加目录（旧链 `input.additionalDirectories`）。 */
@@ -414,9 +456,13 @@ export interface ElectronProductMcpCapabilityDeps {
 }
 
 /** 旧链 `previewAllowedRoots` / `browserAllowedRoots` 的原始目录采集（组合规则在注入模块里唯一实现）。 */
-function collectProductRootInputs(input: ElectronProductMcpCapabilityInput): ProductRootInputs {
+function collectProductRootInputs(
+  input: ElectronProductMcpCapabilityInput,
+  storageDir: string | undefined,
+): ProductRootInputs {
   return {
     ...(input.cwd ? { agentCwd: input.cwd } : {}),
+    ...(storageDir ? { storageDir } : {}),
     ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     ...(input.workspaceSlug ? { workspaceSlug: input.workspaceSlug } : {}),
     attachedDirectories: collectAttachedDirectories({
@@ -447,7 +493,15 @@ export function createElectronProductMcpCapabilities(
 
   return async (input) => {
     const capabilities: ProductMcpHostCapabilities = {}
-    const roots = collectProductRootInputs(input)
+    // 会话写入布局（唯一真相源）：project 下生图产物/记录必须落中央 storageDir，
+    // 不得用 cwd（项目根）拼路径。解析失败时不猜：回落调用方缺省（cwd 语义）。
+    const sessionWriteLayout = resolveRuntimeSessionWriteLayout({
+      sessionId: input.sessionId,
+      ...(input.storageDir ? { storageDir: input.storageDir } : {}),
+      ...(input.workspaceSlug ? { workspaceSlug: input.workspaceSlug } : {}),
+    })
+    const storageDir = sessionWriteLayout?.storageDir
+    const roots = collectProductRootInputs(input, storageDir)
     const previewAllowedRoots = composePreviewAllowedRoots(roots)
 
     // 会话可见文件预览：宿主注入了 PreviewPort 才有（无预览端口 ⇒ agent-preview 记为能力不可用）。
@@ -483,9 +537,14 @@ export function createElectronProductMcpCapabilities(
     }
 
     // 受工作区授权的图片输出根：旧链 `workspaceSlug && agentCwd ? previewAllowedRoots : []`。
+    // 新链额外把 storageDir 列为授权根（project 下生成图/记录在那里）。
     const imageOutputRoots = composeImageOutputAllowedRoots(roots)
     if (imageOutputRoots.length > 0) {
-      capabilities['image-output-roots'] = { allowedRoots: imageOutputRoots }
+      capabilities['image-output-roots'] = {
+        allowedRoots: imageOutputRoots,
+        // 生图产物/记录与皮肤参考图的写入根；managed 下等于 cwd，旧行为不变。
+        ...(storageDir ? { storageDir } : {}),
+      }
       if (deps.events) {
         const events = deps.events
         const { sessionId } = input
@@ -539,6 +598,10 @@ export function projectPiProductToolAssemblyFields(
     fields.onPreviewRequest = preview.open
     fields.onPreviewInspectRequest = preview.inspect
   }
+  // 会话私有存储根：Pi 的生图/本地图片/皮肤工具从装配 context 读 `storageDir`，
+  // project 下缺它会把产物写进项目根（旧链在 `buildPiBuiltinTools` 里直接传同一个值）。
+  const imageOutput = capabilities['image-output-roots']
+  if (imageOutput?.storageDir) fields.storageDir = imageOutput.storageDir
   return fields
 }
 
@@ -569,6 +632,7 @@ export async function withPiProductToolAssemblyFields(
     ...(typeof base.workspaceId === 'string' ? { workspaceId: base.workspaceId } : {}),
     ...(typeof base.workspaceSlug === 'string' ? { workspaceSlug: base.workspaceSlug } : {}),
     ...(typeof base.agentCwd === 'string' ? { cwd: base.agentCwd } : {}),
+    ...(typeof base.storageDir === 'string' && base.storageDir.trim() ? { storageDir: base.storageDir } : {}),
     ...(triggeredBy ? { triggeredBy } : {}),
     ...(facts.additionalDirectories ? { additionalDirectories: facts.additionalDirectories } : {}),
   })
@@ -638,6 +702,12 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
       const workspaceSlug = input.workspaceSlug
         ?? (meta?.workspaceId ? getAgentWorkspace(meta.workspaceId)?.slug : undefined)
       const facts = agentRuntimeRunFacts.get(input.sessionId) ?? {}
+      // 会话写入布局：project 下产品能力（生图产物/记录、皮肤参考图）必须拿 storageDir，
+      // 不能只给 cwd（项目根），否则一旦生图就污染用户仓库。
+      const sessionWriteLayout = resolveRuntimeSessionWriteLayout({
+        sessionId: input.sessionId,
+        ...(workspaceSlug ? { workspaceSlug } : {}),
+      })
       // GAP-4 / B8：内置与产品 MCP 注入都与「有没有工作区」无关（旧链同样无条件跑），
       // 因此先于「无工作区」的早退执行；外部 MCP 才依赖工作区配置。
       const builtinMcpResources = await loadBuiltinMcpResources(input.sessionId, meta, workspaceSlug)
@@ -647,6 +717,7 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
             ...(input.workspaceId ?? meta?.workspaceId ? { workspaceId: input.workspaceId ?? meta?.workspaceId } : {}),
             ...(workspaceSlug ? { workspaceSlug } : {}),
             ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(sessionWriteLayout ? { storageDir: sessionWriteLayout.storageDir } : {}),
             ...(facts.triggeredBy ? { triggeredBy: facts.triggeredBy } : {}),
             ...(facts.additionalDirectories ? { additionalDirectories: facts.additionalDirectories } : {}),
           })

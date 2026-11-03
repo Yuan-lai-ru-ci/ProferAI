@@ -2,12 +2,29 @@
  * agent-directory-utils 测试
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getAgentWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { collectAttachedDirectories, collectProductArtifactDirectories, isPathInsideDirectory } from './agent-directory-utils'
+
+/** 在隔离配置根下写入一份含 project 条目的工作区索引。 */
+function writeProjectWorkspaceIndex(configRoot: string, slug: string, rootPath: string): void {
+  writeFileSync(join(configRoot, 'agent-workspaces.json'), JSON.stringify({
+    version: 4,
+    workspaces: [{
+      id: randomUUID(),
+      name: slug,
+      slug,
+      createdAt: 0,
+      updatedAt: 0,
+      type: 'personal',
+      storageMode: 'project',
+      rootPath,
+    }],
+  }), 'utf-8')
+}
 
 let testDir: string | undefined
 let previousConfigRoot: string | undefined
@@ -99,6 +116,45 @@ describe('collectAttachedDirectories', () => {
 
     expect(result).toContain(workspaceDir)
     expect(result).toContain(getWorkspaceFilesDir(slug))
+    // managed：工作区根与 workspace-files 都在同一配置目录下，不额外引入项目根或 runtimeDir。
+    expect(result.filter((dir) => dir === workspaceDir)).toHaveLength(1)
+    expect(result).not.toContain(join(workspaceDir, '.profer'))
+  })
+
+  test('project 工作区加入项目根与中央 runtimeDir，不重复加 configDir', () => {
+    const slug = `directory-project-${randomUUID()}`
+    const projectRoot = join(testDir!, 'project-root')
+    mkdirSync(projectRoot, { recursive: true })
+    writeProjectWorkspaceIndex(testDir!, slug, projectRoot)
+
+    const result = collectAttachedDirectories({ workspaceSlug: slug })
+
+    // locator 会对 rootPath 做 realpath 归一化（macOS 上 /var 会变成 /private/var）
+    const canonicalRoot = realpathSync(projectRoot)
+    const configDir = join(canonicalRoot, '.profer')
+    const runtimeDir = join(testDir!, 'agent-workspaces', slug)
+    // 项目根（Agent 需要访问项目）
+    expect(result).toContain(canonicalRoot)
+    // 中央 runtimeDir（附件/会话产物在这里，否则读不到附件）
+    expect(result).toContain(runtimeDir)
+    // configDir 在 rootPath 之内，不单独出现，也不出现「rootPath 内再套 agent-workspaces」的 managed 形状
+    expect(result).not.toContain(configDir)
+    expect(result).not.toContain(join(canonicalRoot, 'agent-workspaces'))
+    // workspace-files 跟随 configDir（项目内 .profer）
+    expect(result).toContain(join(configDir, 'workspace-files'))
+  })
+
+  test('project 工作区去重：rootPath 重复传入时只保留一次', () => {
+    const slug = `directory-project-dup-${randomUUID()}`
+    const projectRoot = join(testDir!, 'project-dup')
+    mkdirSync(projectRoot, { recursive: true })
+    writeProjectWorkspaceIndex(testDir!, slug, projectRoot)
+
+    const canonicalRoot = realpathSync(projectRoot)
+    const result = collectAttachedDirectories({ workspaceSlug: slug, extraDirs: [canonicalRoot] })
+
+    expect(result.filter((dir) => dir === canonicalRoot)).toHaveLength(1)
+    expect(result[0]).toBe(canonicalRoot)
   })
 })
 

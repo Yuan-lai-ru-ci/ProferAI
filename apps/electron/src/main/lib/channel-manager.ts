@@ -3,7 +3,7 @@
  *
  * 负责渠道的 CRUD 操作、API Key 加密/解密、连接测试。
  * 使用 Electron safeStorage 进行 API Key 加密（底层使用 OS 级加密）。
- * 数据持久化到 ~/.profer/channels.json（历史 ~/.proma 路径由 config-paths 迁移）。
+ * 数据持久化到 ~/.profer/channels.json（历史 ~/.profer 路径由 config-paths 迁移）。
  */
 
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
@@ -100,6 +100,31 @@ function withTimeout(init: RequestInit, timeoutMs: number = CHANNEL_TEST_TIMEOUT
 /** 余额/额度查询专用：短超时，快速失败 */
 function withPlanQuotaTimeout(init: RequestInit): RequestInit {
   return withTimeout(init, PLAN_QUOTA_TIMEOUT_MS)
+}
+
+/**
+ * 失败信息里回显实际请求端点。
+ *
+ * 404 这类「路径没匹配上」的错误必须能看见真正打出去的地址，否则用户只能靠猜
+ * （典型场景：OpenAI 兼容渠道少写 /v1 时上游只回一句 no Route matched）。
+ * query/hash 可能带路由凭据，一律不回显。
+ */
+function describeRequestEndpoint(url: string): string {
+  const trimmed = url.trim()
+  const separatorIndex = trimmed.search(/[?#]/)
+  return separatorIndex === -1 ? trimmed : trimmed.slice(0, separatorIndex)
+}
+
+/** 上游 404 的「路由没匹配上」信号：Kong / Go 网关 / 通用反代都会这么回。 */
+function isRouteMissBody(text: string): boolean {
+  return /no route matched|404 page not found|cannot (?:get|post|put|delete|patch)|route not found/i.test(text)
+}
+
+/** OpenAI 兼容渠道 404 的可操作提示：版本前缀缺失是最高频原因。 */
+function openAICompatibleRouteHint(status: number, text: string): string {
+  return status === 404 && isRouteMissBody(text)
+    ? '；上游没有匹配该路径的路由，请确认 Base URL 的路径前缀（OpenAI 兼容格式通常需要 /v1）'
+    : ''
 }
 
 export function resolveChannelAgentBaseUrl(channel: Pick<Channel, 'provider' | 'baseUrl' | 'agentBaseUrl'>): string | undefined {
@@ -1160,7 +1185,10 @@ async function testOpenAICompatible(
   }
 
   const text = await response.text().catch(() => '')
-  return { success: false, message: `请求失败 (${response.status}): ${text.slice(0, 200)}` }
+  return {
+    success: false,
+    message: `请求失败 (${response.status}): ${text.slice(0, 200)}${openAICompatibleRouteHint(response.status, text)}；当前测试端点为 ${describeRequestEndpoint(url)}`,
+  }
 }
 
 /**
@@ -2048,7 +2076,11 @@ async function fetchOpenAICompatibleModels(baseUrl: string, apiKey: string, prox
 
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    return { success: false, message: `请求失败 (${response.status}): ${text.slice(0, 200)}`, models: [] }
+    return {
+      success: false,
+      message: `请求失败 (${response.status}): ${text.slice(0, 200)}${openAICompatibleRouteHint(response.status, text)}；当前测试端点为 ${describeRequestEndpoint(url)}`,
+      models: [],
+    }
   }
 
   const { data, items } = modelPage(await response.json(), 'data')

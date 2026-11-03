@@ -137,12 +137,58 @@ export function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
 }
 
 /**
+ * 会话行行首状态标记的种类，数组顺序即渲染顺序（固定，不随数量变化）。
+ * 置顶 → 定时 → 探索分支 / 委派子会话 → 浏览器 → 标题生成。
+ */
+export type SessionLeadingMarker =
+  | 'pin'
+  | 'automation'
+  | 'exploration'
+  | 'delegation'
+  | 'browser'
+  | 'regeneratingTitle'
+
+/**
+ * 按固定顺序算出会话行该显示哪些行首标记。
+ *
+ * 只返回真实存在的标记：没有标记的行不占位，标题贴左；标记变多时标题顺势右移。
+ * 探索分支优先于委派子会话（二者互斥），定时来源在委派子会话上不再重复提示。
+ */
+export function resolveSessionLeadingMarkers(input: {
+  /** 子会话不参与置顶，也不显示置顶标记 */
+  pinnable: boolean
+  pinned: boolean
+  /** 置顶分区已用分区标题表达状态，不再重复画大头针 */
+  showPinIcon: boolean
+  sourceAutomationId?: string | null
+  sourceDelegationId?: string | null
+  explorationParentSessionId?: string | null
+  explorationSourceMessageId?: string | null
+  hasBrowser: boolean
+  regeneratingTitle: boolean
+}): SessionLeadingMarker[] {
+  const markers: SessionLeadingMarker[] = []
+  if (input.pinnable && input.pinned && input.showPinIcon) markers.push('pin')
+  if (input.sourceAutomationId && !input.sourceDelegationId) markers.push('automation')
+  if (input.explorationParentSessionId && input.explorationSourceMessageId) {
+    markers.push('exploration')
+  } else if (input.sourceDelegationId) {
+    markers.push('delegation')
+  }
+  if (input.hasBrowser) markers.push('browser')
+  if (input.regeneratingTitle) markers.push('regeneratingTitle')
+  return markers
+}
+
+/**
  * 侧栏行统一外观（会话 / 项目 / 入口共用）。
  *
  * 只统一 className，不抽组件：ConversationItem 内含编辑态、右键菜单、中键关闭、
  * 迷你地图预览与 F2 快捷键，抽组件会强制重排这些逻辑，风险大于收益。
  *
- * 约定：行高 28（项目 32），圆角 7，左右内边距 8，子会话缩进（块左 4 + 文字 26）；
+ * 约定：行高 28（项目 32），圆角 7，左右内边距 8，子会话缩进（块左 4 + 文字 8）；
+ * 行首状态标记不预留固定留白，有标记时才在标题左侧按固定顺序内联堆叠（见
+ * resolveSessionLeadingMarkers），没标记的会话标题直接贴左。
  * 除 focus ring 外不使用描边与阴影，层级只靠背景灰度与文字灰度区分。
  * 会话行与入口行同为默认行：不常显底色、不画分隔线，行间距靠列表 gap；
  * 有色标的会话由调用方（AgentSessionItem）另加同色相淡底色。
@@ -150,7 +196,7 @@ export function deleteSetEntry<T>(prev: Set<T>, value: T): Set<T> {
  */
 export function sidebarRowClass(options: {
   active?: boolean
-  /** 1 = 项目内的会话行（左侧留出层级缩进） */
+  /** 1 = 项目内的会话行（左侧只留层级缩进，行首状态标记随内容内联堆叠） */
   depth?: 0 | 1
   /** 已归档等次要行 */
   muted?: boolean
@@ -164,7 +210,7 @@ export function sidebarRowClass(options: {
     'group relative flex w-full shrink-0 items-center gap-2 rounded-[7px] px-2 text-[13px] transition-colors duration-100',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
     tall ? 'h-8' : 'h-[28px]',
-    depth === 1 && 'ml-1 w-[calc(100%-0.25rem)] pl-[30px]',
+    depth === 1 && 'ml-1 w-[calc(100%-0.25rem)] pl-2',
     active
       ? tall
         ? 'bg-foreground/[0.09] text-foreground'

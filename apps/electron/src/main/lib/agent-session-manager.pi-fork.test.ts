@@ -12,7 +12,7 @@ type AgentSessionManager = typeof import('./agent-session-manager')
 let manager: AgentSessionManager
 let tempHome: string
 const originalHome = process.env.HOME
-const originalPromaDev = process.env.PROMA_DEV
+const originalProferDev = process.env.PROFER_DEV
 const originalProferConfigDir = process.env.PROFER_CONFIG_DIR
 const appendedCustomMessages: Array<{ customType: string; content: string; display: boolean; details?: unknown }> = []
 let forkArtifactGate: Promise<void> | undefined
@@ -97,7 +97,7 @@ function writeAgentWorkspacesIndex(workspaces: Array<{
 beforeAll(async () => {
   tempHome = mkdtempSync(join(os.tmpdir(), 'profer-pi-fork-test-'))
   process.env.HOME = tempHome
-  process.env.PROMA_DEV = '0'
+  process.env.PROFER_DEV = '0'
   process.env.PROFER_CONFIG_DIR = join(tempHome, 'config')
   manager = await import('./agent-session-manager')
 })
@@ -108,10 +108,10 @@ afterAll(() => {
   } else {
     process.env.HOME = originalHome
   }
-  if (originalPromaDev === undefined) {
-    delete process.env.PROMA_DEV
+  if (originalProferDev === undefined) {
+    delete process.env.PROFER_DEV
   } else {
-    process.env.PROMA_DEV = originalPromaDev
+    process.env.PROFER_DEV = originalProferDev
   }
   if (originalProferConfigDir === undefined) {
     delete process.env.PROFER_CONFIG_DIR

@@ -187,7 +187,7 @@ function applySkinToAllWindows(id: string): void {
 
 async function createSkin(
   input: CreateSkinInput,
-  context: { agentCwd: string; allowedRoots: string[] },
+  context: { agentCwd: string; storageDir?: string; allowedRoots: string[] },
 ): Promise<SkinToolResult> {
   const id = input.id.trim().toLowerCase()
   if (!ID_RE.test(id)) throw new Error('皮肤 id 必须为 kebab-case，例如 midnight-blue')
@@ -206,6 +206,7 @@ async function createSkin(
   if (input.wallpaperPath?.trim()) {
     const wallpaper = await readAuthorizedAgentImage(input.wallpaperPath, {
       agentCwd: context.agentCwd,
+      storageDir: context.storageDir,
       allowedRoots: context.allowedRoots,
     })
     wallpaperFilename = safeAssetFilename(input.wallpaperFilename, wallpaper.absolutePath, wallpaper.mediaType)
@@ -222,6 +223,7 @@ async function createSkin(
   if (input.previewPath?.trim()) {
     const preview = await readAuthorizedAgentImage(input.previewPath, {
       agentCwd: context.agentCwd,
+      storageDir: context.storageDir,
       allowedRoots: context.allowedRoots,
     })
     previewFilename = `preview${extensionForMediaType(preview.mediaType, '皮肤缩略图')}`
@@ -306,7 +308,18 @@ async function createSkin(
 export const AGENT_SKIN_TOOL_NAME = 'create_skin'
 export const AGENT_SKIN_TOOL_DESCRIPTION = 'Create/install a Profer skin only on explicit user request. Read profer-theme-authoring Skill first. skinCss declares Surface Contract v2: :root must assign the semantic surfaces, not only shadcn tokens — at least --shell-surface, --content-area, --sidebar-surface, --raised-surface, --sunken-surface, --surface-border, --control-surface, --input-surface, --selected-surface, --dialog, --popover, --tooltip, --message-surface. Unassigned Tailwind-mapped surfaces inherit .dark defaults; unassigned skin-base tokens (e.g. --item-selected-bg, --mode-slider-bg, --scroll-thumb-*) become transparent, not default. Match value formats: HSL triples for Tailwind-mapped tokens, complete CSS values for skin-base tokens. Local assets/ only; authorized wallpaper is copied there, CSS url("assets/<filename>"). previewPath supplies a thumbnail, otherwise wallpaper derives preview.<ext>; neither means blank thumbnail. This tool validates, installs and refreshes the library; use returned installedPath, never find/ls/recursive scan afterwards. replace only with explicit overwrite authorization.'
 
-type AgentSkinToolContext = { agentCwd?: string; allowedRoots?: string[]; workspaceSlug?: string }
+type AgentSkinToolContext = {
+  agentCwd?: string
+  /**
+   * 会话私有存储根（`resolveAgentSessionWriteLayout().storageDir`）。
+   *
+   * 皮肤常直接引用本会话生成图作为壁纸/缩略图；project 下生成图在 storageDir、不在 cwd，
+   * 缺这个授权根会让 readAuthorizedAgentImage 判越权。缺省回落到 cwd（managed 旧语义）。
+   */
+  storageDir?: string
+  allowedRoots?: string[]
+  workspaceSlug?: string
+}
 
 export function buildPiAgentSkinTools(
   sdk: typeof import('@earendil-works/pi-coding-agent'),
@@ -340,6 +353,7 @@ export function buildPiAgentSkinTools(
       try {
         return await createSkin(params as CreateSkinInput, {
           agentCwd: context.agentCwd!,
+          storageDir: context.storageDir,
           allowedRoots: context.allowedRoots ?? [],
         }) as AgentToolResult<unknown>
       } catch (error) {
@@ -389,6 +403,7 @@ export async function injectAgentSkinMcpServer(
           try {
             return await createSkin(args as CreateSkinInput, {
               agentCwd: context.agentCwd!,
+              storageDir: context.storageDir,
               allowedRoots: context.allowedRoots ?? [],
             })
           } catch (error) {

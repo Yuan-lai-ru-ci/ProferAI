@@ -59,7 +59,8 @@ import {
   paginateSDKMessages,
   searchAgentSessionMessages,
 } from './agent-session-manager'
-import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getAgentWorkspacePath, getWorkspaceFilesDir } from './config-paths'
+import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getWorkspaceFilesDir, getWorkspaceRootPath } from './config-paths'
+import { resolveWorkspaceLocation } from './workspace-locator'
 import { getSettings, updateSettings } from './settings-service'
 import { projectAgentPayloadForPocket, projectSdkMessageForPocket, projectSdkMessagesToPocketView } from './pocket-agent-projection'
 import {
@@ -799,16 +800,21 @@ export function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]
  * 归档是电脑端的整理动作：Pocket 不展示归档会话，也不传输它们，
  * 避免手机在 800+ 会话里背负一份永远用不到的归档目录。
  * `buildSessionItem` 仍保留 archived 字段，供 projection 表达「刚被归档」。
+ *
+ * 已删除工作区的会话同样不下发：project 工作区被移除时只删索引、保留会话历史，
+ * 如果继续下发，手机仍能看到并向这类「死会话」发消息（headless 无法解析 cwd）。
+ * 桌面侧的历史存档不受影响（本函数只决定 Pocket 可见集合）。
  */
 function buildSessionList() {
   // 归档项目整体收纳：项目行不下发，项目里的会话也不下发（避免它们掉进「未归入项目」）。
-  const archivedWorkspaceIds = new Set(
+  // 索引里仍存在的非归档工作区才是「活项目」；已移除 / 已归档的 id 不在集合中，其会话一并过滤。
+  const liveWorkspaceIds = new Set(
     listAgentWorkspaces()
-      .filter((workspace) => workspace.archived)
+      .filter((workspace) => !workspace.archived)
       .map((workspace) => workspace.id),
   )
   return listAgentSessions(false)
-    .filter((session) => !session.workspaceId || !archivedWorkspaceIds.has(session.workspaceId))
+    .filter((session) => !session.workspaceId || liveWorkspaceIds.has(session.workspaceId))
     .map(buildSessionItem)
 }
 
@@ -940,6 +946,94 @@ function buildChatToolList() {
 /** 单条 WS 连接已声明的最近活动会话，仅用于兼容旧 Pocket 文件预览请求。 */
 interface RemoteCommandContext {
   activeSessionId?: string
+}
+
+/**
+ * 远程端文件访问的授权根（**全部由服务端从会话 meta 推导**，客户端不可提交）。
+ *
+ * 关键词：`rootPath` 是「用户可见的文件根」，`storageDir` 是「Profer 会话私有产物根」。
+ * 两者在工作区模式下的取值不同，混用就会出现「project 下看不到项目文件」。
+ */
+export interface RemoteFileRoots {
+  /** 会话组扫描根（也决定 `@` 相对路径基准）：project = 项目根；managed = 会话 storageDir（与改造前逐字一致） */
+  sessionRoot: string
+  /** 会话私有存储目录（附件 / 会话产物 / checkpoint）；project 下位于中央 runtimeDir */
+  sessionStorageDir: string
+  /** 工作区文件目录（桌面端「工作文件」） */
+  workspaceFilesDir: string
+  /** 会话级附加路径：会话 attached 目录/文件，project 追加 storageDir 让附件仍可检索 */
+  sessionAttachedPaths: string[]
+  /** 工作区级附加路径 */
+  workspaceAttachedPaths: string[]
+  /** 读文件授权目录根（`resolveAuthorizedRemoteFilePath` 用） */
+  directoryRoots: string[]
+  /** 是否为 project 工作区（`sessionRoot` = 项目根）；搜索结果据此剪掉 `.profer` 内部条目 */
+  isProject: boolean
+}
+
+/**
+ * 解析远程端可读文件的授权根。
+ *
+ * - project：用户可见文件根 = `getWorkspaceRootPath(slug)`（项目根），会话私有数据仍在 storageDir，
+ *   二者共用一条授权链；不得把整个 `~/.profer` 放开。
+ * - managed：`rootPath` 与 `configDir` 相同、`sessionRoot` 仍是会话 storageDir，
+ *   实际 roots 集合与改造前一致（顺序也保持 storageDir 优先）。
+ *
+ * 授权边界：只包含 rootPath / storageDir / workspace-files / 会话与工作区 attached 路径。
+ */
+export function resolveRemoteFileRoots(input: {
+  workspaceSlug: string
+  sessionId: string
+  sessionAttachedDirectories?: readonly string[]
+  sessionAttachedFiles?: readonly string[]
+  workspaceAttachedDirectories?: readonly string[]
+  workspaceAttachedFiles?: readonly string[]
+}): RemoteFileRoots {
+  const { workspaceSlug, sessionId } = input
+  const isProjectWorkspace = resolveWorkspaceLocation(workspaceSlug).mode === 'project'
+  // project 的 rootPath 不存在时抛 WorkspaceRootMissingError（绝不自动创建），由调用方转成中性错误。
+  const rootPath = getWorkspaceRootPath(workspaceSlug)
+  const sessionStorageDir = getAgentSessionWorkspacePath(workspaceSlug, sessionId)
+  const workspaceFilesDir = getWorkspaceFilesDir(workspaceSlug)
+
+  const sessionRoot = isProjectWorkspace ? rootPath : sessionStorageDir
+  const sessionAttachedPaths = [
+    // project：会话附件/产物不在项目里，必须显式并入，否则移动端看不到自己上传的文件。
+    ...(isProjectWorkspace ? [sessionStorageDir] : []),
+    ...(input.sessionAttachedDirectories ?? []),
+    ...(input.sessionAttachedFiles ?? []),
+  ]
+  const workspaceAttachedPaths = [
+    ...(input.workspaceAttachedDirectories ?? []),
+    ...(input.workspaceAttachedFiles ?? []),
+  ]
+
+  const directoryRoots: string[] = []
+  const seen = new Set<string>()
+  for (const root of [
+    sessionRoot,
+    rootPath,
+    sessionStorageDir,
+    workspaceFilesDir,
+    ...(input.sessionAttachedDirectories ?? []),
+    ...(input.workspaceAttachedDirectories ?? []),
+  ]) {
+    const normalized = resolve(root)
+    const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+    if (seen.has(key)) continue
+    seen.add(key)
+    directoryRoots.push(normalized)
+  }
+
+  return {
+    sessionRoot,
+    sessionStorageDir,
+    workspaceFilesDir,
+    sessionAttachedPaths,
+    workspaceAttachedPaths,
+    directoryRoots,
+    isProject: isProjectWorkspace,
+  }
 }
 
 /** 处理来自移动端客户端的一条 JSON 指令消息 */
@@ -1174,6 +1268,10 @@ export async function handleRemoteCommand(
             workspaceId: meta.workspaceId,
             agentRuntime: meta.agentRuntime,
             permissionMode: meta.permissionMode,
+            // 思考强度：会话级档位覆盖必须随会话详情下发，否则移动端打开会话时
+            // 只能按「字段缺失」处理，把本地已知的档位退回默认。null 表示跟随预设。
+            openAIThinkingLevel: meta.openAIThinkingLevel ?? null,
+            agentEffort: meta.agentEffort ?? null,
             sourceAutomationId: meta.sourceAutomationId,
             sourceSessionId: meta.sourceSessionId,
             sourceRunId: meta.sourceRunId,
@@ -1217,21 +1315,32 @@ export async function handleRemoteCommand(
       if (!session?.workspaceId) return { ok: false, error: '会话不存在或未绑定工作区' }
       const workspace = getAgentWorkspace(session.workspaceId)
       if (!workspace) return { ok: false, error: '会话工作区不存在' }
+      let roots: RemoteFileRoots
+      try {
+        roots = resolveRemoteFileRoots({
+          workspaceSlug: workspace.slug,
+          sessionId,
+          sessionAttachedDirectories: session.attachedDirectories,
+          sessionAttachedFiles: session.attachedFiles,
+          workspaceAttachedDirectories: getWorkspaceAttachedDirectories(workspace.slug),
+          workspaceAttachedFiles: getWorkspaceAttachedFiles(workspace.slug),
+        })
+      } catch {
+        // project 的 rootPath 已被移动/删除：不暴露绝对路径，也不降级到中央目录伪造结果。
+        return { ok: false, error: '会话工作区不可用（项目目录可能已移动或删除）' }
+      }
       return {
         ok: true,
         data: searchRemoteWorkspaceFiles({
           query,
           limit,
-          sessionRoot: getAgentSessionWorkspacePath(workspace.slug, sessionId),
-          workspaceRoot: getWorkspaceFilesDir(workspace.slug),
-          sessionAttachedPaths: [
-            ...(session.attachedDirectories ?? []),
-            ...(session.attachedFiles ?? []),
-          ],
-          workspaceAttachedPaths: [
-            ...getWorkspaceAttachedDirectories(workspace.slug),
-            ...getWorkspaceAttachedFiles(workspace.slug),
-          ],
+          // project：项目根（用户可见文件）；managed：会话 storageDir（与改造前一致）
+          sessionRoot: roots.sessionRoot,
+          workspaceRoot: roots.workspaceFilesDir,
+          sessionAttachedPaths: roots.sessionAttachedPaths,
+          workspaceAttachedPaths: roots.workspaceAttachedPaths,
+          // project：剪掉 `<root>/.profer` 下的 presets/skills/sessions/cache 等内部条目
+          isProjectWorkspace: roots.isProject,
         }),
       }
     }
@@ -2106,14 +2215,23 @@ export async function handleRemoteCommand(
       const workspace = getAgentWorkspace(session.workspaceId)
       if (!workspace) return { ok: false, error: '会话工作区不存在' }
 
+      let roots: RemoteFileRoots
+      try {
+        roots = resolveRemoteFileRoots({
+          workspaceSlug: workspace.slug,
+          sessionId,
+          sessionAttachedDirectories: session.attachedDirectories,
+          sessionAttachedFiles: session.attachedFiles,
+          workspaceAttachedDirectories: getWorkspaceAttachedDirectories(workspace.slug),
+          workspaceAttachedFiles: getWorkspaceAttachedFiles(workspace.slug),
+        })
+      } catch {
+        // project 的 rootPath 已被移动/删除：不暴露绝对路径。
+        return { ok: false, error: '会话工作区不可用（项目目录可能已移动或删除）' }
+      }
+
       const resolvedPath = resolveAuthorizedRemoteFilePath(filePath, {
-        directoryRoots: [
-          getAgentSessionWorkspacePath(workspace.slug, sessionId),
-          getAgentWorkspacePath(workspace.slug),
-          getWorkspaceFilesDir(workspace.slug),
-          ...(session.attachedDirectories ?? []),
-          ...getWorkspaceAttachedDirectories(workspace.slug),
-        ],
+        directoryRoots: roots.directoryRoots,
         exactFiles: [
           ...(session.attachedFiles ?? []),
           ...getWorkspaceAttachedFiles(workspace.slug),

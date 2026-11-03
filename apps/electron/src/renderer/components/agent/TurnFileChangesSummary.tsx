@@ -14,8 +14,9 @@
  *
  * 文件 chip 直接复用 FilePathChip（与 Agent 消息中的渲染完全一致）。
  *
- * 会话工作目录内的写入不计入：截图、临时产物、`.context` 草稿都是 Agent 的草稿区产物，
- * 不是用户要 review 的改动。
+ * 会话草稿区（storageDir）内的写入不计入：截图、临时产物、`.context` 草稿都是 Agent 的草稿区产物，
+ * 不是用户要 review 的改动。判定基准必须显式传入 `draftRoot`：project 下它不是 UI 根（项目根），
+ * 而是中央 storageDir——拿项目根当基准会把项目内改动当成草稿丢弃，chip 变空。
  */
 
 import * as React from 'react'
@@ -156,30 +157,41 @@ export function buildTurnFileNameMap(turnMessages: SDKMessage[]): Map<string, st
 
 export interface TurnFileChangesSummaryProps {
   turnMessages: SDKMessage[]
+  /** 相对路径解析基准（UI 根：managed = 会话目录，project = 项目根） */
   basePath?: string
+  /**
+   * 草稿区判定基准（显式传入的 storageDir）。
+   *
+   * 不能复用 `basePath`：project 下 `basePath` 是项目根，会把项目内改动全部当草稿隐藏。
+   * 缺省（无工作区 / 拿不到 storageDir）时不做草稿过滤——宁可多显示也不整轮空白，
+   * 且正常链路上主进程的写入账本已按 storageDir 在落账时就过滤过草稿。
+   */
+  draftRoot?: string
 }
 
 /**
  * 算出本轮要展示的文件改动 chip。
  *
- * 会话工作目录是 Agent 的草稿区：截图、临时产物、`.context` 草稿全落在那里，
- * 它们不是用户要 review 的改动，一律不追踪（历史会话里已落盘的旧记录同样过滤）。
- * 相对路径脱离 basePath 无法判断归属，保持可见。
+ * 草稿区（`draftRoot`，即会话 storageDir）是 Agent 的临时产物落点：截图、临时文件、
+ * `.context` 草稿全在那里，它们不是用户要 review 的改动，一律不追踪（历史会话里已落盘的旧记录同样过滤）。
+ * project 下 storageDir 与 UI 根（项目根）互不相交，所以这两个参数不能混用。
+ * 相对路径脱离 `draftRoot` 无法判断归属，保持可见。
  */
 export function resolveVisibleFileChanges(
   paths: readonly string[],
-  sessionPath?: string,
+  draftRoot?: string,
 ): string[] {
-  if (!sessionPath) return [...paths]
-  return paths.filter((path) => !isAbsoluteFilePath(path) || !isPathInsideDirectory(path, sessionPath))
+  if (!draftRoot) return [...paths]
+  return paths.filter((path) => !isAbsoluteFilePath(path) || !isPathInsideDirectory(path, draftRoot))
 }
 
 export function TurnFileChangesSummary({
   turnMessages,
   basePath,
+  draftRoot,
 }: TurnFileChangesSummaryProps): React.ReactElement | null {
   const paths = React.useMemo(() => collectModifiedFilePaths(turnMessages), [turnMessages])
-  const visiblePaths = resolveVisibleFileChanges(paths, basePath)
+  const visiblePaths = resolveVisibleFileChanges(paths, draftRoot)
 
   return (
     <div className="file-changes-summary pl-[46px] mt-3">

@@ -21,10 +21,12 @@ import {
   activeTabIdAtom,
   tabIndicatorMapAtom,
   closeTab,
+  ensureScratchPadTab,
   isMovableSessionTab,
   reorderTabs,
   updateTabTitle,
   tabMruAtom,
+  SCRATCH_PAD_ID,
 } from "@/atoms/tab-atoms";
 import type { TabItem } from "@/atoms/tab-atoms";
 import type { SessionIndicatorStatus } from "@/atoms/agent-atoms";
@@ -70,6 +72,7 @@ import {
 import { WindowControlsHost } from "@/components/WindowControlsTemplate";
 import { TabBarItem } from "./TabBarItem";
 import { TabGroupItem } from "./TabGroupItem";
+import { selectContextTabs } from "./tab-context";
 import { useCloseTab } from "@/hooks/useCloseTab";
 import { useMoveTabToNewWindow } from "@/hooks/useMoveTabToNewWindow";
 import { detectIsWindows } from "@profer/ui";
@@ -93,28 +96,23 @@ export function TabBar(): React.ReactElement {
   const agentSessions = useAtomValue(agentSessionsAtom);
   const installedPlugins = useAtomValue(installedPluginsAtom)
   const hasPluginPages = installedPlugins.some((plugin) => plugin.enabled && (plugin.manifest.contributes.pages ?? []).some((page) => resolvePluginPageSurfaceVisibility(page, plugin.pagePlacements?.[page.id], 'tab')))
-  const contextTabs = React.useMemo(() => {
-    const active = tabs.find((tab) => tab.id === activeTabId) ?? null
-    if (!active) return tabs
-    if (active.type === 'chat') return tabs.filter((tab) => tab.sessionId === active.sessionId)
+  // 草稿是全局固定入口，永远排在会话 Tab 之前。
+  // 展示层由 selectContextTabs 保证（上下文过滤不丢草稿）；这里再兼一层原子层兜底：
+  // 草稿只能靠启动期异步初始化（ScratchPadPersistence / Tab 恢复）注入，任一路径失败或晚到，
+  // 入口就会整个消失且点不出来。缺了就补回首位，已存在时不动用户当前顺序。
+  React.useEffect(() => {
+    if (tabs.some((tab) => tab.id === SCRATCH_PAD_ID)) return;
+    setTabs((previous) =>
+      previous.some((tab) => tab.id === SCRATCH_PAD_ID)
+        ? previous
+        : ensureScratchPadTab(previous),
+    );
+  }, [tabs, setTabs]);
 
-    const sessionBoundPlugin = active.type === 'plugin' && active.pluginScope === 'session'
-    if (active.type === 'agent' || active.type === 'preview' || active.type === 'browser' || sessionBoundPlugin) {
-      const sessionId = active.sessionId
-      const activeSession = agentSessions.find((session) => session.id === sessionId)
-      const ownerTab = tabs.find((tab) => (tab.type === 'chat' || tab.type === 'agent') && tab.sessionId === sessionId)
-      if (ownerTab?.type === 'chat') return tabs.filter((tab) => tab.sessionId === sessionId)
-      const rootSessionId = activeSession?.parentSessionId ?? activeSession?.explorationParentSessionId ?? sessionId
-      const sessionIds = new Set(
-        agentSessions
-          .filter((session) => session.id === rootSessionId || session.parentSessionId === rootSessionId || session.explorationParentSessionId === rootSessionId)
-          .map((session) => session.id),
-      )
-      sessionIds.add(rootSessionId)
-      return tabs.filter((tab) => sessionIds.has(tab.sessionId) || tab.parentSessionId === rootSessionId)
-    }
-    return tabs.filter((tab) => tab.id === active.id)
-  }, [activeTabId, agentSessions, tabs]);
+  const contextTabs = React.useMemo(
+    () => selectContextTabs(tabs, activeTabId, agentSessions),
+    [activeTabId, agentSessions, tabs],
+  );
   const indicatorMap = useAtomValue(tabIndicatorMapAtom);
   const setTabMru = useSetAtom(tabMruAtom);
   const isWindows = React.useMemo(() => detectIsWindows(), []);

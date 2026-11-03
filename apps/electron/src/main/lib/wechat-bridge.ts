@@ -190,7 +190,7 @@ class ILinkClient {
       msg: {
         from_user_id: this.botId,
         to_user_id: toUserId,
-        client_id: `proma_${Date.now()}`,
+        client_id: `profer_${Date.now()}`,
         message_type: WECHAT_MESSAGE_TYPE.BOT,
         message_state: WECHAT_MESSAGE_STATE.FINISH,
         item_list: items,

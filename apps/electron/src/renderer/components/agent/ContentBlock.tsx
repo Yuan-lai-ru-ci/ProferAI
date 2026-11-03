@@ -28,6 +28,7 @@ import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
+import { AgentTurnImageOutput } from './AgentTurnImageOutput'
 import { parseAgentImageAttachmentMarkers, type ParsedAgentImageAttachment } from './image-attachment-marker'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
@@ -222,6 +223,17 @@ export interface ContentBlockProps {
   isStreaming?: boolean
   /** 是否展示模型返回的 thinking 内容；只回摘要型 reasoning 的内核+模型组合由上层关闭。 */
   showThinking?: boolean
+  /**
+   * 本轮没有任何正常正文、只有思考时强制展开思考块。
+   * 模型把整篇回答写进 reasoning_content（content 为空）时，默认折叠 4 行会让用户
+   * 只看到一条「思考摘要」加一句「未生成回复」，而答案其实就在里面。
+   */
+  forceExpandThinking?: boolean
+  /**
+   * 该工具调用产出的图片附件。
+   * 仅过程阶段的图片会传到这里就地展示（随过程折叠）；尾部交付图片由 turn 级内容块渲染。
+   */
+  imageAttachments?: ParsedAgentImageAttachment[]
 }
 
 // ===== 提示词折叠行 =====
@@ -351,14 +363,16 @@ interface ToolUseBlockProps {
   basePaths?: string[]
   /** 是否正在流式输出中 */
   isStreaming?: boolean
+  /** 过程阶段产出的图片：就地渲染在工具行下方，随过程组一起折叠。 */
+  imageAttachments?: ParsedAgentImageAttachment[]
 }
 
-function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed = false, childBlocks, basePath, basePaths, isStreaming }: ToolUseBlockProps): React.ReactElement {
+function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed = false, childBlocks, basePath, basePaths, isStreaming, imageAttachments }: ToolUseBlockProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const toolResult = useToolResult(block.id, allMessages)
   const resultText = toolResult?.result
   const isError = toolResult?.isError === true
-  // 图片由 turn 级「图片输出」内容块渲染，工具行不再重复展示附件。
+  // 尾部交付的图片由 turn 级「图片输出」内容块渲染；过程阶段的图片就地展示在本工具行下方。
   const shouldShowResult = !!resultText
   const taskGetSummary = React.useMemo(() => {
     if (block.name !== 'TaskGet' || !resultText || isError) return null
@@ -624,6 +638,15 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         </div>
       )}
 
+      {imageAttachments && imageAttachments.length > 0 && (
+        <div className={cn(
+          'ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30',
+          animate && 'animate-in fade-in slide-in-from-top-1 duration-150',
+        )}>
+          <AgentTurnImageOutput images={imageAttachments} />
+        </div>
+      )}
+
       {shouldShowResult && expanded && (
         <div className={cn(
           'ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30',
@@ -648,14 +671,16 @@ interface ThinkingBlockProps {
   block: SDKThinkingBlock
   dimmed?: boolean
   streaming?: boolean
+  /** 本轮没有正文时强制展开，并提示这是模型唯一产出的内容 */
+  forceExpanded?: boolean
 }
 
 /** 思考块折叠行数阈值 */
 const THINKING_COLLAPSE_LINE_THRESHOLD = 4
 
-function ThinkingBlock({ block, dimmed = false, streaming = false }: ThinkingBlockProps): React.ReactElement {
+function ThinkingBlock({ block, dimmed = false, streaming = false, forceExpanded = false }: ThinkingBlockProps): React.ReactElement {
   const thinkingExpanded = useAtomValue(thinkingExpandedAtom)
-  const [isExpanded, setIsExpanded] = React.useState(thinkingExpanded)
+  const [isExpanded, setIsExpanded] = React.useState(forceExpanded || thinkingExpanded)
   const [shouldCollapse, setShouldCollapse] = React.useState(false)
   const contentRef = React.useRef<HTMLDivElement>(null)
 
@@ -670,8 +695,8 @@ function ThinkingBlock({ block, dimmed = false, streaming = false }: ThinkingBlo
 
   // 当全局偏好变更时同步（仅在"应折叠"时生效）
   React.useEffect(() => {
-    setIsExpanded(thinkingExpanded)
-  }, [thinkingExpanded])
+    setIsExpanded(forceExpanded || thinkingExpanded)
+  }, [thinkingExpanded, forceExpanded])
 
   const toggleExpand = React.useCallback(() => {
     setIsExpanded((prev) => !prev)
@@ -682,7 +707,7 @@ function ThinkingBlock({ block, dimmed = false, streaming = false }: ThinkingBlo
       <div className="flex items-center gap-1.5 mb-1.5">
         <Brain className={cn('size-3.5', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')} />
         <span className={cn('text-[14px] uppercase tracking-wider', dimmed ? 'text-muted-foreground/70' : 'text-muted-foreground')}>
-          思考摘要
+          {forceExpanded ? '思考通道（本轮没有正文）' : '思考摘要'}
         </span>
       </div>
       <div
@@ -785,7 +810,7 @@ function GeneratedImageThumb({ image }: { image: ParsedAgentImageAttachment }): 
 
 // ===== ContentBlock 主组件 =====
 
-const ContentBlockView = function ContentBlock({ block, allMessages, basePath, basePaths, animate = false, index = 0, dimmed = false, childBlocks, isStreaming, showThinking = true }: ContentBlockProps): React.ReactElement | null {
+const ContentBlockView = function ContentBlock({ block, allMessages, basePath, basePaths, animate = false, index = 0, dimmed = false, childBlocks, isStreaming, showThinking = true, forceExpandThinking = false, imageAttachments }: ContentBlockProps): React.ReactElement | null {
   // text 块 — 主要内容，不受 dimmed 影响
   if (block.type === 'text') {
     const textBlock = block as SDKTextBlock
@@ -826,6 +851,7 @@ const ContentBlockView = function ContentBlock({ block, allMessages, basePath, b
         basePath={basePath}
         basePaths={basePaths}
         isStreaming={isStreaming}
+        imageAttachments={imageAttachments}
       />
     )
   }
@@ -834,7 +860,7 @@ const ContentBlockView = function ContentBlock({ block, allMessages, basePath, b
   if (block.type === 'thinking') {
     const thinkingBlock = block as SDKThinkingBlock
     if (!showThinking || !thinkingBlock.thinking) return null
-    return <ThinkingBlock block={thinkingBlock} dimmed={dimmed} streaming={isStreaming} />
+    return <ThinkingBlock block={thinkingBlock} dimmed={dimmed} streaming={isStreaming} forceExpanded={forceExpandThinking} />
   }
 
   return null
@@ -851,4 +877,6 @@ export const ContentBlock = React.memo(ContentBlockView, (prev, next) => (
   && prev.childBlocks === next.childBlocks
   && prev.isStreaming === next.isStreaming
   && prev.showThinking === next.showThinking
+  && prev.forceExpandThinking === next.forceExpandThinking
+  && prev.imageAttachments === next.imageAttachments
 ))

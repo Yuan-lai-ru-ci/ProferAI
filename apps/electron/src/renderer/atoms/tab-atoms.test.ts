@@ -1,7 +1,21 @@
 import { expect, test } from 'bun:test'
-import { closeTab, closeTabs, createPluginTabId, detachTab, getPersistableTabState, isMovableSessionTab, openPluginTab, openTab, selectSameModeCloseFallback, tabContextSessionId, FRP_GUIDE_TAB_ID, FRP_GUIDE_TAB_TITLE, TUTORIAL_TAB_ID, type TabItem } from './tab-atoms'
+import { closeTab, closeTabs, createPluginTabId, detachTab, ensureScratchPadTab, getPersistableTabState, isMovableSessionTab, openPluginTab, openTab, selectSameModeCloseFallback, tabContextSessionId, FRP_GUIDE_TAB_ID, FRP_GUIDE_TAB_TITLE, TUTORIAL_TAB_ID, SCRATCH_PAD_ID, type TabItem } from './tab-atoms'
 
 const tab = (id: string): TabItem => ({ id, type: 'agent', sessionId: id, title: id })
+
+test('草稿是全局固定入口：缺了就补回首位，已有则保持现有顺序', () => {
+  const injected = ensureScratchPadTab([tab('a'), tab('b')])
+  expect(injected.map((item) => item.id)).toEqual([SCRATCH_PAD_ID, 'a', 'b'])
+  expect(injected[0]?.type).toBe('scratch')
+
+  // 草稿是固定入口：即使用户把它拖到后面，也回到首位。
+  const moved = [tab('a'), { id: SCRATCH_PAD_ID, type: 'scratch' as const, sessionId: SCRATCH_PAD_ID, title: 'Scratch Pad' }]
+  expect(ensureScratchPadTab(moved).map((item) => item.id)).toEqual([SCRATCH_PAD_ID, 'a'])
+
+  // 重复注入不产生第二份草稿
+  const once = ensureScratchPadTab([])
+  expect(ensureScratchPadTab(once)).toHaveLength(1)
+})
 
 test('教程与自建 FRP 教程各自单例：互不覆盖、重复打开只聚焦、不参与持久化', () => {
   const tutorial = openTab([], { type: 'tutorial', sessionId: TUTORIAL_TAB_ID, title: 'Profer 使用教程' })

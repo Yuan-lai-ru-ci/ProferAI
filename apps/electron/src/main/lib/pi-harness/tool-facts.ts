@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { TASK_GRAPH_TOOL_CREATE, TASK_GRAPH_TOOL_UPDATE, normalizeTaskGraphShortName } from '@profer/shared'
 import type { CommandExecutionResult } from '../command-execution'
 import type { ToolFact } from './types'
 
@@ -150,7 +151,13 @@ export function createToolFact(context: {
     }
   }
 
-  if (name === 'taskcreate' || name === 'taskupdate' || name.includes('proma_task_')) {
+  const shortName = normalizeTaskGraphShortName(input.toolName)
+  if (
+    name === 'taskcreate' ||
+    name === 'taskupdate' ||
+    shortName === TASK_GRAPH_TOOL_CREATE ||
+    shortName === TASK_GRAPH_TOOL_UPDATE
+  ) {
     return {
       ...base,
       kind: 'task_graph',

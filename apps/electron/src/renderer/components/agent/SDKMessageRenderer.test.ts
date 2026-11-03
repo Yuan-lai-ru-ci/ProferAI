@@ -3,6 +3,7 @@ import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Provider, createStore } from 'jotai'
 import type { SDKMessage } from '@profer/shared'
+import { TooltipProvider } from '@profer/ui/primitives/tooltip'
 import { groupIntoTurns, getGroupPreview, MessageGroupRenderer, parseAttachedFiles, buildHistoricalTaskSubjects, splitUserMessagePrefix, type MessageGroup, type EditResendRequest } from './SDKMessageRenderer'
 
 function userText(text: string): SDKMessage {
@@ -390,5 +391,73 @@ describe('用户消息操作入口渲染（修改重发）', () => {
     expect(splitUserMessagePrefix('帮我改成 TypeScript', '帮我改成 TypeScript')).toBe('')
     // 正文里有重复片段时，以最后一段为准（与渲染态一致）
     expect(splitUserMessagePrefix('aaa\nbbb\naaa', 'aaa')).toBe('aaa\nbbb')
+  })
+})
+
+/**
+ * 文件改动 chip 的草稿区基准（P1-6 / FIX-B 回归）。
+ *
+ * `draftRoot` 是会话 storageDir；project 下它和 `basePath`（项目根）互不相交。
+ * 把项目根当草稿区会让项目内改动整轮消失（chip 空白），这里从渲染层钉住这条链路。
+ */
+describe('文件改动 chip 的草稿区基准', () => {
+  const projectRoot = '/Users/me/profer/profer-main'
+  const projectStorageDir = '/Users/me/.profer/agent-workspaces/proj/sessions/s1'
+
+  function writeToolUse(id: string, filePath: string): Record<string, unknown> {
+    return { type: 'tool_use', id, name: 'Write', input: { file_path: filePath, content: 'x' } }
+  }
+
+  function renderTurn(draftRoot?: string): string {
+    const messages = [{
+      type: 'assistant',
+      message: {
+        content: [
+          writeToolUse('w1', `${projectRoot}/src/a.ts`),
+          writeToolUse('w2', `${projectStorageDir}/mem-v2.png`),
+        ],
+        model: 'deepseek-v4-flash',
+      },
+      parent_tool_use_id: null,
+    }] as unknown as SDKMessage[]
+    const groups = groupIntoTurns(messages)
+    return renderToStaticMarkup(
+      React.createElement(
+        Provider,
+        { store: createStore() },
+        React.createElement(
+          TooltipProvider,
+          null,
+          React.createElement(MessageGroupRenderer, {
+            group: groups[0]!,
+            allMessages: messages,
+            historicalTaskSubjects: new Map<string, string>(),
+            basePath: projectRoot,
+            ...(draftRoot ? { draftRoot } : {}),
+          }),
+        ),
+      ),
+    )
+  }
+
+  test('project：项目内改动出 chip，storageDir 内的草稿不出 chip', () => {
+    const markup = renderTurn(projectStorageDir)
+
+    expect(markup).toContain('file-changes-summary')
+    expect(markup).toContain('a.ts')
+    expect(markup).not.toContain('mem-v2.png')
+  })
+
+  test('project：不传 draftRoot 时不过滤（不回退到 basePath 当草稿区）', () => {
+    const markup = renderTurn()
+
+    expect(markup).toContain('a.ts')
+  })
+
+  test('反证：把项目根当 draftRoot 时 chip 区为空（修前的 bug 形态）', () => {
+    const markup = renderTurn(projectRoot)
+
+    expect(markup).toContain('file-changes-summary')
+    expect(markup).not.toContain('a.ts')
   })
 })

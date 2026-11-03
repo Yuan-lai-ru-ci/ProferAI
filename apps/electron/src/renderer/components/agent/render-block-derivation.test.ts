@@ -157,8 +157,8 @@ describe('隐藏 thinking 时过程组不空占位', () => {
     }
   })
 
-  test('图片输出工具成功后变成正文里的图片块，不再作为过程行出现', () => {
-    const derived = derive([message('m1', [thinking(), tool('image-1', 'send_local_image'), tool('tool-2'), text('最终输出')])])
+  test('本轮尾部的图片工具提升为正文图片块，工具行不再重复出现', () => {
+    const derived = derive([message('m1', [thinking(), tool('image-1', 'send_local_image'), text('图已生成')])])
     const image = { localPath: '/tmp/a.png', filename: 'a.png', mediaType: 'image/png' as const }
     const items = buildAssistantTurnRenderItems(derived.topLevelItems, {
       imageOutputsByToolUseId: new Map([['image-1', [image]]]),
@@ -166,7 +166,29 @@ describe('隐藏 thinking 时过程组不空占位', () => {
 
     expect(items.map((item) => item.type)).toEqual(['process-group', 'image-output', 'block'])
     expect(items[1]?.type === 'image-output' && items[1].images).toEqual([image])
-    expect(items[0]?.type === 'process-group' && items[0].items.map((item) => item.block.type)).toEqual(['thinking', 'tool_use'])
+    expect(items[0]?.type === 'process-group' && items[0].items.map((item) => item.block.type)).toEqual(['thinking'])
+  })
+
+  test('过程阶段的图片工具留在过程组，不跳到正文', () => {
+    const derived = derive([message('m1', [thinking(), tool('image-1', 'send_local_image'), tool('tool-2'), text('最终输出')])])
+    const image = { localPath: '/tmp/a.png', filename: 'a.png', mediaType: 'image/png' as const }
+    const items = buildAssistantTurnRenderItems(derived.topLevelItems, {
+      imageOutputsByToolUseId: new Map([['image-1', [image]]]),
+    })
+
+    expect(items.map((item) => item.type)).toEqual(['process-group', 'block'])
+    expect(items[0]?.type === 'process-group' && items[0].items.map((item) => item.block.type)).toEqual(['thinking', 'tool_use', 'tool_use'])
+  })
+
+  test('流式中图片不提前提升，避免结束后位置跳变', () => {
+    const derived = derive([message('m1', [thinking(), tool('image-1', 'generate_image')])])
+    const image = { localPath: '/tmp/a.png', filename: 'a.png', mediaType: 'image/png' as const }
+    const items = buildAssistantTurnRenderItems(derived.topLevelItems, {
+      isStreaming: true,
+      imageOutputsByToolUseId: new Map([['image-1', [image]]]),
+    })
+
+    expect(items.map((item) => item.type)).toEqual(['process-group'])
   })
 
   test('图片按原始顺序插在文字之间，支持图文混排', () => {

@@ -13,11 +13,11 @@ import { COLLABORATION_PLACEMENT_GUIDELINES, DELEGATION_GUIDELINES, buildTaskGra
 import { buildCoreAgentPrompt } from './agent-prompt-core'
 import { AGENT_IMAGE_OUTPUT_TEXT_RULE } from './agent-image-output-contract'
 import { AGENT_PRESET_CAPABILITY_GROUPS, isAgentPresetToolGroupDisabled } from '@profer/shared'
-import type { AgentPresetToolGroup, ProferPermissionMode } from '@profer/shared'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import type { AgentPresetToolGroup, ProferPermissionMode, WorkspaceStorageMode } from '@profer/shared'
+import { basename, join } from 'node:path'
 import { getUserProfile } from './user-profile-service'
-import { getConfigDirName } from './config-paths'
+import { resolveAgentSessionWorkspacePath } from './config-paths'
+import { resolveWorkspaceLocation } from './workspace-locator'
 import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 import { buildAgentPlatformPrompt } from './agent-platform-prompt'
 import type { AgentPlatformProjectCandidate } from './agent-platform-prompt'
@@ -57,7 +57,13 @@ export interface SystemPromptContext {
 }
 
 interface WorkspacePromptPaths {
+  /** `managed`：会话 cwd 在工作区内；`project`：cwd 就是项目根。 */
+  mode: WorkspaceStorageMode
+  /** 供提示词展示的「工作区根」：managed = 工作区配置目录；project = 项目根。 */
   workspaceRoot: string
+  /** 工作区配置目录：managed = `~/.profer/agent-workspaces/<slug>`；project = `<root>/.profer`。 */
+  configDir: string
+  /** Agent 实际 cwd：managed = `<configDir>/<sessionId>`；project = 项目根。 */
   sessionDir: string
   workspaceContextDir: string
   workspaceProfile: string
@@ -68,21 +74,81 @@ interface WorkspacePromptPaths {
   skillsDir: string
 }
 
-/** 集中生成供 Agent 使用的真实路径，避免会话 cwd 与工作区根目录混淆。 */
+/**
+ * 集中生成供 Agent 使用的真实路径，避免会话 cwd 与工作区根目录混淆。
+ *
+ * 路径一律取自 `workspace-locator`（读索引，支持 `PROFER_CONFIG_DIR`），不再自己拼
+ * `homedir()/agent-workspaces`：project 工作区的 `.profer` 在项目根内，手拼会直接写错位置。
+ * 这里只做纯计算，不 mkdir（提示词构建不应有目录副作用）。
+ */
 function buildWorkspacePromptPaths(workspaceSlug: string, sessionId: string): WorkspacePromptPaths {
-  const workspaceRoot = join(homedir(), getConfigDirName(), 'agent-workspaces', workspaceSlug)
-  const autoMemoryDir = join(workspaceRoot, '.profer', 'memory')
+  const location = resolveWorkspaceLocation(workspaceSlug)
+  const { configDir, rootPath, mode } = location
+  const isProject = mode === 'project'
+  // managed：会话目录就是工作区下的 <sessionId>；project：cwd 是项目根，会话私有数据在中央 runtimeDir。
+  const sessionDir = isProject ? rootPath : resolveAgentSessionWorkspacePath(workspaceSlug, sessionId)
+  const profileFile = isProject ? 'profile.md' : 'workspace-profile.md'
+  // project 下的旧版资料名是 workspace-profile.md；`CLAUDE.md` 属于用户项目指令，不能被当成 Profer 资料。
+  const legacyProfileFile = isProject ? 'workspace-profile.md' : 'CLAUDE.md'
+  const autoMemoryDir = isProject ? join(configDir, 'memory') : join(configDir, '.profer', 'memory')
   return {
-    workspaceRoot,
-    sessionDir: join(workspaceRoot, sessionId),
-    workspaceContextDir: join(workspaceRoot, 'workspace-files', '.context'),
-    workspaceProfile: join(workspaceRoot, 'workspace-profile.md'),
-    legacyWorkspaceProfile: join(workspaceRoot, 'CLAUDE.md'),
+    mode,
+    workspaceRoot: isProject ? rootPath : configDir,
+    configDir,
+    sessionDir,
+    workspaceContextDir: join(configDir, 'workspace-files', '.context'),
+    workspaceProfile: join(configDir, profileFile),
+    legacyWorkspaceProfile: join(configDir, legacyProfileFile),
     autoMemoryDir,
     autoMemoryIndex: join(autoMemoryDir, 'MEMORY.md'),
-    mcpConfig: join(workspaceRoot, 'mcp.json'),
-    skillsDir: join(workspaceRoot, 'skills'),
+    mcpConfig: join(configDir, 'mcp.json'),
+    skillsDir: join(configDir, 'skills'),
   }
+}
+
+/** managed 工作区段：改造前文案逐字保留（快照测试锁定）。 */
+function buildManagedWorkspaceSection(workspaceName: string, p: WorkspacePromptPaths): string {
+  return `## 工作区
+
+- 工作区名称: ${workspaceName}
+- 工作区根目录: ${p.workspaceRoot}
+- **Profer 工作区资料**: ${p.workspaceProfile}（不在 cwd；按此绝对路径访问，不与用户项目指令混用）
+- **旧版 Profer 工作区资料（仅兼容读取）**: ${p.legacyWorkspaceProfile}（新 Profile 不存在才按需读，不再写入）
+- 当前会话目录（cwd）: ${p.sessionDir}
+- Profer Memory 索引: ${p.autoMemoryIndex}
+- MCP 配置: ${p.mcpConfig}（顶层 \`servers\`）
+- Skills 目录: ${p.skillsDir}/（仅此目录会加载；外部安装到 .agents/skills/ 的需移入）
+
+### .context 目录层级
+
+- 会话级 cwd/\`.context/\`：当前任务工作台（\`todo.md\`、\`plan/\`、主题文件）。
+- 工作区级 \`${p.workspaceContextDir}\`：跨会话调研、证据、决策和长期事项。
+- 按用户指定位置优先；恢复时先列出两个目录；只读取**实际存在且与当前任务相关**的文件。不得默认创建或读取 \`note.md\`、\`todo.md\`；为空或无关直接跳过。`
+}
+
+/**
+ * project 工作区段：cwd 即项目根，只保留一套路径语义。
+ *
+ * 刻意不打印中央会话目录（`~/.profer/agent-workspaces/<slug>`）：那会把模型引回 managed 路径；
+ * 会话产物与附件已通过附加目录授权，模型用宿主给出的绝对路径访问即可。
+ */
+function buildProjectWorkspaceSection(workspaceName: string, p: WorkspacePromptPaths): string {
+  return `## 工作区
+
+- 工作区名称: ${workspaceName}
+- **当前 cwd 就是项目根**: ${p.workspaceRoot}。相对路径直接落在项目里，不要再套一层项目目录，也不要另找「仓库根」。
+- **Profer 项目配置目录**: ${p.configDir}（\`.profer\`，随项目提交；资料、记忆、skills、MCP 都在其中）
+- **Profer 项目资料**: ${p.workspaceProfile}（新名优先；同目录旧版 \`${basename(p.legacyWorkspaceProfile)}\` 仍可只读兼容，不再写入）
+- Profer Memory 索引: ${p.autoMemoryIndex}
+- MCP 配置: ${p.mcpConfig}（顶层 \`servers\`）
+- Skills 目录: ${p.skillsDir}/（仅此目录会加载；外部安装到 .agents/skills/ 的需移入）
+- 会话产物与附件不在项目内：按附加目录清单给出的绝对路径访问，不要把 \`.context\`、附件或日志写进项目根
+
+### .context 目录层级
+
+- 会话级 \`.context/\`：当前任务工作台（\`todo.md\`、\`plan/\`、主题文件）；project 模式下由 Profer 放在项目之外的会话运行目录，不要写进项目根或 \`.profer/\`。
+- 跨会话资料 \`${p.workspaceContextDir}\`：调研、证据、决策和长期事项，随项目提交。
+- 按用户指定位置优先；恢复时先列出两个目录；只读取**实际存在且与当前任务相关**的文件。不得默认创建或读取 \`note.md\`、\`todo.md\`；为空或无关直接跳过。`
 }
 
 /**
@@ -103,6 +169,16 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const workspacePaths = ctx.workspaceSlug
     ? buildWorkspacePromptPaths(ctx.workspaceSlug, ctx.sessionId)
     : undefined
+  // project 模式下 cwd 就是项目根：资料名、记忆目录、会话级 Context 都要按项目布局描述，
+  // 否则模型会把 `.profer/memory` 再嵌一层到 `<root>/.profer` 里。
+  const isProjectWorkspace = workspacePaths?.mode === 'project'
+  const workspaceProfileName = isProjectWorkspace ? 'profile.md' : 'workspace-profile.md'
+  // 记忆目录在两种模式下都是工作区根下的 `.profer/memory/`：
+  // project 的 configDir 是 `<root>/.profer`，managed 的是 `<slug>/.profer`，相对工作区根写法一致。
+  const workspaceMemoryRef = '.profer/memory/'
+  const sessionContextRef = isProjectWorkspace
+    ? '会话运行目录下的 `.context/`（不在项目内）'
+    : '当前 cwd 下的 `.context/`'
 
   const sections: string[] = []
   sections.push(buildCoreAgentPrompt())
@@ -187,14 +263,14 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
 
 Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi 提供工作区文件工具；因此**不要等待 SDK 自动落盘，应由你按统一知识维护规则主动维护文件记忆**：
 
-- **可以读取和写入**：通过 Read、Write、Edit 工具访问 Profer 工作区资料 \`workspace-profile.md\`、\`.profer/memory/MEMORY.md\`，以及 \`workspace-files/.context/memory-archive/\` 的主题文件；涉及工作区文件时必须使用提示中给出的绝对路径。用户项目中的 CLAUDE.md / AGENTS.md 属于用户资产，只按项目 scope 读取和遵守，不要写入 Profer 内部规则或记忆。
-- **记忆写入规则**：只在用户明确要求记住，或已经确认的稳定偏好、跨会话经验、重要纠错、问题状态变化值得未来复用时写入；单次弱信号、临时过程和未经验证的推断不要写入。\`MEMORY.md\` 只保留短索引和路由；详细内容写到 \`workspace-files/.context/memory-archive/\` 的对应主题文件。修正旧结论时先读取相关主题，修订或标注旧结论，不能追加互相冲突的信息。
+- **可以读取和写入**：通过 Read、Write、Edit 工具访问 Profer 工作区资料 \`${workspaceProfileName}\`、\`${workspaceMemoryRef}MEMORY.md\`，以及 \`${workspaceMemoryRef}\` 下的主题文件；涉及工作区文件时必须使用提示中给出的绝对路径。用户项目中的 CLAUDE.md / AGENTS.md 属于用户资产，只按项目 scope 读取和遵守，不要写入 Profer 内部规则或记忆。
+- **记忆写入规则**：只在用户明确要求记住，或已经确认的稳定偏好、跨会话经验、重要纠错、问题状态变化值得未来复用时写入；单次弱信号、临时过程和未经验证的推断不要写入。\`MEMORY.md\` 只保留短索引和路由；详细内容写到 \`${workspaceMemoryRef}\` 的对应主题文件。修正旧结论时先读取相关主题，修订或标注旧结论，不能追加互相冲突的信息。
 - **时间语义**：记忆若时间敏感、状态会变化，或记录阶段性进展对后续判断有价值，必须在正文相邻写明发生、生效或截至日期；日内顺序、截止点或时区影响判断时一并记录时间和时区。不能用文件修改时间代替事实时间；稳定事实无需强行加日期。
 - **主题治理**：若一个主题文件包含 3 个以上可独立命名的议题，或新内容明显越出标题范围，先拆分/迁移到合适主题，再同步 \`MEMORY.md\` 索引；合并重复结论，删除或标记长期未验证且无未来判断价值的内容。
-- **分层不变**：Profer 核心规则由应用运行时注入；Profer 工作区背景写 \`workspace-profile.md\`；可复用经验/偏好写 \`.profer/memory/\`；证据、长报告和跨会话资料写工作区级 Context；当前任务临时内容写会话级 \`.context/\`。用户项目硬规则保留在用户自己的 CLAUDE.md / AGENTS.md 中，Profer 不自动修改。
-- **会话级 Context 正常使用**：当前 cwd 下的 \`.context/\`（\`todo.md\`、\`plan/\` 与按任务命名的临时 Markdown 文档）可以正常读写；不要默认创建或读取 \`note.md\`。
+- **分层不变**：Profer 核心规则由应用运行时注入；Profer 工作区背景写 \`${workspaceProfileName}\`；可复用经验/偏好写 \`${workspaceMemoryRef}\`；证据、长报告和跨会话资料写工作区级 Context；当前任务临时内容写会话级 \`.context/\`。用户项目硬规则保留在用户自己的 CLAUDE.md / AGENTS.md 中，Profer 不自动修改。
+- **会话级 Context 正常使用**：${sessionContextRef}（\`todo.md\`、\`plan/\` 与按任务命名的临时 Markdown 文档）可以正常读写；不要默认创建或读取 \`note.md\`。
 - **透明性**：写入长期记忆前先说明准备更新的位置和原因；写后在回复中说明路径与摘要。
-- **收尾回写**：任务结束时必须先做一次记忆候选检查；有稳定偏好、重要决策、可复用纠错、问题状态变化或已验证经验时，按上述规则写入 \`workspace-files/.context/memory-archive/\` 对应主题文件并补齐/校验 \`MEMORY.md\` 索引；没有候选时跳过写入。不要因为用户没有再次提醒“记住”就跳过检查。普通一次性修复、调研中间过程和未验证判断不回写。`)
+- **收尾回写**：任务结束时必须先做一次记忆候选检查；有稳定偏好、重要决策、可复用纠错、问题状态变化或已验证经验时，按上述规则写入 \`${workspaceMemoryRef}\` 对应主题文件并补齐/校验 \`MEMORY.md\` 索引；没有候选时跳过写入。不要因为用户没有再次提醒“记住”就跳过检查。普通一次性修复、调研中间过程和未验证判断不回写。`)
     }
   } else {
     sections.push(`## Claude Agent Runtime
@@ -213,6 +289,7 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
       agentCwd: ctx.agentCwd,
       projectCandidates: ctx.projectCandidates,
       isPiRuntime: ctx.isPiRuntime,
+      workspaceMode: workspacePaths?.mode,
     }))
   }
 
@@ -223,22 +300,9 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 
   // 工作区信息
   if (ctx.workspaceName && workspacePaths) {
-    sections.push(`## 工作区
-
-- 工作区名称: ${ctx.workspaceName}
-- 工作区根目录: ${workspacePaths.workspaceRoot}
-- **Profer 工作区资料**: ${workspacePaths.workspaceProfile}（不在 cwd；按此绝对路径访问，不与用户项目指令混用）
-- **旧版 Profer 工作区资料（仅兼容读取）**: ${workspacePaths.legacyWorkspaceProfile}（新 Profile 不存在才按需读，不再写入）
-- 当前会话目录（cwd）: ${workspacePaths.sessionDir}
-- Profer Memory 索引: ${workspacePaths.autoMemoryIndex}
-- MCP 配置: ${workspacePaths.mcpConfig}（顶层 \`servers\`）
-- Skills 目录: ${workspacePaths.skillsDir}/（仅此目录会加载；外部安装到 .agents/skills/ 的需移入）
-
-### .context 目录层级
-
-- 会话级 cwd/\`.context/\`：当前任务工作台（\`todo.md\`、\`plan/\`、主题文件）。
-- 工作区级 \`${workspacePaths.workspaceContextDir}\`：跨会话调研、证据、决策和长期事项。
-- 按用户指定位置优先；恢复时先列出两个目录；只读取**实际存在且与当前任务相关**的文件。不得默认创建或读取 \`note.md\`、\`todo.md\`；为空或无关直接跳过。`)
+    sections.push(workspacePaths.mode === 'project'
+      ? buildProjectWorkspaceSection(ctx.workspaceName, workspacePaths)
+      : buildManagedWorkspaceSection(ctx.workspaceName, workspacePaths))
   }
 
   // 不确定性处理策略
@@ -249,23 +313,41 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 - 指出影响结果的错误前提，说明依据与影响；不确定时明确说明，不编造。`)
 
 
+  // 计划文件落点：managed 下 cwd 就是会话目录，相对路径 `.context/plan/` 正确；
+  // project 下 cwd 是项目根，相对路径会把计划写进用户仓库（违反 I3），必须给出
+  // storageDir 内的绝对路径。真相比源是 agent-session-manager 的
+  // `resolveAgentSessionWriteLayout().plansDir`（单测锁两者相等）；这里不直接 import 它，
+  // 避免提示词构建把会话管理器的模块级副作用（SDK 配置目录 / 环境变量）带进来。
+  const projectPlanDir = workspacePaths?.mode === 'project' && ctx.workspaceSlug
+    ? join(resolveAgentSessionWorkspacePath(ctx.workspaceSlug, ctx.sessionId), '.context', 'plan')
+    : undefined
+
   // 计划模式指令（始终注入计划文件路径规则）。WebSearch 是 Claude 原生工具，
   // 因此必须和 web 能力组同步，不能在禁用后仍出现在 Prompt 中。
   if (ctx.permissionMode === 'plan') {
     const planResearchTools = ['WebSearch', 'WebFetch'].filter((toolName) => !capabilityDisabled('web') && !toolDisabled(toolName))
     const planResearchToolsText = ['Read', 'Glob', 'Grep', ...planResearchTools].join('、')
+    const planWriteRule = projectPlanDir
+      ? `1. 将计划文件写入 \`${projectPlanDir}/\`（如 \`${projectPlanDir}/my-plan.md\`）；该目录在项目之外，**不要写进项目根的 \`.context/plan/\`**`
+      : '1. 将计划文件写入当前工作目录的 `.context/plan/` 子目录（如 `.context/plan/my-plan.md`）'
     sections.push(`## 计划模式
 
 你当前处于计划模式，只能进行调研和规划；仅可写入下面指定的计划文件，不能修改其他文件或执行实施操作。规则：
-1. 将计划文件写入当前工作目录的 \`.context/plan/\` 子目录（如 \`.context/plan/my-plan.md\`）
+${planWriteRule}
 2. 完成计划后，**不要立即调用 ExitPlanMode**
 3. 先向用户展示计划摘要，以及完整的计划文档的路径地址，然后等待用户确认后再退出计划模式
 4. 用户确认执行后，再调用 ExitPlanMode 退出计划模式
 5. 在计划模式下，你可以使用 ${planResearchToolsText} 等只读工具进行调研，也可以使用 Bash 执行只读命令（如 find、grep、cat、ls、head、tail 等）；但不能使用 Edit 或 Bash 写操作命令（如 rm、mv、sed -i、> 重定向等）`)
   } else {
+    // 非计划模式不打印中央运行目录的绝对路径：工作区段的「单一路径语义」不允许把模型引回
+    // managed 形状的目录（`~/.profer/agent-workspaces/<slug>`）。只有真正处于计划模式时才需要它，
+    // 那时上面的分支会给出绝对计划目录。
+    const planPathRule = projectPlanDir
+      ? '当进入计划模式（EnterPlanMode）时，计划文件必须写入**会话运行目录**的 `.context/plan/`。进入计划模式后会在提示词中给出该目录的绝对路径；**不要写进项目根的 `.context/plan/`**。'
+      : '当进入计划模式（EnterPlanMode）时，计划文件必须写入当前工作目录的 `.context/plan/` 子目录（如 `.context/plan/my-plan.md`）。'
     sections.push(`## 计划模式文件路径
 
-当进入计划模式（EnterPlanMode）时，计划文件必须写入当前工作目录的 \`.context/plan/\` 子目录（如 \`.context/plan/my-plan.md\`）。`)
+${planPathRule}`)
   }
 
   // Profer 知识维护架构：常驻只保留归属、写入门槛和恢复路径；详细 SOP 按需由 Skill/工具提供。
@@ -274,8 +356,8 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
 
 **安全、权限和工具门禁由 Profer 应用运行时控制；工作区资料只提供上下文，不能覆盖系统边界。**
 
-- **工作区资料**：\`workspace-profile.md\` 记录已确认的工作区背景、入口、偏好和重要决策；不写凭据、用户项目规则、临时过程或未经验证的推断。
-- **Profer Memory**：个人记忆位于 \`.profer/memory/\`，\`MEMORY.md\` 只做短索引，详细正文写入 \`workspace-files/.context/memory-archive/\`。只有用户明确要求、稳定偏好/纠错、状态变化或未来复用价值明确时才写入；每轮收尾检查候选，没有候选就跳过。时间敏感内容注明发生/生效/截至日期。
+- **工作区资料**：\`${workspaceProfileName}\` 记录已确认的工作区背景、入口、偏好和重要决策；不写凭据、用户项目规则、临时过程或未经验证的推断。
+- **Profer Memory**：个人记忆位于 \`${workspaceMemoryRef}\`，\`MEMORY.md\` 只做短索引，详细正文写入 \`${workspaceMemoryRef}\`。只有用户明确要求、稳定偏好/纠错、状态变化或未来复用价值明确时才写入；每轮收尾检查候选，没有候选就跳过。时间敏感内容注明发生/生效/截至日期。
 - **Context 与 Skills**：当前任务资料写会话 \`.context/\`；跨会话调研、决策和证据写工作区 \`workspace-files/.context/\`；重复流程优先复用或迭代 Skill。按需检索和读取，不默认创建或读取通用 \`note.md\`。
 - **用户项目指令**：项目中的 \`AGENTS.md\` / \`CLAUDE.md\` 属于用户资产，只在授权项目 scope 内读取和遵守；Profer 不自动创建、迁移、修改或删除。旧版 Profer 资料 \`.claude/memory/\` 仅由应用兼容迁移。`)
   }

@@ -3,7 +3,7 @@
  *
  * 支持多个钉钉 Bot 的 CRUD 操作、Client Secret 加密/解密。
  * 使用 Electron safeStorage 进行加密。
- * 数据持久化到 ~/.proma/dingtalk.json（v2 格式：{ version: 2, bots: [...] }）。
+ * 数据持久化到 ~/.profer/dingtalk.json（v2 格式：{ version: 2, bots: [...] }）。
  *
  * 向后兼容：自动检测并迁移旧格式（v1 单 Bot）。
  */

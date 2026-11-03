@@ -15,7 +15,7 @@ function normalizeWindowsDrivePath(filePath: string): string {
   // Markdown/file URL 在某些路径中会吞掉 `\\.`，把 `alice.profer-dev`
   // 还原为用户目录下的隐藏配置目录 `alice/.profer-dev`。
   return normalized.replace(
-    /^([A-Za-z]:\/Users\/[^/]+)\.(profer(?:-dev)?|proma(?:-dev)?)(?=\/|$)/i,
+    /^([A-Za-z]:\/Users\/[^/]+)\.(profer(?:-dev)?)(?=\/|$)/i,
     '$1/.$2',
   )
 }

@@ -20,7 +20,7 @@ import { injectGoalMcpServer } from './goal-tools'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs'
+import { existsSync, mkdirSync, appendFileSync } from 'node:fs'
 import type {
   AgentSendInput,
   AgentMessage,
@@ -57,6 +57,7 @@ import {
 } from '@profer/shared'
 import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest, EffectiveAgentPresetPolicy } from '@profer/shared'
 import { buildPiRuntimeCredentialOptions, resolveRuntimeCredentials } from './agent-runtime-credentials'
+import { buildClaudeInlineSdkSettings } from './agent-claude-inline-sdk-settings'
 import {
   decryptApiKey,
   getChannelById,
@@ -70,6 +71,8 @@ import { AgentEventBus } from './agent-event-bus'
 import { appendRunOriginPrompt, createRunTriggerMessage, createAgentRunContext, resolveAgentInputOperationSource, stampRunMessage, createAgentQueryPreparationPort, createAgentRunOwnershipRegistry, createAgentRunOwnershipView, createAgentRunRejectionError, createAgentStreamDrainController, readAgentStreamNext, waitForRetryDelay } from '@profer/agent-runtime'
 import type { AgentRunOwnershipRegistry, AgentRunOwnershipView, AgentRuntimeQuery, AgentRuntimeQueryPreparationPort, AgentStreamDrainState } from '@profer/agent-runtime'
 import type { AgentRunLedger, AgentRunContext, AgentRun, AgentRuntimePorts, CredentialPort, EventPort, PermissionPort, PreviewPort, ResourcePort, RuntimeCanUseTool, RuntimePermissionResult, SessionPort, ToolAssemblyPort } from '@profer/agent-runtime'
+// 只借 provider 的 settings 形状：内联设置的字段必须与 SDK `Settings` 一致（类型仅编译期擦除）。
+import type { ClaudeAgentQueryOptions } from '@profer/agent-provider-claude'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
@@ -92,6 +95,7 @@ import {
   type TaskToolInvocation,
 } from './task-graph-event-converter'
 import { appendGraphEvent } from './project-graph-service'
+import { taskGraphToolKind } from '@profer/project-core'
 import { injectAgentCollaborationMcpServer, registerCollaborationEventBus, stopDelegationsForParent } from './agent-collaboration-tools'
 import { setHeadlessAgentRunner, setAgentStopper } from './agent-headless-runner-registry'
 import { getAdapter, resolveTitleBaseUrl, fetchTitleWithRetry } from '@profer/core'
@@ -118,6 +122,9 @@ import {
   rewindPiSession,
   resetPiSession,
   collectForeignCheckpointPaths,
+  resolveAgentSessionCwd,
+  resolveAgentSessionWriteLayout,
+  shouldSkipPiFileCheckpoint,
 } from './agent-session-manager'
 import { buildAgentSessionUiProjection } from './agent-session-ui-projection'
 import { normalizeAgentEndReason } from './agent-end-reason'
@@ -175,6 +182,7 @@ import {
   extractSDKToolSummary,
   buildContextPrompt,
   buildRecoveryPrompt,
+  buildEmptyOutputRetryPrompt,
   escapeContextAttr,
   buildReferencedSessionsPrompt,
   DEFAULT_SESSION_TITLE,
@@ -197,6 +205,8 @@ import { evaluatePptCapability } from './ppt-capability-gate'
 import { injectAgentImageOutputMcpServer } from './agent-image-output-tools'
 import { injectAgentGptImageMcpServer, isAgentGptImageAvailable } from './agent-gpt-image-tools'
 import { injectAgentSkinMcpServer } from './agent-skin-tools'
+// 授权根组合规则的唯一真相源（与新 runtime 链共用）：project 下图片授权根必须包含会话 storageDir。
+import { composeImageOutputAllowedRoots } from './agent-runtime-product-mcp-injection'
 import { injectAgentPreviewMcpServer } from './agent-preview-tools'
 import { injectVisualizationMcpServer } from './agent-visualization-tools'
 import { agentFilePreviewSessionManager } from './agent-file-preview-session'
@@ -204,6 +214,7 @@ import { injectPptDeliveryMcpServer } from './ppt-delivery-agent-tools'
 import { browserController } from './browser-controller'
 import {
   AgentRunAlreadyActiveError,
+  ensureAgentSessionSdkSettings,
   isBrowserToolName,
   isPartialSDKMessage,
   isXaiChannelAvailableForRuntime,
@@ -310,6 +321,82 @@ export function serializeErrorDetail(error: unknown): string {
   }
 }
 
+/**
+ * 旧链 skin 注入上下文（Claude 路径）。
+ *
+ * project 下会话产物（含生成图）落在中央 storageDir，而 cwd 是用户项目根：皮肤壁纸/缩略图
+ * 常直接引用本会话生成图，不传 storageDir 时 `readAuthorizedAgentImage` 只认 cwd，会判越权。
+ * managed 下 storageDir === cwd，行为与改造前逐字一致。缺 cwd / workspaceSlug 时返回 undefined
+ * （与注入器自身的守卫一致，保持「没有工作区就不注册 skin 工具」的旧语义）。
+ */
+export function buildLegacySkinToolContext(input: {
+  agentCwd?: string
+  storageDir?: string
+  allowedRoots: readonly string[]
+  workspaceSlug?: string
+}): { agentCwd: string; storageDir?: string; allowedRoots: string[]; workspaceSlug: string } | undefined {
+  if (!input.agentCwd || !input.workspaceSlug) return undefined
+  const storageDir = input.storageDir?.trim()
+  return {
+    agentCwd: input.agentCwd,
+    ...(storageDir ? { storageDir } : {}),
+    allowedRoots: [...input.allowedRoots],
+    workspaceSlug: input.workspaceSlug,
+  }
+}
+
+/**
+ * 会话所属工作区已从索引里消失（典型：project 工作区被「移除项目」）。
+ *
+ * project 的删除只删索引、保留会话历史（managed 才级联删会话），所以「死项目里的会话」会长期
+ * 留在会话索引中。这类会话没有任何可信 cwd：旧实现回落到 `$HOME`，等于把用户主目录当项目根
+ * 跑无人值守命令（P1-残留-1）。现在所有运行入口一律拒绝执行，并把原因明确交给调用方。
+ */
+export class AgentSessionWorkspaceMissingError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly workspaceId: string,
+  ) {
+    super(`会话所属工作区已不存在（workspaceId=${workspaceId}），已拒绝执行；请重新选择项目或新建会话`)
+    this.name = 'AgentSessionWorkspaceMissingError'
+  }
+}
+
+/**
+ * 解析本轮运行真正所属的工作区 —— 桌面旧链 / 桌面 runtime 链 / 全部 headless 入口的唯一判据。
+ *
+ * 判据是「`input.workspaceId` 优先，缺失时取会话元数据里的 `workspaceId`」；一旦存在，它必须能在
+ * 工作区索引里解析到，否则抛 `AgentSessionWorkspaceMissingError`，**绝不**静默回落到 `$HOME`。
+ * 两条来源都必须看：headless 调用方（Pocket / IM / 协作 / 自动化）可能只带 sessionId，
+ * 而「会话属于哪个项目」的权威事实在会话元数据里。
+ *
+ * @returns 无工作区的历史会话返回 undefined（保持 `resolveAgentSessionCwd` 的既有语义）
+ * @throws AgentSessionWorkspaceMissingError 工作区解析不到
+ */
+export function requireAgentRunWorkspace(input: {
+  sessionId: string
+  /** 调用方声明的工作区（优先） */
+  workspaceId?: string
+  /** 会话元数据里的工作区（调用方未声明时使用） */
+  sessionWorkspaceId?: string
+}): import('@profer/shared').AgentWorkspace | undefined {
+  const workspaceId = input.workspaceId ?? input.sessionWorkspaceId
+  if (!workspaceId) return undefined
+  const workspace = getAgentWorkspace(workspaceId)
+  if (!workspace) throw new AgentSessionWorkspaceMissingError(input.sessionId, workspaceId)
+  return workspace
+}
+
+/**
+ * project 模式下需要内联下发的 SDK 设置（flag settings 层）。
+ *
+ * 实现已抽到 `agent-claude-inline-sdk-settings.ts`：runtime 链的 provider preparation（headless /
+ * 自动化 / remote / 桌面新链）与旧编排链必须共用同一份对象；放在本文件里会让 preparation 直接
+ * import 编排器，经 `agent-service.ts` 的加载期 `new AgentOrchestrator(...)` 形成循环（TDZ）。
+ * 这里保留同名导出，调用点与既有引用无需改动。
+ */
+export { buildClaudeInlineSdkSettings } from './agent-claude-inline-sdk-settings'
+
 // ===== AgentOrchestrator =====
 
 export class AgentOrchestrator {
@@ -365,6 +452,14 @@ export class AgentOrchestrator {
   /** 队列复用当前 run 的 Skill 快照；初始化失败 resolve(undefined)，不得悬挂或放宽策略。 */
   private activeSkillRoutings = new Map<string, Promise<SkillRoutingSnapshot | undefined>>()
   private activeRuntimeRegistrations = new Map<string, Promise<boolean>>()
+
+  /**
+   * 本轮 run 加载的 MCP 外部状态文件：sessionId → serverName → 绝对路径。
+   *
+   * `externalStatePaths` 是 Profer 自己的展示字段，不能塞进 mcpServers——
+   * 同一个对象会交给 Claude Agent SDK，未知字段有风险，所以走这条旁路。
+   */
+  private activeMcpExternalStatePaths = new Map<string, Record<string, string[]>>()
 
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus, ports?: AgentOrchestratorPorts, ownership: AgentRunOwnershipRegistry = createAgentRunOwnershipRegistry()) {
     // ⚠️ 必须在构造函数体内赋值：字段初始化器先于参数属性赋值执行。
@@ -633,7 +728,12 @@ export class AgentOrchestrator {
    */
   private buildMcpServers(sessionId: string, workspaceSlug: string | undefined, mcpNameFilter?: string[]): Record<string, Record<string, unknown>> {
     const mcpServers: Record<string, Record<string, unknown>> = {}
-    if (!workspaceSlug) return mcpServers
+    if (!workspaceSlug) {
+      this.activeMcpExternalStatePaths.delete(sessionId)
+      return mcpServers
+    }
+
+    const externalStatePaths: Record<string, string[]> = {}
 
     const mcpConfig = this.resourcePort.getMcpConfig?.({ sessionId, workspaceSlug }) ?? getWorkspaceMcpConfig(workspaceSlug)
     for (const [name, entry] of Object.entries(mcpConfig.servers ?? {})) {
@@ -671,6 +771,17 @@ export class AgentOrchestrator {
       } else {
         console.warn(`[Agent 编排] MCP 服务器 "${name}" 配置不完整，已跳过（type=${entry.type}, command=${entry.command ?? '无'}, url=${entry.url ?? '无'}）`)
       }
+
+      // 只记录真正加载成功的 server：被禁用/裁剪/配置不完整的 server 不参与外部状态提示
+      if (mcpServers[name] && entry.externalStatePaths && entry.externalStatePaths.length > 0) {
+        externalStatePaths[name] = [...entry.externalStatePaths]
+      }
+    }
+
+    if (Object.keys(externalStatePaths).length > 0) {
+      this.activeMcpExternalStatePaths.set(sessionId, externalStatePaths)
+    } else {
+      this.activeMcpExternalStatePaths.delete(sessionId)
     }
 
     if (Object.keys(mcpServers).length > 0) {
@@ -1068,6 +1179,14 @@ export class AgentOrchestrator {
       callbacks.onComplete([], { startedAt: input.startedAt })
       return
     }
+    // 会话所属工作区必须真实存在：解析不到就拒绝执行，绝不把 `$HOME` 当 cwd 跑 Agent。
+    // 放在取执行权之前：被拒绝的请求不是一次运行，不产生 owner、终态与 provider 调用。
+    // 工作区 id 可能只在会话元数据里（Pocket / IM / 协作只带 sessionId），两条来源都看。
+    const runWorkspace = requireAgentRunWorkspace({
+      sessionId,
+      ...(workspaceId !== undefined ? { workspaceId } : {}),
+      ...(boundSession?.workspaceId !== undefined ? { sessionWorkspaceId: boundSession.workspaceId } : {}),
+    })
     const runGeneration = randomUUID()
     // 已有 owner：对用户而言就是「上一条消息仍在处理中」，与改造前 `tryAcquireActiveSession` 同义。
     // 内核不匹配由上面的会话元数据检查负责（同样在取得 owner 之前）；
@@ -1409,12 +1528,14 @@ export class AgentOrchestrator {
       console.log(`[Agent 编排] 检测到回退 resume: resumeSessionAt=${rewindResumeAt}`)
     }
 
-    console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, proma sessionId=${sessionId}`)
+    console.log(`[Agent 编排] Resume 状态: sdkSessionId=${existingSdkSessionId || '无'}, profer sessionId=${sessionId}`)
 
     // 6. 状态初始化
     const accumulatedMessages: SDKMessage[] = []
     let resolvedModel = modelId || DEFAULT_MODEL_ID
     let agentCwd: string | undefined
+    /** 会话私有数据目录（storageDir）：project 下在中央目录，永不等于 cwd。 */
+    let agentStorageDir: string | undefined
     let workspaceSlug: string | undefined
     let workspace: import('@profer/shared').AgentWorkspace | undefined
 
@@ -1437,7 +1558,7 @@ export class AgentOrchestrator {
               key: 'd',
               label: '下载最新安装包',
               action: 'open_external',
-              payload: 'https://proma.cool/download',
+              payload: 'https://profer.cn/download',
             },
             {
               key: 'i',
@@ -1455,25 +1576,26 @@ export class AgentOrchestrator {
         `[Agent 编排] 启动 ${agentRuntime} runtime — ${agentRuntime === 'claude' ? `binary: ${cliPath}` : 'in-process Pi'}，模型: ${modelId || DEFAULT_MODEL_ID}, resume: ${existingSdkSessionId ?? '无'}`,
       )
 
-      // 确定 Agent 工作目录
+      // 确定 Agent 工作目录（cwd 与 storageDir 是两种语义，统一由 session-manager 解析）
+      // 无工作区的历史会话仍按既有语义回落 `homedir()`；有工作区但解析不到已在入口拒绝（不会走到这里）。
       agentCwd = homedir()
       workspaceSlug = undefined
       workspace = undefined
-      if (workspaceId) {
-        const ws = getAgentWorkspace(workspaceId)
-        if (ws) {
-          agentCwd = getAgentSessionWorkspacePath(ws.slug, sessionId)
-          workspaceSlug = ws.slug
-          workspace = ws
-          console.log(`[Agent 编排] 使用 session 级别 cwd: ${agentCwd} (${ws.name}/${sessionId})`)
+      if (runWorkspace) {
+        const ws = runWorkspace
+        // 先取 storageDir：保留既有的「会话目录按需创建」副作用（删除/落盘都依赖它）。
+        agentStorageDir = getAgentSessionWorkspacePath(ws.slug, sessionId)
+        agentCwd = resolveAgentSessionCwd(ws.slug, sessionId)
+        workspaceSlug = ws.slug
+        workspace = ws
+        console.log(`[Agent 编排] 使用会话 cwd: ${agentCwd}（存储目录: ${agentStorageDir}; ${ws.name}/${sessionId}）`)
 
-          ensurePluginManifest(ws.slug, ws.name)
+        ensurePluginManifest(ws.slug, ws.name)
 
-          if (existingSdkSessionId) {
-            console.log(`[Agent 编排] 将尝试 resume: ${existingSdkSessionId}`)
-          } else {
-            console.log(`[Agent 编排] 无 sdkSessionId，将作为新会话启动（回填历史上下文）`)
-          }
+        if (existingSdkSessionId) {
+          console.log(`[Agent 编排] 将尝试 resume: ${existingSdkSessionId}`)
+        } else {
+          console.log(`[Agent 编排] 无 sdkSessionId，将作为新会话启动（回填历史上下文）`)
         }
       }
 
@@ -1481,46 +1603,48 @@ export class AgentOrchestrator {
       // fork 后的会话直接使用自己的 cwd，无需回退到源目录。
       // forkSourceDir 仅作为备用参考字段保留，不再影响 agentCwd。
 
-      // 9.5 确保 SDK 项目设置（plansDirectory → .context）
+      // 会话写入布局（唯一真相源）：project 下所有会话产物落在中央 storageDir，
+      // managed 下等价于会话目录（cwd）。后续写入一律不得用 agentCwd 拼路径。
+      const sessionWriteLayout = workspaceSlug ? resolveAgentSessionWriteLayout(workspaceSlug, sessionId) : undefined
+      const agentSessionStorageDir = sessionWriteLayout?.storageDir ?? agentStorageDir
+
+      // 9.5 确保 SDK 项目设置（plansDirectory → 会话存储目录内的 .context）
+      // project 下 cwd 是用户项目根：写 `<root>/.claude/settings.json` 会覆盖用户自己的 Claude
+      // 配置并把 `.claude/` 留在仓库里，因此目标改成 storageDir（managed 下两者相同，行为不变）。
+      // 但 SDK 只从 **cwd** 读 `.claude/settings.json`，所以 project 下必须把同一组设置以内联对象
+      // （`queryOptions.settings` → flag settings 层）交给 provider，否则 plansDirectory /
+      // autoMemoryDirectory / skipWebFetchPreflight 全部对 SDK 惰性（P1-8）。
+      let claudeInlineSdkSettings: ClaudeAgentQueryOptions['settings'] | undefined
       {
-        const claudeSettingsDir = join(agentCwd, '.claude')
-        if (!existsSync(claudeSettingsDir)) mkdirSync(claudeSettingsDir, { recursive: true })
-        const settingsPath = join(claudeSettingsDir, 'settings.json')
-        let sdkProjectSettings: Record<string, unknown> = {}
-        try {
-          sdkProjectSettings = JSON.parse(readFileSync(settingsPath, 'utf-8'))
-        } catch {
-          /* 文件不存在或解析失败 */
-        }
-        let needsWrite = false
-        if (sdkProjectSettings.plansDirectory !== '.context') {
-          sdkProjectSettings.plansDirectory = '.context'
-          needsWrite = true
-        }
-        if (sdkProjectSettings.skipWebFetchPreflight !== true) {
-          sdkProjectSettings.skipWebFetchPreflight = true
-          needsWrite = true
-        }
+        // project 用「相对项目根」的合法相对路径；managed / 无工作区仍是 `.context`。
+        const plansDirectory = sessionWriteLayout ? sessionWriteLayout.plansDirectory : '.context'
         const autoMemoryDirectory = workspaceSlug ? getWorkspaceAutoMemoryDir(workspaceSlug) : undefined
-        if (sdkProjectSettings.autoMemoryDirectory !== autoMemoryDirectory) {
-          sdkProjectSettings.autoMemoryDirectory = autoMemoryDirectory
-          needsWrite = true
+        const { settingsPath, wrote } = ensureAgentSessionSdkSettings({
+          storageDir: agentSessionStorageDir ?? agentCwd,
+          plansDirectory,
+          autoMemoryDirectory,
+        })
+        claudeInlineSdkSettings = buildClaudeInlineSdkSettings({
+          projectMode: workspace?.storageMode === 'project',
+          plansDirectory,
+          autoMemoryDirectory,
+        })
+        if (wrote) {
+          console.log(`[Agent 编排] 已设置 SDK settings (${settingsPath}): plansDirectory, skipWebFetchPreflight, autoMemoryDirectory`)
         }
-        if (needsWrite) {
-          writeFileSync(settingsPath, JSON.stringify(sdkProjectSettings, null, 2))
-          console.log(`[Agent 编排] 已设置 SDK settings (plansDirectory, skipWebFetchPreflight, autoMemoryDirectory, autoCompact)`)
+        if (claudeInlineSdkSettings) {
+          console.log(`[Agent 编排] SDK settings 内联透传（project 下的 cwd 不是 storageDir）: ${Object.keys(claudeInlineSdkSettings).join(', ')}`)
         }
       }
 
-      // Pi/Claude 都要求 Write 不能隐式创建父目录；产品约定的计划目录在这里显式准备。
-      if (workspaceSlug) {
-        const planDir = join(agentCwd, '.context', 'plan')
-        if (!existsSync(planDir)) mkdirSync(planDir, { recursive: true })
-      }
+      // Pi/Claude 都要求 Write 不能隐式创建父目录；计划目录同样建在会话存储目录内。
+      // 注意：project 下 plansDir 不在 cwd 之内，不能再用 join(agentCwd, '.context', 'plan')。
+      const agentPlansDir = sessionWriteLayout?.plansDir
+      if (agentPlansDir && !existsSync(agentPlansDir)) mkdirSync(agentPlansDir, { recursive: true })
 
       // 9.6 直接信任已保存的 sdkSessionId，跳过 listSessions 预验证
       // 原因：listSessions({ dir }) 基于 cwd 路径哈希查找，但 session 级别的 cwd
-      // （如 ~/.proma/agent-workspaces/workspace-xxx/sessionId）与 SDK 内部存储的路径哈希可能不匹配，
+      // （如 ~/.profer/agent-workspaces/workspace-xxx/sessionId）与 SDK 内部存储的路径哈希可能不匹配，
       // 导致 listSessions 始终返回 0 个会话，误杀有效的 resume。
       // SDK 本身会优雅处理无效的 resume ID（回退为新会话），无需预验证。
       if (existingSdkSessionId) {
@@ -1681,14 +1805,24 @@ export class AgentOrchestrator {
         sessionMeta,
         workspaceSlug,
       })
+      const productArtifactRoots = collectProductArtifactDirectories()
       const previewAllowedRoots = [
         // 产品自有产物目录（皮肤库/插件/Skill/附件）也是 Agent 产物的落地位置：
         // 不加进来，create_skin 产出的皮肤预览、Agent 自己写的本地页面都过不了授权根。
         ...(workspaceSlug && agentCwd ? [agentCwd] : []),
         ...attachedPreviewRoots,
-        ...collectProductArtifactDirectories(),
+        ...productArtifactRoots,
       ]
-      const imageOutputAllowedRoots = workspaceSlug && agentCwd ? previewAllowedRoots : []
+      // 受工作区授权的图片输出根：project 下生成图与记录都落在 storageDir（不在 cwd），
+      // 不列进来会让「生成图 → 皮肤壁纸/缩略图」这类后续读取被判越权；
+      // managed 下 storageDir === cwd，与首根重合，数组逐字保持不变。
+      const imageOutputAllowedRoots = composeImageOutputAllowedRoots({
+        workspaceSlug,
+        agentCwd,
+        storageDir: agentSessionStorageDir,
+        attachedDirectories: attachedPreviewRoots,
+        productArtifactDirectories: productArtifactRoots,
+      })
       const emitImageGenerationUpdate = (record: import('@profer/shared').AgentImageGenerationCard): void => {
         this.eventPort.emit(sessionId, {
           kind: 'profer_event',
@@ -1724,6 +1858,7 @@ export class AgentOrchestrator {
           await injectAgentImageOutputMcpServer(sdk, mcpServers, {
             ...runToolContext,
             agentCwd,
+            storageDir: agentSessionStorageDir,
             allowedRoots: imageOutputAllowedRoots,
           }, disabledTools)
           if (agentRuntime === 'claude' && isAgentGptImageAvailable()) {
@@ -1731,17 +1866,20 @@ export class AgentOrchestrator {
               ...runToolContext,
               sessionId,
               agentCwd,
+              storageDir: agentSessionStorageDir,
               allowedRoots: imageOutputAllowedRoots,
               onGenerationUpdate: emitImageGenerationUpdate,
             }, disabledTools)
           }
-          if (agentRuntime === 'claude') {
-            await injectAgentSkinMcpServer(sdk, mcpServers, {
-              ...runToolContext,
-              agentCwd,
-              allowedRoots: imageOutputAllowedRoots,
-              workspaceSlug,
-            }, disabledTools)
+          const skinContext = buildLegacySkinToolContext({
+            agentCwd,
+            // 生成图在 storageDir：skin 参考图授权必须带上它，否则 project 下判越权。
+            storageDir: agentSessionStorageDir,
+            allowedRoots: imageOutputAllowedRoots,
+            workspaceSlug,
+          })
+          if (agentRuntime === 'claude' && skinContext) {
+            await injectAgentSkinMcpServer(sdk, mcpServers, { ...runToolContext, ...skinContext }, disabledTools)
           }
         }
         if (pptCapabilityActive) {
@@ -1910,6 +2048,8 @@ export class AgentOrchestrator {
               agentCwd,
               allowedRoots: browserAllowedRoots,
               visualizationStorageDir: workspaceSlug && agentCwd ? agentSessionVisualizationsDir(sessionId) : undefined,
+              // 生图产物/记录跟会话存储目录：project 下写进项目根就是污染（I3）。
+              storageDir: agentSessionStorageDir,
               onVisualizationUpdate: emitVisualizationUpdate,
               assertCanPresentVisualization,
               onPreviewRequest: (event) => this.previewPort.open(event),
@@ -1926,7 +2066,10 @@ export class AgentOrchestrator {
               disabledTools,
               pptCapabilityActive,
             })
-            const mcpTools = await buildPiMcpTools(mcpServers, presetPolicy)
+            const mcpTools = await buildPiMcpTools(mcpServers, presetPolicy, {
+              workspaceSlug,
+              externalStatePaths: this.activeMcpExternalStatePaths.get(sessionId),
+            })
             const preparedToolsContext = {
               ...runToolContext,
               sessionId,
@@ -1993,7 +2136,7 @@ export class AgentOrchestrator {
 
       // 计划模式只读工具面（Bash 只读判定 / 白名单 / 延迟工具）的唯一实现已提取到
       // `plan-mode-tool-policy.ts`（GAP-5），此处只持有共享策略实例，不再保留局部副本。
-      const planToolPolicy = createPlanModeToolPolicy(agentCwd)
+      const planToolPolicy = createPlanModeToolPolicy(agentCwd, agentPlansDir)
 
       // 计划状态供工具公布守卫和权限审批共同读取，避免进入计划后只更新 UI。
       const syncPlanModeFromToolUse = (toolName: string): void => {
@@ -2172,8 +2315,15 @@ export class AgentOrchestrator {
       if (!isCompactCommand && !input.suppressUserMessagePersistence) this.persistSkillRoutingNotice(sessionId, routedSkills)
       console.log('[Skill 路由]', JSON.stringify({ sessionId, allowed: skillRouting.snapshot.allowedSlugs, blocked: skillRouting.snapshot.skills.filter(skill => skill.blocked).map(skill => ({ slug: skill.slug, code: skill.blocked })), selected: routedSkills.selected, hints: routedSkills.hints, diagnostics: routedSkills.diagnostics }))
       const skillRuntimeOptions = buildSkillRuntimeOptions(skillRouting, promptMode === 'light' ? 'pi' : agentRuntime)
-      const projectCandidates = promptMode === 'light' ? [] : detectAttachedDirectoryProjects(allAdditionalDirectories)
-      const attachedDirectoriesPrompt = promptMode === 'light' ? '' : buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates)
+      // project 下 cwd 就是项目根（= 索引 rootPath 的 realpath 归一化形式，已由 workspace-locator
+      // 统一）：它是唯一权威项目根，不再从附加目录反推候选（候选会把模型引向另一个项目的 root，
+      // 甚至在附加目录只有只读授权时误导写路径）。managed / 无工作区保持改造前行为。
+      // 用 agentCwd 而不是 workspace.rootPath：提示词里的 <working_directory> 就是它，两条路径必须同形。
+      const projectRoot = workspace?.storageMode === 'project' ? agentCwd : undefined
+      const projectCandidates = promptMode === 'light' || projectRoot ? [] : detectAttachedDirectoryProjects(allAdditionalDirectories)
+      const attachedDirectoriesPrompt = promptMode === 'light'
+        ? ''
+        : buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories, projectCandidates, { projectRoot })
       // Pi runtimeEnv 与旧链同源：宿主状态 / 登录 shell 快照 / 平台判定的唯一实现在
       // `agent-runtime-env-host.ts`（新链 provider preparation 调用同一个函数）。
       const piRuntimeEnv = agentRuntime === 'pi'
@@ -2233,7 +2383,12 @@ export class AgentOrchestrator {
       // 且把快照目录放在被快照的树里本身就是隐患。
       let piCheckpointRoot: string | undefined
       let piTurnCheckpoint: ReturnType<typeof createPiFileCheckpoint> | undefined
-      if (agentRuntime === 'pi') {
+      // project 的 cwd 就是用户项目根：把它作为快照根会每轮全量快照整个仓库（体积/耗时失控），
+      // 回退时还会删改同项目其它会话的文件。项目文件回退交给 git，本阶段不建检查点。
+      const skipPiFileCheckpoint = shouldSkipPiFileCheckpoint(workspace)
+      if (agentRuntime === 'pi' && skipPiFileCheckpoint) {
+        console.log(`[Agent 编排] 项目模式跳过 Pi 文件检查点（文件回退由 git 负责）: ${sessionId}`)
+      } else if (agentRuntime === 'pi') {
         // 文件回退是增强能力，绝不能因为权限、磁盘或第三方锁导致本轮模型请求失败。
         try {
           piCheckpointRoot = getPiCheckpointsDir()
@@ -2242,6 +2397,9 @@ export class AgentOrchestrator {
           console.warn(`[Agent 编排] Pi 文件检查点创建失败，本轮继续但不可文件回退 (${sessionId}):`, error)
         }
       }
+      // 草稿区判定基准是 storageDir：project 下它不等于 cwd，项目内改动必须照常进 file-changes。
+      // managed 下 storageDir === cwd，行为与改造前一致。
+      const draftDiscardRoot = agentStorageDir ?? agentCwd
       const browserAllowedToolAliases = SAFE_TOOLS
         .filter((toolName) => toolName.startsWith('Browser'))
         .map((toolName) => `mcp__browser__${toolName}`)
@@ -2260,6 +2418,8 @@ export class AgentOrchestrator {
         model: agentRuntime === 'pi' ? selectedModelId : effectiveSdkModelId,
         cwd: agentCwd,
         ...(agentRuntime === 'claude' && { sdkCliPath: cliPath, env: sdkEnv }),
+        // project 下把 storageDir 那份设置内联给 SDK（flag settings 层）；managed 不传，走 cwd 文件。
+        ...(agentRuntime === 'claude' && claudeInlineSdkSettings && { settings: claudeInlineSdkSettings }),
         ...(agentRuntime === 'pi' && {
           ...buildPiRuntimeCredentialOptions(channelId, runtimeCredentials),
           channelId,
@@ -2277,9 +2437,10 @@ export class AgentOrchestrator {
             executionResultsByToolUse.set(toolCallId, result)
           },
           onFileWrite: (toolCallId: string, fact: { path: string; source: string }) => {
-            // 会话工作目录是 Agent 的草稿区：截图、临时产物、.context 草稿都不是用户要 review 的改动。
+            // 会话私有存储目录是 Agent 的草稿区：截图、临时产物、.context 草稿都不是用户要 review 的改动。
             // 在这里就不入账，历史记录与 chip 都不会被草稿污染。
-            if (isPathInsideDirectory(fact.path, agentCwd)) return
+            // 不能用 cwd 判定：project 下 cwd 是项目根，会把项目内所有改动当成草稿丢掉。
+            if (isPathInsideDirectory(fact.path, draftDiscardRoot)) return
             const existing = fileWritesByToolUse.get(toolCallId) ?? []
             if (!existing.some((item) => item.path === fact.path)) {
               existing.push(fact)
@@ -2813,7 +2974,7 @@ export class AgentOrchestrator {
                     lastCompletedTaskId: lastCompletedTaskId ?? resolvePersistedRecentTask(),
                   })
                   if (autoLink) appendGraphEvent(sessionId, autoLink)
-                  if (invocation.toolName.endsWith('proma_task_update') && invocation.input.status === 'completed' && structuredTaskId) {
+                  if (taskGraphToolKind(invocation.toolName) === 'update' && invocation.input.status === 'completed' && structuredTaskId) {
                     lastCompletedTaskId = structuredTaskId
                     currentTaskId = null
                   } else if (structuredTaskId) {
@@ -3017,7 +3178,10 @@ export class AgentOrchestrator {
                     lastRetryableError = EMPTY_OUTPUT_ERROR_MESSAGE
                     skipNextRetryDelay = true
                     stderrChunks.length = 0
-                    console.warn(`[Agent 编排] 检测到 thinking-only 空回复，立即恢复一次 (attempt ${attempt})`)
+                    // 原样重发大概率得到同样的空输出（长上下文下还白烧几十万 token）；
+                    // 改成定向催答，明确要求把结论写进正文。
+                    queryOptions.prompt = buildEmptyOutputRetryPrompt(contextualMessage)
+                    console.warn(`[Agent 编排] 检测到 thinking-only 空回复，定向催答恢复一次 (attempt ${attempt})`)
                     shouldRetryFromError = true
                     break
                   }
@@ -3534,7 +3698,7 @@ export class AgentOrchestrator {
           // 此终止分支只会被「非 session-not-found」的错误命中（session 失效已在上文
           // isSessionNotFoundError 分支单独处理并切到恢复模式）。网络断连、服务端 5xx、
           // 未知错误都不代表 SDK 会话本身失效——其完整历史 JSONL 仍保存在
-          // ~/.proma/sdk-config/projects/.../{sdkSessionId}.jsonl 中，依旧可 resume。
+          // ~/.profer/sdk-config/projects/.../{sdkSessionId}.jsonl 中，依旧可 resume。
           // 此前这里对 `!apiError`（如普通断连解析不出状态码）一律清除指针，导致下一轮
           // 退化为「仅回填最近 N 条」的冷启动，上下文从满载骤降（#903）。
           if (existingSdkSessionId) {
@@ -3877,17 +4041,27 @@ export class AgentOrchestrator {
     // 所以缺失时降级为「只截断对话」而不是直接拒绝（例如 session-not-found 恢复过它的会话）。
     const sdkSessionId = sessionMeta.sdkSessionId
     // 0.5 从 SDK session JSONL 解析对应的 user message UUID（rewindFiles 需要）
-    let projectDir: string | undefined
+    // 两种路径语义不能混用：storageDir 只用于定位会话私有数据（SDK JSONL / 备份目录），
+    // cwd 是快照里相对路径的基准与允许写入根。project 下 cwd = 项目根，storageDir = 中央会话目录；
+    // 把 storageDir 当 cwd 会让「回退到此处」把文件恢复到中央目录（P1-1）。
+    let storageDir: string | undefined
+    let rewindCwd: string | undefined
     let workspaceSlug: string | undefined
     if (sessionMeta.workspaceId) {
       const ws = getAgentWorkspace(sessionMeta.workspaceId)
       if (ws) {
         workspaceSlug = ws.slug
-        projectDir = getAgentSessionWorkspacePath(ws.slug, sessionMeta.id)
+        storageDir = getAgentSessionWorkspacePath(ws.slug, sessionMeta.id)
+        try {
+          rewindCwd = resolveAgentSessionCwd(ws.slug, sessionMeta.id)
+        } catch (error) {
+          // 项目目录已不可用：绝不让文件恢复回落到用户主目录执行，只降级文件恢复。
+          console.warn(`[Agent 编排] 回退: 无法解析会话 cwd，将跳过文件恢复: ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
     }
     const userMessageUuid = sdkSessionId
-      ? resolveUserUuidFromSDK(sdkSessionId, assistantMessageUuid, projectDir, sessionMeta.forkSourceSdkSessionId)
+      ? resolveUserUuidFromSDK(sdkSessionId, assistantMessageUuid, storageDir, sessionMeta.forkSourceSdkSessionId)
       : undefined
     console.log(
       `[Agent 编排] 回退: 解析 user uuid=${userMessageUuid || '未找到'} (assistant uuid=${assistantMessageUuid}, forkSource=${sessionMeta.forkSourceSdkSessionId ?? 'none'})`,
@@ -3913,9 +4087,11 @@ export class AgentOrchestrator {
       fileRewindResult = { canRewind: true, filesChanged: [] }
     } else if (userMessageUuid) {
       try {
-        // 确定 cwd（文件的基准路径）
-        let cwd = homedir()
-        if (projectDir) cwd = projectDir
+        // 确定 cwd（快照相对路径的基准 + 允许写入根）：project 下是项目根，managed 下是会话目录。
+        // 会话有 workspaceId 但解析不到（工作区被移除 / 项目目录被移走）时明确降级，
+        // 绝不回落到用户主目录当 cwd —— 否则快照恢复会去改 ~ 下的同名相对路径。
+        const cwd = rewindCwd ?? (sessionMeta.workspaceId ? undefined : homedir())
+        if (!cwd) throw new Error('项目目录不可用，文件未回退')
         // 收集附加目录（必须与 sendMessage 中传给 SDK 的 additionalDirectories 一致，
         // 否则会话级 attachedDirectories 内的文件会因路径越界检查被静默跳过）
         const rewindAttachedDirs = collectAttachedDirectories({
@@ -3929,7 +4105,7 @@ export class AgentOrchestrator {
           sdkSessionId,
           userMessageUuid,
           cwd,
-          projectDir,
+          storageDir,
           sessionMeta.forkSourceSdkSessionId,
           rewindAttachedDirs,
         )

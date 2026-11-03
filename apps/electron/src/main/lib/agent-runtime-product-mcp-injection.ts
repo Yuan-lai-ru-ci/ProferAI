@@ -29,6 +29,7 @@
  * （比较最终注册的服务器集合与顺序，以及每个注入器收到的位置参数）。
  */
 
+import { resolve } from 'node:path'
 import type {
   AgentFilePreviewInspectRequest,
   AgentFilePreviewInspectResult,
@@ -107,6 +108,11 @@ export interface ProductFilePreviewCapability {
 /** 受工作区授权的图片输出根（旧链 `imageOutputAllowedRoots`）；本地图片输出与皮肤创作只用它。 */
 export interface ProductImageOutputRootsCapability {
   allowedRoots: readonly string[]
+  /**
+   * 会话私有存储根（`resolveAgentSessionWriteLayout().storageDir`）。
+   * 生图产物/记录与皮肤参考图的真实落点：project 下它不在 cwd 内，缺省回落到 cwd（managed 旧语义）。
+   */
+  storageDir?: string
 }
 
 /** AI 生图能力：可用性探测（旧链 `isAgentGptImageAvailable()`）与生成进度广播（`image_generation_updated`）。 */
@@ -309,6 +315,8 @@ export interface ProductRootInputs {
   agentCwd?: string
   workspaceId?: string
   workspaceSlug?: string
+  /** 会话私有存储根（`resolveAgentSessionWriteLayout().storageDir`）；缺省表示按 cwd 语义处理。 */
+  storageDir?: string
   /** 旧链 `collectAttachedDirectories({ extraDirs: additionalDirectories, sessionMeta, workspaceSlug })` 的结果。 */
   attachedDirectories: readonly string[]
   /** 旧链 `collectProductArtifactDirectories()` 的结果。 */
@@ -324,9 +332,20 @@ export function composePreviewAllowedRoots(input: ProductRootInputs): string[] {
   ]
 }
 
-/** 旧链 `imageOutputAllowedRoots`：仅当有工作区且会话工作目录存在时才非空。 */
+/**
+ * 旧链 `imageOutputAllowedRoots`：仅当有工作区且会话工作目录存在时才非空。
+ *
+ * 在旧链根列表之后追加会话存储根（`storageDir`）：project 下生图产物与记录都落在那里，
+ * 不把它列为授权根会让「生成图 → 皮肤壁纸 / 参考图」这类后续读取被判定越权。
+ * managed 下 `storageDir === agentCwd`，与已有的首根重合，数组逐字保持不变（旧行为零变化）。
+ */
 export function composeImageOutputAllowedRoots(input: ProductRootInputs): string[] {
-  return input.workspaceSlug && input.agentCwd ? [...composePreviewAllowedRoots(input)] : []
+  if (!input.workspaceSlug || !input.agentCwd) return []
+  const roots = composePreviewAllowedRoots(input)
+  const storageDir = input.storageDir?.trim()
+  if (!storageDir) return roots
+  const alreadyCovered = roots.some(root => resolve(root) === resolve(storageDir))
+  return alreadyCovered ? roots : [...roots, storageDir]
 }
 
 /**
@@ -551,12 +570,15 @@ function disabledToolsOf(context: ProductMcpInjectionContext): string[] | undefi
  * 逐条与旧编排层传入的对象一致（旧链字段是**无条件**给出的，undefined 也占位）：
  * - `visualization`：`[{sessionId, agentCwd, storageDir, allowedRoots, onUpdate, assertCanPresent}, disabledTools]`
  * - `agent-preview`：`[{sessionId, agentCwd, allowedRoots, onRequest, onInspectRequest}, disabledTools]`
- * - `agent-image-output`：`[{agentCwd, allowedRoots}, disabledTools]`
- * - `agent-gpt-image`：`[{sessionId, agentCwd, allowedRoots, onGenerationUpdate}, disabledTools]`
- * - `agent-skin`：`[{agentCwd, allowedRoots, workspaceSlug}, disabledTools]`
+ * - `agent-image-output`：`[{agentCwd, storageDir, allowedRoots}, disabledTools]`
+ * - `agent-gpt-image`：`[{sessionId, agentCwd, storageDir, allowedRoots, onGenerationUpdate}, disabledTools]`
+ * - `agent-skin`：`[{agentCwd, storageDir, allowedRoots, workspaceSlug}, disabledTools]`
  * - `ppt-delivery`：`[disabledTools]`（没有上下文参数）
  * - `clipboard`：`[disabledTools]`
  * - `browser`：`[{sessionId, workspaceId, agentCwd, allowedRoots, executionSource, disabledTools}]`（`disabledTools` 是上下文字段）
+ *
+ * `storageDir` 取自 `image-output-roots` 能力（宿主解析的会话私有存储根）：project 下生图产物/记录
+ * 与皮肤参考图都在那里，旧链的 `agentSessionStorageDir` 同源。
  *
  * 这是宿主适配层与测试取证**共用**的构造器：测试可以比较真实注入函数收到的参数，
  * 而不是比较一份适配层副本。
@@ -602,7 +624,15 @@ export async function buildProductMcpInjectorArgs(
     }
     case 'agent-image-output': {
       const capability = requireCapability(capabilities, 'image-output-roots')
-      return [{ agentCwd: ctx.agentCwd, allowedRoots: [...capability.allowedRoots] }, disabledTools]
+      return [
+        {
+          agentCwd: ctx.agentCwd,
+          // project 下生图产物必须落 storageDir（不在项目根）；managed 下两者相等。
+          storageDir: capability.storageDir,
+          allowedRoots: [...capability.allowedRoots],
+        },
+        disabledTools,
+      ]
     }
     case 'agent-gpt-image': {
       const roots = requireCapability(capabilities, 'image-output-roots')
@@ -615,6 +645,8 @@ export async function buildProductMcpInjectorArgs(
         {
           sessionId: ctx.sessionId,
           agentCwd: ctx.agentCwd,
+          // 生图产物/记录与「上一张生成图」的查询都跟会话存储目录（project 下不在项目根）。
+          storageDir: roots.storageDir,
           allowedRoots: [...roots.allowedRoots],
           onGenerationUpdate: generation.onGenerationUpdate,
         },
@@ -624,7 +656,13 @@ export async function buildProductMcpInjectorArgs(
     case 'agent-skin': {
       const capability = requireCapability(capabilities, 'image-output-roots')
       return [
-        { agentCwd: ctx.agentCwd, allowedRoots: [...capability.allowedRoots], workspaceSlug: ctx.workspaceSlug },
+        {
+          agentCwd: ctx.agentCwd,
+          // 皮肤壁纸/缩略图常直接引用本会话生成图：参考图授权必须包含 storageDir。
+          storageDir: capability.storageDir,
+          allowedRoots: [...capability.allowedRoots],
+          workspaceSlug: ctx.workspaceSlug,
+        },
         disabledTools,
       ]
     }

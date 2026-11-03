@@ -1892,14 +1892,28 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
   // ===== 队列操作（运行中追加的消息）=====
 
-  /** 队列在空闲且前置满足时可以发送（运行中置灰） */
-  const canSendQueuedNow = !runtimeSwitchInFlight && messagesLoaded && !presetSelectionRequired
-    && Boolean(agentChannelId) && hasAvailableModel && !streaming && !backgroundWaiting
-    && streamState?.stopping !== true
+  /** 队列发送硬前置：与 Agent 是否在跑无关（渠道/模型/加载/预设/停止中） */
+  const queueSendPrerequisitesMet = !runtimeSwitchInFlight && messagesLoaded && !presetSelectionRequired
+    && Boolean(agentChannelId) && hasAvailableModel && streamState?.stopping !== true
+
+  /** 自动发送队首：必须真正空闲。运行中/后台等待都不发，否则每轮都会被自己打断重开 */
+  const canSendQueuedNow = queueSendPrerequisitesMet && !streaming && !backgroundWaiting
+
+  /**
+   * 「立即发送」按钮：运行中也可点。点下去由 sendPlainTextAgentMessage 走软打断
+   * （interrupt=true）插进当前轮；后台等待时则是无中断追加。
+   * 故意不复用 canSendQueuedNow——那个是自动发送闸门，要求真正空闲。
+   */
+  const canInsertQueuedNow = queueSendPrerequisitesMet
+
+  /** 按钮 tooltip 如实说明点下去会发生什么 */
+  const sendQueuedNowLabel = streaming
+    ? '插入当前轮（会打断本轮）'
+    : backgroundWaiting ? '追加到当前任务' : '立即发送'
 
   /** 立即发送某条队列消息：出队后发送，失败按 stop epoch 判定是否回队首 */
   const handleSendQueuedNow = React.useCallback((messageId: string): void => {
-    if (!canSendQueuedNow || queueSendInFlightRef.current) return
+    if (!canInsertQueuedNow || queueSendInFlightRef.current) return
     const message = queuedMessages.find((item) => item.id === messageId)
     if (!message) return
     const sendEpoch = queueStopEpochRef.current
@@ -1913,7 +1927,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     }).finally(() => {
       queueSendInFlightRef.current = false
     })
-  }, [canSendQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streamState?.stopping])
+  }, [canInsertQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streamState?.stopping])
 
   /** 撤回队列消息：出队并追加到当前草稿后面 */
   const handleRecallQueuedMessage = React.useCallback((messageId: string): void => {
@@ -3308,7 +3322,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
             <AgentMessageQueue
               items={queuedMessages}
-              canSendNow={canSendQueuedNow}
+              canSendNow={canInsertQueuedNow}
+              sendNowLabel={sendQueuedNowLabel}
               autoSend={autoSendEnabled}
               onToggleAutoSend={handleToggleAutoSend}
               onSendNow={handleSendQueuedNow}

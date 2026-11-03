@@ -18,7 +18,10 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, cpSync, copyFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { getConfigDir, getDefaultSkillsDir, getWorkspaceSkillsDir } from './config-paths'
+import { getConfigDir, getDefaultSkillsDir, getAgentWorkspacesIndexPath, getWorkspaceSkillsDir } from './config-paths'
+import { readJsonFileSafe } from './safe-file'
+import { assertSafeSkillSegment } from './skill-path-security'
+import { resolveWorkspaceLocation } from './workspace-locator'
 import { normalizeDefaultSkillSlug } from './default-skill-slugs'
 import { readSkillManifest, readSkillVersion, writeSkillManifest, SKILL_MANIFEST_FILENAME } from './skill-manifest'
 import type { MasterSkillMeta, MasterSkillVersion, SyncSkillResult, SkillConflict, SkillImportSource } from '@profer/shared'
@@ -49,12 +52,68 @@ function getWorkspacesDirBase(): string {
   return join(getConfigDir(), 'agent-workspaces')
 }
 
-/** 某工作区 skill 目录（active） */
+/** 某工作区 skill 目录（active）；不存在时由调用方（同步）按需创建 */
 function workspaceSkillsDirOf(workspaceSlug: string): string {
   if (testRootOverride) {
     return join(getWorkspacesDirBase(), workspaceSlug, 'skills')
   }
   return getWorkspaceSkillsDir(workspaceSlug)
+}
+
+/**
+ * 工作区配置目录（纯路径，不 mkdir）。
+ *
+ * - managed：`<config root>/agent-workspaces/<slug>`
+ * - project：`<root>/.profer`（由 locator 读索引得出）
+ *
+ * 同步统计是只读扫描：枚举阶段绝不能替项目创建目录。
+ */
+function workspaceConfigDirOf(workspaceSlug: string): string {
+  if (testRootOverride) return join(getWorkspacesDirBase(), workspaceSlug)
+  return resolveWorkspaceLocation(workspaceSlug).configDir
+}
+
+/** 索引登记的工作区 slug（只读、容错，跳过软删除、失效项目根与损坏项） */
+function readIndexWorkspaceSlugs(): string[] {
+  const index = readJsonFileSafe<{ workspaces?: Array<{ slug?: string; isDeleted?: boolean; storageMode?: string; rootPath?: string }> }>(getAgentWorkspacesIndexPath())
+  const slugs: string[] = []
+  for (const workspace of index?.workspaces ?? []) {
+    if (!workspace || typeof workspace.slug !== 'string' || workspace.slug.length === 0) continue
+    if (workspace.isDeleted) continue
+    // 项目目录已被移走/删除：没有可统计的技能副本，跳过而不是让路径解析抛错。
+    if (workspace.storageMode === 'project'
+      && (typeof workspace.rootPath !== 'string' || workspace.rootPath.length === 0 || !existsSync(workspace.rootPath))) {
+      continue
+    }
+    try {
+      assertSafeSkillSegment(workspace.slug, 'workspaceSlug')
+    } catch {
+      continue
+    }
+    slugs.push(workspace.slug)
+  }
+  return slugs
+}
+
+/**
+ * 工作区 slug 枚举 = managed 目录 ∪ 索引登记。
+ *
+ * 原先只扫 `agent-workspaces/`，project 工作区（配置目录在项目内）完全不参与
+ * 元 Skill 同步统计；索引是 project 工作区的唯一来源（审计 §7.3）。
+ * 测试注入根目录（`testRootOverride`）时不读真实索引，避免串到用户数据。
+ */
+function listWorkspaceSlugs(): string[] {
+  const slugs = new Set<string>()
+  const root = getWorkspacesDirBase()
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.name.startsWith('.')) slugs.add(entry.name)
+    }
+  }
+  if (!testRootOverride) {
+    for (const slug of readIndexWorkspaceSlugs()) slugs.add(slug)
+  }
+  return [...slugs].sort((left, right) => left.localeCompare(right))
 }
 
 // ============================================================
@@ -320,20 +379,19 @@ export function countMasterSyncedWorkspaces(masterSlug: string, countMap?: Map<s
 }
 
 /**
- * 收集所有个人工作区 skills 下（含 skills-inactive）的 .source.json 路径。
+ * 收集所有工作区 skills 下（含 skills-inactive）的 .source.json 路径。
  * .source.json 只存在于 skill 目录内，因此只遍历每个工作区的 skills 与
- * skills-inactive 子目录，绝不递归整个 agent-workspaces/ 根（避免遍历会话
- * 目录、workspace-files、.claude、node_modules 等无关/巨型目录带来的卡顿）。
+ * skills-inactive 子目录，绝不递归整个工作区根（避免遍历会话目录、
+ * workspace-files、.claude、node_modules 等无关/巨型目录带来的卡顿）。
+ *
+ * 工作区集合来自「目录 ∪ 索引」，因此 project 工作区也会被计入。
  */
 function findWorkspaceSourceFiles(): string[] {
-  const root = getWorkspacesDirBase()
-  if (!existsSync(root)) return []
   const out: string[] = []
-  for (const wsEntry of readdirSync(root, { withFileTypes: true })) {
-    if (!wsEntry.isDirectory()) continue
-    const wsDir = join(root, wsEntry.name)
+  for (const workspaceSlug of listWorkspaceSlugs()) {
+    const configDir = workspaceConfigDirOf(workspaceSlug)
     for (const skillsDirName of ['skills', 'skills-inactive']) {
-      const skillsDir = join(wsDir, skillsDirName)
+      const skillsDir = join(configDir, skillsDirName)
       if (existsSync(skillsDir)) {
         collectSourceFiles(skillsDir, out)
       }

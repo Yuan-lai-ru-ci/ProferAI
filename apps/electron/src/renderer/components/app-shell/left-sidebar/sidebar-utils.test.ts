@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 import type { AgentSessionMeta, ConversationMeta } from '@profer/shared'
 import type { TabItem } from '@/atoms/tab-atoms'
-import { getOpenSessionEntries, sidebarRowClass } from './sidebar-utils'
+import { getOpenSessionEntries, resolveSessionLeadingMarkers, sidebarRowClass } from './sidebar-utils'
 
 const NOW = 1_752_000_000_000
 const session = (id: string, overrides: Partial<AgentSessionMeta> = {}): AgentSessionMeta => ({
@@ -101,8 +101,10 @@ describe('sidebarRowClass — 侧栏行视觉契约', () => {
     expect(cls).not.toContain('shadow')
   })
 
-  test('Given 项目内会话 When 生成 Then 增加 30px 缩进且不影响默认行', () => {
-    expect(sidebarRowClass({ depth: 1 })).toContain('pl-[30px]')
+  test('Given 项目内会话 When 生成 Then 不再预留标记留白且不影响默认行', () => {
+    const cls = sidebarRowClass({ depth: 1 })
+    expect(cls).not.toContain('pl-[30px]')
+    expect(cls).toContain('pl-2')
     expect(sidebarRowClass({ depth: 0 })).not.toContain('pl-[30px]')
   })
 
@@ -146,5 +148,50 @@ describe('sidebarRowClass — 侧栏行视觉契约', () => {
     expect(currentProject).toContain('bg-foreground/[0.09]')
     // 入口行（非会话、非项目）保持无底色
     expect(sidebarRowClass()).not.toMatch(/(?:^|\s)bg-foreground\/\[0\.04\]/)
+  })
+})
+
+describe('resolveSessionLeadingMarkers — 行首标记固定顺序', () => {
+  const base = {
+    pinnable: true,
+    pinned: false,
+    showPinIcon: true,
+    hasBrowser: false,
+    regeneratingTitle: false,
+  }
+
+  test('Given 没有任何标记 When 解析 Then 不占位（空数组）', () => {
+    expect(resolveSessionLeadingMarkers(base)).toEqual([])
+  })
+
+  test('Given 置顶且开着浏览器 When 解析 Then 置顶在前、浏览器在后', () => {
+    expect(resolveSessionLeadingMarkers({ ...base, pinned: true, hasBrowser: true }))
+      .toEqual(['pin', 'browser'])
+  })
+
+  test('Given 标记全开 When 解析 Then 固定为 置顶→定时→探索→浏览器→生成标题', () => {
+    expect(resolveSessionLeadingMarkers({
+      ...base,
+      pinned: true,
+      sourceAutomationId: 'auto-1',
+      explorationParentSessionId: 'parent-1',
+      explorationSourceMessageId: 'msg-1',
+      hasBrowser: true,
+      regeneratingTitle: true,
+    })).toEqual(['pin', 'automation', 'exploration', 'browser', 'regeneratingTitle'])
+  })
+
+  test('Given 委派子会话 When 解析 Then 显示委派标记且不出现置顶标记', () => {
+    expect(resolveSessionLeadingMarkers({
+      ...base,
+      pinnable: false,
+      pinned: true,
+      sourceAutomationId: 'auto-1',
+      sourceDelegationId: 'parent-1',
+    })).toEqual(['delegation'])
+  })
+
+  test('Given 置顶分区（分区标题已表达状态）When 解析 Then 不重复画置顶标记', () => {
+    expect(resolveSessionLeadingMarkers({ ...base, pinned: true, showPinIcon: false })).toEqual([])
   })
 })

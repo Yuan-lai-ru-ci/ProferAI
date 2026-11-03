@@ -966,12 +966,59 @@ function migrateRoutingSidecars(): void {
   }
 }
 
+/**
+ * 索引登记的工作区 slug（只读、容错）。
+ *
+ * project 工作区的配置目录在项目内的 `.profer/`，不在 `agent-workspaces/` 下；
+ * 只扫目录会让它们从全局技能引用/删除阻断与旧路由侧车迁移里消失（审计 §7.3）。
+ */
+function readIndexWorkspaceSlugs(): string[] {
+  const slugs: string[] = []
+  const index = readJsonFileSafe<{ workspaces?: Array<{ slug?: string; isDeleted?: boolean; storageMode?: string; rootPath?: string }> }>(getAgentWorkspacesIndexPath())
+  for (const workspace of index?.workspaces ?? []) {
+    if (!workspace || typeof workspace.slug !== 'string' || workspace.slug.length === 0) continue
+    if (workspace.isDeleted) continue
+    // 项目目录已被移走/删除（rootPath 失效）：没有任何可枚举的技能，
+    // 跳过而不是让后续工作区路径解析抛 WorkspaceRootMissingError。
+    if (workspace.storageMode === 'project'
+      && (typeof workspace.rootPath !== 'string' || workspace.rootPath.length === 0 || !existsSync(workspace.rootPath))) {
+      continue
+    }
+    try {
+      // slug 会直接拼进目录：损坏索引项跳过，而不是让整个枚举抛错。
+      assertSafeSkillSegment(workspace.slug, 'workspaceSlug')
+    } catch {
+      continue
+    }
+    slugs.push(workspace.slug)
+  }
+  return slugs
+}
+
+/**
+ * 工作区 slug 枚举 = managed 目录 ∪ 索引登记（去重排序）。
+ *
+ * 目录枚举只覆盖 managed 工作区，project 工作区只能从索引拿到；两者取并集后
+ * 全局技能的影响面统计才能覆盖全部工作区。测试注入根目录（`rootsOverride`）时
+ * 不读真实索引，避免串到用户数据。
+ */
 function listWorkspaceSlugs(): string[] {
+  const slugs = new Set<string>()
   const root = rootsOverride?.workspacesRoot ?? getAgentWorkspacesDir()
-  if (!existsSync(root)) return []
-  return readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-    .map((entry) => entry.name)
+  if (existsSync(root)) {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.name.startsWith('.')) slugs.add(entry.name)
+    }
+  }
+  if (!rootsOverride) {
+    for (const slug of readIndexWorkspaceSlugs()) slugs.add(slug)
+  }
+  return [...slugs].sort((left, right) => left.localeCompare(right))
+}
+
+/** 测试用：验证「索引 ∪ 目录」的工作区枚举（含 project 工作区）。 */
+export function __listWorkspaceSlugsForTest(): string[] {
+  return listWorkspaceSlugs()
 }
 
 /** 既包含已有目录，也包含尚未落盘但已登记的工作区，避免漏掉默认启用的全局引用。 */

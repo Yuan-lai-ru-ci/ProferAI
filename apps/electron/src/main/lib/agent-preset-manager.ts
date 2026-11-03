@@ -40,6 +40,14 @@ import type {
 } from '@profer/shared'
 import { getAgentPresetMigrationPath, getGlobalAgentPresetsPath, getWorkspaceAgentPresetsPath, getAgentWorkspacesIndexPath, getAgentSessionsIndexPath, getAutomationsPath } from './config-paths'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
+import {
+  getPresetStorageMode,
+  presetStore,
+  withPresetScope,
+  __resetPresetStoreBaseDirForTest,
+  __setPresetStoreBaseDirForTest,
+} from './preset-store'
+import type { PresetStoreDiagnostic } from './preset-store'
 import { AgentPresetError } from '@profer/shared'
 import type { AgentPresetScope, PresetReference, PresetReferenceReport, PresetScopeRebindResult, PresetWorkspaceReference, GlobalAgentPresetConfig } from '@profer/shared'
 
@@ -53,12 +61,14 @@ let testWorkspaceSlugs: string[] | null = null
 /** 测试用：覆盖预设配置基础目录（真实路径 = baseDir/{slug}/agent-presets.json） */
 export function __setAgentPresetsBaseDirForTest(path: string): void {
   testBaseDirOverride = path
+  __setPresetStoreBaseDirForTest(path)
 }
 
 /** 测试用：恢复真实路径 */
 export function __resetAgentPresetsBaseDirForTest(): void {
   testBaseDirOverride = null
   testWorkspaceSlugs = null
+  __resetPresetStoreBaseDirForTest()
 }
 
 /** 测试用：让迁移覆盖临时目录中的指定工作区；生产代码从工作区索引读取。 */
@@ -69,11 +79,13 @@ export function __setAgentPresetMigrationWorkspacesForTest(slugs: string[]): voi
 /** 兼容旧测试替身命名（deprecated，请用 __setAgentPresetsBaseDirForTest） */
 export function __setAgentPresetsConfigPathForTest(path: string): void {
   testBaseDirOverride = path
+  __setPresetStoreBaseDirForTest(path)
 }
 
 export function __resetAgentPresetsConfigPathForTest(): void {
   testBaseDirOverride = null
   testWorkspaceSlugs = null
+  __resetPresetStoreBaseDirForTest()
 }
 
 function getConfigFilePath(workspaceSlug: string | undefined): string | null {
@@ -118,13 +130,7 @@ function presetScopeOf(preset: AgentPreset, fallback: AgentPresetScope): AgentPr
 }
 
 function withScope(preset: AgentPreset, scope: AgentPresetScope, workspaceSlug?: string): AgentPreset {
-  return {
-    ...preset,
-    scope,
-    ...(scope === 'workspace' && workspaceSlug ? { workspaceSlug } : {}),
-    ...(scope !== 'workspace' ? { workspaceSlug: undefined } : {}),
-    version: preset.version ?? '1.0.0',
-  }
+  return withPresetScope(preset, scope, workspaceSlug)
 }
 
 // ============================================================
@@ -160,53 +166,19 @@ function writeGlobalConfig(config: GlobalAgentPresetConfig): void {
 
 /** 读取工作区配置；无工作区返回默认配置 */
 function readConfig(workspaceSlug: string | undefined): AgentPresetConfig {
-  const filePath = getConfigFilePath(workspaceSlug)
-  if (!filePath || !existsSync(filePath)) {
-    return getDefaultConfig()
-  }
+  if (!workspaceSlug) return getDefaultConfig()
 
   try {
-    const raw = readFileSync(filePath, 'utf-8')
-    const data = JSON.parse(raw) as Partial<AgentPresetConfig>
-
-    const presets = Array.isArray(data.presets)
-      ? data.presets.map((preset) => withScope(preset, 'workspace', workspaceSlug))
-      : []
-    // 规范化：过滤历史脏数据中的非法 suppress key / 工具组（防御手工编辑 JSON 遗留值）
-    for (const preset of presets) {
-      if (Array.isArray(preset.suppressPromptSections)) {
-        preset.suppressPromptSections = preset.suppressPromptSections.filter((k) =>
-          AGENT_PRESET_SUPPRESS_KEYS.includes(k as AgentPresetSuppressKey))
-        if (preset.suppressPromptSections.length === 0) delete preset.suppressPromptSections
-      }
-      if (Array.isArray(preset.disabledToolGroups)) {
-        preset.disabledToolGroups = preset.disabledToolGroups.filter((g) =>
-          AGENT_PRESET_TOOL_GROUPS.includes(g as AgentPresetToolGroup))
-        if (preset.disabledToolGroups.length === 0) delete preset.disabledToolGroups
-      }
-      // 规范化：单工具禁用必须是已知短名（防御手工编辑 JSON 遗留值；未知短名直接剔除）
-      if (Array.isArray(preset.disabledTools)) {
-        preset.disabledTools = preset.disabledTools.filter((t) =>
-          AGENT_PRESET_TOOL_NAMES.includes(t as (typeof AGENT_PRESET_TOOL_NAMES)[number]))
-        if (preset.disabledTools.length === 0) delete preset.disabledTools
-      }
-      // C6：非法、缺失或循环基座必须保留原始字段并记录诊断，不能静默变成独立预设。
-      if (preset.basePresetId !== undefined && !BUILTIN_AGENT_PRESETS.some((b) => b.id === preset.basePresetId)) {
-        console.warn(`[Agent 预设] 保留非法派生基座待诊断: ${preset.name ?? preset.id} → ${String(preset.basePresetId)}`)
-        preset.migrationStatus = 'invalid-base'
-        preset.migrationReason = `非法派生基座: ${String(preset.basePresetId)}`
-      }
-    }
+    // 存储细节（单文件 / presets 目录、旧格式兼容、逐文件容错、脏数据清洗）全部下沉到 PresetStore。
+    // 这里只保留「默认引用解析」——它依赖全局预设配置，属于 manager 的职责。
+    const data = presetStore.readConfig(workspaceSlug)
+    const presets = data.presets
     // 规范化：允许空默认值；优先使用仍在当前工作区生效的稳定引用。
     // 旧版本可能留下 defaultPresetId=standard，但 defaultPresetReference 已指向用户全局预设；
     // 以 ID 优先会把已解除范围的 standard 再次带入 runtime，最终触发作用域错误。
     const globalConfig = readGlobalConfig()
-    const disabledGlobalPresetIds = Array.isArray(data.disabledGlobalPresetIds)
-      ? data.disabledGlobalPresetIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-      : []
-    const disabledWorkspacePresetIds = Array.isArray(data.disabledWorkspacePresetIds)
-      ? data.disabledWorkspacePresetIds.filter((id): id is string => typeof id === 'string' && presets.some((preset) => preset.id === id))
-      : []
+    const disabledGlobalPresetIds = data.disabledGlobalPresetIds ?? []
+    const disabledWorkspacePresetIds = data.disabledWorkspacePresetIds ?? []
     const isGlobalPresetEnabled = (presetId: string): boolean => {
       if (disabledGlobalPresetIds.includes(presetId)) return false
       const scopes = globalConfig.workspaceScopes?.[presetId]
@@ -263,21 +235,25 @@ function readConfig(workspaceSlug: string | undefined): AgentPresetConfig {
   }
 }
 
-/** 写入工作区配置文件；无工作区拒绝 */
+/** 写入工作区配置文件；无工作区拒绝。project 模式由 PresetStore 拆分到 `presets/` 目录 */
 function writeConfig(workspaceSlug: string | undefined, config: AgentPresetConfig): void {
-  const filePath = getConfigFilePath(workspaceSlug)
-  if (!filePath) throw new AgentPresetError('PRESET_WORKSPACE_REQUIRED', '预设管理需要工作区')
-  mkdirSync(dirname(filePath), { recursive: true })
-  try {
-    writeJsonFileAtomic(filePath, config)
-  } catch (error) {
-    throw new AgentPresetError('PRESET_WRITE_FAILED', `工作区预设写入失败: ${error instanceof Error ? error.message : String(error)}`)
-  }
+  if (!workspaceSlug) throw new AgentPresetError('PRESET_WORKSPACE_REQUIRED', '预设管理需要工作区')
+  presetStore.writeConfig(workspaceSlug, config)
 }
 
 // ============================================================
 // 查询 API
 // ============================================================
+
+/**
+ * 只读诊断：存储问题（非法文件 / 未知 schema / 遗留单文件）+ 引用一致性。
+ *
+ * 只供 UI / IPC 展示，不影响运行时裁剪与保存结果（A14：白名单原样保留）。
+ */
+export function listAgentPresetDiagnostics(workspaceSlug: string | undefined): PresetStoreDiagnostic[] {
+  if (!workspaceSlug) return []
+  return presetStore.listDiagnostics(workspaceSlug)
+}
 
 /**
  * 列出指定工作区的全部可用预设：内置在前，自定义在后。
@@ -684,6 +660,9 @@ export function ensurePresetSystemReady(): PresetMigrationState {
     const workspaceIdToSlug = new Map(workspaces.map((workspace) => [workspace.id, workspace.slug]))
     const remaps = new Map<string, string>()
     for (const workspace of workspaces) {
+      // project 模式走「读时惰性兼容 + 首次写入拆分」，不进入单文件迁移状态机，
+      // 也绝不在用户项目里写 `.migration-backup/`（审计 §8.3）。
+      if (getPresetStorageMode(workspace.slug) === 'project') continue
       const filePath = getConfigFilePath(workspace.slug)
       if (!filePath || !existsSync(filePath)) continue
       try {
@@ -1189,7 +1168,8 @@ function assertBuiltinBaseId(basePresetId: string | undefined): void {
 /** disabledTools 运行时校验：非已知单工具短名直接拒绝（含具体非法项）。 */
 function assertToolNames(tools: string[] | undefined): void {
   if (!tools?.length) return
-  const invalid = tools.filter((t) => !AGENT_PRESET_TOOL_NAMES.includes(t as (typeof AGENT_PRESET_TOOL_NAMES)[number]))
+  const invalid = tools.filter((t) =>
+    !AGENT_PRESET_TOOL_NAMES.includes(t as (typeof AGENT_PRESET_TOOL_NAMES)[number]))
   if (invalid.length > 0) {
     throw new Error(`非法的单工具短名: ${invalid.join(', ')}（可用工具见 AGENT_PRESET_GROUP_TOOL_NAMES）`)
   }
@@ -1440,7 +1420,9 @@ function assertImportEntry(entry: unknown, index: number): AgentPresetExportEntr
   }
   if (value.disabledTools !== undefined) {
     assertStringArray(value.disabledTools, `${at}的 disabledTools`)
-    const invalid = (value.disabledTools as string[]).filter((t) => !AGENT_PRESET_TOOL_NAMES.includes(t as (typeof AGENT_PRESET_TOOL_NAMES)[number]))
+    // 导入文件可能来自旧版本，允许旧工具名但按正式名校验。
+    const invalid = (value.disabledTools as string[]).filter((t) =>
+      !AGENT_PRESET_TOOL_NAMES.includes(t as (typeof AGENT_PRESET_TOOL_NAMES)[number]))
     if (invalid.length > 0) throw new AgentPresetImportError(`${at}的 disabledTools 含非法单工具短名: ${invalid.join(', ')}`)
   }
   if (value.effort !== undefined && !AGENT_EFFORT_VALUES.includes(value.effort as (typeof AGENT_EFFORT_VALUES)[number])) {

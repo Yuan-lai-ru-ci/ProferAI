@@ -11,7 +11,7 @@ const source = readFileSync(new URL('./automation-scheduler.ts', import.meta.url
 const start = source.indexOf('export async function runAutomation(')
 const body = source.slice(start, source.indexOf('/** 立即运行一次', start)).replace('export ', '')
 const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
-function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse' | 'daily', graduated = false, blocked?: unknown, initiallyBusy = false, runnerThrows = false, controlled = false) {
+function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse' | 'daily', graduated = false, blocked?: unknown, initiallyBusy = false, runnerThrows = false, controlled = false, workspaceMissing = false) {
   const original: AgentSessionMeta = {
     id: 'old', title: 'old history', createdAt: 1, updatedAt: 2, agentRuntime: runtime,
     channelId: 'channel', workspaceId: 'workspace', modelId: 'model', presetId: 'standard',
@@ -25,6 +25,7 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
   const runs: AutomationRun[] = []
   const lastIds: string[] = []
   const notifications: AutomationRun[] = []
+  const updateCalls: Array<{ id: string; active?: boolean }> = []
   const triggers: AutomationTriggerRecord[] = []
   const broadcasts: Array<Array<Pick<AutomationTriggerRecord, 'triggerId' | 'status' | 'runId' | 'error'>>> = []
   const sharedRuns = new Map<string, AgentRun>()
@@ -100,7 +101,7 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
     setSessionBusy: (busy: boolean) => { sessionBusy = busy },
     runningAutomations: new Set<string>(), RUN_TIMEOUT_MS: 10000, DAILY_CONTEXT_ROLLOVER_THRESHOLD: 0.7,
     isSameLocalDay: () => true, getSessionContextUsageRatio: () => 0.2,
-    getAgentSessionMeta: (id: string) => sessions.get(id), getAgentWorkspace: () => ({ slug: 'workspace' }), getChannelById: () => ({ enabled: true, provider: 'fixture', models: [{ id: 'model', enabled: true }] }),
+    getAgentSessionMeta: (id: string) => sessions.get(id), getAgentWorkspace: () => (workspaceMissing ? undefined : { slug: 'workspace' }), getChannelById: () => ({ enabled: true, provider: 'fixture', models: [{ id: 'model', enabled: true }] }),
     getAgentWorkspacePath: () => '/tmp/fixture-workspace',
     getDefaultPresetId: () => 'standard', resolvePresetId: (_slug: string, preset: string) => preset,
     createAgentSession: (title: string, channelId: string, workspaceId: string, modelId: string, runtime: AgentRuntime) => {
@@ -109,7 +110,7 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
     },
     updateAgentSessionMeta: (id: string, patch: Partial<AgentSessionMeta>) => { updates.push({ id, patch }); sessions.set(id, { ...sessions.get(id)!, ...patch }) },
     setLastSessionId: (_id: string, sessionId: string) => lastIds.push(sessionId),
-    getAutomation: () => undefined, updateAutomation() {}, broadcastChanged: () => { broadcasts.push(triggers.map(({ triggerId, status, runId, error }) => ({ triggerId, status, runId, error }))) },
+    getAutomation: () => undefined, updateAutomation: (input: { id: string; active?: boolean }) => { updateCalls.push(input) }, broadcastChanged: () => { broadcasts.push(triggers.map(({ triggerId, status, runId, error }) => ({ triggerId, status, runId, error }))) },
     appendRun: (_id: string, run: AutomationRun) => runs.push(run),
     notifyAutomationRunFinished: async ({ run }: { run: AutomationRun }) => { notifications.push(run) },
     formatScheduleLabel: () => 'fixture',
@@ -122,7 +123,7 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
   }
   const run = new Function(...Object.keys(deps), `${transpiler.transformSync(body)}\nreturn runAutomation`)(...Object.values(deps)) as (input: Automation, manual?: boolean) => Promise<void>
   const task = { id: 'task', name: 'task', prompt: 'work', channelId: 'channel', workspaceId: 'workspace', modelId: 'model', lastSessionId: 'old', lastRunAt: Date.now(), nextRunAt: 7, sessionMode: mode, agentRuntime: taskRuntime } as Automation
-  return { run: (input: Automation = task, manual = false) => run(input, manual), task, sessions, original, updates, inputs, runtimeInputs, runs, notifications, lastIds, triggers, broadcasts,
+  return { run: (input: Automation = task, manual = false) => run(input, manual), task, sessions, original, updates, inputs, runtimeInputs, runs, notifications, lastIds, triggers, broadcasts, updateCalls,
     sharedRuns, setSharedOutcome, setLedgerError: (error?: Error) => { ledgerError = error }, callbacks: () => capturedCallbacks!, resolveRunner: () => resolveRunner(), rejectRunner: (error: Error) => rejectRunner(error), setSessionBusy: deps.setSessionBusy }
 }
 
@@ -607,5 +608,33 @@ describe('AutomationRun 字段语义：新分支与旧分支不漂移', () => {
     expect(appendRun).toContain('target.consecutiveFailures = (target.consecutiveFailures ?? 0) + 1')
     // skipped 不推进 nextRunAt / runCount（否则重入跳过会把周期拉长）
     expect(appendRun).toContain("if (run.status !== 'skipped') {")
+  })
+})
+
+describe('工作区已移除时绝不执行（P1-3）', () => {
+  test('定时触发：workspace 解析不到时停用任务、不建会话、不进 headless（不会以 homedir 为 cwd）', async () => {
+    const f = fixture('claude', 'claude', 'reuse', false, undefined, false, false, false, true)
+
+    await f.run()
+
+    expect(f.inputs).toHaveLength(0)
+    expect(f.runtimeInputs).toHaveLength(0)
+    expect(f.sessions.has('new')).toBe(false)
+    expect(f.lastIds).toHaveLength(0)
+    expect(f.updates).toHaveLength(0)
+    expect(f.runs).toHaveLength(0)
+    // 任务被停用（否则每个 tick 都会重试）
+    expect(f.updateCalls).toEqual([{ id: 'task', active: false }])
+    expect(f.broadcasts.length).toBeGreaterThan(0)
+  })
+
+  test('手动触发：同样不执行，并抛可操作错误提示用户重选工作区', async () => {
+    const f = fixture('claude', 'claude', 'reuse', false, undefined, false, false, false, true)
+
+    await expect(f.run(f.task, true)).rejects.toThrow('该定时任务绑定的项目已被移除')
+
+    expect(f.inputs).toHaveLength(0)
+    expect(f.runtimeInputs).toHaveLength(0)
+    expect(f.updateCalls).toEqual([{ id: 'task', active: false }])
   })
 })

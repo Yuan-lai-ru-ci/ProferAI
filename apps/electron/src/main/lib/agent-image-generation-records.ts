@@ -17,12 +17,19 @@ export interface AgentImageGenerationRecord extends AgentImageGenerationCard {}
 
 export interface AgentImageGenerationRecordContext {
   sessionId: string
+  /** 会话工作目录（相对路径基准）；project 下是项目根，**不是**记录落点。 */
   agentCwd: string
+  /**
+   * 会话私有存储根（`resolveAgentSessionWriteLayout().storageDir`）。
+   * jsonl 必须落在这里：project 下它不在项目内；缺省回落到 agentCwd 保持 managed/旧调用方语义。
+   */
+  storageDir?: string
 }
 
 export interface CreateAgentImageGenerationRecordInput {
   sessionId: string
   agentCwd: string
+  storageDir?: string
   toolCallId: string
   prompt: string
   size?: GptImageSize
@@ -101,13 +108,20 @@ async function normalizedAgentCwd(agentCwd: string): Promise<string> {
   return realpath(resolve(agentCwd))
 }
 
-export async function getAgentImageGenerationRecordsPath(agentCwd: string): Promise<string> {
-  return join(await normalizedAgentCwd(agentCwd), '.context', RECORD_FILE)
+/** 记录根：project 下在中央 storageDir，managed 下就是 cwd。 */
+function recordRoot(context: { agentCwd: string; storageDir?: string }): string {
+  return context.storageDir?.trim() ? context.storageDir : context.agentCwd
 }
 
-async function appendRecord(record: AgentImageGenerationRecord, agentCwd: string): Promise<void> {
-  const path = await getAgentImageGenerationRecordsPath(agentCwd)
-  await mkdir(join(await normalizedAgentCwd(agentCwd), '.context'), { recursive: true })
+export async function getAgentImageGenerationRecordsPath(agentCwd: string, storageDir?: string): Promise<string> {
+  const root = storageDir?.trim() ? storageDir : agentCwd
+  return join(await normalizedAgentCwd(root), '.context', RECORD_FILE)
+}
+
+async function appendRecord(record: AgentImageGenerationRecord, context: { agentCwd: string; storageDir?: string }): Promise<void> {
+  const root = recordRoot(context)
+  const path = await getAgentImageGenerationRecordsPath(context.agentCwd, context.storageDir)
+  await mkdir(join(await normalizedAgentCwd(root), '.context'), { recursive: true })
   await appendFile(path, `${JSON.stringify(record)}\n`, 'utf8')
 }
 
@@ -117,16 +131,17 @@ function isWithinRoot(root: string, target: string): boolean {
 }
 
 async function replay(context: AgentImageGenerationRecordContext): Promise<AgentImageGenerationRecord[]> {
-  const agentCwd = await normalizedAgentCwd(context.agentCwd)
+  const root = recordRoot(context)
+  const storageRoot = await normalizedAgentCwd(root)
   // persisted output paths may use the non-canonical long Windows path while
   // realpath(agentCwd) returns an 8.3 alias; use the lexical session root for
   // containment as well as the canonical cwd to avoid rejecting our own output.
   const outputRoots = [
-    resolve(context.agentCwd, '.context', 'agent-output-images'),
-    resolve(agentCwd, '.context', 'agent-output-images'),
+    resolve(root, '.context', 'agent-output-images'),
+    resolve(storageRoot, '.context', 'agent-output-images'),
   ]
   let contents: string
-  try { contents = await readFile(await getAgentImageGenerationRecordsPath(context.agentCwd), 'utf8') } catch (error) {
+  try { contents = await readFile(await getAgentImageGenerationRecordsPath(context.agentCwd, context.storageDir), 'utf8') } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
@@ -160,7 +175,7 @@ export async function createImageGenerationRecord(input: CreateAgentImageGenerat
     size: normalizeGptImageSize(input.size), quality: normalizeGptImageQuality(input.quality), reference: input.reference,
     ...(input.retryOf ? { retryOf: input.retryOf } : {}), createdAt: now, updatedAt: now,
   }
-  await appendRecord(record, input.agentCwd)
+  await appendRecord(record, input)
   return record
 }
 
@@ -187,7 +202,7 @@ export async function transitionImageGenerationRecord(
     ...(transition.error ? { error: transition.error.slice(0, MAX_ERROR_LENGTH) } : {}),
     ...((transition.status === 'succeeded' || transition.status === 'failed') ? { completedAt: transition.completedAt ?? now } : {}),
   }
-  await appendRecord(record, context.agentCwd)
+  await appendRecord(record, context)
   return record
 }
 

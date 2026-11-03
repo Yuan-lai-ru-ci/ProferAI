@@ -1,7 +1,7 @@
 /**
  * Chat 工具配置文件监听器
  *
- * 监听 ~/.proma/chat-tools.json 的变化，
+ * 监听 ~/.profer/chat-tools.json 的变化，
  * 当 Agent 通过文件系统修改配置后自动通知渲染进程刷新工具列表。
  *
  * 使用 node:fs.watch + debounce 防抖，避免高频写入导致多次通知。

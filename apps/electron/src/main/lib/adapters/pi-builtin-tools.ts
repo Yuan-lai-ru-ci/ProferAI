@@ -38,6 +38,8 @@ import type {
 import {
   AGENT_PRESET_SUPPRESS_KEYS,
   AGENT_PRESET_TOOL_GROUPS,
+  TASK_GRAPH_TOOL_CREATE,
+  TASK_GRAPH_TOOL_UPDATE,
   filterDisabledTools,
   isAgentPresetToolGroupDisabled,
 } from '@profer/shared'
@@ -135,6 +137,11 @@ export interface PiBuiltinToolsContext {
   triggeredBy?: 'user' | 'automation' | 'delegation' | 'goal'
   /** 当前 Agent 工作目录；用于解析生图产物、参考图和本地网页预览的相对路径。 */
   agentCwd?: string
+  /**
+   * 会话私有存储根（`resolveAgentSessionWriteLayout().storageDir`）。
+   * 生图产物/记录必须落在这里：project 下它不在项目根；缺省时回落到 agentCwd。
+   */
+  storageDir?: string
   /** 图片外发前必须校验在这些已授权目录内。 */
   allowedRoots?: string[]
   /** PPT 专用能力是否已通过会话级激活门禁。 */
@@ -388,7 +395,7 @@ function enrichTaskDescription(description: string, dependsOn: string[] | undefi
 export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'sessionId'>): ToolDefinition[] {
   return [
     sdk.defineTool({
-      name: 'mcp__task-graph__proma_task_create',
+      name: `mcp__task-graph__${TASK_GRAPH_TOOL_CREATE}`,
       label: '创建项目任务',
       description: '创建任务。依赖用 dependsOn 数组直填。用此工具替代 TaskCreate。',
       parameters: Type.Object({
@@ -422,7 +429,7 @@ export function buildPiTaskGraphTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContex
       },
     }),
     sdk.defineTool({
-      name: 'mcp__task-graph__proma_task_update',
+      name: `mcp__task-graph__${TASK_GRAPH_TOOL_UPDATE}`,
       label: '更新项目任务',
       description: '更新任务状态/依赖/放弃。发现遗漏的依赖关系时在此补 dependsOn。用此工具替代 TaskUpdate。',
       parameters: Type.Object({
@@ -739,6 +746,7 @@ function buildPiAgentImageOutputTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): T
         const path = typeof args.path === 'string' ? args.path : ''
         return formatAgentImageOutputToolResult(await sendAgentLocalImage({ path }, {
           agentCwd: ctx.agentCwd!,
+          storageDir: ctx.storageDir,
           allowedRoots: ctx.allowedRoots ?? [],
         })) as AgentToolResult<unknown>
       },
@@ -927,7 +935,7 @@ function buildPiAgentGptImageTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): Tool
           referenceImagePaths: Array.isArray(args.referenceImagePaths) ? args.referenceImagePaths.filter((path): path is string => typeof path === 'string') : undefined,
           useLastGeneratedImage: args.useLastGeneratedImage === true,
           signal,
-        }, { sessionId: ctx.sessionId, agentCwd: ctx.agentCwd!, allowedRoots: ctx.allowedRoots ?? [], onGenerationUpdate: ctx.onImageGenerationUpdate })) as AgentToolResult<unknown>
+        }, { sessionId: ctx.sessionId, agentCwd: ctx.agentCwd!, storageDir: ctx.storageDir, allowedRoots: ctx.allowedRoots ?? [], onGenerationUpdate: ctx.onImageGenerationUpdate })) as AgentToolResult<unknown>
       },
     }),
   ] as unknown as ToolDefinition[]

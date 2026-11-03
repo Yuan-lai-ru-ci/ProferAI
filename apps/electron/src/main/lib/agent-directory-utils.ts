@@ -8,6 +8,7 @@ import { statSync } from 'node:fs'
 import type { AgentSessionMeta } from '@profer/shared'
 import { getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getAgentWorkspacePath, getConfigDir, getWorkspaceFilesDir } from './config-paths'
+import { resolveWorkspaceLocation } from './workspace-locator'
 
 /**
  * 路径是否位于指定目录内（含子目录）。
@@ -24,6 +25,11 @@ export function isPathInsideDirectory(candidate: string, directory: string): boo
  * 聚合一次 SDK 调用涉及的所有附加目录（去重，保持插入顺序）。
  *
  * 来源：extraDirs / 会话级 attachedDirectories+Files / 工作区根目录 / 工作区级 attachedDirectories+Files / workspace-files/
+ *
+ * project 模式下 cwd 就是项目根，工作区配置在 `<rootPath>/.profer` 之内：
+ * - 加入 `rootPath`（Agent 必须能访问项目根；`.profer` 已在其内，不重复追加）；
+ * - 加入 `runtimeDir`（中央 `~/.profer/agent-workspaces/<slug>`）：会话产物与附件落在项目之外，
+ *   不加入的话 Agent 读不到自己收到的附件，也无法预览自己生成的产物。
  */
 export function collectAttachedDirectories(params: {
   sessionMeta?: AgentSessionMeta
@@ -42,9 +48,17 @@ export function collectAttachedDirectories(params: {
   for (const file of sessionMeta?.attachedFiles ?? []) push(dirname(file))
 
   if (workspaceSlug) {
-    // cwd 是会话子目录；显式加入 Profer 工作区根目录，使 workspace-profile.md 等
-    // 工作区级资料可被 Agent 用其绝对路径读取，也与提示词中的路径声明保持一致。
-    push(getAgentWorkspacePath(workspaceSlug))
+    const location = resolveWorkspaceLocation(workspaceSlug)
+    if (location.mode === 'project') {
+      // 项目根就是 cwd；配置目录 `<rootPath>/.profer` 已包含在 rootPath 内，不重复追加。
+      push(location.rootPath)
+      // 会话运行数据在中央目录：附件、plan、日志、生成产物都在这里，必须授权给 Agent。
+      push(location.runtimeDir)
+    } else {
+      // managed：cwd 是会话子目录；显式加入 Profer 工作区根目录，使 workspace-profile.md 等
+      // 工作区级资料可被 Agent 用其绝对路径读取，也与提示词中的路径声明保持一致。
+      push(getAgentWorkspacePath(workspaceSlug))
+    }
     for (const d of getWorkspaceAttachedDirectories(workspaceSlug)) push(d)
     for (const f of getWorkspaceAttachedFiles(workspaceSlug)) push(dirname(f))
     push(getWorkspaceFilesDir(workspaceSlug))

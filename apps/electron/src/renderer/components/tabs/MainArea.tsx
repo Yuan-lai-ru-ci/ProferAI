@@ -46,6 +46,7 @@ import {
   tabGroupsAtom,
   tabGroupDragAtom,
   tabGroupRatioAtom,
+  type GroupCollapseIntent,
   type TabGroupSide,
 } from '@/atoms/tab-group-atoms'
 
@@ -76,13 +77,16 @@ const AgentMemoryView = React.lazy(() =>
 const LAZY_VIEW_FALLBACK = <div className="h-full w-full bg-content-area" />
 
 /**
- * 分栏收起的抽屉动画时长与缓动：与左侧栏/抽屉的收起动画（300ms + cubic-bezier(0.32,0.72,0,1)）
- * 保持一致，手感和系统里的抽屉一致；时长同时用于 transition 与真正解散组合的定时器。
+ * 收起手势：被挤压的一栏像抽屉一样跟着指针滑出（1:1 跟手），松手才落定。
+ * 滑出一半（50%）就“吸进去”：剩下的路程自动补完，松手即收起；
+ * 没到一半就松手则回弹回原宽（不收起）。
  */
-const GROUP_COLLAPSE_ANIMATION_MS = 300
+const GROUP_COLLAPSE_RELEASE_MS = 200
+/** 滑出到整栏宽的多少比例时磁吸收起 */
+const GROUP_COLLAPSE_SNAP_PROGRESS = 0.5
+/** 磁吸/回弹的过渡时长（1:1 跟手的拖动段不用 transition） */
+const GROUP_COLLAPSE_SNAP_MS = 160
 const GROUP_COLLAPSE_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)'
-/** 动画结束后再多等一帧再解散，避免“最后一帧还没画完就切布局”的微跳 */
-const GROUP_COLLAPSE_SETTLE_MS = GROUP_COLLAPSE_ANIMATION_MS + 32
 
 export function MainArea(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom)
@@ -244,12 +248,21 @@ export function MainArea(): React.ReactElement {
   // 分栏像素宽由实测容器宽算出，保证比例与最小宽度约束一致
   const [groupContainerWidth, setGroupContainerWidth] = React.useState(0)
   const groupDragging = React.useRef(false)
-  // 分栏缝拖到极限后继续外拖时，被挤压的那一栏：用于显示「继续拖动收起该栏」提示。
-  const [collapseHint, setCollapseHint] = React.useState<TabGroupSide | null>(null)
-  // 抽屉式收起：closed=false 先让两栏停在原宽度，closed=true 才触发滑出动画，
-  // 动画结束后再真正解散组合——避免一帧内整块内容消失。
-  const [collapseAnim, setCollapseAnim] = React.useState<{ side: TabGroupSide; closed: boolean } | null>(null)
-  const collapseRatioRef = React.useRef(0.5)
+  // 收起手势进行中：progress 0..1 = 被挤压的一栏滑出了多少（跟随指针，可逆）。
+  // 松手时 progress 满 1 才真正收起；没拉到底则回弹（releasing）。
+  const [collapseSlide, setCollapseSlide] = React.useState<{
+    side: TabGroupSide
+    progress: number
+    /** 滑出一半后磁吸到完全收起（视觉上整栏消失） */
+    snapped: boolean
+    releasing: boolean
+  } | null>(null)
+  // 上一帧是否处于磁吸态：跨越阈值那一帧要启用过渡，其余帧保持 1:1 跟手。
+  const slideWasSnappedRef = React.useRef(false)
+  // 收起左栏后，让原本在右栏的标签**留在右栏容器里**（右栏铺满），而不是把子树搬到左栏容器。
+  // 跨父节点搬动会让预览/浏览器整棵重挂载：Tiptap 重建、滚动位置丢失、原生视图重建，
+  // 表现就是收完闪一下白。这里记住「单栏由右栏承担」的那个标签，切标签/重新分栏即复位。
+  const [singlePaneTabId, setSinglePaneTabId] = React.useState<string | null>(null)
 
   // 分栏容器只在「对话视图」渲染（规划中心 / Agent 技能视图整屏取代 TabBar + 内容），
   // 切回来时是**新节点**。所以观察者必须跟着元素出现/消失挂载，不能写成 [] 依赖的
@@ -271,11 +284,27 @@ export function MainArea(): React.ReactElement {
   }, [])
 
   const groupGeometry = resolveGroupSplitGeometry(groupContainerWidth, tabGroupRatio)
+  // 拖拽监听是原生 document 监听，拿不到每次 render 的最新几何，用 ref 传递：
+  // 收起手势要按“当前栏宽”算滑出量，才能与指针 1:1。
+  const groupGeometryRef = React.useRef(groupGeometry)
+  groupGeometryRef.current = groupGeometry
   // 虚线投放区与真实两栏都用这一份几何：宽度只由分栏缝拖动决定，拖放落定不改宽度，
   // 所以"拖下来看到的分配虚线"就是落定后的两栏宽度（含空栏的实际比例）。
   // 当前激活标签属于某个组合时才显示该组合；其他组合保持后台状态。
   const groupViewActive = !!tabGroup && (!!leftGroupTab || !!rightGroupTab)
-  const leftPaneTabId = groupViewActive ? leftGroupTab?.id ?? null : contentTabId
+  // 组合已解散、且激活标签正是刚留在右栏的那个 → 单栏由右栏容器承担（不搬 DOM）。
+  const singlePaneActive = !tabGroup && !automationFormOpen && !!contentTabId && contentTabId === singlePaneTabId
+  const singlePaneTab = React.useMemo(
+    () => (singlePaneActive ? tabs.find((tab) => tab.id === singlePaneTabId) ?? null : null),
+    [singlePaneActive, singlePaneTabId, tabs],
+  )
+  const leftPaneTabId = groupViewActive
+    ? leftGroupTab?.id ?? null
+    : singlePaneActive
+      ? null
+      : contentTabId
+  // 右栏内容：组合时是右成员；单栏右置时是刚收起左栏后留下的标签（同一个 TabContent 位置）。
+  const rightPaneTab = rightGroupTab ?? singlePaneTab
   // ResizeObserver 首次回调前宽度是 0。此时必须用 CSS 等分兜底，不能把右栏写成 0px；
   // 否则初次合并会只剩一条窄边界，用户也很难命中分隔条。
   const groupGeometryReady = groupContainerWidth > GROUP_SPLIT_GAP
@@ -288,25 +317,46 @@ export function MainArea(): React.ReactElement {
     flexShrink: 0,
   }
 
-  // 收起动画：被挤压的一栏用负外边距整体滑出视野（自身宽度不变 → 内容不重排，
-  // 像抽屉被推出去），另一栏改回 flex 自适应，跟着滑出同步长满。
-  // 分栏缝宽度同时收到 0：收完解散组合时不会因为 8px 中缝消失而跳一下。
-  const collapsingSide = collapseAnim?.side ?? null
-  const collapseClosed = collapseAnim?.closed ?? false
-  const collapseTransition = `margin ${GROUP_COLLAPSE_ANIMATION_MS}ms ${GROUP_COLLAPSE_EASING}`
-  const leftPaneStyle: React.CSSProperties = collapsingSide === 'left'
+  // 收起手势：被挤压的一栏用负外边距整体滑出视野（自身宽度不变 → 内容不重排，
+  // 像抽屉被推出去），滑出量直接跟随指针越界距离，往回拖就原路滑回；
+  // 另一栏同时改回 flex 自适应，跟着滑出同步长满。分栏缝宽度一起收到 0，
+  // 收完解散组合时不会因为 8px 中缝消失而跳一下。
+  // 原生网页视图不受 CSS overflow 裁切（滑出会画到侧栏上面），这类栏位不做滑动，
+  // 只记录进度；滑出一半就磁吸收起，没到一半松手则回弹。
+  const slideTab = collapseSlide
+    ? (collapseSlide.side === 'left' ? leftGroupTab : rightGroupTab)
+    : null
+  const slideBlockedByNativePane = !!slideTab
+    && slideTab.type === 'browser'
+    && nativeBrowserPaneTabs.has(slideTab.id)
+  const slide = collapseSlide && !slideBlockedByNativePane ? collapseSlide : null
+  const slideSnapped = slide?.snapped ?? false
+  const slideWasSnapped = slideWasSnappedRef.current
+  // 用 effect 同步「上一帧是否磁吸」：StrictMode 下 render 会跑两遍，
+  // 在 render 里直接赋值会让第二遍读到新值，丢掉磁吸/回弹那一帧的过渡。
+  React.useEffect(() => {
+    slideWasSnappedRef.current = slideSnapped
+  }, [slideSnapped])
+  // 磁吸态直接按“完全滑出”渲染；磁吸/回弹那一帧带过渡，其余帧跟手不动画。
+  const slideProgress = slide ? (slideSnapped ? 1 : slide.progress) : 0
+  const slideAnimated = slideSnapped || slideWasSnapped || !!slide?.releasing
+  const slideDuration = slide?.releasing ? GROUP_COLLAPSE_RELEASE_MS : GROUP_COLLAPSE_SNAP_MS
+  const slideTransition = slideAnimated
+    ? `margin ${slideDuration}ms ${GROUP_COLLAPSE_EASING}`
+    : undefined
+  const leftPaneStyle: React.CSSProperties = slide?.side === 'left'
     ? {
         flex: '0 0 auto',
         width: groupGeometry.leftWidth,
-        marginLeft: collapseClosed ? -groupGeometry.leftWidth : 0,
-        transition: collapseTransition,
+        marginLeft: -(slideProgress * groupGeometry.leftWidth),
+        transition: slideTransition,
       }
     : { flex: '1 1 auto' }
   const collapseRightPaneStyle: React.CSSProperties = {
     flexShrink: 0,
     width: groupGeometry.rightWidth,
-    marginRight: collapseClosed ? -groupGeometry.rightWidth : 0,
-    transition: collapseTransition,
+    marginRight: -(slideProgress * groupGeometry.rightWidth),
+    transition: slideTransition,
   }
   const expandingRightPaneStyle: React.CSSProperties = { flex: '1 1 auto', width: 'auto' }
 
@@ -346,8 +396,10 @@ export function MainArea(): React.ReactElement {
   }, [activateGroupTab, setTabGroups, tabGroup, tabs])
 
   const dissolveGroup = React.useCallback((): void => {
+    // 焦点在右栏时让右栏原地变单栏：解散不该把预览子树搬到左栏重挂载（会闪一下）。
+    setSinglePaneTabId(tabGroup?.rightTabId && activeTabId === tabGroup.rightTabId ? tabGroup.rightTabId : null)
     setTabGroups((previous) => removeTabGroup(previous, tabGroup))
-  }, [setTabGroups, tabGroup])
+  }, [activeTabId, setTabGroups, tabGroup])
 
   /**
    * 收起被挤压的一栏：解散组合（**不关闭标签**），另一栏独占整个主区。
@@ -358,6 +410,8 @@ export function MainArea(): React.ReactElement {
     if (!tabGroup) return
     const survivingTabId = side === 'left' ? tabGroup.rightTabId : tabGroup.leftTabId
     const squeezedTabId = side === 'left' ? tabGroup.leftTabId : tabGroup.rightTabId
+    // 左栏被收起、且右栏有内容：让右栏原地铺满，标签不搬去左栏 → 预览/浏览器不重建。
+    setSinglePaneTabId(side === 'left' ? survivingTabId : null)
     setTabGroups((previous) => removeTabGroup(previous, tabGroup))
     setTabGroupRatio(clampGroupRatio(ratioBeforeDrag))
     // 被保留的一栏若有内容就聚焦它；只有它是空栏时才回落到被挤压那一栏的标签，
@@ -366,37 +420,33 @@ export function MainArea(): React.ReactElement {
     if (nextTabId) activateGroupTab(nextTabId)
   }, [activateGroupTab, setTabGroupRatio, setTabGroups, tabGroup])
 
-  // 动画收尾的定时器只依赖 collapseAnim：tabs 在流式输出时会频繁换引用，
-  // 如果把它当依赖，定时器会被反复清掉重建，收起就永远落不了地。解散逻辑用 ref 取最新一版。
-  const collapseGroupSideRef = React.useRef(collapseGroupSide)
-  collapseGroupSideRef.current = collapseGroupSide
-
+  // 组合在拖动中途被外部解散（关标签/切视图）时立即复位，
+  // 避免半截滑出样式（固定宽 + 负外边距）落在单栏布局上。
   React.useEffect(() => {
-    if (!collapseAnim?.closed) return
-    const timer = window.setTimeout(() => {
-      setCollapseAnim(null)
-      collapseGroupSideRef.current(collapseAnim.side, collapseRatioRef.current)
-    }, GROUP_COLLAPSE_SETTLE_MS)
-    return () => window.clearTimeout(timer)
-  }, [collapseAnim])
+    if (!tabGroup && collapseSlide) setCollapseSlide(null)
+  }, [collapseSlide, tabGroup])
 
-  // 组合在动画中途被外部解散（关标签/切视图）时立即复位，
-  // 避免半截收起样式（固定宽 + 负外边距）落在单栏布局上。
+  // 「单栏右置」只在刚收起左栏这一种情形下成立：切标签、重新分栏、
+  // 打开自动化表单或标签被关空时都复位到常规左栏布局。
   React.useEffect(() => {
-    if (!tabGroup && collapseAnim) setCollapseAnim(null)
-  }, [collapseAnim, tabGroup])
+    if (!singlePaneTabId) return
+    if (!tabGroup && !automationFormOpen && contentTabId === singlePaneTabId) return
+    setSinglePaneTabId(null)
+  }, [automationFormOpen, contentTabId, singlePaneTabId, tabGroup])
 
   const handleGroupDragStart = React.useCallback((e: React.MouseEvent): void => {
     const container = groupContainerRef.current
     if (!container) return
-    // 收起动画进行中不再开启新一轮拖动：此时两栏宽度在动画里，拖拽几何会错位。
-    if (collapseAnim) return
+    // 回弹动画还没结束时不再开启新一轮拖动：两栏宽度正在动画里，拖拽几何会错位。
+    if (collapseSlide?.releasing) return
     e.preventDefault()
     groupDragging.current = true
     const rect = container.getBoundingClientRect()
     // 收起后要还原的宽度记忆：拖动过程中比例会被 clamp 到极限，不能拿极限值当记忆。
     const ratioBeforeDrag = tabGroupRatio
-    let collapsed = false
+    // 本次拖动内的收起进度：滑出量与指针 1:1；越过一半就磁吸到完全滑出，松手才真正收起。
+    let slide: GroupCollapseIntent | null = null
+    let releaseTimer = 0
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
     document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = 'none' })
@@ -408,37 +458,37 @@ export function MainArea(): React.ReactElement {
       document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = '' })
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('blur', onWindowBlur)
+      if (releaseTimer) {
+        window.clearTimeout(releaseTimer)
+        releaseTimer = 0
+      }
     }
     const onMouseMove = (moveEvent: MouseEvent): void => {
-      if (collapsed) return
       const pointerX = moveEvent.clientX - rect.left
-      // 分栏缝到极限后不再移动，继续外拖的这段距离判定为「收起被挤压的一栏」。
-      // 先给提示，越过阈值立即收起（不等松手，符合“再拖一点就独占”的直觉）。
-      const intent = resolveGroupCollapseIntent({ containerWidth: rect.width, pointerX })
-      setCollapseHint(intent ? intent.side : null)
-      if (intent?.ready) {
-        collapsed = true
-        setCollapseHint(null)
-        stopDragging()
-        // 原生网页视图不受 CSS overflow 裁切：滑出时会画到侧栏上面，
-        // 所以含原生 pane 的浏览器栏位不做滑动，直接切布局（与之前的观感一致）。
-        const squeezedTab = intent.side === 'left' ? leftGroupTab : rightGroupTab
-        const squeezedUsesNativePane = squeezedTab?.type === 'browser'
-          && nativeBrowserPaneTabs.has(squeezedTab.id)
-        if (squeezedUsesNativePane) {
-          collapseGroupSide(intent.side, ratioBeforeDrag)
-          return
-        }
-        collapseRatioRef.current = ratioBeforeDrag
-        // 抽屉式收起：先把被挤压的一栏滑出视野，动画结束再真正解散组合。
-        setCollapseAnim({ side: intent.side, closed: false })
-        // 双 rAF：先让「未收起」这一帧真正上屏，transition 才有起点，否则会直接跳到位。
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            setCollapseAnim((previous) => (previous ? { ...previous, closed: true } : previous))
-          })
+      // 分栏缝到极限后不再移动，继续外拖的这段距离就是收起行程：
+      // 滑出量与指针 1:1（可逆）；越过一半磁吸到完全滑出，松手之前都只是预览。
+      const geometry = groupGeometryRef.current
+      const intent = resolveGroupCollapseIntent({
+        containerWidth: rect.width,
+        pointerX,
+        leftPaneWidth: geometry.leftWidth,
+        rightPaneWidth: geometry.rightWidth,
+      })
+      if (intent) {
+        slide = intent
+        setCollapseSlide({
+          side: intent.side,
+          progress: intent.progress,
+          snapped: intent.progress >= GROUP_COLLAPSE_SNAP_PROGRESS,
+          releasing: false,
         })
         return
+      }
+      // 拉回极限以内：栏位原路滑回，恢复常规拖宽。
+      if (slide) {
+        slide = null
+        setCollapseSlide(null)
       }
       const available = Math.max(1, rect.width - GROUP_SPLIT_GAP)
       // 指针位置代表**左栏**占比，而 tabGroupRatio 存的是右栏占比，取补。
@@ -446,12 +496,43 @@ export function MainArea(): React.ReactElement {
       setTabGroupRatio(resolveGroupSplitGeometry(rect.width, 1 - pointerFraction).ratio)
     }
     const onMouseUp = (): void => {
-      setCollapseHint(null)
       stopDragging()
+      if (slide) {
+        // 原生网页视图不参与滑动（不受 CSS 裁切），没有视觉反馈，
+        // 按 1/4 栏宽判定即可；普通栏位越过一半（磁吸点）就算收起。
+        const squeezedTab = slide.side === 'left' ? leftGroupTab : rightGroupTab
+        const squeezedIsNativeBrowser = !!squeezedTab
+          && squeezedTab.type === 'browser'
+          && nativeBrowserPaneTabs.has(squeezedTab.id)
+        const ready = squeezedIsNativeBrowser
+          ? slide.slide >= slide.paneWidth * 0.25
+          : slide.progress >= GROUP_COLLAPSE_SNAP_PROGRESS
+        if (ready) {
+          // 越过一半就落定：解散组合，另一栏独占。此时栏位已被磁吸到完全滑出，没有跳变。
+          setCollapseSlide(null)
+          collapseGroupSide(slide.side, ratioBeforeDrag)
+          return
+        }
+        if (slide.progress > 0) {
+          // 没到一半：回弹到原宽（不收起），动画结束后恢复正常拖拽样式。
+          setCollapseSlide({ side: slide.side, progress: 0, snapped: false, releasing: true })
+          releaseTimer = window.setTimeout(() => setCollapseSlide(null), GROUP_COLLAPSE_RELEASE_MS + 40)
+          return
+        }
+      }
+      setCollapseSlide(null)
+    }
+    const onWindowBlur = (): void => {
+      // 失焦 = 放弃本次拖动：栏位归位、组合保持原样。
+      stopDragging()
+      setCollapseSlide(null)
     }
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
-  }, [collapseAnim, collapseGroupSide, leftGroupTab, nativeBrowserPaneTabs, rightGroupTab, setTabGroupRatio, tabGroupRatio])
+    // 指针在窗口外松开时拿不到 mouseup：失焦就当作取消拖动，
+    // 否则栏位会停在滑出状态、组合也一直不落定。
+    window.addEventListener('blur', onWindowBlur)
+  }, [collapseGroupSide, collapseSlide?.releasing, leftGroupTab, nativeBrowserPaneTabs, rightGroupTab, setTabGroupRatio, tabGroupRatio])
 
   React.useEffect(() => {
     if (tabs.length === 0) {
@@ -519,21 +600,22 @@ export function MainArea(): React.ReactElement {
                   始终保持在同一 DOM 位置，避免 Tab 切换时 unmount。
                   注：左右区域宽度变化不用 transition——文字逐帧 reflow 会导致行末字符抖动，
                   视觉上像"内容从右向左推送"。唯一例外是拖到极限后的抽屉式收起：
-                  那是一次性 300ms 的滑出动画（不是用户逐帧控宽），结束即解散组合。 */}
+                  那一段的滑出量跟随指针（可逆，不重排内容），越过一半磁吸收起、松手才解散组合。 */}
               {/* data-group-drop-split = 真实分界线（相对区域左缘的 px）：TabBar 判定左右落点
                   必须用它，不能用容器中点——比例被拖过、或空栏只占 1/3 时中点与实际分界不符。 */}
               <div
                 ref={attachGroupContainer}
                 data-group-drop-region="true"
                 data-group-drop-split={groupGeometryReady ? Math.round(groupGeometry.leftWidth + GROUP_SPLIT_GAP / 2) : undefined}
-                className={cn('flex h-full min-w-0 relative', collapsingSide && 'overflow-hidden')}
+                className={cn('flex h-full min-w-0 relative', slide && 'overflow-hidden')}
                 style={{ flex: '1 1 auto' }}
               >
                 {/* 左栏：组合激活时是组内左成员，否则是当前标签 */}
                 <div
                   data-group-drop-left-pane="true"
                   className="flex flex-col min-w-0 h-full relative"
-                  style={leftPaneStyle}
+                  // 单栏右置时左栏完全隐藏：内容已由右栏承担，不能留一条空栏占位。
+                  style={singlePaneActive ? { display: 'none' } : leftPaneStyle}
                   onPointerDownCapture={() => focusGroupSide('left')}
                 >
                   {automationFormOpen ? (
@@ -559,79 +641,69 @@ export function MainArea(): React.ReactElement {
                   ) : null}
                 </div>
 
-                {/* 右栏：组合内的右侧成员；可以是空栏（等用户选择） */}
-                {groupViewActive && tabGroup && (
+                {/* 右栏：组合内的右侧成员；可以是空栏（等用户选择）。
+                    收起左栏后它还会继续承担单栏（singlePaneActive）：同一个 TabContent 原地保留，
+                    不把预览/浏览器子树搬到左栏容器，避免重建导致的闪白与滚动位置丢失。 */}
+                {((groupViewActive && tabGroup) || singlePaneActive) && (
                   <>
-                    <div
-                      className="panel-resize-handle-x titlebar-no-drag"
-                      onMouseDown={handleGroupDragStart}
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label="调整组合内两栏宽度"
-                      style={collapsingSide
-                        ? {
-                            width: collapseClosed ? 0 : GROUP_SPLIT_GAP,
-                            opacity: collapseClosed ? 0 : 1,
-                            transition: `width ${GROUP_COLLAPSE_ANIMATION_MS}ms ${GROUP_COLLAPSE_EASING}, opacity ${GROUP_COLLAPSE_ANIMATION_MS}ms linear`,
-                          }
-                        : undefined}
-                    />
+                    {groupViewActive && tabGroup && (
+                      <div
+                        className="panel-resize-handle-x titlebar-no-drag"
+                        onMouseDown={handleGroupDragStart}
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="调整组合内两栏宽度"
+                        style={slide
+                          ? {
+                              width: GROUP_SPLIT_GAP * (1 - slideProgress),
+                              opacity: 1 - slideProgress,
+                              transition: slideAnimated
+                                ? `width ${slideDuration}ms ${GROUP_COLLAPSE_EASING}, opacity ${slideDuration}ms linear`
+                                : undefined,
+                            }
+                          : undefined}
+                      />
+                    )}
                     <div
                       data-group-drop-right-pane="true"
                       // 浏览器/预览直接把退出浮标叠在内容右下角；只有 Agent/Chat 的右栏
                       // 需要为 composer 让出 32px，避免浮标压住发送按钮。原生网页的浮标
                       // 由主进程额外绘制，DOM 按钮会被原生视图盖住，这是预期分层。
+                      // 单栏右置不是“右栏”，不需要给浮标让位。
                       className={cn(
                         'flex flex-col min-w-0 h-full relative',
-                        (rightGroupTab?.type === 'agent' || rightGroupTab?.type === 'chat') && 'pb-8',
+                        groupViewActive
+                          && (rightPaneTab?.type === 'agent' || rightPaneTab?.type === 'chat')
+                          && 'pb-8',
                       )}
-                      style={collapsingSide === 'right'
-                        ? collapseRightPaneStyle
-                        : collapsingSide === 'left'
-                          ? expandingRightPaneStyle
-                          : rightPaneStyle}
+                      style={singlePaneActive
+                        ? expandingRightPaneStyle
+                        : slide?.side === 'right'
+                          ? collapseRightPaneStyle
+                          : slide?.side === 'left'
+                            ? expandingRightPaneStyle
+                            : rightPaneStyle}
                       onPointerDownCapture={() => focusGroupSide('right')}
                     >
-                      {rightGroupTab ? (
+                      {rightPaneTab ? (
                         <div className="flex-1 min-h-0 titlebar-no-drag">
-                          <TabContent tabId={rightGroupTab.id} />
+                          <TabContent tabId={rightPaneTab.id} />
                         </div>
-                      ) : (
+                      ) : tabGroup ? (
                         <EmptyPanePlaceholder
                           excludeTabIds={groupTabIds(tabGroup)}
                           sessionId={groupSessionId(tabGroup, tabs)}
                           onPick={(tabId) => fillGroupPane('right', tabId)}
                           onDissolve={dissolveGroup}
                         />
-                      )}
+                      ) : null}
                     </div>
                   </>
                 )}
 
-                {/* 收起提示：分栏缝拖到极限后继续外拖时，被挤压的一栏上盖一层遮罩并给出
-                    “继续拖动收起该栏”的提示；越过阈值即自动收起（不等松手）。
-                    遮罩只负责视觉（pointer-events-none），不参与拖拽命中。 */}
-                {collapseHint && (
-                  <div
-                    className={cn(
-                      'pointer-events-none absolute inset-y-0 z-20 flex items-center justify-center bg-background/60',
-                      collapseHint === 'left' ? 'left-0' : 'right-0',
-                    )}
-                    style={{
-                      width: groupGeometryReady
-                        ? (collapseHint === 'left' ? groupGeometry.leftWidth : groupGeometry.rightWidth)
-                        : `calc(50% - ${GROUP_SPLIT_GAP / 2}px)`,
-                    }}
-                  >
-                    <span className="rounded-full border border-border/60 bg-background/90 px-3 py-1 text-[11px] text-muted-foreground shadow-sm">
-                      继续拖动，收起{collapseHint === 'left' ? '左' : '右'}栏
-                    </span>
-                  </div>
-                )}
-
                 {/* 拆分视图退出浮标：贴在右栏右下角，点击解散组合（两个标签都保留）。
                     原生网页有主进程绘制的同款浮标，这里让位，避免出现两个。 */}
-                {groupViewActive && tabGroup && !rightBrowserUsesNativePane && !collapsingSide && (
+                {groupViewActive && tabGroup && !rightBrowserUsesNativePane && !slide && (
                   <SplitViewCloseButton onClose={dissolveGroup} />
                 )}
 

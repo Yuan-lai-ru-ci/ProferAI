@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test'
-import { homedir } from 'node:os'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 // prompt builder 经 config-paths 间接导入 Electron；Bun 单测需提供最小主进程 mock。
 mock.module('./workspace-mcp-config', () => ({
@@ -309,11 +311,11 @@ describe('buildSystemPrompt', () => {
     expect(piPrompt).toContain('系统不会自动追加验证轮次')
     expect(piPrompt).not.toContain('自动追加一次只做最小验证的续轮')
     // 工具名按 runtime 适配：Pi 带 mcp__ 前缀，Claude 用 in-process MCP 裸名
-    expect(piPrompt).toContain('mcp__task-graph__proma_task_create')
+    expect(piPrompt).toContain('mcp__task-graph__profer_task_create')
     expect(piPrompt).toContain('mcp__agent-presets__preset_list')
     expect(piPrompt).not.toContain('mcp__agent-presets__preset_create')
-    expect(piPrompt).not.toContain('用 `proma_task_create` 创建节点')
-    expect(claudePrompt).toContain('用 `proma_task_create` 创建节点')
+    expect(piPrompt).not.toContain('用 `profer_task_create` 创建节点')
+    expect(claudePrompt).toContain('用 `profer_task_create` 创建节点')
     expect(claudePrompt).toContain('写入口只在当前用户消息明确要求对应操作时按轮注册')
     expect(claudePrompt).toContain('更新和设为默认先返回影响摘要，只有用户下一条消息明确确认后才提交')
     expect(claudePrompt).not.toContain('mcp__agent-presets__preset_create')
@@ -428,7 +430,7 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: true,
     })
     // 隐藏：任务图、委派、记忆、规划及所有增强型产品能力说明。
-    expect(minimalPrompt).not.toContain('proma_task_create')
+    expect(minimalPrompt).not.toContain('profer_task_create')
     expect(minimalPrompt).not.toContain('## SubAgent 委派策略')
     expect(minimalPrompt).not.toContain('## Profer 知识维护架构')
     expect(minimalPrompt).not.toContain('### Pi Runtime 与文件记忆')
@@ -451,7 +453,7 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: true,
     })
     // 标准预设无 suppress：全部段落在场
-    expect(standardPrompt).toContain('proma_task_create')
+    expect(standardPrompt).toContain('profer_task_create')
     expect(standardPrompt).toContain('## SubAgent 委派策略')
     expect(standardPrompt).toContain('presetReference')
     expect(standardPrompt).toContain('不传时子 Agent 继承当前父会话的稳定预设引用')
@@ -492,7 +494,7 @@ describe('buildSystemPrompt', () => {
     expect(withoutAutomation).not.toContain('10. **PPT 视觉交付门禁**')
     expect(withoutAutomation).toContain('send_local_image')
     expect(withoutAutomation).toContain('Profer 会自动展示图片')
-    expect(withoutAutomation).not.toContain('PROMA_IMAGE_ATTACHMENT')
+    expect(withoutAutomation).not.toContain('PROFER_IMAGE_ATTACHMENT')
     expect(withoutAutomation).toContain('6. **自检习惯**')
   })
 
@@ -656,7 +658,7 @@ describe('buildSystemPrompt', () => {
       disabledTools: ['generate_image', 'create_skin'],
       isPiRuntime: true,
     })
-    expect(prompt).toContain('proma_task_create')
+    expect(prompt).toContain('profer_task_create')
     expect(prompt).toContain('## SubAgent 委派策略')
     expect(prompt).toContain('## Profer 知识维护架构')
     expect(prompt).toContain('`inspect_preview`')
@@ -704,7 +706,7 @@ describe('buildSystemPrompt', () => {
       platform: 'darwin',
       shellPath: '/bin/zsh',
       agentCwd: '/Users/alice/.profer/agent-workspaces/profer/session-123',
-      projectCandidates: [{ rootPath: '/Users/alice/project', name: 'proma', type: 'git-repository' }],
+      projectCandidates: [{ rootPath: '/Users/alice/project', name: 'profer', type: 'git-repository' }],
       isPiRuntime: true,
       disabledToolGroups: ['clipboard'],
     })
@@ -798,5 +800,156 @@ describe('buildSystemPrompt 皮肤创建指引', () => {
   test('create_skin 被禁用时不再注入皮肤创建 SOP', () => {
     const prompt = buildSystemPrompt({ ...base, disabledTools: ['create_skin'] })
     expect(prompt).not.toContain('10. **创建 Profer 皮肤**')
+  })
+})
+
+/**
+ * 提示词里的工作区路径现在由 workspace-locator 解析（读索引 + 尊重 PROFER_CONFIG_DIR）。
+ * 这里用隔离配置根，避免污染真实 ~/.profer*。
+ */
+function withIsolatedConfigRoot<T>(run: (configRoot: string) => T): T {
+  const previous = process.env.PROFER_CONFIG_DIR
+  const configRoot = mkdtempSync(join(tmpdir(), 'profer-prompt-workspace-'))
+  process.env.PROFER_CONFIG_DIR = configRoot
+  try {
+    return run(configRoot)
+  } finally {
+    if (previous === undefined) delete process.env.PROFER_CONFIG_DIR
+    else process.env.PROFER_CONFIG_DIR = previous
+    rmSync(configRoot, { recursive: true, force: true })
+  }
+}
+
+function writeProjectWorkspaceEntry(configRoot: string, slug: string, rootPath: string): void {
+  writeFileSync(join(configRoot, 'agent-workspaces.json'), JSON.stringify({
+    version: 4,
+    workspaces: [{
+      id: randomUUID(),
+      name: slug,
+      slug,
+      createdAt: 0,
+      updatedAt: 0,
+      type: 'personal',
+      storageMode: 'project',
+      rootPath,
+    }],
+  }), 'utf-8')
+}
+
+describe('buildSystemPrompt 工作区路径（managed / project）', () => {
+  test('managed 路径走 config-paths，尊重 PROFER_CONFIG_DIR（不再硬编码 homedir）', () => {
+    const slug = `prompt-managed-${randomUUID()}`
+    const sessionId = 'session-managed'
+
+    withIsolatedConfigRoot((configRoot) => {
+      const prompt = buildSystemPrompt({
+        workspaceName: 'Demo',
+        workspaceSlug: slug,
+        sessionId,
+        permissionMode: 'auto',
+      })
+
+      const workspaceRoot = join(configRoot, 'agent-workspaces', slug)
+      // 硬编码预期：与改造前的 managed 布局逐项一致，只是根目录改为跟随配置根
+      expect(prompt).toContain(`- 工作区根目录: ${workspaceRoot}`)
+      expect(prompt).toContain(`- **Profer 工作区资料**: ${join(workspaceRoot, 'workspace-profile.md')}`)
+      expect(prompt).toContain(`- **旧版 Profer 工作区资料（仅兼容读取）**: ${join(workspaceRoot, 'CLAUDE.md')}`)
+      expect(prompt).toContain(`- 当前会话目录（cwd）: ${join(workspaceRoot, sessionId)}`)
+      expect(prompt).toContain(`- Profer Memory 索引: ${join(workspaceRoot, '.profer', 'memory', 'MEMORY.md')}`)
+      expect(prompt).toContain(`- MCP 配置: ${join(workspaceRoot, 'mcp.json')}`)
+      expect(prompt).toContain(`- Skills 目录: ${join(workspaceRoot, 'skills')}/`)
+      expect(prompt).toContain(`- 工作区级 \`${join(workspaceRoot, 'workspace-files', '.context')}\``)
+      // 反证：旧的 homedir 硬编码不再出现
+      const legacyHardcoded = join(homedir(), getConfigDirName(), 'agent-workspaces', slug)
+      if (legacyHardcoded !== workspaceRoot) {
+        expect(prompt).not.toContain(legacyHardcoded)
+      }
+      // 文案快照：managed 段逐字保持改造前的措辞
+      expect(prompt).toContain('- 会话级 cwd/`.context/`：当前任务工作台（`todo.md`、`plan/`、主题文件）。')
+      expect(prompt).toContain('- **工作区资料**：`workspace-profile.md` 记录已确认的工作区背景')
+      expect(prompt).toContain('- **Profer Memory**：个人记忆位于 `.profer/memory/`，`MEMORY.md` 只做短索引')
+      // managed 不应出现项目模式的声明
+      expect(prompt).not.toContain('当前 cwd 就是项目根')
+
+      const piPrompt = buildSystemPrompt({
+        workspaceName: 'Demo',
+        workspaceSlug: slug,
+        sessionId,
+        permissionMode: 'auto',
+        isPiRuntime: true,
+      })
+      expect(piPrompt).toContain('访问 Profer 工作区资料 `workspace-profile.md`、`.profer/memory/MEMORY.md`，以及 `.profer/memory/` 下的主题文件')
+      expect(piPrompt).toContain('可复用经验/偏好写 `.profer/memory/`')
+      expect(piPrompt).toContain('- **会话级 Context 正常使用**：当前 cwd 下的 `.context/`')
+    })
+  })
+
+  test('project 声明 cwd 即项目根与 <root>/.profer，且不出现 managed 路径', () => {
+    const slug = `prompt-project-${randomUUID()}`
+    const sessionId = 'session-project'
+
+    withIsolatedConfigRoot((configRoot) => {
+      const projectRoot = join(configRoot, 'demo-project')
+      mkdirSync(projectRoot, { recursive: true })
+      writeProjectWorkspaceEntry(configRoot, slug, projectRoot)
+
+      const prompt = buildSystemPrompt({
+        workspaceName: 'DemoProject',
+        workspaceSlug: slug,
+        sessionId,
+        permissionMode: 'auto',
+        isPiRuntime: true,
+        platform: 'darwin',
+        shellPath: '/bin/zsh',
+        agentCwd: projectRoot,
+      })
+
+      const canonicalRoot = realpathSync(projectRoot)
+      const configDir = join(canonicalRoot, '.profer')
+      // 项目根与 .profer 下的三件套
+      expect(prompt).toContain(canonicalRoot)
+      expect(prompt).toContain(`- **Profer 项目配置目录**: ${configDir}`)
+      expect(prompt).toContain(`- **Profer 项目资料**: ${join(configDir, 'profile.md')}`)
+      expect(prompt).toContain(`- Profer Memory 索引: ${join(configDir, 'memory', 'MEMORY.md')}`)
+      expect(prompt).toContain(`- MCP 配置: ${join(configDir, 'mcp.json')}`)
+      expect(prompt).toContain(`- Skills 目录: ${join(configDir, 'skills')}/`)
+      expect(prompt).toContain(`跨会话资料 \`${join(configDir, 'workspace-files', '.context')}\``)
+      // 单一路径语义
+      expect(prompt).toContain('**当前 cwd 就是项目根**')
+      expect(prompt).not.toContain('工作区根目录')
+      expect(prompt).not.toContain('当前会话目录（cwd）')
+      // 平台 overlay 不再把模型引离项目根
+      expect(prompt).toContain('**这就是项目根**')
+      expect(prompt).not.toContain('cwd 不是项目 root')
+      // Pi 记忆段按项目布局：记忆目录是 `<root>/.profer/memory`，不能少写 `.profer`
+      expect(prompt).toContain('访问 Profer 工作区资料 `profile.md`、`.profer/memory/MEMORY.md`')
+      expect(prompt).not.toContain('`memory/MEMORY.md`')
+      expect(prompt).not.toContain('`memory/MEMORY.md`，以及')
+      // 不出现 managed 形状的中央工作区路径
+      expect(prompt).not.toContain(join(configRoot, 'agent-workspaces', slug))
+      expect(prompt).not.toContain('~/.profer/agent-workspaces')
+      expect(prompt).not.toContain('workspace-profile.md（新 Profile 不存在才按需读，不再写入）')
+    })
+  })
+
+  test('project 与 managed 在同一 slug/session 下的工作区段明显不同', () => {
+    const slug = `prompt-diff-${randomUUID()}`
+
+    withIsolatedConfigRoot((configRoot) => {
+      const managed = buildSystemPrompt({
+        workspaceName: 'Demo', workspaceSlug: slug, sessionId: 's1', permissionMode: 'auto',
+      })
+      const projectRoot = join(configRoot, 'diff-project')
+      mkdirSync(projectRoot, { recursive: true })
+      writeProjectWorkspaceEntry(configRoot, slug, projectRoot)
+      const project = buildSystemPrompt({
+        workspaceName: 'Demo', workspaceSlug: slug, sessionId: 's1', permissionMode: 'auto',
+      })
+
+      expect(managed).not.toEqual(project)
+      expect(managed).toContain(join(configRoot, 'agent-workspaces', slug))
+      expect(project).not.toContain(join(configRoot, 'agent-workspaces', slug))
+      expect(project).toContain(join(realpathSync(projectRoot), '.profer'))
+    })
   })
 })

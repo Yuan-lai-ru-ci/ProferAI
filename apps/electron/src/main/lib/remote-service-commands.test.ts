@@ -60,6 +60,16 @@ describe('remote-service 新增 WS 命令', () => {
     expect(result.data).toBeUndefined()
   })
 
+  test('update_session_thinking_level：非法档位被拒，缺 sessionId 报错', async () => {
+    const invalid = await handleRemoteCommand(
+      JSON.stringify({ type: 'update_session_thinking_level', sessionId: 's1', level: 'ultra' }),
+      1,
+    )
+    expect(invalid).toEqual({ ok: false, error: '无效的推理档位: ultra' })
+    const missing = await handleRemoteCommand(JSON.stringify({ type: 'update_session_thinking_level' }), 1)
+    expect(missing).toEqual({ ok: false, error: '缺少 sessionId' })
+  })
+
   test('search_workspace_files：缺少 sessionId 时报错，且不接受客户端 roots', async () => {
     const result = await handleRemoteCommand(
       JSON.stringify({

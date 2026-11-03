@@ -47,8 +47,8 @@ describe('Pi 工具定义压缩', () => {
 
   test('浏览器工具和任务图工具均有短说明；未知 MCP/插件定义原样保留', () => {
     expect(isKnownCompactPiTool('BrowserObserve')).toBe(true)
-    expect(isKnownCompactPiTool('mcp__task-graph__proma_task_create', { allowBuiltinMcpNames: true })).toBe(true)
-    expect(isKnownCompactPiTool('mcp__task-graph__proma_task_create')).toBe(false)
+    expect(isKnownCompactPiTool('mcp__task-graph__profer_task_create', { allowBuiltinMcpNames: true })).toBe(true)
+    expect(isKnownCompactPiTool('mcp__task-graph__profer_task_create')).toBe(false)
     expect(isKnownCompactPiTool('mcp__custom__third_party')).toBe(false)
     const unknown = tool('mcp__custom__third_party')
     expect(compactPiToolDefinition(unknown)).toBe(unknown)

@@ -1,7 +1,7 @@
 /**
  * ScratchPadView — 草稿本编辑器
  *
- * 基于 TipTap 的轻量 Markdown 编辑器，内容持久化到 ~/.proma/scratch-pad.md。
+ * 基于 TipTap 的轻量 Markdown 编辑器，内容持久化到 ~/.profer/scratch-pad.md。
  * 自动保存由 ScratchPadPersistence 组件通过监听 scratchPadContentAtom 统一管理。
  *
  * 支持：Markdown 快捷输入、图片粘贴、Todo 列表（- [ ] 触发）、代码高亮（lowlight）、数学公式（$..$ / $$..$$ 触发）、导出为 Markdown
@@ -127,7 +127,8 @@ export function ScratchPadView(): React.ReactElement {
       try {
         let dirPath: string | null = null
         if (target === 'session' && activeSessionId && currentWorkspaceId) {
-          dirPath = await window.electronAPI.getAgentSessionPath(currentWorkspaceId, activeSessionId)
+          // 会话目标 = 会话私有目录（storageDir）；project 下 getAgentSessionPath 是项目根，不能用来落草稿。
+          dirPath = await window.electronAPI.getAgentSessionStoragePath(currentWorkspaceId, activeSessionId)
         } else if (target === 'workspace' && currentWorkspace?.slug) {
           dirPath = await window.electronAPI.getWorkspaceFilesPath(currentWorkspace.slug)
         }

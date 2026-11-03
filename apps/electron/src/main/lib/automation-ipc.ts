@@ -32,7 +32,7 @@ import { validateBoundAutomationChannel, validateBoundAutomationSession, withTru
 export function registerAutomationIpc(): void {
 
   // 渲染进程可能被注入内容污染（XSS via markdown / MCP tool output），主进程必须自己校验入参，
-  // 否则 NaN / -Infinity / 越界值会污染 ~/.proma/automations.json，无法回滚。
+  // 否则 NaN / -Infinity / 越界值会污染 ~/.profer/automations.json，无法回滚。
   const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v.length > 0
   const isNonBlankString = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0
   const isFiniteInt = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v)

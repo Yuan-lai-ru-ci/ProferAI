@@ -155,6 +155,9 @@ function ownerFixture(initialSession?: AgentSessionMeta, runLedger?: AgentRunLed
   const Orchestrator = compile<typeof AgentOrchestrator>(orchestratorSource.slice(orchestratorSource.indexOf('export class AgentOrchestrator')), 'AgentOrchestrator', {
     registerCollaborationEventBus() {}, setHeadlessAgentRunner() {}, setAgentStopper() {},
     normalizeAgentRuntime,
+    // 工作区守卫在类外定义（与 agent-service 共用）：本 fixture 的会话/输入都没有 workspaceId，
+    // 因此只需注入「无工作区 → undefined」的等价实现；真实守卫行为由 agent-run-workspace-guard.test.ts 覆盖。
+    requireAgentRunWorkspace: () => undefined,
     getAgentSessionMeta: () => session,
     getAgentSessionMessages: () => [],
     getAgentSessionSDKMessages: () => [],

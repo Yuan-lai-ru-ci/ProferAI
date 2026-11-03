@@ -11,7 +11,7 @@ import { buildForkProjectKey } from './fork-file-ops'
 const tempRoots: string[] = []
 
 function makeTempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), 'proma-fork-copy-'))
+  const root = mkdtempSync(join(tmpdir(), 'profer-fork-copy-'))
   tempRoots.push(root)
   return root
 }

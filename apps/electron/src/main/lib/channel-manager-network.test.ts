@@ -402,6 +402,39 @@ describe('F20：测试/发现 URL 一致', () => {
   })
 })
 
+describe('F21：OpenAI 兼容渠道（Mistral 类上游）端点推导与 404 定位', () => {
+  test('Given custom + 版本根地址 When Pi 测试连接 Then 请求 /v1/chat/completions', async () => {
+    for (const baseUrl of ['https://api.mistral.ai/v1', 'https://api.mistral.ai/v1/', 'https://api.mistral.ai']) {
+      responder = async () => json({ choices: [{ message: { content: 'ok' } }] })
+      const result = await testChannelDirect(input('custom', { baseUrl, runtime: 'pi', modelId: 'mistral-large-latest' }))
+      expect(result.success).toBe(true)
+      expect(requests.at(-1)!.url).toBe('https://api.mistral.ai/v1/chat/completions')
+    }
+  })
+
+  test('Given custom + 版本根地址 When 未选模型 Then 目录请求打 /v1/models', async () => {
+    responder = async () => json({ data: [{ id: 'mistral-large-latest', object: 'model' }] })
+    const result = await testChannelDirect(input('custom', { baseUrl: 'https://api.mistral.ai/v1', runtime: 'pi' }))
+    expect(result.success).toBe(true)
+    expect(requests.at(-1)!.url).toBe('https://api.mistral.ai/v1/models')
+  })
+
+  test('Given 上游路由未匹配 When 测试连接失败 Then 回显实际端点并给出路径提示', async () => {
+    responder = async () => json({ message: 'no Route matched with those values', request_id: 'fixture' }, 404)
+    const result = await testChannelDirect(input('custom', {
+      baseUrl: 'https://api.mistral.ai/chat/completions?route=fixture-secret#anchor',
+      modelId: 'mistral-large-latest',
+    }))
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('no Route matched')
+    expect(result.message).toContain('上游没有匹配该路径的路由')
+    // 只回显端点本身，query/hash 可能带路由凭据，不能进 UI
+    expect(result.message).toContain('当前测试端点为 https://api.mistral.ai/chat/completions')
+    expect(result.message).not.toContain('fixture-secret')
+    expect(result.message).not.toContain('#anchor')
+  })
+})
+
 test('F14：Given 生成挂起或错误/空响应 When 测试 Then 不报告生成成功', async () => {
   const originalTimeout = AbortSignal.timeout.bind(AbortSignal)
   spyOn(AbortSignal, 'timeout').mockImplementation(() => originalTimeout(5))

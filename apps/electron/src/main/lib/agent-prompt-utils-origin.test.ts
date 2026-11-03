@@ -18,3 +18,14 @@ describe('后续模型读取历史来源', () => {
     expect(prompt).not.toContain('author=user')
   })
 })
+
+describe('空输出重试 prompt', () => {
+  test('Given thinking-only 空回复 When 构造重试 prompt Then 明确要求正文并保留原请求', async () => {
+    const { buildEmptyOutputRetryPrompt } = await import('./agent-prompt-utils')
+    const prompt = buildEmptyOutputRetryPrompt('把 P1 做完')
+
+    expect(prompt).toContain('<empty_output_retry>')
+    expect(prompt).toContain('请直接输出最终的答复正文')
+    expect(prompt.endsWith('把 P1 做完')).toBe(true)
+  })
+})

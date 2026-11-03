@@ -1,7 +1,7 @@
 /**
  * 任务图结构化 MCP 工具
  *
- * 通过 SDK MCP Server 暴露 proma_task_create / proma_task_update 工具。
+ * 通过 SDK MCP Server 暴露 profer_task_create / profer_task_update 工具。
  * 这些工具的 schema 直接包含 dependsOn、forkFrom、abandonReason 等结构化参数，
  * 从根本上解决 AI 遗忘内联标记的问题。
  *
@@ -11,7 +11,7 @@
  * - 返回结果格式与 SDK TaskCreate/TaskUpdate 兼容，渲染层可通过
  *   parseTaskCreateResult 识别，保证流式路径也可见。
  * - 与 SDK 原生 TaskCreate/TaskUpdate 不冲突——AI 可任选其一，
- *   也可同时使用（proma_task_create 的结构化参数会被注入到 enrichedDescription）。
+ *   也可同时使用（profer_task_create 的结构化参数会被注入到 enrichedDescription）。
  */
 
 import { randomUUID } from 'node:crypto'
@@ -23,7 +23,7 @@ import {
 } from '@profer/project-core'
 import { appendGraphEvent } from './project-graph-service'
 import { hasRunningDelegations } from './agent-collaboration-tools'
-import { filterDisabledTools } from '@profer/shared'
+import { TASK_GRAPH_TOOL_CREATE, TASK_GRAPH_TOOL_UPDATE, filterDisabledTools } from '@profer/shared'
 
 // ===== 类型 =====
 
@@ -110,9 +110,9 @@ export async function injectTaskGraphMcpServer(
   const now = () => Date.now()
 
   const tools = [
-      // ===== proma_task_create =====
+      // ===== profer_task_create =====
       sdk.tool(
-        'proma_task_create',
+        TASK_GRAPH_TOOL_CREATE,
         '创建任务。依赖用 dependsOn 数组直填。用此工具替代 TaskCreate。',
         schemas.create,
         async (args) => {
@@ -153,9 +153,9 @@ export async function injectTaskGraphMcpServer(
         },
       ),
 
-      // ===== proma_task_update =====
+      // ===== profer_task_update =====
       sdk.tool(
-        'proma_task_update',
+        TASK_GRAPH_TOOL_UPDATE,
         '更新任务状态/依赖/放弃。发现遗漏的依赖关系时在此补 dependsOn。用此工具替代 TaskUpdate。',
         schemas.update,
         async (args) => {

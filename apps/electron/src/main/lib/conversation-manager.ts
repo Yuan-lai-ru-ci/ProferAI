@@ -2,9 +2,9 @@
  * 对话管理器
  *
  * 负责对话的 CRUD 操作和消息持久化。
- * - 对话索引：~/.proma/conversations.json（轻量元数据，含 activePath 字段）
- * - 消息存储：~/.proma/conversations/{id}.jsonl（JSONL，逐行追加，每条带 parentId）
- * - 旧式 sidecar（已废弃，仅历史数据兼容读取）：~/.proma/conversations/{id}.discarded.jsonl
+ * - 对话索引：~/.profer/conversations.json（轻量元数据，含 activePath 字段）
+ * - 消息存储：~/.profer/conversations/{id}.jsonl（JSONL，逐行追加，每条带 parentId）
+ * - 旧式 sidecar（已废弃，仅历史数据兼容读取）：~/.profer/conversations/{id}.discarded.jsonl
  *
  * 消息结构：所有消息通过 parentId 形成一棵/多棵 DAG；每一时刻对话有一个 active 路径
  * (activePath: string[]) 表示主视图当前展示的「root→leaf 全段」消息链：

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, Menu, powerMonitor, protocol, screen, shell } from 'electron'
 import { join } from 'path'
 import { createConnection } from 'net'
-import { existsSync, cpSync, mkdirSync, readdirSync } from 'fs'
+import { existsSync } from 'fs'
 import { getDevInstanceId, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
 
@@ -43,46 +43,6 @@ if (devInstanceId) {
   console.log(`[启动] 开发隔离实例: ${devInstanceId}，userData=${app.getPath('userData')}`)
 }
 
-// 一次性迁移：把存量 Profer 用户遗留在 @proma/electron 的浏览器层数据搬到新目录。
-// 登录态/会话/自动任务/device_id 都在 ~/.profer（不涉及），这里只搬 Chromium 层，避免用户升级后
-// 首屏缓存/cookie 凭空清空。copy 而非 move（保住原版 Proma 的目录）；跳过可再生大缓存；静默降级。
-migrateUserDataFromProferIfNeeded()
-
-function migrateUserDataFromProferIfNeeded(): void {
-  // 仅正式版需要：dev 版一直用独立的 @profer/electron-dev，无 @proma 遗留。
-  if (!app.isPackaged) return
-  try {
-    const newDir = app.getPath('userData') // setPath 后 = %APPDATA%\@profer\electron
-    const oldDir = join(app.getPath('appData'), '@proma', 'electron')
-    // 幂等：新目录已存在（迁过或已在用）或旧目录不存在（全新用户）时跳过。
-    if (existsSync(newDir) || !existsSync(oldDir)) return
-
-    // 可再生的大缓存不迁（省时且避免占用冲突）——Electron 会自动重建。
-    const SKIP = new Set([
-      'Cache',
-      'Code Cache',
-      'GPUCache',
-      'DawnGraphiteCache',
-      'DawnWebGPUCache',
-      'blob_storage',
-      'Dictionaries',
-      'Shared Dictionary',
-    ])
-
-    mkdirSync(newDir, { recursive: true })
-    for (const entry of readdirSync(oldDir, { withFileTypes: true })) {
-      if (SKIP.has(entry.name)) continue
-      try {
-        cpSync(join(oldDir, entry.name), join(newDir, entry.name), { recursive: true })
-      } catch {
-        // 单项失败不阻断其余项（如原版 Proma 正在运行占用某文件）。
-      }
-    }
-    console.log('[userData迁移] 已从 @proma/electron 复制浏览器层数据到 @profer/electron')
-  } catch (err) {
-    console.warn('[userData迁移] 失败（不影响使用，核心数据在 ~/.profer）:', err)
-  }
-}
 
 // 仅正式 Windows 安装版声明 AUMID，使任务栏与 Profer.exe / 开始菜单快捷方式绑定。
 // 开发版由裸 electron.exe 承载，刻意不声明 AUMID：任务栏使用 Electron 默认图标，
@@ -192,7 +152,7 @@ import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
 import { focusSessionWindow, getSessionWindowSummaries, hasOtherVisibleMainWindow, registerMainAppWindow, setMainAppWindowsChangedHandler } from './lib/main-app-windows'
 import { stopAllAgents, killOrphanedClaudeSubprocesses, initializeAgentRunLedger } from './lib/agent-service'
-import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
+import { disposePiMcpConnections, startMcpConnectionReaper } from './lib/adapters/pi-mcp-tools'
 import { disposeLarkCliService } from './lib/lark-cli-service'
 import { disposeLarkMcpService } from './lib/lark-mcp-service'
 import { browserController } from './lib/browser-controller'
@@ -445,7 +405,7 @@ function saveMainWindowState(): void {
   const isMaximized = mainWindow.isMaximized()
   const isFullScreen = mainWindow.isFullScreen()
   // 最大化/全屏时用 getNormalBounds() 保存恢复后的尺寸，
-  // 避免 macOS 全屏关闭后下次启动用全屏坐标恢复导致黑屏（Proma PR #1119）
+  // 避免 macOS 全屏关闭后下次启动用全屏坐标恢复导致黑屏（上游 PR #1119）
   const bounds = (isMaximized || isFullScreen) ? mainWindow.getNormalBounds() : mainWindow.getBounds()
   updateSettings({
     mainWindowState: {
@@ -870,7 +830,7 @@ function createWindow(): void {
       if (!getIsQuitting()) {
         event.preventDefault()
         // 若当前处于全屏状态，先退出全屏再保存状态，
-        // 避免全屏坐标被持久化导致下次启动黑屏（Proma PR #1119）
+        // 避免全屏坐标被持久化导致下次启动黑屏（上游 PR #1119）
         if (mainWindow?.isFullScreen()) {
           mainWindow.setFullScreen(false)
           // 等待 leave-full-screen 事件，超时后无论如何继续
@@ -967,9 +927,11 @@ async function bootstrap(): Promise<void> {
   // 热启动时从磁盘缓存恢复，耗时 < 10ms
   await safeAwait('initializeRuntime', () => initializeRuntime())
 
-  // 从旧 Proma 数据目录迁移到 Profer（一次性）
-  const { migrateFromProferIfNeeded } = require('./lib/config-paths')
-  safeRun('migrateFromProfer', migrateFromProferIfNeeded)
+  // 空闲 MCP 连接回收：长时间不用的子进程自动关闭，避免「改了配置还在用旧进程」和进程堆积。
+  // 重复调用幂等；定时器已 unref，不影响应用退出。
+  safeRun('startMcpConnectionReaper', () => startMcpConnectionReaper())
+
+  // 从旧数据目录迁移（已结束：存量数据早于 2026-11-03 完成迁移）
   safeRun('initializeAgentRunLedger', initializeAgentRunLedger)
 
   // Create application menu

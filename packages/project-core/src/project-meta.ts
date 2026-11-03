@@ -124,7 +124,7 @@ export function projectStatusLabel(meta: ProjectMeta): string {
  * 根据会话 ID 生成 Graph JSONL 文件路径。
  * 约定：与 Agent 会话 JSONL 同目录，文件名为 {sessionId}-graph.jsonl
  *
- * @param sessionDir - Agent 会话存储目录（如 ~/.proma/agent-sessions/）
+ * @param sessionDir - Agent 会话存储目录（如 ~/.profer/agent-sessions/）
  * @param sessionId - 主会话 ID
  */
 const SAFE_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/

@@ -38,7 +38,7 @@ describe('Pi AskUserQuestion 提问闭环（工具注册契约）', () => {
     expect(shouldBlockToolForAskUserQuestion(['Bash'], 'Bash')).toBe(false)
   })
 
-  test('Given Pi runtime When building Proma product tools Then AskUserQuestion is registered with the interactive question schema', () => {
+  test('Given Pi runtime When building Profer product tools Then AskUserQuestion is registered with the interactive question schema', () => {
     const { sdk } = createPiSdkStub()
 
     const definitions = buildProferProductToolDefinitions(sdk, async () => ({ behavior: 'allow' }))

@@ -39,11 +39,11 @@ describe('aggregateTaskItems statuses', () => {
 
   test('aggregates the real Claude SDK MCP-prefixed task tools', () => {
     const items = aggregateTaskItems([
-      activity('mcp__task-graph__proma_task_create', { subject: '结构化任务' }, {
+      activity('mcp__task-graph__profer_task_create', { subject: '结构化任务' }, {
         toolUseId: 'mcp-create',
         result: JSON.stringify({ task: { id: 'mcp-1', subject: '结构化任务' } }),
       }),
-      activity('mcp__task-graph__proma_task_update', { taskId: 'mcp-1', status: 'completed' }),
+      activity('mcp__task-graph__profer_task_update', { taskId: 'mcp-1', status: 'completed' }),
     ], false)
 
     expect(items).toEqual([expect.objectContaining({ id: 'mcp-1', status: 'completed' })])
@@ -51,13 +51,13 @@ describe('aggregateTaskItems statuses', () => {
 
   test('uses the real task ID from an SDK MCP content envelope', () => {
     const items = aggregateTaskItems([
-      activity('mcp__task-graph__proma_task_create', { subject: '结构化任务' }, {
+      activity('mcp__task-graph__profer_task_create', { subject: '结构化任务' }, {
         toolUseId: 'tool-use-id-must-not-become-a-node-id',
         result: JSON.stringify({
           content: [{ type: 'text', text: JSON.stringify({ task: { id: 'mcp-1', subject: '结构化任务' } }) }],
         }),
       }),
-      activity('mcp__task-graph__proma_task_update', { taskId: 'mcp-1', status: 'completed' }),
+      activity('mcp__task-graph__profer_task_update', { taskId: 'mcp-1', status: 'completed' }),
     ], false)
 
     expect(items).toEqual([expect.objectContaining({ id: 'mcp-1', status: 'completed' })])

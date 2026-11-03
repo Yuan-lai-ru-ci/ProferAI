@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { AgentRuntime, Channel, ProviderType, SDKMessage } from '@profer/shared'
 import { isChannelEnabledForRuntime, canonicalAgentToolName } from '@profer/shared'
 import { normalizeAnthropicBaseUrlForSdk } from '@profer/core'
@@ -60,16 +61,83 @@ export function isXaiChannelAvailableForRuntime(
   return agentRuntime === 'pi' && isChannelEnabledForRuntime(channel, 'pi')
 }
 
-/** Plan 模式只允许写入当前会话 .context/plan 内的 Markdown 文件。 */
-export function isPlanModeMarkdownPath(agentCwd: string, filePath: string): boolean {
-  const planDir = resolve(agentCwd, '.context', 'plan')
+/**
+ * Plan 模式只允许写入当前会话计划目录内的 Markdown 文件。
+ *
+ * `planDir` 是计划目录的真相源，由宿主显式传入（`resolveAgentSessionWriteLayout().plansDir`）：
+ * - managed：等于 `<agentCwd>/.context/plan`，与改造前逐字一致；
+ * - project：在中央 storageDir 内，**不在项目根**，所以不能再按 cwd 推导。
+ *
+ * 缺省时回落到 `<agentCwd>/.context/plan`，保留旧调用方语义。
+ * 相对 `filePath` 仍按 `agentCwd` 解析（SDK/Pi 的相对路径基准是 cwd）；project 下提示词给的是
+ * storageDir 内的绝对路径，两种形式都能正确命中。
+ */
+export function isPlanModeMarkdownPath(agentCwd: string, filePath: string, planDir?: string): boolean {
+  const resolvedPlanDir = planDir && planDir.trim() ? resolve(planDir) : resolve(agentCwd, '.context', 'plan')
   const targetPath = resolve(agentCwd, filePath)
-  const relativePath = relative(planDir, targetPath)
+  const relativePath = relative(resolvedPlanDir, targetPath)
   const isWithinPlanDir = relativePath !== ''
     && !isAbsolute(relativePath)
     && relativePath !== '..'
     && !relativePath.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
   return filePath.toLowerCase().endsWith('.md') && isWithinPlanDir
+}
+
+/** `ensureAgentSessionSdkSettings` 的输入：全部取自会话写入布局，调用方不得自己拼 cwd。 */
+export interface AgentSessionSdkSettingsInput {
+  /** 会话私有存储根：managed = cwd；project = 中央 storageDir（**永不**是项目根）。 */
+  storageDir: string
+  /** 写入 `plansDirectory` 的值；`undefined` 表示删除该键（跨盘符时无合法相对路径）。 */
+  plansDirectory?: string
+  /** 工作区自动记忆目录；无工作区时保持 undefined。 */
+  autoMemoryDirectory?: string
+}
+
+/**
+ * 准备 SDK 项目设置（`<storageDir>/.claude/settings.json`）。
+ *
+ * 为什么目标不是 cwd：project 下 cwd 是用户项目根，写 `<root>/.claude/settings.json` 会覆盖
+ * 用户自己的 Claude 配置、并在仓库里留下 `.claude/`（违反 I3）。managed 下 storageDir === cwd，
+ * 文件路径与内容与改造前逐字一致。
+ *
+ * 如实记录：SDK 的项目设置只从 **cwd** 读取，且 Claude provider 没有透传
+ * `queryOptions.settings` 内联对象，所以 project 下这份副本对 SDK 是惰性的。计划落点由
+ * 提示词（storageDir 绝对路径）+ `isPlanModeMarkdownPath(agentCwd, path, plansDir)` 保证。
+ */
+export function ensureAgentSessionSdkSettings(input: AgentSessionSdkSettingsInput): { settingsPath: string; wrote: boolean } {
+  const settingsPath = join(input.storageDir, '.claude', 'settings.json')
+  const claudeDir = dirname(settingsPath)
+  if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true })
+
+  let sdkSettings: Record<string, unknown> = {}
+  try {
+    sdkSettings = JSON.parse(readFileSync(settingsPath, 'utf-8'))
+  } catch {
+    /* 文件不存在或解析失败：按空设置重建 */
+  }
+
+  let needsWrite = false
+  if (input.plansDirectory === undefined) {
+    if ('plansDirectory' in sdkSettings) {
+      delete sdkSettings.plansDirectory
+      needsWrite = true
+    }
+  } else if (sdkSettings.plansDirectory !== input.plansDirectory) {
+    sdkSettings.plansDirectory = input.plansDirectory
+    needsWrite = true
+  }
+  if (sdkSettings.skipWebFetchPreflight !== true) {
+    sdkSettings.skipWebFetchPreflight = true
+    needsWrite = true
+  }
+  if (sdkSettings.autoMemoryDirectory !== input.autoMemoryDirectory) {
+    sdkSettings.autoMemoryDirectory = input.autoMemoryDirectory
+    needsWrite = true
+  }
+  if (!needsWrite) return { settingsPath, wrote: false }
+
+  writeFileSync(settingsPath, JSON.stringify(sdkSettings, null, 2))
+  return { settingsPath, wrote: true }
 }
 
 /**

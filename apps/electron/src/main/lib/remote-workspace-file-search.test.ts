@@ -121,3 +121,139 @@ describe('searchRemoteWorkspaceFiles', () => {
     expect(allPaths.length).toBeGreaterThan(0)
   })
 })
+
+/** project 工作区：根目录下自带 `.profer` 配置目录，内部条目不该出现在 `@` 搜索结果里。 */
+describe('project 工作区的 .profer 内部条目过滤', () => {
+  let projectRoot = ''
+  let projectFilesDir = ''
+  /** `.profer` 下必须被剪掉的内部条目（目录与文件） */
+  const internalEntries = [
+    'presets',
+    'skills',
+    'skills-inactive',
+    'sessions',
+    'cache',
+    '.claude-plugin',
+    'config.json',
+    'mcp.json',
+    'mcp.local.json',
+  ]
+
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'profer-remote-search-project-'))
+    projectFilesDir = join(projectRoot, '.profer', 'workspace-files')
+    // 用户自己会引用的内容
+    write(join(projectRoot, 'README.md'), '# demo')
+    mkdirSync(join(projectRoot, 'src'), { recursive: true })
+    write(join(projectRoot, 'src', 'app.ts'))
+    mkdirSync(join(projectRoot, '.profer'), { recursive: true })
+    write(join(projectRoot, '.profer', 'profile.md'))
+    mkdirSync(join(projectRoot, '.profer', 'memory'), { recursive: true })
+    write(join(projectRoot, '.profer', 'memory', 'note.md'))
+    mkdirSync(projectFilesDir, { recursive: true })
+    write(join(projectFilesDir, 'guide.md'))
+
+    // Profer 内部状态
+    mkdirSync(join(projectRoot, '.profer', 'presets'), { recursive: true })
+    write(join(projectRoot, '.profer', 'presets', '_config.json'))
+    mkdirSync(join(projectRoot, '.profer', 'skills', 'demo-skill'), { recursive: true })
+    write(join(projectRoot, '.profer', 'skills', 'demo-skill', 'SKILL.md'))
+    mkdirSync(join(projectRoot, '.profer', 'skills-inactive', 'old-skill'), { recursive: true })
+    write(join(projectRoot, '.profer', 'skills-inactive', 'old-skill', 'SKILL.md'))
+    mkdirSync(join(projectRoot, '.profer', 'sessions', 'sess-1'), { recursive: true })
+    write(join(projectRoot, '.profer', 'sessions', 'sess-1', 'messages.jsonl'))
+    mkdirSync(join(projectRoot, '.profer', 'cache'), { recursive: true })
+    write(join(projectRoot, '.profer', 'cache', 'blob.bin'))
+    mkdirSync(join(projectRoot, '.profer', '.claude-plugin'), { recursive: true })
+    write(join(projectRoot, '.profer', '.claude-plugin', 'plugin.json'))
+    write(join(projectRoot, '.profer', 'config.json'), '{}')
+    write(join(projectRoot, '.profer', 'mcp.json'), '{}')
+    write(join(projectRoot, '.profer', 'mcp.local.json'), '{}')
+  })
+
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true })
+  })
+
+  test('project 搜索不出现 presets/skills/sessions 等内部目录', () => {
+    const result = searchRemoteWorkspaceFiles({
+      sessionRoot: projectRoot,
+      workspaceRoot: projectFilesDir,
+      query: '',
+      isProjectWorkspace: true,
+    })
+    const names = result.sessionEntries.map((entry) => entry.name)
+
+    for (const name of internalEntries) {
+      expect(names).not.toContain(name)
+    }
+    const allPaths = result.entries.map((entry) => entry.path)
+    expect(allPaths.some((path) => path.includes(join('.profer', 'presets')))).toBe(false)
+    expect(allPaths.some((path) => path.includes(join('.profer', 'skills')))).toBe(false)
+    expect(allPaths.some((path) => path.includes(join('.profer', 'sessions')))).toBe(false)
+    // 项目自身文件不受影响
+    expect(names).toContain('README.md')
+    expect(names).toContain('src')
+    expect(names).toContain('app.ts')
+  })
+
+  test('project 搜索仍保留 profile.md / memory / workspace-files', () => {
+    const result = searchRemoteWorkspaceFiles({
+      sessionRoot: projectRoot,
+      workspaceRoot: projectFilesDir,
+      query: '',
+      isProjectWorkspace: true,
+    })
+    const sessionPaths = result.sessionEntries.map((entry) => entry.path)
+
+    expect(sessionPaths).toContain(join('.profer', 'profile.md'))
+    expect(sessionPaths).toContain(join('.profer', 'memory'))
+    expect(sessionPaths).toContain(join('.profer', 'memory', 'note.md'))
+    // workspace 组：工作区文件目录仍是根条目
+    expect(result.workspaceEntries[0]).toMatchObject({ name: '工作文件', path: projectFilesDir, type: 'dir' })
+    expect(result.workspaceEntries.map((entry) => entry.path)).toContain(join(projectFilesDir, 'guide.md'))
+  })
+
+  test('project 搜索 query 命中内部目录名时也不返回条目', () => {
+    for (const query of ['presets', 'skills', 'sessions', 'cache', 'mcp']) {
+      const result = searchRemoteWorkspaceFiles({
+        sessionRoot: projectRoot,
+        workspaceRoot: projectFilesDir,
+        query,
+        isProjectWorkspace: true,
+      })
+      const names = result.sessionEntries.map((entry) => entry.name)
+      expect(names).not.toContain('presets')
+      expect(names).not.toContain('skills')
+      expect(names).not.toContain('sessions')
+      expect(names).not.toContain('cache')
+      expect(names.some((name) => name.startsWith('mcp'))).toBe(false)
+      expect(result.sessionEntries.some((entry) => entry.path.includes(join('.profer', 'presets')))).toBe(false)
+    }
+  })
+
+  test('project 搜索仍能命中 profile.md / memory', () => {
+    const result = searchRemoteWorkspaceFiles({
+      sessionRoot: projectRoot,
+      workspaceRoot: projectFilesDir,
+      query: 'profile',
+      isProjectWorkspace: true,
+    })
+    expect(result.sessionEntries.map((entry) => entry.path)).toContain(join('.profer', 'profile.md'))
+  })
+
+  test('managed（不传 isProjectWorkspace）扫描结果不变：同名内部目录仍出现', () => {
+    const result = searchRemoteWorkspaceFiles({
+      sessionRoot: projectRoot,
+      workspaceRoot: projectFilesDir,
+      query: '',
+    })
+    const names = result.sessionEntries.map((entry) => entry.name)
+
+    expect(names).toContain('presets')
+    expect(names).toContain('skills')
+    expect(names).toContain('sessions')
+    expect(names).toContain('cache')
+    expect(names.some((name) => name.startsWith('mcp'))).toBe(true)
+  })
+})

@@ -6,97 +6,31 @@
  */
 
 import { join, basename, resolve, sep, relative } from 'node:path'
-import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { homedir } from 'node:os'
 import { RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
 import { readSkillVersion } from './skill-manifest'
 import { resolveDevVitePort } from './dev-instance'
+import { getConfigDir } from './config-root'
+import {
+  getWorkspacesIndexPath,
+  getWorkspacesRootPath,
+  resolveWorkspaceLocation,
+  requireExistingWorkspaceRoot,
+  type WorkspaceLocation,
+} from './workspace-locator'
 
-/** Vite 开发服务器端口（避开旧 Proma 的 5173），可由隔离开发实例覆盖。 */
+// 配置根解析已下沉到 config-root：workspace-locator 也要用它算索引位置，
+// 留在本文件会形成 config-paths → locator → config-paths 的环。
+// 这里保留 re-export，既有调用方的 import 路径与签名不变。
+export { getConfigDir, getConfigDirName, migrateFromProferIfNeeded } from './config-root'
+export { WorkspaceRootMissingError } from './workspace-locator'
+
+/** Vite 开发服务器端口（避开旧版占用的 5173），可由隔离开发实例覆盖。 */
 export const VITE_DEV_SERVER_PORT = resolveDevVitePort()
 /** Vite 开发服务器 URL */
 export const VITE_DEV_SERVER_URL = `http://localhost:${VITE_DEV_SERVER_PORT}`
 
-/**
- * 获取默认配置目录名称
- *
- * 开发模式下返回 '.profer-dev'，正式版本返回 '.profer'。
- * 受控运行可通过 PROFER_CONFIG_DIR 覆盖实际配置根；该覆盖不改变默认名称。
- *
- * 检测优先级：
- * 1. PROFER_DEV=1 环境变量（显式覆盖）
- * 2. Electron app.isPackaged（未打包 = 开发模式）
- * 3. 兜底 '.profer'
- */
-let _configDirName: string | undefined
-
-export function getConfigDirName(): string {
-  if (_configDirName === undefined) {
-    if (process.env.PROFER_DEV === '1') {
-      _configDirName = '.profer-dev'
-    } else {
-      try {
-        const { app } = require('electron')
-        _configDirName = app.isPackaged ? '.profer' : '.profer-dev'
-      } catch {
-        _configDirName = '.profer'
-      }
-    }
-    const mode = _configDirName === '.profer-dev' ? '开发模式' : '正式版本'
-    console.log(`[配置] 默认配置目录名: ~/${_configDirName}/（${mode}）；实际路径可由 PROFER_CONFIG_DIR 覆盖`)
-  }
-  return _configDirName
-}
-
-/**
- * 从旧 Proma 目录迁移到新 Profer 目录（一次性）
- * 如果 ~/.profer/ 或 ~/.profer-dev/ 不存在但对应的旧目录存在，则重命名迁移
- */
-export function migrateFromProferIfNeeded(): void {
-  try {
-    const name = getConfigDirName()
-    const newDir = join(homedir(), name)
-    const oldName = name.replace('profer', 'proma')
-    const oldDir = join(homedir(), oldName)
-
-    if (!existsSync(newDir) && existsSync(oldDir)) {
-      console.log(`[迁移] 从 ~/${oldName}/ 迁移到 ~/${name}/`)
-      renameSync(oldDir, newDir)
-      console.log('[迁移] 数据迁移完成')
-    }
-  } catch (err) {
-    console.error('[迁移] 数据迁移失败（不影响使用）:', err)
-  }
-}
-
-/** 配置目录 0700 只需在进程内确认一次（避免每次路径解析都 chmod）。 */
-let securedConfigDir: string | null = null
-
-/**
- * 获取配置目录路径
- *
- * 开发模式返回 ~/.profer-dev/，正式版本返回 ~/.profer/。
- * 如果目录不存在则自动创建。
- */
-export function getConfigDir(): string {
-  // 自动化测试和受控诊断可显式隔离配置根目录；常规运行仍使用用户目录。
-  const override = process.env.PROFER_CONFIG_DIR?.trim()
-  const configDir = override ? resolve(override) : join(homedir(), getConfigDirName())
-
-  if (!existsSync(configDir)) {
-    // 配置目录里有令牌密文与 deviceId（AES 密钥派生源），仅当前用户可读写。
-    mkdirSync(configDir, { recursive: true, mode: 0o700 })
-    console.log(`[配置] 已创建配置目录: ${configDir}`)
-  }
-  // 旧版本可能以 0755 创建过：每个目录首次访问时只收紧不放开（Windows 忽略权限位）。
-  if (securedConfigDir !== configDir && process.platform !== 'win32') {
-    securedConfigDir = configDir
-    try { chmodSync(configDir, 0o700) } catch { /* 只读介质/网络盘等忽略 */ }
-  }
-
-  return configDir
-}
 
 /**
  * 获取渠道配置文件路径
@@ -444,21 +378,24 @@ export function agentSessionVisualizationsDir(sessionId: string): string {
 /**
  * 获取 Agent 工作区索引文件路径
  *
+ * 索引是 workspace-locator 的唯一数据源，路径由 locator 提供，避免两处拼字符串。
+ *
  * @returns ~/.profer/agent-workspaces.json
  */
 export function getAgentWorkspacesIndexPath(): string {
-  return join(getConfigDir(), 'agent-workspaces.json')
+  return getWorkspacesIndexPath()
 }
 
 /**
  * 获取 Agent 工作区根目录路径
  *
+ * 仅 managed 工作区的配置目录位于此根下；project 工作区的配置目录在项目内的 `.profer/`。
  * 如果目录不存在则自动创建。
  *
  * @returns ~/.profer/agent-workspaces/
  */
 export function getAgentWorkspacesDir(): string {
-  const dir = join(getConfigDir(), 'agent-workspaces')
+  const dir = getWorkspacesRootPath()
 
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
@@ -469,16 +406,24 @@ export function getAgentWorkspacesDir(): string {
 }
 
 /**
- * 获取指定 Agent 工作区的目录路径
+ * 获取指定 Agent 工作区的配置目录路径（语义等同于 locator 的 configDir）
  *
- * 如果目录不存在则自动创建。
+ * - managed：`~/.profer/agent-workspaces/{slug}/`（与改造前完全一致）
+ * - project：`{rootPath}/.profer/`（配置、技能、预设等 Profer 私有资产）
+ *
+ * 注意：project 模式下本函数**不等于会话 cwd**，cwd 见 `getAgentSessionCwd`。
+ *
+ * 如果目录不存在则自动创建；project 的 rootPath 不存在时直接抛
+ * `WorkspaceRootMissingError`，绝不自动造出用户项目目录（I4）。
  *
  * @param slug 工作区 slug
- * @returns ~/.profer/agent-workspaces/{slug}/
+ * @returns 工作区配置目录
  */
 export function getAgentWorkspacePath(slug: string): string {
-  const dir = join(getAgentWorkspacesDir(), slug)
+  const location = resolveWorkspaceLocation(slug)
+  requireExistingWorkspaceRoot(location)
 
+  const dir = location.configDir
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
     console.log(`[配置] 已创建 Agent 工作区: ${dir}`)
@@ -488,10 +433,23 @@ export function getAgentWorkspacePath(slug: string): string {
 }
 
 /**
+ * 获取工作区根路径（纯查询，不创建任何目录）
+ *
+ * - managed：与 `getAgentWorkspacePath` 相同（`~/.profer/agent-workspaces/{slug}/`）
+ * - project：用户项目根绝对路径（存在时经 realpath 归一化）
+ *
+ * @throws WorkspaceRootMissingError project 的 rootPath 不存在（不会自动创建）
+ */
+export function getWorkspaceRootPath(slug: string): string {
+  const location = resolveWorkspaceLocation(slug)
+  return requireExistingWorkspaceRoot(location)
+}
+
+/**
  * 获取指定工作区的 MCP 配置文件路径
  *
  * @param slug 工作区 slug
- * @returns ~/.profer/agent-workspaces/{slug}/mcp.json
+ * @returns managed: ~/.profer/agent-workspaces/{slug}/mcp.json；project: {rootPath}/.profer/mcp.json
  */
 export function getWorkspaceMcpPath(slug: string): string {
   return join(getAgentWorkspacePath(slug), 'mcp.json')
@@ -503,11 +461,41 @@ export function getWorkspaceMcpPath(slug: string): string {
  * 预设为工作区级配置（与 mcp.json 同构）：内置三预设恒定可见，
  * 自定义预设与默认预设按工作区存储。
  *
+ * project 模式下这里返回的是**旧单文件布局**，仅用于兼容读取；
+ * 预设读写请统一经 PresetStore（项目模式新布局为 `presets/` 目录 + `_config.json`）。
+ *
  * @param slug 工作区 slug
- * @returns ~/.profer/agent-workspaces/{slug}/agent-presets.json
+ * @returns managed: ~/.profer/agent-workspaces/{slug}/agent-presets.json；project: {rootPath}/.profer/agent-presets.json
  */
 export function getWorkspaceAgentPresetsPath(slug: string): string {
   return join(getAgentWorkspacePath(slug), 'agent-presets.json')
+}
+
+/**
+ * 获取项目模式预设目录（`<root>/.profer/presets`）
+ *
+ * - project：返回目录路径（纯路径，不创建，避免只读诊断触发 mkdir）
+ * - managed：返回 `null`——managed 继续用单文件 `agent-presets.json`（I1）
+ *
+ * @param slug 工作区 slug
+ */
+export function getWorkspacePresetsDir(slug: string): string | null {
+  const location = resolveWorkspaceLocation(slug)
+  return location.mode === 'project' ? join(location.configDir, 'presets') : null
+}
+
+/**
+ * 获取预设「配置级字段」文件路径
+ *
+ * - project：`<configDir>/presets/_config.json`
+ * - managed：`<configDir>/agent-presets.json`（旧单文件，含 presets 数组）
+ *
+ * 纯路径，不创建目录；预设读写统一经 `PresetStore`，本函数只用于定位与迁移。
+ */
+export function getWorkspacePresetsConfigPath(slug: string): string {
+  const presetsDir = getWorkspacePresetsDir(slug)
+  if (presetsDir) return join(presetsDir, '_config.json')
+  return join(resolveWorkspaceLocation(slug).configDir, 'agent-presets.json')
 }
 
 /**
@@ -516,7 +504,7 @@ export function getWorkspaceAgentPresetsPath(slug: string): string {
  * 如果目录不存在则自动创建。
  *
  * @param slug 工作区 slug
- * @returns ~/.profer/agent-workspaces/{slug}/skills/
+ * @returns managed: ~/.profer/agent-workspaces/{slug}/skills/；project: {rootPath}/.profer/skills/
  */
 export function getWorkspaceSkillsDir(slug: string): string {
   const dir = join(getAgentWorkspacePath(slug), 'skills')
@@ -535,7 +523,7 @@ export function getWorkspaceSkillsDir(slug: string): string {
  * 如果目录不存在则自动创建。
  *
  * @param slug 工作区 slug
- * @returns ~/.profer/agent-workspaces/{slug}/workspace-files/
+ * @returns managed: ~/.profer/agent-workspaces/{slug}/workspace-files/；project: {rootPath}/.profer/workspace-files/
  */
 export function getWorkspaceFilesDir(slug: string): string {
   const dir = join(getAgentWorkspacePath(slug), 'workspace-files')
@@ -548,30 +536,100 @@ export function getWorkspaceFilesDir(slug: string): string {
 }
 
 /**
+ * 工作区文件面板的展示根。
+ *
+ * - project：项目根。project 模式下「工作区」就是绑定的项目文件夹，面板直接展示项目文件。
+ * - managed：`workspace-files/` 子目录（工作区根含 sessions 等内部目录，不能整体暴露）。
+ *
+ * project 分支不调用 `getWorkspaceFilesDir`，避免在项目里建一个空的 `.profer/workspace-files`。
+ */
+export function resolveWorkspaceFilesUiRootPath(workspaceSlug: string): string {
+  const location = resolveWorkspaceLocation(workspaceSlug)
+  return location.mode === 'project' ? location.rootPath : getWorkspaceFilesDir(workspaceSlug)
+}
+
+/**
  * 解析工作区文件目录路径（只读，不创建目录）
  *
  * 与 getWorkspaceFilesDir 的区别：不会触发 mkdir 副作用，
  * 适用于 /now 等只读查询场景。
  *
  * @param slug 工作区 slug
- * @returns ~/.profer/agent-workspaces/{slug}/workspace-files/
+ * @returns 工作区文件目录（managed 与 project 都跟随 configDir）
  */
 export function resolveWorkspaceFilesDir(slug: string): string {
-  return join(getConfigDir(), 'agent-workspaces', slug, 'workspace-files')
+  return join(resolveWorkspaceLocation(slug).configDir, 'workspace-files')
+}
+
+/** project 模式下会话运行时存储子目录名（位于 configDir 内）。 */
+const SESSION_STORAGE_DIR_NAME = 'sessions'
+
+/**
+ * 会话运行时存储目录（纯计算）：managed = `<configDir>/<sid>`，project = `<configDir>/sessions/<sid>`。
+ *
+ * 这个目录只放 Profer 会话私有数据（checkpoint、临时产物等），**永远不是 cwd**。
+ */
+function resolveSessionStorageDir(location: WorkspaceLocation, sessionId: string): string {
+  // project 的 configDir 在项目内（<root>/.profer），会话运行数据必须落中央 runtimeDir，
+  // 否则每个会话目录、附件与日志都会进用户仓库（I3）。
+  return location.mode === 'project'
+    ? join(location.runtimeDir, SESSION_STORAGE_DIR_NAME, sessionId)
+    : join(location.runtimeDir, sessionId)
 }
 
 /**
- * 解析 Agent 会话工作目录路径（只读，不创建目录）
+ * 解析 Agent 会话运行时存储目录（只读，不创建目录）
  *
  * 与 getAgentSessionWorkspacePath 的区别：不会触发 mkdir 副作用，
- * 适用于 /now 等只读查询场景。
+ * 适用于 /now 等只读查询场景。语义是「storageDir」，不是 cwd。
  *
  * @param slug 工作区 slug
  * @param sessionId 会话 ID
- * @returns ~/.profer/agent-workspaces/{slug}/{sessionId}/
+ * @returns managed: ~/.profer/agent-workspaces/{slug}/{sessionId}/；project: {rootPath}/.profer/sessions/{sessionId}/
  */
 export function resolveAgentSessionWorkspacePath(slug: string, sessionId: string): string {
-  return join(getConfigDir(), 'agent-workspaces', slug, sessionId)
+  return resolveSessionStorageDir(resolveWorkspaceLocation(slug), sessionId)
+}
+
+/**
+ * 解析 Agent 会话 cwd（纯查询，绝不 mkdir）
+ *
+ * - managed：`<configDir>/<sessionId>`（与改造前一致）
+ * - project：工作区 rootPath（realpath 归一化后的项目根）
+ *
+ * 判据：cwd 只能用作运行时相对路径基准（`queryOptions.cwd`、提示词里的
+ * `<working_directory>` 等），**禁止**作为 `rmSync` / `cpSync` / `mkdirSync` 的目标。
+ * 会话私有数据一律走 `getAgentSessionStorageDir`。
+ *
+ * @throws WorkspaceRootMissingError project 的 rootPath 不存在（不会自动创建）
+ */
+export function getAgentSessionCwd(slug: string, sessionId: string): string {
+  const location = resolveWorkspaceLocation(slug)
+  if (location.mode === 'project') return requireExistingWorkspaceRoot(location)
+  return join(location.configDir, sessionId)
+}
+
+/**
+ * 获取 Agent 会话运行时存储目录（允许 mkdir）
+ *
+ * - managed：`<configDir>/<sessionId>`
+ * - project：`~/.profer/agent-workspaces/<slug>/sessions/<sessionId>`（中央 runtimeDir）
+ *
+ * 与 cwd 严格分离：project 模式下它永远落在中央配置目录里，不进入用户项目（I3）。
+ *
+ * @throws WorkspaceRootMissingError project 的 rootPath 不存在（不会自动创建）
+ */
+export function getAgentSessionStorageDir(slug: string, sessionId: string): string {
+  const location = resolveWorkspaceLocation(slug)
+  requireExistingWorkspaceRoot(location)
+
+  const dir = resolveSessionStorageDir(location, sessionId)
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+    console.log(`[配置] 已创建 Agent 会话工作目录: ${dir}`)
+  }
+
+  return dir
 }
 
 /**
@@ -857,7 +915,7 @@ function hashDefaultSkillDir(dir: string): string {
 }
 
 /**
- * 引入 .seed-state.json 之前随 Proma/早期 Profer 发出的整个 Skill 目录指纹。
+ * 引入 .seed-state.json 之前随早期版本发出的整个 Skill 目录指纹。
  *
  * 只有目录内容完整命中某个历史出厂版本（忽略 BOM/换行）才会被接管为受管种子；
  * 用户修改正文、增删脚本或参考资料都会改变指纹，继续遵循“绝不覆盖”的保守策略。
@@ -1142,24 +1200,24 @@ export function getFeishuBotMetadataPath(botId: string): string {
 }
 
 /**
- * 获取指定 Agent 会话的工作路径
+ * 获取指定 Agent 会话的运行时存储目录（会话私有数据落点，**禁止当 cwd 用**）
  *
- * 在工作区目录下创建以 sessionId 命名的子文件夹，
- * 作为该会话的独立 Agent cwd。如果目录不存在则自动创建。
+ * - managed：`<runtimeDir>/<sessionId>`，与改造前完全一致（历史上它同时也是 cwd）
+ * - project：`<runtimeDir>/sessions/<sessionId>`，即
+ *   `~/.profer/agent-workspaces/<slug>/sessions/<sessionId>`（**仍在中央配置目录，不进项目根**，I3）
+ *
+ * 注意 project 的 `configDir` 是 `<root>/.profer`，但会话运行数据不用它；这里刻意使用
+ * `runtimeDir`，避免会话目录、附件与日志写进用户仓库。
+ *
+ * 本函数带 mkdir 副作用，且被删除 / 复制路径复用，因此**永远不能返回 rootPath**（I2）。
+ * 需要 cwd 请用 `getAgentSessionCwd`；需要只读路径请用 `resolveAgentSessionWorkspacePath`。
  *
  * @param workspaceSlug 工作区 slug
  * @param sessionId 会话 ID
- * @returns ~/.profer/agent-workspaces/{slug}/{sessionId}/
+ * @returns 会话运行时存储目录
  */
 export function getAgentSessionWorkspacePath(workspaceSlug: string, sessionId: string): string {
-  const dir = join(getAgentWorkspacePath(workspaceSlug), sessionId)
-
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-    console.log(`[配置] 已创建 Agent 会话工作目录: ${dir}`)
-  }
-
-  return dir
+  return getAgentSessionStorageDir(workspaceSlug, sessionId)
 }
 
 /**

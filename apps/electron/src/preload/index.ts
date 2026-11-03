@@ -57,6 +57,8 @@ import type {
   AgentRuntimeRestoreSnapshot,
   UpdateAgentInterruptStateInput,
   AgentWorkspace,
+  ProjectWorkspaceTarget,
+  ProjectWorkspaceOpenResult,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
   AgentSaveWorkspaceFilesInput,
@@ -922,6 +924,18 @@ export interface ElectronAPI {
   /** 删除 Agent 工作区 */
   deleteAgentWorkspace: (id: string) => Promise<void>
 
+  /** 选择项目文件夹（系统目录选择器）；取消返回 null */
+  selectProjectFolder: () => Promise<string | null>
+
+  /** 创建项目工作区（绑定已有文件夹 + 生成骨架） */
+  createProjectWorkspace: (input: ProjectWorkspaceTarget) => Promise<ProjectWorkspaceOpenResult>
+
+  /** 打开已有项目工作区（补齐骨架，不覆盖既有文件） */
+  openProjectWorkspace: (input: ProjectWorkspaceTarget) => Promise<ProjectWorkspaceOpenResult>
+
+  /** 移除项目工作区（只删索引，不碰项目文件） */
+  removeProjectWorkspace: (id: string) => Promise<void>
+
   /** 重排工作区顺序 */
   reorderAgentWorkspaces: (orderedIds: string[]) => Promise<AgentWorkspace[]>
 
@@ -939,8 +953,14 @@ export interface ElectronAPI {
   /** 保存工作区 MCP 配置 */
   saveWorkspaceMcpConfig: (workspaceSlug: string, config: WorkspaceMcpConfig) => Promise<void>
 
-  /** 测试 MCP 服务器连接 */
-  testMcpServer: (name: string, entry: import('@profer/shared').McpServerEntry) => Promise<{ success: boolean; message: string }>
+  /** 测试 MCP 服务器连接；传 workspaceSlug 时结果会落盘到该工作区配置 */
+  testMcpServer: (name: string, entry: import('@profer/shared').McpServerEntry, workspaceSlug?: string) => Promise<{ success: boolean; message: string; reason?: import('@profer/shared').McpProbeFailureReason; tools?: import('@profer/shared').McpToolSummary[] }>
+
+  /** 重启单个 MCP server 的常驻连接（Pi runtime） */
+  restartMcpServer: (name: string) => Promise<import('@profer/shared').McpServerRestartResult>
+
+  /** 获取当前 MCP 连接快照（不含凭据） */
+  getMcpConnectionStatus: () => Promise<import('@profer/shared').McpConnectionSnapshot[]>
 
   /** 获取工作区 Skill 列表（含活跃和不活跃） */
   getWorkspaceSkills: (workspaceSlug: string) => Promise<SkillMeta[]>
@@ -962,7 +982,7 @@ export interface ElectronAPI {
   /** 获取其他工作区的 Skill 列表 */
   getOtherWorkspaceSkills: (currentSlug: string) => Promise<OtherWorkspaceSkillsGroup[]>
 
-  /** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
+  /** 获取默认 Skills 的 slug 列表（来自 ~/.profer/default-skills/） */
   getDefaultSkillSlugs: () => Promise<string[]>
 
   /** 从其他工作区导入 Skill */
@@ -1182,6 +1202,14 @@ export interface ElectronAPI {
 
   /** 获取 session 工作路径 */
   getAgentSessionPath: (workspaceId: string, sessionId: string) => Promise<string | null>
+
+  /**
+   * 获取 session 草稿区（storageDir，只读）。
+   *
+   * 用于判定 Agent 私有产物（截图 / 临时文件 / `.context` 草稿）：project 下它是中央
+   * runtimeDir 里的 `sessions/<sid>`，与用户可见的项目根无关。
+   */
+  getAgentSessionStoragePath: (workspaceId: string, sessionId: string) => Promise<string | null>
 
   /** 列出目录内容 */
   listDirectory: (dirPath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<FileEntry[]>
@@ -2660,6 +2688,22 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_WORKSPACE, id)
   },
 
+  selectProjectFolder: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SELECT_PROJECT_FOLDER)
+  },
+
+  createProjectWorkspace: (input: ProjectWorkspaceTarget) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_PROJECT_WORKSPACE, input)
+  },
+
+  openProjectWorkspace: (input: ProjectWorkspaceTarget) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_PROJECT_WORKSPACE, input)
+  },
+
+  removeProjectWorkspace: (id: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REMOVE_PROJECT_WORKSPACE, id)
+  },
+
   reorderAgentWorkspaces: (orderedIds: string[]) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REORDER_WORKSPACES, orderedIds)
   },
@@ -2683,8 +2727,16 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SAVE_MCP_CONFIG, workspaceSlug, config)
   },
 
-  testMcpServer: (name: string, entry: import('@profer/shared').McpServerEntry) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TEST_MCP_SERVER, name, entry) as Promise<{ success: boolean; message: string }>
+  testMcpServer: (name: string, entry: import('@profer/shared').McpServerEntry, workspaceSlug?: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TEST_MCP_SERVER, name, entry, workspaceSlug) as Promise<{ success: boolean; message: string; reason?: import('@profer/shared').McpProbeFailureReason; tools?: import('@profer/shared').McpToolSummary[] }>
+  },
+
+  restartMcpServer: (name: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTART_MCP_SERVER, name) as Promise<import('@profer/shared').McpServerRestartResult>
+  },
+
+  getMcpConnectionStatus: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_MCP_CONNECTION_STATUS) as Promise<import('@profer/shared').McpConnectionSnapshot[]>
   },
 
   getWorkspaceSkills: (workspaceSlug: string) => {
@@ -3062,6 +3114,10 @@ const electronAPI: ElectronAPI = {
   // Agent 文件系统操作
   getAgentSessionPath: (workspaceId: string, sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SESSION_PATH, workspaceId, sessionId)
+  },
+
+  getAgentSessionStoragePath: (workspaceId: string, sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SESSION_STORAGE_PATH, workspaceId, sessionId)
   },
 
   listDirectory: (dirPath: string, access?: import('@profer/shared').FileAccessOptions) => {

@@ -36,6 +36,8 @@ import type {
   AgentSendInput,
   UpdateAgentInterruptStateInput,
   AgentWorkspace,
+  ProjectWorkspaceTarget,
+  ProjectWorkspaceOpenResult,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
   AgentSaveWorkspaceFilesInput,
@@ -176,6 +178,7 @@ import { listAutomations,
   createAutomation,
   updateAutomation,
   deleteAutomation,
+  pauseAutomationsForWorkspace,
 } from './lib/automation-manager'
 import { runAutomationNow, broadcastChanged as broadcastAutomationsChanged } from './lib/automation-scheduler'
 import { applyRecommendationFeedback, listRecommendations } from './lib/recommendation-manager'
@@ -208,6 +211,8 @@ import {
   createAgentSession,
   ensureProjectDraftAgentSession,
   getAgentSessionMeta,
+  resolveAgentSessionUiRootPath,
+  resolveAgentSessionStoragePath,
   getAgentSessionSDKMessages,
   appendSDKMessages,
   updateAgentSessionMeta,
@@ -239,7 +244,7 @@ import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { GoalSessionService } from './lib/goal-session-service'
 import { loadGoalStates, saveGoalStates, archiveGoalState, loadGoalHistory } from './lib/goal-store'
 import { resolveEffectivePermissionMode } from '@profer/shared'
-import type { AgentGoalContract, AgentGoalLimitsPatch, AgentGoalState } from '@profer/shared'
+import type { AgentGoalContract, AgentGoalLimitsPatch, AgentGoalState, McpConnectionSnapshot, McpProbeFailureReason, McpServerRestartResult, McpToolSummary } from '@profer/shared'
 import { getAgentPresetByReference, presetReferenceForId } from './lib/agent-preset-manager'
 import { AgentSessionDeletionCoordinator } from './lib/agent-session-deletion'
 import { permissionService } from './lib/agent-permission-service'
@@ -259,16 +264,24 @@ import { registerDockBadgeIpc } from './lib/dock-badge-ipc'
 import { registerEnvironmentIpc } from './lib/environment-ipc'
 import { registerNotificationSoundIpc } from './lib/notification-sound-ipc'
 import { registerScratchPadIpc } from './lib/scratch-pad-ipc'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getAgentWorkspacePath } from './lib/config-paths'
+import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getAgentWorkspacePath, resolveWorkspaceFilesUiRootPath } from './lib/config-paths'
+import { isProjectWorkspaceRootPath, listProjectWorkspaceRoots, resolveWorkspaceLocation } from './lib/workspace-locator'
+import { resolveProjectInternalEntryDir, scanWorkspaceRoot } from './lib/remote-workspace-file-search'
+import { assertProjectFileDeletionAllowed } from './lib/workspace-delete-guard'
 import {
   listAgentWorkspaces,
   createAgentWorkspace,
   updateAgentWorkspace,
   deleteAgentWorkspace,
+  createProjectWorkspace,
+  openProjectWorkspace,
+  removeProjectWorkspace,
+  ProjectWorkspaceError,
   reorderAgentWorkspaces,
   ensureDefaultWorkspace,
   getWorkspaceMcpConfig,
   saveWorkspaceMcpConfig,
+  saveMcpServerTestResult,
   getAllWorkspaceSkills,
   promoteWorkspaceSkillToGlobal,
   getOtherWorkspaceSkills,
@@ -312,6 +325,7 @@ import {
   readWorkspaceMemoryArchiveFile,
   writeWorkspaceMemoryArchiveFile,
   getWorkspaceMemoryArchivePath,
+  getLegacyMemoryArchivePath,
   getWorkspaceAutoMemoryDir,
 } from './lib/agent-workspace-manager'
 import { resolveMemoryWikilink, findMemoryBacklinks } from './lib/memory-wikilink-service'
@@ -471,8 +485,32 @@ function isResolvedPathInsideRoot(targetPath: string, root: string): boolean {
 }
 
 function assertInsideAgentWorkspaces(targetPath: string): void {
-  if (!isResolvedPathInsideRoot(targetPath, getAgentWorkspacesDir())) {
-    throw new Error('访问路径超出 Agent 工作区范围')
+  if (isResolvedPathInsideRoot(targetPath, getAgentWorkspacesDir())) return
+
+  // project 模式：`<rootPath>` 及其内部也是合法操作区（文件浏览器、上传、预览）。
+  // 删除 / 改名 / 移动的额外限制不在本函数里做，而由 `assertFileTreeMutationAllowed` 逐次检查，
+  // 否则会平白得到「能删项目根」的能力。
+  const resolvedTarget = realpathOrResolve(targetPath)
+  for (const project of listProjectWorkspaceRoots()) {
+    if (isUnderRoot(resolvedTarget, project.rootPath)) return
+  }
+
+  throw new Error('访问路径超出 Agent 工作区范围')
+}
+
+/**
+ * 破坏性文件操作（删除 / 移入回收站 / 改名 / 移动）的项目守卫。
+ *
+ * 允许普通项目文件；拒绝项目根、项目根的祖先、整个 `<rootPath>/.profer`。
+ * managed 工作区不受影响（不命中任何 project root 时直接返回）。
+ */
+function assertFileTreeMutationAllowed(targetPath: string): void {
+  const resolvedTarget = realpathOrResolve(targetPath)
+  for (const project of listProjectWorkspaceRoots()) {
+    // 目标在项目内，或目标是项目根的祖先 —— 两种情况都交给窄守卫判定
+    if (!isUnderRoot(resolvedTarget, project.rootPath) && !isUnderRoot(project.rootPath, resolvedTarget)) continue
+    assertProjectFileDeletionAllowed(targetPath, { ...project, storageMode: 'project' })
+    return
   }
 }
 
@@ -708,8 +746,14 @@ function getFileSearchRoots(sessionId: string): string[] {
 
   const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
   if (workspace?.slug) {
+    // project：`@` 引用与文件面板必须能搜到项目文件，项目根放最前面。
+    // managed：rootPath 与会话目录逐字相同，由 addRoot 去重，行为不变。
+    const location = resolveWorkspaceLocation(workspace.slug)
+    if (location.mode === 'project') addRoot(location.rootPath)
     addRoot(getAgentSessionWorkspacePath(workspace.slug, sessionId))
     // 不加入整个 workspace 根目录，避免把其他 session 的 cwd/文件纳入搜索范围。
+    // project 例外：同一项目的多个会话本就共享 rootPath（设计 §7.3），且会话数据不在项目内，
+    // 不把 rootPath 加进来等于让 `@` 引用彻底搜不到项目文件（P1-2）。
     addRoot(getWorkspaceFilesDir(workspace.slug))
     for (const directory of getWorkspaceAttachedDirectories(workspace.slug)) addRoot(directory)
   }
@@ -2642,6 +2686,23 @@ export function registerIpcHandlers(): void {
       if (deletingWorkspace.slug === 'default') {
         throw new Error('默认项目不能删除')
       }
+
+      // project：移除绑定 = 只删索引（设计 §6.3 / I2）。
+      // 必须在计算 affectedSessionIds / affectedAutomationIds 之前分流：
+      // 会话与自动化保留，磁盘（rootPath 与 <rootPath>/.profer）零操作。
+      // 项目是外部资产，也允许移除最后一个 project（不适用 managed 的「至少保留一个」规则）。
+      if (deletingWorkspace.storageMode === 'project') {
+        // 移除项目只删索引，但绑定它的定时任务不能再跑：工作区解析不到时调度侧会以
+        // 用户主目录作 cwd 执行（P1-3）。先停用并广播，再移除索引。
+        const pausedAutomationIds = pauseAutomationsForWorkspace(id)
+        if (pausedAutomationIds.length > 0) {
+          broadcastAutomationsChanged()
+        }
+        removeProjectWorkspace(id)
+        broadcastAgentWorkspacesChanged()
+        return
+      }
+
       if (listAgentWorkspaces().length <= 1) {
         throw new Error('至少需要保留一个项目')
       }
@@ -2690,6 +2751,86 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // ===== 项目工作区（project 模式） =====
+
+  // 项目工作区错误的 IPC 序列化约定。
+  //
+  // `ipcRenderer.invoke` 只把主进程错误的 message 传过进程边界（`code`/自定义字段会丢），
+  // 所以把 `ProjectWorkspaceError.code` 编码进 message 前缀，渲染层用
+  // `parseProjectWorkspaceError` 还原成稳定分类与友好文案。
+  //
+  // 格式：`[PROJECT:<code>] <原始 message>`；前缀字面量必须与
+  // apps/electron/src/renderer/hooks/useProjectActions.ts 的解析保持一致。
+  const PROJECT_ERROR_MESSAGE_TAG = '[PROJECT:'
+
+  /**
+   * 只在 IPC 边界包装 `ProjectWorkspaceError`：
+   * - 保留原有抛错契约（依旧 throw Error，P1-D 的既有文案清洗不受影响）；
+   * - 非 ProjectWorkspaceError 原样抛出，不吞不改。
+   */
+  async function withProjectWorkspaceErrorCode<T>(run: () => Promise<T> | T): Promise<T> {
+    try {
+      return await run()
+    } catch (error) {
+      if (error instanceof ProjectWorkspaceError) {
+        throw new Error(`${PROJECT_ERROR_MESSAGE_TAG}${error.code}] ${error.message}`)
+      }
+      throw error
+    }
+  }
+
+  // 选择项目文件夹：createDirectory 允许用户在对话框里新建空目录后直接绑定
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SELECT_PROJECT_FOLDER,
+    async (): Promise<string | null> => {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      const options = {
+        title: '选择项目文件夹',
+        buttonLabel: '绑定项目',
+        properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
+      }
+      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+      if (result.canceled || result.filePaths.length === 0) return null
+      return result.filePaths[0] ?? null
+    }
+  )
+
+  // 创建项目工作区：绑定已有文件夹并生成 `.profer` 骨架（只补缺失项）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CREATE_PROJECT_WORKSPACE,
+    async (_, input: ProjectWorkspaceTarget): Promise<ProjectWorkspaceOpenResult> => {
+      return withProjectWorkspaceErrorCode(() => {
+        // 版本号由主进程注入：manager 不依赖 electron，才能被单元测试直接驱动
+        const result = createProjectWorkspace({ ...input, proferVersion: app.getVersion() })
+        broadcastAgentWorkspacesChanged()
+        return result
+      })
+    }
+  )
+
+  // 打开已有项目工作区：补齐骨架、复用已有绑定
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.OPEN_PROJECT_WORKSPACE,
+    async (_, input: ProjectWorkspaceTarget): Promise<ProjectWorkspaceOpenResult> => {
+      return withProjectWorkspaceErrorCode(() => {
+        const result = openProjectWorkspace({ ...input, proferVersion: app.getVersion() })
+        broadcastAgentWorkspacesChanged()
+        return result
+      })
+    }
+  )
+
+  // 移除项目工作区：只删索引，不碰项目文件与 `.profer`（I2）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.REMOVE_PROJECT_WORKSPACE,
+    async (_, id: string): Promise<void> => {
+      return withProjectWorkspaceErrorCode(() => {
+        removeProjectWorkspace(id)
+        broadcastAgentWorkspacesChanged()
+      })
+    }
+  )
+
   // ===== 工作区能力（MCP + Skill） =====
 
   // 获取工作区能力摘要
@@ -2712,20 +2853,71 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SAVE_MCP_CONFIG,
     async (_, workspaceSlug: string, config: WorkspaceMcpConfig): Promise<void> => {
-      return saveWorkspaceMcpConfig(workspaceSlug, config)
+      saveWorkspaceMcpConfig(workspaceSlug, config)
+      // 禁用/删除即断开：把落盘后的 enabled 名单同步给 Pi 常驻连接。
+      // 不 await：保存不能被连接释放拖住；失败只警告，连接会在下次使用时重建。
+      const activeNames = Object.entries(config.servers ?? {})
+        .filter(([, entry]) => entry.enabled)
+        .map(([name]) => name)
+      void (async () => {
+        try {
+          const { reconcileMcpServers } = await import('./lib/adapters/pi-mcp-tools')
+          await reconcileMcpServers(activeNames)
+        } catch (error) {
+          console.warn('[IPC] 保存 MCP 配置后同步 Pi 连接失败:', error)
+        }
+      })()
     }
   )
 
-  // 测试 MCP 服务器连接
+  // 测试 MCP 服务器连接：真实握手 + 工具清单，结果落盘到该工作区配置
   ipcMain.handle(
     AGENT_IPC_CHANNELS.TEST_MCP_SERVER,
-    async (_, name: string, entry: import('@profer/shared').McpServerEntry): Promise<{ success: boolean; message: string }> => {
-      const { validateMcpServer } = await import('./lib/mcp-validator')
-      const result = await validateMcpServer(name, entry)
-      return {
-        success: result.valid,
-        message: result.valid ? '连接成功' : (result.reason || '连接失败'),
+    async (_, name: string, entry: import('@profer/shared').McpServerEntry, workspaceSlug?: string): Promise<{ success: boolean; message: string; reason?: McpProbeFailureReason; tools?: McpToolSummary[] }> => {
+      const { probeMcpServer, mcpConfigFingerprint } = await import('./lib/mcp-probe')
+      const probe = await probeMcpServer(name, entry)
+      const outcome = {
+        success: probe.success,
+        message: probe.message,
+        ...(probe.reason ? { reason: probe.reason } : {}),
+        ...(probe.tools && probe.tools.length > 0 ? { tools: probe.tools } : {}),
       }
+      const lastTestResult: NonNullable<import('@profer/shared').McpServerEntry['lastTestResult']> = {
+        ...outcome,
+        timestamp: Date.now(),
+        // 指纹与当前配置绑定：配置一改，旧结果就不该再当作「已连接」展示
+        fingerprint: mcpConfigFingerprint(entry),
+      }
+      if (!workspaceSlug) {
+        // 没有工作区就没有落盘位置：只把结果返回给 UI
+        return outcome
+      }
+      try {
+        // 测试结果属于本机状态：project 工作区写 mcp.local.json，不污染受版本控制的 mcp.json
+        saveMcpServerTestResult(workspaceSlug, name, lastTestResult)
+      } catch (error) {
+        // 落盘失败不影响测试结论：UI 至少能看到本次结果
+        console.warn(`[IPC] 保存 MCP 测试结果失败（${workspaceSlug}/${name}）:`, error)
+      }
+      return outcome
+    }
+  )
+
+  // 重启单个 MCP server 的常驻连接（Pi runtime；Claude runtime 每轮由 SDK 自行起进程）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RESTART_MCP_SERVER,
+    async (_, name: string): Promise<McpServerRestartResult> => {
+      const { restartMcpServer } = await import('./lib/adapters/pi-mcp-tools')
+      return restartMcpServer(name)
+    }
+  )
+
+  // 获取当前 MCP 连接快照（不含凭据，供设置页展示）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_MCP_CONNECTION_STATUS,
+    async (): Promise<McpConnectionSnapshot[]> => {
+      const { listMcpConnectionSnapshots } = await import('./lib/adapters/pi-mcp-tools')
+      return listMcpConnectionSnapshots()
     }
   )
 
@@ -2785,7 +2977,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/）
+  // 获取默认 Skills 的 slug 列表（来自 ~/.profer/default-skills/）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS,
     async () => {
@@ -3279,7 +3471,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RESOLVE_MEMORY_WIKILINK,
     async (_event, workspaceSlug: string, name: string): Promise<MemoryWikilinkTarget | null> => {
-      const archiveDir = getWorkspaceMemoryArchivePath(workspaceSlug)
+      const archiveDir = getLegacyMemoryArchivePath(workspaceSlug)
       const autoDir = getWorkspaceAutoMemoryDir(workspaceSlug)
       return resolveMemoryWikilink(archiveDir, autoDir, name)
     }
@@ -3288,7 +3480,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_MEMORY_BACKLINKS,
     async (_event, workspaceSlug: string, currentAbsolutePath: string, currentLinkName: string): Promise<MemoryBacklink[]> => {
-      const archiveDir = getWorkspaceMemoryArchivePath(workspaceSlug)
+      const archiveDir = getLegacyMemoryArchivePath(workspaceSlug)
       const autoDir = getWorkspaceAutoMemoryDir(workspaceSlug)
       return findMemoryBacklinks(archiveDir, autoDir, currentAbsolutePath, currentLinkName)
     }
@@ -3546,7 +3738,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_WORKSPACE_FILES_PATH,
     async (_, workspaceSlug: string): Promise<string> => {
-      return getWorkspaceFilesDir(workspaceSlug)
+      // project 下返回项目根（工作区就是项目文件夹）；managed 保持 workspace-files 子目录。
+      return resolveWorkspaceFilesUiRootPath(workspaceSlug)
     }
   )
 
@@ -3724,12 +3917,23 @@ export function registerIpcHandlers(): void {
   // ===== Agent 文件系统操作 =====
 
   // 获取 session 工作路径
+  // 注意这是 UI 语义（`@` 引用 / 侧栏文件面板 / 预览相对路径基准），不是会话存储目录：
+  // project 下返回项目根（会话数据在中央，用户不该看到），managed 下仍是会话目录。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SESSION_PATH,
     async (_, workspaceId: string, sessionId: string): Promise<string | null> => {
-      const ws = getAgentWorkspace(workspaceId)
-      if (!ws) return null
-      return getAgentSessionWorkspacePath(ws.slug, sessionId)
+      return resolveAgentSessionUiRootPath(workspaceId, sessionId) ?? null
+    }
+  )
+
+  // 获取 session 草稿区（storageDir，只读）
+  // 语义与上面的 UI 根相反：project 下是中央 runtimeDir 里的 `sessions/<sid>`，managed 下等于会话目录。
+  // 渲染层只用它判定「哪些文件改动是 Agent 草稿」；绝不能拿 UI 根做这个判定，
+  // 否则 project 下项目内改动会被当成草稿隐藏（文件改动 chip 空白）。
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_SESSION_STORAGE_PATH,
+    async (_, workspaceId: string, sessionId: string): Promise<string | null> => {
+      return resolveAgentSessionStoragePath(workspaceId, sessionId) ?? null
     }
   )
 
@@ -3793,9 +3997,11 @@ export function registerIpcHandlers(): void {
       const { rmSync } = await import('node:fs')
       const { resolve } = await import('node:path')
 
-      // 安全校验：路径必须在 agent-workspaces 目录下
+      // 安全校验：路径必须在 agent-workspaces 目录（或 project 根）下
       const safePath = resolve(filePath)
       assertInsideAgentWorkspaces(safePath)
+      // project：禁止删项目根 / 根的祖先 / 整个 .profer
+      assertFileTreeMutationAllowed(safePath)
 
       try {
         // maxRetries/retryDelay 处理 Windows 下目录被占用/未清空的瞬态错误（EBUSY/ENOTEMPTY 等）
@@ -3813,9 +4019,11 @@ export function registerIpcHandlers(): void {
     async (_, filePath: string): Promise<void> => {
       const { resolve } = await import('node:path')
 
-      // 安全校验：路径必须在 agent-workspaces 目录下
+      // 安全校验：路径必须在 agent-workspaces 目录（或 project 根）下
       const safePath = resolve(filePath)
       assertInsideAgentWorkspaces(safePath)
+      // project：禁止把项目根 / 根的祖先 / 整个 .profer 移进回收站
+      assertFileTreeMutationAllowed(safePath)
 
       try {
         await shell.trashItem(safePath)
@@ -4244,6 +4452,8 @@ export function registerIpcHandlers(): void {
 
       const safePath = resolve(filePath)
       assertInsideAgentWorkspaces(safePath)
+      // project：禁止把项目根 / 根的祖先 / 整个 .profer 改名
+      assertFileTreeMutationAllowed(safePath)
 
       const newPath = join(dirname(safePath), newName)
       try {
@@ -4266,6 +4476,8 @@ export function registerIpcHandlers(): void {
       const safeTarget = resolve(targetDir)
       assertInsideAgentWorkspaces(safePath)
       assertInsideAgentWorkspaces(safeTarget)
+      // project：禁止把项目根 / 根的祖先 / 整个 .profer 当普通条目移走
+      assertFileTreeMutationAllowed(safePath)
 
       const newPath = join(safeTarget, basename(safePath))
       renameSync(safePath, newPath)
@@ -4408,6 +4620,8 @@ export function registerIpcHandlers(): void {
       if (!isPathAllowed(safePath, options)) {
         throw new Error('访问路径不在允许范围内')
       }
+      // project：附加目录也可能是项目根，删除/改名/移动同样受窄守卫约束
+      assertFileTreeMutationAllowed(safePath)
       const newPath = join(dirname(safePath), newName)
       renameSync(safePath, newPath)
       console.log(`[附加目录] 已重命名: ${safePath} → ${newPath}`)
@@ -4427,6 +4641,8 @@ export function registerIpcHandlers(): void {
       if (!isPathAllowed(safePath, options) || !isPathAllowed(safeTarget, options)) {
         throw new Error('访问路径不在允许范围内')
       }
+      // project：附加目录也可能是项目根，删除/改名/移动同样受窄守卫约束
+      assertFileTreeMutationAllowed(safePath)
       const newPath = join(safeTarget, basename(safePath))
       renameSync(safePath, newPath)
       console.log(`[附加目录] 已移动: ${safePath} → ${newPath}`)
@@ -4445,6 +4661,8 @@ export function registerIpcHandlers(): void {
       if (!isPathAllowed(safePath, options)) {
         throw new Error('访问路径不在允许范围内')
       }
+      // project：即使项目根被当成附加目录，也不允许整体删除
+      assertFileTreeMutationAllowed(safePath)
       try {
         rmSync(safePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
         console.log(`[附加目录] 已删除: ${safePath}`)
@@ -4464,6 +4682,8 @@ export function registerIpcHandlers(): void {
       if (!isPathAllowed(safePath, options)) {
         throw new Error('访问路径不在允许范围内')
       }
+      // project：即使项目根被当成附加目录，也不允许整体移进回收站
+      assertFileTreeMutationAllowed(safePath)
       try {
         await shell.trashItem(safePath)
         console.log(`[附加目录] 已移入回收站: ${safePath}`)
@@ -4500,10 +4720,16 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SEARCH_WORKSPACE_FILES,
     async (_, rootPath: string, query: string, limit = 20, additionalPaths?: string[], sessionPaths?: string[]): Promise<FileSearchResult> => {
-      const { readdirSync, statSync } = await import('node:fs')
-      const { resolve, relative, basename } = await import('node:path')
+      const { statSync } = await import('node:fs')
+      const { resolve, basename } = await import('node:path')
 
       const safeRoot = resolve(rootPath)
+      // project 工作区（rootPath 就是项目根）要剪掉 `.profer` 下的 Profer 内部条目，
+      // 与远端 `searchRemoteWorkspaceFiles` 共用同一谓词；managed / 无合法 rootPath 的
+      // 降级条目返回 undefined，扫描结果逐字不变。
+      const projectInternalDir = isProjectWorkspaceRootPath(safeRoot)
+        ? resolveProjectInternalEntryDir(safeRoot)
+        : undefined
       const ignoreDirs = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.venv', 'build', '.cache'])
       const ignoreFiles = new Set(['.DS_Store', '.Spotlight-V100', '.Trashes', 'Thumbs.db', 'desktop.ini'])
       const BROWSE_LIMIT_PER_GROUP = 2000
@@ -4514,6 +4740,7 @@ export function registerIpcHandlers(): void {
       const rootEntries: Entry[] = []
       const workspaceEntries: Entry[] = []
 
+      /** 目录递归扫描走共享实现（与远端 `@` 搜索同一份 ignore/深度/`.profer` 剪枝）。 */
       function scan(
         dir: string,
         depth: number,
@@ -4523,28 +4750,12 @@ export function registerIpcHandlers(): void {
         source: 'session' | 'workspace',
       ): void {
         if (depth > 10) return
-        try {
-          const items = readdirSync(dir, { withFileTypes: true })
-          for (const item of items) {
-            if (ignoreFiles.has(item.name)) continue
-            if (item.isDirectory() && ignoreDirs.has(item.name)) continue
-
-            const fullPath = resolve(dir, item.name)
-            const entryPath = useAbsPath ? fullPath : relative(baseRoot, fullPath)
-            target.push({
-              name: item.name,
-              path: entryPath,
-              type: item.isDirectory() ? 'dir' : 'file',
-              source,
-            })
-
-            if (item.isDirectory()) {
-              scan(fullPath, depth + 1, baseRoot, target, useAbsPath, source)
-            }
-          }
-        } catch {
-          // 忽略无权限的目录
-        }
+        target.push(...scanWorkspaceRoot(dir, {
+          baseRoot,
+          useAbsolutePath: useAbsPath,
+          source,
+          projectInternalDir: dir === safeRoot ? projectInternalDir : undefined,
+        }))
       }
 
       function addAttachedPath(pathValue: string, target: Entry[], source: 'session' | 'workspace'): void {

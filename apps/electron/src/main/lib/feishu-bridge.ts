@@ -420,7 +420,7 @@ class FeishuBridge {
     this.groupInfoCache.clear()
     this.userNameCache.clear()
     // 注意：lastInteractedUserOpenId 不在 stop 中清空——它代表"用户曾经与该 Bot 互动过"的事实，
-    // 重启后仍需用来给桌面 Session 镜像建群。完整重置请删除 ~/.proma/feishu-metadata-{botId}.json。
+    // 重启后仍需用来给桌面 Session 镜像建群。完整重置请删除 ~/.profer/feishu-metadata-{botId}.json。
     this.botOpenId = null
 
     this.updateStatus({ status: 'disconnected', activeBindings: 0 })

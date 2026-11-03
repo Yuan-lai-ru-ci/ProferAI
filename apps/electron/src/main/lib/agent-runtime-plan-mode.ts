@@ -58,6 +58,12 @@ export interface AgentRuntimePlanModeOptions {
   initialMode: ProferPermissionMode
   /** 会话工作目录；计划目录内的 Markdown 写入白名单依赖它，缺失时按拒绝处理。 */
   agentCwd?: string
+  /**
+   * 计划目录真相源（`resolveAgentSessionWriteLayout().plansDir`）。
+   * project 下它在会话存储目录内、不在 cwd 内；managed 下等价于 `<agentCwd>/.context/plan`。
+   * 缺省时回落旧语义（按 agentCwd 推导）。
+   */
+  planDir?: string
   /** 宿主计划只读工具策略（由共享只读规则提供时才是完整等价实现）。 */
   planToolPolicy?: AgentRuntimePlanToolPolicy
   /** 审批通过后通知宿主同步 provider 侧权限模式。 */
@@ -69,6 +75,8 @@ export interface AgentRuntimePlanModeController {
   readonly sessionId: string
   getMode(): ProferPermissionMode
   getAgentCwd(): string | undefined
+  /** 计划目录（storageDir 内的 `.context/plan`）；缺省时调用方按 cwd 推导。 */
+  getPlanDir(): string | undefined
   isPlanActive(): boolean
   /** 是否已注入宿主计划只读策略；未注入时门禁只覆盖共享 helper 可判定的部分。 */
   hasHostPlanToolPolicy(): boolean
@@ -117,6 +125,7 @@ export function createAgentRuntimePlanModeController(
     sessionId: options.sessionId,
     getMode: () => mode,
     getAgentCwd: () => options.agentCwd,
+    getPlanDir: () => options.planDir,
     isPlanActive: () => planActive,
     hasHostPlanToolPolicy: () => typeof options.planToolPolicy === 'function',
     getPlanToolPolicy: () => options.planToolPolicy,
@@ -177,7 +186,7 @@ export function createAgentRuntimePlanModeController(
  * （见交付物 integration-requests.md 的 PLAN-TOOL-POLICY 项）。因此本函数对
  * 无法分类的工具返回 `undefined`，由门禁交回宿主既有权限判定。
  */
-export function createSharedPlanModeToolPolicy(agentCwd?: string): AgentRuntimePlanToolPolicy {
+export function createSharedPlanModeToolPolicy(agentCwd?: string, planDir?: string): AgentRuntimePlanToolPolicy {
   return ({ toolName, toolInput }) => {
     if (isBrowserToolName(toolName)) {
       const decision = resolvePlanModeBrowserPermission(toolName)
@@ -194,7 +203,7 @@ export function createSharedPlanModeToolPolicy(agentCwd?: string): AgentRuntimeP
         : typeof toolInput.path === 'string'
           ? toolInput.path
           : ''
-      if (agentCwd && filePath && isPlanModeMarkdownPath(agentCwd, filePath)) return { behavior: 'allow' }
+      if (agentCwd && filePath && isPlanModeMarkdownPath(agentCwd, filePath, planDir)) return { behavior: 'allow' }
       return { behavior: 'deny', message: '计划模式下仅允许写入当前会话 .context/plan/ 目录内的 Markdown 计划文件' }
     }
     return undefined
@@ -224,7 +233,7 @@ export function createPlanModeGatedCanUseTool(
   options: AgentRuntimePlanModeGateOptions,
 ): RuntimeCanUseTool {
   const { controller, inner, requestExitPlanApproval } = options
-  const sharedPolicy = createSharedPlanModeToolPolicy(controller.getAgentCwd())
+  const sharedPolicy = createSharedPlanModeToolPolicy(controller.getAgentCwd(), controller.getPlanDir())
   const hostPolicy = options.planToolPolicy ?? controller.getPlanToolPolicy()
   const planToolPolicy: AgentRuntimePlanToolPolicy = input =>
     hostPolicy?.(input) ?? sharedPolicy(input)

@@ -8,8 +8,10 @@ import { parseQuotedSelectionRefs, stripQuoteMarkers } from '@/lib/quoted-select
 
 interface AgentMessageQueueProps {
   items: AgentQueuedMessage[]
-  /** 空闲且前置满足时才允许「立即发送」，运行中置灰 */
+  /** 硬前置满足即可点（运行中也允许：点下去走软打断插入当前轮） */
   canSendNow: boolean
+  /** 「立即发送」按钮的 tooltip：运行中如实说明会打断本轮 */
+  sendNowLabel?: string
   /** 当前队列是否会在本轮结束后自动发送 */
   autoSend: boolean
   onToggleAutoSend: () => void
@@ -28,6 +30,7 @@ interface AgentMessageQueueProps {
 export function AgentMessageQueue({
   items,
   canSendNow,
+  sendNowLabel = '立即发送',
   autoSend,
   onToggleAutoSend,
   onSendNow,
@@ -128,7 +131,7 @@ export function AgentMessageQueue({
                 <div className="line-clamp-2">{displayText(item.text)}</div>
               </div>
               <div className="flex shrink-0 items-center gap-0.5">
-                <QueueIconButton label="立即发送" disabled={!canSendNow} onClick={() => onSendNow(item.id)}>
+                <QueueIconButton label={sendNowLabel} disabled={!canSendNow} onClick={() => onSendNow(item.id)}>
                   <CornerDownLeft className="size-3.5" />
                 </QueueIconButton>
                 <QueueIconButton label="撤回到输入框" onClick={() => onRecall(item.id)}>

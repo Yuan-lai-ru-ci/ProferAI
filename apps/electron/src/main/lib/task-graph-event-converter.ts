@@ -3,6 +3,7 @@ import {
   isStructuredTaskGraphTool,
   parseAbandon,
   parseDependsOn,
+  taskGraphToolKind,
 } from '@profer/project-core'
 import { loadGraph } from './project-graph-service'
 
@@ -150,7 +151,7 @@ export function isTaskCompletionBlocked(result: unknown): boolean {
 
 export function structuredTaskToolCurrentTaskId(invocation: TaskToolInvocation): string | undefined {
   if (!isStructuredTaskGraphTool(invocation.toolName)) return undefined
-  if (invocation.toolName.endsWith('proma_task_create')) return parseCreatedTask(invocation.result)?.id
+  if (taskGraphToolKind(invocation.toolName) === 'create') return parseCreatedTask(invocation.result)?.id
   return taskIdFromInput(invocation.input)
 }
 
@@ -192,7 +193,7 @@ export function structuredTaskAutoLinkEvent(
   timestamp: number,
   context: TaskGraphAutoLinkContext,
 ): GraphEvent | undefined {
-  if (!invocation.toolName.endsWith('proma_task_create')) return undefined
+  if (taskGraphToolKind(invocation.toolName) !== 'create') return undefined
   const taskId = structuredTaskToolCurrentTaskId(invocation)
   if (!taskId) return undefined
   const description = stringValue(invocation.input, 'description') ?? ''

@@ -174,7 +174,7 @@ export function registerFeishuIpc(): void {
         const lark = await import('@larksuiteoapi/node-sdk')
         const QRCode = (await import('qrcode')).default
         const result = await lark.registerApp({
-          source: 'proma',
+          source: 'profer',
           signal: abort.signal,
           onQRCodeReady: async (info) => {
             if (event.sender.isDestroyed()) return

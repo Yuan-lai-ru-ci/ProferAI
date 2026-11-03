@@ -210,7 +210,7 @@ describe('plan 只读工具面', () => {
 
   test('Given plan 模式 When 调用 MCP 工具 Then 一律拒绝', async () => {
     const fixture = createGate({ mode: 'plan' })
-    await expect(fixture.gate('mcp__task-graph__proma_task_create', {}, { signal })).resolves.toMatchObject({ behavior: 'deny' })
+    await expect(fixture.gate('mcp__task-graph__profer_task_create', {}, { signal })).resolves.toMatchObject({ behavior: 'deny' })
     expect(fixture.innerCalls).toEqual([])
   })
 

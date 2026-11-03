@@ -93,6 +93,14 @@ import { hasEnvironmentIssuesAtom } from '@/atoms/environment'
 import { promptConfigAtom, selectedPromptIdAtom, conversationPromptIdAtom } from '@/atoms/system-prompt-atoms'
 import { calendarEventsAtom, planningTabAtom, todosAtom, type PlanningTab } from '@/atoms/planning-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
+import {
+  bindProjectFolderFromPicker,
+  createProjectPickerDeps,
+  openProjectFolderFromPicker,
+  relocateProjectFromPicker,
+  toProjectErrorMessage,
+  type ProjectPickOutcome,
+} from '@/hooks/useProjectActions'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 import { detectIsMac } from '@profer/ui'
@@ -126,6 +134,18 @@ import {
 import { enterableViewSelector, focusEnterableViewItem, planningSectionOf } from './navigation-items'
 import type { AgentProjectGroup } from './session-items'
 
+
+/** 项目根路径可用性映射是否等价：内容未变时保留旧引用，避免每次聚焦重新渲染整棵项目树 */
+function isSameProjectPathStatus(
+  prev: Map<string, 'ok' | 'missing'>,
+  next: Map<string, 'ok' | 'missing'>,
+): boolean {
+  if (prev.size !== next.size) return false
+  for (const [id, status] of next) {
+    if (prev.get(id) !== status) return false
+  }
+  return true
+}
 
 export function useLeftSidebar() {
   const [activeView, setActiveView] = useAtom(activeViewAtom)
@@ -281,10 +301,14 @@ export function useLeftSidebar() {
   /** 项目拖拽排序状态 */
   const [dragProjectId, setDragProjectId] = React.useState<string | null>(null)
   const [projectDropIndicator, setProjectDropIndicator] = React.useState<{ id: string; position: 'before' | 'after' } | null>(null)
-  /** 新建项目输入状态 */
-  const [creatingProject, setCreatingProject] = React.useState(false)
+  /** 新建项目弹窗：先选入口（绑定文件夹 / 打开已有 / Profer 托管目录），托管目录再填名称 */
+  const [createProjectDialogOpen, setCreateProjectDialogOpen] = React.useState(false)
+  const [createProjectMode, setCreateProjectMode] = React.useState<'choose' | 'managed'>('choose')
   const [newProjectName, setNewProjectName] = React.useState('')
-  const newProjectInputRef = React.useRef<HTMLInputElement>(null)
+  /** 目录选择/绑定的在途标记：防止连点重复绑定 */
+  const [projectPickerBusy, setProjectPickerBusy] = React.useState(false)
+  /** project 工作区根路径可用性；missing 时在项目行显示「项目路径不可用」 */
+  const [projectPathStatus, setProjectPathStatus] = React.useState<Map<string, 'ok' | 'missing'>>(new Map())
   const projectSelectionRequestRef = React.useRef(0)
   const [relativeTimeNow, setRelativeTimeNow] = React.useState(() => Date.now())
   const [userProfile, setUserProfile] = useAtom(userProfileAtom)
@@ -333,6 +357,56 @@ export function useLeftSidebar() {
     })
   }, [setWorkspaces])
   const setMode = useSetAtom(appModeAtom)
+
+  /** project 工作区的根路径目标：只探测 project 模式，managed 不需要 */
+  const projectRootTargets = React.useMemo(
+    () => workspaces
+      .filter((workspace) => (
+        workspace.storageMode === 'project' &&
+        typeof workspace.rootPath === 'string' &&
+        workspace.rootPath.length > 0
+      ))
+      .map((workspace) => ({ id: workspace.id, rootPath: workspace.rootPath as string })),
+    [workspaces],
+  )
+  const projectRootSignature = React.useMemo(
+    () => projectRootTargets.map((target) => `${target.id}\u0000${target.rootPath}`).join('\u0001'),
+    [projectRootTargets],
+  )
+  const projectRootTargetsRef = React.useRef(projectRootTargets)
+  projectRootTargetsRef.current = projectRootTargets
+
+  // 路径可用性只在工作区列表变化与窗口聚焦时探测：只读 stat，不自动重建目录（I4）
+  React.useEffect(() => {
+    const targets = projectRootTargetsRef.current
+    if (targets.length === 0) {
+      setProjectPathStatus((prev) => (prev.size === 0 ? prev : new Map()))
+      return
+    }
+    let cancelled = false
+    const probe = (): void => {
+      window.electronAPI
+        .checkPathsType(targets.map((target) => target.rootPath))
+        .then(({ directories }) => {
+          if (cancelled) return
+          const available = new Set(directories)
+          const next = new Map<string, 'ok' | 'missing'>()
+          for (const target of targets) {
+            next.set(target.id, available.has(target.rootPath) ? 'ok' : 'missing')
+          }
+          setProjectPathStatus((prev) => (isSameProjectPathStatus(prev, next) ? prev : next))
+        })
+        .catch(() => {
+          // 探测失败保持上一次结论，不用“不可用”误报
+        })
+    }
+    probe()
+    window.addEventListener('focus', probe)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', probe)
+    }
+  }, [projectRootSignature])
 
   // 当前项目能力（MCP + Skill 计数）
   const [capabilities, setCapabilities] = React.useState<WorkspaceCapabilities | null>(null)
@@ -1014,8 +1088,18 @@ export function useLeftSidebar() {
     setCollapsedWorkspaceIds((previous) => toggleSetEntry(previous, workspaceId))
   }, [setCollapsedWorkspaceIds])
 
+  /**
+   * 是否允许移除项目。
+   *
+   * project 是外部资产：没有「至少保留一个」限制，只剩一个也能移除（只删索引）。
+   * managed 仍沿用原有规则：默认项目不可删，且必须保留至少一个。
+   */
   const canDeleteWorkspace = React.useCallback(
-    (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
+    (workspace: AgentWorkspace): boolean => (
+      workspace.storageMode === 'project'
+        ? true
+        : workspace.slug !== 'default' && workspaces.length > 1
+    ),
     [workspaces.length],
   )
 
@@ -1036,6 +1120,8 @@ export function useLeftSidebar() {
       return
     }
 
+    const isProjectWorkspace = workspace.storageMode === 'project'
+
     const deletedSessionIds = new Set(
       agentSessions
         .filter((session) => session.workspaceId === workspaceId)
@@ -1045,7 +1131,12 @@ export function useLeftSidebar() {
     try {
       setDeletingWorkspaceId(workspaceId)
 
-      await window.electronAPI.deleteAgentWorkspace(workspaceId)
+      // project 走「移除」：主进程只删索引，项目文件与 .profer 保留（I2）
+      if (isProjectWorkspace) {
+        await window.electronAPI.removeProjectWorkspace(workspaceId)
+      } else {
+        await window.electronAPI.deleteAgentWorkspace(workspaceId)
+      }
 
       for (const sessionId of deletedSessionIds) {
         cleanupMapAtoms(sessionId)
@@ -1117,13 +1208,18 @@ export function useLeftSidebar() {
         }
       }
 
-      toast.success('项目已删除', {
-        description: `已删除「${workspace.name}」及其绑定资源`,
-      })
+      if (isProjectWorkspace) {
+        toast.success('已从 Profer 移除', {
+          description: `「${workspace.name}」的项目文件与 .profer 目录都保留在原位`,
+        })
+      } else {
+        toast.success('项目已删除', {
+          description: `已删除「${workspace.name}」及其绑定资源`,
+        })
+      }
     } catch (error) {
       console.error('[侧边栏] 删除项目失败:', error)
-      const msg = error instanceof Error ? error.message : '删除项目失败'
-      toast.error(msg)
+      toast.error(toProjectErrorMessage(error, isProjectWorkspace ? '移除项目失败' : '删除项目失败'))
     } finally {
       setDeletingWorkspaceId(null)
       setPendingDeleteWorkspaceId(null)
@@ -1259,35 +1355,119 @@ export function useLeftSidebar() {
     setProjectDropIndicator(null)
   }, [])
 
-  /** 开始创建新项目 */
+  /** 把新建/绑定/重新定位得到的工作区设为当前项目 */
+  const applyOpenedProject = React.useCallback((workspace: AgentWorkspace): void => {
+    setWorkspaces((prev) => (
+      prev.some((item) => item.id === workspace.id)
+        ? prev.map((item) => (item.id === workspace.id ? workspace : item))
+        : [workspace, ...prev]
+    ))
+    setCurrentWorkspaceId(workspace.id)
+    setActiveView('conversations')
+    window.electronAPI.updateSettings({ agentWorkspaceId: workspace.id }).catch(console.error)
+  }, [setActiveView, setCurrentWorkspaceId, setWorkspaces])
+
+  /** 打开新建项目弹窗；每次打开都从入口选择重新开始 */
   const handleStartCreateProject = React.useCallback((): void => {
-    setCreatingProject(true)
+    setCreateProjectMode('choose')
     setNewProjectName('')
-    requestAnimationFrame(() => {
-      newProjectInputRef.current?.focus()
-    })
+    setCreateProjectDialogOpen(true)
   }, [])
 
-  /** 创建新项目，并设为当前项目 */
+  const handleCreateProjectDialogOpenChange = React.useCallback((open: boolean): void => {
+    setCreateProjectDialogOpen(open)
+    if (!open) {
+      setCreateProjectMode('choose')
+      setNewProjectName('')
+    }
+  }, [])
+
+  /**
+   * 统一的目录选择流程：取消直接返回（不动状态），失败按 IPC message toast。
+   * 成功时关闭弹窗、切到新项目，并按是否原本就有 `.profer` 区分提示。
+   */
+  const runProjectPick = React.useCallback(async (
+    pick: () => Promise<ProjectPickOutcome>,
+  ): Promise<void> => {
+    if (projectPickerBusy) return
+    setProjectPickerBusy(true)
+    try {
+      const outcome = await pick()
+      if (outcome.kind === 'cancelled') return
+      if (outcome.kind === 'failed') {
+        toast.error(outcome.message)
+        return
+      }
+
+      const { result, recognized } = outcome
+      applyOpenedProject(result.workspace)
+      setCreateProjectDialogOpen(false)
+      setCreateProjectMode('choose')
+      setNewProjectName('')
+      setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, result.workspace.id))
+
+      if (recognized) {
+        // 目录里原本就有 .profer：无论新绑定还是复用，都按「识别为 Profer 项目」提示
+        toast.success('已识别 Profer 项目', {
+          description: result.created
+            ? `已加入「${result.workspace.name}」，沿用既有的 .profer 配置`
+            : `已切换到「${result.workspace.name}」`,
+        })
+      } else if (result.created) {
+        toast.success('项目已绑定', {
+          description: `已为「${result.workspace.name}」生成 .profer 配置`,
+        })
+      } else {
+        toast.success('项目已在列表中', {
+          description: `已切换到「${result.workspace.name}」`,
+        })
+      }
+
+      for (const warning of result.warnings) toast.warning(warning)
+      if (outcome.cleanupError) toast.warning(outcome.cleanupError)
+    } finally {
+      setProjectPickerBusy(false)
+    }
+  }, [applyOpenedProject, projectPickerBusy])
+
+  /** 绑定本地文件夹为项目（新建入口 · 绑定项目文件夹）；名称默认取目录名 */
+  const handleBindProjectFolder = React.useCallback(async (): Promise<void> => {
+    const deps = createProjectPickerDeps()
+    await runProjectPick(() => bindProjectFolderFromPicker(deps))
+  }, [runProjectPick])
+
+  /** 打开已有项目文件夹（新建入口 · 打开已有项目） */
+  const handleOpenProjectFolder = React.useCallback(async (): Promise<void> => {
+    const deps = createProjectPickerDeps()
+    await runProjectPick(() => openProjectFolderFromPicker(deps))
+  }, [runProjectPick])
+
+  /** 重新定位路径失效的项目：选新目录后把旧索引绑定替换掉 */
+  const handleRelocateProject = React.useCallback(async (workspaceId: string): Promise<void> => {
+    const workspace = workspaces.find((item) => item.id === workspaceId)
+    if (!workspace) return
+    const deps = createProjectPickerDeps()
+    await runProjectPick(() => relocateProjectFromPicker(deps, { id: workspace.id, name: workspace.name }))
+  }, [runProjectPick, workspaces])
+
+  /** 在 Profer 数据目录下新建托管项目（旧行为），并设为当前项目 */
   const handleCreateProject = React.useCallback(async (): Promise<void> => {
     const trimmed = newProjectName.trim()
-    if (!trimmed) {
-      setCreatingProject(false)
-      return
-    }
+    if (!trimmed || projectPickerBusy) return
 
+    setProjectPickerBusy(true)
     try {
       const workspace = await window.electronAPI.createAgentWorkspace(trimmed)
-      setWorkspaces((prev) => [workspace, ...prev])
-      setCurrentWorkspaceId(workspace.id)
-      window.electronAPI.updateSettings({ agentWorkspaceId: workspace.id }).catch(console.error)
-      setCreatingProject(false)
+      applyOpenedProject(workspace)
+      setCreateProjectDialogOpen(false)
+      setCreateProjectMode('choose')
       setNewProjectName('')
     } catch (error) {
-      const msg = error instanceof Error ? error.message : '创建项目失败'
-      toast.error(msg)
+      toast.error(toProjectErrorMessage(error, '创建项目失败'))
+    } finally {
+      setProjectPickerBusy(false)
     }
-  }, [newProjectName, setCurrentWorkspaceId, setWorkspaces])
+  }, [applyOpenedProject, newProjectName, projectPickerBusy])
 
   const handleCreateProjectKeyDown = React.useCallback((e: React.KeyboardEvent): void => {
     if (e.key === 'Enter') {
@@ -1296,7 +1476,7 @@ export function useLeftSidebar() {
       void handleCreateProject()
     } else if (e.key === 'Escape') {
       e.preventDefault()
-      setCreatingProject(false)
+      setCreateProjectMode('choose')
       setNewProjectName('')
     }
   }, [handleCreateProject])
@@ -1809,12 +1989,20 @@ export function useLeftSidebar() {
     // 账号能力（free 用户限制）
     accountCaps,
 
-    // 新建项目输入
-    creatingProject,
-    setCreatingProject,
+    // 新建项目弹窗（入口选择 / 托管目录名称输入）
+    createProjectDialogOpen,
+    handleCreateProjectDialogOpenChange,
+    createProjectMode,
+    setCreateProjectMode,
     newProjectName,
     setNewProjectName,
-    newProjectInputRef,
+    handleBindProjectFolder,
+    handleOpenProjectFolder,
+    projectPickerBusy,
+
+    // project 路径可用性（missing 时项目行显示「项目路径不可用」）
+    projectPathStatus,
+    handleRelocateProject,
 
     // 删除 dialogs 状态
     pendingDeleteId,

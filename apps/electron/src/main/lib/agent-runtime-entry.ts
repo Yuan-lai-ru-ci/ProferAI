@@ -40,7 +40,7 @@ import type {
   SessionPort,
 } from '@profer/agent-runtime'
 import { resolveAgentInputOperationSource } from '@profer/agent-runtime'
-import { createElectronAgentRuntimeQuery, clearAgentRuntimeRunFacts, setAgentRuntimeRunFacts } from './agent-runtime-host'
+import { createElectronAgentRuntimeQuery, clearAgentRuntimeRunFacts, resolveRuntimeSessionWriteLayout, setAgentRuntimeRunFacts } from './agent-runtime-host'
 import { resolveCredentialPreflightTypedError } from './agent-preflight-typed-errors'
 import {
   agentRuntimePolicyRuns,
@@ -100,6 +100,13 @@ export interface RuntimeEntryTitleNaming {
 export interface RuntimeEntryRunContext {
   runtime: AgentRuntime
   cwd?: string
+  /**
+   * 会话私有存储根（`resolveAgentSessionWriteLayout().storageDir`）。
+   *
+   * 优先采用：宿主已知时就给出，入口不再重算；缺省时入口按 `toolAssemblyContext.workspaceSlug + sessionId`
+   * 从会话写入布局解析（与 `storageDir` 同一真相源），两者都没有时回落旧行为（cwd 语义）。
+   */
+  storageDir?: string
   /** 工具装配 context 基座（宿主既有字段）；策略字段由本模块合并。 */
   toolAssemblyContext: Record<string, unknown>
   /** 本轮策略上下文；`undefined` = 宿主无法解析预设，保持「不注入权限模式」的缺失语义。 */
@@ -271,6 +278,24 @@ export async function runRuntimeHeadlessEntry(
     ...(input.onRuntimeSessionId ? { onRuntimeSessionId: input.onRuntimeSessionId } : {}),
   })
 
+  // 会话写入布局（唯一真相源）：
+  // - 优先宿主已给出的 `storageDir`（run context / 装配 context，二者同源）；
+  // - 否则按 `workspaceSlug + sessionId` 从会话写入布局解析；
+  // - 无工作区或解析失败时返回 undefined，计划策略回落旧语义（cwd/.context/plan）。
+  // 为什么不自己拼 `join(cwd, '.context', 'plan')`：project 下 cwd 是用户项目根，
+  // 这样拼会把计划文件判可写、写进仓库，正是 A3-3c 遗留的缺陷。
+  const assemblyStorageDir = typeof context.toolAssemblyContext.storageDir === 'string'
+    ? context.toolAssemblyContext.storageDir
+    : undefined
+  const assemblyWorkspaceSlug = typeof context.toolAssemblyContext.workspaceSlug === 'string'
+    ? context.toolAssemblyContext.workspaceSlug
+    : undefined
+  const sessionWriteLayout = resolveRuntimeSessionWriteLayout({
+    sessionId: input.sessionId,
+    ...(context.storageDir ?? assemblyStorageDir ? { storageDir: context.storageDir ?? assemblyStorageDir } : {}),
+    ...(assemblyWorkspaceSlug ? { workspaceSlug: assemblyWorkspaceSlug } : {}),
+  })
+
   const built = createRuntimeEntryQuery(input, {
     runtime: context.runtime,
     ...(context.cwd ? { cwd: context.cwd } : {}),
@@ -281,7 +306,8 @@ export async function runRuntimeHeadlessEntry(
       emit: event => deps.emitPlanModeEvent(input.sessionId, event),
       ...(context.cwd ? { agentCwd: context.cwd } : {}),
       // GAP-5：计划模式只读工具面的完整规则（与旧编排层共享同一实现）。
-      planToolPolicy: createPlanModeToolPolicy(context.cwd),
+      // 计划目录真相源：project 下计划文件落 storageDir（不在项目根），managed 下等价于 cwd/.context/plan。
+      planToolPolicy: createPlanModeToolPolicy(context.cwd, sessionWriteLayout?.plansDir),
       ...(deps.setProviderPermissionMode
         ? { onPermissionModeChange: (mode: ProferPermissionMode) => deps.setProviderPermissionMode?.(input.sessionId, mode) }
         : {}),

@@ -27,7 +27,7 @@ export function buildOAuthNoProxy(noProxy = readNoProxyEnvironment()): string {
 }
 
 /**
- * 用 Proma 的全局代理配置执行一段 Pi OAuth 网络操作。
+ * 用 Profer 的全局代理配置执行一段 Pi OAuth 网络操作。
  *
  * Pi OAuth 内部使用全局 fetch；受管 scope 通过 AsyncLocalStorage 为该异步链路绑定
  * dispatcher，并在操作结束后关闭连接池。外部系统浏览器不属于此网络平面。

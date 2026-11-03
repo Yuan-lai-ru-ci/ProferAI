@@ -34,7 +34,7 @@ export const DISTRUSTED_SPKI_SHA256: ReadonlySet<string> = new Set([
 ])
 
 export const DEFAULT_SECURITY_FEED_URL = process.env.PROFER_SECURITY_FEED_URL
-  || 'https://profer.cn/proma/v1/public/security/distrusted-spki'
+  || 'https://profer.cn/profer/v1/public/security/distrusted-spki'
 
 const CACHE_FILE_NAME = 'browser-distrusted-spki.json'
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000

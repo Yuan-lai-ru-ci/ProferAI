@@ -95,7 +95,7 @@ describe('nativeTaskToolToGraphEvents', () => {
 
   test('reads structured MCP task and delegation results without duplicating its persistence', () => {
     expect(structuredTaskToolCurrentTaskId({
-      toolUseId: 'mcp-create', toolName: 'mcp__task-graph__proma_task_create', input: {},
+      toolUseId: 'mcp-create', toolName: 'mcp__task-graph__profer_task_create', input: {},
       result: JSON.stringify({ task: { id: 'task-9' } }),
     })).toBe('task-9')
     expect(isDelegateAgentTool('delegate_agent')).toBe(true)
@@ -116,7 +116,7 @@ describe('nativeTaskToolToGraphEvents', () => {
 
 describe('structuredTaskAutoLinkEvent 跨 run 兜底', () => {
   const createToolCall = (id: string) => ({
-    toolUseId: 'use-' + id, toolName: 'mcp__task-graph__proma_task_create',
+    toolUseId: 'use-' + id, toolName: 'mcp__task-graph__profer_task_create',
     input: { subject: '新增子任务' },
     result: JSON.stringify({ task: { id } }),
   })
@@ -136,7 +136,7 @@ describe('structuredTaskAutoLinkEvent 跨 run 兜底', () => {
 
   test('显式 dependsOn 优先于兑底，不额外加边', () => {
     const evt = structuredTaskAutoLinkEvent({
-      toolUseId: 'use-x', toolName: 'mcp__task-graph__proma_task_create',
+      toolUseId: 'use-x', toolName: 'mcp__task-graph__profer_task_create',
       input: { subject: '独立任务', dependsOn: ['x1'] },
       result: JSON.stringify({ task: { id: 'new-c' } }),
     }, 3000, { currentTaskId: null, lastCompletedTaskId: 'a' })

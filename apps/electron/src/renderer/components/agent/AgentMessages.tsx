@@ -34,7 +34,7 @@ import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/l
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import { resolvedBlobMessagesAtom } from '@/atoms/agent-atoms'
+import { resolvedBlobMessagesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@profer/ui/primitives/spinner'
@@ -124,6 +124,13 @@ interface AgentMessagesProps {
   liveMessages?: SDKMessage[]
   /** 当前会话工作目录，用于解析相对文件路径 */
   sessionPath?: string | null
+  /**
+   * 草稿区判定基准（会话 storageDir）。
+   *
+   * 缺省时组件自己按会话所属工作区向主进程只读解析：managed = 会话目录，project = 中央
+   * `sessions/<sid>`。绝不能回退到 `sessionPath`：project 下它是项目根，会把项目内改动全当草稿隐藏。
+   */
+  draftRoot?: string | null
   /** 附加目录列表（与 sessionPath 一并用作相对路径解析候选） */
   attachedDirs?: string[]
   /** 最后一轮是否被用户中断 */
@@ -166,6 +173,46 @@ interface AgentMessagesProps {
 /** 空状态引导 — 使用 WelcomeEmptyState */
 function EmptyState(): React.ReactElement {
   return <WelcomeEmptyState />
+}
+
+/**
+ * 解析当前会话的草稿区（storageDir）。
+ *
+ * 显式传入的 `explicit` 优先（测试 / 嵌入方已知时不再多打一次 IPC）；否则按会话所属工作区
+ * 向主进程做一次只读解析。拿不到（工作区已移除 / 无工作区）时返回 `undefined`，
+ * 表示「不做草稿过滤」——宁可多显示 chip，也不能因基准用错把整轮改动隐藏。
+ */
+function useAgentSessionDraftRoot(
+  sessionId: string,
+  explicit: string | null | undefined,
+): string | undefined {
+  const sessions = useAtomValue(agentSessionsAtom)
+  const workspaceId = React.useMemo(
+    () => sessions.find((session) => session.id === sessionId)?.workspaceId,
+    [sessions, sessionId],
+  )
+  // 带上 sessionId：切会话后旧值不能被当成新会话的草稿区。
+  const [fetched, setFetched] = React.useState<{ sessionId: string; path: string | null } | null>(null)
+
+  React.useEffect(() => {
+    if (explicit) return
+    if (!workspaceId) {
+      setFetched(null)
+      return
+    }
+    let cancelled = false
+    window.electronAPI
+      .getAgentSessionStoragePath(workspaceId, sessionId)
+      .then((path) => {
+        if (!cancelled) setFetched({ sessionId, path: path ?? null })
+      })
+      .catch(() => {
+        if (!cancelled) setFetched(null)
+      })
+    return () => { cancelled = true }
+  }, [explicit, workspaceId, sessionId])
+
+  return explicit ?? (fetched?.sessionId === sessionId ? fetched.path ?? undefined : undefined)
 }
 
 /**
@@ -506,8 +553,10 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true }: AgentMessagesProps): React.ReactElement {
   const store = useStore()
+  // 草稿区基准（storageDir）：显式传入优先，否则按会话所属工作区只读解析。
+  const resolvedDraftRoot = useAgentSessionDraftRoot(sessionId, draftRoot)
   React.useEffect(() => {
     if (!window.electronAPI?.listVisualizations) return
     let cancelled = false
@@ -986,6 +1035,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
                   historicalTaskSubjects={historicalTaskSubjects}
                   basePath={sessionPath || undefined}
                   basePaths={resolvedBasePaths}
+                  draftRoot={resolvedDraftRoot}
                   onFork={shouldDisableActions ? undefined : onFork}
                   onExplore={shouldDisableActions ? undefined : onExplore}
                   onRewind={shouldDisableActions ? undefined : onRewind}

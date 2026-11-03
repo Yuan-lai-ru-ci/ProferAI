@@ -30,8 +30,8 @@ import { extname, join, relative, resolve } from 'node:path'
 /** 单次检索返回的最大结果数 / 单片段最大字符数 */
 const MAX_TOP_K = 20
 const MAX_SNIPPET_CHARS = 1_500
-/** 单文件过大保护：超过该字节数不全文索引（仍保留标题/路径命中） */
-const MAX_FILE_BYTES = 2 * 1024 * 1024
+/** 单文件过大保护：超过该字节数不索引（与读写 API 的 10MB 上限一致，避免「能写能读但搜不到」） */
+const MAX_FILE_BYTES = 10 * 1024 * 1024
 /** 索引覆盖的最大文件数，防止异常目录拖垮检索 */
 const MAX_FILES = 2_000
 

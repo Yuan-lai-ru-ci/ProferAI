@@ -110,6 +110,8 @@ interface FileBrowserProps {
   hideToolbar?: boolean
   embedded?: boolean
   hideEmpty?: boolean
+  /** 空目录时的说明文案（默认「目录为空」）。用于解释该目录的语义，避免被当成加载失败。 */
+  emptyHint?: string
   onAddToChat?: (entry: FileEntry) => void
   onFilePreview?: (filePath: string) => void
 }
@@ -163,7 +165,7 @@ function buildFileTree(flatEntries: FileEntry[]): FileEntry[] {
   return root
 }
 
-export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddToChat, onFilePreview }: FileBrowserProps): React.ReactElement {
+export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyHint, onAddToChat, onFilePreview }: FileBrowserProps): React.ReactElement {
   const [entries, setEntries] = React.useState<FileEntry[]>([])
   const [loading, setLoading] = React.useState(false)
   const [uploading, setUploading] = React.useState(false)
@@ -448,8 +450,8 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
         <div className="px-3 py-2 text-xs text-destructive">{error}</div>
       )}
       {!error && entries.length === 0 && !loading && !hideEmpty && (
-        <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-          目录为空
+        <div className="px-3 py-4 text-xs text-muted-foreground text-center leading-relaxed">
+          {emptyHint ?? '目录为空'}
         </div>
       )}
       {entries.map((entry) => (
@@ -558,9 +560,9 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
       {/* 文件列表 / 卡片视图 */}
       {embedded ? (
-        viewMode === 'grid' ? <FileGridView entries={entries} loading={loading} error={error} onSelect={handleSelect} onDelete={handleDeleteGrid} /> : fileTree
+        viewMode === 'grid' ? <FileGridView entries={entries} loading={loading} error={error} emptyHint={emptyHint} onSelect={handleSelect} onDelete={handleDeleteGrid} /> : fileTree
       ) : viewMode === 'grid' ? (
-        <ScrollArea className="flex-1"><FileGridView entries={entries} loading={loading} error={error} onSelect={handleSelect} onDelete={handleDeleteGrid} /></ScrollArea>
+        <ScrollArea className="flex-1"><FileGridView entries={entries} loading={loading} error={error} emptyHint={emptyHint} onSelect={handleSelect} onDelete={handleDeleteGrid} /></ScrollArea>
       ) : (
         <ScrollArea className="flex-1">{fileTree}</ScrollArea>
       )}
@@ -599,10 +601,11 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, onAddT
 
 // ===== FileGridView 卡片视图 =====
 
-function FileGridView({ entries, loading, error, onSelect, onDelete, onDownload }: {
+function FileGridView({ entries, loading, error, emptyHint, onSelect, onDelete, onDownload }: {
   entries: FileEntry[]
   loading: boolean
   error: string | null
+  emptyHint?: string
   onSelect: (entry: FileEntry, event: React.MouseEvent) => void
   onDelete?: (entry: FileEntry) => void
   onDownload?: (entry: FileEntry) => Promise<string | null>
@@ -616,7 +619,7 @@ function FileGridView({ entries, loading, error, onSelect, onDelete, onDownload 
   }, [menuOpen])
   if (loading) return <div className="flex items-center justify-center h-full text-muted-foreground text-xs">加载中...</div>
   if (error) return <div className="px-3 py-2 text-xs text-destructive">{error}</div>
-  if (entries.length === 0) return <div className="px-3 py-4 text-xs text-muted-foreground text-center">目录为空</div>
+  if (entries.length === 0) return <div className="px-3 py-4 text-xs text-muted-foreground text-center leading-relaxed">{emptyHint ?? '目录为空'}</div>
 
   return (
     <div className="p-2 grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(125px, 1fr))' }}>

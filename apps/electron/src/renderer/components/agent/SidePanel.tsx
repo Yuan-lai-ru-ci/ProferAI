@@ -105,6 +105,25 @@ const filePanelActionButtonClass = 'h-6 w-6 flex-shrink-0 rounded-md text-muted-
 export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, width = 280 }: SidePanelProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const sessions = useAtomValue(agentSessionsAtom)
+
+  // 「会话文件」的根：会话私有目录（storageDir）。
+  // project 下 `sessionPath` 是项目根（相对路径基准），拿它当会话文件根会让所有会话互通，
+  // 且用户上传到会话目录的文件看不到。
+  const [sessionStoragePath, setSessionStoragePath] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    const workspaceId = sessions.find((item) => item.id === sessionId)?.workspaceId
+    if (!workspaceId) {
+      setSessionStoragePath(null)
+      return
+    }
+    let cancelled = false
+    window.electronAPI
+      .getAgentSessionStoragePath(workspaceId, sessionId)
+      .then((path) => { if (!cancelled) setSessionStoragePath(path) })
+      .catch(() => { if (!cancelled) setSessionStoragePath(null) })
+    return () => { cancelled = true }
+  }, [sessions, sessionId])
+  const sessionFileRoot = sessionStoragePath ?? sessionPath
   const sessionIndicators = useAtomValue(agentSessionIndicatorMapAtom)
   const isClassic = interfaceVariant === 'classic'
 
@@ -201,6 +220,9 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId)
   const workspaceSlug = currentWorkspace?.slug
+  // project 模式下「工作区」就是绑定的项目文件夹，工作区文件直接展示项目根；
+  // 此时不再提供「添加到工作区」入口（文件本来就在项目里，上传到 .profer/workspace-files 反而看不到）。
+  const isProjectWorkspace = currentWorkspace?.storageMode === 'project'
 
   // 附加目录列表（会话级）
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
@@ -536,7 +558,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   }, [pendingFiles, setPendingFiles])
 
   // 面包屑：显示根路径最后两段（公共实现 R5）
-  const breadcrumb = React.useMemo(() => getLastPathSegments(sessionPath), [sessionPath])
+  const breadcrumb = React.useMemo(() => getLastPathSegments(sessionFileRoot ?? sessionPath ?? ''), [sessionFileRoot, sessionPath])
 
   // 工作区文件目录路径
   const [workspaceFilesPath, setWorkspaceFilesPath] = React.useState<string | null>(null)
@@ -564,7 +586,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     if (autoRevealSignal.ts <= consumedTabRevealTsRef.current) return
     const path = autoRevealSignal.path
     const inSession =
-      (!!sessionPath && (path === sessionPath || isPathUnderRoot(sessionPath, path)))
+      (!!sessionFileRoot && (path === sessionFileRoot || isPathUnderRoot(sessionFileRoot, path)))
       || attachedDirs.some((d) => isPathUnderRoot(d, path))
       || attachedFiles.includes(path)
     const inWorkspace =
@@ -575,12 +597,12 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     if (!targetTab) return
     consumedTabRevealTsRef.current = autoRevealSignal.ts
     if (activeTab !== targetTab) onTabChange(targetTab)
-  }, [autoRevealSignal, sessionId, sessionPath, workspaceFilesPath, attachedDirs, attachedFiles, wsAttachedDirs, wsAttachedFiles, activeTab, onTabChange])
+  }, [autoRevealSignal, sessionId, sessionFileRoot, workspaceFilesPath, attachedDirs, attachedFiles, wsAttachedDirs, wsAttachedFiles, activeTab, onTabChange])
 
   // RightSidePanel 完全由用户控制，不因 Agent 文件变更自动打开
 
   // 同步 basePaths ref（供 handleFilePreview 使用，避免 hooks 声明顺序问题）
-  basePathsRef.current = [sessionPath, workspaceFilesPath, ...fileAccessPathsMemo].filter(Boolean) as string[]
+  basePathsRef.current = [sessionPath, sessionStoragePath, workspaceFilesPath, ...fileAccessPathsMemo].filter(Boolean) as string[]
   const hasSessionAttachedItems = attachedDirs.length > 0 || attachedFiles.length > 0
   const hasWorkspaceAttachedItems = wsAttachedDirs.length > 0 || wsAttachedFiles.length > 0
 
@@ -640,7 +662,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             )
           ) : activeTab === 'session' ? (
             <div className="flex-1 min-h-0 flex flex-col pt-0.5 mx-2 mb-2">
-              {sessionPath ? (
+              {sessionFileRoot ? (
                 <>
                   <div className="flex items-center gap-1 px-2 h-[32px] flex-shrink-0">
                     <FolderOpen className="size-3 text-muted-foreground" />
@@ -653,7 +675,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                         <p>当前会话的专属文件，仅本次对话的 Agent 可以访问</p>
                       </TooltipContent>
                     </Tooltip>
-                    <span className="text-[10px] text-muted-foreground/70 truncate flex-1 min-w-0" title={sessionPath}>
+                    <span className="text-[10px] text-muted-foreground/70 truncate flex-1 min-w-0" title={sessionFileRoot}>
                       {breadcrumb}
                     </span>
                     <Tooltip>
@@ -663,7 +685,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                           variant="ghost"
                           size="icon"
                           className={filePanelActionButtonClass}
-                          onClick={() => window.electronAPI.openFile(sessionPath).catch(console.error)}
+                          onClick={() => window.electronAPI.openFile(sessionFileRoot).catch(console.error)}
                         >
                           <FolderSearch />
                         </Button>
@@ -675,7 +697,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                   </div>
                   <FileSearchBar
                     workspaceFilesPath={null}
-                    sessionPath={sessionPath}
+                    sessionPath={sessionFileRoot}
                     sessionAttachedDirs={attachedDirs}
                     workspaceAttachedDirs={[]}
                     placeholder="搜索会话文件..."
@@ -712,7 +734,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                       {hasSessionAttachedItems && (
                         <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3 pt-2">工作文件（存储于该工作区目录）</div>
                       )}
-                      <FileBrowser rootPath={sessionPath} hideToolbar embedded hideEmpty={hasSessionAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} />
+                      <FileBrowser rootPath={sessionFileRoot} hideToolbar embedded hideEmpty={hasSessionAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} />
                     </>
                     <FileDropZone
                       workspaceSlug={workspaceSlug ?? ''}
@@ -740,7 +762,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                       <Info className="size-3 text-muted-foreground/50 cursor-help" />
                     </TooltipTrigger>
                     <TooltipContent side="bottom" className="max-w-[220px]">
-                      <p>工作区内所有会话可访问的文件和文件夹，每个新对话都可以自动读取</p>
+                      <p>{isProjectWorkspace ? '项目文件夹中的文件，当前工作区的会话可直接读取' : '工作区内所有会话可访问的文件和文件夹，每个新对话都可以自动读取'}</p>
                     </TooltipContent>
                   </Tooltip>
                   <div className="flex-1" />
@@ -758,7 +780,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">
-                        <p>在 Finder 中打开工作区文件目录</p>
+                        <p>{isProjectWorkspace ? '在 Finder 中打开项目文件夹' : '在 Finder 中打开工作区文件目录'}</p>
                       </TooltipContent>
                     </Tooltip>
                   )}
@@ -806,14 +828,16 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                       <FileBrowser rootPath={workspaceFilesPath!} hideToolbar embedded hideEmpty={hasWorkspaceAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} />
                     </>
                   )}
-                  <FileDropZone
-                    workspaceSlug={workspaceSlug ?? ''}
-                    target="workspace"
-                    onFilesUploaded={handleFilesUploaded}
-                    onFilesAttached={handleWorkspaceFilesAttached}
-                    onAttachFolder={handleAttachWorkspaceFolder}
-                    onFoldersDropped={handleWorkspaceFoldersDropped}
-                  />
+                  {!isProjectWorkspace && (
+                    <FileDropZone
+                      workspaceSlug={workspaceSlug ?? ''}
+                      target="workspace"
+                      onFilesUploaded={handleFilesUploaded}
+                      onFilesAttached={handleWorkspaceFilesAttached}
+                      onAttachFolder={handleAttachWorkspaceFolder}
+                      onFoldersDropped={handleWorkspaceFoldersDropped}
+                    />
+                  )}
                 </div>
               </div>
             </div>

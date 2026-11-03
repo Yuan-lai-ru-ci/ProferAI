@@ -278,15 +278,15 @@ describe('Pi Profer in-process tool bridges', () => {
     buildPiTaskGraphTools(sdk, { sessionId: 'pi-task-graph-test' })
 
     expect(tools.map((tool) => tool.name)).toEqual([
-      'mcp__task-graph__proma_task_create',
-      'mcp__task-graph__proma_task_update',
+      'mcp__task-graph__profer_task_create',
+      'mcp__task-graph__profer_task_update',
     ])
   })
 
   test('Given an unknown task ID When Pi requests an update Then it rejects without creating a graph node', async () => {
     const { sdk, tools } = createPiSdkStub()
     buildPiTaskGraphTools(sdk, { sessionId: 'pi-task-graph-unknown-task' })
-    const update = tools.find((tool) => tool.name === 'mcp__task-graph__proma_task_update')
+    const update = tools.find((tool) => tool.name === 'mcp__task-graph__profer_task_update')
 
     const result = await update?.execute?.('call-1', { taskId: 'not-created', status: 'completed' }) as { details?: { error?: string } }
 
@@ -508,7 +508,7 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
       expect(names.has(forbidden), `${forbidden} should be pruned in code mode`).toBe(false)
     }
     for (const engineeringTool of [
-      'mcp__task-graph__proma_task_create',
+      'mcp__task-graph__profer_task_create',
       'mcp__memory-archive__search_memory',
       'mcp__collaboration__delegate_agent',
       'inspect_preview',
@@ -531,7 +531,7 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     })
     const names = new Set(tools.map((tool) => tool.name))
     for (const forbidden of [
-      'mcp__task-graph__proma_task_create',
+      'mcp__task-graph__profer_task_create',
       'mcp__memory-archive__search_memory',
       'mcp__collaboration__delegate_agent',
       'mcp__automation__create_automation',
@@ -558,11 +558,11 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     const { sdk } = createPiSdkStub()
     const result = await buildPiBuiltinTools(sdk, {
       ...baseCtx,
-      disabledTools: ['proma_task_create', 'delegate_agent'],
+      disabledTools: ['profer_task_create', 'delegate_agent'],
     })
     const names = result.tools.map((t) => t.name)
-    expect(names).not.toContain('mcp__task-graph__proma_task_create')
-    expect(names).toContain('mcp__task-graph__proma_task_update')
+    expect(names).not.toContain('mcp__task-graph__profer_task_create')
+    expect(names).toContain('mcp__task-graph__profer_task_update')
     expect(names).not.toContain('mcp__collaboration__delegate_agent')
     expect(names).toContain('mcp__collaboration__delegate_agents')
   })
@@ -572,7 +572,7 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     const result = await buildPiBuiltinTools(sdk, {
       ...baseCtx,
       disabledToolGroups: ['task-graph'],
-      disabledTools: ['proma_task_create', 'delegate_agent'],
+      disabledTools: ['profer_task_create', 'delegate_agent'],
     })
     const names = result.tools.map((t) => t.name)
     expect(names.some((n) => n.startsWith('mcp__task-graph__'))).toBe(false)

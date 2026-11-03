@@ -50,4 +50,17 @@ describe('task_trigger 远程命令投影', () => {
       expect(JSON.stringify(messages)).not.toContain('secret')
     }
   })
+
+  test('session_detail 下发会话级思考档位，移动端不必退回默认', async () => {
+    const { updateAgentSessionUiMeta } = await import('./agent-session-ui-projection-publisher')
+    const session = sessions.createAgentSession('thinking projection')
+    updateAgentSessionUiMeta(session.id, { openAIThinkingLevel: 'xhigh', agentEffort: 'max' })
+
+    const response = await handleRemoteCommand(JSON.stringify({ type: 'session_detail', sessionId: session.id }))
+    expect(response.ok).toBe(true)
+    if (!response.ok) throw new Error(response.error)
+    const meta = (response.data as { meta: Record<string, unknown> }).meta
+    expect(meta.openAIThinkingLevel).toBe('xhigh')
+    expect(meta.agentEffort).toBe('max')
+  })
 })

@@ -161,12 +161,6 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     workspaceSortMode,
     handleCycleWorkspaceSort,
     handleStartCreateProject,
-    creatingProject,
-    setCreatingProject,
-    newProjectName,
-    setNewProjectName,
-    newProjectInputRef,
-    handleCreateProjectKeyDown,
     agentProjectGroups,
     progressiveCount,
     currentWorkspaceId,
@@ -190,6 +184,8 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     archivedWorkspaces,
     canDeleteWorkspace,
     workspaceSwitchTs,
+    projectPathStatus,
+    handleRelocateProject,
     progressiveConversationGroups,
     progressiveAgentSessionGroups,
     archivedConversationCount,
@@ -387,25 +383,6 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
           </div>
 
           <ScrollRegion className="sidebar-session-scroll min-h-0 flex-1 overflow-y-auto pb-2 scrollbar-thin titlebar-no-drag">
-            {creatingProject && (
-              <div className="flex items-center gap-2 px-2 py-1.5 mb-1 rounded-md bg-foreground/[0.04]">
-                <FolderOpen size={14} className="flex-shrink-0 text-foreground/40" />
-                <input
-                  ref={newProjectInputRef}
-                  value={newProjectName}
-                  onChange={(e) => setNewProjectName(e.target.value)}
-                  onKeyDown={handleCreateProjectKeyDown}
-                  onBlur={() => {
-                    setCreatingProject(false)
-                    setNewProjectName('')
-                  }}
-                  placeholder="项目名称..."
-                  className="flex-1 min-w-0 bg-transparent text-[14px] text-foreground border-b border-primary/50 outline-none px-0.5"
-                  maxLength={50}
-                />
-              </div>
-            )}
-
             <div className="flex flex-col gap-0.5">
               {agentProjectGroups.slice(0, progressiveCount).map((group) => (
                 <AgentProjectGroupItem
@@ -446,6 +423,8 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                   onToggleRelatedParent={handleToggleRelatedParent}
                   onMarkUnread={handleToggleSessionUnread}
                   workspaceSwitchTs={workspaceSwitchTs}
+                  pathStatus={projectPathStatus.get(group.workspace.id)}
+                  onRelocateProject={handleRelocateProject}
                 />
               ))}
             </div>

@@ -13,6 +13,8 @@ import AdmZip from 'adm-zip'
 import { DOMParser } from '@xmldom/xmldom'
 import type { OfficePreviewResult } from '@profer/shared'
 import { getConfigDir } from './config-paths'
+import { getWorkspacesIndexPath, resolveWorkspaceLocation } from './workspace-locator'
+import { readJsonFileSafe } from './safe-file'
 const PDFJS_PACKAGE = 'pdfjs-dist'
 
 /** 文件大小限制：50MB */
@@ -119,9 +121,70 @@ let _globalSearchDirsCache: { dirs: string[]; ts: number } | null = null
 /** 缓存 TTL：30 秒，平衡实时性与性能 */
 const GLOBAL_SEARCH_CACHE_TTL = 30_000
 
+/** 丢弃全局搜索目录缓存（测试重置 / 工作区集合发生变更后主动刷新）。 */
+export function resetGlobalSearchDirsCache(): void {
+  _globalSearchDirsCache = null
+}
+
+/**
+ * 按存储模式收集工作区级搜索根：
+ *
+ * - `managed`：工作区目录（`<configDir>/agent-workspaces/<slug>`）+ 其下一层会话目录，
+ *   与改造前逐字一致；
+ * - `project`：只加**项目根**（`rootPath`）。中央 `~/.profer/agent-workspaces/<slug>` 是
+ *   Profer 的运行时目录，不是用户项目，把它当搜索根会在项目文件缺失时回退到配置目录；
+ *   会话运行目录（附件等）只按具体 `sessions/<id>` 加入。
+ *
+ * 工作区集合以索引为唯一来源；索引缺失（旧版 / 首次启动）时退回目录枚举，保持旧行为。
+ */
+function collectWorkspaceSearchDirs(configDir: string): string[] {
+  const dirs: string[] = []
+  const workspacesDir = join(configDir, 'agent-workspaces')
+  const slugs = new Set<string>()
+
+  const index = readJsonFileSafe<{ workspaces?: Array<{ slug?: string }> }>(getWorkspacesIndexPath())
+  for (const entry of index?.workspaces ?? []) {
+    if (entry && typeof entry.slug === 'string' && entry.slug.length > 0) slugs.add(entry.slug)
+  }
+  if (slugs.size === 0 && existsSync(workspacesDir)) {
+    try {
+      for (const name of readdirSync(workspacesDir)) {
+        if (!name.startsWith('.')) slugs.add(name)
+      }
+    } catch { /* skip */ }
+  }
+
+  const pushChildDirs = (root: string): void => {
+    try {
+      for (const child of readdirSync(root)) {
+        if (child.startsWith('.')) continue
+        const childPath = join(root, child)
+        try {
+          if (statSync(childPath).isDirectory()) dirs.push(childPath)
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+  }
+
+  for (const slug of slugs) {
+    const location = resolveWorkspaceLocation(slug)
+    if (location.mode === 'project') {
+      if (existsSync(location.rootPath)) dirs.push(location.rootPath)
+      const sessionsDir = join(location.runtimeDir, 'sessions')
+      if (existsSync(sessionsDir)) pushChildDirs(sessionsDir)
+      continue
+    }
+    if (!existsSync(location.configDir)) continue
+    dirs.push(location.configDir)
+    pushChildDirs(location.configDir)
+  }
+
+  return dirs
+}
+
 /**
  * 收集所有潜在的搜索目录：
- * - 所有工作区的 agent-workspaces 子目录
+ * - 工作区搜索根（managed = 工作区配置目录；project = 项目根 rootPath；不含中央工作区壳）
  * - agent-sessions.json 中所有会话的 attachedDirectories
  *
  * 用于相对路径在 basePaths 中找不到时的全局 fallback 搜索。
@@ -138,29 +201,8 @@ function collectGlobalSearchDirs(): string[] {
   try {
     const configDir = getConfigDir()
 
-    // 1. 收集所有工作区目录
-    const workspacesDir = join(configDir, 'agent-workspaces')
-    if (existsSync(workspacesDir)) {
-      try {
-        for (const wsName of readdirSync(workspacesDir)) {
-          const wsPath = join(workspacesDir, wsName)
-          try {
-            if (statSync(wsPath).isDirectory() && !wsName.startsWith('.')) {
-              dirs.add(wsPath)
-              // 也收集工作区下的子目录（各个 session 目录）
-              for (const sessionDir of readdirSync(wsPath)) {
-                const sessionPath = join(wsPath, sessionDir)
-                try {
-                  if (statSync(sessionPath).isDirectory() && !sessionDir.startsWith('.')) {
-                    dirs.add(sessionPath)
-                  }
-                } catch { /* skip */ }
-              }
-            }
-          } catch { /* skip */ }
-        }
-      } catch { /* skip */ }
-    }
+    // 1. 收集工作区搜索根（project 用 rootPath，managed 用工作区配置目录）
+    for (const dir of collectWorkspaceSearchDirs(configDir)) dirs.add(dir)
 
     // 2. 收集 agent-sessions.json 中的 attachedDirectories 和 forkSourceDir
     const indexPath = join(configDir, 'agent-sessions.json')

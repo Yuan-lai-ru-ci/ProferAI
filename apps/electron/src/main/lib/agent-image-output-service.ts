@@ -6,8 +6,13 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 export const MAX_AGENT_IMAGE_OUTPUT_SIZE = 20 * 1024 * 1024
 
 export interface AgentImageOutputContext {
-  /** 当前 Agent 会话的可写工作目录。 */
+  /** 当前 Agent 会话的可写工作目录（project 下是用户项目根，只作相对路径基准与授权根）。 */
   agentCwd: string
+  /**
+   * 会话私有存储根（`resolveAgentSessionWriteLayout().storageDir`）。
+   * 生图产物必须落在这里：project 下它不在项目内，缺省回落到 agentCwd 保持 managed/旧调用方语义。
+   */
+  storageDir?: string
   /** 会话中用户明确授权的附加目录。 */
   allowedRoots: string[]
 }
@@ -18,7 +23,7 @@ export interface AgentImageOutputResult {
   image: {
     /** renderer 可通过 readAttachment() 读取的、位于当前会话目录内的绝对副本路径。 */
     localPath: string
-    /** 与 agentCwd 的相对路径（统一使用 /）；供 Agent 后续把生成图复制到皮肤 assets 等工作流使用。 */
+    /** 与会话存储根（storageDir，缺省为 agentCwd）的相对路径（统一使用 /）；供 Agent 后续把生成图复制到皮肤 assets 等工作流使用。 */
     relativePath: string
     /** 兼容旧调用方的绝对路径字段；不要将其写入用户可见文本。 */
     absolutePath: string
@@ -43,6 +48,11 @@ function isWithinRoot(root: string, target: string, allowRootItself = false): bo
   const relation = relative(root, target)
   if (relation === '') return allowRootItself
   return !relation.startsWith('..') && !isAbsolute(relation)
+}
+
+/** 会话私有写入根：project 下在中央 storageDir，managed 下就是 cwd。 */
+function sessionWriteRoot(context: AgentImageOutputContext): string {
+  return context.storageDir?.trim() ? context.storageDir : context.agentCwd
 }
 
 async function realDirectory(path: string): Promise<string | undefined> {
@@ -80,7 +90,9 @@ export async function readAuthorizedAgentImage(path: string, context: AgentImage
 
   const agentCwd = await realDirectory(resolve(context.agentCwd))
   if (!agentCwd) throw new Error('当前会话工作目录不存在或不可访问')
-  const roots = await Promise.all([agentCwd, ...context.allowedRoots.map((root) => realDirectory(resolve(root)))])
+  // storageDir 是生图产物与记录的真实落点（project 下不在 cwd 内），因此也必须是合法授权根。
+  const storageRoot = await realDirectory(resolve(sessionWriteRoot(context)))
+  const roots = await Promise.all([agentCwd, storageRoot, ...context.allowedRoots.map((root) => realDirectory(resolve(root)))])
   const authorizedRoots = roots.filter((root): root is string => !!root)
   if (!authorizedRoots.some((root) => isWithinRoot(root, source))) throw new Error('图片路径不在当前会话或用户已授权目录内')
   if (sourceStats.size > MAX_AGENT_IMAGE_OUTPUT_SIZE) throw new Error('图片超过 20MB 大小限制，无法发送')
@@ -105,15 +117,18 @@ export async function writeAgentImageOutput(
   if (detected.mediaType !== mediaType) throw new Error('图片媒体类型与文件内容不一致')
   const agentCwd = await realDirectory(resolve(context.agentCwd))
   if (!agentCwd) throw new Error('当前会话工作目录不存在或不可访问')
-  const outputDir = join(agentCwd, '.context', 'agent-output-images')
+  // 写入目标永远是会话存储根：project 下若用 cwd，生成图会落进用户仓库（违反 I3）。
+  const writeRoot = await realDirectory(resolve(sessionWriteRoot(context)))
+  if (!writeRoot) throw new Error('当前会话存储目录不存在或不可访问')
+  const outputDir = join(writeRoot, '.context', 'agent-output-images')
   await mkdir(outputDir, { recursive: true })
   const realOutputDir = await realpath(outputDir)
-  if (!isWithinRoot(agentCwd, realOutputDir)) throw new Error('图片输出目录不在当前会话工作目录内')
+  if (!isWithinRoot(writeRoot, realOutputDir)) throw new Error('图片输出目录不在当前会话工作目录内')
   const absolutePath = join(realOutputDir, `${randomUUID()}${detected.extension}`)
   await writeFile(absolutePath, data, { flag: 'wx' })
   const image = {
     localPath: absolutePath,
-    relativePath: relative(agentCwd, absolutePath).split(sep).join('/'),
+    relativePath: relative(writeRoot, absolutePath).split(sep).join('/'),
     absolutePath,
     filename: filename ? displayFilename(filename, detected.extension) : `generated-image${detected.extension}`,
     mediaType,

@@ -117,7 +117,7 @@ interface BuildAssistantTurnRenderItemsOptions {
   completedToolResultIds?: Set<string>
   /**
    * 已成功产出图片的工具调用 → 图片附件。
-   * 这类调用不再作为过程行渲染，而是在原位置输出一份独立的图片内容块。
+   * 位于本轮尾部的交付图片提升为独立内容块；过程阶段的图片由渲染层就地展示，随过程折叠。
    */
   imageOutputsByToolUseId?: Map<string, ParsedAgentImageAttachment[]>
   /**
@@ -219,6 +219,50 @@ function areToolsBeforeIndexCompleted(
   return true
 }
 
+/** 提升到正文的图片输出项，按其在 visibleBlocks 中的下标索引。 */
+type PromotedImageOutput = Extract<AssistantTurnRenderItem, { type: 'image-output' }>
+
+/**
+ * 判定哪些图片输出工具的结果算「本轮交付内容」，需要从过程区提升到正文。
+ *
+ * 判据：该图片工具是本轮最后一个 tool_use（之后没有其它工具调用）。
+ * 位于过程阶段的图片（后面还有工具调用）留在原地，跟随过程组一起折叠 ——
+ * 否则试作图会跳到正文区，看起来像思考里的图跑到了正式输出。
+ *
+ * 流式期间位置尚未定型，一律不提升：此时过程组默认展开，图片就地可见；
+ * 轮次结束后再按最终形态判定，避免图片先出现在正文、随后又跳回过程区。
+ */
+function collectPromotedImageOutputs(
+  blocks: IndexedContentBlock[],
+  imageOutputsByToolUseId?: Map<string, ParsedAgentImageAttachment[]>,
+  isStreaming?: boolean,
+): Map<number, PromotedImageOutput> {
+  const promoted = new Map<number, PromotedImageOutput>()
+  if (isStreaming || !imageOutputsByToolUseId || imageOutputsByToolUseId.size === 0) return promoted
+
+  let lastToolUseIndex = -1
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    if (blocks[index]?.block.type === 'tool_use') {
+      lastToolUseIndex = index
+      break
+    }
+  }
+  if (lastToolUseIndex < 0) return promoted
+
+  const lastToolUse = blocks[lastToolUseIndex]!.block as SDKToolUseBlock
+  if (typeof lastToolUse.id !== 'string') return promoted
+  const images = imageOutputsByToolUseId.get(lastToolUse.id)
+  if (!images || images.length === 0) return promoted
+
+  promoted.set(lastToolUseIndex, {
+    type: 'image-output',
+    toolUseId: lastToolUse.id,
+    images,
+    identity: `image-output:${lastToolUse.id}`,
+  })
+  return promoted
+}
+
 export function buildAssistantTurnRenderItems(
   blocks: StableContentBlock[],
   options?: BuildAssistantTurnRenderItemsOptions,
@@ -257,15 +301,8 @@ export function buildAssistantTurnRenderItems(
     && outputSplit.textStartIndex > 0
     && areToolsBeforeIndexCompleted(renderBlocks, outputSplit.textStartIndex, options.completedToolResultIds)
 
-  // 图片输出按它在原始输出里的位置参与渲染，而不是统一堆到正文前面。
-  const imageItems = new Map<number, Extract<AssistantTurnRenderItem, { type: 'image-output' }>>()
-  for (const [index, entry] of visibleBlocks.entries()) {
-    const block = entry.block
-    if (block.type !== 'tool_use' || typeof block.id !== 'string') continue
-    const images = options.imageOutputsByToolUseId?.get(block.id)
-    if (!images || images.length === 0) continue
-    imageItems.set(index, { type: 'image-output', toolUseId: block.id, images, identity: `image-output:${block.id}` })
-  }
+  // 只有本轮尾部交付的图片才提升为正文内容块；过程阶段生成的图片留在原位、随过程折叠。
+  const imageItems = collectPromotedImageOutputs(visibleBlocks, options.imageOutputsByToolUseId, options.isStreaming)
 
   const replyTextIndexes = new Set<number>()
   // 没有过程块时（例如思考被隐藏）尾部 text 始终是正文；流式中只有工具都完成才提前外置。

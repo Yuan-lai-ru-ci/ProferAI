@@ -500,7 +500,7 @@ version: 1.0.1
   test('repair：schema 3 completed 仍使用历史备份中的旧正文证据，多工作区幂等迁移', () => {
     const paths = setup()
     const builtin = listGlobalSkills()[0]!
-    const oldSkill = '---\nname: 演示\nversion: 0.9.0\n---\n\n# Proma 旧正文\n'
+    const oldSkill = '---\nname: 演示\nversion: 0.9.0\n---\n\n# Profer 旧正文\n'
     const legacyMaster = join(paths.global, 'legacy-default-skills', builtin.slug)
     mkdirSync(legacyMaster, { recursive: true })
     writeFileSync(join(legacyMaster, 'SKILL.md'), oldSkill)
@@ -540,7 +540,7 @@ version: 1.0.1
     const workspace = join(paths.workspaces, 'immutable-history')
     const current = join(workspace, 'skills', builtin.slug)
     const backup = join(workspace, '.migration-backup', 'skills', 'skills', builtin.slug)
-    const historicalContent = '---\nname: 演示\nversion: 0.9.0\n---\n\n# Proma 历史正文\n'
+    const historicalContent = '---\nname: 演示\nversion: 0.9.0\n---\n\n# Profer 历史正文\n'
     const userContent = '---\nname: 演示\nversion: 0.9.0\n---\n\n# 用户修改正文\n'
     mkdirSync(current, { recursive: true })
     mkdirSync(backup, { recursive: true })

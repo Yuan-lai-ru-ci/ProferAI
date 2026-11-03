@@ -33,6 +33,24 @@ describe('buildPiAdditionalDirectoriesPrompt', () => {
     expect(prompt).toContain('唯一语义匹配候选')
   })
 
+  test('project 工作区：项目根是唯一权威，不再注入反推候选', () => {
+    const candidates: AttachedDirectoryProjectCandidate[] = [{
+      rootPath: 'D:\\REPO\\AAAI学习大师',
+      type: 'obsidian-vault',
+      evidence: ['.obsidian/'],
+      sourceDirectory: 'D:\\REPO',
+      name: 'AAAI学习大师',
+      relativePath: 'AAAI学习大师',
+    }]
+
+    // project 下 cwd 就是项目根：附加目录只是授权范围，不得反推第二个“项目”引模型跑偏
+    const prompt = buildPiAdditionalDirectoriesPrompt(['D:\\REPO'], candidates, { projectRoot: 'D:\\REPO\\REPO-A' })
+    expect(prompt).not.toContain('<detected_project_candidates>')
+    expect(prompt).toContain('<workspace_project_root>D:\\REPO\\REPO-A</workspace_project_root>')
+    expect(prompt).toContain('当前 cwd 就是本项目根')
+    expect(prompt).toContain('<attached_directories>')
+  })
+
   test('空目录不增加 Pi 提示词', () => {
     expect(buildPiAdditionalDirectoriesPrompt([])).toBe('')
   })

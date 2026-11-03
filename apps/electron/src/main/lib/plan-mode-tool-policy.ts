@@ -168,8 +168,11 @@ export const PLAN_MODE_DENY_MESSAGES = {
  * 8. 其余一律拒绝（**不静默放行**）。
  *
  * `agentCwd` 缺失时计划目录白名单不可判定，Write/Edit 一律拒绝。
+ *
+ * `planDir` 是计划目录的真相源（宿主传 `resolveAgentSessionWriteLayout().plansDir`）：
+ * project 下它不在 cwd 之内，不能由 `agentCwd/.context/plan` 推导；managed 下两者相等。
  */
-export function createPlanModeToolPolicy(agentCwd: string | undefined): PlanModeToolPolicy {
+export function createPlanModeToolPolicy(agentCwd: string | undefined, planDir?: string): PlanModeToolPolicy {
   return ({ toolName, toolInput }) => {
     // 1. 宿主自有工具：本策略不表态，由宿主既有判定（问答闭环 / 计划审批）处理。
     if (HOST_OWNED_PLAN_TOOLS.has(toolName)) return undefined
@@ -188,7 +191,7 @@ export function createPlanModeToolPolicy(agentCwd: string | undefined): PlanMode
     // 4. Write / Edit：仅计划目录内的 Markdown（旧实现只认 file_path）。
     if (toolName === 'Write' || toolName === 'Edit') {
       const filePath = typeof toolInput.file_path === 'string' ? toolInput.file_path : ''
-      if (agentCwd && filePath && isPlanModeMarkdownPath(agentCwd, filePath)) return { behavior: 'allow' }
+      if (agentCwd && filePath && isPlanModeMarkdownPath(agentCwd, filePath, planDir)) return { behavior: 'allow' }
       return { behavior: 'deny', message: PLAN_MODE_DENY_MESSAGES.write }
     }
 

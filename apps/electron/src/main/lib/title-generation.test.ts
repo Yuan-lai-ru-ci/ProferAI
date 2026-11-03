@@ -184,7 +184,7 @@ describe('evaluateTitleSource', () => {
   })
 
   test('Given 调度标记 When 判定 Then 剥离后正常判断', () => {
-    const result = evaluateTitleSource('<!--PROMA_SCHEDULED_RUN-->巡检线上错误日志')
+    const result = evaluateTitleSource('<!--PROFER_SCHEDULED_RUN-->巡检线上错误日志')
     expect(result).toEqual({ text: '巡检线上错误日志', informative: true })
   })
 

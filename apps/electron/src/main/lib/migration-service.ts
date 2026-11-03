@@ -111,6 +111,17 @@ export interface ExportResult {
   entries?: number
   /** 是否为口令加密备份 */
   encrypted?: boolean
+  /** 默认全量导出时被自动排除的工作区（当前只有 project 模式） */
+  excluded?: ExcludedWorkspace[]
+}
+
+/** 默认全量导出时被自动排除的工作区，附带面向用户的原因。 */
+export interface ExcludedWorkspace {
+  workspaceId: string
+  workspaceName: string
+  workspaceSlug: string
+  /** 已本地化的排除原因 */
+  reason: string
 }
 
 export interface ExportPreview {
@@ -307,8 +318,40 @@ export interface ConfirmImportOptionsV2 {
 
 // ─── 导出 ────────────────────────────────────────────────────────────────────
 
+/**
+ * 项目工作区不参与迁移。
+ *
+ * project 工作区的配置与资产在用户项目目录（`<rootPath>/.profer`）里，与项目自身
+ * 版本控制/分享边界重叠；直接纳入导出/导入会跨项目搬运数据，所以统一禁用。
+ *
+ * 行为分两种：
+ * - 显式选中 project（单工作区导出、`workspaceSelections` 指名、导入目标）：硬错误；
+ * - 默认全量导出（`exportDataV2` 未传 `workspaceSelections`）：自动跳过并在结果 `excluded` 里回报原因，
+ *   避免「一键全量备份」在存在项目工作区时直接失败。
+ * managed 工作区行为保持不变（`storageMode` 缺省一律视为 managed）。
+ */
+const PROJECT_WORKSPACE_MIGRATION_UNSUPPORTED = '项目工作区暂不支持导出/导入'
+
+/**
+ * 默认全量导出（未传 selections）时自动排除 project 工作区的原因。
+ * 显式选中 project 仍然是硬错误（见 `assertMigrationWorkspacesSupported`）。
+ */
+const PROJECT_WORKSPACE_AUTO_EXCLUDED_REASON = '项目工作区暂不支持导出，已自动排除'
+
+type MigrationGuardWorkspace = Pick<AgentWorkspace, 'name' | 'storageMode'>
+
+/** 导出/导入公共入口的统一守卫：只要涉及的工作区里有 project 模式就拒绝。 */
+function assertMigrationWorkspacesSupported(
+  workspaces: Array<MigrationGuardWorkspace | null | undefined>,
+): void {
+  const project = workspaces.find((candidate) => candidate?.storageMode === 'project')
+  if (!project) return
+  throw new Error(`${PROJECT_WORKSPACE_MIGRATION_UNSUPPORTED}：「${project.name}」`)
+}
+
 export async function getExportPreview(workspaceId: string): Promise<ExportPreview> {
   const workspace = getAgentWorkspace(workspaceId) ?? null
+  assertMigrationWorkspacesSupported([workspace])
 
   let agentSessionCount = 0
   let chatConversationCount = 0
@@ -378,6 +421,7 @@ export async function exportData(options: ExportOptions): Promise<ExportResult> 
 
   const workspace = getAgentWorkspace(workspaceId)
   if (!workspace) throw new Error(`工作区不存在: ${workspaceId}`)
+  assertMigrationWorkspacesSupported([workspace])
 
   const manifest: MigrationManifest = {
     mode,
@@ -441,10 +485,14 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
   const allWorkspaces = listAgentWorkspaces()
   const wsMap = new Map(allWorkspaces.map((w) => [w.id, w]))
 
+  /** 默认全量导出时被自动排除的 project 工作区（显式选中是硬错误，不进这里）。 */
+  const excluded: ExcludedWorkspace[] = []
+  const explicitSelection = Array.isArray(workspaceSelections) && workspaceSelections.length > 0
+
   let targetWorkspaces: Array<{ workspace: AgentWorkspace; skillSlugs?: string[]; mcpServerNames?: string[] }>
 
-  if (workspaceSelections && workspaceSelections.length > 0) {
-    targetWorkspaces = workspaceSelections
+  if (explicitSelection) {
+    targetWorkspaces = workspaceSelections!
       .map((sel) => {
         const ws = wsMap.get(sel.workspaceId)
         if (!ws) return null
@@ -452,10 +500,31 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
       })
       .filter((x): x is NonNullable<typeof x> => x !== null)
   } else {
-    targetWorkspaces = allWorkspaces.map((ws) => ({ workspace: ws }))
+    // 默认全量：project 工作区的配置在用户项目目录里，不能随备份跨项目搬运。
+    // 这里自动跳过并回报 excluded，而不是让「一键全量备份」直接失败。
+    targetWorkspaces = []
+    for (const ws of allWorkspaces) {
+      if (ws.storageMode === 'project') {
+        excluded.push({
+          workspaceId: ws.id,
+          workspaceName: ws.name,
+          workspaceSlug: ws.slug,
+          reason: PROJECT_WORKSPACE_AUTO_EXCLUDED_REASON,
+        })
+        addExportWarning(warnings, `「${ws.name}」${PROJECT_WORKSPACE_AUTO_EXCLUDED_REASON}`)
+        continue
+      }
+      targetWorkspaces.push({ workspace: ws })
+    }
   }
 
-  if (targetWorkspaces.length === 0) throw new Error('没有可导出的工作区')
+  if (targetWorkspaces.length === 0) {
+    throw new Error(excluded.length > 0
+      ? `没有可导出的工作区：${excluded.length} 个项目工作区已自动排除，请至少保留一个托管工作区`
+      : '没有可导出的工作区')
+  }
+  // 防御纵深：显式选中 project 会在这里抛错；默认全量分支已把 project 剔除。
+  assertMigrationWorkspacesSupported(targetWorkspaces.map((entry) => entry.workspace))
 
   const workspaceEntries: WorkspaceExportEntry[] = targetWorkspaces.map(({ workspace, skillSlugs, mcpServerNames }) => ({
     workspaceId: workspace.id,
@@ -529,7 +598,8 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
 
     reporter.setPhase('finalizing')
     await writer.addBuffer(JSON.stringify(manifest, null, 2), 'manifest.json')
-    return await _finishExport({ writer, stagingPath, outputPath, passphrase, warnings, reporter })
+    const result = await _finishExport({ writer, stagingPath, outputPath, passphrase, warnings, reporter })
+    return excluded.length > 0 ? { ...result, excluded } : result
   } catch (error) {
     await writer.abort()
     if (passphrase) rmSync(stagingPath, { force: true })
@@ -1534,6 +1604,7 @@ export async function confirmImport(
     }
 
     if (!targetWorkspace) throw new Error('无法确定目标工作区')
+    assertMigrationWorkspacesSupported([targetWorkspace])
 
     const warnings: string[] = []
 
@@ -1595,7 +1666,9 @@ async function _confirmImportV2(options: ConfirmImportOptionsV2): Promise<Confir
   const localWorkspaces = listAgentWorkspaces()
   const localBySlug = new Map(localWorkspaces.map((w) => [w.slug, w]))
 
-  const resolvedMappings: Array<{ sourceSlug: string; target: AgentWorkspace }> = []
+  // 项目工作区不支持导入：先解析已有目标并校验，再按原顺序创建新工作区。
+  // 顺序必须先校验后创建，避免“先建出一个空工作区再报错”的残留副作用。
+  const plannedTargets: Array<{ sourceSlug: string; existing?: AgentWorkspace; createName?: string }> = []
 
   if (workspaceMappings && workspaceMappings.length > 0) {
     for (const mapping of workspaceMappings) {
@@ -1605,24 +1678,30 @@ async function _confirmImportV2(options: ConfirmImportOptionsV2): Promise<Confir
           ? getAgentWorkspace(mapping.targetWorkspaceId)
           : localBySlug.get(mapping.sourceSlug)
         if (!target) continue
-        resolvedMappings.push({ sourceSlug: mapping.sourceSlug, target })
+        plannedTargets.push({ sourceSlug: mapping.sourceSlug, existing: target })
       } else if (mapping.action === 'create') {
         const wsEntry = v2Manifest.workspaces.find((w) => w.workspaceSlug === mapping.sourceSlug)
         const name = mapping.newWorkspaceName ?? wsEntry?.workspaceName ?? mapping.sourceSlug
-        const target = createAgentWorkspace(name)
-        resolvedMappings.push({ sourceSlug: mapping.sourceSlug, target })
+        plannedTargets.push({ sourceSlug: mapping.sourceSlug, createName: name })
       }
     }
   } else {
     for (const wsEntry of v2Manifest.workspaces) {
       const local = localBySlug.get(wsEntry.workspaceSlug)
-      if (local) {
-        resolvedMappings.push({ sourceSlug: wsEntry.workspaceSlug, target: local })
-      } else {
-        const target = createAgentWorkspace(wsEntry.workspaceName)
-        resolvedMappings.push({ sourceSlug: wsEntry.workspaceSlug, target })
-      }
+      plannedTargets.push(local
+        ? { sourceSlug: wsEntry.workspaceSlug, existing: local }
+        : { sourceSlug: wsEntry.workspaceSlug, createName: wsEntry.workspaceName })
     }
+  }
+
+  assertMigrationWorkspacesSupported(plannedTargets.map((plan) => plan.existing))
+
+  const resolvedMappings: Array<{ sourceSlug: string; target: AgentWorkspace }> = []
+  for (const plan of plannedTargets) {
+    resolvedMappings.push({
+      sourceSlug: plan.sourceSlug,
+      target: plan.existing ?? createAgentWorkspace(plan.createName ?? plan.sourceSlug),
+    })
   }
 
   for (const { sourceSlug, target } of resolvedMappings) {

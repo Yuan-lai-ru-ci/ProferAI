@@ -35,7 +35,7 @@ function normalizePreviewPath(filePath: string): string {
     .replace(/\\/g, '/')
     .replace(/^([A-Za-z]:)\/+/, '$1/')
   return normalized.replace(
-    /^([A-Za-z]:\/Users\/[^/]+)\.(profer(?:-dev)?|proma(?:-dev)?)(?=\/|$)/i,
+    /^([A-Za-z]:\/Users\/[^/]+)\.(profer(?:-dev)?)(?=\/|$)/i,
     '$1/.$2',
   )
 }

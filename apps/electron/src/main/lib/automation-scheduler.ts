@@ -129,6 +129,18 @@ export function broadcastChanged(): void {
  * @param manual 是否手动「立即运行」（手动运行也走同一路径，但不影响调度计时由 appendRun 统一推进）
  */
 export async function runAutomation(automation: Automation, manual = false): Promise<void> {
+  // 工作区已不可解析（project 被移除只删索引）时绝不执行：
+  // 会话与 headless 运行会拿不到 workspaceSlug，cwd 回落用户主目录，
+  // 等于把 ~ 当项目根跑无人值守命令。这里停用任务并结束。
+  if (automation.workspaceId && !getAgentWorkspace(automation.workspaceId)) {
+    console.warn(
+      `[定时任务] ${automation.name} 绑定的工作区已不存在（workspaceId=${automation.workspaceId}），已停用，本次不执行`,
+    )
+    updateAutomation({ id: automation.id, active: false })
+    broadcastChanged()
+    if (manual) throw new Error('该定时任务绑定的项目已被移除，请重新选择工作区后再运行')
+    return
+  }
   const scheduledAt = manual ? Date.now() : automation.nextRunAt
   const triggerId = manual
     ? `${automation.id}:manual:${scheduledAt}:${randomUUID()}`
@@ -355,7 +367,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
 
       const headlessInput: AgentSendInput = {
         sessionId: targetSessionId,
-        userMessage: automation.prompt + '\n<!--PROMA_SCHEDULED_RUN-->',
+        userMessage: automation.prompt + '\n<!--PROFER_SCHEDULED_RUN-->',
         automationContext: `这是 Profer 定时任务「${automation.name}」的自动执行（ID: ${automation.id}，${formatScheduleLabel(automation)}）。这本身就是定时任务，不要建议用户再创建定时任务。直接执行任务即可。如发现本任务连续失败、输出价值低、频率不合适或提示词不完整，可以使用 automation 工具读取并更新当前任务。`,
         channelId: automation.channelId,
         modelId: automation.modelId,

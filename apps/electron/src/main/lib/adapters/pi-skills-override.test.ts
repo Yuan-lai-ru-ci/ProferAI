@@ -46,7 +46,6 @@ beforeAll(() => {
   // 真实创建目录，确保 buildAllowedSkillRoots 的 realpath 能解析
   mkdirSync(join(skillsRoot, 'alpha'), { recursive: true })
   mkdirSync(join(skillsRoot, 'beta'), { recursive: true })
-  mkdirSync(join(skillsRoot, 'proma-coach'), { recursive: true })
   mkdirSync(join(skillsRoot, 'profer-coach'), { recursive: true })
   realSkillsRoot = mkdtempSync(join(tmpdir(), 'profer-real-skill-loader-'))
   for (const slug of ['same-a', 'same-b', 'ambiguous', 'ambiguous-copy']) {
@@ -89,13 +88,6 @@ describe('createProferSkillsOverride skillSlugs 语义', () => {
     const override = createProferSkillsOverride([skillsRoot], ['alpha'])
     const result = override(makeBase([alpha, outside]))
     expect(result.skills.map((s) => s.name)).toEqual(['alpha'])
-  })
-
-  test('历史 Coach 白名单解析为新 slug，且新旧目录并存时只注入新副本', () => {
-    const legacyCoach = makeSkill('proma-coach', skillsRoot)
-    const currentCoach = makeSkill('profer-coach', skillsRoot)
-    expect(createProferSkillsOverride([skillsRoot], ['proma-coach'])(makeBase([legacyCoach, currentCoach]))
-      .skills.map((skill) => skill.name)).toEqual(['profer-coach'])
   })
 
   test('synthetic fixture 的 name 不能扩宽规范目录白名单', () => {

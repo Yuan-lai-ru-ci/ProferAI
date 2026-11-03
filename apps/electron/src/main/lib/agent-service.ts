@@ -11,7 +11,6 @@
  */
 
 import { join, dirname, basename, sep } from 'node:path'
-import { homedir } from 'node:os'
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
@@ -47,13 +46,12 @@ import { RuntimeRoutingAgentAdapter } from './adapters/runtime-routing-agent-ada
 import { AgentEventBus } from './agent-event-bus'
 import { fanoutSessionEvent } from './agent-event-fanout'
 import { AgentCatalogInvalidationPublisher } from './agent-catalog-invalidation'
-import { AgentOrchestrator, serializeErrorDetail } from './agent-orchestrator'
+import { AgentOrchestrator, AgentSessionWorkspaceMissingError, requireAgentRunWorkspace, serializeErrorDetail } from './agent-orchestrator'
 import { AgentRunAlreadyActiveError } from './agent-orchestrator-p0-guards'
 import { createAgentRunOutcomeReporter } from './agent-run-outcome'
 import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, type HeadlessAgentCompletionOptions, type HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir, getSdkConfigDir } from './config-paths'
-import { getAgentWorkspace } from './agent-workspace-manager'
-import { getAgentSessionMeta, getAgentSessionMessages, setAgentSessionActiveChecker, updateAgentSessionMeta } from './agent-session-manager'
+import { getAgentSessionMeta, getAgentSessionMessages, setAgentSessionActiveChecker, updateAgentSessionMeta, resolveAgentSessionCwd, shouldSkipPiFileCheckpoint } from './agent-session-manager'
 import { backupAgentAttachment } from './agent-attachment-backup'
 import {
   configureAgentSessionProjectionPublisher,
@@ -784,9 +782,10 @@ export async function runAgent(
  * 被拒绝时 `handle.promise` 直接抛具名错误，本函数不投递任何终态。
  *
  * cwd：**不再接受**调用方覆盖。旧链（remote / automation / bridge 都走 `orchestrator.sendMessage`）
- * 的 cwd 语义是 `getAgentSessionWorkspacePath(workspaceSlug, sessionId)`，无 workspace 时用
- * 用户主目录；新链曾让 remote / automation 传 workspace 根，导致多个 session 共享 cwd、
- * Pi checkpoint 与相对路径文件串线。现在统一由 `buildRuntimeHeadlessRunContext` 推导。
+ * 的 cwd 语义已统一为 `resolveAgentSessionCwd`（managed = 会话目录，project = 项目根）。
+ * 会话所属工作区解析不到时拒绝执行（不回落 `$HOME`）；只有完全无工作区的历史会话保留主目录语义。
+ * 新链曾让 remote / automation 传 workspace 根，导致多个 session
+ * 共享 cwd、Pi checkpoint 与相对路径文件串线。现在统一由 `buildRuntimeHeadlessRunContext` 推导。
  */
 export async function runAgentRuntimeHeadless(
   input: AgentSendInput,
@@ -883,6 +882,13 @@ export async function runAgentRuntimeHeadless(
         onComplete: forwardRuntimeCompletion,
       },
     })
+  } catch (error) {
+    // 工作区已不存在是「执行前拒绝」，不是 owner run 的终态：
+    // - 没有其它 run 持有会话时，把错误作为终态投给调用方（IM / Pocket / 自动化才看得到原因）；
+    // - 已有 owner 时按既有约定原样抛出，绝不伪造终态破坏正在运行的那一轮。
+    if (!(error instanceof AgentSessionWorkspaceMissingError) || isAgentExecutionActive(input.sessionId)) throw error
+    forwardRuntimeError(error.message)
+    forwardRuntimeCompletion([], { stoppedByUser: false, endReason: 'error', endReasonLabel: '执行出错' })
   } finally {
     finishActiveStreamBacklog(input.sessionId)
   }
@@ -903,24 +909,40 @@ function canUseRuntimeHeadless(input: AgentSendInput): boolean {
 /**
  * 将完整 headless 输入交给 runtime coordinator 所需的宿主环境（runtime / cwd / 工具装配基座 / 策略）。
  *
- * cwd 与旧链同源（`AgentOrchestrator.sendMessage`）：workspace 存在时用会话级工作目录
- * `getAgentSessionWorkspacePath(workspaceSlug, sessionId)`，否则回退用户主目录。
+ * cwd 与旧链（`AgentOrchestrator.sendMessage`）同源：两边都调 `resolveAgentSessionCwd`
+ * （managed = `<configDir>/<sessionId>`；project = 工作区 rootPath）。
+ * 会话所属工作区解析不到时**拒绝执行**（抛 `AgentSessionWorkspaceMissingError`），绝不把 `$HOME`
+ * 当 cwd：否则无人值守命令会以用户主目录为项目根运行（P1-残留-1）。只有完全没有工作区的
+ * 历史会话才保留 `resolveAgentSessionCwd` 的无工作区语义。
  * 不用 `process.cwd()`：桌面应用启动目录可能是安装目录 / 快捷方式目录，不稳定。
+ *
+ * 导出供回归测试直接断言 cwd / 拒绝行为（不经 provider）。
  */
-function buildRuntimeHeadlessRunContext(
+export function buildRuntimeHeadlessRunContext(
   input: AgentSendInput,
 ): RuntimeEntryRunContext {
   const sessionMeta = getAgentSessionMeta(input.sessionId)
   const runtime = normalizeAgentRuntime(input.agentRuntime ?? sessionMeta?.agentRuntime)
-  const workspaceSlug = input.workspaceId ? getAgentWorkspace(input.workspaceId)?.slug : undefined
-  const cwd = workspaceSlug ? getAgentSessionWorkspacePath(workspaceSlug, input.sessionId) : homedir()
+  // 工作区归属的权威事实在会话元数据里：headless 调用方可能只带 sessionId。两条来源都看。
+  const workspace = requireAgentRunWorkspace({
+    sessionId: input.sessionId,
+    ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
+    ...(sessionMeta?.workspaceId !== undefined ? { sessionWorkspaceId: sessionMeta.workspaceId } : {}),
+  })
+  const workspaceSlug = workspace?.slug
+  // 保留历史副作用：该函数带 mkdir（会话存储目录按需创建），cwd 解析本身不 mkdir。
+  // project 下存储目录在中央 runtimeDir，绝不进项目。
+  if (workspaceSlug) getAgentSessionWorkspacePath(workspaceSlug, input.sessionId)
+  const cwd = resolveAgentSessionCwd(workspaceSlug, input.sessionId)
+  // 项目模式的 cwd 是项目根：不能当快照根（每轮全量快照整个仓库，回退会删改同项目其它会话的文件）。
+  const skipPiFileCheckpoint = shouldSkipPiFileCheckpoint(workspace)
   const policy = resolveRuntimeHeadlessPolicyContext(input, runtime, sessionMeta, workspaceSlug)
   return {
     runtime,
     cwd,
     // GAP-2：Pi 文件回退检查点必须在 provider 启动前创建（Claude 走 SDK 自带 file-history-snapshot）。
     // 使用与 provider 相同的 `cwd`（否则快照根与实际被改写的目录不一致）。
-    ...(runtime === 'pi'
+    ...(runtime === 'pi' && !skipPiFileCheckpoint
       ? { checkpointTurn: beginPiCheckpointTurn({ sessionId: input.sessionId, cwd }) }
       : {}),
     toolAssemblyContext: {

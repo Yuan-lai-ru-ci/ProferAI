@@ -62,7 +62,7 @@ describe('turn image outputs', () => {
       assistantToolUse('send-1', 'send_local_image'),
       {
         type: 'assistant',
-        message: { content: [{ type: 'text', text: `[PROMA_IMAGE_ATTACHMENT:${JSON.stringify(image)}]` }] },
+        message: { content: [{ type: 'text', text: `[PROFER_IMAGE_ATTACHMENT:${JSON.stringify(image)}]` }] },
       } as unknown as SDKMessage,
     ])
 

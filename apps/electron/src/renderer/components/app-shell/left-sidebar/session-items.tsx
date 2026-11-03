@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Pencil, Pin, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, MailOpen, Sparkles, X, XCircle, XSquare,
+  Pencil, Pin, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, MailOpen, Sparkles, X, XCircle, XSquare, AlertTriangle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useShortcut } from '@/hooks/useShortcut'
@@ -41,7 +41,7 @@ import {
 import { browserStateMapAtom } from '@/atoms/browser-atoms'
 import { currentAgentSessionIdAtom, unviewedCompletedSessionIdsAtom, type SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import type { ConversationMeta, AgentSessionMeta, AgentWorkspace } from '@profer/shared'
-import { formatRelativeUpdatedAt, sidebarRowClass } from './sidebar-utils'
+import { formatRelativeUpdatedAt, resolveSessionLeadingMarkers, sidebarRowClass } from './sidebar-utils'
 import type { ShortcutRegistrationOptions } from '@/lib/shortcut-registry'
 import {
   buildAgentSessionTrees,
@@ -75,11 +75,26 @@ export interface AgentProjectGroup {
 }
 
 /**
- * 已置顶标记：标题左侧常显的大头针，点击取消置顶。
+ * 项目行的移除菜单文案。
  *
- * 只在会话已置顶时渲染——未置顶不占位，标题贴左；置顶后才让出 14px。
- * 置顶入口本身走右键 / 三点菜单，避免 hover 时按钮浮在标题上或把标题挤跳。
+ * project 只是从 Profer 列表移除绑定（项目文件与 `.profer` 都保留），
+ * 用「删除」会让用户以为要动磁盘；managed 仍是真正删除工作区。
  */
+export function getWorkspaceRemoveMenuLabel(workspace: Pick<AgentWorkspace, 'storageMode'>): string {
+  return workspace.storageMode === 'project' ? '从 Profer 移除' : '删除项目'
+}
+
+/**
+ * 行首状态标记（置顶 / 定时 / 委派·探索 / 浏览器 / 标题生成）的统一规格：
+ * 11px 线性图标、同一中性灰、13px 见方的小盒，按固定顺序从标题左侧依次向右堆。
+ *
+ * 标记只在真的存在时占位、随标题行内联排布：没有标记的会话标题直接贴左，不会被空留白
+ * 顶开；标记变多时标题顺势右移，不会像固定留白槽那样压到标题文字上。
+ */
+const SESSION_MARKER_BOX_CLASS = 'flex size-[13px] flex-shrink-0 items-center justify-center'
+const SESSION_MARKER_ICON_CLASS = 'flex-shrink-0 text-foreground/40'
+
+/** 已置顶标记：点击取消置顶；尺寸与灰度跟其它行首标记完全一致 */
 function SessionLeadingPin({
   onTogglePin,
 }: {
@@ -95,12 +110,12 @@ function SessionLeadingPin({
         onTogglePin()
       }}
       className={cn(
-        'flex h-[14px] w-[14px] flex-shrink-0 items-center justify-center rounded',
+        SESSION_MARKER_BOX_CLASS,
+        'rounded text-foreground/40 transition-colors hover:text-foreground/75',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
-        'text-primary/60 hover:text-primary hover:bg-foreground/[0.08]',
       )}
     >
-      <Pin size={10} className="fill-current" />
+      <Pin size={11} />
     </button>
   )
 }
@@ -789,29 +804,53 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   // 隐藏行内入口与菜单项，避免置顶后既不在项目顶部、又让母行状态与排序失真。
   const pinnable = isPinnableSession(session)
 
-  // 行首状态图标：置顶 / 定时 / 委派·探索 / 浏览器 / 生成标题。
-  // 项目列表行（depth=1）把它们放进左侧缩进留白的绝对定位槽，标题起点固定，
-  // 不再因为图标数量不同而左右跳动；其他行保持内联。
-  const leadingIcons = (
-    <>
-      {pinnable && session.pinned && showPinIcon && (
-        <SessionLeadingPin onTogglePin={() => onTogglePin(session.id)} />
-      )}
-      {session.sourceAutomationId && !session.sourceDelegationId && (
-        <Clock size={11} className="flex-shrink-0 text-foreground/40" />
-      )}
-      {session.explorationParentSessionId && session.explorationSourceMessageId ? (
-        <GitFork size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
-      ) : session.sourceDelegationId ? (
-        <GitBranch size={11} className={cn('flex-shrink-0', DELEGATION_STATUS_ICON_CLASS[indicatorStatus])} />
-      ) : null}
-      {regeneratingTitle ? (
-        <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
-      ) : hasBrowser ? (
-        <Globe size={11} className="flex-shrink-0 text-foreground/40" aria-label="该会话正在使用浏览器" />
-      ) : null}
-    </>
-  )
+  // 行首状态标记，顺序固定：置顶 → 定时 → 委派·探索 → 浏览器 → 标题生成（见 resolveSessionLeadingMarkers）。
+  // 有几个就按这个顺序从标题左侧依次向右堆；没有标记时不占位，标题直接贴左。
+  const leadingMarkers = resolveSessionLeadingMarkers({
+    pinnable,
+    pinned: !!session.pinned,
+    showPinIcon: !!showPinIcon,
+    sourceAutomationId: session.sourceAutomationId,
+    sourceDelegationId: session.sourceDelegationId,
+    explorationParentSessionId: session.explorationParentSessionId,
+    explorationSourceMessageId: session.explorationSourceMessageId,
+    hasBrowser,
+    regeneratingTitle: !!regeneratingTitle,
+  }).map((kind) => {
+    switch (kind) {
+      case 'pin':
+        return <SessionLeadingPin key={kind} onTogglePin={() => onTogglePin(session.id)} />
+      case 'automation':
+        return <Clock key={kind} size={11} className={SESSION_MARKER_ICON_CLASS} aria-label="由定时任务创建" />
+      case 'exploration':
+        return (
+          <GitFork
+            key={kind}
+            size={11}
+            className={cn(SESSION_MARKER_ICON_CLASS, DELEGATION_STATUS_ICON_CLASS[indicatorStatus])}
+          />
+        )
+      case 'delegation':
+        return (
+          <GitBranch
+            key={kind}
+            size={11}
+            className={cn(SESSION_MARKER_ICON_CLASS, DELEGATION_STATUS_ICON_CLASS[indicatorStatus])}
+          />
+        )
+      case 'browser':
+        return <Globe key={kind} size={11} className={SESSION_MARKER_ICON_CLASS} aria-label="该会话正在使用浏览器" />
+      case 'regeneratingTitle':
+        return (
+          <Loader2
+            key={kind}
+            size={11}
+            className={cn(SESSION_MARKER_ICON_CLASS, 'text-info animate-spin')}
+            aria-label="正在重新生成标题"
+          />
+        )
+    }
+  })
 
   // 未读切换项：判据是「用户能看到的未读状态」——持久化字段
   // `completedButUnconfirmed` ∪ 渲染层未读集合（关闭态下绿标看的就是内存集合，只判持久化字段
@@ -953,13 +992,11 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
                 'truncate text-[13px] leading-[18px] flex items-center gap-1.5',
                 active ? 'text-foreground' : 'text-foreground/[0.75] [.skin-slate-light_&]:text-foreground/[0.85]'
               )}>
-                {/* 行首状态图标：项目列表行放进左侧缩进留白的绝对定位槽，标题起点固定；其他行内联 */}
-                {depth === 1 ? (
-                  <span className="absolute left-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
-                    {leadingIcons}
+                {/* 行首状态标记：只在有标记时占位，按固定顺序向右堆，标题紧接其后 */}
+                {leadingMarkers.length > 0 && (
+                  <span data-session-markers className="flex flex-shrink-0 items-center gap-1">
+                    {leadingMarkers}
                   </span>
-                ) : (
-                  leadingIcons
                 )}
                 {regeneratingTitle && depth !== 1 && (
                   <span className="flex-shrink-0 text-[12px] text-info">正在生成标题…</span>
@@ -1145,6 +1182,10 @@ interface AgentProjectGroupItemProps {
   onRegenerateTitle?: (id: string) => Promise<void>
   /** 工作区最近一次切换的时间戳，用于短暂高亮 */
   workspaceSwitchTs?: number
+  /** project 工作区的根路径可用性；unknown = 尚未探测或探测失败（不误报不可用） */
+  pathStatus?: 'ok' | 'missing' | 'unknown'
+  /** 重新定位路径失效的项目（选择新的项目文件夹） */
+  onRelocateProject?: (workspaceId: string) => void | Promise<void>
 }
 
 export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
@@ -1184,8 +1225,14 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   onToggleRelatedParent,
   onMarkUnread,
   onRegenerateTitle,
+  pathStatus = 'unknown',
+  onRelocateProject,
 }: AgentProjectGroupItemProps): React.ReactElement {
   const isCurrent = group.workspace.id === currentWorkspaceId
+  const isProjectWorkspace = group.workspace.storageMode === 'project'
+  const projectRootPath = isProjectWorkspace ? group.workspace.rootPath ?? '' : ''
+  // 索引里缺少 rootPath 与路径被删除是同一类问题：项目行必须给出重新定位入口
+  const projectPathUnavailable = isProjectWorkspace && (pathStatus === 'missing' || !projectRootPath)
   /** 最近 1.2 秒内切换到此工作区时，短暂高亮 */
   const justSwitchedTo = isCurrent && workspaceSwitchTs > 0 && Date.now() - workspaceSwitchTs < 1200
   const renderWorkspaceIcon = (size: number, className: string) =>
@@ -1302,12 +1349,15 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
             data-profer-navigation-active={isCurrent ? 'true' : undefined}
             aria-expanded={!collapsed}
             aria-controls={`project-sessions-${group.workspace.id}`}
+            title={projectPathUnavailable ? '项目路径不可用，请先重新定位' : undefined}
             onClick={(e) => {
               e.stopPropagation()
               if (e.target instanceof Element && e.target.closest('[data-project-collapse]')) {
                 onToggleProjectCollapse(group.workspace.id)
                 return
               }
+              // 路径失效时不进入项目：进入会拉起草稿会话，等于在错误路径上新建会话（设计 §8.5）
+              if (projectPathUnavailable) return
               // 切换项目不再等双击窗口：折叠只走右侧 chevron，单击立即生效。
               void onSelectProject(group.workspace.id)
             }}
@@ -1322,6 +1372,14 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
             <span className="flex-1 min-w-0 truncate text-[14px] font-medium leading-[19px]">
               {group.workspace.name}
             </span>
+            {isProjectWorkspace && (
+              <span
+                data-project-local-badge
+                className="flex-shrink-0 rounded border border-foreground/20 bg-foreground/[0.03] px-1 text-[10px] leading-4 text-foreground/50"
+              >
+                本地项目
+              </span>
+            )}
             <span
               data-project-collapse
               title={collapsed ? '展开项目会话' : '收起项目会话'}
@@ -1341,8 +1399,10 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
         <button
           type="button"
           aria-label={`在「${group.workspace.id}」中新建会话`}
+          title={projectPathUnavailable ? '项目路径不可用，无法新建会话' : undefined}
+          disabled={projectPathUnavailable}
           onClick={() => { void onNewSession(group.workspace.id) }}
-          className="absolute right-5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-colors hover:bg-foreground/[0.055] hover:text-foreground/65 group-hover/project:opacity-100 data-[state=open]:opacity-100 titlebar-no-drag"
+          className="absolute right-5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-colors hover:bg-foreground/[0.055] hover:text-foreground/65 group-hover/project:opacity-100 data-[state=open]:opacity-100 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-foreground/30 titlebar-no-drag"
         >
           <Plus size={13} />
         </button>
@@ -1389,11 +1449,46 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               onSelect={() => onRequestDeleteWorkspace(group.workspace.id)}
             >
               <Trash2 size={14} />
-              删除项目
+              {getWorkspaceRemoveMenuLabel(group.workspace)}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {isProjectWorkspace && projectPathUnavailable && (
+        <div data-project-meta className="flex flex-col gap-0.5 pb-0.5 pl-[30px] pr-2">
+          <div data-project-path-unavailable className="flex flex-col gap-1">
+            <div className="flex min-w-0 items-center gap-1 text-[11px] leading-4 text-destructive/85">
+              <AlertTriangle size={11} className="flex-shrink-0" />
+              <span className="min-w-0 truncate">项目路径不可用</span>
+            </div>
+            <div className="flex items-center gap-2 text-[11px] leading-4">
+              <button
+                type="button"
+                data-project-relocate
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void onRelocateProject?.(group.workspace.id)
+                }}
+                className="rounded px-1.5 py-0.5 text-foreground/75 transition-colors hover:bg-foreground/[0.07] hover:text-foreground"
+              >
+                重新定位
+              </button>
+              <button
+                type="button"
+                data-project-remove-from-list
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRequestDeleteWorkspace(group.workspace.id)
+                }}
+                className="rounded px-1.5 py-0.5 text-foreground/50 transition-colors hover:bg-foreground/[0.06] hover:text-foreground/80"
+              >
+                从列表移除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div id={`project-sessions-${group.workspace.id}`} className="mt-px">
         {!collapsed ? (
@@ -1464,7 +1559,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 <button
                   type="button"
                   onClick={() => onShowMore(group.workspace.id)}
-                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[30px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
+                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-2 pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
                 >
                   显示更多（{hiddenCount}）
                 </button>
@@ -1474,7 +1569,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                 <button
                   type="button"
                   onClick={() => onCollapseExtra(group.workspace.id)}
-                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-[30px] pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
+                  className="ml-1 flex h-[26px] w-[calc(100%-0.25rem)] items-center rounded-[7px] pl-2 pr-2 text-left text-[12px] text-foreground/[0.32] transition-colors hover:bg-foreground/[0.04] hover:text-foreground/[0.62] titlebar-no-drag"
                 >
                   收起已展开的会话
                 </button>

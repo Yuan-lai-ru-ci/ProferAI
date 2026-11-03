@@ -13,6 +13,14 @@ export type { ActorRef, MessageProvenance, ResourceRef, TaskAuthorization, TaskO
 /** Agent 工作区类型；团队工作区已下线，新建工作区仅为个人。 */
 export type WorkspaceType = 'personal'
 
+/**
+ * 工作区存储模式
+ *
+ * - managed：Profer 托管，工作区目录在 `~/.profer/agent-workspaces/<slug>/`
+ * - project：用户项目模式，工作区配置在 `<rootPath>/.profer/`，Agent 在项目根下工作
+ */
+export type WorkspaceStorageMode = 'managed' | 'project'
+
 /** Agent 工作区 */
 export interface AgentWorkspace {
   /** 工作区唯一标识 */
@@ -29,6 +37,20 @@ export interface AgentWorkspace {
   /** 工作区类型 */
   type?: WorkspaceType
 
+  /**
+   * 存储模式
+   *
+   * 缺省（undefined）一律视为 `managed`：v3 及更早索引没有该字段，
+   * 迁移到 v4 时会补齐为 `'managed'`。
+   */
+  storageMode?: WorkspaceStorageMode
+  /**
+   * 项目根绝对路径
+   *
+   * 仅 `project` 模式落盘；`managed` 模式不得携带该字段（其目录由 slug 推导）。
+   */
+  rootPath?: string
+
   // 本地收纳（个人工作区归档，与会话归档同构）
   /** 收纳标记：true 时不出现在项目切换器，数据完整保留 */
   archived?: boolean
@@ -44,6 +66,52 @@ export interface AgentWorkspace {
   /** 冷静期到期时间（仅 deleted 状态下有意义） */
   expiresAt?: number
 }
+
+/**
+ * 绑定项目的目标路径（IPC 入参）
+ *
+ * 只包含用户可选信息；`proferVersion` 由主进程补齐，渲染进程不需要感知。
+ */
+export interface ProjectWorkspaceTarget {
+  /** 项目根绝对路径 */
+  rootPath: string
+  /** 显示名称；缺省用目录名 */
+  name?: string
+}
+
+/** 创建项目工作区入参（主进程内部） */
+export interface CreateProjectWorkspaceInput extends ProjectWorkspaceTarget {
+  /** 写入 `profer.json` 的 Profer 版本；由调用方注入，manager 不依赖 electron */
+  proferVersion: string
+}
+
+/** 打开已有项目入参（主进程内部） */
+export interface OpenProjectWorkspaceInput extends ProjectWorkspaceTarget {
+  /** 仅在补写缺失的 `profer.json` 时使用 */
+  proferVersion?: string
+}
+
+/** 创建 / 打开项目工作区的结果 */
+export interface ProjectWorkspaceOpenResult {
+  workspace: AgentWorkspace
+  /** true = 本次新建了索引条目；false = 复用已有绑定 */
+  created: boolean
+  /** 非致命提示（如项目清单 schema 版本过新、只读打开） */
+  warnings: string[]
+}
+
+/** 项目工作区生命周期错误的稳定分类，便于调用方映射文案 */
+export type ProjectWorkspaceErrorCode =
+  | 'path-not-absolute'
+  | 'path-not-found'
+  | 'path-not-directory'
+  | 'path-not-writable'
+  | 'path-is-filesystem-root'
+  | 'path-inside-config-dir'
+  | 'already-bound'
+  | 'manifest-invalid'
+  | 'not-a-project-workspace'
+  | 'workspace-not-found'
 
 /** 思考模式配置
  *
@@ -825,7 +893,7 @@ export interface AgentSessionUiProjection {
 /**
  * Agent 会话轻量索引项
  *
- * 存储在 ~/.proma/agent-sessions.json 中，
+ * 存储在 ~/.profer/agent-sessions.json 中，
  * 类似 ConversationMeta，独立存储。
  */
 export interface AgentSessionMeta {
@@ -965,7 +1033,7 @@ export function isVisibleAgentSession(session: Pick<AgentSessionMeta, 'draft'>):
 /**
  * Agent 持久化消息
  *
- * 存储在 ~/.proma/agent-sessions/{id}.jsonl 中。
+ * 存储在 ~/.profer/agent-sessions/{id}.jsonl 中。
  */
 export interface AgentMessage {
   /** 消息唯一标识 */
@@ -1097,12 +1165,65 @@ export interface McpServerEntry {
   enabled: boolean
   /** 是否为内置 MCP（不可删除，仅可配置 env） */
   isBuiltin?: boolean
+  /**
+   * 该 server 会在进程内缓存的外部配置文件（绝对路径）。
+   * 用于判断「配置文件已变更，但常驻进程仍在用旧值」——Profer 只提示，不自动重载。
+   */
+  externalStatePaths?: string[]
   /** 最后一次测试结果 */
   lastTestResult?: {
     success: boolean
     message: string
     timestamp: number
+    /** 结果对应的配置指纹；与当前配置指纹不一致时该结果作废，不得当作「已连接」展示 */
+    fingerprint?: string
+    /** 握手成功后探测到的工具清单（仅名称与只读标注，不含任何凭据） */
+    tools?: McpToolSummary[]
+    /** 失败原因分类，供 UI 给出可区分文案 */
+    reason?: McpProbeFailureReason
   }
+}
+
+/** MCP 工具摘要：只保留展示与门禁需要的字段，不含 schema 与凭据 */
+export interface McpToolSummary {
+  name: string
+  /** 服务端声明的 readOnlyHint；缺失表示未声明，不等于可写 */
+  readOnly?: boolean
+}
+
+/** MCP 握手失败的可区分原因 */
+export type McpProbeFailureReason =
+  | 'command-missing'
+  | 'handshake-timeout'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'protocol-incompatible'
+  | 'network'
+  | 'unknown'
+
+/** 单个 MCP 连接在运行时的快照（供设置页展示，不含任何凭据） */
+export interface McpConnectionSnapshot {
+  serverName: string
+  /** 连接归属的工作区；跨工作区共享连接时为空 */
+  workspaceSlug?: string
+  /** 连接建立时间（epoch ms） */
+  connectedAt: number
+  /** 最后一次使用时间（epoch ms） */
+  lastUsedAt: number
+  /** 连接代际：重启后递增，旧代际的探测结果与工具清单作废 */
+  epoch: number
+  /** 当前缓存的工具数量 */
+  toolCount: number
+  /** stdio 子进程 pid；http/sse 为 null */
+  pid: number | null
+  /** externalStatePaths 中任一文件的 mtime 晚于连接建立时间 */
+  externalStateStale: boolean
+}
+
+/** 重启单个 MCP server 的结果 */
+export interface McpServerRestartResult {
+  ok: boolean
+  message: string
 }
 
 /** 工作区 MCP 配置文件 */
@@ -2229,6 +2350,14 @@ export const AGENT_IPC_CHANNELS = {
   LIST_WORKSPACES: 'agent:list-workspaces',
   /** 创建工作区 */
   CREATE_WORKSPACE: 'agent:create-workspace',
+  /** 选择项目文件夹（系统目录选择器） */
+  SELECT_PROJECT_FOLDER: 'agent:select-project-folder',
+  /** 创建项目工作区（绑定已有文件夹 + 生成骨架） */
+  CREATE_PROJECT_WORKSPACE: 'agent:create-project-workspace',
+  /** 打开已有项目工作区（补齐骨架，不覆盖既有文件） */
+  OPEN_PROJECT_WORKSPACE: 'agent:open-project-workspace',
+  /** 移除项目工作区（只删索引，不碰项目文件） */
+  REMOVE_PROJECT_WORKSPACE: 'agent:remove-project-workspace',
   /** 更新工作区 */
   UPDATE_WORKSPACE: 'agent:update-workspace',
   /** 删除工作区 */
@@ -2332,6 +2461,10 @@ export const AGENT_IPC_CHANNELS = {
   SAVE_MCP_CONFIG: 'agent:save-mcp-config',
   /** 测试 MCP 服务器连接 */
   TEST_MCP_SERVER: 'agent:test-mcp-server',
+  /** 重启单个 MCP server（关闭现有连接，下一轮重建） */
+  RESTART_MCP_SERVER: 'agent:restart-mcp-server',
+  /** 获取 MCP 运行时连接快照（pid / 启动时间 / 工具数 / 外部配置是否过期） */
+  GET_MCP_CONNECTION_STATUS: 'agent:get-mcp-connection-status',
   /** 获取工作区 Skill 列表 */
   GET_SKILLS: 'agent:get-skills',
   /** 获取工作区 Skills 目录绝对路径 */
@@ -2345,7 +2478,7 @@ export const AGENT_IPC_CHANNELS = {
   TOGGLE_SKILL: 'agent:toggle-skill',
   /** 获取其他工作区的 Skill 列表 */
   GET_OTHER_WORKSPACE_SKILLS: 'agent:get-other-workspace-skills',
-  /** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
+  /** 获取默认 Skills 的 slug 列表（来自 ~/.profer/default-skills/） */
   GET_DEFAULT_SKILL_SLUGS: 'agent:get-default-skill-slugs',
   /** 从其他工作区导入 Skill 到当前工作区 */
   IMPORT_SKILL_FROM_WORKSPACE: 'agent:import-skill-from-workspace',
@@ -2445,8 +2578,10 @@ export const AGENT_IPC_CHANNELS = {
   REMOVE_WORKTREE_REPO: 'agent:remove-worktree-repo',
 
   // 文件系统操作
-  /** 获取 session 工作路径 */
+  /** 获取 session 工作路径（UI 根：managed = 会话目录，project = 项目根） */
   GET_SESSION_PATH: 'agent:get-session-path',
+  /** 获取 session 草稿区（storageDir，只读）：用于判定 Agent 私有产物（截图 / 临时文件 / .context 草稿） */
+  GET_SESSION_STORAGE_PATH: 'agent:get-session-storage-path',
   /** 列出目录内容 */
   LIST_DIRECTORY: 'agent:list-directory',
   /** 删除文件/空目录 */
@@ -2624,7 +2759,7 @@ export interface TeamServerConfig {
   baseUrl: string
   authEndpoint: string
   syncEndpoint: string
-  provider: 'self-hosted' | 'proma-cloud'
+  provider: 'self-hosted' | 'profer-cloud'
   enabled: boolean
   lastHealthCheck?: { ok: boolean; checkedAt: number; error?: string }
 }

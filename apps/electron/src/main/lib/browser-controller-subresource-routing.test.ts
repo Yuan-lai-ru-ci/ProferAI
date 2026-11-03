@@ -38,7 +38,7 @@ interface Internals {
 function twoSharedSessions() {
   const controller = new BrowserController()
   const internals = controller as unknown as Internals
-  const sharedSession = { partition: 'persist:proma-browser-shared' }
+  const sharedSession = { partition: 'persist:profer-browser-shared' }
   const olderTab = makeTab('tab-older', 101, 'https://older.example.com/')
   const newerTab = makeTab('tab-newer', 202, 'https://profer.cn/')
   internals.sessions = new Map([

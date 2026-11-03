@@ -163,3 +163,46 @@ describe('文件改动 chip 不追踪会话工作目录里的草稿文件', () =
     expect(resolveVisibleFileChanges(['src/a.ts'], sessionPath)).toEqual(['src/a.ts'])
   })
 })
+
+/**
+ * P1-6 / FIX-B 回归：project 下草稿区是 storageDir，不是用户可见的项目根。
+ *
+ * 修前 `TurnFileChangesSummary` 拿 `sessionPath`（project 下 = 项目根）当草稿区，
+ * 项目内改动全被当成草稿隐藏，文件改动 chip 变空。
+ */
+describe('草稿区基准必须是 storageDir（project 下不再是 UI 根）', () => {
+  const projectRoot = '/Users/me/profer/profer-main'
+  const projectStorageDir = '/Users/me/.profer/agent-workspaces/proj/sessions/0ad480b7'
+
+  test('project：项目内改动看得见', () => {
+    expect(resolveVisibleFileChanges(
+      [`${projectRoot}/src/a.ts`, `${projectRoot}/README.md`],
+      projectStorageDir,
+    )).toEqual([`${projectRoot}/src/a.ts`, `${projectRoot}/README.md`])
+  })
+
+  test('project：storageDir 内的截图与 .context 草稿仍被隐藏', () => {
+    expect(resolveVisibleFileChanges(
+      [`${projectStorageDir}/mem-v2.png`, `${projectStorageDir}/.context/plan/x.md`, `${projectRoot}/src/a.ts`],
+      projectStorageDir,
+    )).toEqual([`${projectRoot}/src/a.ts`])
+  })
+
+  test('project：拿 UI 根当基准会把项目改动全部吃掉（修前的 bug，用基准反证）', () => {
+    expect(resolveVisibleFileChanges([`${projectRoot}/src/a.ts`], projectRoot)).toEqual([])
+  })
+
+  test('managed：storageDir 就是会话目录，行为与改造前一致', () => {
+    expect(resolveVisibleFileChanges(
+      [`${projectStorageDir}/mem-v2.png`, '/Users/me/profer/profer-main/src/a.ts'],
+      projectStorageDir,
+    )).toEqual(['/Users/me/profer/profer-main/src/a.ts'])
+  })
+
+  test('拿不到 storageDir 时不做草稿过滤（绝不回退到 UI 根）', () => {
+    expect(resolveVisibleFileChanges([
+      `${projectRoot}/src/a.ts`,
+      `${projectStorageDir}/mem-v2.png`,
+    ])).toEqual([`${projectRoot}/src/a.ts`, `${projectStorageDir}/mem-v2.png`])
+  })
+})

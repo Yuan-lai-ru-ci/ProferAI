@@ -87,8 +87,8 @@ export async function generateAgentGptImage(
     const paths = input.referenceImagePaths ?? []
     const previous = input.useLastGeneratedImage
       ? (input.referenceGenerationId
-          ? await getImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd }, input.referenceGenerationId)
-          : await getLatestSuccessfulGeneration({ sessionId: context.sessionId, agentCwd: context.agentCwd }))
+          ? await getImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd, storageDir: context.storageDir }, input.referenceGenerationId)
+          : await getLatestSuccessfulGeneration({ sessionId: context.sessionId, agentCwd: context.agentCwd, storageDir: context.storageDir }))
       : undefined
     const reference = input.useLastGeneratedImage
       ? (previous ? { kind: 'last_generated' as const, generationId: previous.id } : { kind: 'last_generated' as const })
@@ -97,7 +97,7 @@ export async function generateAgentGptImage(
     // Persist invocation before validation, artifact reads, or provider contact. This
     // makes rejected calls visible as honest failed cards too.
     record = await createImageGenerationRecord({
-      sessionId: context.sessionId, agentCwd: context.agentCwd, toolCallId: input.toolCallId,
+      sessionId: context.sessionId, agentCwd: context.agentCwd, storageDir: context.storageDir, toolCallId: input.toolCallId,
       prompt: prompt || '（无效提示词）', size: input.size, quality: input.quality, reference,
       retryOf: input.retryOf,
     })
@@ -119,10 +119,10 @@ export async function generateAgentGptImage(
     })
     if (!generated.ok) throw new AgentGptImageProviderError(generated.error)
 
-    record = await transitionImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd }, record.id, { status: 'saving' })
+    record = await transitionImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd, storageDir: context.storageDir }, record.id, { status: 'saving' })
     notify(context, record)
     const output = await writeAgentImageOutput(generated.bytes, generated.mediaType, context, `generated-image-${input.toolCallId}`)
-    record = await transitionImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd }, record.id, {
+    record = await transitionImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd, storageDir: context.storageDir }, record.id, {
       status: 'succeeded', image: publicImage(output), mode: generated.mode,
       ...(generated.mode === 'official' ? { chargedCredits: 5 as const } : {}), revisedPrompt: generated.revisedPrompt,
     })
@@ -133,7 +133,7 @@ export async function generateAgentGptImage(
     const errorText = safeError(error)
     if (record && (record.status === 'requesting' || record.status === 'saving')) {
       try {
-        const failed = await transitionImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd }, record.id, { status: 'failed', error: errorText })
+        const failed = await transitionImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd, storageDir: context.storageDir }, record.id, { status: 'failed', error: errorText })
         notify(context, failed)
       } catch (transitionError) { console.error('[Agent GPT Image] failed to persist failure:', transitionError) }
     }
@@ -153,7 +153,7 @@ export async function retryAgentGptImage(
     return { ok: false, error: '参考图编辑失败后请让 Agent 重新选择参考图，不能自动重试' }
   }
   const originalReference = record.reference.kind === 'last_generated' && record.reference.generationId
-    ? await getImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd }, record.reference.generationId)
+    ? await getImageGenerationRecord({ sessionId: context.sessionId, agentCwd: context.agentCwd, storageDir: context.storageDir }, record.reference.generationId)
     : undefined
   if (record.reference.kind === 'last_generated' && !originalReference?.image) {
     return { ok: false, error: '原始上一张生成图已不可用，无法安全重试' }

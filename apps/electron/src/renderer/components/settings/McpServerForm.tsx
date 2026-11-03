@@ -6,11 +6,19 @@
  */
 
 import * as React from 'react'
-import { ArrowLeft, Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
 import { cn } from '@/lib/utils'
-import type { McpServerEntry, McpTransportType, WorkspaceMcpConfig } from '@profer/shared'
+import type {
+  McpConnectionSnapshot,
+  McpProbeFailureReason,
+  McpServerEntry,
+  McpServerRestartResult,
+  McpToolSummary,
+  McpTransportType,
+  WorkspaceMcpConfig,
+} from '@profer/shared'
 import {
   SettingsSection,
   SettingsCard,
@@ -18,6 +26,7 @@ import {
   SettingsSelect,
   SettingsToggle,
 } from './primitives'
+import { mergeEntryWithExisting } from './mcp-form-entry'
 
 /** 编辑中的服务器 */
 interface EditingServer {
@@ -73,10 +82,60 @@ function serializeKeyValueText(record: Record<string, string> | undefined, separ
     .join('\n')
 }
 
+/** 测试连接返回的探测结果（与 preload 契约一致） */
+interface McpTestOutcome {
+  success: boolean
+  message: string
+  reason?: McpProbeFailureReason
+  tools?: McpToolSummary[]
+}
+
+/** 表单内保存的测试结果，附带本地时间戳 */
+type TestResultView = McpTestOutcome & { timestamp?: number }
+
+/**
+ * 运行时探测桥接
+ *
+ * preload 侧按共享契约接线；尚未落地的方法按缺省处理，不阻塞表单。
+ */
+interface McpRuntimeBridge {
+  testMcpServer: (name: string, entry: McpServerEntry, workspaceSlug?: string) => Promise<McpTestOutcome>
+  restartMcpServer?: (name: string) => Promise<McpServerRestartResult>
+  getMcpConnectionStatus?: () => Promise<McpConnectionSnapshot[]>
+}
+
+function getMcpBridge(): McpRuntimeBridge {
+  return window.electronAPI as unknown as McpRuntimeBridge
+}
+
+/** 握手失败原因 → 中文文案；unknown 保留原始 message */
+const FAILURE_REASON_TEXT: Record<Exclude<McpProbeFailureReason, 'unknown'>, string> = {
+  'command-missing': '找不到启动命令',
+  'handshake-timeout': '握手超时（20 秒）',
+  unauthorized: '凭据无效或已过期',
+  forbidden: '权限范围不足',
+  'protocol-incompatible': '协议版本不兼容',
+  network: '网络不可达，请检查代理/网络',
+}
+
+function describeFailure(result: McpTestOutcome): string {
+  const reason = result.reason
+  if (!reason || reason === 'unknown') return result.message
+  return FAILURE_REASON_TEXT[reason]
+}
+
+/** 时间戳格式化为本地时间 YYYY-MM-DD HH:mm:ss */
+function formatLocalTime(epochMs: number | undefined): string {
+  if (epochMs == null || !Number.isFinite(epochMs)) return '—'
+  const date = new Date(epochMs)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 interface McpFormValues {
   transportType: McpTransportType
   enabled: boolean
-  testResult: { success: boolean; message: string; timestamp?: number } | null
+  testResult: TestResultView | null
   isBuiltin: boolean
   command: string
   argsText: string
@@ -90,13 +149,16 @@ interface McpFormValues {
 function buildEntryFromValues(values: McpFormValues, includeTestResult = false): McpServerEntry {
   const base: McpServerEntry = {
     type: values.transportType,
-    enabled: values.enabled && values.testResult?.success === true,
+    // enabled 表达「用户意图」，测试结果只用于展示与「是否已验证」提示。
+    // 二者不能求与：否则没测过的 server 只要在 UI 里改一个字段，就会被静默关掉。
+    enabled: values.enabled,
     ...(values.isBuiltin && { isBuiltin: true }),
-    ...(includeTestResult && values.testResult && {
-      lastTestResult: {
-        ...values.testResult,
-        timestamp: values.testResult.timestamp ?? Date.now(),
-      },
+    // 表单对测试结果有最终发言权：includeTestResult 时即使没有结果也要显式清掉，
+    // 否则配置一改，磁盘上那份旧结果（指纹已不匹配）会继续被当作「已测试」。
+    ...(includeTestResult && {
+      lastTestResult: values.testResult
+        ? { ...values.testResult, timestamp: values.testResult.timestamp ?? Date.now() }
+        : undefined,
     }),
   }
 
@@ -144,9 +206,15 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
   // UI 状态
   const [saving, setSaving] = React.useState(false)
   const [testing, setTesting] = React.useState(false)
-  const [testResult, setTestResult] = React.useState<{ success: boolean; message: string; timestamp?: number } | null>(
+  const [testResult, setTestResult] = React.useState<TestResultView | null>(
     server?.entry.lastTestResult ?? null
   )
+  // 重启服务
+  const [restarting, setRestarting] = React.useState(false)
+  const [restartResult, setRestartResult] = React.useState<{ ok: boolean; message: string } | null>(null)
+  // 运行时连接快照（本地 UI 状态，不进 Jotai）
+  const [connection, setConnection] = React.useState<McpConnectionSnapshot | null>(null)
+  const [statusReady, setStatusReady] = React.useState(false)
 
   // 自动保存状态（仅编辑模式）
   const AUTO_SAVE_DELAY = 600
@@ -181,8 +249,9 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
       headersText !== serializeKeyValueText(server.entry.headers, ':')
 
     if (configChanged) {
+      // 配置变了，旧测试结果不再可信；但「启用」是用户意图，不能被连带抹掉。
+      // 否则自动保存会把 enabled 写成 false，用户改一个字段就丢了整个 server 的工具。
       setTestResult(null)
-      setEnabled(false) // 配置改变时自动关闭开关
     }
   }, [transportType, command, url, argsText, envText, headersText, server])
 
@@ -213,7 +282,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
     try {
       const config = await window.electronAPI.getWorkspaceMcpConfig(workspaceSlug)
       const newConfig: WorkspaceMcpConfig = {
-        servers: { ...config.servers, [serverName]: entry },
+        servers: { ...config.servers, [serverName]: mergeEntryWithExisting(config.servers?.[serverName], entry) },
       }
       await window.electronAPI.saveWorkspaceMcpConfig(workspaceSlug, newConfig)
       if (generation === saveGenerationRef.current && mountedRef.current) {
@@ -295,6 +364,42 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
       }
     }
   }, [])
+  /** 读取当前 server 的运行时连接快照；失败不阻塞表单 */
+  const refreshConnectionStatus = React.useCallback(async (): Promise<void> => {
+    const target = name.trim()
+    if (!target) {
+      if (mountedRef.current) {
+        setConnection(null)
+        setStatusReady(true)
+      }
+      return
+    }
+    const bridge = getMcpBridge()
+    if (!bridge.getMcpConnectionStatus) {
+      if (mountedRef.current) setStatusReady(true)
+      return
+    }
+    try {
+      const list = await bridge.getMcpConnectionStatus()
+      if (!mountedRef.current) return
+      // 优先取本工作区的连接，其次兼容跨工作区共享连接（workspaceSlug 为空）
+      const matched =
+        list.find((item) => item.serverName === target && item.workspaceSlug === workspaceSlug) ??
+        list.find((item) => item.serverName === target) ??
+        null
+      setConnection(matched)
+    } catch (error) {
+      console.warn('[MCP 表单] 读取运行时连接状态失败:', error)
+    } finally {
+      if (mountedRef.current) setStatusReady(true)
+    }
+  }, [name, workspaceSlug])
+
+  // 挂载时及服务器名称变化时刷新连接状态
+  React.useEffect(() => {
+    void refreshConnectionStatus()
+  }, [refreshConnectionStatus])
+
   const handleTest = async (): Promise<void> => {
     const serverName = name.trim()
     if (!serverName) return
@@ -308,20 +413,54 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
 
     try {
       const entry = buildEntry(false) // 测试时不包含旧的测试结果
-      const result = await window.electronAPI.testMcpServer(serverName, entry)
+      const result = await getMcpBridge().testMcpServer(serverName, entry, workspaceSlug)
+      if (!mountedRef.current) return
       setTestResult({
         success: result.success,
         message: result.message,
+        reason: result.reason,
+        tools: result.tools,
         timestamp: Date.now(),
       })
     } catch (error) {
+      if (!mountedRef.current) return
       setTestResult({
         success: false,
         message: error instanceof Error ? error.message : '测试失败',
         timestamp: Date.now(),
       })
     } finally {
-      setTesting(false)
+      if (mountedRef.current) setTesting(false)
+      void refreshConnectionStatus()
+    }
+  }
+
+  /** 重启常驻 MCP 服务（仅编辑态可用） */
+  const handleRestart = async (): Promise<void> => {
+    const serverName = name.trim()
+    if (!isEdit || !serverName) return
+
+    const bridge = getMcpBridge()
+    if (!bridge.restartMcpServer) {
+      setRestartResult({ ok: false, message: '当前版本不支持重启服务' })
+      return
+    }
+
+    setRestarting(true)
+    setRestartResult(null)
+    try {
+      const result = await bridge.restartMcpServer(serverName)
+      if (!mountedRef.current) return
+      setRestartResult(result.ok ? { ok: true, message: '已重启，下一轮会话生效' } : result)
+    } catch (error) {
+      if (!mountedRef.current) return
+      setRestartResult({
+        ok: false,
+        message: error instanceof Error ? error.message : '重启失败',
+      })
+    } finally {
+      if (mountedRef.current) setRestarting(false)
+      void refreshConnectionStatus()
     }
   }
 
@@ -337,9 +476,9 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
     if (transportType === 'stdio' && !command.trim()) return
     if (transportType !== 'stdio' && !url.trim()) return
 
-    // 警告：如果用户试图启用但测试未成功
+    // 启用但未验证：允许保存（enabled 是用户意图），只提示当前配置未经验证
     if (enabled && !testResult?.success) {
-      console.warn('[MCP 表单] 用户试图启用未测试成功的 MCP，将强制禁用')
+      console.warn('[MCP 表单] 保存了未验证的 MCP 服务器，运行时仍按 enabled 加载')
     }
 
     setSaving(true)
@@ -354,7 +493,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
       const newConfig: WorkspaceMcpConfig = {
         servers: {
           ...config.servers,
-          [serverName]: entry,
+          [serverName]: mergeEntryWithExisting(config.servers?.[serverName], entry),
         },
       }
       await window.electronAPI.saveWorkspaceMcpConfig(workspaceSlug, newConfig)
@@ -536,23 +675,92 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
 
           {/* 测试连接区域 */}
           <div className="px-4 py-3 space-y-3 border-t border-border">
-            <div className="flex items-center justify-between">
+            <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-sm font-medium text-foreground">连接测试</div>
                 <div className="text-xs text-muted-foreground mt-0.5">
                   必须测试成功后才能启用；测试失败的 MCP 可能导致整个 Agent 运行失败
                 </div>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleTest}
-                disabled={testing || !canTest()}
+              <div className="flex shrink-0 items-center gap-2">
+                {isEdit && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleRestart()}
+                    disabled={restarting || !name.trim()}
+                  >
+                    {restarting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                    <span>{restarting ? '重启中...' : '重启服务'}</span>
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTest}
+                  disabled={testing || !canTest()}
+                >
+                  {testing && <Loader2 size={14} className="animate-spin" />}
+                  <span>{testing ? '测试中...' : '测试连接'}</span>
+                </Button>
+              </div>
+            </div>
+
+            {/* 重启结果 */}
+            {restartResult && (
+              <div
+                className={cn(
+                  'flex items-start gap-2 px-3 py-2 rounded-md text-sm',
+                  restartResult.ok
+                    ? 'bg-green-500/10 text-green-700 dark:text-green-400'
+                    : 'bg-red-500/10 text-red-700 dark:text-red-400'
+                )}
               >
-                {testing && <Loader2 size={14} className="animate-spin" />}
-                <span>{testing ? '测试中...' : '测试连接'}</span>
-              </Button>
+                {restartResult.ok ? (
+                  <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+                ) : (
+                  <XCircle size={16} className="mt-0.5 shrink-0" />
+                )}
+                <div className="flex-1 text-xs">{restartResult.message}</div>
+              </div>
+            )}
+
+            {/* 运行时状态 */}
+            <div className="rounded-lg bg-muted/40 px-3 py-2.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium text-foreground">运行时状态</div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs text-muted-foreground"
+                  onClick={() => void refreshConnectionStatus()}
+                  disabled={!name.trim()}
+                >
+                  <RefreshCw size={12} />
+                  <span>刷新</span>
+                </Button>
+              </div>
+              {connection ? (
+                <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                  <span>进程 PID：{connection.pid ?? '—（远程服务）'}</span>
+                  <span>启动时间：{formatLocalTime(connection.connectedAt)}</span>
+                  <span>已缓存工具：{connection.toolCount} 个</span>
+                  <span>最后使用：{formatLocalTime(connection.lastUsedAt)}</span>
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground">
+                  {statusReady ? '当前没有活跃连接' : '正在读取运行状态…'}
+                </div>
+              )}
+              {connection?.externalStateStale && (
+                <div className="flex items-start gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>该服务的配置文件已变更，当前进程仍在用旧配置，建议重启此服务</span>
+                </div>
+              )}
             </div>
 
             {/* 测试结果显示 */}
@@ -570,11 +778,32 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
                 ) : (
                   <XCircle size={16} className="mt-0.5 shrink-0" />
                 )}
-                <div className="flex-1">
+                <div className="min-w-0 flex-1">
                   <div className="font-medium">
-                    {testResult.success ? '测试成功' : '测试失败'}
+                    {testResult.success ? '握手成功' : '测试失败'}
                   </div>
-                  <div className="text-xs mt-0.5 opacity-90">{testResult.message}</div>
+                  <div className="text-xs mt-0.5 opacity-90">
+                    {testResult.success
+                      ? testResult.tools?.length
+                        ? `发现 ${testResult.tools.length} 个工具`
+                        : '握手成功，未返回工具清单'
+                      : describeFailure(testResult)}
+                  </div>
+                  {testResult.success && testResult.tools && testResult.tools.length > 0 && (
+                    <details className="mt-1.5">
+                      <summary className="text-xs cursor-pointer select-none opacity-80">
+                        查看工具（前 {Math.min(20, testResult.tools.length)} 个）
+                      </summary>
+                      <ul className="mt-1 space-y-0.5 text-xs font-mono opacity-90">
+                        {testResult.tools.slice(0, 20).map((tool) => (
+                          <li key={tool.name} className="truncate">
+                            {tool.name}
+                            {tool.readOnly ? ' · 只读' : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                 </div>
               </div>
             )}
@@ -596,11 +825,10 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
             description={
               testResult?.success
                 ? '开启后该 MCP 服务器将在 Agent 会话中加载'
-                : '只有测试成功后才能启用，否则可能导致整个 Agent 运行失败'
+                : '开启后仍会按配置加载；建议先测试连接，未验证的配置可能连不上'
             }
             checked={enabled}
             onCheckedChange={setEnabled}
-            disabled={!testResult?.success}
           />
         </SettingsCard>
       </SettingsSection>

@@ -14,6 +14,17 @@ const appended: SDKMessage[][] = []
 const metaUpdates: Array<{ id: string; patch: Record<string, unknown> }> = []
 
 mock.module('./agent-session-manager', () => ({
+  // 产品能力现在会解析会话写入布局（storageDir / plansDir）；测试里给确定值，
+  // 免得能力表断言依赖真实工作区索引。
+  resolveAgentSessionWriteLayout: (slug: string, sessionId: string) => ({
+    storageDir: `/tmp/${slug}/${sessionId}`,
+    contextDir: `/tmp/${slug}/${sessionId}/.context`,
+    plansDir: `/tmp/${slug}/${sessionId}/.context/plan`,
+    imageOutputDir: `/tmp/${slug}/${sessionId}/.context/agent-output-images`,
+    errorsLogPath: `/tmp/${slug}/${sessionId}/.context/session-errors.log`,
+    claudeSettingsPath: `/tmp/${slug}/${sessionId}/.claude/settings.json`,
+    plansDirectory: '.context',
+  }),
   lockAgentSessionRuntime: () => ({ ...meta, agentRuntimeLocked: true }),
   getAgentSessionMeta: (id: string) => id === meta.id
     ? meta
@@ -43,6 +54,8 @@ mock.module('./agent-workspace-manager', () => ({
   getWorkspaceSkills: () => [{ slug: 'skill-a', enabled: true }, { slug: 'skill-disabled', enabled: false }],
   getWorkspaceMcpConfig: () => ({ servers: { fixture: { enabled: true, command: 'fixture' }, disabled: { enabled: false, command: 'disabled' } } }),
   getWorkspaceMemoryArchivePath: (slug: string) => `/fixture/${slug}/.context/memory-archive`,
+  // provider preparation 在 project 模式下用它与 settings 文件同值下发 autoMemoryDirectory。
+  getWorkspaceAutoMemoryDir: (slug: string) => `/fixture/${slug}/.profer/memory`,
   // B8：宿主现在会通过 `agent-directory-utils` 收集产品服务器的授权根（预览 / 图片 / 浏览器）。
   getWorkspaceAttachedDirectories: () => [],
   getWorkspaceAttachedFiles: () => [],
@@ -758,8 +771,12 @@ describe('B8 · 产品 MCP 注入的宿主接线', () => {
     expect(noEvents.visualization).toBeUndefined()
     expect(noEvents['file-preview']).toBeUndefined()
     expect(noEvents['ai-image-generation']).toBeUndefined()
-    // 图片根只依赖目录事实，因此仍然提供（宿主能读文件系统就够用）。
-    expect(noEvents['image-output-roots']).toEqual({ allowedRoots: noEvents['image-output-roots']!.allowedRoots })
+    // 图片根只依赖目录事实，因此仍然提供（宿主能读文件系统就够用）；
+    // 除旧链根列表外还带上会话存储根（project 下生图产物/记录的落点）。
+    const imageRoots = noEvents['image-output-roots']!
+    expect(imageRoots.allowedRoots).toContain(sessionCwd)
+    expect(imageRoots.allowedRoots).toContain('/tmp/fixture-workspace/caps-session')
+    expect(imageRoots.storageDir).toBe('/tmp/fixture-workspace/caps-session')
     expect(noEvents.clipboard).toBe(true)
     expect(noEvents.browser).toBeDefined()
   })
