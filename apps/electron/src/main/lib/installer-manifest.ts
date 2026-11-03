@@ -21,78 +21,80 @@ let cache: ManifestCache | null = null
 /**
  * 内置 fallback manifest。
  *
- * 断网或 API 不可达时使用，此时没有 OSS 签名 URL，直接让客户端走 fallbackUrl
- * （官方上游）。sha256 留空，下载器在 sha256 为空时跳过校验并打 warning。
+ * 断网或 API 不可达时使用：没有 CDN 分发地址，直接让客户端走 fallbackUrl
+ * （官方上游）。版本与 sha256 跟随分发源站当前版本（Git 2.54.0 / Node.js 22.22.2），
+ * 断网时也能做完整性校验。
  */
-const BUILTIN_FALLBACK: InstallerManifest = {
+export const BUILTIN_INSTALLER_FALLBACK: InstallerManifest = {
   installers: [
     {
       id: 'git-for-windows',
       platform: 'win32',
       arch: 'x64',
-      version: '2.47.1',
+      version: '2.54.0',
       downloadUrl: '',
       fallbackUrl:
-        'https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/Git-2.47.1-64-bit.exe',
-      sha256: '',
-      sizeBytes: 66000000,
-      filename: 'Git-2.47.1-64-bit.exe',
+        'https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/Git-2.54.0-64-bit.exe',
+      sha256: '2b96e7854f0520f0f6b709c21041d9801b1be44d5e1a0d9fa621b2fbc40f1983',
+      sizeBytes: 65175776,
+      filename: 'Git-2.54.0-64-bit.exe',
     },
     {
       id: 'git-for-windows',
       platform: 'win32',
       arch: 'arm64',
-      version: '2.47.1',
+      version: '2.54.0',
       downloadUrl: '',
       fallbackUrl:
-        'https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/Git-2.47.1-arm64.exe',
-      sha256: '',
-      sizeBytes: 66000000,
-      filename: 'Git-2.47.1-arm64.exe',
+        'https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/Git-2.54.0-arm64.exe',
+      sha256: '97bf63e5c65152c14b488e191c107aa1ccbeae2435690693241be4b2b5edd0d2',
+      sizeBytes: 63430440,
+      filename: 'Git-2.54.0-arm64.exe',
     },
     {
       id: 'nodejs',
       platform: 'win32',
       arch: 'x64',
-      version: '22.13.1',
+      version: '22.22.2',
       downloadUrl: '',
-      fallbackUrl: 'https://nodejs.org/dist/v22.13.1/node-v22.13.1-x64.msi',
-      sha256: '',
-      sizeBytes: 28000000,
-      filename: 'node-v22.13.1-x64.msi',
+      fallbackUrl: 'https://nodejs.org/dist/v22.22.2/node-v22.22.2-x64.msi',
+      sha256: '57456aa33fcd6fb6a9418e09227de0b0ca604f7b2123566acc66b555cb2f42e5',
+      sizeBytes: 31703040,
+      filename: 'node-v22.22.2-x64.msi',
     },
     {
       id: 'nodejs',
       platform: 'win32',
       arch: 'arm64',
-      version: '22.13.1',
+      version: '22.22.2',
       downloadUrl: '',
-      fallbackUrl: 'https://nodejs.org/dist/v22.13.1/node-v22.13.1-arm64.msi',
-      sha256: '',
-      sizeBytes: 28000000,
-      filename: 'node-v22.13.1-arm64.msi',
+      fallbackUrl: 'https://nodejs.org/dist/v22.22.2/node-v22.22.2-arm64.msi',
+      sha256: '1ec02aeb76d716ce15915bed10c0a4dcf9a6224e9a4f4d1645ddca4985a7bc06',
+      sizeBytes: 27906048,
+      filename: 'node-v22.22.2-arm64.msi',
     },
     {
+      // macOS 的 pkg 是 universal 二进制，x64 与 arm64 指向同一份文件与同一个 sha256。
       id: 'nodejs',
       platform: 'darwin',
       arch: 'arm64',
-      version: '22.13.1',
+      version: '22.22.2',
       downloadUrl: '',
-      fallbackUrl: 'https://nodejs.org/dist/v22.13.1/node-v22.13.1.pkg',
-      sha256: '',
-      sizeBytes: 45000000,
-      filename: 'node-v22.13.1.pkg',
+      fallbackUrl: 'https://nodejs.org/dist/v22.22.2/node-v22.22.2.pkg',
+      sha256: 'ff08ad19678de4ca2af34b58b73b272c555449c6f2d91487ca6fe0a697f9eabe',
+      sizeBytes: 88420691,
+      filename: 'node-v22.22.2.pkg',
     },
     {
       id: 'nodejs',
       platform: 'darwin',
       arch: 'x64',
-      version: '22.13.1',
+      version: '22.22.2',
       downloadUrl: '',
-      fallbackUrl: 'https://nodejs.org/dist/v22.13.1/node-v22.13.1.pkg',
-      sha256: '',
-      sizeBytes: 45000000,
-      filename: 'node-v22.13.1.pkg',
+      fallbackUrl: 'https://nodejs.org/dist/v22.22.2/node-v22.22.2.pkg',
+      sha256: 'ff08ad19678de4ca2af34b58b73b272c555449c6f2d91487ca6fe0a697f9eabe',
+      sizeBytes: 88420691,
+      filename: 'node-v22.22.2.pkg',
     },
   ],
 }
@@ -128,7 +130,7 @@ export async function fetchInstallerManifest(force = false): Promise<InstallerMa
     const mergedData: InstallerManifest = {
       installers: [
         ...data.installers,
-        ...BUILTIN_FALLBACK.installers.filter((source) => !remoteKeys.has(`${source.id}:${source.platform}:${source.arch}`)),
+        ...BUILTIN_INSTALLER_FALLBACK.installers.filter((source) => !remoteKeys.has(`${source.id}:${source.platform}:${source.arch}`)),
       ],
     }
     cache = { data: mergedData, timestamp: Date.now() }
@@ -140,7 +142,7 @@ export async function fetchInstallerManifest(force = false): Promise<InstallerMa
       error,
     )
     // 不缓存 fallback，下一次仍然先试远程
-    return BUILTIN_FALLBACK
+    return BUILTIN_INSTALLER_FALLBACK
   }
 }
 
