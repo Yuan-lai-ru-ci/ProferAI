@@ -41,11 +41,11 @@
     "source-map": "^0.7.6"
   },
   "overrides": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.201",
-    "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.201",
-    "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.201",
-    "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.201",
-    "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.201",
+    "@anthropic-ai/claude-agent-sdk": "0.3.316",
+    "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.316",
+    "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.316",
+    "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.316",
+    "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.316",
     "@earendil-works/pi-agent-core": "0.86.1",
     "@earendil-works/pi-ai": "0.86.1",
     "@earendil-works/pi-coding-agent": "0.86.1",
