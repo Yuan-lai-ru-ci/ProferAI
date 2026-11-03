@@ -254,7 +254,16 @@ function pushSourceAndTag() {
   const remoteTag = remoteTagTarget();
   if (localTag && localTag !== head) throw new Error(`本地 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
   if (remoteTag && remoteTag !== head) throw new Error(`远端 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
-  run('git push origin HEAD:main');
+  // 另一平台先发布后，tag 所在提交会落后 origin/main（通常只差一个 release-notes/releases.json
+  // 同步提交）。补发场景不能推源码，但无需因此中止整个发布；与 push-mac-release.cjs 保持一致。
+  const mainIsAncestor = tryRun('git merge-base --is-ancestor origin/main HEAD').ok;
+  if (mainIsAncestor) {
+    run('git push origin HEAD:main');
+  } else if (!localTag) {
+    throw new Error('创建新 tag 前 HEAD 必须包含最新 origin/main；请先同步 main。');
+  } else {
+    console.log('  HEAD 不是 origin/main 的最新提交，跳过源码推送（按补充已发布版本资产处理）。');
+  }
   if (!localTag) run(`git tag ${TAG}`);
   if (!remoteTag) run(`git push origin ${TAG}`);
 }
