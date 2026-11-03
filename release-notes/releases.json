@@ -1,5 +1,16 @@
 [
   {
+    "id": "RE_kwDOTfo-884ZzN1c",
+    "tag_name": "v0.16.18",
+    "name": "Profer v0.16.18",
+    "body": "# Profer v0.16.18\n\n## 新增\n\n- **工作区项目模式**：工作区分为 managed 与 project 两态。project 在用户项目目录用 `.profer/` 作为配置根，会话 cwd 就是项目根，而会话数据、检查点与附件仍留在中央工作区，绝不写进项目仓库。支持创建/打开/移除项目、侧栏「工作区文件」指向项目根、失效路径提示；同一目录只允许一个工作区，删除工作区只删索引、不碰项目文件。managed 工作区的路径与行为逐字不变。\n- **MCP 连接探针与空闲回收**：MCP 服务器增加连接探针与空闲连接回收，测试结果持久化；project 工作区会合并本地 `mcp.local.json`。\n- **记忆去重**：反链与搜索不再对同一文件返回两条结果。\n\n## 优化\n\n- **安装器内置清单对齐**：断网时使用的内置 fallback 从 Git 2.47.1 / Node.js 22.13.1 更新到 2.54.0 / 22.22.2，补齐官方 sha256 与精确大小，断网也能做完整性校验。\n- **Git 下载加速**：内置 fallback 的 Git 下载改走华为云镜像（实测 9.2 MB/s，GitHub 直连约 103 KB/s），官方地址保留为兜底。\n- **Agent SDK**：`@anthropic-ai/claude-agent-sdk` 升级到 0.3.316。\n\n## 修复\n\n- **内容块数组解析**：OpenAI 兼容上游以内容块数组流式返回时（Mistral 类），正文与思考分开解析，不再把对象拼成 `[object Object]`。\n- **thinking-only 空回复**：思考里已写出完整正文时提升为正文；不足 120 字或只是思考叙述时仍按空输出恢复。\n- **MCP 页按钮文案**：MCP 页面的新建按钮不再错误显示为「新建 Skill」。\n\n## 升级提示\n\n- **品牌改名收尾**：环境变量、CLI 标识与包描述统一为 Profer；服务端渠道白名单仍保留 `Proma/` UA，历史消息中的 `[PROMA_IMAGE_ATTACHMENT:]` 与定时任务标记继续可读，旧会话不受影响。\n- **任务图工具改名**：`proma_task_create/update` 改为 `profer_task_create/update`，存量会话里的旧工具名不再映射，需要重新发起对应调用。\n- **项目模式不会写入项目仓库**：在项目工作区里产生的会话、检查点与附件都在中央工作区，`git status` 保持干净。\n",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-11-03T15:06:56Z",
+    "published_at": "2026-11-03T15:14:53Z",
+    "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.16.18"
+  },
+  {
     "id": "RE_kwDOTfo-884ZsSgv",
     "tag_name": "v0.16.17",
     "name": "Profer v0.16.17",
