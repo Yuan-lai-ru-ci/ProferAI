@@ -55,6 +55,7 @@ import { getAgentSessionMeta, getAgentSessionMessages, setAgentSessionActiveChec
 import { backupAgentAttachment } from './agent-attachment-backup'
 import {
   configureAgentSessionProjectionPublisher,
+  hasAgentSessionProjectionPublisher,
   publishAgentSessionProjection,
   setAgentSessionUnread,
 } from './agent-session-ui-projection-publisher'
@@ -525,6 +526,28 @@ export function emitSessionStreamEvent(
 // ===== IPC 薄包装函数 =====
 
 /**
+ * 自动标题写回后的补发投影。
+ *
+ * 标题生成已改为终态之后的后台任务（`setImmediate` + 标题模型请求），此时本轮 run 早已结束，
+ * `finishActiveStreamBacklog` 已把 `sessionWebContents` 里的会话绑定删除。只按绑定表直发
+ * `TITLE_UPDATED` 会把事件投给不存在的目标而静默丢弃：渲染层只能等之后某次全量列表刷新
+ * 才看到新标题，于是左侧列表（读会话列表）与顶栏 Tab（读打开时的标题快照）长期不一致。
+ *
+ * `session_projection` 是事件总线里唯一按窗口广播（不依赖会话绑定）的类型，渲染层收到后
+ * 同帧更新会话列表与 Tab 标题。发布器未接线（单测 / 非 Electron 宿主）时静默跳过。
+ */
+function publishTitleUpdateProjection(sessionId: string): void {
+  if (!hasAgentSessionProjectionPublisher()) return
+  try {
+    const meta = getAgentSessionMeta(sessionId)
+    if (meta) publishAgentSessionProjection(meta)
+  } catch (error) {
+    // 标题是增强能力：投影失败不得影响标题落盘与运行终态。
+    console.warn(`[Agent 服务] 标题更新投影广播失败: sessionId=${sessionId}`, error)
+  }
+}
+
+/**
  * 自动命名窗口的宿主接线（GAP-D1）。
  *
  * 判据与编排在 `agent-session-title-naming.ts`（旧链同一实现，由共享入口
@@ -536,7 +559,7 @@ export function emitSessionStreamEvent(
  *   （旧链 `runAgentHeadless` 的 `callbacks.onTitleUpdated`），再发一条
  *   `profer_event: title_updated`，最后向该会话**已登记**的 webContents 直发
  *   `TITLE_UPDATED`（旧链用 `sessionWebContents.get`，不是请求时的 sender ——
- *   刷新后旧窗口已销毁时不丢事件）。
+ *   刷新后旧窗口已销毁时不丢事件）；末尾再补一次不依赖绑定的投影广播。
  * - **两个常量**：`DEFAULT_SESSION_TITLE`（`planTitleWindow` 的「人工命名」判定）与
  *   `DEFAULT_MODEL_ID`（旧链 `input.modelId || DEFAULT_MODEL_ID` 的同一个常量）。
  */
@@ -556,6 +579,7 @@ function buildRuntimeTitleNaming(
       if (currentWc && !currentWc.isDestroyed()) {
         currentWc.send(AGENT_IPC_CHANNELS.TITLE_UPDATED, { sessionId, title })
       }
+      publishTitleUpdateProjection(sessionId)
     },
     defaultTitle: DEFAULT_SESSION_TITLE,
     defaultModelId: DEFAULT_MODEL_ID,
@@ -743,6 +767,8 @@ export async function runAgent(
             title,
           })
         }
+        // 标题生成晚于 run 结束：绑定可能已被清理，必须再走一次不依赖绑定的广播投影。
+        publishTitleUpdateProjection(input.sessionId)
       },
       onRunStarted: async ({ startedAt }) => {
         runStarted = true
@@ -1127,6 +1153,8 @@ export async function runAgentHeadless(
             title,
           })
         }
+        // 标题生成晚于 run 结束：绑定可能已被清理，必须再走一次不依赖绑定的广播投影。
+        publishTitleUpdateProjection(runInput.sessionId)
       },
       onRunStarted: ({ startedAt: persistedStartedAt }) => {
         runStarted = true

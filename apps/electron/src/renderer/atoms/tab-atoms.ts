@@ -622,6 +622,32 @@ export function updateTabTitle(
   )
 }
 
+/**
+ * 把 agent Tab 的标题对齐到会话 meta。
+ *
+ * `tab.title` 只是打开那一刻的快照，而左栏 / 切换器读的是会话列表（`session.title`）。
+ * 任何没能走到 `updateTabTitle` 的标题变化（启动恢复的旧快照、标题事件丢失后的补发、
+ * 其他窗口改名）都会让两边长期分叉，且切会话也不会自愈（openTab 复用旧 Tab）。
+ * 这里把能在会话列表里找到的标题写回 Tab；找不到（不在当前视图 / 已删）保留原值。
+ * 无差异时返回原数组引用，避免无意义的重渲染与 atom 写入。
+ */
+export function reconcileAgentTabTitles(
+  tabs: TabItem[],
+  sessions: readonly { id: string; title: string }[],
+): TabItem[] {
+  if (tabs.length === 0 || sessions.length === 0) return tabs
+  const titleBySessionId = new Map(sessions.map((session) => [session.id, session.title]))
+  let changed = false
+  const next = tabs.map((tab) => {
+    if (tab.type !== 'agent' || isSessionWorkTab(tab)) return tab
+    const title = titleBySessionId.get(tab.sessionId)
+    if (!title || title === tab.title) return tab
+    changed = true
+    return { ...tab, title }
+  })
+  return changed ? next : tabs
+}
+
 /** 确保 Scratch Pad 标签存在并位于首位，保留所有已打开标签。 */
 export function ensureScratchPadTab(tabs: TabItem[]): TabItem[] {
   const scratchTab = tabs.find((t) => t.id === SCRATCH_PAD_ID) ?? createScratchPadTab()

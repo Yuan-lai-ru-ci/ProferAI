@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { closeTab, closeTabs, createPluginTabId, detachTab, ensureScratchPadTab, getPersistableTabState, isMovableSessionTab, openPluginTab, openTab, selectSameModeCloseFallback, tabContextSessionId, FRP_GUIDE_TAB_ID, FRP_GUIDE_TAB_TITLE, TUTORIAL_TAB_ID, SCRATCH_PAD_ID, type TabItem } from './tab-atoms'
+import { closeTab, closeTabs, createPluginTabId, detachTab, ensureScratchPadTab, getPersistableTabState, isMovableSessionTab, openPluginTab, openTab, reconcileAgentTabTitles, selectSameModeCloseFallback, tabContextSessionId, FRP_GUIDE_TAB_ID, FRP_GUIDE_TAB_TITLE, TUTORIAL_TAB_ID, SCRATCH_PAD_ID, type TabItem } from './tab-atoms'
 
 const tab = (id: string): TabItem => ({ id, type: 'agent', sessionId: id, title: id })
 
@@ -271,4 +271,30 @@ test('isMovableSessionTab 只允许 chat / agent', () => {
   expect(isMovableSessionTab({ ...tab('a'), type: 'browser' })).toBe(false)
   expect(isMovableSessionTab(SCRATCH)).toBe(false)
   expect(isMovableSessionTab(null)).toBe(false)
+})
+
+test('reconcileAgentTabTitles：用会话 meta 覆盖 agent Tab 的旧快照标题', () => {
+  const tabs = [SCRATCH, tab('s1')]
+  const result = reconcileAgentTabTitles(tabs, [{ id: 's1', title: '会话标题' }])
+  expect(result.find((item) => item.sessionId === 's1')?.title).toBe('会话标题')
+  expect(result.find((item) => item.id === '__scratch-pad__')?.title).toBe('Scratch Pad')
+})
+
+test('reconcileAgentTabTitles：会话不在当前列表时保留原标题', () => {
+  const tabs = [tab('archived-only')]
+  const result = reconcileAgentTabTitles(tabs, [{ id: 'other', title: '别的会话' }])
+  expect(result).toBe(tabs)
+  expect(result[0]?.title).toBe('archived-only')
+})
+
+test('reconcileAgentTabTitles：无差异时返回同一引用，避免多余重渲染', () => {
+  const tabs = [tab('s1')]
+  const result = reconcileAgentTabTitles(tabs, [{ id: 's1', title: 's1' }])
+  expect(result).toBe(tabs)
+})
+
+test('reconcileAgentTabTitles：不覆盖会话工作 Tab（预览 / 浏览器 / 会话插件页）', () => {
+  const preview = { ...tab('s1'), id: '__preview__:s1:/w/a.ts', type: 'preview' as const, title: 'a.ts' }
+  const result = reconcileAgentTabTitles([preview], [{ id: 's1', title: '会话标题' }])
+  expect(result[0]?.title).toBe('a.ts')
 })

@@ -65,7 +65,7 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle, reconcileAgentTabTitles } from '@/atoms/tab-atoms'
 import { planFollowWorkTab, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 import { openFilePreviewTab } from '@/components/diff/preview-opener'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
@@ -761,6 +761,22 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     }
     const unsubscribeDelegationSessionTabs = store.sub(agentSessionsAtom, ensureDelegationChildTabs)
     const unsubscribeDelegationIndicatorTabs = store.sub(agentSessionIndicatorMapAtom, ensureDelegationChildTabs)
+
+    // ===== 0.6 标题收敛：会话 meta 是 agent Tab 标题的唯一事实源 =====
+    // tab.title 只是打开那一刻的快照；左栏 / 切换器读的是会话列表。任何没走到
+    // `updateTabTitle` 的变化（启动恢复的旧快照、标题事件丢失、其他窗口改名）都会让两边分叉，
+    // 且切会话也不会自愈（openTab 复用旧 Tab）。两个 atom 任一变化时都对齐一次；
+    // 无差异时 reconcileAgentTabTitles 返回原引用，不会反复写入。
+    const reconcileTabTitles = (): void => {
+      if (!effectActive) return
+      const sessions = store.get(agentSessionsAtom)
+      if (sessions.length === 0) return
+      store.set(tabsAtom, (tabs) => reconcileAgentTabTitles(tabs, sessions))
+    }
+    reconcileTabTitles()
+    const unsubscribeTabTitleReconcile = store.sub(agentSessionsAtom, reconcileTabTitles)
+    // 恢复 / 新建 Tab 时也会带旧快照，tabs 侧变化同样对齐。
+    const unsubscribeTabsTitleReconcile = store.sub(tabsAtom, reconcileTabTitles)
 
     // ===== 1. 流式事件 =====
     const cleanupEvent = window.electronAPI.onAgentStreamEvent(
@@ -1793,6 +1809,8 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       clearInterval(pruneTimer)
       unsubscribeDelegationSessionTabs()
       unsubscribeDelegationIndicatorTabs()
+      unsubscribeTabTitleReconcile()
+      unsubscribeTabsTitleReconcile()
       window.removeEventListener('focus', onWindowFocus)
     }
   }, [store, standaloneSessionId]) // store 引用稳定；独立窗口的 sessionId 在窗口生命周期内不变
