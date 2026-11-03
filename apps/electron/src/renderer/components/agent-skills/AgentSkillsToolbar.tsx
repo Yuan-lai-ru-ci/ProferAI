@@ -9,6 +9,7 @@ import {
   Store,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { agentSkillsCreateLabel } from "./agentSkillsToolbarLabels";
 
 export type AgentSkillsToolbarDomain = "skills" | "marketplace" | "mcp" | "presets";
 export type AgentSkillsToolbarScope = "workspace" | "global";
@@ -104,9 +105,7 @@ export function AgentSkillsToolbar({
           className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
         >
           <Plus size={14} />
-          {scope === "global"
-            ? `新建全局${domain === "presets" ? "预设" : " Skill"}`
-            : `新建${domain === "presets" ? "预设" : " Skill"}`}
+          {agentSkillsCreateLabel(scope, domain)}
         </button>
       )}
       {onImport && (
