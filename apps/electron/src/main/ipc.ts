@@ -220,6 +220,7 @@ import {
   updateAgentSessionMeta,
   migrateChatToAgentSession,
   moveSessionToWorkspace,
+  reconcileProjectSessionIndexesNow,
   forkAgentSession,
   searchAgentSessionMessages,
   searchAgentSessionReferences,
@@ -2809,11 +2810,20 @@ export function registerIpcHandlers(): void {
   )
 
   // 打开已有项目工作区：补齐骨架、复用已有绑定
+  function reconcileProjectSessionIndexesSafely(): void {
+    try {
+      reconcileProjectSessionIndexesNow()
+    } catch (error) {
+      console.warn('[Agent 会话] 项目会话索引对账失败（不阻断项目打开）:', error)
+    }
+  }
+
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_PROJECT_WORKSPACE,
     async (_, input: ProjectWorkspaceTarget): Promise<ProjectWorkspaceOpenResult> => {
       return withProjectWorkspaceErrorCode(() => {
         const result = openProjectWorkspace({ ...input, proferVersion: app.getVersion() })
+        reconcileProjectSessionIndexesSafely()
         broadcastAgentWorkspacesChanged()
         return result
       })
@@ -2841,6 +2851,7 @@ export function registerIpcHandlers(): void {
     async (_, input: { id: string; rootPath: string }): Promise<ProjectWorkspaceOpenResult> => {
       return withProjectWorkspaceErrorCode(() => {
         const result = relocateProjectWorkspace({ ...input, proferVersion: app.getVersion() })
+        reconcileProjectSessionIndexesSafely()
         broadcastAgentWorkspacesChanged()
         return result
       })

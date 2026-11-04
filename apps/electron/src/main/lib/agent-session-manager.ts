@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unl
 import { createInterface } from 'node:readline'
 import { rm as rmAsync } from 'node:fs/promises'
 import { createAgentSessionIndexStore } from './agent-session-index'
-import { createSyncSessionMessageStore } from '@profer/session-store'
+import { createSyncSessionMessageStore, type AgentSessionsIndex } from '@profer/session-store'
 import { createSnippet, extractTextFromPersistedMessage, matchAgentJsonlLine } from './agent-session-search'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -32,7 +32,7 @@ import {
   getSdkConfigDir,
   getAgentAttachmentBackupsRoot,
 } from './config-paths'
-import { getAgentWorkspace } from './agent-workspace-manager'
+import { getAgentWorkspace, listAgentWorkspaces } from './agent-workspace-manager'
 import { resolveWorkspaceLocation, requireExistingWorkspaceRoot, type WorkspaceLocation } from './workspace-locator'
 import { collectAttachedDirectories } from './agent-directory-utils'
 import { assertEnabledModelForChannel } from './agent-model-selection'
@@ -47,6 +47,7 @@ import { getPiTranscriptIndex, invalidatePiTranscriptCache, resolvePiTranscriptP
 import { isSessionDeletionPending } from './agent-session-deletion-queue'
 import { removeToolResultDirAsync } from './agent-tool-result-store'
 import { assertNotProjectLifecyclePath } from './workspace-delete-guard'
+import { readProjectSessionIndex, writeProjectSessionIndex } from './project-session-index'
 import {
   defaultStorageLayoutForWorkspace,
   moveSessionDataFiles,
@@ -142,6 +143,103 @@ import {
 const sessionIndex = createAgentSessionIndexStore(getAgentSessionsIndexPath)
 const readIndexRaw = sessionIndex.read
 let lastLayoutSyncIndex: unknown = null
+
+interface ProjectSessionMirror {
+  id: string
+  rootPath: string
+}
+
+function listProjectSessionMirrors(): ProjectSessionMirror[] {
+  return listAgentWorkspaces()
+    .filter((workspace) => workspace.storageMode === 'project' && typeof workspace.rootPath === 'string' && workspace.rootPath.length > 0)
+    .map((workspace) => ({ id: workspace.id, rootPath: workspace.rootPath! }))
+}
+
+const mirroredProjectSignatures = new Map<string, string>()
+
+/** 列表级签名：覆盖排序、标题、置顶/归档与 revision，避免每次写盘都重写未变化的项目。 */
+function projectIndexSignature(sessions: readonly AgentSessionMeta[]): string {
+  return sessions
+    .map((session) => `${session.id}:${session.updatedAt ?? 0}:${session.revision ?? 0}:${session.title}:${session.pinned ? 1 : 0}:${session.archived ? 1 : 0}`)
+    .join('|')
+}
+
+/**
+ * 把全局索引里属于各 project 的会话镜像到 `<root>/.profer/sessions/index.json`。
+ *
+ * 失败只记日志：项目可能只读/离线，不能因此阻断全局索引写入。
+ */
+function mirrorProjectSessionIndexes(index: AgentSessionsIndex): void {
+  const mirrors = listProjectSessionMirrors()
+  if (mirrors.length === 0) return
+
+  const byWorkspace = new Map<string, AgentSessionMeta[]>()
+  for (const session of index.sessions) {
+    if (!session.workspaceId) continue
+    const list = byWorkspace.get(session.workspaceId) ?? []
+    list.push(session)
+    byWorkspace.set(session.workspaceId, list)
+  }
+
+  for (const mirror of mirrors) {
+    const sessions = (byWorkspace.get(mirror.id) ?? [])
+      .slice()
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    const signature = projectIndexSignature(sessions)
+    const cacheKey = `${mirror.id}|${mirror.rootPath}`
+    if (mirroredProjectSignatures.get(cacheKey) === signature) continue
+    try {
+      writeProjectSessionIndex(mirror.rootPath, sessions)
+      mirroredProjectSignatures.set(cacheKey, signature)
+    } catch (error) {
+      console.warn(`[Agent 会话] 写入项目会话索引失败 (${mirror.rootPath}):`, error)
+    }
+  }
+}
+
+/**
+ * 启动对账：把项目索引里比全局更新的会话合并回来。
+ *
+ * 典型场景：项目从另一台机器拷来，全局索引没有它的会话；或者上次退出前
+ * 项目索引已写、全局索引尚未写。冲突时按 updatedAt 取新。
+ */
+function reconcileProjectSessionIndexes(index: AgentSessionsIndex, force = false): boolean {
+  let changed = false
+  const byId = new Map(index.sessions.map((session) => [session.id, session]))
+
+  for (const mirror of listProjectSessionMirrors()) {
+    if (!force && reconciledProjectRoots.has(mirror.rootPath)) continue
+    reconciledProjectRoots.add(mirror.rootPath)
+    const entries = readProjectSessionIndex(mirror.rootPath)
+    if (!entries) continue
+    for (const entry of entries) {
+      const normalized: AgentSessionMeta = { ...entry, workspaceId: mirror.id }
+      const existing = byId.get(normalized.id)
+      if (!existing) {
+        index.sessions.push(normalized)
+        byId.set(normalized.id, normalized)
+        changed = true
+        continue
+      }
+      if ((normalized.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+        Object.assign(existing, normalized)
+        changed = true
+      }
+    }
+  }
+
+  return changed
+}
+
+const reconciledProjectRoots = new Set<string>()
+
+/** 供打开/重新定位项目后显式对账（同一进程内新出现的项目）。 */
+export function reconcileProjectSessionIndexesNow(): void {
+  const index = readIndexRaw()
+  if (reconcileProjectSessionIndexes(index, true)) sessionIndex.write(index)
+  mirrorProjectSessionIndexes(index)
+}
+
 /**
  * 读索引时顺带刷新会话布局注册表。
  *
@@ -150,13 +248,18 @@ let lastLayoutSyncIndex: unknown = null
  */
 const readIndex = () => {
   const index = readIndexRaw()
+  if (reconcileProjectSessionIndexes(index)) sessionIndex.write(index)
   if (index !== lastLayoutSyncIndex) {
     lastLayoutSyncIndex = index
     syncSessionStorageLayouts(index.sessions)
   }
   return index
 }
-const writeIndex = sessionIndex.write
+
+const writeIndex = (index: AgentSessionsIndex) => {
+  sessionIndex.write(index)
+  mirrorProjectSessionIndexes(index)
+}
 
 const syncMessageStore = createSyncSessionMessageStore(
   () => ({ sessionsDir: getAgentSessionsDir() }),
@@ -369,12 +472,15 @@ export function toAgentSessionSummary(meta: AgentSessionMeta): AgentSessionMeta 
 
 export function listAgentSessions(includeArchived = false): AgentSessionMeta[] {
   // 已接受删除但还没清理完的会话不再对外可见：入队即隐藏，避免刷新后复活。
-  return sessionIndex.list(includeArchived).filter((session) => !isSessionDeletionPending(session.id))
+  return readIndex().sessions
+    .filter((session) => includeArchived || !session.archived)
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .filter((session) => !isSessionDeletionPending(session.id))
 }
 
 /** 已归档 Agent 会话数量；不含隐藏草稿与待删除会话。 */
 export function countArchivedAgentSessions(): number {
-  return sessionIndex.list(true)
+  return readIndex().sessions
     .filter((session) => session.archived && !session.draft && !isSessionDeletionPending(session.id))
     .length
 }
@@ -391,7 +497,7 @@ export function lockAgentSessionRuntime(id: string, runtime: AgentRuntime): Agen
 
 /** 获取单个会话的元数据。 */
 export function getAgentSessionMeta(id: string): AgentSessionMeta | undefined {
-  return sessionIndex.get(id)
+  return readIndex().sessions.find((session) => session.id === id)
 }
 
 /**
