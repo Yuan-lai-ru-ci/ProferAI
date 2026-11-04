@@ -1671,7 +1671,11 @@ function collectDelegatedDescendantIds(sessions: AgentSessionMeta[], rootId: str
  * 4. 更新元数据（workspaceId + storageLayout + 清空 sdkSessionId）
  * 5. 消息/任务图/Harness/transcript 跟随布局搬迁（managed ↔ project）
  */
-export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: string): AgentSessionMeta {
+export function moveSessionToWorkspace(
+  sessionId: string,
+  targetWorkspaceId: string,
+  options?: { allowDelegatedChild?: boolean },
+): AgentSessionMeta {
   let index = readIndex()
   let idx = index.sessions.findIndex((s) => s.id === sessionId)
   if (idx === -1) {
@@ -1688,10 +1692,41 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
     throw new Error(`目标工作区不存在: ${targetWorkspaceId}`)
   }
 
+  // 迁移前预检：先确认目标根可用、整棵会话树空闲、目标位置没有冲突。
+  // 这些检查必须在搬任何文件之前完成，否则子会话已迁、父会话失败会把树撕成两半。
+  if (targetWs.storageMode === 'project') {
+    requireExistingWorkspaceRoot(resolveWorkspaceLocation(targetWs.slug))
+  }
+  const movingSessionIds = [sessionId, ...collectDelegatedDescendantIds(index.sessions, sessionId)]
+  const sessionsById = new Map(index.sessions.map((item) => [item.id, item]))
+  for (const movingId of movingSessionIds) {
+    if (agentSessionActiveChecker?.(movingId) || isAgentSessionForking(movingId)) {
+      throw new Error('会话树中有会话正在运行或分叉，请停止后再迁移')
+    }
+  }
+  for (const movingId of movingSessionIds) {
+    const movingSession = sessionsById.get(movingId)
+    const sourceWs = movingSession?.workspaceId ? getAgentWorkspace(movingSession.workspaceId) : undefined
+    const sourceDir = sourceWs ? resolveAgentSessionWorkspacePath(sourceWs.slug, movingId) : undefined
+    const destDir = resolveAgentSessionWorkspacePath(targetWs.slug, movingId)
+    if (sourceDir && resolve(sourceDir) === resolve(destDir)) continue
+    if (existsSync(destDir) && readdirSync(destDir).length > 0) {
+      throw new Error(`目标工作区已存在同 ID 的会话数据，请先清理后再迁移: ${destDir}`)
+    }
+  }
+  // 委派子会话必须跟父会话一起走；单独迁移会让它在目标工作区降级成孤儿根。
+  // 父会话内部递归迁移子会话时通过 options 放行。
+  if (!options?.allowDelegatedChild && session.parentSessionId && session.sourceDelegationId) {
+    const parent = sessionsById.get(session.parentSessionId)
+    if (parent && parent.workspaceId !== targetWorkspaceId) {
+      throw new Error('委派子会话不能单独迁移，请迁移其父会话')
+    }
+  }
+
   // 委派子会话必须跟随父会话：session-tree 要求父子同工作区才归并，
   // 否则子会话会降级成独立根节点；父会话离开旧项目后子会话还会变成孤儿。
   for (const childId of collectDelegatedDescendantIds(index.sessions, sessionId)) {
-    moveSessionToWorkspace(childId, targetWorkspaceId)
+    moveSessionToWorkspace(childId, targetWorkspaceId, { allowDelegatedChild: true })
   }
   // 子会话迁移会各自写盘；重新读索引，避免用旧快照覆盖它们的 workspaceId 更新。
   index = readIndex()

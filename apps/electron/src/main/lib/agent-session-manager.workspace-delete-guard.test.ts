@@ -36,7 +36,7 @@ const configRoot = join(sandbox, 'config')
 process.env.PROFER_DEV = '1'
 process.env.PROFER_CONFIG_DIR = configRoot
 
-const { deleteAgentSession, getAgentSessionMeta, listAgentSessions, moveSessionToWorkspace, findOrphanSessions } = await import('./agent-session-manager')
+const { deleteAgentSession, getAgentSessionMeta, listAgentSessions, moveSessionToWorkspace, findOrphanSessions, setAgentSessionActiveChecker } = await import('./agent-session-manager')
 const { ProjectPathDeletionError, assertNotProjectLifecyclePath } = await import('./workspace-delete-guard')
 const { invalidateWorkspaceLocation } = await import('./workspace-locator')
 
@@ -304,6 +304,71 @@ describe('moveSessionToWorkspace：会话目录跟随归属迁移', () => {
     expect(moved.workspaceId).toBe('id-p1')
     expect(existsSync(join(projectStorageDir('p1', 'sess-3'), 'marker.txt'))).toBe(true)
     expect(snapshotProjectTree(root)).toEqual(before)
+  })
+
+  test('Given 委派子会话 When 单独迁移 Then 拒绝，避免在目标工作区变成孤儿根', () => {
+    const rootA = makeProject('move-child-a')
+    const rootB = makeProject('move-child-b')
+    writeWorkspacesIndex([projectEntry('pa', rootA), projectEntry('pb', rootB)])
+    writeSessionsIndex([
+      { id: 'sess-parent', title: 'parent', workspaceId: 'id-pa', createdAt: 1, updatedAt: 1 },
+      { id: 'sess-child', title: 'child', workspaceId: 'id-pa', parentSessionId: 'sess-parent', sourceDelegationId: 'deleg-1', rootSessionId: 'sess-parent', createdAt: 2, updatedAt: 2 },
+    ])
+    seedStorageDir(projectStorageDir('pa', 'sess-child'))
+
+    expect(() => moveSessionToWorkspace('sess-child', 'id-pb')).toThrow('委派子会话不能单独迁移')
+    expect(getAgentSessionMeta('sess-child')!.workspaceId).toBe('id-pa')
+    expect(existsSync(projectStorageDir('pa', 'sess-child'))).toBe(true)
+  })
+
+  test('Given 目标项目根不存在 When 迁移 Then 直接报错，不重建项目目录', () => {
+    const root = makeProject('move-missing-root')
+    writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
+    writeSessionsIndex([{ id: 'sess-missing-root', title: 'move', workspaceId: 'id-default', createdAt: 1, updatedAt: 1 }])
+    seedStorageDir(managedStorageDir('default', 'sess-missing-root'))
+    rmSync(root, { recursive: true, force: true })
+
+    expect(() => moveSessionToWorkspace('sess-missing-root', 'id-p1')).toThrow()
+    expect(existsSync(root)).toBe(false)
+    expect(getAgentSessionMeta('sess-missing-root')!.workspaceId).toBe('id-default')
+  })
+
+  test('Given 目标项目已有同 ID 非空会话目录 When 迁移 Then 拒绝覆盖，源数据保持完整', () => {
+    const root = makeProject('move-conflict')
+    writeWorkspacesIndex([projectEntry('p1', root), managedEntry('default')])
+    writeSessionsIndex([{ id: 'sess-conflict', title: 'move', workspaceId: 'id-default', createdAt: 1, updatedAt: 1 }])
+    const sourceDir = managedStorageDir('default', 'sess-conflict')
+    seedStorageDir(sourceDir)
+    const destDir = projectStorageDir('p1', 'sess-conflict')
+    mkdirSync(destDir, { recursive: true })
+    writeFileSync(join(destDir, 'existing.txt'), 'do not delete\n', 'utf-8')
+
+    expect(() => moveSessionToWorkspace('sess-conflict', 'id-p1')).toThrow('已存在同 ID 的会话数据')
+    expect(readFileSync(join(destDir, 'existing.txt'), 'utf-8')).toBe('do not delete\n')
+    expect(existsSync(join(sourceDir, 'marker.txt'))).toBe(true)
+    expect(getAgentSessionMeta('sess-conflict')!.workspaceId).toBe('id-default')
+  })
+
+  test('Given 委派子会话仍在运行 When 迁移父会话 Then 拒绝，不搬任何目录', () => {
+    const rootA = makeProject('move-active-a')
+    const rootB = makeProject('move-active-b')
+    writeWorkspacesIndex([projectEntry('pa', rootA), projectEntry('pb', rootB)])
+    writeSessionsIndex([
+      { id: 'sess-active-parent', title: 'parent', workspaceId: 'id-pa', createdAt: 1, updatedAt: 1 },
+      { id: 'sess-active-child', title: 'child', workspaceId: 'id-pa', parentSessionId: 'sess-active-parent', sourceDelegationId: 'deleg-1', rootSessionId: 'sess-active-parent', createdAt: 2, updatedAt: 2 },
+    ])
+    seedStorageDir(projectStorageDir('pa', 'sess-active-parent'))
+    seedStorageDir(projectStorageDir('pa', 'sess-active-child'))
+
+    setAgentSessionActiveChecker((id) => id === 'sess-active-child')
+    try {
+      expect(() => moveSessionToWorkspace('sess-active-parent', 'id-pb')).toThrow('正在运行或分叉')
+    } finally {
+      setAgentSessionActiveChecker(undefined)
+    }
+    expect(getAgentSessionMeta('sess-active-parent')!.workspaceId).toBe('id-pa')
+    expect(existsSync(projectStorageDir('pa', 'sess-active-parent'))).toBe(true)
+    expect(existsSync(projectStorageDir('pa', 'sess-active-child'))).toBe(true)
   })
 
   test('Given 父会话带委派子会话 When 迁移 Then 子会话与目录一起跟随，树不断', () => {
