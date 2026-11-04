@@ -51,7 +51,11 @@ function assertSafeSessionId(sessionId: string): void {
 
 function realpathCandidate(path: string): string {
   if (existsSync(path)) return realpathSync(path)
-  return resolve(realpathSync(dirname(path)), basename(path))
+  const parent = dirname(path)
+  // 目录尚未创建（首次写入 / 读取空会话）时不做 realpath，避免 ENOENT；
+  // 此时也没有符号链接可逃逸，直接返回归一化路径即可。
+  if (!existsSync(parent)) return resolve(path)
+  return resolve(realpathSync(parent), basename(path))
 }
 
 function isPathInside(root: string, candidate: string): boolean {

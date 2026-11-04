@@ -119,6 +119,10 @@ export interface SessionDataFile {
   sessionId: string
   path: string
   kind: 'managed' | 'project'
+  /** 目录内文件名（managed 为 `<sid>.jsonl`，project 为 `messages.jsonl` / `pi/xxx.jsonl`）。 */
+  fileName: string
+  /** managed 文件名能否解析出会话 ID；project 恒为 true。 */
+  parseable: boolean
 }
 
 /**
@@ -131,7 +135,7 @@ export function listAllSessionMessageFiles(): SessionDataFile[] {
   return listSessionDataFiles((sessionId, fileName) => fileName === `${sessionId}.jsonl` || fileName === 'messages.jsonl')
 }
 
-/** 列出全部会话 JSONL（消息 + 任务图 + Harness），用于存储统计与清理。 */
+/** 列出全部会话 JSONL（消息 + 任务图 + Harness + Pi transcript），用于存储统计与清理。 */
 export function listAllSessionJsonlFiles(): SessionDataFile[] {
   return listSessionDataFiles(() => true)
 }
@@ -139,10 +143,16 @@ export function listAllSessionJsonlFiles(): SessionDataFile[] {
 function listSessionDataFiles(include: (sessionId: string, fileName: string) => boolean): SessionDataFile[] {
   const result: SessionDataFile[] = []
   const seen = new Set<string>()
-  const push = (sessionId: string, filePath: string, kind: 'managed' | 'project') => {
+  const push = (
+    sessionId: string,
+    filePath: string,
+    kind: 'managed' | 'project',
+    fileName: string,
+    parseable: boolean,
+  ) => {
     if (seen.has(filePath)) return
     seen.add(filePath)
-    result.push({ sessionId, path: filePath, kind })
+    result.push({ sessionId, path: filePath, kind, fileName, parseable })
   }
 
   const globalDir = join(getConfigDir(), 'agent-sessions')
@@ -150,8 +160,10 @@ function listSessionDataFiles(include: (sessionId: string, fileName: string) => 
     for (const entry of readdirSync(globalDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
       const sessionId = entry.name.slice(0, -'.jsonl'.length)
-      if (!sessionId || !include(sessionId, entry.name)) continue
-      push(sessionId, join(globalDir, entry.name), 'managed')
+      // 解析不出会话 ID 的文件仍计入总量（不能凭空消失），但不参与孤儿判定/删除。
+      const parseable = sessionId.length > 0
+      if (!include(sessionId, entry.name)) continue
+      push(sessionId, join(globalDir, entry.name), 'managed', entry.name, parseable)
     }
   }
 
@@ -164,7 +176,7 @@ function listSessionDataFiles(include: (sessionId: string, fileName: string) => 
       if (!existsSync(dataDir)) continue
       for (const file of readdirSync(dataDir, { withFileTypes: true })) {
         if (file.isFile() && file.name.endsWith('.jsonl')) {
-          if (include(entry.name, file.name)) push(entry.name, join(dataDir, file.name), 'project')
+          if (include(entry.name, file.name)) push(entry.name, join(dataDir, file.name), 'project', file.name, true)
           continue
         }
         // Pi 原生 transcript 在 <dataDir>/pi/ 下，同属该会话数据，孤儿清理与统计都要覆盖。
@@ -174,7 +186,7 @@ function listSessionDataFiles(include: (sessionId: string, fileName: string) => 
             if (!piFile.isFile() || !piFile.name.endsWith('.jsonl')) continue
             const relativeName = `pi/${piFile.name}`
             if (!include(entry.name, relativeName)) continue
-            push(entry.name, join(piDir, piFile.name), 'project')
+            push(entry.name, join(piDir, piFile.name), 'project', relativeName, true)
           }
         }
       }

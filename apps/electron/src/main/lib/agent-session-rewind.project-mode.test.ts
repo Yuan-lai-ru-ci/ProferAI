@@ -11,7 +11,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 mock.module('electron', () => ({
   BrowserWindow: { getAllWindows: () => [], fromWebContents: () => undefined },
@@ -94,9 +94,10 @@ function writeIndex(workspaces: Array<Record<string, unknown>>): void {
 }
 
 function seedProferMessages(sessionId: string, lines: unknown[]): void {
-  const dir = configPaths.getAgentSessionsDir()
-  mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, `${sessionId}.jsonl`), lines.map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf-8')
+  // 按会话实际布局写入（project 在项目 .profer/sessions/<sid>/messages.jsonl）。
+  const filePath = configPaths.getAgentSessionMessagesPath(sessionId)
+  mkdirSync(dirname(filePath), { recursive: true })
+  writeFileSync(filePath, lines.map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf-8')
 }
 
 const userMsg = (uuid: string, text: string) => ({ type: 'user', uuid, message: { content: [{ type: 'text', text }] } })

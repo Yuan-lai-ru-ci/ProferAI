@@ -8,7 +8,7 @@
 import { join, basename, resolve, sep, relative } from 'node:path'
 import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { createSessionStorePaths, getSessionStorageLayout, sessionGraphPath, sessionHarnessPath, sessionMessagesPath } from '@profer/session-store'
+import { getSessionStorageLayout } from '@profer/session-store'
 import { RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
 import { readSkillVersion } from './skill-manifest'
 import { resolveDevVitePort } from './dev-instance'
@@ -316,7 +316,10 @@ export function getAgentSessionsDir(): string {
  * @returns ~/.profer/agent-sessions/{id}.jsonl
  */
 export function getAgentSessionMessagesPath(id: string): string {
-  return sessionMessagesPath(createSessionStorePaths(getConfigDir()), id)
+  const layout = getSessionStorageLayout(id)
+  if (layout?.kind === 'project' && layout.dataDir) return join(layout.dataDir, 'messages.jsonl')
+  // managed 保持历史行为（含目录自动创建）。
+  return join(getAgentSessionsDir(), `${id}.jsonl`)
 }
 
 /**
@@ -326,7 +329,9 @@ export function getAgentSessionMessagesPath(id: string): string {
  * managed 会话保持 `~/.profer/agent-sessions/<sid>-graph.jsonl`。
  */
 export function getAgentSessionGraphPath(id: string): string {
-  return sessionGraphPath(createSessionStorePaths(getConfigDir()), id)
+  const layout = getSessionStorageLayout(id)
+  if (layout?.kind === 'project' && layout.dataDir) return join(layout.dataDir, `${id}-graph.jsonl`)
+  return join(getAgentSessionsDir(), `${id}-graph.jsonl`)
 }
 
 /**
@@ -336,7 +341,9 @@ export function getAgentSessionGraphPath(id: string): string {
  * 缺失文件代表该历史会话尚未启用 Harness，读取方必须安全降级为空 snapshot。
  */
 export function getPiHarnessEventsPath(id: string): string {
-  return sessionHarnessPath(createSessionStorePaths(getConfigDir()), id)
+  const layout = getSessionStorageLayout(id)
+  if (layout?.kind === 'project' && layout.dataDir) return join(layout.dataDir, `${id}-pi-harness.jsonl`)
+  return join(getAgentSessionsDir(), `${id}-pi-harness.jsonl`)
 }
 
 /**

@@ -296,8 +296,11 @@ async function calcAgentSessionsCategory(): Promise<StorageCategory> {
       const stat = await fsPromises.stat(file.path)
       bytes += stat.size
       count++
-      // 侧车文件与消息文件共用同一个 sessionId 判定，口径必须与清理一致
-      if (!activeIds.has(file.sessionId)) {
+      // 侧车文件与消息文件共用同一个 baseSessionId 判定；解析不出的文件只计数，不算孤儿。
+      const baseSessionId = file.kind === 'project'
+        ? file.sessionId
+        : parseAgentSessionFileName(file.fileName)?.baseSessionId
+      if (baseSessionId && !activeIds.has(baseSessionId)) {
         orphanBytes += stat.size
         orphanCount++
       }
@@ -693,7 +696,11 @@ async function cleanupOrphanAgentSessions(): Promise<CleanupResult> {
   const errors: string[] = []
 
   for (const file of listAllSessionJsonlFiles()) {
-    if (activeIds.has(file.sessionId)) continue
+    const baseSessionId = file.kind === 'project'
+      ? file.sessionId
+      : parseAgentSessionFileName(file.fileName)?.baseSessionId
+    // 解析不出会话 ID 的文件不删：删除不可逆，宁可漏清也不能误删。
+    if (!baseSessionId || activeIds.has(baseSessionId)) continue
     const freed = safeUnlink(file.path)
     if (freed > 0) { freedBytes += freed; deletedCount++ }
   }
