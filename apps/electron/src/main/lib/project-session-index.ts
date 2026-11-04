@@ -10,7 +10,8 @@
  * 的条目（例如从另一台机器拷来的项目）会合并回全局索引。
  */
 
-import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { AgentSessionMeta } from '@profer/shared'
 import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
 
@@ -38,7 +39,9 @@ export function readProjectSessionIndex(rootPath: string): AgentSessionMeta[] | 
 }
 
 export function writeProjectSessionIndex(rootPath: string, sessions: readonly AgentSessionMeta[]): void {
-  writeJsonFileAtomic(projectSessionIndexPath(rootPath), {
+  const indexPath = projectSessionIndexPath(rootPath)
+  mkdirSync(dirname(indexPath), { recursive: true })
+  writeJsonFileAtomic(indexPath, {
     version: PROJECT_SESSION_INDEX_VERSION,
     sessions: [...sessions],
   })

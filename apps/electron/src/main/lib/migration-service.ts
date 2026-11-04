@@ -59,6 +59,7 @@ import {
   getFeishuConfigPath,
 } from './config-paths'
 import { listAgentWorkspaces, getAgentWorkspace, getAllWorkspaceSkills, getWorkspaceMcpConfig } from './agent-workspace-manager'
+import { reconcileProjectSessionIndexesNow } from './agent-session-manager'
 import { listChannels, decryptApiKey } from './channel-manager'
 import { readSessionBlobRefs } from '@profer/shared'
 import type { AgentWorkspace } from '@profer/shared'
@@ -358,9 +359,27 @@ function assertMigrationWorkspacesSupported(
   throw new Error(`${PROJECT_WORKSPACE_MIGRATION_UNSUPPORTED}：「${project.name}」`)
 }
 
+/**
+ * v2 导出：项目工作区只允许导出会话。
+ *
+ * 项目 `.profer` 配置随 git 版本化，跨项目搬运会覆盖目标配置，因此仍不进入备份；
+ * 会话数据已自包含，导出后可作为独立备份/迁移包。
+ */
+function assertProjectExportComponents(
+  workspaces: Array<MigrationGuardWorkspace | null | undefined>,
+  components: readonly string[],
+): void {
+  const project = workspaces.find((candidate) => candidate?.storageMode === 'project')
+  if (!project) return
+  const unsupported = components.filter((component) => component !== 'sessions')
+  if (unsupported.length > 0) {
+    throw new Error(`项目工作区「${project.name}」只支持导出会话，请取消勾选: ${unsupported.join('、')}`)
+  }
+}
+
 export async function getExportPreview(workspaceId: string): Promise<ExportPreview> {
   const workspace = getAgentWorkspace(workspaceId) ?? null
-  assertMigrationWorkspacesSupported([workspace])
+  // 项目工作区允许导出会话（预览只读，不涉及配置搬运）。
 
   let agentSessionCount = 0
   let chatConversationCount = 0
@@ -532,8 +551,11 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
       ? `没有可导出的工作区：${excluded.length} 个项目工作区已自动排除，请至少保留一个托管工作区`
       : '没有可导出的工作区')
   }
-  // 防御纵深：显式选中 project 会在这里抛错；默认全量分支已把 project 剔除。
-  assertMigrationWorkspacesSupported(targetWorkspaces.map((entry) => entry.workspace))
+  // 防御纵深：默认全量分支已把 project 剔除；显式选中 project 时只允许导出会话。
+  assertProjectExportComponents(targetWorkspaces.map((entry) => entry.workspace), components)
+  try { reconcileProjectSessionIndexesNow() } catch (error) {
+    console.warn('[导出] 项目会话索引对账失败（继续导出）:', error)
+  }
 
   const workspaceEntries: WorkspaceExportEntry[] = targetWorkspaces.map(({ workspace, skillSlugs, mcpServerNames }) => ({
     workspaceId: workspace.id,
@@ -589,6 +611,8 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
     }
 
     for (const { workspace } of targetWorkspaces) {
+      // 项目 `.profer` 配置随 git 版本化，不进入备份包（会话数据已单独打包）。
+      if (workspace.storageMode === 'project') continue
       await _addWorkspaceConfigV2(writer, workspace)
     }
 
@@ -599,7 +623,7 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
       await _addPersonalFiles(writer)
       manifest.personal = await _addPersonalPayload(
         writer,
-        targetWorkspaces.map((entry) => entry.workspace),
+        targetWorkspaces.map((entry) => entry.workspace).filter((workspace) => workspace.storageMode !== 'project'),
         blobRefs,
         warnings,
       )
@@ -625,14 +649,14 @@ function _collectRuntimeArtifactCandidates(
   filterIds: string[] | undefined,
 ): RuntimeArtifactCandidate[] {
   const workspaceIds = new Set(workspaces.map((w) => w.id))
-  const sessionsIndex = readJsonSafe<{ sessions?: Array<{ id: string; workspaceId?: string; agentRuntime?: string; sdkSessionId?: string }> }>(
+  const sessionsIndex = readJsonSafe<{ sessions?: Array<{ id: string; workspaceId?: string; agentRuntime?: string; sdkSessionId?: string; piSessionFile?: string }> }>(
     getAgentSessionsIndexPath(),
   )
   const candidates: RuntimeArtifactCandidate[] = []
   for (const session of sessionsIndex?.sessions ?? []) {
     if (!workspaceIds.has(session.workspaceId ?? '') || (filterIds && !filterIds.includes(session.id)) || !session.sdkSessionId) continue
     if (session.agentRuntime === 'pi') {
-      const piPath = _findPiSessionArtifact(session.sdkSessionId)
+      const piPath = _findPiSessionArtifact(session.sdkSessionId, session.piSessionFile)
       if (piPath) {
         candidates.push({
           sessionId: session.sdkSessionId,
@@ -661,7 +685,9 @@ function _collectRuntimeArtifactCandidates(
   return candidates
 }
 
-function _findPiSessionArtifact(sessionId: string): string | undefined {
+function _findPiSessionArtifact(sessionId: string, knownPath?: string): string | undefined {
+  // project 会话的 transcript 在项目 .profer 内，优先信任索引记录并做存在性校验。
+  if (knownPath && existsSync(knownPath)) return knownPath
   const root = join(getSdkConfigDir(), 'sessions', 'pi')
   if (!existsSync(root)) return undefined
   const scan = (dir: string): string | undefined => {
@@ -878,7 +904,7 @@ async function _addSessionsMultiWorkspace(
 
   const sessionsIndexPath = getAgentSessionsIndexPath()
   if (existsSync(sessionsIndexPath)) {
-    const index = readJsonSafe<{ version: number; sessions: Array<{ id: string; workspaceId: string }> }>(sessionsIndexPath)
+    const index = readJsonSafe<{ version: number; sessions: Array<{ id: string; workspaceId: string; storageLayout?: 'project' | 'managed' }> }>(sessionsIndexPath)
     const sessions = (index?.sessions ?? []).filter((s) => wsIds.has(s.workspaceId) && !isSessionDeletionPending(s.id))
     const targets = filterIds ? sessions.filter((s) => filterIds.includes(s.id)) : sessions
     const exportedIds = new Set<string>()
@@ -898,7 +924,13 @@ async function _addSessionsMultiWorkspace(
     }
 
     if (index) {
-      const filtered = { ...index, sessions: index.sessions.filter((s) => exportedIds.has(s.id)) }
+      // 导出包按 managed 语义恢复（消息写入全局 agent-sessions），避免导入端按项目路径找不到文件。
+      const filtered = {
+        ...index,
+        sessions: index.sessions
+          .filter((s) => exportedIds.has(s.id))
+          .map((s) => (s.storageLayout === 'project' ? { ...s, storageLayout: 'managed' as const } : s)),
+      }
       await writer.addBuffer(JSON.stringify(filtered, null, 2), 'sessions/agent-sessions-index.json')
       const piState = pickPiStatesForExport(sessionsIndexPath, exportedIds)
       if (piState) await writer.addBuffer(JSON.stringify(piState), EXPORTED_PI_STATE_ENTRY)

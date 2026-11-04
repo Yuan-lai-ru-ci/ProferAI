@@ -68,7 +68,9 @@ type SessionStorageLayout = { kind: 'project'; dataDir: string } | { kind: 'mana
 
 ## 6. 与备份/导出的关系
 
-项目文件夹本身就是完整备份单元。现有 `migration-service` 仍对 project 工作区禁用导出/导入：项目 `.profer` 配置随 git 版本化，跨项目搬运会覆盖配置。会话数据已自包含，直接复制项目文件夹即可；后续若要支持 zip 导入，需要单独的“项目会话包”格式与目标项目校验。
+- **项目文件夹本身就是完整备份单元**：直接复制文件夹即可恢复。
+- v2 导出允许显式选中 project 工作区，但只支持 `sessions` 组件：会话消息、任务图、Harness、transcript、项目会话索引会进入归档；项目 `.profer` 配置（profile/memory/skills/mcp/presets）随 git 版本化，不进入备份，避免跨项目覆盖。
+- 导入仍拒绝 project 目标（配置搬运边界未变）；项目会话归档可在导入时恢复为 managed 布局，再由项目迁移回到项目内。
 
 ## 7. 风险与边界
 

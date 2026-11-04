@@ -5,7 +5,8 @@
  * 项目文件是该工作区任务的可移植副本；启动/打开项目时对账，项目拷来即可恢复任务。
  */
 
-import { join } from 'node:path'
+import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { Automation, AutomationTriggerRecord } from '@profer/shared'
 import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
 
@@ -52,7 +53,9 @@ export function writeProjectAutomations(
   automations: readonly Automation[],
   triggers: readonly AutomationTriggerRecord[],
 ): void {
-  writeJsonFileAtomic(projectAutomationsPath(rootPath), {
+  const filePath = projectAutomationsPath(rootPath)
+  mkdirSync(dirname(filePath), { recursive: true })
+  writeJsonFileAtomic(filePath, {
     version: PROJECT_AUTOMATIONS_VERSION,
     automations: [...automations],
     triggers: [...triggers],
