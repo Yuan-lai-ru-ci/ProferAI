@@ -179,6 +179,7 @@ import { listAutomations,
   updateAutomation,
   deleteAutomation,
   pauseAutomationsForWorkspace,
+  ensureProjectAutomationMirrors,
 } from './lib/automation-manager'
 import { runAutomationNow, broadcastChanged as broadcastAutomationsChanged } from './lib/automation-scheduler'
 import { applyRecommendationFeedback, listRecommendations } from './lib/recommendation-manager'
@@ -210,6 +211,8 @@ import {
   listAgentSessions,
   toAgentSessionSummary,
   backfillPiSessionFiles,
+  migrateProjectSessionLayouts,
+  ensureProjectSessionMirrors,
   createAgentSession,
   ensureProjectDraftAgentSession,
   getAgentSessionMeta,
@@ -2642,16 +2645,25 @@ export function registerIpcHandlers(): void {
   ensureDefaultWorkspace()
   // 上次退出/崩溃前已接受但未完成的删除请求，启动后继续执行，避免会话复活。
   resumePendingSessionDeletions()
-  // 空闲时补齐历史 Pi 会话的 transcript 路径：删除/健康检查就不必回退到目录扫描。
+  // 空闲时先迁移存量项目会话布局，再补齐历史 Pi transcript 路径。
   setTimeout(() => {
-    try {
-      backfillPiSessionFiles()
-    } catch (error) {
-      console.warn('[Agent 会话] 补齐 Pi transcript 路径失败:', error)
-    }
+    void migrateProjectSessionLayouts()
+      .catch((error) => {
+        console.warn('[Agent 会话] 项目会话布局迁移失败:', error)
+      })
+      .finally(() => {
+        try {
+          backfillPiSessionFiles()
+        } catch (error) {
+          console.warn('[Agent 会话] 补齐 Pi transcript 路径失败:', error)
+        }
+      })
   }, 3000).unref?.()
   // 旧项目不会重新走 open，启动时幂等补齐 .profer/.gitignore（会话/运行时投影不应进仓库）
   ensureProjectWorkspaceGitignores()
+  // 启动时补齐项目镜像（会话索引 / 工作区定时任务），让已有数据立刻可在项目文件夹内看到
+  try { ensureProjectSessionMirrors() } catch (error) { console.warn('[Agent 会话] 补齐项目会话镜像失败:', error) }
+  try { ensureProjectAutomationMirrors() } catch (error) { console.warn('[定时任务] 补齐项目任务镜像失败:', error) }
 
   // 获取 Agent 工作区列表
   ipcMain.handle(
@@ -2803,6 +2815,7 @@ export function registerIpcHandlers(): void {
       return withProjectWorkspaceErrorCode(() => {
         // 版本号由主进程注入：manager 不依赖 electron，才能被单元测试直接驱动
         const result = createProjectWorkspace({ ...input, proferVersion: app.getVersion() })
+        scheduleProjectSessionMigration(result.workspace.id)
         broadcastAgentWorkspacesChanged()
         return result
       })
@@ -2818,12 +2831,21 @@ export function registerIpcHandlers(): void {
     }
   }
 
+  /** 打开/定位项目后异步迁移该项目的存量会话，不阻塞 UI。 */
+  function scheduleProjectSessionMigration(workspaceId: string): void {
+    void migrateProjectSessionLayouts({ workspaceId })
+      .catch((error) => {
+        console.warn(`[Agent 会话] 项目会话布局迁移失败 (${workspaceId}):`, error)
+      })
+  }
+
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_PROJECT_WORKSPACE,
     async (_, input: ProjectWorkspaceTarget): Promise<ProjectWorkspaceOpenResult> => {
       return withProjectWorkspaceErrorCode(() => {
         const result = openProjectWorkspace({ ...input, proferVersion: app.getVersion() })
         reconcileProjectSessionIndexesSafely()
+        scheduleProjectSessionMigration(result.workspace.id)
         broadcastAgentWorkspacesChanged()
         return result
       })
@@ -2852,6 +2874,7 @@ export function registerIpcHandlers(): void {
       return withProjectWorkspaceErrorCode(() => {
         const result = relocateProjectWorkspace({ ...input, proferVersion: app.getVersion() })
         reconcileProjectSessionIndexesSafely()
+        scheduleProjectSessionMigration(result.workspace.id)
         broadcastAgentWorkspacesChanged()
         return result
       })

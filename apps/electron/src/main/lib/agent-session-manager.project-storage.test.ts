@@ -167,6 +167,25 @@ describe('会话存储布局', () => {
     expect(resolvePiTranscriptPath('sdk-1', undefined, { rootDir: projectPiDir, force: true })).toBe(transcript)
   })
 
+  test('Given project 会话 When 迁移回 managed Then 消息搬回全局 agent-sessions', () => {
+    const root = makeProject('p4')
+    writeWorkspaces([projectEntry('p4', root), managedEntry('default')])
+
+    const session = createAgentSession('move back', undefined, 'id-p4', undefined, 'pi', false, 'standard')
+    appendUserMessage(session.id, 'in-project')
+    const projectMessages = join(root, '.profer', 'sessions', session.id, 'messages.jsonl')
+    expect(existsSync(projectMessages)).toBe(true)
+
+    const moved = moveSessionToWorkspace(session.id, 'id-default')
+    const globalMessages = join(configRoot, 'agent-sessions', `${session.id}.jsonl`)
+
+    expect(moved.storageLayout).toBe('managed')
+    expect(existsSync(globalMessages)).toBe(true)
+    expect(readFileSync(globalMessages, 'utf-8')).toContain('in-project')
+    expect(existsSync(projectMessages)).toBe(false)
+    expect(getAgentSessionSDKMessages(session.id).length).toBe(1)
+  })
+
   test('Given 历史 project 会话只有全局消息 When 读取 Then 继续读全局，不因升级丢历史', () => {
     const root = makeProject('legacy')
     writeWorkspaces([projectEntry('legacy', root), managedEntry('default')])

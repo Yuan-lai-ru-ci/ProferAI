@@ -5,6 +5,12 @@
 > 范围：新增 project 模式——绑定真实项目文件夹，项目内 `.profer/` 承载配置与资产，Agent cwd 为项目根
 > 非范围：存量工作区迁移、团队工作区云同步协议、Agent 并发 worktree、项目模板市场
 
+> **2026-11-04 修订（会话自包含）**：§3 的 L4「会话数据永远留中央」已被
+> `docs/plans/2026-11-04-project-session-self-contained.md` 修订。project 工作区的
+> 消息 JSONL、会话列表、任务图、Harness、Pi transcript、绑定该工作区的定时任务
+> 改为落在 `<root>/.profer/`；managed 工作区行为不变。全局索引与 automations 索引
+> 保留为实时权威 + 跨项目视图，项目内文件是可移植副本与恢复来源。
+
 ## 1. 背景
 
 当前 Profer 的「工作区」是纯应用内概念：

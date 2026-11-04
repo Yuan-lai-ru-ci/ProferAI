@@ -904,3 +904,9 @@ export function __resetAutomationManagerForTests(): void {
   reconciledAutomationRoots.clear()
   mirroredAutomationSignatures.clear()
 }
+
+/** 启动时补齐项目任务镜像（不等待下一次写盘）。 */
+export function ensureProjectAutomationMirrors(): void {
+  const index = readIndex()
+  mirrorProjectAutomations(index)
+}
