@@ -38,6 +38,7 @@ process.env.PROFER_CONFIG_DIR = configRoot
 
 const {
   appendAgentMessage,
+  appendSDKMessages,
   createAgentSession,
   getAgentSessionMeta,
   getAgentSessionSDKMessages,
@@ -111,6 +112,25 @@ describe('会话存储布局', () => {
     // 任务图与 Harness 账本同布局
     expect(dirname(getAgentSessionGraphPath(session.id))).toBe(dirname(messagesPath))
     expect(dirname(getPiHarnessEventsPath(session.id))).toBe(dirname(messagesPath))
+  })
+
+  test('Given project 会话 When 运行时追加 SDKMessage Then 也落在项目消息文件', () => {
+    const root = makeProject('p-runtime')
+    writeWorkspaces([projectEntry('p-runtime', root), managedEntry('default')])
+
+    const session = createAgentSession('runtime messages', undefined, 'id-p-runtime', undefined, 'pi', false, 'standard')
+    appendSDKMessages(session.id, [{
+      type: 'assistant',
+      uuid: 'a-runtime',
+      message: { content: [{ type: 'text', text: 'runtime-write' }] },
+    }] as never)
+
+    const projectPath = join(root, '.profer', 'sessions', session.id, 'messages.jsonl')
+    expect(existsSync(projectPath)).toBe(true)
+    expect(readFileSync(projectPath, 'utf-8')).toContain('runtime-write')
+    // 运行时写入也不能在中央目录留下影子文件
+    expect(existsSync(join(configRoot, 'agent-sessions', `${session.id}.jsonl`))).toBe(false)
+    expect(getAgentSessionSDKMessages(session.id).length).toBe(1)
   })
 
   test('Given managed 工作区 When 新建会话并写消息 Then 保持全局 agent-sessions 布局', () => {

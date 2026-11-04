@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unl
 import { createInterface } from 'node:readline'
 import { rm as rmAsync, copyFile as copyFileAsync, mkdir as mkdirAsync, rename as renameAsync, unlink as unlinkAsync } from 'node:fs/promises'
 import { createAgentSessionIndexStore } from './agent-session-index'
-import { createSyncSessionMessageStore, type AgentSessionsIndex } from '@profer/session-store'
+import { type AgentSessionsIndex } from '@profer/session-store'
 import { createSnippet, extractTextFromPersistedMessage, matchAgentJsonlLine } from './agent-session-search'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -262,14 +262,6 @@ const writeIndex = (index: AgentSessionsIndex) => {
   sessionIndex.write(index)
   mirrorProjectSessionIndexes(index)
 }
-
-const syncMessageStore = createSyncSessionMessageStore(
-  () => ({ sessionsDir: getAgentSessionsDir() }),
-  {
-    parseMessage: (sessionId, line) => parseSDKMessageLine(line, sessionId) ?? undefined,
-    serializeMessage: (sessionId, message) => serializeSDKMessageForStorage(message, undefined, undefined),
-  },
-)
 
 /**
  * 本进程内已删除的会话。
@@ -923,7 +915,13 @@ export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
   }
 
   try {
-    syncMessageStore.append(id, persistentMessages)
+    // 消息落点必须跟会话布局走：project 会话写项目数据目录，managed 写全局目录。
+    const filePath = getAgentSessionMessagesPath(id)
+    mkdirSync(dirname(filePath), { recursive: true })
+    const content = persistentMessages
+      .map((message) => serializeSDKMessageForStorage(message, undefined, undefined))
+      .join('\n') + '\n'
+    appendFileSync(filePath, content, 'utf-8')
   } catch (error) {
     console.error(`[Agent 会话] 追加 SDKMessage 失败 (${id}):`, error)
     throw new Error('追加 SDKMessage 失败')
@@ -2767,7 +2765,7 @@ function copyTruncatedGraphJsonl(
   sourceMessages: SDKMessage[],
 ): void {
   try {
-    const sourcePath = join(getAgentSessionsDir(), `${sourceSessionId}-graph.jsonl`)
+    const sourcePath = getAgentSessionGraphPath(sourceSessionId)
     if (!existsSync(sourcePath)) return
 
     const graphContent = readFileSync(sourcePath, 'utf-8')
@@ -2789,7 +2787,7 @@ function copyTruncatedGraphJsonl(
     const truncatedEvents = allEvents.filter((e) => e.timestamp <= forkTimestamp)
     if (truncatedEvents.length === 0) return
 
-    const destPath = join(getAgentSessionsDir(), `${destSessionId}-graph.jsonl`)
+    const destPath = getAgentSessionGraphPath(destSessionId)
     const dir = dirname(destPath)
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true })
