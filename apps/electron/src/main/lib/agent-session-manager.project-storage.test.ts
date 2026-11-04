@@ -46,6 +46,7 @@ const {
 } = await import('./agent-session-manager')
 const { getAgentSessionGraphPath, getAgentSessionMessagesPath, getPiHarnessEventsPath, getPiTranscriptDirForSession } = await import('./config-paths')
 const { resolvePiTranscriptPath } = await import('./pi-session-files')
+const { appendGraphEvent } = await import('./project-graph-service')
 const { invalidateWorkspaceLocation } = await import('./workspace-locator')
 
 const indexPath = join(configRoot, 'agent-workspaces.json')
@@ -204,6 +205,32 @@ describe('会话存储布局', () => {
     expect(readFileSync(globalMessages, 'utf-8')).toContain('in-project')
     expect(existsSync(projectMessages)).toBe(false)
     expect(getAgentSessionSDKMessages(session.id).length).toBe(1)
+  })
+
+  test('Given project 会话 When 往返 managed 再回 project Then 消息/图/Harness 都跟随且不重复', () => {
+    const root = makeProject('p-roundtrip')
+    writeWorkspaces([projectEntry('p-roundtrip', root), managedEntry('default')])
+
+    const session = createAgentSession('round trip', undefined, 'id-p-roundtrip', undefined, 'pi', false, 'standard')
+    appendUserMessage(session.id, 'round-trip-message')
+    appendGraphEvent(session.id, {
+      type: 'task_created', taskId: 'task-rt', timestamp: 1,
+      payload: { subject: 'round trip', description: '', dependsOn: [] },
+    })
+    writeFileSync(getPiHarnessEventsPath(session.id), '{"version":1}\n', 'utf-8')
+
+    moveSessionToWorkspace(session.id, 'id-default')
+    expect(existsSync(join(configRoot, 'agent-sessions', `${session.id}.jsonl`))).toBe(true)
+    expect(existsSync(join(configRoot, 'agent-sessions', `${session.id}-graph.jsonl`))).toBe(true)
+    expect(existsSync(join(configRoot, 'agent-sessions', `${session.id}-pi-harness.jsonl`))).toBe(true)
+    expect(existsSync(join(root, '.profer', 'sessions', session.id, 'messages.jsonl'))).toBe(false)
+
+    moveSessionToWorkspace(session.id, 'id-p-roundtrip')
+    const dataDir = join(root, '.profer', 'sessions', session.id)
+    expect(readFileSync(join(dataDir, 'messages.jsonl'), 'utf-8')).toContain('round-trip-message')
+    expect(existsSync(join(dataDir, `${session.id}-graph.jsonl`))).toBe(true)
+    expect(existsSync(join(dataDir, `${session.id}-pi-harness.jsonl`))).toBe(true)
+    expect(existsSync(join(configRoot, 'agent-sessions', `${session.id}.jsonl`))).toBe(false)
   })
 
   test('Given 历史 project 会话只有全局消息 When 读取 Then 继续读全局，不因升级丢历史', () => {

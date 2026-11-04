@@ -1725,8 +1725,25 @@ export function moveSessionToWorkspace(
 
   // 委派子会话必须跟随父会话：session-tree 要求父子同工作区才归并，
   // 否则子会话会降级成独立根节点；父会话离开旧项目后子会话还会变成孤儿。
-  for (const childId of collectDelegatedDescendantIds(index.sessions, sessionId)) {
-    moveSessionToWorkspace(childId, targetWorkspaceId, { allowDelegatedChild: true })
+  // 先记下源工作区：父会话后续失败时把已迁的子会话尽量搬回去，避免树被撕成两半。
+  const sourceWorkspaceId = session.workspaceId
+  const movedChildIds: string[] = []
+  try {
+    for (const childId of collectDelegatedDescendantIds(index.sessions, sessionId)) {
+      moveSessionToWorkspace(childId, targetWorkspaceId, { allowDelegatedChild: true })
+      movedChildIds.push(childId)
+    }
+  } catch (error) {
+    if (sourceWorkspaceId) {
+      for (const childId of movedChildIds.reverse()) {
+        try {
+          moveSessionToWorkspace(childId, sourceWorkspaceId, { allowDelegatedChild: true })
+        } catch (rollbackError) {
+          console.warn(`[Agent 会话] 迁移失败后回滚子会话失败: ${childId}`, rollbackError)
+        }
+      }
+    }
+    throw error
   }
   // 子会话迁移会各自写盘；重新读索引，避免用旧快照覆盖它们的 workspaceId 更新。
   index = readIndex()
