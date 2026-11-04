@@ -194,8 +194,16 @@ function reconcileProjectAutomations(index: AutomationsIndex): boolean {
     const file = readProjectAutomations(mirror.rootPath)
     if (!file) continue
 
+    const workspaceSlug = (() => {
+      const { getAgentWorkspace } = require('./agent-workspace-manager') as typeof import('./agent-workspace-manager')
+      return getAgentWorkspace(mirror.id)?.slug
+    })()
     for (const automation of file.automations) {
       const normalized: Automation = { ...automation, workspaceId: mirror.id }
+      // 项目拷到新机器后 slug 可能变化：工作区级预设引用改指当前项目。
+      if (workspaceSlug && normalized.presetReference?.presetScope === 'workspace') {
+        normalized.presetReference = { ...normalized.presetReference, workspaceSlug }
+      }
       const existing = index.automations.find((item) => item.id === normalized.id)
       if (!existing) {
         index.automations.push(normalized)

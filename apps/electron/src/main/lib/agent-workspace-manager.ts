@@ -589,6 +589,7 @@ const PROJECT_PRESETS_CONFIG = {
 /** `.profer/.gitignore`：会话、缓存、运行时投影与本机覆盖层都不提交。 */
 const PROJECT_GITIGNORE_LINES = [
   'sessions/',
+  'blobs/',
   'cache/',
   'workspace-files/',
   '.runtime/',

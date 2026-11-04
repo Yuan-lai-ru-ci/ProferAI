@@ -317,7 +317,8 @@ export function normalizePresetReference(reference: PresetReference, contextWork
     throw new AgentPresetError('PRESET_UNKNOWN_REFERENCE', `未知预设作用域: ${String(reference.presetScope)}`)
   }
   if (reference.presetScope === 'workspace') {
-    const workspaceSlug = reference.workspaceSlug || contextWorkspaceSlug
+    // 上下文工作区优先：会话/任务迁移到新工作区后，旧引用里的 slug 不应把解析带回旧工作区。
+    const workspaceSlug = contextWorkspaceSlug || reference.workspaceSlug
     if (!workspaceSlug) throw new AgentPresetError('PRESET_WORKSPACE_REQUIRED', '工作区预设引用必须提供 workspaceSlug')
     return { ...reference, presetId: reference.presetId.trim(), workspaceSlug }
   }
