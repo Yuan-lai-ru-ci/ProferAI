@@ -49,7 +49,7 @@ import { getPiTranscriptIndex, invalidatePiTranscriptCache, resolvePiTranscriptP
 import { isSessionDeletionPending } from './agent-session-deletion-queue'
 import { removeToolResultDirAsync } from './agent-tool-result-store'
 import { assertNotProjectLifecyclePath } from './workspace-delete-guard'
-import { readProjectSessionIndex, projectSessionIndexPath, writeProjectSessionIndex } from './project-session-index'
+import { readProjectSessionIndex, projectSessionIndexPath, writeProjectSessionIndex, listProjectSessionMetas, writeProjectSessionMeta } from './project-session-index'
 import {
   defaultStorageLayoutForWorkspace,
   moveSessionDataFiles,
@@ -148,13 +148,14 @@ let lastLayoutSyncIndex: unknown = null
 
 interface ProjectSessionMirror {
   id: string
+  slug: string
   rootPath: string
 }
 
 function listProjectSessionMirrors(): ProjectSessionMirror[] {
   return listAgentWorkspaces()
     .filter((workspace) => workspace.storageMode === 'project' && typeof workspace.rootPath === 'string' && workspace.rootPath.length > 0)
-    .map((workspace) => ({ id: workspace.id, rootPath: workspace.rootPath! }))
+    .map((workspace) => ({ id: workspace.id, slug: workspace.slug, rootPath: workspace.rootPath! }))
 }
 
 const mirroredProjectSignatures = new Map<string, string>()
@@ -164,6 +165,18 @@ function projectIndexSignature(sessions: readonly AgentSessionMeta[]): string {
   return sessions
     .map((session) => `${session.id}:${session.updatedAt ?? 0}:${session.revision ?? 0}:${session.title}:${session.pinned ? 1 : 0}:${session.archived ? 1 : 0}`)
     .join('|')
+}
+
+/** 把会话元数据写进项目内的 `session.json`，让项目脱离全局索引也能恢复。 */
+function writeProjectSessionMetaSidecar(meta: AgentSessionMeta): void {
+  if (meta.storageLayout !== 'project' || !meta.workspaceId) return
+  const workspace = getAgentWorkspace(meta.workspaceId)
+  if (!workspace?.rootPath) return
+  try {
+    writeProjectSessionMeta(workspace.rootPath, meta.id, meta)
+  } catch (error) {
+    console.warn(`[Agent 会话] 写入项目会话元数据失败 (${meta.id}):`, error)
+  }
 }
 
 /**
@@ -187,6 +200,12 @@ function mirrorProjectSessionIndexes(index: AgentSessionsIndex): void {
     const sessions = (byWorkspace.get(mirror.id) ?? [])
       .slice()
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    // 每个会话目录也留一份自描述元数据：只拷项目文件夹、不拷全局索引时仍能恢复列表。
+    for (const session of sessions) {
+      if (!existsSync(join(mirror.rootPath, '.profer', 'sessions', session.id, 'session.json'))) {
+        writeProjectSessionMetaSidecar(session)
+      }
+    }
     const signature = projectIndexSignature(sessions)
     const cacheKey = `${mirror.id}|${mirror.rootPath}`
     if (mirroredProjectSignatures.get(cacheKey) === signature) continue
@@ -200,10 +219,83 @@ function mirrorProjectSessionIndexes(index: AgentSessionsIndex): void {
 }
 
 /**
- * 启动对账：把项目索引里比全局更新的会话合并回来。
+ * 把项目里拷来的会话元数据修正成当前机器可用的形态。
+ *
+ * 项目文件夹可能来自另一台机器：绝对路径、旧工作区 slug、旧 workspaceId
+ * 都不能直接使用。这里只做可判定的修复，不改消息内容。
+ */
+function normalizeImportedProjectSession(
+  entry: AgentSessionMeta,
+  mirror: ProjectSessionMirror,
+  availablePresetIds: ReadonlySet<string> | undefined,
+): AgentSessionMeta {
+  const normalized: AgentSessionMeta = {
+    ...entry,
+    workspaceId: mirror.id,
+    storageLayout: 'project',
+  }
+  const dataDir = join(mirror.rootPath, '.profer', 'sessions', entry.id)
+
+  if (normalizeAgentRuntime(normalized.agentRuntime) === 'pi') {
+    let piFile = normalized.piSessionFile
+    if (piFile && !isAbsolute(piFile)) piFile = join(dataDir, piFile)
+    if (piFile && !existsSync(piFile)) piFile = undefined
+    // 旧机器的绝对路径失效时，按 sdkSessionId 在项目 pi/ 目录里重新定位。
+    if (!piFile && normalized.sdkSessionId) {
+      const piDir = join(dataDir, 'pi')
+      if (existsSync(piDir)) {
+        const match = readdirSync(piDir).find((name) => name.endsWith('.jsonl') && name.includes(normalized.sdkSessionId!))
+        if (match) piFile = join(piDir, match)
+      }
+    }
+    normalized.piSessionFile = piFile
+    // transcript 找不到就不能 resume，否则每轮都会撞旧 session id。
+    if (!piFile) normalized.sdkSessionId = undefined
+  } else if (normalized.sdkSessionId && !findSdkSessionJsonl(normalized.sdkSessionId)) {
+    // Claude transcript 不在项目文件夹里；换机器后找不到就主动清空，
+    // 避免首轮 resume 报 "No conversation found" 再走恢复重试。
+    normalized.sdkSessionId = undefined
+  }
+
+  if (normalized.piFileCheckpoints) {
+    const kept = Object.fromEntries(
+      Object.entries(normalized.piFileCheckpoints).filter(([, checkpointPath]) => (
+        typeof checkpointPath === 'string' && existsSync(checkpointPath)
+      )),
+    )
+    normalized.piFileCheckpoints = Object.keys(kept).length > 0 ? kept : undefined
+  }
+
+  if (normalized.attachedDirectories) {
+    const kept = normalized.attachedDirectories.filter((dir) => existsSync(dir))
+    normalized.attachedDirectories = kept.length > 0 ? kept : undefined
+  }
+  if (normalized.attachedFiles) {
+    const kept = normalized.attachedFiles.filter((file) => existsSync(file))
+    normalized.attachedFiles = kept.length > 0 ? kept : undefined
+  }
+  if (normalized.forkSourceDir && !existsSync(normalized.forkSourceDir)) {
+    normalized.forkSourceDir = undefined
+  }
+
+  // 工作区级预设引用仍指向旧 slug：改指当前项目；预设不存在时回退到默认预设。
+  if (normalized.presetReference?.presetScope === 'workspace') {
+    normalized.presetReference = { ...normalized.presetReference, workspaceSlug: mirror.slug }
+  }
+  if (availablePresetIds && normalized.presetId && !availablePresetIds.has(normalized.presetId)) {
+    normalized.presetId = undefined
+    normalized.presetReference = undefined
+  }
+
+  return normalized
+}
+
+/**
+ * 启动对账：把项目索引/会话元数据里比全局更新的会话合并回来。
  *
  * 典型场景：项目从另一台机器拷来，全局索引没有它的会话；或者上次退出前
  * 项目索引已写、全局索引尚未写。冲突时按 updatedAt 取新。
+ * 即使 `index.json` 缺失，也会扫描每个会话目录的 `session.json` 恢复列表。
  */
 function reconcileProjectSessionIndexes(index: AgentSessionsIndex, force = false): boolean {
   let changed = false
@@ -212,19 +304,35 @@ function reconcileProjectSessionIndexes(index: AgentSessionsIndex, force = false
   for (const mirror of listProjectSessionMirrors()) {
     if (!force && reconciledProjectRoots.has(mirror.rootPath)) continue
     reconciledProjectRoots.add(mirror.rootPath)
-    const entries = readProjectSessionIndex(mirror.rootPath)
-    if (!entries) continue
-    for (const entry of entries) {
-      const normalized: AgentSessionMeta = { ...entry, workspaceId: mirror.id }
+
+    const merged = new Map<string, AgentSessionMeta>()
+    for (const entry of [...(readProjectSessionIndex(mirror.rootPath) ?? []), ...listProjectSessionMetas(mirror.rootPath)]) {
+      const previous = merged.get(entry.id)
+      if (!previous || (entry.updatedAt ?? 0) > (previous.updatedAt ?? 0)) merged.set(entry.id, entry)
+    }
+    if (merged.size === 0) continue
+
+    let availablePresetIds: Set<string> | undefined
+    try {
+      availablePresetIds = new Set(listAgentPresets(mirror.slug).map((preset) => preset.id))
+    } catch {
+      availablePresetIds = undefined
+    }
+
+    for (const entry of merged.values()) {
+      const normalized = normalizeImportedProjectSession(entry, mirror, availablePresetIds)
       const existing = byId.get(normalized.id)
       if (!existing) {
         index.sessions.push(normalized)
         byId.set(normalized.id, normalized)
+        registerSessionLayout(normalized)
+        try { writeProjectSessionMeta(mirror.rootPath, normalized.id, normalized) } catch { /* 只读项目忽略 */ }
         changed = true
         continue
       }
-      if ((normalized.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+      if ((normalized.updatedAt ?? 0) >= (existing.updatedAt ?? 0)) {
         Object.assign(existing, normalized)
+        registerSessionLayout(existing)
         changed = true
       }
     }
@@ -238,7 +346,10 @@ const reconciledProjectRoots = new Set<string>()
 /** 供打开/重新定位项目后显式对账（同一进程内新出现的项目）。 */
 export function reconcileProjectSessionIndexesNow(): void {
   const index = readIndexRaw()
-  if (reconcileProjectSessionIndexes(index, true)) sessionIndex.write(index)
+  if (reconcileProjectSessionIndexes(index, true)) {
+    sessionIndex.write(index)
+    syncSessionStorageLayouts(index.sessions)
+  }
   mirrorProjectSessionIndexes(index)
 }
 
@@ -745,6 +856,7 @@ export function createAgentSession(
   index.sessions.push(meta)
   writeIndex(index)
   registerSessionLayout(meta)
+  writeProjectSessionMetaSidecar(meta)
 
   // 确保消息目录存在（project 在会话数据目录，managed 在全局目录）
   getAgentSessionsDir()
@@ -841,6 +953,7 @@ export function appendAgentMessage(id: string, message: AgentMessage): void {
       session.updatedAt = Date.now()
       if (session.archived) session.archived = false
       writeIndex(index)
+      writeProjectSessionMetaSidecar(session)
     }
   } catch (error) {
     console.error(`[Agent 会话] 追加消息失败 (${id}):`, error)
@@ -877,12 +990,13 @@ export async function resolveMessageBlobs(message: SDKMessage): Promise<SDKMessa
   return clone as unknown as SDKMessage
 }
 
-import { readBlob } from './blob-store'
+import { readBlob, blobPathFor, blobRootDir } from './blob-store'
 import {
   BLOB_REFS_FIELD,
   BLOB_REFS_MISSING_FIELD,
   MAX_SDK_MESSAGE_LENGTH,
   externalizeSerializedSessionLine,
+  readSerializedBlobRefs,
   setStringAtPath,
   type StoredBlobRef,
 } from './session-payload-externalize'
@@ -919,7 +1033,7 @@ export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
     const filePath = getAgentSessionMessagesPath(id)
     mkdirSync(dirname(filePath), { recursive: true })
     const content = persistentMessages
-      .map((message) => serializeSDKMessageForStorage(message, undefined, undefined))
+      .map((message) => serializeSDKMessageForStorage(message, undefined, undefined, id))
       .join('\n') + '\n'
     appendFileSync(filePath, content, 'utf-8')
   } catch (error) {
@@ -1164,6 +1278,7 @@ export function updateAgentSessionMeta(
   index.sessions[idx] = updated
   writeIndex(index)
   registerSessionLayout(updated)
+  writeProjectSessionMetaSidecar(updated)
 
   console.log(`[Agent 会话] 已更新会话: ${updated.title} (${updated.id})`)
   return updated
@@ -1863,6 +1978,7 @@ export function moveSessionToWorkspace(
   index.sessions[idx] = updated
   writeIndex(index)
   registerSessionLayout(updated)
+  writeProjectSessionMetaSidecar(updated)
 
   console.log(`[Agent 会话] 已迁移会话到工作区: ${updated.title} → ${targetWs.name}`)
   return updated
@@ -2411,7 +2527,7 @@ async function copyForkStoredSDKMessages({
 
   try {
     for await (const msg of readStoredSDKMessages(sourcePath)) {
-      await writeJsonlLine(out, serializeSDKMessageForStorage(msg, sourceDir, destDir))
+      await writeJsonlLine(out, serializeSDKMessageForStorage(msg, sourceDir, destDir, destSessionId))
       copiedCount += 1
 
       if (upToMessageUuid && getStoredMessageUuid(msg) === upToMessageUuid) {
@@ -2456,6 +2572,7 @@ function serializeSDKMessageForStorage(
   msg: SDKMessage,
   sourceDir?: string,
   destDir?: string,
+  sessionId?: string,
 ): string {
   let serialized = JSON.stringify(msg)
   if (sourceDir && destDir) {
@@ -2463,7 +2580,7 @@ function serializeSDKMessageForStorage(
   }
   if (serialized.length <= MAX_SDK_MESSAGE_LENGTH) return serialized
 
-  let externalized = externalizeSerializedSessionLine(serialized)
+  let externalized = externalizeSerializedSessionLine(serialized, sessionId)
   if (sourceDir && destDir) {
     externalized = rewriteSourceToDest(externalized, sourceDir, destDir)
   }
@@ -3829,6 +3946,43 @@ export interface ProjectSessionLayoutMigrationResult {
  * - 每个项目全部成功才写 `.layout-v2.json` 标记，中断后可重跑；
  * - 目标已存在的文件不覆盖，保证幂等。
  */
+/**
+ * 把项目会话消息引用到的 blob 从全局目录复制进项目 `.profer/blobs`。
+ *
+ * 项目要能整体拷到另一台电脑，大载荷不能只留在源机器的全局目录。
+ * 已存在的 blob 直接跳过（内容寻址，天然幂等）。
+ */
+function copyProjectSessionBlobs(sessionId: string, messagesPath: string, projectRoot: string): number {
+  if (!existsSync(messagesPath)) return 0
+  const targetRoot = join(projectRoot, '.profer', 'blobs')
+  const sourceRoot = blobRootDir()
+  const hashes = new Set<string>()
+  try {
+    for (const line of readFileSync(messagesPath, 'utf-8').split('\n')) {
+      if (!line.trim()) continue
+      for (const ref of readSerializedBlobRefs(line)) hashes.add(ref.hash)
+    }
+  } catch (error) {
+    console.warn(`[Agent 会话] 读取会话 blob 引用失败 (${sessionId}):`, error)
+    return 0
+  }
+
+  let copied = 0
+  for (const hash of hashes) {
+    const source = blobPathFor(hash, sourceRoot)
+    const target = blobPathFor(hash, targetRoot)
+    if (!existsSync(source) || existsSync(target)) continue
+    try {
+      mkdirSync(dirname(target), { recursive: true })
+      copyFileSync(source, target)
+      copied += 1
+    } catch (error) {
+      console.warn(`[Agent 会话] 复制会话 blob 失败 (${sessionId}, ${hash}):`, error)
+    }
+  }
+  return copied
+}
+
 export async function migrateProjectSessionLayouts(
   options: { workspaceId?: string; force?: boolean } = {},
 ): Promise<ProjectSessionLayoutMigrationResult> {
@@ -3882,6 +4036,8 @@ export async function migrateProjectSessionLayouts(
           )
         }
 
+        copyProjectSessionBlobs(session.id, projectMessages, rootPath)
+
         if (normalizeAgentRuntime(session.agentRuntime) === 'pi' && session.sdkSessionId) {
           const known = resolvePiTranscriptPath(
             session.sdkSessionId,
@@ -3896,6 +4052,7 @@ export async function migrateProjectSessionLayouts(
         }
 
         session.storageLayout = 'project'
+        writeProjectSessionMetaSidecar(session)
         migratedIds.push(session.id)
         migratedSessions += 1
       } catch (error) {
@@ -3924,6 +4081,58 @@ export async function migrateProjectSessionLayouts(
     console.log(`[Agent 会话] 项目会话布局迁移完成: ${migratedSessions} 个会话 / ${migratedWorkspaces} 个项目`)
   }
   return { migratedSessions, migratedWorkspaces, skipped }
+}
+
+const portableCheckedRoots = new Set<string>()
+
+/**
+ * 一次性把项目会话变成“可整体拷走”的形态：
+ * - 每个会话目录补 `session.json`；
+ * - 消息引用到的 blob 从全局复制进 `<root>/.profer/blobs`。
+ *
+ * 进程内每个项目只跑一次；新会话的 blob 已经直接写项目目录，不需要反复扫描。
+ */
+export async function ensureProjectSessionPortability(
+  workspaceId?: string,
+): Promise<{ checkedSessions: number; copiedBlobs: number }> {
+  const workspaces = listAgentWorkspaces().filter((workspace) => (
+    workspace.storageMode === 'project'
+    && typeof workspace.rootPath === 'string'
+    && workspace.rootPath.length > 0
+    && (!workspaceId || workspace.id === workspaceId)
+  ))
+  let checkedSessions = 0
+  let copiedBlobs = 0
+  let changed = false
+  const index = readIndex()
+
+  for (const workspace of workspaces) {
+    const rootPath = workspace.rootPath!
+    if (portableCheckedRoots.has(rootPath) || !existsSync(rootPath)) continue
+    portableCheckedRoots.add(rootPath)
+
+    for (const session of index.sessions) {
+      if (session.workspaceId !== workspace.id) continue
+      const dataDir = join(rootPath, '.profer', 'sessions', session.id)
+      if (!existsSync(dataDir)) continue
+      if (session.storageLayout !== 'project') {
+        session.storageLayout = 'project'
+        changed = true
+      }
+      writeProjectSessionMetaSidecar(session)
+      copiedBlobs += copyProjectSessionBlobs(session.id, join(dataDir, 'messages.jsonl'), rootPath)
+      checkedSessions += 1
+    }
+  }
+
+  if (changed) {
+    writeIndex(index)
+    syncSessionStorageLayouts(index.sessions)
+  }
+  if (checkedSessions > 0) {
+    console.log(`[Agent 会话] 项目可移植性检查完成: ${checkedSessions} 个会话，复制 ${copiedBlobs} 个 blob`)
+  }
+  return { checkedSessions, copiedBlobs }
 }
 
 /** 回滚到中央布局（仅供排障/升级回退使用）。 */

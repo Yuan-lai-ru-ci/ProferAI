@@ -212,6 +212,7 @@ import {
   toAgentSessionSummary,
   backfillPiSessionFiles,
   migrateProjectSessionLayouts,
+  ensureProjectSessionPortability,
   ensureProjectSessionMirrors,
   createAgentSession,
   ensureProjectDraftAgentSession,
@@ -2648,6 +2649,7 @@ export function registerIpcHandlers(): void {
   // 空闲时先迁移存量项目会话布局，再补齐历史 Pi transcript 路径。
   setTimeout(() => {
     void migrateProjectSessionLayouts()
+      .then(() => ensureProjectSessionPortability())
       .catch((error) => {
         console.warn('[Agent 会话] 项目会话布局迁移失败:', error)
       })
@@ -2815,7 +2817,11 @@ export function registerIpcHandlers(): void {
       return withProjectWorkspaceErrorCode(() => {
         // 版本号由主进程注入：manager 不依赖 electron，才能被单元测试直接驱动
         const result = createProjectWorkspace({ ...input, proferVersion: app.getVersion() })
-        scheduleProjectSessionMigration(result.workspace.id)
+        void scheduleProjectSessionMigration(result.workspace.id)
+          .then(() => ensureProjectSessionPortability(result.workspace.id))
+          .catch((error) => {
+            console.warn('[Agent 会话] 项目可移植性检查失败:', error)
+          })
         broadcastAgentWorkspacesChanged()
         return result
       })
@@ -2831,9 +2837,10 @@ export function registerIpcHandlers(): void {
     }
   }
 
-  /** 打开/定位项目后异步迁移该项目的存量会话，不阻塞 UI。 */
-  function scheduleProjectSessionMigration(workspaceId: string): void {
-    void migrateProjectSessionLayouts({ workspaceId })
+  /** 打开/定位项目后异步迁移该项目的存量会话，不阻塞 UI；返回 Promise 供后续可移植性检查串行。 */
+  function scheduleProjectSessionMigration(workspaceId: string): Promise<void> {
+    return migrateProjectSessionLayouts({ workspaceId })
+      .then(() => undefined)
       .catch((error) => {
         console.warn(`[Agent 会话] 项目会话布局迁移失败 (${workspaceId}):`, error)
       })
@@ -2845,7 +2852,11 @@ export function registerIpcHandlers(): void {
       return withProjectWorkspaceErrorCode(() => {
         const result = openProjectWorkspace({ ...input, proferVersion: app.getVersion() })
         reconcileProjectSessionIndexesSafely()
-        scheduleProjectSessionMigration(result.workspace.id)
+        void scheduleProjectSessionMigration(result.workspace.id)
+          .then(() => ensureProjectSessionPortability(result.workspace.id))
+          .catch((error) => {
+            console.warn('[Agent 会话] 项目可移植性检查失败:', error)
+          })
         broadcastAgentWorkspacesChanged()
         return result
       })
@@ -2874,7 +2885,11 @@ export function registerIpcHandlers(): void {
       return withProjectWorkspaceErrorCode(() => {
         const result = relocateProjectWorkspace({ ...input, proferVersion: app.getVersion() })
         reconcileProjectSessionIndexesSafely()
-        scheduleProjectSessionMigration(result.workspace.id)
+        void scheduleProjectSessionMigration(result.workspace.id)
+          .then(() => ensureProjectSessionPortability(result.workspace.id))
+          .catch((error) => {
+            console.warn('[Agent 会话] 项目可移植性检查失败:', error)
+          })
         broadcastAgentWorkspacesChanged()
         return result
       })

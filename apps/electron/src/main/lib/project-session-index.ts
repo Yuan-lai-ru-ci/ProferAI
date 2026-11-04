@@ -10,12 +10,14 @@
  * 的条目（例如从另一台机器拷来的项目）会合并回全局索引。
  */
 
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { AgentSessionMeta } from '@profer/shared'
 import { readJsonFileSafe, writeJsonFileAtomic } from './safe-file'
 
 export const PROJECT_SESSION_INDEX_VERSION = 1
+/** 每个会话目录内的自描述元数据；不依赖 index.json 也能恢复会话。 */
+export const PROJECT_SESSION_META_FILE = 'session.json'
 
 interface ProjectSessionIndexFile {
   version?: number
@@ -45,4 +47,54 @@ export function writeProjectSessionIndex(rootPath: string, sessions: readonly Ag
     version: PROJECT_SESSION_INDEX_VERSION,
     sessions: [...sessions],
   })
+}
+
+/** 会话目录内的元数据文件：项目被单独拷走时，列表不依赖 index.json。 */
+export function projectSessionMetaPath(rootPath: string, sessionId: string): string {
+  return join(rootPath, '.profer', 'sessions', sessionId, PROJECT_SESSION_META_FILE)
+}
+
+export function readProjectSessionMeta(rootPath: string, sessionId: string): AgentSessionMeta | null {
+  const data = readJsonFileSafe<unknown>(projectSessionMetaPath(rootPath, sessionId))
+  return isSessionMeta(data) ? data : null
+}
+
+export function writeProjectSessionMeta(rootPath: string, sessionId: string, meta: AgentSessionMeta): void {
+  const filePath = projectSessionMetaPath(rootPath, sessionId)
+  mkdirSync(dirname(filePath), { recursive: true })
+  writeJsonFileAtomic(filePath, meta)
+}
+
+/**
+ * 扫描项目内所有会话目录的 `session.json`。
+ *
+ * 没有元数据但已有 `messages.jsonl` 的目录（旧版本项目）合成一条最小会话，
+ * 至少让历史消息可见；标题等细节由后续全局索引对账补齐。
+ */
+export function listProjectSessionMetas(rootPath: string): AgentSessionMeta[] {
+  const sessionsDir = join(rootPath, '.profer', 'sessions')
+  if (!existsSync(sessionsDir)) return []
+  const result: AgentSessionMeta[] = []
+  for (const entry of readdirSync(sessionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const sessionId = entry.name
+    const meta = readProjectSessionMeta(rootPath, sessionId)
+    if (meta) {
+      result.push(meta)
+      continue
+    }
+    const messagesPath = join(sessionsDir, sessionId, 'messages.jsonl')
+    if (!existsSync(messagesPath)) continue
+    let updatedAt = Date.now()
+    try { updatedAt = statSync(messagesPath).mtimeMs } catch { /* 保持当前时间 */ }
+    result.push({
+      id: sessionId,
+      title: '恢复的会话',
+      workspaceId: '',
+      storageLayout: 'project',
+      createdAt: updatedAt,
+      updatedAt,
+    })
+  }
+  return result
 }

@@ -7,7 +7,7 @@
  * - 跨工作区迁移时消息文件跟着会话走，迁移后仍能读回。
  */
 import { afterAll, beforeEach, describe, expect, test, mock } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -43,6 +43,7 @@ const {
   getAgentSessionMeta,
   getAgentSessionSDKMessages,
   moveSessionToWorkspace,
+  resolveMessageBlobs,
 } = await import('./agent-session-manager')
 const { getAgentSessionGraphPath, getAgentSessionMessagesPath, getPiHarnessEventsPath, getPiTranscriptDirForSession } = await import('./config-paths')
 const { resolvePiTranscriptPath } = await import('./pi-session-files')
@@ -231,6 +232,28 @@ describe('会话存储布局', () => {
     expect(existsSync(join(dataDir, `${session.id}-graph.jsonl`))).toBe(true)
     expect(existsSync(join(dataDir, `${session.id}-pi-harness.jsonl`))).toBe(true)
     expect(existsSync(join(configRoot, 'agent-sessions', `${session.id}.jsonl`))).toBe(false)
+  })
+
+  test('Given project 会话 When 写入超限消息 Then 大载荷落在项目 .profer/blobs', async () => {
+    const root = makeProject('p-blob')
+    writeWorkspaces([projectEntry('p-blob', root), managedEntry('default')])
+
+    const session = createAgentSession('blob session', undefined, 'id-p-blob', undefined, 'pi', false, 'standard')
+    const fullText = `PROJECT-BLOB-${'y'.repeat(300_000)}`
+    appendSDKMessages(session.id, [{
+      type: 'assistant',
+      uuid: 'a-blob',
+      message: { content: [{ type: 'text', text: fullText }] },
+    }] as never)
+
+    const projectBlobRoot = join(root, '.profer', 'blobs')
+    expect(existsSync(projectBlobRoot)).toBe(true)
+    expect(readdirSync(projectBlobRoot).length).toBeGreaterThan(0)
+    expect(existsSync(join(configRoot, 'blobs'))).toBe(false)
+
+    const resolved = await resolveMessageBlobs(getAgentSessionSDKMessages(session.id)[0]!)
+    const text = (resolved as { message?: { content?: Array<{ text?: string }> } }).message?.content?.[0]?.text
+    expect(text).toBe(fullText)
   })
 
   test('Given 历史 project 会话只有全局消息 When 读取 Then 继续读全局，不因升级丢历史', () => {
