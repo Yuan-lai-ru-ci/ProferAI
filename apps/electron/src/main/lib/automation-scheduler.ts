@@ -17,6 +17,7 @@
 import type { AgentRun } from '@profer/agent-runtime'
 import type { HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
 import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import {
   AUTOMATION_MAX_CONSECUTIVE_FAILURES,
@@ -227,6 +228,14 @@ export async function runAutomation(automation: Automation, manual = false): Pro
   }
 
   try {
+    // 项目工作区路径失效时不执行：新建/复用会话都会失败，直接 blocked 等用户重新定位。
+    const automationWorkspace = automation.workspaceId ? getAgentWorkspace(automation.workspaceId) : undefined
+    if (automationWorkspace?.storageMode === 'project'
+      && (!automationWorkspace.rootPath || !existsSync(automationWorkspace.rootPath))) {
+      blockTrigger(`项目路径不可用：${automationWorkspace.name}，请先重新定位项目`)
+      return
+    }
+
     // 根据 sessionMode 决定新建或复用子会话
     //  - reuse：lastSessionId 存在且会话还活着就复用，否则新建
     //  - daily：再叠加一层「同一自然日」+「上下文占用率 < 阈值」双重判断
