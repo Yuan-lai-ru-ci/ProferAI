@@ -16,13 +16,14 @@ import { createSyncSessionMessageStore, type AgentSessionsIndex } from '@profer/
 import { createSnippet, extractTextFromPersistedMessage, matchAgentJsonlLine } from './agent-session-search'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { isAbsolute, join, relative, resolve, dirname, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, dirname, sep, basename } from 'node:path'
 import {
   getAgentSessionsIndexPath,
   getAgentSessionsDir,
   getAgentSessionMessagesPath,
   getAgentSessionGraphPath,
   getPiHarnessEventsPath,
+  getPiTranscriptDirForSession,
   getAgentSessionCwd,
   getAgentSessionWorkspacePath,
   resolveAgentSessionWorkspacePath,
@@ -439,8 +440,15 @@ export function backfillPiSessionFiles(): number {
     && !session.piSessionFile)
   if (candidates.length === 0) return 0
 
-  // 一次扫描建索引，避免每个会话各扫一遍。
-  const matches = getPiTranscriptIndex({ force: true })
+  // 按会话所在布局分组扫描，避免每个会话各扫一遍；project 与 managed 的 transcript 目录不同。
+  const matches = new Map<string, string[]>()
+  const roots = new Set(candidates.map((session) => getPiTranscriptDirForSession(session.id)))
+  for (const rootDir of roots) {
+    for (const [sdkId, paths] of getPiTranscriptIndex({ rootDir, force: true })) {
+      const existing = matches.get(sdkId) ?? []
+      matches.set(sdkId, [...existing, ...paths])
+    }
+  }
   let updated = 0
   for (const session of candidates) {
     const paths = matches.get(session.sdkSessionId!)
@@ -1413,7 +1421,10 @@ export async function deleteAgentSession(
         const piSessionFile = resolvePiTranscriptPath(
           sid,
           knownTranscript,
-          knownTranscript ? undefined : { refreshOnFallback: true },
+          {
+            rootDir: getPiTranscriptDirForSession(removed.id),
+            ...(knownTranscript ? {} : { refreshOnFallback: true }),
+          },
         )
         if (!piSessionFile) continue
         try {
@@ -1513,7 +1524,7 @@ export function findOrphanSessions(): SessionHealth[] {
     // 检查 runtime 对应的原生 session JSONL。Claude 与 Pi 的持久化目录和文件名规则不同。
     if (session.sdkSessionId) {
       health.hasSdkJsonl = normalizeAgentRuntime(session.agentRuntime) === 'pi'
-        ? resolvePiTranscriptPath(session.sdkSessionId, session.piSessionFile) !== undefined
+        ? resolvePiTranscriptPath(session.sdkSessionId, session.piSessionFile, { rootDir: getPiTranscriptDirForSession(session.id) }) !== undefined
         : findSdkSessionJsonl(session.sdkSessionId) !== undefined
     }
 
@@ -1658,8 +1669,8 @@ function collectDelegatedDescendantIds(sessions: AgentSessionMeta[], rootId: str
  * 1. 验证会话和目标工作区存在
  * 2. 源 == 目标 → no-op
  * 3. 先递归迁移委派子会话，再迁移当前会话的运行时目录
- * 4. 更新元数据（workspaceId + 清空 sdkSessionId）
- * 5. JSONL 消息文件保持原位（全局目录）
+ * 4. 更新元数据（workspaceId + storageLayout + 清空 sdkSessionId）
+ * 5. 消息/任务图/Harness/transcript 跟随布局搬迁（managed ↔ project）
  */
 export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: string): AgentSessionMeta {
   let index = readIndex()
@@ -1692,6 +1703,10 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
   session = index.sessions[idx]!
   // 记录迁移前的落盘布局：消息/任务图/Harness 需要跟着会话归属一起搬。
   const previousLayout = resolveSessionStorageLayout(session)
+
+  // 记录迁移前的 Pi transcript 目录：会话目录搬迁会把 transcript 一起带走，
+  // 旧路径删除必须在新位置执行。
+  const oldPiDir = getPiTranscriptDirForSession(sessionId)
 
   // 移动会话运行时目录（源工作区存在时）。
   // 新布局下 project 的会话数据在项目内 `.profer/sessions/<sid>`，managed 在中央
@@ -1764,13 +1779,19 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
   if (normalizeAgentRuntime(session.agentRuntime) === 'pi') {
     // Pi transcript 与文件检查点包含旧 cwd 的状态；迁移后重建 runtime，避免在新工作区恢复旧目录快照。
     const oldPiSessionFile = session.sdkSessionId
-      ? resolvePiTranscriptPath(session.sdkSessionId, session.piSessionFile, { refreshOnFallback: true })
+      ? resolvePiTranscriptPath(session.sdkSessionId, session.piSessionFile, { rootDir: oldPiDir, refreshOnFallback: true })
       : undefined
-    if (oldPiSessionFile && existsSync(oldPiSessionFile)) {
+    // 会话目录已整体搬迁：旧 transcript 现在位于新布局的 pi/ 下。
+    const nextPiDir = nextLayout.kind === 'project' && nextLayout.dataDir
+      ? join(nextLayout.dataDir, 'pi')
+      : join(getSdkConfigDir(), 'sessions', 'pi')
+    const movedPiSessionFile = oldPiSessionFile ? join(nextPiDir, basename(oldPiSessionFile)) : undefined
+    for (const candidate of [oldPiSessionFile, movedPiSessionFile]) {
+      if (!candidate || !existsSync(candidate)) continue
       try {
-        unlinkSync(oldPiSessionFile)
+        unlinkSync(candidate)
       } catch (error) {
-        console.warn(`[Agent 会话] 迁移工作区时清理旧 Pi transcript 失败: ${oldPiSessionFile}`, error)
+        console.warn(`[Agent 会话] 迁移工作区时清理旧 Pi transcript 失败: ${candidate}`, error)
       }
     }
     try {
@@ -1867,7 +1888,7 @@ async function forkPiAgentSession(sourceMeta: AgentSessionMeta, input: ForkSessi
   const destStorageDir = workspace ? getAgentSessionWorkspacePath(workspace.slug, newMeta.id) : undefined
 
   try {
-    const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
+    const sessionDir = getPiTranscriptDirForSession(newMeta.id)
     const forkedManager = await forkPiSessionArtifact({
       sourceSessionFile: sourceMeta.piSessionFile,
       sessionDir,
@@ -2074,7 +2095,7 @@ export async function rewindPiSession(
 
   // 3. 物理截断 Pi session 文件：header + root→目标 entry 的主路径
   const sdk = await import('@earendil-works/pi-coding-agent')
-  const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
+  const sessionDir = getPiTranscriptDirForSession(sessionMeta.id)
   const workspace = sessionMeta.workspaceId ? getAgentWorkspace(sessionMeta.workspaceId) : undefined
   // Pi session 的目录参数是 cwd（project = 项目根），不是会话存储目录。
   const sourceDir = workspace ? resolveAgentSessionCwd(workspace.slug, sessionMeta.id) : undefined
@@ -2242,7 +2263,7 @@ export async function resetPiSession(
 
   const bindings = sessionMeta.piEntryBindings ?? {}
   const sdk = await import('@earendil-works/pi-coding-agent')
-  const sessionDir = join(getSdkConfigDir(), 'sessions', 'pi')
+  const sessionDir = getPiTranscriptDirForSession(sessionMeta.id)
   const workspace = sessionMeta.workspaceId ? getAgentWorkspace(sessionMeta.workspaceId) : undefined
   // Pi session 的目录参数是 cwd（project = 项目根），不是会话存储目录。
   const sourceDir = workspace ? resolveAgentSessionCwd(workspace.slug, sessionMeta.id) : undefined

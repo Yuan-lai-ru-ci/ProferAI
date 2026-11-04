@@ -8,7 +8,7 @@
 import { join, basename, resolve, sep, relative } from 'node:path'
 import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { createSessionStorePaths, sessionGraphPath, sessionHarnessPath, sessionMessagesPath } from '@profer/session-store'
+import { createSessionStorePaths, getSessionStorageLayout, sessionGraphPath, sessionHarnessPath, sessionMessagesPath } from '@profer/session-store'
 import { RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
 import { readSkillVersion } from './skill-manifest'
 import { resolveDevVitePort } from './dev-instance'
@@ -337,6 +337,18 @@ export function getAgentSessionGraphPath(id: string): string {
  */
 export function getPiHarnessEventsPath(id: string): string {
   return sessionHarnessPath(createSessionStorePaths(getConfigDir()), id)
+}
+
+/**
+ * 指定会话的 Pi transcript 目录。
+ *
+ * - project 会话：`<root>/.profer/sessions/<sid>/pi`，随项目文件夹走；
+ * - managed/未注册会话：`~/.profer/sdk-config/sessions/pi`（历史布局）。
+ */
+export function getPiTranscriptDirForSession(sessionId: string): string {
+  const layout = getSessionStorageLayout(sessionId)
+  if (layout?.kind === 'project' && layout.dataDir) return join(layout.dataDir, 'pi')
+  return join(getSdkConfigDir(), 'sessions', 'pi')
 }
 
 /**

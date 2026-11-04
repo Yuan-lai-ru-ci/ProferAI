@@ -163,9 +163,20 @@ function listSessionDataFiles(include: (sessionId: string, fileName: string) => 
       const dataDir = join(sessionsDir, entry.name)
       if (!existsSync(dataDir)) continue
       for (const file of readdirSync(dataDir, { withFileTypes: true })) {
-        if (!file.isFile() || !file.name.endsWith('.jsonl')) continue
-        if (!include(entry.name, file.name)) continue
-        push(entry.name, join(dataDir, file.name), 'project')
+        if (file.isFile() && file.name.endsWith('.jsonl')) {
+          if (include(entry.name, file.name)) push(entry.name, join(dataDir, file.name), 'project')
+          continue
+        }
+        // Pi 原生 transcript 在 <dataDir>/pi/ 下，同属该会话数据，孤儿清理与统计都要覆盖。
+        if (file.isDirectory() && file.name === 'pi') {
+          const piDir = join(dataDir, 'pi')
+          for (const piFile of readdirSync(piDir, { withFileTypes: true })) {
+            if (!piFile.isFile() || !piFile.name.endsWith('.jsonl')) continue
+            const relativeName = `pi/${piFile.name}`
+            if (!include(entry.name, relativeName)) continue
+            push(entry.name, join(piDir, piFile.name), 'project')
+          }
+        }
       }
     }
   }

@@ -43,7 +43,8 @@ const {
   getAgentSessionSDKMessages,
   moveSessionToWorkspace,
 } = await import('./agent-session-manager')
-const { getAgentSessionGraphPath, getAgentSessionMessagesPath, getPiHarnessEventsPath } = await import('./config-paths')
+const { getAgentSessionGraphPath, getAgentSessionMessagesPath, getPiHarnessEventsPath, getPiTranscriptDirForSession } = await import('./config-paths')
+const { resolvePiTranscriptPath } = await import('./pi-session-files')
 const { invalidateWorkspaceLocation } = await import('./workspace-locator')
 
 const indexPath = join(configRoot, 'agent-workspaces.json')
@@ -146,6 +147,24 @@ describe('会话存储布局', () => {
 
     appendUserMessage(session.id, 'after-move')
     expect(readFileSync(newPath, 'utf-8')).toContain('after-move')
+  })
+
+  test('Given project 会话 When 解析 Pi transcript Then 落在会话数据目录的 pi/ 下', () => {
+    const root = makeProject('p3')
+    writeWorkspaces([projectEntry('p3', root), managedEntry('default')])
+
+    const projectSession = createAgentSession('project pi', undefined, 'id-p3', undefined, 'pi', false, 'standard')
+    const managedSession = createAgentSession('managed pi', undefined, 'id-default', undefined, 'pi', false, 'standard')
+
+    const projectPiDir = getPiTranscriptDirForSession(projectSession.id)
+    expect(projectPiDir).toBe(join(root, '.profer', 'sessions', projectSession.id, 'pi'))
+    expect(getPiTranscriptDirForSession(managedSession.id)).toBe(join(configRoot, 'sdk-config', 'sessions', 'pi'))
+
+    // 模拟 Pi SDK 在该目录写入 transcript：resolvePiTranscriptPath 应能按 header 找到
+    mkdirSync(projectPiDir, { recursive: true })
+    const transcript = join(projectPiDir, '2026-11-04T00-00-00-000Z_sdk-1.jsonl')
+    writeFileSync(transcript, `${JSON.stringify({ type: 'session', id: 'sdk-1' })}\n`, 'utf-8')
+    expect(resolvePiTranscriptPath('sdk-1', undefined, { rootDir: projectPiDir, force: true })).toBe(transcript)
   })
 
   test('Given 历史 project 会话只有全局消息 When 读取 Then 继续读全局，不因升级丢历史', () => {
