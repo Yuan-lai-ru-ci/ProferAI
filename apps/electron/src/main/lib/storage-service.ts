@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import {
   getConfigDir,
-  getAgentSessionsDir,
+  getAgentSessionMessagesPath,
   getSdkConfigDir,
   getAgentWorkspacesDir,
   getAttachmentsDir,
@@ -20,6 +20,7 @@ import {
   getPiCheckpointsDir,
 } from './config-paths'
 import { listAgentSessions } from './agent-session-manager'
+import { listAllSessionJsonlFiles, listAllSessionMessageFiles } from './session-data-layout'
 import { removePiFileCheckpoints } from './pi-file-checkpoint'
 import { listAgentWorkspaces } from './agent-workspace-manager'
 import { blobRootDir } from './blob-store'
@@ -218,22 +219,18 @@ function getActiveWorkspaceSlugs(): Set<string> {
  */
 async function collectReferencedBlobHashes(): Promise<Set<string>> {
   const hashes = new Set<string>()
-  const dir = getAgentSessionsDir()
-  if (!existsSync(dir)) return hashes
-
   const pattern = /"hash"\s*:\s*"sha256:([0-9a-f]{64})"/g
-  try {
-    const files = await fsPromises.readdir(dir)
-    for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue
-      try {
-        const content = await fsPromises.readFile(join(dir, file), 'utf-8')
-        pattern.lastIndex = 0
-        let match: RegExpExecArray | null
-        while ((match = pattern.exec(content)) !== null) hashes.add(match[1]!)
-      } catch { /* 单个文件读失败不影响其余 */ }
-    }
-  } catch { /* 目录不可读时返回已收集的部分 */ }
+
+  // 两种布局（managed 全局 + project 项目内）都必须扫到；只扫全局会把项目会话
+  // 引用的 blob 当成孤儿删掉。
+  for (const file of listAllSessionMessageFiles()) {
+    try {
+      const content = await fsPromises.readFile(file.path, 'utf-8')
+      pattern.lastIndex = 0
+      let match: RegExpExecArray | null
+      while ((match = pattern.exec(content)) !== null) hashes.add(match[1]!)
+    } catch { /* 单个文件读失败不影响其余 */ }
+  }
 
   return hashes
 }
@@ -291,28 +288,18 @@ async function calcSessionBlobsCategory(): Promise<StorageCategory> {
 }
 
 async function calcAgentSessionsCategory(): Promise<StorageCategory> {
-  const dir = getAgentSessionsDir()
   const activeIds = getActiveSessionIds()
   let bytes = 0, count = 0, orphanBytes = 0, orphanCount = 0
 
-  if (existsSync(dir)) {
+  for (const file of listAllSessionJsonlFiles()) {
     try {
-      const files = await fsPromises.readdir(dir)
-      for (const file of files) {
-        const parsed = parseAgentSessionFileName(file)
-        // 非 .jsonl 完全不计；.jsonl 但解析不出会话 ID 的只计入总量，不计孤儿
-        if (!parsed && !file.endsWith('.jsonl')) continue
-        const fullPath = join(dir, file)
-        try {
-          const stat = await fsPromises.stat(fullPath)
-          bytes += stat.size
-          count++
-          // 侧车文件与消息文件共用同一个 baseSessionId 判定，口径必须与清理一致
-          if (parsed && !activeIds.has(parsed.baseSessionId)) {
-            orphanBytes += stat.size
-            orphanCount++
-          }
-        } catch { /* skip */ }
+      const stat = await fsPromises.stat(file.path)
+      bytes += stat.size
+      count++
+      // 侧车文件与消息文件共用同一个 sessionId 判定，口径必须与清理一致
+      if (!activeIds.has(file.sessionId)) {
+        orphanBytes += stat.size
+        orphanCount++
       }
     } catch { /* skip */ }
   }
@@ -701,25 +688,14 @@ export async function cleanupTempFiles(): Promise<CleanupResult> {
 }
 
 async function cleanupOrphanAgentSessions(): Promise<CleanupResult> {
-  const dir = getAgentSessionsDir()
   const activeIds = getActiveSessionIds()
   let freedBytes = 0, deletedCount = 0
   const errors: string[] = []
 
-  if (!existsSync(dir)) return { freedBytes, deletedCount, errors }
-
-  try {
-    const files = await fsPromises.readdir(dir)
-    for (const file of files) {
-      const parsed = parseAgentSessionFileName(file)
-      // 解析不出会话 ID 的文件不删：删除不可逆，宁可漏清也不能误删
-      if (!parsed) continue
-      if (activeIds.has(parsed.baseSessionId)) continue
-      const freed = safeUnlink(join(dir, file))
-      if (freed > 0) { freedBytes += freed; deletedCount++ }
-    }
-  } catch (e) {
-    errors.push(`清理孤儿会话文件失败: ${e}`)
+  for (const file of listAllSessionJsonlFiles()) {
+    if (activeIds.has(file.sessionId)) continue
+    const freed = safeUnlink(file.path)
+    if (freed > 0) { freedBytes += freed; deletedCount++ }
   }
 
   return { freedBytes, deletedCount, errors }
@@ -895,7 +871,7 @@ async function cleanupArchivedSessions(beforeDays: number): Promise<CleanupResul
 
   for (const session of victims) {
     // 删除 JSONL 消息文件
-    const msgPath = join(getAgentSessionsDir(), `${session.id}.jsonl`)
+    const msgPath = getAgentSessionMessagesPath(session.id)
     if (existsSync(msgPath)) {
       const freed = safeUnlink(msgPath)
       if (freed > 0) { freedBytes += freed; deletedCount++ }

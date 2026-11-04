@@ -8,6 +8,7 @@
 import { join, basename, resolve, sep, relative } from 'node:path'
 import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { createSessionStorePaths, sessionGraphPath, sessionHarnessPath, sessionMessagesPath } from '@profer/session-store'
 import { RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
 import { readSkillVersion } from './skill-manifest'
 import { resolveDevVitePort } from './dev-instance'
@@ -315,7 +316,17 @@ export function getAgentSessionsDir(): string {
  * @returns ~/.profer/agent-sessions/{id}.jsonl
  */
 export function getAgentSessionMessagesPath(id: string): string {
-  return join(getAgentSessionsDir(), `${id}.jsonl`)
+  return sessionMessagesPath(createSessionStorePaths(getConfigDir()), id)
+}
+
+/**
+ * 获取指定 Agent 会话的任务图文件路径。
+ *
+ * project 会话落在 `<root>/.profer/sessions/<sid>/<sid>-graph.jsonl`，
+ * managed 会话保持 `~/.profer/agent-sessions/<sid>-graph.jsonl`。
+ */
+export function getAgentSessionGraphPath(id: string): string {
+  return sessionGraphPath(createSessionStorePaths(getConfigDir()), id)
 }
 
 /**
@@ -325,7 +336,7 @@ export function getAgentSessionMessagesPath(id: string): string {
  * 缺失文件代表该历史会话尚未启用 Harness，读取方必须安全降级为空 snapshot。
  */
 export function getPiHarnessEventsPath(id: string): string {
-  return join(getAgentSessionsDir(), `${id}-pi-harness.jsonl`)
+  return sessionHarnessPath(createSessionStorePaths(getConfigDir()), id)
 }
 
 /**

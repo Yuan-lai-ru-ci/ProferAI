@@ -3,7 +3,7 @@ import { dirname } from 'node:path'
 import type { SDKMessage } from '@profer/shared'
 import type { SessionMessagePage, SyncSessionMessageStore, SyncSessionMessageStoreOptions } from './contracts'
 import { readSessionMessagesFromString } from '@profer/session-core'
-import { sessionMessagesPath } from './paths'
+import { sessionMessagesDir, sessionMessagesPath } from './paths'
 
 export function createSyncSessionMessageStore(
   getPaths: () => { sessionsDir: string },
@@ -43,9 +43,10 @@ export function createSyncSessionMessageStore(
   const append = (sessionId: string, messages: readonly SDKMessage[]): void => {
     if (messages.length === 0) return
     const paths = getPaths()
-    mkdirSync(paths.sessionsDir, { recursive: true })
+    const filePath = sessionMessagesPath(paths, sessionId)
+    mkdirSync(sessionMessagesDir(paths, sessionId), { recursive: true })
     const content = messages.map((message) => options.serializeMessage?.(sessionId, message) ?? JSON.stringify(message)).join('\n') + '\n'
-    appendFileSync(sessionMessagesPath(paths, sessionId), content, 'utf8')
+    appendFileSync(filePath, content, 'utf8')
   }
 
   const replace = (sessionId: string, messages: readonly SDKMessage[]): void => {

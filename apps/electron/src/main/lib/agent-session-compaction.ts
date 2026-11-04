@@ -29,9 +29,10 @@
  * 实现），因此在行与行之间显式让出一次，避免单个会话文件长时间独占主线程。
  */
 
-import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { getAgentSessionsDir, getConfigDir } from './config-paths'
+import { getConfigDir } from './config-paths'
+import { listAllSessionMessageFiles } from './session-data-layout'
 import {
   MAX_SDK_MESSAGE_LENGTH,
   externalizeSerializedSessionLine,
@@ -84,15 +85,6 @@ function createEmptyResult(): SessionCompactionResult {
   }
 }
 
-async function listSessionFiles(sessionsDir: string): Promise<string[]> {
-  try {
-    const entries = await readdir(sessionsDir)
-    return entries.filter((name) => name.endsWith('.jsonl'))
-  } catch {
-    return []
-  }
-}
-
 async function ensureBackupDir(result: SessionCompactionResult): Promise<string> {
   if (result.backupDir) return result.backupDir
   const dir = join(getConfigDir(), 'migrations', `backup-${new Date().toISOString().replace(/[:.]/g, '-')}`)
@@ -136,20 +128,18 @@ function externalizeLineIntoStats(
  */
 export async function previewAgentSessionCompaction(): Promise<SessionCompactionResult> {
   const result = createEmptyResult()
-  const sessionsDir = getAgentSessionsDir()
   const seenHashes = new Set<string>()
 
-  for (const name of await listSessionFiles(sessionsDir)) {
+  for (const file of listAllSessionMessageFiles()) {
     result.scannedFiles++
     try {
-      const filePath = join(sessionsDir, name)
-      if ((await stat(filePath)).size <= MAX_SDK_MESSAGE_LENGTH) continue
+      if ((await stat(file.path)).size <= MAX_SDK_MESSAGE_LENGTH) continue
 
-      const lines = (await readFile(filePath, 'utf-8')).split('\n')
+      const lines = (await readFile(file.path, 'utf-8')).split('\n')
       let touched = false
       for (const line of lines) {
         if (line.length <= MAX_SDK_MESSAGE_LENGTH) continue
-        const compacted = externalizeLineIntoStats(line, name, result, seenHashes)
+        const compacted = externalizeLineIntoStats(line, file.sessionId, result, seenHashes)
         if (compacted === line) continue
         touched = true
         result.rewrittenLines++
@@ -158,7 +148,7 @@ export async function previewAgentSessionCompaction(): Promise<SessionCompaction
       }
       if (touched) result.rewrittenFiles++
     } catch (error) {
-      recordError(result, name, error)
+      recordError(result, file.sessionId, error)
     }
   }
 
@@ -170,11 +160,10 @@ export async function previewAgentSessionCompaction(): Promise<SessionCompaction
  */
 export async function compactAgentSessionStorage(): Promise<SessionCompactionResult> {
   const result = createEmptyResult()
-  const sessionsDir = getAgentSessionsDir()
   const seenHashes = new Set<string>()
 
-  for (const name of await listSessionFiles(sessionsDir)) {
-    const filePath = join(sessionsDir, name)
+  for (const file of listAllSessionMessageFiles()) {
+    const filePath = file.path
     result.scannedFiles++
 
     try {
@@ -198,7 +187,7 @@ export async function compactAgentSessionStorage(): Promise<SessionCompactionRes
         // 逐行外部化是同步的（与写入路径共用同一实现）；行与行之间让出一次，
         // 避免一个塞满巨型行的会话文件长时间卡住主进程。
         await yieldToEventLoop()
-        const compacted = externalizeLineIntoStats(line, name, result, seenHashes)
+        const compacted = externalizeLineIntoStats(line, file.sessionId, result, seenHashes)
         if (compacted === line) {
           compactedLines.push(line)
           continue
@@ -219,7 +208,7 @@ export async function compactAgentSessionStorage(): Promise<SessionCompactionRes
       }
 
       const backupDir = await ensureBackupDir(result)
-      await copyFile(filePath, join(backupDir, name))
+      await copyFile(filePath, join(backupDir, `${file.sessionId}.jsonl`))
 
       const tmpPath = filePath + TMP_SUFFIX
       await writeFile(tmpPath, compactedLines.join('\n'), 'utf-8')
@@ -230,7 +219,7 @@ export async function compactAgentSessionStorage(): Promise<SessionCompactionRes
       result.charsBefore += fileCharsBefore
       result.charsAfter += fileCharsAfter
     } catch (error) {
-      recordError(result, name, error)
+      recordError(result, file.sessionId, error)
       // 失败时清掉可能残留的临时文件，避免污染会话目录
       try {
         await rm(filePath + TMP_SUFFIX, { force: true })

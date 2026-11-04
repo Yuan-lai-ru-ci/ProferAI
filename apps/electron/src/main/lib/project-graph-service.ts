@@ -9,7 +9,7 @@
 
 import { appendFileSync, existsSync, readFileSync, mkdirSync, lstatSync, realpathSync } from 'node:fs'
 import { basename, dirname, resolve, sep } from 'node:path'
-import { getAgentSessionsDir } from './config-paths'
+import { getAgentSessionGraphPath } from './config-paths'
 import {
   buildGraphFromEvents,
   parseEventsFromJsonl,
@@ -27,7 +27,6 @@ import {
   isProjectCompleted,
   projectProgress,
   projectStatusLabel,
-  getGraphJsonlPath,
   isSafeSessionId,
   serializeEvent,
   type TaskGraph,
@@ -66,14 +65,15 @@ function isPathInside(root: string, candidate: string): boolean {
  */
 function getSafeGraphPath(sessionId: string): string {
   assertSafeSessionId(sessionId)
-  const sessionDir = getAgentSessionsDir()
-  const graphPath = resolve(getGraphJsonlPath(sessionDir, sessionId))
-  const realSessionDir = realpathSync(sessionDir)
+  // 路径由会话布局解析：project 在 <root>/.profer/sessions/<sid>，managed 在中央目录。
+  const graphPath = resolve(getAgentSessionGraphPath(sessionId))
+  const graphDir = dirname(graphPath)
+  const realGraphDir = existsSync(graphDir) ? realpathSync(graphDir) : resolve(graphDir)
   if (existsSync(graphPath)) {
     if (lstatSync(graphPath).isSymbolicLink()) throw new Error('任务图文件不允许使用符号链接')
   }
   const realGraphPath = realpathCandidate(graphPath)
-  if (!isPathInside(realSessionDir, realGraphPath)) {
+  if (!isPathInside(realGraphDir, realGraphPath)) {
     throw new Error('任务图路径不在会话目录内')
   }
   return graphPath
