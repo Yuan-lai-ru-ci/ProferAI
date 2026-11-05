@@ -107,7 +107,7 @@ import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
 import { listBookmarks, addBookmark, removeBookmark, listHistory, clearHistory } from './lib/browser-start-page-store'
 import { getMainRepoRoot } from './lib/git-diff-service'
 import { registerProferDirectoryPath, registerProferFilePath } from './lib/local-file-protocol'
-import { isPathInsideAnyRoot, isReadOnlyPreviewPathAllowed } from './lib/preview-path-policy'
+import { isPathInsideAnyRoot, isPathInsideRoot, isReadOnlyPreviewPathAllowed } from './lib/preview-path-policy'
 import { registerUpdaterIpc } from './lib/updater/updater-ipc'
 import { registerChannelIpc } from './lib/channel-ipc'
 import { listChannels,
@@ -488,7 +488,7 @@ function assertInsideAgentWorkspaces(targetPath: string): void {
   // 否则会平白得到「能删项目根」的能力。
   const resolvedTarget = realpathOrResolve(targetPath)
   for (const project of listProjectWorkspaceRoots()) {
-    if (isUnderRoot(resolvedTarget, project.rootPath)) return
+    if (isPathInsideRoot(resolvedTarget, project.rootPath)) return
   }
 
   throw new Error('访问路径超出 Agent 工作区范围')
@@ -504,7 +504,7 @@ function assertFileTreeMutationAllowed(targetPath: string): void {
   const resolvedTarget = realpathOrResolve(targetPath)
   for (const project of listProjectWorkspaceRoots()) {
     // 目标在项目内，或目标是项目根的祖先 —— 两种情况都交给窄守卫判定
-    if (!isUnderRoot(resolvedTarget, project.rootPath) && !isUnderRoot(project.rootPath, resolvedTarget)) continue
+    if (!isPathInsideRoot(resolvedTarget, project.rootPath) && !isPathInsideRoot(project.rootPath, resolvedTarget)) continue
     assertProjectFileDeletionAllowed(targetPath, { ...project, storageMode: 'project' })
     return
   }
