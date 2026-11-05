@@ -207,3 +207,70 @@ describe('流绑定归主进程仲裁', () => {
     expect(legacyHeadless).toContain('if (wc && !existingOwner)')
   })
 })
+
+/**
+ * 把 `restoreActiveAgentStreams` 的真实函数体切出来编译，注入边界依赖后执行。
+ *
+ * 与上面的源码断言不同：这里走完整控制流，能覆盖「过滤器删掉快照后又被兜底循环绑回去」
+ * 这类只靠字符串匹配发现不了的分支回归。
+ */
+async function loadRestoreActiveAgentStreams() {
+  const source = await readAgentService()
+  const from = source.indexOf('export function restoreActiveAgentStreams(')
+  const to = source.indexOf('function isMainRendererWindow(', from)
+  if (from < 0 || to < 0) throw new Error('restoreActiveAgentStreams 源码锚点未找到')
+  const compiled = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
+    .transformSync(source.slice(from, to).replace('export function', 'function'))
+  return (dependencies: Record<string, unknown>) => new Function(
+    ...Object.keys(dependencies),
+    `${compiled}\nreturn restoreActiveAgentStreams`,
+  )(...Object.values(dependencies)) as (
+    webContents: { isDestroyed(): boolean; send(channel: string, payload?: unknown): void },
+    sessionIds?: readonly string[],
+  ) => Array<{ sessionId: string; active: boolean; hasTerminalEvent: boolean }>
+}
+
+function restoreHarness(owner: unknown) {
+  const bindings: string[] = []
+  const caller = { isDestroyed: () => false, send: () => undefined }
+  const dependencies = {
+    completedStreamEventBacklogs: new Map<string, unknown[]>(),
+    activeStreamEventBacklogs: new Map<string, unknown[]>(),
+    getSessionWebContents: () => owner,
+    isSessionWindowContents: (target: unknown) => target === owner,
+    runtimeContextStore: { list: () => [] },
+    isAgentExecutionActive: () => true,
+    registerWebContents: (sessionId: string) => { bindings.push(sessionId) },
+    isTerminalBacklogEvent: () => false,
+    AGENT_IPC_CHANNELS: {
+      STREAM_EVENT: 'agent:stream-event',
+      STREAM_COMPLETE: 'agent:stream-complete',
+      STREAM_ERROR: 'agent:stream-error',
+    },
+    getAgentSessionMessages: () => [],
+  }
+  return { bindings, caller, dependencies }
+}
+
+describe('活跃但尚无 backlog 的会话同样受窗口归属保护', () => {
+  test('Given 独立会话窗口持有活跃会话且尚无事件 When 其它窗口认领 Then 不绑定也不返回快照', async () => {
+    const load = await loadRestoreActiveAgentStreams()
+    const owner = { window: 'standalone-session' }
+    const { bindings, caller, dependencies } = restoreHarness(owner)
+    const restore = load(dependencies)
+
+    expect(restore(caller, ['session-a'])).toEqual([])
+    expect(bindings).toEqual([])
+  })
+
+  test('Given 活跃会话没有其它窗口持有 When 窗口认领 Then 完成兜底绑定并返回活跃快照', async () => {
+    const load = await loadRestoreActiveAgentStreams()
+    const { bindings, caller, dependencies } = restoreHarness(undefined)
+    const restore = load(dependencies)
+
+    expect(restore(caller, ['session-a'])).toEqual([
+      { sessionId: 'session-a', active: true, hasTerminalEvent: false },
+    ])
+    expect(bindings).toEqual(['session-a'])
+  })
+})

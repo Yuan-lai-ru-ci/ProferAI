@@ -438,9 +438,13 @@ export function restoreActiveAgentStreams(
     if (!isAgentExecutionActive(sessionId)) completedStreamEventBacklogs.delete(sessionId)
   }
   // 活跃但尚未产出事件的会话不在 backlog 里，也必须完成绑定；否则第一次事件会丢。
+  // 但「没有 backlog」不等于「没有归属」：独立会话窗口正展示的会话仍不能被认领抢走，
+  // 否则那个窗口会收到 SESSION_RELEASED 并冻结在快照上。
   if (allowed) {
     for (const sessionId of allowed) {
       if (snapshots.has(sessionId) || !isAgentExecutionActive(sessionId)) continue
+      const owner = getSessionWebContents(sessionId)
+      if (owner && owner !== webContents && isSessionWindowContents(owner)) continue
       registerWebContents(sessionId, webContents)
       const context = contextSnapshots.get(sessionId)
       restored.push({

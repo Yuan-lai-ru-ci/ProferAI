@@ -28,8 +28,18 @@ describe('dist.ts 默认平台推导', () => {
     // 不因为「electron-builder.yml 有 linux 段」就当支持：缺 Claude 原生二进制与 Linux 验证。
     expect(() => assertSupportedPackagingTarget('linux')).toThrow('Linux 不是受支持的发布目标')
     expect(() => assertBuilderPackagingHost(['--linux'], 'linux')).toThrow('Linux 不是受支持的发布目标')
+    // 不给平台参数时 electron-builder 仍按宿主默认打 linux，门禁必须同样拒绝。
+    expect(() => assertBuilderPackagingHost([], 'linux')).toThrow('Linux 不是受支持的发布目标')
+    expect(() => assertBuilderPackagingHost(['--dir'], 'linux')).toThrow('Linux 不是受支持的发布目标')
     expect(() => assertSupportedPackagingTarget('mac')).not.toThrow()
     expect(() => assertSupportedPackagingTarget('win')).not.toThrow()
+  })
+
+  test('Given 未指定平台参数 When 宿主为 macOS 或 Windows Then 按宿主默认目标校验并通过', () => {
+    expect(() => assertBuilderPackagingHost([], 'darwin')).not.toThrow()
+    expect(() => assertBuilderPackagingHost(['--dir'], 'darwin')).not.toThrow()
+    expect(() => assertBuilderPackagingHost([], 'win32')).not.toThrow()
+    expect(() => assertBuilderPackagingHost(['--publish', 'never'], 'win32')).not.toThrow()
   })
 
   test('Given 未知宿主 Then 报错退出而不是伪造某个平台', () => {

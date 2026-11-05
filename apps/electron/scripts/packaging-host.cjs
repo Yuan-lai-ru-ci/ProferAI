@@ -66,8 +66,20 @@ function assertSupportedPackagingTarget(targetPlatform) {
   if (reason) throw new Error(reason)
 }
 
+/** 未显式传平台参数时，electron-builder 按宿主打包；门禁必须用同一个默认目标校验。 */
+const HOST_DEFAULT_TARGET = new Map([
+  ['darwin', 'mac'],
+  ['win32', 'win'],
+  ['linux', 'linux'],
+])
+
 function assertBuilderPackagingHost(args, hostPlatform = process.platform) {
-  for (const targetPlatform of getRequestedPlatforms(args)) {
+  const requested = getRequestedPlatforms(args)
+  // 没有 --win/--mac/--linux 时不能直接放行：`pack` / `dist` 会落到 electron-builder 的
+  // 宿主默认目标，于是 Linux 宿主能绕过「Linux 不受支持」的拒绝，产出 Claude 必然失败的包。
+  const defaultTarget = HOST_DEFAULT_TARGET.get(hostPlatform)
+  const targets = requested.length > 0 ? requested : (defaultTarget ? [defaultTarget] : [])
+  for (const targetPlatform of targets) {
     assertSupportedPackagingTarget(targetPlatform)
     assertPackagingHost(targetPlatform, hostPlatform)
   }
