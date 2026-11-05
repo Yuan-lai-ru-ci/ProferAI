@@ -8,9 +8,10 @@
 
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { resolve, sep } from 'node:path'
+import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { net } from 'electron'
+import { isPathInsideRoot } from './preview-path-policy'
 
 type RegisteredEntry = {
   root: string
@@ -43,10 +44,6 @@ function realpathExisting(path: string): string {
     throw new Error(`文件不存在: ${path}`)
   }
   return resolved
-}
-
-function isInsideDirectory(target: string, root: string): boolean {
-  return target === root || target.startsWith(root.endsWith(sep) ? root : root + sep)
 }
 
 function registerEntry(path: string, isDirectory: boolean): string {
@@ -95,7 +92,8 @@ export function handleProferFileRequest(request: Request): Promise<Response> | R
     } catch {
       return new Response('Not Found', { status: 404 })
     }
-    if (!isInsideDirectory(target, entry.root)) {
+    // 目录 token 下的相对路径必须仍落在注册根内（共用实现已处理 Windows 大小写不敏感）
+    if (!isPathInsideRoot(target, entry.root)) {
       return new Response('Forbidden', { status: 403 })
     }
   } else if (url.pathname && url.pathname !== '/') {
