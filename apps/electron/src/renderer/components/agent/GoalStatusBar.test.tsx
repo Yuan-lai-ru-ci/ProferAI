@@ -5,7 +5,7 @@ import { Provider, createStore } from 'jotai'
 import type { AgentGoalState } from '@profer/shared'
 import { getGoalActions, goalHistoryAtomFamily, mergeAgentGoalAtom } from '../../atoms/goal-atoms'
 import { allPendingAskUserRequestsAtom, allPendingPermissionRequestsAtom } from '../../atoms/agent-atoms'
-import { GoalStatusBar, GoalHistoryDetails, GoalLifecycleDetails } from './GoalStatusBar'
+import { GoalStatusBar, GoalHistoryDetails, GoalLifecycleDetails, GoalDetailsPanel } from './GoalStatusBar'
 
 const goal = (status: AgentGoalState['status']): AgentGoalState => ({
   id: 'g', sessionId: 's', goal: '交付目标', status, revision: 1, iteration: 2,
@@ -212,6 +212,22 @@ describe('Goal 原因与生命周期详情', () => {
   })
 })
 
+
+test('展开详情自身可滚动，长轮次历史不会撑破页面', () => {
+  // 回归保护：外层是 shrink-0，详情区没有 max-height + overflow 时会挤压对话区，
+  // 超出窗口的部分被裁掉，用户滚轮扫在详情上没有任何反应。
+  const history = Array.from({ length: 12 }, (_, index) => ({
+    iteration: index + 1, startedAt: 0, finishedAt: 1_000, status: 'continue' as const, outcome: 'success' as const,
+    summary: `第 ${index + 1} 轮摘要`, evidence: [],
+  }))
+  const html = renderToStaticMarkup(<GoalDetailsPanel goal={{ ...goal('completed'), history }} archives={[]} history={[]} historyError={null} />)
+  expect(html).toContain('data-testid="goal-status-details"')
+  expect(html).toContain('max-h-[45vh]')
+  expect(html).toContain('overflow-y-auto')
+  expect(html).toContain('最近轮次')
+  expect(html).toContain('第 12 轮')
+  expect(html).not.toContain('第 1 轮 ·')
+})
 
 test('异常历史时间降级展示，不使状态栏详情崩溃', () => {
   const state = { ...goal('paused'), lifecycle: [{ id: 'invalid-time', goalId: 'g', sessionId: 's', from: 'active' as const, to: 'paused' as const, reason: 'user_pause' as const, revision: 2, at: Number.MAX_SAFE_INTEGER }] }

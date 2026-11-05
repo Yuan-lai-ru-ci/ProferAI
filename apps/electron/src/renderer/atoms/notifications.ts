@@ -71,6 +71,28 @@ export const notificationsEnabledAtom = atom<boolean>(true)
 /** 通知提示音是否启用 */
 export const notificationSoundEnabledAtom = atom<boolean>(true)
 
+/**
+ * Goal 空闲自检间隔（分钟）。0 = 关闭（默认）。
+ * 只做展示与设置回显；真正的调度在主进程读取同一份 settings，
+ * 避免渲染层与主进程各存一份导致「界面显示开启、实际不跑」。
+ */
+export const goalIdleCheckinMinutesAtom = atom<number>(0)
+
+/** 连续空闲自检次数上限（主进程同样读 settings）。 */
+export const goalIdleCheckinMaxCountAtom = atom<number>(3)
+
+/** 模型主动提议建立 Goal 的策略（主进程读同一份 settings 决定是否注入工具）。 */
+export const goalProposalPolicyAtom = atom<import('@profer/shared').GoalProposalPolicy>('alwaysAsk')
+
+/** 更新 Goal 提议策略并持久化。 */
+export async function updateGoalProposalPolicy(policy: import('@profer/shared').GoalProposalPolicy): Promise<void> {
+  try {
+    await window.electronAPI.updateSettings({ goalProposalPolicy: policy })
+  } catch (error) {
+    console.error('[Goal] 更新提议策略失败:', error)
+  }
+}
+
 /** 各场景通知音配置 */
 export const notificationSoundsAtom = atom<NotificationSoundSettings>({})
 
@@ -122,6 +144,15 @@ export async function initializeNotifications(
 /**
  * 更新通知开关并持久化
  */
+/** 更新 Goal 空闲自检配置并持久化（主进程下次排程即生效）。 */
+export async function updateGoalIdleCheckin(minutes: number, maxCount: number): Promise<void> {
+  try {
+    await window.electronAPI.updateSettings({ goalIdleCheckinMinutes: minutes, goalIdleCheckinMaxCount: maxCount })
+  } catch (error) {
+    console.error('[Goal] 更新空闲自检设置失败:', error)
+  }
+}
+
 export async function updateNotificationsEnabled(enabled: boolean): Promise<void> {
   try {
     await window.electronAPI.updateSettings({ notificationsEnabled: enabled })

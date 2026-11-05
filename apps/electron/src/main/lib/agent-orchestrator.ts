@@ -1,6 +1,7 @@
 import { routePluginModel } from './plugins/plugin-routing'
 import { buildPluginAgentTools } from './plugins/plugin-agent-tools'
 import { injectGoalMcpServer } from './goal-tools'
+import { injectGoalProposalMcpServer } from './goal-proposal-tools'
 /**
  * AgentOrchestrator — Agent 编排层
  *
@@ -1163,6 +1164,8 @@ export class AgentOrchestrator {
       automationContext,
     } = input
     const goalIsolated = input.isolatedRuntimeSession === true
+    // Goal 提议回调只在入口有效：内部轮次（Goal 自己、自动化、委派）不得再提议。
+    const goalProposal = input.triggeredBy === undefined || input.triggeredBy === 'user' ? input.goalProposal : undefined
     const runtimeUserMessage = input.internalPrompt ?? userMessage
     let { channelId, modelId } = input
     // Pi/Claude 的错误结构和可恢复语义不同；Router 必须按本次请求 runtime 提供 helper。
@@ -1780,6 +1783,10 @@ export class AgentOrchestrator {
             report: input.reportGoalResult,
           })
         }
+        // 非 Goal 轮次：允许模型提议「这件事值得开一个 Goal」，用户确认后才创建。
+        if (agentRuntime === 'claude' && goalProposal) {
+          await injectGoalProposalMcpServer(sdk, mcpServers, { sessionId, ...goalProposal })
+        }
         await injectAgentPresetMcpServer(sdk, mcpServers, {
           ...runToolContext,
           sessionId,
@@ -2058,6 +2065,7 @@ export class AgentOrchestrator {
               triggeredBy: input.triggeredBy,
               goalIteration: input.goalIteration,
               reportGoalResult: input.reportGoalResult,
+              goalProposal,
               allowedPresetOperations,
               currentPresetReference,
               presetOperationUserMessage: userMessage,

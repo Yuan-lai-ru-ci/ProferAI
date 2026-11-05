@@ -504,6 +504,14 @@ export const pendingPermissionRequestsAtom = atom(
   }
 )
 
+/**
+ * 待确认的模型 Goal 提议 — 以 sessionId 为 key。
+ *
+ * 与 AskUser 不同，提议不阻塞模型当前轮：模型继续把手上的活做完，
+ * 用户确认后才由主进程创建 Goal。因此这里只做展示与一次性提交。
+ */
+export const allPendingGoalProposalsAtom = atom<Map<string, readonly import('@profer/shared').GoalProposal[]>>(new Map())
+
 /** 待处理的 AskUser 请求 Map — 以 sessionId 为 key，切换会话时保留状态 */
 export const allPendingAskUserRequestsAtom = atom<Map<string, readonly AskUserRequest[]>>(new Map())
 

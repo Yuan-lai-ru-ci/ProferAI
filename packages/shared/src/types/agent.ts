@@ -685,6 +685,9 @@ export type AgentEvent =
   // AskUserQuestion 交互式问答
   | { type: 'ask_user_request'; request: AskUserRequest }
   | { type: 'ask_user_resolved'; requestId: string }
+  // 模型主动提议建立 Goal
+  | { type: 'goal_proposal'; proposal: GoalProposal }
+  | { type: 'goal_proposal_resolved'; proposalId: string; accepted: boolean }
   // ExitPlanMode 计划审批
   | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
   | { type: 'exit_plan_mode_resolved'; requestId: string }
@@ -707,6 +710,9 @@ export type ProferEvent =
   | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
   | { type: 'ask_user_request'; request: AskUserRequest }
   | { type: 'ask_user_resolved'; requestId: string }
+  // 模型主动提议建立 Goal
+  | { type: 'goal_proposal'; proposal: GoalProposal }
+  | { type: 'goal_proposal_resolved'; proposalId: string; accepted: boolean }
   | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
   | { type: 'exit_plan_mode_resolved'; requestId: string }
   | { type: 'enter_plan_mode'; sessionId: string }
@@ -1547,7 +1553,40 @@ export interface AgentGoalState {
   retry?: AgentGoalRetryState
   /** Goal 仍为 active 但暂不运行的原因（如计划模式下等待切换）。 */
   waiting?: 'plan_mode'
+  /**
+   * 空闲自检：轮次结束后没有新输入时，宿主会隔一段时间自动续跑一轮。
+   * 连续达到上限后不再唤醒，等用户发消息（对齐 Claude Code 的 idle check-in）。
+   */
+  idleCheckin?: AgentGoalIdleCheckinState
 }
+
+export interface AgentGoalIdleCheckinState {
+  /** 下一次空闲唤醒的时间戳；undefined 表示本轮已唤醒或未安排。 */
+  nextAt?: number
+  /** 连续空闲唤醒次数（用户发消息后清零）。 */
+  count: number
+  /** 达到上限后置为 true：不再自动唤醒，状态栏提示「空闲自检已暂停」。 */
+  paused?: boolean
+}
+
+/** 跨会话 Goal 总览条目：Goal 状态 + 会话展示信息（会话可能已删除）。 */
+export interface AgentGoalOverviewEntry {
+  goal: AgentGoalState
+  /** 会话标题；会话已不存在时为 undefined */
+  sessionTitle?: string
+  workspaceId?: string
+  /** 归档条目为 true，活跃条目为 false */
+  archived: boolean
+}
+
+export interface AgentGoalOverview {
+  /** 非终态的当前目标（执行中/等待处理/暂停），按最近更新排序 */
+  live: AgentGoalOverviewEntry[]
+  /** 最近结束：终态但未清除的 Goal + 已归档历史，按结束时间倒序 */
+  history: AgentGoalOverviewEntry[]
+}
+
+export const GOAL_OVERVIEW_HISTORY_LIMIT = 50
 
 export interface AgentGoalRetryState {
   /** 已安排的第几次重试（1 起） */
@@ -1655,6 +1694,18 @@ export interface AgentSendInput {
   suppressUserMessagePersistence?: boolean
   /** Goal 专用结构化结果回调；由内置 update_goal 工具调用，不写入普通对话。 */
   reportGoalResult?: (result: import('@profer/shared').AgentGoalIterationResult) => void
+  /**
+   * 模型主动提议建立 Goal 的通道（非 Goal 轮次提供）。
+   * 返回 `{ policy }` 表示允许提议；省略表示本轮不注入 propose_goal 工具。
+   */
+  goalProposal?: {
+    policy: import('./agent').GoalProposalPolicy
+    /** 当前会话是否已有 Goal（有则不再提议）。 */
+    hasActiveGoal: boolean
+    /** 计划模式下不提议。 */
+    planMode: boolean
+    onPropose: (proposal: import('./agent').GoalProposal, contract?: import('./agent').AgentGoalContract) => void
+  }
   /** Goal turn 是否使用独立的 runtime session，不得复用普通会话 SDK 上下文。 */
   isolatedRuntimeSession?: boolean
   /** Goal 当前运行 ID；用于把停止和结果绑定到具体 owner。 */
@@ -2095,6 +2146,32 @@ export interface AskUserRequest {
   /** 主进程内部确认元数据；不应出现在 renderer payload 中 */
 }
 
+/**
+ * 模型主动提议建立 Goal（对齐 Claude Code 的 ProposeGoal）。
+ *
+ * 模型在长任务中发现「这其实是多轮持续目标」时调用 propose_goal，
+ * 宿主把提议交给你确认；批准后才真正创建 Goal，避免模型单方面接管会话。
+ */
+export interface GoalProposal {
+  /** 提议唯一 ID */
+  id: string
+  sessionId: string
+  /** 模型建议的目标（一句话，可执行） */
+  objective: string
+  /** 为什么建议用 Goal 而不是一轮做完 */
+  rationale: string
+  /** 建议的验收标准 */
+  verification?: string
+  /** 建议的约束 */
+  constraints?: string
+  /** 建议的停止条件 */
+  stopWhen?: string
+  createdAt: number
+}
+
+/** 模型主动提议建立 Goal 的策略：auto 直接创建 / alwaysAsk 每次确认 / disabled 关闭。 */
+export type GoalProposalPolicy = 'auto' | 'alwaysAsk' | 'disabled'
+
 /** AskUser 响应（渲染进程 → 主进程） */
 export interface AskUserResponse {
   /** 请求 ID */
@@ -2390,6 +2467,11 @@ export const AGENT_IPC_CHANNELS = {
   GET_GOAL_HISTORY: 'agent:goal-history',
   /** 列出全部会话的 Goal（启动时水合渲染层状态） */
   LIST_GOALS: 'agent:goal-list',
+  /** 跨会话 Goal 总览：活跃目标 + 最近归档，附带会话标题 */
+  GOAL_OVERVIEW: 'agent:goal-overview',
+  /** 模型主动提议建立 Goal：列出待确认提议 / 批准 / 忽略 */
+  LIST_GOAL_PROPOSALS: 'agent:goal-proposals',
+  RESPOND_GOAL_PROPOSAL: 'agent:goal-proposal-respond',
   /** 暂停当前 Goal */
   PAUSE_GOAL: 'agent:goal-pause',
   /** 恢复当前 Goal */
@@ -2702,6 +2784,8 @@ export interface PendingRequestsSnapshot {
   askUsers: AskUserRequest[]
   /** 待处理的 ExitPlanMode 请求 */
   exitPlans: ExitPlanModeRequest[]
+  /** 待确认的模型 Goal 提议 */
+  goalProposals?: GoalProposal[]
 }
 
 // ===== 团队协作 IPC 通道 =====

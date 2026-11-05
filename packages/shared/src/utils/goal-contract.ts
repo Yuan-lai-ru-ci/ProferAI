@@ -154,6 +154,14 @@ export function stripGoalResultBlocks(text: string): string {
 
 export const GOAL_UPDATE_TOOL_NAME = 'update_goal'
 
+/** 模型主动提议建立 Goal 的工具名（对齐 Claude Code 的 ProposeGoal）。 */
+export const GOAL_PROPOSE_TOOL_NAME = 'propose_goal'
+
+/** Goal 提议工具不应作为普通工具过程展示（有专门的确认卡片）。 */
+export function isGoalProposalToolName(name: unknown): boolean {
+  return name === GOAL_PROPOSE_TOOL_NAME || name === `mcp__goal_proposal__${GOAL_PROPOSE_TOOL_NAME}`
+}
+
 /** Goal 内部状态工具不应作为普通工具过程展示。 */
 export function isGoalUpdateToolName(name: unknown): boolean {
   return name === GOAL_UPDATE_TOOL_NAME || name === `mcp__goal__${GOAL_UPDATE_TOOL_NAME}`

@@ -45,6 +45,16 @@ function useNow(enabled: boolean): number {
   return now
 }
 
+/**
+ * 哪些状态需要 1s 时钟：运行中、重试倒计时、空闲自检倒计时。
+ * 空闲等待没有 activeRun，漏掉 nextAt 会让「N 分钟后自动继续」永远停在同一个数字。
+ */
+function needsLiveClock(goal: AgentGoalState | undefined): boolean {
+  return isGoalRunning(goal)
+    || (goal?.status === 'active' && goal.retry !== undefined)
+    || goal?.idleCheckin?.nextAt !== undefined
+}
+
 function goalElapsed(goal: AgentGoalState, now: number): number {
   return getGoalElapsed(goal, now)
 }
@@ -206,6 +216,83 @@ function GoalEditor({ sessionId }: Props): React.ReactElement {
   </Dialog>
 }
 
+/**
+ * `/goal status` 的结构化面板：目标、契约、预算、最近进展与证据、最近轮次。
+ * 与状态栏展开区共用同一批纯展示组件，避免两套口径。
+ */
+export function GoalStatusDialog({ sessionId, open, onOpenChange }: { sessionId: string; open: boolean; onOpenChange: (open: boolean) => void }): React.ReactElement {
+  const goal = useAtomValue(agentGoalAtomFamily(sessionId))
+  const askUserPending = useAtomValue(allPendingAskUserRequestsAtom).get(sessionId)?.length ?? 0
+  const permissionPending = useAtomValue(allPendingPermissionRequestsAtom).get(sessionId)?.length ?? 0
+  const now = useNow(needsLiveClock(goal))
+  const history = (goal?.history ?? []).slice(-10).reverse()
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-xl">
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2"><Target className="size-4 text-primary" aria-hidden="true" />Goal 状态</DialogTitle>
+        <DialogDescription>{goal ? '当前会话的持续目标；完整历史在状态栏展开查看。' : '当前会话没有 Goal。'}</DialogDescription>
+      </DialogHeader>
+      {goal ? <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto text-xs">
+        <DetailRow label="目标" value={goal.goal} />
+        <DetailRow label="状态" value={`${getGoalStatusLabel(goal, { askUser: askUserPending, permission: permissionPending }, now)} · 第 ${goal.iteration} 轮`} />
+        <DetailRow label="耗时" value={formatGoalElapsed(getGoalElapsed(goal, now))} />
+        <DetailRow label="预算" value={formatGoalBudget(goal.limits)} />
+        {goal.contract?.verification && <DetailRow label="验收" value={goal.contract.verification} />}
+        {goal.contract?.constraints && <DetailRow label="约束" value={goal.contract.constraints} />}
+        {goal.contract?.stopWhen && <DetailRow label="停止条件" value={goal.contract.stopWhen} />}
+        {goal.lastSummary && <DetailRow label="最近进展" value={goal.lastSummary} />}
+        {goal.lastEvidence?.length ? <DetailRow label="证据" value={goal.lastEvidence.join('；')} /> : null}
+        <GoalReasonDetails goal={goal} />
+        <div className="font-medium">最近轮次</div>
+        {history.length > 0 ? history.map((entry) => <div key={entry.iteration} className="rounded-md bg-muted/40 px-2 py-1.5">
+          <div className="font-medium">第 {entry.iteration} 轮 · {entry.outcome === 'failed' ? '失败' : entry.outcome === 'stopped' ? '停止' : entry.status === 'complete' ? '完成' : entry.status === 'blocked' ? '受阻' : '推进'}</div>
+          <div className="whitespace-pre-wrap break-words text-muted-foreground">{entry.summary}</div>
+          {entry.evidence.length > 0 && <div className="whitespace-pre-wrap break-words text-muted-foreground">证据：{entry.evidence.join('；')}</div>}
+        </div>) : <span className="text-muted-foreground">尚无已结束的轮次</span>}
+      </div> : <p className="text-xs text-muted-foreground">在输入框输入 <code className="rounded bg-muted px-1 py-0.5">/goal 目标</code> 启动持续目标。</p>}
+      <DialogFooter>
+        <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>关闭</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+}
+
+/**
+ * 状态栏展开区：契约、预算、生命周期、最近轮次与归档目标。
+ *
+ * 内容长度不确定（10 轮摘要 + 归档列表很容易超过一屏），所以这里必须是
+ * 「有上限 + 自己滚动」的区域：外层是 shrink-0，不设上限会把对话区挤到 0 高度、
+ * 详情被窗口裁掉，表现为鼠标怎么滚都不动。
+ */
+export function GoalDetailsPanel({ goal, archives, history, historyError }: {
+  goal?: AgentGoalState
+  archives: AgentGoalState[]
+  history: AgentGoalState[] | null
+  historyError: string | null
+}): React.ReactElement {
+  return <div
+    data-testid="goal-status-details"
+    className="flex max-h-[45vh] flex-col gap-2 overflow-y-auto overscroll-contain border-t border-border/40 px-3 py-2 text-[11px]"
+  >
+    <p className="text-muted-foreground">沿用当前会话上下文，实际工作保留在对话中。</p>
+    {goal && <>
+      {goal.contract?.verification && <DetailRow label="验收" value={goal.contract.verification} />}
+      {goal.contract?.constraints && <DetailRow label="约束" value={goal.contract.constraints} />}
+      {goal.contract?.stopWhen && <DetailRow label="停止条件" value={goal.contract.stopWhen} />}
+      <DetailRow label="预算" value={formatBudget(goal.limits)} />
+      {goal.lastSummary && <DetailRow label="最近进展" value={goal.lastSummary} />}
+      {goal.usage && <DetailRow label="用量" value={`${goal.usage.totalTokens.toLocaleString()} tokens（输入 ${goal.usage.inputTokens.toLocaleString()} · 输出 ${goal.usage.outputTokens.toLocaleString()}）`} />}
+      {goal.lastEvidence?.length ? <DetailRow label="证据" value={goal.lastEvidence.join('；')} /> : null}
+      <GoalReasonDetails goal={goal} />
+      <GoalLifecycleDetails goal={goal} />
+      <div className="font-medium">最近轮次</div><IterationHistory goal={goal} />
+    </>}
+    <div className="font-medium">归档 Goal（{archives.length}）</div>
+    {historyError && <p role="alert" className="text-destructive">读取历史失败：{historyError}</p>}
+    {history === null ? !historyError && <p className="text-muted-foreground">正在读取历史…</p> : <GoalHistoryDetails goals={archives} />}
+  </div>
+}
+
 export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
   const goal = useAtomValue(agentGoalAtomFamily(sessionId))
   const setGoal = useSetAtom(agentGoalAtomFamily(sessionId))
@@ -214,7 +301,7 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
   const [history, setHistory] = useAtom(goalHistoryAtomFamily(sessionId))
   const [expanded, setExpanded] = React.useState(false)
   const [historyError, setHistoryError] = React.useState<string | null>(null)
-  const now = useNow(isGoalRunning(goal) || (goal?.status === 'active' && goal.retry !== undefined))
+  const now = useNow(needsLiveClock(goal))
   const elapsed = goal ? goalElapsed(goal, now) : 0
   const askUserPending = useAtomValue(allPendingAskUserRequestsAtom).get(sessionId)?.length ?? 0
   const permissionPending = useAtomValue(allPendingPermissionRequestsAtom).get(sessionId)?.length ?? 0
@@ -281,24 +368,7 @@ export function GoalStatusBar({ sessionId }: Props): React.ReactElement | null {
         <span className="min-w-0 flex-1 text-warning break-words">{reasons.join('；') || goal.stopReason || '预算已耗尽'}。增加预算后才能继续。</span>
         <Button variant="outline" size="sm" className="h-6 text-[11px]" disabled={pending || !actions.canEdit} onClick={() => setEditor(goal)}>{actions.canEdit ? '修改预算后恢复' : '等待本轮停止'}</Button>
       </div>}
-      {expanded && <div className="flex flex-col gap-2 border-t border-border/40 px-3 py-2 text-[11px]">
-        <p className="text-muted-foreground">沿用当前会话上下文，实际工作保留在对话中。</p>
-        {goal && <>
-          {goal.contract?.verification && <DetailRow label="验收" value={goal.contract.verification} />}
-          {goal.contract?.constraints && <DetailRow label="约束" value={goal.contract.constraints} />}
-          {goal.contract?.stopWhen && <DetailRow label="停止条件" value={goal.contract.stopWhen} />}
-          <DetailRow label="预算" value={formatBudget(goal.limits)} />
-          {goal.lastSummary && <DetailRow label="最近进展" value={goal.lastSummary} />}
-          {goal.usage && <DetailRow label="用量" value={`${goal.usage.totalTokens.toLocaleString()} tokens（输入 ${goal.usage.inputTokens.toLocaleString()} · 输出 ${goal.usage.outputTokens.toLocaleString()}）`} />}
-          {goal.lastEvidence?.length ? <DetailRow label="证据" value={goal.lastEvidence.join('；')} /> : null}
-          <GoalReasonDetails goal={goal} />
-          <GoalLifecycleDetails goal={goal} />
-          <div className="font-medium">最近轮次</div><IterationHistory goal={goal} />
-        </>}
-        <div className="font-medium">归档 Goal（{archives.length}）</div>
-        {historyError && <p role="alert" className="text-destructive">读取历史失败：{historyError}</p>}
-        {history === null ? !historyError && <p className="text-muted-foreground">正在读取历史…</p> : <GoalHistoryDetails goals={archives} />}
-      </div>}
+      {expanded && <GoalDetailsPanel goal={goal} archives={archives} history={history} historyError={historyError} />}
     </div>
     <GoalEditor sessionId={sessionId} />
   </div>

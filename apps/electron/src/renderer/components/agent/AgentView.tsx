@@ -23,7 +23,7 @@ import { AgentRuntimeSelector } from './AgentRuntimeSelector'
 import { AgentHeader } from './AgentHeader'
 import { createAgentComposerToolbarItems } from './agent-composer-toolbar-config'
 import { composerToolbarPreferencesAtom } from '@/atoms/composer-toolbar-preferences'
-import { GoalStatusBar } from './GoalStatusBar'
+import { GoalStatusBar, GoalStatusDialog } from './GoalStatusBar'
 import { agentGoalAtomFamily, getGoalActions, GOAL_STATUS_LABELS, goalEditorAtomFamily, goalReplacementAtomFamily, startGoalWithReplacement } from '@/atoms/goal-atoms'
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
@@ -37,6 +37,7 @@ import { PresetSelector } from './PresetSelector'
 import { referenceForSelectablePreset, selectablePresetMatchesReference } from './preset-selector-utils'
 import { agentPresetCacheKey, agentPresetsAtom, agentPresetsLoadedAtom } from '@/atoms/agent-preset-atoms'
 import { AskUserBanner } from './AskUserBanner'
+import { GoalProposalBanner } from './GoalProposalBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
@@ -152,6 +153,7 @@ import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachm
 import { AgentSendButton } from './AgentSendButton'
 import { normalizeAgentHistoryRefresh, normalizeAgentHistoryResult } from './agent-history-pagination'
 import { clearSessionReferenceDragState, getSessionReferenceDragData, canReferenceDraggedSession } from '@/lib/session-reference-drag'
+import { getFileReferenceDragData, isFileReferenceDrag, toFileReferenceMentions } from '@/lib/file-reference-drag'
 import { buildQuotedSelectionBlock, buildQuotedSelectionsPrefix, collectQuotedSelectionsFromTexts, parseQuotedSelectionRefs, quotedSelectionFromParsedRef, stripQuoteMarkers } from '@/lib/quoted-selection'
 import {
   createAgentQueuedMessage,
@@ -286,6 +288,7 @@ export interface AgentViewProps {
 
 export function AgentView({ sessionId, standalone = false }: AgentViewProps): React.ReactElement {
   const [pendingGoalReplacement, setPendingGoalReplacement] = useAtom(goalReplacementAtomFamily(sessionId))
+  const [goalStatusOpen, setGoalStatusOpen] = React.useState(false)
   const [replacingGoal, setReplacingGoal] = React.useState(false)
   const setCurrentGoal = useSetAtom(agentGoalAtomFamily(sessionId))
   const setGoalEditor = useSetAtom(goalEditorAtomFamily(sessionId))
@@ -1541,6 +1544,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const handleDragOver = React.useCallback((e: React.DragEvent): void => {
     e.preventDefault()
     e.stopPropagation()
+    // 文件面板拖入显式声明为复制，光标提示与「插入引用」语义一致
+    if (isFileReferenceDrag(e.dataTransfer)) e.dataTransfer.dropEffect = 'copy'
     setIsDragOver(true)
   }, [])
 
@@ -1563,6 +1568,15 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         return
       }
       richTextInputRef.current?.insertSessionMention(draggedSession)
+      return
+    }
+
+    // 右侧文件面板拖入：插入 @ 文件引用胶囊，而不是当附件上传
+    const draggedFileReferences = getFileReferenceDragData(e.dataTransfer)
+    if (draggedFileReferences) {
+      richTextInputRef.current?.insertFileMentions(
+        toFileReferenceMentions(draggedFileReferences, sessionPath),
+      )
       return
     }
 
@@ -1624,7 +1638,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       // 无路径信息：回退，所有项按普通文件处理
       addFilesAsAttachments(droppedFiles)
     }
-  }, [sessionId, addFilesAsAttachments, setAttachedDirsMap])
+  }, [sessionId, sessionPath, addFilesAsAttachments, setAttachedDirsMap])
 
   /** ModelSelector 选择回调：主进程 session metadata 是跨重启真源。 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
@@ -2067,8 +2081,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       try {
         if (goalCommand.type === 'invalid') throw new Error(goalCommand.reason)
         if (goalCommand.type === 'status') {
-          const state = await window.electronAPI.getGoal(sessionId)
-          toast.info(state ? `Goal：${GOAL_STATUS_LABELS[state.status]} · 第 ${state.iteration} 轮` : '当前会话没有 Goal', { description: state?.lastSummary || state?.goal })
+          // 结构化面板（目标/契约/预算/最近进展与证据/最近轮次），与状态栏共用展示组件。
+          setGoalStatusOpen(true)
         } else if (goalCommand.type === 'pause') {
           await window.electronAPI.pauseGoal(sessionId)
           toast.info('Goal 已暂停')
@@ -3221,6 +3235,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         <div className="shrink-0">
           <GoalStatusBar sessionId={sessionId} />
         </div>
+        <GoalStatusDialog sessionId={sessionId} open={goalStatusOpen} onOpenChange={setGoalStatusOpen} />
         <AlertDialog open={Boolean(pendingGoalReplacement)} onOpenChange={(open) => { if (!open && !replacingGoal) setPendingGoalReplacement(null) }}>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -3291,6 +3306,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
           {/* ExitPlanMode 计划审批横幅 */}
           <ExitPlanModeBanner sessionId={sessionId} onRequestStop={handleStop} />
+
+          {/* 模型主动提议建立 Goal：不阻塞当前轮，只等用户确认 */}
+          <GoalProposalBanner sessionId={sessionId} />
         </div>
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}

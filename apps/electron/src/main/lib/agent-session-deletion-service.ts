@@ -10,6 +10,7 @@ import { beginAgentSessionDeletion, endAgentSessionDeletion, stopAgentAndWait } 
 import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
 import { exitPlanService } from './agent-exit-plan-service'
+import { goalProposalService } from './goal-proposal-service'
 import { browserController } from './browser-controller'
 import {
   hasAgentSessionProjectionPublisher,
@@ -160,6 +161,8 @@ export function drainSessionDeletionQueue(): Promise<void> {
             permissionService.clearSessionPending(sessionId)
             askUserService.clearSessionPending(sessionId)
             exitPlanService.clearSessionPending(sessionId)
+            // 会话删了，待确认的 Goal 提议不能再留着：否则点「建立 Goal」会对着已删除会话创建。
+            goalProposalService.clearSession(sessionId)
             void browserController.close(sessionId)
           },
           // 带上 workspaceId：索引条目已被移除时仍能解析 session 目录继续清理。

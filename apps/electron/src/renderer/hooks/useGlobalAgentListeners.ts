@@ -9,10 +9,11 @@
 
 import { useEffect } from 'react'
 import { channelsAtom, channelsLoadedAtom, selectedModelAtom, channelCatalogRefreshAtom } from '@/atoms/chat-atoms'
-import { isChannelEnabledForChat } from '@profer/shared'
+import { isChannelEnabledForChat, normalizeGoalReason } from '@profer/shared'
 import { authStatusAtom } from '@/atoms/identity-atoms'
 import { subscribeChannelCatalog } from '@/lib/channel-catalog-listener'
 import { agentGoalsAtom, hydrateAgentGoalsAtom, mergeAgentGoalAtom } from '@/atoms/goal-atoms'
+import { getGoalTerminalNotification } from '@/domains/goal/goal-display-policy'
 import { visualizationsAtom, updateVisualizationSessionCache } from '@/atoms/visualization-atoms'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useStore } from 'jotai'
@@ -26,6 +27,7 @@ import {
   agentPendingPromptAtom,
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
+  allPendingGoalProposalsAtom,
   askUserAnswersAtom,
   allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
@@ -139,6 +141,10 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         return [{ type: 'ask_user_request', request: evt.request }]
       case 'ask_user_resolved':
         return [{ type: 'ask_user_resolved', requestId: evt.requestId }]
+      case 'goal_proposal':
+        return [{ type: 'goal_proposal', proposal: evt.proposal }]
+      case 'goal_proposal_resolved':
+        return [{ type: 'goal_proposal_resolved', proposalId: evt.proposalId, accepted: evt.accepted }]
       case 'exit_plan_mode_request':
         return [{ type: 'exit_plan_mode_request', request: evt.request }]
       case 'exit_plan_mode_resolved':
@@ -412,6 +418,19 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       if (!effectActive) return
       store.set(hydrateAgentGoalsAtom, goals)
     }).catch(() => {})
+    // 提议只在主进程内存里：窗口重载后必须重新拉一次，否则待确认卡片永远看不到，
+    // 但主进程的 hasPending 仍会拒绝模型后续提议。
+    void window.electronAPI.listGoalProposals().then((proposals) => {
+      if (!effectActive || proposals.length === 0) return
+      store.set(allPendingGoalProposalsAtom, (prev) => {
+        const map = new Map(prev)
+        for (const proposal of proposals) {
+          const current = map.get(proposal.sessionId) ?? []
+          if (!current.some((item) => item.id === proposal.id)) map.set(proposal.sessionId, [...current, proposal])
+        }
+        return map
+      })
+    }).catch(() => {})
     const cleanupGoal = window.electronAPI.onGoalEvent((event) => {
       if (!effectActive) return
       const previous = store.get(agentGoalsAtom).get(event.sessionId)
@@ -427,14 +446,55 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       // Goal 描述目标生命周期，不证明实际 run 已启动/停止。流状态和工作消息只由
       // run 事件更新；禁止 Goal 状态清空普通流内容或抢先将其标成空闲。
       if (event.state && event.state.stopReason !== 'cleared' && previous?.id === event.state.id && previous.status !== event.state.status) {
-        if (event.state.status === 'completed') {
-          toast.success('Goal 已完成', { description: event.state.lastSummary || event.state.goal })
-        } else if (event.state.status === 'blocked') {
-          toast.warning('Goal 受阻，补充信息后可恢复', { description: event.state.stopReason || event.state.lastSummary || event.state.goal })
-        } else if (event.state.status === 'failed') {
-          toast.error('Goal 执行失败', { description: event.state.stopReason || event.state.goal })
-        } else if (event.state.status === 'budget_limited') {
+        const goal = event.state
+        const goalDetail = goal.stopReason || goal.lastSummary || goal.goal
+        if (goal.status === 'completed') {
+          toast.success('Goal 已完成', { description: goal.lastSummary || goal.goal })
+        } else if (goal.status === 'blocked') {
+          toast.warning('Goal 受阻，补充信息后可恢复', { description: goalDetail })
+        } else if (goal.status === 'failed') {
+          toast.error('Goal 执行失败', { description: goalDetail })
+        } else if (goal.status === 'budget_limited') {
           toast.warning('Goal 预算已耗尽', { description: '请在 Goal 卡片中增加预算后恢复；预算耗尽不代表目标已完成。' })
+        } else if (goal.status === 'paused') {
+          // 运行错误重试用尽 / 不可恢复错误会以 paused 结束，这类暂停需要人处理；
+          // 用户主动暂停和普通中断不弹告警。
+          const reason = goal.reasonCode ?? normalizeGoalReason(goal.stopReason)
+          if (reason === 'retry_exhausted' || reason === 'run_error') {
+            toast.warning('Goal 已暂停，需要你处理', { description: goalDetail })
+          }
+        }
+        // 终态通知：用户不在该会话时也能知道结果（与 Agent 本轮结束通知同口径，静默、可点击跳转）。
+        // 完成时同时写入未读提醒，让侧边栏/角标保留「有新结果」。
+        const goalNotification = getGoalTerminalNotification(goal)
+        if (goalNotification) {
+          const sessionTitle = getSessionTitle(event.sessionId)
+          if (goal.status === 'completed') {
+            const markers = getAgentCompletionMarkers({
+              tabs: store.get(tabsAtom),
+              activeTabId: store.get(activeTabIdAtom),
+              currentAgentSessionId: store.get(currentAgentSessionIdAtom),
+              sessionId: event.sessionId,
+              documentHasFocus: document.hasFocus(),
+            })
+            if (markers.markUnviewedCompleted) {
+              store.set(unviewedCompletedSessionIdsAtom, (prev: Set<string>) => {
+                if (prev.has(event.sessionId)) return prev
+                const next = new Set(prev)
+                next.add(event.sessionId)
+                return next
+              })
+            }
+          }
+          sendDesktopNotification(
+            goalNotification.title,
+            `[${sessionTitle}] ${goalNotification.body}`,
+            store.get(notificationsEnabledAtom),
+            {
+              playSound: false,
+              onNavigate: makeNavigateToSession(event.sessionId, sessionTitle),
+            }
+          )
         }
       }
     })
@@ -1256,6 +1316,33 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
               event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
               'permissionRequest'
             )
+          } else if (event.type === 'goal_proposal') {
+            // 模型提议建立 Goal：不阻塞当前轮，只排队等用户确认。
+            store.set(allPendingGoalProposalsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              if (current.some((item) => item.id === event.proposal.id)) return prev
+              map.set(sessionId, [...current, event.proposal])
+              return map
+            })
+            // 提议不阻塞当前轮：只在应用不在前台时提醒，避免用户在会话里被系统通知+提示音打扰。
+            const proposalEnabled = store.get(notificationsEnabledAtom)
+            const proposalSessionTitle = getSessionTitle(sessionId)
+            sendDesktopNotification(
+              '建议建立 Goal',
+              `[${proposalSessionTitle}] ${event.proposal.objective}`,
+              proposalEnabled,
+              { playSound: false, onNavigate: makeNavigateToSession(sessionId, proposalSessionTitle) }
+            )
+          } else if (event.type === 'goal_proposal_resolved') {
+            store.set(allPendingGoalProposalsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              const next = current.filter((item) => item.id !== event.proposalId)
+              if (next.length > 0) map.set(sessionId, next)
+              else map.delete(sessionId)
+              return map
+            })
           } else if (event.type === 'ask_user_resolved') {
             // AskUser 已解决：从队列移除对应请求（双端在线时，另一端回答后也必须清理本地队列，
             // 否则 AskUserBanner 永远显示残留的最旧请求 → 回答发旧 requestId → “提问请求不存在”）。

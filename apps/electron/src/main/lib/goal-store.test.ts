@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GOAL_LIFECYCLE_LIMIT, createGoalLifecycleEvent } from '@profer/shared'
 import type { AgentGoalLifecycleEvent, AgentGoalReasonCode, AgentGoalState, AgentGoalStatus } from '@profer/shared'
-import { archiveGoalState, loadGoalHistory, loadGoalStates, saveGoalStates } from './goal-store'
+import { archiveGoalState, loadGoalHistory, loadGoalOverview, loadGoalStates, saveGoalStates } from './goal-store'
 import { createGoalState, DEFAULT_GOAL_LIMITS } from './goal-loop'
 
 function lifecycleGoal(): AgentGoalState & { lifecycle: AgentGoalLifecycleEvent[] } {
@@ -365,6 +365,39 @@ describe('Goal v2 存储故障保护', () => {
       const invalid = { ...goal, lifecycle: goal.lifecycle.map((event) => ({ ...event, at: Number.MAX_SAFE_INTEGER })) }
       expect(() => saveGoalStates(file, [invalid])).toThrow('schema')
       expect(readFileSync(file, 'utf8')).toBe(original)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+describe('Goal 跨会话总览', () => {
+  test('活跃槽位与归档分开返回，同一 Goal 以活跃槽位为准并按更新时间排序', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'goal-overview-'))
+    try {
+      const file = join(dir, 'goals.json')
+      const live = { ...createGoalState('session-live', '活跃目标', 1_000), updatedAt: 2_000 }
+      const archivedOld = { ...createGoalState('session-old', '旧目标', 100), status: 'completed' as const, updatedAt: 500 }
+      const archivedNew = { ...createGoalState('session-new', '新目标', 200), status: 'failed' as const, updatedAt: 900 }
+      saveGoalStates(file, [live])
+      archiveGoalState(file, archivedOld)
+      archiveGoalState(file, archivedNew)
+      // 归档里残留同一 id 时不能重复出现在历史里
+      archiveGoalState(file, live)
+
+      const overview = loadGoalOverview(file)
+      expect(overview.live.map((item) => item.id)).toEqual([live.id])
+      expect(overview.history.map((item) => item.id)).toEqual([archivedNew.id, archivedOld.id])
+      expect(overview.history[0]?.status).toBe('failed')
+      expect(loadGoalOverview(file, 1).history).toHaveLength(1)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('文件不存在或损坏时返回空总览，不抛错', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'goal-overview-'))
+    try {
+      const file = join(dir, 'goals.json')
+      expect(loadGoalOverview(file)).toEqual({ live: [], history: [] })
+      writeFileSync(file, '{broken')
+      expect(loadGoalOverview(file)).toEqual({ live: [], history: [] })
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

@@ -619,3 +619,100 @@ describe('GoalController v2 生命周期审计', () => {
     expect(h.controller.get('s')).toMatchObject({ status: 'completed', waiting: undefined })
   })
 })
+
+describe('GoalController 空闲自检', () => {
+  const idleConfig = { intervalMs: 30 * 60_000, maxCount: 3 }
+
+  test('轮次结束后不立即续跑，而是按间隔安排空闲唤醒并计数', async () => {
+    const runs: Array<{ iteration: number; idle?: boolean }> = []
+    const h = controlledGoalHarness({
+      idleCheckin: () => idleConfig,
+      runTurn: async ({ state, idleCheckin }) => { runs.push({ iteration: state.iteration, idle: idleCheckin }); return { status: 'continue', summary: '继续', evidence: [] } },
+    })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    expect(runs).toEqual([{ iteration: 1, idle: false }])
+    // 第一轮结束后不再排队立即执行，而是等 30 分钟
+    const pending = [...h.scheduled.values()]
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.delay).toBe(idleConfig.intervalMs)
+    expect(h.controller.get('s')?.idleCheckin).toMatchObject({ count: 0 })
+    expect(h.controller.get('s')?.idleCheckin?.nextAt).toBe(1000 + idleConfig.intervalMs)
+
+    await h.dispatch()
+    expect(runs[1]).toEqual({ iteration: 2, idle: true })
+    expect(h.controller.get('s')?.idleCheckin?.count).toBe(1)
+  })
+
+  test('连续空闲唤醒达到上限后不再安排，状态标记 paused；用户回来发消息后清零恢复', async () => {
+    const runs: boolean[] = []
+    const h = controlledGoalHarness({
+      idleCheckin: () => idleConfig,
+      runTurn: async ({ idleCheckin }) => { runs.push(idleCheckin === true); return { status: 'continue', summary: '继续', evidence: [] } },
+    })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    for (let index = 0; index < idleConfig.maxCount; index++) await h.dispatch()
+    expect(runs.filter(Boolean)).toHaveLength(idleConfig.maxCount)
+    expect(h.controller.get('s')?.idleCheckin).toMatchObject({ count: idleConfig.maxCount, paused: true })
+    expect(h.scheduled.size).toBe(0)
+    expect(h.controller.get('s')?.status).toBe('active')
+
+    h.controller.noteUserActivity('s')
+    expect(h.controller.get('s')?.idleCheckin).toEqual({ count: 0 })
+    // 必须真的重新排程：只清计数会让 Goal 永远停在 active 且没有下一轮（发消息也不恢复）。
+    const resumed = [...h.scheduled.values()]
+    expect(resumed).toHaveLength(1)
+    expect(resumed[0]?.delay).toBe(0)
+  })
+
+  test('空闲等待中用户发消息会取消剩余倒计时并立即续跑', async () => {
+    const h = controlledGoalHarness({ idleCheckin: () => idleConfig })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    expect([...h.scheduled.values()][0]?.delay).toBe(idleConfig.intervalMs)
+
+    h.controller.noteUserActivity('s')
+    expect([...h.scheduled.values()].map((entry) => entry.delay)).toEqual([0])
+    expect(h.controller.get('s')?.idleCheckin).toEqual({ count: 0 })
+  })
+
+  test('手动暂停再恢复会清掉空闲计数，不会刚恢复就再次撞上限', async () => {
+    const h = controlledGoalHarness({ idleCheckin: () => idleConfig })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    for (let index = 0; index < idleConfig.maxCount; index++) await h.dispatch()
+    expect(h.controller.get('s')?.idleCheckin).toMatchObject({ count: idleConfig.maxCount, paused: true })
+
+    await h.controller.pause('s')
+    await h.controller.resume('s')
+    expect(h.controller.get('s')?.idleCheckin).toEqual({ count: 0 })
+    expect([...h.scheduled.values()].map((entry) => entry.delay)).toEqual([0])
+  })
+
+  test('未配置空闲自检时保持立即续跑（原行为不变）', async () => {
+    let runs = 0
+    const h = controlledGoalHarness({ runTurn: async () => { runs++; return { status: 'continue', summary: '继续', evidence: [] } } })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    expect(runs).toBe(1)
+    expect([...h.scheduled.values()][0]?.delay).toBe(0)
+    expect(h.controller.get('s')?.idleCheckin).toBeUndefined()
+  })
+
+  test('配置为 0 分钟视为关闭', async () => {
+    const h = controlledGoalHarness({ idleCheckin: () => ({ intervalMs: 0, maxCount: 3 }) })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    expect([...h.scheduled.values()][0]?.delay).toBe(0)
+  })
+
+  test('暂停后不会因为残留排程被重新拉起', async () => {
+    const h = controlledGoalHarness({ idleCheckin: () => idleConfig })
+    await h.controller.start('s', '目标')
+    await h.dispatch()
+    await h.controller.pause('s')
+    expect(h.controller.get('s')?.status).toBe('paused')
+    expect(h.scheduled.size).toBe(0)
+  })
+})

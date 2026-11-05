@@ -18,6 +18,8 @@ type GoalControllerDependencies = {
     previousSummary?: string
     runtimeSessionId?: string
     onRuntimeSessionId: (sdkSessionId: string, sessionFile?: string) => void
+    /** 本轮由空闲自检唤醒（无人值守），用于在提示词里说明触发原因。 */
+    idleCheckin?: boolean
   }) => Promise<AgentGoalIterationResult>
   stopTurn: (sessionId: string, runId?: string) => Promise<void>
   onStateChange?: (state: AgentGoalState) => void
@@ -33,6 +35,8 @@ type GoalControllerDependencies = {
   setTimer?: (callback: () => void, delay: number) => TimerHandle
   clearTimer?: (handle: TimerHandle) => void
   stopTimeoutMs?: number
+  /** 空闲自检配置；返回 undefined 表示关闭。 */
+  idleCheckin?: () => { intervalMs: number; maxCount: number } | undefined
 }
 
 type Runtime = {
@@ -42,6 +46,8 @@ type Runtime = {
   scheduleEpoch: number
   activeRun?: { runId: string; iteration: number; startedAt: number; baseElapsedMs: number }
   stopping: boolean
+  /** 本轮是否由空闲自检触发；用于区分「用户发消息续上」与「无人值守唤醒」。 */
+  idleCheckinTurn?: boolean
 }
 
 const RETRY_DELAY_MS = 250
@@ -49,6 +55,9 @@ const RETRY_DELAY_MS = 250
 const WAITING_FALLBACK_POLL_MS = 30_000
 /** 可重试错误的退避间隔（对齐 Claude Code：1 / 5 / 15 分钟，±20% 抖动）。 */
 export const GOAL_ERROR_RETRY_DELAYS_MS = [60_000, 300_000, 900_000] as const
+/** 空闲自检默认值（对齐 Claude Code：30 分钟一次，连续 3 次后暂停等用户）。 */
+export const DEFAULT_GOAL_IDLE_CHECKIN_MINUTES = 30
+export const DEFAULT_GOAL_IDLE_CHECKIN_MAX_COUNT = 3
 
 export class GoalController {
   private readonly runtimes = new Map<string, Runtime>()
@@ -128,6 +137,23 @@ export class GoalController {
     this.scheduleNext(sessionId, runtime, 0)
   }
 
+  /**
+   * 用户在该会话发起了新的输入：取消残留的空闲唤醒、清零计数，并立即续跑下一轮。
+   * 由 GoalSessionService 在 onRunFinished 里调用（此时用户这一轮已经结束，不会抢占 owner）。
+   * 这也是「发消息即可继续」的唯一实现：达到空闲上限后 Goal 状态仍是 active，
+   * 没有排程，必须在这里主动重新排程，否则只能靠 /goal pause + resume 才能救回来。
+   */
+  noteUserActivity(sessionId: string): void {
+    const runtime = this.runtimes.get(sessionId)
+    if (!runtime || runtime.state.status !== 'active' || runtime.activeRun || runtime.stopping) return
+    if (!runtime.state.idleCheckin) return
+    this.cancelPending(runtime)
+    runtime.state = { ...runtime.state, idleCheckin: { count: 0 }, revision: (runtime.state.revision ?? 0) + 1, updatedAt: this.now() }
+    this.emit(runtime.state)
+    // 用户回来就意味着「不再空闲」：不再等剩余倒计时，直接进入下一轮。
+    this.scheduleNext(sessionId, runtime, 0)
+  }
+
   /** 用户中断当前轮：只暂停，用户再发消息即可自动续上。 */
   async pauseForInterrupt(sessionId: string): Promise<AgentGoalState> {
     return this.requestStop(sessionId, 'paused', 'user_interrupt')
@@ -146,7 +172,13 @@ export class GoalController {
     }
     runtime.stopping = false
     runtime.generation++
-    runtime.state = { ...runtime.state, consecutiveFailures: 0, retry: undefined }
+    runtime.state = {
+      ...runtime.state,
+      consecutiveFailures: 0,
+      retry: undefined,
+      // 手动恢复同样视为「用户回来了」：清掉空闲自检计数，避免刚恢复就再次撞上限。
+      ...(runtime.state.idleCheckin ? { idleCheckin: { count: 0 } } : {}),
+    }
     this.transition(runtime, 'active', undefined)
     this.scheduleNext(sessionId, runtime, 0)
     return runtime.state
@@ -236,15 +268,24 @@ export class GoalController {
     }
   }
 
-  private scheduleNext(sessionId: string, runtime: Runtime, delay: number): void {
+  private scheduleNext(sessionId: string, runtime: Runtime, delay: number, idleCheckin = false): void {
     const generation = runtime.generation
     const scheduleEpoch = ++runtime.scheduleEpoch
+    runtime.idleCheckinTurn = idleCheckin
     runtime.schedule = this.schedule(() => {
       if (this.runtimes.get(sessionId) !== runtime || runtime.generation !== generation || runtime.scheduleEpoch !== scheduleEpoch) return
       runtime.schedule = undefined
       runtime.scheduleEpoch++
+      if (idleCheckin) this.markIdleCheckinFired(runtime)
       void this.runTurn(sessionId, runtime, generation)
     }, delay)
+  }
+
+  /** 空闲唤醒真正触发时计数 +1，并清掉倒计时（状态栏据此显示「第 N 次空闲自检」）。 */
+  private markIdleCheckinFired(runtime: Runtime): void {
+    const previous = runtime.state.idleCheckin ?? { count: 0 }
+    runtime.state = { ...runtime.state, idleCheckin: { count: previous.count + 1, paused: false }, revision: (runtime.state.revision ?? 0) + 1, updatedAt: this.now() }
+    this.emit(runtime.state)
   }
 
   private async runTurn(sessionId: string, runtime: Runtime, generation: number): Promise<void> {
@@ -258,6 +299,8 @@ export class GoalController {
     if (waiting) { this.scheduleNext(sessionId, runtime, WAITING_FALLBACK_POLL_MS); return }
     const budget = goalBudgetReason(runtime.state)
     if (budget) { this.transition(runtime, 'budget_limited', budget); return }
+    const idleCheckinTurn = runtime.idleCheckinTurn === true
+    runtime.idleCheckinTurn = false
     const iteration = runtime.state.iteration + 1
     const runId = crypto.randomUUID()
     const turnStartedAt = this.now()
@@ -273,6 +316,7 @@ export class GoalController {
         previousSummary: runtime.state.lastSummary,
         // 仅保留旧调用方的兼容接口；同会话 Goal 不用此 ID 创建独立上下文。
         runtimeSessionId: runtime.state.runtimeSessionId,
+        idleCheckin: idleCheckinTurn,
         onRuntimeSessionId: (id, file) => {
           if (this.runtimes.get(sessionId) !== runtime || runtime.generation !== generation || runtime.activeRun?.runId !== runId || runtime.stopping || runtime.state.status !== 'active') return
           runtime.state = {
@@ -359,7 +403,32 @@ export class GoalController {
       updatedAt: Math.max(finishedAt, transitioned.updatedAt),
     }
     this.emit(runtime.state)
-    if (decision.action === 'continue' && !runtime.stopping) this.scheduleNext(sessionId, runtime, 0)
+    if (decision.action === 'continue' && !runtime.stopping) this.scheduleIdleCheckin(sessionId, runtime)
+  }
+
+  /**
+   * 一轮结束后安排下一轮：默认立即续跑（Goal 的常规节奏）；
+   * 配置了空闲自检时改为隔一段时间再唤醒，给用户插话与查看结果的机会。
+   * 连续空闲唤醒达到上限后不再安排，等用户发消息（对齐 Claude Code）。
+   */
+  private scheduleIdleCheckin(sessionId: string, runtime: Runtime): void {
+    // 用户中断 / 发消息触发的暂停不走这里；但外部调用 nudge 或恢复后仍可能落到这里，
+    // 此时若 Goal 已不是 active，直接放弃排程，避免把已停下的目标重新拉起。
+    if (runtime.state.status !== 'active' || runtime.stopping) return
+    const config = this.deps.idleCheckin?.()
+    if (!config || config.intervalMs <= 0) { this.scheduleNext(sessionId, runtime, 0); return }
+    const previous = runtime.state.idleCheckin ?? { count: 0 }
+    if (previous.count >= config.maxCount) {
+      if (!previous.paused) {
+        runtime.state = { ...runtime.state, idleCheckin: { ...previous, nextAt: undefined, paused: true }, revision: (runtime.state.revision ?? 0) + 1, updatedAt: this.now() }
+        this.emit(runtime.state)
+      }
+      return
+    }
+    const nextAt = this.now() + config.intervalMs
+    runtime.state = { ...runtime.state, idleCheckin: { count: previous.count, nextAt, paused: false }, revision: (runtime.state.revision ?? 0) + 1, updatedAt: this.now() }
+    this.emit(runtime.state)
+    this.scheduleNext(sessionId, runtime, config.intervalMs, true)
   }
 
   /** 运行级错误不计入无进展：可重试的按退避重排，用尽或不可恢复则暂停等用户处理。 */

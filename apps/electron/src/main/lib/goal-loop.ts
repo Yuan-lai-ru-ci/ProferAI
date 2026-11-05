@@ -35,8 +35,8 @@ function describeRemainingBudget(state: Pick<AgentGoalState, 'iteration' | 'elap
  * 注入目标契约与剩余预算，让 Agent 在明确的验收标准与边界内工作。
  */
 export function buildGoalIterationPrompt(
-  state: Pick<AgentGoalState, 'goal' | 'contract' | 'iteration' | 'limits' | 'startedAt' | 'history' | 'elapsedMs' | 'usage'>,
-  input: { previousSummary?: string; now?: number },
+  state: Pick<AgentGoalState, 'goal' | 'contract' | 'iteration' | 'limits' | 'startedAt' | 'history' | 'elapsedMs' | 'usage' | 'idleCheckin'>,
+  input: { previousSummary?: string; now?: number; idleCheckin?: boolean },
 ): string {
   // 调用方在进入本轮前已经自增轮次；暂停与空闲时间不消耗预算。
   const displayIteration = Math.max(1, state.iteration)
@@ -48,6 +48,12 @@ export function buildGoalIterationPrompt(
   if (state.contract?.stopWhen) lines.push(`停止条件（stop）：${state.contract.stopWhen}`)
   const remaining = describeRemainingBudget(state)
   lines.push(`这是第 ${displayIteration} 轮。${remaining ? `剩余预算：${remaining}。` : ''}不得缩小目标来迎合预算。`)
+  if (input.idleCheckin) {
+    lines.push(
+      `本轮由空闲自检唤醒（第 ${state.idleCheckin?.count ?? 1} 次）：用户在你上一轮结束后没有发新消息。`,
+      '先确认上一轮之后外部状态有没有变化（文件、进程、任务结果），再决定继续推进还是如实说明卡点；不要因为没人说话就重复已经做过的工作。',
+    )
+  }
   if (input.previousSummary) lines.push(`上一轮摘要：${input.previousSummary}`)
   const recentHistory = (state.history ?? []).slice(-3)
   if (recentHistory.length > 0) {
@@ -64,6 +70,7 @@ export function buildGoalIterationPrompt(
         : '完成判定：请先为这个目标拟定可验证的验收标准，后续轮次以证据满足它为准。',
       '完成前逐项核对原目标与验收标准：列出每项要求、实际证据、尚未完成的部分；证据不足就继续做，不得只用本轮局部成功代表整个目标完成。',
       '汇报方式：目标逐项验收完成时调用 update_goal(status=complete, summary, evidence)，evidence 必须是真实证据；确实需要用户输入或外部状态变化才能继续时调用 update_goal(status=blocked) 并说明缺口与恢复条件。其余情况正常结束本轮即可，宿主会自动开始下一轮；连续无进展会被宿主停止。update_goal 是内部控制通道，不要在普通回复中输出 XML/JSON 协议。',
+      '边界：如果你发现这件事其实是另一个多轮目标，不要自己扩大当前目标的范围，也不要重复已经完成的部分；用 update_goal(status=blocked) 说明「需要另开目标」的原因，由用户决定是否新建。',
     ].join('\n'),
   )
   if (isGoalNearBudget(state)) {

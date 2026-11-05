@@ -280,6 +280,20 @@ export interface AppSettings {
   manualReadConfirmEnabled?: boolean
   /** 是否启用通知提示音（阻塞 Hook 触发时播放） */
   notificationSoundEnabled?: boolean
+  /**
+   * Goal 空闲自检间隔（分钟）。轮次结束后没有新输入时，宿主隔这么久自动续跑一轮；
+   * 0 = 关闭（默认）。开启后建议按无人值守场景设置，普通交互不需要它。
+   */
+  goalIdleCheckinMinutes?: number
+  /** 连续空闲自检次数上限；达到后不再自动唤醒，用户发消息会清零并立即续跑。默认 3。 */
+  goalIdleCheckinMaxCount?: number
+  /**
+   * 模型主动提议建立 Goal 的策略：
+   * - `alwaysAsk`（默认）：模型提议后要你确认；
+   * - `auto`：模型提议后直接创建 Goal；
+   * - `disabled`：不给模型这个工具。
+   */
+  goalProposalPolicy?: import('@profer/shared').GoalProposalPolicy
   /** 各场景通知音选择 */
   notificationSounds?: NotificationSoundSettings
   /** 用户添加的自定义通知音 */

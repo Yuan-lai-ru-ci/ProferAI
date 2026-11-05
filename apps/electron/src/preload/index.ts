@@ -892,6 +892,11 @@ export interface ElectronAPI {
   updateGoal: (sessionId: string, patch: { goal?: string; contract?: import('@profer/shared').AgentGoalContract; limits?: import('@profer/shared').AgentGoalLimitsPatch }) => Promise<import('@profer/shared').AgentGoalState>
   getGoalHistory: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState[]>
   listGoals: () => Promise<import('@profer/shared').AgentGoalState[]>
+  /** 跨会话 Goal 总览（活跃 + 最近归档，带会话标题） */
+  getGoalOverview: () => Promise<import('@profer/shared').AgentGoalOverview>
+  /** 模型主动提议建立 Goal：列出待确认提议 / 批准或忽略 */
+  listGoalProposals: () => Promise<import('@profer/shared').GoalProposal[]>
+  respondGoalProposal: (proposalId: string, accepted: boolean) => Promise<boolean>
   pauseGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState>
   resumeGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState>
   stopGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState>
@@ -2653,6 +2658,9 @@ const electronAPI: ElectronAPI = {
   updateGoal: (sessionId, patch) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_GOAL, sessionId, patch),
   getGoalHistory: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GOAL_HISTORY, sessionId),
   listGoals: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_GOALS),
+  getGoalOverview: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GOAL_OVERVIEW),
+  listGoalProposals: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_GOAL_PROPOSALS),
+  respondGoalProposal: (proposalId: string, accepted: boolean) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESPOND_GOAL_PROPOSAL, proposalId, accepted),
   pauseGoal: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PAUSE_GOAL, sessionId),
   resumeGoal: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESUME_GOAL, sessionId),
   stopGoal: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.STOP_GOAL, sessionId),

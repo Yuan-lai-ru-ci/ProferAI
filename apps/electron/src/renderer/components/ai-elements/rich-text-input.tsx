@@ -40,9 +40,10 @@ import {
 import { useWindowInnerHeight } from '@/hooks/use-window-inner-height'
 import { createFileMentionSuggestion } from '@/components/file-browser/file-mention-suggestion'
 import { createSkillMentionSuggestion, createMcpMentionSuggestion, createSessionMentionSuggestion } from '@/components/agent/mention-suggestions'
+import { createGoalCommandSuggestion } from '@/components/agent/goal-command-suggestion'
 import { shouldConvertClipboardTextToAttachment } from '@/lib/clipboard-text-attachment'
-type FilePanelDragItem = { path: string; name: string; isDirectory?: boolean }
 import { getSessionReferenceDragData, type SessionReferenceDragItem } from '@/lib/session-reference-drag'
+import { getFileReferenceDragData, type FileReferenceDragItem } from '@/lib/file-reference-drag'
 import {
   VOICE_DICTATION_INSERT_EVENT,
   getLastFocusedVoiceInputId,
@@ -204,7 +205,7 @@ interface RichTextInputProps {
 /** RichTextInput 对外暴露的命令接口。 */
 export interface RichTextInputHandle {
   getMarkdown: () => string
-  insertFileMentions: (items: FilePanelDragItem[]) => void
+  insertFileMentions: (items: FileReferenceDragItem[]) => void
   insertSessionMention: (item: SessionReferenceDragItem) => boolean
   /** 在光标处插入纯文本（手写识别结果回填用） */
   insertText: (text: string) => boolean
@@ -353,6 +354,12 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
     [],
   )
 
+  // Goal 命令提示（/ 触发，仅 `/goal…` 生效；与 Skill 补全互斥）
+  const goalSuggestion = useMemo(
+    () => createGoalCommandSuggestion(mentionActiveRef, mentionItemCountRef),
+    [],
+  )
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -428,6 +435,7 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           },
           suggestions: [
             mentionSuggestion,
+            goalSuggestion,
             skillSuggestion,
             mcpSuggestion,
             sessionSuggestion,
@@ -442,7 +450,12 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
     editorProps: {
       // 自定义拖拽载荷由 Agent 外层处理，避免 text/plain 兜底内容被 ProseMirror 当成普通文本插入。
       handleDrop: (_view, event) => {
+        // 会话引用 / 文件引用载荷由 Agent 外层统一插入胶囊，这里只拦住默认的纯文本插入。
         if (event.dataTransfer && getSessionReferenceDragData(event.dataTransfer)) {
+          event.preventDefault()
+          return true
+        }
+        if (event.dataTransfer && getFileReferenceDragData(event.dataTransfer)) {
           event.preventDefault()
           return true
         }
@@ -890,7 +903,7 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
   useImperativeHandle(ref, () => ({
     getMarkdown: () => htmlToMarkdown(editor?.getHTML() ?? ''),
     insertFileMentions: (items) => {
-      if (!editor || items.length === 0) return
+      if (!editor || editor.isDestroyed || !editor.isEditable || items.length === 0) return
       let chain = editor.chain().focus()
       for (const item of items) {
         chain = chain.insertContent({ type: 'mention', attrs: { id: item.path, label: item.name, mentionSuggestionChar: '@', isDirectory: item.isDirectory ?? false } }).insertContent(' ')

@@ -27,6 +27,8 @@ type Dependencies = {
   updateBlockedTodo: (id: string, status: 'open' | 'completed', notes: string) => void
   publish: (state: AgentGoalState) => void
   logError: (error: unknown) => void
+  /** 空闲自检配置（分钟/次数）；返回 undefined 或 0 分钟表示关闭。 */
+  idleCheckin?: () => { intervalMs: number; maxCount: number } | undefined
 }
 
 /** Goal 只读取当前轮 runtime usage；消息正文永远不能成为控制协议。 */
@@ -108,7 +110,7 @@ export class GoalSessionService {
     this.controller = new GoalController({
       canRun: (sessionId) => !deps.isSessionActive(sessionId),
       waitingReason: (sessionId) => deps.isPlanMode(sessionId) ? 'plan_mode' : undefined,
-      runTurn: async ({ sessionId, state, previousSummary, runId }) => {
+      runTurn: async ({ sessionId, state, previousSummary, runId, idleCheckin }) => {
         const session = deps.getSession(sessionId)
         if (!session?.channelId) throw new Error('Goal 会话缺少渠道配置')
         let report: AgentGoalIterationResult | undefined
@@ -122,7 +124,7 @@ export class GoalSessionService {
             permissionModeOverride: session.permissionMode,
             userMessage: state.goal,
             // 持久化的 user 消息带 _goalIteration 标记，只渲染为轮次分隔条；runtime 只收 internalPrompt。
-            internalPrompt: buildGoalIterationPrompt(state, { previousSummary }),
+            internalPrompt: buildGoalIterationPrompt(state, { previousSummary, idleCheckin }),
             triggeredBy: 'goal',
             goalIteration: state.iteration,
             goalRunId: runId,
@@ -152,6 +154,7 @@ export class GoalSessionService {
       stopTurn: (sessionId, runId) => runId ? deps.stopRun(sessionId, runId) : Promise.resolve(),
       onStateChange: (state) => this.onStateChange(state),
       onBeforeClear: (state) => this.archive(state),
+      idleCheckin: () => deps.idleCheckin?.(),
     })
   }
 
@@ -200,6 +203,8 @@ export class GoalSessionService {
    */
   async onRunFinished(sessionId: string, initiator: AgentRunInitiator | undefined): Promise<void> {
     if (initiator !== 'user' && initiator !== 'external') return
+    // 用户回来插话：空闲自检计数清零，恢复常规续跑节奏。
+    this.controller.noteUserActivity(sessionId)
     const goal = this.get(sessionId)
     if (!goal || goal.activeRunId || !isGoalResumableByMessage(goal)) return
     try { await this.controller.resume(sessionId) } catch (error) { this.deps.logError(error) }

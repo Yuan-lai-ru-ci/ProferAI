@@ -55,6 +55,7 @@ import {
   runAutomationNow,
 } from '../automation-scheduler'
 import { getAgentSessionMeta } from '../agent-session-manager'
+import { goalProposalService, normalizeGoalProposalInput } from '../goal-proposal-service'
 import {
   listAgentPresets,
   getDefaultPresetId,
@@ -168,6 +169,8 @@ export interface PiBuiltinToolsContext {
   currentPresetReference?: PresetReference
   /** 当前 Goal turn 的结构化结果回调，仅由 Goal 内部工具使用。 */
   reportGoalResult?: (result: import('@profer/shared').AgentGoalIterationResult) => void
+  /** 模型主动提议建立 Goal（非 Goal 轮次提供）。 */
+  goalProposal?: import('@profer/shared').AgentSendInput['goalProposal']
   goalIteration?: number
   /** 仅由 orchestrator 注入的当前用户原文，供目标预设意图绑定。 */
   presetOperationUserMessage?: string
@@ -501,6 +504,48 @@ export function buildPiGoalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'g
       const result = normalizeGoalToolResult(args)
       ctx.reportGoalResult?.(result)
       return jsonToolResult({ accepted: true, iteration: ctx.goalIteration, status: result.status })
+    },
+  }) as unknown as ToolDefinition]
+}
+
+// ===== Goal 提议工具 =====
+
+/**
+ * 模型主动提议建立 Goal（对齐 Claude Code 的 ProposeGoal）。
+ * 不阻塞当前轮：登记提议后立即返回，用户确认后由 Goal 控制器接管后续轮次。
+ */
+export function buildPiGoalProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'sessionId' | 'goalProposal'>): ToolDefinition[] {
+  const proposal = ctx.goalProposal
+  if (!proposal || proposal.policy === 'disabled' || proposal.hasActiveGoal || proposal.planMode) return []
+  return [sdk.defineTool({
+    name: 'propose_goal',
+    label: '提议建立 Goal',
+    description: '当这件事明显需要多轮持续执行（构建→验证→迭代），而且这一轮做不完时，向用户提议建立一个 Goal。用户确认后才会创建；本工具不会自己启动 Goal，也不阻塞当前轮。',
+    promptSnippet: 'propose_goal: propose creating a long-running Goal for this session',
+    parameters: {
+      objective: { type: 'string', description: '一句话可执行的目标' },
+      rationale: { type: 'string', description: '为什么需要多轮持续执行，而不是这一轮做完' },
+      verification: { type: 'string', description: '可验证的验收标准', optional: true },
+      constraints: { type: 'string', description: '必须遵守的约束', optional: true },
+      stopWhen: { type: 'string', description: '什么情况下应该停下来问用户', optional: true },
+    },
+    execute: async (params: unknown) => {
+      const args = params as { objective: unknown; rationale?: unknown; verification?: unknown; constraints?: unknown; stopWhen?: unknown }
+      const normalized = normalizeGoalProposalInput(args)
+      if (!normalized) return jsonToolResult({ accepted: false, reason: 'objective 不能为空' })
+      // 与 Claude 路径同口径：同会话已有待确认提议时不再入队，避免弹多张重复卡片。
+      if (goalProposalService.hasPending(ctx.sessionId)) {
+        return jsonToolResult({ accepted: false, reason: '该会话已有待确认的 Goal 提议，等待用户确认后再提议' })
+      }
+      const created = goalProposalService.add(ctx.sessionId, args)
+      if (!created) return jsonToolResult({ accepted: false, reason: 'objective 不能为空' })
+      proposal.onPropose(created.proposal, created.contract)
+      return jsonToolResult({
+        accepted: true,
+        proposalId: created.proposal.id,
+        policy: proposal.policy,
+        note: proposal.policy === 'auto' ? '已直接创建 Goal，后续轮次由 Goal 控制器接管' : '已提交给用户确认，先继续完成当前这一轮',
+      })
     },
   }) as unknown as ToolDefinition]
 }
@@ -1664,6 +1709,8 @@ export async function buildPiBuiltinTools(
 
   if (ctx.reportGoalResult) {
     tools.push(...buildPiGoalTools(sdk, ctx))
+  } else if (ctx.goalProposal) {
+    tools.push(...buildPiGoalProposalTools(sdk, ctx))
   }
 
   if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'image')) {

@@ -744,6 +744,8 @@ export async function runAgent(
   }
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   registerWebContents(input.sessionId, webContents)
+  // Goal 提议事件可能在本轮结束后才发（用户稍后确认），上面已绑定窗口，
+  // 这里不再重复注册；保留注释说明绑定顺序对提议同样必需。
   // 被 active-run 并发保护拒绝的请求不能清空已有 run 的恢复记录。
   if (!isAgentExecutionActive(input.sessionId)) {
     beginActiveStreamBacklog(input.sessionId)
@@ -1002,6 +1004,8 @@ function canUseRuntimeHeadless(input: AgentSendInput): boolean {
   return process.env.PROFER_RUNTIME_HEADLESS === '1'
     && !input.goalRunId
     && !input.reportGoalResult
+    // Goal 提议需要宿主回调，headless 路径不承载。
+    && !input.goalProposal
     && !input.onRuntimeSessionId
     && !input.onRuntimeMessage
 }

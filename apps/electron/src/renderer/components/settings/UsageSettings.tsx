@@ -54,6 +54,11 @@ import {
   getAllNotificationSounds,
   BUILTIN_NOTIFICATION_SOUNDS,
   DEFAULT_NOTIFICATION_SOUNDS,
+  goalIdleCheckinMinutesAtom,
+  goalIdleCheckinMaxCountAtom,
+  updateGoalIdleCheckin,
+  goalProposalPolicyAtom,
+  updateGoalProposalPolicy,
 } from '@/atoms/notifications'
 import type { NotificationSoundMeta } from '@/atoms/notifications'
 import {
@@ -434,6 +439,8 @@ export function UsageSettings(): React.ReactElement {
               updateNotificationsEnabled(checked)
             }}
           />
+          <GoalIdleCheckinSetting />
+          <GoalProposalPolicySetting />
           <SettingsToggle
             label="通知提示音"
             description="阻塞操作（权限确认、问题回答、计划审批）触发时播放提示音"
@@ -999,6 +1006,106 @@ function SmoothScrollDiagnostics({ enabled, force }: { enabled: boolean; force: 
       <p className="text-muted-foreground">
         一直显示「像素 · 未接管」= 当前设备是触控板或高精度滚轮，这类输入本身连续，会直通原生。
       </p>
+    </div>
+  )
+}
+
+
+/**
+ * Goal 空闲自检：轮次结束后没有新输入时，隔一段时间自动续跑一轮。
+ * 与 Claude Code 的 idle check-in 同口径：默认 30 分钟、连续 3 次后暂停等用户。
+ * 调度在主进程按同一份 settings 执行，这里只负责配置与回显。
+ */
+function GoalIdleCheckinSetting(): React.ReactElement {
+  const [minutes, setMinutes] = useAtom(goalIdleCheckinMinutesAtom)
+  const [maxCount, setMaxCount] = useAtom(goalIdleCheckinMaxCountAtom)
+  const [minutesDraft, setMinutesDraft] = React.useState(String(minutes))
+  const [maxDraft, setMaxDraft] = React.useState(String(maxCount))
+  React.useEffect(() => { setMinutesDraft(String(minutes)) }, [minutes])
+  React.useEffect(() => { setMaxDraft(String(maxCount)) }, [maxCount])
+
+  const commit = (rawMinutes: string, rawMax: string): void => {
+    const parsedMinutes = Number(rawMinutes)
+    const parsedMax = Number(rawMax)
+    const nextMinutes = Number.isFinite(parsedMinutes) && parsedMinutes >= 0
+      ? Math.min(Math.round(parsedMinutes), 7 * 24 * 60)
+      : minutes
+    const nextMax = Number.isFinite(parsedMax) && parsedMax >= 1
+      ? Math.min(Math.round(parsedMax), 50)
+      : maxCount
+    setMinutes(nextMinutes)
+    setMaxCount(nextMax)
+    void updateGoalIdleCheckin(nextMinutes, nextMax)
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-b border-border/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">Goal 空闲自检</p>
+        <p className="text-xs text-muted-foreground">默认关闭（0 分钟）。开启后，Goal 一轮结束后如果你没有发消息，隔一段时间自动继续；连续达到次数上限后停下等你，你发消息会清零计数并立即续跑。</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2 text-xs">
+        <label htmlFor="goal-idle-checkin-minutes" className="flex items-center gap-1">
+          每
+          <Input
+            id="goal-idle-checkin-minutes"
+            aria-label="空闲自检间隔（分钟）"
+            inputMode="numeric"
+            className="h-8 w-14 text-center"
+            value={minutesDraft}
+            onChange={(event) => setMinutesDraft(event.target.value.replace(/[^0-9]/g, ''))}
+            onBlur={() => commit(minutesDraft, maxDraft)}
+          />
+          分钟
+        </label>
+        <label htmlFor="goal-idle-checkin-max-count" className="flex items-center gap-1">
+          最多
+          <Input
+            id="goal-idle-checkin-max-count"
+            aria-label="空闲自检次数上限"
+            inputMode="numeric"
+            className="h-8 w-12 text-center"
+            value={maxDraft}
+            onChange={(event) => setMaxDraft(event.target.value.replace(/[^0-9]/g, ''))}
+            onBlur={() => commit(minutesDraft, maxDraft)}
+          />
+          次
+        </label>
+      </div>
+    </div>
+  )
+}
+
+
+/**
+ * 模型主动提议建立 Goal 的策略。
+ * alwaysAsk：模型提议后要用户点确认（默认）；auto：直接创建；disabled：不给模型这个工具。
+ */
+function GoalProposalPolicySetting(): React.ReactElement {
+  const [policy, setPolicy] = useAtom(goalProposalPolicyAtom)
+  return (
+    <div className="flex flex-col gap-2 border-b border-border/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">模型提议建立 Goal</p>
+        <p className="text-xs text-muted-foreground">长任务里模型发现「这需要多轮持续执行」时，可以建议建立一个 Goal。提议不会打断当前这一轮。</p>
+      </div>
+      <Select
+        value={policy}
+        onValueChange={(value) => {
+          const next = value as import('@profer/shared').GoalProposalPolicy
+          setPolicy(next)
+          void updateGoalProposalPolicy(next)
+        }}
+      >
+        <SelectTrigger aria-label="模型提议建立 Goal" className="h-8 w-[150px] text-[13px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="alwaysAsk">先问我</SelectItem>
+          <SelectItem value="auto">直接建立</SelectItem>
+          <SelectItem value="disabled">关闭</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
   )
 }

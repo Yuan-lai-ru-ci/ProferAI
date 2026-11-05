@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { capGoalLifecycle, GOAL_REASON_CODES, GOAL_STATUSES, isGoalTransitionAllowed, isValidGoalLimits, normalizeGoalReason } from '@profer/shared'
+import { capGoalLifecycle, GOAL_OVERVIEW_HISTORY_LIMIT, GOAL_REASON_CODES, GOAL_STATUSES, isGoalTransitionAllowed, isValidGoalLimits, normalizeGoalReason } from '@profer/shared'
 import type { AgentGoalState, AgentGoalStatus, AgentGoalReasonCode, AgentGoalIterationRecord, AgentGoalUsage } from '@profer/shared'
 import { GOAL_HISTORY_LIMIT } from './goal-loop'
 
@@ -65,6 +65,12 @@ function isGoalState(value: unknown): value is AgentGoalState {
   if (value.reasonCode !== undefined && !validReason(value.reasonCode)) return false
   if (value.elapsedMs !== undefined && !nonNegativeInteger(value.elapsedMs)) return false
   if (value.usage !== undefined && !validUsage(value.usage)) return false
+  if (value.idleCheckin !== undefined) {
+    const idle = value.idleCheckin
+    if (!record(idle) || !nonNegativeInteger(idle.count)) return false
+    if (idle.nextAt !== undefined && !validTimestamp(idle.nextAt)) return false
+    if (idle.paused !== undefined && typeof idle.paused !== 'boolean') return false
+  }
   if (value.history !== undefined && (!Array.isArray(value.history) || !value.history.every(validHistoryRecord))) return false
   if (value.lastEvidence !== undefined && !evidence(value.lastEvidence)) return false
   for (const key of ['activeRunId', 'runtimeSessionId', 'runtimeSessionFile', 'blockedTodoId', 'lastSummary', 'stopReason', 'reasonDetail']) {
@@ -113,6 +119,27 @@ export function loadGoalHistory(filePath: string, sessionId?: string): AgentGoal
   const payload = readPayload(filePath)
   if (!payload?.history) return []
   return payload.history.filter(isGoalState).map(sanitize).filter((state) => sessionId === undefined || state.sessionId === sessionId)
+}
+
+/**
+ * 跨会话 Goal 总览：活跃槽位 + 最近归档。
+ * 同一 Goal id 以活跃槽位为准（归档可能滞后）；归档按结束时间倒序并截断。
+ */
+export function loadGoalOverview(
+  filePath: string,
+  limit = GOAL_OVERVIEW_HISTORY_LIMIT,
+): { live: AgentGoalState[]; history: AgentGoalState[] } {
+  const payload = readPayload(filePath)
+  if (!payload) return { live: [], history: [] }
+  const live = payload.goals.filter(isGoalState).map(sanitize)
+  const liveIds = new Set(live.map((state) => state.id))
+  const history = (payload.history ?? [])
+    .filter(isGoalState)
+    .map(sanitize)
+    .filter((state) => !liveIds.has(state.id))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, Math.max(0, limit))
+  return { live: live.sort((a, b) => b.updatedAt - a.updatedAt), history }
 }
 
 function writePayload(filePath: string, payload: GoalStorePayload): void {

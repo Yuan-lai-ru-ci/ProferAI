@@ -67,6 +67,8 @@ import {
   allPendingExitPlanRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
+import { agentGoalsAtom } from '@/atoms/goal-atoms'
+import { summarizeGoalRailCounts } from '@/domains/goal/goal-display-policy'
 import { previewFileMapAtom, previewFilesByTabAtom } from '@/atoms/preview-atoms'
 import {
   browserPanelDismissedSessionIdsAtom,
@@ -158,6 +160,13 @@ export function useLeftSidebar() {
   const automations = useAtomValue(automationsAtom)
   const setAutomations = useSetAtom(automationsAtom)
   const automationCount = automations.length
+  // Goal 入口计数：live 数与规划中心上半部分同口径（含暂停、受阻、预算耗尽），
+  // 但「执行中」只算真正在跑的，角标只在需要你介入时亮。
+  // 之前把暂停也写成「进行中」，且只要有目标就亮角标，读起来像「有 N 件事等你」。
+  // 入口已雪藏（GOAL_OVERVIEW_ENTRY_ENABLED=false）：这里照常计算，hooks 不能条件调用；
+  // 成本只是一次 atom 订阅，恢复开关即生效。
+  const agentGoals = useAtomValue(agentGoalsAtom)
+  const goalRailCounts = React.useMemo(() => summarizeGoalRailCounts(agentGoals.values()), [agentGoals])
   // 规划中心拆成 rail 三个入口后，每个入口的计数与选中态都读同一份数据：
   // 选中态由 activeView + planningTab 共同决定，计数只做提示，不参与导航逻辑。
   const [planningTab, setPlanningTab] = useAtom(planningTabAtom)
@@ -1910,6 +1919,7 @@ export function useLeftSidebar() {
 
     // automations / skills / planning
     automationCount,
+    goalRailCounts,
     todoOpenCount,
     todayCalendarCount,
     planningTab,

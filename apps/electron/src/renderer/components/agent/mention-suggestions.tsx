@@ -14,6 +14,7 @@ import type { MentionListRef } from './MentionList'
 import { createMentionPopup, positionPopup, isSuggestionTriggerPresent } from './mention-popup-utils'
 import type { AgentSessionReferenceSearchResult } from '@profer/shared'
 import { createLatestQueryRunner, getCachedWorkspaceCapabilities, getMentionCacheGeneration, MAX_MENTION_ITEMS } from './mention-query-utils'
+import { matchGoalCommandQuery } from './goal-command-suggestion'
 
 // ===== 泛型工厂 =====
 
@@ -92,11 +93,11 @@ function createMentionSuggestion<T>(
           if (!isSuggestionTriggerPresent(props.editor, props.range, config.char)) {
             return
           }
-          // `/goal` 是 Agent 内置命令，不是 Skill 引用。这里仅跳过弹窗，
-          // 不使用 Suggestion 的 allow 钩子，避免影响带斜杠文本的粘贴事务。
+          // `/goal` 是 Agent 内置命令，不是 Skill 引用。这里仅跳过弹窗（由 goal-command-suggestion
+          // 单独接管提示），不使用 Suggestion 的 allow 钩子，避免影响带斜杠文本的粘贴事务。
           if (config.char === '/') {
             const textBeforeTrigger = props.editor.state.doc.textBetween(0, props.range.to, '', '')
-            if (/^\/goal(?:\s|$)/i.test(textBeforeTrigger.trimStart())) return
+            if (matchGoalCommandQuery(textBeforeTrigger)) return
           }
 
           mentionActiveRef.current = true

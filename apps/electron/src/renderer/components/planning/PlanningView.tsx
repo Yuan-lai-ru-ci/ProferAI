@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { automationsAtom, automationFormAtom, createEmptyDraft } from '@/atoms/automation-atoms'
 import { AutomationsListView } from '@/components/automation/AutomationsListView'
 import { CalendarWorkspace } from '@/components/planning/CalendarWorkspace'
+import { GoalOverviewList } from '@/components/planning/GoalOverviewList'
 import { PlanningFloatingInspector } from '@/components/planning/PlanningFloatingInspector'
 import { PlanningGroupManager } from '@/components/planning/PlanningGroupManager'
 import { agentChannelIdAtom, agentModelIdAtom, agentPendingPromptAtom, agentSessionsAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
@@ -27,13 +28,29 @@ import { ShortcutKeycaps } from '@/components/shortcuts/ShortcutKeycaps'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
 import { detectIsWindows } from '@profer/ui'
 import { resolveWindowControlsRightInset } from '@/lib/window-controls-layout'
-import { getVisibleAgentWorkspaces } from '@/lib/product-feature-flags'
+import { getVisibleAgentWorkspaces, GOAL_OVERVIEW_ENTRY_ENABLED } from '@/lib/product-feature-flags'
 
-const TABS: Array<{ id: PlanningTab; label: string }> = [
+const ALL_TABS: Array<{ id: PlanningTab; label: string }> = [
   { id: 'todos', label: 'Todo' },
   { id: 'calendar', label: '日程' },
   { id: 'automations', label: '定时任务' },
+  { id: 'goals', label: 'Goal' },
 ]
+
+/**
+ * Goal 总览入口雪藏期间，主窗口侧栏按钮与独立规划窗口的 tab 一起藏。
+ * 分区组件、数据与测试都保留：Goal 的日常入口是会话内的 `/goal` 与顶部状态栏，
+ * 没有人会专门开规划窗口去发目标。
+ */
+export const PLANNING_TABS = ALL_TABS.filter((item) => item.id !== 'goals' || GOAL_OVERVIEW_ENTRY_ENABLED)
+const TABS = PLANNING_TABS
+
+const SECTION_LABELS: Record<PlanningTab, string> = {
+  todos: 'Todo',
+  calendar: '日程',
+  automations: '定时任务',
+  goals: 'Goal',
+}
 
 function CreateShortcutHint(): React.ReactElement | null {
   return (
@@ -76,6 +93,12 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
     setPlanningTab('todos')
     setSelectedTodoId(nextPlannedTodo.id)
   }, [nextPlannedTodo, setPlanningTab, setSelectedTodoId])
+  // 分区入口雪藏后 tab 可能残留在 'goals'（快捷键、历史状态、其它窗口写过同一个 atom）：
+  // 归一回 Todo，避免停在一个既没有入口也没有 tab 条的空白页。
+  React.useEffect(() => {
+    if (!GOAL_OVERVIEW_ENTRY_ENABLED && tab === 'goals') setTab('todos')
+  }, [setTab, tab])
+
   const handleTabKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number): void => {
     let nextIndex: number | undefined
     if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % TABS.length
@@ -115,7 +138,7 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
   // 主窗口的导航已交给 rail 的三个入口，页面内不再重复一层 tab；
   // 独立规划窗口（standalone）没有 rail，仍用 tab 在三个分区之间切换。
   const showTabs = standalone
-  const sectionLabel = tab === 'todos' ? 'Todo' : tab === 'calendar' ? '日程' : '定时任务'
+  const sectionLabel = SECTION_LABELS[tab]
   const tabNav = showTabs ? (
     <nav className="inline-flex h-9 shrink-0 rounded-xl border border-surface-border/40 bg-surface-sunken/45 p-0.5 shadow-sm" aria-label="任务日程视图" role="tablist" aria-orientation="horizontal">
       {TABS.map((item, index) => <button key={item.id} ref={(element) => { tabButtonRefs.current[index] = element }} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('h-8 rounded-lg px-3.5 text-sm transition-colors', tab === item.id ? 'bg-surface-raised font-semibold text-foreground shadow-sm ring-1 ring-surface-border/35' : 'text-muted-foreground hover:bg-surface-selected/60 hover:text-foreground')}>{item.label}</button>)}
@@ -146,7 +169,7 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
           <section data-tour="planning-panel" className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-surface-border/50 bg-surface-raised shadow-lg">
             {tab === 'calendar' ? <div ref={setCalendarToolbarTarget} className="shrink-0 titlebar-drag-region" /> : <div className="flex shrink-0 items-center gap-3 border-b border-surface-border/45 px-4 py-2.5 sm:px-5 titlebar-drag-region">
               {tabNav}
-              <div className="hidden min-w-0 flex-1 text-right text-sm text-muted-foreground 2xl:block">{tab === 'todos' && <div className="flex min-w-0 items-center justify-end gap-2"><span className="hidden shrink-0 sm:inline">{todayLabel}</span><span className="hidden h-3 w-px bg-border/70 sm:inline" />{nextPlannedTodo ? <button type="button" onClick={openNextPlannedTodo} className="group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-right transition-colors hover:bg-muted/55 hover:text-foreground" title={`查看：${nextPlannedTodo.title}`}><span className="shrink-0 text-xs">下一项</span><span className="max-w-56 truncate font-medium text-foreground/85 group-hover:text-foreground">{nextPlannedTodo.title}</span><span className="shrink-0 text-xs text-muted-foreground">· {formatTodoDueDate(nextPlannedTodo.dueAt!)}</span></button> : <span className="text-xs sm:text-sm">{openTodoCount ? '今天没有安排，留出时间专注' : '从一个清晰的待办开始'}</span>}</div>}{tab === 'automations' && <span className="text-xs">管理 Agent 的周期性任务</span>}</div>
+              <div className="hidden min-w-0 flex-1 text-right text-sm text-muted-foreground 2xl:block">{tab === 'todos' && <div className="flex min-w-0 items-center justify-end gap-2"><span className="hidden shrink-0 sm:inline">{todayLabel}</span><span className="hidden h-3 w-px bg-border/70 sm:inline" />{nextPlannedTodo ? <button type="button" onClick={openNextPlannedTodo} className="group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-right transition-colors hover:bg-muted/55 hover:text-foreground" title={`查看：${nextPlannedTodo.title}`}><span className="shrink-0 text-xs">下一项</span><span className="max-w-56 truncate font-medium text-foreground/85 group-hover:text-foreground">{nextPlannedTodo.title}</span><span className="shrink-0 text-xs text-muted-foreground">· {formatTodoDueDate(nextPlannedTodo.dueAt!)}</span></button> : <span className="text-xs sm:text-sm">{openTodoCount ? '今天没有安排，留出时间专注' : '从一个清晰的待办开始'}</span>}</div>}{tab === 'automations' && <span className="text-xs">管理 Agent 的周期性任务</span>}{tab === 'goals' && <span className="text-xs">跨会话查看进行中与最近结束的目标</span>}</div>
               {tab === 'todos' && <button type="button" onClick={triggerTodoCreate} data-planning-primary-action="todos" className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]" aria-keyshortcuts="Meta+N Control+N"><Plus size={15} /> 新建 Todo<CreateShortcutHint /></button>}
               {tab === 'automations' && <button type="button" onClick={createAutomation} data-planning-primary-action="automations" className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]" aria-keyshortcuts="Meta+N Control+N"><Plus size={15} /> 新建定时任务<CreateShortcutHint /></button>}
             </div>}
@@ -154,6 +177,7 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
               {tab === 'todos' && <TodoWorkspace standalone={standalone} embedded />}
               {tab === 'calendar' && <CalendarWorkspace embedded toolbarTarget={calendarToolbarTarget} toolbarStart={tabNav} toolbarEnd={<button type="button" onClick={triggerCalendarCreate} data-planning-primary-action="calendar" aria-keyshortcuts="Meta+N Control+N" className="ml-2 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"><Plus size={15} /> 新建日程<CreateShortcutHint /></button>} />}
               {tab === 'automations' && <AutomationsListView embedded />}
+              {tab === 'goals' && <GoalOverviewList />}
             </div>
           </section>
         </div>

@@ -17,7 +17,8 @@
 
 import * as React from 'react'
 import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
-import { PanelLeftClose, PanelLeftOpen, Bot, MessageSquare, Plus, Search, CalendarDays, Clock, ListTodo, Blocks, Brain } from 'lucide-react'
+import { GOAL_OVERVIEW_ENTRY_ENABLED } from '@/lib/product-feature-flags'
+import { PanelLeftClose, PanelLeftOpen, Bot, MessageSquare, Plus, Search, CalendarDays, Clock, ListTodo, Blocks, Brain, Target } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { CollapsedWorkspacePopover } from '@/components/agent/CollapsedWorkspacePopover'
@@ -34,6 +35,15 @@ import {
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import type { SidebarModel } from './use-left-sidebar'
 
+/** 侧栏 Goal 入口的 tooltip：把「在跑」和「等你处理」分开说清楚。 */
+function describeGoalRailTooltip(counts: { live: number; running: number; attention: number }): string {
+  if (counts.live === 0) return 'Goal（当前没有目标）'
+  const parts = [`${counts.live} 个目标`]
+  if (counts.running > 0) parts.push(`${counts.running} 个在跑`)
+  if (counts.attention > 0) parts.push(`${counts.attention} 个待处理`)
+  return `Goal（${parts.join(' · ')}）`
+}
+
 export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: number }): React.ReactElement {
   const {
     sidebarCollapsed,
@@ -44,6 +54,7 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
     handleNewConversation,
     setSearchDialogOpen,
     automationCount,
+    goalRailCounts,
     todoOpenCount,
     todayCalendarCount,
     planningTab,
@@ -180,6 +191,21 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
         onClick={() => handleOpenPlanning('automations')}
         navigationItem={PLANNING_NAV_ITEM.automations}
       />
+      {/* Goal 跨会话总览入口暂时雪藏（GOAL_OVERVIEW_ENTRY_ENABLED = false）。
+          Goal 本身在会话内可用，不需要从侧栏进入；恢复只改开关，组件与数据都在。
+          计数用「N 个目标」而不是「N 个进行中」，因为暂停/受阻/预算耗尽都还没结束；
+          角标只在受阻或预算耗尽时亮——正在跑的目标不需要你管。 */}
+      {GOAL_OVERVIEW_ENTRY_ENABLED && (
+        <SidebarRailEntry
+          icon={<Target size={19} />}
+          label={goalRailCounts.live > 0 ? `Goal，${goalRailCounts.live} 个目标` : 'Goal'}
+          tooltip={describeGoalRailTooltip(goalRailCounts)}
+          active={activeView === 'planning' && planningTab === 'goals'}
+          dot={goalRailCounts.attention > 0}
+          onClick={() => handleOpenPlanning('goals')}
+          navigationItem={PLANNING_NAV_ITEM.goals}
+        />
+      )}
       {mode === 'agent' && (
         <SidebarRailEntry
           icon={<Blocks size={19} />}

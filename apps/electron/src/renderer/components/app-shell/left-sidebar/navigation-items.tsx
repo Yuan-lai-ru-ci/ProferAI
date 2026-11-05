@@ -20,6 +20,7 @@ export const PLANNING_NAV_ITEM: Record<PlanningTab, string> = {
   todos: 'planning-todos',
   calendar: 'planning-calendar',
   automations: 'planning-automations',
+  goals: 'planning-goals',
 }
 
 /** 把 rail 入口标识还原成规划中心分区；非规划入口返回 null。 */
@@ -27,6 +28,7 @@ export function planningSectionOf(item: string | undefined): PlanningTab | null 
   if (item === PLANNING_NAV_ITEM.todos) return 'todos'
   if (item === PLANNING_NAV_ITEM.calendar) return 'calendar'
   if (item === PLANNING_NAV_ITEM.automations) return 'automations'
+  if (item === PLANNING_NAV_ITEM.goals) return 'goals'
   return null
 }
 

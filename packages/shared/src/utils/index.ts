@@ -11,7 +11,7 @@ export { isGoalTransitionAllowed, getGoalActions, normalizeGoalReason, isGoalRes
 export { diffCapabilities } from './capabilities-diff'
 export { canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, AgentSessionRuntimeMismatchError, AgentRunAlreadyActiveError } from './agent-session-runtime'
 export type { CapabilityChange } from './capabilities-diff'
-export { parseGoalCommand, parseGoalContractInput, parseGoalLimitsInput, applyGoalLimitsPatch, isValidGoalLimits, getGoalBudgetDimensions, getGoalBudgetExhaustedReasons, stripGoalResultBlocks, GOAL_UPDATE_TOOL_NAME, isGoalIterationMessage, isGoalUpdateToolName } from './goal-contract'
+export { parseGoalCommand, parseGoalContractInput, parseGoalLimitsInput, applyGoalLimitsPatch, isValidGoalLimits, getGoalBudgetDimensions, getGoalBudgetExhaustedReasons, stripGoalResultBlocks, GOAL_UPDATE_TOOL_NAME, GOAL_PROPOSE_TOOL_NAME, isGoalIterationMessage, isGoalUpdateToolName, isGoalProposalToolName } from './goal-contract'
 export type { GoalLimitsInput, AgentGoalLimitsPatch, GoalBudgetDimension } from './goal-contract'
 export {
   DEFAULT_CONTEXT_WINDOW,

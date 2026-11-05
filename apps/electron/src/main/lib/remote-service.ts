@@ -86,6 +86,7 @@ import { searchRemoteWorkspaceFiles } from './remote-workspace-file-search'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
 import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
+import { goalProposalService } from './goal-proposal-service'
 import { exitPlanService } from './agent-exit-plan-service'
 import {
   listConversations,
@@ -1176,6 +1177,7 @@ export async function handleRemoteCommand(
           permissions: permissionService.getPendingRequests().filter(belongsToSession),
           askUsers: askUserService.getPendingRequests().filter(belongsToSession),
           exitPlans: exitPlanService.getPendingRequests().filter(belongsToSession),
+          goalProposals: goalProposalService.list().filter(belongsToSession),
         },
       }
     }

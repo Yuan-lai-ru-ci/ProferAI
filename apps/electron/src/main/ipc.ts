@@ -243,12 +243,13 @@ import { isProcessHandleOwnedBySession, processHandleFromRuntimeRecord } from '.
 import { normalizeUserSendInput } from './lib/agent-input-origin'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
 import { GoalSessionService } from './lib/goal-session-service'
-import { loadGoalStates, saveGoalStates, archiveGoalState, loadGoalHistory } from './lib/goal-store'
+import { loadGoalStates, saveGoalStates, archiveGoalState, loadGoalHistory, loadGoalOverview } from './lib/goal-store'
 import { resolveEffectivePermissionMode } from '@profer/shared'
-import type { AgentGoalContract, AgentGoalLimitsPatch, AgentGoalState, McpConnectionSnapshot, McpProbeFailureReason, McpServerRestartResult, McpToolSummary } from '@profer/shared'
+import type { AgentGoalContract, AgentGoalLimitsPatch, AgentGoalOverview, AgentGoalOverviewEntry, AgentGoalState, McpConnectionSnapshot, McpProbeFailureReason, McpServerRestartResult, McpToolSummary } from '@profer/shared'
 import { getAgentPresetByReference, presetReferenceForId } from './lib/agent-preset-manager'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
+import { goalProposalService, normalizeGoalProposalPolicy } from './lib/goal-proposal-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
 import { registerVisualizationIpc } from './lib/visualization-ipc'
@@ -350,16 +351,19 @@ const channelNetworkRequests = new ChannelNetworkRequests()
 
 const GOAL_STORE_PATH = () => join(app.getPath('userData'), 'goals.json')
 
+/** 会话当前是否处于计划模式（Goal 等待判定与 Goal 提议共用同一口径）。 */
+const isSessionPlanMode = (sessionId: string): boolean => {
+  const session = getAgentSessionMeta(sessionId)
+  const workspaceSlug = session?.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
+  const reference = session?.presetReference ?? presetReferenceForId(workspaceSlug, session?.presetId)
+  const preset = getAgentPresetByReference(reference, workspaceSlug)
+  return resolveEffectivePermissionMode(preset.permissionMode, session?.permissionMode) === 'plan'
+}
+
 const goalSessionService = new GoalSessionService({
   getSession: (sessionId) => getAgentSessionMeta(sessionId),
   isSessionActive: isAgentSessionActive,
-  isPlanMode: (sessionId) => {
-    const session = getAgentSessionMeta(sessionId)
-    const workspaceSlug = session?.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
-    const reference = session?.presetReference ?? presetReferenceForId(workspaceSlug, session?.presetId)
-    const preset = getAgentPresetByReference(reference, workspaceSlug)
-    return resolveEffectivePermissionMode(preset.permissionMode, session?.permissionMode) === 'plan'
-  },
+  isPlanMode: isSessionPlanMode,
   run: async (input) => {
     // 多窗口：优先把 Goal 本轮事件发给该会话当前绑定的窗口；
     // 没有绑定（例如从未在本进程跑过）时回退主窗口。
@@ -392,6 +396,21 @@ const goalSessionService = new GoalSessionService({
     }
   },
   logError: (error) => { console.error('[goal] 会话状态同步失败', error) },
+  // 空闲自检：轮次结束后隔一段时间自动续跑，连续达到上限后等用户发消息。
+  // 默认 0（关闭）：常规 Goal 应立即续跑，开启后才会按间隔节流。
+  idleCheckin: () => {
+    try {
+      const settings = getSettings()
+      const minutes = settings.goalIdleCheckinMinutes ?? 0
+      if (!Number.isFinite(minutes) || minutes <= 0) return undefined
+      const maxCount = Math.max(1, Math.floor(settings.goalIdleCheckinMaxCount ?? 3))
+      // 对齐 Claude Code 的 7 天上限：超大值会让 setTimeout 溢出成 1ms，变成立即连跑。
+      const clampedMinutes = Math.min(minutes, 7 * 24 * 60)
+      return { intervalMs: Math.round(clampedMinutes * 60_000), maxCount }
+    } catch {
+      return undefined
+    }
+  },
 })
 
 // 人发起的运行结束后，受阻 / 被中断的 Goal 自动续上（桌面、Pocket、IM 入口共用）。
@@ -3096,6 +3115,10 @@ export function registerIpcHandlers(): void {
     async (event, input: AgentSendInput): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
       input = normalizeUserSendInput(input)
+      // 用户发起的普通轮次才注入 propose_goal：内部轮次（Goal / 自动化 / 委派）不提议。
+      if (!input.triggeredBy || input.triggeredBy === 'user') {
+        input = { ...input, goalProposal: goalProposalInputFor(input.sessionId) }
+      }
       await coordinateAgentSend(input, {
         getSession: getAgentSessionMeta,
         workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
@@ -3139,6 +3162,61 @@ export function registerIpcHandlers(): void {
     registerWebContents(sessionId, event.sender)
     return goalSessionService.start(sessionId, goal, contract)
   })
+  // ===== 模型主动提议建立 Goal =====
+  // 非 Goal 轮次注入 propose_goal：模型判断这件事需要多轮持续执行时提议，
+  // 用户确认后走与 /goal 完全相同的创建路径（同一份审计与消息投影）。
+  const goalProposalInputFor = (sessionId: string): import('@profer/shared').AgentSendInput['goalProposal'] => {
+    const policy = normalizeGoalProposalPolicy(getSettings().goalProposalPolicy)
+    if (policy === 'disabled') return undefined
+    return {
+      policy,
+      // start() 只允许覆盖 completed 的旧 Goal；已完成的不算「占用中」，否则用户完成一次 Goal 后
+      // 该会话再也不会收到 propose_goal（除非手动清除）。
+      hasActiveGoal: (() => {
+        const existing = goalSessionService.get(sessionId)
+        return Boolean(existing && existing.status !== 'completed')
+      })(),
+      planMode: isSessionPlanMode(sessionId),
+      onPropose: (proposal, contract) => {
+        if (policy === 'auto') {
+          goalSessionService.start(sessionId, proposal.objective, contract)
+            // auto 模式不会把提议交给用户，成功后必须出队；否则 hasPending 永久为 true，
+            // 后续提议会被工具当成「已有待确认提议」拒绝，而用户从未看到过这张卡。
+            .then(() => { goalProposalService.remove(proposal.id) })
+            .catch((error) => {
+              console.error('[goal] 自动创建提议的 Goal 失败', error)
+              emitGoalProposalEvent(sessionId, { type: 'goal_proposal', proposal })
+            })
+          return
+        }
+        emitGoalProposalEvent(sessionId, { type: 'goal_proposal', proposal })
+      },
+    }
+  }
+  const emitGoalProposalEvent = (sessionId: string, event: import('@profer/shared').ProferEvent): void => {
+    emitSessionStreamEvent(sessionId, { kind: 'profer_event', event })
+  }
+  ipcMain.handle(AGENT_IPC_CHANNELS.LIST_GOAL_PROPOSALS, async (event): Promise<import('@profer/shared').GoalProposal[]> => {
+    assertSensitiveAgentIpcSender(event)
+    return goalProposalService.list()
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.RESPOND_GOAL_PROPOSAL, async (event, proposalId: string, accepted: boolean): Promise<boolean> => {
+    assertSensitiveAgentIpcSender(event)
+    if (typeof proposalId !== 'string' || !proposalId) throw new Error('无效的 Goal 提议标识')
+    // 先读取不出队：创建失败时保留提议，卡片才能继续显示错误并允许重试。
+    const pending = goalProposalService.peek(proposalId)
+    if (!pending) return false
+    const { proposal, contract } = pending
+    registerWebContents(proposal.sessionId, event.sender)
+    if (accepted) {
+      // 失败直接抛回渲染层，不改发 resolved 事件：发 resolved 会让卡片消失，
+      // 用户看不到失败原因，也无法重试。
+      await goalSessionService.start(proposal.sessionId, proposal.objective, contract)
+    }
+    goalProposalService.remove(proposalId)
+    emitGoalProposalEvent(proposal.sessionId, { type: 'goal_proposal_resolved', proposalId, accepted })
+    return true
+  })
   ipcMain.handle(AGENT_IPC_CHANNELS.GET_GOAL, async (event, sessionId: string): Promise<AgentGoalState | null> => {
     assertSensitiveAgentIpcSender(event)
     return goalSessionService.get(sessionId) ?? null
@@ -3146,6 +3224,33 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(AGENT_IPC_CHANNELS.LIST_GOALS, async (event): Promise<AgentGoalState[]> => {
     assertSensitiveAgentIpcSender(event)
     return goalSessionService.list()
+  })
+  // 跨会话 Goal 总览：活跃槽位读 controller（含未落盘的最新状态），归档读 goals.json。
+  ipcMain.handle(AGENT_IPC_CHANNELS.GOAL_OVERVIEW, async (event): Promise<AgentGoalOverview> => {
+    assertSensitiveAgentIpcSender(event)
+    const describe = (goal: AgentGoalState, archived: boolean): AgentGoalOverviewEntry => {
+      const session = getAgentSessionMeta(goal.sessionId)
+      return { goal, sessionTitle: session?.title, workspaceId: session?.workspaceId, archived }
+    }
+    const { live, history } = loadGoalOverview(GOAL_STORE_PATH())
+    const liveById = new Map(goalSessionService.list().map((goal) => [goal.id, goal]))
+    const storedLive = (live.length > 0 ? live : []).map((goal) => liveById.get(goal.id) ?? goal)
+    for (const goal of goalSessionService.list()) {
+      if (!storedLive.some((item) => item.id === goal.id)) storedLive.push(goal)
+    }
+    // 终态但仍占着槽位的 Goal 归到历史：它们不是「进行中」，也不该等用户手动清除才出现。
+    const isTerminal = (goal: AgentGoalState): boolean => goal.status === 'completed' || goal.status === 'stopped' || goal.status === 'failed'
+    const activeGoals = storedLive.filter((goal) => !isTerminal(goal))
+    const endedGoals = storedLive.filter(isTerminal)
+    const endedIds = new Set(endedGoals.map((goal) => goal.id))
+    const ended = [
+      ...endedGoals.map((goal) => describe(goal, false)),
+      ...history.filter((goal) => !endedIds.has(goal.id)).map((goal) => describe(goal, true)),
+    ].sort((a, b) => b.goal.updatedAt - a.goal.updatedAt)
+    return {
+      live: activeGoals.sort((a, b) => b.updatedAt - a.updatedAt).map((goal) => describe(goal, false)),
+      history: ended,
+    }
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.PAUSE_GOAL, async (event, sessionId: string): Promise<AgentGoalState> => {
     assertSensitiveAgentIpcSender(event)
@@ -3675,6 +3780,7 @@ export function registerIpcHandlers(): void {
         permissions: permissionService.getPendingRequests(),
         askUsers: askUserService.getPendingRequests(),
         exitPlans: exitPlanService.getPendingRequests(),
+        goalProposals: goalProposalService.list(),
       }
     }
   )

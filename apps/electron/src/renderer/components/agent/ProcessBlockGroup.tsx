@@ -8,7 +8,7 @@ import type {
   SDKContentBlock,
   SDKToolUseBlock,
 } from '@profer/shared'
-import { isGoalUpdateToolName } from '@profer/shared'
+import { isGoalProposalToolName, isGoalUpdateToolName } from '@profer/shared'
 
 interface ProcessBlockGroupProps {
   blocks: SDKContentBlock[]
@@ -45,7 +45,7 @@ export function buildProcessGroupSummary(blocks: SDKContentBlock[]): string {
 
   for (const block of blocks) {
     if (block.type === 'tool_use') {
-      if (isGoalUpdateToolName((block as SDKToolUseBlock).name)) continue
+      if (isGoalUpdateToolName((block as SDKToolUseBlock).name) || isGoalProposalToolName((block as SDKToolUseBlock).name)) continue
       toolCount += 1
     } else if (block.type === 'thinking') {
       // 思考与正文分开计数：思考是可读 CoT 时的主内容，笼统写「消息」会让用户
@@ -71,7 +71,7 @@ export function buildProcessGroupToolNames(blocks: SDKContentBlock[]): string[] 
   for (const block of blocks) {
     if (block.type !== 'tool_use') continue
     const toolBlock = block as SDKToolUseBlock
-    if (isGoalUpdateToolName(toolBlock.name)) continue
+    if (isGoalUpdateToolName(toolBlock.name) || isGoalProposalToolName(toolBlock.name)) continue
     if (seen.has(toolBlock.name)) continue
     seen.add(toolBlock.name)
     toolNames.push(toolBlock.name)

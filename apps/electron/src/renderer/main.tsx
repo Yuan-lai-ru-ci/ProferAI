@@ -58,6 +58,9 @@ import {
   notificationSoundEnabledAtom,
   notificationSoundsAtom,
   customNotificationSoundsAtom,
+  goalIdleCheckinMinutesAtom,
+  goalIdleCheckinMaxCountAtom,
+  goalProposalPolicyAtom,
   initializeNotifications,
   initDesktopNotificationListener,
 } from './atoms/notifications'
@@ -421,11 +424,20 @@ function NotificationsInitializer(): null {
   const setSoundEnabled = useSetAtom(notificationSoundEnabledAtom)
   const setSounds = useSetAtom(notificationSoundsAtom)
   const setCustomSounds = useSetAtom(customNotificationSoundsAtom)
+  const setGoalIdleMinutes = useSetAtom(goalIdleCheckinMinutesAtom)
+  const setGoalIdleMax = useSetAtom(goalIdleCheckinMaxCountAtom)
+  const setGoalProposalPolicy = useSetAtom(goalProposalPolicyAtom)
 
   useEffect(() => {
+    // Goal 空闲自检与通知同批读取，避免设置页首次打开显示默认值再跳变。
+    void window.electronAPI.getSettings().then((settings) => {
+      setGoalIdleMinutes(settings.goalIdleCheckinMinutes ?? 0)
+      setGoalIdleMax(settings.goalIdleCheckinMaxCount ?? 3)
+      setGoalProposalPolicy(settings.goalProposalPolicy ?? 'alwaysAsk')
+    }).catch(() => {})
     initializeNotifications(setEnabled, setSoundEnabled, setSounds, setCustomSounds)
     initDesktopNotificationListener()
-  }, [setEnabled, setSoundEnabled, setSounds, setCustomSounds])
+  }, [setEnabled, setSoundEnabled, setSounds, setCustomSounds, setGoalIdleMinutes, setGoalIdleMax, setGoalProposalPolicy])
 
   return null
 }

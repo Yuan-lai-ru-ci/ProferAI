@@ -7,6 +7,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getSettingsPath } from './config-paths'
+import { normalizeGoalProposalPolicy } from './goal-proposal-service'
 import { DEFAULT_AGENT_RUNTIME, DEFAULT_INTERFACE_VARIANT, DEFAULT_PREVIEW_OPEN_MODE, DEFAULT_THEME_MODE, DEFAULT_USER_MESSAGE_POSITION } from '../../types'
 import { normalizeAgentRuntime } from '@profer/shared'
 import type { AppSettings } from '../../types'
@@ -29,6 +30,11 @@ function getDefaultSettings(): AppSettings {
     onboardingCompleted: false,
     environmentCheckSkipped: false,
     notificationsEnabled: true,
+    // 空闲自检默认关闭：Goal 的常规节奏是「一轮结束后立即续跑」，
+    // 30 分钟间隔只在用户明确选择「无人值守」时才启用，否则会把正常 Goal 降速成半小时一轮。
+    goalIdleCheckinMinutes: 0,
+    goalIdleCheckinMaxCount: 3,
+    goalProposalPolicy: 'alwaysAsk',
     showCreditsInSidebar: true,
     userMessagePosition: DEFAULT_USER_MESSAGE_POSITION,
     previewModePreference: DEFAULT_PREVIEW_OPEN_MODE,
@@ -80,6 +86,7 @@ export function getSettings(): AppSettings {
       manualReadConfirmEnabled: data.manualReadConfirmEnabled === true,
       feishuSessionMirror: data.feishuSessionMirror ?? { mode: 'off' },
       agentRuntime: normalizeAgentRuntime(data.agentRuntime),
+      goalProposalPolicy: normalizeGoalProposalPolicy(data.goalProposalPolicy),
       developerModeEnabled,
     }
     return _settingsCache
