@@ -257,6 +257,8 @@ function toReasoningTransport(api: Api): ReasoningTransport {
       return 'openai-completions'
     case 'openai-responses':
       return 'openai-responses'
+    case 'mistral-conversations':
+      return 'mistral-conversations'
     default:
       return 'other'
   }
@@ -513,15 +515,26 @@ async function resolvePiModelDefaults(
       : rawCatalogContextWindow
   // 渠道模型上的 1M 勾选最后统一生效（强开抬到 1M、强关压回保守窗口）。
   const contextWindow = applyModel1MContextPreference(computedContextWindow, input.context1m)
-  // 官方 Mistral 的推理开关是模型/账号维度的能力（prompt_mode / reasoning_effort），
-  // 未开通时直接 400（`Reasoning prompt mode is not enabled for this model`，code 3051）。
-  // 同一个渠道里还可能启用 deepseek / glm 等第三方模型 id，它们从共享 catalog 拿到的
-  // reasoning 标记在 Mistral 网关上没有意义，却会让 SDK 发出 prompt_mode。
-  // 因此官方端点一律不声明推理能力：模型自己流式返回的 thinking 内容仍会被解析并展示。
+  // 官方 Mistral 的推理开关是模型/账号维度的能力（prompt_mode / reasoning_effort）。
+  // Pi 的 mistral-conversations 适配器按模型 ID 自行分流：reasoning_effort 型发
+  // `reasoning_effort`，其余声明 reasoning 的型号发 `prompt_mode: 'reasoning'`。
+  //
+  // 只对 Mistral 自家模型声明推理能力：同一渠道里常被启用 deepseek / glm 等第三方
+  // 模型 id，它们从共享 catalog 拿到的 reasoning 标记在 Mistral 网关上没有意义，
+  // 却会让 SDK 发出 prompt_mode 并直接 400（code 3051）。
+  //
+  // 注意：账号未开通推理时 Mistral 同样会返回 400，这属于用户侧配置问题；
+  // 不再用「一律禁用」来回避——那会让已开通账号也彻底用不上思考档位。
   const mistralNative = api === 'mistral-conversations'
+  const mistralOwnModel = mistralNative && isMistralOwnModel(input.model)
   return {
-    reasoning: mistralNative ? false : (modelMetadata?.reasoning ?? true),
-    thinkingLevelMap: mistralNative
+    // 第三方模型 id 在 Mistral 网关上保持禁用；自家模型按 catalog / 协议默认声明。
+    reasoning: mistralNative
+      ? (mistralOwnModel ? (modelMetadata?.reasoning ?? true) : false)
+      : (modelMetadata?.reasoning ?? true),
+    // profile 已按 transport 编译出 Mistral 专用档位表（含 off 语义），
+    // 未命中 profile 时回退 catalog 映射。
+    thinkingLevelMap: mistralNative && !mistralOwnModel
       ? undefined
       : (providerSpecificCapabilities?.thinkingLevelMap ?? modelMetadata?.thinkingLevelMap),
     compat: applyOpenAICompatibleFinishReasonFallback(
@@ -562,6 +575,28 @@ function applyModel1MContextPreferenceToModel(
 ): PiCatalogModel {
   const contextWindow = applyModel1MContextPreference(model.contextWindow ?? DEFAULT_CONTEXT_WINDOW, preference)
   return contextWindow === model.contextWindow ? model : { ...model, contextWindow }
+}
+
+/**
+ * 模型 ID 是否属于 Mistral 自家模型。
+ *
+ * Mistral 渠道里常被启用 deepseek / glm / kimi 等第三方模型 id（聚合网关常见），
+ * 这些 id 的 reasoning 标记在 Mistral 网关上无效——声明了就会发 prompt_mode 并 400。
+ * 因此只对 Mistral 自家的模型族声明推理能力。
+ */
+function isMistralOwnModel(modelId: string | undefined): boolean {
+  const id = normalizeModelIdTail(modelId)
+  if (!id) return false
+  return id.startsWith('mistral-')
+    || id.startsWith('magistral-')
+    || id.startsWith('ministral-')
+    || id.startsWith('codestral-')
+    || id.startsWith('devstral-')
+    || id.startsWith('pixtral-')
+    || id.startsWith('open-mistral-')
+    || id.startsWith('open-mixtral-')
+    // Mistral 平台托管的 GLM 型号（zai-glm-5-2 / zai-glm-5-3）由 Mistral 官方提供推理能力。
+    || id.startsWith('zai-glm-')
 }
 
 function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType): string | undefined {

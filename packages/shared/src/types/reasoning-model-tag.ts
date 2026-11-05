@@ -44,6 +44,8 @@ export type ReasoningModelTag =
   | 'qwen-3.8'
   | 'qwen-toggle'
   | 'mimo-toggle'
+  | 'mistral-reasoning'
+  | 'mistral-effort'
 
 export interface ReasoningModelTagRule {
   tag: ReasoningModelTag
@@ -151,6 +153,29 @@ export const REASONING_MODEL_TAG_RULES: readonly ReasoningModelTagRule[] = [
   // ===== 小米 MiMo =====
   // V2.5 起只有 thinking.type 开关，没有 effort 档位。
   { tag: 'mimo-toggle', prefix: 'mimo-v', minVersion: '2.5' },
+
+  // ===== Mistral（官方 mistral-conversations 协议）=====
+  // 两类推理语义，由 Pi 的 Mistral 适配器按模型 ID 自行分流：
+  // - reasoning_effort 型（none/high）：mistral-small-2603 / mistral-small-latest /
+  //   mistral-medium-* / zai-glm-5-2；
+  // - prompt_mode 型（开/关）：其余声明 reasoning 的型号（magistral-* 等）。
+  // 这里按 ID 形态打标，与 Pi 的 usesReasoningEffort 判定保持一致。
+  {
+    tag: 'mistral-effort',
+    match: (modelId) => modelId === 'mistral-small-2603'
+      || modelId === 'mistral-small-latest'
+      || modelId.startsWith('mistral-medium-')
+      || modelId === 'zai-glm-5-2',
+  },
+  {
+    tag: 'mistral-reasoning',
+    match: (modelId) => modelId.startsWith('magistral-')
+      || modelId === 'mistral-large-latest'
+      || modelId.startsWith('mistral-large-')
+      || modelId.startsWith('mistral-small-')
+      || modelId.startsWith('mistral-medium')
+      || modelId === 'zai-glm-5-3',
+  },
 ]
 
 function matchesRule(modelId: string, rule: ReasoningModelTagRule): boolean {

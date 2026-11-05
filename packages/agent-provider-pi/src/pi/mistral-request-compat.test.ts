@@ -126,6 +126,38 @@ describe('官方 Mistral 端点使用原生 mistral-conversations 协议', () =>
     expect(toolCall?.id).toBe('abc123456')
   })
 
+  test('Given Mistral prompt_mode 型模型且会话开启思考 When 请求 Then 发 prompt_mode=reasoning', async () => {
+    // magistral 系列是 Mistral 的推理模型，思考开关走 prompt_mode；
+    // 档位本身只有开/关，high 就是「开」。
+    const model = await registerCustomModel('https://api.mistral.ai/v1', 'magistral-medium-latest')
+    expect(model.reasoning).toBe(true)
+    // off 必须是 undefined 而非 null：Pi 把 null 判为「不支持该档」，
+    // 会把 off 向上 clamp 成 high，导致关不掉思考。
+    expect(model.thinkingLevelMap).toMatchObject({ high: 'high' })
+    expect(model.thinkingLevelMap?.off).toBeUndefined()
+    const { request } = await runStream(model, mistralChunkedSse, streamSimple as typeof stream, { reasoning: 'high' })
+    expect(request.body.prompt_mode).toBe('reasoning')
+    // prompt_mode 型不发 reasoning_effort（Mistral 只对特定型号接受该字段）。
+    expect(request.body.reasoning_effort).toBeUndefined()
+  })
+
+  test('Given Mistral 模型且会话关闭思考 When 请求 Then 不发 prompt_mode', async () => {
+    const model = await registerCustomModel('https://api.mistral.ai/v1', 'magistral-medium-latest')
+    const { request } = await runStream(model, mistralChunkedSse, streamSimple as typeof stream, { reasoning: 'off' })
+    expect(request.body.prompt_mode).toBeUndefined()
+    expect(request.body.reasoning_effort).toBeUndefined()
+  })
+
+  test('Given Mistral reasoning_effort 型模型且会话开启思考 When 请求 Then 发 reasoning_effort=high', async () => {
+    // mistral-medium-* / mistral-small-2603 走 reasoning_effort（官方只接受 none / high）。
+    const model = await registerCustomModel('https://api.mistral.ai/v1', 'mistral-medium-latest')
+    expect(model.reasoning).toBe(true)
+    const { request } = await runStream(model, mistralChunkedSse, streamSimple as typeof stream, { reasoning: 'high' })
+    expect(request.body.reasoning_effort).toBe('high')
+    // reasoning_effort 型不发 prompt_mode。
+    expect(request.body.prompt_mode).toBeUndefined()
+  })
+
   test('Given 渠道启用了非 Mistral 模型 id 且会话带思考档位 When 请求 Then 不发 prompt_mode / reasoning_effort', async () => {
     // 同一个 Mistral 渠道里可能启用 deepseek / glm 等模型 id，它们从共享 catalog 拿到的
     // reasoning 标记在 Mistral 网关上无效，发 prompt_mode 会直接 400（code 3051）。

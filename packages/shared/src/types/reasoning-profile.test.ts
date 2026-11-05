@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AgentThinkingLevel } from './agent'
-import { isClaudeAdaptiveThinkingModel, resolveReasoningModelTag, resolveReasoningProfile } from './reasoning-profile'
+import { inferReasoningTransport, isClaudeAdaptiveThinkingModel, resolveReasoningModelTag, resolveReasoningProfile } from './reasoning-profile'
 
 describe('OpenAI reasoning profile', () => {
   test('Given GPT-6 Astra When resolving Then exposes five effort levels without off/minimal', () => {
@@ -245,5 +245,34 @@ describe('模型能力家族 tag', () => {
     expect(resolveReasoningModelTag('glm-x-preview')).toBeUndefined()
     expect(resolveReasoningModelTag('qwen-max')).toBeUndefined()
     expect(resolveReasoningModelTag(undefined)).toBeUndefined()
+  })
+})
+
+describe('Mistral reasoning profile', () => {
+  test('Given 官方 Mistral 端点 When 推断 transport Then 独立成 mistral-conversations 而不是 other', () => {
+    expect(inferReasoningTransport('custom', 'https://api.mistral.ai/v1')).toBe('mistral-conversations')
+  })
+
+  test('Given magistral 系列 When 解析 profile Then 走 prompt_mode 开关档位', () => {
+    const profile = resolveReasoningProfile({ modelId: 'magistral-medium-latest', transport: 'mistral-conversations' })
+
+    expect(profile?.id).toBe('mistral-reasoning-toggle')
+    expect(profile?.levels).toEqual(['off', 'high'])
+    // off 必须留空而不是 null：Pi 把 null 判为不支持该档，会把 off 向上 clamp 成 high。
+    expect(profile?.encodings['mistral-conversations']?.effortMap.off).toBeUndefined()
+    expect(profile?.encodings['mistral-conversations']?.effortMap.high).toBe('high')
+  })
+
+  test('Given mistral-medium / mistral-small When 解析 profile Then 走 reasoning_effort 档位', () => {
+    expect(resolveReasoningProfile({ modelId: 'mistral-medium-latest', transport: 'mistral-conversations' })?.id).toBe('mistral-effort')
+    expect(resolveReasoningProfile({ modelId: 'mistral-small-2603', transport: 'mistral-conversations' })?.id).toBe('mistral-effort')
+  })
+
+  test('Given 第三方模型 id 跑在 Mistral 渠道上 When 解析 profile Then 不命中任何 Mistral 档位', () => {
+    expect(resolveReasoningProfile({ modelId: 'deepseek-v4-1-flash-1017', transport: 'mistral-conversations' })).toBeUndefined()
+  })
+
+  test('Given 同一 Mistral 模型走 OpenAI 兼容网关 When 解析 profile Then 不套用 Mistral 档位', () => {
+    expect(resolveReasoningProfile({ modelId: 'magistral-medium-latest', transport: 'openai-completions' })).toBeUndefined()
   })
 })

@@ -13,6 +13,7 @@ export type ReasoningTransport =
   | 'anthropic-messages'
   | 'openai-completions'
   | 'openai-responses'
+  | 'mistral-conversations'
   | 'other'
 
 /**
@@ -39,9 +40,10 @@ export function inferReasoningTransport(
     case 'google-generative-ai':
       return 'other'
     case 'mistral-conversations':
-      // Mistral 原生协议的思考开关是 prompt_mode，未开通时直接 400，
-      // 且它不是档位式推理，渲染层不提供思考档位菜单。
-      return 'other'
+      // Mistral 原生协议有自己的推理字段（prompt_mode / reasoning_effort），
+      // 由 Pi 的 mistral-conversations 适配器编码，必须单独成一个 transport：
+      // 归到 'other' 会让档位菜单消失、运行时也不注入参数。
+      return 'mistral-conversations'
     default:
       return 'anthropic-messages'
   }
@@ -66,7 +68,7 @@ export interface ReasoningEncoding {
 }
 
 export interface ReasoningProfile {
-  id: 'deepseek-v4-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'kimi-k2.6-toggle' | 'kimi-k2.7-always-on' | 'glm-5.2' | 'glm-5.3' | 'glm-legacy-toggle' | 'grok-4.3' | 'grok-4.5' | 'grok-4.6' | 'qwen-3.8' | 'qwen-toggle' | 'mimo-toggle' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-gpt6' | 'claude-adaptive'
+  id: 'deepseek-v4-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'kimi-k2.6-toggle' | 'kimi-k2.7-always-on' | 'glm-5.2' | 'glm-5.3' | 'glm-legacy-toggle' | 'grok-4.3' | 'grok-4.5' | 'grok-4.6' | 'qwen-3.8' | 'qwen-toggle' | 'mimo-toggle' | 'mistral-reasoning-toggle' | 'mistral-effort' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-gpt6' | 'claude-adaptive'
   levels: readonly AgentThinkingLevel[]
   defaultLevel: AgentThinkingLevel
   normalize(level: AgentThinkingLevel | undefined): AgentThinkingLevel
@@ -446,6 +448,58 @@ const MIMO_PROFILE: ReasoningProfile = {
   },
 }
 
+// Mistral 原生协议只有两种档位语义，且**都由 Pi 的 mistral-conversations 适配器
+// 自行编码**（Profer 不注入请求体）：
+// - prompt_mode 型：`model.reasoning` 为 true 且思考开启时发 `prompt_mode: 'reasoning'`；
+// - reasoning_effort 型：发 `reasoning_effort`，官方只接受 none / high。
+// 因此这里真正生效的是 thinkingLevelMap（Pi 的 clamp 与编码都读它），
+// effortMap 只用于界面如实展示。两种语义都不存在 medium / xhigh，
+// 只暴露 off / high 两档，避免出现选不同档位、实际发同一个值的假档位。
+const MISTRAL_EFFORT_LEVELS = ['off', 'high'] as const satisfies readonly AgentThinkingLevel[]
+
+/**
+ * Mistral 档位表。
+ *
+ * 与其它 toggle 型 profile 的关键差异：Mistral 的请求体完全由 Pi 的
+ * mistral-conversations 适配器编码，Profer 不注入任何字段，所以档位表必须
+ * 同时满足 Pi 的两处语义：
+ * - `off` 必须**不是 null**：Pi 的 getSupportedThinkingLevels 把 `map[level] === null`
+ *   判为不支持，off 会被 clamp 向上取到 high，导致「关闭思考」实际仍开思考。
+ *   留空（undefined）既保持 off 合法，又让 streamSimple 在 off 时不发参数。
+ * - `high: 'high'`：reasoning_effort 型的实际请求值；prompt_mode 型只用到「非 off」。
+ * - 其余档位显式 null：界面不展示，统一收敛到 high。
+ */
+const MISTRAL_LEVEL_MAP: ReasoningEffortMap = {
+  minimal: null,
+  low: null,
+  medium: null,
+  high: 'high',
+  xhigh: null,
+  max: null,
+}
+
+/** Mistral prompt_mode 型推理模型（magistral / mistral-large 等）：开关式。 */
+const MISTRAL_REASONING_PROFILE: ReasoningProfile = {
+  id: 'mistral-reasoning-toggle',
+  levels: TOGGLE_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeToggleLevel,
+  encodings: {
+    'mistral-conversations': { kind: 'provider-toggle', effortMap: MISTRAL_LEVEL_MAP },
+  },
+}
+
+/** Mistral reasoning_effort 型模型（mistral-small-2603 / mistral-medium-* 等）。 */
+const MISTRAL_EFFORT_PROFILE: ReasoningProfile = {
+  id: 'mistral-effort',
+  levels: MISTRAL_EFFORT_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeToggleLevel,
+  encodings: {
+    'mistral-conversations': { kind: 'provider-toggle', effortMap: MISTRAL_LEVEL_MAP },
+  },
+}
+
 const GLM_52_PROFILE: ReasoningProfile = {
   id: 'glm-5.2',
   levels: GLM_52_LEVELS,
@@ -609,6 +663,8 @@ export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   QWEN_38_PROFILE,
   QWEN_TOGGLE_PROFILE,
   MIMO_PROFILE,
+  MISTRAL_REASONING_PROFILE,
+  MISTRAL_EFFORT_PROFILE,
   OPENAI_STANDARD_PROFILE,
   OPENAI_MAX_PROFILE,
   OPENAI_GPT6_PROFILE,
@@ -636,6 +692,8 @@ const TAG_TO_PROFILE: Readonly<Record<ReasoningModelTag, ReasoningProfile>> = {
   'qwen-3.8': QWEN_38_PROFILE,
   'qwen-toggle': QWEN_TOGGLE_PROFILE,
   'mimo-toggle': MIMO_PROFILE,
+  'mistral-reasoning': MISTRAL_REASONING_PROFILE,
+  'mistral-effort': MISTRAL_EFFORT_PROFILE,
 }
 
 /**
