@@ -124,6 +124,9 @@ export const scratchPadContentAtom = atom<string>('')
 /** Scratch Pad 内容是否已从磁盘加载 */
 export const scratchPadLoadedAtom = atom<boolean>(false)
 
+/** 从会话进入草稿时记录来源 Tab，使草稿可回到同一条会话 rail。 */
+export const scratchPadOriginTabIdAtom = atom<string | null>(null)
+
 // ===== 派生 Atoms =====
 
 /** 当前活跃标签 */

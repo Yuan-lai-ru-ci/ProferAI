@@ -35,8 +35,33 @@ test('Chat 会话激活时草稿仍在首位', () => {
   expect(selectContextTabs(tabs, 'c1', []).map((tab) => tab.id)).toEqual([SCRATCH_PAD_ID, 'c1'])
 })
 
-test('草稿自身激活时只显示草稿', () => {
-  const tabs = [scratch, agentTab('a1')]
+test('草稿激活时沿用进入前的会话 rail，不带入其他会话', () => {
+  const tabs: TabItem[] = [
+    scratch,
+    agentTab('agent-a'),
+    chatTab('chat-b'),
+    { id: 'preview-a', type: 'preview', sessionId: 'agent-a', title: '预览' },
+    { id: 'browser-b', type: 'browser', sessionId: 'chat-b', title: '浏览器' },
+    agentTab('agent-c'),
+  ]
+
+  expect(selectContextTabs(tabs, SCRATCH_PAD_ID, [], 'agent-a').map((tab) => tab.id)).toEqual([
+    SCRATCH_PAD_ID,
+    'agent-a',
+    'preview-a',
+  ])
+})
+
+test('从 Chat 会话进入草稿时保留该 Chat，隐藏其他会话', () => {
+  const tabs = [scratch, chatTab('chat-a'), chatTab('chat-b'), agentTab('agent-c')]
+  expect(selectContextTabs(tabs, SCRATCH_PAD_ID, [], 'chat-a').map((tab) => tab.id)).toEqual([
+    SCRATCH_PAD_ID,
+    'chat-a',
+  ])
+})
+
+test('直接打开草稿时不把其他会话放进 rail', () => {
+  const tabs = [scratch, agentTab('agent-a'), chatTab('chat-b')]
   expect(selectContextTabs(tabs, SCRATCH_PAD_ID, []).map((tab) => tab.id)).toEqual([SCRATCH_PAD_ID])
 })
 

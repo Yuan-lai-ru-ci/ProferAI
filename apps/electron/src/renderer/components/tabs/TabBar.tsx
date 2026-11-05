@@ -26,6 +26,7 @@ import {
   reorderTabs,
   updateTabTitle,
   tabMruAtom,
+  scratchPadOriginTabIdAtom,
   SCRATCH_PAD_ID,
 } from "@/atoms/tab-atoms";
 import type { TabItem } from "@/atoms/tab-atoms";
@@ -93,6 +94,8 @@ export function TabBar(): React.ReactElement {
   const tabs = useAtomValue(tabsAtom);
   const setTabs = useSetAtom(tabsAtom);
   const [activeTabId, setActiveTabId] = useAtom(activeTabIdAtom);
+  const scratchPadOriginTabId = useAtomValue(scratchPadOriginTabIdAtom)
+  const setScratchPadOriginTabId = useSetAtom(scratchPadOriginTabIdAtom)
   const agentSessions = useAtomValue(agentSessionsAtom);
   const installedPlugins = useAtomValue(installedPluginsAtom)
   const hasPluginPages = installedPlugins.some((plugin) => plugin.enabled && (plugin.manifest.contributes.pages ?? []).some((page) => resolvePluginPageSurfaceVisibility(page, plugin.pagePlacements?.[page.id], 'tab')))
@@ -110,8 +113,8 @@ export function TabBar(): React.ReactElement {
   }, [tabs, setTabs]);
 
   const contextTabs = React.useMemo(
-    () => selectContextTabs(tabs, activeTabId, agentSessions),
-    [activeTabId, agentSessions, tabs],
+    () => selectContextTabs(tabs, activeTabId, agentSessions, scratchPadOriginTabId),
+    [activeTabId, agentSessions, scratchPadOriginTabId, tabs],
   );
   const indicatorMap = useAtomValue(tabIndicatorMapAtom);
   const setTabMru = useSetAtom(tabMruAtom);
@@ -223,6 +226,10 @@ export function TabBar(): React.ReactElement {
     (tabId: string) => {
       const tab = tabs.find((t) => t.id === tabId);
       if (!tab) return;
+      if (tab.id === SCRATCH_PAD_ID && activeTabId !== SCRATCH_PAD_ID) {
+        const currentTab = tabs.find((candidate) => candidate.id === activeTabId)
+        if (currentTab && currentTab.type !== 'scratch') setScratchPadOriginTabId(currentTab.id)
+      }
       if (tab.type === "agent" || tab.type === "preview") {
         const session = agentSessions.find((s) => s.id === tab.sessionId);
         if (!isAgentWorkspaceIdVisible(session?.workspaceId, agentWorkspaces)) return;
@@ -338,6 +345,8 @@ export function TabBar(): React.ReactElement {
       setCurrentAgentSessionId,
       setCurrentAgentWorkspaceId,
       setUnviewedCompleted,
+      setScratchPadOriginTabId,
+      activeTabId,
     ],
   );
 

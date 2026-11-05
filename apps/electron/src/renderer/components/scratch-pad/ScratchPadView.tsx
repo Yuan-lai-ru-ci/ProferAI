@@ -12,8 +12,10 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
+import Underline from '@tiptap/extension-underline'
+import Link from '@tiptap/extension-link'
 import { useAtom, useAtomValue } from 'jotai'
-import { FileDown } from 'lucide-react'
+import { FileDown, ImagePlus } from 'lucide-react'
 import { scratchPadContentAtom, scratchPadLoadedAtom, tabsAtom, activeTabIdAtom } from '@/atoms/tab-atoms'
 import { currentAgentWorkspaceIdAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import {
@@ -39,6 +41,7 @@ import {
   createMarkdownVideo,
 } from '@/components/diff/markdown-preview-extensions'
 import { SpeechButton } from '@/components/ai-elements/speech-button'
+import { MarkdownEditorToolbar } from '@/components/diff/MarkdownEditorToolbar'
 import {
   SCRATCH_PAD_VOICE_INPUT_ID,
   VOICE_DICTATION_INSERT_EVENT,
@@ -46,24 +49,52 @@ import {
   setLastFocusedVoiceInputId,
 } from '@/lib/voice-input-focus'
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'))
+    reader.readAsText(file)
+  })
+}
+
+function isMarkdownFile(file: File): boolean {
+  return /\.(md|markdown|mdown|mkdn)$/i.test(file.name)
+}
+
 export function ScratchPadView(): React.ReactElement {
   const [content, setContent] = useAtom(scratchPadContentAtom)
   const loaded = useAtomValue(scratchPadLoadedAtom)
+  const [isDragging, setIsDragging] = React.useState(false)
   const containerRef = React.useRef<HTMLDivElement>(null)
-
-  // 用 ref 追踪最新内容，避免在 useEffect deps 里包含 content 导致循环
-  const contentRef = React.useRef(content)
-  contentRef.current = content
 
   const extensions = React.useMemo(() => [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
-      codeBlock: false, // 用 CodeBlockLowlight 替代：支持 ``` 触发、可编辑、可删除
+      codeBlock: false,
+      link: false,
+      underline: false,
     }),
     Placeholder.configure({
       placeholder: '在此随意书写… 支持 Markdown 快捷输入',
     }),
     CodeBlockLowlight.configure({ lowlight }),
+    Underline,
+    Link.configure({
+      openOnClick: false,
+      autolink: true,
+      linkOnPaste: true,
+      validate: (href) => /^(https?|mailto|file|profer-file):/.test(href),
+    }),
     // ScratchPad 无会话/文件上下文，传 null 跳过路径解析（仅支持 data-URL / 外链 / file: 协议）
     createMarkdownImage(null),
     createMarkdownVideo(null),
@@ -84,6 +115,60 @@ export function ScratchPadView(): React.ReactElement {
     },
     immediatelyRender: false,
   })
+
+  const loadedContentAppliedRef = React.useRef(false)
+  React.useEffect(() => {
+    if (!editor || !loaded || loadedContentAppliedRef.current) return
+    editor.commands.setContent(content || '', { emitUpdate: false })
+    loadedContentAppliedRef.current = true
+  }, [editor, loaded, content])
+
+  // ===== 文件中转 =====
+
+  const insertFile = React.useCallback(async (file: File): Promise<void> => {
+    if (!editor) return
+    try {
+      if (file.type.startsWith('image/')) {
+        const src = await readFileAsDataUrl(file)
+        editor.chain().focus().insertContent({
+          type: 'markdownImage',
+          attrs: { src, alt: file.name.replace(/\.[^.]+$/, ''), title: file.name },
+        }).run()
+        return
+      }
+
+      const text = await readFileAsText(file)
+      if (!text) return
+      const html = isMarkdownFile(file) ? markdownToHtml(text) : undefined
+      editor.chain().focus().insertContent(html ?? text).run()
+    } catch (err) {
+      console.error('[ScratchPad] 文件插入失败:', err)
+    }
+  }, [editor])
+
+  const handleDragOver = React.useCallback((event: React.DragEvent<HTMLDivElement>): void => {
+    if (event.dataTransfer.types.includes('Files')) {
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+      setIsDragging(true)
+    }
+  }, [])
+
+  const handleDragLeave = React.useCallback((event: React.DragEvent<HTMLDivElement>): void => {
+    if (event.currentTarget === event.target || !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setIsDragging(false)
+    }
+  }, [])
+
+  const handleDrop = React.useCallback((event: React.DragEvent<HTMLDivElement>): void => {
+    if (!event.dataTransfer.files.length) return
+    event.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(event.dataTransfer.files)
+    void (async () => {
+      for (const file of files) await insertFile(file)
+    })()
+  }, [insertFile])
 
   // ===== 导出 =====
 
@@ -156,21 +241,6 @@ export function ScratchPadView(): React.ReactElement {
       console.error('[ScratchPad] 导出失败:', err)
     }
   }, [editor])
-
-  // ===== 内容同步 =====
-
-  // 仅在初始加载或编辑器重新挂载时同步内容到编辑器。
-  // content 不加入 deps：用户每次输入都会更新 atom，若加入 deps 会导致
-  // setContent → onUpdate → atom 变化 → setContent 死循环，
-  // HTML 规范化解析会吞掉尾部空格和空段落，并重置光标位置。
-  React.useEffect(() => {
-    if (!loaded || !editor) return
-    const latestContent = contentRef.current
-    if (latestContent && editor.getHTML() !== latestContent) {
-      editor.commands.setContent(latestContent)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, editor])
 
   // ===== 语音输入路由 =====
 
@@ -255,16 +325,51 @@ export function ScratchPadView(): React.ReactElement {
     return () => el.removeEventListener('paste', handlePaste, true)
   }, [editor])
 
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
+
+  const handleFileSelect = React.useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    void Promise.all(files.map(insertFile))
+  }, [insertFile])
+
   return (
-    <div ref={containerRef} className="relative flex flex-col h-full">
+    <div
+      ref={containerRef}
+      className="relative flex h-full flex-col"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <div className="flex-1 overflow-auto scrollbar-thin px-8 pt-6 pb-20">
         <div className="max-w-3xl mx-auto">
-          <div className="mb-5 flex flex-col gap-2">
-            <div>
-              <h1 className="text-xl font-semibold tracking-normal text-foreground">草稿页</h1>
-              <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
-                临时记录内容、整理 Todo、暂存剪贴板文本，稍后再导出到会话或工作区。
-              </p>
+          <div className="mb-5 flex flex-col gap-3">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h1 className="text-xl font-semibold tracking-normal text-foreground">草稿页</h1>
+                <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
+                  把文字、图片和临时想法先放在这里，再整理到会话或工作区。
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,.md,.markdown,.txt,.json,.csv,.log"
+                  className="hidden"
+                  onChange={handleFileSelect}
+                />
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border/70 bg-background px-2.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={() => fileInputRef.current?.click()}
+                  title="插入图片或文本文件"
+                >
+                  <ImagePlus className="h-3.5 w-3.5" />
+                  插入文件
+                </button>
+              </div>
             </div>
             <div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground/80">
               <span className="rounded-md bg-muted px-2 py-1">临时笔记</span>
@@ -272,11 +377,21 @@ export function ScratchPadView(): React.ReactElement {
               <span className="rounded-md bg-muted px-2 py-1">剪贴板暂存</span>
             </div>
           </div>
-          {loaded ? (
-            <EditorContent
-              editor={editor}
-              className="prose prose-sm dark:prose-invert max-w-none [&_.ProseMirror]:min-h-[40vh] [&_.ProseMirror]:outline-none [&_.ProseMirror]:text-sm [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-muted-foreground/50 [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left [&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0"
-            />
+          {loaded && editor ? (
+            <div className="overflow-hidden rounded-lg border border-border/70 bg-background/40 shadow-sm">
+              <MarkdownEditorToolbar editor={editor} />
+              <div className="relative">
+                <EditorContent
+                  editor={editor}
+                  className="prose prose-sm dark:prose-invert max-w-none px-5 py-4 [&_.ProseMirror]:min-h-[42vh] [&_.ProseMirror]:outline-none [&_.ProseMirror]:text-sm [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-muted-foreground/50 [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left [&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0"
+                />
+                {isDragging && (
+                  <div className="pointer-events-none absolute inset-2 flex items-center justify-center rounded-md border-2 border-dashed border-primary bg-primary/5 text-sm font-medium text-primary">
+                    松开以插入图片或文件
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
             <div className="min-h-[200px] flex items-center justify-center">
               <span className="text-sm text-muted-foreground/40">加载中…</span>
