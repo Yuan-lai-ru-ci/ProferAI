@@ -9,6 +9,7 @@ import { Box, ChevronRight, FolderSearch, Search, Undo2, X } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { getFileBaseName } from '@/lib/file-utils'
+import { setFileReferenceDragData } from '@/lib/file-reference-drag'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
 import { FileTypeIcon } from '@/components/file-browser/FileTypeIcon'
 import { agentDiffUnseenFilesAtom, agentDiffDataAtom, agentSelectedWorktreeAtom } from '@/atoms/agent-atoms'
@@ -426,6 +427,8 @@ function FileRow({
     <div
       role="button"
       tabIndex={0}
+      draggable
+      onDragStart={(e) => setFileReferenceDragData(e.dataTransfer, [{ path: fullPath, name: fileName }])}
       className={cn(
         'flex items-center w-full px-2 pl-3 h-[36px] text-[14px] transition-colors group',
         isSelected
@@ -501,6 +504,8 @@ function UntrackedFileRow({
     <div
       role="button"
       tabIndex={0}
+      draggable
+      onDragStart={(e) => setFileReferenceDragData(e.dataTransfer, [{ path: fullPath, name: fileName }])}
       className="flex items-center w-full px-2 pl-6 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors"
       onClick={onClick}
     >
@@ -539,6 +544,8 @@ function NonGitFileRow({
     <div
       role="button"
       tabIndex={0}
+      draggable
+      onDragStart={(e) => setFileReferenceDragData(e.dataTransfer, [{ path: change.path, name: fileName }])}
       className="flex items-center w-full px-2 pl-3 h-[36px] text-[14px] hover:bg-foreground/[0.04] transition-colors"
       onClick={onClick}
     >

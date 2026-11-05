@@ -49,6 +49,7 @@ import {
 } from '@profer/ui/primitives/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { getLastPathSegments } from '@/lib/file-utils'
+import { setFileReferenceDragData } from '@/lib/file-reference-drag'
 import { toast } from 'sonner'
 import { workspaceFilesVersionAtom, fileBrowserAutoRevealAtom, recentlyModifiedPathsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
 import type { FileEntry } from '@profer/shared'
@@ -626,6 +627,10 @@ function FileGridView({ entries, loading, error, emptyHint, onSelect, onDelete, 
       {entries.map((entry) => (
         <div
           key={entry.path}
+          draggable
+          onDragStart={(e) => {
+            setFileReferenceDragData(e.dataTransfer, [{ path: entry.path, name: entry.name, isDirectory: entry.isDirectory }])
+          }}
           onClick={(e) => { if (menuOpen !== entry.path) onSelect(entry, e) }}
           className={cn(
             'group relative flex flex-col items-center gap-1.5 p-4 rounded-lg border border-transparent cursor-pointer',
@@ -973,10 +978,21 @@ function FileTreeItem({
   const showMenu = !isRenaming
   const menuSelectedCount = isSelected ? selectedCount : 1
 
+  /** 拖动整行到输入框 = 插入 @ 引用；重命名时不参与拖拽，避免抢走输入框里的文本选择。 */
+  const handleDragStart = (e: React.DragEvent): void => {
+    if (isRenaming) {
+      e.preventDefault()
+      return
+    }
+    setFileReferenceDragData(e.dataTransfer, [{ path: entry.path, name: entry.name, isDirectory: entry.isDirectory }])
+  }
+
   return (
     <div className="relative" onClick={handleWrapperClick}>
       <div
         ref={rowRef}
+        draggable={!isRenaming}
+        onDragStart={handleDragStart}
         data-sticky-row={isSticky ? 'true' : undefined}
         className={cn(
           'relative flex h-8 items-center gap-1 pr-2 text-sm cursor-pointer group transition-colors',
