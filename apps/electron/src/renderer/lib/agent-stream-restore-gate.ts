@@ -13,10 +13,22 @@
  * 直接派发即可通过竞态保护，也能避免延迟用户可见的收尾动作。
  */
 export class AgentStreamRestoreGate {
-  private settled = false
+  private activeRestores = 0
   private readonly deferred: Array<() => void> = []
 
   constructor(private readonly hasStreamState: (sessionId: string) => boolean) {}
+
+  /** 开始一次恢复请求；所有并发请求结束后才放行暂存的终态。 */
+  begin(): () => void {
+    this.activeRestores += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.activeRestores -= 1
+      if (this.activeRestores === 0) this.flush()
+    }
+  }
 
   /**
    * 判断终态是否需要延后派发。
@@ -24,15 +36,14 @@ export class AgentStreamRestoreGate {
    * @returns true 表示已暂存，调用方必须立刻返回、不要再执行终态处理。
    */
   defer(sessionId: string, dispatch: () => void): boolean {
-    if (this.settled) return false
+    if (this.activeRestores === 0) return false
     if (this.hasStreamState(sessionId)) return false
     this.deferred.push(dispatch)
     return true
   }
 
-  /** 占位写入完成后调用：放行暂存的终态，之后到达的终态一律立即派发。 */
-  settle(): void {
-    this.settled = true
+  /** 所有恢复请求完成后放行暂存的终态。 */
+  private flush(): void {
     const pending = this.deferred.splice(0)
     for (const dispatch of pending) dispatch()
   }
@@ -41,4 +52,14 @@ export class AgentStreamRestoreGate {
   get pendingCount(): number {
     return this.deferred.length
   }
+}
+
+/** 旧版 IPC 只返回 sessionId 字符串，按活跃流兼容。 */
+export function isActiveRestoreSnapshot(snapshot: string | { active: boolean }): boolean {
+  return typeof snapshot === 'string' || snapshot.active === true
+}
+
+/** 已结束但仍会回放终态的快照需要一次性占位，让完成处理能执行并立即收敛。 */
+export function shouldCreateRestoreState(snapshot: string | { active: boolean; hasTerminalEvent: boolean }): boolean {
+  return isActiveRestoreSnapshot(snapshot) || (typeof snapshot !== 'string' && snapshot.hasTerminalEvent)
 }

@@ -88,7 +88,7 @@ import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session-file-changes'
 import { compactCompletedBackgroundStreamState, isCurrentAgentStreamCompletion, settleCompletedAgentStreamState } from '@/lib/agent-stream-state-cleanup'
-import { AgentStreamRestoreGate } from '@/lib/agent-stream-restore-gate'
+import { AgentStreamRestoreGate, shouldCreateRestoreState } from '@/lib/agent-stream-restore-gate'
 import { isAbsoluteFilePath } from '@/lib/file-utils'
 import { inspectOfficialPptxPreview } from '@/components/file-browser/office-preview/official-preview-session'
 import { isAgentWorkspaceIdVisible } from '@/lib/product-feature-flags'
@@ -1455,11 +1455,18 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       store.set(agentStreamingStatesAtom, (prev) => {
         let next: Map<string, AgentStreamState> | null = null
         for (const snapshot of snapshots) {
+          const restored = typeof snapshot === 'string' ? undefined : snapshot
           const sessionId = typeof snapshot === 'string' ? snapshot : snapshot.sessionId
           const current = (next ?? prev).get(sessionId)
+          if (!shouldCreateRestoreState(snapshot)) {
+            // 主进程已确认没有活跃 run；清掉旧版本遗留的 running/stopping，保留用量快照。
+            if (!current || (!current.running && !current.backgroundWaiting && !current.stopping)) continue
+            if (!next) next = new Map(prev)
+            next.set(sessionId, settleCompletedAgentStreamState(current, false))
+            continue
+          }
           if (current?.running || current?.backgroundWaiting) continue
           if (!next) next = new Map(prev)
-          const restored = typeof snapshot === 'string' ? undefined : snapshot
           next.set(sessionId, {
             running: true,
             content: '',
@@ -1475,16 +1482,17 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       })
     }
 
+    const restoreActiveStreams = (sessionIds?: readonly string[]): Promise<void> => {
+      const release = restoreTerminalGate.begin()
+      return window.electronAPI.restoreActiveAgentStreams(sessionIds)
+        .then(applyRestoreSnapshots)
+        .finally(release)
+    }
+
     // 独立会话窗口只接管自己的会话；主窗口保持「恢复全部活跃流」的刷新语义。
-    window.electronAPI.restoreActiveAgentStreams(standaloneSessionId ? [standaloneSessionId] : undefined)
-      .then((snapshots) => {
-        applyRestoreSnapshots(snapshots)
-        // 占位已写好，此时派发暂存的终态才能通过竞态保护并完成收尾副作用。
-        restoreTerminalGate.settle()
-      })
+    void restoreActiveStreams(standaloneSessionId ? [standaloneSessionId] : undefined)
       .catch((error) => {
         console.error('[Agent] 刷新后恢复活跃流失败:', error)
-        restoreTerminalGate.settle()
       })
 
     // 切到某个 Agent 会话时主动“认领”本轮流。
@@ -1506,10 +1514,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         standalone: Boolean(standaloneSessionId),
       })) return
       claimedSessionIds.add(sessionId)
-      void window.electronAPI.restoreActiveAgentStreams([sessionId])
-        .then((snapshots) => {
-          if (snapshots.length > 0) applyRestoreSnapshots(snapshots)
-        })
+      void restoreActiveStreams([sessionId])
         .catch((error) => {
           console.error('[Agent] 认领会话流失败:', error)
         })
