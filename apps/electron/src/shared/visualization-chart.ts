@@ -1,10 +1,14 @@
 import { init, use, type EChartsCoreOption } from 'echarts/core'
 import { BarChart, LineChart, PieChart, ScatterChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent, AriaComponent } from 'echarts/components'
-import { SVGRenderer } from 'echarts/renderers'
+import { SVGRenderer, CanvasRenderer } from 'echarts/renderers'
 import type { VisualizationChartSpec, VisualizationViewState } from '@profer/shared'
 
-use([BarChart, LineChart, PieChart, ScatterChart, GridComponent, LegendComponent, TooltipComponent, AriaComponent, SVGRenderer])
+// SVGRenderer 供导出静态 HTML（SSR 字符串）；CanvasRenderer 供会话内实时图表。
+// 实时图表必须用 canvas：SVG renderer 下鼠标扫过柱状图时，ECharts 会把柱子那个 <path>
+// 反复从 <g> 里移出再插回，重新插入的瞬间 fill 会落成 none（zrender 在 style.fill == null
+// 时输出 fill="none"）——柱子在一帧里真的消失，肉眼就是「鼠标划过一排柱子全在闪」。
+use([BarChart, LineChart, PieChart, ScatterChart, GridComponent, LegendComponent, TooltipComponent, AriaComponent, SVGRenderer, CanvasRenderer])
 export { init }
 
 export interface ChartTheme {
@@ -100,11 +104,10 @@ export function buildChartOption(spec: VisualizationChartSpec, theme: ChartTheme
     animation: false, color: [...(theme.palette ?? DEFAULT_CHART_PALETTE)], backgroundColor: 'transparent',
     textStyle: { color: theme.foreground, fontFamily: theme.fontFamily, fontSize: 12 },
     aria: { enabled: true, decal: { show: true } },
-    // 提示框必须是 HTML 渲染（ECharts 默认值），不能改成 `richText`：
-    // richText 的提示框画在图表自己的 SVG 里，而 ECharts 每次 mousemove 都会把那段文本
-    // 节点销毁重建（实测沿着一根柱子移动 134 次 = 增删各 804 个节点），整块 SVG 连同
-    // decal 图案每帧重绘一次——表现就是鼠标在柱子上移动时图表持续闪动。
-    // HTML 渲染的提示框是图表外的一个 `pointer-events:none` 的 div，悬停期间 SVG 零重绘。
+    // 提示框必须走 HTML 渲染：richText 把提示框画进图表自己的 SVG，每次 mousemove
+    // 都销毁重建那段文本节点，整块 SVG 连 decal 斜纹每帧重绘（实测沿柱移动 134 次
+    // = 增删各 804 个节点）。HTML 提示框是图表外 pointer-events:none 的 div，
+    // 悬停期间 SVG 零重绘。
     tooltip: {
       trigger: spec.chartType === 'line' ? 'axis' : 'item',
       renderMode: 'html',

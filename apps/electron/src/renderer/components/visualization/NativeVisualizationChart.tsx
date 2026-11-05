@@ -29,7 +29,16 @@ export function NativeVisualizationChart({ spec, content, state, onState, onQuot
   const height = nativeChartHeight(spec)
   React.useEffect(() => {
     if (!ref.current) return
-    const chart = init(ref.current, undefined, { renderer: 'svg' })
+    // 必须用 canvas 渲染，不能用 SVG。
+    //
+    // 实测（真实窗口 + MutationObserver）：SVG renderer 下鼠标扫过柱状图时，ECharts 会把
+    // 柱子那个 <path> 反复从 <g> 里移出再插回（同一 d，2 秒内上百次），而重新插入的瞬间
+    // 它的 fill 会落成 none（zrender 在 style.fill == null 时输出 fill="none"）——
+    // 于是柱子在一帧里真的消失，肉眼就是「鼠标划过一排柱子全在闪」。
+    // 这与 decal 斜纹、提示框、布局抖动、React 重渲染均无关（实测 resizes/setOptions 都是 0，
+    // 容器高度与 pattern 数量全程不变）。canvas 没有元素节点，重绘是整块位图原子替换，
+    // 从根上不存在这类中间态。导出的静态 HTML 仍走 SSR SVG，不受影响。
+    const chart = init(ref.current, undefined, { renderer: 'canvas' })
     chartRef.current = chart
     // 新实例先落一次当前 option：重挂载后各 effect 的依赖没变，下面的签名闸门会跳过重绘。
     if (optionRef.current) chart.setOption(optionRef.current.option, { notMerge: true, silent: true })
