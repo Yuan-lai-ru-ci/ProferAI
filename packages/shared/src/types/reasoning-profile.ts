@@ -706,9 +706,38 @@ const TAG_TO_PROFILE: Readonly<Record<ReasoningModelTag, ReasoningProfile>> = {
  */
 export function resolveReasoningProfile(input: ResolveReasoningProfileInput): ReasoningProfile | undefined {
   const tag = resolveReasoningModelTag(input.modelId)
-  if (!tag) return undefined
-  const profile = TAG_TO_PROFILE[tag]
-  return profile.encodings[input.transport] ? profile : undefined
+  if (tag) {
+    const profile = TAG_TO_PROFILE[tag]
+    if (profile.encodings[input.transport]) return profile
+  }
+  // Mistral 网关托管的第三方推理模型（deepseek-v4-1-flash 等）没有自己的
+  // Mistral 编码，但实测接受 reasoning_effort=none/high。没有这条兜底会让
+  // 界面隐藏思考档位，运行时也把它当非推理模型。
+  if (input.transport === 'mistral-conversations' && isMistralEffortReasoningModel(input.modelId)) {
+    return MISTRAL_REASONING_PROFILE
+  }
+  return undefined
+}
+
+/**
+ * Mistral 原生协议下走 `reasoning_effort` 的模型族。
+ *
+ * 判据来自真实请求而非模型名猜测：
+ * - Pi 0.86.1 自带清单：mistral-small-2603 / mistral-small-latest /
+ *   mistral-medium-* / zai-glm-5-2；
+ * - 实测同样接受 reasoning_effort 的 magistral-* 与 Mistral 托管的
+ *   deepseek-v4-1-flash（prompt_mode 在未开通的账号上会 400 code 3051）。
+ * 其余声明 reasoning 的型号（如 mistral-large-*）保持 catalog 判定。
+ */
+export function isMistralEffortReasoningModel(modelId: string | undefined): boolean {
+  if (!modelId) return false
+  const id = modelId.trim().toLowerCase().replace(/\[1m\]$/, '')
+  return id === 'mistral-small-2603'
+    || id === 'mistral-small-latest'
+    || id.startsWith('mistral-medium-')
+    || id.startsWith('zai-glm-5-')
+    || id.startsWith('magistral-')
+    || id.startsWith('deepseek-v4-1-flash')
 }
 
 const PI_EXTENDED_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly AgentThinkingLevel[]

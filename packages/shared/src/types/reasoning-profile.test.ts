@@ -268,11 +268,22 @@ describe('Mistral reasoning profile', () => {
     expect(resolveReasoningProfile({ modelId: 'mistral-small-2603', transport: 'mistral-conversations' })?.id).toBe('mistral-effort')
   })
 
-  test('Given 第三方模型 id 跑在 Mistral 渠道上 When 解析 profile Then 不命中任何 Mistral 档位', () => {
-    expect(resolveReasoningProfile({ modelId: 'deepseek-v4-1-flash-1017', transport: 'mistral-conversations' })).toBeUndefined()
+  test('Given Mistral 托管的 deepseek 推理模型 When 解析 profile Then 复用 Mistral 开关档位', () => {
+    // 该模型不在 Pi 的 reasoning_effort 清单里，但实测接受 reasoning_effort=high；
+    // 不挂 profile 会让界面隐藏档位、运行时当它不支持推理。
+    const profile = resolveReasoningProfile({ modelId: 'deepseek-v4-1-flash-1017', transport: 'mistral-conversations' })
+
+    expect(profile?.id).toBe('mistral-reasoning-toggle')
+    expect(profile?.encodings['mistral-conversations']?.effortMap.high).toBe('high')
+    expect(profile?.encodings['mistral-conversations']?.effortMap.off).toBeUndefined()
+  })
+
+  test('Given 不具备推理能力的 Mistral 模型 When 解析 profile Then 仍不命中', () => {
+    expect(resolveReasoningProfile({ modelId: 'codestral-latest', transport: 'mistral-conversations' })).toBeUndefined()
   })
 
   test('Given 同一 Mistral 模型走 OpenAI 兼容网关 When 解析 profile Then 不套用 Mistral 档位', () => {
     expect(resolveReasoningProfile({ modelId: 'magistral-medium-latest', transport: 'openai-completions' })).toBeUndefined()
+    expect(resolveReasoningProfile({ modelId: 'deepseek-v4-1-flash-1017', transport: 'openai-completions' })).toBeUndefined()
   })
 })

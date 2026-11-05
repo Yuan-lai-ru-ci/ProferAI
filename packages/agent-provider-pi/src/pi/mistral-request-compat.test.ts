@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { stream, streamSimple } from '@earendil-works/pi-ai/compat'
 import type { CreateModelRuntimeOptions } from '@earendil-works/pi-coding-agent'
 import { buildModel, normalizePiApi } from './model-registry'
+import { injectMistralReasoningLevel } from './mistral-reasoning-request-settings'
 
 /**
  * 官方 Mistral 的 OpenAI 兼容层有两个硬差异：
@@ -126,9 +127,10 @@ describe('官方 Mistral 端点使用原生 mistral-conversations 协议', () =>
     expect(toolCall?.id).toBe('abc123456')
   })
 
-  test('Given Mistral prompt_mode 型模型且会话开启思考 When 请求 Then 发 prompt_mode=reasoning', async () => {
-    // magistral 系列是 Mistral 的推理模型，思考开关走 prompt_mode；
-    // 档位本身只有开/关，high 就是「开」。
+  test('Given Mistral prompt_mode 型模型且会话开启思考 When 请求 Then Pi 先发 prompt_mode，扩展改写为 reasoning_effort', async () => {
+    // magistral 系列在 Pi 眼里属于 prompt_mode 型；但 prompt_mode 需要账号单独开通，
+    // 未开通时 400（code 3051）。实测同一模型接受 reasoning_effort，因此 Profer 的
+    // 请求扩展在 Pi 构造完请求后统一改写，避免一开思考就失败。
     const model = await registerCustomModel('https://api.mistral.ai/v1', 'magistral-medium-latest')
     expect(model.reasoning).toBe(true)
     // off 必须是 undefined 而非 null：Pi 把 null 判为「不支持该档」，
@@ -137,8 +139,10 @@ describe('官方 Mistral 端点使用原生 mistral-conversations 协议', () =>
     expect(model.thinkingLevelMap?.off).toBeUndefined()
     const { request } = await runStream(model, mistralChunkedSse, streamSimple as typeof stream, { reasoning: 'high' })
     expect(request.body.prompt_mode).toBe('reasoning')
-    // prompt_mode 型不发 reasoning_effort（Mistral 只对特定型号接受该字段）。
-    expect(request.body.reasoning_effort).toBeUndefined()
+
+    // 扩展拿到的是序列化前的 camelCase payload（promptMode），不是 wire 形态。
+    const finalBody = injectMistralReasoningLevel({ model: model.id, promptMode: 'reasoning' }, { thinkingLevel: 'high' })
+    expect(finalBody).toEqual({ model: model.id, reasoningEffort: 'high' })
   })
 
   test('Given Mistral 模型且会话关闭思考 When 请求 Then 不发 prompt_mode', async () => {
@@ -158,14 +162,17 @@ describe('官方 Mistral 端点使用原生 mistral-conversations 协议', () =>
     expect(request.body.prompt_mode).toBeUndefined()
   })
 
-  test('Given 渠道启用了非 Mistral 模型 id 且会话带思考档位 When 请求 Then 不发 prompt_mode / reasoning_effort', async () => {
-    // 同一个 Mistral 渠道里可能启用 deepseek / glm 等模型 id，它们从共享 catalog 拿到的
-    // reasoning 标记在 Mistral 网关上无效，发 prompt_mode 会直接 400（code 3051）。
+  test('Given 渠道启用了 Mistral 托管的 deepseek 推理模型 When 请求 Then 声明推理能力并把 prompt_mode 改成 reasoning_effort', async () => {
+    // deepseek-v4-1-flash 不在 Pi 的 reasoning_effort 清单里，Pi 会错发 prompt_mode；
+    // 实测该模型接受 reasoning_effort=high 并产出思考块，因此按实测声明推理能力。
     const model = await registerCustomModel('https://api.mistral.ai/v1', 'deepseek-v4-1-flash-1017')
-    expect(model.reasoning).toBe(false)
+    expect(model.reasoning).toBe(true)
+    expect(model.thinkingLevelMap).toMatchObject({ high: 'high' })
     const { request } = await runStream(model, mistralChunkedSse, streamSimple as typeof stream, { reasoning: 'medium' })
-    expect(request.body.prompt_mode).toBeUndefined()
-    expect(request.body.reasoning_effort).toBeUndefined()
+
+    // Pi 对不在清单里的模型会补 promptMode；扩展把它改成 reasoningEffort。
+    const finalBody = injectMistralReasoningLevel({ model: model.id, promptMode: 'reasoning' }, { thinkingLevel: 'medium' })
+    expect(finalBody).toEqual({ model: model.id, reasoningEffort: 'high' })
   })
 
   test('Given 自建 OpenAI 兼容网关 When 发起请求 Then 仍走 openai-completions', async () => {

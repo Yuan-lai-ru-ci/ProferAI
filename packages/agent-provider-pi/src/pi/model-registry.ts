@@ -24,6 +24,7 @@ import {
   type ReasoningCapability,
   resolveProviderNativeProtocol,
   isLocalOllamaBaseUrl,
+  isMistralEffortReasoningModel,
 } from '@profer/shared'
 import { assertSdkBaseUrlSupportsRouting, getWhitelistCompatUserAgent, normalizeAnthropicBaseUrlForSdk, normalizeGoogleBaseUrl, normalizeOpenAIBaseUrlForSdk } from '@profer/core/providers'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
@@ -515,26 +516,32 @@ async function resolvePiModelDefaults(
       : rawCatalogContextWindow
   // 渠道模型上的 1M 勾选最后统一生效（强开抬到 1M、强关压回保守窗口）。
   const contextWindow = applyModel1MContextPreference(computedContextWindow, input.context1m)
-  // 官方 Mistral 的推理开关是模型/账号维度的能力（prompt_mode / reasoning_effort）。
-  // Pi 的 mistral-conversations 适配器按模型 ID 自行分流：reasoning_effort 型发
+  // 官方 Mistral 的推理开关是模型维度的能力（reasoning_effort / prompt_mode）。
+  // Pi 的 mistral-conversations 适配器按模型 ID 分流：固定清单内的发
   // `reasoning_effort`，其余声明 reasoning 的型号发 `prompt_mode: 'reasoning'`。
-  //
-  // 只对 Mistral 自家模型声明推理能力：同一渠道里常被启用 deepseek / glm 等第三方
-  // 模型 id，它们从共享 catalog 拿到的 reasoning 标记在 Mistral 网关上没有意义，
-  // 却会让 SDK 发出 prompt_mode 并直接 400（code 3051）。
-  //
-  // 注意：账号未开通推理时 Mistral 同样会返回 400，这属于用户侧配置问题；
-  // 不再用「一律禁用」来回避——那会让已开通账号也彻底用不上思考档位。
+  // 该清单不完整（magistral-*、Mistral 托管的 deepseek 都不在其中），
+  // 所以能力声明按实测结果决定，参数再由 mistral-reasoning-request-settings
+  // 统一改写成 reasoning_effort。
   const mistralNative = api === 'mistral-conversations'
   const mistralOwnModel = mistralNative && isMistralOwnModel(input.model)
+  // Mistral 原生协议下实际走 reasoning_effort 的型号。Pi 0.86.1 只会对
+  // mistral-small-2603 / mistral-small-latest / mistral-medium-* / zai-glm-5-2
+  // 自动发 reasoning_effort，其余声明 reasoning 的模型会被它改发 prompt_mode。
+  // 实测 magistral-* 与 Mistral 托管的 deepseek-v4-1-flash 同样接受
+  // reasoning_effort，而 prompt_mode 在未开通的账号上直接 400（code 3051）；
+  // 因此这里把它们的推理能力打开，由请求扩展统一改写参数。
+  const mistralEffortModel = mistralNative && isMistralEffortReasoningModel(input.model)
   return {
-    // 第三方模型 id 在 Mistral 网关上保持禁用；自家模型按 catalog / 协议默认声明。
+    // 自家模型按 catalog 声明；第三方模型只在实测接受 reasoning_effort 时声明，
+    // 其余保持关闭（发 prompt_mode 必 400）。
     reasoning: mistralNative
-      ? (mistralOwnModel ? (modelMetadata?.reasoning ?? true) : false)
+      ? (mistralOwnModel
+          ? (modelMetadata?.reasoning ?? true)
+          : mistralEffortModel)
       : (modelMetadata?.reasoning ?? true),
     // profile 已按 transport 编译出 Mistral 专用档位表（含 off 语义），
     // 未命中 profile 时回退 catalog 映射。
-    thinkingLevelMap: mistralNative && !mistralOwnModel
+    thinkingLevelMap: mistralNative && !mistralOwnModel && !mistralEffortModel
       ? undefined
       : (providerSpecificCapabilities?.thinkingLevelMap ?? modelMetadata?.thinkingLevelMap),
     compat: applyOpenAICompatibleFinishReasonFallback(
@@ -580,9 +587,9 @@ function applyModel1MContextPreferenceToModel(
 /**
  * 模型 ID 是否属于 Mistral 自家模型。
  *
- * Mistral 渠道里常被启用 deepseek / glm / kimi 等第三方模型 id（聚合网关常见），
- * 这些 id 的 reasoning 标记在 Mistral 网关上无效——声明了就会发 prompt_mode 并 400。
- * 因此只对 Mistral 自家的模型族声明推理能力。
+ * 自家模型直接采用 Pi catalog 的 reasoning 标记；第三方模型（deepseek / glm 等）
+ * 的标记不可信：声明了就可能被 Pi 发成 prompt_mode 并 400（code 3051）。
+ * 第三方模型是否能思考改由 {@link isMistralEffortReasoningModel} 按实测判定。
  */
 function isMistralOwnModel(modelId: string | undefined): boolean {
   const id = normalizeModelIdTail(modelId)

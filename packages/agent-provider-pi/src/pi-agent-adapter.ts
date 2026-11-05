@@ -73,6 +73,7 @@ import { ProjectInstructionScopeController } from './pi/project-instruction-scop
 import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi/codex-fast-mode'
 import { createCodexRequestSettingsExtension } from './pi/codex-request-settings'
 import { createDeepSeekReasoningRequestExtension } from './pi/deepseek-reasoning-request-settings'
+import { createMistralReasoningRequestExtension } from './pi/mistral-reasoning-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi/openai-reasoning-request-settings'
 import { inferReasoningTransport, isLocalOllamaBaseUrl, resolveReasoningProfile, calculatePiAutoCompactionReserveTokens } from '@profer/shared'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from './pi/runtime-env'
@@ -2048,6 +2049,16 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             transport: 'anthropic-messages',
           })
         : undefined
+      // Mistral 原生协议：Pi 只会对写死的四个模型 ID 发 reasoning_effort，其余声明
+      // reasoning 的模型（magistral-*、Mistral 托管的 deepseek-v4-1-flash 等）会被
+      // 补上 prompt_mode，而未开通 prompt mode 的账号会直接 400（code 3051）。
+      // 这些模型的能力已由 model-registry 按实测声明，这里把请求参数统一改写。
+      const mistralReasoningProfile = model.api === 'mistral-conversations' && model.reasoning
+        ? resolveReasoningProfile({
+            modelId: model.id,
+            transport: 'mistral-conversations',
+          })
+        : undefined
       const projectInstructionScope = input.projectInstructionScope
         ? new ProjectInstructionScopeController({
             projectRoot: input.projectInstructionScope.projectRoot,
@@ -2072,6 +2083,12 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         ...(deepSeekReasoningProfile?.encodings['anthropic-messages']?.kind === 'deepseek-output-effort'
           ? [createDeepSeekReasoningRequestExtension({
               profile: deepSeekReasoningProfile,
+              thinkingLevel: input.thinkingLevel,
+            })]
+          : []),
+        ...(mistralReasoningProfile?.encodings['mistral-conversations']?.kind === 'provider-toggle'
+          ? [createMistralReasoningRequestExtension({
+              profile: mistralReasoningProfile,
               thinkingLevel: input.thinkingLevel,
             })]
           : []),

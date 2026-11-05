@@ -117,3 +117,48 @@ describe('DeepSeek 档位与目录归一', () => {
     expect(qwen?.levels).toEqual(['low', 'high', 'max'])
   })
 })
+
+describe('Mistral 原生协议按实测模型声明推理能力', () => {
+  test('Given custom 渠道指向 api.mistral.ai 且启用托管的 deepseek When 解析能力 Then 暴露 off/high', async () => {
+    const capability = await resolvePiReasoningCapability('custom', 'deepseek-v4-1-flash-1017', 'https://api.mistral.ai/v1')
+
+    // 旧行为把非自家模型一律判为非推理；实测该模型接受 reasoning_effort=high。
+    expect(capability).toEqual({
+      source: 'profile',
+      levels: ['off', 'high'],
+      defaultLevel: 'high',
+      effortMap: { high: 'high' },
+    })
+  })
+
+  test('Given Mistral 托管 deepseek 模型 When 注册 Pi 模型 Then reasoning 打开且档位表可用', async () => {
+    const fixture = fakeSdk()
+    await buildModel(fixture.sdk, {
+      sessionId: 'fixture',
+      apiKey: 'fixture-key',
+      provider: 'custom',
+      channelId: 'channel',
+      model: 'deepseek-v4-1-flash-1017',
+      baseUrl: 'https://api.mistral.ai/v1',
+    })
+    const model = fixture.models[0] as Record<string, unknown>
+    expect(model.api).toBe('mistral-conversations')
+    expect(model.reasoning).toBe(true)
+    expect(model.thinkingLevelMap).toMatchObject({ high: 'high' })
+    // off 必须保持 undefined：Pi 把 null 判为不支持，会把 off 向上 clamp 成 high。
+    expect((model.thinkingLevelMap as Record<string, unknown>).off).toBeUndefined()
+  })
+
+  test('Given 同一渠道里启用不具备推理能力的 Mistral 模型 When 注册 Then 仍保持关闭', async () => {
+    const fixture = fakeSdk()
+    await buildModel(fixture.sdk, {
+      sessionId: 'fixture',
+      apiKey: 'fixture-key',
+      provider: 'custom',
+      channelId: 'channel',
+      model: 'codestral-latest',
+      baseUrl: 'https://api.mistral.ai/v1',
+    })
+    expect((fixture.models[0] as Record<string, unknown>).reasoning).toBe(false)
+  })
+})
