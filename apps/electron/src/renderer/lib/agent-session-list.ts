@@ -91,6 +91,13 @@ export function upsertAgentSessionProjection(
     parentSessionId: projection.parentSessionId ?? undefined,
     rootSessionId: projection.rootSessionId ?? undefined,
     sourceDelegationId: projection.sourceDelegationId ?? undefined,
+    // 必须带过来：`placement=independent` 的委派没有 parentSessionId，
+    // 血缘只存在 sourceSessionId 上。丢掉它会让这类子会话在渲染层
+    // 既认不出是委派子会话，也拿不到运行态（表现为「子会话没有 runtime、过程区一直折叠」）。
+    sourceSessionId: projection.sourceSessionId ?? undefined,
+    sourceRunId: projection.sourceRunId ?? undefined,
+    delegationRelation: projection.delegationRelation ?? undefined,
+    delegationPlacement: projection.delegationPlacement ?? undefined,
     explorationParentSessionId: projection.explorationParentSessionId ?? undefined,
     explorationSourceMessageId: projection.explorationSourceMessageId ?? undefined,
     explorationSourceLabel: projection.explorationSourceLabel ?? undefined,

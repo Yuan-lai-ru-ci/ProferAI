@@ -8,6 +8,7 @@ import {
   upsertAgentSessionProjection,
   mergeFetchedAgentSessions,
 } from './agent-session-list'
+import { isDelegatedChildSessionLike } from '@/domains/agent-runtime/delegation-runtime-display'
 
 function makeSession(
   id: string,
@@ -270,5 +271,45 @@ describe('syncDraftSessionId — 草稿标记与持久化状态保持一致', ()
     syncDraftSessionId(ids, { id: 'a', draft: false })
 
     expect(ids.has('a')).toBe(true)
+  })
+})
+
+describe('委派血缘字段投影', () => {
+  // 回归：`agent-session-ui-projection` 会下发 sourceSessionId，但渲染层映射曾漏字段，
+  // 导致 placement=independent 的子会话（无 parentSessionId）在渲染层认不出是委派子会话，
+  // 运行态显示与过程区展开全部失效 —— 现象就是「子会话没有 runtime、一直折叠」。
+  test('Given independent 委派投影 When 合并进会话列表 Then 保留来源会话血缘', () => {
+    const sessions = upsertAgentSessionProjection([], {
+      id: 'child',
+      revision: 1,
+      title: '子会话',
+      createdAt: 1,
+      updatedAt: 2,
+      agentRuntime: 'pi',
+      permissionMode: 'bypassPermissions',
+      sourceSessionId: 'source-session',
+      sourceDelegationId: 'delegation-1',
+      delegationRelation: 'independent',
+      delegationPlacement: 'independent',
+      delegationStatus: 'running',
+      parentSessionId: null,
+      rootSessionId: null,
+    } as never)
+    const session = sessions[0]
+    if (!session) throw new Error('投影后应当得到子会话条目')
+
+    expect(session).toMatchObject({
+      sourceSessionId: 'source-session',
+      sourceDelegationId: 'delegation-1',
+      delegationRelation: 'independent',
+      delegationPlacement: 'independent',
+      delegationStatus: 'running',
+    })
+    expect(session.parentSessionId).toBeUndefined()
+    expect(isDelegatedChildSessionLike({
+      parentSessionId: session.parentSessionId,
+      sourceSessionId: session.sourceSessionId,
+      sourceDelegationId: session.sourceDelegationId,
+    })).toBe(true)
   })
 })

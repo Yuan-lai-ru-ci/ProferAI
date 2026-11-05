@@ -184,3 +184,26 @@ describe('IR-D1：桌面 runtime 链与旧链都在请求入口清未读', () =>
     expect(runAgentBody).toContain('checkEntryGuards: (sessionId) => orchestrator.checkEntryGuards(sessionId),')
   })
 })
+
+describe('流绑定归主进程仲裁', () => {
+  test('Given 独立会话窗口正展示某会话 When 其它窗口带 sessionIds 认领 Then 拒绝抢占', async () => {
+    const source = await readAgentService()
+    const restoreBody = slice(source, 'export function restoreActiveAgentStreams(', 'function isMainRendererWindow(')
+    const allowedBranch = slice(restoreBody, 'if (allowed) {', '} else {')
+    // 回归：认领路径（带 sessionIds）此前只会按 sessionIds 过滤，不做归属判定，
+    // 于是主窗口切 Tab 认领时会把独立会话窗口正在看的流抢走（对方向 SESSION_RELEASED），
+    // 那个窗口随即冻结在快照上 —— 现象就是「过程区一直折叠、看不出在运行」。
+    expect(allowedBranch).toContain('isSessionWindowContents(owner)')
+    expect(allowedBranch).toContain('owner !== webContents')
+    expect(allowedBranch).toContain('snapshots.delete(sessionId)')
+  })
+
+  test('Given headless 启动 When 该会话已有展示窗口 Then 不改绑到主窗口', async () => {
+    const source = await readAgentService()
+    const from = source.indexOf('export async function runAgentHeadless(')
+    expect(from).toBeGreaterThan(-1)
+    const legacyHeadless = source.slice(from, from + 4000)
+    expect(legacyHeadless).toContain('getSessionWebContents(')
+    expect(legacyHeadless).toContain('if (wc && !existingOwner)')
+  })
+})

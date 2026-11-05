@@ -11,7 +11,7 @@
  */
 
 import { join, dirname, basename, sep } from 'node:path'
-import { writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, appendFileSync, statSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE, resolveRunInitiator, AgentSessionRuntimeMismatchError } from '@profer/shared'
@@ -245,20 +245,42 @@ const wcWithCleanupHook = new WeakSet<WebContents>()
  * 为什么需要：子会话页「冻结在打开时快照、过程区一直折叠」的根因类是绑定被别的窗口
  * 抢走（改绑会向旧窗口发 SESSION_RELEASED，旧窗口随后收不到任何事件）。这条链路
  * 完全在运行时隐式发生，没有日志就只能靠猜。
- * 只写 append，失败不影响主流程。
+ *
+ * 跨平台约束：
+ * - 路径统一走 `node:path` 的 `join`，不拼分隔符；
+ * - Windows 上杀软/索引服务会短暂占用日志文件，`appendFileSync` 可能抛 EBUSY/EPERM。
+ *   这里连续失败就**停用**日志，避免每次绑定都抛一次异常拖慢主流程；
+ * - 文件大小设上限，长时间运行不会把用户目录写满（超限后停用而不是截断）。
  */
+const STREAM_BINDING_LOG_MAX_BYTES = 1_000_000
+const STREAM_BINDING_LOG_MAX_FAILURES = 3
+let streamBindingLogDisabled = false
+let streamBindingLogFailures = 0
+/** 已知文件大小；-1 表示尚未探测。 */
+let streamBindingLogBytes = -1
+
 function recordStreamBinding(event: Record<string, unknown>): void {
+  if (streamBindingLogDisabled) return
   try {
     const dir = join(getConfigDir(), 'diagnostics')
     mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'stream-binding.log')
+    if (streamBindingLogBytes < 0) {
+      streamBindingLogBytes = existsSync(file) ? statSync(file).size : 0
+    }
+    if (streamBindingLogBytes >= STREAM_BINDING_LOG_MAX_BYTES) {
+      streamBindingLogDisabled = true
+      return
+    }
     const stack = new Error().stack?.split('\n').slice(2, 9).join(' | ') ?? ''
-    appendFileSync(
-      join(dir, 'stream-binding.log'),
-      `${JSON.stringify({ ...event, at: Date.now(), stack })}\n`,
-      'utf8',
-    )
+    const line = `${JSON.stringify({ ...event, at: Date.now(), stack })}\n`
+    appendFileSync(file, line, 'utf8')
+    streamBindingLogBytes += Buffer.byteLength(line, 'utf8')
+    streamBindingLogFailures = 0
   } catch {
-    // 诊断日志失败不得影响主流程
+    // 诊断日志失败不得影响主流程；连续失败（Windows 文件锁/权限）直接停用。
+    streamBindingLogFailures += 1
+    if (streamBindingLogFailures >= STREAM_BINDING_LOG_MAX_FAILURES) streamBindingLogDisabled = true
   }
 }
 
@@ -358,7 +380,17 @@ export function restoreActiveAgentStreams(
   const snapshots = new Map([...completedStreamEventBacklogs, ...activeStreamEventBacklogs])
   if (allowed) {
     for (const sessionId of [...snapshots.keys()]) {
-      if (!allowed.has(sessionId)) snapshots.delete(sessionId)
+      if (!allowed.has(sessionId)) {
+        snapshots.delete(sessionId)
+        continue
+      }
+      // 认领（主动声明）同样不能让主窗口抢走独立会话窗口正在展示的会话：
+      // 抢走会给那个窗口发 SESSION_RELEASED，它的运行态与实时消息被清掉，
+      // 页面冻结在快照上（过程区一直折叠）。
+      const owner = getSessionWebContents(sessionId)
+      if (owner && owner !== webContents && isSessionWindowContents(owner)) {
+        snapshots.delete(sessionId)
+      }
     }
   } else {
     // 主窗口刷新/启动时不要把手动拆到独立会话窗口里的活跃流抢回来：

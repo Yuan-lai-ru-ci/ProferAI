@@ -65,7 +65,8 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle, reconcileAgentTabTitles } from '@/atoms/tab-atoms'
+import { shouldClaimAgentStream } from '@/lib/agent-stream-claim'
+import { tabsAtom, activeTabIdAtom, activeTabAtom, activeSessionIdAtom, openTab, updateTabTitle, reconcileAgentTabTitles } from '@/atoms/tab-atoms'
 import { planFollowWorkTab, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 import { openFilePreviewTab } from '@/components/diff/preview-opener'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
@@ -1361,30 +1362,36 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       (sessionId) => store.get(agentStreamingStatesAtom).get(sessionId) !== undefined,
     )
 
+    // 把“主进程说这些会话还在跑”的占位写进 store。刷新恢复与切会话认领共用。
+    type RestoreSnapshots = Awaited<ReturnType<typeof window.electronAPI.restoreActiveAgentStreams>>
+    const applyRestoreSnapshots = (snapshots: RestoreSnapshots): void => {
+      store.set(agentStreamingStatesAtom, (prev) => {
+        let next: Map<string, AgentStreamState> | null = null
+        for (const snapshot of snapshots) {
+          const sessionId = typeof snapshot === 'string' ? snapshot : snapshot.sessionId
+          const current = (next ?? prev).get(sessionId)
+          if (current?.running || current?.backgroundWaiting) continue
+          if (!next) next = new Map(prev)
+          const restored = typeof snapshot === 'string' ? undefined : snapshot
+          next.set(sessionId, {
+            running: true,
+            content: '',
+            toolActivities: [],
+            startedAt: undefined,
+            ...(restored?.contextWindow !== undefined ? {
+              contextWindow: restored.contextWindow,
+              usageUpdatedAt: restored.contextUpdatedAt ?? Date.now(),
+            } : {}),
+          })
+        }
+        return next ?? prev
+      })
+    }
+
     // 独立会话窗口只接管自己的会话；主窗口保持「恢复全部活跃流」的刷新语义。
     window.electronAPI.restoreActiveAgentStreams(standaloneSessionId ? [standaloneSessionId] : undefined)
       .then((snapshots) => {
-        store.set(agentStreamingStatesAtom, (prev) => {
-          let next: Map<string, AgentStreamState> | null = null
-          for (const snapshot of snapshots) {
-            const sessionId = typeof snapshot === 'string' ? snapshot : snapshot.sessionId
-            const current = (next ?? prev).get(sessionId)
-            if (current?.running || current?.backgroundWaiting) continue
-            if (!next) next = new Map(prev)
-            const restored = typeof snapshot === 'string' ? undefined : snapshot
-            next.set(sessionId, {
-              running: true,
-              content: '',
-              toolActivities: [],
-              startedAt: undefined,
-              ...(restored?.contextWindow !== undefined ? {
-                contextWindow: restored.contextWindow,
-                usageUpdatedAt: restored.contextUpdatedAt ?? Date.now(),
-              } : {}),
-            })
-          }
-          return next ?? prev
-        })
+        applyRestoreSnapshots(snapshots)
         // 占位已写好，此时派发暂存的终态才能通过竞态保护并完成收尾副作用。
         restoreTerminalGate.settle()
       })
@@ -1392,6 +1399,36 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         console.error('[Agent] 刷新后恢复活跃流失败:', error)
         restoreTerminalGate.settle()
       })
+
+    // 切到某个 Agent 会话时主动“认领”本轮流。
+    //
+    // 为什么需要：建绑只发生在窗口挂载时（以及 run 启动时对主窗口的绑定），切 Tab 不会重绑。
+    // 一旦该会话的流被别的窗口接管、或 run 由移动端发起而事件进了别处，本窗口就永远没有
+    // 运行态：过程区一直折叠、没有 spinner、消息停在打开时的快照上。
+    // 认领由主进程仲裁：已由独立会话窗口持有的会话不会被抢（见 restoreActiveAgentStreams）。
+    const claimedSessionIds = new Set<string>()
+    const claimActiveSessionStream = (): void => {
+      const tab = store.get(activeTabAtom)
+      if (!tab) return
+      const sessionId = tab.sessionId
+      const state = store.get(agentStreamingStatesAtom).get(sessionId)
+      if (!shouldClaimAgentStream({
+        tabType: tab.type,
+        hasRunningState: Boolean(state?.running || state?.backgroundWaiting),
+        alreadyClaimed: claimedSessionIds.has(sessionId),
+        standalone: Boolean(standaloneSessionId),
+      })) return
+      claimedSessionIds.add(sessionId)
+      void window.electronAPI.restoreActiveAgentStreams([sessionId])
+        .then((snapshots) => {
+          if (snapshots.length > 0) applyRestoreSnapshots(snapshots)
+        })
+        .catch((error) => {
+          console.error('[Agent] 认领会话流失败:', error)
+        })
+    }
+    claimActiveSessionStream()
+    const unsubscribeActiveSessionClaim = store.sub(activeTabAtom, claimActiveSessionStream)
 
     // ===== 2. 流式完成 =====
     const handleStreamComplete = (data: AgentStreamCompletePayload): void => {
@@ -1811,6 +1848,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       unsubscribeDelegationIndicatorTabs()
       unsubscribeTabTitleReconcile()
       unsubscribeTabsTitleReconcile()
+      unsubscribeActiveSessionClaim()
       window.removeEventListener('focus', onWindowFocus)
     }
   }, [store, standaloneSessionId]) // store 引用稳定；独立窗口的 sessionId 在窗口生命周期内不变

@@ -2566,7 +2566,7 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
         remoteRelayCommandContext = {}
       },
       onMessage: (raw, sink) => {
-        let parsed: { kind?: unknown; type?: unknown; _cmdId?: unknown; requestId?: unknown; cursor?: unknown }
+        let parsed: { kind?: unknown; type?: unknown; _cmdId?: unknown; requestId?: unknown; cursor?: unknown; sessionIds?: unknown }
         try { parsed = JSON.parse(raw) } catch { return }
         if (parsed.kind === 'relay_hello') return
         if (parsed.kind === 'pong') return
@@ -2586,15 +2586,34 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
           return
         }
         if (parsed.type === 'restore_agent_streams') {
-          // 同理：relay 背后可能是多个 viewer，不在透明层做会话级回放，一律要求取快照。
+          // Relay 是透明转发层，背后可能是多个 viewer，因此不在这一层做会话级事件回放
+          // （继续要求客户端取快照）。但“哪些会话此刻正在跑”是全局事实，必须告诉客户端：
+          // 否则 Pocket 只能按持久化快照渲染，正在飞的一轮会被当成“已结束”，
+          // 过程区显示成折叠、没有运行指示——与桌面端“没有 stream state”同一类结果。
+          const requested = (parsed as { sessionIds?: unknown }).sessionIds
+          const requestedIds = Array.isArray(requested)
+            ? requested.filter((id): id is string => typeof id === 'string')
+            : null
+          const candidateIds = requestedIds
+            ?? listActiveAgentRuntimeContexts().map((context) => context.sessionId)
+          const latestEventId = remoteAgentEventLog.getLatestEventId()
+          const activeSessions = candidateIds
+            .filter((sessionId) => isAgentSessionActive(sessionId))
+            .map((sessionId) => ({
+              sessionId,
+              active: true,
+              hasTerminalEvent: false,
+              latestEventId,
+              eventCount: 0,
+            }))
           sink.send(JSON.stringify({
             kind: 'agent_streams_restored',
             requestId: parsed._cmdId ?? parsed.requestId ?? null,
-            sessions: [],
+            sessions: activeSessions,
             replayed: 0,
             requiresSnapshot: true,
             oldestEventId: remoteAgentEventLog.getOldestEventId(),
-            latestEventId: remoteAgentEventLog.getLatestEventId(),
+            latestEventId,
           }))
           return
         }
