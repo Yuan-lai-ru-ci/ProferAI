@@ -463,7 +463,7 @@ function previewPresetUpdate(preset: AgentPreset, updates: AgentPresetUpdateInpu
 
 const AGENT_PRESET_UPDATE_KEYS = new Set<keyof AgentPresetUpdateInput>([
   'name', 'description', 'promptSections', 'suppressPromptSections', 'disabledToolGroups',
-  'disabledTools', 'effort', 'permissionMode', 'skillSlugs', 'mcpServerNames', 'allowSubagents', 'basePresetId',
+  'disabledTools', 'modelId', 'effort', 'permissionMode', 'skillSlugs', 'mcpServerNames', 'allowSubagents', 'basePresetId',
 ])
 
 function assertAgentPresetUpdateInput(updates: AgentPresetUpdateInput): void {

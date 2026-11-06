@@ -868,14 +868,6 @@ function startDelegation(
   const goal = truncateText(task, DELEGATION_GOAL_CHAR_LIMIT)
   // 优先从持久化父会话继承，旧会话/无父上下文才安全回退 Claude。
   const inheritedRuntime = parent?.agentRuntime ?? ctx.agentRuntime ?? 'claude'
-  const effectiveModelId = args.modelId !== undefined
-    ? assertEnabledModelForChannel({
-        channelId: ctx.channelId,
-        modelId: args.modelId,
-        runtime: inheritedRuntime,
-        purpose: '创建协作子会话',
-      })
-    : ctx.modelId?.trim() || undefined
 
   const { completion, resolveCompletion } = createDelegationCompletion()
 
@@ -892,6 +884,17 @@ function startDelegation(
     parent,
     target: args.presetReference,
     workspaceSlug,
+  })
+  const requestedModelId = args.modelId ?? resolvedPreset?.preset.modelId ?? ctx.modelId?.trim() ?? undefined
+  const effectiveModelId = assertEnabledModelForChannel({
+    channelId: ctx.channelId,
+    modelId: requestedModelId,
+    runtime: inheritedRuntime,
+    purpose: args.modelId !== undefined
+      ? '创建协作子会话'
+      : resolvedPreset?.preset.modelId
+        ? `预设「${resolvedPreset.preset.name}」绑定模型`
+        : '创建协作子会话',
   })
   const sourcePreset = args.presetReference
     ? resolveDelegationPreset({ parent, workspaceSlug })
@@ -1030,7 +1033,7 @@ function buildCollaborationSchemas(z: ZodModule['z']) {
     role: role.optional().describe('子任务角色：explore/research/implement/review/custom'),
     task: nonBlankString.describe('发送给子 Agent 的完整任务说明，必须自包含必要上下文'),
     expectedOutput: z.string().optional().describe('希望子 Agent 最终返回的格式或要点'),
-    modelId: nonBlankString.optional().describe('可选目标模型 ID；必须属于父会话当前渠道且已启用。不传则继承父会话当前模型'),
+    modelId: nonBlankString.optional().describe('可选目标模型 ID；显式传入时覆盖目标预设绑定模型；不传且预设未绑定时继承父会话当前模型'),
     presetReference: buildZodDelegationPresetReferenceSchema(z),
     placement: z.enum(['current', 'child', 'independent']).optional().describe('承接位置：current 为父时间线投影且执行上下文隔离；child 为子会话（省略兼容旧调用）；independent 为独立工作会话'),
     relation: z.enum(['subtask', 'independent']).optional().describe('工作关系：subtask 随父停止；independent 保留来源且不随来源会话停止'),

@@ -92,6 +92,7 @@ interface PresetFormState {
   name: string;
   description: string;
   promptText: string;
+  modelId: string; // 空 = 委派时继承
   effort: string; // '' = 跟随全局
   permissionMode: string; // '' = 跟随默认
   skillSlugs: string; // 逗号分隔
@@ -119,6 +120,7 @@ function presetToForm(preset: AgentPreset): PresetFormState {
     name: preset.name,
     description: preset.description,
     promptText: preset.promptSections?.join("\n\n") ?? "",
+    modelId: preset.modelId ?? "",
     effort: preset.effort ?? "",
     permissionMode: preset.permissionMode ?? "",
     skillSlugs: preset.skillSlugs?.join(", ") ?? "",
@@ -456,6 +458,7 @@ export function AgentPresetSettings({
       name: "",
       description: "",
       promptText: "",
+      modelId: "",
       effort: "",
       permissionMode: "",
       skillSlugs: "",
@@ -506,6 +509,7 @@ export function AgentPresetSettings({
       disabledToolGroups:
         form.disabledToolGroups.length > 0 ? form.disabledToolGroups : null,
       disabledTools: form.disabledTools.length > 0 ? form.disabledTools : null,
+      modelId: form.modelId.trim() || null,
       effort: (form.effort || null) as AgentEffort | null,
       permissionMode: (form.permissionMode ||
         null) as ProferPermissionMode | null,
@@ -532,6 +536,7 @@ export function AgentPresetSettings({
       }),
       ...(u.disabledToolGroups && { disabledToolGroups: u.disabledToolGroups }),
       ...(u.disabledTools && { disabledTools: u.disabledTools }),
+      ...(u.modelId && { modelId: u.modelId }),
       ...(u.effort && { effort: u.effort }),
       ...(u.permissionMode && { permissionMode: u.permissionMode }),
       ...(u.skillSlugs && { skillSlugs: u.skillSlugs }),
@@ -1408,6 +1413,24 @@ export function AgentPresetSettings({
                   placeholder={"## 研究模式\n\n本会话专注调研，只读不写……"}
                   rows={6}
                   className="min-h-32 resize-y bg-background/70 text-sm leading-6"
+                />
+              </div>
+              <div className="rounded-xl border bg-muted/15 p-4">
+                <div className="mb-3">
+                  <label className="text-sm font-semibold text-foreground/90">
+                    委派模型绑定
+                  </label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    仅影响从此预设创建的协作子会话；留空时继承父会话模型。填写渠道设置中已启用的 Agent 模型 ID，Claude 与 Pi 会按实际运行时校验。
+                  </p>
+                </div>
+                <Input
+                  value={form.modelId}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, modelId: e.target.value }))
+                  }
+                  placeholder="例如：claude-sonnet-4-5"
+                  spellCheck={false}
                 />
               </div>
               <div className="rounded-xl border bg-muted/15 p-4">

@@ -637,6 +637,7 @@ describe('自定义预设 CRUD', () => {
       name: '研究模式',
       description: '只读调研',
       skillSlugs: ['web-search'],
+      modelId: 'bound-model',
       effort: 'high',
     })
     expect(created.id).toBeTruthy()
@@ -646,11 +647,25 @@ describe('自定义预设 CRUD', () => {
     expect(presets.length).toBe(4)
     expect(presets.find((p) => p.id === created.id)?.name).toBe('研究模式')
     expect(getAgentPreset(WS_A, created.id).id).toBe(created.id)
+    expect(getAgentPreset(WS_A, created.id).modelId).toBe('bound-model')
   })
 
   test('名称为空拒绝创建', () => {
     expect(() => createAgentPreset(WS_A, { name: '  ', description: '' })).toThrow('预设名称不能为空')
   })
+
+  test('派生预设保留自身模型绑定，并可更新绑定', () => {
+    const created = createAgentPreset(WS_A, {
+      name: '模型岗位',
+      description: '',
+      modelId: 'base-model',
+      basePresetId: BUILTIN_PRESET_CODE,
+    })
+    expect(getAgentPreset(WS_A, created.id).modelId).toBe('base-model')
+    updateAgentPreset(WS_A, created.id, { modelId: 'override-model' })
+    expect(getAgentPreset(WS_A, created.id).modelId).toBe('override-model')
+  })
+
 
   test('工作区隔离：A 区自定义预设对 B 区不可见', () => {
     createAgentPreset(WS_A, { name: 'A区专属', description: '' })

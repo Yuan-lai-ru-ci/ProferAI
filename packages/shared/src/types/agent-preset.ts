@@ -369,6 +369,8 @@ export interface AgentPreset {
   disabledToolGroups?: AgentPresetToolGroup[];
   /** [B2-3] 禁用的单个产品内置工具（短名，见 AGENT_PRESET_GROUP_TOOL_NAMES）；与 disabledToolGroups 叠加生效，组已禁用时无需重复列 */
   disabledTools?: string[];
+  /** 绑定委派子会话模型；不设置时使用委派参数或父会话当前模型。 */
+  modelId?: string;
   /** 覆盖全局设置的推理档位；undefined 表示跟随全局设置 */
   effort?: AgentEffort;
   /** 覆盖会话默认权限模式；undefined 表示跟随全局/会话默认 */
@@ -534,6 +536,8 @@ export interface AgentPresetCreateInput {
   disabledToolGroups?: AgentPresetToolGroup[];
   /** 禁用的单个产品内置工具（短名，见 AGENT_PRESET_GROUP_TOOL_NAMES） */
   disabledTools?: string[];
+  /** 绑定委派子会话模型。 */
+  modelId?: string;
   effort?: AgentEffort;
   permissionMode?: ProferPermissionMode;
   skillSlugs?: string[];
@@ -556,6 +560,8 @@ export interface AgentPresetUpdateInput {
   suppressPromptSections?: AgentPresetSuppressKey[] | null;
   disabledToolGroups?: AgentPresetToolGroup[] | null;
   disabledTools?: string[] | null;
+  /** 绑定委派子会话模型；null 表示清除绑定。 */
+  modelId?: string | null;
   effort?: AgentEffort | null;
   permissionMode?: ProferPermissionMode | null;
   skillSlugs?: string[] | null;
@@ -579,6 +585,8 @@ export interface AgentPresetExportEntry {
   suppressPromptSections?: AgentPresetSuppressKey[];
   disabledToolGroups?: AgentPresetToolGroup[];
   disabledTools?: string[];
+  /** 绑定委派子会话模型。 */
+  modelId?: string;
   effort?: AgentEffort;
   permissionMode?: ProferPermissionMode;
   skillSlugs?: string[];
@@ -623,6 +631,7 @@ export function toAgentPresetExportEntry(
     ...(preset.disabledTools?.length && {
       disabledTools: preset.disabledTools,
     }),
+    ...(preset.modelId && { modelId: preset.modelId }),
     ...(preset.effort && { effort: preset.effort }),
     ...(preset.permissionMode && { permissionMode: preset.permissionMode }),
     ...(preset.skillSlugs !== undefined && { skillSlugs: preset.skillSlugs }),
@@ -689,6 +698,7 @@ export function mergeAgentPreset(
       child.allowSubagents !== undefined
         ? child.allowSubagents
         : base.allowSubagents,
+    modelId: child.modelId ?? base.modelId,
   };
 }
 

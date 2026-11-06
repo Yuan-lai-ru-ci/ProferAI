@@ -491,6 +491,7 @@ export function createGlobalAgentPreset(input: AgentPresetCreateInput): AgentPre
     ...(input.suppressPromptSections?.length && { suppressPromptSections: input.suppressPromptSections }),
     ...(input.disabledToolGroups?.length && { disabledToolGroups: input.disabledToolGroups }),
     ...(input.disabledTools?.length && { disabledTools: input.disabledTools }),
+    ...(input.modelId?.trim() && { modelId: input.modelId.trim() }),
     ...(input.effort && { effort: input.effort }), ...(input.permissionMode && { permissionMode: input.permissionMode }),
     ...(input.skillSlugs !== undefined && { skillSlugs: input.skillSlugs }),
     ...(input.mcpServerNames !== undefined && { mcpServerNames: input.mcpServerNames }),
@@ -515,6 +516,7 @@ export function promoteWorkspacePresetToGlobal(workspaceSlug: string, presetId: 
     suppressPromptSections: source.suppressPromptSections,
     disabledToolGroups: source.disabledToolGroups,
     disabledTools: source.disabledTools,
+    modelId: source.modelId,
     effort: source.effort,
     permissionMode: source.permissionMode,
     skillSlugs: source.skillSlugs,
@@ -559,6 +561,7 @@ function applyPresetUpdates(existing: AgentPreset, updates: AgentPresetUpdateInp
   if (updates.suppressPromptSections !== undefined) next.suppressPromptSections = updates.suppressPromptSections?.length ? updates.suppressPromptSections : undefined
   if (updates.disabledToolGroups !== undefined) next.disabledToolGroups = updates.disabledToolGroups?.length ? updates.disabledToolGroups : undefined
   if (updates.disabledTools !== undefined) next.disabledTools = updates.disabledTools?.length ? updates.disabledTools : undefined
+  if (updates.modelId !== undefined) next.modelId = updates.modelId?.trim() || undefined
   if (updates.effort !== undefined) next.effort = updates.effort ?? undefined
   if (updates.permissionMode !== undefined) next.permissionMode = updates.permissionMode ?? undefined
   if (updates.skillSlugs !== undefined) next.skillSlugs = updates.skillSlugs ?? undefined
@@ -567,7 +570,7 @@ function applyPresetUpdates(existing: AgentPreset, updates: AgentPresetUpdateInp
   if (updates.basePresetId === null) {
     const base = next.basePresetId ? BUILTIN_AGENT_PRESETS.find((preset) => preset.id === next.basePresetId) : undefined
     const resolved = base ? mergeAgentPreset(base, next) : next
-    Object.assign(next, { promptSections: resolved.promptSections, suppressPromptSections: resolved.suppressPromptSections, disabledToolGroups: resolved.disabledToolGroups, disabledTools: resolved.disabledTools, effort: resolved.effort, permissionMode: resolved.permissionMode, skillSlugs: resolved.skillSlugs, mcpServerNames: resolved.mcpServerNames, allowSubagents: resolved.allowSubagents })
+    Object.assign(next, { promptSections: resolved.promptSections, suppressPromptSections: resolved.suppressPromptSections, disabledToolGroups: resolved.disabledToolGroups, disabledTools: resolved.disabledTools, modelId: resolved.modelId, effort: resolved.effort, permissionMode: resolved.permissionMode, skillSlugs: resolved.skillSlugs, mcpServerNames: resolved.mcpServerNames, allowSubagents: resolved.allowSubagents })
     delete next.basePresetId
   } else if (updates.basePresetId !== undefined) next.basePresetId = updates.basePresetId
   next.updatedAt = Date.now()
@@ -580,6 +583,7 @@ export function copyPresetToWorkspace(source: PresetReference, workspaceSlug: st
     name: name?.trim() || `${sourcePreset.name} 副本`, description: sourcePreset.description,
     promptSections: sourcePreset.promptSections, suppressPromptSections: sourcePreset.suppressPromptSections,
     disabledToolGroups: sourcePreset.disabledToolGroups, disabledTools: sourcePreset.disabledTools,
+    modelId: sourcePreset.modelId,
     effort: sourcePreset.effort, permissionMode: sourcePreset.permissionMode, skillSlugs: sourcePreset.skillSlugs,
     mcpServerNames: sourcePreset.mcpServerNames, allowSubagents: sourcePreset.allowSubagents,
   })
@@ -1206,6 +1210,7 @@ export function createAgentPreset(workspaceSlug: string | undefined, input: Agen
     ...(input.suppressPromptSections?.length && { suppressPromptSections: input.suppressPromptSections }),
     ...(input.disabledToolGroups?.length && { disabledToolGroups: input.disabledToolGroups }),
     ...(input.disabledTools?.length && { disabledTools: input.disabledTools }),
+    ...(input.modelId?.trim() && { modelId: input.modelId.trim() }),
     ...(input.effort && { effort: input.effort }),
     ...(input.permissionMode && { permissionMode: input.permissionMode }),
     ...(input.skillSlugs !== undefined && { skillSlugs: input.skillSlugs }),
@@ -1239,6 +1244,7 @@ export function copyAgentPreset(workspaceSlug: string | undefined, fromId: strin
     suppressPromptSections: source.suppressPromptSections,
     disabledToolGroups: source.disabledToolGroups,
     disabledTools: source.disabledTools,
+    modelId: source.modelId,
     effort: source.effort,
     permissionMode: source.permissionMode,
     skillSlugs: source.skillSlugs,
@@ -1284,6 +1290,7 @@ export function updateAgentPreset(workspaceSlug: string | undefined, presetId: s
   if (updates.suppressPromptSections !== undefined) existing.suppressPromptSections = updates.suppressPromptSections?.length ? updates.suppressPromptSections : undefined
   if (updates.disabledToolGroups !== undefined) existing.disabledToolGroups = updates.disabledToolGroups?.length ? updates.disabledToolGroups : undefined
   if (updates.disabledTools !== undefined) existing.disabledTools = updates.disabledTools?.length ? updates.disabledTools : undefined
+  if (updates.modelId !== undefined) existing.modelId = updates.modelId?.trim() || undefined
   if (updates.effort !== undefined) existing.effort = updates.effort ?? undefined
   if (updates.permissionMode !== undefined) existing.permissionMode = updates.permissionMode ?? undefined
   // skillSlugs 语义：null=清除（回退全量），[]=禁用全部 skill（保留），非空=白名单
@@ -1301,6 +1308,7 @@ export function updateAgentPreset(workspaceSlug: string | undefined, presetId: s
     existing.suppressPromptSections = resolved.suppressPromptSections
     existing.disabledToolGroups = resolved.disabledToolGroups
     existing.disabledTools = resolved.disabledTools
+    existing.modelId = resolved.modelId
     existing.effort = resolved.effort
     existing.permissionMode = resolved.permissionMode
     existing.skillSlugs = resolved.skillSlugs
@@ -1425,6 +1433,9 @@ function assertImportEntry(entry: unknown, index: number): AgentPresetExportEntr
       !AGENT_PRESET_TOOL_NAMES.includes(t as (typeof AGENT_PRESET_TOOL_NAMES)[number]))
     if (invalid.length > 0) throw new AgentPresetImportError(`${at}的 disabledTools 含非法单工具短名: ${invalid.join(', ')}`)
   }
+  if (value.modelId !== undefined && (typeof value.modelId !== 'string' || !value.modelId.trim())) {
+    throw new AgentPresetImportError(`${at}的 modelId 必须是非空字符串`)
+  }
   if (value.effort !== undefined && !AGENT_EFFORT_VALUES.includes(value.effort as (typeof AGENT_EFFORT_VALUES)[number])) {
     throw new AgentPresetImportError(`${at}的 effort 非法: ${String(value.effort)}（合法值: ${AGENT_EFFORT_VALUES.join(' / ')}）`)
   }
@@ -1449,6 +1460,7 @@ function assertImportEntry(entry: unknown, index: number): AgentPresetExportEntr
     ...(Array.isArray(value.suppressPromptSections) && { suppressPromptSections: value.suppressPromptSections as AgentPresetSuppressKey[] }),
     ...(Array.isArray(value.disabledToolGroups) && { disabledToolGroups: value.disabledToolGroups as AgentPresetToolGroup[] }),
     ...(Array.isArray(value.disabledTools) && { disabledTools: value.disabledTools as string[] }),
+    ...(typeof value.modelId === 'string' && { modelId: value.modelId.trim() }),
     ...(value.effort !== undefined && { effort: value.effort as AgentEffort }),
     ...(value.permissionMode !== undefined && { permissionMode: value.permissionMode as ProferPermissionMode }),
     ...(value.skillSlugs !== undefined && { skillSlugs: value.skillSlugs as string[] }),
