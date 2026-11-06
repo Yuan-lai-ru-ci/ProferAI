@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 import type { AgentSessionMeta, ConversationMeta } from '@profer/shared'
 import type { TabItem } from '@/atoms/tab-atoms'
-import { getOpenSessionEntries, resolveSessionLeadingMarkers, sidebarRowClass } from './sidebar-utils'
+import { getOpenSessionEntries, resolveDeleteShortcutAction, resolveSessionLeadingMarkers, sidebarRowClass } from './sidebar-utils'
 
 const NOW = 1_752_000_000_000
 const session = (id: string, overrides: Partial<AgentSessionMeta> = {}): AgentSessionMeta => ({
@@ -193,5 +193,22 @@ describe('resolveSessionLeadingMarkers — 行首标记固定顺序', () => {
 
   test('Given 置顶分区（分区标题已表达状态）When 解析 Then 不重复画置顶标记', () => {
     expect(resolveSessionLeadingMarkers({ ...base, pinned: true, showPinIcon: false })).toEqual([])
+  })
+})
+describe('resolveDeleteShortcutAction', () => {
+  test('Given 确认框未打开且有可删除的活跃会话 When 按 Delete Then 打开', () => {
+    expect(resolveDeleteShortcutAction(null, 'session-a')).toBe('open')
+  })
+
+  test('Given 确认框已打开 When 再按 Delete Then 关闭', () => {
+    expect(resolveDeleteShortcutAction('session-a', 'session-a')).toBe('close')
+  })
+
+  test('Given 确认框已打开但活跃会话已切换 When 再按 Delete Then 仍先关闭', () => {
+    expect(resolveDeleteShortcutAction('session-a', 'session-b')).toBe('close')
+  })
+
+  test('Given 无可删除的活跃会话（未选中 / 草稿） When 按 Delete Then 不响应', () => {
+    expect(resolveDeleteShortcutAction(null, null)).toBe('none')
   })
 })
