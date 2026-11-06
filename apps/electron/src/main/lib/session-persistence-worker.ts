@@ -2,7 +2,7 @@ import { parentPort } from 'node:worker_threads'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { SDKMessage } from '@profer/shared'
-import { setBlobRootDirForWorker } from './blob-store'
+import { setBlobRootDirDirect, setBlobRootDirForWorker } from './blob-store'
 import { externalizeSerializedSessionLine } from './session-payload-externalize'
 
 interface AppendBatch {
@@ -12,6 +12,10 @@ interface AppendBatch {
   sessionsDir: string
   sessionId: string
   messages: SDKMessage[]
+  /** 主进程按会话布局算好的消息文件路径；缺省时回退全局 sessionsDir 拼装。 */
+  messagesPath?: string
+  /** 主进程按会话布局算好的 blob 根目录（project 会话在 <root>/.profer/blobs）。 */
+  blobRoot?: string
 }
 
 if (!parentPort) throw new Error('会话持久化 Worker 缺少 parentPort')
@@ -37,8 +41,9 @@ parentPort.on('message', async (batch: AppendBatch) => {
   if (batch.type !== 'append') return
   try {
     setBlobRootDirForWorker(batch.configDir)
+    if (batch.blobRoot) setBlobRootDirDirect(batch.blobRoot)
     const lines = batch.messages.map((message) => serializeLine(message, batch.sessionId))
-    const path = join(batch.sessionsDir, `${batch.sessionId}.jsonl`)
+    const path = batch.messagesPath ?? join(batch.sessionsDir, `${batch.sessionId}.jsonl`)
     await mkdir(dirname(path), { recursive: true })
     await appendFile(path, `${lines.join('\n')}\n`, 'utf8')
     parentPort!.postMessage({ type: 'saved', id: batch.id })

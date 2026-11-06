@@ -24,6 +24,8 @@ interface Batch {
   messages: SDKMessage[]
   attempts: number
   estimatedBytes: number
+  messagesPath?: string
+  blobRoot?: string
 }
 
 interface WorkerReply { type: 'saved' | 'failed'; id: number; error?: string }
@@ -53,6 +55,15 @@ export interface SessionPersistenceQueueOptions {
   workerPath?: string
   createWorker?: () => Worker
   onStatus?: (sessionId: string, status: 'pending' | 'saved' | 'failed', error?: string) => void
+  /**
+   * 按会话布局解析消息文件路径。
+   *
+   * project 会话写在 `<root>/.profer/sessions/<sid>/messages.jsonl`，worker 是独立
+   * 线程、没有布局注册表，必须由主进程在入队时算好传下去；缺省回退 sessionsDir。
+   */
+  resolveMessagesPath?: (sessionId: string) => string
+  /** 按会话布局解析 blob 根目录，同样必须由主进程注入。 */
+  resolveBlobRoot?: (sessionId: string) => string
 }
 
 /** 运行消息的有界、进程内 FIFO 持久化旁路。 */
@@ -66,6 +77,8 @@ export class SessionPersistenceQueue {
   private readonly sessionsDir: string
   private readonly createWorker: () => Worker
   private readonly onStatus?: SessionPersistenceQueueOptions['onStatus']
+  private readonly resolveMessagesPath?: SessionPersistenceQueueOptions['resolveMessagesPath']
+  private readonly resolveBlobRoot?: SessionPersistenceQueueOptions['resolveBlobRoot']
   private disposed = false
 
   constructor(options: SessionPersistenceQueueOptions) {
@@ -73,6 +86,8 @@ export class SessionPersistenceQueue {
     this.sessionsDir = options.sessionsDir
     this.createWorker = options.createWorker ?? (() => new Worker(options.workerPath ?? resolvePersistenceWorkerPath()))
     this.onStatus = options.onStatus
+    this.resolveMessagesPath = options.resolveMessagesPath
+    this.resolveBlobRoot = options.resolveBlobRoot
   }
 
   enqueue(sessionId: string, messages: readonly SDKMessage[]): void {
@@ -85,7 +100,18 @@ export class SessionPersistenceQueue {
       console.error(`[Agent 会话] 持久化队列容量已满，拒收 ${messages.length} 条消息: session=${sessionId}`)
       return
     }
-    const batch = { id: this.nextId++, sessionId, messages: [...messages], attempts: 0, estimatedBytes }
+    const batch: Batch = { id: this.nextId++, sessionId, messages: [...messages], attempts: 0, estimatedBytes }
+    // 布局解析失败不能让消息丢：回退 undefined，worker 侧用全局 sessionsDir 拼装。
+    try {
+      batch.messagesPath = this.resolveMessagesPath?.(sessionId)
+    } catch {
+      batch.messagesPath = undefined
+    }
+    try {
+      batch.blobRoot = this.resolveBlobRoot?.(sessionId)
+    } catch {
+      batch.blobRoot = undefined
+    }
     this.queue.push(batch)
     this.onStatus?.(sessionId, 'pending')
     setImmediate(() => this.pump())
@@ -153,6 +179,7 @@ export class SessionPersistenceQueue {
       worker.postMessage({
         type: 'append', id: batch.id, configDir: this.configDir, sessionsDir: this.sessionsDir,
         sessionId: batch.sessionId, messages: batch.messages,
+        messagesPath: batch.messagesPath, blobRoot: batch.blobRoot,
       })
     } catch (error) {
       worker.off('message', onMessage)
