@@ -101,8 +101,12 @@ extraResources:
     filter:
       - "**/*"
   # 窗口图标（Windows 任务栏 / Linux 标题栏 / macOS Dock 使用）
+  # Windows 故意重命名为 app-icon.ico：resources/icon.ico 历史上被文件关联的
+  # DefaultIcon 引用，Shell 在覆盖安装时可能仍持有句柄，导致 NSIS 写不进去
+  # （用户可见：“不能打开要写入的文件 ...\resources\icon.ico”）。
+  # 文件关联现在指向 exe 内嵌图标，安装器只写这个不被 Shell 引用的副本。
   - from: resources/icon.ico
-    to: icon.ico
+    to: app-icon.ico
   - from: resources/icon.png
     to: icon.png
   # 版本更新日志（设置 → 软件更新 → 版本历史；changelog-service 读取 process.resourcesPath/CHANGELOG.json）
@@ -175,13 +179,16 @@ win:
     # 手写 OCR 脚本（Windows.Media.Ocr，系统自带能力，无额外依赖）
     - from: resources/pen-ocr/PenOcr.ps1
       to: pen-ocr/PenOcr.ps1
+  # 文件关联不指定 icon：指定后 electron-builder 会把图标写成
+  # $INSTDIR\resources\icon.ico，并把这个路径写进 Shell 的 DefaultIcon。
+  # 该文件在下次升级时被 Explorer 占用而写入失败，安装直接中断。
+  # 省略后 DefaultIcon 固定为 "$INSTDIR\Profer.exe,0"，图标来自 after-pack
+  # 强制打进 exe 的品牌图标，安装器不再触碰任何被 Shell 引用的 .ico。
   fileAssociations:
     - ext: profer-backup
       name: Profer Personal Backup
-      icon: resources/icon.ico
     - ext: profer-share
       name: Profer Share Package
-      icon: resources/icon.ico
   target:
     - target: nsis
       arch:
@@ -194,9 +201,10 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  # 注入 NSIS 自定义段：安装完成后刷新 Windows Shell 图标缓存。
+  # 注入 NSIS 自定义段：安装前关闭仍在运行的 Profer（含 --quit 优雅退出
+  # 与 /F 兜底），安装完成后刷新 Windows Shell 图标缓存。
   # 覆盖安装到同一路径时，避免任务栏/桌面快捷方式仍显示旧（electron 默认）图标。
-  include: scripts/nsis-icon-refresh.nsh
+  include: scripts/nsis-custom.nsh
 
 # ============================================
 # 发布配置

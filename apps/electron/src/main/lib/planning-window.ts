@@ -1,9 +1,9 @@
 import { app, BrowserWindow, screen, shell } from 'electron'
-import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MainWindowState } from '../../types'
 import { getPersistableMainWindowState } from './main-window-lifecycle'
 import { getSettings, updateSettings } from './settings-service'
+import { resolveAppWindowIconPath } from './app-window-icon'
 
 const DEFAULT_WIDTH = 1180
 const DEFAULT_HEIGHT = 820
@@ -13,20 +13,6 @@ const PLANNING_WINDOW_TITLE = 'Profer · 规划中心'
 
 let planningWindow: BrowserWindow | null = null
 
-function getIconPath(): string | undefined {
-  // 开发态资源由 build:resources 复制到 dist/resources；
-  // 打包态资源位于 app.asar 同级的 process.resourcesPath。
-  const resourcesDir = app.isPackaged
-    ? process.resourcesPath
-    : join(__dirname, 'resources')
-  const filename = process.platform === 'darwin'
-    ? 'icon.icns'
-    : process.platform === 'win32'
-      ? 'icon.ico'
-      : 'icon.png'
-  const iconPath = join(resourcesDir, filename)
-  return existsSync(iconPath) ? iconPath : undefined
-}
 
 function getInitialBounds(savedState?: MainWindowState): Electron.Rectangle {
   if (savedState) {
@@ -99,7 +85,7 @@ function createPlanningWindow(): BrowserWindow {
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
     title: PLANNING_WINDOW_TITLE,
-    icon: getIconPath(),
+    icon: resolveAppWindowIconPath(),
     show: false,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),

@@ -159,6 +159,28 @@ describe('平台打包入口配置', () => {
     expect(changelog.releases[0].version).toBe(packageJson.version)
   })
 
+  test('Given Windows 安装器配置 When 覆盖安装 Then 不写被 Shell 引用的 .ico 且先关闭旧进程', () => {
+    const appDir = resolve(import.meta.dir, '..')
+    const config = readFileSync(join(appDir, 'electron-builder.yml'), 'utf8').replace(/\r\n/g, '\n')
+    const commonResources = getTopLevelSection(config, 'extraResources')
+    const winConfig = getTopLevelSection(config, 'win')
+
+    // 文件关联不能自带 icon：那样 electron-builder 会把图标写成 $INSTDIR\resources\icon.ico，
+    // 并把该路径注册成 DefaultIcon；升级时 Explorer 仍可能持有句柄，安装器写不进去。
+    const fileAssociations = winConfig.slice(winConfig.indexOf('fileAssociations:'))
+    expect(fileAssociations).not.toContain('icon:')
+    // 窗口图标用改名后的副本，安装器不再改写旧版注册表引用的路径。
+    expect(commonResources).toContain('from: resources/icon.ico\n    to: app-icon.ico')
+
+    // 安装前必须先关掉还在托盘里的 Profer，并且有 /F 与提权兜底。
+    expect(config).toContain('include: scripts/nsis-custom.nsh')
+    const nsisInclude = readFileSync(join(appDir, 'scripts', 'nsis-custom.nsh'), 'utf8')
+    expect(nsisInclude).toContain('!macro customCheckAppRunning')
+    expect(nsisInclude).toContain('--quit')
+    expect(nsisInclude).toContain('taskkill.exe" /F /T /IM ${APP_EXECUTABLE_FILENAME}')
+    expect(nsisInclude).toContain('ExecShell "runas"')
+  })
+
   test('Given Windows 发布脚本 When 启动构建 Then 宿主门禁总是最先执行', () => {
     const appDir = resolve(import.meta.dir, '..')
     const packageJson = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8')) as {

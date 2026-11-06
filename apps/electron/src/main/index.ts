@@ -53,13 +53,19 @@ if (process.platform === 'win32' && app.isPackaged) {
 }
 
 
-// 单实例锁：防止重复启动同一个版本
+// 单实例锁：防止重复启动同一个版本。
+// `--quit` 由安装器/卸载器使用：已有实例时，本次启动只把退出请求转给主实例。
+const quitRequested = isQuitRequest(process.argv)
 if (!app.requestSingleInstanceLock()) {
   console.warn(
     '[启动] 已有 Profer 进程持有单实例锁，本次启动将退出。\n' +
       '  如果窗口未出现，可能旧进程已卡死。请运行 `killall Profer` 后重试。',
   )
   app.quit()
+} else if (quitRequested) {
+  // 没有正在运行的实例：退出请求不需要真的启动应用（安装器可能只是探测）。
+  console.log('[退出] 收到退出请求，但当前没有运行中的实例，直接退出')
+  app.exit(0)
 } else {
   // 主流程：正常启动（单实例锁已获取）
   registerProtocolsAndHandlers()
@@ -100,6 +106,13 @@ function registerProtocolsAndHandlers(): void {
 
   // Windows 文件关联：当用户双击文件时，新实例的参数会通过 second-instance 传给已有实例
   app.on('second-instance', (_event, argv) => {
+    // 安装器的退出请求：不要先弹窗口，直接走正常退出清理（会话落盘、远控/持久化收尾）。
+    if (isQuitRequest(argv)) {
+      console.log('[退出] 收到外部退出请求，正在退出')
+      setQuitting(true)
+      app.quit()
+      return
+    }
     showAndFocusMainWindow()
     const fileArg = argv.find((arg) => arg.endsWith('.profer-backup') || arg.endsWith('.profer-share'))
     if (fileArg) {
@@ -162,6 +175,8 @@ import { initAutoUpdater, cleanupUpdater } from './lib/updater/auto-updater'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from './lib/workspace-watcher'
 import { startChatToolsWatcher, stopChatToolsWatcher } from './lib/chat-tools-watcher'
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
+import { resolveAppWindowIconPath } from './lib/app-window-icon'
+import { isQuitRequest } from './lib/app-quit-command'
 import { awaitQuitCleanup, resolveQuitCleanupTimeoutMs } from './lib/quit-cleanup'
 import { logLifecycle } from './lib/lifecycle-diagnostics'
 import {
@@ -382,25 +397,6 @@ function showAndFocusMainWindow(): void {
   mainWindow.focus()
 }
 
-/**
- * Get the appropriate app icon path for the current platform
- */
-function getIconPath(): string {
-  // 开发模式：resources/ 在 dist/ 下，通过 build:resources 复制
-  // 打包模式：resources/ 在 process.resourcesPath（app.asar 同级）
-  const resourcesDir = app.isPackaged
-    ? process.resourcesPath
-    : join(__dirname, 'resources')
-
-  if (process.platform === 'darwin') {
-    return join(resourcesDir, 'icon.icns')
-  } else if (process.platform === 'win32') {
-    return join(resourcesDir, 'icon.ico')
-  } else {
-    return join(resourcesDir, 'icon.png')
-  }
-}
-
 function saveMainWindowState(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const isMaximized = mainWindow.isMaximized()
@@ -420,11 +416,11 @@ function saveMainWindowState(): void {
 }
 
 function createWindow(): void {
-  const iconPath = getIconPath()
-  const iconExists = existsSync(iconPath)
+  const iconPath = resolveAppWindowIconPath()
+  const iconExists = iconPath != null
 
   if (!iconExists) {
-    console.warn('App icon not found at:', iconPath)
+    console.warn('App icon not found for platform:', process.platform)
   }
 
   const isMac = process.platform === 'darwin'
@@ -559,14 +555,15 @@ function createWindow(): void {
   if (isMac) mainWindow.setWindowButtonVisibility(false)
   // Windows 开发运行时的 Electron 壳不会稳定继承 BrowserWindow 构造参数中的图标；
   // 显式设置一次，确保任务栏窗口图标使用当前资源文件。
-  if (process.platform === 'win32' && iconExists) {
+  if (process.platform === 'win32' && iconPath) {
     mainWindow.setIcon(iconPath)
-    // 任务栏按钮图标 = 进程身份（AUMID）决定，不随 WM_SETICON。显式提供 appIconPath
-    // （微软 RelaunchIconResource 允许 .ico 路径），与 setAppUserModelId 的 AUMID 配合。
+    // 任务栏按钮图标 = 进程身份（AUMID）决定，不随 WM_SETICON。
+    // appIconPath 故意指向 exe 而不是散装 .ico：Shell 会长期引用这个路径，
+    // 指向 resources/app-icon.ico 会让下一次升级覆盖安装时文件被占用。
     if (app.isPackaged) {
       mainWindow.setAppDetails({
         appId: 'com.profer.app',
-        appIconPath: iconPath,
+        appIconPath: process.execPath,
       })
     }
   }

@@ -8,7 +8,6 @@
 
 import { app, BrowserWindow, screen, shell } from 'electron'
 import type { WebContents } from 'electron'
-import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type {
@@ -18,6 +17,7 @@ import type {
   OpenTabInNewWindowResult,
 } from '@profer/shared'
 import { IPC_CHANNELS } from '@profer/shared'
+import { resolveAppWindowIconPath } from './app-window-icon'
 import { VITE_DEV_SERVER_URL } from './config-paths'
 import { getWindowFrameColor, updateWindowFrameAppearance } from './titlebar-overlay'
 import {
@@ -192,16 +192,6 @@ export function normalizeInitialTab(input: unknown): MainWindowTabPayload | null
   }
 }
 
-function getIconPath(): string | undefined {
-  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, 'resources')
-  const iconPath = process.platform === 'darwin'
-    ? join(resourcesDir, 'icon.icns')
-    : process.platform === 'win32'
-      ? join(resourcesDir, 'icon.ico')
-      : join(resourcesDir, 'icon.png')
-  return existsSync(iconPath) ? iconPath : undefined
-}
-
 export function buildSessionTitleBarOptions(platform: NodeJS.Platform = process.platform): Record<string, unknown> {
   if (platform === 'darwin') {
     // 独立会话窗口保留原生交通灯：轻量壳只需要一条拖拽条，不必再自绘窗口按钮。
@@ -320,7 +310,7 @@ export function createSecondaryMainWindow(
     minWidth: 560,
     minHeight: 480,
     title: initialTab.title,
-    icon: getIconPath(),
+    icon: resolveAppWindowIconPath(),
     backgroundColor: getWindowFrameColor(),
     show: false,
     webPreferences: {
