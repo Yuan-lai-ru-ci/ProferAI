@@ -189,7 +189,7 @@ describe('AgentRuntimeCoordinator headless host', () => {
     expect(events.findIndex(event => event.type === 'message'))
       .toBeLessThan(events.findIndex(event => event.type === 'runtime_started'))
   })
-  test('Given a persisted user message When runtime starts Then preparation precedes the user transcript and the run-start announcement', async () => {
+  test('Given a persisted user message When runtime starts Then projection is delivered before provider and persistence is detached', async () => {
     // 2026-10-16 继承会话的行为变更（原断言为 lock → append → runtime_started → onRunStarted → preparation）：
     // 用户消息与「真正运行开始」都后移到准备成功之后、provider 启动之前，与旧编排器同序：
     // 凭证失败不再留下「孤儿用户气泡」，也不得建立 UI running 态 / 清未读 / 晋升 draft。
@@ -206,7 +206,7 @@ describe('AgentRuntimeCoordinator headless host', () => {
       onEvent() {},
       onRunStarted: () => { order.push('onRunStarted') },
     }).promise).resolves.toEqual({ status: 'completed' })
-    expect(order).toEqual(['lock', 'runtime_claimed', 'preparation', 'append', 'runtime_started', 'onRunStarted', 'provider'])
+    expect(order).toEqual(['lock', 'runtime_claimed', 'preparation', 'runtime_started', 'append', 'onRunStarted', 'provider'])
   })
   test('Given a persisted user message without SessionPort When runtime starts Then the run fails as a preparation failure before the provider', async () => {
     // 变更点：落盘时机后移到异步准备阶段之后，因此失败以「准备失败」终态返回，而不是同步 reject。
@@ -224,10 +224,9 @@ describe('AgentRuntimeCoordinator headless host', () => {
     expect(started).toBe(false)
     expect(coordinator.isRunning(query.sessionId)).toBe(false)
   })
-  test('Given user transcript persistence fails When runtime starts Then the run fails as a preparation failure and no owner leaks', async () => {
-    // 变更点同上一用例：落盘失败不再 reject，而是以结构化准备失败返回；provider 仍未启动。
+  test('Given user transcript persistence fails When runtime starts Then persistence failure does not block the run', async () => {
     let started = false
-    const failures: Array<{ phase: string; code?: string; message: string }> = []
+    const failures: Array<{ phase: string; message: string }> = []
     const coordinator = new AgentRuntimeCoordinator({
       adapters: { pi: adapter(async () => { started = true; return { status: 'completed' } }) },
       ports: { sessions: { getMeta: () => undefined, appendMessages: () => { throw new Error('user persistence failed') }, updateMeta: () => undefined } },
@@ -235,12 +234,10 @@ describe('AgentRuntimeCoordinator headless host', () => {
     await expect(coordinator.run({ ...query, persistedUserMessage: { type: 'user', message: { content: [{ type: 'text', text: 'hello' }] }, parent_tool_use_id: null } }, {
       onEvent() {},
       onPreparationFailure: failure => { failures.push({ phase: failure.phase, message: failure.message }) },
-    }).promise)
-      .resolves.toEqual({ status: 'failed', error: 'user persistence failed' })
-    expect(failures).toEqual([{ phase: 'unknown', message: 'user persistence failed' }])
-    expect(started).toBe(false)
+    }).promise).resolves.toEqual({ status: 'completed' })
+    expect(failures).toEqual([])
+    expect(started).toBe(true)
     expect(coordinator.isRunning(query.sessionId)).toBe(false)
-    expect(coordinator.ownership.ownerCount()).toBe(0)
   })
   test('rejects duplicate ownership before the second adapter starts', async () => {
     let started = 0
@@ -856,7 +853,7 @@ describe('AgentRuntimeCoordinator headless host', () => {
     expect(writes).toBe(0)
   })
 
-  test('Given prepared provider writes fail When streaming Then persistence error becomes one failed terminal and releases ownership', async () => {
+  test('Given transcript write fails When a runtime message streams Then projection and run completion survive', async () => {
     const events: AgentRuntimeEvent[] = []
     let errors = 0
     let terminals = 0
@@ -872,9 +869,10 @@ describe('AgentRuntimeCoordinator headless host', () => {
       onEvent() {},
       onError: () => { errors += 1 },
       onComplete: () => { terminals += 1 },
-    }).promise).resolves.toEqual({ status: 'failed', error: 'persist failed' })
-    expect(errors).toBe(1)
+    }).promise).resolves.toEqual({ status: 'completed' })
+    expect(errors).toBe(0)
     expect(terminals).toBe(1)
+    expect(events.filter(event => event.type === 'message')).toHaveLength(1)
     expect(events.filter(event => event.type === 'runtime_finished')).toHaveLength(1)
     expect(coordinator.isRunning(query.sessionId)).toBe(false)
   })
@@ -1338,7 +1336,7 @@ describe('coordinator 真实等待与接收失败', () => {
     expect(ledger.list()).toHaveLength(1)
   })
 
-  test('Provider 已接收但消息保存失败时不重复注入，最终明确报告失败', async () => {
+  test('Provider 已接收后磁盘失败时仍确认输入，不重复注入且运行完成', async () => {
     const { ledger } = ledgerFixture()
     let complete!: () => void
     let started!: () => void
@@ -1353,13 +1351,13 @@ describe('coordinator 真实等待与接收失败', () => {
     await ready
     const queued = { sessionId: query.sessionId, message: { type: 'user', uuid: 'accepted-uuid' } as import('@profer/shared').SDKMessage,
       context: { trigger: { ...runTrigger, id: 'accepted-trigger' } }, receive: async () => { delivered++ } }
-    await expect(coordinator.queueMessage(queued)).rejects.toThrow('disk full')
-    await expect(coordinator.queueMessage(queued)).rejects.toThrow('disk full')
+    await expect(coordinator.queueMessage(queued)).resolves.toMatchObject({ messageId: 'accepted-uuid' })
+    await expect(coordinator.queueMessage(queued)).resolves.toMatchObject({ messageId: 'accepted-uuid' })
     expect(delivered).toBe(1)
     expect(ledger.findByTrigger('accepted-trigger')?.id).toBe(ledger.list()[0]!.id)
     complete()
-    expect((await handle.promise).status).toBe('failed')
-    expect(ledger.list()[0]!.status).toBe('failed')
+    expect((await handle.promise).status).toBe('completed')
+    expect(ledger.list()[0]!.status).toBe('completed')
   })
 })
 

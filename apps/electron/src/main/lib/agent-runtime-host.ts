@@ -22,7 +22,7 @@ import type {
 import type { AgentRuntime, AgentSessionMeta, AgentSendInput, SDKMessage, AgentStreamPayload, ProferPermissionMode } from '@profer/shared'
 import type { SessionStore } from '@profer/session-store'
 import { createElectronSessionStore } from './session-store-host'
-import { appendSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime, resolveAgentSessionWriteLayout } from './agent-session-manager'
+import { appendSDKMessages, enqueueSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime, resolveAgentSessionWriteLayout } from './agent-session-manager'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { getChannelById } from './channel-manager'
 import { getWorkspaceMcpConfig, getWorkspaceSkills, getAgentWorkspace, readWorkspaceProfile } from './agent-workspace-manager'
@@ -164,8 +164,11 @@ export function createElectronSessionPort(): SessionPort {
     getMeta(sessionId): AgentSessionMeta | undefined {
       return getAgentSessionMeta(sessionId)
     },
-    appendMessages(sessionId, messages: readonly SDKMessage[]): undefined {
+    appendMessages(sessionId, messages): undefined {
       appendSDKMessages(sessionId, [...messages])
+    },
+    enqueueMessages(sessionId, messages): void {
+      enqueueSDKMessages(sessionId, [...messages])
     },
     updateMeta(sessionId, patch): undefined {
       updateAgentSessionMeta(sessionId, patch)

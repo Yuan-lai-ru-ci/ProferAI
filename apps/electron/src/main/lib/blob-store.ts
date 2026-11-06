@@ -31,9 +31,16 @@ export interface BlobRef {
   bytes: number
 }
 
+let configuredBlobRootDir: string | undefined
+
+/** Worker 可注入主进程解析出的配置目录，避免 worker 侧重新猜测 dev/production 路径。 */
+export function setBlobRootDirForWorker(configDir: string): void {
+  configuredBlobRootDir = join(configDir, BLOB_DIR_NAME)
+}
+
 /** blob 根目录：<configDir>/blobs */
 export function blobRootDir(): string {
-  return join(getConfigDir(), BLOB_DIR_NAME)
+  return configuredBlobRootDir ?? join(getConfigDir(), BLOB_DIR_NAME)
 }
 
 /**

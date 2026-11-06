@@ -525,13 +525,14 @@ describe('AgentOrchestrator host seams', () => {
     h.manager.dispose()
   })
 
-  test('Given a queue accepted by the adapter When session persistence fails Then the UUID remains reserved and retry does not reinject', async () => {
+  test('Given an accepted queued message When persistence fails Then UUID remains reserved and retry does not reinject', async () => {
     let accepted = 0
     let writes = 0
     const sessions: SessionPort = {
       getMeta: () => ({ id: 'failed-queue', title: 'fixture', agentRuntime: 'pi', createdAt: 1, updatedAt: 1 }),
       updateMeta() {},
       appendMessages: () => { writes++; throw new Error('write failed') },
+      enqueueMessages: () => {},
     }
     const h = fixture({ sessions }, { sendQueuedMessage: async () => { accepted++ } })
     h.ownership.claim({ sessionId: 'failed-queue', runtime: 'pi', token: 'run-1' })
@@ -541,7 +542,7 @@ describe('AgentOrchestrator host seams', () => {
     await expect(h.instance.queueMessage('failed-queue', 'queue', undefined, undefined, 'fixed-uuid')).resolves.toBe('fixed-uuid')
     await h.instance.queueMessage('failed-queue', 'retry', undefined, undefined, 'fixed-uuid')
     expect(accepted).toBe(1)
-    expect(writes).toBe(2) // 用户消息和后置 notice 都尝试写入，重复 UUID 不再写入。
+    expect(writes).toBe(0) // 队列接受消息；实际持久化由 Electron Worker 旁路执行。
     h.manager.dispose()
   })
 

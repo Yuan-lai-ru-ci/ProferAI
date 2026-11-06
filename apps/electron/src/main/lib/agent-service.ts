@@ -51,7 +51,15 @@ import { AgentRunAlreadyActiveError } from './agent-orchestrator-p0-guards'
 import { createAgentRunOutcomeReporter } from './agent-run-outcome'
 import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, type HeadlessAgentCompletionOptions, type HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir, getSdkConfigDir } from './config-paths'
-import { getAgentSessionMeta, getAgentSessionMessages, setAgentSessionActiveChecker, updateAgentSessionMeta, resolveAgentSessionCwd, shouldSkipPiFileCheckpoint } from './agent-session-manager'
+import {
+  configureSessionPersistenceStatusPublisher,
+  getAgentSessionMeta,
+  getAgentSessionMessages,
+  setAgentSessionActiveChecker,
+  updateAgentSessionMeta,
+  resolveAgentSessionCwd,
+  shouldSkipPiFileCheckpoint,
+} from './agent-session-manager'
 import { backupAgentAttachment } from './agent-attachment-backup'
 import {
   configureAgentSessionProjectionPublisher,
@@ -92,6 +100,12 @@ export function onAgentRunComplete(listener: (sessionId: string, initiator: Agen
   })
 }
 configureAgentSessionProjectionPublisher(eventBus)
+configureSessionPersistenceStatusPublisher((sessionId, status, error) => {
+  eventBus.emit(sessionId, {
+    kind: 'profer_event',
+    event: { type: 'session_persistence', status, ...(error ? { message: error } : {}) },
+  })
+})
 // 目录失效发布器单例：ipc.ts / remote-service.ts / workspace-watcher.ts 共享同一 revision 序列，
 // 保证 Pocket 按 (catalog, workspaceSlug) 去重时看到的 revision 单调可信。
 export const agentCatalogInvalidationPublisher = new AgentCatalogInvalidationPublisher(eventBus)

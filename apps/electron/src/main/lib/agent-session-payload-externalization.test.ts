@@ -137,6 +137,28 @@ describe('外部化 · 超限行搬到 blob', () => {
     expect((resolved as unknown as Record<string, unknown>)[MISSING_FIELD]).toBeUndefined()
   })
 
+  test('Given 140 条中等长度图片字段 When 落盘 Then 引用表参与第二级收敛且每张图片可还原', async () => {
+    const images = Array.from({ length: 140 }, (_, index) => `${String(index).padStart(3, '0')}-${'I'.repeat(2_500)}`)
+    const message = {
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'images', content: images.map(text => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: text } })) }] },
+    } as unknown as SDKMessage
+    const line = writeAndRead(message)
+    const refs = line[REFS_FIELD] as { path: string; hash: string; chars: number }[]
+    expect(refs).toHaveLength(140)
+    const resolved = await sessions.resolveMessageBlobs(line as unknown as SDKMessage) as unknown as { message: { content: { content: { source: { data: string } }[] }[] } }
+    expect(resolved.message.content[0]!.content.map(image => image.source.data)).toEqual(images)
+  })
+
+  test('Given 200 个中等长度字段 When 落盘 Then 引用表预算仍允许完整还原', async () => {
+    const values = Array.from({ length: 200 }, (_, index) => `${String(index).padStart(3, '0')}-${'J'.repeat(2_500)}`)
+    const message = { type: 'user', payload: values } as unknown as SDKMessage
+    const line = writeAndRead(message)
+    expect((line[REFS_FIELD] as unknown[]).length).toBe(200)
+    const resolved = await sessions.resolveMessageBlobs(line as unknown as SDKMessage) as unknown as { payload: string[] }
+    expect(resolved.payload).toEqual(values)
+  })
+
   test('Given 同一段内容出现两次 When 落盘 Then 两个引用指向同一个 blob（去重）', () => {
     const shared = bigText('SAME-')
     const message = {

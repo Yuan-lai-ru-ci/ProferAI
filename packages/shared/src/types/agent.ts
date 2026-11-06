@@ -730,6 +730,7 @@ export type ProferEvent =
   | { type: 'session_updated'; session: AgentSessionMeta }
   | { type: 'session_deleted'; sessionId: string; revision?: number }
   | { type: 'run_resumed'; sessionId: string }
+  | { type: 'session_persistence'; status: 'pending' | 'saved' | 'failed'; message?: string }
   // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
   // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
   | { type: 'run_idle'; sessionId: string }

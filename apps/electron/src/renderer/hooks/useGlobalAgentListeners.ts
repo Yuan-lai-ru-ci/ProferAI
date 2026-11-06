@@ -880,6 +880,10 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
 
         if (payload.kind === 'profer_event') {
           const proferEvent = payload.event
+          if (proferEvent.type === 'session_persistence') {
+            if (proferEvent.status === 'failed') toast.warning(proferEvent.message ?? '本轮消息未能保存到会话历史')
+            return
+          }
           if (proferEvent.type === 'preview_requested' && proferEvent.sessionId === sessionId) {
             // Agent 请求预览时只复用当前 renderer 的正式 PreviewPanel/PreviewTabContent。
             // requestId/revision 进入 PreviewFile，OfficePreview ready/error 后才向工具回执。

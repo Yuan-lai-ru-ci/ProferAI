@@ -33,10 +33,11 @@ export type RuntimeCredentialResult =
   | { ok: true; credentials: RuntimeCredential }
   | { ok: false; code: 'token_expired' | 'api_key_decrypt_failed' }
 
-/** 同步会话快照与持久化：返回前完成写入，错误同步抛出，保障 ownership 前的内核绑定顺序。 */
+/** 同步会话快照接口；运行时消息另走非阻塞 enqueue，不等待磁盘写入。 */
 export interface SessionPort {
   getMeta(sessionId: string): AgentSessionMeta | undefined
   appendMessages(sessionId: string, messages: readonly SDKMessage[]): undefined
+  enqueueMessages?(sessionId: string, messages: readonly SDKMessage[]): void
   updateMeta(sessionId: string, patch: Partial<AgentSessionMeta>): undefined
   getMessages?(sessionId: string): readonly SDKMessage[]
   getAgentMessages?(sessionId: string): readonly AgentMessage[]

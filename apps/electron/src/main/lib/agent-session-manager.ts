@@ -13,6 +13,7 @@ import { createInterface } from 'node:readline'
 import { rm as rmAsync } from 'node:fs/promises'
 import { createAgentSessionIndexStore } from './agent-session-index'
 import { createSyncSessionMessageStore } from '@profer/session-store'
+import { SessionPersistenceQueue } from './session-persistence-queue'
 import { createSnippet, extractTextFromPersistedMessage, matchAgentJsonlLine } from './agent-session-search'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -20,6 +21,7 @@ import { isAbsolute, join, relative, resolve, dirname, sep } from 'node:path'
 import {
   getAgentSessionsIndexPath,
   getAgentSessionsDir,
+  getConfigDir,
   getAgentSessionMessagesPath,
   getPiHarnessEventsPath,
   getAgentSessionCwd,
@@ -133,6 +135,33 @@ import {
 const sessionIndex = createAgentSessionIndexStore(getAgentSessionsIndexPath)
 const readIndex = sessionIndex.read
 const writeIndex = sessionIndex.write
+
+let persistenceStatusPublisher: ((sessionId: string, status: 'pending' | 'saved' | 'failed', error?: string) => void) | undefined
+
+export function configureSessionPersistenceStatusPublisher(
+  publisher: (sessionId: string, status: 'pending' | 'saved' | 'failed', error?: string) => void,
+): void {
+  persistenceStatusPublisher = publisher
+}
+
+const persistenceQueue = new SessionPersistenceQueue({
+  configDir: getConfigDir(),
+  sessionsDir: getAgentSessionsDir(),
+  onStatus: (sessionId, status, error) => {
+    if (status !== 'failed') return
+    persistenceStatusPublisher?.(sessionId, status, error)
+    console.error(`[Agent 会话] 持久化状态失败: session=${sessionId}; ${error ?? '未知错误'}`)
+  },
+})
+
+export function enqueueSDKMessages(id: string, messages: readonly SDKMessage[]): void {
+  if (messages.length === 0 || deletedSessionIds.has(id)) return
+  persistenceQueue.enqueue(id, messages)
+}
+
+export function flushSDKMessagePersistence(timeoutMs?: number): Promise<boolean> {
+  return persistenceQueue.flush(timeoutMs)
+}
 
 const syncMessageStore = createSyncSessionMessageStore(
   () => ({ sessionsDir: getAgentSessionsDir() }),

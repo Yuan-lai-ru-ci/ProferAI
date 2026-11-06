@@ -4,6 +4,7 @@ import { createConnection } from 'net'
 import { existsSync } from 'fs'
 import { getDevInstanceId, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
+import { flushSDKMessagePersistence } from './lib/agent-session-manager'
 
 /**
  * dev 模式下等待 Vite dev server 就绪的轮询参数。
@@ -1195,6 +1196,8 @@ app.on('window-all-closed', () => {
 
 let remoteExitComplete = false
 let remoteExitPending = false
+let persistenceExitComplete = false
+let persistenceExitPending = false
 app.on('before-quit', (event) => {
   if (!remoteExitComplete) {
     event.preventDefault()
@@ -1219,6 +1222,23 @@ app.on('before-quit', (event) => {
         timeoutMs,
         error: result.error,
       })
+      app.quit()
+    })
+    return
+  }
+  if (!persistenceExitComplete) {
+    event.preventDefault()
+    if (persistenceExitPending) return
+    persistenceExitPending = true
+    const timeoutMs = 1_500
+    const flushPromise = Promise.resolve().then(async () => {
+      const flushed = await flushSDKMessagePersistence(timeoutMs)
+      if (!flushed) throw new Error('超过退出 flush 预算')
+    })
+    void awaitQuitCleanup(flushPromise, timeoutMs).then((result) => {
+      persistenceExitPending = false
+      persistenceExitComplete = true
+      if (result.outcome !== 'completed') console.error(`[退出] 会话持久化 flush 未完成 (${result.outcome})，继续退出`)
       app.quit()
     })
     return

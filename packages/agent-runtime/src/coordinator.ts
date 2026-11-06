@@ -188,6 +188,23 @@ export interface AgentRuntimeRunHandle {
  * Host-neutral run coordinator. Ownership is claimed synchronously before the
  * first provider await; session persistence and event projection remain ports.
  */
+function enqueueSessionMessages(session: NonNullable<AgentRuntimePorts['sessions']> | undefined, sessionId: string, messages: readonly SDKMessage[]): void {
+  if (!session || messages.length === 0) return
+  if (session.enqueueMessages) {
+    try { session.enqueueMessages(sessionId, messages) } catch (error) {
+      console.error(`[Agent runtime] 消息持久化旁路失败，运行继续: session=${sessionId}`, error)
+    }
+    return
+  }
+  // Compatibility for non-Electron hosts. Production Electron provides enqueueMessages.
+  // Defer and isolate this legacy write so provider callbacks do not observe its failure.
+  queueMicrotask(() => {
+    try { session.appendMessages(sessionId, messages) } catch (error) {
+      console.error(`[Agent runtime] 延迟持久化失败，运行继续: session=${sessionId}`, error)
+    }
+  })
+}
+
 export class AgentRuntimeCoordinator {
   private readonly active = new Map<string, AgentRunControlEntry>()
   private readonly now: () => number
@@ -363,13 +380,13 @@ export class AgentRuntimeCoordinator {
         if (finished) return
         // 先用原对象分配来源 ID，再附加运行耗时，避免重复 result 投影丢失稳定 ID。
         const runtimeMessage = addRuntimeDuration(stamp(message), startedAt, this.now())
-        if (isPersistableRuntimeMessage(runtimeMessage)) {
-          session?.appendMessages(input.sessionId, [normalizeRuntimeMessage(runtimeMessage, input.modelId, this.now())])
-        }
         // 路由键用本轮 run 的 agent 会话 id（`input.sessionId`），不能用 `runtimeMessage.session_id`：
         // 后者是内核原生会话 id，宿主 EventBus 转发层按 agent 会话 id 找绑定 webContents。
         await emit({ type: 'message', sessionId: input.sessionId, message: runtimeMessage })
         await callbacks.onMessage?.(runtimeMessage)
+        if (isPersistableRuntimeMessage(runtimeMessage)) {
+          enqueueSessionMessages(session, input.sessionId, [normalizeRuntimeMessage(runtimeMessage, input.modelId, this.now())])
+        }
       },
       onError: async () => {
         // provider 的中间错误只由 retry loop 判断；最终 outcome 统一回调宿主。
@@ -425,9 +442,10 @@ export class AgentRuntimeCoordinator {
             if (!ledger.attachInput(sourceRun.id, queued.context.trigger)) throw new Error('已接收输入无法关联原 Run，需对账')
           } catch (error) { attachError = error }
         }
-        session.appendMessages(input.sessionId, [message])
+        // Transcript 是运行结果的旁路副本；先投影已接收输入，再异步入队持久化。
         await emit({ type: 'message', sessionId: input.sessionId, message })
         await callbacks.onMessage?.(message)
+        enqueueSessionMessages(session, input.sessionId, [message])
         if (attachError) throw attachError
         return { ...runReference, messageId: message._provenance?.messageId ?? record.uuid ?? queued.context.trigger.id }
       })
@@ -436,7 +454,6 @@ export class AgentRuntimeCoordinator {
       void delivery.then(() => { pendingInputs.delete(delivery) }, () => {
         pendingInputs.delete(delivery)
         if (!accepted) queuedInputs.delete(key)
-        else inputRecordingError ??= new Error('已接收的追加输入记账或持久化失败，需对账')
       })
       return delivery
     }
@@ -468,25 +485,18 @@ export class AgentRuntimeCoordinator {
           : input.providerInput
         const prepared = { ...input, abortSignal: controller.signal, prepared: { ...input.prepared, ...preparedContext }, ...(providerInput ? { providerInput } : {}) }
         if (controller.signal.aborted) return { status: 'stopped' }
-        // 用户消息落盘时机（与旧路径同序）：凭证/资源/装配全部准备成功之后、provider 启动之前。
-        // 理由：① 凭证失败不留下「孤儿用户气泡」；② 落盘失败也不会启动 provider；
-        // ③ 重试命中同一份 transcript，不重复 append。
-        // 该落盘仍在第一个 provider await 之前完成，因此持久化失败不会产生半轮运行。
+        // 准备成功后，用户输入立即进入运行态投影与异步持久化旁路，不等待写盘。
         if (input.persistedUserMessage && !userMessagePersisted) {
           if (!session) throw new AgentRuntimePreparationError('Persisted user message requires a SessionPort', 'session_port_missing', 'persistence')
           const notice = run && input.context ? createRunTriggerMessage(run, input.context, () => globalThis.crypto.randomUUID(), this.now()) : undefined
           if (notice) {
-            session.appendMessages(input.sessionId, [notice])
             await emit({ type: 'message', sessionId: input.sessionId, message: notice })
+            enqueueSessionMessages(session, input.sessionId, [notice])
           }
           input.persistedUserMessage = stamp(input.persistedUserMessage, input.context?.messageAuthor ?? input.context?.trigger.actor)
-          session.appendMessages(input.sessionId, [input.persistedUserMessage])
-          userMessagePersisted = true
-          // 用户气泡也是事件流的一部分：桌面渲染层有乐观气泡并按 uuid 去重，
-          // 且不消费 user 文本事件；但 Pocket 没有本地状态，只能靠这条事件在运行中
-          // 看到电脑端发起的那句话。缺了它，手机端整轮只剩回复、看不到指令。
-          // 必须在 provider 启动前投递，保证移动端先看到用户输入再看到输出。
           await emit({ type: 'message', sessionId: input.sessionId, message: input.persistedUserMessage })
+          enqueueSessionMessages(session, input.sessionId, [input.persistedUserMessage])
+          userMessagePersisted = true
         }
         if (!providerStarted) {
           // 先保存 running，再发布开始副作用；保存失败时 provider 从未启动。
@@ -518,7 +528,6 @@ export class AgentRuntimeCoordinator {
           // Provider 接收与 settle 竞态时，先保存已接收的输入，再封存原 Run。
           await Promise.allSettled([...pendingInputs])
         }
-        if (inputRecordingError) return { status: 'failed', error: inputRecordingError instanceof Error ? inputRecordingError.message : String(inputRecordingError) }
         if (outcome.status !== 'failed' || controller.signal.aborted) return controller.signal.aborted ? { status: 'stopped' } : outcome
 
         const shouldRetry = this.options.retry?.shouldRetry ?? ((error: string) => isRetryableError({ message: error }))

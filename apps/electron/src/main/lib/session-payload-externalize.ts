@@ -149,17 +149,18 @@ function collectExtractableStrings(
   out: ExtractableString[],
   minChars: number,
   skipPaths: Set<string>,
+  includeSkipped = false,
   depth = 0,
 ): void {
   if (depth > MAX_BLOB_WALK_DEPTH) return
 
   if (typeof value === 'string') {
-    if (value.length > minChars && !skipPaths.has(path)) out.push({ path, length: value.length })
+    if (value.length > minChars && (includeSkipped || !skipPaths.has(path))) out.push({ path, length: value.length })
     return
   }
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      collectExtractableStrings(value[i], `${path}[${i}]`, out, minChars, skipPaths, depth + 1)
+      collectExtractableStrings(value[i], `${path}[${i}]`, out, minChars, skipPaths, includeSkipped, depth + 1)
     }
     return
   }
@@ -167,7 +168,7 @@ function collectExtractableStrings(
 
   for (const [key, child] of Object.entries(value)) {
     if (key === BLOB_REFS_FIELD || key === BLOB_REFS_MISSING_FIELD) continue
-    collectExtractableStrings(child, path ? `${path}.${key}` : key, out, minChars, skipPaths, depth + 1)
+    collectExtractableStrings(child, path ? `${path}.${key}` : key, out, minChars, skipPaths, includeSkipped, depth + 1)
   }
 }
 
@@ -191,12 +192,13 @@ function extractUntilUnderBudget(
   extractedPaths: Set<string>,
   fragmentChars: number,
   minChars: number,
+  allowExistingRefs = false,
 ): { converged: boolean; serialized: string } {
   let serialized = serializeMessageWithRefs(message, refs)
   if (serialized.length <= MAX_SDK_MESSAGE_LENGTH) return { converged: true, serialized }
 
   const candidates: ExtractableString[] = []
-  collectExtractableStrings(message, '', candidates, minChars, extractedPaths)
+  collectExtractableStrings(message, '', candidates, minChars, extractedPaths, allowExistingRefs)
   if (candidates.length === 0) return { converged: false, serialized }
   candidates.sort((a, b) => b.length - a.length)
 
@@ -206,10 +208,15 @@ function extractUntilUnderBudget(
     const value = getStringAtPath(message, candidate.path)
     if (typeof value !== 'string' || value.length <= minChars) break
 
-    const { hash, bytes } = writeBlobSync(value)
-    if (!setStringAtPath(message, candidate.path, value.slice(0, fragmentChars))) break
-    extractedPaths.add(candidate.path)
-    refs.push({ path: candidate.path, hash, chars: value.length, bytes })
+    const existingRef = allowExistingRefs ? refs.find((ref) => ref.path === candidate.path) : undefined
+    if (existingRef) {
+      if (!setStringAtPath(message, candidate.path, value.slice(0, fragmentChars))) break
+    } else {
+      const { hash, bytes } = writeBlobSync(value)
+      if (!setStringAtPath(message, candidate.path, value.slice(0, fragmentChars))) break
+      extractedPaths.add(candidate.path)
+      refs.push({ path: candidate.path, hash, chars: value.length, bytes })
+    }
     serialized = serializeMessageWithRefs(message, refs)
   }
 
@@ -226,15 +233,23 @@ function extractUntilUnderBudget(
  *
  * 为什么「从最大开始抽」：抽一个 12 MB 的字符串就解决问题，不需要动其他字段，干预面最小。
  */
-export function externalizeSerializedSessionLine(line: string, sessionId?: string): string {
+export function externalizeSerializedSessionLine(
+  line: string,
+  sessionId?: string,
+  options: { strict?: boolean } = {},
+): string {
   if (line.length <= MAX_SDK_MESSAGE_LENGTH) return line
 
   let message: Record<string, unknown>
   try {
     const parsed: unknown = JSON.parse(line)
-    if (!isPlainRecord(parsed)) return sanitizeSerializedSessionLine(line, sessionId)
+    if (!isPlainRecord(parsed)) {
+      if (options.strict) throw new Error('会话行根值不是对象')
+      return sanitizeSerializedSessionLine(line, sessionId)
+    }
     message = parsed
-  } catch {
+  } catch (error) {
+    if (options.strict) throw error
     return sanitizeSerializedSessionLine(line, sessionId)
   }
 
@@ -250,17 +265,18 @@ export function externalizeSerializedSessionLine(line: string, sessionId?: strin
     // 把中等字符串也抽走，只留更短的片段——原文仍在 blob，不丢数据
     if (!converged) {
       ;({ converged, serialized } = extractUntilUnderBudget(
-        message, refs, extractedPaths, SHORT_PREVIEW_CHARS, SECOND_TIER_MIN_CHARS,
+        message, refs, extractedPaths, SHORT_PREVIEW_CHARS, SECOND_TIER_MIN_CHARS, true,
       ))
     }
 
     // 达标且确实搬走了东西 → 直接用（serialized 已含引用表，无需再拼一次）
     if (converged && refs.length > 0) return serialized
 
-    // 两级都抽不动（没有超过 512 的字符串）或抽完仍超限 → 交给截断兜底
+    if (options.strict) throw new Error(`会话行外部化无法在预算内完整收敛${sessionId ? `: ${sessionId}` : ''}`)
     return sanitizeSerializedSessionLine(line, sessionId)
   } catch (error) {
-    // blob 写失败不能让写入失败：退回截断，保住行上限
+    if (options.strict) throw error
+    // blob 写失败不能让旧同步写入路径崩溃：退回截断，保住行上限。
     console.warn(`[Agent 会话] 载荷外部化失败，退回截断${sessionId ? ` session=${sessionId}` : ''}:`, error)
     return sanitizeSerializedSessionLine(line, sessionId)
   }

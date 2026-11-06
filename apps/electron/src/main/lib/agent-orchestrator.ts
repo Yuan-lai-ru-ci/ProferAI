@@ -110,6 +110,7 @@ import type { SessionTitleNamingLogger } from './agent-session-title-naming'
 import { editionProviders } from './edition'
 import {
   appendSDKMessages,
+  enqueueSDKMessages,
   lockAgentSessionRuntime,
   updateAgentSessionMeta,
   getAgentSessionMeta,
@@ -470,6 +471,7 @@ export class AgentOrchestrator {
       sessions: {
         getMeta: getAgentSessionMeta,
         lockRuntime: lockAgentSessionRuntime,
+        enqueueMessages: (sessionId, messages): void => { enqueueSDKMessages(sessionId, [...messages]) },
         appendMessages: (sessionId, messages): undefined => { appendSDKMessages(sessionId, [...messages]) },
         updateMeta: (sessionId, patch): undefined => { updateAgentSessionMeta(sessionId, patch) },
         getMessages: getAgentSessionSDKMessages,
@@ -499,6 +501,9 @@ export class AgentOrchestrator {
     this.sessionPort = this.runLedger ? {
       ...sessions,
       appendMessages: (sessionId, messages) => sessions.appendMessages(sessionId, messages.map(message => this.stampMessage(sessionId, message))),
+      enqueueMessages: sessions.enqueueMessages
+        ? (sessionId, messages) => sessions.enqueueMessages!(sessionId, messages.map(message => this.stampMessage(sessionId, message)))
+        : undefined,
     } : sessions
     this.credentialPort = ports?.credentials ?? legacyPorts.credentials
     this.resourcePort = ports?.resources ?? legacyPorts.resources
@@ -1083,11 +1088,12 @@ export class AgentOrchestrator {
     const notice = buildSkillRoutingNotice(routed)
     if (!notice) return
     const message = { type: 'system', subtype: 'skill_routing_notice', message: notice, _createdAt: Date.now() } as unknown as SDKMessage
+    this.eventPort.emit(sessionId, { kind: 'sdk_message', message })
     try {
-      this.sessionPort.appendMessages(sessionId, [message])
-      this.eventPort.emit(sessionId, { kind: 'sdk_message', message })
+      this.sessionPort.enqueueMessages?.(sessionId, [message])
+      if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [message])
     } catch (error) {
-      console.warn(`[Skill 路由] 未加载提示写入失败: sessionId=${sessionId}`, error)
+      console.warn(`[Skill 路由] 未加载提示持久化旁路失败: sessionId=${sessionId}`, error)
     }
   }
 
@@ -1134,7 +1140,8 @@ export class AgentOrchestrator {
       return { ...m, _createdAt: now } as unknown as SDKMessage
     })
 
-    this.sessionPort.appendMessages(sessionId, withTimestamps)
+    this.sessionPort.enqueueMessages?.(sessionId, withTimestamps)
+    if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, withTimestamps)
   }
 
   /**
@@ -1311,10 +1318,11 @@ export class AgentOrchestrator {
         _errorActions: typedError.actions,
       } as unknown as SDKMessage
       const stamped = this.stampMessage(sessionId, errorSDKMsg, { type: 'system' })
-        try {
-          this.sessionPort.appendMessages(sessionId, [stamped])
-        } catch (e) {
-        console.error('[Agent 编排] 持久化 preflight error 失败:', e)
+      try {
+        if (this.sessionPort.enqueueMessages) this.sessionPort.enqueueMessages(sessionId, [stamped])
+        else this.sessionPort.appendMessages(sessionId, [stamped])
+      } catch (error) {
+        console.error('[Agent 编排] preflight error 持久化旁路失败，运行继续:', error)
       }
       callbacks.onError(errorContent)
       // owner finally 释放 activeSessions 后才发 complete，避免 renderer 先进入 idle。
@@ -1430,8 +1438,9 @@ export class AgentOrchestrator {
       const triggerNotice = runFacts ? createRunTriggerMessage(runFacts.run, runFacts.context, randomUUID) : undefined
       if (triggerNotice) {
         this.stampedMessages.add(triggerNotice)
-        this.sessionPort.appendMessages(sessionId, [triggerNotice])
         this.eventPort.emit(sessionId, { kind: 'sdk_message', message: triggerNotice })
+        this.sessionPort.enqueueMessages?.(sessionId, [triggerNotice])
+        if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [triggerNotice])
       }
       // 气泡/transcript 只存用户原文：IM 桥与桌面都会把 prompt 工程块放进 userMessage，
       // 直接持久化会让桌面端看到一大段本应对用户不可见的注入内容。
@@ -1452,11 +1461,9 @@ export class AgentOrchestrator {
       if (input.taskReturnReferences?.length) {
         ;(inputMessage as SDKUserMessage)._taskReturnReferences = input.taskReturnReferences.map(reference => ({ ...reference }))
       }
-      this.sessionPort.appendMessages(sessionId, [inputMessage])
-      // 运行中的用户输入只有本地乐观气泡是不够的：手机端（Pocket）没有这份本地状态，
-      // 只能靠事件流看到电脑端发起的指令。桌面渲染层不消费 user 文本事件、乐观气泡
-      // 按 uuid 去重，因此这里广播不会在电脑上产生重复气泡。
       this.eventPort.emit(sessionId, { kind: 'sdk_message', message: inputMessage })
+      this.sessionPort.enqueueMessages?.(sessionId, [inputMessage])
+      if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [inputMessage])
     }
     if (!this.runLedger) await callbacks.onRunStarted?.({ startedAt: streamStartedAt })
       const completeRun = (messages?: AgentMessage[], opts?: CompleteOptions): void => {
@@ -3218,7 +3225,8 @@ export class AgentOrchestrator {
                     _errorCanRetry: true,
                     _errorActions: [{ key: 'r', label: '重试', action: 'retry' }],
                   } as unknown as SDKMessage
-                  this.sessionPort.appendMessages(sessionId, [emptyOutputErrorSDKMsg])
+                  this.sessionPort.enqueueMessages?.(sessionId, [emptyOutputErrorSDKMsg])
+                  if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [emptyOutputErrorSDKMsg])
                   this.eventPort.emit(sessionId, {
                     kind: 'sdk_message',
                     message: emptyOutputErrorSDKMsg,
@@ -3283,7 +3291,8 @@ export class AgentOrchestrator {
                   _errorCanRetry: typedError.canRetry,
                   _errorActions: typedError.actions,
                 } as unknown as SDKMessage
-                this.sessionPort.appendMessages(sessionId, [errorSDKMsg])
+                this.sessionPort.enqueueMessages?.(sessionId, [errorSDKMsg])
+                if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [errorSDKMsg])
                 console.log(`[Agent 编排] 已保存 TypedError 消息: ${typedError.code} - ${typedError.title}`)
 
                 // 如果之前有可见重试记录，发送 retry_failed
@@ -3681,7 +3690,8 @@ export class AgentOrchestrator {
               _errorTitle: errorTitle,
               _errorActions: errorActions,
             } as unknown as SDKMessage
-            this.sessionPort.appendMessages(sessionId, [errMsg])
+            this.sessionPort.enqueueMessages?.(sessionId, [errMsg])
+            if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [errMsg])
             console.log(`[Agent 编排] 已保存错误消息到 JSONL`)
           } catch (saveError) {
             console.error('[Agent 编排] 保存错误消息失败:', saveError)
@@ -3756,7 +3766,8 @@ export class AgentOrchestrator {
           _errorCode: 'unknown_error',
           _errorTitle: '重试失败',
         } as unknown as SDKMessage
-        this.sessionPort.appendMessages(sessionId, [retryErrorSDKMsg])
+        this.sessionPort.enqueueMessages?.(sessionId, [retryErrorSDKMsg])
+        if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [retryErrorSDKMsg])
 
         failRun(`${retryFailureMessage}: ${lastRetryableError}`, [...(this.sessionPort.getAgentMessages?.(sessionId) ?? [])], { startedAt: streamStartedAt })
       }
@@ -3869,7 +3880,8 @@ export class AgentOrchestrator {
               _createdAt: now,
             } as unknown as SDKMessage)
             try {
-              this.sessionPort.appendMessages(sessionId, [record])
+              this.sessionPort.enqueueMessages?.(sessionId, [record])
+              if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [record])
               if (completion.messages) completion.messages.push(record as unknown as AgentMessage)
             } catch {
               /* 忽略 */
@@ -4325,13 +4337,12 @@ export class AgentOrchestrator {
         queueContext.messageAuthor ?? queueContext.trigger.actor, randomUUID, queueContext.trigger) : persistMsg
       this.stampedMessages.add(sourcedMessage)
       try {
-        this.sessionPort.appendMessages(sessionId, [sourcedMessage])
-        // 追加消息同样要进事件流：手机端要靠它看到电脑端在运行中补发的指令。
         this.eventPort.emit(sessionId, { kind: 'sdk_message', message: sourcedMessage })
+        this.sessionPort.enqueueMessages?.(sessionId, [sourcedMessage])
+        if (!this.sessionPort.enqueueMessages) this.sessionPort.appendMessages(sessionId, [sourcedMessage])
       } catch (persistError) {
-        // 注入已成功，uuid 必须保留（幂等短路），否则重试会重复注入；JSONL 缺口由会话文件后续 append 兜底。
-        console.error(`[Agent 编排] 已注入消息持久化失败 (uuid=${uuid}, sessionId=${sessionId}):`, persistError)
-        if (queueFacts) throw persistError
+        // 注入已成功，uuid 必须保留（幂等短路）；持久化旁路失败不得撤销已接收输入。
+        console.error(`[Agent 编排] 已注入消息未能持久化 (uuid=${uuid}, sessionId=${sessionId}):`, persistError)
       }
       if (attachError) throw attachError
       // 提示必须排在用户消息之后落盘，否则重载后会显示在它前面。
