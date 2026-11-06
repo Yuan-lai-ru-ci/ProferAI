@@ -31,6 +31,17 @@ export function isEditableTarget(target: EventTarget | null): boolean {
     || Boolean(element.closest?.('[contenteditable="true"], .ProseMirror'))
 }
 
+/**
+ * 是否存在已打开的模态确认框（Radix AlertDialog）。
+ *
+ * NavigationInputProvider 在 window capture 层监听 keydown，会先于 Radix 在
+ * document 层的 Escape 监听执行：确认框打开时若把 Escape 当 back 消费（聚焦
+ * 输入框 + stopPropagation），确认框将永远无法用 Esc 关闭。此判定供其放行。
+ */
+export function hasOpenAlertDialog(doc: Pick<Document, 'querySelector'>): boolean {
+  return doc.querySelector('[role="alertdialog"][data-state="open"]') !== null
+}
+
 export function createNavigationController(): NavigationController {
   const consumers = new Set<ConsumerEntry>()
   let sequence = 0
