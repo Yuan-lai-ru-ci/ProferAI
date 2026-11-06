@@ -720,13 +720,18 @@ export function useLeftSidebar() {
   }, [refreshSidebarLists])
 
   // 监听工作区列表变更（创建/删除/重命名/重排、远程创建）：主进程广播后刷新侧边栏，
-  // 否则运行中的桌面端一直用启动时的工作区快照，新工作区的会话会被归入默认工作区
+  // 否则运行中的桌面端一直用启动时的工作区快照，新工作区的会话会被归入默认工作区。
+  //
+  // 会话列表也必须一并重拉：绑定/重新绑定项目时主进程会把项目内的历史会话对账进索引，
+  // 但工作区 id 是新建的（解绑再绑定会换 id），只刷工作区列表的话侧栏仍按旧 id 过滤，
+  // 页面就停在「暂无会话」，直到下一次发消息触发列表刷新才「突然出现」。
   React.useEffect(() => {
     const unsub = window.electronAPI.onAgentWorkspacesChanged(() => {
       window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
+      refreshSidebarLists()
     })
     return unsub
-  }, [setWorkspacesStable])
+  }, [setWorkspacesStable, refreshSidebarLists])
 
   // authStatus 变化时刷新工作区（登录/登出）
   // 仅立即刷新一次，避免重复请求
