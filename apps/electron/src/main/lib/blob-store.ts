@@ -20,6 +20,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { getConfigDir } from './config-paths'
+import { listProjectWorkspaceRoots } from './workspace-locator'
+import { getSessionStorageLayout } from '@profer/session-store'
 
 const BLOB_DIR_NAME = 'blobs'
 
@@ -38,18 +40,57 @@ export function setBlobRootDirForWorker(configDir: string): void {
   configuredBlobRootDir = join(configDir, BLOB_DIR_NAME)
 }
 
-/** blob 根目录：<configDir>/blobs */
+/**
+ * Worker 直接使用主进程算好的 blob 根目录。
+ *
+ * project 会话的 blob 在 `<root>/.profer/blobs`，worker 里没有布局注册表，
+ * 无法自行推导，必须由主进程把结果传进来。
+ */
+export function setBlobRootDirDirect(dir: string): void {
+  configuredBlobRootDir = dir
+}
+
+/** 全局 blob 根目录：<configDir>/blobs */
 export function blobRootDir(): string {
   return configuredBlobRootDir ?? join(getConfigDir(), BLOB_DIR_NAME)
+}
+
+/**
+ * 会话应使用的 blob 根目录。
+ *
+ * project 会话写进项目 `.profer/blobs`，项目文件夹才是自包含的；
+ * managed 继续写全局目录。布局未知时回退全局（迁移/启动早期）。
+ */
+export function blobRootDirForSession(sessionId?: string): string {
+  if (!sessionId) return blobRootDir()
+  const layout = getSessionStorageLayout(sessionId)
+  if (layout?.kind === 'project' && layout.dataDir) {
+    // <root>/.profer/sessions/<sid> → <root>/.profer/blobs
+    return join(dirname(dirname(layout.dataDir)), BLOB_DIR_NAME)
+  }
+  return blobRootDir()
+}
+
+/** 读路径：全局 + 所有已绑定项目的 `.profer/blobs`（项目拷来后无需改写引用）。 */
+function readableBlobRoots(): string[] {
+  const roots = [blobRootDir()]
+  try {
+    for (const project of listProjectWorkspaceRoots()) {
+      roots.push(join(project.rootPath, '.profer', BLOB_DIR_NAME))
+    }
+  } catch {
+    // 工作区索引不可读时只读全局，不能让历史消息渲染失败。
+  }
+  return [...new Set(roots)]
 }
 
 /**
  * 哈希 → 落盘路径。
  * 用哈希前四位做两级分片（`ab/cd/<hex>`），避免单目录堆积上万文件。
  */
-export function blobPathFor(hash: string): string {
+export function blobPathFor(hash: string, rootDir: string = blobRootDir()): string {
   const hex = hash.startsWith(HASH_PREFIX) ? hash.slice(HASH_PREFIX.length) : hash
-  return join(blobRootDir(), hex.slice(0, 2), hex.slice(2, 4), hex)
+  return join(rootDir, hex.slice(0, 2), hex.slice(2, 4), hex)
 }
 
 /**
@@ -65,9 +106,9 @@ function tempPathFor(target: string): string {
 }
 
 /** 同步写入（写入路径用）。内容寻址 ⇒ 幂等：已存在则直接返回。 */
-export function writeBlobSync(content: string): BlobRef {
+export function writeBlobSync(content: string, sessionId?: string): BlobRef {
   const hash = hashOfBlobContent(content)
-  const target = blobPathFor(hash)
+  const target = blobPathFor(hash, blobRootDirForSession(sessionId))
 
   if (!existsSync(target)) {
     mkdirSync(dirname(target), { recursive: true })
@@ -81,9 +122,9 @@ export function writeBlobSync(content: string): BlobRef {
 }
 
 /** 异步写入（存量迁移用）。 */
-export async function writeBlob(content: string): Promise<BlobRef> {
+export async function writeBlob(content: string, sessionId?: string): Promise<BlobRef> {
   const hash = hashOfBlobContent(content)
-  const target = blobPathFor(hash)
+  const target = blobPathFor(hash, blobRootDirForSession(sessionId))
 
   try {
     await readFile(target)
@@ -102,19 +143,25 @@ export async function writeBlob(content: string): Promise<BlobRef> {
  * 不一致按「读不到」处理——宁可降级显示片段，也不返回可能被损坏的内容。
  */
 export function readBlobSync(hash: string): string | null {
-  try {
-    const content = readFileSync(blobPathFor(hash), 'utf-8')
-    return hashOfBlobContent(content) === hash ? content : null
-  } catch {
-    return null
+  for (const root of readableBlobRoots()) {
+    try {
+      const content = readFileSync(blobPathFor(hash, root), 'utf-8')
+      if (hashOfBlobContent(content) === hash) return content
+    } catch {
+      // 继续找下一个根
+    }
   }
+  return null
 }
 
 export async function readBlob(hash: string): Promise<string | null> {
-  try {
-    const content = await readFile(blobPathFor(hash), 'utf-8')
-    return hashOfBlobContent(content) === hash ? content : null
-  } catch {
-    return null
+  for (const root of readableBlobRoots()) {
+    try {
+      const content = await readFile(blobPathFor(hash, root), 'utf-8')
+      if (hashOfBlobContent(content) === hash) return content
+    } catch {
+      // 继续找下一个根
+    }
   }
+  return null
 }

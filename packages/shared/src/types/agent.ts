@@ -948,6 +948,11 @@ export interface AgentSessionMeta {
   agentEffort?: AgentEffort | null
   /** 所属工作区 ID */
   workspaceId?: string
+  /**
+   * 会话数据落盘布局。project 表示消息/任务图/Harness 随项目文件夹存放；
+   * managed 表示历史中央布局。缺省时按工作区模式与文件存在性推断，兼容升级前的会话。
+   */
+  storageLayout?: 'project' | 'managed'
   /** 当前 Agent 会话是否已激活 PPT 专用能力；缺省为 false。 */
   pptCapabilityActive?: boolean
   /** 是否置顶 */

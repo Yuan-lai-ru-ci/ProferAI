@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { getAutomationsPath } from './config-paths'
+import { readProjectAutomations, writeProjectAutomations } from './project-automation-store'
 import {
   AUTOMATION_MAX_HISTORY,
   AUTOMATION_DEFAULT_PERMISSION_MODE,
@@ -132,7 +133,107 @@ function migrateLegacyFields(data: AutomationsIndex): boolean {
  */
 let cachedIndex: AutomationsIndex | null = null
 
-function readIndex(): AutomationsIndex {
+interface ProjectAutomationMirror {
+  id: string
+  rootPath: string
+}
+
+function listProjectAutomationMirrors(): ProjectAutomationMirror[] {
+  // 延迟 require：工作区管理器与定时任务管理器共享索引文件，避免顶层循环依赖。
+  const { listAgentWorkspaces } = require('./agent-workspace-manager') as typeof import('./agent-workspace-manager')
+  return listAgentWorkspaces()
+    .filter((workspace) => workspace.storageMode === 'project' && typeof workspace.rootPath === 'string' && workspace.rootPath.length > 0)
+    .map((workspace) => ({ id: workspace.id, rootPath: workspace.rootPath! }))
+}
+
+const mirroredAutomationSignatures = new Map<string, string>()
+const reconciledAutomationRoots = new Set<string>()
+
+function automationMirrorSignature(
+  automations: readonly Automation[],
+  triggers: readonly AutomationTriggerRecord[],
+): string {
+  const automationPart = automations
+    .map((automation) => `${automation.id}:${automation.updatedAt ?? 0}:${automation.active ? 1 : 0}:${automation.name}`)
+    .join('|')
+  const triggerPart = triggers
+    .map((trigger) => `${trigger.triggerId}:${trigger.updatedAt ?? 0}:${trigger.status}`)
+    .join('|')
+  return `${automationPart}##${triggerPart}`
+}
+
+/** 把全局索引里属于各 project 的任务镜像到 `<root>/.profer/automations.json`。 */
+function mirrorProjectAutomations(index: AutomationsIndex): void {
+  const mirrors = listProjectAutomationMirrors()
+  if (mirrors.length === 0) return
+
+  for (const mirror of mirrors) {
+    const automations = index.automations.filter((automation) => automation.workspaceId === mirror.id)
+    const automationIds = new Set(automations.map((automation) => automation.id))
+    const triggers = (index.triggers ?? []).filter((trigger) => automationIds.has(trigger.automationId))
+    const signature = automationMirrorSignature(automations, triggers)
+    const cacheKey = `${mirror.id}|${mirror.rootPath}`
+    if (mirroredAutomationSignatures.get(cacheKey) === signature) continue
+    try {
+      writeProjectAutomations(mirror.rootPath, automations, triggers)
+      mirroredAutomationSignatures.set(cacheKey, signature)
+    } catch (error) {
+      console.warn(`[定时任务] 写入项目任务镜像失败 (${mirror.rootPath}):`, error)
+    }
+  }
+}
+
+/** 启动/打开项目时把项目镜像里更新的任务合并回全局。 */
+function reconcileProjectAutomations(index: AutomationsIndex): boolean {
+  let changed = false
+  index.triggers = index.triggers ?? []
+
+  for (const mirror of listProjectAutomationMirrors()) {
+    if (reconciledAutomationRoots.has(mirror.rootPath)) continue
+    reconciledAutomationRoots.add(mirror.rootPath)
+    const file = readProjectAutomations(mirror.rootPath)
+    if (!file) continue
+
+    const workspaceSlug = (() => {
+      const { getAgentWorkspace } = require('./agent-workspace-manager') as typeof import('./agent-workspace-manager')
+      return getAgentWorkspace(mirror.id)?.slug
+    })()
+    for (const automation of file.automations) {
+      const normalized: Automation = { ...automation, workspaceId: mirror.id }
+      // 项目拷到新机器后 slug 可能变化：工作区级预设引用改指当前项目。
+      if (workspaceSlug && normalized.presetReference?.presetScope === 'workspace') {
+        normalized.presetReference = { ...normalized.presetReference, workspaceSlug }
+      }
+      const existing = index.automations.find((item) => item.id === normalized.id)
+      if (!existing) {
+        index.automations.push(normalized)
+        changed = true
+        continue
+      }
+      if ((normalized.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+        Object.assign(existing, normalized)
+        changed = true
+      }
+    }
+
+    for (const trigger of file.triggers) {
+      const existing = index.triggers.find((item) => item.triggerId === trigger.triggerId)
+      if (!existing) {
+        index.triggers.push(trigger)
+        changed = true
+        continue
+      }
+      if ((trigger.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+        Object.assign(existing, trigger)
+        changed = true
+      }
+    }
+  }
+
+  return changed
+}
+
+function readGlobalIndex(): AutomationsIndex {
   if (cachedIndex) return cachedIndex
 
   const data = readJsonFileSafe<AutomationsIndex>(getAutomationsPath())
@@ -175,10 +276,23 @@ function readIndex(): AutomationsIndex {
   return cachedIndex
 }
 
+function readIndex(): AutomationsIndex {
+  const index = readGlobalIndex()
+  if (reconcileProjectAutomations(index)) {
+    try {
+      writeJsonFileAtomic(getAutomationsPath(), index)
+    } catch (error) {
+      console.warn('[定时任务] 项目任务对账后写回全局索引失败:', error)
+    }
+  }
+  return index
+}
+
 function writeIndex(index: AutomationsIndex): void {
   try {
     cachedIndex = index
     writeJsonFileAtomic(getAutomationsPath(), index)
+    mirrorProjectAutomations(index)
   } catch (error) {
     cachedIndex = null // 写入失败时丢弃缓存，下次重新从磁盘读取
     console.error('[定时任务] 写入索引文件失败:', error)
@@ -790,4 +904,17 @@ export function setLastSessionId(id: string, sessionId: string): void {
   if (!target) return
   target.lastSessionId = sessionId
   writeIndex(index)
+}
+
+/** 仅测试：清空进程内缓存与镜像签名，回到首次启动状态。 */
+export function __resetAutomationManagerForTests(): void {
+  cachedIndex = null
+  reconciledAutomationRoots.clear()
+  mirroredAutomationSignatures.clear()
+}
+
+/** 启动时补齐项目任务镜像（不等待下一次写盘）。 */
+export function ensureProjectAutomationMirrors(): void {
+  const index = readIndex()
+  mirrorProjectAutomations(index)
 }

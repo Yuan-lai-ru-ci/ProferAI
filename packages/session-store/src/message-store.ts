@@ -4,7 +4,7 @@ import { createInterface } from 'node:readline'
 import type { SDKMessage } from '@profer/shared'
 import { readSessionMessagesFromString } from '@profer/session-core'
 import type { SessionMessagePage, SessionMessageStore, SessionStorePaths } from './contracts'
-import { sessionMessagesPath } from './paths'
+import { sessionMessagesDir, sessionMessagesPath } from './paths'
 
 export function createSessionMessageStore(paths: SessionStorePaths): SessionMessageStore {
   const read = async (sessionId: string): Promise<SDKMessage[]> => {
@@ -35,13 +35,14 @@ export function createSessionMessageStore(paths: SessionStorePaths): SessionMess
 
   const append = async (sessionId: string, messages: readonly SDKMessage[]): Promise<void> => {
     if (messages.length === 0) return
-    await mkdir(paths.sessionsDir, { recursive: true })
-    await appendFile(sessionMessagesPath(paths, sessionId), `${messages.map((message) => JSON.stringify(message)).join('\n')}\n`, 'utf8')
+    const filePath = sessionMessagesPath(paths, sessionId)
+    await mkdir(sessionMessagesDir(paths, sessionId), { recursive: true })
+    await appendFile(filePath, `${messages.map((message) => JSON.stringify(message)).join('\n')}\n`, 'utf8')
   }
 
   const replace = async (sessionId: string, messages: readonly SDKMessage[]): Promise<void> => {
-    await mkdir(paths.sessionsDir, { recursive: true })
     const filePath = sessionMessagesPath(paths, sessionId)
+    await mkdir(sessionMessagesDir(paths, sessionId), { recursive: true })
     const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`
     await writeFile(tempPath, messages.length > 0 ? `${messages.map((message) => JSON.stringify(message)).join('\n')}\n` : '', 'utf8')
     await rename(tempPath, filePath)

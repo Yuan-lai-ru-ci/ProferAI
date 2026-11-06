@@ -575,6 +575,8 @@ const PROJECT_CONFIG_DIR_NAME = '.profer'
 const PROJECT_MANIFEST_FILE = 'profer.json'
 /** 项目清单 schema 主版本。 */
 const PROJECT_MANIFEST_SCHEMA = 'profer.project/1'
+/** 项目会话数据布局版本：2 = 会话/任务/transcript 在项目 .profer 内。 */
+const PROJECT_SESSION_LAYOUT_VERSION = 2
 const PROJECT_MANIFEST_SCHEMA_PREFIX = 'profer.project/'
 /** `.profer/presets/_config.json` 的空结构：不预生成任何岗位文件。 */
 const PROJECT_PRESETS_CONFIG = {
@@ -587,6 +589,7 @@ const PROJECT_PRESETS_CONFIG = {
 /** `.profer/.gitignore`：会话、缓存、运行时投影与本机覆盖层都不提交。 */
 const PROJECT_GITIGNORE_LINES = [
   'sessions/',
+  'blobs/',
   'cache/',
   'workspace-files/',
   '.runtime/',
@@ -850,6 +853,8 @@ function materializeProjectSkeleton(configDir: string, options: MaterializeProje
         name: existingName || options.name,
         createdAt: existingCreatedAt || new Date().toISOString(),
         proferVersion: existingVersion || options.proferVersion,
+        // 新项目直接标记为项目内会话布局；存量项目由迁移完成后补写。
+        ...(existing ? {} : { sessionLayout: PROJECT_SESSION_LAYOUT_VERSION }),
       }
 
       if (!existing || JSON.stringify(existing) !== JSON.stringify(nextManifest)) {
@@ -1090,6 +1095,22 @@ export function ensureProjectWorkspaceGitignores(): void {
     const gitignorePath = join(location.configDir, '.gitignore')
     if (!existsSync(gitignorePath)) continue
     mergeProjectGitignore(gitignorePath)
+  }
+}
+
+/**
+ * 在项目清单里标记会话布局版本。
+ *
+ * 只在清单存在时改写，保留其余字段；只读项目失败不抛错（不影响会话数据本身）。
+ */
+export function markProjectSessionLayout(rootPath: string, version: number): void {
+  const manifestPath = join(rootPath, '.profer', PROJECT_MANIFEST_FILE)
+  const existing = readProjectManifest(manifestPath)
+  if (!existing || existing.sessionLayout === version) return
+  try {
+    writeFileSync(manifestPath, `${JSON.stringify({ ...existing, sessionLayout: version }, null, 2)}\n`, 'utf-8')
+  } catch (error) {
+    console.warn(`[Agent 工作区] 写入项目会话布局标记失败 (${rootPath}):`, error)
   }
 }
 

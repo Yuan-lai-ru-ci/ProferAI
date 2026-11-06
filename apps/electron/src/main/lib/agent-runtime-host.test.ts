@@ -32,6 +32,8 @@ mock.module('./agent-session-manager', () => ({
   getAgentSessionMessages: () => [],
   getAgentSessionSDKMessages: () => messages,
   appendSDKMessages: (_id: string, next: SDKMessage[]) => appended.push(next),
+  // 2026-11-06 起运行消息走异步持久化旁路，host 优先调用 enqueueSDKMessages。
+  enqueueSDKMessages: (_id: string, next: SDKMessage[]) => appended.push(next),
   updateAgentSessionMeta: (id: string, patch: Record<string, unknown>) => {
     metaUpdates.push({ id, patch })
     return { ...meta, ...patch }

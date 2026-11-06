@@ -29,9 +29,14 @@ describe('用户消息广播', () => {
     const source = await readOrchestrator()
     const body = slice(source, 'export class AgentOrchestrator')
     const persistAt = body.indexOf('this.sessionPort.appendMessages(sessionId, [inputMessage])')
+    const enqueueAt = body.indexOf('this.sessionPort.enqueueMessages?.(sessionId, [inputMessage])')
     const emitAt = body.indexOf("this.eventPort.emit(sessionId, { kind: 'sdk_message', message: inputMessage })")
+    // 两个落盘入口都必须存在：异步入队为主，同步 append 为兼容兜底。
     expect(persistAt).toBeGreaterThan(-1)
-    expect(emitAt).toBeGreaterThan(persistAt)
+    expect(enqueueAt).toBeGreaterThan(-1)
+    // 2026-11-06 起持久化改为异步旁路：先投影给前端（Pocket 靠事件流渲染），再入队落盘。
+    expect(emitAt).toBeGreaterThan(-1)
+    expect(enqueueAt).toBeGreaterThan(emitAt)
   })
 
   test('Given 运行中追加的用户消息 When 持久化成功 Then 同样广播给远程客户端', async () => {

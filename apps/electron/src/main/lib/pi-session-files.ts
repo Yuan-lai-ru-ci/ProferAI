@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readSync, readdirSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
-import { getSdkConfigDir } from './config-paths'
+import { getPiTranscriptDirForSession, getSdkConfigDir } from './config-paths'
 
 /**
  * Pi 原生 transcript（`<sdk-config>/sessions/pi/**\/*.jsonl`）路径解析。
@@ -84,7 +84,7 @@ export function isPiTranscriptPathFor(
   filePath: string,
   options: Pick<PiTranscriptLookupOptions, 'rootDir'> = {},
 ): boolean {
-  const rootDir = options.rootDir ?? getPiTranscriptDir()
+  const rootDir = options.rootDir ?? getPiTranscriptDirForSession(sessionId)
   if (!isPathWithin(rootDir, filePath)) return false
   if (!existsSync(filePath)) return false
   return readPiSessionHeaderId(filePath) === sessionId
@@ -150,9 +150,11 @@ export function resolvePiTranscriptPath(
   knownPath?: string,
   options: PiTranscriptLookupOptions = {},
 ): string | undefined {
-  if (knownPath && isPiTranscriptPathFor(sessionId, knownPath, options)) return knownPath
+  // sessionId 可能是 SDK id；调用方拿不到 Profer 会话 id 时必须显式传 rootDir。
+  const rootDir = options.rootDir ?? getPiTranscriptDirForSession(sessionId)
+  if (knownPath && isPiTranscriptPathFor(sessionId, knownPath, { rootDir })) return knownPath
   const matches = getPiTranscriptIndex(
-    options.refreshOnFallback ? { ...options, force: true } : options,
+    options.refreshOnFallback ? { ...options, rootDir, force: true } : { ...options, rootDir },
   ).get(sessionId)
   return matches && matches.length === 1 ? matches[0] : undefined
 }
@@ -162,6 +164,7 @@ export function findPiSessionJsonlCached(
   sessionId: string,
   options: PiTranscriptLookupOptions = {},
 ): string | undefined {
-  const matches = getPiTranscriptIndex(options).get(sessionId)
+  const rootDir = options.rootDir ?? getPiTranscriptDirForSession(sessionId)
+  const matches = getPiTranscriptIndex({ ...options, rootDir }).get(sessionId)
   return matches && matches.length === 1 ? matches[0] : undefined
 }

@@ -8,6 +8,7 @@
 import { join, basename, resolve, sep, relative } from 'node:path'
 import { mkdirSync, existsSync, cpSync, rmSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { getSessionStorageLayout } from '@profer/session-store'
 import { RENAMED_DEFAULT_SKILLS } from './default-skill-slugs'
 import { readSkillVersion } from './skill-manifest'
 import { resolveDevVitePort } from './dev-instance'
@@ -315,7 +316,22 @@ export function getAgentSessionsDir(): string {
  * @returns ~/.profer/agent-sessions/{id}.jsonl
  */
 export function getAgentSessionMessagesPath(id: string): string {
+  const layout = getSessionStorageLayout(id)
+  if (layout?.kind === 'project' && layout.dataDir) return join(layout.dataDir, 'messages.jsonl')
+  // managed 保持历史行为（含目录自动创建）。
   return join(getAgentSessionsDir(), `${id}.jsonl`)
+}
+
+/**
+ * 获取指定 Agent 会话的任务图文件路径。
+ *
+ * project 会话落在 `<root>/.profer/sessions/<sid>/<sid>-graph.jsonl`，
+ * managed 会话保持 `~/.profer/agent-sessions/<sid>-graph.jsonl`。
+ */
+export function getAgentSessionGraphPath(id: string): string {
+  const layout = getSessionStorageLayout(id)
+  if (layout?.kind === 'project' && layout.dataDir) return join(layout.dataDir, `${id}-graph.jsonl`)
+  return join(getAgentSessionsDir(), `${id}-graph.jsonl`)
 }
 
 /**
@@ -325,7 +341,21 @@ export function getAgentSessionMessagesPath(id: string): string {
  * 缺失文件代表该历史会话尚未启用 Harness，读取方必须安全降级为空 snapshot。
  */
 export function getPiHarnessEventsPath(id: string): string {
+  const layout = getSessionStorageLayout(id)
+  if (layout?.kind === 'project' && layout.dataDir) return join(layout.dataDir, `${id}-pi-harness.jsonl`)
   return join(getAgentSessionsDir(), `${id}-pi-harness.jsonl`)
+}
+
+/**
+ * 指定会话的 Pi transcript 目录。
+ *
+ * - project 会话：`<root>/.profer/sessions/<sid>/pi`，随项目文件夹走；
+ * - managed/未注册会话：`~/.profer/sdk-config/sessions/pi`（历史布局）。
+ */
+export function getPiTranscriptDirForSession(sessionId: string): string {
+  const layout = getSessionStorageLayout(sessionId)
+  if (layout?.kind === 'project' && layout.dataDir) return join(layout.dataDir, 'pi')
+  return join(getSdkConfigDir(), 'sessions', 'pi')
 }
 
 /**

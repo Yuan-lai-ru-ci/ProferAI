@@ -6,6 +6,7 @@
  */
 export * from './contracts'
 export * from './paths'
+export * from './session-layout'
 export * from './sync-index-store'
 export * from './pi-state-split'
 export * from './message-store'

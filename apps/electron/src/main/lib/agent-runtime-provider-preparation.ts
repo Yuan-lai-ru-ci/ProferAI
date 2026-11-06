@@ -8,7 +8,7 @@ import type { ProferPermissionMode } from '@profer/shared'
 import { buildAgentSdkEnv } from './agent-sdk-env'
 import { resolveHostAgentRuntimeEnv } from './agent-runtime-env-host'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
-import { getSdkConfigDir } from './config-paths'
+import { getPiTranscriptDirForSession, getSdkConfigDir } from './config-paths'
 import { resolveProviderPermissionMode, stripAgentRuntimePolicyFromProviderInput } from './agent-runtime-policy-snapshot'
 import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-manager'
 import { resolveAgentSessionWriteLayout } from './agent-session-manager'
@@ -154,7 +154,7 @@ export function createElectronProviderQueryPreparation(
         ...(prepared.disallowedTools !== undefined ? { disallowedTools: [...prepared.disallowedTools] } : {}),
         ...(prepared.canUseTool ? { canUseTool: prepared.canUseTool } : {}),
         piAgentDir: getSdkConfigDir(),
-        piSessionDir: `${getSdkConfigDir()}/sessions/pi`,
+        piSessionDir: getPiTranscriptDirForSession(input.sessionId),
         runtimeEnv,
         cwd: input.cwd,
         ...(input.runtimeSessionId ? { resumeSessionId: input.runtimeSessionId } : {}),

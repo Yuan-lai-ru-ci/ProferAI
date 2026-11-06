@@ -134,7 +134,7 @@ describe('创建项目工作区', () => {
       disabledGlobalPresetIds: [],
       disabledWorkspacePresetIds: [],
     })
-    expect(readFileSync(join(proferDir, '.gitignore'), 'utf-8')).toBe('sessions/\ncache/\nworkspace-files/\n.runtime/\nskill-overrides.json\n*.local.json\n.lock\n')
+    expect(readFileSync(join(proferDir, '.gitignore'), 'utf-8')).toBe('sessions/\nblobs/\ncache/\nworkspace-files/\n.runtime/\nskill-overrides.json\n*.local.json\n.lock\n')
     expect(readFileSync(join(proferDir, 'profile.md'), 'utf-8')).toContain('# 我的项目')
 
     const index = readIndexFile()

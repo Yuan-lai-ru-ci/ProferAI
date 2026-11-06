@@ -63,6 +63,7 @@ const projectWorkspace = {
 }
 
 const PROJECT_MIGRATION_REJECTED = '项目工作区暂不支持导出/导入'
+const PROJECT_EXPORT_SESSIONS_ONLY = '只支持导出会话'
 const PROJECT_AUTO_EXCLUDED_REASON = '项目工作区暂不支持导出，已自动排除'
 const INDEX_PATH = join(configRoot, 'agent-workspaces.json')
 
@@ -88,8 +89,8 @@ afterAll(() => {
   rmSync(configRoot, { recursive: true, force: true })
 })
 
-describe('项目工作区禁用导出', () => {
-  test('Given project 工作区 When 单工作区导出 Then 明确拒绝且不写文件', async () => {
+describe('项目工作区导出限制', () => {
+  test('Given project 工作区 When v1 单工作区导出 Then 明确拒绝且不写文件', async () => {
     const output = join(configRoot, 'project-single.zip')
     await expect(exportData({
       mode: 'personal',
@@ -100,30 +101,43 @@ describe('项目工作区禁用导出', () => {
     expect(existsSync(output)).toBe(false)
   })
 
-  test('Given 显式选中 project + managed When 多工作区导出 Then 拒绝（不静默剔除）', async () => {
+  test('Given 显式选中 project + managed When 导出非会话组件 Then 拒绝并指出工作区', async () => {
     const output = join(configRoot, 'project-mixed.zip')
     await expect(exportDataV2({
       mode: 'share',
       components: ['skills'],
       outputPath: output,
       workspaceSelections: [{ workspaceId: managedWorkspace.id }, { workspaceId: projectWorkspace.id }],
-    })).rejects.toThrow(PROJECT_MIGRATION_REJECTED)
+    })).rejects.toThrow(PROJECT_EXPORT_SESSIONS_ONLY)
     expect(existsSync(output)).toBe(false)
   })
 
-  test('Given 显式选中 project 工作区 When 多工作区导出 Then 拒绝并指出工作区', async () => {
+  test('Given 显式选中 project 工作区 When 导出非会话组件 Then 拒绝并指出工作区', async () => {
     const output = join(configRoot, 'project-multi.zip')
     await expect(exportDataV2({
       mode: 'share',
       components: ['skills'],
       outputPath: output,
       workspaceSelections: [{ workspaceId: projectWorkspace.id }],
-    })).rejects.toThrow(`${PROJECT_MIGRATION_REJECTED}：「${projectWorkspace.name}」`)
+    })).rejects.toThrow(PROJECT_EXPORT_SESSIONS_ONLY)
     expect(existsSync(output)).toBe(false)
   })
 
-  test('Given project 工作区 When 取导出预览 Then 拒绝（避免 UI 进入不可用流程）', async () => {
-    await expect(getExportPreview(projectWorkspace.id)).rejects.toThrow(PROJECT_MIGRATION_REJECTED)
+  test('Given 显式选中 project 工作区 When 只导出会话 Then 成功', async () => {
+    const output = join(configRoot, 'project-sessions.zip')
+    const result = await exportDataV2({
+      mode: 'share',
+      components: ['sessions'],
+      outputPath: output,
+      workspaceSelections: [{ workspaceId: projectWorkspace.id }],
+    })
+    expect(result.success).toBe(true)
+    expect(existsSync(output)).toBe(true)
+  })
+
+  test('Given project 工作区 When 取导出预览 Then 成功（只读预览不搬运配置）', async () => {
+    const preview = await getExportPreview(projectWorkspace.id)
+    expect(preview.workspace?.id).toBe(projectWorkspace.id)
   })
 })
 

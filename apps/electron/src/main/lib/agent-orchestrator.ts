@@ -138,7 +138,7 @@ import {
   getWorkspaceMemoryArchivePath,
   ensurePluginManifest,
 } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, agentSessionVisualizationsDir, getPiCheckpointsDir, getSdkConfigDir } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getPiTranscriptDirForSession, agentSessionVisualizationsDir, getPiCheckpointsDir, getSdkConfigDir } from './config-paths'
 import { prepareRuntimeSkills } from './global-skill-manager'
 import { buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
@@ -2444,8 +2444,8 @@ export class AgentOrchestrator {
           permissionMode: initialPermissionMode,
           taskPrompt: promptAssembly.taskPrompt,
           piAgentDir: getSdkConfigDir(),
-          // Keep Pi JSONL session files below the SDK-isolated config directory, never in another workspace.
-          piSessionDir: join(getSdkConfigDir(), 'sessions', 'pi'),
+          // project 会话的 transcript 落在会话数据目录，随项目文件夹走。
+          piSessionDir: getPiTranscriptDirForSession(sessionId),
           // Pi model credentials stay in its request-local AuthStorage; never pass Claude auth env into Bash/tool processes.
           runtimeEnv: piRuntimeEnv,
           onToolExecutionResult: (toolCallId: string, result: CommandExecutionResult) => {

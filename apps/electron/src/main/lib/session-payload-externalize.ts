@@ -192,6 +192,7 @@ function extractUntilUnderBudget(
   extractedPaths: Set<string>,
   fragmentChars: number,
   minChars: number,
+  sessionId?: string,
   allowExistingRefs = false,
 ): { converged: boolean; serialized: string } {
   let serialized = serializeMessageWithRefs(message, refs)
@@ -212,7 +213,7 @@ function extractUntilUnderBudget(
     if (existingRef) {
       if (!setStringAtPath(message, candidate.path, value.slice(0, fragmentChars))) break
     } else {
-      const { hash, bytes } = writeBlobSync(value)
+      const { hash, bytes } = writeBlobSync(value, sessionId)
       if (!setStringAtPath(message, candidate.path, value.slice(0, fragmentChars))) break
       extractedPaths.add(candidate.path)
       refs.push({ path: candidate.path, hash, chars: value.length, bytes })
@@ -258,14 +259,14 @@ export function externalizeSerializedSessionLine(
   try {
     // 第一级：只抽明显的大字符串（≥ 2000），片段长度也是 2000
     let { converged, serialized } = extractUntilUnderBudget(
-      message, refs, extractedPaths, INLINE_PREVIEW_CHARS, FIRST_TIER_MIN_CHARS,
+      message, refs, extractedPaths, INLINE_PREVIEW_CHARS, FIRST_TIER_MIN_CHARS, sessionId,
     )
 
     // 第二级：第一级无解时（典型形态：一条消息里全是中等字符串，无一超过 2000）
     // 把中等字符串也抽走，只留更短的片段——原文仍在 blob，不丢数据
     if (!converged) {
       ;({ converged, serialized } = extractUntilUnderBudget(
-        message, refs, extractedPaths, SHORT_PREVIEW_CHARS, SECOND_TIER_MIN_CHARS, true,
+        message, refs, extractedPaths, SHORT_PREVIEW_CHARS, SECOND_TIER_MIN_CHARS, sessionId, true,
       ))
     }
 
