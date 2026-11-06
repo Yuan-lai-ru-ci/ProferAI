@@ -234,8 +234,10 @@ function dispatchShortcut(e: KeyboardEvent): void {
   for (const [id, parsed] of parsedCache) {
     if (!matchesParsed(e, parsed)) continue
     if (SHORTCUT_MAP.get(id)?.skipInEditable && isEditableTarget(e.target)) {
-      match = 'none'
-      break
+      // 只跳过这一条定义，继续匹配其余定义：同一按键若另有非 skipInEditable 的
+      // 绑定，是否响应不应取决于 parsedCache 的迭代顺序（改绑后可能表现为
+      // 「输入框里这个键彻底失效」的不可见行为）。
+      continue
     }
     // 匹配一个即停止。但仍要区分「命中定义但无 handler」（如未选中会话时的重命名）：
     // 它同样需要走功能键兜底，否则 F 键会漏出原生焦点导航。

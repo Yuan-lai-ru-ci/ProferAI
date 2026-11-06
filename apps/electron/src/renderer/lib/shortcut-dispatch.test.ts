@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
-import { initShortcutRegistry, registerShortcut, suppressShortcutDispatch } from './shortcut-registry'
+import { initShortcutRegistry, registerShortcut, suppressShortcutDispatch, updateShortcutOverrides } from './shortcut-registry'
+import type { ShortcutOverrides } from './shortcut-defaults'
 
 /**
  * 分发层的 handler 执行次数。
@@ -69,6 +70,7 @@ async function freshRegistry(): Promise<{
   register: (id: string, cb: () => void, options?: { exclusive?: boolean }) => () => void
   press: (options?: PressOptions) => PressResult
   suppress: () => () => void
+  override: (overrides: ShortcutOverrides) => void
 }> {
   const { window, keydown } = makeWindow()
   ;(globalThis as unknown as { window: unknown }).window = window
@@ -76,12 +78,14 @@ async function freshRegistry(): Promise<{
     initShortcutRegistry: typeof initShortcutRegistry
     registerShortcut: typeof registerShortcut
     suppressShortcutDispatch: typeof suppressShortcutDispatch
+    updateShortcutOverrides: typeof updateShortcutOverrides
   }
   mod.initShortcutRegistry()
   return {
     register: (id, cb, options) => mod.registerShortcut(id, cb, options ?? {}),
     press: (options) => pressKey(keydown(), options),
     suppress: () => mod.suppressShortcutDispatch(),
+    override: (overrides) => mod.updateShortcutOverrides(overrides),
   }
 }
 
@@ -216,4 +220,27 @@ test('Given 两层抑制挂起 When 只解除一层 Then 分发仍挂起（计�
   releaseB()
   reg.press({ key: 'Delete' })
   expect(hits).toBe(1)
+})
+
+/**
+ * 同键多绑定：命中 skipInEditable 时只跳过该条定义，不应连带终止整轮匹配。
+ *
+ * 否则「输入框里这个键是否失效」会取决于 parsedCache 的迭代顺序 —— 默认配置下
+ * 不触发（F2 与 Delete 不重叠），但用户把某个绑定改到同一个键后，会表现为
+ * 输入框内该键静默失效，且没有任何报错提示。
+ */
+test('Given 同一按键既有 skipInEditable 也有普通绑定 When 焦点在输入框 Then 只跳过前者', async () => {
+  const reg = await freshRegistry()
+  let deleteHits = 0
+  let renameHits = 0
+  cleanup.push(reg.register('delete-item', () => { deleteHits++ }))
+  cleanup.push(reg.register('rename-item', () => { renameHits++ }))
+  // 把重命名改绑到与删除相同的键，构造同键多定义
+  reg.override({ 'rename-item': { mac: 'Delete', win: 'Delete' } })
+
+  const result = reg.press({ key: 'Delete', target: { tagName: 'INPUT' } })
+
+  expect(deleteHits).toBe(0)
+  expect(renameHits).toBe(1)
+  expect(result.prevented).toBe(1)
 })
