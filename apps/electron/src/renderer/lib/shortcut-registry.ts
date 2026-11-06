@@ -220,8 +220,8 @@ export function resolveShortcutDispatch(
  * 执行 handler 与阻止默认行为。
  *
  * 另有一条前置放行规则（必须在吞键之前判定）：定义带 skipInEditable 的按键
- * 在可编辑元素内一律不参与分发 —— 裸 Delete 这类键在输入框里属于原生输入语义，
- * 若命中后照常 preventDefault，输入框将收不到 keydown、删字符彻底失效。
+ * 在可编辑元素内一律不参与分发 —— Delete 这类键在输入框里属于原生输入语义，
+ * 若命中后照常 preventDefault，输入框将收不到 keydown、删除行为彻底失效。
  */
 function dispatchShortcut(e: KeyboardEvent): void {
   // 录制新快捷键期间挂起全局分发：否则按下的已绑定键会真实触发动作

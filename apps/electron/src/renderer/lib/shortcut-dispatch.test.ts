@@ -29,8 +29,12 @@ interface PressResult {
 }
 
 interface PressOptions {
-  /** 按键名，默认 F2 */
+  /** 键盘按键，默认 F2 */
   key?: string
+  /** Ctrl 修饰键 */
+  ctrlKey?: boolean
+  /** Meta/Cmd 修饰键 */
+  metaKey?: boolean
   /** 事件目标（焦点所在元素），用于验证可编辑元素内的放行 */
   target?: unknown
   /** 键盘按住时的自动重复事件，默认 false */
@@ -45,8 +49,8 @@ function pressKey(listener: Listener | null, options: PressOptions = {}): PressR
     key,
     code: key,
     target: options.target,
-    metaKey: false,
-    ctrlKey: false,
+    metaKey: options.metaKey ?? false,
+    ctrlKey: options.ctrlKey ?? false,
     shiftKey: false,
     altKey: false,
     isComposing: false,
@@ -81,6 +85,8 @@ async function freshRegistry(): Promise<{
     updateShortcutOverrides: typeof updateShortcutOverrides
   }
   mod.initShortcutRegistry()
+  // 用跨平台组合键覆盖宿主默认值，确保 macOS 本地也能验证 Windows/Linux 的 Ctrl+Delete 分发。
+  mod.updateShortcutOverrides({ 'delete-item': { mac: 'Ctrl+Delete', win: 'Ctrl+Delete' } })
   return {
     register: (id, cb, options) => mod.registerShortcut(id, cb, options ?? {}),
     press: (options) => pressKey(keydown(), options),
@@ -136,24 +142,26 @@ test('Given 注销后仅剩一个 handler When 触发 Then 不再重复执行', 
 })
 
 /**
- * skipInEditable 守卫：裸 Delete 在输入框里属于原生输入语义。分发是先吞键再执行
- * handler，因此必须在命中处就放行，否则输入框收不到 keydown、删字符彻底失效。
+ * skipInEditable 守卫：Ctrl+Delete（Windows/Linux）或 Cmd+Backspace（macOS）
+ * 在输入框里属于原生输入语义。分发是先吞键再执行 handler，因此必须在命中处就放行，
+ * 否则输入框收不到 keydown、删除行为彻底失效。
  */
-test('Given 焦点在输入框 When 按 Delete Then 不触发删除且不吞键', async () => {
+test('Given 焦点在输入框 When 按 Ctrl+Delete Then 不触发删除且不吞键', async () => {
   const reg = await freshRegistry()
   let hits = 0
   cleanup.push(reg.register('delete-item', () => { hits++ }))
-  const result = reg.press({ key: 'Delete', target: { tagName: 'INPUT' } })
+  const result = reg.press({ key: 'Delete', ctrlKey: true, target: { tagName: 'INPUT' } })
   expect(hits).toBe(0)
   expect(result.prevented).toBe(0)
 })
 
-test('Given 焦点在富文本编辑器 When 按 Delete Then 不触发删除且不吞键', async () => {
+test('Given 焦点在富文本编辑器 When 按 Ctrl+Delete Then 不触发删除且不吞键', async () => {
   const reg = await freshRegistry()
   let hits = 0
   cleanup.push(reg.register('delete-item', () => { hits++ }))
   const result = reg.press({
     key: 'Delete',
+    ctrlKey: true,
     target: {
       tagName: 'DIV',
       closest: (selector: string) => selector.includes('.ProseMirror') ? {} : null,
@@ -163,13 +171,22 @@ test('Given 焦点在富文本编辑器 When 按 Delete Then 不触发删除且�
   expect(result.prevented).toBe(0)
 })
 
-test('Given 焦点不在可编辑元素 When 按 Delete Then 触发删除并吞键', async () => {
+test('Given 焦点不在可编辑元素 When 按 Ctrl+Delete Then 触发删除并吞键', async () => {
+  const reg = await freshRegistry()
+  let hits = 0
+  cleanup.push(reg.register('delete-item', () => { hits++ }))
+  const result = reg.press({ key: 'Delete', ctrlKey: true, target: { tagName: 'BUTTON', closest: () => null } })
+  expect(hits).toBe(1)
+  expect(result.prevented).toBe(1)
+})
+
+test('Given 焦点不在可编辑元素 When 按裸 Delete Then 不触发会话删除', async () => {
   const reg = await freshRegistry()
   let hits = 0
   cleanup.push(reg.register('delete-item', () => { hits++ }))
   const result = reg.press({ key: 'Delete', target: { tagName: 'BUTTON', closest: () => null } })
-  expect(hits).toBe(1)
-  expect(result.prevented).toBe(1)
+  expect(hits).toBe(0)
+  expect(result.prevented).toBe(0)
 })
 
 test('Given 焦点在输入框 When 按 F2 Then 照常重命名（守卫只作用于声明过的定义）', async () => {
@@ -185,26 +202,26 @@ test('Given 焦点在输入框 When 按 F2 Then 照常重命名（守卫只作�
  *（删除确认框、侧边栏、面板）会因此高频闪烁，松手后停在哪一态是随机的。
  * 重复事件不重复执行 handler，但吞键判定照常（macOS 按住 F 键不能漏给 Chromium）。
  */
-test('Given 按住 Delete 自动重复 When repeat 事件到达 Then 不重复执行 handler', async () => {
+test('Given 按住 Ctrl+Delete 自动重复 When repeat 事件到达 Then 不重复执行 handler', async () => {
   const reg = await freshRegistry()
   let hits = 0
   cleanup.push(reg.register('delete-item', () => { hits++ }))
-  reg.press({ key: 'Delete' })
-  reg.press({ key: 'Delete', repeat: true })
-  reg.press({ key: 'Delete', repeat: true })
+  reg.press({ key: 'Delete', ctrlKey: true })
+  reg.press({ key: 'Delete', ctrlKey: true, repeat: true })
+  reg.press({ key: 'Delete', ctrlKey: true, repeat: true })
   expect(hits).toBe(1)
 })
 
-test('Given 录制抑制已挂起 When 按已绑定的 Delete Then 不触发且不吞键，解除后恢复', async () => {
+test('Given 录制抑制已挂起 When 按已绑定的 Ctrl+Delete Then 不触发且不吞键，解除后恢复', async () => {
   const reg = await freshRegistry()
   let hits = 0
   cleanup.push(reg.register('delete-item', () => { hits++ }))
   const release = reg.suppress()
-  const suppressed = reg.press({ key: 'Delete' })
+  const suppressed = reg.press({ key: 'Delete', ctrlKey: true })
   expect(hits).toBe(0)
   expect(suppressed.prevented).toBe(0)
   release()
-  reg.press({ key: 'Delete' })
+  reg.press({ key: 'Delete', ctrlKey: true })
   expect(hits).toBe(1)
 })
 
@@ -215,10 +232,10 @@ test('Given 两层抑制挂起 When 只解除一层 Then 分发仍挂起（计�
   const releaseA = reg.suppress()
   const releaseB = reg.suppress()
   releaseA()
-  reg.press({ key: 'Delete' })
+  reg.press({ key: 'Delete', ctrlKey: true })
   expect(hits).toBe(0)
   releaseB()
-  reg.press({ key: 'Delete' })
+  reg.press({ key: 'Delete', ctrlKey: true })
   expect(hits).toBe(1)
 })
 
@@ -236,9 +253,9 @@ test('Given 同一按键既有 skipInEditable 也有普通绑定 When 焦点在�
   cleanup.push(reg.register('delete-item', () => { deleteHits++ }))
   cleanup.push(reg.register('rename-item', () => { renameHits++ }))
   // 把重命名改绑到与删除相同的键，构造同键多定义
-  reg.override({ 'rename-item': { mac: 'Delete', win: 'Delete' } })
+  reg.override({ 'rename-item': { mac: 'Ctrl+Delete', win: 'Ctrl+Delete' } })
 
-  const result = reg.press({ key: 'Delete', target: { tagName: 'INPUT' } })
+  const result = reg.press({ key: 'Delete', ctrlKey: true, target: { tagName: 'INPUT' } })
 
   expect(deleteHits).toBe(0)
   expect(renameHits).toBe(1)
