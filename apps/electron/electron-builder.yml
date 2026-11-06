@@ -31,6 +31,8 @@ afterSign: scripts/after-sign-mac.cjs
 asar: true
 asarUnpack:
   - "node_modules/@anthropic-ai/**"
+  # 会话持久化 Worker 由 worker_threads 从真实文件路径加载，asar 内路径会直接失败。
+  - "dist/session-persistence-worker.cjs"
   # Pi 运行闭包中的 WASM / native addon 必须解包，避免 packaged runtime 从 ASAR 加载失败。
   - "node_modules/@silvia-odwyer/**"
   - "node_modules/@mariozechner/**"

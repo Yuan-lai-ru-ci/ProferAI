@@ -42,12 +42,14 @@ const macOsDir = path.join(contents, 'MacOS')
 const appArchive = path.join(resources, 'app.asar')
 const unpackedNodeModules = path.join(resources, 'app.asar.unpacked', 'node_modules')
 const cliPath = path.join(resources, 'bin', 'profer')
+const persistenceWorkerPath = path.join(resources, 'app.asar.unpacked', 'dist', 'session-persistence-worker.cjs')
 const claudePath = path.join(unpackedNodeModules, '@anthropic-ai', 'claude-agent-sdk-darwin-arm64', 'claude')
 
 assertExists(path.join(macOsDir, 'Profer'), '应用可执行文件')
 assertExists(appArchive, 'app.asar')
 assertExists(unpackedNodeModules, 'app.asar.unpacked/node_modules')
 assertExists(cliPath, 'Profer CLI')
+assertExists(persistenceWorkerPath, '会话持久化 Worker（app.asar.unpacked/dist）')
 assertExists(claudePath, 'Claude Agent SDK darwin-arm64 CLI')
 
 for (const [binary, description] of [[cliPath, 'Profer CLI'], [claudePath, 'Claude CLI']]) {
@@ -67,6 +69,7 @@ console.log(JSON.stringify({
   ok: true,
   appBundle,
   claudePath,
+  persistenceWorkerPath,
   nativeFileCount: nativeFiles.length,
   appBinaryInfo,
 }, null, 2))

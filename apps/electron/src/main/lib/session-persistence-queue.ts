@@ -1,6 +1,16 @@
 import { Worker } from 'node:worker_threads'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import type { SDKMessage } from '@profer/shared'
+
+/**
+ * Worker 线程不经过 Electron 的 asar 读补丁，只能从真实文件加载。
+ * 打包后 __dirname 位于 app.asar 内，需要改指到 asarUnpack 出来的副本。
+ */
+export function resolvePersistenceWorkerPath(runtimeDir: string = __dirname): string {
+  const path = join(runtimeDir, 'session-persistence-worker.cjs')
+  const asarSegment = `app.asar${sep}`
+  return path.includes(asarSegment) ? path.replace(asarSegment, `app.asar.unpacked${sep}`) : path
+}
 
 const MAX_QUEUED_MESSAGES = 2_000
 const MAX_QUEUED_BYTES = 64 * 1024 * 1024
@@ -61,7 +71,7 @@ export class SessionPersistenceQueue {
   constructor(options: SessionPersistenceQueueOptions) {
     this.configDir = options.configDir
     this.sessionsDir = options.sessionsDir
-    this.createWorker = options.createWorker ?? (() => new Worker(options.workerPath ?? join(__dirname, 'session-persistence-worker.cjs')))
+    this.createWorker = options.createWorker ?? (() => new Worker(options.workerPath ?? resolvePersistenceWorkerPath()))
     this.onStatus = options.onStatus
   }
 

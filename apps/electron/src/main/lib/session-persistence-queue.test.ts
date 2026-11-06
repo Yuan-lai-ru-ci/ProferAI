@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Worker } from 'node:worker_threads'
 import type { SDKMessage } from '@profer/shared'
-import { SessionPersistenceQueue } from './session-persistence-queue'
+import { resolvePersistenceWorkerPath, SessionPersistenceQueue } from './session-persistence-queue'
 
 class FakeWorker extends EventEmitter {
   posts: Array<{ id: number; sessionId: string; messages: SDKMessage[] }> = []
@@ -98,6 +98,16 @@ describe('SessionPersistenceQueue', () => {
     expect(await queue.flush(500)).toBe(true)
     expect(worker.posts.map(batch => (batch.messages[0] as { uuid?: string }).uuid)).toEqual(['retry', 'retry'])
     queue.dispose()
+  })
+
+  test('loads the worker from app.asar.unpacked after packaging', () => {
+    const packaged = join('/Applications', 'Profer.app', 'Contents', 'Resources', 'app.asar', 'dist')
+    expect(resolvePersistenceWorkerPath(packaged)).toBe(
+      join('/Applications', 'Profer.app', 'Contents', 'Resources', 'app.asar.unpacked', 'dist', 'session-persistence-worker.cjs'),
+    )
+    expect(resolvePersistenceWorkerPath('/repo/apps/electron/dist')).toBe(
+      join('/repo/apps/electron/dist', 'session-persistence-worker.cjs'),
+    )
   })
 
   test('bounds payload memory by estimated byte size', () => {
