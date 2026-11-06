@@ -9,6 +9,7 @@
  *
  * --github-only: 只推送源码/tag 并创建 GitHub Release，跳过国内更新源上传；
  *   releases.json 仅本地生成，待更新源可达后自行补传。
+ * --allow-published-release: 允许对已发布的同名 Release 覆盖本平台资产（同版本重发）。
  */
 const { execFileSync, execSync, spawn } = require('child_process');
 const crypto = require('crypto');
@@ -21,8 +22,10 @@ const VERSION = process.argv[2];
 const UNSIGNED_RELEASE = process.argv.includes('--unsigned');
 const ARTIFACTS_ONLY = process.argv.includes('--artifacts-only');
 const GITHUB_ONLY = process.argv.includes('--github-only');
+// 同版本重发：已发布的 Release 需要显式放行才能覆盖本平台资产（如仅修打包缺陷的重发）。
+const ALLOW_PUBLISHED_RELEASE = process.argv.includes('--allow-published-release');
 if (!VERSION) {
-  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only]');
+  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only] [--allow-published-release]');
   process.exit(1);
 }
 
@@ -359,7 +362,7 @@ async function ensureGitHubRelease(assets) {
     console.log(`[发布模式] ${TAG} 已由 macOS 发布，本次仅补充 Windows 资产。`);
   }
   // 必须先完成所有只读预检；随后才允许构建、上传或 Git/GitHub 写入。
-  run(`node scripts/verify-release-preflight.cjs ${VERSION}${supplementingPublishedRelease ? ' --allow-published-release' : ''}`);
+  run(`node scripts/verify-release-preflight.cjs ${VERSION}${supplementingPublishedRelease || ALLOW_PUBLISHED_RELEASE ? ' --allow-published-release' : ''}`);
 
   console.log(`[1/5] ${ARTIFACTS_ONLY ? '校验已有本地产物' : '执行发布验证门禁'}（Windows x64${UNSIGNED_RELEASE ? ' 未签名' : ' 签名'}正式包）...`);
   if (!UNSIGNED_RELEASE) assertReleaseSigningConfiguration();
