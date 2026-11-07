@@ -46,11 +46,18 @@ import { copySettledPiHarnessEventsForFork } from './pi-harness/pi-harness-store
 import { forkPiSessionArtifact } from './pi-session-fork'
 import { isRecoveredEphemeralTransportError } from './error-patterns'
 import { adoptPiFileCheckpoints, loadPiFileCheckpoint, restorePiFileCheckpoint, prunePiFileCheckpoints, removePiFileCheckpointsAsync } from './pi-file-checkpoint'
-import { getPiTranscriptIndex, invalidatePiTranscriptCache, resolvePiTranscriptPath } from './pi-session-files'
+import { getPiTranscriptIndex, invalidatePiTranscriptCache, isPiTranscriptPathFor, resolvePiTranscriptPath } from './pi-session-files'
 import { isSessionDeletionPending } from './agent-session-deletion-queue'
 import { removeToolResultDirAsync } from './agent-tool-result-store'
 import { assertNotProjectLifecyclePath } from './workspace-delete-guard'
 import { readProjectSessionIndex, projectSessionIndexPath, writeProjectSessionIndex, listProjectSessionMetas, writeProjectSessionMeta } from './project-session-index'
+import {
+  isProjectSessionsDirSafe,
+  isValidProjectSessionId,
+  projectSessionsDir,
+  resolveProjectSessionDir,
+  tryResolveProjectSessionDir,
+} from './project-session-paths'
 import {
   defaultStorageLayoutForWorkspace,
   moveSessionDataFiles,
@@ -200,6 +207,59 @@ function listProjectSessionMirrors(): ProjectSessionMirror[] {
 
 const mirroredProjectSignatures = new Map<string, string>()
 
+/**
+ * 跨项目同 ID 冲突：同一个会话 ID 同时出现在多个项目目录里。
+ *
+ * 第一阶段策略是「拒绝自动导入」而不是重编号：会话 ID 被父子会话、fork/探索分支、
+ * 自动化等多处引用，单独改一条会让引用链断裂。
+ */
+export interface ProjectSessionIndexConflict {
+  sessionId: string
+  /** 冲突条目所在项目根。 */
+  rootPath: string
+  /** 全局索引里已有的归属（保持不动）。 */
+  workspaceId: string
+  /** 试图占用该 ID 的项目。 */
+  conflictingWorkspaceId: string
+  title?: string
+}
+
+const projectSessionIndexConflicts = new Map<string, ProjectSessionIndexConflict>()
+
+function projectSessionConflictKey(rootPath: string, sessionId: string): string {
+  return `${rootPath}|${sessionId}`
+}
+
+function recordProjectSessionIndexConflict(conflict: ProjectSessionIndexConflict): void {
+  const key = projectSessionConflictKey(conflict.rootPath, conflict.sessionId)
+  if (!projectSessionIndexConflicts.has(key)) {
+    console.warn(
+      `[Agent 会话] 会话 ID 冲突，拒绝从项目自动导入: ${conflict.sessionId} `
+      + `已属于工作区 ${conflict.workspaceId}，来源项目 ${conflict.conflictingWorkspaceId} (${conflict.rootPath})`,
+    )
+  }
+  projectSessionIndexConflicts.set(key, conflict)
+}
+
+/** 当前进程内检测到的跨项目会话 ID 冲突（供诊断/测试）。 */
+export function listProjectSessionIndexConflicts(): ProjectSessionIndexConflict[] {
+  return [...projectSessionIndexConflicts.values()]
+}
+
+/**
+ * 安全解析项目会话目录。
+ *
+ * 非法 ID、路径越界、符号链接逃逸一律返回 undefined：调用方跳过该会话，
+ * 不读写项目目录之外的任何文件。
+ */
+function safeProjectSessionDir(rootPath: string, sessionId: string, context: string): string | undefined {
+  const dir = tryResolveProjectSessionDir(rootPath, sessionId)
+  if (!dir) {
+    console.warn(`[Agent 会话] 跳过不可用的项目会话路径 (${context}): ${JSON.stringify(sessionId)} @ ${rootPath}`)
+  }
+  return dir
+}
+
 /** 列表级签名：覆盖排序、标题、置顶/归档与 revision，避免每次写盘都重写未变化的项目。 */
 function projectIndexSignature(sessions: readonly AgentSessionMeta[]): string {
   return sessions
@@ -237,15 +297,24 @@ function mirrorProjectSessionIndexes(index: AgentSessionsIndex): void {
   }
 
   for (const mirror of mirrors) {
-    const sessions = (byWorkspace.get(mirror.id) ?? [])
+    if (!isProjectSessionsDirSafe(mirror.rootPath)) {
+      console.warn(`[Agent 会话] 项目会话根目录指向项目外，跳过镜像写入: ${projectSessionsDir(mirror.rootPath)}`)
+      continue
+    }
+    const owned = (byWorkspace.get(mirror.id) ?? [])
+      .filter((session) => isValidProjectSessionId(session.id))
       .slice()
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     // 每个会话目录也留一份自描述元数据：只拷项目文件夹、不拷全局索引时仍能恢复列表。
-    for (const session of sessions) {
-      if (!existsSync(join(mirror.rootPath, '.profer', 'sessions', session.id, 'session.json'))) {
+    for (const session of owned) {
+      const sessionDir = safeProjectSessionDir(mirror.rootPath, session.id, 'mirror')
+      if (!sessionDir) continue
+      if (!existsSync(join(sessionDir, 'session.json'))) {
         writeProjectSessionMetaSidecar(session)
       }
     }
+    // 冲突条目属于另一个项目：保留在它自己的 index.json 里，不静默抹掉证据。
+    const sessions = [...owned, ...preservedConflictEntries(mirror, owned)]
     const signature = projectIndexSignature(sessions)
     const cacheKey = `${mirror.id}|${mirror.rootPath}`
     if (mirroredProjectSignatures.get(cacheKey) === signature) continue
@@ -256,6 +325,21 @@ function mirrorProjectSessionIndexes(index: AgentSessionsIndex): void {
       console.warn(`[Agent 会话] 写入项目会话索引失败 (${mirror.rootPath}):`, error)
     }
   }
+}
+
+/**
+ * 项目索引里被判定为「同 ID 冲突」的条目：全局索引里该 ID 属于别的项目。
+ *
+ * 只在确实检测到冲突时读盘，避免每次索引写入都多一次文件 IO。
+ */
+function preservedConflictEntries(mirror: ProjectSessionMirror, owned: readonly AgentSessionMeta[]): AgentSessionMeta[] {
+  const conflicts = [...projectSessionIndexConflicts.values()]
+    .filter((conflict) => conflict.rootPath === mirror.rootPath)
+  if (conflicts.length === 0) return []
+  const conflictIds = new Set(conflicts.map((conflict) => conflict.sessionId))
+  const ownedIds = new Set(owned.map((session) => session.id))
+  return (readProjectSessionIndex(mirror.rootPath) ?? [])
+    .filter((entry) => conflictIds.has(entry.id) && !ownedIds.has(entry.id))
 }
 
 /**
@@ -274,22 +358,35 @@ function normalizeImportedProjectSession(
     workspaceId: mirror.id,
     storageLayout: 'project',
   }
-  const dataDir = join(mirror.rootPath, '.profer', 'sessions', entry.id)
+  // 路径边界：非法 ID / 越界 / 符号链接逃逸会抛错，由调用方拒绝整条条目。
+  const dataDir = resolveProjectSessionDir(mirror.rootPath, entry.id)
 
   if (normalizeAgentRuntime(normalized.agentRuntime) === 'pi') {
-    let piFile = normalized.piSessionFile
-    if (piFile && !isAbsolute(piFile)) piFile = join(dataDir, piFile)
-    if (piFile && !existsSync(piFile)) piFile = undefined
-    // 旧机器的绝对路径失效时，按 sdkSessionId 在项目 pi/ 目录里重新定位。
-    if (!piFile && normalized.sdkSessionId) {
-      const piDir = join(dataDir, 'pi')
-      if (existsSync(piDir)) {
-        const match = readdirSync(piDir).find((name) => name.endsWith('.jsonl') && name.includes(normalized.sdkSessionId!))
-        if (match) piFile = join(piDir, match)
+    const piDir = join(dataDir, 'pi')
+    const known = normalized.piSessionFile
+    let piFile: string | undefined
+
+    if (known) {
+      const candidate = isAbsolute(known) ? known : join(dataDir, known)
+      // 只接受当前项目 pi/ 目录内的 transcript：旧机器绝对路径即使文件仍在，
+      // 也属于另一个项目的数据，不能顺着它跨项目读历史。
+      if (normalized.sdkSessionId) {
+        if (isPiTranscriptPathFor(normalized.sdkSessionId, candidate, { rootDir: piDir })) {
+          piFile = candidate
+        }
+      } else if (isPathWithin(piDir, candidate) && existsSync(candidate)) {
+        piFile = candidate
       }
     }
+
+    // 已知路径不可用时，按 sdkSessionId 在当前项目 pi/ 目录内重新定位（含 header 校验）。
+    if (!piFile && normalized.sdkSessionId && existsSync(piDir)) {
+      piFile = resolvePiTranscriptPath(normalized.sdkSessionId, undefined, { rootDir: piDir, force: true })
+    }
+
     normalized.piSessionFile = piFile
-    // transcript 找不到就不能 resume，否则每轮都会撞旧 session id。
+    // transcript 找不到就不能 resume，否则每轮都会撞旧 session id；
+    // 用应用保存的消息历史恢复，而不是跨项目读旧 transcript。
     if (!piFile) normalized.sdkSessionId = undefined
   } else if (normalized.sdkSessionId && !findSdkSessionJsonl(normalized.sdkSessionId)) {
     // Claude transcript 不在项目文件夹里；换机器后找不到就主动清空，
@@ -334,21 +431,38 @@ function normalizeImportedProjectSession(
  * 启动对账：把项目索引/会话元数据里比全局更新的会话合并回来。
  *
  * 典型场景：项目从另一台机器拷来，全局索引没有它的会话；或者上次退出前
- * 项目索引已写、全局索引尚未写。冲突时按 updatedAt 取新。
+ * 项目索引已写、全局索引尚未写。同一项目内冲突时按 updatedAt 取新。
  * 即使 `index.json` 缺失，也会扫描每个会话目录的 `session.json` 恢复列表。
+ *
+ * 跨项目同 ID 例外：一个会话 ID 已经属于另一个工作区时，**不按 updatedAt 抢占**，
+ * 而是保留双方数据并记录冲突诊断。项目可能是整目录拷贝/备份，允许抢占会让
+ * 原项目的归属被改掉、原项目镜像被清空。
  */
 function reconcileProjectSessionIndexes(index: AgentSessionsIndex, force = false): boolean {
   let changed = false
   const byId = new Map(index.sessions.map((session) => [session.id, session]))
+  const mirrors = listProjectSessionMirrors()
 
-  for (const mirror of listProjectSessionMirrors()) {
+  // 已取消注册的项目不再参与对账，旧诊断一并清掉。
+  const mirrorRoots = new Set(mirrors.map((mirror) => mirror.rootPath))
+  for (const [key, conflict] of projectSessionIndexConflicts) {
+    if (!mirrorRoots.has(conflict.rootPath)) projectSessionIndexConflicts.delete(key)
+  }
+
+  for (const mirror of mirrors) {
     if (!force && reconciledProjectRoots.has(mirror.rootPath)) continue
     reconciledProjectRoots.add(mirror.rootPath)
 
     const merged = new Map<string, AgentSessionMeta>()
     for (const entry of [...(readProjectSessionIndex(mirror.rootPath) ?? []), ...listProjectSessionMetas(mirror.rootPath)]) {
+      if (!isValidProjectSessionId(entry.id)) continue
       const previous = merged.get(entry.id)
       if (!previous || (entry.updatedAt ?? 0) > (previous.updatedAt ?? 0)) merged.set(entry.id, entry)
+    }
+
+    // 本轮重新检测该项目的冲突：旧的先清掉，冲突消失后不会留下永久告警。
+    for (const [key, conflict] of projectSessionIndexConflicts) {
+      if (conflict.rootPath === mirror.rootPath) projectSessionIndexConflicts.delete(key)
     }
     if (merged.size === 0) continue
 
@@ -359,14 +473,35 @@ function reconcileProjectSessionIndexes(index: AgentSessionsIndex, force = false
       availablePresetIds = undefined
     }
 
+    const detectedConflicts = new Set<string>()
     for (const entry of merged.values()) {
-      const normalized = normalizeImportedProjectSession(entry, mirror, availablePresetIds)
+      let normalized: AgentSessionMeta
+      try {
+        normalized = normalizeImportedProjectSession(entry, mirror, availablePresetIds)
+      } catch (error) {
+        console.warn(
+          `[Agent 会话] 已拒绝导入项目会话 ${JSON.stringify(entry.id)} (${mirror.rootPath}):`,
+          error instanceof Error ? error.message : error,
+        )
+        continue
+      }
       const existing = byId.get(normalized.id)
+      if (existing && existing.workspaceId && existing.workspaceId !== mirror.id) {
+        recordProjectSessionIndexConflict({
+          sessionId: normalized.id,
+          rootPath: mirror.rootPath,
+          workspaceId: existing.workspaceId,
+          conflictingWorkspaceId: mirror.id,
+          title: normalized.title,
+        })
+        detectedConflicts.add(normalized.id)
+        continue
+      }
       if (!existing) {
         index.sessions.push(normalized)
         byId.set(normalized.id, normalized)
         registerSessionLayout(normalized)
-        try { writeProjectSessionMeta(mirror.rootPath, normalized.id, normalized) } catch { /* 只读项目忽略 */ }
+        try { writeProjectSessionMeta(mirror.rootPath, normalized.id, normalized) } catch { /* 只读/不可写项目忽略 */ }
         changed = true
         continue
       }
@@ -375,6 +510,12 @@ function reconcileProjectSessionIndexes(index: AgentSessionsIndex, force = false
         registerSessionLayout(existing)
         changed = true
       }
+    }
+
+    // 本轮重新检测：同一项目里不再冲突的 ID 不会留在诊断里。
+    for (const [key, conflict] of projectSessionIndexConflicts) {
+      if (conflict.rootPath !== mirror.rootPath) continue
+      if (!detectedConflicts.has(conflict.sessionId)) projectSessionIndexConflicts.delete(key)
     }
   }
 
@@ -3972,20 +4113,51 @@ function backupGlobalIndexesBeforeLayoutMigration(): void {
   }
 }
 
+/** 项目会话布局的三个独立数据组件。 */
+export type ProjectSessionLayoutComponent = 'messages' | 'graph' | 'harness'
+
+/** 源和目标同时存在同一个组件：不覆盖任何一边，整条会话停下来等人工处理。 */
+export interface ProjectSessionLayoutConflict {
+  sessionId: string
+  title: string
+  component: ProjectSessionLayoutComponent
+  sourcePath: string
+  targetPath: string
+}
+
 export interface ProjectSessionLayoutMigrationResult {
   migratedSessions: number
   migratedWorkspaces: number
   skipped: string[]
+  conflicts: ProjectSessionLayoutConflict[]
 }
 
-/**
- * 把存量 project 会话从中央布局迁到项目内布局。
- *
- * - 只处理 project 工作区且 rootPath 存在的项目；
- * - 运行中的会话跳过，下一次启动/打开项目再迁；
- * - 每个项目全部成功才写 `.layout-v2.json` 标记，中断后可重跑；
- * - 目标已存在的文件不覆盖，保证幂等。
- */
+interface LayoutComponentPaths {
+  component: ProjectSessionLayoutComponent
+  source: string
+  target: string
+}
+
+function layoutComponentPaths(sessionId: string, dataDir: string, globalSessionsDir: string): LayoutComponentPaths[] {
+  return [
+    {
+      component: 'messages',
+      source: join(globalSessionsDir, `${sessionId}.jsonl`),
+      target: join(dataDir, 'messages.jsonl'),
+    },
+    {
+      component: 'graph',
+      source: join(globalSessionsDir, `${sessionId}-graph.jsonl`),
+      target: join(dataDir, `${sessionId}-graph.jsonl`),
+    },
+    {
+      component: 'harness',
+      source: join(globalSessionsDir, `${sessionId}-pi-harness.jsonl`),
+      target: join(dataDir, `${sessionId}-pi-harness.jsonl`),
+    },
+  ]
+}
+
 /**
  * 把项目会话消息引用到的 blob 从全局目录复制进项目 `.profer/blobs`。
  *
@@ -4023,6 +4195,16 @@ function copyProjectSessionBlobs(sessionId: string, messagesPath: string, projec
   return copied
 }
 
+/**
+ * 把存量 project 会话从中央布局迁到项目内布局。
+ *
+ * - 只处理 project 工作区且 rootPath 存在的项目；
+ * - 运行中的会话跳过，下一次启动/打开项目再迁；
+ * - 每个项目全部成功才写 `.layout-v2.json` 标记，中断后可重跑；
+ * - 消息 / 任务图 / Harness 各自独立检查与搬迁：目标已有消息不影响 graph/Harness 迁移；
+ * - 同一组件源和目标都存在时不覆盖任何一边，整条会话不标记完成并上报冲突；
+ * - 已完成的单文件迁移在重跑时自动跳过（目标存在且源不存在），可安全继续。
+ */
 export async function migrateProjectSessionLayouts(
   options: { workspaceId?: string; force?: boolean } = {},
 ): Promise<ProjectSessionLayoutMigrationResult> {
@@ -4033,13 +4215,14 @@ export async function migrateProjectSessionLayouts(
     && workspace.rootPath.length > 0
     && (!options.workspaceId || workspace.id === options.workspaceId)
   ))
-  if (workspaces.length === 0) return { migratedSessions: 0, migratedWorkspaces: 0, skipped: [] }
+  if (workspaces.length === 0) return { migratedSessions: 0, migratedWorkspaces: 0, skipped: [], conflicts: [] }
 
   backupGlobalIndexesBeforeLayoutMigration()
 
   const globalSessionsDir = join(getConfigDir(), 'agent-sessions')
   const globalPiDir = join(getSdkConfigDir(), 'sessions', 'pi')
   const skipped: string[] = []
+  const conflicts: ProjectSessionLayoutConflict[] = []
   let migratedSessions = 0
   let migratedWorkspaces = 0
 
@@ -4047,6 +4230,10 @@ export async function migrateProjectSessionLayouts(
     const rootPath = workspace.rootPath!
     if (!existsSync(rootPath)) {
       skipped.push(`${workspace.name}: 项目路径不可用`)
+      continue
+    }
+    if (!isProjectSessionsDirSafe(rootPath)) {
+      skipped.push(`${workspace.name}: 项目会话根目录指向项目外`)
       continue
     }
     if (!options.force && readProjectLayoutMarker(rootPath)?.version === PROJECT_SESSION_LAYOUT_VERSION) continue
@@ -4061,21 +4248,44 @@ export async function migrateProjectSessionLayouts(
         skipped.push(`${session.title}: 会话正在运行`)
         continue
       }
-      const dataDir = join(rootPath, '.profer', 'sessions', session.id)
       try {
-        const projectMessages = join(dataDir, 'messages.jsonl')
-        if (!existsSync(projectMessages)) {
-          await moveSessionFile(join(globalSessionsDir, `${session.id}.jsonl`), projectMessages)
-          await moveSessionFile(
-            join(globalSessionsDir, `${session.id}-graph.jsonl`),
-            join(dataDir, `${session.id}-graph.jsonl`),
-          )
-          await moveSessionFile(
-            join(globalSessionsDir, `${session.id}-pi-harness.jsonl`),
-            join(dataDir, `${session.id}-pi-harness.jsonl`),
-          )
+        const dataDir = resolveProjectSessionDir(rootPath, session.id)
+        const components = layoutComponentPaths(session.id, dataDir, globalSessionsDir)
+
+        // 预检：任何一个组件两边都有，就不动任何文件。
+        // 先搬一半再发现冲突会让布局字段与实际可读位置脱节。
+        const componentConflicts = components.filter((item) => (
+          existsSync(item.source) && existsSync(item.target)
+        ))
+        if (componentConflicts.length > 0) {
+          workspaceComplete = false
+          for (const item of componentConflicts) {
+            conflicts.push({
+              sessionId: session.id,
+              title: session.title,
+              component: item.component,
+              sourcePath: item.source,
+              targetPath: item.target,
+            })
+            console.warn(
+              `[Agent 会话] 项目会话布局冲突，已保留两边文件 (${session.id}, ${item.component}): `
+              + `${item.source} ↔ ${item.target}`,
+            )
+          }
+          skipped.push(`${session.title}: 布局冲突（${componentConflicts.map((item) => item.component).join('/')}）`)
+          continue
         }
 
+        // 独立搬迁：目标已有消息不影响 graph/Harness 迁移；已搬过的组件自动跳过。
+        for (const item of components) {
+          if (!existsSync(item.source)) continue
+          const moved = await moveSessionFile(item.source, item.target)
+          if (!moved || !existsSync(item.target)) {
+            throw new Error(`迁移 ${item.component} 失败: ${item.target}`)
+          }
+        }
+
+        const projectMessages = join(dataDir, 'messages.jsonl')
         copyProjectSessionBlobs(session.id, projectMessages, rootPath)
 
         if (normalizeAgentRuntime(session.agentRuntime) === 'pi' && session.sdkSessionId) {
@@ -4120,7 +4330,10 @@ export async function migrateProjectSessionLayouts(
   if (migratedSessions > 0) {
     console.log(`[Agent 会话] 项目会话布局迁移完成: ${migratedSessions} 个会话 / ${migratedWorkspaces} 个项目`)
   }
-  return { migratedSessions, migratedWorkspaces, skipped }
+  if (conflicts.length > 0) {
+    console.warn(`[Agent 会话] 项目会话布局迁移存在 ${conflicts.length} 处冲突，相关会话未标记完成`)
+  }
+  return { migratedSessions, migratedWorkspaces, skipped, conflicts }
 }
 
 const portableCheckedRoots = new Set<string>()
@@ -4149,12 +4362,21 @@ export async function ensureProjectSessionPortability(
   for (const workspace of workspaces) {
     const rootPath = workspace.rootPath!
     if (portableCheckedRoots.has(rootPath) || !existsSync(rootPath)) continue
-    portableCheckedRoots.add(rootPath)
+    let deferred = false
 
     for (const session of index.sessions) {
       if (session.workspaceId !== workspace.id) continue
-      const dataDir = join(rootPath, '.profer', 'sessions', session.id)
-      if (!existsSync(dataDir)) continue
+      if (agentSessionActiveChecker?.(session.id) || isAgentSessionForking(session.id)) {
+        deferred = true
+        continue
+      }
+      const dataDir = safeProjectSessionDir(rootPath, session.id, 'portability')
+      if (!dataDir || !existsSync(dataDir)) continue
+      // 不在权威消息文件落入项目目录前提升布局，避免读取空项目目录。
+      if (!existsSync(join(dataDir, 'messages.jsonl'))) {
+        deferred = true
+        continue
+      }
       if (session.storageLayout !== 'project') {
         session.storageLayout = 'project'
         changed = true
@@ -4163,6 +4385,7 @@ export async function ensureProjectSessionPortability(
       copiedBlobs += copyProjectSessionBlobs(session.id, join(dataDir, 'messages.jsonl'), rootPath)
       checkedSessions += 1
     }
+    if (!deferred) portableCheckedRoots.add(rootPath)
   }
 
   if (changed) {
@@ -4195,8 +4418,17 @@ export async function rollbackProjectSessionLayouts(workspaceId?: string): Promi
     ))
     for (const session of sessions) {
       if (agentSessionActiveChecker?.(session.id)) continue
-      const dataDir = join(rootPath, '.profer', 'sessions', session.id)
-      await moveSessionFile(join(dataDir, 'messages.jsonl'), join(globalSessionsDir, `${session.id}.jsonl`))
+      const dataDir = safeProjectSessionDir(rootPath, session.id, 'rollback')
+      if (!dataDir) continue
+      const projectMessages = join(dataDir, 'messages.jsonl')
+      const globalMessages = join(globalSessionsDir, `${session.id}.jsonl`)
+      // 两边都有消息时不能回滚：全局那份可能是旧数据，改回 managed 会读错历史。
+      // 必须在搬任何文件之前判定，否则会出现「graph 已回中央、布局还是 project」的半搬。
+      if (existsSync(projectMessages) && existsSync(globalMessages)) {
+        console.warn(`[Agent 会话] 回滚冲突，保留项目布局 (${session.id}): ${projectMessages} ↔ ${globalMessages}`)
+        continue
+      }
+      await moveSessionFile(projectMessages, globalMessages)
       await moveSessionFile(
         join(dataDir, `${session.id}-graph.jsonl`),
         join(globalSessionsDir, `${session.id}-graph.jsonl`),

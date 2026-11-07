@@ -11,7 +11,7 @@
  */
 
 import { existsSync, cpSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { AgentSessionMeta } from '@profer/shared'
 import {
   createSessionStorePaths,
@@ -24,6 +24,11 @@ import {
 } from '@profer/session-store'
 import { listProjectWorkspaceRoots, resolveWorkspaceLocation } from './workspace-locator'
 import { getConfigDir } from './config-paths'
+import {
+  isValidProjectSessionId,
+  isProjectSessionsDirSafe,
+  projectSessionsDir,
+} from './project-session-paths'
 
 function getWorkspace(id: string) {
   // 延迟 require：agent-workspace-manager 反向依赖 agent-session-manager，顶层 import 会成环。
@@ -39,14 +44,25 @@ export function defaultStorageLayoutForWorkspace(workspaceId: string | undefined
   return resolveWorkspaceLocation(workspace.slug).mode === 'project' ? 'project' : 'managed'
 }
 
-/** 项目会话的数据目录；工作区不是 project 或索引损坏时返回 undefined。 */
+/**
+ * 项目会话的数据目录；工作区不是 project 或索引损坏时返回 undefined。
+ *
+ * 这里是布局注册表的热路径（索引加载时按会话批量调用），只做纯字符串的
+ * ID 校验 + 越界检查，不做文件 IO；符号链接与真实路径检查在导入/写入入口
+ * （`project-session-index` / 迁移）完成。
+ */
 export function projectSessionDataDir(workspaceId: string | undefined, sessionId: string): string | undefined {
   if (!workspaceId) return undefined
+  if (!isValidProjectSessionId(sessionId)) return undefined
   const workspace = getWorkspace(workspaceId)
   if (!workspace) return undefined
   const location = resolveWorkspaceLocation(workspace.slug)
   if (location.mode !== 'project') return undefined
-  return join(location.configDir, 'sessions', sessionId)
+  const sessionsDir = join(location.configDir, 'sessions')
+  const dataDir = resolve(sessionsDir, sessionId)
+  const rel = relative(resolve(sessionsDir), dataDir)
+  if (!rel || rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) return undefined
+  return dataDir
 }
 
 /**
@@ -168,10 +184,13 @@ function listSessionDataFiles(include: (sessionId: string, fileName: string) => 
   }
 
   for (const root of listProjectWorkspaceRoots()) {
-    const sessionsDir = join(root.rootPath, '.profer', 'sessions')
+    if (!isProjectSessionsDirSafe(root.rootPath)) continue
+    const sessionsDir = projectSessionsDir(root.rootPath)
     if (!existsSync(sessionsDir)) continue
     for (const entry of readdirSync(sessionsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
+      // 目录名是不可信输入：非法 ID 不参与统计/孤儿判定，避免误删项目外文件。
+      if (!isValidProjectSessionId(entry.name)) continue
       const dataDir = join(sessionsDir, entry.name)
       if (!existsSync(dataDir)) continue
       for (const file of readdirSync(dataDir, { withFileTypes: true })) {

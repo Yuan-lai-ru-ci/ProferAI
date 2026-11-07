@@ -62,7 +62,7 @@ beforeAll(async () => {
   writeFileSync(join(root, '.profer', 'profer.json'), JSON.stringify({
     schema: 'profer.project/1', name: 'copied-project', createdAt: '2026-01-01T00:00:00.000Z', proferVersion: '0.16.19',
   }, null, 2))
-  writeFileSync(join(dataDir, 'pi', `2026-01-01T00-00-00-000Z_${piSessionId}.jsonl`), '{"type":"session"}\n', 'utf-8')
+  writeFileSync(join(dataDir, 'pi', `2026-01-01T00-00-00-000Z_${piSessionId}.jsonl`), `${JSON.stringify({ type: 'session', id: piSessionId })}\n`, 'utf-8')
 
   // 大载荷：原文在项目 .profer/blobs，消息行只留片段 + 引用
   const fullText = `PORTABLE-BLOB-${'x'.repeat(300_000)}`
