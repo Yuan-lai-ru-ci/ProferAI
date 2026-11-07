@@ -198,10 +198,11 @@ describe('Electron Agent host ports', () => {
       resolveMemoryArchivePath: async () => '/tmp/parity-memory-archive',
     })
 
-    // meta 无 agentRuntime ⇒ 默认 claude；goal 因未提供报告回调而不注入，其余 6 个按旧链顺序注入。
+    // meta 无 agentRuntime ⇒ 默认 claude；goal 因未提供报告回调而不注入，其余 6 个按旧链顺序注入；
+    // global-memory 走独立的 injectGlobalMemoryTools，追加在旧链之后（不在 BUILTIN_MCP_INJECTION_ORDER 内）。
     const withSnapshot = await loadBuiltinMcpResources('session-1', meta, 'fixture-workspace', port)
     expect(withSnapshot.map(entry => entry.name)).toEqual([
-      'automation', 'memory-archive', 'collaboration', 'task-graph', 'agent-presets', 'planning',
+      'automation', 'memory-archive', 'collaboration', 'task-graph', 'agent-presets', 'planning', 'global-memory',
     ])
     expect(injected).toEqual(['automation', 'memory-archive', 'collaboration', 'task-graph', 'agent-presets', 'planning'])
     expect(sourceRuns).toEqual(['host-run', 'host-run'])
