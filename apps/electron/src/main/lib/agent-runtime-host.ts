@@ -39,6 +39,7 @@ import {
   runBuiltinMcpInjection,
   type BuiltinMcpInjectionContext,
 } from './agent-runtime-mcp-injection'
+import { injectGlobalMemoryTools } from './global-memory-agent-tools'
 import {
   PRODUCT_MCP_UNAVAILABLE_LOG_PREFIX,
   composeBrowserAllowedRoots,
@@ -373,6 +374,13 @@ export async function loadBuiltinMcpResources(
     sdk,
     planInput: builtinMcpPlanInputFromContext(context, 'standard', snapshot.policy.disabledToolGroups),
   })
+  if (!snapshot.policy.disabledToolGroups.includes('memory')) {
+    try {
+      await injectGlobalMemoryTools(sdk, builtinMcpServers, snapshot.policy.disabledTools ? [...snapshot.policy.disabledTools] : undefined)
+    } catch (error) {
+      console.warn(`${BUILTIN_MCP_UNAVAILABLE_LOG_PREFIX}: ${JSON.stringify({ id: 'global-memory', reason: 'injector-failed', detail: error instanceof Error ? error.message : String(error) })}`)
+    }
+  }
   if (outcome.unavailable.length > 0) {
     console.warn(`${BUILTIN_MCP_UNAVAILABLE_LOG_PREFIX}: ${JSON.stringify(outcome.unavailable)}`)
   }

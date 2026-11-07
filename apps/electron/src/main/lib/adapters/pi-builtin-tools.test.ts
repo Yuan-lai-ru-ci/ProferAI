@@ -237,12 +237,13 @@ describe('Pi Profer in-process tool bridges', () => {
     expect(tools.map((tool) => tool.name)).not.toContain('mcp__agent-presets__preset_copy')
   })
 
-  test('Given Pi runtime When building memory tools without a workspace Then it does not expose personal memory search', () => {
+  test('Given Pi runtime When building memory tools without a workspace Then it exposes global memory but not workspace search', () => {
     const { sdk, tools } = createPiSdkStub()
 
     buildPiMemoryArchiveTools(sdk, {})
 
-    expect(tools).toEqual([])
+    expect(tools.map((tool) => tool.name)).toContain('mcp__global-memory__search_global_memory')
+    expect(tools.map((tool) => tool.name)).not.toContain('mcp__memory-archive__search_memory')
   })
 
   test('Given Pi runtime When building memory tools with a workspace Then it exposes read-only archive search', async () => {
@@ -436,6 +437,7 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     for (const [group, prefix] of Object.entries(GROUP_PREFIXES)) {
       expect(tools.some((t) => t.name.startsWith(prefix)), `group ${group} (${prefix}) should be registered`).toBe(true)
     }
+    expect(tools.some((tool) => tool.name.startsWith('mcp__global-memory__'))).toBe(true)
   })
 
   test('Given each new capability group disabled Then only its registered tools are pruned', async () => {

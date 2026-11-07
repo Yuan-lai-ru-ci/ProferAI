@@ -1425,6 +1425,22 @@ export interface WorkspaceMemorySummary {
   }
 }
 
+/** 全局用户记忆摘要（跨所有工作区共享） */
+export interface GlobalMemorySummary {
+  indexExists: boolean
+  fileCount: number
+  totalSize: number
+  updatedAt?: number
+}
+
+/** 全局用户记忆文件内容 */
+export interface GlobalMemoryFileContent {
+  relativePath: string
+  content?: string
+  isText: boolean
+  size: number
+}
+
 /** 内置 MCP 服务器摘要 */
 export interface BuiltinMcpServerSummary {
   name: string
@@ -2624,6 +2640,18 @@ export const AGENT_IPC_CHANNELS = {
   RESOLVE_MEMORY_WIKILINK: 'agent:resolve-memory-wikilink',
   /** 查询记忆反链：列出引用过当前文件的其它记忆文件 */
   GET_MEMORY_BACKLINKS: 'agent:get-memory-backlinks',
+  /** 获取全局用户记忆摘要 */
+  GET_GLOBAL_MEMORY_SUMMARY: 'agent:get-global-memory-summary',
+  /** 列出全局用户记忆文件树 */
+  LIST_GLOBAL_MEMORY_FILES: 'agent:list-global-memory-files',
+  /** 读取全局用户记忆文件 */
+  READ_GLOBAL_MEMORY_FILE: 'agent:read-global-memory-file',
+  /** 写入全局用户记忆文件 */
+  WRITE_GLOBAL_MEMORY_FILE: 'agent:write-global-memory-file',
+  /** 删除全局用户记忆文件 */
+  DELETE_GLOBAL_MEMORY_FILE: 'agent:delete-global-memory-file',
+  /** 搜索全局用户记忆 */
+  SEARCH_GLOBAL_MEMORY: 'agent:search-global-memory',
 
   // 流式事件（主进程 → 渲染进程推送）
   /** Agent 流式事件 */

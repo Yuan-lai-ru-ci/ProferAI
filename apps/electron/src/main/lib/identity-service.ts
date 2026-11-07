@@ -120,7 +120,8 @@ export function updateDeviceName(name: string): DeviceIdentity {
  */
 export function getUserIdentity(): UserIdentity {
   // 暂时从 user-profile.json 读取，Phase 2 扩展为完整 UserIdentity
-  const { getUserProfilePath } = require('./user-profile-service')
+  // 路径解析在 config-paths（user-profile-service 不导出它），惰性 require 保留以避免启动期循环依赖。
+  const { getUserProfilePath } = require('./config-paths')
   const profilePath = (getUserProfilePath as () => string)()
   let displayName = '用户'
   let avatar = '🧑‍💻'

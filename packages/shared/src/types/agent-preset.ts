@@ -167,6 +167,8 @@ export const AGENT_PRESET_CAPABILITY_GROUPS = [
     id: 'memory', label: '长期记忆', hint: 'Auto Memory 与 memory-archive', suppressPromptSection: 'memory',
     tools: [
       capabilityTool('search_memory', '搜索个人记忆', '检索工作区长期记忆索引'),
+      capabilityTool('search_global_memory', '搜索全局记忆', '检索跨工作区的用户级记忆'),
+      capabilityTool('read_global_memory', '读取全局记忆', '读取全局记忆索引或主题文件'),
     ],
   }),
   capabilityGroup({

@@ -10,6 +10,7 @@ import { groupIntoTurns, toTranscript, searchTurns } from '@profer/session-core'
 import { numFlag, boolFlag } from '../args'
 
 register({
+  namespace: 'session',
   name: 'search',
   summary: '在会话内搜索关键词，返回命中 turn 下标 + 片段',
   usage: 'session search <query> <id|path> [--context N] [--limit N] [--case-sensitive] [--json]',

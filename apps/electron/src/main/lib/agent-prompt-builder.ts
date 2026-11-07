@@ -14,6 +14,7 @@ import { buildCoreAgentPrompt } from './agent-prompt-core'
 import { AGENT_IMAGE_OUTPUT_TEXT_RULE } from './agent-image-output-contract'
 import { AGENT_PRESET_CAPABILITY_GROUPS, isAgentPresetToolGroupDisabled } from '@profer/shared'
 import type { AgentPresetToolGroup, ProferPermissionMode, WorkspaceStorageMode } from '@profer/shared'
+import { buildUserIdentitySection } from '@profer/user-memory'
 import { basename, join } from 'node:path'
 import { getUserProfile } from './user-profile-service'
 import { resolveAgentSessionWorkspacePath } from './config-paths'
@@ -293,10 +294,8 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
     }))
   }
 
-  // 用户信息
-  sections.push(`## 用户信息
-
-- 用户名: ${userName}`)
+  // 用户信息（与 CLI 的 `profer profile context` 共用同一段文本）
+  sections.push(buildUserIdentitySection(userName))
 
   // 工作区信息
   if (ctx.workspaceName && workspacePaths) {

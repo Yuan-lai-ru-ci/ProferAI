@@ -1,5 +1,7 @@
 import { isAgentPresetToolGroupDisabled, type AgentPresetToolGroup } from '@profer/shared'
+import { buildGlobalMemoryIndexBlock, escapeContextText } from '@profer/user-memory'
 import { getWorkspaceMcpConfig } from './workspace-mcp-config'
+import { readGlobalMemoryFile } from './global-memory-service'
 import type { BrowserUserContextSnapshot } from './browser-controller'
 
 // ===== 动态 Per-Message 上下文 =====
@@ -17,10 +19,6 @@ export interface DynamicContext {
   disabledToolGroups?: readonly AgentPresetToolGroup[]
   /** 当前运行硬禁用的单个工具。 */
   disabledTools?: readonly string[]
-}
-
-function escapeContextText(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 /**
@@ -70,6 +68,15 @@ export function buildDynamicContext(ctx: DynamicContext): string {
 
     if (wsLines.length > 0) {
       sections.push(`<workspace_state>\n${wsLines.join('\n')}\n</workspace_state>`)
+    }
+  }
+
+  if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'memory')) {
+    try {
+      const block = buildGlobalMemoryIndexBlock(readGlobalMemoryFile('MEMORY.md').content ?? '')
+      if (block) sections.push(block)
+    } catch {
+      // The index is optional until global memory has been initialized.
     }
   }
 

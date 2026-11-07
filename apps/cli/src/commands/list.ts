@@ -16,6 +16,7 @@ interface MetaLike {
 }
 
 register({
+  namespace: 'session',
   name: 'list',
   summary: '列出会话（id / 标题 / 更新时间 / 工作区），按更新时间降序',
   usage: 'session list [--limit N] [--workspace W] [--json]',

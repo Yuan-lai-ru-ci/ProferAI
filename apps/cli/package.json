@@ -2,7 +2,7 @@
   "name": "@profer/cli",
   "version": "0.1.1",
   "license": "AGPL-3.0-only",
-  "description": "profer — Profer 命令行工具。面向有限上下文的 Agent 消费者，提供会话的渐进式读取（list / info / outline / search / export）。",
+  "description": "profer — Profer 命令行工具。面向有限上下文的 Agent 消费者，提供会话的渐进式读取（list / info / outline / search / export）与用户画像读写（profile show / get / set / context / search）。",
   "type": "module",
   "bin": {
     "profer": "./src/index.ts"
@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@profer/session-core": "workspace:*",
-    "@profer/shared": "workspace:*"
+    "@profer/shared": "workspace:*",
+    "@profer/user-memory": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.0.0"

@@ -10,6 +10,7 @@ import { groupIntoTurns, toTranscript, outline, formatOutlineLine, selectTurns }
 import { numFlag } from '../args'
 
 register({
+  namespace: 'session',
   name: 'outline',
   summary: 'turn 级地图：每 turn 一行（角色 / 预览 / 工具概览 / 估算 tokens）',
   usage: 'session outline <id|path> [--offset K] [--limit N] [--json]',

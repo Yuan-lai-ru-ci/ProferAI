@@ -76,6 +76,7 @@ import type { AgentRunLedger, AgentRunContext, AgentRun, AgentRuntimePorts, Cred
 import type { ClaudeAgentQueryOptions } from '@profer/agent-provider-claude'
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
+import { injectGlobalMemoryTools } from './global-memory-agent-tools'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
 import { injectAgentPresetMcpServer } from './agent-preset-tools'
 import {
@@ -1753,6 +1754,7 @@ export class AgentOrchestrator {
           )
         }
         if (!disabledToolGroups.has('memory')) {
+          await injectGlobalMemoryTools(sdk, mcpServers, disabledTools)
           await injectMemoryArchiveMcpServer(
             sdk,
             mcpServers,

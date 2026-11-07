@@ -1052,6 +1052,7 @@ const LEGACY_BUNDLED_SKILL_DIRECTORY_HASHES: Readonly<Record<string, readonly st
   'user-sense': [
     '3db6c922794255a83631237dcf10792ee58c392f42015972e7d067c019bc4fb8',
     'bb6b523acdbd108ac99a131e8d9b6f4ad51bd8c32b64abeb0461dd192a3ae2bc',
+    'e1ceba66c3cae565761fcdcd5b40e9090def092d0dce5a12901c94d329e2f096',
   ],
   'writing-plans': [
     'd5a0f5f9ab3dec492442757151c4299ac6f71f347665a498f6cd7d79be59ecd1',

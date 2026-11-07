@@ -2,14 +2,14 @@
 name: user-sense
 description: Profer's built-in default "User Sense" Skill, available out of the box. Its goal is to build a "local user profile" through an initial scan of the local environment (system information, installed applications, file-type statistics, recently opened files, and browser bookmark categories), so Profer can understand the user's work domain, schedule, and interests and provide personalized conversation and proactive service (Proactive Center). Trigger this when the user is using a new workspace for the first time, the profile file is missing or clearly stale (>30 days), the user mentions "understand me better", "remember my preferences/habits/work domain", "Proactive Center", or "personalized recommendations", or the conversation context requires understanding the user's identity (development/research/office/entertainment). After triggering, first check whether the profile exists, then decide whether to build, update, or only consume it; before building a profile, you must explain the scan scope and obtain consent, and must not scan without consent.
 group: profer
-version: "1.0.2"
+version: "1.0.3"
 ---
 
 # UserSense (User Sense)
 
 Profer's default Skill, distributed with the application and available to all users out of the box. Responsibility: **build, maintain, and consume a local user profile**.
 
-A profile is a set of **inferred conclusions** about the user's work domain, schedule, and interests (for example, "activity is concentrated in the early morning", "development tools are predominant", or "there has recently been activity around reading papers"), stored at `workspace-files/.context/memory-archive/user-profile.md` in the workspace.
+A profile is a set of user-level information stored in the global memory directory (`global-memory/` under the active Profer configuration root). Keep user-confirmed facts separate from inferred conclusions: `user-profile.md` is for facts the user stated or explicitly confirmed; `user-sense.md` is for local-scan inferences. Do not write inferred conclusions into `user-profile.md`, and do not treat an inference as confirmed fact.
 
 ## Hard privacy constraints (must come before everything else)
 
@@ -23,7 +23,7 @@ A profile is a set of **inferred conclusions** about the user's work domain, sch
 
 After this Skill is triggered, make decisions in the following order:
 
-1. Read the profile file (`workspace-files/.context/memory-archive/user-profile.md`, distinguishing the `manual` and `auto` blocks)
+1. Read `global-memory/user-profile.md` and, if relevant, `global-memory/user-sense.md`; distinguish confirmed facts from inferences.
 2. Profile missing → explain the scan scope to the user and obtain consent; after consent, run "initial construction"
 3. Profile exists but `updated` is more than 30 days old → propose an incremental update (not mandatory)
 4. Profile exists and is fresh → consume it directly (use profile information in the conversation without scanning again)
@@ -82,9 +82,9 @@ Example conclusion: `Bookmark categories are primarily video/games/learning; inf
 
 ## Profile file format requirements
 
-Update `workspace-files/.context/memory-archive/user-profile.md` as follows:
+Update `global-memory/user-sense.md` as follows; do not edit `user-profile.md`, which contains user-confirmed facts:
 
-1. Write automatic conclusions in the `## Automatic Profile (auto)` section; do not modify manual content (such as the existing `## User Profile` section), and mark automatic conclusions as `manual`
+1. Write automatic conclusions only in this inference file; never overwrite user-confirmed facts in `user-profile.md`.
 2. Format each conclusion as: `- **<conclusion>** (source: <system/applications/files/recent files/bookmarks>, confidence: <high/medium/low>, date: YYYY-MM-DD)`
 3. Update frontmatter `updated: YYYY-MM-DD`
 4. Do not write the same conclusion again when it already exists and is not stale (<30 days)
@@ -96,9 +96,11 @@ Update `workspace-files/.context/memory-archive/user-profile.md` as follows:
 - **Connect to proactive service**: profile signals are inputs to Proactive Center (late-night activity → suggest a work mode, a pile of PDFs → remind the user to organize or read closely, frequent project switching → recommend quick switching); when a matching signal is found, you may make a suggestion to the user
 - **Profile staleness/change**: when the user's behavior changes clearly (for example, many new design tools are added), propose an incremental update rather than scanning without permission
 
-## Boundaries
-
-- Do not collect browser history, chat records, passwords, or cookies; only perform **category** statistics on bookmarks
+- User-confirmed facts belong in `user-profile.md` and may be added or corrected only when the user explicitly provides or confirms them.
+- Inferred conclusions belong in `user-sense.md`; before a new scan, explain the scope and obtain consent. A scan result is not user confirmation.
+- Do not store credentials, secrets, or specific server IP/hostnames unless the user explicitly asks to store them in the appropriate global memory file.
+- Record source and last-checked date for information that can change.
+- Do not write or update user-level profile information in a workspace `memory-archive`; that archive is reserved for project/workspace facts.
 - Do not upload or perform remote analysis
 - When the user declines or disables collection, respect the choice and do not ask repeatedly
 - This Skill defines the workflow. The main-process ProfileScanner (faster and more comprehensive native scanning) is a later enhancement; once implemented, it automatically takes over collection, while this Skill's consumption and maintenance requirements remain unchanged

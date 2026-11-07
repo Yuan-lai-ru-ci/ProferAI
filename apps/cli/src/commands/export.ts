@@ -20,6 +20,7 @@ import { numFlag, strFlag, boolFlag, parseRange } from '../args'
 const DEFAULT_MAX_BYTES = 51200 // 50KB
 
 register({
+  namespace: 'session',
   name: 'export',
   summary: '把会话或 turn 子集渲染为干净 Markdown（含超预算落盘护栏）',
   usage: 'session export <id|path> [--after-message UUID | --turns A-B | --head N | --tail N | --offset K --limit N] [--out FILE] [--stdout] [--max-bytes N] [--json]',

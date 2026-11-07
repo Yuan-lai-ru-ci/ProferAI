@@ -336,6 +336,7 @@ import {
   getLegacyMemoryArchivePath,
   getWorkspaceAutoMemoryDir,
 } from './lib/agent-workspace-manager'
+import { getGlobalMemorySummary, listGlobalMemoryFiles, readGlobalMemoryFile, writeGlobalMemoryFile, deleteGlobalMemoryFile, searchGlobalMemory } from './lib/global-memory-service'
 import { resolveMemoryWikilink, findMemoryBacklinks } from './lib/memory-wikilink-service'
 import { assertSafeSkillSegment } from './lib/skill-path-security'
 import { searchFileCandidate, type FileSearchResult as FileCandidateSearchResult } from './lib/file-search-service'
@@ -3649,6 +3650,37 @@ export function registerIpcHandlers(): void {
       const autoDir = getWorkspaceAutoMemoryDir(workspaceSlug)
       return findMemoryBacklinks(archiveDir, autoDir, currentAbsolutePath, currentLinkName)
     }
+  )
+
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_GLOBAL_MEMORY_SUMMARY,
+    async () => getGlobalMemorySummary(),
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LIST_GLOBAL_MEMORY_FILES,
+    async () => listGlobalMemoryFiles(),
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.READ_GLOBAL_MEMORY_FILE,
+    async (_event, relativePath: string) => readGlobalMemoryFile(relativePath),
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.WRITE_GLOBAL_MEMORY_FILE,
+    async (event, relativePath: string, content: string) => {
+      assertSensitiveAgentIpcSender(event)
+      writeGlobalMemoryFile(relativePath, content)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.DELETE_GLOBAL_MEMORY_FILE,
+    async (event, relativePath: string) => {
+      assertSensitiveAgentIpcSender(event)
+      deleteGlobalMemoryFile(relativePath)
+    },
+  )
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SEARCH_GLOBAL_MEMORY,
+    async (_event, query: string, topK?: number) => searchGlobalMemory(query, topK),
   )
 
   // ===== Chat 工具管理 =====

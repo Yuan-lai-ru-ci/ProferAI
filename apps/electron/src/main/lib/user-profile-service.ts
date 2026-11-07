@@ -1,44 +1,24 @@
 /**
- * 用户档案服务
+ * 用户档案服务 —— Electron 主进程适配层。
  *
- * 管理用户档案（用户名 + 头像）的读写。
- * 存储在 ~/.profer/user-profile.json
+ * 读写实现已下沉到 `@profer/user-memory`，与 profer CLI 的
+ * `profer profile show` 共用同一份逻辑与同一个文件：
+ * `<configDir>/user-profile.json`。
+ *
+ * 这里只负责把配置目录接上主进程的 `getConfigDir()`。
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { getUserProfilePath } from './config-paths'
-import { DEFAULT_USER_AVATAR, DEFAULT_USER_NAME } from '../../types'
+import { readUserProfile, writeUserProfile } from '@profer/user-memory'
 import type { UserProfile } from '../../types'
+import { getConfigDir } from './config-root'
 
 /**
  * 获取用户档案
  *
- * 如果文件不存在，返回默认档案。
+ * 文件不存在或内容损坏时返回默认档案，不抛错。
  */
 export function getUserProfile(): UserProfile {
-  const filePath = getUserProfilePath()
-
-  if (!existsSync(filePath)) {
-    return {
-      userName: DEFAULT_USER_NAME,
-      avatar: DEFAULT_USER_AVATAR,
-    }
-  }
-
-  try {
-    const raw = readFileSync(filePath, 'utf-8')
-    const data = JSON.parse(raw) as Partial<UserProfile>
-    return {
-      userName: data.userName || DEFAULT_USER_NAME,
-      avatar: data.avatar || DEFAULT_USER_AVATAR,
-    }
-  } catch (error) {
-    console.error('[用户档案] 读取失败:', error)
-    return {
-      userName: DEFAULT_USER_NAME,
-      avatar: DEFAULT_USER_AVATAR,
-    }
-  }
+  return readUserProfile(getConfigDir())
 }
 
 /**
@@ -47,21 +27,12 @@ export function getUserProfile(): UserProfile {
  * 合并更新字段并写入文件。
  */
 export function updateUserProfile(updates: Partial<UserProfile>): UserProfile {
-  const current = getUserProfile()
-  const updated: UserProfile = {
-    ...current,
-    ...updates,
-  }
-
-  const filePath = getUserProfilePath()
-
   try {
-    writeFileSync(filePath, JSON.stringify(updated, null, 2), 'utf-8')
+    const updated = writeUserProfile(getConfigDir(), updates)
     console.log(`[用户档案] 已更新: ${updated.userName}`)
+    return updated
   } catch (error) {
     console.error('[用户档案] 写入失败:', error)
     throw new Error('写入用户档案失败')
   }
-
-  return updated
 }

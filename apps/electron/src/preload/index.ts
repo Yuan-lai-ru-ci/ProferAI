@@ -1105,6 +1105,18 @@ export interface ElectronAPI {
   resolveMemoryWikilink: (workspaceSlug: string, name: string) => Promise<MemoryWikilinkTarget | null>
   /** 查询记忆反链：列出引用过当前文件的其它记忆文件 */
   getMemoryBacklinks: (workspaceSlug: string, currentAbsolutePath: string, currentLinkName: string) => Promise<MemoryBacklink[]>
+  /** 获取全局用户记忆摘要 */
+  getGlobalMemorySummary: () => Promise<import('@profer/shared').GlobalMemorySummary>
+  /** 列出全局用户记忆文件树 */
+  listGlobalMemoryFiles: () => Promise<SkillFileNode[]>
+  /** 读取全局用户记忆文件 */
+  readGlobalMemoryFile: (relativePath: string) => Promise<SkillFileContent>
+  /** 写入全局用户记忆文件 */
+  writeGlobalMemoryFile: (relativePath: string, content: string) => Promise<void>
+  /** 删除全局用户记忆文件 */
+  deleteGlobalMemoryFile: (relativePath: string) => Promise<void>
+  /** 搜索全局用户记忆 */
+  searchGlobalMemory: (query: string, topK?: number) => Promise<Array<{ relativePath: string; content: string; startIndex: number; endIndex: number }>>
 
   // ===== Chat 工具管理 =====
 
@@ -2982,6 +2994,30 @@ const electronAPI: ElectronAPI = {
 
   getMemoryBacklinks: (workspaceSlug: string, currentAbsolutePath: string, currentLinkName: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_MEMORY_BACKLINKS, workspaceSlug, currentAbsolutePath, currentLinkName)
+  },
+
+  getGlobalMemorySummary: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GLOBAL_MEMORY_SUMMARY)
+  },
+
+  listGlobalMemoryFiles: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_GLOBAL_MEMORY_FILES)
+  },
+
+  readGlobalMemoryFile: (relativePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_GLOBAL_MEMORY_FILE, relativePath)
+  },
+
+  writeGlobalMemoryFile: (relativePath: string, content: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_GLOBAL_MEMORY_FILE, relativePath, content)
+  },
+
+  deleteGlobalMemoryFile: (relativePath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_GLOBAL_MEMORY_FILE, relativePath)
+  },
+
+  searchGlobalMemory: (query: string, topK?: number) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEARCH_GLOBAL_MEMORY, query, topK)
   },
 
   // Chat 工具管理

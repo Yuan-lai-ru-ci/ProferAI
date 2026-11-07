@@ -11,6 +11,7 @@ import { readSessionMessages } from '@profer/session-core/node'
 import { groupIntoTurns, toTranscript } from '@profer/session-core'
 
 register({
+  namespace: 'session',
   name: 'info',
   summary: '会话体量/结构概览：turn 数、角色分布、估算 tokens、字节数',
   usage: 'session info <id|path> [--json]',

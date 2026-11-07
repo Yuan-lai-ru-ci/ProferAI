@@ -1,0 +1,23 @@
+{
+  "name": "@profer/user-memory",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Headless user profile and global memory store. Single source of truth shared by the Electron app, the profer CLI and any future surface that needs the user's profile without a UI.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./profile-fields": "./src/profile-fields.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@profer/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

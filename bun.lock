@@ -32,6 +32,7 @@
       "dependencies": {
         "@profer/session-core": "workspace:*",
         "@profer/shared": "workspace:*",
+        "@profer/user-memory": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^5.0.0",
@@ -358,6 +359,16 @@
       "peerDependencies": {
         "react": "^18.3.0",
         "react-dom": "^18.3.0",
+      },
+    },
+    "packages/user-memory": {
+      "name": "@profer/user-memory",
+      "version": "0.1.0",
+      "dependencies": {
+        "@profer/shared": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.0.0",
       },
     },
   },
@@ -736,6 +747,8 @@
     "@profer/shared": ["@profer/shared@workspace:packages/shared"],
 
     "@profer/ui": ["@profer/ui@workspace:packages/ui"],
+
+    "@profer/user-memory": ["@profer/user-memory@workspace:packages/user-memory"],
 
     "@protobufjs/aspromise": ["@protobufjs/aspromise@1.1.2", "https://registry.npmmirror.com/@protobufjs/aspromise/-/aspromise-1.1.2.tgz", {}, "sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ=="],
 

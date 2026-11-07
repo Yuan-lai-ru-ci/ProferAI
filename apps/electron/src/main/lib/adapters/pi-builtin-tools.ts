@@ -87,6 +87,7 @@ import { fetchInstallerManifest, findInstallerSource } from '../installer-manife
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { appendGraphEvent, queryNodeById } from '../project-graph-service'
 import { getWorkspaceMemoryArchivePath } from '../agent-workspace-manager'
+import { searchGlobalMemory, readGlobalMemoryFile } from '../global-memory-service'
 import {
   fetchWebPage,
   formatFetchResults,
@@ -208,7 +209,29 @@ function textToolResult(text: string, details?: unknown): AgentToolResult<unknow
  * memory-archive 搜索服务，保持 Claude/Pi 的个人长期记忆检索能力对等。
  */
 export function buildPiMemoryArchiveTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'workspaceSlug'>): ToolDefinition[] {
-  if (!ctx.workspaceSlug) return []
+  const globalTools: ToolDefinition[] = [
+    sdk.defineTool({
+      name: 'mcp__global-memory__search_global_memory',
+      label: '搜索全局记忆',
+      description: '搜索跨工作区共享的用户级长期记忆，如用户背景、稳定偏好、设备与服务器。结果可能过时，动态状态需和用户当轮信息核对。只读。',
+      parameters: Type.Object({ query: Type.String({ minLength: 1, maxLength: 200 }), topK: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }),
+      async execute(_toolCallId, params) {
+        const args = params as { query: string; topK?: number }
+        return jsonToolResult({ hits: searchGlobalMemory(args.query, args.topK ?? 5), freshnessNote: '记忆可能过时；涉及动态状态时与用户当轮信息核对。' })
+      },
+    }),
+    sdk.defineTool({
+      name: 'mcp__global-memory__read_global_memory',
+      label: '读取全局记忆',
+      description: '读取 MEMORY.md 索引或搜索命中的全局记忆主题文件。只读。',
+      parameters: Type.Object({ relativePath: Type.String({ minLength: 1, maxLength: 500 }) }),
+      async execute(_toolCallId, params) {
+        try { return jsonToolResult(readGlobalMemoryFile((params as { relativePath: string }).relativePath)) }
+        catch (error) { return jsonToolError(error) }
+      },
+    }),
+  ]
+  if (!ctx.workspaceSlug) return globalTools
   let searcher: ReturnType<typeof import('../memory-archive-search')['createMemoryArchiveSearcher']>
   let memoryFreshnessNote: typeof import('../memory-archive-search')['memoryFreshnessNote'] = () => undefined
   let memoryHitAgeDays: typeof import('../memory-archive-search')['memoryHitAgeDays'] = () => undefined
@@ -219,10 +242,11 @@ export function buildPiMemoryArchiveTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCo
     memoryHitAgeDays = mod.memoryHitAgeDays
   } catch (error) {
     console.error('[Pi 桥接] 初始化个人记忆搜索失败:', error)
-    return []
+    return globalTools
   }
 
   return [
+    ...globalTools,
     sdk.defineTool({
       name: 'mcp__memory-archive__search_memory',
       label: '搜索个人记忆',
