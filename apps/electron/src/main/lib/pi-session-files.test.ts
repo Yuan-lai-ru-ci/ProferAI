@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -57,6 +57,16 @@ describe('Pi transcript 路径解析', () => {
     expect(isPiTranscriptPathFor('session-1', outside, { rootDir: root })).toBe(false)
   })
 
+  test('Given transcript 文件是指向根目录外的符号链接 When 校验 Then 拒绝该路径', () => {
+    const root = makeRoot()
+    const outsideRoot = makeRoot()
+    const outside = writeTranscript(outsideRoot, 'outside.jsonl', 'session-1')
+    const linked = join(root, 'linked.jsonl')
+    symlinkSync(outside, linked)
+
+    expect(isPiTranscriptPathFor('session-1', linked, { rootDir: root })).toBe(false)
+    expect(resolvePiTranscriptPath('session-1', linked, { rootDir: root })).toBeUndefined()
+  })
   test('Given 同一 sessionId 有多个文件 When 解析 Then 返回 undefined 避免误删', () => {
     const root = makeRoot()
     writeTranscript(root, 'a.jsonl', 'session-1')

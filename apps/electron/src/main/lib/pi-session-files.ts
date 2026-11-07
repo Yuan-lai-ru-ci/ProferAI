@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readSync, readdirSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readSync, readdirSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { getPiTranscriptDirForSession, getSdkConfigDir } from './config-paths'
 
@@ -87,6 +87,13 @@ export function isPiTranscriptPathFor(
   const rootDir = options.rootDir ?? getPiTranscriptDirForSession(sessionId)
   if (!isPathWithin(rootDir, filePath)) return false
   if (!existsSync(filePath)) return false
+  try {
+    const realRoot = realpathSync(rootDir)
+    const realFile = realpathSync(filePath)
+    if (!isPathWithin(realRoot, realFile)) return false
+  } catch {
+    return false
+  }
   return readPiSessionHeaderId(filePath) === sessionId
 }
 
