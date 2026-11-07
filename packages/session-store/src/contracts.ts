@@ -13,6 +13,7 @@ export interface SessionStorePaths {
   graphDir: string
   harnessDir: string
   checkpointsDir: string
+  rewindDir: string
   sdkConfigDir?: string
   workspaceRoot?: string
 }

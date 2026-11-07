@@ -156,6 +156,8 @@ for (const key of Object.keys(process.env)) {
 
 import { createApplicationMenu, installTextContextMenus } from './menu'
 import { registerIpcHandlers, setRendererReadyHandler, stopAllGoalsForProcessExit } from './ipc'
+import { setAgentRewindService } from './lib/agent-rewind-gateway'
+import { createElectronAgentRewindService } from './lib/agent-rewind-host'
 import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from './lib/remote-service'
 import { startAgentFabricService, stopAgentFabricService } from './lib/agent-fabric/agent-fabric-service'
 import { createTray, destroyTray, getTray } from './tray'
@@ -958,6 +960,9 @@ async function bootstrap(): Promise<void> {
     ? join(process.resourcesPath, 'default-skills')
     : join(__dirname, '../default-skills')
   configureGlobalSkillSystem(bundledGlobalSkillsDir)
+
+  // 回退服务必须在 IPC handler 注册前完成装配；R0 只提供 Claude conversation。
+  setAgentRewindService(createElectronAgentRewindService())
 
   // Register IPC handlers
   registerIpcHandlers()

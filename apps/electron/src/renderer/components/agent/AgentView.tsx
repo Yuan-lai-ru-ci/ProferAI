@@ -179,6 +179,9 @@ import { longTextPasteAsAttachmentEnabledAtom } from '@/atoms/ui-preferences'
 import { resolveForkActionAvailability } from '@/lib/exploration-session'
 import { getUserTextFromSDKMessage, resolveRegenerateTarget, resolveRewriteSubmitBlock, resolveRewriteTarget, type RewriteSubmitBlock } from '@/lib/agent-regenerate-anchor'
 import type { EditResendRequest } from './SDKMessageRenderer'
+import type { RewindClient } from '@/lib/agent-rewind-client'
+import { RewindDialog, type RewindDialogIntent } from './RewindDialog'
+import type { RewindResult, RewindTarget } from '@profer/shared'
 
 /** 「修改重发」被拦下时的提示文案（文案属 UI，故不入纯逻辑模块）。 */
 const REWRITE_SUBMIT_BLOCK_MESSAGES: Record<RewriteSubmitBlock, { title: string; description: string }> = {
@@ -2712,46 +2715,12 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     const finalMessage = `${request.preservedPrefix ? `${request.preservedPrefix}\n\n` : ''}${request.text.trim()}`.trim()
     if (!finalMessage) return false
 
-    try {
-      const result = await window.electronAPI.rewindSession({
-        sessionId,
-        ...(target.kind === 'rewind' ? { assistantMessageUuid: target.rewindToAssistantUuid } : {}),
-      })
-      store.set(agentMessageRefreshAtom, (prev) => {
-        const map = new Map(prev)
-        map.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
-        return map
-      })
-      store.set(agentDiffRefreshVersionAtom, (prev) => {
-        const map = new Map(prev)
-        map.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
-        return map
-      })
-      const fileRewind = result.fileRewind
-      // 文件恢复可能因占用/基线不完整而降级；必须明确告知，否则用户会误以为工作区已回到该时刻
-      const warnings = [
-        ...(fileRewind && !fileRewind.canRewind && fileRewind.error ? [`文件未回退：${fileRewind.error}`] : []),
-        ...((fileRewind?.skippedFiles?.length ?? 0) > 0 ? [`${fileRewind!.skippedFiles!.length} 个文件被占用或过大而未回退`] : []),
-        ...(fileRewind?.incomplete ? ['基线不完整，未确认的新增文件已保留'] : []),
-      ]
-      if (warnings.length > 0) {
-        toast.warning('已重发修改后的消息，但文件未完全回退', { description: warnings.join('；') })
-      }
-      // 先清编辑态再发送（回退后这条消息已从历史里消失，编辑框不能再挂在那里）
-      setEditingUserMessageUuid(null)
-      sendUserMessageInCurrentSession(finalMessage, request.text.trim())
-      store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
-        if (!prev.has(sessionId)) return prev
-        const next = new Set(prev)
-        next.delete(sessionId)
-        return next
-      })
-      return true
-    } catch (error) {
-      toast.error('修改重发失败', { description: error instanceof Error ? error.message : String(error) })
-      return false
-    }
-  }, [agentChannelId, backgroundWaiting, hasAvailableModel, messagesLoaded, persistedSDKMessages, presetSelectionRequired, sendUserMessageInCurrentSession, sessionId, store, streaming, streamState?.stopping])
+    setRewindRequest({
+      target: target.kind === 'rewind' ? { kind: 'message', messageUuid: target.rewindToAssistantUuid } : { kind: 'session-start' },
+      intent: 'edit-resend', draft: finalMessage, resendText: finalMessage, retryDraft: request.text.trim(),
+    })
+    return false
+  }, [backgroundWaiting, hasAvailableModel, messagesLoaded, persistedSDKMessages, presetSelectionRequired, sessionId, streaming, streamState?.stopping])
 
   /** 重试：在当前会话中重新发送最后一条用户消息（不截断历史，追加新一轮） */
   const handleRetry = React.useCallback((): void => {
@@ -2904,12 +2873,23 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
    * `targetUuid` 省略仅出现在 `regenerate`：首轮就失败、没有可保留锚点，
    * 此时主进程会清空整段对话（而不是截断到某个点）。
    */
-  const [rewindRequest, setRewindRequest] = React.useState<{ targetUuid?: string; mode: 'rewind' | 'regenerate' } | null>(null)
+  const [rewindRequest, setRewindRequest] = React.useState<{
+    target: RewindTarget
+    intent: RewindDialogIntent
+    draft?: string
+    resendText?: string
+    retryDraft?: string
+  } | null>(null)
+  const rewindClient = React.useMemo<RewindClient>(() => ({
+    prepare: (input) => window.electronAPI.prepareRewind(input),
+    execute: (input) => window.electronAPI.executeRewind(input),
+    undo: (input) => window.electronAPI.undoRewind(input),
+  }), [])
   const [graphDialogOpen, setGraphDialogOpen] = React.useState(false)
   const [graphRefreshVersion, setGraphRefreshVersion] = React.useState(0)
 
   const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
-    setRewindRequest({ targetUuid: assistantMessageUuid, mode: 'rewind' })
+    setRewindRequest({ target: { kind: 'message', messageUuid: assistantMessageUuid }, intent: 'rewind' })
   }, [])
 
   /**
@@ -2928,85 +2908,40 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       })
       return
     }
-    setRewindRequest(target.kind === 'rewind'
-      ? { targetUuid: target.rewindToAssistantUuid, mode: 'regenerate' }
-      : { mode: 'regenerate' })
+    setRewindRequest({
+      target: target.kind === 'rewind' ? { kind: 'message', messageUuid: target.rewindToAssistantUuid } : { kind: 'session-start' },
+      intent: 'regenerate', draft: target.userMessage, resendText: target.userMessage,
+    })
   }, [persistedSDKMessages, streaming, backgroundWaiting])
 
-  const handleRewindConfirm = React.useCallback(async (): Promise<void> => {
-    if (!rewindRequest) return
-    const { targetUuid, mode } = rewindRequest
-    setRewindRequest(null)
-
-    // 重发的文本要在回退前取：回退后这条用户消息已从历史里消失。
-    const regenerateText = mode === 'regenerate'
-      ? resolveRegenerateTarget(persistedSDKMessages)?.userMessage
-      : undefined
-    if (mode === 'regenerate' && !regenerateText) {
-      toast.error('重新生成失败', { description: '未找到要重发的用户消息' })
+  const handleRewindCommitted = React.useCallback((result: RewindResult): void => {
+    const request = rewindRequest
+    if (!request) return
+    if (result.status !== 'committed') {
+      toast.error('回退未完成', { description: `执行状态：${result.status}` })
       return
     }
+    setRewindRequest(null)
+    if (request.intent === 'edit-resend') setEditingUserMessageUuid(null)
+    if (request.resendText) sendUserMessageInCurrentSession(request.resendText, request.retryDraft ?? request.resendText)
+    if (request.intent === 'rewind') toast.success('已回退对话')
+    store.set(stoppedByUserSessionsAtom, (prev: Set<string>) => {
+      if (!prev.has(sessionId)) return prev
+      const next = new Set(prev)
+      next.delete(sessionId)
+      return next
+    })
+    store.set(agentMessageRefreshAtom, (prev) => {
+      const map = new Map(prev); map.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return map
+    })
+    store.set(agentDiffRefreshVersionAtom, (prev) => {
+      const map = new Map(prev); map.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return map
+    })
+  }, [rewindRequest, sendUserMessageInCurrentSession, sessionId, store])
 
-    try {
-      const result = await window.electronAPI.rewindSession({
-        sessionId,
-        ...(targetUuid ? { assistantMessageUuid: targetUuid } : {}),
-      })
-
-      // 刷新消息列表
-      store.set(agentMessageRefreshAtom, (prev) => {
-        const map = new Map(prev)
-        map.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
-        return map
-      })
-
-      // 刷新预览面板的 diff（文件已被回退，当前显示的内容已过期）
-      store.set(agentDiffRefreshVersionAtom, (prev) => {
-        const m = new Map(prev); m.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return m
-      })
-
-      const fileRewind = result.fileRewind
-      const fileCount = fileRewind?.filesChanged?.length ?? 0
-      // 被浏览器/数据库等进程占用的文件无法进入快照，或根本没有可用快照时必须明确告知，
-      // 否则用户会误以为工作区已完全回到该时刻
-      const warnings = [
-        ...(fileRewind && !fileRewind.canRewind && fileRewind.error ? [`文件未回退：${fileRewind.error}`] : []),
-        ...((fileRewind?.skippedFiles?.length ?? 0) > 0 ? [`${fileRewind!.skippedFiles!.length} 个文件被占用或过大而未回退`] : []),
-        ...(fileRewind?.incomplete ? ['基线不完整，未确认的新增文件已保留'] : []),
-      ]
-
-      if (mode === 'regenerate') {
-        if (warnings.length > 0) {
-          toast.warning('已重新生成，但文件未完全回退', { description: warnings.join('；') })
-        }
-        sendUserMessageInCurrentSession(regenerateText!)
-        return
-      }
-
-      if (fileRewind?.canRewind) {
-        if (warnings.length > 0) {
-          toast.warning('已回退到此处', {
-            description: [`${fileCount} 个文件已恢复`, ...warnings].join('；'),
-          })
-        } else {
-          toast.success('已回退到此处', {
-            description: fileCount > 0 ? `${fileCount} 个文件已恢复` : '文件无变化',
-          })
-        }
-      } else if (fileRewind?.error) {
-        toast.warning('已回退对话', {
-          description: `文件恢复不可用：${fileRewind.error}`,
-        })
-      } else {
-        toast.success('已回退到此处')
-      }
-    } catch (error) {
-      console.error('[AgentView] 回退失败:', error)
-      toast.error(mode === 'regenerate' ? '重新生成失败' : '回退失败', {
-        description: error instanceof Error ? error.message : '未知错误',
-      })
-    }
-  }, [rewindRequest, persistedSDKMessages, sendUserMessageInCurrentSession, sessionId, store])
+  const handleRewindError = React.useCallback((error: Error): void => {
+    toast.error(rewindRequest?.intent === 'regenerate' ? '重新生成失败' : rewindRequest?.intent === 'edit-resend' ? '修改重发失败' : '回退失败', { description: error.message })
+  }, [rewindRequest])
 
   // 父会话与右侧探索分支会同时挂载；快捷键只归当前可见工作面，避免一次停止两个并行 run。
   React.useEffect(() => {
@@ -3475,33 +3410,17 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       </DialogContent>
     </Dialog>
 
-    {/* 回退 / 重新生成确认弹窗 */}
-    <AlertDialog
+    <RewindDialog
       open={rewindRequest !== null}
-      onOpenChange={(v) => { if (!v) setRewindRequest(null) }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{rewindRequest?.mode === 'regenerate' ? '确认重新生成' : '确认回退'}</AlertDialogTitle>
-          <AlertDialogDescription>
-            {rewindRequest?.mode === 'regenerate'
-              ? (rewindRequest.targetUuid
-                  ? '重新生成会先截断最后一轮对话（整个一问一答）再重发该消息，并恢复工作区文件。此操作不可撤销，确定要继续吗？'
-                  : '这条消息前面还没有可保留的回复（首轮就失败了）：重新生成会清空整段对话后重发该消息，并恢复文件到会话开始时的状态。此操作不可撤销，确定要继续吗？')
-              : '回退将截断该消息之后的所有对话，并恢复工作区文件。此操作不可撤销，确定要回退吗？'}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>取消</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={handleRewindConfirm}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          >
-            {rewindRequest?.mode === 'regenerate' ? '重新生成' : '回退'}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+      onOpenChange={(open) => { if (!open) setRewindRequest(null) }}
+      sessionId={sessionId}
+      target={rewindRequest?.target ?? { kind: 'session-start' }}
+      client={rewindClient}
+      intent={rewindRequest?.intent ?? 'rewind'}
+      draft={rewindRequest?.draft}
+      onCommitted={handleRewindCommitted}
+      onError={handleRewindError}
+    />
 
     </>
   )

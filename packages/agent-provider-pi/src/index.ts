@@ -28,3 +28,8 @@ export type {
   PiPermissionUpdate,
   PiPermissionUpdateDestination,
 } from './permission'
+export type {
+  PiFileMutationEvidence,
+  PiFileVersion,
+  PiStoredFileVersion,
+} from './pi/rewind-evidence'

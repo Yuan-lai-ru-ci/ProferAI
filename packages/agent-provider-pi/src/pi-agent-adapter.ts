@@ -10,8 +10,8 @@ import type { CommandExecutionPort, BackgroundTaskPort, ProcessRegistrationPort,
 import { createPiCommandBashOperations } from './pi/command-bash'
 import { prependPiCompactionTaskGuidance } from '@profer/shared'
 
-import { diffSnapshots, snapshotTree } from './pi/file-write-snapshot'
 import { FileReadTracker, isTruncatedReadOutput, readFileState } from './pi/file-read-tracker'
+import { runWithPiFileMutationEvidence, type PiFileMutationEvidence } from './pi/rewind-evidence'
 import type { PiAgentAdapterPorts, PiProviderHostDependencies } from './ports'
 import type { Dispatcher } from 'undici'
 import { buildWslBashArgs, windowsPathToWslPath, executeWslBashCommand, executeLocalBashCommand, waitForLocalBashProcess, classifyLocalBashFailure } from './pi/shell-execution'
@@ -137,6 +137,9 @@ export interface FileWriteFact {
   source: 'write' | 'edit' | 'bash'
 }
 
+/** Versioned evidence for a write/edit tool; Bash remains observation-only. */
+export type PiFileMutationFact = PiFileMutationEvidence
+
 type PiRetrySettings = {
   enabled: boolean
   maxRetries?: number
@@ -196,6 +199,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onSessionId?: (sdkSessionId: string, sessionFile?: string) => void
   /** Profer assistant UI UUID → Pi 树状 session entry ID 的持久映射；分叉/回退依赖它定位 branch 点。 */
   onPiEntryBindings?: (bindings: Record<string, string>) => void
+  /** Host-owned logical turn boundaries; observer failures never affect the provider run. */
+  onRewindTurn?: (event: { phase: 'begin' | 'complete' | 'fail'; turnId: string; terminalEntryId?: string; timestamp: number }) => void | Promise<void>
   onModelResolved?: (model: string) => void
   onContextWindow?: (contextWindow: number) => void
   onRetry?: (update: import('./pi/retry-control').PiRetryUpdate) => void
@@ -207,6 +212,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
    * 渲染层用它替代「从命令文本猜路径」，因此这里只报确定发生过的写入。
    */
   onFileWrite?: (toolCallId: string, fact: FileWriteFact) => void
+  /** Versioned before/after evidence for controlled write/edit operations. */
+  onFileMutation?: (fact: PiFileMutationFact) => void | Promise<void>
   /** Passive lifecycle feed for Pi Host Harness; observers cannot control Session or queue prompts. */
   onHarnessLifecycle?: PiHarnessLifecycleObserver
   thinkingLevel?: AgentThinkingLevel
@@ -1478,6 +1485,30 @@ function reportFileWrite(
   }
 }
 
+async function runControlledFileWrite(
+  path: string,
+  source: 'write' | 'edit',
+  write: () => Promise<void>,
+  onFileWrite: PiAgentQueryOptions['onFileWrite'] | undefined,
+  onFileMutation: PiAgentQueryOptions['onFileMutation'] | undefined,
+): Promise<void> {
+  const toolCallId = piToolExecutionContext.getStore()?.toolCallId
+  if (!toolCallId || !onFileMutation) {
+    await write()
+    if (toolCallId) reportFileWrite(onFileWrite, path, source)
+    return
+  }
+  await runWithPiFileMutationEvidence({
+    path,
+    source,
+    toolCallId,
+    write: async () => {
+      await write()
+      reportFileWrite(onFileWrite, path, source)
+    },
+    onMutation: onFileMutation,
+  })
+}
 function commandExecutionFailureError(result: CommandExecutionResult): Error {
   const message = result.errorKind === 'shell_not_found'
     ? `Bash 启动失败：shell_not_found（未找到可用的 Bash）`
@@ -1567,32 +1598,9 @@ export function createControlledLocalBashOperations(
 }
 
 /**
- * 给任意 BashOperations 包一层「执行前后工作目录快照」。
- *
- * Bash 里的 `sed -i`、`python3 -c "open(...)"`、heredoc 不经过受控 operations，
- * 只能靠前后对比拿到真实写入。快照失败/超预算时安静跳过，不影响命令本身。
+ * Bash may write arbitrary paths; a directory diff cannot prove session ownership.
+ * Keep Bash execution evidence, but do not recursively scan cwd or attribute files.
  */
-function withWriteTracking(
-  operations: BashOperations,
-  onFileWrite: PiAgentQueryOptions['onFileWrite'] | undefined,
-): BashOperations {
-  if (!onFileWrite) return operations
-  return {
-    async exec(command, cwd, options) {
-      const before = await snapshotTree(cwd)
-      try {
-        return await operations.exec(command, cwd, options)
-      } finally {
-        if (before) {
-          const after = await snapshotTree(cwd)
-          if (after) {
-            for (const path of diffSnapshots(before, after)) reportFileWrite(onFileWrite, path, 'bash')
-          }
-        }
-      }
-    },
-  }
-}
 
 function createProferBashToolOptions(
   sessionId: string,
@@ -1601,7 +1609,6 @@ function createProferBashToolOptions(
   commands?: CommandExecutionPort,
   backgroundTasks: BackgroundTaskPort = noOpBackgroundTasks,
   processRegistration: ProcessRegistrationPort = defaultProcessRegistrationPort,
-  onFileWrite?: PiAgentQueryOptions['onFileWrite'],
 ): BashToolOptions | undefined {
   const taskIds = new Map<string, string>()
   const currentToolCallId = (): string | undefined => piToolExecutionContext.getStore()?.toolCallId
@@ -1633,7 +1640,7 @@ function createProferBashToolOptions(
   if (commands) {
     return {
       spawnHook,
-      operations: withWriteTracking(createPiCommandBashOperations({
+      operations: createPiCommandBashOperations({
         commands,
         prepare(_command, cwd) {
           if (runtimeEnv?.shellKind === 'wsl') {
@@ -1669,36 +1676,37 @@ function createProferBashToolOptions(
             clearTaskId()
           }
         },
-      }), onFileWrite),
+      }),
     }
   }
 
   if (runtimeEnv?.shellKind === 'wsl') {
     return {
-      operations: withWriteTracking(
-        createWslBashOperations(runtimeEnv, sessionId, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
-        onFileWrite,
-      ),
+      operations: createWslBashOperations(runtimeEnv, sessionId, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
       spawnHook,
     }
   }
 
   return {
-    operations: withWriteTracking(
-      createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
-      onFileWrite,
-    ),
+    operations: createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
     spawnHook,
   }
 }
 
 
-function createStrictWriteOperations(onFileWrite?: PiAgentQueryOptions['onFileWrite']) {
+function createStrictWriteOperations(
+  onFileWrite?: PiAgentQueryOptions['onFileWrite'],
+  onFileMutation?: PiAgentQueryOptions['onFileMutation'],
+) {
   return {
     async writeFile(path: string, content: string): Promise<void> {
-      await writeFileAsync(path, content, 'utf-8')
-      // 落盘成功后再上报：失败写入不应该出现在「本轮改动」里。
-      reportFileWrite(onFileWrite, path, 'write')
+      await runControlledFileWrite(
+        path,
+        'write',
+        () => writeFileAsync(path, content, 'utf-8'),
+        onFileWrite,
+        onFileMutation,
+      )
     },
     async mkdir(dir: string): Promise<void> {
       const info = await statAsync(dir).catch(() => undefined)
@@ -1715,12 +1723,20 @@ function createStrictWriteOperations(onFileWrite?: PiAgentQueryOptions['onFileWr
  * 行为与 SDK 默认的 `defaultEditOperations` 一致（读 Buffer、写 utf-8、R/W 校验），
  * 只在写盘后多上报一次路径，让渲染层无需再从消息文本推断。
  */
-function createTrackedEditOperations(onFileWrite?: PiAgentQueryOptions['onFileWrite']) {
+function createTrackedEditOperations(
+  onFileWrite?: PiAgentQueryOptions['onFileWrite'],
+  onFileMutation?: PiAgentQueryOptions['onFileMutation'],
+) {
   return {
     readFile: (path: string) => readFileAsync(path),
     writeFile: async (path: string, content: string): Promise<void> => {
-      await writeFileAsync(path, content, 'utf-8')
-      reportFileWrite(onFileWrite, path, 'edit')
+      await runControlledFileWrite(
+        path,
+        'edit',
+        () => writeFileAsync(path, content, 'utf-8'),
+        onFileWrite,
+        onFileMutation,
+      )
     },
     access: (path: string) => accessAsync(path, fsConstants.R_OK | fsConstants.W_OK),
   }
@@ -1822,16 +1838,17 @@ export function buildBuiltinToolDefinitions(
   backgroundTasks?: BackgroundTaskPort,
   processRegistration?: ProcessRegistrationPort,
   onFileWrite?: PiAgentQueryOptions['onFileWrite'],
+  onFileMutation?: PiAgentQueryOptions['onFileMutation'],
 ): ToolDefinition[] {
   const powerShellTool = commands
     ? createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId, commands, backgroundTasks, processRegistration)
     : createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId)
-  const writeTool = sdk.createWriteToolDefinition(cwd, { operations: createStrictWriteOperations(onFileWrite) })
+  const writeTool = sdk.createWriteToolDefinition(cwd, { operations: createStrictWriteOperations(onFileWrite, onFileMutation) })
   const definitions = [
     sdk.createReadToolDefinition(cwd),
-    sdk.createBashToolDefinition(cwd, createProferBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult, commands, backgroundTasks, processRegistration, onFileWrite)),
+    sdk.createBashToolDefinition(cwd, createProferBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult, commands, backgroundTasks, processRegistration)),
     ...(powerShellTool ? [powerShellTool] : []),
-    sdk.createEditToolDefinition(cwd, { operations: createTrackedEditOperations(onFileWrite) }),
+    sdk.createEditToolDefinition(cwd, { operations: createTrackedEditOperations(onFileWrite, onFileMutation) }),
     {
       ...writeTool,
       description: 'Write content to a file. Creates the file if it does not exist, overwrites if it does. The parent directory must already exist; Profer will not create it implicitly.',
@@ -1939,6 +1956,14 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     this.activeSessions.set(input.sessionId, active)
     input.onRuntimeRegistered?.()
     const queue = createAsyncQueue<SDKMessage>()
+    const rewindTurnId = input.metadata?.rewindTurnId
+    let rewindTurnSettled = false
+    const reportRewindTurn = async (event: { phase: 'begin' | 'complete' | 'fail'; turnId: string; terminalEntryId?: string; timestamp: number }): Promise<void> => {
+      if (typeof rewindTurnId !== 'string') return
+      try { await input.onRewindTurn?.(event) }
+      catch (error) { console.warn('[Pi adapter] rewind lifecycle 记录失败，忽略:', error) }
+    }
+    if (typeof rewindTurnId === 'string') await reportRewindTurn({ phase: 'begin', turnId: rewindTurnId, timestamp: Date.now() })
     const runtimeGuard = createAgentRuntimeGuard(input)
     active.runtimeGuard = runtimeGuard
     let unsubscribe: (() => void) | undefined
@@ -2014,6 +2039,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           input.backgroundTasks,
           input.processRegistration,
           input.onFileWrite,
+          input.onFileMutation,
         ),
         ...buildProferProductToolDefinitions(sdk, input.canUseTool),
       ])
@@ -2593,23 +2619,36 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         }
 
         runCompactionAwareChain()
-          .then(() => {
+          .then(async () => {
             // 若 agent_end 已把终态 result 存入 pendingTerminalResult（等待 overflow 压缩），
             // 在 prompt 链最终落定后必须 flush 出来，否则上层会因本轮无 result 而误判。
             if (pendingTerminalResult) {
               queue.push(pendingTerminalResult)
               pendingTerminalResult = undefined
             }
-            // prompt 链结束后 Pi 已落盘；此时从 SessionManager entries 精确取得 entry ID 映射，
-            // 供分叉/回退定位 branch 点使用。
             persistPiEntryBindings()
+            if (typeof rewindTurnId === 'string' && !rewindTurnSettled) {
+              const terminalEntryId = sessionManager.getLeafId() ?? undefined
+              rewindTurnSettled = true
+              await reportRewindTurn({ phase: terminalEntryId ? 'complete' : 'fail', turnId: rewindTurnId, terminalEntryId, timestamp: Date.now() })
+            }
             queue.close()
           })
-          .catch((error) => queue.fail(error))
+          .catch(async (error) => {
+            if (typeof rewindTurnId === 'string' && !rewindTurnSettled) {
+              rewindTurnSettled = true
+              await reportRewindTurn({ phase: 'fail', turnId: rewindTurnId, timestamp: Date.now() })
+            }
+            queue.fail(error)
+          })
           .finally(cleanupActiveSession)
       }
     } catch (error) {
       rejectActiveReady(active, error)
+      if (typeof rewindTurnId === 'string' && !rewindTurnSettled) {
+        rewindTurnSettled = true
+        await reportRewindTurn({ phase: 'fail', turnId: rewindTurnId, timestamp: Date.now() })
+      }
       queue.fail(error)
     }
 

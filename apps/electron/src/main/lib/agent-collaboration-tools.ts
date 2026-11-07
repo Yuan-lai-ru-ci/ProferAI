@@ -11,12 +11,19 @@ import type {
   AgentSessionMeta,
   AgentStreamPayload,
   AskUserRequest,
+  DelegationBlockedEvent,
   PermissionRequest,
   PresetReference,
   ProferPermissionMode,
   SDKMessage,
 } from '@profer/shared'
 import { filterDisabledTools } from '@profer/shared'
+import {
+  DelegationBlockedRegistry,
+  decideDelegationBlockedWake,
+  waitForDelegationProgress,
+  type DelegationProgressWaitResult,
+} from '@profer/agent-runtime'
 import {
   createAgentSession,
   getAgentSessionMeta,
@@ -115,20 +122,17 @@ const AUTO_CONTINUATION_SUMMARY_LIMIT = 24_000
 
 // ===== 阻塞事件追踪 =====
 
-interface BlockedEvent {
-  id: string
-  delegationId: string
-  childSessionId: string
-  type: 'ask_user' | 'permission'
-  askUserRequestId?: string
-  askUserQuestions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }> }>
-  permissionRequestId?: string
-  permissionToolName?: string
-  resolved: boolean
-  createdAt: number
-}
+/**
+ * 阻塞事件状态与唤醒判定都在 `@profer/agent-runtime`，这里只做宿主接线：
+ * 登记事件、唤醒父会话、把用户/父会话的回答映射回子会话。
+ */
+const blockedEvents = new DelegationBlockedRegistry()
 
-const blockedEvents = new Map<string, BlockedEvent>()
+/**
+ * 唤醒父会话按父会话串行：同一批阻塞只拉起一轮，避免多个子会话同时提问把父会话拉起多次。
+ * 锁窗口内新到的阻塞在释放后复查一次。
+ */
+const parentBlockedWakeLocks = new Set<string>()
 
 let _eventBusRegistered = false
 let _eventBusRef: import('./agent-event-bus').AgentEventBus | null = null
@@ -141,7 +145,11 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
   eventBus.on((sessionId: string, payload: AgentStreamPayload) => {
     if (payload.kind === 'profer_event' && payload.event.type === 'run_idle') {
       // 父会话本身没有 child 记录，必须先处理 idle，不能被下方 child 过滤吞掉。
-      if (isDelegationParent(sessionId)) scheduleParentAutoContinuation(sessionId)
+      if (isDelegationParent(sessionId)) {
+        scheduleParentAutoContinuation(sessionId)
+        // 阻塞可能发生在父会话运行期间（当时不打断）；父会话空闲后补一次决策机会。
+        wakeParentForBlockedDelegations(sessionId)
+      }
       return
     }
     const record = Array.from(delegations.values()).find((d) => d.childSessionId === sessionId)
@@ -151,67 +159,46 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
     const event = payload.event
     if (event.type === 'ask_user_request') {
       const req = event.request as AskUserRequest
-      const blocked: BlockedEvent = {
-        id: randomUUID(),
+      const blocked = blockedEvents.register({
         delegationId: record.delegationId,
         childSessionId: sessionId,
-        type: 'ask_user',
-        askUserRequestId: req.requestId,
-        askUserQuestions: req.questions.map((q) => ({
+        kind: 'ask_user',
+        requestId: req.requestId,
+        questions: req.questions.map((q) => ({
           question: q.question,
           header: q.header,
           options: q.options.map((o) => ({ label: o.label, description: o.description })),
         })),
-        resolved: false,
-        createdAt: Date.now(),
-      }
-      blockedEvents.set(blocked.id, blocked)
+      })
 
       eventBus.emit(record.parentSessionId, {
         kind: 'profer_event',
-        event: {
-          type: 'delegation_blocked' as const,
-          delegationId: record.delegationId,
-          blockedEvent: blocked,
-        } as unknown as import('@profer/shared').ProferEvent,
+        event: { type: 'delegation_blocked', delegationId: record.delegationId, blockedEvent: blocked },
       })
+      wakeParentForBlockedDelegations(record.parentSessionId)
     }
 
     if (event.type === 'permission_request') {
       const req = event.request as PermissionRequest
-      const blocked: BlockedEvent = {
-        id: randomUUID(),
+      const blocked = blockedEvents.register({
         delegationId: record.delegationId,
         childSessionId: sessionId,
-        type: 'permission',
-        permissionRequestId: req.requestId,
-        permissionToolName: req.toolName,
-        resolved: false,
-        createdAt: Date.now(),
-      }
-      blockedEvents.set(blocked.id, blocked)
+        kind: 'permission',
+        requestId: req.requestId,
+        toolName: req.toolName,
+      })
 
       eventBus.emit(record.parentSessionId, {
         kind: 'profer_event',
-        event: {
-          type: 'delegation_blocked' as const,
-          delegationId: record.delegationId,
-          blockedEvent: blocked,
-        } as unknown as import('@profer/shared').ProferEvent,
+        event: { type: 'delegation_blocked', delegationId: record.delegationId, blockedEvent: blocked },
       })
+      wakeParentForBlockedDelegations(record.parentSessionId)
     }
 
     if (event.type === 'ask_user_resolved' || event.type === 'permission_resolved') {
       const requestId = 'requestId' in event ? (event as { requestId: string }).requestId : undefined
-      if (requestId) {
-        for (const be of blockedEvents.values()) {
-          if (be.resolved) continue
-          if (be.askUserRequestId === requestId || be.permissionRequestId === requestId) {
-            be.resolved = true
-            break
-          }
-        }
-      }
+      // 用户直接回答（或父会话代答后广播）都会走到这里；已解决的事件不会被覆盖解决者。
+      if (requestId) blockedEvents.resolveByRequestId(requestId, 'answered_by_user')
     }
   })
 
@@ -226,11 +213,11 @@ function isDelegationParent(parentSessionId: string): boolean {
   return listAgentSessions(true).some((s) => s.parentSessionId === parentSessionId)
 }
 
-function getPendingBlockedEvents(delegationId: string): BlockedEvent[] {
-  return Array.from(blockedEvents.values()).filter((be) => be.delegationId === delegationId && !be.resolved)
+function getPendingBlockedEvents(delegationId: string): DelegationBlockedEvent[] {
+  return blockedEvents.pendingFor([delegationId])
 }
 
-function getBlockedEventById(blockedEventId: string): BlockedEvent | undefined {
+function getBlockedEventById(blockedEventId: string): DelegationBlockedEvent | undefined {
   return blockedEvents.get(blockedEventId)
 }
 
@@ -407,6 +394,8 @@ function markDelegationFinished(
       session: child,
     },
   })
+  // 子会话已结束，它名下的阻塞问题不再有回答对象。
+  blockedEvents.clearDelegation(record.delegationId)
   record.resolveCompletion()
   scheduleParentAutoContinuation(record.parentSessionId)
 }
@@ -499,6 +488,92 @@ function scheduleParentAutoContinuation(parentSessionId: string): void {
     parentAutoContinuationLocks.delete(parentSessionId)
     // 与 onComplete 同理：启动失败也复查，避免漏收锁窗口内完成的子会话。
     scheduleParentAutoContinuation(parentSessionId)
+  })
+}
+
+/**
+ * 子会话被阻塞时唤醒父会话，给它一次决策机会。
+ *
+ * 判定（是否唤醒、是否已唤醒过、提示词内容）全部在 `@profer/agent-runtime`，
+ * 这里只负责把父会话跑起来。父会话既没代答也没显式转交时，问题已经留在用户界面，
+ * 按「已转交用户」收口，避免同一事件反复唤醒。
+ */
+function wakeParentForBlockedDelegations(parentSessionId: string): void {
+  if (parentBlockedWakeLocks.has(parentSessionId)) return
+  // 只唤醒 subtask：independent 是保留来源的独立工作会话，不随父停止，也不应把父会话拉回来。
+  // 它被阻塞时父会话若正在 wait_for_delegations 仍会拿到 blocked，可自行决定是否代答。
+  const records = Array.from(delegations.values())
+    .filter((record) => record.parentSessionId === parentSessionId
+      && record.relation === 'subtask'
+      && record.status === 'running')
+  if (records.length === 0) return
+
+  const parent = getAgentSessionMeta(parentSessionId)
+  const parentChannelId = parent?.channelId
+  const pending = blockedEvents.pendingFor(records.map((record) => record.delegationId))
+  const decision = decideDelegationBlockedWake(pending, {
+    parentActive: isAgentSessionActive(parentSessionId),
+    parentStoppedByUser: parent?.stoppedByUser,
+    parentHasChannel: !!parentChannelId,
+    childTitles: Object.fromEntries(records.map((record) => [record.delegationId, record.title])),
+  })
+  if (decision.action === 'skip') {
+    if (decision.reason !== 'no_pending' && decision.reason !== 'already_handled') {
+      console.info('[协作] 跳过父会话阻塞唤醒', { parentSessionId, reason: decision.reason })
+    }
+    return
+  }
+  // 决策已保证父会话存在且有渠道；这里只做类型收窄。
+  if (!parent || !parentChannelId) return
+
+  parentBlockedWakeLocks.add(parentSessionId)
+  decision.eventIds.forEach((eventId) => blockedEvents.markWoken(eventId))
+  const settleUnanswered = (): void => {
+    for (const eventId of decision.eventIds) {
+      const event = blockedEvents.get(eventId)
+      if (event && !event.resolvedAt) blockedEvents.markEscalated(eventId)
+    }
+  }
+  const release = (): void => {
+    parentBlockedWakeLocks.delete(parentSessionId)
+    // 锁窗口期间新到的阻塞不能丢：释放后复查一次（已处理的事件会被去重跳过）。
+    queueMicrotask(() => wakeParentForBlockedDelegations(parentSessionId))
+  }
+
+  runAgentHeadless(
+    {
+      sessionId: parentSessionId,
+      messageAuthor: { type: 'system' },
+      taskOrigin: { actor: { type: 'system' }, source: { type: 'task', id: records[0]!.delegationId } },
+      taskAuthorization: { kind: 'inherited', sourceRef: { type: 'session', id: parentSessionId } },
+      triggerId: randomUUID(),
+      userMessage: decision.prompt,
+      channelId: parentChannelId,
+      modelId: parent.modelId,
+      workspaceId: parent.workspaceId,
+      permissionModeOverride: parent.permissionMode,
+      agentRuntime: parent.agentRuntime,
+      // 与结果回传一致：框架唤醒不是用户发起的轮次，不能开放预设写入等用户授权入口。
+      triggeredBy: 'delegation',
+      startedAt: Date.now(),
+    },
+    {
+      source: 'delegation',
+      onError: (error) => {
+        console.error(`[协作] 父会话阻塞唤醒失败: parentSessionId=${parentSessionId}`, error)
+        settleUnanswered()
+        release()
+      },
+      onComplete: () => {
+        settleUnanswered()
+        release()
+      },
+      onTitleUpdated: () => {},
+    },
+  ).catch((error: unknown) => {
+    console.error(`[协作] 启动父会话阻塞唤醒失败: parentSessionId=${parentSessionId}`, error)
+    settleUnanswered()
+    release()
   })
 }
 
@@ -733,37 +808,38 @@ function getFinishedDelegationCount(records: DelegationRecord[]): number {
   return records.filter((record) => record.status !== 'running').length
 }
 
+/**
+ * 等待子会话进展：完成 / 阻塞 / 超时。
+ *
+ * 阻塞必须提前返回：子会话等父会话回答、父会话等子会话完成，不提前返回就是互锁。
+ */
 async function waitForLiveRecords(
   records: DelegationRecord[],
   timeoutSeconds: number,
   liveTarget: number,
-): Promise<'completed' | 'timeout'> {
-  if (getFinishedDelegationCount(records) >= liveTarget) {
-    return 'completed'
+): Promise<DelegationProgressWaitResult> {
+  const isCompleted = (): boolean => getFinishedDelegationCount(records) >= liveTarget
+  if (isCompleted()) return { status: 'completed' }
+
+  let resolveCompleted: () => void = () => {}
+  const completed = new Promise<void>((resolve) => {
+    resolveCompleted = resolve
+  })
+  const check = (): void => {
+    if (isCompleted()) resolveCompleted()
+  }
+  for (const record of records) {
+    if (record.status === 'running') record.completion.then(check)
   }
 
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      new Promise<'completed'>((resolve) => {
-        const check = () => {
-          if (getFinishedDelegationCount(records) >= liveTarget) {
-            resolve('completed')
-          }
-        }
-        for (const record of records) {
-          if (record.status === 'running') {
-            record.completion.then(check)
-          }
-        }
-      }),
-      new Promise<'timeout'>((resolve) => {
-        timeout = setTimeout(() => resolve('timeout'), timeoutSeconds * 1000)
-      }),
-    ])
-  } finally {
-    if (timeout) clearTimeout(timeout)
-  }
+  return waitForDelegationProgress({
+    registry: blockedEvents,
+    delegationIds: records.map((record) => record.delegationId),
+    completed,
+    isCompleted,
+    timeoutMs: timeoutSeconds * 1000,
+    initialBlocked: blockedEvents.pendingFor(records.map((record) => record.delegationId)),
+  })
 }
 
 function getCurrentParentPermissionMode(
@@ -1172,7 +1248,7 @@ export async function injectAgentCollaborationMcpServer(
       ),
       sdk.tool(
         'wait_for_delegations',
-        '等待一个或多个 Profer 协作子会话完成，并返回结构化结果摘要。支持 all 等全部完成，或 any 等部分完成。',
+        '等待一个或多个 Profer 协作子会话完成，并返回结构化结果摘要。支持 all 等全部完成，或 any 等部分完成。子会话被阻塞（提问/权限）时提前返回 status=blocked 与 blockedEvent，先决定代答或交给用户。',
         schemas.wait,
         async (args) => {
           const ids = args.delegationIds?.length
@@ -1193,20 +1269,24 @@ export async function injectAgentCollaborationMcpServer(
             ? totalTargets
             : Math.max(1, Math.min(minCompleted, totalTargets))
           const liveTarget = Math.max(0, targetCompleted - settled.length)
-          const waitResult = liveRecords.length > 0
+          const waitResult: DelegationProgressWaitResult = liveRecords.length > 0
             ? await waitForLiveRecords(liveRecords, timeoutSeconds, liveTarget)
-            : 'completed'
+            : { status: 'completed' }
 
           const allDelegations = [...liveRecords.map(getDelegationSummary), ...settled]
           for (const item of allDelegations) {
             if (item.status !== 'running' && typeof item.delegationId === 'string') acknowledgedDelegationResultIds.add(item.delegationId)
           }
           return jsonResult({
-            status: waitResult,
+            status: waitResult.status,
+            blockedEvent: waitResult.status === 'blocked' ? waitResult.event : undefined,
             mode,
             completedCount: allDelegations.filter((item) => item.status !== 'running').length,
             runningCount: allDelegations.filter((item) => item.status === 'running').length,
             delegations: allDelegations,
+            note: waitResult.status === 'blocked'
+              ? '子会话被阻塞：能确定答案就调用 answer_delegation_question 代答；确定不了就交给用户，问题已在用户界面等待回答。'
+              : undefined,
           })
         },
         { annotations: { readOnlyHint: true } },
@@ -1261,44 +1341,46 @@ export async function injectAgentCollaborationMcpServer(
       ),
       sdk.tool(
         'answer_delegation_question',
-        '代答协作子会话的阻塞问题（AskUserQuestion）或审批权限请求（Permission）。当子会话被阻塞时，父 Agent 可通过此工具代替用户回答，让子会话继续执行。从 delegation 的 pendingBlockedEvents 获取 blockedEventId。',
+        '代答协作子会话的阻塞问题（AskUserQuestion）或审批权限请求（Permission）。只有在能从用户指令或已核验上下文直接推出唯一答案时才代答；需要用户偏好、取舍或高风险授权时不要代答，问题会留在用户界面等待用户回答。从 blockedEvent 或 delegation 的 pendingBlockedEvents 获取 blockedEventId。',
         schemas.answer,
         async (args) => {
           const blocked = getBlockedEventById(args.blockedEventId)
           if (!blocked) throw new Error(`阻塞事件不存在: ${args.blockedEventId}`)
-          if (blocked.resolved) return jsonResult({ answered: false, note: '该阻塞事件已被解决' })
+          if (blocked.resolvedAt) return jsonResult({ answered: false, note: '该阻塞事件已被解决' })
 
           const record = delegations.get(blocked.delegationId)
           if (record && record.parentSessionId !== ctx.sessionId) {
             throw new Error(`委派不属于当前父会话: ${blocked.delegationId}`)
           }
 
-          if (blocked.type === 'ask_user' && blocked.askUserRequestId) {
+          if (blocked.kind === 'ask_user') {
             const { askUserService } = await import('./agent-ask-user-service')
             const answers = args.answers ?? {}
-            const sessionId = await askUserService.respondToAskUser(blocked.askUserRequestId, answers)
-            blocked.resolved = !!sessionId
-            if (blocked.resolved && _eventBusRef) {
+            const sessionId = await askUserService.respondToAskUser(blocked.requestId, answers)
+            const answered = !!sessionId
+            if (answered) blockedEvents.resolve(blocked.id, 'answered_by_parent')
+            if (answered && _eventBusRef) {
               _eventBusRef.emit(blocked.childSessionId, {
                 kind: 'profer_event',
-                event: { type: 'ask_user_resolved', requestId: blocked.askUserRequestId },
+                event: { type: 'ask_user_resolved', requestId: blocked.requestId },
               })
             }
-            return jsonResult({ answered: blocked.resolved, type: 'ask_user' })
+            return jsonResult({ answered, type: 'ask_user' })
           }
 
-          if (blocked.type === 'permission' && blocked.permissionRequestId) {
+          if (blocked.kind === 'permission') {
             const { permissionService } = await import('./agent-permission-service')
             const behavior = args.permissionBehavior ?? 'allow'
-            const sessionId = permissionService.respondToPermission(blocked.permissionRequestId, behavior, false)
-            blocked.resolved = !!sessionId
-            if (blocked.resolved && _eventBusRef) {
+            const sessionId = permissionService.respondToPermission(blocked.requestId, behavior, false)
+            const answered = !!sessionId
+            if (answered) blockedEvents.resolve(blocked.id, 'answered_by_parent')
+            if (answered && _eventBusRef) {
               _eventBusRef.emit(blocked.childSessionId, {
                 kind: 'profer_event',
-                event: { type: 'permission_resolved', requestId: blocked.permissionRequestId, behavior },
+                event: { type: 'permission_resolved', requestId: blocked.requestId, behavior },
               })
             }
-            return jsonResult({ answered: blocked.resolved, type: 'permission', behavior })
+            return jsonResult({ answered, type: 'permission', behavior })
           }
 
           return jsonResult({ answered: false, note: '无法匹配阻塞事件类型' })
@@ -1349,13 +1431,16 @@ export async function injectAgentCollaborationMcpServer(
             })
           })
 
-          await waitForLiveRecords([record], DEFAULT_WAIT_SECONDS, 1)
+          const waitResult = await waitForLiveRecords([record], DEFAULT_WAIT_SECONDS, 1)
 
           const delegation = getDelegationSummary(record)
           if (delegation.status !== 'running') acknowledgedDelegationResultIds.add(record.delegationId)
           return jsonResult({
             delegation,
-            note: delegation.status === 'running' ? '子会话仍在运行中（等待超时），可稍后用 wait_for_delegations 等待结果。' : undefined,
+            blockedEvent: waitResult.status === 'blocked' ? waitResult.event : undefined,
+            note: waitResult.status === 'blocked'
+              ? '子会话被阻塞：能确定答案就代答，确定不了就交给用户。'
+              : delegation.status === 'running' ? '子会话仍在运行中（等待超时），可稍后用 wait_for_delegations 等待结果。' : undefined,
           })
         },
       ),
@@ -1484,7 +1569,7 @@ export function buildPiCollaborationTools(
     sdk.defineTool({
       name: 'mcp__collaboration__wait_for_delegations',
       label: '等待子会话完成',
-      description: '等待一个或多个 Profer 协作子会话完成，并返回结构化结果摘要。',
+      description: '等待一个或多个 Profer 协作子会话完成，并返回结构化结果摘要。子会话被阻塞时提前返回 blocked 状态。',
       parameters: Type.Object({
         delegationIds: Type.Optional(Type.Array(Type.String(), { description: '要等待的委派 ID' })),
         mode: Type.Optional(Type.Union([Type.Literal('all'), Type.Literal('any')])),
@@ -1508,19 +1593,23 @@ export function buildPiCollaborationTools(
         const timeoutSeconds = Math.min(args.timeoutSeconds ?? DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS)
         const targetCompleted = mode === 'all' ? totalTargets : Math.max(1, Math.min(minCompleted, totalTargets))
         const liveTarget = Math.max(0, targetCompleted - settled.length)
-        const waitResult = liveRecords.length > 0
+        const waitResult: DelegationProgressWaitResult = liveRecords.length > 0
           ? await waitForLiveRecords(liveRecords, timeoutSeconds, liveTarget)
-          : 'completed'
+          : { status: 'completed' }
         const allDelegations = [...liveRecords.map(getDelegationSummary), ...settled]
         for (const item of allDelegations) {
           if (item.status !== 'running' && typeof item.delegationId === 'string') acknowledgedDelegationResultIds.add(item.delegationId)
         }
         return piJsonResult({
-          status: waitResult,
+          status: waitResult.status,
+          blockedEvent: waitResult.status === 'blocked' ? waitResult.event : undefined,
           mode,
           completedCount: allDelegations.filter((item) => item.status !== 'running').length,
           runningCount: allDelegations.filter((item) => item.status === 'running').length,
           delegations: allDelegations,
+          note: waitResult.status === 'blocked'
+            ? '子会话被阻塞：能确定答案就调用 answer_delegation_question 代答；确定不了就交给用户，问题已在用户界面等待回答。'
+            : undefined,
         })
       },
     }),
@@ -1589,7 +1678,7 @@ export function buildPiCollaborationTools(
     sdk.defineTool({
       name: 'mcp__collaboration__answer_delegation_question',
       label: '代答子会话问题',
-      description: '代答协作子会话的阻塞问题或审批权限请求。从 delegation 的 pendingBlockedEvents 获取 blockedEventId。',
+      description: '代答协作子会话的阻塞问题或审批权限请求。能确定答案才代答，否则交给用户。从 blockedEvent 的 id 获取 blockedEventId。',
       parameters: Type.Object({
         delegationId: Type.String({ description: '子会话所属的委派 ID' }),
         blockedEventId: Type.String({ description: '要回答的阻塞事件 ID' }),
@@ -1600,39 +1689,41 @@ export function buildPiCollaborationTools(
         const args = params as { delegationId: string; blockedEventId: string; answers?: Record<string, string>; permissionBehavior?: 'allow' | 'deny' }
         const blocked = getBlockedEventById(args.blockedEventId)
         if (!blocked) throw new Error(`阻塞事件不存在: ${args.blockedEventId}`)
-        if (blocked.resolved) return piJsonResult({ answered: false, note: '该阻塞事件已被解决' })
+        if (blocked.resolvedAt) return piJsonResult({ answered: false, note: '该阻塞事件已被解决' })
 
         const record = delegations.get(blocked.delegationId)
         if (record && record.parentSessionId !== ctx.sessionId) {
           throw new Error(`委派不属于当前父会话: ${blocked.delegationId}`)
         }
 
-        if (blocked.type === 'ask_user' && blocked.askUserRequestId) {
+        if (blocked.kind === 'ask_user') {
           const { askUserService } = await import('./agent-ask-user-service')
           const answers = args.answers ?? {}
-          const sessionId = await askUserService.respondToAskUser(blocked.askUserRequestId, answers)
-          blocked.resolved = !!sessionId
-          if (blocked.resolved && _eventBusRef) {
+          const sessionId = await askUserService.respondToAskUser(blocked.requestId, answers)
+          const answered = !!sessionId
+          if (answered) blockedEvents.resolve(blocked.id, 'answered_by_parent')
+          if (answered && _eventBusRef) {
             _eventBusRef.emit(blocked.childSessionId, {
               kind: 'profer_event',
-              event: { type: 'ask_user_resolved', requestId: blocked.askUserRequestId },
+              event: { type: 'ask_user_resolved', requestId: blocked.requestId },
             })
           }
-          return piJsonResult({ answered: blocked.resolved, type: 'ask_user' })
+          return piJsonResult({ answered, type: 'ask_user' })
         }
 
-        if (blocked.type === 'permission' && blocked.permissionRequestId) {
+        if (blocked.kind === 'permission') {
           const { permissionService } = await import('./agent-permission-service')
           const behavior = args.permissionBehavior ?? 'allow'
-          const sessionId = permissionService.respondToPermission(blocked.permissionRequestId, behavior, false)
-          blocked.resolved = !!sessionId
-          if (blocked.resolved && _eventBusRef) {
+          const sessionId = permissionService.respondToPermission(blocked.requestId, behavior, false)
+          const answered = !!sessionId
+          if (answered) blockedEvents.resolve(blocked.id, 'answered_by_parent')
+          if (answered && _eventBusRef) {
             _eventBusRef.emit(blocked.childSessionId, {
               kind: 'profer_event',
-              event: { type: 'permission_resolved', requestId: blocked.permissionRequestId, behavior },
+              event: { type: 'permission_resolved', requestId: blocked.requestId, behavior },
             })
           }
-          return piJsonResult({ answered: blocked.resolved, type: 'permission', behavior })
+          return piJsonResult({ answered, type: 'permission', behavior })
         }
 
         return piJsonResult({ answered: false, note: '无法匹配阻塞事件类型' })
@@ -1688,13 +1779,16 @@ export function buildPiCollaborationTools(
           })
         })
 
-        await waitForLiveRecords([record], DEFAULT_WAIT_SECONDS, 1)
+        const waitResult = await waitForLiveRecords([record], DEFAULT_WAIT_SECONDS, 1)
 
         const delegation = getDelegationSummary(record)
         if (delegation.status !== 'running') acknowledgedDelegationResultIds.add(record.delegationId)
         return piJsonResult({
           delegation,
-          note: delegation.status === 'running' ? '子会话仍在运行中（等待超时），可稍后用 wait_for_delegations 等待结果。' : undefined,
+          blockedEvent: waitResult.status === 'blocked' ? waitResult.event : undefined,
+          note: waitResult.status === 'blocked'
+            ? '子会话被阻塞：能确定答案就代答，确定不了就交给用户。'
+            : delegation.status === 'running' ? '子会话仍在运行中（等待超时），可稍后用 wait_for_delegations 等待结果。' : undefined,
         })
       },
     }),

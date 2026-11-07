@@ -21,6 +21,7 @@ import { injectGoalProposalMcpServer } from './goal-proposal-tools'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { createRewindStore } from '@profer/session-store'
 import { existsSync, mkdirSync, appendFileSync } from 'node:fs'
 import type {
   AgentSendInput,
@@ -64,7 +65,6 @@ import {
   getChannelById,
   isCommercialMode,
   listChannels,
-  canSelfConfig,
   persistCodexOAuthCredentials,
   resolveCodexOAuthCredentials,
 } from './channel-manager'
@@ -72,11 +72,24 @@ import { AgentEventBus } from './agent-event-bus'
 import { appendRunOriginPrompt, createRunTriggerMessage, createAgentRunContext, resolveAgentInputOperationSource, stampRunMessage, createAgentQueryPreparationPort, createAgentRunOwnershipRegistry, createAgentRunOwnershipView, createAgentRunRejectionError, createAgentStreamDrainController, readAgentStreamNext, waitForRetryDelay } from '@profer/agent-runtime'
 import type { AgentRunOwnershipRegistry, AgentRunOwnershipView, AgentRuntimeQuery, AgentRuntimeQueryPreparationPort, AgentStreamDrainState } from '@profer/agent-runtime'
 import type { AgentRunLedger, AgentRunContext, AgentRun, AgentRuntimePorts, CredentialPort, EventPort, PermissionPort, PreviewPort, ResourcePort, RuntimeCanUseTool, RuntimePermissionResult, SessionPort, ToolAssemblyPort } from '@profer/agent-runtime'
-// 只借 provider 的 settings 形状：内联设置的字段必须与 SDK `Settings` 一致（类型仅编译期擦除）。
 import type { ClaudeAgentQueryOptions } from '@profer/agent-provider-claude'
+function relativeWorkspacePath(sessionId: string, path: string): { rootId: string; relativePath: string; coverage: 'managed' | 'project' } | undefined {
+  const meta = getAgentSessionMeta(sessionId)
+  const workspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+  if (!meta || !workspace) return undefined
+  const rootPath = workspace.storageMode === 'project' ? workspace.rootPath : getAgentSessionCwd(workspace.slug, sessionId)
+  if (!rootPath) return undefined
+  const prefix = rootPath.endsWith('/') ? rootPath : `${rootPath}/`
+  if (path !== rootPath && !path.startsWith(prefix)) return undefined
+  const relativePath = path.slice(prefix.length)
+  if (!relativePath || relativePath.split('/').some(part => part === '.' || part === '..' || part === '')) return undefined
+  return { rootId: workspace.id, relativePath, coverage: workspace.storageMode === 'project' ? 'project' : 'managed' }
+}
+
 import { injectAutomationMcpServer } from './automation-agent-tools'
 import { injectMemoryArchiveMcpServer } from './memory-archive-agent-tools'
 import { injectGlobalMemoryTools } from './global-memory-agent-tools'
+import { createElectronClaudeRewindEvidencePort } from './agent-rewind-claude-evidence'
 import { injectTaskGraphMcpServer } from './task-graph-agent-tools'
 import { injectAgentPresetMcpServer } from './agent-preset-tools'
 import {
@@ -139,7 +152,9 @@ import {
   getWorkspaceMemoryArchivePath,
   ensurePluginManifest,
 } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getPiTranscriptDirForSession, agentSessionVisualizationsDir, getPiCheckpointsDir, getSdkConfigDir } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getPiTranscriptDirForSession, agentSessionVisualizationsDir, getPiCheckpointsDir, getSdkConfigDir, getAgentSessionCwd } from './config-paths'
+import { createElectronSessionStorePaths } from './session-store-host'
+import { loadPiRewindTracker, persistPiRewindTracker } from './agent-rewind-pi'
 import { prepareRuntimeSkills } from './global-skill-manager'
 import { buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
@@ -2434,7 +2449,7 @@ export class AgentOrchestrator {
         // Pi must receive the channel model unchanged: Claude's `[1m]` suffix is not a provider model ID.
         model: agentRuntime === 'pi' ? selectedModelId : effectiveSdkModelId,
         cwd: agentCwd,
-        ...(agentRuntime === 'claude' && { sdkCliPath: cliPath, env: sdkEnv }),
+        ...(agentRuntime === 'claude' && { sdkCliPath: cliPath, env: sdkEnv, rewindEvidence: createElectronClaudeRewindEvidencePort() }),
         // project 下把 storageDir 那份设置内联给 SDK（flag settings 层）；managed 不传，走 cwd 文件。
         ...(agentRuntime === 'claude' && claudeInlineSdkSettings && { settings: claudeInlineSdkSettings }),
         ...(agentRuntime === 'pi' && {
@@ -2452,6 +2467,31 @@ export class AgentOrchestrator {
           runtimeEnv: piRuntimeEnv,
           onToolExecutionResult: (toolCallId: string, result: CommandExecutionResult) => {
             executionResultsByToolUse.set(toolCallId, result)
+          },
+          metadata: { rewindTurnId: input.uuid ?? `turn-${Date.now()}` },
+          onRewindTurn: async (event: { phase: 'begin' | 'complete' | 'fail'; turnId: string; terminalEntryId?: string; timestamp: number }) => {
+            const tracker = await loadPiRewindTracker(join(createElectronSessionStorePaths().rewindDir, sessionId, 'pi-tracker.json'), sessionId)
+            if (event.phase === 'begin') tracker.beginTurn(event.turnId, event.timestamp)
+            else if (event.phase === 'complete') tracker.completeTurn(event.turnId, event.terminalEntryId, event.timestamp)
+            else tracker.failTurn(event.turnId, event.timestamp)
+            await persistPiRewindTracker(join(createElectronSessionStorePaths().rewindDir, sessionId, 'pi-tracker.json'), tracker)
+          },
+          onFileMutation: async (evidence: import('@profer/agent-provider-pi').PiFileMutationFact) => {
+            const scope = relativeWorkspacePath(sessionId, evidence.path)
+            const store = createRewindStore(createElectronSessionStorePaths(), sessionId)
+            const [beforeBackup, afterBackup] = await Promise.all([
+              evidence.beforeContent ? store.putVersion({ kind: 'file', content: evidence.beforeContent }) : Promise.resolve(evidence.before?.kind === 'absent' ? { kind: 'absent' as const } : undefined),
+              evidence.afterContent ? store.putVersion({ kind: 'file', content: evidence.afterContent }) : Promise.resolve(evidence.after?.kind === 'absent' ? { kind: 'absent' as const } : undefined),
+            ])
+            const tracker = await loadPiRewindTracker(join(createElectronSessionStorePaths().rewindDir, sessionId, 'pi-tracker.json'), sessionId)
+            tracker.recordMutation(input.uuid ?? `turn-${Date.now()}`, {
+              ...evidence,
+              ...(scope ?? {}),
+              ...(scope ? { coverage: scope.coverage } : {}),
+              ...(beforeBackup ? { beforeBackup } : {}),
+              ...(afterBackup ? { afterBackup } : {}),
+            })
+            await persistPiRewindTracker(join(createElectronSessionStorePaths().rewindDir, sessionId, 'pi-tracker.json'), tracker)
           },
           onFileWrite: (toolCallId: string, fact: { path: string; source: string }) => {
             // 会话私有存储目录是 Agent 的草稿区：截图、临时产物、.context 草稿都不是用户要 review 的改动。

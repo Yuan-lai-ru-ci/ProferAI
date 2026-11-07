@@ -39,7 +39,8 @@ import { app, BrowserWindow } from 'electron'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
 import type { AgentRuntime, AgentSendInput } from '@profer/shared'
-import { agentEventBus, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, rewindAgentSession, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
+import { agentEventBus, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
+import { prepareAgentRewind, refineAgentRewind, executeAgentRewind, undoAgentRewind, submitAgentAfterRewind, legacyConversationRewind } from './agent-rewind-gateway'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
 import { buildArchiveToggleUpdates } from './agent-unread-policy'
 import { getUserProfile } from './user-profile-service'
@@ -251,7 +252,7 @@ let httpServer: HttpServer | null = null
 let wss: WebSocketServer | null = null
 let remoteRelayClient: RemoteRelayClient | null = null
 let remoteRelaySink: RemoteRelaySink | null = null
-let remoteRelayCommandContext: RemoteCommandContext = {}
+let remoteRelayCommandContext: RemoteCommandContext = { clientId: randomUUID() }
 
 /** 闲置踢人定时器：定期扫描连接，清理长时间无任何入站消息（含 ping）的假死/僵尸连接。 */
 let idleSweepTimer: ReturnType<typeof setInterval> | null = null
@@ -948,6 +949,12 @@ function buildChatToolList() {
 /** 单条 WS 连接已声明的最近活动会话，仅用于兼容旧 Pocket 文件预览请求。 */
 interface RemoteCommandContext {
   activeSessionId?: string
+  clientId?: string
+}
+
+function remoteCaller(context?: RemoteCommandContext): { kind: 'remote'; id: string } {
+  if (!context?.clientId) throw new Error('缺少已鉴权连接身份')
+  return { kind: 'remote', id: context.clientId }
 }
 
 /**
@@ -1781,19 +1788,41 @@ export async function handleRemoteCommand(
       }
     }
 
-    // 快照回退 / 清空对话（同一会话内回退到指定点；无 assistantMessageUuid 时清空整段对话）
+    // 兼容旧 Pocket：无 mode 的回退只能按 conversation 执行，绝不进入文件恢复器。
     case 'rewind_session': {
-      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
-      const assistantMessageUuid = typeof parsed.assistantMessageUuid === 'string' && parsed.assistantMessageUuid
-        ? parsed.assistantMessageUuid
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId.trim() : ''
+      const assistantMessageUuid = typeof parsed.assistantMessageUuid === 'string' && parsed.assistantMessageUuid.trim()
+        ? parsed.assistantMessageUuid.trim()
         : undefined
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
       try {
-        const result = await rewindAgentSession(sessionId, assistantMessageUuid)
-        return { ok: true, data: result }
+        const data = await legacyConversationRewind({ sessionId, assistantMessageUuid }, remoteCaller(context))
+        return { ok: true, data }
       } catch (error) {
-        console.error('[Remote] rewind_session 失败:', error)
         return { ok: false, error: error instanceof Error ? error.message : '会话回退失败' }
+      }
+    }
+
+    case 'rewind_prepare':
+    case 'rewind_refine':
+    case 'rewind_execute':
+    case 'rewind_recovery':
+    case 'rewind_undo':
+    case 'rewind_submit': {
+      const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId.trim() : ''
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const caller = remoteCaller(context)
+      try {
+        let data: unknown
+        if (type === 'rewind_prepare') data = await prepareAgentRewind(parsed as unknown as import('@profer/shared').PrepareRewindPlanInput, caller)
+        else if (type === 'rewind_refine') data = await refineAgentRewind(parsed as unknown as import('@profer/shared').RefineRewindPlanInput, caller)
+        else if (type === 'rewind_execute') data = await executeAgentRewind(parsed as unknown as import('@profer/shared').ExecuteRewindPlanInput, caller)
+        else if (type === 'rewind_undo') data = await undoAgentRewind(parsed as unknown as import('@profer/shared').UndoRewindInput, caller)
+        else if (type === 'rewind_submit') data = await submitAgentAfterRewind(parsed as unknown as import('@profer/shared').SubmitAfterRewindInput, caller)
+        else return { ok: false, error: '恢复记录查询尚未接入' }
+        return { ok: true, data }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : '回退请求失败' }
       }
     }
 
@@ -2385,7 +2414,7 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
   const establish = (ws: WebSocket, req: IncomingMessage): void => {
     console.log('[Remote] 移动端客户端已鉴权')
     ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
-    const commandContext: RemoteCommandContext = {}
+    const commandContext: RemoteCommandContext = { clientId: randomUUID() }
     const replayState: AgentReplayState = {
       clientKey: randomUUID(),
       replaying: true,
@@ -2553,7 +2582,7 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
     remoteRelayClient = new RemoteRelayClient({
       onOpen: (sink) => {
         remoteRelaySink = sink
-        remoteRelayCommandContext = {}
+        remoteRelayCommandContext = { clientId: randomUUID() }
         // 让 Relay 后面的 Pocket 继续使用现有 WsClient 握手/快照协议。
         sink.send(JSON.stringify({
           kind: 'hello',
@@ -2736,7 +2765,7 @@ async function stopRemoteServiceNow(): Promise<void> {
   remoteRelayClient?.stop()
   remoteRelayClient = null
   remoteRelaySink = null
-  remoteRelayCommandContext = {}
+  remoteRelayCommandContext = { clientId: randomUUID() }
   eventBusUnsubscribe?.()
   eventBusUnsubscribe = null
   chatBusUnsubscribe?.()

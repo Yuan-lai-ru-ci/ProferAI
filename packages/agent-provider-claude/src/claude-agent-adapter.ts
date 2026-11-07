@@ -47,6 +47,7 @@ import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
 import { normalizeClaudeTaskEvent } from './task-events'
 import { BackgroundTaskManager } from './background-task-manager'
 import { validateWriteTargetParent } from './write-target-guard'
+import { createClaudeRewindEvidenceHooks, type ClaudeRewindEvidencePort } from './rewind-evidence'
 
 /** SDK 模块形状；宿主可用替身替换，用于非 Electron 环境验证与测试。 */
 export type ClaudeSdkModule = typeof import('@anthropic-ai/claude-agent-sdk')
@@ -179,6 +180,8 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   sdkPermissionMode: ProferPermissionMode
   /** 是否跳过权限检查 */
   allowDangerouslySkipPermissions: boolean
+  /** Claude 回退 evidence port；只记录受控 Write/Edit 的可靠前后版本，不改变工具执行结果。 */
+  rewindEvidence?: ClaudeRewindEvidencePort
   /** 自定义权限处理器（匹配 SDK CanUseTool 签名；类型复用 runtime 权限契约） */
   canUseTool?: (
     toolName: string,
@@ -1054,6 +1057,10 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         idleTimer.unref?.()
       }
 
+      const rewindHooks = options.rewindEvidence
+        ? createClaudeRewindEvidenceHooks(options.rewindEvidence, { sessionId: options.sessionId })
+        : undefined
+
       // SDK options 构建
       const sdkOptions = {
         // 基础字段
@@ -1122,31 +1129,36 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         // 在 result 消息发到 host 之前完成，故 result 处理时 backgroundTasksPending 已是最新。
         // 仅观察、绝不返回 decision:'block'（那会强制模型继续输出）。
         hooks: {
-          PreToolUse: [{
-            hooks: [async (input: unknown) => {
-              const hookInput = input as { tool_name?: unknown; tool_input?: unknown }
-              if (hookInput.tool_name !== 'Write' || !hookInput.tool_input || typeof hookInput.tool_input !== 'object') {
-                return { continue: true }
-              }
-              const failure = validateWriteTargetParent(
-                hookInput.tool_input as Record<string, unknown>,
-                options.cwd,
-                'Write',
-              )
-              return failure
-                ? {
-                    continue: false,
-                    decision: 'block',
-                    reason: failure.message,
-                    hookSpecificOutput: {
-                      hookEventName: 'PreToolUse',
-                      permissionDecision: 'deny',
-                      permissionDecisionReason: failure.message,
-                    },
-                  }
-                : { continue: true }
-            }],
-          }],
+          PreToolUse: [
+            {
+              hooks: [async (input: unknown) => {
+                const hookInput = input as { tool_name?: unknown; tool_input?: unknown }
+                if (hookInput.tool_name !== 'Write' || !hookInput.tool_input || typeof hookInput.tool_input !== 'object') {
+                  return { continue: true }
+                }
+                const failure = validateWriteTargetParent(
+                  hookInput.tool_input as Record<string, unknown>,
+                  options.cwd,
+                  'Write',
+                )
+                return failure
+                  ? {
+                      continue: false,
+                      decision: 'block',
+                      reason: failure.message,
+                      hookSpecificOutput: {
+                        hookEventName: 'PreToolUse',
+                        permissionDecision: 'deny',
+                        permissionDecisionReason: failure.message,
+                      },
+                    }
+                  : { continue: true }
+              }],
+            },
+            ...(rewindHooks?.PreToolUse ?? []),
+          ],
+          ...(rewindHooks?.PostToolUse && { PostToolUse: rewindHooks.PostToolUse }),
+          ...(rewindHooks?.PostToolUseFailure && { PostToolUseFailure: rewindHooks.PostToolUseFailure }),
           Stop: [{
             hooks: [async (input: unknown) => {
               const bt = (input as { background_tasks?: unknown[] }).background_tasks

@@ -702,6 +702,46 @@ export type AgentEvent =
   // 权限模式变更（Plan → bypassPermissions 等）
   | { type: 'permission_mode_changed'; mode: ProferPermissionMode }
 
+// ===== 协作子会话阻塞 =====
+
+/** 协作子会话阻塞类型：向用户提问，或等待权限审批。 */
+export type DelegationBlockedKind = 'ask_user' | 'permission'
+
+/** 阻塞问题（AskUserQuestion 的宿主无关投影，不含工具原始输入）。 */
+export interface DelegationBlockedQuestion {
+  question: string
+  header?: string
+  options: Array<{ label: string; description?: string }>
+}
+
+/** 阻塞事件的解决者：父会话代答与用户回答必须可区分，不能互相冒充。 */
+export type DelegationBlockedResolution = 'answered_by_parent' | 'answered_by_user'
+
+/**
+ * 协作子会话阻塞事件：子会话等待回答期间，父会话与用户共用同一份状态。
+ *
+ * 生命周期：register → （父会话被唤醒一次）→ resolved 或 escalated。
+ * `wokenAt` / `escalatedAt` 只用于「同一事件不重复唤醒父会话」，不影响用户随时回答。
+ */
+export interface DelegationBlockedEvent {
+  id: string
+  delegationId: string
+  childSessionId: string
+  kind: DelegationBlockedKind
+  /** 子会话侧 ask_user / permission 请求 ID，用于把用户回答与阻塞事件对上。 */
+  requestId: string
+  questions?: DelegationBlockedQuestion[]
+  /** 权限阻塞对应的工具名。 */
+  toolName?: string
+  createdAt: number
+  resolvedAt?: number
+  resolution?: DelegationBlockedResolution
+  /** 父会话已被唤醒处理该事件；同一事件只唤醒一次。 */
+  wokenAt?: number
+  /** 父会话判断无法决定，问题已留在用户界面等待用户回答。 */
+  escalatedAt?: number
+}
+
 // ===== Profer 内部事件（SDK 不覆盖的场景） =====
 
 /** Profer 内部事件类型 */
@@ -726,6 +766,8 @@ export type ProferEvent =
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; parentSessionId?: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number; session?: AgentSessionMeta; initiator?: AgentRunInitiator }
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }
+  // 协作子会话被阻塞（提问 / 权限）。父会话据此获得一次决策机会，用户界面据此提示待回答。
+  | { type: 'delegation_blocked'; delegationId: string; blockedEvent: DelegationBlockedEvent }
   // 跨端会话元数据同步：Pocket 远程命令修改会话后立即通知桌面与其他 Pocket 客户端。
   | { type: 'session_updated'; session: AgentSessionMeta }
   | { type: 'session_deleted'; sessionId: string; revision?: number }
@@ -867,7 +909,6 @@ export interface AgentSessionUiProjection {
   presetReference: import('./agent-preset').PresetReference | null
   openAIThinkingLevel: AgentThinkingLevel | null
   codexFastMode: boolean
-  autoQueueSendEnabled: boolean
   agentEffort: AgentEffort | null
   attachedDirectories: string[]
   attachedFiles: string[]
@@ -2441,8 +2482,13 @@ export const AGENT_IPC_CHANNELS = {
   RUNTIME_PROCESSES_CHANGED: 'agent:runtime-processes-changed',
   /** 分叉会话（从指定消息处创建新会话） */
   FORK_SESSION: 'agent:fork-session',
-  /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
+  /** 旧版回退兼容：主进程只允许映射为 conversation。 */
   REWIND_SESSION: 'agent:rewind-session',
+  REWIND_PREPARE: 'agent:rewind-prepare',
+  REWIND_REFINE: 'agent:rewind-refine',
+  REWIND_EXECUTE: 'agent:rewind-execute',
+  REWIND_UNDO: 'agent:rewind-undo',
+  REWIND_SUBMIT: 'agent:rewind-submit',
   /** 扫描所有会话的孤儿记录和文件系统不一致 */
   FIND_ORPHAN_SESSIONS: 'agent:find-orphan-sessions',
 

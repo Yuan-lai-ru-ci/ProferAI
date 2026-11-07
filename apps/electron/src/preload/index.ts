@@ -873,8 +873,12 @@ export interface ElectronAPI {
   /** 分叉 Agent 会话 */
   forkAgentSession: (input: ForkSessionInput) => Promise<AgentSessionMeta>
 
-  /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
   rewindSession: (input: RewindSessionInput) => Promise<RewindSessionResult>
+  prepareRewind: (input: import('@profer/shared').PrepareRewindPlanInput) => Promise<import('@profer/shared').PrepareRewindPlanResult>
+  refineRewind: (input: import('@profer/shared').RefineRewindPlanInput) => Promise<import('@profer/shared').PrepareRewindPlanResult>
+  executeRewind: (input: import('@profer/shared').ExecuteRewindPlanInput) => Promise<import('@profer/shared').RewindResult>
+  undoRewind: (input: import('@profer/shared').UndoRewindInput) => Promise<import('@profer/shared').RewindResult>
+  submitAfterRewind: (input: import('@profer/shared').SubmitAfterRewindInput) => Promise<import('@profer/shared').SubmitAfterRewindResult>
 
   /** 扫描所有会话的孤儿记录和文件系统不一致 */
   findOrphanSessions: () => Promise<SessionHealth[]>
@@ -2646,9 +2650,12 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.FORK_SESSION, input)
   },
 
-  rewindSession: (input: RewindSessionInput) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_SESSION, input)
-  },
+  prepareRewind: (input: import('@profer/shared').PrepareRewindPlanInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_PREPARE, input),
+  refineRewind: (input: import('@profer/shared').RefineRewindPlanInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_REFINE, input),
+  executeRewind: (input: import('@profer/shared').ExecuteRewindPlanInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_EXECUTE, input),
+  undoRewind: (input: import('@profer/shared').UndoRewindInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_UNDO, input),
+  submitAfterRewind: (input: import('@profer/shared').SubmitAfterRewindInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_SUBMIT, input),
+  rewindSession: (input: RewindSessionInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_SESSION, input),
 
   findOrphanSessions: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.FIND_ORPHAN_SESSIONS)

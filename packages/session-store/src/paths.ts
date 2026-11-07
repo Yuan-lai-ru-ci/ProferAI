@@ -12,6 +12,7 @@ export function createSessionStorePaths(configDir: string, overrides: Partial<Se
     graphDir: overrides.graphDir ?? sessionsDir,
     harnessDir: overrides.harnessDir ?? sessionsDir,
     checkpointsDir: overrides.checkpointsDir ?? join(configDir, 'agent-checkpoints'),
+    rewindDir: overrides.rewindDir ?? join(configDir, 'agent-rewind'),
     ...(overrides.sdkConfigDir ? { sdkConfigDir: overrides.sdkConfigDir } : {}),
     ...(overrides.workspaceRoot ? { workspaceRoot: overrides.workspaceRoot } : {}),
   }
@@ -25,6 +26,18 @@ export function createSessionStorePaths(configDir: string, overrides: Partial<Se
 function projectDataDir(sessionId: string): string | undefined {
   const layout = getSessionStorageLayout(sessionId)
   return layout?.kind === 'project' ? layout.dataDir : undefined
+}
+
+/**
+ * 恢复包目录；project 会话随项目移动，managed 会话位于配置目录。
+ */
+export function sessionRewindPath(paths: Pick<SessionStorePaths, 'rewindDir'>, sessionId: string): string {
+  const layout = getSessionStorageLayout(sessionId)
+  if (layout?.kind === 'project' && layout.dataDir) {
+    const projectRoot = join(layout.dataDir, '..', '..', '..')
+    return join(projectRoot, '.profer', 'rewind', sessionId)
+  }
+  return join(paths.rewindDir, sessionId)
 }
 
 /**

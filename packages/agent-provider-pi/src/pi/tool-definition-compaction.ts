@@ -124,8 +124,8 @@ function compactMcpDescription(name: string): string | undefined {
   }
   if (name.startsWith('mcp__collaboration__')) {
     if (name.endsWith('delegate_agent') || name.endsWith('delegate_agents')) return '只为长耗时、可独立且需追踪的任务创建 Profer 协作会话；任务须自包含，简单搜索直接完成。presetReference 直接照抄 preset_list 返回的引用，不要自行补字段。'
-    if (name.endsWith('wait_for_delegations')) return '等待协作会话并返回结构化状态。'
-    if (name.endsWith('answer_delegation_question')) return '代答子会话的问答或权限阻塞。'
+    if (name.endsWith('wait_for_delegations')) return '等待协作会话；子会话被阻塞时提前返回 blocked 状态。'
+    if (name.endsWith('answer_delegation_question')) return '代答子会话的问答或权限阻塞；无法确定就交给用户。'
     if (name.endsWith('continue_delegation')) return '向已结束的子会话追加后续指令。'
     if (name.endsWith('stop_delegation') || name.endsWith('stop_delegations')) return '停止运行中的协作子会话。'
     if (name.endsWith('get_delegation_results')) return '读取协作子会话结果摘要。'

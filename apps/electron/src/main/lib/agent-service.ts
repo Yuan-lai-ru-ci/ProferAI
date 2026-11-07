@@ -182,6 +182,18 @@ const runtimeContextStore = new AgentRuntimeContextStore()
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
 
+export async function withAgentSessionExclusive<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+  const meta = getAgentSessionMeta(sessionId)
+  if (!meta) throw new Error(`Agent 会话不存在: ${sessionId}`)
+  const claim = runOwnership.claim({ sessionId, runtime: normalizeAgentRuntime(meta.agentRuntime) })
+  if (!claim.ok) throw new Error('会话正在运行中，请停止后再回退')
+  try {
+    return await operation()
+  } finally {
+    runOwnership.release(sessionId, claim.owner.token)
+  }
+}
+
 /**
  * 非破坏性执行权预检：供入口在**做任何副作用之前**同步失败。
  *

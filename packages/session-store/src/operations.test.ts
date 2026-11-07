@@ -45,6 +45,36 @@ describe('session operation service', () => {
     expect((await store.messages.read(source.id)).map((item) => (item as { uuid: string }).uuid)).toEqual(['u1', 'a1', 'u2'])
   })
 
+  test('rewind rejects an unknown message UUID without changing messages or native artifacts', async () => {
+    const { store } = await setup()
+    const session = await store.metadata.create({ title: 'keep', agentRuntime: 'claude' })
+    await store.messages.append(session.id, [message('user', 'u1'), message('assistant', 'a1')])
+    let nativeRewindCalls = 0
+    const guardedService = createSessionOperationService({
+      store,
+      host: {
+        async getDeletionOrder(id) { return [id] },
+        async stopAndWait() {},
+        getArtifactAdapter() {
+          return {
+            runtime: 'claude',
+            async fork() { return {} },
+            async rewind() { nativeRewindCalls += 1; return {} },
+          }
+        },
+      },
+    })
+
+    await expect(guardedService.rewind({
+      operationId: 'rewind-unknown',
+      sessionId: session.id,
+      assistantMessageUuid: 'missing',
+    })).rejects.toMatchObject({ code: 'target_not_found' })
+
+    expect((await store.messages.read(session.id)).map((item) => (item as { uuid: string }).uuid)).toEqual(['u1', 'a1'])
+    expect(nativeRewindCalls).toBe(0)
+  })
+
   test('fork failure rolls back destination metadata and copied files', async () => {
     const { paths, store } = await setup()
     const source = await store.metadata.create({ title: 'source', agentRuntime: 'claude' })

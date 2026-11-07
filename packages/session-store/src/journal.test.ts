@@ -41,4 +41,9 @@ test('fork operation persists a journal while running and removes it after commi
   expect(progress.filter((phase) => phase === 'copying').length).toBeGreaterThan(0)
   await expect(store.index.get(fork.id)).resolves.toBeDefined()
   await expect(store.index.get(source.id)).resolves.toBeDefined()
+
+  const journalStore = (await import('./journal')).createSessionJournalStore(`${root}/journals`)
+  await journalStore.write({ operationId: 'durable', operation: 'rewind', sessionId: source.id, status: 'started', phase: 'applying', createdAt: 1, updatedAt: 1 })
+  await expect(journalStore.read('durable')).resolves.toMatchObject({ phase: 'applying' })
+  await expect(journalStore.list()).resolves.toHaveLength(1)
 })

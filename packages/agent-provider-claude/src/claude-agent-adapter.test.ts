@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackgroundTaskManager } from './background-task-manager'
 import type { ClaudeAgentQueryOptions } from './claude-agent-adapter'
+import type { ClaudeRewindEvidenceCaptureInput, ClaudeRewindToolEvidence } from './rewind-evidence'
 import {
   applyClaudePreparedQuery,
   ClaudeAgentAdapter,
@@ -116,6 +117,55 @@ describe('Claude provider：SDK 查询选项透传', () => {
       const done = await stream.next()
       expect(done.done).toBe(true)
       expect(harness.double.state.returnCalls).toBe(1)
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test('Given rewind evidence port When SDK 注册 hooks Then Write 以同一 tool_use_id 捕获前后版本', async () => {
+    const harness = createHarness()
+    const captures: ClaudeRewindEvidenceCaptureInput[] = []
+    const records: ClaudeRewindToolEvidence[] = []
+    try {
+      const stream = harness.adapter.query(baseInput('rewind-hooks', {
+        cwd: '/fixture/cwd',
+        rewindEvidence: {
+          async capture(input) {
+            captures.push(input)
+            return {
+              path: input.path,
+              revision: `${input.phase}:${input.toolUseId}`,
+              exists: true,
+              backupRef: `backup:${input.phase}:${input.toolUseId}`,
+              contentRef: `content:${input.phase}:${input.toolUseId}`,
+            }
+          },
+          record(evidence) {
+            records.push(evidence)
+          },
+        },
+      }))[Symbol.asyncIterator]()
+      const pending = stream.next()
+      await waitUntil(() => harness.double.state.options !== undefined)
+      const hooks = harness.double.state.options!.hooks as {
+        PreToolUse: Array<{ hooks: Array<(input: unknown, toolUseID?: string, options?: { signal: AbortSignal }) => Promise<unknown>> }>
+        PostToolUse: Array<{ hooks: Array<(input: unknown, toolUseID?: string, options?: { signal: AbortSignal }) => Promise<unknown>> }>
+      }
+      expect(hooks.PreToolUse).toHaveLength(2)
+      const context = { session_id: 'native', transcript_path: '/tmp/native', cwd: '/fixture/cwd', prompt_id: 'turn-1' }
+      await hooks.PreToolUse[1]!.hooks[0]!({
+        ...context, hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'write-1',
+        tool_input: { file_path: 'tracked.txt' },
+      }, 'write-1', { signal: new AbortController().signal })
+      await hooks.PostToolUse[0]!.hooks[0]!({
+        ...context, hook_event_name: 'PostToolUse', tool_name: 'Write', tool_use_id: 'write-1',
+        tool_input: { file_path: 'tracked.txt' }, tool_response: 'ok',
+      }, 'write-1', { signal: new AbortController().signal })
+      expect(captures.map(item => item.phase)).toEqual(['before', 'after'])
+      expect(records).toMatchObject([{ toolUseId: 'write-1', status: 'complete' }])
+      harness.double.push({ type: 'result', subtype: 'success', session_id: 'native', terminal_reason: 'completed' })
+      await pending
+      await stream.next()
     } finally {
       harness.dispose()
     }

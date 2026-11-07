@@ -154,7 +154,13 @@ export function createSessionOperationService(options: SessionOperationServiceOp
       const targetIndex = input.assistantMessageUuid
         ? messages.findIndex((message) => (message as { uuid?: string }).uuid === input.assistantMessageUuid)
         : -1
-      const kept = targetIndex >= 0 ? messages.slice(0, targetIndex + 1) : []
+      if (input.assistantMessageUuid && targetIndex < 0) {
+        throw new SessionOperationError('target_not_found', `回退目标不存在: ${input.assistantMessageUuid}`, {
+          operation: 'rewind',
+          sessionId: input.sessionId,
+        })
+      }
+      const kept = input.assistantMessageUuid ? messages.slice(0, targetIndex + 1) : []
       await options.host.getArtifactAdapter?.(meta)?.rewind?.({
         sessionId: input.sessionId,
         assistantMessageUuid: input.assistantMessageUuid,

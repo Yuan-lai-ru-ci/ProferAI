@@ -257,6 +257,7 @@ import { askUserService } from './lib/agent-ask-user-service'
 import { goalProposalService, normalizeGoalProposalPolicy } from './lib/goal-proposal-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
+import { prepareAgentRewind, refineAgentRewind, executeAgentRewind, undoAgentRewind, submitAgentAfterRewind, legacyConversationRewind } from './lib/agent-rewind-gateway'
 import { registerVisualizationIpc } from './lib/visualization-ipc'
 import { registerAutomationIpc } from './lib/automation-ipc'
 import { registerSettingsIpc } from './lib/settings-ipc'
@@ -2636,16 +2637,31 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 快照回退（同一会话内回退到指定点）
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.REWIND_SESSION,
-    async (_, input: RewindSessionInput): Promise<RewindSessionResult> => {
-      return rewindAgentSession(
-        input.sessionId,
-        input.assistantMessageUuid,
-      )
-    }
-  )
+  // 回退协议：所有输入均经类型化网关校验；旧协议固定降级为 conversation。
+  ipcMain.handle(AGENT_IPC_CHANNELS.REWIND_SESSION, async (event, input: RewindSessionInput) => {
+    assertMainWindowSender(event, getMainWindow)
+    return legacyConversationRewind(input, { kind: 'desktop' })
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.REWIND_PREPARE, async (event, input: import('@profer/shared').PrepareRewindPlanInput) => {
+    assertMainWindowSender(event, getMainWindow)
+    return prepareAgentRewind(input, { kind: 'desktop' })
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.REWIND_REFINE, async (event, input: import('@profer/shared').RefineRewindPlanInput) => {
+    assertMainWindowSender(event, getMainWindow)
+    return refineAgentRewind(input, { kind: 'desktop' })
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.REWIND_EXECUTE, async (event, input: import('@profer/shared').ExecuteRewindPlanInput) => {
+    assertMainWindowSender(event, getMainWindow)
+    return executeAgentRewind(input, { kind: 'desktop' })
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.REWIND_UNDO, async (event, input: import('@profer/shared').UndoRewindInput) => {
+    assertMainWindowSender(event, getMainWindow)
+    return undoAgentRewind(input, { kind: 'desktop' })
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.REWIND_SUBMIT, async (event, input: import('@profer/shared').SubmitAfterRewindInput) => {
+    assertMainWindowSender(event, getMainWindow)
+    return submitAgentAfterRewind(input, { kind: 'desktop' })
+  })
 
   // 会话健康检查：扫描孤儿记录和文件系统不一致
   ipcMain.handle(

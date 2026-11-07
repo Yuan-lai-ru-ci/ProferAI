@@ -26,6 +26,7 @@ export * from './chat'
 
 // Agent 相关类型
 export * from './agent'
+export * from './agent-rewind'
 export * from './remote-sync'
 export * from './agent-preview'
 export * from './visualization'

@@ -22,7 +22,10 @@ mock.module('./agent-session-manager', () => ({
   },
 }))
 let parentActive = true
-mock.module('./agent-service', () => ({ isAgentSessionActive: () => parentActive, runAgentHeadless: async (input: AgentSendInput) => { runs.push({ input, handlers: {} }) } }))
+mock.module('./agent-service', () => ({
+  isAgentSessionActive: () => parentActive,
+  runAgentHeadless: async (input: AgentSendInput, handlers: typeof runs[number]['handlers']) => { runs.push({ input, handlers }) },
+}))
 mock.module('./agent-headless-runner-registry', () => ({
   runRegisteredHeadlessAgent: async (input: AgentSendInput, handlers: typeof runs[number]['handlers']) => { runs.push({ input, handlers }) },
   stopRegisteredAgent: (id: string) => { stopped.push(id) },
@@ -43,6 +46,17 @@ function setup() {
 }
 beforeEach(() => { runs.length = 0; stopped.length = 0; events.length = 0; parentActive = true })
 const bus = new AgentEventBus()
+
+/** 模拟子会话发起 AskUserQuestion（不经过真实服务，只验证父会话侧接线）。 */
+function emitAskUserRequest(sessionId: string, requestId: string, question = '需要你决定') {
+  bus.emit(sessionId, {
+    kind: 'profer_event',
+    event: {
+      type: 'ask_user_request',
+      request: { requestId, sessionId, questions: [{ question, header: '确认', options: [{ label: '是' }], multiSelect: false }], toolInput: {} },
+    },
+  } as AgentStreamPayload)
+}
 bus.on((sessionId, payload) => events.push({ sessionId, payload }))
 registerCollaborationEventBus(bus)
 
@@ -181,6 +195,81 @@ describe('真实会话派工', () => {
     await expect(other.invoke('get_delegation_results', { delegationIds: ['persisted-id'] })).rejects.toThrow()
     expect((await own.invoke('list_delegations', {})).delegations.some((d: { childSessionId: string }) => d.childSessionId === 'persisted')).toBe(true)
   })
+  test('子会话提问时唤醒父会话一次，并带上代答决策规则', async () => {
+    const { source, invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '核对发布清单' })).delegation
+    parentActive = false
+
+    emitAskUserRequest(child.childSessionId, 'ask-1', '要不要覆盖已有产物？')
+
+    expect(runs).toHaveLength(2)
+    expect(runs[1]!.input).toMatchObject({ sessionId: source, messageAuthor: { type: 'system' }, triggeredBy: 'delegation' })
+    expect(runs[1]!.input.userMessage).toContain('要不要覆盖已有产物？')
+    expect(runs[1]!.input.userMessage).toContain('answer_delegation_question')
+    expect(runs[1]!.input.userMessage).toContain('已转交用户')
+    expect(events.some(event => event.sessionId === source
+      && event.payload.kind === 'profer_event'
+      && event.payload.event.type === 'delegation_blocked')).toBe(true)
+  })
+
+  test('父会话运行中不打断，空闲后补一次决策机会', async () => {
+    const { source, invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '子任务' })).delegation
+
+    emitAskUserRequest(child.childSessionId, 'ask-2')
+    expect(runs).toHaveLength(1)
+
+    parentActive = false
+    bus.emit(source, { kind: 'profer_event', event: { type: 'run_idle', sessionId: source } } as AgentStreamPayload)
+    expect(runs).toHaveLength(2)
+    expect(runs[1]!.input.userMessage).toContain('需要你决定')
+  })
+
+  test('wait_for_delegations 遇到阻塞提前返回，父会话代答后事件解决', async () => {
+    const { invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '子任务' })).delegation
+    const waiting = invoke('wait_for_delegations', { delegationIds: [child.delegationId], timeoutSeconds: 30 })
+
+    const { askUserService } = await import('./agent-ask-user-service')
+    const pending = askUserService.handleAskUserQuestion(
+      child.childSessionId,
+      { questions: [{ question: '用哪个分支？', options: [{ label: 'main' }, { label: 'dev' }] }] },
+      new AbortController().signal,
+      (request) => { bus.emit(child.childSessionId, { kind: 'profer_event', event: { type: 'ask_user_request', request } }) },
+    )
+
+    const result = await waiting
+    expect(result.status).toBe('blocked')
+    expect(result.blockedEvent).toMatchObject({ delegationId: child.delegationId, kind: 'ask_user' })
+
+    const answered = await invoke('answer_delegation_question', {
+      delegationId: child.delegationId,
+      blockedEventId: result.blockedEvent.id,
+      answers: { '用哪个分支？': 'main' },
+    })
+    expect(answered).toMatchObject({ answered: true, type: 'ask_user' })
+    expect(await pending).toMatchObject({ behavior: 'allow', updatedInput: { answers: { '用哪个分支？': 'main' } } })
+    expect((await invoke('list_delegations', {})).delegations[0].pendingBlockedEvents).toEqual([])
+  })
+
+  test('同一阻塞事件只唤醒一次，父会话未代答时按转交用户收口', async () => {
+    const { source, invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '子任务' })).delegation
+    parentActive = false
+
+    emitAskUserRequest(child.childSessionId, 'ask-3')
+    expect(runs).toHaveLength(2)
+
+    // 父会话结束本轮但没代答：问题留在用户界面，不再重复唤醒。
+    runs[1]!.handlers.onComplete?.([])
+    bus.emit(source, { kind: 'profer_event', event: { type: 'run_idle', sessionId: source } } as AgentStreamPayload)
+    expect(runs).toHaveLength(2)
+
+    const pending = (await invoke('list_delegations', {})).delegations[0].pendingBlockedEvents
+    expect(pending).toHaveLength(1)
+    expect(pending[0].escalatedAt).toBeTruthy()
+  })
+
   test('Claude/Pi schema 和禁用单工具保持对等', async () => {
     const { source, tools } = setup()
     const captured: Array<{ name: string; schema: Record<string, unknown>; execute: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> = []
