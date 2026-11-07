@@ -33,6 +33,7 @@ import {
   checkConflict,
   registerShortcut,
   updateShortcutOverrides,
+  suppressShortcutDispatch,
   isMac,
 } from '@/lib/shortcut-registry'
 
@@ -102,7 +103,8 @@ function ShortcutRecorder({
   }, [])
 
   const isStandaloneKeyAllowed = React.useCallback((key: string): boolean => {
-    return /^F(?:[1-9]|1[0-9]|2[0-4])$/i.test(key)
+    // Delete 也要单独可用：「删除当前会话」加修饰键就失去手感了。
+    return /^F(?:[1-9]|1[0-9]|2[0-4])$/i.test(key) || key === 'Delete'
   }, [])
 
   const finishCapture = React.useCallback((accelerator: string) => {
@@ -126,6 +128,10 @@ function ShortcutRecorder({
   React.useEffect(() => {
     if (!recording) return
 
+    // 录制期间挂起全局快捷键分发：否则按下的已绑定键会真实触发动作
+    //（例如录制 Delete 时弹出删除确认框）。
+    const releaseSuppression = suppressShortcutDispatch()
+
     const handleKeyDown = (e: KeyboardEvent): void => {
       e.preventDefault()
       e.stopImmediatePropagation()
@@ -148,7 +154,7 @@ function ShortcutRecorder({
       // 标准化按键名称
       const key = normalizeKey(e.key)
 
-      // 普通字母/数字/符号需要修饰键；F1-F24 允许作为独立快捷键。
+      // 普通字母/数字/符号需要修饰键；F1-F24 与 Delete 允许作为独立快捷键。
       if (parts.length === 0 && !isStandaloneKeyAllowed(key)) {
         setPendingAccelerator('')
         return
@@ -171,6 +177,7 @@ function ShortcutRecorder({
     window.addEventListener('keydown', handleKeyDown, true)
     window.addEventListener('keyup', handleKeyUp, true)
     return () => {
+      releaseSuppression()
       window.removeEventListener('keydown', handleKeyDown, true)
       window.removeEventListener('keyup', handleKeyUp, true)
     }

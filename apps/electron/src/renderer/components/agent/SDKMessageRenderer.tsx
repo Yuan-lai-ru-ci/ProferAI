@@ -23,6 +23,10 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { parseQuotedSelectionRefs, type ParsedQuotedSelectionRef } from '@/lib/quoted-selection'
 import { ImageLightbox } from '@profer/ui/primitives/image-lightbox'
+import {
+  ChatImageContextMenu,
+  useCopyChatImageAction,
+} from '@/components/chat/chat-image-context-menu'
 import { ContentBlock } from './ContentBlock'
 import { AgentTurnImageOutput } from './AgentTurnImageOutput'
 import { collectTurnImageOutputs } from './turn-image-outputs'
@@ -1334,6 +1338,12 @@ function AttachedImageThumb({ file }: { file: AttachedFileRef }): React.ReactEle
     window.electronAPI.saveImageAs(file.path, file.filename)
   }, [file.path, file.filename])
 
+  /** 复制图片到剪贴板（主进程 clipboard.writeImage） */
+  const copyImage = useCopyChatImageAction()
+  const handleCopy = React.useCallback((): void => {
+    void copyImage({ localPath: file.path })
+  }, [copyImage, file.path])
+
   // 附件可能已被删除（模型清理临时文件时误删、会话目录被手动清理）。
   // 这里必须给出明确状态：无限 skeleton 会让用户以为 Profer 连自己的截图都渲染不了。
   if (loadFailed) {
@@ -1354,29 +1364,32 @@ function AttachedImageThumb({ file }: { file: AttachedFileRef }): React.ReactEle
   }
 
   return (
-    <div className="relative group inline-block">
-      <img
-        src={imageSrc}
-        alt={file.filename}
-        className="max-w-[300px] max-h-[200px] rounded-lg object-contain cursor-pointer"
-        onClick={() => setLightboxOpen(true)}
-      />
-      <button
-        type="button"
-        onClick={handleSave}
-        className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
-        title="保存图片"
-      >
-        <Download className="size-4" />
-      </button>
-      <ImageLightbox
-        src={imageSrc}
-        alt={file.filename}
-        open={lightboxOpen}
-        onOpenChange={setLightboxOpen}
-        onSave={handleSave}
-      />
-    </div>
+    <ChatImageContextMenu localPath={file.path} onSave={handleSave}>
+      <div className="relative group inline-block">
+        <img
+          src={imageSrc}
+          alt={file.filename}
+          className="max-w-[300px] max-h-[200px] rounded-lg object-contain cursor-pointer"
+          onClick={() => setLightboxOpen(true)}
+        />
+        <button
+          type="button"
+          onClick={handleSave}
+          className="absolute bottom-2 right-2 p-1.5 rounded-md bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+          title="保存图片"
+        >
+          <Download className="size-4" />
+        </button>
+        <ImageLightbox
+          src={imageSrc}
+          alt={file.filename}
+          open={lightboxOpen}
+          onOpenChange={setLightboxOpen}
+          onSave={handleSave}
+          onCopy={handleCopy}
+        />
+      </div>
+    </ChatImageContextMenu>
   )
 }
 
