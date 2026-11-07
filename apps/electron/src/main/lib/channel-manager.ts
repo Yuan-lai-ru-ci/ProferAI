@@ -626,16 +626,6 @@ export function isCommercialMode(): boolean {
   }
 }
 
-/** 当前用户是否可以自配渠道（代管模式 + 自配开关 = 可自配） */
-export function canSelfConfig(): boolean {
-  try {
-    const { isSelfConfigAllowed } = require('./auth-service')
-    return isSelfConfigAllowed()
-  } catch {
-    return false
-  }
-}
-
 /**
  * 获取所有渠道
  *
@@ -666,7 +656,6 @@ export function getChannelById(id: string): Channel | undefined {
  * @returns 创建后的渠道（apiKey 为加密态）
  */
 export function createChannel(input: ChannelCreateInput): Channel {
-  if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许手动创建渠道，渠道由服务端统一管理')
   if (input.provider === 'xai' && input.credentialMode === 'oauth' && !parseXaiCredentials(input.apiKey)) {
     throw new Error('xAI OAuth 渠道必须先完成订阅登录')
   }
@@ -736,22 +725,6 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
       }
     }
   }
-  // 商业模式下无自配权限时只允许切换 enabled，有自配权限则全部放开
-  if (isCommercialMode() && !canSelfConfig()) {
-    const hasStructuralChange =
-      input.name !== undefined ||
-      input.provider !== undefined ||
-      input.baseUrl !== undefined ||
-      input.agentBaseUrl !== undefined ||
-      input.agentRuntimes !== undefined ||
-      input.credentialMode !== undefined ||
-      input.agentExperimentalEnabled !== undefined ||
-      input.apiKey !== undefined ||
-      (input.models !== undefined && !isOfficialManagedChannel(existing))
-    if (hasStructuralChange) {
-      throw new Error('商业模式下不允许修改渠道，渠道由服务端统一管理')
-    }
-  }
   const targetProvider = input.provider ?? existing.provider
   // 普通字段更新不依赖解密成功；损坏凭据也允许用户替换，而不是二次加密旧密文。
   if (targetProvider === 'xai' && (input.apiKey
@@ -818,7 +791,6 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
  * 删除渠道
  */
 export function deleteChannel(id: string): void {
-  if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许删除渠道，渠道由服务端统一管理')
   const config = readConfig()
   const index = config.channels.findIndex((c) => c.id === id)
 
@@ -854,7 +826,6 @@ let inflightCodexLogin: Promise<Channel> | undefined
 /** 授权前不落盘；失败/取消无孤儿渠道，同一时刻拒绝重复登录或创建。 */
 export async function loginCodexChannel(input: import('@profer/shared').CodexOAuthLoginInput): Promise<Channel> {
   if (inflightCodexLogin) throw new Error('Codex 登录正在进行，请先完成或取消')
-  if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许自配 Codex 渠道')
   if (typeof input === 'string') {
     const channel = getChannelById(input)
     if (!channel || channel.provider !== 'openai-codex' || isOfficialManagedChannel(channel)) {
@@ -962,7 +933,6 @@ let inflightXaiLogin: Promise<Channel> | undefined
 /** xAI 授权事务：授权前不落盘，重试不留下孤儿渠道，已有渠道原位更新。 */
 export async function loginXaiChannel(input: import('@profer/shared').XaiOAuthLoginInput): Promise<Channel> {
   if (inflightXaiLogin) throw new Error('xAI 登录正在进行，请先完成或取消')
-  if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下不允许自配 xAI 渠道')
   if (typeof input === 'string') {
     const channel = getChannelById(input)
     if (!channel || channel.provider !== 'xai' || isOfficialManagedChannel(channel)) {

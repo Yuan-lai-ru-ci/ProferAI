@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtom, useAtomValue } from 'jotai'
-import { Plus, Pencil, Trash2, Server, RefreshCw, ChevronDown } from 'lucide-react'
+import { Plus, Pencil, Trash2, RefreshCw, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
 import { Switch } from '@profer/ui/primitives/switch'
@@ -45,10 +45,6 @@ export function ChannelSettings(): React.ReactElement {
   const [editingChannel, setEditingChannel] = React.useState<Channel | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [loadError, setLoadError] = React.useState('')
-  const [commercialMode, setCommercialMode] = React.useState(false)
-  const [canSelfConfig, setCanSelfConfig] = React.useState(false)
-  const [capsReady, setCapsReady] = React.useState(false)
-  const [capsError, setCapsError] = React.useState('')
   const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
   const [agentModelId, setAgentModelId] = useAtom(agentModelIdAtom)
   const [agentChannelIds, setAgentChannelIds] = useAtom(agentChannelIdsAtom)
@@ -59,7 +55,6 @@ export function ChannelSettings(): React.ReactElement {
   const [busyIds, setBusyIds] = React.useState<string[]>([])
   const pendingMutations = React.useRef(new Set<string>())
   const requestVersion = React.useRef(0)
-  const capsVersion = React.useRef(0)
   const currentAccount = React.useRef(authStatus)
   currentAccount.current = authStatus
   const currentChannels = React.useRef(channels)
@@ -70,13 +65,8 @@ export function ChannelSettings(): React.ReactElement {
     return () => {
       mounted.current = false
       requestVersion.current += 1
-      capsVersion.current += 1
     }
   }, [])
-  const managedFamilyNames = React.useMemo(() => [...new Set(
-    channels.filter(isModelFamilyChannel).map((channel) => channel.name.trim()).filter(Boolean),
-  )], [channels])
-  const managedFamilySummary = managedFamilyNames.length > 0 ? managedFamilyNames.join('、') : '官方'
   const agentChannelIdsRef = React.useRef(agentChannelIds)
   const agentChannelIdRef = React.useRef(agentChannelId)
 
@@ -87,43 +77,6 @@ export function ChannelSettings(): React.ReactElement {
   React.useEffect(() => {
     agentChannelIdRef.current = agentChannelId
   }, [agentChannelId])
-
-  const [refreshingCaps, setRefreshingCaps] = React.useState(false)
-
-  // 加载账号能力（商业模式 + 自配权限）
-  const loadCaps = React.useCallback(async (force: boolean) => {
-    const version = ++capsVersion.current
-    const account = currentAccount.current
-    setCapsReady(false)
-    setCapsError('')
-    try {
-      const caps = await window.electronAPI.getAccountCapabilities(force)
-      if (version !== capsVersion.current || account !== currentAccount.current) return null
-      setCommercialMode(caps.commercialMode)
-      setCanSelfConfig(caps.canSelfConfig)
-      setCapsReady(true)
-      return caps
-    } catch {
-      if (version === capsVersion.current && account === currentAccount.current) setCapsError('账号权限读取失败，请重试')
-      // 不把失败伪装成本地模式；权限未知时禁用自配入口。
-      return null
-    }
-  }, [])
-
-  React.useEffect(() => {
-    loadCaps(false).then((caps) => {
-      if (caps && caps.commercialMode && !caps.canSelfConfig) loadCaps(true)
-    })
-  }, [loadCaps, authStatus])
-
-  const handleRefreshCaps = React.useCallback(async () => {
-    setRefreshingCaps(true)
-    try {
-      await loadCaps(true)
-    } finally {
-      setRefreshingCaps(false)
-    }
-  }, [loadCaps])
 
   /** 加载渠道列表（未登录时隐藏服务端托管的官方渠道，避免残留缓存展示给未登录用户） */
   const loadChannels = React.useCallback(async (localOnly = false): Promise<Channel[]> => {
@@ -195,14 +148,6 @@ export function ChannelSettings(): React.ReactElement {
       }
     }
   }, [channels, loading, loadError, runtime, agentChannelIds, agentChannelId, agentModelId, selectedChatModel, setAgentChannelId, setAgentModelId, setSelectedChatModel])
-
-  // 商业模式且无自配权限时：不允许进入创建/编辑视图
-  React.useEffect(() => {
-    const locked = !capsReady || (commercialMode && !canSelfConfig)
-    if (!locked || viewMode === 'list') return
-    setViewMode('list')
-    setEditingChannel(null)
-  }, [capsReady, commercialMode, canSelfConfig, viewMode])
 
   const syncAgentChannelEligibility = React.useCallback(async (
     channel: Channel,
@@ -329,7 +274,7 @@ export function ChannelSettings(): React.ReactElement {
   }
 
   // 表单视图
-  if ((viewMode === 'create' || viewMode === 'edit') && capsReady && !(commercialMode && !canSelfConfig)) {
+  if (viewMode === 'create' || viewMode === 'edit') {
     return (
       <ChannelForm
         channel={editingChannel}
@@ -343,44 +288,17 @@ export function ChannelSettings(): React.ReactElement {
   // 列表视图
   return (
     <div className="space-y-8">
-      {capsError && <div role="alert" className="flex items-center justify-between gap-3 text-sm text-destructive">
-        <span>{capsError}</span>
-        <Button variant="outline" size="sm" disabled={refreshingCaps} onClick={handleRefreshCaps}>
-          <RefreshCw size={14} /><span>重试权限</span>
-        </Button>
-      </div>}
       {/* 模型配置（Chat 与 Agent 统一） */}
       <SettingsSection
         title="模型配置"
-        description={
-          commercialMode && !canSelfConfig
-            ? `${managedFamilySummary}模型池由团队服务器统一管理，无需手动配置；普通/VIP 路由与上游故障转移由后台处理`
-            : '管理 AI 供应商连接，配置 API Key 和可用模型。支持 Agent 的渠道会显示对应标签'
-        }
+        description="管理 AI 供应商连接，配置 API Key 和可用模型。支持 Agent 的渠道会显示对应标签"
         action={
-          (commercialMode && !canSelfConfig) ? null : (
-            <Button size="sm" disabled={loading || Boolean(loadError) || !capsReady} onClick={() => setViewMode('create')}>
-              <Plus size={16} />
-              <span>添加配置</span>
-            </Button>
-          )
+          <Button size="sm" disabled={loading || Boolean(loadError)} onClick={() => setViewMode('create')}>
+            <Plus size={16} />
+            <span>添加配置</span>
+          </Button>
         }
       >
-        {commercialMode && !canSelfConfig && (
-          <SettingsCard>
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-primary/5 border border-primary/10">
-              <Server size={18} className="text-primary shrink-0" />
-              <div className="flex-1">
-                <div className="text-sm font-medium">模型池由服务端统一管理</div>
-                <div className="text-xs text-muted-foreground">{managedFamilySummary}模型池由后台按当前账号身份选择普通/VIP 路由，并负责上游主备与故障重试。你当前没有自配 API 权限（可能被管理员单独关闭），如需自行添加 API Key，请联系管理员开通后点「刷新权限」</div>
-              </div>
-              <Button size="sm" variant="outline" onClick={handleRefreshCaps} disabled={refreshingCaps} className="shrink-0">
-                <RefreshCw size={14} className={refreshingCaps ? 'animate-spin' : ''} />
-                <span>刷新权限</span>
-              </Button>
-            </div>
-          </SettingsCard>
-        )}
         {loading ? (
           <div className="text-sm text-muted-foreground py-8 text-center">加载中...</div>
         ) : loadError ? (
@@ -412,8 +330,6 @@ export function ChannelSettings(): React.ReactElement {
                       key={channel.id}
                       channel={channel}
                       busy={busyIds.includes(channel.id)}
-                      commercialMode={commercialMode}
-                      canSelfConfig={capsReady && (!commercialMode || canSelfConfig)}
                       onEdit={() => { setEditingChannel(channel); setViewMode('edit') }}
                       onDelete={() => handleDeleteRequest(channel)}
                       onToggle={() => handleToggle(channel)}
@@ -553,13 +469,11 @@ interface ChannelRowProps {
   onEdit: () => void
   onDelete: () => void
   onToggle: () => void
-  commercialMode?: boolean
-  canSelfConfig?: boolean
   health?: OfficialChannelHealth
   busy?: boolean
 }
 
-function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSelfConfig, busy, health }: ChannelRowProps): React.ReactElement {
+function ChannelRow({ channel, onEdit, onDelete, onToggle, busy, health }: ChannelRowProps): React.ReactElement {
   const isOfficial = isOfficialChannel(channel)
   const [expanded, setExpanded] = React.useState(false)
   const enabledCount = channel.models.filter((m) => m.enabled).length
@@ -580,7 +494,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle, commercialMode, canSe
       <AgentCoreChips channel={channel} />
 
       {/* 操作按钮 */}
-        {!isOfficial && canSelfConfig && (
+        {!isOfficial && (
           <>
             <button
               onClick={onEdit}

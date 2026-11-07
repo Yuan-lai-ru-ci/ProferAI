@@ -1012,19 +1012,14 @@ export async function revokeRemoteDevice(slotId: string): Promise<{ ok: boolean;
 }
 
 /**
- * 代管模式下当前用户是否允许自配 API。
- * 优先采用服务端下发的 canSelfConfigApi（权威值，admin 可单独开关）；
- * 旧 token 无该字段时回退到按 tier 判断（plus/pro/VIP 可自配）。
+ * 当前用户是否允许自配 API / 渠道。
+ *
+ * 渠道完全托管模式已取消：自配对所有账号开放，不再读取服务端下发的
+ * canSelfConfigApi，也不按会员等级降级。函数与 IPC 字段保留，仅为兼容
+ * 旧版 renderer 与旧版服务端的调用契约。
  */
 export function isSelfConfigAllowed(): boolean {
-  const tokens = readTokens()
-  for (const serverId of Object.keys(tokens)) {
-    const t = tokens[serverId]
-    if (!t) continue
-    if (t.canSelfConfigApi !== undefined) return t.canSelfConfigApi
-  }
-  const tier = getMembershipTier()
-  return tier === 'plus' || tier === 'pro' || tier === 'vip'
+  return true
 }
 
 /** 获取当前用户的 membershipTier（不存在则返回 'free'，不依赖 token 过期） */

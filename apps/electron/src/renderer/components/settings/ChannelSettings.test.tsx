@@ -46,7 +46,6 @@ function mount(overrides: Record<string, unknown> = {}) {
   const updates: ChannelUpdateInput[] = []
   const api = {
     listChannels: async (options: unknown) => { reads.push(options); return local },
-    getAccountCapabilities: async () => ({ commercialMode: false, canSelfConfig: true }),
     getOfficialModelHealth: async () => [], updateSettings: async () => ({}),
     deleteChannel: async () => { local = [] },
     updateChannel: async (_id: string, patch: ChannelUpdateInput) => { updates.push(patch); local = [{ ...fixture, ...patch }]; return local[0] },
@@ -114,18 +113,12 @@ function mount(overrides: Record<string, unknown> = {}) {
 afterEach(() => { mounts.splice(0).forEach((cleanup) => cleanup()); Reflect.deleteProperty(globalThis, 'window') })
 
 describe('ChannelSettings 实际事件回归（fixture IPC）', () => {
-  test('Given 权限读取失败 When 加载 Then 不展示可编辑自配入口，重试后恢复', async () => {
-    let attempts = 0
-    const scope = mount({ getAccountCapabilities: async () => { if (++attempts === 1) throw new Error('fixture'); return { commercialMode: false, canSelfConfig: true } } })
+  test('Given 自配渠道 When 加载 Then 始终提供编辑与删除入口', async () => {
+    const scope = mount()
     await scope.flush()
-    const add = scope.elements().find((element) => element.props.onClick && element.props.disabled === true)
-    expect(add).toBeDefined()
-    expect(scope.row().props.canSelfConfig).toBe(false)
-    expect(scope.findText('账号权限读取失败，请重试')).toBeDefined()
-    const retry = scope.elements().find((element) => typeof element.props.onClick === 'function' && React.Children.toArray(element.props.children as React.ReactNode).some((child) => React.isValidElement<{ children?: unknown }>(child) && child.props.children === '重试权限'))!
-    await (retry.props.onClick as () => Promise<void>)()
-    await scope.flush()
-    expect(scope.row().props.canSelfConfig).toBe(true)
+    const row = scope.row()
+    expect(typeof row.props.onEdit).toBe('function')
+    expect(typeof row.props.onDelete).toBe('function')
   })
   test('Given LIST 未返回 When 目录事件已更新 atom Then 迟到 LIST 不覆盖目录', async () => {
     const old = deferred<Channel[]>()
@@ -135,14 +128,6 @@ describe('ChannelSettings 实际事件回归（fixture IPC）', () => {
     scope.render()
     old.resolve([fixture]); await scope.flush()
     expect(store.get(channelsAtom)).toEqual([synced])
-  })
-  test('Given 权限读取未返回 When 页面卸载 Then 迟到结果不触发组件状态更新', async () => {
-    const pending = deferred<{ commercialMode: boolean; canSelfConfig: boolean }>()
-    const scope = mount({ getAccountCapabilities: () => pending.promise })
-    scope.cleanup()
-    pending.resolve({ commercialMode: false, canSelfConfig: true })
-    await scope.flush()
-    expect(scope.elements().find((element) => element.props.channel === fixture)?.props.canSelfConfig).not.toBe(true)
   })
   test('Given 删除成功但 settings 失败 When 确认 Then 仍重载目录并关闭确认框', async () => {
     const scope = mount({ updateSettings: async () => { throw new Error('fixture-settings') } })

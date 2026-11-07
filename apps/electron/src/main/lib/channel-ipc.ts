@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { CHANNEL_IPC_CHANNELS } from '@profer/shared'
 import type { Channel, ChannelCreateInput, ChannelTestResult, ChannelUpdateInput, FetchModelsInput, FetchModelsResult } from '@profer/shared'
-import { listChannels, createChannel, updateChannel, deleteChannel, decryptApiKey, testChannel, testChannelDirect, fetchModels, getChannelPlanQuota, syncChannelsFromServer, isCommercialMode, canSelfConfig, loginXaiChannel, loginCodexChannel } from './channel-manager'
+import { listChannels, createChannel, updateChannel, deleteChannel, decryptApiKey, testChannel, testChannelDirect, fetchModels, getChannelPlanQuota, syncChannelsFromServer, isCommercialMode, loginXaiChannel, loginCodexChannel } from './channel-manager'
 import { listChannelsWithBackgroundSync } from './local-first-channel-listing'
 import { cancelXaiOAuthLogin } from './xai-oauth-service'
 import { cancelCodexOAuthLogin } from './codex-oauth-service'
@@ -53,7 +53,6 @@ export function registerChannelIpc(context: ChannelIpcContext): void {
     return result
   })
   ipcMain.handle(CHANNEL_IPC_CHANNELS.DECRYPT_KEY, async (_, channelId: string): Promise<string> => {
-    if (isCommercialMode() && !canSelfConfig()) throw new Error('商业模式下渠道由服务端统一管理')
     return decryptApiKey(channelId)
   })
   ipcMain.handle(CHANNEL_IPC_CHANNELS.TEST, async (_, channelId: string): Promise<ChannelTestResult> => testChannel(channelId))

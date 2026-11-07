@@ -5,11 +5,10 @@ import { join } from 'node:path'
 import type { XaiOAuthCredentials, XaiOAuthLoginInput } from '@profer/shared'
 
 let commercial = false
-let allowed = true
 let calls = 0
 let authorize: () => Promise<XaiOAuthCredentials>
 const credentials: XaiOAuthCredentials = { access: 'fixture-access', refresh: 'fixture-refresh', expires: Date.now() + 3600000,  }
-mock.module('./auth-service', () => ({ getCommercialMode: () => commercial, isSelfConfigAllowed: () => allowed }))
+mock.module('./auth-service', () => ({ getCommercialMode: () => commercial }))
 mock.module('./token-crypto', () => ({
   encryptToken: (secret: string) => Buffer.from(secret).toString('base64'),
   decryptToken: (secret: string) => Buffer.from(secret, 'base64').toString(),
@@ -35,7 +34,7 @@ function deferred<T>() {
 beforeEach(() => {
   configDir = mkdtempSync(join(tmpdir(), 'profer-xai-login-'))
   process.env.PROFER_CONFIG_DIR = configDir
-  commercial = false; allowed = true; calls = 0
+  commercial = false; calls = 0
   authorize = async () => credentials
 })
 afterEach(() => {
@@ -85,10 +84,7 @@ describe('Xai 主进程授权后创建（fixture OAuth/加密/配置目录）', 
     expect(JSON.parse(decryptApiKey(channel.id))).toEqual(credentials)
   })
 
-  test('商业模式无自配权限、非 Xai/官方渠道与空模型在 OAuth 前拒绝', async () => {
-    commercial = true; allowed = false
-    await expect(loginXaiChannel(input)).rejects.toThrow('商业模式')
-    commercial = false
+  test('非 Xai/官方渠道与空模型在 OAuth 前拒绝', async () => {
     await expect(loginXaiChannel({ ...input, models: [] })).rejects.toThrow('至少启用')
     await expect(loginXaiChannel('missing-fixture')).rejects.toThrow('不存在')
     const channel = createChannel({ ...input, provider: 'custom', apiKey: 'fixture-key' })

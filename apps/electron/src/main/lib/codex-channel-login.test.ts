@@ -5,11 +5,10 @@ import { join } from 'node:path'
 import type { CodexOAuthCredentials, CodexOAuthLoginInput } from '@profer/shared'
 
 let commercial = false
-let allowed = true
 let calls = 0
 let authorize: () => Promise<CodexOAuthCredentials>
 const credentials: CodexOAuthCredentials = { access: 'fixture-access', refresh: 'fixture-refresh', expires: Date.now() + 3600000, accountId: 'fixture-account' }
-mock.module('./auth-service', () => ({ getCommercialMode: () => commercial, isSelfConfigAllowed: () => allowed }))
+mock.module('./auth-service', () => ({ getCommercialMode: () => commercial }))
 mock.module('./token-crypto', () => ({
   encryptToken: (secret: string) => Buffer.from(secret).toString('base64'),
   decryptToken: (secret: string) => Buffer.from(secret, 'base64').toString(),
@@ -34,7 +33,7 @@ function deferred<T>() {
 beforeEach(() => {
   configDir = mkdtempSync(join(tmpdir(), 'profer-codex-login-'))
   process.env.PROFER_CONFIG_DIR = configDir
-  commercial = false; allowed = true; calls = 0
+  commercial = false; calls = 0
   authorize = async () => credentials
 })
 afterEach(() => {
@@ -83,10 +82,7 @@ describe('Codex 主进程授权后创建（fixture OAuth/加密/配置目录）'
     expect(JSON.parse(decryptApiKey(channel.id))).toEqual(credentials)
   })
 
-  test('商业模式无自配权限、非 Codex/官方渠道与空模型在 OAuth 前拒绝', async () => {
-    commercial = true; allowed = false
-    await expect(loginCodexChannel(input)).rejects.toThrow('商业模式')
-    commercial = false
+  test('非 Codex/官方渠道与空模型在 OAuth 前拒绝', async () => {
     await expect(loginCodexChannel({ ...input, models: [] })).rejects.toThrow('至少启用')
     await expect(loginCodexChannel('missing-fixture')).rejects.toThrow('不存在')
     const channel = createChannel({ ...input, provider: 'custom', apiKey: 'fixture-key' })

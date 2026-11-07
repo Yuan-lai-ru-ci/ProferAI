@@ -27,7 +27,7 @@ import {
 } from '@profer/core'
 import type { ImageAttachmentData, ContinuationMessage } from '@profer/core'
 import { resolveEditionBearerToken } from '@profer/edition-contract'
-import { listChannels, decryptApiKey, canSelfConfig } from './channel-manager'
+import { listChannels, decryptApiKey } from './channel-manager'
 import { appendMessage, appendBranchTail, updateConversationMeta, getConversationBranch, getConversationMeta, DEFAULT_CONVERSATION_TITLE } from './conversation-manager'
 import { readAttachmentAsBase64, isImageAttachment } from './attachment-service'
 import { extractTextFromAttachment, isDocumentAttachment } from './document-parser'
