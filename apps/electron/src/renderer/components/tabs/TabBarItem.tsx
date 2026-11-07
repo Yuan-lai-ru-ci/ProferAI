@@ -229,7 +229,7 @@ export function TabBarItem({
     return (
       <div
         data-tab-id={id}
-        className="relative flex-none titlebar-no-drag"
+        className="relative flex-none"
         onMouseEnter={onHoverEnter}
         onMouseLeave={onHoverLeave}
       >
@@ -267,7 +267,7 @@ export function TabBarItem({
       data-tab-id={id}
       className={cn(
         // 空间宽裕时按内容自然宽度排列；拥挤时由 min-width + 横向滚动承接，不把单个标签撑满顶栏。
-        'relative w-fit max-w-[280px] flex-none titlebar-no-drag transition-[min-width] duration-200 ease-out',
+        'relative w-fit max-w-[280px] flex-none transition-[min-width] duration-200 ease-out',
         hideWorkspaceName
           ? (isActive ? 'min-w-[144px]' : 'min-w-[128px] hover:min-w-[144px]')
           : (isActive ? 'min-w-[132px]' : 'min-w-[116px] hover:min-w-[132px]'),

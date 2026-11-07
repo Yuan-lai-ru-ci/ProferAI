@@ -10,25 +10,32 @@ import { join } from 'node:path'
  * 而 macOS 上的类型检查和单测都不会发现，Windows 打包 smoke test 也只验证
  * 进程存活。因此用源码级守卫把约定固化进 CI。
  *
+ * 2026-11 起宿主收敛到共用骨架 FullScreenView：页面只负责内容和动作，
+ * 拖拽带与宿主由骨架统一声明；页面再自己写一份会给同一页注册两个宿主。
+ *
  * 注意：本测试只保证「声明了宿主」，不替代 Windows 真机上对宿主位置、
  * 优先级、命中区的验收。
  */
-const FULLSCREEN_VIEWS: Array<{ path: string; minHosts: number; why: string }> = [
+const FULLSCREEN_VIEWS: Array<{ path: string; why: string }> = [
   {
     path: '../components/planning/PlanningView.tsx',
-    minHosts: 1,
     why: '规划中心全屏取代 TabBar',
   },
   {
     path: '../components/agent-skills/AgentSkillsView.tsx',
-    // 正常页与「未选择工作区」空态是两个互斥的分支，各自都要有按钮
-    minHosts: 2,
     why: 'Agent 技能全屏视图（含未选工作区空态）',
   },
   {
     path: '../components/agent-skills/AgentMemoryView.tsx',
-    minHosts: 1,
     why: 'Agent 记忆全屏视图',
+  },
+  {
+    path: '../components/user-profile/GlobalProfileView.tsx',
+    why: '我的画像全屏视图',
+  },
+  {
+    path: '../components/user-profile/GlobalMemoryFilesView.tsx',
+    why: '全局记忆二级页',
   },
 ]
 
@@ -37,21 +44,30 @@ function readSource(relativePath: string): string {
 }
 
 describe('全屏视图的窗口按钮宿主覆盖', () => {
+  const frameSource = readSource('../components/app-shell/FullScreenView.tsx')
+
+  test('共用骨架声明了窗口按钮宿主与拖拽带', () => {
+    expect(frameSource).toContain('WindowControlsHost')
+    expect(frameSource).toContain('titlebar-drag-region')
+    // 拖拽层必须为窗口按钮让位，否则 Windows 高缩放会吞掉单击
+    expect(frameSource).toContain('resolveWindowControlsRightInset')
+  })
+
   for (const view of FULLSCREEN_VIEWS) {
-    test(`${view.why}：${view.path} 声明了 WindowControlsHost`, () => {
+    test(`${view.why}：${view.path} 使用共用全屏骨架`, () => {
       const source = readSource(view.path)
 
       // 不固定引号风格：仓库内单双引号混用
-      const hasImport = /import\s*\{[^}]*WindowControlsHost[^}]*\}\s*from\s*['"][^'"]*WindowControlsTemplate['"]/.test(
+      const hasImport = /import\s*\{[^}]*FullScreenView[^}]*\}\s*from\s*['"][^'"]*app-shell\/FullScreenView['"]/.test(
         source,
       )
-      expect(hasImport, `${view.path} 缺少 WindowControlsHost 导入`).toBe(true)
+      expect(hasImport, `${view.path} 缺少 FullScreenView 导入`).toBe(true)
 
-      const usages = source.match(/<WindowControlsHost\b/g) ?? []
+      const usages = source.match(/<FullScreenView\b/g) ?? []
       expect(
         usages.length,
-        `${view.path} 只出现 ${usages.length} 处 <WindowControlsHost，至少需要 ${view.minHosts} 处`,
-      ).toBeGreaterThanOrEqual(view.minHosts)
+        `${view.path} 没有渲染 <FullScreenView，Windows 会丢失窗口按钮`,
+      ).toBeGreaterThanOrEqual(1)
     })
   }
 

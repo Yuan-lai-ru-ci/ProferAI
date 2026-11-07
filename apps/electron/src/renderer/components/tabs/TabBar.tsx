@@ -843,6 +843,52 @@ function TabBarInner({
     .map((tab) => `${tab.id}:${tab.type}:${tab.title}`)
     .join("|");
 
+  // 标签条内的拖拽/非拖拽矩形全部按「实测几何」摆放，标签自己不再声明 no-drag。
+  //
+  // 原因：横向滚动会把滚出视口的标签留在负坐标的布局盒上（实测视口 300..666 时首个标签盒
+  // 落在 -51..-14），这些盒子带 no-drag，就一路盖到左侧栏顶部，把侧栏那条 drag strip 从
+  // 窗口命中区里减掉——标签一多，侧栏顶部就拖不动窗口。Chromium 合成拖拽区时不套祖先的
+  // overflow 裁剪、也不看 z-index，所以只能在几何上保证标签条里没有越界的 no-drag 矩形。
+  //
+  // 于是这一层量两个宽度：
+  //   --topbar-tabs-used  标签实际占用的宽度（按视口右缘截断）→ 标签区 no-drag 覆盖层
+  //   --topbar-drag-tail  最后一个标签右缘到视口右缘的空档 → 拖拽层
+  // 两者都不越出视口，标签铺满时空档为 0（那里本来也没有可拖的空白）。
+  React.useLayoutEffect(() => {
+    const content = topbarContentRef.current;
+    const el = scrollRef.current;
+    if (!content || !el) return;
+
+    const updateDragTail = (): void => {
+      const viewport = el.getBoundingClientRect();
+      const last = el.lastElementChild as HTMLElement | null;
+      if (!last) {
+        content.style.setProperty("--topbar-drag-tail", "0px");
+        content.style.setProperty("--topbar-tabs-used", "0px");
+        return;
+      }
+      // 用最后一个标签的右缘量两个量，而不是 clientWidth - scrollWidth：
+      // 滚动区带着 pr-1（右侧给操作胶囊让位），scrollWidth 会把那段留白也算进内容宽度，
+      // 让空档凭空消失。rect 相减只关心标签真正的右缘，滚动时跟着 scroll 事件重算。
+      const lastRight = last.getBoundingClientRect().right;
+      // 标签实际占用的宽度，按视口右缘截断：滚出去的标签再长，这一层也不会越出视口。
+      const used = Math.min(Math.max(lastRight - viewport.left, 0), viewport.width);
+      const tail = Math.max(0, Math.round(viewport.right - lastRight));
+      content.style.setProperty("--topbar-tabs-used", `${Math.round(used)}px`);
+      content.style.setProperty("--topbar-drag-tail", `${tail}px`);
+    };
+
+    updateDragTail();
+    el.addEventListener("scroll", updateDragTail, { passive: true });
+    const observer = new ResizeObserver(updateDragTail);
+    observer.observe(el);
+    if (el.lastElementChild) observer.observe(el.lastElementChild);
+    return () => {
+      el.removeEventListener("scroll", updateDragTail);
+      observer.disconnect();
+    };
+  }, [tabLayoutKey, tabCompressionLevel]);
+
   React.useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -1299,9 +1345,10 @@ function TabBarInner({
       className="topbar-editorial relative tabbar-bg"
       style={{ height: TOPBAR_HEIGHT }}
     >
-      {/* 顶栏不整条声明 drag：Tab、工具组、窗口按钮都是 no-drag，整条 drag 只能靠
-          从大矩形里扣除小块矩形来放行交互，正是 Windows 高 DPI 点击失效的成因。
-          这里改为单一拖拽层，并在右侧操作胶囊左缘精确结束（见 .topbar-drag-surface）。 */}
+      {/* 顶栏不整条声明 drag：整条 drag 只能靠从大矩形里扣除小块矩形来放行交互，正是
+          Windows 高 DPI 点击失效的成因。这里改为单一拖拽层，并且只盖住标签条末尾的空档
+          （宽由 --topbar-drag-tail 实测写入），标签本身不再占 no-drag 矩形——滚动出视口的
+          标签盒会越出视口，把侧栏顶部的 drag 区从窗口命中区里减掉。 */}
 
       {tearingOff && (
         <div className="pointer-events-none absolute -bottom-px left-0 right-0 h-px bg-primary/60 shadow-[0_0_8px_rgba(0,0,0,0.2)]" />
@@ -1323,7 +1370,25 @@ function TabBarInner({
         className="topbar-content absolute inset-x-0 z-10"
         style={{ top: TOPBAR_CONTENT_OFFSET, height: TOPBAR_CONTENT_HEIGHT }}
       >
-        <div className="topbar-drag-surface absolute inset-y-0 left-0 titlebar-drag-region" />
+        {/* 空档宽度未测量出来之前默认 0：宁可暂时没有拖拽区，也不能让拖拽层盖住标签
+            （标签已不再声明 no-drag，被盖住就会变成拖窗口而不是点标签）。
+            left: auto 是关键——拖拽层贴着右侧操作胶囊、按空档宽度向左展开，
+            否则 left-0 会让它从标签条最左端开始铺，正好压住第一个标签。 */}
+        <div
+          className="topbar-drag-surface absolute inset-y-0 titlebar-drag-region"
+          style={{ width: "var(--topbar-drag-tail, 0px)", left: "auto" }}
+        />
+
+        {/* 标签区域的 no-drag 声明放在这一层，而不是每个标签上。
+            标签的矩形会随横向滚动越出视口（实测视口 300..666 时首个标签盒落在 -51..-14），
+            带 no-drag 就会一路盖到左侧栏顶部，把侧栏的拖拽区从窗口命中区里减掉——标签一多，
+            侧栏顶部就拖不动窗口。这一层按「标签实际占用宽度」定位、按视口右缘截断，永远落在
+            视口内；它排在标签视口之前（在标签背后），点击照旧落在标签上。 */}
+        <div
+          className="absolute inset-y-0 left-0 titlebar-no-drag"
+          style={{ width: "var(--topbar-tabs-used, 0px)" }}
+          aria-hidden="true"
+        />
 
         <div className="topbar-tabs-viewport absolute inset-0 overflow-hidden rounded-r-full">
           <div

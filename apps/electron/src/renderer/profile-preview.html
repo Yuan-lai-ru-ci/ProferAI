@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>视觉预览 · 我的画像</title>
+    <script>
+      // 主题：?theme=dark / light，缺省跟随系统；必须首帧写入，避免闪白。
+      ;(function () {
+        var q = new URLSearchParams(location.search)
+        var t = q.get('theme')
+        var dark = t ? t === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.classList.toggle('dark', dark)
+        document.documentElement.setAttribute('data-platform', 'darwin')
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./profile-preview/main.tsx"></script>
+  </body>
+</html>

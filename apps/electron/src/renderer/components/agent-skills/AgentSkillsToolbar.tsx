@@ -9,6 +9,7 @@ import {
   Store,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@profer/ui/primitives/button";
 import { agentSkillsCreateLabel } from "./agentSkillsToolbarLabels";
 
 export type AgentSkillsToolbarDomain = "skills" | "marketplace" | "mcp" | "presets";
@@ -55,7 +56,7 @@ export function AgentSkillsToolbar({
   exportLabel = "导出",
 }: AgentSkillsToolbarProps): React.ReactElement {
   return (
-    <div className="titlebar-no-drag mx-auto flex w-full max-w-6xl shrink-0 flex-wrap items-center gap-2 px-4 pb-4 sm:px-6 lg:px-8">
+    <div className="titlebar-no-drag flex w-full min-w-0 flex-wrap items-center gap-2">
       <div
         className="relative flex h-8 items-stretch rounded-xl bg-muted p-0.5"
         role="tablist"
@@ -88,8 +89,8 @@ export function AgentSkillsToolbar({
         ))}
       </div>
 
-      <div className="flex h-8 min-w-[180px] flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 transition-colors focus-within:border-primary/40">
-        <Search size={14} className="shrink-0 text-foreground/40" />
+      <div className="flex h-8 min-w-[180px] flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-2.5 transition-colors focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
+        <Search size={13} className="shrink-0 text-foreground/40" />
         <input
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
@@ -99,44 +100,51 @@ export function AgentSkillsToolbar({
       </div>
 
       {onCreate && (
-        <button
+        <Button
           type="button"
+          size="sm"
           onClick={onCreate}
-          className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+          className="h-8 shrink-0 gap-1.5 px-3 text-[13px] font-medium"
         >
-          <Plus size={14} />
+          <Plus size={15} />
           {agentSkillsCreateLabel(scope, domain)}
-        </button>
+        </Button>
       )}
       {onImport && (
-        <button
+        <Button
           type="button"
+          size="sm"
+          variant="outline"
           onClick={onImport}
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
+          className="h-8 shrink-0 gap-1.5 px-3 text-[13px] font-medium"
         >
-          <Upload size={14} />
+          <Upload size={15} />
           {importLabel}
-        </button>
+        </Button>
       )}
       {onSecondaryImport && (
-        <button
+        <Button
           type="button"
+          size="sm"
+          variant="outline"
           onClick={onSecondaryImport}
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
+          className="h-8 shrink-0 gap-1.5 px-3 text-[13px] font-medium"
         >
-          <Upload size={14} />
+          <Upload size={15} />
           {secondaryImportLabel}
-        </button>
+        </Button>
       )}
       {onExport && (
-        <button
+        <Button
           type="button"
+          size="sm"
+          variant="outline"
           onClick={onExport}
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 shadow-sm transition-colors hover:bg-foreground/[0.04]"
+          className="h-8 shrink-0 gap-1.5 px-3 text-[13px] font-medium"
         >
-          <Download size={14} />
+          <Download size={15} />
           {exportLabel}
-        </button>
+        </Button>
       )}
     </div>
   );

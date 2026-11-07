@@ -39,7 +39,7 @@ export function AgentWorkspaceSwitcher({
         <button
           type="button"
           aria-label={`切换工作区，当前为${workspaceName}`}
-          className="flex shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 py-1.5 text-[13px] font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.04]"
+          className="flex h-8 shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-3 text-[13px] font-medium text-foreground/80 transition-colors hover:bg-foreground/[0.04]"
         >
           <FolderOpen size={14} className="text-foreground/45" />
           <span className="max-w-[180px] truncate">{workspaceName}</span>

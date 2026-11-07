@@ -25,9 +25,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@profer/ui/primitives/p
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@profer/ui/primitives/alert-dialog'
 import { TodoDatePicker, formatTodoDueDate } from '@profer/ui/primitives/todo-date-picker'
 import { ShortcutKeycaps } from '@/components/shortcuts/ShortcutKeycaps'
-import { WindowControlsHost } from '@/components/WindowControlsTemplate'
-import { detectIsWindows } from '@profer/ui'
-import { resolveWindowControlsRightInset } from '@/lib/window-controls-layout'
+import {
+  FullScreenView,
+  ViewBody,
+  ViewHeader,
+  ViewToolbar,
+} from '@/components/app-shell/FullScreenView'
+import { activeViewAtom } from '@/atoms/active-view'
 import { getVisibleAgentWorkspaces, GOAL_OVERVIEW_ENTRY_ENABLED } from '@/lib/product-feature-flags'
 
 const ALL_TABS: Array<{ id: PlanningTab; label: string }> = [
@@ -69,7 +73,7 @@ function PlanningStat({ label, value }: { label: string; value: number }): React
 
 export function PlanningView({ standalone = false }: { standalone?: boolean } = {}): React.ReactElement {
   const [tab, setTab] = useAtom(planningTabAtom)
-  const isWindows = React.useMemo(() => detectIsWindows(), [])
+  const setActiveView = useSetAtom(activeViewAtom)
   const tabButtonRefs = React.useRef<Array<HTMLButtonElement | null>>([])
   const [calendarToolbarTarget, setCalendarToolbarTarget] = React.useState<HTMLDivElement | null>(null)
   const automations = useAtomValue(automationsAtom)
@@ -139,50 +143,68 @@ export function PlanningView({ standalone = false }: { standalone?: boolean } = 
   // 独立规划窗口（standalone）没有 rail，仍用 tab 在三个分区之间切换。
   const showTabs = standalone
   const sectionLabel = SECTION_LABELS[tab]
+  // 主操作统一放页头右侧：四个 rail 入口共用同一位置，不再塞进内容卡片的工具条。
+  const primaryAction = tab === 'todos' ? (
+    <Button type="button" size="sm" onClick={triggerTodoCreate} data-planning-primary-action="todos" className="h-8 shrink-0 gap-1.5 px-3 text-[13px] font-medium" aria-keyshortcuts="Meta+N Control+N"><Plus size={15} /> 新建 Todo<CreateShortcutHint /></Button>
+  ) : tab === 'calendar' ? (
+    <Button type="button" size="sm" onClick={triggerCalendarCreate} data-planning-primary-action="calendar" className="h-8 shrink-0 gap-1.5 px-3 text-[13px] font-medium" aria-keyshortcuts="Meta+N Control+N"><Plus size={15} /> 新建日程<CreateShortcutHint /></Button>
+  ) : tab === 'automations' ? (
+    <Button type="button" size="sm" onClick={createAutomation} data-planning-primary-action="automations" className="h-8 shrink-0 gap-1.5 px-3 text-[13px] font-medium" aria-keyshortcuts="Meta+N Control+N"><Plus size={15} /> 新建定时任务<CreateShortcutHint /></Button>
+  ) : null
+  // 标题右侧那行字：Todo 说今天与「下一项」，其它分区给一句用途说明。
+  const headerSubtitle = tab === 'todos' ? (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="shrink-0">{todayLabel}</span>
+      <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border/70" />
+      {nextPlannedTodo ? (
+        <button type="button" onClick={openNextPlannedTodo} title={`查看：${nextPlannedTodo.title}`} className="group flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-muted/55 hover:text-foreground">
+          <span className="shrink-0 text-xs">下一项</span>
+          <span className="max-w-56 truncate font-medium text-foreground/85 group-hover:text-foreground">{nextPlannedTodo.title}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">· {formatTodoDueDate(nextPlannedTodo.dueAt!)}</span>
+        </button>
+      ) : (
+        <span className="truncate">{openTodoCount ? '今天没有安排，留出时间专注' : '从一个清晰的待办开始'}</span>
+      )}
+    </div>
+  ) : tab === 'calendar' ? '按日、按周查看与安排日程'
+    : tab === 'automations' ? '管理 Agent 的周期性任务'
+    : '跨会话查看进行中与最近结束的目标'
   const tabNav = showTabs ? (
-    <nav className="inline-flex h-9 shrink-0 rounded-xl border border-surface-border/40 bg-surface-sunken/45 p-0.5 shadow-sm" aria-label="任务日程视图" role="tablist" aria-orientation="horizontal">
-      {TABS.map((item, index) => <button key={item.id} ref={(element) => { tabButtonRefs.current[index] = element }} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('h-8 rounded-lg px-3.5 text-sm transition-colors', tab === item.id ? 'bg-surface-raised font-semibold text-foreground shadow-sm ring-1 ring-surface-border/35' : 'text-muted-foreground hover:bg-surface-selected/60 hover:text-foreground')}>{item.label}</button>)}
+    <nav className="inline-flex h-8 shrink-0 rounded-xl border border-surface-border/40 bg-surface-sunken/45 p-0.5 shadow-sm" aria-label="任务日程视图" role="tablist" aria-orientation="horizontal">
+      {TABS.map((item, index) => <button key={item.id} ref={(element) => { tabButtonRefs.current[index] = element }} type="button" role="tab" aria-selected={tab === item.id} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={(event) => handleTabKeyDown(event, index)} className={cn('h-7 rounded-lg px-3.5 text-[13px] transition-colors', tab === item.id ? 'bg-surface-raised font-semibold text-foreground shadow-sm ring-1 ring-surface-border/35' : 'text-muted-foreground hover:bg-surface-selected/60 hover:text-foreground')}>{item.label}</button>)}
     </nav>
   ) : null
   return (
-    <div data-profer-navigation-region="planning" tabIndex={-1} className="flex h-full flex-col overflow-hidden bg-content-area">
-      {/* 页面标题区作为可拖拽空白区；标题旁的统计和窗口按钮保持可交互。
-          拖拽层在 Windows 窗口按钮前结束：drag 矩形压住 no-drag 按钮矩形时，
-          高 DPI 缩放会把单击判成标题栏点击（与 TabBar 同一类问题）。 */}
-      <header className={cn('relative flex w-full items-start', standalone ? 'px-5 pb-3 pt-4' : 'px-6 pb-3 pt-4 sm:px-8 xl:px-10')}>
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-2" aria-hidden="true" />
-        <div
-          className="absolute inset-y-0 left-0 titlebar-drag-region"
-          style={{ right: resolveWindowControlsRightInset(isWindows) }}
-          aria-hidden="true"
-        />
-        <WindowControlsHost id="planning" priority={20} className="absolute right-2 top-[3px] z-20" />
-        <div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <h1 className="text-2xl font-semibold tracking-tight text-wrap-balance">{sectionLabel}</h1>
-            {tab === 'todos' && <div className="titlebar-no-drag flex items-center gap-1.5 text-xs text-muted-foreground"><PlanningStat label="待完成" value={openTodoCount} /><PlanningStat label="今天" value={todayTodoCount} /><PlanningStat label="本周" value={weekTodoCount} /></div>}
+    <FullScreenView region="planning" controlsId="planning">
+      <ViewHeader
+        width="full"
+        title={sectionLabel}
+        meta={tab === 'todos' ? (
+          <>
+            <PlanningStat label="待完成" value={openTodoCount} />
+            <PlanningStat label="今天" value={todayTodoCount} />
+            <PlanningStat label="本周" value={weekTodoCount} />
+          </>
+        ) : undefined}
+        subtitle={headerSubtitle}
+        back={standalone ? undefined : { label: '返回当前 Agent 会话', onClick: () => setActiveView('conversations') }}
+        actions={primaryAction}
+      />
+      {/* 独立规划窗口没有 rail，分区切换仍留在页头下方的工具条里。 */}
+      {showTabs && <ViewToolbar width="full">{tabNav}</ViewToolbar>}
+      <ViewBody width="full" className="pb-6">
+        <section data-tour="planning-panel" className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-surface-border/50 bg-surface-raised shadow-lg">
+          {/* 日历自带一条工具条（时间导航 / 视图切换），通过 portal 挂到卡片顶边。 */}
+          {tab === 'calendar' && <div ref={setCalendarToolbarTarget} className="shrink-0 titlebar-drag-region" />}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {tab === 'todos' && <TodoWorkspace standalone={standalone} embedded />}
+            {tab === 'calendar' && <CalendarWorkspace embedded toolbarTarget={calendarToolbarTarget} toolbarStart={tabNav} />}
+            {tab === 'automations' && <AutomationsListView embedded />}
+            {tab === 'goals' && <GoalOverviewList />}
           </div>
-        </div>
-      </header>
-      <main className={cn('min-h-0 flex-1 overflow-hidden titlebar-no-drag', standalone ? 'px-5 pb-4 pt-3' : 'px-6 pb-6 pt-3 sm:px-8 xl:px-10')}>
-        <div className="h-full w-full">
-          <section data-tour="planning-panel" className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-surface-border/50 bg-surface-raised shadow-lg">
-            {tab === 'calendar' ? <div ref={setCalendarToolbarTarget} className="shrink-0 titlebar-drag-region" /> : <div className="flex shrink-0 items-center gap-3 border-b border-surface-border/45 px-4 py-2.5 sm:px-5 titlebar-drag-region">
-              {tabNav}
-              <div className="hidden min-w-0 flex-1 text-right text-sm text-muted-foreground 2xl:block">{tab === 'todos' && <div className="flex min-w-0 items-center justify-end gap-2"><span className="hidden shrink-0 sm:inline">{todayLabel}</span><span className="hidden h-3 w-px bg-border/70 sm:inline" />{nextPlannedTodo ? <button type="button" onClick={openNextPlannedTodo} className="group flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-right transition-colors hover:bg-muted/55 hover:text-foreground" title={`查看：${nextPlannedTodo.title}`}><span className="shrink-0 text-xs">下一项</span><span className="max-w-56 truncate font-medium text-foreground/85 group-hover:text-foreground">{nextPlannedTodo.title}</span><span className="shrink-0 text-xs text-muted-foreground">· {formatTodoDueDate(nextPlannedTodo.dueAt!)}</span></button> : <span className="text-xs sm:text-sm">{openTodoCount ? '今天没有安排，留出时间专注' : '从一个清晰的待办开始'}</span>}</div>}{tab === 'automations' && <span className="text-xs">管理 Agent 的周期性任务</span>}{tab === 'goals' && <span className="text-xs">跨会话查看进行中与最近结束的目标</span>}</div>
-              {tab === 'todos' && <button type="button" onClick={triggerTodoCreate} data-planning-primary-action="todos" className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]" aria-keyshortcuts="Meta+N Control+N"><Plus size={15} /> 新建 Todo<CreateShortcutHint /></button>}
-              {tab === 'automations' && <button type="button" onClick={createAutomation} data-planning-primary-action="automations" className="ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]" aria-keyshortcuts="Meta+N Control+N"><Plus size={15} /> 新建定时任务<CreateShortcutHint /></button>}
-            </div>}
-            <div className="min-h-0 flex-1 overflow-hidden">
-              {tab === 'todos' && <TodoWorkspace standalone={standalone} embedded />}
-              {tab === 'calendar' && <CalendarWorkspace embedded toolbarTarget={calendarToolbarTarget} toolbarStart={tabNav} toolbarEnd={<button type="button" onClick={triggerCalendarCreate} data-planning-primary-action="calendar" aria-keyshortcuts="Meta+N Control+N" className="ml-2 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 active:scale-[0.98]"><Plus size={15} /> 新建日程<CreateShortcutHint /></button>} />}
-              {tab === 'automations' && <AutomationsListView embedded />}
-              {tab === 'goals' && <GoalOverviewList />}
-            </div>
-          </section>
-        </div>
-      </main>
-    </div>
+        </section>
+      </ViewBody>
+    </FullScreenView>
   )
 }
 

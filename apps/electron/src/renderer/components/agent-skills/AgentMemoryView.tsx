@@ -13,23 +13,20 @@
 
 import * as React from "react";
 import { useSetAtom } from "jotai";
-import { ArrowLeft, Brain, Search, X } from "lucide-react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@profer/ui/primitives/tooltip";
+import { Brain } from "lucide-react";
 import { activeViewAtom } from "@/atoms/active-view";
 import { useProjectActions } from "@/hooks/useProjectActions";
-import { WindowControlsHost } from "@/components/WindowControlsTemplate";
-import { detectIsWindows } from "@profer/ui";
-import { resolveWindowControlsRightInset } from "@/lib/window-controls-layout";
+import {
+  FullScreenView,
+  ViewBody,
+  ViewHeader,
+  ViewSearchField,
+} from "@/components/app-shell/FullScreenView";
 import { AgentWorkspaceSwitcher } from "./AgentWorkspaceSwitcher";
 import { WorkspaceMemoryTab } from "./WorkspaceMemoryTab";
 
 export function AgentMemoryView(): React.ReactElement {
   const setActiveView = useSetAtom(activeViewAtom);
-  const isWindows = React.useMemo(() => detectIsWindows(), []);
   const { workspaces, currentWorkspaceId, selectProject } = useProjectActions();
   const [search, setSearch] = React.useState("");
 
@@ -45,85 +42,41 @@ export function AgentMemoryView(): React.ReactElement {
   }, [currentWorkspaceId]);
 
   return (
-    <div
-      data-profer-navigation-region="agent-memory"
-      tabIndex={-1}
-      className="relative flex h-full flex-col overflow-hidden bg-content-area"
-    >
-      {/* 本页全屏取代 TabBar，窗口按钮必须由本页自己声明；拖拽层必须在按钮前结束，
-          否则 Windows 高缩放会把单击判成标题栏点击。 */}
-      <div
-        className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region"
-        style={{ right: resolveWindowControlsRightInset(isWindows) }}
-        aria-hidden="true"
-      />
-      <WindowControlsHost
-        id="agent-memory"
-        priority={20}
-        className="absolute right-2 top-[3px] z-20"
-      />
-
-      {/* 单行头部：返回 + 标题在左，搜索与工作区在右。
-          记忆页的主体是文件内容本身，标题区不再占三行，也不写说明文案。 */}
-      <div
-        data-tour="agent-memory-header"
-        className="titlebar-no-drag mx-auto mt-14 flex w-full max-w-6xl shrink-0 flex-wrap items-center gap-3 px-4 pb-3 sm:px-6 lg:px-8"
-      >
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => setActiveView("conversations")}
-              className="flex shrink-0 items-center gap-1 rounded-md px-1 py-0.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              aria-label="返回当前 Agent 会话"
-            >
-              <ArrowLeft size={14} />
-              返回
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>返回当前 Agent 会话</TooltipContent>
-        </Tooltip>
-        <h1 className="shrink-0 text-[17px] font-semibold tracking-tight text-foreground">
-          Agent 记忆
-        </h1>
-
-        <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
-          <div className="flex h-8 w-full min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-2.5 transition-colors focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10 sm:w-[240px]">
-            <Search size={13} className="shrink-0 text-foreground/40" />
-            <input
+    <FullScreenView region="agent-memory" controlsId="agent-memory">
+      <ViewHeader
+        width="standard"
+        tourId="agent-memory-header"
+        title="Agent 记忆"
+        subtitle="当前工作区的长期资料：规则、偏好与已验证经验"
+        back={{
+          label: "返回当前 Agent 会话",
+          onClick: () => setActiveView("conversations"),
+        }}
+        actions={
+          <>
+            <ViewSearchField
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={setSearch}
               placeholder="搜索记忆正文"
-              aria-label="搜索记忆正文"
-              data-agent-memory-search
-              className="w-full bg-transparent text-[12.5px] text-foreground placeholder:text-foreground/35 focus:outline-none"
+              label="搜索记忆正文"
+              searchId="agent-memory"
             />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                aria-label="清空搜索"
-                className="shrink-0 rounded p-0.5 text-foreground/40 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <X size={13} />
-              </button>
+            {currentWorkspace && (
+              <AgentWorkspaceSwitcher
+                workspaces={workspaces}
+                currentWorkspaceId={currentWorkspaceId}
+                workspaceName={workspaceName}
+                onSelect={(workspaceId) =>
+                  selectProject(workspaceId, { resetView: false })
+                }
+              />
             )}
-          </div>
-          {currentWorkspace && (
-            <AgentWorkspaceSwitcher
-              workspaces={workspaces}
-              currentWorkspaceId={currentWorkspaceId}
-              workspaceName={workspaceName}
-              onSelect={(workspaceId) =>
-                selectProject(workspaceId, { resetView: false })
-              }
-            />
-          )}
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* 内容区直接撑满剩余高度：面板内部自己滚，页面不再整体滚动。 */}
-      <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-4 pb-5 sm:px-6 lg:px-8">
+      <ViewBody width="standard" className="pb-5">
         <div data-tour="agent-memory-panel" className="flex min-h-0 flex-1 flex-col">
           {workspaceSlug ? (
             <WorkspaceMemoryTab workspaceSlug={workspaceSlug} search={search} />
@@ -141,7 +94,7 @@ export function AgentMemoryView(): React.ReactElement {
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </ViewBody>
+    </FullScreenView>
   );
 }

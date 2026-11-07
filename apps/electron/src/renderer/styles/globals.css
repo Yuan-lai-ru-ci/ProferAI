@@ -1347,9 +1347,16 @@
  * 窗口按钮），因此 drag 矩形与操作胶囊几何相邻、不重叠。
  * 过去「整条顶栏 drag + 滚动层 drag」只能靠 no-drag 从大矩形里扣除按钮小块，
  * 在 Windows 125%/150%/175% 缩放下会被 OS 判成标题栏点击（按钮单击无效/需双击）。
- * 这里的 12px 必须与 .topbar-actions-slot 的 right 偏移保持一致。 */
+ * 这里的 12px 必须与 .topbar-actions-slot 的 right 偏移保持一致。
+ *
+ * 宽度由 --topbar-drag-tail 实测（TabBar 写入「视口宽度 − 内容宽度」）：拖拽层只盖标签条
+ * 末尾的空档，标签本身不再声明 no-drag。横向滚动会把滚出视口的标签留在负坐标的布局盒上，
+ * 那些盒子带 no-drag 就会盖到左侧栏顶部、把侧栏的 drag 区从窗口命中区里减掉；Chromium
+ * 合成拖拽区时不套 overflow 裁剪、也不看 z-index，只能靠几何不越界来保证。
+ * 变量缺席（例如无标签的空顶栏）时宽度回落到 auto，仍由 left/right 撑满。 */
 .topbar-editorial .topbar-drag-surface {
   right: calc(var(--topbar-actions-width, 0px) + 12px);
+  width: var(--topbar-drag-tail, auto);
 }
 
 .topbar-editorial .topbar-tabs-scroll {
@@ -1753,6 +1760,40 @@
  *
  * 显式隐藏仍用 .scrollbar-none；.scrollbar-thin 类名保留作语义兼容，样式由本段接管。
  */
+/* ===== 消息导航轨道（ScrollMinimap）=====
+ *
+ * 轨道是 Framer 组件「Segmented Navigation」旋转 90° 的形态，颜色全部走 token：
+ * 默认值从主题的 foreground / popover 派生，内置皮肤与自定义主题不用额外配置就会跟随。
+ * 想让轨道用主色而不是前景色时，在皮肤或自定义主题的 :root 里覆盖对应 token 即可：
+ *
+ *   --minimap-pill-bg: hsl(var(--primary));
+ *   --minimap-pill-fg: hsl(var(--primary-foreground));
+ *
+ * 当前阅读位置的横杠仍走 .minimap-visible-indicator + --minimap-indicator-bg，
+ * 保持与既有皮肤兼容。
+ */
+:root {
+  /* 浅色主题：底色是白的，同样的 alpha 会显得更淡，所以刻度比深色主题压深一档 */
+  --minimap-rail-bg: hsl(var(--foreground) / 0.04);
+  --minimap-rail-border: hsl(var(--border) / 0.7);
+  --minimap-bar: hsl(var(--foreground) / 0.2);
+  --minimap-bar-mid: hsl(var(--foreground) / 0.38);
+  --minimap-bar-near: hsl(var(--foreground) / 0.62);
+  --minimap-bar-active: hsl(var(--foreground) / 0.42);
+  /* 展开胶囊跟随应用的「选中态」色：皮肤定义了 --item-selected-* 就用它，
+   * 默认主题没有这两个 token，回退到前景/背景色 */
+  --minimap-pill-bg: var(--item-selected-bg, hsl(var(--foreground)));
+  --minimap-pill-fg: var(--item-selected-fg, hsl(var(--background)));
+}
+
+/* 深色主题：底色本来就深，同样的 alpha 更亮，刻度回退到组件原值 */
+.dark {
+  --minimap-bar: hsl(var(--foreground) / 0.14);
+  --minimap-bar-mid: hsl(var(--foreground) / 0.32);
+  --minimap-bar-near: hsl(var(--foreground) / 0.6);
+  --minimap-bar-active: hsl(var(--foreground) / 0.3);
+}
+
 :root {
   --scrollbar-size: 6px;
   --scrollbar-size-compact: 6px;

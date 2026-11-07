@@ -103,6 +103,23 @@ html[class*="skin-"] .minimap-visible-indicator {
   background-color: var(--minimap-indicator-bg, hsl(var(--foreground) / 0.8)) !important;
 }
 
+/* ===== 消息导航轨道（ScrollMinimap）=====
+ *
+ * 轨道颜色由一组 --minimap-* token 驱动，默认值在 globals.css 的 :root 里从前景色派生，
+ * 皮肤不用配置就会跟随；想单独调轨道时在 skin.css 的 :root 里覆盖需要的项：
+ *
+ *   --minimap-rail-bg      轨道胶囊底色        默认 hsl(var(--popover))
+ *   --minimap-rail-border  胶囊描边            默认 hsl(var(--border) / 0.6)
+ *   --minimap-bar          普通刻度            默认 hsl(var(--foreground) / 0.14)
+ *   --minimap-bar-mid      悬停时距离 2 的邻居  默认 hsl(var(--foreground) / 0.32)
+ *   --minimap-bar-near     悬停时距离 1 的邻居  默认 hsl(var(--foreground) / 0.6)
+ *   --minimap-bar-active   当前阅读位置        默认 hsl(var(--foreground) / 0.3)
+ *   --minimap-pill-bg      展开胶囊底色        默认 hsl(var(--foreground))
+ *   --minimap-pill-fg      展开胶囊文字        默认 hsl(var(--background))
+ *
+ * 例：想让展开的胶囊用主色 —— --minimap-pill-bg: hsl(var(--primary));
+ */
+
 /* ===== 滚动进度条（普通皮肤三态；terminal 等特殊皮肤用特例覆写） ===== */
 html[class*="skin-"] .scroll-progress-thumb {
   background-color: var(--scroll-thumb-bg) !important;

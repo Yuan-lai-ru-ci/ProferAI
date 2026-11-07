@@ -14,21 +14,19 @@
 import * as React from "react";
 import { useSetAtom, useAtomValue } from "jotai";
 import { toast } from "sonner";
-import { ArrowLeft, Blocks, Search, Plus, Globe2 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@profer/ui/primitives/tooltip";
+import { Blocks, Search, Plus, Globe2 } from "lucide-react";
+import { Button } from "@profer/ui/primitives/button";
 import { ConfirmDialog } from "@profer/ui/primitives/confirm-dialog";
 import { activeViewAtom } from "@/atoms/active-view";
 import { workspaceCapabilitiesVersionAtom } from "@/atoms/agent-atoms";
 import { workspacePresetsAtom } from "@/atoms/agent-preset-atoms";
 import { useProjectActions } from "@/hooks/useProjectActions";
-import { WindowControlsHost } from "@/components/WindowControlsTemplate";
-import { detectIsWindows } from "@profer/ui";
-import { resolveWindowControlsRightInset } from "@/lib/window-controls-layout";
+import {
+  FullScreenView,
+  ViewBody,
+  ViewHeader,
+  ViewToolbar,
+} from "@/components/app-shell/FullScreenView";
 import type { McpServerEntry, SkillMeta } from "@profer/shared";
 import { useAgentSkillsData } from "./useAgentSkillsData";
 import { SkillCard } from "./SkillCard";
@@ -58,7 +56,6 @@ type CapabilityTab = "skills" | "mcp" | "presets";
 export function AgentSkillsView(): React.ReactElement {
   const data = useAgentSkillsData();
   const setActiveView = useSetAtom(activeViewAtom);
-  const isWindows = React.useMemo(() => detectIsWindows(), []);
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom);
   const presetList = useAtomValue(workspacePresetsAtom(data.workspaceSlug));
   const { workspaces, currentWorkspaceId, selectProject } = useProjectActions();
@@ -189,101 +186,48 @@ export function AgentSkillsView(): React.ReactElement {
 
   if (!data.hasWorkspace && !globalConfigOpen) {
     return (
-      <div className="relative flex h-full flex-col items-center justify-center gap-3 bg-content-area text-center">
-        {/* 本页全屏取代 TabBar，窗口按钮必须由本页自己声明；缺失时 Windows 会整组
-            失去最小化/最大化/关闭（该回归已发生过一次：宿主被后续重构移除）。 */}
-        <div
-          className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region"
-          style={{ right: resolveWindowControlsRightInset(isWindows) }}
-          aria-hidden="true"
-        />
-        <WindowControlsHost
-          id="agent-skills"
-          priority={20}
-          className="absolute right-2 top-[3px] z-20"
-        />
-        <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
-          <Blocks className="size-8 text-foreground/30" />
-        </div>
-        <div className="text-[15px] font-medium text-foreground/80">
-          未选择工作区
-        </div>
-        <div className="max-w-sm text-[13px] text-foreground/50">
-          请先在 Agent 模式下选择或创建一个工作区，再来管理它的 Skills 与 MCP。
-        </div>
-        <button
-          type="button"
-          onClick={() => setGlobalConfigOpen(true)}
-          className="mt-1 flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[13px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-        >
-          <Globe2 size={14} />
-          管理全局配置
-        </button>
-      </div>
+      <FullScreenView region="agent-skills" controlsId="agent-skills">
+        <ViewBody width="standard" className="items-center justify-center gap-3 text-center">
+          <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
+            <Blocks className="size-8 text-foreground/30" />
+          </div>
+          <div className="text-[15px] font-medium text-foreground/80">
+            未选择工作区
+          </div>
+          <div className="max-w-sm text-[13px] text-foreground/50">
+            请先在 Agent 模式下选择或创建一个工作区，再来管理它的 Skills 与 MCP。
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setGlobalConfigOpen(true)}
+            className="mt-1 h-8 gap-1.5 px-3 text-[13px] font-medium"
+          >
+            <Globe2 size={15} />
+            管理全局配置
+          </Button>
+        </ViewBody>
+      </FullScreenView>
     );
   }
 
   return (
-    <div
-      data-profer-navigation-region="agent-skills"
-      className="relative flex h-full flex-col overflow-hidden bg-content-area"
-    >
-      {/* 本页全屏取代 TabBar，窗口按钮必须由本页自己声明（priority 高于 MainArea 的兜底宿主）。
-          拖拽层同样必须在按钮前结束：drag 矩形压住 no-drag 按钮矩形时，
-          Windows 125%/150%/175% 缩放会把单击判成标题栏点击。 */}
-      <div
-        className="absolute inset-x-0 top-0 z-0 h-14 titlebar-drag-region"
-        style={{ right: resolveWindowControlsRightInset(isWindows) }}
-        aria-hidden="true"
-      />
-      <WindowControlsHost
-        id="agent-skills"
-        priority={20}
-        className="absolute right-2 top-[3px] z-20"
-      />
-      {/* 顶部 56px 已交给上面的拖拽层。不能把含 mt-14 的外层设为 no-drag，
-          否则它的布局盒会盖住窗口顶端并抵消拖拽区；交互控件从 56px 开始的内层才设 no-drag。 */}
-      <div data-tour="agent-skills-header" className="mx-auto mt-14 flex w-full max-w-6xl shrink-0 flex-col gap-3 px-4 pb-4 sm:px-6 lg:px-8">
-        <div className="titlebar-no-drag flex min-h-5 items-center">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={() => setActiveView("conversations")}
-                className="flex items-center gap-1.5 rounded-md text-[13px] text-muted-foreground transition-colors hover:text-foreground"
-                aria-label="返回当前 Agent 会话"
-              >
-                <ArrowLeft size={14} />
-                返回
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>返回当前 Agent 会话</TooltipContent>
-          </Tooltip>
-        </div>
-        <div className="grid min-h-[76px] grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <Blocks className="size-6 shrink-0 text-foreground/70" />
-            <div className="min-w-0">
-              <h1 className="text-2xl font-semibold text-foreground">
-                {globalConfigOpen ? "Agent 技能 · 全局" : "Agent 技能"}
-              </h1>
-              <p className="mt-1 whitespace-nowrap text-[13px] text-muted-foreground">
-                {globalConfigOpen
-                  ? "管理跨工作区生效的 Skills 与预设"
-                  : "管理当前工作区的 Skills、预设与其他 Agent 能力"}
-              </p>
-            </div>
-            {globalConfigOpen && (
-              <div className="flex min-h-[44px] min-w-0 items-center gap-2 rounded-xl bg-gradient-to-br from-primary/12 via-primary/[0.05] to-transparent px-3 py-2 shadow-sm ring-1 ring-primary/10">
-                <Globe2 size={16} className="shrink-0 text-primary" />
-                <div className="min-w-0 text-[11px] leading-4 text-muted-foreground">
-                  <div className="font-semibold text-foreground">全局能力</div>
-                  管理跨工作区生效的 Skill 与预设；内置元类型只读。
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="titlebar-no-drag flex shrink-0 items-center justify-end gap-2 whitespace-nowrap">
+    <FullScreenView region="agent-skills" controlsId="agent-skills">
+      <ViewHeader
+        width="standard"
+        tourId="agent-skills-header"
+        title={globalConfigOpen ? "Agent 技能 · 全局" : "Agent 技能"}
+        subtitle={
+          globalConfigOpen
+            ? "管理跨工作区生效的 Skills 与预设"
+            : "管理当前工作区的 Skills、预设与其他 Agent 能力"
+        }
+        back={{
+          label: "返回当前 Agent 会话",
+          onClick: () => setActiveView("conversations"),
+        }}
+        actions={
+          <>
             {!globalConfigOpen && (
               <AgentWorkspaceSwitcher
                 workspaces={workspaces}
@@ -295,99 +239,98 @@ export function AgentSkillsView(): React.ReactElement {
                 }}
               />
             )}
-            <button
+            <Button
               type="button"
+              size="sm"
+              variant={globalConfigOpen ? "default" : "outline"}
               aria-pressed={globalConfigOpen}
               onClick={() => setGlobalConfigOpen((open) => !open)}
-              className={cn(
-                "flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium shadow-sm transition-colors",
-                globalConfigOpen
-                  ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                  : "border border-border/60 bg-content-area text-foreground/80 hover:bg-foreground/[0.04]",
-              )}
+              className="h-8 shrink-0 gap-1.5 px-3 text-[13px] font-medium"
             >
-              <Globe2 size={14} />
+              <Globe2 size={15} />
               全局配置
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <AgentSkillsToolbar
-        scope={globalConfigOpen ? "global" : "workspace"}
-        domain={globalConfigOpen ? globalConfigTab : tab}
-        tabs={
-          globalConfigOpen
-            ? [
-                { value: "skills", label: "全局 Skill" },
-                { value: "presets", label: "全局预设" },
-              ]
-            : tabList
-        }
-        search={search}
-        searchPlaceholder={
-          globalConfigOpen
-            ? globalConfigTab === "skills"
-              ? "搜索全局 Skills…"
-              : "搜索全局预设…"
-            : tab === "skills"
-              ? "搜索 Skills..."
-              : tab === "mcp"
-                ? "搜索 MCP 服务器..."
-                : "搜索预设..."
-        }
-        onDomainChange={(value) => {
-          if (globalConfigOpen)
-            setGlobalConfigTab(value === "presets" ? "presets" : "skills");
-          else setTab(value as CapabilityTab);
-        }}
-        onSearchChange={setSearch}
-        onCreate={
-          globalConfigOpen
-            ? () => {
-                if (globalConfigTab === "skills")
-                  setGlobalCreateSkillToken((value) => value + 1);
-                else setGlobalCreatePresetToken((value) => value + 1);
-              }
-            : tab === "skills"
-              ? () => setCreateWorkspaceSkillOpen(true)
-              : tab === "presets"
-                ? () => setWorkspaceCreatePresetToken((value) => value + 1)
-                : tab === "mcp"
-                  ? () => {
-                      setEditingMcp(null);
-                      setMcpSheetOpen(true);
-                    }
-                  : undefined
-        }
-        onImport={
-          globalConfigOpen
-            ? globalConfigTab === "skills"
-              ? () => setGlobalImportSkillToken((value) => value + 1)
-              : undefined
-            : tab === "skills"
-              ? () => setShowImport(true)
-              : tab === "presets"
-                ? () => setShowImportPreset(true)
-                : undefined
-        }
-        importLabel="导入"
-        onSecondaryImport={
-          !globalConfigOpen && tab === "presets"
-            ? () => setWorkspaceImportPresetFileToken((value) => value + 1)
-            : undefined
-        }
-        secondaryImportLabel="从文件导入"
-        onExport={
-          !globalConfigOpen && tab === "presets"
-            ? () => setWorkspaceExportPresetToken((value) => value + 1)
-            : undefined
+            </Button>
+          </>
         }
       />
 
+      <ViewToolbar width="standard">
+          <AgentSkillsToolbar
+          scope={globalConfigOpen ? "global" : "workspace"}
+          domain={globalConfigOpen ? globalConfigTab : tab}
+          tabs={
+            globalConfigOpen
+              ? [
+                  { value: "skills", label: "全局 Skill" },
+                  { value: "presets", label: "全局预设" },
+                ]
+              : tabList
+          }
+          search={search}
+          searchPlaceholder={
+            globalConfigOpen
+              ? globalConfigTab === "skills"
+                ? "搜索全局 Skills…"
+                : "搜索全局预设…"
+              : tab === "skills"
+                ? "搜索 Skills..."
+                : tab === "mcp"
+                  ? "搜索 MCP 服务器..."
+                  : "搜索预设..."
+          }
+          onDomainChange={(value) => {
+            if (globalConfigOpen)
+              setGlobalConfigTab(value === "presets" ? "presets" : "skills");
+            else setTab(value as CapabilityTab);
+          }}
+          onSearchChange={setSearch}
+          onCreate={
+            globalConfigOpen
+              ? () => {
+                  if (globalConfigTab === "skills")
+                    setGlobalCreateSkillToken((value) => value + 1);
+                  else setGlobalCreatePresetToken((value) => value + 1);
+                }
+              : tab === "skills"
+                ? () => setCreateWorkspaceSkillOpen(true)
+                : tab === "presets"
+                  ? () => setWorkspaceCreatePresetToken((value) => value + 1)
+                  : tab === "mcp"
+                    ? () => {
+                        setEditingMcp(null);
+                        setMcpSheetOpen(true);
+                      }
+                    : undefined
+          }
+          onImport={
+            globalConfigOpen
+              ? globalConfigTab === "skills"
+                ? () => setGlobalImportSkillToken((value) => value + 1)
+                : undefined
+              : tab === "skills"
+                ? () => setShowImport(true)
+                : tab === "presets"
+                  ? () => setShowImportPreset(true)
+                  : undefined
+          }
+          importLabel="导入"
+          onSecondaryImport={
+            !globalConfigOpen && tab === "presets"
+              ? () => setWorkspaceImportPresetFileToken((value) => value + 1)
+              : undefined
+          }
+          secondaryImportLabel="从文件导入"
+          onExport={
+            !globalConfigOpen && tab === "presets"
+              ? () => setWorkspaceExportPresetToken((value) => value + 1)
+              : undefined
+          }
+        />
+      </ViewToolbar>
+
       {/* 内容 */}
-      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        <div data-tour="agent-skills-panel" className="mx-auto w-full max-w-6xl px-4 pb-10 sm:px-6 lg:px-8">
+      <ViewBody width="standard" scroll>
+        <div data-tour="agent-skills-panel" className="w-full">
           {globalConfigOpen ? (
             <GlobalCapabilitiesView
               initialTab={globalConfigTab}
@@ -446,7 +389,7 @@ export function AgentSkillsView(): React.ReactElement {
             />
           )}
         </div>
-      </div>
+      </ViewBody>
 
       {/* 详情抽屉 */}
       {selectedIsGlobal ? (
@@ -640,7 +583,7 @@ export function AgentSkillsView(): React.ReactElement {
           // 导入成功后 bump 已在对话框内完成；这里留空回调以保持签名一致
         }}
       />
-    </div>
+    </FullScreenView>
   );
 }
 
@@ -791,7 +734,7 @@ function SkillSection({
           {skills.length}
         </span>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {skills.map((skill) => (
           <SkillCard
             key={skillListKey(skill)}
@@ -867,7 +810,7 @@ function McpTab({
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {entries.map(([name, entry]) => (
         <McpCard
           key={name}

@@ -47,7 +47,6 @@ interface ScrollMinimapProps {
 /** 最少轮数才显示迷你地图 */
 const MIN_ITEMS = 1
 /** 迷你地图最多渲染的横杠数 */
-const MAX_BARS = 20
 /**
  * 面板列表最多渲染的行数。
  *
@@ -56,15 +55,32 @@ const MAX_BARS = 20
  * 这里只渲染最近的 N 行，总数仍显示真实值（不随窗口/折叠/截断变化）。
  */
 const MAX_LIST_ITEMS = 200
-/** 横杠静止宽度（px） */
-const REST_WIDTH = 6
-/** 被悬停那根的宽度（px） */
-const PEAK_WIDTH = 22
 /**
- * 悬停时的邻域衰减：下标 = 与指针所在刻度的距离，值 = 伸长比例。
- * 自己吃满，上下邻条依次减弱，形成一道跟着指针走的起伏，而不是孤零零一根长杠。
+ * 轨道是 Framer 组件「Segmented Navigation」旋转 90° 的形态：
+ * 组件里条形 4 宽 × 12 高、悬停胶囊 24 高沿容器方向横向展开；
+ * 转成竖排后条形 12 宽 × 4 高、胶囊 24 宽沿容器方向纵向展开。
  */
-const WAVE_FALLOFF = [1, 0.45, 0.22] as const
+const BAR_REST_WIDTH = 12
+const BAR_REST_HEIGHT = 4
+/** 与悬停项距离 0 / 1 / 2 的条形尺寸（px），照搬组件的 4/6/5 与 12/18/15 */
+const BAR_WIDTHS = [BAR_REST_WIDTH, 18, 15] as const
+const BAR_HEIGHTS = [BAR_REST_HEIGHT, 6, 5] as const
+/** 轨道最多渲染的刻度数（轮次更多时分桶合并） */
+const MAX_BARS = 20
+/** 条目在展开方向上的内边距（px）：组件是 padding 8px 4px，转 90° 后就是上下各 4 */
+const RAIL_ITEM_PAD = 8
+/** 悬停胶囊宽度（px），对应组件里 24px 高的胶囊 */
+const PILL_WIDTH = 24
+/** 胶囊圆角（px）：组件是 6px 圆角矩形，不是全圆胶囊；首尾两段分别放大到 24 */
+const PILL_RADIUS = 6
+/** 胶囊沿展开方向的内边距（px），对应组件里 0 6px 的左右留白 */
+const PILL_PAD = 6
+/** 胶囊沿纵向的高度（px）：13px 数字 + 两侧各 6px */
+const PILL_HEIGHT = 13 + PILL_PAD * 2
+/** 轨道胶囊左右内边距（px）：比组件的 8px 收窄，胶囊贴边更紧 */
+const RAIL_PAD_X = 3
+/** 轨道胶囊宽度（px）= 展开胶囊 24 + 左右各 3px */
+const RAIL_WIDTH = PILL_WIDTH + RAIL_PAD_X * 2
 
 // ── 辅助函数 ──
 
@@ -209,6 +225,7 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
   const trackRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
 
+
   /** 滚动进度条按需显隐：只有用户滚动时才露出，停手约 1.25s 后隐藏。 */
   React.useEffect(() => {
     if (!canScroll) return
@@ -225,6 +242,8 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
    * 所以刻度、预览、面板列表全部以轮为单位。
    */
   const turns = React.useMemo(() => groupNavigationTurns(items), [items])
+
+
 
   // ── 可见消息 + 滚动指标追踪 ──
 
@@ -570,35 +589,77 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
     return {
       first: group[0],
       firstIndex: start,
+      // 一根刻度可能压了多轮（轮数 > RAIL_SEGMENTS 时），胶囊上的标签要用区间
+      lastIndex: Math.max(start, end - 1),
       isVisible: group.some(isTurnOnScreen),
       hasAnswer: group.some((turn) => Boolean(turn.assistant)),
       loaded: group.some((turn) => isLoaded(turn.anchor)),
     }
   })
 
-  // 悬停时按距离衰减：自己最长，上下邻居依次变短（见 WAVE_FALLOFF）
-  const waveWidth = (index: number): number => {
-    if (hoveredBar === null) return REST_WIDTH
-    const factor = WAVE_FALLOFF[Math.abs(index - hoveredBar)] ?? 0
-    return Math.round(REST_WIDTH + (PEAK_WIDTH - REST_WIDTH) * factor)
+  // 悬停时按距离衰减：自己长成胶囊，上下邻居依次变宽变厚（见 BAR_WIDTHS / BAR_HEIGHTS）
+  const barSize = (index: number): { width: number; height: number } => {
+    const slot = hoveredBar === null ? 0 : Math.min(Math.abs(index - hoveredBar), 2)
+    return { width: BAR_WIDTHS[slot] ?? BAR_REST_WIDTH, height: BAR_HEIGHTS[slot] ?? BAR_REST_HEIGHT }
   }
+
+  // ── 悬停胶囊 ──
+  //
+  // 照 Framer 组件的做法：被压住的那一段长成白色胶囊，其余条形按距离变宽变亮。
+  // 竖排里胶囊不能占纵向空间（18px 高会顶掉上下邻居），所以它横向展开，
+  // 容器跟着胶囊一起变宽 —— 否则胶囊会戳到容器外面，读起来就成了一张贴纸。
+  const isSingleSegment = railBars.length === 1
+  const hoveredRailBar = hoveredBar === null ? undefined : railBars[hoveredBar]
+  // 竖排标签不带空格：竖排下空格会撑出一段空白
+  const hoveredLabel = hoveredRailBar
+    ? hoveredRailBar.lastIndex > hoveredRailBar.firstIndex
+      ? `第${hoveredRailBar.firstIndex + 1}–${hoveredRailBar.lastIndex + 1}轮`
+      : `第${hoveredRailBar.firstIndex + 1}轮`
+    : ''
 
   return (
     <>
       {/* ── 左中轨道 ──
           放在正文左侧、纵向居中：它是一份目录刻度，不是贴边的滚动条。
-          指针压到某一根时，它自己和上下邻居按距离衰减伸长，滑动时就是一道跟着走的起伏。 */}
+          整条刻度装在一枚深色胶囊里（对齐 Framer 组件的容器）。指针压到某一根时，
+          那一段沿容器方向（纵向）长成白色胶囊、上下邻居被推开并按距离变宽变亮 ——
+          和组件里横向展开是同一个动作，只是轴转了 90°。 */}
       <div className="absolute left-1 top-1/2 z-30 -translate-y-1/2 pointer-events-none">
         <div
           ref={railRef}
           role="group"
           aria-label="消息导航（右键打开）"
-          className="flex flex-col items-start pointer-events-auto"
+          className="pointer-events-auto flex flex-col items-center justify-center py-2"
+          style={{
+            width: RAIL_WIDTH,
+            borderRadius: 24,
+            background: 'var(--minimap-rail-bg)',
+            // 只有一轮时是一枚小胶囊，描边会让它看起来像按钮
+            boxShadow: isSingleSegment ? 'none' : 'inset 0 0 0 1px var(--minimap-rail-border)',
+          }}
           onMouseLeave={handleRailLeave}
           onContextMenu={handleRailContextMenu}
         >
-          {railBars.map(({ first, firstIndex, isVisible, hasAnswer, loaded }, i) => {
+          {railBars.map(({ first, firstIndex, isVisible, hasAnswer }, i) => {
             const isHovered = hoveredBar === i
+            const distance = hoveredBar === null ? null : Math.abs(i - hoveredBar)
+            const bar = barSize(i)
+            const isFirst = i === 0
+            const isLast = i === railBars.length - 1
+            // 颜色分两套，别混着用：
+            // 静止时表达状态（视口内 / 有回复 / 其余）；悬停时只按距离排，近亮远暗。
+            // 混用会让远处的「视口内」条比近邻还亮，深浅顺序就乱了。
+            // 组件的做法：静止时所有条都是 #333（≈ /12），悬停时只把邻居提亮到
+            // #a3a3a3（/60）和 #636363（/32），其余保持 #333 不动 —— 不是把远处调暗。
+            const barColor = distance === null
+              ? isVisible
+                ? 'var(--minimap-bar-active)'
+                : 'var(--minimap-bar)'
+              : distance === 1
+                ? 'var(--minimap-bar-near)'
+                : distance === 2
+                  ? 'var(--minimap-bar-mid)'
+                  : 'var(--minimap-bar)'
             return (
               <button
                 key={i}
@@ -607,48 +668,69 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
                 aria-label={first ? `跳转到第 ${firstIndex + 1} 轮：${first.preview.slice(0, 40)}` : '跳转到对话'}
                 onMouseEnter={() => handleBarEnter(i)}
                 onClick={() => first && scrollToMessage(first.anchor.id, first.anchor.matchKey)}
-                className="relative flex h-2 w-9 items-center focus:outline-none"
+                className="relative flex w-full items-center justify-center transition-[height] duration-200 ease-out focus:outline-none"
+                style={{ height: (isHovered ? PILL_HEIGHT : bar.height) + RAIL_ITEM_PAD }}
               >
-                <span
-                  className={cn(
-                    // 150ms 的跟随：沿轨道滑动时，起伏是一道跟着指针走的波，而不是逐格硬跳
-                    'block h-[3px] rounded-full transition-[width,background-color] duration-150 ease-out',
-                    isVisible
-                      ? 'bg-foreground/70 dark:bg-foreground/75 minimap-visible-indicator'
-                      : hasAnswer
-                        ? 'bg-foreground/40 dark:bg-foreground/40'
-                        : 'bg-foreground/20 dark:bg-foreground/25',
-                    !loaded && 'opacity-40',
-                    isHovered && 'bg-foreground dark:bg-foreground'
-                  )}
-                  style={{ width: waveWidth(i) }}
-                />
+                {isHovered ? (
+                  <span
+                    className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center overflow-hidden shadow-sm"
+                    style={{
+                      background: 'var(--minimap-pill-bg)',
+                      color: 'var(--minimap-pill-fg)',
+                      width: PILL_WIDTH,
+                      // 只有一轮时内部也收成圆点，和外面的圆同形
+                      height: isSingleSegment ? PILL_WIDTH : PILL_HEIGHT,
+                      borderRadius: isSingleSegment
+                        ? '50%'
+                        : isFirst
+                          ? `24px 24px ${PILL_RADIUS}px ${PILL_RADIUS}px`
+                          : isLast
+                            ? `${PILL_RADIUS}px ${PILL_RADIUS}px 24px 24px`
+                            : PILL_RADIUS,
+                    }}
+                  >
+                    <span className="shrink-0 font-serif text-[13px] leading-none tabular-nums">
+                      {firstIndex + 1}
+                    </span>
+                  </span>
+                ) : (
+                  <span
+                    className={cn(
+                      // 150ms 的跟随：沿轨道滑动时，起伏是一道跟着指针走的波，而不是逐格硬跳
+                      'block h-1 rounded-full transition-[width,height,background-color] duration-150 ease-out',
+                      // 皮肤可以用 --minimap-indicator-bg 覆写「当前阅读位置」这一根
+                      isVisible && distance === null && 'minimap-visible-indicator'
+                    )}
+                    style={{ width: bar.width, height: bar.height, backgroundColor: barColor }}
+                  />
+                )}
 
-                {/* 悬停预览：一轮 = 提问 + 回复，贴着被悬停的那一根向右展开。
-                    一张卡、两块内容、只用间距分隔：不做分割线、不加标题行、不做入场动画——
-                    指针滑过时它就是一块跟着走的内容，而不是一堆被线切碎的小格子。 */}
+                {/* 悬停预览：一轮 = 提问 + 回复，接在胶囊右边缘。
+                    卡片不做入场动画——指针滑过时它就是一块跟着走的内容。 */}
                 {isHovered && !panelOpen && hoveredTurn && (
-                  <div className="pointer-events-none absolute left-full top-1/2 z-40 ml-4 w-[280px] -translate-y-1/2 rounded-lg border bg-popover px-2.5 py-2 shadow-lg">
-                    <div className="flex items-start gap-1.5">
-                      <ItemIcon item={hoveredTurn.user ?? hoveredTurn.anchor} />
-                      <p className="line-clamp-2 text-xs leading-relaxed text-popover-foreground/85">
-                        {hoveredTurn.preview.trim() || '(空消息)'}
-                      </p>
-                    </div>
-                    {hoveredTurn.assistant && (
-                      <div className="mt-1.5 flex items-start gap-1.5">
-                        <ItemIcon item={hoveredTurn.assistant} />
-                        <p className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground/75">
-                          {hoveredTurn.assistant.preview.trim() || '(空回复)'}
+                  <div className="pointer-events-none absolute left-full top-1/2 z-40 ml-2 flex -translate-y-1/2 items-center">
+                    <div className="w-[280px] shrink-0 rounded-lg border bg-popover px-2.5 py-2 shadow-lg">
+                      <div className="flex items-start gap-1.5">
+                        <ItemIcon item={hoveredTurn.user ?? hoveredTurn.anchor} />
+                        <p className="line-clamp-2 text-xs leading-relaxed text-popover-foreground/85">
+                          {hoveredTurn.preview.trim() || '(空消息)'}
                         </p>
                       </div>
-                    )}
-                    {!hoveredTurn.assistant && hoveredTurn.status && (
-                      <div className="mt-1.5 flex items-start gap-1.5 text-destructive/80">
-                        <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                        <p className="line-clamp-2 text-[11px] leading-relaxed">{hoveredTurn.status.preview}</p>
-                      </div>
-                    )}
+                      {hoveredTurn.assistant && (
+                        <div className="mt-1.5 flex items-start gap-1.5">
+                          <ItemIcon item={hoveredTurn.assistant} />
+                          <p className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground/75">
+                            {hoveredTurn.assistant.preview.trim() || '(空回复)'}
+                          </p>
+                        </div>
+                      )}
+                      {!hoveredTurn.assistant && hoveredTurn.status && (
+                        <div className="mt-1.5 flex items-start gap-1.5 text-destructive/80">
+                          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                          <p className="line-clamp-2 text-[11px] leading-relaxed">{hoveredTurn.status.preview}</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </button>

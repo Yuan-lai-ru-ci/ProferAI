@@ -14,7 +14,20 @@ export interface WorkspaceHeatmapEntry {
   tokens: number
 }
 
-/** 计算 [p25, p50, p75] 百分位阈值。只对非零值做分级，空则返回 [0,0,0] */
+export function aggregateHeatmapEntries(
+  workspaceEntries: ReadonlyArray<ReadonlyArray<WorkspaceHeatmapEntry>>,
+): WorkspaceHeatmapEntry[] {
+  const totals = new Map<string, number>()
+  for (const entries of workspaceEntries) {
+    for (const entry of entries) {
+      totals.set(entry.date, (totals.get(entry.date) ?? 0) + entry.tokens)
+    }
+  }
+  return Array.from(totals, ([date, tokens]) => ({ date, tokens }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+
 export function computePercentileThresholds(values: number[]): [number, number, number] {
   const nonZero = values.filter((v) => v > 0).sort((a, b) => a - b)
   if (nonZero.length === 0) return [0, 0, 0]

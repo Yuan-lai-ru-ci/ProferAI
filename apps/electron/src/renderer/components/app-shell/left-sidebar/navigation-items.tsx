@@ -165,6 +165,8 @@ export function enterableViewSelector(item: string): string | null {
   if (planningSectionOf(item)) return '[data-profer-navigation-region="planning"]'
   if (item === 'agent-skills') return '[data-profer-navigation-region="agent-skills"]'
   if (item === 'agent-memory') return '[data-profer-navigation-region="agent-memory"]'
+  if (item === 'user-profile') return '[data-profer-navigation-region="user-profile"]'
+  if (item === 'user-profile-files') return '[data-profer-navigation-region="user-profile"]'
   return null
 }
 
@@ -195,7 +197,10 @@ export function focusEnterableViewItem(item: string): void {
     }
     // 记忆页：直接落到搜索框
     if (!target && item === 'agent-memory') {
-      target = region?.querySelector<HTMLElement>('[data-agent-memory-search]')
+      target = region?.querySelector<HTMLElement>('[data-view-search="agent-memory"]')
+    }
+    if (!target && item === 'user-profile') {
+      target = region?.querySelector<HTMLElement>('[data-user-profile-primary-action]')
     }
     if (!target) {
       // 通用回退：region 内首个 focusable（tablist/按钮等）；无则可聚焦的 region 容器（tabIndex=-1）。

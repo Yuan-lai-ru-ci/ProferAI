@@ -127,7 +127,7 @@ export function TabGroupItem({
       className={cn(
         // w-fit：宽度由两个标题内容决定；min-w 只保证图标+按钮的基本可用宽度，
         // max-w 防止超长标题把整条顶栏吃掉。中线位置由内容决定，见文件头说明。
-        'relative w-fit flex-none titlebar-no-drag',
+        'relative w-fit flex-none',
         isActive ? 'min-w-[168px] max-w-[420px]' : 'min-w-[152px] max-w-[400px] hover:min-w-[168px]',
       )}
       onMouseEnter={onHoverEnter}

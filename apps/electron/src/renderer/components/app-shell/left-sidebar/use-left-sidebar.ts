@@ -780,6 +780,15 @@ export function useLeftSidebar() {
     setActiveView('agent-memory')
   }, [activeView, setActiveView])
 
+  /** 打开跨工作区共享的用户画像视图 */
+  const handleOpenUserProfile = React.useCallback((): void => {
+    if (activeView === 'user-profile') {
+      setActiveView('conversations')
+      return
+    }
+    setActiveView('user-profile')
+  }, [activeView, setActiveView])
+
   // 切换模式时重置归档视图
   React.useEffect(() => {
     setViewMode('active')
@@ -1932,6 +1941,7 @@ export function useLeftSidebar() {
     handleOpenPlanning,
     handleOpenSkills,
     handleOpenMemory,
+    handleOpenUserProfile,
 
     // tab 状态
     tabs,

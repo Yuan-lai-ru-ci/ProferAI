@@ -18,7 +18,7 @@
 import * as React from 'react'
 import { PluginSidebarEntries } from '@/components/plugins/PluginEntries'
 import { GOAL_OVERVIEW_ENTRY_ENABLED } from '@/lib/product-feature-flags'
-import { PanelLeftClose, PanelLeftOpen, Bot, MessageSquare, Plus, Search, CalendarDays, Clock, ListTodo, Blocks, Brain, Target } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Bot, MessageSquare, Plus, Search, CalendarDays, Clock, ListTodo, Blocks, Brain, Target, UserRound } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { CollapsedWorkspacePopover } from '@/components/agent/CollapsedWorkspacePopover'
@@ -62,6 +62,7 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
     activeView,
     handleOpenSkills,
     handleOpenMemory,
+    handleOpenUserProfile,
     capabilities,
     setSettingsOpen,
     userProfile,
@@ -227,6 +228,14 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
           navigationItem="agent-memory"
         />
       )}
+      <SidebarRailEntry
+        icon={<UserRound size={19} />}
+        label="我的画像"
+        tooltip="我的画像（所有工作区共享）"
+        active={activeView === 'user-profile'}
+        onClick={handleOpenUserProfile}
+        navigationItem="user-profile"
+      />
       <PluginSidebarEntries collapsed />
 
       <div className="min-h-0 flex-1" />

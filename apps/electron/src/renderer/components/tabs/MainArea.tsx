@@ -72,6 +72,12 @@ const AgentSkillsView = React.lazy(() =>
 const AgentMemoryView = React.lazy(() =>
   import('@/components/agent-skills/AgentMemoryView').then((module) => ({ default: module.AgentMemoryView })),
 )
+const GlobalProfileView = React.lazy(() =>
+  import('@/components/user-profile/GlobalProfileView').then((module) => ({ default: module.GlobalProfileView })),
+)
+const GlobalMemoryFilesView = React.lazy(() =>
+  import('@/components/user-profile/GlobalMemoryFilesView').then((module) => ({ default: module.GlobalMemoryFilesView })),
+)
 
 /** 懒加载视图的占位：与内容区同色、无文字，避免出现“加载中”闪烁。 */
 const LAZY_VIEW_FALLBACK = <div className="h-full w-full bg-content-area" />
@@ -556,8 +562,8 @@ export function MainArea(): React.ReactElement {
         className="main-content-panel relative rounded-2xl bg-content-area shadow-xl dark:shadow-sm"
       >
         {/* 通用兜底宿主：凡是 TabBar 不持有窗口按钮的分支（定时任务表单、无 Tab
-            空态、以及所有全屏视图）都必须能提供按钮；页面自己声明的宿主
-            priority 更高时会自动接管（planning / agent-skills / agent-memory 均为 20）。
+            空态、以及所有全屏视图）都必须能提供按钮；全屏页由共用骨架
+            FullScreenView 声明 priority 20 的宿主，会自动接管这里的兜底。
             priority 5 < TabBar 的 10：相同优先级会让两个宿主争抢按钮（按注册
             顺序决出），表现为按钮在两处之间跳位。兜底只在没有其他宿主时接管。
             位置：顶栏已横跨主区，兜底宿主也必须相对整个主区定位，
@@ -590,6 +596,16 @@ export function MainArea(): React.ReactElement {
           // Agent 记忆视图：同样全屏取代 TabBar + TabContent
           <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
             <AgentMemoryView />
+          </React.Suspense>
+        ) : activeView === 'user-profile' ? (
+          // 用户画像视图：跨工作区共享的全局用户背景
+          <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
+            <GlobalProfileView />
+          </React.Suspense>
+        ) : activeView === 'user-profile-files' ? (
+          // 用户画像二级页：全局 Markdown 记忆文件管理
+          <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
+            <GlobalMemoryFilesView />
           </React.Suspense>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
