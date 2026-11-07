@@ -27,11 +27,19 @@ describe('Agent 活跃运行显示投影', () => {
       .toMatchObject({ kind: 'stopping', active: true, showRunningIndicator: false, showRetry: false })
   })
 
-  test('压缩与收尾期间不重复显示运行、后台或协作等待行', () => {
+  test('压缩期间与手动压缩 run 的收尾窗口不重复显示运行、后台或协作等待行', () => {
     for (const flag of [{ isCompacting: true }, { compactInFlight: true }]) {
       expect(deriveAgentRuntimeDisplay({ ...running, ...flag, backgroundWaiting: true, runningDelegationCount: 2 }))
         .toMatchObject({ kind: 'none', active: true, showRunningIndicator: false, showRetry: false })
     }
+  })
+
+  test('自动压缩结束后本轮继续执行，运行指示必须恢复', () => {
+    // 自动压缩（阈值/溢出）只置 isCompacting，compact_boundary 到达后同一轮会继续跑：
+    // 不能把「压缩结束」当成「run 结束」，否则长会话会长时间看不到运行指示。
+    expect(deriveAgentRuntimeDisplay({ ...running, isCompacting: true })).toMatchObject({ kind: 'none', active: true })
+    expect(deriveAgentRuntimeDisplay({ ...running, isCompacting: false, compactInFlight: false }))
+      .toMatchObject({ kind: 'running', active: true, showRunningIndicator: true })
   })
 
   test('正在重试时取代普通计时和旧错误说明；失败记录不解除运行锁', () => {

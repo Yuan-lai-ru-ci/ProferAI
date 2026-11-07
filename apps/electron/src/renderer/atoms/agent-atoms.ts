@@ -93,12 +93,13 @@ export interface AgentStreamState {
   thinkingEstimatedTokens?: number
   /** usage 数据最后更新时间戳（毫秒），用于 UI 提示数据时效 */
   usageUpdatedAt?: number
-  /** 是否正在压缩上下文 */
+  /** 是否正在压缩上下文（手动 /compact 与自动阈值/溢出压缩共用） */
   isCompacting?: boolean
   /**
-   * 压缩流程是否进行中（含收尾窗口）。
-   * 从用户点击压缩 / SDK compacting 事件开始 → 到整个 stream 结束（state 被删除）前一直为 true。
+   * 本轮 run 是否就是一次手动压缩（含 compact_boundary 之后的收尾窗口）。
+   * 只由 AgentView 的手动 /compact 路径置位，一直保留到整个 stream 结束（state 被删除），
    * 用于抑制压缩分隔符切换期间 AgentRunningIndicator 的短暂闪烁。
+   * 自动压缩（阈值/溢出）不置位：压缩结束后本轮还要继续执行，运行指示必须立即恢复。
    */
   compactInFlight?: boolean
   /** 流式开始时间戳（用于思考计时持久化） */
@@ -339,10 +340,10 @@ export const agentMessageQueueAtomFamily = atomFamily((sessionId: string) =>
 )
 
 /**
- * 每会话「队列自动发送」开关的运行时缓存：权威值持久化在会话 meta（`autoQueueSendEnabled`）。
- * 停止会话时写 false，重启后从 meta 恢复。
+ * 每会话「停止后队列暂停」的运行时缓存：停止时置 true，用户下一次显式发送/立即发送时置 false。
+ * 只暂停自动发送，不动队列内容；不持久化——队列本身也在内存里。
  */
-export const agentQueueAutoSendMapAtom = atom<Map<string, boolean>>(new Map())
+export const agentQueuePausedMapAtom = atom<Map<string, boolean>>(new Map())
 
 /** 工作区能力版本号 — 每次修改 MCP/Skills 后自增，触发侧边栏重新获取 */
 export const workspaceCapabilitiesVersionAtom = atom(0)
@@ -908,9 +909,17 @@ export function applyAgentEvent(
       }
 
     case 'compacting':
-      return { ...prev, isCompacting: true, compactInFlight: true }
+      // 自动压缩（阈值/溢出）与手动压缩都会到这里。这里只标记「正在压缩」，
+      // 不置 compactInFlight：自动压缩结束后同一轮还会自动续跑，
+      // 若把整轮当作手动压缩 run，运行指示与流式正文会被一路压到 run 结束（长会话看起来像卡死）。
+      return { ...prev, isCompacting: true }
 
     case 'compact_complete':
+      return { ...prev, isCompacting: false }
+
+    case 'compact_failed':
+      // 压缩失败/取消不会发 compact_boundary；同样必须释放压缩锁，
+      // 否则本轮剩余时间既没有运行指示也不能输入。
       return { ...prev, isCompacting: false }
 
     case 'model_resolved':

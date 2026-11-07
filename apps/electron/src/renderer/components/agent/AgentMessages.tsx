@@ -716,10 +716,10 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
   )
   const hasContent = allSDKMessages.length > 0 || (imageGenerations?.length ?? 0) > 0
 
-  // 压缩流程进行中（含收尾窗口：compact_boundary 已到但 result 未到）
-  // → 一律抑制 AgentRunningIndicator，避免压缩分隔符切换期间闪烁。
-  // compactInFlight 从点击压缩 / SDK compacting 事件开始为 true，
-  // 直到整个 stream 结束（stream state 被删除）才消失。
+  // 压缩流程进行中（含手动压缩 run 的收尾窗口：compact_boundary 已到但 result 未到）
+  // → 抑制 AgentRunningIndicator 与尾部流式气泡，避免压缩分隔符切换期间闪烁。
+  // compactInFlight 只代表「本轮 run 就是一次手动压缩」，直到 stream 结束才消失；
+  // 自动压缩（阈值/溢出）只有 isCompacting，压缩结束后本轮继续执行时必须恢复运行指示与正文。
   const suppressAgentRunning = streamState?.isCompacting || streamState?.compactInFlight
 
   // 统一分组：将持久化 + 实时消息合并后再分组，确保 system 消息（如压缩分割线）出现在正确位置

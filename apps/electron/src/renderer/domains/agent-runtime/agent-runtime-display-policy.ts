@@ -22,6 +22,7 @@ export interface AgentRuntimeDisplayFacts {
   stopping?: boolean
   backgroundWaiting?: boolean
   isCompacting?: boolean
+  /** 本轮 run 就是一次手动压缩（含收尾窗口）；自动压缩不置位。 */
   compactInFlight?: boolean
   retrying?: boolean
   retryFailed?: boolean
@@ -48,7 +49,9 @@ export function deriveAgentRuntimeDisplay(facts: AgentRuntimeDisplayFacts): Agen
   })
 
   if (facts.stopping) return display('stopping', '正在停止，等待运行结束确认')
-  // compact_boundary 与 owner 结束之间有收尾窗口，沿用现有抑制规则避免指示器闪烁。
+  // 压缩期间由 CompactingIndicator 接管，不重复显示运行行；手动压缩 run 在 compact_boundary
+  // 之后只剩合成 result，用 compactInFlight 把抑制延续到 run 结束避免闪烁。
+  // 自动压缩（阈值/溢出）只置 isCompacting：压缩结束后同一轮会继续执行，必须立即恢复运行指示。
   if (facts.isCompacting || facts.compactInFlight) return display('none')
   if (facts.running) {
     if (facts.retrying && !facts.retryFailed) return display('retrying', '', true)

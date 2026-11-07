@@ -12,9 +12,9 @@ interface AgentMessageQueueProps {
   canSendNow: boolean
   /** 「立即发送」按钮的 tooltip：运行中如实说明会打断本轮 */
   sendNowLabel?: string
-  /** 当前队列是否会在本轮结束后自动发送 */
-  autoSend: boolean
-  onToggleAutoSend: () => void
+  /** 是否因「停止」暂停自动发送（队列内容仍在） */
+  paused: boolean
+  onResume: () => void
   onSendNow: (messageId: string) => void
   onRecall: (messageId: string) => void
   onRemove: (messageId: string) => void
@@ -31,8 +31,8 @@ export function AgentMessageQueue({
   items,
   canSendNow,
   sendNowLabel = '立即发送',
-  autoSend,
-  onToggleAutoSend,
+  paused,
+  onResume,
   onSendNow,
   onRecall,
   onRemove,
@@ -77,22 +77,19 @@ export function AgentMessageQueue({
     >
       <div className="flex items-center gap-2 px-1 pb-1 text-[12px] text-muted-foreground">
         <Clock3 className="size-3.5" />
-        <button
-          type="button"
-          role="switch"
-          aria-checked={autoSend}
-          onClick={onToggleAutoSend}
-          title={autoSend ? '自动发送已开启：本轮结束自动发送队首' : '自动发送已关闭：需手动逐条「立即发送」'}
-          className={cn(
-            'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] leading-none transition-colors',
-            autoSend
-              ? 'border-amber-500/40 bg-amber-500/10 text-amber-600'
-              : 'border-border bg-muted/40 text-muted-foreground/60 hover:text-foreground/80',
-          )}
-        >
-          <span className={cn('size-1.5 rounded-full transition-colors', autoSend ? 'bg-amber-500' : 'bg-muted-foreground/40')} />
-          <span>自动发送</span>
-        </button>
+        {paused ? (
+          <button
+            type="button"
+            onClick={onResume}
+            title="已按停止暂停自动发送；点此或直接发送消息即恢复"
+            className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] leading-none text-amber-600 transition-colors hover:bg-amber-500/15"
+          >
+            <span className="size-1.5 rounded-full bg-amber-500" />
+            <span>已暂停 · 继续</span>
+          </button>
+        ) : (
+          <span>本轮结束后自动发送</span>
+        )}
       </div>
       <div className="space-y-1">
         {items.map((item, index) => {

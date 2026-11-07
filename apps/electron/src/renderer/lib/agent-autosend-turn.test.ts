@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { AUTO_SEND_RETRY_INTERVAL_MS, nextAutoSendRetryAt, shouldAutoSendQueueHead, type AutoSendGateState } from './agent-autosend-turn'
 
 const gate = (over: Partial<AutoSendGateState> = {}): AutoSendGateState => ({
-  autoSendEnabled: true,
+  queuePaused: false,
   queuedCount: 1,
   liveMessagesPending: false,
   streaming: false,
@@ -16,12 +16,12 @@ const gate = (over: Partial<AutoSendGateState> = {}): AutoSendGateState => ({
 })
 
 describe('队列自动发送判定', () => {
-  test('Given 开关开且空闲可发 When 队列非空 Then 发队首', () => {
+  test('Given 未被暂停且空闲可发 When 队列非空 Then 发队首', () => {
     expect(shouldAutoSendQueueHead(gate())).toBe(true)
   })
 
   test('Given 任一前置不满足 When 判定 Then 都不发', () => {
-    expect(shouldAutoSendQueueHead(gate({ autoSendEnabled: false }))).toBe(false)
+    expect(shouldAutoSendQueueHead(gate({ queuePaused: true }))).toBe(false)
     expect(shouldAutoSendQueueHead(gate({ queuedCount: 0 }))).toBe(false)
     expect(shouldAutoSendQueueHead(gate({ streaming: true }))).toBe(false)
     expect(shouldAutoSendQueueHead(gate({ liveMessagesPending: true }))).toBe(false)

@@ -8,14 +8,17 @@
  * 之后只能等下一轮结束——表现为「队列消息再也不自动发送」（D3）。
  *
  * 新实现是纯条件判定 + 失败退避：
- * - 只要「队列非空 + 开关开 + 空闲可发」就发，不依赖任何一次性信号，天然幂等；
+ * - 只要「队列非空 + 未被停止暂停 + 空闲可发」就发，不依赖任何一次性信号，天然幂等；
  * - 发送失败回队首并记录时间戳，退避窗口内不再重试，避免 tight loop；
  * - 空闲时队列新增/恢复同样满足条件，压缩后也能自己续跑。
+ *
+ * 没有「自动发送开关」：左键入队就是发送意图，队列必须自动发。
+ * 唯一会暂停的是「停止」——用户主动叫停后保留队列，下一次显式发送/立即发送时恢复。
  */
 
 export interface AutoSendGateState {
-  /** 该会话「自动发送」开关（meta 持久化，缺省开） */
-  autoSendEnabled: boolean
+  /** 用户按过停止：队列保留但不自动发，直到下一次显式发送或点「立即发送」 */
+  queuePaused: boolean
   queuedCount: number
   /** 上一轮的 live 消息还没进 persisted，此时发会重复渲染 */
   liveMessagesPending: boolean
@@ -35,7 +38,7 @@ export interface AutoSendGateState {
 export const AUTO_SEND_RETRY_INTERVAL_MS = 3000
 
 export function shouldAutoSendQueueHead(state: AutoSendGateState): boolean {
-  if (!state.autoSendEnabled) return false
+  if (state.queuePaused) return false
   if (state.queuedCount <= 0) return false
   if (state.streaming || state.liveMessagesPending || state.stoppedByUser) return false
   if (!state.canSendQueuedNow || state.sendInFlight) return false

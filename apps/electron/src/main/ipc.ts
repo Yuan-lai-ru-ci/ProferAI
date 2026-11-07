@@ -236,7 +236,7 @@ import {
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { getAgentSessionNavigationIndex } from './lib/agent-navigation-index'
-import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
+import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
 import { requestSessionDeletion, requestSessionDeletions, resumePendingSessionDeletions, waitForSessionDeletions } from './lib/agent-session-deletion-service'
 import { setQuoteableSelection } from './menu'
@@ -1900,24 +1900,6 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.SET_QUOTEABLE_SELECTION,
     async (event, enabled: boolean): Promise<void> => {
       setQuoteableSelection(event.sender.id, Boolean(enabled))
-    }
-  )
-
-  // 更新会话队列自动发送开关。该设置与 Agent 是否运行无关，停止按钮必须始终能完成。
-  ipcMain.handle(
-    AGENT_IPC_CHANNELS.UPDATE_QUEUE_AUTO_SEND,
-    async (event, sessionId: string, enabled: boolean): Promise<AgentSessionMeta> => {
-      assertSensitiveAgentIpcSender(event)
-      if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 200) {
-        throw new Error('Agent 会话标识无效')
-      }
-      if (typeof enabled !== 'boolean') {
-        throw new Error(`无效的队列自动发送状态: ${String(enabled)}`)
-      }
-      if (!getAgentSessionMeta(sessionId)) {
-        throw new Error(`Agent 会话不存在: ${sessionId}`)
-      }
-      return updateAgentSessionUiMeta(sessionId, { autoQueueSendEnabled: enabled })
     }
   )
 

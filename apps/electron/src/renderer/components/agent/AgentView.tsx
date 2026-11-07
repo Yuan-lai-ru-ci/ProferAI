@@ -115,7 +115,7 @@ import {
   finalizeStreamingActivities,
   workspaceCapabilitiesVersionAtom,
   agentMessageQueueAtomFamily,
-  agentQueueAutoSendMapAtom,
+  agentQueuePausedMapAtom,
 } from '@/atoms/agent-atoms'
 import { requestConversationFollowAtom } from '@/atoms/conversation-scroll-intents'
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
@@ -594,23 +594,21 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const setPendingQuoteInsertMap = useSetAtom(pendingQuoteInsertMapAtom)
   // 运行中追加消息队列（前端托管，轮结束后按条件 auto-drain）
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
-  const setAutoSendMap = useSetAtom(agentQueueAutoSendMapAtom)
-  const autoSendEnabled = useAtomValue(agentQueueAutoSendMapAtom).get(sessionId) ?? sessionMeta?.autoQueueSendEnabled ?? true
+  const setQueuePausedMap = useSetAtom(agentQueuePausedMapAtom)
+  const queuePaused = useAtomValue(agentQueuePausedMapAtom).get(sessionId) ?? false
+  /** 停止后暂停 / 用户显式发送时恢复；只影响自动发送，不动队列内容 */
+  const setQueuePaused = React.useCallback((paused: boolean): void => {
+    setQueuePausedMap((prev) => {
+      if ((prev.get(sessionId) ?? false) === paused) return prev
+      const map = new Map(prev)
+      map.set(sessionId, paused)
+      return map
+    })
+  }, [sessionId, setQueuePausedMap])
   const queueSendInFlightRef = React.useRef(false)
   const queueStopEpochRef = React.useRef(0)
   const lastQueueFailureAtRef = React.useRef(0)
   const [queueRetryTick, setQueueRetryTick] = React.useState(0)
-  // 切会话/首次：map 无值而 meta 有值 → 用 meta 填充运行时缓存（每个会话独立记忆）
-  React.useEffect(() => {
-    const metaValue = sessionMeta?.autoQueueSendEnabled
-    if (metaValue === undefined) return
-    if (store.get(agentQueueAutoSendMapAtom).has(sessionId)) return
-    setAutoSendMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, metaValue)
-      return map
-    })
-  }, [sessionId, sessionMeta?.autoQueueSendEnabled, setAutoSendMap, store])
   const openPreview = useOpenPreview()
   const richTextInputRef = React.useRef<RichTextInputHandle>(null)
 
@@ -1962,6 +1960,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     if (!canInsertQueuedNow || queueSendInFlightRef.current) return
     const message = queuedMessages.find((item) => item.id === messageId)
     if (!message) return
+    // 用户显式点「立即发送」= 恢复自动发送，后续队首继续走
+    setQueuePaused(false)
     const sendEpoch = queueStopEpochRef.current
     setQueuedMessages((prev) => removeQueuedMessage(prev, messageId))
     queueSendInFlightRef.current = true
@@ -1973,7 +1973,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     }).finally(() => {
       queueSendInFlightRef.current = false
     })
-  }, [canInsertQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuedMessages, stoppedByUser, streamState?.stopping])
+  }, [canInsertQueuedNow, queuedMessages, sendPlainTextAgentMessage, setQueuePaused, setQueuedMessages, stoppedByUser, streamState?.stopping])
 
   /** 撤回队列消息：出队并追加到当前草稿后面 */
   const handleRecallQueuedMessage = React.useCallback((messageId: string): void => {
@@ -2012,18 +2012,10 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     setQueuedMessages((prev) => moveQueuedMessage(prev, sourceId, targetId, placement))
   }, [setQueuedMessages])
 
-  /** 自动发送开关：运行时缓存 + meta 持久化（与队列面板/设置页共用写入路径） */
-  const handleToggleAutoSend = React.useCallback((): void => {
-    const next = !autoSendEnabled
-    setAutoSendMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, next)
-      return map
-    })
-    void Promise.resolve()
-      .then(() => window.electronAPI.updateAgentQueueAutoSend(sessionId, next))
-      .catch(console.error)
-  }, [autoSendEnabled, sessionId, setAutoSendMap])
+  /** 继续队列：停止造成的暂停只持续到用户下一次显式操作为止 */
+  const handleResumeQueue = React.useCallback((): void => {
+    setQueuePaused(false)
+  }, [setQueuePaused])
 
   /**
    * 队列自动发送：纯条件判定，不依赖「轮结束版本号」。
@@ -2041,7 +2033,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     const head = queuedMessages[0]
     if (!head) return
     if (!shouldAutoSendQueueHead({
-      autoSendEnabled,
+      queuePaused,
       queuedCount: queuedMessages.length,
       liveMessagesPending: liveMessages.length > 0,
       streaming,
@@ -2068,7 +2060,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       queueSendInFlightRef.current = false
     })
   }, [
-    autoSendEnabled, canSendQueuedNow, liveMessages.length, queuedMessages, queueRetryTick,
+    queuePaused, canSendQueuedNow, liveMessages.length, queuedMessages, queueRetryTick,
     sendPlainTextAgentMessage, sessionId, setQueuedMessages, stoppedByUser, streaming, streamState?.stopping,
   ])
 
@@ -2150,6 +2142,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         })
         return
       }
+      // 左键入队 = 发送意图：即使此前因「停止」暂停，也立即恢复自动发送
+      setQueuePaused(false)
       // 引用块在入队时就展开进文本，保证轮结束后发出去的仍是用户当时看到的那条
       const queuedText = buildAgentMessagePayload(effectiveText, quotedSelections).rawText
       setQueuedMessages((prev) => [
@@ -2166,6 +2160,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       })
       return
     }
+
+    // 空闲直发同样恢复被「停止」暂停的队列，旧消息继续自动发
+    setQueuePaused(false)
 
     // backgroundWaiting（软空闲，无活跃 turn）：直接注入，无需中断。
     if (backgroundWaiting) {
@@ -2475,17 +2472,10 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const handleStop = React.useCallback((): void => {
     if (stopInFlightRef.current || streamState?.stopping) return
     stopInFlightRef.current = true
-    // 停止即取消「自动发送」，并让此前已取出但未 settle 的队列消息失去回队资格
+    // 停止 = 暂停队列自动发送（队列内容保留），并让此前已取出但未 settle 的队列消息失去回队资格。
+    // 用户下一次显式发送或点「立即发送」时恢复。
     queueStopEpochRef.current += 1
-    setAutoSendMap((prev) => {
-      if (prev.get(sessionId) === false) return prev
-      const map = new Map(prev)
-      map.set(sessionId, false)
-      return map
-    })
-    void Promise.resolve()
-      .then(() => window.electronAPI.updateAgentQueueAutoSend(sessionId, false))
-      .catch(console.error)
+    setQueuePaused(true)
 
     setStreamingStates((prev) => {
       const current = prev.get(sessionId)
@@ -2504,7 +2494,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       .finally(() => {
         stopInFlightRef.current = false
       })
-  }, [sessionId, setAutoSendMap, streamState?.stopping, setStreamingStates])
+  }, [sessionId, setQueuePaused, streamState?.stopping, setStreamingStates])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -2539,6 +2529,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     })
 
     // 2. 初始化流式状态 + 乐观设 isCompacting=true（SDK compacting 事件之前就显示"正在压缩..."分隔符）
+    //    同时置 compactInFlight：只有手动 /compact 的 run 才是「整轮就是一次压缩」，
+    //    压缩分隔符切换后到 run 结束之间沿用抑制，避免运行指示闪一下。自动压缩不置此位。
     setStreamingStates((prev) => {
       const map = new Map(prev)
       const current = prev.get(sessionId) ?? {
@@ -3308,8 +3300,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
               items={queuedMessages}
               canSendNow={canInsertQueuedNow}
               sendNowLabel={sendQueuedNowLabel}
-              autoSend={autoSendEnabled}
-              onToggleAutoSend={handleToggleAutoSend}
+              paused={queuePaused}
+              onResume={handleResumeQueue}
               onSendNow={handleSendQueuedNow}
               onRecall={handleRecallQueuedMessage}
               onRemove={handleRemoveQueuedMessage}

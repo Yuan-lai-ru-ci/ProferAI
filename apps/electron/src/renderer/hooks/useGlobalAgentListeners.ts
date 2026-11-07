@@ -129,7 +129,7 @@ function uniqueTruthyPaths(paths: Array<string | null | undefined>): string[] {
 // Phase 2 将移除此转换，直接使用 SDKMessage 渲染
 // ============================================================================
 
-function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
+export function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
   if (payload.kind === 'profer_event') {
     const evt = payload.event
     switch (evt.type) {
@@ -301,6 +301,11 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       const sMsg = msg as SDKSystemMessage
       if (sMsg.subtype === 'compact_boundary') return [{ type: 'compact_complete' }]
       if (sMsg.subtype === 'compacting') return [{ type: 'compacting' }]
+      // 压缩失败/取消/跳过不会发 compact_boundary：适配器只发 status(compact_result) 或 compact_skipped。
+      // 不释放压缩锁会让本轮剩余时间既没有运行指示也不能输入。
+      if (sMsg.subtype === 'compact_skipped' || (sMsg.subtype === 'status' && sMsg.compact_result != null)) {
+        return [{ type: 'compact_failed' }]
+      }
       if (sMsg.subtype === 'task_started' && sMsg.task_id) {
         return [{ type: 'task_started', taskId: sMsg.task_id, description: sMsg.description ?? '', taskType: sMsg.task_type, toolUseId: sMsg.tool_use_id }]
       }

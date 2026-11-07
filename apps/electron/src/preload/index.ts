@@ -747,9 +747,6 @@ export interface ElectronAPI {
   /** 用户从右键菜单点了「引用到输入框」 */
   onAgentQuoteSelection: (callback: () => void) => () => void
 
-  /** 更新指定会话的队列自动发送开关 */
-  updateAgentQueueAutoSend: (sessionId: string, enabled: boolean) => Promise<import('@profer/shared').AgentSessionMeta>
-
   /** 轻量：对话 + Agent 会话的归档计数（不传输 meta 列表） */
   getArchivedCounts: () => Promise<{ conversations: number; agentSessions: number }>
 
@@ -2465,10 +2462,6 @@ const electronAPI: ElectronAPI = {
 
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, presetId)
-  },
-
-  updateAgentQueueAutoSend: (sessionId: string, enabled: boolean) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_QUEUE_AUTO_SEND, sessionId, enabled)
   },
 
   setQuoteableSelection: (enabled: boolean) => {

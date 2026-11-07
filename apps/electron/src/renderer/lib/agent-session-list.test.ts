@@ -111,7 +111,6 @@ describe('upsertAgentSessionProjection', () => {
     title: `标题-${revision}`,
     createdAt: 1,
     updatedAt: revision,
-    autoQueueSendEnabled: true,
     channelId: 'channel',
     modelId: 'model',
     agentRuntime: 'claude',

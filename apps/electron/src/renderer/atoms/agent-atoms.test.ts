@@ -69,3 +69,28 @@ describe('applyAgentEvent retry recovery', () => {
     expect(applyAgentEvent(state(), { type: 'complete' }).retrying).toBeUndefined()
   })
 })
+
+describe('applyAgentEvent 压缩状态', () => {
+  test('自动压缩只标记压缩中，不把整轮当成手动压缩 run', () => {
+    const compacting = applyAgentEvent(state(), { type: 'compacting' })
+    expect(compacting.isCompacting).toBe(true)
+    expect(compacting.compactInFlight).toBeUndefined()
+  })
+
+  test('自动压缩结束后本轮继续执行：压缩锁释放且不残留抑制标记', () => {
+    const completed = applyAgentEvent(applyAgentEvent(state(), { type: 'compacting' }), { type: 'compact_complete' })
+    expect(completed).toMatchObject({ running: true, isCompacting: false })
+    expect(completed.compactInFlight).toBeUndefined()
+  })
+
+  test('手动压缩 run 的 compactInFlight 跨过 compact_boundary 保留到 run 结束', () => {
+    const manual = state({ isCompacting: true, compactInFlight: true })
+    const afterBoundary = applyAgentEvent(manual, { type: 'compact_complete' })
+    expect(afterBoundary).toMatchObject({ isCompacting: false, compactInFlight: true })
+  })
+
+  test('压缩失败/取消同样释放压缩锁，不把会话留在不可输入的压缩态', () => {
+    const failed = applyAgentEvent(state({ isCompacting: true }), { type: 'compact_failed' })
+    expect(failed).toMatchObject({ running: true, isCompacting: false })
+  })
+})
