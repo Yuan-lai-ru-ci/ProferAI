@@ -67,7 +67,7 @@ import {
   allPendingExitPlanRequestsAtom,
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
-import { agentGoalsAtom } from '@/atoms/goal-atoms'
+import { agentGoalsAtom, goalStatusBySessionAtom } from '@/atoms/goal-atoms'
 import { summarizeGoalRailCounts } from '@/domains/goal/goal-display-policy'
 import { previewFileMapAtom, previewFilesByTabAtom } from '@/atoms/preview-atoms'
 import {
@@ -338,6 +338,8 @@ export function useLeftSidebar() {
   const [agentSessions, setAgentSessions] = useAtom(agentSessionsAtom)
   const [currentAgentSessionId, setCurrentAgentSessionId] = useAtom(currentAgentSessionIdAtom)
   const agentIndicatorMap = useAtomValue(agentSessionIndicatorMapAtom)
+  // 行首 Goal 标记的数据源：只含 status 的稳定投影，Goal 心跳刷新不会让整列会话行重渲染
+  const goalStatusMap = useAtomValue(goalStatusBySessionAtom)
   const unviewedCompletedSessionIds = useAtomValue(unviewedCompletedSessionIdsAtom)
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const agentChannelId = useAtomValue(agentChannelIdAtom)
@@ -2018,6 +2020,7 @@ export function useLeftSidebar() {
     currentAgentSessionId,
     setCurrentAgentSessionId,
     agentIndicatorMap,
+    goalStatusMap,
     unviewedCompletedSessionIds,
     agentDraftIds,
     agentProjectGroups,

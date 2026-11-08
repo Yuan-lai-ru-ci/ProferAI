@@ -8,6 +8,27 @@ export { getGoalActions } from '@profer/shared'
 export const agentGoalsAtom = atom<Map<string, AgentGoalState>>(new Map())
 export const goalHistoryAtomFamily = atomFamily((_sessionId: string) => atom<AgentGoalState[] | null>(null))
 
+/**
+ * 侧栏行首标记用的「会话 → Goal 状态」投影。
+ *
+ * 只暴露 status：Goal 事件会带 elapsedMs 之类的同状态刷新，若把 `agentGoalsAtom`
+ * 直接传给侧栏列表，整列会话行会跟着每秒重渲染。按签名缓存引用（与
+ * `agentSessionIndicatorMapAtom` 同一套路），状态没变就返回同一实例，React.memo 才生效。
+ */
+let lastGoalStatusSignature = ''
+let lastGoalStatusMap = new Map<string, AgentGoalState['status']>()
+
+export const goalStatusBySessionAtom = atom<Map<string, AgentGoalState['status']>>((get) => {
+  const entries: Array<[string, AgentGoalState['status']]> = []
+  for (const [sessionId, goal] of get(agentGoalsAtom)) entries.push([sessionId, goal.status])
+  entries.sort(([a], [b]) => a.localeCompare(b))
+  const signature = entries.map(([id, status]) => `${id}:${status}`).join('|')
+  if (signature === lastGoalStatusSignature) return lastGoalStatusMap
+  lastGoalStatusSignature = signature
+  lastGoalStatusMap = new Map(entries)
+  return lastGoalStatusMap
+})
+
 function isClearedGoal(goal: AgentGoalState): boolean {
   return goal.reasonCode === 'cleared' || goal.stopReason === 'cleared'
 }
