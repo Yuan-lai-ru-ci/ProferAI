@@ -6,6 +6,10 @@
 
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
+import {
+  DEFAULT_CURRENT_SESSION_VISIBLE_COUNT,
+  normalizeCurrentSessionVisibleCount,
+} from '@/lib/current-session-capacity'
 
 /** 侧边栏视图模式 */
 export type SidebarViewMode = 'active' | 'archived'
@@ -50,3 +54,31 @@ export const leftSidebarWidthAtom = atomWithStorage<number>(
   'profer-left-sidebar-width-v2',
   246,
 )
+
+/**
+ * 左侧栏「当前会话」区最多显示的会话数。
+ *
+ * 与宽度/高度偏好不同，这一项走 settings.json 而非 localStorage（配置文件为权威）。
+ * 朴素 atom + 初始化函数 + 落盘函数，与 `atoms/session-preview-settings.ts` 同一套写法；
+ * 读取失败保持默认值，不改变既有行为。
+ */
+export const currentSessionVisibleCountAtom = atom<number>(DEFAULT_CURRENT_SESSION_VISIBLE_COUNT)
+
+/** 从主进程加载容量数值；读失败保持默认 5（fail-safe） */
+export async function initializeCurrentSessionVisibleCount(
+  setCount: (count: number) => void,
+): Promise<void> {
+  try {
+    const settings = await window.electronAPI.getSettings()
+    setCount(normalizeCurrentSessionVisibleCount(settings.currentSessionVisibleCount))
+  } catch (error) {
+    console.error('[侧栏] 初始化当前会话容量失败:', error)
+  }
+}
+
+/** 落盘容量档位；调用方先乐观更新 atom，失败由其自行回滚 */
+export async function persistCurrentSessionVisibleCount(count: number): Promise<void> {
+  await window.electronAPI.updateSettings({
+    currentSessionVisibleCount: normalizeCurrentSessionVisibleCount(count),
+  })
+}

@@ -226,7 +226,7 @@ export function sidebarRowClass(options: {
 } = {}): string {
   const { active, depth = 0, muted, tall } = options
   return cn(
-    // shrink-0：行必须保持固定高度。列表容器有 max-height 时（当前会话区 144px），
+    // shrink-0：行必须保持固定高度。列表容器有 max-height 时（当前会话区按档位夹算），
     // flex 子项默认会被压扁去「塞进」容器，导致行高从 28px 塌成 20px 左右且不再滚动。
     'group relative flex w-full shrink-0 items-center gap-2 rounded-[7px] px-2 text-[13px] transition-colors duration-100',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
