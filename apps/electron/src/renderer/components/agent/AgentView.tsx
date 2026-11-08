@@ -154,6 +154,7 @@ import { AgentSendButton } from './AgentSendButton'
 import { normalizeAgentHistoryRefresh, normalizeAgentHistoryResult } from './agent-history-pagination'
 import { clearSessionReferenceDragState, getSessionReferenceDragData, canReferenceDraggedSession } from '@/lib/session-reference-drag'
 import { getFileReferenceDragData, isFileReferenceDrag, toFileReferenceMentions } from '@/lib/file-reference-drag'
+import { isSupportedInputDrop } from '@/lib/input-drop-payload'
 import { buildQuotedSelectionBlock, buildQuotedSelectionsPrefix, collectQuotedSelectionsFromTexts, parseQuotedSelectionRefs, quotedSelectionFromParsedRef, stripQuoteMarkers } from '@/lib/quoted-selection'
 import {
   createAgentQueuedMessage,
@@ -1543,6 +1544,14 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
   /** 拖放处理 */
   const handleDragOver = React.useCallback((e: React.DragEvent): void => {
+    // 只接管输入框确实能消费的载荷。未知载荷（例如侧栏「当前会话」排序把手）
+    // 不 preventDefault、也不点亮高亮，浏览器会显示禁止光标，
+    // 避免「看起来能放、松手什么都没发生」的误导。
+    if (!isSupportedInputDrop(e.dataTransfer)) {
+      e.stopPropagation()
+      setIsDragOver(false)
+      return
+    }
     e.preventDefault()
     e.stopPropagation()
     // 文件面板拖入显式声明为复制，光标提示与「插入引用」语义一致
@@ -1557,9 +1566,11 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   }, [])
 
   const handleDrop = React.useCallback(async (e: React.DragEvent): Promise<void> => {
-    e.preventDefault()
     e.stopPropagation()
     setIsDragOver(false)
+    // 与 dragover 同一口径：未知载荷不接管，也不误清其它拖拽的内存态
+    if (!isSupportedInputDrop(e.dataTransfer)) return
+    e.preventDefault()
     clearSessionReferenceDragState()
 
     const draggedSession = getSessionReferenceDragData(e.dataTransfer)
