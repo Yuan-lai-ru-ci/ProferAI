@@ -45,6 +45,54 @@ describe('ExpandedSidebar — 当前会话区容量与下方保底', () => {
   })
 })
 
+describe('ExpandedSidebar — 当前会话拖拽重排接线', () => {
+  test('Given 左侧把手 When 重排当前会话 Then 状态在 hook 里、视图只负责渲染', () => {
+    const source = readFileSync(new URL('./expanded-sidebar.tsx', import.meta.url), 'utf8')
+    const hook = readFileSync(new URL('../../../hooks/use-current-session-reorder.ts', import.meta.url), 'utf8')
+    const items = readFileSync(new URL('./session-items.tsx', import.meta.url), 'utf8')
+
+    // 视图：接线与视觉契约
+    expect(source).toContain('useCurrentSessionReorder()')
+    expect(source).toContain('data-profer-reorder-handle')
+    expect(source).toContain('aria-hidden="true"')
+    expect(source).not.toContain('useSetAtom(tabsAtom)')
+    // 让位由 state 驱动：停留 100ms 或重排态，快速扫过不触发；不再依赖 :hover
+    expect(source).toContain('reorder.isReordering || reorder.hoveredTabId === tab.id')
+    expect(source).not.toContain('hover:pl-5')
+    expect(source).toContain('onMouseEnter={() => reorder.onRowMouseEnter(tab.id)}')
+    expect(source).toContain('onMouseLeave={reorder.onRowMouseLeave}')
+    expect(source).toContain('inset-y-0 left-0')
+    expect(source).toContain('w-5 cursor-grab')
+    expect(source).toContain('pointer-events-none')
+    // 容器级接管 dragenter / dragover / drop：行间 gap 与空白处不会闪禁止光标
+    expect(source).toContain('onDragEnter={reorder.onListDragEnter}')
+    expect(source).toContain('onDragOver={reorder.onListDragOver}')
+    expect(source).toContain('onDrop={reorder.onListDrop}')
+    expect(source).not.toContain('onRowDragLeave')
+    // 指示线画在行内边缘：第一行上方 / 最后一行下方不会被 overflow-y-auto 裁掉
+    expect(source).toContain("indicator.position === 'before' ? 'top-0' : 'bottom-0'")
+    expect(source).not.toContain('-top-0.5')
+
+    // hook：按 tab.id 换算真实索引、写回 tabsAtom，drop 时用事件坐标重算插入位置
+    expect(hook).toContain('useSetAtom(tabsAtom)')
+    expect(hook).toContain('resolveReorderTargetIndex(previous, dragged, target.tabId, target.position)')
+    expect(hook).toContain('reorderTabs(previous, fromIndex, insertIndex)')
+    expect(hook).toContain('resolveReorderDropPosition(e.clientY, rect.top, rect.height)')
+    expect(hook).toContain('acceptCurrentSessionReorderDrag(e)')
+    expect(hook).toContain('e.stopPropagation()')
+    // hover 延迟：定时器在离开、dragstart 与卸载时都要清理
+    expect(hook).toContain('REORDER_HOVER_DELAY_MS = 100')
+    expect(hook).toContain('clearHoverTimer')
+    expect(hook).toContain('React.useEffect(() => () => clearHoverTimer(), [clearHoverTimer])')
+    // 插入点规范化：相邻两行边界只对应一根线，dragover 与 drop 同口径
+    expect(source).toContain('openSessionEntries[index + 1]?.tab.id ?? null')
+    expect(hook).toContain('normalizeDropTarget(tabId, position, nextTabId)')
+    expect(hook).toContain('normalizeDropTarget(targetTabId, position, nextTabId)')
+    // 把手是行组件的兄弟，行体拖作引用的入口原封不动
+    expect(items).toContain('setSessionReferenceDragData(')
+  })
+})
+
 describe('getOpenSessionEntries — 当前会话列表与计数共用数据', () => {
   test('Given 失效 Tab 和有效会话 When 解析 Then 数量只包含实际能渲染的行并保留 Tab 顺序', () => {
     const entries = getOpenSessionEntries('agent', [tab('missing'), tab('b'), tab('a')], [], [session('a'), session('b')])

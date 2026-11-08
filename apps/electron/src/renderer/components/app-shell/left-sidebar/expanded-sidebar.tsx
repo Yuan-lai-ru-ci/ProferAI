@@ -6,7 +6,7 @@
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
-import { Plus, Search, FolderOpen, Archive, ArchiveRestore, ArrowLeft } from 'lucide-react'
+import { Plus, Search, FolderOpen, Archive, ArchiveRestore, ArrowLeft, GripVertical } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
@@ -19,6 +19,7 @@ import { currentSessionVisibleCountAtom, showCurrentSessionSectionAtom } from '@
 import { buildCurrentSessionMaxHeight } from '@/lib/current-session-capacity'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { useCloseTab } from '@/hooks/useCloseTab'
+import { useCurrentSessionReorder } from '@/hooks/use-current-session-reorder'
 import type { SidebarModel } from './use-left-sidebar'
 
 function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
@@ -64,6 +65,9 @@ function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
     requestCloseTabs(openSessionEntries.map((entry) => entry.tab.id))
   }, [openSessionEntries, requestCloseTabs])
 
+  // 拖拽重排的状态、协议与索引换算都在 hook 里，这里只负责渲染
+  const reorder = useCurrentSessionReorder()
+
   return (
     <div className="flex-none pb-1 titlebar-no-drag">
       <div className="flex h-[26px] items-center justify-between px-2">
@@ -75,15 +79,20 @@ function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
       <ScrollRegion
         className="sidebar-session-scroll flex flex-col gap-px overflow-y-auto scrollbar-thin"
         style={{ maxHeight: buildCurrentSessionMaxHeight(currentSessionVisibleCount) }}
+        onDragEnter={reorder.onListDragEnter}
+        onDragOver={reorder.onListDragOver}
+        onDrop={reorder.onListDrop}
       >
-        {openSessionEntries.map((entry) => {
+        {openSessionEntries.map((entry, index) => {
           const { tab } = entry
           const active = tab.sessionId === activeSessionId
+          // 用于把「本行之后」规范化成「下一行之前」，让相邻边界只显示一根指示线
+          const nextTabId = openSessionEntries[index + 1]?.tab.id ?? null
+          let row: React.ReactNode
           if (entry.type === 'chat') {
             const { conversation } = entry
-            return (
+            row = (
               <ConversationItem
-                key={tab.id}
                 conversation={conversation}
                 active={active}
                 streaming={streamingIds.has(conversation.id)}
@@ -102,31 +111,78 @@ function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
                 onCloseAllTabs={closeAllOpenSessions}
               />
             )
+          } else {
+            const { session } = entry
+            row = (
+              <AgentSessionItem
+                session={session}
+                active={active}
+                indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                showPinIcon={false}
+                hasDraft={agentDraftIds.has(session.id)}
+                leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
+                workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
+                relativeTimeNow={relativeTimeNow}
+                onSelect={handleSelectAgentSession}
+                onRequestDelete={handleRequestDelete}
+                onRequestMove={handleRequestMove}
+                onRename={handleAgentRename}
+                onRegenerateTitle={handleAgentRegenerateTitle}
+                onTogglePin={handleTogglePinAgent}
+                onToggleArchive={handleToggleArchiveAgent}
+                onMarkUnread={handleToggleSessionUnread}
+                onCloseTab={() => requestCloseTab(tab.id)}
+                onCloseOtherTabs={openSessionEntries.length > 1 ? () => closeOtherOpenSessions(tab.id) : undefined}
+                onCloseAllTabs={closeAllOpenSessions}
+              />
+            )
           }
-          const { session } = entry
+          const indicator = reorder.dropIndicator?.tabId === tab.id ? reorder.dropIndicator : null
+          // 停留超过 100ms 或已进入重排态才让位；快速扫过时不会让整列轮流左右跳动
+          const shifted = reorder.isReordering || reorder.hoveredTabId === tab.id
           return (
-            <AgentSessionItem
+            // shrink-0：列表容器有 max-height 时，包装层作为直接 flex 子项也必须保持行高，
+            // 否则会被压扁且不再滚动（与 sidebarRowClass 的 shrink-0 同理）。
+            <div
               key={tab.id}
-              session={session}
-              active={active}
-              indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
-              showPinIcon={false}
-              hasDraft={agentDraftIds.has(session.id)}
-              leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
-              workspaceName={session.workspaceId ? workspaceNameMap.get(session.workspaceId) : undefined}
-              relativeTimeNow={relativeTimeNow}
-              onSelect={handleSelectAgentSession}
-              onRequestDelete={handleRequestDelete}
-              onRequestMove={handleRequestMove}
-              onRename={handleAgentRename}
-              onRegenerateTitle={handleAgentRegenerateTitle}
-              onTogglePin={handleTogglePinAgent}
-              onToggleArchive={handleToggleArchiveAgent}
-              onMarkUnread={handleToggleSessionUnread}
-              onCloseTab={() => requestCloseTab(tab.id)}
-              onCloseOtherTabs={openSessionEntries.length > 1 ? () => closeOtherOpenSessions(tab.id) : undefined}
-              onCloseAllTabs={closeAllOpenSessions}
-            />
+              className={cn('relative shrink-0', shifted && 'pl-5')}
+              onMouseEnter={() => reorder.onRowMouseEnter(tab.id)}
+              onMouseLeave={reorder.onRowMouseLeave}
+              onDragOver={(e) => reorder.onRowDragOver(e, tab.id, nextTabId)}
+              onDrop={(e) => reorder.onRowDrop(e, tab.id, nextTabId)}
+            >
+              {/* 指示线画在行内边缘，不使用负偏移：
+                  列表容器是 overflow-y-auto，第一行上方（及最后一行下方）越界的 2px 会被裁掉，
+                  导致「拖到最上面之前 / 最后一行之后」看不到提示。 */}
+              {indicator && (
+                <div
+                  className={cn(
+                    'pointer-events-none absolute left-2 right-2 z-10 h-0.5 rounded-full bg-primary',
+                    indicator.position === 'before' ? 'top-0' : 'bottom-0',
+                  )}
+                />
+              )}
+              {/* 把手是行组件的兄弟：dragstart 不会冒泡到行 div，
+                  AgentSessionItem 原有的「拖会话到输入框当引用」语义因此完全不受影响。
+                  停留 100ms 后整行右移 20px 给把手让位，行首 3px 状态色标随之移动，两者永不重叠。
+                  ARIA 与项目分组把手一致：纯鼠标手势用 aria-hidden，不做可聚焦却无行为的假按钮。 */}
+              <span
+                draggable
+                data-profer-reorder-handle
+                aria-hidden="true"
+                title="拖拽调整顺序"
+                onDragStart={(e) => reorder.onHandleDragStart(e, tab.id)}
+                onDragEnd={reorder.onHandleDragEnd}
+                className={cn(
+                  'absolute inset-y-0 left-0 z-10 flex w-5 cursor-grab items-center justify-center rounded-md text-foreground/25 transition-opacity duration-100 hover:bg-foreground/[0.06] hover:text-foreground/60 active:cursor-grabbing',
+                  // 显形与让位由同一个 shifted 驱动，pointer-events 与可见性严格同步
+                  shifted ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
+                )}
+              >
+                <GripVertical size={14} />
+              </span>
+              <div className={cn(reorder.draggingTabId === tab.id && 'opacity-40')}>{row}</div>
+            </div>
           )
         })}
       </ScrollRegion>
