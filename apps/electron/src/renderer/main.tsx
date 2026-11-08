@@ -50,6 +50,10 @@ import {
   sessionHoverPreviewEnabledAtom,
   initializeSessionHoverPreviewEnabled,
 } from './atoms/session-preview-settings'
+import {
+  currentSessionVisibleCountAtom,
+  initializeCurrentSessionVisibleCount,
+} from './atoms/sidebar-atoms'
 import { planUnreadSeedOnInit } from './lib/agent-unread-gate'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
@@ -493,6 +497,21 @@ function SessionPreviewSettingsInitializer(): null {
   useEffect(() => {
     void initializeSessionHoverPreviewEnabled(setEnabled)
   }, [setEnabled])
+
+  return null
+}
+
+/**
+ * 「当前会话」容量初始化组件（设置 → 使用偏好）
+ *
+ * 把 settings.json 里的档位写进 atom；侧栏直接读 atom，切换后立即生效、无需重启。
+ */
+function CurrentSessionCapacityInitializer(): null {
+  const setCount = useSetAtom(currentSessionVisibleCountAtom)
+
+  useEffect(() => {
+    void initializeCurrentSessionVisibleCount(setCount)
+  }, [setCount])
 
   return null
 }
@@ -1338,6 +1357,7 @@ if (isQuickTaskWindow) {
       <NotificationsInitializer />
       <AgentUnreadSettingsInitializer />
       <SessionPreviewSettingsInitializer />
+      <CurrentSessionCapacityInitializer />
       <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <SmoothWheelInitializer />

@@ -33,6 +33,18 @@ describe('ExpandedSidebar — 当前会话区域按设置挂载', () => {
   })
 })
 
+describe('ExpandedSidebar — 当前会话区容量与下方保底', () => {
+  test('Given 容量可配置 When 渲染侧栏 Then 不再写死 144px 且下方主区有 min-height 保底', () => {
+    const source = readFileSync(new URL('./expanded-sidebar.tsx', import.meta.url), 'utf8')
+    expect(source).not.toContain('max-h-[144px]')
+    expect(source).toContain('currentSessionVisibleCountAtom')
+    expect(source).toContain('buildCurrentSessionMaxHeight(')
+    expect(source).toContain('overflow-y-auto')
+    // chat active / agent active / 归档视图三处主区都要保底
+    expect(source.match(/min-h-\[160px\]/g)?.length).toBeGreaterThanOrEqual(3)
+  })
+})
+
 describe('getOpenSessionEntries — 当前会话列表与计数共用数据', () => {
   test('Given 失效 Tab 和有效会话 When 解析 Then 数量只包含实际能渲染的行并保留 Tab 顺序', () => {
     const entries = getOpenSessionEntries('agent', [tab('missing'), tab('b'), tab('a')], [], [session('a'), session('b')])

@@ -15,7 +15,8 @@ import { ModeSwitcher } from '../ModeSwitcher'
 import { SIDEBAR_ROW_GAP, renderWorkspaceSortIcon } from './navigation-items'
 import { ConversationItem, AgentSessionItem, RelatedChildSessionItem, AgentProjectGroupItem, PINNED_SESSION_MAX_HEIGHT, getSessionLeftAccent } from './session-items'
 import { getOpenSessionEntries, WORKSPACE_SORT_LABEL, SIDEBAR_SECTION_TITLE_CLASS, sidebarRowClass } from './sidebar-utils'
-import { showCurrentSessionSectionAtom } from '@/atoms/sidebar-atoms'
+import { currentSessionVisibleCountAtom, showCurrentSessionSectionAtom } from '@/atoms/sidebar-atoms'
+import { buildCurrentSessionMaxHeight } from '@/lib/current-session-capacity'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { useCloseTab } from '@/hooks/useCloseTab'
 import type { SidebarModel } from './use-left-sidebar'
@@ -49,6 +50,7 @@ function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
     relativeTimeNow,
   } = s
   const { requestClose: requestCloseTab, requestCloseMany: requestCloseTabs } = useCloseTab()
+  const currentSessionVisibleCount = useAtomValue(currentSessionVisibleCountAtom)
   const openSessionEntries = React.useMemo(
     () => getOpenSessionEntries(mode, tabs, conversations, agentSessions),
     [agentSessions, conversations, mode, tabs],
@@ -68,7 +70,12 @@ function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
         <span className={SIDEBAR_SECTION_TITLE_CLASS}>当前会话</span>
         <span className="text-[10.5px] tabular-nums text-foreground/[0.26]">{openSessionEntries.length}</span>
       </div>
-      <ScrollRegion className={cn('sidebar-session-scroll flex max-h-[144px] flex-col gap-px overflow-y-auto scrollbar-thin')}>
+      {/* 高度取 min(内容, N 行, 视口剩余空间)：N 是上限而非目标高度，
+          超出后在区内滚动，下方项目/会话列表由各自的 min-height 保底。 */}
+      <ScrollRegion
+        className="sidebar-session-scroll flex flex-col gap-px overflow-y-auto scrollbar-thin"
+        style={{ maxHeight: buildCurrentSessionMaxHeight(currentSessionVisibleCount) }}
+      >
         {openSessionEntries.map((entry) => {
           const { tab } = entry
           const active = tab.sessionId === activeSessionId
@@ -240,7 +247,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
 
       {/* Chat 模式 active 视图：置顶 + 对话历史，结构与 Agent active 视图保持一致 */}
       {mode === 'chat' && viewMode === 'active' ? (
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-[160px]">
           {pinnedConversations.length > 0 && (
             <div className="flex-none pb-1 titlebar-no-drag">
               <div className={cn('flex h-[26px] items-center px-2', SIDEBAR_SECTION_TITLE_CLASS)}>
@@ -309,7 +316,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
           </ScrollRegion>
         </div>
       ) : mode === 'agent' && viewMode === 'active' ? (
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-[160px]">
           <div className="flex h-[26px] flex-none items-center justify-between pr-1 titlebar-no-drag">
             <span className={cn('px-2', SIDEBAR_SECTION_TITLE_CLASS)}>项目</span>
             <div className="flex items-center gap-0.5">
@@ -442,7 +449,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
           )}
 
           {/* 归档视图：单列表布局 */}
-          <ScrollRegion className="sidebar-session-scroll flex-1 overflow-y-auto pb-2 pt-1 scrollbar-thin titlebar-no-drag">
+          <ScrollRegion className="sidebar-session-scroll min-h-[160px] flex-1 overflow-y-auto pb-2 pt-1 scrollbar-thin titlebar-no-drag">
             {mode === 'chat' ? (
               /* Chat 归档：对话按日期分组 */
               progressiveConversationGroups.map((group) => (

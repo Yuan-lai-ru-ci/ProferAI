@@ -329,6 +329,8 @@ export interface AppSettings {
   shortcutOverrides?: ShortcutOverrides
   /** 是否在左侧栏显示我的积分（默认 true） */
   showCreditsInSidebar?: boolean
+  /** 左侧栏「当前会话」区最多显示的会话数（默认 5，可填 1–30，实际可见数还受窗口高度夹算） */
+  currentSessionVisibleCount?: number
   /** 鼠标悬停侧栏会话时是否弹出会话内容迷你预览（默认 true，缺省按开启处理） */
   sessionHoverPreviewEnabled?: boolean
   /** 是否显示用户消息悬浮置顶条（默认 true） */

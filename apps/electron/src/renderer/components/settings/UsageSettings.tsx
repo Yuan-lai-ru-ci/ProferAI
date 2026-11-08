@@ -79,7 +79,18 @@ import {
   updatePreviewOpenMode,
   composerCompactModeAtom,
 } from '@/atoms/ui-preferences'
-import { showCurrentSessionSectionAtom } from '@/atoms/sidebar-atoms'
+import {
+  currentSessionVisibleCountAtom,
+  persistCurrentSessionVisibleCount,
+  showCurrentSessionSectionAtom,
+} from '@/atoms/sidebar-atoms'
+import {
+  DEFAULT_CURRENT_SESSION_VISIBLE_COUNT,
+  MAX_CURRENT_SESSION_VISIBLE_COUNT,
+  MIN_CURRENT_SESSION_VISIBLE_COUNT,
+  normalizeCurrentSessionVisibleCount,
+  resolveEffectiveVisibleRows,
+} from '@/lib/current-session-capacity'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -121,6 +132,7 @@ export function UsageSettings(): React.ReactElement {
   const [customSounds, setCustomSounds] = useAtom(customNotificationSoundsAtom)
   const [showCreditsInSidebar, setShowCreditsInSidebar] = useAtom(showCreditsInSidebarAtom)
   const [showCurrentSessionSection, setShowCurrentSessionSection] = useAtom(showCurrentSessionSectionAtom)
+  const [currentSessionVisibleCount, setCurrentSessionVisibleCount] = useAtom(currentSessionVisibleCountAtom)
   const [stickyUserMessageEnabled, setStickyUserMessageEnabled] = useAtom(stickyUserMessageEnabledAtom)
   const [smoothScrollEnabled, setSmoothScrollEnabled] = useAtom(smoothScrollEnabledAtom)
   const [smoothScrollForce, setSmoothScrollForce] = useAtom(smoothScrollForceAtom)
@@ -139,8 +151,13 @@ export function UsageSettings(): React.ReactElement {
   const [compactViewportHeightDraft, setCompactViewportHeightDraft] = React.useState(String(DEFAULT_COMPACT_VIEWPORT_HEIGHT))
   const [compactMinHeightDraft, setCompactMinHeightDraft] = React.useState(String(DEFAULT_COMPACT_MIN_HEIGHT))
   const [compactMaxHeightDraft, setCompactMaxHeightDraft] = React.useState(String(DEFAULT_COMPACT_MAX_HEIGHT))
+  // 「当前会话最多显示」用本地字符串草稿：输入过程中不落盘，失焦才归一化保存
+  const [currentSessionCountDraft, setCurrentSessionCountDraft] = React.useState(String(DEFAULT_CURRENT_SESSION_VISIBLE_COUNT))
   // 实时窗口内高：直接告诉用户当前是否达到触发条件（窗口最大化时高度可能远高于阈值）
   const viewportHeight = useWindowInnerHeight()
+  // 「当前会话」上限在矮窗口下会被夹算，设置页直接告诉用户实际能看到几行，
+  // 避免「填了上限却看不满」被当成 bug。与侧栏夹算公式同源。
+  const effectiveCurrentSessionRows = resolveEffectiveVisibleRows(currentSessionVisibleCount, viewportHeight)
   // 阈值草稿是否已触发紧凑档（仅用于文案提示；实际切换还带 60px 退出迟滞）
   const compactThresholdDraftNumber = Number(compactViewportHeightDraft.trim())
   const compactTriggered = Number.isFinite(compactThresholdDraftNumber)
@@ -290,6 +307,10 @@ export function UsageSettings(): React.ReactElement {
     }
   }, [])
   React.useEffect(() => { void loadSettings() }, [loadSettings])
+  // 初始化器异步读到 settings.json 后同步草稿；保存失败回滚 atom 时也由这里复原输入
+  React.useEffect(() => {
+    setCurrentSessionCountDraft(String(currentSessionVisibleCount))
+  }, [currentSessionVisibleCount])
 
   /** 切换文件预览打开方式：先更新本地态保证交互即时，再落盘。 */
   const handlePreviewOpenModeChange = (value: string): void => {
@@ -375,6 +396,28 @@ export function UsageSettings(): React.ReactElement {
       toast.error('自动归档设置保存失败，请重试')
     } finally {
       setArchiveSaving(false)
+    }
+  }
+
+  /**
+   * 「当前会话最多显示」失焦时归一化落盘。
+   * 与紧凑档三个输入框同一套范式：输入过程只改草稿，失焦才写 atom + settings.json，
+   * 避免输入「12」时先落盘 1 再落盘 12。空输入回落默认值。
+   */
+  const handleCurrentSessionCountBlur = async (): Promise<void> => {
+    if (settingsLoading || Boolean(settingsError)) return
+    const raw = currentSessionCountDraft.trim()
+    const next = normalizeCurrentSessionVisibleCount(raw === '' ? Number.NaN : Number(raw))
+    const previous = currentSessionVisibleCount
+    setCurrentSessionCountDraft(String(next))
+    if (next === previous) return
+    setCurrentSessionVisibleCount(next)
+    try {
+      await persistCurrentSessionVisibleCount(next)
+    } catch (error) {
+      console.error('[使用偏好] 更新当前会话显示数失败:', error)
+      setCurrentSessionVisibleCount(previous)
+      toast.error('当前会话显示数保存失败，请重试')
     }
   }
 
@@ -552,6 +595,16 @@ export function UsageSettings(): React.ReactElement {
             description="在左侧栏顶部列出已打开的会话入口；关闭后会话仍保留在对话 / 项目列表中"
             checked={showCurrentSessionSection}
             onCheckedChange={setShowCurrentSessionSection}
+          />
+          <SettingsInput
+            label="当前会话最多显示"
+            description={`左侧栏「当前会话」区的可见上限，可填 ${MIN_CURRENT_SESSION_VISIBLE_COUNT}–${MAX_CURRENT_SESSION_VISIBLE_COUNT} 个（默认 ${DEFAULT_CURRENT_SESSION_VISIBLE_COUNT}），失焦后保存；超出后在该区内滚动，下方项目列表始终保留至少 160px。当前窗口高度下约可显示 ${effectiveCurrentSessionRows} 个。`}
+            type="number"
+            value={currentSessionCountDraft}
+            disabled={settingsLoading || Boolean(settingsError)}
+            onChange={setCurrentSessionCountDraft}
+            onBlur={() => { void handleCurrentSessionCountBlur() }}
+            placeholder={String(DEFAULT_CURRENT_SESSION_VISIBLE_COUNT)}
           />
           <SettingsToggle
             label="侧栏显示我的积分"
