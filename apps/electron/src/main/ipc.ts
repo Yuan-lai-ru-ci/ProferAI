@@ -34,6 +34,8 @@ import type {
   AgentSessionMeta,
   AgentRuntime,
   AgentSendInput,
+  AgentSessionHandoffRequest,
+  AgentSessionHandoffResult,
   UpdateAgentInterruptStateInput,
   AgentWorkspace,
   ProjectWorkspaceTarget,
@@ -236,6 +238,7 @@ import {
 } from './lib/agent-session-manager'
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { getAgentSessionNavigationIndex } from './lib/agent-navigation-index'
+import { createHandoffSession } from './lib/session-handoff-service'
 import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
 import { requestSessionDeletion, requestSessionDeletions, resumePendingSessionDeletions, waitForSessionDeletions } from './lib/agent-session-deletion-service'
@@ -1931,6 +1934,19 @@ export function registerIpcHandlers(): void {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
       return session
+    }
+  )
+
+  // 交接当前会话：撰写文档 → 新建会话（沿用执行前提），首轮 prompt 由渲染层发出
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CREATE_HANDOFF_SESSION,
+    async (event, request: AgentSessionHandoffRequest): Promise<AgentSessionHandoffResult> => {
+      assertSensitiveAgentIpcSender(event)
+      const result = await createHandoffSession(request.sessionId)
+      feishuBridgeManager.ensureSessionMirror(result.session).catch((error) => {
+        console.error('[飞书 Session 镜像] 交接会话建群失败:', error)
+      })
+      return result
     }
   )
 

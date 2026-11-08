@@ -35,6 +35,7 @@ import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { resolvedBlobMessagesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
+import { agentSessionTurnCountAtom } from '@/atoms/session-handoff'
 import { ScrollPositionManager } from '@/hooks/useScrollPositionMemory'
 import { cn } from '@/lib/utils'
 import { Spinner } from '@profer/ui/primitives/spinner'
@@ -872,6 +873,25 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
     return () => { cancelled = true }
     // 会话切换或落盘窗口变化时重建；流式期间靠本地分组即时反映新轮次，不每帧打主进程。
   }, [sessionId, persistedNavSignature])
+
+  /**
+   * 把「用户提问轮数」发布给会话交接建议条。
+   *
+   * 只有这里能拿到**全量**轮次：AgentView 的持久化消息按 tail 分页加载，
+   * 长会话必然少算——而那恰好是唯一需要这个计数的场景。
+   * 导航索引一条用户消息就是一轮，直接数 role 即可，不需要再分组。
+   */
+  const setSessionTurnCounts = useSetAtom(agentSessionTurnCountAtom)
+  React.useEffect(() => {
+    if (!sessionNavEntries) return
+    const count = sessionNavEntries.filter((entry) => entry.role === 'user').length
+    setSessionTurnCounts((prev) => {
+      if (prev.get(sessionId) === count) return prev
+      const next = new Map(prev)
+      next.set(sessionId, count)
+      return next
+    })
+  }, [sessionNavEntries, sessionId, setSessionTurnCounts])
 
   const minimapItems: MinimapItem[] = React.useMemo(
     () => buildNavigationItems(sessionNavEntries, visibleGroups, userProfile.avatar, orderedSDKMessages),

@@ -50,6 +50,10 @@ import {
   sessionHoverPreviewEnabledAtom,
   initializeSessionHoverPreviewEnabled,
 } from './atoms/session-preview-settings'
+import {
+  handoffSuggestTurnCountAtom,
+  initializeHandoffSuggestTurnCount,
+} from './atoms/session-handoff'
 import { planUnreadSeedOnInit } from './lib/agent-unread-gate'
 import { updateStatusAtom, initializeUpdater } from './atoms/updater'
 import { automationsAtom } from './atoms/automation-atoms'
@@ -493,6 +497,22 @@ function SessionPreviewSettingsInitializer(): null {
   useEffect(() => {
     void initializeSessionHoverPreviewEnabled(setEnabled)
   }, [setEnabled])
+
+  return null
+}
+
+/**
+ * 会话交接（建议新开会话）阈值初始化组件
+ *
+ * 只把「超过多少轮建议新开会话」读进 atom；建议条本身按会话独立判定，
+ * 未开启（默认 0）时整条不渲染，不影响任何既有行为。
+ */
+function SessionHandoffInitializer(): null {
+  const setCount = useSetAtom(handoffSuggestTurnCountAtom)
+
+  useEffect(() => {
+    void initializeHandoffSuggestTurnCount(setCount)
+  }, [setCount])
 
   return null
 }
@@ -1338,6 +1358,7 @@ if (isQuickTaskWindow) {
       <NotificationsInitializer />
       <AgentUnreadSettingsInitializer />
       <SessionPreviewSettingsInitializer />
+      <SessionHandoffInitializer />
       <DockBadgeInitializer />
       <UiPreferencesInitializer />
       <SmoothWheelInitializer />

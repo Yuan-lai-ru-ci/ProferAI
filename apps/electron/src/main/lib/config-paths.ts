@@ -186,6 +186,25 @@ export function getAgentAttachmentBackupDir(sessionId: string): string {
 }
 
 /**
+ * 会话交接文档根目录（按需创建）
+ *
+ * 刻意放在 agent-workspaces 之外：交接文档是跨会话的资料，既不属于源会话的
+ * 工作台（那个目录会随会话归档/删除），也不该落进用户项目里污染仓库。
+ * 新会话读取它需要额外授权，由首轮 prompt 的 additionalDirectories 提供。
+ *
+ * @returns ~/.profer/agent-handoffs/
+ */
+export function getAgentHandoffDir(): string {
+  const dir = join(getConfigDir(), 'agent-handoffs')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+
+  return dir
+}
+
+/**
  * 获取应用设置文件路径
  *
  * @returns ~/.profer/settings.json

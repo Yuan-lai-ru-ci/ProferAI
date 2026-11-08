@@ -45,6 +45,8 @@ import type {
   MessageSearchResult,
   BranchTreeSnapshot,
   AgentSessionMeta,
+  AgentSessionHandoffRequest,
+  AgentSessionHandoffResult,
   AgentRuntime,
   AgentEffort,
   AgentThinkingLevel,
@@ -755,6 +757,8 @@ export interface ElectronAPI {
 
   /** 创建 Agent 会话 */
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => Promise<AgentSessionMeta>
+  /** 交接当前会话：撰写交接文档并新建沿用执行前提的会话；首轮 prompt 由渲染层发出 */
+  createAgentHandoffSession: (sessionId: string) => Promise<AgentSessionHandoffResult>
 
   // ===== Agent 预设（工作区级） =====
 
@@ -2469,6 +2473,11 @@ const electronAPI: ElectronAPI = {
 
   createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, presetId)
+  },
+
+  createAgentHandoffSession: (sessionId: string) => {
+    const request: AgentSessionHandoffRequest = { sessionId }
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_HANDOFF_SESSION, request)
   },
 
   setQuoteableSelection: (enabled: boolean) => {

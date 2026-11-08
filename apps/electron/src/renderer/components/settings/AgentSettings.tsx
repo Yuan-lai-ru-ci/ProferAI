@@ -20,6 +20,9 @@ import { SettingsSection, SettingsCard, SettingsSegmentedControl } from './primi
 import type { AgentEffort } from '@profer/shared'
 import { toast } from 'sonner'
 import { useSessionSettingMutation } from '@/lib/use-session-setting-mutation'
+import { Input } from '@profer/ui/primitives/input'
+import { handoffSuggestTurnCountAtom, updateHandoffSuggestTurnCount } from '@/atoms/session-handoff'
+import { MAX_HANDOFF_SUGGEST_TURN_COUNT } from '@/types/settings'
 
 const EFFORT_OPTIONS: { value: AgentEffort; label: string }[] = [
   { value: 'low', label: '轻度' },
@@ -27,6 +30,56 @@ const EFFORT_OPTIONS: { value: AgentEffort; label: string }[] = [
   { value: 'high', label: '深度' },
   { value: 'max', label: '极限' },
 ]
+
+/**
+ * 「建议新开会话」轮数阈值。
+ *
+ * 与 `GoalIdleCheckinSetting` 同一套交互：输入期只保留数字草稿，
+ * 失焦（或回车）才归一落盘，避免每敲一个字符就写一次 settings.json。
+ * 0 = 关闭，这也是默认值。
+ */
+function HandoffSuggestTurnCountSetting(): React.ReactElement {
+  const [count, setCount] = useAtom(handoffSuggestTurnCountAtom)
+  const [draft, setDraft] = React.useState(String(count))
+
+  React.useEffect(() => { setDraft(String(count)) }, [count])
+
+  const commit = (raw: string): void => {
+    const parsed = Number(raw)
+    const next = Number.isFinite(parsed) && parsed > 0
+      ? Math.min(Math.round(parsed), MAX_HANDOFF_SUGGEST_TURN_COUNT)
+      : 0
+    setDraft(String(next))
+    if (next === count) return
+    void updateHandoffSuggestTurnCount(next, setCount, count).catch(() => {
+      toast.error('保存失败，请重试')
+    })
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-4 p-4">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">建议新开会话</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          超过这个轮数后，在输入框上方提示把当前进展整理成交接文档，并带着它开一个新会话。
+          0 = 关闭。
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <Input
+          id="handoff-suggest-turn-count"
+          inputMode="numeric"
+          className="h-8 w-16 text-center"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value.replace(/[^0-9]/g, ''))}
+          onBlur={() => commit(draft)}
+          onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+        />
+        <span className="text-xs text-muted-foreground">轮</span>
+      </div>
+    </div>
+  )
+}
 
 export function AgentSettings(): React.ReactElement {
   const tools = useAtomValue(chatToolsAtom)
@@ -90,6 +143,15 @@ export function AgentSettings(): React.ReactElement {
             disabled={pending}
             options={EFFORT_OPTIONS}
           />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection
+        title="长会话"
+        description="会话越长，上下文越容易在压缩里丢失细节；交接让下一个会话从干净上下文接手。"
+      >
+        <SettingsCard>
+          <HandoffSuggestTurnCountSetting />
         </SettingsCard>
       </SettingsSection>
 

@@ -166,6 +166,7 @@ import {
 } from '@/lib/agent-message-queue'
 import { AUTO_SEND_RETRY_INTERVAL_MS, shouldAutoSendQueueHead } from '@/lib/agent-autosend-turn'
 import { AgentMessageQueue } from './AgentMessageQueue'
+import { HandoffSuggestion } from './HandoffSuggestion'
 import { useQuoteSourceHighlight } from '@/hooks/useQuoteSourceHighlight'
 import { QuoteSourceMarkers } from './QuoteSourceMarkers'
 import {
@@ -3295,6 +3296,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
                 ))}
               </div>
             )}
+
+            {/* 建议新开会话：命中轮数阈值或上下文告警线时出现，点击触发交接 */}
+            <HandoffSuggestion sessionId={sessionId} />
 
             <AgentMessageQueue
               items={queuedMessages}
