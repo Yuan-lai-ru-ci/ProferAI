@@ -1084,6 +1084,30 @@ export function isVisibleAgentSession(session: Pick<AgentSessionMeta, 'draft'>):
 }
 
 /**
+ * 「建议新开会话」交接完成后的结果。
+ *
+ * 新会话由主进程创建（因为它要复制源会话的权限模式与附加目录），
+ * 渲染层只负责打开标签页并把首轮 prompt 交给新会话。
+ */
+export interface AgentSessionHandoffResult {
+  /** 新建的会话（已包含沿用自源会话的权限模式与附加目录） */
+  session: AgentSessionMeta
+  /** 源会话 ID */
+  fromSessionId: string
+  /** 交接文档绝对路径 */
+  handoffPath: string
+  /** 交接文档所在目录：新会话首轮需要它作为可读目录授权 */
+  handoffDir: string
+  /** 文档来源：agent = 源会话模型撰写；transcript = 主进程按转录摘要兜底 */
+  handoffSource: 'agent' | 'transcript'
+}
+
+/** `agent:create-handoff-session` 的参数 */
+export interface AgentSessionHandoffRequest {
+  sessionId: string
+}
+
+/**
  * Agent 持久化消息
  *
  * 存储在 ~/.profer/agent-sessions/{id}.jsonl 中。
@@ -2420,6 +2444,8 @@ export const AGENT_IPC_CHANNELS = {
   QUOTE_SELECTION_REQUEST: 'agent:quote-selection-request',
   /** 创建会话 */
   CREATE_SESSION: 'agent:create-session',
+  /** 交接当前会话：先让当前会话产出交接文档，再新建一个待加载该文档的会话 */
+  CREATE_HANDOFF_SESSION: 'agent:create-handoff-session',
   /** 为项目创建或复用隐藏的 Agent 草稿会话 */
   ENSURE_PROJECT_DRAFT_SESSION: 'agent:ensure-project-draft-session',
   /** 获取会话 SDKMessage（Phase 4 新格式） */

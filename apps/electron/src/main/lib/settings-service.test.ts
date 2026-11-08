@@ -332,3 +332,44 @@ describe('文件预览打开方式', () => {
     expect(readSettingsFile(configDir).previewModePreference).toBe('tab')
   })
 })
+
+describe('建议新开会话的轮数阈值', () => {
+  test('Given 未落盘该键 When 读取设置 Then 默认关闭（0）', () => {
+    expect(getSettings().handoffSuggestTurnCount).toBe(0)
+  })
+
+  test('Given 落盘负数或非数字 When 读取设置 Then 归一为关闭（0）', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+    writeSettingsFile(configDir, { handoffSuggestTurnCount: -5 })
+    expect(getSettings().handoffSuggestTurnCount).toBe(0)
+
+    clearSettingsCache()
+    writeSettingsFile(configDir, { handoffSuggestTurnCount: '30' })
+    expect(getSettings().handoffSuggestTurnCount).toBe(0)
+  })
+
+  test('Given 落盘超过上限 When 读取设置 Then 截断到上限', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+    writeSettingsFile(configDir, { handoffSuggestTurnCount: 9999 })
+
+    expect(getSettings().handoffSuggestTurnCount).toBe(500)
+  })
+
+  test('Given 设置为 30 When 更新设置 Then 落盘且重启后保持', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+
+    updateSettings({ handoffSuggestTurnCount: 30 })
+
+    expect(readSettingsFile(configDir).handoffSuggestTurnCount).toBe(30)
+    clearSettingsCache()
+    expect(getSettings().handoffSuggestTurnCount).toBe(30)
+  })
+
+  test('Given 传小数 When 更新设置 Then 取整落盘', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+
+    updateSettings({ handoffSuggestTurnCount: 12.6 })
+
+    expect(readSettingsFile(configDir).handoffSuggestTurnCount).toBe(13)
+  })
+})

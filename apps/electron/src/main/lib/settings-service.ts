@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getSettingsPath } from './config-paths'
 import { normalizeGoalProposalPolicy } from './goal-proposal-service'
-import { DEFAULT_AGENT_RUNTIME, DEFAULT_INTERFACE_VARIANT, DEFAULT_PREVIEW_OPEN_MODE, DEFAULT_THEME_MODE, DEFAULT_USER_MESSAGE_POSITION } from '../../types'
+import { DEFAULT_AGENT_RUNTIME, DEFAULT_HANDOFF_SUGGEST_TURN_COUNT, MAX_HANDOFF_SUGGEST_TURN_COUNT, DEFAULT_INTERFACE_VARIANT, DEFAULT_PREVIEW_OPEN_MODE, DEFAULT_THEME_MODE, DEFAULT_USER_MESSAGE_POSITION } from '../../types'
 import { normalizeAgentRuntime } from '@profer/shared'
 import type { AppSettings } from '../../types'
 
@@ -42,8 +42,18 @@ function getDefaultSettings(): AppSettings {
     manualReadConfirmEnabled: false,
     feishuSessionMirror: { mode: 'off' },
     agentRuntime: DEFAULT_AGENT_RUNTIME,
+    // 建议新开会话默认关闭：这是常驻提示，应由用户主动开启。
+    handoffSuggestTurnCount: DEFAULT_HANDOFF_SUGGEST_TURN_COUNT,
     developerModeEnabled: false,
   }
+}
+
+/** 轮数阈值归一：非数字/负数按关闭处理，超上限截断，小数取整。 */
+export function normalizeHandoffSuggestTurnCount(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_HANDOFF_SUGGEST_TURN_COUNT
+  }
+  return Math.min(Math.round(value), MAX_HANDOFF_SUGGEST_TURN_COUNT)
 }
 
 /**
@@ -86,6 +96,7 @@ export function getSettings(): AppSettings {
       manualReadConfirmEnabled: data.manualReadConfirmEnabled === true,
       feishuSessionMirror: data.feishuSessionMirror ?? { mode: 'off' },
       agentRuntime: normalizeAgentRuntime(data.agentRuntime),
+      handoffSuggestTurnCount: normalizeHandoffSuggestTurnCount(data.handoffSuggestTurnCount),
       goalProposalPolicy: normalizeGoalProposalPolicy(data.goalProposalPolicy),
       developerModeEnabled,
     }
@@ -122,6 +133,9 @@ export function updateSettings(updates: Partial<AppSettings>): AppSettings {
   }
   if (updates.previewModePreference !== undefined) {
     normalizedUpdates.previewModePreference = updates.previewModePreference === 'split' ? 'split' : DEFAULT_PREVIEW_OPEN_MODE
+  }
+  if (updates.handoffSuggestTurnCount !== undefined) {
+    normalizedUpdates.handoffSuggestTurnCount = normalizeHandoffSuggestTurnCount(updates.handoffSuggestTurnCount)
   }
   delete normalizedUpdates.pluginSystemEnabled
   const updated: AppSettings = {

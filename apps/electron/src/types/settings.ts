@@ -238,6 +238,17 @@ export const DEFAULT_PREVIEW_OPEN_MODE: PreviewOpenMode = 'tab'
 /** 默认 Agent runtime：Pi 执行链路完成灰度前始终使用 Claude。 */
 export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
 
+/**
+ * 建议新开会话的轮数阈值默认值：0 = 关闭。
+ *
+ * 默认关闭，因为它会在输入框上方常驻一条建议条；这属于打扰性提示，
+ * 应该由用户主动开启，而不是升级后突然出现在所有人的长会话里。
+ */
+export const DEFAULT_HANDOFF_SUGGEST_TURN_COUNT = 0
+
+/** 轮数阈值的上限，防止误输入一个大到无意义的数字（也避免设置页排版溢出）。 */
+export const MAX_HANDOFF_SUGGEST_TURN_COUNT = 500
+
 /** 提升此版本可要求用户重新确认更新后的受管浏览器风险告知。 */
 export const BROWSER_RISK_DISCLAIMER_VERSION = 1
 
@@ -308,6 +319,14 @@ export interface AppSettings {
   agentMaxBudgetUsd?: number
   /** Agent 最大轮次（0 或 undefined = SDK 默认） */
   agentMaxTurns?: number
+  /**
+   * 超过多少轮对话后建议新开会话（0 / undefined = 关闭，默认关闭）。
+   *
+   * 命中后在输入框上方显示一条建议条：点击会让当前会话先写一份交接文档，
+   * 再新开一个会话并加载该文档。它和 80% 上下文自动压缩是互补关系——
+   * 压缩是「让这一轮继续跑」，交接是「让下一个会话从头开始」。
+   */
+  handoffSuggestTurnCount?: number
   /** 已确认的受管浏览器风险告知版本；低于当前版本时首次使用会再次要求确认。 */
   browserRiskDisclaimerVersion?: number
   /** 新标签页默认首页 URL；空串/未设置 = 显示自定义起始页。 */
