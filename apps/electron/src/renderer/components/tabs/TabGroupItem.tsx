@@ -19,7 +19,14 @@
  */
 
 import * as React from 'react'
-import { Columns2, Ungroup, X } from 'lucide-react'
+import { ChevronRight, Columns2, Ungroup, X, XCircle } from 'lucide-react'
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@profer/ui/primitives/context-menu'
 import { cn } from '@/lib/utils'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { SESSION_STATUS_DOT_CLASS, SESSION_STATUS_LABEL } from '@/lib/session-status-visual'
@@ -43,6 +50,13 @@ export interface TabGroupItemProps {
   onMiddleClick: () => void
   /** 关闭整组（两个标签都关闭） */
   onCloseGroup: () => void
+  /** 右键菜单「关闭其他」；组合条目算一个整体，两个成员都保留 */
+  onCloseOthers?: () => void
+  /** 右键菜单「关闭右侧」 */
+  onCloseToRight?: () => void
+  /** 没有可关闭的其他条目时置灰 */
+  canCloseOthers?: boolean
+  canCloseToRight?: boolean
   onDragStart: (e: React.PointerEvent) => void
   onHoverEnter: () => void
   onHoverLeave: () => void
@@ -71,6 +85,10 @@ export function TabGroupItem({
   onDissolve,
   onMiddleClick,
   onCloseGroup,
+  onCloseOthers,
+  onCloseToRight,
+  canCloseOthers = true,
+  canCloseToRight = true,
   onDragStart,
   onHoverEnter,
   onHoverLeave,
@@ -120,7 +138,7 @@ export function TabGroupItem({
     pointerStartRef.current = null
   }
 
-  return (
+  const groupBody = (
     <div
       data-tab-id={id}
       data-tab-group="true"
@@ -232,5 +250,45 @@ export function TabGroupItem({
         </Tooltip>
       </button>
     </div>
+  )
+
+  // 组合条目代表两个标签：批量关闭按「整组」计算范围，两个成员同进同出。
+  if (!onCloseOthers && !onCloseToRight) return groupBody
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{groupBody}</ContextMenuTrigger>
+      <ContextMenuContent className="z-[9999] w-44 min-w-0 p-0.5">
+        <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onDissolve}>
+          <Ungroup size={14} />
+          解散组合
+        </ContextMenuItem>
+        <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onCloseGroup}>
+          <X size={14} />
+          关闭组合
+        </ContextMenuItem>
+        <ContextMenuSeparator className="my-0.5" />
+        {onCloseOthers && (
+          <ContextMenuItem
+            className="text-xs py-1 [&>svg]:size-3.5"
+            disabled={!canCloseOthers}
+            onSelect={onCloseOthers}
+          >
+            <XCircle size={14} />
+            关闭其他
+          </ContextMenuItem>
+        )}
+        {onCloseToRight && (
+          <ContextMenuItem
+            className="text-xs py-1 [&>svg]:size-3.5"
+            disabled={!canCloseToRight}
+            onSelect={onCloseToRight}
+          >
+            <ChevronRight size={14} />
+            关闭右侧
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }

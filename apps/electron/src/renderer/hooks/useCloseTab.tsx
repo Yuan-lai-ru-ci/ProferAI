@@ -37,13 +37,24 @@ import { manualReadConfirmEnabledAtom } from '@/atoms/agent-unread-settings'
 import { shouldAutoClearUnreadOnView } from '@/lib/agent-unread-gate'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 
+interface CloseManyOptions {
+  /**
+   * 关闭后希望激活的 Tab。
+   *
+   * 右键菜单的目标条目本身不在关闭范围内，用户刚在它上面操作，落点应回到它；
+   * 而 `closeTabs` 的缺省回退是 MRU + 就近，不保证落在目标上。
+   * 该 Tab 若已被连带关闭（例如作为某会话的工作 Tab）则忽略，仍按缺省回退。
+   */
+  activateTabId?: string
+}
+
 interface UseCloseTabReturn {
   /** 请求关闭当前会话入口 */
   requestClose: (tabId: string) => void
   /** 直接执行关闭 */
   executeClose: (tabId: string) => void
   /** 批量关闭多个当前会话入口（「关闭其他 / 关闭所有」），一次提交，避免逐次读到过期快照 */
-  requestCloseMany: (tabIds: readonly string[]) => void
+  requestCloseMany: (tabIds: readonly string[], options?: CloseManyOptions) => void
 }
 
 export function useCloseTab(): UseCloseTabReturn {
@@ -195,10 +206,16 @@ export function useCloseTab(): UseCloseTabReturn {
    * 逐次调用单 Tab 关闭会各自读到同一份过期 `tabs` 快照（最后一次提交覆盖前面所有结果），
    * 因此这里在同一份工作副本上按传入顺序串行推进，结束时只提交一次。
    */
-  const executeCloseMany = React.useCallback((tabIds: readonly string[]) => {
+  const executeCloseMany = React.useCallback((tabIds: readonly string[], options?: CloseManyOptions) => {
     const result = closeTabs(tabs, activeTabId, tabIds, tabMru)
     if (result.closedTabs.length === 0) return
-    commitClose(tabs, result.closedTabs, result.tabs, result.activeTabId, result.mru)
+    // 右键目标不在关闭范围内：优先落回它，而不是 MRU / 就近回退（落在别处会像"没按我指的走"）。
+    const requestedTabId = options?.activateTabId
+    const nextActiveTabId =
+      requestedTabId && result.tabs.some((tab) => tab.id === requestedTabId)
+        ? requestedTabId
+        : result.activeTabId
+    commitClose(tabs, result.closedTabs, result.tabs, nextActiveTabId, result.mru)
   }, [tabs, activeTabId, tabMru, commitClose])
 
   const executeClose = React.useCallback((tabId: string) => {
@@ -209,8 +226,8 @@ export function useCloseTab(): UseCloseTabReturn {
     executeClose(tabId)
   }, [executeClose])
 
-  const requestCloseMany = React.useCallback((tabIds: readonly string[]) => {
-    executeCloseMany(tabIds)
+  const requestCloseMany = React.useCallback((tabIds: readonly string[], options?: CloseManyOptions) => {
+    executeCloseMany(tabIds, options)
   }, [executeCloseMany])
 
   return { requestClose, executeClose, requestCloseMany }

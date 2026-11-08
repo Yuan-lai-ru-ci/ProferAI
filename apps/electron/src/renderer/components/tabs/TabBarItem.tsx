@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { Blocks, BookOpen, Bot, FileText, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, Clock, Pencil, Check, AppWindow } from 'lucide-react'
+import { Blocks, BookOpen, Bot, ChevronRight, FileText, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, XCircle, Clock, Pencil, Check, AppWindow } from 'lucide-react'
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -47,6 +47,13 @@ export interface TabBarItemProps {
   onDragStart: (e: React.PointerEvent) => void
   /** 右键菜单「在新窗口打开」；仅会话 Tab 由 TabBar 传入 */
   onOpenInNewWindow?: () => void
+  /** 右键菜单「关闭其他」；由 TabBar 按顶栏可见条目算出范围 */
+  onCloseOthers?: () => void
+  /** 右键菜单「关闭右侧」 */
+  onCloseToRight?: () => void
+  /** 没有可关闭的其他条目时置灰，而不是点了没反应 */
+  canCloseOthers?: boolean
+  canCloseToRight?: boolean
   /** 该 Tab 对应的会话是否由定时任务创建 */
   isAutomation?: boolean
   /** 子会话血缘：探索分支（GitFork）或委派子会话（GitBranch），替换默认 agent 图标 */
@@ -82,6 +89,10 @@ export function TabBarItem({
   onMiddleClick,
   onDragStart,
   onOpenInNewWindow,
+  onCloseOthers,
+  onCloseToRight,
+  canCloseOthers = true,
+  canCloseToRight = true,
   isAutomation,
   childKind,
   agentOwned,
@@ -411,21 +422,47 @@ export function TabBarItem({
     </div>
   )
 
-  if (!onOpenInNewWindow) return tabBody
+  // 草稿已在上方提前返回；其余 Tab 只要有任一项菜单动作就挂右键菜单：
+  // 「在新窗口打开」只属于会话 Tab，批量关闭对所有非草稿 Tab 都成立（预览/浏览器同样有用）。
+  if (!onOpenInNewWindow && !onCloseOthers && !onCloseToRight) return tabBody
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{tabBody}</ContextMenuTrigger>
       <ContextMenuContent className="z-[9999] w-44 min-w-0 p-0.5">
-        <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onOpenInNewWindow}>
-          <AppWindow size={14} />
-          在新窗口打开
-        </ContextMenuItem>
-        <ContextMenuSeparator className="my-0.5" />
+        {onOpenInNewWindow && (
+          <>
+            <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onOpenInNewWindow}>
+              <AppWindow size={14} />
+              在新窗口打开
+            </ContextMenuItem>
+            <ContextMenuSeparator className="my-0.5" />
+          </>
+        )}
         <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onClose}>
           <X size={14} />
           关闭
         </ContextMenuItem>
+        {onCloseOthers && (
+          <ContextMenuItem
+            className="text-xs py-1 [&>svg]:size-3.5"
+            disabled={!canCloseOthers}
+            onSelect={onCloseOthers}
+          >
+            <XCircle size={14} />
+            关闭其他
+          </ContextMenuItem>
+        )}
+        {onCloseToRight && (
+          <ContextMenuItem
+            className="text-xs py-1 [&>svg]:size-3.5"
+            disabled={!canCloseToRight}
+            onSelect={onCloseToRight}
+          >
+            <ChevronRight size={14} />
+            关闭右侧
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   )

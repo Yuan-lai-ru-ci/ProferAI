@@ -74,6 +74,7 @@ import { WindowControlsHost } from "@/components/WindowControlsTemplate";
 import { TabBarItem } from "./TabBarItem";
 import { TabGroupItem } from "./TabGroupItem";
 import { selectContextTabs } from "./tab-context";
+import { buildTabBarEntries, selectScopeTabIds } from "./tab-close-scope";
 import { useCloseTab } from "@/hooks/useCloseTab";
 import { useMoveTabToNewWindow } from "@/hooks/useMoveTabToNewWindow";
 import { detectIsWindows } from "@profer/ui";
@@ -131,7 +132,7 @@ export function TabBar(): React.ReactElement {
   const setAutomationForm = useSetAtom(automationFormAtom);
 
   // 统一关闭逻辑：关闭当前会话入口并回到 Scratch Pad，不停止后台 Agent
-  const { requestClose } = useCloseTab();
+  const { requestClose, requestCloseMany } = useCloseTab();
   const moveTabToNewWindow = useMoveTabToNewWindow();
   const store = useStore();
 
@@ -566,6 +567,7 @@ export function TabBar(): React.ReactElement {
         hasPluginPages={hasPluginPages}
         onActivate={handleActivate}
         onClose={requestClose}
+        onCloseMany={(tabIds, activateTabId) => requestCloseMany(tabIds, { activateTabId })}
         onDragStart={handleDragStart}
         onMoveToNewWindow={moveTabToNewWindow}
         onCancelSort={() => sortCancelRef.current?.()}
@@ -573,6 +575,9 @@ export function TabBar(): React.ReactElement {
     </>
   );
 }
+
+/** 条目查不到范围时的占位（组合刚被解散等瞬态），避免每次渲染新建对象 */
+const EMPTY_CLOSE_SCOPE: { others: string[]; right: string[] } = { others: [], right: [] };
 
 /** 内部组件：管理全局 hover 状态，确保同一时刻只有一个预览面板 */
 function TabBarInner({
@@ -584,6 +589,7 @@ function TabBarInner({
   hasPluginPages,
   onActivate,
   onClose,
+  onCloseMany,
   onDragStart,
   onCancelSort,
   onMoveToNewWindow,
@@ -596,6 +602,8 @@ function TabBarInner({
   hasPluginPages: boolean;
   onActivate: (tabId: string) => void;
   onClose: (tabId: string) => void;
+  /** 批量关闭（右键「关闭其他 / 关闭右侧」）：一次提交，落点回到被右键的条目 */
+  onCloseMany: (tabIds: readonly string[], activateTabId: string) => void;
   onDragStart: (tabId: string, e: React.PointerEvent) => void;
   /** 取消进行中的标签排序（合并手势中途接管时调用） */
   onCancelSort: () => void;
@@ -749,6 +757,30 @@ function TabBarInner({
   const dissolveGroup = React.useCallback((group: ReturnType<typeof findTabGroup>) => {
     setTabGroups((previous) => removeTabGroup(previous, group));
   }, [setTabGroups]);
+
+  // 右键批量关闭的作用范围：按顶栏的「渲染条目」算（组合折叠成一个条目），而不是按数组下标——
+  // 组合成员可能不相邻，按下标会把视觉上位于左边的成员算成右侧（见 tab-close-scope）。
+  const closeScopeByEntryId = React.useMemo(() => {
+    const entries = buildTabBarEntries(tabs, tabGroups);
+    const result = new Map<string, { others: string[]; right: string[] }>();
+    for (const entry of entries) {
+      result.set(entry.id, {
+        others: selectScopeTabIds(entries, entry.id, "others"),
+        right: selectScopeTabIds(entries, entry.id, "right"),
+      });
+    }
+    return result;
+  }, [tabs, tabGroups]);
+
+  /** 批量关闭：范围为空时菜单已置灰，这里再挡一层，避免空提交。 */
+  const closeInScope = React.useCallback(
+    (tabId: string, scope: "others" | "right") => {
+      const targets = closeScopeByEntryId.get(tabId)?.[scope] ?? [];
+      if (targets.length === 0) return;
+      onCloseMany(targets, tabId);
+    },
+    [closeScopeByEntryId, onCloseMany],
+  );
 
   // 关闭整组：两个标签都关闭（运行中的会话仍按既有语义保留在后台）
   const closeGroup = React.useCallback((group: ReturnType<typeof findTabGroup>) => {
@@ -1412,6 +1444,7 @@ function TabBarInner({
                   ? tabs.find((item) => item.id === tabGroup.rightTabId) ?? null
                   : null;
                 if (leftTab || rightTab) {
+                  const groupCloseScope = closeScopeByEntryId.get(tab.id) ?? EMPTY_CLOSE_SCOPE;
                   return (
                     <TabGroupItem
                       key={tab.id}
@@ -1426,6 +1459,10 @@ function TabBarInner({
                       onDissolve={() => dissolveGroup(tabGroup)}
                       onMiddleClick={() => dissolveGroup(tabGroup)}
                       onCloseGroup={() => closeGroup(tabGroup)}
+                      onCloseOthers={() => closeInScope(tab.id, "others")}
+                      onCloseToRight={() => closeInScope(tab.id, "right")}
+                      canCloseOthers={groupCloseScope.others.length > 0}
+                      canCloseToRight={groupCloseScope.right.length > 0}
                       onDragStart={(e) => handleDragStartWithTearOff(tab.id, e)}
                       onHoverEnter={() => handleTabHoverEnter(tab.id)}
                       onHoverLeave={handleTabHoverLeave}
@@ -1434,6 +1471,7 @@ function TabBarInner({
                 }
               }
 
+              const closeScope = closeScopeByEntryId.get(tab.id) ?? EMPTY_CLOSE_SCOPE;
               return (
               <TabBarItem
                 key={tab.id}
@@ -1483,6 +1521,10 @@ function TabBarInner({
                     ? () => onMoveToNewWindow(tab.id)
                     : undefined
                 }
+                onCloseOthers={() => closeInScope(tab.id, "others")}
+                onCloseToRight={() => closeInScope(tab.id, "right")}
+                canCloseOthers={closeScope.others.length > 0}
+                canCloseToRight={closeScope.right.length > 0}
                 onHoverEnter={() => handleTabHoverEnter(tab.id)}
                 onHoverLeave={handleTabHoverLeave}
                 onPanelHoverEnter={handlePanelHoverEnter}
