@@ -1224,14 +1224,12 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       })
 
       // 乐观更新：SDKMessage 格式（Phase 4）
-      const tempUserSDKMsg: SDKMessage = {
-        type: 'user',
-        message: {
-          content: [{ type: 'text', text: snapshot.message }],
-        },
-        parent_tool_use_id: null,
-        _createdAt: Date.now(),
-      } as unknown as SDKMessage
+      // 必须带 uuid 并透传给主进程：主进程的 userSDKMsg 会沿用这个 uuid 并补上 _provenance，
+      // 消息重载时才能在 persistedUuids 里命中、让乐观副本让位。
+      // 不带 uuid 的后果是两个一模一样的气泡并存（乐观那份没有 provenance，显示为「未知作者」），
+      // 直到下一次整表重载才被丢掉。
+      const messageUuid = crypto.randomUUID()
+      const tempUserSDKMsg = createUserSDKMessage(snapshot.message, messageUuid, streamStartedAt)
       requestFollow(sessionId)
       appendOptimisticPersistedMessage(tempUserSDKMsg)
 
@@ -1239,6 +1237,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       const input: AgentSendInput = {
         sessionId,
         userMessage: snapshot.message,
+        uuid: messageUuid,
         channelId: snapshot.channelId,
         modelId: snapshot.modelId,
         workspaceId: snapshot.workspaceId,
