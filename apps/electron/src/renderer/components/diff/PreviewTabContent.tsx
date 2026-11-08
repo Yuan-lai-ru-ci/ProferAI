@@ -36,6 +36,14 @@ export function PreviewTabContent({ tabId, sessionId, filePath }: PreviewTabCont
   // 与顶栏 Tab 的 ×、Cmd+W 走同一条关闭路径：连带清理该预览 Tab 的文件元数据。
   const { requestClose } = useCloseTab()
 
+  // 复制按钮由 DiffTabContent 渲染（内容 state 与编辑态草稿只在那边有一份），
+  // 这里只提供一个挂载点。用 state 而不是 ref：子组件首帧渲染时 ref 还没挂上，
+  // portal 的 target 会永远是 null。
+  // 回调必须稳定：内联箭头每次渲染换身份，React 会先 detach(null) 再 attach(el)，
+  // 每轮渲染都抖一次 state。
+  const [headerSlot, setHeaderSlot] = React.useState<HTMLElement | null>(null)
+  const bindHeaderSlot = React.useCallback((el: HTMLDivElement | null) => setHeaderSlot(el), [])
+
   const currentFile = filesByTab.get(tabId) ?? null
   const sessionPath = sessionPathMap.get(sessionId) ?? ''
   const fileName = getFileBaseName(filePath)
@@ -98,6 +106,7 @@ export function PreviewTabContent({ tabId, sessionId, filePath }: PreviewTabCont
           {currentFile.filePath}
         </button>
         <div className="flex shrink-0 items-center gap-0.5">
+          <div ref={bindHeaderSlot} className="flex items-center" />
           <DefaultAppOpenButton
             filePath={defaultAppTargetPath}
             access={defaultAppAccess}
@@ -136,6 +145,7 @@ export function PreviewTabContent({ tabId, sessionId, filePath }: PreviewTabCont
           baseRef={currentFile.baseRef}
           agentPreviewSession={currentFile.previewRequestId && currentFile.previewRevision ? { requestId: currentFile.previewRequestId, revision: currentFile.previewRevision } : undefined}
           hideToolbar
+          headerSlot={headerSlot}
         />
       </div>
     </div>

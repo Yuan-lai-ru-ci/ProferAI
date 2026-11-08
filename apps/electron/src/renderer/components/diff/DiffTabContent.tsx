@@ -8,6 +8,7 @@
 import * as React from 'react'
 import { ChevronRight, Code2, Copy, Check, Eye, List, Pencil, RefreshCw, Save, X, FileQuestion } from 'lucide-react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { createPortal } from 'react-dom'
 import DOMPurify from 'dompurify'
 import { File as PierreFile } from '@pierre/diffs/react'
 import { toast } from 'sonner'
@@ -199,13 +200,21 @@ interface DiffTabContentProps {
   toolbarActions?: React.ReactNode
   /** 上层已提供文件名和操作栏时，隐藏本组件的路径/操作重复栏。 */
   hideToolbar?: boolean
+  /**
+   * 复制按钮的外置容器（与 `hideToolbar` 配套）。
+   *
+   * 复制按钮必须由本组件渲染 —— 唯一真相是内部的内容 state（含编辑态草稿
+   * `markdownDraft`），上层拿不到。`hideToolbar` 时把按钮 portal 到上层头部，
+   * 既避免重复渲染一条工具栏，又不用把内容 state 提升出去。
+   */
+  headerSlot?: HTMLElement | null
   /** 基准 ref（如 "origin/main"），用于 worktree vs main 模式 */
   baseRef?: string
   /** Agent 正式预览请求上下文；只透传给当前用户可见的 PPTX OfficePreview。 */
   agentPreviewSession?: { requestId: string; revision: string }
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions, hideToolbar = false, baseRef, agentPreviewSession }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, onEmptyDiff, toolbarActions, hideToolbar = false, headerSlot, baseRef, agentPreviewSession }: DiffTabContentProps): React.ReactElement {
   const [viewMode, setViewMode] = useAtom(agentDiffViewModeAtom)
   const refreshVersionMap = useAtomValue(agentDiffRefreshVersionAtom)
   const setRefreshVersionMap = useSetAtom(agentDiffRefreshVersionAtom)
@@ -756,13 +765,15 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
   }, [])
 
   const handleCopy = React.useCallback(async () => {
+    const copyText = markdownEditing ? markdownDraft : (isOfficePreview ? officeText : newContent)
     try {
-      const copyText = markdownEditing ? markdownDraft : (isOfficePreview ? officeText : newContent)
       await navigator.clipboard.writeText(copyText)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // 复制失败
+    } catch (err) {
+      // 按钮在预览头部与"复制路径"并排，同一位置不能一个给 toast 一个静默失败
+      console.error('[DiffTabContent] 复制内容失败:', err)
+      toast.error('复制失败')
     }
   }, [isOfficePreview, markdownDraft, markdownEditing, newContent, officeText])
 
@@ -939,6 +950,40 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath, sessionId])
 
+  // 复制按钮的「唯一真相」在本组件内部（newContent / 编辑态草稿 markdownDraft），
+  // 因此按钮必须由这里渲染。hideToolbar 场景下用 portal 挂到上层头部（见 headerSlot），
+  // 既不会重复渲染一条工具栏，也不用把内容 state 提升出去。
+  //
+  // 只在「真的读到了文本」的类型上出现：图片 / PDF / Office / 长尾回退 / 目录 / 不支持
+  // 这几种的 newContent 恒为空串，给了按钮也只会复制出空内容。
+  const canCopy = pathKind === 'file'
+    && !isUnsupported
+    && !isImage
+    && !isPdf
+    && !isDocx
+    && !isOfficePreview
+    && !isLegacyOffice
+    && !isOfvBacked
+  const copyLabel = isMarkdown ? '复制 Markdown 源码' : '复制文件内容'
+  const copyButton = (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={cn(
+        'shrink-0 rounded transition-colors',
+        headerSlot
+          // 外置到预览头部时对齐该处按钮的视觉口径（size-6 / muted-foreground）
+          ? 'flex size-6 items-center justify-center text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+          : 'p-1 text-foreground/40 hover:bg-foreground/[0.06] hover:text-foreground/60',
+        !headerSlot && previewOnly && !isEditableText && 'ml-auto',
+      )}
+      title={copyLabel}
+      aria-label={copyLabel}
+    >
+      {copied ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
+    </button>
+  )
+
   return (
     <div className="flex flex-col h-full">
       {!hideToolbar && <div className="flex h-8 items-center gap-1.5 border-b border-surface-border/60 px-3 flex-shrink-0">
@@ -1037,13 +1082,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           )
         )}
 
-        {!(previewOnly && (isDocx || isOfficePreview || isOfvBacked)) && (
-          <button type="button" onClick={handleCopy}
-            className={cn("p-1 rounded hover:bg-foreground/[0.06] text-foreground/40 hover:text-foreground/60 shrink-0", previewOnly && !isEditableText && "ml-auto")}
-            title="复制文件内容">
-            {copied ? <Check className="size-3.5 text-green-500" /> : <Copy className="size-3.5" />}
-          </button>
-        )}
+        {canCopy && copyButton}
 
         <button
           type="button"
@@ -1070,6 +1109,8 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
 
         {toolbarActions}
       </div>}
+
+      {hideToolbar && headerSlot && canCopy && createPortal(copyButton, headerSlot)}
 
       <div className="relative flex-1 min-h-0 flex">
         <PreviewFindBar
