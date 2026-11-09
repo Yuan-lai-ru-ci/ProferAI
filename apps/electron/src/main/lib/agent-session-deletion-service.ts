@@ -155,7 +155,8 @@ export function drainSessionDeletionQueue(): Promise<void> {
           getDeletionOrder: () => next.sessionIds,
           beginDeletion: beginAgentSessionDeletion,
           endDeletion: endAgentSessionDeletion,
-          stopAndWait: stopAgentAndWait,
+          // 删除只看是否等到所有权释放，不关心停止结果的分类值。
+          stopAndWait: async (id: string) => { await stopAgentAndWait(id) },
           clearState: (sessionId) => {
             permissionService.clearSessionWhitelist(sessionId)
             permissionService.clearSessionPending(sessionId)
