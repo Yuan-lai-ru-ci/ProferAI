@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { observeMinimapViewport } from './scroll-minimap'
+import { getScrollTargetTop, observeMinimapViewport } from './scroll-minimap'
 
 // 真实观察函数 + 可计数几何端口，验证工作量及状态语义，不代表浏览器帧率测量。
 function harness() {
@@ -69,6 +69,36 @@ function run(body: (h: ReturnType<typeof harness>) => void) {
   const h = harness()
   try { body(h) } finally { h.dispose() }
 }
+
+describe('迷你地图导航定位', () => {
+  test('根据滚动视口矩形计算目标位置并居中短消息', () => {
+    const target = {
+      getBoundingClientRect: () => ({ top: 210 }),
+      offsetHeight: 200,
+    }
+    const container = {
+      getBoundingClientRect: () => ({ top: 100 }),
+      clientTop: 1,
+      scrollTop: 800,
+      clientHeight: 600,
+    }
+    expect(getScrollTargetTop(target as HTMLElement, container as HTMLElement)).toBe(709)
+  })
+
+  test('长消息按顶部附近定位且不产生负滚动位置', () => {
+    const target = {
+      getBoundingClientRect: () => ({ top: 110 }),
+      offsetHeight: 900,
+    }
+    const container = {
+      getBoundingClientRect: () => ({ top: 100 }),
+      clientTop: 0,
+      scrollTop: 0,
+      clientHeight: 600,
+    }
+    expect(getScrollTargetTop(target as HTMLElement, container as HTMLElement)).toBe(0)
+  })
+})
 
 describe('迷你地图视口更新', () => {
   test('同帧 scroll/resize 合并扫描，双属性节点只测量一次', () => run(h => {

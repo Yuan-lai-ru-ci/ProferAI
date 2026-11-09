@@ -108,6 +108,8 @@ function getSDKMessageStableKey(message: SDKMessage): string {
 
 /** AgentMessages 属性接口 */
 interface AgentMessagesProps {
+  /** 全宽会话区域，用于固定消息导航轨道。 */
+  minimapHostRef?: React.RefObject<HTMLDivElement | null>
   sessionId: string
   /** 用户在前端选择的模型 ID（用于显示渠道配置的 Model Name） */
   sessionModelId?: string
@@ -559,7 +561,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, runStartedAtFallback, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, runStartedAtFallback, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true }: AgentMessagesProps): React.ReactElement {
   const store = useStore()
   // 草稿区基准（storageDir）：显式传入优先，否则按会话所属工作区只读解析。
   const resolvedDraftRoot = useAgentSessionDraftRoot(sessionId, draftRoot)
@@ -791,8 +793,10 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
     : (visibleGroupStart ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE))
   // 输入草稿/运行状态更新不改变消息窗口，保持导航与时间线的依赖引用稳定。
   const visibleGroups = React.useMemo(
-    () => allGroups.slice(resolvedVisibleGroupStart),
-    [allGroups, resolvedVisibleGroupStart],
+    () => pagedMode
+      ? allGroups
+      : allGroups.slice(resolvedVisibleGroupStart, resolvedVisibleGroupStart + HISTORY_GROUP_PAGE_SIZE),
+    [allGroups, pagedMode, resolvedVisibleGroupStart],
   )
   // When SDK history is paged, do not inject cards older than the loaded message tail;
   // they appear naturally after the user loads the corresponding older message page.
@@ -813,6 +817,28 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
     // 全量老路径的本地 slice 前移一页；分页模式由 onLoadEarlierHistory 服务端拉取接管。
     setVisibleGroupStart((start) => Math.max(0, (start ?? Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE)) - HISTORY_GROUP_PAGE_SIZE))
   }, [allGroups.length])
+  const requestEarlierNavigation = React.useCallback((target?: { id: string | null; matchKey?: string }) => {
+    // 本地全量历史已经在内存，只是被渲染窗口裁掉：直接把窗口切到目标附近，避免逐页挂载。
+    if (!pagedMode && target) {
+      const targetIndex = allGroups.findIndex((group) => {
+        if (target.id) return getGroupId(group) === target.id
+        return target.matchKey ? getGroupNavKey(group) === target.matchKey : false
+      })
+      if (targetIndex >= 0) {
+        const maxStart = Math.max(0, allGroups.length - HISTORY_GROUP_PAGE_SIZE)
+        const targetStart = Math.max(0, targetIndex - 10)
+        setVisibleGroupStart(Math.min(maxStart, targetStart))
+        return
+      }
+    }
+
+    // 分页模式仍由主进程接口拉取更早历史；找不到本地目标时按原逻辑请求一页。
+    if (onLoadEarlierHistory) {
+      onLoadEarlierHistory()
+      return
+    }
+    if (hasEarlierGroups) loadEarlierGroups()
+  }, [allGroups, hasEarlierGroups, loadEarlierGroups, onLoadEarlierHistory, pagedMode])
 
   // 跨 turn 历史 TaskCreate id → subject 映射：顶层算一次，避免每个 AssistantTurnRenderer
   // 都对全量 allMessages 做 O(M) 扫描（流式期间 useMemo 因 allMessages 引用变化失效，
@@ -1146,7 +1172,7 @@ export function AgentMessages({ sessionId, sessionModelId, agentRuntime, message
           </>
         )}
       </ConversationContent>
-      <ScrollMinimap items={minimapItems} onRequestEarlier={onLoadEarlierHistory} />
+      <ScrollMinimap items={minimapItems} onRequestEarlier={requestEarlierNavigation} railHostRef={minimapHostRef} />
       <ConversationScrollButton />
       {allUserMessagesData.length > 0 && (
         <StickyUserMessage userMessages={allUserMessagesData} />

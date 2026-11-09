@@ -209,7 +209,7 @@ export function GeneralSettings(): React.ReactElement {
             label="当前语言"
             description="简体中文"
           >
-            <span className="text-xs text-muted-foreground">只读</span>
+            <span className="text-xs text-muted-foreground">更多语言敬请期待</span>
           </SettingsRow>
           <SettingsToggle
             label={`快速任务（${quickTaskShortcut || '快捷键已禁用'}）`}

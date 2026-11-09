@@ -8,6 +8,7 @@
  */
 
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
 import { MarkdownPreview, MARKDOWN_PREVIEW_LIGHT_COMPONENTS } from '@profer/ui'
 import { AlertTriangle, Search } from 'lucide-react'
@@ -38,10 +39,12 @@ export interface MinimapItem {
 
 interface ScrollMinimapProps {
   items: MinimapItem[]
+  /** 导航轨道的全宽定位容器；未提供时保持局部定位。 */
+  railHostRef?: React.RefObject<HTMLDivElement | null>
   /**
-   * 拉取更早一页消息（命中不了旧条目时调用）。不传则不提供“加载更早”入口。
+   * 将目标传给宿主以加载/挂载对应历史条目。
    */
-  onRequestEarlier?: () => void
+  onRequestEarlier?: (target?: { id: string | null; matchKey?: string }) => void
 }
 
 /** 最少轮数才显示迷你地图 */
@@ -126,6 +129,19 @@ function getOffsetTopRelativeTo(node: HTMLElement, container: HTMLElement): numb
   return top
 }
 
+export function getScrollTargetTop(target: HTMLElement, container: HTMLElement): number {
+  const targetTop = target.getBoundingClientRect().top
+    - container.getBoundingClientRect().top
+    - container.clientTop
+    + container.scrollTop
+  const targetHeight = target.offsetHeight
+  const viewportHeight = container.clientHeight
+  const scrollTarget = targetHeight < viewportHeight
+    ? targetTop - (viewportHeight - targetHeight) / 2
+    : targetTop - 32
+  return Math.max(0, scrollTarget)
+}
+
 /** 转义正则特殊字符 */
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -198,7 +214,7 @@ export function observeMinimapViewport(
 
 // ── 主组件 ──
 
-export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): React.ReactElement | null {
+export function ScrollMinimap({ items, onRequestEarlier, railHostRef }: ScrollMinimapProps): React.ReactElement | null {
   const { scrollRef, contentRef, pause, navigate, beginLayout } = useConversationScroll()
   /** 面板是否打开 —— 只由「右键轨道」或 ⌘F 打开，不再由悬停触发 */
   const [panelOpen, setPanelOpen] = React.useState(false)
@@ -224,7 +240,34 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
   const searchInputRef = React.useRef<HTMLInputElement>(null)
   const trackRef = React.useRef<HTMLDivElement>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
+  const pendingNavigationRef = React.useRef<{ id: string | null; matchKey?: string } | null>(null)
+  const [railHost, setRailHost] = React.useState<HTMLDivElement | null>(null)
+  const [railTop, setRailTop] = React.useState(0)
 
+  // 轨道单独挂到会话全宽容器，避开居中 max-width 容器的裁剪。
+  React.useEffect(() => {
+    const host = railHostRef?.current
+    const viewport = scrollRef.current
+    if (!canScroll || !host || !viewport) {
+      setRailHost(null)
+      return
+    }
+    const update = (): void => {
+      const hostRect = host.getBoundingClientRect()
+      const viewportRect = viewport.getBoundingClientRect()
+      setRailTop(viewportRect.top - hostRect.top + viewportRect.height / 2 + 56)
+    }
+    update()
+    setRailHost(host)
+    const observer = new ResizeObserver(update)
+    observer.observe(host)
+    observer.observe(viewport)
+    window.addEventListener('resize', update)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', update)
+    }
+  }, [canScroll, railHostRef, scrollRef])
 
   /** 滚动进度条按需显隐：只有用户滚动时才露出，停手约 1.25s 后隐藏。 */
   React.useEffect(() => {
@@ -407,31 +450,45 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
   // 导航索引覆盖全会话，但更早的行可能还没加载进 DOM。命中不了且仍有更早历史时，
   // 先拉起更早一页，让用户知道「在加载」而不是点了没反应；已加载到底则静默返回。
 
-  const scrollToMessage = React.useCallback((id: string | null, matchKey?: string) => {
+  const scrollToMessage = React.useCallback((id: string | null, matchKey?: string, smooth = true) => {
     const el = scrollRef.current
     if (!el) return
     const target = findMessageNode(el, id, matchKey)
     if (!target) {
-      // 还没加载到那条历史：先拉起更早一页。
-      // prepend 会把内容整体向下推，必须当锚点布局事务处理，否则用户会被推离当前位置。
+      // 还没加载到那条历史：保留目标，窗口前移后由 effect 自动重试。
       if (onRequestEarlier) {
+        pendingNavigationRef.current = { id, matchKey }
         const finish = beginLayout(contentRef.current ?? undefined)
-        onRequestEarlier()
+        onRequestEarlier({ id, matchKey })
         // 内容异步到达；下一帧结束事务，让控制器在新高度下把锚点抳回原位。
         window.setTimeout(finish, 0)
       }
       return
     }
-    const offsetTop = getOffsetTopRelativeTo(target, el)
-    const targetHeight = target.offsetHeight
-    const viewportHeight = el.clientHeight
-    const scrollTarget = targetHeight < viewportHeight
-      ? offsetTop - (viewportHeight - targetHeight) / 2
-      : offsetTop - 32
-    navigate(Math.max(0, scrollTarget))
+    pendingNavigationRef.current = null
+    // 已挂载目标沿用普通导航动画；远程目标由 pending effect 显式关闭动画。
+    navigate(getScrollTargetTop(target, el), smooth)
 
     closePanel()
   }, [scrollRef, contentRef, navigate, onRequestEarlier, beginLayout, closePanel])
+
+  // 历史窗口前移后继续定位左侧刻度对应的目标，不要求用户重复点击。
+  React.useEffect(() => {
+    const pending = pendingNavigationRef.current
+    if (!pending) return
+    const el = scrollRef.current
+    if (!el) return
+    const target = findMessageNode(el, pending.id, pending.matchKey)
+    if (target) {
+      scrollToMessage(pending.id, pending.matchKey, false)
+    } else if (onRequestEarlier) {
+      const finish = beginLayout(contentRef.current ?? undefined)
+      onRequestEarlier({ id: pending.id, matchKey: pending.matchKey })
+      window.setTimeout(finish, 0)
+    } else {
+      pendingNavigationRef.current = null
+    }
+  }, [items, scrollRef, contentRef, onRequestEarlier, beginLayout, scrollToMessage])
 
   // ── 按轮分组后的派生数据 ──
 
@@ -617,14 +674,12 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
       : `第${hoveredRailBar.firstIndex + 1}轮`
     : ''
 
-  return (
-    <>
-      {/* ── 左中轨道 ──
-          放在正文左侧、纵向居中：它是一份目录刻度，不是贴边的滚动条。
-          整条刻度装在一枚深色胶囊里（对齐 Framer 组件的容器）。指针压到某一根时，
-          那一段沿容器方向（纵向）长成白色胶囊、上下邻居被推开并按距离变宽变亮 ——
-          和组件里横向展开是同一个动作，只是轴转了 90°。 */}
-      <div className="absolute left-1 top-1/2 z-30 -translate-y-1/2 pointer-events-none">
+  // 轨道及其悬停预览、搜索面板作为整体定位，避免被正文的最大宽度容器裁剪。
+  const rail = (
+      <div
+        className={cn('absolute left-0 z-30 -translate-y-1/2 pointer-events-none', !railHost && 'top-[calc(50%+3.5rem)]')}
+        style={railHost ? { top: railTop } : undefined}
+      >
         <div
           ref={railRef}
           role="group"
@@ -633,9 +688,6 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
           style={{
             width: RAIL_WIDTH,
             borderRadius: 24,
-            background: 'var(--minimap-rail-bg)',
-            // 只有一轮时是一枚小胶囊，描边会让它看起来像按钮
-            boxShadow: isSingleSegment ? 'none' : 'inset 0 0 0 1px var(--minimap-rail-border)',
           }}
           onMouseLeave={handleRailLeave}
           onContextMenu={handleRailContextMenu}
@@ -793,6 +845,11 @@ export function ScrollMinimap({ items, onRequestEarlier }: ScrollMinimapProps): 
           </div>
         )}
       </div>
+  )
+
+  return (
+    <>
+      {railHost ? createPortal(rail, railHost) : !railHostRef ? rail : null}
 
       {/* ── 滚动进度条（仍在右边缘，和轨道分工：左边读位置，右边拖滚动） ── */}
       <div className="absolute right-1 top-0 bottom-0 z-30 py-4 pointer-events-none">

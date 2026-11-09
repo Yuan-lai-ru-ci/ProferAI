@@ -80,6 +80,7 @@ export function ChatView({ conversationId, standalone = false }: ChatViewProps):
 }
 
 function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): React.ReactElement {
+  const minimapHostRef = React.useRef<HTMLDivElement>(null)
   // ===== 本地状态（每个实例独立） =====
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [contextDividers, setContextDividers] = React.useState<string[]>([])
@@ -767,12 +768,13 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
   return (
     <div className="flex h-full overflow-hidden">
       {/* 主内容区域 */}
-      <div data-profer-navigation-region="conversation" tabIndex={-1} className="flex flex-col h-full flex-1 min-w-0">
+      <div ref={minimapHostRef} data-profer-navigation-region="conversation" tabIndex={-1} className="relative flex flex-col h-full flex-1 min-w-0">
         {/* Header 在 max-w 外，按钮可到达最右侧 */}
         <ChatHeader conversation={conversation} onOpenHistory={() => setHistoryDrawerOpen(true)} />
         <div className="flex flex-col flex-1 w-full max-w-[min(72rem,100%)] mx-auto overflow-hidden min-h-0">
           {/* 中间：消息区域 */}
           <ChatMessages
+            minimapHostRef={minimapHostRef}
             conversationId={conversationId}
             messages={messages}
             messagesLoaded={messagesLoaded}

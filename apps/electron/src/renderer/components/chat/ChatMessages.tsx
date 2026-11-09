@@ -118,6 +118,8 @@ function ScrollTopLoader({ hasMore, loading, onLoadMore }: ScrollTopLoaderProps)
 // ===== 主组件 =====
 
 interface ChatMessagesProps {
+  /** 全宽会话区域，用于固定消息导航轨道。 */
+  minimapHostRef?: React.RefObject<HTMLDivElement | null>
   /** 当前对话 ID */
   conversationId: string
   /** 消息列表 */
@@ -166,6 +168,7 @@ function EmptyState(): React.ReactElement {
 }
 
 export function ChatMessages({
+  minimapHostRef,
   conversationId,
   messages,
   messagesLoaded,
@@ -443,7 +446,7 @@ export function ChatMessages({
           </>
         )}
       </ConversationContent>
-      <ScrollMinimap items={minimapItems} />
+      <ScrollMinimap items={minimapItems} railHostRef={minimapHostRef} />
       <ConversationScrollButton />
     </Conversation>
   )

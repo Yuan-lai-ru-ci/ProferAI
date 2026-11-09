@@ -508,5 +508,6 @@ function getIndicatorColor(status: SessionIndicatorStatus): string | undefined {
   if (status === 'idle') return undefined
   if (status === 'completed') return 'bg-success'
   if (status === 'blocked') return 'bg-warning'
+  if (status === 'interrupted') return 'bg-destructive'
   return 'bg-info'
 }
