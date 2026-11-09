@@ -241,6 +241,38 @@ describe('getSessionTreeStatus — 父会话状态聚合', () => {
     expect(getDelegatedChildStatus(child, new Map())).toBe('running')
     expect(getSessionTreeStatus(item, new Map())).toBe('running')
   })
+
+  test('Given 子代理停在断点（delegationStatus 为 interrupted）When 计算状态 Then 子会话为 interrupted 且父行不跟着变红', () => {
+    const child = makeSession({
+      id: 'child-8',
+      title: '子会话',
+      parentSessionId: 'parent-8',
+      sourceDelegationId: 'deleg-8',
+      delegationStatus: 'interrupted',
+    })
+    const item: AgentSessionTreeItem = {
+      session: makeSession({ id: 'parent-8', title: '父会话' }),
+      childSessions: [child],
+    }
+
+    // 断点需要用户在子会话上做决定，不能落回 idle 灰点。
+    expect(getDelegatedChildStatus(child, new Map())).toBe('interrupted')
+    // 中断是终态：不像 blocked/running 那样向上传染，父行不冒充异常。
+    expect(getSessionTreeStatus(item, new Map())).toBe('idle')
+  })
+
+  test('Given 子会话本轮已收尾但持久化仍是 interrupted When 计算状态 Then 仍保留断点状态', () => {
+    const child = makeSession({
+      id: 'child-9',
+      title: '子会话',
+      parentSessionId: 'parent-9',
+      sourceDelegationId: 'deleg-9',
+      delegationStatus: 'interrupted',
+    })
+
+    // 实时指示器先给出 completed 是时序常态，持久化事实更权威。
+    expect(getDelegatedChildStatus(child, new Map([['child-9', 'completed'] satisfies [string, SessionIndicatorStatus]]))).toBe('interrupted')
+  })
 })
 
 describe('computeProjectSessionVisibility — 项目内折叠切片', () => {

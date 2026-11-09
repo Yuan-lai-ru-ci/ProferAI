@@ -28,7 +28,10 @@ export async function readAgentStreamNext<T>(
   options: ReadAgentStreamNextOptions,
 ): Promise<AgentStreamReadResult<T>> {
   if (options.shouldStop()) {
-    await closeAgentStreamIterator(iterator)
+    // 停止路径不得等待 provider 清理。async generator 的 return() 无法抢占其内部
+    // 未 settle 的 await（实测：既不 resolve 也不 reject），await 它会让读取器
+    // 永久挂住，终态就永远到不了宿主。清理转后台，generator 最终仍会走自己的 finally。
+    void closeAgentStreamIterator(iterator)
     return { kind: 'stopped' }
   }
 
@@ -55,7 +58,8 @@ export async function readAgentStreamNext<T>(
     ])
     if (result.kind === 'stopped') {
       pendingNext.catch(() => {})
-      await closeAgentStreamIterator(iterator)
+      // 同第一个分支：先宣布终态，清理不参与终态时序。
+      void closeAgentStreamIterator(iterator)
       return { kind: 'stopped' }
     }
     if (result.next.done) return { kind: 'done' }
@@ -66,11 +70,33 @@ export async function readAgentStreamNext<T>(
   }
 }
 
-export async function closeAgentStreamIterator<T>(iterator: AgentStreamReader<T>): Promise<void> {
+/**
+ * 关闭 provider 迭代器。
+ *
+ * 停止路径不 await 本函数；即便有调用方等待，也不能让它无限挂住：
+ * provider 的 return() 在内部 await 未 settle 时不会 resolve，所以这里加一道
+ * 超时，超时只记日志并放弃等待，不影响已经决定的本轮终态。
+ */
+export async function closeAgentStreamIterator<T>(
+  iterator: AgentStreamReader<T>,
+  options?: { timeoutMs?: number },
+): Promise<void> {
+  const timeoutMs = options?.timeoutMs ?? 5_000
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await iterator.return?.()
+    await Promise.race([
+      Promise.resolve(iterator.return?.()),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          console.warn('[agent-runtime] provider 迭代器清理超时，已放弃等待（终态不受影响）')
+          resolve()
+        }, timeoutMs)
+      }),
+    ])
   } catch {
     // stop 已经决定了本轮终态；provider 的 close 错误交给下一层统一处理。
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 

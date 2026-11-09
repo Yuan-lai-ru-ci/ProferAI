@@ -655,7 +655,7 @@ export const ConversationItem = React.memo(function ConversationItem({
 // ===== Agent 会话列表项 =====
 
 /** 会话行左侧状态条的颜色 — 与 SessionIndicatorStatus 呼应 */
-type SessionLeftAccent = 'orange' | 'blue' | 'green'
+type SessionLeftAccent = 'orange' | 'blue' | 'green' | 'red'
 /** 有色标的会话统一用中性淡底，不跟随状态色相；色相只留在左侧竖条与状态图标上 */
 const SESSION_ACCENT_ROW_CLASS = 'bg-foreground/[0.04] hover:bg-foreground/[0.07]'
 
@@ -666,6 +666,7 @@ const SESSION_ACCENT_INDICATOR_CLASS: Record<SessionLeftAccent, string> = {
   orange: 'bg-warning',
   blue: 'bg-info',
   green: 'bg-success',
+  red: 'bg-destructive',
 }
 
 const DELEGATION_STATUS_ICON_CLASS: Record<SessionIndicatorStatus, string> = {
@@ -673,12 +674,14 @@ const DELEGATION_STATUS_ICON_CLASS: Record<SessionIndicatorStatus, string> = {
   running: 'text-info',
   blocked: 'text-warning',
   completed: 'text-success',
+  interrupted: 'text-destructive',
 }
 
 export function getSessionLeftAccent(status: SessionIndicatorStatus): SessionLeftAccent | undefined {
   if (status === 'blocked') return 'orange'
   if (status === 'running') return 'blue'
   if (status === 'completed') return 'green'
+  if (status === 'interrupted') return 'red'
   return undefined
 }
 

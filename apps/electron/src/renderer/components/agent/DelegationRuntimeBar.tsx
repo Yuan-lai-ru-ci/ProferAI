@@ -40,6 +40,8 @@ export function DelegationRuntimeBar({ display }: { display: DelegationRuntimeDi
   if (!display.visible) return null
 
   const running = display.phase === 'running'
+  // 中断与完成、取消必须区分开：它停在断点、等用户决定续跑还是放弃，用红色占位。
+  const interrupted = display.phase === 'interrupted'
 
   return (
     <div
@@ -50,8 +52,8 @@ export function DelegationRuntimeBar({ display }: { display: DelegationRuntimeDi
     >
       {running
         ? <Spinner size="sm" aria-hidden="true" className="shrink-0 text-primary/70" />
-        : <GitBranch className="size-3 shrink-0 text-muted-foreground/45" aria-hidden="true" />}
-      <span className="min-w-0 truncate text-muted-foreground/75">{display.label}</span>
+        : <GitBranch className={cn('size-3 shrink-0', interrupted ? 'text-destructive' : 'text-muted-foreground/45')} aria-hidden="true" />}
+      <span className={cn('min-w-0 truncate', interrupted ? 'text-destructive/90' : 'text-muted-foreground/75')}>{display.label}</span>
       {running && display.startedAt != null && <DelegationElapsed startedAt={display.startedAt} />}
     </div>
   )

@@ -893,8 +893,8 @@ export interface ElectronAPI {
   /** 发送 Agent 消息 */
   sendAgentMessage: (input: AgentSendInput) => Promise<void>
 
-  /** 中止 Agent 执行 */
-  stopAgent: (sessionId: string) => Promise<void>
+  /** 中止 Agent 执行；already_finished 表示主进程已无该会话运行（用于清理渲染层残留状态） */
+  stopAgent: (sessionId: string) => Promise<'stopped' | 'already_finished'>
   startGoal: (sessionId: string, goal: string, contract?: import('@profer/shared').AgentGoalContract) => Promise<import('@profer/shared').AgentGoalState>
   getGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState | null>
   updateGoal: (sessionId: string, patch: { goal?: string; contract?: import('@profer/shared').AgentGoalContract; limits?: import('@profer/shared').AgentGoalLimitsPatch }) => Promise<import('@profer/shared').AgentGoalState>
@@ -2678,7 +2678,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SEND_MESSAGE, input)
   },
 
-  stopAgent: (sessionId: string) => {
+  stopAgent: (sessionId: string): Promise<'stopped' | 'already_finished'> => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, sessionId)
   },
   startGoal: (sessionId: string, goal: string, contract?: import('@profer/shared').AgentGoalContract) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.START_GOAL, sessionId, goal, contract),

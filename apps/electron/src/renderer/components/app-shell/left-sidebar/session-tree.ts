@@ -29,8 +29,10 @@ export const PROJECT_SESSION_TAIL_ALWAYS_VISIBLE = 2
 export const ACTIVE_SESSION_STATUS_PRIORITY: Record<SessionIndicatorStatus, number> = {
   blocked: 0,
   running: 1,
-  completed: 2,
-  idle: 3,
+  // 中断比完成更需要注意：它需要用户决定续跑还是放弃。
+  interrupted: 2,
+  completed: 3,
+  idle: 4,
 }
 
 /** 判断是否为委派子会话（有父会话且带来源委派 ID） */
@@ -115,6 +117,9 @@ export function getDelegatedChildStatus(
   // 就不能让这段时序窗口把父会话误显示为已完成。
   if (status === 'blocked' || status === 'running') return status
   if (session.delegationStatus === 'running') return 'running'
+  // 持久化的中断是可靠事实，即使本轮 stream 已收尾（先出 completed 指示）也要表达出来，
+  // 否则可续跑的断点会被完成态掩盖。
+  if (session.delegationStatus === 'interrupted') return 'interrupted'
   return status ?? 'idle'
 }
 

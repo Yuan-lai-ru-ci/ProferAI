@@ -3,7 +3,7 @@ import type { AgentSendInput, AgentSessionMeta, AgentStreamPayload } from '@prof
 import { AgentEventBus } from './agent-event-bus'
 
 const sessions = new Map<string, AgentSessionMeta>()
-const runs: Array<{ input: AgentSendInput; handlers: { onComplete?: (messages: never[]) => void } }> = []
+const runs: Array<{ input: AgentSendInput; handlers: { onComplete?: (messages: never[], opts?: { stoppedByUser?: boolean; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }) => void } }> = []
 const stopped: string[] = []
 const events: Array<{ sessionId: string; payload: AgentStreamPayload }> = []
 mock.module('./agent-session-manager', () => ({
@@ -32,7 +32,11 @@ mock.module('./agent-headless-runner-registry', () => ({
 }))
 mock.module('./agent-workspace-manager', () => ({ getAgentWorkspace: () => ({ slug: 'project' }) }))
 mock.module('./agent-model-selection', () => ({ assertEnabledModelForChannel: ({ modelId }: { modelId: string }) => modelId, listEnabledAgentModelsForChannel: () => ({ models: [] }) }))
-mock.module('./agent-delegation-preset', () => ({ resolveDelegationPreset: () => ({ reference: { presetId: 'code', presetScope: 'workspace', workspaceSlug: 'project' }, preset: { id: 'code', name: '代码', permissionMode: 'auto', modelId: 'bound-model' } }) }))
+mock.module('./agent-delegation-preset', () => ({ resolveDelegationPreset: () => resolvedPreset }))
+let resolvedPreset: {
+  reference: { presetId: string; presetScope: 'workspace'; workspaceSlug: string }
+  preset: { id: string; name: string; permissionMode: string; channelId?: string; modelId?: string }
+} = { reference: { presetId: 'code', presetScope: 'workspace', workspaceSlug: 'project' }, preset: { id: 'code', name: '代码', permissionMode: 'auto', modelId: 'bound-model' } }
 const { buildPiCollaborationTools, injectAgentCollaborationMcpServer, stopDelegationsForParent, registerCollaborationEventBus, hasRunningDelegations } = await import('./agent-collaboration-tools')
 
 interface Tool { name: string; parameters: Record<string, unknown>; execute: (id: string, args: unknown) => Promise<{ content: Array<{ text: string }> }> }
@@ -44,7 +48,13 @@ function setup() {
   const invoke = async (name: string, args: unknown) => JSON.parse((await tools.find(tool => tool.name.endsWith(`__${name}`))!.execute('tool', args)).content[0]!.text)
   return { source, tools, invoke }
 }
-beforeEach(() => { runs.length = 0; stopped.length = 0; events.length = 0; parentActive = true })
+beforeEach(() => {
+  runs.length = 0
+  stopped.length = 0
+  events.length = 0
+  parentActive = true
+  resolvedPreset = { reference: { presetId: 'code', presetScope: 'workspace', workspaceSlug: 'project' }, preset: { id: 'code', name: '代码', permissionMode: 'auto', modelId: 'bound-model' } }
+})
 const bus = new AgentEventBus()
 
 /** 模拟子会话发起 AskUserQuestion（不经过真实服务，只验证父会话侧接线）。 */
@@ -78,6 +88,19 @@ describe('真实会话派工', () => {
     })).delegation
     expect(explicit.modelId).toBe('explicit-model')
     expect(runs[1]!.input.modelId).toBe('explicit-model')
+  })
+
+  test('预设绑定渠道和模型时，子会话及 headless dispatch 都使用该渠道', async () => {
+    resolvedPreset = {
+      reference: { presetId: 'code', presetScope: 'workspace', workspaceSlug: 'project' },
+      preset: { id: 'code', name: '代码', permissionMode: 'auto', channelId: 'bound-channel', modelId: 'bound-model' },
+    }
+    const { invoke } = setup()
+    const { delegation } = await invoke('delegate_agent', { task: '跨渠道委派' })
+    expect(delegation.channelId).toBe('bound-channel')
+    expect(delegation.modelId).toBe('bound-model')
+    expect(sessions.get(delegation.childSessionId)).toMatchObject({ channelId: 'bound-channel', modelId: 'bound-model' })
+    expect(runs[0]!.input).toMatchObject({ channelId: 'bound-channel', modelId: 'bound-model' })
   })
 
   test('current 使用独立 Provider 会话并返回父时间线投影，来源不受正文影响', async () => {
@@ -178,6 +201,61 @@ describe('真实会话派工', () => {
     expect(runs[1]!.input.taskId).toBe(runs[0]!.input.taskId)
     expect(runs[1]!.input.triggerId).not.toBe(runs[0]!.input.triggerId)
     expect(runs[1]!.input.messageAuthor).toEqual(runs[0]!.input.messageAuthor)
+  })
+  test('子会话后台任务等待不算终态，委派保持运行中', async () => {
+    const { invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '跑长任务' })).delegation
+    runs[0]!.handlers.onComplete?.([], { backgroundTasksPending: true })
+    expect(sessions.get(child.childSessionId)?.delegationStatus).toBe('running')
+  })
+  test('子会话被用户停止时记为断点中断，父会话收到续跑决策而不是结果回传', async () => {
+    const { source, invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '实现子功能' })).delegation
+    runs[0]!.handlers.onComplete?.([], { stoppedByUser: true })
+    expect(sessions.get(child.childSessionId)?.delegationStatus).toBe('interrupted')
+
+    parentActive = false
+    bus.emit(source, { kind: 'profer_event', event: { type: 'run_idle', sessionId: source } } as AgentStreamPayload)
+
+    expect(runs).toHaveLength(2)
+    expect(runs[1]!.input.userMessage).toContain('断点')
+    expect(runs[1]!.input.userMessage).toContain('continue_delegation')
+    expect(runs[1]!.input.userMessage).toContain('放弃')
+    // 中断不是结果回传：不能套用“所有子会话均已结束”的完成文案。
+    expect(runs[1]!.input.userMessage).not.toContain('所有协作子会话均已结束')
+  })
+  test('父会话停止时级联取消子会话，不会把父会话自动拉起来', async () => {
+    const { source, invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '子任务' })).delegation
+    expect(stopDelegationsForParent(source)).toBe(1)
+    expect(sessions.get(child.childSessionId)?.delegationStatus).toBe('cancelled')
+
+    parentActive = false
+    bus.emit(source, { kind: 'profer_event', event: { type: 'run_idle', sessionId: source } } as AgentStreamPayload)
+
+    // 级联取消只让等待方立即返回；父会话刚被用户停止，不能再自动跑一轮。
+    expect(runs).toHaveLength(1)
+  })
+  test('断点续跑完成后由工具返回值交付结果，不再重复自动续跑', async () => {
+    const { source, invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '实现子功能' })).delegation
+    runs[0]!.handlers.onComplete?.([], { stoppedByUser: true })
+    parentActive = false
+    bus.emit(source, { kind: 'profer_event', event: { type: 'run_idle', sessionId: source } } as AgentStreamPayload)
+    expect(runs).toHaveLength(2)
+    runs[1]!.handlers.onComplete?.([])
+
+    // 父会话采纳决策后续跑：工具同步返回本轮结果，不能再重复拉起父会话。
+    parentActive = true
+    const continuation = invoke('continue_delegation', { delegationId: child.delegationId, message: '继续并跑测试' })
+    runs[2]!.handlers.onComplete?.([])
+    const result = await continuation
+    expect(result.delegation.status).toBe('completed')
+    expect(sessions.get(child.childSessionId)?.delegationStatus).toBe('completed')
+
+    parentActive = false
+    bus.emit(source, { kind: 'profer_event', event: { type: 'run_idle', sessionId: source } } as AgentStreamPayload)
+    expect(runs).toHaveLength(3)
   })
   test('重启后 current 的结果查询仍返回执行记录定位投影', async () => {
     const { source, invoke } = setup()

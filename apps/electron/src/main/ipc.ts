@@ -239,7 +239,7 @@ import {
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { getAgentSessionNavigationIndex } from './lib/agent-navigation-index'
 import { createHandoffSession } from './lib/session-handoff-service'
-import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher } from './lib/agent-service'
+import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher, type AgentStopOutcome } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
 import { requestSessionDeletion, requestSessionDeletions, resumePendingSessionDeletions, waitForSessionDeletions } from './lib/agent-session-deletion-service'
 import { setQuoteableSelection } from './menu'
@@ -3362,18 +3362,21 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     AGENT_IPC_CHANNELS.STOP_AGENT,
-    async (event, sessionId: string): Promise<void> => {
+    async (event, sessionId: string): Promise<AgentStopOutcome> => {
       assertSensitiveAgentIpcSender(event)
       feishuBridgeManager.stopSessionMirrorRun(sessionId)
       const goal = goalSessionService.get(sessionId)
       const ownedByGoal = isGoalRunActive(sessionId, goal?.activeRunId)
-      const ordinaryStop = ownedByGoal ? Promise.resolve() : stopAgentAndWait(sessionId)
+      const ordinaryStop: Promise<AgentStopOutcome> = ownedByGoal
+        ? Promise.resolve('already_finished')
+        : stopAgentAndWait(sessionId)
       // 中断只暂停 Goal（对齐 Codex），用户再发消息即可续上；真停止走 /goal stop。
       const goalStop = goal?.status === 'active'
         ? goalSessionService.pauseForInterrupt(sessionId)
         : Promise.resolve()
       // 点击当刻就请求停止普通 owner；不在另一个 await 后按 sessionId 停掉新运行。
-      await Promise.all([ordinaryStop, goalStop])
+      const [outcome] = await Promise.all([ordinaryStop, goalStop])
+      return outcome
     }
   )
 

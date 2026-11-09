@@ -47,11 +47,14 @@ import {
   buildDelegationDispatchFacts,
   resolveDelegationArrangement,
   resolveDelegationPermissionMode,
+  resolveDelegationTerminalStatus,
+  isResumableDelegationStatus,
   type DelegationPlacement,
   type DelegationRelation,
   type AgentDelegationRole,
   type AgentDelegationStatus,
 } from './agent-collaboration-utils'
+import { DELEGATION_CANCELLED_RESULT_SUBTYPE } from './agent-end-reason'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel } from './agent-model-selection'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { resolveDelegationPreset } from './agent-delegation-preset'
@@ -378,6 +381,7 @@ function markDelegationFinished(
   record: DelegationRecord,
   status: AgentDelegationStatus,
   fields: { error?: string; resultSummary?: string } = {},
+  options: { notifyParent?: boolean } = {},
 ): void {
   if (record.status !== 'running') return
   record.status = status
@@ -397,17 +401,53 @@ function markDelegationFinished(
   // 子会话已结束，它名下的阻塞问题不再有回答对象。
   blockedEvents.clearDelegation(record.delegationId)
   record.resolveCompletion()
-  scheduleParentAutoContinuation(record.parentSessionId)
+  // 父级联取消只负责让等待方立即返回：用户刚停止父会话，父会话正在收敛，
+  // 任何自动续跑都会把运行重新拉起来。只有真正需要父会话决策的终态才唤起它。
+  if (options.notifyParent !== false) scheduleParentAutoContinuation(record.parentSessionId)
+}
+
+/** 断点中断：需要父会话决策（续跑/改指令/放弃），不能当作结果回传。 */
+function isCheckpointInterrupted(record: DelegationRecord): boolean {
+  return record.status === 'interrupted'
+}
+
+function formatDelegationDetail(record: DelegationRecord): string {
+  if (record.status === 'failed') return `错误：${record.error || '未知错误'}`
+  if (record.status === 'cancelled') return '父会话被停止，级联取消；这不是可续跑的断点。'
+  if (record.status === 'interrupted') return record.resultSummary || '中断前没有可摘要的 assistant 文本。'
+  return record.resultSummary || '子会话未返回可摘要的 assistant 文本。'
+}
+
+function buildDelegationSummaryBlock(record: DelegationRecord): string {
+  return `### ${record.title}\n- 委派 ID：${record.delegationId}\n- 子会话：${record.childSessionId}\n- 状态：${record.status}\n${truncateText(formatDelegationDetail(record), RESULT_SUMMARY_CHAR_LIMIT)}`
+}
+
+/**
+ * 中断决策提示词：子会话在断点停住，父会话必须显式选择续跑、改指令或放弃。
+ * 不能复用「结果回传」文案：那会让模型把中断当成完成，直接宣布任务结束。
+ */
+function buildParentInterruptionPrompt(records: DelegationRecord[]): string {
+  const interrupted = records.filter(isCheckpointInterrupted)
+  const finished = records.filter((record) => !isCheckpointInterrupted(record))
+  return truncateText(
+    [
+      '以下协作子会话在断点处中断，尚未完成。不要把它当作已完成的任务，也不要假设它的结论可用。',
+      '',
+      interrupted.map(buildDelegationSummaryBlock).join('\n\n'),
+      finished.length > 0 ? `\n其余子会话已结束：\n${finished.map(buildDelegationSummaryBlock).join('\n\n')}` : '',
+      '',
+      '请决定如何处理，并在回复中说明选择：',
+      '1. 断点续跑：调用 continue_delegation，传 delegationId 和一条简短指令；子会话保留完整上下文继续。',
+      '2. 给出下一轮指示：在 continue_delegation 的 message 里写明新的要求、验收标准或边界。',
+      '3. 放弃该子会话：说明原因并调整原任务计划，不要静默跳过。',
+    ].join('\n'),
+    AUTO_CONTINUATION_SUMMARY_LIMIT,
+  )
 }
 
 function buildParentAutoContinuationPrompt(records: DelegationRecord[]): string {
-  const summaries = records.map((record) => {
-    const detail = record.status === 'failed'
-      ? `错误：${record.error || '未知错误'}`
-      : record.resultSummary || '子会话未返回可摘要的 assistant 文本。'
-    return `### ${record.title}\n- 委派 ID：${record.delegationId}\n- 状态：${record.status}\n${truncateText(detail, RESULT_SUMMARY_CHAR_LIMIT)}`
-  }).join('\n\n')
-
+  if (records.some(isCheckpointInterrupted)) return buildParentInterruptionPrompt(records)
+  const summaries = records.map(buildDelegationSummaryBlock).join('\n\n')
   return truncateText(
     `所有协作子会话均已结束。请基于下列结果继续完成用户的原始任务；核验子会话的结论，不要把未验证内容当作事实。\n\n${summaries}`,
     AUTO_CONTINUATION_SUMMARY_LIMIT,
@@ -421,7 +461,8 @@ function scheduleParentAutoContinuation(parentSessionId: string): void {
     .filter((record) => record.parentSessionId === parentSessionId && record.relation === 'subtask')
   if (parentRecords.some((record) => record.status === 'running')) return
 
-  const completed = parentRecords.filter((record) => !autoContinuedDelegationIds.has(record.delegationId)
+  const completed = parentRecords.filter((record) => record.status !== 'cancelled'
+    && !autoContinuedDelegationIds.has(record.delegationId)
     && !acknowledgedDelegationResultIds.has(record.delegationId))
   if (completed.length === 0) return
 
@@ -601,6 +642,13 @@ function getDelegationSummary(record: DelegationRecord): Record<string, unknown>
     permissionMode: record.permissionMode,
     presetReference: record.presetReference,
     status: record.status,
+    resumable: isResumableDelegationStatus(record.status),
+    resumableFromCheckpoint: record.status === 'interrupted',
+    continuationHint: record.status === 'interrupted'
+      ? '子会话在断点中断，可调用 continue_delegation 续跑或给出下一轮指示。'
+      : record.status !== 'running'
+        ? '可调用 continue_delegation 追加下一轮指令，子会话保留完整上下文。'
+        : undefined,
     startedAt: record.startedAt,
     completedAt: record.completedAt,
     error: record.error,
@@ -778,6 +826,10 @@ function prepareDelegationContinuation(
   Object.assign(record, createDelegationCompletion())
   record.startedAt = Date.now()
   record.triggerId = randomUUID()
+  // 续跑是同一 delegationId 的新一轮：上一轮的去重标记必须清掉，
+  // 否则这一轮结束后父会话收不到结果（被 autoContinued/acknowledged 当成已处理）。
+  autoContinuedDelegationIds.delete(record.delegationId)
+  acknowledgedDelegationResultIds.delete(record.delegationId)
   record.sourceRunId = ctx.sourceRunId
   return updated
 }
@@ -817,6 +869,7 @@ async function waitForLiveRecords(
   records: DelegationRecord[],
   timeoutSeconds: number,
   liveTarget: number,
+  signal?: AbortSignal,
 ): Promise<DelegationProgressWaitResult> {
   const isCompleted = (): boolean => getFinishedDelegationCount(records) >= liveTarget
   if (isCompleted()) return { status: 'completed' }
@@ -839,6 +892,7 @@ async function waitForLiveRecords(
     isCompleted,
     timeoutMs: timeoutSeconds * 1000,
     initialBlocked: blockedEvents.pendingFor(records.map((record) => record.delegationId)),
+    signal,
   })
 }
 
@@ -896,8 +950,9 @@ function stopDelegation(parentSessionId: string, delegationId: string): Record<s
   }
 
   // 由父协作工具取消子会话并非 child UI 的直接 user stop。
+  // 父会话自己发起的取消不触发父会话续跑：它在工具调用里，下一步由模型自己决定。
   stopRegisteredAgent(record.childSessionId, 'delegation_cancel')
-  markDelegationFinished(record, 'cancelled')
+  markDelegationFinished(record, 'cancelled', {}, { notifyParent: false })
   return {
     delegation: getDelegationSummary(record),
     stopped: true,
@@ -918,7 +973,7 @@ export function stopDelegationsForParent(parentSessionId: string): number {
     if (record.parentSessionId === parentSessionId && record.relation === 'subtask' && record.status === 'running') {
       try {
         stopRegisteredAgent(record.childSessionId, 'delegation_cancel')
-        markDelegationFinished(record, 'cancelled')
+        markDelegationFinished(record, 'cancelled', {}, { notifyParent: false })
         stopped++
       } catch (err) {
         console.error(`[协作] 级联停止子会话失败: delegationId=${record.delegationId}`, err)
@@ -961,9 +1016,13 @@ function startDelegation(
     target: args.presetReference,
     workspaceSlug,
   })
+  const effectiveChannelId = resolvedPreset?.preset.channelId?.trim() || ctx.channelId
+  if (resolvedPreset?.preset.channelId && !args.modelId && !resolvedPreset.preset.modelId) {
+    throw new Error(`预设「${resolvedPreset.preset.name}」已绑定渠道，但没有绑定模型`)
+  }
   const requestedModelId = args.modelId ?? resolvedPreset?.preset.modelId ?? ctx.modelId?.trim() ?? undefined
   const effectiveModelId = assertEnabledModelForChannel({
-    channelId: ctx.channelId,
+    channelId: effectiveChannelId,
     modelId: requestedModelId,
     runtime: inheritedRuntime,
     purpose: args.modelId !== undefined
@@ -993,7 +1052,7 @@ function startDelegation(
     : parent
   const child = createAgentSession(
     title,
-    ctx.channelId,
+    effectiveChannelId,
     workspaceId,
     effectiveModelId,
     inheritedRuntime,
@@ -1030,7 +1089,7 @@ function startDelegation(
     ...arrangement,
     childSessionId: child.id,
     workspaceId,
-    channelId: ctx.channelId,
+    channelId: effectiveChannelId,
     modelId: effectiveModelId,
     title,
     role,
@@ -1063,7 +1122,7 @@ function startDelegation(
       sessionId: child.id,
       ...buildDelegationDispatchFacts({ sessionId: ctx.sessionId, sourceRunId: ctx.sourceRunId, delegationId, triggerId: record.triggerId! }),
       userMessage: prompt,
-      channelId: ctx.channelId,
+      channelId: effectiveChannelId,
       modelId: effectiveModelId,
       workspaceId,
       permissionModeOverride: permissionMode,
@@ -1075,12 +1134,14 @@ function startDelegation(
       onError: (error) => {
         markDelegationFinished(record, 'failed', { error })
       },
-      onComplete: (messages) => {
+      onComplete: (messages, opts) => {
         // 级联取消会预先写入 cancelled；该状态仅阻断重复 delegation 收尾，
         // 不能阻断 agent-service 对同一 run 的权威 STREAM_COMPLETE 转发。
+        // 后台任务等待不是终态：子会话仍持有执行权，提前收尾会让父会话误以为它已结束。
+        if (opts?.backgroundTasksPending === true) return
         if (record.status === 'running') {
           const resultSummary = summarizeChildResult(child.id, messages)
-          markDelegationFinished(record, 'completed', { resultSummary })
+          markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}, DELEGATION_CANCELLED_RESULT_SUBTYPE), { resultSummary })
         }
       },
       onTitleUpdated: (updatedTitle) => {
@@ -1417,10 +1478,11 @@ export async function injectAgentCollaborationMcpServer(
               onError: (error) => {
                 markDelegationFinished(record, 'failed', { error })
               },
-              onComplete: (messages) => {
+              onComplete: (messages, opts) => {
+                if (opts?.backgroundTasksPending === true) return
                 if (record.status === 'running') {
                   const resultSummary = summarizeChildResult(record.childSessionId, messages)
-                  markDelegationFinished(record, 'completed', { resultSummary })
+                  markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}, DELEGATION_CANCELLED_RESULT_SUBTYPE), { resultSummary })
                 }
               },
               onTitleUpdated: () => {},
@@ -1576,7 +1638,7 @@ export function buildPiCollaborationTools(
         minCompleted: Type.Optional(Type.Number({ description: 'mode=any 时至少等待完成的数量，默认 1' })),
         timeoutSeconds: Type.Optional(Type.Number({ description: '最长等待秒数，默认 1800' })),
       }),
-      async execute(_toolCallId: string, params: unknown) {
+      async execute(_toolCallId: string, params: unknown, signal?: AbortSignal) {
         const args = params as { delegationIds?: string[]; mode?: 'all' | 'any'; minCompleted?: number; timeoutSeconds?: number }
         const ids = args.delegationIds?.length
           ? args.delegationIds
@@ -1594,7 +1656,7 @@ export function buildPiCollaborationTools(
         const targetCompleted = mode === 'all' ? totalTargets : Math.max(1, Math.min(minCompleted, totalTargets))
         const liveTarget = Math.max(0, targetCompleted - settled.length)
         const waitResult: DelegationProgressWaitResult = liveRecords.length > 0
-          ? await waitForLiveRecords(liveRecords, timeoutSeconds, liveTarget)
+          ? await waitForLiveRecords(liveRecords, timeoutSeconds, liveTarget, signal)
           : { status: 'completed' }
         const allDelegations = [...liveRecords.map(getDelegationSummary), ...settled]
         for (const item of allDelegations) {
@@ -1765,10 +1827,11 @@ export function buildPiCollaborationTools(
             onError: (error) => {
               markDelegationFinished(record, 'failed', { error })
             },
-            onComplete: (messages) => {
+            onComplete: (messages, opts) => {
+              if (opts?.backgroundTasksPending === true) return
               if (record.status === 'running') {
                 const resultSummary = summarizeChildResult(record.childSessionId, messages)
-                markDelegationFinished(record, 'completed', { resultSummary })
+                markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}, DELEGATION_CANCELLED_RESULT_SUBTYPE), { resultSummary })
               }
             },
             onTitleUpdated: () => {},

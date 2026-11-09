@@ -613,7 +613,7 @@ export const agentRunningSessionIdsAtom = atom<Set<string>>((get) => {
 })
 
 /** 侧边栏会话指示点状态 */
-export type SessionIndicatorStatus = 'idle' | 'running' | 'blocked' | 'completed'
+export type SessionIndicatorStatus = 'idle' | 'running' | 'blocked' | 'completed' | 'interrupted'
 
 /**
  * 关闭态专用的内存未读集合（内部原子：外部一律通过 `unviewedCompletedSessionIdsAtom` 读写）。

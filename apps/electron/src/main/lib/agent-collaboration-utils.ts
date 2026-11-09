@@ -49,6 +49,34 @@ export type AgentDelegationRole = 'explore' | 'research' | 'implement' | 'review
 
 export type AgentDelegationStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 
+/**
+ * 子会话终态判定：只看宿主给出的停止来源与 result 信号，不从正文、耗时或工具调用推断。
+ *
+ * - `cancelled`：父会话被用户停止后级联取消。父会话自己正在收敛，这不是可续跑的断点。
+ * - `interrupted`：子会话自身被停止（用户单独停止、进程重启），保留断点，父会话可续跑。
+ * - `failed`：结果或错误明确失败。
+ * - `completed`：干净结束。
+ *
+ * 判定顺序不可交换：级联取消同时携带 `delegation_cancelled` 子类型与 `stoppedByUser=false`，
+ * 必须先按子类型收口，否则会被误判成可续跑的中断。
+ */
+export function resolveDelegationTerminalStatus(input: {
+  stoppedByUser?: boolean
+  resultSubtype?: string
+  resultErrors?: readonly string[]
+}, cancelledSubtype: string): AgentDelegationStatus {
+  if (input.resultSubtype === cancelledSubtype) return 'cancelled'
+  if (input.stoppedByUser === true) return 'interrupted'
+  if (input.resultErrors && input.resultErrors.length > 0) return 'failed'
+  if (input.resultSubtype !== undefined && input.resultSubtype !== 'success') return 'failed'
+  return 'completed'
+}
+
+/** 断点可续跑的状态：子会话上下文仍完整，`continue_delegation` 可接续。 */
+export function isResumableDelegationStatus(status: AgentDelegationStatus): boolean {
+  return status === 'interrupted' || status === 'failed' || status === 'cancelled' || status === 'completed'
+}
+
 /** 最大运行中子会话数 */
 export const MAX_RUNNING_DELEGATIONS_PER_PARENT = 50
 

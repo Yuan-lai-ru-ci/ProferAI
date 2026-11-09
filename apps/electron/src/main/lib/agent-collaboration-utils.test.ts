@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { PROFER_DEFAULT_PERMISSION_MODE } from '@profer/shared'
 import {
   buildDelegationDispatchFacts,
+  isResumableDelegationStatus,
   resolveDelegationArrangement,
   resolveDelegationPermissionMode,
+  resolveDelegationTerminalStatus,
 } from './agent-collaboration-utils'
 
 const modes = ['plan', 'auto', 'bypassPermissions'] as const
@@ -34,5 +36,32 @@ describe('委派权限与归属', () => {
     expect(next.taskId).toBe(first.taskId)
     expect(next.triggerId).not.toBe(first.triggerId)
     expect(buildDelegationDispatchFacts({ sessionId: 'source', delegationId: 'task-1', triggerId: 'i' }).taskOrigin.source).toEqual({ type: 'session', id: 'source' })
+  })
+})
+
+describe('子会话终态与断点续跑判定', () => {
+  const cancelled = 'delegation_cancelled'
+
+  test('级联取消优先于 stoppedByUser，不被当成可续跑中断', () => {
+    expect(resolveDelegationTerminalStatus({ resultSubtype: cancelled, stoppedByUser: false }, cancelled)).toBe('cancelled')
+  })
+
+  test('用户单独停止子会话记为断点中断', () => {
+    expect(resolveDelegationTerminalStatus({ stoppedByUser: true }, cancelled)).toBe('interrupted')
+    expect(resolveDelegationTerminalStatus({ stoppedByUser: true, resultSubtype: 'success' }, cancelled)).toBe('interrupted')
+  })
+
+  test('干净结束与失败按 result 信号收口，不靠耗时或正文', () => {
+    expect(resolveDelegationTerminalStatus({}, cancelled)).toBe('completed')
+    expect(resolveDelegationTerminalStatus({ resultSubtype: 'success' }, cancelled)).toBe('completed')
+    expect(resolveDelegationTerminalStatus({ resultErrors: ['boom'] }, cancelled)).toBe('failed')
+    expect(resolveDelegationTerminalStatus({ resultSubtype: 'error_max_turns' }, cancelled)).toBe('failed')
+  })
+
+  test('只有 running 不可续跑，其余状态都保留完整上下文', () => {
+    for (const status of ['completed', 'failed', 'cancelled', 'interrupted'] as const) {
+      expect(isResumableDelegationStatus(status)).toBe(true)
+    }
+    expect(isResumableDelegationStatus('running')).toBe(false)
   })
 })
