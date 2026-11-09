@@ -157,6 +157,7 @@ for (const key of Object.keys(process.env)) {
 import { createApplicationMenu, installTextContextMenus } from './menu'
 import { registerIpcHandlers, setRendererReadyHandler, stopAllGoalsForProcessExit } from './ipc'
 import { setAgentRewindService } from './lib/agent-rewind-gateway'
+import { startDebugChannel } from './lib/debug-channel'
 import { createElectronAgentRewindService } from './lib/agent-rewind-host'
 import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from './lib/remote-service'
 import { startAgentFabricService, stopAgentFabricService } from './lib/agent-fabric/agent-fabric-service'
@@ -168,6 +169,11 @@ import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
 import { focusSessionWindow, getSessionWindowSummaries, hasOtherVisibleMainWindow, registerMainAppWindow, setMainAppWindowsChangedHandler } from './lib/main-app-windows'
 import { stopAllAgents, killOrphanedClaudeSubprocesses, initializeAgentRunLedger } from './lib/agent-service'
+import {
+  reconcileWorkspaceShadowOnStartup,
+  SHADOW_RECONCILE_DELAY_MS,
+} from './lib/workspace-shadow-reconcile'
+import { runStartupAgentTranscriptAudit } from './lib/agent-transcript-audit'
 import { disposePiMcpConnections, startMcpConnectionReaper } from './lib/adapters/pi-mcp-tools'
 import { disposeLarkCliService } from './lib/lark-cli-service'
 import { disposeLarkMcpService } from './lib/lark-mcp-service'
@@ -964,6 +970,12 @@ async function bootstrap(): Promise<void> {
   // 回退服务必须在 IPC handler 注册前完成装配；R0 只提供 Claude conversation。
   setAgentRewindService(createElectronAgentRewindService())
 
+  // 开发版调试通道（仅 loopback、仅 dev、随机 token）：让自动化脚本能跑「真实回退」这类
+  // 只有主进程才看得见效果的操作，不必靠点界面。打包版不启动。
+  safeRun('startDebugChannel', () => {
+    startDebugChannel()
+  })
+
   // Register IPC handlers
   registerIpcHandlers()
   registerPluginIpcHandlers()
@@ -1027,6 +1039,19 @@ async function bootstrap(): Promise<void> {
       sendToMainWindow(TRAY_IPC_CHANNELS.CREATE_SESSION, { mode: 'agent' })
     },
   })
+
+  // Shadow Git 启动对账：只处理已经有底座的工作区，增量采集，纯旁路。
+  // 延迟到窗口显示后再跑，避免和首屏、技能迁移抢磁盘与 CPU。
+  setTimeout(() => {
+    void safeAwait('reconcileWorkspaceShadowOnStartup', () => reconcileWorkspaceShadowOnStartup())
+  }, SHADOW_RECONCILE_DELAY_MS)
+
+  // 会话内核 / 原生 transcript 一致性对账：只读、只记日志。
+  // 历史上可能已经存在「Claude 历史 + Pi 文件」这类混血会话，发送入口只能阻止新的，
+  // 已存在的数据必须被看见而不能被"自愈"——修哪一侧是用户决策。
+  setTimeout(() => {
+    void safeAwait('runStartupAgentTranscriptAudit', () => runStartupAgentTranscriptAudit())
+  }, SHADOW_RECONCILE_DELAY_MS + 5_000)
 
   // ─── 第二梯队：窗口已显示，以下任务延迟到空闲时执行 ───
 

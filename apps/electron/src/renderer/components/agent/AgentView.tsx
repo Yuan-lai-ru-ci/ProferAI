@@ -29,6 +29,7 @@ import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
 import { isAgentModelSelectionValid, nextAgentChannelIdsAfterModelSelect, resolveAgentRuntimeSelection } from '@/lib/agent-channel-selection'
+import { dropRewoundSessionFileChanges } from '@/lib/session-file-changes'
 import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { BackgroundTaskControls } from './BackgroundTaskControls'
@@ -95,6 +96,7 @@ import {
   agentSDKMessagesCacheAtom,
   setSessionMessagesCache,
   agentDiffRefreshVersionAtom,
+  agentNonGitFileChangesAtom,
   agentSessionsAtom,
   agentAttachedDirectoriesMapAtom,
   agentAttachedFilesMapAtom,
@@ -292,6 +294,7 @@ export interface AgentViewProps {
 }
 
 export function AgentView({ sessionId, standalone = false }: AgentViewProps): React.ReactElement {
+  const minimapHostRef = React.useRef<HTMLDivElement>(null)
   const [pendingGoalReplacement, setPendingGoalReplacement] = useAtom(goalReplacementAtomFamily(sessionId))
   const [goalStatusOpen, setGoalStatusOpen] = React.useState(false)
   const [replacingGoal, setReplacingGoal] = React.useState(false)
@@ -2482,7 +2485,11 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
   /** 经唯一入口请求停止；只有主进程 STREAM_COMPLETE 才能将 UI 收敛为空闲。 */
   const handleStop = React.useCallback((): void => {
-    if (stopInFlightRef.current || streamState?.stopping) return
+    // 不再因 stopping 为真就拒绝点击：首次停止可能卡在 provider 清理上，
+    // 而 stopping 本身没有超时。主进程的 stop 是幂等的（stoppedBySessions 已置位直接返回），
+    // 重复请求不会叠加副作用，但能给用户一条自救通道。
+    // 同一时刻仍只允许一个请求在飞，避免双击打出两次 IPC。
+    if (stopInFlightRef.current) return
     stopInFlightRef.current = true
     // 停止 = 暂停队列自动发送（队列内容保留），并让此前已取出但未 settle 的队列消息失去回队资格。
     // 用户下一次显式发送或点「立即发送」时恢复。
@@ -2498,15 +2505,27 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     })
 
     window.electronAPI.stopAgent(sessionId)
+      .then((outcome) => {
+        if (outcome !== 'already_finished') return
+        // 主进程已经没有这一轮的 owner：终态事件丢了，但事实是它结束了。
+        // 这里主动收敛渲染层，避免 stopping / running 残留到下次进入会话。
+        setStreamingStates((prev) => {
+          const current = prev.get(sessionId)
+          if (!current) return prev
+          const map = new Map(prev)
+          map.set(sessionId, rollbackRejectedAgentRunState(current))
+          return map
+        })
+      })
       .catch((error) => {
-        // timeout/reject 只说明尚未确认结束，必须保持 stopping，不能伪装为空闲。
+        // timeout/reject 只说明尚未确认结束，保持 stopping；但不再阻止用户再试一次。
         console.error('[AgentView] 停止 Agent 未完成:', error)
-        toast.error('停止 Agent 尚未完成', { description: '请稍候，草稿已保留。' })
+        toast.error('停止 Agent 尚未完成', { description: '可以再点一次停止，或稍候重试。' })
       })
       .finally(() => {
         stopInFlightRef.current = false
       })
-  }, [sessionId, setQueuePaused, streamState?.stopping, setStreamingStates])
+  }, [sessionId, setQueuePaused, setStreamingStates])
 
   /** 手动发送 /compact 命令 */
   const compactInFlightRef = React.useRef(false)
@@ -2941,6 +2960,17 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     store.set(agentDiffRefreshVersionAtom, (prev) => {
       const map = new Map(prev); map.set(sessionId, (prev.get(sessionId) ?? 0) + 1); return map
     })
+    // 非 Git 目录的写入记录是渲染层内存累积（tool_result 时 upsert），没有权威来源可重扫；
+    // 不在这里按回退结果剔除，就会出现「文件已经删了，面板还写着新建」。
+    store.set(agentNonGitFileChangesAtom, (prev) => {
+      const current = prev.get(sessionId)
+      if (!current?.length) return prev
+      const next = dropRewoundSessionFileChanges(current, result.files)
+      if (next.length === current.length) return prev
+      const map = new Map(prev)
+      map.set(sessionId, next)
+      return map
+    })
   }, [rewindRequest, sendUserMessageInCurrentSession, sessionId, store])
 
   const handleRewindError = React.useCallback((error: Error): void => {
@@ -3043,6 +3073,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
           preferredProtocol={sessionAgentRuntime === 'pi' ? 'openai' : 'anthropic'}
           strictProtocolFilter
+          runtime={sessionAgentRuntime}
         />
       ),
     },
@@ -3163,6 +3194,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       getQuotes={getVisibleQuoteSelections}
     />
     <AgentSessionProvider sessionId={sessionId}>
+      <div ref={minimapHostRef} className="relative flex h-full min-h-0 min-w-0 w-full flex-1">
       <div data-profer-navigation-region="conversation" data-agent-session-id={sessionId} tabIndex={-1} className="agent-conversation flex h-full min-h-0 min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
         <div className="shrink-0">
           {!standalone && <AgentHeader sessionId={sessionId} />}
@@ -3205,6 +3237,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
         {/* 消息区域 */}
         <AgentMessages
+          minimapHostRef={minimapHostRef}
           sessionId={sessionId}
           sessionModelId={agentModelId || undefined}
           agentRuntime={sessionAgentRuntime}
@@ -3406,6 +3439,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           </div>
         </div>
         )}
+      </div>
       </div>
     </AgentSessionProvider>
 
