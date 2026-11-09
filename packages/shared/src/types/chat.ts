@@ -493,6 +493,15 @@ export interface ModelOption {
   protocol?: 'openai' | 'anthropic'
   /** 同名模型被合并的渠道数量，供模型选择器观察路由池。 */
   channelCount?: number
+  /**
+   * 指定内核时的渠道可用性（仅 Agent 模型选择器设置）。
+   *
+   * `false` 表示该渠道没有为当前会话的内核开启：选项仍展示但不可选，
+   * 并把原因写在 `runtimeUnavailableReason`，避免用户以为模型「丢了」。
+   */
+  runtimeCompatible?: boolean
+  /** 不可选的用户可见原因（如「仅支持 Claude 引擎」）；`runtimeCompatible` 为 true 时缺省。 */
+  runtimeUnavailableReason?: string
 }
 
 // ===== 分页加载相关 =====

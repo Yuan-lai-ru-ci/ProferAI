@@ -184,12 +184,22 @@ export interface DelegationProgressWaitInput {
   timeoutMs: number
   /** 进入等待前已经挂起的阻塞事件；避免「注册早于等待」被漏掉。 */
   initialBlocked?: readonly DelegationBlockedEvent[]
+  /**
+   * 宿主的中断信号。
+   *
+   * 这里的等待是纯本地 promise，不接信号就无法被 abort 打断：用户停止父会话后，
+   * 工具会一直挂到超时（wait_for_delegations 默认 30 分钟到 2 小时），
+   * 整条 prompt 链和 provider 清理都跟着被拖住。
+   */
+  signal?: AbortSignal
 }
 
 export type DelegationProgressWaitResult =
   | { status: 'completed' }
   | { status: 'blocked'; event: DelegationBlockedEvent }
   | { status: 'timeout' }
+  /** 等待被宿主中断（用户停止）；不是子会话的终态。 */
+  | { status: 'interrupted' }
 
 /**
  * 等待子会话进展：任一目标完成、出现阻塞、或超时。
@@ -206,9 +216,11 @@ export async function waitForDelegationProgress(
   const alreadyBlocked = pickBlocked(input.initialBlocked ?? input.registry.pendingFor(input.delegationIds))
   if (alreadyBlocked) return { status: 'blocked', event: alreadyBlocked }
   if (input.isCompleted?.()) return { status: 'completed' }
+  if (input.signal?.aborted) return { status: 'interrupted' }
 
   let unsubscribe: () => void = () => {}
   let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
   try {
     return await Promise.race([
       input.completed.then((): DelegationProgressWaitResult => ({ status: 'completed' })),
@@ -223,10 +235,16 @@ export async function waitForDelegationProgress(
       new Promise<DelegationProgressWaitResult>((resolve) => {
         timer = setTimeout(() => resolve({ status: 'timeout' }), input.timeoutMs)
       }),
+      new Promise<DelegationProgressWaitResult>((resolve) => {
+        if (!input.signal) return
+        onAbort = () => resolve({ status: 'interrupted' })
+        input.signal.addEventListener('abort', onAbort, { once: true })
+      }),
     ])
   } finally {
     unsubscribe()
     if (timer) clearTimeout(timer)
+    if (onAbort) input.signal?.removeEventListener('abort', onAbort)
   }
 }
 

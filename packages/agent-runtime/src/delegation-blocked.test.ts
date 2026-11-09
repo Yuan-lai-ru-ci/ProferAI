@@ -224,6 +224,39 @@ describe('等待竞速', () => {
     expect(await waiting).toEqual({ status: 'completed' })
   })
 
+  test('Given 宿主中断等待 When 用户停止父会话 Then 立即返回 interrupted 而不是等到超时', async () => {
+    const registry = createRegistry()
+    const controller = new AbortController()
+    const waiting = waitForDelegationProgress({
+      registry,
+      delegationIds: ['delegation-a'],
+      completed: new Promise<void>(() => {}),
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    })
+
+    controller.abort()
+
+    // 不接中断信号时，这里会挂到 30 分钟~2 小时；停止父会话就会变成无限等待。
+    expect(await waiting).toEqual({ status: 'interrupted' })
+  })
+
+  test('Given 进入等待前已中断 When 开始等待 Then 不发监听直接返回 interrupted', async () => {
+    const registry = createRegistry()
+    const controller = new AbortController()
+    controller.abort()
+
+    const result = await waitForDelegationProgress({
+      registry,
+      delegationIds: ['delegation-a'],
+      completed: new Promise<void>(() => {}),
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    })
+
+    expect(result).toEqual({ status: 'interrupted' })
+  })
+
   test('Given 子会话完成 When 同时出现阻塞 Then 完成优先，阻塞留给下一轮', async () => {
     const registry = createRegistry()
     let completed = false
