@@ -6,6 +6,8 @@ import {
   normalizeFieldValue,
   plainText,
   readField,
+  readProfileList,
+  writeProfileList,
   writeField,
 } from './profile-fields'
 
@@ -122,6 +124,24 @@ describe('边界', () => {
   test('写入是幂等的：相同值重复写入结果一致', () => {
     const once = writeField(INITIAL_PROFILE, '称呼', '老源')
     expect(writeField(once, '称呼', '老源')).toBe(once)
+  })
+})
+
+describe('可见设备与服务器目录', () => {
+  test('结构化目录只暴露名称与类型，写回保留 Agent 详细正文', () => {
+    const doc = '# 设备\n\n详细说明：不要在画像首页展示\n'
+    const next = writeProfileList(doc, 'device', [{ id: 'mac', name: 'MacBook Pro', type: 'computer' }, { id: 'watch', name: 'Apple Watch', type: 'watch' }])
+    expect(next).toContain('- [mac]|computer MacBook Pro')
+    expect(next).toContain('详细说明：不要在画像首页展示')
+    expect(readProfileList(next, 'device')).toEqual([
+      { id: 'mac', name: 'MacBook Pro', type: 'computer' },
+      { id: 'watch', name: 'Apple Watch', type: 'watch' },
+    ])
+  })
+
+  test('旧格式列表兼容读取时只提取短名称', () => {
+    const doc = '# 设备\n\n- MacBook Pro · Apple Silicon · macOS 27.2\n- iPhone 16 | 主力手机\n'
+    expect(readProfileList(doc, 'device').map(({ name }) => name)).toEqual(['MacBook Pro', 'iPhone 16'])
   })
 })
 

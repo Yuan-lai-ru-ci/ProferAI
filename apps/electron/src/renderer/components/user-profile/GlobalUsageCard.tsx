@@ -4,7 +4,7 @@ import { Activity, RefreshCw } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
-import { aggregateHeatmapEntries, toCalendarData, type WorkspaceHeatmapEntry } from '@/lib/heatmap-utils'
+import { aggregateHeatmapEntries, isScrolledToEnd, toCalendarData, type WorkspaceHeatmapEntry } from '@/lib/heatmap-utils'
 
 const CELL = 10
 const GAP = 3
@@ -39,6 +39,7 @@ function buildGrid(entries: WorkspaceHeatmapEntry[]) {
 }
 
 function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000_000) return `${(tokens / 1_000_000_000).toFixed(1)}B`
   return tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M` : tokens >= 1_000 ? `${(tokens / 1_000).toFixed(1)}K` : String(tokens)
 }
 
@@ -48,6 +49,13 @@ export function GlobalUsageCard(): React.ReactElement {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [reload, setReload] = React.useState(0)
+  // 53 列网格（约 690px）在窄窗口下会横向溢出。产品语义：**钉住最新日期**，
+  // 宽度不够时被裁掉的应该是左侧的旧数据，而不是右侧的近期数据。
+  // 所以除了首屏滚到最右，还要在容器宽度变化（改窗口、切侧边栏）时重新贴回最右，
+  // 否则 scrollLeft 是绝对像素值，容器一变窄右侧就被推出视野。
+  const scrollRef = React.useRef<HTMLDivElement>(null)
+  // 用户是否停在最右端（初始视为是）；只有停在最右时，尺寸变化才自动重贴。
+  const pinnedToEndRef = React.useRef(true)
   const personalWorkspaces = React.useMemo(() => workspaces.filter((workspace) =>
     !workspace.isDeleted && (workspace as { type?: string }).type !== 'team',
   ), [workspaces])
@@ -68,6 +76,34 @@ export function GlobalUsageCard(): React.ReactElement {
     return () => { cancelled = true }
   }, [personalWorkspaces, reload])
 
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current
+    if (!element || loading) return
+    pinnedToEndRef.current = true
+    element.scrollLeft = element.scrollWidth
+  }, [loading, entries])
+
+  // 尺寸变化时重新贴最右（仅当用户本来就停在最右，不抢手动滚到历史区的人）。
+  React.useEffect(() => {
+    const element = scrollRef.current
+    if (!element || loading) return
+
+    const handleScroll = () => {
+      pinnedToEndRef.current = isScrolledToEnd(element)
+    }
+    element.addEventListener('scroll', handleScroll, { passive: true })
+
+    const observer = new ResizeObserver(() => {
+      if (pinnedToEndRef.current) element.scrollLeft = element.scrollWidth
+    })
+    observer.observe(element)
+
+    return () => {
+      element.removeEventListener('scroll', handleScroll)
+      observer.disconnect()
+    }
+  }, [loading])
+
   const totalTokens = entries.reduce((sum, entry) => sum + entry.tokens, 0)
   const activeDays = entries.filter((entry) => entry.tokens > 0).length
   const { weeks, months } = React.useMemo(() => buildGrid(entries), [entries])
@@ -87,11 +123,12 @@ export function GlobalUsageCard(): React.ReactElement {
       </div>
       {error ? <div role="alert" className="mt-4 flex items-center justify-between gap-3 rounded-lg bg-destructive/5 px-3 py-2 text-xs text-destructive"><span>热力图读取失败：{error}</span><Button variant="outline" size="sm" onClick={() => setReload((value) => value + 1)}>重试</Button></div> : loading ? <div aria-busy="true" className="mt-5 h-[112px] animate-pulse rounded-md bg-muted/40 motion-reduce:animate-none" /> : (
         <>
-          <div className="mt-5 overflow-x-auto pb-1">
-            <div className="min-w-[410px]">
-              <div className="relative mb-2 ml-7 h-3">{months.map((month) => <span key={`${month.label}-${month.col}`} className="absolute top-0 text-[9px] text-muted-foreground" style={{ left: month.col * (CELL + GAP) }}>{month.label}</span>)}</div>
-              <div className="flex gap-2">
-                <div className="flex shrink-0 flex-col justify-between py-px">{DAYS.map((day, i) => <span key={i} className="h-[10px] w-5 text-[9px] leading-[10px] text-muted-foreground">{day}</span>)}</div>
+          <div className="mt-5 flex gap-2">
+            {/* 星期标签固定在滚动区左侧，不随横向滚动跑掉；行高与网格逐行对齐（10px + 3px） */}
+            <div className="mt-[20px] flex shrink-0 flex-col" style={{ gap: GAP }}>{DAYS.map((day, i) => <span key={i} className="h-[10px] w-5 text-[9px] leading-[10px] text-muted-foreground">{day}</span>)}</div>
+            <div ref={scrollRef} className="min-w-0 flex-1 overflow-x-auto pb-1">
+              <div className="w-max">
+                <div className="relative mb-2 h-3">{months.map((month) => <span key={`${month.label}-${month.col}`} className="absolute top-0 whitespace-nowrap text-[9px] text-muted-foreground" style={{ left: month.col * (CELL + GAP) }}>{month.label}</span>)}</div>
                 <div className="grid grid-flow-col grid-rows-7" style={{ gap: GAP }}>
                   {weeks.flatMap((week) => week).map((cell, index) => cell ? <Tooltip key={cell.date} delayDuration={200}><TooltipTrigger asChild><div aria-label={`${cell.date}，${cell.tokens ? `${formatTokens(cell.tokens)} tokens` : '无消耗'}`} className={`rounded-[2px] ${LEVELS[cell.level] ?? LEVELS[0]} transition-opacity hover:opacity-75`} style={{ width: CELL, height: CELL }} /></TooltipTrigger><TooltipContent className="whitespace-pre-line text-xs">{cell.date}{'\n'}{cell.tokens ? `${formatTokens(cell.tokens)} tokens` : '无消耗'}</TooltipContent></Tooltip> : <div key={`future-${index}`} style={{ width: CELL, height: CELL }} />)}
                 </div>

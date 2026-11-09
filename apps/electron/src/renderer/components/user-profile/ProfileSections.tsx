@@ -13,13 +13,20 @@ import {
   FileText,
   Handshake,
   HardDrive,
+  Laptop,
   Languages,
   Loader2,
+  Pencil,
+  Plus,
   Server,
   ServerCog,
   ShieldCheck,
+  Smartphone,
   Sparkles,
+  Tablet,
+  Trash2,
   UserRound,
+  Watch,
 } from 'lucide-react'
 import { Input } from '@profer/ui/primitives/input'
 import { Button } from '@profer/ui/primitives/button'
@@ -31,6 +38,8 @@ import {
   plainText,
   type QuickField,
   type QuickFieldKey,
+  type ProfileDeviceType,
+  type ProfileListItem,
 } from './profile-fields'
 
 export type FieldSaveState = 'idle' | 'saving' | 'saved' | 'error'
@@ -141,7 +150,6 @@ export function QuickFieldGrid({
     <Card id="profile-quick-fields" aria-labelledby="quick-fields-title" className="scroll-mt-6 p-4">
       <SectionHeading
         id="quick-fields-title"
-        eyebrow="01 / 基础信息"
         title="让 Agent 从一开始就更懂你"
       />
 
@@ -217,7 +225,6 @@ export function FreeTextCard({
     <Card className="scroll-mt-6 p-6 sm:p-7" aria-labelledby="free-text-title">
       <SectionHeading
         id="free-text-title"
-        eyebrow="02 / 补充内容"
         title="你手写过的背景"
         description="这里显示在「管理记忆文件」里补充过的段落；上面的基础信息不会重复出现。"
         action={
@@ -274,51 +281,90 @@ export function FreeTextCard({
   )
 }
 
-const SECONDARY_FILES = [
-  { path: 'devices/README.md', label: '设备', hint: '还没有记录设备', icon: HardDrive },
-  { path: 'infrastructure/servers.md', label: '服务器与基础设施', hint: '还没有记录服务器', icon: Server },
-] as const
+const DEVICE_ICONS = { computer: Laptop, phone: Smartphone, watch: Watch, tablet: Tablet, other: HardDrive } as const
+const DEVICE_LABELS: Record<ProfileDeviceType, string> = { computer: '电脑', phone: '手机', watch: '手表', tablet: '平板', other: '其他' }
 
-/** 设备 / 服务器：一行预览，不展开正文。 */
+/** 用户可见目录只呈现名称和类型；细节保留在 Agent 记忆文件中。 */
 export function SecondaryFilesCard({
-  contents,
-  onOpenFile,
+  devices,
+  servers,
+  onSave,
 }: {
-  contents: Record<string, string>
-  onOpenFile: (path: string) => void
+  devices: ProfileListItem[]
+  servers: ProfileListItem[]
+  onSave: (kind: 'device' | 'server', items: ProfileListItem[]) => Promise<void>
 }): React.ReactElement {
+  const [kind, setKind] = React.useState<'device' | 'server' | null>(null)
+  const [name, setName] = React.useState('')
+  const [deviceType, setDeviceType] = React.useState<ProfileDeviceType>('computer')
+  const [editingId, setEditingId] = React.useState<string | null>(null)
+  const [busy, setBusy] = React.useState(false)
+  const activeItems = kind === 'device' ? devices : servers
+
+  const begin = (target: 'device' | 'server', item?: ProfileListItem) => {
+    setKind(target)
+    setEditingId(item?.id ?? null)
+    setName(item?.name ?? '')
+    setDeviceType(item?.type ?? 'computer')
+  }
+  const submit = async () => {
+    if (!kind || !name.trim()) return
+    const id = editingId ?? `${kind}-${Date.now().toString(36)}`
+    const next = editingId
+      ? activeItems.map((item) => item.id === editingId ? { id, name: name.trim(), ...(kind === 'device' ? { type: deviceType } : {}) } : item)
+      : [...activeItems, { id, name: name.trim(), ...(kind === 'device' ? { type: deviceType } : {}) }]
+    setBusy(true)
+    try {
+      await onSave(kind, next)
+      setKind(null)
+    } catch {
+      // 保存错误由上层提示，保留表单内容供重试。
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <Card className="p-4" aria-labelledby="secondary-title">
-      <SectionHeading
-        id="secondary-title"
-        eyebrow="03 / 更多档案"
-        title="设备与基础设施"
-        description="稳定配置与核对时间；不要在这里记录密码、私钥或 Token。"
-      />
+      <SectionHeading id="secondary-title" title="设备与基础设施" />
       <div className="mt-4 divide-y divide-border/60 border-y border-border/60">
-        {SECONDARY_FILES.map((file) => {
-          const text = plainText(contents[file.path] ?? '')
-          const Icon = file.icon
+        {(['device', 'server'] as const).map((category) => {
+          const items = category === 'device' ? devices : servers
+          const title = category === 'device' ? '设备' : '服务器'
           return (
-            <button
-              key={file.path}
-              type="button"
-              onClick={() => onOpenFile(file.path)}
-              aria-label={`打开${file.label}`}
-              className="group flex w-full items-start gap-3 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus/30"
-            >
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                <Icon className="size-3.5" aria-hidden="true" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[12.5px] font-medium text-foreground">{file.label}</span>
-                <span className="mt-1 block line-clamp-2 break-words text-[11.5px] leading-5 text-muted-foreground">{text || file.hint}</span>
-              </span>
-              <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-foreground" aria-hidden="true" />
-            </button>
+            <div key={category} className="py-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[12.5px] font-medium text-foreground">{title}</span>
+                <Button variant="ghost" size="icon" className="size-7" aria-label={`添加${title}`} onClick={() => begin(category)}><Plus className="size-3.5" /></Button>
+              </div>
+              {items.length ? <ul className="mt-2 space-y-1">
+                {items.map((item) => {
+                  const Icon = category === 'device' ? DEVICE_ICONS[item.type ?? 'other'] : Server
+                  return <li key={item.id} className="group relative flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/40">
+                    <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate text-[12px] transition-[padding] group-hover:pr-14 group-focus-within:pr-14" title={item.name}>{item.name}</span>
+                    {category === 'device' && <span className="shrink-0 text-[10px] text-muted-foreground">{DEVICE_LABELS[item.type ?? 'other']}</span>}
+                    <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 bg-card pl-1 opacity-0 pointer-events-none transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 dark:bg-surface-raised [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+                      <Button variant="ghost" size="icon" className="size-6" aria-label={`编辑${item.name}`} onClick={() => begin(category, item)}><Pencil className="size-3" /></Button>
+                      <Button variant="ghost" size="icon" className="size-6 text-muted-foreground hover:text-destructive" aria-label={`删除${item.name}`} onClick={() => { void onSave(category, items.filter((entry) => entry.id !== item.id)).catch(() => undefined) }}><Trash2 className="size-3" /></Button>
+                    </div>
+                  </li>
+                })}
+              </ul> : <p className="mt-1 text-[11px] text-muted-foreground">尚未添加</p>}
+            </div>
           )
         })}
       </div>
+      {kind && <form className="mt-3 space-y-2" onSubmit={(event) => { event.preventDefault(); submit() }}>
+        <label className="sr-only" htmlFor="profile-list-name">名称</label>
+        <Input id="profile-list-name" autoFocus maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder={kind === 'device' ? '设备名称' : '服务器名称'} />
+        {kind === 'device' && <label className="flex items-center gap-2 text-xs text-muted-foreground">设备类型
+          <select className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-foreground" value={deviceType} onChange={(event) => setDeviceType(event.target.value as ProfileDeviceType)}>
+            {Object.entries(DEVICE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </label>}
+        <div className="flex justify-end gap-2"><Button type="button" variant="ghost" size="sm" onClick={() => setKind(null)}>取消</Button><Button type="submit" size="sm" disabled={busy || !name.trim()}>保存</Button></div>
+      </form>}
     </Card>
   )
 }
@@ -336,7 +382,6 @@ export function InferredCard({
     <Card className="border-amber-500/20 bg-amber-500/[0.035] p-6 dark:bg-amber-500/[0.045] sm:p-7" aria-labelledby="inferred-title">
       <SectionHeading
         id="inferred-title"
-        eyebrow="04 / 本地推断"
         title="Agent 观察到的结论"
         description="由本机扫描推断而来，不是你确认过的事实。核对后可以把正确结论写进上面的基础信息。"
         action={

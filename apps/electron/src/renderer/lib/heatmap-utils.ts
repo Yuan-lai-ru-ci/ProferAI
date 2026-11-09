@@ -48,6 +48,19 @@ export function valueToLevel(value: number, thresholds: [number, number, number]
 }
 
 /**
+ * 判断横向滚动容器是否停在最右端（允许 tolerance 像素误差）。
+ *
+ * 热力图钉住最新日期：只有用户本就停在最右时才随容器宽度变化重新贴右，
+ * 避免抢走手动滚回历史区查看的人的滚动位置。
+ */
+export function isScrolledToEnd(
+  metrics: { scrollLeft: number; scrollWidth: number; clientWidth: number },
+  tolerance = 2,
+): boolean {
+  return metrics.scrollLeft >= metrics.scrollWidth - metrics.clientWidth - tolerance
+}
+
+/**
  * 将后端返回的 WorkspaceHeatmapEntry[] 转成热力图渲染格式。
  * 每一天的 level 由当日 tokens 在所有非零值中的百分位决定。
  */

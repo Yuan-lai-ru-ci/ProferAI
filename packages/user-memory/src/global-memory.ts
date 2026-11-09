@@ -42,8 +42,8 @@ export const INITIAL_GLOBAL_MEMORY_FILES: Record<string, string> = {
   'user-profile.md': '# 用户背景\n\n<!-- 用户明确提供或确认的信息。 -->\n',
   'user-sense.md': '# 用户感知结论\n\n<!-- 本地扫描推断；记录来源、置信度和最近核对日期。 -->\n',
   'preferences.md': '# 稳定偏好\n\n<!-- 用户明确表达或确认的跨工作区偏好。 -->\n',
-  'infrastructure/servers.md': '# 服务器\n\n<!-- 记录用途、系统、别名、访问方式与最近核对时间；不要记录密码、私钥或 Token。 -->\n',
-  'devices/README.md': '# 设备\n\n<!-- 按设备记录稳定配置与核对时间；避免记录凭据。 -->\n',
+  'infrastructure/servers.md': '# 服务器\n\n<!-- 用户可见目录：格式 `- [唯一ID] 名称`；标记区外写 Agent 需要的详情。 -->\n<!-- profer:visible-list:start -->\n<!-- profer:visible-list:end -->\n',
+  'devices/README.md': '# 设备\n\n<!-- 用户可见目录：格式 `- [唯一ID]|类型 名称`；类型为 computer/phone/watch/tablet/other。标记区外写 Agent 需要的详情。 -->\n<!-- profer:visible-list:start -->\n<!-- profer:visible-list:end -->\n',
 }
 
 /** 记忆根目录绝对路径（不创建目录）。 */

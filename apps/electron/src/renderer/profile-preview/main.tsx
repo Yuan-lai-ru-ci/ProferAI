@@ -50,9 +50,11 @@ const FILLED: Record<string, string> = {
     '## 协作偏好\n\n先给结论，代码要能直接运行，不做套路式对冲\n\n' +
     '## 验证与表述\n\n源码改动、单测、typecheck、构建、真机验收必须分别表述。\n',
   'devices/README.md':
-    '# 设备\n\n- MacBook Pro · Apple Silicon · macOS 27.2 · 2026-10-30 核对\n- 工具链：Bun 1.4.2 / Node v26.8.1 / git 2.50.1\n',
+    '# 设备\n\n<!-- profer:visible-list:start -->\n- [macbook]|computer MacBook Pro\n- [phone]|phone iPhone\n- [watch]|watch Apple Watch\n<!-- profer:visible-list:end -->\n\n' +
+    '## 主力开发设备\n\nApple Silicon，macOS 27.2；设备名与网络标识等详细信息仅供 Agent 读取。\n',
   'infrastructure/servers.md':
-    '# 服务器\n\n- Team Server（自建），用于多端会话同步；最近核对 2026-10-20\n',
+    '# 服务器\n\n<!-- profer:visible-list:start -->\n- [team-server] Team Server\n<!-- profer:visible-list:end -->\n\n' +
+    '## Team Server\n\n自建服务，用于多端会话同步；访问方式和内部拓扑仅供 Agent 读取。\n',
   'user-sense.md':
     '# 用户感知结论\n\n' +
     '- 常在夜间（22:00 后）推进代码任务；单轮改动倾向于收窄到单个业务域。\n' +

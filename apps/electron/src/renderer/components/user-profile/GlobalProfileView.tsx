@@ -36,7 +36,11 @@ import {
   normalizeFieldValue,
   plainText,
   readField,
+  readProfileList,
+  writeProfileList,
   writeField,
+  type ProfileListItem,
+  type ProfileListKind,
   type QuickField,
   type QuickFieldKey,
 } from './profile-fields'
@@ -225,6 +229,30 @@ export function GlobalProfileView(): React.ReactElement {
     queuesRef.current[path] = task
   }, [drafts, loading, error])
 
+  const saveList = React.useCallback(async (kind: ProfileListKind, items: ProfileListItem[]): Promise<void> => {
+    if (loading || error) return
+    const path = kind === 'device' ? 'devices/README.md' : 'infrastructure/servers.md'
+    const task = (queuesRef.current[path] ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(async () => {
+        const doc = writeProfileList(docsRef.current[path] ?? '', kind, items)
+        await window.electronAPI.writeGlobalMemoryFile(path, doc)
+        docsRef.current[path] = doc
+        if (!aliveRef.current) return
+        setContents((current) => ({ ...current, [path]: doc }))
+        setSummary(await window.electronAPI.getGlobalMemorySummary())
+      })
+      .catch((cause: unknown) => {
+        toast.error(`保存${kind === 'device' ? '设备' : '服务器'}目录失败：${cause instanceof Error ? cause.message : String(cause)}`)
+        throw cause
+      })
+    queuesRef.current[path] = task
+    await task
+  }, [error, loading])
+
+  const devices = React.useMemo(() => readProfileList(contents['devices/README.md'] ?? '', 'device'), [contents])
+  const servers = React.useMemo(() => readProfileList(contents['infrastructure/servers.md'] ?? '', 'server'), [contents])
+
   const filledCount = QUICK_FIELDS.filter((field) => (drafts[field.key] ?? '').trim().length > 0).length
   const inferredCount = plainText(contents['user-sense.md'] ?? '').length > 0 ? 1 : 0
   const updatedAt = formatDate(summary?.updatedAt)
@@ -309,7 +337,7 @@ export function GlobalProfileView(): React.ReactElement {
                   </dl>
                   <p className="mt-3 text-[11px] leading-5 text-muted-foreground">画像跨工作区共享，本地推断与已确认信息分开展示。</p>
                 </section>
-                <SecondaryFilesCard contents={contents} onOpenFile={openFile} />
+                <SecondaryFilesCard devices={devices} servers={servers} onSave={saveList} />
               </aside>
             </div>
             <div className="mt-4"><PrivacyFooter onManageFiles={() => setActiveView('user-profile-files')} /></div>

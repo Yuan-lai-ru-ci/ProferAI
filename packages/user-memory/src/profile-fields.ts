@@ -53,6 +53,59 @@ export const QUICK_FIELDS = [
 export type QuickFieldKey = (typeof QUICK_FIELDS)[number]['key']
 export type QuickField = (typeof QUICK_FIELDS)[number]
 
+export type ProfileListKind = 'device' | 'server'
+export type ProfileDeviceType = 'computer' | 'phone' | 'watch' | 'tablet' | 'other'
+export interface ProfileListItem { id: string; name: string; type?: ProfileDeviceType }
+
+const LIST_START = '<!-- profer:visible-list:start -->'
+const LIST_END = '<!-- profer:visible-list:end -->'
+const DEVICE_TYPES = new Set<ProfileDeviceType>(['computer', 'phone', 'watch', 'tablet', 'other'])
+
+function listValue(item: ProfileListItem, kind: ProfileListKind): string {
+  const name = item.name.replace(/[\[\]]/g, '').trim()
+  const id = item.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
+  if (!name || !id) return ''
+  const type = kind === 'device' && item.type && DEVICE_TYPES.has(item.type) ? `|${item.type}` : ''
+  return `- [${id}]${type} ${name}`
+}
+
+/** 读取可供用户展示的目录；兼容旧式列表行，仅取首个短名称而不暴露其余说明。 */
+export function readProfileList(doc: string, kind: ProfileListKind): ProfileListItem[] {
+  const lines = doc.replace(/\r\n/g, '\n').split('\n')
+  const start = lines.indexOf(LIST_START)
+  const end = start >= 0 ? lines.indexOf(LIST_END, start + 1) : -1
+  if (start >= 0 && end > start) {
+    return lines.slice(start + 1, end).flatMap((line) => {
+      const match = /^\s*-\s+\[([\w-]+)\](?:\|(computer|phone|watch|tablet|other))?\s+(.+?)\s*$/.exec(line)
+      if (!match) return []
+      return [{ id: match[1]!, ...(kind === 'device' && match[2] ? { type: match[2] as ProfileDeviceType } : {}), name: match[3]! }]
+    })
+  }
+
+  return lines.flatMap((line, index) => {
+    const match = /^\s*[-*+]\s+(.+?)\s*$/.exec(line)
+    if (!match || /^<!--/.test(line)) return []
+    const value = match[1]!.trim()
+    const name = kind === 'device'
+      ? value.split(/[·|,，;；]/, 1)[0]!.trim()
+      : /^(?:Team Server|NAS|VPS|云服务器|本地服务器|.*(?:server|服务器|主机|NAS))\b/i.test(value) ? value.split(/[·|,，;；]/, 1)[0]!.trim() : ''
+    if (!name || name.length > 48 || /(?:password|token|私钥|密码|工具链|系统版本|访问方式|最近核对|用途|用于|192\.168\.|https?:\/\/)/i.test(name)) return []
+    if (kind === 'device' && !/(?:macbook|mac mini|imac|iphone|ipad|apple watch|pixel|surface|thinkpad|电脑|手机|手表|平板)/i.test(name)) return []
+    return [{ id: `legacy-${kind}-${index}`, name, ...(kind === 'device' ? { type: 'other' as const } : {}) }]
+  })
+}
+
+/** 更新 Markdown 中 Agent 可读的显式目录，不改动标记区外正文。 */
+export function writeProfileList(doc: string, kind: ProfileListKind, items: ProfileListItem[]): string {
+  const lines = doc.replace(/\r\n/g, '\n').split('\n')
+  const start = lines.indexOf(LIST_START)
+  const end = start >= 0 ? lines.indexOf(LIST_END, start + 1) : -1
+  const block = [LIST_START, ...items.map((item) => listValue(item, kind)).filter(Boolean), LIST_END]
+  if (start >= 0 && end > start) lines.splice(start, end - start + 1, ...block)
+  else lines.push('', ...block, '')
+  return lines.join('\n').replace(/\n*$/, '\n')
+}
+
 const FIELD_TITLES = new Set<string>(QUICK_FIELDS.map((field) => field.title))
 
 /** 字段所在的文件集合（去重）。 */

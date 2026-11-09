@@ -51,8 +51,13 @@ export {
   plainText,
   isFieldTitle,
   customSectionTitles,
+  readProfileList,
+  writeProfileList,
   type QuickField,
   type QuickFieldKey,
+  type ProfileListItem,
+  type ProfileListKind,
+  type ProfileDeviceType,
 } from './profile-fields'
 
 export {

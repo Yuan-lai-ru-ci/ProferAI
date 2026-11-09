@@ -19,6 +19,11 @@ export {
   plainText,
   isFieldTitle,
   customSectionTitles,
+  readProfileList,
+  writeProfileList,
+  type ProfileListItem,
+  type ProfileListKind,
+  type ProfileDeviceType,
   type QuickField,
   type QuickFieldKey,
 } from '@profer/user-memory/profile-fields'
