@@ -35,7 +35,7 @@ import { cn } from '@/lib/utils'
 import { ChannelPlanQuotaBadge } from './ChannelPlanQuotaBadge'
 import { AgentComposerToolTooltip, getAgentComposerToolTriggerClass } from '@/components/ai-elements/composer/ComposerTool'
 import { updateChatComposerModel } from '@/domains/composer/composer-api'
-import { isChannelEnabledForChat, type Channel, type ModelOption } from '@profer/shared'
+import { isChannelEnabledForChat, isChannelEnabledForRuntime, runtimeDisplayName, type AgentRuntime, type Channel, type ModelOption } from '@profer/shared'
 import { getChannelProtocol, getChannelSource, getOfficialChannelDisplayName, isOfficialChannel, isModelFamilyChannel, supportsChannelProtocol, type ChannelProtocol } from '@/lib/channel-model-groups'
 
 /** 紧凑模式 Context — 窄面板中 ModelSelector 只显示圆形 logo */
@@ -54,6 +54,7 @@ function buildModelOptions(
   filterChannelIds?: string[],
   preferredProtocol: ChannelProtocol = 'openai',
   strictProtocolFilter = false,
+  runtime?: AgentRuntime,
 ): ModelOption[] {
   const optionsByModel = new Map<string, ModelOption>()
 
@@ -68,7 +69,17 @@ function buildModelOptions(
     if (filterChannelIds && filterChannelIds.length > 0 && !filterChannelIds.includes(channel.id)) continue
 
     const protocol = getChannelProtocol(channel.provider)
-    if (strictProtocolFilter && !supportsChannelProtocol(channel, preferredProtocol)) continue
+    // 指定内核（Agent 输入区）时，跨内核渠道不再直接隐藏：选项置灰并附原因，
+    // 让用户看得见「为什么这个模型不能选」，而不是以为模型被删了。
+    if (strictProtocolFilter && !supportsChannelProtocol(channel, preferredProtocol) && runtime === undefined) continue
+    const runtimeCompatible = runtime === undefined ? true : isChannelEnabledForRuntime(channel, runtime)
+    const runtimeUnavailableReason = runtimeCompatible || runtime === undefined
+      ? undefined
+      : (`仅支持 ${runtimeDisplayName(runtime === 'pi' ? 'claude' : 'pi')} 引擎` as const)
+    // 同分时保留旧行为（协议优先的已有项胜出，否则后出现者胜）；额外规则：
+    // 「本内核可用」的代表渠道必须赢过「不可用」的，否则模型明明有可用渠道却被置灰。
+    const score = (option: ModelOption): number =>
+      (option.runtimeCompatible === false ? 0 : 2) + (option.protocol === preferredProtocol ? 1 : 0)
 
     for (const model of channel.models) {
       if (!model.enabled) continue
@@ -81,7 +92,18 @@ function buildModelOptions(
       if (existing) {
         existing.channelCount = (existing.channelCount ?? 0) + 1
         // 官方同名模型优先选当前运行时需要的协议；同协议重复保留第一个作为代表渠道。
-        if (existing.protocol === preferredProtocol) continue
+        const existingScore = score(existing)
+        const candidateScore = score({
+          channelId: channel.id,
+          channelName: channel.name,
+          modelId: model.id,
+          modelName: model.name,
+          provider: channel.provider,
+          protocol,
+          runtimeCompatible,
+        })
+        if (existingScore > candidateScore) continue
+        if (existingScore === candidateScore && existing.protocol === preferredProtocol) continue
       }
 
       optionsByModel.set(key, {
@@ -93,6 +115,8 @@ function buildModelOptions(
         multiplier: model.multiplier,
         protocol,
         channelCount: existing ? existing.channelCount : 1,
+        ...(runtime === undefined ? {} : { runtimeCompatible }),
+        ...(runtimeUnavailableReason ? { runtimeUnavailableReason } : {}),
       })
     }
   }
@@ -138,6 +162,11 @@ interface ModelSelectorProps {
   preferredProtocol?: 'openai' | 'anthropic'
   /** Agent runtime 按目标内核严格过滤；Chat 等通用选择器默认保留多协议模型。 */
   strictProtocolFilter?: boolean
+  /**
+   * 会话固定的内核。传入时跨内核渠道仍展示但**不可选**，并标出原因
+   * （仍按 `strictProtocolFilter` 的协议偏好排序代表渠道）。
+   */
+  runtime?: AgentRuntime
   /** Agent 输入区使用统一的 Composer hover/focus/Tooltip 外壳，Chat 默认不变。 */
   composerTool?: boolean
   /** 弹层底部固定区域（如推理强度），不随模型列表滚动。 */
@@ -166,6 +195,7 @@ export function ModelSelector({
   preferredProtocol = 'openai',
   strictProtocolFilter = false,
   composerTool = false,
+  runtime,
   footer,
   triggerExtra,
   keepOpenOnSelect = false,
@@ -232,8 +262,8 @@ export function ModelSelector({
   }, [channels, authStatus.isLoggedIn])
 
   const modelOptions = React.useMemo(
-    () => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter),
-    [visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter],
+    () => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter, runtime),
+    [visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter, runtime],
   )
   const grouped = React.useMemo(() => groupByChannel(modelOptions), [modelOptions])
 
@@ -258,11 +288,11 @@ export function ModelSelector({
     return filtered
   }, [grouped, search])
 
-  // 扁平化过滤后的模型列表，用于键盘导航
+  // 扁平化过滤后的模型列表，用于键盘导航（跨内核项不可选，也不进入导航序列）
   const flatOptions = React.useMemo(() => {
     const result: ModelOption[] = []
     for (const options of filteredGrouped.values()) {
-      result.push(...options)
+      result.push(...options.filter((option) => option.runtimeCompatible !== false))
     }
     return result
   }, [filteredGrouped])
@@ -287,9 +317,9 @@ export function ModelSelector({
   const currentModelInfo = React.useMemo(() => {
     if (!selectedModel || (filterChannelId && filterChannelId !== selectedModel.channelId)) return null
     // 官方池只合并菜单项；已有有效绑定仍显示自己的渠道，不依赖代表渠道。
-    return buildModelOptions(visibleChannels, selectedModel.channelId, filterChannelIds, preferredProtocol, strictProtocolFilter)
+    return buildModelOptions(visibleChannels, selectedModel.channelId, filterChannelIds, preferredProtocol, strictProtocolFilter, runtime)
       .find((option) => option.modelId === selectedModel.modelId) ?? null
-  }, [selectedModel, visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter])
+  }, [selectedModel, visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter, runtime])
 
   // 账号切换/目录重载期间也不展示上个账号的缓存模型。
   const displayModelInfo = channelsLoaded ? currentModelInfo : null
@@ -305,10 +335,15 @@ export function ModelSelector({
   const handleSelect = (option: ModelOption): void => {
     if (disabled || selectionInFlightRef.current || !store.get(channelsLoadedAtom)) return
     const currentChannels = store.get(channelsAtom).filter((channel) => store.get(authStatusAtom).isLoggedIn || !isOfficialChannel(channel))
-    const currentOption = buildModelOptions(currentChannels, option.channelId, filterChannelIds, preferredProtocol, strictProtocolFilter)
+    const currentOption = buildModelOptions(currentChannels, option.channelId, filterChannelIds, preferredProtocol, strictProtocolFilter, runtime)
       .find((item) => item.modelId === option.modelId)
     if (!currentOption) {
       toast.error('模型配置已变化，请重新选择')
+      return
+    }
+    // 逐层校验：UI 已置灰跨内核项，这里仍再拒一次（键盘/程序化选择也必须守住）。
+    if (currentOption.runtimeCompatible === false) {
+      toast.error(currentOption.runtimeUnavailableReason ?? '该模型不能用于当前会话')
       return
     }
     if (onModelSelect) {
@@ -519,6 +554,8 @@ export function ModelSelector({
                         selectedModel?.modelId === option.modelId
                       const currentFlatIndex = flatIndex++
                       const isHighlighted = currentFlatIndex === highlightIndex
+                      // 跨内核（当前会话引擎用不了）的渠道仍在列表里，但不可选也不可高亮。
+                      const incompatible = option.runtimeCompatible === false
 
                       return (
                         <button
@@ -528,13 +565,15 @@ export function ModelSelector({
                             else itemRefs.current.delete(currentFlatIndex)
                           }}
                           type="button"
-                          disabled={saving || disabled}
+                          disabled={saving || disabled || incompatible}
+                          title={incompatible ? option.runtimeUnavailableReason : undefined}
                           onClick={() => handleSelect(option)}
-                          onMouseEnter={() => setHighlightIndex(currentFlatIndex)}
+                          onMouseEnter={() => { if (!incompatible) setHighlightIndex(currentFlatIndex) }}
                           className={cn(
                             'flex items-center gap-3 w-[calc(100%-1rem)] px-4 py-1.5 mx-2 rounded-lg text-left transition-colors',
                             'hover:bg-accent',
                             isHighlighted && 'bg-accent',
+                            incompatible && 'opacity-45 hover:bg-transparent cursor-not-allowed',
                             isSelected && 'bg-foreground/10 border-l-3 border-l-primary'
                           )}
                         >
@@ -553,8 +592,13 @@ export function ModelSelector({
                             {/* 严格按协议过滤时，标签应反映运行时实际使用的协议：
                                 DeepSeek 同时在 OpenAI 与 Anthropic 两侧可用，
                                 其 display 值（openai）会在 Claude 模式下误导用户。 */}
-                            {strictProtocolFilter ? preferredProtocol : option.protocol}
+                            {incompatible ? '不可选' : (strictProtocolFilter ? preferredProtocol : option.protocol)}
                           </span>
+                          {incompatible && (
+                            <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                              {option.runtimeUnavailableReason}
+                            </span>
+                          )}
                           {(option.channelCount ?? 0) > 1 && (
                             <span className="shrink-0 inline-flex items-center gap-1 text-[10px] text-muted-foreground" title={`已合并 ${option.channelCount} 个渠道`}>
                               <Layers2 size={12} />{option.channelCount}

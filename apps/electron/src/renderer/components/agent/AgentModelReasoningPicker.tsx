@@ -29,6 +29,7 @@ import { updateComposerEffort, updateComposerOpenAIThinkingLevel } from '@/domai
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import type {
   AgentEffort,
+  AgentRuntime,
   AgentSessionMeta,
   AgentThinkingLevel,
   ReasoningCapability,
@@ -59,6 +60,11 @@ export interface AgentModelReasoningPickerProps {
   filterChannelIds?: string[]
   preferredProtocol?: ChannelProtocol
   strictProtocolFilter?: boolean
+  /**
+   * 当前会话的内核：跨内核渠道在模型列表里置灰并标出原因（与主进程校验同一判据）。
+   * 缺省时不启用该维度（Chat / 其它无内核概念的宿主）。
+   */
+  runtime?: AgentRuntime
 }
 
 /** 规范化模型人类可读名称，剥离底层 ID 前缀 */
@@ -94,6 +100,7 @@ export function AgentModelReasoningPicker({
   filterChannelIds,
   preferredProtocol = 'openai',
   strictProtocolFilter = true,
+  runtime,
 }: AgentModelReasoningPickerProps): React.ReactElement {
   const [popoverOpen, setPopoverOpen] = React.useState(false)
   const [modelSelectorOpen, setModelSelectorOpen] = React.useState(false)
@@ -289,6 +296,7 @@ export function AgentModelReasoningPicker({
         filterChannelIds={filterChannelIds}
         preferredProtocol={preferredProtocol}
         strictProtocolFilter={strictProtocolFilter}
+        {...(runtime ? { runtime } : {})}
         externalSelectedModel={externalSelectedModel}
         hideTrigger
         onModelSelect={(option) => {

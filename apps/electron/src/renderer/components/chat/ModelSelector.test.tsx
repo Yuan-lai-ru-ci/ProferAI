@@ -210,3 +210,55 @@ describe('ModelSelector 只渲染 Dialog 的宿主模式', () => {
     expect(scope.elements().some((element) => element.props.open === true)).toBe(true)
   })
 })
+
+describe('ModelSelector 跨内核选项', () => {
+  const claudeOnly: Channel = {
+    id: 'claude-only', name: 'Claude 渠道', provider: 'anthropic', baseUrl: 'https://claude.invalid',
+    apiKey: 'encrypted', enabled: true, agentRuntimes: ['claude'],
+    models: [{ id: 'claude-model', name: 'ClaudeModel', enabled: true }], createdAt: 1, updatedAt: 1,
+  }
+  /** 找到承载指定模型名的模型行按钮。 */
+  const row = (scope: ReturnType<typeof mount>, modelName: string) => scope.elements().find((element) => (
+    element.type === 'button'
+    && Array.isArray(element.props.children)
+    && element.props.children.some((child) => React.isValidElement<{ children?: unknown }>(child) && child.props.children === modelName)
+  ))!
+
+  test('会话内核为 Pi 时，Claude 专属渠道仍展示但置灰并标出原因', () => {
+    const selected: string[] = []
+    const scope = mount([fixture, claudeOnly], { ...meta, channelId: 'fixture' }, {
+      hideTrigger: true,
+      open: true,
+      onOpenChange: () => {},
+      runtime: 'pi',
+      preferredProtocol: 'openai',
+      strictProtocolFilter: true,
+      onModelSelect: (option) => selected.push(`${option.channelId}:${option.modelId}`),
+    })
+
+    const incompatible = row(scope, 'ClaudeModel')
+    expect(incompatible).toBeDefined()
+    expect(incompatible.props.disabled).toBe(true)
+    expect(incompatible.props.title).toBe('仅支持 Claude 引擎')
+
+    const compatible = row(scope, 'Model')
+    expect(compatible.props.disabled).toBe(false)
+    ;(compatible.props.onClick as () => void)()
+    expect(selected).toEqual(['fixture:model'])
+    // 即使程序化触发跨内核行，也不会产生选择。
+    ;(incompatible.props.onClick as () => void)()
+    expect(selected).toEqual(['fixture:model'])
+  })
+
+  test('不传 runtime 时保持旧行为：跨内核渠道不出现在列表里', () => {
+    const scope = mount([fixture, claudeOnly], { ...meta, channelId: 'fixture' }, {
+      hideTrigger: true,
+      open: true,
+      onOpenChange: () => {},
+      preferredProtocol: 'openai',
+      strictProtocolFilter: true,
+    })
+    expect(row(scope, 'ClaudeModel')).toBeUndefined()
+    expect(row(scope, 'Model').props.disabled).toBe(false)
+  })
+})

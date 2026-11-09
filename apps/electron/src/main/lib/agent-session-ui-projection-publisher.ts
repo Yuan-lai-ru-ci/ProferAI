@@ -1,8 +1,10 @@
 import type { AgentSessionMeta, AgentStreamPayload } from '@profer/shared'
+import { canSelectAgentSessionRuntime, normalizeAgentRuntime, resolveAgentRuntimeChannelConflict } from '@profer/shared'
 import type { AgentEventBus } from './agent-event-bus'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import { buildAgentSessionUiProjection } from './agent-session-ui-projection'
 import { getAgentUnreadPolicyMode } from './agent-unread-mode'
+import { getChannelById } from './channel-manager'
 
 let projectionEventBus: AgentEventBus | null = null
 
@@ -36,6 +38,20 @@ export function updateAgentSessionUiMeta(
   updates: Parameters<typeof updateAgentSessionMeta>[1],
   options?: Parameters<typeof updateAgentSessionMeta>[2],
 ): AgentSessionMeta {
+  // 模型/渠道写入是「跨内核混血」的最后一道门。会话内核一旦固定，就不能再把一个
+  // 只为另一内核开启的渠道写进来（否则历史与原生 transcript 分属两个内核，
+  // 下次发送、回退、续聊全部会错位）。未锁定的新会话不受限：内核会跟随渠道。
+  if (updates.channelId !== undefined) {
+    const current = getAgentSessionMeta(id)
+    if (current && !canSelectAgentSessionRuntime(current)) {
+      const conflict = resolveAgentRuntimeChannelConflict({
+        sessionRuntime: normalizeAgentRuntime(current.agentRuntime),
+        channelId: updates.channelId,
+        channel: getChannelById(updates.channelId),
+      })
+      if (conflict) throw new Error(conflict)
+    }
+  }
   const updated = updateAgentSessionMeta(id, updates, options)
   publishAgentSessionProjection(updated)
   return updated
