@@ -10,6 +10,12 @@ import type { AgentRunOutcome } from './events'
 
 export interface AgentRuntimeProviderAdapterOptions {
   mapInput?: (input: AgentRuntimeQuery, base: AgentQueryInput & { prepared?: AgentRuntimeQuery['prepared'] }) => AgentQueryInput
+  /**
+   * 出口装饰器：provider 产出的每条消息在交给 runtime 之前过一遍。
+   * 宿主用它把本轮受控写入挂到 `tool_result` 上（消息气泡里的文件改动 chip）。
+   * 不返回新对象时保持原引用，避免下游按形状/引用比较的行为漂移。
+   */
+  mapMessage?: (message: SDKMessage, input: AgentRuntimeQuery) => SDKMessage
 }
 
 function toProviderInput(input: AgentRuntimeQuery): AgentQueryInput & { prepared?: AgentRuntimeQuery['prepared'] } {
@@ -18,7 +24,9 @@ function toProviderInput(input: AgentRuntimeQuery): AgentQueryInput & { prepared
   return {
     ...(extra ?? {}),
     sessionId: input.sessionId,
-    prompt: input.prompt,
+    // 宿主在准备阶段拼好的本轮 prompt 优先：动态上下文依赖实际加载的 MCP 名单，
+    // 构造 query 时拿不到。没有 prepared.prompt 时行为与之前完全一致。
+    prompt: input.prepared?.prompt ?? input.prompt,
     ...(input.modelId ? { model: input.modelId } : {}),
     agentRuntime: input.runtime,
     ...(input.isolatedRuntimeSession !== undefined ? { isolatedRuntimeSession: input.isolatedRuntimeSession } : {}),
@@ -50,9 +58,14 @@ export function createAgentRuntimeProviderAdapter(
       activeSessionIds.add(input.sessionId)
       const base = toProviderInput(input)
       const source = provider.query(options.mapInput?.(input, base) ?? base)
+      const mapMessage = options.mapMessage
       return (async function* () {
         try {
-          yield* source
+          if (!mapMessage) {
+            yield* source
+            return
+          }
+          for await (const message of source) yield mapMessage(message, input)
         } finally {
           removeSession(input.sessionId)
         }
@@ -60,8 +73,9 @@ export function createAgentRuntimeProviderAdapter(
     },
     async query(input, callbacks): Promise<AgentRunOutcome> {
       try {
+        const mapMessage = options.mapMessage
         for await (const message of provider.query(options.mapInput?.(input, toProviderInput(input)) ?? toProviderInput(input))) {
-          await callbacks.onMessage?.(message)
+          await callbacks.onMessage?.(mapMessage ? mapMessage(message, input) : message)
         }
         return { status: 'completed' }
       } catch (error) {

@@ -17,6 +17,28 @@ afterEach(() => {
   }
 })
 
+describe('无人值守语义（bypassPermissions）', () => {
+  test('Given bypass 会话 When 写类工具请求权限 Then 直接放行且不产生审批请求', async () => {
+    const requests: PermissionRequest[] = []
+    const port = createElectronPermissionPort({ isBypassPermissions: id => id === sessionId })
+    const canUseTool = port.createCanUseTool!({ sessionId, sendPermissionRequest: request => requests.push(request) })
+    const signal = new AbortController().signal
+    const result = await canUseTool('Write', { file_path: '/unsafe/file', content: 'fixture' }, { signal, toolUseID: 'tool-1' })
+    expect(result).toMatchObject({ behavior: 'allow', toolUseID: 'tool-1' })
+    // 关键：不能落审批请求，否则无界面入口会永久等待。
+    expect(requests).toHaveLength(0)
+    expect(permissionService.getPendingRequests()).toHaveLength(0)
+  })
+
+  test('非 bypass 会话仍走真实审批', async () => {
+    const requests: PermissionRequest[] = []
+    const port = createElectronPermissionPort({ isBypassPermissions: () => false })
+    const canUseTool = port.createCanUseTool!({ sessionId, sendPermissionRequest: request => requests.push(request) })
+    void canUseTool('Write', { file_path: '/unsafe/file', content: 'fixture' }, { signal: new AbortController().signal })
+    expect(requests).toHaveLength(1)
+  })
+})
+
 describe('Electron runtime permission lifecycle', () => {
   test('Given outstanding approvals and questions When a turn ends Then only that session permission and plan requests are denied', async () => {
     const port = createElectronPermissionPort()

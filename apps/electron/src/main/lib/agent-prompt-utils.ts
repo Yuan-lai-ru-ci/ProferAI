@@ -47,9 +47,31 @@ export function buildContextPrompt(sessionId: string, currentUserMessage: string
   const allMessages = getAgentSessionSDKMessages(sessionId)
   if (allMessages.length === 0) return currentUserMessage
 
+  // 旧链调用时当前用户消息已经落盘：去掉最后一条才是「历史」。
   const history = allMessages.slice(0, -1)
   if (history.length === 0) return currentUserMessage
 
+  const { block, injected } = formatContextHistoryBlock(
+    history,
+    sessionHint ? { sessionId, agentCwd: sessionHint.agentCwd } : undefined,
+  )
+  if (!block) return currentUserMessage
+
+  console.log(`[Agent 编排] buildContextPrompt: 读取 ${allMessages.length} 条消息，注入 ${injected} 条历史${sessionHint ? '（含 session 元信息）' : ''}`)
+  return `${block}\n\n${currentUserMessage}`
+}
+
+/**
+ * 把历史消息格式化成 `<conversation_history>` 块（不含当前用户消息）。
+ *
+ * 抽出来是为了让新链复用同一份格式：新链在本轮消息落盘**之前**拼 prompt，
+ * 手里已经是「纯历史」，不需要旧链那个 `slice(0, -1)` 的位移语义。
+ */
+export function formatContextHistoryBlock(
+  history: readonly SDKMessage[],
+  sessionHint?: { sessionId: string; agentCwd: string },
+): { block: string; injected: number } {
+  if (history.length === 0) return { block: '', injected: 0 }
   const recent = history.slice(-MAX_CONTEXT_MESSAGES)
   const lines = recent
     .filter((m) => (m.type === 'user' || m.type === 'assistant'))
@@ -78,14 +100,16 @@ export function buildContextPrompt(sessionId: string, currentUserMessage: string
     })
     .filter(Boolean)
 
-  if (lines.length === 0) return currentUserMessage
+  if (lines.length === 0) return { block: '', injected: 0 }
 
   const sessionInfoBlock = sessionHint
-    ? `\n<session_info>\nSession ID: ${sessionId}\nSession CWD: ${sessionHint.agentCwd}\nNote: 上方为近期对话摘要。如需更多上下文，可读取 ~/${getConfigDirName()}/agent-sessions/${sessionId}.jsonl 获取完整历史。\n</session_info>\n`
+    ? `\n<session_info>\nSession ID: ${sessionHint.sessionId}\nSession CWD: ${sessionHint.agentCwd}\nNote: 上方为近期对话摘要。如需更多上下文，可读取 ~/${getConfigDirName()}/agent-sessions/${sessionHint.sessionId}.jsonl 获取完整历史。\n</session_info>\n`
     : ''
 
-  console.log(`[Agent 编排] buildContextPrompt: 读取 ${allMessages.length} 条消息，注入 ${lines.length} 条历史${sessionHint ? '（含 session 元信息）' : ''}`)
-  return `<conversation_history>${sessionInfoBlock}\n${lines.join('\n')}\n</conversation_history>\n\n${currentUserMessage}`
+  return {
+    block: `<conversation_history>${sessionInfoBlock}\n${lines.join('\n')}\n</conversation_history>`,
+    injected: lines.length,
+  }
 }
 
 /**

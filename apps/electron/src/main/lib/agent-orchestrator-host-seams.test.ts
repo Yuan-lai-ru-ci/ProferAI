@@ -78,6 +78,9 @@ function fixture(ports: AgentRuntimePorts & { runLedger?: AgentRunLedger } = {},
     routeSkillsForTask: () => ({ selected: [], hints: [], diagnostics: [], prompt: '' }),
     buildSkillRoutingNotice: () => 'fixture skill notice',
     buildPiBuiltinTools: async () => { legacyBuilds++; return builtinResult },
+    // Shadow Git turn 边界（Phase 1）：本 fixture 不关心采集，注入空实现保持可编译。
+    beginWorkspaceShadowTurn: async () => {},
+    endWorkspaceShadowTurn: () => {},
   }
   const Constructor = new Function(...Object.keys(dependencies), `${compiled}\nreturn AgentOrchestrator`)(...Object.values(dependencies)) as new (
     adapter: object,

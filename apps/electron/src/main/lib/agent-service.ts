@@ -34,6 +34,7 @@ import type {
 import { normalizeAgentRuntime } from '@profer/shared'
 import type { AgentRuntime, AgentRuntimeCallbacks, AgentRuntimeQuery, AgentRunOutcome, AgentRuntimePreparedContext } from '@profer/agent-runtime'
 import { AgentRuntimeCoordinator, createAgentRunOwnershipRegistry, createAgentRunRejectionError, createAgentRuntimeProviderAdapter, peekAgentRunClaimFailure } from '@profer/agent-runtime'
+import { fileWriteChips } from './agent-file-write-chips'
 import { createDesktopRunLedger } from './agent-run-ledger-host'
 import { getConfigDir } from './config-paths'
 import { normalizeHeadlessSendInput } from './agent-input-origin'
@@ -162,8 +163,14 @@ const orchestrator = new AgentOrchestrator(adapter, eventBus, {
 }, runOwnership)
 const runtimeCoordinator = new AgentRuntimeCoordinator({
   adapters: {
-    claude: createAgentRuntimeProviderAdapter('claude', claudeAdapter),
-    pi: createAgentRuntimeProviderAdapter('pi', piAdapter),
+    // 出口装饰：把本轮受控写入挂到 tool_result 上（消息气泡里的文件改动 chip）。
+    // Claude 没有受控写回调，表里永远无命中，装饰器原样返回消息。
+    claude: createAgentRuntimeProviderAdapter('claude', claudeAdapter, {
+      mapMessage: (message, input) => fileWriteChips.attach(input.sessionId, message),
+    }),
+    pi: createAgentRuntimeProviderAdapter('pi', piAdapter, {
+      mapMessage: (message, input) => fileWriteChips.attach(input.sessionId, message),
+    }),
   },
   ports: agentRuntimeHost.ports,
   ownership: runOwnership,
@@ -726,9 +733,9 @@ export async function runAgent(
   webContents: WebContents,
   onDraftPromoted?: (session: import('@profer/shared').AgentSessionMeta) => void | Promise<void>,
 ): Promise<void> {
-  // IR-D1：桌面 runtime 开关**默认关闭**（显式 opt-in，v0.16.10 起）；只有显式置为 `1` 才走新链。
-  // 判定实现在 agent-runtime-desktop-switch.ts：`isDesktopRuntimeSwitchEnabled` 只认值 `'1'`；
-  // 未设置、设为 `0` 或任何其他值都走旧编排器，便于发版后止损。
+  // IR-D1：桌面 runtime 开关**默认开启**（v0.16.11 起）；显式置为 `0` 回旧编排器，便于发版后止损。
+  // 判定实现在 agent-runtime-desktop-switch.ts：`isDesktopRuntimeSwitchEnabled` 只认值 `'0'` 为关闭；
+  // 未设置或其他值都走新链。
   // 本函数不自读环境变量（parity 断言：函数体内不得出现开关字面量），只调判定函数一次。
   // 顺序：开关判定 → 桌面入口自承担 registerWebContents / backlog / 入口清未读 → 守卫 → claim；
   // claim 之前不得有 await（runDesktopRuntimeAgent 内部同样保证）。
@@ -1027,7 +1034,8 @@ export async function stopAgentRuntime(sessionId: string, reason = 'stopped_by_u
 }
 
 function canUseRuntimeHeadless(input: AgentSendInput): boolean {
-  return process.env.PROFER_RUNTIME_HEADLESS === '1'
+  // 默认走新链；显式 `0` 回旧链（发版后的止损开关）。
+  return process.env.PROFER_RUNTIME_HEADLESS !== '0'
     && !input.goalRunId
     && !input.reportGoalResult
     // Goal 提议需要宿主回调，headless 路径不承载。
@@ -1347,13 +1355,20 @@ export async function stopAgentTask(sessionId: string, taskId: string, type?: 'a
   await adapter.stopTask(sessionId, taskId, type)
 }
 
+/** 停止请求的结果：主进程已无该会话运行时返回 already_finished，便于渲染层清掉残留状态。 */
+export type AgentStopOutcome = 'stopped' | 'already_finished'
+
 /** 删除运行中会话前停止并等待其真实运行生命周期结束。 */
-export async function stopAgentAndWait(sessionId: string): Promise<void> {
+export async function stopAgentAndWait(sessionId: string): Promise<AgentStopOutcome> {
   if (runtimeCoordinator.isRunning(sessionId)) {
     await runtimeCoordinator.stopAndWait(sessionId)
-    return
+    return 'stopped'
   }
+  // 没有 owner 就说明这一轮早已结束（可能是终态事件丢失）：必须明确告知渲染层，
+  // 否则它的 stopping 会永久保持，用户只能整页重载才能恢复。
+  if (!orchestrator.isActive(sessionId)) return 'already_finished'
   await orchestrator.stopAndWait(sessionId)
+  return 'stopped'
 }
 
 /** 检查指定 session 是否由给定 Goal runId 持有运行锁。 */

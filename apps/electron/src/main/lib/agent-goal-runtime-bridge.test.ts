@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { isChannelEnabledForRuntime, resolveRunInitiator, normalizeAgentRuntime, AgentSessionRuntimeMismatchError } from '@profer/shared'
+import { isChannelEnabledForRuntime, resolveAgentRuntimeChannelConflict, resolveRunInitiator, normalizeAgentRuntime, AgentSessionRuntimeMismatchError } from '@profer/shared'
 import { buildAgentSessionUiProjection } from './agent-session-ui-projection'
-import type { AgentSessionMeta, AgentMessage, AgentSendInput, AgentStreamPayload, SDKMessage } from '@profer/shared'
+import type { AgentSessionMeta, AgentWorkspace, AgentMessage, AgentSendInput, AgentStreamPayload, SDKMessage } from '@profer/shared'
 import type { AgentOrchestrator, SessionCallbacks } from './agent-orchestrator'
 import { AgentRunAlreadyActiveError, releaseActiveSession, tryAcquireActiveSession, isPartialSDKMessage } from './agent-orchestrator-p0-guards'
 import { normalizeAgentEndReason } from './agent-end-reason'
@@ -14,6 +14,12 @@ import { createElectronPermissionPort } from './agent-runtime-permission-port'
 import { resolveCredentialPreflightTypedError } from './agent-preflight-typed-errors'
 import { normalizeHeadlessSendInput } from './agent-input-origin'
 import { forwardHeadlessAgentCompletion } from './agent-headless-runner-registry'
+import { createShadowEvidenceLedger, resolveWriteToolFact, sameEvidencePath } from './workspace-shadow-write-evidence'
+
+// 本文件验证的是**旧路径**的拒绝语义（runtime 与渠道不匹配等）。
+// 新链已默认开启，这里显式关掉，避免用例静默切到另一条分支。
+process.env.PROFER_RUNTIME_HEADLESS = '0'
+process.env.PROFER_RUNTIME_DESKTOP = '0'
 
 // 编译真实 service 函数和 orchestrator 类，显式注入边界依赖。
 // 不导入 Electron 单例、不读写用户目录、不加载或修改 Claude/Pi adapter。
@@ -137,7 +143,20 @@ test('桌面与 headless 的内核不匹配拒绝不广播假终态，也不清�
   expect(backlog.get('session')).toHaveLength(1)
 })
 
-function ownerFixture(initialSession?: AgentSessionMeta, runLedger?: AgentRunLedger) {
+interface ShadowTurnHooks {
+  /** 返回 undefined = 不需要等待（常见路径），编排器据此保持同步时序。 */
+  begin(workspaceId: string | undefined): Promise<void> | undefined
+  end(workspaceId: string | undefined, context?: { sessionId?: string; turnId?: string; runtime?: string; evidence?: unknown[] }): void
+}
+
+const noShadowHooks: ShadowTurnHooks = { begin: () => undefined, end: () => {} }
+
+function ownerFixture(
+  initialSession?: AgentSessionMeta,
+  runLedger?: AgentRunLedger,
+  shadowHooks: ShadowTurnHooks = noShadowHooks,
+  runWorkspace?: AgentWorkspace,
+) {
   let session = initialSession
   let bindingFailure = false
   const events: AgentStreamPayload[] = []
@@ -158,7 +177,7 @@ function ownerFixture(initialSession?: AgentSessionMeta, runLedger?: AgentRunLed
     normalizeAgentRuntime,
     // 工作区守卫在类外定义（与 agent-service 共用）：本 fixture 的会话/输入都没有 workspaceId，
     // 因此只需注入「无工作区 → undefined」的等价实现；真实守卫行为由 agent-run-workspace-guard.test.ts 覆盖。
-    requireAgentRunWorkspace: () => undefined,
+    requireAgentRunWorkspace: () => runWorkspace,
     getAgentSessionMeta: () => session,
     getAgentSessionMessages: () => [],
     getAgentSessionSDKMessages: () => [],
@@ -174,6 +193,9 @@ function ownerFixture(initialSession?: AgentSessionMeta, runLedger?: AgentRunLed
     updateAgentSessionMeta() {}, appendSDKMessages() {},
     getChannelById: () => ({ provider: 'anthropic', enabled: true, agentRuntimes: ['pi', 'claude'] }),
     isChannelEnabledForRuntime,
+    // 跨内核拦截用真实实现：本条契约就是「请求在取得 owner 之前被拒绝」，
+    // 用等价闭包替换会掩盖真实判据（channel × session runtime）。
+    resolveAgentRuntimeChannelConflict,
     isXaiChannelAvailableForRuntime: () => true,
     DEFAULT_MODEL_ID: 'test',
     resolveRuntimeCredentials: () => credentials.promise,
@@ -184,6 +206,11 @@ function ownerFixture(initialSession?: AgentSessionMeta, runLedger?: AgentRunLed
     resolveCredentialPreflightTypedError,
     permissionService: { clearSessionPending() {} }, exitPlanService: { clearSessionPending() {} },
     normalizeAgentEndReason,
+    beginWorkspaceShadowTurn: shadowHooks.begin,
+    endWorkspaceShadowTurn: shadowHooks.end,
+    // S2：证据采集规则已抽到 workspace-shadow-write-evidence.ts，编译 sendMessage 时必须注入。
+    createShadowEvidenceLedger,
+    resolveWriteToolFact,
     console: quietConsole,
   })
   // 只触发本测试覆盖的 preflight/stop 边界，adapter.query 不会执行。
@@ -463,4 +490,80 @@ test('model routing 抛错也进入 owner finally，不能泄漏 active/Goal 锁
   await expect(f.instance.sendMessage(f.input, f.callbacks)).rejects.toThrow('routing failed')
   expect(f.instance.isActive('session')).toBe(false)
   expect(f.instance.isGoalRunActive('session')).toBe(false)
+})
+
+describe('Shadow Git turn 边界（Phase 1）', () => {
+  const workspace = { id: 'ws-shadow', name: 'w', slug: 'w', createdAt: 1, updatedAt: 1 } as AgentWorkspace
+
+  test('begin 在持久 Run 登记之前同步调用，end 在失败终态后调用一次', async () => {
+    const calls: string[] = []
+    const contexts: Array<Record<string, unknown>> = []
+    const hooks: ShadowTurnHooks = {
+      begin: (id) => { calls.push(`begin:${id}`); return undefined },
+      end: (id, context) => { calls.push(`end:${id}`); if (context) contexts.push(context) },
+    }
+    const f = ownerFixture(undefined, undefined, hooks, workspace)
+    const run = f.instance.sendMessage({ ...f.input, agentRuntime: 'pi', uuid: 'user-msg-1' }, f.callbacks)
+    // 不引入微任务：调用后立刻可见，说明常见路径没有把 turn 启动推迟到下一个 tick。
+    expect(calls).toEqual(['begin:ws-shadow'])
+    f.credentials.resolve({ ok: false, code: 'token_expired' })
+    await run
+    expect(calls).toEqual(['begin:ws-shadow', 'end:ws-shadow'])
+    // 归属键必须随 turn 传给采集层：会话 id + 用户消息 uuid + runtime 缺一不可，
+    // 否则记录无法和 JSONL 消息对齐，回退时就找不到边界。
+    expect(contexts[0]).toMatchObject({ sessionId: 'session', turnId: 'user-msg-1', runtime: 'pi' })
+    expect(Array.isArray(contexts[0]?.evidence)).toBe(true)
+  })
+
+  test('入口拒绝（内核不匹配）不触发任何采集', async () => {
+    const calls: string[] = []
+    const hooks: ShadowTurnHooks = {
+      begin: (id) => { calls.push(`begin:${id}`); return undefined },
+      end: (id) => { calls.push(`end:${id}`) },
+    }
+    const f = ownerFixture({ id: 'session', title: 't', agentRuntime: 'pi', agentRuntimeLocked: false, createdAt: 1, updatedAt: 1 }, undefined, hooks, workspace)
+    await expect(f.instance.sendMessage({ ...f.input, agentRuntime: 'claude' }, f.callbacks)).rejects.toThrow('AGENT_SESSION_RUNTIME_MISMATCH')
+    expect(calls).toEqual([])
+  })
+
+  test('begin 需要等待（首个基线/上一轮未落盘）时，Run 登记被推迟到采集完成之后', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const ledger = new AgentRunLedger(createInMemoryRunLedgerPort())
+    const f = ownerFixture(undefined, ledger, { begin: () => gate, end: () => {} }, workspace)
+    const run = f.instance.sendMessage({ ...f.input, agentRuntime: 'pi' }, f.callbacks)
+    expect(ledger.list()).toHaveLength(0)
+    release()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(ledger.list()).toHaveLength(1)
+    f.credentials.resolve({ ok: false, code: 'token_expired' })
+    await run
+  })
+})
+
+describe('写入证据解析（Phase 2）', () => {
+  // 直接断言真实实现（S2 起在 workspace-shadow-write-evidence.ts）：写入工具表一旦改名/改字段，这里立刻红。
+  const helpers = { resolveWriteToolFact, sameEvidencePath }
+
+  test('Pi 渠道用 Write 工具执行写入时也能取到路径（真实一轮踩到的回归）', () => {
+    expect(helpers.resolveWriteToolFact('Write', { path: '/w/a.md' })).toEqual({ path: '/w/a.md', source: 'write' })
+    expect(helpers.resolveWriteToolFact('write', { file_path: '/w/b.md' })).toEqual({ path: '/w/b.md', source: 'write' })
+    expect(helpers.resolveWriteToolFact('Edit', { file_path: '/w/c.md' })).toEqual({ path: '/w/c.md', source: 'edit' })
+    expect(helpers.resolveWriteToolFact('NotebookEdit', { notebook_path: '/w/d.ipynb' })).toEqual({
+      path: '/w/d.ipynb',
+      source: 'edit',
+    })
+  })
+
+  test('Bash 不进证据表：从命令行文本猜路径会把非受控改动伪装成受控写入', () => {
+    expect(helpers.resolveWriteToolFact('Bash', { command: 'echo hi > a.md' })).toBeUndefined()
+    expect(helpers.resolveWriteToolFact('Read', { file_path: '/w/a.md' })).toBeUndefined()
+  })
+
+  test('路径归一：相对写法与绝对写法视为同一文件，兄弟文件不能误判', () => {
+    expect(helpers.sameEvidencePath('note.md', '/w/note.md')).toBe(true)
+    expect(helpers.sameEvidencePath('/w/note.md', 'note.md')).toBe(true)
+    expect(helpers.sameEvidencePath('/w/a.ts', '/w/ab.ts')).toBe(false)
+  })
 })

@@ -207,6 +207,12 @@ export interface RuntimeResources {
   skills?: readonly string[]
   mcpResources?: readonly unknown[]
   projectInstructions?: readonly string[]
+  /**
+   * Skill 目录（`<skill_catalog>` 段）。
+   *
+   * Pi 没有 SDK 侧 Skill 发现，catalog 必须由宿主提供；Claude 由 SDK 自己发现，宿主不填。
+   */
+  skillCatalog?: string
 }
 
 export interface ResourcePort {

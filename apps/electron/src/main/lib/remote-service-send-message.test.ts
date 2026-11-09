@@ -17,6 +17,9 @@ type CapturedRun = {
 
 const captured: CapturedRun[] = []
 
+/** 宿主生成的 uuid 必须是合法 UUID（`randomUUID()`），而不是时间戳或空串。 */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 mock.module('./agent-service', () => ({
   ...actualAgentService,
   // 仅捕获实参，不启动真实 run（避免副作用与外部依赖）。
@@ -24,6 +27,13 @@ mock.module('./agent-service', () => ({
     captured.push({ input, callbacks })
     return Promise.resolve()
   },
+  // 默认已切新链：新入口也要捕获同一份实参，否则这里会启动真实 run。
+  runAgentRuntimeHeadless: (input: Record<string, unknown>, callbacks: Record<string, unknown>) => {
+    captured.push({ input, callbacks })
+    return Promise.resolve()
+  },
+  // 新分支在起 run 之前做非破坏性执行权预检；fixture 里恒无阻塞。
+  peekAgentRunClaimFailureForSession: () => undefined,
 }))
 
 let handleRemoteCommand: typeof import('./remote-service')['handleRemoteCommand']
@@ -82,7 +92,7 @@ describe('send_message 的 uuid / startedAt 透传', () => {
     expect(callbacks.source).toBe('bridge')
   })
 
-  test('两者均缺省时回退：startedAt 取当前时间，uuid 不作为键出现', async () => {
+  test('两者均缺省时回退：startedAt 取当前时间，uuid 由宿主生成', async () => {
     const before = Date.now()
     const result = await sendMessage({ omitStartedAt: true, omitUuid: true })
     const after = Date.now()
@@ -94,8 +104,10 @@ describe('send_message 的 uuid / startedAt 透传', () => {
     expect(typeof input.startedAt).toBe('number')
     expect(input.startedAt as number).toBeGreaterThanOrEqual(before)
     expect(input.startedAt as number).toBeLessThanOrEqual(after)
-    // 实现为 { ...(uuid ? { uuid } : {}) }：缺省时不应出现该键
-    expect(Object.prototype.hasOwnProperty.call(input, 'uuid')).toBe(false)
+    // 缺省时宿主生成 uuid：它同时是消息身份（乐观气泡去重）与归属记录关联 turn 的依据，
+    // 缺失会让 rewindTurnId 退化成时间戳、Shadow Git 的 turn 无法与 JSONL 消息对齐。
+    expect(typeof input.uuid).toBe('string')
+    expect(input.uuid as string).toMatch(UUID_PATTERN)
   })
 
   test('类型不符 / 空串一律按缺省处理，不把非法值传入 run', async () => {
@@ -110,14 +122,17 @@ describe('send_message 的 uuid / startedAt 透传', () => {
     expect(typeof input.startedAt).toBe('number')
     expect(input.startedAt as number).toBeGreaterThanOrEqual(before)
     expect(input.startedAt as number).toBeLessThanOrEqual(after)
-    expect(Object.prototype.hasOwnProperty.call(input, 'uuid')).toBe(false)
+    // 空串按缺省处理：宿主生成合法 uuid，非法值本身不得进入 run。
+    expect(typeof input.uuid).toBe('string')
+    expect(input.uuid as string).not.toBe('')
+    expect(input.uuid as string).toMatch(UUID_PATTERN)
   })
 })
 
-describe('runtime coordinator remote opt-in', () => {
-  test('Given the default remote service When sending a message Then legacy runner remains default and runtime switch is explicit', async () => {
+describe('runtime coordinator remote 默认路由', () => {
+  test('Given the default remote service When sending a message Then the runtime chain is the default and explicit 0 rolls back', async () => {
     const source = await Bun.file(join(import.meta.dir, 'remote-service.ts')).text()
-    expect(source).toContain("process.env.PROFER_RUNTIME_REMOTE === '1'")
+    expect(source).toContain("process.env.PROFER_RUNTIME_REMOTE !== '0'")
     expect(source).toContain('runAgentRuntimeHeadless(')
     expect(source).toContain('runAgentHeadless(headlessInput, {')
     expect(source).toContain("initiator: 'user'")

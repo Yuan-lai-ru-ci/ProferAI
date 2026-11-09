@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { createAgentRunContext } from '@profer/agent-runtime'
 import type {
   AgentRuntimeEvent,
+  AgentRuntimePreparedContext,
   BackgroundTaskPort,
   AgentRuntimePorts,
   CredentialPort,
@@ -20,18 +21,24 @@ import type {
   ProcessRegistrationPort,
 } from '@profer/agent-runtime'
 import type { AgentRuntime, AgentSessionMeta, AgentSendInput, SDKMessage, AgentStreamPayload, ProferPermissionMode } from '@profer/shared'
+import { resolveAgentRuntimeChannelConflict } from '@profer/shared'
 import type { SessionStore } from '@profer/session-store'
 import { createElectronSessionStore } from './session-store-host'
 import { appendSDKMessages, enqueueSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime, resolveAgentSessionWriteLayout } from './agent-session-manager'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { getChannelById } from './channel-manager'
 import { getWorkspaceMcpConfig, getWorkspaceSkills, getAgentWorkspace, readWorkspaceProfile } from './agent-workspace-manager'
+import { prepareRuntimeSkills } from './global-skill-manager'
+import { prepareAgentSkillRouting } from './skill-runtime-routing'
+import { buildSkillCatalog } from './skill-routing'
 import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
 import { agentSessionVisualizationsDir } from './config-paths'
 import { agentFilePreviewSessionManager } from './agent-file-preview-session'
 import { piBackgroundTaskManager } from './pi-background-task-manager'
 import { createElectronPermissionPort } from './agent-runtime-permission-port'
 import { agentRuntimePolicyRuns, filterPolicyMcpResources, filterPolicySkills } from './agent-runtime-policy-snapshot'
+import { buildRuntimeTurnUserPrompt } from './agent-runtime-turn-prompt'
+import { selectAgentPromptMode, type AgentPromptMode } from './agent-prompt-mode'
 import {
   BUILTIN_MCP_UNAVAILABLE_LOG_PREFIX,
   builtinMcpPlanInputFromContext,
@@ -252,6 +259,13 @@ export interface AgentRuntimeRunFacts {
    * 旧链把它透传给 collaboration 注入上下文；这里同源传递，不放宽也不收紧。
    */
   permissionModeOverride?: ProferPermissionMode
+  /**
+   * 本轮提示词模式（`light` = 无上下文的新会话短问候）。
+   *
+   * 资源端口需要它：旧链在 light 下不加载任何 MCP / Skill，新链同一判据，
+   * 否则一句「你好」会拉起全部 MCP 服务器。
+   */
+  promptMode?: AgentPromptMode
 }
 
 const agentRuntimeRunFacts = new Map<string, AgentRuntimeRunFacts>()
@@ -709,6 +723,9 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
   const capabilityProvider = options.productCapabilities
   return {
     async load(input): Promise<RuntimeResources> {
+      // light：无上下文的新会话短问候不加载任何 MCP / Skill（旧链同一判据）。
+      // 否则一句「你好」会拉起全部 MCP 服务器，首字延迟全花在没人用的工具上。
+      if (agentRuntimeRunFacts.get(input.sessionId)?.promptMode === 'light') return {}
       const meta = getAgentSessionMeta(input.sessionId)
       const workspaceSlug = input.workspaceSlug
         ?? (meta?.workspaceId ? getAgentWorkspace(meta.workspaceId)?.slug : undefined)
@@ -750,6 +767,22 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
       // 查不到快照（未接线 / 其他宿主）时保持现状而不猜测裁剪：禁用项由工具装配与权限端口承担，
       // 本函数只负责「白名单内的可见性」，因此缺快照不会放行任何被禁用的能力。
       const snapshot = agentRuntimePolicyRuns.getForRun(input.sessionId)
+      // Pi 没有 SDK 侧 Skill 发现：catalog 必须由 Profer 提供（与旧链同一 builder）。
+      // Claude 由 SDK 自己发现，旧链同样不注入 catalog。
+      let skillCatalog: string | undefined
+      if (meta?.agentRuntime === 'pi' && snapshot) {
+        try {
+          const routing = await prepareAgentSkillRouting({
+            projection: prepareRuntimeSkills(workspaceSlug),
+            policy: snapshot.policy,
+            toolNames: ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', ...enabledMcpResources.map(resource => String(resource.name ?? ''))],
+          })
+          skillCatalog = buildSkillCatalog(routing.snapshot) || undefined
+        } catch (error) {
+          // 目录是增强能力：构建失败不阻断本轮，只是模型看不到 skill 清单。
+          console.warn('[Agent Runtime] Skill 目录构建失败，本轮不注入 catalog:', error)
+        }
+      }
       return {
         projectInstructions: profile.content ? [profile.content] : [],
         skills: snapshot ? [...filterPolicySkills(snapshot, enabledSkills)] : enabledSkills,
@@ -757,6 +790,7 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
           ...(snapshot ? [...filterPolicyMcpResources(snapshot, enabledMcpResources)] : enabledMcpResources),
           ...injectedMcpResources,
         ],
+        ...(skillCatalog ? { skillCatalog } : {}),
       }
     },
     getMcpConfig({ workspaceSlug }) {
@@ -861,10 +895,59 @@ export interface ElectronAgentRuntimeQueryOptions {
   cwd?: string
   providerInput?: Readonly<Record<string, unknown>>
   toolAssemblyContext?: unknown
+  /**
+   * 原生会话 id（热启动）。缺省取 `input.runtimeSessionId`（Goal 隔离会话）。
+   *
+   * 新链必须显式传入会话已持久化的 `sdkSessionId`，否则每轮都是新建 provider session，
+   * 历史与缓存全部重建（真机上表现为「它忘了上一轮」）。
+   */
+  runtimeSessionId?: string
+  /** 回退后的 provider 截断点（仅在 resume 生效时有意义）。 */
+  resumeSessionAt?: string
+  /** 仅本轮的隐藏上下文前缀（回退 notice）；不写入用户消息、不进 UI。 */
+  promptPrefix?: string
+  /** 完全替换本轮 prompt（resume 失效时的恢复提示）；缺省按 automationContext/internalPrompt/userMessage 拼装。 */
+  promptOverride?: string
+  /**
+   * 本轮的 Shadow Git 写入证据账本。
+   *
+   * provider 的受控写入回调（Pi 的 `onFileWrite`）在 provider 层触发，而账本属于这一轮；
+   * 通过 query metadata 传下去，避免为了一个回调再引入一份会话级全局表。
+   */
+  shadowLedger?: import('./workspace-shadow-write-evidence').ShadowEvidenceLedger
+}
+
+/**
+ * 本轮提示词模式（与旧链 `selectAgentPromptMode` 同一判据）。
+ *
+ * 拿不到策略快照时一律 `standard`：猜 light 会让一个真需要工具的任务丢掉 MCP 与 Skill。
+ */
+function resolveRuntimePromptModeForInput(input: AgentSendInput): AgentPromptMode {
+  const snapshot = agentRuntimePolicyRuns.getForRun(input.sessionId)
+  if (!snapshot) return 'standard'
+  const meta = getAgentSessionMeta(input.sessionId)
+  return selectAgentPromptMode({
+    message: input.userMessage,
+    hasRuntimeSession: Boolean(meta?.sdkSessionId),
+    hasHistory: !meta?.sdkSessionId && (getAgentSessionMessages(input.sessionId)?.length ?? 0) > 1,
+    hasAttachedResources: Boolean(meta?.attachedDirectories?.length || meta?.attachedFiles?.length),
+    hasPresetInstructions: Boolean(snapshot.policy.preset.promptSections?.length),
+    permissionMode: snapshot.policy.permissionMode,
+    request: input,
+  })
 }
 
 /** 将现有 headless 输入收敛为 runtime 可消费的中性 query；未映射的业务回调不进入 runtime。 */
 export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: ElectronAgentRuntimeQueryOptions): import('@profer/agent-runtime').AgentRuntimeQuery {
+  // 跨内核不可绕过校验（新链）：本函数是每个 runtime run 的必经点，也是宿主唯一能拿到
+  // 渠道注册表的地方。非法请求在构造 query 时就报错，不会到达 provider（不会建进程、
+  // 不会写 transcript、不会广播假终态）。
+  const runtimeChannelConflict = resolveAgentRuntimeChannelConflict({
+    sessionRuntime: options.runtime,
+    channelId: input.channelId,
+    channel: input.channelId ? getChannelById(input.channelId) : undefined,
+  })
+  if (runtimeChannelConflict) throw new Error(runtimeChannelConflict)
   // B8：把运行级事实写进宿主侧 per-run 注册表（`setAgentRuntimeRunFacts` 已由入口写过
   // `triggeredBy` / `userMessage`，这里补齐产品服务器需要的两项）。
   // 为什么写在这里：`ResourceRequest` 上没有 `additionalDirectories` / `permissionModeOverride`，
@@ -873,8 +956,15 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
     ...(input.additionalDirectories?.length ? { additionalDirectories: [...input.additionalDirectories] } : {}),
     ...(input.permissionModeOverride ? { permissionModeOverride: input.permissionModeOverride } : {}),
   })
+  // 提示词模式：与旧链同一判据（`selectAgentPromptMode`）。在这里算一次，
+  // 同时给资源端口（light 不加载 MCP / Skill）与提示词装配（light 不拼动态上下文/历史）。
+  const promptMode = resolveRuntimePromptModeForInput(input)
+  // 只记录 light：standard 是缺省语义，写进去会让每次 standard run 的 metadata / run facts
+  // 多一个恒等字段（下游按形状断言的地方会全部漂移）。
+  if (promptMode === 'light') mergeAgentRuntimeRunFacts(input.sessionId, { promptMode })
   const providerInput = {
     ...(options.providerInput ?? {}),
+    ...(options.resumeSessionAt ? { resumeSessionAt: options.resumeSessionAt } : {}),
     ...(input.customMcpServers ? { customMcpServers: input.customMcpServers } : {}),
     ...(input.permissionModeOverride ? { permissionMode: input.permissionModeOverride } : {}),
     ...(input.mentionedSkills ? { mentionedSkills: [...input.mentionedSkills] } : {}),
@@ -882,9 +972,13 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
     ...(input.automationContext ? { automationContext: input.automationContext } : {}),
     ...(input.mentionedSessionIds ? { mentionedSessionIds: [...input.mentionedSessionIds] } : {}),
   }
-  const prompt = input.automationContext
-    ? `${input.automationContext}\n\n${input.internalPrompt ?? input.userMessage}`
-    : input.internalPrompt ?? input.userMessage
+  const basePrompt = options.promptOverride
+    ?? (input.automationContext
+      ? `${input.automationContext}\n\n${input.internalPrompt ?? input.userMessage}`
+      : input.internalPrompt ?? input.userMessage)
+  // 回退 notice 只拼进本轮 runtime prompt：persistedUserMessage 仍用原始用户输入，UI/JSONL 看不到。
+  const prompt = options.promptPrefix ? `${options.promptPrefix}\n\n${basePrompt}` : basePrompt
+  const runtimeSessionId = options.runtimeSessionId ?? input.runtimeSessionId
   const persistedUserMessage = input.suppressUserMessagePersistence
     ? undefined
     : {
@@ -912,11 +1006,17 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
     initiator: input.initiator ?? (input.triggeredBy === 'automation' ? 'automation' : input.triggeredBy === 'delegation' ? 'delegation' : input.triggeredBy === 'goal' ? 'goal' : 'external'),
     ...(options.cwd ? { cwd: options.cwd } : {}),
     ...(input.additionalDirectories ? { additionalDirectories: [...input.additionalDirectories] } : {}),
-    ...(input.runtimeSessionId ? { runtimeSessionId: input.runtimeSessionId } : {}),
+    ...(runtimeSessionId ? { runtimeSessionId } : {}),
     ...(input.isolatedRuntimeSession !== undefined ? { isolatedRuntimeSession: input.isolatedRuntimeSession } : {}),
     ...(options.toolAssemblyContext !== undefined ? { deferredToolAssemblyContext: options.toolAssemblyContext } : {}),
-    ...(input.startedAt !== undefined
-      ? { metadata: { startedAt: input.startedAt } }
+    ...(input.startedAt !== undefined || promptMode === 'light' || options.shadowLedger
+      ? {
+          metadata: {
+            ...(input.startedAt !== undefined ? { startedAt: input.startedAt } : {}),
+            ...(promptMode === 'light' ? { promptMode } : {}),
+            ...(options.shadowLedger ? { shadowLedger: options.shadowLedger } : {}),
+          },
+        }
       : {}),
     ...(Object.keys(providerInput).length ? { providerInput } : {}),
     ...(persistedUserMessage ? { persistedUserMessage } : {}),
@@ -954,42 +1054,64 @@ export function createElectronAgentHost(options: ElectronAgentHostOptions = {}):
     ?? (options.toolAssemblyBuild
       ? createElectronToolAssemblyPort(options.toolAssemblyBuild, { productCapabilities })
       : undefined)
-  const permissions = createElectronPermissionPort(options.permission)
+  const permissions = createElectronPermissionPort({
+    ...options.permission,
+    // 两个来源都要看：run facts 覆盖本轮显式 override（automation/飞书），
+    // 会话元数据覆盖用户在界面上选的 bypass。
+    isBypassPermissions: (sessionId: string) =>
+      getAgentRuntimeRunFacts(sessionId)?.permissionModeOverride === 'bypassPermissions'
+      || getAgentSessionMeta(sessionId)?.permissionMode === 'bypassPermissions',
+  })
   const preparationPorts = { credentials, resources, permissions, events, toolAssembly }
   const defaultPreparation = createElectronQueryPreparationPort(preparationPorts)
   const queryPreparation: NonNullable<AgentRuntimePorts['queryPreparation']> = options.queryPreparation ?? {
-    prepare(input, signal) {
-      const lifecycle = input.runLifecycle
-      if (!lifecycle || !permissions.createCanUseTool) return defaultPreparation.prepare(input, signal)
-      const scopedPermissions: PermissionPort = {
-        ...permissions,
-        createCanUseTool: config => async (toolName, toolInput, toolOptions) => {
-          const requests = new Set<string>()
-          const waiting = (requestId: string) => {
-            lifecycle.wait(requestId)
-            requests.add(requestId)
-          }
-          const callback = permissions.createCanUseTool!({
-            ...config,
-            sendPermissionRequest: request => {
-              waiting(request.requestId)
-              config.sendPermissionRequest(request)
-            },
-            sendAskUserRequest: request => {
-              waiting(request.requestId)
-              config.sendAskUserRequest?.(request)
-            },
-          })
-          try {
-            return await callback(toolName, toolInput, toolOptions)
-          } finally {
-            // abort 表示运行正在停止；不把取消审批伪造为继续执行。
-            if (!toolOptions.signal.aborted) for (const id of requests) lifecycle.resume(id)
-          }
-        },
+    async prepare(input, signal) {
+      const prepared = await prepareWithScopedPermissions(input, signal)
+      // 本轮用户消息侧 prompt（动态上下文 / `@` 引用 / 运行来源 / 历史回填）。
+      // 写在准备阶段：动态上下文要用实际加载的 MCP 名单，历史回填要知道本轮消息尚未落盘。
+      return {
+        ...prepared,
+        prompt: buildRuntimeTurnUserPrompt(input, {
+          ...(prepared.mcpServers ? { mcpServerNames: Object.keys(prepared.mcpServers) } : {}),
+          hasResume: Boolean(input.runtimeSessionId),
+        }),
       }
-      return createElectronQueryPreparationPort({ ...preparationPorts, permissions: scopedPermissions }).prepare(input, signal)
     },
+  }
+  async function prepareWithScopedPermissions(
+    input: Parameters<NonNullable<AgentRuntimePorts['queryPreparation']>['prepare']>[0],
+    signal: AbortSignal,
+  ): Promise<AgentRuntimePreparedContext> {
+    const lifecycle = input.runLifecycle
+    if (!lifecycle || !permissions.createCanUseTool) return defaultPreparation.prepare(input, signal)
+    const scopedPermissions: PermissionPort = {
+      ...permissions,
+      createCanUseTool: config => async (toolName, toolInput, toolOptions) => {
+        const requests = new Set<string>()
+        const waiting = (requestId: string) => {
+          lifecycle.wait(requestId)
+          requests.add(requestId)
+        }
+        const callback = permissions.createCanUseTool!({
+          ...config,
+          sendPermissionRequest: request => {
+            waiting(request.requestId)
+            config.sendPermissionRequest(request)
+          },
+          sendAskUserRequest: request => {
+            waiting(request.requestId)
+            config.sendAskUserRequest?.(request)
+          },
+        })
+        try {
+          return await callback(toolName, toolInput, toolOptions)
+        } finally {
+          // abort 表示运行正在停止；不把取消审批伪造为继续执行。
+          if (!toolOptions.signal.aborted) for (const id of requests) lifecycle.resume(id)
+        }
+      },
+    }
+    return createElectronQueryPreparationPort({ ...preparationPorts, permissions: scopedPermissions }).prepare(input, signal)
   }
   return {
     sessions,

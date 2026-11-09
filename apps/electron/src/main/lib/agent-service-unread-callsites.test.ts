@@ -29,7 +29,8 @@ describe('runtime headless routing guard', () => {
   test('Given the runtime headless switch When a normal headless input arrives Then it routes through the runtime query adapter', async () => {
     const source = await readAgentService()
     const headlessBody = slice(source, 'export async function runAgentHeadless(', 'setHeadlessAgentRunner(')
-    expect(source).toContain("process.env.PROFER_RUNTIME_HEADLESS === '1'")
+    // 默认走新链：只有显式 `0` 才回旧编排器（发版止损口径）。
+    expect(source).toContain("process.env.PROFER_RUNTIME_HEADLESS !== '0'")
     // 2026-10-16 集成会话：runtime headless 入口合并为一条（不再有 runAgentRuntimeHeadlessInput 包装）。
     expect(headlessBody).toContain('runAgentRuntimeHeadless(input, callbacks)')
     // query 构造（含策略快照与原生 session 回调）已收敛到 agent-runtime-entry.ts 的入口接线。

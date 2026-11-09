@@ -102,6 +102,7 @@ import {
   installPiRequestProxyFetch,
   runWithPiRequestProxy,
 } from './pi/request-proxy'
+import { openPiSessionFile } from './pi/session-file-store'
 import { compactPiToolDefinitions } from './pi/tool-definition-compaction'
 import { PiManualCompactionGuard, countPiEffectiveTurns, createPiCompactionSkippedMessage } from './pi/compaction-guard'
 
@@ -124,6 +125,25 @@ const defaultProcessRegistrationPort: ProcessRegistrationPort = {
 }
 const PI_NATIVE_MAX_RETRIES = 8
 const PI_NATIVE_RETRY_BASE_DELAY_MS = 1_000
+
+/**
+ * assistant uuid → Pi entry 绑定的最短上报间隔。
+ *
+ * 宿主侧的 `onPiEntryBindings` 不是轻量回调：它会扫盘做检查点 prune、再 updateMeta
+ * 读写整个会话索引（本机 320+ 会话）并原子写 + 备份。工具级 flush 每个工具都会跑一次，
+ * 若逐条上报，一个 20 次工具调用的轮就是 20 次全量索引读写（历史上已出现过 fsync 风暴卡主进程）。
+ * 轮末 / 异常收尾会以 `force` 越过节流，所以最后一轮的绑定不会留到下次（进程可能已经不在了）。
+ */
+export const PI_ENTRY_BINDING_REPORT_INTERVAL_MS = 1_000
+
+/** 节流时间源；生产恒为 `Date.now`。 */
+let piEntryBindingClock: () => number = () => Date.now()
+
+/** 仅测试用：替换绑定上报的节流时间源（传 `undefined` 恢复 `Date.now`）。 */
+export function setPiEntryBindingClock(clock?: () => number): void {
+  piEntryBindingClock = clock ?? (() => Date.now())
+}
+
 const piToolExecutionContext = new AsyncLocalStorage<{ toolCallId: string }>()
 
 /**
@@ -259,6 +279,13 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   openAIThinkingLevel?: AgentThinkingLevel
   prepared?: AgentRuntimePreparedContext
   metadata?: Readonly<Record<string, unknown>>
+  /**
+   * 延迟提示词：工具装配完成后，用实际注册的工具名定型（system + Pi 的 taskPrompt）。
+   *
+   * Pi 的 custom tools 在 adapter 内才构建（`resolvePiPreparedToolAssembly`），而提示词里的工具指南
+   * 必须描述**真实注册**的工具；在宿主侧先猜一份名单会让模型看到不存在的入口。
+   */
+  resolvePromptForTools?: (toolNames: string[]) => { systemPrompt: string; taskPrompt?: string }
 }
 
 export async function resolvePiPreparedToolAssembly(input: PiAgentQueryOptions, sdk: PiSdk): Promise<PiAgentQueryOptions> {
@@ -281,6 +308,13 @@ export function applyPiPreparedQuery(input: PiAgentQueryOptions): PiAgentQueryOp
   const credentials = prepared.credentials
   const resources = prepared.resources
   const preparedCanUseTool = prepared.canUseTool
+  // 工具已装配时才解析延迟提示词：首轮 `applyPiPreparedQuery`（工具尚未构建）继续用 prepared 的值。
+  const toolNames = prepared.tools
+    ?.map(tool => (tool as { name?: unknown }).name)
+    .filter((name): name is string => typeof name === 'string' && name.length > 0)
+  const deferredPrompt = toolNames && input.resolvePromptForTools
+    ? input.resolvePromptForTools(toolNames)
+    : undefined
   return {
     ...input,
     ...(credentials && {
@@ -292,19 +326,33 @@ export function applyPiPreparedQuery(input: PiAgentQueryOptions): PiAgentQueryOp
       xaiCredentialMode: credentials.xaiCredentialMode,
       xaiApiProtocol: credentials.xaiApiProtocol,
     }),
-    ...(typeof prepared.systemPrompt === 'string'
-      ? { systemPrompt: prepared.systemPrompt }
-      : resources?.systemPrompt !== undefined ? { systemPrompt: resources.systemPrompt } : {}),
+    ...(deferredPrompt !== undefined
+      ? {
+          systemPrompt: deferredPrompt.systemPrompt,
+          ...(deferredPrompt.taskPrompt ? { taskPrompt: deferredPrompt.taskPrompt } : {}),
+        }
+      : typeof prepared.systemPrompt === 'string'
+        ? { systemPrompt: prepared.systemPrompt }
+        : resources?.systemPrompt !== undefined ? { systemPrompt: resources.systemPrompt } : {}),
     ...(prepared.tools && { customTools: prepared.tools as ToolDefinition[] }),
     ...(prepared.collaborationAvailable !== undefined && { metadata: { ...input.metadata, collaborationAvailable: prepared.collaborationAvailable } }),
-    ...(preparedCanUseTool && {
-      canUseTool: (toolName, toolInput, options) => preparedCanUseTool(toolName, toolInput, options),
-    }),
+    // bypassPermissions 语义就是「不打断」：Pi 的工具是本地包装，每次调用都会回调
+    // canUseTool（不像 SDK 会自己跳过），装了它就等于把无人值守入口挂死 ——
+    // automation / 飞书 / 调试通道都没有界面可以点批准。所以这里按模式不装。
+    ...(preparedCanUseTool && input.permissionMode !== 'bypassPermissions'
+      ? { canUseTool: (toolName, toolInput, options) => preparedCanUseTool(toolName, toolInput, options) }
+      : {}),
   }
 }
 interface ActivePiSession {
   session?: AgentSession
   resourceLoader?: ResourceLoader
+  /**
+   * 本次 query 的事件队列。abort() 需要它才能立即结束事件流：
+   * 否则只能等 prompt 链自己 settle，而链上任何一个不可中断的工具调用
+   * 都会把 generator、cleanup 和宿主的终态一起拖住。
+   */
+  queue?: AsyncQueue<SDKMessage>
   ready: Promise<AgentSession>
   resolveReady: (session: AgentSession) => void
   rejectReady: (error: unknown) => void
@@ -932,21 +980,19 @@ export function shouldDeferPiOverflowTerminalMessage(
 export const PI_REAL_USAGE_COMPACTION_RATIO = 0.8
 
 /**
- * 真实占用的软上限（token）。
+ * 返回真实占用触发压缩的 token 阈值。
  *
- * 即使模型声明了 1M 窗口，真实占用超过这个量级后网关侧的 100 秒超时（524）、
- * 上游限流与「把回答写进 reasoning_content」的概率都会明显上升。实测一个 353k
- * 占用的会话，单轮稳定 60–100 秒，并反复超时中断。所以 80% 窗口与这个绝对上限取小值。
+ * 只按窗口比例计算，不设全局绝对上限：1M 窗口模型（DeepSeek V4、Kimi K3、
+ * GPT-5.6/6.x）的真实可用上下文就是 1M，250k 之类的硬顶会把付费买来的长上下文
+ * 直接压掉。网关单轮耗时/524 超时属于渠道能力问题，应在渠道层处理，不能转嫁成
+ * 全局压缩阈值。
  */
-export const PI_SOFT_CONTEXT_COMPACTION_TOKENS = 250_000
-
-/** 返回真实占用触发压缩的 token 阈值。 */
 export function calculatePiRealUsageCompactionThreshold(
   contextWindow: number,
   ratio: number = PI_REAL_USAGE_COMPACTION_RATIO,
 ): number {
   if (!Number.isFinite(contextWindow) || contextWindow <= 0 || ratio <= 0) return 0
-  return Math.min(contextWindow * ratio, PI_SOFT_CONTEXT_COMPACTION_TOKENS)
+  return contextWindow * ratio
 }
 
 /**
@@ -1027,6 +1073,49 @@ export function shouldBlockToolForAskUserQuestion(toolNames: string[], toolName:
   return toolName !== 'AskUserQuestion'
     && toolNames.includes('AskUserQuestion')
     && toolNames.length > 1
+}
+
+/** 从 SessionManager 读到的 entry 的最小结构；只用到 type / id / message。 */
+export interface PiEntryBindingScanEntry {
+  type: string
+  id: string
+  message?: unknown
+}
+
+export interface PiEntryBindingScanResult {
+  /** 本次新增的「Profer assistant uuid → Pi entry id」映射。 */
+  bindings: Record<string, string>
+  /** 本次扫描后的游标（等于已扫描到的 entry 数）。 */
+  cursor: number
+}
+
+/**
+ * 增量扫描 Pi session entries，收集尚未上报过的 assistant 绑定。
+ *
+ * 绑定必须靠消息对象身份反查 uuid（不按文本猜），而未命中的 entry 不能回退游标、
+ * 否则单次扫描就会退化成全量。调用方的约束是：uuid 永远先于对应 entry 登记
+ * （message_end 早于 Pi 把 entry 追加进 SessionManager），因此游标前进是安全的。
+ *
+ * 抽成纯函数是为了能直接盖「游标推进 / 全局只扫一次 / 未知 uuid 跳过」这些边界。
+ */
+export function scanPiEntryBindings(
+  entries: readonly PiEntryBindingScanEntry[],
+  cursor: number,
+  uuidOf: (message: unknown) => string | undefined,
+): PiEntryBindingScanResult {
+  const start = Number.isSafeInteger(cursor) && cursor > 0 ? Math.min(cursor, entries.length) : 0
+  const bindings: Record<string, string> = {}
+  for (let index = start; index < entries.length; index += 1) {
+    const entry = entries[index]
+    if (!entry || entry.type !== 'message' || !entry.id) continue
+    const message = entry.message
+    if (!message || typeof message !== 'object') continue
+    if ((message as { role?: unknown }).role !== 'assistant') continue
+    const uuid = uuidOf(message)
+    if (!uuid) continue
+    bindings[uuid] = entry.id
+  }
+  return { bindings, cursor: entries.length }
 }
 
 function createCompactionNoopMessage(sessionId: string, error: unknown): SDKMessage {
@@ -1956,6 +2045,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     this.activeSessions.set(input.sessionId, active)
     input.onRuntimeRegistered?.()
     const queue = createAsyncQueue<SDKMessage>()
+    active.queue = queue
     const rewindTurnId = input.metadata?.rewindTurnId
     let rewindTurnSettled = false
     const reportRewindTurn = async (event: { phase: 'begin' | 'complete' | 'fail'; turnId: string; terminalEntryId?: string; timestamp: number }): Promise<void> => {
@@ -1969,6 +2059,23 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     let unsubscribe: (() => void) | undefined
     let requestProxyDispatcher: Dispatcher | undefined
     let partialAssistantCoalescer: PartialMessageCoalescer<{ message: AssistantMessage; uuid: string }> | undefined
+    /**
+     * 把本轮新增的 Pi entry 落到正式文件。
+     *
+     * Profer 是唯一写入者（SDK 跑内存态会话），因此「什么时候写」只能由这里决定：
+     * 正常结束、出错、中断、手动压缩之后各写一次，幂等且只追加。
+     *
+     * `forceBindings`：轮末 / 异常收尾必须越过绑定上报节流，否则最后几条要等下一次上报，
+     * 而进程可能已经不在了。
+     */
+    let flushPiSessionFile: ((forceBindings?: boolean) => void) | undefined
+    /**
+     * 把已进入 SDK 内存态 session 的 assistant entry 增量登记到 Profer 侧 uuid → entry id 映射。
+     *
+     * 定义位置在 session 就绪之后（需要 `sessionManager`），而工具级 flush 更早就会调用，
+     * 因此在这里前向声明；调用点一律用可选调用，避免初始化顺序带来的运行时风险。
+     */
+    let persistPiEntryBindings: ((force?: boolean) => void) | undefined
 
     const cleanupActiveSession = (): void => {
       try {
@@ -1979,7 +2086,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         if (!active.disposed) {
           active.disposed = true
           rejectPendingInterruptPrompts(active, createAbortError())
-          active.session?.dispose()
+          try {
+            active.session?.dispose()
+          } catch (error) {
+            // 停止可能在 prompt 仍在飞行时触发；dispose 抛错不能反过来阻断
+            // generator 退出，否则终态又会依赖 provider 的清理结果。
+            console.warn('[Pi adapter] session.dispose() 失败（忽略）:', error)
+          }
         }
         if (this.activeSessions.get(input.sessionId) === active) {
           this.activeSessions.delete(input.sessionId)
@@ -2013,15 +2126,45 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       if (input.resumeSessionId && !sessionFile) {
         throw new Error(`No conversation found with session ID ${input.resumeSessionId}`)
       }
-      const sessionManager = sessionFile
-        ? sdk.SessionManager.open(sessionFile, input.piSessionDir, cwd)
-        : sdk.SessionManager.create(cwd, input.piSessionDir)
+      // Profer 独占写：SDK 只跑内存态会话（`persist=false`，实测不写盘），
+      // 正式文件由 `piSessionFileStore.flush()` 在本轮结束时追加。
+      const piSessionFileStore = openPiSessionFile({
+        sdk: sdk as unknown as Parameters<typeof openPiSessionFile>[0]['sdk'],
+        sessionDir: input.piSessionDir,
+        cwd,
+        ...(sessionFile ? { existingFile: sessionFile } : {}),
+      })
+      const sessionManager = piSessionFileStore.sessionManager
+      flushPiSessionFile = (forceBindings = false): void => {
+        try {
+          // 先登记再写盘：entry 已经进了 SDK 内存态就等于已经产出，若只在轮末登记，
+          // 「链没有正常 resolve」的轮（进程退出 / 被新 run 抢占 / 异常结束）会永久缺绑定，
+          // 而它们的 entry 恰恰已被工具级 flush 写进文件 → 回退锚点静默前移、transcript 被截早。
+          persistPiEntryBindings?.(forceBindings)
+          const written = piSessionFileStore.flush()
+          if (written > 0) {
+            console.log(`[Pi adapter] 已写入 Pi session 文件: +${written} 条 (${piSessionFileStore.file})`)
+          }
+        } catch (error) {
+          // 写盘失败不能把已经流给用户的答案变成执行错误；但必须留下可定位的日志：
+          // 下一轮 resume 会少这一轮上下文，Profer JSONL 仍是完整历史。
+          console.error('[Pi adapter] 写入 Pi session 文件失败:', error)
+        }
+      }
       const { modelRuntime, model } = await buildModel(sdk, input, this.host.modelRegistry)
       const autoCompactionReserveTokens = calculatePiAutoCompactionReserveTokens(
         model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       )
       let compactContextRequested = false
       let automaticCompactionContinuations = 0
+      // 边跑边落盘：SDK 原本每完成一个工具就写一次文件，内存态会话把写盘收口到 flush，
+      // 若只在轮末落盘，进程被杀就会丢掉整轮已完成的工具结果。这里补回工具级时间点。
+      const onToolExecutionResult = input.onToolExecutionResult
+        ? (toolCallId: string, result: Parameters<NonNullable<typeof input.onToolExecutionResult>>[1]): void => {
+            input.onToolExecutionResult?.(toolCallId, result)
+            flushPiSessionFile?.()
+          }
+        : undefined
       const proferTools = compactPiToolDefinitions([
         buildCurrentSessionCompactionTool(
           sdk,
@@ -2034,7 +2177,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           cwd,
           input.canUseTool,
           input.runtimeEnv,
-          input.onToolExecutionResult,
+          onToolExecutionResult,
           input.commands,
           input.backgroundTasks,
           input.processRegistration,
@@ -2226,7 +2369,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         throw createAbortError()
       }
 
-      input.onSessionId?.(session.sessionId, session.sessionFile)
+      // 文件路径由 Profer 自己持有：内存态会话的 `session.sessionFile` 永远是 undefined，
+      // 不能拿它充当元数据（否则 `piSessionFile` 会丢失，删除/回退/健康检查全部找不到 transcript）。
+      input.onSessionId?.(session.sessionId, piSessionFileStore.file)
       input.onModelResolved?.(session.model?.id ?? input.model ?? 'default')
       input.onContextWindow?.(model.contextWindow ?? DEFAULT_CONTEXT_WINDOW)
 
@@ -2260,15 +2405,35 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       // message_end 发生在 Pi 落盘前；保留对象身份，待 prompt 完成后从
       // SessionManager entries 精确取得 Pi entry ID，绝不按文本猜测。
       const finalAssistantUuids = new Map<AssistantMessage, string>()
+      // 增量游标：工具级 flush 每完成一个工具就会调用一次 persistPiEntryBindings，
+      // 全量扫 entries 会退化成 O(n²)，每次回调宿主又会多一次 updateMeta 写盘。
+      // 因此只扫上次之后的新 entry，并且只在真的拿到新绑定时回调。
+      let piEntryBindingCursor = 0
+      /** 上次成功上报的时间戳；节流只在这里更新，没有新绑定时不推，避免无意义地拖后下一次上报。 */
+      let lastPiEntryBindingReportAt = Number.NEGATIVE_INFINITY
 
-      const persistPiEntryBindings = (): void => {
-        const bindings: Record<string, string> = {}
-        for (const entry of sessionManager.getEntries()) {
-          if (entry.type !== 'message' || entry.message.role !== 'assistant') continue
-          const uuid = finalAssistantUuids.get(entry.message as AssistantMessage)
-          if (uuid) bindings[uuid] = entry.id
+      persistPiEntryBindings = (force = false): void => {
+        // 节流先于扫描：未到间隔就直接返回，游标不前进，未上报的绑定下次会重新扫到。
+        const now = piEntryBindingClock()
+        if (!force && now - lastPiEntryBindingReportAt < PI_ENTRY_BINDING_REPORT_INTERVAL_MS) return
+        const scanned = scanPiEntryBindings(
+          sessionManager.getEntries(),
+          piEntryBindingCursor,
+          (message) => finalAssistantUuids.get(message as AssistantMessage),
+        )
+        if (Object.keys(scanned.bindings).length === 0) {
+          piEntryBindingCursor = scanned.cursor
+          return
         }
-        if (Object.keys(bindings).length > 0) input.onPiEntryBindings?.(bindings)
+        try {
+          input.onPiEntryBindings?.(scanned.bindings)
+          piEntryBindingCursor = scanned.cursor
+          lastPiEntryBindingReportAt = now
+        } catch (error) {
+          // 上报失败不能连带阻断 transcript 写盘，也不推游标：下一次 flush 重试。
+          // 重复上报是幂等的（宿主按 uuid 合并），丢绑定则会让回退锚点静默前移。
+          console.warn('[Pi adapter] 上报 Pi entry 绑定失败，下次 flush 重试:', error)
+        }
       }
 
       const assistantUuidFor = (): string => {
@@ -2311,13 +2476,18 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             case 'message_end': {
               partialAssistantCoalescer?.flush()
               if (active.interrupting && isAbortedAssistantMessage(event.message)) {
+                // 被打断的 assistant 仍是真实产出：Pi 会把它写进 transcript，这里也会把
+                // 已展示的 partial 作为 final 推给上层。不登记 uuid 的话，本轮最后这条
+                // assistant 永远没有 entry 绑定，回退只能锚到更早的条目。
+                const abortedUuid = assistantUuidFor()
                 if (lastPartialAssistant) {
                   const converted = convertPiMessage(lastPartialAssistant, session.sessionId, input.model, {
                     final: true,
-                    uuid: assistantUuidFor(),
+                    uuid: abortedUuid,
                   })
                   if (converted?.type === 'assistant') queue.push(converted)
                 }
+                finalAssistantUuids.set(event.message as AssistantMessage, abortedUuid)
                 lastPartialAssistant = undefined
                 activeAssistant = {}
                 break
@@ -2333,6 +2503,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
                 // Native retry 会丢弃该失败 assistant；不应消耗 Profer 的 turn/budget 配额。
                 // 关键：此处不能重置 UUID。retry 后的新 partial/final 必须原地替换此前
                 // 已经展示的 partial，避免用户同时看到断流残片和恢复后的完整回答。
+                // 失败条目同样要登记：绑定是「entry → uuid」反向查找，重试丢弃后它不会产生
+                // 悬空绑定；但若它真被写进 transcript，回退锚点才不至于漏掉这一条。
+                finalAssistantUuids.set(event.message as AssistantMessage, assistantUuid)
                 retryTerminalGate.defer({
                   assistantMessage: event.message as AssistantMessage,
                   sdkMessage: converted,
@@ -2626,7 +2799,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               queue.push(pendingTerminalResult)
               pendingTerminalResult = undefined
             }
-            persistPiEntryBindings()
+            // flush 内部会先强制上报绑定（越过节流），再追写 Pi 文件。
+            flushPiSessionFile?.(true)
             if (typeof rewindTurnId === 'string' && !rewindTurnSettled) {
               const terminalEntryId = sessionManager.getLeafId() ?? undefined
               rewindTurnSettled = true
@@ -2635,6 +2809,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             queue.close()
           })
           .catch(async (error) => {
+            // 中断/失败轮次里已完成的消息与用户消息也已进入 SDK 内存态：与 SDK 边跑边写时
+            // 落盘的内容一致，因此这里同样要落一次（否则下轮 resume 会少掉这轮）。
+            flushPiSessionFile?.(true)
             if (typeof rewindTurnId === 'string' && !rewindTurnSettled) {
               rewindTurnSettled = true
               await reportRewindTurn({ phase: 'fail', turnId: rewindTurnId, timestamp: Date.now() })
@@ -2659,6 +2836,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         yield next.value
       }
     } finally {
+      // 消费方提前退出（上层 result-drain 超时 / 用户停止）时也要落盘：flush 幂等。
+      // 绑定上报在这里强制越过节流：这是本轮最后一次机会，进程可能随后就不在了。
+      flushPiSessionFile?.(true)
       cleanupActiveSession()
     }
   }
@@ -2669,13 +2849,19 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     active.abortRequested = true
     rejectPendingInterruptPrompts(active, createAbortError())
     if (!active.session) rejectActiveReady(active, createAbortError())
+    // 先结束事件流，再让 provider 去收尾。
+    // async generator 的 return() 无法抢占内部未 settle 的 await，所以不能靠
+    // “等 prompt 链结束”来结束本轮：队列一关，generator 立刻从 queue.next() 醒来，
+    // finally 里的 cleanup 才能执行，宿主的终态也不再依赖工具/网络是否响应。
+    // 终态语义仍由宿主的 stopped 判定产生，这里不伪造 result，避免被误判成 completed。
+    active.queue?.close()
     active.session?.abort().catch(err => console.error('[Pi adapter] session.abort() 失败:', err))
   }
 
   /**
    * 软中断当前 turn，但保留活跃 session 以便继续注入下一条用户消息。
    *
-   * 与 abort() 的区别：不杀 session，允许立即续跑新消息。
+   * 与 abort() 的区别：不杀 session，也不关事件流，允许立即续跑新消息。
    * 调用 session.abort() 让 Pi SDK 底层终止当前 prompt 流；prompt chain 会等待它实际 settle。
    */
   async interruptQuery(sessionId: string): Promise<void> {
@@ -2684,11 +2870,25 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     active.abortRequested = true
     rejectPendingInterruptPrompts(active, createAbortError())
     if (!active.session) rejectActiveReady(active, createAbortError())
+    // Pi 的 session.abort() 内部 await waitForIdle()，遇到不响应中止的工具会一直等待。
+    // 这里是“软中断 + 马上再发一条消息”的路径，不能被 provider 的收尾速度拖死：
+    // 超时后再调用方可以继续，真正的清理仍在后台完成。
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      await active.session?.abort()
+      await Promise.race([
+        Promise.resolve(active.session?.abort()),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn(`[Pi adapter] session.abort() 超过 3s 未 settle，转后台完成: sessionId=${sessionId}`)
+            resolve()
+          }, 3_000)
+        }),
+      ])
       console.log(`[Pi adapter] 已软中断当前 turn: sessionId=${sessionId}`)
     } catch (err) {
       console.warn(`[Pi adapter] 软中断 session.abort() 失败:`, err)
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 

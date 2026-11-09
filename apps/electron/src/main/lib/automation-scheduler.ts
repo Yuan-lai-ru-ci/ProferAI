@@ -406,8 +406,8 @@ export async function runAutomation(automation: Automation, manual = false): Pro
         },
         onTitleUpdated: () => { /* 自动任务标题不影响运行终态 */ },
       }
-      // 使用当前功能开关路由 Runtime；ownership 预检与路由开关无关。
-      const useRuntimeAutomation = process.env.PROFER_RUNTIME_AUTOMATION === '1'
+      // 默认走新链；显式 `0` 回旧编排器（发版止损开关）。ownership 预检与路由开关无关。
+      const useRuntimeAutomation = process.env.PROFER_RUNTIME_AUTOMATION !== '0'
       // ownership 预检对 legacy orchestrator 与 Runtime coordinator 共用；两条路径都应把 busy 保留为 queued。
       // 预检与 runAgentHeadless/runAgentRuntimeHeadless 之间没有 await，最终 claim 仍负责互斥。
       const automationBlocked = peekAgentRunClaimFailureForSession(targetSessionId, agentRuntime)

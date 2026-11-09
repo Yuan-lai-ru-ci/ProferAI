@@ -1689,7 +1689,10 @@ export async function handleRemoteCommand(
       // 让 run_completed.startedAt 与前端流状态同源（消除跨机时钟比较），
       // 并让持久化消息可按 uuid 与前端乐观气泡匹配去重。两者均缺省回退现有行为。
       const startedAt = typeof parsed.startedAt === 'number' ? parsed.startedAt : Date.now()
-      const uuid = typeof parsed.uuid === 'string' ? parsed.uuid : undefined
+      // 缺省时由宿主生成：uuid 同时是**消息身份**（乐观气泡按它去重、归属记录按它
+      // 关联 turn）。缺失会让 Pi 的 rewindTurnId 退化成 `turn-<时间戳>`、让 Shadow Git
+      // 的 turn 记录只能退到采集 id，两者都无法和 JSONL 消息对齐。
+      const uuid = typeof parsed.uuid === 'string' && parsed.uuid ? parsed.uuid : randomUUID()
 
       // 弱网重连重放幂等：移动端断线后按原 clientMessageId 重发同一逻辑消息，这里去重，避免重复启动 run。
       if (isSendMessageDuplicate(clientMessageId)) {
@@ -1703,9 +1706,9 @@ export async function handleRemoteCommand(
       // run 失败原因：orchestrator / agent-service 的 onError 一定先于 onComplete 触发，
       // 这里暂存并并入 completion 的 resultErrors，让 Pocket 能看到真实错误文案（而非只有「执行出错」）。
       let runErrorMessage: string | null = null
-      // runtime coordinator opt-in：默认仍保留旧 headless 路径，便于逐步迁移和回退。
+      // runtime coordinator 默认路径：未设置即新链，显式 `0` 回旧 headless（发版止损）。
       // 开关只读一次：既保证「全仓只有本入口读它」的可审计性，也让预检与分支使用同一个值。
-      const useRuntimeRemote = process.env.PROFER_RUNTIME_REMOTE === '1'
+      const useRuntimeRemote = process.env.PROFER_RUNTIME_REMOTE !== '0'
       const headlessInput: AgentSendInput = {
         sessionId, userMessage, channelId, modelId, workspaceId, startedAt,
         initiator: 'user',

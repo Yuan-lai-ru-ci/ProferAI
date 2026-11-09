@@ -31,6 +31,14 @@ export type RuntimeSystemPrompt = string | { type: 'preset'; preset: 'claude_cod
 
 export interface AgentRuntimePreparedContext {
   systemPrompt?: RuntimeSystemPrompt
+  /**
+   * 本轮交给 provider 的最终 prompt（已含动态上下文 / 引用 / 任务 SOP / 历史回填）。
+   *
+   * 为什么在 prepared 阶段而不是 query 构造时定：这些块依赖 `resources`（实际加载的 MCP 名单）
+   * 与「本轮消息是否已落盘」，两者都只在准备阶段才成立。宿主写在这里，`provider-bridge`
+   * 是唯一把它转成 provider 输入的地方。
+   */
+  prompt?: string
   credentials?: RuntimeCredential
   resources?: RuntimeResources
   canUseTool?: RuntimeCanUseTool

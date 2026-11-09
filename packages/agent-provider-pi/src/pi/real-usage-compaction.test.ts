@@ -58,10 +58,13 @@ describe('shouldCompactByRealUsage', () => {
     expect(shouldCompactByRealUsage(messages, WINDOW, 0.6)).toBe(false)
   })
 
-  test('1M 窗口也受软上限约束，超过 250k 就压缩', () => {
+  test('1M 窗口按 80% 触发，不被绝对上限提前压缩', () => {
     const oneMillion = 1_000_000
-    // 260k / 1M = 26%，远低于 80%，但已过软上限。
-    expect(shouldCompactByRealUsage([assistant(200_000, 60_000)], oneMillion)).toBe(true)
-    expect(shouldCompactByRealUsage([assistant(150_000, 90_000)], oneMillion)).toBe(false)
+    // 353,427 是真实事故会话的峰值输入；1M 窗口下只占 35%，不应触发。
+    expect(shouldCompactByRealUsage([assistant(250_000, 103_427)], oneMillion)).toBe(false)
+    expect(shouldCompactByRealUsage([assistant(500_000, 299_999)], oneMillion)).toBe(false)
+    // 到 80% 才压。
+    expect(shouldCompactByRealUsage([assistant(600_000, 200_000)], oneMillion)).toBe(true)
+    expect(shouldCompactByRealUsage([assistant(600_000, 199_999)], oneMillion)).toBe(false)
   })
 })

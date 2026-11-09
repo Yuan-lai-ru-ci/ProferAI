@@ -72,6 +72,16 @@ import {
   withNativeSessionCallbacks,
 } from './agent-runtime-native-session-persistence'
 import { runSessionTitleNaming } from './agent-session-title-naming'
+import { buildRewindNoticePrompt } from './agent-rewind-notice'
+import { beginWorkspaceShadowTurn, endWorkspaceShadowTurn } from './workspace-shadow-turns'
+import { fileWriteChips } from './agent-file-write-chips'
+import {
+  createShadowEvidenceLedger,
+  resolveWriteToolFact,
+  type ShadowEvidenceLedger,
+} from './workspace-shadow-write-evidence'
+import { buildRecoveryPrompt } from './agent-prompt-utils'
+import { isSessionNotFoundError } from './agent-retry-utils'
 
 /**
  * 自动命名窗口在本链的日志标签（与旧链 `[Agent 编排]` 区分，但同一份判据与编排）。
@@ -130,6 +140,16 @@ export interface RuntimeEntryQueryOptions {
   cwd?: string
   toolAssemblyContext: Record<string, unknown>
   policy?: AgentRuntimePolicyResolutionInput
+  /** 原生会话 id（热启动）；缺省不恢复，provider 会新建会话。 */
+  resumeSessionId?: string
+  /** 回退后的 provider 截断点（仅在 resumeSessionId 存在时生效）。 */
+  resumeSessionAt?: string
+  /** 仅本轮的隐藏上下文前缀（回退 notice）。 */
+  promptPrefix?: string
+  /** 完全替换本轮 prompt（resume 失效时的恢复提示）。 */
+  promptOverride?: string
+  /** 本轮 Shadow Git 写入证据账本（Pi 受控写入回调会往里记）。 */
+  shadowLedger?: import('./workspace-shadow-write-evidence').ShadowEvidenceLedger
   /** 原生 session 持久化器；提供时经 providerInput 挂到 provider 回调上。 */
   persister?: ReturnType<typeof createNativeSessionPersister>
   /** 计划模式：提供时创建并注册本轮控制器。 */
@@ -176,14 +196,24 @@ export function createRuntimeEntryQuery(
     ? buildPolicyToolAssemblyContext(snapshot, options.toolAssemblyContext)
     : options.toolAssemblyContext
 
-  const providerInput = options.persister
-    ? withNativeSessionCallbacks(undefined, options.persister)
-    : undefined
+  const providerInput = {
+    ...(options.persister ? withNativeSessionCallbacks(undefined, options.persister) : {}),
+    ...(options.resumeSessionAt ? { resumeSessionAt: options.resumeSessionAt } : {}),
+  }
+  const hasProviderInput = Object.keys(providerInput).length > 0
 
   let query = createElectronAgentRuntimeQuery(input, {
     runtime: options.runtime,
     ...(options.cwd ? { cwd: options.cwd } : {}),
-    ...(providerInput ? { providerInput } : {}),
+    // 本轮权限模式必须带进 query：宿主据此决定 provider 的 permissionMode。
+    // 漏掉这一项时，显式 `bypassPermissions` 会在新链里失效（automation / 飞书 / 调试通道
+    // 都会因此停成「等待批准」，而无人值守入口没有界面可以点）。旧链一直传同一个字段。
+    ...(input.permissionModeOverride ? { permissionModeOverride: input.permissionModeOverride } : {}),
+    ...(hasProviderInput ? { providerInput } : {}),
+    ...(options.resumeSessionId ? { runtimeSessionId: options.resumeSessionId } : {}),
+    ...(options.promptPrefix ? { promptPrefix: options.promptPrefix } : {}),
+    ...(options.promptOverride ? { promptOverride: options.promptOverride } : {}),
+    ...(options.shadowLedger ? { shadowLedger: options.shadowLedger } : {}),
     toolAssemblyContext,
   })
   if (snapshot) query = attachAgentRuntimePolicyToQuery(query, snapshot)
@@ -257,6 +287,35 @@ export interface RuntimeHeadlessEntryDeps {
 }
 
 /**
+ * 从 assistant 消息的 `tool_use` 块里采集 Shadow Git 写入证据。
+ *
+ * 两个 runtime 共用：Claude 只能从 tool_use 取路径；Pi 的受控写入回调在部分渠道不触发，
+ * 但 `Write` / `Edit` 这类工具调用一定会在消息流里出现。回调能触发时，
+ * `ShadowEvidenceLedger` 会按「同一 toolUseId + 同一路径」把同一条证据合并，不会记两次。
+ */
+function collectShadowWriteEvidence(message: SDKMessage, ledger: ShadowEvidenceLedger): void {
+  const content = (message as { message?: { content?: unknown } }).message?.content
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue
+    const record = block as { type?: unknown; id?: unknown; name?: unknown; input?: unknown }
+    if (record.type !== 'tool_use') continue
+    const name = typeof record.name === 'string' ? record.name : ''
+    const toolInput = record.input && typeof record.input === 'object'
+      ? record.input as Record<string, unknown>
+      : {}
+    const fact = resolveWriteToolFact(name, toolInput)
+    if (!fact) continue
+    ledger.push({
+      ...(typeof record.id === 'string' ? { toolUseId: record.id } : {}),
+      ...(name ? { toolName: name } : {}),
+      path: fact.path,
+      source: fact.source,
+    })
+  }
+}
+
+/**
  * 运行一轮 runtime headless。
  *
  * 返回 runtime 的终态 outcome；被并发 / 内核不匹配拒绝时**抛出具名错误**且不投递任何终态。
@@ -270,13 +329,18 @@ export async function runRuntimeHeadlessEntry(
   // GAP-2：检查点必须在 provider 启动之前创建（否则快照到的不是本轮改动前的工作区基线）。
   // 显式 `beginCheckpointTurn` 优先（测试 / 特殊宿主），否则用宿主随运行上下文注入的检查点。
   const checkpointTurn = deps.beginCheckpointTurn?.(input, context) ?? context.checkpointTurn
-  const persister = createNativeSessionPersister({
-    sessions: deps.sessions,
-    sessionId: input.sessionId,
-    ...(checkpointTurn ? { checkpointLifecycle: checkpointTurn } : {}),
-    ...(input.isolatedRuntimeSession !== undefined ? { isolatedRuntimeSession: input.isolatedRuntimeSession } : {}),
-    ...(input.onRuntimeSessionId ? { onRuntimeSessionId: input.onRuntimeSessionId } : {}),
-  })
+  /**
+   * 热启动事实（只读一次）。
+   *
+   * 新链曾经完全不读会话元数据：每轮都是新建 provider session，历史与缓存全部重建。
+   * 这里把旧链的续写语义补齐：非隔离会话一律恢复自己的原生 session，
+   * 回退后的截断点与一次性 notice 也从同一份元数据取。
+   */
+  const entryMeta = deps.sessions.getMeta(input.sessionId)
+  const resumeSessionId = input.isolatedRuntimeSession ? input.runtimeSessionId : entryMeta?.sdkSessionId
+  const rewindResumeAt = input.isolatedRuntimeSession ? undefined : entryMeta?.resumeAtMessageUuid
+  const pendingRewindNotice = input.isolatedRuntimeSession ? undefined : entryMeta?.pendingRewindNotice
+  const noticePrefix = pendingRewindNotice ? buildRewindNoticePrompt(pendingRewindNotice) : undefined
 
   // 会话写入布局（唯一真相源）：
   // - 优先宿主已给出的 `storageDir`（run context / 装配 context，二者同源）；
@@ -296,23 +360,55 @@ export async function runRuntimeHeadlessEntry(
     ...(assemblyWorkspaceSlug ? { workspaceSlug: assemblyWorkspaceSlug } : {}),
   })
 
-  const built = createRuntimeEntryQuery(input, {
-    runtime: context.runtime,
-    ...(context.cwd ? { cwd: context.cwd } : {}),
-    ...(context.policy ? { policy: context.policy } : {}),
-    toolAssemblyContext: context.toolAssemblyContext,
-    persister,
-    planMode: {
-      emit: event => deps.emitPlanModeEvent(input.sessionId, event),
-      ...(context.cwd ? { agentCwd: context.cwd } : {}),
-      // GAP-5：计划模式只读工具面的完整规则（与旧编排层共享同一实现）。
-      // 计划目录真相源：project 下计划文件落 storageDir（不在项目根），managed 下等价于 cwd/.context/plan。
-      planToolPolicy: createPlanModeToolPolicy(context.cwd, sessionWriteLayout?.plansDir),
-      ...(deps.setProviderPermissionMode
-        ? { onPermissionModeChange: (mode: ProferPermissionMode) => deps.setProviderPermissionMode?.(input.sessionId, mode) }
-        : {}),
-    },
+  // Shadow Git 的 turn 边界（与旧链同一份实现）：
+  // 本轮第一次写文件之前把基线采下来，终态后把「树差异 × 写入证据」落成归属记录。
+  // 纯旁路：`beginWorkspaceShadowTurn` 内部已吞掉所有异常，不会阻断本轮。
+  const shadowWorkspaceId = entryMeta?.workspaceId
+  const shadowSessionAttached = entryMeta?.attachedDirectories
+  // 会话级附加目录只对这个会话可见，采集与记录都要用它，
+  // 否则 Agent 写到附加目录里的文件会被当成「工作区外」。
+  const shadowBegin = beginWorkspaceShadowTurn(shadowWorkspaceId, {
+    ...(shadowSessionAttached?.length ? { sessionAttachedDirectories: shadowSessionAttached } : {}),
   })
+  // 本轮 before 边界：轮中任何外部采集都会把 turn-after 的 previousCommitId 推后，
+  // 必须把 begin 采出来的基线显式带到 end。
+  const shadowBaseline = shadowBegin ? await shadowBegin : undefined
+  const shadowLedger = createShadowEvidenceLedger()
+
+  const buildQuery = (params: { resumeSessionId?: string; resumeSessionAt?: string; promptOverride?: string }) => {
+    const persister = createNativeSessionPersister({
+      sessions: deps.sessions,
+      sessionId: input.sessionId,
+      ...(checkpointTurn ? { checkpointLifecycle: checkpointTurn } : {}),
+      ...(input.isolatedRuntimeSession !== undefined ? { isolatedRuntimeSession: input.isolatedRuntimeSession } : {}),
+      ...(input.onRuntimeSessionId ? { onRuntimeSessionId: input.onRuntimeSessionId } : {}),
+    })
+    const built = createRuntimeEntryQuery(input, {
+      runtime: context.runtime,
+      ...(context.cwd ? { cwd: context.cwd } : {}),
+      ...(context.policy ? { policy: context.policy } : {}),
+      ...(params.resumeSessionId ? { resumeSessionId: params.resumeSessionId } : {}),
+      ...(params.resumeSessionAt ? { resumeSessionAt: params.resumeSessionAt } : {}),
+      ...(noticePrefix ? { promptPrefix: noticePrefix } : {}),
+      ...(params.promptOverride ? { promptOverride: params.promptOverride } : {}),
+      shadowLedger,
+      toolAssemblyContext: context.toolAssemblyContext,
+      persister,
+      planMode: {
+        emit: event => deps.emitPlanModeEvent(input.sessionId, event),
+        ...(context.cwd ? { agentCwd: context.cwd } : {}),
+        // GAP-5：计划模式只读工具面的完整规则（与旧编排层共享同一实现）。
+        // 计划目录真相源：project 下计划文件落 storageDir（不在项目根），managed 下等价于 cwd/.context/plan。
+        planToolPolicy: createPlanModeToolPolicy(context.cwd, sessionWriteLayout?.plansDir),
+        ...(deps.setProviderPermissionMode
+          ? { onPermissionModeChange: (mode: ProferPermissionMode) => deps.setProviderPermissionMode?.(input.sessionId, mode) }
+          : {}),
+      },
+    })
+    return built
+  }
+
+  let built = buildQuery({ resumeSessionId, ...(rewindResumeAt ? { resumeSessionAt: rewindResumeAt } : {}) })
 
   let started = false
   let startedAt: number | undefined
@@ -343,6 +439,37 @@ export async function runRuntimeHeadlessEntry(
     },
   })
 
+  /**
+   * 一次性回退状态（resume 截断点 / 回退 notice）只在 provider 真正接上后消费。
+   *
+   * 与旧链同一口径：首条 assistant/user 消息 = resume 已被接受。在发送前就清，
+   * 本轮若在 provider 启动前失败，下一次 resume 会越界到 provider 自己的末尾。
+   */
+  let pendingRewindStateConsumed = !rewindResumeAt && !pendingRewindNotice
+  const consumePendingRewindState = (): void => {
+    if (pendingRewindStateConsumed) return
+    pendingRewindStateConsumed = true
+    try {
+      const current = deps.sessions.getMeta(input.sessionId)
+      if (rewindResumeAt && current?.resumeAtMessageUuid === rewindResumeAt) {
+        deps.sessions.updateMeta(input.sessionId, { resumeAtMessageUuid: undefined })
+      }
+      if (pendingRewindNotice && current?.pendingRewindNotice?.createdAt === pendingRewindNotice.createdAt) {
+        deps.sessions.updateMeta(input.sessionId, { pendingRewindNotice: undefined })
+      }
+    } catch (error) {
+      console.warn('[Agent Runtime] 清理一次性回退状态失败:', error)
+    }
+  }
+
+  /**
+   * 第一次尝试的失败先压住：resume 失效要静默重试一次。
+   * 不是 resume 失效时再把同一条失败原样重放，用户可见语义与原来一致。
+   */
+  let suppressAttemptFailure = true
+  let suppressedError: string | undefined
+  let suppressedPreparation: Parameters<NonNullable<AgentRuntimeCallbacks['onPreparationFailure']>>[0] | undefined
+
   const runtimeCallbacks: AgentRuntimeCallbacks = {
     ...callbacks,
     onRunStarted: async ({ startedAt: runStartedAt }) => {
@@ -355,15 +482,29 @@ export async function runRuntimeHeadlessEntry(
     },
     onMessage: message => {
       projector.observeMessage(message)
-      if ((message as { type?: unknown }).type === 'result') lastResultMessage = message
+      const type = (message as { type?: unknown }).type
+      // 首条实质消息 = provider 已接受本轮请求（含回退后的 resume 分支）。
+      if (type === 'assistant' || type === 'user') consumePendingRewindState()
+      // Shadow Git 写入证据：两个 runtime 都从 tool_use 取路径。
+      // Pi 在部分渠道下用 `Write` 工具执行写入，不走受控写入回调；只靠回调会把真实改动记成 unconfirmed。
+      if (type === 'assistant') collectShadowWriteEvidence(message, shadowLedger)
+      if (type === 'result') lastResultMessage = message
       void callbacks.onMessage?.(message)
     },
     onError: error => {
       // 只记录，不立即投递：终态统一由 projector.settle 决定，避免同一轮两次 onError。
+      if (suppressAttemptFailure) {
+        suppressedError = typeof error === 'string' ? error : String(error)
+        return
+      }
       projector.observeProviderError(error)
       void callbacks.onError?.(error)
     },
     onPreparationFailure: async failure => {
+      if (suppressAttemptFailure) {
+        suppressedPreparation = failure
+        return
+      }
       preparationFailure = failure
       await callbacks.onPreparationFailure?.(failure)
     },
@@ -386,6 +527,47 @@ export async function runRuntimeHeadlessEntry(
       // 请求从未取得执行权（并发 / 内核不匹配）：不是一次运行 —— 不投递任何终态，向上抛具名错误。
       projector.rejectBeforeStart()
       throw error
+    }
+
+    // resume 失效（provider 里那个 session 已经不在了）：清掉原生会话，按截断后的历史重建一次。
+    // 只在本轮尚未真正开始前重试：已产生工具副作用的轮次不能重跑。
+    const failureText = (outcome.status === 'failed' ? outcome.error : undefined) ?? suppressedError
+    if (outcome.status === 'failed' && resumeSessionId && !started && isSessionNotFoundError(failureText ?? '')) {
+      console.warn(`[Agent Runtime] resume 失效，清除原生会话并重建一轮: ${input.sessionId}（${failureText ?? ''}）`)
+      try {
+        deps.sessions.updateMeta(input.sessionId, { sdkSessionId: undefined, resumeAtMessageUuid: undefined })
+      } catch (error) {
+        console.warn('[Agent Runtime] 清除失效 sdkSessionId 失败:', error)
+      }
+      // 重建会重新注册计划模式控制器：先释放旧的，避免遗留一个不归本轮管的控制器。
+      clearAgentRuntimePlanMode(input.sessionId)
+      suppressAttemptFailure = false
+      suppressedError = undefined
+      suppressedPreparation = undefined
+      // 新链没有旧链的自动上下文回填：用与旧链同一份恢复提示，让模型自己去读会话历史文件。
+      const basePrompt = input.automationContext
+        ? `${input.automationContext}\n\n${input.internalPrompt ?? input.userMessage}`
+        : input.internalPrompt ?? input.userMessage
+      built = buildQuery({
+        promptOverride: buildRecoveryPrompt(input.sessionId, basePrompt, { agentCwd: context.cwd ?? '' }),
+      })
+      try {
+        outcome = await deps.run(built.query, runtimeCallbacks).promise
+      } catch (error) {
+        projector.rejectBeforeStart()
+        throw error
+      }
+    } else {
+      // 不重试：把压住的失败原样重放，保持旧语义（含下面的 credentials 特判）。
+      suppressAttemptFailure = false
+      if (suppressedPreparation) {
+        preparationFailure = suppressedPreparation
+        await callbacks.onPreparationFailure?.(suppressedPreparation)
+      }
+      if (suppressedError) {
+        projector.observeProviderError(suppressedError)
+        void callbacks.onError?.(suppressedError)
+      }
     }
 
     // 凭证 / 环境 preflight 失败：保持旧路径的用户可见语义。
@@ -441,8 +623,25 @@ export async function runRuntimeHeadlessEntry(
 
     return outcome
   } finally {
+    // 本轮终态已交付：后台补一次 turn-after，作为下一轮的「之前」状态，
+    // 同时把「树差异 × 写入证据」落成这个 turn 的归属记录。
+    // 没真正开始（并发拒绝 / 内核不匹配）的请求不记 turn：否则会多出一个空 turn，
+    // 回退时把它当成「没改过任何东西的一轮」。
+    if (started) {
+      endWorkspaceShadowTurn(shadowWorkspaceId, {
+        sessionId: input.sessionId,
+        ...(typeof input.uuid === 'string' && input.uuid ? { turnId: input.uuid } : {}),
+        runtime: context.runtime,
+        ...(startedAt !== undefined ? { startedAt } : {}),
+        evidence: shadowLedger.list(),
+        ...(shadowBaseline ? { baseline: shadowBaseline } : {}),
+        ...(shadowSessionAttached?.length ? { sessionAttachedDirectories: shadowSessionAttached } : {}),
+      })
+    }
     clearAgentRuntimePlanMode(input.sessionId)
     agentRuntimePolicyRuns.releaseRun(input.sessionId)
     clearAgentRuntimeRunFacts(input.sessionId)
+    // 本轮已结束：没等到 tool_result 的写入事实不会再有消费方，别留到下一轮。
+    fileWriteChips.dropSession(input.sessionId)
   }
 }

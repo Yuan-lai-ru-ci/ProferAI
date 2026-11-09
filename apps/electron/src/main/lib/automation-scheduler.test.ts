@@ -22,6 +22,8 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
   const updates: Array<{ id: string; patch: Partial<AgentSessionMeta> }> = []
   const inputs: AgentSendInput[] = []
   const runtimeInputs: AgentSendInput[] = []
+  /** 只记旧入口：用来断言「新分支确实没走旧入口」。 */
+  const legacyInputs: AgentSendInput[] = []
   const runs: AutomationRun[] = []
   const lastIds: string[] = []
   const notifications: AutomationRun[] = []
@@ -114,8 +116,10 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
     appendRun: (_id: string, run: AutomationRun) => runs.push(run),
     notifyAutomationRunFinished: async ({ run }: { run: AutomationRun }) => { notifications.push(run) },
     formatScheduleLabel: () => 'fixture',
-    runAgentHeadless: (input: AgentSendInput, callbacks: HeadlessAgentRunCallbacks) => { inputs.push(input); return invokeHeadless(input, callbacks) },
-    runAgentRuntimeHeadless: (input: AgentSendInput, callbacks: HeadlessAgentRunCallbacks) => { runtimeInputs.push(input); return invokeHeadless(input, callbacks) },
+    runAgentHeadless: (input: AgentSendInput, callbacks: HeadlessAgentRunCallbacks) => { inputs.push(input); legacyInputs.push(input); return invokeHeadless(input, callbacks) },
+    // 默认已切新链：两条路由都把 input 记进 inputs（断言「选中了哪个会话」与链无关），
+    // runtimeInputs 只用于「哪条分支被调用」的比较。
+    runAgentRuntimeHeadless: (input: AgentSendInput, callbacks: HeadlessAgentRunCallbacks) => { inputs.push(input); runtimeInputs.push(input); return invokeHeadless(input, callbacks) },
     // runtime 分支的预检依赖：默认返回 undefined（无阻塞）；用例可注入阻塞原因。
     peekAgentRunClaimFailureForSession: () => blocked,
     describeAgentRunRejection: () => 'fixture rejection',
@@ -123,7 +127,7 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
   }
   const run = new Function(...Object.keys(deps), `${transpiler.transformSync(body)}\nreturn runAutomation`)(...Object.values(deps)) as (input: Automation, manual?: boolean) => Promise<void>
   const task = { id: 'task', name: 'task', prompt: 'work', channelId: 'channel', workspaceId: 'workspace', modelId: 'model', lastSessionId: 'old', lastRunAt: Date.now(), nextRunAt: 7, sessionMode: mode, agentRuntime: taskRuntime } as Automation
-  return { run: (input: Automation = task, manual = false) => run(input, manual), task, sessions, original, updates, inputs, runtimeInputs, runs, notifications, lastIds, triggers, broadcasts, updateCalls,
+  return { run: (input: Automation = task, manual = false) => run(input, manual), task, sessions, original, updates, inputs, runtimeInputs, legacyInputs, runs, notifications, lastIds, triggers, broadcasts, updateCalls,
     sharedRuns, setSharedOutcome, setLedgerError: (error?: Error) => { ledgerError = error }, callbacks: () => capturedCallbacks!, resolveRunner: () => resolveRunner(), rejectRunner: (error: Error) => rejectRunner(error), setSessionBusy: deps.setSessionBusy }
 }
 
@@ -385,7 +389,7 @@ describe('Automation shared Run settlement', () => {
         f.resolveRunner()
         await pending
         expect(f.runtimeInputs).toHaveLength(1)
-        expect(f.inputs).toHaveLength(0)
+        expect(f.legacyInputs).toHaveLength(0)
         expect(f.runs[0]).toMatchObject({ status: 'success', runId: 'run:task:7' })
       }
     })
@@ -491,9 +495,9 @@ describe('Automation shared Run settlement', () => {
   })
 })
 
-describe('runtime coordinator automation opt-in', () => {
-  test('Given the default scheduler When running automation Then legacy headless path remains the default and runtime switch is explicit', () => {
-    expect(source).toContain("process.env.PROFER_RUNTIME_AUTOMATION === '1'")
+describe('runtime coordinator automation 默认路由', () => {
+  test('Given the default scheduler When running automation Then the runtime chain is the default and explicit 0 rolls back', () => {
+    expect(source).toContain("process.env.PROFER_RUNTIME_AUTOMATION !== '0'")
     expect(source).toContain('runAgentRuntimeHeadless(')
     expect(source).toContain('runAgentHeadless(headlessInput, callbacks)')
     expect(source).toContain('automationContext:')
@@ -535,7 +539,7 @@ describe('AutomationRun 字段语义：新分支与旧分支不漂移', () => {
     }
     // 新分支确实走的是 runtime 入口（不是旧入口）
     expect(runtime.runtimeInputs).toHaveLength(1)
-    expect(runtime.inputs).toHaveLength(0)
+    expect(runtime.legacyInputs).toHaveLength(0)
     expect(legacy.inputs).toHaveLength(1)
     expect(runtime.runtimeInputs[0]).toMatchObject({
       taskId: 'automation:task',
