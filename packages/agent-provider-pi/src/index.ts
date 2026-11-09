@@ -33,3 +33,5 @@ export type {
   PiFileVersion,
   PiStoredFileVersion,
 } from './pi/rewind-evidence'
+export { findPiSessionFile, rewindPiTranscript } from './pi-transcript-rewind'
+export type { PiTranscriptRewindResult } from './pi-transcript-rewind'

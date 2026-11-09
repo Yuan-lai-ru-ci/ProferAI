@@ -56,3 +56,39 @@ export function groupSessionFileChanges(
     earlier: changes.filter((change) => change.runId !== currentRunId),
   }
 }
+
+function normalizeEvidencePath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
+}
+
+/**
+ * 判断内存里的写入路径与回退返回的相对路径是否指同一个文件。
+ *
+ * 内存记录来自工具的原始入参（可能是绝对路径），回退返回的是相对工作区根的路径，
+ * 所以只能比尾部；但纯文件名不参与匹配——否则 `b.md` 会把任意目录下的同名文件一起抹掉。
+ */
+function refersToSameFile(left: string, right: string): boolean {
+  const a = normalizeEvidencePath(left)
+  const b = normalizeEvidencePath(right)
+  if (!a || !b) return false
+  if (a === b) return true
+  const [longer, shorter] = a.length >= b.length ? [a, b] : [b, a]
+  return shorter.includes('/') && longer.endsWith(`/${shorter}`)
+}
+
+/**
+ * 回退成功后清理内存里的非 Git 变更记录。
+ *
+ * `deleted`（文件被回退删除）与 `restored`（文件恢复到回退前内容）都不再是「本次改动」；
+ * `conflicts` 保留——文件确实被改过，只是没能自动对齐。
+ */
+export function dropRewoundSessionFileChanges(
+  changes: readonly SessionFileChange[],
+  files: { readonly deleted?: readonly string[]; readonly restored?: readonly string[] } | undefined,
+): SessionFileChange[] {
+  const rewound = [...(files?.deleted ?? []), ...(files?.restored ?? [])]
+  if (rewound.length === 0) return [...changes]
+  return changes.filter(
+    (change) => !rewound.some((path) => refersToSameFile(change.path, path)),
+  )
+}

@@ -45,6 +45,7 @@ interface FakePorts {
   files: FakeFilePort
   recovery: FakeRecoveryPort
   lock: FakeLockPort
+  afterExecute(result: RewindResult): void | Promise<void>
   calls: string[]
   setFailure(point: string | undefined): void
   mutateFile(path: string, value: string, revision?: string): void
@@ -120,6 +121,10 @@ function fakePorts(): FakePorts {
     },
     lock: {
       async withSessionLock(_sessionId, operation) { calls.push('lock:acquire'); return operation() },
+    },
+    async afterExecute(result) {
+      calls.push(`after-execute:${result.status}`)
+      if (failurePoint === 'after-execute') throw new Error('injected afterExecute failure')
     },
   }
 }
@@ -289,5 +294,29 @@ describe('D4 agent rewind service failure and port harness', () => {
     const before = await service.prepare({ sessionId: 'session-1', mode: 'both', target: { kind: 'before-turn', turnId: 'T2' } })
     expect(after.plan.conversation).toEqual(before.plan.conversation)
     expect(after.plan.files).toEqual(before.plan.files)
+  })
+
+  test('afterExecute runs after the commit journal and cannot turn a committed rewind into a failure', async () => {
+    const ports = fakePorts()
+    ports.setFailure('after-execute')
+    const service = await createService(ports)
+    const { plan } = await service.prepare({ sessionId: 'session-1', mode: 'both', target })
+
+    const result = await service.execute({ sessionId: 'session-1', planId: plan.planId, expectedRevision: plan.revision })
+
+    expect(result.status).toBe('committed')
+    expect(ports.calls.indexOf('after-execute:committed')).toBeGreaterThan(ports.calls.indexOf('journal:committed'))
+  })
+
+  test('afterExecute also runs for recovery-required so caches never point at a half-reverted history', async () => {
+    const ports = fakePorts()
+    ports.setFailure('file:write:2')
+    const service = await createService(ports)
+    const { plan } = await service.prepare({ sessionId: 'session-1', mode: 'both', target })
+
+    const result = await service.execute({ sessionId: 'session-1', planId: plan.planId, expectedRevision: plan.revision })
+
+    expect(result.status).toBe('recovery-required')
+    expect(ports.calls).toContain('after-execute:recovery-required')
   })
 })

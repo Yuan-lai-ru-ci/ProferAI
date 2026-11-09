@@ -19,6 +19,12 @@ import { injectGoalProposalMcpServer } from './goal-proposal-tools'
  */
 
 import { randomUUID } from 'node:crypto'
+import { beginWorkspaceShadowTurn, endWorkspaceShadowTurn, type WorkspaceShadowTurnBaseline } from './workspace-shadow-turns'
+import {
+  createShadowEvidenceLedger,
+  resolveWriteToolFact,
+  type ShadowWriteFact,
+} from './workspace-shadow-write-evidence'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createRewindStore } from '@profer/session-store'
@@ -42,7 +48,7 @@ import type {
   AgentThinkingLevel,
   ErrorCode,
 } from '@profer/shared'
-import { normalizeAgentRuntime, AgentSessionRuntimeMismatchError } from '@profer/shared'
+import { normalizeAgentRuntime, AgentSessionRuntimeMismatchError, resolveAgentRuntimeChannelConflict } from '@profer/shared'
 import {
   SAFE_TOOLS,
   THINKING_SIGNATURE_ERROR_CODE,
@@ -55,7 +61,6 @@ import {
   createEffectiveAgentPresetPolicy,
   withLoadedMcpServerNames,
   isEffectiveAgentPresetMcpServerAllowed,
-  isChannelEnabledForRuntime,
 } from '@profer/shared'
 import type { PermissionRequest, ProferPermissionMode, AskUserRequest, ExitPlanModeRequest, EffectiveAgentPresetPolicy } from '@profer/shared'
 import { buildPiRuntimeCredentialOptions, resolveRuntimeCredentials } from './agent-runtime-credentials'
@@ -155,6 +160,7 @@ import {
 import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getPiTranscriptDirForSession, agentSessionVisualizationsDir, getPiCheckpointsDir, getSdkConfigDir, getAgentSessionCwd } from './config-paths'
 import { createElectronSessionStorePaths } from './session-store-host'
 import { loadPiRewindTracker, persistPiRewindTracker } from './agent-rewind-pi'
+import { buildRewindNoticePrompt } from './agent-rewind-notice'
 import { prepareRuntimeSkills } from './global-skill-manager'
 import { buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
@@ -415,6 +421,15 @@ export function requireAgentRunWorkspace(input: {
  */
 export { buildClaudeInlineSdkSettings } from './agent-claude-inline-sdk-settings'
 
+// ===== Shadow Git turn 归属（Phase 2） =====
+
+/**
+ * 本 turn 的写入证据账本。
+ *
+ * 采集规则（哪些工具算写入、同一路径如何合并）只有一份实现，见
+ * `workspace-shadow-write-evidence.ts`：旧编排器与新 runtime 链必须给出同一份证据，
+ * 否则同一个写入在两条链里会被判成不同来源，回退合并方向会反过来。
+ */
 // ===== AgentOrchestrator =====
 
 export class AgentOrchestrator {
@@ -1069,8 +1084,9 @@ export class AgentOrchestrator {
     accumulatedMessages.length = 0
     // 清除失效的 SDK session，新 SDK 会话产生的 sdkSessionId 会通过 onSessionId 回调自动保存
     // 此操作必须成功，否则下次打开会话仍会尝试 resume 已失效的 session，陷入无限恢复循环
+    // 回退边界一起清：已改成「按截断后的 Profer 历史回填」，旧的 provider 截断点不再有对应会话。
     try {
-      this.sessionPort.updateMeta(sessionId, { sdkSessionId: undefined })
+      this.sessionPort.updateMeta(sessionId, { sdkSessionId: undefined, resumeAtMessageUuid: undefined })
     } catch (clearErr) {
       console.error(`[Agent 编排] ⚠️ 清除失效 sdkSessionId 失败！下次打开此会话可能仍触发 session-not-found 恢复:`, clearErr)
       // 写诊断文件供后续排查
@@ -1280,6 +1296,26 @@ export class AgentOrchestrator {
     // 受控写入事实：toolCallId → 本轮确定写过的路径。
     // 渲染层只信这份账本，不再从 Bash 命令文本推断路径。
     const fileWritesByToolUse = new Map<string, Array<{ path: string; source: string }>>()
+    // Shadow Git 归属证据（Phase 2）：本 turn 内「runtime 声明自己写过什么」的顺序账本。
+    // 这里只记证据，不做判断：文件到底变没变由 Shadow Git 的树差异决定，两边交叉才是归属。
+    // 为什么按 runtime 分流：Pi 由 adapter 精确上报（含 Bash 提升的写入），Claude 只能从
+    // tool_use 的入参里取路径。两边都采会把同一个写入记两次，让「证据命中」统计失真。
+    const shadowLedger = createShadowEvidenceLedger()
+    const pushShadowEvidence = (fact: Omit<ShadowWriteFact, 'seq'>): void => shadowLedger.push(fact)
+    // Shadow Git 的 turn 边界（Phase 1）：首个 turn 建立基线，之后靠上一轮 turn-after 兜底。
+    // 纯旁路，内部已吞掉所有异常，不会影响本轮执行。
+    const shadowWorkspaceId = runWorkspace?.id
+    // 会话级附加目录只对这个会话可见，工作区配置里没有；采集与记录都要用它，
+    // 否则 Agent 写到附加目录里的文件会被当成「工作区外」。
+    const shadowSessionAttached = this.sessionPort.getMeta(sessionId)?.attachedDirectories
+    // 常见路径返回 undefined（不引入微任务），只有首个基线或上一轮采集未落盘时才等待。
+    const shadowBeginPending = beginWorkspaceShadowTurn(shadowWorkspaceId, {
+      ...(shadowSessionAttached?.length ? { sessionAttachedDirectories: shadowSessionAttached } : {}),
+    })
+    // 本轮 before 边界：轮中任何外部采集都会把 turn-after 的 previousCommitId 推后，
+    // 所以必须把 begin 采出来的基线显式带到 end。
+    let shadowBaseline: WorkspaceShadowTurnBaseline | undefined
+    if (shadowBeginPending) shadowBaseline = await shadowBeginPending
 
     try {
       if (this.runLedger) {
@@ -1411,11 +1447,19 @@ export class AgentOrchestrator {
       return
     }
 
-    if (!isChannelEnabledForRuntime(channel, agentRuntime)) {
+    // 跨内核的唯一拦截点（旧链）：渠道没有为「本会话固定的内核」开启时，这条消息根本不能发。
+    // 判据与文案都来自 `@profer/shared`，新链（`createElectronAgentRuntimeQuery`）用同一份，
+    // 避免出现「选择器里能选、发送时才失败」或两条链文案不同。
+    const runtimeChannelConflict = resolveAgentRuntimeChannelConflict({
+      sessionRuntime: agentRuntime,
+      channelId,
+      channel,
+    })
+    if (runtimeChannelConflict) {
       reportPreflightError({
         code: 'invalid_request',
-        title: '渠道未启用当前 Agent 内核',
-        message: '请在渠道设置中启用当前内核，或重新选择可用渠道。',
+        title: '该模型不能用于当前会话',
+        message: runtimeChannelConflict,
         actions: [{ key: 's', label: '打开渠道设置', action: 'open_channel_settings' }],
         canRetry: false,
       })
@@ -1546,11 +1590,14 @@ export class AgentOrchestrator {
     let existingSdkSessionId = input.isolatedRuntimeSession ? input.runtimeSessionId : sessionMeta?.sdkSessionId
 
     // 4.1 检测回退后的 resume 截断点（快照回退功能）
+    //
+    // 这里只读取，不消费：真正的“已接上”证据是 provider 吐出第一条消息。
+    // 若在发送前就清掉，本轮若在 provider 真正 resume 之前失败（凭证/二进制/分支错误），
+    // 下一次发送会丢掉这个边界，直接 resume 到 provider 自己的末尾 —— 已截断的历史会静默回来。
     let rewindResumeAt: string | undefined
+    const pendingRewindNotice = sessionMeta?.pendingRewindNotice
     if (sessionMeta?.resumeAtMessageUuid) {
       rewindResumeAt = sessionMeta.resumeAtMessageUuid
-      // 消费一次后清除
-      this.sessionPort.updateMeta(sessionId, { resumeAtMessageUuid: undefined })
       console.log(`[Agent 编排] 检测到回退 resume: resumeSessionAt=${rewindResumeAt}`)
     }
 
@@ -1985,6 +2032,12 @@ export class AgentOrchestrator {
 
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅引用当前预设实际可用的能力。
       let enrichedMessage = runFacts ? appendRunOriginPrompt(runtimeUserMessage, runFacts.context) : runtimeUserMessage
+      // 11.45 回退后的一次性不可见上下文：告诉模型「哪些文件因用户改动被保留」。
+      // 只拼进本轮 runtime prompt，不写入 Profer 对话；清理由首条 runtime 消息触发。
+      if (promptMode === 'standard' && pendingRewindNotice) {
+        enrichedMessage = `${buildRewindNoticePrompt(pendingRewindNotice)}\n\n${enrichedMessage}`
+        console.log(`[Agent 编排] 注入回退上下文: 保留文件 ${pendingRewindNotice.keptCount} 个，撤销 ${pendingRewindNotice.restoredCount + pendingRewindNotice.deletedCount} 个`)
+      }
       const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
       if (referencedSessionsBlock) {
         enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
@@ -2483,6 +2536,16 @@ export class AgentOrchestrator {
               evidence.beforeContent ? store.putVersion({ kind: 'file', content: evidence.beforeContent }) : Promise.resolve(evidence.before?.kind === 'absent' ? { kind: 'absent' as const } : undefined),
               evidence.afterContent ? store.putVersion({ kind: 'file', content: evidence.afterContent }) : Promise.resolve(evidence.after?.kind === 'absent' ? { kind: 'absent' as const } : undefined),
             ])
+            // Shadow Git 归属证据：受控写入回调带来的是**绝对路径 + 内容引用**，
+            // 比 tool_use 的入参更可信，因此用它把同一条证据补全（而不是新增一条）。
+            // 内容引用只记 id，不复制内容：同一份文件在两个对象库各存一份没有意义。
+            pushShadowEvidence({
+              toolUseId: evidence.toolCallId,
+              path: evidence.path,
+              source: evidence.source === 'edit' ? 'edit' : evidence.source === 'bash' ? 'bash' : 'write',
+              ...(beforeBackup?.kind === 'file' && beforeBackup.contentRef ? { beforeRef: beforeBackup.contentRef } : {}),
+              ...(afterBackup?.kind === 'file' && afterBackup.contentRef ? { afterRef: afterBackup.contentRef } : {}),
+            })
             const tracker = await loadPiRewindTracker(join(createElectronSessionStorePaths().rewindDir, sessionId, 'pi-tracker.json'), sessionId)
             tracker.recordMutation(input.uuid ?? `turn-${Date.now()}`, {
               ...evidence,
@@ -2503,6 +2566,11 @@ export class AgentOrchestrator {
               existing.push(fact)
               fileWritesByToolUse.set(toolCallId, existing)
             }
+            pushShadowEvidence({
+              toolUseId: toolCallId,
+              path: fact.path,
+              source: fact.source === 'bash' ? 'bash' : fact.source === 'edit' ? 'edit' : 'write',
+            })
           },
           onHarnessLifecycle: (event: import('./adapters/pi-harness-lifecycle').PiHarnessLifecycleEvent) => {
             piHarnessScope?.observeLifecycle(event)
@@ -2906,6 +2974,25 @@ export class AgentOrchestrator {
             return persistedRecentTaskId
           }
 
+          // 一次性回退状态（resume 边界 / 不可见上下文）只在 provider 真正接上后消费。
+          // 使用类闭包而不是模块级状态：每个 run 自己持有一份，避免并发会话互相清除。
+          let pendingRewindStateConsumed = !rewindResumeAt && !pendingRewindNotice
+          const consumePendingRewindState = (): void => {
+            if (pendingRewindStateConsumed) return
+            pendingRewindStateConsumed = true
+            try {
+              const current = this.sessionPort.getMeta(sessionId)
+              if (rewindResumeAt && current?.resumeAtMessageUuid === rewindResumeAt) {
+                this.sessionPort.updateMeta(sessionId, { resumeAtMessageUuid: undefined })
+              }
+              if (pendingRewindNotice && current?.pendingRewindNotice?.createdAt === pendingRewindNotice.createdAt) {
+                this.sessionPort.updateMeta(sessionId, { pendingRewindNotice: undefined })
+              }
+            } catch (error) {
+              console.warn('[Agent 编排] 清理一次性回退状态失败:', error)
+            }
+          }
+
           while (true) {
             const nextResult = await readAgentStreamNext(queryIterator, {
               shouldStop: () => this.stoppedBySessions.has(sessionId),
@@ -2921,6 +3008,10 @@ export class AgentOrchestrator {
             }
 
             const msg = this.stampMessage(sessionId, nextResult.value, undefined, runFacts)
+            // 首条实质 runtime 消息 = provider 已接受本轮请求（含回退后的 resume 分支）。
+            // 只看 system 初始化消息不够：那只能证明进程起来了，不证明 resume 点被接受。
+            // 这一刻才能丢掉一次性状态；在发送前扔掉会让失败 run 后的下一次 resume 越界。
+            if (msg.type === 'assistant' || msg.type === 'user') consumePendingRewindState()
             if (msg.type === 'result' && configuredModelId) {
               const resultRecord = msg as Record<string, unknown>
               if (!resultRecord._channelModelId) resultRecord._channelModelId = configuredModelId
@@ -2962,11 +3053,23 @@ export class AgentOrchestrator {
               if (!assistantMsg.isReplay) {
                 for (const block of assistantMsg.message.content) {
                   if (block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+                    const toolInput = typeof block.input === 'object' && block.input !== null ? (block.input as Record<string, unknown>) : {}
                     taskToolUses.set(block.id, {
                       toolUseId: block.id,
                       toolName: block.name,
-                      input: typeof block.input === 'object' && block.input !== null ? (block.input as Record<string, unknown>) : {},
+                      input: toolInput,
                     })
+                    // 两个 runtime 都从这里取证据：Pi 在部分渠道下用 `Write` 工具执行写入，
+                    // 不走受控写入回调；只信回调会让真实改动落成 unconfirmed。
+                    const writeFact = resolveWriteToolFact(block.name, toolInput)
+                    if (writeFact) {
+                      pushShadowEvidence({
+                        toolUseId: block.id,
+                        toolName: block.name,
+                        path: writeFact.path,
+                        source: writeFact.source,
+                      })
+                    }
                   }
                 }
               }
@@ -3510,7 +3613,13 @@ export class AgentOrchestrator {
           retrySucceeded = true
 
           // 15. 持久化 assistant 消息
-          this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+          // 持久化失败不能阻断终态：本轮已经结束，UI 必须收到 STREAM_COMPLETE。
+          // 这里一旦裸抛，停止标记已被 consumeStoppedByUser 消费，finally 会误判成 failed。
+          try {
+            this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
+          } catch (error) {
+            console.error('[Agent 编排] 持久化消息失败（已继续交付终态）:', error)
+          }
 
           if (!wasStoppedByUser && !capturedResultErrors?.length) {
             // 自动命名是增强能力，不能占用终态路径：标题模型偶发慢请求/重试时，
@@ -3837,6 +3946,9 @@ export class AgentOrchestrator {
           } else if (recorded.status === 'failed') {
             runEndedWithError = true
             failureReason = recorded.failureReason
+            // 失败也必须交付终态：否则 stream 已结束、UI 却永远停在运行中。
+            // 停止标记可能已被 consumeStoppedByUser 消费，不能靠它兜底。
+            pendingTerminalCompletion ??= { messages: [], opts: { startedAt: streamStartedAt } }
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
@@ -3955,6 +4067,17 @@ export class AgentOrchestrator {
         // active ownership）→ 子会话完成触发的 scheduleParentAutoContinuation 因 parent_active
         // 被跳过；此事件在压缩 run 结束后发出，协作层据此重新检查并续跑父会话，避免结果丢失。
         if (this.activeRunFacts.get(sessionId) === runFacts) this.activeRunFacts.delete(sessionId)
+        // 本轮终态已交付：后台补一次 turn-after，作为下一轮的「之前」状态，
+        // 同时把「树差异 × 写入证据」落成这个 turn 的归属记录。
+        endWorkspaceShadowTurn(shadowWorkspaceId, {
+          sessionId,
+          ...(typeof input.uuid === 'string' && input.uuid ? { turnId: input.uuid } : {}),
+          runtime: agentRuntime,
+          startedAt: streamStartedAt,
+          evidence: shadowLedger.list(),
+          ...(shadowBaseline ? { baseline: shadowBaseline } : {}),
+          ...(shadowSessionAttached?.length ? { sessionAttachedDirectories: shadowSessionAttached } : {}),
+        })
         this.eventPort.emit(sessionId, {
           kind: 'profer_event',
           event: { type: 'run_idle', sessionId },

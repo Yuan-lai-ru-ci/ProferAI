@@ -5,6 +5,7 @@
  */
 
 import type { AgentRuntime } from './agent-provider'
+import type { AgentRewindNotice } from './agent-rewind'
 import type { ActorRef, MessageProvenance, TaskAuthorization, TaskOrigin } from '@profer/agent-fabric'
 export type { ActorRef, MessageProvenance, ResourceRef, TaskAuthorization, TaskOrigin } from '@profer/agent-fabric'
 
@@ -1031,8 +1032,15 @@ export interface AgentSessionMeta {
   titleLockedAt?: number
   /** 分叉来源：源会话的 SDK session ID（用于 rewind 时读取源会话的 file-history-snapshot 和备份文件） */
   forkSourceSdkSessionId?: string
-  /** 回退后的 resume 截断点：下次发消息时传给 SDK resumeSessionAt（消费后清除） */
+  /** 回退后的 resume 截断点：下次发消息时传给 SDK resumeSessionAt（provider 真正接上后才清除） */
   resumeAtMessageUuid?: string
+  /**
+   * 回退后留给下一轮的一次性不可见上下文（文件被保留/撤销的事实）。
+   *
+   * 由回退事务成功后写入，下一轮真正开始运行时注入 prompt 并清除；不写入对话消息、不进 UI。
+   * 只影响模型对「当前工作区到底是什么状态」的假设，不参与任何回退判定。
+   */
+  pendingRewindNotice?: AgentRewindNotice
   /** 历史兼容字段：旧版手动保留状态 */
   manualWorking?: boolean
   /** Agent 执行完成但用户尚未清除完成状态 */

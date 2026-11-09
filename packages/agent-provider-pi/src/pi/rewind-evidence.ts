@@ -110,8 +110,11 @@ export async function runWithPiFileMutationEvidence(input: CapturePiFileMutation
     toolCallId: input.toolCallId,
     ...(before.version ? { before: before.version } : {}),
     ...(after.version ? { after: after.version } : {}),
-    ...(before.version?.kind === 'absent' ? { beforeContent: new Uint8Array() } : before.content ? { beforeContent: before.content } : {}),
-    ...(after.version?.kind === 'absent' ? { afterContent: new Uint8Array() } : after.content ? { afterContent: after.content } : {}),
+    // absent 不能靠「空 Uint8Array」表达：宿主按真值判断内容是否存在，空数组也是真值，
+    // 会被写成一个「存在但内容为空」的 before 版本，进而把新建文件误判成 preexisting，
+    // 回退时拒绝删除。absent 只用 `before/after.kind` 表达。
+    ...(before.version?.kind === 'file' && before.content ? { beforeContent: before.content } : {}),
+    ...(after.version?.kind === 'file' && after.content ? { afterContent: after.content } : {}),
     evidence: 'controlled-write',
     status: complete ? 'complete' : 'unsupported',
     ...(!complete ? { reason: reason ?? '受控写入前后版本不完整' } : {}),

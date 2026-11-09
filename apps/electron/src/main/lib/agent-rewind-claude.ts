@@ -102,6 +102,24 @@ function hasUntrackedWriter(entries: ClaudeSdkTranscriptEntry[]): boolean {
   return toolNames(entries).some(name => name === 'Bash' || name === 'PowerShell' || name.startsWith('mcp__'))
 }
 
+/**
+ * 回退边界 = 最后保留的那一轮在 `turns` 里的下标（-1 表示回到会话开始）。
+ *
+ * 导出给宿主复用：对话截断和文件回退必须用同一个边界，否则会出现
+ * 「对话退到 T2、文件退到 T1」这种只有内部才知道的错位。
+ * Pi 会话也走同一个换算（turns 的形状与 runtime 无关）。
+ */
+export function rewindBoundaryIndex(turns: ClaudeRewindTurn[], target: RewindTarget): number | undefined {
+  if (target.kind === 'session-start') return -1
+  if (target.kind === 'message') {
+    const index = turns.findIndex(turn => turn.assistantMessageUuid === target.messageUuid)
+    return index < 0 ? undefined : index
+  }
+  const index = turns.findIndex(turn => turn.turnId === target.turnId)
+  if (index < 0) return undefined
+  return target.kind === 'after-turn' ? index : index - 1
+}
+
 function targetTurnIndex(input: ClaudeRewindResolveInput): number {
   const target = input.target
   if (target.kind === 'session-start') return -1

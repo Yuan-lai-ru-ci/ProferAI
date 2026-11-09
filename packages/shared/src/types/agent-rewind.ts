@@ -76,6 +76,13 @@ export interface RewindPlan {
   capability: RewindCapabilityReport
   conversation?: RewindConversationPlan
   files?: RewindFilePlanItem[]
+  /**
+   * 文件回退由工作区历史（Shadow Git）承担时要撤销的 turn，按时间正序。
+   *
+   * 不写进 `files[].targetRevision`：工作区历史不需要「目标版本的整份内容」，
+   * 它在执行时按 before/after/current 三方合并现算，因此计划里也不该假装有目标内容。
+   */
+  shadowTurns?: string[]
 }
 
 export interface PrepareRewindPlanInput {
@@ -112,6 +119,26 @@ export interface RewindResult {
   mode: RewindMode
   conversation?: { remainingMessages: number; turnId?: string }
   files?: { restored: string[]; deleted: string[]; conflicts: string[] }
+}
+
+/**
+ * 回退成功后留给下一轮的一次性不可见上下文。
+ *
+ * 只保存「模型需要知道什么」，不保存文件内容或对象引用：真正的落盘结果已经在工作区里，
+ * 模型应以磁盘当前内容为准。消费一次即清除（见 AgentSessionMeta.pendingRewindNotice）。
+ */
+export interface AgentRewindNotice {
+  /** 产生时间（毫秒）。用于识别「这条 notice 属于哪次回退」，不参与判定。 */
+  createdAt: number
+  mode: RewindMode
+  /** 已撤销（恢复）的文件数。 */
+  restoredCount: number
+  /** 已删除的文件数（Agent 新建后被撤销）。 */
+  deletedCount: number
+  /** 未能安全撤销、保持原样的文件路径（工作区相对路径，已去重排序）。 */
+  keptPaths: string[]
+  /** keptPaths 被截断前的真实总数。 */
+  keptCount: number
 }
 
 export type RewindErrorCode =

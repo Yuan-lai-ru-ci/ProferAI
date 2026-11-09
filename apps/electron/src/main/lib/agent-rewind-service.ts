@@ -41,6 +41,13 @@ type ResolverFile = {
 export interface RewindResolverResult {
   conversation?: ConversationState
   files?: ResolverFile[]
+  /**
+   * 文件回退交给工作区历史（Shadow Git）时要撤销的 turn。
+   *
+   * 与 `files` 同时给出：`files` 只用于计划/反馈展示动作，
+   * 真正写盘由 `ports.shadow.apply` 按三方合并现算，不需要目标版本内容。
+   */
+  shadow?: { turns: string[] }
   /** D2 adapters may expose provider-native naming; D4 normalizes it here. */
   fileCandidates?: ResolverFile[]
   supported?: boolean
@@ -77,7 +84,29 @@ export interface RewindServicePorts {
     updateRecovery?(input: { sessionId: string; recoveryId: string; patch: { status?: RewindResult['status']; result?: RewindResult; undone?: RewindResult } }): Promise<void>
     bindOwner?(input: { sessionId: string; recoveryId: string; callerKey: string }): Promise<void>
   }
+  /**
+   * 工作区历史执行器。缺省表示宿主没接 Shadow Git：带 `shadowTurns` 的计划会被拒绝执行，
+   * 而不是退化成「只截断对话、文件没动」。
+   */
+  shadow?: {
+    apply(input: { sessionId: string; turns: string[] }): Promise<{
+      ok: boolean
+      restoredPaths: string[]
+      deletedPaths: string[]
+      /** 因重合或用户已改而保持原样：不阻塞回退，只用来给一句轻提示。 */
+      keptPaths: string[]
+      error?: string
+    }>
+  }
   lock: { withSessionLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> }
+  /**
+   * 执行结束后的宿主侧收尾（无论 committed 还是 recovery-required）。
+   *
+   * 回退改变了历史边界/工作区状态，派生缓存必须失效；具体做什么由宿主决定
+   * （缓存重建、下一轮不可见上下文）。这里只保证「写盘之后、把结果交回去之前」调用，
+   * 且收尾失败不能把一个已经完成的回退改判成失败。
+   */
+  afterExecute?: (result: RewindResult) => void | Promise<void>
   recoveryOwners?: Map<string, { sessionId: string; callerId: string }>
   runtime?: AgentRuntime
   submitAfterRewind?(input: SubmitAfterRewindInput & { recoveryId?: string }): Promise<SubmitAfterRewindResult>
@@ -115,6 +144,19 @@ function codeOf(error: unknown): RewindErrorCode | undefined {
 function throwMapped(error: unknown, fallback: RewindErrorCode, message: string): never {
   if (error instanceof RewindServiceError) throw error
   throw new RewindServiceError(codeOf(error) ?? fallback, error instanceof Error ? error.message : message)
+}
+
+/** 提交后的宿主侧收尾：任何异常都只记日志，不能覆盖已经写盘的回退结论。 */
+async function notifyAfterExecute(
+  hook: RewindServicePorts['afterExecute'],
+  result: RewindResult,
+): Promise<void> {
+  if (!hook) return
+  try {
+    await hook(result)
+  } catch (error) {
+    console.warn('[Agent 回退] 提交后收尾失败（不影响回退结论）:', error)
+  }
 }
 
 function sameRevision(a: RewindRevision, b: RewindRevision): boolean {
@@ -161,6 +203,15 @@ function makeCapability(runtime: AgentRuntime, mode: RewindMode, reason?: string
     supportsSubmission: true,
     ...(reason ? { reasons: { [mode]: reason } } : {}),
   }
+}
+
+/**
+ * 工作区回退（Shadow Git）当前不支持「撤销回退」和「按文件剔除」：
+ * 前者需要把撤回的内容再放回去，后者需要按文件重算三方合并——都还没实现。
+ * 与其给出会骗人的按钮，不如在能力上报里直接说没有。
+ */
+function shadowCapability<T extends { supportsUndo: boolean; supportsRefine: boolean }>(capability: T, usesShadow: boolean): T {
+  return usesShadow ? { ...capability, supportsUndo: false, supportsRefine: false } : capability
 }
 
 function makeItem(item: ResolverFile, index: number): RewindFilePlanItem {
@@ -224,6 +275,12 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
       await ports.recovery.updateRecovery({ sessionId: record.sessionId, recoveryId: record.recoveryId, patch })
     }
   }
+  async function planUsesShadow(sessionId: string, planId: string): Promise<boolean> {
+    const cached = plans.get(planId)?.plan
+    const plan = cached ?? (await ports.recovery.readPlan?.(sessionId, planId))?.plan
+    return (plan?.shadowTurns?.length ?? 0) > 0
+  }
+
   async function prepare(input: PrepareRewindPlanInput): Promise<PrepareRewindPlanResult> {
     const session = await readSession(input.sessionId)
     assertRevision(input.expectedRevision, session.revision, { sessionId: input.sessionId })
@@ -284,7 +341,10 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
       createdAt: Date.now(),
       revision: session.revision,
       ...(turnIdOf(input.target) ? { turnId: turnIdOf(input.target) } : {}),
-      capability: resolved.capability ? { ...makeCapability(resolvedRuntime, input.mode), ...resolved.capability } : makeCapability(resolvedRuntime, input.mode),
+      capability: shadowCapability(
+        resolved.capability ? { ...makeCapability(resolvedRuntime, input.mode), ...resolved.capability } : makeCapability(resolvedRuntime, input.mode),
+        Boolean(resolved.shadow && input.mode !== 'conversation'),
+      ),
       ...(conversation ? {
         conversation: {
           ...(conversation.messages.at(-1) ? { keepThroughMessageUuid: conversation.messages.at(-1) } : {}),
@@ -294,6 +354,8 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
         },
       } : {}),
       ...(fileItems ? { files: fileItems } : {}),
+      // conversation 模式下不携带：只有用户确认「回退对话和文件」才会动工作区。
+      ...(resolved.shadow && input.mode !== 'conversation' ? { shadowTurns: resolved.shadow.turns } : {}),
     }
     if (fileItems) {
       for (const item of fileItems) {
@@ -350,8 +412,14 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
       }
 
       const files = plan.files ?? []
+      const shadowTurns = plan.shadowTurns ?? []
+      const usesShadow = shadowTurns.length > 0
+      if (usesShadow && !ports.shadow) {
+        // 计划要求动工作区，但宿主没接执行器：宁可失败，也不能只截断对话却让用户以为文件也回去了。
+        throw new RewindServiceError('CAPABILITY_UNAVAILABLE', '工作区历史执行器未接入，无法回退文件')
+      }
       const fileStates = new Map<string, FileState>()
-      for (const item of files) {
+      for (const item of usesShadow ? [] : files) {
         if (item.action === 'keep') continue
         if (item.action === 'conflict') throw new RewindServiceError('CONFLICT', `文件计划包含冲突: ${item.path}`, { itemIds: [item.itemId] })
         if (ports.files.authorizePath) {
@@ -368,8 +436,9 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
         }
       }
 
+      // shadow 计划不需要「目标内容」：逆向 patch 在执行时按 before/after/current 现算。
       const fileActions = [] as Array<{ rootId: string; relativePath: string; action: 'restore' | 'delete'; before: FileState; after: FileState; ownerKey?: string }>
-      for (const item of files) {
+      for (const item of usesShadow ? [] : files) {
         if (item.action === 'keep' || item.action === 'conflict') continue
         if (!item.rootId || !item.relativePath) throw new RewindServiceError('EVIDENCE_UNAVAILABLE', `文件证据缺少稳定路径标识: ${item.path}`)
         let after: FileState
@@ -405,7 +474,20 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
       const deleted: string[] = []
       const conflicts: string[] = []
       try {
-        for (const item of files) {
+        if (usesShadow) {
+          const applied = await ports.shadow!.apply({ sessionId: input.sessionId, turns: shadowTurns })
+          if (!applied.ok) {
+            // 保护快照失败/工作区不可用：此时可能一个文件都没动，也可能撤到一半。
+            // 用 recovery-required 交回去，让宿主保留恢复记录，而不是假装成功。
+            throw new RewindServiceError('RECOVERY_REQUIRED', applied.error ?? '工作区回退未完成', {
+              sessionId: input.sessionId,
+            })
+          }
+          restored.push(...applied.restoredPaths)
+          deleted.push(...applied.deletedPaths)
+          conflicts.push(...applied.keptPaths)
+        }
+        for (const item of usesShadow ? [] : files) {
           if (item.action === 'keep') continue
           const current = await ports.files.read(item.path, fileScope(item, input.sessionId))
           const expected = fileStates.get(item.itemId)?.revision ?? 'absent'
@@ -446,6 +528,7 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
         executions.set(input.planId, result)
         recoveries.set(recoveryId, { recoveryId, sessionId: input.sessionId, planId: plan.planId, mode: plan.mode, status: result.status, result })
         await ports.recovery.updateRecovery?.({ sessionId: input.sessionId, recoveryId, patch: { status: result.status, result } })
+        await notifyAfterExecute(ports.afterExecute, result)
         return result
       } catch (error) {
         try {
@@ -462,6 +545,7 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
         }
         recoveries.set(recoveryId, { recoveryId, sessionId: input.sessionId, planId: plan.planId, mode: plan.mode, status: result.status, result })
         await ports.recovery.updateRecovery?.({ sessionId: input.sessionId, recoveryId, patch: { status: result.status, result } })
+        await notifyAfterExecute(ports.afterExecute, result)
         return result
       }
     })
@@ -483,6 +567,11 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
     if (owner && (owner.sessionId !== input.sessionId || owner.callerId !== callerKey)) throw new RewindServiceError('RECOVERY_REQUIRED', '恢复记录不属于当前调用方')
 
     if (record.undone) return record.undone
+    if (await planUsesShadow(input.sessionId, record.planId)) {
+      // 旧恢复流程只能把对话和「按文件存的备份」放回去；文件是工作区回退改的，
+      // 它没有对应备份，undo 会造成「对话回去了、文件没回」的半恢复状态。
+      throw new RewindServiceError('CAPABILITY_UNAVAILABLE', '工作区文件回退暂不支持撤销')
+    }
     return ports.lock.withSessionLock(input.sessionId, async () => {
       const session = await readSession(input.sessionId)
       assertRevision(input.expectedRevision, session.revision, { recoveryId: input.recoveryId })
@@ -501,6 +590,9 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
   async function refine(input: RefineRewindPlanInput): Promise<PrepareRewindPlanResult> {
     const previous = plans.get(input.previousPlanId)
     if (!previous || previous.plan.sessionId !== input.sessionId) throw new RewindServiceError('PLAN_STALE', '原回退计划不存在或不属于当前会话')
+    if ((previous.plan.shadowTurns?.length ?? 0) > 0) {
+      throw new RewindServiceError('CAPABILITY_UNAVAILABLE', '当前回退不支持按文件剔除')
+    }
     const known = new Set((previous.plan.files ?? []).map(item => item.itemId))
     if (input.excludedItemIds.some(itemId => !known.has(itemId))) throw new RewindServiceError('TARGET_NOT_FOUND', 'excludedItemIds 不属于原回退计划')
     const prepared = await prepare({ sessionId: input.sessionId, mode: previous.plan.mode, target: previous.plan.target, expectedRevision: previous.plan.revision })
