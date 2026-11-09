@@ -371,6 +371,8 @@ export interface AgentPreset {
   disabledToolGroups?: AgentPresetToolGroup[];
   /** [B2-3] 禁用的单个产品内置工具（短名，见 AGENT_PRESET_GROUP_TOOL_NAMES）；与 disabledToolGroups 叠加生效，组已禁用时无需重复列 */
   disabledTools?: string[];
+  /** 绑定委派子会话目标渠道；未设置时沿用父会话渠道。 */
+  channelId?: string;
   /** 绑定委派子会话模型；不设置时使用委派参数或父会话当前模型。 */
   modelId?: string;
   /** 覆盖全局设置的推理档位；undefined 表示跟随全局设置 */
@@ -538,6 +540,8 @@ export interface AgentPresetCreateInput {
   disabledToolGroups?: AgentPresetToolGroup[];
   /** 禁用的单个产品内置工具（短名，见 AGENT_PRESET_GROUP_TOOL_NAMES） */
   disabledTools?: string[];
+  /** 绑定委派子会话目标渠道；省略=沿用父会话渠道。 */
+  channelId?: string;
   /** 绑定委派子会话模型。 */
   modelId?: string;
   effort?: AgentEffort;
@@ -562,6 +566,8 @@ export interface AgentPresetUpdateInput {
   suppressPromptSections?: AgentPresetSuppressKey[] | null;
   disabledToolGroups?: AgentPresetToolGroup[] | null;
   disabledTools?: string[] | null;
+  /** 绑定委派子会话目标渠道；null 表示清除绑定。 */
+  channelId?: string | null;
   /** 绑定委派子会话模型；null 表示清除绑定。 */
   modelId?: string | null;
   effort?: AgentEffort | null;
@@ -587,6 +593,8 @@ export interface AgentPresetExportEntry {
   suppressPromptSections?: AgentPresetSuppressKey[];
   disabledToolGroups?: AgentPresetToolGroup[];
   disabledTools?: string[];
+  /** 绑定委派子会话目标渠道。 */
+  channelId?: string;
   /** 绑定委派子会话模型。 */
   modelId?: string;
   effort?: AgentEffort;
@@ -633,6 +641,7 @@ export function toAgentPresetExportEntry(
     ...(preset.disabledTools?.length && {
       disabledTools: preset.disabledTools,
     }),
+    ...(preset.channelId && { channelId: preset.channelId }),
     ...(preset.modelId && { modelId: preset.modelId }),
     ...(preset.effort && { effort: preset.effort }),
     ...(preset.permissionMode && { permissionMode: preset.permissionMode }),
@@ -700,6 +709,7 @@ export function mergeAgentPreset(
       child.allowSubagents !== undefined
         ? child.allowSubagents
         : base.allowSubagents,
+    channelId: child.channelId ?? base.channelId,
     modelId: child.modelId ?? base.modelId,
   };
 }

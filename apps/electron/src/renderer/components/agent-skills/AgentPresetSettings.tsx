@@ -59,7 +59,9 @@ import type {
   PresetReference,
   PresetReferenceReport,
   PresetWorkspaceReference,
+  Channel,
 } from "@profer/shared";
+import { isChannelEnabledForAnyRuntime } from "@profer/shared";
 
 function BuiltinPresetTag(): React.ReactElement {
   return (
@@ -92,6 +94,7 @@ interface PresetFormState {
   name: string;
   description: string;
   promptText: string;
+  channelId: string; // 空 = 委派时继承
   modelId: string; // 空 = 委派时继承
   effort: string; // '' = 跟随全局
   permissionMode: string; // '' = 跟随默认
@@ -120,6 +123,7 @@ function presetToForm(preset: AgentPreset): PresetFormState {
     name: preset.name,
     description: preset.description,
     promptText: preset.promptSections?.join("\n\n") ?? "",
+    channelId: preset.channelId ?? "",
     modelId: preset.modelId ?? "",
     effort: preset.effort ?? "",
     permissionMode: preset.permissionMode ?? "",
@@ -338,15 +342,17 @@ export function AgentPresetSettings({
   const [availableMcpServers, setAvailableMcpServers] = React.useState<
     Array<{ name: string; enabled: boolean }>
   >([]);
+  const [availableChannels, setAvailableChannels] = React.useState<Channel[]>([]);
   const dialogOpen = creating || editing !== null;
 
   React.useEffect(() => {
     if (!dialogOpen || !workspaceSlug) return;
     void (async () => {
       try {
-        const [skills, mcp] = await Promise.all([
+        const [skills, mcp, channels] = await Promise.all([
           window.electronAPI.getWorkspaceSkills(workspaceSlug),
           window.electronAPI.getWorkspaceMcpConfig(workspaceSlug),
+          window.electronAPI.listChannels({ localOnly: true }),
         ]);
         setAvailableSkills(skills);
         setAvailableMcpServers(
@@ -355,6 +361,7 @@ export function AgentPresetSettings({
             enabled: !!entry.enabled,
           })),
         );
+        setAvailableChannels(channels);
       } catch (err) {
         console.error("[预设设置] 加载 Skill/MCP 列表失败:", err);
       }
@@ -458,6 +465,7 @@ export function AgentPresetSettings({
       name: "",
       description: "",
       promptText: "",
+      channelId: "",
       modelId: "",
       effort: "",
       permissionMode: "",
@@ -509,6 +517,7 @@ export function AgentPresetSettings({
       disabledToolGroups:
         form.disabledToolGroups.length > 0 ? form.disabledToolGroups : null,
       disabledTools: form.disabledTools.length > 0 ? form.disabledTools : null,
+      channelId: form.channelId.trim() || null,
       modelId: form.modelId.trim() || null,
       effort: (form.effort || null) as AgentEffort | null,
       permissionMode: (form.permissionMode ||
@@ -536,6 +545,7 @@ export function AgentPresetSettings({
       }),
       ...(u.disabledToolGroups && { disabledToolGroups: u.disabledToolGroups }),
       ...(u.disabledTools && { disabledTools: u.disabledTools }),
+      ...(u.channelId && { channelId: u.channelId }),
       ...(u.modelId && { modelId: u.modelId }),
       ...(u.effort && { effort: u.effort }),
       ...(u.permissionMode && { permissionMode: u.permissionMode }),
@@ -547,9 +557,30 @@ export function AgentPresetSettings({
     };
   }, [buildUpdateInput, form.basePresetId]);
 
+  const selectableChannels = React.useMemo(
+    () => availableChannels
+      .filter((channel) => isChannelEnabledForAnyRuntime(channel))
+      .map((channel) => ({
+        ...channel,
+        models: channel.models.filter((model) => model.enabled),
+      }))
+      .filter((channel) => channel.models.length > 0),
+    [availableChannels],
+  );
+  const selectedChannel = selectableChannels.find((channel) => channel.id === form.channelId);
+  const selectedModel = selectedChannel?.models.find((model) => model.id === form.modelId);
+  const bindingIsLegacy = !form.channelId && !!form.modelId;
+  const bindingIsInvalid = !!form.channelId && (!selectedChannel || !selectedModel);
+  const modelSelectEnabled = !!selectedChannel || bindingIsLegacy;
+
+
   const handleSave = React.useCallback(async () => {
     if (!form.name.trim()) {
       setError("预设名称不能为空");
+      return;
+    }
+    if (form.channelId.trim() && !form.modelId.trim()) {
+      setError("选择了委派渠道后，还需要选择一个模型；如果要跟随父会话，请把渠道也设为跟随。");
       return;
     }
     setSaving(true);
@@ -1416,22 +1447,102 @@ export function AgentPresetSettings({
                 />
               </div>
               <div className="rounded-xl border bg-muted/15 p-4">
-                <div className="mb-3">
-                  <label className="text-sm font-semibold text-foreground/90">
-                    委派模型绑定
-                  </label>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    仅影响从此预设创建的协作子会话；留空时继承父会话模型。填写渠道设置中已启用的 Agent 模型 ID，Claude 与 Pi 会按实际运行时校验。
-                  </p>
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <div>
+                    <label className="text-sm font-semibold text-foreground/90">
+                      委派路由
+                    </label>
+                    <p className="mt-0.5 max-w-2xl text-xs leading-5 text-muted-foreground">
+                      选择协作子会话使用的渠道和模型。留空时跟随父会话；保存的是稳定的渠道与模型绑定，不需要记忆模型 ID。
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[10px] font-medium text-primary">
+                    可选
+                  </span>
                 </div>
-                <Input
-                  value={form.modelId}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, modelId: e.target.value }))
-                  }
-                  placeholder="例如：claude-sonnet-4-5"
-                  spellCheck={false}
-                />
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-foreground/75">渠道</label>
+                    <Select
+                      value={form.channelId || SELECT_DEFAULT_VALUE}
+                      onValueChange={(value) =>
+                        setForm((f) => ({
+                          ...f,
+                          channelId: value === SELECT_DEFAULT_VALUE ? "" : value,
+                          modelId: value === SELECT_DEFAULT_VALUE || value !== f.channelId ? "" : f.modelId,
+                        }))
+                      }
+                    >
+                      <SelectTrigger className="bg-background/70">
+                        <SelectValue placeholder="跟随父会话渠道" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={SELECT_DEFAULT_VALUE}>跟随父会话渠道</SelectItem>
+                        {selectableChannels.map((channel) => (
+                          <SelectItem key={channel.id} value={channel.id}>
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className="truncate">{channel.name}</span>
+                              <span className="text-[10px] text-muted-foreground">{channel.models.length} 个模型</span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-foreground/75">模型</label>
+                    <Select
+                      value={form.modelId || SELECT_DEFAULT_VALUE}
+                      onValueChange={(value) =>
+                        setForm((f) => ({ ...f, modelId: value === SELECT_DEFAULT_VALUE ? "" : value }))
+                      }
+                      disabled={!modelSelectEnabled}
+                    >
+                      <SelectTrigger className="bg-background/70">
+                        <SelectValue placeholder={selectedChannel ? "选择模型" : bindingIsLegacy ? "清空旧版模型绑定" : "先选择渠道"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={SELECT_DEFAULT_VALUE}>跟随父会话模型</SelectItem>
+                        {bindingIsLegacy && (
+                          <SelectItem value={form.modelId}>
+                            <span className="flex min-w-0 flex-col">
+                              <span className="truncate">旧版绑定：{form.modelId}</span>
+                              <span className="truncate text-[10px] text-muted-foreground">选择“跟随父会话模型”即可清除</span>
+                            </span>
+                          </SelectItem>
+                        )}
+                        {selectedChannel?.models.map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            <span className="flex min-w-0 flex-col">
+                              <span className="truncate">{model.name}</span>
+                              <span className="truncate text-[10px] text-muted-foreground">{model.id}</span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {bindingIsLegacy && (
+                  <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+                    这是旧版仅绑定模型 ID 的配置。请选择渠道和模型来升级为明确路由，或清空模型后让它完全跟随父会话。
+                  </p>
+                )}
+                {bindingIsInvalid && !bindingIsLegacy && (
+                  <p className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">
+                    当前绑定的渠道或模型已不可用，请重新选择；否则委派时会被拒绝，不会静默切换模型。
+                  </p>
+                )}
+                {!availableChannels.length && (
+                  <p className="mt-3 rounded-lg bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+                    尚未找到已配置渠道。你可以先保存其他预设内容，配置 Agent 渠道后再回来选择路由。
+                  </p>
+                )}
+                {availableChannels.length > 0 && !selectableChannels.length && (
+                  <p className="mt-3 rounded-lg bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+                    当前没有同时启用 Agent 且包含可用模型的渠道。请先在渠道设置中启用渠道、Agent 内核和至少一个模型。
+                  </p>
+                )}
               </div>
               <div className="rounded-xl border bg-muted/15 p-4">
                 <div className="mb-3">

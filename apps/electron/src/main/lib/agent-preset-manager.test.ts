@@ -654,6 +654,41 @@ describe('自定义预设 CRUD', () => {
     expect(() => createAgentPreset(WS_A, { name: '  ', description: '' })).toThrow('预设名称不能为空')
   })
 
+  test('委派路由必须成对绑定，并支持完整清空', () => {
+    expect(() => createAgentPreset(WS_A, {
+      name: '半绑定',
+      description: '',
+      channelId: 'channel-a',
+    })).toThrow('预设绑定渠道时必须同时选择模型')
+
+    const created = createAgentPreset(WS_A, {
+      name: '明确路由',
+      description: '',
+      channelId: 'channel-a',
+      modelId: 'model-a',
+    })
+    expect(created).toMatchObject({ channelId: 'channel-a', modelId: 'model-a' })
+
+    const cleared = updateAgentPreset(WS_A, created.id, { channelId: null, modelId: null })
+    expect(cleared.channelId).toBeUndefined()
+    expect(cleared.modelId).toBeUndefined()
+
+    expect(() => updateAgentPreset(WS_A, created.id, { channelId: 'channel-b' })).toThrow('预设绑定渠道时必须同时选择模型')
+  })
+
+  test('派生预设继承成对委派路由，子预设可成对覆盖', () => {
+    const base = createAgentPreset(WS_A, {
+      name: '基座路由',
+      description: '',
+      channelId: 'channel-base',
+      modelId: 'model-base',
+      basePresetId: BUILTIN_PRESET_CODE,
+    })
+    expect(getAgentPreset(WS_A, base.id)).toMatchObject({ channelId: 'channel-base', modelId: 'model-base' })
+    updateAgentPreset(WS_A, base.id, { channelId: 'channel-next', modelId: 'model-next' })
+    expect(getAgentPreset(WS_A, base.id)).toMatchObject({ channelId: 'channel-next', modelId: 'model-next' })
+  })
+
   test('派生预设保留自身模型绑定，并可更新绑定', () => {
     const created = createAgentPreset(WS_A, {
       name: '模型岗位',
