@@ -3478,19 +3478,30 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           <GoalProposalBanner sessionId={sessionId} />
         </div>
 
-        {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
-        {!hasBannerOverlay && (isEmptySession ? (
-          /* 新会话：欢迎语 + 输入框整体居中，输入框宽度收窄 */
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-8">
-            <WelcomeEmptyState variant="inline">
-              <div className="w-full max-w-[min(46rem,100%)]">{composerStack}</div>
-            </WelcomeEmptyState>
+        {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代。
+            空会话与非空会话共用同一个容器元素：只切换 className，不让父链类型变化，
+            否则发送第一条消息的瞬间 composerStack 整棵子树会被卸载重建
+            （ProseMirror 实例、滚动位置、选区全部丢失）。 */}
+        {!hasBannerOverlay && (
+          <div
+            className={cn(
+              isEmptySession
+                /* 新会话：欢迎语 + 输入框整体居中，输入框宽度收窄 */
+                ? 'flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-4 pb-8'
+                : 'shrink-0 px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]',
+            )}
+            data-input-mode="agent"
+          >
+            {/* 欢迎语只在空会话渲染；非空时占位为 null，不影响 composer 容器的位置与身份 */}
+            {isEmptySession && <WelcomeEmptyState variant="inline" />}
+            <div
+              key="agent-composer"
+              className={isEmptySession ? 'w-full max-w-[min(46rem,100%)]' : 'w-full'}
+            >
+              {composerStack}
+            </div>
           </div>
-        ) : (
-          <div className="shrink-0 px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
-            {composerStack}
-          </div>
-        ))}
+        )}
       </div>
       </div>
     </AgentSessionProvider>
