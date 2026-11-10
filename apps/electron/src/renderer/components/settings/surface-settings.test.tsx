@@ -284,6 +284,20 @@ describe('About 分区与真实状态（仅 fixture）', () => {
     api(); const host = mount(AboutSettings)
     expect(host.elements().filter((item) => item.props.title).map((item) => item.props.title)).toEqual(expect.arrayContaining(['关于 Profer', '软件更新', '运行环境', '版本记录']))
   })
+  test('打包版 feed 与内置日志都没有目标版本时，用 GitHub Release 正文补更新日志', async () => {
+    fixtureUpdaterAvailable = true
+    store.set(updateStatusAtom, { status: 'available', version: '9.9.9' })
+    let requested = ''
+    api({
+      updater: { getChangelog: async () => [] },
+      getReleaseByTag: async (tag: string) => { requested = tag; return { tag_name: tag, body: '## 修复\n\n- fixture 在线更新说明' } },
+    })
+    const host = mount(child(AboutSettings, 'UpdateCard'))
+    await tick(); host.render()
+    expect(requested).toBe('v9.9.9')
+    expect(text(host.elements())).toContain('更新日志')
+    expect(text(host.elements())).toContain('fixture 在线更新说明')
+  })
   test('无 updater 展示发布页，检测失败后重试；安装更新需确认', async () => {
     fixtureUpdaterAvailable = false; api()
     const disabled = mount(child(AboutSettings, 'UpdateCard')); expect(disabled.button('官方发布页')).toBeDefined()

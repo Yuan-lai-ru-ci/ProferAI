@@ -116,17 +116,31 @@ function UpdateCard(): React.ReactElement | null {
     })
   }
 
-  // 本地日志只匹配当前目标版本；旧请求不能覆盖新版本的说明。
+  // 新版本说明三级来源：feed 自带 → 内置 CHANGELOG → GitHub Release 正文。
+  // 打包版 feed（latest-mac.yml / latest.yml）不带 releaseNotes，旧包内置 CHANGELOG 也没有目标
+  // 版本，只靠前两级会出现「检测到新版本但看不到更新内容」；所以最后补一次在线 Release 查询。
   React.useEffect(() => {
     setLatestNotes(null)
     let cancelled = false
-    if (status.status === 'available' && status.version && !status.releaseNotes) {
-      window.electronAPI.updater?.getChangelog().then((entries) => {
-        if (cancelled) return
-        const match = entries.find((entry) => entry.version === status.version)
-        if (match?.notes) { setLatestNotes(match.notes); setShowReleaseNotes(true) }
-      }).catch(() => { /* 缺少本地日志时保留版本和下载入口 */ })
+    if (status.status !== 'available' || !status.version || status.releaseNotes) {
+      return (): void => { cancelled = true }
     }
+    const applyNotes = (notes?: string): boolean => {
+      if (cancelled || !notes) return false
+      setLatestNotes(notes)
+      setShowReleaseNotes(true)
+      return true
+    }
+    const loadOnlineNotes = async (): Promise<void> => {
+      try {
+        const release = await window.electronAPI.getReleaseByTag?.(`v${status.version}`)
+        applyNotes(release?.body)
+      } catch { /* 离线/限流：保留版本号与下载入口，不显示空面板 */ }
+    }
+    window.electronAPI.updater?.getChangelog().then((entries) => {
+      const match = entries.find((entry) => entry.version === status.version)
+      if (!applyNotes(match?.notes)) void loadOnlineNotes()
+    }).catch(() => { void loadOnlineNotes() })
     return () => { cancelled = true }
   }, [status.status, status.version, status.releaseNotes])
 
