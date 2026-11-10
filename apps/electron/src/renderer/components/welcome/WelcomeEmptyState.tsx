@@ -4,21 +4,19 @@
  * 在没有会话时展示：
  * 1. 个性化时段问候
  * 2. 平台感知的小 Tips
- * 3. Chat/Agent 模式切换 Tab
- * 4. Agent 模式 + 普通工作区：编码活跃热力图
+ * 3. 调用方插槽（新会话居中布局里放输入框）
+ *
+ * 模式切换由左侧栏顶部的 Agent/Chat 开关负责；活跃热力图统一收敛到「我的画像」
+ * （GlobalUsageCard，跨工作区聚合），这里不再重复展示。
  */
 
 import * as React from 'react'
-import { useAtomValue, useAtom } from 'jotai'
-import { Lightbulb, MessageSquare, Bot, StickyNote } from 'lucide-react'
+import { useAtomValue } from 'jotai'
+import { Lightbulb } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { userProfileAtom } from '@/atoms/user-profile'
-import { appModeAtom, type AppMode } from '@/atoms/app-mode'
-import { themeStyleAtom } from '@/atoms/theme'
-import { currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 
 import { getRandomTip, getPlatform, type Tip } from '@/lib/tips'
-import { UsageHeatmap } from './UsageHeatmap'
 
 /** 根据小时返回时段问候 */
 function getGreeting(hour: number): string {
@@ -28,19 +26,21 @@ function getGreeting(hour: number): string {
   return '晚上好'
 }
 
-/** 模式配置 */
-const MODE_CONFIG: Record<AppMode, { icon: React.ReactNode; label: string }> = {
-  chat: { icon: <MessageSquare size={15} />, label: 'Chat' },
-  agent: { icon: <Bot size={15} />, label: 'Agent' },
-  scratch: { icon: <StickyNote size={15} />, label: 'Scratch Pad' },
+export interface WelcomeEmptyStateProps {
+  /**
+   * 布局变体：
+   * - `centered`（默认）：占满消息区，为底部输入框让位（向上偏移补偿）
+   * - `inline`：作为「欢迎语 + 输入框」居中布局的一部分，自身不撑满、不偏移，
+   *   由外层容器负责垂直居中
+   */
+  variant?: 'centered' | 'inline'
+  /** 插槽：inline 变体用来放输入框，紧跟在问候语与 Tips 下方 */
+  children?: React.ReactNode
 }
 
-export function WelcomeEmptyState(): React.ReactElement {
+export function WelcomeEmptyState({ variant = 'centered', children }: WelcomeEmptyStateProps = {}): React.ReactElement {
+  const inline = variant === 'inline'
   const userProfile = useAtomValue(userProfileAtom)
-  const [mode, setMode] = useAtom(appModeAtom)
-  const themeStyle = useAtomValue(themeStyleAtom)
-  const showHeatmap = mode === 'agent'
-
 
   // 稳定的随机 Tip（组件挂载时选一条）
   const [tip] = React.useState<Tip>(() => getRandomTip(getPlatform()))
@@ -49,17 +49,15 @@ export function WelcomeEmptyState(): React.ReactElement {
   const greeting = getGreeting(hour)
   const displayName = userProfile.userName || '用户'
 
-  // 森息晨光主题下选中按钮使用主色
-  const selectedColor = themeStyle === 'forest-light' ? '#3f8361' : undefined
-
-  /** 切换模式：仅切换模式，不创建新会话 */
-  const handleModeSwitch = React.useCallback((targetMode: AppMode): void => {
-    if (targetMode === mode) return
-    setMode(targetMode)
-  }, [mode, setMode])
-
   return (
-    <div className="welcome-empty-state flex h-full translate-y-[90px] flex-col items-center justify-center gap-6 px-4 [@media(max-height:820px)]:translate-y-0 [@media(max-height:700px)]:gap-4">
+    <div
+      className={cn(
+        'welcome-empty-state flex flex-col items-center px-4',
+        inline
+          ? 'w-full gap-5'
+          : 'h-full translate-y-[90px] justify-center gap-6 [@media(max-height:820px)]:translate-y-0 [@media(max-height:700px)]:gap-4',
+      )}
+    >
       {/* 问候语 */}
       <h1 className="text-[26px] font-semibold tracking-tight text-foreground">
         {displayName}，{greeting}
@@ -71,43 +69,9 @@ export function WelcomeEmptyState(): React.ReactElement {
         <span>{tip.text}</span>
       </div>
 
-      {/* 模式切换 Tab */}
-      <div className="relative flex rounded-xl bg-muted/60 p-1">
-        {/* 滑动背景指示器 */}
-        <div
-          className={cn(
-            'absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
-            mode === 'agent' ? 'translate-x-0' : 'translate-x-full',
-          )}
-        />
-        {(['agent', 'chat'] as const).map((m) => {
-          const config = MODE_CONFIG[m]
-          const isSelected = mode === m
-          return (
-            <button
-              key={m}
-              onClick={() => handleModeSwitch(m)}
-              style={isSelected && selectedColor ? { color: selectedColor } : undefined}
-              className={cn(
-                'relative z-[1] flex items-center gap-1.5 rounded-lg px-5 py-1.5 text-[13px] font-medium transition-colors duration-200',
-                isSelected
-                  ? 'text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {config.icon}
-              {config.label}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* 编码活跃热力图（仅 Agent 模式 + 普通工作区；窗口过矮时隐藏避免与输入框重叠） */}
-      {showHeatmap && (
-        <div className="[@media(max-height:640px)]:hidden">
-          <UsageHeatmap />
-        </div>
-      )}
+      {/* 插槽：inline 变体放输入框。
+          justify-center 让调用方的 max-w 容器真正水平居中——普通块级子元素只会左对齐。 */}
+      {children != null && <div className="flex w-full justify-center">{children}</div>}
     </div>
   )
 }

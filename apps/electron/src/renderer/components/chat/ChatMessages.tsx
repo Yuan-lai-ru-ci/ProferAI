@@ -16,6 +16,7 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { Loader2 } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
+import { cn } from '@/lib/utils'
 import { ChatMessageItem, formatMessageTime } from './ChatMessageItem'
 import type { InlineEditSubmitPayload } from './ChatMessageItem'
 import { ChatToolActivityIndicator } from './ChatToolActivityIndicator'
@@ -160,6 +161,11 @@ interface ChatMessagesProps {
   onLoadMore?: () => Promise<void>
   /** 打开"历史版本抽屉"回调（用于从单条消息的"查看历史"按钮触发） */
   onOpenHistory?: (anchorMessageId?: string) => void
+  /**
+   * 空对话时隐藏整个消息区（欢迎语与输入框由外层居中容器承载）。
+   * 仅隐藏不卸载：滚动位置、回调与实时消息订阅保持存活。
+   */
+  hidden?: boolean
 }
 
 /** 空状态引导 — 使用 WelcomeEmptyState */
@@ -189,6 +195,7 @@ export function ChatMessages({
   onDeleteDivider,
   onLoadMore,
   onOpenHistory,
+  hidden = false,
 }: ChatMessagesProps): React.ReactElement {
   const userProfile = useAtomValue(userProfileAtom)
   const channels = useAtomValue(channelsAtom)
@@ -323,7 +330,7 @@ export function ChatMessages({
   // 并排模式
   if (parallelMode) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className={cn('flex min-h-0 flex-1 flex-col', hidden && 'hidden')}>
         {loadError && (
           <div role="alert" className="flex items-center justify-center gap-2 py-2 text-xs text-destructive">
             <span>{loadError}</span>
@@ -356,7 +363,7 @@ export function ChatMessages({
   const dividerSet = new Set(contextDividers)
 
   return (
-    <Conversation key={conversationId} resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0'}>
+    <Conversation key={conversationId} resize={ready && !transitioning ? 'smooth' : 'instant'} className={cn(ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 transition-opacity duration-200') : 'opacity-0', hidden && 'hidden')}>
       <ScrollPositionManager id={conversationId} ready={ready} />
       {/* 滚动到顶部时自动加载更多历史 */}
       <ScrollTopLoader
