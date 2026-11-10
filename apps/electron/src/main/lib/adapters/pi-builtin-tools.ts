@@ -546,13 +546,16 @@ export function buildPiGoalProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCon
     label: '提议建立 Goal',
     description: '当这件事明显需要多轮持续执行（构建→验证→迭代），而且这一轮做不完时，向用户提议建立一个 Goal。用户确认后才会创建；本工具不会自己启动 Goal，也不阻塞当前轮。',
     promptSnippet: 'propose_goal: propose creating a long-running Goal for this session',
-    parameters: {
-      objective: { type: 'string', description: '一句话可执行的目标' },
-      rationale: { type: 'string', description: '为什么需要多轮持续执行，而不是这一轮做完' },
-      verification: { type: 'string', description: '可验证的验收标准', optional: true },
-      constraints: { type: 'string', description: '必须遵守的约束', optional: true },
-      stopWhen: { type: 'string', description: '什么情况下应该停下来问用户', optional: true },
-    },
+    // 必须是 typebox 的 Object schema：直接写字面量会序列化成
+    // `parameters: { objective: {...} }`（没有 type/properties/required），
+    // 严格校验的上游会整轮 400 拒绝。
+    parameters: Type.Object({
+      objective: Type.String({ description: '一句话可执行的目标' }),
+      rationale: Type.String({ description: '为什么需要多轮持续执行，而不是这一轮做完' }),
+      verification: Type.Optional(Type.String({ description: '可验证的验收标准' })),
+      constraints: Type.Optional(Type.String({ description: '必须遵守的约束' })),
+      stopWhen: Type.Optional(Type.String({ description: '什么情况下应该停下来问用户' })),
+    }),
     execute: async (params: unknown) => {
       const args = params as { objective: unknown; rationale?: unknown; verification?: unknown; constraints?: unknown; stopWhen?: unknown }
       const normalized = normalizeGoalProposalInput(args)

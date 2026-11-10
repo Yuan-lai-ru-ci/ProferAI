@@ -59,6 +59,7 @@ const {
   buildPiPlanningTools,
   buildPiTaskGraphTools,
   buildPiAgentPresetTools,
+  buildPiGoalProposalTools,
 } = await import('./pi-builtin-tools')
 
 interface CapturedTool {
@@ -599,5 +600,25 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     expect(result.details?.activeTabId).toBeNull()
     expect(result.details?.agentTabId).toBeNull()
     expect(result.details?.tabs).toEqual([])
+  })
+})
+
+describe('Pi propose_goal tool schema', () => {
+  test('Given goal proposal enabled When building propose_goal Then parameters 是合法 JSON Schema', () => {
+    const { sdk, tools } = createPiSdkStub()
+    buildPiGoalProposalTools(sdk, {
+      sessionId: 'goal-schema-test',
+      goalProposal: { policy: 'alwaysAsk', hasActiveGoal: false, planMode: false, onPropose: () => {} },
+    })
+
+    expect(tools).toHaveLength(1)
+    const parameters = tools[0]!.parameters as Record<string, unknown>
+    // 回归守卫：曾直接写字面量对象，序列化成 {objective: {...}}，缺 type/properties/required，
+    // 严格校验的上游（DeepSeek 等）会整轮 400。
+    expect(parameters.type).toBe('object')
+    expect(parameters.required).toEqual(['objective', 'rationale'])
+    const properties = parameters.properties as Record<string, { type?: string }>
+    expect(Object.keys(properties).sort()).toEqual(['constraints', 'objective', 'rationale', 'stopWhen', 'verification'])
+    for (const property of Object.values(properties)) expect(property.type).toBe('string')
   })
 })
