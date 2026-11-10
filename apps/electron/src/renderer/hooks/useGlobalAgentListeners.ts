@@ -1,4 +1,4 @@
-import { decidePersistenceAck } from '@/lib/agent-persistence'
+import { decidePersistenceAck, decideStreamFinalize } from '@/lib/agent-persistence'
 /**
  * useGlobalAgentListeners — 全局 Agent IPC 监听器
  *
@@ -1711,19 +1711,20 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         }
 
         const finalize = (): void => {
-          // 竞态保护：新流已启动时不要清理状态
-          if (isNewStreamRunning() || (data.persistence && data.persistence.status !== 'saved')) return
-
-          // 后台任务等待态：保留后台任务列表（面板继续显示在跑任务），不做收尾清理，
-          // 等任务完成 Agent 自动唤醒续轮后再走真正的完成路径。
-          if (backgroundTasksPending) return
+          // 落盘状态与收尾副作用分开判定：新流已接管 / 后台任务等待态整体跳过；
+          // pending/failed 只保留 live 与运行态，会话列表刷新、后台任务清理照常执行。
+          const plan = decideStreamFinalize({
+            newStreamRunning: isNewStreamRunning(),
+            persistenceStatus: data.persistence?.status,
+            backgroundTasksPending,
+          })
 
           // 清理后台任务
-          store.set(backgroundTasksAtomFamily(data.sessionId), [])
+          if (plan.clearBackgroundTasks) store.set(backgroundTasksAtomFamily(data.sessionId), [])
 
           // 后台会话没有挂载的 AgentView 来执行收尾清理（MainArea 只渲染活跃 Tab）。
           // 仅回收未激活会话；当前会话继续在消息加载完成后同步移除实时气泡，避免闪烁。
-          if (store.get(activeSessionIdAtom) !== data.sessionId) {
+          if (plan.recycleInactiveSession && store.get(activeSessionIdAtom) !== data.sessionId) {
             store.set(liveMessagesMapAtom, (prev) => {
               if (!prev.has(data.sessionId)) return prev
               const map = new Map(prev)
@@ -1743,14 +1744,17 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
           }
 
           // 清理该 session 关联的未完成写工具记录，防止内存泄漏
-          for (const [toolId, entry] of pendingWriteTools) {
-            if (entry.sessionId === data.sessionId) {
-              pendingWriteTools.delete(toolId)
+          // （本轮已收到终态，不会再有这些工具的返回值；新 run 的 toolId 互不相同）
+          if (plan.clearPendingToolRecords) {
+            for (const [toolId, entry] of pendingWriteTools) {
+              if (entry.sessionId === data.sessionId) {
+                pendingWriteTools.delete(toolId)
+              }
             }
-          }
-          for (const [toolId, sid] of pendingGitMutateTools) {
-            if (sid === data.sessionId) {
-              pendingGitMutateTools.delete(toolId)
+            for (const [toolId, sid] of pendingGitMutateTools) {
+              if (sid === data.sessionId) {
+                pendingGitMutateTools.delete(toolId)
+              }
             }
           }
 
@@ -1758,16 +1762,19 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
           // 与 streamingState 清理同步，避免「实时消息已清 → 持久化消息未到」的空档闪烁
 
           // 刷新会话列表并同步 stoppedByUser 状态（按当前视图拉取，避免归档视图被活跃列表覆盖）
-          window.electronAPI
-            .listAgentSessions(store.get(sidebarViewModeAtom) === 'archived')
-            .then((sessions) => {
-              store.set(agentSessionsAtom, (prev) => mergeFetchedAgentSessions(prev, sessions))
-              // 从持久化 meta 对齐 stoppedByUser 状态
-              store.set(stoppedByUserSessionsAtom, new Set<string>(
-                sessions.filter((s) => s.stoppedByUser).map((s) => s.id)
-              ))
-            })
-            .catch(console.error)
+          // pending/failed 也刷新：侧栏「已停止」标记以持久化 meta 为准，不刷新会残留到下次手动刷新。
+          if (plan.refreshSessionList) {
+            window.electronAPI
+              .listAgentSessions(store.get(sidebarViewModeAtom) === 'archived')
+              .then((sessions) => {
+                store.set(agentSessionsAtom, (prev) => mergeFetchedAgentSessions(prev, sessions))
+                // 从持久化 meta 对齐 stoppedByUser 状态
+                store.set(stoppedByUserSessionsAtom, new Set<string>(
+                  sessions.filter((s) => s.stoppedByUser).map((s) => s.id)
+                ))
+              })
+              .catch(console.error)
+          }
 
           // 注意：流式状态的完全清除由 AgentView 在消息加载完成后执行，
           // 确保不会出现「气泡消失 → 持久化消息尚未加载」的空档闪烁

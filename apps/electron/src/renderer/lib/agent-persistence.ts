@@ -43,6 +43,53 @@ export function decidePersistenceAck(
 }
 
 /**
+ * STREAM_COMPLETE 收尾（finalize）要做的四类副作用。
+ *
+ * 落盘状态只决定「实时答复能不能被丢弃」，不应该连带关掉会话列表刷新与后台任务收尾：
+ * 侧栏「已停止」标记来自持久化 meta、后台任务面板来自列表 atom，两者都要靠收尾刷新，
+ * 一旦被 pending/failed 整段跳过，就会残留到用户下次手动刷新为止。
+ */
+export interface StreamFinalizePlan {
+  /** 刷新会话列表并按持久化 meta 对齐 stoppedByUser */
+  refreshSessionList: boolean
+  /** 清空后台任务面板 */
+  clearBackgroundTasks: boolean
+  /** 回收未激活会话的实时消息与流式状态（激活会话交给 AgentView 在消息加载后清理） */
+  recycleInactiveSession: boolean
+  /** 丢弃等待结果的写 / 改工具记录，防止内存泄漏 */
+  clearPendingToolRecords: boolean
+}
+
+const NO_FINALIZE = {
+  refreshSessionList: false,
+  clearBackgroundTasks: false,
+  recycleInactiveSession: false,
+  clearPendingToolRecords: false,
+} as const satisfies StreamFinalizePlan
+
+export function decideStreamFinalize(input: {
+  /** 该会话已有新一轮流在跑：任何收尾都会打断新 run */
+  newStreamRunning: boolean
+  /** 本轮落盘结果；undefined 表示旧链路 completion（沿用不判定的旧行为） */
+  persistenceStatus?: AgentPersistenceState['status']
+  /** 后台任务仍在飞行：面板要保留在跑任务，等唤醒续轮再收尾 */
+  backgroundTasksPending: boolean
+}): StreamFinalizePlan {
+  if (input.newStreamRunning) return { ...NO_FINALIZE }
+  if (input.backgroundTasksPending) return { ...NO_FINALIZE }
+
+  // 落盘未完成（pending/failed）时实时答复仍是唯一副本，只能保留 live 与流式状态；
+  // 其余收尾副作用与落盘无关，照常执行。
+  const keepLive = input.persistenceStatus === 'pending' || input.persistenceStatus === 'failed'
+  return {
+    refreshSessionList: true,
+    clearBackgroundTasks: true,
+    recycleInactiveSession: !keepLive,
+    clearPendingToolRecords: true,
+  }
+}
+
+/**
  * 读盘返回后，这份历史快照还能不能用来替换当前视图。
  *
  * - 新 run 已接管（startedAt 变化）：旧请求的内容属于上一代，丢弃，等新 run 的终态刷新。

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { canReplaceAgentHistory, acceptPersistenceAck, decideAgentHistoryLoad, decidePersistenceAck } from './agent-persistence'
+import { canReplaceAgentHistory, acceptPersistenceAck, decideAgentHistoryLoad, decidePersistenceAck, decideStreamFinalize } from './agent-persistence'
 
 test('legacy completion allows history; pending and failed retain live across mounts', () => {
   expect(canReplaceAgentHistory(undefined, undefined)).toBe(true)
@@ -63,4 +63,61 @@ test('history load survives in-flight persistence change without blanking the se
   // 读取期间转为 saved：交给 ACK 的 bump，别用旧快照清理实时副本。
   const saved = { status: 'saved' as const, runId: 'r', startedAt: 1 }
   expect(decideAgentHistoryLoad({ generationAtLoad: 1, generationNow: 1, persistenceAtLoad: pending, persistenceNow: saved, streamNow: { startedAt: 1 } })).toBe('discard')
+})
+
+// ===== 运行链加固 B3：finalize 的落盘状态与收尾副作用 =====
+
+test('saved 收尾行为不变：列表刷新 + 后台任务清理 + 未激活会话回收', () => {
+  expect(decideStreamFinalize({ newStreamRunning: false, persistenceStatus: 'saved', backgroundTasksPending: false }))
+    .toEqual({
+      refreshSessionList: true,
+      clearBackgroundTasks: true,
+      recycleInactiveSession: true,
+      clearPendingToolRecords: true,
+    })
+  // 旧链路 completion（无 persistence）沿用 saved 的收尾口径。
+  expect(decideStreamFinalize({ newStreamRunning: false, backgroundTasksPending: false }).recycleInactiveSession).toBe(true)
+})
+
+test('pending 不丢收尾：列表刷新与后台任务清理照执行，live 保留', () => {
+  const plan = decideStreamFinalize({ newStreamRunning: false, persistenceStatus: 'pending', backgroundTasksPending: false })
+  // 侧栏「已停止」标记与后台任务面板必须收尾，否则残留到下次手动刷新。
+  expect(plan.refreshSessionList).toBe(true)
+  expect(plan.clearBackgroundTasks).toBe(true)
+  expect(plan.clearPendingToolRecords).toBe(true)
+  // 落盘未完成：实时答复是唯一副本，不许回收。
+  expect(plan.recycleInactiveSession).toBe(false)
+})
+
+test('failed 同样刷新列表并清理，但保留实时答复', () => {
+  const plan = decideStreamFinalize({ newStreamRunning: false, persistenceStatus: 'failed', backgroundTasksPending: false })
+  expect(plan.refreshSessionList).toBe(true)
+  expect(plan.clearBackgroundTasks).toBe(true)
+  expect(plan.clearPendingToolRecords).toBe(true)
+  // canReplaceAgentHistory 对 failed 恒为 false：实时答复必须留着让用户复制/重试。
+  expect(canReplaceAgentHistory({ status: 'failed', startedAt: 1 }, { startedAt: 1, running: false })).toBe(false)
+  expect(plan.recycleInactiveSession).toBe(false)
+})
+
+test('新流已启动时任何收尾都不做', () => {
+  for (const persistenceStatus of ['pending', 'saved', 'failed'] as const) {
+    expect(decideStreamFinalize({ newStreamRunning: true, persistenceStatus, backgroundTasksPending: false }))
+      .toEqual({
+        refreshSessionList: false,
+        clearBackgroundTasks: false,
+        recycleInactiveSession: false,
+        clearPendingToolRecords: false,
+      })
+  }
+  expect(decideStreamFinalize({ newStreamRunning: true, backgroundTasksPending: true }).refreshSessionList).toBe(false)
+})
+
+test('后台任务等待态保持现状：不收尾、不刷新', () => {
+  for (const persistenceStatus of ['pending', 'saved', 'failed'] as const) {
+    const plan = decideStreamFinalize({ newStreamRunning: false, persistenceStatus, backgroundTasksPending: true })
+    expect(plan.refreshSessionList).toBe(false)
+    expect(plan.clearBackgroundTasks).toBe(false)
+    expect(plan.recycleInactiveSession).toBe(false)
+    expect(plan.clearPendingToolRecords).toBe(false)
+  }
 })
