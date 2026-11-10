@@ -88,7 +88,8 @@ import { getAgentCompletionMarkers } from '@/lib/agent-completion-presence'
 import { getPlanModeChangeFromToolName, updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
 import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session-file-changes'
 import { compactCompletedBackgroundStreamState, isCurrentAgentStreamCompletion, settleCompletedAgentStreamState } from '@/lib/agent-stream-state-cleanup'
-import { AgentStreamRestoreGate, shouldCreateRestoreState } from '@/lib/agent-stream-restore-gate'
+import { AgentStreamRestoreGate } from '@/lib/agent-stream-restore-gate'
+import { decideRestoreMerge } from '@/lib/agent-stream-restore-merge'
 import { isAbsoluteFilePath } from '@/lib/file-utils'
 import { inspectOfficialPptxPreview } from '@/components/file-browser/office-preview/official-preview-session'
 import { isAgentWorkspaceIdVisible } from '@/lib/product-feature-flags'
@@ -1467,15 +1468,15 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
           const restored = typeof snapshot === 'string' ? undefined : snapshot
           const sessionId = typeof snapshot === 'string' ? snapshot : snapshot.sessionId
           const current = (next ?? prev).get(sessionId)
-          if (!shouldCreateRestoreState(snapshot)) {
-            // 主进程已确认没有活跃 run；清掉旧版本遗留的 running/stopping，保留用量快照。
-            if (!current || (!current.running && !current.backgroundWaiting && !current.stopping)) continue
-            if (!next) next = new Map(prev)
-            next.set(sessionId, settleCompletedAgentStreamState(current, false))
+          // 处置规则集中在 decideRestoreMerge：已收敛的状态不能被终态回放的 running 占位盖掉
+          // （切回 60s 内刚结束的会话会永久残留 spinner，见该函数注释）。
+          const action = decideRestoreMerge(current, snapshot)
+          if (action === 'keep') continue
+          if (!next) next = new Map(prev)
+          if (action === 'settle') {
+            if (current) next.set(sessionId, settleCompletedAgentStreamState(current, false))
             continue
           }
-          if (current?.running || current?.backgroundWaiting) continue
-          if (!next) next = new Map(prev)
           next.set(sessionId, {
             running: true,
             content: '',
