@@ -60,6 +60,7 @@ export function installMacTrafficLightZoomSync(win: BrowserWindow): void {
   syncMacTrafficLightPosition(win)
   win.webContents.on('zoom-changed', () => syncMacTrafficLightPosition(win))
   win.webContents.on('before-input-event', (event, input) => {
+    if (event.defaultPrevented || input.isComposing || input.isAutoRepeat) return
     if (input.type !== 'keyDown' || !input.meta || input.control || input.alt) return
 
     const key = input.key.toLowerCase()
