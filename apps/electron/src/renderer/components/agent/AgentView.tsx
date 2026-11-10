@@ -1,3 +1,4 @@
+import { canReplaceAgentHistory, decideAgentHistoryLoad } from '@/lib/agent-persistence'
 /**
  * AgentView — Agent 模式主视图容器
  *
@@ -19,6 +20,7 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Sparkles, GitBranch } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
+import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import { AgentRuntimeSelector } from './AgentRuntimeSelector'
 import { AgentHeader } from './AgentHeader'
 import { createAgentComposerToolbarItems } from './agent-composer-toolbar-config'
@@ -102,6 +104,7 @@ import {
   agentAttachedFilesMapAtom,
   workspaceAttachedDirectoriesMapAtom,
   workspaceAttachedFilesMapAtom,
+  agentPersistenceMapAtom,
   liveMessagesMapAtom,
   liveMessagesAtomFamily,
   agentThinkingAtom,
@@ -1004,7 +1007,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       // 这份 stale live，避免切回会话时把同一条 /compact 再叠加一份。
       // 运行中的会话必须保留 live，以支持切走后回来继续看流式进度。
       const streamStateAtMount = store.get(agentStreamingStatesAtom).get(sessionId)
-      if (!streamStateAtMount?.running) {
+      if (!streamStateAtMount?.running && canReplaceAgentHistory(store.get(agentPersistenceMapAtom).get(sessionId), streamStateAtMount)) {
         setLiveMessagesMap((prev) => {
           if (!prev.has(sessionId)) return prev
           const map = new Map(prev)
@@ -1027,6 +1030,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       }
     }
     let cancelled = false
+    const persistenceAtLoad = store.get(agentPersistenceMapAtom).get(sessionId)
+    const generationAtLoad = store.get(agentStreamingStatesAtom).get(sessionId)?.startedAt
     // 桌面懒加载：首次只取尾部一页（tail）；refresh（流结束/出错/rewind）时覆盖
     // 已加载条数 + 余量，避免把用户已加载的更早历史丢回空窗。
     // 注意：tail 的基数已含上一次 refresh 顺带拉回的更早历史，因此 refresh 结果
@@ -1047,6 +1052,33 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     loadPromise
       .then((sdkMsgs) => {
         if (cancelled) return
+        const streamAtResult = store.get(agentStreamingStatesAtom).get(sessionId)
+        const persistenceAtResult = store.get(agentPersistenceMapAtom).get(sessionId)
+        // 读盘期间的新 run / ACK 必须重新读盘，不能让旧请求清理或覆盖实时答复。
+        const decision = decideAgentHistoryLoad({
+          generationAtLoad,
+          generationNow: streamAtResult?.startedAt,
+          persistenceAtLoad,
+          persistenceNow: persistenceAtResult,
+          streamNow: streamAtResult,
+        })
+        if (decision === 'discard') {
+          setMessagesLoaded(true)
+          return
+        }
+        if (decision === 'retry') {
+          // 落盘停在 pending/failed：历史仍要显示（否则整段空窗），但不能拿这次快照
+          // 去清实时副本。补一次读盘让窗口收敛；重读时状态已稳定，不会反复触发。
+          setMessagesLoaded(true)
+          store.set(agentMessageRefreshAtom, (prev) => {
+            const map = new Map(prev)
+            map.set(sessionId, (map.get(sessionId) ?? 0) + 1)
+            return map
+          })
+          return
+        }
+        // 落盘未完成/失败：磁盘历史照常应用，但实时答复与流式正文必须保留。
+        const canCleanLive = canReplaceAgentHistory(persistenceAtResult, streamAtResult)
         const historyResult = normalizeAgentHistoryResult(
           sdkMsgs,
           { startIndex: historyStartIndexRef.current, hasMore: historyHasMoreRef.current },
@@ -1094,6 +1126,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           // 确保 React 在一次渲染中同时显示持久化消息并移除流式气泡/实时消息，
           // 避免「实时消息已清 → 持久化消息未到」的空档闪烁
           // 注意：保留 inputTokens/contextWindow 以维持上下文用量圆环显示
+          if (!canCleanLive) return
           setStreamingStates((prev) => {
             const state = prev.get(sessionId)
             // 仍在运行中：不清除
@@ -3186,108 +3219,16 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     />
   )
 
-  return (
-    <>
-    <QuoteSourceMarkers
-      sessionId={sessionId}
-      version={quoteMarkerVersion}
-      getQuotes={getVisibleQuoteSelections}
-    />
-    <AgentSessionProvider sessionId={sessionId}>
-      <div ref={minimapHostRef} className="relative flex h-full min-h-0 min-w-0 w-full flex-1">
-      <div data-profer-navigation-region="conversation" data-agent-session-id={sessionId} tabIndex={-1} className="agent-conversation flex h-full min-h-0 min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
-        <div className="shrink-0">
-          {!standalone && <AgentHeader sessionId={sessionId} />}
-        </div>
-        {delegationRuntimeDisplay && <div className="shrink-0"><DelegationRuntimeBar display={delegationRuntimeDisplay} /></div>}
-        {/* 探索分支：来源标注 + 带回主线（原侧面板分支条，随分支 Tab 化迁入）。
-            独立会话窗口没有父会话 Tab，避免把引用写进本窗口的临时草稿。 */}
-        {!standalone && isExplorationBranch && <ExplorationBranchBar branchSessionId={sessionId} />}
-        <div className="shrink-0">
-          <GoalStatusBar sessionId={sessionId} />
-        </div>
-        <GoalStatusDialog sessionId={sessionId} open={goalStatusOpen} onOpenChange={setGoalStatusOpen} />
-        <AlertDialog open={Boolean(pendingGoalReplacement)} onOpenChange={(open) => { if (!open && !replacingGoal) setPendingGoalReplacement(null) }}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>归档当前 Goal 并开始新目标？</AlertDialogTitle>
-              <AlertDialogDescription>
-                当前目标「{pendingGoalReplacement?.previous.goal}」尚未完成（{pendingGoalReplacement ? GOAL_STATUS_LABELS[pendingGoalReplacement.previous.status] : ''}）。确认后会先停止并归档当前目标与轮次历史，再沿用此会话上下文执行「{pendingGoalReplacement?.goal}」。
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={replacingGoal}>保留当前目标</AlertDialogCancel>
-              <AlertDialogAction disabled={replacingGoal || pendingGoalReplacement?.previous.status === 'stopping'} onClick={(event) => {
-                event.preventDefault()
-                if (!pendingGoalReplacement || replacingGoal) return
-                const pending = pendingGoalReplacement
-                setReplacingGoal(true)
-                void startGoalWithReplacement(window.electronAPI, sessionId, pending, pending.previous.id).then((result) => {
-                  if (result.state) setCurrentGoal(result.state)
-                  setPendingGoalReplacement(null)
-                  clearComposer()
-                  toast.success('旧 Goal 已归档，新 Goal 已启动')
-                }).catch((error) => {
-                  toast.error('Goal 替换失败', { description: error instanceof Error ? error.message : String(error) })
-                }).finally(() => setReplacingGoal(false))
-              }}>{replacingGoal ? '正在归档并启动…' : '归档并开始新目标'}</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+  // 新会话（空会话）：欢迎语与输入框一起垂直居中，而不是让输入框贴底
+  const isEmptySession = messagesLoaded
+    && !conversationRunState.streaming
+    && !(streamState?.backgroundWaiting ?? false)
+    && persistedSDKMessages.length === 0
+    && (liveMessages?.length ?? 0) === 0
 
-        {/* 消息区域 */}
-        <AgentMessages
-          minimapHostRef={minimapHostRef}
-          sessionId={sessionId}
-          sessionModelId={agentModelId || undefined}
-          agentRuntime={sessionAgentRuntime}
-          messagesLoaded={messagesLoaded}
-          persistedSDKMessages={persistedSDKMessages}
-          streaming={conversationRunState.streaming}
-          runStartedAtFallback={conversationRunState.startedAt ?? delegationFallbackStartedAt}
-          streamState={streamState}
-          runningDelegationCount={runningDelegationCount}
-          liveMessages={liveMessages}
-          sessionPath={sessionPath}
-          attachedDirs={allAttachedDirs}
-          stoppedByUser={stoppedByUser}
-          streamError={agentError}
-          onRetry={handleRetry}
-          onRetryInNewSession={standalone ? undefined : handleRetryInNewSession}
-          onRegenerateLastTurn={canRegenerateLastTurn ? handleRegenerateLastTurn : undefined}
-          onEditUserMessage={handleEditUserMessage}
-          onSubmitEditUserMessage={handleSubmitEditUserMessage}
-          onCancelEditUserMessage={handleCancelEditUserMessage}
-          editingUserMessageUuid={editingUserMessageUuid}
-          onFork={!standalone && canFork ? handleFork : undefined}
-          onExplore={!standalone && canExplore ? handleExplore : undefined}
-          onRewind={handleRewindRequest}
-          onCompact={handleCompact}
-          onLoadEarlierHistory={handleLoadEarlierHistory}
-          historyMoreAvailable={historyHasMore}
-          historyLoadingEarlier={historyLoading}
-          explorationEnabled={!isExplorationBranch}
-        />
-
-        {/* 权限请求横幅 */}
-        <div className="shrink-0">
-          <PermissionBanner sessionId={sessionId} onRequestStop={handleStop} />
-
-          {/* AskUserQuestion 交互式问答横幅 */}
-          <AskUserBanner sessionId={sessionId} onRequestStop={handleStop} />
-
-          {/* ExitPlanMode 计划审批横幅 */}
-          <ExitPlanModeBanner sessionId={sessionId} onRequestStop={handleStop} />
-
-          {/* 模型主动提议建立 Goal：不阻塞当前轮，只等用户确认 */}
-          <GoalProposalBanner sessionId={sessionId} />
-        </div>
-
-        {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
-        {!hasBannerOverlay && (
-        <div className="shrink-0 px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
-          {/* 下方 composer 以完整顶部圆角叠在服务轨上；服务轨延伸至圆角背后。 */}
-          <div className="composer-stack">
+  // 输入卡片：底部贴边布局与居中欢迎布局共用同一份结构
+  const composerStack = (
+    <div className="composer-stack">
             <BackgroundTaskControls sessionId={sessionId} />
             <RuntimeProcessPanel sessionId={sessionId} />
             <div
@@ -3436,9 +3377,120 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
               <ComposerToolbar items={inputToolbarItems} trailing={inputTrailingNode} />
             </div>
 
-          </div>
+    </div>
+  )
+
+  return (
+    <>
+    <QuoteSourceMarkers
+      sessionId={sessionId}
+      version={quoteMarkerVersion}
+      getQuotes={getVisibleQuoteSelections}
+    />
+    <AgentSessionProvider sessionId={sessionId}>
+      <div ref={minimapHostRef} className="relative flex h-full min-h-0 min-w-0 w-full flex-1">
+      <div data-profer-navigation-region="conversation" data-agent-session-id={sessionId} tabIndex={-1} className="agent-conversation flex h-full min-h-0 min-w-0 w-full flex-1 flex-col max-w-[min(72rem,100%)] mx-auto">
+        <div className="shrink-0">
+          {!standalone && <AgentHeader sessionId={sessionId} />}
         </div>
-        )}
+        {delegationRuntimeDisplay && <div className="shrink-0"><DelegationRuntimeBar display={delegationRuntimeDisplay} /></div>}
+        {/* 探索分支：来源标注 + 带回主线（原侧面板分支条，随分支 Tab 化迁入）。
+            独立会话窗口没有父会话 Tab，避免把引用写进本窗口的临时草稿。 */}
+        {!standalone && isExplorationBranch && <ExplorationBranchBar branchSessionId={sessionId} />}
+        <div className="shrink-0">
+          <GoalStatusBar sessionId={sessionId} />
+        </div>
+        <GoalStatusDialog sessionId={sessionId} open={goalStatusOpen} onOpenChange={setGoalStatusOpen} />
+        <AlertDialog open={Boolean(pendingGoalReplacement)} onOpenChange={(open) => { if (!open && !replacingGoal) setPendingGoalReplacement(null) }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>归档当前 Goal 并开始新目标？</AlertDialogTitle>
+              <AlertDialogDescription>
+                当前目标「{pendingGoalReplacement?.previous.goal}」尚未完成（{pendingGoalReplacement ? GOAL_STATUS_LABELS[pendingGoalReplacement.previous.status] : ''}）。确认后会先停止并归档当前目标与轮次历史，再沿用此会话上下文执行「{pendingGoalReplacement?.goal}」。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={replacingGoal}>保留当前目标</AlertDialogCancel>
+              <AlertDialogAction disabled={replacingGoal || pendingGoalReplacement?.previous.status === 'stopping'} onClick={(event) => {
+                event.preventDefault()
+                if (!pendingGoalReplacement || replacingGoal) return
+                const pending = pendingGoalReplacement
+                setReplacingGoal(true)
+                void startGoalWithReplacement(window.electronAPI, sessionId, pending, pending.previous.id).then((result) => {
+                  if (result.state) setCurrentGoal(result.state)
+                  setPendingGoalReplacement(null)
+                  clearComposer()
+                  toast.success('旧 Goal 已归档，新 Goal 已启动')
+                }).catch((error) => {
+                  toast.error('Goal 替换失败', { description: error instanceof Error ? error.message : String(error) })
+                }).finally(() => setReplacingGoal(false))
+              }}>{replacingGoal ? '正在归档并启动…' : '归档并开始新目标'}</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* 消息区域（空会话时仅隐藏，欢迎语与输入框由下方居中容器承载） */}
+        <AgentMessages
+          minimapHostRef={minimapHostRef}
+          sessionId={sessionId}
+          sessionModelId={agentModelId || undefined}
+          agentRuntime={sessionAgentRuntime}
+          messagesLoaded={messagesLoaded}
+          persistedSDKMessages={persistedSDKMessages}
+          streaming={conversationRunState.streaming}
+          runStartedAtFallback={conversationRunState.startedAt ?? delegationFallbackStartedAt}
+          streamState={streamState}
+          runningDelegationCount={runningDelegationCount}
+          liveMessages={liveMessages}
+          sessionPath={sessionPath}
+          attachedDirs={allAttachedDirs}
+          stoppedByUser={stoppedByUser}
+          streamError={agentError}
+          onRetry={handleRetry}
+          onRetryInNewSession={standalone ? undefined : handleRetryInNewSession}
+          onRegenerateLastTurn={canRegenerateLastTurn ? handleRegenerateLastTurn : undefined}
+          onEditUserMessage={handleEditUserMessage}
+          onSubmitEditUserMessage={handleSubmitEditUserMessage}
+          onCancelEditUserMessage={handleCancelEditUserMessage}
+          editingUserMessageUuid={editingUserMessageUuid}
+          onFork={!standalone && canFork ? handleFork : undefined}
+          onExplore={!standalone && canExplore ? handleExplore : undefined}
+          onRewind={handleRewindRequest}
+          onCompact={handleCompact}
+          onLoadEarlierHistory={handleLoadEarlierHistory}
+          historyMoreAvailable={historyHasMore}
+          historyLoadingEarlier={historyLoading}
+          explorationEnabled={!isExplorationBranch}
+          hidden={isEmptySession}
+        />
+
+        {/* 权限请求横幅 */}
+        <div className="shrink-0">
+          <PermissionBanner sessionId={sessionId} onRequestStop={handleStop} />
+
+          {/* AskUserQuestion 交互式问答横幅 */}
+          <AskUserBanner sessionId={sessionId} onRequestStop={handleStop} />
+
+          {/* ExitPlanMode 计划审批横幅 */}
+          <ExitPlanModeBanner sessionId={sessionId} onRequestStop={handleStop} />
+
+          {/* 模型主动提议建立 Goal：不阻塞当前轮，只等用户确认 */}
+          <GoalProposalBanner sessionId={sessionId} />
+        </div>
+
+        {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代 */}
+        {!hasBannerOverlay && (isEmptySession ? (
+          /* 新会话：欢迎语 + 输入框整体居中，输入框宽度收窄 */
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-8">
+            <WelcomeEmptyState variant="inline">
+              <div className="w-full max-w-[min(46rem,100%)]">{composerStack}</div>
+            </WelcomeEmptyState>
+          </div>
+        ) : (
+          <div className="shrink-0 px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="agent">
+            {composerStack}
+          </div>
+        ))}
       </div>
       </div>
     </AgentSessionProvider>

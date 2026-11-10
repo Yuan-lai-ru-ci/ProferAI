@@ -295,8 +295,10 @@ export function GlobalProfileView(): React.ReactElement {
             </div>
           </div>
         ) : (
-          <ViewBody className="pb-10">
+          <ViewBody className="gap-4 pb-10">
             <h1 className="sr-only">我的画像</h1>
+            {/* 统一热力图：聚合全部工作区的活跃度，放在画像内容上方 */}
+            <GlobalUsageCard />
             <div className="grid items-start gap-4 lg:grid-cols-[252px_minmax(0,1fr)_252px]">
               <aside className="min-w-0 space-y-4">
                 <ProfileIdentity
@@ -321,7 +323,6 @@ export function GlobalProfileView(): React.ReactElement {
               </aside>
 
               <main className="min-w-0 space-y-4">
-                <GlobalUsageCard />
                 <FreeTextCard contents={contents} onOpenFile={openFile} />
                 <InferredCard content={contents['user-sense.md'] ?? ''} onOpenFile={openFile} />
               </main>

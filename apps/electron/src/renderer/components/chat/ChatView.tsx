@@ -22,6 +22,7 @@ import { ChatMessages } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { BranchTreeView } from './HistoryDrawer'
 import { AgentRecommendBanner } from './AgentRecommendBanner'
+import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import { PromptEditorSidebar } from './PromptEditorSidebar'
 import { KNOWLEDGE_PREVIEW_EVENT, KnowledgePreviewContent } from '@/components/knowledge-base/KnowledgePreviewPanel'
 import type { InlineEditSubmitPayload } from './ChatMessageItem'
@@ -765,6 +766,25 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
     setHasMoreMessages(false)
   }, [conversationId])
 
+  // 新会话（空对话）：欢迎语与输入框一起垂直居中，而不是让输入框贴底
+  const isEmptyConversation = messagesLoaded && !isStreaming && messages.length === 0
+
+  // 输入卡片：底部贴边布局与居中欢迎布局共用同一份结构
+  const chatComposer = (
+    <ChatInput
+            conversationId={conversationId}
+            streaming={isStreaming}
+            pendingAttachments={pendingAttachments}
+            onSetPendingAttachments={setPendingAttachments}
+            pendingKnowledgeReferences={pendingKnowledgeReferences}
+            onSetPendingKnowledgeReferences={setPendingKnowledgeReferences}
+            onSend={handleSend}
+            onStop={handleStop}
+            onClearContext={handleClearContext}
+      flush={isEmptyConversation}
+    />
+  )
+
   return (
     <div className="flex h-full overflow-hidden">
       {/* 主内容区域 */}
@@ -773,6 +793,7 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
         <ChatHeader conversation={conversation} onOpenHistory={() => setHistoryDrawerOpen(true)} />
         <div className="flex flex-col flex-1 w-full max-w-[min(72rem,100%)] mx-auto overflow-hidden min-h-0">
           {/* 中间：消息区域 */}
+          {/* 消息区（空对话时仅隐藏，欢迎语与输入框由下方居中容器承载） */}
           <ChatMessages
             minimapHostRef={minimapHostRef}
             conversationId={conversationId}
@@ -795,6 +816,7 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
             onDeleteDivider={handleDeleteDivider}
             onLoadMore={handleLoadMore}
             onOpenHistory={() => setHistoryDrawerOpen(true)}
+            hidden={isEmptyConversation}
           />
 
           {/* 错误提示 */}
@@ -833,18 +855,16 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
           {/* Agent 模式推荐横幅：独立会话窗口不接管跨模式迁移 */}
           {!standalone && <AgentRecommendBanner />}
 
-          {/* 底部：输入框 */}
-          <ChatInput
-            conversationId={conversationId}
-            streaming={isStreaming}
-            pendingAttachments={pendingAttachments}
-            onSetPendingAttachments={setPendingAttachments}
-            pendingKnowledgeReferences={pendingKnowledgeReferences}
-            onSetPendingKnowledgeReferences={setPendingKnowledgeReferences}
-            onSend={handleSend}
-            onStop={handleStop}
-            onClearContext={handleClearContext}
-          />
+          {/* 底部：输入框（新会话时与欢迎语一起居中） */}
+          {isEmptyConversation ? (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-8">
+              <WelcomeEmptyState variant="inline">
+                <div className="w-full max-w-[min(46rem,100%)]">{chatComposer}</div>
+              </WelcomeEmptyState>
+            </div>
+          ) : (
+            chatComposer
+          )}
         </div>
       </div>
 

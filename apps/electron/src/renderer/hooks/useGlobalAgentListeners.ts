@@ -1,3 +1,4 @@
+import { decidePersistenceAck } from '@/lib/agent-persistence'
 /**
  * useGlobalAgentListeners — 全局 Agent IPC 监听器
  *
@@ -20,6 +21,7 @@ import { useStore } from 'jotai'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
 import {
+  agentPersistenceMapAtom,
   agentStreamingStatesAtom,
   agentStreamErrorsAtom,
   agentSessionsAtom,
@@ -886,7 +888,28 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         if (payload.kind === 'profer_event') {
           const proferEvent = payload.event
           if (proferEvent.type === 'session_persistence') {
-            if (proferEvent.status === 'failed') toast.warning(proferEvent.message ?? '本轮消息未能保存到会话历史')
+            const current = store.get(agentPersistenceMapAtom).get(sessionId)
+            const stream = store.get(agentStreamingStatesAtom).get(sessionId)
+            const ackDecision = decidePersistenceAck(current, proferEvent, stream)
+            // 旧链路 / 无 runId 的 ACK 只保留“保存失败要提示”，不得改写本轮落盘状态。
+            if (ackDecision === 'toast') {
+              toast.warning(proferEvent.message ?? '本轮消息未能保存到会话历史')
+              return
+            }
+            if (ackDecision === 'ignore') return
+            store.set(agentPersistenceMapAtom, (prev) => {
+              const next = new Map(prev)
+              next.set(sessionId, { ...current!, status: proferEvent.status, watermark: proferEvent.watermark ?? current?.watermark, error: proferEvent.message })
+              return next
+            })
+            if (proferEvent.status === 'failed') toast.warning(proferEvent.message ?? '本轮消息未能保存到会话历史；实时答复已保留，请勿重新运行 Agent')
+            if (proferEvent.status === 'saved') {
+              store.set(agentMessageRefreshAtom, (prev) => {
+                const next = new Map(prev)
+                next.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+                return next
+              })
+            }
             return
           }
           if (proferEvent.type === 'preview_requested' && proferEvent.sessionId === sessionId) {
@@ -1546,6 +1569,14 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         // 防止迟到的旧终态通知、标记或关闭新 run。
         const activeStreamState = store.get(agentStreamingStatesAtom).get(data.sessionId)
         if (!isCurrentAgentStreamCompletion(activeStreamState, data)) return
+        store.set(agentPersistenceMapAtom, (prev) => {
+          const next = new Map(prev)
+          if (data.persistence) next.set(data.sessionId, { ...data.persistence, runId: data.runId, startedAt: activeStreamState.startedAt })
+          else next.delete(data.sessionId) // legacy completion 保留旧行为
+          return next
+        })
+        if (data.persistence?.status === 'failed') toast.warning(data.persistence.error ?? '本轮消息未能保存到会话历史；实时答复已保留，请勿重新运行 Agent')
+
 
         // 发送桌面通知（任务完成，始终播放提示音）
         const enabled = store.get(notificationsEnabledAtom)
@@ -1680,7 +1711,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
 
         const finalize = (): void => {
           // 竞态保护：新流已启动时不要清理状态
-          if (isNewStreamRunning()) return
+          if (isNewStreamRunning() || (data.persistence && data.persistence.status !== 'saved')) return
 
           // 后台任务等待态：保留后台任务列表（面板继续显示在跑任务），不做收尾清理，
           // 等任务完成 Agent 自动唤醒续轮后再走真正的完成路径。
@@ -1742,7 +1773,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         }
 
         // 通知 AgentView 重新加载消息（无论是否为当前会话）
-        if (!isNewStreamRunning()) {
+        if (!isNewStreamRunning() && (!data.persistence || data.persistence.status === 'saved')) {
           bumpRefresh()
         }
         finalize()

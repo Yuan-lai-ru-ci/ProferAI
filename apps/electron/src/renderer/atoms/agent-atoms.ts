@@ -1,3 +1,4 @@
+import type { AgentPersistenceState } from '../lib/agent-persistence'
 /**
  * Agent Atoms — Agent 模式的 Jotai 状态管理
  *
@@ -268,6 +269,8 @@ export const agentSessionStreamingStateAtomFamily = atomFamily((sessionId: strin
  * 流式期间每条 SDKMessage 直接追加，供新 UI 渲染。
  * 流式完成后清空（持久化消息从 JSONL 加载）。
  */
+export const agentPersistenceMapAtom = atom<Map<string, AgentPersistenceState>>(new Map())
+
 export const liveMessagesMapAtom = atom<Map<string, SDKMessage[]>>(new Map())
 
 const EMPTY_LIVE_MESSAGES: SDKMessage[] = []

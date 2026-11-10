@@ -66,9 +66,11 @@ interface ChatInputProps {
   onClearContext?: () => void
   /** 自定义占位文字 */
   placeholder?: string
+  /** 嵌入居中欢迎布局：去掉外层留白，由外层容器控制宽度与间距 */
+  flush?: boolean
 }
 
-export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, pendingKnowledgeReferences = [], onSetPendingKnowledgeReferences, onSend, onStop, onClearContext, placeholder }: ChatInputProps): React.ReactElement {
+export function ChatInput({ conversationId, streaming, pendingAttachments, onSetPendingAttachments, pendingKnowledgeReferences = [], onSetPendingKnowledgeReferences, onSend, onStop, onClearContext, placeholder, flush = false }: ChatInputProps): React.ReactElement {
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   // 从 Map atom 读写草稿
   const draftsMap = useAtomValue(conversationDraftsAtom)
@@ -377,7 +379,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
   )
 
   return (
-    <div className="px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]" data-input-mode="chat">
+    <div className={cn(flush ? 'w-full' : 'px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]')} data-input-mode="chat">
         {/* 卡片式输入容器 — 对标 Cherry Studio: border-radius 17px, 0.5px border */}
         <div
           ref={composerCardRef}

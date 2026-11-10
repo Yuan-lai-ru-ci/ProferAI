@@ -176,6 +176,11 @@ interface AgentMessagesProps {
   historyLoadingEarlier?: boolean
   /** 嵌入在右侧探索分支时关闭探索入口，避免无限嵌套。 */
   explorationEnabled?: boolean
+  /**
+   * 空会话时隐藏整个消息区（欢迎语与输入框由外层居中容器承载）。
+   * 仅隐藏不卸载：滚动位置、回调与实时消息订阅保持存活。
+   */
+  hidden?: boolean
 }
 
 /** 空状态引导 — 使用 WelcomeEmptyState */
@@ -561,7 +566,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, runStartedAtFallback, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, runStartedAtFallback, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true, hidden = false }: AgentMessagesProps): React.ReactElement {
   const store = useStore()
   // 草稿区基准（storageDir）：显式传入优先，否则按会话所属工作区只读解析。
   const resolvedDraftRoot = useAgentSessionDraftRoot(sessionId, draftRoot)
@@ -998,7 +1003,7 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
   return (
     <FileAccessSessionProvider sessionId={sessionId}>
     <BasePathsProvider basePaths={resolvedBasePaths}>
-    <div ref={historySelectionRootRef} className="relative flex min-h-0 flex-1 flex-col">
+    <div ref={historySelectionRootRef} className={cn('relative flex min-h-0 flex-1 flex-col', hidden && 'hidden')}>
     <Conversation key={sessionId} resize={ready && !transitioning ? 'smooth' : 'instant'} className={ready ? (skipFadeIn ? 'opacity-100' : 'opacity-100 motion-safe:transition-opacity motion-safe:duration-200') : 'opacity-0'}>
       <ScrollPositionManager id={sessionId} ready={ready} />
       <TopHistoryLoader
