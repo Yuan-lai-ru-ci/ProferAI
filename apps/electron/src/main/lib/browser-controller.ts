@@ -1753,6 +1753,19 @@ export class BrowserController {
     return structuredClone(this.buildPageProjection(browserSession, tab))
   }
 
+  /**
+   * 读取展示标签已落定的地址，供「在系统浏览器打开」使用。
+   * 严格只读：不创建会话、不改变前台所有权；空标签、about:blank 与本地文件预览（非 HTTP(S)）返回 null。
+   */
+  getDisplayUrl(sessionId: string, tabId?: string): string | null {
+    const browserSession = this.sessions.get(sessionId)
+    if (!browserSession) return null
+    const tab = tabId ? browserSession.tabs.get(tabId) : browserSession.tabs.get(browserSession.activeTabId)
+    const url = tab?.state.url?.trim()
+    if (!url || !/^https?:\/\//i.test(url)) return null
+    return url
+  }
+
   async respondToDialog(sessionId: string, tabId: string, input: import('@profer/shared').BrowserDialogResponse): Promise<void> {
     const tab = this.getDisplayTab(this.getSession(sessionId), tabId)
     if (!tab.isLocalPreview) this.assertRiskDisclaimerAcknowledged()

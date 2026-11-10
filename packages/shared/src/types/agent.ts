@@ -2604,6 +2604,8 @@ export const AGENT_IPC_CHANNELS = {
   SET_BROWSER_ZOOM: 'agent:set-browser-zoom',
   /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
   PASTE_BROWSER_CLIPBOARD: 'agent:paste-browser-clipboard',
+  /** 用户面板显式触发：把当前页面交给系统默认浏览器打开（地址由主进程按 tab 读取）。 */
+  OPEN_BROWSER_IN_SYSTEM: 'agent:open-browser-in-system',
   /** 主进程 → 渲染进程：受管网页的下载被安全拦截，携带脱敏文件名与来源 URL。 */
   BROWSER_DOWNLOAD_BLOCKED: 'agent:browser-download-blocked',
   BROWSER_LOCAL_FILE_SELECTION: 'agent:browser-local-file-selection',

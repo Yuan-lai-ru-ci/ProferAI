@@ -187,3 +187,32 @@ test('Given Profer 已失焦 When 原显示页打开新窗口链接 Then 不切�
   expect(h.browserSession.activeTabId).toBe('user-page')
   expect(h.activated).toEqual([])
 })
+
+test('Given 用户正在查看页面 When 请求在系统浏览器打开 Then 只读返回展示页地址且不改动会话', () => {
+  const h = harness()
+  expect(h.controller.getDisplayUrl('session-1')).toBe('https://example.com/user-page')
+  // 只读：不切前台、不激活标签、不改工作指针。
+  expect(h.browserSession.activeTabId).toBe('user-page')
+  expect(h.browserSession.agentTabId).toBe('work-page')
+  expect(h.activated).toEqual([])
+})
+
+test('Given 显式指定标签 When 请求外开地址 Then 返回该标签自己的地址', () => {
+  const h = harness()
+  expect(h.controller.getDisplayUrl('session-1', 'work-page')).toBe('https://example.com/work-page')
+})
+
+test('Given 无会话或标签不存在 When 请求外开地址 Then 返回 null 而不创建会话', () => {
+  const h = harness()
+  expect(h.controller.getDisplayUrl('missing-session')).toBeNull()
+  expect(h.controller.getDisplayUrl('session-1', 'missing-tab')).toBeNull()
+  expect(h.controller.getState('missing-session')).toBeNull()
+})
+
+test('Given 标签还没有真实页面 When 请求外开地址 Then 非 HTTP(S) 地址一律返回 null', () => {
+  const h = harness()
+  h.display.state.url = 'about:blank'
+  expect(h.controller.getDisplayUrl('session-1')).toBeNull()
+  h.display.state.url = ''
+  expect(h.controller.getDisplayUrl('session-1')).toBeNull()
+})

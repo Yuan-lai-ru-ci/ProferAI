@@ -2281,6 +2281,16 @@ export function registerIpcHandlers(): void {
     await assertBrowserSessionAccess(event.sender.id, input.sessionId)
     return browserController.pasteClipboard(input.sessionId, input.tabId)
   })
+  // 用户侧：把受管浏览器当前页面交给系统默认浏览器。
+  // 不复用 OPEN_EXTERNAL：那里为防 SSRF 拒绝本机/私网地址，而受管浏览器本来就允许用户
+  // 显式访问 localhost / 局域网开发地址；复用会让开发页面在系统浏览器里静默打不开。
+  // 地址只从主进程按 tab 读取，不接受渲染进程传入的任意 URL。
+  ipcMain.handle(AGENT_IPC_CHANNELS.OPEN_BROWSER_IN_SYSTEM, async (event, input: BrowserTabInput): Promise<void> => {
+    await assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    const url = browserController.getDisplayUrl(input.sessionId, input.tabId)
+    if (!url) throw new Error('当前页面没有可以交给系统浏览器的地址。')
+    await shell.openExternal(url)
+  })
   ipcMain.handle(AGENT_IPC_CHANNELS.SET_BROWSER_ZOOM, async (event, input: BrowserTabInput & { zoomFactor: number }): Promise<BrowserViewState> => {
     await assertBrowserSessionAccess(event.sender.id, input.sessionId)
     if (!input.tabId || typeof input.zoomFactor !== 'number') throw new Error('tabId 和 zoomFactor 必填。')

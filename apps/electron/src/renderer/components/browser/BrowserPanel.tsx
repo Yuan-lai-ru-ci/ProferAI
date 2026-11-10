@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { BrowserStartPageState, BrowserViewState } from '@profer/shared'
-import { ArrowLeft, ArrowRight, Check, Copy, Globe2, Languages, LoaderCircle, Plus, RefreshCw, Search, ShieldAlert, Square, Star, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, Globe2, Languages, LoaderCircle, Plus, RefreshCw, Search, ShieldAlert, Square, Star, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
 import { Input } from '@profer/ui/primitives/input'
@@ -171,6 +171,24 @@ export function BrowserPanel({ sessionId, state, visible, active = false, avoidW
       console.error('[受管浏览器] 复制网址失败:', error)
     }
   }, [url, state?.url])
+
+  // 当前页能否交给系统默认浏览器：空标签、about:blank 与本地文件预览都没有可外开的地址。
+  const canOpenInSystemBrowser = /^https?:\/\//i.test(state?.url ?? '')
+  const [openingInSystemBrowser, setOpeningInSystemBrowser] = React.useState(false)
+  const openInSystemBrowser = React.useCallback(async () => {
+    const openExternally = (window.electronAPI as Partial<typeof window.electronAPI>).openBrowserInSystemBrowser
+    if (typeof openExternally !== 'function' || !state?.activeTabId) return
+    setOpeningInSystemBrowser(true)
+    try {
+      // 地址由主进程按标签读取，渲染层不传 URL，避免外开地址与真实页面分叉。
+      await openExternally({ sessionId, tabId: state.activeTabId })
+    } catch (error) {
+      console.error('[受管浏览器] 在系统浏览器打开失败:', error)
+      toast.error('在系统浏览器打开失败', { description: error instanceof Error ? error.message : '无法把当前页面交给系统浏览器' })
+    } finally {
+      setOpeningInSystemBrowser(false)
+    }
+  }, [sessionId, state?.activeTabId])
 
   /** 收起浏览器面板（不销毁主进程浏览器会话），与标签页的关闭按钮语义区分，避免误触销毁整个浏览器。 */
   const closeBrowserPanel = React.useCallback(() => {
@@ -442,6 +460,7 @@ export function BrowserPanel({ sessionId, state, visible, active = false, avoidW
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" aria-label={state?.loading ? '停止网页加载' : '刷新网页'} disabled={riskBlocked} onClick={() => { if (state?.loading) void stopPage(); else void runNavigationAction('reload') }}>{state?.loading ? <X className="size-3.5" /> : pendingNavAction === 'reload' ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>{state?.loading ? '停止网页加载' : '刷新'}</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${translated ? 'text-primary' : ''}`} disabled={riskBlocked || translating} onClick={() => void toggleTranslate()}>{translating ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>{translated ? '恢复原文' : '整页翻译'}</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${isBookmarked ? 'text-amber-500' : ''}`} disabled={riskBlocked || !state?.url || bookmarking} onClick={() => void toggleBookmark()} aria-label="收藏当前页">{bookmarking ? <LoaderCircle className="size-3.5 animate-spin" /> : <Star className={`size-3.5 ${isBookmarked ? 'fill-current' : ''}`} />}</Button></TooltipTrigger><TooltipContent>{isBookmarked ? '取消收藏' : '收藏当前页'}</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={!canOpenInSystemBrowser || openingInSystemBrowser} onClick={() => void openInSystemBrowser()} aria-label="在系统浏览器打开当前页">{openingInSystemBrowser ? <LoaderCircle className="size-3.5 animate-spin" /> : <ExternalLink className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>在系统浏览器打开</TooltipContent></Tooltip>
         {/* 地址栏：平时显示 URL 胶囊；hover 时胶囊淡出、输入框淡入原位替换（文字位置/字号一致），末尾复制；动画对齐 ContextMenu（fade + zoom 的轻量版） */}
         <div
           className={cn('flex-1 min-w-0', expanded === 'url' ? 'static' : 'relative')}
@@ -561,6 +580,7 @@ export function BrowserPanel({ sessionId, state, visible, active = false, avoidW
                 <div className="mt-1 flex items-center gap-2">
                   <Button type="button" size="sm" className="h-7 px-3 text-xs" onClick={() => void retryLoad()}>重试</Button>
                   <Button type="button" size="sm" variant="ghost" className="h-7 px-3 text-xs" onClick={() => void copyUrl()}>复制地址</Button>
+                  {canOpenInSystemBrowser && <Button type="button" size="sm" variant="ghost" className="h-7 px-3 text-xs" disabled={openingInSystemBrowser} onClick={() => void openInSystemBrowser()}>在系统浏览器打开</Button>}
                 </div>
               </div>
             )}

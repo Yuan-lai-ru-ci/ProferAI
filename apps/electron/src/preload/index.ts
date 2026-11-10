@@ -284,6 +284,8 @@ export interface ElectronAPI {
   translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
   /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
   pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
+  /** 用户面板显式触发：把当前页面交给系统默认浏览器打开。 */
+  openBrowserInSystemBrowser: (input: import('@profer/shared').BrowserTabInput) => Promise<void>
   /** 订阅受管网页下载被拦截的脱敏事件。 */
   onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => () => void
   /**
@@ -1884,6 +1886,7 @@ const electronAPI: ElectronAPI = {
   respondBrowserDialog: (input: import('@profer/shared').BrowserTabInput & import('@profer/shared').BrowserDialogResponse) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESPOND_BROWSER_DIALOG, input),
   translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.TRANSLATE_BROWSER, input),
   pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PASTE_BROWSER_CLIPBOARD, input),
+  openBrowserInSystemBrowser: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_BROWSER_IN_SYSTEM, input),
   onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: import('@profer/shared').BrowserDownloadBlockedEvent) => callback(payload)
     ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
