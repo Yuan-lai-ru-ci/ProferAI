@@ -1056,11 +1056,17 @@ export function createElectronAgentHost(options: ElectronAgentHostOptions = {}):
       : undefined)
   const permissions = createElectronPermissionPort({
     ...options.permission,
-    // 两个来源都要看：run facts 覆盖本轮显式 override（automation/飞书），
-    // 会话元数据覆盖用户在界面上选的 bypass。
-    isBypassPermissions: (sessionId: string) =>
-      getAgentRuntimeRunFacts(sessionId)?.permissionModeOverride === 'bypassPermissions'
-      || getAgentSessionMeta(sessionId)?.permissionMode === 'bypassPermissions',
+    // 三个来源依次看：本轮显式 override（automation/飞书/移动端）、本轮冻结的策略快照、
+    // 会话元数据（用户在界面上选的值）。快照必须参与：预设未声明权限时策略解析为
+    // 完全自动（默认），provider 收到的就是这个值；只看会话元数据会让没写
+    // permissionMode 的历史会话与移动端会话退化成「每一步都要确认」。
+    isBypassPermissions: (sessionId: string) => {
+      const override = getAgentRuntimeRunFacts(sessionId)?.permissionModeOverride
+      if (override) return override === 'bypassPermissions'
+      const snapshot = agentRuntimePolicyRuns.getForRun(sessionId)
+      if (snapshot) return snapshot.policy.permissionMode === 'bypassPermissions'
+      return getAgentSessionMeta(sessionId)?.permissionMode === 'bypassPermissions'
+    },
   })
   const preparationPorts = { credentials, resources, permissions, events, toolAssembly }
   const defaultPreparation = createElectronQueryPreparationPort(preparationPorts)
