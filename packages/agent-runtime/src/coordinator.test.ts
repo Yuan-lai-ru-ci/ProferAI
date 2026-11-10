@@ -208,6 +208,65 @@ describe('AgentRuntimeCoordinator headless host', () => {
     }).promise).resolves.toEqual({ status: 'completed' })
     expect(order).toEqual(['lock', 'runtime_claimed', 'preparation', 'runtime_started', 'append', 'onRunStarted', 'provider'])
   })
+  test('delayed receipt stays pending through completion, then publishes saved without changing run outcome', async () => {
+    let resolveReceipt!: (value: { status: 'saved'; watermark: number }) => void
+    const completion = new Promise<{ status: 'saved' | 'failed'; watermark: number }>(resolve => {
+      resolveReceipt = resolve as (value: { status: 'saved'; watermark: number }) => void
+    })
+    const states: Array<{ status: string; watermark?: number }> = []
+    const events: AgentRuntimeEvent[] = []
+    const coordinator = new AgentRuntimeCoordinator({
+      adapters: { pi: adapter(async (_input, callbacks) => {
+        await callbacks.onMessage?.({ type: 'assistant', uuid: 'receipt-message', message: { content: [{ type: 'text', text: 'answer' }] } } as never)
+        return { status: 'completed' }
+      }) },
+      ports: {
+        sessions: {
+          getMeta: () => undefined, appendMessages() {}, updateMeta: () => undefined,
+          enqueueMessages: () => ({ accepted: true, watermark: 7, completion }),
+        },
+        host: { emit: event => { events.push(event) } },
+      },
+    })
+    const handle = coordinator.run(query, { onEvent() {}, onPersistence: state => states.push(state) })
+    await expect(handle.promise).resolves.toEqual({ status: 'completed' })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(states.at(-1)).toMatchObject({ status: 'pending', watermark: 7 })
+    expect(events.find(event => event.type === 'runtime_finished')).toMatchObject({ persistence: { status: 'pending', watermark: 7 } })
+    resolveReceipt({ status: 'saved', watermark: 7 })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(states.at(-1)).toMatchObject({ status: 'saved', watermark: 7 })
+    expect(events.filter(event => event.type === 'runtime_persistence').map(event => event.persistence.status)).toEqual(['pending', 'saved'])
+    expect(await handle.promise).toEqual({ status: 'completed' })
+  })
+
+  test('failed persistence ACK does not change completed provider outcome or rerun it', async () => {
+    let resolveReceipt!: (value: { status: 'failed'; watermark: number; error: string }) => void
+    const completion = new Promise<{ status: 'saved' | 'failed'; watermark: number; error?: string }>(resolve => {
+      resolveReceipt = resolve as (value: { status: 'failed'; watermark: number; error: string }) => void
+    })
+    let attempts = 0
+    const states: Array<{ status: string; error?: string }> = []
+    const coordinator = new AgentRuntimeCoordinator({
+      adapters: { pi: adapter(async (_input, callbacks) => {
+        attempts += 1
+        await callbacks.onMessage?.({ type: 'assistant', uuid: 'receipt-failure', message: { content: [{ type: 'text', text: 'answer' }] } } as never)
+        return { status: 'completed' }
+      }) },
+      ports: { sessions: {
+        getMeta: () => undefined, appendMessages() {}, updateMeta: () => undefined,
+        enqueueMessages: () => ({ accepted: true, watermark: 8, completion }),
+      } },
+    })
+    const handle = coordinator.run(query, { onEvent() {}, onPersistence: state => states.push(state) })
+    await expect(handle.promise).resolves.toEqual({ status: 'completed' })
+    resolveReceipt({ status: 'failed', watermark: 8, error: 'disk full' })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(states.at(-1)).toMatchObject({ status: 'failed', error: 'disk full' })
+    expect(attempts).toBe(1)
+    expect(await handle.promise).toEqual({ status: 'completed' })
+  })
+
   test('Given a persisted user message without SessionPort When runtime starts Then the run fails as a preparation failure before the provider', async () => {
     // 变更点：落盘时机后移到异步准备阶段之后，因此失败以「准备失败」终态返回，而不是同步 reject。
     let started = false
@@ -720,6 +779,22 @@ describe('AgentRuntimeCoordinator headless host', () => {
       expect(coordinator.isRunning(query.sessionId)).toBe(false)
     })
   }
+  test('tool_use observed through onEvent suppresses blind provider retry', async () => {
+    let attempts = 0
+    const coordinator = new AgentRuntimeCoordinator({
+      adapters: { pi: { runtime: 'pi', query: async (_input, callbacks) => {
+        attempts += 1
+        await callbacks.onEvent({ type: 'message', sessionId: query.sessionId, message: {
+          type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Write', input: { path: 'file' } }] },
+        } as never })
+        return { status: 'failed', error: '503 upstream busy' }
+      } } },
+      retry: { maxRetries: 3, maxWaitMs: 10_000, maxDelayMs: 1, random: () => 0 },
+    })
+    await expect(coordinator.run(query).promise).resolves.toMatchObject({ status: 'failed', error: '503 upstream busy' })
+    expect(attempts).toBe(1)
+  })
+
   test('Given a retryable provider failure When retry is enabled Then preparation and provider rerun before one completed terminal', async () => {
     let preparations = 0
     let attempts = 0
@@ -1395,3 +1470,51 @@ describe('queueMessage 停止竞态', () => {
     await expect(coordinator.queueMessage({ sessionId: query.sessionId, ownershipToken: token, context: { trigger: runTrigger }, message: { type: 'user' } as never, receive: async () => {} })).rejects.toThrow('未运行')
   })
 })
+
+for (const method of ['stopAndWait', 'stopAll'] as const) {
+  test(`${method}: timeout preserves owner until late query drain`, async () => {
+    let release!: () => void
+    let ready!: () => void
+    const started = new Promise<void>(resolve => { ready = resolve })
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const coordinator = new AgentRuntimeCoordinator({ stopDeadlineMs: 5, adapters: { pi: adapter(async () => { ready(); await pending; return { status: 'completed' } }) } })
+    const handle = coordinator.run(query)
+    await started
+    try {
+      await expect(method === 'stopAll' ? coordinator.stopAll() : coordinator.stopAndWait(query.sessionId)).rejects.toMatchObject({ code: 'AGENT_RUNTIME_STOP_TIMEOUT' })
+      expect(coordinator.isRunning(query.sessionId)).toBe(true)
+      expect(coordinator.ownership.ownerCount()).toBe(1)
+    } finally { release() }
+    await handle.promise
+    expect(coordinator.isRunning(query.sessionId)).toBe(false)
+    expect(coordinator.ownership.ownerCount()).toBe(0)
+  })
+}
+
+ test('retainOwnership keeps normal owner until host releases it', async () => {
+   const coordinator = new AgentRuntimeCoordinator({ adapters: { pi: adapter(async () => ({ status: 'completed' })) } })
+   const handle = coordinator.run({ ...query, retainOwnership: true })
+   await handle.promise
+   expect(coordinator.isRunning(query.sessionId)).toBe(false)
+   expect(coordinator.ownership.ownerCount()).toBe(1)
+   const owner = coordinator.ownership.getOwner(query.sessionId)!
+   coordinator.ownership.release(query.sessionId, owner.token)
+   expect(coordinator.ownership.ownerCount()).toBe(0)
+ })
+
+ test('provider stop and run drain share a single deadline', async () => {
+   let release!: () => void
+   let ready!: () => void
+   const started = new Promise<void>(resolve => { ready = resolve })
+   const pending = new Promise<void>(resolve => { release = resolve })
+   const coordinator = new AgentRuntimeCoordinator({ stopDeadlineMs: 25, adapters: { pi: adapter(async () => { ready(); await pending; return { status: 'completed' } }, () => new Promise<void>(() => {})) } })
+   const handle = coordinator.run(query)
+   await started
+   const began = Date.now()
+   try {
+     await expect(coordinator.stopAndWait(query.sessionId)).rejects.toMatchObject({ code: 'AGENT_RUNTIME_STOP_TIMEOUT' })
+     expect(Date.now() - began).toBeLessThan(60)
+     expect(coordinator.ownership.ownerCount()).toBe(1)
+   } finally { release() }
+   await handle.promise
+ })

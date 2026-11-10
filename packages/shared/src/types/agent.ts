@@ -775,7 +775,7 @@ export type ProferEvent =
   | { type: 'session_updated'; session: AgentSessionMeta }
   | { type: 'session_deleted'; sessionId: string; revision?: number }
   | { type: 'run_resumed'; sessionId: string }
-  | { type: 'session_persistence'; status: 'pending' | 'saved' | 'failed'; message?: string }
+  | { type: 'session_persistence'; runId?: string; watermark?: number; status: 'pending' | 'saved' | 'failed'; message?: string }
   // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
   // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
   | { type: 'run_idle'; sessionId: string }
@@ -785,7 +785,7 @@ export type ProferEvent =
   // endReason / endReasonLabel：orchestrator 已归一化的结束原因与其可读短文案，
   // 由 remote-service 的 run_completed 广播透传给移动端（Pocket），驱动中断 chip + toast
   // （completed 表示正常完成，不触发 chip）。缺省兼容旧服务端。
-  | { type: 'run_completed'; sessionId: string; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean; endReason?: AgentEndReason; endReasonLabel?: string }
+  | { type: 'run_completed'; sessionId: string; runId?: string; eventId?: string; stopReason?: string; outcomeStatus?: 'completed' | 'failed' | 'stopped'; stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean; endReason?: AgentEndReason; endReasonLabel?: string }
   | { type: 'preview_requested'; requestId: string; sessionId: string; filePath: string; revision: string; basePaths?: string[]; readOnly: boolean }
   | { type: 'preview_inspection_requested'; request: import('./agent-preview').AgentFilePreviewInspectRequest }
 
@@ -1076,6 +1076,8 @@ export interface AgentSessionMeta {
   delegationDepth?: number
   /** 委派状态（用于侧栏子会话状态显示）：running / completed / interrupted */
   delegationStatus?: string
+  /** 最近一次委派运行的最终摘要；属于 executionRunId，不从全历史重算。 */
+  delegationResult?: { executionRunId?: string; summary: string; updatedAt: number }
   /** 自动任务毕业后标记（毕业指从自动任务区移到正常会话区） */
   automationGraduated?: boolean
   /** 回溯放弃抽取的增量水位：已分析到的最新轮次索引（下次只分析 > 此值的新增轮次） */
@@ -1809,6 +1811,7 @@ export interface AgentSendInput {
   onRunOutcome?: (outcome: {
     status: 'completed' | 'failed' | 'stopped'
     error?: string
+    stopReason?: string
   }) => void
   /** Goal 独立 runtime 要恢复的 SDK/Pi session ID。 */
   runtimeSessionId?: string
@@ -2040,6 +2043,12 @@ export interface AgentGoalEvent {
 
 export interface AgentStreamCompletePayload {
   sessionId: string
+  runId?: string
+  eventId?: string
+  stopReason?: string
+  outcomeStatus?: 'completed' | 'failed' | 'stopped'
+  persistence?: { status: 'pending' | 'saved' | 'failed'; watermark?: number; error?: string }
+  messagesScope?: 'run'
   /** 已持久化的完整消息列表 */
   messages?: AgentMessage[]
   /** 是否由用户手动中止 */

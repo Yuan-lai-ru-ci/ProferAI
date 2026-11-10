@@ -206,7 +206,7 @@ export function buildRuntimeTurnUserPrompt(
   // 否则提示词会把模型推向一个本预设已禁用的服务器。
   const availableMcp = [...(options.mcpServerNames ?? [])]
   const allowedMentions = mentionedMcpServers
-    ? mentionedMcpServers.filter(name => availableMcp.length === 0 || availableMcp.includes(name))
+    ? mentionedMcpServers.filter(name => availableMcp.includes(name))
     : []
   if (allowedMentions.length > 0) {
     const toolLines = allowedMentions.map(name => `- MCP 服务器: ${name}（请使用此 MCP 服务器的工具来完成任务）`)

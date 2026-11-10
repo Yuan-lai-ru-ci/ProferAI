@@ -103,3 +103,5 @@ apps/electron/remote-test-*.log
 server/
 
 .workbuddy
+# 隔离开发实例的运行时数据目录（settings/会话/planning 等，不入库）
+.dev-config/

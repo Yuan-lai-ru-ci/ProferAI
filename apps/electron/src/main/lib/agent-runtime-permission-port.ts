@@ -43,6 +43,8 @@ export interface ElectronPermissionPortOptions extends Pick<PermissionPort, 'can
 export function createElectronPermissionPort(options?: ElectronPermissionPortOptions): PermissionPort {
   return {
     createCanUseTool(input) {
+      // 绑定本次 callback 创建时的有效模式；迟到调用不能重新读取下一轮的 session 模式。
+      const bypassPermissions = options?.isBypassPermissions?.(input.sessionId) === true
       const callback = permissionService.createCanUseTool(
         input.sessionId,
         input.sendPermissionRequest,
@@ -51,7 +53,7 @@ export function createElectronPermissionPort(options?: ElectronPermissionPortOpt
       )
       const inner: RuntimeCanUseTool = async (toolName, toolInput, canUseOptions) => {
         // 完全自动模式：不打断、不落审批请求（与 Claude SDK 在 bypassPermissions 下的行为同义）。
-        if (options?.isBypassPermissions?.(input.sessionId)) {
+        if (bypassPermissions) {
           return {
             behavior: 'allow' as const,
             updatedInput: toolInput,

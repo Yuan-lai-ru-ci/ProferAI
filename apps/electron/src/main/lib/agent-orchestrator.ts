@@ -117,7 +117,7 @@ import {
 import { appendGraphEvent } from './project-graph-service'
 import { taskGraphToolKind } from '@profer/project-core'
 import { injectAgentCollaborationMcpServer, registerCollaborationEventBus, stopDelegationsForParent } from './agent-collaboration-tools'
-import { setHeadlessAgentRunner, setAgentStopper } from './agent-headless-runner-registry'
+import { setHeadlessAgentRunner, getAgentStopCompletionOptions, type AgentStopSource } from './agent-headless-runner-registry'
 import { getAdapter, resolveTitleBaseUrl, fetchTitleWithRetry } from '@profer/core'
 import { resolveEditionBearerToken } from '@profer/edition-contract'
 import { getFetchFn } from './proxy-fetch'
@@ -289,6 +289,8 @@ export interface SessionCallbacks {
       taskId?: string
       triggerId?: string
       stoppedByUser?: boolean
+      stopReason?: string
+      outcomeStatus?: 'completed' | 'failed' | 'stopped'
       startedAt?: number
       resultSubtype?: string
       resultErrors?: string[]
@@ -463,6 +465,7 @@ export class AgentOrchestrator {
 
   /** 被用户手动中止的会话集合（在 stop 中标记，catch block 中消费） */
   private stoppedBySessions = new Set<string>()
+  private stopSources = new Map<string, AgentStopSource>()
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, ProferPermissionMode>()
@@ -562,9 +565,6 @@ export class AgentOrchestrator {
 
     // 注册 headless runner，供协作工具 / 自动任务 / 桥接命令等非 UI 场景调用
     setHeadlessAgentRunner((input, callbacks) => this.sendMessage(input, callbacks))
-    setAgentStopper((sessionId) => {
-      this.stop(sessionId)
-    })
   }
 
   /** 审批请求只投影真实的 request/response 生命周期；abort 和 stop 不生成恢复触发。 */
@@ -1245,6 +1245,7 @@ export class AgentOrchestrator {
     }
     // 执行权取得走共享登记表：与 runtime 引擎（coordinator.claim）共用同一份 owner 表，
     // 因此「桌面持有 → headless 被拒」「headless 持有 → 桌面被拒」两个方向都由同一处保证。
+    this.stopSources.delete(sessionId)
     const runClaim = this.ownership.claim({ sessionId, runtime: agentRuntime, token: runGeneration })
     if (!runClaim.ok) {
       // 登记表层面的结构性拒绝（例如另一个内核已持有）：不伪造终态，直接抛具名错误。
@@ -1276,6 +1277,8 @@ export class AgentOrchestrator {
     const releaseActiveRun = (): boolean => this.ownership.release(sessionId, runGeneration)
     type CompleteOptions = {
       stoppedByUser?: boolean
+      stopReason?: string
+      outcomeStatus?: 'completed' | 'failed' | 'stopped'
       startedAt?: number
       resultSubtype?: string
       resultErrors?: string[]
@@ -3995,6 +3998,8 @@ export class AgentOrchestrator {
         // 防止下一轮被误判为“启动前已停止”。
         const stoppedDuringRun = this.stoppedBySessions.has(sessionId)
         this.stoppedBySessions.delete(sessionId)
+        const stopSourceAtFinish = this.stopSources.get(sessionId)
+        this.stopSources.delete(sessionId)
         if (pendingTerminalCompletion) {
           const completion = pendingTerminalCompletion
           // 1.1 统一结束原因判定：在任何终端路径的 complete 处归一化。
@@ -4002,15 +4007,21 @@ export class AgentOrchestrator {
           // 因此不写 meta、不追加记录、不透传 endReason ——「假结束」不误判。
           const opts: CompleteOptions = completion.opts ?? {}
           const stopped = opts.stoppedByUser === true || stoppedDuringRun
-          if (stopped) opts.stoppedByUser = true
+          const stopSource = stopSourceAtFinish ?? opts.stopReason as AgentStopSource | undefined
+          const stopFields = stopped ? getAgentStopCompletionOptions(stopSource ?? 'user') : undefined
+          if (stopFields) Object.assign(opts, stopFields)
           const hasError = runEndedWithError
           const rawSubtype = opts.resultSubtype
-          // D3 防御：干净结束（无 subtype、无错误、未停止）视为 success，避免被误判为 unknown/中断
-          const effectiveSubtype = !stopped && !hasError && rawSubtype == null ? 'success' : rawSubtype
+          const effectiveSubtype = rawSubtype === 'delegation_cancelled' && !stopped
+            ? undefined
+            : hasError && rawSubtype === 'success'
+              ? undefined
+              : !stopped && !hasError && rawSubtype == null ? 'success' : rawSubtype
           const { reason, label } = normalizeAgentEndReason({
             resultSubtype: effectiveSubtype,
-            stoppedByUser: stopped,
+            stoppedByUser: stopFields?.stoppedByUser ?? stopped,
             hasError,
+            ...(stopped && stopSource ? { stopReason: stopSource } : {}),
           })
 
           if (reason === 'completed') {
@@ -4058,6 +4069,8 @@ export class AgentOrchestrator {
             ...opts,
             endReason: reason,
             endReasonLabel: label,
+            outcomeStatus: stopped ? 'stopped' : reason === 'completed' ? 'completed' : 'failed',
+            ...(stopped && (stopSource === 'parent_cancel' || stopSource === 'delegation_cancel') ? { stopReason: stopSource } : {}),
           }
           if (this.activeRunFacts.get(sessionId) === runFacts) this.activeRunFacts.delete(sessionId)
           callbacks.onComplete(completion.messages, finalOpts)
@@ -4118,8 +4131,9 @@ export class AgentOrchestrator {
   /**
    * 中止指定会话；Stop 仅标记并 abort，运行所有权由 owner finally 释放。
    */
-  stop(sessionId: string): void {
+  stop(sessionId: string, source: AgentStopSource = 'user'): void {
     if (!this.activeSessions.has(sessionId) || this.stoppedBySessions.has(sessionId)) return
+    this.stopSources.set(sessionId, source)
     this.stoppedBySessions.add(sessionId)
     this.activeRunFacts.get(sessionId)?.pendingApprovalRequestIds?.clear()
     this.queryPreparations.get(sessionId)?.abort()

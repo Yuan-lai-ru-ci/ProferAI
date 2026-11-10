@@ -55,9 +55,14 @@ describe('normalizeAgentEndReason', () => {
     expect(result.reason).toBe('max_turns')
   })
 
-  test('父会话级联取消使用非用户终态文案', () => {
+  test('trusted parent stop reason dominates a stale provider success subtype', () => {
+    expect(normalizeAgentEndReason({ stopReason: 'parent_cancel', resultSubtype: 'success' }))
+      .toEqual({ reason: 'unknown', label: '协作子任务已取消' })
+  })
+
+  test('historical sentinel without trusted stop reason is only an unknown subtype', () => {
     expect(normalizeAgentEndReason({ resultSubtype: DELEGATION_CANCELLED_RESULT_SUBTYPE }))
-      .toEqual({ reason: 'unknown', label: '因父会话停止而取消' })
+      .toEqual({ reason: 'unknown', label: '任务中断' })
   })
 
   test('未知 subtype → unknown', () => {

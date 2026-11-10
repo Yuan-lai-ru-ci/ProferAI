@@ -50,14 +50,22 @@ export function createAgentRuntimeProviderAdapter(
   provider: AgentProviderAdapter,
   options: AgentRuntimeProviderAdapterOptions = {},
 ): AgentRuntimeAdapter {
-  const activeSessionIds = new Set<string>()
-  const removeSession = (sessionId: string) => activeSessionIds.delete(sessionId)
+  const activeAttempts = new Map<string, { drained: Promise<void>; finish(): void }>()
   const adapter: AgentRuntimeAdapter = {
     runtime,
     stream(input: AgentRuntimeQuery): AsyncIterable<SDKMessage> {
-      activeSessionIds.add(input.sessionId)
+      let finish!: () => void
+      const drained = new Promise<void>(resolve => { finish = resolve })
+      const attempt = { drained, finish }
+      activeAttempts.set(input.sessionId, attempt)
       const base = toProviderInput(input)
-      const source = provider.query(options.mapInput?.(input, base) ?? base)
+      let source: AsyncIterable<SDKMessage>
+      try { source = provider.query(options.mapInput?.(input, base) ?? base) }
+      catch (error) {
+        if (activeAttempts.get(input.sessionId) === attempt) activeAttempts.delete(input.sessionId)
+        finish()
+        throw error
+      }
       const mapMessage = options.mapMessage
       return (async function* () {
         try {
@@ -67,7 +75,9 @@ export function createAgentRuntimeProviderAdapter(
           }
           for await (const message of source) yield mapMessage(message, input)
         } finally {
-          removeSession(input.sessionId)
+          // 旧 attempt 的延迟清理不能移除同一 session 的新 attempt。
+          if (activeAttempts.get(input.sessionId) === attempt) activeAttempts.delete(input.sessionId)
+          finish()
         }
       })()
     },
@@ -83,12 +93,15 @@ export function createAgentRuntimeProviderAdapter(
         return { status: 'failed', error: errorMessage(error) }
       }
     },
+    waitForDrain(sessionId) {
+      return activeAttempts.get(sessionId)?.drained ?? Promise.resolve()
+    },
     stop(_reason, sessionId) {
       if (sessionId) {
-        if (activeSessionIds.has(sessionId)) provider.abort(sessionId)
+        if (activeAttempts.has(sessionId)) provider.abort(sessionId)
         return
       }
-      for (const activeSessionId of activeSessionIds) provider.abort(activeSessionId)
+      for (const activeSessionId of activeAttempts.keys()) provider.abort(activeSessionId)
     },
     dispose() {
       provider.dispose()

@@ -95,6 +95,8 @@ export interface DesktopRuntimeAgentHost {
   onDraftPromoted?(session: AgentSessionMeta): void | Promise<void>
 
   // ===== runtime 入口依赖（与 `runAgentRuntimeHeadless` 完全同源）=====
+  /** 与 coordinator 共用的原子执行权；保护 entry 准备阶段，非产品测试宿主可省略。 */
+  execution?: import('./agent-runtime-entry').RuntimeHeadlessEntryDeps['execution']
   /** 解析每轮运行环境（runtime / cwd / 工具装配基座 / 策略上下文）。 */
   resolveRunContext(input: AgentSendInput): RuntimeEntryRunContext
   /** 执行一轮 run（生产实现是真实 coordinator）。 */
@@ -103,6 +105,7 @@ export interface DesktopRuntimeAgentHost {
   sessions: Pick<SessionPort, 'getMeta' | 'appendMessages' | 'updateMeta' | 'getMessages'>
   /** 终态消息载荷（旧 `onComplete(messages, opts)` 第一参语义）。 */
   messages(sessionId: string): AgentMessage[]
+  onIdle?(sessionId: string): void
   /** 计划模式事件出口（host port 的 host_event → profer_event）。 */
   emitPlanModeEvent(sessionId: string, event: AgentRuntimePlanModeEvent): void
   /** 审批通过后同步 provider 侧权限模式。 */
@@ -139,6 +142,11 @@ function buildDesktopCompletion(
   return {
     sessionId,
     messages,
+    ...(fields.runId ? { runId: fields.runId } : {}),
+    ...(fields.eventId ? { eventId: fields.eventId } : {}),
+    ...(fields.stopReason ? { stopReason: fields.stopReason } : {}),
+    ...(fields.persistence ? { persistence: fields.persistence } : {}),
+    ...(fields.messagesScope ? { messagesScope: fields.messagesScope } : {}),
     stoppedByUser: fields.stoppedByUser ?? false,
     startedAt: fields.startedAt,
     resultSubtype: fields.resultSubtype,
@@ -219,10 +227,12 @@ export async function runDesktopRuntimeAgent(
   try {
     await runRuntimeHeadlessEntry(input, { onEvent: () => {} }, {
       initiator,
+      ...(host.execution ? { execution: host.execution } : {}),
       resolveRunContext: sendInput => host.resolveRunContext(sendInput),
       run: (query, callbacks) => host.run(query, callbacks),
       sessions: host.sessions,
       messages: session => host.messages(session),
+      ...(host.onIdle ? { onIdle: host.onIdle } : {}),
       emitPlanModeEvent: (sid, event) => host.emitPlanModeEvent(sid, event),
       ...(host.setProviderPermissionMode
         ? { setProviderPermissionMode: host.setProviderPermissionMode }

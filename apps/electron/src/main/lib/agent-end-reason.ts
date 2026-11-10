@@ -17,8 +17,10 @@ export interface NormalizeAgentEndReasonInput {
   resultSubtype?: string
   /** 是否由用户手动停止 */
   stoppedByUser?: boolean
-  /** 是否显式记录到运行级错误标志（preflight 错误 / 异常 catch / TypedError 无 subtype） */
+  /** 是否显式记录到运行级错误标志（preflight / 异常 catch / TypedError 无 subtype） */
   hasError?: boolean
+  /** 可信 stop router 产生的终态来源。 */
+  stopReason?: string
 }
 
 export interface AgentEndReasonResult {
@@ -52,11 +54,13 @@ export const AGENT_END_REASON_LABELS: Record<AgentEndReason, string> = {
  * 9. 兜底（无 subtype、无错误、未停止的干净结束）    → completed（防御：不被误判为中断）
  */
 export function normalizeAgentEndReason(input: NormalizeAgentEndReasonInput): AgentEndReasonResult {
-  const { resultSubtype, stoppedByUser, hasError } = input
+  const { resultSubtype, stoppedByUser, hasError, stopReason } = input
 
   if (stoppedByUser === true) {
     return { reason: 'stopped_by_user', label: AGENT_END_REASON_LABELS.stopped_by_user }
   }
+
+  if (stopReason === 'parent_cancel' || stopReason === 'delegation_cancel') return { reason: 'unknown', label: '协作子任务已取消' }
 
   if (resultSubtype === 'success') {
     return { reason: 'completed', label: AGENT_END_REASON_LABELS.completed }
@@ -73,10 +77,6 @@ export function normalizeAgentEndReason(input: NormalizeAgentEndReasonInput): Ag
   if (resultSubtype === 'error_during_execution') {
     return { reason: 'error', label: AGENT_END_REASON_LABELS.error }
   }
-  if (resultSubtype === DELEGATION_CANCELLED_RESULT_SUBTYPE) {
-    return { reason: 'unknown', label: '因父会话停止而取消' }
-  }
-
   if (hasError === true) {
     return { reason: 'error', label: AGENT_END_REASON_LABELS.error }
   }

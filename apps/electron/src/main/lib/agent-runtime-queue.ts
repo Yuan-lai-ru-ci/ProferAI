@@ -26,8 +26,9 @@ export async function queueRuntimeUserMessage(input: AgentQueueMessageInput, dep
         await deps.interrupt(input.sessionId)
         if (!isCurrent()) throw new Error('会话已结束，无法追加消息')
       }
+  const options = { interrupt: input.interrupt, skillMentions: input.mentionedSkills, isCurrent }
       await deps.send(input.sessionId, { ...message, type: 'user', parent_tool_use_id: null, session_id: input.sessionId, priority: 'next',
-        message: { role: 'user', content: prompt } }, { interrupt: input.interrupt, skillMentions: input.mentionedSkills })
+        message: { role: 'user', content: prompt } }, options)
     },
   })
   return uuid

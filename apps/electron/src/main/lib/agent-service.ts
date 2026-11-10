@@ -50,7 +50,9 @@ import { AgentCatalogInvalidationPublisher } from './agent-catalog-invalidation'
 import { AgentOrchestrator, AgentSessionWorkspaceMissingError, requireAgentRunWorkspace, serializeErrorDetail } from './agent-orchestrator'
 import { AgentRunAlreadyActiveError } from './agent-orchestrator-p0-guards'
 import { createAgentRunOutcomeReporter } from './agent-run-outcome'
-import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, type HeadlessAgentCompletionOptions, type HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
+import { forwardHeadlessAgentCompletion, setHeadlessAgentRunner, setAgentStopper, type HeadlessAgentCompletionOptions, type HeadlessAgentRunCallbacks } from './agent-headless-runner-registry'
+import { createAgentStopRouter } from './agent-stop-router'
+import { stopDelegationsForParent } from './agent-collaboration-tools'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir, getSdkConfigDir } from './config-paths'
 import {
   configureSessionPersistenceStatusPublisher,
@@ -159,7 +161,8 @@ const orchestrator = new AgentOrchestrator(adapter, eventBus, {
   events: agentRuntimeHost.ports.events,
   toolAssembly: agentRuntimeHost.ports.toolAssembly,
   preview: agentRuntimeHost.ports.preview,
-  queryPreparation: agentRuntimeHost.ports.queryPreparation,
+  // 旧链在自身已构造策略与 prepared context；不经过新链的 manifest finalizer。
+  // 不注入 queryPreparation 时，orchestrator 按同一组 ports 构造中性准备器。
 }, runOwnership)
 const runtimeCoordinator = new AgentRuntimeCoordinator({
   adapters: {
@@ -176,6 +179,14 @@ const runtimeCoordinator = new AgentRuntimeCoordinator({
   ownership: runOwnership,
   runLedger: desktopRuns.ledger,
 })
+const stopAgentOwner = createAgentStopRouter({
+  runtimeActive: sessionId => runtimeCoordinator.isRunning(sessionId),
+  stopRuntime: (sessionId, reason) => runtimeCoordinator.stop(sessionId, reason),
+  stopLegacy: (sessionId, source) => orchestrator.stop(sessionId, source),
+  stopChildren: stopDelegationsForParent,
+  onError: (sessionId, error) => console.error(`[Agent 服务] 请求停止失败: sessionId=${sessionId}`, error),
+})
+setAgentStopper(stopAgentOwner)
 /**
  * 只读的「是否有活跃 run」查询（backlog / 恢复路由用）。
  *
@@ -763,7 +774,9 @@ export async function runAgent(
       // GAP-D1：标题自动命名（旧链同一判据 + 同一投影）。
       titleNaming: buildRuntimeTitleNaming(input.sessionId),
       resolveRunContext: (sendInput) => buildRuntimeHeadlessRunContext(sendInput),
+      execution: { ownership: runOwnership, isRunning: sessionId => runtimeCoordinator.isRunning(sessionId) },
       run: (query, callbacks) => runtimeCoordinator.run(query, callbacks),
+      onIdle: sessionId => eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'run_idle', sessionId } }),
       sessions: agentRuntimeHost.sessions,
       messages: getAgentSessionMessages,
       emitPlanModeEvent: (sessionId, event) => {
@@ -805,6 +818,8 @@ export async function runAgent(
           sessionId: input.sessionId,
           messages,
           stoppedByUser: opts?.stoppedByUser ?? false,
+          stopReason: opts?.stopReason,
+          outcomeStatus: opts?.outcomeStatus,
           startedAt: opts?.startedAt,
           resultSubtype: opts?.resultSubtype,
           resultErrors: opts?.resultErrors,
@@ -947,10 +962,18 @@ export async function runAgentRuntimeHeadless(
     messages: AgentMessage[] | undefined,
     fields: HeadlessAgentCompletionOptions,
   ): void => {
-    callbacks.onComplete(messages, fields)
+    try { callbacks.onComplete(messages, fields) } catch (error) {
+      console.warn('[Agent 服务] headless 完成观察者异常，继续广播:', error)
+    }
     const completion: AgentStreamCompletePayload = {
       sessionId: input.sessionId,
       messages,
+      runId: fields.runId,
+      eventId: fields.eventId,
+      stopReason: fields.stopReason,
+      outcomeStatus: fields.outcomeStatus,
+      persistence: fields.persistence,
+      messagesScope: fields.messagesScope,
       stoppedByUser: fields.stoppedByUser ?? false,
       startedAt: fields.startedAt,
       resultSubtype: fields.resultSubtype,
@@ -972,7 +995,9 @@ export async function runAgentRuntimeHeadless(
       ...(callbacks.source !== undefined ? { source: callbacks.source } : {}),
       initiator,
       resolveRunContext: sendInput => buildRuntimeHeadlessRunContext(sendInput),
+      execution: { ownership: runOwnership, isRunning: sessionId => runtimeCoordinator.isRunning(sessionId) },
       run: (query, cbs) => runtimeCoordinator.run(query, cbs),
+      onIdle: sessionId => eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'run_idle', sessionId } }),
       sessions: agentRuntimeHost.sessions,
       messages: getAgentSessionMessages,
       emitPlanModeEvent: (sessionId, event) => {
@@ -1330,13 +1355,7 @@ export async function regenerateAgentTitle(
  * 中止指定会话的 Agent 执行
  */
 export function stopAgent(sessionId: string): void {
-  if (runtimeCoordinator.isRunning(sessionId)) {
-    void runtimeCoordinator.stop(sessionId).catch((error) => {
-      console.error(`[Agent 服务] runtime coordinator 停止失败: sessionId=${sessionId}`, error)
-    })
-    return
-  }
-  orchestrator.stop(sessionId)
+  stopAgentOwner(sessionId, 'user')
 }
 
 export function getAgentRuntimeCapabilities(runtime: import('@profer/shared').AgentRuntime): import('@profer/shared').AgentRuntimeCapabilities {
@@ -1361,6 +1380,7 @@ export type AgentStopOutcome = 'stopped' | 'already_finished'
 /** 删除运行中会话前停止并等待其真实运行生命周期结束。 */
 export async function stopAgentAndWait(sessionId: string): Promise<AgentStopOutcome> {
   if (runtimeCoordinator.isRunning(sessionId)) {
+    stopAgentOwner(sessionId, 'user')
     await runtimeCoordinator.stopAndWait(sessionId)
     return 'stopped'
   }

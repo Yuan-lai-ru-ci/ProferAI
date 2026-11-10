@@ -11,10 +11,10 @@ describe('getAgentStopCompletionOptions', () => {
     expect(getAgentStopCompletionOptions('user')).toEqual({ stoppedByUser: true })
   })
 
-  test('Given a parent delegation cancellation When building terminal fields Then it is not attributed to the user', () => {
+  test('Given a parent delegation cancellation When building terminal fields Then it carries stop facts without forging provider subtype', () => {
     expect(getAgentStopCompletionOptions('delegation_cancel')).toEqual({
       stoppedByUser: false,
-      resultSubtype: 'delegation_cancelled',
+      stopReason: 'delegation_cancel',
     })
   })
 

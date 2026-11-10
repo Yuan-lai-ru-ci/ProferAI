@@ -33,11 +33,21 @@ export type RuntimeCredentialResult =
   | { ok: true; credentials: RuntimeCredential }
   | { ok: false; code: 'token_expired' | 'api_key_decrypt_failed' }
 
+/** 入队成功不等于保存成功；receipt 由宿主确认，不影响 provider 执行结果。 */
+export interface RuntimePersistenceState {
+  status: 'pending' | 'saved' | 'failed'
+  watermark?: number
+  error?: string
+}
+export type RuntimePersistenceReceipt =
+  | { accepted: false; reason: string; error?: string }
+  | { accepted: true; watermark: number; completion: Promise<{ status: 'saved' | 'failed'; watermark: number; error?: string }> }
+
 /** 同步会话快照接口；运行时消息另走非阻塞 enqueue，不等待磁盘写入。 */
 export interface SessionPort {
   getMeta(sessionId: string): AgentSessionMeta | undefined
   appendMessages(sessionId: string, messages: readonly SDKMessage[]): undefined
-  enqueueMessages?(sessionId: string, messages: readonly SDKMessage[]): void
+  enqueueMessages?(sessionId: string, messages: readonly SDKMessage[]): void | RuntimePersistenceReceipt
   updateMeta(sessionId: string, patch: Partial<AgentSessionMeta>): undefined
   getMessages?(sessionId: string): readonly SDKMessage[]
   getAgentMessages?(sessionId: string): readonly AgentMessage[]

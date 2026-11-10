@@ -43,19 +43,26 @@ describe('子会话终态与断点续跑判定', () => {
   const cancelled = 'delegation_cancelled'
 
   test('级联取消优先于 stoppedByUser，不被当成可续跑中断', () => {
-    expect(resolveDelegationTerminalStatus({ resultSubtype: cancelled, stoppedByUser: false }, cancelled)).toBe('cancelled')
+    expect(resolveDelegationTerminalStatus({ outcomeStatus: 'stopped', stopReason: 'parent_cancel', resultSubtype: cancelled })).toBe('cancelled')
+    expect(resolveDelegationTerminalStatus({ outcomeStatus: 'stopped', stopReason: 'delegation_cancel' })).toBe('cancelled')
+  })
+
+  test('result subtype sentinel alone does not cancel but trusted stopped outcome does', () => {
+    expect(resolveDelegationTerminalStatus({ outcomeStatus: 'completed', resultSubtype: cancelled })).toBe('completed')
+    expect(resolveDelegationTerminalStatus({ outcomeStatus: 'stopped', stopReason: 'parent_cancel', resultSubtype: cancelled })).toBe('cancelled')
+    expect(resolveDelegationTerminalStatus({ outcomeStatus: 'stopped', stopReason: 'delegation_cancel' })).toBe('cancelled')
   })
 
   test('用户单独停止子会话记为断点中断', () => {
-    expect(resolveDelegationTerminalStatus({ stoppedByUser: true }, cancelled)).toBe('interrupted')
-    expect(resolveDelegationTerminalStatus({ stoppedByUser: true, resultSubtype: 'success' }, cancelled)).toBe('interrupted')
+    expect(resolveDelegationTerminalStatus({ stoppedByUser: true })).toBe('interrupted')
+    expect(resolveDelegationTerminalStatus({ stoppedByUser: true, resultSubtype: 'success' })).toBe('interrupted')
   })
 
   test('干净结束与失败按 result 信号收口，不靠耗时或正文', () => {
-    expect(resolveDelegationTerminalStatus({}, cancelled)).toBe('completed')
-    expect(resolveDelegationTerminalStatus({ resultSubtype: 'success' }, cancelled)).toBe('completed')
-    expect(resolveDelegationTerminalStatus({ resultErrors: ['boom'] }, cancelled)).toBe('failed')
-    expect(resolveDelegationTerminalStatus({ resultSubtype: 'error_max_turns' }, cancelled)).toBe('failed')
+    expect(resolveDelegationTerminalStatus({})).toBe('completed')
+    expect(resolveDelegationTerminalStatus({ resultSubtype: 'success' })).toBe('completed')
+    expect(resolveDelegationTerminalStatus({ resultErrors: ['boom'] })).toBe('failed')
+    expect(resolveDelegationTerminalStatus({ resultSubtype: 'error_max_turns' })).toBe('failed')
   })
 
   test('只有 running 不可续跑，其余状态都保留完整上下文', () => {

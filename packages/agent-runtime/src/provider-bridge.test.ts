@@ -56,6 +56,61 @@ describe('runtime provider bridge', () => {
       .resolves.toEqual({ status: 'completed' })
     expect(received).toMatchObject({ provider: 'deepseek', apiKey: 'redacted', sessionId: 'provider-input', prompt: 'fixture' })
   })
+  for (const runtime of ['claude', 'pi'] as const) {
+    test(`${runtime}: late cleanup of attempt A preserves attempt B for stop`, async () => {
+      const releases: Array<() => void> = []
+      const aborted: string[] = []
+      const adapter = createAgentRuntimeProviderAdapter(runtime, provider(() => {
+        const pending = new Promise<void>(resolve => { releases.push(resolve) })
+        return (async function* () { await pending })()
+      }, sessionId => { aborted.push(sessionId) }))
+      const input = { sessionId: 'overlapping-session', runtime, prompt: 'wait' }
+      const first = adapter.stream!(input)[Symbol.asyncIterator]()
+      const firstDone = first.next()
+      await adapter.stop?.('user', input.sessionId)
+      const second = adapter.stream!(input)[Symbol.asyncIterator]()
+      const secondDone = second.next()
+      releases[0]!()
+      await firstDone
+      try {
+        await adapter.stop?.('user', input.sessionId)
+        expect(aborted).toEqual([input.sessionId, input.sessionId])
+      } finally {
+        releases[1]!()
+        await secondDone
+      }
+      await adapter.stop?.('user', input.sessionId)
+      expect(aborted).toHaveLength(2)
+    })
+  }
+
+  test('logical stopped retains provider resource lease until background iterator actually drains', async () => {
+    let release!: () => void
+    let ready!: () => void
+    const started = new Promise<void>(resolve => { ready = resolve })
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const adapter = createAgentRuntimeProviderAdapter('pi', provider(() => (async function* () {
+      ready()
+      await pending
+    })(), () => {}))
+    const coordinator = new AgentRuntimeCoordinator({ stopDeadlineMs: 5, adapters: { pi: adapter } })
+    const input = { sessionId: 'late-resource', runtime: 'pi' as const, prompt: 'wait' }
+    const handle = coordinator.run(input)
+    await started
+    try {
+      await coordinator.stop(input.sessionId)
+      await expect(handle.promise).resolves.toEqual({ status: 'stopped' })
+      expect(coordinator.isRunning(input.sessionId)).toBe(true)
+      expect(coordinator.ownership.isOwned(input.sessionId)).toBe(true)
+      await expect(coordinator.run(input).promise).rejects.toThrow()
+      await expect(coordinator.stopAndWait(input.sessionId)).rejects.toMatchObject({ code: 'AGENT_RUNTIME_STOP_TIMEOUT' })
+    } finally { release() }
+    await adapter.waitForDrain!(input.sessionId)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(coordinator.isRunning(input.sessionId)).toBe(false)
+    expect(coordinator.ownership.isOwned(input.sessionId)).toBe(false)
+  })
+
   test('routes coordinator stop to the active provider session and closes its stream', async () => {
     let release!: () => void
     const pending = new Promise<void>(resolve => { release = resolve })

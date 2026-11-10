@@ -13,7 +13,7 @@ import { createInterface } from 'node:readline'
 import { rm as rmAsync, copyFile as copyFileAsync, mkdir as mkdirAsync, rename as renameAsync, unlink as unlinkAsync } from 'node:fs/promises'
 import { createAgentSessionIndexStore } from './agent-session-index'
 import { createSyncSessionMessageStore, type AgentSessionsIndex } from '@profer/session-store'
-import { SessionPersistenceQueue } from './session-persistence-queue'
+import { SessionPersistenceQueue, type PersistenceReceipt } from './session-persistence-queue'
 import { createSnippet, extractTextFromPersistedMessage, matchAgentJsonlLine } from './agent-session-search'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -170,15 +170,14 @@ const persistenceQueue = new SessionPersistenceQueue({
   resolveMessagesPath: (sessionId) => getAgentSessionMessagesPath(sessionId),
   resolveBlobRoot: (sessionId) => blobRootDirForSession(sessionId),
   onStatus: (sessionId, status, error) => {
-    if (status !== 'failed') return
     persistenceStatusPublisher?.(sessionId, status, error)
-    console.error(`[Agent 会话] 持久化状态失败: session=${sessionId}; ${error ?? '未知错误'}`)
+    if (status === 'failed') console.error(`[Agent 会话] 持久化状态失败: session=${sessionId}; ${error ?? '未知错误'}`)
   },
 })
 
-export function enqueueSDKMessages(id: string, messages: readonly SDKMessage[]): void {
-  if (messages.length === 0 || deletedSessionIds.has(id)) return
-  persistenceQueue.enqueue(id, messages)
+export function enqueueSDKMessages(id: string, messages: readonly SDKMessage[]): PersistenceReceipt {
+  if (deletedSessionIds.has(id)) return { accepted: false, reason: 'deleted' }
+  return persistenceQueue.enqueue(id, messages)
 }
 
 export function flushSDKMessagePersistence(timeoutMs?: number): Promise<boolean> {

@@ -30,7 +30,7 @@ import type {
   ProferEvent,
   SDKMessage,
 } from '@profer/shared'
-import { DELEGATION_CANCELLED_RESULT_SUBTYPE, normalizeAgentEndReason } from './agent-end-reason'
+import { normalizeAgentEndReason } from './agent-end-reason'
 import type { HeadlessAgentCompletionOptions } from './agent-headless-runner-registry'
 
 /**
@@ -49,6 +49,8 @@ export type RuntimeRunCompletedProjection = Extract<ProferEvent, { type: 'run_co
 export interface RuntimeRunObservation {
   /** `onRunStarted({ startedAt })` 的返回值；runtime core 生成的 run 起始时刻。 */
   startedAt?: number
+  persistence?: import('@profer/agent-runtime').RuntimePersistenceState
+  runId?: string
   /** provider 流中最后一个 `result` SDKMessage：outcome 丢掉的 subtype / errors 从这里恢复。 */
   resultMessage?: SDKMessage
   /** 后台任务信号（adapter 的 `idleComplete`）。它不是终态，仅影响未读与 UI 空闲态。 */
@@ -57,10 +59,7 @@ export interface RuntimeRunObservation {
 
 export interface ResolveRuntimeTerminalFieldsInput {
   outcome: AgentRunOutcome
-  /**
-   * 外部运行来源。只有 `'delegation'` 不算「用户停止」，并按委派取消写 resultSubtype
-   * （与 `getAgentStopCompletionOptions` 同义）。
-   */
+  /** 运行来源只用于追溯，绝不用于推断停止原因。 */
   source?: AgentExternalRunSource
   observation?: RuntimeRunObservation
 }
@@ -86,8 +85,8 @@ export function readResultSignal(result: SDKMessage | undefined): { subtype?: st
  * 与旧编排器 owner-finally 的归一化完全同源；本模块不新增第二套判定。
  *
  * 判定口径（与旧路径对齐）：
- * - `stopped`：委派取消 → `stoppedByUser: false` + `resultSubtype: 'delegation_cancelled'`；
- *   用户/其他停止 → `stoppedByUser: true`。endReason 由归一化函数给出 `stopped_by_user`。
+ * - `stopped`：仅可信 stopReason 明确 parent_cancel / delegation_cancel 时投影为取消；
+ *   单独停止 child 与启动来源无关，仍是用户中断。
  * - `failed`：`endReason: 'error'`、`endReasonLabel` 取归一化 label（旧路径为「执行出错」）；
  *   `resultErrors` 优先取 result 消息的 errors，没有则回落到 outcome.error（保证移动端一定有可读原因）。
  * - `completed`：只透传可观察字段；`endReason` 为 `completed`（旧 remote 分支会透传它，
@@ -97,29 +96,34 @@ export function resolveRuntimeTerminalFields(input: ResolveRuntimeTerminalFields
   const { outcome } = input
   const observation = input.observation ?? {}
   const { subtype, errors } = readResultSignal(observation.resultMessage)
-  const delegationCancelled = input.source === 'delegation'
   const stopped = outcome.status === 'stopped'
+  const delegationCancelled = stopped && (outcome.stopReason === 'parent_cancel' || outcome.stopReason === 'delegation_cancel')
   const hasError = outcome.status === 'failed'
   const stoppedByUser = stopped && !delegationCancelled
-  const resultSubtype = delegationCancelled ? DELEGATION_CANCELLED_RESULT_SUBTYPE : subtype
-  const { reason, label } = normalizeAgentEndReason({
-    resultSubtype,
-    stoppedByUser,
-    hasError,
-  })
+  const resultSubtype = subtype
+  const normalizedSubtype = hasError && resultSubtype === 'success' ? undefined : resultSubtype
+  const terminalReason = stopped
+    ? normalizeAgentEndReason({ stoppedByUser, hasError, ...(outcome.stopReason ? { stopReason: outcome.stopReason } : {}) })
+    : outcome.status === 'failed'
+      ? normalizeAgentEndReason({ resultSubtype: normalizedSubtype, hasError: true })
+      : { reason: 'completed' as const, label: '' }
 
   return {
+    outcomeStatus: outcome.status,
+    ...(outcome.status === 'stopped' && outcome.stopReason ? { stopReason: outcome.stopReason } : {}),
     stoppedByUser,
+    ...(observation.persistence ? { persistence: observation.persistence } : {}),
+    ...(observation.runId ? { runId: observation.runId, eventId: `terminal:${observation.runId}` } : {}),
     ...(observation.startedAt !== undefined ? { startedAt: observation.startedAt } : {}),
     ...(resultSubtype !== undefined ? { resultSubtype } : {}),
     ...(hasError
-      ? { resultErrors: errors && errors.length > 0 ? errors : [outcome.error] }
+      ? { resultErrors: normalizedSubtype && errors?.length ? errors : [outcome.error] }
       : errors && errors.length > 0
         ? { resultErrors: errors }
         : {}),
     ...(observation.backgroundTasksPending === true ? { backgroundTasksPending: true } : {}),
-    endReason: reason,
-    endReasonLabel: label,
+    endReason: terminalReason.reason,
+    endReasonLabel: terminalReason.label,
   }
 }
 
@@ -138,6 +142,10 @@ export function buildRunCompletedProjection(
     type: 'run_completed',
     sessionId,
     stoppedByUser: fields.stoppedByUser === true,
+    ...(fields.runId ? { runId: fields.runId } : {}),
+    ...(fields.eventId ? { eventId: fields.eventId } : {}),
+    ...(fields.stopReason ? { stopReason: fields.stopReason } : {}),
+    ...(fields.outcomeStatus ? { outcomeStatus: fields.outcomeStatus } : {}),
     ...(fields.startedAt !== undefined ? { startedAt: fields.startedAt } : {}),
     ...(fields.resultSubtype !== undefined ? { resultSubtype: fields.resultSubtype } : {}),
     ...(fields.resultErrors !== undefined ? { resultErrors: [...fields.resultErrors] } : {}),
@@ -181,7 +189,9 @@ export interface RuntimeBackgroundTasksSignal {
 
 export interface RuntimeTerminalProjector {
   /** `onRunStarted({ startedAt })`。 */
-  observeRunStarted(startedAt: number): void
+  observeRunStarted(startedAt: number, runId?: string): void
+  observeRunIdentity(runId: string): void
+  observePersistence(state: import('@profer/agent-runtime').RuntimePersistenceState): void
   /** provider 流中的每条 SDKMessage；只保留最后一个 `result`。 */
   observeMessage(message: SDKMessage): void
   /** provider 报错。**不立即投递**：统一在 settle 时决定，避免重复触发。 */
@@ -221,10 +231,15 @@ export function createRuntimeTerminalProjector(
   let rejected = false
 
   return {
-    observeRunStarted(startedAt) {
+    observeRunStarted(startedAt, runId) {
       if (settled) return
       observation.startedAt = startedAt
+      if (runId) observation.runId = runId
     },
+    observeRunIdentity(runId) {
+      if (!settled) observation.runId = runId
+    },
+    observePersistence(state) { observation.persistence = { ...state } },
     observeMessage(message) {
       if (settled) return
       if ((message as unknown as { type?: unknown }).type === 'result') {
@@ -261,7 +276,11 @@ export function createRuntimeTerminalProjector(
         observation,
       })
       const error = outcome.status === 'failed' ? providerError ?? outcome.error : undefined
-      if (error !== undefined) options.sink.onError(error)
+      if (error !== undefined) {
+        try { options.sink.onError(error) } catch (notificationError) {
+          console.warn('[Agent Runtime] 错误观察者异常，继续交付终态:', notificationError)
+        }
+      }
       options.sink.onComplete(fields, options.messages?.())
       return { delivered: true, fields, ...(error !== undefined ? { error } : {}) }
     },

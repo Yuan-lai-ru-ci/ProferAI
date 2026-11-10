@@ -62,6 +62,20 @@ function baseInput(sessionId: string, overrides: Partial<ClaudeAgentQueryOptions
 }
 
 describe('Claude provider：SDK 查询选项透传', () => {
+  test('prepared deny 不覆盖宿主冻结 deny，最终 SDK options 保留并集', async () => {
+    const harness = createHarness()
+    try {
+      const stream = harness.adapter.query(baseInput('deny-union', {
+        disallowedTools: ['Bash', 'Read'],
+        prepared: { disallowedTools: ['Read', 'Write'], allowedTools: ['Read'] },
+      }))
+      const consuming = (async () => { for await (const _message of stream) { /* 消费 fixture */ } })()
+      await waitUntil(() => harness.double.state.options !== undefined)
+      expect(harness.double.state.options!.disallowedTools).toEqual(['Bash', 'Read', 'Write'])
+      harness.double.push({ type: 'result', subtype: 'success', session_id: 'deny-union', terminal_reason: 'completed' })
+      await consuming
+    } finally { harness.dispose() }
+  })
   test('Given 一次 query When SDK 收到 options Then 关键 SDK 行为保持不变', async () => {
     const harness = createHarness()
     try {

@@ -135,6 +135,58 @@ describe('Electron Agent host ports', () => {
     expect(query).toMatchObject({ title: 'visible prompt', workspaceId: undefined, initiator: 'goal' })
   })
 
+  test('Given a frozen auto policy When the host receives raw bypass fields Then query and run facts keep the effective mode', () => {
+    const sessionId = 'effective-permission-host-query'
+    agentRuntimePolicyRuns.releaseRun(sessionId)
+    clearAgentRuntimeRunFacts(sessionId)
+    const snapshot = agentRuntimePolicyRuns.resolveForRun(sessionId, {
+      preset: { id: 'preset-policy', name: 'auto', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0, permissionMode: 'auto' },
+      presetReference: { presetId: 'preset-policy', presetScope: 'user-global' },
+    })
+    try {
+      const query = createElectronAgentRuntimeQuery({
+        sessionId,
+        userMessage: 'fixture',
+        channelId: 'channel-1',
+        permissionModeOverride: 'bypassPermissions',
+      } as never, {
+        runtime: 'claude',
+        providerInput: { permissionMode: 'bypassPermissions' },
+      })
+      expect(snapshot.policy.permissionMode).toBe('auto')
+      expect(query.providerInput?.permissionMode).toBe('auto')
+      expect(getAgentRuntimeRunFacts(sessionId)?.permissionModeOverride).toBe('auto')
+    } finally {
+      clearAgentRuntimeRunFacts(sessionId)
+      agentRuntimePolicyRuns.releaseRun(sessionId)
+    }
+  })
+
+  test('Given a frozen auto policy and bypass facts When Write requests permission Then real approval is still required', async () => {
+    const { permissionService } = await import('./agent-permission-service')
+    const sessionId = 'host-policy-approval'
+    agentRuntimePolicyRuns.releaseRun(sessionId)
+    agentRuntimePolicyRuns.resolveForRun(sessionId, {
+      preset: { id: 'approval', name: 'approval', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0, permissionMode: 'auto' },
+      presetReference: { presetId: 'approval', presetScope: 'user-global' },
+    })
+    setAgentRuntimeRunFacts(sessionId, { permissionModeOverride: 'bypassPermissions' })
+    const requests: import('@profer/shared').PermissionRequest[] = []
+    const host = createElectronAgentHost()
+    const canUseTool = host.ports.permissions!.createCanUseTool!({ sessionId, sendPermissionRequest: request => requests.push(request) })
+    try {
+      const decision = canUseTool('Write', { file_path: '/fixture/approval', content: 'not written' }, { signal: new AbortController().signal })
+      expect(requests).toHaveLength(1)
+      permissionService.respondToPermission(requests[0]!.requestId, 'deny', false)
+      await expect(decision).resolves.toMatchObject({ behavior: 'deny' })
+    } finally {
+      permissionService.clearSessionPending(sessionId)
+      permissionService.clearSessionWhitelist(sessionId)
+      clearAgentRuntimeRunFacts(sessionId)
+      agentRuntimePolicyRuns.releaseRun(sessionId)
+    }
+  })
+
   test('Given a renderer run timestamp When creating a runtime query Then it is carried into runtime metadata', () => {
     const query = createElectronAgentRuntimeQuery({
       sessionId: 'session-started-at',
@@ -244,6 +296,20 @@ describe('Electron Agent host ports', () => {
     expect(events[2]?.payload).toEqual({ kind: 'run_error', error: 'fixture error' })
     expect(events[3]?.payload).toEqual({ kind: 'profer_event', event: { type: 'external_run_started', source: 'bridge', sessionId: 'session-1', startedAt: 123, title: 'Fixture title', workspaceId: 'workspace-1', modelId: 'model-1', initiator: 'automation' } })
     expect(events[4]?.payload).toMatchObject({ kind: 'profer_event', event: { type: 'run_completed', sessionId: 'session-1', stoppedByUser: false, title: 'Fixture title', workspaceId: 'workspace-1', modelId: 'model-1', initiator: 'automation', resultErrors: ['terminal fixture error'] } })
+  })
+
+  test('late persistence ACK is forwarded with its run identity after terminal and cannot finish a newer owner', () => {
+    const events: Array<{ sessionId: string; payload: AgentStreamPayload }> = []
+    const port = createElectronEventPort({ emit: (sessionId: string, payload: AgentStreamPayload) => events.push({ sessionId, payload }) } as never)
+    port.emit({ type: 'runtime_claimed', sessionId: 'ack-session', runId: 'run-a', runtime: 'pi', startedAt: 1 })
+    port.emit({ type: 'runtime_finished', sessionId: 'ack-session', runId: 'run-a', outcome: { status: 'completed' }, finishedAt: 2 })
+    port.emit({ type: 'runtime_claimed', sessionId: 'ack-session', runId: 'run-b', runtime: 'pi', startedAt: 3 })
+    port.emit({ type: 'runtime_persistence', sessionId: 'ack-session', runId: 'run-a', persistence: { status: 'saved', watermark: 7 } })
+    expect(isRuntimeRunActive('ack-session')).toBe(true)
+    expect(events.at(-1)).toMatchObject({
+      sessionId: 'ack-session',
+      payload: { kind: 'profer_event', event: { type: 'session_persistence', runId: 'run-a', status: 'saved', watermark: 7 } },
+    })
   })
 
   test('Given a message whose native session id differs When the host event port emits Then it routes by the agent session id', () => {
@@ -370,7 +436,13 @@ describe('Electron Agent host ports', () => {
       return { tools: [{ name: 'prepared-tool' }], collaborationAvailable: true }
     } }
     const host = createElectronAgentHost({ toolAssembly, eventBus: { emit() {} } as never })
-    await expect(host.ports.queryPreparation!.prepare({ sessionId: 's', runtime: 'pi', prompt: 'fixture', toolAssemblyContext: input }, new AbortController().signal)).resolves.toMatchObject({ tools: [{ name: 'prepared-tool' }], collaborationAvailable: true })
+    agentRuntimePolicyRuns.resolveForRun('s', {
+      preset: { id: 'fixture-assembly', name: 'fixture', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0 },
+      presetReference: { presetId: 'fixture-assembly', presetScope: 'user-global' },
+    })
+    try {
+      await expect(host.ports.queryPreparation!.prepare({ sessionId: 's', runtime: 'pi', prompt: 'fixture', toolAssemblyContext: input }, new AbortController().signal)).resolves.toMatchObject({ tools: [{ name: 'prepared-tool' }], collaborationAvailable: true })
+    } finally { agentRuntimePolicyRuns.releaseRun('s') }
   })
   test('Given an injected query preparation port When composing a host Then it remains the runtime preparation authority', async () => {
     const queryPreparation = { prepare: async () => ({ resources: { systemPrompt: 'prepared' } }) }

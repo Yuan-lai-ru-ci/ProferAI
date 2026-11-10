@@ -54,7 +54,6 @@ import {
   type AgentDelegationRole,
   type AgentDelegationStatus,
 } from './agent-collaboration-utils'
-import { DELEGATION_CANCELLED_RESULT_SUBTYPE } from './agent-end-reason'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel } from './agent-model-selection'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { resolveDelegationPreset } from './agent-delegation-preset'
@@ -100,6 +99,7 @@ interface DelegationRecord {
   completedAt?: number
   error?: string
   resultSummary?: string
+  cancelRequested?: 'parent_cancel' | 'delegation_cancel'
   completion: Promise<void>
   resolveCompletion: () => void
 }
@@ -360,11 +360,14 @@ function extractTextFromSdkMessage(message: SDKMessage): string[] {
   return parts
 }
 
-function summarizeChildResult(childSessionId: string, messages?: AgentMessage[]): string {
+function summarizeChildResult(childSessionId: string, messages?: AgentMessage[], currentRun = false): string {
   const lastAssistant = [...(messages ?? [])]
     .reverse()
     .find((message) => message.role === 'assistant' && message.content.trim().length > 0)
   if (lastAssistant) return truncateText(lastAssistant.content.trim(), RESULT_SUMMARY_CHAR_LIMIT)
+  if (currentRun) return '本轮已结束，但没有可摘要的最终 assistant 文本。'
+  const stored = getAgentSessionMeta(childSessionId)?.delegationResult
+  if (stored) return stored.summary
 
   const sdkMessages = getAgentSessionSDKMessages(childSessionId)
   const sdkTexts: string[] = []
@@ -380,7 +383,7 @@ function summarizeChildResult(childSessionId: string, messages?: AgentMessage[])
 function markDelegationFinished(
   record: DelegationRecord,
   status: AgentDelegationStatus,
-  fields: { error?: string; resultSummary?: string } = {},
+  fields: { error?: string; resultSummary?: string; executionRunId?: string } = {},
   options: { notifyParent?: boolean } = {},
 ): void {
   if (record.status !== 'running') return
@@ -388,7 +391,13 @@ function markDelegationFinished(
   record.completedAt = Date.now()
   record.error = fields.error
   record.resultSummary = fields.resultSummary
-  const child = updateAgentSessionMeta(record.childSessionId, { delegationStatus: status })
+  const child = updateAgentSessionMeta(record.childSessionId, {
+    delegationStatus: status,
+    ...(fields.resultSummary ? { delegationResult: {
+      summary: fields.resultSummary, updatedAt: record.completedAt,
+      ...(fields.executionRunId ? { executionRunId: fields.executionRunId } : {}),
+    } } : {}),
+  })
   // 完成状态必须推回父会话所属的渲染进程。不能只依赖随后可能陈旧的全量列表刷新，
   // 否则子会话可能暂时丢失委派字段，被侧栏当作普通会话展示。
   _eventBusRef?.emit(record.parentSessionId, {
@@ -403,7 +412,7 @@ function markDelegationFinished(
   record.resolveCompletion()
   // 父级联取消只负责让等待方立即返回：用户刚停止父会话，父会话正在收敛，
   // 任何自动续跑都会把运行重新拉起来。只有真正需要父会话决策的终态才唤起它。
-  if (options.notifyParent !== false) scheduleParentAutoContinuation(record.parentSessionId)
+  if (options.notifyParent !== false && !record.cancelRequested) scheduleParentAutoContinuation(record.parentSessionId)
 }
 
 /** 断点中断：需要父会话决策（续跑/改指令/放弃），不能当作结果回传。 */
@@ -642,6 +651,7 @@ function getDelegationSummary(record: DelegationRecord): Record<string, unknown>
     permissionMode: record.permissionMode,
     presetReference: record.presetReference,
     status: record.status,
+    ...(record.cancelRequested ? { cancelRequested: record.cancelRequested } : {}),
     resumable: isResumableDelegationStatus(record.status),
     resumableFromCheckpoint: record.status === 'interrupted',
     continuationHint: record.status === 'interrupted'
@@ -822,6 +832,7 @@ function prepareDelegationContinuation(
   record.status = 'running'
   record.error = undefined
   record.resultSummary = undefined
+  record.cancelRequested = undefined
   record.completedAt = undefined
   Object.assign(record, createDelegationCompletion())
   record.startedAt = Date.now()
@@ -951,8 +962,9 @@ function stopDelegation(parentSessionId: string, delegationId: string): Record<s
 
   // 由父协作工具取消子会话并非 child UI 的直接 user stop。
   // 父会话自己发起的取消不触发父会话续跑：它在工具调用里，下一步由模型自己决定。
-  stopRegisteredAgent(record.childSessionId, 'delegation_cancel')
-  markDelegationFinished(record, 'cancelled', {}, { notifyParent: false })
+  record.cancelRequested = 'delegation_cancel'
+  try { stopRegisteredAgent(record.childSessionId, 'delegation_cancel') }
+  catch (error) { record.cancelRequested = undefined; throw error }
   return {
     delegation: getDelegationSummary(record),
     stopped: true,
@@ -972,10 +984,13 @@ export function stopDelegationsForParent(parentSessionId: string): number {
   for (const record of delegations.values()) {
     if (record.parentSessionId === parentSessionId && record.relation === 'subtask' && record.status === 'running') {
       try {
-        stopRegisteredAgent(record.childSessionId, 'delegation_cancel')
-        markDelegationFinished(record, 'cancelled', {}, { notifyParent: false })
+        if (record.cancelRequested) continue
+        record.cancelRequested = 'parent_cancel'
+        stopRegisteredAgent(record.childSessionId, 'parent_cancel')
+
         stopped++
       } catch (err) {
+        record.cancelRequested = undefined
         console.error(`[协作] 级联停止子会话失败: delegationId=${record.delegationId}`, err)
       }
     }
@@ -1140,8 +1155,8 @@ function startDelegation(
         // 后台任务等待不是终态：子会话仍持有执行权，提前收尾会让父会话误以为它已结束。
         if (opts?.backgroundTasksPending === true) return
         if (record.status === 'running') {
-          const resultSummary = summarizeChildResult(child.id, messages)
-          markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}, DELEGATION_CANCELLED_RESULT_SUBTYPE), { resultSummary })
+          const resultSummary = summarizeChildResult(child.id, messages, opts?.messagesScope === 'run')
+          markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}), { resultSummary, executionRunId: opts?.runId })
         }
       },
       onTitleUpdated: (updatedTitle) => {
@@ -1481,8 +1496,8 @@ export async function injectAgentCollaborationMcpServer(
               onComplete: (messages, opts) => {
                 if (opts?.backgroundTasksPending === true) return
                 if (record.status === 'running') {
-                  const resultSummary = summarizeChildResult(record.childSessionId, messages)
-                  markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}, DELEGATION_CANCELLED_RESULT_SUBTYPE), { resultSummary })
+                  const resultSummary = summarizeChildResult(record.childSessionId, messages, opts?.messagesScope === 'run')
+                  markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}), { resultSummary, executionRunId: opts?.runId })
                 }
               },
               onTitleUpdated: () => {},
@@ -1830,8 +1845,8 @@ export function buildPiCollaborationTools(
             onComplete: (messages, opts) => {
               if (opts?.backgroundTasksPending === true) return
               if (record.status === 'running') {
-                const resultSummary = summarizeChildResult(record.childSessionId, messages)
-                markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}, DELEGATION_CANCELLED_RESULT_SUBTYPE), { resultSummary })
+                const resultSummary = summarizeChildResult(record.childSessionId, messages, opts?.messagesScope === 'run')
+                markDelegationFinished(record, resolveDelegationTerminalStatus(opts ?? {}), { resultSummary, executionRunId: opts?.runId })
               }
             },
             onTitleUpdated: () => {},

@@ -7,6 +7,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@profer/shared'
+import { resolveDelegationTerminalStatus } from './agent-collaboration-utils'
 import {
   buildRunCompletedProjection,
   createRuntimeTerminalProjector,
@@ -36,6 +37,7 @@ describe('resolveRuntimeTerminalFields', () => {
       observation: { startedAt: 1000, resultMessage: resultMessage('success') },
     })
     expect(fields).toEqual({
+      outcomeStatus: 'completed',
       stoppedByUser: false,
       startedAt: 1000,
       resultSubtype: 'success',
@@ -50,6 +52,7 @@ describe('resolveRuntimeTerminalFields', () => {
       observation: { startedAt: 2000, resultMessage: resultMessage('error_during_execution', ['boom-a', 'boom-b']) },
     })
     expect(fields).toEqual({
+      outcomeStatus: 'failed',
       stoppedByUser: false,
       startedAt: 2000,
       resultSubtype: 'error_during_execution',
@@ -81,14 +84,78 @@ describe('resolveRuntimeTerminalFields', () => {
     expect(fields.resultSubtype).toBeUndefined()
   })
 
-  test('stopped（委派取消）：stoppedByUser=false 且写 delegation_cancelled', () => {
+  test('stopped（委派取消）：trusted stopReason creates cancellation label without forging subtype', () => {
     const fields = resolveRuntimeTerminalFields({
-      outcome: { status: 'stopped' },
+      outcome: { status: 'stopped', stopReason: 'parent_cancel' },
       source: 'delegation',
       observation: { startedAt: 5 },
     })
-    expect(fields.stoppedByUser).toBe(false)
-    expect(fields.resultSubtype).toBe('delegation_cancelled')
+    expect(fields).toEqual({ outcomeStatus: 'stopped', stopReason: 'parent_cancel', stoppedByUser: false, startedAt: 5, endReason: 'unknown', endReasonLabel: '协作子任务已取消' })
+    expect(fields.resultSubtype).toBeUndefined()
+  })
+
+  test('用户单停委派 child 与来源无关：只能是 interrupted，不能冒称父取消', () => {
+    const fields = resolveRuntimeTerminalFields({ source: 'delegation', outcome: { status: 'stopped' } })
+    expect(fields.stoppedByUser).toBe(true)
+    expect(fields.resultSubtype).toBeUndefined()
+    expect(fields.endReason).toBe('stopped_by_user')
+  })
+
+  test('completed run carrying the historical cancellation sentinel stays completed and preserves subtype', () => {
+    const fields = resolveRuntimeTerminalFields({
+      source: 'delegation',
+      outcome: { status: 'completed' },
+      observation: { resultMessage: resultMessage('delegation_cancelled') },
+    })
+    expect(fields).toMatchObject({ outcomeStatus: 'completed', resultSubtype: 'delegation_cancelled', endReason: 'completed' })
+  })
+
+  test('subtype sentinel alone is not cancellation; explicit stopped status plus trusted stop reason is', () => {
+    const result = (subtype: string) => ({ type: 'result', subtype }) as unknown as SDKMessage
+    const completed = resolveRuntimeTerminalFields({ outcome: { status: 'completed' }, observation: { resultMessage: result('delegation_cancelled') } })
+    const stopped = resolveRuntimeTerminalFields({ outcome: { status: 'stopped', stopReason: 'parent_cancel' } })
+    expect(resolveDelegationTerminalStatus(completed)).toBe('completed')
+    expect(resolveDelegationTerminalStatus(stopped)).toBe('cancelled')
+  })
+
+  test('delegation 来源不把正常完成改写为取消', () => {
+    const fields = resolveRuntimeTerminalFields({
+      source: 'delegation',
+      outcome: { status: 'completed' },
+      observation: { resultMessage: resultMessage('success') },
+    })
+    expect(fields).toMatchObject({
+      stoppedByUser: false,
+      resultSubtype: 'success',
+      endReason: 'completed',
+    })
+    expect(fields.resultSubtype).not.toBe('delegation_cancelled')
+  })
+
+  test('delegation 来源不覆盖失败结果', () => {
+    const fields = resolveRuntimeTerminalFields({
+      source: 'delegation',
+      outcome: { status: 'failed', error: 'provider failed' },
+      observation: { resultMessage: resultMessage('error_during_execution', ['provider failed']) },
+    })
+    expect(fields).toMatchObject({
+      stoppedByUser: false,
+      resultSubtype: 'error_during_execution',
+      endReason: 'error',
+    })
+  })
+
+  test('最终 failed outcome 不被旧 success result 消息覆盖', () => {
+    const fields = resolveRuntimeTerminalFields({
+      outcome: { status: 'failed', error: 'ledger write failed after provider success' },
+      observation: { resultMessage: resultMessage('success') },
+    })
+    expect(fields).toMatchObject({
+      stoppedByUser: false,
+      resultSubtype: 'success',
+      resultErrors: ['ledger write failed after provider success'],
+      endReason: 'error',
+    })
   })
 
   test('backgroundTasksPending 只在显式为 true 时出现', () => {

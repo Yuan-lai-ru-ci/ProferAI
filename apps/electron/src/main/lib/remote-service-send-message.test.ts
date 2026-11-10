@@ -52,6 +52,7 @@ interface SendMessageOverrides {
   uuid?: unknown
   omitStartedAt?: boolean
   omitUuid?: boolean
+  permissionMode?: unknown
 }
 
 async function sendMessage(overrides: SendMessageOverrides = {}) {
@@ -65,6 +66,7 @@ async function sendMessage(overrides: SendMessageOverrides = {}) {
   }
   if (!overrides.omitStartedAt) payload.startedAt = overrides.startedAt
   if (!overrides.omitUuid) payload.uuid = overrides.uuid
+  if (overrides.permissionMode !== undefined) payload.permissionMode = overrides.permissionMode
   const result = await handleRemoteCommand(JSON.stringify(payload), 7)
   // runAgentHeadless 是同步调用点，microtask 后捕获必然已就绪。
   await Promise.resolve()
@@ -126,6 +128,24 @@ describe('send_message 的 uuid / startedAt 透传', () => {
     expect(typeof input.uuid).toBe('string')
     expect(input.uuid as string).not.toBe('')
     expect(input.uuid as string).toMatch(UUID_PATTERN)
+  })
+})
+
+describe('send_message 的权限模式透传', () => {
+  test('Given 移动端带上完全自动 When 发消息 Then 本轮 override 直达 run', async () => {
+    const result = await sendMessage({ permissionMode: 'bypassPermissions' })
+
+    expect(result).toEqual({ ok: true, data: { accepted: true } })
+    expect(captured).toHaveLength(1)
+    // 移动端没有持久化 permissionMode 的历史会话也要靠这一项恢复无人值守语义。
+    expect(captured[0]!.input.permissionModeOverride).toBe('bypassPermissions')
+  })
+
+  test('Given 非法权限模式 When 发消息 Then 不把非法值传入 run', async () => {
+    await sendMessage({ permissionMode: 'hack-mode' })
+
+    expect(captured).toHaveLength(1)
+    expect(captured[0]!.input.permissionModeOverride).toBeUndefined()
   })
 })
 

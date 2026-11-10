@@ -12,6 +12,7 @@
 import type {
   AgentQueryInput,
   AgentProviderAdapter,
+  SendQueuedMessageOptions,
   SDKUserMessageInput,
   TypedError,
   ErrorCode,
@@ -280,7 +281,9 @@ export function applyClaudePreparedQuery(
     ...(prepared.plugins && { plugins: [...prepared.plugins] }),
     ...(prepared.skills && { skills: [...prepared.skills] }),
     ...(prepared.allowedTools && { allowedTools: [...prepared.allowedTools] }),
-    ...(prepared.disallowedTools && { disallowedTools: [...prepared.disallowedTools] }),
+    ...((input.disallowedTools || prepared.disallowedTools) && {
+      disallowedTools: [...new Set([...(input.disallowedTools ?? []), ...(prepared.disallowedTools ?? [])])],
+    }),
     ...(preparedCanUseTool(prepared) && { canUseTool: preparedCanUseTool(prepared) }),
   }
 }
@@ -1026,7 +1029,10 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
 
     // 创建 AbortController
     const controller = new AbortController()
-    activeControllers.set(options.sessionId, controller)
+    let registeredQuery: SDKQuery | undefined
+    let registeredChannel: MessageChannel | undefined
+    const registeredController = controller
+    activeControllers.set(options.sessionId, registeredController)
 
     // 创建/复用 Query 就绪状态（可能在 sendQueuedMessage 已提前创建）
     ensureSessionReady(options.sessionId)
@@ -1236,8 +1242,10 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       })
 
       // 保存 Query 和 Channel 引用，供后续消息注入使用
-      activeQueries.set(options.sessionId, queryIterator)
-      activeChannels.set(options.sessionId, channel)
+      registeredQuery = queryIterator
+      registeredChannel = channel
+      activeQueries.set(options.sessionId, registeredQuery)
+      activeChannels.set(options.sessionId, registeredChannel)
 
       // 通知 Query 已就绪，解除 sendQueuedMessage 的等待
       const state = sessionReadyStates.get(options.sessionId)
@@ -1342,10 +1350,10 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       // 注意：pidMap 的清理由 child.on('exit') 触发，不在这里清除
       // 原因：finally 可能先于子进程真正退出执行，此时仍需保留 PID 以便 abort/dispose 兜底
       clearIdleTimer()
-      activeControllers.delete(options.sessionId)
-      activeQueries.delete(options.sessionId)
-      activeChannels.delete(options.sessionId)
-      sessionReadyStates.delete(options.sessionId)
+      if (activeControllers.get(options.sessionId) === registeredController) activeControllers.delete(options.sessionId)
+      if (activeQueries.get(options.sessionId) === registeredQuery) activeQueries.delete(options.sessionId)
+      if (activeChannels.get(options.sessionId) === registeredChannel) activeChannels.delete(options.sessionId)
+      if (activeControllers.get(options.sessionId) === undefined) sessionReadyStates.delete(options.sessionId)
     }
   }
 
@@ -1355,25 +1363,43 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
    * 通过持久化消息通道直接入队，由 SDK streamInput() 的长生命周期 generator 消费。
    * 不再单独调用 query.streamInput()，避免触发 endInput() 关闭 CLI stdin。
    */
-  async sendQueuedMessage(sessionId: string, message: SDKUserMessageInput): Promise<void> {
+  async sendQueuedMessage(sessionId: string, message: SDKUserMessageInput, options?: SendQueuedMessageOptions): Promise<void> {
+    const controller = activeControllers.get(sessionId)
+    const capturedChannel = activeChannels.get(sessionId)
+    const assertCurrent = (): void => {
+      if (!controller || controller.signal.aborted || activeControllers.get(sessionId) !== controller
+        || options?.isCurrent?.() === false) {
+        throw new Error('[Claude 适配器] 队列消息所属运行已失效')
+      }
+    }
+    assertCurrent()
     // 获取或创建会话就绪状态（可能由 sendQueuedMessage 或 query() 率先创建）
     const state = ensureSessionReady(sessionId)
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => reject(new Error('[Claude 适配器] 等待 SDK 初始化超时，请稍后重试')), QUERY_READY_TIMEOUT_MS)
     })
+    let onAbort: (() => void) | undefined
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new Error('[Claude 适配器] 队列消息所属运行已中止'))
+      controller!.signal.addEventListener('abort', onAbort, { once: true })
+    })
     try {
-      await Promise.race([state.promise, timeoutPromise])
+      await Promise.race([state.promise, timeoutPromise, aborted])
     } finally {
       clearTimeout(timeoutHandle)
+      if (onAbort) controller!.signal.removeEventListener('abort', onAbort)
     }
 
-    const channel = activeChannels.get(sessionId)
-    if (!channel) {
+    assertCurrent()
+    if (sessionReadyStates.get(sessionId) !== state) throw new Error('[Claude 适配器] 队列消息就绪代际已失效')
+    const channel = capturedChannel ?? activeChannels.get(sessionId)
+    if (!channel || activeChannels.get(sessionId) !== channel) {
       throw new Error(`[Claude 适配器] 无活跃消息通道可注入队列消息: ${sessionId}`)
     }
     // 通过消息通道入队，generator 会自动 yield 给 SDK
     channel.enqueue(message as import('@anthropic-ai/claude-agent-sdk').SDKUserMessage)
+    options?.onAccepted?.()
     console.log(`[Claude 适配器] 队列消息已注入: sessionId=${sessionId}, uuid=${message.uuid}, priority=${message.priority}`)
   }
 

@@ -110,6 +110,12 @@ export interface AgentRuntimeQuery {
    * 不传则由 coordinator 自己生成 token。
    */
   ownershipToken?: import('./run-ownership').AgentRunOwnershipToken
+  /** 宿主出口完成后释放；quarantine 迟到 drain 由 core 释放。 */
+  retainOwnership?: boolean
+  /** 资源晚退出时在释放隔离 owner 前清宿主状态；不等于逻辑终态回调。 */
+  onResourcesDrained?(): void | Promise<void>
+  /** 隔离资源退出且 owner 已释放后的宿主通知。 */
+  onOwnerReleased?(): void
 }
 
 /** 可选 ledger 关联；未注入 ledger 时回调保持原有形状。 */
@@ -131,6 +137,8 @@ export interface AgentRuntimeQueuedInput {
 
 export interface AgentRuntimeQueuedInputResult extends AgentRuntimeRunReference {
   messageId: string
+  /** 已接收的输入即便记账失败也不能伪报未接受，否则客户端会重复执行。 */
+  recordingError?: string
 }
 
 /** Runtime 执行过程中可观察的回调；回调不携带窗口对象或渲染层对象。 */
@@ -149,6 +157,8 @@ export interface AgentRuntimeCallbacks {
    * 终态仍由 `onComplete` 统一给出（本回调不产生终态，也不替代 onComplete）。
    */
   onPreparationFailure?(failure: import('./query-preparation').AgentRuntimePreparationFailure): void | Promise<void>
+  /** 保存确认独立于执行 outcome；迟到 ACK 也不得重新运行 provider。 */
+  onPersistence?(state: import('./ports').RuntimePersistenceState & AgentRuntimeRunReference): void
   /**
    * provider 的「轻量完成」信号：本轮 turn 主体已结束，但仍有后台任务在飞。
    *
@@ -170,6 +180,8 @@ export interface AgentRuntimeAdapter {
   /** 可选的真实 provider async iterable；coordinator 会负责 drain、消息投影和 stop。 */
   stream?(input: AgentRuntimeQuery, callbacks?: AgentRuntimeCallbacks): AsyncIterable<SDKMessage>
   stop?(reason?: string, sessionId?: string): Promise<void> | void
+  /** 捕获当前 attempt 的资源退出承诺；逻辑 stopped 不能替代它。 */
+  waitForDrain?(sessionId: string): Promise<void>
   dispose?(): Promise<void> | void
   getCapabilities?(): AgentRuntimeCapabilities
 }

@@ -13,7 +13,7 @@ import { AgentRunLedger, createInMemoryRunLedgerPort, createAgentRunContext, sta
 import { createElectronPermissionPort } from './agent-runtime-permission-port'
 import { resolveCredentialPreflightTypedError } from './agent-preflight-typed-errors'
 import { normalizeHeadlessSendInput } from './agent-input-origin'
-import { forwardHeadlessAgentCompletion } from './agent-headless-runner-registry'
+import { forwardHeadlessAgentCompletion, getAgentStopCompletionOptions } from './agent-headless-runner-registry'
 import { createShadowEvidenceLedger, resolveWriteToolFact, sameEvidencePath } from './workspace-shadow-write-evidence'
 
 // 本文件验证的是**旧路径**的拒绝语义（runtime 与渠道不匹配等）。
@@ -206,6 +206,7 @@ function ownerFixture(
     resolveCredentialPreflightTypedError,
     permissionService: { clearSessionPending() {} }, exitPlanService: { clearSessionPending() {} },
     normalizeAgentEndReason,
+    getAgentStopCompletionOptions,
     beginWorkspaceShadowTurn: shadowHooks.begin,
     endWorkspaceShadowTurn: shadowHooks.end,
     // S2：证据采集规则已抽到 workspace-shadow-write-evidence.ts，编译 sendMessage 时必须注入。

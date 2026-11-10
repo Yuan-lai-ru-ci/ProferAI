@@ -8,7 +8,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { CommandExecutionPort, BackgroundTaskPort, ProcessRegistrationPort, AgentRuntimePreparedContext } from '@profer/agent-runtime'
 import { createPiCommandBashOperations } from './pi/command-bash'
-import { prependPiCompactionTaskGuidance } from '@profer/shared'
+import { prependPiCompactionTaskGuidance, canonicalAgentToolName } from '@profer/shared'
 
 import { FileReadTracker, isTruncatedReadOutput, readFileState } from './pi/file-read-tracker'
 import { runWithPiFileMutationEvidence, type PiFileMutationEvidence } from './pi/rewind-evidence'
@@ -216,6 +216,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   piAgentDir: string
   piSessionDir: string
   customTools?: ToolDefinition[]
+  /** 禁用集合是硬门禁，独立于审批模式与 allowedTools。 */
+  disallowedTools?: readonly string[]
   onSessionId?: (sdkSessionId: string, sessionFile?: string) => void
   /** Profer assistant UI UUID → Pi 树状 session entry ID 的持久映射；分叉/回退依赖它定位 branch 点。 */
   onPiEntryBindings?: (bindings: Record<string, string>) => void
@@ -335,6 +337,7 @@ export function applyPiPreparedQuery(input: PiAgentQueryOptions): PiAgentQueryOp
         ? { systemPrompt: prepared.systemPrompt }
         : resources?.systemPrompt !== undefined ? { systemPrompt: resources.systemPrompt } : {}),
     ...(prepared.tools && { customTools: prepared.tools as ToolDefinition[] }),
+    disallowedTools: [...new Set([...(input.disallowedTools ?? []), ...(prepared.disallowedTools ?? [])])],
     ...(prepared.collaborationAvailable !== undefined && { metadata: { ...input.metadata, collaborationAvailable: prepared.collaborationAvailable } }),
     // bypassPermissions 语义就是「不打断」：Pi 的工具是本地包装，每次调用都会回调
     // canUseTool（不像 SDK 会自己跳过），装了它就等于把无人值守入口挂死 ——
@@ -1961,6 +1964,21 @@ export function buildBuiltinToolDefinitions(
   })
 }
 
+export function finalizePiToolDefinitions(
+  tools: ToolDefinition[],
+  disallowedTools: readonly string[] = [],
+): ToolDefinition[] {
+  const denied = new Set(disallowedTools.map(canonicalAgentToolName))
+  return tools.filter(tool => !denied.has(canonicalAgentToolName(tool.name))).map(tool => ({
+    ...tool,
+    async execute(...args) {
+      // 注册过滤之外保留执行边界，审批 bypass 永远不能跳过策略。
+      if (denied.has(canonicalAgentToolName(tool.name))) throw new Error(`Tool denied by policy: ${tool.name}`)
+      return tool.execute(...args)
+    },
+  }))
+}
+
 function wrapCustomToolDefinitions(
   tools: ToolDefinition[] | undefined,
   canUseTool: PiAgentQueryOptions['canUseTool'],
@@ -2186,10 +2204,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         ),
         ...buildProferProductToolDefinitions(sdk, input.canUseTool),
       ])
-      const customTools = input.tools?.length === 0 ? [] : [
+      const customTools = input.tools?.length === 0 ? [] : finalizePiToolDefinitions([
         ...proferTools,
         ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
-      ]
+      ], input.disallowedTools)
 
       const settingsManager = sdk.SettingsManager.inMemory({
         // 使用 Pi SDK 原生压缩策略：
@@ -2900,6 +2918,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     const active = this.activeSessions.get(sessionId)
     if (!active) throw new Error('当前会话没有正在运行的 Agent')
     const session = await waitForActiveSession(active)
+    const assertCurrent = (): void => {
+      if (this.activeSessions.get(sessionId) !== active || active.session !== session || active.disposed
+        || (!options?.interrupt && active.abortRequested) || options?.isCurrent?.() === false) {
+        throw createAbortError()
+      }
+    }
+    assertCurrent()
     // abortRequested 检查：interrupt 路径豁免（interruptQuery 已在此前设置该标志），
     // 普通队列消息在会话已中止时应拒绝。
     if (!options?.interrupt && active.abortRequested) throw createAbortError()
@@ -2911,9 +2936,12 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     if (options?.interrupt) {
       // Must reserve before any async skill preparation or abort. Otherwise the prompt chain may finish
       // between the abort and reservation, making the first "send now" click disappear.
-      const contentReady = active.resourceLoader
+      const contentReady = (active.resourceLoader
         ? preparePromptWithProferSkills(active.resourceLoader, message.message.content, options?.skillMentions)
-        : Promise.resolve(message.message.content)
+        : Promise.resolve(message.message.content)).then((content) => {
+          assertCurrent()
+          return content
+        })
       const accepted = new Promise<void>((resolve, reject) => {
         active.pendingInterruptPrompts.push({
           contentReady,
@@ -2950,6 +2978,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       throw new Error(stopOverride?.errors[0] ?? 'Agent 已达到运行限制，无法继续追加消息')
     }
     const queuedContent = preparePromptForPiSkillQueue(content)
+    assertCurrent()
     if (message.priority === 'now') {
       await session.steer(queuedContent)
     } else {

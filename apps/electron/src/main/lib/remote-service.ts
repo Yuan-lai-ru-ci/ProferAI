@@ -1709,10 +1709,17 @@ export async function handleRemoteCommand(
       // runtime coordinator 默认路径：未设置即新链，显式 `0` 回旧 headless（发版止损）。
       // 开关只读一次：既保证「全仓只有本入口读它」的可审计性，也让预检与分支使用同一个值。
       const useRuntimeRemote = process.env.PROFER_RUNTIME_REMOTE !== '0'
+      // 移动端每轮都会带上当前会话的权限模式（Pocket 默认「完全自动」）。
+      // 这里必须把它当作本轮覆盖透传：丢掉的话，历史会话（meta 没有 permissionMode）
+      // 在权限端口会判定为非 bypass，移动派发的任务就退化成每一步都要回电脑确认。
+      const clientPermissionMode = typeof parsed.permissionMode === 'string' && isProferPermissionMode(parsed.permissionMode)
+        ? parsed.permissionMode
+        : undefined
       const headlessInput: AgentSendInput = {
         sessionId, userMessage, channelId, modelId, workspaceId, startedAt,
         initiator: 'user',
         ...(uuid ? { uuid } : {}),
+        ...(clientPermissionMode ? { permissionModeOverride: clientPermissionMode } : {}),
       }
       // 取得执行权之前不做任何副作用：被拒绝的请求不是一次运行，失败必须同步返回，
       // 否则客户端已经收到 `accepted: true` 却永远等不到 `run_completed`。
@@ -1743,7 +1750,21 @@ export async function handleRemoteCommand(
               console.error('[Remote] send_message 运行失败:', error)
             },
             onComplete: (_messages, opts) => {
-              agentEventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'run_completed', sessionId, stoppedByUser: opts?.stoppedByUser ?? false, startedAt: opts?.startedAt ?? startedAt, resultSubtype: opts?.resultSubtype, resultErrors: opts?.resultErrors ?? (runErrorMessage ? [runErrorMessage] : undefined), backgroundTasksPending: opts?.backgroundTasksPending ?? false, endReason: opts?.endReason, endReasonLabel: opts?.endReasonLabel } })
+              agentEventBus.emit(sessionId, {
+                kind: 'profer_event',
+                event: {
+                  type: 'run_completed', sessionId,
+                  stoppedByUser: opts?.stoppedByUser ?? false,
+                  stopReason: opts?.stopReason,
+                  outcomeStatus: opts?.outcomeStatus,
+                  startedAt: opts?.startedAt ?? startedAt,
+                  resultSubtype: opts?.resultSubtype,
+                  resultErrors: opts?.resultErrors ?? (runErrorMessage ? [runErrorMessage] : undefined),
+                  backgroundTasksPending: opts?.backgroundTasksPending ?? false,
+                  endReason: opts?.endReason,
+                  endReasonLabel: opts?.endReasonLabel,
+                },
+              })
             },
             onTitleUpdated: () => {},
           })

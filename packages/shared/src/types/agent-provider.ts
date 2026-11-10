@@ -54,6 +54,8 @@ export interface SDKUserMessageInput {
 
 /** Queue delivery controls shared by Claude and Pi adapters. */
 export interface SendQueuedMessageOptions {
+  /** Host queue generation must still own this delivery immediately before submission. */
+  isCurrent?: () => boolean
   /** Cancel the current turn and deliver this input as the next turn. */
   interrupt?: boolean
   /** Explicitly mentioned workspace skills, resolved by the adapter before delivery. */

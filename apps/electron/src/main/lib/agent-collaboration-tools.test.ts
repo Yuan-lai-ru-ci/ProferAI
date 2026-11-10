@@ -3,7 +3,7 @@ import type { AgentSendInput, AgentSessionMeta, AgentStreamPayload } from '@prof
 import { AgentEventBus } from './agent-event-bus'
 
 const sessions = new Map<string, AgentSessionMeta>()
-const runs: Array<{ input: AgentSendInput; handlers: { onComplete?: (messages: never[], opts?: { stoppedByUser?: boolean; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }) => void } }> = []
+const runs: Array<{ input: AgentSendInput; handlers: { onComplete?: (messages: never[], opts?: { outcomeStatus?: 'completed' | 'failed' | 'stopped'; stopReason?: string; stoppedByUser?: boolean; resultSubtype?: string; resultErrors?: string[]; backgroundTasksPending?: boolean }) => void } }> = []
 const stopped: string[] = []
 const events: Array<{ sessionId: string; payload: AgentStreamPayload }> = []
 mock.module('./agent-session-manager', () => ({
@@ -122,9 +122,18 @@ describe('真实会话派工', () => {
     expect(sessions.get(independent.childSessionId)).toMatchObject({ sourceSessionId: source, delegationRelation: 'independent' })
     expect(stopDelegationsForParent(source)).toBe(1)
     expect(stopped).toEqual([child.childSessionId])
+    expect(hasRunningDelegations(source)).toBe(true)
+    runs[1]!.handlers.onComplete?.([], { outcomeStatus: 'stopped', stopReason: 'parent_cancel', resultSubtype: 'delegation_cancelled', stoppedByUser: false })
     expect(hasRunningDelegations(source)).toBe(false)
     expect((await invoke('get_delegation_results', { delegationIds: [independent.delegationId] })).delegations[0]).toMatchObject({ status: 'running', placement: 'independent' })
   })
+  test('provider sentinel without stopped outcome completes delegation normally', async () => {
+    const { invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: 'provider diagnostic value' })).delegation
+    runs[0]!.handlers.onComplete?.([], { outcomeStatus: 'completed', resultSubtype: 'delegation_cancelled' })
+    expect(sessions.get(child.childSessionId)?.delegationStatus).toBe('completed')
+  })
+
   test('批量混合组织复用同一入口，冲突关系失败且不创建会话', async () => {
     const { source, invoke } = setup()
     const result = await invoke('delegate_agents', { sharedContext: '只读范围', items: [
@@ -228,6 +237,9 @@ describe('真实会话派工', () => {
     const { source, invoke } = setup()
     const child = (await invoke('delegate_agent', { task: '子任务' })).delegation
     expect(stopDelegationsForParent(source)).toBe(1)
+    expect(sessions.get(child.childSessionId)?.delegationStatus).toBe('running')
+    expect((await invoke('get_delegation_results', { delegationIds: [child.delegationId] })).delegations[0]).toMatchObject({ cancelRequested: 'parent_cancel' })
+    runs[0]!.handlers.onComplete?.([], { outcomeStatus: 'stopped', stopReason: 'parent_cancel', stoppedByUser: false, resultSubtype: 'delegation_cancelled' })
     expect(sessions.get(child.childSessionId)?.delegationStatus).toBe('cancelled')
 
     parentActive = false

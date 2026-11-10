@@ -22,6 +22,7 @@ import {
 import {
   AGENT_RUNTIME_POLICY_SNAPSHOT_KEY,
   AgentRuntimePolicySnapshotMissingError,
+  agentRuntimePolicyRuns,
   attachAgentRuntimePolicyToQuery,
   buildPolicyToolAssemblyContext,
   collectPolicyDisallowedTools,
@@ -35,7 +36,8 @@ import {
   withPolicyLoadedMcpServers,
 } from './agent-runtime-policy-snapshot'
 import { createElectronProviderQueryPreparation } from './agent-runtime-provider-preparation'
-import { createElectronAgentRuntimeQuery } from './agent-runtime-host'
+import { createElectronAgentRuntimeQuery, getAgentRuntimeRunFacts, setAgentRuntimeRunFacts, clearAgentRuntimeRunFacts } from './agent-runtime-host'
+import { createRuntimeEntryQuery } from './agent-runtime-entry'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { prepareAgentSkillRouting, buildSkillRuntimeOptions } from './skill-runtime-routing'
 
@@ -135,6 +137,37 @@ describe('权限模式来源', () => {
     expect(options.permissionMode).toBeUndefined()
     expect(options.sdkPermissionMode).toBeUndefined()
     expect(options.allowDangerouslySkipPermissions).toBeUndefined()
+  })
+
+  test('本轮 run 构造后权限 facts 与冻结策略一致，不被原始 bypass 请求覆盖', () => {
+    const sessionId = 'policy-effective-auto-entry'
+    agentRuntimePolicyRuns.releaseRun(sessionId)
+    clearAgentRuntimeRunFacts(sessionId)
+    setAgentRuntimeRunFacts(sessionId, { triggeredBy: 'user', userMessage: 'fixture' })
+
+    try {
+      const built = createRuntimeEntryQuery({
+        sessionId,
+        userMessage: 'fixture',
+        permissionModeOverride: 'bypassPermissions',
+        channelId: 'policy-channel',
+        agentRuntime: 'claude',
+      } as never, {
+        runtime: 'claude',
+        policy: {
+          preset: preset({ permissionMode: 'auto' }),
+          presetReference: reference,
+        },
+        toolAssemblyContext: { sessionId },
+      })
+
+      expect(built.snapshot?.policy.permissionMode).toBe('auto')
+      expect(getAgentRuntimeRunFacts(sessionId)?.permissionModeOverride).toBe('auto')
+      expect(resolveProviderPermissionMode(built.query.providerInput)).toBe('auto')
+    } finally {
+      clearAgentRuntimeRunFacts(sessionId)
+      agentRuntimePolicyRuns.releaseRun(sessionId)
+    }
   })
 
   test('Given 仅显式合法覆盖 When provider preparation Then 透传该覆盖', async () => {

@@ -151,6 +151,15 @@ describe('runtime turn user prompt', () => {
     expect(prompt).not.toContain('mcp-not-loaded')
   })
 
+  test('空的实际 MCP 集不能作为 wildcard 接受未加载引用', () => {
+    const meta = sessions.createAgentSession('MCP empty', undefined, undefined, 'model-1', 'pi')
+    freezePolicy(meta.id)
+    const input = queryFor(meta.id, { providerInput: { mentionedMcpServers: ['SECRET_DISABLED_MCP'] } })
+    const prompt = turnPrompt.buildRuntimeTurnUserPrompt(input, { hasResume: true, mcpServerNames: [] })
+    expect(prompt).not.toContain('SECRET_DISABLED_MCP')
+    expect(prompt).not.toContain('<mentioned_tools>')
+  })
+
   test('有 resume 时不回填历史（provider 自己持有），但保留动态上下文', () => {
     const meta = sessions.createAgentSession('有 resume', undefined, undefined, 'model-1', 'pi')
     freezePolicy(meta.id)

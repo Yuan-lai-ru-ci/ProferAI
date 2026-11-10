@@ -21,7 +21,7 @@ import type {
   ProcessRegistrationPort,
 } from '@profer/agent-runtime'
 import type { AgentRuntime, AgentSessionMeta, AgentSendInput, SDKMessage, AgentStreamPayload, ProferPermissionMode } from '@profer/shared'
-import { resolveAgentRuntimeChannelConflict } from '@profer/shared'
+import { isEffectiveAgentPresetToolDisabled, resolveAgentRuntimeChannelConflict } from '@profer/shared'
 import type { SessionStore } from '@profer/session-store'
 import { createElectronSessionStore } from './session-store-host'
 import { appendSDKMessages, enqueueSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime, resolveAgentSessionWriteLayout } from './agent-session-manager'
@@ -29,14 +29,15 @@ import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { getChannelById } from './channel-manager'
 import { getWorkspaceMcpConfig, getWorkspaceSkills, getAgentWorkspace, readWorkspaceProfile } from './agent-workspace-manager'
 import { prepareRuntimeSkills } from './global-skill-manager'
-import { prepareAgentSkillRouting } from './skill-runtime-routing'
+import { buildPiMcpTools, mcpToolName } from './adapters/pi-mcp-tools'
+import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
 import { buildSkillCatalog } from './skill-routing'
 import { collectAttachedDirectories, collectProductArtifactDirectories } from './agent-directory-utils'
 import { agentSessionVisualizationsDir } from './config-paths'
 import { agentFilePreviewSessionManager } from './agent-file-preview-session'
 import { piBackgroundTaskManager } from './pi-background-task-manager'
 import { createElectronPermissionPort } from './agent-runtime-permission-port'
-import { agentRuntimePolicyRuns, filterPolicyMcpResources, filterPolicySkills } from './agent-runtime-policy-snapshot'
+import { agentRuntimePolicyRuns, filterPolicyMcpResources, filterPolicySkills, readAgentRuntimePolicySnapshot } from './agent-runtime-policy-snapshot'
 import { buildRuntimeTurnUserPrompt } from './agent-runtime-turn-prompt'
 import { selectAgentPromptMode, type AgentPromptMode } from './agent-prompt-mode'
 import {
@@ -175,8 +176,8 @@ export function createElectronSessionPort(): SessionPort {
     appendMessages(sessionId, messages): undefined {
       appendSDKMessages(sessionId, [...messages])
     },
-    enqueueMessages(sessionId, messages): void {
-      enqueueSDKMessages(sessionId, [...messages])
+    enqueueMessages(sessionId, messages) {
+      return enqueueSDKMessages(sessionId, [...messages])
     },
     updateMeta(sessionId, patch): undefined {
       updateAgentSessionMeta(sessionId, patch)
@@ -287,13 +288,14 @@ export function mergeAgentRuntimeRunFacts(sessionId: string, facts: AgentRuntime
  * 由 host event port 在 `runtime_started` / `runtime_finished` 上唯一维护（两者是同一份真实运行生命周期）。
  * 它不承担并发互斥（那是 `AgentRunOwnershipRegistry` 的职责），只是一个可观察的运行态快照。
  */
-const activeRuntimeRuns = new Set<string>()
+const activeRuntimeRuns = new Map<string, string | undefined>()
 
-function markRuntimeRunStarted(sessionId: string): void {
-  activeRuntimeRuns.add(sessionId)
+function markRuntimeRunStarted(sessionId: string, runId?: string): void {
+  activeRuntimeRuns.set(sessionId, runId)
 }
 
-function markRuntimeRunFinished(sessionId: string): void {
+function markRuntimeRunFinished(sessionId: string, runId?: string): void {
+  if (runId !== undefined && activeRuntimeRuns.get(sessionId) !== runId) return
   activeRuntimeRuns.delete(sessionId)
 }
 
@@ -764,8 +766,9 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
         .filter(([, value]) => value.enabled)
         .map(([name, value]) => ({ name, ...value }))
       // 预设策略裁剪：与本轮已冻结的策略快照同一份规则。
-      // 查不到快照（未接线 / 其他宿主）时保持现状而不猜测裁剪：禁用项由工具装配与权限端口承担，
-      // 本函数只负责「白名单内的可见性」，因此缺快照不会放行任何被禁用的能力。
+      // Legacy orchestrator also reads this configuration port before publishing a run snapshot.
+      // Keep that configuration-only compatibility; the new runtime finalizer below fails closed
+      // without a snapshot and never treats these configured names as executable authorization.
       const snapshot = agentRuntimePolicyRuns.getForRun(input.sessionId)
       // Pi 没有 SDK 侧 Skill 发现：catalog 必须由 Profer 提供（与旧链同一 builder）。
       // Claude 由 SDK 自己发现，旧链同样不注入 catalog。
@@ -799,6 +802,65 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
   }
 }
 
+/** Final executable manifest for the new runtime. Legacy resource readers remain configuration-only. */
+export async function finalizeRuntimeResourcePreparation(
+  input: Parameters<NonNullable<AgentRuntimePorts['queryPreparation']>['prepare']>[0],
+  prepared: AgentRuntimePreparedContext,
+): Promise<AgentRuntimePreparedContext> {
+  const snapshot = agentRuntimePolicyRuns.getForRun(input.sessionId)
+  // Product entries require a snapshot. Never infer permission from a prefilled manifest.
+  if (!snapshot) return { ...prepared, skills: [], plugins: [], mcpServers: {}, tools: [], resources: { ...prepared.resources, skills: [], mcpResources: [], skillCatalog: '' } }
+  const meta = getAgentSessionMeta(input.sessionId)
+  const workspaceSlug = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId)?.slug : undefined
+  const loaded = (prepared.resources?.mcpResources ?? []).filter((resource): resource is Record<string, unknown> & { name: string } => Boolean(resource && typeof resource === 'object' && 'name' in resource && typeof resource.name === 'string'))
+  const allowedExternal = new Set(filterPolicyMcpResources(snapshot, loaded).map(resource => resource.name))
+  const allowedNames = new Set(loaded.flatMap(resource => typeof resource.name === 'string' ? [resource.name] : []))
+  const servers: Record<string, Record<string, unknown>> = Object.fromEntries(Object.entries(prepared.mcpServers ?? {}).filter((entry): entry is [string, Record<string, unknown>] => {
+    const [name, config] = entry
+    return Boolean(config && typeof config === 'object' && allowedNames.has(name)
+      && (allowedExternal.has(name) || loaded.some(resource => resource.name === name && resource.type === 'sdk')))
+  }))
+  const external = Object.fromEntries(Object.entries(servers).filter(([, config]) => config.type !== 'sdk'))
+  const piTools = input.runtime === 'pi' ? await buildPiMcpTools(external, snapshot.policy, { workspaceSlug }) : []
+  const filterTools = (candidates: readonly unknown[]) => candidates.filter(tool => {
+    if (!tool || typeof tool !== 'object' || !('name' in tool) || typeof tool.name !== 'string') return false
+    const name = tool.name
+    if (isEffectiveAgentPresetToolDisabled(snapshot.policy, name)) return false
+    return !name.startsWith('mcp__') || loaded.some(resource => resource.type === 'sdk' && name.startsWith(mcpToolName(resource.name, '').replace(/unnamed$/, '')))
+  })
+  const mergeTools = (candidates: readonly unknown[]) => [...filterTools(candidates), ...piTools]
+  const deferred = input.runtime === 'pi' && prepared.tools === undefined ? prepared.deferredToolAssembly : undefined
+  const tools = mergeTools(prepared.tools ?? [])
+  const toolNames = tools.flatMap(tool => tool && typeof tool === 'object' && 'name' in tool && typeof tool.name === 'string' ? [tool.name] : [])
+  const routing = await prepareAgentSkillRouting({
+    ...(workspaceSlug ? { projection: prepareRuntimeSkills(workspaceSlug) } : {}),
+    policy: snapshot.policy,
+    toolNames: input.runtime === 'pi' ? toolNames : ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash'],
+  })
+  const skillOptions = buildSkillRuntimeOptions(routing, input.runtime)
+  const executableNames = input.runtime === 'pi'
+    ? Object.keys(external).filter(name => piTools.some(tool => tool.name.startsWith(mcpToolName(name, '').replace(/unnamed$/, ''))))
+    : Object.keys(servers)
+  return {
+    ...prepared,
+    skills: skillOptions.skills,
+    plugins: skillOptions.plugins,
+    mcpServers: input.runtime === 'pi' ? {} : servers,
+    ...(deferred ? {
+      tools: undefined,
+      deferredToolAssembly: {
+        build: async (sdk: unknown) => {
+          const result = await deferred.build(sdk)
+          return { ...result, tools: mergeTools(result.tools) }
+        },
+      },
+    } : prepared.tools !== undefined || input.runtime === 'pi' ? { tools } : {}),
+    resources: { ...prepared.resources, skills: skillOptions.skills,
+      mcpResources: loaded.filter(resource => typeof resource.name === 'string' && executableNames.includes(resource.name)),
+      skillCatalog: skillOptions.skillCatalogPrompt },
+  }
+}
+
 export function createElectronEventBusPort(eventBus: AgentEventBus): { emit(sessionId: string, payload: AgentStreamPayload): void } {
   return { emit: (sessionId, payload) => eventBus.emit(sessionId, payload) }
 }
@@ -815,7 +877,8 @@ export function createElectronEventPort(eventBus: AgentEventBus): { emit(event: 
    * 这是 remote / automation / headless 三入口 `run_completed` **字段集相同**的原因：
    * 它们看到的是同一个 host event port 的同一份映射。
    */
-  const observations = new Map<string, { startedAt?: number; resultMessage?: SDKMessage }>()
+  const observations = new Map<string, { runId?: string; startedAt?: number; resultMessage?: SDKMessage }>()
+  const completedRuns = new Set<string>()
   return {
     emit(event): void {
       // B8：本宿主唯一维护「本轮 runtime 是否还在跑」（产品服务器的公布门禁需要它，
@@ -823,8 +886,26 @@ export function createElectronEventPort(eventBus: AgentEventBus): { emit(event: 
       //
       // 运行态快照挂在**claim**上而不是 `runtime_started` 上：准备阶段（凭证 / 资源 / 工具装配）
       // 也是一轮真实 run 的存在期，只是还没有产生「用户可见的运行开始」。
-      if (event.type === 'runtime_claimed' || event.type === 'runtime_started') markRuntimeRunStarted(event.sessionId)
-      else if (event.type === 'runtime_finished') markRuntimeRunFinished(event.sessionId)
+      const lifecycleSession = 'sessionId' in event ? event.sessionId : undefined
+      const observationKey = `${lifecycleSession ?? ''}:${event.runId ?? 'legacy'}`
+      if (event.type === 'runtime_persistence') {
+        eventBus.emit(event.sessionId, { kind: 'profer_event', event: {
+          type: 'session_persistence', status: event.persistence.status,
+          ...(event.runId ? { runId: event.runId } : {}),
+          ...(event.persistence.watermark !== undefined ? { watermark: event.persistence.watermark } : {}),
+          ...(event.persistence.error ? { message: event.persistence.error } : {}),
+        } })
+        return
+      }
+      if (event.type === 'runtime_claimed') completedRuns.delete(observationKey)
+      if (event.type === 'runtime_finished' && completedRuns.has(observationKey)) return
+      const activeId = lifecycleSession ? activeRuntimeRuns.get(lifecycleSession) : undefined
+      if (activeId && event.runId && activeId !== event.runId && event.type !== 'runtime_claimed') {
+        if (event.type === 'runtime_finished') observations.delete(observationKey)
+        return
+      }
+      if (event.type === 'runtime_claimed' || event.type === 'runtime_started') markRuntimeRunStarted(event.sessionId, event.runId)
+      else if (event.type === 'runtime_finished') markRuntimeRunFinished(event.sessionId, event.runId)
       // 路由键一律取事件自带的 `sessionId`，**不得**从 `event.message.session_id` 推断。
       // 后者是内核原生会话 id（Pi 的 `sdkSessionId` / Claude 的 SDK session id），与 agent 会话 id
       // 不同；`sessionWebContents` 绑定表是按 agent 会话 id 建的，用错键会让 `sdk_message`
@@ -843,9 +924,9 @@ export function createElectronEventPort(eventBus: AgentEventBus): { emit(event: 
 
       if (event.type === 'message') {
         if ((event.message as unknown as { type?: unknown }).type === 'result') {
-          const observation = observations.get(sessionId) ?? {}
+          const observation = observations.get(observationKey) ?? {}
           observation.resultMessage = event.message
-          observations.set(sessionId, observation)
+          observations.set(observationKey, observation)
         }
         eventBus.emit(sessionId, { kind: 'sdk_message', message: event.message })
       } else if (event.type === 'host_event') {
@@ -855,22 +936,29 @@ export function createElectronEventPort(eventBus: AgentEventBus): { emit(event: 
       } else if (event.type === 'runtime_claimed') {
         // claim 只记录运行起点时刻，**不**广播 `external_run_started`：
         // 准备失败时渲染层不得看到「运行已开始」（也不得据此清未读 / 晋升 draft）。
-        const observation = observations.get(sessionId) ?? {}
+        const observation = observations.get(observationKey) ?? {}
         observation.startedAt = event.startedAt
-        observations.set(sessionId, observation)
+        observation.runId = event.runId
+        observations.set(observationKey, observation)
       } else if (event.type === 'runtime_started') {
-        const observation = observations.get(sessionId) ?? {}
+        const observation = observations.get(observationKey) ?? {}
         observation.startedAt = event.startedAt
-        observations.set(sessionId, observation)
+        observation.runId = event.runId
+        observations.set(observationKey, observation)
         eventBus.emit(sessionId, { kind: 'profer_event', event: { type: 'external_run_started', source: 'bridge', sessionId, startedAt: event.startedAt, title: event.title, workspaceId: event.workspaceId, modelId: event.modelId, initiator: event.initiator } })
       } else if (event.type === 'runtime_finished') {
-        const observation = observations.get(sessionId)
-        observations.delete(sessionId)
-        // 委派取消不算「用户停止」：与旧路径 `callbacks.source !== 'delegation'` 同义。
+        const observation = observations.get(observationKey)
+        observations.delete(observationKey)
+        if (event.runId) {
+          completedRuns.add(observationKey)
+          if (completedRuns.size > 200) completedRuns.delete(completedRuns.values().next().value!)
+        }
         const fields = resolveRuntimeTerminalFields({
           outcome: event.outcome,
           ...(event.initiator === 'delegation' ? { source: 'delegation' as const } : {}),
           observation: {
+            ...(event.persistence ? { persistence: event.persistence } : {}),
+            ...(event.runId ? { runId: event.runId } : {}),
             ...(observation?.startedAt !== undefined ? { startedAt: observation.startedAt } : {}),
             ...(observation?.resultMessage !== undefined ? { resultMessage: observation.resultMessage } : {}),
           },
@@ -952,10 +1040,13 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
   // `triggeredBy` / `userMessage`，这里补齐产品服务器需要的两项）。
   // 为什么写在这里：`ResourceRequest` 上没有 `additionalDirectories` / `permissionModeOverride`，
   // 而本函数是每个 runtime run 的必经点（headless 与桌面同源），因此不需要改 runtime 公共契约。
+  const policySnapshot = readAgentRuntimePolicySnapshot(options.providerInput) ?? agentRuntimePolicyRuns.getForRun(input.sessionId)
+  const effectivePermissionMode = policySnapshot?.policy.permissionMode ?? input.permissionModeOverride
   mergeAgentRuntimeRunFacts(input.sessionId, {
     ...(input.additionalDirectories?.length ? { additionalDirectories: [...input.additionalDirectories] } : {}),
-    ...(input.permissionModeOverride ? { permissionModeOverride: input.permissionModeOverride } : {}),
+    ...(effectivePermissionMode ? { permissionModeOverride: effectivePermissionMode } : {}),
   })
+
   // 提示词模式：与旧链同一判据（`selectAgentPromptMode`）。在这里算一次，
   // 同时给资源端口（light 不加载 MCP / Skill）与提示词装配（light 不拼动态上下文/历史）。
   const promptMode = resolveRuntimePromptModeForInput(input)
@@ -966,7 +1057,7 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
     ...(options.providerInput ?? {}),
     ...(options.resumeSessionAt ? { resumeSessionAt: options.resumeSessionAt } : {}),
     ...(input.customMcpServers ? { customMcpServers: input.customMcpServers } : {}),
-    ...(input.permissionModeOverride ? { permissionMode: input.permissionModeOverride } : {}),
+    ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
     ...(input.mentionedSkills ? { mentionedSkills: [...input.mentionedSkills] } : {}),
     ...(input.mentionedMcpServers ? { mentionedMcpServers: [...input.mentionedMcpServers] } : {}),
     ...(input.automationContext ? { automationContext: input.automationContext } : {}),
@@ -1056,23 +1147,27 @@ export function createElectronAgentHost(options: ElectronAgentHostOptions = {}):
       : undefined)
   const permissions = createElectronPermissionPort({
     ...options.permission,
-    // 两个来源都要看：run facts 覆盖本轮显式 override（automation/飞书），
-    // 会话元数据覆盖用户在界面上选的 bypass。
-    isBypassPermissions: (sessionId: string) =>
-      getAgentRuntimeRunFacts(sessionId)?.permissionModeOverride === 'bypassPermissions'
-      || getAgentSessionMeta(sessionId)?.permissionMode === 'bypassPermissions',
+    // 冻结策略优先于原始覆盖和会话元数据；两端 provider 与审批只能使用同一个有效值。
+    // 后两项仅兼容未挂策略的旧宿主，不得反过来放宽已挂载策略。
+    isBypassPermissions: (sessionId: string) => {
+      const snapshot = agentRuntimePolicyRuns.getForRun(sessionId)
+      if (snapshot) return snapshot.policy.permissionMode === 'bypassPermissions'
+      const override = getAgentRuntimeRunFacts(sessionId)?.permissionModeOverride
+      if (override) return override === 'bypassPermissions'
+      return getAgentSessionMeta(sessionId)?.permissionMode === 'bypassPermissions'
+    },
   })
   const preparationPorts = { credentials, resources, permissions, events, toolAssembly }
   const defaultPreparation = createElectronQueryPreparationPort(preparationPorts)
   const queryPreparation: NonNullable<AgentRuntimePorts['queryPreparation']> = options.queryPreparation ?? {
     async prepare(input, signal) {
-      const prepared = await prepareWithScopedPermissions(input, signal)
+      const prepared = await finalizeRuntimeResourcePreparation(input, await prepareWithScopedPermissions(input, signal))
       // 本轮用户消息侧 prompt（动态上下文 / `@` 引用 / 运行来源 / 历史回填）。
       // 写在准备阶段：动态上下文要用实际加载的 MCP 名单，历史回填要知道本轮消息尚未落盘。
       return {
         ...prepared,
         prompt: buildRuntimeTurnUserPrompt(input, {
-          ...(prepared.mcpServers ? { mcpServerNames: Object.keys(prepared.mcpServers) } : {}),
+          mcpServerNames: (prepared.resources?.mcpResources ?? []).flatMap(resource => resource && typeof resource === 'object' && 'name' in resource && typeof resource.name === 'string' ? [resource.name] : []),
           hasResume: Boolean(input.runtimeSessionId),
         }),
       }

@@ -3,7 +3,7 @@ import type { AgentEvent, AgentStreamPayload, ProferEvent, SDKMessage } from '@p
 export type AgentRunOutcome =
   | { status: 'completed' }
   | { status: 'failed'; error: string }
-  | { status: 'stopped' }
+  | { status: 'stopped'; stopReason?: string }
 
 export type AgentRuntimeEvent = (
   /**
@@ -30,10 +30,13 @@ export type AgentRuntimeEvent = (
    */
   | { type: 'runtime_claimed'; sessionId: string; runtime: string; startedAt: number; title?: string; workspaceId?: string; modelId?: string; initiator?: import('@profer/shared').AgentRunInitiator }
   | { type: 'runtime_started'; sessionId: string; runtime: string; startedAt: number; title?: string; workspaceId?: string; modelId?: string; initiator?: import('@profer/shared').AgentRunInitiator }
-  | { type: 'runtime_finished'; sessionId: string; runtime?: string; outcome: AgentRunOutcome; finishedAt: number; title?: string; workspaceId?: string; modelId?: string; initiator?: import('@profer/shared').AgentRunInitiator }
+  | { type: 'runtime_persistence'; sessionId: string; persistence: import('./ports').RuntimePersistenceState }
+  | { type: 'runtime_finished'; sessionId: string; persistence?: import('./ports').RuntimePersistenceState; runtime?: string; outcome: AgentRunOutcome; finishedAt: number; title?: string; workspaceId?: string; modelId?: string; initiator?: import('@profer/shared').AgentRunInitiator }
 ) & { runId?: string; taskId?: string; triggerId?: string }
 
 export interface AgentRuntimeCompletionSignal {
+  outcomeStatus?: 'completed' | 'failed' | 'stopped'
+  stopReason?: string
   stoppedByUser?: boolean
   endReason?: string
   endReasonLabel?: string

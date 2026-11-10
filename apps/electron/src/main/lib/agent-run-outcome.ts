@@ -7,7 +7,10 @@ type CompletionOptions = Parameters<NonNullable<import('./agent-orchestrator').S
 export function createAgentRunOutcomeReporter(onOutcome?: (outcome: RunOutcome) => void) {
   let error: string | undefined
   let stopped = false
-  let failedSubtype: string | undefined
+  let stopReason: string | undefined
+  let stopSignalSeen = false
+  let failed = false
+  let explicitOutcomeStatus: 'completed' | 'failed' | 'stopped' | undefined
   let completionSeen = false
   let settled = false
 
@@ -18,21 +21,26 @@ export function createAgentRunOutcomeReporter(onOutcome?: (outcome: RunOutcome) 
     onComplete(options?: CompletionOptions) {
       if (options?.backgroundTasksPending) return
       completionSeen = true
-      if (options?.stoppedByUser) stopped = true
-      if (options?.endReason === 'stopped_by_user') stopped = true
-      const errors = options?.resultErrors?.filter(value => typeof value === 'string' && value.trim())
-      const failed = options?.resultSubtype != null && options.resultSubtype !== 'success'
-      const malformedSuccess = options?.resultSubtype === 'success' && (errors?.length ?? 0) > 0
-      if ((failed || malformedSuccess) && !stopped) {
-        failedSubtype = options?.resultSubtype
-        error ??= errors?.join('\n') || (options?.endReasonLabel && options.endReasonLabel !== '' ? options.endReasonLabel : undefined)
-          || `Agent 运行未成功${failedSubtype ? ` (${failedSubtype})` : ''}`
+      if (options?.outcomeStatus !== undefined) explicitOutcomeStatus = options.outcomeStatus
+      const isStopped = options?.outcomeStatus !== undefined
+        ? options.outcomeStatus === 'stopped'
+        : options?.stoppedByUser === true || options?.endReason === 'stopped_by_user'
+      if (isStopped) {
+        if (!stopSignalSeen) {
+          stopSignalSeen = true
+          stopped = true
+          stopReason = options?.stopReason === 'parent_cancel' || options?.stopReason === 'delegation_cancel' ? options.stopReason : undefined
+        }
       }
-      const nonCompletedReason = options?.endReason != null
-        && options.endReason !== 'completed'
-        && options.endReason !== 'stopped_by_user'
-      if (nonCompletedReason && !stopped) {
-        error ??= options?.endReasonLabel || `Agent 运行未成功 (${options?.endReason})`
+      const errors = options?.resultErrors?.filter(value => typeof value === 'string' && value.trim())
+      const failedResult = options?.outcomeStatus === undefined && options?.resultSubtype != null && options.resultSubtype !== 'success' && options.resultSubtype !== 'delegation_cancelled'
+      const malformedSuccess = options?.outcomeStatus === undefined && options?.resultSubtype === 'success' && (errors?.length ?? 0) > 0
+      const nonCompletedReason = options?.outcomeStatus === undefined && options?.endReason != null
+        && options.endReason !== 'completed' && options.endReason !== 'stopped_by_user'
+      if (options?.outcomeStatus === 'failed' || failedResult || malformedSuccess || nonCompletedReason) {
+        failed = true
+        error ??= errors?.join('\n') || (options?.endReasonLabel && options.endReasonLabel !== '' ? options.endReasonLabel : undefined)
+          || `Agent 运行未成功${options?.resultSubtype && options.resultSubtype !== 'delegation_cancelled' ? ` (${options.resultSubtype})` : ''}`
       }
     },
     rejectBeforeStart() {
@@ -41,9 +49,11 @@ export function createAgentRunOutcomeReporter(onOutcome?: (outcome: RunOutcome) 
     finish() {
       if (settled) return
       settled = true
-      if (stopped) {
-        try { onOutcome?.({ status: 'stopped' }) } catch { /* 外部观察者不能改变运行结果 */ }
-      } else if (error || !completionSeen) {
+      if (explicitOutcomeStatus === 'stopped' || stopped) {
+        try { onOutcome?.({ status: 'stopped', ...(stopReason ? { stopReason } : {}) }) } catch { /* 外部观察者不能改变运行结果 */ }
+      } else if (explicitOutcomeStatus === 'completed') {
+        try { onOutcome?.({ status: 'completed' }) } catch { /* 外部观察者不能改变运行结果 */ }
+      } else if (explicitOutcomeStatus === 'failed' || failed || error || !completionSeen) {
         try { onOutcome?.({ status: 'failed', error: error ?? 'Agent 未产生运行终态' }) } catch { /* 外部观察者不能改变运行结果 */ }
       } else {
         try { onOutcome?.({ status: 'completed' }) } catch { /* 外部观察者不能改变运行结果 */ }

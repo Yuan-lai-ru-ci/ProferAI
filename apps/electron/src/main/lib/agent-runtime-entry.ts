@@ -39,11 +39,13 @@ import type {
   AgentRunOutcome,
   SessionPort,
 } from '@profer/agent-runtime'
-import { resolveAgentInputOperationSource } from '@profer/agent-runtime'
+import { normalizeAgentRuntime } from '@profer/shared'
+import { createAgentRunRejectionError, resolveAgentInputOperationSource } from '@profer/agent-runtime'
 import { createElectronAgentRuntimeQuery, clearAgentRuntimeRunFacts, resolveRuntimeSessionWriteLayout, setAgentRuntimeRunFacts } from './agent-runtime-host'
 import { resolveCredentialPreflightTypedError } from './agent-preflight-typed-errors'
 import {
   agentRuntimePolicyRuns,
+  AgentRuntimePolicySnapshotMissingError,
   attachAgentRuntimePolicyToQuery,
   buildPolicyToolAssemblyContext,
   type AgentRuntimePolicyResolutionInput,
@@ -58,6 +60,7 @@ import {
   type AgentRuntimePlanToolPolicy,
 } from './agent-runtime-plan-mode'
 import { createPlanModeToolPolicy } from './plan-mode-tool-policy'
+import { createRuntimeResultSnapshot } from './agent-runtime-result-snapshot'
 import {
   createRuntimeTerminalProjector,
   readResultSignal,
@@ -190,6 +193,11 @@ export function createRuntimeEntryQuery(
   setAgentRuntimeRunFacts(input.sessionId, {
     triggeredBy: resolveAgentInputOperationSource(input),
     userMessage: input.userMessage,
+    ...(snapshot
+      ? { permissionModeOverride: snapshot.policy.permissionMode }
+      : input.permissionModeOverride
+        ? { permissionModeOverride: input.permissionModeOverride }
+        : {}),
   })
 
   const toolAssemblyContext = snapshot
@@ -202,7 +210,10 @@ export function createRuntimeEntryQuery(
   }
   const hasProviderInput = Object.keys(providerInput).length > 0
 
-  let query = createElectronAgentRuntimeQuery(input, {
+  const queryInput = snapshot
+    ? { ...input, permissionModeOverride: snapshot.policy.permissionMode }
+    : input
+  let query = createElectronAgentRuntimeQuery(queryInput, {
     runtime: options.runtime,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     // 本轮权限模式必须带进 query：宿主据此决定 provider 的 permissionMode。
@@ -240,12 +251,19 @@ export function createRuntimeEntryQuery(
 export interface RuntimeHeadlessEntryDeps {
   /** 解析每轮运行环境（runtime / cwd / 工具装配基座 / 策略上下文）。 */
   resolveRunContext(input: AgentSendInput): RuntimeEntryRunContext
+  /** 产品宿主与 coordinator 共用同一所有权表；保护 claim 前的上下文与检查点副作用。 */
+  execution?: {
+    ownership: import('@profer/agent-runtime').AgentRunOwnershipRegistry
+    isRunning(sessionId: string): boolean
+  }
   /** 执行一轮 run；生产实现是真实 coordinator，测试可注入真实 coordinator + fixture 端口。 */
   run(query: AgentRuntimeQuery, callbacks: AgentRuntimeCallbacks): AgentRuntimeRunHandle
   /** 会话端口：原生 session 持久化 + preflight transcript 落盘 + 标题来源读取（旧链 `sessionPort.getMessages`）。 */
   sessions: Pick<SessionPort, 'getMeta' | 'appendMessages' | 'updateMeta' | 'getMessages'>
   /** 终态消息载荷（旧 `onComplete(messages, opts)` 第一参语义）。 */
   messages(sessionId: string): AgentMessage[]
+  /** owner 释放后的空闲通知；协作框架此时才可安全唤醒父会话。 */
+  onIdle?(sessionId: string): void
   /** 计划模式事件出口（host port 的 host_event → profer_event）。 */
   emitPlanModeEvent(sessionId: string, event: AgentRuntimePlanModeEvent): void
   /** 审批通过后同步 provider 侧权限模式。 */
@@ -325,7 +343,42 @@ export async function runRuntimeHeadlessEntry(
   callbacks: AgentRuntimeCallbacks,
   deps: RuntimeHeadlessEntryDeps,
 ): Promise<AgentRunOutcome> {
+  const execution = deps.execution
+  const token = execution ? Symbol(`runtime-entry:${input.sessionId}`) : undefined
+  if (execution && token) {
+    const runtime = normalizeAgentRuntime(input.agentRuntime ?? deps.sessions.getMeta(input.sessionId)?.agentRuntime)
+    const claim = execution.ownership.claim({ sessionId: input.sessionId, runtime, token })
+    if (!claim.ok) throw createAgentRunRejectionError(claim, { stopping: execution.isRunning(input.sessionId) })
+  }
+  let hostFinished!: () => void
+  const hostCompletion = new Promise<void>(resolve => { hostFinished = resolve })
+  try {
+    return await runOwnedRuntimeHeadlessEntry(input, callbacks, deps, token, hostCompletion)
+  } finally {
+    hostFinished()
+    // 正常运行由入口在终态投影/清理后释放。停止未退出的资源仍由 coordinator 隔离，不能抢先解锁。
+    if (execution && token && !execution.isRunning(input.sessionId)
+      && (execution.ownership.getOwner(input.sessionId)?.token === token || !execution.ownership.isOwned(input.sessionId))) {
+      clearAgentRuntimePlanMode(input.sessionId)
+      agentRuntimePolicyRuns.releaseRun(input.sessionId)
+      clearAgentRuntimeRunFacts(input.sessionId)
+      fileWriteChips.dropSession(input.sessionId)
+      execution.ownership.release(input.sessionId, token)
+      deps.onIdle?.(input.sessionId)
+    }
+  }
+}
+
+async function runOwnedRuntimeHeadlessEntry(
+  input: AgentSendInput,
+  callbacks: AgentRuntimeCallbacks,
+  deps: RuntimeHeadlessEntryDeps,
+  token?: import('@profer/agent-runtime').AgentRunOwnershipToken,
+  hostCompletion: Promise<void> = Promise.resolve(),
+): Promise<AgentRunOutcome> {
   const context = deps.resolveRunContext(input)
+  // 产品入口不能以缺策略的 neutral host 语义继续执行；独立包测试宿主仍可显式不注入 execution。
+  if (deps.execution && !context.policy) throw new AgentRuntimePolicySnapshotMissingError()
   // GAP-2：检查点必须在 provider 启动之前创建（否则快照到的不是本轮改动前的工作区基线）。
   // 显式 `beginCheckpointTurn` 优先（测试 / 特殊宿主），否则用宿主随运行上下文注入的检查点。
   const checkpointTurn = deps.beginCheckpointTurn?.(input, context) ?? context.checkpointTurn
@@ -372,7 +425,8 @@ export async function runRuntimeHeadlessEntry(
   })
   // 本轮 before 边界：轮中任何外部采集都会把 turn-after 的 previousCommitId 推后，
   // 必须把 begin 采出来的基线显式带到 end。
-  const shadowBaseline = shadowBegin ? await shadowBegin : undefined
+  let shadowBaseline: Awaited<NonNullable<ReturnType<typeof beginWorkspaceShadowTurn>>> | undefined
+  const awaitShadowBaseline = async () => { shadowBaseline = shadowBegin ? await shadowBegin : undefined }
   const shadowLedger = createShadowEvidenceLedger()
 
   const buildQuery = (params: { resumeSessionId?: string; resumeSessionAt?: string; promptOverride?: string }) => {
@@ -405,6 +459,28 @@ export async function runRuntimeHeadlessEntry(
           : {}),
       },
     })
+    const onRunAdmitted = built.query.onRunAdmitted
+    built.query = {
+      ...built.query,
+      onRunAdmitted: async admitted => {
+        await onRunAdmitted?.(admitted)
+        await awaitShadowBaseline()
+      },
+    }
+    if (token) built.query = {
+      ...built.query,
+      ownershipToken: token,
+      retainOwnership: true,
+      onOwnerReleased: () => deps.onIdle?.(input.sessionId),
+      onResourcesDrained: async () => {
+        await hostCompletion
+        if (deps.execution?.ownership.getOwner(input.sessionId)?.token !== token) return
+        clearAgentRuntimePlanMode(input.sessionId)
+        agentRuntimePolicyRuns.releaseRun(input.sessionId)
+        clearAgentRuntimeRunFacts(input.sessionId)
+        fileWriteChips.dropSession(input.sessionId)
+      },
+    }
     return built
   }
 
@@ -421,12 +497,13 @@ export async function runRuntimeHeadlessEntry(
    * （例如自动压缩续跑达上限）。解析走终态投影的同一个 `readResultSignal`，不另写一套。
    */
   let lastResultMessage: SDKMessage | undefined
+  const resultSnapshot = createRuntimeResultSnapshot()
   const titleNaming = deps.titleNaming
   const readSessionMessages = deps.sessions.getMessages?.bind(deps.sessions)
 
   const projector = createRuntimeTerminalProjector({
     ...(deps.source !== undefined ? { source: deps.source } : {}),
-    messages: () => deps.messages(input.sessionId),
+    messages: () => resultSnapshot.messages(),
     sink: {
       onError: error => deps.sink.onError(error),
       onComplete: (fields, messages) => {
@@ -434,7 +511,7 @@ export async function runRuntimeHeadlessEntry(
         // 渲染层收到 STREAM_COMPLETE 时侧边栏绿标与角标必须已就绪。
         // `started` 透传：从未真正启动的请求（并发拒绝 / 准备失败）不得写未读。
         deps.applyCompletionUnread(input, fields, started)
-        deps.sink.onComplete(messages, fields)
+        deps.sink.onComplete(messages, { ...fields, messagesScope: 'run' })
       },
     },
   })
@@ -472,15 +549,21 @@ export async function runRuntimeHeadlessEntry(
 
   const runtimeCallbacks: AgentRuntimeCallbacks = {
     ...callbacks,
-    onRunStarted: async ({ startedAt: runStartedAt }) => {
+    onRunStarted: async ({ startedAt: runStartedAt, runId }) => {
       started = true
       startedAt = runStartedAt
-      projector.observeRunStarted(runStartedAt)
+      await awaitShadowBaseline()
+      projector.observeRunStarted(runStartedAt, runId)
       built.controller?.start()
       await deps.onRunStarted(input, runStartedAt)
-      await callbacks.onRunStarted?.({ startedAt: runStartedAt })
+      await callbacks.onRunStarted?.({ startedAt: runStartedAt, ...(runId ? { runId } : {}) })
+    },
+    onPersistence: state => {
+      projector.observePersistence(state)
+      callbacks.onPersistence?.(state)
     },
     onMessage: message => {
+      resultSnapshot.observe(message)
       projector.observeMessage(message)
       const type = (message as { type?: unknown }).type
       // 首条实质消息 = provider 已接受本轮请求（含回退后的 resume 分支）。
@@ -515,6 +598,7 @@ export async function runRuntimeHeadlessEntry(
       void callbacks.onBackgroundTasksPending?.(signal)
     },
     onComplete: outcome => {
+      if (outcome.runId) projector.observeRunIdentity(outcome.runId)
       void callbacks.onComplete?.(outcome)
     },
   }
@@ -541,6 +625,7 @@ export async function runRuntimeHeadlessEntry(
       }
       // 重建会重新注册计划模式控制器：先释放旧的，避免遗留一个不归本轮管的控制器。
       clearAgentRuntimePlanMode(input.sessionId)
+      resultSnapshot.clear()
       suppressAttemptFailure = false
       suppressedError = undefined
       suppressedPreparation = undefined
@@ -628,6 +713,7 @@ export async function runRuntimeHeadlessEntry(
     // 没真正开始（并发拒绝 / 内核不匹配）的请求不记 turn：否则会多出一个空 turn，
     // 回退时把它当成「没改过任何东西的一轮」。
     if (started) {
+      await awaitShadowBaseline()
       endWorkspaceShadowTurn(shadowWorkspaceId, {
         sessionId: input.sessionId,
         ...(typeof input.uuid === 'string' && input.uuid ? { turnId: input.uuid } : {}),
@@ -638,10 +724,13 @@ export async function runRuntimeHeadlessEntry(
         ...(shadowSessionAttached?.length ? { sessionAttachedDirectories: shadowSessionAttached } : {}),
       })
     }
-    clearAgentRuntimePlanMode(input.sessionId)
-    agentRuntimePolicyRuns.releaseRun(input.sessionId)
-    clearAgentRuntimeRunFacts(input.sessionId)
-    // 本轮已结束：没等到 tool_result 的写入事实不会再有消费方，别留到下一轮。
-    fileWriteChips.dropSession(input.sessionId)
+    // 只有仍持有本轮 token 的入口可清；资源未退出时保留到 onResourcesDrained。
+    if (!deps.execution || (token && !deps.execution.isRunning(input.sessionId)
+      && deps.execution.ownership.getOwner(input.sessionId)?.token === token)) {
+      clearAgentRuntimePlanMode(input.sessionId)
+      agentRuntimePolicyRuns.releaseRun(input.sessionId)
+      clearAgentRuntimeRunFacts(input.sessionId)
+      fileWriteChips.dropSession(input.sessionId)
+    }
   }
 }

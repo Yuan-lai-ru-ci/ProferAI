@@ -48,6 +48,7 @@
     "test": "bun test --isolate",
     "check:skin-token-sync": "node scripts/check-skin-token-sync.mjs",
     "check:skin-contract": "node scripts/check-skin-surface-contract.mjs",
+    "check:runtime-contracts": "bun run scripts/check-runtime-contracts.ts",
     "test:memory-search": "node scripts/memory-search-verify.mjs",
     "diagnose:openai-reasoning": "node scripts/diagnose-openai-reasoning.mjs",
     "generate:icons": "cd resources && ./generate-icons.sh",

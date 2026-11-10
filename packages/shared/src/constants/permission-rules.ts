@@ -8,7 +8,9 @@
 /** 返回跨 Runtime 共用的逻辑工具短名；兼容 Claude MCP 命名空间和 Pi 原生工具名。 */
 export function canonicalAgentToolName(toolName: string): string {
   const trimmed = toolName.trim()
-  return trimmed.split('__').at(-1) ?? trimmed
+  const short = trimmed.split('__').at(-1) ?? trimmed
+  const aliases: Record<string, string> = { bash: 'Bash', read: 'Read', write: 'Write', edit: 'Edit', grep: 'Grep', find: 'Glob', glob: 'Glob', ls: 'Ls' }
+  return aliases[short.toLowerCase()] ?? short
 }
 
 /** 工具名是否匹配指定逻辑工具；避免把 Claude MCP namespace 当成能力名。 */

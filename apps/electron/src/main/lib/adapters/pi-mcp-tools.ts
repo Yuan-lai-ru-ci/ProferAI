@@ -13,7 +13,7 @@
  * - dispose() 只用于 app quit；重启/断开/回收都不允许置位 disposed。
  */
 
-import { isEffectiveAgentPresetToolDisabled, type EffectiveAgentPresetPolicy, type McpConnectionSnapshot, type McpServerRestartResult } from '@profer/shared'
+import { isEffectiveAgentPresetMcpServerAllowed, isEffectiveAgentPresetToolDisabled, type EffectiveAgentPresetPolicy, type McpConnectionSnapshot, type McpServerRestartResult } from '@profer/shared'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { statSync } from 'node:fs'
@@ -665,7 +665,7 @@ export async function discoverExternalMcpTools(mcpServers: PiMcpServers, options
 export async function buildPiMcpTools(mcpServers: PiMcpServers, policy?: EffectiveAgentPresetPolicy, options?: PiMcpBridgeOptions): Promise<ToolDefinition[]> {
   const tools: ToolDefinition[] = []
   const seenToolNames = new Set<string>()
-  for (const { serverName, config, tool } of await discoverExternalMcpTools(mcpServers, options)) {
+  for (const { serverName, config, tool } of await discoverExternalMcpTools(Object.fromEntries(Object.entries(mcpServers).filter(([name]) => !policy || isEffectiveAgentPresetMcpServerAllowed(policy, name))), options)) {
     const originalName = `mcp__${serverName}__${tool.name}`
     const piToolName = mcpToolName(serverName, tool.name)
     if (policy && (isEffectiveAgentPresetToolDisabled(policy, originalName) || policy.disabledTools?.includes(originalName) || policy.disabledTools?.includes(piToolName))) continue

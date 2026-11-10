@@ -18,11 +18,24 @@ describe('Agent run outcome', () => {
     expect(reporter.finish()).toEqual({ status: 'failed', error: 'network failed' })
   })
 
-  test('Given a stop signal Then it wins over a provider error', () => {
+  test('Given a stop signal Then it wins over a provider error and retains trusted stop reason', () => {
     const reporter = createAgentRunOutcomeReporter()
     reporter.onError('late error')
-    reporter.onComplete({ stoppedByUser: true, resultSubtype: 'error_during_execution' })
+    reporter.onComplete({ outcomeStatus: 'stopped', stopReason: 'parent_cancel', stoppedByUser: false, resultSubtype: 'success' })
+    expect(reporter.finish()).toEqual({ status: 'stopped', stopReason: 'parent_cancel' })
+  })
+
+  test('first stop source is sticky when a later callback adds a different source', () => {
+    const reporter = createAgentRunOutcomeReporter()
+    reporter.onComplete({ outcomeStatus: 'stopped', stoppedByUser: true })
+    reporter.onComplete({ outcomeStatus: 'stopped', stopReason: 'parent_cancel', stoppedByUser: false })
     expect(reporter.finish()).toEqual({ status: 'stopped' })
+  })
+
+  test('Given completed status with the historical cancellation sentinel Then it remains completed', () => {
+    const reporter = createAgentRunOutcomeReporter()
+    reporter.onComplete({ outcomeStatus: 'completed', resultSubtype: 'delegation_cancelled' })
+    expect(reporter.finish()).toEqual({ status: 'completed' })
   })
 
   test('Given a background task pending signal Then completion remains open', () => {

@@ -21,12 +21,27 @@ describe('Agent typed run outcome', () => {
     expect(outcomes).toEqual([{ status: 'completed' }])
   })
 
-  test('onError 后即使收到 success，也不能降级为 completed', () => {
+  test('explicit completion status is authoritative over stale callbacks', () => {
     const { outcomes, reporter } = fixture()
-    reporter.onError('preflight failed')
-    reporter.onComplete({ resultSubtype: 'success' })
+    reporter.onError('stale provider error')
+    reporter.onComplete({ outcomeStatus: 'completed', resultSubtype: 'delegation_cancelled' })
     reporter.finish()
-    expect(outcomes).toEqual([{ status: 'failed', error: 'preflight failed' }])
+    expect(outcomes).toEqual([{ status: 'completed' }])
+  })
+
+  test('first stop source is sticky across duplicate completion notifications', () => {
+    const { outcomes, reporter } = fixture()
+    reporter.onComplete({ outcomeStatus: 'stopped', stoppedByUser: true })
+    reporter.onComplete({ outcomeStatus: 'stopped', stopReason: 'parent_cancel', stoppedByUser: false })
+    reporter.finish()
+    expect(outcomes).toEqual([{ status: 'stopped' }])
+  })
+
+  test('explicit failed status is authoritative even with success subtype', () => {
+    const { outcomes, reporter } = fixture()
+    reporter.onComplete({ outcomeStatus: 'failed', resultSubtype: 'success', resultErrors: ['ledger finish failed'] })
+    reporter.finish()
+    expect(outcomes).toEqual([{ status: 'failed', error: 'ledger finish failed' }])
   })
 
   test('异常、result subtype、resultErrors、endReason 均不能成为成功', () => {

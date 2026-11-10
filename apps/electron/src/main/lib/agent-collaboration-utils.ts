@@ -57,18 +57,25 @@ export type AgentDelegationStatus = 'running' | 'completed' | 'failed' | 'cancel
  * - `failed`：结果或错误明确失败。
  * - `completed`：干净结束。
  *
- * 判定顺序不可交换：级联取消同时携带 `delegation_cancelled` 子类型与 `stoppedByUser=false`，
- * 必须先按子类型收口，否则会被误判成可续跑的中断。
+ * 判定顺序：实际 outcomeStatus 优先；级联取消必须同时具备 stopped 与可信 stopReason。
+ * `resultSubtype` 只保留 provider 诊断信号，历史 sentinel 不再作为取消依据。
  */
 export function resolveDelegationTerminalStatus(input: {
+  outcomeStatus?: 'completed' | 'failed' | 'stopped'
+  stopReason?: string
   stoppedByUser?: boolean
   resultSubtype?: string
   resultErrors?: readonly string[]
-}, cancelledSubtype: string): AgentDelegationStatus {
-  if (input.resultSubtype === cancelledSubtype) return 'cancelled'
+},): AgentDelegationStatus {
+  if (input.outcomeStatus === 'stopped') {
+    return input.stopReason === 'parent_cancel' || input.stopReason === 'delegation_cancel' ? 'cancelled' : 'interrupted'
+  }
+  if (input.outcomeStatus === 'failed') return 'failed'
+  if (input.outcomeStatus === 'completed') return 'completed'
+  // Legacy payload compatibility: never infer cancellation from provider resultSubtype.
   if (input.stoppedByUser === true) return 'interrupted'
   if (input.resultErrors && input.resultErrors.length > 0) return 'failed'
-  if (input.resultSubtype !== undefined && input.resultSubtype !== 'success') return 'failed'
+  if (input.resultSubtype !== undefined && input.resultSubtype !== 'success' && input.resultSubtype !== 'delegation_cancelled') return 'failed'
   return 'completed'
 }
 

@@ -7,12 +7,18 @@
  */
 
 import type { AgentEndReason, AgentMessage, AgentSendInput, AgentExternalRunSource } from '@profer/shared'
-import { DELEGATION_CANCELLED_RESULT_SUBTYPE } from './agent-end-reason'
 
 /** 仅直接由 UI / IPC 发起的停止才属于 user。 */
-export type AgentStopSource = 'user' | 'delegation_cancel'
+export type AgentStopSource = 'user' | 'delegation_cancel' | 'parent_cancel'
 
 export interface HeadlessAgentCompletionOptions {
+  runId?: string
+  eventId?: string
+  stopReason?: string
+  outcomeStatus?: 'completed' | 'failed' | 'stopped'
+  persistence?: import('@profer/agent-runtime').RuntimePersistenceState
+  /** messages 仅当前 run，不是全历史。缺省保持旧调用语义。 */
+  messagesScope?: 'run'
   stoppedByUser?: boolean
   startedAt?: number
   resultSubtype?: string
@@ -39,11 +45,10 @@ export type AgentStopper = (sessionId: string, source?: AgentStopSource) => void
 /** 将停止来源转换为统一终态字段，供所有 orchestrator 终态出口复用。 */
 export function getAgentStopCompletionOptions(source: AgentStopSource | undefined): {
   stoppedByUser: boolean
-  resultSubtype?: string
+  stopReason?: string
 } {
-  return source === 'delegation_cancel'
-    ? { stoppedByUser: false, resultSubtype: DELEGATION_CANCELLED_RESULT_SUBTYPE }
-    : { stoppedByUser: source === 'user' }
+  if (source === 'delegation_cancel' || source === 'parent_cancel') return { stoppedByUser: false, stopReason: source }
+  return { stoppedByUser: source === 'user' }
 }
 
 /**
@@ -58,8 +63,11 @@ export interface ForwardHeadlessAgentCompletionInput {
 }
 
 export function forwardHeadlessAgentCompletion(input: ForwardHeadlessAgentCompletionInput): void {
-  input.callbacks.onComplete(input.messages, input.opts)
-  input.forwardToRenderer(input.messages, input.opts)
+  try {
+    input.callbacks.onComplete(input.messages, input.opts)
+  } finally {
+    input.forwardToRenderer(input.messages, input.opts)
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
+import { Worker as RealWorker } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -33,7 +34,7 @@ describe('SessionPersistenceQueue', () => {
   test('writes a batch through the real worker and resolves the persisted blob', async () => {
     const root = mkdtempSync(join(tmpdir(), 'profer-persistence-worker-'))
     const sessionsDir = join(root, 'sessions')
-    const workerPath = join(import.meta.dir, '../../../dist/session-persistence-worker.cjs')
+    const workerPath = await buildWorker(root)
     const queue = new SessionPersistenceQueue({ configDir: root, sessionsDir, workerPath })
     try {
       const payload = 'B'.repeat(300_000)
@@ -54,7 +55,7 @@ describe('SessionPersistenceQueue', () => {
   test('falls back to truncation instead of stalling the queue when a line cannot converge', async () => {
     const root = mkdtempSync(join(tmpdir(), 'profer-persistence-unconvergeable-'))
     const sessionsDir = join(root, 'sessions')
-    const workerPath = join(import.meta.dir, '../../../dist/session-persistence-worker.cjs')
+    const workerPath = await buildWorker(root)
     const queue = new SessionPersistenceQueue({ configDir: root, sessionsDir, workerPath })
     try {
       // 每段都低于第二级抽取阈值（512），整行却超过 256K：外部化无法收敛，只能截断。
@@ -83,7 +84,7 @@ describe('SessionPersistenceQueue', () => {
     queue.enqueue('a', [message('2')])
     expect(await queue.flush(500)).toBe(true)
     expect(worker.posts.map(batch => (batch.messages[0] as { uuid?: string }).uuid)).toEqual(['1', '2'])
-    expect(statuses).toEqual(['pending', 'pending', 'saved', 'saved'])
+    expect(statuses).toEqual(['pending', 'pending', 'saved'])
     queue.dispose()
   })
 
@@ -135,4 +136,220 @@ describe('SessionPersistenceQueue', () => {
     expect(errors).toEqual(['持久化队列容量已满，本批消息未保存'])
     queue.dispose()
   })
+})
+
+test('receipt stays pending until ACK and rejects disposed enqueue explicitly', async () => {
+  const worker = new FakeWorker()
+  worker.postMessage = batch => { worker.posts.push(batch) }
+  const queue = new SessionPersistenceQueue({ configDir: '/tmp/config', sessionsDir: '/tmp/sessions', createWorker: () => worker as unknown as Worker })
+  try {
+    const receipt = queue.enqueue('a', [message('delayed')])
+    expect(receipt.accepted).toBe(true)
+    expect(await queue.flush(30)).toBe(false)
+    worker.emit('message', { type: 'saved', id: worker.posts[0]!.id })
+    if (receipt.accepted) expect((await receipt.completion).status).toBe('saved')
+    queue.dispose()
+    expect(queue.enqueue('a', [message('late')])).toMatchObject({ accepted: false, reason: 'disposed' })
+  } finally { queue.dispose() }
+})
+
+test('bounded failures isolate sessions and do not overtake same-session predecessors', async () => {
+  const worker = new FakeWorker()
+  worker.postMessage = batch => {
+    worker.posts.push(batch)
+    queueMicrotask(() => worker.emit('message', { type: batch.sessionId === 'a' ? 'failed' : 'saved', id: batch.id, error: 'disk full' }))
+  }
+  const queue = new SessionPersistenceQueue({ configDir: '/tmp/config', sessionsDir: '/tmp/sessions', createWorker: () => worker as unknown as Worker, retryDelayMs: 5, maxAttempts: 2 })
+  try {
+    const a = queue.enqueue('a', [message('a1')])
+    const a2 = queue.enqueue('a', [message('a2')])
+    const b = queue.enqueue('b', [message('b1')])
+    if (!a.accepted || !a2.accepted || !b.accepted) throw new Error('unexpected rejection')
+    expect((await b.completion).status).toBe('saved')
+    expect((await a.completion).status).toBe('failed')
+    expect((await a2.completion).status).toBe('failed')
+    expect(worker.posts.filter(p => p.sessionId === 'a')).toHaveLength(2)
+    expect(await queue.flush(100)).toBe(false)
+  } finally { queue.dispose() }
+})
+
+async function buildWorker(root: string): Promise<string> {
+  const path = join(root, 'session-persistence-worker.cjs')
+  const result = await Bun.build({ entrypoints: [join(import.meta.dir, 'session-persistence-worker.ts')], target: 'node', format: 'cjs' })
+  if (!result.success) throw new Error(result.logs.join('\n'))
+  await Bun.write(path, result.outputs[0]!)
+  return path
+}
+
+test('disk batch identity survives ACK loss and worker restart without duplicate lines', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'profer-persistence-replay-'))
+  let worker: RealWorker | undefined
+  try {
+    const path = await buildWorker(root)
+    const batch = { type: 'append', id: 1, batchId: 'stable-batch', configDir: root, sessionsDir: join(root, 'sessions'), sessionId: 'replay', messages: [message('one'), message('two')] }
+    const send = async (): Promise<void> => {
+      worker = new RealWorker(path)
+      await new Promise<void>((resolve, reject) => {
+        worker!.once('error', reject)
+        worker!.once('message', reply => reply.type === 'saved' ? resolve() : reject(new Error(reply.error)))
+        worker!.postMessage(batch)
+      })
+      await worker.terminate()
+      worker = undefined
+    }
+    // 第一次 ACK 被调用方丢弃；全新 worker 重发同一批次，去重事实只来自磁盘。
+    await send()
+    await send()
+    const lines = readFileSync(join(root, 'sessions/replay.jsonl'), 'utf8').trim().split('\n')
+    expect(lines.map(line => JSON.parse(line).uuid)).toEqual(['one', 'two'])
+  } finally { await worker?.terminate(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test('silent ACK loss is bounded and other session eventually proceeds', async () => {
+  const worker = new FakeWorker()
+  worker.postMessage = batch => {
+    worker.posts.push(batch)
+    if (batch.sessionId === 'b') queueMicrotask(() => worker.emit('message', { type: 'saved', id: batch.id }))
+  }
+  const queue = new SessionPersistenceQueue({ configDir: '/tmp/config', sessionsDir: '/tmp/sessions', createWorker: () => worker as unknown as Worker, ackTimeoutMs: 15, retryDelayMs: 5, maxAttempts: 2 })
+  try {
+    const a = queue.enqueue('a', [message('lost')])
+    const b = queue.enqueue('b', [message('good')])
+    if (!a.accepted || !b.accepted) throw new Error('unexpected rejection')
+    expect((await b.completion).status).toBe('saved')
+    expect((await a.completion).status).toBe('failed')
+    expect(worker.posts.filter(batch => batch.sessionId === 'a')).toHaveLength(2)
+  } finally { queue.dispose() }
+})
+
+test('real disk failure yields failed receipt while unrelated session saves', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'profer-persistence-disk-fault-'))
+  const { writeFileSync } = await import('node:fs')
+  const blocked = join(root, 'not-a-directory')
+  writeFileSync(blocked, 'fixture')
+  const workerPath = await buildWorker(root)
+  const queue = new SessionPersistenceQueue({ configDir: root, sessionsDir: join(root, 'sessions'), workerPath,
+    resolveMessagesPath: session => session === 'broken' ? join(blocked, 'messages.jsonl') : join(root, 'sessions', `${session}.jsonl`),
+    retryDelayMs: 5, maxAttempts: 2 })
+  try {
+    const broken = queue.enqueue('broken', [message('broken')])
+    const healthy = queue.enqueue('healthy', [message('healthy')])
+    if (!broken.accepted || !healthy.accepted) throw new Error('unexpected rejection')
+    expect((await broken.completion).status).toBe('failed')
+    expect((await healthy.completion).status).toBe('saved')
+    expect(queue.enqueue('broken', [message('later')])).toMatchObject({ accepted: false, reason: 'session_failed' })
+    expect(await queue.flush(100)).toBe(false)
+  } finally { queue.dispose(); rmSync(root, { recursive: true, force: true }) }
+})
+
+test('failed worker termination quarantines the writer and settles every receipt', async () => {
+  const worker = new FakeWorker()
+  worker.postMessage = batch => { worker.posts.push(batch) }
+  worker.terminate = () => Promise.reject(new Error('termination refused'))
+  const queue = new SessionPersistenceQueue({
+    configDir: '/tmp/config', sessionsDir: '/tmp/sessions',
+    createWorker: () => worker as unknown as Worker, ackTimeoutMs: 5,
+  })
+  const first = queue.enqueue('a', [message('uncertain')])
+  const second = queue.enqueue('b', [message('also-uncertain')])
+  if (!first.accepted || !second.accepted) throw new Error('unexpected rejection')
+  expect((await first.completion).status).toBe('failed')
+  expect((await second.completion).status).toBe('failed')
+  expect(queue.enqueue('c', [message('must-not-write')])).toMatchObject({ accepted: false, reason: 'worker_unavailable' })
+  expect(await queue.flush(30)).toBe(false)
+  expect(worker.posts).toHaveLength(1)
+  queue.dispose()
+})
+
+test('capacity rejection and dispose settle pending receipts without claiming saved', async () => {
+  const worker = new FakeWorker()
+  worker.postMessage = batch => { worker.posts.push(batch) }
+  const queue = new SessionPersistenceQueue({ configDir: '/tmp/config', sessionsDir: '/tmp/sessions', createWorker: () => worker as unknown as Worker })
+  const receipt = queue.enqueue('full', Array.from({ length: 2_000 }, (_, index) => message(String(index))))
+  expect(queue.enqueue('full', [message('overflow')])).toMatchObject({ accepted: false, reason: 'capacity' })
+  queue.dispose()
+  if (!receipt.accepted) throw new Error('unexpected rejection')
+  expect((await receipt.completion).status).toBe('failed')
+  expect(await queue.flush(30)).toBe(false)
+})
+
+test('real worker resumes missing batch indexes without rewriting concurrent sync history', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'profer-persistence-append-only-'))
+  const { appendFileSync, mkdirSync, statSync } = await import('node:fs')
+  let worker: RealWorker | undefined
+  try {
+    const path = await buildWorker(root)
+    const sessionsDir = join(root, 'sessions')
+    mkdirSync(sessionsDir)
+    const file = join(sessionsDir, 'resume.jsonl')
+    const first = JSON.stringify({ ...message('first'), _proferPersistence: { batchId: 'partial', index: 0, count: 3 } }) + '\n'
+    appendFileSync(file, first)
+    const inode = statSync(file).ino
+    worker = new RealWorker(path)
+    const batch = { type: 'append', id: 1, batchId: 'partial', configDir: root, sessionsDir, sessionId: 'resume', messages: [message('first'), message('second'), message('third')] }
+    let counter = 0
+    const syncLines: string[] = []
+    const timer = setInterval(() => {
+      const line = JSON.stringify({ type: 'user', uuid: `sync-${counter++}` }) + '\n'
+      appendFileSync(file, line)
+      syncLines.push(line)
+    }, 1)
+    try {
+      await new Promise<void>((resolve, reject) => {
+        worker!.once('error', reject)
+        worker!.once('message', reply => reply.type === 'saved' ? resolve() : reject(new Error(reply.error)))
+        worker!.postMessage(batch)
+      })
+    } finally { clearInterval(timer) }
+    expect(syncLines.length).toBeGreaterThan(0)
+    const content = readFileSync(file, 'utf8')
+    expect(content.startsWith(first)).toBe(true)
+    for (const line of syncLines) expect(content.includes(line)).toBe(true)
+    expect(statSync(file).ino).toBe(inode)
+    const own = content.trim().split('\n').map(line => JSON.parse(line)).filter(m => m._proferPersistence?.batchId === 'partial')
+    expect(own.map(m => m.uuid)).toEqual(['first', 'second', 'third'])
+  } finally { await worker?.terminate(); rmSync(root, { recursive: true, force: true }) }
+})
+
+  test('real worker refuses duplicate batch indexes instead of acknowledging an ambiguous replay', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'profer-persistence-duplicate-mark-'))
+    const { appendFileSync, mkdirSync } = await import('node:fs')
+    let worker: RealWorker | undefined
+    try {
+      const path = await buildWorker(root)
+      const sessionsDir = join(root, 'sessions')
+      mkdirSync(sessionsDir)
+      const file = join(sessionsDir, 'duplicate.jsonl')
+      const mark = { batchId: 'dup', index: 0, count: 2 }
+      appendFileSync(file, `${JSON.stringify({ uuid: 'one', _proferPersistence: mark })}\n${JSON.stringify({ uuid: 'one-again', _proferPersistence: mark })}\n`)
+      worker = new RealWorker(path)
+      const reply = await new Promise<{ type: string; error?: string }>((resolve, reject) => {
+        worker!.once('error', reject)
+        worker!.once('message', resolve)
+        worker!.postMessage({ type: 'append', id: 1, batchId: 'dup', configDir: root, sessionsDir, sessionId: 'duplicate', messages: [message('one'), message('two')] })
+      })
+      expect(reply.type).toBe('failed')
+      expect(reply.error).toContain('重复索引')
+    } finally { await worker?.terminate(); rmSync(root, { recursive: true, force: true }) }
+  })
+
+  test('real worker refuses torn JSONL tail and preserves every existing byte', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'profer-persistence-torn-tail-'))
+  const { writeFileSync } = await import('node:fs')
+  let worker: RealWorker | undefined
+  try {
+    const path = await buildWorker(root)
+    const file = join(root, 'broken.jsonl')
+    const previous = '{"uuid":"old"}\n{"uuid":"torn'
+    writeFileSync(file, previous)
+    worker = new RealWorker(path)
+    const reply = await new Promise<{ type: string; error?: string }>((resolve, reject) => {
+      worker!.once('error', reject)
+      worker!.once('message', resolve)
+      worker!.postMessage({ type: 'append', id: 1, batchId: 'torn', configDir: root, sessionsDir: root, messagesPath: file, sessionId: 'broken', messages: [message('new')] })
+    })
+    expect(reply.type).toBe('failed')
+    expect(reply.error).toContain('待恢复')
+    expect(readFileSync(file, 'utf8')).toBe(previous)
+  } finally { await worker?.terminate(); rmSync(root, { recursive: true, force: true }) }
 })

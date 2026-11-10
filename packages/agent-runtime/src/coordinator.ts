@@ -163,17 +163,29 @@ export interface AgentRuntimeCoordinatorOptions {
    * 不注入时 coordinator 自建一份（只在本协调器内互斥，与改造前等价）。
    */
   ownership?: AgentRunOwnershipRegistry
+  /** stop/stopAndWait/stopAll 的 provider 资源退出 deadline。 */
+  stopDeadlineMs?: number
 }
 
+
+export class AgentRuntimeStopTimeoutError extends Error {
+  readonly code = 'AGENT_RUNTIME_STOP_TIMEOUT'
+  constructor(readonly sessionId: string, readonly deadlineMs: number) {
+    super(`Agent runtime stop timed out after ${deadlineMs}ms: ${sessionId}`)
+    this.name = 'AgentRuntimeStopTimeoutError'
+  }
+}
 
 /** coordinator 自己的 owner 控制表：执行权归 registry，stop/wait 路由归这里。 */
 interface AgentRunControlEntry {
   token: AgentRunOwnershipToken
   /** 已经进入停止流程（stop() 已调用、run 尚未 settle）；只影响拒绝文案。 */
   stopping: boolean
+  quarantined?: boolean
   stop(reason: string): Promise<void>
   queue?(input: AgentRuntimeQueuedInput): Promise<AgentRuntimeQueuedInputResult>
   wait?: Promise<AgentRunOutcome>
+  drained?: Promise<void>
 }
 
 
@@ -188,13 +200,13 @@ export interface AgentRuntimeRunHandle {
  * Host-neutral run coordinator. Ownership is claimed synchronously before the
  * first provider await; session persistence and event projection remain ports.
  */
-function enqueueSessionMessages(session: NonNullable<AgentRuntimePorts['sessions']> | undefined, sessionId: string, messages: readonly SDKMessage[]): void {
+function enqueueSessionMessages(session: NonNullable<AgentRuntimePorts['sessions']> | undefined, sessionId: string, messages: readonly SDKMessage[]): import('./ports').RuntimePersistenceReceipt | void {
   if (!session || messages.length === 0) return
   if (session.enqueueMessages) {
-    try { session.enqueueMessages(sessionId, messages) } catch (error) {
+    try { return session.enqueueMessages(sessionId, messages) } catch (error) {
       console.error(`[Agent runtime] 消息持久化旁路失败，运行继续: session=${sessionId}`, error)
+      return { accepted: false, reason: 'enqueue_failed', error: error instanceof Error ? error.message : String(error) }
     }
-    return
   }
   // Compatibility for non-Electron hosts. Production Electron provides enqueueMessages.
   // Defer and isolate this legacy write so provider callbacks do not observe its failure.
@@ -321,12 +333,23 @@ export class AgentRuntimeCoordinator {
     let providerAttemptActive = false
     let finished = false
     let acceptingInput = false
+    let providerDrain: Promise<void> | undefined
+    let providerDrainSettled = true
+    let stopTask: Promise<void> | undefined
+    let stopTaskSettled = true
+    const resourceDrained = () => providerDrainSettled && stopTaskSettled
     const pendingInputs = new Set<Promise<AgentRuntimeQueuedInputResult>>()
     const queuedInputs = new Map<string, Promise<AgentRuntimeQueuedInputResult>>()
     let inputRecordingError: unknown
     const messageIds = new WeakMap<SDKMessage, string>()
     const logicalMessageIds = new Map<string, string>()
     let pendingAssistantId: string | undefined
+    let providerHasSideEffects = false
+    const observeSideEffects = (message: SDKMessage) => {
+      if (message.type !== 'assistant') return
+      const blocks = (message as { message?: { content?: Array<{ type?: unknown }> } }).message?.content
+      if (Array.isArray(blocks) && blocks.some(block => block?.type === 'tool_use')) providerHasSideEffects = true
+    }
     const stamp = (message: SDKMessage, author?: ActorRef, context = input.context): SDKMessage => {
       if (!run || !context) return message
       const record = message as SDKMessage & { uuid?: string; message?: { id?: string }; _partial?: boolean; error?: unknown; _errorCode?: unknown }
@@ -350,11 +373,21 @@ export class AgentRuntimeCoordinator {
       if (finished || this.active.get(input.sessionId)?.token !== token || controller.signal.aborted) return
       const control = this.active.get(input.sessionId)
       if (control) control.stopping = true
-      reporter.onComplete({ stoppedByUser: true, endReason: reason })
+      const effectiveReason = reason.startsWith('AbortError') ? 'stopped_by_user' : reason
+      const userStop = effectiveReason === 'stopped_by_user' || effectiveReason === 'user'
+      const trustedCascade = effectiveReason === 'parent_cancel' || effectiveReason === 'delegation_cancel'
+      reporter.onComplete({ outcomeStatus: 'stopped', ...(trustedCascade ? { stopReason: effectiveReason } : {}), stoppedByUser: userStop, endReason: userStop ? 'stopped_by_user' : undefined })
       controller.abort(reason)
-      if (providerAttemptActive) await adapter.stop?.(reason, input.sessionId)
+      if (providerAttemptActive) {
+        stopTaskSettled = false
+        stopTask = Promise.resolve().then(() => adapter.stop?.(reason, input.sessionId))
+        void stopTask.then(() => { stopTaskSettled = true }, () => { /* 失败不证明资源已退出。 */ })
+        await stopTask
+      }
     }
-    this.active.set(input.sessionId, { token, stopping: false, stop })
+    let markResourcesExited!: () => void
+    const resourcesExited = new Promise<void>(resolve => { markResourcesExited = resolve })
+    this.active.set(input.sessionId, { token, stopping: false, stop, drained: resourcesExited })
     const abort = () => {
       // EventTarget 不等待 async listener；停止失败记录为执行错误，避免未处理 rejection。
       stop(String(input.abortSignal?.reason ?? 'stopped_by_user')).catch(error => {
@@ -367,9 +400,36 @@ export class AgentRuntimeCoordinator {
       ? input.metadata.startedAt
       : this.now()
     const emit = (event: AgentRuntimeEvent): void | Promise<void> => this.options.ports?.host?.emit({ ...event, ...runReference })
+    let persistence: import('./ports').RuntimePersistenceState | undefined
+    let pendingSaves = 0
+    let saveFailure: string | undefined
+    let watermark: number | undefined
+    const persist = (messages: readonly SDKMessage[]) => {
+      const receipt = enqueueSessionMessages(session, input.sessionId, messages)
+      if (!receipt) return // neutral/legacy host 没有 ACK 契约，不能冒称 saved。
+        const publish = () => {
+          const state = { status: saveFailure ? 'failed' : pendingSaves ? 'pending' : 'saved' } as const
+          persistence = { ...state, ...(watermark !== undefined ? { watermark } : {}), ...(saveFailure ? { error: saveFailure } : {}) }
+          const published = { ...persistence, ...runReference }
+          try { callbacks.onPersistence?.(published) } catch { /* 保存状态观察者不能撤销写入。 */ }
+          void Promise.resolve().then(() => emit({ type: 'runtime_persistence', sessionId: input.sessionId, persistence: { ...published } })).catch(() => {})
+        }
+      if (!receipt.accepted) { saveFailure ??= receipt.error ?? `消息未保存 (${receipt.reason})`; publish(); return }
+      pendingSaves += 1
+      watermark = Math.max(watermark ?? 0, receipt.watermark)
+      publish()
+      void receipt.completion.then(ack => {
+        pendingSaves -= 1
+        if (ack.status === 'failed') saveFailure ??= ack.error ?? '消息保存失败'
+        publish()
+      }, error => { pendingSaves -= 1; saveFailure ??= String(error); publish() })
+    }
     const runCallbacks: AgentRuntimeCallbacks = {
       onEvent: async (event) => {
-        if (finished) return
+        if (finished || controller.signal.aborted) return
+        const eventMessage = event.type === 'message' ? event.message
+          : event.type === 'stream_payload' && event.payload.kind === 'sdk_message' ? event.payload.message : undefined
+        if (eventMessage) observeSideEffects(eventMessage)
         const sourced = event.type === 'message' ? { ...event, sessionId: input.sessionId, message: stamp(event.message) }
           : event.type === 'stream_payload' && event.payload.kind === 'sdk_message'
             ? { ...event, sessionId: input.sessionId, payload: { ...event.payload, message: stamp(event.payload.message) } } : event
@@ -377,7 +437,8 @@ export class AgentRuntimeCoordinator {
         await callbacks.onEvent({ ...sourced, ...runReference })
       },
       onMessage: async (message: SDKMessage) => {
-        if (finished) return
+        if (finished || controller.signal.aborted) return
+        observeSideEffects(message)
         // 先用原对象分配来源 ID，再附加运行耗时，避免重复 result 投影丢失稳定 ID。
         const runtimeMessage = addRuntimeDuration(stamp(message), startedAt, this.now())
         // 路由键用本轮 run 的 agent 会话 id（`input.sessionId`），不能用 `runtimeMessage.session_id`：
@@ -385,7 +446,7 @@ export class AgentRuntimeCoordinator {
         await emit({ type: 'message', sessionId: input.sessionId, message: runtimeMessage })
         await callbacks.onMessage?.(runtimeMessage)
         if (isPersistableRuntimeMessage(runtimeMessage)) {
-          enqueueSessionMessages(session, input.sessionId, [normalizeRuntimeMessage(runtimeMessage, input.modelId, this.now())])
+          persist([normalizeRuntimeMessage(runtimeMessage, input.modelId, this.now())])
         }
       },
       onError: async () => {
@@ -443,11 +504,16 @@ export class AgentRuntimeCoordinator {
           } catch (error) { attachError = error }
         }
         // Transcript 是运行结果的旁路副本；先投影已接收输入，再异步入队持久化。
-        await emit({ type: 'message', sessionId: input.sessionId, message })
-        await callbacks.onMessage?.(message)
-        enqueueSessionMessages(session, input.sessionId, [message])
-        if (attachError) throw attachError
-        return { ...runReference, messageId: message._provenance?.messageId ?? record.uuid ?? queued.context.trigger.id }
+        try { await emit({ type: 'message', sessionId: input.sessionId, message }) }
+        catch (error) { attachError ??= error }
+        try { await callbacks.onMessage?.(message) }
+        catch (error) { attachError ??= error }
+        persist([message])
+        const recordingError = attachError instanceof Error ? attachError.message : attachError ? String(attachError) : undefined
+        if (recordingError) console.error(`[Agent runtime] 已接受追加输入，但记录失败: session=${input.sessionId}; ${recordingError}`)
+        return { ...runReference, messageId: message._provenance?.messageId ?? record.uuid ?? queued.context.trigger.id,
+          ...(recordingError ? { recordingError } : {}),
+        }
       })
       queuedInputs.set(key, delivery)
       pendingInputs.add(delivery)
@@ -491,11 +557,11 @@ export class AgentRuntimeCoordinator {
           const notice = run && input.context ? createRunTriggerMessage(run, input.context, () => globalThis.crypto.randomUUID(), this.now()) : undefined
           if (notice) {
             await emit({ type: 'message', sessionId: input.sessionId, message: notice })
-            enqueueSessionMessages(session, input.sessionId, [notice])
+            persist([notice])
           }
           input.persistedUserMessage = stamp(input.persistedUserMessage, input.context?.messageAuthor ?? input.context?.trigger.actor)
           await emit({ type: 'message', sessionId: input.sessionId, message: input.persistedUserMessage })
-          enqueueSessionMessages(session, input.sessionId, [input.persistedUserMessage])
+          persist([input.persistedUserMessage])
           userMessagePersisted = true
         }
         if (!providerStarted) {
@@ -514,12 +580,13 @@ export class AgentRuntimeCoordinator {
         acceptingInput = true
         let outcome: AgentRunOutcome
         try {
-          outcome = await (adapter.stream
-            ? consumeRuntimeStream(adapter.stream(prepared), controller.signal, runCallbacks, {
-                sessionId: input.sessionId,
-                startedAt,
-              })
-            : adapter.query(prepared, runCallbacks))
+          const execution = adapter.stream
+            ? consumeRuntimeStream(adapter.stream(prepared), controller.signal, runCallbacks, { sessionId: input.sessionId, startedAt })
+            : adapter.query(prepared, runCallbacks)
+          providerDrainSettled = false
+          providerDrain = adapter.waitForDrain?.(input.sessionId) ?? execution.then(() => undefined, () => undefined)
+          void providerDrain.then(() => { providerDrainSettled = true }, () => { /* 不把清理失败误报为退出。 */ })
+          outcome = await execution
         } catch (error) {
           outcome = { status: 'failed', error: error instanceof Error ? error.message : String(error) }
         } finally {
@@ -532,7 +599,7 @@ export class AgentRuntimeCoordinator {
 
         const shouldRetry = this.options.retry?.shouldRetry ?? ((error: string) => isRetryableError({ message: error }))
         const policy: RetryPolicy = { ...this.options.retry, maxRetries: this.options.retry?.maxRetries ?? 0 }
-        if (!shouldRetry(outcome.error) || !canRetry(retryCount + 1, retryWaitedMs, policy)) return outcome
+        if (providerHasSideEffects || !shouldRetry(outcome.error) || !canRetry(retryCount + 1, retryWaitedMs, policy)) return outcome
         retryCount += 1
         const delayMs = getRetryDelayMs(retryCount, retryWaitedMs, policy)
         await runCallbacks.onEvent({ type: 'retry', attempt: retryCount, delayMs, reason: outcome.error })
@@ -542,7 +609,11 @@ export class AgentRuntimeCoordinator {
     })()
       .then(async (outcome) => {
         if (outcome.status === 'completed') reporter.onComplete()
-        else if (outcome.status === 'stopped') reporter.onComplete({ stoppedByUser: true })
+        else if (outcome.status === 'stopped') {
+          const userStop = outcome.stopReason === undefined || outcome.stopReason === 'stopped_by_user' || outcome.stopReason === 'user'
+          const trustedCascade = outcome.stopReason === 'parent_cancel' || outcome.stopReason === 'delegation_cancel'
+          reporter.onComplete({ outcomeStatus: 'stopped', ...(trustedCascade ? { stopReason: outcome.stopReason } : {}), stoppedByUser: userStop, endReason: userStop ? 'stopped_by_user' : undefined })
+        }
         else {
           reporter.onError(outcome.error)
           await callbacks.onError?.(outcome.error)
@@ -572,7 +643,10 @@ export class AgentRuntimeCoordinator {
         if (ledger && run && ownsLedgerRun) {
           try {
             const recorded = ledger.finish(run.id, outcome)
-            outcome = ledgerOutcome(recorded) ?? outcome
+            const recordedOutcome = ledgerOutcome(recorded)
+            outcome = recordedOutcome?.status === 'stopped' && outcome.status === 'stopped'
+              ? { ...recordedOutcome, ...(outcome.stopReason ? { stopReason: outcome.stopReason } : {}) }
+              : recordedOutcome ?? outcome
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             outcome = { status: 'failed', error: outcome.status === 'failed' ? `${outcome.error}\n${message}` : message }
@@ -589,11 +663,28 @@ export class AgentRuntimeCoordinator {
       })
       .finally(async () => {
         input.abortSignal?.removeEventListener('abort', abort)
-        // 释放必须校验 token：旧 run 的 finally 不能清掉已被新 run 接管的会话。
-        this.ownership.release(input.sessionId, token)
-        if (this.active.get(input.sessionId)?.token === token) this.active.delete(input.sessionId)
+        const release = async (lateDrain = false) => {
+          if (lateDrain) {
+            try { await input.onResourcesDrained?.() } catch (error) {
+              console.warn('[Agent Runtime] 资源退出观察者失败:', error)
+            }
+          }
+          if (!input.retainOwnership || this.active.get(input.sessionId)?.quarantined) this.ownership.release(input.sessionId, token)
+          if (this.active.get(input.sessionId)?.token === token) this.active.delete(input.sessionId)
+          markResourcesExited()
+          if (lateDrain) {
+            try { input.onOwnerReleased?.() } catch (error) { console.warn('[Agent Runtime] owner 释放观察者异常:', error) }
+          }
+        }
+        if (resourceDrained()) await release()
+        else {
+          const control = this.active.get(input.sessionId)
+          if (control?.token === token) control.quarantined = true
+          // 逻辑终态可以先交付，旧 provider 的资源退出后才释放隔离锁。
+          void Promise.all([providerDrain, stopTask]).then(() => release(true), () => { /* 拒绝无法证明退出，保留隔离锁。 */ })
+        }
         try {
-          await emit({ type: 'runtime_finished', sessionId: input.sessionId, runtime: input.runtime, outcome: finalOutcome ?? { status: 'failed', error: 'Agent 未产生运行终态' }, finishedAt: this.now(), title: input.title, workspaceId: input.workspaceId, modelId: input.modelId, initiator: input.initiator })
+          await emit({ type: 'runtime_finished', sessionId: input.sessionId, ...(persistence ? { persistence } : {}), runtime: input.runtime, outcome: finalOutcome ?? { status: 'failed', error: 'Agent 未产生运行终态' }, finishedAt: this.now(), title: input.title, workspaceId: input.workspaceId, modelId: input.modelId, initiator: input.initiator })
         } catch {
           // 宿主终态投影失败不能使已完成的 run 重新失败；owner 已释放。
         }
@@ -605,7 +696,10 @@ export class AgentRuntimeCoordinator {
       sessionId: input.sessionId,
       runtime: input.runtime,
       promise,
-      stop: async (reason = 'stopped_by_user') => stop(reason),
+      stop: async (reason = 'stopped_by_user') => {
+        const control = this.active.get(input.sessionId)
+        if (control?.token === token) await this.stopWithinDeadline(input.sessionId, control, reason, undefined, false)
+      },
     }
   }
 
@@ -630,21 +724,37 @@ export class AgentRuntimeCoordinator {
   async stop(sessionId: string, reason = 'stopped_by_user'): Promise<void> {
     const active = this.active.get(sessionId)
     if (!active) return
-    await active.stop(reason)
+    await this.stopWithinDeadline(sessionId, active, reason, undefined, false)
+  }
+  private async stopWithinDeadline(sessionId: string, active: AgentRunControlEntry, reason: string, deadlineAt = Date.now() + (this.options.stopDeadlineMs ?? 15_000), waitForRun = true): Promise<void> {
+    const remaining = Math.max(0, deadlineAt - Date.now())
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const drain = (async () => {
+      await active.stop(reason)
+      if (waitForRun) {
+        await active.wait
+        await active.drained
+      }
+    })()
+    try {
+      await Promise.race([drain, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          active.quarantined = true
+          reject(new AgentRuntimeStopTimeoutError(sessionId, this.options.stopDeadlineMs ?? 15_000))
+        }, remaining)
+      })])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
   async stopAndWait(sessionId: string, reason = 'stopped_by_user'): Promise<void> {
     const active = this.active.get(sessionId)
-    if (!active) return
-    await active.stop(reason)
-    await active.wait
+    if (active) await this.stopWithinDeadline(sessionId, active, reason, Date.now() + (this.options.stopDeadlineMs ?? 15_000))
   }
 
   async stopAll(reason = 'stopped_by_user'): Promise<void> {
-    const active = [...this.active.values()]
-    await Promise.all(active.map(async owner => {
-      await owner.stop(reason)
-      await owner.wait
-    }))
+    const deadlineAt = Date.now() + (this.options.stopDeadlineMs ?? 15_000)
+    await Promise.all([...this.active.entries()].map(([id, owner]) => this.stopWithinDeadline(id, owner, reason, deadlineAt)))
   }
 }
 

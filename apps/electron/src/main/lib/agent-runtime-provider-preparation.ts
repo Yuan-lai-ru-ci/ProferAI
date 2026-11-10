@@ -4,12 +4,12 @@ import type {
   AgentRuntimeQuery,
 } from '@profer/agent-runtime'
 import { homedir } from 'node:os'
-import type { ProferPermissionMode } from '@profer/shared'
+import { canonicalAgentToolName, type ProferPermissionMode } from '@profer/shared'
 import { buildAgentSdkEnv } from './agent-sdk-env'
 import { resolveHostAgentRuntimeEnv } from './agent-runtime-env-host'
 import { resolveSDKCliPath } from './agent-sdk-cli-path'
 import { getPiTranscriptDirForSession, getSdkConfigDir } from './config-paths'
-import { resolveProviderPermissionMode, stripAgentRuntimePolicyFromProviderInput } from './agent-runtime-policy-snapshot'
+import { collectPolicyDisallowedTools, readAgentRuntimePolicySnapshot, resolveProviderPermissionMode, stripAgentRuntimePolicyFromProviderInput } from './agent-runtime-policy-snapshot'
 import { getAgentWorkspace, getWorkspaceAutoMemoryDir } from './agent-workspace-manager'
 import { resolveAgentSessionWriteLayout } from './agent-session-manager'
 import { resolveWorkspaceLocation } from './workspace-locator'
@@ -118,6 +118,12 @@ export function createElectronProviderQueryPreparation(
       const systemPrompt = promptFromPrepared(input, prepared, claudeTurnPrompt)
       // 快照不进 provider options：provider 只应看到 permissionMode 这类自己能理解的字段。
       const providerInput = stripAgentRuntimePolicyFromProviderInput(input.providerInput)
+      const snapshot = readAgentRuntimePolicySnapshot(input.providerInput)
+      const disallowedTools = [...new Set([
+        ...((providerInput.disallowedTools as readonly string[] | undefined) ?? []),
+        ...(prepared.disallowedTools ?? []),
+        ...(snapshot ? collectPolicyDisallowedTools(snapshot) : []),
+      ].map(canonicalAgentToolName))]
       if (input.runtime === 'claude') {
         // project 下 cwd 是用户项目根：storageDir 那份 `.claude/settings.json` 对 SDK 是惰性的，
         // 必须把同一组设置内联成 flag settings 层（与旧链 P1-8 同一 builder、同一值）。
@@ -145,7 +151,7 @@ export function createElectronProviderQueryPreparation(
           ...(prepared.plugins !== undefined ? { plugins: [...prepared.plugins] } : {}),
           ...(prepared.skills !== undefined ? { skills: [...prepared.skills] } : {}),
           ...(prepared.allowedTools !== undefined ? { allowedTools: [...prepared.allowedTools] } : {}),
-          ...(prepared.disallowedTools !== undefined ? { disallowedTools: [...prepared.disallowedTools] } : {}),
+          disallowedTools,
           ...(prepared.canUseTool ? { canUseTool: prepared.canUseTool } : {}),
           ...(input.runtimeSessionId ? { resumeSessionId: input.runtimeSessionId } : {}),
           ...(input.providerInput?.resumeSessionAt ? { resumeSessionAt: input.providerInput.resumeSessionAt } : {}),
@@ -204,7 +210,7 @@ export function createElectronProviderQueryPreparation(
         ...(prepared.plugins !== undefined ? { plugins: [...prepared.plugins] } : {}),
         ...(prepared.skills !== undefined ? { skills: [...prepared.skills] } : {}),
         ...(prepared.allowedTools !== undefined ? { allowedTools: [...prepared.allowedTools] } : {}),
-        ...(prepared.disallowedTools !== undefined ? { disallowedTools: [...prepared.disallowedTools] } : {}),
+        disallowedTools,
         ...(prepared.canUseTool ? { canUseTool: prepared.canUseTool } : {}),
         piAgentDir: getSdkConfigDir(),
         piSessionDir: getPiTranscriptDirForSession(input.sessionId),
