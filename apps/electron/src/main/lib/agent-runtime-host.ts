@@ -1147,8 +1147,13 @@ export function createElectronAgentHost(options: ElectronAgentHostOptions = {}):
       : undefined)
   const permissions = createElectronPermissionPort({
     ...options.permission,
-    // 冻结策略优先于原始覆盖和会话元数据；两端 provider 与审批只能使用同一个有效值。
-    // 后两项仅兼容未挂策略的旧宿主，不得反过来放宽已挂载策略。
+    // 三个来源依次看：本轮冻结的策略快照、run facts 里的 override、会话元数据（用户在界面上选的值）。
+    // 快照必须排在最前：它已经是「预设上限 + 显式覆盖（automation/飞书/移动端）」的收敛结果，
+    // 也是 provider 收到的同一个值；入口写入的 facts override 同样是收敛值，两者一致。
+    // 若 facts 里残留原始 override（旧宿主 / 手工写入）与快照冲突，审批边界必须以冻结策略为准，
+    // 否则会出现「端口放行但 provider 仍在计划模式」的错位。
+    // 快照缺失时才看 override 与会话元数据：预设未声明权限的历史会话与移动端会话因此不会
+    // 退化成「每一步都要确认」。
     isBypassPermissions: (sessionId: string) => {
       const snapshot = agentRuntimePolicyRuns.getForRun(sessionId)
       if (snapshot) return snapshot.policy.permissionMode === 'bypassPermissions'

@@ -114,6 +114,25 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
     category: 'navigation',
   },
 
+  {
+    id: 'browser-reload', name: '刷新网页', description: '刷新当前浏览器页面', defaultMac: 'Cmd+R', defaultWin: 'Ctrl+R', category: 'navigation',
+  },
+  {
+    id: 'browser-new-page', name: '新建浏览器页面', description: '在当前浏览器会话新建页面', defaultMac: 'Cmd+T', defaultWin: 'Ctrl+T', category: 'navigation',
+  },
+  {
+    id: 'browser-zoom-in', name: '放大网页', description: '仅放大当前网页，不改变应用界面', defaultMac: 'Cmd+=', defaultWin: 'Ctrl+=', category: 'navigation',
+  },
+  {
+    id: 'browser-zoom-out', name: '缩小网页', description: '仅缩小当前网页，不改变应用界面', defaultMac: 'Cmd+-', defaultWin: 'Ctrl+-', category: 'navigation',
+  },
+  {
+    id: 'browser-zoom-reset', name: '重置网页缩放', description: '将当前网页恢复为100%', defaultMac: 'Cmd+0', defaultWin: 'Ctrl+0', category: 'navigation',
+  },
+  {
+    id: 'browser-stop', name: '停止网页加载', description: '关闭网页查找或停止当前网页加载，不停止 Agent', defaultMac: 'Esc', defaultWin: 'Esc', category: 'navigation', skipInEditable: true,
+  },
+
   // 编辑级（输入框格式化，仅 macOS — Cmd+B/S 被全局快捷键占用）
   {
     id: 'editor-bold',

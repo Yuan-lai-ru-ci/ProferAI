@@ -2600,16 +2600,21 @@ export const AGENT_IPC_CHANNELS = {
   CLOSE_BROWSER_TAB: 'agent:close-browser-tab',
   GET_BROWSER_STATE: 'agent:get-browser-state',
   /** 高频布局同步使用单向 IPC，不等待主进程 Promise。 */
-  SET_BROWSER_LAYOUT: 'agent:set-browser-layout',
   NAVIGATE_BROWSER: 'agent:navigate-browser',
   GO_BACK_BROWSER: 'agent:go-back-browser',
   GO_FORWARD_BROWSER: 'agent:go-forward-browser',
   RELOAD_BROWSER: 'agent:reload-browser',
+  STOP_BROWSER_PAGE: 'agent:stop-browser-page',
+  FIND_BROWSER_PAGE: 'agent:find-browser-page',
+  CLEAR_BROWSER_FIND: 'agent:clear-browser-find',
+  RESPOND_BROWSER_DIALOG: 'agent:respond-browser-dialog',
   /** 用户阅读用途：整页翻译当前 tab（toggle），返回翻译态。 */
   TRANSLATE_BROWSER: 'agent:translate-browser',
   SET_BROWSER_ZOOM: 'agent:set-browser-zoom',
   /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
   PASTE_BROWSER_CLIPBOARD: 'agent:paste-browser-clipboard',
+  /** 用户面板显式触发：把当前页面交给系统默认浏览器打开（地址由主进程按 tab 读取）。 */
+  OPEN_BROWSER_IN_SYSTEM: 'agent:open-browser-in-system',
   /** 主进程 → 渲染进程：受管网页的下载被安全拦截，携带脱敏文件名与来源 URL。 */
   BROWSER_DOWNLOAD_BLOCKED: 'agent:browser-download-blocked',
   BROWSER_LOCAL_FILE_SELECTION: 'agent:browser-local-file-selection',
@@ -2626,8 +2631,14 @@ export const AGENT_IPC_CHANNELS = {
   OPEN_FILE_IN_BROWSER: 'agent:open-file-in-browser',
   CLOSE_BROWSER: 'agent:close-browser',
   BROWSER_STATE_CHANGED: 'agent:browser-state-changed',
-  /** 主进程 → 渲染进程：用户点击了原生网页上的分屏退出浮标。 */
-  SPLIT_VIEW_CLOSE_CLICKED: 'agent:split-view-close-clicked',
+  CONNECT_BROWSER_GUEST_HOST: 'agent:connect-browser-guest-host',
+  BIND_BROWSER_GUEST: 'agent:bind-browser-guest',
+  GET_BROWSER_GUESTS: 'agent:get-browser-guests',
+  BROWSER_GUESTS_CHANGED: 'agent:browser-guests-changed',
+  SET_BROWSER_GUEST_VISIBILITY: 'agent:set-browser-guest-visibility',
+  BROWSER_GUEST_FOCUSED: 'agent:browser-guest-focused',
+  SET_BROWSER_SHORTCUT_CONTEXT: 'agent:set-browser-shortcut-context',
+  BROWSER_SHORTCUT: 'agent:browser-shortcut',
   /** 新标签页起始页数据（书签 + 最近访问 + 默认首页）。 */
   GET_BROWSER_START_PAGE: 'agent:get-browser-start-page',
   /** 新增书签，返回更新后的起始页状态。 */

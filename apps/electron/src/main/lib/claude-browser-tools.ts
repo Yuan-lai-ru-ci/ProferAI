@@ -56,10 +56,10 @@ export async function injectClaudeBrowserMcpServer(
         const image = compressToolImageForModel({ data: shot.base64, mimeType: shot.mimeType })
         return { content: [{ type: 'text', text: `已截取当前页面：${shot.url}（仅供观察，不要用 send_local_image 转发给用户）` }, { type: 'image', data: image.data, mimeType: image.mimeType }] }
       }, readOnly),
-      sdk.tool('BrowserPreviewOpen', 'Open an authorized local file in the visible in-app browser tab. HTML files load directly; other extensions render through the built-in viewer page (documents, archives, designs, 3D, GIS, media). Read-only; never expose absolute paths.', { path: z.string().min(1), tabId: optionalTabId }, async ({ path, tabId }) => textResult(await browserController.previewOpen(ctx.sessionId, path, tabId, ctx.allowedRoots, ctx.agentCwd)), readOnly),
+      sdk.tool('BrowserPreviewOpen', 'Open an authorized local file in a background in-app browser tab without changing the user panel. HTML files load directly; other extensions render through the built-in viewer page (documents, archives, designs, 3D, GIS, media). Read-only; never expose absolute paths.', { path: z.string().min(1), tabId: optionalTabId }, async ({ path, tabId }) => textResult(await browserController.previewOpen(ctx.sessionId, path, tabId, ctx.allowedRoots, ctx.agentCwd)), readOnly),
       sdk.tool('BrowserListTabs', 'List current in-app browser tabs.', {}, async () => textResult(browserController.listTabs(ctx.sessionId)), readOnly),
-      sdk.tool('BrowserNewTab', 'Create a new Agent working tab and optionally navigate it.', { url: z.string().min(1).optional() }, async ({ url }) => textResult(await browserController.createNewTab(ctx.sessionId, url))),
-      sdk.tool('BrowserSelectTab', 'Switch the Agent working tab by tab id.', { tabId: z.string().min(1) }, async ({ tabId }) => textResult(browserController.selectAgentTab(ctx.sessionId, tabId))),
+      sdk.tool('BrowserNewTab', 'Create a new background Agent working tab without changing the user panel and optionally navigate it.', { url: z.string().min(1).optional() }, async ({ url }) => textResult(await browserController.createNewTab(ctx.sessionId, url))),
+      sdk.tool('BrowserSelectTab', 'Switch only the Agent working tab by tab id without changing the user-visible page.', { tabId: z.string().min(1) }, async ({ tabId }) => textResult(browserController.selectAgentTab(ctx.sessionId, tabId))),
       sdk.tool('BrowserCloseTab', 'Close an Agent browser tab by tab id after the browser risk notice has been acknowledged.', { tabId: z.string().min(1) }, async ({ tabId }) => textResult(await browserController.closeAgentTab(ctx.sessionId, tabId))),
     ]
   const server = sdk.createSdkMcpServer({

@@ -10,11 +10,3 @@ export const browserStateMapAtom = atom<Map<string, BrowserViewState>>(new Map()
  * 用户再次点浏览器入口（手动打开会清除标记）也可恢复。
  */
 export const browserPanelDismissedSessionIdsAtom = atom<Set<string>>(new Set<string>())
-
-/**
- * 当前挂载了原生 WebContentsView 的浏览器顶栏 Tab id 集合。
- *
- * 这些页的右下角退出按钮由主进程绘制在原生网页之上；renderer 的 DOM 按钮必须隐藏，
- * 否则会在网页下方的面板底部再露出一个，形成两个关闭按钮。
- */
-export const browserNativePaneTabIdsAtom = atom<ReadonlySet<string>>(new Set<string>())

@@ -136,7 +136,6 @@ export function useCloseTab(): UseCloseTabReturn {
       // 用户关掉该会话最后一个浏览器页 Tab：记入 dismissed，推送不再自动重开
       const remainingBrowserTabs = remainingTabs.filter((tab) => isBrowserTab(tab) && tab.sessionId === browserSessionId)
       if (remainingBrowserTabs.length === 0) {
-        void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(browserSessionId)
         setBrowserDismissed((prev) => {
           if (prev.has(browserSessionId)) return prev
           const next = new Set(prev)

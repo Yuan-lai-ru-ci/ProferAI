@@ -193,6 +193,9 @@ export function createRuntimeEntryQuery(
   setAgentRuntimeRunFacts(input.sessionId, {
     triggeredBy: resolveAgentInputOperationSource(input),
     userMessage: input.userMessage,
+    // 写入本轮**收敛后**的权限模式（预设上限 + 显式覆盖），与 provider 拿到的是同一个值：
+    // 权限端口按这份事实判定是否短路，写入原始 override 会在「会话预设是 plan、
+    // 客户端传 bypass」时出现端口放行而 provider 仍在计划模式的错位。
     ...(snapshot
       ? { permissionModeOverride: snapshot.policy.permissionMode }
       : input.permissionModeOverride

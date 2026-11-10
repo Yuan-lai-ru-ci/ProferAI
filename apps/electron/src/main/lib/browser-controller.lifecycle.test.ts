@@ -1,61 +1,134 @@
 import { expect, test } from 'bun:test'
+import { EventEmitter } from 'node:events'
+import type { WebContents } from 'electron'
 import { BrowserController } from './browser-controller'
 
-test('关闭最后一个标签时移除原生 hostView，避免透明区域继续拦截全局点击', async () => {
-  const calls = {
-    hostVisible: [] as boolean[],
-    hostBounds: [] as Array<{ x: number; y: number; width: number; height: number }>,
-    removedChildren: [] as unknown[],
-    removedHosts: [] as unknown[],
-    tabClosed: 0,
-  }
-  const hostView = {
-    setVisible: (visible: boolean) => calls.hostVisible.push(visible),
-    setBounds: (bounds: { x: number; y: number; width: number; height: number }) => calls.hostBounds.push(bounds),
-    removeChildView: (view: unknown) => calls.removedChildren.push(view),
-  }
-  const webContents = {
+test('关闭最后一个标签时释放guest和DOM请求，不创建残留原生命中区域', async () => {
+  const sent: unknown[][] = []
+  let closed = 0
+  const contents = {
     debugger: { isAttached: () => false, detach: () => undefined },
     isDestroyed: () => false,
-    close: () => { calls.tabClosed += 1 },
+    close: () => { closed++ },
+    once: () => undefined,
   }
-  const tab = {
-    tabId: 'tab-1',
-    view: { webContents, setVisible: () => undefined },
-    state: { visible: true },
-  }
+  const tab = { tabId: 'tab-1', contents, state: { visible: true } }
   const browserSession = {
-    sessionId: 'session-1',
-    tabs: new Map([[tab.tabId, tab]]),
-    activeTabId: tab.tabId,
+    sessionId: 'session-1', tabs: new Map([[tab.tabId, tab]]), activeTabId: tab.tabId,
     agentTabId: tab.tabId,
-    hostView,
-    lastVisible: true,
   }
-  const owner = {
-    isDestroyed: () => false,
-    contentView: { removeChildView: (view: unknown) => calls.removedHosts.push(view) },
-  }
+  const owner = { isDestroyed: () => false, webContents: { send: (...args: unknown[]) => { sent.push(args) } } }
   const controller = new BrowserController()
   const internals = controller as unknown as {
     owner: typeof owner
     foregroundSessionId: string | null
     sessions: Map<string, typeof browserSession>
+    guestRequests: Map<string, { sessionId: string; tabId: string }>
   }
   internals.owner = owner
   internals.foregroundSessionId = browserSession.sessionId
   internals.sessions.set(browserSession.sessionId, browserSession)
-
+  internals.guestRequests.set(JSON.stringify([browserSession.sessionId, tab.tabId]), { sessionId: browserSession.sessionId, tabId: tab.tabId })
   expect(await controller.closeTab(browserSession.sessionId, tab.tabId)).toBeNull()
   expect(controller.getState(browserSession.sessionId)).toBeNull()
-  // 浏览器 session 已销毁，但当前前台 Agent 会话所有权必须保留；否则同会话重新打开后
-  // 新的 native layout 会被主进程误判为后台，表现为空白无画面。
   expect(internals.foregroundSessionId).toBe(browserSession.sessionId)
-  expect(calls.hostVisible).toEqual([false])
-  expect(calls.hostBounds).toEqual([{ x: 0, y: 0, width: 0, height: 0 }])
-  expect(calls.removedChildren).toEqual([tab.view])
-  expect(calls.removedHosts).toEqual([hostView])
-  expect(calls.tabClosed).toBe(1)
+  expect(internals.guestRequests.size).toBe(0)
+  expect(sent.at(-1)?.[1]).toEqual([])
+  expect(closed).toBe(1)
+})
+
+test('销毁回调不重新读取已经失效的 WebContents.debugger getter', () => {
+  const events = new EventEmitter()
+  const debuggerEvents = new EventEmitter()
+  const debuggerClient = Object.assign(debuggerEvents, {
+    attach: () => undefined,
+    sendCommand: async () => ({}),
+  })
+  let destroyed = false
+  const contents = {
+    id: 123,
+    get debugger() {
+      if (destroyed) throw new Error('Object has been destroyed')
+      return debuggerClient
+    },
+    on: events.on.bind(events),
+    removeListener: events.removeListener.bind(events),
+    setWindowOpenHandler: () => undefined,
+  }
+  const controller = new BrowserController()
+  const internals = controller as unknown as {
+    installTabContents: (session: { sessionId: string }, tab: { tabId: string }, contents: WebContents) => void
+  }
+  internals.installTabContents({ sessionId: 'closed-session' }, { tabId: 'closed-tab' }, contents as unknown as WebContents)
+  expect(debuggerClient.listenerCount('message')).toBe(1)
+  destroyed = true
+  expect(() => events.emit('destroyed')).not.toThrow()
+  expect(debuggerClient.listenerCount('message')).toBe(0)
+})
+
+test('旧 ticket 的迟到可见性清理不影响重建后的 guest', () => {
+  const controller = new BrowserController()
+  const tab = { tabId: 't', state: { visible: true } }
+  const browserSession = { sessionId: 's', tabs: new Map([['t', tab]]) }
+  const internals = controller as unknown as {
+    sessions: Map<string, typeof browserSession>
+    guestRequests: Map<string, { ticket: string }>
+    emit: () => void
+  }
+  let changes = 0
+  internals.sessions.set('s', browserSession)
+  internals.guestRequests.set(JSON.stringify(['s', 't']), { ticket: 'new' })
+  internals.emit = () => { changes++ }
+  controller.setGuestVisibility([{ sessionId: 's', tabId: 't', ticket: 'old', visible: false }])
+  expect(tab.state.visible).toBe(true)
+  expect(changes).toBe(0)
+  controller.setGuestVisibility([{ sessionId: 's', tabId: 't', ticket: 'new', visible: false }])
+  expect(tab.state.visible).toBe(false)
+  expect(changes).toBe(1)
+})
+
+test('用户输入可激活另一可见网页；脚本 focus、后台页、失焦窗口与 Agent 输入都不授予展示权', () => {
+  const events = new EventEmitter()
+  const debug = Object.assign(new EventEmitter(), { attach: () => undefined, sendCommand: async () => ({}) })
+  const contents = { id: 321, debugger: debug, on: events.on.bind(events), removeListener: events.removeListener.bind(events), setWindowOpenHandler: () => undefined }
+  const sent: unknown[][] = []
+  let focused = true
+  const tab = { tabId: 'work', contents, state: { visible: true } }
+  const session = { sessionId: 's', activeTabId: 'user', tabs: new Map([['work', tab]]) }
+  const controller = new BrowserController()
+  const internals = controller as unknown as {
+    owner: unknown; foregroundSessionId: string; guestManager: unknown
+    sessions: Map<string, typeof session>
+    agentOperatingTabs: Map<string, number>
+    installTabContents: (session: unknown, tab: unknown, contents: WebContents) => void
+    markUserBrowserContext: () => void
+    activateDisplayTab: (targetSession: typeof session, page: typeof tab) => void
+  }
+  internals.owner = { isDestroyed: () => false, isVisible: () => true, isFocused: () => focused,
+    webContents: { send: (...args: unknown[]) => { sent.push(args) } } }
+  internals.foregroundSessionId = 's'
+  internals.sessions.set('s', session)
+  internals.guestManager = { getBinding: () => ({ sessionId: 's', tabId: 'work' }) }
+  internals.markUserBrowserContext = () => undefined
+  internals.activateDisplayTab = (targetSession, page) => { targetSession.activeTabId = page.tabId }
+  internals.installTabContents(session, tab, contents as unknown as WebContents)
+  events.emit('focus')
+  expect(session.activeTabId).toBe('user')
+  events.emit('before-mouse-event', {}, { type: 'mouseDown' })
+  expect(session.activeTabId).toBe('work')
+  expect(sent).toHaveLength(1)
+  session.activeTabId = 'user'; sent.length = 0
+  internals.agentOperatingTabs.set('s:work', 1)
+  events.emit('before-input-event', {}, { type: 'keyDown' })
+  expect(sent).toHaveLength(0)
+  internals.agentOperatingTabs.clear()
+  focused = false
+  events.emit('before-mouse-event', {}, { type: 'mouseDown' })
+  expect(sent).toHaveLength(0)
+  focused = true; tab.state.visible = false
+  events.emit('before-mouse-event', {}, { type: 'mouseDown' })
+  expect(sent).toHaveLength(0)
+  expect(session.activeTabId).toBe('user')
 })
 
 test('没有浏览器会话时 listTabs 只读：不创建 session/tab，也不广播状态', () => {

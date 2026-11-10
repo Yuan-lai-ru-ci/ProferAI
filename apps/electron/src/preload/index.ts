@@ -256,25 +256,38 @@ export interface ElectronAPI {
   /** 获取独立预览窗口数据 */
   getDetachedPreviewData: (previewId: string) => Promise<DetachedPreviewWindowData | null>
 
-  // ===== Pi 受管浏览器（主进程 WebContentsView） =====
+  // ===== 受管浏览器 DOM guest =====
+  connectBrowserGuestHost: () => Promise<import('@profer/shared').BrowserGuestRequest[]>
+  bindBrowserGuest: (claim: import('@profer/shared').BrowserGuestClaim) => Promise<void>
+  getBrowserGuests: () => Promise<import('@profer/shared').BrowserGuestRequest[]>
+  onBrowserGuestsChanged: (callback: (requests: import('@profer/shared').BrowserGuestRequest[]) => void) => () => void
+  setBrowserGuestVisibility: (pages: import('@profer/shared').BrowserGuestVisibility[]) => void
+  onBrowserGuestFocused: (callback: (page: import('@profer/shared').BrowserGuestFocusEvent) => void) => () => void
+  setBrowserShortcutContext: (context: import('@profer/shared').BrowserShortcutContext) => void
+  onBrowserShortcut: (callback: (event: import('@profer/shared').BrowserShortcutEvent) => void) => () => void
+
+  // ===== 受管浏览器（主进程 WebContents/CDP，renderer 内嵌 guest） =====
   openAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
   listAgentBrowserTabs: (sessionId: string) => Promise<import('@profer/shared').BrowserTabListResult>
   createAgentBrowserTab: (input: import('@profer/shared').BrowserCreateTabInput) => Promise<import('@profer/shared').BrowserViewState>
   selectAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState>
   closeAgentBrowserTab: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState | null>
   getAgentBrowserState: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState | null>
-  setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => void
   navigateAgentBrowser: (input: import('@profer/shared').BrowserNavigateInput) => Promise<import('@profer/shared').BrowserViewState>
-  goBackAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
-  goForwardAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
-  reloadAgentBrowser: (sessionId: string) => Promise<import('@profer/shared').BrowserViewState>
+  goBackAgentBrowser: (sessionId: string, tabId?: string) => Promise<import('@profer/shared').BrowserViewState>
+  goForwardAgentBrowser: (sessionId: string, tabId?: string) => Promise<import('@profer/shared').BrowserViewState>
+  reloadAgentBrowser: (sessionId: string, tabId?: string) => Promise<import('@profer/shared').BrowserViewState>
+  stopBrowserPage: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserViewState>
+  findBrowserPage: (input: import('@profer/shared').BrowserTabInput & import('@profer/shared').BrowserFindInput) => Promise<void>
+  clearBrowserFind: (input: import('@profer/shared').BrowserTabInput) => Promise<void>
+  respondBrowserDialog: (input: import('@profer/shared').BrowserTabInput & import('@profer/shared').BrowserDialogResponse) => Promise<void>
   translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
   /** 用户面板显式触发：将系统剪贴板文本粘贴到当前聚焦字段。 */
   pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => Promise<import('@profer/shared').BrowserTranslateResult>
+  /** 用户面板显式触发：把当前页面交给系统默认浏览器打开。 */
+  openBrowserInSystemBrowser: (input: import('@profer/shared').BrowserTabInput) => Promise<void>
   /** 订阅受管网页下载被拦截的脱敏事件。 */
   onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => () => void
-  /** 订阅原生网页上「关闭拆分视图」浮标的点击（主进程绘制，renderer 负责解散组合）。 */
-  onSplitViewCloseClicked: (callback: (event: import('@profer/shared').BrowserSplitViewCloseEvent) => void) => () => void
   /**
    * 订阅「用户在浏览器列的文件预览里划词」。
    * 选区本身发生在无 preload 的沙箱 viewer 页，只能由主进程转投过来。
@@ -1828,6 +1841,26 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_DETACHED_PREVIEW_DATA, previewId) as Promise<DetachedPreviewWindowData | null>
   },
 
+  connectBrowserGuestHost: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CONNECT_BROWSER_GUEST_HOST),
+  bindBrowserGuest: (claim: import('@profer/shared').BrowserGuestClaim) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.BIND_BROWSER_GUEST, claim),
+  getBrowserGuests: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_GUESTS),
+  onBrowserGuestsChanged: (callback: (requests: import('@profer/shared').BrowserGuestRequest[]) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, requests: import('@profer/shared').BrowserGuestRequest[]) => callback(requests)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_GUESTS_CHANGED, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_GUESTS_CHANGED, listener)
+  },
+  setBrowserGuestVisibility: (pages: import('@profer/shared').BrowserGuestVisibility[]) => ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_GUEST_VISIBILITY, pages),
+  onBrowserGuestFocused: (callback: (page: import('@profer/shared').BrowserGuestFocusEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, page: import('@profer/shared').BrowserGuestFocusEvent) => callback(page)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_GUEST_FOCUSED, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_GUEST_FOCUSED, listener)
+  },
+  setBrowserShortcutContext: (context: import('@profer/shared').BrowserShortcutContext) => ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_SHORTCUT_CONTEXT, context),
+  onBrowserShortcut: (callback: (event: import('@profer/shared').BrowserShortcutEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, input: import('@profer/shared').BrowserShortcutEvent) => callback(input)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_SHORTCUT, listener)
+    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_SHORTCUT, listener)
+  },
   openAgentBrowser: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_BROWSER, sessionId)
   },
@@ -1841,26 +1874,23 @@ const electronAPI: ElectronAPI = {
   getAgentBrowserState: (sessionId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_BROWSER_STATE, sessionId)
   },
-  setAgentBrowserLayout: (layout: import('@profer/shared').BrowserViewLayout) => {
-    ipcRenderer.send(AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT, layout)
-  },
   navigateAgentBrowser: (input: import('@profer/shared').BrowserNavigateInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.NAVIGATE_BROWSER, input)
   },
-  goBackAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, sessionId),
-  goForwardAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, sessionId),
-  reloadAgentBrowser: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RELOAD_BROWSER, sessionId),
+  goBackAgentBrowser: (sessionId: string, tabId?: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, sessionId, tabId),
+  goForwardAgentBrowser: (sessionId: string, tabId?: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, sessionId, tabId),
+  reloadAgentBrowser: (sessionId: string, tabId?: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RELOAD_BROWSER, sessionId, tabId),
+  stopBrowserPage: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.STOP_BROWSER_PAGE, input),
+  findBrowserPage: (input: import('@profer/shared').BrowserTabInput & import('@profer/shared').BrowserFindInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.FIND_BROWSER_PAGE, input),
+  clearBrowserFind: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLEAR_BROWSER_FIND, input),
+  respondBrowserDialog: (input: import('@profer/shared').BrowserTabInput & import('@profer/shared').BrowserDialogResponse) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESPOND_BROWSER_DIALOG, input),
   translateAgentBrowser: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.TRANSLATE_BROWSER, input),
   pasteAgentBrowserClipboard: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PASTE_BROWSER_CLIPBOARD, input),
+  openBrowserInSystemBrowser: (input: import('@profer/shared').BrowserTabInput) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_BROWSER_IN_SYSTEM, input),
   onAgentBrowserDownloadBlocked: (callback: (event: import('@profer/shared').BrowserDownloadBlockedEvent) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: import('@profer/shared').BrowserDownloadBlockedEvent) => callback(payload)
     ipcRenderer.on(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
     return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.BROWSER_DOWNLOAD_BLOCKED, listener)
-  },
-  onSplitViewCloseClicked: (callback: (event: import('@profer/shared').BrowserSplitViewCloseEvent) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: import('@profer/shared').BrowserSplitViewCloseEvent) => callback(payload)
-    ipcRenderer.on(AGENT_IPC_CHANNELS.SPLIT_VIEW_CLOSE_CLICKED, listener)
-    return () => ipcRenderer.removeListener(AGENT_IPC_CHANNELS.SPLIT_VIEW_CLOSE_CLICKED, listener)
   },
   onAgentBrowserLocalFileSelection: (
     callback: (event: import('@profer/shared').BrowserLocalFileSelectionEvent) => void,

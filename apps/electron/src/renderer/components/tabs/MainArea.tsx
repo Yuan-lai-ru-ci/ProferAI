@@ -3,15 +3,17 @@
  *
  * 组合 TabBar + TabContent。文件预览与受管浏览器都是顶栏的工作 Tab：
  * - 每文件一个预览 Tab，浏览器每会话单例；
- * - 并排统一走 Tab 组合（左侧组内成员 + 右侧组内成员）；Agent 推送浏览器状态时
- *   自动把浏览器 Tab 与对话组合（不打断对话，焦点留在对话一侧）。
+ * - 并排统一走 Tab 组合（左侧组内成员 + 右侧组内成员）；Agent 推送只同步后台状态，
+ *   不隐式打开浏览器或改变用户的组合。
  */
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
 import { tabsAtom, activeTabIdAtom, activeTabAtom, tabIndicatorMapAtom, createBrowserTabId } from '@/atoms/tab-atoms'
+import { BrowserShortcutBridge } from '@/components/browser/BrowserShortcutBridge'
+import { BrowserGuestHost } from '@/components/browser/BrowserGuestHost'
 import { Panel } from '@/components/app-shell/Panel'
-import { browserNativePaneTabIdsAtom, browserPanelDismissedSessionIdsAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { browserPanelDismissedSessionIdsAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
 import { openBrowserTabFromPush } from '@/lib/browser-tab'
 import { isBrowserTab } from '@/atoms/tab-atoms'
 import { shouldAutoOpenBrowserFromPush } from '@/lib/browser-auto-open'
@@ -104,7 +106,6 @@ export function MainArea(): React.ReactElement {
   const activeTab = useAtomValue(activeTabAtom)
   const store = useStore()
   const [tabGroups, setTabGroups] = useAtom(tabGroupsAtom)
-  const nativeBrowserPaneTabs = useAtomValue(browserNativePaneTabIdsAtom)
   const tabGroup = findTabGroup(tabGroups, activeTabId)
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const activeView = useAtomValue(activeViewAtom)
@@ -119,7 +120,6 @@ export function MainArea(): React.ReactElement {
   const setBrowserStateMap = useSetAtom(browserStateMapAtom)
   const browserDismissed = useAtomValue(browserPanelDismissedSessionIdsAtom)
   const currentBrowserSessionIdRef = React.useRef<string | null>(null)
-  const previousBrowserSessionIdRef = React.useRef<string | null>(null)
   // 浏览器仅属于 Agent 会话；必须同时满足「激活 tab 绑定了 agent 会话」（agent / 预览 / 浏览器 Tab）
   // 和「当前处于 agent 模式」。否则 toggle-mode 快捷键（只切 appMode 不切 tab）会造成
   // appMode 与 activeTab 撕裂，让浏览器状态在已切到 Chat 的界面上错误残留。
@@ -137,18 +137,18 @@ export function MainArea(): React.ReactElement {
     // 同步浏览器内容状态（tabs/url/标题/trace 等）。状态可以保留在后台会话，
     // 但后台会话的状态推送不能改变当前会话的浏览器 Tab。
     setBrowserStateMap((previous) => { const next = new Map(previous); next.set(state.sessionId, state); return next })
-    // 只有当前激活会话收到实时状态推送时才允许自动打开。切换会话时的 getState
-    // 仅用于恢复工具栏状态，不能把旧会话的浏览器 Tab 重新唤起。
+    // 只有显式跟随才允许推送打开；getState 恢复和普通推送默认没有展示权。
     if (state.sessionId !== currentBrowserSessionIdRef.current) return
     const dismissed = browserDismissed.has(state.sessionId)
     const hasBrowserTabs = tabsRef.current.some((tab) => isBrowserTab(tab) && tab.sessionId === state.sessionId)
     // 已手动收掉且没有遗留页 Tab：不重建；仍有页 Tab 则继续同步（页面可能被 Agent 关掉）
     if (dismissed && !hasBrowserTabs) return
-    const autoOpen = options?.autoOpen !== false && !dismissed
+    const autoOpen = options?.autoOpen === true && !dismissed
     // 只读动作推送且没有既有页 Tab：不创建（保持安静）
     if (!hasBrowserTabs && !autoOpen) return
-    // Tab 化：按页 reconcile；autoOpen 时自动与对话组合并排（对话左、浏览器右，不打断对话）。
+    // 后台状态仅同步用户已打开的页面；显式跟随才可创建页签/组合。
     openBrowserTabFromPush(state, {
+      autoOpen,
       autoGroup: autoOpen && options?.autoGroup !== false,
       previousState,
     })
@@ -157,41 +157,22 @@ export function MainArea(): React.ReactElement {
   /**
    * 订阅实时状态推送。
    *
-   * 不再把「收到任意浏览器状态」当作「用户需要看浏览器」：只有 Agent 真的开始展示页面
-   * （存在工作标签 + 最近动作是 navigate/tab）才自动建组。用户点击浏览器按钮走 TabBar 的
-   * 本地显式打开路径，切回会话走 getAgentBrowserState 恢复路径，两者都不受此处影响。
+   * 状态镜像可持续更新，但默认不把 Agent 的导航/新页解释为用户的展示意图。
+   * 用户点击浏览器入口走显式打开路径；切回会话的 getState 也只被动同步。
    */
   const handleBrowserStatePush = React.useCallback((state: BrowserViewState) => {
     publishBrowserState(state, { autoOpen: shouldAutoOpenBrowserFromPush(state) })
   }, [publishBrowserState])
 
   React.useLayoutEffect(() => {
-    // 先同步主进程的可见性所有权，再处理旧会话隐藏和新布局，
-    // 防止后台 Agent 在这次会话切换的 IPC 间隙抢先显示原生 WebContentsView。
+    // 前台会话仅作为用户输入和 popup 的上下文，不获得页面展示权。
+    // guest 的显示与裁切由当前 DOM slot 决定。
     // 依赖含 activeTabId：同会话内的标签切换（对话 ↔ 预览 ↔ 浏览器）即使不改变
     // browserSessionId，也要重新断言前台所有权——顶栏激活处理器先行写入的所有权
     // 可能有瞬时值，这里作为最终口径兜底纠正。
     const setForeground = (window.electronAPI as Partial<typeof window.electronAPI>).setAgentBrowserForeground
     if (typeof setForeground === 'function') setForeground(browserSessionId)
-
-    const previousSessionId = previousBrowserSessionIdRef.current
-    if (previousSessionId && previousSessionId !== browserSessionId) {
-      // 切换会话时只收起旧会话的原生视图，不销毁其浏览器状态；回到该会话时，
-      // 只要用户没有主动关闭浏览器 Tab，就应恢复打开。
-      void (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser?.(previousSessionId)
-    }
-    previousBrowserSessionIdRef.current = browserSessionId
   }, [activeTabId, browserSessionId])
-
-  React.useLayoutEffect(() => {
-    // 原生 WebContentsView 盖在 DOM 之上。页内新页接管分屏后立即解散时，新页的原生视图
-    // 可能已被主进程先行显示，而对应 BrowserViewport 还没来得及挂载并发布可见性，
-    // 卸载清理就不会发生，旧网页会盖在已经激活的对话上。当前布局没有任何浏览器页时
-    // 同步收起原生视图；分屏仍保留浏览器栏时不动，避免正常分屏闪黑。
-    if (!browserSessionId || browserPaneVisible) return
-    const hide = (window.electronAPI as Partial<typeof window.electronAPI>).hideAgentBrowser
-    if (typeof hide === 'function') void hide(browserSessionId)
-  }, [browserPaneVisible, browserSessionId])
 
   React.useEffect(() => {
     // Vite renderer 可在 preload 热重载前先更新；旧 bridge 时浏览器功能不可用，
@@ -202,18 +183,6 @@ export function MainArea(): React.ReactElement {
   }, [handleBrowserStatePush])
 
   React.useEffect(() => {
-    // 原生网页上的退出浮标由主进程绘制（DOM 盖不住 WebContentsView），点击通过 IPC 回来。
-    const subscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onSplitViewCloseClicked
-    if (typeof subscribe !== 'function') return
-    return subscribe(({ sessionId, tabId }) => {
-      const topTabId = createBrowserTabId(sessionId, tabId)
-      const groups = store.get(tabGroupsAtom)
-      const group = findTabGroup(groups, topTabId)
-      if (group) store.set(tabGroupsAtom, removeTabGroup(groups, group))
-    })
-  }, [store])
-
-  React.useEffect(() => {
     if (!browserSessionId) return
     const getState = (window.electronAPI as Partial<typeof window.electronAPI>).getAgentBrowserState
     if (typeof getState !== 'function') return
@@ -221,8 +190,8 @@ export function MainArea(): React.ReactElement {
     void getState(browserSessionId)
       .then((state) => {
         if (!cancelled && state) {
-          // 切回会话只恢复浏览器标签，保留用户的组合/解散选择。
-          publishBrowserState(state, { autoOpen: !browserDismissed.has(browserSessionId), autoGroup: false })
+          // 恢复已有 UI 状态，不替用户打开此前只在后台运行的页面。
+          publishBrowserState(state, { autoOpen: false, autoGroup: false })
         }
       })
       // 后台会话及已删除会话会被主进程拒绝或返回空状态；无需打断当前界面。
@@ -314,10 +283,6 @@ export function MainArea(): React.ReactElement {
   // ResizeObserver 首次回调前宽度是 0。此时必须用 CSS 等分兜底，不能把右栏写成 0px；
   // 否则初次合并会只剩一条窄边界，用户也很难命中分隔条。
   const groupGeometryReady = groupContainerWidth > GROUP_SPLIT_GAP
-  // 右栏是已挂载原生网页的浏览器 Tab 时，退出按钮由主进程的原生浮标承担；
-  // 这里必须隐藏 DOM 按钮，否则网页下方会再露出一个，形成重复。
-  const rightBrowserUsesNativePane = rightGroupTab?.type === 'browser'
-    && nativeBrowserPaneTabs.has(rightGroupTab.id)
   const rightPaneStyle: React.CSSProperties = {
     width: groupGeometryReady ? groupGeometry.rightWidth : `calc(50% - ${GROUP_SPLIT_GAP / 2}px)`,
     flexShrink: 0,
@@ -327,15 +292,7 @@ export function MainArea(): React.ReactElement {
   // 像抽屉被推出去），滑出量直接跟随指针越界距离，往回拖就原路滑回；
   // 另一栏同时改回 flex 自适应，跟着滑出同步长满。分栏缝宽度一起收到 0，
   // 收完解散组合时不会因为 8px 中缝消失而跳一下。
-  // 原生网页视图不受 CSS overflow 裁切（滑出会画到侧栏上面），这类栏位不做滑动，
-  // 只记录进度；滑出一半就磁吸收起，没到一半松手则回弹。
-  const slideTab = collapseSlide
-    ? (collapseSlide.side === 'left' ? leftGroupTab : rightGroupTab)
-    : null
-  const slideBlockedByNativePane = !!slideTab
-    && slideTab.type === 'browser'
-    && nativeBrowserPaneTabs.has(slideTab.id)
-  const slide = collapseSlide && !slideBlockedByNativePane ? collapseSlide : null
+  const slide = collapseSlide
   const slideSnapped = slide?.snapped ?? false
   const slideWasSnapped = slideWasSnappedRef.current
   // 用 effect 同步「上一帧是否磁吸」：StrictMode 下 render 会跑两遍，
@@ -391,6 +348,22 @@ export function MainArea(): React.ReactElement {
     if (focused) setTabGroups((previous) => replaceTabGroup(previous, tabGroup, focused))
     activateGroupTab(targetId)
   }, [activateGroupTab, activeTabId, setTabGroups, tabGroup])
+
+  React.useEffect(() => {
+    const subscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onBrowserGuestFocused
+    if (typeof subscribe !== 'function') return
+    return subscribe(({ sessionId, tabId }) => {
+      if (sessionId !== currentBrowserSessionIdRef.current || !browserPaneVisible) return
+      const targetId = createBrowserTabId(sessionId, tabId)
+      const activeGroup = findTabGroup(store.get(tabGroupsAtom), store.get(activeTabIdAtom))
+      if (!activeGroup || !groupTabIds(activeGroup).includes(targetId) || store.get(activeViewAtom) !== 'conversations') return
+      const target = tabsRef.current.find((tab) => tab.id === targetId)
+      if (!target || target.type !== 'browser' || target.sessionId !== sessionId) return
+      const focused = focusGroupMember(activeGroup, targetId)
+      if (focused && focused !== activeGroup) setTabGroups(previous => replaceTabGroup(previous, activeGroup, focused))
+      activateGroupTab(targetId)
+    })
+  }, [activateGroupTab, browserPaneVisible, setTabGroups, store])
 
   /** 空栏里选中一个标签（会话或工作 Tab）：放进去并把焦点交给它；跨会话标签一律拒绝 */
   const fillGroupPane = React.useCallback((side: TabGroupSide, tabId: string): void => {
@@ -455,12 +428,16 @@ export function MainArea(): React.ReactElement {
     let releaseTimer = 0
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
+    document.body.dataset.browserGuestDrag = 'true'
+    window.dispatchEvent(new Event('browser-guest-layout'))
     document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = 'none' })
 
     const stopDragging = (): void => {
       groupDragging.current = false
       document.body.style.userSelect = ''
       document.body.style.cursor = ''
+      delete document.body.dataset.browserGuestDrag
+      window.dispatchEvent(new Event('browser-guest-layout'))
       document.querySelectorAll('iframe').forEach((frame) => { (frame as HTMLElement).style.pointerEvents = '' })
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
@@ -504,15 +481,7 @@ export function MainArea(): React.ReactElement {
     const onMouseUp = (): void => {
       stopDragging()
       if (slide) {
-        // 原生网页视图不参与滑动（不受 CSS 裁切），没有视觉反馈，
-        // 按 1/4 栏宽判定即可；普通栏位越过一半（磁吸点）就算收起。
-        const squeezedTab = slide.side === 'left' ? leftGroupTab : rightGroupTab
-        const squeezedIsNativeBrowser = !!squeezedTab
-          && squeezedTab.type === 'browser'
-          && nativeBrowserPaneTabs.has(squeezedTab.id)
-        const ready = squeezedIsNativeBrowser
-          ? slide.slide >= slide.paneWidth * 0.25
-          : slide.progress >= GROUP_COLLAPSE_SNAP_PROGRESS
+        const ready = slide.progress >= GROUP_COLLAPSE_SNAP_PROGRESS
         if (ready) {
           // 越过一半就落定：解散组合，另一栏独占。此时栏位已被磁吸到完全滑出，没有跳变。
           setCollapseSlide(null)
@@ -538,7 +507,7 @@ export function MainArea(): React.ReactElement {
     // 指针在窗口外松开时拿不到 mouseup：失焦就当作取消拖动，
     // 否则栏位会停在滑出状态、组合也一直不落定。
     window.addEventListener('blur', onWindowBlur)
-  }, [collapseGroupSide, collapseSlide?.releasing, leftGroupTab, nativeBrowserPaneTabs, rightGroupTab, setTabGroupRatio, tabGroupRatio])
+  }, [collapseGroupSide, collapseSlide?.releasing, setTabGroupRatio, tabGroupRatio])
 
   React.useEffect(() => {
     if (tabs.length === 0) {
@@ -682,9 +651,7 @@ export function MainArea(): React.ReactElement {
                     )}
                     <div
                       data-group-drop-right-pane="true"
-                      // 浏览器/预览直接把退出浮标叠在内容右下角；只有 Agent/Chat 的右栏
-                      // 需要为 composer 让出 32px，避免浮标压住发送按钮。原生网页的浮标
-                      // 由主进程额外绘制，DOM 按钮会被原生视图盖住，这是预期分层。
+                      // 浏览器/预览也由 DOM 合成；只有 Agent/Chat 需要为 composer 让位。
                       // 单栏右置不是“右栏”，不需要给浮标让位。
                       className={cn(
                         'flex flex-col min-w-0 h-full relative',
@@ -717,9 +684,8 @@ export function MainArea(): React.ReactElement {
                   </>
                 )}
 
-                {/* 拆分视图退出浮标：贴在右栏右下角，点击解散组合（两个标签都保留）。
-                    原生网页有主进程绘制的同款浮标，这里让位，避免出现两个。 */}
-                {groupViewActive && tabGroup && !rightBrowserUsesNativePane && !slide && (
+                {/* 拆分视图退出浮标：所有页面复用同一 DOM 控件，解散组合但保留两个标签。 */}
+                {groupViewActive && tabGroup && !slide && (
                   <SplitViewCloseButton onClose={dissolveGroup} />
                 )}
 
@@ -765,6 +731,8 @@ export function MainArea(): React.ReactElement {
             </div>
           </div>
         )}
+        <BrowserShortcutBridge />
+        <BrowserGuestHost />
       </Panel>
     </div>
   )

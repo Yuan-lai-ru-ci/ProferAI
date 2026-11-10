@@ -546,13 +546,16 @@ export function buildPiGoalProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCon
     label: '提议建立 Goal',
     description: '当这件事明显需要多轮持续执行（构建→验证→迭代），而且这一轮做不完时，向用户提议建立一个 Goal。用户确认后才会创建；本工具不会自己启动 Goal，也不阻塞当前轮。',
     promptSnippet: 'propose_goal: propose creating a long-running Goal for this session',
-    parameters: {
-      objective: { type: 'string', description: '一句话可执行的目标' },
-      rationale: { type: 'string', description: '为什么需要多轮持续执行，而不是这一轮做完' },
-      verification: { type: 'string', description: '可验证的验收标准', optional: true },
-      constraints: { type: 'string', description: '必须遵守的约束', optional: true },
-      stopWhen: { type: 'string', description: '什么情况下应该停下来问用户', optional: true },
-    },
+    // 必须是 typebox 的 Object schema：直接写字面量会序列化成
+    // `parameters: { objective: {...} }`（没有 type/properties/required），
+    // 严格校验的上游会整轮 400 拒绝。
+    parameters: Type.Object({
+      objective: Type.String({ description: '一句话可执行的目标' }),
+      rationale: Type.String({ description: '为什么需要多轮持续执行，而不是这一轮做完' }),
+      verification: Type.Optional(Type.String({ description: '可验证的验收标准' })),
+      constraints: Type.Optional(Type.String({ description: '必须遵守的约束' })),
+      stopWhen: Type.Optional(Type.String({ description: '什么情况下应该停下来问用户' })),
+    }),
     execute: async (params: unknown) => {
       const args = params as { objective: unknown; rationale?: unknown; verification?: unknown; constraints?: unknown; stopWhen?: unknown }
       const normalized = normalizeGoalProposalInput(args)
@@ -1608,7 +1611,7 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
     sdk.defineTool({
       name: 'BrowserPreviewOpen',
       label: '打开本地文件预览',
-      description: 'Open an authorized local file (HTML, or any format the built-in viewer supports: documents, archives, designs, 3D, GIS, media) in a dedicated, visible in-app browser tab. HTML files load directly; other extensions render through the built-in viewer page. This is read-only preview access; do not use it to read arbitrary local files.',
+      description: 'Open an authorized local file (HTML, or any format the built-in viewer supports: documents, archives, designs, 3D, GIS, media) in a dedicated background in-app browser tab; this does not open or switch the user panel. HTML files load directly; other extensions render through the built-in viewer page. This is read-only preview access; do not use it to read arbitrary local files.',
       parameters: Type.Object({ path: Type.String({ description: 'Absolute or current-workspace-relative path to an HTML file or directory with index.html.' }), tabId: Type.Optional(Type.String({ description: 'Optional tab id.' })) }),
       async execute(_id, params, signal?: AbortSignal) {
         const args = params as Record<string, unknown>
@@ -1632,7 +1635,7 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
     sdk.defineTool({
       name: 'BrowserNewTab',
       label: '新建浏览器标签',
-      description: 'Create a new Agent working tab and activate it in the visible in-app browser. Optionally navigate it to a public HTTP/HTTPS URL.',
+      description: 'Create a new background Agent working tab without opening or switching the user browser panel. Optionally navigate it to a public HTTP/HTTPS URL.',
       parameters: Type.Object({ url: Type.Optional(Type.String({ description: 'Optional public HTTP/HTTPS URL.' })) }),
       async execute(_id, params) {
         const url = typeof (params as Record<string, unknown>).url === 'string' ? (params as Record<string, string>).url : undefined
@@ -1642,7 +1645,7 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
     sdk.defineTool({
       name: 'BrowserSelectTab',
       label: '切换浏览器标签',
-      description: 'Switch the Agent working tab by tab id and activate that tab in the visible browser panel.',
+      description: 'Switch only the Agent working tab by tab id. Do not change the user-visible browser tab or panel.',
       parameters: Type.Object({ tabId: Type.String({ description: 'Tab id from BrowserListTabs or BrowserNewTab.' }) }),
       async execute(_id, params) {
         const value = (params as Record<string, unknown>).tabId

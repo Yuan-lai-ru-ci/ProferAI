@@ -1,6 +1,6 @@
 import * as React from 'react'
 import type { BrowserStartPageState, BrowserViewState } from '@profer/shared'
-import { ArrowLeft, ArrowRight, Check, Copy, Globe2, Languages, LoaderCircle, Plus, RefreshCw, ShieldAlert, Square, Star, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, Globe2, Languages, LoaderCircle, Plus, RefreshCw, Search, ShieldAlert, Square, Star, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
 import { Input } from '@profer/ui/primitives/input'
@@ -19,13 +19,20 @@ import { detectIsWindows } from '@profer/ui'
 import { BROWSER_RISK_DISCLAIMER_VERSION } from '@/types/settings'
 import { BrowserViewport } from './BrowserViewport'
 import { BrowserStartPage } from './BrowserStartPage'
+import { BrowserFindBar } from './BrowserFindBar'
+import { BrowserScriptDialogCard } from './BrowserScriptDialogCard'
+import { useShortcut } from '@/hooks/useShortcut'
+import { BrowserPageMenu } from './BrowserPageMenu'
 import { shouldNavigateDefaultHome } from './browser-start-page-navigation'
+import { captureBrowserOpenIntent, openBrowserTabManually } from '@/lib/browser-tab'
 
 interface BrowserPanelProps {
   sessionId: string
   state: BrowserViewState | null
   /** 本浏览器是否处于可见的渲染面板（Tab 化后：Tab 内容挂载即可见）。 */
   visible: boolean
+  /** 是否拥有当前键盘交互作用域；分屏另一侧和全局浮层不注册浏览器快捷键。 */
+  active?: boolean
   /** 浏览器内容实际位于窗口右缘时，为悬浮 WindowControls 保留空间。 */
   avoidWindowControls?: boolean
   /** 外层布局发生结构性变化时重建定位锚点，但不销毁网页标签。 */
@@ -33,7 +40,7 @@ interface BrowserPanelProps {
   onClose: () => void
 }
 
-export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = false, layoutKey = '', onClose }: BrowserPanelProps): React.ReactElement {
+export function BrowserPanel({ sessionId, state, visible, active = false, avoidWindowControls = false, layoutKey = '', onClose }: BrowserPanelProps): React.ReactElement {
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   // 只有 Windows 自定义窗口按钮实际存在时，才需要给它们预留右侧空间。
   const shouldAvoidWindowControls = avoidWindowControls && isWindows
@@ -45,6 +52,9 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
   // 用户正在地址栏输入/聚焦时，禁止用主进程回推的 state.url 覆盖，避免被 Agent 导航顶掉输入。
   const urlDirtyRef = React.useRef(false)
   const urlInputRef = React.useRef<HTMLInputElement>(null)
+  const findInputRef = React.useRef<HTMLInputElement>(null)
+  const [findOpen, setFindOpen] = React.useState(false)
+  const panelRef = React.useRef<HTMLDivElement>(null)
   const [translating, setTranslating] = React.useState(false)
   const [translated, setTranslated] = React.useState(state?.translated ?? false)
   const [startPage, setStartPage] = React.useState<BrowserStartPageState | null>(null)
@@ -82,7 +92,8 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
     urlDirtyRef.current = false
     autoNavigatedTabRef.current = null
     setUrl(state?.url ?? '')
-  }, [sessionId])
+    setFindOpen(false)
+  }, [sessionId, state?.activeTabId])
 
   // 订阅“下载被拦截”事件：受管浏览器不放行下载，但给用户可见反馈。
   React.useEffect(() => {
@@ -98,14 +109,14 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
         })
       })
     return unsubscribe
-  }, [sessionId])
+  }, [sessionId, state?.activeTabId])
 
   const toggleTranslate = React.useCallback(async () => {
     const doTranslate = (window.electronAPI as Partial<typeof window.electronAPI>).translateAgentBrowser
     if (typeof doTranslate !== 'function') return
     setTranslating(true)
     try {
-      const result = await doTranslate({ sessionId, tabId: undefined })
+      const result = await doTranslate({ sessionId, tabId: state?.activeTabId })
       setTranslated(result.translated)
       if (result.error) toast.error('翻译失败', { description: result.error })
     } catch (error) {
@@ -114,7 +125,7 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
     } finally {
       setTranslating(false)
     }
-  }, [sessionId])
+  }, [sessionId, state?.activeTabId])
   const [savingRiskAcknowledgement, setSavingRiskAcknowledgement] = React.useState(false)
 
   React.useEffect(() => {
@@ -138,7 +149,7 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
     const navigateBrowser = (window.electronAPI as Partial<typeof window.electronAPI>).navigateAgentBrowser
     if (!value || typeof navigateBrowser !== 'function') return
     try {
-      const nextState = await navigateBrowser({ sessionId, url: value })
+      const nextState = await navigateBrowser({ sessionId, url: value, tabId: state?.activeTabId })
       // 以主进程规范化后的地址为准（例如补全 HTTPS），避免地址栏显示值与实际页面分叉。
       urlDirtyRef.current = false
       setUrl(nextState.url || value)
@@ -146,7 +157,7 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
       console.error('[受管浏览器] 导航失败:', error)
       toast.error('导航失败', { description: error instanceof Error ? error.message : '无法打开该地址' })
     }
-  }, [sessionId, url])
+  }, [sessionId, url, state?.activeTabId])
 
   const copyUrl = React.useCallback(async () => {
     // 复制地址栏输入框当前显示的内容（用户填写的未提交内容也复制），无输入时回退当前页 URL
@@ -160,6 +171,24 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
       console.error('[受管浏览器] 复制网址失败:', error)
     }
   }, [url, state?.url])
+
+  // 当前页能否交给系统默认浏览器：空标签、about:blank 与本地文件预览都没有可外开的地址。
+  const canOpenInSystemBrowser = /^https?:\/\//i.test(state?.url ?? '')
+  const [openingInSystemBrowser, setOpeningInSystemBrowser] = React.useState(false)
+  const openInSystemBrowser = React.useCallback(async () => {
+    const openExternally = (window.electronAPI as Partial<typeof window.electronAPI>).openBrowserInSystemBrowser
+    if (typeof openExternally !== 'function' || !state?.activeTabId) return
+    setOpeningInSystemBrowser(true)
+    try {
+      // 地址由主进程按标签读取，渲染层不传 URL，避免外开地址与真实页面分叉。
+      await openExternally({ sessionId, tabId: state.activeTabId })
+    } catch (error) {
+      console.error('[受管浏览器] 在系统浏览器打开失败:', error)
+      toast.error('在系统浏览器打开失败', { description: error instanceof Error ? error.message : '无法把当前页面交给系统浏览器' })
+    } finally {
+      setOpeningInSystemBrowser(false)
+    }
+  }, [sessionId, state?.activeTabId])
 
   /** 收起浏览器面板（不销毁主进程浏览器会话），与标签页的关闭按钮语义区分，避免误触销毁整个浏览器。 */
   const closeBrowserPanel = React.useCallback(() => {
@@ -200,7 +229,7 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
     if (typeof run !== 'function') return false
     setPendingNavAction(action)
     try {
-      await run(sessionId)
+      await run(sessionId, state?.activeTabId)
       // 这是明确的导航意图；解除脏标记，让随后回推的真实页面地址接管地址栏。
       urlDirtyRef.current = false
       return true
@@ -212,10 +241,41 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
     } finally {
       setPendingNavAction(null)
     }
-  }, [sessionId])
+  }, [sessionId, state?.activeTabId])
 
-  // 主框架加载失败：展示面板内可重试的错误态。重试期间先摘掉遮罩，
-  // 让原生网页视图恢复，避免错误态盖住正在重新加载的页面。
+  const stopPage = React.useCallback(async () => {
+    if (!activeTabId) return
+    try { await window.electronAPI.stopBrowserPage({ sessionId, tabId: activeTabId }) }
+    catch (error) { toast.error('停止加载失败', { description: error instanceof Error ? error.message : '页面已关闭' }) }
+  }, [sessionId, activeTabId])
+  const findPage = React.useCallback((query: string, next = false, forward = true, matchCase = false) => {
+    if (!activeTabId) return
+    void window.electronAPI.findBrowserPage({ sessionId, tabId: activeTabId, query, next, forward, matchCase })
+      .catch(error => toast.error('网页查找失败', { description: error instanceof Error ? error.message : '页面未就绪' }))
+  }, [sessionId, activeTabId])
+  const closeFind = React.useCallback(() => {
+    setFindOpen(false)
+    if (activeTabId) void window.electronAPI.clearBrowserFind({ sessionId, tabId: activeTabId }).catch(() => undefined)
+  }, [sessionId, activeTabId])
+  const openFind = React.useCallback(() => {
+    setFindOpen(true)
+    requestAnimationFrame(() => { findInputRef.current?.focus(); findInputRef.current?.select() })
+  }, [])
+  const focusAddress = React.useCallback(() => {
+    if (isFilePreviewMode) return
+    setExpanded('url')
+    requestAnimationFrame(() => { urlInputRef.current?.focus(); urlInputRef.current?.select() })
+  }, [isFilePreviewMode])
+  const shortcutOptions = React.useMemo(() => ({ exclusive: true }), [])
+  useShortcut('focus-input', focusAddress, active && visible && !riskBlocked && !isFilePreviewMode, shortcutOptions)
+  useShortcut('file-find', openFind, active && visible && !tabInteractionBlocked && !state?.dialog, shortcutOptions)
+  const respondDialog = React.useCallback(async (response: import('@profer/shared').BrowserDialogResponse): Promise<void> => {
+    if (!activeTabId) return
+    try { await window.electronAPI.respondBrowserDialog({ sessionId, tabId: activeTabId, ...response }) }
+    catch (error) { toast.error('网页响应失败', { description: error instanceof Error ? error.message : '对话框已结束' }) }
+  }, [sessionId, activeTabId])
+
+  // 主框架加载失败：展示面板内可重试的错误态。
   const loadError = state?.loadError ?? null
   const [retryingLoad, setRetryingLoad] = React.useState(false)
   const showLoadError = !!loadError && !retryingLoad && !riskBlocked
@@ -245,21 +305,35 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
   // 关闭展开（鼠标移开）后，若焦点停留在展开区（地址输入框/缩放控制），主动失焦，
   // 避免关闭动画后焦点悬空在已隐藏元素上（表现为“焦点锁到菜单按钮/输入框失焦”）
   const handleExpandLeave = React.useCallback((type: 'url' | 'zoom') => {
+    const element = document.activeElement
+    // 键盘聚焦的地址/缩放输入不随鼠标离开收起，失焦时再关闭。
+    if (element instanceof HTMLElement && element.closest('[data-browser-expand]')) return
     setExpanded((p) => (p === type ? null : p))
-    const active = document.activeElement
-    if (active instanceof HTMLElement && active.closest('[data-browser-expand]')) {
-      ;(document.activeElement as HTMLElement | null)?.blur()
-    }
   }, [])
 
-  /** 新建浏览器页（新页由状态推送 reconcile 出现在顶栏） */
+  /** 用户显式选择后台页，主进程展示目标与顶栏同步，但不改 Agent 默认操作页。 */
+  const selectPage = React.useCallback(async (tabId: string) => {
+    const select = (window.electronAPI as Partial<typeof window.electronAPI>).selectAgentBrowserTab
+    if (typeof select !== 'function') return
+    const intent = captureBrowserOpenIntent(sessionId, state?.activeTabId)
+    try {
+      const next = await select({ sessionId, tabId })
+      openBrowserTabManually(sessionId, next, tabId, intent)
+    } catch (error) {
+      toast.error('打开页面失败', { description: error instanceof Error ? error.message : '页面可能已关闭' })
+    }
+  }, [sessionId, state?.activeTabId])
+
+  /** 用户显式新建时主动展示；普通状态推送不再承担打开页签的职责。 */
   const createPage = React.useCallback(async () => {
     const create = (window.electronAPI as Partial<typeof window.electronAPI>).createAgentBrowserTab
     if (typeof create !== 'function') return
+    const intent = captureBrowserOpenIntent(sessionId, state?.activeTabId)
     try {
-      await create({ sessionId })
+      const next = await create({ sessionId })
+      openBrowserTabManually(sessionId, next, next.activeTabId, intent)
     } catch (error) { console.error('[受管浏览器] 新建标签失败:', error) }
-  }, [sessionId])
+  }, [sessionId, state?.activeTabId])
 
   const closeTab = React.useCallback(async (tabId: string) => {
     const closeBrowserTab = (window.electronAPI as Partial<typeof window.electronAPI>).closeAgentBrowserTab
@@ -277,7 +351,7 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
     const goBack = (window.electronAPI as Partial<typeof window.electronAPI>).goBackAgentBrowser
     if (state.canGoBack && typeof goBack === 'function') {
       try {
-        await goBack(sessionId)
+        await goBack(sessionId, state.activeTabId)
         return
       } catch (error) {
         console.error('[受管浏览器] 返回预览前页面失败:', error)
@@ -285,6 +359,13 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
     }
     await closeTab(state.activeTabId)
   }, [closeTab, sessionId, state?.activeTabId, state?.canGoBack, state?.localFile])
+
+  useShortcut('browser-reload', React.useCallback(() => { void runNavigationAction('reload') }, [runNavigationAction]), active && visible && !riskBlocked && !state?.dialog, shortcutOptions)
+  useShortcut('browser-new-page', React.useCallback(() => { void createPage() }, [createPage]), active && visible && !riskBlocked, shortcutOptions)
+  useShortcut('browser-zoom-in', React.useCallback(() => changeZoom(0.1), [sessionId, state?.activeTabId, state?.zoomFactor]), active && visible && !riskBlocked, shortcutOptions)
+  useShortcut('browser-zoom-out', React.useCallback(() => changeZoom(-0.1), [sessionId, state?.activeTabId, state?.zoomFactor]), active && visible && !riskBlocked, shortcutOptions)
+  useShortcut('browser-zoom-reset', resetZoom, active && visible && !riskBlocked, shortcutOptions)
+  useShortcut('browser-stop', React.useCallback(() => { if (findOpen) closeFind(); else void stopPage() }, [findOpen, closeFind, stopPage]), active && visible && !state?.dialog && (findOpen || state?.loading === true), shortcutOptions)
 
   const toggleBookmark = React.useCallback(async () => {
     if (!startPage || !state?.url) return
@@ -328,14 +409,14 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
     const navigateBrowser = (window.electronAPI as Partial<typeof window.electronAPI>).navigateAgentBrowser
     if (!targetUrl || typeof navigateBrowser !== 'function') return
     try {
-      const nextState = await navigateBrowser({ sessionId, url: targetUrl })
+      const nextState = await navigateBrowser({ sessionId, url: targetUrl, tabId: state?.activeTabId })
       urlDirtyRef.current = false
       setUrl(nextState.url || targetUrl)
     } catch (error) {
       console.error('[受管浏览器] 导航失败:', error)
       toast.error('导航失败', { description: error instanceof Error ? error.message : '无法打开该地址' })
     }
-  }, [sessionId])
+  }, [sessionId, state?.activeTabId])
 
   // 默认首页：仅为主进程已创建的真实空标签自动导航（同一标签只触发一次）。
   // BrowserPanel 收起时仍预挂载，state=null 代表浏览器会话尚不存在，不能据此反向创建会话。
@@ -352,7 +433,11 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
   // 会话来源标识：区分用户手动、自动任务、委派子会话，让用户一眼看出是谁在驱动这个浏览器。
   const sourceLabel = state?.executionSource === 'automation' ? '自动任务' : state?.executionSource === 'delegation' ? '委派' : null
   return (
-    <div data-browser-native-host className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden titlebar-no-drag">
+    <div ref={panelRef} data-browser-native-host className="@container relative flex flex-1 flex-col h-full w-full min-w-0 overflow-hidden titlebar-no-drag" onKeyDown={event => {
+      if (event.nativeEvent.isComposing || event.key !== 'Escape') return
+      if (findOpen) { event.preventDefault(); closeFind() }
+      else if (state?.loading) { event.preventDefault(); void stopPage() }
+    }}>
       {state?.localFile ? (
         <div className={cn('flex items-center h-[40px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20', shouldAvoidWindowControls && 'pr-[126px]')}>
           <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" onClick={() => void closeLocalFilePreview()} aria-label="返回浏览器"><ArrowLeft className="size-3.5" /></Button></TooltipTrigger><TooltipContent>返回浏览器</TooltipContent></Tooltip>
@@ -362,33 +447,38 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
               {state.localFile.name}
             </span>
           </div>
+          <Button type="button" variant="ghost" size="icon" className="size-7" aria-label="在网页中查找" onClick={openFind}><Search className="size-3.5" /></Button>
+          <BrowserPageMenu pages={state.tabs} activeTabId={activeTabId} agentTabId={state.agentTabId} disabled={tabInteractionBlocked} onSelect={(tabId) => void selectPage(tabId)} />
         </div>
       ) : (
-        <div className={cn('flex items-center h-[40px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20', shouldAvoidWindowControls && 'pr-[126px]')}>
+        <div data-browser-toolbar className={cn('relative flex items-center h-[40px] gap-1 px-2 border-b border-surface-border/40 bg-surface-raised/20', shouldAvoidWindowControls && 'pr-[126px]')}>
         {sourceLabel && (
           <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[9px] font-medium text-primary">{sourceLabel}</span>
         )}
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || pendingNavAction !== null || !state?.canGoBack} onClick={() => void runNavigationAction('back')}>{pendingNavAction === 'back' ? <LoaderCircle className="size-3.5 animate-spin" /> : <ArrowLeft className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>后退</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || pendingNavAction !== null || !state?.canGoForward} onClick={() => void runNavigationAction('forward')}>{pendingNavAction === 'forward' ? <LoaderCircle className="size-3.5 animate-spin" /> : <ArrowRight className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>前进</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={riskBlocked || pendingNavAction !== null} onClick={() => void runNavigationAction('reload')}>{pendingNavAction === 'reload' ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>刷新</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" aria-label={state?.loading ? '停止网页加载' : '刷新网页'} disabled={riskBlocked} onClick={() => { if (state?.loading) void stopPage(); else void runNavigationAction('reload') }}>{state?.loading ? <X className="size-3.5" /> : pendingNavAction === 'reload' ? <LoaderCircle className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>{state?.loading ? '停止网页加载' : '刷新'}</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${translated ? 'text-primary' : ''}`} disabled={riskBlocked || translating} onClick={() => void toggleTranslate()}>{translating ? <LoaderCircle className="size-3.5 animate-spin" /> : <Languages className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>{translated ? '恢复原文' : '整页翻译'}</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className={`size-6 ${isBookmarked ? 'text-amber-500' : ''}`} disabled={riskBlocked || !state?.url || bookmarking} onClick={() => void toggleBookmark()} aria-label="收藏当前页">{bookmarking ? <LoaderCircle className="size-3.5 animate-spin" /> : <Star className={`size-3.5 ${isBookmarked ? 'fill-current' : ''}`} />}</Button></TooltipTrigger><TooltipContent>{isBookmarked ? '取消收藏' : '收藏当前页'}</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-6" disabled={!canOpenInSystemBrowser || openingInSystemBrowser} onClick={() => void openInSystemBrowser()} aria-label="在系统浏览器打开当前页">{openingInSystemBrowser ? <LoaderCircle className="size-3.5 animate-spin" /> : <ExternalLink className="size-3.5" />}</Button></TooltipTrigger><TooltipContent>在系统浏览器打开</TooltipContent></Tooltip>
         {/* 地址栏：平时显示 URL 胶囊；hover 时胶囊淡出、输入框淡入原位替换（文字位置/字号一致），末尾复制；动画对齐 ContextMenu（fade + zoom 的轻量版） */}
         <div
-          className="relative flex-1 min-w-0"
+          className={cn('flex-1 min-w-0', expanded === 'url' ? 'static' : 'relative')}
           onMouseEnter={() => setExpanded('url')}
           onMouseLeave={() => handleExpandLeave('url')}
         >
           {/* 输入框层（展开态，absolute 覆盖胶囊层，交叉淡入淡出） */}
-          <div className={cn('absolute inset-0 flex items-center transition-opacity duration-150', expanded === 'url' ? 'opacity-100' : 'pointer-events-none opacity-0')}>
-            <form className="flex h-6 w-full items-center gap-1" data-browser-expand onSubmit={(event) => { event.preventDefault(); void navigate() }}>
+          <div className={cn('absolute flex items-center transition-opacity duration-150', expanded === 'url' ? cn('inset-x-2 inset-y-1 z-40 rounded-md bg-surface-raised opacity-100', shouldAvoidWindowControls && 'right-[126px]') : 'inset-0 pointer-events-none opacity-0')}>
+            <form className="flex h-8 w-full min-w-0 items-center gap-1" data-browser-expand onSubmit={(event) => { event.preventDefault(); void navigate() }}
+              onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(null) }}>
               <Input
                 ref={urlInputRef}
                 disabled={riskBlocked}
                 value={url}
+                onFocus={() => { urlDirtyRef.current = true; setExpanded('url') }}
                 onChange={(event) => { const v = event.target.value; setUrl(v); urlDirtyRef.current = true }}
                 placeholder="输入域名或 URL（本地地址默认 HTTP，公网地址默认 HTTPS）"
-                className="h-6 min-w-0 flex-1 px-2 py-0 text-xs md:text-xs"
+                className="h-8 min-w-0 flex-1 px-2 py-0 text-xs md:text-xs"
                 aria-label="浏览器地址"
               />
               <button
@@ -405,7 +495,8 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
           </div>
           {/* 胶囊层（常态） */}
           <div
-            className={cn('flex h-6 w-full min-w-[100px] cursor-default items-center rounded-md bg-background/70 px-2 text-xs text-muted-foreground transition-opacity duration-150', expanded === 'url' && 'pointer-events-none opacity-0')}
+            className={cn('flex h-6 w-full min-w-0 cursor-text items-center rounded-md bg-background/70 px-2 text-xs text-muted-foreground transition-opacity duration-150', expanded === 'url' && 'pointer-events-none opacity-0')}
+            onClick={focusAddress}
             aria-label="地址栏"
           >
             <span className="truncate text-left">{url || '输入网址'}</span>
@@ -442,9 +533,12 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
         {isBackgroundRun && (
           <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" className="size-7 text-amber-600 hover:text-amber-700" onClick={() => void stopBackgroundRun()} aria-label="停止当前后台 Agent"><Square className="size-3.5 fill-current" /></Button></TooltipTrigger><TooltipContent>停止当前{state?.executionSource === 'automation' ? '自动任务' : '委派'}运行</TooltipContent></Tooltip>
         )}
+        <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label="在网页中查找" disabled={riskBlocked || !state?.url || !!state?.dialog} onClick={openFind}><Search className="size-3.5" /></Button>
+        <BrowserPageMenu pages={state?.tabs ?? []} activeTabId={activeTabId} agentTabId={state?.agentTabId ?? null} disabled={riskBlocked} onSelect={(tabId) => void selectPage(tabId)} />
         <Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" disabled={riskBlocked} onClick={() => void createPage()} aria-label="新建标签页"><Plus className="size-3.5" /></Button></TooltipTrigger><TooltipContent>新建标签页</TooltipContent></Tooltip>
         </div>
       )}
+      {findOpen && visible && !tabInteractionBlocked && !state?.dialog && <BrowserFindBar key={activeTabId} state={state?.find ?? null} onFind={findPage} onClose={closeFind} inputRef={findInputRef} />}
       {showActivity && activity && !isFilePreviewMode && (
         <div className="flex min-h-7 items-center gap-2 border-b border-border/25 bg-primary/[0.04] px-3 py-1 text-[11px]" role="status" aria-live="polite">
           <span className="shrink-0 font-medium text-primary">Agent 活动</span>
@@ -467,10 +561,11 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
               key={`${activeTabId}:${layoutKey}`}
               sessionId={sessionId}
               tabId={activeTabId}
-              visible={visible}
+              visible={visible && !showLoadError}
+              blocked={!!state?.dialog}
             />
-            {/* 原生 WebContentsView 盖在 DOM 之上；data-browser-blocking 会让它自行隐藏，
-                否则错误态会被原生失败页遮住。 */}
+            {visible && state?.dialog && <BrowserScriptDialogCard key={state.dialog.id} dialog={state.dialog} onRespond={respondDialog} />}
+            {/* 页面失败态占用宿主覆盖层时，DOM guest 同步停放，不保留命中。 */}
             {showLoadError && (
               <div
                 data-browser-blocking
@@ -485,6 +580,7 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
                 <div className="mt-1 flex items-center gap-2">
                   <Button type="button" size="sm" className="h-7 px-3 text-xs" onClick={() => void retryLoad()}>重试</Button>
                   <Button type="button" size="sm" variant="ghost" className="h-7 px-3 text-xs" onClick={() => void copyUrl()}>复制地址</Button>
+                  {canOpenInSystemBrowser && <Button type="button" size="sm" variant="ghost" className="h-7 px-3 text-xs" disabled={openingInSystemBrowser} onClick={() => void openInSystemBrowser()}>在系统浏览器打开</Button>}
                 </div>
               </div>
             )}
@@ -512,7 +608,7 @@ export function BrowserPanel({ sessionId, state, visible, avoidWindowControls = 
               <div className="space-y-3 text-left leading-6">
                 <p>Profer 可让 Agent 在浏览器中读取、搜索、点击和输入。部分平台可能将这些行为或高频操作识别为自动化活动。</p>
                 <p>这可能导致验证码、限流、功能限制、账号风控，严重时可能造成账号处罚或封禁。请自行了解并遵守目标平台规则，并自行承担相应风险。</p>
-                <p>受管浏览器已启用剪贴板读写权限：页面可通过系统剪贴板复制与粘贴文本，请留意剪贴板中可能存在的敏感信息。</p>
+                <p>受管网页不获准读取系统剪贴板等权限；你主动使用复制、粘贴快捷键或原生右键菜单不受影响。</p>
                 <p className="text-xs">Profer 不会保证第三方平台接受这些操作；请避免不必要的高频互动，并在重要操作前核对页面状态。</p>
               </div>
             </AlertDialogDescription>

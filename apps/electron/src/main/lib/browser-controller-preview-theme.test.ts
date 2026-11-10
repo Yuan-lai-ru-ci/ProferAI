@@ -17,6 +17,7 @@ import { viewerPreviewThemeSignature } from './browser-preview-service'
  */
 interface FakeTab {
   tabId: string
+  contents: { isDestroyed: () => boolean }
   isLocalPreview: boolean
   localFilePath: string | null
   localPreviewThemeSignature: string | null
@@ -41,6 +42,7 @@ function harness() {
   const loaded: Array<{ tabId: string; url: string }> = []
   const makeTab = (over: Partial<FakeTab>): FakeTab => ({
     tabId: 'tab',
+    contents: { isDestroyed: () => false },
     isLocalPreview: false,
     localFilePath: null,
     localPreviewThemeSignature: null,

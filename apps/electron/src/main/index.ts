@@ -81,6 +81,8 @@ function registerProtocolsAndHandlers(): void {
     { scheme: 'profer-skin', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
     // 第三方插件页面资源。具体 handler 注册在每个插件独立 Session 上，主会话不处理该协议。
     { scheme: 'profer-plugin', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: false, stream: true } },
+    // 仅受管 partition 注册的同步网页提示端点；无资源/代理能力，必须经真实 guest/frame 授权。
+    { scheme: 'profer-browser-dialog', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true } },
   ])
 
   // Windows: 禁用 LCD 次像素抗锯齿（ClearType），改用灰度 AA。
@@ -346,6 +348,7 @@ function installWindowsZoomInFallback(win: BrowserWindow): void {
   if (process.platform !== 'win32') return
 
   win.webContents.on('before-input-event', (event, input) => {
+    if (event.defaultPrevented || input.isComposing || input.isAutoRepeat) return
     if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return
 
     // Windows 下主键盘的 Ctrl++ 常会以 Ctrl+= 上报；小键盘加号也需要兜底。
@@ -465,6 +468,8 @@ function createWindow(): void {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      // 仅可信主界面可创建 guest；每次 attach 仍由 BrowserGuestManager 校验一次性票据。
+      webviewTag: true,
       // 移动端消息仍需在窗口隐藏、最小化或被其他窗口遮挡时实时落到桌面状态。
       // 默认后台节流会暂停/降频 renderer 的定时器与动画帧，导致消息直到重新显示窗口才提交。
       backgroundThrottling: false,
@@ -752,6 +757,7 @@ function createWindow(): void {
   }
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (event.defaultPrevented || input.isComposing || input.isAutoRepeat) return
     const isRefresh = input.type === 'keyDown' && input.key.toLowerCase() === 'r' && (input.control || input.meta) && !input.alt
     if (!isRefresh) return
     event.preventDefault()

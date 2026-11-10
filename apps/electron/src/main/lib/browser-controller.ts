@@ -1,5 +1,5 @@
-import { app, BrowserWindow, View, WebContentsView, session as electronSession, clipboard as electronClipboard, shell, type Session } from 'electron'
-import type { BrowserDownloadBlockedEvent, BrowserExecutionSource, BrowserExtractInput, BrowserExtractResult, BrowserOperationStatus, BrowserScrollInput, BrowserScrollResult, BrowserTraceAction, BrowserTraceItem, BrowserTranslateResult, BrowserViewLayout, BrowserViewState, BrowserTabListResult, BrowserTabState } from '@profer/shared'
+import { app, BrowserWindow, session as electronSession, clipboard as electronClipboard, shell, type Session, type WebContents } from 'electron'
+import type { BrowserGuestClaim, BrowserGuestRequest, BrowserGuestVisibility, BrowserActionResult, BrowserDownloadBlockedEvent, BrowserExecutionSource, BrowserExtractInput, BrowserExtractResult, BrowserOperationStatus, BrowserScrollInput, BrowserScrollResult, BrowserTraceAction, BrowserTraceItem, BrowserTranslateResult, BrowserViewState, BrowserTabListResult, BrowserTabState } from '@profer/shared'
 import {
   AGENT_IPC_CHANNELS,
   BROWSER_LOCAL_FILE_OPEN_DEFAULT_URL,
@@ -26,8 +26,11 @@ import { hasAcknowledgedBrowserRiskDisclaimer } from './browser-risk-disclaimer'
 import { buildProferBrowserUserAgent } from './browser-identity'
 import { assertBrowserScript, buildBrowserDomActionExpression, type BrowserDomActionInput, BUILD_READ_ELEMENT_VALUE_FUNCTION, BUILD_WRITE_ELEMENT_VALUE_FUNCTION, normalizeFilledText } from './browser-script-policy'
 import { getSettings } from './settings-service'
-import { getBrowserHostSurfaceColor } from './titlebar-overlay'
-import { hasUsableBrowserBounds, resolveBrowserPageHostBounds, resolveBrowserViewportLayout, sameBrowserBounds, shouldApplyBrowserLayoutRevision } from './browser-view-layout'
+import { matchBrowserShortcut } from './browser-shortcut-policy'
+import { BrowserPageInteractions } from './browser-page-interactions'
+import { BrowserDialogFrameScripts } from './browser-dialog-frame-scripts'
+import { BROWSER_DIALOG_SCHEME, BrowserDialogProtocol } from './browser-dialog-protocol'
+import { BrowserGuestManager } from './browser-guest-manager'
 import { recordHistory } from './browser-start-page-store'
 import {
   BUILD_COLLECT_SCRIPT,
@@ -39,28 +42,9 @@ import {
 const MAX_TRACE_ITEMS = 30
 /** 总数超限时只回收 Agent 创建且未在使用的标签，绝不自动关闭用户标签。 */
 const MAX_BROWSER_TABS = 20
-const MAX_INVALIDATED_LAYOUT_RENDERERS = 16
 const MAX_SCREENSHOT_BYTES = 3 * 1024 * 1024
 const ACTION_HIGHLIGHT_DURATION_MS = 900
 const MAX_BROWSER_SCRIPT_RESULT_CHARS = 64_000
-/** 原生网页右下角的「关闭拆分视图」浮标：DOM 盖不住 WebContentsView，只能单独绘制一层原生视图。 */
-const SPLIT_CLOSE_OVERLAY_ACTION_URL = 'https://profer.local/split-close'
-const SPLIT_CLOSE_OVERLAY_BASE_SIZE = 24
-const SPLIT_CLOSE_OVERLAY_BASE_MARGIN = 6
-const SPLIT_CLOSE_OVERLAY_HTML_URL = `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html>
-<html><head><meta charset="utf-8"><style>
-html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
-body{display:flex;align-items:center;justify-content:center}
-button{appearance:none;box-sizing:border-box;width:100%;height:100%;padding:0;border:1px solid rgba(255,255,255,.18);border-radius:50%;background:rgba(60,64,67,.9);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background-color .12s ease}
-button:hover{background:rgba(32,33,36,.94)}
-svg{width:48%;height:48%;display:block}
-</style></head><body>
-<button type="button" aria-label="关闭拆分视图" title="关闭拆分视图（两个标签都保留）">
-<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-</button>
-<script>document.querySelector('button').addEventListener('click',function(){location.href='https://profer.local/split-close'})</script>
-</body></html>`)}`
-
 /** 受管网页使用与 Profer 一致的滚动条；仅影响展示，不修改页面滚动行为或内容。
  * 与渲染进程同一套平台差异（见 docs/design/2026-10-27-scrollbar-spec.md）：
  * Windows 给 12px 命中区 + 3px 透明 border（视觉 4px），悬停展开；macOS 保持 6px overlay 尺寸。
@@ -79,7 +63,12 @@ type CdpResponse = Record<string, unknown>
 type RefEntry = { backendNodeId: number; generation: number; label: string; editable: boolean }
 type BrowserTabRecord = {
   tabId: string
-  view: WebContentsView
+  contents: WebContents | null
+  ready?: Promise<void>
+  interactions?: BrowserPageInteractions
+  dialogEndpoint?: { dispose: () => void }
+  dialogScripts?: BrowserDialogFrameScripts
+  debuggerReady?: Promise<void>
   state: BrowserTabState
   refs: Map<string, RefEntry>
   /** 页面文档/观察代际；导航、关闭、调试器恢复后即失效。 */
@@ -113,6 +102,8 @@ type BrowserTabRecord = {
   lastActivityAt: number
   /** 最近一次已通过策略的主框架导航目标；错误页不应污染地址栏和 Agent 状态。 */
   lastRequestedUrl: string | null
+  /** guest/renderer 丢失后，仅在重建绑定时恢复最后一个已校验页面。 */
+  restoreOnGuestAttach: boolean
   zoomFactor: number
   highlightTimer?: ReturnType<typeof setTimeout>
 }
@@ -142,25 +133,7 @@ type BrowserSessionRecord = {
   ledger: BrowserTraceItem[]
   /** 用户在面板中主动打开/操作过浏览器；用于下一条消息的实时上下文。 */
   userOpenedAt: number | null
-  /** 最近一次布局来自哪个 renderer 实例；renderer 刷新后允许新实例从 revision=1 重新开始。 */
-  lastLayoutRendererInstanceId: string | null
-  /** renderer 刷新期间仍可能有旧布局 IPC 在途，记录已失效实例，避免它晚到覆盖新实例。 */
-  invalidatedLayoutRendererInstanceIds: Set<string>
-  /** 同一 renderer 内最近接受的 BrowserViewport 来源序号。 */
-  lastLayoutSourceRevision: number
-  lastLayoutRevision: number
-  /**
-   * 唯一原生网页 frame。它只覆盖网页 pageBounds，不覆盖 renderer 的工具栏、标签栏或操作区。
-   * macOS 下透明 View 仍会参与 hit-test，因此不能把它设成整张浏览器卡片大小。
-   */
-  hostView: View
-  lastViewportBounds?: BrowserViewLayout['viewportBounds']
-  lastHostBounds?: BrowserViewLayout['pageBounds']
-  /** WebContentsView 相对于 hostView 的局部边界，始终从 0,0 开始。 */
-  lastPageBounds?: BrowserViewLayout['pageBounds']
-  lastViewportRadius?: number
-  /** 上次布局应用后的实际可见状态；隐藏→显示过渡时强制重绘，避免 WebContentsView 白屏。 */
-  lastVisible: boolean
+
 }
 
 type BrowserSessionConfiguration = {
@@ -203,15 +176,6 @@ export function resolvePreviewTheme(
 function emptyTabState(tabId: string): BrowserTabState {
   return { tabId, url: '',
     localFile: null, title: '新建标签页', loading: false, visible: false, canGoBack: false, canGoForward: false, zoomFactor: 1, translated: false, loadError: null, trace: [] }
-}
-
-function rememberInvalidatedLayoutRenderer(browserSession: BrowserSessionRecord, rendererInstanceId: string): void {
-  browserSession.invalidatedLayoutRendererInstanceIds.add(rendererInstanceId)
-  while (browserSession.invalidatedLayoutRendererInstanceIds.size > MAX_INVALIDATED_LAYOUT_RENDERERS) {
-    const oldest = browserSession.invalidatedLayoutRendererInstanceIds.values().next().value
-    if (typeof oldest !== 'string') break
-    browserSession.invalidatedLayoutRendererInstanceIds.delete(oldest)
-  }
 }
 
 function textValue(value: unknown): string {
@@ -279,6 +243,8 @@ function describeBrowserScriptException(response: CdpResponse): string {
 export class BrowserController {
   private owner: BrowserWindow | null = null
   private foregroundSessionId: string | null = null
+  /** 正在执行 Agent 指令的页面；其派生 popup 不获得用户展示权。 */
+  private readonly agentOperatingTabs = new Map<string, number>()
   private readonly sessions = new Map<string, BrowserSessionRecord>()
   /** 已派发但结果未知的不可逆动作，按 session/tab/ref 隔离，禁止隐式重复执行。 */
   private readonly actionGuards = new BrowserActionGuard()
@@ -287,6 +253,7 @@ export class BrowserController {
   private readonly guardedSessions = new WeakSet<Session>()
   /** 自定义 partition 不继承 default session 的协议处理器，必须单独注册本地预览协议。 */
   private readonly previewProtocolSessions = new WeakSet<Session>()
+  private readonly dialogProtocols = new WeakMap<Session, BrowserDialogProtocol>()
   /**
    * 渲染进程最近同步过来的主题参数。
    *
@@ -294,10 +261,12 @@ export class BrowserController {
    * 用最近一次同步值补上，可以让这些预览也跟随当前皮肤（而不是永远浅色/默认色）。
    */
   private lastKnownPreviewTheme: ViewerPreviewTheme | null = null
-  /** 原生网页右下角的退出浮标（全局单例，跟随当前可见的分屏右栏浏览器页）。 */
-  private splitCloseOverlay: WebContentsView | null = null
-  private splitCloseOverlaySessionId: string | null = null
-  private splitCloseOverlayTabId: string | null = null
+  private guestManager: BrowserGuestManager | null = null
+  private guestHostGeneration = 0
+  private ownerMainFrameReady = false
+  private shortcutContext: (import('@profer/shared').BrowserShortcutContext & { ticket?: string }) | null = null
+  private readonly resettingGuestIds = new Set<number>()
+  private readonly guestRequests = new Map<string, BrowserGuestRequest>()
 
   configureSession(sessionId: string, input: ConfigureBrowserSessionInput): void {
     const previous = this.configurations.get(sessionId)
@@ -325,153 +294,153 @@ export class BrowserController {
   }
 
   setOwnerWindow(window: BrowserWindow): void {
-    if (this.owner && this.owner !== window) this.destroySplitCloseOverlay()
+    if (this.owner === window && this.guestManager) return
+    if (this.owner && !this.owner.isDestroyed()) {
+      this.resetGuestHost()
+      this.owner.webContents.removeListener('before-input-event', this.onOwnerShortcutInput)
+      this.owner.webContents.removeListener('did-start-navigation', this.onOwnerDidStartNavigation)
+      this.owner.webContents.removeListener('did-finish-load', this.onOwnerDidFinishLoad)
+      this.owner.webContents.removeListener('render-process-gone', this.onOwnerRenderProcessGone)
+    }
+    this.guestManager?.dispose()
     this.owner = window
+    this.ownerMainFrameReady = false
+    this.guestRequests.clear()
+    this.guestManager = new BrowserGuestManager(window.webContents, (request) => {
+      this.guestRequests.set(this.guestKey(request.sessionId, request.tabId), request)
+      this.publishGuestRequests()
+    }, partition => electronSession.fromPartition(partition), 15_000, false)
+    window.webContents.prependListener('before-input-event', this.onOwnerShortcutInput)
+    window.webContents.on('did-start-navigation', this.onOwnerDidStartNavigation)
+    window.webContents.on('did-finish-load', this.onOwnerDidFinishLoad)
+    window.webContents.on('render-process-gone', this.onOwnerRenderProcessGone)
   }
 
-  /**
-   * 原生网页上的退出浮标。
-   *
-   * 受管网页是盖在 renderer 之上的 WebContentsView，DOM 按钮无法显示在它上面；
-   * 分屏右栏是浏览器页时，在网页右下角额外挂一个很小的透明原生视图，点击后通过 IPC
-   * 让 renderer 解散当前组合。只在网页可见、且 renderer 声明该页属于分屏右栏时显示。
-   */
-  private ensureSplitCloseOverlay(): WebContentsView | null {
-    if (!this.owner || this.owner.isDestroyed()) return null
-    if (this.splitCloseOverlay) return this.splitCloseOverlay
-    const overlay = new WebContentsView({
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-        backgroundThrottling: false,
-      },
+  setShortcutContext(context: import('@profer/shared').BrowserShortcutContext): void {
+    const current = this.shortcutContext
+    if (current?.scopeId === context.scopeId && current.revision >= context.revision) return
+    const request = context.target ? this.guestRequests.get(this.guestKey(context.target.sessionId, context.target.tabId)) : undefined
+    this.shortcutContext = { ...context, ticket: request?.ticket }
+  }
+
+  private readonly onOwnerShortcutInput = (event: Electron.Event, input: Electron.Input): void => {
+    const context = this.shortcutContext
+    const binding = context ? matchBrowserShortcut(input, context.bindings) : undefined
+    if (!binding || !['browser-reload', 'browser-zoom-in', 'browser-zoom-out', 'browser-zoom-reset'].includes(binding.id)) return
+    if (this.forwardShortcut(input)) event.preventDefault()
+  }
+
+  private forwardShortcut(input: Electron.Input, sourceGuestId?: number): boolean {
+    const context = this.shortcutContext
+    const target = context?.target
+    if (!context || !target || !this.owner || this.owner.isDestroyed() || !this.owner.isFocused() || !this.owner.isVisible()) return false
+    const session = this.sessions.get(target.sessionId)
+    const tab = session?.tabs.get(target.tabId)
+    const request = this.guestRequests.get(this.guestKey(target.sessionId, target.tabId))
+    if (!tab?.state.visible || !tab.contents || tab.contents.isDestroyed() || !request || request.ticket !== context.ticket
+      || (sourceGuestId !== undefined && tab.contents.id !== sourceGuestId)
+      || target.sessionId !== this.foregroundSessionId || this.agentOperatingTabs.has(`${target.sessionId}:${target.tabId}`)) return false
+    const binding = matchBrowserShortcut(input, context.bindings)
+    if (!binding) return false
+    if (!input.isAutoRepeat) this.owner.webContents.send(AGENT_IPC_CHANNELS.BROWSER_SHORTCUT, {
+      scopeId: context.scopeId, revision: context.revision, sessionId: target.sessionId,
+      tabId: target.tabId, ticket: request.ticket, shortcutId: binding.id,
     })
-    overlay.setBackgroundColor('#00000000')
-    overlay.setVisible(false)
-    overlay.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    overlay.webContents.on('will-navigate', (event, url) => {
-      if (url !== SPLIT_CLOSE_OVERLAY_ACTION_URL) return
-      event.preventDefault()
-      this.handleSplitCloseOverlayClick()
-    })
-    void overlay.webContents.loadURL(SPLIT_CLOSE_OVERLAY_HTML_URL).catch(() => undefined)
-    this.splitCloseOverlay = overlay
-    return overlay
+    return true
   }
 
-  private updateSplitCloseOverlay(
-    browserSession: BrowserSessionRecord,
-    tab: BrowserTabRecord,
-    layout: BrowserViewLayout,
-    hostBounds: { width: number; height: number },
-    visible: boolean,
-  ): void {
-    if (!visible || layout.splitViewClose !== true || !this.owner || this.owner.isDestroyed()) {
-      this.hideSplitCloseOverlay()
-      return
-    }
-    const overlay = this.ensureSplitCloseOverlay()
-    if (!overlay) {
-      this.hideSplitCloseOverlay()
-      return
-    }
-    const zoom = this.owner.webContents.getZoomFactor()
-    const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
-    const size = Math.max(20, Math.round(SPLIT_CLOSE_OVERLAY_BASE_SIZE * scale))
-    const margin = Math.max(2, Math.round(SPLIT_CLOSE_OVERLAY_BASE_MARGIN * scale))
-    const x = hostBounds.width - size - margin
-    const y = hostBounds.height - size - margin
-    if (x < 0 || y < 0) {
-      this.hideSplitCloseOverlay()
-      return
-    }
-    const changed = this.splitCloseOverlaySessionId !== browserSession.sessionId
-      || this.splitCloseOverlayTabId !== tab.tabId
-    if (changed) {
-      // View 只能有一个父节点：先确保从所有会话的 hostView 上摘除，再加到当前页面上方。
-      for (const session of this.sessions.values()) {
-        try { session.hostView.removeChildView(overlay) } catch { /* 不是子节点 */ }
-      }
-      try { browserSession.hostView.addChildView(overlay) } catch { /* 宿主已销毁 */ }
-      this.splitCloseOverlaySessionId = browserSession.sessionId
-      this.splitCloseOverlayTabId = tab.tabId
-    }
-    overlay.setBounds({ x, y, width: size, height: size })
-    overlay.setVisible(true)
+  private readonly onOwnerDidStartNavigation = (details: Electron.WebContentsDidStartNavigationEventParams): void => {
+    if (!details.isMainFrame || details.isSameDocument || !this.ownerMainFrameReady) return
+    this.ownerMainFrameReady = false
+    this.resetGuestHost(true)
   }
 
-  private hideSplitCloseOverlay(): void {
-    try { this.splitCloseOverlay?.setVisible(false) } catch { /* 视图已销毁 */ }
-    this.splitCloseOverlaySessionId = null
-    this.splitCloseOverlayTabId = null
+  private readonly onOwnerDidFinishLoad = (): void => {
+    this.ownerMainFrameReady = true
+    this.guestManager?.completeHostReset()
   }
 
-  private destroySplitCloseOverlay(): void {
-    const overlay = this.splitCloseOverlay
-    this.splitCloseOverlay = null
-    this.splitCloseOverlaySessionId = null
-    this.splitCloseOverlayTabId = null
-    if (!overlay) return
-    try { overlay.setVisible(false) } catch { /* 视图已销毁 */ }
-    for (const session of this.sessions.values()) {
-      try { session.hostView.removeChildView(overlay) } catch { /* 不是子节点 */ }
+  private readonly onOwnerRenderProcessGone = (): void => {
+    this.ownerMainFrameReady = false
+    this.resetGuestHost(true)
+  }
+
+  private resetGuestHost(deferGuestClose = false): void {
+    this.guestHostGeneration += 1
+    this.shortcutContext = null
+    for (const binding of this.guestManager?.listBindings() ?? []) {
+      const id = binding.guest.id
+      this.resettingGuestIds.add(id)
+      binding.guest.once('destroyed', () => this.resettingGuestIds.delete(id))
     }
-    try { overlay.webContents.close() } catch { /* 已销毁 */ }
-  }
-
-  private handleSplitCloseOverlayClick(): void {
-    const sessionId = this.splitCloseOverlaySessionId
-    const tabId = this.splitCloseOverlayTabId
-    this.hideSplitCloseOverlay()
-    if (!sessionId || !tabId || !this.owner || this.owner.isDestroyed()) return
-    this.owner.webContents.send(AGENT_IPC_CHANNELS.SPLIT_VIEW_CLOSE_CLICKED, { sessionId, tabId })
-  }
-
-  /**
-   * 主题切换后同步所有受管浏览器原生视图背景色，避免页面加载中 / 空白页 / 拖拽 resize 时露白。
-   * 背景色与浏览器卡片宿主的 DOM 背景（--browser-host-surface）保持一致，圆角边缘无分层。
-   */
-  syncThemeBackground(): void {
-    const color = getBrowserHostSurfaceColor()
+    this.guestManager?.resetHost(deferGuestClose)
+    this.guestRequests.clear()
     for (const browserSession of this.sessions.values()) {
-      // hostView 保持透明（它覆盖顶部工具栏 DOM，不透明白底会遮住工具栏）；
-      // 只更新承载网页的 WebContentsView，页面加载前/空白页显示卡片底色。
       for (const tab of browserSession.tabs.values()) {
-        try {
-          tab.view.setBackgroundColor(color)
-        } catch { /* 视图可能已销毁 */ }
+        this.invalidateTabDocument(tab)
+        tab.frameIds.clear()
+        tab.pendingNetworkRequestIds.clear()
+        tab.dialogScripts?.dispose()
+        tab.dialogScripts = undefined
+        tab.debuggerReady = undefined
+        tab.dialogEndpoint?.dispose()
+        tab.dialogEndpoint = undefined
+        tab.interactions?.dispose()
+        tab.interactions = undefined
+        tab.contents = null
+        tab.ready = undefined
+        tab.restoreOnGuestAttach = true
+        tab.state.visible = false
+        tab.state.loading = false
+        tab.state.loadError = null
       }
+      this.emit(browserSession)
     }
   }
 
-  /**
-   * 同步当前前台 Agent 会话。后台 Agent 仍可创建、导航和操作自己的网页，
-   * 但它们的原生 WebContentsView 不得显示或抢占主窗口。
-   */
-  setForegroundSession(sessionId: string | null): void {
-    if (sessionId === null) {
-      // 普通切换到 Chat / 草稿时只隐藏原生视图；不能把当前 renderer 加入刷新失效列表，
-      // 否则同一个 renderer 切回 Agent 后，新 BrowserViewport 会被误判为旧来源。
-      this.hideAll(false)
-      return
+  private guestKey(sessionId: string, tabId: string): string { return JSON.stringify([sessionId, tabId]) }
+
+  private publishGuestRequests(): void {
+    if (!this.owner || this.owner.isDestroyed()) return
+    this.owner.webContents.send(AGENT_IPC_CHANNELS.BROWSER_GUESTS_CHANGED, this.getGuestRequests())
+  }
+
+  getGuestRequests(): BrowserGuestRequest[] { return [...this.guestRequests.values()].map(request => ({ ...request })) }
+
+  connectGuestHost(): BrowserGuestRequest[] {
+    if (!this.guestManager) throw new Error('浏览器宿主尚未就绪。')
+    this.guestManager.setHostReady()
+    for (const browserSession of this.sessions.values()) {
+      for (const tab of browserSession.tabs.values()) void this.prepareTab(browserSession, tab).catch(() => undefined)
     }
-    if (sessionId !== this.foregroundSessionId) this.hideSplitCloseOverlay()
-    this.hideOtherBrowserSessions(sessionId)
-    // 同一会话的前台重申（如同会话内切换 Tab、分栏聚焦点击对话区）不得隐藏视图：
-    // 分栏模式下两侧 BrowserViewport 不会重挂载，renderer 未必立刻重发布局，
-    // 隐藏后原生 WebContentsView 会一直黑屏直到下一次几何/滚动事件。
-    if (sessionId === this.foregroundSessionId) return
-    this.foregroundSessionId = sessionId
-    const browserSession = this.sessions.get(sessionId)
-    if (!browserSession) return
-    // 仅切换所有权，不在这里显示视图；显示必须等待当前 renderer 的布局 IPC。
-    browserSession.hostView.setVisible(false)
-    browserSession.lastVisible = false
-    for (const tab of browserSession.tabs.values()) {
-      tab.view.setVisible(false)
-      tab.state.visible = false
+    return this.getGuestRequests()
+  }
+
+  bindGuest(claim: BrowserGuestClaim): void {
+    if (!this.sessions.get(claim.sessionId)?.tabs.has(claim.tabId)) throw new Error('浏览器页面已关闭。')
+    if (!this.guestManager) throw new Error('浏览器宿主尚未就绪。')
+    this.guestManager.bindGuest(claim)
+  }
+
+  /** DOM 是可见性权威；这里只记录页状态，不控制主窗口、焦点或原生几何。 */
+  setGuestVisibility(pages: BrowserGuestVisibility[]): void {
+    const changed = new Set<BrowserSessionRecord>()
+    for (const page of pages) {
+      const browserSession = this.sessions.get(page.sessionId)
+      const tab = browserSession?.tabs.get(page.tabId)
+      const request = this.guestRequests.get(this.guestKey(page.sessionId, page.tabId))
+      if (!browserSession || !tab || request?.ticket !== page.ticket || tab.state.visible === page.visible) continue
+      tab.state.visible = page.visible
+      changed.add(browserSession)
     }
+    for (const browserSession of changed) this.emit(browserSession)
+  }
+
+  setForegroundSession(sessionId: string | null): void { this.foregroundSessionId = sessionId }
+
+  private contents(tab: BrowserTabRecord): WebContents {
+    if (!tab.contents || tab.contents.isDestroyed()) throw new Error('浏览器页面尚未就绪或已关闭，请刷新页面后重试。')
+    return tab.contents
   }
 
   private emit(browserSession: BrowserSessionRecord): void {
@@ -482,11 +451,20 @@ export class BrowserController {
   private buildState(browserSession: BrowserSessionRecord): BrowserViewState {
     const active = browserSession.tabs.get(browserSession.activeTabId)
     if (!active) throw new Error('受管浏览器没有有效标签。')
+    return this.buildPageProjection(browserSession, active)
+  }
+
+  /** 动作结果只投影实际操作页；UI 广播仍使用 buildState 的显示语义。 */
+  private buildActionResult(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): BrowserActionResult {
+    return structuredClone({ ...this.buildPageProjection(browserSession, tab), tabId: tab.tabId })
+  }
+
+  private buildPageProjection(browserSession: BrowserSessionRecord, active: BrowserTabRecord): BrowserViewState {
     const trace = browserSession.ledger.slice(-MAX_TRACE_ITEMS)
     return {
       sessionId: browserSession.sessionId,
       executionSource: browserSession.executionSource,
-      activeTabId: active.tabId,
+      activeTabId: browserSession.activeTabId,
       agentTabId: browserSession.agentTabId,
       tabs: [...browserSession.tabs.values()].map((tab) => ({
         tabId: tab.tabId,
@@ -496,6 +474,12 @@ export class BrowserController {
         loading: tab.state.loading,
         zoomFactor: tab.zoomFactor,
         openedByAgent: tab.openedByAgent,
+        visible: tab.state.visible,
+        canGoBack: tab.state.canGoBack,
+        canGoForward: tab.state.canGoForward,
+        translated: tab.state.translated,
+        loadError: tab.state.loadError,
+        ...tab.interactions?.snapshot(),
       })),
       url: active.state.url,
       title: active.state.title,
@@ -507,6 +491,7 @@ export class BrowserController {
       zoomFactor: active.zoomFactor,
       translated: active.state.translated,
       loadError: active.state.loadError,
+      ...active.interactions?.snapshot(),
       trace,
       activity: trace.at(-1) ?? null,
     }
@@ -569,9 +554,10 @@ export class BrowserController {
     // WebContents.close() 不会同步取消已排队的导航事件。关闭标签后，迟到的
     // did-stop-loading / page-title-updated 仍可能触发；此时标签已从 Map 移除，
     // 再 emit 会因 activeTabId 指向已关闭标签而让主进程抛出未捕获异常。
-    if (browserSession.tabs.get(tab.tabId) !== tab || tab.view.webContents.isDestroyed()) return
-    const contents = tab.view.webContents
+    if (browserSession.tabs.get(tab.tabId) !== tab || !tab.contents || tab.contents.isDestroyed()) return
+    const contents = this.contents(tab)
     const currentUrl = contents.getURL()
+    if ((!currentUrl || currentUrl === 'about:blank') && !tab.lastRequestedUrl) return
     // 导航失败时 Chromium 可能把 WebContents URL 改成 chrome-error://chromewebdata/；
     // 这不是可操作的用户地址，保留上一次合法目标，防止状态回推污染地址栏。
     if (!currentUrl.startsWith('chrome-error://')) tab.state.url = currentUrl
@@ -647,6 +633,7 @@ export class BrowserController {
             tab.localPreviewBaseDir ?? undefined,
             previewTheme,
           )
+          await this.prepareTab(browserSession, tab)
           await this.loadUrl(tab, preview.url)
           tab.localPreviewThemeSignature = signature
           refreshed += 1
@@ -734,13 +721,27 @@ export class BrowserController {
     const operationSignal = signal ? this.agentSignal(browserSession, signal) : undefined
     return this.enqueueTab(tab, async () => {
       throwIfBrowserOperationAborted(operationSignal)
-      return task(operationSignal)
+      await withBrowserCdpTimeout(() => this.prepareTab(browserSession, tab), 'Guest.ready', 15_000, operationSignal)
+      if (tab.debuggerReady) await withBrowserCdpTimeout(() => tab.debuggerReady!, 'Guest.debuggerReady', 8_000, operationSignal)
+      throwIfBrowserOperationAborted(operationSignal)
+      if (this.sessions.get(browserSession.sessionId) !== browserSession || browserSession.tabs.get(tab.tabId) !== tab) throw new Error('浏览器页面已关闭。')
+      if (tab.interactions?.snapshot().dialog) throw new Error('网页正在等待确认。请在对应浏览器页面回应提示，或停止该页操作后再继续。')
+      if (!signal) return task(operationSignal)
+      const key = `${browserSession.sessionId}:${tab.tabId}`
+      this.agentOperatingTabs.set(key, (this.agentOperatingTabs.get(key) ?? 0) + 1)
+      try {
+        return await task(operationSignal)
+      } finally {
+        const remaining = (this.agentOperatingTabs.get(key) ?? 1) - 1
+        if (remaining > 0) this.agentOperatingTabs.set(key, remaining)
+        else this.agentOperatingTabs.delete(key)
+      }
     })
   }
 
   private assertCurrentDocument(tab: BrowserTabRecord, generation: number, signal?: AbortSignal): void {
     throwIfBrowserOperationAborted(signal)
-    if (tab.generation !== generation || tab.view.webContents.isDestroyed()) {
+    if (tab.generation !== generation || this.contents(tab).isDestroyed()) {
       throw new Error('页面已变化或标签已关闭，请先重新调用 BrowserObserve。')
     }
   }
@@ -755,8 +756,9 @@ export class BrowserController {
     if (agentTabId) {
       const tab = browserSession.tabs.get(agentTabId)
       if (tab) {
+        tab.interactions?.cancelDialog()
         this.invalidateTabDocument(tab)
-        try { tab.view.webContents.stop() } catch { /* WebContents 已销毁 */ }
+        try { this.contents(tab).stop() } catch { /* WebContents 已销毁 */ }
         this.trace(browserSession, tab, 'tab', 'Agent 已停止浏览器操作；已发送指令的结果未知，请重新观察页面。', 'unknown')
       }
     }
@@ -775,7 +777,7 @@ export class BrowserController {
     for (const [sessionId, record] of this.sessions.entries()) {
       for (const tab of record.tabs.values()) {
         try {
-          if (tab.view.webContents.id === webContentsId) return { sessionId, tab }
+          if (this.contents(tab).id === webContentsId) return { sessionId, tab }
         } catch {
           // 视图已销毁：跳过它，但不能因此中断对其它标签的查找。
         }
@@ -797,8 +799,16 @@ export class BrowserController {
     // Electron 收不到 Chrome 的 CRLSet 推送，泄露 CA 的拉黑必须自己做。
     installDistrustedCertificateGuard(browserSession, { cacheDir: app.getPath('userData') })
     browserSession.webRequest.onBeforeRequest((details, callback) => {
+      if (this.guestManager?.isProvisional(details.webContentsId)) {
+        callback({ cancel: details.url !== 'about:blank' })
+        return
+      }
       let protocol = ''
       try { protocol = new URL(details.url).protocol } catch { callback({ cancel: true }); return }
+      if (protocol === `${BROWSER_DIALOG_SCHEME}:`) {
+        callback({ cancel: !this.dialogProtocols.get(browserSession)?.authorize(details) })
+        return
+      }
       if (protocol !== 'http:' && protocol !== 'https:' && protocol !== 'ws:' && protocol !== 'wss:') {
         callback({ cancel: false })
         return
@@ -863,19 +873,10 @@ export class BrowserController {
       executionSource: configuration?.executionSource ?? 'user',
       ledger: [],
       userOpenedAt: null,
-      lastLayoutRendererInstanceId: null,
-      invalidatedLayoutRendererInstanceIds: new Set(),
-      lastLayoutSourceRevision: 0,
-      lastLayoutRevision: 0,
-      hostView: new View(),
-      lastVisible: false,
     }
-    // hostView 只承载网页区域；透明原生 View 也会拦截 macOS 鼠标命中，不能覆盖工具栏和标签栏。
-    // 圆角由 BrowserViewport 的固定 frame 契约驱动，不再读取 DOM 的卡片样式。
-    record.hostView.setVisible(false)
-    this.owner.contentView.addChildView(record.hostView)
     this.installSessionGuards(browserSession)
     this.installPreviewProtocol(browserSession)
+    if (!this.dialogProtocols.has(browserSession)) this.dialogProtocols.set(browserSession, new BrowserDialogProtocol(browserSession))
     this.sessions.set(sessionId, record)
     return record
   }
@@ -883,26 +884,9 @@ export class BrowserController {
   private createTab(browserSession: BrowserSessionRecord, isLocalPreview = false, claimAsAgent = false): BrowserTabRecord {
     if (!this.owner || this.owner.isDestroyed()) throw new Error('主窗口尚未就绪，无法创建浏览器标签。')
     const tabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const view = new WebContentsView({
-      webPreferences: {
-        partition: browserSession.partition,
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-        webSecurity: true,
-        // Agent 驱动的页面经常在原生视图隐藏时完成导航/加载；节流会让页面进程
-        // 不产任何合成帧，之后显示/分屏改尺寸时只能拿到空纹理（网页区黑屏，偶发、
-        // 高负载下更明显）。受管视图的可见性由主进程显式控制，节流没有收益。
-        backgroundThrottling: false,
-      },
-    })
-    // 页面加载前 / 加载失败 / 空白页显示卡片底色（--browser-host-surface）而非默认白色，避免露白与分层。
-    view.setBackgroundColor(getBrowserHostSurfaceColor())
-    // 网页 view 从工具栏下方开始；不对它设置圆角，避免在其底角额外挖出弧形透明区。
-    // 外观圆角由 renderer 的 BrowserPanel 统一处理。
     const tab: BrowserTabRecord = {
       tabId,
-      view,
+      contents: null,
       state: emptyTabState(tabId),
       refs: new Map(),
       generation: 0,
@@ -917,14 +901,119 @@ export class BrowserController {
       openedByAgent: claimAsAgent,
       lastActivityAt: Date.now(),
       lastRequestedUrl: null,
+      restoreOnGuestAttach: false,
       zoomFactor: 1,
     }
-    browserSession.hostView.addChildView(view)
-    // 网页内容区域保持直角；四角裁切只由本会话的 native frame 负责。
-    view.setVisible(false)
-    // WebContentsView 不应放任 target=_blank 创建脱离主窗口的 BrowserWindow；此前直接 deny
-    // 也导致用户和 Agent 点击站外链接没有任何反应。将安全的 HTTP(S) 目标转为当前受管浏览器的新标签。
-    view.webContents.setWindowOpenHandler(({ url }) => {
+    browserSession.tabs.set(tabId, tab)
+    if (!browserSession.activeTabId) {
+      browserSession.activeTabId = tabId
+      browserSession.tabMru = promoteMru(browserSession.tabMru, tabId)
+    }
+    if (claimAsAgent) browserSession.agentTabId = tabId
+    void this.prepareTab(browserSession, tab).catch(() => undefined)
+    return tab
+  }
+
+  private async prepareTab(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): Promise<void> {
+    if (tab.ready) return tab.ready
+    if (tab.contents && !tab.contents.isDestroyed()) return
+    const manager = this.guestManager
+    if (!manager) throw new Error('浏览器宿主尚未就绪。')
+    const generation = this.guestHostGeneration
+    const restorePage = tab.restoreOnGuestAttach
+    const requestedUrl = tab.state.url && tab.state.url !== 'about:blank' ? tab.state.url : tab.lastRequestedUrl
+    const ready = manager.requestGuest(browserSession.sessionId, tab.tabId, browserSession.partition).then(async ({ guest }) => {
+      if (generation !== this.guestHostGeneration
+        || this.sessions.get(browserSession.sessionId) !== browserSession
+        || browserSession.tabs.get(tab.tabId) !== tab) {
+        guest.close()
+        throw new Error('页面在接入前已关闭或宿主已重载。')
+      }
+      tab.contents = guest
+      await this.installTabContents(browserSession, tab, guest)
+      if (!restorePage || !requestedUrl || requestedUrl === 'about:blank') return
+      let restoreUrl: string | null
+      if (tab.isLocalPreview && tab.localFilePath) {
+        const extension = extname(tab.localFilePath).toLowerCase()
+        const preview = extension === '.html' || extension === '.htm'
+          ? createAuthorizedPreviewUrl(tab.localFilePath, browserSession.allowedRoots, tab.localPreviewBaseDir ?? undefined)
+          : createViewerPreviewUrl(
+              tab.localFilePath,
+              browserSession.allowedRoots,
+              tab.localPreviewBaseDir ?? undefined,
+              resolvePreviewTheme(undefined, this.lastKnownPreviewTheme, () => resolveAppThemeIsDark() ? 'dark' : 'light'),
+            )
+        restoreUrl = preview.url
+        tab.state.localFile = { name: basename(preview.filePath), readOnly: true }
+      } else {
+        restoreUrl = await assertSafeBrowserDestination(requestedUrl)
+      }
+      if (!restoreUrl) throw new Error('页面地址已失效，请重新打开该页面。')
+      if (generation !== this.guestHostGeneration || tab.ready !== ready || tab.contents !== guest) throw new Error('浏览器页面实例已更新。')
+      await this.loadUrl(tab, restoreUrl)
+      if (generation !== this.guestHostGeneration || tab.ready !== ready || tab.contents !== guest) throw new Error('浏览器页面实例已更新。')
+      tab.restoreOnGuestAttach = false
+      this.updateNavigationState(browserSession, tab)
+    }).catch((error: unknown) => {
+      if (generation !== this.guestHostGeneration || tab.ready !== ready
+        || this.sessions.get(browserSession.sessionId) !== browserSession || browserSession.tabs.get(tab.tabId) !== tab) throw error
+      tab.ready = undefined
+      {
+        tab.dialogScripts?.dispose()
+        tab.dialogEndpoint?.dispose()
+        tab.interactions?.dispose()
+        const failedGuest = tab.contents
+        tab.contents = null
+        tab.restoreOnGuestAttach = true
+        if (failedGuest && !failedGuest.isDestroyed()) {
+          const guestReleased = this.guestManager?.release(browserSession.sessionId, tab.tabId) ?? false
+          if (!guestReleased) failedGuest.close()
+        }
+      }
+      this.guestRequests.delete(this.guestKey(browserSession.sessionId, tab.tabId))
+      if (browserSession.tabs.get(tab.tabId) === tab) {
+        if (!tab.contents || tab.state.loadError === null) tab.state.loadError = error instanceof Error ? error.message : '浏览器页面接入失败。'
+        this.emit(browserSession)
+      }
+      this.publishGuestRequests()
+      throw error
+    })
+    tab.ready = ready
+    return ready
+  }
+
+  private installTabContents(browserSession: BrowserSessionRecord, tab: BrowserTabRecord, contents: WebContents): Promise<void> {
+    const debuggerClient = contents.debugger
+    const contentsId = contents.id
+    const isCurrentGuest = (): boolean => tab.contents === contents
+      && this.sessions.get(browserSession.sessionId) === browserSession
+      && browserSession.tabs.get(tab.tabId) === tab
+    const interactions = new BrowserPageInteractions(contents, () => { if (isCurrentGuest()) this.emit(browserSession) })
+    const protocol = this.dialogProtocols.get(browserSession.browserSession)
+    const dialogEndpoint = protocol?.register({ contents, current: isCurrentGuest, request: (input, alive, signal) => interactions.requestDialog(input, alive, signal) })
+    tab.interactions = interactions
+    tab.dialogEndpoint = dialogEndpoint
+    const dialogScripts = dialogEndpoint ? new BrowserDialogFrameScripts(debuggerClient, dialogEndpoint.source, (error) => {
+      if (!isCurrentGuest()) return
+      console.warn('[受管浏览器] 无法安装网页提示通道，已停止此页面:', error)
+      dialogScripts?.dispose()
+      dialogEndpoint.dispose()
+      interactions.dispose()
+      tab.contents = null
+      tab.ready = undefined
+      tab.debuggerReady = undefined
+      tab.restoreOnGuestAttach = true
+      tab.state.visible = false
+      tab.state.loading = false
+      tab.state.loadError = '网页提示通道未能安全接入。点击重试可重新打开页面。'
+      this.guestRequests.delete(this.guestKey(browserSession.sessionId, tab.tabId))
+      const released = this.guestManager?.release(browserSession.sessionId, tab.tabId)
+      if (!released && !contents.isDestroyed()) contents.close()
+      this.publishGuestRequests()
+      this.emit(browserSession)
+    }) : undefined
+    tab.dialogScripts = dialogScripts
+    contents.setWindowOpenHandler(({ url }) => {
       if (url === BROWSER_LOCAL_FILE_OPEN_DEFAULT_URL) {
         this.openLocalFileWithDefaultApp(browserSession, tab)
         return { action: 'deny' }
@@ -937,6 +1026,7 @@ export class BrowserController {
       return { action: 'deny' }
     })
     const onDebuggerMessage = (_event: Electron.Event, method: string, rawParams: unknown): void => {
+      if (!isCurrentGuest()) return
       const params = rawParams && typeof rawParams === 'object' ? rawParams as Record<string, unknown> : {}
       const requestId = typeof params.requestId === 'string' ? params.requestId : null
       if (method === 'Network.requestWillBeSent' && requestId) tab.pendingNetworkRequestIds.add(requestId)
@@ -948,8 +1038,27 @@ export class BrowserController {
       }
       if (method === 'Page.frameDetached' && typeof params.frameId === 'string') tab.frameIds.delete(params.frameId)
     }
-    view.webContents.debugger.on('message', onDebuggerMessage)
-    view.webContents.on('will-navigate', (event, url) => {
+    contents.debugger.on('message', onDebuggerMessage)
+    const acknowledgeUserInput = (): void => {
+      const binding = this.guestManager?.getBinding(contentsId)
+      if (!isCurrentGuest() || interactions.snapshot().dialog || !binding || this.agentOperatingTabs.has(`${binding.sessionId}:${binding.tabId}`)
+        || !tab.state.visible || browserSession.sessionId !== this.foregroundSessionId
+        || !this.owner || this.owner.isDestroyed() || !this.owner.isVisible() || !this.owner.isFocused()) return
+      this.markUserBrowserContext(browserSession)
+      if (browserSession.activeTabId !== tab.tabId) this.activateDisplayTab(browserSession, tab)
+      this.owner.webContents.send(AGENT_IPC_CHANNELS.BROWSER_GUEST_FOCUSED, {
+        sessionId: binding.sessionId, tabId: binding.tabId,
+      })
+    }
+    // 页面脚本 focus 不授予 UI 展示权；只接收窗口内真实输入，Agent 的 CDP 输入在操作期间被隔离。
+    contents.on('before-mouse-event', (_event, input) => { if (input.type === 'mouseDown') acknowledgeUserInput() })
+    contents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return
+      acknowledgeUserInput()
+      if (isCurrentGuest() && this.forwardShortcut(input, contentsId)) event.preventDefault()
+    })
+    contents.on('will-navigate', (event, url) => {
+      if (!isCurrentGuest()) { event.preventDefault(); return }
       // 在校验及真正导航前失效，避免 Observe 后在新页面按旧坐标操作。
       this.invalidateTabDocument(tab)
       tab.frameIds.clear()
@@ -972,8 +1081,11 @@ export class BrowserController {
         this.trace(browserSession, tab, 'navigate', '已阻止不安全的页面跳转', 'failed')
       }
     })
-    view.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
-      if (!isMainFrame || this.sessions.get(browserSession.sessionId) !== browserSession || !browserSession.tabs.has(tab.tabId)) return
+    contents.on('did-start-navigation', (details) => {
+      if (isCurrentGuest() && details.isMainFrame && !details.isSameDocument) interactions.resetDocument()
+    })
+    contents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+      if (!isMainFrame || !isCurrentGuest()) return
       // Chromium 失败页的 chrome-error:// URL 不属于受管浏览器地址；只保留导航前
       // 已通过策略的目标，让用户可以直接重试，也避免内部协议进入 BrowserNavigate。
       tab.state.loading = false
@@ -984,7 +1096,8 @@ export class BrowserController {
         : `${errorDescription || '页面加载失败'}（${errorCode}）`
       this.emit(browserSession)
     })
-    view.webContents.on('did-start-loading', () => {
+    contents.on('did-start-loading', () => {
+      if (!isCurrentGuest()) return
       // 新文档会重建 DOM，翻译标记与原文备份随之丢失，翻译态复位。
       tab.state.translated = false
       // 重新开始加载意味着用户已重试或发起了新导航，旧的失败态不应继续遮住页面。
@@ -994,43 +1107,56 @@ export class BrowserController {
       tab.pendingNetworkRequestIds.clear()
       this.updateNavigationState(browserSession, tab)
     })
-    view.webContents.on('did-stop-loading', () => {
+    contents.on('did-stop-loading', () => {
+      if (!isCurrentGuest()) return
       // 导航会重建文档，因而在每次加载完成后重新注入展示层滚动条样式。
-      void view.webContents.insertCSS(PROFER_BROWSER_SCROLLBAR_CSS).catch(() => undefined)
+      void contents.insertCSS(PROFER_BROWSER_SCROLLBAR_CSS).catch(() => undefined)
       this.updateNavigationState(browserSession, tab)
     })
-    view.webContents.on('page-title-updated', () => this.updateNavigationState(browserSession, tab))
-    view.webContents.on('did-navigate', () => { tab.state.loadError = null; this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
-    view.webContents.on('did-navigate-in-page', () => { this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
-    view.webContents.on('destroyed', () => {
-      if (this.sessions.get(browserSession.sessionId) !== browserSession || !browserSession.tabs.has(tab.tabId)) return
-      const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
-      view.webContents.debugger.removeListener('message', onDebuggerMessage)
+    contents.on('page-title-updated', () => { if (isCurrentGuest()) this.updateNavigationState(browserSession, tab) })
+    contents.on('did-navigate', () => { if (!isCurrentGuest()) return; tab.state.loadError = null; this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
+    contents.on('did-navigate-in-page', () => { if (!isCurrentGuest()) return; this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
+    contents.on('render-process-gone', () => {
+      if (tab.contents !== contents || browserSession.tabs.get(tab.tabId) !== tab) return
+      dialogScripts?.dispose()
+      dialogEndpoint?.dispose()
+      interactions.dispose()
+      this.invalidateTabDocument(tab)
+      tab.contents = null
+      tab.ready = undefined
+      tab.restoreOnGuestAttach = true
+      tab.state.loading = false
+      tab.state.visible = false
+      tab.state.loadError = '网页进程已退出。点击重试可重新打开；未保存的页面状态无法恢复。'
+      this.guestRequests.delete(this.guestKey(browserSession.sessionId, tab.tabId))
+      this.guestManager?.release(browserSession.sessionId, tab.tabId)
+      this.publishGuestRequests()
+      this.emit(browserSession)
+    })
+    contents.on('destroyed', () => {
+      dialogScripts?.dispose()
+      dialogEndpoint?.dispose()
+      interactions.dispose()
+      debuggerClient.removeListener('message', onDebuggerMessage)
+      if (this.resettingGuestIds.delete(contentsId)) return
+      if (this.sessions.get(browserSession.sessionId) !== browserSession || browserSession.tabs.get(tab.tabId) !== tab || tab.contents !== contents) return
       this.actionGuards.clearTab(browserSession.sessionId, tab.tabId)
-      browserSession.tabs.delete(tab.tabId)
-      if (browserSession.tabs.size === 0) {
-        // WebContents 可能因 renderer crash 等原因绕过 closeTab。最后一个 tab 消失时仍必须
-        // 从主窗口移除透明 hostView，否则 macOS 会留下永久拦截点击的不可见原生区域。
-        this.disposeSession(browserSession)
-        return
-      }
-      if (browserSession.activeTabId === tab.tabId) this.selectMruActiveTab(browserSession, tab.tabId, closingIndex)
-      browserSession.tabMru = removeMruId(browserSession.tabMru, tab.tabId)
-      if (browserSession.agentTabId === tab.tabId) browserSession.agentTabId = null
+      tab.contents = null
+      tab.ready = undefined
+      tab.restoreOnGuestAttach = true
+      tab.state.visible = false
+      tab.state.loading = false
+      tab.state.loadError = '浏览器页面已结束。点击刷新可重新打开；未保存的页面状态无法恢复。'
+      this.guestRequests.delete(this.guestKey(browserSession.sessionId, tab.tabId))
+      this.publishGuestRequests()
       this.emit(browserSession)
     })
     try {
-      view.webContents.debugger.attach('1.3')
-      void view.webContents.debugger.sendCommand('Page.enable').catch(() => undefined)
-      void view.webContents.debugger.sendCommand('Network.enable').catch(() => undefined)
-    } catch (error) { console.warn('[受管浏览器] CDP attach 失败:', error) }
-    browserSession.tabs.set(tabId, tab)
-    if (!browserSession.activeTabId) {
-      browserSession.activeTabId = tabId
-      browserSession.tabMru = promoteMru(browserSession.tabMru, tabId)
+      debuggerClient.attach('1.3')
+      return Promise.all([debuggerClient.sendCommand('Network.enable'), dialogScripts ? dialogScripts.start() : debuggerClient.sendCommand('Page.enable')]).then(() => undefined)
+    } catch (error) {
+      return Promise.reject(error)
     }
-    if (claimAsAgent) browserSession.agentTabId = tabId
-    return tab
   }
 
   private getOrCreateSession(
@@ -1060,7 +1186,8 @@ export class BrowserController {
    */
   private async cdp(tab: BrowserTabRecord, method: string, params?: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal): Promise<CdpResponse> {
     throwIfBrowserOperationAborted(signal)
-    const debuggerClient = tab.view.webContents.debugger
+    if (tab.debuggerReady) await withBrowserCdpTimeout(() => tab.debuggerReady!, 'Guest.debuggerReady', 8_000, signal)
+    const debuggerClient = this.contents(tab).debugger
     if (!debuggerClient.isAttached()) throw new Error('浏览器调试通道不可用。')
     try {
       return await withBrowserCdpTimeout(
@@ -1070,7 +1197,10 @@ export class BrowserController {
         signal,
       )
     } catch (error) {
+      // 同步网页提示不是调试器卡死。让当前工具返回“待回应”，保留UI等待，绝不重连/取消用户的选择。
+      if (error instanceof BrowserCdpTimeoutError && tab.interactions?.snapshot().dialog) throw new Error('网页正在等待确认。请在对应浏览器页面回应提示，或停止该页操作后再继续。')
       if (error instanceof BrowserCdpTimeoutError) this.recoverDebugger(tab, method)
+      if (error instanceof BrowserOperationAbortedError) tab.interactions?.cancelDialog()
       throw error
     }
   }
@@ -1078,14 +1208,24 @@ export class BrowserController {
   private recoverDebugger(tab: BrowserTabRecord, timedOutMethod: string): void {
     // 重连会使所有 backend node/ref 的有效性不可判定。
     this.invalidateTabDocument(tab)
-    const debuggerClient = tab.view.webContents.debugger
+    tab.interactions?.cancelDialog()
+    const contents = this.contents(tab)
+    const debuggerClient = contents.debugger
     try {
       if (debuggerClient.isAttached()) debuggerClient.detach()
       debuggerClient.attach('1.3')
       tab.frameIds.clear()
       tab.pendingNetworkRequestIds.clear()
-      void debuggerClient.sendCommand('Page.enable').catch(() => undefined)
-      void debuggerClient.sendCommand('Network.enable').catch(() => undefined)
+      const ready = withBrowserCdpTimeout(() => Promise.all([
+        debuggerClient.sendCommand('Network.enable'),
+        tab.dialogScripts ? tab.dialogScripts.start() : debuggerClient.sendCommand('Page.enable'),
+      ]), 'Guest.reconnect', 8_000).then(() => undefined)
+      tab.debuggerReady = ready
+      void ready.catch((error: unknown) => {
+        if (tab.contents !== contents || contents.isDestroyed()) return
+        console.warn('[受管浏览器] 调试通道恢复失败，已结束页面:', error)
+        contents.close()
+      }).finally(() => { if (tab.debuggerReady === ready) tab.debuggerReady = undefined })
       console.warn(`[受管浏览器] CDP ${timedOutMethod} 超时，已重连调试通道。`)
     } catch (error) {
       console.warn(`[受管浏览器] CDP ${timedOutMethod} 超时后无法重连调试通道:`, error)
@@ -1138,22 +1278,6 @@ export class BrowserController {
   }
 
   /**
-   * 跨会话互斥：隐藏除 activeSessionId 外所有会话的原生浏览器 frame 与网页。
-   * 所有原生 View 都叠在 renderer DOM 之上，必须始终保证最多一个会话可见。
-   */
-  private hideOtherBrowserSessions(activeSessionId: string): void {
-    for (const [otherSessionId, otherSession] of this.sessions) {
-      if (otherSessionId === activeSessionId) continue
-      if (otherSession.hostView.getVisible()) otherSession.hostView.setVisible(false)
-      otherSession.lastVisible = false
-      for (const otherTab of otherSession.tabs.values()) {
-        if (otherTab.view.getVisible()) otherTab.view.setVisible(false)
-        if (otherTab.state.visible) otherTab.state.visible = false
-      }
-    }
-  }
-
-  /**
    * 列出当前会话**已经存在**的标签页。
    *
    * 这是严格只读查询：没有会话时返回 exists=false 的空结果，绝不创建 session / tab、
@@ -1179,6 +1303,11 @@ export class BrowserController {
         loading: tab.state.loading,
         zoomFactor: tab.zoomFactor,
         openedByAgent: tab.openedByAgent,
+        visible: tab.state.visible,
+        canGoBack: tab.state.canGoBack,
+        canGoForward: tab.state.canGoForward,
+        translated: tab.state.translated,
+        loadError: tab.state.loadError,
       })),
     })
   }
@@ -1189,132 +1318,31 @@ export class BrowserController {
     if (!tab) throw new Error(`浏览器标签不存在: ${tabId}`)
     const clamped = Math.max(0.5, Math.min(3, Math.round(zoomFactor * 20) / 20))
     tab.zoomFactor = clamped
-    tab.view.webContents.setZoomFactor(clamped)
+    tab.contents?.setZoomFactor(clamped)
     this.emit(browserSession)
     return structuredClone(this.buildState(browserSession))
   }
 
-  setLayout(layout: BrowserViewLayout): void {
-    const browserSession = this.sessions.get(layout.sessionId)
-    if (
-      !browserSession
-      || browserSession.invalidatedLayoutRendererInstanceIds.has(layout.rendererInstanceId)
-      || !Number.isSafeInteger(layout.layoutSourceRevision)
-    ) return
-    const isNewRenderer = browserSession.lastLayoutRendererInstanceId !== layout.rendererInstanceId
-    const isNewLayoutSource = isNewRenderer || layout.layoutSourceRevision !== browserSession.lastLayoutSourceRevision
-    if (!isNewLayoutSource && !shouldApplyBrowserLayoutRevision(browserSession.lastLayoutRevision, layout.revision)) return
-    if (!isNewRenderer && layout.layoutSourceRevision < browserSession.lastLayoutSourceRevision) return
-    if (isNewRenderer && browserSession.lastLayoutRendererInstanceId) {
-      // 顶栏切换标签会卸载旧 BrowserViewport；即使旧 cleanup 晚于新布局抵达，也不能再隐藏新页面。
-      rememberInvalidatedLayoutRenderer(browserSession, browserSession.lastLayoutRendererInstanceId)
-    }
-    browserSession.lastLayoutRendererInstanceId = layout.rendererInstanceId
-    browserSession.lastLayoutSourceRevision = layout.layoutSourceRevision
-    browserSession.lastLayoutRevision = layout.revision
-    const tab = browserSession.tabs.get(layout.tabId ?? browserSession.activeTabId)
-    // 视口卸载与标签关闭可交错，晚到布局不应让 renderer 报错。
-    if (!tab || !this.owner || this.owner.isDestroyed()) {
-      if (this.splitCloseOverlaySessionId === browserSession.sessionId) this.hideSplitCloseOverlay()
-      return
-    }
-
-    const zoomFactor = this.owner.webContents.getZoomFactor()
-    const contentBounds = this.owner.contentView.getBounds()
-    const viewportBounds = resolveBrowserViewportLayout(layout.viewportBounds, zoomFactor, contentBounds)
-    // pageBounds 是 frame 内部局部坐标，不能把 frame 的窗口绝对 x/y 再套进缩放函数。
-    const pageBounds = {
-      x: Math.min(Math.max(0, Math.round(layout.pageBounds.x * zoomFactor)), viewportBounds.width),
-      y: Math.min(Math.max(0, Math.round(layout.pageBounds.y * zoomFactor)), viewportBounds.height),
-      width: Math.max(0, Math.round(layout.pageBounds.width * zoomFactor)),
-      height: Math.max(0, Math.round(layout.pageBounds.height * zoomFactor)),
-    }
-    pageBounds.width = Math.min(pageBounds.width, Math.max(0, viewportBounds.width - pageBounds.x))
-    pageBounds.height = Math.min(pageBounds.height, Math.max(0, viewportBounds.height - pageBounds.y))
-    const visible = layout.visible
-      && browserSession.sessionId === this.foregroundSessionId
-      && hasUsableBrowserBounds(viewportBounds)
-      && hasUsableBrowserBounds(pageBounds)
-      && this.owner.isVisible()
-    const wasVisible = browserSession.lastVisible
-    const pageChanged = !sameBrowserBounds(browserSession.lastPageBounds, pageBounds)
-    // hostView 是 contentView 的直接子节点，必须把 frame 内的 pageBounds 转为窗口绝对坐标。
-    // 之前 hostView 使用完整 viewportBounds：虽然背景透明，macOS 仍把它当作可命中的原生 View，
-    // 于是它覆盖了浏览器 DOM 工具栏、标签栏和关闭按钮。现在 hostView 的命中范围严格收窄到网页。
-    const hostBounds = resolveBrowserPageHostBounds(viewportBounds, pageBounds)
-    const hostChanged = !sameBrowserBounds(browserSession.lastHostBounds, hostBounds)
-
-    // 隐藏后恢复时强制重写网页 frame / page bounds，规避 Chromium 不重合成白屏。
-    if (visible && (hostChanged || !wasVisible)) {
-      browserSession.hostView.setBounds(hostBounds)
-      browserSession.lastHostBounds = { ...hostBounds }
-      browserSession.lastViewportBounds = { ...viewportBounds }
-    }
-    // hostView 不再覆盖整张卡片，不能继续使用整卡片圆角；DOM 卡片负责外层圆角和裁切。
-    if (browserSession.lastViewportRadius !== 0) {
-      browserSession.hostView.setBorderRadius(0)
-      browserSession.lastViewportRadius = 0
-    }
-    for (const other of browserSession.tabs.values()) {
-      const shouldBeVisible = visible && other.tabId === tab.tabId
-      if (other.view.getVisible() !== shouldBeVisible) other.view.setVisible(shouldBeVisible)
-    }
-    if (visible && (pageChanged || !wasVisible)) {
-      // WebContentsView 是 hostView 的子节点，边界必须使用网页区域的局部坐标。
-      tab.view.setBounds({ x: 0, y: 0, width: pageBounds.width, height: pageBounds.height })
-      browserSession.lastPageBounds = { ...pageBounds }
-    }
-    if (visible) this.hideOtherBrowserSessions(layout.sessionId)
-    if (browserSession.hostView.getVisible() !== visible) browserSession.hostView.setVisible(visible)
-    // 原生网页盖住 DOM，分屏右栏的退出浮标必须单独挂在网页上方。
-    this.updateSplitCloseOverlay(browserSession, tab, layout, hostBounds, visible)
-    if (visible && !wasVisible) {
-      try { tab.view.webContents.invalidate() } catch { /* 页面可能已销毁 */ }
-    }
-    browserSession.lastVisible = visible
-    if (tab.state.visible !== visible) { tab.state.visible = visible; this.emit(browserSession) }
-  }
-
-  /** 将指定标签置于前台；复用当前 frame/page 边界，避免等待 renderer layout 往返时仍显示旧页面。 */
   private activateDisplayTab(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): void {
     tab.lastActivityAt = Date.now()
     browserSession.activeTabId = tab.tabId
     browserSession.tabMru = promoteMru(browserSession.tabMru, tab.tabId)
-    for (const other of browserSession.tabs.values()) {
-      if (other.tabId !== tab.tabId) {
-        other.view.setVisible(false)
-        other.state.visible = false
-      }
-    }
-    const pageBounds = browserSession.lastPageBounds
-    if (pageBounds) {
-      tab.view.setBounds({ x: 0, y: 0, width: pageBounds.width, height: pageBounds.height })
-    }
-    tab.view.webContents.setZoomFactor(tab.zoomFactor)
-    const visible = browserSession.sessionId === this.foregroundSessionId
-      && !!browserSession.lastViewportBounds
-      && !!pageBounds
-      && hasUsableBrowserBounds(pageBounds)
-      && !!this.owner
-      && !this.owner.isDestroyed()
-      && this.owner.isVisible()
-    if (visible) this.hideOtherBrowserSessions(browserSession.sessionId)
-    browserSession.hostView.setVisible(visible)
-    tab.view.setVisible(visible)
-    if (visible) {
-      // 标签切换不会重新挂载 BrowserViewport；强制刷新 native 合成，避免只看到背景色。
-      try { tab.view.webContents.invalidate() } catch { /* 页面可能已销毁 */ }
-    }
-    if (tab.state.visible !== visible) tab.state.visible = visible
+    tab.contents?.setZoomFactor(tab.zoomFactor)
     this.emit(browserSession)
   }
 
   private disposeTab(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): void {
     browserSession.tabs.delete(tab.tabId)
+    tab.dialogScripts?.dispose()
+    tab.dialogEndpoint?.dispose()
+    tab.interactions?.dispose()
     this.clearAgentTargetHighlight(tab)
-    try { if (tab.view.webContents.debugger.isAttached()) tab.view.webContents.debugger.detach() } catch { /* 已销毁 */ }
-    try { browserSession.hostView.removeChildView(tab.view) } catch { /* 宿主已销毁 */ }
-    if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
+    const contents = tab.contents
+    try { if (contents?.debugger.isAttached()) contents.debugger.detach() } catch { /* 已销毁 */ }
+    this.guestRequests.delete(this.guestKey(browserSession.sessionId, tab.tabId))
+    const guestReleased = this.guestManager?.release(browserSession.sessionId, tab.tabId) ?? false
+    if (!guestReleased && contents && !contents.isDestroyed()) contents.close()
+    this.publishGuestRequests()
   }
 
   /**
@@ -1347,9 +1375,9 @@ export class BrowserController {
    * 达到上限时回收最久未使用的 Agent 标签。用户创建的标签、当前前台标签和 Agent 当前工作标签
    * 一律保留；若没有安全候选，宁可暂时超过限制也不擅自关闭用户内容。
    */
-  private reclaimExcessAgentTabs(browserSession: BrowserSessionRecord): number {
+  private reclaimExcessAgentTabs(browserSession: BrowserSessionRecord, protectedTabId?: string): number {
     const candidates = [...browserSession.tabs.values()]
-      .filter((tab) => tab.openedByAgent && tab.tabId !== browserSession.activeTabId && tab.tabId !== browserSession.agentTabId)
+      .filter((tab) => tab.openedByAgent && tab.tabId !== browserSession.activeTabId && tab.tabId !== browserSession.agentTabId && tab.tabId !== protectedTabId && !tab.state.visible)
       .sort((left, right) => left.lastActivityAt - right.lastActivityAt)
     let reclaimed = 0
     while (browserSession.tabs.size > MAX_BROWSER_TABS && candidates.length > 0) {
@@ -1361,20 +1389,19 @@ export class BrowserController {
     return reclaimed
   }
 
-  /** Agent 新建工作 tab，并立即切到该标签让用户能看到接下来的操作。 */
-  async createNewTab(sessionId: string, url?: string): Promise<BrowserViewState> {
+  /** Agent 新建后台工作 tab。显示目标只由用户操作或显式跟随策略决定。 */
+  async createNewTab(sessionId: string, url?: string): Promise<BrowserActionResult> {
     // 自己下面就会 createTab，不能让 getOrCreateSession 再补一个空标签
     const browserSession = this.getOrCreateSession(sessionId, [], true, false)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.createTab(browserSession, false, true)
     browserSession.agentTabId = tab.tabId
-    this.activateDisplayTab(browserSession, tab)
     const reclaimed = this.reclaimExcessAgentTabs(browserSession)
     this.trace(browserSession, tab, 'tab', reclaimed > 0
-      ? `Agent 新建并打开工作标签；已回收 ${reclaimed} 个最久未使用的 Agent 标签`
-      : `Agent 新建并打开工作标签 ${tab.tabId}`)
+      ? `Agent 新建后台工作标签；已回收 ${reclaimed} 个最久未使用的 Agent 标签`
+      : `Agent 新建后台工作标签 ${tab.tabId}`)
     if (url?.trim()) return this.navigate(sessionId, url, tab.tabId)
-    return structuredClone(this.buildState(browserSession))
+    return this.buildActionResult(browserSession, tab)
   }
 
   /** 用户在浏览器面板中新建 tab；不会抢占 Agent 的工作 tab。 */
@@ -1403,15 +1430,15 @@ export class BrowserController {
     return structuredClone(this.buildState(browserSession))
   }
 
-  /** Agent 显式切换工作 tab，并同步激活用户可见的前台标签。 */
-  selectAgentTab(sessionId: string, tabId: string): BrowserViewState {
+  /** Agent 显式切换工作 tab，不改变用户正在查看的页面或布局。 */
+  selectAgentTab(sessionId: string, tabId: string): BrowserActionResult {
     const browserSession = this.getSession(sessionId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     browserSession.agentTabId = tab.tabId
-    this.activateDisplayTab(browserSession, tab)
-    this.trace(browserSession, tab, 'tab', `Agent 切换并打开工作标签 ${tab.tabId}`)
-    return structuredClone(this.buildState(browserSession))
+    tab.lastActivityAt = Date.now()
+    this.trace(browserSession, tab, 'tab', `Agent 切换后台工作标签 ${tab.tabId}`)
+    return this.buildActionResult(browserSession, tab)
   }
 
   /** Agent 关闭标签的显式入口；UI 关闭使用 closeTab，不应绕过浏览器风险告知。 */
@@ -1445,9 +1472,28 @@ export class BrowserController {
     baseDir?: string,
     signal?: AbortSignal,
     previewTheme?: ViewerPreviewTheme,
-  ): Promise<BrowserViewState> {
+  ): Promise<BrowserActionResult> {
+    return this.openPreview(sessionId, inputPath, tabId, allowedRoots, baseDir, signal, previewTheme, false)
+  }
+
+  /** UI 显式打开本地文件：使用用户标签，不认领或改动 Agent 工作目标。 */
+  async previewOpenDisplay(sessionId: string, inputPath: string, allowedRoots: string[], previewTheme?: ViewerPreviewTheme): Promise<BrowserViewState> {
+    await this.openPreview(sessionId, inputPath, undefined, allowedRoots, undefined, undefined, previewTheme, true)
+    return structuredClone(this.buildState(this.getSession(sessionId)))
+  }
+
+  private async openPreview(
+    sessionId: string,
+    inputPath: string,
+    tabId: string | undefined,
+    allowedRoots: string[],
+    baseDir: string | undefined,
+    signal: AbortSignal | undefined,
+    previewTheme: ViewerPreviewTheme | undefined,
+    display: boolean,
+  ): Promise<BrowserActionResult> {
     // 同上：下面会按需 createTab（本地预览标签），不再让新会话先补一个空白标签
-    const browserSession = this.getOrCreateSession(sessionId, allowedRoots, true, false)
+    const browserSession = this.getOrCreateSession(sessionId, allowedRoots, !display, false)
     this.assertRiskDisclaimerAcknowledged()
     const resolvedPreviewTheme = resolvePreviewTheme(previewTheme, this.lastKnownPreviewTheme, () =>
       resolveAppThemeIsDark() ? 'dark' : 'light',
@@ -1460,12 +1506,17 @@ export class BrowserController {
     const preview = usesViewerPage
       ? createViewerPreviewUrl(inputPath, browserSession.allowedRoots, baseDir, resolvedPreviewTheme)
       : createAuthorizedPreviewUrl(inputPath, browserSession.allowedRoots, baseDir)
-    const tab = tabId ? this.getAgentTab(browserSession, tabId) : this.createTab(browserSession, true, true)
-    browserSession.agentTabId = tab.tabId
-    this.activateDisplayTab(browserSession, tab)
+    const tab = tabId ? this.getAgentTab(browserSession, tabId) : this.createTab(browserSession, true, !display)
+    if (display) {
+      this.markUserBrowserContext(browserSession)
+      this.activateDisplayTab(browserSession, tab)
+    } else {
+      browserSession.agentTabId = tab.tabId
+    }
     const reclaimed = this.reclaimExcessAgentTabs(browserSession)
     if (reclaimed > 0) this.trace(browserSession, tab, 'tab', `已回收 ${reclaimed} 个最久未使用的 Agent 标签以保持最多 ${MAX_BROWSER_TABS} 个标签`)
-    return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
+    const operationSignal = display ? undefined : signal ?? browserSession.agentAbortController.signal
+    return this.runTabOperation(browserSession, tab, operationSignal, async (operationSignal) => {
       tab.isLocalPreview = true
       tab.localFilePath = preview.filePath
       // HTML 直接加载文件本身，主题不在它的 URL 里 —— 写 null 表示"这个标签不跟随主题"
@@ -1477,7 +1528,7 @@ export class BrowserController {
         await this.loadUrl(tab, preview.url, operationSignal)
         this.trace(browserSession, tab, 'navigate', `预览本地文件 ${preview.filePath.split(/[\\/]/).pop() ?? preview.filePath}`, 'verified')
         this.updateNavigationState(browserSession, tab)
-        return structuredClone(this.buildState(browserSession))
+        return this.buildActionResult(browserSession, tab)
       } catch (error) {
         this.trace(browserSession, tab, 'navigate', error instanceof BrowserOperationAbortedError ? '本地预览已停止，结果未知' : '本地预览加载失败', error instanceof BrowserOperationAbortedError ? 'unknown' : 'failed')
         throw error
@@ -1487,7 +1538,9 @@ export class BrowserController {
 
   private async loadUrl(tab: BrowserTabRecord, url: string, signal?: AbortSignal): Promise<void> {
     throwIfBrowserOperationAborted(signal)
-    const contents = tab.view.webContents
+    const contents = this.contents(tab)
+    // 对话框等待时不让旧脚本阻塞明确的新导航；取消不是接受。
+    tab.interactions?.cancelDialog()
     // loadURL 的 Promise 可能要等到子资源全部完成；页面主框架已经可用时就应
     // 立即结束 BrowserNavigate，否则一个慢字体/CDN 会被误报为协议或导航失败。
     await withBrowserCdpTimeout(() => new Promise<void>((resolve, reject) => {
@@ -1506,8 +1559,11 @@ export class BrowserController {
         // Electron 的 did-navigate 只针对主框架触发；子框架应使用 did-frame-navigate。
         finish(resolve)
       }
-      const onFail = (_event: Electron.Event, errorCode: number, description: string, _validatedURL: string, isMainFrame: boolean): void => {
-        if (isMainFrame) finish(() => reject(new Error(`页面导航失败（${errorCode}）：${description}`)))
+      const onFail = (_event: Electron.Event, errorCode: number, description: string, validatedURL: string, isMainFrame: boolean): void => {
+        // Stop/新导航的旧ERR_ABORTED可能迟到；loadURL自身Promise负责本次取消。
+        // 共享did-fail-load只能消费属于本目标的失败，不能误伤紧接着打开的新页面。
+        if (!isMainFrame || errorCode === -3 || (validatedURL && validatedURL !== url)) return
+        finish(() => reject(new Error(`页面导航失败（${errorCode}）：${description}`)))
       }
       contents.on('did-navigate', onNavigate)
       contents.on('did-fail-load', onFail)
@@ -1515,12 +1571,13 @@ export class BrowserController {
     }), 'Page.navigate', BROWSER_OBSERVE_TIMEOUT_MS + 3_000, signal)
   }
 
-  async navigate(sessionId: string, url: string, tabId?: string, signal?: AbortSignal): Promise<BrowserViewState> {
+  async navigate(sessionId: string, url: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     const browserSession = this.getOrCreateSession(sessionId, [])
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     const safeUrl = await assertSafeBrowserDestination(url)
     tab.lastRequestedUrl = safeUrl
+    tab.restoreOnGuestAttach = false
     const host = new URL(safeUrl).host
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
       tab.isLocalPreview = false
@@ -1533,7 +1590,7 @@ export class BrowserController {
         await this.loadUrl(tab, safeUrl, operationSignal)
         this.trace(browserSession, tab, 'navigate', `已打开 ${host}`, 'verified')
         this.updateNavigationState(browserSession, tab)
-        return structuredClone(this.buildState(browserSession))
+        return this.buildActionResult(browserSession, tab)
       } catch (error) {
         this.trace(browserSession, tab, 'navigate', error instanceof BrowserOperationAbortedError ? `打开 ${host} 已停止，结果未知` : `无法打开 ${host}`, error instanceof BrowserOperationAbortedError ? 'unknown' : 'failed')
         throw error
@@ -1546,6 +1603,11 @@ export class BrowserController {
    * Electron 的 window.open handler 是同步的，因此先拒绝原生弹窗，再异步完成 DNS 安全校验并新建标签。
    */
   private async openExternalLinkInDisplayTab(browserSession: BrowserSessionRecord, sourceTab: BrowserTabRecord, url: string): Promise<void> {
+    const sourceWasDisplayed = !this.agentOperatingTabs.has(`${browserSession.sessionId}:${sourceTab.tabId}`)
+      && browserSession.activeTabId === sourceTab.tabId
+      && sourceTab.state.visible
+      && browserSession.sessionId === this.foregroundSessionId
+      && !!this.owner && !this.owner.isDestroyed() && this.owner.isVisible() && this.owner.isFocused()
     let safeUrl: string
     try {
       safeUrl = await assertSafeBrowserDestination(url)
@@ -1557,8 +1619,18 @@ export class BrowserController {
     // 链接点击后标签/会话可能已被用户关闭，不能在已销毁的上下文中创建 view。
     if (this.sessions.get(browserSession.sessionId) !== browserSession || !browserSession.tabs.has(sourceTab.tabId)) return
 
-    const tab = this.createTab(browserSession)
-    this.activateDisplayTab(browserSession, tab)
+    const shouldDisplay = sourceWasDisplayed
+      && !this.agentOperatingTabs.has(`${browserSession.sessionId}:${sourceTab.tabId}`)
+      && browserSession.activeTabId === sourceTab.tabId
+      && sourceTab.state.visible
+      && browserSession.sessionId === this.foregroundSessionId
+      && !!this.owner && !this.owner.isDestroyed() && this.owner.isVisible() && this.owner.isFocused()
+    // 后台页的新窗口链接继承后台来源，但不改变工作指针或用户显示目标。
+    const previousAgentTabId = browserSession.agentTabId
+    const tab = this.createTab(browserSession, false, !shouldDisplay)
+    browserSession.agentTabId = previousAgentTabId
+    if (shouldDisplay) this.activateDisplayTab(browserSession, tab)
+    this.reclaimExcessAgentTabs(browserSession, tab.tabId)
     tab.lastRequestedUrl = safeUrl
     const host = new URL(safeUrl).host
     try {
@@ -1585,7 +1657,9 @@ export class BrowserController {
     const tab = this.getDisplayTab(browserSession, tabId)
     const safeUrl = await assertSafeBrowserDestination(url)
     tab.lastRequestedUrl = safeUrl
+    tab.restoreOnGuestAttach = false
     const host = new URL(safeUrl).host
+    tab.interactions?.cancelDialog()
     return this.runTabOperation(browserSession, tab, undefined, async () => {
       tab.isLocalPreview = false
       tab.localFilePath = null
@@ -1597,7 +1671,7 @@ export class BrowserController {
         await this.loadUrl(tab, safeUrl)
         this.trace(browserSession, tab, 'navigate', `已打开 ${host}`, 'verified')
         this.updateNavigationState(browserSession, tab)
-        return structuredClone(this.buildState(browserSession))
+        return structuredClone(this.buildPageProjection(browserSession, tab))
       } catch (error) {
         this.trace(browserSession, tab, 'navigate', `无法打开 ${host}`, 'failed')
         throw error
@@ -1605,60 +1679,126 @@ export class BrowserController {
     })
   }
 
-  async goBack(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserViewState> {
+  async goBack(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     const browserSession = this.getOrCreateSession(sessionId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
       throwIfBrowserOperationAborted(operationSignal)
-      if (!tab.view.webContents.canGoBack()) throw new Error('当前标签没有可后退的导航记录。')
-      tab.view.webContents.goBack()
+      if (!this.contents(tab).canGoBack()) throw new Error('当前标签没有可后退的导航记录。')
+      this.contents(tab).goBack()
       this.updateNavigationState(browserSession, tab)
       this.trace(browserSession, tab, 'navigate', 'Agent 后退页面', 'dispatched')
-      return structuredClone(this.buildState(browserSession))
+      return this.buildActionResult(browserSession, tab)
     })
   }
 
-  async goBackDisplay(sessionId: string): Promise<BrowserViewState> {
-    const browserSession = this.getOrCreateSession(sessionId)
-    return this.goBack(sessionId, this.getDisplayTab(browserSession).tabId)
+  async goBackDisplay(sessionId: string, tabId?: string): Promise<BrowserViewState> {
+    return this.navigateDisplayHistory(sessionId, 'back', tabId)
   }
 
-  async goForward(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserViewState> {
+  async goForward(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     const browserSession = this.getOrCreateSession(sessionId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
       throwIfBrowserOperationAborted(operationSignal)
-      if (!tab.view.webContents.canGoForward()) throw new Error('当前标签没有可前进的导航记录。')
-      tab.view.webContents.goForward()
+      if (!this.contents(tab).canGoForward()) throw new Error('当前标签没有可前进的导航记录。')
+      this.contents(tab).goForward()
       this.updateNavigationState(browserSession, tab)
       this.trace(browserSession, tab, 'navigate', 'Agent 前进页面', 'dispatched')
-      return structuredClone(this.buildState(browserSession))
+      return this.buildActionResult(browserSession, tab)
     })
   }
 
-  async goForwardDisplay(sessionId: string): Promise<BrowserViewState> {
-    const browserSession = this.getOrCreateSession(sessionId)
-    return this.goForward(sessionId, this.getDisplayTab(browserSession).tabId)
+  async goForwardDisplay(sessionId: string, tabId?: string): Promise<BrowserViewState> {
+    return this.navigateDisplayHistory(sessionId, 'forward', tabId)
   }
 
-  async reload(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserViewState> {
+  async reload(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     const browserSession = this.getOrCreateSession(sessionId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
       throwIfBrowserOperationAborted(operationSignal)
-      tab.view.webContents.reload()
+      this.contents(tab).reload()
       this.updateNavigationState(browserSession, tab)
       this.trace(browserSession, tab, 'navigate', 'Agent 刷新页面', 'dispatched')
-      return structuredClone(this.buildState(browserSession))
+      return this.buildActionResult(browserSession, tab)
     })
   }
 
-  async reloadDisplay(sessionId: string): Promise<BrowserViewState> {
-    const browserSession = this.getOrCreateSession(sessionId)
-    return this.reload(sessionId, this.getDisplayTab(browserSession).tabId)
+  /** 查找、停止与对话框响应不排入 Agent 页面命令队列，避免网页等待确认时无法操作 UI。 */
+  async findDisplay(sessionId: string, tabId: string, input: import('@profer/shared').BrowserFindInput): Promise<void> {
+    const browserSession = this.getSession(sessionId)
+    const tab = this.getDisplayTab(browserSession, tabId)
+    if (!tab.isLocalPreview) this.assertRiskDisclaimerAcknowledged()
+    await this.prepareTab(browserSession, tab)
+    if (!tab.interactions) throw new Error('页面查找暂不可用。')
+    tab.interactions.find(input)
+  }
+
+  clearFindDisplay(sessionId: string, tabId: string): void {
+    this.getDisplayTab(this.getSession(sessionId), tabId).interactions?.clearFind()
+  }
+
+  stopDisplay(sessionId: string, tabId: string): BrowserViewState {
+    const browserSession = this.getSession(sessionId)
+    const tab = this.getDisplayTab(browserSession, tabId)
+    tab.interactions?.cancelDialog()
+    if (tab.contents && !tab.contents.isDestroyed()) tab.contents.stop()
+    tab.state.loading = false
+    this.invalidateTabDocument(tab)
+    this.emit(browserSession)
+    return structuredClone(this.buildPageProjection(browserSession, tab))
+  }
+
+  /**
+   * 读取展示标签已落定的地址，供「在系统浏览器打开」使用。
+   * 严格只读：不创建会话、不改变前台所有权；空标签、about:blank 与本地文件预览（非 HTTP(S)）返回 null。
+   */
+  getDisplayUrl(sessionId: string, tabId?: string): string | null {
+    const browserSession = this.sessions.get(sessionId)
+    if (!browserSession) return null
+    const tab = tabId ? browserSession.tabs.get(tabId) : browserSession.tabs.get(browserSession.activeTabId)
+    const url = tab?.state.url?.trim()
+    if (!url || !/^https?:\/\//i.test(url)) return null
+    return url
+  }
+
+  async respondToDialog(sessionId: string, tabId: string, input: import('@profer/shared').BrowserDialogResponse): Promise<void> {
+    const tab = this.getDisplayTab(this.getSession(sessionId), tabId)
+    if (!tab.isLocalPreview) this.assertRiskDisclaimerAcknowledged()
+    if (!tab.state.visible || sessionId !== this.foregroundSessionId || !this.owner || this.owner.isDestroyed() || !this.owner.isVisible()) throw new Error('请先打开对应网页面板，再回应网页提示。')
+    if (!tab.interactions) throw new Error('网页对话框已结束。')
+    await tab.interactions.respond(input)
+  }
+
+  async reloadDisplay(sessionId: string, tabId?: string): Promise<BrowserViewState> {
+    return this.navigateDisplayHistory(sessionId, 'reload', tabId)
+  }
+
+  /** 用户历史导航不接入 Agent 的取消源，也不冒充 Agent popup/操作来源。 */
+  private async navigateDisplayHistory(sessionId: string, action: 'back' | 'forward' | 'reload', tabId?: string): Promise<BrowserViewState> {
+    const browserSession = this.getSession(sessionId)
+    this.assertRiskDisclaimerAcknowledged()
+    this.markUserBrowserContext(browserSession)
+    const tab = this.getDisplayTab(browserSession, tabId)
+    // 用户明确导航须先取消旧提示，再排队；不能等到被旧脚本阻塞的命令队列内部。
+    tab.interactions?.cancelDialog()
+    return this.runTabOperation(browserSession, tab, undefined, async () => {
+      const contents = this.contents(tab)
+      if (action === 'back') {
+        if (!contents.canGoBack()) throw new Error('当前标签没有可后退的导航记录。')
+        contents.goBack()
+      } else if (action === 'forward') {
+        if (!contents.canGoForward()) throw new Error('当前标签没有可前进的导航记录。')
+        contents.goForward()
+      } else contents.reload()
+      this.updateNavigationState(browserSession, tab)
+      this.trace(browserSession, tab, 'navigate', action === 'back' ? '用户后退页面' : action === 'forward' ? '用户前进页面' : '用户刷新页面', 'dispatched')
+      return structuredClone(this.buildPageProjection(browserSession, tab))
+    })
   }
 
   /**
@@ -1676,6 +1816,7 @@ export class BrowserController {
     }
     const tab = this.getDisplayTab(browserSession, tabId)
     return this.enqueueTab(tab, async () => {
+      await this.prepareTab(browserSession, tab)
       try {
         if (tab.state.translated) {
           await this.evalPage(tab, BUILD_RESTORE_SCRIPT)
@@ -1983,7 +2124,7 @@ export class BrowserController {
     return result?.value === true && !response.exceptionDetails
   }
 
-  async click(sessionId: string, ref: string, tabId?: string, signal?: AbortSignal): Promise<BrowserViewState> {
+  async click(sessionId: string, ref: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     const browserSession = this.getOrCreateSession(sessionId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
@@ -2033,7 +2174,7 @@ export class BrowserController {
         : status === 'unknown'
           ? `点击 ${target.label} 结果未知，请重新观察`
           : `点击 ${target.label} 未发送`, status)
-      return structuredClone(this.buildState(browserSession))
+      return this.buildActionResult(browserSession, tab)
     })
   }
 
@@ -2052,7 +2193,7 @@ export class BrowserController {
     if (!axPropertyBoolean(current, 'focused')) throw new Error('无法聚焦目标字段，请重新观察页面后重试。')
   }
 
-  async fill(sessionId: string, ref: string, text: string, tabId?: string, signal?: AbortSignal): Promise<BrowserViewState> {
+  async fill(sessionId: string, ref: string, text: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     if (text.length > 10_000) throw new Error('单次输入不能超过 10000 个字符。')
     const browserSession = this.getOrCreateSession(sessionId)
     this.assertRiskDisclaimerAcknowledged()
@@ -2092,11 +2233,11 @@ export class BrowserController {
         throw new Error(`输入未完全生效：目标字段当前值为「${current.slice(0, 40)}」（已脱敏），期望「${expected.slice(0, 40)}」。已尝试回写，请重新观察页面后重试。`)
       }
       this.trace(browserSession, tab, 'fill', `在 ${target.label} 输入 ${charCount} 个字符（已脱敏）${usedFallback ? '，已通过回写生效' : ''}`, 'verified')
-      return structuredClone(this.buildState(browserSession))
+      return this.buildActionResult(browserSession, tab)
     })
   }
 
-  async press(sessionId: string, key: string, tabId?: string, signal?: AbortSignal): Promise<BrowserViewState> {
+  async press(sessionId: string, key: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     const action = parseBrowserPressAction(key)
     const browserSession = this.getOrCreateSession(sessionId)
     this.assertRiskDisclaimerAcknowledged()
@@ -2110,7 +2251,7 @@ export class BrowserController {
         await this.cdp(tab, 'Input.insertText', { text: action.text }, undefined, operationSignal)
         this.trace(browserSession, tab, 'press', `输入 ${Array.from(action.text).length} 个字符（已脱敏）`, 'dispatched')
       }
-      return structuredClone(this.buildState(browserSession))
+      return this.buildActionResult(browserSession, tab)
     })
   }
 
@@ -2192,6 +2333,7 @@ export class BrowserController {
     }
     const tab = this.getDisplayTab(browserSession, tabId)
     return this.enqueueTab(tab, async () => {
+      await this.prepareTab(browserSession, tab)
       try {
         const text = electronClipboard.readText()
         if (!text) return { translated: false, error: '系统剪贴板当前没有文本。' }
@@ -2230,7 +2372,7 @@ export class BrowserController {
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
       throwIfBrowserOperationAborted(operationSignal)
-      const image = await withBrowserCdpTimeout(() => tab.view.webContents.capturePage(), 'Page.captureScreenshot', BROWSER_OBSERVE_TIMEOUT_MS + 3_000, operationSignal)
+      const image = await withBrowserCdpTimeout(() => this.contents(tab).capturePage(undefined, { stayHidden: true }), 'Page.captureScreenshot', BROWSER_OBSERVE_TIMEOUT_MS + 3_000, operationSignal)
       throwIfBrowserOperationAborted(operationSignal)
       // 视图隐藏/零尺寸/尚未渲染时 capturePage 会「成功」返回空 NativeImage。
       // 空图一旦作为成功结果进入会话历史，部分模型上游收到带空 data 的 image part 会挂起直到
@@ -2251,81 +2393,23 @@ export class BrowserController {
     })
   }
 
-  /**
-   * 立即隐藏会话的全部原生视图，但不销毁网页、Cookie 或标签状态。
-   * BrowserViewport 的 effect cleanup 是异步 IPC：在 React 卸载前，WebContentsView 仍会盖在
-   * renderer 上。面板关闭动作必须同步走这条主进程路径，避免页面视觉残留。
-   */
   hide(sessionId: string): void {
-    // 隐藏是当前会话的面板动作，不等于失去前台所有权；保留 ownership，
-    // 这样用户再次点击打开时，新的 BrowserViewport layout 可以正常显示视图。
     const browserSession = this.sessions.get(sessionId)
     if (!browserSession) return
-    if (this.splitCloseOverlaySessionId === sessionId) this.hideSplitCloseOverlay()
-    browserSession.lastVisible = false
-    browserSession.hostView.setVisible(false)
-    for (const tab of browserSession.tabs.values()) {
-      tab.view.setVisible(false)
-      tab.state.visible = false
-    }
+    for (const tab of browserSession.tabs.values()) tab.state.visible = false
   }
 
-  /**
-   * 隐藏所有会话的原生浏览器视图，但不销毁网页/标签/Cookie。
-   * 用于 renderer 刷新（Ctrl/Cmd+R）等场景：此时 renderer 即将重建，内存 atom 会清空，
-   * 不再有 BrowserViewport 去 setLayout 定位/隐藏原生 view；若不在此刻隐藏，主窗口重新显示后
-   * 旧会话的网页会裸奔在旧位置，脱离浏览器容器、不再受控。
-   */
-  hideAll(invalidateLayoutSources = true): void {
-    this.hideSplitCloseOverlay()
+  /** 宿主刷新时 guest 会由 Electron 销毁；保留标签元数据，重开按公开生命周期重建。 */
+  hideAll(_invalidateLayoutSources = true): void {
     this.foregroundSessionId = null
-    for (const browserSession of this.sessions.values()) {
-      if (invalidateLayoutSources && browserSession.lastLayoutRendererInstanceId) {
-        rememberInvalidatedLayoutRenderer(browserSession, browserSession.lastLayoutRendererInstanceId)
-        browserSession.lastLayoutRendererInstanceId = null
-        browserSession.lastLayoutSourceRevision = 0
-        browserSession.lastLayoutRevision = 0
-      }
-      browserSession.lastVisible = false
-      browserSession.hostView.setVisible(false)
-      for (const tab of browserSession.tabs.values()) {
-        tab.view.setVisible(false)
-        tab.state.visible = false
-      }
-    }
+    for (const browserSession of this.sessions.values()) this.hide(browserSession.sessionId)
   }
 
-  /**
-   * 销毁浏览器 session 的唯一出口。必须先隐藏、再从主窗口移除 hostView；仅从 sessions Map
-   * 删除记录并不会移除 Electron 原生 View，透明残留仍会在 macOS 上参与 hit-test。
-   *
-   * 注意：foregroundSessionId 表示当前前台 Agent 会话，不是浏览器 session 的存活状态。
-   * 关闭最后一个浏览器标签后必须保留该所有权，否则同一 Agent 会话重新打开浏览器时，
-   * renderer 不会发生会话切换，新的 layout 会永久被判定为后台而没有画面。
-   */
   private disposeSession(browserSession: BrowserSessionRecord): void {
     if (this.sessions.get(browserSession.sessionId) !== browserSession) return
-    if (this.splitCloseOverlaySessionId === browserSession.sessionId) this.hideSplitCloseOverlay()
-    if (this.splitCloseOverlay) {
-      try { browserSession.hostView.removeChildView(this.splitCloseOverlay) } catch { /* 不是子节点 */ }
-    }
-    this.actionGuards.clearSession(browserSession.sessionId)
     this.sessions.delete(browserSession.sessionId)
-    browserSession.lastVisible = false
-    try {
-      // 即使 removeChildView 因窗口销毁竞态失败，也把命中区域先收敛为零，避免留下透明死区。
-      browserSession.hostView.setVisible(false)
-      browserSession.hostView.setBounds({ x: 0, y: 0, width: 0, height: 0 })
-    } catch { /* 宿主已销毁 */ }
-    for (const tab of browserSession.tabs.values()) {
-      this.clearAgentTargetHighlight(tab)
-      try { tab.view.setVisible(false) } catch { /* 视图已销毁 */ }
-      try { if (tab.view.webContents.debugger.isAttached()) tab.view.webContents.debugger.detach() } catch { /* 已销毁 */ }
-      try { browserSession.hostView.removeChildView(tab.view) } catch { /* 宿主已销毁 */ }
-      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
-    }
-    browserSession.tabs.clear()
-    try { this.owner?.contentView.removeChildView(browserSession.hostView) } catch { /* owner 已销毁 */ }
+    this.actionGuards.clearSession(browserSession.sessionId)
+    for (const tab of [...browserSession.tabs.values()]) this.disposeTab(browserSession, tab)
   }
 
   async close(sessionId: string): Promise<void> {
@@ -2338,6 +2422,17 @@ export class BrowserController {
     this.foregroundSessionId = null
     for (const sessionId of [...this.sessions.keys()]) void this.close(sessionId)
     this.configurations.clear()
+    this.agentOperatingTabs.clear()
+    if (this.owner && !this.owner.isDestroyed()) {
+      this.resetGuestHost()
+      this.owner.webContents.removeListener('before-input-event', this.onOwnerShortcutInput)
+      this.owner.webContents.removeListener('did-start-navigation', this.onOwnerDidStartNavigation)
+      this.owner.webContents.removeListener('did-finish-load', this.onOwnerDidFinishLoad)
+      this.owner.webContents.removeListener('render-process-gone', this.onOwnerRenderProcessGone)
+    }
+    this.guestManager?.dispose()
+    this.guestManager = null
+    this.guestRequests.clear()
     this.owner = null
   }
 }

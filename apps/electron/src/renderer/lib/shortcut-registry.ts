@@ -5,6 +5,7 @@
  * 所有快捷键监听集中在一处，避免多个 addEventListener 分散注册。
  */
 
+import type { BrowserShortcutBinding } from '@profer/shared'
 import { DEFAULT_SHORTCUTS, SHORTCUT_MAP } from './shortcut-defaults'
 import type { ShortcutOverrides } from './shortcut-defaults'
 import { isEditableTarget } from './navigation-controller'
@@ -45,6 +46,34 @@ let initialized = false
  * 计数而非布尔：多个录制器并发挂起时，需全部释放后才恢复分发。
  */
 let suppressionCount = 0
+const registryListeners = new Set<() => void>()
+const notifyRegistry = (): void => { for (const listener of registryListeners) listener() }
+
+/** 原生 guest 使用同一组有效命令，不转发页面编辑组合键。 */
+export function getRegisteredShortcutBindings(): BrowserShortcutBinding[] {
+  if (suppressionCount > 0) return []
+  const nativeEditKeys = new Set(['c', 'v', 'x', 'a', 'z', 'y'])
+  return [...parsedCache].filter(([id, parsed]) => (handlers.get(id)?.size ?? 0) > 0
+      && !SHORTCUT_MAP.get(id)?.readonly && (!SHORTCUT_MAP.get(id)?.skipInEditable || id === 'browser-stop') && id !== 'close-tab'
+      && !((parsed.cmd || parsed.ctrl) && !parsed.alt && nativeEditKeys.has(parsed.key)))
+    .map(([id, parsed]) => ({ id, key: parsed.key, meta: parsed.cmd, control: parsed.ctrl, shift: parsed.shift, alt: parsed.alt }))
+}
+
+export function subscribeShortcutRegistry(listener: () => void): () => void {
+  registryListeners.add(listener)
+  return () => { registryListeners.delete(listener) }
+}
+
+/** 菜单与 guest 只按已知 ID 分发，不合成键盘事件。 */
+export function invokeRegisteredShortcut(id: string): boolean {
+  if (suppressionCount > 0) return false
+  const entries = [...(handlers.get(id) ?? [])]
+  if (!entries.length) return false
+  const exclusive = [...entries].reverse().find(entry => entry.options.exclusive)
+  if (exclusive) exclusive.callback()
+  else for (const entry of entries) entry.callback()
+  return true
+}
 
 // ===== 快捷键匹配 =====
 
@@ -128,7 +157,7 @@ function matchesParsed(e: KeyboardEvent, parsed: ParsedAccelerator): boolean {
   // 修饰键匹配
   if (parsed.cmd !== e.metaKey) return false
   if (parsed.ctrl !== e.ctrlKey) return false
-  if (parsed.shift !== e.shiftKey) return false
+  if (parsed.shift !== e.shiftKey && !(parsed.key === '=' && !parsed.shift && ['+', '='].includes(e.key))) return false
   if (parsed.alt !== e.altKey) return false
 
   // 按键匹配
@@ -137,7 +166,8 @@ function matchesParsed(e: KeyboardEvent, parsed: ParsedAccelerator): boolean {
   }
 
   const eventKey = normalizeKeyName(e.key)
-  return eventKey === parsed.key
+  return eventKey === parsed.key || (parsed.key === '=' && ['plus', 'add', 'numadd'].includes(eventKey))
+    || (parsed.key === '-' && ['subtract', 'numsub'].includes(eventKey))
 }
 
 // ===== 预计算加速器缓存 =====
@@ -297,12 +327,14 @@ export function registerShortcut(
   }
   const entry: ShortcutHandlerEntry = { callback, options }
   handlers.get(id)!.add(entry)
+  notifyRegistry()
 
   return () => {
     const set = handlers.get(id)
     if (set) {
       set.delete(entry)
       if (set.size === 0) handlers.delete(id)
+      notifyRegistry()
     }
   }
 }
@@ -316,8 +348,10 @@ export function registerShortcut(
  */
 export function suppressShortcutDispatch(): () => void {
   suppressionCount += 1
+  notifyRegistry()
   return () => {
     suppressionCount = Math.max(0, suppressionCount - 1)
+    notifyRegistry()
   }
 }
 
@@ -329,6 +363,7 @@ export function suppressShortcutDispatch(): () => void {
 export function updateShortcutOverrides(overrides: ShortcutOverrides): void {
   currentOverrides = overrides
   rebuildCache()
+  notifyRegistry()
 }
 
 /**

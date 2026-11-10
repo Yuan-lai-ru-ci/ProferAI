@@ -32,9 +32,16 @@ function snapshot(overrides: Partial<BrowserPushSnapshot>): BrowserPushSnapshot 
 }
 
 describe('浏览器状态推送自动打开门禁', () => {
-  test('Given Agent 导航或新建标签 When 收到状态推送 Then 自动打开浏览器面板', () => {
-    expect(shouldAutoOpenBrowserFromPush(snapshot({ activity: trace('navigate') }))).toBe(true)
-    expect(shouldAutoOpenBrowserFromPush(snapshot({ activity: trace('tab') }))).toBe(true)
+  test('Given Agent 导航或新建标签 When 默认收到状态推送 Then 保持后台静默', () => {
+    expect(shouldAutoOpenBrowserFromPush(snapshot({ activity: trace('navigate') }))).toBe(false)
+    expect(shouldAutoOpenBrowserFromPush(snapshot({ activity: trace('tab') }))).toBe(false)
+  })
+
+  test('Given 用户明确启用跟随 When Agent 导航或新建标签 Then 允许展示', () => {
+    expect(shouldAutoOpenBrowserFromPush(snapshot({ activity: trace('navigate') }), true)).toBe(true)
+    expect(shouldAutoOpenBrowserFromPush(snapshot({ activity: trace('tab') }), true)).toBe(true)
+    expect(shouldAutoOpenBrowserFromPush(snapshot({ activity: trace('observe') }), true)).toBe(false)
+    expect(shouldAutoOpenBrowserFromPush(snapshot({ agentTabId: null }), true)).toBe(false)
   })
 
   test('Given 只读动作 When 收到状态推送 Then 不打开浏览器面板', () => {

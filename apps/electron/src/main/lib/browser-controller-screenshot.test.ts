@@ -16,10 +16,7 @@ function harness(capturePage: () => Promise<unknown>) {
     tabId: 'tab-1',
     commandTail: Promise.resolve(),
     lastActivityAt: 0,
-    view: {
-      webContents: { capturePage },
-      setVisible: () => undefined,
-    },
+    contents: { capturePage, isDestroyed: () => false },
     state: { url: 'profer-file://plugin/index.html', title: '', trace: [] as unknown[], visible: true },
   }
   const browserSession = {
@@ -36,6 +33,20 @@ function harness(capturePage: () => Promise<unknown>) {
   internals.sessions.set(browserSession.sessionId, browserSession)
   return { controller, tab }
 }
+
+test('Given 后台截图 When 请求 capturePage Then 保持隐藏且不唤起窗口', async () => {
+  const args: unknown[][] = []
+  const { controller } = harness(async (...input: unknown[]) => {
+    args.push(input)
+    return {
+      isEmpty: () => false,
+      toPNG: () => Buffer.from('test-png'),
+      getSize: () => ({ width: 800, height: 600 }),
+    }
+  })
+  await controller.screenshot('session-1')
+  expect(args).toEqual([[undefined, { stayHidden: true }]])
+})
 
 test('capturePage 返回空图像时截图必须报错，不能产出空 image 工具结果', async () => {
   const { controller } = harness(async () => ({

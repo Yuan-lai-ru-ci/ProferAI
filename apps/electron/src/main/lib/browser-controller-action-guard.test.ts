@@ -47,10 +47,7 @@ function harness(label = 'button「打开菜单」', options: { delayedFeedback?
       zoomFactor: 1, translated: false, loadError: null, trace: [],
     },
     lastActivityAt: 0,
-    view: {
-      webContents: { debugger: debuggerClient, isDestroyed: () => false },
-      setVisible: () => undefined,
-    },
+    contents: { debugger: debuggerClient, isDestroyed: () => false },
   }
   const browserSession = {
     sessionId: 'session-1', tabs: new Map([[tab.tabId, tab]]), activeTabId: tab.tabId,
