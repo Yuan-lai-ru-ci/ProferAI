@@ -1608,7 +1608,7 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
     sdk.defineTool({
       name: 'BrowserPreviewOpen',
       label: '打开本地文件预览',
-      description: 'Open an authorized local file (HTML, or any format the built-in viewer supports: documents, archives, designs, 3D, GIS, media) in a dedicated, visible in-app browser tab. HTML files load directly; other extensions render through the built-in viewer page. This is read-only preview access; do not use it to read arbitrary local files.',
+      description: 'Open an authorized local file (HTML, or any format the built-in viewer supports: documents, archives, designs, 3D, GIS, media) in a dedicated background in-app browser tab; this does not open or switch the user panel. HTML files load directly; other extensions render through the built-in viewer page. This is read-only preview access; do not use it to read arbitrary local files.',
       parameters: Type.Object({ path: Type.String({ description: 'Absolute or current-workspace-relative path to an HTML file or directory with index.html.' }), tabId: Type.Optional(Type.String({ description: 'Optional tab id.' })) }),
       async execute(_id, params, signal?: AbortSignal) {
         const args = params as Record<string, unknown>
@@ -1632,7 +1632,7 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
     sdk.defineTool({
       name: 'BrowserNewTab',
       label: '新建浏览器标签',
-      description: 'Create a new Agent working tab and activate it in the visible in-app browser. Optionally navigate it to a public HTTP/HTTPS URL.',
+      description: 'Create a new background Agent working tab without opening or switching the user browser panel. Optionally navigate it to a public HTTP/HTTPS URL.',
       parameters: Type.Object({ url: Type.Optional(Type.String({ description: 'Optional public HTTP/HTTPS URL.' })) }),
       async execute(_id, params) {
         const url = typeof (params as Record<string, unknown>).url === 'string' ? (params as Record<string, string>).url : undefined
@@ -1642,7 +1642,7 @@ function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefiniti
     sdk.defineTool({
       name: 'BrowserSelectTab',
       label: '切换浏览器标签',
-      description: 'Switch the Agent working tab by tab id and activate that tab in the visible browser panel.',
+      description: 'Switch only the Agent working tab by tab id. Do not change the user-visible browser tab or panel.',
       parameters: Type.Object({ tabId: Type.String({ description: 'Tab id from BrowserListTabs or BrowserNewTab.' }) }),
       async execute(_id, params) {
         const value = (params as Record<string, unknown>).tabId

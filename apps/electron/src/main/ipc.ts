@@ -92,7 +92,7 @@ import type {
   UpdateAutomationInput,
   BrowserTabListResult,
   BrowserViewState,
-  BrowserViewLayout,
+  BrowserGuestVisibility,
   BrowserNavigateInput,
   BrowserTabInput,
   BrowserCreateTabInput,
@@ -2139,6 +2139,67 @@ export function registerIpcHandlers(): void {
     })
   }
 
+  const assertBrowserGuestHost = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): void => {
+    assertMainRenderer(event.sender.id)
+    if (event.senderFrame !== event.sender.mainFrame) throw new Error('仅主界面顶层 frame 可以创建浏览器页面。')
+  }
+  ipcMain.handle(AGENT_IPC_CHANNELS.CONNECT_BROWSER_GUEST_HOST, (event) => {
+    assertBrowserGuestHost(event)
+    return browserController.connectGuestHost()
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.BIND_BROWSER_GUEST, (event, raw: unknown) => {
+    assertBrowserGuestHost(event)
+    if (!raw || typeof raw !== 'object') throw new Error('浏览器绑定参数无效。')
+    const claim = raw as Record<string, unknown>
+    if (typeof claim.sessionId !== 'string' || typeof claim.tabId !== 'string' || typeof claim.ticket !== 'string'
+      || !Number.isSafeInteger(claim.guestId) || (claim.guestId as number) <= 0) throw new Error('浏览器绑定参数无效。')
+    assertBrowserSessionAccess(event.sender.id, claim.sessionId)
+    browserController.bindGuest({ sessionId: claim.sessionId, tabId: claim.tabId, ticket: claim.ticket, guestId: claim.guestId as number })
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.GET_BROWSER_GUESTS, (event) => {
+    assertBrowserGuestHost(event)
+    return browserController.getGuestRequests()
+  })
+  ipcMain.on(AGENT_IPC_CHANNELS.SET_BROWSER_GUEST_VISIBILITY, (event, raw: unknown) => {
+    try {
+      assertBrowserGuestHost(event)
+      if (!Array.isArray(raw) || raw.length > 200) return
+      const pages: BrowserGuestVisibility[] = []
+      for (const page of raw) {
+        if (!page || typeof page !== 'object' || typeof page.sessionId !== 'string' || typeof page.tabId !== 'string' || typeof page.ticket !== 'string' || typeof page.visible !== 'boolean') return
+        assertBrowserSessionAccess(event.sender.id, page.sessionId)
+        pages.push({ sessionId: page.sessionId, tabId: page.tabId, ticket: page.ticket, visible: page.visible })
+      }
+      browserController.setGuestVisibility(pages)
+    } catch { /* 过期或非顶层宿主声明不应用。 */ }
+  })
+
+  ipcMain.on(AGENT_IPC_CHANNELS.SET_BROWSER_SHORTCUT_CONTEXT, (event, raw: unknown) => {
+    try {
+      assertBrowserGuestHost(event)
+      if (!raw || typeof raw !== 'object') return
+      const context = raw as Record<string, unknown>
+      if (typeof context.scopeId !== 'string' || context.scopeId.length > 100 || !Number.isSafeInteger(context.revision)
+        || !Array.isArray(context.bindings) || context.bindings.length > 100) return
+      const bindings: import('@profer/shared').BrowserShortcutBinding[] = []
+      for (const item of context.bindings) {
+        if (!item || typeof item !== 'object' || typeof item.id !== 'string' || item.id.length > 100
+          || typeof item.key !== 'string' || item.key.length > 50 || typeof item.meta !== 'boolean'
+          || typeof item.control !== 'boolean' || typeof item.shift !== 'boolean' || typeof item.alt !== 'boolean') return
+        bindings.push({ id: item.id, key: item.key, meta: item.meta, control: item.control, shift: item.shift, alt: item.alt })
+      }
+      let target: { sessionId: string; tabId: string } | undefined
+      if (context.target !== undefined) {
+        if (!context.target || typeof context.target !== 'object') return
+        const input = context.target as Record<string, unknown>
+        if (typeof input.sessionId !== 'string' || typeof input.tabId !== 'string') return
+        assertBrowserSessionAccess(event.sender.id, input.sessionId)
+        target = { sessionId: input.sessionId, tabId: input.tabId }
+      }
+      browserController.setShortcutContext({ scopeId: context.scopeId, revision: context.revision as number, target, bindings })
+    } catch { /* 过期宿主的快捷键声明丢弃。 */ }
+  })
+
   ipcMain.on(
     AGENT_IPC_CHANNELS.SET_BROWSER_FOREGROUND,
     (event, sessionId: unknown): void => {
@@ -2168,29 +2229,6 @@ export function registerIpcHandlers(): void {
       return browserController.getState(sessionId)
     },
   )
-  ipcMain.on(
-    AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT,
-    (event, layout: BrowserViewLayout): void => {
-      if (
-        !layout ||
-        typeof layout.sessionId !== 'string' ||
-        !layout.viewportBounds ||
-        !layout.pageBounds ||
-        typeof layout.rendererInstanceId !== 'string' ||
-        layout.rendererInstanceId.length === 0 ||
-        !Number.isSafeInteger(layout.layoutSourceRevision) ||
-        !Number.isSafeInteger(layout.revision)
-      )
-        return
-      // 保留原有主窗口/session 校验；布局通道单向发送，但不牺牲 IPC 鉴权。
-      try {
-        assertBrowserSessionAccess(event.sender.id, layout.sessionId)
-        browserController.setLayout(layout)
-      } catch {
-        // 单向 IPC 没有调用方可接收错误；非法或过期布局直接丢弃。
-      }
-    },
-  )
   ipcMain.handle(
     AGENT_IPC_CHANNELS.NAVIGATE_BROWSER,
     async (event, input: BrowserNavigateInput): Promise<BrowserViewState> => {
@@ -2198,17 +2236,42 @@ export function registerIpcHandlers(): void {
       return browserController.navigateDisplay(input.sessionId, input.url, input.tabId)
     },
   )
-  ipcMain.handle(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, async (event, sessionId: string) => {
+  ipcMain.handle(AGENT_IPC_CHANNELS.GO_BACK_BROWSER, async (event, sessionId: string, tabId?: string) => {
     await assertBrowserSessionAccess(event.sender.id, sessionId)
-    return browserController.goBackDisplay(sessionId)
+    return browserController.goBackDisplay(sessionId, tabId)
   })
-  ipcMain.handle(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, async (event, sessionId: string) => {
+  ipcMain.handle(AGENT_IPC_CHANNELS.GO_FORWARD_BROWSER, async (event, sessionId: string, tabId?: string) => {
     await assertBrowserSessionAccess(event.sender.id, sessionId)
-    return browserController.goForwardDisplay(sessionId)
+    return browserController.goForwardDisplay(sessionId, tabId)
   })
-  ipcMain.handle(AGENT_IPC_CHANNELS.RELOAD_BROWSER, async (event, sessionId: string) => {
+  ipcMain.handle(AGENT_IPC_CHANNELS.RELOAD_BROWSER, async (event, sessionId: string, tabId?: string) => {
     await assertBrowserSessionAccess(event.sender.id, sessionId)
-    return browserController.reloadDisplay(sessionId)
+    return browserController.reloadDisplay(sessionId, tabId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.STOP_BROWSER_PAGE, (event, input: BrowserTabInput) => {
+    assertBrowserGuestHost(event)
+    assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId) throw new Error('tabId 必填。')
+    return browserController.stopDisplay(input.sessionId, input.tabId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.FIND_BROWSER_PAGE, (event, input: BrowserTabInput & import('@profer/shared').BrowserFindInput) => {
+    assertBrowserGuestHost(event)
+    assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId || typeof input.query !== 'string' || input.query.length > 1000) throw new Error('查找参数无效。')
+    return browserController.findDisplay(input.sessionId, input.tabId, input)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.CLEAR_BROWSER_FIND, (event, input: BrowserTabInput) => {
+    assertBrowserGuestHost(event)
+    assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId) throw new Error('tabId 必填。')
+    browserController.clearFindDisplay(input.sessionId, input.tabId)
+  })
+  ipcMain.handle(AGENT_IPC_CHANNELS.RESPOND_BROWSER_DIALOG, (event, input: BrowserTabInput & import('@profer/shared').BrowserDialogResponse) => {
+    assertBrowserGuestHost(event)
+    assertBrowserSessionAccess(event.sender.id, input.sessionId)
+    if (!input.tabId || typeof input.dialogId !== 'string' || typeof input.accept !== 'boolean'
+      || (input.promptText !== undefined && (typeof input.promptText !== 'string' || input.promptText.length > 10_000))) throw new Error('网页确认参数无效。')
+    return browserController.respondToDialog(input.sessionId, input.tabId, input)
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.TRANSLATE_BROWSER, async (event, input: BrowserTabInput): Promise<BrowserTranslateResult> => {
     await assertBrowserSessionAccess(event.sender.id, input.sessionId)
@@ -2251,13 +2314,10 @@ export function registerIpcHandlers(): void {
       const options = normalizeFileAccessOptions(input.access)
       // getAllowedCandidateBasePaths 在没有候选根时返回 undefined；浏览器侧要求 string[]。
       const allowedRoots = getAllowedCandidateBasePaths(options) ?? []
-      return browserController.previewOpen(
+      return browserController.previewOpenDisplay(
         input.sessionId,
         input.filePath,
-        undefined,
         allowedRoots,
-        undefined,
-        undefined,
         // IPC 边界收口（未知 token / 可疑值在这里被丢掉，见 shared 的 ofv-theme-bridge）
         normalizeOfvThemePayload(input) ?? undefined,
       )

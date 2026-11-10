@@ -14,7 +14,7 @@ import { BrowserController } from './browser-controller'
 
 interface FakeTab {
   tabId: string
-  view: { webContents: { id: number } }
+  contents: { id: number; isDestroyed: () => boolean }
   state: { url: string }
   lastRequestedUrl: string | null
 }
@@ -22,7 +22,7 @@ interface FakeTab {
 function makeTab(tabId: string, webContentsId: number, url = ''): FakeTab {
   return {
     tabId,
-    view: { webContents: { id: webContentsId } },
+    contents: { id: webContentsId, isDestroyed: () => false },
     state: { url },
     lastRequestedUrl: url || null,
   }
@@ -63,11 +63,7 @@ describe('受管浏览器子资源路由', () => {
     const { internals } = twoSharedSessions()
     const brokenTab = {
       tabId: 'tab-broken',
-      view: {
-        get webContents(): never {
-          throw new Error('视图已销毁')
-        },
-      },
+      get contents(): never { throw new Error('页面已销毁') },
       state: { url: 'https://broken.example.com/' },
       lastRequestedUrl: 'https://broken.example.com/',
     }

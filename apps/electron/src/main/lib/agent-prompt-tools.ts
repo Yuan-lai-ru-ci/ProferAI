@@ -183,7 +183,7 @@ export function buildBrowserGuideline(
     const refText = has('BrowserObserve')
       ? '每次 Observe 返回的 ref 只在其来源 tab 与 generation 有效；'
       : ''
-    lines.push(`多标签中，用户面板正在查看的标签与 Agent 工作标签彼此独立：用户切换或新建页面不会改变你的默认操作目标。${tabTools.join('；')}。${refText}操作非默认工作标签时必须传入对应 tabId，绝不跨 tab 复用 ref。`)
+    lines.push(`多标签中，用户面板正在查看的标签与 Agent 工作标签彼此独立：用户切换或新建页面不会改变你的默认操作目标；Agent 新建、选择、导航与预览也默认在后台进行，不打开面板、不切换用户展示页。动作结果的 tabId 与顶层页面字段代表实际操作目标，activeTabId 仍代表用户展示页。${tabTools.join('；')}。${refText}操作非默认工作标签时必须传入对应 tabId，绝不跨 tab 复用 ref。`)
   }
 
   if (has('BrowserPreviewOpen')) {

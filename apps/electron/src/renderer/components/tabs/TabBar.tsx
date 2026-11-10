@@ -47,7 +47,7 @@ import {
 import { browserStateMapAtom } from "@/atoms/browser-atoms";
 import { appModeAtom } from "@/atoms/app-mode";
 import { openFilePanel } from "@/hooks/usePanelAutoLayout";
-import { openBrowserTabManually } from "@/lib/browser-tab";
+import { captureBrowserOpenIntent, openBrowserTabManually } from "@/lib/browser-tab";
 import {
   findTabGroup,
   groupTabIds,
@@ -673,7 +673,8 @@ function TabBarInner({
     activeAgentSessionId && !activeIsSessionBrowserPage,
   );
   const browserBackgroundActive = Boolean(
-    activeBrowserTab && !activeIsSessionBrowserPage,
+    activeAgentSessionId && !activeIsSessionBrowserPage &&
+      (activeBrowserTab || browserStateMap.get(activeAgentSessionId)?.tabs.length),
   );
   // MainArea 的右边界会随着右侧文件面板提前结束；
   // 这种情况下窗口控制按钮已经不在当前 TabBar 内，工具组应贴近 MainArea 右缘。
@@ -713,6 +714,7 @@ function TabBarInner({
     ).setAgentBrowserForeground;
     if (typeof setForeground === "function")
       setForeground(activeAgentSessionId);
+    const intent = captureBrowserOpenIntent(activeAgentSessionId);
     const state = await open(activeAgentSessionId);
     setBrowserStateMap((previous) => {
       const next = new Map(previous);
@@ -720,7 +722,7 @@ function TabBarInner({
       return next;
     });
     // Tab 化：创建/聚焦浏览器页 Tab 并清除“已手动关闭”标记（reconcile 以主进程状态为准）。
-    openBrowserTabManually(activeAgentSessionId, state);
+    openBrowserTabManually(activeAgentSessionId, state, undefined, intent);
   }, [activeAgentSessionId, setBrowserStateMap]);
 
   // 浏览器图标在浏览器 Tab 未展示时出现：存在后台浏览器 Tab → 点击聚焦；不存在 → 打开。

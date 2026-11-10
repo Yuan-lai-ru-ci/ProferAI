@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { initShortcutRegistry, registerShortcut, suppressShortcutDispatch, updateShortcutOverrides } from './shortcut-registry'
+import { initShortcutRegistry, registerShortcut, suppressShortcutDispatch, updateShortcutOverrides, getRegisteredShortcutBindings, invokeRegisteredShortcut } from './shortcut-registry'
 import type { ShortcutOverrides } from './shortcut-defaults'
 
 /**
@@ -75,6 +75,8 @@ async function freshRegistry(): Promise<{
   press: (options?: PressOptions) => PressResult
   suppress: () => () => void
   override: (overrides: ShortcutOverrides) => void
+  bindings: typeof getRegisteredShortcutBindings
+  invoke: typeof invokeRegisteredShortcut
 }> {
   const { window, keydown } = makeWindow()
   ;(globalThis as unknown as { window: unknown }).window = window
@@ -83,6 +85,8 @@ async function freshRegistry(): Promise<{
     registerShortcut: typeof registerShortcut
     suppressShortcutDispatch: typeof suppressShortcutDispatch
     updateShortcutOverrides: typeof updateShortcutOverrides
+    getRegisteredShortcutBindings: typeof getRegisteredShortcutBindings
+    invokeRegisteredShortcut: typeof invokeRegisteredShortcut
   }
   mod.initShortcutRegistry()
   // 用跨平台组合键覆盖宿主默认值，确保 macOS 本地也能验证 Windows/Linux 的 Ctrl+Delete 分发。
@@ -92,8 +96,36 @@ async function freshRegistry(): Promise<{
     press: (options) => pressKey(keydown(), options),
     suppress: () => mod.suppressShortcutDispatch(),
     override: (overrides) => mod.updateShortcutOverrides(overrides),
+    bindings: () => mod.getRegisteredShortcutBindings(),
+    invoke: (id) => mod.invokeRegisteredShortcut(id),
   }
 }
+
+test('guest绑定镜像保留改绑和抑制，不转发编辑键、删除类守卫或菜单W', async () => {
+  const reg = await freshRegistry()
+  const noOp = (): void => undefined
+  for (const id of ['file-find', 'focus-input', 'delete-item', 'close-tab', 'browser-stop']) cleanup.push(reg.register(id, noOp))
+  reg.override({ 'file-find': { mac: 'Ctrl+Q', win: 'Ctrl+Q' }, 'focus-input': { mac: 'Ctrl+C', win: 'Ctrl+C' } })
+  expect(reg.bindings().map(binding => binding.id)).toEqual(['file-find', 'browser-stop'])
+  expect(reg.bindings()[0]).toMatchObject({ key: 'q', control: true, meta: false })
+  const resume = reg.suppress()
+  expect(reg.bindings()).toEqual([])
+  expect(reg.invoke('file-find')).toBe(false)
+  resume()
+  expect(reg.bindings()).toHaveLength(2)
+  reg.override({ 'file-find': { mac: null, win: null } })
+  expect(reg.bindings().some(binding => binding.id === 'file-find')).toBe(false)
+})
+
+test('按ID桥接复用最后注册的exclusive handler，不生成第二次键盘事件', async () => {
+  const reg = await freshRegistry()
+  const calls: string[] = []
+  cleanup.push(reg.register('file-find', () => calls.push('plain')))
+  cleanup.push(reg.register('file-find', () => calls.push('active'), { exclusive: true }))
+  expect(reg.invoke('file-find')).toBe(true)
+  expect(calls).toEqual(['active'])
+  expect(reg.invoke('unknown-command')).toBe(false)
+})
 
 test('Given 同一快捷键注册多个 handler When 均未声明 exclusive Then 全部执行', async () => {
   const reg = await freshRegistry()

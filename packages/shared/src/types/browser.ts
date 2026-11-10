@@ -1,42 +1,38 @@
 // 受管浏览器对所有 Agent 会话开放；会话来源只影响 UI 标识。
 
+export interface BrowserGuestRequest {
+  sessionId: string
+  tabId: string
+  partition: string
+  /** 主进程一次性签发的挂载票据；与具体页面实例绑定，不是导航 URL。 */
+  ticket: string
+  src: string
+}
+
+export interface BrowserGuestClaim {
+  sessionId: string
+  tabId: string
+  ticket: string
+  guestId: number
+}
+
+export interface BrowserGuestVisibility {
+  sessionId: string
+  tabId: string
+  ticket: string
+  visible: boolean
+}
+
+export interface BrowserGuestFocusEvent {
+  sessionId: string
+  tabId: string
+}
+
 export interface BrowserViewBounds {
   x: number
   y: number
   width: number
   height: number
-}
-
-export interface BrowserViewLayout {
-  sessionId: string
-  tabId?: string
-  /** 当前 renderer 实例标识；renderer 刷新后旧实例的晚到布局必须全部丢弃。 */
-  rendererInstanceId: string
-  /** 当前 BrowserViewport 挂载来源序号；顶栏切换后旧视口的 cleanup 不能覆盖新视口。 */
-  layoutSourceRevision: number
-  /** 同一布局来源内单调递增的布局代际；主进程忽略晚到的旧布局 IPC。 */
-  revision: number
-  visible: boolean
-  /**
-   * 唯一由 renderer 测得并由主进程应用的原生浏览器视口（CSS 像素）。
-   * 它代表完整原生 frame；网页内容在其中使用局部坐标，圆角裁切也只由该 frame 负责。
-   */
-  viewportBounds: BrowserViewBounds
-  /** 原生 frame 的四角统一裁切半径（CSS 像素）。 */
-  viewportRadius: number
-  /** 网页在 native frame 内的局部矩形；当前工具栏/标签栏位于 renderer DOM，不占原生 frame。 */
-  pageBounds: BrowserViewBounds
-  /**
-   * 该网页当前位于分屏右栏，需要在原生网页右下角叠加「关闭拆分视图」浮标。
-   * 原生 WebContentsView 盖在 renderer DOM 之上，普通 DOM 按钮无法覆盖网页内容。
-   */
-  splitViewClose?: boolean
-}
-
-export interface BrowserSplitViewCloseEvent {
-  sessionId: string
-  /** 浏览器内部页 id；渲染进程用它定位所属的分屏组合。 */
-  tabId: string
 }
 
 export type BrowserExecutionSource = 'user' | 'automation' | 'delegation' | 'goal'
@@ -72,7 +68,67 @@ export interface BrowserLocalFileInfo {
   readOnly: true
 }
 
-export interface BrowserTabState {
+export interface BrowserShortcutBinding {
+  id: string
+  key: string
+  meta: boolean
+  control: boolean
+  shift: boolean
+  alt: boolean
+}
+
+export interface BrowserShortcutContext {
+  scopeId: string
+  revision: number
+  target?: { sessionId: string; tabId: string }
+  bindings: BrowserShortcutBinding[]
+}
+
+export interface BrowserShortcutEvent {
+  scopeId: string
+  revision: number
+  sessionId: string
+  tabId: string
+  ticket: string
+  shortcutId: string
+}
+
+export interface BrowserFindInput {
+  query: string
+  next?: boolean
+  forward?: boolean
+  matchCase?: boolean
+}
+
+export interface BrowserFindState {
+  query: string
+  matches: number
+  activeMatchOrdinal: number
+  searching: boolean
+  matchCase?: boolean
+}
+
+export interface BrowserScriptDialog {
+  id: string
+  type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'
+  message: string
+  origin: string
+  defaultPrompt: string
+  responding: boolean
+}
+
+export interface BrowserDialogResponse {
+  dialogId: string
+  accept: boolean
+  promptText?: string
+}
+
+export interface BrowserPageInteractionState {
+  find?: BrowserFindState | null
+  dialog?: BrowserScriptDialog | null
+}
+
+export interface BrowserTabState extends BrowserPageInteractionState {
   tabId: string
   url: string
   title: string
@@ -91,7 +147,7 @@ export interface BrowserTabState {
   trace: BrowserTraceItem[]
 }
 
-export interface BrowserTabSummary {
+export interface BrowserTabSummary extends BrowserPageInteractionState {
   tabId: string
   url: string
   title: string
@@ -102,6 +158,12 @@ export interface BrowserTabSummary {
   zoomFactor: number
   /** 此标签由 Agent 创建（与当前默认工作标签无关）。 */
   openedByAgent: boolean
+  /** 每页状态供两页同时分屏；缺失仅用于兼容旧状态。 */
+  visible?: boolean
+  canGoBack?: boolean
+  canGoForward?: boolean
+  translated?: boolean
+  loadError?: string | null
 }
 
 /**
@@ -122,7 +184,7 @@ export interface BrowserTabListResult {
   tabs: BrowserTabSummary[]
 }
 
-export interface BrowserViewState {
+export interface BrowserViewState extends BrowserPageInteractionState {
   sessionId: string
   /** 非用户触发时，面板可显示来源并提供停止当前 Agent run 的控制。 */
   executionSource: BrowserExecutionSource
@@ -154,6 +216,15 @@ export interface BrowserViewState {
    * 面板据此展示可重试的错误态。
    */
   loadError: string | null
+}
+
+/**
+ * Agent 动作结果：顶层页面字段属于 tabId，activeTabId 仍表示用户显示页。
+ * 与 BROWSER_STATE_CHANGED 的 UI 投影分开，避免后台操作返回另一标签的 URL/导航状态。
+ */
+export interface BrowserActionResult extends BrowserViewState {
+  /** 本次实际操作的标签，不隐式改变用户显示目标。 */
+  tabId: string
 }
 
 export interface BrowserNavigateInput {
