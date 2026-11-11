@@ -6,7 +6,7 @@ import type { ToolCall, ToolResult, ToolDefinition } from '@profer/core'
 import type { ChatToolMeta, FileAttachment } from '@profer/shared'
 import { randomUUID } from 'node:crypto'
 import { getGptImageCredentials } from '../chat-tool-config'
-import { getTeamAuth } from '../auth-service'
+import { editionProviders } from '../edition'
 import { saveAttachment, readAttachmentAsBase64, isImageAttachment } from '../attachment-service'
 import {
   generateGptImage,
@@ -60,7 +60,7 @@ export const GPT_IMAGE_TOOL_DEFINITIONS: ToolDefinition[] = [{
 /** Official mode requires a team login; BYOK requires a decryptable main-process key. */
 export function isGptImageAvailable(): boolean {
   const credentials = getGptImageCredentials()
-  return credentials.mode === 'official' ? !!getTeamAuth() : !!credentials.apiKey
+  return credentials.mode === 'official' ? !!editionProviders.account.getSessionSnapshot() : !!credentials.apiKey
 }
 
 const GPT_IMAGE_TOOL_NAMES = new Set(['generate_image'])

@@ -39,4 +39,18 @@ function findAppBundle() {
 const appBundle = findAppBundle()
 if (!appBundle) throw new Error(`未找到 macOS Profer.app 解包产物: ${outputDir}`)
 
-console.log(JSON.stringify(assertMacSignatureContract(appBundle), null, 2))
+const result = assertMacSignatureContract(appBundle)
+
+// CI 里「提供了证书但产物仍是 ad-hoc」是最危险的静默降级：
+// 自签名证书会被 afterSign 钩子判为无效并重签成 ad-hoc，签完看起来一切正常，
+// 只有发布后用户下载才会发现没有发布者身份。用显式期望模式把这件事变成硬验证。
+const expectedMode = process.env.PROFER_EXPECT_MAC_SIGNATURE_MODE
+if (expectedMode && expectedMode !== result.signatureMode) {
+  throw new Error(
+    `macOS 签名模式不符合预期：期望 ${expectedMode}，实际 ${result.signatureMode}` +
+    `（TeamIdentifier=${result.teamIdentifier ?? '未设置'}）。` +
+    '自签名证书不能当发布证书用；要么换成 Developer ID，要么去掉证书走 ad-hoc。',
+  )
+}
+
+console.log(JSON.stringify(result, null, 2))

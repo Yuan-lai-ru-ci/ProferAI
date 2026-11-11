@@ -12,9 +12,32 @@ let auth: { baseUrl: string; token: string; proxyToken?: string } | undefined = 
 let recoveredAuth: typeof auth = auth
 
 mock.module('./chat-tool-config', () => ({ getGptImageCredentials: () => credentials }))
-mock.module('./auth-service', () => ({
-  getTeamAuthWithRefresh: async () => auth,
-  recoverCommercialProxyAuth: async () => recoveredAuth,
+// 账号能力已收口到发行版契约：mock 接缝从 auth-service 移到 ./edition。
+mock.module('./edition', () => ({
+  editionProviders: {
+    id: 'commercial',
+    account: {
+      getSession: async () => auth ?? null,
+      recoverSession: async () => recoveredAuth ?? null,
+      getSessionSnapshot: () => auth ?? null,
+      getSessionGeneration: () => (auth ? 1 : null),
+      refreshSession: async () => true,
+      restoreSession: async () => false,
+      scheduleAutoRefresh: () => {},
+      getMembership: () => ({ commercialMode: true, membershipTier: 'pro', canSelfConfig: true }),
+    },
+    credentials: {
+      shouldUseManagedRoute: () => true,
+      shouldUseBearerAuth: () => true,
+      managedPath: (kind: string) =>
+        ({ messages: '/v1/proxy/messages', chat: '/v1/proxy/chat', images: '/v1/proxy/images/generations', imageEdits: '/v1/proxy/images/edits', root: '/v1/proxy' } as Record<string, string>)[kind] ?? '',
+      managedImageOperationPath: (operation: string, key: string) =>
+        `/v1/proxy/images/operations/by-idempotency/${operation}/${key}`,
+    },
+    errors: { detectInsufficientCredits: () => null },
+    remote: { getRelayTicket: async () => null },
+    registerIpc: () => {},
+  },
 }))
 
 const { generateGptImage, __setOfficialImageRecoveryDelaysForTest } = await import('./gpt-image-service')

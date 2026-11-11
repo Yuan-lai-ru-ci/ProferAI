@@ -10,7 +10,30 @@ let respond: () => Promise<Response>
 let calls = 0
 const invalidations: string[] = []
 mock.module('./agent-service', () => ({ agentCatalogInvalidationPublisher: { invalidate: (catalog: string) => invalidations.push(catalog) } }))
-mock.module('./auth-service', () => ({ getTeamAuth: () => auth, getAuthSessionGeneration: () => generation }))
+// 账号能力已收口到发行版契约：mock 接缝从 auth-service 移到 ./edition。
+mock.module('./edition', () => ({
+  editionProviders: {
+    id: 'commercial',
+    account: {
+      getSession: async () => auth,
+      recoverSession: async () => null,
+      getSessionSnapshot: () => auth,
+      getSessionGeneration: () => generation,
+      refreshSession: async () => true,
+      restoreSession: async () => false,
+      scheduleAutoRefresh: () => {},
+      getMembership: () => ({ commercialMode: true, membershipTier: 'pro', canSelfConfig: true }),
+    },
+    credentials: { shouldUseManagedRoute: () => true, shouldUseBearerAuth: () => true },
+    errors: { detectInsufficientCredits: () => null },
+    channels: {
+      isManagedChannel: (channel: { id: string; serverManaged?: boolean }) =>
+        channel.serverManaged === true || channel.id.startsWith('newapi-'),
+    },
+    remote: { getRelayTicket: async () => null },
+    registerIpc: () => {},
+  },
+}))
 mock.module('./proxy-settings-service', () => ({ getEffectiveProxyUrl: async () => undefined }))
 mock.module('./proxy-fetch', () => ({ getFetchFn: () => async () => { calls += 1; return respond() } }))
 mock.module('./identity-service', () => ({ getOrCreateDeviceIdentity: () => ({ deviceId: 'fixture-sync-device' }) }))

@@ -4,7 +4,7 @@ import type { AgentEventBus } from './agent-event-bus'
 import { getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import { buildAgentSessionUiProjection } from './agent-session-ui-projection'
 import { getAgentUnreadPolicyMode } from './agent-unread-mode'
-import { getChannelById } from './channel-manager'
+import { getVisibleChannelById } from './channel-manager'
 
 let projectionEventBus: AgentEventBus | null = null
 
@@ -47,7 +47,7 @@ export function updateAgentSessionUiMeta(
       const conflict = resolveAgentRuntimeChannelConflict({
         sessionRuntime: normalizeAgentRuntime(current.agentRuntime),
         channelId: updates.channelId,
-        channel: getChannelById(updates.channelId),
+        channel: getVisibleChannelById(updates.channelId),
       })
       if (conflict) throw new Error(conflict)
     }

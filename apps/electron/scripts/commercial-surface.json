@@ -1,0 +1,36 @@
+{
+  "$comment": "商业能力面清单。OSS 构建产物不得包含这里的任何模块或字符串。新增商业模块时必须同步登记，否则 verify:oss-excludes-commercial 会阻断。",
+  "commercialModules": [
+    "^src/main/lib/auth-service\\.ts$",
+    "^src/main/lib/account-ipc\\.ts$",
+    "^src/main/lib/official-channel\\.ts$",
+    "^src/main/lib/commercial-routing-policy\\.ts$",
+    "^src/main/lib/edition/commercial\\.ts$",
+    "^src/main/lib/edition/commercial/",
+    "^src/main/lib/credits/",
+    "^src/main/lib/remote-relay-client\\.ts$",
+    "^packages/core/src/providers/insufficient-credits\\.ts$"
+  ],
+  "$comment2": "商业构建必须真实包含的模块。用于反向校验，防止把功能做丢了还以为在发商业版；只登记已经存在的实现，未来目录不写在这里。",
+  "commercialRequiredModules": [
+    "^src/main/lib/auth-service\\.ts$",
+    "^src/main/lib/account-ipc\\.ts$",
+    "^src/main/lib/official-channel\\.ts$",
+    "^src/main/lib/commercial-routing-policy\\.ts$",
+    "^src/main/lib/remote-relay-client\\.ts$",
+    "^packages/core/src/providers/insufficient-credits\\.ts$"
+  ],
+  "$comment3": "字符串标记：压缩后仍保留的字面量，用来兜住“模块级检查看不到”的残留商业代码路径。baseline 只能缩小，不能扩大。",
+  "commercialStringMarkers": [
+    "/v1/proxy/messages",
+    "/v1/proxy/chat",
+    "syncChannelsFromServer",
+    "pruneOfficialChannelsOnLogout",
+    "restoreChannelsForAccount",
+    "getRegistrationOptions",
+    "verifyRegistrationOtp",
+    "recoverCommercialProxyAuth",
+    "getRemoteRelayTicket",
+    "/v1/proxy"
+  ]
+}

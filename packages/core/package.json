@@ -9,7 +9,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./providers": "./src/providers/index.ts",
-    "./highlight": "./src/highlight/index.ts"
+    "./highlight": "./src/highlight/index.ts",
+    "./providers/insufficient-credits": "./src/providers/insufficient-credits.ts"
   },
   "dependencies": {
     "@profer/shared": "workspace:*",

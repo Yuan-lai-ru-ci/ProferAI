@@ -234,3 +234,43 @@ describe('macOS 签名契约', () => {
       .toThrow('不存在')
   })
 })
+
+describe('开源版与商业版打包隔离', () => {
+  const appDir = resolve(import.meta.dir, '..')
+
+  test('Given 商业版配置 When 加载 Then 只在必须不同的字段上覆盖基础配置', () => {
+    const commercial = readFileSync(join(appDir, 'electron-builder.commercial.yml'), 'utf8')
+    // 用 extends 继承，避免两份 250 行配置各自漂移
+    expect(commercial).toContain('extends: ./electron-builder.yml')
+    // 产物目录必须独立，否则两次打包互相覆盖
+    expect(commercial).toContain('output: out-commercial')
+    // 安装包文件名可区分，两套 feed 的元数据同名也不会混淆
+    expect(commercial).toContain('Profer-Commercial-Setup-${version}.${ext}')
+    expect(commercial).toContain('Profer-Commercial-${version}-${arch}.${ext}')
+    // app-update.yml 指向商业目录，不能指向公共 GitHub Release
+    expect(commercial).toContain('url: https://profer.cn/profer-updates/')
+    expect(commercial).not.toContain('provider: github')
+    // appId / productName 故意与开源版一致：改 appId 会断掉存量用户的更新链
+    expect(commercial).not.toContain('appId:')
+    expect(commercial).not.toContain('productName:')
+  })
+
+  test('Given 基础配置 When 加载 Then 仍是开源版身份与 GitHub 发布源', () => {
+    const base = readFileSync(join(appDir, 'electron-builder.yml'), 'utf8')
+    expect(base).toContain('appId: com.profer.app')
+    expect(base).toContain('productName: Profer')
+    expect(base).toContain('provider: github')
+    expect(base).toContain('artifactName: Profer-Setup-${version}.${ext}')
+  })
+
+  test('Given 打包脚本 When 选择发行版 Then 商业版必须显式指向商业配置', () => {
+    const packageJson = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>
+    }
+    expect(packageJson.scripts['dist:win-commercial']).toContain('--config electron-builder.commercial.yml')
+    expect(packageJson.scripts['dist:mac-commercial']).toContain('--target commercial')
+    // 开源版入口不能误用商业配置
+    expect(packageJson.scripts['dist:win-github']).not.toContain('electron-builder.commercial.yml')
+    expect(packageJson.scripts['dist:mac']).not.toContain('--target commercial')
+  })
+})

@@ -45,8 +45,12 @@ mock.module('./agent-runtime-credentials', () => ({
     credentials: { apiKey: 'fixture-key', baseUrl: 'https://api.fixture.invalid', provider: 'custom', forceBearerAuth: false },
   }),
 }))
+const fixtureChannelById = (id: string) =>
+  id === 'channel-1' ? { id, provider: 'custom', baseUrl: 'https://api.fixture.invalid' } : undefined
 mock.module('./channel-manager', () => ({
-  getChannelById: (id: string) => id === 'channel-1' ? { id, provider: 'custom', baseUrl: 'https://api.fixture.invalid' } : undefined,
+  getChannelById: fixtureChannelById,
+  // 宿主现在走可见变体；OSS 语义下可见性由契约决定，测试里两者等价。
+  getVisibleChannelById: fixtureChannelById,
   // 内置 7 服务器走真实注入器时会读渠道密钥；测试里给一个确定值，让它们能真的完成注册。
   decryptApiKey: () => 'fixture-key',
 }))

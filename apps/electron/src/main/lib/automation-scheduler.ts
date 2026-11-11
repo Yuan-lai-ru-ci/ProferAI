@@ -48,7 +48,7 @@ import {
 import { createAutomationTriggerId, buildAutomationDispatchMetadata, validateBoundAutomationChannel, validateBoundAutomationSession, isSettledAutomationTrigger } from './automation-dispatch'
 import { createAgentSession, updateAgentSessionMeta, getAgentSessionMeta } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
-import { getChannelById } from './channel-manager'
+import { getVisibleChannelById } from './channel-manager'
 import { resolvePresetId, getDefaultPresetId } from './agent-preset-manager'
 import { getSessionContextUsageRatio } from './agent-session-usage'
 import { runAgentHeadless, runAgentRuntimeHeadless, isAgentSessionActive, peekAgentRunClaimFailureForSession, findAgentRunForTrigger } from './agent-service'
@@ -281,7 +281,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       const validation = validateBoundAutomationSession(automation, bound, expectedPresetId)
       if (!validation.valid) throw new Error(`定时任务目标会话不可用：${validation.reason}`)
       if (!bound) throw new Error('定时任务目标会话不可用：绑定会话不存在或不可访问')
-      const boundAvailability = validateBoundAutomationChannel(automation, bound, getChannelById(automation.channelId))
+      const boundAvailability = validateBoundAutomationChannel(automation, bound, getVisibleChannelById(automation.channelId))
       if (!boundAvailability.valid) throw new Error(`定时任务目标会话不可用：${boundAvailability.reason}`)
       targetSessionId = automation.boundSessionId
     } else if (reuseSessionId) {

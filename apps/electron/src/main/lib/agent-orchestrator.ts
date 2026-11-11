@@ -68,6 +68,7 @@ import { buildClaudeInlineSdkSettings } from './agent-claude-inline-sdk-settings
 import {
   decryptApiKey,
   getChannelById,
+  getVisibleChannelById,
   isCommercialMode,
   listChannels,
   persistCodexOAuthCredentials,
@@ -897,7 +898,7 @@ export class AgentOrchestrator {
         if (!auth) {
           return fail('团队账号登录已过期')
         }
-        const proxyPath = (this.adapter.isAnthropicProxyProvider?.(channel.provider) ?? true) ? '/v1/proxy/messages' : '/v1/proxy/chat'
+        const proxyPath = editionProviders.credentials.managedPath((this.adapter.isAnthropicProxyProvider?.(channel.provider) ?? true) ? 'messages' : 'chat')
         proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
         apiKey = resolveEditionBearerToken(auth)
       } else {
@@ -1419,7 +1420,9 @@ export class AgentOrchestrator {
     }
 
     // 2. 获取渠道信息并解密 API Key
-    const channel = getChannelById(channelId)
+    // 用可见变体：另一个发行版下发的渠道在这里就要报「渠道不存在」，
+    // 而不是等到凭据解析阶段才失败（那时错误归因已经跑偏）。
+    const channel = getVisibleChannelById(channelId)
     if (!channel) {
       reportPreflightError({
         code: 'channel_not_found',
@@ -3287,7 +3290,13 @@ export class AgentOrchestrator {
                 if (errorHelpers.isPromptTooLongError(detailedMessage, originalError)) {
                   errorCode = 'prompt_too_long'
                 }
-                const typedError = errorHelpers.mapSDKErrorToTypedError(errorCode, errorHelpers.friendlyErrorMessage(detailedMessage), originalError)
+                const typedError = errorHelpers.mapSDKErrorToTypedError(
+                  errorCode,
+                  errorHelpers.friendlyErrorMessage(detailedMessage),
+                  originalError,
+                  // 额度不足的识别规则由发行版注入；开源版传进来也会恒返回 null。
+                  (error, status) => editionProviders.errors.detectInsufficientCredits(error, status),
+                )
                 console.error(`[Agent 编排] mapSDKErrorToTypedError 结果:`)
                 console.error(`  code: ${typedError.code}`)
                 console.error(`  title: ${typedError.title || '(空)'}`)

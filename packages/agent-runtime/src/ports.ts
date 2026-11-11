@@ -31,7 +31,7 @@ export interface RuntimeCredential {
 
 export type RuntimeCredentialResult =
   | { ok: true; credentials: RuntimeCredential }
-  | { ok: false; code: 'token_expired' | 'api_key_decrypt_failed' }
+  | { ok: false; code: 'token_expired' | 'api_key_decrypt_failed' | 'channel_not_found' }
 
 /** 入队成功不等于保存成功；receipt 由宿主确认，不影响 provider 执行结果。 */
 export interface RuntimePersistenceState {

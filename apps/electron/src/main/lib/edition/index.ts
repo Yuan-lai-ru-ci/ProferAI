@@ -1,25 +1,16 @@
-import type { EditionProviders } from '@profer/edition-contract'
-import { getTeamAuthWithRefresh, recoverCommercialProxyAuth } from '../auth-service'
-import { isCommercialBuild } from '../build-target'
-import { shouldUseCommercialBearerAuth, shouldUseManagedCommercialRoute } from '../commercial-routing-policy'
-
 /**
  * 执行链唯一的商业能力装配点。
  *
- * 阶段 A 保持现有行为：account 与 credentials 仍委托 auth-service /
- * commercial-routing-policy，只把直接依赖从执行链移到本模块。
- * 阶段 B 在这里按发行版切换实现（OSS 注入本地实现、Commercial 注入商业适配），
- * chat-service / agent-orchestrator / agent-runtime-credentials / plugin-models
- * 不需要再改。
+ * 本文件只做一件事：把 `@profer/edition-impl` 转发给调用方。真正的实现在
+ * `./oss.ts` 与 `./commercial.ts`，由 esbuild 的 `--alias` 在构建时二选一：
+ *
+ *   build:main             → @profer/edition-impl = ./oss.ts
+ *   build:main-commercial  → @profer/edition-impl = ./commercial.ts
+ *
+ * 这样 OSS 产物的模块图里**物理上不含** auth-service / account-ipc，
+ * 而不是靠运行时开关把功能藏起来。类型层面 tsconfig `paths` 指到 oss.ts，
+ * 两份实现都满足 `EditionProviders`，所以商业版不需要单独的类型检查配置。
+ *
+ * 新增商业能力时：先扩 `@profer/edition-contract`，再同时补两份实现。
  */
-export const editionProviders: EditionProviders = {
-  id: isCommercialBuild() ? 'commercial' : 'oss',
-  account: {
-    getSession: () => getTeamAuthWithRefresh(),
-    recoverSession: () => recoverCommercialProxyAuth(),
-  },
-  credentials: {
-    shouldUseManagedRoute: shouldUseManagedCommercialRoute,
-    shouldUseBearerAuth: shouldUseCommercialBearerAuth,
-  },
-}
+export { editionProviders } from '@profer/edition-impl'

@@ -10,6 +10,30 @@ mock.module('./identity-service', () => ({
   getUserIdentity: () => ({ userName: 'fixture', avatar: 'F' }),
 }))
 
+// 登出清理官方渠道是商业版行为：渠道来源判定经发行版契约注入。
+mock.module('./edition', () => ({
+  editionProviders: {
+    id: 'commercial',
+    account: {
+      getSession: async () => null,
+      recoverSession: async () => null,
+      getSessionSnapshot: () => null,
+      getSessionGeneration: () => null,
+      refreshSession: async () => true,
+      restoreSession: async () => false,
+      scheduleAutoRefresh: () => {},
+      getMembership: () => ({ commercialMode: true, membershipTier: 'pro', canSelfConfig: true }),
+    },
+    credentials: { shouldUseManagedRoute: () => true, shouldUseBearerAuth: () => true },
+    errors: { detectInsufficientCredits: () => null },
+    channels: {
+      isManagedChannel: (channel: { id: string; serverManaged?: boolean }) =>
+        channel.serverManaged === true || channel.id.startsWith('newapi-'),
+    },
+    remote: { getRelayTicket: async () => null },
+    registerIpc: () => {},
+  },
+}))
 const { logout } = await import('./auth-service')
 const { listChannels } = await import('./channel-manager')
 const { encryptToken } = await import('./token-crypto')

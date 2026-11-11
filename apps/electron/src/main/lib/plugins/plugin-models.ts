@@ -29,7 +29,7 @@ export async function generatePluginModel(raw: unknown, signal: AbortSignal): Pr
     if (!auth) throw new Error('请重新登录团队账号')
     apiKey = resolveEditionBearerToken(auth)
     const probe = adapter.buildStreamRequest({ baseUrl, apiKey: '', modelId: input.modelId, history: [], userMessage: '', readImageAttachments: () => [] })
-    baseUrl = `${auth.baseUrl}${new URL(probe.url).pathname.endsWith('/messages') ? '/v1/proxy/messages' : '/v1/proxy/chat'}`
+    baseUrl = `${auth.baseUrl}${editionProviders.credentials.managedPath(new URL(probe.url).pathname.endsWith('/messages') ? 'messages' : 'chat')}`
     commercial = true
   } else {
     apiKey = decryptApiKey(channel.id)

@@ -23,7 +23,7 @@ import {
 import { runRegisteredHeadlessAgent, stopRegisteredAgent } from '../agent-headless-runner-registry'
 import { stopAgent, agentEventBus, findAgentRunForTrigger } from '../agent-service'
 import { createAgentSession, getAgentSessionMessages } from '../agent-session-manager'
-import { getChannelById } from '../channel-manager'
+import { getVisibleChannelById } from '../channel-manager'
 import { getSettings } from '../settings-service'
 import type { AgentFabricConfig } from './fabric-config'
 
@@ -156,7 +156,7 @@ export function createHeadlessTaskExecutor(deps: HeadlessExecutorDeps): TaskExec
           // 内核跟随全局默认（主推 Pi）。写死 'claude' 会让 Pi-only 渠道上的 Fabric 任务必然失败，
           // 且失败原因埋在 SDK 层，因此这里先按渠道能力校验再建会话。
           const agentRuntime: AgentRuntime = settings.agentRuntime ?? 'claude'
-          const channel = getChannelById(channelId)
+          const channel = getVisibleChannelById(channelId)
           if (!channel) {
             finish({ error: `Fabric 任务无法执行：渠道不存在（${channelId}）` })
             return

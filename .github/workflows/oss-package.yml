@@ -1,0 +1,407 @@
+name: OSS Package
+
+# 开源版（OSS edition）安装包构建。
+#
+# 分工（2026-11-12 定）：
+# - 商业版：由维护者在自有机器上打包（dist:mac-commercial / dist:win-commercial），产物进
+#   out-commercial/，更新源 https://profer.cn/profer-updates/（平铺目录）。
+# - 开源版：由本工作流在 GitHub Actions 上打包，产物进 out/，更新源 /oss/ 子目录。
+#
+# 默认只构建并上传 Actions Artifact，不发布。发布需要显式勾选 publish=true，
+# 且目标 Release 必须已存在（本工作流不创建 Release、不推送更新源主机）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的分支、tag 或 commit SHA'
+        required: true
+        default: main
+      publish:
+        description: '是否把产物上传到已存在的 GitHub Release（v<version>）'
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oss-package-${{ inputs.ref }}-${{ inputs.publish }}
+  cancel-in-progress: true
+
+env:
+  # 固定到已在本地验证过的版本，避免 latest 改变 lockfile 或测试行为。
+  BUN_VERSION: 1.3.14
+  NODE_VERSION: '22'
+
+jobs:
+  # ============================================================
+  # macOS arm64（开源版）
+  # ============================================================
+  macos-arm64:
+    name: build (macos-14, darwin, arm64, oss)
+    runs-on: macos-14
+    env:
+      # Vite 处理 OOXML/WASM 资源时默认堆上限不足。
+      NODE_OPTIONS: --max-old-space-size=6144
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify app version, changelog and tag consistency
+        run: |
+          set -euo pipefail
+          package_version=$(node -p "require('./apps/electron/package.json').version")
+          changelog_version=$(node -p "require('./apps/electron/resources/CHANGELOG.json').releases[0].version")
+          if [ "$package_version" != "$changelog_version" ]; then
+            echo "::error::package.json 版本 $package_version 与 CHANGELOG 首条 $changelog_version 不一致"
+            exit 1
+          fi
+          case "$INPUT_REF" in
+            v*)
+              tag_version="${INPUT_REF#v}"
+              if [ "$tag_version" != "$package_version" ]; then
+                echo "::error::tag 版本 ${tag_version} 与 package.json $package_version 不一致"
+                exit 1
+              fi
+              ;;
+          esac
+          echo "Verifying version: $package_version"
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+
+      - name: Typecheck workspace
+        run: bun run typecheck
+
+      - name: Verify runtime contract test discovery
+        run: bun --cwd apps/electron run check:runtime-contracts
+
+      - name: Run cross-platform packaging tests
+        # 与 macos-package.yml 同一条便携测试集：Windows 专用测试与 /private/var 别名
+        # 相关用例不该阻断 macOS 打包。
+        run: >-
+          bun test --isolate --max-concurrency=1 --timeout 30000
+          apps/electron/scripts/package-closure.test.ts
+          apps/electron/scripts/build-cli-runtime.test.ts
+          apps/electron/scripts/dist-platform.test.ts
+          apps/electron/scripts/ui-workspace-contract.test.ts
+          packages/ui/src/markdown-preview.test.tsx
+          packages/session-core/src/session-core.test.ts
+          packages/project-core/src/project-core.test.ts
+
+      - name: Resolve macOS signing material
+        id: signing
+        env:
+          OSS_MAC_CSC_LINK: ${{ secrets.OSS_MAC_CSC_LINK }}
+          OSS_MAC_CSC_KEY_PASSWORD: ${{ secrets.OSS_MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${OSS_MAC_CSC_LINK}" ] && [ -n "${OSS_MAC_CSC_KEY_PASSWORD}" ]; then
+            echo "has_cert=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "CSC_LINK=${OSS_MAC_CSC_LINK}"
+              echo "CSC_KEY_PASSWORD=${OSS_MAC_CSC_KEY_PASSWORD}"
+            } >> "$GITHUB_ENV"
+            echo "签名：使用 OSS_MAC_CSC_LINK 提供的证书"
+          else
+            echo "has_cert=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=macOS 未签名::未配置 OSS_MAC_CSC_LINK / OSS_MAC_CSC_KEY_PASSWORD；本次产物为 ad-hoc 签名，浏览器下载首次安装会被 Gatekeeper 拦。"
+            echo "签名：缺少证书，降级为 ad-hoc + 钉死 designated requirement"
+          fi
+
+          if [ -n "${OSS_MAC_CSC_LINK}" ] && \
+             [ -n "${APPLE_ID}" ] && \
+             [ -n "${APPLE_APP_SPECIFIC_PASSWORD}" ] && \
+             [ -n "${APPLE_TEAM_ID}" ]; then
+            echo "notarize=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "APPLE_ID=${APPLE_ID}"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=${APPLE_APP_SPECIFIC_PASSWORD}"
+              echo "APPLE_TEAM_ID=${APPLE_TEAM_ID}"
+            } >> "$GITHUB_ENV"
+            echo "公证：Apple ID 凭据齐全，electron-builder 将走 notarytool"
+          else
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+            echo "公证：凭据不齐（需要 OSS_MAC_CSC_LINK + APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID），本次跳过"
+          fi
+
+      - name: Package macOS arm64 (signed)
+        if: steps.signing.outputs.has_cert == 'true'
+        working-directory: apps/electron
+        run: bun run dist:mac-release
+
+      - name: Package macOS arm64 (ad-hoc)
+        if: steps.signing.outputs.has_cert != 'true'
+        working-directory: apps/electron
+        run: bun run dist:mac
+
+      - name: Assert macOS signature mode
+        # 有证书却仍是 ad-hoc（例如自签名证书被 afterSign 重签）必须让构建失败，
+        # 不能发布一个看起来签过、实际没有发布者身份的包。
+        working-directory: apps/electron
+        env:
+          PROFER_EXPECT_MAC_SIGNATURE_MODE: ${{ steps.signing.outputs.has_cert == 'true' && 'developer-id' || 'adhoc' }}
+        run: bun run verify:mac-signature
+
+      - name: Verify macOS update metadata
+        working-directory: apps/electron
+        run: bun run verify:mac-update-assets
+
+      - name: Summarize macOS build
+        run: |
+          version=$(node -p "require('./apps/electron/package.json').version")
+          sig=${{ steps.signing.outputs.has_cert == 'true' && 'signed' || 'ad-hoc' }}
+          notarized=${{ steps.signing.outputs.notarize == 'true' && 'yes' || 'no' }}
+          {
+            echo "### OSS macOS arm64"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | $version |"
+            echo "| 签名 | $sig |"
+            echo "| 公证 | $notarized |"
+            echo "| 产物 | $(ls apps/electron/out/*.dmg apps/electron/out/*.zip 2>/dev/null | xargs -n1 basename | tr '\n' ' ') |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload macOS installable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Profer-OSS-macOS-arm64-${{ inputs.ref }}
+          path: |
+            apps/electron/out/latest-mac.yml
+            apps/electron/out/*.dmg
+            apps/electron/out/*.zip
+            apps/electron/out/*.blockmap
+          if-no-files-found: error
+          retention-days: 14
+
+  # ============================================================
+  # Windows x64（开源版）
+  # ============================================================
+  windows-x64:
+    name: build (windows-latest, win, x64, oss)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify app version, changelog and tag consistency
+        shell: pwsh
+        run: |
+          $packageVersion = node -p "require('./apps/electron/package.json').version"
+          $changelogVersion = node -p "require('./apps/electron/resources/CHANGELOG.json').releases[0].version"
+          if ($packageVersion -ne $changelogVersion) {
+            throw "package.json 版本 $packageVersion 与 CHANGELOG 首条 $changelogVersion 不一致"
+          }
+          $requestedRef = "${{ inputs.ref }}"
+          if ($requestedRef -match '^v') {
+            $tagVersion = $requestedRef -replace '^v', ''
+            if ($tagVersion -ne $packageVersion) {
+              throw "Tag 版本 $requestedRef 与 package.json $packageVersion 不一致"
+            }
+          }
+          "Verifying version: $packageVersion"
+
+      - name: Typecheck workspace
+        run: bun run typecheck
+
+      - name: Run Windows packaging regression tests
+        run: >-
+          bun test --isolate --max-concurrency=1 --timeout 30000
+          apps/electron/scripts/package-closure.test.ts
+          apps/electron/scripts/dist-platform.test.ts
+          apps/electron/scripts/packaging-guards.test.ts
+          scripts/release-asset-contract.test.ts
+
+      - name: Resolve Windows signing material
+        id: signing
+        shell: pwsh
+        env:
+          OSS_WIN_CSC_LINK: ${{ secrets.OSS_WIN_CSC_LINK }}
+          OSS_WIN_CSC_KEY_PASSWORD: ${{ secrets.OSS_WIN_CSC_KEY_PASSWORD }}
+          METADATA_KEY: ${{ secrets.PROFER_UPDATE_METADATA_PRIVATE_KEY }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:OSS_WIN_CSC_LINK) -and
+              -not [string]::IsNullOrWhiteSpace($env:OSS_WIN_CSC_KEY_PASSWORD)) {
+            "has_cert=true" >> $env:GITHUB_OUTPUT
+            "CSC_LINK=$($env:OSS_WIN_CSC_LINK)" >> $env:GITHUB_ENV
+            "CSC_KEY_PASSWORD=$($env:OSS_WIN_CSC_KEY_PASSWORD)" >> $env:GITHUB_ENV
+            Write-Host "签名：使用 OSS_WIN_CSC_LINK 提供的 Authenticode 证书"
+          } else {
+            "has_cert=false" >> $env:GITHUB_OUTPUT
+            Write-Host "::warning title=Windows 未签名::未配置 OSS_WIN_CSC_LINK / OSS_WIN_CSC_KEY_PASSWORD；产物未签名，SmartScreen 会提示未知发布者。"
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:METADATA_KEY)) {
+            "has_metadata_key=true" >> $env:GITHUB_OUTPUT
+            "PROFER_UPDATE_METADATA_PRIVATE_KEY=$($env:METADATA_KEY)" >> $env:GITHUB_ENV
+          } else {
+            "has_metadata_key=false" >> $env:GITHUB_OUTPUT
+            Write-Host "更新元数据：缺少 PROFER_UPDATE_METADATA_PRIVATE_KEY，latest.yml.sig 不会生成"
+          }
+
+      - name: Package Windows x64 (official OSS build)
+        working-directory: apps/electron
+        # dist:win-github = build:github（oss 目标 + 两道边界断言）+ electron-builder；
+        # 入口已固定 --publish never，发布只由 push-release.cjs 负责。
+        run: bun run dist:win-github
+
+      - name: Sign update metadata
+        if: steps.signing.outputs.has_metadata_key == 'true'
+        working-directory: apps/electron
+        env:
+          PROFER_UPDATE_METADATA_PUBLIC_KEY: ${{ secrets.PROFER_UPDATE_METADATA_PUBLIC_KEY }}
+        run: bun run sign:update-metadata
+
+      - name: Verify Windows release assets (signed)
+        if: steps.signing.outputs.has_cert == 'true' && steps.signing.outputs.has_metadata_key == 'true'
+        working-directory: apps/electron
+        env:
+          PROFER_UPDATE_METADATA_PUBLIC_KEY: ${{ secrets.PROFER_UPDATE_METADATA_PUBLIC_KEY }}
+        run: bun run verify:release-assets
+
+      - name: Verify Windows release assets (unsigned)
+        if: steps.signing.outputs.has_cert != 'true' || steps.signing.outputs.has_metadata_key != 'true'
+        working-directory: apps/electron
+        run: bun run verify:release-assets:unsigned
+
+      - name: Probe packaged Pi runtime closure
+        shell: pwsh
+        working-directory: apps/electron
+        run: |
+          $probePath = Join-Path $PWD "scripts/packaged-pi-probe.cjs"
+          if (-not (Test-Path -LiteralPath $probePath)) {
+            throw "Missing Pi probe script: $probePath"
+          }
+          $unpackedResources = Join-Path $PWD "out/win-unpacked/resources"
+          if (-not (Test-Path -LiteralPath $unpackedResources)) {
+            throw "Missing unpacked resources for Pi probe: $unpackedResources"
+          }
+          $env:ELECTRON_RUN_AS_NODE = "1"
+          $stdout = Join-Path $PWD "probe-out.txt"
+          $stderr = Join-Path $PWD "probe-err.txt"
+          $process = Start-Process -FilePath (Join-Path $PWD "out/win-unpacked/Profer.exe") `
+            -ArgumentList @($probePath, $unpackedResources) `
+            -PassThru -NoNewWindow `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            Wait-Process -Id $process.Id -Timeout 120 -ErrorAction Stop
+          } catch {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Pi runtime closure probe timed out after 120s"
+          }
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path $stdout) { Get-Content $stdout }
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Pi runtime closure probe failed with exit code $($process.ExitCode)"
+          }
+          Write-Host "Pi runtime closure verified"
+
+      - name: Summarize Windows build
+        shell: pwsh
+        run: |
+          $version = node -p "require('./apps/electron/package.json').version"
+          $sig = if ("${{ steps.signing.outputs.has_cert }}" -eq "true") { "signed" } else { "unsigned" }
+          @(
+            "### OSS Windows x64",
+            "",
+            "| 项 | 值 |",
+            "| --- | --- |",
+            "| 版本 | $version |",
+            "| Authenticode | $sig |",
+            "| 安装包 | $(Get-ChildItem apps/electron/out/*.exe | Select-Object -ExpandProperty Name -ErrorAction SilentlyContinue) |"
+          ) >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload Windows installable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Profer-OSS-Windows-x64-${{ inputs.ref }}
+          path: |
+            apps/electron/out/latest.yml
+            apps/electron/out/*.exe
+            apps/electron/out/*.blockmap
+          if-no-files-found: error
+          retention-days: 14
+
+  # ============================================================
+  # 发布（默认关闭）
+  # ============================================================
+  publish:
+    name: publish to GitHub Release (oss)
+    if: inputs.publish == 'true'
+    needs:
+      - macos-arm64
+      - windows-x64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Profer-OSS-macOS-arm64-${{ inputs.ref }}
+          path: artifacts
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Profer-OSS-Windows-x64-${{ inputs.ref }}
+          path: artifacts
+
+      - name: Upload assets to existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./apps/electron/package.json').version")
+          tag="v${version}"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $tag 不存在；本工作流不创建 Release，请先建好 release 再重跑 publish。"
+            exit 1
+          fi
+          gh release upload "$tag" artifacts/* --clobber --repo "$GITHUB_REPOSITORY"

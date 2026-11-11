@@ -23,7 +23,6 @@ import {
   resolveTitleBaseUrl,
   streamSSE,
   fetchTitleWithRetry,
-  detectInsufficientCredits,
 } from '@profer/core'
 import type { ImageAttachmentData, ContinuationMessage } from '@profer/core'
 import { resolveEditionBearerToken } from '@profer/edition-contract'
@@ -298,7 +297,7 @@ export async function sendMessage(
       return
     }
 
-    const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
+    const proxyPath = editionProviders.credentials.managedPath(ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? 'messages' : 'chat')
     proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
     apiKey = resolveEditionBearerToken(auth)
   } else {
@@ -459,7 +458,7 @@ export async function sendMessage(
 
         const currentChannel = listChannels().find((candidate) => candidate.id === channelId)
         if (!currentChannel || !isChatModelAvailable(currentChannel, modelId)) throw error
-        proxyBaseUrl = `${recovered.baseUrl}${ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'}`
+        proxyBaseUrl = `${recovered.baseUrl}${editionProviders.credentials.managedPath(ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? 'messages' : 'chat')}`
         apiKey = recovered.proxyToken || recovered.token
         request.url = proxyBaseUrl
         request.headers.Authorization = `Bearer ${apiKey}`
@@ -681,7 +680,8 @@ export async function sendMessage(
     // 额度不足（402）：把原始报错替换成「额度不足，请充值」结构化引导。
     // 其他上游瞬时错误只在日志保留原文，UI 使用稳定、可读的提示。
     const normalizedError = normalizeChatStreamError(channel.provider, error)
-    const insufficient = detectInsufficientCredits(error)
+    // 额度不足属于商业版语义：识别规则由发行版注入，开源版恒为 null。
+    const insufficient = editionProviders.errors.detectInsufficientCredits(error)
     const displayError = insufficient ? insufficient.message : normalizedError.message
     const errorCode = insufficient ? 'insufficient_credits' : normalizedError.code
     const errorTitle = insufficient ? '额度不足' : normalizedError.errorTitle
@@ -806,7 +806,7 @@ export async function generateTitle(input: GenerateTitleInput): Promise<string |
       console.warn('[标题生成] 团队账号登录已过期，跳过 AI 标题生成')
       return null
     }
-    const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
+    const proxyPath = editionProviders.credentials.managedPath(ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? 'messages' : 'chat')
     proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
     apiKey = resolveEditionBearerToken(auth)
   } else {

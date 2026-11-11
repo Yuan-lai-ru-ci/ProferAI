@@ -1,4 +1,5 @@
 import { getGptImageCredentials, getToolCredentials } from './chat-tool-config'
+import { editionProviders } from './edition'
 
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com'
 const DEFAULT_XAI_BASE_URL = 'https://api.x.ai'
@@ -21,8 +22,7 @@ export async function testGptImageConnection(): Promise<GptImageConnectionTestRe
   const credentials = getGptImageCredentials()
 
   if (credentials.mode === 'official') {
-    const { getTeamAuthWithRefresh } = await import('./auth-service')
-    const auth = await getTeamAuthWithRefresh()
+    const auth = await editionProviders.account.getSession()
     if (!auth) {
       return { success: false, message: '请先登录 Profer 团队账号' }
     }

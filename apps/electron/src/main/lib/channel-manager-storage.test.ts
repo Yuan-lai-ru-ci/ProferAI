@@ -19,6 +19,30 @@ mock.module('./auth-service', () => ({
   getCommercialMode: () => commercial,
   isSelfConfigAllowed: () => selfConfig,
 }))
+// 会员能力与渠道来源判定已收口到发行版契约；本文件验的是商业版保护逻辑。
+mock.module('./edition', () => ({
+  editionProviders: {
+    id: 'commercial',
+    account: {
+      getSession: async () => null,
+      recoverSession: async () => null,
+      getSessionSnapshot: () => null,
+      getSessionGeneration: () => null,
+      refreshSession: async () => true,
+      restoreSession: async () => false,
+      scheduleAutoRefresh: () => {},
+      getMembership: () => ({ commercialMode: commercial, membershipTier: 'pro', canSelfConfig: selfConfig }),
+    },
+    credentials: { shouldUseManagedRoute: () => commercial, shouldUseBearerAuth: () => commercial },
+    errors: { detectInsufficientCredits: () => null },
+    channels: {
+      isManagedChannel: (channel: { id: string; serverManaged?: boolean }) =>
+        channel.serverManaged === true || channel.id.startsWith('newapi-'),
+    },
+    remote: { getRelayTicket: async () => null },
+    registerIpc: () => {},
+  },
+}))
 mock.module('./proxy-settings-service', () => ({ getEffectiveProxyUrl: async () => undefined }))
 mock.module('./proxy-fetch', () => ({
   getFetchFn: () => async (_url: string, init: RequestInit) => {

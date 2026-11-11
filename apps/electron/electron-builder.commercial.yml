@@ -1,0 +1,29 @@
+# 商业版打包配置
+# 用法：node scripts/run-electron-builder.cjs --win --config electron-builder.commercial.yml
+#
+# 与开源版的差异只允许出现在这四个字段上，其余一律继承 electron-builder.yml：
+#   1. directories.output —— 产物落到独立目录，避免两次打包互相覆盖
+#   2. nsis.artifactName  —— 安装包文件名可区分，两套元数据同名也不冲突
+#   3. mac.artifactName   —— 同上，macOS 侧
+#   4. publish            —— app-update.yml 指向商业目录，不指向公共 GitHub Release
+#
+# appId / productName 故意与开源版保持一致：现有安装（含已发布的 0.16.x）继续沿用
+# com.profer.app，变更 appId 会让存量用户的自动更新链断掉，需要人工重装。
+# 代价是两个发行版无法在同一台机器上共存；要共存必须拆 appId，那是独立的迁移动作。
+extends: ./electron-builder.yml
+
+directories:
+  output: out-commercial
+
+nsis:
+  artifactName: Profer-Commercial-Setup-${version}.${ext}
+
+mac:
+  artifactName: Profer-Commercial-${version}-${arch}.${ext}
+
+# publish 必须写成数组：对象形式会与基础配置深度合并，把 GitHub 的
+# owner / repo / releaseType 残留进来（provider 已是 generic，用不上却会写进
+# app-update.yml）。数组形式是整体替换，已验证合并结果为单条 generic 配置。
+publish:
+  - provider: generic
+    url: https://profer.cn/profer-updates/

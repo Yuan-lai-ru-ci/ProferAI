@@ -48,6 +48,8 @@ interface DistOptions {
   noSign: boolean
   targetFormat: 'all' | 'dmg' | 'zip' | 'dir'
   platform: 'mac' | 'win' | 'linux'
+  /** 发行版：决定主进程构建目标、打包配置与产物目录。 */
+  target: 'oss' | 'commercial'
 }
 
 // ============================================
@@ -168,6 +170,16 @@ export function defaultPlatformForHost(
   return undefined
 }
 
+/**
+ * 发行版对应的 electron-builder 产物目录。
+ *
+ * 两个发行版必须物理隔离：同名 `latest*.yml` 在同一目录会互相覆盖，
+ * 构建后的 verify 步骤也必须指向正确的目录，否则只会验证上一次留下的另一版产物。
+ */
+export function resolveOutputDir(target: DistOptions['target']): 'out' | 'out-commercial' {
+  return target === 'commercial' ? 'out-commercial' : 'out'
+}
+
 /** 参数解析（宿主平台与 argv 可注入，便于跨平台解析测试）。 */
 export function parseArgs(
   args: readonly string[] = process.argv.slice(2),
@@ -184,10 +196,18 @@ export function parseArgs(
   if (!platform) {
     throw new Error(`不支持在 ${hostPlatform} 宿主上打包；请显式选择 --mac / --win / --linux。`)
   }
+  // --target 缺省为 oss，与既有 `dist:mac` / `dist:win` 行为一致；
+  // 显式传错值要报错，不能静默回退成开源版产物。
+  const targetIndex = args.indexOf('--target')
+  const rawTarget = targetIndex === -1 ? 'oss' : args[targetIndex + 1]
+  if (rawTarget !== 'oss' && rawTarget !== 'commercial') {
+    throw new Error(`--target 只能是 oss 或 commercial，实际为 ${rawTarget ?? '(缺失)'}`)
+  }
   return {
     currentArch: args.includes('--current-arch'),
     verbose: args.includes('--verbose'),
     noSign: args.includes('--no-sign'),
+    target: rawTarget,
     targetFormat: args.includes('--dmg')
       ? 'dmg'
       : args.includes('--zip')
@@ -232,6 +252,7 @@ function main(): void {
 
   // 打印配置信息
   console.log(`\n${color.bgBlue}${color.bold} Profer 打包工具 ${color.reset}\n`)
+  console.log(`  ${color.bold}发行版${color.reset}:   ${opts.target}${opts.target === 'commercial' ? ' (商业版)' : ' (开源版)'}`)
   console.log(`  ${color.bold}平台${color.reset}:     ${opts.platform}`)
   console.log(`  ${color.bold}架构${color.reset}:     ${opts.currentArch ? arch + ' (仅当前)' : opts.platform === 'mac' ? 'arm64' : 'arm64 + x64'}`)
   console.log(`  ${color.bold}格式${color.reset}:     ${opts.targetFormat}`)
@@ -239,19 +260,36 @@ function main(): void {
   console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
   printSeparator()
 
-  const totalSteps = opts.platform === 'mac' ? 9 : 7
+  const totalSteps = opts.platform === 'mac' ? 11 : 8
+  const outputDir = resolveOutputDir(opts.target)
   let step = 0
 
   // ── 步骤 1: 构建主进程 ──
   step++
-  printStepStart(step, totalSteps, '构建主进程 (esbuild)')
+  printStepStart(step, totalSteps, opts.target === 'commercial' ? '构建主进程 (commercial)' : '构建主进程 (oss)')
   results.push(
-    runStep('构建主进程', 'bun', ['run', 'build:main'], { verbose: opts.verbose })
+    runStep('构建主进程', 'bun', ['run', opts.target === 'commercial' ? 'build:main-commercial' : 'build:main'], { verbose: opts.verbose })
   )
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 2: 构建 Preload ──
+  // ── 步骤 2: 校验发行版边界 ──
+  // 打包前就把“拿错发行版主进程去出包”报出来，比装完才发现省事：
+  // 开源版必须不含商业模块，商业版必须真的包含商业模块。
+  step++
+  printStepStart(step, totalSteps, '校验发行版边界')
+  results.push(
+    runStep(
+      '校验发行版边界',
+      'bun',
+      ['run', opts.target === 'commercial' ? 'verify:commercial-includes-commercial' : 'verify:oss-excludes-commercial'],
+      { verbose: opts.verbose },
+    )
+  )
+  printStepResult(results[results.length - 1])
+  if (!results[results.length - 1].success) return printSummary(results)
+
+  // ── 步骤 3: 构建 Preload ──
   step++
   printStepStart(step, totalSteps, '构建 Preload (esbuild)')
   results.push(
@@ -260,7 +298,7 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 3: 构建渲染进程 ──
+  // ── 步骤 4: 构建渲染进程 ──
   step++
   printStepStart(step, totalSteps, '构建渲染进程 (Vite)')
   results.push(
@@ -269,7 +307,7 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 4: 编译随包 CLI ──
+  // ── 步骤 5: 编译随包 CLI ──
   step++
   printStepStart(step, totalSteps, '编译 Profer CLI (bun --compile)')
   results.push(
@@ -278,7 +316,7 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 5: 复制资源文件 ──
+  // ── 步骤 6: 复制资源文件 ──
   step++
   printStepStart(step, totalSteps, '复制资源文件')
   results.push(
@@ -288,7 +326,7 @@ function main(): void {
   // 资源包缺失会导致打包产物缺 skins/icon 等，必须中断而非继续
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 6: 同步主进程运行时依赖 ──
+  // ── 步骤 7: 同步主进程运行时依赖 ──
   step++
   printStepStart(step, totalSteps, '同步主进程运行时依赖')
   results.push(
@@ -297,15 +335,18 @@ function main(): void {
   printStepResult(results[results.length - 1])
   if (!results[results.length - 1].success) return printSummary(results)
 
-  // ── 步骤 7: electron-builder 打包 ──
+  // ── 步骤 8: electron-builder 打包 ──
   step++
   printStepStart(step, totalSteps, 'Electron Builder 打包')
 
   const builderArgs = ['electron-builder', `--${opts.platform}`]
-  // P1 只产出本地验收包，绝不能因 package.json 中的 GitHub publish 配置上传资产。
-  if (opts.platform === 'mac') {
-    builderArgs.push('--publish', 'never')
+  // 商业版用独立配置：独立产物目录、独立文件名、独立更新源（app-update.yml）。
+  if (opts.target === 'commercial') {
+    builderArgs.push('--config', 'electron-builder.commercial.yml')
   }
+  // 只产出本地验收包：绝不能因 package.json 中的 GitHub publish 配置上传资产。
+  // 发布一律走 push-release.cjs / push-mac-release.cjs，CI 侧也显式 --publish never。
+  builderArgs.push('--publish', 'never')
 
   // 只构建当前架构
   if (opts.currentArch) {
@@ -345,10 +386,13 @@ function main(): void {
   if (!results[results.length - 1].success) return printSummary(results)
 
   if (opts.platform === 'mac') {
+    // 所有 verify 步骤都指向本次发行版的产物目录；商业版在 out-commercial/。
+    const verifyEnv = { PROFER_ELECTRON_OUTPUT_DIR: outputDir }
+
     step++
     printStepStart(step, totalSteps, '验证 macOS 安装包资源闭包')
     results.push(
-      runStep('验证 macOS 安装包', 'bun', ['run', 'verify:mac-package'], { verbose: opts.verbose })
+      runStep('验证 macOS 安装包', 'bun', ['run', 'verify:mac-package'], { verbose: opts.verbose, env: verifyEnv })
     )
     printStepResult(results[results.length - 1])
     if (!results[results.length - 1].success) return printSummary(results)
@@ -356,7 +400,18 @@ function main(): void {
     step++
     printStepStart(step, totalSteps, '验证 macOS 签名契约（ad-hoc + 钉死 DR）')
     results.push(
-      runStep('验证 macOS 签名', 'bun', ['run', 'verify:mac-signature'], { verbose: true })
+      runStep('验证 macOS 签名', 'bun', ['run', 'verify:mac-signature'], { verbose: true, env: verifyEnv })
+    )
+    printStepResult(results[results.length - 1])
+    if (!results[results.length - 1].success) return printSummary(results)
+
+    step++
+    printStepStart(step, totalSteps, '验证 macOS 更新元数据')
+    results.push(
+      runStep('验证 macOS 更新元数据', 'node', ['scripts/verify-macos-update-assets.cjs', '--edition', opts.target], {
+        verbose: opts.verbose,
+        env: verifyEnv,
+      })
     )
     printStepResult(results[results.length - 1])
   }

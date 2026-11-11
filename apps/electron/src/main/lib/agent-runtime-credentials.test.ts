@@ -27,7 +27,34 @@ mock.module('./channel-manager', () => ({
   resolveXaiOAuthCredentials: async () => ({ ...codex }),
   persistXaiOAuthCredentials: () => {},
 }))
-mock.module('./auth-service', () => ({ getTeamAuthWithRefresh: teamAuth, recoverCommercialProxyAuth: async () => null }))
+// 账号与路由策略已收口到发行版契约：mock 接缝从 auth-service 移到 ./edition。
+const isManaged = (channel: Pick<Channel, 'id' | 'serverManaged'>): boolean =>
+  channel.serverManaged === true || channel.id.startsWith('newapi-')
+mock.module('./edition', () => ({
+  editionProviders: {
+    id: 'commercial',
+    account: {
+      getSession: teamAuth,
+      recoverSession: async () => null,
+      getSessionSnapshot: () => null,
+      getSessionGeneration: () => (commercial ? 1 : null),
+      refreshSession: async () => true,
+      restoreSession: async () => false,
+      scheduleAutoRefresh: () => {},
+      getMembership: () => ({ commercialMode: commercial, membershipTier: 'pro', canSelfConfig: true }),
+    },
+    credentials: {
+      shouldUseManagedRoute: (channel: Pick<Channel, 'id' | 'serverManaged'>) => commercial && isManaged(channel),
+      shouldUseBearerAuth: (channel: Pick<Channel, 'id' | 'serverManaged'>) => commercial && isManaged(channel),
+      managedPath: (kind: string) =>
+        ({ messages: '/v1/proxy/messages', chat: '/v1/proxy/chat', images: '/v1/proxy/images/generations', imageEdits: '/v1/proxy/images/edits', root: '/v1/proxy' } as Record<string, string>)[kind] ?? '',
+      managedImageOperationPath: (operation: string, key: string) =>
+        `/v1/proxy/images/operations/by-idempotency/${operation}/${key}`,
+    },
+    remote: { getRelayTicket: async () => null },
+    registerIpc: () => {},
+  },
+}))
 mock.module('./build-target', () => ({ isCommercialBuild: () => false }))
 const { buildPiRuntimeCredentialOptions, resolveRuntimeCredentials } = await import('./agent-runtime-credentials')
 const { buildModel } = await import('./adapters/pi-model-registry')

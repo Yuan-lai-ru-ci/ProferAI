@@ -145,3 +145,44 @@ describe('老版本 blockmap 清理告警', () => {
     ])
   })
 })
+
+describe('发行版与更新目录匹配', () => {
+  const { classifyArtifactEdition, assertFeedDirectoryMatchesEdition } = contract
+
+  test('Given 资产文件名 When 判定发行版 Then 先认商业前缀再认公开前缀', () => {
+    expect(classifyArtifactEdition(['latest.yml', 'Profer-Setup-0.16.26.exe', 'Profer-Setup-0.16.26.exe.blockmap'])).toBe('oss')
+    expect(classifyArtifactEdition(['latest-mac.yml', 'Profer-0.16.26-arm64-mac.zip', 'Profer-0.16.26-arm64.dmg'])).toBe('oss')
+    expect(classifyArtifactEdition(['latest.yml', 'Profer-Commercial-Setup-0.16.26.exe'])).toBe('commercial')
+    expect(classifyArtifactEdition(['latest.yml', 'Profer-Setup-0.16.26.exe', 'Profer-Commercial-Setup-0.16.26.exe'])).toBe('mixed')
+    expect(classifyArtifactEdition(['latest.yml', 'latest.yml.sig'])).toBe('unknown')
+    expect(classifyArtifactEdition([])).toBe('unknown')
+  })
+
+  test('Given 开源版资产 When 写入商业目录 Then 阻断并说明后果', () => {
+    // 两个发行版的 latest.yml 同名，混目录等于让商业用户升级到没有账号能力的版本。
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'oss', dir: '/var/www/updates.profer.cn' }))
+      .toThrow('开源版资产正在写入商业版更新目录')
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'oss', dir: '/var/www/updates.profer.cn/' }))
+      .toThrow('PROFER_UPDATE_DIR')
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'oss', dir: '/var/www/updates.profer.cn/oss' })).not.toThrow()
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'oss', dir: '/var/www/updates.profer.cn/oss/' })).not.toThrow()
+  })
+
+  test('Given 商业版资产 When 写入开源目录 Then 阻断', () => {
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'commercial', dir: '/var/www/updates.profer.cn/oss' }))
+      .toThrow('商业版资产正在写入开源版更新目录')
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'commercial', dir: '/var/www/updates.profer.cn' })).not.toThrow()
+  })
+
+  test('Given 混合资产或无法识别 When 校验 Then 混合阻断、未知放行', () => {
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'mixed', dir: '/var/www/updates.profer.cn/oss' }))
+      .toThrow('同时包含开源版与商业版安装包')
+    // 只有 latest.yml 时无法判定发行版，不能凭空阻断
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'unknown', dir: '/var/www/updates.profer.cn' })).not.toThrow()
+  })
+
+  test('Given 报错 When 定位 Then 带上目标标签', () => {
+    expect(() => assertFeedDirectoryMatchesEdition({ edition: 'oss', dir: '/var/www/x', label: '旧机' }))
+      .toThrow('（旧机）')
+  })
+})

@@ -10,7 +10,20 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 
 const appRoot = path.resolve(__dirname, '..')
-const out = path.join(appRoot, 'out')
+
+// 商业版产物在 out-commercial/，与开源版的 out/ 互不覆盖；默认仍为 out/。
+const args = process.argv.slice(2)
+const editionIndex = args.indexOf('--edition')
+const edition = editionIndex === -1
+  ? (process.env.PROFER_RELEASE_EDITION ?? 'oss')
+  : args[editionIndex + 1]
+if (edition !== 'oss' && edition !== 'commercial') {
+  throw new Error(`--edition 只能是 oss 或 commercial，实际为 ${edition ?? '(缺失)'}`)
+}
+const out = path.join(
+  appRoot,
+  process.env.PROFER_ELECTRON_OUTPUT_DIR ?? (edition === 'commercial' ? 'out-commercial' : 'out'),
+)
 const version = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version
 const metadataPath = path.join(out, 'latest-mac.yml')
 

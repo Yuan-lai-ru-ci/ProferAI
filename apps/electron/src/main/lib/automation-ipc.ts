@@ -25,7 +25,7 @@ import { applyRecommendationFeedback, listRecommendations } from './recommendati
 import { refreshAutomationRecommendations } from './recommendation-engine'
 import { getAgentSessionMeta, listAgentSessions } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
-import { getChannelById } from './channel-manager'
+import { getVisibleChannelById } from './channel-manager'
 import { resolvePresetId, getDefaultPresetId } from './agent-preset-manager'
 import { validateBoundAutomationChannel, validateBoundAutomationSession, withTrustedAutomationPromptAuthor } from './automation-dispatch'
 
@@ -134,7 +134,7 @@ export function registerAutomationIpc(): void {
       : getDefaultPresetId(workspaceSlug)
     const result = validateBoundAutomationSession(automation, session, expectedPresetId)
     if (!result.valid) throw new Error(`目标会话绑定无效：${result.reason}`)
-    const channel = getChannelById(channelId)
+    const channel = getVisibleChannelById(channelId)
     const availability = validateBoundAutomationChannel({ ...automation, modelId: input.modelId ?? existing?.modelId }, session, channel)
     if (!availability.valid) throw new Error(`目标会话绑定无效：${availability.reason}`)
   }

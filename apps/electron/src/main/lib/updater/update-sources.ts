@@ -1,4 +1,5 @@
 import type { AppUpdater } from 'electron-updater'
+import { isCommercialBuild } from '../build-target'
 
 type UpdateFeedConfiguration = Exclude<Parameters<AppUpdater['setFeedURL']>[0], string>
 
@@ -13,19 +14,34 @@ export interface UpdateSource {
   probeUrl: string | null
 }
 
+/** 发行版：决定用哪一组更新目录。 */
+export type UpdateEdition = 'oss' | 'commercial'
+
 /**
- * 国内主更新源：旧机静态目录 `profer.cn/profer-updates/`（阿里云，国内直连）。
+ * 开源版国内主源目录。
+ *
+ * 与商业版目录**物理隔离**：两个发行版的元数据文件同名（latest.yml /
+ * latest-mac.yml），放进同一目录会互相覆盖，安装器也无法区分该给谁。
+ */
+export const OSS_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/oss/'
+export const OSS_FALLBACK_UPDATE_FEED_URL = 'https://updates.profer.cn/oss/'
+
+/**
+ * 商业版国内主源：沿用存量平铺目录。
+ *
+ * 已安装的商业版老用户读的就是这个地址，改路径等于让存量用户停止收到更新，
+ * 所以商业版继承原路径，由新增的开源版去占新目录。
  *
  * 2026-10-08：香港机失联，`updates.profer.cn` 已不可达，主备顺序切回旧机。
  */
-export const DOMESTIC_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/'
-/**
- * 备用国内源：香港机专属域名。
- *
- * 香港机 2026-10-08 失联后由主源降级为备用；若确认该域名不再使用，可直接从
- * `getUpdateSources` 中移除（客户端在它之后仍有 GitHub 兜底）。
- */
-export const DOMESTIC_FALLBACK_UPDATE_FEED_URL = 'https://updates.profer.cn/'
+export const COMMERCIAL_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/'
+/** 商业版备用国内源：香港机专属域名（失联后降级为备用）。 */
+export const COMMERCIAL_FALLBACK_UPDATE_FEED_URL = 'https://updates.profer.cn/'
+
+/** @deprecated 旧名，等价于商业版目录。新代码请直接用带发行版语义的常量。 */
+export const DOMESTIC_UPDATE_FEED_URL = COMMERCIAL_UPDATE_FEED_URL
+/** @deprecated 旧名，等价于商业版备用目录。 */
+export const DOMESTIC_FALLBACK_UPDATE_FEED_URL = COMMERCIAL_FALLBACK_UPDATE_FEED_URL
 /**
  * 并行探活超时。黑洞型故障（丢包不回 RST）下，探活必须远早于真正的元数据请求放弃。
  *
@@ -85,7 +101,12 @@ export function isSecureUpdateFeedUrl(value: unknown): value is string {
 
 /**
  * 客户端运行时更新源顺序。
- * 国内源是默认主源，GitHub 只在主源不可达或下载失败时作为备用。
+ *
+ * 两个发行版走**不同目录**，并各自有独立的回退策略：
+ * - 开源版：国内开源目录 → 备用开源目录 → GitHub Releases。
+ * - 商业版：国内商业目录 → 备用商业目录，**不回退 GitHub**。
+ *   公共 Release 上是开源产物，商业版装上去会变成没有账号与官方渠道的版本，
+ *   这是跨版本降级，比“更新不了”严重得多。
  *
  * generic provider 会由 electron-updater 根据运行平台自动请求：
  * Windows 为 latest.yml，macOS 为 latest-mac.yml。因此两个平台共用同一个 HTTPS
@@ -97,11 +118,15 @@ export function isSecureUpdateFeedUrl(value: unknown): value is string {
 export function getUpdateSources(
   overrideUrl = process.env.PROFER_UPDATE_FEED_URL,
   platform: NodeJS.Platform = process.platform,
+  edition: UpdateEdition = isCommercialBuild() ? 'commercial' : 'oss',
 ): UpdateSource[] {
   const sources: UpdateSource[] = []
   const metadataFile = updateMetadataFileName(platform)
-  const normalizedDomesticUrl = normalizeFeedUrl(DOMESTIC_UPDATE_FEED_URL)
-  const normalizedFallbackUrl = normalizeFeedUrl(DOMESTIC_FALLBACK_UPDATE_FEED_URL)
+  const commercial = edition === 'commercial'
+  const primaryUrl = commercial ? COMMERCIAL_UPDATE_FEED_URL : OSS_UPDATE_FEED_URL
+  const fallbackUrl = commercial ? COMMERCIAL_FALLBACK_UPDATE_FEED_URL : OSS_FALLBACK_UPDATE_FEED_URL
+  const normalizedDomesticUrl = normalizeFeedUrl(primaryUrl)
+  const normalizedFallbackUrl = normalizeFeedUrl(fallbackUrl)
 
   const genericSource = (
     id: 'override' | 'domestic' | 'domestic-fallback',
@@ -129,8 +154,10 @@ export function getUpdateSources(
     sources.push(genericSource('override', '环境变量更新源', normalizedOverride))
   }
 
-  sources.push(genericSource('domestic', '国内更新服务器', DOMESTIC_UPDATE_FEED_URL))
-  sources.push(genericSource('domestic-fallback', '备用国内更新源', DOMESTIC_FALLBACK_UPDATE_FEED_URL))
-  sources.push(GITHUB_UPDATE_SOURCE)
+  // 标签对用户可见（更新失败时会拼进错误文案），保持中性描述；发行版差异只体现在 URL 上。
+  sources.push(genericSource('domestic', '国内更新服务器', primaryUrl))
+  sources.push(genericSource('domestic-fallback', '备用国内更新源', fallbackUrl))
+  // 商业版到此为止：绝不能拿公共 Release 的开源产物覆盖商业安装。
+  if (!commercial) sources.push(GITHUB_UPDATE_SOURCE)
   return sources
 }

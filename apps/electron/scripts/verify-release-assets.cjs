@@ -13,11 +13,34 @@ const { execFileSync } = require('node:child_process')
 const { verifyPackagedWindowsCli } = require('./packaged-cli-contract.cjs')
 
 const appRoot = path.resolve(__dirname, '..')
-const out = path.join(appRoot, 'out')
+
+/**
+ * 发行版决定产物目录与安装包前缀：
+ * - oss：`out/` + `Profer-Setup-<version>.exe`
+ * - commercial：`out-commercial/` + `Profer-Commercial-Setup-<version>.exe`
+ *
+ * 两者都必须能被校验，否则商业版出包只能靠肉眼确认产物存在。
+ * 显式 `PROFER_ELECTRON_OUTPUT_DIR` / `PROFER_INSTALLER_PREFIX` 仍然优先，
+ * 便于临时目录或内部版本号复用同一套断言。
+ */
+const args = process.argv.slice(2)
+const editionIndex = args.indexOf('--edition')
+const edition = editionIndex === -1
+  ? (process.env.PROFER_RELEASE_EDITION ?? 'oss')
+  : args[editionIndex + 1]
+if (edition !== 'oss' && edition !== 'commercial') {
+  throw new Error(`--edition 只能是 oss 或 commercial，实际为 ${edition ?? '(缺失)'}`)
+}
+const out = path.join(
+  appRoot,
+  process.env.PROFER_ELECTRON_OUTPUT_DIR ?? (edition === 'commercial' ? 'out-commercial' : 'out'),
+)
+const installerPrefix = process.env.PROFER_INSTALLER_PREFIX
+  ?? (edition === 'commercial' ? 'Profer-Commercial-Setup' : 'Profer-Setup')
 const version = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version
-const installerName = `Profer-Setup-${version}.exe`
+const installerName = `${installerPrefix}-${version}.exe`
 const blockmapName = `${installerName}.blockmap`
-const unsignedRelease = process.env.PROFER_UNSIGNED_RELEASE === '1'
+const unsignedRelease = process.env.PROFER_UNSIGNED_RELEASE === '1' || args.includes('--unsigned')
 const signatureName = 'latest.yml.sig'
 const expected = unsignedRelease
   ? ['latest.yml', installerName, blockmapName]

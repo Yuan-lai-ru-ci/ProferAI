@@ -20,7 +20,9 @@ export * from './sse-reader.ts'
 export * from './url-utils.ts'
 export * from './thinking-capability.ts'
 export * from './user-agent.ts'
-export * from './insufficient-credits.ts'
+// 额度不足（402 → 「请充值」）是商业版语义：开源版没有额度体系，也不该把这段
+// 解析与文案打进开源包。因此**刻意不从 barrel 导出**，只允许商业侧用深路径
+// `@profer/core/providers/insufficient-credits` 引用。
 
 // 导出适配器类
 export { AnthropicAdapter } from './anthropic-adapter.ts'

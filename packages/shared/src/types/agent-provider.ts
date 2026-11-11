@@ -109,7 +109,18 @@ export interface AgentErrorHelpers {
   /** 判断是否是 thinking signature 不兼容错误 */
   isThinkingSignatureError(...messages: string[]): boolean
   /** 将 SDK 错误码映射为结构化 TypedError */
-  mapSDKErrorToTypedError(errorCode: string, userMessage: string, originalError?: string): TypedError
+  /**
+   * 将 SDK 错误码映射为结构化 TypedError。
+   *
+   * `detectCredits` 是宿主按发行版注入的「额度不足」识别器：额度/充值属于商业语义，
+   * provider 包不内置该解析，开源版不传即不识别。
+   */
+  mapSDKErrorToTypedError(
+    errorCode: string,
+    userMessage: string,
+    originalError?: string,
+    detectCredits?: (error: unknown, status?: number) => { message?: string } | null,
+  ): TypedError
   /** 从 SDK 错误对象中提取详细错误信息 */
   extractErrorDetails(msg: { error?: string | { message?: string; errorType?: string }; message?: { content?: Array<Record<string, unknown>> } }): { detailedMessage: string; originalError: string }
   /** 判断 terminal reason 是否应保持 channel 打开 */

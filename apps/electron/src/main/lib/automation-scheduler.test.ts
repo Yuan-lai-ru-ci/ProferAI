@@ -104,6 +104,8 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
     runningAutomations: new Set<string>(), RUN_TIMEOUT_MS: 10000, DAILY_CONTEXT_ROLLOVER_THRESHOLD: 0.7,
     isSameLocalDay: () => true, getSessionContextUsageRatio: () => 0.2,
     getAgentSessionMeta: (id: string) => sessions.get(id), getAgentWorkspace: () => (workspaceMissing ? undefined : { slug: 'workspace' }), getChannelById: () => ({ enabled: true, provider: 'fixture', models: [{ id: 'model', enabled: true }] }),
+    // 调度器改用可见变体；该 harness 直接求值源码文本，需同步提供导出。
+    getVisibleChannelById: () => ({ enabled: true, provider: 'fixture', models: [{ id: 'model', enabled: true }] }),
     getAgentWorkspacePath: () => '/tmp/fixture-workspace',
     getDefaultPresetId: () => 'standard', resolvePresetId: (_slug: string, preset: string) => preset,
     createAgentSession: (title: string, channelId: string, workspaceId: string, modelId: string, runtime: AgentRuntime) => {

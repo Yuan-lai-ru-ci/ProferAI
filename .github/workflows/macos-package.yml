@@ -1,5 +1,8 @@
 name: macOS Package Verification
 
+# 仅作 macOS 打包链路验证（ad-hoc 验收包），不是发版入口。
+# 开源版正式打包走 `.github/workflows/oss-package.yml`（macOS + Windows，带签名/公证接入）。
+
 on:
   workflow_dispatch:
     inputs:

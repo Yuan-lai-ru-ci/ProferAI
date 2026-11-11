@@ -25,17 +25,46 @@ let invalidRelay = false
 mock.module('./plugins/plugin-routing', () => ({ routePluginModel: (_key: string, input: ChatSendInput) => input }))
 mock.module('./channel-manager', () => ({
   listChannels: () => channels,
+  getVisibleChannelById: (id: string) => channels.find((channel) => channel.id === id),
   decryptApiKey: () => { decrypts += 1; if (decryptFails) throw new Error('fixture-decrypt-failure'); return 'fixture-key' },
   isCommercialMode: () => commercial, canSelfConfig: () => true,
   syncChannelsFromServer: async () => { synced += 1; channels = refreshedChannels },
 }))
 mock.module('./chat-stream-bus', () => ({ pushChatStream: (_wc: unknown, _id: string, topic: string, payload: { error?: string; model?: string; message?: { id?: string; role?: string; content?: string } }) => events.push({ topic, payload }) }))
-mock.module('./auth-service', () => ({
-  getTeamAuthWithRefresh: async () => ({ baseUrl: 'https://fixture.invalid', token: 'fixture-token' }),
-  recoverCommercialProxyAuth: async () => {
-    if (!recover) return null
-    if (!channels[0]?.directDataPlane) channels = refreshedChannels
-    return { baseUrl: 'https://fixture.invalid', token: 'fixture-token' }
+// 账号与路由策略已收口到发行版契约：mock 接缝从 auth-service 移到 ./edition。
+// 本文件验的是 chat-service 的 fallback 行为，不是策略本身，所以策略固定为“走代管”。
+const fixtureSession = { baseUrl: 'https://fixture.invalid', token: 'fixture-token' }
+mock.module('./edition', () => ({
+  editionProviders: {
+    id: 'commercial',
+    account: {
+      getSession: async () => fixtureSession,
+      recoverSession: async () => {
+        if (!recover) return null
+        if (!channels[0]?.directDataPlane) channels = refreshedChannels
+        return fixtureSession
+      },
+      getSessionSnapshot: () => fixtureSession,
+      getSessionGeneration: () => 1,
+      refreshSession: async () => true,
+      restoreSession: async () => false,
+      scheduleAutoRefresh: () => {},
+      getMembership: () => ({ commercialMode: true, membershipTier: 'pro', canSelfConfig: true }),
+    },
+    // 与 commercial-routing-policy 一致：只由商业模式决定；official-channel 在本文件已 mock 为 true。
+    credentials: {
+      shouldUseManagedRoute: (channel: { directDataPlane?: boolean }, options?: { respectDirectDataPlane?: boolean }) =>
+        commercial && (!options?.respectDirectDataPlane || channel.directDataPlane !== true),
+      shouldUseBearerAuth: () => commercial,
+      managedPath: (kind: string) =>
+        ({ messages: '/v1/proxy/messages', chat: '/v1/proxy/chat', images: '/v1/proxy/images/generations', imageEdits: '/v1/proxy/images/edits', root: '/v1/proxy' } as Record<string, string>)[kind] ?? '',
+      managedImageOperationPath: (operation: string, key: string) =>
+        `/v1/proxy/images/operations/by-idempotency/${operation}/${key}`,
+    },
+    // 商业版会识别额度不足；本文件走商业桩，保持与生产一致。
+    errors: { detectInsufficientCredits: () => null },
+    remote: { getRelayTicket: async () => null },
+    registerIpc: () => {},
   },
 }))
 mock.module('./conversation-manager', () => ({ appendMessage: () => {},

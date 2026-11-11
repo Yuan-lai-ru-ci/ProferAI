@@ -1,5 +1,5 @@
 import { getGptImageCredentials } from './chat-tool-config'
-import { getTeamAuthWithRefresh, recoverCommercialProxyAuth } from './auth-service'
+import { editionProviders } from './edition'
 
 const DEFAULT_BASE_URL = 'https://api.openai.com'
 // 线上网关可能在应用层 120 秒上游超时前先断开。本轮恢复覆盖网关返回后的 72 秒，
@@ -179,10 +179,10 @@ function appendReferences(form: FormData, references: GptImageReference[]): void
 async function callOfficial(
   request: Pick<GptImageRequest, 'prompt' | 'idempotencyKey' | 'signal'> & { size: GptImageSize; quality: GptImageQuality; references: GptImageReference[] },
 ): Promise<Response | undefined> {
-  let auth = await getTeamAuthWithRefresh()
+  let auth = await editionProviders.account.getSession()
   if (!auth) return undefined
 
-  const endpoint = request.references.length ? '/v1/proxy/images/edits' : '/v1/proxy/images/generations'
+  const endpoint = editionProviders.credentials.managedPath(request.references.length ? 'imageEdits' : 'images')
   const operationType = request.references.length ? 'edit' : 'generation'
   const send = async (current: NonNullable<typeof auth>): Promise<Response> => {
     const headers: Record<string, string> = {
@@ -209,7 +209,10 @@ async function callOfficial(
   const recoverCompletedOperation = async (current: NonNullable<typeof auth>): Promise<Response | undefined> => {
     // 504 可能由最外层 Nginx 先返回，而 Team Server 仍在完成上游请求。不能重新
     // POST：相同幂等键只会得到 processing/缓存结果；轮询同一 operation 才能恢复交付。
-    const operationPath = `/v1/proxy/images/operations/by-idempotency/${encodeURIComponent(operationType)}/${encodeURIComponent(request.idempotencyKey)}`
+    const operationPath = editionProviders.credentials.managedImageOperationPath(
+      operationType === 'edit' ? 'edit' : 'generation',
+      request.idempotencyKey,
+    )
     for (const delay of officialImageRecoveryDelaysMs) {
       await sleep(delay, request.signal)
       const result = await fetch(`${current.baseUrl.replace(/\/+$/, '')}${operationPath}`, {
@@ -242,7 +245,7 @@ async function callOfficial(
 
   // 服务端重启后会轮换内存中无法恢复的 relay 明文；用 refresh token 获取新 relay，
   // 并复用同一个幂等键只重试一次，避免放宽服务端鉴权或重复扣费。
-  const recovered = await recoverCommercialProxyAuth()
+  const recovered = await editionProviders.account.recoverSession()
   if (!recovered) return response
   auth = recovered
   response = await send(auth)

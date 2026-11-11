@@ -126,10 +126,73 @@ function findPurgedBlockmaps({ feedUrl, releasesJsonText, currentVersion, instal
   return { checked, missing }
 }
 
+/**
+ * 发行版与更新源目录的对应关系。
+ *
+ * 两个发行版的元数据文件同名（latest.yml / latest-mac.yml），只能靠**目录**隔离。
+ * 一旦开源版资产写进商业目录，商业版用户会被告知升级到一个没有账号能力的版本——
+ * 这不是普通的事故，而是把付费用户静默降级，所以发布前必须机械校验。
+ */
+const EDITION_ARTIFACT_PREFIX = {
+  oss: 'Profer-',
+  commercial: 'Profer-Commercial-',
+}
+
+/**
+ * 从发布资产文件名推断发行版。
+ * 注意顺序：商业包同样以 `Profer-` 开头，必须先认 `Profer-Commercial-`。
+ *
+ * @param {string[]} fileNames
+ * @returns {'oss' | 'commercial' | 'mixed' | 'unknown'}
+ */
+function classifyArtifactEdition(fileNames) {
+  const names = (fileNames ?? []).map((name) => String(name))
+  const isCommercial = (name) => name.startsWith(EDITION_ARTIFACT_PREFIX.commercial)
+  const isOss = (name) => name.startsWith(EDITION_ARTIFACT_PREFIX.oss) && !isCommercial(name)
+  const hasCommercial = names.some(isCommercial)
+  const hasOss = names.some(isOss)
+  if (hasCommercial && hasOss) return 'mixed'
+  if (hasCommercial) return 'commercial'
+  if (hasOss) return 'oss'
+  return 'unknown'
+}
+
+/**
+ * 发布门禁：资产发行版必须与目标更新目录匹配。
+ *
+ * @param {object} options
+ * @param {string} options.edition classifyArtifactEdition 的结果
+ * @param {string} options.dir 目标更新目录
+ * @param {string} [options.label] 目标标签，用于报错定位
+ */
+function assertFeedDirectoryMatchesEdition({ edition, dir, label = '' }) {
+  const target = String(dir ?? '').replace(/\/+$/, '')
+  const where = label ? `（${label}）` : ''
+  if (edition === 'mixed') {
+    throw new Error(`发布资产同时包含开源版与商业版安装包，拒绝上传${where}。请分开发布。`)
+  }
+  if (edition === 'unknown') return
+  if (edition === 'oss' && !target.endsWith('/oss')) {
+    throw new Error(
+      `开源版资产正在写入商业版更新目录${where}: ${target}\n` +
+      '两个发行版的 latest.yml 同名，会直接覆盖商业版元数据，把商业用户升级到没有账号能力的版本。\n' +
+      '修复：把 PROFER_UPDATE_DIR / PROFER_MAC_UPDATE_DIR 指向 <商业目录>/oss。',
+    )
+  }
+  if (edition === 'commercial' && target.endsWith('/oss')) {
+    throw new Error(
+      `商业版资产正在写入开源版更新目录${where}: ${target}\n` +
+      '修复：商业版应上传到平铺的商业目录（不带 /oss 后缀）。',
+    )
+  }
+}
+
 module.exports = {
   parseUpdateMetadata,
   previousBlockmapUrl,
   assertPreviousBlockmapPublished,
   listRecentVersions,
   findPurgedBlockmaps,
+  classifyArtifactEdition,
+  assertFeedDirectoryMatchesEdition,
 }

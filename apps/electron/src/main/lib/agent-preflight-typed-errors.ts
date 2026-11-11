@@ -33,6 +33,15 @@ const CREDENTIAL_PREFLIGHT_TYPED_ERRORS: Partial<Record<string, TypedError>> = {
     actions: [{ key: 's', label: '打开渠道设置', action: 'open_channel_settings' }],
     canRetry: false,
   },
+  // 发行版切换后，另一发行版下发的渠道在当前版本里不可见（典型：商业版官方渠道在开源版里）。
+  // 文案必须与 orchestrator 的渠道 preflight 保持一致，否则同一次失败在两个入口说法不同。
+  channel_not_found: {
+    code: 'channel_not_found',
+    title: '渠道不存在',
+    message: '当前会话引用的渠道已被删除或不可用，请在设置中重新选择。',
+    actions: [{ key: 's', label: '打开渠道设置', action: 'open_channel_settings' }],
+    canRetry: false,
+  },
 }
 
 /** 凭证 preflight 语义覆盖的失败码（新入口据此把准备失败翻译成产品文案）。 */

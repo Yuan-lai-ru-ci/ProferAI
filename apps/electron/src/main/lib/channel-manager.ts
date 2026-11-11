@@ -36,7 +36,7 @@ import { loginCodexOAuth, refreshCodexOAuth } from './codex-oauth-service'
 import { refreshXaiOAuth } from './xai-oauth-service'
 import { refreshXaiOAuthCredentialsSerial, rememberXaiOAuthCredentials } from './xai-oauth-credentials'
 import { isCommercialBuild } from './build-target'
-import { isOfficialManagedChannel } from './official-channel'
+import { editionProviders } from './edition'
 import {
   inferAgentBaseUrl,
   normalizeChannelForCurrentSchema,
@@ -259,7 +259,18 @@ function readConfig(): ChannelsConfig {
   try {
     const parsed: unknown = JSON.parse(raw)
     assertChannelsConfig(parsed)
-    const normalized = normalizeConfigForCurrentSchema(parsed)
+    // 另一个发行版下发的渠道在本发行版里不可见，必须**原样保留**：
+    // 一旦让归一化或预设迁移碰到它们，切回另一个发行版时拿到的就不是原始数据了。
+    // 实测过的真实损害：空 baseUrl 的代管渠道被补成厂商默认地址（https://api.deepseek.com）。
+    const isVisible = editionProviders.channels.isChannelVisible
+    const hiddenByIndex = new Map<number, Channel>()
+    const visibleChannels: Channel[] = []
+    parsed.channels.forEach((channel, index) => {
+      if (isVisible && !isVisible(channel)) hiddenByIndex.set(index, channel)
+      else visibleChannels.push(channel)
+    })
+
+    const normalized = normalizeConfigForCurrentSchema({ ...parsed, channels: visibleChannels })
     const channelsWithCredentialModes = normalized.config.channels.map((channel) => {
       if (channel.provider !== 'xai' || channel.credentialMode) return channel
       try {
@@ -270,15 +281,28 @@ function readConfig(): ChannelsConfig {
     })
     const credentialModeChanged = channelsWithCredentialModes.some((channel, index) => channel !== normalized.config.channels[index])
     const presetUpdated = applyPresetModelCandidateUpdates({ ...normalized.config, channels: channelsWithCredentialModes })
+
+    // 按原顺序把未可见渠道拼回去（它们的字段一个都不改）。
+    let cursor = 0
+    const mergedChannels = parsed.channels.map((_, index) => {
+      const hidden = hiddenByIndex.get(index)
+      if (hidden) return hidden
+      // 可见渠道数量与归一化后一致，越界只可能是上游 bug，交给后续断言暴露。
+      const migrated = presetUpdated.config.channels[cursor]!
+      cursor += 1
+      return migrated
+    })
+    const mergedConfig: ChannelsConfig = { ...presetUpdated.config, channels: mergedChannels }
+
     if (normalized.changed || credentialModeChanged || presetUpdated.changed) {
       try {
-        writeConfig(presetUpdated.config)
+        writeConfig(mergedConfig)
         console.log('[渠道管理] 已应用渠道配置迁移或预设模型更新')
       } catch (error) {
         console.warn('[渠道管理] 写入迁移后的渠道配置失败，将继续使用内存中的迁移结果:', error)
       }
     }
-    return presetUpdated.config
+    return mergedConfig
   } catch {
     console.error('[渠道管理] 读取配置文件失败：内容损坏或格式不受支持')
     throw new Error('渠道配置损坏或格式不受支持，已中止操作以保留原文件')
@@ -323,6 +347,20 @@ function decryptKey(encryptedKey: string): string {
 }
 
 /**
+ * 当前发行版可见性校验。
+ *
+ * 不可见渠道属于**另一个发行版**（典型：商业版下发的官方渠道在读入开源版之后）。
+ * 本发行版既不该改写它，也不该拿它的凭据发请求或把它删掉——否则切回另一个发行版时
+ * 用户会丢失或损坏原本的配置。
+ */
+function assertChannelUsable(channel: { id: string; serverManaged?: boolean }, action: string): void {
+  const isVisible = editionProviders.channels.isChannelVisible
+  if (isVisible && !isVisible(channel)) {
+    throw new Error(`渠道不在当前发行版中，无法${action}`)
+  }
+}
+
+/**
  * 旧版登出渠道备份文件的路径（按账号隔离）。
  *
  * 新版本登出不再备份自配渠道（它们原样保留在 channels.json 中），
@@ -335,7 +373,7 @@ export function getChannelsLogoutBackupPath(accountId: string): string {
 
 /** 从渠道列表中筛出用户自配渠道（官方代管渠道由服务端下发，不属于用户本地资产）。 */
 export function filterUserManagedChannels(channels: Channel[]): Channel[] {
-  return channels.filter((channel) => !isOfficialManagedChannel(channel))
+  return channels.filter((channel) => !editionProviders.channels.isManagedChannel(channel))
 }
 
 /** 登出清理官方代管渠道的结果 */
@@ -366,7 +404,7 @@ export function pruneOfficialChannelsOnLogout(): PruneOfficialChannelsResult {
     return { removed: 0, error: `读取渠道配置失败: ${(err as Error).message}` }
   }
 
-  const keptChannels = current.channels.filter((channel) => !isOfficialManagedChannel(channel))
+  const keptChannels = current.channels.filter((channel) => !editionProviders.channels.isManagedChannel(channel))
   const removed = current.channels.length - keptChannels.length
   if (removed === 0) return { removed: 0 }
 
@@ -477,9 +515,9 @@ export function restoreChannelsForAccount(accountId: string): RestoreChannelsRes
  */
 export async function syncChannelsFromServer(serverBaseUrl: string, accessToken: string): Promise<boolean> {
   // 记录请求发起时的账号身份。登出后旧请求即使返回成功，也不得把官方渠道写回本地。
-  const { getTeamAuth, getAuthSessionGeneration } = require('./auth-service') as typeof import('./auth-service')
-  const generationAtStart = getAuthSessionGeneration()
-  const authAtStart = getTeamAuth()
+  // 账号能力经发行版契约获取：开源版恒为 null，这条路径在那里会直接抛错退出。
+  const generationAtStart = editionProviders.account.getSessionGeneration()
+  const authAtStart = editionProviders.account.getSessionSnapshot()
   if (generationAtStart === null || !authAtStart || authAtStart.baseUrl !== serverBaseUrl || authAtStart.teamAccountId === undefined
     || authAtStart.token !== accessToken) {
     throw new Error('渠道同步已跳过：当前团队会话已失效')
@@ -516,10 +554,10 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
   if (!data.commercialMode || !data.channels) return false
 
   // 请求期间可能发生登出或切换账号；再次校验账号后再落盘，避免旧响应污染新会话。
-  const authBeforeWrite = getTeamAuth()
+  const authBeforeWrite = editionProviders.account.getSessionSnapshot()
   if (!authBeforeWrite || authBeforeWrite.baseUrl !== serverBaseUrl || authBeforeWrite.teamAccountId !== accountIdAtStart
     || authBeforeWrite.token !== authAtStart.token
-    || generationAtStart !== getAuthSessionGeneration()) {
+    || generationAtStart !== editionProviders.account.getSessionGeneration()) {
     throw new Error('渠道同步已跳过：请求完成时团队会话已变化')
   }
 
@@ -547,7 +585,7 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
   const preCleanupCount = existingConfig.channels.length
   const localChannels = existingConfig.channels.filter((c) => {
     if (serverIds.has(c.id)) return false // 服务端仍在管理，后面会用最新数据覆盖
-    if (isOfficialManagedChannel(c)) return false // 之前由服务端管理但现在不在列表中了 → 已删除，清理
+    if (editionProviders.channels.isManagedChannel(c)) return false // 之前由服务端管理但现在不在列表中了 → 已删除，清理
     return true // 用户自建本地渠道，保留
   })
   const cleanedCount = preCleanupCount - localChannels.length - serverIds.size
@@ -619,8 +657,7 @@ export async function syncChannelsFromServer(serverBaseUrl: string, accessToken:
 /** 当前是否处于商业模式（渠道由服务端统一管理） */
 export function isCommercialMode(): boolean {
   try {
-    const { getCommercialMode } = require('./auth-service')
-    return getCommercialMode()
+    return editionProviders.account.getMembership().commercialMode
   } catch {
     return false
   }
@@ -636,7 +673,12 @@ export function isCommercialMode(): boolean {
  * 并让预置清单冒充真实的端点能力。模型清单由渠道表单从供应商端点发现后写入。
  */
 export function listChannels(): Channel[] {
-  return readConfig().channels
+  // 发行版切换：商业版下发的渠道留在共享的 channels.json 里，开源版用不了它们
+  // （没有代管通道，baseUrl 为空）。这里只隐藏、不删除，切回商业版时原样恢复。
+  // 注意：只过滤对外列表；getChannelById 不过滤，避免内部一致性被破坏。
+  const channels = readConfig().channels
+  const isVisible = editionProviders.channels.isChannelVisible
+  return isVisible ? channels.filter((channel) => isVisible(channel)) : channels
 }
 
 /**
@@ -647,6 +689,24 @@ export function listChannels(): Channel[] {
 export function getChannelById(id: string): Channel | undefined {
   const config = readConfig()
   return config.channels.find((c) => c.id === id)
+}
+
+/**
+ * 按 ID 获取**当前发行版可见**的渠道。
+ *
+ * 与 `getChannelById` 的差别只在「另一个发行版下发的渠道」：那些渠道在本发行版里
+ * 不可用，面向用户的路径（模型选择、自动化绑定、Fabric 执行、UI 投影）必须拿不到，
+ * 否则会出现「界面显示可用、执行时才报凭据错误」的错位。
+ *
+ * 内部增删改查继续用 `getChannelById`：它们需要看到完整配置，
+ * 且写盘前另有 `assertChannelUsable` 兜底。
+ */
+export function getVisibleChannelById(id: string): Channel | undefined {
+  const channel = getChannelById(id)
+  if (!channel) return undefined
+  const isVisible = editionProviders.channels.isChannelVisible
+  if (isVisible && !isVisible(channel)) return undefined
+  return channel
 }
 
 /**
@@ -702,7 +762,7 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
   const existing = config.channels[index]!
 
   // 官方同步渠道（newapi-*）：允许切换 channel enabled + 模型 enabled，不允许改名称/供应商/API Key/增删模型
-  if (isOfficialManagedChannel(existing)) {
+  if (editionProviders.channels.isManagedChannel(existing)) {
     if (input.name !== undefined || input.provider !== undefined ||
         input.baseUrl !== undefined || input.agentBaseUrl !== undefined ||
         input.agentRuntimes !== undefined ||
@@ -798,7 +858,8 @@ export function deleteChannel(id: string): void {
     throw new Error(`渠道不存在: ${id}`)
   }
 
-  if (isOfficialManagedChannel(config.channels[index]!)) throw new Error('官方同步渠道不可删除，请在 New API 后台管理')
+  assertChannelUsable(config.channels[index]!, '删除')
+  if (editionProviders.channels.isManagedChannel(config.channels[index]!)) throw new Error('官方同步渠道不可删除，请在 New API 后台管理')
   const removed = config.channels.splice(index, 1)[0]!
   writeConfig(config)
 
@@ -817,6 +878,7 @@ export function decryptApiKey(channelId: string): string {
   if (!channel) {
     throw new Error(`渠道不存在: ${channelId}`)
   }
+  assertChannelUsable(channel, '读取其密钥')
 
   return decryptKey(channel.apiKey)
 }
@@ -828,7 +890,7 @@ export async function loginCodexChannel(input: import('@profer/shared').CodexOAu
   if (inflightCodexLogin) throw new Error('Codex 登录正在进行，请先完成或取消')
   if (typeof input === 'string') {
     const channel = getChannelById(input)
-    if (!channel || channel.provider !== 'openai-codex' || isOfficialManagedChannel(channel)) {
+    if (!channel || channel.provider !== 'openai-codex' || editionProviders.channels.isManagedChannel(channel)) {
       throw new Error('Codex 渠道不存在或不可重新授权')
     }
   } else if (!input || !input.name.trim() || !input.models.some((model) => model.enabled)) {
@@ -838,7 +900,7 @@ export async function loginCodexChannel(input: import('@profer/shared').CodexOAu
     const credentials = await loginCodexOAuth()
     if (typeof input === 'string') {
       const current = getChannelById(input)
-      if (!current || current.provider !== 'openai-codex' || isOfficialManagedChannel(current)) {
+      if (!current || current.provider !== 'openai-codex' || editionProviders.channels.isManagedChannel(current)) {
         throw new Error('Codex 渠道已删除或类型改变，请重新选择渠道')
       }
     }
@@ -935,7 +997,7 @@ export async function loginXaiChannel(input: import('@profer/shared').XaiOAuthLo
   if (inflightXaiLogin) throw new Error('xAI 登录正在进行，请先完成或取消')
   if (typeof input === 'string') {
     const channel = getChannelById(input)
-    if (!channel || channel.provider !== 'xai' || isOfficialManagedChannel(channel)) {
+    if (!channel || channel.provider !== 'xai' || editionProviders.channels.isManagedChannel(channel)) {
       throw new Error('xAI 渠道不存在或不可重新授权')
     }
   } else if (!input || !input.name.trim() || !input.models.some((model) => model.enabled)) {
@@ -950,7 +1012,7 @@ export async function loginXaiChannel(input: import('@profer/shared').XaiOAuthLo
       return channel
     }
     const current = getChannelById(input)
-    if (!current || current.provider !== 'xai' || isOfficialManagedChannel(current)) {
+    if (!current || current.provider !== 'xai' || editionProviders.channels.isManagedChannel(current)) {
       throw new Error('xAI 渠道已删除或类型改变，请重新选择渠道')
     }
     persistXaiOAuthCredentials(input, credentials)
@@ -1013,6 +1075,7 @@ export async function resolveChannelRuntimeApiKey(channelId: string): Promise<st
   if (!channel) {
     throw new Error(`渠道不存在: ${channelId}`)
   }
+  assertChannelUsable(channel, '使用其凭据')
 
   if (channel.provider === 'openai-codex') return resolveCodexAccessToken(channelId)
   if (channel.provider === 'xai') {
@@ -1035,6 +1098,10 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
 
   if (!channel) {
     return { success: false, message: '渠道不存在' }
+  }
+  const visible = editionProviders.channels.isChannelVisible
+  if (visible && !visible(channel)) {
+    return { success: false, message: '渠道不在当前发行版中，无法测试' }
   }
 
   const apiKey = decryptKey(channel.apiKey)
@@ -1677,6 +1744,10 @@ export async function getChannelPlanQuota(channelId: string): Promise<import('@p
   const channel = getChannelById(channelId)
   if (!channel) {
     return createUnsupportedPlanQuota('custom', '渠道不存在')
+  }
+  const visible = editionProviders.channels.isChannelVisible
+  if (visible && !visible(channel)) {
+    return createUnsupportedPlanQuota('custom', '渠道不在当前发行版中')
   }
 
   const provider = channel.provider

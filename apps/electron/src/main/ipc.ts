@@ -160,7 +160,7 @@ import { registerVoiceDictationIpc } from './lib/voice-dictation-ipc'
 import { registerMigrationIpc } from './lib/migration-ipc'
 import { registerWindowIpc } from './lib/window-ipc'
 import { registerPlanningIpc } from './lib/planning-ipc'
-import { registerAccountIpc } from './lib/account-ipc'
+import { editionProviders } from './lib/edition'
 import { registerLarkIpc } from './lib/lark-ipc'
 import { registerWeChatIpc } from './lib/wechat-ipc'
 import { registerDingTalkIpc } from './lib/dingtalk-ipc'
@@ -5268,7 +5268,8 @@ export function registerIpcHandlers(): void {
   registerPenOcrIpc()
 
   // ===== 身份认证 =====
-  registerAccountIpc()
+  // 账号 IPC 由发行版自己注册：商业版是真实登录/注册，开源版是同名空实现。
+  editionProviders.registerIpc()
 
   // ===== 通用个人资料库相关 =====
   registerKnowledgeIpc()

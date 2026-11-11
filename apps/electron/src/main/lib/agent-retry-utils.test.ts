@@ -25,6 +25,8 @@ import {
 } from './agent-retry-utils'
 import type { TypedError } from '@profer/shared'
 import { mapSDKErrorToTypedError } from './adapters/claude-agent-adapter'
+// 额度识别已改为宿主按发行版注入：这里显式注入，表示“商业版行为”。
+import { detectInsufficientCredits } from '@profer/core/providers/insufficient-credits'
 
 function typedError(code: TypedError['code'], message = ''): TypedError {
   return {
@@ -103,12 +105,20 @@ describe('isAutoRetryableTypedError', () => {
     expect(isAutoRetryableTypedError(typedError('invalid_request', 'Bad request'))).toBe(false)
   })
 
-  test('上游 billing URL 的 402 不可自动重试', () => {
+  test('上游 billing URL 的 402 不可自动重试（商业版注入额度识别）', () => {
     const message = 'API Error: 402 Insufficient credit. Add funds at zyloo.io/dashboard/billing.'
-    const mapped = mapSDKErrorToTypedError('unknown', message, message)
+    const mapped = mapSDKErrorToTypedError('unknown', message, message, detectInsufficientCredits)
     expect(mapped.code).toBe('insufficient_credits')
     expect(mapped.canRetry).toBe(false)
     expect(isAutoRetryableTypedError(mapped)).toBe(false)
+  })
+
+  test('未注入额度识别时不产生充值引导（开源版语义）', () => {
+    // 开源版没有额度体系：同一个 402 只能按普通上游错误处理，
+    // 不能给用户看「额度不足/去充值」这类与当前版本无关的引导。
+    const message = 'API Error: 402 Insufficient credit. Add funds at zyloo.io/dashboard/billing.'
+    const mapped = mapSDKErrorToTypedError('unknown', message, message)
+    expect(mapped.code).not.toBe('insufficient_credits')
   })
 })
 

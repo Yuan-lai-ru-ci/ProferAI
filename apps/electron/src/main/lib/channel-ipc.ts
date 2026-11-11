@@ -6,7 +6,7 @@ import { listChannelsWithBackgroundSync } from './local-first-channel-listing'
 import { cancelXaiOAuthLogin } from './xai-oauth-service'
 import { cancelCodexOAuthLogin } from './codex-oauth-service'
 import { listCodexModels, listXaiModels } from './adapters/pi-model-registry'
-import { getTeamAuth, getTeamAuthWithRefresh, getAuthSessionGeneration, isSelfConfigAllowed, getMembershipTier, refreshAuthToken } from './auth-service'
+import { editionProviders } from './edition'
 import type { ChannelNetworkRequests } from './channel-network-requests'
 
 export interface ChannelIpcContext {
@@ -18,15 +18,16 @@ export function registerChannelIpc(context: ChannelIpcContext): void {
   ipcMain.handle(CHANNEL_IPC_CHANNELS.LIST, (_, options?: { localOnly?: boolean }): Channel[] => listChannelsWithBackgroundSync({
     listLocalChannels: listChannels,
     isCommercialMode,
-    getTeamAuth,
-    getSessionGeneration: getAuthSessionGeneration,
-    getTeamAuthWithRefresh,
+    // 账号能力一律经发行版契约，开源版在这里拿到 null / null / false。
+    getTeamAuth: () => editionProviders.account.getSessionSnapshot(),
+    getSessionGeneration: () => editionProviders.account.getSessionGeneration(),
+    getTeamAuthWithRefresh: () => editionProviders.account.getSession(),
     syncChannelsFromServer,
     onSyncFailure: (error) => console.warn('[渠道管理] 后台同步渠道失败，继续使用本地缓存:', error),
   }, options?.localOnly !== true))
 
   ipcMain.handle(CHANNEL_IPC_CHANNELS.GET_OFFICIAL_HEALTH, async (): Promise<import('@profer/shared').OfficialChannelHealth[]> => {
-    const auth = await getTeamAuthWithRefresh()
+    const auth = await editionProviders.account.getSession()
     if (!auth) return []
     const response = await fetch(`${auth.baseUrl}/v1/account/channels/health`, {
       headers: { Authorization: `Bearer ${auth.token}` },
@@ -69,8 +70,9 @@ export function registerChannelIpc(context: ChannelIpcContext): void {
   })
   ipcMain.handle(CHANNEL_IPC_CHANNELS.GET_COMMERCIAL_MODE, async (): Promise<boolean> => isCommercialMode())
   ipcMain.handle(CHANNEL_IPC_CHANNELS.GET_ACCOUNT_CAPABILITIES, async (_, force?: boolean): Promise<{ commercialMode: boolean; canSelfConfig: boolean; membershipTier: string }> => {
-    if (force) await refreshAuthToken().catch(() => {})
-    return { commercialMode: isCommercialMode(), canSelfConfig: isSelfConfigAllowed(), membershipTier: getMembershipTier() }
+    if (force) await editionProviders.account.refreshSession().catch(() => {})
+    const membership = editionProviders.account.getMembership()
+    return { commercialMode: membership.commercialMode, canSelfConfig: membership.canSelfConfig, membershipTier: membership.membershipTier }
   })
   ipcMain.handle(CHANNEL_IPC_CHANNELS.GET_BUILD_TARGET, async (): Promise<'oss' | 'commercial'> => {
     const { getBuildTarget } = await import('./build-target')

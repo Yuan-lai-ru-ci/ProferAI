@@ -27,7 +27,7 @@ const {
 } = require('./release-asset-contract.cjs')
 // 与构建时的 afterSign 钩子共用同一份签名契约，避免门禁与产物实现漂移。
 const { assertMacSignatureContract } = require('../apps/electron/scripts/macos-signature.cjs')
-const { assertPreviousBlockmapPublished, findPurgedBlockmaps } = require('./update-feed-contract.cjs')
+const { assertPreviousBlockmapPublished, findPurgedBlockmaps, classifyArtifactEdition, assertFeedDirectoryMatchesEdition } = require('./update-feed-contract.cjs')
 
 const VERSION = process.argv[2]
 if (!VERSION) throw new Error('用法：node scripts/push-mac-release.cjs <版本号>')
@@ -41,8 +41,9 @@ const ELECTRON = path.join(ROOT, 'apps/electron')
 const OUT = path.join(ELECTRON, 'out')
 const TAG = `v${VERSION}`
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI'
-const UPDATE_FEED_URL = 'https://updates.profer.cn/'
-const LEGACY_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/'
+// 本脚本发的是开源版（资产名 Profer-*-arm64-mac.*），更新源对应开源目录。
+const UPDATE_FEED_URL = 'https://updates.profer.cn/oss/'
+const LEGACY_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/oss/'
 const MAC_UPDATE_METADATA = 'latest-mac.yml'
 const RELEASE_RETRY_DELAYS_MS = [0, 15_000, 45_000, 90_000]
 
@@ -73,7 +74,7 @@ function getUpdateTargets() {
     host: requireEnv('PROFER_UPDATE_SSH_HOST', '国内更新源主机'),
     user: requireEnv('PROFER_UPDATE_SSH_USER', '国内更新源 SSH 用户'),
     port: process.env.PROFER_UPDATE_SSH_PORT || '22',
-    dir: process.env.PROFER_MAC_UPDATE_DIR || '/var/www/updates.profer.cn',
+    dir: process.env.PROFER_MAC_UPDATE_DIR || '/var/www/updates.profer.cn/oss',
   })]
   if (process.env.PROFER_UPDATE_SKIP_LEGACY !== '1') {
     targets.push(assertSafeTarget({
@@ -81,7 +82,7 @@ function getUpdateTargets() {
       host: requireEnv('PROFER_UPDATE_LEGACY_SSH_HOST', '旧更新源主机；已退役可设 PROFER_UPDATE_SKIP_LEGACY=1'),
       user: requireEnv('PROFER_UPDATE_LEGACY_SSH_USER', '旧更新源 SSH 用户'),
       port: process.env.PROFER_UPDATE_LEGACY_SSH_PORT || '22',
-      dir: process.env.PROFER_UPDATE_LEGACY_DIR || '/usr/share/nginx/html/profer-updates',
+      dir: process.env.PROFER_UPDATE_LEGACY_DIR || '/usr/share/nginx/html/profer-updates/oss',
     }))
   }
   updateTargetsCache = targets
@@ -405,7 +406,10 @@ async function publishGitHubRelease() {
 
   console.log(`[3/5] 上传 macOS 更新资产到 ${UPDATE_FEED_URL}`)
   const uploadedNames = [metadata, zip, dmg, blockmap].map((filePath) => path.basename(filePath))
+  // 本脚本只收集 Profer-*-arm64-mac.* 等开源版资产，写错目录会盖掉商业版 latest-mac.yml。
+  const releaseEdition = classifyArtifactEdition(uploadedNames)
   for (const target of getUpdateTargets()) {
+    assertFeedDirectoryMatchesEdition({ edition: releaseEdition, dir: target.dir, label: target.label })
     const sudo = target.user === 'root' ? '' : 'sudo '
     for (const filePath of [metadata, zip, dmg, blockmap]) upload(filePath, `/tmp/${path.basename(filePath)}`, target)
     const copyCommands = uploadedNames.map((name) => `${sudo}cp /tmp/${name} ${target.dir}/`).join(' && ')

@@ -1123,12 +1123,13 @@ async function bootstrap(): Promise<void> {
   }, 0)
 
   // 启动时恢复账号会话：先检查已登录，否则用 refreshToken 尝试恢复
+  // 账号能力经发行版契约获取：开源版 restoreSession 恒为 false，不碰任何账号代码。
   safeRun('restoreAccountSession', async () => {
-    const { getAuthStatus, scheduleAutoRefresh, tryRestoreSession } = require('./lib/auth-service')
+    const { editionProviders } = require('./lib/edition') as typeof import('./lib/edition')
 
-    const restored = await tryRestoreSession()
-    if (restored || getAuthStatus().isLoggedIn) {
-      scheduleAutoRefresh()
+    const restored = await editionProviders.account.restoreSession()
+    if (restored) {
+      editionProviders.account.scheduleAutoRefresh()
     }
   })
 
@@ -1150,12 +1151,12 @@ async function bootstrap(): Promise<void> {
   powerMonitor.on('resume', () => {
     console.log('[系统] 从休眠恢复，重建连接...')
     safeRun('resume:refreshAccountSession', async () => {
-      const { tryRestoreSession } = require('./lib/auth-service')
-      await tryRestoreSession()
+      const { editionProviders } = require('./lib/edition') as typeof import('./lib/edition')
+      await editionProviders.account.restoreSession()
     })
     safeRun('resume:channelsSync', () => {
-      const { getTeamAuth } = require('./lib/auth-service')
-      const auth = getTeamAuth()
+      const { editionProviders } = require('./lib/edition') as typeof import('./lib/edition')
+      const auth = editionProviders.account.getSessionSnapshot()
       if (auth) {
         const { syncChannelsFromServer } = require('./lib/channel-manager')
         syncChannelsFromServer(auth.baseUrl, auth.token).catch(() => {})

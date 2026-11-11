@@ -36,7 +36,7 @@
  * 4. ad-hoc 签名**不提供** Gatekeeper 公证。用户从浏览器下载 DMG 首次安装仍会被
  *    拦（"无法验证开发者"），只有 Developer ID + notarization 能解决。
  */
-const { execFileSync } = require('node:child_process')
+const { execFileSync, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -60,14 +60,14 @@ function expectedDesignatedRequirement(bundleId) {
 
 function runCodesign(args) {
   // codesign 的 --display 系列把内容写到 stderr，因此必须合并两路输出。
-  try {
-    const output = execFileSync('codesign', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-    return { ok: true, output }
-  } catch (error) {
-    const stdout = typeof error?.stdout === 'string' ? error.stdout : ''
-    const stderr = typeof error?.stderr === 'string' ? error.stderr : ''
-    return { ok: false, output: `${stdout}${stderr}`, error }
-  }
+  // 注意：成功路径（exit 0）也会走 stderr，不能只用 execFileSync 的返回值，
+  // 否则 readSignatureInfo 会永远读到 null，真实 Developer ID 签名会被误判成 ad-hoc。
+  const result = spawnSync('codesign', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const stdout = typeof result.stdout === 'string' ? result.stdout : ''
+  const stderr = typeof result.stderr === 'string' ? result.stderr : ''
+  const output = `${stdout}${stderr}`
+  if (result.error) return { ok: false, output, error: result.error }
+  return { ok: result.status === 0, output, status: result.status }
 }
 
 /** 读取 App bundle 的 CFBundleIdentifier（即 appId），它是 DR 的唯一来源。 */
@@ -199,7 +199,8 @@ async function signMacAppWithPinnedRequirement(appPath) {
  *
  * 校验项：
  * 1. 包完整有效（codesign --verify --deep --strict）
- * 2. 顶层 DR == identifier "<bundleId>"，且不是 cdhash 派生
+ * 2. 顶层 DR 可跨版本稳定：ad-hoc 必须等于 identifier "<bundleId>"；真实签名必须由
+ *    Apple 锚定且带同一 bundle id（DR 由证书派生，天然跨版本稳定）
  * 3. Squirrel.Mac 实际使用的校验路径（无 --deep / --strict + 指定 DR）通过
  * 4. 嵌套 helper 保留各自 bundle id（防止有人改回 `codesign --deep`）
  */
@@ -209,7 +210,6 @@ function assertMacSignatureContract(appPath) {
 
   const bundleId = readBundleIdentifier(resolvedApp)
   const expectedRequirement = expectedDesignatedRequirement(bundleId)
-  const requirementExpression = `identifier "${bundleId}"`
 
   const strict = runCodesign(['--verify', '--deep', '--strict', '--verbose=2', resolvedApp])
   if (!strict.ok) throw new Error(`macOS 签名不完整（codesign --verify --deep --strict 失败）:\n${strict.output}`)
@@ -217,16 +217,37 @@ function assertMacSignatureContract(appPath) {
   const plain = runCodesign(['--verify', '--verbose=2', resolvedApp])
   if (!plain.ok) throw new Error(`macOS 签名无效（codesign --verify 失败）:\n${plain.output}`)
 
+  const signature = readSignatureInfo(resolvedApp)
   const requirement = readDesignatedRequirement(resolvedApp)
-  if (requirement !== expectedRequirement) {
-    throw new Error(
-      `macOS designated requirement 不符合契约：期望 ${expectedRequirement}，实际 ${requirement ?? '(缺失)'}。` +
-      'cdhash 派生或缺失的 DR 会导致 Squirrel.Mac 拒绝安装更新。',
-    )
+
+  if (signature.isAdhoc) {
+    if (requirement !== expectedRequirement) {
+      throw new Error(
+        `macOS designated requirement 不符合契约：期望 ${expectedRequirement}，实际 ${requirement ?? '(缺失)'}。` +
+        'cdhash 派生或缺失的 DR 会导致 Squirrel.Mac 拒绝安装更新。',
+      )
+    }
+  } else {
+    // 真实签名（Developer ID）：DR 由证书锚定，不再是字面上的 identifier 单条，
+    // 但仍必须（a）锚定到 Apple、（b）限定同一 bundle id。否则 Squirrel.Mac 跨版本校验会失败，
+    // 或允许任意证书冒充本应用。
+    if (!requirement) {
+      throw new Error('macOS 真实签名缺少 designated requirement')
+    }
+    if (!requirement.includes(`identifier "${bundleId}"`)) {
+      throw new Error(`macOS 真实签名的 DR 未限定 bundle id ${bundleId}：${requirement}`)
+    }
+    if (!/anchor apple generic/.test(requirement)) {
+      throw new Error(
+        `macOS 真实签名未锚定到 Apple（缺少 anchor apple generic）：${requirement}。` +
+        '自签名证书不能用于发布包。',
+      )
+    }
   }
 
   // 复现 Squirrel.Mac 的校验：SecStaticCodeCheckValidity(新包, kSecCSDefaultFlags, 旧包 DR)。
-  const satisfies = runCodesign(['--verify', `-R=${requirementExpression}`, resolvedApp])
+  // 真实签名的 DR 是一整条 requirement 表达式，也必须用它自己的 DR 来验证自满足。
+  const satisfies = runCodesign(['--verify', `-R=${requirement}`, resolvedApp])
   if (!satisfies.ok) {
     throw new Error(`macOS App 不满足自身 designated requirement，自更新会失败:\n${satisfies.output}`)
   }
@@ -251,6 +272,8 @@ function assertMacSignatureContract(appPath) {
     ok: true,
     appBundle: resolvedApp,
     bundleId,
+    signatureMode: signature.isAdhoc ? 'adhoc' : 'developer-id',
+    teamIdentifier: signature.teamIdentifier,
     designatedRequirement: requirement,
     nestedAppCount: nestedBundles.length,
   }

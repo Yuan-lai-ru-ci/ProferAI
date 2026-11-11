@@ -4,7 +4,7 @@
  * 在协作委派时验证目标渠道和模型的可用性。
  */
 
-import { getChannelById } from './channel-manager'
+import { getVisibleChannelById } from './channel-manager'
 import { isChannelEnabledForRuntime } from '@profer/shared'
 import type { AgentRuntime, ChannelModel, ProviderType } from '@profer/shared'
 
@@ -38,7 +38,7 @@ export function assertEnabledModelForChannel(input: {
     throw new Error(`${input.purpose}需要可用的 channelId`)
   }
 
-  const channel = getChannelById(input.channelId)
+  const channel = getVisibleChannelById(input.channelId)
   if (!channel || !isChannelEnabledForRuntime(channel, runtime)) {
     throw new Error(`${input.purpose}引用的渠道不存在、未启用或未开放 Agent: ${input.channelId}`)
   }
@@ -60,7 +60,7 @@ export function listEnabledAgentModelsForChannel(
     throw new Error(`${purpose}需要可用的 channelId`)
   }
 
-  const channel = getChannelById(channelId)
+  const channel = getVisibleChannelById(channelId)
   if (!channel || !isChannelEnabledForRuntime(channel, runtime)) {
     throw new Error(`${purpose}引用的渠道不存在、未启用或未开放 Agent: ${channelId}`)
   }

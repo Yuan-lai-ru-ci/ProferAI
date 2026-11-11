@@ -3,6 +3,8 @@ node_modules
 
 # output
 out
+# 商业版独立产物目录（electron-builder.commercial.yml 的 directories.output）
+out-commercial
 dist
 *.tgz
 # 冒烟脚本的编译产物（apps/electron/scripts/agent-session-smoke.ts 的 --outfile 目录）

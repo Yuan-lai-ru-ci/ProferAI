@@ -26,7 +26,7 @@ import type { SessionStore } from '@profer/session-store'
 import { createElectronSessionStore } from './session-store-host'
 import { appendSDKMessages, enqueueSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime, resolveAgentSessionWriteLayout } from './agent-session-manager'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
-import { getChannelById } from './channel-manager'
+import { getVisibleChannelById } from './channel-manager'
 import { getWorkspaceMcpConfig, getWorkspaceSkills, getAgentWorkspace, readWorkspaceProfile } from './agent-workspace-manager'
 import { prepareRuntimeSkills } from './global-skill-manager'
 import { buildPiMcpTools, mcpToolName } from './adapters/pi-mcp-tools'
@@ -231,7 +231,7 @@ export function createElectronCredentialPort(): CredentialPort {
   return {
     async resolve(input): Promise<RuntimeCredentialResult> {
       if (!input.channelId) throw new Error('运行时凭据解析缺少 channelId')
-      const channel = getChannelById(input.channelId)
+      const channel = getVisibleChannelById(input.channelId)
       if (!channel) throw new Error(`渠道不存在: ${input.channelId}`)
       return toRuntimeCredentialResult(await resolveRuntimeCredentials(channel, input.runtime))
     },
@@ -1033,7 +1033,7 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
   const runtimeChannelConflict = resolveAgentRuntimeChannelConflict({
     sessionRuntime: options.runtime,
     channelId: input.channelId,
-    channel: input.channelId ? getChannelById(input.channelId) : undefined,
+    channel: input.channelId ? getVisibleChannelById(input.channelId) : undefined,
   })
   if (runtimeChannelConflict) throw new Error(runtimeChannelConflict)
   // B8：把运行级事实写进宿主侧 per-run 注册表（`setAgentRuntimeRunFacts` 已由入口写过

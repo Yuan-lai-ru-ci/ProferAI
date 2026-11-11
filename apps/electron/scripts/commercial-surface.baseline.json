@@ -1,0 +1,12 @@
+{
+  "$comment": "已知商业残留基线。只允许缩小。清理完某项后从对应数组/对象里删掉，脚本会开始阻断它的回归。",
+  "modules": [
+    "src/main/lib/remote-relay-client.ts"
+  ],
+  "markers": {
+    "/v1/proxy": 1,
+    "pruneOfficialChannelsOnLogout": 1,
+    "restoreChannelsForAccount": 1,
+    "syncChannelsFromServer": 6
+  }
+}

@@ -192,6 +192,8 @@ function ownerFixture(
     createCommandExecutionLedger: () => new Map(),
     updateAgentSessionMeta() {}, appendSDKMessages() {},
     getChannelById: () => ({ provider: 'anthropic', enabled: true, agentRuntimes: ['pi', 'claude'] }),
+    // 编排器改用可见变体；这个 harness 直接求值源码文本，必须同步提供该导出。
+    getVisibleChannelById: () => ({ provider: 'anthropic', enabled: true, agentRuntimes: ['pi', 'claude'] }),
     isChannelEnabledForRuntime,
     // 跨内核拦截用真实实现：本条契约就是「请求在取得 owner 之前被拒绝」，
     // 用等价闭包替换会掩盖真实判据（channel × session runtime）。

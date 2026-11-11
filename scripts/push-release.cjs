@@ -16,7 +16,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { hasMacReleaseAssets, hasWindowsReleaseAssets } = require('./release-asset-contract.cjs');
-const { assertPreviousBlockmapPublished, findPurgedBlockmaps } = require('./update-feed-contract.cjs');
+const { assertPreviousBlockmapPublished, findPurgedBlockmaps, classifyArtifactEdition, assertFeedDirectoryMatchesEdition } = require('./update-feed-contract.cjs');
 
 const VERSION = process.argv[2];
 const UNSIGNED_RELEASE = process.argv.includes('--unsigned');
@@ -34,8 +34,10 @@ const ELECTRON = path.join(ROOT, 'apps/electron');
 const OUT = path.join(ELECTRON, 'out');
 const TAG = `v${VERSION}`;
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
-const UPDATE_FEED_URL = 'https://updates.profer.cn/';
-const LEGACY_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/';
+// 本脚本发的是开源版（资产名 Profer-Setup-*），所以更新源也必须是开源目录：
+// 两个发行版的 latest.yml 同名，混目录会把商业版用户升级到没有账号能力的版本。
+const UPDATE_FEED_URL = 'https://updates.profer.cn/oss/';
+const LEGACY_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/oss/';
 const WINDOWS_UPDATE_METADATA = 'latest.yml';
 
 /**
@@ -66,16 +68,17 @@ function getUpdateTargets() {
     host: requireEnv('PROFER_UPDATE_SSH_HOST', '国内更新源主机'),
     user: requireEnv('PROFER_UPDATE_SSH_USER', '国内更新源 SSH 用户'),
     port: process.env.PROFER_UPDATE_SSH_PORT || '22',
-    dir: process.env.PROFER_UPDATE_DIR || '/var/www/updates.profer.cn',
+    dir: process.env.PROFER_UPDATE_DIR || '/var/www/updates.profer.cn/oss',
   })];
   // 旧机（profer.cn/profer-updates/ 供数）在退役前保持双写，PROFER_UPDATE_SKIP_LEGACY=1 可关闭。
+  // 本脚本只收集 Profer-Setup-* 等开源版资产，所以默认目标也是开源子目录。
   if (process.env.PROFER_UPDATE_SKIP_LEGACY !== '1') {
     targets.push(assertSafeTarget({
       label: '旧机',
       host: requireEnv('PROFER_UPDATE_LEGACY_SSH_HOST', '旧更新源主机；已退役可设 PROFER_UPDATE_SKIP_LEGACY=1'),
       user: requireEnv('PROFER_UPDATE_LEGACY_SSH_USER', '旧更新源 SSH 用户'),
       port: process.env.PROFER_UPDATE_LEGACY_SSH_PORT || '22',
-      dir: process.env.PROFER_UPDATE_LEGACY_DIR || '/usr/share/nginx/html/profer-updates',
+      dir: process.env.PROFER_UPDATE_LEGACY_DIR || '/usr/share/nginx/html/profer-updates/oss',
     }));
   }
   updateTargetsCache = targets;
@@ -409,6 +412,8 @@ async function ensureGitHubRelease(assets) {
   if (!installer || !metadata || !blockmap || (!UNSIGNED_RELEASE && !metadataSignature)) {
     throw new Error('发布资产列表不完整，拒绝上传。');
   }
+  // 两个发行版的 latest.yml 同名，写错目录会把商业用户升级到开源版。
+  const releaseEdition = classifyArtifactEdition(assets.map((asset) => asset.name));
   const latestJsonPath = path.join(OUT, 'latest.json');
   fs.writeFileSync(latestJsonPath, JSON.stringify({
     version: VERSION,
@@ -417,6 +422,7 @@ async function ensureGitHubRelease(assets) {
     date: new Date().toISOString().split('T')[0],
   }));
   for (const target of (GITHUB_ONLY ? [] : getUpdateTargets())) {
+    assertFeedDirectoryMatchesEdition({ edition: releaseEdition, dir: target.dir, label: target.label });
     const sudo = target.user === 'root' ? '' : 'sudo ';
     await scp(metadata.path, '/tmp/latest.yml', target);
     if (metadataSignature) await scp(metadataSignature.path, '/tmp/latest.yml.sig', target);

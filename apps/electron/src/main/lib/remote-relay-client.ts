@@ -5,7 +5,7 @@
  * 由 remote-service 通过回调提供，避免把 Agent/模型/文件权限移到服务器。
  */
 import WebSocket from 'ws'
-import { getRemoteRelayTicket } from './auth-service'
+import { editionProviders } from './edition'
 
 export const DEFAULT_REMOTE_RELAY_URL = 'wss://profer.cn/remote/ws'
 
@@ -71,7 +71,14 @@ export class RemoteRelayClient {
     const generation = ++this.generation
     let ticket: { ticket: string; expiresAt: number }
     try {
-      ticket = await getRemoteRelayTicket('desktop')
+      const resolved = await editionProviders.remote.getRelayTicket('desktop')
+      // 开源版没有远程中继：这不是网络错误，不要进入重连循环。
+      if (!resolved) {
+        console.warn('[Remote Relay] 当前发行版未启用远程控制，停止连接')
+        this.stopped = true
+        return
+      }
+      ticket = resolved
     } catch (error) {
       console.warn('[Remote Relay] 获取 desktop ticket 失败:', error instanceof Error ? error.message : error)
       this.scheduleReconnect()

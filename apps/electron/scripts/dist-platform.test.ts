@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { assertBuilderPackagingHost, assertPackagingHost, assertSupportedPackagingTarget } from './packaging-host.cjs'
-import { defaultPlatformForHost, parseArgs } from './dist'
+import { defaultPlatformForHost, parseArgs, resolveOutputDir } from './dist'
 
 /**
  * `dist.ts` 平台解析的跨平台 fixture。
@@ -63,9 +63,30 @@ describe('dist.ts 默认平台推导', () => {
 
   test('Given 其它开关 Then 解析结果与既有行为一致', () => {
     const options = parseArgs(['--current-arch', '--verbose', '--no-sign', '--dmg', '--mac'], 'darwin')
-    expect(options).toEqual({ currentArch: true, verbose: true, noSign: true, targetFormat: 'dmg', platform: 'mac' })
+    expect(options).toEqual({ currentArch: true, verbose: true, noSign: true, targetFormat: 'dmg', platform: 'mac', target: 'oss' })
     expect(parseArgs(['--zip'], 'darwin').targetFormat).toBe('zip')
     expect(parseArgs(['--dir'], 'darwin').targetFormat).toBe('dir')
     expect(parseArgs([], 'darwin').targetFormat).toBe('all')
+  })
+
+  test('Given --target Then 发行版决定主进程构建与打包配置', () => {
+    expect(parseArgs(['--mac', '--target', 'commercial'], 'darwin').target).toBe('commercial')
+    // 缺省为开源版，与既有 dist:mac / dist:win 行为一致
+    expect(parseArgs(['--mac'], 'darwin').target).toBe('oss')
+    // 写错不能静默回退成开源版产物
+    expect(() => parseArgs(['--mac', '--target', 'bussiness'], 'darwin')).toThrow('--target 只能是 oss 或 commercial')
+    expect(() => parseArgs(['--mac', '--target'], 'darwin')).toThrow('--target 只能是 oss 或 commercial')
+  })
+
+  test('Given 发行版 Then 产物目录与构建后校验目录一致', () => {
+    // 两个发行版同名 metadata（latest.yml / latest-mac.yml）不能落在同一目录。
+    expect(resolveOutputDir('oss')).toBe('out')
+    expect(resolveOutputDir('commercial')).toBe('out-commercial')
+    // 校验步骤靠这个目录名定位产物，不能与 electron-builder.commercial.yml 的 output 漂移。
+    const commercialConfig = require('node:fs').readFileSync(
+      require('node:path').resolve(import.meta.dir, '..', 'electron-builder.commercial.yml'),
+      'utf8',
+    )
+    expect(commercialConfig).toContain('output: out-commercial')
   })
 })

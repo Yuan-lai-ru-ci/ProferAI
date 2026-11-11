@@ -18,10 +18,9 @@ import { AnthropicAdapter, getAdapter, GoogleAdapter, OpenAIResponsesAdapter } f
 import type { ProviderAdapter } from '@profer/core'
 import type { TaskGraph, TaskNode, GraphEvent, RetrospectiveResult, UnmappedAbandonment } from '@profer/project-core'
 import { listChannels, decryptApiKey } from './channel-manager'
-import { getTeamAuthWithRefresh } from './auth-service'
+import { editionProviders } from './edition'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { shouldUseManagedCommercialRoute } from './commercial-routing-policy'
 import { getSettings } from './settings-service'
 import { getAgentSessionSDKMessages, getAgentSessionMeta, updateAgentSessionMeta } from './agent-session-manager'
 import { loadGraph, appendGraphEvent } from './project-graph-service'
@@ -330,13 +329,13 @@ async function oneShotJsonCall(systemPrompt: string, userPrompt: string): Promis
 
   let apiKey: string
   let proxyBaseUrl = ''
-  if (shouldUseManagedCommercialRoute(channel)) {
-    const auth = await getTeamAuthWithRefresh()
+  if (editionProviders.credentials.shouldUseManagedRoute(channel)) {
+    const auth = await editionProviders.account.getSession()
     if (!auth) {
       console.warn('[回溯] 团队账号登录已过期，跳过')
       return null
     }
-    const proxyPath = ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? '/v1/proxy/messages' : '/v1/proxy/chat'
+    const proxyPath = editionProviders.credentials.managedPath(ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? 'messages' : 'chat')
     proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
     apiKey = auth.proxyToken || auth.token
   } else {

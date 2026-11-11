@@ -33,7 +33,7 @@ import {
   isThinkingSignatureError as matchesThinkingSignatureError,
   resolveContextWindowFromModelUsage,
 } from '@profer/shared'
-import { detectInsufficientCredits, normalizeAnthropicBaseUrlForSdk } from '@profer/core/providers'
+import { normalizeAnthropicBaseUrlForSdk } from '@profer/core/providers'
 import type {
   AgentRuntimePreparedContext,
   ProcessLifecyclePort,
@@ -404,10 +404,23 @@ function extractHttpStatusFromErrorText(...messages: string[]): number | null {
 }
 
 /** 将 SDK 错误映射为 TypedError */
+/**
+ * 额度不足识别器（由宿主按发行版注入）。
+ *
+ * 为什么不在本包里判断：额度、充值、402 引导都是商业版语义，开源版没有额度体系。
+ * 本包属于开源代码，不能内置这段解析，否则开源包里会带上「额度不足，请充值」文案。
+ * 宿主注入后，商业版仍得到结构化引导；开源版传 undefined，错误按普通上游错误处理。
+ */
+export type InsufficientCreditsDetector = (
+  error: unknown,
+  status?: number,
+) => { message?: string } | null
+
 export function mapSDKErrorToTypedError(
   errorCode: string,
   detailedMessage: string,
   originalError: string,
+  detectCredits?: InsufficientCreditsDetector,
 ): TypedError {
   if (isThinkingSignatureError(detailedMessage, originalError)) {
     return {
@@ -600,10 +613,10 @@ export function mapSDKErrorToTypedError(
     }
   }
 
-  // 额度不足：Profer 自有 402 或 New API 上游 403「预扣费额度失败」（含美元文案）。
+  // 额度不足：解析规则由宿主按发行版注入（商业版识别 402/额度 403，开源版不识别）。
   // 必须在 errorMap['authentication_failed'] 之前拦截——New API 的额度 403 文本含
   // "Failed to authenticate" 会被误判成 invalid_api_key 认证失败。
-  const creditInfo = detectInsufficientCredits(errorText, httpStatus ?? undefined)
+  const creditInfo = detectCredits?.(errorText, httpStatus ?? undefined) ?? null
   if (creditInfo) {
     return {
       code: 'insufficient_credits',

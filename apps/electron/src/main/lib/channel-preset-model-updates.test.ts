@@ -1,6 +1,32 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
 import type { Channel, ChannelsConfig } from '@profer/shared'
-import { applyPresetModelCandidateUpdates, filterUserManagedChannels } from './channel-manager'
+
+// 渠道来源判定已收口到发行版契约；本用例校验的是商业版“官方渠道不算用户自配”的行为。
+mock.module('./edition', () => ({
+  editionProviders: {
+    id: 'commercial',
+    account: {
+      getSession: async () => null,
+      recoverSession: async () => null,
+      getSessionSnapshot: () => null,
+      getSessionGeneration: () => null,
+      refreshSession: async () => true,
+      restoreSession: async () => false,
+      scheduleAutoRefresh: () => {},
+      getMembership: () => ({ commercialMode: true, membershipTier: 'pro', canSelfConfig: true }),
+    },
+    credentials: { shouldUseManagedRoute: () => true, shouldUseBearerAuth: () => true },
+    errors: { detectInsufficientCredits: () => null },
+    channels: {
+      isManagedChannel: (channel: { id: string; serverManaged?: boolean }) =>
+        channel.serverManaged === true || channel.id.startsWith('newapi-'),
+    },
+    remote: { getRelayTicket: async () => null },
+    registerIpc: () => {},
+  },
+}))
+
+const { applyPresetModelCandidateUpdates, filterUserManagedChannels } = await import('./channel-manager')
 
 function createChannel(overrides: Partial<Channel> = {}): Channel {
   return {

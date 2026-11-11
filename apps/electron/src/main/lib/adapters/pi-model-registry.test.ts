@@ -1,5 +1,32 @@
-import { describe, expect, test } from 'bun:test'
-import {
+import { describe, expect, mock, test } from 'bun:test'
+
+// 代管渠道判定已收口到发行版契约，而本文件的用例校验的是商业版的官方模型能力
+// （Codex 1.05M 上下文、官方 1M 档位），所以必须先装商业桩再加载被测模块。
+mock.module('../edition', () => ({
+  editionProviders: {
+    id: 'commercial',
+    account: {
+      getSession: async () => null,
+      recoverSession: async () => null,
+      getSessionSnapshot: () => null,
+      getSessionGeneration: () => null,
+      refreshSession: async () => true,
+      restoreSession: async () => false,
+      scheduleAutoRefresh: () => {},
+      getMembership: () => ({ commercialMode: true, membershipTier: 'pro', canSelfConfig: true }),
+    },
+    credentials: { shouldUseManagedRoute: () => true, shouldUseBearerAuth: () => true },
+    errors: { detectInsufficientCredits: () => null },
+    channels: {
+      isManagedChannel: (channel: { id: string; serverManaged?: boolean }) =>
+        channel.serverManaged === true || channel.id.startsWith('newapi-'),
+    },
+    remote: { getRelayTicket: async () => null },
+    registerIpc: () => {},
+  },
+}))
+
+const {
   DEFAULT_CONTEXT_WINDOW,
   applyModel1MContextPreference,
   buildModel,
@@ -10,7 +37,7 @@ import {
   requiresWhitelistUserAgent,
   resolvePiApiKey,
   stripAgentSdkContextSuffix,
-} from './pi-model-registry'
+} = await import('./pi-model-registry')
 import { IsolatedInMemoryCredentialStore } from '../pi-model-runtime-options'
 
 const BASE_PI_AGENT_OPTIONS = {

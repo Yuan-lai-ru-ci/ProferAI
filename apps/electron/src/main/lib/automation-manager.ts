@@ -59,7 +59,7 @@ function assertValidBoundAutomation(automation: Pick<Automation, 'boundSessionId
   const { getAgentSessionMeta } = require('./agent-session-manager') as typeof import('./agent-session-manager')
   const { getAgentWorkspace } = require('./agent-workspace-manager') as typeof import('./agent-workspace-manager')
   const { resolvePresetId, getDefaultPresetId } = require('./agent-preset-manager') as typeof import('./agent-preset-manager')
-  const { getChannelById } = require('./channel-manager') as typeof import('./channel-manager')
+  const { getVisibleChannelById } = require('./channel-manager') as typeof import('./channel-manager')
   const session = getAgentSessionMeta(automation.boundSessionId)
   const workspaceSlug = automation.workspaceId ? getAgentWorkspace(automation.workspaceId)?.slug : undefined
   const expectedPresetId = automation.presetId
@@ -67,7 +67,7 @@ function assertValidBoundAutomation(automation: Pick<Automation, 'boundSessionId
     : getDefaultPresetId(workspaceSlug)
   const result = validateBoundAutomationSession(automation, session, expectedPresetId)
   if (!result.valid) throw new Error(`目标会话绑定无效：${result.reason}`)
-  const channel = getChannelById(automation.channelId)
+  const channel = getVisibleChannelById(automation.channelId)
   const availability = validateBoundAutomationChannel(automation, session!, channel)
   if (!availability.valid) throw new Error(`目标会话绑定无效：${availability.reason}`)
 }

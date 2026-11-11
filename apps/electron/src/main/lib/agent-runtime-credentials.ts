@@ -25,7 +25,7 @@ export interface ResolvedRuntimeCredentials {
 
 export type ResolveRuntimeCredentialsResult =
   | { ok: true; credentials: ResolvedRuntimeCredentials }
-  | { ok: false; code: 'token_expired' | 'api_key_decrypt_failed' }
+  | { ok: false; code: 'token_expired' | 'api_key_decrypt_failed' | 'channel_not_found' }
 
 /** Pi 协议由其模型注册层决定；Claude 的独立端点不能覆盖 OpenAI/Google 请求。 */
 function resolveRuntimeBaseUrl(channel: Pick<Channel, 'provider' | 'baseUrl' | 'agentBaseUrl'>, runtime: AgentRuntime): string | undefined {
@@ -47,6 +47,13 @@ export async function resolveRuntimeCredentials(
   channel: Pick<Channel, 'id' | 'provider' | 'baseUrl' | 'agentBaseUrl' | 'credentialMode' | 'apiProtocol' | 'directDataPlane'>,
   runtime: AgentRuntime = 'claude',
 ): Promise<ResolveRuntimeCredentialsResult> {
+  // 发行版切换：另一个发行版残留的渠道在当前版本里不可见（开源版里没有代管通道）。
+  // 必须在这里拦住：它的 baseUrl 为空，往下会回落到厂商默认地址，用不属于该厂商的
+  // 凭据去打真实接口，报一个和用户配置毫无关系的认证错误。
+  // 用可选调用：能力缺失时退化为“可见”，不能让一个可选能力把整条执行链打断。
+  const isVisible = editionProviders.channels?.isChannelVisible
+  if (isVisible && !isVisible(channel)) return { ok: false, code: 'channel_not_found' }
+
   const forceBearerAuth = editionProviders.credentials.shouldUseBearerAuth(channel)
 
   const useDirectDataPlane = forceBearerAuth && channel.directDataPlane === true
@@ -75,7 +82,7 @@ export async function resolveRuntimeCredentials(
       ok: true,
       credentials: {
         apiKey: resolveEditionBearerToken(auth),
-        baseUrl: `${auth.baseUrl}/v1/proxy`,
+        baseUrl: `${auth.baseUrl}${editionProviders.credentials.managedPath('root')}`,
         provider: channel.provider,
         forceBearerAuth: true,
       },
