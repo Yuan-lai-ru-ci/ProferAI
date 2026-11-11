@@ -50,8 +50,10 @@ jobs:
   # macOS arm64（开源版）
   # ============================================================
   macos-arm64:
-    name: build (macos-14, darwin, arm64, oss)
-    runs-on: macos-14
+    name: build (macos-15, darwin, arm64, oss)
+    # macos-14 已被 GitHub 退役（2026-11 实测 label 不可用）；
+    # 当前 arm64 可用标签：macos-15 / macos-26 / macos-latest。
+    runs-on: macos-15
     env:
       # Vite 处理 OOXML/WASM 资源时默认堆上限不足。
       NODE_OPTIONS: --max-old-space-size=6144
