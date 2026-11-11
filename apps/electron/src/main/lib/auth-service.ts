@@ -16,6 +16,10 @@ import { isCommercialBuild } from './build-target'
 import { getDeviceAuthInfo } from './identity-service'
 import { encryptToken, decryptToken } from './token-crypto'
 import type { TeamServerConfig } from '@profer/shared'
+import { channelStore } from './channel-manager'
+// auth-service 本身就是商业实现的一部分，直接引用 commercial/ 下的实现即可；
+// 走 edition 契约反而会形成 commercial → auth-service → edition 的循环。
+import { pruneManagedOnLogout, restoreForAccount, syncFromServer } from './edition/commercial/channel-sync'
 
 /** 默认团队服务地址（商业版内置，认证页不向用户暴露服务器配置）。 */
 export const DEFAULT_TEAM_SERVER_URL = 'https://profer.cn/profer'
@@ -306,8 +310,7 @@ export async function login(
     // teamAccountId 存的就是 data.userId，与备份/恢复的文件名 key 恒等，保证能对上。
     let channelRestore: LoginResult['channelRestore']
     try {
-      const { restoreChannelsForAccount } = require('./channel-manager')
-      const result = restoreChannelsForAccount(data.userId)
+      const result = restoreForAccount(channelStore, data.userId)
       if (result.error) {
         console.warn('[认证] 渠道备份恢复失败（保留备份）:', result.error)
         channelRestore = { restored: 0, warning: result.error }
@@ -323,8 +326,7 @@ export async function login(
     // 商业模式下自动同步渠道
     if (commercialMode) {
       try {
-        const { syncChannelsFromServer } = require('./channel-manager')
-        await syncChannelsFromServer(server.baseUrl, data.accessToken)
+        await syncFromServer(channelStore, server.baseUrl, data.accessToken)
       } catch (err) {
         console.warn('[认证] 渠道同步失败（非致命）:', err)
       }
@@ -503,8 +505,7 @@ export async function register(
     // 商业模式下自动同步渠道
     if (commercialMode) {
       try {
-        const { syncChannelsFromServer } = require('./channel-manager')
-        await syncChannelsFromServer(server.baseUrl, data.accessToken)
+        await syncFromServer(channelStore, server.baseUrl, data.accessToken)
       } catch (err) {
         console.warn('[认证] 渠道同步失败（非致命）:', err)
       }
@@ -644,8 +645,7 @@ export async function logout(): Promise<LogoutResult> {
     let channelsCleared = false
     let warning: string | undefined
     try {
-      const { pruneOfficialChannelsOnLogout } = require('./channel-manager') as typeof import('./channel-manager')
-      const pruned = pruneOfficialChannelsOnLogout()
+      const pruned = pruneManagedOnLogout(channelStore)
       channelsCleared = pruned.removed > 0
       if (pruned.error) {
         warning = `登出时未能清理官方渠道：${pruned.error}（你的自配渠道未受影响）`
@@ -818,8 +818,7 @@ export async function recoverCommercialProxyAuth(): Promise<{ baseUrl: string; t
   if (!auth) return null
 
   try {
-    const { syncChannelsFromServer } = require('./channel-manager') as typeof import('./channel-manager')
-    await syncChannelsFromServer(auth.baseUrl, auth.token)
+    await syncFromServer(channelStore, auth.baseUrl, auth.token)
   } catch (error) {
     // 凭据已刷新；渠道列表同步失败不应阻断当前请求的一次恢复重试。
     console.warn('[认证] relay 凭据恢复后的渠道同步失败:', (error as Error).message)

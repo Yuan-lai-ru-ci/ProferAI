@@ -5,13 +5,17 @@
  * 由 remote-service 通过回调提供，避免把 Agent/模型/文件权限移到服务器。
  */
 import WebSocket from 'ws'
-import { editionProviders } from './edition'
 
 export const DEFAULT_REMOTE_RELAY_URL = 'wss://profer.cn/remote/ws'
 
 export type RemoteRelayClientOptions = {
   url?: string
   enabled?: boolean
+  /**
+   * 取 ticket 的回调由商业装配层注入（`edition/commercial.ts` 转给 auth-service）。
+   * 传输层因此不直接 import 发行版装配点，避免 `commercial.ts → 本模块 → edition` 的循环。
+   */
+  getTicket?: (role: 'desktop') => Promise<{ ticket: string; expiresAt: number } | null>
   onOpen?: (sink: RemoteRelaySink) => void
   onClose?: () => void
   onMessage?: (raw: string, sink: RemoteRelaySink) => void
@@ -71,10 +75,10 @@ export class RemoteRelayClient {
     const generation = ++this.generation
     let ticket: { ticket: string; expiresAt: number }
     try {
-      const resolved = await editionProviders.remote.getRelayTicket('desktop')
-      // 开源版没有远程中继：这不是网络错误，不要进入重连循环。
+      const resolved = await this.options.getTicket?.('desktop')
+      // 没有 ticket 说明当前配置不允许中继：这不是网络错误，不要进入重连循环。
       if (!resolved) {
-        console.warn('[Remote Relay] 当前发行版未启用远程控制，停止连接')
+        console.warn('[Remote Relay] 当前会话未获得 relay ticket，停止连接')
         this.stopped = true
         return
       }

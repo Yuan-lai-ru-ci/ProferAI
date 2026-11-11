@@ -1,4 +1,4 @@
-import type { Channel } from '@profer/shared'
+import type { Channel, ChannelsConfig } from '@profer/shared'
 
 /** 发行版标识：oss=开源版，commercial=商业版。 */
 export type EditionId = 'oss' | 'commercial'
@@ -73,8 +73,36 @@ export interface EditionRelayTicket {
  * OSS 不提供远程中继，实现返回 null；调用方需自行给出“当前发行版未启用”的提示，
  * 不能把 null 当成网络错误。
  */
+export interface EditionRelaySink {
+  send(data: string): boolean
+  isOpen(): boolean
+  close(code?: number, reason?: string): void
+}
+
+export interface EditionRelayClientOptions {
+  url?: string
+  enabled?: boolean
+  onOpen?: (sink: EditionRelaySink) => void
+  onClose?: () => void
+  onMessage?: (raw: string, sink: EditionRelaySink) => void
+}
+
+/** 中心 Relay 传输层的最小接口；ticket 获取由商业装配层注入。 */
+export interface EditionRelayClient {
+  start(): void
+  stop(): void
+  getSink(): EditionRelaySink | null
+}
+
 export interface EditionRemoteProvider {
   getRelayTicket(role?: 'desktop' | 'viewer', deviceSlotId?: string): Promise<EditionRelayTicket | null>
+  /**
+   * 创建中心 Relay 客户端。
+   *
+   * 只有商业版提供：开源版没有中心服务，缺省该方法，调用方必须容忍 `undefined`。
+   * 返回值也可能为 null（例如当前发行版未开启中继）。
+   */
+  createRelayClient?(options: EditionRelayClientOptions): EditionRelayClient | null
 }
 
 /**
@@ -120,6 +148,29 @@ export interface EditionCredentialPolicy {
 }
 
 /** 渠道来源策略：区分“用户自配”与“服务端下发/代管”。 */
+/**
+ * 商业版渠道管理需要的底层能力（由 channel-manager 注入）。
+ *
+ * 传端口而不是让商业实现 import channel-manager：后者会形成
+ * `channel-manager → edition → commercial → channel-manager` 的循环依赖。
+ */
+export interface EditionChannelStore {
+  readConfig(): ChannelsConfig
+  writeConfig(config: ChannelsConfig): void
+  /** 用与本地渠道相同的加密方式加密服务端下发的 API Key。 */
+  encryptKey(plain: string): string
+  channelsPath(): string
+  /** 旧版登出备份的路径（按账号隔离）。 */
+  logoutBackupPath(accountId: string): string
+  /** 通知渲染进程渠道目录已变化。 */
+  invalidateCatalog(): void
+  /** 校验渠道配置结构（损坏时抛错，不得静默覆盖原文件）。 */
+  validateConfig(value: unknown): void
+  isManagedChannel(channel: { id: string; serverManaged?: boolean }): boolean
+  getSessionGeneration(): number | null
+  getSessionSnapshot(): EditionAuthSession | null
+}
+
 export interface EditionChannelPolicy {
   /**
    * 该渠道是否由服务端下发并代管。
@@ -138,6 +189,19 @@ export interface EditionChannelPolicy {
    * 开源版只隐藏、不删除——切回商业版时这些渠道原样恢复，不需要重新同步。
    */
   isChannelVisible?(channel: { id: string; serverManaged?: boolean }): boolean
+
+  /**
+   * 从 Team Server 拉取渠道并覆盖本地 channels.json（保留用户自配渠道）。
+   *
+   * 只有商业版提供；开源版没有服务端下发渠道，缺省该方法，调用方直接跳过。
+   */
+  syncFromServer?(store: EditionChannelStore, serverBaseUrl: string, accessToken: string): Promise<boolean>
+
+  /** 登出时清理服务端下发的渠道，保留用户自配渠道。只有商业版提供。 */
+  pruneManagedOnLogout?(store: EditionChannelStore): { removed: number; error?: string }
+
+  /** 登录后恢复旧版登出备份里的自配渠道。只有商业版提供。 */
+  restoreForAccount?(store: EditionChannelStore, accountId: string): { restored: number; error?: string; backupRetained: boolean }
 }
 
 /** 额度不足的结构化信息（余额、预估消耗、面向用户的提示）。 */

@@ -60,10 +60,11 @@ mock.module('./codex-oauth-service', () => ({
   },
 }))
 const {
-  createChannel, decryptApiKey, deleteChannel, getChannelById, getChannelsLogoutBackupPath,
-  getChannelPlanQuota, listChannels, persistXaiOAuthCredentials, pruneOfficialChannelsOnLogout,
-  restoreChannelsForAccount, updateChannel,
+  channelStore, createChannel, decryptApiKey, deleteChannel, getChannelById, getChannelsLogoutBackupPath,
+  getChannelPlanQuota, listChannels, persistXaiOAuthCredentials, updateChannel,
 } = await import('./channel-manager')
+// 服务端渠道的同步/清理/恢复已移到商业实现，这里按生产装配方式直接调用。
+const { pruneManagedOnLogout, restoreForAccount } = await import('./edition/commercial/channel-sync')
 const { encryptToken } = await import('./token-crypto')
 
 /** 按旧版本格式写入一份加密登出备份（新版本不再生成，仅用于验证兼容恢复）。 */
@@ -208,7 +209,7 @@ describe('渠道存储 fail-closed 与原子写', () => {
   test('Given 本地配置损坏 When 恢复合法加密备份 Then 保留两份文件并返回错误', () => {
     const backupPath = writeLegacyLogoutBackup('fixture-account', [fixtureChannel()])
     writeFileSync(channelsPath, '{broken')
-    expect(restoreChannelsForAccount('fixture-account')).toMatchObject({ restored: 0, backupRetained: true })
+    expect(restoreForAccount(channelStore, 'fixture-account')).toMatchObject({ restored: 0, backupRetained: true })
     expect(readFileSync(channelsPath, 'utf8')).toBe('{broken')
     expect(existsSync(backupPath)).toBe(true)
   })
@@ -223,7 +224,7 @@ describe('登出渠道归属', () => {
       fixtureChannel({ id: 'newapi-legacy' }),
     ])
 
-    expect(pruneOfficialChannelsOnLogout()).toEqual({ removed: 2 })
+    expect(pruneManagedOnLogout(channelStore)).toEqual({ removed: 2 })
 
     const after = JSON.parse(readFileSync(channelsPath, 'utf-8')) as ChannelsConfig
     expect(after.channels.map((channel) => channel.id)).toEqual(['fixture-self'])
@@ -237,7 +238,7 @@ describe('登出渠道归属', () => {
     listChannels() // 先让读取期迁移落盘，避免把迁移误判为登出写盘
     const before = readFileSync(channelsPath, 'utf-8')
 
-    expect(pruneOfficialChannelsOnLogout()).toEqual({ removed: 0 })
+    expect(pruneManagedOnLogout(channelStore)).toEqual({ removed: 0 })
     expect(readFileSync(channelsPath, 'utf-8')).toBe(before)
     expect(listChannels().map((channel) => channel.id)).toEqual(['fixture-self'])
   })

@@ -429,8 +429,8 @@ export async function sendMessage(
 
         if (channel.directDataPlane === true) {
           try {
-            const { syncChannelsFromServer } = await import('./channel-manager')
-            await syncChannelsFromServer(recovered.baseUrl, recovered.token)
+            const { channelStore } = await import('./channel-manager')
+            await editionProviders.channels.syncFromServer?.(channelStore, recovered.baseUrl, recovered.token)
           } catch (syncError) {
             console.warn('[聊天服务] 直连失败后的 Relay 渠道同步失败:', syncError)
           }

@@ -2809,8 +2809,8 @@ export class AgentOrchestrator {
         // 直连 canary 失败时同步一次渠道目录，将该用户切回 Relay；旧 Relay 令牌仍由服务端控制。
         if (channel.directDataPlane === true) {
           try {
-            const { syncChannelsFromServer } = require('./channel-manager') as typeof import('./channel-manager')
-            await syncChannelsFromServer(recovered.baseUrl, recovered.token)
+            const { channelStore } = require('./channel-manager') as typeof import('./channel-manager')
+            await editionProviders.channels.syncFromServer?.(channelStore, recovered.baseUrl, recovered.token)
           } catch (error) {
             console.warn('[Agent 编排] 直连失败后的 Relay 渠道同步失败:', error)
           }

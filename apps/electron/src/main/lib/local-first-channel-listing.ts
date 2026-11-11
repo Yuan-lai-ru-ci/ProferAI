@@ -12,7 +12,7 @@ export interface LocalFirstChannelListingDeps {
   getSessionGeneration: () => number | null
   getTeamAuth: () => TeamAuth | null
   getTeamAuthWithRefresh: () => Promise<TeamAuth | null>
-  syncChannelsFromServer: (serverBaseUrl: string, accessToken: string) => Promise<boolean | void>
+  syncManagedChannels: (serverBaseUrl: string, accessToken: string) => Promise<boolean | void> | undefined
   onSyncFailure: (error: unknown) => void
 }
 
@@ -45,7 +45,7 @@ export function listChannelsWithBackgroundSync(deps: LocalFirstChannelListingDep
     .then(async (auth) => {
       if (!auth?.teamAccountId || !isInitialCurrent() || (initial && (auth.baseUrl !== initial.baseUrl
         || auth.teamAccountId !== initial.teamAccountId))) return
-      await deps.syncChannelsFromServer(auth.baseUrl, auth.token)
+      await deps.syncManagedChannels(auth.baseUrl, auth.token)
     })
     .catch((error: unknown) => {
       deps.onSyncFailure(error)

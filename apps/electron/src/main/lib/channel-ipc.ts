@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { CHANNEL_IPC_CHANNELS } from '@profer/shared'
 import type { Channel, ChannelCreateInput, ChannelTestResult, ChannelUpdateInput, FetchModelsInput, FetchModelsResult } from '@profer/shared'
-import { listChannels, createChannel, updateChannel, deleteChannel, decryptApiKey, testChannel, testChannelDirect, fetchModels, getChannelPlanQuota, syncChannelsFromServer, isCommercialMode, loginXaiChannel, loginCodexChannel } from './channel-manager'
+import { listChannels, createChannel, updateChannel, deleteChannel, decryptApiKey, testChannel, testChannelDirect, fetchModels, getChannelPlanQuota, channelStore, isCommercialMode, loginXaiChannel, loginCodexChannel } from './channel-manager'
 import { listChannelsWithBackgroundSync } from './local-first-channel-listing'
 import { cancelXaiOAuthLogin } from './xai-oauth-service'
 import { cancelCodexOAuthLogin } from './codex-oauth-service'
@@ -22,7 +22,8 @@ export function registerChannelIpc(context: ChannelIpcContext): void {
     getTeamAuth: () => editionProviders.account.getSessionSnapshot(),
     getSessionGeneration: () => editionProviders.account.getSessionGeneration(),
     getTeamAuthWithRefresh: () => editionProviders.account.getSession(),
-    syncChannelsFromServer,
+    syncManagedChannels: (serverBaseUrl: string, accessToken: string) =>
+      editionProviders.channels.syncFromServer?.(channelStore, serverBaseUrl, accessToken),
     onSyncFailure: (error) => console.warn('[渠道管理] 后台同步渠道失败，继续使用本地缓存:', error),
   }, options?.localOnly !== true))
 
@@ -66,7 +67,7 @@ export function registerChannelIpc(context: ChannelIpcContext): void {
   })
   ipcMain.handle(CHANNEL_IPC_CHANNELS.GET_PLAN_QUOTA, async (_, channelId: string): Promise<import('@profer/shared').ChannelPlanQuotaResult> => getChannelPlanQuota(channelId))
   ipcMain.handle(CHANNEL_IPC_CHANNELS.SYNC_FROM_SERVER, async (_, serverBaseUrl: string, accessToken: string): Promise<void> => {
-    await syncChannelsFromServer(serverBaseUrl, accessToken)
+    await editionProviders.channels.syncFromServer?.(channelStore, serverBaseUrl, accessToken)
   })
   ipcMain.handle(CHANNEL_IPC_CHANNELS.GET_COMMERCIAL_MODE, async (): Promise<boolean> => isCommercialMode())
   ipcMain.handle(CHANNEL_IPC_CHANNELS.GET_ACCOUNT_CAPABILITIES, async (_, force?: boolean): Promise<{ commercialMode: boolean; canSelfConfig: boolean; membershipTier: string }> => {

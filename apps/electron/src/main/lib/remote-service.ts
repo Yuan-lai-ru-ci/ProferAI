@@ -122,7 +122,8 @@ import { getFrpStatus, getFrpPublicEndpoint, startFrp, stopFrp, ensureFrpReady }
 import { ensurePublicTlsIdentity, getPublicEndpoint, getPublicEndpointInfo, type PublicEndpointInfo } from './remote-public-endpoint'
 import { RemoteLifecycleQueue, closeOwnedHttp } from './remote-lifecycle'
 const remoteLifecycle = new RemoteLifecycleQueue()
-import { RemoteRelayClient, type RemoteRelaySink } from './remote-relay-client'
+import { editionProviders } from './edition'
+import type { EditionRelayClient, EditionRelaySink } from '@profer/edition-contract'
 const authenticatedClients = new WeakMap<WebSocket, string>()
 let profileTimer: ReturnType<typeof setInterval> | null = null
 let tlsServer: TlsServer | null = null
@@ -250,8 +251,8 @@ let accessToken: string | null = null
 /** HTTP + WebSocket 服务实例 */
 let httpServer: HttpServer | null = null
 let wss: WebSocketServer | null = null
-let remoteRelayClient: RemoteRelayClient | null = null
-let remoteRelaySink: RemoteRelaySink | null = null
+let remoteRelayClient: EditionRelayClient | null = null
+let remoteRelaySink: EditionRelaySink | null = null
 let remoteRelayCommandContext: RemoteCommandContext = { clientId: randomUUID() }
 
 /** 闲置踢人定时器：定期扫描连接，清理长时间无任何入站消息（含 ping）的假死/僵尸连接。 */
@@ -2602,7 +2603,7 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
 
   // 中心 relay 仅在显式开启时连接；默认仍保持本地 LAN 远程行为不变。
   if (process.env.PROFER_REMOTE_RELAY === '1') {
-    remoteRelayClient = new RemoteRelayClient({
+    remoteRelayClient = editionProviders.remote.createRelayClient?.({
       onOpen: (sink) => {
         remoteRelaySink = sink
         remoteRelayCommandContext = { clientId: randomUUID() }
@@ -2678,8 +2679,9 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
           if (sink.isOpen()) sink.send(JSON.stringify({ kind: 'command_result', requestId, commandId, ...result }))
         })
       },
-    })
-    remoteRelayClient.start()
+    }) ?? null
+    // 开源版没有中心 Relay（createRelayClient 缺省），这里直接跳过启动。
+    remoteRelayClient?.start()
   }
 
   // 监听地址：默认 0.0.0.0（局域网设备可访问，移动端通过电脑局域网 IP:端口 访问）。

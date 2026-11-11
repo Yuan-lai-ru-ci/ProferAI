@@ -137,7 +137,7 @@ describe('remote-service 接线（源码切片）', () => {
   })
 
   test('relay 透明层不做会话级回放，一律要求取快照（不混用跨连接状态）', () => {
-    const relay = slice('remoteRelayClient = new RemoteRelayClient({', '// 监听地址：默认 0.0.0.0')
+    const relay = slice('remoteRelayClient = editionProviders.remote.createRelayClient?.(', '// 监听地址：默认 0.0.0.0')
     expect(relay).toContain("parsed.type === 'restore_agent_streams'")
     expect(relay).toContain('requiresSnapshot: true')
   })

@@ -12,7 +12,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChannelsConfig } from '@profer/shared'
-import { listChannels, mergeServerChannelModels } from './channel-manager'
+import { listChannels } from './channel-manager'
+import { mergeServerChannelModels } from './channel-url-routing'
 
 const configDir = mkdtempSync(join(tmpdir(), 'profer-channels-'))
 const channelsPath = join(configDir, 'channels.json')

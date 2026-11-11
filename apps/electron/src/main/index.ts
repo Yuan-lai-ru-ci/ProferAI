@@ -1158,8 +1158,9 @@ async function bootstrap(): Promise<void> {
       const { editionProviders } = require('./lib/edition') as typeof import('./lib/edition')
       const auth = editionProviders.account.getSessionSnapshot()
       if (auth) {
-        const { syncChannelsFromServer } = require('./lib/channel-manager')
-        syncChannelsFromServer(auth.baseUrl, auth.token).catch(() => {})
+        const { channelStore } = require('./lib/channel-manager')
+        // 开源版没有 syncFromServer（缺省），直接跳过。
+        editionProviders.channels.syncFromServer?.(channelStore, auth.baseUrl, auth.token)?.catch(() => {})
       }
     })
   })

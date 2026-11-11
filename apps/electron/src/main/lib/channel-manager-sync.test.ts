@@ -39,7 +39,8 @@ mock.module('./proxy-fetch', () => ({ getFetchFn: () => async () => { calls += 1
 mock.module('./identity-service', () => ({ getOrCreateDeviceIdentity: () => ({ deviceId: 'fixture-sync-device' }) }))
 mock.module('./settings-service', () => ({ getSettings: () => ({ agentChannelIds: ['fixture-local'] }), updateSettings: () => {} }))
 mock.module('./codex-oauth-service', () => ({ loginCodexOAuth: async () => { throw new Error('禁止真实OAuth') }, refreshCodexOAuth: async () => { throw new Error('禁止真实OAuth') } }))
-const { syncChannelsFromServer } = await import('./channel-manager')
+const { syncFromServer } = await import('./edition/commercial/channel-sync')
+const { channelStore } = await import('./channel-manager')
 const { encryptToken } = await import('./token-crypto')
 const original = process.env.PROFER_CONFIG_DIR
 let dir: string
@@ -74,23 +75,23 @@ afterEach(() => {
 })
 describe('服务端渠道同步：写盘代际', () => {
   test('Given 当前账号 When 同步成功 Then 保留本地及官方模型偏好、仅落密文', async () => {
-    expect(await syncChannelsFromServer(serverUrl, 'fixture-a')).toBe(true)
+    expect(await syncFromServer(channelStore, serverUrl, 'fixture-a')).toBe(true)
     const saved = JSON.parse(readFileSync(path, 'utf8')) as { channels: Channel[] }
     expect(saved.channels.map((channel) => channel.id)).toEqual(['fixture-local', 'newapi-fixture'])
     saved.channels[1]!.enabled = false
     saved.channels[1]!.models[0]!.enabled = false
     saved.channels[1]!.models[0]!.context1m = true
     writeFileSync(path, JSON.stringify(saved))
-    await syncChannelsFromServer(serverUrl, 'fixture-a')
+    await syncFromServer(channelStore, serverUrl, 'fixture-a')
     const again = JSON.parse(readFileSync(path, 'utf8')) as { channels: Channel[] }
     expect(again.channels[1]).toMatchObject({ enabled: false, models: [{ enabled: false, context1m: true }] })
     expect(readFileSync(path, 'utf8')).not.toContain('fixture-server-secret')
     expect(invalidations).toEqual(['channels', 'channels'])
   })
   test('Given 旧token或失效账号 When 发起 Then 不访问网络也不改配置', async () => {
-    await expect(syncChannelsFromServer(serverUrl, 'old-token')).rejects.toThrow('失效')
+    await expect(syncFromServer(channelStore, serverUrl, 'old-token')).rejects.toThrow('失效')
     auth = null
-    await expect(syncChannelsFromServer(serverUrl, 'fixture-a')).rejects.toThrow('失效')
+    await expect(syncFromServer(channelStore, serverUrl, 'fixture-a')).rejects.toThrow('失效')
     expect(calls).toBe(0)
     expect(readFileSync(path, 'utf8')).toBe(bytes)
   })
@@ -99,7 +100,7 @@ describe('服务端渠道同步：写盘代际', () => {
       auth = { baseUrl: serverUrl, teamAccountId: 'a', token: 'fixture-a' }
       const pending = deferred<Response>()
       respond = () => pending.promise
-      const operation = syncChannelsFromServer(serverUrl, 'fixture-a')
+      const operation = syncFromServer(channelStore, serverUrl, 'fixture-a')
       for (let i = 0; i < 6; i += 1) await Promise.resolve()
       if (change === 'account') auth = { ...auth, teamAccountId: 'b' }
       if (change === 'logout') auth = null
@@ -114,9 +115,9 @@ describe('服务端渠道同步：写盘代际', () => {
   })
   test('Given 空目录或非商业响应 When 同步 Then 明确未写入且保留缓存', async () => {
     respond = async () => Response.json({ commercialMode: true, channels: [] })
-    expect(await syncChannelsFromServer(serverUrl, 'fixture-a')).toBe(false)
+    expect(await syncFromServer(channelStore, serverUrl, 'fixture-a')).toBe(false)
     respond = async () => Response.json({ commercialMode: false, channels: [] })
-    expect(await syncChannelsFromServer(serverUrl, 'fixture-a')).toBe(false)
+    expect(await syncFromServer(channelStore, serverUrl, 'fixture-a')).toBe(false)
     expect(readFileSync(path, 'utf8')).toBe(bytes)
     expect(invalidations).toEqual([])
   })

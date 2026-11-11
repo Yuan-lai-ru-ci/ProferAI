@@ -28,7 +28,7 @@ describe('后台目录同步代际', () => {
       listLocalChannels: () => localChannels, isCommercialMode: () => true,
       getSessionGeneration: () => null, getTeamAuth: () => null,
       getTeamAuthWithRefresh: async () => { calls += 1; return null },
-      syncChannelsFromServer: async () => { calls += 1 }, onSyncFailure() {},
+      syncManagedChannels: async () => { calls += 1 }, onSyncFailure() {},
     })).toBe(localChannels)
     await settle()
     expect(calls).toBe(0)
@@ -41,7 +41,7 @@ describe('后台目录同步代际', () => {
     const deps: LocalFirstChannelListingDeps = {
       listLocalChannels: () => localChannels, isCommercialMode: () => true,
       getSessionGeneration: () => 1, getTeamAuth: () => auth, getTeamAuthWithRefresh: async () => auth,
-      syncChannelsFromServer: async () => { calls += 1; await pending.promise },
+      syncManagedChannels: async () => { calls += 1; await pending.promise },
       onSyncFailure() {},
     }
     expect(listChannelsWithBackgroundSync(deps)).toBe(localChannels)
@@ -66,7 +66,7 @@ describe('后台目录同步代际', () => {
     const deps: LocalFirstChannelListingDeps = {
       listLocalChannels: () => localChannels, isCommercialMode: () => true,
       getSessionGeneration: () => generation, getTeamAuth: () => auth, getTeamAuthWithRefresh: () => pending.promise,
-      syncChannelsFromServer: async () => { calls += 1 }, onSyncFailure() {},
+      syncManagedChannels: async () => { calls += 1 }, onSyncFailure() {},
     }
     listChannelsWithBackgroundSync(deps)
     generation += 1
@@ -82,7 +82,7 @@ describe('后台目录同步代际', () => {
     const deps: LocalFirstChannelListingDeps = {
       listLocalChannels: () => localChannels, isCommercialMode: () => true,
       getSessionGeneration: () => 1, getTeamAuth: () => auth, getTeamAuthWithRefresh: () => pending.promise,
-      syncChannelsFromServer: async () => { calls += 1 }, onSyncFailure() {},
+      syncManagedChannels: async () => { calls += 1 }, onSyncFailure() {},
     }
     listChannelsWithBackgroundSync(deps)
     auth = { ...auth, teamAccountId: 'b' }
@@ -103,7 +103,7 @@ describe('listChannelsWithBackgroundSync', () => {
       getSessionGeneration: () => 1,
       getTeamAuth: () => ({ baseUrl: 'https://server.example', token: 'token', teamAccountId: 'fixture' }),
       getTeamAuthWithRefresh: async () => ({ baseUrl: 'https://server.example', token: 'token', teamAccountId: 'fixture' }),
-      syncChannelsFromServer: async () => {
+      syncManagedChannels: async () => {
         syncStarted = true
         await pendingSync
       },
@@ -127,7 +127,7 @@ describe('listChannelsWithBackgroundSync', () => {
       getTeamAuthWithRefresh: async () => {
         throw new Error('服务器不可达')
       },
-      syncChannelsFromServer: async () => {},
+      syncManagedChannels: async () => {},
       onSyncFailure: (error) => failures.push(error),
     })
 
@@ -149,7 +149,7 @@ describe('listChannelsWithBackgroundSync', () => {
         authRequested = true
         return null
       },
-      syncChannelsFromServer: async () => {},
+      syncManagedChannels: async () => {},
       onSyncFailure: () => {},
     })
 

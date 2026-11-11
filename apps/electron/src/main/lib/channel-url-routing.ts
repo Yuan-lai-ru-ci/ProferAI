@@ -1,4 +1,4 @@
-import type { Channel, ChannelsConfig, ProviderType } from '@profer/shared'
+import type { Channel, ChannelModel, ChannelsConfig, ProviderType } from '@profer/shared'
 import { PROVIDER_DEFAULT_URLS, inferAgentRuntimeModes } from '@profer/shared'
 import { inferAgentBaseUrl, isOfficialDeepSeekAgentUrl, isOfficialDeepSeekV1Url, normalizeBaseUrl } from '@profer/core'
 
@@ -81,3 +81,28 @@ export function normalizeConfigForCurrentSchema(config: ChannelsConfig): { confi
   return { config: { ...config, channels }, changed }
 }
 
+/**
+ * 合并服务端下发的渠道模型与本地状态。
+ *
+ * 服务端只负责「有哪些模型」，以下两项属于用户本地决定，不得被同步洗掉：
+ * - 模型级 enabled（用户启停）
+ * - 模型上的 1M 勾选（context1m）
+ *
+ * 注意：这里的 localModels 只会是「同 ID 的服务端渠道」上次同步留下的本地记录
+ * （官方/模型族渠道在 UI 上没有 1M 开关，用户改不了 context1m），
+ * 不会与用户自配渠道（id 不同）发生交叉。
+ */
+export function mergeServerChannelModels(
+  serverModels: readonly Partial<ChannelModel>[],
+  localModels: readonly ChannelModel[] | undefined,
+): ChannelModel[] {
+  return serverModels.map((model) => {
+    const modelKey = model.id ?? model.name
+    const localModel = localModels?.find((candidate) => candidate.id === modelKey)
+    return {
+      ...model,
+      enabled: localModel ? localModel.enabled : model.enabled !== false,
+      ...(localModel?.context1m !== undefined && { context1m: localModel.context1m }),
+    } as ChannelModel
+  })
+}

@@ -17,6 +17,8 @@ import {
   tryRestoreSession,
 } from '../auth-service'
 import { shouldUseCommercialBearerAuth, shouldUseManagedCommercialRoute } from '../commercial-routing-policy'
+import { RemoteRelayClient } from './commercial/remote-relay-client'
+import { pruneManagedOnLogout, restoreForAccount, syncFromServer } from './commercial/channel-sync'
 import { isOfficialManagedChannel } from '../official-channel'
 
 /**
@@ -68,12 +70,22 @@ export const editionProviders: EditionProviders = {
     isManagedChannel: (channel) => isOfficialManagedChannel(channel),
     // 商业版下发的渠道在这里永远可见。
     isChannelVisible: () => true,
+    // 服务端渠道的同步/清理/恢复：实现放在 commercial/ 下，OSS 构建里不存在。
+    syncFromServer: (store, serverBaseUrl, accessToken) => syncFromServer(store, serverBaseUrl, accessToken),
+    pruneManagedOnLogout: (store) => pruneManagedOnLogout(store),
+    restoreForAccount: (store, accountId) => restoreForAccount(store, accountId),
   },
   errors: {
     detectInsufficientCredits: (error, status) => detectInsufficientCredits(error, status),
   },
   remote: {
     getRelayTicket: (role, deviceSlotId) => getRemoteRelayTicket(role, deviceSlotId),
+    // 传输层不直接依赖装配点：ticket 在这里注入，避免 commercial → client → edition 的循环。
+    createRelayClient: (options) =>
+      new RemoteRelayClient({
+        ...options,
+        getTicket: (role) => getRemoteRelayTicket(role),
+      }),
   },
   registerIpc: () => registerAccountIpc(),
 }

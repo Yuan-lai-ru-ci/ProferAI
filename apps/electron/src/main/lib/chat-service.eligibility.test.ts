@@ -28,7 +28,7 @@ mock.module('./channel-manager', () => ({
   getVisibleChannelById: (id: string) => channels.find((channel) => channel.id === id),
   decryptApiKey: () => { decrypts += 1; if (decryptFails) throw new Error('fixture-decrypt-failure'); return 'fixture-key' },
   isCommercialMode: () => commercial, canSelfConfig: () => true,
-  syncChannelsFromServer: async () => { synced += 1; channels = refreshedChannels },
+  channelStore: {},
 }))
 mock.module('./chat-stream-bus', () => ({ pushChatStream: (_wc: unknown, _id: string, topic: string, payload: { error?: string; model?: string; message?: { id?: string; role?: string; content?: string } }) => events.push({ topic, payload }) }))
 // 账号与路由策略已收口到发行版契约：mock 接缝从 auth-service 移到 ./edition。
@@ -63,6 +63,11 @@ mock.module('./edition', () => ({
     },
     // 商业版会识别额度不足；本文件走商业桩，保持与生产一致。
     errors: { detectInsufficientCredits: () => null },
+    // 服务端渠道同步经契约调用；本文件只关心 fallback 后是否触发同步。
+    channels: {
+      isManagedChannel: () => false,
+      syncFromServer: async () => { synced += 1; channels = refreshedChannels; return true },
+    },
     remote: { getRelayTicket: async () => null },
     registerIpc: () => {},
   },
