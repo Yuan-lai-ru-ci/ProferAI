@@ -25,15 +25,22 @@ on:
         options:
           - 'false'
           - 'true'
+  # 分支验证入口：把分支推到 ci-* 命名空间即自动构建一次（不改默认分支也能验证流水线）。
+  # 分支名不要带斜杠：它会进入 Artifact 名称。
+  push:
+    branches:
+      - 'ci-*'
 
 permissions:
   contents: read
 
 concurrency:
-  group: oss-package-${{ inputs.ref }}-${{ inputs.publish }}
+  group: oss-package-${{ github.ref }}-${{ inputs.publish }}
   cancel-in-progress: true
 
 env:
+  # workflow_dispatch 用输入 ref；push 触发的分支验证用被推的 ref。
+  BUILD_REF: ${{ inputs.ref || github.ref_name }}
   # 固定到已在本地验证过的版本，避免 latest 改变 lockfile 或测试行为。
   BUN_VERSION: 1.3.14
   NODE_VERSION: '22'
@@ -53,7 +60,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -88,7 +95,7 @@ jobs:
           esac
           echo "Verifying version: $package_version"
         env:
-          INPUT_REF: ${{ inputs.ref }}
+          INPUT_REF: ${{ env.BUILD_REF }}
 
       - name: Typecheck workspace
         run: bun run typecheck
@@ -189,7 +196,7 @@ jobs:
       - name: Upload macOS installable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Profer-OSS-macOS-arm64-${{ inputs.ref }}
+          name: Profer-OSS-macOS-arm64-${{ env.BUILD_REF }}
           path: |
             apps/electron/out/latest-mac.yml
             apps/electron/out/*.dmg
@@ -209,7 +216,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -232,7 +239,7 @@ jobs:
           if ($packageVersion -ne $changelogVersion) {
             throw "package.json 版本 $packageVersion 与 CHANGELOG 首条 $changelogVersion 不一致"
           }
-          $requestedRef = "${{ inputs.ref }}"
+          $requestedRef = "${{ env.BUILD_REF }}"
           if ($requestedRef -match '^v') {
             $tagVersion = $requestedRef -replace '^v', ''
             if ($tagVersion -ne $packageVersion) {
@@ -354,7 +361,7 @@ jobs:
       - name: Upload Windows installable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Profer-OSS-Windows-x64-${{ inputs.ref }}
+          name: Profer-OSS-Windows-x64-${{ env.BUILD_REF }}
           path: |
             apps/electron/out/latest.yml
             apps/electron/out/*.exe
@@ -379,18 +386,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
-          name: Profer-OSS-macOS-arm64-${{ inputs.ref }}
+          name: Profer-OSS-macOS-arm64-${{ env.BUILD_REF }}
           path: artifacts
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: Profer-OSS-Windows-x64-${{ inputs.ref }}
+          name: Profer-OSS-Windows-x64-${{ env.BUILD_REF }}
           path: artifacts
 
       - name: Upload assets to existing release
