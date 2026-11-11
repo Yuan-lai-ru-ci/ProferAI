@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { CollapsedWorkspacePopover } from '@/components/agent/CollapsedWorkspacePopover'
 import { SidebarBalanceBar } from '@/components/app-shell/SidebarBalanceBar'
+import { isCommercialBuild } from '@/lib/build-target'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import {
   PLANNING_NAV_ITEM,
@@ -240,8 +241,9 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
 
       <div className="min-h-0 flex-1" />
 
-      {/* 身份区：余额 + 头像（点击进设置） */}
-      <SidebarBalanceBar collapsed />
+      {/* 身份区：余额 + 头像（点击进设置）
+          积分条属于商业版（额度/会员），开源版没有账号体系，不渲染也不轮询余额。 */}
+      {isCommercialBuild() ? <SidebarBalanceBar collapsed /> : null}
       <Tooltip>
         <TooltipTrigger asChild>
           <button

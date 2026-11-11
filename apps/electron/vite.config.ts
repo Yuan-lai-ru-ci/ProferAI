@@ -4,10 +4,23 @@ import { resolve } from 'path'
 import pkg from './package.json' with { type: 'json' }
 import { resolveDevVitePort } from './src/main/lib/dev-instance'
 
-export default defineConfig({
+/**
+ * 发行版：renderer 也必须在构建期就知道自己做的是哪一版。
+ *
+ * 商业版用 `vite build --mode commercial`（见 package.json 的 build:renderer:commercial），
+ * 其余情况（dev / 开源版打包）都按 oss 处理 —— 开源版是缺省，避免忘记传参时
+ * 把商业入口漏进开源包。
+ */
+const buildTarget = (mode: string): 'oss' | 'commercial' =>
+  mode === 'commercial' ? 'commercial' : 'oss'
+
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // 源码里直接用 `if (__PROFER_BUILD_TARGET__ === 'commercial')`，
+    // Vite 会把常量替换成字面量，便于打包器折叠分支。
+    __PROFER_BUILD_TARGET__: JSON.stringify(buildTarget(mode)),
   },
   root: resolve(__dirname, 'src/renderer'),
   base: './',
@@ -57,4 +70,4 @@ export default defineConfig({
         : {}),
     },
   },
-})
+}))

@@ -72,6 +72,8 @@ import { DeveloperSettings } from "./DeveloperSettings";
 import { DevicesSettings } from "./DevicesSettings";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
 import { matchesSettingsSearch } from "./settings-search";
+import { filterSettingsGroups } from "./settings-visibility";
+import { isCommercialBuild } from "@/lib/build-target";
 
 /** 设置 Tab 定义 */
 export interface SettingsTabItem {
@@ -150,13 +152,6 @@ const PLUGIN_SYSTEM_ITEM: SettingsTabItem = {
   icon: <Blocks size={16} />,
   searchTerms: ["插件系统", "安装插件", "已安装插件", "扩展"],
 };
-
-/** 依赖团队账号登录的 Tab（未登录时不展示） */
-const AUTH_REQUIRED_TABS: ReadonlySet<SettingsTab> = new Set([
-  "credits",
-  "subscription",
-  "team",
-]);
 
 /** 根据标签页 id 渲染对应内容 */
 function renderTabContent(tab: SettingsTab): React.ReactElement {
@@ -284,10 +279,16 @@ export function SettingsPanel({
   }
 
   // 受限环境传入白名单时直接使用（无分组标题）；否则按语义分组组装导航。
-  // 未登录时过滤掉需要团队账号的 Tab；账户页始终保留，用于登录入口。
+  // 可见性统一走 filterSettingsGroups：开源版没有账号体系，账户/额度/订阅/团队整组不出现；
+  // 商业版未登录时隐藏需要登录的页面，账户页保留作为登录入口。
+  const commercial = isCommercialBuild()
   const groups = React.useMemo<SettingsTabGroup[]>(() => {
     if (tabsOverride) {
-      return [{ items: tabsOverride }]
+      const [only] = filterSettingsGroups([{ items: tabsOverride }], {
+        isLoggedIn: authStatus.isLoggedIn,
+        commercial,
+      })
+      return only ? [only] : []
     }
 
     const modelItems = appMode === "agent"
@@ -308,13 +309,8 @@ export function SettingsPanel({
       { title: "帮助", items: HELP_GROUP_ITEMS },
     ]
 
-    if (authStatus.isLoggedIn) return allGroups
-
-    // 未登录：过滤需要鉴权的页面，并清理空分组
-    return allGroups
-      .map((g) => ({ ...g, items: g.items.filter((t) => !AUTH_REQUIRED_TABS.has(t.id)) }))
-      .filter((g) => g.items.length > 0)
-  }, [appMode, tabsOverride, authStatus.isLoggedIn, developerModeEnabled]);
+    return filterSettingsGroups(allGroups, { isLoggedIn: authStatus.isLoggedIn, commercial })
+  }, [appMode, tabsOverride, authStatus.isLoggedIn, developerModeEnabled, commercial]);
 
   // 将所有可见 tab 拍平成列表，用于 activeTab 回落与标题查找
   const tabs: SettingsTabItem[] = React.useMemo(

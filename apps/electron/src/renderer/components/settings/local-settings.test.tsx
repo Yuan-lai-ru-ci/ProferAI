@@ -53,6 +53,20 @@ mock.module('./DevicesSettings', () => ({ DevicesSettings: () => null }))
 mock.module('./VoiceInputSettings', () => ({ VoiceInputSettings: () => null }))
 mock.module('@emoji-mart/react', () => ({ default: () => null }))
 
+
+/**
+ * 商业版专属的图片生图开关只在 commercial 构建里渲染。
+ * bun 测试环境没有 Vite 注入，用 globalThis 临时模拟打包常量。
+ */
+async function asCommercial<T>(run: () => Promise<T>): Promise<T> {
+  ;(globalThis as { __PROFER_BUILD_TARGET__?: string }).__PROFER_BUILD_TARGET__ = 'commercial'
+  try {
+    return await run()
+  } finally {
+    delete (globalThis as { __PROFER_BUILD_TARGET__?: string }).__PROFER_BUILD_TARGET__
+  }
+}
+
 const { AccountSettings } = await import('./AccountSettings')
 const { PromptSettings } = await import('./PromptSettings')
 const { ToolSettings } = await import('./ToolSettings')
@@ -360,6 +374,7 @@ describe('ToolSettings 保存失败停止测试', () => {
     }
   }
   test('图片 BYOK 每个可见标签绑定对应输入或 provider 触发器', async () => {
+    await asCommercial(async () => {
     api({ getChatToolCredentials: async () => ({ mode: 'byok' }) })
     const host = mount(toolComponent('GptImageSettings')); await tick(); host.render()
     const labels = host.elements().filter((item) => item.type === 'label')
@@ -367,8 +382,17 @@ describe('ToolSettings 保存失败停止测试', () => {
     for (const label of labels) expect(host.elements().some((item) => item.props.id === label.props.htmlFor)).toBe(true)
     expect(host.elements().find((item) => item.props.onClick && text(item).startsWith('自带 API Key'))!.props['aria-pressed']).toBe(true)
     expect(host.elements().find((item) => item.props.onClick && text(item).startsWith('Profer 官方生图'))!.props['aria-pressed']).toBe(false)
+    })
+  })
+
+  test('开源版隐藏官方生图开关并强制走自带 Key', async () => {
+    api({ getChatToolCredentials: async () => ({ mode: 'official' }) })
+    const host = mount(toolComponent('GptImageSettings')); await tick(); host.render()
+    expect(host.elements().some((item) => text(item).startsWith('Profer 官方生图'))).toBe(false)
+    expect(host.elements().some((item) => item.props.type === 'password' || item.props.id?.toString().includes('key'))).toBe(true)
   })
   test('图片模式写失败不改变显示模式；工具开关失败保持原状态', async () => {
+    await asCommercial(async () => {
     api({ updateChatToolCredentials: fail, updateChatToolState: fail })
     const host = mount(toolComponent('GptImageSettings')); await tick(); host.render()
     const button = host.elements().find((item) => item.props.onClick && text(item).startsWith('自带 API Key'))!
@@ -377,6 +401,7 @@ describe('ToolSettings 保存失败停止测试', () => {
     const toggle = host.elements().find((item) => item.props.onCheckedChange)!
     await (toggle.props.onCheckedChange as (value: boolean) => Promise<void>)(true); host.render()
     expect(host.elements().find((item) => item.props.onCheckedChange)!.props.checked).toBe(false)
+    })
   })
   test('自定义工具删除只在确认后写入，失败保留列表并可重试', async () => {
     const tool = { meta: { id: 'fixture-tool', name: 'Fixture tool', description: '', category: 'custom' as const, params: [], executorType: 'http' as const }, enabled: true, available: true }

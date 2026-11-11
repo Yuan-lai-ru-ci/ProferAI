@@ -22,6 +22,7 @@ import { activeViewAtom, globalProfileFileAtom } from '@/atoms/active-view'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { ProfileIdentity } from './ProfileIdentity'
 import { GlobalUsageCard } from './GlobalUsageCard'
+import { isCommercialBuild } from '@/lib/build-target'
 import {
   FreeTextCard,
   InferredCard,
@@ -297,8 +298,9 @@ export function GlobalProfileView(): React.ReactElement {
         ) : (
           <ViewBody className="gap-4 pb-10">
             <h1 className="sr-only">我的画像</h1>
-            {/* 统一热力图：聚合全部工作区的活跃度，放在画像内容上方 */}
-            <GlobalUsageCard />
+            {/* 统一热力图：聚合全部工作区的活跃度，放在画像内容上方。
+                额度/会员属于商业版语义，开源版没有账号体系，不显示这张卡。 */}
+            {isCommercialBuild() ? <GlobalUsageCard /> : null}
             <div className="grid items-start gap-4 lg:grid-cols-[252px_minmax(0,1fr)_252px]">
               <aside className="min-w-0 space-y-4">
                 <ProfileIdentity

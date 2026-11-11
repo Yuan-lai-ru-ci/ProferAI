@@ -1,5 +1,11 @@
 /// <reference types="vite/client" />
 
+/**
+ * 发行版常量：由 `vite.config.ts` 的 define 注入。
+ * oss = 开源版（缺省），commercial = 商业版（`vite build --mode commercial`）。
+ */
+declare const __PROFER_BUILD_TARGET__: 'oss' | 'commercial'
+
 // CSS 模块类型声明
 declare module '*.css' {
   const content: Record<string, string>

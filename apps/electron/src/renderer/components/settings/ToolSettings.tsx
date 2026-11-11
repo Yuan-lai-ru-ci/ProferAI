@@ -5,6 +5,7 @@
  * 管理联网搜索、生图与自定义工具配置。
  */
 
+import { isCommercialBuild } from '@/lib/build-target'
 import * as React from 'react'
 import { useSetAtom, useAtomValue } from 'jotai'
 import { toast } from 'sonner'
@@ -270,8 +271,10 @@ const IMAGE_PROVIDER_OPTIONS: Array<{ value: GptImageProvider; label: string }> 
 
 /** AI 图片生成工具设置区域 */
 function GptImageSettings(): React.ReactElement {
+  // 官方生图走 Profer 团队账号扣积分，属于商业版能力；开源版只保留「自带 API Key」。
+  const canUseOfficial = isCommercialBuild()
   const [provider, setProvider] = React.useState<GptImageProvider>('openai')
-  const [mode, setMode] = React.useState<'official' | 'byok'>('official')
+  const [mode, setMode] = React.useState<'official' | 'byok'>(canUseOfficial ? 'official' : 'byok')
   const [apiKey, setApiKey] = React.useState('')
   const [hasApiKey, setHasApiKey] = React.useState(false)
   const [baseUrl, setBaseUrl] = React.useState('')
@@ -294,7 +297,7 @@ function GptImageSettings(): React.ReactElement {
   const [modeSaving, setModeSaving] = React.useState(false)
   const savedCredentialsRef = React.useRef({
     provider: 'openai' as GptImageProvider,
-    mode: 'official' as 'official' | 'byok',
+    mode: (canUseOfficial ? 'official' : 'byok') as 'official' | 'byok',
     baseUrl: '',
     model: '',
   })
@@ -310,7 +313,8 @@ function GptImageSettings(): React.ReactElement {
         const tool = tools.find((t) => t.meta.id === 'gpt-image')
         if (tool) setEnabled(tool.enabled)
         const loadedProvider = credentials.provider === 'xai' ? 'xai' : 'openai'
-        const loadedMode = credentials.mode === 'byok' ? 'byok' : 'official'
+        // 开源版即使配置里残留 official（例如从商业版切过来），也强制落回 byok。
+        const loadedMode = !canUseOfficial || credentials.mode === 'byok' ? 'byok' : 'official'
         setProvider(loadedProvider)
         setMode(loadedMode)
         setHasApiKey(credentials.hasApiKey === 'true')
@@ -512,6 +516,7 @@ function GptImageSettings(): React.ReactElement {
               </p>
             </div>
           )}
+          {canUseOfficial ? (
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               type="button"
@@ -538,6 +543,7 @@ function GptImageSettings(): React.ReactElement {
               </p>
             </button>
           </div>
+          ) : null}
           {mode === 'official' ? (
             <div className="rounded-lg bg-muted/50 p-3 space-y-1 text-sm text-muted-foreground">
               <p>
