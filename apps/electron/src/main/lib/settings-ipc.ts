@@ -6,9 +6,11 @@
  * 段内的动态 import 路径已改为相对 lib/ 的路径（原路径相对 src/main/）。
  */
 import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
-import { SETTINGS_IPC_CHANNELS, type AppSettings } from '../../types'
+import { SETTINGS_IPC_CHANNELS, type AppSettings, type WebuiConfigPatch, type WebuiStatus } from '../../types'
 import { getSettings, updateSettings } from './settings-service'
 import { getRemoteServiceStatus, setRemoteServiceEnabled, restartRemoteService } from './remote-service'
+import { buildWebuiPublishedUrls, getWebuiLocalState } from './webui-service'
+import { listAccessibleHosts, normalizeBindHost, normalizePublishedIds, pickAccessibleHost } from './webui-routing'
 import { savePublicEndpointConfig, ensurePublicTlsIdentity } from './remote-public-endpoint'
 import { updateWindowFrameAppearance } from './titlebar-overlay'
 import { syncFeishuSyncSleepBlocker } from './feishu-sleep-blocker'
@@ -144,6 +146,71 @@ export function registerSettingsIpc(): void {
         console.error('[移动模式] APK 二维码生成失败:', err)
         return { url, dataUrl: '', fileName }
       }
+    },
+  )
+
+  // ===== WebUI：一个会话 = 一个网页 =====
+  // 只负责静态页托管与会话白名单；会话内容、发消息、goal 仍全部走既有 WS 与主进程单写者。
+  function readWebuiStatus(): WebuiStatus {
+    const remote = getRemoteServiceStatus()
+    const local = getWebuiLocalState()
+    return {
+      enabled: local.config.enabled,
+      running: remote.running,
+      port: remote.port,
+      defaultPort: remote.defaultPort,
+      bindHost: local.config.bindHost,
+      interfaces: local.interfaces,
+      publishedSessionIds: local.config.publishedSessionIds,
+      token: remote.token,
+      urls: buildWebuiPublishedUrls(remote.port, local.config.bindHost, remote.token),
+      accessibleHost: pickAccessibleHost(local.interfaces),
+      accessibleHosts: listAccessibleHosts(local.interfaces),
+      platform: process.platform,
+      assetDir: local.assetDir,
+      assetReady: local.assetReady,
+      serviceError: remote.error,
+    }
+  }
+
+  ipcMain.handle(SETTINGS_IPC_CHANNELS.GET_WEBUI_STATUS, async (): Promise<WebuiStatus> => readWebuiStatus())
+
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.SET_WEBUI_CONFIG,
+    async (_event, patch: WebuiConfigPatch): Promise<WebuiStatus> => {
+      if (!patch || typeof patch !== 'object') throw new Error('WebUI 配置参数无效')
+      const updates: Partial<AppSettings> = {}
+      let needsRestart = false
+
+      if (typeof patch.enabled === 'boolean') updates.webuiEnabled = patch.enabled
+      if (patch.bindHost !== undefined) {
+        const host = normalizeBindHost(patch.bindHost)
+        if (host !== getSettings().webuiBindHost) {
+          updates.webuiBindHost = host
+          needsRestart = true
+        }
+      }
+      if (patch.port !== undefined) {
+        const port = Number(patch.port)
+        if (!Number.isInteger(port) || (port !== 0 && (port < 1024 || port > 65535))) {
+          throw new Error('端口必须是 1024-65535 之间的整数，或 0 表示恢复默认')
+        }
+        updates.pocketModePort = port
+        needsRestart = true
+      }
+      if (patch.publishedSessionIds !== undefined) {
+        updates.webuiPublishedSessionIds = normalizePublishedIds(patch.publishedSessionIds)
+      }
+      if (Object.keys(updates).length > 0) updateSettings(updates)
+
+      // 开启 WebUI 需要底层 HTTP/WS 服务在跑；关闭时不主动停服务，因为移动模式可能仍在用。
+      if (patch.enabled === true) {
+        await setRemoteServiceEnabled(true)
+      } else if (needsRestart && getRemoteServiceStatus().running) {
+        // 网卡 / 端口变化必须重新 listen 才生效
+        await restartRemoteService()
+      }
+      return readWebuiStatus()
     },
   )
 

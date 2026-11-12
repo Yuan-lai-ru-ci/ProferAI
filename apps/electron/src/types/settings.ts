@@ -420,6 +420,12 @@ export interface AppSettings {
   pocketModeEnabled?: boolean
   /** 移动模式服务端口（正式版默认 7788，开发模式默认 7789；0/缺省表示使用默认端口）。 */
   pocketModePort?: number
+  /** WebUI「一个会话一个网页」开关；默认关闭，即默认 0 个网页。与移动模式共用同一 HTTP/WS 服务。 */
+  webuiEnabled?: boolean
+  /** WebUI 监听网卡（IPv4 字面量，默认 127.0.0.1）；仅在 webuiEnabled 时覆盖监听地址。 */
+  webuiBindHost?: string
+  /** 已发布的会话白名单；/s/<id> 只对此列表内的会话返回页面。默认空数组。 */
+  webuiPublishedSessionIds?: string[]
   /** Windows Shell 环境偏好：'auto'（自动检测，优先 Git Bash）| 'git-bash' | 'wsl'（默认 'auto'） */
   agentShellPreference?: 'auto' | 'git-bash' | 'wsl'
   /** 桌面输入工具栏的显示与排序偏好；移动端不读取此字段。 */
@@ -486,6 +492,46 @@ export interface PocketModeStatus {
   notice: string | null
 }
 
+/** 网卡下拉项（WebUI 选择监听地址用） */
+export interface WebuiNetworkInterface {
+  name: string
+  address: string
+  internal: boolean
+  /** 局域网 / 隧道 / 虚拟 等；面板据此标注「手机可能不可达」，避免选错网卡。 */
+  kind: 'loopback' | 'lan' | 'tunnel' | 'virtual' | 'link-local'
+}
+
+/** WebUI 面板可更新的配置；未提供的字段保持不变。 */
+export interface WebuiConfigPatch {
+  enabled?: boolean
+  bindHost?: string
+  port?: number
+  publishedSessionIds?: string[]
+}
+
+/** WebUI 面板状态。与移动模式共用同一个 HTTP/WS 服务，因此 port / running / token 都来自远程服务。 */
+export interface WebuiStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  defaultPort: number
+  bindHost: string
+  interfaces: WebuiNetworkInterface[]
+  publishedSessionIds: string[]
+  token: string | null
+  urls: Array<{ sessionId: string; url: string }>
+  /** 监听 0.0.0.0 时用于展示的可达地址（第一张局域网网卡）；没有局域网网卡则为 null。 */
+  accessibleHost: string | null
+  /** 所有可能被手机访问到的局域网地址，按「最可能」排序；面板用来列出候选。 */
+  accessibleHosts: string[]
+  /** 宿主平台，面板据此决定是否展示 Windows 防火墙放行提示。 */
+  platform: string
+  assetDir: string
+  assetReady: boolean
+  /** 底层远程服务的错误（如端口占用）；WebUI 依赖同一服务 */
+  serviceError: string | null
+}
+
 export const SKIN_IPC_CHANNELS = {
   GET_SKINS: 'skins:get-list',
   GET_SKIN_CSS: 'skins:get-css',
@@ -530,6 +576,9 @@ export const SETTINGS_IPC_CHANNELS = {
   SET_POCKET_PUBLIC_ENDPOINT: 'settings:set-pocket-public-endpoint',
   /** 获取安卓版 APK 扫码下载二维码（指向官网 profer.cn 域名；始终返回） */
   GET_APK_QR: 'settings:get-apk-qr',
+  /** WebUI「一个会话一个网页」：读取状态 / 更新配置（含热应用） */
+  GET_WEBUI_STATUS: 'settings:get-webui-status',
+  SET_WEBUI_CONFIG: 'settings:set-webui-config',
 } as const
 
 /** 自定义通知音 IPC 通道 */

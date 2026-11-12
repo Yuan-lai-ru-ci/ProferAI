@@ -990,7 +990,9 @@ async function bootstrap(): Promise<void> {
   // 设置页开启「启用移动端连接」后，下次启动自动恢复监听（正式版与开发版一致）。
   // 开发版默认端口 7789、正式版 7788，端口已隔离，dev 与打包版并存不会互相抢占。
   void safeAwait('startRemoteService', async () => {
-    if (getSettings().pocketModeEnabled === true) {
+    // WebUI 与移动模式共用同一个服务：任一开关开启时，启动都要自动恢复监听。
+    const startupSettings = getSettings()
+    if (startupSettings.pocketModeEnabled === true || startupSettings.webuiEnabled === true) {
       await setRemoteServiceEnabled(true)
     } else {
       await startRemoteService()

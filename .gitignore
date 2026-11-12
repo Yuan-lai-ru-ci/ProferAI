@@ -58,6 +58,8 @@ vendor
 
 # 打包内置二进制(体积大，构建产物，不入库)
 apps/electron/resources/bin/
+# WebUI 静态产物：由 Profer-pocket/webui/dist 构建后拷贝，不入库
+apps/electron/resources/webui/
 
 # SQLite 数据库文件（不入库）
 *.db

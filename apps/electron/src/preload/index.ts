@@ -143,6 +143,8 @@ import type {
   AppSettings,
   DeveloperSettingsSnapshot,
   PocketModeStatus,
+  WebuiStatus,
+  WebuiConfigPatch,
   QuickTaskSubmitInput,
   QuickTaskOpenSessionData,
   VoiceDictationAudioChunkInput,
@@ -637,6 +639,10 @@ export interface ElectronAPI {
   setPocketPublicEndpoint: (input: { host: string; port: number } | null) => Promise<PocketModeStatus>
   /** 获取安卓版 APK 扫码下载信息（官网地址/二维码/文件名） */
   getProferApkQr: () => Promise<{ url: string; dataUrl: string; fileName: string }>
+  /** 获取 WebUI 状态（开关、网卡、端口、已发布会话与可访问 URL） */
+  getWebuiStatus: () => Promise<WebuiStatus>
+  /** 更新 WebUI 配置并热应用（开关会启停共用服务，网卡/端口变化会重启服务） */
+  setWebuiConfig: (patch: WebuiConfigPatch) => Promise<WebuiStatus>
 
   /** 获取系统主题（是否深色模式） */
   getSystemTheme: () => Promise<boolean>
@@ -2334,6 +2340,14 @@ const electronAPI: ElectronAPI = {
   },
   getProferApkQr: () => {
     return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_APK_QR) as Promise<{ url: string; dataUrl: string; fileName: string }>
+  },
+
+  getWebuiStatus: () => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET_WEBUI_STATUS) as Promise<WebuiStatus>
+  },
+
+  setWebuiConfig: (patch) => {
+    return ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SET_WEBUI_CONFIG, patch) as Promise<WebuiStatus>
   },
 
   getSystemTheme: () => {
