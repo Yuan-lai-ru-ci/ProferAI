@@ -14,8 +14,8 @@
  *  5. 显式开关控制：环境变量 PROFER_REMOTE=1 或设置页「移动模式」开关（settings.pocketModeEnabled）时启动，
  *     默认不启动，确保桌面版行为零变化。
  *
- * 注：本文件**不含静态 UI 服务**（原平板静态页面已随 tablet 线退役移除，2026-09-11）；
- *     当前仅提供 /health 与 /ws（WebSocket 命令通道），供移动端（Profer-pocket）客户端接入。
+ * 注：除 /health 与 /ws 外，本文件还通过 webui-service 托管 WebUI 静态页（/s/<id> 与 /webui/*）：
+ *     仅放行设置页已发布的会话，默认 0 个网页；页面与 /ws 同源，Pocket 客户端行为不受影响。
  *
  * 依赖说明：
  *  本文件使用 Node 原生 http/https + ws 库（已于 apps/electron 安装）。
@@ -36,6 +36,7 @@ import { networkInterfaces } from 'node:os'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
+import { getWebuiBindHost, handleWebuiHttpRequest } from './webui-service'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
 import type { AgentRuntime, AgentSendInput } from '@profer/shared'
@@ -88,6 +89,7 @@ import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
 import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
 import { goalProposalService } from './goal-proposal-service'
+import { findGoalSessionService, type GoalSessionService } from './goal-session-service'
 import { exitPlanService } from './agent-exit-plan-service'
 import {
   listConversations,
@@ -1046,6 +1048,40 @@ export function resolveRemoteFileRoots(input: {
 }
 
 /** 处理来自移动端客户端的一条 JSON 指令消息 */
+/** Goal 契约只接受对象形态；数组/null/字符串一律视为未提供，避免把脏值送进状态机。 */
+function readGoalContract(value: unknown): Parameters<GoalSessionService['start']>[2] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as Parameters<GoalSessionService['start']>[2]
+}
+
+/**
+ * 会话标识必须 trim 后判空：`'   '` 是真值，直接 `!sessionId` 会把空白当成合法会话标识，
+ * 一路走到状态机里变成一个查不到的会话。
+ */
+function readSessionId(parsed: Record<string, unknown>): string {
+  return typeof parsed.sessionId === 'string' ? parsed.sessionId.trim() : ''
+}
+
+function withGoalService(): { ok: true; service: GoalSessionService } | { ok: false; error: string } {
+  const service = findGoalSessionService()
+  return service ? { ok: true, service } : { ok: false, error: 'Goal 服务尚未就绪' }
+}
+
+/**
+ * Goal 命令的异常边界。
+ *
+ * GoalSessionService 会主动抛业务错误（例如「当前会话有未完成的 Goal，请先恢复或清除」），
+ * 而 WS 调用方是 `handleRemoteCommand(...).then(...)` 且没有 .catch ——
+ * 直接抛出去会变成 unhandled rejection，客户端还会一直等不到 command_result。
+ */
+async function runGoalCommand(action: () => unknown | Promise<unknown>): Promise<CommandResult> {
+  try {
+    return { ok: true, data: await action() }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Goal 操作失败' }
+  }
+}
+
 export async function handleRemoteCommand(
   message: string,
   requestId: unknown = null,
@@ -1968,6 +2004,77 @@ export async function handleRemoteCommand(
       return { ok: true, data: { stopped: true } }
     }
 
+    // ===== Goal 长时自主执行 =====
+    // 与桌面端 AGENT_IPC_CHANNELS.START_GOAL / PAUSE_GOAL / RESUME_GOAL / STOP_GOAL /
+    // CLEAR_GOAL / UPDATE_GOAL / GET_GOAL / GET_GOAL_HISTORY 一一对应。
+    // 全部转发给 ipc.ts 装配的同一个 GoalSessionService（单写者），本层不复制状态机、
+    // 不直接写 goals.json。状态变化经 agentEventBus 以 profer_event/goal_state 推送。
+
+    case 'get_goal': {
+      const sessionId = readSessionId(parsed)
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const ready = withGoalService()
+      if (!ready.ok) return { ok: false, error: ready.error }
+      return { ok: true, data: { goal: ready.service.get(sessionId) ?? null } }
+    }
+
+    case 'get_goal_history': {
+      const sessionId = readSessionId(parsed)
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const ready = withGoalService()
+      if (!ready.ok) return { ok: false, error: ready.error }
+      return { ok: true, data: { goals: ready.service.history(sessionId) } }
+    }
+
+    case 'start_goal': {
+      const sessionId = readSessionId(parsed)
+      const goal = typeof parsed.goal === 'string' ? parsed.goal : ''
+      if (!sessionId || !goal.trim()) return { ok: false, error: '缺少 sessionId 或 goal' }
+      const ready = withGoalService()
+      if (!ready.ok) return { ok: false, error: ready.error }
+      const contract = readGoalContract(parsed.contract)
+      return runGoalCommand(async () => ({ goal: await ready.service.start(sessionId, goal, contract) }))
+    }
+
+    case 'pause_goal':
+    case 'resume_goal':
+    case 'stop_goal': {
+      const sessionId = readSessionId(parsed)
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const ready = withGoalService()
+      if (!ready.ok) return { ok: false, error: ready.error }
+      return runGoalCommand(async () => ({
+        goal: type === 'pause_goal'
+          ? await ready.service.pause(sessionId)
+          : type === 'resume_goal'
+            ? await ready.service.resume(sessionId)
+            : await ready.service.stop(sessionId),
+      }))
+    }
+
+    case 'clear_goal': {
+      const sessionId = readSessionId(parsed)
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const ready = withGoalService()
+      if (!ready.ok) return { ok: false, error: ready.error }
+      return runGoalCommand(() => { ready.service.clear(sessionId); return { sessionId } })
+    }
+
+    case 'update_goal': {
+      const sessionId = readSessionId(parsed)
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const ready = withGoalService()
+      if (!ready.ok) return { ok: false, error: ready.error }
+      const patch: Parameters<typeof ready.service.update>[1] = {}
+      if (typeof parsed.goal === 'string') patch.goal = parsed.goal
+      const contract = readGoalContract(parsed.contract)
+      if (contract) patch.contract = contract
+      if (parsed.limits && typeof parsed.limits === 'object' && !Array.isArray(parsed.limits)) {
+        patch.limits = parsed.limits as Parameters<typeof ready.service.update>[1]['limits']
+      }
+      return runGoalCommand(() => ({ goal: ready.service.update(sessionId, patch) }))
+    }
+
     // ===== Chat（聊天工具）指令 =====
 
     case 'list_conversations': {
@@ -2412,8 +2519,9 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
       res.end(JSON.stringify({ ok: true }))
       return
     }
-    // 本机不再提供静态 UI 服务（原平板页面已随 tablet 线退役移除，2026-09-11）：非 /health 的 HTTP 请求一律 404。
-    // WS 客户端（Profer-pocket）直接连 /ws，不依赖 HTTP 根路径。
+    // WebUI 静态页：与 /ws 同源，由 webui-service 按会话白名单放行。
+    // 不属于 WebUI 的路径仍走原有 404，Pocket 客户端行为不受影响。
+    if (handleWebuiHttpRequest(req, res, { isAuthorized: () => checkToken(req), token: accessToken })) return
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('Not Found')
   })
@@ -2686,7 +2794,8 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
 
   // 监听地址：默认 0.0.0.0（局域网设备可访问，移动端通过电脑局域网 IP:端口 访问）。
   // 安全性由 accessToken 鉴权保障。可用 PROFER_REMOTE_HOST 覆盖（如设为 127.0.0.1 即仅本机）。
-  const HOST = process.env.PROFER_REMOTE_HOST || '0.0.0.0'
+  // WebUI 开启时改用设置页选中的网卡（默认仅本机）；关闭时保持 Pocket 原有行为不变。
+  const HOST = process.env.PROFER_REMOTE_HOST || getWebuiBindHost() || '0.0.0.0'
   // 单端口双协议：首字节 0x16 是 TLS 握手，交给公网自签服务；其余走明文 HTTP/ws。
   // 这样用户自建 FRP 只需把公网端口映射到本机端口，不必额外开端口。
   const front = createProtocolSniffer((tls) => {

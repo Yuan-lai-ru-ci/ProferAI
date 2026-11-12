@@ -300,3 +300,22 @@ export class GoalSessionService {
     }
   }
 }
+
+/**
+ * 共享实例句柄。
+ *
+ * GoalSessionService 的装配依赖一批主进程单例（存储路径、会话消息读取、规划中心 Todo、
+ * 窗口路由），只能在 `ipc.ts` 里装配一次。远程出口（WebUI / Pocket 的 WS）必须复用同一个实例，
+ * **绝不能自己 new**：两份实例各持一套内存状态 = 两个写者，会互相覆盖并让状态机错乱。
+ */
+let sharedGoalSessionService: GoalSessionService | null = null
+
+/** 由 ipc.ts 在装配完成后调用；传 null 表示卸载（测试清理）。 */
+export function registerGoalSessionService(service: GoalSessionService | null): void {
+  sharedGoalSessionService = service
+}
+
+/** 未装配时返回 null（启动早期或纯单测环境），调用方需转成可读错误，不要抛到事件循环里。 */
+export function findGoalSessionService(): GoalSessionService | null {
+  return sharedGoalSessionService
+}

@@ -239,7 +239,7 @@ import {
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { getAgentSessionNavigationIndex } from './lib/agent-navigation-index'
 import { createHandoffSession } from './lib/session-handoff-service'
-import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher, type AgentStopOutcome } from './lib/agent-service'
+import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentEventBus, agentCatalogInvalidationPublisher, type AgentStopOutcome } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
 import { requestSessionDeletion, requestSessionDeletions, resumePendingSessionDeletions, waitForSessionDeletions } from './lib/agent-session-deletion-service'
 import { setQuoteableSelection } from './menu'
@@ -250,7 +250,7 @@ import { listOwnedRuntimeProcesses, markOwnedRuntimeProcessExited, onRuntimeProc
 import { isProcessHandleOwnedBySession, processHandleFromRuntimeRecord } from './lib/process-handle'
 import { normalizeUserSendInput } from './lib/agent-input-origin'
 import { coordinateAgentSend } from './lib/agent-send-coordinator'
-import { GoalSessionService } from './lib/goal-session-service'
+import { GoalSessionService, registerGoalSessionService } from './lib/goal-session-service'
 import { loadGoalStates, saveGoalStates, archiveGoalState, loadGoalHistory, loadGoalOverview } from './lib/goal-store'
 import { resolveEffectivePermissionMode } from '@profer/shared'
 import type { AgentGoalContract, AgentGoalLimitsPatch, AgentGoalOverview, AgentGoalOverviewEntry, AgentGoalState, McpConnectionSnapshot, McpProbeFailureReason, McpServerRestartResult, McpToolSummary } from '@profer/shared'
@@ -404,6 +404,12 @@ const goalSessionService = new GoalSessionService({
     if (target && !target.isDestroyed()) {
       target.send(AGENT_IPC_CHANNELS.GOAL_EVENT, { sessionId: state.sessionId, state })
     }
+    // WS 出口（WebUI / Pocket）走事件总线。只发 bus、不再重复发窗口：
+    // 上面的 GOAL_EVENT 已经覆盖桌面渲染层，两路都发会让窗口收到两份。
+    agentEventBus.emit(state.sessionId, {
+      kind: 'profer_event',
+      event: { type: 'goal_state', goal: state },
+    })
   },
   logError: (error) => { console.error('[goal] 会话状态同步失败', error) },
   // 空闲自检：轮次结束后隔一段时间自动续跑，连续达到上限后等用户发消息。
@@ -422,6 +428,10 @@ const goalSessionService = new GoalSessionService({
     }
   },
 })
+
+// 远程出口（WebUI / Pocket 的 WS）通过这个句柄复用同一个实例，
+// 保证 Goal 状态机只有一份内存状态、一个写者。
+registerGoalSessionService(goalSessionService)
 
 // 人发起的运行结束后，受阻 / 被中断的 Goal 自动续上（桌面、Pocket、IM 入口共用）。
 onAgentRunComplete((sessionId, initiator) => { void goalSessionService.onRunFinished(sessionId, initiator) })

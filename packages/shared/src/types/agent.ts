@@ -756,6 +756,8 @@ export type ProferEvent =
   // 模型主动提议建立 Goal
   | { type: 'goal_proposal'; proposal: GoalProposal }
   | { type: 'goal_proposal_resolved'; proposalId: string; accepted: boolean }
+  // Goal 状态变化：桌面端走 GOAL_EVENT，远程出口（WebUI / Pocket）走事件总线的这一条。
+  | { type: 'goal_state'; goal: AgentGoalState }
   | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
   | { type: 'exit_plan_mode_resolved'; requestId: string }
   | { type: 'enter_plan_mode'; sessionId: string }
