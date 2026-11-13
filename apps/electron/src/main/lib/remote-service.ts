@@ -59,10 +59,11 @@ import {
   paginateSDKMessages,
   searchAgentSessionMessages,
 } from './agent-session-manager'
-import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getWorkspaceFilesDir, getWorkspaceRootPath } from './config-paths'
+import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getWorkspaceFilesDir, getWorkspaceRootPath, agentSessionVisualizationsDir } from './config-paths'
 import { resolveWorkspaceLocation } from './workspace-locator'
 import { getSettings, updateSettings } from './settings-service'
 import { projectAgentPayloadForPocket, projectSdkMessageForPocket, projectSdkMessagesToPocketView } from './pocket-agent-projection'
+import { listVisualizations } from './visualization-records'
 import {
   listAgentWorkspaces,
   createAgentWorkspace,
@@ -1281,6 +1282,32 @@ export async function handleRemoteCommand(
           ...page,
           messages: page.messages.map(projectSdkMessageForPocket),
         },
+      }
+    }
+
+    /**
+     * 会话内可视化记录（原生图表 / HTML 片段）。
+     *
+     * 只回记录元数据与 chart 规格，不回 html 正文：正文动辄几百 KB，
+     * 且 HTML 卡片依赖桌面端的 bridge 才能交互，移动端拿到也无法正确渲染。
+     * 客户端按 `toolCallId` 把记录挂回对应的工具调用行。
+     */
+    case 'list_visualizations': {
+      const id = readSessionId(parsed)
+      if (!id) return { ok: false, error: '缺少 sessionId' }
+      // agentSessionVisualizationsDir 会对非法标识抛错，先在边界上挡掉
+      if (!/^[A-Za-z0-9_-]+$/.test(id)) return { ok: false, error: 'sessionId 非法' }
+      const meta = getAgentSessionMeta(id)
+      if (!meta) return { ok: false, error: '会话不存在' }
+      const workspace = meta.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+      const storageDir = agentSessionVisualizationsDir(id)
+      // list 只读 storageDir；agentCwd 只是上下文合法性的一部分（记录刻意存在会话工作区之外）
+      const agentCwd = workspace ? getAgentSessionWorkspacePath(workspace.slug, id) : storageDir
+      try {
+        const records = await listVisualizations({ sessionId: id, agentCwd, storageDir, allowedRoots: [] })
+        return { ok: true, data: { records } }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : '读取可视化失败' }
       }
     }
 
