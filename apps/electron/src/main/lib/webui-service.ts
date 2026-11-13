@@ -122,13 +122,42 @@ function buildRootPage(publishedIds: readonly string[], token: string): string {
 }
 
 /** 首屏种下的 HttpOnly cookie：页面抹掉 URL 上的 ?token= 后，刷新仍能通过鉴权。 */
+const TOKEN_COOKIE_NAME = 'profer_webui_token'
+const TOKEN_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+
+/**
+ * 凭据 cookie 的属性不是随便写的，两条都是被真机坑过的：
+ *
+ * - `Max-Age`：不写过期时间就是**会话 cookie**。iOS Safari 会随标签页被系统回收把它丢掉，
+ *   而桌面 Chrome 不会 —— 所以这个坑只在手机上表现为「刷新一次就必须重新带 token」。
+ * - `SameSite=Lax`：`Strict` 会让「从其它 App 点链接跳进来」的那一次请求不带 cookie。
+ *   首屏有 URL token 兜着，但页面内再跳一次就会莫名其妙 401。
+ */
+function buildTokenCookie(token: string): string {
+  return `${TOKEN_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${TOKEN_COOKIE_MAX_AGE_SECONDS}`
+}
+
+/**
+ * 未授权会话页的「自愈」页。
+ *
+ * 不含任何会话数据：只是把 localStorage 里存过的 token 拼回 `?token=` 再跳一次，
+ * 让「cookie 被浏览器回收」不再等于「必须回电脑上重新复制链接」。
+ * 已经带着 token 仍被拒时不跳转（否则死循环），直接显示更换链接的提示。
+ *
+ * 数据安全不受影响：这里只回一段静态脚本与说明，会话内容仍然只能从 /ws 拿，
+ * 而 /ws 依旧要 token；发布白名单也没有放宽。
+ */
+function buildCredentialRecoveryPage(): string {
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="robots" content="noindex"><meta name="viewport" content="width=device-width,initial-scale=1"><title>需要访问凭据</title><style>body{font:14px/1.7 system-ui,sans-serif;background:#191715;color:#ECEBE9;margin:0;padding:48px 24px;max-width:560px}h1{font-size:17px;margin:0 0 12px}p{margin:0 0 10px;color:#AAA7A1}code{color:#B4998E}</style></head><body><h1>这个页面需要访问凭据</h1><p>凭据已经失效，或者当前浏览器没有保存它。</p><p>请在电脑端 Profer 的「设置 → 远程连接 → Web 会话」里复制该会话的链接，重新打开一次。</p><p>iOS 上如果经常遇到，请确认没有开启无痕浏览。</p><script>(function(){try{var params=new URLSearchParams(location.search);if(params.has('token'))return;var saved=localStorage.getItem('profer-webui-token');if(!saved)return;params.set('token',saved);location.replace(location.pathname+'?'+params.toString())}catch(error){}})();</script></body></html>`
+}
+
 function readCookieToken(req: IncomingMessage): string | null {
   const raw = req.headers.cookie
   if (!raw) return null
   for (const part of raw.split(';')) {
     const index = part.indexOf('=')
     if (index < 0) continue
-    if (part.slice(0, index).trim() !== 'profer_webui_token') continue
+    if (part.slice(0, index).trim() !== TOKEN_COOKIE_NAME) continue
     try {
       return decodeURIComponent(part.slice(index + 1).trim())
     } catch {
@@ -189,6 +218,12 @@ export function handleWebuiHttpRequest(
   const publicAsset = route.kind === 'asset'
   const authorized = readCookieToken(req) === ctx.token || ctx.isAuthorized(req)
   if (!publicAsset && !authorized) {
+    // 会话页回「自愈页」而不是裸 401：手机上 cookie 会被系统回收，
+    // 让页面自己拿 localStorage 里的凭据重试一次，用户不用回电脑复制链接。
+    if (route.kind === 'session') {
+      reply(401, buildCredentialRecoveryPage(), 'text/html; charset=utf-8')
+      return true
+    }
     reply(401, 'Unauthorized')
     return true
   }
@@ -217,7 +252,7 @@ export function handleWebuiHttpRequest(
       200,
       injectBoot(readFileSync(indexPath, 'utf-8'), route.sessionId, ctx.token, ctx.sessionTitle?.(route.sessionId)),
       'text/html; charset=utf-8',
-      { 'set-cookie': `profer_webui_token=${encodeURIComponent(ctx.token)}; Path=/; HttpOnly; SameSite=Strict` },
+      { 'set-cookie': buildTokenCookie(ctx.token) },
     )
     return true
   }

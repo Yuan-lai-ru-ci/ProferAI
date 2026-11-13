@@ -130,10 +130,21 @@ describe('WebUI 静态托管', () => {
     expect(res.body).not.toContain('__PROFER_WEBUI_BOOT__')
   })
 
-  test('Given 凭据无效 When 访问 Then 401', () => {
+  test('Given 凭据无效 When 访问会话页 Then 401 且回自愈页（不含 boot）', () => {
     settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
     const { res } = request('/s/s1', false)
     expect(res.statusCode).toBe(401)
+    // 自愈页只做一件事：把 localStorage 里的凭据拼回 ?token= 再跳一次
+    expect(res.body).toContain('profer-webui-token')
+    expect(res.body).toContain('location.replace')
+    expect(res.body).not.toContain('__PROFER_WEBUI_BOOT__')
+  })
+
+  test('Given 凭据无效 When 访问根页 Then 仍是裸 401（根页会列出 token，不能放行）', () => {
+    settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
+    const { res } = request('/', false)
+    expect(res.statusCode).toBe(401)
+    expect(res.body).toBe('Unauthorized')
   })
 
   test('Given 静态资源存在 When 请求 /webui/assets/* Then 返回正确内容与类型', () => {
@@ -159,10 +170,22 @@ describe('WebUI 静态托管', () => {
     expect(res.body).toContain('"sessionId":"s1"')
   })
 
-  test('Given cookie 中的凭据不匹配 When 访问会话页 Then 401', () => {
+  test('Given cookie 中的凭据不匹配 When 访问会话页 Then 401 且给自愈页', () => {
     settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
     const { res } = request('/s/s1', false, { cookie: 'profer_webui_token=wrong' })
     expect(res.statusCode).toBe(401)
+    expect(res.body).toContain('profer-webui-token')
+  })
+
+  test('Given 首屏通过 URL token 鉴权 When 下发 cookie Then 是持久 cookie 且 SameSite=Lax', () => {
+    settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
+    const { res } = request('/s/s1?token=test-token')
+    const cookie = String(res.headers['set-cookie'] ?? '')
+    // 会话 cookie（无 Max-Age）会被 iOS Safari 随标签页回收丢掉 → 刷新就要重带 token
+    expect(cookie).toContain('Max-Age=')
+    expect(cookie).toContain('SameSite=Lax')
+    expect(cookie).toContain('HttpOnly')
+    expect(cookie).toContain('Path=/')
   })
 
   test('Given 目录穿越路径 When 请求 Then 拒绝', () => {
