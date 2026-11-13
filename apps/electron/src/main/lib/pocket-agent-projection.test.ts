@@ -207,3 +207,28 @@ describe('工具入参摘要（移动端「执行过程」每行那一句话）'
     expect(tool.summary).toBe('该显示')
   })
 })
+
+describe('消息来源标记（WebUI 用来标注「这条是网页发的」）', () => {
+  test('Given user 消息带 _clientId When 投影 Then 原样保留', () => {
+    const projected = projectSdkMessageForPocket({
+      type: 'user',
+      uuid: 'u1',
+      parent_tool_use_id: null,
+      message: { content: [{ type: 'text', text: '你好' }] },
+      _clientId: 'webui',
+      _createdAt: 1794558663188,
+    } as never) as never as Record<string, unknown>
+    expect(projected._clientId).toBe('webui')
+    expect(projected._createdAt).toBe(1794558663188)
+  })
+
+  test('Given 桌面端消息没有标记 When 投影 Then 不带 _clientId（缺省即软件）', () => {
+    const projected = projectSdkMessageForPocket({
+      type: 'user',
+      uuid: 'u2',
+      parent_tool_use_id: null,
+      message: { content: [{ type: 'text', text: '你好' }] },
+    } as never) as never as Record<string, unknown>
+    expect(projected._clientId).toBeUndefined()
+  })
+})

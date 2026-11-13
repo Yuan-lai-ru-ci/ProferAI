@@ -120,7 +120,7 @@ export function projectToolInputSummary(input: Record<string, unknown>): string 
 export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
   const record = message as Record<string, unknown>
   const base: Record<string, unknown> = { type: message.type }
-  for (const key of ['uuid', 'session_id', 'parent_tool_use_id', '_createdAt', '_partial', '_channelModelId', 'isReplay', 'isSynthetic', '_goalIteration']) {
+  for (const key of ['uuid', 'session_id', 'parent_tool_use_id', '_createdAt', '_partial', '_channelModelId', 'isReplay', 'isSynthetic', '_goalIteration', '_clientId']) {
     if (record[key] !== undefined) base[key] = record[key]
   }
   const provenance = projectMessageProvenance(record._provenance)

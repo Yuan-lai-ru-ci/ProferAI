@@ -1079,6 +1079,8 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
         ...(input.uuid ? { uuid: input.uuid } : {}),
         ...(input.taskReturnReferences?.length ? { _taskReturnReferences: input.taskReturnReferences.map(reference => ({ ...reference })) } : {}),
         ...(input.triggeredBy === 'goal' ? { _goalIteration: input.goalIteration ?? true } : {}),
+        // 来源客户端：仅展示用（网页 / 远程），缺省即桌面软件。
+        ...(input.clientId ? { _clientId: input.clientId } : {}),
         _createdAt: Date.now(),
       } as unknown as import('@profer/shared').SDKMessage
   return {

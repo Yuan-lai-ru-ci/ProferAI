@@ -24,4 +24,10 @@ describe('可信发送来源', () => {
     const scheduled = { ...input, taskOrigin: { actor: { type: 'automation' as const, id: 'a' } }, messageAuthor: { type: 'user' as const }, taskAuthorization: { kind: 'scheduled' as const }, triggerId: 'a:1' }
     expect(normalizeHeadlessSendInput(scheduled, 'automation')).toBe(scheduled)
   })
+  test('Given 远程入口带 clientId When 标准化 Then 只保留展示标记，作者仍是用户', () => {
+    // clientId 是纯展示标签（网页/远程），不能被当成作者身份，也不该被归一化丢掉
+    const clean = normalizeHeadlessSendInput({ ...input, initiator: 'user', clientId: 'webui' }, 'bridge')
+    expect(clean.clientId).toBe('webui')
+    expect(clean.messageAuthor).toEqual({ type: 'user' })
+  })
 })

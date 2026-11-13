@@ -1746,6 +1746,14 @@ export interface AgentSendInput {
    * 若不单独提供本字段，桌面端会话里会直接看到这一大段注入内容。
    */
   rawUserMessage?: string
+  /**
+   * 消息来自哪个客户端（仅用于展示，例：`webui` / `remote`）。
+   *
+   * 必须由**宿主入口**按可信上下文填写（远程服务只接受白名单值），不从客户端 payload
+   * 直接透传；落盘后会以 `_clientId` 挂在 user 消息上，供界面标注「这条是在网页还是软件里发的」。
+   * 缺省（桌面端）表示本机软件。
+   */
+  clientId?: string
   /** 渠道 ID（用于获取 API Key） */
   channelId: string
   /** 模型 ID */
@@ -1837,6 +1845,8 @@ export interface AgentQueueMessageInput {
   userMessage: string
   /** 前端预生成的 UUID（用于乐观更新去重） */
   uuid?: string
+  /** 来源客户端（展示用，见 AgentSendInput.clientId） */
+  clientId?: string
   /**
    * 软中断当前 Agent turn 后再追加消息。
    * true：先调用 SDK query.interrupt() 立即打断正在输出的 turn，再注入消息。

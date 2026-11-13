@@ -1801,6 +1801,8 @@ export async function handleRemoteCommand(
       const headlessInput: AgentSendInput = {
         sessionId, userMessage: attachmentResult.userMessage, channelId, modelId, workspaceId, startedAt,
         initiator: 'user',
+        // 来源客户端：只做展示标签，白名单收口（不接受任意字符串落进 provenance/消息体）。
+        clientId: parsed.clientKind === 'webui' ? 'webui' : 'remote',
         // 气泡只显示用户原文：<attached_files> 路径块进模型上下文与 JSONL，但不进 transcript
         ...(attachmentResult.rawUserMessage ? { rawUserMessage: attachmentResult.rawUserMessage } : {}),
         ...(uuid ? { uuid } : {}),
@@ -2034,6 +2036,7 @@ export async function handleRemoteCommand(
             userMessage,
             rawUserMessage: typeof parsed.rawUserMessage === 'string' ? parsed.rawUserMessage : undefined,
             uuid: typeof parsed.uuid === 'string' ? parsed.uuid : undefined,
+            clientId: parsed.clientKind === 'webui' ? 'webui' : 'remote',
             interrupt: parsed.interrupt === true,
             mentionedSkills: Array.isArray(parsed.mentionedSkills) ? parsed.mentionedSkills as string[] : undefined,
             mentionedMcpServers: Array.isArray(parsed.mentionedMcpServers) ? parsed.mentionedMcpServers as string[] : undefined,
