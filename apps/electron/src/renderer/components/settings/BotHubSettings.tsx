@@ -211,7 +211,8 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
 // ===== 主组件 =====
 
 export function BotHubSettings(): React.ReactElement {
-  const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('webui')
+  // 默认停在 Pocket：新增「Web 会话」是自己的功能，不该改变用户打开面板时的落点。
+  const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('pocket')
 
   return (
     <div className="space-y-5">
