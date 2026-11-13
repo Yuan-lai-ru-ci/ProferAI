@@ -20,6 +20,7 @@ process.env.PROFER_CONFIG_DIR = sandbox
 
 const { handleRemoteCommand } = await import('./remote-service')
 const { registerGoalSessionService } = await import('./goal-session-service')
+const { goalProposalService } = await import('./goal-proposal-service')
 
 afterAll(() => {
   registerGoalSessionService(null)
@@ -116,5 +117,76 @@ describe('Goal 远程命令：转发与返回契约', () => {
     installStub({ start: async () => { throw new Error('当前会话有未完成的 Goal，请先恢复或明确清除它') } })
     expect(await call({ type: 'start_goal', sessionId: 's1', goal: 'x' }))
       .toEqual({ ok: false, error: '当前会话有未完成的 Goal，请先恢复或明确清除它' })
+  })
+})
+
+/**
+ * 模型主动提议建立 Goal 的确认。
+ *
+ * 锁的不变量是「建 Goal 失败时提议必须留在队列里」：
+ * 若失败也出队，卡片会消失，用户既看不到原因也无法重试。
+ */
+describe('Goal 提议确认：respond_goal_proposal', () => {
+  const resetProposals = (): void => {
+    for (const proposal of goalProposalService.list()) goalProposalService.remove(proposal.id)
+  }
+
+  const seedProposal = (): string => {
+    const created = goalProposalService.add('s1', {
+      objective: '把这批测试补到全绿',
+      rationale: '涉及多个模块，需要多轮',
+      verification: 'bun test 全过',
+    })
+    if (!created) throw new Error('测试数据构造失败')
+    return created.proposal.id
+  }
+
+  beforeEach(() => {
+    installStub()
+    resetProposals()
+  })
+
+  afterAll(resetProposals)
+
+  test('Given 缺少 proposalId When 调用 Then 拒绝，不触碰队列', async () => {
+    expect(await call({ type: 'respond_goal_proposal', accepted: true }))
+      .toEqual({ ok: false, error: '缺少 proposalId' })
+  })
+
+  test('Given 提议不存在 When 调用 Then 返回可读错误', async () => {
+    expect(await call({ type: 'respond_goal_proposal', proposalId: 'not-exist', accepted: true }))
+      .toEqual({ ok: false, error: '该提议不存在或已处理' })
+  })
+
+  test('Given 批准提议 When 调用 Then 用提议的目标启动 Goal 并出队', async () => {
+    const proposalId = seedProposal()
+    expect(await call({ type: 'respond_goal_proposal', proposalId, accepted: true }))
+      .toEqual({ ok: true, data: { sessionId: 's1' } })
+    expect(calls).toEqual(['start:s1:把这批测试补到全绿'])
+    expect(goalProposalService.peek(proposalId)).toBeNull()
+  })
+
+  test('Given 忽略提议 When 调用 Then 不启动 Goal 但出队', async () => {
+    const proposalId = seedProposal()
+    expect(await call({ type: 'respond_goal_proposal', proposalId, accepted: false }))
+      .toEqual({ ok: true, data: { sessionId: 's1' } })
+    expect(calls).toEqual([])
+    expect(goalProposalService.peek(proposalId)).toBeNull()
+  })
+
+  test('Given 创建 Goal 失败 When 批准 Then 返回原因且提议保留，允许重试', async () => {
+    installStub({ start: async () => { throw new Error('当前会话有未完成的 Goal，请先恢复或明确清除它') } })
+    const proposalId = seedProposal()
+    expect(await call({ type: 'respond_goal_proposal', proposalId, accepted: true }))
+      .toEqual({ ok: false, error: '当前会话有未完成的 Goal，请先恢复或明确清除它' })
+    expect(goalProposalService.peek(proposalId)).not.toBeNull()
+  })
+
+  test('Given Goal 服务未装配 When 批准 Then 返回可读错误且提议保留', async () => {
+    const proposalId = seedProposal()
+    registerGoalSessionService(null)
+    expect(await call({ type: 'respond_goal_proposal', proposalId, accepted: true }))
+      .toEqual({ ok: false, error: 'Goal 服务尚未就绪' })
+    expect(goalProposalService.peek(proposalId)).not.toBeNull()
   })
 })

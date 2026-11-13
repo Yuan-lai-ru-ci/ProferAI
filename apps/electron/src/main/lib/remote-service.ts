@@ -40,7 +40,7 @@ import { getWebuiBindHost, handleWebuiHttpRequest } from './webui-service'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
 import type { AgentRuntime, AgentSendInput } from '@profer/shared'
-import { agentEventBus, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
+import { agentEventBus, emitSessionStreamEvent, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
 import { prepareAgentRewind, refineAgentRewind, executeAgentRewind, undoAgentRewind, submitAgentAfterRewind, legacyConversationRewind } from './agent-rewind-gateway'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
 import { buildArchiveToggleUpdates } from './agent-unread-policy'
@@ -2073,6 +2073,37 @@ export async function handleRemoteCommand(
         patch.limits = parsed.limits as Parameters<typeof ready.service.update>[1]['limits']
       }
       return runGoalCommand(() => ({ goal: ready.service.update(sessionId, patch) }))
+    }
+
+    /**
+     * 模型主动提议建立 Goal 的确认（与 ipc.ts 的 RESPOND_GOAL_PROPOSAL 同一套语义）。
+     *
+     * 先 peek 不出队：Goal 真正建成功后才移除并广播 resolved。
+     * 失败时必须保留提议 —— 若照样发 resolved，卡片会消失，用户既看不到原因也无法重试。
+     *
+     * 用 emitSessionStreamEvent 而不是 agentEventBus.emit：前者同时投递给
+     * 绑定的桌面窗口，这样在手机上批准后，电脑端那张卡也会立刻消失。
+     */
+    case 'respond_goal_proposal': {
+      const proposalId = typeof parsed.proposalId === 'string' ? parsed.proposalId.trim() : ''
+      if (!proposalId) return { ok: false, error: '缺少 proposalId' }
+      const pending = goalProposalService.peek(proposalId)
+      if (!pending) return { ok: false, error: '该提议不存在或已处理' }
+      const ready = withGoalService()
+      if (!ready.ok) return { ok: false, error: ready.error }
+      const sessionId = pending.proposal.sessionId
+      const accepted = parsed.accepted === true
+      if (accepted) {
+        const started = await runGoalCommand(() =>
+          ready.service.start(sessionId, pending.proposal.objective, pending.contract))
+        if (!started.ok) return started
+      }
+      goalProposalService.remove(proposalId)
+      emitSessionStreamEvent(sessionId, {
+        kind: 'profer_event',
+        event: { type: 'goal_proposal_resolved', proposalId, accepted },
+      })
+      return { ok: true, data: { sessionId } }
     }
 
     // ===== Chat（聊天工具）指令 =====
