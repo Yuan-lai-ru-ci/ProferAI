@@ -67,6 +67,7 @@ import {
   syncSessionStorageLayouts,
   unregisterSessionLayout,
 } from './session-data-layout'
+import { retractWebuiPublication } from './webui-publication'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
 // process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）。
@@ -1460,6 +1461,10 @@ export function updateAgentSessionMeta(
   registerSessionLayout(updated)
   writeProjectSessionMetaSidecar(updated)
 
+  // 归档即撤销 WebUI 发布：归档意味着「这件事结束了」，留一个还能打开的网页与之矛盾。
+  // 只在「变为归档」时动，取消归档不会自动重新发布（需要用户在面板里重新添加）。
+  if (updated.archived && !existing.archived) retractWebuiPublication(updated.id)
+
   console.log(`[Agent 会话] 已更新会话: ${updated.title} (${updated.id})`)
   return updated
 }
@@ -1618,6 +1623,8 @@ export async function deleteAgentSession(
   writeIndex(index)
   deletedSessionIds.add(id)
   unregisterSessionLayout(id)
+  // 会话没了，发布位也不该留着（面板里不会再有幽灵条目、外部链接立刻失效）
+  retractWebuiPublication(id)
 
   // 删除消息与任务图文件。任务图和会话消息均属于该 Profer session，删除必须同步清理。
   for (const [label, filePath] of [
@@ -3774,6 +3781,7 @@ export function autoArchiveAgentSessions(
   }
 
   let count = 0
+  const archivedIds: string[] = []
   for (const session of index.sessions) {
     // 置顶豁免只对可置顶的根会话生效：子会话（委派 / 探索分支）不参与置顶，
     // 历史残留的 pinned 字段不能让它们永久逃过自动归档。
@@ -3785,11 +3793,14 @@ export function autoArchiveAgentSessions(
     if (agentSessionActiveChecker?.(session.id) || isAgentSessionForking(session.id)) continue
     if (hasUnfinishedTaskGraph(session.id)) continue
     session.archived = true
+    archivedIds.push(session.id)
     count++
   }
 
   if (count > 0) {
     writeIndex(index)
+    // 这条路径直接改索引、不走 updateAgentSessionMeta，发布位回收要显式补上
+    for (const archivedId of archivedIds) retractWebuiPublication(archivedId)
     console.log(
       `[Agent 会话] 自动归档 ${count} 个会话（阈值: ${daysThreshold} 天，每工作区保留: ${keepCount}）`,
     )

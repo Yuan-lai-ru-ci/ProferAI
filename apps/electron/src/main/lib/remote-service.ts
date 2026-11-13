@@ -37,6 +37,7 @@ import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
 import { getWebuiBindHost, handleWebuiHttpRequest } from './webui-service'
+import { isSessionServableForWebui } from './webui-session-guard'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
 import type { AgentRuntime, AgentSendInput } from '@profer/shared'
@@ -2584,6 +2585,8 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
       token: accessToken,
       // 首屏 <title> 就用会话名：页面此时还没连上 WS，拿不到会话信息
       sessionTitle: (id) => getAgentSessionMeta(id)?.title,
+      // 已归档/已删除的会话不该继续对外提供页面（白名单可能落后于会话状态）
+      isSessionServable: isSessionServableForWebui,
     })) return
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('Not Found')

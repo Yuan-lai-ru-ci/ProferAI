@@ -47,6 +47,13 @@ export interface WebuiRequestContext {
    * 否则静态托管会连带把会话存储拉进来，测试也得多 mock 一层。
    */
   sessionTitle?: (sessionId: string) => string | undefined
+  /**
+   * 该会话当前是否还能对外服务（未归档、未删除）。
+   *
+   * 白名单是持久化的、会落后于会话状态（归档、删除），所以每次请求都要复核一遍：
+   * 由调用方注入，静态托管层不依赖会话存储。
+   */
+  isSessionServable?: (sessionId: string) => boolean
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -196,6 +203,11 @@ export function handleWebuiHttpRequest(
 
   const assetDir = getWebuiAssetDir()
   if (route.kind === 'session') {
+    // 白名单里有、但会话已归档/已删除：视为不再发布（老版本的设置里可能残留这种 id）
+    if (ctx.isSessionServable && !ctx.isSessionServable(route.sessionId)) {
+      reply(404, '该会话已归档或不存在，页面已停止发布')
+      return true
+    }
     const indexPath = join(assetDir, 'index.html')
     if (!existsSync(indexPath)) {
       reply(503, 'WebUI 静态产物缺失：请把 profer-pocket/webui/dist 拷到 resources/webui，或设置 PROFER_WEBUI_DIR')

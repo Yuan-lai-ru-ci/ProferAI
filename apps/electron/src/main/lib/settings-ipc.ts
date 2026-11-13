@@ -11,6 +11,7 @@ import { getSettings, updateSettings } from './settings-service'
 import { getRemoteServiceStatus, setRemoteServiceEnabled, restartRemoteService } from './remote-service'
 import { buildWebuiPublishedUrls, getWebuiLocalState } from './webui-service'
 import { listAccessibleHosts, normalizeBindHost, normalizePublishedIds, pickAccessibleHost } from './webui-routing'
+import { filterServablePublications } from './webui-session-guard'
 import { savePublicEndpointConfig, ensurePublicTlsIdentity } from './remote-public-endpoint'
 import { updateWindowFrameAppearance } from './titlebar-overlay'
 import { syncFeishuSyncSleepBlocker } from './feishu-sleep-blocker'
@@ -161,7 +162,9 @@ export function registerSettingsIpc(): void {
       defaultPort: remote.defaultPort,
       bindHost: local.config.bindHost,
       interfaces: local.interfaces,
-      publishedSessionIds: local.config.publishedSessionIds,
+      // 老版本可能把「已归档」的会话留在白名单里：面板不显示它们，
+      // 生效路径由访问时的兜底判定负责，用户不必手工清理。
+      publishedSessionIds: filterServablePublications(local.config.publishedSessionIds),
       token: remote.token,
       urls: buildWebuiPublishedUrls(remote.port, local.config.bindHost, remote.token),
       accessibleHost: pickAccessibleHost(local.interfaces),

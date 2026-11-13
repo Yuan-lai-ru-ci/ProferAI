@@ -37,12 +37,18 @@ function request(
   authorized = true,
   headers: Record<string, string> = {},
   sessionTitle?: (sessionId: string) => string | undefined,
+  isSessionServable?: (sessionId: string) => boolean,
 ): { handled: boolean; res: FakeResponse } {
   const res = makeResponse()
   const handled = handleWebuiHttpRequest(
     { url, headers } as never,
     res as never,
-    { isAuthorized: () => authorized, token: 'test-token', ...(sessionTitle ? { sessionTitle } : {}) },
+    {
+      isAuthorized: () => authorized,
+      token: 'test-token',
+      ...(sessionTitle ? { sessionTitle } : {}),
+      ...(isSessionServable ? { isSessionServable } : {}),
+    },
   )
   return { handled, res }
 }
@@ -100,6 +106,21 @@ describe('WebUI 静态托管', () => {
     const { res } = request('/s/s1?token=test-token', true, {}, () => '<img src=x onerror=alert(1)> & co')
     expect(res.body).toContain('&lt;img src=x onerror=alert(1)&gt; &amp; co')
     expect(res.body).not.toContain('<img src=x')
+  })
+
+  test('Given 会话在要停用名单里（已归档/已删除） When 访问 Then 404 且不注入 boot', () => {
+    settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
+    const { res } = request('/s/s1?token=test-token', true, {}, undefined, () => false)
+    expect(res.statusCode).toBe(404)
+    expect(res.body).toContain('已停止发布')
+    expect(res.body).not.toContain('__PROFER_WEBUI_BOOT__')
+  })
+
+  test('Given 会话仍可服务 When 访问 Then 正常返回页面', () => {
+    settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
+    const { res } = request('/s/s1?token=test-token', true, {}, undefined, () => true)
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('__PROFER_WEBUI_BOOT__')
   })
 
   test('Given 会话未发布 When 访问 Then 404，且不会泄漏页面内容', () => {
