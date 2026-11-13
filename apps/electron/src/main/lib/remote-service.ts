@@ -37,6 +37,7 @@ import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
 import { getWebuiBindHost, handleWebuiHttpRequest } from './webui-service'
+import { applyAttachmentsToMessage } from './remote-send-attachments'
 import { isSessionServableForWebui } from './webui-session-guard'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
@@ -1764,6 +1765,23 @@ export async function handleRemoteCommand(
         return { ok: true, data: { accepted: true, deduped: true } }
       }
 
+      /**
+       * 附件：客户端只给文件名（先经 `save_agent_attachment` 落到会话 cwd），
+       * 绝对路径由主进程拼出来并校验存在 —— 不接受客户端传路径，
+       * 否则任何客户端都能让 Agent 去读 `~/.ssh/id_rsa`。
+       */
+      const attachmentSession = getAgentSessionMeta(sessionId)
+      const attachmentWorkspace = attachmentSession?.workspaceId
+        ? getAgentWorkspace(attachmentSession.workspaceId)
+        : undefined
+      const attachmentResult = attachmentWorkspace
+        ? applyAttachmentsToMessage({
+            userMessage,
+            sessionDir: getAgentSessionWorkspacePath(attachmentWorkspace.slug, sessionId),
+            attachments: parsed.attachments,
+          })
+        : { userMessage, attached: [] as Array<{ label: string; path: string }> }
+
       // 异步执行，不阻塞 WS 响应；结果通过事件流返回。
       // onComplete 不再空置：orchestrator 会在 run 真正结束时回调「已持久化的完整消息列表」，
       // 这里把 completion 标记（携带最终消息 + 完成元数据）通过 agentEventBus 广播给移动端，
@@ -1781,8 +1799,10 @@ export async function handleRemoteCommand(
         ? parsed.permissionMode
         : undefined
       const headlessInput: AgentSendInput = {
-        sessionId, userMessage, channelId, modelId, workspaceId, startedAt,
+        sessionId, userMessage: attachmentResult.userMessage, channelId, modelId, workspaceId, startedAt,
         initiator: 'user',
+        // 气泡只显示用户原文：<attached_files> 路径块进模型上下文与 JSONL，但不进 transcript
+        ...(attachmentResult.rawUserMessage ? { rawUserMessage: attachmentResult.rawUserMessage } : {}),
         ...(uuid ? { uuid } : {}),
         ...(clientPermissionMode ? { permissionModeOverride: clientPermissionMode } : {}),
       }
@@ -1834,7 +1854,10 @@ export async function handleRemoteCommand(
             onTitleUpdated: () => {},
           })
       void runtimeRun.catch((e) => console.error('[Remote] send_message 执行异常:', e))
-      return { ok: true, data: { accepted: true } }
+      return {
+        ok: true,
+        data: { accepted: true, ...(attachmentResult.attached.length > 0 ? { attachments: attachmentResult.attached } : {}) },
+      }
     }
 
     // 分叉会话：从指定消息处创建新会话继续（对齐桌面 forkAgentSession IPC）。
