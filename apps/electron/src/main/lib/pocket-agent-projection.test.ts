@@ -232,3 +232,19 @@ describe('消息来源标记（WebUI 用来标注「这条是网页发的」）'
     expect(projected._clientId).toBeUndefined()
   })
 })
+
+describe('消息里的附件块（WebUI 靠它渲染附件 chip）', () => {
+  test('Given user 消息带 <attached_files> When 投影 Then 文本块原样保留，不被当成工具入参吃掉', () => {
+    const text = '<attached_files>\n- shot.png: /s/shot.png\n</attached_files>\n\n看下附件'
+    const projected = projectSdkMessageForPocket({
+      type: 'user',
+      uuid: 'u-attach',
+      parent_tool_use_id: null,
+      message: { content: [{ type: 'text', text }] },
+    } as never) as never as { message?: { content?: Array<{ type?: string; text?: string }> } }
+    const blocks = projected.message?.content ?? []
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]?.text).toBe(text)
+    expect(blocks[0]?.text).toContain('<attached_files>')
+  })
+})

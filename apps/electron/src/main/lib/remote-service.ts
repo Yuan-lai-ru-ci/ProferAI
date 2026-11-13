@@ -1809,8 +1809,11 @@ export async function handleRemoteCommand(
         initiator: 'user',
         // 来源客户端：只做展示标签，白名单收口（不接受任意字符串落进 provenance/消息体）。
         clientId: parsed.clientKind === 'webui' ? 'webui' : 'remote',
-        // 气泡只显示用户原文：<attached_files> 路径块进模型上下文与 JSONL，但不进 transcript
-        ...(attachmentResult.rawUserMessage ? { rawUserMessage: attachmentResult.rawUserMessage } : {}),
+        // 附件的 <attached_files> 块必须跟着 userMessage 一起落盘：它是消息里唯一
+        // 记录「这一轮带了哪些文件」的地方。以前用 rawUserMessage 把它抹成纯用户原文，
+        // 结果附件只存在于模型上下文，桌面和 WebUI 的消息里都看不到，刷新后更是无从恢复。
+        // 各端 transcript 都会先剥掉这个块再渲染（桌面还会解析成附件 chip），
+        // 所以气泡不会露出路径清单；桌面自己发消息时保存的也是这个带块的形态。
         ...(uuid ? { uuid } : {}),
         ...(clientPermissionMode ? { permissionModeOverride: clientPermissionMode } : {}),
       }
