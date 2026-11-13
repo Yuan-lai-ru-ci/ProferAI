@@ -70,6 +70,49 @@ function collectPocketImageRefs(
   return found
 }
 
+/** 工具摘要的候选字段，按「人类最想先看到什么」排序。 */
+const POCKET_TOOL_SUMMARY_KEYS = [
+  'description', 'prompt', 'query', 'command', 'subject', 'title', 'task', 'objective',
+  'name', 'skill', 'pattern', 'url', 'uri', 'path', 'file_path', 'filePath', 'notebook_path',
+  'automationId', 'trigger_id', 'id', 'server', 'reason', 'message', 'to',
+]
+
+/** 摘要上限：一行、够看清在做什么，又不至于把整条命令/补丁带上 WebSocket。 */
+const POCKET_TOOL_SUMMARY_MAX_CHARS = 120
+
+function toSingleLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * 从工具入参里挑一行摘要（对齐桌面端 `extractFirstMeaningfulValue` 的口径）。
+ *
+ * 移动端拿不到完整入参：投影只留 `{ file_path }`，于是「执行过程」里每行都只剩一个裸工具名，
+ * 54 次调用滚下来分不清哪一步在干什么。摘要只下发结论性的那一小段，命令原文、补丁内容、
+ * 搜索结果仍然不出主进程。
+ */
+export function projectToolInputSummary(input: Record<string, unknown>): string | undefined {
+  const pick = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined
+    const line = toSingleLine(value)
+    if (!line) return undefined
+    return line.length > POCKET_TOOL_SUMMARY_MAX_CHARS
+      ? `${line.slice(0, POCKET_TOOL_SUMMARY_MAX_CHARS)}…`
+      : line
+  }
+  for (const key of POCKET_TOOL_SUMMARY_KEYS) {
+    const line = pick(input[key])
+    if (line) return line
+  }
+  // 各 MCP 服务的入参命名不统一（agent / skill_id / qurey…）：退回第一个像样的短字符串
+  for (const [key, value] of Object.entries(input)) {
+    if (key.startsWith('_')) continue
+    const line = pick(value)
+    if (line && line.length < 200) return line
+  }
+  return undefined
+}
+
 /**
  * Pocket 只需要渲染正文、工具活动摘要和有界的思考预览，不需要工具入参/结果或 SDK 内部字段。
  * 该投影在远程出口使用，避免完整 SDK 消息进入 WebSocket、重放日志和移动端缓存。
@@ -99,15 +142,17 @@ export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
       if (item.type === 'thinking') return []
       if (item.type === 'text' && typeof item.text === 'string') return [{ type: 'text', text: item.text }]
       if (item.type === 'tool_use' && typeof item.id === 'string' && typeof item.name === 'string') {
-        // 入参只透传文件路径：移动端需要在正文/回合末尾渲染文件 chip，
-        // 但不应该把完整工具参数（命令、补丁、搜索结果）带进 WebSocket。
+        // 入参只透传文件路径与一行摘要：移动端需要在正文/回合末尾渲染文件 chip，
+        // 也需要知道这一步在做什么，但不应该把完整工具参数（命令、补丁、搜索结果）带进 WebSocket。
         const input = item.input && typeof item.input === 'object' ? item.input as Record<string, unknown> : {}
         const filePath = input.file_path ?? input.filePath ?? input.path ?? input.notebook_path
+        const summary = projectToolInputSummary(input)
         return [{
           type: 'tool_use',
           id: item.id,
           name: item.name,
           input: typeof filePath === 'string' ? { file_path: filePath } : {},
+          ...(summary ? { summary } : {}),
         }]
       }
       return []

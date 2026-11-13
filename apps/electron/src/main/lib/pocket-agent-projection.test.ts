@@ -20,7 +20,11 @@ describe('Pocket 远程 Agent 投影', () => {
     }
     const [thinking, text, tool] = projected.message.content
     expect(text).toEqual({ type: 'text', text: '完成' })
-    expect(tool).toEqual({ type: 'tool_use', id: 'tool-1', name: 'Bash', input: {} })
+    // 入参照旧不下发，只多一行有界摘要（移动端要靠它区分「哪一步在干什么」）
+    expect(tool).toMatchObject({ type: 'tool_use', id: 'tool-1', name: 'Bash', input: {} })
+    expect(tool?.summary).toMatch(/^private tool data private tool data/)
+    expect(String(tool?.summary).length).toBe(121)
+    expect(String(tool?.summary).endsWith('…')).toBe(true)
     // final 帧思考上限 2000 字符，保留结尾；整条消息不再携带 18k 的原始思考。
     expect(thinking.type).toBe('thinking')
     expect(String(thinking.thinking).startsWith('…')).toBe(true)
@@ -154,5 +158,52 @@ describe('Pocket 远程 Agent 投影', () => {
     } as never) as never as { message: { message: { content: Array<Record<string, unknown>> } } }
     expect(payload.message.message.content).toHaveLength(1)
     expect(payload.message.message.content[0]?.type).toBe('thinking')
+  })
+})
+
+describe('工具入参摘要（移动端「执行过程」每行那一句话）', () => {
+  const projectTool = (name: string, input: Record<string, unknown>): Record<string, unknown> => {
+    const projected = projectSdkMessageForPocket({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 't1', name, input }] },
+      parent_tool_use_id: null,
+    } as never) as never as { message: { content: Array<Record<string, unknown>> } }
+    return projected.message.content[0]!
+  }
+
+  test('Given 多行 Bash 命令 When 投影 Then 折成一行，仍不带上完整命令', () => {
+    const tool = projectTool('Bash', { command: 'cd /d/ProferAI\nbun run typecheck\nbun test webui/' })
+    expect(tool.summary).toBe('cd /d/ProferAI bun run typecheck bun test webui/')
+    expect(tool.input).toEqual({})
+  })
+
+  test('Given MCP 工具带 prompt 与 id When 投影 Then 摘要取 prompt 而不是 id', () => {
+    const tool = projectTool('mcp__collaboration__delegate_agent', {
+      agent: 'reviewer',
+      prompt: '一行原文结论，不要复述过程。',
+      id: 'sess-123',
+    })
+    expect(tool.summary).toBe('一行原文结论，不要复述过程。')
+  })
+
+  test('Given 只有业务 id When 投影 Then 退回到那个字符串，行为不空白', () => {
+    const tool = projectTool('mcp__automation__delete_automation', { automationId: '1aa622a2-6fb0-4b71-8dd3-ea5d51b9a512' })
+    expect(tool.summary).toBe('1aa622a2-6fb0-4b71-8dd3-ea5d51b9a512')
+  })
+
+  test('Given 全是非字符串入参 When 投影 Then 干脆不挂 summary 字段', () => {
+    const tool = projectTool('TodoWrite', { todos: [{ a: 1 }] })
+    expect('summary' in tool).toBe(false)
+  })
+
+  test('Given 超长摘要 When 投影 Then 截到 120 字加省略号，WebSocket 不被撑大', () => {
+    const tool = projectTool('WebFetch', { url: `https://example.com/${'x'.repeat(400)}` })
+    expect(String(tool.summary)).toHaveLength(121)
+    expect(String(tool.summary).endsWith('…')).toBe(true)
+  })
+
+  test('Given 下划线开头的内部字段 When 投影 Then 不当作摘要（那是 SDK 内部标记）', () => {
+    const tool = projectTool('mcp__x__y', { _internal: '不该显示', label: '该显示' })
+    expect(tool.summary).toBe('该显示')
   })
 })
