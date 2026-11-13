@@ -1328,6 +1328,12 @@ export async function handleRemoteCommand(
             channelId: meta.channelId,
             modelId: meta.modelId,
             workspaceId: meta.workspaceId,
+            // 预设是「工作区级」配置：把 slug 一起下发，移动端不必再拉一遍工作区列表反查。
+            workspaceSlug: meta.workspaceId ? getAgentWorkspace(meta.workspaceId)?.slug : undefined,
+            // 会话绑定的预设（reference 为唯一真源，presetId 用于兼容旧数据）。
+            // 缺了这两个字段，移动端无法知道当前岗位，也没法判断「预设已被停用」。
+            presetId: meta.presetId,
+            presetReference: meta.presetReference ?? null,
             agentRuntime: meta.agentRuntime,
             permissionMode: meta.permissionMode,
             // 思考强度：会话级档位覆盖必须随会话详情下发，否则移动端打开会话时
