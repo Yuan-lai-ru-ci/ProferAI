@@ -2579,7 +2579,12 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
     }
     // WebUI 静态页：与 /ws 同源，由 webui-service 按会话白名单放行。
     // 不属于 WebUI 的路径仍走原有 404，Pocket 客户端行为不受影响。
-    if (handleWebuiHttpRequest(req, res, { isAuthorized: () => checkToken(req), token: accessToken })) return
+    if (handleWebuiHttpRequest(req, res, {
+      isAuthorized: () => checkToken(req),
+      token: accessToken,
+      // 首屏 <title> 就用会话名：页面此时还没连上 WS，拿不到会话信息
+      sessionTitle: (id) => getAgentSessionMeta(id)?.title,
+    })) return
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('Not Found')
   })

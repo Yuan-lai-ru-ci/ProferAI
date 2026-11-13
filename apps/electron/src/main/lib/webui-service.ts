@@ -40,6 +40,13 @@ export interface WebuiLocalState {
 export interface WebuiRequestContext {
   isAuthorized: (req: IncomingMessage) => boolean
   token: string | null
+  /**
+   * 会话标题（用于首屏 `<title>`）。
+   *
+   * 由调用方注入而不是这里去读会话索引：本层刻意不依赖 agent-session-manager，
+   * 否则静态托管会连带把会话存储拉进来，测试也得多 mock 一层。
+   */
+  sessionTitle?: (sessionId: string) => string | undefined
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -124,11 +131,22 @@ function readCookieToken(req: IncomingMessage): string | null {
   return null
 }
 
-/** 首屏注入会话 id 与 token，页面随后用同源 defaultWsUrl() 连接 /ws。 */
-function injectBoot(html: string, sessionId: string, token: string): string {
+/**
+ * 首屏注入会话 id 与 token，页面随后用同源 defaultWsUrl() 连接 /ws。
+ *
+ * 顺便把 `<title>` 换成会话名：标签页在第一帧就是对的，不会先闪一下通用文案，
+ * 也省得等 WS 连上再改 —— 慢网络下那个空窗期可能有好几秒。
+ */
+function injectBoot(html: string, sessionId: string, token: string, title?: string): string {
   const boot = JSON.stringify({ sessionId, token }).replace(/</g, '\\u003c')
   const script = `<script>window.__PROFER_WEBUI_BOOT__=${boot};</script>`
-  return html.includes('<head>') ? html.replace('<head>', `<head>${script}`) : `${script}${html}`
+  const name = title?.trim()
+  const withTitle = name
+    ? html.replace(/<title>[^<]*<\/title>/i, `<title>${escapeHtml(name)}</title>`)
+    : html
+  return withTitle.includes('<head>')
+    ? withTitle.replace('<head>', `<head>${script}`)
+    : `${script}${withTitle}`
 }
 
 /**
@@ -185,7 +203,7 @@ export function handleWebuiHttpRequest(
     }
     reply(
       200,
-      injectBoot(readFileSync(indexPath, 'utf-8'), route.sessionId, ctx.token),
+      injectBoot(readFileSync(indexPath, 'utf-8'), route.sessionId, ctx.token, ctx.sessionTitle?.(route.sessionId)),
       'text/html; charset=utf-8',
       { 'set-cookie': `profer_webui_token=${encodeURIComponent(ctx.token)}; Path=/; HttpOnly; SameSite=Strict` },
     )

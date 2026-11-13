@@ -32,12 +32,17 @@ function makeResponse(): FakeResponse {
   return res
 }
 
-function request(url: string, authorized = true, headers: Record<string, string> = {}): { handled: boolean; res: FakeResponse } {
+function request(
+  url: string,
+  authorized = true,
+  headers: Record<string, string> = {},
+  sessionTitle?: (sessionId: string) => string | undefined,
+): { handled: boolean; res: FakeResponse } {
   const res = makeResponse()
   const handled = handleWebuiHttpRequest(
     { url, headers } as never,
     res as never,
-    { isAuthorized: () => authorized, token: 'test-token' },
+    { isAuthorized: () => authorized, token: 'test-token', ...(sessionTitle ? { sessionTitle } : {}) },
   )
   return { handled, res }
 }
@@ -47,7 +52,7 @@ let assetDir: string
 beforeAll(() => {
   assetDir = mkdtempSync(join(tmpdir(), 'profer-webui-'))
   mkdirSync(join(assetDir, 'assets'))
-  writeFileSync(join(assetDir, 'index.html'), '<!doctype html><html><head></head><body><div id="root"></div></body></html>')
+  writeFileSync(join(assetDir, 'index.html'), '<!doctype html><html><head><title>Profer 会话</title></head><body><div id="root"></div></body></html>')
   writeFileSync(join(assetDir, 'assets', 'app.js'), 'console.log("webui")')
   process.env.PROFER_WEBUI_DIR = assetDir
 })
@@ -75,6 +80,26 @@ describe('WebUI 静态托管', () => {
     expect(res.body).toContain('"sessionId":"s1"')
     expect(res.body).toContain('"token":"test-token"')
     expect(res.headers['set-cookie']).toContain('profer_webui_token=test-token')
+  })
+
+  test('Given 会话有标题 When 首屏返回 Then <title> 直接就是会话名（不必等 WS 连上）', () => {
+    settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
+    const { res } = request('/s/s1?token=test-token', true, {}, () => '把构建修好')
+    expect(res.body).toContain('<title>把构建修好</title>')
+    expect(res.body).not.toContain('<title>Profer 会话</title>')
+  })
+
+  test('Given 会话还没标题 When 首屏返回 Then 保留兜底文案，不注入空 <title>', () => {
+    settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
+    const { res } = request('/s/s1?token=test-token', true, {}, () => undefined)
+    expect(res.body).toContain('<title>Profer 会话</title>')
+  })
+
+  test('Given 标题里有 HTML When 首屏返回 Then 转义，不允许往页面里塞标签', () => {
+    settings = { webuiEnabled: true, webuiPublishedSessionIds: ['s1'] }
+    const { res } = request('/s/s1?token=test-token', true, {}, () => '<img src=x onerror=alert(1)> & co')
+    expect(res.body).toContain('&lt;img src=x onerror=alert(1)&gt; &amp; co')
+    expect(res.body).not.toContain('<img src=x')
   })
 
   test('Given 会话未发布 When 访问 Then 404，且不会泄漏页面内容', () => {
