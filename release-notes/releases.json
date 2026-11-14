@@ -1,5 +1,16 @@
 [
   {
+    "id": "RE_kwDOTfo-884ajRCs",
+    "tag_name": "v0.16.26",
+    "name": "Profer v0.16.26",
+    "body": "# Profer v0.16.26\n\n## 新增\n\n- **文件改动 chip 观察**：Claude 的 Write/Edit 与 Pi 的受控写入、Bash 实际落盘改动统一记录到消息文件改动 chip；历史回放可见，观察失败不影响工具执行。\n- **全局记忆操作收口**：补齐全局记忆操作模块与 Agent 工具边界，统一读写、搜索和文件变更记录。\n- **标签页与迷你地图性能**：迷你地图按 Tab 切片订阅，加入 LRU 上限与关闭 Tab 清理，减少流式输出时无关标签重渲染。\n- **开源/商业构建隔离加固**：OSS 构建改为严格零容忍检查，构建编排、产物目录与版本校验统一按发行版选择。\n\n## 优化\n\n- **Agent 过程展示**：补齐 Skill、工具调用和文件改动的过程分组与状态展示，成功加载的 Skill 也有可见提示。\n- **Chat 顶栏与会话布局**：调整顶栏、标签栏、会话输入和对话过程的状态投影，减少空会话、切换 Tab 与流式更新时的布局抖动。\n- **浏览器与设置体验**：完善浏览器 Tab 自动打开、设置入口和用户画像相关界面的一致性。\n- **文档与发布说明**：README、中文 README、架构文档和计划文档按当前能力边界收敛描述，不再把历史设想写成已承诺能力。\n\n## 修复\n\n- 修复文件改动观察、回退证据与 Bash 目录快照之间的边界混淆，避免把普通观察误记为可回退证据。\n- 修复 Claude/Pi 适配器在工具 hook、文件写入和运行时准备过程中的测试覆盖缺口。\n- 修复若干聊天顶栏、对话框遮罩、欢迎页布局、Tab 状态和浏览器 Tab 的交互回归。\n\n## 升级提示\n\n- 本版继续保持 macOS Apple Silicon 构建范围；macOS 本地验收包仍为 ad-hoc、无公证。\n- OSS 与商业版使用独立的构建目标和输出目录；本版不改变商业版既有更新目录。\n- 本版无数据迁移。\n\n## 发行与安装说明\n\n- 本 GitHub Release 仅提供开源版（OSS）；商业版使用独立的国内商业更新源，不混用安装包。\n- macOS 仅支持 Apple Silicon（arm64），使用 ad-hoc 签名，未经 Apple 公证。浏览器下载首次打开可能被 Gatekeeper 拦截，请按系统安全提示处理；请先核对 SHA256SUMS.txt。\n- Windows 仅提供 x64，尚未接入 Authenticode 签名，首次安装可能出现 SmartScreen 未知发布者提示。\n- 开源版与商业版共用应用身份，不能并存；不要把 OSS 包当作商业版的覆盖升级包。\n",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-11-14T14:27:12Z",
+    "published_at": "2026-11-14T17:13:23Z",
+    "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.16.26"
+  },
+  {
     "id": "RE_kwDOTfo-884aPqds",
     "tag_name": "v0.16.25",
     "name": "Profer v0.16.25",
