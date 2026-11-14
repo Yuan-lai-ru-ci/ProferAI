@@ -11,6 +11,8 @@ export interface AgentComposerToolbarNodes {
   speech?: ReactNode
   attach: ReactNode
   contextUsage: ReactNode
+  /** 常驻「交接并新开会话」入口；与建议条是两个入口、同一个动作 */
+  handoff?: ReactNode
   graph?: ReactNode
 }
 
@@ -31,6 +33,7 @@ export function createAgentComposerToolbarItems(input: AgentComposerToolbarNodes
     ...(input.speech ? [{ key: 'speech', node: input.speech }] : []),
     { key: 'attach', node: input.attach },
     { key: 'context-usage', node: input.contextUsage },
+    ...(input.handoff ? [{ key: 'handoff', node: input.handoff }] : []),
     ...(input.graph ? [{ key: 'graph', node: input.graph }] : []),
   ], preferences)
 }

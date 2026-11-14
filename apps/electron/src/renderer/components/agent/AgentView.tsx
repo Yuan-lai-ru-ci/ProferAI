@@ -173,6 +173,8 @@ import {
 import { AUTO_SEND_RETRY_INTERVAL_MS, shouldAutoSendQueueHead } from '@/lib/agent-autosend-turn'
 import { AgentMessageQueue } from './AgentMessageQueue'
 import { HandoffSuggestion } from './HandoffSuggestion'
+import { HandoffToolbarButton } from './HandoffToolbarButton'
+import { HandoffConfirmDialog } from './HandoffConfirmDialog'
 import { useQuoteSourceHighlight } from '@/hooks/useQuoteSourceHighlight'
 import { QuoteSourceMarkers } from './QuoteSourceMarkers'
 import {
@@ -300,6 +302,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const minimapHostRef = React.useRef<HTMLDivElement>(null)
   const [pendingGoalReplacement, setPendingGoalReplacement] = useAtom(goalReplacementAtomFamily(sessionId))
   const [goalStatusOpen, setGoalStatusOpen] = React.useState(false)
+  /** 手动交接的二次确认：工具栏里点一下只开这个，确认后才跑模型、建会话 */
+  const [handoffConfirmOpen, setHandoffConfirmOpen] = React.useState(false)
   const [replacingGoal, setReplacingGoal] = React.useState(false)
   const setCurrentGoal = useSetAtom(agentGoalAtomFamily(sessionId))
   const setGoalEditor = useSetAtom(goalEditorAtomFamily(sessionId))
@@ -3061,6 +3065,14 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const composerToolbarPreferences = useAtomValue(composerToolbarPreferencesAtom)
   useLoadVoiceDictationSettings()
 
+  // 手动交接的门禁只收成两个布尔，避免把整个 messages 数组塞进工具栏 useMemo 的依赖
+  // （流式期间 liveMessages 每 token 都在变，会让整条工具栏反复重建）。
+  // 交接文档撰写是往同一份 JSONL 追加的一次 headless run，与本轮运行同时写会撞车。
+  const hasHandoffContent = messagesLoaded
+    && (persistedSDKMessages.length > 0 || (liveMessages?.length ?? 0) > 0)
+  const handoffBusy = streaming || backgroundWaiting || isCompacting
+    || runtimeSwitchInFlight || Boolean(streamState?.stopping)
+
   const taskGraphEnabled = Boolean(
     !isExplorationBranch
     && sessionBoundPreset
@@ -3153,6 +3165,20 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         />
       ),
     },
+    {
+      key: 'handoff',
+      // 独立会话窗口没有 Tab 栏，交接完成后切不过去（与分叉/探索入口同样处理）。
+      visible: !standalone,
+      node: (
+        <HandoffToolbarButton
+          sessionId={sessionId}
+          sessionReady={messagesLoaded}
+          hasContent={hasHandoffContent}
+          running={handoffBusy}
+          onRequest={() => { setHandoffConfirmOpen(true) }}
+        />
+      ),
+    },
     ...(taskGraphEnabled ? [{
       key: 'graph',
       node: <ToolbarGraphButton sessionId={sessionId} onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
@@ -3197,6 +3223,10 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     taskGraphEnabled,
     voiceDictationEnabled,
     composerToolbarPreferences,
+    messagesLoaded,
+    hasHandoffContent,
+    handoffBusy,
+    standalone,
   ])
 
   const inputTrailingNode = (streaming || streamState?.stopping) ? (
@@ -3282,8 +3312,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
               </div>
             )}
 
-            {/* 建议新开会话：命中轮数阈值或上下文告警线时出现，点击触发交接 */}
-            <HandoffSuggestion sessionId={sessionId} />
+            {/* 建议新开会话：命中轮数阈值或上下文告警线时出现，点击触发交接。
+                独立会话窗口没有 Tab 栏，交接完切不过去，和工具栏按钮一起隐藏。 */}
+            {!standalone && <HandoffSuggestion sessionId={sessionId} />}
 
             <AgentMessageQueue
               items={queuedMessages}
@@ -3401,6 +3432,13 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           <GoalStatusBar sessionId={sessionId} />
         </div>
         <GoalStatusDialog sessionId={sessionId} open={goalStatusOpen} onOpenChange={setGoalStatusOpen} />
+        {/* 挂在顶层：按钮可能被折进工具栏「更多」Popover，弹窗不能随它卸载 */}
+        <HandoffConfirmDialog
+          sessionId={sessionId}
+          open={handoffConfirmOpen}
+          onOpenChange={setHandoffConfirmOpen}
+          sessionTitle={sessionMeta?.title}
+        />
         <AlertDialog open={Boolean(pendingGoalReplacement)} onOpenChange={(open) => { if (!open && !replacingGoal) setPendingGoalReplacement(null) }}>
           <AlertDialogContent>
             <AlertDialogHeader>
