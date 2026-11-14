@@ -305,6 +305,7 @@ function renderProjectGroup(options: {
         extraCount={0}
         activeSessionId={null}
         agentIndicatorMap={new Map()}
+        goalStatusMap={new Map()}
         agentDraftIds={new Set()}
         expandedRelatedParentIds={new Set()}
         relativeTimeNow={1}

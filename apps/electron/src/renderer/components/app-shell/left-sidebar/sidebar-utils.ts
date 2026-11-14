@@ -9,7 +9,8 @@ import { cn } from '@/lib/utils'
 import type { WorkspaceSortMode } from '@/atoms/sidebar-atoms'
 import type { AppMode } from '@/atoms/app-mode'
 import type { TabItem } from '@/atoms/tab-atoms'
-import type { AgentSessionMeta, ConversationMeta } from '@profer/shared'
+import type { AgentGoalState, AgentSessionMeta, ConversationMeta } from '@profer/shared'
+import { isGoalLive } from '@/domains/goal/goal-display-policy'
 import { buildAgentSessionTrees } from './session-tree'
 
 export type OpenSessionEntry =
@@ -159,10 +160,14 @@ export function resolveDeleteShortcutAction(
 
 /**
  * 会话行行首状态标记的种类，数组顺序即渲染顺序（固定，不随数量变化）。
- * 置顶 → 定时 → 探索分支 / 委派子会话 → 浏览器 → 标题生成。
+ * 置顶 → 进行中的目标 → 定时 → 探索分支 / 委派子会话 → 浏览器 → 标题生成。
+ *
+ * 左侧竖条只回答「现在什么状态（跑/卡/完成）」，行首标记只回答「这行是什么身份」。
+ * 两者不互相替代：Goal 暂停或等待输入时竖条已经消失，标记仍然要在。
  */
 export type SessionLeadingMarker =
   | 'pin'
+  | 'goal'
   | 'automation'
   | 'exploration'
   | 'delegation'
@@ -174,6 +179,8 @@ export type SessionLeadingMarker =
  *
  * 只返回真实存在的标记：没有标记的行不占位，标题贴左；标记变多时标题顺势右移。
  * 探索分支优先于委派子会话（二者互斥），定时来源在委派子会话上不再重复提示。
+ * 未结束的 Goal 会压掉定时来源：两者都在说明「不是我在跟它对话」，Goal 更具体；
+ * 已结束的 Goal 不再显示标记，结果已由左侧竖条的绿/橙色表达。
  */
 export function resolveSessionLeadingMarkers(input: {
   /** 子会话不参与置顶，也不显示置顶标记 */
@@ -187,10 +194,14 @@ export function resolveSessionLeadingMarkers(input: {
   explorationSourceMessageId?: string | null
   hasBrowser: boolean
   regeneratingTitle: boolean
+  /** 该会话的 Goal 状态；未结束（见 isGoalLive）才显示靶心标记 */
+  goalStatus?: AgentGoalState['status']
 }): SessionLeadingMarker[] {
   const markers: SessionLeadingMarker[] = []
+  const hasLiveGoal = input.goalStatus !== undefined && isGoalLive({ status: input.goalStatus })
   if (input.pinnable && input.pinned && input.showPinIcon) markers.push('pin')
-  if (input.sourceAutomationId && !input.sourceDelegationId) markers.push('automation')
+  if (hasLiveGoal) markers.push('goal')
+  if (input.sourceAutomationId && !input.sourceDelegationId && !hasLiveGoal) markers.push('automation')
   if (input.explorationParentSessionId && input.explorationSourceMessageId) {
     markers.push('exploration')
   } else if (input.sourceDelegationId) {
@@ -199,6 +210,27 @@ export function resolveSessionLeadingMarkers(input: {
   if (input.hasBrowser) markers.push('browser')
   if (input.regeneratingTitle) markers.push('regeneratingTitle')
   return markers
+}
+
+/**
+ * 行首标记的容量上限（封顶用，不是精确省宽度）。
+ *
+ * 每枚标记是 13px 盒子 + 4px 间距，侧栏内容宽 246px；不封顶时新增一种标记就可能把标题
+ * 挤到只剩三四个字，而且没有任何机制会自己收敛。顺序即优先级，瞬时标记排在末尾，
+ * 溢出时优先折叠它们（浏览器 / 正在生成标题几十秒后本来就会自己消失）。
+ */
+export const MAX_SESSION_LEADING_MARKERS = 3
+
+/** 按上限切分标记：visible 用于渲染，overflow 用于折叠成 `+N` 并在 tooltip 里说明。 */
+export function limitSessionLeadingMarkers(markers: SessionLeadingMarker[]): {
+  visible: SessionLeadingMarker[]
+  overflow: SessionLeadingMarker[]
+} {
+  if (markers.length <= MAX_SESSION_LEADING_MARKERS) return { visible: markers, overflow: [] }
+  return {
+    visible: markers.slice(0, MAX_SESSION_LEADING_MARKERS),
+    overflow: markers.slice(MAX_SESSION_LEADING_MARKERS),
+  }
 }
 
 /**

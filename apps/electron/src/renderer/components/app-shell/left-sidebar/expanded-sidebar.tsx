@@ -39,6 +39,7 @@ function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
     handleTogglePin,
     handleToggleArchive,
     agentIndicatorMap,
+    goalStatusMap,
     agentDraftIds,
     workspaceNameMap,
     handleSelectAgentSession,
@@ -118,6 +119,7 @@ function CurrentSessionSection({ s }: { s: SidebarModel }): React.ReactElement {
                 session={session}
                 active={active}
                 indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                goalStatus={goalStatusMap.get(session.id)}
                 showPinIcon={false}
                 hasDraft={agentDraftIds.has(session.id)}
                 leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}
@@ -208,6 +210,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
     handleTogglePin,
     handleToggleArchive,
     agentIndicatorMap,
+    goalStatusMap,
     expandedRelatedParentIds,
     agentDraftIds,
     workspaceNameMap,
@@ -457,6 +460,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                   collapsed={collapsedWorkspaceIds.has(group.workspace.id)}
                   activeSessionId={activeSessionId}
                   agentIndicatorMap={agentIndicatorMap}
+                  goalStatusMap={goalStatusMap}
                   agentDraftIds={agentDraftIds}
                   expandedRelatedParentIds={expandedRelatedParentIds}
                   relativeTimeNow={relativeTimeNow}
@@ -549,6 +553,7 @@ export function ExpandedSidebar({ s }: { s: SidebarModel }): React.ReactElement 
                         session={session}
                         active={session.id === activeSessionId}
                         indicatorStatus={agentIndicatorMap.get(session.id) ?? 'idle'}
+                        goalStatus={goalStatusMap.get(session.id)}
                         showPinIcon={!!session.pinned}
                         hasDraft={agentDraftIds.has(session.id)}
                         leftAccent={getSessionLeftAccent(agentIndicatorMap.get(session.id) ?? 'idle')}

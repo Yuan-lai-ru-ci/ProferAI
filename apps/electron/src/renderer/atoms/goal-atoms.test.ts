@@ -5,6 +5,7 @@ import type { AgentGoalState } from '@profer/shared'
 import {
   agentGoalAtomFamily, agentGoalsAtom, mergeAgentGoalAtom, hydrateAgentGoalsAtom,
   getGoalActions, startGoalWithReplacement, goalEditorAtomFamily, goalHistoryAtomFamily,
+  goalStatusBySessionAtom,
 } from './goal-atoms'
 
 const goal = (patch: Partial<AgentGoalState> = {}): AgentGoalState => ({
@@ -220,5 +221,30 @@ describe('Goal 替换流程', () => {
     const busy = api(goal({ status: 'stopped', activeRunId: 'unsettled' }))
     await expect(startGoalWithReplacement(busy, 'session-a', { goal: '新目标' }, 'goal-a')).rejects.toThrow('正在停止')
     expect(busy.calls).toEqual([])
+  })
+})
+
+describe('goalStatusBySessionAtom — 侧栏行首标记投影', () => {
+  test('只暴露 status：同状态心跳刷新不换引用，整列会话行不跟着重渲染', () => {
+    const store = createStore()
+    store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: goal({ status: 'active', revision: 1, updatedAt: 100 }) })
+    const first = store.get(goalStatusBySessionAtom)
+    expect(first.get('session-a')).toBe('active')
+
+    store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: goal({ status: 'active', revision: 2, updatedAt: 150 }) })
+    expect(store.get(goalStatusBySessionAtom)).toBe(first)
+  })
+
+  test('状态推进与清除都会反映到投影', () => {
+    const store = createStore()
+    store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: goal({ status: 'active', revision: 1 }) })
+    store.set(mergeAgentGoalAtom, { sessionId: 'session-a', state: goal({ status: 'blocked', revision: 2, updatedAt: 300 }) })
+    expect(store.get(goalStatusBySessionAtom).get('session-a')).toBe('blocked')
+
+    store.set(mergeAgentGoalAtom, {
+      sessionId: 'session-a',
+      state: goal({ status: 'stopped', revision: 3, updatedAt: 400, stopReason: 'cleared', reasonCode: 'cleared' }),
+    })
+    expect(store.get(goalStatusBySessionAtom).has('session-a')).toBe(false)
   })
 })

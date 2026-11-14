@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { createStore, Provider } from 'jotai'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { TooltipProvider } from '@profer/ui/primitives/tooltip'
-import type { AgentSessionMeta } from '@profer/shared'
+import type { AgentGoalState, AgentSessionMeta } from '@profer/shared'
 import { browserStateMapAtom } from '@/atoms/browser-atoms'
 import { AgentSessionItem } from './session-items'
 
@@ -24,6 +24,8 @@ function renderSession(options: {
   depth?: 0 | 1
   showPinIcon?: boolean
   hasBrowser?: boolean
+  goalStatus?: AgentGoalState['status']
+  regeneratingTitle?: boolean
 }): string {
   const store = createStore()
   if (options.hasBrowser) {
@@ -38,6 +40,8 @@ function renderSession(options: {
           indicatorStatus="idle"
           depth={options.depth ?? 1}
           showPinIcon={options.showPinIcon ?? true}
+          goalStatus={options.goalStatus}
+          regeneratingTitle={options.regeneratingTitle}
           relativeTimeNow={1}
           onSelect={() => {}}
           onRequestDelete={() => {}}
@@ -71,5 +75,58 @@ describe('会话行首状态标记', () => {
     const html = renderSession({ session: session() })
 
     expect(html).not.toContain('data-session-markers')
+  })
+})
+
+describe('会话行 Goal 标记', () => {
+  test('Given 会话有未结束的 Goal When 渲染 Then 置顶后显示靶心图标', () => {
+    const html = renderSession({
+      session: session({ pinned: true }),
+      depth: 0,
+      goalStatus: 'active',
+    })
+
+    expect(html.indexOf('lucide-pin')).toBeGreaterThan(-1)
+    expect(html.indexOf('lucide-pin')).toBeLessThan(html.indexOf('lucide-target'))
+    expect(html.indexOf('lucide-target')).toBeLessThan(html.indexOf('本地部署workbuddy2api'))
+  })
+
+  test('Given Goal 需要你处理 When 渲染 Then 靶心用 warning 色', () => {
+    const html = renderSession({ session: session(), goalStatus: 'blocked' })
+
+    expect(html).toContain('lucide-target')
+    expect(html).toContain('text-warning')
+  })
+
+  test('Given Goal 正常推进 When 渲染 Then 靶心保持中性灰（不新造色相）', () => {
+    const html = renderSession({ session: session(), goalStatus: 'active' })
+
+    expect(html).toContain('lucide-target')
+    expect(html).not.toContain('text-warning')
+  })
+
+  test('Given Goal 已结束 When 渲染 Then 不再渲染靶心', () => {
+    const html = renderSession({ session: session(), goalStatus: 'completed' })
+
+    expect(html).not.toContain('data-session-markers')
+    expect(html).not.toContain('lucide-target')
+  })
+
+  test('Given 标记超过上限 When 渲染 Then 只留前三枚并折叠成 +N', () => {
+    const html = renderSession({
+      session: session({ pinned: true, sourceAutomationId: 'auto-1' }),
+      depth: 0,
+      hasBrowser: true,
+      regeneratingTitle: true,
+      goalStatus: 'active',
+    })
+
+    // 置顶 + 靶心 + 浏览器 + 生成标题 = 4 枚，Goal 已压掉定时来源
+    expect(html).toContain('lucide-pin')
+    expect(html).toContain('lucide-target')
+    expect(html).toContain('lucide-globe')
+    expect(html).not.toContain('lucide-clock')
+    expect(html).toContain('data-session-markers-overflow')
+    expect(html).toContain('+1')
   })
 })

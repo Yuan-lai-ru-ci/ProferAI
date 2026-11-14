@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Pencil, Pin, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, MailOpen, Sparkles, X, XCircle, XSquare, AlertTriangle,
+  Pencil, Pin, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, MailOpen, Sparkles, Target, X, XCircle, XSquare, AlertTriangle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useShortcut } from '@/hooks/useShortcut'
@@ -40,8 +40,9 @@ import {
 } from '@/components/session-preview/SessionMiniMapPopover'
 import { browserStateMapAtom } from '@/atoms/browser-atoms'
 import { currentAgentSessionIdAtom, unviewedCompletedSessionIdsAtom, type SessionIndicatorStatus } from '@/atoms/agent-atoms'
-import type { ConversationMeta, AgentSessionMeta, AgentWorkspace } from '@profer/shared'
-import { formatRelativeUpdatedAt, resolveSessionLeadingMarkers, sidebarRowClass } from './sidebar-utils'
+import type { ConversationMeta, AgentGoalState, AgentSessionMeta, AgentWorkspace } from '@profer/shared'
+import { needsGoalAttention } from '@/domains/goal/goal-display-policy'
+import { formatRelativeUpdatedAt, limitSessionLeadingMarkers, resolveSessionLeadingMarkers, sidebarRowClass, type SessionLeadingMarker } from './sidebar-utils'
 import type { ShortcutRegistrationOptions } from '@/lib/shortcut-registry'
 import {
   buildAgentSessionTrees,
@@ -93,6 +94,17 @@ export function getWorkspaceRemoveMenuLabel(workspace: Pick<AgentWorkspace, 'sto
  */
 const SESSION_MARKER_BOX_CLASS = 'flex size-[13px] flex-shrink-0 items-center justify-center'
 const SESSION_MARKER_ICON_CLASS = 'flex-shrink-0 text-foreground/40'
+
+/** `+N` 折叠时说明被折叠的是哪些标记：只留一个数字用户无从判断要不要展开 */
+const SESSION_MARKER_LABELS: Record<SessionLeadingMarker, string> = {
+  pin: '已置顶',
+  goal: '进行中的目标',
+  automation: '由定时任务创建',
+  exploration: '探索分支',
+  delegation: '委派子会话',
+  browser: '正在使用浏览器',
+  regeneratingTitle: '正在重新生成标题',
+}
 
 /** 已置顶标记：点击取消置顶；尺寸与灰度跟其它行首标记完全一致 */
 function SessionLeadingPin({
@@ -705,6 +717,12 @@ interface AgentSessionItemProps {
   }
   disableMiniMap?: boolean
   workspaceName?: string
+  /**
+   * 该会话的 Goal 状态（未结束才显示行首靶心）。
+   * 只传状态字符串而不是整个 AgentGoalState：行是 React.memo，
+   * 传对象会让 Goal 的每次心跳刷新都击穿 memo。
+   */
+  goalStatus?: AgentGoalState['status']
   relativeTimeNow: number
   onSelect: (id: string, title: string) => void
   onRequestDelete: (id: string) => void
@@ -735,6 +753,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   leftAccent,
   disableMiniMap,
   workspaceName,
+  goalStatus,
   relativeTimeNow,
   onSelect,
   onRequestDelete,
@@ -807,22 +826,39 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   // 隐藏行内入口与菜单项，避免置顶后既不在项目顶部、又让母行状态与排序失真。
   const pinnable = isPinnableSession(session)
 
-  // 行首状态标记，顺序固定：置顶 → 定时 → 委派·探索 → 浏览器 → 标题生成（见 resolveSessionLeadingMarkers）。
+  // 行首状态标记，顺序固定：置顶 → Goal → 定时 → 委派·探索 → 浏览器 → 标题生成（见 resolveSessionLeadingMarkers）。
   // 有几个就按这个顺序从标题左侧依次向右堆；没有标记时不占位，标题直接贴左。
-  const leadingMarkers = resolveSessionLeadingMarkers({
-    pinnable,
-    pinned: !!session.pinned,
-    showPinIcon: !!showPinIcon,
-    sourceAutomationId: session.sourceAutomationId,
-    sourceDelegationId: session.sourceDelegationId,
-    explorationParentSessionId: session.explorationParentSessionId,
-    explorationSourceMessageId: session.explorationSourceMessageId,
-    hasBrowser,
-    regeneratingTitle: !!regeneratingTitle,
-  }).map((kind) => {
+  // Goal 标记的颜色跟随「要不要你管」：受阻 / 预算耗尽用 warning，与此刻已经变橙的左侧竖条同色相；
+  // 正常推进用中性灰。不新增色相，也不跟竖条的 info 抢注意力。
+  const goalNeedsAttention = goalStatus !== undefined && needsGoalAttention({ status: goalStatus })
+  // 顺序即优先级，超出上限的部分折叠成 +N（见 MAX_SESSION_LEADING_MARKERS）
+  const { visible: visibleMarkerKinds, overflow: overflowMarkerKinds } = limitSessionLeadingMarkers(
+    resolveSessionLeadingMarkers({
+      pinnable,
+      pinned: !!session.pinned,
+      showPinIcon: !!showPinIcon,
+      sourceAutomationId: session.sourceAutomationId,
+      sourceDelegationId: session.sourceDelegationId,
+      explorationParentSessionId: session.explorationParentSessionId,
+      explorationSourceMessageId: session.explorationSourceMessageId,
+      hasBrowser,
+      regeneratingTitle: !!regeneratingTitle,
+      goalStatus,
+    }),
+  )
+  const leadingMarkers = visibleMarkerKinds.map((kind) => {
     switch (kind) {
       case 'pin':
         return <SessionLeadingPin key={kind} onTogglePin={() => onTogglePin(session.id)} />
+      case 'goal':
+        return (
+          <Target
+            key={kind}
+            size={11}
+            className={cn(SESSION_MARKER_ICON_CLASS, goalNeedsAttention && 'text-warning')}
+            aria-label={goalNeedsAttention ? '有目标需要你处理' : '有进行中的目标'}
+          />
+        )
       case 'automation':
         return <Clock key={kind} size={11} className={SESSION_MARKER_ICON_CLASS} aria-label="由定时任务创建" />
       case 'exploration':
@@ -854,6 +890,9 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
         )
     }
   })
+  const overflowMarkerTitle = overflowMarkerKinds.length > 0
+    ? `另有${overflowMarkerKinds.map((kind) => SESSION_MARKER_LABELS[kind]).join('、')}`
+    : undefined
 
   // 未读切换项：判据是「用户能看到的未读状态」——持久化字段
   // `completedButUnconfirmed` ∪ 渲染层未读集合（关闭态下绿标看的就是内存集合，只判持久化字段
@@ -999,6 +1038,16 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
                 {leadingMarkers.length > 0 && (
                   <span data-session-markers className="flex flex-shrink-0 items-center gap-1">
                     {leadingMarkers}
+                    {/* 超出上限的标记只留计数，明细放 title：行内不再继续挤占标题宽度 */}
+                    {overflowMarkerKinds.length > 0 && (
+                      <span
+                        data-session-markers-overflow
+                        className="flex-shrink-0 text-[11px] leading-none text-foreground/40"
+                        title={overflowMarkerTitle}
+                      >
+                        +{overflowMarkerKinds.length}
+                      </span>
+                    )}
                   </span>
                 )}
                 {regeneratingTitle && depth !== 1 && (
@@ -1084,6 +1133,8 @@ interface RelatedChildSessionItemProps {
   session: AgentSessionMeta
   activeSessionId: string | null
   agentIndicatorMap: Map<string, SessionIndicatorStatus>
+  /** 会话 → Goal 状态（是否画靶心由 resolveSessionLeadingMarkers 按「未结束」判定） */
+  goalStatusMap: Map<string, AgentGoalState['status']>
   relativeTimeNow: number
   workspaceName?: string
   /** 输入框是否有未发送内容（草稿标记） */
@@ -1105,6 +1156,7 @@ export const RelatedChildSessionItem = React.memo(function RelatedChildSessionIt
   session,
   activeSessionId,
   agentIndicatorMap,
+  goalStatusMap,
   relativeTimeNow,
   workspaceName,
   hasDraft,
@@ -1125,6 +1177,7 @@ export const RelatedChildSessionItem = React.memo(function RelatedChildSessionIt
       session={session}
       active={session.id === activeSessionId}
       indicatorStatus={status}
+      goalStatus={goalStatusMap.get(session.id)}
       hasDraft={hasDraft}
       relativeTimeNow={relativeTimeNow}
       workspaceName={workspaceName}
@@ -1152,6 +1205,8 @@ interface AgentProjectGroupItemProps {
   extraCount: number
   activeSessionId: string | null
   agentIndicatorMap: Map<string, SessionIndicatorStatus>
+  /** 会话 → Goal 状态（是否画靶心由 resolveSessionLeadingMarkers 按「未结束」判定） */
+  goalStatusMap: Map<string, AgentGoalState['status']>
   /** 输入框有内容的 Agent 会话 ID 集合（草稿标记） */
   agentDraftIds: Set<string>
   expandedRelatedParentIds: Set<string>
@@ -1200,6 +1255,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   extraCount,
   activeSessionId,
   agentIndicatorMap,
+  goalStatusMap,
   agentDraftIds,
   expandedRelatedParentIds,
   relativeTimeNow,
@@ -1510,6 +1566,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                       session={item.session}
                       active={treeActive}
                       indicatorStatus={rowStatus}
+                      goalStatus={goalStatusMap.get(item.session.id)}
                       depth={1}
                       showPinIcon={!!item.session.pinned}
                       hasDraft={agentDraftIds.has(item.session.id)}
@@ -1540,6 +1597,7 @@ export const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
                             session={childSession}
                             activeSessionId={activeSessionId}
                             agentIndicatorMap={agentIndicatorMap}
+                            goalStatusMap={goalStatusMap}
                             hasDraft={agentDraftIds.has(childSession.id)}
                             relativeTimeNow={relativeTimeNow}
                             onSelect={onSelectSession}

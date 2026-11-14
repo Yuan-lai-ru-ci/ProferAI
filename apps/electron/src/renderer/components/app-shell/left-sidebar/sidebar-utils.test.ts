@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 import type { AgentSessionMeta, ConversationMeta } from '@profer/shared'
 import type { TabItem } from '@/atoms/tab-atoms'
-import { getOpenSessionEntries, resolveDeleteShortcutAction, resolveSessionLeadingMarkers, sidebarRowClass } from './sidebar-utils'
+import { getOpenSessionEntries, limitSessionLeadingMarkers, resolveDeleteShortcutAction, resolveSessionLeadingMarkers, sidebarRowClass } from './sidebar-utils'
 
 const NOW = 1_752_000_000_000
 const session = (id: string, overrides: Partial<AgentSessionMeta> = {}): AgentSessionMeta => ({
@@ -253,6 +253,70 @@ describe('resolveSessionLeadingMarkers — 行首标记固定顺序', () => {
 
   test('Given 置顶分区（分区标题已表达状态）When 解析 Then 不重复画置顶标记', () => {
     expect(resolveSessionLeadingMarkers({ ...base, pinned: true, showPinIcon: false })).toEqual([])
+  })
+})
+
+describe('resolveSessionLeadingMarkers — Goal 身份标记', () => {
+  const base = {
+    pinnable: true,
+    pinned: false,
+    showPinIcon: true,
+    hasBrowser: false,
+    regeneratingTitle: false,
+  }
+
+  test('Given 有进行中的 Goal When 解析 Then 靶心排在置顶之后、定时之前', () => {
+    expect(resolveSessionLeadingMarkers({ ...base, pinned: true, goalStatus: 'active' }))
+      .toEqual(['pin', 'goal'])
+  })
+
+  test('Given Goal 未结束（暂停/受阻/预算耗尽/停止中）When 解析 Then 仍然显示标记', () => {
+    for (const status of ['paused', 'blocked', 'budget_limited', 'stopping'] as const) {
+      expect(resolveSessionLeadingMarkers({ ...base, goalStatus: status })).toEqual(['goal'])
+    }
+  })
+
+  test('Given Goal 已结束 When 解析 Then 不再显示标记（结果已由左侧竖条表达）', () => {
+    for (const status of ['completed', 'stopped', 'failed'] as const) {
+      expect(resolveSessionLeadingMarkers({ ...base, goalStatus: status })).toEqual([])
+    }
+  })
+
+  test('Given 既有定时来源又有未结束 Goal When 解析 Then 只留 Goal 一种驱动源', () => {
+    expect(resolveSessionLeadingMarkers({
+      ...base,
+      sourceAutomationId: 'auto-1',
+      hasBrowser: true,
+      goalStatus: 'active',
+    })).toEqual(['goal', 'browser'])
+  })
+
+  test('Given Goal 已结束且来源是定时任务 When 解析 Then 回落到定时标记', () => {
+    expect(resolveSessionLeadingMarkers({
+      ...base,
+      sourceAutomationId: 'auto-1',
+      goalStatus: 'completed',
+    })).toEqual(['automation'])
+  })
+})
+
+describe('limitSessionLeadingMarkers — 行首标记容量上限', () => {
+  test('Given 不超过上限 When 切分 Then 全部可见且不折叠', () => {
+    expect(limitSessionLeadingMarkers(['pin', 'goal', 'browser']))
+      .toEqual({ visible: ['pin', 'goal', 'browser'], overflow: [] })
+  })
+
+  test('Given 超过上限 When 切分 Then 按顺序保留前三枚、其余折叠成 +N', () => {
+    expect(limitSessionLeadingMarkers(['pin', 'goal', 'automation', 'browser', 'regeneratingTitle']))
+      .toEqual({
+        visible: ['pin', 'goal', 'automation'],
+        overflow: ['browser', 'regeneratingTitle'],
+      })
+  })
+
+  test('Given 瞬时标记排在末尾 When 溢出 Then 优先被折叠的是浏览器与生成标题', () => {
+    expect(limitSessionLeadingMarkers(['pin', 'goal', 'delegation', 'browser']).overflow)
+      .toEqual(['browser'])
   })
 })
 describe('resolveDeleteShortcutAction', () => {
