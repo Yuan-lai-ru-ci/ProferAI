@@ -170,7 +170,33 @@ export function writeGlobalMemoryFile(configDir: string, relativePath: string, c
   })
 }
 
+/** 在写锁内读取、去重并追加；不允许通过此入口改动索引。 */
+export function appendGlobalMemoryFile(configDir: string, relativePath: string, entry: string): { added: boolean } {
+  if (relativePath === INDEX_FILE) throw new Error('追加入口不能修改全局记忆索引')
+  if (typeof entry !== 'string' || !entry.trim() || entry.length > 6000) throw new Error('全局记忆条目无效')
+  const root = ensureGlobalMemoryInitialized(configDir)
+  const file = resolveMemoryPath(root, relativePath)
+  mkdirSync(resolve(file, '..'), { recursive: true, mode: 0o700 })
+  return withFileLock(join(root, WRITE_LOCK_FILE), () => {
+    const realRoot = realpathSync(root)
+    const realParent = realpathSync(resolve(file, '..'))
+    const parentRel = relative(realRoot, realParent)
+    if (parentRel.startsWith(`..${sep}`) || parentRel === '..') throw new Error('全局记忆路径越界')
+    const current = existsSync(file) ? readFileSync(file, 'utf8') : ''
+    if (Buffer.byteLength(current, 'utf8') > MAX_FILE_BYTES) throw new Error('全局记忆内容超过 10 MB')
+    const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
+    const target = normalize(entry)
+    if (normalize(current).includes(target)) return { added: false }
+    const separator = current && !current.endsWith('\n') ? '\n' : ''
+    const next = `${current}${separator}\n${entry.trim()}\n`
+    if (Buffer.byteLength(next, 'utf8') > MAX_FILE_BYTES) throw new Error('全局记忆内容超过 10 MB')
+    writeFileSync(file, next, { encoding: 'utf8', mode: 0o600 })
+    return { added: true }
+  })
+}
+
 /** 删除单个记忆文件；索引文件不可删除。 */
+
 export function deleteGlobalMemoryFile(configDir: string, relativePath: string): void {
   if (relativePath === INDEX_FILE) throw new Error('不能删除全局记忆索引')
   const root = ensureGlobalMemoryInitialized(configDir)

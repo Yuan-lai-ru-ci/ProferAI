@@ -6,8 +6,9 @@
  * `proferFileChanges` 上，随消息一起落盘。
  *
  * 渲染层不再从命令文本推断路径——那正是过去产生 `<meta>` / `%{http_code}` /
- * `=` 这类假 chip 的根因。历史会话没有账本字段时，只回退到 Edit/Write 的
- * tool_use 参数，不回退到 Bash 正则。
+ * `=` 这类假 chip 的根因。每次调用没有账本字段时，只回退到 Edit/Write 的
+ * tool_use 参数；是否回退按 tool_use_id 判断，不能因为一条账本记录就丢掉整轮的其他修改。
+ * Bash 命令文本始终不参与推断，避免生成假路径 chip。
  *
  * 子代理（Agent/Task）的修改也会冒泡到此处——因为 SDK 的子代理 assistant
  * 消息同样存在于 turn.turnMessages 中（通过 parent_tool_use_id 关联）。
@@ -86,7 +87,11 @@ export function collectAuthoritativeFileChanges(turnMessages: SDKMessage[]): str
   return paths
 }
 
-function collectFilePaths(turnMessages: SDKMessage[], tools: Set<string> = MUTATING_TOOLS): string[] {
+function collectFilePaths(
+  turnMessages: SDKMessage[],
+  tools: Set<string> = MUTATING_TOOLS,
+  coveredToolUseIds: ReadonlySet<string> = new Set(),
+): string[] {
   const failed = new Set<string>()
   for (const msg of turnMessages) {
     if (msg.type !== 'user') continue
@@ -108,7 +113,7 @@ function collectFilePaths(turnMessages: SDKMessage[], tools: Set<string> = MUTAT
     for (const block of blocks) {
       if (block.type !== 'tool_use') continue
       const tu = block as SDKToolUseBlock
-      if (failed.has(tu.id)) continue
+      if (failed.has(tu.id) || coveredToolUseIds.has(tu.id)) continue
       if (!tools.has(tu.name)) continue
 
       const filePath = getFilePath(tu.name, tu.input as Record<string, unknown>)
@@ -123,11 +128,25 @@ function collectFilePaths(turnMessages: SDKMessage[], tools: Set<string> = MUTAT
 /**
  * 本轮修改类工具触及的文件（按出现顺序去重，失败调用已排除）。
  *
- * 优先用主进程账本；历史会话没有账本字段时回退到 Edit/Write 的 tool_use 参数。
+ * 每次调用优先用主进程账本；仅未被账本覆盖的 Edit/Write 回退到 tool_use 参数。
+ * 空账本同样表示该调用已覆盖，不能把未发生的写入从参数重新补回。
  */
 export function collectModifiedFilePaths(turnMessages: SDKMessage[]): string[] {
-  const authoritative = collectAuthoritativeFileChanges(turnMessages)
-  return authoritative.length > 0 ? authoritative : collectFilePaths(turnMessages)
+  const coveredToolUseIds = new Set<string>()
+  for (const msg of turnMessages) {
+    if (msg.type !== 'user') continue
+    const blocks = (msg as SDKUserMessage).message?.content
+    if (!Array.isArray(blocks)) continue
+    for (const block of blocks) {
+      if (block.type !== 'tool_result') continue
+      const result = block as SDKToolResultBlock & { proferFileChanges?: ProferFileChange[] }
+      if (Array.isArray(result.proferFileChanges)) coveredToolUseIds.add(result.tool_use_id)
+    }
+  }
+  return [...new Set([
+    ...collectAuthoritativeFileChanges(turnMessages),
+    ...collectFilePaths(turnMessages, MUTATING_TOOLS, coveredToolUseIds),
+  ])]
 }
 
 /**

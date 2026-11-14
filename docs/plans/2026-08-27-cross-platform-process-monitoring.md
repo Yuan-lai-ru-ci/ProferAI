@@ -1,5 +1,6 @@
 # Cross-Platform Process Monitoring Implementation Plan
 
+> Lifecycle: **Implemented in source; this is a historical implementation plan**. Platform-specific behavior and current acceptance status must be verified against current code/tests and target OS, not inferred from the original plan.
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make Profer's runtime process panel and process termination work on macOS while preserving the existing Windows implementation and PID/start-time safety checks.

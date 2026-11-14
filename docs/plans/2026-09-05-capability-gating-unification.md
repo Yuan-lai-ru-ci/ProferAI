@@ -1,5 +1,6 @@
 # Capability Gating Unification Implementation Plan
 
+> Lifecycle: **Registry implementation exists; this is a historical plan**. Full tool-registration and edition matrix still requires review against current code/tests.
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Extend the existing Agent preset gate into one shared capability registry for browser, clipboard, preview, image, web, and PPT materials, so Claude, Pi, prompts, schemas, and settings consume the same group/tool definitions.

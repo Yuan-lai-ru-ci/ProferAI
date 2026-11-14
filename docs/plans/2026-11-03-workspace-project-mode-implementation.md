@@ -1,7 +1,7 @@
 # 工作区项目模式实施规格
 
 > 日期：2026-11-03（GMT+8）
-> 状态：待实施；本文是文件级施工清单，依据《2026-10-19 工作区项目模式设计》v2
+> 生命周期：**主要链路已实施；本文为历史实施规格**。当前会话布局与项目存储实现见 `packages/session-store/src/session-layout.ts` 和 `paths.ts`；本文件中的 I3 与后续项目自包含设计冲突，已由 `2026-11-04-project-session-self-contained.md` 取代。
 > 前置决定：存量 managed 工作区原样保留，不做迁移；本轮只新增 project 模式
 
 ## 1. 不变量
@@ -12,7 +12,7 @@
 |---|---|
 | I1 | managed 模式的路径、cwd、技能、预设、会话行为零变化 |
 | I2 | project 模式下任何代码路径都不得递归删除 `rootPath` |
-| I3 | 会话消息、checkpoint、blobs、attachments 不写入项目目录 |
+| I3 | （原设计）会话消息、checkpoint、blobs、attachments 不写入项目目录；**此约束已被 2026-11-04 项目会话自包含方案取代** |
 | I4 | `rootPath` 不存在时不自动创建，抛明确错误 |
 | I5 | 同一 `rootPath`（realpath 归一化后）只允许一个工作区 |
 | I6 | 旧文件名（`workspace-profile.md`、`agent-presets.json`）继续可读，新项目写新名；项目模式预设新布局为 `presets/` 目录 + `_config.json` |

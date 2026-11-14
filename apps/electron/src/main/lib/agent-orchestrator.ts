@@ -163,7 +163,7 @@ import { createElectronSessionStorePaths } from './session-store-host'
 import { loadPiRewindTracker, persistPiRewindTracker } from './agent-rewind-pi'
 import { buildRewindNoticePrompt } from './agent-rewind-notice'
 import { prepareRuntimeSkills } from './global-skill-manager'
-import { buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
+import { buildSkillRoutingAppliedNotice, buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
 import { captureSkillToolInventory } from './skill-tool-inventory'
 import { getRuntimeStatus } from './runtime-init'
@@ -1118,7 +1118,9 @@ export class AgentOrchestrator {
    */
   /** 用户点名的 Skill 没加载时落盘一条系统提示并推给界面；失败只记日志，不影响本轮运行。 */
   private persistSkillRoutingNotice(sessionId: string, routed: SkillRoutingResult): void {
-    const notice = buildSkillRoutingNotice(routed)
+    // 成功注入的 Skill 也走同一通道：正文注入不产生工具调用，
+    // 界面无任何痕迹会让用户以为 Skill 没生效。
+    const notice = buildSkillRoutingNotice(routed) ?? buildSkillRoutingAppliedNotice(routed)
     if (!notice) return
     const message = { type: 'system', subtype: 'skill_routing_notice', message: notice, _createdAt: Date.now() } as unknown as SDKMessage
     this.eventPort.emit(sessionId, { kind: 'sdk_message', message })
@@ -2491,6 +2493,14 @@ export class AgentOrchestrator {
       // 草稿区判定基准是 storageDir：project 下它不等于 cwd，项目内改动必须照常进 file-changes。
       // managed 下 storageDir === cwd，行为与改造前一致。
       const draftDiscardRoot = agentStorageDir ?? agentCwd
+      // chip-only 观察不写 Shadow/rewind；目录差分不能证明会话对文件的所有权。
+      const onFileChangeObserved = (toolCallId: string, fact: { path: string; source: string }): void => {
+        if (isPathInsideDirectory(fact.path, draftDiscardRoot)) return
+        const existing = fileWritesByToolUse.get(toolCallId) ?? []
+        if (!existing.some(item => item.path === fact.path)) {
+          fileWritesByToolUse.set(toolCallId, [...existing, fact])
+        }
+      }
       const browserAllowedToolAliases = SAFE_TOOLS
         .filter((toolName) => toolName.startsWith('Browser'))
         .map((toolName) => `mcp__browser__${toolName}`)
@@ -2508,6 +2518,7 @@ export class AgentOrchestrator {
         // Pi must receive the channel model unchanged: Claude's `[1m]` suffix is not a provider model ID.
         model: agentRuntime === 'pi' ? selectedModelId : effectiveSdkModelId,
         cwd: agentCwd,
+        onFileChangeObserved,
         ...(agentRuntime === 'claude' && { sdkCliPath: cliPath, env: sdkEnv, rewindEvidence: createElectronClaudeRewindEvidencePort() }),
         // project 下把 storageDir 那份设置内联给 SDK（flag settings 层）；managed 不传，走 cwd 文件。
         ...(agentRuntime === 'claude' && claudeInlineSdkSettings && { settings: claudeInlineSdkSettings }),
@@ -2567,11 +2578,7 @@ export class AgentOrchestrator {
             // 在这里就不入账，历史记录与 chip 都不会被草稿污染。
             // 不能用 cwd 判定：project 下 cwd 是项目根，会把项目内所有改动当成草稿丢掉。
             if (isPathInsideDirectory(fact.path, draftDiscardRoot)) return
-            const existing = fileWritesByToolUse.get(toolCallId) ?? []
-            if (!existing.some((item) => item.path === fact.path)) {
-              existing.push(fact)
-              fileWritesByToolUse.set(toolCallId, existing)
-            }
+            onFileChangeObserved(toolCallId, fact)
             pushShadowEvidence({
               toolUseId: toolCallId,
               path: fact.path,

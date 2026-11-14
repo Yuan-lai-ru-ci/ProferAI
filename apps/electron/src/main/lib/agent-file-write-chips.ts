@@ -6,13 +6,14 @@
  * 会话历史回放也靠它恢复。
  *
  * 新链没有这段，于是消息气泡里看不到「改了哪些文件」，重启后连回放也没有。
- * 这里把同一份事实搬过来，并且保持两条约束：
- * - 记账只信 provider 的受控写回调（`onFileWrite`），绝不解析 Bash 命令文本猜路径；
+ * 这里把展示记录搬过来，并保持展示与恢复证据分离：
+ * - 只消费 provider 的受控写入或 chip-only 观察（`onFileWrite` / `onFileChangeObserved`），不解析命令文本；
+ * - 本表只供消息展示，Bash 元数据差分不构成 Shadow 或 rewind 写入归属证据；
  * - 落点在 `provider-bridge` 的唯一出口，桌面与 headless 两条入口自动同时生效。
  */
 import type { SDKMessage, SDKToolResultBlock } from '@profer/shared'
 
-/** 一次受控写入：路径 + 触发方式（与旧链 `fileWritesByToolUse` 同形） */
+/** 一条 chip 展示记录：受控写入路径或低置信度的 Bash 目录变化观察。 */
 export interface FileWriteChipFact {
   path: string
   source: string
@@ -48,7 +49,7 @@ export function createFileWriteChipLedger(): FileWriteChipLedger {
       if (!sessionId || !toolUseId || !fact.path) return
       const writes = sessionMap(sessionId)
       const existing = writes.get(toolUseId) ?? []
-      // 同一工具调用对同一路径只记一次：Pi 会在写入前后各上报一次。
+      // 同一工具调用对同一路径只记一次，避免多次上报生成重复 chip。
       if (existing.some(item => item.path === fact.path)) return
       writes.set(toolUseId, [...existing, fact])
       if (writes.size > MAX_PENDING_PER_SESSION) {

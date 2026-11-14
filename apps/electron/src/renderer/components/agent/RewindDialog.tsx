@@ -38,6 +38,11 @@ export function getRewindConfirmCopy(intent: RewindDialogIntent): {
   }
 }
 
+export function hasRewindFileChanges(plan: RewindPlan): boolean {
+  if (plan.mode === 'conversation') return false
+  return (plan.files ?? []).some((item) => item.action === 'restore' || item.action === 'delete')
+}
+
 /**
  * 先按「对话 + 文件」准备；文件回退不可用时（该会话还没记录过文件变化、工作区没接底座）
  * 自动降级成只回退对话。降级是静默的：让用户为「为什么文件回不去」做选择没有意义。
@@ -72,14 +77,51 @@ function resultSummary(result: RewindResult): string {
 
 export function RewindDialog({ open, onOpenChange, sessionId, target, client, intent = 'rewind', draft, onCommitted, onError }: RewindDialogProps): React.ReactElement {
   const [plan, setPlan] = React.useState<RewindPlan | null>(null)
-  const [mode, setMode] = React.useState<RewindMode>('both')
   const [result, setResult] = React.useState<RewindResult | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<Error | null>(null)
   const coordinator = React.useRef(new RewindRequestCoordinator()).current
+  const executingPlanId = React.useRef<string | null>(null)
+  const onOpenChangeRef = React.useRef(onOpenChange)
+  const onCommittedRef = React.useRef(onCommitted)
+  const onErrorRef = React.useRef(onError)
+  const draftRef = React.useRef(draft)
+  onOpenChangeRef.current = onOpenChange
+  onCommittedRef.current = onCommitted
+  onErrorRef.current = onError
+  draftRef.current = draft
   const copy = getRewindConfirmCopy(intent)
 
-  // 打开即准备：没有「生成预览」这一步，确认框里直接给结论和按钮。
+  const executePlan = React.useCallback((nextPlan: RewindPlan, autoClose: boolean): void => {
+    if (executingPlanId.current === nextPlan.planId) return
+    executingPlanId.current = nextPlan.planId
+    setLoading(true)
+    setError(null)
+    const request = coordinator.execute(createRewindClient(client), { sessionId, planId: nextPlan.planId, expectedRevision: nextPlan.revision })
+    if (!request) {
+      executingPlanId.current = null
+      setLoading(false)
+      return
+    }
+    void request
+      .then((response) => {
+        setResult(response)
+        onCommittedRef.current?.(response, draftRef.current || undefined)
+        if (autoClose && response.status === 'committed') onOpenChangeRef.current(false)
+      })
+      .catch((cause) => {
+        const nextError = asRewindError(cause)
+        setError(nextError)
+        onErrorRef.current?.(nextError)
+        if (autoClose) onOpenChangeRef.current(false)
+      })
+      .finally(() => {
+        executingPlanId.current = null
+        setLoading(false)
+      })
+  }, [client, coordinator, onCommitted, onError, sessionId])
+
+  // 打开即准备：没有文件回退时直接执行，不显示确认框。
   React.useEffect(() => {
     if (!open) return
     let cancelled = false
@@ -91,13 +133,14 @@ export function RewindDialog({ open, onOpenChange, sessionId, target, client, in
       .then((prepared) => {
         if (cancelled) return
         setPlan(prepared.plan)
-        setMode(prepared.mode)
+        if (!hasRewindFileChanges(prepared.plan)) executePlan(prepared.plan, true)
       })
       .catch((cause) => {
         if (cancelled) return
         const nextError = asRewindError(cause)
         setError(nextError)
-        onError?.(nextError)
+        onErrorRef.current?.(nextError)
+        onOpenChangeRef.current(false)
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -105,32 +148,15 @@ export function RewindDialog({ open, onOpenChange, sessionId, target, client, in
     return () => {
       cancelled = true
     }
-  }, [client, coordinator, onError, open, sessionId, target])
+  }, [client, coordinator, executePlan, open, sessionId, target])
 
   const execute = React.useCallback(() => {
     if (!plan || loading) return
-    setLoading(true)
-    setError(null)
-    const request = coordinator.execute(createRewindClient(client), { sessionId, planId: plan.planId, expectedRevision: plan.revision })
-    if (!request) {
-      setLoading(false)
-      return
-    }
-    void request
-      .then((response) => {
-        setResult(response)
-        onCommitted?.(response, draft || undefined)
-      })
-      .catch((cause) => {
-        const nextError = asRewindError(cause)
-        setError(nextError)
-        onError?.(nextError)
-      })
-      .finally(() => setLoading(false))
-  }, [client, coordinator, draft, loading, onCommitted, onError, plan, sessionId])
+    executePlan(plan, false)
+  }, [executePlan, loading, plan])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open && plan !== null && hasRewindFileChanges(plan)} onOpenChange={onOpenChange}>
       <DialogContent className="w-[min(440px,calc(100vw-2rem))] gap-3 p-4 sm:p-5" aria-describedby="rewind-dialog-description">
         <DialogTitle className="flex items-center gap-2 text-base">
           <RotateCcw className="size-4" />
@@ -159,9 +185,6 @@ export function RewindDialog({ open, onOpenChange, sessionId, target, client, in
         )}
         {result && (
           <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 p-2 text-xs">{resultSummary(result)}</div>
-        )}
-        {!loading && plan && mode === 'conversation' && !result && (
-          <div className="text-xs text-muted-foreground">本次只回退对话，文件保持不变。</div>
         )}
         <DialogFooter className="gap-2 sm:gap-2">
           <button type="button" className="h-8 rounded-md px-3 text-xs hover:bg-accent" disabled={loading} onClick={() => onOpenChange(false)}>

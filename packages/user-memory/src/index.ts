@@ -37,6 +37,7 @@ export {
   listGlobalMemoryFiles,
   readGlobalMemoryFile,
   writeGlobalMemoryFile,
+  appendGlobalMemoryFile,
   deleteGlobalMemoryFile,
   searchGlobalMemory,
 } from './global-memory'

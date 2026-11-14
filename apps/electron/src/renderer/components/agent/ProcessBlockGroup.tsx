@@ -1,9 +1,10 @@
 import * as React from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Zap } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { Spinner } from '@profer/ui/primitives/spinner'
 import { shouldRestartProcessCollapse } from './process-fold-state'
 import { cn } from '@/lib/utils'
-import { getToolDisplayName, getToolIcon } from './tool-utils'
+import { extractSkillNameFromRead, getToolDisplayName, getToolIcon } from './tool-utils'
 import type {
   SDKContentBlock,
   SDKToolUseBlock,
@@ -78,6 +79,46 @@ export function buildProcessGroupToolNames(blocks: SDKContentBlock[]): string[] 
   }
 
   return toolNames
+}
+
+/** 折叠摘要行里的一个工具徽标 */
+export interface ProcessGroupToolBadge {
+  /** 去重键：Skill 按 Skill 名去重，其他工具按工具名去重。 */
+  key: string
+  icon: LucideIcon
+  label: string
+}
+
+/**
+ * 构建折叠摘要行的工具徽标。
+ *
+ * Pi Runtime 没有独立的 Skill 工具，Skill 是通过 read 读取 `SKILL.md` 生效的；
+ * 因此在这里把“读取 Skill 正文”归并为 Skill 徽标（闪电图标），而不是几个
+ * 看起来一模一样的文件图标。每个 Skill 单独占一个徽标（按名字去重），受 4 个
+ * 上限约束时也能看出本轮触发了哪几个 Skill。
+ */
+export function buildProcessGroupToolBadges(blocks: SDKContentBlock[]): ProcessGroupToolBadge[] {
+  const badges: ProcessGroupToolBadge[] = []
+  const seen = new Set<string>()
+
+  for (const block of blocks) {
+    if (block.type !== 'tool_use') continue
+    const toolBlock = block as SDKToolUseBlock
+    if (isGoalUpdateToolName(toolBlock.name) || isGoalProposalToolName(toolBlock.name)) continue
+
+    const skillName = extractSkillNameFromRead(toolBlock.name, toolBlock.input ?? {})
+    const key = skillName ? `Skill:${skillName}` : toolBlock.name
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    badges.push(
+      skillName
+        ? { key, icon: Zap, label: `使用技能：${skillName}` }
+        : { key, icon: getToolIcon(toolBlock.name), label: getToolDisplayName(toolBlock.name) },
+    )
+  }
+
+  return badges
 }
 
 export function ProcessBlockGroup({ blocks, isStreaming, scrollAnchorId, keepExpandedAfterComplete, isMessageTail = false, onContentVisibilityChange, summaryBlocks, children }: ProcessBlockGroupProps): React.ReactElement {
@@ -213,12 +254,12 @@ export function ProcessBlockGroup({ blocks, isStreaming, scrollAnchorId, keepExp
     () => buildProcessGroupSummary(summaryBlocks ?? blocks),
     [summaryBlocks, blocks],
   )
-  const toolNames = React.useMemo(
-    () => buildProcessGroupToolNames(summaryBlocks ?? blocks),
+  const toolBadges = React.useMemo(
+    () => buildProcessGroupToolBadges(summaryBlocks ?? blocks),
     [summaryBlocks, blocks],
   )
-  const visibleToolNames = toolNames.slice(0, MAX_PROCESS_GROUP_ICONS)
-  const hiddenToolCount = Math.max(0, toolNames.length - visibleToolNames.length)
+  const visibleToolBadges = toolBadges.slice(0, MAX_PROCESS_GROUP_ICONS)
+  const hiddenToolCount = Math.max(0, toolBadges.length - visibleToolBadges.length)
 
   // 内容区子项渲染策略：
   // - 流式中：每个新块有入场动画，最新一段（消息末尾过程组的最后一个 child）保持正常显示，
@@ -276,15 +317,15 @@ export function ProcessBlockGroup({ blocks, isStreaming, scrollAnchorId, keepExp
             （{collapseCountdown}）
           </span>
         )}
-        {visibleToolNames.length > 0 && (
+        {visibleToolBadges.length > 0 && (
           <span className="flex shrink-0 items-center gap-1 text-muted-foreground/60">
-            {visibleToolNames.map((toolName) => {
-              const ToolIcon = getToolIcon(toolName)
+            {visibleToolBadges.map((badge) => {
+              const ToolIcon = badge.icon
               return (
                 <ToolIcon
-                  key={toolName}
-                  className="size-3.5"
-                  aria-label={getToolDisplayName(toolName)}
+                  key={badge.key}
+                  className={cn('size-3.5', badge.key.startsWith('Skill:') && 'text-primary/70')}
+                  aria-label={badge.label}
                 />
               )
             })}

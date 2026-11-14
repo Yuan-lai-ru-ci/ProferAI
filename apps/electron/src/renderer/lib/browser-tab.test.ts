@@ -363,6 +363,25 @@ test('Given 用户从浏览器切到规划中心 When 旧手动打开结果返�
   expect(store.get(activeTabIdAtom)).toBe('s1')
 })
 
+test('Given 用户正看会话 When Agent 首次导航自动展示 Then 在侧边分屏打开浏览器', () => {
+  const store = getDefaultStore()
+  store.set(appModeAtom, 'agent')
+  store.set(activeViewAtom, 'conversations')
+  store.set(currentAgentSessionIdAtom, 's1')
+  store.set(tabsAtom, [agentTab('s1')])
+  store.set(activeTabIdAtom, 's1')
+  openBrowserTabFromPush(state({
+    sessionId: 's1',
+    activeTabId: 't1',
+    agentTabId: 't1',
+    tabs: [page('t1', '页面一')],
+  }), { autoOpen: true })
+  const browserTab = store.get(tabsAtom).find((tab) => tab.type === 'browser')
+  expect(browserTab?.browserTabId).toBe('t1')
+  const group = store.get(tabGroupsAtom).find((item) => item.leftTabId === 's1')
+  expect(group?.rightTabId).toBe(browserTab?.id ?? null)
+})
+
 afterEach(() => {
   const store = getDefaultStore()
   store.set(appModeAtom, 'scratch')

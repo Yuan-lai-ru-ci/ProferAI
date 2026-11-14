@@ -318,6 +318,22 @@ const NOTICE_REASONS: Readonly<Record<SkillRoutingCode, string>> = {
   'budget-deferred': '正文超出本轮预算',
 }
 
+/**
+ * 本轮已实际生效的 Skill 一行提示。
+ *
+ * Pi/Claude 都会把选中 Skill 的正文直接注入提示词，**不产生任何工具调用**，
+ * 所以折叠摘要行的工具图标里永远不会出现 Skill 闪电；若这里不提示，
+ * 用户完全无法看出本轮用过哪个 Skill。只列 `selected`（已注入），
+ * `hints` 仅是用词猜测、正文未注入，不得计入。
+ */
+export function buildSkillRoutingAppliedNotice(result: SkillRoutingResult): string | undefined {
+  const applied = result.selected.filter(item =>
+    !result.diagnostics.some(diagnostic => diagnostic.slug === item.slug))
+  if (!applied.length) return undefined
+  const names = applied.map(item => `「${item.slug}」`).join('、')
+  return `已加载 Skill：${names}`
+}
+
 /** 用户显式引用的 Skill 没加载时给界面的一行提示；正文超预算仍会按需读取，不算失败。 */
 export function buildSkillRoutingNotice(result: SkillRoutingResult): string | undefined {
   const failures = result.diagnostics.filter(d => d.code !== 'budget-deferred')

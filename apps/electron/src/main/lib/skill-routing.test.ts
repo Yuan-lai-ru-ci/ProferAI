@@ -6,7 +6,7 @@ import { prepareAgentSkillRouting } from './skill-runtime-routing'
 import { DOMParser } from '@xmldom/xmldom'
 import { join } from 'node:path'
 import { createEffectiveAgentPresetPolicy, type AgentPreset } from '@profer/shared'
-import { buildSkillCatalog, buildSkillRoutingNotice, createSkillRoutingSnapshot, routeSkillsForTask, type SkillRoutingSnapshot } from './skill-routing'
+import { buildSkillCatalog, buildSkillRoutingAppliedNotice, buildSkillRoutingNotice, createSkillRoutingSnapshot, routeSkillsForTask, type SkillRoutingSnapshot } from './skill-routing'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -254,5 +254,23 @@ describe('Skill 未加载的用户提示', () => {
     expect(buildSkillRoutingNotice(denied)).toBe('Skill 未加载：pdf（当前预设未启用）；nope（没有找到这个 Skill）')
     expect(buildSkillRoutingNotice(routeSkillsForTask(await snapshot(), { userMessage: '/skill:pdf 合并 PDF' }))).toBeUndefined()
     expect(buildSkillRoutingNotice({ prompt: '', selected: [], recommended: [], hints: [], diagnostics: [{ slug: 'pdf', code: 'budget-deferred' }] })).toBeUndefined()
+  })
+})
+
+describe('Skill 已加载的用户提示', () => {
+  test('正文注入不产生工具调用，因此必须给出已加载提示', async () => {
+    const routed = routeSkillsForTask(await snapshot(), { userMessage: '/skill:pdf 合并 PDF' })
+    expect(buildSkillRoutingAppliedNotice(routed)).toBe('已加载 Skill：「pdf」')
+  })
+
+  test('用词猜测的 hints 未注入正文，不得计入已加载', async () => {
+    expect(buildSkillRoutingAppliedNotice({ prompt: '', selected: [], recommended: [], hints: [{ slug: 'pdf', reason: 'lexical-hint' }], diagnostics: [] })).toBeUndefined()
+  })
+
+  test('未加载的 Skill 不算已加载；空结果返回 undefined', async () => {
+    const closed = await snapshot({ skillSlugs: [] })
+    const denied = routeSkillsForTask(closed, { userMessage: '/skill:pdf 帮我处理' })
+    expect(buildSkillRoutingAppliedNotice(denied)).toBeUndefined()
+    expect(buildSkillRoutingAppliedNotice({ prompt: '', selected: [], recommended: [], hints: [], diagnostics: [] })).toBeUndefined()
   })
 })

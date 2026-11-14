@@ -88,6 +88,7 @@ import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { appendGraphEvent, queryNodeById } from '../project-graph-service'
 import { getWorkspaceMemoryArchivePath } from '../agent-workspace-manager'
 import { searchGlobalMemory, readGlobalMemoryFile } from '../global-memory-service'
+import { appendGlobalMemoryEntry, GLOBAL_MEMORY_APPEND_DESCRIPTION, type GlobalMemoryEntry } from '../global-memory-operations'
 import {
   fetchWebPage,
   formatFetchResults,
@@ -210,6 +211,25 @@ function textToolResult(text: string, details?: unknown): AgentToolResult<unknow
  */
 export function buildPiMemoryArchiveTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'workspaceSlug'>): ToolDefinition[] {
   const globalTools: ToolDefinition[] = [
+    sdk.defineTool({
+      name: 'mcp__global-memory__append_global_memory',
+      label: '追加全局记忆',
+      description: GLOBAL_MEMORY_APPEND_DESCRIPTION,
+      parameters: Type.Object({
+        category: Type.Union([Type.Literal('profile'), Type.Literal('preferences'), Type.Literal('inference')]),
+        entry: Type.String({ minLength: 3, maxLength: 2000 }),
+        confidence: Type.Optional(Type.Literal('high')),
+        evidence: Type.Optional(Type.Array(Type.Object({
+          sessionId: Type.String({ minLength: 1, maxLength: 200 }),
+          date: Type.String(), observation: Type.String({ minLength: 1, maxLength: 300 }),
+        }), { minItems: 2, maxItems: 5 })),
+      }),
+      async execute(_toolCallId, params) {
+        try {
+          return jsonToolResult({ ...appendGlobalMemoryEntry(params as GlobalMemoryEntry), message: '全局记忆写入已完成；请在回复中简要告知用户写入主题。' })
+        } catch (error) { return jsonToolError(error) }
+      },
+    }),
     sdk.defineTool({
       name: 'mcp__global-memory__search_global_memory',
       label: '搜索全局记忆',

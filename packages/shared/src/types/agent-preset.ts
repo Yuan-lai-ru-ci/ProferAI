@@ -169,6 +169,7 @@ export const AGENT_PRESET_CAPABILITY_GROUPS = [
       capabilityTool('search_memory', '搜索个人记忆', '检索工作区长期记忆索引'),
       capabilityTool('search_global_memory', '搜索全局记忆', '检索跨工作区的用户级记忆'),
       capabilityTool('read_global_memory', '读取全局记忆', '读取全局记忆索引或主题文件'),
+      capabilityTool('append_global_memory', '追加全局记忆', '沉淀用户背景、稳定偏好与有依据的推断', 'write'),
     ],
   }),
   capabilityGroup({

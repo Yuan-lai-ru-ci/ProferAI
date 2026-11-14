@@ -1,6 +1,6 @@
 {
   "name": "@profer/electron",
-  "version": "0.16.25",
+  "version": "0.16.26",
   "description": "Profer",
   "main": "dist/main.cjs",
   "author": "Profer Team",
@@ -45,7 +45,7 @@
     "verify:release-assets:unsigned": "node scripts/verify-release-assets-unsigned.cjs",
     "verify:release-assets:commercial": "node scripts/verify-release-assets.cjs --edition commercial --unsigned",
     "verify:release-assets:commercial:signed": "node scripts/verify-release-assets.cjs --edition commercial",
-    "build:github": "bun run build:main-github && bun run verify:build-target:oss && bun run verify:oss-excludes-commercial && bun run build:preload && bun run build:renderer && bun run verify:renderer-edition:oss && bun run build:cli && bun run build:pen-ocr && bun run build:resources",
+    "build:github": "bun run build:main-github && bun run verify:build-target:oss && bun run verify:oss-excludes-commercial:strict && bun run build:preload && bun run build:renderer && bun run verify:renderer-edition:oss && bun run build:cli && bun run build:pen-ocr && bun run build:resources",
     "build:commercial": "bun run build:main-commercial && bun run verify:build-target:commercial && bun run verify:commercial-includes-commercial && bun run build:preload && bun run build:renderer:commercial && bun run verify:renderer-edition:commercial && bun run build:cli && bun run build:pen-ocr && bun run build:resources",
     "start": "bun run build && bunx electron .",
     "typecheck": "tsc --noEmit",

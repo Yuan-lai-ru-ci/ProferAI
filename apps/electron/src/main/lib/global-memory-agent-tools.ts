@@ -1,5 +1,6 @@
 import { filterDisabledTools } from '@profer/shared'
 import { searchGlobalMemory, readGlobalMemoryFile } from './global-memory-service'
+import { appendGlobalMemoryEntry, GLOBAL_MEMORY_APPEND_DESCRIPTION } from './global-memory-operations'
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }> }
 function result(payload: unknown): ToolResult {
@@ -26,6 +27,21 @@ export async function buildGlobalMemoryTools(sdk: typeof import('@anthropic-ai/c
         catch (error) { return result({ error: error instanceof Error ? error.message : String(error) }) }
       },
       { annotations: { readOnlyHint: true } },
+    ),
+    sdk.tool(
+      'append_global_memory',
+      GLOBAL_MEMORY_APPEND_DESCRIPTION,
+      {
+        category: z.enum(['profile', 'preferences', 'inference']),
+        entry: z.string().min(3).max(2000),
+        confidence: z.literal('high').optional(),
+        evidence: z.array(z.object({ sessionId: z.string().min(1).max(200), date: z.string(), observation: z.string().min(1).max(300) })).min(2).max(5).optional(),
+      },
+      async (args) => {
+        try { return result({ ...appendGlobalMemoryEntry(args), message: '全局记忆写入已完成；请在回复中简要告知用户写入主题。' }) }
+        catch (error) { return result({ error: error instanceof Error ? error.message : String(error) }) }
+      },
+      { annotations: { readOnlyHint: false, destructiveHint: false } },
     ),
   ]
 }

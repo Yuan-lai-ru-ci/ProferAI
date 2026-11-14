@@ -1,5 +1,6 @@
 # Agent 文件视觉预览 Implementation Plan
 
+> 生命周期：**已实现，本文是历史施工计划**。工具、服务和测试已进入当前源码；本文中的目录、SDK 版本和步骤只记录设计时预期，当前行为以源码和测试为准。
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** 为 Claude 和 Pi Agent 增加统一的 `inspect_preview` 内置工具，使 Agent 能在授权范围内实时读取文件内容并通过共享预览 renderer 观察视觉结果。

@@ -21,6 +21,8 @@ import {
   isBrowserTab,
   isPreviewTab,
   tabMruAtom,
+  tabMinimapCacheAtom,
+  deleteTabMinimapCacheEntry,
   type TabItem,
 } from '@/atoms/tab-atoms'
 import { browserPanelDismissedSessionIdsAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
@@ -145,6 +147,9 @@ export function useCloseTab(): UseCloseTabReturn {
       }
     } else if (closingTab.type === 'agent' || closingTab.type === 'chat') {
       const closingSessionId = closingTab.sessionId
+      // 迷你地图缓存只服务 hover 预览，可从消息重建：Tab 关掉就释放，
+      // 否则它按 sessionId 常驻，长期不重启的进程里只增不减。
+      store.set(tabMinimapCacheAtom, (prev) => deleteTabMinimapCacheEntry(prev, closingSessionId))
       setPreviewFilesByTab((prev) => {
         const next = new Map(prev)
         let changed = false

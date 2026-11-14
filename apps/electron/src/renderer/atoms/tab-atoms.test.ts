@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { closeTab, closeTabs, createPluginTabId, detachTab, ensureScratchPadTab, getPersistableTabState, isMovableSessionTab, openPluginTab, openTab, reconcileAgentTabTitles, selectSameModeCloseFallback, tabContextSessionId, FRP_GUIDE_TAB_ID, FRP_GUIDE_TAB_TITLE, TUTORIAL_TAB_ID, SCRATCH_PAD_ID, type TabItem } from './tab-atoms'
+import { createStore } from 'jotai'
+import { closeTab, closeTabs, tabMinimapCacheAtom, tabMinimapItemsAtomFamily, createPluginTabId, deleteTabMinimapCacheEntry, detachTab, ensureScratchPadTab, getPersistableTabState, isMovableSessionTab, openPluginTab, openTab, reconcileAgentTabTitles, selectSameModeCloseFallback, tabContextSessionId, TAB_MINIMAP_CACHE_LIMIT, writeTabMinimapCache, FRP_GUIDE_TAB_ID, FRP_GUIDE_TAB_TITLE, TUTORIAL_TAB_ID, SCRATCH_PAD_ID, type TabItem, type TabMinimapItem } from './tab-atoms'
 
 const tab = (id: string): TabItem => ({ id, type: 'agent', sessionId: id, title: id })
 
@@ -297,4 +298,51 @@ test('reconcileAgentTabTitles：不覆盖会话工作 Tab（预览 / 浏览器 /
   const preview = { ...tab('s1'), id: '__preview__:s1:/w/a.ts', type: 'preview' as const, title: 'a.ts' }
   const result = reconcileAgentTabTitles([preview], [{ id: 's1', title: '会话标题' }])
   expect(result[0]?.title).toBe('a.ts')
+})
+
+test('迷你地图缓存有上限：超限淘汰最旧，重复写入视为最近使用', () => {
+  const items = (n: number): TabMinimapItem[] => [{ id: `m${n}`, role: 'user', preview: `p${n}` }]
+  let cache = new Map<string, TabMinimapItem[]>()
+  for (let i = 0; i < TAB_MINIMAP_CACHE_LIMIT; i += 1) {
+    cache = writeTabMinimapCache(cache, `s${i}`, items(i))
+  }
+  expect(cache.size).toBe(TAB_MINIMAP_CACHE_LIMIT)
+
+  // 重写最旧的 s0 → 它变成最近使用，写入第 49 条时被淘汰的是 s1
+  cache = writeTabMinimapCache(cache, 's0', items(100))
+  cache = writeTabMinimapCache(cache, 'new', items(999))
+  expect(cache.size).toBe(TAB_MINIMAP_CACHE_LIMIT)
+  expect(cache.has('s0')).toBe(true)
+  expect(cache.has('s1')).toBe(false)
+  expect(cache.has('new')).toBe(true)
+})
+
+test('迷你地图缓存：同一份数组不产生新 Map，关闭 Tab 只释放对应条目', () => {
+  const items: TabMinimapItem[] = [{ id: 'a', role: 'user', preview: 'x' }]
+  const cache = writeTabMinimapCache(new Map<string, TabMinimapItem[]>(), 's1', items)
+  expect(writeTabMinimapCache(cache, 's1', items)).toBe(cache)
+  expect(deleteTabMinimapCacheEntry(cache, 'missing')).toBe(cache)
+
+  const cleared = deleteTabMinimapCacheEntry(cache, 's1')
+  expect(cleared.has('s1')).toBe(false)
+  // 原 Map 不被就地修改，避免读到半清理状态
+  expect(cache.has('s1')).toBe(true)
+})
+
+test('迷你地图按 Tab 切片：别的会话写入不改变本 Tab 的引用', () => {
+  const store = createStore()
+  const a: TabMinimapItem[] = [{ id: 'a', role: 'user', preview: 'x' }]
+  const b: TabMinimapItem[] = [{ id: 'b', role: 'assistant', preview: 'y' }]
+
+  store.set(tabMinimapCacheAtom, (prev) => writeTabMinimapCache(prev, 'A', a))
+  const before = store.get(tabMinimapItemsAtomFamily('A'))
+  expect(before).toBe(a)
+
+  // 另一个会话写入新缓存：A 的切片必须是同一引用，否则顶栏整排都会跟着重渲染
+  store.set(tabMinimapCacheAtom, (prev) => writeTabMinimapCache(prev, 'B', b))
+  expect(store.get(tabMinimapItemsAtomFamily('A'))).toBe(before)
+
+  // 未缓存过的 Tab 共用同一份空数组，避免每次派生都产出新引用
+  expect(store.get(tabMinimapItemsAtomFamily('missing-1')))
+    .toBe(store.get(tabMinimapItemsAtomFamily('missing-2')))
 })

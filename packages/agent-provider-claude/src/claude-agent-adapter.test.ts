@@ -136,13 +136,76 @@ describe('Claude provider：SDK 查询选项透传', () => {
     }
   })
 
+  test('Given chip observer When 成功 Write/Edit hook Then 按 tool ID 上报且不产生回退证据', async () => {
+    const harness = createHarness()
+    const observed: Array<{ id: string; path: string; source: string }> = []
+    try {
+      const stream = harness.adapter.query(baseInput('chip-hooks', {
+        cwd: '/fixture/cwd',
+        onFileChangeObserved: (id, fact) => { observed.push({ id, ...fact }) },
+      }))
+      const pending = stream[Symbol.asyncIterator]().next()
+      await waitUntil(() => harness.double.state.options !== undefined)
+      const hooks = harness.double.state.options!.hooks as {
+        PostToolUse?: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>
+        PostToolUseFailure?: unknown
+      }
+      expect(hooks.PostToolUse).toHaveLength(1)
+      const hook = hooks.PostToolUse![0]!.hooks[0]!
+      const context = { hook_event_name: 'PostToolUse', cwd: '/fixture/cwd' }
+      await Promise.all([
+        hook({ ...context, tool_name: 'Write', tool_use_id: 'w1', tool_input: { file_path: 'a.ts' } }),
+        hook({ ...context, tool_name: 'Edit', tool_use_id: 'e1', tool_input: { file_path: '/other/b.ts' } }),
+      ])
+      for (const tool_name of ['Bash', 'Read', 'mcp__write']) {
+        await hook({ ...context, tool_name, tool_use_id: tool_name, tool_input: { file_path: 'ignored.ts' } })
+      }
+      await hook({ ...context, tool_name: 'Write', tool_input: { file_path: 'no-id.ts' } })
+      await hook({ ...context, tool_name: 'Write', tool_use_id: 'empty', tool_input: { file_path: '' } })
+      expect(observed).toEqual([
+        { id: 'w1', path: '/fixture/cwd/a.ts', source: 'write' },
+        { id: 'e1', path: '/other/b.ts', source: 'edit' },
+      ])
+      expect(hooks.PostToolUseFailure).toBeUndefined()
+      harness.double.push({ type: 'result', subtype: 'success', session_id: 's', terminal_reason: 'completed' })
+      await pending
+    } finally {
+      harness.dispose()
+    }
+  })
+
+  test('Given chip observer 抛错 When PostToolUse Then 不阻断 SDK', async () => {
+    const harness = createHarness()
+    try {
+      const stream = harness.adapter.query(baseInput('chip-failure', {
+        cwd: '/fixture/cwd',
+        onFileChangeObserved: () => { throw new Error('chip failed') },
+      }))
+      const pending = stream[Symbol.asyncIterator]().next()
+      await waitUntil(() => harness.double.state.options !== undefined)
+      const hooks = harness.double.state.options!.hooks as {
+        PostToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>
+      }
+      await expect(hooks.PostToolUse[0]!.hooks[0]!({
+        hook_event_name: 'PostToolUse', cwd: '/fixture/cwd', tool_name: 'Write',
+        tool_use_id: 'w1', tool_input: { file_path: 'a.ts' },
+      })).resolves.toEqual({ continue: true })
+      harness.double.push({ type: 'result', subtype: 'success', session_id: 's', terminal_reason: 'completed' })
+      await pending
+    } finally {
+      harness.dispose()
+    }
+  })
+
   test('Given rewind evidence port When SDK 注册 hooks Then Write 以同一 tool_use_id 捕获前后版本', async () => {
     const harness = createHarness()
     const captures: ClaudeRewindEvidenceCaptureInput[] = []
     const records: ClaudeRewindToolEvidence[] = []
+    const chipPaths: string[] = []
     try {
       const stream = harness.adapter.query(baseInput('rewind-hooks', {
         cwd: '/fixture/cwd',
+        onFileChangeObserved: (_id, fact) => { chipPaths.push(fact.path) },
         rewindEvidence: {
           async capture(input) {
             captures.push(input)
@@ -171,10 +234,14 @@ describe('Claude provider：SDK 查询选项透传', () => {
         ...context, hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'write-1',
         tool_input: { file_path: 'tracked.txt' },
       }, 'write-1', { signal: new AbortController().signal })
-      await hooks.PostToolUse[0]!.hooks[0]!({
-        ...context, hook_event_name: 'PostToolUse', tool_name: 'Write', tool_use_id: 'write-1',
-        tool_input: { file_path: 'tracked.txt' }, tool_response: 'ok',
-      }, 'write-1', { signal: new AbortController().signal })
+      expect(hooks.PostToolUse).toHaveLength(2)
+      for (const matcher of hooks.PostToolUse) {
+        await matcher.hooks[0]!({
+          ...context, hook_event_name: 'PostToolUse', tool_name: 'Write', tool_use_id: 'write-1',
+          tool_input: { file_path: 'tracked.txt' }, tool_response: 'ok',
+        }, 'write-1', { signal: new AbortController().signal })
+      }
+      expect(chipPaths).toEqual(['/fixture/cwd/tracked.txt'])
       expect(captures.map(item => item.phase)).toEqual(['before', 'after'])
       expect(records).toMatchObject([{ toolUseId: 'write-1', status: 'complete' }])
       harness.double.push({ type: 'result', subtype: 'success', session_id: 'native', terminal_reason: 'completed' })

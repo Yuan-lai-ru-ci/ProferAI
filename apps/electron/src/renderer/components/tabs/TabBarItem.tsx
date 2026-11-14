@@ -20,7 +20,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
-import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
+import { tabMinimapItemsAtomFamily } from '@/atoms/tab-atoms'
 import { TabPreviewPanel } from './TabPreviewPanel'
 import { readNativePageRects, resolveTabPreviewLeft } from '@/lib/tab-preview-position'
 
@@ -110,7 +110,8 @@ export function TabBarItem({
   const [draftTitle, setDraftTitle] = React.useState(title)
   const [savingTitle, setSavingTitle] = React.useState(false)
   const titleInputRef = React.useRef<HTMLInputElement>(null)
-  const minimapCache = useAtomValue(tabMinimapCacheAtom)
+  // 只订阅本 Tab 的切片：流式输出写缓存时不会连带重渲染整排标签
+  const previewItems = useAtomValue(tabMinimapItemsAtomFamily(id))
 
   React.useEffect(() => {
     const el = buttonRef.current
@@ -230,7 +231,6 @@ export function TabBarItem({
         : isActive
           ? 'topbar-tab-focused'
           : undefined
-  const previewItems = minimapCache.get(id) ?? []
   // 仅会话 Tab 有消息预览价值；浏览器、文件预览等工作区 Tab 不显示空态面板。
   const canShowPreview = (type === 'chat' || type === 'agent') && previewItems.length > 0
   const showPreview = isHovered && !isActive && canShowPreview

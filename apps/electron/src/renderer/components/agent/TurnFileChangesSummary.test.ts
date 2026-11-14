@@ -104,6 +104,42 @@ describe('collectModifiedFilePaths', () => {
     expect(result).toEqual(['/repo/from-ledger.ts'])
   })
 
+  test.each(['Write', 'write'])('同轮有部分账本时仍保留未覆盖的 %s/Edit 路径', (writeName) => {
+    const editName = writeName === 'Write' ? 'Edit' : 'edit'
+    expect(collectModifiedFilePaths([
+      toolUse('write-1', writeName, { path: '/repo/input.ts' }),
+      toolResultWithChanges('write-1', [{ path: '/repo/observed.ts', source: 'write' }]),
+      toolUse('edit-1', editName, { path: '/repo/edited.ts' }),
+      toolUse('edit-2', editName, { path: '/repo/failed.ts' }),
+      failedToolResult('edit-2'),
+    ])).toEqual(['/repo/observed.ts', '/repo/edited.ts'])
+  })
+
+  test('账本仅覆盖对应 tool_use_id，不覆盖同路径的其他调用', () => {
+    expect(collectModifiedFilePaths([
+      toolUse('write-1', 'write', { path: '/repo/input.ts' }),
+      toolResultWithChanges('write-1', [{ path: '/repo/observed.ts', source: 'write' }]),
+      toolUse('edit-1', 'edit', { path: '/repo/input.ts' }),
+    ])).toEqual(['/repo/observed.ts', '/repo/input.ts'])
+  })
+
+  test('混合账本与回退路径按文件去重，不从 Bash 命令补路径', () => {
+    expect(collectModifiedFilePaths([
+      toolResultWithChanges('bash-1', [{ path: '/repo/observed.ts', source: 'bash' }]),
+      toolUse('edit-1', 'Edit', { path: '/repo/observed.ts' }),
+      toolUse('write-1', 'Write', { path: '/repo/other.ts' }),
+      toolUse('bash-2', 'bash', { command: 'echo x > /repo/not-observed.ts' }),
+    ])).toEqual(['/repo/observed.ts', '/repo/other.ts'])
+  })
+
+  test('显式空账本也覆盖对应调用，不把未发生写入的参数补成 chip', () => {
+    expect(collectModifiedFilePaths([
+      toolUse('write-1', 'write', { path: '/repo/not-written.ts' }),
+      toolResultWithChanges('write-1', []),
+      toolUse('edit-1', 'edit', { path: '/repo/edited.ts' }),
+    ])).toEqual(['/repo/edited.ts'])
+  })
+
   test('collects Pi runtime lowercase write/edit tool calls when no ledger exists', () => {
     const result = collectModifiedFilePaths([
       toolUse('write-1', 'write', { path: '/tmp/project/a.ts', content: 'a' }),

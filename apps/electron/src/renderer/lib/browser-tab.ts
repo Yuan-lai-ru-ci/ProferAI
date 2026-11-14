@@ -139,7 +139,7 @@ function shouldFollowNewDisplayPage(store: JotaiStore, state: BrowserViewState, 
 }
 
 /**
- * 被动同步浏览器状态。默认不新增页面、不自动建组；显式跟随才允许自动展示。
+ * 被动同步浏览器状态。autoOpen 时新增页面并在侧边自动建组展示；否则只同步已有页面。
  * 用户正在查看的页面内新链接仍可接管原 Pane，但后台会话不能改变当前布局。
  */
 export function openBrowserTabFromPush(

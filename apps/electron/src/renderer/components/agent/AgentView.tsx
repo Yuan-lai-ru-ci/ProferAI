@@ -3486,8 +3486,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           <div
             className={cn(
               isEmptySession
-                /* 新会话：欢迎语 + 输入框整体居中，输入框宽度收窄 */
-                ? 'flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-4 pb-8'
+                /* 新会话：欢迎语 + 输入框整体略低于中线；矮窗口自动收回顶部留白 */
+                ? 'flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-4 pb-8 pt-[clamp(0px,calc(30vh-242px),8rem)]'
                 : 'shrink-0 px-2.5 pb-2.5 md:px-[18px] md:pb-[18px]',
             )}
             data-input-mode="agent"

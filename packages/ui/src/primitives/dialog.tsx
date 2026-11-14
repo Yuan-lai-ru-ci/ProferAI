@@ -14,37 +14,20 @@ const DialogPortal = DialogPrimitive.Portal
 
 const DialogClose = DialogPrimitive.Close
 
-const DialogOverlay = React.forwardRef<
-  React.ElementRef<typeof DialogPrimitive.Overlay>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
->(({ className, ...props }, ref) => (
-  <DialogPrimitive.Overlay
-    ref={ref}
-    className={cn(
-      // overlay：更轻的黑（避免暗主题压得太重）+ backdrop-blur 制造"焦点感"，
-      // 这是飞书/扣子/Linear 等现代 App 弹窗最显著的质感特征
-      "fixed inset-0 z-[100] bg-overlay/40 backdrop-blur-sm titlebar-no-drag",
-      "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
-      className
-    )}
-    {...props}
-  />
-))
-DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
-
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { hideClose?: boolean }
 >(({ className, children, hideClose, ...props }, ref) => (
   <DialogPortal>
-    <DialogOverlay />
+    {/* 不再渲染独立的整屏 Overlay：变暗改由 .dialog-dim 的 100vmax 扩散阴影承担。
+     * 独立的 fixed 遮罩层在 macOS 高刷屏上滚动时会偶发整层漏画一帧（闪屏）。 */}
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        // 内容容器：吃 --dialog token、xl 圆角、shadow-xl（多层柔阴影 + 暗色 inset 顶高光）；
+        // 内容容器：吃 --dialog token、xl 圆角、dialog-dim（多层柔阴影 + 整屏变暗）；
         // hairline 边框（border/50）替代默认实色边；动画时长稍微拉长到 250ms 配合 blur 过渡更自然
         "fixed left-[50%] top-[50%] z-[100] grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4",
-        "border border-surface-border/60 bg-dialog text-dialog-foreground rounded-xl p-6 shadow-xl duration-200 titlebar-no-drag",
+        "dialog-dim border border-surface-border/60 bg-dialog text-dialog-foreground rounded-xl p-6 duration-200 titlebar-no-drag",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
         "data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%]",
@@ -124,7 +107,6 @@ DialogDescription.displayName = DialogPrimitive.Description.displayName
 export {
   Dialog,
   DialogPortal,
-  DialogOverlay,
   DialogTrigger,
   DialogClose,
   DialogContent,

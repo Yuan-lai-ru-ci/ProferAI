@@ -51,7 +51,7 @@ import { getModelLogo, resolveModelProvider } from '@/lib/model-logo'
 import { parseQuotedSelectionRefs } from '@/lib/quoted-selection'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { channelsAtom } from '@/atoms/chat-atoms'
-import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
+import { tabMinimapCacheAtom, writeTabMinimapCache } from '@/atoms/tab-atoms'
 import type { ChatMessage, ChatToolActivity } from '@profer/shared'
 
 // ===== 滚动到顶部加载更多 =====
@@ -316,14 +316,10 @@ export function ChatMessages({
     [messages, userProfile.avatar]
   )
 
-  // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）
+  // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）；写入走上限淘汰，避免只增不减
   React.useEffect(() => {
     if (minimapItems.length > 0) {
-      setMinimapCache((prev) => {
-        const next = new Map(prev)
-        next.set(conversationId, minimapItems)
-        return next
-      })
+      setMinimapCache((prev) => writeTabMinimapCache(prev, conversationId, minimapItems))
     }
   }, [conversationId, minimapItems, setMinimapCache])
 

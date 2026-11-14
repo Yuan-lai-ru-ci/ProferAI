@@ -7,7 +7,7 @@
  */
 
 import { atom } from 'jotai'
-import { atomWithStorage } from 'jotai/utils'
+import { atomFamily, atomWithStorage } from 'jotai/utils'
 import {
   streamingConversationIdsAtom,
 } from './chat-atoms'
@@ -118,6 +118,57 @@ export interface TabMinimapItem {
   matchKey?: string
 }
 export const tabMinimapCacheAtom = atom<Map<string, TabMinimapItem[]>>(new Map())
+
+/**
+ * 迷你地图缓存上限。
+ *
+ * 这份缓存只服务 Tab hover 预览与侧栏迷你地图：内容可以从消息数组重建，
+ * 不属于真源。但它按 sessionId 常驻，若不设上限，长时间不重启的进程里
+ * 每打开过一个会话就多留一份预览文本，只增不减。
+ * 上限按「同时可见的 Tab 量级」取值，超出淘汰最久未写入的那份。
+ */
+export const TAB_MINIMAP_CACHE_LIMIT = 48
+
+/** 写入一条会话的迷你地图缓存：重复写入视为最近使用，超出上限淘汰最旧。 */
+export function writeTabMinimapCache(
+  previous: Map<string, TabMinimapItem[]>,
+  key: string,
+  items: TabMinimapItem[],
+): Map<string, TabMinimapItem[]> {
+  if (previous.get(key) === items) return previous
+  const next = new Map(previous)
+  next.delete(key)
+  next.set(key, items)
+  while (next.size > TAB_MINIMAP_CACHE_LIMIT) {
+    const oldest = next.keys().next().value
+    if (oldest === undefined) break
+    next.delete(oldest)
+  }
+  return next
+}
+
+/** 关闭 Tab 时释放该会话的迷你地图缓存；未命中时返回原引用，避免无谓重渲染。 */
+export function deleteTabMinimapCacheEntry(
+  previous: Map<string, TabMinimapItem[]>,
+  key: string,
+): Map<string, TabMinimapItem[]> {
+  if (!previous.has(key)) return previous
+  const next = new Map(previous)
+  next.delete(key)
+  return next
+}
+
+const EMPTY_TAB_MINIMAP: TabMinimapItem[] = []
+
+/**
+ * 单个 Tab 的迷你地图切片。
+ *
+ * TabBarItem 直接订阅整张 Map 时，流式输出每写一次缓存都会让顶栏全部条目重渲染；
+ * 这里按 Tab 切片，未变化的条目拿到同一引用，不会跟着刷新。
+ */
+export const tabMinimapItemsAtomFamily = atomFamily((tabKey: string) =>
+  atom((get) => get(tabMinimapCacheAtom).get(tabKey) ?? EMPTY_TAB_MINIMAP),
+)
 
 /** Scratch Pad 编辑内容（HTML 字符串，供 TipTap 编辑器使用） */
 export const scratchPadContentAtom = atom<string>('')

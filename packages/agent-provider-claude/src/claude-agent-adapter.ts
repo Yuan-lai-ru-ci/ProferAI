@@ -43,7 +43,7 @@ import type {
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '@profer/agent-runtime/error-patterns'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { win32 } from 'node:path'
+import { resolve, win32 } from 'node:path'
 import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
 import { normalizeClaudeTaskEvent } from './task-events'
 import { BackgroundTaskManager } from './background-task-manager'
@@ -183,6 +183,8 @@ export interface ClaudeAgentQueryOptions extends AgentQueryInput {
   allowDangerouslySkipPermissions: boolean
   /** Claude 回退 evidence port；只记录受控 Write/Edit 的可靠前后版本，不改变工具执行结果。 */
   rewindEvidence?: ClaudeRewindEvidencePort
+  /** 仅供文件 chip 展示的成功 Write/Edit 观察，不参与回退或 Shadow 归属。 */
+  onFileChangeObserved?: (toolCallId: string, fact: { path: string; source: 'write' | 'edit' }) => void
   /** 自定义权限处理器（匹配 SDK CanUseTool 签名；类型复用 runtime 权限契约） */
   canUseTool?: (
     toolName: string,
@@ -1176,7 +1178,30 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
             },
             ...(rewindHooks?.PreToolUse ?? []),
           ],
-          ...(rewindHooks?.PostToolUse && { PostToolUse: rewindHooks.PostToolUse }),
+          ...((rewindHooks?.PostToolUse || options.onFileChangeObserved) && {
+            PostToolUse: [
+              ...(rewindHooks?.PostToolUse ?? []),
+              ...(options.onFileChangeObserved ? [{
+                hooks: [async (input: unknown) => {
+                  const event = input as import('@anthropic-ai/claude-agent-sdk').PostToolUseHookInput
+                  if ((event.tool_name === 'Write' || event.tool_name === 'Edit') && event.tool_use_id
+                    && event.tool_input && typeof event.tool_input === 'object') {
+                    const toolInput = event.tool_input as Record<string, unknown>
+                    const rawPath = toolInput.file_path ?? toolInput.path
+                    if (typeof rawPath === 'string' && rawPath.trim()) {
+                      try {
+                        options.onFileChangeObserved?.(event.tool_use_id, {
+                          path: resolve(event.cwd ?? options.cwd ?? '.', rawPath),
+                          source: event.tool_name === 'Write' ? 'write' : 'edit',
+                        })
+                      } catch { /* chip 观察失败不改变 SDK 工具结果 */ }
+                    }
+                  }
+                  return { continue: true }
+                }],
+              }] : []),
+            ],
+          }),
           ...(rewindHooks?.PostToolUseFailure && { PostToolUseFailure: rewindHooks.PostToolUseFailure }),
           Stop: [{
             hooks: [async (input: unknown) => {

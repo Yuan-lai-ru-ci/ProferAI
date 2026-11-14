@@ -1,11 +1,13 @@
 /**
  * ChatHeader - 对话头部
  *
- * 显示对话标题（可点击编辑）+ 置顶按钮 + 并排模式切换按钮。
+ * 主窗口操作通过 Portal 进入顶栏；独立窗口保留标题与操作行。
  */
 
 import * as React from 'react'
-import { useSetAtom } from 'jotai'
+import { createPortal } from 'react-dom'
+import { useAtomValue, useSetAtom } from 'jotai'
+import { chatTopBarHostAtom } from '@/atoms/chat-topbar-atoms'
 import { Pencil, Check, X, Pin, Columns2, GitBranch } from 'lucide-react'
 import { conversationsAtom } from '@/atoms/chat-atoms'
 import { useConversationParallelMode } from '@/hooks/useConversationSettings'
@@ -16,13 +18,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/t
 import { cn } from '@/lib/utils'
 
 interface ChatHeaderProps {
+  standalone?: boolean
   conversation: ConversationMeta | null
   /** 快捷打开分支树视图 */
   onOpenHistory?: () => void
 }
 
-export function ChatHeader({ conversation, onOpenHistory }: ChatHeaderProps): React.ReactElement | null {
+export function ChatHeader({ conversation, onOpenHistory, standalone = false }: ChatHeaderProps): React.ReactElement | null {
   const setConversations = useSetAtom(conversationsAtom)
+  const host = useAtomValue(chatTopBarHostAtom)
   const [parallelMode, setParallelMode] = useConversationParallelMode()
   const [editing, setEditing] = React.useState(false)
   const [editTitle, setEditTitle] = React.useState('')
@@ -64,6 +68,66 @@ export function ChatHeader({ conversation, onOpenHistory }: ChatHeaderProps): Re
     } else if (e.key === 'Escape') {
       setEditing(false)
     }
+  }
+
+  const actions = (
+    <div className="topbar-tool-group relative z-10 flex h-7 items-center gap-0.5 titlebar-no-drag" role="toolbar" aria-label="对话操作">
+      {onOpenHistory && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="topbar-tool-button h-7 w-7"
+              aria-label="对话节点树"
+              onClick={onOpenHistory}
+            >
+              <GitBranch className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom"><p>对话节点树</p></TooltipContent>
+        </Tooltip>
+      )}
+      <SystemPromptSelector />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn('topbar-tool-button h-7 w-7', conversation.pinned && 'bg-accent text-accent-foreground')}
+            aria-label={conversation.pinned ? '取消置顶' : '置顶对话'}
+            onClick={async () => {
+              const updated = await window.electronAPI.togglePinConversation(conversation.id)
+              setConversations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+            }}
+          >
+            <Pin className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom"><p>{conversation.pinned ? '取消置顶' : '置顶对话'}</p></TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn('topbar-tool-button h-7 w-7', parallelMode && 'bg-accent text-accent-foreground')}
+            aria-label={parallelMode ? '关闭并排模式' : '并排模式'}
+            onClick={() => setParallelMode(!parallelMode)}
+          >
+            <Columns2 className="size-3.5" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom"><p>{parallelMode ? '关闭并排模式' : '并排模式'}</p></TooltipContent>
+      </Tooltip>
+    </div>
+  )
+
+  if (!standalone) {
+    return host?.conversationId === conversation.id ? createPortal(actions, host.element) : null
   }
 
   return (
@@ -116,57 +180,7 @@ export function ChatHeader({ conversation, onOpenHistory }: ChatHeaderProps): Re
         </div>
       )}
 
-      {/* 右侧按钮组 */}
-      <div className="flex items-center gap-1 titlebar-no-drag ml-auto">
-        {onOpenHistory && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={onOpenHistory}
-              >
-                <GitBranch className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom"><p>对话节点树</p></TooltipContent>
-          </Tooltip>
-        )}
-        <SystemPromptSelector />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn('h-7 w-7', conversation.pinned && 'bg-accent text-accent-foreground')}
-              onClick={async () => {
-                const updated = await window.electronAPI.togglePinConversation(conversation.id)
-                setConversations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
-              }}
-            >
-              <Pin className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom"><p>{conversation.pinned ? '取消置顶' : '置顶对话'}</p></TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn('h-7 w-7', parallelMode && 'bg-accent text-accent-foreground')}
-              onClick={() => setParallelMode(!parallelMode)}
-            >
-              <Columns2 className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom"><p>{parallelMode ? '关闭并排模式' : '并排模式'}</p></TooltipContent>
-        </Tooltip>
-      </div>
+      {actions}
     </div>
   )
 }

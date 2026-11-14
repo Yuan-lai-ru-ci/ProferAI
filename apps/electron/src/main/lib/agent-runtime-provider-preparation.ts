@@ -124,6 +124,16 @@ export function createElectronProviderQueryPreparation(
         ...(prepared.disallowedTools ?? []),
         ...(snapshot ? collectPolicyDisallowedTools(snapshot) : []),
       ].map(canonicalAgentToolName))]
+      const chipSlug = workspaceSlugFromQuery(input)
+      let chipStorageDir: string | undefined
+      try {
+        chipStorageDir = chipSlug ? resolveAgentSessionWriteLayout(chipSlug, input.sessionId)?.storageDir : undefined
+      } catch { /* chip 展示增强不能让布局缺失的查询失败，Renderer 仍会按 draftRoot 过滤 */ }
+      // 观察只进入消息 chip；尤其 Bash 快照不能升级为 Shadow 或 rewind 的写入证据。
+      const onFileChangeObserved = (toolCallId: string, fact: { path: string; source: string }): void => {
+        if (chipStorageDir && isPathInsideDirectory(fact.path, chipStorageDir)) return
+        fileWriteChips.record(input.sessionId, toolCallId, fact)
+      }
       if (input.runtime === 'claude') {
         // project 下 cwd 是用户项目根：storageDir 那份 `.claude/settings.json` 对 SDK 是惰性的，
         // 必须把同一组设置内联成 flag settings 层（与旧链 P1-8 同一 builder、同一值）。
@@ -144,6 +154,7 @@ export function createElectronProviderQueryPreparation(
             : {}),
           systemPrompt,
           cwd: input.cwd,
+          onFileChangeObserved,
           ...(inlineSdkSettings ? { settings: inlineSdkSettings } : {}),
           ...(prepared.tools !== undefined ? { tools: [...prepared.tools] } : {}),
           ...(prepared.mcpServers !== undefined ? { mcpServers: prepared.mcpServers } : {}),
@@ -172,13 +183,8 @@ export function createElectronProviderQueryPreparation(
         ...(prepared.resources?.skillCatalog ? { skillCatalog: prepared.resources.skillCatalog } : {}),
       })
       const piSystemPrompt = promptFromPrepared(input, prepared, piTurnPrompt)
-      // Shadow Git 的受控写入回调：Bash 提升的写入不会出现在 tool_use 里，只能靠这条补。
-      // 草稿区（会话私有存储）不算用户改动，与旧链同一判据。
+      // 受控写入继续补充 Shadow 证据，chip-only 观察与它严格分离。
       const piShadowLedger = input.metadata?.shadowLedger as ShadowEvidenceLedger | undefined
-      const piShadowSlug = workspaceSlugFromQuery(input)
-      const piShadowStorageDir = piShadowSlug
-        ? resolveAgentSessionWriteLayout(piShadowSlug, input.sessionId)?.storageDir
-        : undefined
       return {
         ...providerInput,
         apiKey: credentials.apiKey,
@@ -221,9 +227,10 @@ export function createElectronProviderQueryPreparation(
         ...(input.additionalDirectories ? { additionalDirectories: [...input.additionalDirectories] } : {}),
         // 受控写入回调始终注册：消息气泡里的文件改动 chip 依赖它（旧链同一份事实）。
         // 草稿区（会话私有存储）不是用户要 review 的改动，chip 与归属都不该看到。
+        onFileChangeObserved,
         onFileWrite: (toolCallId: string, fact: { path: string; source: string }) => {
-          if (piShadowStorageDir && isPathInsideDirectory(fact.path, piShadowStorageDir)) return
-          fileWriteChips.record(input.sessionId, toolCallId, { path: fact.path, source: fact.source })
+          if (chipStorageDir && isPathInsideDirectory(fact.path, chipStorageDir)) return
+          onFileChangeObserved(toolCallId, fact)
           piShadowLedger?.push({
             toolUseId: toolCallId,
             path: fact.path,

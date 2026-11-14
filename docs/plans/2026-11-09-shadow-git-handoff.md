@@ -4,6 +4,7 @@
 > 代码库：`/Users/mac/profer/profer-main`
 > 配套文档：设计与决策见 `2026-11-08-shadow-git-design.md`（含 §12.1–§12.15 实施记录）；逐文件改动清单见 `2026-11-09-shadow-git-changes.md`
 > 阅读顺序建议：先看第 1–3 节搞清「回退到底是什么」，再看第 8–10 节（缺陷、未完成、审查重点），中间按需查。
+> 生命周期：**历史交接与验收证据，不是当前 backlog**。本文 §9 的“新链 workspace shadow 采集未做”已有后继 [`2026-11-09-runtime-default-chain-handoff.md`](./2026-11-09-runtime-default-chain-handoff.md) §2.2 和当前 `agent-runtime-entry.ts` 的 begin/end 接线；其他未完项逐项回查源码、测试与工作区 `todo.md` T6。下文保留原始测试数字、设备条件和未验边界。
 
 ---
 

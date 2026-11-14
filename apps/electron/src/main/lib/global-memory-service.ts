@@ -12,6 +12,7 @@
 
 import type { GlobalMemorySummary, SkillFileContent, SkillFileNode } from '@profer/shared'
 import {
+  appendGlobalMemoryFile as appendFile,
   deleteGlobalMemoryFile as deleteFile,
   ensureGlobalMemoryInitialized,
   getGlobalMemoryDir as getDir,
@@ -47,6 +48,11 @@ export function readGlobalMemoryFile(relativePath: string): SkillFileContent {
 
 export function writeGlobalMemoryFile(relativePath: string, content: string): void {
   writeFile(getConfigDir(), relativePath, content)
+}
+
+/** 追加操作与去重在同一把跨进程锁内完成。 */
+export function appendGlobalMemoryFile(relativePath: string, entry: string): { added: boolean } {
+  return appendFile(getConfigDir(), relativePath, entry)
 }
 
 export function deleteGlobalMemoryFile(relativePath: string): void {

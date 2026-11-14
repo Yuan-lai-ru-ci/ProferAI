@@ -5,7 +5,7 @@
  * 用于工具活动行的收起态展示和 Loading 态展示。
  */
 
-import { computeDiffStats } from './tool-utils'
+import { computeDiffStats, extractSkillNameFromRead } from './tool-utils'
 
 /** 工具短语 */
 export interface ToolPhrase {
@@ -33,6 +33,13 @@ function truncate(text: string, max: number): string {
  * 返回的 label 应读起来像一个完整动宾短语，无冗余信息。
  */
 export function getToolPhrase(toolName: string, input: Record<string, unknown>): ToolPhrase {
+  // Pi Runtime 读取 SKILL.md 就是 Skill 生效的方式，这里必须说清是 Skill，
+  // 否则展开后只能看到「读取 SKILL.md」，读者无法区分是哪个 Skill。
+  const skillName = extractSkillNameFromRead(toolName, input)
+  if (skillName) {
+    return phrase(`加载 Skill「${skillName}」`)
+  }
+
   switch (toolName) {
     case 'Read': {
       const fp = input.file_path ?? input.filePath

@@ -18,7 +18,7 @@ import { isGoalIterationMessage, projectMessageProvenance } from '@profer/shared
 import { isScheduledTaskInput, isTaskSourceInput, projectTaskInputTimeline } from '@/lib/task-input-timeline'
 import { getAgentMessageIdentity } from '@/lib/agent-message-identity'
 import { useOpenSession } from '@/hooks/useOpenSession'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, GitFork, Undo2, RotateCw, Pencil, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, GitBranch, Wallet, Cpu, PackageOpen, Target } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, GitFork, Undo2, RotateCw, Pencil, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, GitBranch, Wallet, Cpu, PackageOpen, Target, Zap } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { parseQuotedSelectionRefs, type ParsedQuotedSelectionRef } from '@/lib/quoted-selection'
@@ -161,13 +161,22 @@ function formatSystemToolName(toolName: string): string {
   return toolName
 }
 
-/** 系统提示条：宿主侧拦下的操作（Skill 未加载、压缩被跳过等）直接给用户看，不依赖模型转述。 */
+/** 系统提示条：Skill 路由结果（已加载/未加载）与压缩被跳过等宿主侧事实直接给用户看，不依赖模型转述。 */
+/**
+ * Skill 路由结果的提示卡。
+ *
+ * 失败（未加载）用警告样式；成功（正文已注入）必须用中性样式，
+ * 否则「已加载 Skill」会带着琥珀底色和警告三角，看起来像出了问题。
+ */
 function AgentNotice({ message, fallback }: { message: SDKSystemMessage; fallback: string }): React.ReactElement {
   const text = typeof message.message === 'string' && message.message.length > 0 ? message.message : fallback
+  const isSkillFailure = text.startsWith('Skill 未加载')
   return (
-    <TimelineNoticeCard tone="warning">
+    <TimelineNoticeCard tone={isSkillFailure ? 'warning' : 'neutral'}>
       <div className="flex items-start gap-2.5">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+        {isSkillFailure
+          ? <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+          : <Zap className="mt-0.5 size-4 shrink-0 text-primary/70" />}
         <p className="min-w-0 break-words">{text}</p>
       </div>
     </TimelineNoticeCard>
@@ -1248,7 +1257,7 @@ export function SDKMessageRenderer({
       return null
     }
     if (subtype === 'skill_routing_notice') {
-      return <AgentNotice message={sysMsg} fallback="Skill 未加载" />
+      return <AgentNotice message={sysMsg} fallback="Skill 状态" />
     }
     if (subtype === 'compact_skipped') {
       return <AgentNotice message={sysMsg} fallback="上下文压缩已跳过" />
@@ -1961,7 +1970,7 @@ export function getGroupPreview(group: MessageGroup): string {
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
     if (group.message.subtype === 'interruption_record') return group.message.message ?? '任务中断'
-    if (group.message.subtype === 'skill_routing_notice') return group.message.message ?? 'Skill 未加载'
+    if (group.message.subtype === 'skill_routing_notice') return group.message.message ?? 'Skill 状态'
     if (group.message.subtype === 'compact_skipped') return group.message.message ?? '上下文压缩已跳过'
     return ''
   }
@@ -2027,7 +2036,7 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
     if (subtype === 'permission_denied') return <div data-message-id={groupId} data-message-nav-key={navKey}><PermissionDeniedNotice message={group.message} /></div>
     // 中断记录保留在消息数据中供恢复/续接使用，但不在会话正文显示。
     if (subtype === 'interruption_record') return null
-    if (subtype === 'skill_routing_notice') return <div data-message-id={groupId} data-message-nav-key={navKey}><AgentNotice message={group.message} fallback="Skill 未加载" /></div>
+    if (subtype === 'skill_routing_notice') return <div data-message-id={groupId} data-message-nav-key={navKey}><AgentNotice message={group.message} fallback="Skill 状态" /></div>
     if (subtype === 'compact_skipped') return <div data-message-id={groupId} data-message-nav-key={navKey}><AgentNotice message={group.message} fallback="上下文压缩已跳过" /></div>
     return null
   }

@@ -1,5 +1,5 @@
 /**
- * SystemPromptSelector - ChatHeader 系统提示词下拉选择器
+ * SystemPromptSelector - Chat 顶栏系统提示词下拉选择器
  *
  * ghost 按钮 + DropdownMenu 列表，与 Pin/Parallel 按钮风格统一。
  */
@@ -47,7 +47,8 @@ export function SystemPromptSelector(): React.ReactElement {
         <button
           type="button"
           title={tooltipText}
-          className="inline-flex items-center justify-center h-7 w-7 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+          aria-label={tooltipText}
+          className="topbar-tool-button inline-flex items-center justify-center h-7 w-7 rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
         >
           <BookOpen className="size-4" />
         </button>

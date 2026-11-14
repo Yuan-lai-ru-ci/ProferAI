@@ -1,11 +1,51 @@
 import { describe, expect, test } from 'bun:test'
-import { getRewindConfirmCopy } from './RewindDialog'
+import type { RewindFilePlanItem, RewindPlan } from '@profer/shared'
+import { getRewindConfirmCopy, hasRewindFileChanges } from './RewindDialog'
+
+function plan(mode: RewindPlan['mode'], actions: RewindFilePlanItem['action'][]): RewindPlan {
+  return {
+    protocolVersion: 1,
+    planId: 'plan',
+    sessionId: 'session',
+    mode,
+    target: { kind: 'session-start' },
+    runtime: 'claude',
+    createdAt: 0,
+    revision: { session: 0, files: 0, state: 0 },
+    capability: {
+      runtime: 'claude',
+      supportsConversation: true,
+      supportsFiles: true,
+      supportsBoth: true,
+      supportsUndo: true,
+      supportsRefine: true,
+      supportsSubmission: true,
+    },
+    files: actions.map((action, index) => ({
+      itemId: `item-${index}`,
+      path: `/workspace/${index}`,
+      action,
+      evidence: 'tracked-write',
+    })),
+  }
+}
 
 /**
  * 设计 §8 的 UI 约束在测试里表达：主路径只有一次确认，
  * 且文案里不能出现内部词汇或让用户判断冲突。
  */
 describe('RewindDialog 确认文案', () => {
+  test('无文件回退动作时不需要确认；keep/conflict 不会修改文件', () => {
+    expect(hasRewindFileChanges(plan('both', []))).toBe(false)
+    expect(hasRewindFileChanges(plan('both', ['keep', 'conflict']))).toBe(false)
+    expect(hasRewindFileChanges(plan('conversation', ['restore', 'delete']))).toBe(false)
+  })
+
+  test('存在 restore/delete 文件动作时需要确认', () => {
+    expect(hasRewindFileChanges(plan('both', ['restore']))).toBe(true)
+    expect(hasRewindFileChanges(plan('both', ['delete']))).toBe(true)
+  })
+
   test('只有一次确认：标题、说明、按钮，且不暴露内部词汇', () => {
     const copy = getRewindConfirmCopy('rewind')
     expect(copy.title).toBe('确认回退？')

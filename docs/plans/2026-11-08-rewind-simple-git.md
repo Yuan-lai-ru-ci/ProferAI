@@ -1,5 +1,7 @@
 # 简化 Agent 回退 Implementation Plan
 
+> 生命周期：**已被工作区级 Shadow Git 方案取代；不作为现行施工入口**。本文的“会话目录 bare Git + 受控路径快照”是历史方案；后继为 [`2026-11-08-shadow-git-design.md`](./2026-11-08-shadow-git-design.md)。当前实现见 `workspace-shadow-git.ts`、`workspace-shadow-rewind.ts` 与 `packages/session-store/src/shadow-git/`，遗留项需逐项核验，不从本计划重新执行。
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** 恢复原有 Agent 回退入口和 runtime 行为，并用 Profer 自己管理的影子 Git 快照补上可用的文件回退，不把快照机制暴露成新的用户流程。

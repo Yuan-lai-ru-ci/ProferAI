@@ -180,6 +180,38 @@ export function resolveOutputDir(target: DistOptions['target']): 'out' | 'out-co
   return target === 'commercial' ? 'out-commercial' : 'out'
 }
 
+/** 发行版对应的有序构建链；实际打包和回归测试共用，避免 main 与 renderer 选到不同版别。 */
+export function resolveBuildSteps(target: DistOptions['target']): { name: string; script: string }[] {
+  const commercial = target === 'commercial'
+  return [
+    { name: `构建主进程 (${target})`, script: commercial ? 'build:main-commercial' : 'build:main' },
+    { name: '校验主进程发行版', script: `verify:build-target:${target}` },
+    // OSS 侧用 strict：基线已清空，任何商业内容回流都应直接阻断出包。
+    { name: '校验发行版边界', script: commercial ? 'verify:commercial-includes-commercial' : 'verify:oss-excludes-commercial:strict' },
+    { name: '构建 Preload (esbuild)', script: 'build:preload' },
+    { name: '构建渲染进程 (Vite)', script: commercial ? 'build:renderer:commercial' : 'build:renderer' },
+    { name: '校验界面发行版', script: `verify:renderer-edition:${target}` },
+    { name: '编译 Profer CLI (bun --compile)', script: 'build:cli' },
+    { name: '编译手写笔 OCR', script: 'build:pen-ocr' },
+    { name: '复制资源文件', script: 'build:resources' },
+    { name: '同步主进程运行时依赖', script: 'sync:runtime-deps' },
+  ]
+}
+
+/** 顺序执行，首个失败即停止；调用方可注入命令执行器，无须在回归测试中启动外部进程。 */
+export function runBuildSteps(
+  target: DistOptions['target'],
+  execute: (step: { name: string; script: string }) => StepResult,
+): StepResult[] {
+  const results: StepResult[] = []
+  for (const step of resolveBuildSteps(target)) {
+    const result = execute(step)
+    results.push(result)
+    if (!result.success) break
+  }
+  return results
+}
+
 /** 参数解析（宿主平台与 argv 可注入，便于跨平台解析测试）。 */
 export function parseArgs(
   args: readonly string[] = process.argv.slice(2),
@@ -260,82 +292,22 @@ function main(): void {
   console.log(`  ${color.bold}详细日志${color.reset}: ${opts.verbose ? '开启' : '关闭'}`)
   printSeparator()
 
-  const totalSteps = opts.platform === 'mac' ? 11 : 8
+  const buildSteps = resolveBuildSteps(opts.target)
+  const totalSteps = buildSteps.length + 1 + (opts.platform === 'mac' ? 3 : 0)
   const outputDir = resolveOutputDir(opts.target)
   let step = 0
 
-  // ── 步骤 1: 构建主进程 ──
-  step++
-  printStepStart(step, totalSteps, opts.target === 'commercial' ? '构建主进程 (commercial)' : '构建主进程 (oss)')
-  results.push(
-    runStep('构建主进程', 'bun', ['run', opts.target === 'commercial' ? 'build:main-commercial' : 'build:main'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
+  // 两版共用编排，版别在生成步骤时一次确定；任何构建或身份断言失败都不得进入打包。
+  results.push(...runBuildSteps(opts.target, (buildStep) => {
+    step++
+    printStepStart(step, totalSteps, buildStep.name)
+    const result = runStep(buildStep.name, 'bun', ['run', buildStep.script], { verbose: opts.verbose })
+    printStepResult(result)
+    return result
+  }))
+  if (results.some((result) => !result.success)) return printSummary(results)
 
-  // ── 步骤 2: 校验发行版边界 ──
-  // 打包前就把“拿错发行版主进程去出包”报出来，比装完才发现省事：
-  // 开源版必须不含商业模块，商业版必须真的包含商业模块。
-  step++
-  printStepStart(step, totalSteps, '校验发行版边界')
-  results.push(
-    runStep(
-      '校验发行版边界',
-      'bun',
-      ['run', opts.target === 'commercial' ? 'verify:commercial-includes-commercial' : 'verify:oss-excludes-commercial'],
-      { verbose: opts.verbose },
-    )
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 3: 构建 Preload ──
-  step++
-  printStepStart(step, totalSteps, '构建 Preload (esbuild)')
-  results.push(
-    runStep('构建 Preload', 'bun', ['run', 'build:preload'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 4: 构建渲染进程 ──
-  step++
-  printStepStart(step, totalSteps, '构建渲染进程 (Vite)')
-  results.push(
-    runStep('构建渲染进程', 'bun', ['run', 'build:renderer'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 5: 编译随包 CLI ──
-  step++
-  printStepStart(step, totalSteps, '编译 Profer CLI (bun --compile)')
-  results.push(
-    runStep('编译 Profer CLI', 'bun', ['run', 'build:cli'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 6: 复制资源文件 ──
-  step++
-  printStepStart(step, totalSteps, '复制资源文件')
-  results.push(
-    runStep('复制资源文件', 'bun', ['run', 'build:resources'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  // 资源包缺失会导致打包产物缺 skins/icon 等，必须中断而非继续
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 7: 同步主进程运行时依赖 ──
-  step++
-  printStepStart(step, totalSteps, '同步主进程运行时依赖')
-  results.push(
-    runStep('同步运行时依赖', 'bun', ['run', 'sync:runtime-deps'], { verbose: opts.verbose })
-  )
-  printStepResult(results[results.length - 1])
-  if (!results[results.length - 1].success) return printSummary(results)
-
-  // ── 步骤 8: electron-builder 打包 ──
+  // ── electron-builder 打包 ──
   step++
   printStepStart(step, totalSteps, 'Electron Builder 打包')
 

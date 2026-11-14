@@ -1,7 +1,8 @@
 # 工作区项目模式（Project Mode）设计
 
 > 日期：2026-10-19（GMT+8），v2 修订 2026-11-03
-> 状态：范围已确认；存量 managed 工作区保留为过渡态，本轮不做存量迁移；本文不含代码改动
+> Lifecycle: **Implemented for project workspace/session storage; this is a historical design and lifecycle record**. The original proposal's initial storage boundaries were revised by `2026-11-04-project-session-self-contained.md`; current paths are defined in `packages/session-store/src/session-layout.ts` and `paths.ts`.
+
 > 范围：新增 project 模式——绑定真实项目文件夹，项目内 `.profer/` 承载配置与资产，Agent cwd 为项目根
 > 非范围：存量工作区迁移、团队工作区云同步协议、Agent 并发 worktree、项目模板市场
 

@@ -11,6 +11,7 @@ function buildTools(
   cwd: string,
   onFileWrite: (toolCallId: string, fact: FileWriteFact) => void,
   onFileMutation?: (fact: import('../pi/rewind-evidence').PiFileMutationEvidence) => void | Promise<void>,
+  onFileChangeObserved?: (toolCallId: string, fact: FileWriteFact) => void,
 ) {
   return buildBuiltinToolDefinitions(
     sdk,
@@ -24,6 +25,7 @@ function buildTools(
     undefined,
     onFileWrite,
     onFileMutation,
+    onFileChangeObserved,
   )
 }
 
@@ -145,23 +147,192 @@ describe('Pi 受控写入上报', () => {
 })
 
 describe('Bash 写入归属边界', () => {
-  test('bash 命令生成的文件不会被目录 diff 自动归属', async () => {
+  test('bash 写入只进入 chip observer，不进入受控写入或回退证据', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'profer-bash-fact-'))
     try {
-      const facts: Array<{ toolCallId: string; fact: FileWriteFact }> = []
-      const bash = buildTools(dir, (toolCallId, fact) => facts.push({ toolCallId, fact }))
-        .find((tool) => tool.name === 'bash')
-      expect(bash).toBeDefined()
+      const writes: Array<{ toolCallId: string; fact: FileWriteFact }> = []
+      const observed: Array<{ toolCallId: string; fact: FileWriteFact }> = []
+      const mutations: Array<import('../pi/rewind-evidence').PiFileMutationEvidence> = []
+      const bash = buildTools(
+        dir,
+        (toolCallId, fact) => writes.push({ toolCallId, fact }),
+        fact => { mutations.push(fact) },
+        (toolCallId, fact) => observed.push({ toolCallId, fact }),
+      ).find((tool) => tool.name === 'bash')!
 
-      await bash!.execute(
+      await bash.execute(
         'call-4',
-        { command: "python3 -c \"open('report.md','w').write('generated')\"" } as never,
+        { command: "printf generated > report.md" } as never,
         undefined,
         undefined,
         undefined as never,
       )
 
-      expect(facts).toEqual([])
+      expect(readFileSync(join(dir, 'report.md'), 'utf-8')).toBe('generated')
+      expect(observed).toEqual([{ toolCallId: 'call-4', fact: { path: join(dir, 'report.md'), source: 'bash' } }])
+      expect(writes).toEqual([])
+      expect(mutations).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('bash 非零退出仍上报已观察到的改动', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profer-bash-nonzero-'))
+    try {
+      const observed: Array<{ toolCallId: string; fact: FileWriteFact }> = []
+      const bash = buildTools(dir, () => {}, undefined, (toolCallId, fact) => observed.push({ toolCallId, fact }))
+        .find((tool) => tool.name === 'bash')!
+
+      await expect(bash.execute(
+        'call-nonzero',
+        { command: "printf partial > partial.txt; exit 7" } as never,
+        undefined,
+        undefined,
+        undefined as never,
+      )).rejects.toThrow()
+
+      expect(readFileSync(join(dir, 'partial.txt'), 'utf-8')).toBe('partial')
+      expect(observed).toEqual([{ toolCallId: 'call-nonzero', fact: { path: join(dir, 'partial.txt'), source: 'bash' } }])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('Bash observer 抛错不影响命令执行', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profer-bash-observer-fail-'))
+    try {
+      const bash = buildTools(dir, () => {}, undefined, () => { throw new Error('observer failed') })
+        .find((tool) => tool.name === 'bash')!
+
+      await bash.execute(
+        'call-observer-fail',
+        { command: "printf yes > survives.txt" } as never,
+        undefined,
+        undefined,
+        undefined as never,
+      )
+      expect(readFileSync(join(dir, 'survives.txt'), 'utf-8')).toBe('yes')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('缺少 observer 时无扫描回调', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profer-bash-no-observer-'))
+    try {
+      const writes: Array<{ toolCallId: string; fact: FileWriteFact }> = []
+      const bash = buildTools(dir, (toolCallId, fact) => writes.push({ toolCallId, fact }))
+        .find((tool) => tool.name === 'bash')!
+      await bash.execute(
+        'call-no-observer',
+        { command: "printf x > ignored.txt" } as never,
+        undefined,
+        undefined,
+        undefined as never,
+      )
+      expect(writes).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('真实 Bash 只读命令不产生文件观察', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profer-bash-readonly-command-'))
+    try {
+      const observed: Array<{ toolCallId: string; fact: FileWriteFact }> = []
+      const mutations: Array<import('../pi/rewind-evidence').PiFileMutationEvidence> = []
+      const bash = buildTools(
+        dir,
+        () => {},
+        fact => { mutations.push(fact) },
+        (toolCallId, fact) => observed.push({ toolCallId, fact }),
+      ).find((tool) => tool.name === 'bash')!
+
+      await bash.execute('call-readonly-command', { command: 'pwd && ls' } as never, undefined, undefined, undefined as never)
+
+      expect(observed).toEqual([])
+      expect(mutations).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('Bash 超时后不观察部分写入，也不产生 mutation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profer-bash-timeout-'))
+    try {
+      const observed: Array<{ toolCallId: string; fact: FileWriteFact }> = []
+      const mutations: Array<import('../pi/rewind-evidence').PiFileMutationEvidence> = []
+      const bash = buildTools(
+        dir,
+        () => {},
+        fact => { mutations.push(fact) },
+        (toolCallId, fact) => observed.push({ toolCallId, fact }),
+      ).find((tool) => tool.name === 'bash')!
+
+      await expect(bash.execute(
+        'call-timeout',
+        { command: 'printf partial > partial.txt; sleep 2', timeout: 0.1 } as never,
+        undefined,
+        undefined,
+        undefined as never,
+      )).rejects.toThrow()
+
+      expect(readFileSync(join(dir, 'partial.txt'), 'utf-8')).toBe('partial')
+      expect(observed).toEqual([])
+      expect(mutations).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('Bash 取消后不观察部分写入，也不产生 mutation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profer-bash-abort-'))
+    try {
+      const observed: Array<{ toolCallId: string; fact: FileWriteFact }> = []
+      const mutations: Array<import('../pi/rewind-evidence').PiFileMutationEvidence> = []
+      const bash = buildTools(
+        dir,
+        () => {},
+        fact => { mutations.push(fact) },
+        (toolCallId, fact) => observed.push({ toolCallId, fact }),
+      ).find((tool) => tool.name === 'bash')!
+      const controller = new AbortController()
+
+      const execution = bash.execute(
+        'call-abort',
+        { command: 'printf partial > partial.txt; sleep 2' } as never,
+        controller.signal as never,
+        undefined,
+        undefined as never,
+      )
+      setTimeout(() => controller.abort(), 100).unref?.()
+      await expect(execution).rejects.toThrow()
+
+      expect(readFileSync(join(dir, 'partial.txt'), 'utf-8')).toBe('partial')
+      expect(observed).toEqual([])
+      expect(mutations).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('缺少 tool ID 时不报告 Bash 观察结果', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'profer-bash-no-id-'))
+    try {
+      const observed: Array<{ toolCallId: string; fact: FileWriteFact }> = []
+      const mutations: Array<import('../pi/rewind-evidence').PiFileMutationEvidence> = []
+      const bash = buildTools(dir, () => {}, fact => { mutations.push(fact) }, (toolCallId, fact) => observed.push({ toolCallId, fact }))
+        .find((tool) => tool.name === 'bash')!
+      await bash.execute(
+        '',
+        { command: "printf x > no-id.txt" } as never,
+        undefined,
+        undefined,
+        undefined as never,
+      )
+      expect(observed).toEqual([])
+      expect(mutations).toEqual([])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

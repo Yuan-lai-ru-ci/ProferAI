@@ -31,7 +31,7 @@ import {
 } from "@/atoms/tab-atoms";
 import type { TabItem } from "@/atoms/tab-atoms";
 import type { SessionIndicatorStatus } from "@/atoms/agent-atoms";
-import { currentConversationIdAtom } from "@/atoms/chat-atoms";
+import { currentConversationIdAtom, conversationsAtom } from "@/atoms/chat-atoms";
 import {
   agentSessionsAtom,
   agentSessionDraftsAtom,
@@ -44,6 +44,7 @@ import {
   workspaceFilesVersionAtom,
   seenFilesVersionAtom,
 } from "@/atoms/agent-atoms";
+import { chatTopBarHostAtom } from '@/atoms/chat-topbar-atoms'
 import { browserStateMapAtom } from "@/atoms/browser-atoms";
 import { appModeAtom } from "@/atoms/app-mode";
 import { openFilePanel } from "@/hooks/usePanelAutoLayout";
@@ -618,6 +619,12 @@ function TabBarInner({
   const setTabMru = useSetAtom(tabMruAtom);
   const setTabs = useSetAtom(tabsAtom);
   const setAgentSessions = useSetAtom(agentSessionsAtom);
+  const setConversations = useSetAtom(conversationsAtom);
+  const setChatHost = useSetAtom(chatTopBarHostAtom);
+  const chatHostRef = React.useCallback((element: HTMLDivElement | null) => {
+    const conversationId = element?.dataset.conversationId;
+    setChatHost(element && conversationId ? { conversationId, element } : null);
+  }, [setChatHost]);
   const [isLeaving, setIsLeaving] = React.useState(false);
   const enterTimerRef = React.useRef<ReturnType<typeof setTimeout>>();
   const leaveTimerRef = React.useRef<ReturnType<typeof setTimeout>>();
@@ -634,6 +641,7 @@ function TabBarInner({
     () => tabs.find((t) => t.id === activeTabId),
     [tabs, activeTabId],
   );
+  const activeChatSessionId = activeTab?.type === "chat" ? activeTab.sessionId : null;
   const [tabGroups, setTabGroups] = useAtom(tabGroupsAtom);
   const activeGroup = findTabGroup(tabGroups, activeTabId);
   // 顶栏右侧工具是「会话上下文」动作，不是「会话 Tab」动作：
@@ -865,7 +873,7 @@ function TabBarInner({
     const actions = content.querySelector<HTMLElement>(".topbar-actions-slot");
     if (actions) observer.observe(actions);
     return () => observer.disconnect();
-  }, [visibleTopBarToolIds, showTabBarWindowControls]);
+  }, [visibleTopBarToolIds, showTabBarWindowControls, activeChatSessionId]);
 
   // Tab ??????????????????????????????
   // ????????????? flex-shrink ????????
@@ -1507,7 +1515,19 @@ function TabBarInner({
                 onRename={
                   tab.type === "agent"
                     ? (title) => handleRenameAgentSession(tab.sessionId, title)
-                    : undefined
+                    : tab.type === "chat"
+                      ? async (title) => {
+                          try {
+                            const updated = await window.electronAPI.updateConversationTitle(tab.sessionId, title);
+                            setTabs((previous) => updateTabTitle(previous, updated.id, updated.title));
+                            setConversations((previous) => previous.map((item) => item.id === updated.id ? updated : item));
+                          } catch (error) {
+                            console.error('[TabBar] 更新对话标题失败:', error);
+                            toast.error('会话重命名失败，请重试');
+                            throw error;
+                          }
+                        }
+                      : undefined
                 }
                 isActive={tab.id === activeTabId}
                 isStreaming={streamingMap.get(tab.id) ?? "idle"}
@@ -1540,6 +1560,8 @@ function TabBarInner({
         <TopBarActions
           tools={topBarTools}
           showWindowControls={showTabBarWindowControls}
+          chatSessionId={activeChatSessionId}
+          chatHostRef={chatHostRef}
         >
           <WindowControlsHost
             id="tab-bar"
@@ -1570,23 +1592,28 @@ function TopBarActions({
   tools,
   showWindowControls,
   children,
+  chatSessionId,
+  chatHostRef,
 }: {
   tools: TopBarTool[];
   showWindowControls: boolean;
   children: React.ReactNode;
+  chatSessionId: string | null;
+  chatHostRef: React.RefCallback<HTMLDivElement>;
 }): React.ReactElement | null {
   const visibleTools = tools.filter((tool) => tool.visible);
-  if (visibleTools.length === 0 && !showWindowControls) return null;
+  if (visibleTools.length === 0 && !showWindowControls && !chatSessionId) return null;
 
   // 只有一个控件时不再画容器：右上角一颗孤零零的图标包在胶囊里，看起来像空盒子；
   // 两个以上（或与窗口按钮共存）才需要胶囊把它们圈成一组。
-  const bare = visibleTools.length + (showWindowControls ? 1 : 0) <= 1;
+  const bare = !chatSessionId && visibleTools.length + (showWindowControls ? 1 : 0) <= 1;
 
   return (
     <div
       className="topbar-actions-slot relative z-20 flex items-center gap-1 titlebar-no-drag"
       data-bare={bare ? "true" : undefined}
     >
+      {chatSessionId && <div key={chatSessionId} ref={chatHostRef} data-conversation-id={chatSessionId} className="flex items-center" />}
       {visibleTools.length > 0 && (
         <div
           className="topbar-tool-group relative z-10 flex h-7 items-center gap-0.5"

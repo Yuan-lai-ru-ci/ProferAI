@@ -157,8 +157,8 @@ export function MainArea(): React.ReactElement {
   /**
    * 订阅实时状态推送。
    *
-   * 状态镜像可持续更新，但默认不把 Agent 的导航/新页解释为用户的展示意图。
-   * 用户点击浏览器入口走显式打开路径；切回会话的 getState 也只被动同步。
+   * Agent 导航/新建页面时在侧边自动展示浏览器面板；只读同步与后台会话仍不改变当前布局。
+   * 用户点击浏览器入口走显式打开路径；切回会话的 getState 只被动同步。
    */
   const handleBrowserStatePush = React.useCallback((state: BrowserViewState) => {
     publishBrowserState(state, { autoOpen: shouldAutoOpenBrowserFromPush(state) })

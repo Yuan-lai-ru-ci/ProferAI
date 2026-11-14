@@ -26,10 +26,10 @@ English | [简体中文](./README.zh-CN.md)
 Most AI tools give you a chatbot. Profer gives you an agent that **executes**, **coordinates**, and **automates**.
 
 - **Chat is for questions.** Agent is for tasks that take hours or require multiple steps.
-- **One-shot prompts are brittle.** Profer breaks complex work into dependency graphs and executes them reliably.
-- **You shouldn't babysit AI.** Profer runs unattended jobs—daily reports, repo health checks, research pipelines—and reports back when done.
+- **One-shot prompts are brittle.** Profer can record multi-step work and dependencies in a task graph; parallel execution uses explicit sub-agent delegation rather than an automatic DAG-execution guarantee.
+- **Recurring work can be scheduled.** Automation runs configured tasks while Profer is running and the required model, tools, and permissions are available; run history records the outcome.
 
-Built on dual runtimes ([Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) + [Pi Agent SDK](https://www.npmjs.com/package/@earendil-works/pi-agent-core)), Profer balances autonomy with control: agents work independently, but you see their plan before they commit changes, and you own all the data locally.
+Built on dual runtimes ([Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) + [Pi Agent SDK](https://www.npmjs.com/package/@earendil-works/pi-agent-core)), Profer provides local session records, configurable permissions, and preset capability gates. Review requirements depend on the selected mode; not every write or Git commit is preceded by a mandatory plan.
 
 ---
 
@@ -46,11 +46,11 @@ Profer distinguishes simple queries from actual work:
 - **Chat mode** for quick questions, brainstorming, document drafts  
 - **Agent mode** for multi-step execution: coding, file operations, research synthesis, data pipelines  
 
-Agents break tasks into subtasks with explicit dependencies, execute them in parallel when possible, and surface checkpoints when you need review.
+Agents can record subtasks and dependencies, delegate independent work to parallel sessions, and request review when the configured mode or tool requires it.
 
 ### 🤝 Collaborative sub-agents
 
-Spawn multiple agent sessions for parallel workstreams. Each sub-agent gets its own workspace, full context, and autonomy—you orchestrate at a high level and collect results when they're ready.
+Create separate agent sessions for parallel workstreams, with their own model context and execution records. The parent supplies the task and necessary background; children do not automatically receive the full parent transcript. Sessions can share a project directory, so separate context is not filesystem or Git-worktree isolation.
 
 **Example:** Analyzing a codebase? Spawn three agents:  
 → Agent A: scan for security issues  
@@ -61,20 +61,16 @@ All run concurrently; you review consolidated findings.
 
 ### ⏰ Scheduled automation
 
-Set recurring tasks with cron-like schedules (daily / weekly / monthly / interval). Profer executes them unattended and logs:
+Set daily, weekly, monthly, or interval schedules. While Profer is running, the scheduler dispatches due work, records run results, and retries queued triggers when a target session is busy. Long-running work, failures, and sleep/network interruptions still need monitoring.
 
-- Success / failure history  
-- Output artifacts (reports, updated files, notifications)  
-- Retry logic for transient errors  
-
-**Use cases:**  
+**Example workflows, with the relevant tools configured:**
 → Generate weekly team status from Git + Jira  
 → Monitor competitor landing pages for changes  
 → Sync research papers to a knowledge base nightly  
 
 ### 📱 Mobile companion
 
-Use your phone to trigger desktop agents or review their work. The mobile client (Capacitor-based, separate repo: [Profer-pocket](https://github.com/Yuan-lai-ru-ci/Profer-pocket)) connects over local network or VPN—no cloud relay required.
+Use your phone to trigger desktop agents or review their work. The current mobile maintenance line is the native Android app in the separate [Profer-pocket repo](https://github.com/Yuan-lai-ru-ci/Profer-pocket); its legacy Capacitor app remains a protocol/source reference and is not the native release line. Connections use the local network or VPN—no cloud relay required.
 
 ### 🔒 Local-first by default
 
@@ -86,9 +82,9 @@ Workspaces, sessions, skills and files stay on your machine—no account require
 
 ## Demo
 
-<img src="./docs/assets/screenshots/profer-main-demo.png" alt="Profer agent executing a multi-step task with dependency graph" width="100%" />
+<img src="./docs/assets/screenshots/profer-main-demo.png" alt="Profer agent multi-step task interface" width="100%" />
 
-*Agent breaking down a task into subtasks, executing file operations, running tests, and awaiting review before final commit.*
+*Example task view. Available actions and review prompts depend on the selected runtime, preset, and permissions.*
 
 ---
 
@@ -106,29 +102,29 @@ Profer checks dependencies on first launch (Git, Node.js or Bun, working shell).
 
 **Settings → Model Configuration**  
 
-Add one or more providers. Profer supports:
+The following summarizes configured channel types, not a live model-availability or end-to-end acceptance matrix. Exact model IDs come from the provider or your channel configuration; Claude runtime requires an Anthropic Messages-compatible endpoint.
 
-| Provider | Chat | Agent (Pi runtime) | Agent (Claude runtime) | Notes |
-|----------|------|-------------------|------------------------|-------|
-| Anthropic | ✅ | ✅ | ✅ | Native Claude Messages API |
-| DeepSeek | ✅ | ✅ | ✅ | Anthropic-compatible |
-| Kimi (Moonshot) | ✅ | ✅ | ✅ | Anthropic-compatible |
-| OpenAI | ✅ | ✅ | ❌ | Pi runtime supports OpenAI protocol |
-| Google Gemini | ✅ | ✅ | ❌ | Pi runtime only |
-| 智谱 AI | ✅ | ✅ | ✅ | Anthropic-compatible |
-| MiniMax | ✅ | ✅ | ✅ | Anthropic-compatible |
-| 豆包 (Doubao) | ✅ | ✅ | ❌ | Pi runtime only |
-| 通义千问 (Qwen) | ✅ | ✅ | ❌ | Pi runtime only |
-| xAI / Grok | ✅ | ✅ | ❌ | Pi runtime, experimental flag required |
-| Ollama | ✅ | ✅ | ✅ | Local models, OpenAI-compatible |
-| Custom endpoint | ✅ | ✅ | ❌ | OpenAI-compatible API |
+| Channel type | Pi default | Claude default | Notes |
+|---|---|---|---|
+| Anthropic / Anthropic-compatible | Yes | Yes | Anthropic Messages |
+| DeepSeek / Ollama | Yes | Endpoint-dependent | Protocol varies with the configured endpoint |
+| Kimi API / Kimi Coding / MiniMax | Yes | Yes | Anthropic-compatible Agent endpoint |
+| Zhipu general / Zhipu Coding | Yes | Coding by default | Separate provider types |
+| Doubao / Ark Coding Plan | Yes | Ark Coding Plan by default | Separate provider types |
+| Qwen / Qwen Anthropic | Yes | Anthropic channel by default | Separate provider types |
+| Xiaomi / Xiaomi Token Plan | Yes | Yes | Anthropic Messages |
+| OpenAI / OpenAI Responses / OpenAI Codex | Yes | No | API or OAuth credentials depend on channel type |
+| Google / OpenCode Go OpenAI / custom OpenAI-compatible | Yes | No | Native protocol handled by Pi |
+| xAI | Enable Pi; legacy configs require the experimental flag | No | API Key or OAuth channel; Pi-only |
+
+This table describes defaults for channels without an explicit runtime selection. A configured `agentRuntimes` selection takes precedence and a separate `agentBaseUrl` can supply an Anthropic-compatible endpoint; xAI and OpenAI Codex remain Pi-only. See [`provider-capability.ts`](./packages/shared/src/types/provider-capability.ts) for static protocol defaults and [`channel.ts`](./packages/shared/src/types/channel.ts) for runtime and Chat eligibility. Enabled models, credentials, endpoint compatibility, and preset gates determine actual availability. Codex/xAI OAuth credentials are Agent-only, not Chat credentials.
 
 ### 3. Start working
 
 - **Chat**: Quick conversations, brainstorming, document editing  
 - **Agent**: Complex tasks—coding, file batch operations, research synthesis  
 
-Agents show you their execution plan before making irreversible changes.
+Choose the permission mode and preset before running a task. Planning/review prompts are mode- and tool-specific; they are not a universal approval barrier before every change.
 
 ---
 
@@ -147,9 +143,11 @@ Agents show you their execution plan before making irreversible changes.
 
 ### For teams
 
-- **Recurring reports**: Schedule weekly summary of merged PRs, open issues, and release notes  
-- **Monitoring**: Daily check of competitor pricing pages; alert on changes  
-- **Knowledge sync**: Nightly sync of new Slack threads, Notion pages, or Confluence docs into a unified knowledge base  
+- Schedule recurring summaries from sources available in the workspace
+- Monitor pages using configured browser or web tools
+- Sync research into a configured knowledge base
+
+These are configurable workflow examples, not built-in Git/Jira, competitor-monitoring, Slack, Notion, or Confluence connectors. Available actions depend on configured tools, MCP servers, and permissions.
 
 ---
 
@@ -161,15 +159,15 @@ Profer is a **local-first Electron app**: workspaces, sessions and files stay on
 
 ### Tech stack
 
-- **Runtime**: Bun  
-- **Desktop**: Electron 43  
-- **Frontend**: React 18 + TypeScript + Jotai state  
-- **UI**: Tailwind CSS + Radix primitives  
-- **Rich content**: TipTap editor, Beautiful Mermaid, KaTeX math, Shiki syntax highlighting  
-- **Agent SDKs**:  
-  - [`@anthropic-ai/claude-agent-sdk@0.3.201`](https://github.com/anthropics/claude-agent-sdk)  
-  - [`@earendil-works/pi-agent@0.86.1`](https://www.npmjs.com/package/@earendil-works/pi-agent-core)  
-- **Mobile**: Capacitor (Android client in [Profer-pocket repo](https://github.com/Yuan-lai-ru-ci/Profer-pocket))  
+- **Runtime**: Bun
+- **Desktop**: Electron 43
+- **Frontend**: React 18 + TypeScript + Jotai state
+- **UI**: Tailwind CSS + Radix primitives
+- **Rich content**: TipTap editor, Beautiful Mermaid, KaTeX math, Shiki syntax highlighting
+- **Agent SDKs**:
+  - [`@anthropic-ai/claude-agent-sdk@0.3.316`](https://github.com/anthropics/claude-agent-sdk)
+  - [`@earendil-works/pi-agent-core@0.86.1`](https://www.npmjs.com/package/@earendil-works/pi-agent-core)
+- **Mobile**: Native Android is the current maintenance line; the legacy Capacitor app remains in the [Profer-pocket repo](https://github.com/Yuan-lai-ru-ci/Profer-pocket) as a separate historical/protocol reference
 
 ---
 
@@ -202,7 +200,7 @@ profer/
 
 ```bash
 bun install        # Install dependencies
-bun run dev        # Development mode (Vite + Electron hot reload)
+bun run dev        # Renderer HMR; main/preload changes need an Electron restart
 bun run typecheck  # Type check all packages
 bun test           # Run tests
 ```
@@ -251,14 +249,7 @@ See [AGENTS.md](./AGENTS.md) for repository conventions and contribution guideli
 
 ## Roadmap
 
-- [ ] Windows ARM64 support  
-- [ ] Linux AppImage / Flatpak  
-- [ ] Plugin API for third-party integrations  
-- [ ] Built-in vector DB for semantic search over workspace context  
-- [ ] iOS client  
-- [ ] Web version (WebAssembly agent runtime)  
-
-See [open issues](https://github.com/Yuan-lai-ru-ci/ProferAI/issues) for detailed plans and vote on what matters to you.
+This README does not define approved release dates or a delivery backlog. Consult [open issues](https://github.com/Yuan-lai-ru-ci/ProferAI/issues) and the [documentation lifecycle index](./docs/README.md) for proposals and implementation evidence. A design document or an unchecked historical list is not a shipping commitment. The plugin API already has an implementation and a [maintained guide](./docs/guides/plugins.md); a marketplace and additional platform releases require separate acceptance.
 
 ---
 

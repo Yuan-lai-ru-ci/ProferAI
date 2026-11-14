@@ -32,7 +32,7 @@ import { useCompletionTransition } from '@/hooks/useCompletionTransition'
 import { formatMessageTime } from '@/components/chat/ChatMessageItem'
 import { getModelLogo, resolveModelDisplayName, resolveModelProvider } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
-import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'
+import { tabMinimapCacheAtom, writeTabMinimapCache } from '@/atoms/tab-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { resolvedBlobMessagesAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
 import { agentSessionTurnCountAtom } from '@/atoms/session-handoff'
@@ -929,14 +929,10 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
     [sessionNavEntries, visibleGroups, userProfile.avatar, orderedSDKMessages],
   )
 
-  // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）
+  // 同步 minimap 缓存到 Tab 级别（供 Tab hover 预览使用）；写入走上限淘汰，避免只增不减
   React.useEffect(() => {
     if (minimapItems.length > 0) {
-      setMinimapCache((prev) => {
-        const next = new Map(prev)
-        next.set(sessionId, minimapItems)
-        return next
-      })
+      setMinimapCache((prev) => writeTabMinimapCache(prev, sessionId, minimapItems))
     }
   }, [sessionId, minimapItems, setMinimapCache])
 

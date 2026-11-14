@@ -789,8 +789,8 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
     <div className="flex h-full overflow-hidden">
       {/* 主内容区域 */}
       <div ref={minimapHostRef} data-profer-navigation-region="conversation" tabIndex={-1} className="relative flex flex-col h-full flex-1 min-w-0">
-        {/* Header 在 max-w 外，按钮可到达最右侧 */}
-        <ChatHeader conversation={conversation} onOpenHistory={() => setHistoryDrawerOpen(true)} />
+        {/* 主窗口动作进入顶栏，独立窗口保留自己的标题与操作。 */}
+        <ChatHeader conversation={conversation} standalone={standalone} onOpenHistory={() => setHistoryDrawerOpen(true)} />
         <div className="flex flex-col flex-1 w-full max-w-[min(72rem,100%)] mx-auto overflow-hidden min-h-0">
           {/* 中间：消息区域 */}
           {/* 消息区（空对话时仅隐藏，欢迎语与输入框由下方居中容器承载） */}
@@ -855,9 +855,9 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
           {/* Agent 模式推荐横幅：独立会话窗口不接管跨模式迁移 */}
           {!standalone && <AgentRecommendBanner />}
 
-          {/* 底部：输入框（新会话时与欢迎语一起居中） */}
+          {/* 底部：新会话时欢迎语与输入框整体略低于中线；矮窗口自动收回顶部留白 */}
           {isEmptyConversation ? (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-8">
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 pb-8 pt-[clamp(0px,calc(30vh-242px),8rem)]">
               <WelcomeEmptyState variant="inline">
                 <div className="w-full max-w-[min(46rem,100%)]">{chatComposer}</div>
               </WelcomeEmptyState>

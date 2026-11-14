@@ -45,6 +45,7 @@ import {
   LoaderCircle,
   Zap,
 } from 'lucide-react'
+import { canonicalAgentToolName } from '@profer/shared'
 
 /** 工具名称到图标组件的映射 */
 export const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -118,6 +119,26 @@ export function getToolIcon(toolName: string): LucideIcon {
   if (TOOL_ICONS[toolName]) return TOOL_ICONS[toolName]
   if (toolName.startsWith('mcp__')) return Plug
   return Wrench
+}
+
+/**
+ * Pi Runtime 没有独立的 Skill 工具：Skill 是通过 read 读取 `SKILL.md` 生效的。
+ * 若不识别，Pi 会话里「用了 Skill」和「读了个普通文件」在折叠摘要中完全同形，
+ * 用户无法看出这一轮触发过哪个 Skill。
+ *
+ * 只按 ``skills/<name>/SKILL.md`` 的结构判定，目录名不得含路径分隔符，
+ * 避免把「随便读到的某个叫 SKILL.md 的文件」误判成 Skill 内容。
+ * Windows 路径（`\\` 分隔）同样适用。
+ */
+export function extractSkillNameFromRead(
+  toolName: string,
+  input: Record<string, unknown>,
+): string | null {
+  if (canonicalAgentToolName(toolName) !== 'Read') return null
+  const filePath = extractFilePath(input)
+  if (!filePath) return null
+  const match = /skills[\\/]([^\\/]+)[\\/]SKILL\.md$/i.exec(filePath.trim())
+  return match?.[1] ?? null
 }
 
 /** 内置工具显示名称映射 */

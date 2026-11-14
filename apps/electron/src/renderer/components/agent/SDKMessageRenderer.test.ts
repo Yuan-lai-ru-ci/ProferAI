@@ -408,7 +408,7 @@ describe('文件改动 chip 的草稿区基准', () => {
     return { type: 'tool_use', id, name: 'Write', input: { file_path: filePath, content: 'x' } }
   }
 
-  function renderTurn(draftRoot?: string): string {
+  function renderTurn(draftRoot?: string, extraMessages: SDKMessage[] = []): string {
     const messages = [{
       type: 'assistant',
       message: {
@@ -419,7 +419,7 @@ describe('文件改动 chip 的草稿区基准', () => {
         model: 'deepseek-v4-flash',
       },
       parent_tool_use_id: null,
-    }] as unknown as SDKMessage[]
+    }, ...extraMessages] as unknown as SDKMessage[]
     const groups = groupIntoTurns(messages)
     return renderToStaticMarkup(
       React.createElement(
@@ -446,6 +446,24 @@ describe('文件改动 chip 的草稿区基准', () => {
     expect(markup).toContain('file-changes-summary')
     expect(markup).toContain('a.ts')
     expect(markup).not.toContain('mem-v2.png')
+  })
+
+  test('混合消息回放：已有部分账本时其他 Write 路径仍渲染为 chip，草稿仍隐藏', () => {
+    const markup = renderTurn(projectStorageDir, [{
+      type: 'user',
+      parent_tool_use_id: null,
+      message: { content: [{
+        type: 'tool_result',
+        tool_use_id: 'bash-observed',
+        content: 'ok',
+        proferFileChanges: [{ path: `${projectRoot}/src/observed.ts`, source: 'bash' }],
+      }] },
+    } as unknown as SDKMessage])
+    const summary = markup.slice(markup.indexOf('file-changes-summary'))
+
+    expect(summary).toContain('observed.ts')
+    expect(summary).toContain('a.ts')
+    expect(summary).not.toContain('mem-v2.png')
   })
 
   test('project：不传 draftRoot 时不过滤（不回退到 basePath 当草稿区）', () => {

@@ -21,14 +21,13 @@
     "^src/main/lib/edition/commercial/remote-relay-client\\.ts$",
     "^src/main/lib/edition/commercial/channel-sync\\.ts$"
   ],
-  "$comment3": "字符串标记：压缩后仍保留的字面量，用来兜住“模块级检查看不到”的残留商业代码路径。baseline 只能缩小，不能扩大。",
+  "$comment3": "字符串标记：压缩后仍保留的字面量，用来兜住“模块级检查看不到”的残留商业代码路径。基线已清空，OSS 构建现在走 --strict 零容忍。",
   "commercialStringMarkers": [
     "/v1/proxy/messages",
     "/v1/proxy/chat",
     "getRegistrationOptions",
     "verifyRegistrationOtp",
     "recoverCommercialProxyAuth",
-    "getRemoteRelayTicket",
-    "/v1/proxy"
+    "getRemoteRelayTicket"
   ]
 }

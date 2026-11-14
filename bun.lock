@@ -40,7 +40,7 @@
     },
     "apps/electron": {
       "name": "@profer/electron",
-      "version": "0.16.25",
+      "version": "0.16.26",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.316",
         "@anthropic-ai/sdk": "^0.93.0",

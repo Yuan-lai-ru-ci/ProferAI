@@ -20,8 +20,8 @@
  *
  * 退出码：0 通过 / 1 校验失败 / 2 用法或 IO 错误
  */
-const { readFileSync, writeFileSync, existsSync } = require('node:fs')
-const { resolve } = require('node:path')
+const { readFileSync, writeFileSync, existsSync, statSync } = require('node:fs')
+const { basename, resolve } = require('node:path')
 
 const SCRIPT_DIR = __dirname
 const CONFIG_PATH = resolve(SCRIPT_DIR, 'commercial-surface.json')
@@ -76,6 +76,38 @@ function readModulePaths(metafilePath) {
   const metafile = readJson(metafilePath)
   const inputs = metafile.inputs ?? {}
   return Object.keys(inputs).map(normalizeModulePath)
+}
+
+/**
+ * 校验 metafile 与 bundle 出自同一次构建。
+ *
+ * 为什么必须校验：模块清单来自 metafile，字符串扫描来自 bundle。两者若不同源，
+ * 结论会同时出现假阳性（拿商业 metafile 查开源包，报一堆“商业模块混入”）
+ * 和更危险的假阴性（拿开源 metafile 查商业包，看起来一切干净）。
+ * metafile 记录了每个输出的字节数，直接与磁盘文件比对即可。
+ */
+function assertSameBuild(metafilePath, bundlePath) {
+  const metafile = readJson(metafilePath)
+  const outputs = metafile.outputs ?? {}
+  const bundleName = basename(resolve(bundlePath))
+  const matched = Object.entries(outputs).filter(([key]) => basename(key) === bundleName)
+  if (matched.length === 0) {
+    console.error(`[commercial-surface] metafile 里没有 ${bundleName} 的输出记录，无法确认两者同源`)
+    process.exit(2)
+  }
+  const [, output] = matched[0]
+  const declared = typeof output?.bytes === 'number' ? output.bytes : null
+  const actual = statSync(resolve(bundlePath)).size
+  if (declared === null) {
+    console.error(`[commercial-surface] metafile 缺少 ${bundleName} 的字节数，无法确认两者同源`)
+    process.exit(2)
+  }
+  if (declared !== actual) {
+    console.error('[commercial-surface] metafile 与 bundle 不是同一次构建的产物：')
+    console.error(`  metafile 记录 ${declared} 字节，磁盘上是 ${actual} 字节`)
+    console.error('  两者混用会让结论不可信（假阳性/假阴性都可能）。请重新执行 bundled 构建。')
+    process.exit(2)
+  }
 }
 
 /** esbuild 输出形如 `../../packages/core/src/x.ts`；统一成仓库内可读形式 */
@@ -145,6 +177,7 @@ function main() {
     process.exit(2)
   }
 
+  assertSameBuild(resolve(opts.metafile), resolve(opts.bundle))
   const modulePaths = readModulePaths(resolve(opts.metafile))
   const bundle = readFileSync(resolve(opts.bundle), 'utf8')
   const moduleHits = findModuleViolations(modulePaths, modulePatterns)

@@ -1,5 +1,6 @@
 # Agent Planning Todo Tools Implementation Plan
 
+> 生命周期：**已实现，本文是历史施工计划**。当前实现见 `planning-agent-operations.ts`、`planning-agent-tools.ts` 及其测试；本文的团队 workspace 细节是设计时上下文，不代表当前产品 UI 支持团队工作区。
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** 让 Claude/Pi Agent 可以直接列出、读取、创建和更新 Profer 规划中心 Todo；暂不开放删除。

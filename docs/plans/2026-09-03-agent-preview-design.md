@@ -1,7 +1,7 @@
 # Agent 文件视觉预览设计
 
 > 日期：2026-09-03（GMT+8）
-> 状态：已由用户确认，待实施
+> 生命周期：**核心工具已实现；本文为历史设计与决策记录**。当前工具行为以 `apps/electron/src/main/lib/agent-preview-tools.ts`、`preview-inspection-service.ts` 及同目录测试为准。PPTX 走 Profer 可见正式预览链路，不属于 Agent `inspect_preview` 支持范围。
 
 ## 背景
 
@@ -28,9 +28,12 @@ Profer 已经提供面向人类用户的文件预览能力，但 Agent 目前不
 - 第一版不把所有纯文本渲染成截图。
 - 第一版不新建独立的 PPT 编辑工作台。
 
-## 工具契约
+### 生命周期与当前边界
 
-工具名称：`inspect_preview`
+本文描述的是早期统一文件视觉预览目标。实现后，当前 Agent 工具覆盖范围和类型路由以源码为准；PPTX 通过正式可见预览 API 单独处理。历史目标中列出的全部格式/默认行为不得直接作为现行支持承诺。
+
+## 历史提案契约（非当前支持列表）
+
 
 ```ts
 interface InspectPreviewInput {

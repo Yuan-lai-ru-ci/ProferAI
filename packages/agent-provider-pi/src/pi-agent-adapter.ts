@@ -12,6 +12,7 @@ import { prependPiCompactionTaskGuidance, canonicalAgentToolName } from '@profer
 
 import { FileReadTracker, isTruncatedReadOutput, readFileState } from './pi/file-read-tracker'
 import { runWithPiFileMutationEvidence, type PiFileMutationEvidence } from './pi/rewind-evidence'
+import { diffSnapshots, snapshotTree } from './pi/file-write-snapshot'
 import type { PiAgentAdapterPorts, PiProviderHostDependencies } from './ports'
 import type { Dispatcher } from 'undici'
 import { buildWslBashArgs, windowsPathToWslPath, executeWslBashCommand, executeLocalBashCommand, waitForLocalBashProcess, classifyLocalBashFailure } from './pi/shell-execution'
@@ -236,6 +237,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onFileWrite?: (toolCallId: string, fact: FileWriteFact) => void
   /** Versioned before/after evidence for controlled write/edit operations. */
   onFileMutation?: (fact: PiFileMutationFact) => void | Promise<void>
+  /** Bash 差分只供低置信度 chip 展示，禁止用于 rewind 或 Shadow 写入归属。 */
+  onFileChangeObserved?: (toolCallId: string, fact: FileWriteFact) => void
   /** Passive lifecycle feed for Pi Host Harness; observers cannot control Session or queue prompts. */
   onHarnessLifecycle?: PiHarnessLifecycleObserver
   thinkingLevel?: AgentThinkingLevel
@@ -1690,17 +1693,50 @@ export function createControlledLocalBashOperations(
 }
 
 /**
- * Bash may write arbitrary paths; a directory diff cannot prove session ownership.
- * Keep Bash execution evidence, but do not recursively scan cwd or attribute files.
+ * Bash 目录差分仅是低置信度 chip 观察，不能证明文件归属，也不产生 rewind/Shadow 证据。
  */
+
+function withBashFileChangeObservation(
+  operations: BashOperations,
+  cwd: string,
+  onFileChangeObserved: PiAgentQueryOptions['onFileChangeObserved'] | undefined,
+): BashOperations {
+  if (!onFileChangeObserved) return operations
+  return {
+    async exec(command, executionCwd, options) {
+      const toolCallId = piToolExecutionContext.getStore()?.toolCallId
+      if (!toolCallId) return operations.exec(command, executionCwd, options)
+      const scanRoot = resolve(executionCwd || cwd)
+      let before: Awaited<ReturnType<typeof snapshotTree>> = null
+      try { before = await snapshotTree(scanRoot) } catch { /* 观察失败不能影响 Bash */ }
+      if (!before) return operations.exec(command, executionCwd, options)
+      // operations 对非零退出返回 exitCode，SDK 稍后再转换为工具错误；
+      // 启动失败、超时或取消则抛出，不能把这些未完成执行记为完整观察。
+      const result = await operations.exec(command, executionCwd, options)
+      try {
+        const after = await snapshotTree(scanRoot)
+        if (after && !options.signal?.aborted) {
+          for (const path of diffSnapshots(before, after)) {
+            try { onFileChangeObserved(toolCallId, { path, source: 'bash' }) } catch { /* chip 观察失败不影响执行 */ }
+          }
+        }
+      } catch {
+        // 快照只提供低置信度 chip，不得影响命令结果或生成恢复证据。
+      }
+      return result
+    },
+  }
+}
 
 function createProferBashToolOptions(
   sessionId: string,
+  cwd: string,
   runtimeEnv: AgentRuntimeEnv | undefined,
   onToolExecutionResult?: PiAgentQueryOptions['onToolExecutionResult'],
   commands?: CommandExecutionPort,
   backgroundTasks: BackgroundTaskPort = noOpBackgroundTasks,
   processRegistration: ProcessRegistrationPort = defaultProcessRegistrationPort,
+  onFileChangeObserved?: PiAgentQueryOptions['onFileChangeObserved'],
 ): BashToolOptions | undefined {
   const taskIds = new Map<string, string>()
   const currentToolCallId = (): string | undefined => piToolExecutionContext.getStore()?.toolCallId
@@ -1730,45 +1766,48 @@ function createProferBashToolOptions(
   }
 
   if (commands) {
-    return {
-      spawnHook,
-      operations: createPiCommandBashOperations({
-        commands,
-        prepare(_command, cwd) {
-          if (runtimeEnv?.shellKind === 'wsl') {
-            return { sessionId, shell: 'bash', launcher: 'wsl', runtimeEnv }
-          }
-          let shell = runtimeEnv?.shellPath ?? 'bash'
-          try {
-            ensureBashWorkingDirectory(cwd)
-            shell = requireLocalBashShellPath(runtimeEnv?.shellPath)
-          } catch (error) {
-            reportCommandExecutionResult(onToolExecutionResult, createCommandExecutionFailure({
-              shell, cwd, ...classifyLocalBashFailure(error, shell, cwd),
-              stderr: error instanceof Error ? error.message : String(error),
-            }))
-            throw formatLocalBashSpawnError(error, shell, cwd)
-          }
-          return { sessionId, shell, launcher: 'bash', runtimeEnv }
-        },
-        callbacks: (command, cwd) => ({
-          onStdout(data) { const taskId = getTaskId(); if (taskId) backgroundTasks.append(sessionId, taskId, data) },
-          onStderr(data) { const taskId = getTaskId(); if (taskId) backgroundTasks.append(sessionId, taskId, data) },
-          onSpawn(pid) {
-            const record = processRegistration.registerShell({ sessionId, command, cwd, pid, launcher: runtimeEnv?.shellKind === 'wsl' ? 'wsl' : 'bash' })
-            const taskId = getTaskId()
-            if (taskId && record) backgroundTasks.attachProcess(sessionId, taskId, pid, record.startTime)
-          },
-        }),
-        onResult(execution) {
-          reportCommandExecutionResult(onToolExecutionResult, execution)
+    const operations = createPiCommandBashOperations({
+      commands,
+      prepare(_command, cwd) {
+        if (runtimeEnv?.shellKind === 'wsl') {
+          return { sessionId, shell: 'bash', launcher: 'wsl', runtimeEnv }
+        }
+        let shell = runtimeEnv?.shellPath ?? 'bash'
+        try {
+          ensureBashWorkingDirectory(cwd)
+          shell = requireLocalBashShellPath(runtimeEnv?.shellPath)
+        } catch (error) {
+          reportCommandExecutionResult(onToolExecutionResult, createCommandExecutionFailure({
+            shell, cwd, ...classifyLocalBashFailure(error, shell, cwd),
+            stderr: error instanceof Error ? error.message : String(error),
+          }))
+          throw formatLocalBashSpawnError(error, shell, cwd)
+        }
+        return { sessionId, shell, launcher: 'bash', runtimeEnv }
+      },
+      callbacks: (command, cwd) => ({
+        onStdout(data) { const taskId = getTaskId(); if (taskId) backgroundTasks.append(sessionId, taskId, data) },
+        onStderr(data) { const taskId = getTaskId(); if (taskId) backgroundTasks.append(sessionId, taskId, data) },
+        onSpawn(pid) {
+          const record = processRegistration.registerShell({ sessionId, command, cwd, pid, launcher: runtimeEnv?.shellKind === 'wsl' ? 'wsl' : 'bash' })
           const taskId = getTaskId()
-          if (taskId) {
-            backgroundTasks.complete(sessionId, taskId, execution.aborted || execution.timedOut ? 'stopped' : execution.errorKind || execution.exitCode !== 0 ? 'failed' : 'completed')
-            clearTaskId()
-          }
+          if (taskId && record) backgroundTasks.attachProcess(sessionId, taskId, pid, record.startTime)
         },
       }),
+      onResult(execution) {
+        reportCommandExecutionResult(onToolExecutionResult, execution)
+        const taskId = getTaskId()
+        if (taskId) {
+          backgroundTasks.complete(sessionId, taskId, execution.aborted || execution.timedOut ? 'stopped' : execution.errorKind || execution.exitCode !== 0 ? 'failed' : 'completed')
+          clearTaskId()
+        }
+      },
+    })
+    return {
+      spawnHook,
+      operations: runtimeEnv?.shellKind === 'wsl'
+        ? operations
+        : withBashFileChangeObservation(operations, cwd, onFileChangeObserved),
     }
   }
 
@@ -1780,7 +1819,11 @@ function createProferBashToolOptions(
   }
 
   return {
-    operations: createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
+    operations: withBashFileChangeObservation(
+      createControlledLocalBashOperations(sessionId, runtimeEnv?.shellPath, onToolExecutionResult, getTaskId, clearTaskId, backgroundTasks, processRegistration),
+      cwd,
+      onFileChangeObserved,
+    ),
     spawnHook,
   }
 }
@@ -1931,6 +1974,7 @@ export function buildBuiltinToolDefinitions(
   processRegistration?: ProcessRegistrationPort,
   onFileWrite?: PiAgentQueryOptions['onFileWrite'],
   onFileMutation?: PiAgentQueryOptions['onFileMutation'],
+  onFileChangeObserved?: PiAgentQueryOptions['onFileChangeObserved'],
 ): ToolDefinition[] {
   const powerShellTool = commands
     ? createWindowsPowerShellToolDefinition(sdk, cwd, runtimeEnv, {}, sessionId, commands, backgroundTasks, processRegistration)
@@ -1938,7 +1982,7 @@ export function buildBuiltinToolDefinitions(
   const writeTool = sdk.createWriteToolDefinition(cwd, { operations: createStrictWriteOperations(onFileWrite, onFileMutation) })
   const definitions = [
     sdk.createReadToolDefinition(cwd),
-    sdk.createBashToolDefinition(cwd, createProferBashToolOptions(sessionId, runtimeEnv, onToolExecutionResult, commands, backgroundTasks, processRegistration)),
+    sdk.createBashToolDefinition(cwd, createProferBashToolOptions(sessionId, cwd, runtimeEnv, onToolExecutionResult, commands, backgroundTasks, processRegistration, onFileChangeObserved)),
     ...(powerShellTool ? [powerShellTool] : []),
     sdk.createEditToolDefinition(cwd, { operations: createTrackedEditOperations(onFileWrite, onFileMutation) }),
     {
@@ -2201,6 +2245,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           input.processRegistration,
           input.onFileWrite,
           input.onFileMutation,
+          input.onFileChangeObserved,
         ),
         ...buildProferProductToolDefinitions(sdk, input.canUseTool),
       ])

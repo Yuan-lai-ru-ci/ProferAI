@@ -6,7 +6,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/t
 import { agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { aggregateHeatmapEntries, isScrolledToEnd, toCalendarData, type WorkspaceHeatmapEntry } from '@/lib/heatmap-utils'
 
-const CELL = 10
 const GAP = 3
 const WEEKS = 53
 const DAYS = ['一', '', '三', '', '五', '', '日']
@@ -49,7 +48,7 @@ export function GlobalUsageCard(): React.ReactElement {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [reload, setReload] = React.useState(0)
-  // 53 列网格（约 690px）在窄窗口下会横向溢出。产品语义：**钉住最新日期**，
+  // 53 列网格在窄窗口下会横向溢出。产品语义：**钉住最新日期**，
   // 宽度不够时被裁掉的应该是左侧的旧数据，而不是右侧的近期数据。
   // 所以除了首屏滚到最右，还要在容器宽度变化（改窗口、切侧边栏）时重新贴回最右，
   // 否则 scrollLeft 是绝对像素值，容器一变窄右侧就被推出视野。
@@ -123,14 +122,17 @@ export function GlobalUsageCard(): React.ReactElement {
       </div>
       {error ? <div role="alert" className="mt-4 flex items-center justify-between gap-3 rounded-lg bg-destructive/5 px-3 py-2 text-xs text-destructive"><span>热力图读取失败：{error}</span><Button variant="outline" size="sm" onClick={() => setReload((value) => value + 1)}>重试</Button></div> : loading ? <div aria-busy="true" className="mt-5 h-[112px] animate-pulse rounded-md bg-muted/40 motion-reduce:animate-none" /> : (
         <>
-          <div className="mt-5 flex gap-2">
-            {/* 星期标签固定在滚动区左侧，不随横向滚动跑掉；行高与网格逐行对齐（10px + 3px） */}
-            <div className="mt-[20px] flex shrink-0 flex-col" style={{ gap: GAP }}>{DAYS.map((day, i) => <span key={i} className="h-[10px] w-5 text-[9px] leading-[10px] text-muted-foreground">{day}</span>)}</div>
-            <div ref={scrollRef} className="min-w-0 flex-1 overflow-x-auto pb-1">
-              <div className="w-max">
-                <div className="relative mb-2 h-3">{months.map((month) => <span key={`${month.label}-${month.col}`} className="absolute top-0 whitespace-nowrap text-[9px] text-muted-foreground" style={{ left: month.col * (CELL + GAP) }}>{month.label}</span>)}</div>
-                <div className="grid grid-flow-col grid-rows-7" style={{ gap: GAP }}>
-                  {weeks.flatMap((week) => week).map((cell, index) => cell ? <Tooltip key={cell.date} delayDuration={200}><TooltipTrigger asChild><div aria-label={`${cell.date}，${cell.tokens ? `${formatTokens(cell.tokens)} tokens` : '无消耗'}`} className={`rounded-[2px] ${LEVELS[cell.level] ?? LEVELS[0]} transition-opacity hover:opacity-75`} style={{ width: CELL, height: CELL }} /></TooltipTrigger><TooltipContent className="whitespace-pre-line text-xs">{cell.date}{'\n'}{cell.tokens ? `${formatTokens(cell.tokens)} tokens` : '无消耗'}</TooltipContent></Tooltip> : <div key={`future-${index}`} style={{ width: CELL, height: CELL }} />)}
+          <div className="mt-5" style={{ containerType: 'inline-size' }}>
+            {/* 宽屏放大方格至多 18px，超宽时整体居中；窄屏保留 10px 并允许横向滚动。 */}
+            <div className="mx-auto flex gap-2" style={{ width: 'min(100%, 1138px)', '--heatmap-cell': 'clamp(10px, calc((100cqw - 184px) / 53), 18px)' } as React.CSSProperties}>
+              {/* 星期标签固定在滚动区左侧，并与方格逐行对齐。 */}
+              <div className="mt-[20px] flex shrink-0 flex-col" style={{ gap: GAP }}>{DAYS.map((day, i) => <span key={i} className="flex w-5 items-center text-[9px] text-muted-foreground" style={{ height: 'var(--heatmap-cell)' }}>{day}</span>)}</div>
+              <div ref={scrollRef} className="min-w-0 flex-1 overflow-x-auto pb-1">
+                <div className="w-max">
+                  <div className="relative mb-2 h-3">{months.map((month) => <span key={`${month.label}-${month.col}`} className="absolute top-0 whitespace-nowrap text-[9px] text-muted-foreground" style={{ left: `calc(${month.col} * (var(--heatmap-cell) + ${GAP}px))` }}>{month.label}</span>)}</div>
+                  <div className="grid grid-flow-col grid-rows-7" style={{ gap: GAP }}>
+                    {weeks.flatMap((week) => week).map((cell, index) => cell ? <Tooltip key={cell.date} delayDuration={200}><TooltipTrigger asChild><div aria-label={`${cell.date}，${cell.tokens ? `${formatTokens(cell.tokens)} tokens` : '无消耗'}`} className={`rounded-[2px] ${LEVELS[cell.level] ?? LEVELS[0]} transition-opacity hover:opacity-75`} style={{ width: 'var(--heatmap-cell)', height: 'var(--heatmap-cell)' }} /></TooltipTrigger><TooltipContent className="whitespace-pre-line text-xs">{cell.date}{'\n'}{cell.tokens ? `${formatTokens(cell.tokens)} tokens` : '无消耗'}</TooltipContent></Tooltip> : <div key={`future-${index}`} style={{ width: 'var(--heatmap-cell)', height: 'var(--heatmap-cell)' }} />)}
+                  </div>
                 </div>
               </div>
             </div>
