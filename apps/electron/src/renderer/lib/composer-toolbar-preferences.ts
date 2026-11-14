@@ -33,6 +33,8 @@ export const COMPOSER_TOOLBAR_DEFINITIONS: Record<ComposerToolbarSurface, readon
     { key: 'speech', label: '语音输入', description: '从语音输入浮窗插入文字。' },
     { key: 'context-usage', label: '上下文用量', description: '查看并管理当前会话的上下文用量。' },
     { key: 'graph', label: '任务图', description: '查看当前任务的图结构。' },
+    // 追加在末尾：老用户已保存的 order 值不会被重排，新入口默认排最后。
+    { key: 'handoff', label: '会话交接', description: '随时整理交接文档并新建会话继续，不受建议轮数阈值限制。' },
   ],
 }
 

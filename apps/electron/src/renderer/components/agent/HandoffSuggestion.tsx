@@ -5,46 +5,24 @@
  * RuntimeProcessPanel、消息队列同一位置），所以它天然浮在输入卡正上方，
  * 复用既有的叠层与间距，不需要另造一套布局。
  *
- * 点击后由主进程完成「撰写交接文档 → 新建会话」，渲染层只做三件事：
- * 把新会话塞进列表、打开标签页、把首轮 prompt 交给它。
- * 首轮刻意只要求「读文档 + 复述计划」，不直接执行下一步——否则新会话会在
- * 用户还没看过内容的情况下就开始花钱改代码。
+ * 与输入工具栏的常驻「交接」按钮共用 `useSessionHandoff`：这里只负责
+ * 「什么时候建议」和「怎么显示」，点下去的动作由 hook 统一执行。
+ * 建议条有阈值闸门，工具栏按钮没有 —— 用户随时可以主动交接。
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue } from 'jotai'
 import { ArrowRightLeft, Loader2, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
-import { toast } from 'sonner'
-import type { AgentSessionHandoffResult } from '@profer/shared'
-import {
-  agentPendingPromptAtom,
-  agentSessionsAtom,
-  agentSessionStreamingStateAtomFamily,
-} from '@/atoms/agent-atoms'
+import { agentSessionStreamingStateAtomFamily } from '@/atoms/agent-atoms'
 import {
   agentSessionTurnCountFamily,
   handoffDismissedAtom,
   handoffSuggestTurnCountAtom,
 } from '@/atoms/session-handoff'
 import { resolveHandoffSuggestion } from '@/lib/handoff-suggestion'
-import { useOpenSession } from '@/hooks/useOpenSession'
-
-/**
- * 新会话首轮 prompt：只要它「读 + 复述」，不要它「动手」。
- *
- * `additionalDirectories` 里会带上交接文档所在目录，所以这里用绝对路径引用
- * 才不会因为 cwd 之外而读不到。
- */
-function buildBootstrapPrompt(result: AgentSessionHandoffResult): string {
-  return `已从上一个会话交接过来，交接文档：${result.handoffPath}
-
-请先读取这份文档，然后**只做确认，先不要动手**：
-1. 用 3-5 条要点复述你接手的目标、已经完成的部分、以及下一步建议；
-2. 指出文档里含糊、缺失，或你认为需要我确认的地方；
-3. 等我确认之后再开始执行。`
-}
+import { useSessionHandoff } from '@/hooks/useSessionHandoff'
 
 interface HandoffSuggestionProps {
   sessionId: string
@@ -55,10 +33,7 @@ export function HandoffSuggestion({ sessionId }: HandoffSuggestionProps): React.
   const turnCount = useAtomValue(agentSessionTurnCountFamily(sessionId))
   const streamingState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
   const [dismissedIds, setDismissedIds] = useAtom(handoffDismissedAtom)
-  const setPendingPrompt = useSetAtom(agentPendingPromptAtom)
-  const setAgentSessions = useSetAtom(agentSessionsAtom)
-  const openSession = useOpenSession()
-  const [inFlight, setInFlight] = React.useState(false)
+  const { inFlight, startHandoff } = useSessionHandoff(sessionId)
 
   // 取本会话自己的流式状态，而不是全局「当前会话」的那一份：后台标签页也挂着
   // 这个组件的实例，用全局值会让它按另一个会话的占用率做判断。
@@ -90,32 +65,6 @@ export function HandoffSuggestion({ sessionId }: HandoffSuggestionProps): React.
     })
   }
 
-  const handleCreate = async (): Promise<void> => {
-    if (inFlight) return
-    setInFlight(true)
-    try {
-      const result = await window.electronAPI.createAgentHandoffSession(sessionId)
-      setAgentSessions((prev) => (
-        prev.some((session) => session.id === result.session.id) ? prev : [result.session, ...prev]
-      ))
-      // 交接完成后旧会话不再提示：用户刚做过这个动作，立刻再劝一次只会变成噪音。
-      handleDismiss()
-      openSession('agent', result.session.id, result.session.title)
-      setPendingPrompt({
-        sessionId: result.session.id,
-        message: buildBootstrapPrompt(result),
-        additionalDirectories: [result.handoffDir],
-      })
-      if (result.handoffSource === 'transcript') {
-        toast.warning('交接文档由转录自动生成（模型撰写未成功），建议先核对内容')
-      }
-    } catch (error) {
-      console.error('[会话交接] 创建交接会话失败:', error)
-      toast.error('交接失败，请重试')
-      setInFlight(false)
-    }
-  }
-
   return (
     <div className="flex items-center gap-3 border-b border-border/35 px-3 pt-2.5 pb-1.5">
       <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -131,7 +80,7 @@ export function HandoffSuggestion({ sessionId }: HandoffSuggestionProps): React.
         </p>
       </div>
 
-      <Button size="sm" className="h-7 shrink-0 px-2.5 text-[12px]" disabled={inFlight} onClick={() => void handleCreate()}>
+      <Button size="sm" className="h-7 shrink-0 px-2.5 text-[12px]" disabled={inFlight} onClick={() => void startHandoff()}>
         新开会话
       </Button>
 

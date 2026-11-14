@@ -21,6 +21,18 @@ describe('composer toolbar preferences', () => {
     expect(preferences.agent?.graph).toEqual({ visible: true, order: 7 })
   })
 
+  test('agent 手动交接入口默认显示、默认排最后，也可被用户隐藏', () => {
+    const defaults = normalizeComposerToolbarPreferences(undefined)
+    expect(defaults.agent?.handoff).toEqual({ visible: true, order: 8 })
+    // 老用户存过的偏好里没有 handoff 这个 key，归一化后仍要显示（不能变成「新按钮要手动开」）。
+    const legacy = normalizeComposerToolbarPreferences({ agent: { graph: { visible: true, order: 3 } } })
+    expect(legacy.agent?.handoff).toEqual({ visible: true, order: 8 })
+    const hidden = applyComposerToolbarPreferences('agent', [{ key: 'handoff' }], {
+      agent: { handoff: { visible: false, order: 8 } },
+    })
+    expect(hidden[0]?.visible).toBe(false)
+  })
+
   test('applies user ordering to core tools while keeping them visible in the main row', () => {
     const items = [
       { key: 'model', node: 'model' },
