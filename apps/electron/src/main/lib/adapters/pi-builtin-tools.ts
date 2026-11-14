@@ -556,7 +556,10 @@ export function buildPiGoalProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCon
       constraints: Type.Optional(Type.String({ description: '必须遵守的约束' })),
       stopWhen: Type.Optional(Type.String({ description: '什么情况下应该停下来问用户' })),
     }),
-    execute: async (params: unknown) => {
+    // Pi SDK 的 execute 签名是 (toolCallId, params, signal?)，第一个参数不是参数对象。
+    // 曾误写成单参 execute(params)，把 toolCallId 当成 params，objective 永远读不到，
+    // 于是无论模型填什么内容都返回「objective 不能为空」。
+    async execute(_toolCallId, params) {
       const args = params as { objective: unknown; rationale?: unknown; verification?: unknown; constraints?: unknown; stopWhen?: unknown }
       const normalized = normalizeGoalProposalInput(args)
       if (!normalized) return jsonToolResult({ accepted: false, reason: 'objective 不能为空' })
