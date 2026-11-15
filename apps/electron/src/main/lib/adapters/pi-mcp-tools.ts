@@ -410,6 +410,34 @@ class PiMcpClientManager {
     await Promise.all(idle.map((key) => this.closeSlot(key, '空闲回收')))
   }
 
+  /**
+   * 关闭外部配置文件已变更的连接，让下次 listTools 按新配置重建。
+   *
+   * 只允许在没有并发工具调用的时机调用（当前唯一调用点是每轮会话准备）。
+   * 不要放进 `getConnection` 的调用热路径：两个并发调用会同时判定 stale，
+   * 各自删旧 slot 再各自新建，后写入的 slot 覆盖先写入的，被覆盖那条连接
+   * 既不在 connections 里、也不会被 reapIdle 回收，等于永久泄漏一个子进程。
+   */
+  async closeStaleExternalState(
+    externalStatePaths: Record<string, string[]> | undefined,
+  ): Promise<string[]> {
+    const targets: Array<{ key: string; serverName: string }> = []
+    for (const [key, slot] of this.connections.entries()) {
+      const conn = slot.connection
+      if (!conn) continue
+      // 当前配置里的路径优先；连接上记录的是建立时的快照，可能已过期
+      const paths = externalStatePaths?.[conn.serverName] ?? conn.externalStatePaths
+      if (!isExternalStateStale(paths, conn.connectedAt)) continue
+      targets.push({ key, serverName: conn.serverName })
+    }
+    if (targets.length === 0) return []
+
+    const serverNames = [...new Set(targets.map((target) => target.serverName))]
+    console.log(`[Pi MCP] 外部配置已变更，重建连接: ${serverNames.join('、')}`)
+    await Promise.all(targets.map((target) => this.closeSlot(target.key, '外部配置已变更')))
+    return serverNames
+  }
+
   /** 只输出已建立完成的连接；pending 与 rejected 一律跳过。 */
   snapshots(): McpConnectionSnapshot[] {
     const snapshots: McpConnectionSnapshot[] = []
@@ -666,7 +694,27 @@ export async function discoverExternalMcpTools(mcpServers: PiMcpServers, options
   return discovered
 }
 
+/**
+ * 每轮会话准备时关闭「外部配置文件已变更」的连接，下一轮 listTools 会按新配置重建。
+ *
+ * 放在这里而不是 `getConnection` 热路径：此时没有并发工具调用，关闭连接不会打断调用，
+ * 也避免并发重建互相覆盖 slot 造成连接泄漏。失败只告警，不影响本轮工具装配。
+ */
+export async function refreshStaleMcpConnections(
+  externalStatePaths?: Record<string, string[]>,
+): Promise<string[]> {
+  try {
+    return await manager.closeStaleExternalState(externalStatePaths)
+  } catch (error) {
+    console.warn('[Pi MCP] 重建外部配置已变更的连接失败（忽略）:', error)
+    return []
+  }
+}
+
 export async function buildPiMcpTools(mcpServers: PiMcpServers, policy?: EffectiveAgentPresetPolicy, options?: PiMcpBridgeOptions): Promise<ToolDefinition[]> {
+  // 外部配置文件（如 server 自己的 TOML）改了不会改变 mcpServers 的配置 hash，
+  // 必须在这里主动淘汰旧连接，否则整轮会话都在用旧配置且没有任何提示。
+  await refreshStaleMcpConnections(options?.externalStatePaths)
   const tools: ToolDefinition[] = []
   const seenToolNames = new Set<string>()
   for (const { serverName, config, tool } of await discoverExternalMcpTools(Object.fromEntries(Object.entries(mcpServers).filter(([name]) => !policy || isEffectiveAgentPresetMcpServerAllowed(policy, name))), options)) {
