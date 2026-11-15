@@ -60,6 +60,7 @@ const {
   buildPiTaskGraphTools,
   buildPiAgentPresetTools,
   buildPiGoalProposalTools,
+  buildPiMcpAdminTools,
 } = await import('./pi-builtin-tools')
 
 interface CapturedTool {
@@ -88,7 +89,7 @@ describe('Pi Profer in-process tool bridges', () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     const context: PiBuiltinToolsContext = {
       sessionId: 'prepared-sdk-probe', channelId: 'fixture', agentRuntime: 'pi',
-      disabledToolGroups: ['task-graph', 'memory', 'collaboration', 'automation', 'browser', 'clipboard', 'preview', 'image', 'web', 'ppt-materials'],
+      disabledToolGroups: ['task-graph', 'memory', 'collaboration', 'automation', 'browser', 'clipboard', 'preview', 'image', 'web', 'ppt-materials', 'mcp'],
       allowedPresetOperations: [],
     }
     let invoked = false
@@ -448,6 +449,7 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
       { group: 'preview', names: ['inspect_preview', 'open_file_preview', 'inspect_file_preview', 'present_visualization', 'inspect_visualization'] },
       { group: 'image', names: ['send_local_image', 'generate_image', 'create_skin'] },
       { group: 'web', names: ['WebSearch', 'WebFetch'] },
+      { group: 'mcp', names: ['list_mcp_servers', 'restart_mcp_server'] },
     ] as const
     for (const { group, names: disabledNames } of cases) {
       const { sdk, tools } = createPiSdkStub()
@@ -523,14 +525,14 @@ describe('Pi builtin tools disabledToolGroups pruning (preset capability pruning
     }
   })
 
-  test('Given all ten product groups disabled When building Pi builtin tools Then only core and preset tools remain', async () => {
+  test('Given all product groups disabled When building Pi builtin tools Then only core and preset tools remain', async () => {
     const { sdk, tools } = createPiSdkStub()
     await buildPiBuiltinTools(sdk, {
       ...baseCtx,
       agentCwd: 'C:/safe/session',
       allowedRoots: ['C:/safe/attached'],
       pptCapabilityActive: true,
-      disabledToolGroups: ['task-graph', 'memory', 'collaboration', 'automation', 'browser', 'clipboard', 'preview', 'image', 'web', 'ppt-materials'],
+      disabledToolGroups: ['task-graph', 'memory', 'collaboration', 'automation', 'browser', 'clipboard', 'preview', 'image', 'web', 'ppt-materials', 'mcp'],
     })
     const names = new Set(tools.map((tool) => tool.name))
     for (const forbidden of [
@@ -620,5 +622,62 @@ describe('Pi propose_goal tool schema', () => {
     const properties = parameters.properties as Record<string, { type?: string }>
     expect(Object.keys(properties).sort()).toEqual(['constraints', 'objective', 'rationale', 'stopWhen', 'verification'])
     for (const property of Object.values(properties)) expect(property.type).toBe('string')
+  })
+})
+
+describe('Pi MCP 连接管理工具', () => {
+  test('Given 未禁用 mcp 组 When 全量装配 Then 两个工具真的进入工具面', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    await buildPiBuiltinTools(sdk, {
+      sessionId: 'mcp-register-test',
+      channelId: 'ch-mcp',
+      triggeredBy: 'user',
+    })
+    const names = new Set(tools.map((tool) => tool.name))
+    expect(names.has('list_mcp_servers')).toBe(true)
+    expect(names.has('restart_mcp_server')).toBe(true)
+  })
+
+  test('Given Pi runtime When building MCP admin tools Then 只暴露查连接与重启两个工具且参数合法', () => {
+    const { sdk, tools } = createPiSdkStub()
+    buildPiMcpAdminTools(sdk, {})
+
+    expect(tools.map((tool) => tool.name)).toEqual(['list_mcp_servers', 'restart_mcp_server'])
+
+    const listParameters = tools[0]!.parameters as Record<string, unknown>
+    expect(listParameters.type).toBe('object')
+
+    const restartParameters = tools[1]!.parameters as Record<string, unknown>
+    expect(restartParameters.type).toBe('object')
+    expect(restartParameters.required).toEqual(['server'])
+    expect(Object.keys(restartParameters.properties as object)).toEqual(['server'])
+  })
+
+  // 下面三条都不传 workspaceSlug：readConfigured() 直接返回空表，避免测试去读写真实配置目录。
+  test('Given 没有配置也没有连接 When list_mcp_servers Then 返回空清单与提示而不是报错', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    buildPiMcpAdminTools(sdk, {})
+
+    const result = await tools[0]!.execute!('call-1', {}) as { details?: { servers?: unknown[]; hints?: string[] } }
+    expect(result.details?.servers).toEqual([])
+    expect(result.details?.hints?.join()).toContain('没有配置用户 MCP 服务器')
+  })
+
+  test('Given 缺少 server 参数 When restart_mcp_server Then 返回错误且不触碰连接', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    buildPiMcpAdminTools(sdk, {})
+
+    const result = await tools[1]!.execute!('call-2', { server: '   ' }) as { isError?: boolean; details?: { error?: string } }
+    expect(result.isError).toBe(true)
+    expect(result.details?.error).toContain('缺少 server 参数')
+  })
+
+  test('Given 配置与连接都为空 When restart_mcp_server 传入任意名字 Then 明确报告无需重启', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    buildPiMcpAdminTools(sdk, {})
+
+    const result = await tools[1]!.execute!('call-3', { server: 'whatever' }) as { isError?: boolean; details?: { error?: string } }
+    expect(result.isError).toBe(true)
+    expect(result.details?.error).toContain('没有配置任何用户 MCP 服务器')
   })
 })

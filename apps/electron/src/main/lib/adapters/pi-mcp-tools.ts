@@ -377,10 +377,14 @@ class PiMcpClientManager {
     await Promise.allSettled(keys.map((key) => this.closeSlot(key, 'app quit')))
   }
 
-  /** 关闭指定 serverName 下的所有 key（跨 workspace 与不同配置 hash）。 */
-  async closeServer(serverName: string, reason: string): Promise<number> {
+  /**
+   * 关闭指定 serverName 下的 key（跨配置 hash）。
+   * 传入 workspaceSlug 时只关该工作区的连接，避免一个会话的重启踢掉其它工作区正在用的连接。
+   */
+  async closeServer(serverName: string, reason: string, workspaceSlug?: string): Promise<number> {
     const keys = [...this.connections.entries()]
-      .filter(([, slot]) => slot.serverName === serverName)
+      .filter(([, slot]) => slot.serverName === serverName
+        && (workspaceSlug === undefined || slot.workspaceSlug === workspaceSlug))
       .map(([key]) => key)
     await Promise.all(keys.map((key) => this.closeSlot(key, reason)))
     return keys.length
@@ -693,17 +697,22 @@ export async function buildPiMcpTools(mcpServers: PiMcpServers, policy?: Effecti
   return tools
 }
 
+/** 重启范围：缺省关闭该 server 名下全部连接；给出 workspaceSlug 时只关该工作区的连接。 */
+export interface McpRestartScope {
+  workspaceSlug?: string
+}
+
 /**
- * 重启单个 MCP server：关闭它名下所有连接（跨 workspace 与配置 hash），
- * 丢弃 tools 缓存并递增代际。下次 listTools 会重建连接与子进程。
- * 不会置位 disposed，因此重启后桥接仍可正常使用。
+ * 重启单个 MCP server：关闭它名下匹配范围的连接，丢弃 tools 缓存并递增代际。
+ * 下次 listTools 会重建连接与子进程。不会置位 disposed，因此重启后桥接仍可正常使用。
  */
-export async function restartMcpServer(serverName: string): Promise<McpServerRestartResult> {
+export async function restartMcpServer(serverName: string, scope?: McpRestartScope): Promise<McpServerRestartResult> {
   // 代际递增：即使没有旧连接，新连接的 epoch 也必须大于重启前的任何探测结果
   nextEpoch()
-  const closed = await manager.closeServer(serverName, '手动重启')
-  console.log(`[Pi MCP] 重启 MCP server ${serverName}：已关闭 ${closed} 个连接`)
-  return { ok: true, message: `已重启 ${closed} 个连接` }
+  const closed = await manager.closeServer(serverName, '手动重启', scope?.workspaceSlug)
+  const scopeNote = scope?.workspaceSlug ? `（仅工作区 ${scope.workspaceSlug}）` : ''
+  console.log(`[Pi MCP] 重启 MCP server ${serverName}：已关闭 ${closed} 个连接${scopeNote}`)
+  return { ok: true, message: `已重启 ${closed} 个连接${scopeNote}` }
 }
 
 /** 断开单个 MCP server 的所有连接；不清 disposed，下次调用会自动重连。 */

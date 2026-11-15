@@ -118,6 +118,30 @@ describe('Pi MCP 连接生命周期', () => {
     expect(await restartMcpServer('not-connected')).toEqual({ ok: true, message: '已重启 0 个连接' })
   })
 
+  test('带 workspaceSlug 的 restart 只关该工作区连接，不影响其它工作区', async () => {
+    const servers = { demo: { type: 'stdio', command: 'demo-server' } }
+    await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-a' })
+    await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-b' })
+
+    const result = await restartMcpServer('demo', { workspaceSlug: 'ws-a' })
+    expect(result).toEqual({ ok: true, message: '已重启 1 个连接（仅工作区 ws-a）' })
+
+    // ws-a 的旧连接已关闭，ws-b 仍在
+    const remaining = listMcpConnectionSnapshots()
+    expect(remaining.map(item => item.workspaceSlug)).toEqual(['ws-b'])
+    expect(created.filter(item => item.transport.closed)).toHaveLength(1)
+  })
+
+  test('显式传空对象等同于全量 restart，保持设置页原有语义', async () => {
+    const servers = { demo: { type: 'stdio', command: 'demo-server' } }
+    await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-a' })
+    await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-b' })
+
+    const result = await restartMcpServer('demo', {})
+    expect(result).toEqual({ ok: true, message: '已重启 2 个连接' })
+    expect(listMcpConnectionSnapshots()).toHaveLength(0)
+  })
+
   test('reconcile 关闭未列出的 server，保留列出的', async () => {
     const servers = {
       keep: { type: 'stdio', command: 'keep-server' },
