@@ -1,4 +1,5 @@
 import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
+import { syncBestEffort } from './durability'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
@@ -66,7 +67,7 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
   const handle = await open(tempPath, 'wx', 0o600)
   try {
     await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8')
-    await handle.sync()
+    await syncBestEffort(handle)
   } catch (error) {
     await handle.close()
     await unlinkMissing(tempPath)
@@ -76,7 +77,7 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
   try {
     await rename(tempPath, path)
     const dir = await open(dirname(path), 'r')
-    try { await dir.sync() } finally { await dir.close() }
+    try { await syncBestEffort(dir) } finally { await dir.close() }
   } catch (error) {
     await unlinkMissing(tempPath)
     throw error

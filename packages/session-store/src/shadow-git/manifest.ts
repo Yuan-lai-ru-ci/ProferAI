@@ -16,7 +16,8 @@
  *   这种条目一律不复用，否则已有工作区永远等不到 100755 被重新登记。
  */
 
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
+import { fsyncBestEffort } from '../durability'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ShadowFileStat } from './types'
@@ -171,7 +172,7 @@ function writeAtomic(path: string, content: string): void {
   try {
     writeSync(fd, content)
     // fsync 必须在 rename 前：清单描述的是「已经提交的 tree」，写一半断电会污染下一次采集的判断。
-    fsyncSync(fd)
+    fsyncBestEffort(fd)
   } finally {
     closeSync(fd)
   }
