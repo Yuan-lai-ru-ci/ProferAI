@@ -1629,6 +1629,8 @@ export interface ElectronAPI {
   migrationExport: (options: unknown) => Promise<MigrationExportResult>
   /** 执行 v2 多工作区导出 */
   migrationExportV2: (options: unknown) => Promise<MigrationExportResult>
+  /** 取消正在进行的导出（按 taskId） */
+  migrationCancelExport: (taskId: string) => Promise<boolean>
   /** 解析导入文件，返回预览信息（加密备份需传口令） */
   migrationParseImportFile: (filePath: string, passphrase?: string) => Promise<unknown>
   /** 检查导入文件是否加密及体积 */
@@ -1766,6 +1768,7 @@ interface MigrationExportResult {
   bytes?: number
   entries?: number
   encrypted?: boolean
+  cancelled?: boolean
 }
 
 /**
@@ -3818,6 +3821,10 @@ const electronAPI: ElectronAPI = {
 
   migrationExportV2: (options: unknown) => {
     return ipcRenderer.invoke('migration:exportV2', options)
+  },
+
+  migrationCancelExport: (taskId: string) => {
+    return ipcRenderer.invoke('migration:cancelExport', taskId)
   },
 
   migrationParseImportFile: (filePath: string, passphrase?: string) => {

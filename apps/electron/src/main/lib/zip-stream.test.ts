@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -112,5 +113,17 @@ describe('流式 ZIP 读写', () => {
     expect(warnings.some((message) => message.includes('校验和不匹配'))).toBe(true)
     // 其余条目照常恢复
     expect(extract.files).toBe(2)
+  })
+
+  test('Given 导出被取消 When 继续写入 Then 立即抛 AbortError 且不生成目标文件', async () => {
+    const zipPath = join(root, 'cancelled.zip')
+    const controller = new AbortController()
+    const writer = new ZipStreamWriter(zipPath, { signal: controller.signal })
+    await writer.addBuffer('before-cancel', 'before.txt')
+    controller.abort()
+
+    await expect(writer.addFile(join(root, 'src', 'big.bin'), 'big.bin')).rejects.toThrow('导出已取消')
+    await writer.abort()
+    expect(existsSync(zipPath)).toBe(false)
   })
 })
