@@ -79,6 +79,14 @@ describe('goal contract parsing', () => {
     expect(contract?.verification).toBe('第一条有效')
   })
 
+  test('overlong marker line falls back to goal text instead of vanishing', () => {
+    const long = `@verify: ${'x'.repeat(241)}`
+    const { goal, contract } = parseGoalContractInput(`目标\n${long}`)
+    expect(contract?.verification).toBeUndefined()
+    // 既不进契约也不该消失：否则用户写的那行字在两端都看不到
+    expect(goal).toContain('@verify:')
+  })
+
   test('goal without markers has no contract', () => {
     expect(parseGoalContractInput('优化性能').contract).toBeUndefined()
     expect(parseGoalCommand('/goal 优化性能')).toEqual({ type: 'start', goal: '优化性能', contract: undefined })
