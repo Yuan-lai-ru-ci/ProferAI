@@ -71,4 +71,12 @@ describe('备份口令加密', () => {
     writeFileSync(plain, 'x')
     await expect(encryptBackupFile(plain, join(root, 'short.profer-backup'), '123')).rejects.toThrow('至少')
   })
+
+  test('Given 目标位置已有备份 When 加密中途失败 Then 原备份不被截断', async () => {
+    const dest = join(root, 'existing.profer-backup')
+    writeFileSync(dest, 'old-backup')
+
+    await expect(encryptBackupFile(join(root, 'missing.zip'), dest, passphrase)).rejects.toThrow()
+    expect(readFileSync(dest, 'utf8')).toBe('old-backup')
+  })
 })

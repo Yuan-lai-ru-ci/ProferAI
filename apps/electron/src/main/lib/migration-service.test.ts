@@ -367,4 +367,22 @@ describe('进度与口令加密', () => {
       passphrase: 'should-not-work',
     })).rejects.toThrow('只有个人备份')
   })
+
+  test('Given 打包期间取消 When 中止信号触发 Then 返回 cancelled 且不生成备份文件', async () => {
+    const output = join(configRoot, 'cancelled.profer-backup')
+    const controller = new AbortController()
+    const result = await exportDataV2({
+      mode: 'personal',
+      components: ['sessions', 'skills'],
+      outputPath: output,
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (progress.phase === 'packing') controller.abort()
+      },
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.cancelled).toBe(true)
+    expect(existsSync(output)).toBe(false)
+  })
 })
