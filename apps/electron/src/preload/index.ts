@@ -918,6 +918,9 @@ export interface ElectronAPI {
   /** 模型主动提议建立 Goal：列出待确认提议 / 批准或忽略 */
   listGoalProposals: () => Promise<import('@profer/shared').GoalProposal[]>
   respondGoalProposal: (proposalId: string, accepted: boolean) => Promise<boolean>
+  /** 模型主动提议交接对话：列出待确认提议 / 批准（返回交接结果）/ 忽略 */
+  listHandoffProposals: () => Promise<import('@profer/shared').HandoffProposal[]>
+  respondHandoffProposal: (proposalId: string, accepted: boolean) => Promise<import('@profer/shared').AgentSessionHandoffResult | null>
   pauseGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState>
   resumeGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState>
   stopGoal: (sessionId: string) => Promise<import('@profer/shared').AgentGoalState>
@@ -2719,6 +2722,8 @@ const electronAPI: ElectronAPI = {
   getGoalOverview: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GOAL_OVERVIEW),
   listGoalProposals: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_GOAL_PROPOSALS),
   respondGoalProposal: (proposalId: string, accepted: boolean) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESPOND_GOAL_PROPOSAL, proposalId, accepted),
+  listHandoffProposals: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_HANDOFF_PROPOSALS),
+  respondHandoffProposal: (proposalId: string, accepted: boolean) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESPOND_HANDOFF_PROPOSAL, proposalId, accepted),
   pauseGoal: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PAUSE_GOAL, sessionId),
   resumeGoal: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESUME_GOAL, sessionId),
   stopGoal: (sessionId: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.STOP_GOAL, sessionId),

@@ -59,6 +59,8 @@ import {
   updateGoalIdleCheckin,
   goalProposalPolicyAtom,
   updateGoalProposalPolicy,
+  handoffProposalPolicyAtom,
+  updateHandoffProposalPolicy,
 } from '@/atoms/notifications'
 import type { NotificationSoundMeta } from '@/atoms/notifications'
 import {
@@ -484,6 +486,7 @@ export function UsageSettings(): React.ReactElement {
           />
           <GoalIdleCheckinSetting />
           <GoalProposalPolicySetting />
+          <HandoffProposalPolicySetting />
           <SettingsToggle
             label="通知提示音"
             description="阻塞操作（权限确认、问题回答、计划审批）触发时播放提示音"
@@ -1134,6 +1137,34 @@ function GoalIdleCheckinSetting(): React.ReactElement {
  * 模型主动提议建立 Goal 的策略。
  * alwaysAsk：模型提议后要用户点确认（默认）；auto：直接创建；disabled：不给模型这个工具。
  */
+function HandoffProposalPolicySetting(): React.ReactElement {
+  const [policy, setPolicy] = useAtom(handoffProposalPolicyAtom)
+  return (
+    <div className="flex flex-col gap-2 border-b border-border/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">模型提议交接对话</p>
+        <p className="text-xs text-muted-foreground">上下文过长或一个阶段刚做完时，模型可以建议交接到一个新会话。提议不打断当前这一轮，写交接文档和新建会话都要你点确认；关闭后模型只能在回复里用文字建议。</p>
+      </div>
+      <Select
+        value={policy}
+        onValueChange={(value) => {
+          const next = value as import('@profer/shared').HandoffProposalPolicy
+          setPolicy(next)
+          void updateHandoffProposalPolicy(next)
+        }}
+      >
+        <SelectTrigger aria-label="模型提议交接对话" className="h-8 w-[150px] text-[13px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="alwaysAsk">先问我</SelectItem>
+          <SelectItem value="disabled">关闭</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
 function GoalProposalPolicySetting(): React.ReactElement {
   const [policy, setPolicy] = useAtom(goalProposalPolicyAtom)
   return (

@@ -34,6 +34,15 @@ export const agentSessionTurnCountFamily = atomFamily((sessionId: string) =>
 )
 
 /**
+ * 每个会话「交接是否正在进行」。
+ *
+ * 交接入口可能有多个组件实例（按条件出现的建议条、Agent 提交的交接卡片等）：
+ * 用各自的组件本地 state 会各判一次 inFlight，快速各点一次就能建出两个交接会话。
+ * 放成按 sessionId 切片的 atomFamily，所有入口共享同一份进行态；后台会话之间互不干扰。
+ */
+export const handoffInFlightAtomFamily = atomFamily((_sessionId: string) => atom(false))
+
+/**
  * 已被用户忽略的会话集合。
  *
  * 纯内存、不落盘：重启后再提醒一次是合理的——用户当时的「不再提示」

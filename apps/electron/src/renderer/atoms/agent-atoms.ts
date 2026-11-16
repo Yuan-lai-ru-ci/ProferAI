@@ -516,6 +516,13 @@ export const pendingPermissionRequestsAtom = atom(
  */
 export const allPendingGoalProposalsAtom = atom<Map<string, readonly import('@profer/shared').GoalProposal[]>>(new Map())
 
+/**
+ * 待确认的模型「交接对话」提议 — 以 sessionId 为 key。
+ *
+ * 与 Goal 提议一致：不阻塞当前轮，卡片只展示，用户点确认后由主进程撰写文档并新建会话。
+ */
+export const allPendingHandoffProposalsAtom = atom<Map<string, readonly import('@profer/shared').HandoffProposal[]>>(new Map())
+
 /** 待处理的 AskUser 请求 Map — 以 sessionId 为 key，切换会话时保留状态 */
 export const allPendingAskUserRequestsAtom = atom<Map<string, readonly AskUserRequest[]>>(new Map())
 

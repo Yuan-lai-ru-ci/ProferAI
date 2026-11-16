@@ -2,6 +2,7 @@ import { routePluginModel } from './plugins/plugin-routing'
 import { buildPluginAgentTools } from './plugins/plugin-agent-tools'
 import { injectGoalMcpServer } from './goal-tools'
 import { injectGoalProposalMcpServer } from './goal-proposal-tools'
+import { injectHandoffProposalMcpServer } from './handoff-proposal-tools'
 /**
  * AgentOrchestrator — Agent 编排层
  *
@@ -1208,6 +1209,8 @@ export class AgentOrchestrator {
     const goalIsolated = input.isolatedRuntimeSession === true
     // Goal 提议回调只在入口有效：内部轮次（Goal 自己、自动化、委派）不得再提议。
     const goalProposal = input.triggeredBy === undefined || input.triggeredBy === 'user' ? input.goalProposal : undefined
+    // 交接提议同样只在用户轮次提供：内部轮次（Goal / 自动化 / 委派）不得替用户提议换会话。
+    const handoffProposal = input.triggeredBy === undefined || input.triggeredBy === 'user' ? input.handoffProposal : undefined
     const runtimeUserMessage = input.internalPrompt ?? userMessage
     let { channelId, modelId } = input
     // Pi/Claude 的错误结构和可恢复语义不同；Router 必须按本次请求 runtime 提供 helper。
@@ -1866,6 +1869,10 @@ export class AgentOrchestrator {
         if (agentRuntime === 'claude' && goalProposal) {
           await injectGoalProposalMcpServer(sdk, mcpServers, { sessionId, ...goalProposal })
         }
+        // 两个提议工具可共存（一个建议建 Goal、一个建议换会话），不互斥。
+        if (agentRuntime === 'claude' && handoffProposal) {
+          await injectHandoffProposalMcpServer(sdk, mcpServers, { sessionId, ...handoffProposal })
+        }
         await injectAgentPresetMcpServer(sdk, mcpServers, {
           ...runToolContext,
           sessionId,
@@ -2151,6 +2158,7 @@ export class AgentOrchestrator {
               goalIteration: input.goalIteration,
               reportGoalResult: input.reportGoalResult,
               goalProposal,
+              handoffProposal,
               allowedPresetOperations,
               currentPresetReference,
               presetOperationUserMessage: userMessage,
