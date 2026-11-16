@@ -428,6 +428,39 @@ bun run generate:icons    # 生成应用图标
 
 > **2026-10-11 变更**：团队工作区运行时已移除，团队文件同步与 `workspace-files/` 缓存语义不再适用。
 
+## 远程访问（Pocket / WebUI）
+
+桌面端对外只有两条通道，**端口、网卡、凭据三者互相独立**，但共用同一套 WS 命令层
+（会话单写者、goal 状态机、事件日志都只有一份，见 `remote-service.ts` 与
+`attachRemoteSocket`）：
+
+| 通道 | 默认端口（正式/开发） | 凭据 | 监听默认 | 能力 |
+|------|----------------------|------|----------|------|
+| 移动模式（Pocket） | 7788 / 7789 | `remote-token.json`（配对凭据） | `0.0.0.0` | 全量远程命令 |
+| Web 会话（WebUI） | 7800 / 7801 | `webui-token.json`（可分享链接） | `127.0.0.1` | 仅已发布会话 + 命令白名单 |
+
+**为什么必须分开**：网页链接是要发出去/放书签的，Pocket 凭据等同于这台机器的远控权；
+共用端口还会让「为了网页选 127.0.0.1」连坐把手机端挡在门外。
+
+WebUI 的三道边界：
+
+1. **发布白名单**（`webuiPublishedSessionIds`）：`/s/<id>` 只对该列表放行，默认空 = 0 个网页。
+2. **命令白名单**（`webui-command-scope.ts`）：网页连接只允许页面真正用到的命令，
+   且会话级命令必须落在白名单内；`list_sessions` / `delete_session` / 工作区管理等一律拒绝。
+3. **事件回放过滤**：实时广播、游标回放、会话级回放都按白名单剪枝，避免「分享一个会话」
+   变成「读取整台机器的事件流」。
+
+静态产物链路（**打包必过**）：`Profer-pocket/webui` →（`bun run build:webui`）→
+`webui/dist` →（`apps/electron/scripts/sync-webui-assets.mjs`，同时产出 `.br`/`.gz`）→
+`apps/electron/resources/webui` →（electron-builder `extraResources`）→
+`process.resourcesPath/webui`。产物缺失时 `build:resources` 会直接失败，
+不会静默产出「网页 503」的安装包；日常开发走 `build:resources:dev`（缺产物只告警）。
+
+关键文件：`webui-config.ts`（配置）· `webui-routing.ts`（纯路由判定）·
+`webui-server.ts`（独立监听/凭据/启停）· `webui-service.ts`（静态托管与缓存）·
+`webui-command-scope.ts`（命令边界）· `webui-publication.ts` / `webui-session-guard.ts`
+（归档/删除时撤发布）。
+
 ## 团队服务器
 
 > 🔴 **团队服务器已迁移至独立私有 git 仓库**（原 `server/`），不再随本公开仓库发布。公开仓库中**没有** `server/` 目录。

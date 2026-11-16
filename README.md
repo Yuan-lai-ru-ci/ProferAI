@@ -72,6 +72,10 @@ Set daily, weekly, monthly, or interval schedules. While Profer is running, the 
 
 Use your phone to trigger desktop agents or review their work. The current mobile maintenance line is the native Android app in the separate [Profer-pocket repo](https://github.com/Yuan-lai-ru-ci/Profer-pocket); its legacy Capacitor app remains a protocol/source reference and is not the native release line. Connections use the local network or VPN—no cloud relay required.
 
+### 🌐 One session, one web page
+
+Publish a single session as its own web page and open it from any browser on your LAN—no install, no account. Each page is scoped to the session you published, served from WebUI's own port and credential, and completely independent from the mobile client.
+
 ### 🔒 Local-first by default
 
 Workspaces, sessions, skills and files stay on your machine—no account required.
