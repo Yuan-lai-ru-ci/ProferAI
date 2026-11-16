@@ -802,6 +802,29 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
   }
 }
 
+/**
+ * 从工作区 MCP 配置取出「声明了外部配置文件」的服务，供桥接层判断常驻连接是否已过期。
+ * 只对当前实际交给 Pi 的 server 取名，避免把未启用的服务也纳入判定。
+ */
+function resolveExternalStatePaths(
+  workspaceSlug: string | undefined,
+  serverNames: readonly string[],
+): Record<string, string[]> | undefined {
+  if (!workspaceSlug || serverNames.length === 0) return undefined
+  try {
+    const { servers } = getWorkspaceMcpConfig(workspaceSlug)
+    const entries = serverNames.flatMap((name) => {
+      const paths = servers[name]?.externalStatePaths
+      return Array.isArray(paths) && paths.length > 0 ? [[name, paths] as const] : []
+    })
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined
+  } catch (error) {
+    // 读取失败只影响「自动重建」这一层优化，不能阻断本轮装配
+    console.warn('[Agent Runtime] 读取工作区 MCP 外部配置路径失败:', error)
+    return undefined
+  }
+}
+
 /** Final executable manifest for the new runtime. Legacy resource readers remain configuration-only. */
 export async function finalizeRuntimeResourcePreparation(
   input: Parameters<NonNullable<AgentRuntimePorts['queryPreparation']>['prepare']>[0],
@@ -821,7 +844,10 @@ export async function finalizeRuntimeResourcePreparation(
       && (allowedExternal.has(name) || loaded.some(resource => resource.name === name && resource.type === 'sdk')))
   }))
   const external = Object.fromEntries(Object.entries(servers).filter(([, config]) => config.type !== 'sdk'))
-  const piTools = input.runtime === 'pi' ? await buildPiMcpTools(external, snapshot.policy, { workspaceSlug }) : []
+  // 把外部配置文件路径一并交给桥接层：配置 hash 变不了（改的是 server 自己的文件），
+  // 只有它能判断常驻连接是否还在用旧值，并在每轮准备时淘汰。
+  const externalStatePaths = resolveExternalStatePaths(workspaceSlug, Object.keys(external))
+  const piTools = input.runtime === 'pi' ? await buildPiMcpTools(external, snapshot.policy, { workspaceSlug, externalStatePaths }) : []
   const filterTools = (candidates: readonly unknown[]) => candidates.filter(tool => {
     if (!tool || typeof tool !== 'object' || !('name' in tool) || typeof tool.name !== 'string') return false
     const name = tool.name
