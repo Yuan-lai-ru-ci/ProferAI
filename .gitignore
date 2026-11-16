@@ -109,3 +109,10 @@ server/
 .workbuddy
 # 隔离开发实例的运行时数据目录（settings/会话/planning 等，不入库）
 .dev-config/
+
+# 开发/调试过程中在仓库内落下的运行时数据（会话索引、工作区、推荐缓存、本地 PR 草稿）
+agent-sessions/
+agent-workspaces/
+recommendations.json
+recommendations.json.bak
+pr-drafts/
