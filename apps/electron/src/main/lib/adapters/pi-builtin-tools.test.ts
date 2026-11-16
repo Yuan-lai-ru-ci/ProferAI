@@ -61,6 +61,7 @@ const {
   buildPiAgentPresetTools,
   buildPiGoalProposalTools,
 } = await import('./pi-builtin-tools')
+const { goalProposalService } = await import('../goal-proposal-service')
 
 interface CapturedTool {
   name: string
@@ -620,5 +621,71 @@ describe('Pi propose_goal tool schema', () => {
     const properties = parameters.properties as Record<string, { type?: string }>
     expect(Object.keys(properties).sort()).toEqual(['constraints', 'objective', 'rationale', 'stopWhen', 'verification'])
     for (const property of Object.values(properties)) expect(property.type).toBe('string')
+  })
+})
+
+describe('Pi propose_goal execute 调用契约', () => {
+  const sessionId = 'pi-propose-goal-execute-contract'
+
+  beforeEach(() => goalProposalService.clearSession(sessionId))
+  afterEach(() => goalProposalService.clearSession(sessionId))
+
+  function buildProposeTool(captured: unknown[]): CapturedTool {
+    const { sdk, tools } = createPiSdkStub()
+    buildPiGoalProposalTools(sdk, {
+      sessionId,
+      goalProposal: {
+        policy: 'alwaysAsk',
+        hasActiveGoal: false,
+        planMode: false,
+        onPropose: (proposal, contract) => { captured.push({ proposal, contract }) },
+      },
+    })
+    return tools[0]!
+  }
+
+  test('Given 模型填了完整提案 When Pi SDK 按 (toolCallId, params) 调用 execute Then 登记成功且 objective 与契约字段不丢失', async () => {
+    const captured: unknown[] = []
+    const tool = buildProposeTool(captured)
+    const objective = '扫描本机环境，产出工作区级本地用户画像文档并挂到 Profer Memory 索引'
+    const rationale = '需要四类采集逐项核对、归纳结论、再回校验，这一轮做不完'
+    const verification = 'user-sense-2026-11-14.md 存在且含四部分，每条结论标注来源命令'
+    const constraints = '只读扫描，不装软件、不改系统设置、不联网'
+    const stopWhen = '需要读隐私文件内容或访问未授权目录时'
+
+    // Pi SDK 第一个参数是 toolCallId，params 在第二个位置；按真实签名调用才能覆盖字段映射。
+    const result = await tool.execute!('tool-call-1', {
+      objective, rationale, verification, constraints, stopWhen,
+    }) as { details?: Record<string, unknown> }
+
+    expect(result.details?.accepted).toBe(true)
+    expect(result.details?.policy).toBe('alwaysAsk')
+    expect(captured).toHaveLength(1)
+    expect(captured[0]).toMatchObject({
+      proposal: { objective, rationale, verification, constraints, stopWhen },
+      contract: { verification, constraints, stopWhen },
+    })
+  })
+
+  test('Given objective 为空白 When 调用 execute Then 仍然拒绝且不登记提议', async () => {
+    const captured: unknown[] = []
+    const tool = buildProposeTool(captured)
+
+    const result = await tool.execute!('tool-call-2', { objective: '   ', rationale: '需要多轮' }) as { details?: Record<string, unknown> }
+
+    expect(result.details).toMatchObject({ accepted: false, reason: 'objective 不能为空' })
+    expect(captured).toHaveLength(0)
+  })
+
+  test('Given 同会话已有待确认提议 When 再次调用 execute Then 拒绝重复入队', async () => {
+    const captured: unknown[] = []
+    const tool = buildProposeTool(captured)
+    await tool.execute!('tool-call-3', { objective: '目标A', rationale: '需要多轮' })
+
+    const result = await tool.execute!('tool-call-4', { objective: '目标B', rationale: '需要多轮' }) as { details?: Record<string, unknown> }
+
+    expect(result.details?.accepted).toBe(false)
+    expect(result.details?.reason).toContain('已有待确认')
+    expect(captured).toHaveLength(1)
   })
 })
