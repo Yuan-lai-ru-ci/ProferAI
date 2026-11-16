@@ -74,6 +74,13 @@ files:
 
 # 通用额外资源
 extraResources:
+  # WebUI 静态产物（一个会话一个网页）。打包态由 webui-service 读 process.resourcesPath/webui，
+  # 而目录本身是构建产物（.gitignore），由 scripts/sync-webui-assets.mjs 从
+  # Profer-pocket/webui/dist 同步并在缺失时让构建失败 —— 否则会静默产出「网页 503」的安装包。
+  - from: resources/webui
+    to: webui
+    filter:
+      - "**/*"
   # 默认 Skills 模板（首次启动时同步到 ~/.profer/default-skills/）
   - from: default-skills
     to: default-skills

@@ -6,7 +6,7 @@
  */
 
 import { basename, join, dirname, extname, resolve, posix as pathPosix } from 'node:path'
-import { readFileSync, readdirSync, statSync, mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, mkdirSync, existsSync, writeFileSync, unlinkSync, openSync, readSync, closeSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { createHash } from 'node:crypto'
 import AdmZip from 'adm-zip'
@@ -758,8 +758,11 @@ export function resolveFilePath(filePath: string, basePaths?: string[], opts?: {
   return existsSync(safePath) ? safePath : null
 }
 
-/** 常见图片扩展名 → MIME 映射（用于 readFileAsDataUrl 组装 data URL） */
-const IMAGE_MIME_MAP: Record<string, string> = {
+/**
+ * 浏览器可内嵌预览的扩展名 → MIME 映射（用于 readFileAsDataUrl 组装 data URL）。
+ * PDF 必须显式列出：回退成 application/octet-stream 会让浏览器下载而不是内嵌显示。
+ */
+const PREVIEW_MIME_MAP: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
@@ -768,6 +771,7 @@ const IMAGE_MIME_MAP: Record<string, string> = {
   svg: 'image/svg+xml',
   bmp: 'image/bmp',
   ico: 'image/x-icon',
+  pdf: 'application/pdf',
 }
 
 /**
@@ -783,7 +787,7 @@ export function readFileAsDataUrl(filePath: string, basePaths?: string[]): { res
     const st = statSync(safePath)
     if (st.size > MAX_FILE_SIZE) return null
     const ext = basename(safePath).split('.').pop()?.toLowerCase() ?? ''
-    const mime = IMAGE_MIME_MAP[ext] ?? 'application/octet-stream'
+    const mime = PREVIEW_MIME_MAP[ext] ?? 'application/octet-stream'
     const buffer = readFileSync(safePath)
     return { resolvedPath: safePath, dataUrl: `data:${mime};base64,${buffer.toString('base64')}`, version: buildFilePreviewVersion(safePath, buffer, st) }
   } catch {
@@ -957,6 +961,54 @@ export async function convertOfficeToHtml(filePath: string, basePaths?: string[]
     } catch (fallbackErr) {
       console.error('[file-preview] convertOfficeToHtml text fallback failed:', fallbackErr)
       return null
+    }
+  }
+}
+
+/**
+ * 文本预览上限。
+ *
+ * 与图片不同，文本要**直接进 DOM**：手机上几十万字的 `<pre>` 会卡死滚动。
+ * 256KB 足够看清一个源码文件或一份配置，超出部分前端明确告知「已截断」。
+ */
+export const MAX_TEXT_PREVIEW_BYTES = 256 * 1024
+
+/**
+ * 读取文本文件供远程预览。
+ *
+ * 入参必须是**已授权解析后的绝对路径**（调用方负责 `resolveAuthorizedRemoteFilePath`）：
+ * 这里不做路径判定，避免出现第二套授权口径。
+ *
+ * 只读前 256KB（大文件不整体载入），并用前 8KB 是否含 NUL 判定二进制 ——
+ * 把二进制当 UTF-8 返回只会得到一堆替换字符，不如直接告诉客户端「不可预览」。
+ */
+export function readTextFileForPreview(
+  filePath: string,
+  maxBytes = MAX_TEXT_PREVIEW_BYTES,
+): { text: string; size: number; truncated: boolean; binary: boolean } | null {
+  if (!existsSync(filePath)) return null
+  let fd: number | null = null
+  try {
+    const st = statSync(filePath)
+    if (!st.isFile()) return null
+    const length = Math.min(st.size, maxBytes)
+    fd = openSync(filePath, 'r')
+    const buffer = Buffer.alloc(length)
+    const read = readSync(fd, buffer, 0, length, 0)
+    const slice = buffer.subarray(0, read)
+    const probe = slice.subarray(0, Math.min(slice.length, 8192))
+    const binary = probe.includes(0)
+    return {
+      text: binary ? '' : slice.toString('utf8'),
+      size: st.size,
+      truncated: st.size > read,
+      binary,
+    }
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd) } catch { /* ignore */ }
     }
   }
 }

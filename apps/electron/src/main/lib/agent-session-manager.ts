@@ -3888,6 +3888,67 @@ export async function searchAgentSessionMessages(query: string): Promise<AgentMe
   return results
 }
 
+/** 会话内搜索结果：`lineIndex` 与分页命令的 `before` 游标同一坐标（非空行序号）。 */
+export interface AgentSessionMessageMatchResult {
+  lineIndex: number
+  messageId: string
+  role: AgentMessageSearchResult['role']
+  author?: AgentMessageSearchResult['author']
+  provenance?: AgentMessageSearchResult['provenance']
+  snippet: string
+  matchStart: number
+}
+
+/**
+ * 在单个会话内全量搜索（WebUI 用）。
+ *
+ * 与全局 `searchAgentSessionMessages` 的区别：
+ * - 不读索引、不跨会话，天然不可能泄露其他会话内容；
+ * - 返回**每一处**命中（带 `lineIndex`），供客户端按游标跳转到对应窗口；
+ * - `lineIndex` 按「非空行」计数，与 `getAgentSessionSDKMessages` 的分页坐标一致。
+ */
+export async function searchAgentSessionMessagesInSession(
+  sessionId: string,
+  query: string,
+  limit = 50,
+): Promise<AgentSessionMessageMatchResult[]> {
+  if (!sessionId || !query || query.length < 2) return []
+
+  const filePath = getAgentSessionMessagesPath(sessionId)
+  if (!existsSync(filePath)) return []
+
+  const queryLower = query.toLowerCase()
+  const results: AgentSessionMessageMatchResult[] = []
+  const stream = createReadStream(filePath, { encoding: 'utf-8' })
+  const rl = createInterface({ input: stream, crlfDelay: Infinity })
+  let lineIndex = 0
+
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue
+      const currentIndex = lineIndex
+      lineIndex += 1
+      const hit = matchAgentJsonlLine(line, queryLower, query.length)
+      if (!hit) continue
+      results.push({
+        lineIndex: currentIndex,
+        messageId: hit.messageId,
+        role: hit.role,
+        ...(hit.author ? { author: hit.author } : {}),
+        ...(hit.provenance ? { provenance: hit.provenance } : {}),
+        snippet: hit.snippet,
+        matchStart: hit.matchStart,
+      })
+      if (results.length >= limit) break
+    }
+  } finally {
+    rl.close()
+    stream.destroy()
+  }
+
+  return results
+}
+
 /**
  * 在单个 Agent 会话 JSONL 中按行流式查找第一条匹配。
  *

@@ -32,6 +32,8 @@ export interface HeadlessAgentRunCallbacks {
   onError: (error: string) => void
   onComplete: (messages?: AgentMessage[], opts?: HeadlessAgentCompletionOptions) => void
   onTitleUpdated: (updatedTitle: string) => void
+  /** 上下文窗口大小上报（tokens）：与桌面路径同口径，供远程占用条使用 */
+  onContextWindow?: (contextWindow: number) => void
   source?: AgentExternalRunSource
 }
 

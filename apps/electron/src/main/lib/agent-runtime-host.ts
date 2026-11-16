@@ -1057,6 +1057,15 @@ export function createElectronAgentRuntimeQuery(input: AgentSendInput, options: 
     ...(options.providerInput ?? {}),
     ...(options.resumeSessionAt ? { resumeSessionAt: options.resumeSessionAt } : {}),
     ...(input.customMcpServers ? { customMcpServers: input.customMcpServers } : {}),
+    /**
+     * 上下文窗口上报回调必须经 providerInput 透传给 adapter。
+     *
+     * 这里曾只把 onContextWindow 挂在 AgentSendInput 上，但 runtime 的 toProviderInput()
+     * 只转发白名单字段，Pi/Claude adapter 从自己的 input 读这个回调时永远是 undefined ——
+     * 网页发起的 run 因此一条 context_window 都不发，占用条一直「未知名」。
+     * providerInput 是宿主给 provider 的 opaque 通道，会原样展开进 adapter input。
+     */
+    ...(input.onContextWindow ? { onContextWindow: input.onContextWindow } : {}),
     ...(effectivePermissionMode ? { permissionMode: effectivePermissionMode } : {}),
     ...(input.mentionedSkills ? { mentionedSkills: [...input.mentionedSkills] } : {}),
     ...(input.mentionedMcpServers ? { mentionedMcpServers: [...input.mentionedMcpServers] } : {}),

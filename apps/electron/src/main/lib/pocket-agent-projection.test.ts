@@ -108,6 +108,8 @@ describe('Pocket 远程 Agent 投影', () => {
     expect(projected.message.content).toEqual([{
       type: 'tool_result',
       tool_use_id: 'tool-9',
+      // 输出正文有界下发（2026-11-15 起：WebUI 展开工具行要看完整输出）
+      output: '图片已复制',
       images: [{
         path: '/Users/mac/.profer/agent-workspaces/profer/s1/.context/agent-output-images/a.png',
         filename: 'a.png',

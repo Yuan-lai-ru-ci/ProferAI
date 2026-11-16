@@ -36,13 +36,14 @@ import { networkInterfaces } from 'node:os'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
-import { getWebuiBindHost, handleWebuiHttpRequest } from './webui-service'
 import { applyAttachmentsToMessage } from './remote-send-attachments'
-import { isSessionServableForWebui } from './webui-session-guard'
+import { readWebuiPublishedIds } from './webui-config'
+import { checkWebuiCommandAccess, filterWebuiSessionIds, readCommandSessionId, WEBUI_REQUEST_SCOPED_COMMANDS } from './webui-command-scope'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
 import type { AgentRuntime, AgentSendInput } from '@profer/shared'
-import { agentEventBus, emitSessionStreamEvent, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
+import { agentEventBus, emitSessionStreamEvent, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, listKnownAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
+import { deletePersistedContextWindow } from './agent-context-window-persistence'
 import { prepareAgentRewind, refineAgentRewind, executeAgentRewind, undoAgentRewind, submitAgentAfterRewind, legacyConversationRewind } from './agent-rewind-gateway'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './agent-session-ui-projection-publisher'
 import { buildArchiveToggleUpdates } from './agent-unread-policy'
@@ -60,11 +61,15 @@ import {
   moveSessionToWorkspace,
   paginateSDKMessages,
   searchAgentSessionMessages,
+  searchAgentSessionMessagesInSession,
 } from './agent-session-manager'
+import { listAgentSessionTurnFileChanges, getAgentSessionTurnFileDiff } from './agent-turn-file-changes'
+import { getSessionDelegationSnapshot } from './agent-collaboration-tools'
 import { getAgentSessionsDir, getConfigDir, getAgentSessionWorkspacePath, getWorkspaceFilesDir, getWorkspaceRootPath, agentSessionVisualizationsDir } from './config-paths'
 import { resolveWorkspaceLocation } from './workspace-locator'
 import { getSettings, updateSettings } from './settings-service'
 import { projectAgentPayloadForPocket, projectSdkMessageForPocket, projectSdkMessagesToPocketView } from './pocket-agent-projection'
+import { listMentionFileGroups } from './remote-file-mention'
 import { listVisualizations } from './visualization-records'
 import {
   listAgentWorkspaces,
@@ -114,7 +119,8 @@ import {
 import { sendMessage, stopGeneration, generateTitle, autoTitleConversation, regenerateConversationTitle } from './chat-service'
 import { saveAttachment, readAttachmentAsBase64, deleteAttachment } from './attachment-service'
 import { chatEventBus } from './chat-stream-bus'
-import { resolveAndReadFile, readFileAsDataUrl } from './file-preview-service'
+import { resolveAndReadFile, readFileAsDataUrl, readTextFileForPreview } from './file-preview-service'
+import { listGlobalSkills } from './global-skill-manager'
 import { resolveAuthorizedRemoteFilePath } from './remote-file-access'
 import { loadWorkspaceHeatmapDaily } from './workspace-heatmap-query'
 import { getAllToolInfos } from './chat-tool-registry'
@@ -304,6 +310,42 @@ const AGENT_REPLAY_HANDSHAKE_TIMEOUT_MS = 5000
 
 const agentReplayStates = new WeakMap<WebSocket, AgentReplayState>()
 
+/**
+ * 每条连接属于哪个功能面。
+ *
+ * Pocket 与 WebUI 现在**各监听一个端口**，但共用这一份命令层与事件日志
+ * （会话单写者、goal 状态机、重放游标都不允许复制第二份）。
+ * 因此广播、回放、命令白名单都必须按角色区分：网页连接只能看到已发布的会话。
+ */
+const socketRoles = new WeakMap<WebSocket, 'pocket' | 'webui'>()
+
+/** 额外连接来源：WebUI 自己的 WebSocketServer 注册进来，广播时一并覆盖。 */
+const extraClientSources = new Set<() => Iterable<WebSocket>>()
+
+/** 注册一组外部连接（返回注销函数）。重复注册同一来源不会去重，调用方自己保证幂等。 */
+export function registerRemoteClientSource(source: () => Iterable<WebSocket>): () => void {
+  extraClientSources.add(source)
+  return () => { extraClientSources.delete(source) }
+}
+
+/** 遍历本服务 + 所有外部连接来源。 */
+function* iterateRemoteClients(): Generator<WebSocket> {
+  for (const client of wss?.clients ?? []) yield client
+  for (const source of extraClientSources) {
+    try {
+      for (const client of source()) yield client
+    } catch {
+      /* 某个来源异常不能中断整轮广播 */
+    }
+  }
+}
+
+/** 网页连接是否可见某个会话（白名单一次广播只读一遍，避免逐客户端读设置）。 */
+function canDeliverToSocket(client: WebSocket, sessionId: string, webuiIds: ReadonlySet<string>): boolean {
+  if (socketRoles.get(client) !== 'webui') return true
+  return webuiIds.has(sessionId)
+}
+
 /** 是否已执行启动检查（避免重复启动） */
 let isStarted = false
 
@@ -355,8 +397,11 @@ function broadcastAgentFrame(sessionId: string, payload: import('@profer/shared'
     payload: record.payload,
   })
   if (remoteRelaySink?.isOpen()) remoteRelaySink.send(frame)
-  for (const client of wss?.clients ?? []) {
+  // 网页连接只收已发布会话的事件：事件日志是全局的，不过滤等于把别的会话实时推给浏览器。
+  const webuiIds = new Set(readWebuiPublishedIds())
+  for (const client of iterateRemoteClients()) {
     if (client.readyState !== WebSocket.OPEN || !authenticatedClients.has(client)) continue
+    if (!canDeliverToSocket(client, sessionId, webuiIds)) continue
     const replayState = agentReplayStates.get(client)
     if (replayState?.replaying) {
       replayState.queuedLiveFrames.push(record)
@@ -429,7 +474,14 @@ function replayAgentEvents(client: WebSocket, requestId: unknown, cursor: unknow
     replayState.fallbackTimer = null
   }
   const normalizedCursor = cursor === null ? null : typeof cursor === 'number' ? cursor : -1
-  const replay = remoteAgentEventLog.replayAfter(normalizedCursor)
+  const rawReplay = remoteAgentEventLog.replayAfter(normalizedCursor)
+  /**
+   * 网页连接：事件日志是全局的，必须按发布白名单剪掉其它会话的记录。
+   * 不过滤的话，浏览器只要带上 token 就能从 cursor=0 拉回整台机器的历史事件。
+   */
+  const replay = socketRoles.get(client) === 'webui' && !rawReplay.requiresSnapshot
+    ? { ...rawReplay, records: rawReplay.records.filter((record) => readWebuiPublishedIds().includes(record.sessionId)) }
+    : rawReplay
   if (replay.requiresSnapshot) {
     // 日志窗口已经不完整时，不发送半段事件；客户端随后按快照重建。
     replayState.queuedLiveFrames = []
@@ -520,9 +572,14 @@ function restoreAgentStreams(
     replayState.fallbackTimer = null
   }
 
-  const sessionIds = Array.isArray(request.sessionIds)
+  const requestedIds = Array.isArray(request.sessionIds)
     ? request.sessionIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
     : undefined
+  // 网页连接：请求里的会话清单先按发布白名单剪一遍，否则「不传 sessionIds」会退化成
+  // 「恢复全机正在跑的会话」——那正是要避免的越权视图。缺省时也收成白名单本身。
+  const sessionIds = socketRoles.get(client) === 'webui'
+    ? filterWebuiSessionIds(requestedIds ?? readWebuiPublishedIds(), readWebuiPublishedIds())
+    : requestedIds
   if (sessionIds) {
     for (const sessionId of sessionIds) remoteAgentReplayRegistry.bindClient(replayState.clientKey, sessionId)
   }
@@ -700,7 +757,7 @@ function checkToken(req: IncomingMessage): boolean {
 /** 轻量封装的 JSON 响应交互类型 */
 type CommandResult =
   | { ok: true; data: unknown }
-  | { ok: false; error: string; conflict?: { code: 'REVISION_CONFLICT'; expectedRevision: number; actualRevision: number; sessionId: string } }
+  | { ok: false; error: string; /** 机器可读错误码（客户端据此分支，不必匹配文案） */ code?: string; conflict?: { code: 'REVISION_CONFLICT'; expectedRevision: number; actualRevision: number; sessionId: string } }
 
 export function validateExpectedRevision(parsed: Record<string, unknown>, sessionId: string): CommandResult | null {
   if (parsed.expectedRevision === undefined) return null
@@ -951,10 +1008,17 @@ function buildChatToolList() {
   }))
 }
 
-/** 单条 WS 连接已声明的最近活动会话，仅用于兼容旧 Pocket 文件预览请求。 */
+/**
+ * 单条 WS 连接已声明的最近活动会话，仅用于兼容旧 Pocket 文件预览请求。
+ *
+ * `role` 决定这条连接能调哪些命令：`pocket`（移动端，凭完整配对凭据接入）不受限制；
+ * `webui`（浏览器页面，凭发布链接接入）只允许页面真正用到的命令，且必须落在
+ * 已发布会话白名单内 —— 详见 `webui-command-scope.ts`。
+ */
 interface RemoteCommandContext {
   activeSessionId?: string
   clientId?: string
+  role?: 'pocket' | 'webui'
 }
 
 function remoteCaller(context?: RemoteCommandContext): { kind: 'remote'; id: string } {
@@ -1085,6 +1149,22 @@ async function runGoalCommand(action: () => unknown | Promise<unknown>): Promise
   }
 }
 
+/**
+ * 审批类命令（只带 requestId / proposalId）的会话归属。
+ *
+ * 返回 undefined 表示「查不到这条待处理请求」——调用方会据此拒绝，
+ * 而不是放行一个找不到归属的审批（那是最容易被拿来越权的一条路）。
+ */
+function resolvePendingRequestSessionId(type: string, parsed: Record<string, unknown>): string | undefined {
+  const requestId = typeof parsed.requestId === 'string' ? parsed.requestId : ''
+  const proposalId = typeof parsed.proposalId === 'string' ? parsed.proposalId : ''
+  if (type === 'respond_permission') return permissionService.getPendingSessionId(requestId)
+  if (type === 'respond_ask_user') return askUserService.getPendingSessionId(requestId)
+  if (type === 'respond_exit_plan_mode') return exitPlanService.getPendingSessionId(requestId)
+  if (type === 'respond_goal_proposal') return goalProposalService.peek(proposalId)?.proposal.sessionId
+  return undefined
+}
+
 export async function handleRemoteCommand(
   message: string,
   requestId: unknown = null,
@@ -1098,6 +1178,23 @@ export async function handleRemoteCommand(
   }
 
   const type = parsed?.type as string
+  /**
+   * 网页连接的命令闸门。
+   *
+   * 放在最前面有两个原因：① 被拒的命令不能留下任何副作用（下面就会写 activeSessionId）；
+   * ② 白名单外的命令连「参数校验错误」都不该回，否则等于告诉浏览器有哪些命令存在。
+   */
+  if (context?.role === 'webui') {
+    const denied = checkWebuiCommandAccess({
+      type,
+      sessionId: readCommandSessionId(parsed),
+      ...(WEBUI_REQUEST_SCOPED_COMMANDS.has(type)
+        ? { requestSessionId: resolvePendingRequestSessionId(type, parsed) }
+        : {}),
+      publishedIds: readWebuiPublishedIds(),
+    })
+    if (!denied.ok) return { ok: false, error: denied.error }
+  }
   // 旧 Pocket 的 FilePreviewDialog 没有把 sessionId 传给 WS 文件读取命令。
   // 它在打开会话时已经通过 get_sdk_messages/session_detail 等命令声明过会话，
   // 因此仅在同一条受 token 保护的连接内保存该会话作为严格授权的回退上下文。
@@ -1113,18 +1210,24 @@ export async function handleRemoteCommand(
       return { ok: true, data: buildSessionList() }
     }
 
-    // 运行中上下文窗口为瞬时运行状态，不能只依赖客户端恰好在线时收到 context_window 事件。
-    // Pocket 在首次连接、重连或事件日志过期后的快照恢复时调用此命令水合。
+    // 上下文窗口不能只依赖客户端恰好在线时收到 context_window 事件：
+    // 快照会随 run_idle 清空，所以这里返回「活跃快照 + 按会话持久化的最后已知窗口」。
+    // 手机端跑完一轮后刷新，仍能水合出占用条。
     case 'get_agent_runtime_contexts': {
-      const sessionIds = Array.isArray(parsed.sessionIds)
+      let sessionIds = Array.isArray(parsed.sessionIds)
         ? parsed.sessionIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
         : undefined
-      // 以 orchestrator 的即时 active 状态二次过滤：即使进程在清理 run_idle 前收到命令，
-      // 也绝不把已结束 run 的短暂残留快照作为历史会话能力返回。
+      /**
+       * 网页连接只能看到**已发布**会话的上下文快照：这个命令不带单个 sessionId，
+       * 不在这里收口的话，网页可以用它枚举任意会话的运行状态。
+       */
+      if (context?.role === 'webui') {
+        const published = new Set(readWebuiPublishedIds())
+        sessionIds = (sessionIds ?? [...published]).filter((id) => published.has(id))
+      }
       return {
         ok: true,
-        data: listActiveAgentRuntimeContexts(sessionIds)
-          .filter((snapshot) => isAgentSessionActive(snapshot.sessionId)),
+        data: listKnownAgentRuntimeContexts(sessionIds),
       }
     }
 
@@ -1135,6 +1238,7 @@ export async function handleRemoteCommand(
         requestSessionDeletion({ sessionId, reason: 'user' })
         // 会话已删：同时释放它的回放登记，避免刷新后的 Pocket 拿到已删会话的在飞事件。
         remoteAgentReplayRegistry.clearSession(sessionId)
+        deletePersistedContextWindow(sessionId)
         publishSessionDeleted(sessionId)
         return { ok: true, data: { sessionId } }
       } catch (err) {
@@ -1349,6 +1453,11 @@ export async function handleRemoteCommand(
             archived: meta.archived ?? false,
             draft: meta.draft ?? false,
             completedButUnconfirmed: meta.completedButUnconfirmed ?? false,
+            // 最近一次非正常结束：刷新/重连后仍要能显示「上次是被停的 / 为什么失败」。
+            lastInterruptReason: meta.lastInterruptReason ?? null,
+            lastInterruptLabel: meta.lastInterruptLabel ?? null,
+            lastInterruptAt: meta.lastInterruptAt ?? null,
+            stoppedByUser: meta.stoppedByUser ?? false,
             createdAt: meta.createdAt,
             updatedAt: meta.updatedAt,
             active: isAgentSessionActive(id),
@@ -1356,6 +1465,53 @@ export async function handleRemoteCommand(
           messages: projectSdkMessagesToPocketView(getAgentSessionSDKMessages(id)),
         },
       }
+    }
+
+    /**
+     * 会话内全量搜索。
+     *
+     * 与全局 `search_agent_session_messages` 不同：后者跨全部会话、消息片段不定位，
+     * 不能暴露给网页；这里只读调用方指定的一个会话，并返回 JSONL 行号供客户端跳转。
+     */
+    case 'search_session_messages': {
+      const id = readSessionId(parsed)
+      if (!id) return { ok: false, error: '缺少 sessionId' }
+      const query = typeof parsed.query === 'string' ? parsed.query.trim() : ''
+      if (query.length < 2) return { ok: true, data: { query, matches: [] } }
+      const requested = typeof parsed.limit === 'number' ? Math.trunc(parsed.limit) : 50
+      const limit = Math.min(Math.max(requested, 1), 100)
+      const matches = await searchAgentSessionMessagesInSession(id, query, limit)
+      return { ok: true, data: { query, matches } }
+    }
+
+    /** 每轮改动文件清单（Shadow Git 归属记录优先，消息里的写入证据兜底）。 */
+    case 'list_turn_file_changes': {
+      const id = readSessionId(parsed)
+      if (!id) return { ok: false, error: '缺少 sessionId' }
+      return { ok: true, data: { turns: listAgentSessionTurnFileChanges(id) } }
+    }
+
+    /**
+     * 某一轮某个文件的只读 diff。
+     *
+     * rootId/path 必须精确命中该 turn 的归属记录，不能用来读取任意文件。
+     */
+    case 'get_turn_file_diff': {
+      const id = readSessionId(parsed)
+      if (!id) return { ok: false, error: '缺少 sessionId' }
+      const turnId = typeof parsed.turnId === 'string' ? parsed.turnId : ''
+      const rootId = typeof parsed.rootId === 'string' ? parsed.rootId : ''
+      const filePath = typeof parsed.path === 'string' ? parsed.path : ''
+      if (!turnId || !rootId || !filePath) return { ok: false, error: '缺少 turnId / rootId / path' }
+      const result = await getAgentSessionTurnFileDiff({ sessionId: id, turnId, rootId, path: filePath })
+      return result.ok ? { ok: true, data: result } : { ok: false, error: result.error }
+    }
+
+    /** 本会话运行中的委派子任务与待回答阻塞（刷新/重连后恢复提示）。 */
+    case 'get_session_delegations': {
+      const id = readSessionId(parsed)
+      if (!id) return { ok: false, error: '缺少 sessionId' }
+      return { ok: true, data: getSessionDelegationSnapshot(id) }
     }
 
     // 查询某 Pi 模型可用的推理档位能力（Pocket 思考档位菜单与服务端同源，避免两端快照漂移）。
@@ -1816,6 +1972,13 @@ export async function handleRemoteCommand(
         // 所以气泡不会露出路径清单；桌面自己发消息时保存的也是这个带块的形态。
         ...(uuid ? { uuid } : {}),
         ...(clientPermissionMode ? { permissionModeOverride: clientPermissionMode } : {}),
+        /**
+         * 提及的技能：客户端从正文里的 `/skill:<slug>` token 提取（与桌面同款正则）。
+         * orchestrator 据此做技能路由（mentioned_tools 注入），正文里的 token 只是给人看的。
+         */
+        ...(Array.isArray(parsed.mentionedSkills)
+          ? { mentionedSkills: parsed.mentionedSkills.filter((item): item is string => typeof item === 'string' && item.length > 0) }
+          : {}),
       }
       // 取得执行权之前不做任何副作用：被拒绝的请求不是一次运行，失败必须同步返回，
       // 否则客户端已经收到 `accepted: true` 却永远等不到 `run_completed`。
@@ -1831,6 +1994,14 @@ export async function handleRemoteCommand(
             headlessInput,
             {
               source: 'bridge',
+              // 桌面 sendMessage 有、远程发起没有的回调：补上 onContextWindow，
+              // 否则网页发起的 run 永远不发 context_window 事件 —— 上下文占用条就不显示。
+              onContextWindow: (cw: number) => {
+                emitSessionStreamEvent(sessionId, {
+                  kind: 'profer_event',
+                  event: { type: 'context_window', contextWindow: cw },
+                })
+              },
               onError: error => {
                 runErrorMessage = error
                 console.error('[Remote] runtime send_message 运行失败:', runErrorMessage)
@@ -1841,6 +2012,14 @@ export async function handleRemoteCommand(
           )
         : runAgentHeadless(headlessInput, {
             source: 'bridge',
+            // 与 runtime 分支保持一致：legacy / Claude 入口也要上报窗口，
+            // 否则这些会话在网页端同样显示「未知名」。
+            onContextWindow: (cw: number) => {
+              emitSessionStreamEvent(sessionId, {
+                kind: 'profer_event',
+                event: { type: 'context_window', contextWindow: cw },
+              })
+            },
             onError: error => {
               runErrorMessage = error
               console.error('[Remote] send_message 运行失败:', error)
@@ -2442,8 +2621,64 @@ export async function handleRemoteCommand(
     // ---- 文件预览：移动端经 WS 读取电脑端文件内容（Pocket 文件预览 MVP） ----
     // Remote token 可在非受信网络泄露，因此权限必须严格绑定到现有会话。
     // 客户端提交的 candidateBasePaths 不参与授权或路径解析。
+    /**
+     * 当前会话可用的技能列表（`@` 提及建议用）。
+     *
+     * 工作区 slug 从**服务端**的会话元数据推导，不接受客户端指定 —— 否则网页可以用
+     * 任意 slug 枚举技能目录。只回 enabled 的，且只给 slug/name/description 三个展示字段。
+     */
+    case 'list_skills': {
+      const sessionId = readCommandSessionId(parsed)
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const meta = getAgentSessionMeta(sessionId)
+      if (!meta) return { ok: false, error: '会话不存在' }
+      const slug = meta.workspaceId ? getAgentWorkspace(meta.workspaceId)?.slug : undefined
+      let skills: Array<{ slug: string; name: string; description: string }> = []
+      let warning: string | undefined
+      try {
+        // 单个技能目录损坏（畸形 SKILL.md 等）不该让整张列表失败：跳过并带回原因
+        skills = listGlobalSkills(slug)
+          .filter((skill) => skill.enabledInWorkspace)
+          .map((skill) => ({ slug: skill.slug, name: skill.name, description: skill.description ?? '' }))
+      } catch (error) {
+        warning = error instanceof Error ? error.message : String(error)
+        console.warn('[Remote] list_skills 扫描失败:', warning)
+      }
+      return { ok: true, data: { skills, ...(warning ? { warning } : {}) } }
+    }
+
+    /**
+     * `@` 文件引用候选：分「会话文件 / 工作区文件」两组（对齐桌面端 FileMentionList）。
+     * 路径统一相对 sessionRoot（= 模型 cwd），不向浏览器暴露机器绝对路径。
+     * 工作区 slug 由服务端从会话推导。
+     */
+    case 'list_workspace_files': {
+      const sessionId = readCommandSessionId(parsed)
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const meta = getAgentSessionMeta(sessionId)
+      if (!meta?.workspaceId) return { ok: false, error: '会话不存在或未绑定工作区' }
+      const workspace = getAgentWorkspace(meta.workspaceId)
+      if (!workspace) return { ok: false, error: '会话工作区不存在' }
+      const query = typeof parsed.query === 'string' ? parsed.query.slice(0, 200) : ''
+      try {
+        const roots = resolveRemoteFileRoots({
+          workspaceSlug: workspace.slug,
+          sessionId,
+          sessionAttachedDirectories: meta.attachedDirectories,
+          sessionAttachedFiles: meta.attachedFiles,
+          workspaceAttachedDirectories: getWorkspaceAttachedDirectories(workspace.slug),
+          workspaceAttachedFiles: getWorkspaceAttachedFiles(workspace.slug),
+        })
+        return { ok: true, data: listMentionFileGroups(roots.sessionRoot, roots.workspaceFilesDir, query) }
+      } catch {
+        return { ok: false, error: '会话工作区不可用（项目目录可能已移动或删除）' }
+      }
+    }
+
     case 'resolve_and_read_file':
-    case 'read_file_as_data_url': {
+    case 'read_file_as_data_url':
+    /** 文本预览：与图片走**同一条授权链**，只是返回正文而不是 data URL。 */
+    case 'read_text_file': {
       const filePath = typeof parsed.filePath === 'string' ? parsed.filePath : ''
       // Pocket 0.1.4 及更早版本沿用桌面 FileAccessOptions，将 sessionId
       // 嵌套在 access 中。兼容该传输形状，但绝不采纳其 candidateBasePaths。
@@ -2484,6 +2719,13 @@ export async function handleRemoteCommand(
       if (!resolvedPath) return { ok: false, error: '文件不存在或不在当前会话授权范围内' }
 
       try {
+        // 文本预览单独返回：不走 resolveAndReadFile —— 那个会把绝对路径一起带回去，
+        // 远程端只需要内容，绝对路径没有任何用处且不该出主进程。
+        if (type === 'read_text_file') {
+          const preview = readTextFileForPreview(resolvedPath)
+          if (!preview) return { ok: false, error: '文件不可读或不是普通文件' }
+          return { ok: true, data: preview }
+        }
         const result = type === 'resolve_and_read_file'
           ? resolveAndReadFile(resolvedPath)
           : readFileAsDataUrl(resolvedPath)
@@ -2599,6 +2841,174 @@ async function adoptRemotePort(port: number, preferred: number): Promise<void> {
   }
 }
 
+/**
+ * agentEventBus / chatEventBus 的订阅引用计数。
+ *
+ * 为什么需要计数：订阅原来写在「移动模式监听尝试」里，于是**只开 WebUI、不开移动模式**时
+ * 根本没人订阅 —— 网页能连上、能发消息，但收不到任何流式事件（首屏或刷新后才看到结果）。
+ * 现在两个入口各 acquire 一份，最后一个释放时才真正退订，避免重复订阅导致事件被广播两遍。
+ */
+let eventBusRefCount = 0
+/** 移动模式是否持有一份订阅：未启动时调 stop 不能去释放别人的引用。 */
+let remoteEventBusAcquired = false
+
+function subscribeRemoteEventBuses(): void {
+  // 订阅 agentEventBus，把工作流事件广播给所有已连接的客户端（Pocket + WebUI）
+  eventBusUnsubscribe = agentEventBus.on((sessionId, payload) => {
+    // run_complete / run_error 是桌面终态的补充通道：移动端已有 run_completed /
+    // 自身 completion 事件表达同一语义，不下发它们可避免旧版客户端
+    // 处理未知 payload.kind，也避免事件日志里出现重复终态。
+    if (payload.kind === 'run_complete' || payload.kind === 'run_error') return
+    broadcastAgentEvent(sessionId, payload)
+  })
+
+  // 订阅 chatEventBus，把 Chat 流式事件（chunk/reasoning/complete/error/tool-activity）
+  // 广播给所有客户端；channel 使用桌面 CHAT_IPC_CHANNELS 同名通道，
+  // 客户端 stub 按通道名分发到 onStreamChunk 等注册器。
+  chatBusUnsubscribe = chatEventBus.on((conversationId, channel, payload) => {
+    const frame = JSON.stringify({ kind: 'chat_event', conversationId, channel, payload })
+    if (remoteRelaySink?.isOpen()) remoteRelaySink.send(frame)
+    for (const client of iterateRemoteClients()) {
+      // 网页端是单会话 Agent 页面，没有 Chat（聊天工具）视图，不需要这类帧。
+      if (socketRoles.get(client) === 'webui') continue
+      if (client.readyState === WebSocket.OPEN && authenticatedClients.has(client)) {
+        client.send(frame)
+      }
+    }
+  })
+}
+
+/** 取一份总线订阅（幂等；两个功能各自持有自己的引用）。 */
+export function acquireRemoteEventBus(): void {
+  eventBusRefCount += 1
+  if (eventBusRefCount === 1) subscribeRemoteEventBuses()
+}
+
+/** 释放一份订阅；最后一个引用释放时才真正退订。 */
+export function releaseRemoteEventBus(): void {
+  eventBusRefCount = Math.max(0, eventBusRefCount - 1)
+  if (eventBusRefCount > 0) return
+  eventBusUnsubscribe?.()
+  eventBusUnsubscribe = null
+  chatBusUnsubscribe?.()
+  chatBusUnsubscribe = null
+}
+
+export type RemoteSocketRole = 'pocket' | 'webui'
+
+/**
+ * 一条已鉴权连接的接入逻辑（Pocket 与 WebUI 共用）。
+ *
+ * 必须放在模块级而不是某个监听尝试内部：WebUI 有自己的端口，用户可能只开 WebUI、
+ * 完全不启用移动模式 —— 此时 Pocket 的监听流程根本不会执行，但命令层仍然要可用。
+ */
+function establishRemoteConnection(ws: WebSocket, req: IncomingMessage, role: RemoteSocketRole): void {
+  console.log(`[Remote] 客户端已鉴权 role=${role}`)
+  ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
+  const commandContext: RemoteCommandContext = { clientId: randomUUID(), role }
+  const replayState: AgentReplayState = {
+    clientKey: randomUUID(),
+    replaying: true,
+    queuedLiveFrames: [],
+    lastSentEventId: 0,
+    fallbackTimer: null,
+  }
+  replayState.fallbackTimer = setTimeout(() => {
+    // 兼容未实现 resume_agent_events 的旧客户端：握手超时后恢复普通实时广播。
+    releaseAgentReplayGate(ws)
+  }, AGENT_REPLAY_HANDSHAKE_TIMEOUT_MS)
+  agentReplayStates.set(ws, replayState)
+
+  // 收到指令
+  ws.on('message', (raw: RawData) => {
+    let reqId: unknown = null
+    let body: string
+    let parsedRaw: { type?: unknown } | null = null
+    try {
+      const parsed = JSON.parse(raw.toString())
+      parsedRaw = parsed
+      // 命令追踪 ID：优先 _cmdId（移动端 ws-client 新协议），兼容旧的 requestId
+      reqId = parsed?._cmdId ?? parsed?.requestId ?? null
+      body = raw.toString()
+    } catch {
+      body = raw.toString()
+    }
+    // 更新存活时间（任何入站消息都算活跃，用于服务端闲置踢人）。
+    ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
+
+    // 心跳 ping：不回 command_result（避免 command_result 走 FIFO 兑底污染 pendingCommands），
+    // 直接回一个明确的 pong 帧，客户端据此做假死检测。
+    if (parsedRaw?.type === 'ping') {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ kind: 'pong', serverTime: Date.now() }))
+      }
+      return
+    }
+
+    if (parsedRaw?.type === 'resume_agent_events') {
+      replayAgentEvents(ws, reqId, (parsedRaw as { cursor?: unknown }).cursor ?? null)
+      return
+    }
+
+    // 刷新后的会话级回放（不依赖 cursor）。同时把本连接绑定到请求的会话，
+    // 之后的实时帧与后续回放都按这个绑定归属。
+    if (parsedRaw?.type === 'restore_agent_streams') {
+      restoreAgentStreams(ws, reqId, parsedRaw as { sessionIds?: unknown; sinceEventId?: unknown })
+      return
+    }
+
+    // 任何带 sessionId 的会话级命令都顺带声明关注：绑定是幂等的。
+    const scopedSessionId = (parsedRaw as { sessionId?: unknown } | null)?.sessionId
+    if (typeof scopedSessionId === 'string' && scopedSessionId.length > 0) {
+      remoteAgentReplayRegistry.bindClient(replayState.clientKey, scopedSessionId)
+    }
+
+    void handleRemoteCommand(body, reqId, commandContext).then((result) => {
+      // commandId 与 requestId 同源：新客户端按 commandId 幂等，旧客户端继续读取 requestId。
+      const commandId = typeof reqId === 'string' && reqId.length > 0 ? reqId : randomUUID()
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ kind: 'command_result', requestId: reqId, commandId, ...result }))
+      }
+    })
+  })
+
+  ws.on('close', () => {
+    const replayState = agentReplayStates.get(ws)
+    if (replayState?.fallbackTimer) clearTimeout(replayState.fallbackTimer)
+    if (replayState) remoteAgentReplayRegistry.unbindClient(replayState.clientKey)
+    agentReplayStates.delete(ws)
+    console.log(`[Remote] 客户端断开 role=${role}`)
+  })
+
+  // 连接建立后推送握手。客户端可据此判断旧 cursor 是否跨越了服务重启。
+  ws.send(JSON.stringify({
+    kind: 'hello',
+    serverTime: Date.now(),
+    serverInstanceId,
+    latestAgentEventId: remoteAgentEventLog.getLatestEventId(),
+    oldestAgentEventId: remoteAgentEventLog.getOldestEventId(),
+    protocolVersion: 1,
+    deviceId: getRemoteProfile().deviceId,
+    profile: getRemoteProfile(),
+  }))
+}
+
+/**
+ * 把外部监听（WebUI 的 WebSocketServer）上的一条连接接入命令层。
+ *
+ * 调用方负责鉴权；本函数只做角色登记与接入，不复制任何命令处理逻辑。
+ * 这样 WebUI 与 Pocket 各自监听端口、各自一套凭据，但会话单写者与 goal 状态机仍然只有一份。
+ */
+export function attachRemoteSocket(
+  ws: WebSocket,
+  req: IncomingMessage,
+  auth: { role: RemoteSocketRole; clientId?: string },
+): void {
+  socketRoles.set(ws, auth.role)
+  authenticatedClients.set(ws, auth.clientId ?? auth.role)
+  establishRemoteConnection(ws, req, auth.role)
+}
+
 type RemoteListenOutcome = { kind: 'listening' } | { kind: 'error'; code: string | null; message: string }
 
 /**
@@ -2613,16 +3023,9 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
       res.end(JSON.stringify({ ok: true }))
       return
     }
-    // WebUI 静态页：与 /ws 同源，由 webui-service 按会话白名单放行。
-    // 不属于 WebUI 的路径仍走原有 404，Pocket 客户端行为不受影响。
-    if (handleWebuiHttpRequest(req, res, {
-      isAuthorized: () => checkToken(req),
-      token: accessToken,
-      // 首屏 <title> 就用会话名：页面此时还没连上 WS，拿不到会话信息
-      sessionTitle: (id) => getAgentSessionMeta(id)?.title,
-      // 已归档/已删除的会话不该继续对外提供页面（白名单可能落后于会话状态）
-      isSessionServable: isSessionServableForWebui,
-    })) return
+    // 本机不提供 WebUI 静态页：网页由 webui-server 在自己的端口上独立托管
+    // （见 `webui-server.ts`）。非 /health 的 HTTP 请求一律 404，行为与改造前一致。
+    // WS 客户端（Profer-pocket）直接连 /ws，不依赖 HTTP 根路径。
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('Not Found')
   })
@@ -2644,95 +3047,13 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
   }, IDLE_SWEEP_INTERVAL_MS)
   if (typeof idleSweepTimer?.unref === 'function') idleSweepTimer.unref()
 
+  /**
+   * 本监听上的连接统一按 Pocket 角色接入。
+   * WebUI 有自己的端口与凭据，走 `attachRemoteSocket` 直接接入同一套命令层。
+   */
   const establish = (ws: WebSocket, req: IncomingMessage): void => {
-    console.log('[Remote] 移动端客户端已鉴权')
-    ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
-    const commandContext: RemoteCommandContext = { clientId: randomUUID() }
-    const replayState: AgentReplayState = {
-      clientKey: randomUUID(),
-      replaying: true,
-      queuedLiveFrames: [],
-      lastSentEventId: 0,
-      fallbackTimer: null,
-    }
-    replayState.fallbackTimer = setTimeout(() => {
-      // 兼容未实现 resume_agent_events 的旧 Pocket：握手超时后恢复普通实时广播。
-      releaseAgentReplayGate(ws)
-    }, AGENT_REPLAY_HANDSHAKE_TIMEOUT_MS)
-    agentReplayStates.set(ws, replayState)
-
-    // 收到指令
-    ws.on('message', (raw: RawData) => {
-      let reqId: unknown = null
-      let body: string
-      let parsedRaw: { type?: unknown } | null = null
-      try {
-        const parsed = JSON.parse(raw.toString())
-        parsedRaw = parsed
-        // 命令追踪 ID：优先 _cmdId（移动端 ws-client 新协议），兼容旧的 requestId
-        reqId = parsed?._cmdId ?? parsed?.requestId ?? null
-        body = raw.toString()
-      } catch {
-        body = raw.toString()
-      }
-      // 更新存活时间（任何入站消息都算活跃，用于服务端闲置踢人）。
-      ;(ws as WebSocket & { __lastAlive?: number }).__lastAlive = Date.now()
-
-      // 心跳 ping：不回 command_result（避免 command_result 走 FIFO 兑底污染 pendingCommands），
-      // 直接回一个明确的 pong 帧，客户端据此做假死检测。
-      if (parsedRaw?.type === 'ping') {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ kind: 'pong', serverTime: Date.now() }))
-        }
-        return
-      }
-
-      if (parsedRaw?.type === 'resume_agent_events') {
-        replayAgentEvents(ws, reqId, (parsedRaw as { cursor?: unknown }).cursor ?? null)
-        return
-      }
-
-      // 刷新后的会话级回放（不依赖 cursor）。同时把本连接绑定到请求的会话，
-      // 之后的实时帧与后续回放都按这个绑定归属。
-      if (parsedRaw?.type === 'restore_agent_streams') {
-        restoreAgentStreams(ws, reqId, parsedRaw as { sessionIds?: unknown; sinceEventId?: unknown })
-        return
-      }
-
-      // 任何带 sessionId 的会话级命令都顺带声明关注：绑定是幂等的。
-      const scopedSessionId = (parsedRaw as { sessionId?: unknown } | null)?.sessionId
-      if (typeof scopedSessionId === 'string' && scopedSessionId.length > 0) {
-        remoteAgentReplayRegistry.bindClient(replayState.clientKey, scopedSessionId)
-      }
-
-      void handleRemoteCommand(body, reqId, commandContext).then((result) => {
-        // commandId 与 requestId 同源：新客户端按 commandId 幂等，旧客户端继续读取 requestId。
-        const commandId = typeof reqId === 'string' && reqId.length > 0 ? reqId : randomUUID()
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ kind: 'command_result', requestId: reqId, commandId, ...result }))
-        }
-      })
-    })
-
-    ws.on('close', () => {
-      const replayState = agentReplayStates.get(ws)
-      if (replayState?.fallbackTimer) clearTimeout(replayState.fallbackTimer)
-      if (replayState) remoteAgentReplayRegistry.unbindClient(replayState.clientKey)
-      agentReplayStates.delete(ws)
-      console.log('[Remote] 移动端客户端断开')
-    })
-
-    // 连接建立后推送握手。客户端可据此判断旧 cursor 是否跨越了服务重启。
-    ws.send(JSON.stringify({
-      kind: 'hello',
-      serverTime: Date.now(),
-      serverInstanceId,
-      latestAgentEventId: remoteAgentEventLog.getLatestEventId(),
-      oldestAgentEventId: remoteAgentEventLog.getOldestEventId(),
-      protocolVersion: 1,
-      deviceId: getRemoteProfile().deviceId,
-      profile: getRemoteProfile(),
-    }))
+    socketRoles.set(ws, 'pocket')
+    establishRemoteConnection(ws, req, 'pocket')
   }
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
@@ -2784,31 +3105,18 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
   })
   profileTimer = setInterval(() => {
     const profile = getRemoteProfile()
-    for (const client of wss?.clients ?? []) if (client.readyState === WebSocket.OPEN && authenticatedClients.has(client)) client.send(JSON.stringify({ kind: 'connection_profile', profile }))
+    for (const client of iterateRemoteClients()) {
+      if (socketRoles.get(client) === 'webui') continue
+      if (client.readyState === WebSocket.OPEN && authenticatedClients.has(client)) client.send(JSON.stringify({ kind: 'connection_profile', profile }))
+    }
   }, 15_000)
   profileTimer.unref()
 
-  // 订阅 agentEventBus，把工作流事件广播给所有移动端客户端
-  eventBusUnsubscribe = agentEventBus.on((sessionId, payload) => {
-    // run_complete / run_error 是桌面终态的补充通道：移动端已有 run_completed /
-    // 自身 completion 事件表达同一语义，不下发它们可避免旧版 Pocket 客户端
-    // 处理未知 payload.kind，也避免事件日志里出现重复终态。
-    if (payload.kind === 'run_complete' || payload.kind === 'run_error') return
-    broadcastAgentEvent(sessionId, payload)
-  })
-
-  // 订阅 chatEventBus，把 Chat 流式事件（chunk/reasoning/complete/error/tool-activity）
-  // 广播给所有移动端客户端；channel 使用桌面 CHAT_IPC_CHANNELS 同名通道，
-  // 移动端 stub 按通道名分发到 onStreamChunk 等注册器。
-  chatBusUnsubscribe = chatEventBus.on((conversationId, channel, payload) => {
-    const frame = JSON.stringify({ kind: 'chat_event', conversationId, channel, payload })
-    if (remoteRelaySink?.isOpen()) remoteRelaySink.send(frame)
-    for (const client of wss?.clients ?? []) {
-      if (client.readyState === WebSocket.OPEN && authenticatedClients.has(client)) {
-        client.send(frame)
-      }
-    }
-  })
+  // 事件总线订阅由 acquireRemoteEventBus() 统一管理（移动模式与 WebUI 各持一份引用）
+  if (!remoteEventBusAcquired) {
+    acquireRemoteEventBus()
+    remoteEventBusAcquired = true
+  }
 
   // 中心 relay 仅在显式开启时连接；默认仍保持本地 LAN 远程行为不变。
   if (process.env.PROFER_REMOTE_RELAY === '1') {
@@ -2895,8 +3203,9 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
 
   // 监听地址：默认 0.0.0.0（局域网设备可访问，移动端通过电脑局域网 IP:端口 访问）。
   // 安全性由 accessToken 鉴权保障。可用 PROFER_REMOTE_HOST 覆盖（如设为 127.0.0.1 即仅本机）。
-  // WebUI 开启时改用设置页选中的网卡（默认仅本机）；关闭时保持 Pocket 原有行为不变。
-  const HOST = process.env.PROFER_REMOTE_HOST || getWebuiBindHost() || '0.0.0.0'
+  // WebUI 已经独立监听自己的端口与网卡，这里不再受它的设置影响 —— 两个功能的开关
+  // 与网卡互不牵连，否则「为了网页选 127.0.0.1」会连坐把手机端挡在门外。
+  const HOST = process.env.PROFER_REMOTE_HOST || '0.0.0.0'
   // 单端口双协议：首字节 0x16 是 TLS 握手，交给公网自签服务；其余走明文 HTTP/ws。
   // 这样用户自建 FRP 只需把公网端口映射到本机端口，不必额外开端口。
   const front = createProtocolSniffer((tls) => {
@@ -2963,10 +3272,11 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
 
 /** 一次监听尝试失败后的清理：只回收本次尝试创建的资源，isStarted 由调用方决定。 */
 function teardownRemoteAttempt(front: NetServer): void {
-  eventBusUnsubscribe?.()
-  eventBusUnsubscribe = null
-  chatBusUnsubscribe?.()
-  chatBusUnsubscribe = null
+  // 只释放本功能持有的那一份：WebUI 可能仍在用同一套订阅
+  if (remoteEventBusAcquired) {
+    releaseRemoteEventBus()
+    remoteEventBusAcquired = false
+  }
   if (idleSweepTimer) {
     clearInterval(idleSweepTimer)
     idleSweepTimer = null
@@ -3001,10 +3311,12 @@ async function stopRemoteServiceNow(): Promise<void> {
   remoteRelayClient = null
   remoteRelaySink = null
   remoteRelayCommandContext = { clientId: randomUUID() }
-  eventBusUnsubscribe?.()
-  eventBusUnsubscribe = null
-  chatBusUnsubscribe?.()
-  chatBusUnsubscribe = null
+  // 只释放移动模式持有的那份；WebUI 若仍在运行，广播必须继续工作。
+  // 用标记而不是无条件释放：从未启动过移动模式时，这份引用属于别人。
+  if (remoteEventBusAcquired) {
+    releaseRemoteEventBus()
+    remoteEventBusAcquired = false
+  }
   if (idleSweepTimer) {
     clearInterval(idleSweepTimer)
     idleSweepTimer = null

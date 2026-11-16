@@ -5,11 +5,12 @@
  * 由 registerIpcHandlers 在原位置调用 registerSettingsIpc()。
  * 段内的动态 import 路径已改为相对 lib/ 的路径（原路径相对 src/main/）。
  */
-import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from 'electron'
 import { SETTINGS_IPC_CHANNELS, type AppSettings, type WebuiConfigPatch, type WebuiStatus } from '../../types'
 import { getSettings, updateSettings } from './settings-service'
 import { getRemoteServiceStatus, setRemoteServiceEnabled, restartRemoteService } from './remote-service'
 import { buildWebuiPublishedUrls, getWebuiLocalState } from './webui-service'
+import { applyWebuiService, getWebuiServiceStatus } from './webui-server'
 import { listAccessibleHosts, normalizeBindHost, normalizePublishedIds, pickAccessibleHost } from './webui-routing'
 import { filterServablePublications } from './webui-session-guard'
 import { savePublicEndpointConfig, ensurePublicTlsIdentity } from './remote-public-endpoint'
@@ -150,29 +151,31 @@ export function registerSettingsIpc(): void {
     },
   )
 
-  // ===== WebUI：一个会话 = 一个网页 =====
+  // ===== WebUI：一个会话 = 一个网页（独立端口 / 独立凭据）=====
   // 只负责静态页托管与会话白名单；会话内容、发消息、goal 仍全部走既有 WS 与主进程单写者。
   function readWebuiStatus(): WebuiStatus {
-    const remote = getRemoteServiceStatus()
     const local = getWebuiLocalState()
+    const runtime = getWebuiServiceStatus()
     return {
       enabled: local.config.enabled,
-      running: remote.running,
-      port: remote.port,
-      defaultPort: remote.defaultPort,
+      running: runtime.running,
+      // port 是实际监听端口（被占顺延后与设置值不同），configuredPort 是设置里的期望值
+      port: runtime.port,
+      configuredPort: runtime.configuredPort,
+      defaultPort: runtime.defaultPort,
       bindHost: local.config.bindHost,
       interfaces: local.interfaces,
       // 老版本可能把「已归档」的会话留在白名单里：面板不显示它们，
       // 生效路径由访问时的兜底判定负责，用户不必手工清理。
       publishedSessionIds: filterServablePublications(local.config.publishedSessionIds),
-      token: remote.token,
-      urls: buildWebuiPublishedUrls(remote.port, local.config.bindHost, remote.token),
+      token: runtime.token,
+      urls: buildWebuiPublishedUrls(runtime.port, local.config.bindHost, runtime.token),
       accessibleHost: pickAccessibleHost(local.interfaces),
       accessibleHosts: listAccessibleHosts(local.interfaces),
       platform: process.platform,
       assetDir: local.assetDir,
       assetReady: local.assetReady,
-      serviceError: remote.error,
+      error: runtime.error,
     }
   }
 
@@ -183,14 +186,18 @@ export function registerSettingsIpc(): void {
     async (_event, patch: WebuiConfigPatch): Promise<WebuiStatus> => {
       if (!patch || typeof patch !== 'object') throw new Error('WebUI 配置参数无效')
       const updates: Partial<AppSettings> = {}
-      let needsRestart = false
+      /** 只有开关 / 网卡 / 端口会改变监听，白名单是热读的（每次请求都重新取设置）。 */
+      let needsApply = false
 
-      if (typeof patch.enabled === 'boolean') updates.webuiEnabled = patch.enabled
+      if (typeof patch.enabled === 'boolean') {
+        updates.webuiEnabled = patch.enabled
+        needsApply = true
+      }
       if (patch.bindHost !== undefined) {
         const host = normalizeBindHost(patch.bindHost)
         if (host !== getSettings().webuiBindHost) {
           updates.webuiBindHost = host
-          needsRestart = true
+          needsApply = true
         }
       }
       if (patch.port !== undefined) {
@@ -198,22 +205,41 @@ export function registerSettingsIpc(): void {
         if (!Number.isInteger(port) || (port !== 0 && (port < 1024 || port > 65535))) {
           throw new Error('端口必须是 1024-65535 之间的整数，或 0 表示恢复默认')
         }
-        updates.pocketModePort = port
-        needsRestart = true
+        if (port !== getSettings().webuiPort) {
+          updates.webuiPort = port
+          needsApply = true
+        }
       }
       if (patch.publishedSessionIds !== undefined) {
         updates.webuiPublishedSessionIds = normalizePublishedIds(patch.publishedSessionIds)
       }
       if (Object.keys(updates).length > 0) updateSettings(updates)
 
-      // 开启 WebUI 需要底层 HTTP/WS 服务在跑；关闭时不主动停服务，因为移动模式可能仍在用。
-      if (patch.enabled === true) {
-        await setRemoteServiceEnabled(true)
-      } else if (needsRestart && getRemoteServiceStatus().running) {
-        // 网卡 / 端口变化必须重新 listen 才生效
-        await restartRemoteService()
-      }
+      // 独立服务：开关关闭只停 WebUI，不碰移动模式；网卡/端口变化时按最新配置重听。
+      if (needsApply) await applyWebuiService()
       return readWebuiStatus()
+    },
+  )
+
+  /**
+   * 打开已发布会话的网页。
+   *
+   * 不复用 OPEN_EXTERNAL：那一层为防 SSRF 明确拒绝 127.0.0.1 / 192.168.x.x / 10.x 等
+   * 本机与私网地址，而 WebUI 的地址恰好全是私网 —— 复用会让「打开」按钮静默失效。
+   * 这里不接受渲染进程传来的任意 URL，只接受已发布白名单里的会话 ID，地址由主进程自己拼。
+   */
+  ipcMain.handle(
+    SETTINGS_IPC_CHANNELS.OPEN_WEBUI_SESSION,
+    async (_event, sessionId: unknown): Promise<void> => {
+      if (typeof sessionId !== 'string' || !sessionId) throw new Error('会话 ID 无效')
+      const runtime = getWebuiServiceStatus()
+      if (!runtime.running) throw new Error('Web 会话服务未运行，请先启用「启用 Web 会话」')
+      const config = getWebuiLocalState().config
+      if (!config.publishedSessionIds.includes(sessionId)) throw new Error('该会话尚未发布，无法打开')
+      const target = buildWebuiPublishedUrls(runtime.port, config.bindHost, runtime.token)
+        .find((item) => item.sessionId === sessionId)
+      if (!target) throw new Error('还没有生成可访问的地址')
+      await shell.openExternal(target.url)
     },
   )
 

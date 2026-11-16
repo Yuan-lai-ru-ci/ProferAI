@@ -56,6 +56,23 @@ describe('runtime provider bridge', () => {
       .resolves.toEqual({ status: 'completed' })
     expect(received).toMatchObject({ provider: 'deepseek', apiKey: 'redacted', sessionId: 'provider-input', prompt: 'fixture' })
   })
+
+  test('forwards callback fields in providerInput to the provider adapter', async () => {
+    // 回归：上下文窗口上报回调经 providerInput 透传。若这里被白名单挡掉，
+    // 所有远程/headless run 都不会发 context_window，WebUI 占用条永远「未知名」。
+    const onContextWindow = () => {}
+    let received: AgentQueryInput | undefined
+    const adapter = createAgentRuntimeProviderAdapter('pi', provider(input => {
+      received = input
+      return (async function* () { yield message })()
+    }, () => {}))
+    const coordinator = new AgentRuntimeCoordinator({ adapters: { pi: adapter } })
+    await expect(coordinator.run({
+      sessionId: 'ctx-callback', runtime: 'pi', prompt: 'fixture',
+      providerInput: { onContextWindow },
+    }).promise).resolves.toEqual({ status: 'completed' })
+    expect(received?.onContextWindow).toBe(onContextWindow)
+  })
   for (const runtime of ['claude', 'pi'] as const) {
     test(`${runtime}: late cleanup of attempt A preserves attempt B for stop`, async () => {
       const releases: Array<() => void> = []

@@ -8,6 +8,10 @@ import {
   normalizePublishedIds,
   pickAccessibleHost,
   resolveWebuiRoute,
+  WEBUI_DEFAULT_PORT,
+  WEBUI_DEV_DEFAULT_PORT,
+  normalizeWebuiPort,
+  planWebuiPort,
 } from './webui-routing'
 
 describe('WebUI 会话白名单', () => {
@@ -124,5 +128,42 @@ describe('网卡分类（避免选中手机不可达的网卡）', () => {
     ]
     expect(pickAccessibleHost(interfaces)).toBeNull()
     expect(listAccessibleHosts(interfaces)).toEqual([])
+  })
+})
+
+
+describe('WebUI 独立端口', () => {
+  test('Given 两个默认端口 When 比较 Then WebUI 与 Pocket 不重叠', () => {
+    // Pocket：正式版 7788 / 开发版 7789（remote-service 的 DEFAULT_REMOTE_PORT / DEV）
+    expect(WEBUI_DEFAULT_PORT).not.toBe(7788)
+    expect(WEBUI_DEV_DEFAULT_PORT).not.toBe(7789)
+    expect(WEBUI_DEFAULT_PORT).not.toBe(WEBUI_DEV_DEFAULT_PORT)
+  })
+
+  test('Given 非法端口 When 归一化 Then 一律回到 0（表示跟随默认）', () => {
+    for (const input of [0, -1, 80, 65536, 'abc', null, undefined, Number.NaN, 1023.5]) {
+      expect(normalizeWebuiPort(input)).toBe(0)
+    }
+  })
+
+  test('Given 合法端口 When 归一化 Then 原样返回', () => {
+    expect(normalizeWebuiPort(7800)).toBe(7800)
+    expect(normalizeWebuiPort('8123')).toBe(8123)
+  })
+
+  test('Given 环境变量与设置同时存在 When 规划 Then 环境变量优先', () => {
+    expect(planWebuiPort({ saved: 8123, env: '9100', fallback: 7801 })).toBe(9100)
+  })
+
+  test('Given 只有设置 When 规划 Then 用设置值（保住已复制的链接）', () => {
+    expect(planWebuiPort({ saved: 8123, env: undefined, fallback: 7801 })).toBe(8123)
+  })
+
+  test('Given 环境变量非法 When 规划 Then 继续看设置，而不是回落到默认', () => {
+    expect(planWebuiPort({ saved: 8123, env: 'not-a-port', fallback: 7801 })).toBe(8123)
+  })
+
+  test('Given 都没配 When 规划 Then 用默认端口', () => {
+    expect(planWebuiPort({ saved: 0, env: undefined, fallback: 7801 })).toBe(7801)
   })
 })

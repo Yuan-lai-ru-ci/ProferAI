@@ -76,8 +76,11 @@ export function resolveSessionAttachments(
 /**
  * 把附件块拼到用户消息前。
  *
- * `rawUserMessage` 只在**确实拼上了**的情况下返回：它让气泡只显示用户原文，
- * 而 `<attached_files>` 里的绝对路径照旧进模型上下文与 JSONL。
+ * `rawUserMessage` 是剥掉附件块后的纯用户原文。**当前远程入口不再使用它**：
+ * `send_message` 现在把带 `<attached_files>` 的整段消息一起落盘（见 remote-service 的
+ * headlessInput 注释），否则刷新后桌面端与 WebUI 都看不出这一轮带了哪些文件。
+ * 保留该字段是给「只想显示原文、不在乎持久化」的调用方用的（例如未来的临时预览），
+ * 不要在 UI 层把它写回消息体，那会把附件记录抹掉。
  */
 export function applyAttachmentsToMessage(input: {
   userMessage: string

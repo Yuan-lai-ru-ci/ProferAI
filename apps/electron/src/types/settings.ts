@@ -420,11 +420,13 @@ export interface AppSettings {
   pocketModeEnabled?: boolean
   /** 移动模式服务端口（正式版默认 7788，开发模式默认 7789；0/缺省表示使用默认端口）。 */
   pocketModePort?: number
-  /** WebUI「一个会话一个网页」开关；默认关闭，即默认 0 个网页。与移动模式共用同一 HTTP/WS 服务。 */
+  /** WebUI「一个会话一个网页」开关；默认关闭，即默认 0 个网页。独立端口与独立凭据，与移动模式互不影响。 */
   webuiEnabled?: boolean
-  /** WebUI 监听网卡（IPv4 字面量，默认 127.0.0.1）；仅在 webuiEnabled 时覆盖监听地址。 */
+  /** WebUI 监听网卡（IPv4 字面量，默认 127.0.0.1）；仅作用于 WebUI 自己的监听。 */
   webuiBindHost?: string
-  /** 已发布的会话白名单；/s/<id> 只对此列表内的会话返回页面。默认空数组。 */
+  /** WebUI 监听端口（正式版默认 7800，开发模式默认 7801；0/缺省表示使用默认端口）。 */
+  webuiPort?: number
+  /** 已发布的会话白名单；/s/<id> 只对此列表内的会话返回页面，网页端 WS 也只能访问这些会话。默认空数组。 */
   webuiPublishedSessionIds?: string[]
   /** Windows Shell 环境偏好：'auto'（自动检测，优先 Git Bash）| 'git-bash' | 'wsl'（默认 'auto'） */
   agentShellPreference?: 'auto' | 'git-bash' | 'wsl'
@@ -509,11 +511,14 @@ export interface WebuiConfigPatch {
   publishedSessionIds?: string[]
 }
 
-/** WebUI 面板状态。与移动模式共用同一个 HTTP/WS 服务，因此 port / running / token 都来自远程服务。 */
+/** WebUI 面板状态。WebUI 有自己的监听端口、网卡与凭据，与移动模式完全独立。 */
 export interface WebuiStatus {
   enabled: boolean
   running: boolean
+  /** 实际监听端口（端口被占用顺延后与设置值不同） */
   port: number
+  /** 设置里的期望端口（0 表示跟随默认） */
+  configuredPort: number
   defaultPort: number
   bindHost: string
   interfaces: WebuiNetworkInterface[]
@@ -528,8 +533,8 @@ export interface WebuiStatus {
   platform: string
   assetDir: string
   assetReady: boolean
-  /** 底层远程服务的错误（如端口占用）；WebUI 依赖同一服务 */
-  serviceError: string | null
+  /** WebUI 服务自身的错误（如端口占用）；与移动模式的状态互不影响 */
+  error: string | null
 }
 
 export const SKIN_IPC_CHANNELS = {
@@ -579,6 +584,8 @@ export const SETTINGS_IPC_CHANNELS = {
   /** WebUI「一个会话一个网页」：读取状态 / 更新配置（含热应用） */
   GET_WEBUI_STATUS: 'settings:get-webui-status',
   SET_WEBUI_CONFIG: 'settings:set-webui-config',
+  /** 在系统浏览器打开已发布的 WebUI 会话页（本机/局域网地址，不走 OPEN_EXTERNAL 的 SSRF 拦截） */
+  OPEN_WEBUI_SESSION: 'settings:open-webui-session',
 } as const
 
 /** 自定义通知音 IPC 通道 */

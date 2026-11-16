@@ -162,6 +162,7 @@ import { setAgentRewindService } from './lib/agent-rewind-gateway'
 import { startDebugChannel } from './lib/debug-channel'
 import { createElectronAgentRewindService } from './lib/agent-rewind-host'
 import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from './lib/remote-service'
+import { startWebuiService, stopWebuiService } from './lib/webui-server'
 import { startAgentFabricService, stopAgentFabricService } from './lib/agent-fabric/agent-fabric-service'
 import { createTray, destroyTray, getTray } from './tray'
 import { initializeRuntime } from './lib/runtime-init'
@@ -990,13 +991,17 @@ async function bootstrap(): Promise<void> {
   // 设置页开启「启用移动端连接」后，下次启动自动恢复监听（正式版与开发版一致）。
   // 开发版默认端口 7789、正式版 7788，端口已隔离，dev 与打包版并存不会互相抢占。
   void safeAwait('startRemoteService', async () => {
-    // WebUI 与移动模式共用同一个服务：任一开关开启时，启动都要自动恢复监听。
-    const startupSettings = getSettings()
-    if (startupSettings.pocketModeEnabled === true || startupSettings.webuiEnabled === true) {
+    // 移动模式与 WebUI 各自监听自己的端口：任一开关只影响自己。
+    if (getSettings().pocketModeEnabled === true) {
       await setRemoteServiceEnabled(true)
     } else {
       await startRemoteService()
     }
+  })
+
+  // WebUI（一个会话一个网页）：独立端口 + 独立凭据，未启用时内部直接返回。
+  void safeAwait('startWebuiService', async () => {
+    await startWebuiService()
   })
 
   // Agent Fabric 本地服务：仅显式启用时启动（PROFER_AGENT_FABRIC=1 或 agent-fabric.json），
@@ -1242,7 +1247,13 @@ app.on('before-quit', (event) => {
     if (remoteExitPending) return
     remoteExitPending = true
     const timeoutMs = resolveQuitCleanupTimeoutMs()
-    void awaitQuitCleanup(stopRemoteService(), timeoutMs).then((result) => {
+    // 两个服务各自监听端口，退出时并行停：串行会让「先等的那个」占满预算。
+    // 任一失败都不该阻塞退出 —— 端口会随进程消失，残留只留日志。
+    const cleanup = Promise.all([
+      stopRemoteService().catch((error) => { console.warn('[退出] 移动模式停止失败:', error) }),
+      stopWebuiService().catch((error) => { console.warn('[退出] Web 会话停止失败:', error) }),
+    ])
+    void awaitQuitCleanup(cleanup, timeoutMs).then((result) => {
       remoteExitPending = false
       remoteExitComplete = true
       if (result.outcome === 'completed') {

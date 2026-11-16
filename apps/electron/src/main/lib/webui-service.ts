@@ -2,36 +2,28 @@
  * Profer WebUI —— 「一个会话 = 一个网页」的静态托管层。
  *
  * 设计边界：
- *  - 不新建 HTTP 服务：remote-service 的 requestListener 在 /health 之后把请求转交这里，
- *    页面与 /ws 同源，因此无需 CORS、反向代理或混合内容豁免。
+ *  - 只做 HTTP 响应：监听与连接接入在 `webui-server.ts`（它要复用 remote-service 的命令层），
+ *    本文件不 import ws / remote-service，因此可以被 bun:test 直接驱动。
  *  - 不读写会话文件：会话内容、发消息、goal 全部走既有 WS 命令与主进程单写者。
- *  - 不 import remote-service（避免循环依赖）：启停 / 状态编排放在 settings-ipc。
  *  - 默认 0 个网页：开关默认关闭，且已发布会话注册表默认为空；
  *    /s/<id> 仅对白名单内的会话返回页面，其余一律 404。
+ *  - 独立端口：WebUI 有自己的监听端口与凭据，与 Pocket 的移动模式互不影响。
  */
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { extname, join, resolve, sep } from 'node:path'
 import { app } from 'electron'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { getSettings } from './settings-service'
+import { getWebuiConfig } from './webui-config'
 import {
   buildPublishedUrls,
   listWebuiInterfaces,
-  normalizeBindHost,
-  normalizePublishedIds,
   pickAccessibleHost,
   resolveWebuiRoute,
   type WebuiNetworkInterface,
 } from './webui-routing'
 
-export interface WebuiConfig {
-  enabled: boolean
-  bindHost: string
-  publishedSessionIds: string[]
-}
-
 export interface WebuiLocalState {
-  config: WebuiConfig
+  config: ReturnType<typeof getWebuiConfig>
   interfaces: WebuiNetworkInterface[]
   assetDir: string
   assetReady: boolean
@@ -69,26 +61,12 @@ const CONTENT_TYPES: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
 }
 
-export function getWebuiConfig(): WebuiConfig {
-  const settings = getSettings()
-  return {
-    enabled: settings.webuiEnabled === true,
-    bindHost: normalizeBindHost(settings.webuiBindHost),
-    publishedSessionIds: normalizePublishedIds(settings.webuiPublishedSessionIds),
-  }
-}
-
 /**
- * 供 remote-service 决定监听地址。
- * WebUI 关闭时返回 null，保持 Pocket 原有 0.0.0.0 行为不变；
- * 环境变量 PROFER_REMOTE_HOST 仍由调用方优先处理。
+ * 静态产物目录：开发时可用 PROFER_WEBUI_DIR 直接指向 profer-pocket/webui/dist，免去来回拷贝。
+ *
+ * 打包态读 `process.resourcesPath/webui`（由 electron-builder 的 extraResources 提供），
+ * 这条链路必须与 `electron-builder.yml` 保持一致，否则安装包里会「页面 503」。
  */
-export function getWebuiBindHost(): string | null {
-  const config = getWebuiConfig()
-  return config.enabled ? config.bindHost : null
-}
-
-/** 静态产物目录：开发时可用 PROFER_WEBUI_DIR 直接指向 pocket/webui/dist，免去来回拷贝。 */
 export function getWebuiAssetDir(): string {
   const override = process.env.PROFER_WEBUI_DIR?.trim()
   if (override) return resolve(override)
@@ -118,7 +96,7 @@ function buildRootPage(publishedIds: readonly string[], token: string): string {
   const items = publishedIds.length === 0
     ? '<li>当前没有已发布会话。请在 Profer「设置 → 远程连接 → Web 会话」里添加。</li>'
     : publishedIds.map((id) => `<li><a href="/s/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}">${escapeHtml(id)}</a></li>`).join('')
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Profer Web 会话</title><style>body{font:14px/1.7 system-ui,sans-serif;background:#101214;color:#e8eaed;margin:0;padding:48px;max-width:720px}li{padding:6px 0}a{color:#7cc4a0}</style></head><body><h1>Profer Web 会话</h1><p>一个会话对应一个网页。只有已发布的会话可以访问。</p><ul>${items}</ul></body></html>`
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/webui/favicon.ico" sizes="any"><title>Profer Web 会话</title><style>:root{color-scheme:light dark;--bg:#101214;--ink:#e8eaed;--accent:#7cc4a0}@media (prefers-color-scheme: light){:root{--bg:#f7f5f2;--ink:#322f2a;--accent:#3a6f4e}}body{font:14px/1.7 system-ui,sans-serif;background:var(--bg);color:var(--ink);margin:0;padding:48px;max-width:720px}li{padding:6px 0}a{color:var(--accent)}</style></head><body><h1>Profer Web 会话</h1><p>一个会话对应一个网页。只有已发布的会话可以访问。</p><ul>${items}</ul></body></html>`
 }
 
 /** 首屏种下的 HttpOnly cookie：页面抹掉 URL 上的 ?token= 后，刷新仍能通过鉴权。 */
@@ -148,7 +126,7 @@ function buildTokenCookie(token: string): string {
  * 而 /ws 依旧要 token；发布白名单也没有放宽。
  */
 function buildCredentialRecoveryPage(): string {
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="robots" content="noindex"><meta name="viewport" content="width=device-width,initial-scale=1"><title>需要访问凭据</title><style>body{font:14px/1.7 system-ui,sans-serif;background:#191715;color:#ECEBE9;margin:0;padding:48px 24px;max-width:560px}h1{font-size:17px;margin:0 0 12px}p{margin:0 0 10px;color:#AAA7A1}code{color:#B4998E}</style></head><body><h1>这个页面需要访问凭据</h1><p>凭据已经失效，或者当前浏览器没有保存它。</p><p>请在电脑端 Profer 的「设置 → 远程连接 → Web 会话」里复制该会话的链接，重新打开一次。</p><p>iOS 上如果经常遇到，请确认没有开启无痕浏览。</p><script>(function(){try{var params=new URLSearchParams(location.search);if(params.has('token'))return;var saved=localStorage.getItem('profer-webui-token');if(!saved)return;params.set('token',saved);location.replace(location.pathname+'?'+params.toString())}catch(error){}})();</script></body></html>`
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="robots" content="noindex"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/webui/favicon.ico" sizes="any"><title>需要访问凭据</title><style>:root{color-scheme:light dark;--bg:#191715;--ink:#ECEBE9;--muted:#AAA7A1;--primary:#B4998E}@media (prefers-color-scheme: light){:root{--bg:#F7F5F2;--ink:#322F2A;--muted:#66635C;--primary:#846558}}body{font:14px/1.7 system-ui,sans-serif;background:var(--bg);color:var(--ink);margin:0;padding:48px 24px;max-width:560px}h1{font-size:17px;margin:0 0 12px}p{margin:0 0 10px;color:var(--muted)}code{color:var(--primary)}</style></head><body><h1>这个页面需要访问凭据</h1><p>凭据已经失效，或者当前浏览器没有保存它。</p><p>请在电脑端 Profer 的「设置 → 远程连接 → Web 会话」里复制该会话的链接，重新打开一次。</p><p>iOS 上如果经常遇到，请确认没有开启无痕浏览。</p><script>(function(){try{var params=new URLSearchParams(location.search);if(params.has('token'))return;var saved=localStorage.getItem('profer-webui-token');if(!saved)return;params.set('token',saved);location.replace(location.pathname+'?'+params.toString())}catch(error){}})();</script></body></html>`
 }
 
 function readCookieToken(req: IncomingMessage): string | null {
@@ -185,9 +163,38 @@ function injectBoot(html: string, sessionId: string, token: string, title?: stri
     : `${script}${withTitle}`
 }
 
+/** 预压缩产物的后缀优先级：br 比 gz 小，浏览器同时支持时优先给 br。 */
+const PRECOMPRESSED_SUFFIXES = ['.br', '.gz'] as const
+
+function acceptsEncoding(header: string | undefined, encoding: string): boolean {
+  if (!header) return false
+  return header.toLowerCase().split(',').some((part) => part.trim().split(';')[0] === encoding)
+}
+
+/**
+ * 取出可发送的静态资源内容。
+ *
+ * 打包进安装包的 JS 有 400KB 量级，手机在局域网刷新一次要全量重下；构建脚本会顺带产出
+ * `.br` / `.gz`，这里按 `accept-encoding` 直接给压缩体（Node 没有内置压缩，实时压反而更慢）。
+ * 找不到预压缩文件时退回原文件，行为与之前一致。
+ */
+function readAssetPayload(
+  fullPath: string,
+  acceptEncoding: string | undefined,
+): { body: Buffer; encoding: string | null } {
+  for (const suffix of PRECOMPRESSED_SUFFIXES) {
+    const encoding = suffix.slice(1)
+    if (!acceptsEncoding(acceptEncoding, encoding)) continue
+    const candidate = `${fullPath}${suffix}`
+    if (!existsSync(candidate)) continue
+    return { body: readFileSync(candidate), encoding }
+  }
+  return { body: readFileSync(fullPath), encoding: null }
+}
+
 /**
  * 处理 WebUI 的 HTTP 请求。返回 false 表示该路径不属于 WebUI，
- * 由 remote-service 继续走它原有的 404 逻辑。
+ * 由调用方继续走它自己的 404 逻辑。
  */
 export function handleWebuiHttpRequest(
   req: IncomingMessage,
@@ -266,15 +273,22 @@ export function handleWebuiHttpRequest(
     reply(404, 'Not Found')
     return true
   }
+  // 只有 assets/ 下带内容 hash 的产物才能长缓存。
+  // favicon / apple-touch-icon 这类固定名没有 hash：若也长缓存，换了图标老访客一年都看不到，必须回来校验。
+  const hashed = route.relativePath.startsWith('assets/')
+    && /-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$/.test(route.relativePath)
+  const payload = readAssetPayload(fullPath, req.headers['accept-encoding'])
   res.writeHead(200, {
     'content-type': CONTENT_TYPES[extname(fullPath).toLowerCase()] ?? 'application/octet-stream',
-    'cache-control': 'no-cache',
+    'cache-control': hashed ? 'public, max-age=31536000, immutable' : 'no-cache',
+    vary: 'accept-encoding',
+    ...(payload.encoding ? { 'content-encoding': payload.encoding } : {}),
   })
-  res.end(readFileSync(fullPath))
+  res.end(payload.body)
   return true
 }
 
-/** 供 settings-ipc 组装面板状态：只做纯拼装，不触发服务启停。 */
+/** 供设置面板组装展示地址：只做纯拼装，不触发服务启停。 */
 export function buildWebuiPublishedUrls(port: number, host: string, token: string | null) {
   const interfaces = listWebuiInterfaces()
   // 监听 0.0.0.0 时用第一张局域网网卡的地址展示，否则复制出来的 127.0.0.1 在手机上必然打不开。

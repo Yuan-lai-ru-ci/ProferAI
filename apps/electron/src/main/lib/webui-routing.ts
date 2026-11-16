@@ -73,6 +73,38 @@ export function classifyInterfaceKind(name: string, address: string, internal: b
   return 'lan'
 }
 
+/**
+ * WebUI 的默认端口：正式版 7800、开发版 7801。
+ *
+ * 必须与移动模式（Pocket 7788/7789）错开：两个服务各自监听，落到同一个端口就是
+ * 「谁后启动谁被占」。这两个常量放在纯函数层，测试才能在没有 Electron 的进程里断言。
+ */
+export const WEBUI_DEFAULT_PORT = 7800
+export const WEBUI_DEV_DEFAULT_PORT = 7801
+
+/**
+ * 端口归一化：只接受 1024-65535 的整数，其余一律 0（= 用默认）。
+ * 0 是合法输入（表示「跟随默认」），80 这类特权端口不在允许范围。
+ */
+export function normalizeWebuiPort(input: unknown): number {
+  const port = typeof input === 'number' ? input : Number(input)
+  if (!Number.isInteger(port) || port <= 0) return 0
+  return port >= 1024 && port <= 65535 ? port : 0
+}
+
+/**
+ * 决定最终监听端口：环境变量 > 设置 > 默认。
+ *
+ * 环境变量优先是为了「临时验收不改用户设置」；设置优先于默认是为了保住已复制的链接。
+ */
+export function planWebuiPort(input: {
+  saved?: unknown
+  env?: string | undefined
+  fallback: number
+}): number {
+  return normalizeWebuiPort(input.env) || normalizeWebuiPort(input.saved) || input.fallback
+}
+
 export type WebuiRoute =
   | { kind: 'foreign' }
   | { kind: 'root' }

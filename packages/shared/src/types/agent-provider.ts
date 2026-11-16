@@ -89,6 +89,11 @@ export interface AgentQueryInput {
   onRuntimeMessage?: (message: SDKMessage) => void
   /** 本轮 runtime 路由已注册；队列仍由底层 adapter 等待自身 ready。 */
   onRuntimeRegistered?: () => void
+  /**
+   * 上下文窗口大小上报。由宿主经 providerInput 透传，Pi/Claude adapter 在拿到
+   * 模型元数据时回调一次。远程/headless 路径缺这个字段时网页端占用条永远不会显示。
+   */
+  onContextWindow?: (contextWindow: number) => void
   /** Agent 工作目录 */
   cwd?: string
   /** 中止信号 */

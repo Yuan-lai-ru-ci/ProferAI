@@ -244,6 +244,16 @@ export class AgentPermissionService {
   }
 
   /**
+   * 这条待处理请求属于哪个会话（查不到返回 undefined）。
+   *
+   * 远程出口用它做越权判定：审批只带 requestId，不看归属就放行的话，
+   * 任何持有凭据的连接都能替别的会话点「允许」。
+   */
+  getPendingSessionId(requestId: string): string | undefined {
+    return this.pendingPermissions.get(requestId)?.request.sessionId
+  }
+
+  /**
    * 清除指定会话的白名单（会话结束时调用）
    */
   clearSessionWhitelist(sessionId: string): void {

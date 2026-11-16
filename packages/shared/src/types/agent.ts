@@ -773,6 +773,8 @@ export type ProferEvent =
   | { type: 'delegation_session_updated'; session: AgentSessionMeta }
   // 协作子会话被阻塞（提问 / 权限）。父会话据此获得一次决策机会，用户界面据此提示待回答。
   | { type: 'delegation_blocked'; delegationId: string; blockedEvent: DelegationBlockedEvent }
+  // 阻塞已解除（用户或父会话回答）。父会话的远程界面据此收起「在等你回答」，无需重连。
+  | { type: 'delegation_blocked_resolved'; delegationId: string; blockedEventId: string; requestId: string; resolution: DelegationBlockedResolution }
   // 跨端会话元数据同步：Pocket 远程命令修改会话后立即通知桌面与其他 Pocket 客户端。
   | { type: 'session_updated'; session: AgentSessionMeta }
   | { type: 'session_deleted'; sessionId: string; revision?: number }
@@ -1827,6 +1829,8 @@ export interface AgentSendInput {
   runtimeSessionId?: string
   /** Goal 独立 runtime 已创建/恢复后的 session ID 回调，不更新普通会话元数据。 */
   onRuntimeSessionId?: (sdkSessionId: string, sessionFile?: string) => void
+  /** 上下文窗口大小上报（tokens）：Pi 在 run 准备阶段回调；远程入口用它转发占用事件 */
+  onContextWindow?: (contextWindow: number) => void
   /** Goal runtime 当前轮消息回调，不写入普通会话 transcript。 */
   onRuntimeMessage?: (message: import('@profer/shared').SDKMessage) => void
   /** 定时任务执行上下文（注入到系统提示词，用户不可见） */

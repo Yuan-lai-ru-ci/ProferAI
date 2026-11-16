@@ -80,6 +80,37 @@ const POCKET_TOOL_SUMMARY_KEYS = [
 /** 摘要上限：一行、够看清在做什么，又不至于把整条命令/补丁带上 WebSocket。 */
 const POCKET_TOOL_SUMMARY_MAX_CHARS = 120
 
+/**
+ * WebUI 需要展开工具行看「完整输出 / 命令入参」（desktop 有、网页没有的能力补齐）。
+ * 完整放开会把重放日志与 WS 帧撑爆，也不安全（工具输出可能带文件内容）——
+ * 所以两头都有界：入参 1500 字、输出 4000 字，超长保留首尾（结论通常在首尾）。
+ */
+const POCKET_TOOL_INPUT_MAX_CHARS = 1500
+const POCKET_TOOL_OUTPUT_MAX_CHARS = 4000
+
+function capMiddle(value: string, limit: number): string {
+  if (value.length <= limit) return value
+  const head = Math.ceil(limit * 0.6)
+  const tail = Math.floor(limit * 0.25)
+  return `${value.slice(0, head)}\n…（中间省略 ${value.length - limit} 字符）…\n${value.slice(-tail)}`
+}
+
+/**
+ * 从 tool_result.content 提取可展示文本：字符串原样；块数组取 text 块（image 块已由
+ * 图片引用通道单独处理）。保留原始换行 —— 展开时按等宽正文渲染。
+ */
+function extractToolResultText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue
+    const item = block as Record<string, unknown>
+    if (typeof item.text === 'string' && item.text.trim()) parts.push(item.text)
+  }
+  return parts.join('\n')
+}
+
 function toSingleLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim()
 }
@@ -147,12 +178,14 @@ export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
         const input = item.input && typeof item.input === 'object' ? item.input as Record<string, unknown> : {}
         const filePath = input.file_path ?? input.filePath ?? input.path ?? input.notebook_path
         const summary = projectToolInputSummary(input)
+        const inputText = capMiddle(JSON.stringify(input, null, 2), POCKET_TOOL_INPUT_MAX_CHARS)
         return [{
           type: 'tool_use',
           id: item.id,
           name: item.name,
           input: typeof filePath === 'string' ? { file_path: filePath } : {},
           ...(summary ? { summary } : {}),
+          ...(inputText ? { inputText } : {}),
         }]
       }
       return []
@@ -180,11 +213,13 @@ export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
       const item = block as Record<string, unknown>
       if (item.type === 'text' && typeof item.text === 'string') return [{ type: 'text', text: item.text }]
       if (item.type === 'tool_result' && typeof item.tool_use_id === 'string') {
+        const outputText = capMiddle(extractToolResultText(item.content), POCKET_TOOL_OUTPUT_MAX_CHARS)
         return [{
           type: 'tool_result',
           tool_use_id: item.tool_use_id,
           ...(item.is_error === true ? { is_error: true } : {}),
           ...(imageRefs.length > 0 ? { images: imageRefs } : {}),
+          ...(outputText ? { output: outputText } : {}),
         }]
       }
       return []

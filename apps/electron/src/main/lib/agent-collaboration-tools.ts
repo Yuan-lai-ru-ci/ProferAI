@@ -12,6 +12,7 @@ import type {
   AgentStreamPayload,
   AskUserRequest,
   DelegationBlockedEvent,
+  DelegationBlockedResolution,
   PermissionRequest,
   PresetReference,
   ProferPermissionMode,
@@ -201,7 +202,10 @@ export function registerCollaborationEventBus(eventBus: import('./agent-event-bu
     if (event.type === 'ask_user_resolved' || event.type === 'permission_resolved') {
       const requestId = 'requestId' in event ? (event as { requestId: string }).requestId : undefined
       // 用户直接回答（或父会话代答后广播）都会走到这里；已解决的事件不会被覆盖解决者。
-      if (requestId) blockedEvents.resolveByRequestId(requestId, 'answered_by_user')
+      if (requestId) {
+        const resolved = blockedEvents.resolveByRequestId(requestId, 'answered_by_user')
+        if (resolved) emitBlockedResolved(resolved)
+      }
     }
   })
 
@@ -222,6 +226,68 @@ function getPendingBlockedEvents(delegationId: string): DelegationBlockedEvent[]
 
 function getBlockedEventById(blockedEventId: string): DelegationBlockedEvent | undefined {
   return blockedEvents.get(blockedEventId)
+}
+
+/**
+ * 阻塞解除必须推回父会话：远程界面（WebUI/Pocket）只看父会话事件流，
+ * 没有这条通知就只能等下一次刷新才收起「子任务在等你回答」。
+ */
+function emitBlockedResolved(event: DelegationBlockedEvent): void {
+  const record = delegations.get(event.delegationId)
+  if (!record || !_eventBusRef) return
+  _eventBusRef.emit(record.parentSessionId, {
+    kind: 'profer_event',
+    event: {
+      type: 'delegation_blocked_resolved',
+      delegationId: event.delegationId,
+      blockedEventId: event.id,
+      requestId: event.requestId,
+      resolution: event.resolution ?? 'answered_by_user',
+    },
+  })
+}
+
+function resolveBlockedEvent(event: DelegationBlockedEvent, resolution: DelegationBlockedResolution): boolean {
+  if (!blockedEvents.resolve(event.id, resolution)) return false
+  emitBlockedResolved(event)
+  return true
+}
+
+/** 远程界面重连时的委派快照：只看仍在运行的子会话与未解除的阻塞，不含历史终态。 */
+export interface SessionDelegationSnapshotEntry {
+  delegationId: string
+  childSessionId: string
+  title: string
+  role: AgentDelegationRole
+  status: AgentDelegationStatus
+  goal: string
+  startedAt: number
+  pendingBlockedEvents: DelegationBlockedEvent[]
+}
+
+export interface SessionDelegationSnapshot {
+  running: SessionDelegationSnapshotEntry[]
+  blockedCount: number
+}
+
+export function getSessionDelegationSnapshot(parentSessionId: string): SessionDelegationSnapshot {
+  const running = Array.from(delegations.values())
+    .filter((record) => record.parentSessionId === parentSessionId && record.status === 'running')
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .map((record) => ({
+      delegationId: record.delegationId,
+      childSessionId: record.childSessionId,
+      title: record.title,
+      role: record.role,
+      status: record.status,
+      goal: record.goal,
+      startedAt: record.startedAt,
+      pendingBlockedEvents: getPendingBlockedEvents(record.delegationId),
+    }))
+  return {
+    running,
+    blockedCount: running.reduce((sum, item) => sum + item.pendingBlockedEvents.length, 0),
+  }
 }
 
 function pruneFinishedDelegations(): void {
@@ -1434,7 +1500,7 @@ export async function injectAgentCollaborationMcpServer(
             const answers = args.answers ?? {}
             const sessionId = await askUserService.respondToAskUser(blocked.requestId, answers)
             const answered = !!sessionId
-            if (answered) blockedEvents.resolve(blocked.id, 'answered_by_parent')
+            if (answered) resolveBlockedEvent(blocked, 'answered_by_parent')
             if (answered && _eventBusRef) {
               _eventBusRef.emit(blocked.childSessionId, {
                 kind: 'profer_event',
@@ -1449,7 +1515,7 @@ export async function injectAgentCollaborationMcpServer(
             const behavior = args.permissionBehavior ?? 'allow'
             const sessionId = permissionService.respondToPermission(blocked.requestId, behavior, false)
             const answered = !!sessionId
-            if (answered) blockedEvents.resolve(blocked.id, 'answered_by_parent')
+            if (answered) resolveBlockedEvent(blocked, 'answered_by_parent')
             if (answered && _eventBusRef) {
               _eventBusRef.emit(blocked.childSessionId, {
                 kind: 'profer_event',
@@ -1778,7 +1844,7 @@ export function buildPiCollaborationTools(
           const answers = args.answers ?? {}
           const sessionId = await askUserService.respondToAskUser(blocked.requestId, answers)
           const answered = !!sessionId
-          if (answered) blockedEvents.resolve(blocked.id, 'answered_by_parent')
+          if (answered) resolveBlockedEvent(blocked, 'answered_by_parent')
           if (answered && _eventBusRef) {
             _eventBusRef.emit(blocked.childSessionId, {
               kind: 'profer_event',
@@ -1793,7 +1859,7 @@ export function buildPiCollaborationTools(
           const behavior = args.permissionBehavior ?? 'allow'
           const sessionId = permissionService.respondToPermission(blocked.requestId, behavior, false)
           const answered = !!sessionId
-          if (answered) blockedEvents.resolve(blocked.id, 'answered_by_parent')
+          if (answered) resolveBlockedEvent(blocked, 'answered_by_parent')
           if (answered && _eventBusRef) {
             _eventBusRef.emit(blocked.childSessionId, {
               kind: 'profer_event',
