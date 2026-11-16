@@ -10,8 +10,8 @@ import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
   Download,
   Upload,
-  CheckCircle2,
   XCircle,
+  CheckCircle2,
   AlertTriangle,
   Loader2,
   ChevronDown,
@@ -43,9 +43,20 @@ import {
   currentAgentSessionIdAtom,
   resolvedBlobMessagesAtom,
 } from '@/atoms/agent-atoms'
-import { migrationImportDialogOpenAtom } from '@/atoms/migration-atoms'
-import { cn } from '@/lib/utils'
+import {
+  cancelMigrationExportAtom,
+  migrationExportStateAtom,
+  migrationImportDialogOpenAtom,
+} from '@/atoms/migration-atoms'
+import {
+  applyMigrationExportProgress,
+  IDLE_MIGRATION_EXPORT_STATE,
+  isMigrationExportActive,
+  MIGRATION_EXPORT_PHASE_LABELS,
+  type MigrationExportResult,
+} from '@/lib/migration-export'
 import { getFileBaseName } from '@/lib/file-utils'
+import { cn } from '@/lib/utils'
 
 // ==================== 导出（Migration）类型 ====================
 
@@ -70,23 +81,6 @@ interface WsSelection {
   mcpServers: Set<string>
 }
 
-interface ExportResult {
-  success: boolean
-  filePath?: string
-  error?: string
-  warnings?: string[]
-  bytes?: number
-  encrypted?: boolean
-  cancelled?: boolean
-}
-
-interface ExportProgress {
-  phase: 'preparing' | 'packing' | 'finalizing' | 'encrypting'
-  percent: number
-  bytesWritten: number
-  totalBytes: number
-}
-
 const MIN_EXPORT_PASSPHRASE = 8
 
 const COMPONENT_LABELS: Record<MigrationComponent, string> = {
@@ -95,13 +89,6 @@ const COMPONENT_LABELS: Record<MigrationComponent, string> = {
   mcp: 'MCP 配置',
   channels: '模型渠道',
   chattools: 'Chat 工具',
-}
-
-const EXPORT_PHASE_LABELS: Record<ExportProgress['phase'], string> = {
-  preparing: '准备中',
-  packing: '打包中',
-  finalizing: '收尾中',
-  encrypting: '加密中',
 }
 
 // ==================== 存储类型 ====================
@@ -191,14 +178,9 @@ function MigrationSection(): React.ReactElement {
   const [shareComponents, setShareComponents] = React.useState<Set<MigrationComponent>>(
     new Set(['sessions', 'skills', 'mcp'])
   )
-  const [exporting, setExporting] = React.useState(false)
-  const [cancelling, setCancelling] = React.useState(false)
   const exportRef = React.useRef(false)
-  const [exportResult, setExportResult] = React.useState<ExportResult | null>(null)
   const [exportEncrypt, setExportEncrypt] = React.useState(false)
   const [exportPassphrase, setExportPassphrase] = React.useState('')
-  const [exportProgress, setExportProgress] = React.useState<ExportProgress | null>(null)
-  const exportTaskIdRef = React.useRef<string | null>(null)
 
   const [shareDetailMode, setShareDetailMode] = React.useState<ShareDetailMode>('default')
   const [sharePreview, setSharePreview] = React.useState<ShareExportPreview | null>(null)
@@ -210,6 +192,19 @@ function MigrationSection(): React.ReactElement {
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const currentWorkspace = workspaces[0]
   const setMigrationImportDialogOpen = useSetAtom(migrationImportDialogOpenAtom)
+  const exportState = useAtomValue(migrationExportStateAtom)
+  const setExportState = useSetAtom(migrationExportStateAtom)
+  const cancelExport = useSetAtom(cancelMigrationExportAtom)
+  const exporting = isMigrationExportActive(exportState)
+  const exportProgress = exportState.progress
+  const exportResult = exportState.result
+
+  React.useEffect(() => {
+    const unsubscribe = window.electronAPI.onMigrationProgress?.((progress) => {
+      setExportState((current) => applyMigrationExportProgress(current, progress))
+    })
+    return () => unsubscribe?.()
+  }, [setExportState])
 
   const hasSkillsOrMcp = shareComponents.has('skills') || shareComponents.has('mcp')
 
@@ -240,45 +235,31 @@ function MigrationSection(): React.ReactElement {
     }
   }, [exportMode, shareDetailMode, sharePreview, sharePreviewError, loadSharePreview])
 
-  React.useEffect(() => {
-    const unsubscribe = window.electronAPI.onMigrationProgress?.((progress) => {
-      if (!exportTaskIdRef.current || progress.taskId !== exportTaskIdRef.current) return
-      setExportProgress({
-        phase: progress.phase as ExportProgress['phase'],
-        percent: progress.percent,
-        bytesWritten: progress.bytesWritten,
-        totalBytes: progress.totalBytes,
-      })
-    })
-    return () => unsubscribe?.()
-  }, [])
-
   const handleExport = async (): Promise<void> => {
-    if (!currentWorkspace || exportRef.current || (exportMode === 'share' && hasSkillsOrMcp && shareDetailMode === 'custom' && (!sharePreview || sharePreviewLoading || sharePreviewError))) return
+    if (!currentWorkspace || exportRef.current || exporting || (exportMode === 'share' && hasSkillsOrMcp && shareDetailMode === 'custom' && (!sharePreview || sharePreviewLoading || sharePreviewError))) return
     // main 将空的工作区选择解释为「全部」，这里必须明确阻断，不能扩大用户选择范围。
     if (exportMode === 'share' && hasSkillsOrMcp && shareDetailMode === 'custom' && sharePreview &&
       !sharePreview.workspaces.some((ws) => {
         const sel = wsSelections.get(ws.workspace.id)
         return (shareComponents.has('skills') && !!sel?.skills.size) || (shareComponents.has('mcp') && !!sel?.mcpServers.size)
       })) {
-      setExportResult({ success: false, error: '请至少选择一个工作区项目；空选择不会导出全部工作区' })
+      setExportState({ status: 'finished', taskId: null, progress: null, result: { success: false, error: '请至少选择一个工作区项目；空选择不会导出全部工作区' } })
       return
     }
     if (exportMode === 'personal' && exportEncrypt && exportPassphrase.length < MIN_EXPORT_PASSPHRASE) {
-      setExportResult({ success: false, error: `加密口令至少需要 ${MIN_EXPORT_PASSPHRASE} 位` })
+      setExportState({ status: 'finished', taskId: null, progress: null, result: { success: false, error: `加密口令至少需要 ${MIN_EXPORT_PASSPHRASE} 位` } })
       return
     }
     exportRef.current = true
-    setExportResult(null)
-    setExportProgress(null)
+    // 每次尝试都覆盖上一次结果，避免旧结果被误认为本次导出。
+    setExportState(IDLE_MIGRATION_EXPORT_STATE)
     const taskId = crypto.randomUUID()
 
     try {
       const outputPath = await window.electronAPI.migrationSaveFileDialog(exportMode)
       if (!outputPath) return
 
-      setExporting(true)
-      exportTaskIdRef.current = taskId
+      setExportState({ status: 'running', taskId, progress: null, result: null })
 
       const components: MigrationComponent[] =
         exportMode === 'personal'
@@ -312,8 +293,8 @@ function MigrationSection(): React.ReactElement {
           workspaceSelections,
           taskId,
           passphrase,
-        }) as ExportResult
-        setExportResult(result)
+        }) as MigrationExportResult
+        setExportState({ status: 'finished', taskId: null, progress: null, result })
       } else {
         const result = await window.electronAPI.migrationExportV2({
           mode: exportMode,
@@ -321,32 +302,19 @@ function MigrationSection(): React.ReactElement {
           outputPath,
           taskId,
           passphrase,
-        }) as ExportResult
-        setExportResult(result)
+        }) as MigrationExportResult
+        setExportState({ status: 'finished', taskId: null, progress: null, result })
         if (result.success && exportEncrypt) setExportPassphrase('')
       }
     } catch (err) {
-      setExportResult({ success: false, error: err instanceof Error ? err.message : '导出失败' })
+      setExportState({
+        status: 'finished',
+        taskId: null,
+        progress: null,
+        result: { success: false, error: err instanceof Error ? err.message : '导出失败' },
+      })
     } finally {
       exportRef.current = false
-      setExporting(false)
-      setCancelling(false)
-      setExportProgress(null)
-      exportTaskIdRef.current = null
-    }
-  }
-
-  const handleCancelExport = async (): Promise<void> => {
-    const taskId = exportTaskIdRef.current
-    if (!taskId || cancelling) return
-    setCancelling(true)
-    try {
-      // false 表示主进程尚未注册该任务（或已结束）：允许用户再次点击取消。
-      const accepted = await window.electronAPI.migrationCancelExport(taskId)
-      if (!accepted) setCancelling(false)
-    } catch (error) {
-      console.error('[导出] 取消请求失败:', error)
-      setCancelling(false)
     }
   }
 
@@ -659,10 +627,10 @@ function MigrationSection(): React.ReactElement {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => void handleCancelExport()}
-                disabled={cancelling}
+                onClick={() => void cancelExport()}
+                disabled={exportState.status === 'cancelling'}
               >
-                {cancelling ? '取消中...' : '取消导出'}
+                {exportState.status === 'cancelling' ? '取消中...' : '取消导出'}
               </Button>
             )}
 
@@ -676,8 +644,8 @@ function MigrationSection(): React.ReactElement {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {exportProgress.totalBytes > 0
-                    ? `${EXPORT_PHASE_LABELS[exportProgress.phase]} ${exportProgress.percent}%`
-                    : EXPORT_PHASE_LABELS[exportProgress.phase]}
+                    ? `${MIGRATION_EXPORT_PHASE_LABELS[exportProgress.phase]} ${exportProgress.percent}%`
+                    : MIGRATION_EXPORT_PHASE_LABELS[exportProgress.phase]}
                   {exportProgress.totalBytes > 0 && (
                     <> · 已处理 {formatBytes(exportProgress.bytesWritten)} / {formatBytes(exportProgress.totalBytes)}</>
                   )}
