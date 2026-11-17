@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  DEFAULT_HANDOFF_PROPOSAL_POLICY,
   HandoffProposalService,
   MAX_PENDING_HANDOFF_PROPOSALS,
   normalizeHandoffProposalInput,
+  normalizeHandoffProposalPolicy,
 } from './handoff-proposal-service'
 
 describe('交接对话提议参数', () => {
@@ -61,5 +63,18 @@ describe('交接对话提议队列', () => {
 
   test('Given remove 不存在的 id When 调用 Then 返回 null', () => {
     expect(new HandoffProposalService().remove('missing')).toBeNull()
+  })
+})
+
+describe('交接提议策略归一化', () => {
+  test('Given disabled When 归一 Then 保持 disabled（用户关掉提议）', () => {
+    expect(normalizeHandoffProposalPolicy('disabled')).toBe('disabled')
+  })
+
+  test('Given 缺失 / 脏值 / 历史 auto When 归一 Then 一律回落 alwaysAsk', () => {
+    // 没有 auto：交接要写文档、建新会话并切标签，自动执行会打断当前工作。
+    for (const value of [undefined, null, '', 'ALWAYSASK', 'auto', 1, {}]) {
+      expect(normalizeHandoffProposalPolicy(value)).toBe(DEFAULT_HANDOFF_PROPOSAL_POLICY)
+    }
   })
 })

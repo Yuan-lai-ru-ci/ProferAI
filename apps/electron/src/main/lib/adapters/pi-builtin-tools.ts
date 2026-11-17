@@ -613,7 +613,7 @@ export function buildPiGoalProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCon
  */
 export function buildPiHandoffProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'sessionId' | 'handoffProposal'>): ToolDefinition[] {
   const proposal = ctx.handoffProposal
-  if (!proposal || proposal.planMode) return []
+  if (!proposal || proposal.policy === 'disabled' || proposal.planMode) return []
   return [sdk.defineTool({
     name: HANDOFF_PROPOSE_TOOL_NAME,
     label: '提议交接对话',
@@ -623,7 +623,8 @@ export function buildPiHandoffProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinTools
       reason: Type.String({ description: '为什么现在该交接：上下文、阶段进展或用户要求' }),
       nextSteps: Type.Optional(Type.String({ description: '建议接手者接下来先做什么' })),
     }),
-    execute: async (params: unknown) => {
+    // 同 propose_goal：必须按 (toolCallId, params) 接收，否则 reason 恒为空。
+    async execute(_toolCallId, params) {
       const args = params as HandoffProposalInput
       if (!normalizeHandoffProposalInput(args)) {
         return jsonToolResult({ accepted: false, reason: 'reason 不能为空' })

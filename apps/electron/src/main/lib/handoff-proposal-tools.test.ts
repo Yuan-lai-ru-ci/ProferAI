@@ -4,11 +4,15 @@ import { shouldInjectHandoffProposalTool } from './handoff-proposal-tools'
 
 describe('交接提议工具注入条件', () => {
   test('Given 普通用户轮次 When 判定 Then 注入工具（模型可自主提议）', () => {
-    expect(shouldInjectHandoffProposalTool({ planMode: false })).toBe(true)
+    expect(shouldInjectHandoffProposalTool({ planMode: false, policy: 'alwaysAsk' })).toBe(true)
   })
 
   test('Given 计划模式 When 判定 Then 不注入（用户还没确认要做什么）', () => {
-    expect(shouldInjectHandoffProposalTool({ planMode: true })).toBe(false)
+    expect(shouldInjectHandoffProposalTool({ planMode: true, policy: 'alwaysAsk' })).toBe(false)
+  })
+
+  test('Given 策略 disabled When 判定 Then 不注入（用户关掉了提议）', () => {
+    expect(shouldInjectHandoffProposalTool({ planMode: false, policy: 'disabled' })).toBe(false)
   })
 })
 

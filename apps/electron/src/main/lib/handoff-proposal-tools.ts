@@ -19,6 +19,8 @@ function jsonResult(payload: unknown): { content: Array<{ type: 'text'; text: st
 
 export interface HandoffProposalToolsContext {
   sessionId: string
+  /** 提议策略；disabled 时不注入工具。 */
+  policy: import('@profer/shared').HandoffProposalPolicy
   /** 计划模式下不提议（用户还没确认要做什么）。 */
   planMode: boolean
   /** 登记成功后通知渲染层出卡片。 */
@@ -26,8 +28,10 @@ export interface HandoffProposalToolsContext {
 }
 
 /** 是否应该给这轮对话注入 propose_handoff。 */
-export function shouldInjectHandoffProposalTool(ctx: Pick<HandoffProposalToolsContext, 'planMode'>): boolean {
-  return !ctx.planMode
+export function shouldInjectHandoffProposalTool(
+  ctx: Pick<HandoffProposalToolsContext, 'planMode' | 'policy'>,
+): boolean {
+  return ctx.policy !== 'disabled' && !ctx.planMode
 }
 
 export async function injectHandoffProposalMcpServer(

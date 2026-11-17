@@ -1814,6 +1814,8 @@ export interface AgentSendInput {
    * 省略表示本轮不注入 propose_handoff 工具（内部轮次 / 计划模式）。
    */
   handoffProposal?: {
+    /** 提议策略；disabled 时不应注入工具（入口已过滤，这里再声明一次便于各适配器判断）。 */
+    policy: import('./agent').HandoffProposalPolicy
     /** 计划模式下不提议。 */
     planMode: boolean
     onPropose: (proposal: import('./agent').HandoffProposal) => void
@@ -2290,6 +2292,14 @@ export interface GoalProposal {
 
 /** 模型主动提议建立 Goal 的策略：auto 直接创建 / alwaysAsk 每次确认 / disabled 关闭。 */
 export type GoalProposalPolicy = 'auto' | 'alwaysAsk' | 'disabled'
+
+/**
+ * 模型主动提议「交接对话」的策略。
+ *
+ * 交接与 Goal 不同，没有 auto 语义：交接要写文档、建新会话、切标签，
+ * 自动执行会在用户没准备时打断当前工作，所以只提供 alwaysAsk / disabled。
+ */
+export type HandoffProposalPolicy = 'alwaysAsk' | 'disabled'
 
 /**
  * 模型主动提议「交接对话」。

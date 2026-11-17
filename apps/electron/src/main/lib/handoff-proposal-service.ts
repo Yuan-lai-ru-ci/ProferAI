@@ -9,7 +9,19 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { HandoffProposal } from '@profer/shared'
+import type { HandoffProposal, HandoffProposalPolicy } from '@profer/shared'
+
+export const DEFAULT_HANDOFF_PROPOSAL_POLICY: HandoffProposalPolicy = 'alwaysAsk'
+
+/**
+ * 归一交接提议策略。
+ *
+ * 刻意没有 AUTO：交接会写文档、建新会话并切标签，自动执行等于在用户没准备时
+ * 打断当前工作，与 Goal 的「值得多轮持续做」不同。旧值/脏值一律回落 alwaysAsk。
+ */
+export function normalizeHandoffProposalPolicy(value: unknown): HandoffProposalPolicy {
+  return value === 'disabled' ? 'disabled' : DEFAULT_HANDOFF_PROPOSAL_POLICY
+}
 
 /** 单个会话最多保留的待确认提议数，防止模型反复提议刷屏。 */
 export const MAX_PENDING_HANDOFF_PROPOSALS = 3

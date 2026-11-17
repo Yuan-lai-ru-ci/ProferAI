@@ -258,7 +258,7 @@ import { getAgentPresetByReference, presetReferenceForId } from './lib/agent-pre
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { goalProposalService, normalizeGoalProposalPolicy } from './lib/goal-proposal-service'
-import { handoffProposalService } from './lib/handoff-proposal-service'
+import { handoffProposalService, normalizeHandoffProposalPolicy } from './lib/handoff-proposal-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
 import { prepareAgentRewind, refineAgentRewind, executeAgentRewind, undoAgentRewind, submitAgentAfterRewind, legacyConversationRewind } from './lib/agent-rewind-gateway'
@@ -3379,8 +3379,12 @@ export function registerIpcHandlers(): void {
     emitSessionStreamEvent(sessionId, { kind: 'profer_event', event })
   }
   const handoffProposalInputFor = (sessionId: string): import('@profer/shared').AgentSendInput['handoffProposal'] => {
+    // disabled 时整条通道不注入，模型拿不到 propose_handoff，也不会产生卡片。
+    const policy = normalizeHandoffProposalPolicy(getSettings().handoffProposalPolicy)
+    if (policy === 'disabled') return undefined
     if (isSessionPlanMode(sessionId)) return undefined
     return {
+      policy,
       planMode: false,
       onPropose: (proposal) => emitHandoffProposalEvent(sessionId, { type: 'handoff_proposal', proposal }),
     }
