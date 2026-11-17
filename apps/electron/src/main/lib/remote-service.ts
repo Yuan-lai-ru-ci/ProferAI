@@ -38,7 +38,7 @@ import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
 import { applyAttachmentsToMessage } from './remote-send-attachments'
 import { readWebuiPublishedIds } from './webui-config'
-import { checkWebuiCommandAccess, filterWebuiSessionIds, readCommandSessionId, WEBUI_REQUEST_SCOPED_COMMANDS } from './webui-command-scope'
+import { checkWebuiCommandAccess, filterWebuiSessionIds, readCommandSessionId, WEBUI_REQUEST_SCOPED_COMMANDS, WEBUI_SESSION_SCOPED_COMMANDS } from './webui-command-scope'
 
 import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
 import type { AgentRuntime, AgentSendInput } from '@profer/shared'
@@ -1165,6 +1165,42 @@ function resolvePendingRequestSessionId(type: string, parsed: Record<string, unk
   return undefined
 }
 
+/**
+ * 网页端预设命令的作用域锚点。
+ *
+ * 预设是工作区级配置，客户端传来的 `workspaceSlug` 在网页通道不可信：拿到一个会话链接
+ * 的人不应该能改其它工作区的预设。页面启动时必定先发 `session_detail`（带 sessionId），
+ * 命令层据此记录了 `activeSessionId`；这里把作用域收束到该会话所属工作区，并复核它
+ * 仍在发布白名单内（activeSessionId 也可能来自旧连接或白名单变更前）。
+ */
+function resolveWebuiPresetWorkspace(
+  context: RemoteCommandContext,
+): { ok: true; workspaceSlug: string | undefined } | { ok: false; error: string } {
+  const sessionId = context.activeSessionId
+  if (!sessionId) return { ok: false, error: '网页端缺少会话上下文，不能操作预设' }
+  if (!readWebuiPublishedIds().includes(sessionId)) {
+    return { ok: false, error: '该会话未发布到网页，不能从此页面操作预设' }
+  }
+  const session = getAgentSessionMeta(sessionId)
+  if (!session) return { ok: false, error: '会话不存在' }
+  return {
+    ok: true,
+    workspaceSlug: session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined,
+  }
+}
+
+/**
+ * 预设命令的实际作用域：Pocket 保持客户端传值（移动端可管理全部工作区），
+ * 网页通道忽略客户端传值，改由当前页面绑定的已发布会话反查。
+ */
+function resolvePresetWorkspaceScope(
+  context: RemoteCommandContext | undefined,
+  parsed: Record<string, unknown>,
+): { ok: true; workspaceSlug: string | undefined } | { ok: false; error: string } {
+  if (context?.role === 'webui') return resolveWebuiPresetWorkspace(context)
+  return { ok: true, workspaceSlug: typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined }
+}
+
 export async function handleRemoteCommand(
   message: string,
   requestId: unknown = null,
@@ -1198,7 +1234,15 @@ export async function handleRemoteCommand(
   // 旧 Pocket 的 FilePreviewDialog 没有把 sessionId 传给 WS 文件读取命令。
   // 它在打开会话时已经通过 get_sdk_messages/session_detail 等命令声明过会话，
   // 因此仅在同一条受 token 保护的连接内保存该会话作为严格授权的回退上下文。
-  if (typeof parsed.sessionId === 'string' && parsed.sessionId) {
+  //
+  // 网页端只认经过会话作用域校验的 sessionId：否则一条非会话级命令（例如
+  // list_presets）只要多带一个 sessionId，就能把 activeSessionId 改成未发布的会话，
+  // 预设命令的作用域会跟着越权。
+  if (
+    typeof parsed.sessionId === 'string'
+    && parsed.sessionId
+    && (context?.role !== 'webui' || WEBUI_SESSION_SCOPED_COMMANDS.has(type))
+  ) {
     context && (context.activeSessionId = parsed.sessionId)
   }
   switch (type) {
@@ -1640,7 +1684,9 @@ export async function handleRemoteCommand(
 
     // Agent 预设（对齐桌面 AGENT_PRESET_IPC_CHANNELS；pocket 无 Electron IPC，走 WS 读写预设）
     case 'list_presets': {
-      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const scope = resolvePresetWorkspaceScope(context, parsed)
+      if (!scope.ok) return { ok: false, error: scope.error }
+      const workspaceSlug = scope.workspaceSlug
       try {
         return { ok: true, data: listAgentPresets(workspaceSlug) }
       } catch (err) {
@@ -1649,7 +1695,9 @@ export async function handleRemoteCommand(
     }
 
     case 'get_default_preset': {
-      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const scope = resolvePresetWorkspaceScope(context, parsed)
+      if (!scope.ok) return { ok: false, error: scope.error }
+      const workspaceSlug = scope.workspaceSlug
       try {
         return { ok: true, data: getDefaultPresetId(workspaceSlug) }
       } catch (err) {
@@ -1658,7 +1706,9 @@ export async function handleRemoteCommand(
     }
 
     case 'set_default_preset': {
-      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const scope = resolvePresetWorkspaceScope(context, parsed)
+      if (!scope.ok) return { ok: false, error: scope.error }
+      const workspaceSlug = scope.workspaceSlug
       const presetId = typeof parsed.presetId === 'string' ? parsed.presetId : ''
       if (!presetId) return { ok: false, error: '缺少 presetId' }
       try {
@@ -1685,7 +1735,9 @@ export async function handleRemoteCommand(
     }
 
     case 'create_preset': {
-      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const scope = resolvePresetWorkspaceScope(context, parsed)
+      if (!scope.ok) return { ok: false, error: scope.error }
+      const workspaceSlug = scope.workspaceSlug
       const input = parsed.input as AgentPresetCreateInput | undefined
       if (!input) return { ok: false, error: '缺少 input' }
       try {
@@ -1696,7 +1748,9 @@ export async function handleRemoteCommand(
     }
 
     case 'copy_preset': {
-      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const scope = resolvePresetWorkspaceScope(context, parsed)
+      if (!scope.ok) return { ok: false, error: scope.error }
+      const workspaceSlug = scope.workspaceSlug
       const fromId = typeof parsed.fromId === 'string' ? parsed.fromId : ''
       const name = typeof parsed.name === 'string' ? parsed.name : undefined
       if (!fromId) return { ok: false, error: '缺少 fromId' }
@@ -1708,7 +1762,9 @@ export async function handleRemoteCommand(
     }
 
     case 'update_preset': {
-      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const scope = resolvePresetWorkspaceScope(context, parsed)
+      if (!scope.ok) return { ok: false, error: scope.error }
+      const workspaceSlug = scope.workspaceSlug
       const presetId = typeof parsed.presetId === 'string' ? parsed.presetId : ''
       const updates = parsed.updates as AgentPresetUpdateInput | undefined
       if (!presetId || !updates) return { ok: false, error: '缺少 presetId 或 updates' }
@@ -1720,7 +1776,9 @@ export async function handleRemoteCommand(
     }
 
     case 'delete_preset': {
-      const workspaceSlug = typeof parsed.workspaceSlug === 'string' ? parsed.workspaceSlug : undefined
+      const scope = resolvePresetWorkspaceScope(context, parsed)
+      if (!scope.ok) return { ok: false, error: scope.error }
+      const workspaceSlug = scope.workspaceSlug
       const presetId = typeof parsed.presetId === 'string' ? parsed.presetId : ''
       if (!presetId) return { ok: false, error: '缺少 presetId' }
       try {
