@@ -61,9 +61,12 @@ describe('主进程：工具 → 提案 → 事件 → 确认', () => {
 })
 
 describe('渲染层：事件 → 卡片 → 确认/叉掉', () => {
-  test('Given 事件到达 When 投影 Then 两个类型都在 payloadToLegacyEvents 里登记', () => {
-    expect(listeners).toContain("case 'handoff_proposal':")
-    expect(listeners).toContain("case 'handoff_proposal_resolved':")
+  test('Given 事件到达 When 投影 Then 卡片队列事件只更新队列，不经旧运行事件', () => {
+    // 队列更新在 profer_event 分支完成；旧事件链路对它们是空投影（行为由
+    // useGlobalAgentListeners.proposal-events.test.ts 钉住），晚到的 resolved
+    // 不会在 run 结束后凭空造出永远收不掉的「Agent Running」。
+    expect(listeners).toContain("proferEvent.type === 'handoff_proposal'")
+    expect(listeners).toContain("proferEvent.type === 'handoff_proposal_resolved'")
     expect(listeners).toContain('allPendingHandoffProposalsAtom')
     expect(listeners).toContain('listHandoffProposals()')
   })
