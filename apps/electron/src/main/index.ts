@@ -335,8 +335,16 @@ function parseDiagnosticPayload(raw: string): unknown {
 }
 let startupSplashWindow: BrowserWindow | null = null
 
-// CSS 圆环会在约 2.4 秒内陆续扩散；保留足够展示时间以便用户观察启动反馈。
-const STARTUP_SPLASH_MIN_MS = 2400
+// 启动闪屏的兜底下限（ms）。
+//
+// 旧实现是硬编码 2400ms 的「强制展示时长」，用户反馈开屏慢的直接来源之一：
+// 即使 renderer 早就 ready，也必须看满 2.4 秒。现在它只是一个防闪烁下限：
+// renderer ready 后最多再等这么久就交接，避免小窗一闪而过（<1 帧）显得像没启动。
+// 真正的展示时长由 renderer 加载速度决定——加载得越快，小窗消失得越早。
+const STARTUP_SPLASH_MIN_MS = 240
+
+/** 小窗交接淡出时长（ms），需与 startup-splash 的页内淡出保持一致 */
+const STARTUP_SPLASH_FADE_OUT_MS = 160
 
 /** 启动闪屏的背景明暗：与「Agent 打开的本地预览」共用同一套解析（皮肤 tone 优先于 id 后缀启发式） */
 const resolveStartupSplashDark = resolveAppThemeIsDark
@@ -422,6 +430,9 @@ function saveMainWindowState(): void {
       x: bounds.x,
       y: bounds.y,
       isMaximized,
+      // macOS 原生全屏必须单独记录：isMaximized 在全屏态下为 false，
+      // 只看它会把「退出时全屏」误判成普通窗口。
+      isFullScreen,
     },
   })
 }
@@ -607,9 +618,18 @@ function createWindow(): void {
     if (showTimer) clearTimeout(showTimer)
     const remaining = Math.max(0, STARTUP_SPLASH_MIN_MS - (Date.now() - splashStartedAt))
     showTimer = setTimeout(() => {
-      // 冷启动先把隐藏主窗口同步到完整工作区，再显示并恢复原生最大化状态。
-      // 主窗口首次可见时已经是目标尺寸，不会先露出保存的普通 bounds。
-      if (!isRefreshReload && mainWindow && startupDisplayWorkArea) {
+      // 冷启动时主窗口按「上次退出的状态」呈现，不再无条件最大化：
+      // 用户明确要求「上次怎么退出这次就还在哪里」。
+      // 注意：savedState 是 createWindow 时读的快照，整次启动内不会变；
+      // 热刷新（isRefreshReload）走 refreshWasMaximized / refreshWasFullScreen 分支。
+      const restoreFullScreen = !isRefreshReload && savedState?.isFullScreen === true
+      const restoreMaximized = !isRefreshReload
+        && savedState?.isMaximized === true
+        && !restoreFullScreen
+
+      if (!isRefreshReload && mainWindow && startupDisplayWorkArea && restoreFullScreen) {
+        // 全屏恢复必须让窗口先覆盖完整工作区，否则会在普通尺寸上 setFullScreen，
+        // 页面内容容器跟着从左上角扩展，出现顶边对齐、底边/右侧偏移的现象。
         mainWindow.setBounds(startupDisplayWorkArea)
       }
       if (process.platform === 'darwin' && app.dock) app.dock.show()
@@ -617,11 +637,36 @@ function createWindow(): void {
       // 扩展到全屏，页面内组件（初始化动画等）容器会随之在底边/右侧偏移（顶边/左侧不动）。
       // 隐藏窗口上 setFullScreen 在 Windows 有效，主窗口 show 时直接就是全屏，无扩展过程。
       if (isRefreshReload && refreshWasFullScreen) mainWindow?.setFullScreen(true)
-      // renderer 已经 ready，先显示完整尺寸的主窗口，再同步原生最大化状态，最后关闭 Splash。
+      if (restoreFullScreen) mainWindow?.setFullScreen(true)
+
+      // renderer 已经 ready：先显示主窗口（保持隐藏阶段已设好的尺寸/全屏状态），
+      // 再同步原生最大化，最后淡出并关闭 Splash。
       mainWindow?.showInactive()
-      if (!isRefreshReload && mainWindow && !mainWindow.isMaximized()) mainWindow.maximize()
-      if (!startupSplashWindow?.isDestroyed()) startupSplashWindow?.close()
+      // 仅当上次退出时确实是最大化才最大化；普通窗口保持 savedState 的 bounds。
+      if (!isRefreshReload && restoreMaximized && mainWindow && !mainWindow.isMaximized()) {
+        mainWindow.maximize()
+      }
+      // 交接：先让 splash 淡出再关窗，避免窗口消失瞬间露出桌面。
+      // 淡出期间主窗口已经在后面完整可见，视觉上是同一张纸铺开。
+      const splashWindow = startupSplashWindow
       startupSplashWindow = null
+      console.info('[启动] 交接', {
+        elapsedMs: Date.now() - splashStartedAt,
+        restoreFullScreen,
+        restoreMaximized,
+        isRefreshReload,
+        savedState: savedState ? { isMaximized: savedState.isMaximized, isFullScreen: savedState.isFullScreen } : null,
+      })
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.webContents.executeJavaScript(
+          "document.querySelector('.sheet')?.classList.add('fading')",
+        ).catch(() => {
+          // 页面已不可用（关闭中/导航中）时忽略，直接走下面的关窗
+        })
+        setTimeout(() => {
+          if (!splashWindow.isDestroyed()) splashWindow.close()
+        }, STARTUP_SPLASH_FADE_OUT_MS)
+      }
       // 兜底：隐藏窗口阶段 setFullScreen 未生效时（个别平台），show 后立即再恢复一次全屏
       if (isRefreshReload && refreshWasFullScreen && mainWindow && !mainWindow.isFullScreen()) {
         mainWindow.setFullScreen(true)
@@ -661,7 +706,9 @@ function createWindow(): void {
       resizable: true,
       movable: true,
       show: false,
-      backgroundColor: resolveStartupSplashDark() ? '#101010' : '#f4f4f2',
+      // 与暖纸页面的中位纸色一致：首帧未画出来前露出这一层，视觉上就是同一张纸。
+      // 旧值 #f4f4f2 / #101010 与暖纸（#f6f4ee）偏差很小但仍能看出色差，这里对齐。
+      backgroundColor: resolveStartupSplashDark() ? '#101114' : '#f6f4ee',
       // 首帧信号靠页面内的 requestAnimationFrame 循环发出。窗口在 show 之前是隐藏的，
       // 默认的后台节流会把隐藏窗口的 rAF 降频甚至暂停，那样信号永远到不了、只能等兜底超时。
       // 这里显式关掉节流，保证首帧能在窗口显示前画完并回报。
@@ -672,10 +719,9 @@ function createWindow(): void {
     // 主窗口完成首次最大化前保持 Splash 置顶，避免 showInactive / maximize 的异步重绘露出空白主窗口。
     splashWindow.setAlwaysOnTop(true, 'floating')
 
-    // Splash 的 WebGL 首帧是异步绘制的：did-finish-load 只代表 HTML 加载完，
-    // 此时窗口里还是 backgroundColor 纯色，先 show 再顶内容会闪一帧。
-    // 改为等页面回报「首帧已提交」再显示；页面脚本异常或 WebGL 不可用时由兜底
-    // 定时器强制显示，避免 splashShown 一直为 false 把主窗口的 showWhenReady 一起卡死。
+    // 首帧信号：暖纸是纯 CSS 绘制，通常一帧内就绪；但仍等页面主动回报再 show，
+    // 避免 did-finish-load 与首次合成之间的纯色帧。信号缺失时由兜底定时器强制显示，
+    // 否则 splashShown 一直为 false 会把主窗口的 showWhenReady 一起卡死。
     let splashRevealed = false
     let revealFallback: ReturnType<typeof setTimeout> | null = null
     const revealSplash = (): void => {

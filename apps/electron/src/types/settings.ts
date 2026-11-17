@@ -438,13 +438,20 @@ export interface ComposerToolbarPreferences {
   agent?: Record<string, ComposerToolbarItemPreference>
 }
 
-/** 主窗口大小、位置和最大化状态 */
+/** 主窗口大小、位置和最大化/全屏状态 */
 export interface MainWindowState {
   width: number
   height: number
   x: number
   y: number
   isMaximized: boolean
+  /**
+   * 退出时是否处于 macOS 原生全屏。
+   *
+   * 缺失（旧版写入的状态或首次启动）按 false 处理：历史实现只存 isMaximized，
+   * 从未能恢复全屏，所以旧状态本来就不存在「该恢复全屏」的语义。
+   */
+  isFullScreen?: boolean
 }
 
 /** 持久化的标签页状态 */

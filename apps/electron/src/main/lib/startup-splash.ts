@@ -1,5 +1,3 @@
-import { INTRO_FLUID_FRAGMENT_SHADER, INTRO_FLUID_VERTEX_SHADER } from '../../shared/intro-fluid-shader'
-
 export interface StartupSplashBounds {
   x: number
   y: number
@@ -23,40 +21,128 @@ export function createCenteredStartupSplashBounds(workArea: StartupSplashBounds)
  * Splash 首帧已提交到合成器的信号（写入 document.title）。
  *
  * 主进程靠它决定何时 show 窗口：did-finish-load 只代表 HTML 加载完，
- * 此时 WebGL 首帧通常还没画出来，窗口会先露出 backgroundColor 纯色再顶内容，
- * 在部分 NVIDIA + D3D11 组合下就是那一帧闪动。
+ * 此时首帧通常还没画出来，窗口会先露出 backgroundColor 纯色再顶内容。
+ *
+ * 暖纸方案下首帧是纯 CSS 绘制（无 WebGL 编译/链接），通常一帧内就绪；
+ * 但信号机制保持不变，避免主进程对不同渲染路径分叉。
  */
 export const SPLASH_READY_TITLE = 'profer-splash-ready'
 
 /**
  * 等首帧信号的兜底上限（ms）。
  *
- * 页面脚本异常或 WebGL 不可用时必须仍然显示 Splash，否则 splashShown 永远为 false，
+ * 页面脚本异常时必须仍然显示 Splash，否则 splashShown 永远为 false，
  * 主窗口的 showWhenReady 会被一起卡死。所以到点无条件显示。
  */
 export const SPLASH_REVEAL_FALLBACK_MS = 600
 
 /**
- * 生成冷启动独立窗口的原始 WebGL Splash HTML。
+ * 生成冷启动独立窗口的暖纸 Splash HTML。
  *
- * 首帧绘制提交后通过 document.title 回报 SPLASH_READY_TITLE，主进程据此决定 show 时机；
- * 这样不必为规避呈现闪动而全局改写 Windows 的 ANGLE 后端。shader 的原始视觉结构保持不变。
+ * 视觉与仓库内开屏方案同源（A 暖纸）：米黄纸底 + 右上暖光 / 左下冷影 +
+ * 横向纸纤维 + 颗粒 + 边缘衰光，前景是斜体 Profer 字标与 Loading 状态行。
+ *
+ * 关键设计取舍：
+ * - **纯 CSS，零 WebGL**。旧实现在 GPU 进程刚启动、主窗口 3.4MB JS 正在解析的
+ *   最拥挤时刻跑全屏片元着色器（每像素约 30 次噪声采样 × 4 层 fbm），且未同步
+ *   renderer 侧的 30fps 节流，120Hz 屏上一秒重绘 120 次。这是用户反馈「开屏卡」
+ *   的主要来源。CSS 渐变与 1px 重复纹理由合成器直接处理，开销低一个数量级。
+ * - **不引入视频**。柔和浅色渐变恰是 H.264 压缩的色带重灾区，且视频无法在
+ *   renderer 提前就绪时中途切断交接。
+ * - 首帧提交后通过 document.title 回报 SPLASH_READY_TITLE，主进程据此决定 show 时机。
  */
 export function createStartupSplashHtml(isDark: boolean): string {
-  const background = isDark ? '#0b0b0c' : '#f7f7f5'
-  const foreground = isDark ? '#f3f3f3' : '#101114'
-  const highlight = isDark ? '#aeb4bd' : '#3c414a'
-  const muted = isDark ? 'rgba(243,243,243,.28)' : 'rgba(16,17,20,.46)'
-  const vertex = JSON.stringify(INTRO_FLUID_VERTEX_SHADER)
-  const fragment = JSON.stringify(INTRO_FLUID_FRAGMENT_SHADER)
+  // 浅色：米黄纸；深色：近黑中性。两套只换颜色，结构完全一致。
+  const paperLit = isDark ? '#17181c' : '#fcfbf8'
+  const paperMid = isDark ? '#101114' : '#f6f4ee'
+  const paperDeep = isDark ? '#09090a' : '#e9e6de'
+  const warmLight = isDark ? 'rgba(148,162,184,.22)' : 'rgba(255,253,244,.95)'
+  const coolShadow = isDark ? 'rgba(80,62,46,.30)' : 'rgba(200,212,230,.40)'
+  const fiber = isDark ? 'rgba(255,255,255,.014)' : 'rgba(118,108,94,.032)'
+  const vignette = isDark ? 'rgba(0,0,0,.46)' : 'rgba(94,84,70,.11)'
+  const inkA = isDark ? '#ffffff' : '#0f1012'
+  const inkB = isDark ? '#f2f4f6' : '#15171a'
+  const inkC = isDark ? '#a4aab4' : '#3c4149'
+  const statusColor = isDark ? 'rgba(255,255,255,.28)' : 'rgba(20,22,26,.30)'
+  const grainOpacity = isDark ? '.15' : '.34'
+  const grainBlend = isDark ? 'screen' : 'multiply'
+  const edgeStrong = isDark ? 'rgba(255,255,255,.09)' : 'rgba(255,255,255,.85)'
+  const edgeSoft = isDark ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.5)'
 
   return `<!doctype html><html><head><meta charset="UTF-8"><style>
-    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:${background};color:${foreground};font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;user-select:none;-webkit-user-select:none}
-    body{display:grid;place-items:center;-webkit-app-region:drag}.stage{position:relative;width:100vw;height:100vh;display:grid;place-items:center;background:${background};-webkit-app-region:drag}
-    #fluid{position:absolute;inset:0;width:100%;height:100%}.glow{position:absolute;width:min(58vw,720px);height:min(58vw,720px);border-radius:50%;background:radial-gradient(circle,${highlight}18 0%,transparent 66%);filter:blur(28px);animation:breathe 2.8s ease-in-out infinite;pointer-events:none}
-    .logo{position:relative;z-index:2;font-size:clamp(52px,10vw,112px);font-weight:600;font-style:italic;letter-spacing:-.045em;transform:skewX(-7deg);text-shadow:0 0 28px ${highlight}28;animation:rise 1.1s cubic-bezier(.22,1,.36,1) both}.status{position:absolute;z-index:2;bottom:8%;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.32em;text-transform:uppercase;color:${muted};animation:pulse 1.8s ease-in-out infinite}
-    @keyframes rise{from{opacity:0;transform:translateY(18px) skewX(-7deg) scale(.96)}to{opacity:1;transform:translateY(0) skewX(-7deg) scale(1)}}@keyframes breathe{0%,100%{opacity:.35;transform:scale(.86)}50%{opacity:.8;transform:scale(1.08)}}@keyframes pulse{0%,100%{opacity:.35}50%{opacity:.8}}
-  </style></head><body><main class="stage"><canvas id="fluid"></canvas><div class="glow"></div><div class="logo">Profer</div><div class="status">Loading</div></main><script>
-  (function(){var c=document.getElementById('fluid'),gl=c.getContext('webgl',{alpha:false,antialias:false}),dark=${isDark ? 'true' : 'false'};var readySent=false;function signalReady(){if(readySent)return;readySent=true;document.title='${SPLASH_READY_TITLE}'}if(!gl){signalReady();return}function shader(type,src){var x=gl.createShader(type);if(!x)return null;gl.shaderSource(x,src);gl.compileShader(x);return gl.getShaderParameter(x,gl.COMPILE_STATUS)?x:null}var v=shader(gl.VERTEX_SHADER,${vertex}),f=shader(gl.FRAGMENT_SHADER,${fragment});if(!v||!f){signalReady();return}var p=gl.createProgram();gl.attachShader(p,v);gl.attachShader(p,f);gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS)){signalReady();return}var b=gl.createBuffer(),a=gl.getAttribLocation(p,'aPosition'),time=gl.getUniformLocation(p,'uTime'),res=gl.getUniformLocation(p,'uResolution'),op=gl.getUniformLocation(p,'uOpacity'),seed=gl.getUniformLocation(p,'uSeed'),theme=gl.getUniformLocation(p,'uThemeLight'),continuous=gl.getUniformLocation(p,'uContinuous');if(!b||a<0||!time||!res||!op||!seed||!theme||!continuous){signalReady();return}gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);var w=1,h=1,started=performance.now(),seedValue=Math.random()*1000;function resize(){var r=c.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,1.5),nw=Math.max(1,Math.round(r.width*d)),nh=Math.max(1,Math.round(r.height*d));if(nw===w&&nh===h)return;w=nw;h=nh;c.width=w;c.height=h}resize();if(typeof ResizeObserver!=='undefined')new ResizeObserver(resize).observe(c);addEventListener('resize',resize);function draw(now){var elapsed=now-started;gl.viewport(0,0,w,h);gl.clearColor(dark?.043:.969,dark?.043:.969,dark?.047:.961,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(p);gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);gl.uniform1f(time,elapsed/625);gl.uniform2f(res,w,h);gl.uniform1f(op,1);gl.uniform1f(seed,seedValue);gl.uniform1f(theme,dark?0:1);gl.uniform1f(continuous,0);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);if(!readySent)requestAnimationFrame(signalReady);requestAnimationFrame(draw)}requestAnimationFrame(draw)})();
+    *{box-sizing:border-box}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:${paperMid};color:${inkA};
+      font-family:Inter,-apple-system,"PingFang SC",system-ui,"Segoe UI",sans-serif;
+      user-select:none;-webkit-user-select:none;-webkit-app-region:drag}
+
+    /* 窗口整体就是一张纸：冷启动小窗在 macOS 上由系统加圆角与投影 */
+    .sheet{position:relative;width:100vw;height:100vh;overflow:hidden;isolation:isolate;
+      display:grid;place-items:center;background:${paperMid}}
+
+    /* 层序：纸基色 → 光 → 纸纤维 → 边缘衰光 → 颗粒 → 顶部高光 */
+    .paper{position:absolute;inset:0;
+      background:linear-gradient(163deg,${paperLit} 0%,${paperMid} 30%,${paperMid} 54%,${paperDeep} 100%)}
+    .light{position:absolute;inset:-38%;
+      background:radial-gradient(ellipse 44% 38% at 74% 15%,${warmLight},transparent 62%),
+                 radial-gradient(ellipse 38% 44% at 20% 90%,${coolShadow},transparent 68%);
+      animation:drift 64s ease-in-out infinite}
+    .fiber{position:absolute;inset:0;opacity:.55;pointer-events:none;
+      background-image:repeating-linear-gradient(91deg,${fiber} 0px,${fiber} 1px,transparent 1px,transparent 3px)}
+    .vignette{position:absolute;inset:0;pointer-events:none;
+      background:radial-gradient(ellipse 76% 68% at 50% 44%,transparent 42%,${vignette} 100%)}
+    .grain{position:absolute;inset:0;width:100%;height:100%;
+      opacity:${grainOpacity};mix-blend-mode:${grainBlend};pointer-events:none}
+    .edge{position:absolute;left:0;right:0;top:0;height:1px;
+      background:linear-gradient(90deg,transparent,${edgeStrong} 30%,${edgeSoft} 62%,transparent)}
+
+    /* 前景：斜体字标 + 状态行。入场「落墨」520ms，与主窗口交接无缝。 */
+    .logo{position:relative;z-index:20;font-size:clamp(38px,16vw,64px);font-weight:600;font-style:italic;
+      letter-spacing:-.045em;padding:0 .12em;white-space:nowrap;
+      background-image:linear-gradient(176deg,${inkA} 0%,${inkB} 46%,${inkC} 100%);
+      -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+      -webkit-font-smoothing:antialiased;text-rendering:geometricPrecision;
+      animation:inkIn 520ms cubic-bezier(.16,1,.3,1) both}
+    .status{position:absolute;z-index:20;bottom:8.5%;left:50%;transform:translateX(-50%);
+      font:8px ui-monospace,SFMono-Regular,Consolas,monospace;
+      letter-spacing:.26em;text-transform:uppercase;white-space:nowrap;color:${statusColor}}
+
+    /* 交接淡出：主进程在 renderer ready 后给 .sheet 加 fading，
+       160ms 后关窗。与主窗口的背景色相近，过渡看起来是同一张纸铺开。 */
+    .sheet{transition:opacity 160ms ease}
+    .sheet.fading{opacity:0}
+
+    @keyframes inkIn{
+      from{opacity:0;filter:blur(6px);transform:skewX(-7deg) scale(1.03)}
+      to{opacity:1;filter:blur(0);transform:skewX(-7deg) scale(1)}}
+    @keyframes drift{
+      0%,100%{transform:translate3d(0,0,0) scale(1)}
+      50%{transform:translate3d(-1.8%,1.4%,0) scale(1.035)}}
+
+    /* 尊重系统的减少动态偏好：静态呈现，不播入场与漂移 */
+    @media (prefers-reduced-motion:reduce){
+      .logo{animation:none}
+      .light{animation:none}
+    }
+  </style></head><body><main class="sheet">
+    <div class="paper"></div><div class="light"></div><div class="fiber"></div>
+    <div class="vignette"></div>
+    <svg class="grain" aria-hidden="true"><rect width="100%" height="100%" filter="url(#grain)"/></svg>
+    <div class="edge"></div>
+    <div class="logo">Profer</div>
+    <div class="status">Loading</div>
+  </main>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute"><filter id="grain">
+    <feTurbulence type="fractalNoise" baseFrequency=".86" numOctaves="3" stitchTiles="stitch"/>
+    <feColorMatrix type="saturate" values="0"/>
+  </filter></svg>
+  <script>
+  (function(){
+    var sent=false;
+    function signalReady(){if(sent)return;sent=true;document.title='${SPLASH_READY_TITLE}'}
+    // 暖纸是纯 CSS 绘制，首帧在下一轮合成即可用。
+    requestAnimationFrame(function(){requestAnimationFrame(signalReady)});
+    // 兜底：窗口隐藏时 rAF 可能被节流，定时器保证信号仍然发出。
+    setTimeout(signalReady,${SPLASH_REVEAL_FALLBACK_MS});
+  })();
   </script></body></html>`
 }
