@@ -29,15 +29,15 @@ export interface AgentRuntimeCapabilities {
   runtimeSupportsSubagents: boolean
 }
 
-/** 默认 runtime。Pi 完成执行链路与灰度前，产品默认始终保持 Claude。 */
-export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
+/** 默认 runtime。2026-11-15 起产品默认改为 Pi；Claude 通过会话级切换或历史持久化值保留。 */
+export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'pi'
 
 /** 严格校验外部输入是否为受支持 runtime。 */
 export function isAgentRuntime(value: unknown): value is AgentRuntime {
   return value === 'claude' || value === 'pi'
 }
 
-/** 将历史缺省或未知持久化值安全归一化为 Claude。 */
+/** 将历史缺省或未知持久化值安全归一化为默认 runtime。 */
 export function normalizeAgentRuntime(value: unknown): AgentRuntime {
   return isAgentRuntime(value) ? value : DEFAULT_AGENT_RUNTIME
 }

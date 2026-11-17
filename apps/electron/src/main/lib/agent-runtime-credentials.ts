@@ -1,5 +1,5 @@
 import type { AgentRuntime, Channel, CodexOAuthCredentials, ProviderType, XaiApiProtocol, XaiOAuthCredentials } from '@profer/shared'
-import { PROVIDER_DEFAULT_URLS, resolveXaiCredentialMode } from '@profer/shared'
+import { DEFAULT_AGENT_RUNTIME, PROVIDER_DEFAULT_URLS, resolveXaiCredentialMode } from '@profer/shared'
 import { resolveEditionBearerToken } from '@profer/edition-contract'
 import { decryptApiKey, persistCodexOAuthCredentials, persistXaiOAuthCredentials, resolveChannelAgentBaseUrl, resolveCodexOAuthCredentials, resolveXaiOAuthCredentials } from './channel-manager'
 import { editionProviders } from './edition'
@@ -45,7 +45,7 @@ function resolveRuntimeBaseUrl(channel: Pick<Channel, 'provider' | 'baseUrl' | '
  */
 export async function resolveRuntimeCredentials(
   channel: Pick<Channel, 'id' | 'provider' | 'baseUrl' | 'agentBaseUrl' | 'credentialMode' | 'apiProtocol' | 'directDataPlane'>,
-  runtime: AgentRuntime = 'claude',
+  runtime: AgentRuntime = DEFAULT_AGENT_RUNTIME,
 ): Promise<ResolveRuntimeCredentialsResult> {
   // 发行版切换：另一个发行版残留的渠道在当前版本里不可见（开源版里没有代管通道）。
   // 必须在这里拦住：它的 baseUrl 为空，往下会回落到厂商默认地址，用不属于该厂商的

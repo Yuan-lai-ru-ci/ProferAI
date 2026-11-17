@@ -37,7 +37,7 @@ import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import type { AddressInfo } from 'node:net'
 import { app, BrowserWindow } from 'electron'
 
-import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
+import { AGENT_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, DEFAULT_AGENT_RUNTIME, normalizeAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, type AgentSessionMeta } from '@profer/shared'
 import type { AgentRuntime, AgentSendInput } from '@profer/shared'
 import { agentEventBus, runAgentHeadless, runAgentRuntimeHeadless, peekAgentRunClaimFailureForSession, describeAgentRunRejection, stopAgent, isAgentSessionActive, listActiveAgentRuntimeContexts, updateAgentPermissionMode, queueAgentMessage, regenerateAgentTitle, saveFilesToAgentSession } from './agent-service'
 import { prepareAgentRewind, refineAgentRewind, executeAgentRewind, undoAgentRewind, submitAgentAfterRewind, legacyConversationRewind } from './agent-rewind-gateway'
@@ -1356,8 +1356,8 @@ export async function handleRemoteCommand(
       if (channelId) {
         const channel = listSwitchableChannels().find((item) => item.id === channelId)
         if (!channel) return { ok: false, error: '渠道不可用或不存在' }
-        if (!isChannelEnabledForRuntime(channel, session.agentRuntime ?? 'claude')) {
-          return { ok: false, error: `当前会话内核不支持该渠道: ${session.agentRuntime ?? 'claude'}` }
+        if (!isChannelEnabledForRuntime(channel, session.agentRuntime ?? DEFAULT_AGENT_RUNTIME)) {
+          return { ok: false, error: `当前会话内核不支持该渠道: ${session.agentRuntime ?? DEFAULT_AGENT_RUNTIME}` }
         }
         if (modelId && !getEnabledModels(channel).some((model) => model.id === modelId)) return { ok: false, error: '模型不属于当前渠道或未启用' }
       }

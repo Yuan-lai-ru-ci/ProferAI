@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import type { AgentRuntime, EffectiveAgentPresetPolicy, RuntimeSkillsProjection } from '@profer/shared'
 import { getRuntimeSkillsPath, preparePolicyRuntimeSkills } from './global-skill-manager'
 import { buildSkillCatalog, createSkillRoutingSnapshot, type SkillRoutingSnapshot } from './skill-routing'
@@ -31,7 +32,7 @@ export async function prepareAgentSkillRouting(input: {
 }
 
 /** 必须用于实际 adapter query，避免两端字段重新各自拼装而漂移。 */
-export function buildSkillRuntimeOptions(routing: PreparedSkillRouting, runtime: AgentRuntime = 'claude') {
+export function buildSkillRuntimeOptions(routing: PreparedSkillRouting, runtime: AgentRuntime = DEFAULT_AGENT_RUNTIME) {
   if (runtime === 'pi') {
     // catalog 与正文均由 Profer 提供，SDK 不再发现/展开 Skill；目录权限不因此变化。
     return {

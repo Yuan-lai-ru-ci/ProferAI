@@ -235,8 +235,8 @@ export type PreviewOpenMode = 'tab' | 'split'
 /** 默认文件预览打开方式：独立标签页（保持既有行为） */
 export const DEFAULT_PREVIEW_OPEN_MODE: PreviewOpenMode = 'tab'
 
-/** 默认 Agent runtime：Pi 执行链路完成灰度前始终使用 Claude。 */
-export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
+/** 默认 Agent runtime：2026-11-15 起新建会话默认使用 Pi。 */
+export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'pi'
 
 /**
  * 建议新开会话的轮数阈值默认值：0 = 关闭。

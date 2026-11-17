@@ -6,10 +6,10 @@ import {
 } from './agent-provider'
 
 describe('Agent runtime persistence compatibility', () => {
-  test('Given missing or invalid historical values When normalizing Then falls back to Claude', () => {
-    expect(DEFAULT_AGENT_RUNTIME).toBe('claude')
-    expect(normalizeAgentRuntime(undefined)).toBe('claude')
-    expect(normalizeAgentRuntime('unknown')).toBe('claude')
+  test('Given missing or invalid historical values When normalizing Then falls back to default runtime', () => {
+    expect(DEFAULT_AGENT_RUNTIME).toBe('pi')
+    expect(normalizeAgentRuntime(undefined)).toBe('pi')
+    expect(normalizeAgentRuntime('unknown')).toBe('pi')
   })
 
   test('Given supported runtime values When validating Then preserves Claude and Pi only', () => {

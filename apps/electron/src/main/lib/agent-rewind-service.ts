@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import type {
   AgentRuntime,
   ExecuteRewindPlanInput,
@@ -292,7 +293,7 @@ export function createAgentRewindService(options: { ports: RewindServicePorts })
       if (!boundary) throw new RewindServiceError('TARGET_NOT_FOUND', '回退目标不存在或尚未加载', { sessionId: input.sessionId })
     }
 
-    const runtime = ports.runtime ?? session.runtime ?? 'claude'
+    const runtime = ports.runtime ?? session.runtime ?? DEFAULT_AGENT_RUNTIME
 
     let resolved: RewindResolverResult
     try {

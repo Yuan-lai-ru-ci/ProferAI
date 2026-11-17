@@ -45,8 +45,10 @@ describe('session index store', () => {
     const store = createSessionIndexStore(paths)
 
     expect((await store.list()).map((session) => session.id)).toEqual(['live'])
-    expect((await store.list(true)).map((session) => session.agentRuntime)).toEqual(['claude', 'claude'])
-    expect((await store.get('old'))?.agentRuntime).toBe('claude')
+    // 历史缺省/未知 runtime 归一化为产品默认内核（2026-11-15 起为 pi），
+    // 不保留原始 'legacy' 字符串，避免下游按未知值处理。
+    expect((await store.list(true)).map((session) => session.agentRuntime)).toEqual(['pi', 'pi'])
+    expect((await store.get('old'))?.agentRuntime).toBe('pi')
     expect(JSON.parse(await readFile(paths.sessionsIndex, 'utf8')).sessions).toHaveLength(2)
   })
 

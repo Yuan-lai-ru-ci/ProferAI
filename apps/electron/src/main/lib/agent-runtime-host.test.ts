@@ -6,6 +6,8 @@ const meta: AgentSessionMeta = {
   id: 'session-1',
   title: 'Fixture',
   workspaceId: 'workspace-1',
+  // 显式声明内核：产品 MCP 中大部分服务器只对 Claude 注入，缺省会按产品默认内核（Pi）归一。
+  agentRuntime: 'claude',
   createdAt: 1,
   updatedAt: 1,
 }
@@ -28,7 +30,10 @@ mock.module('./agent-session-manager', () => ({
   lockAgentSessionRuntime: () => ({ ...meta, agentRuntimeLocked: true }),
   getAgentSessionMeta: (id: string) => id === meta.id
     ? meta
-    : id === 'pi-session' ? { ...meta, id: 'pi-session', agentRuntime: 'pi' } : undefined,
+    : id === 'pi-session' ? { ...meta, id: 'pi-session', agentRuntime: 'pi' }
+      // 「无工作区」用例仍要固定 Claude 内核：产品 MCP 里多数服务器带 claude 门禁，
+      // 让它跟着缺省内核走会让用例同时验证两件事。
+      : id === 'no-workspace-session' ? { ...meta, id, workspaceId: undefined, agentRuntime: 'claude' } : undefined,
   getAgentSessionMessages: () => [],
   getAgentSessionSDKMessages: () => messages,
   appendSDKMessages: (_id: string, next: SDKMessage[]) => appended.push(next),
@@ -735,7 +740,7 @@ describe('B8 · 产品 MCP 注入的宿主接线', () => {
         isRuntimeRunActive: () => true,
       }),
     }).load({ sessionId: 'no-workspace-session' })
-    // meta mock 只认 'session-1' ⇒ 无 meta、无 workspaceSlug、无 cwd：只剩不依赖工作区的服务器。
+    // 该会话有 meta 但没有 workspaceId / cwd ⇒ 只剩不依赖工作区的服务器。
     const productNames = namesOf(resources).filter(name => (PRODUCT_MCP_INJECTION_ORDER as readonly string[]).includes(name))
     expect(productNames).toEqual(['ppt-delivery', 'clipboard', 'browser'])
     clearAgentRuntimeRunFacts('no-workspace-session')

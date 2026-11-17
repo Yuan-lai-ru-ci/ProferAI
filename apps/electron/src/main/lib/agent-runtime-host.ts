@@ -21,7 +21,7 @@ import type {
   ProcessRegistrationPort,
 } from '@profer/agent-runtime'
 import type { AgentRuntime, AgentSessionMeta, AgentSendInput, SDKMessage, AgentStreamPayload, ProferPermissionMode } from '@profer/shared'
-import { isEffectiveAgentPresetToolDisabled, resolveAgentRuntimeChannelConflict } from '@profer/shared'
+import { DEFAULT_AGENT_RUNTIME, isEffectiveAgentPresetToolDisabled, resolveAgentRuntimeChannelConflict } from '@profer/shared'
 import type { SessionStore } from '@profer/session-store'
 import { createElectronSessionStore } from './session-store-host'
 import { appendSDKMessages, enqueueSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime, resolveAgentSessionWriteLayout } from './agent-session-manager'
@@ -364,7 +364,7 @@ export async function loadBuiltinMcpResources(
     ...(meta?.modelId ? { modelId: meta.modelId } : {}),
     ...(meta?.workspaceId ? { workspaceId: meta.workspaceId } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
-    runtime: meta?.agentRuntime ?? 'claude',
+    runtime: meta?.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
     ...(facts.sourceRunId ? { sourceRunId: facts.sourceRunId } : {}),
     triggeredBy: presetOperationSource,
     // 委派继承本轮冻结的有效权限模式，下一轮的预设修改不影响当前输入。
@@ -708,7 +708,7 @@ export async function loadProductMcpResources(
     sdk,
     planInput: productMcpPlanInputFromContext(
       context,
-      meta?.agentRuntime ?? 'claude',
+      meta?.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
       'standard',
       snapshot.policy.disabledToolGroups,
       snapshot.policy.pptCapabilityActive,

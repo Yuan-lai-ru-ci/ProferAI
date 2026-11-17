@@ -14,7 +14,7 @@ import { tmpdir, homedir } from 'node:os'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, normalizeAgentRuntime, isAgentRuntime, isChannelEnabledForRuntime, isProferPermissionMode, normalizePathForCompare, DEFAULT_PRESET_ID, type AgentThinkingLevel, type AgentEffort, PLANNING_CONFLICT_ERROR, type Todo, type TodoListQuery, type CalendarEvent, type CalendarEventListQuery, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type StartTodoAgentInput, type StartTodoAgentResult, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type SnoozePlanningReminderInput, type TodoAgentSessionActivation, type ProviderType, type ReasoningCapability, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult, type OtherWorkspacePresetsGroup, type PresetReference, type PresetReferenceReport, type PresetScopeRebindResult } from '@profer/shared'
-import { SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS } from '../types'
+import { SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, DEFAULT_AGENT_RUNTIME } from '../types'
 import { registerRuntimeGitIpc } from './lib/runtime-git-ipc'
 import { getBuildTarget } from './lib/build-target'
 import { agentFilePreviewSessionManager } from './lib/agent-file-preview-session'
@@ -1929,7 +1929,7 @@ export function registerIpcHandlers(): void {
       // 未显式指定预设时继承该工作区默认预设，保证快捷新建/协作子会话/机器人桥等入口统一行为
       const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
       const effectivePresetId = presetId ?? getDefaultPresetId(workspaceSlug)
-      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? 'claude', false, effectivePresetId)
+      const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? DEFAULT_AGENT_RUNTIME, false, effectivePresetId)
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
@@ -2113,7 +2113,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.ENSURE_PROJECT_DRAFT_SESSION,
     async (_, workspaceId: string, channelId?: string, modelId?: string): Promise<AgentSessionMeta> => {
       if (!getAgentWorkspace(workspaceId)) throw new Error('项目不存在')
-      return ensureProjectDraftAgentSession(workspaceId, channelId, modelId, getSettings().agentRuntime ?? 'claude')
+      return ensureProjectDraftAgentSession(workspaceId, channelId, modelId, getSettings().agentRuntime ?? DEFAULT_AGENT_RUNTIME)
     },
   )
 

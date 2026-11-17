@@ -13,6 +13,7 @@ import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GraphEvent } from '@profer/project-core'
+import { DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import type {
   AgentFilePreviewInspectRequest,
   AgentFilePreviewInspectResult,
@@ -1122,7 +1123,7 @@ function summarizeAutomation(a: import('@profer/shared').Automation, includeHist
     scheduledAt: a.scheduledAt,
     maxRuns: a.maxRuns,
     runCount: a.runCount ?? 0,
-    agentRuntime: a.agentRuntime ?? 'claude',
+    agentRuntime: a.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
     completedAt: a.completedAt,
     sessionMode: a.sessionMode,
     presetId: a.presetId,

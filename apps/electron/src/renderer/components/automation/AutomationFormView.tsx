@@ -49,7 +49,7 @@ import type {
   FeishuChatBinding,
 } from '@profer/shared'
 import type { AgentPreset, AgentRuntime } from '@profer/shared'
-import { DEFAULT_PRESET_ID } from '@profer/shared'
+import { DEFAULT_AGENT_RUNTIME, DEFAULT_PRESET_ID } from '@profer/shared'
 import { selectableAgentPresets } from '@/components/agent/preset-selector-utils'
 
 import {
@@ -498,7 +498,7 @@ export function AutomationFormView(): React.ReactElement | null {
   const compatibleBoundSessions = agentSessions.filter((session) =>
     session.workspaceId === form.workspaceId
     && session.channelId === form.channelId
-    && (session.agentRuntime ?? 'claude') === form.agentRuntime
+    && (session.agentRuntime ?? DEFAULT_AGENT_RUNTIME) === form.agentRuntime
     && (!form.modelId || session.modelId === form.modelId)
     && (session.presetId ?? defaultPresetId) === (form.presetId ?? defaultPresetId),
   )

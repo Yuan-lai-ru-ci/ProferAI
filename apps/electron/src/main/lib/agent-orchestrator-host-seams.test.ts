@@ -15,6 +15,7 @@ import { AgentFilePreviewSessionManager } from './agent-file-preview-session'
 import { createAgentQueryPreparationPort, createAgentRunOwnershipRegistry, createAgentRunOwnershipView, createAgentRunRejectionError } from '@profer/agent-runtime'
 import type { AgentRunOwnershipRegistry, AgentRunOwnershipView } from '@profer/agent-runtime'
 import { createElectronPermissionPort } from './agent-runtime-permission-port'
+import { appendAgentBehaviorUserSteer, resolveAgentBehaviorRole } from './agent-behavior-recipe'
 
 // 复用 Goal bridge 的真实源码编译方式，只执行构造和端口 seam；不加载宿主单例或模型 SDK。
 const source = readFileSync(new URL('./agent-orchestrator.ts', import.meta.url), 'utf8')
@@ -67,7 +68,7 @@ function fixture(ports: AgentRuntimePorts & { runLedger?: AgentRunLedger } = {},
     createAgentRunOwnershipRegistry,
     createAgentRunOwnershipView,
     createAgentRunRejectionError,
-    appendAgentTaskPrompt,
+    appendAgentTaskPrompt, appendAgentBehaviorUserSteer, resolveAgentBehaviorRole,
     console: { log() {}, warn() {}, error() {} },
     collectSessionTitleSources, runSessionTitleNaming, isPartialSDKMessage,
     normalizeAgentRuntime, tryReserveQueuedMessage, shouldPreInterruptQueuedMessage,
@@ -497,6 +498,7 @@ describe('AgentOrchestrator host seams', () => {
     await queued
     expect(received).toContain('<turn_guidance>')
     expect(received).toContain('BROWSER_GUIDANCE')
+    expect(received).toContain('## GPT with Taste Steer')
     expect(received).toContain('打开网页。')
     expect(persisted).toHaveLength(2)
     const persistedUser = persisted[0]
@@ -505,6 +507,7 @@ describe('AgentOrchestrator host seams', () => {
       expect(persistedUser.message).toMatchObject({ content: [{ type: 'text', text: '打开网页。' }] })
     }
     expect(JSON.stringify(persisted)).not.toContain('BROWSER_GUIDANCE')
+    expect(JSON.stringify(persisted)).not.toContain('GPT with Taste')
     h.manager.dispose()
   })
 

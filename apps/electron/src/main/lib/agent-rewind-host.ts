@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { RewindTarget, SDKMessage } from '@profer/shared'
 import { createRewindStore, readShadowTurnAttributions } from '@profer/session-store'
-import { normalizeAgentRuntime } from '@profer/shared'
+import { normalizeAgentRuntime, DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import { createAgentRewindService, type RewindResolverResult } from './agent-rewind-service'
 import { getAgentSessionMeta, getAgentSessionSDKMessages, truncateSDKMessages, updateAgentSessionMeta, clearSDKMessages, appendSDKMessages } from './agent-session-manager'
 import { createElectronSessionStorePaths } from './session-store-host'
@@ -312,7 +312,7 @@ export function createElectronAgentRewindService() {
           const meta = getAgentSessionMeta(input.sessionId)
           const runtime = meta ? normalizeAgentRuntime(meta.agentRuntime) : undefined
           if (!meta || runtime !== (meta.agentRuntime ? normalizeAgentRuntime(meta.agentRuntime) : runtime)) {
-            return { supported: false, runtime: runtime ?? 'claude', reason: '当前 runtime 没有可用的回退适配器' }
+            return { supported: false, runtime: runtime ?? DEFAULT_AGENT_RUNTIME, reason: '当前 runtime 没有可用的回退适配器' }
           }
           const messages = getAgentSessionSDKMessages(input.sessionId)
           const positions = new Map<SDKMessage, number>()

@@ -6,6 +6,7 @@
  */
 
 import {
+  DEFAULT_AGENT_RUNTIME,
   type AgentRuntime,
   type Automation,
   type AutomationScheduleType,
@@ -122,7 +123,7 @@ function summarizeAutomation(a: Automation, includeHistory: boolean): Record<str
     scheduledAt: a.scheduledAt,
     maxRuns: a.maxRuns,
     runCount: a.runCount ?? 0,
-    agentRuntime: a.agentRuntime ?? 'claude',
+    agentRuntime: a.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
     completedAt: a.completedAt,
     sessionMode: a.sessionMode,
     presetId: a.presetId,

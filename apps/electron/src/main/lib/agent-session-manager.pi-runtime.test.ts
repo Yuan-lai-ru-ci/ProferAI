@@ -215,7 +215,7 @@ describe('Pi runtime 会话持久化隔离', () => {
   })
 
   test('Given Claude 原生恢复资产 When 请求 Pi Then 拒绝且索引与历史逐字不变', () => {
-    const meta = sessions.createAgentSession('Claude keep')
+    const meta = sessions.createAgentSession('Claude keep', undefined, undefined, undefined, 'claude')
     sessions.updateAgentSessionMeta(meta.id, {
       sdkSessionId: 'claude-session', forkSourceSdkSessionId: 'claude-source',
       forkSourceDir: '/source', resumeAtMessageUuid: 'assistant-uuid', codexFastMode: true,
@@ -230,7 +230,7 @@ describe('Pi runtime 会话持久化隔离', () => {
   })
 
   test('Given 空会话选择 Pi 后设置保存失败 When 回滚 Then 保留空会话可选状态与模型', () => {
-    const meta = sessions.createAgentSession('empty rollback', 'channel', undefined, 'model')
+    const meta = sessions.createAgentSession('empty rollback', 'channel', undefined, 'model', 'claude')
     const snapshot = sessions.snapshotAgentRuntimeMeta(meta)
     const selected = sessions.updateAgentSessionMeta(meta.id, { agentRuntime: 'pi' })
     expect(selected.agentRuntimeLocked).toBe(false)
@@ -276,8 +276,8 @@ describe('Pi runtime 会话持久化隔离', () => {
     const old = { version: 1, sessions: [{ id: 'legacy', title: 'old', createdAt: 1, updatedAt: 2, sdkSessionId: 'claude-resume' }] }
     const bytes = JSON.stringify(old)
     writeFileSync(indexPath, bytes)
-    expect(sessions.getAgentSessionMeta('legacy')?.agentRuntime).toBe('claude')
-    expect(() => sessions.updateAgentSessionMeta('legacy', { agentRuntime: 'pi' })).toThrow('内核已固定')
+    expect(sessions.getAgentSessionMeta('legacy')?.agentRuntime).toBe('pi')
+    expect(() => sessions.updateAgentSessionMeta('legacy', { agentRuntime: 'claude' })).toThrow('内核已固定')
     expect(readFileSync(indexPath, 'utf8')).toBe(bytes)
   })
 
@@ -291,7 +291,7 @@ describe('Pi runtime 会话持久化隔离', () => {
   })
 
   test('Given 新会话处于运行或分叉准备 When 内部写入口切换 Then 拒绝且不改变绑定', () => {
-    const meta = sessions.createAgentSession('active lock')
+    const meta = sessions.createAgentSession('active lock', undefined, undefined, undefined, 'claude')
     sessions.setAgentSessionActiveChecker(() => true)
     try {
       expect(() => sessions.updateAgentSessionMeta(meta.id, { agentRuntime: 'pi' })).toThrow('内核已固定')

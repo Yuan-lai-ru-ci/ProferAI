@@ -12,7 +12,7 @@
  * 不将无人值守、任务正文或外部 metadata 当作扩大权限的依据。
  */
 
-import { isChannelEnabledForRuntime, readMessageProvenance, type AgentMessage, type AgentRuntime } from '@profer/shared'
+import { DEFAULT_AGENT_RUNTIME, isChannelEnabledForRuntime, readMessageProvenance, type AgentMessage, type AgentRuntime } from '@profer/shared'
 import {
   ArtifactKind,
   type TaskExecution,
@@ -155,7 +155,7 @@ export function createHeadlessTaskExecutor(deps: HeadlessExecutorDeps): TaskExec
           const workspaceId = execution.task.request.workspaceId || deps.config.defaultWorkspaceId
           // 内核跟随全局默认（主推 Pi）。写死 'claude' 会让 Pi-only 渠道上的 Fabric 任务必然失败，
           // 且失败原因埋在 SDK 层，因此这里先按渠道能力校验再建会话。
-          const agentRuntime: AgentRuntime = settings.agentRuntime ?? 'claude'
+          const agentRuntime: AgentRuntime = settings.agentRuntime ?? DEFAULT_AGENT_RUNTIME
           const channel = getVisibleChannelById(channelId)
           if (!channel) {
             finish({ error: `Fabric 任务无法执行：渠道不存在（${channelId}）` })

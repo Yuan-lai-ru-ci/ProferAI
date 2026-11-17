@@ -5,7 +5,7 @@
  */
 
 import { getVisibleChannelById } from './channel-manager'
-import { isChannelEnabledForRuntime } from '@profer/shared'
+import { DEFAULT_AGENT_RUNTIME, isChannelEnabledForRuntime } from '@profer/shared'
 import type { AgentRuntime, ChannelModel, ProviderType } from '@profer/shared'
 
 export interface AvailableAgentModel {
@@ -28,7 +28,7 @@ export function assertEnabledModelForChannel(input: {
   purpose: string
 }): string | undefined {
   if (input.modelId == null) return undefined
-  const runtime = input.runtime ?? 'claude'
+  const runtime = input.runtime ?? DEFAULT_AGENT_RUNTIME
 
   const modelId = input.modelId.trim()
   if (!modelId) {
@@ -54,7 +54,7 @@ export function assertEnabledModelForChannel(input: {
 export function listEnabledAgentModelsForChannel(
   channelId: string | undefined,
   purpose: string,
-  runtime: AgentRuntime = 'claude',
+  runtime: AgentRuntime = DEFAULT_AGENT_RUNTIME,
 ): AvailableAgentModelsForChannel {
   if (!channelId) {
     throw new Error(`${purpose}需要可用的 channelId`)
