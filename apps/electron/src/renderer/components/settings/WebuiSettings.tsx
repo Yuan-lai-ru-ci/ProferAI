@@ -10,7 +10,9 @@ import { useAtomValue } from 'jotai'
 import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, Globe, Loader2, Plus, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
+import { ConfirmDialog } from '@profer/ui/primitives/confirm-dialog'
 import { Input } from '@profer/ui/primitives/input'
+import { Separator } from '@profer/ui/primitives/separator'
 import { SettingsCard, SettingsSection, SettingsSelect, SettingsToggle } from './primitives'
 import { IntegrationSettingsFeedback } from './IntegrationSettingsFeedback'
 import { ScrollRegion } from '@/components/ai-elements/scroll-region'
@@ -45,6 +47,7 @@ export function WebuiSettings(): React.ReactElement {
   const [saving, setSaving] = React.useState(false)
   const [portInput, setPortInput] = React.useState('')
   const [pendingSession, setPendingSession] = React.useState(NO_SELECTION)
+  const [revokeTarget, setRevokeTarget] = React.useState<string | null>(null)
   const [query, setQuery] = React.useState('')
   const [collapsedGroups, setCollapsedGroups] = React.useState<ReadonlySet<string>>(() => new Set())
 
@@ -306,12 +309,16 @@ export function WebuiSettings(): React.ReactElement {
               <Button variant="ghost" size="icon" aria-label={`复制 ${titleOf(id)} 的网页地址`} disabled={!url} onClick={() => void copyText(url, '网页地址已复制')}>
                 <Copy className="size-3.5" />
               </Button>
+              {/* 停止发布会立刻让已分享的链接 404，和「打开 / 复制」分开权重并二次确认 */}
+              <Separator orientation="vertical" className="mx-1 h-4" />
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label={`移除 ${titleOf(id)}`}
+                aria-label={`停止发布 ${titleOf(id)}`}
+                title="停止发布（网页立即 404）"
                 disabled={saving}
-                onClick={() => { void apply({ publishedSessionIds: published.filter((item) => item !== id) }) }}
+                className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => setRevokeTarget(id)}
               >
                 <Trash2 className="size-3.5" />
               </Button>
@@ -319,6 +326,22 @@ export function WebuiSettings(): React.ReactElement {
           )
         })}
       </SettingsCard>
+
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        onOpenChange={(open) => { if (!open) setRevokeTarget(null) }}
+        title="停止发布这个网页？"
+        description={`「${revokeTarget ? titleOf(revokeTarget) : ''}」的网页会立即 404，已经分享出去的链接将无法访问。移动模式与其它网页不受影响。`}
+        confirmLabel="停止发布"
+        cancelLabel="取消"
+        loading={saving}
+        onConfirm={() => {
+          if (!revokeTarget) return
+          const target = revokeTarget
+          void apply({ publishedSessionIds: published.filter((item) => item !== target) })
+            .then((ok) => { if (ok) setRevokeTarget(null) })
+        }}
+      />
     </SettingsSection>
   )
 }
