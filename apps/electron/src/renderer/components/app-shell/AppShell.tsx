@@ -30,9 +30,15 @@ const MIN_RIGHT_PANEL_WIDTH = 300
 const MAX_RIGHT_PANEL_WIDTH = 560
 
 // 左侧栏拖拽范围按「列表宽」计算（外壳总宽 = 54 常驻 rail + 列表宽）。
-// 下限 230 保证 ModeSwitcher 的「Agent / Chat」不被截断，上限 360 避免把主区挤成单栏。
+// 下限 230 为原有列表宽度，下限以上可按需拖宽；上限 360 避免把主区挤成单栏。
 const MIN_LEFT_SIDEBAR_WIDTH = 230
 const MAX_LEFT_SIDEBAR_WIDTH = 360
+// 拖动分隔条进入收起区后，先保留可逆滑出预览，松手再吸附或回弹。
+const LEFT_SIDEBAR_COLLAPSED_WIDTH = 58
+const LEFT_SIDEBAR_COLLAPSE_SNAP_PROGRESS = 0.5
+const LEFT_SIDEBAR_COLLAPSE_SNAP_MS = 160
+const LEFT_SIDEBAR_COLLAPSE_RELEASE_MS = 200
+const LEFT_SIDEBAR_RAIL_WIDTH = 54
 
 function clampLeftSidebarWidth(width: number): number {
   return Math.max(MIN_LEFT_SIDEBAR_WIDTH, Math.min(MAX_LEFT_SIDEBAR_WIDTH, width))
@@ -142,9 +148,17 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
 
   // 左侧边栏可拖拽宽度
   const [leftSidebarWidth, setLeftSidebarWidth] = useAtom(leftSidebarWidthAtom)
-  const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom)
+  const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom)
   const leftDragging = React.useRef(false)
+  const leftDragReleaseTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isDraggingLeftSidebar, setIsDraggingLeftSidebar] = React.useState(false)
+  const [leftSidebarDragPreview, setLeftSidebarDragPreview] = React.useState<{
+    width: number
+    collapsed: boolean
+    listWidthOverride?: number
+    listTranslateX?: number
+    transitionDurationMs?: number
+  } | null>(null)
   const clampedLeftSidebarWidth = clampLeftSidebarWidth(leftSidebarWidth)
 
   React.useEffect(() => {
@@ -153,45 +167,228 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
     }
   }, [clampedLeftSidebarWidth, leftSidebarWidth, setLeftSidebarWidth])
 
+  React.useEffect(() => {
+    return () => {
+      if (leftDragReleaseTimer.current) {
+        clearTimeout(leftDragReleaseTimer.current)
+      }
+    }
+  }, [])
+
   const handleLeftSidebarMouseDown = React.useCallback((e: React.MouseEvent) => {
+    if (leftDragReleaseTimer.current) return
     e.preventDefault()
     leftDragging.current = true
     setIsDraggingLeftSidebar(true)
     const startX = e.clientX
-    const startWidth = clampedLeftSidebarWidth
+    const startCollapsed = sidebarCollapsed
+    const startWidth = startCollapsed
+      ? LEFT_SIDEBAR_COLLAPSED_WIDTH
+      : LEFT_SIDEBAR_RAIL_WIDTH + clampedLeftSidebarWidth
+    const minExpandedWidth = LEFT_SIDEBAR_RAIL_WIDTH + MIN_LEFT_SIDEBAR_WIDTH
+    const maxExpandedWidth = LEFT_SIDEBAR_RAIL_WIDTH + MAX_LEFT_SIDEBAR_WIDTH
     let latestClientX = startX
+    let wasSnapped = false
     let rafId = 0
+    let onMouseMove: (ev: MouseEvent) => void
+    let onMouseUp: () => void
+    let onWindowBlur: () => void
 
-    const applyWidth = () => {
-      const delta = latestClientX - startX
-      setLeftSidebarWidth(clampLeftSidebarWidth(startWidth + delta))
+    const setDragCursor = (active: boolean) => {
+      document.body.style.userSelect = active ? 'none' : ''
+      document.body.style.cursor = active ? 'col-resize' : ''
+    }
+    setDragCursor(true)
+
+    const stopDragging = () => {
+      leftDragging.current = false
+      setIsDraggingLeftSidebar(false)
+      setDragCursor(false)
+      if (rafId) {
+        cancelAnimationFrame(rafId)
+        rafId = 0
+      }
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('blur', onWindowBlur)
     }
 
-    const onMouseMove = (ev: MouseEvent) => {
+    const resolvePreviewWidth = (clientX: number): number => {
+      const delta = clientX - startX
+      return Math.max(
+        LEFT_SIDEBAR_COLLAPSED_WIDTH,
+        Math.min(maxExpandedWidth, startWidth + delta),
+      )
+    }
+
+    const resolveListPreview = (previewWidth: number) => {
+      if (previewWidth >= minExpandedWidth) {
+        return {
+          listWidthOverride: previewWidth - LEFT_SIDEBAR_RAIL_WIDTH,
+          listTranslateX: 0,
+        }
+      }
+      return {
+        listWidthOverride: MIN_LEFT_SIDEBAR_WIDTH,
+        // 保持列表宽度不变，继续向 rail 后方滑入；rail 的左边缘和位置不动。
+        listTranslateX: previewWidth - minExpandedWidth,
+      }
+    }
+
+    const applyPreview = () => {
+      const pointerWidth = resolvePreviewWidth(latestClientX)
+      let previewWidth = pointerWidth
+      let collapsed = pointerWidth <= LEFT_SIDEBAR_COLLAPSED_WIDTH
+      let snapped = false
+
+      if (startCollapsed) {
+        const progress = (pointerWidth - LEFT_SIDEBAR_COLLAPSED_WIDTH)
+          / (minExpandedWidth - LEFT_SIDEBAR_COLLAPSED_WIDTH)
+        snapped = progress >= LEFT_SIDEBAR_COLLAPSE_SNAP_PROGRESS
+        if (snapped) {
+          previewWidth = minExpandedWidth
+          collapsed = false
+        }
+      } else if (pointerWidth < minExpandedWidth) {
+        const progress = (minExpandedWidth - pointerWidth)
+          / (minExpandedWidth - LEFT_SIDEBAR_COLLAPSED_WIDTH)
+        snapped = progress >= LEFT_SIDEBAR_COLLAPSE_SNAP_PROGRESS
+        if (snapped) {
+          previewWidth = LEFT_SIDEBAR_COLLAPSED_WIDTH
+          collapsed = true
+        }
+      }
+
+      const listPreview = resolveListPreview(previewWidth)
+      setLeftSidebarDragPreview({
+        width: previewWidth,
+        collapsed,
+        ...listPreview,
+        ...((snapped || wasSnapped) && {
+          transitionDurationMs: LEFT_SIDEBAR_COLLAPSE_SNAP_MS,
+        }),
+      })
+      wasSnapped = snapped
+    }
+
+    onMouseMove = (ev: MouseEvent) => {
       if (!leftDragging.current) return
       latestClientX = ev.clientX
       if (rafId) return
       rafId = requestAnimationFrame(() => {
         rafId = 0
-        applyWidth()
+        applyPreview()
       })
     }
 
-    const onMouseUp = () => {
-      leftDragging.current = false
-      setIsDraggingLeftSidebar(false)
-      if (rafId) {
-        cancelAnimationFrame(rafId)
-        rafId = 0
+    onMouseUp = () => {
+      if (!leftDragging.current) return
+      const previewWidth = resolvePreviewWidth(latestClientX)
+      stopDragging()
+
+      if (startCollapsed) {
+        const progress = (previewWidth - LEFT_SIDEBAR_COLLAPSED_WIDTH)
+          / (minExpandedWidth - LEFT_SIDEBAR_COLLAPSED_WIDTH)
+        if (progress >= LEFT_SIDEBAR_COLLAPSE_SNAP_PROGRESS) {
+          setLeftSidebarDragPreview({
+            width: minExpandedWidth,
+            collapsed: false,
+            ...resolveListPreview(minExpandedWidth),
+            transitionDurationMs: LEFT_SIDEBAR_COLLAPSE_SNAP_MS,
+          })
+          leftDragReleaseTimer.current = setTimeout(() => {
+            leftDragReleaseTimer.current = null
+            setSidebarCollapsed(false)
+            setLeftSidebarWidth(MIN_LEFT_SIDEBAR_WIDTH)
+            setLeftSidebarDragPreview(null)
+          }, LEFT_SIDEBAR_COLLAPSE_RELEASE_MS)
+          return
+        }
+
+        setLeftSidebarDragPreview({
+          width: LEFT_SIDEBAR_COLLAPSED_WIDTH,
+          collapsed: true,
+          ...resolveListPreview(LEFT_SIDEBAR_COLLAPSED_WIDTH),
+          transitionDurationMs: LEFT_SIDEBAR_COLLAPSE_RELEASE_MS,
+        })
+        leftDragReleaseTimer.current = setTimeout(() => {
+          leftDragReleaseTimer.current = null
+          setLeftSidebarDragPreview(null)
+        }, LEFT_SIDEBAR_COLLAPSE_RELEASE_MS)
+        return
       }
-      applyWidth()
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
+
+      if (previewWidth >= minExpandedWidth) {
+        setLeftSidebarWidth(previewWidth - LEFT_SIDEBAR_RAIL_WIDTH)
+        setLeftSidebarDragPreview(null)
+        return
+      }
+
+      const progress = (minExpandedWidth - previewWidth)
+        / (minExpandedWidth - LEFT_SIDEBAR_COLLAPSED_WIDTH)
+      const shouldCollapse = progress >= LEFT_SIDEBAR_COLLAPSE_SNAP_PROGRESS
+      const targetWidth = shouldCollapse ? LEFT_SIDEBAR_COLLAPSED_WIDTH : startWidth
+      setLeftSidebarDragPreview({
+        width: targetWidth,
+        collapsed: shouldCollapse,
+        ...resolveListPreview(targetWidth),
+        transitionDurationMs: shouldCollapse
+          ? LEFT_SIDEBAR_COLLAPSE_SNAP_MS
+          : LEFT_SIDEBAR_COLLAPSE_RELEASE_MS,
+      })
+      leftDragReleaseTimer.current = setTimeout(() => {
+        leftDragReleaseTimer.current = null
+        if (shouldCollapse) {
+          setSidebarCollapsed(true)
+        } else {
+          setLeftSidebarWidth(startWidth - LEFT_SIDEBAR_RAIL_WIDTH)
+        }
+        setLeftSidebarDragPreview(null)
+      }, LEFT_SIDEBAR_COLLAPSE_RELEASE_MS)
+    }
+
+    onWindowBlur = () => {
+      if (!leftDragging.current) return
+      stopDragging()
+      setLeftSidebarDragPreview(null)
     }
 
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
-  }, [clampedLeftSidebarWidth, setLeftSidebarWidth])
+    window.addEventListener('blur', onWindowBlur)
+  }, [clampedLeftSidebarWidth, setIsDraggingLeftSidebar, setLeftSidebarWidth, setSidebarCollapsed, sidebarCollapsed])
+
+  const handleLeftSidebarKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Home') {
+      e.preventDefault()
+      setSidebarCollapsed(true)
+      return
+    }
+    if (e.key === 'End') {
+      e.preventDefault()
+      setSidebarCollapsed(false)
+      setLeftSidebarWidth(MAX_LEFT_SIDEBAR_WIDTH)
+      return
+    }
+
+    const step = e.shiftKey ? 40 : 16
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+
+    e.preventDefault()
+    if (sidebarCollapsed) {
+      if (e.key === 'ArrowRight') {
+        setSidebarCollapsed(false)
+        setLeftSidebarWidth(MIN_LEFT_SIDEBAR_WIDTH)
+      }
+      return
+    }
+    const nextWidth = clampedLeftSidebarWidth + (e.key === 'ArrowRight' ? step : -step)
+    if (nextWidth <= MIN_LEFT_SIDEBAR_WIDTH) {
+      setSidebarCollapsed(true)
+      return
+    }
+    setLeftSidebarWidth(clampLeftSidebarWidth(nextWidth))
+  }, [clampedLeftSidebarWidth, setLeftSidebarWidth, setSidebarCollapsed, sidebarCollapsed])
 
   return (
     <WindowControlsTemplateProvider>
@@ -219,17 +416,28 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
             sidebarCollapsed ? 'relative z-[62] flex-none crt-sidebar' : 'relative z-[70] flex-none crt-sidebar',
           )}
         >
-          <LeftSidebar width={clampedLeftSidebarWidth} noTransition={isDraggingLeftSidebar} />
-          {/* 左栏复用主区既有的 8px 外边距作为拖动命中区：不额外占宽度，也不覆盖侧栏滚动条。 */}
-          {!sidebarCollapsed && (
-            <div
-              className="titlebar-no-drag absolute left-full top-0 bottom-0 z-[80] w-1.5 translate-x-px cursor-col-resize pointer-events-auto"
-              onMouseDown={handleLeftSidebarMouseDown}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="调整左侧边栏宽度"
-            />
-          )}
+          <LeftSidebar
+            width={clampedLeftSidebarWidth}
+            widthOverride={leftSidebarDragPreview?.width}
+            collapsedOverride={leftSidebarDragPreview?.collapsed}
+            listWidthOverride={leftSidebarDragPreview?.listWidthOverride}
+            listTranslateX={leftSidebarDragPreview?.listTranslateX}
+            transitionDurationMs={leftSidebarDragPreview?.transitionDurationMs}
+            noTransition={isDraggingLeftSidebar}
+          />
+          {/* 收起态也保留分隔条：从 rail 右边向右拖动可直接展开并调整到目标宽度。 */}
+          <div
+            className="titlebar-no-drag absolute left-full top-0 bottom-0 z-[80] w-1.5 translate-x-px cursor-col-resize pointer-events-auto"
+            onMouseDown={handleLeftSidebarMouseDown}
+            onKeyDown={handleLeftSidebarKeyDown}
+            tabIndex={0}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整左侧边栏宽度"
+            aria-valuemin={MIN_LEFT_SIDEBAR_WIDTH}
+            aria-valuemax={MAX_LEFT_SIDEBAR_WIDTH}
+            aria-valuenow={clampedLeftSidebarWidth}
+          />
         </div>
 
         {/* 中间容器 */}

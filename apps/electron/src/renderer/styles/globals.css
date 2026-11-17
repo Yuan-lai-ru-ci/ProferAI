@@ -663,6 +663,41 @@
   transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+/* rail 的快捷入口随吸附状态双向展开；左边缘和底色不参与动画。 */
+.sidebar-rail-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  flex-shrink: 0;
+  width: 100%;
+  opacity: 0;
+  transform: translateY(-12px) scale(0.94);
+  transform-origin: top center;
+  transition: grid-template-rows 320ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 220ms ease, transform 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.sidebar-rail-reveal[data-open='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.sidebar-rail-reveal-content {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-rail-reveal {
+    transition: none;
+    transform: none;
+  }
+}
+
 /* Left sidebar sits above the global titlebar layer, so it owns a stable top drag strip. */
 .sidebar-window-drag-strip {
   position: absolute;
@@ -971,62 +1006,6 @@
     inset 0 0 6px hsl(var(--primary) / 0.10) !important;
   /* 电磁闪烁：不规则微亮度波动 */
   animation: indicator-flicker 2.5s infinite steps(15);
-}
-
-@keyframes coach-tour-pulse {
-  0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.45); opacity: 1; }
-  70% { box-shadow: 0 0 0 14px rgba(255, 255, 255, 0); opacity: 0.9; }
-  100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); opacity: 0; }
-}
-
-/* CoachTour 交互步骤的呼吸脉冲环：提示「点这里」，几何跟随聚光灯 rect */
-.coach-tour-pulse-ring {
-  animation: coach-tour-pulse 1.6s ease-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .coach-tour-pulse-ring {
-    animation: none;
-  }
-}
-
-@keyframes tour-copy-in-forward {
-  from { opacity: 0; transform: translate3d(26px, 10px, 0); filter: blur(6px); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
-}
-
-@keyframes tour-copy-in-backward {
-  from { opacity: 0; transform: translate3d(-26px, 10px, 0); filter: blur(6px); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
-}
-
-@keyframes tour-mock-in-forward {
-  from { opacity: 0; transform: translate3d(34px, 14px, 0) scale(.985); filter: blur(10px); }
-  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
-}
-
-@keyframes tour-mock-in-backward {
-  from { opacity: 0; transform: translate3d(-34px, 14px, 0) scale(.985); filter: blur(10px); }
-  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
-}
-
-.tour-copy,
-.tour-mock {
-  will-change: opacity, transform, filter;
-}
-
-.tour-copy-forward { animation: tour-copy-in-forward 460ms cubic-bezier(.16, 1, .3, 1) both; }
-.tour-copy-backward { animation: tour-copy-in-backward 460ms cubic-bezier(.16, 1, .3, 1) both; }
-.tour-mock-forward { animation: tour-mock-in-forward 620ms cubic-bezier(.16, 1, .3, 1) both; }
-.tour-mock-backward { animation: tour-mock-in-backward 620ms cubic-bezier(.16, 1, .3, 1) both; }
-
-@media (prefers-reduced-motion: reduce) {
-  .tour-copy-forward,
-  .tour-copy-backward,
-  .tour-mock-forward,
-  .tour-mock-backward {
-    animation: none;
-  }
 }
 
 @keyframes indicator-flicker {

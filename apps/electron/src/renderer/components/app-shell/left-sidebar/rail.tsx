@@ -108,8 +108,8 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
       />
 
       {/* 收起态没有列表，新建与搜索必须留在 rail 上，否则收起后无法开始新会话 */}
-      {sidebarCollapsed && (
-        <>
+      <div className="sidebar-rail-reveal" data-open={sidebarCollapsed} aria-hidden={!sidebarCollapsed} {...(!sidebarCollapsed ? { inert: '' } : {})}>
+        <div className="sidebar-rail-reveal-content">
           <SidebarRailEntry
             icon={<Plus size={19} />}
             label={mode === 'agent' ? '新建 Agent 会话' : '新建 Chat 对话'}
@@ -128,13 +128,13 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
             tooltip="搜索会话"
             onClick={() => setSearchDialogOpen(true)}
           />
-        </>
-      )}
+        </div>
+      </div>
 
       {/* 展开态：Agent/Chat 切换由列表顶部的 ModeSwitcher 承担，rail 只留一条分隔线。
           收起态：没有列表，模式切换必须留在 rail 上（Agent 按钮悬停可预览工作区）。 */}
-      {sidebarCollapsed ? (
-        <>
+      <div className="sidebar-rail-reveal" data-open={sidebarCollapsed} aria-hidden={!sidebarCollapsed} {...(!sidebarCollapsed ? { inert: '' } : {})}>
+        <div className="sidebar-rail-reveal-content">
           <RailSeparator className="mt-[2px]" />
           <div className="flex flex-col items-center gap-[3px]" data-tour="mode-switch">
             <CollapsedWorkspacePopover>{agentModeButton}</CollapsedWorkspacePopover>
@@ -160,10 +160,9 @@ export function SidebarRail({ s, topOffset }: { s: SidebarModel; topOffset: numb
             </Tooltip>
           </div>
           <RailSeparator />
-        </>
-      ) : (
-        <RailSeparator className="mt-[2px]" />
-      )}
+        </div>
+      </div>
+      {!sidebarCollapsed && <RailSeparator className="mt-[2px]" />}
 
       {/* 功能入口：Todo / 日程 / 定时任务 / Agent 技能 / Agent 记忆 / 插件页面。
           规划中心原先是一个入口 + 内部三个 tab；拆分后 rail 直接给出三个并列入口，

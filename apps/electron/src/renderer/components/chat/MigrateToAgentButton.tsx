@@ -9,7 +9,7 @@
  */
 
 import * as React from 'react'
-import { useStore } from 'jotai'
+import { useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { Bot, Loader2 } from 'lucide-react'
 import { MessageAction } from '@/components/ai-elements/message'
@@ -20,7 +20,9 @@ import {
   currentAgentSessionIdAtom,
   currentAgentWorkspaceIdAtom,
 } from '@/atoms/agent-atoms'
+import { resolvePreferredAgentWorkspaceId } from '@/lib/agent-workspace-selection'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
+import { conversationsAtom } from '@/atoms/chat-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
 
@@ -35,6 +37,10 @@ const isSessionWindow = typeof window !== 'undefined' && window.location?.search
 export function MigrateToAgentButton({ conversationId }: MigrateToAgentButtonProps): React.ReactElement | null {
   const store = useStore()
   const [migrating, setMigrating] = React.useState(false)
+  // 首次引导的欢迎对话：首条回复是产品写好的文案，不是模型产物，也不是用户的工作内容。
+  // 允许迁移会把这段引导文字拖进一个 Agent 会话，用户看到的是一个假装在工作、实则空跑的会话。
+  const isWelcomeConversation = useAtomValue(conversationsAtom)
+    .find((conversation) => conversation.id === conversationId)?.isWelcome === true
 
   const handleMigrate = async (): Promise<void> => {
     if (migrating) return
@@ -54,7 +60,11 @@ export function MigrateToAgentButton({ conversationId }: MigrateToAgentButtonPro
     setMigrating(true)
     try {
       const workspaces = store.get(agentWorkspacesAtom)
-      const defaultWorkspaceId = workspaces[0]?.id ?? null
+      // 不能用 workspaces[0]：索引首项可能是已收纳工作区，会话建完会因不可见而打不开。
+      const defaultWorkspaceId = resolvePreferredAgentWorkspaceId(
+        workspaces,
+        store.get(currentAgentWorkspaceIdAtom),
+      ) ?? null
 
       // 1. 创建 Agent 会话
       const session = await window.electronAPI.createAgentSession(
@@ -107,7 +117,7 @@ export function MigrateToAgentButton({ conversationId }: MigrateToAgentButtonPro
   }
 
   return (
-    isSessionWindow ? null : (
+    isSessionWindow || isWelcomeConversation ? null : (
     <MessageAction
       tooltip={migrating ? '切换中...' : '切换到 Agent 模式'}
       onClick={() => { void handleMigrate() }}

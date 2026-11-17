@@ -10,14 +10,10 @@
 
 import * as React from 'react'
 import { startTransition } from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtomValue } from 'jotai'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
-import { conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
-import { agentSessionsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
-import { tabsAtom } from '@/atoms/tab-atoms'
-import { useOpenSession } from '@/hooks/useOpenSession'
 import { Bot, MessageSquare } from 'lucide-react'
-import { isVisibleAgentSession } from '@profer/shared'
+import { useSwitchAppMode } from '@/hooks/useSwitchAppMode'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { navigationController } from '@/lib/navigation-controller'
@@ -28,13 +24,8 @@ const modes: { value: AppMode; label: string; icon: React.ReactNode }[] = [
 ]
 
 export function ModeSwitcher(): React.ReactElement {
-  const [mode, setMode] = useAtom(appModeAtom)
-  const openSession = useOpenSession()
-  const conversations = useAtomValue(conversationsAtom)
-  const agentSessions = useAtomValue(agentSessionsAtom)
-  const currentConversationId = useAtomValue(currentConversationIdAtom)
-  const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
-  const tabs = useAtomValue(tabsAtom)
+  const mode = useAtomValue(appModeAtom)
+  const switchAppMode = useSwitchAppMode()
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
   // 预选（preview）模式：普通←/→ 在这个候选间移动，按 Enter 才真正切换；
@@ -46,45 +37,17 @@ export function ModeSwitcher(): React.ReactElement {
     setPreviewMode(mode)
   }, [mode])
 
-  /** 尝试恢复目标模式下的上一个对话/会话，按优先级 fallback */
-  const restoreSession = React.useCallback((targetMode: AppMode) => {
-    const isChatMode = targetMode === 'chat'
-    const sessions = isChatMode ? conversations : agentSessions.filter(isVisibleAgentSession)
-    const lastId = isChatMode ? currentConversationId : currentAgentSessionId
-
-    // 1. 上次选中的对话仍存在 → 恢复
-    if (lastId) {
-      const match = sessions.find((s) => s.id === lastId)
-      if (match) {
-        openSession(targetMode, match.id, match.title)
-        return
-      }
-    }
-    // 2. 已打开的同类型 Tab → 聚焦
-    const tab = tabs.find((t) => t.type === targetMode)
-    if (tab) {
-      openSession(targetMode, tab.sessionId, tab.title)
-      return
-    }
-    // 3. 最近的未归档对话/会话 → 打开
-    const recent = sessions.find((s) => !s.archived)
-    if (recent) {
-      openSession(targetMode, recent.id, recent.title)
-      return
-    }
-    // 4. 无任何对话，仅切换模式
-    setMode(targetMode)
-  }, [openSession, conversations, agentSessions, currentConversationId, currentAgentSessionId, tabs, setMode])
-
   const handleModeSwitch = React.useCallback((targetMode: AppMode) => {
     if (targetMode === mode) return
-    // 紧急更新：滑块/按钮/模式视图框架立即切换，避免模式切换动画被内容重渲染卡住
-    setMode(targetMode)
+    // 先写意图 + 移动滑块，让 UI 立刻响应；会话/标签页的切换在空闲时完成，
+    // 避免模式切换动画被内容重渲染卡住。
+    // 注意：界面显示的模式最终由活动标签页派生，所以真正“生效”发生在标签页切换后；
+    // 这里不写 appModeAtom（那不会改变显示），只写意图。
     setPreviewMode(targetMode)
-    // 低优先级：会话恢复与内容渲染（Tab/会话列表/主区）在空闲时完成，
-    // 先响应 UI（滑块滑动、按钮变色），再填充内容——模式切换不再“卡一下”
-    startTransition(() => restoreSession(targetMode))
-  }, [mode, restoreSession])
+    startTransition(() => {
+      void switchAppMode(targetMode)
+    })
+  }, [mode, switchAppMode])
 
   const isFocusInModeRegion = (activeElement: Element | null): boolean =>
     activeElement instanceof HTMLElement

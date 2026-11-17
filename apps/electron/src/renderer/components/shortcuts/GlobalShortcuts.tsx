@@ -41,6 +41,7 @@ import {
 } from '@/atoms/chat-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { useCreateSession } from '@/hooks/useCreateSession'
+import { useSwitchAppMode } from '@/hooks/useSwitchAppMode'
 import { useShortcut } from '@/hooks/useShortcut'
 import { useCloseTab } from '@/hooks/useCloseTab'
 import {
@@ -56,7 +57,7 @@ import { isImageAttachmentMediaType, resolveAgentAttachmentPrompt } from '@profe
  * 挂载后从 settings 加载自定义配置，并注册所有应用级快捷键。
  */
 export function GlobalShortcuts(): null {
-  const [appMode, setAppMode] = useAtom(appModeAtom)
+  const appMode = useAtomValue(appModeAtom)
   const [settingsOpen, setSettingsOpen] = useAtom(settingsOpenAtom)
   const channelFormDirty = useAtomValue(channelFormDirtyAtom)
   const setSettingsCloseRequested = useSetAtom(settingsCloseRequestedAtom)
@@ -66,6 +67,7 @@ export function GlobalShortcuts(): null {
   const shortcutOverrides = useAtomValue(shortcutOverridesAtom)
   const setSendWithCmdEnter = useSetAtom(sendWithCmdEnterAtom)
   const { createChat, createAgent } = useCreateSession()
+  const switchAppMode = useSwitchAppMode()
 
   // Tab 管理（用于关闭标签页）
   const activeTabId = useAtomValue(activeTabIdAtom)
@@ -159,11 +161,17 @@ export function GlobalShortcuts(): null {
   )
 
   // Cmd+Shift+M → 切换模式
+  // ⌘⇧M 切换模式：旧实现只写 appMode、不动标签页，会立刻造成
+  // 「模式显示 Agent、标签页却是 Chat」的分叉。这里改为走统一的模式切换，
+  // 由活动标签页派生显示状态，两者不会再脱节。
   useShortcut(
     'toggle-mode',
     useCallback(
-      () => { if (appMode !== 'scratch') setAppMode(appMode === 'chat' ? 'agent' : 'chat') },
-      [appMode, setAppMode],
+      () => {
+        if (appMode === 'scratch') return
+        void switchAppMode(appMode === 'chat' ? 'agent' : 'chat')
+      },
+      [appMode, switchAppMode],
     ),
   )
 

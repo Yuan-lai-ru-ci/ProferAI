@@ -199,8 +199,8 @@ export interface SkinManagerResult {
   message?: string
 }
 
-/** 默认主题模式 */
-export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
+/** 默认主题模式：新用户首次启动为浅色 */
+export const DEFAULT_THEME_MODE: ThemeMode = 'light'
 
 /** 默认特殊风格 */
 export const DEFAULT_THEME_STYLE: ThemeStyle = 'default'
