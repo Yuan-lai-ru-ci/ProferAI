@@ -63,11 +63,18 @@ export function getFrpGuideContent(): string | null {
 /**
  * 创建欢迎对话
  *
- * 创建一个预填教程内容的 Chat 对话：
+ * 结构（v2）：
  * 1. 创建对话
- * 2. 将教程文件保存为附件
- * 3. 追加 user 消息（携带教程附件）
- * 4. 追加 assistant 欢迎消息
+ * 2. 将教程保存为附件文件
+ * 3. 追加 assistant 欢迎消息，教程附件挂在**这条回复上**
+ *
+ * 为什么不再造一条 user 消息：欢迎对话是产品给新用户的第一屏，旧实现会写一条
+ * 「你好，我是 Profer 的新用户……这是完整的使用教程」并挂上附件，界面渲染出来
+ * 就是用户自己发了一条带附件的消息 —— 用户既没发过，也会困惑「为什么我说过这话」，
+ * 还会看到重发/编辑/删除这些只对真实输入有意义的按钮。
+ *
+ * 现在教程作为助手回复的附件呈现：内容仍然是「供 AI 参考的完整教程」，但归属正确。
+ * 用户在第一屏里唯一能输入的那条消息，留给用户自己。
  *
  * @returns 对话元数据，失败返回 null
  */
@@ -101,46 +108,41 @@ export function createWelcomeConversation(): ConversationMeta | null {
       size: Buffer.byteLength(cleanedContent, 'utf-8'),
     }
 
-    // 3. 追加 user 消息（携带教程附件作为 AI 的参考知识库）
+    // 3. 追加 assistant 欢迎消息（教程附件挂在助手回复上，不伪造用户输入）
     const now = Date.now()
-    const userMessage: ChatMessage = {
-      id: randomUUID(),
-      parentId: null,
-      role: 'user',
-      content: '你好，我是 Profer 的新用户，希望快速上手。这是完整的使用教程，作为你的参考。',
-      createdAt: now,
-      attachments: [attachment],
-    }
-    appendMessage(meta.id, userMessage)
-
-    // 4. 追加 assistant 欢迎消息（引导式对话：先了解用户，再生成个性化最佳实践）
     const assistantMessage: ChatMessage = {
       id: randomUUID(),
-      parentId: userMessage.id,
+      parentId: null,
       role: 'assistant',
-      content: `你好，欢迎来到 Profer！Profer 是一个通用的 Agent，其实它可以完成任何事，说实话这也挺难的，因为你要构建完整的工作环境才能做到，这会涉及到一些新的概念或者思考方式，不过别担心，我们做了很多设计可以帮助你靠谱稳定的越用越好用。
+      content: `你好，欢迎使用 Profer。
 
-在介绍功能之前，想先认识一下你：
+它可以聊天，也能读你的文件、跑命令、按计划把事做完。想先认识一下你：
 
 1. 怎么称呼你？
-2. 你的职业或主要角色是什么？（比如独立开发者、产品经理、数据分析师、运营、学生……）
-3. 你最近在做什么工作或项目？有哪些场景或痛点想交给 AI 帮忙？
+2. 你主要做什么工作？（独立开发、产品、数据分析、运营、学生……）
+3. 最近在忙什么，有哪些事想交给它？
 
-了解你的背景之后，我会为你单独整理一份专属的 Profer 使用最佳实践——告诉你哪些功能最值得用、推荐的 Skills / MCP 配置，以及贴合你场景的工作流模板。
+说清这三点，我会给你一份贴合你场景的上手建议：先开哪几个功能、推荐哪些 Skill 与 MCP、常用流程怎么搭。
 
-直接在下面回复就好，可以一次说完，也可以分几条慢慢聊。`,
-      createdAt: now + 1,
+直接回复就好，一次说完或分几条都可以。`,
+      createdAt: now,
       model: 'Profer',
+      attachments: [attachment],
     }
     appendMessage(meta.id, assistantMessage)
 
-    // 激活路径初始化为该对话的两条消息
-    updateConversationMeta(meta.id, {
-      activePath: [userMessage.id, assistantMessage.id],
+    // 激活路径只有这一条助手消息；并标记为欢迎对话——它的首条回复是写死的引导文案，
+    // 不属于用户工作内容，不应提供「切换到 Agent 模式」把这段文案拖进新会话。
+    //
+    // 必须回传 update 的返回值：createConversation 给出的 meta 是写标记之前的快照，
+    // 直接 return 它会让渲染进程拿不到 isWelcome，迁移按钮照旧显示。
+    const updatedMeta = updateConversationMeta(meta.id, {
+      activePath: [assistantMessage.id],
+      isWelcome: true,
     })
 
     console.log(`[教程服务] 已创建欢迎对话: ${meta.id}`)
-    return meta
+    return updatedMeta
   } catch (error) {
     console.error('[教程服务] 创建欢迎对话失败:', error)
     return null

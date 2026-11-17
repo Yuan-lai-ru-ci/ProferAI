@@ -1,48 +1,83 @@
 /**
  * CoachTourOverlay — 界面蒙层引导（Coach Tour）
  *
- * 触发：coachTourOpenAtom（设置页「重新播放界面引导」/ 教程横幅 / Onboarding 完成后自动接力 /
+ * 触发：coachTourOpenAtom（设置页「重新播放界面引导」/ Onboarding 完成后自动接力 /
  * 启动时引导版本偏低的自动重播）。
  *
- * 引擎行为：
- *  - 播放期间 rAF 持续跟踪锚点 rect，侧栏收合、视图切换动画中聚光灯实时跟手
- *  - 带 view 的步骤先把主内容区切到对应视图，退出时恢复用户原视图
- *  - 点击遮罩 / → 前进，Esc / 点击 × 退出；Tab 焦点限制在气泡内
- *  - 锚点缺失（对应面板未打开）时气泡居中降级，不阻断流程
- *  - 尊重 prefers-reduced-motion：关闭聚光灯/气泡位移动画
+ * 引擎行为（v9 重写）：
+ *  - 只在「切步、窗口尺寸变化、锚点容器尺寸变化」时测量锚点，不再每帧
+ *    querySelectorAll + getComputedStyle。旧版用 rAF 逐帧测量，120Hz 屏上每秒
+ *    120 次强制样式重算与布局读取，是导览「很卡」的主要来源。
+ *  - 切步后连采一小段覆盖侧栏/面板过渡动画，布局稳定后停止采样，静止时零开销。
+ *  - 键盘：→/Enter 下一步，← 上一步，Esc 退出；Tab 焦点限制在气泡内。
+ *  - 点击遮罩任意处前进（不要求点中高亮区，避免点歪卡住）。
+ *  - 不切换主内容区视图：用户在哪就在哪，引导只做说明。
+ *  - 尊重 prefers-reduced-motion。
  */
 
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { useAtom, useStore } from 'jotai'
-import { Check, Clock3, Layers, Sparkles, X } from 'lucide-react'
+import { useAtom } from 'jotai'
+import { Check, ChevronLeft, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { coachTourOpenAtom } from '@/atoms/coach-tour-atoms'
-import { activeViewAtom, type ActiveView } from '@/atoms/active-view'
 import { Button } from '@profer/ui/primitives/button'
 import { cn } from '@/lib/utils'
 import { COACH_TOUR_STEPS, CURRENT_COACH_TOUR_VERSION, type CoachTourStep } from './coach-tour-steps'
 import { computeCardLayout, unionRects, type AnchorRect, type CardSize } from './coach-tour-position'
 import { claimCoachTourOwnership } from './coach-tour-owner'
 
-/** 未测量前的气泡估算尺寸；首个 layout effect 会用真实值收敛，避免跳动 */
-const FALLBACK_CARD_SIZE: CardSize = { width: 320, height: 190 }
+/** 未测量前的气泡估算尺寸；首个 layout effect 会用真实值收敛 */
+const FALLBACK_CARD_SIZE: CardSize = { width: 336, height: 180 }
 
-/** 收尾卡片的三个「接下来」建议 */
-const FINALE_ACTIONS = [
-  { key: 'task', icon: Sparkles, title: '发一个真实任务', hint: '让它分析工作区里的一个文件并给出结论' },
-  { key: 'skill', icon: Layers, title: '把流程存成 Skill', hint: '一次写好，下次一句话调用' },
-  { key: 'automation', icon: Clock3, title: '设一个定时任务', hint: '每周一自动整理进展并提醒你' },
-] as const
-const MOVE_TRANSITION = 'left 0.32s cubic-bezier(0.22,1,0.36,1), top 0.32s cubic-bezier(0.22,1,0.36,1), width 0.32s cubic-bezier(0.22,1,0.36,1), height 0.32s cubic-bezier(0.22,1,0.36,1)'
+/**
+ * 过渡期间的重测间隔。
+ *
+ * 侧栏收合、面板展开等动画通常持续 200~320ms；80ms 采样足以让聚光灯跟手，
+ * 又比逐帧测量少一个数量级的样式重算。
+ */
+const FOLLOW_SAMPLE_MS = 80
+/** 布局变化后的采样窗口：覆盖动画即可，之后停止，不长期占用主线程。 */
+const FOLLOW_TAIL_MS = 480
+
+/** 元素是否真的看得见（尺寸非零、不是 visibility:hidden、不透明、没被折叠容器裁掉）。 */
+function isElementVisible(el: HTMLElement, rect: DOMRect): boolean {
+  if (rect.width <= 0 || rect.height <= 0) return false
+  const style = window.getComputedStyle(el)
+  if (style.visibility === 'hidden' || style.display === 'none') return false
+  // 侧栏收起时，收起态的入口放在 grid-template-rows: 0fr + opacity: 0 的容器里。
+  // 这些元素仍有非零 rect，只按 display/visibility 判断会高亮到用户看不见的按钮。
+  if (Number.parseFloat(style.opacity || '1') === 0) return false
+  // Chromium 原生可见性判定：同时覆盖 opacity:0 与 content-visibility 隐藏。
+  const checkVisibility = (el as HTMLElement & {
+    checkVisibility?: (options?: { checkOpacity?: boolean; checkVisibilityCSS?: boolean }) => boolean
+  }).checkVisibility
+  if (typeof checkVisibility === 'function' && !checkVisibility.call(el, { checkOpacity: true, checkVisibilityCSS: true })) {
+    return false
+  }
+  // 与被裁剪的祖先求交：折叠容器里的元素 rect 可能落在容器外。
+  let clipped: DOMRect = rect
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const nodeStyle = window.getComputedStyle(node)
+    if (nodeStyle.overflow === 'hidden' || nodeStyle.overflowY === 'hidden' || nodeStyle.overflowX === 'hidden') {
+      const box = node.getBoundingClientRect()
+      const left = Math.max(clipped.left, box.left)
+      const top = Math.max(clipped.top, box.top)
+      const right = Math.min(clipped.right, box.right)
+      const bottom = Math.min(clipped.bottom, box.bottom)
+      if (right - left <= 0 || bottom - top <= 0) return false
+      clipped = new DOMRect(left, top, right - left, bottom - top)
+    }
+  }
+  return true
+}
 
 /** 收集某选择器下所有可见且非零尺寸的元素矩形 */
 function collectVisibleRects(selector: string): AnchorRect[] {
   const rects: AnchorRect[] = []
   for (const el of document.querySelectorAll<HTMLElement>(selector)) {
     const rect = el.getBoundingClientRect()
-    const style = window.getComputedStyle(el)
-    if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+    if (isElementVisible(el, rect)) {
       rects.push({ left: rect.left, top: rect.top, width: rect.width, height: rect.height })
     }
   }
@@ -85,7 +120,7 @@ function trapTabKey(event: KeyboardEvent, card: HTMLElement | null): void {
 }
 
 /**
- * 把聚光灯几何钳制进视口：锚点本身顶满窗口时（如规划/技能全屏页），
+ * 把聚光灯几何钳制进视口：锚点本身顶满窗口时（如技能/记忆全屏页），
  * ±8px padding 会把白圈画到屏幕外导致框缺边；钳制后四边贴屏幕缘完整可见。
  * 遮罩阴影（9999px 巨影）不受钳制影响。
  */
@@ -100,52 +135,43 @@ function clampFrameToViewport(rect: AnchorRect): { left: number; top: number; wi
   return { left, top, width: right - left, height: bottom - top }
 }
 
+function rectKey(rect: AnchorRect | null): string {
+  return rect
+    ? `${rect.left.toFixed(1)}|${rect.top.toFixed(1)}|${rect.width.toFixed(1)}|${rect.height.toFixed(1)}`
+    : 'none'
+}
+
 export function CoachTourOverlay(): React.ReactElement | null {
-  const store = useStore()
   const [open, setOpen] = useAtom(coachTourOpenAtom)
   const [stepIndex, setStepIndex] = React.useState(0)
   const [rect, setRect] = React.useState<AnchorRect | null>(null)
   const [cardSize, setCardSize] = React.useState<CardSize>(FALLBACK_CARD_SIZE)
   const cardRef = React.useRef<HTMLDivElement>(null)
-  /** 打开引导时用户所在的主内容区视图，退出时恢复 */
-  const restoreViewRef = React.useRef<ActiveView | null>(null)
-  /** 交互步骤中已排定的自动前进定时器，防止连点锚点跳两步 */
-  const advanceTimerRef = React.useRef<number | null>(null)
 
   const totalSteps = COACH_TOUR_STEPS.length
   const step = COACH_TOUR_STEPS[stepIndex]
   const isLast = stepIndex === totalSteps - 1
-  /** 交互步骤：镂空放行真实点击，等用户点击锚点后自动前进；锚点缺失时降级为手动下一步 */
-  const isClickToAdvance = step?.advanceOn === 'click-anchor'
-  const interactive = isClickToAdvance && rect !== null
 
-  // 打开时：回到第一步 + 记住当前视图（退出恢复）
+  // 打开时回到第一步
   React.useEffect(() => {
     if (!open) return
     setStepIndex(0)
-    restoreViewRef.current = store.get(activeViewAtom)
-  }, [open, store])
+  }, [open])
 
-  // 关闭（完成 / Esc / 点击 ×）即视为看过：恢复原视图 + 写入当前引导版本
+  // 关闭（完成 / Esc / 点击 ×）即视为看过：写入当前引导版本
   const close = React.useCallback(() => {
     setOpen(false)
-    if (restoreViewRef.current) {
-      store.set(activeViewAtom, restoreViewRef.current)
-      restoreViewRef.current = null
-    }
     window.electronAPI.updateSettings({ coachTourVersion: CURRENT_COACH_TOUR_VERSION }).catch((error) => {
       console.error('[CoachTour] 持久化引导版本失败:', error)
     })
-  }, [setOpen, store])
+  }, [setOpen])
 
-  // 最后一步「完成」/遮罩点击/→ 走这里：收尾反馈 + 关团
   const finish = React.useCallback(() => {
     close()
-    toast.success('引导完成，随时可从顶栏指南针按钮重播')
+    toast.success('引导完成，可从 设置 → 通用 → 重新播放界面引导')
   }, [close])
 
-  // 跨窗口单例：另一窗口正在播放时静默让位（并恢复视图/写版本，与正常退出同路径）；
-  // 持有期间被后来的窗口抢走锁时同样让位。依赖 open，close 置 false 时 cleanup 释放锁。
+  // 跨窗口单例：另一窗口正在播放时静默让位（写版本与正常退出同路径）。
   React.useEffect(() => {
     if (!open) return
     const claim = claimCoachTourOwnership(() => close())
@@ -164,69 +190,62 @@ export function CoachTourOverlay(): React.ReactElement | null {
     }
     setStepIndex((current) => current + 1)
   }, [finish, isLast])
-  const restart = React.useCallback(() => setStepIndex(0), [])
 
-  // 切步/退出时清掉未触发的交互前进定时器
-  React.useEffect(() => {
-    return () => {
-      if (advanceTimerRef.current !== null) {
-        window.clearTimeout(advanceTimerRef.current)
-        advanceTimerRef.current = null
-      }
-    }
-  }, [stepIndex, open])
+  const previous = React.useCallback(() => {
+    setStepIndex((current) => Math.max(0, current - 1))
+  }, [])
 
-  // 交互步骤：capture 阶段侦测落在锚点镂空区的真实点击，稍作停顿让视图切换动画启动，再进下一步
-  React.useEffect(() => {
-    if (!open || !interactive || !rect) return
-    const pad = 14 // 聚光灯 padding(8) + 点击容差
-    const zone = {
-      left: rect.left - pad,
-      top: rect.top - pad,
-      right: rect.left + rect.width + pad,
-      bottom: rect.top + rect.height + pad,
-    }
-    const handleClick = (event: MouseEvent): void => {
-      const inZone =
-        event.clientX >= zone.left && event.clientX <= zone.right &&
-        event.clientY >= zone.top && event.clientY <= zone.bottom
-      if (!inZone || advanceTimerRef.current !== null) return
-      advanceTimerRef.current = window.setTimeout(() => {
-        advanceTimerRef.current = null
-        next()
-      }, 350)
-    }
-    window.addEventListener('click', handleClick, true)
-    return () => window.removeEventListener('click', handleClick, true)
-  }, [open, interactive, rect, next])
-
-  // 步骤声明了 view 时先切主内容区，聚光灯跟随新视图里的锚点
-  React.useEffect(() => {
-    if (!open || !step?.view) return
-    if (store.get(activeViewAtom) !== step.view) {
-      store.set(activeViewAtom, step.view)
-    }
-  }, [open, step, store])
-
-  // 播放期间 rAF 持续跟踪锚点：视图切换、侧栏收合、布局动画都会实时跟手；
-  // rect 未变化时不 setState，不引入额外渲染。
+  /**
+   * 锚点测量：切步 / 窗口尺寸变化 / 锚点容器尺寸变化时重测。
+   *
+   * 布局静止时这里零开销 —— 旧版是每帧都跑。
+   */
   React.useEffect(() => {
     if (!open || !step) return
-    let raf = 0
+    let cancelled = false
     let lastKey = ''
-    const tick = (): void => {
+    let timer: number | null = null
+    let observer: ResizeObserver | null = null
+
+    const measure = (): void => {
+      if (cancelled) return
       const found = findStepRect(step)
-      const key = found
-        ? `${found.left.toFixed(1)}|${found.top.toFixed(1)}|${found.width.toFixed(1)}|${found.height.toFixed(1)}`
-        : 'none'
+      const key = rectKey(found)
       if (key !== lastKey) {
         lastKey = key
         setRect(found)
       }
-      raf = requestAnimationFrame(tick)
     }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+
+    const sampleFor = (durationMs: number): void => {
+      const deadline = performance.now() + durationMs
+      const tick = (): void => {
+        if (cancelled) return
+        measure()
+        timer = performance.now() < deadline ? window.setTimeout(tick, FOLLOW_SAMPLE_MS) : null
+      }
+      tick()
+    }
+
+    measure()
+    sampleFor(FOLLOW_TAIL_MS)
+
+    window.addEventListener('resize', measure)
+    if (typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(() => {
+        measure()
+        // 尺寸真的变了（侧栏收合、面板展开）时补一段采样覆盖过渡动画
+        if (timer === null) sampleFor(FOLLOW_TAIL_MS)
+      })
+      observer.observe(document.body)
+    }
+
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+      window.removeEventListener('resize', measure)
+      observer?.disconnect()
+    }
   }, [open, step])
 
   // 测量气泡真实尺寸，供定位收敛
@@ -246,23 +265,28 @@ export function CoachTourOverlay(): React.ReactElement | null {
     cardRef.current?.focus()
   }, [open, stepIndex])
 
-  // 键盘：Esc 退出，→ 前进，Tab 困在气泡内（Enter/Space 留给聚焦按钮自身）
+  // 键盘：Esc 退出，→/Enter 前进，← 后退，Tab 困在气泡内
   React.useEffect(() => {
     if (!open) return
     const handleKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement | null
+      const onControl = Boolean(target?.closest('button, a, input, textarea, select'))
       if (event.key === 'Escape') {
         event.preventDefault()
         close()
-      } else if (event.key === 'ArrowRight') {
+      } else if (event.key === 'ArrowLeft') {
         event.preventDefault()
-        next()
+        previous()
       } else if (event.key === 'Tab') {
         trapTabKey(event, cardRef.current)
+      } else if (event.key === 'ArrowRight' || (event.key === 'Enter' && !onControl)) {
+        event.preventDefault()
+        next()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [open, close, next])
+  }, [open, close, next, previous])
 
   if (!open || !step) return null
 
@@ -272,54 +296,34 @@ export function CoachTourOverlay(): React.ReactElement | null {
     width: window.innerWidth,
     height: window.innerHeight,
   })
-  const transition = reduceMotion ? 'none' : MOVE_TRANSITION
+  const transition = reduceMotion
+    ? 'none'
+    : 'left 0.28s cubic-bezier(0.22,1,0.36,1), top 0.28s cubic-bezier(0.22,1,0.36,1)'
   const frame = rect ? clampFrameToViewport(rect) : null
 
   return createPortal(
     <div className="titlebar-no-drag pointer-events-none fixed inset-0 z-[9800]">
-      {/* 点击捕获：手动步骤为整屏点击前进；交互步骤拆成锚点四周的四块惰性挡板，镂空区放行真实点击 */}
-      {!interactive && (
-        <div
-          className={cn('pointer-events-auto absolute inset-0', !rect && 'bg-black/55')}
-          onClick={next}
-          aria-hidden="true"
-        />
-      )}
-      {interactive && rect && (
-        <CaptureAround rect={rect} />
-      )}
+      {/* 点击遮罩任意处前进：比旧版「必须点中高亮区」宽容，也不会卡住流程 */}
+      <div className="pointer-events-auto absolute inset-0" onClick={next} aria-hidden="true" />
 
       {/* 聚光灯：box-shadow 巨影形成遮罩镂空；pointer-events-none 让点击穿透到捕获层。
           几何钳制进视口，否则顶满窗口的锚点会让白圈缺边 */}
-      {frame && (
+      {frame ? (
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute rounded-xl"
+          className="pointer-events-none absolute rounded-lg"
           style={{
             left: frame.left,
             top: frame.top,
             width: frame.width,
             height: frame.height,
-            boxShadow:
-              '0 0 0 2px rgba(255,255,255,0.85), 0 0 24px rgba(255,255,255,0.22), 0 0 0 9999px rgba(0,0,0,0.55)',
+            // 环用 foreground 而不是白色：浅色主题下白环贴在被点亮区域上完全不可见。
+            boxShadow: '0 0 0 2px hsl(var(--primary)), 0 0 0 9999px rgba(0,0,0,0.52)',
             transition,
           }}
         />
-      )}
-
-      {/* 交互步骤的呼吸脉冲环：提示「点这里」；reduced-motion 下由 CSS 关闭动画 */}
-      {frame && interactive && (
-        <div
-          aria-hidden="true"
-          className="coach-tour-pulse-ring pointer-events-none absolute rounded-xl"
-          style={{
-            left: frame.left,
-            top: frame.top,
-            width: frame.width,
-            height: frame.height,
-            transition,
-          }}
-        />
+      ) : (
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-black/52" />
       )}
 
       {/* 引导气泡：普通步骤是标题 + 正文 + 页脚；最后一步换成完成卡片 */}
@@ -331,171 +335,101 @@ export function CoachTourOverlay(): React.ReactElement | null {
         tabIndex={-1}
         style={{ left: cardLayout.left, top: cardLayout.top, transition }}
         className={cn(
-          'titlebar-no-drag pointer-events-auto absolute rounded-2xl border border-border/80 bg-popover/95 text-popover-foreground shadow-[0_28px_80px_-24px_rgba(0,0,0,0.55)] outline-none backdrop-blur-xl',
-          isFinale ? 'w-[380px] p-5' : 'w-[344px] p-4',
-          !reduceMotion && 'animate-in fade-in-0 zoom-in-95 duration-200',
+          'titlebar-no-drag pointer-events-auto absolute w-[336px] rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-xl outline-none',
+          isFinale && 'w-[360px]',
+          !reduceMotion && 'animate-in fade-in-0 duration-150',
         )}
         onClick={(event) => event.stopPropagation()}
       >
         {isFinale ? (
-          <FinaleCard step={step} onFinish={finish} onRestart={restart} />
+          <FinaleCard step={step} onFinish={finish} />
         ) : (
           <>
-            {/* 内容区按步 key 重挂，切步时交叉淡入，避免文案瞬跳 */}
-            <div
-              key={step.key}
-              className={cn(!reduceMotion && 'animate-in fade-in-0 slide-in-from-bottom-1 duration-200')}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[9.5px] tracking-[0.1em] text-primary">
-                    {String(stepIndex + 1).padStart(2, '0')} / {String(totalSteps).padStart(2, '0')}
-                  </span>
-                  <h3 className="truncate text-[13.5px] font-semibold">{step.title}</h3>
-                </div>
-                <button
-                  type="button"
-                  aria-label="退出引导"
-                  onClick={close}
-                  className="-mr-1 grid size-7 shrink-0 place-items-center rounded-lg text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                >
-                  <X size={14} />
-                </button>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <span className="font-mono text-[10px] tracking-[0.14em] text-muted-foreground">
+                  {String(stepIndex + 1).padStart(2, '0')} / {String(totalSteps).padStart(2, '0')}
+                </span>
+                <h3 className="mt-1 text-[13px] font-semibold leading-tight">{step.title}</h3>
               </div>
-
-              <p className="mt-2.5 text-[12.5px] leading-[1.7] text-muted-foreground">{step.body}</p>
-
-              {interactive && (
-                <p className="mt-2.5 flex items-center gap-1.5 text-[11px] font-medium text-primary">
-                  <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-                  点击高亮区域继续
-                </p>
-              )}
+              <button
+                type="button"
+                aria-label="退出引导"
+                onClick={close}
+                className="-mr-1 -mt-0.5 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X size={13} />
+              </button>
             </div>
 
-            <div className="mt-4 flex items-center justify-between border-t border-border/60 pt-3">
-              {/* 步骤指示点 */}
-              <div className="flex items-center gap-1.5" aria-hidden="true">
-                {COACH_TOUR_STEPS.map((s, index) => (
+            <p className="mt-2 text-[12px] leading-[1.65] text-muted-foreground">{step.body}</p>
+
+            <div className="mt-3.5 flex items-center justify-between border-t border-border pt-2.5">
+              <div className="flex items-center gap-1" aria-hidden="true">
+                {COACH_TOUR_STEPS.map((item, index) => (
                   <span
-                    key={s.key}
+                    key={item.key}
                     className={cn(
-                      'h-1.5 rounded-full transition-all duration-200',
-                      index === stepIndex ? 'w-4 bg-primary' : 'w-1.5 bg-muted-foreground/25',
+                      'h-1 rounded-full transition-all duration-200',
+                      index === stepIndex ? 'w-3.5 bg-foreground' : 'w-1 bg-muted-foreground/30',
                     )}
                   />
                 ))}
               </div>
-
               <div className="flex items-center gap-1">
-                {/* 交互步骤等用户亲自点击锚点；锚点缺失（降级）时恢复手动下一步 */}
-                {!interactive && (
-                  <Button type="button" size="sm" className="h-7 px-3 text-xs" onClick={next}>
-                    {isLast ? '完成' : '下一步'}
+                {stepIndex > 0 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-[11px] text-muted-foreground"
+                    onClick={previous}
+                  >
+                    <ChevronLeft className="mr-0.5 size-3" />
+                    上一步
                   </Button>
                 )}
+                <Button type="button" size="sm" className="h-7 px-2.5 text-[11px]" onClick={next}>
+                  {isLast ? '完成' : '下一步'}
+                </Button>
               </div>
             </div>
           </>
         )}
       </div>
-
     </div>,
     document.body,
   )
 }
 
-/** 收尾卡片：比普通气泡更宽、居中，给出三条下一步建议和两个出口 */
+/** 收尾卡片：确认引导结束，并告诉用户下次从哪再找到它 */
 function FinaleCard({
   step,
   onFinish,
-  onRestart,
 }: {
   step: CoachTourStep
   onFinish: () => void
-  onRestart: () => void
 }): React.ReactElement {
   return (
-    <div className="relative">
-      <div
-        className="pointer-events-none absolute -inset-x-6 -top-24 h-40 bg-[radial-gradient(ellipse_at_center,hsl(var(--primary)/0.16),transparent_70%)]"
-        aria-hidden="true"
-      />
-
-      <div className="relative text-center">
-        <span className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-[0_16px_40px_-14px_hsl(var(--primary)/0.55)]">
-          <Check className="size-5" aria-hidden="true" />
+    <div>
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
+          <Check className="size-4" aria-hidden="true" />
         </span>
-        <h3 className="mt-4 text-[18px] font-semibold tracking-[-0.01em]">{step.title}</h3>
-        <p className="mx-auto mt-1.5 max-w-[300px] text-[12.5px] leading-relaxed text-muted-foreground">{step.body}</p>
+        <div className="min-w-0">
+          <h3 className="text-[13px] font-semibold leading-tight">{step.title}</h3>
+          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">{step.body}</p>
+        </div>
       </div>
 
-      <ul className="relative mt-5 space-y-1.5">
-        {FINALE_ACTIONS.map((action) => (
-          <li
-            key={action.key}
-            className="flex items-start gap-3 rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5"
-          >
-            <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-lg bg-background text-muted-foreground">
-              <action.icon className="size-3.5" aria-hidden="true" />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-[12px] font-medium text-foreground/90">{action.title}</span>
-              <span className="block text-[10.5px] leading-relaxed text-muted-foreground">{action.hint}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-
-      <div className="relative mt-5 flex items-center gap-2">
-        <Button type="button" size="sm" className="h-9 flex-1 text-xs" onClick={onFinish}>
+      <div className="mt-3.5 border-t border-border pt-3">
+        <Button type="button" size="sm" className="h-8 w-full text-[12px]" onClick={onFinish}>
           开始使用
         </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-9 px-3 text-xs text-muted-foreground"
-          onClick={onRestart}
-        >
-          再看一遍
-        </Button>
+        <p className="mt-2 text-center text-[10px] text-muted-foreground">
+          随时可在 设置 → 通用 → 重新播放界面引导
+        </p>
       </div>
-      <p className="relative mt-3 text-center text-[10px] text-muted-foreground/60">随时可从顶栏指南针重播</p>
     </div>
-  )
-}
-
-/**
- * 交互步骤的镂空挡板：锚点四周四块惰性区域拦截误点，
- * 镂空区不放任何元素，真实 UI 的点击/悬停（含按钮 hover 态）原样生效。
- */
-function CaptureAround({ rect }: { rect: AnchorRect }): React.ReactElement {
-  const pad = 8
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const left = Math.max(0, rect.left - pad)
-  const top = Math.max(0, rect.top - pad)
-  const right = Math.min(vw, rect.left + rect.width + pad)
-  const bottom = Math.min(vh, rect.top + rect.height + pad)
-  const panels: Array<{ key: string; left: number; top: number; width: number; height: number }> = [
-    { key: 'top', left: 0, top: 0, width: vw, height: top },
-    { key: 'bottom', left: 0, top: bottom, width: vw, height: Math.max(0, vh - bottom) },
-    { key: 'left', left: 0, top, width: left, height: Math.max(0, bottom - top) },
-    { key: 'right', left: right, top, width: Math.max(0, vw - right), height: Math.max(0, bottom - top) },
-  ]
-  return (
-    <>
-      {panels
-        .filter((panel) => panel.width > 0 && panel.height > 0)
-        .map((panel) => (
-          <div
-            key={panel.key}
-            aria-hidden="true"
-            className="pointer-events-auto absolute"
-            style={{ left: panel.left, top: panel.top, width: panel.width, height: panel.height }}
-          />
-        ))}
-    </>
   )
 }

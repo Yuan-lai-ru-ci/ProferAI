@@ -211,6 +211,13 @@ export interface ConversationMeta {
   /** 是否已归档 */
   archived?: boolean
   /**
+   * 首次引导生成的欢迎对话标记。
+   *
+   * 这类对话的 assistant 首条消息是产品写好的引导文案，不来自模型；
+   * 它也不属于用户的工作内容，因此不提供「切换到 Agent 模式」的迁移入口。
+   */
+  isWelcome?: boolean
+  /**
    * 最近一次「自动命名窗口」写入标题的时间。
    *
    * 存在即说明当前标题由自动流程产生，允许在定稿前继续精修；

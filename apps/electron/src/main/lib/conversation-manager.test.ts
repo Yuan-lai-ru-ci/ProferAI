@@ -38,6 +38,8 @@ import {
   getBranchTree,
   getConversationBranch,
   setActivePath,
+  listConversations,
+  updateConversationMeta,
 } from './conversation-manager'
 import type { ChatMessage } from '@profer/shared'
 
@@ -239,5 +241,24 @@ describe('PR #121 review：deleteMessageFromTree 子树删除 + activePath 修�
     expect(tree.nodes[a2.id]).toBeUndefined()
     // activePath 完全不变
     expect(tree.activePath).toEqual([r.id, u1.id, a1.id])
+  })
+})
+
+describe('欢迎对话标记（isWelcome）', () => {
+  test('Given 普通对话 When 创建 Then 不带 isWelcome，迁移入口照常可用', () => {
+    const convId = createConversation('普通问答').id
+    const meta = listConversations(true).find((item) => item.id === convId)
+    expect(meta).toBeDefined()
+    expect(meta?.isWelcome).toBeUndefined()
+  })
+
+  test('Given 欢迎对话 When 标记 isWelcome Then 后续改标题不会丢标记', () => {
+    const convId = createConversation('了解 Profer').id
+    updateConversationMeta(convId, { isWelcome: true })
+    updateConversationMeta(convId, { title: '了解 Profer 2' })
+
+    const meta = listConversations(true).find((item) => item.id === convId)
+    expect(meta?.title).toBe('了解 Profer 2')
+    expect(meta?.isWelcome).toBe(true)
   })
 })

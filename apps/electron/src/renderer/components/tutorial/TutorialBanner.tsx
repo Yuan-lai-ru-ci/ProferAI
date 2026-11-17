@@ -1,7 +1,7 @@
 /**
  * TutorialBanner - 教程推荐卡片
  *
- * 首次进入主界面后从右下角浮出，给三条真正能点的上手路径：
+ * 从右下角浮出，给三条真正能点的上手路径：
  *  - 打开教程（设置 → 帮助 → Profer 教程 的同一入口）
  *  - 重播界面导览（Coach Tour）
  *  - 直接看常见任务示例
@@ -17,7 +17,17 @@ import { Button } from '@profer/ui/primitives/button'
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from '@/atoms/tab-atoms'
 import { coachTourOpenAtom } from '@/atoms/coach-tour-atoms'
 
-export function TutorialBanner(): React.ReactElement | null {
+export interface TutorialBannerProps {
+  /**
+   * 本次启动刚走完首次引导。
+   *
+   * 这种情况下界面上已经有界面蒙层引导在播，再叠一张教程卡会互相遮挡，
+   * 用户也不知道该看哪一个；直接标记为已读，之后仍可从设置与顶栏打开教程。
+   */
+  skip?: boolean
+}
+
+export function TutorialBanner({ skip = false }: TutorialBannerProps = {}): React.ReactElement | null {
   const [visible, setVisible] = React.useState(false)
   const [dismissed, setDismissed] = React.useState(true)
   const [tabs, setTabs] = useAtom(tabsAtom)
@@ -25,16 +35,26 @@ export function TutorialBanner(): React.ReactElement | null {
   const setCoachTourOpen = useSetAtom(coachTourOpenAtom)
 
   React.useEffect(() => {
-    window.electronAPI
+    let cancelled = false
+    void window.electronAPI
       .getSettings()
       .then((settings) => {
-        if (!settings.tutorialBannerDismissed) {
-          setDismissed(false)
-          setTimeout(() => setVisible(true), 1500)
+        if (cancelled) return
+        if (skip) {
+          void window.electronAPI.updateSettings({ tutorialBannerDismissed: true }).catch(console.error)
+          return
         }
+        if (settings.tutorialBannerDismissed) return
+        setDismissed(false)
+        setTimeout(() => {
+          if (!cancelled) setVisible(true)
+        }, 1500)
       })
       .catch(console.error)
-  }, [])
+    return () => {
+      cancelled = true
+    }
+  }, [skip])
 
   const handleDismiss = async () => {
     setVisible(false)
