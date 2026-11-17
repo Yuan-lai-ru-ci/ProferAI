@@ -38,6 +38,7 @@ import { getSettings } from './settings-service'
 import { buildDynamicContext } from './agent-prompt-context'
 import { buildReferencedSessionsPrompt, formatContextHistoryBlock } from './agent-prompt-utils'
 import { getAgentSessionSDKMessages } from './agent-session-manager'
+import { appendAgentBehaviorUserSteer, resolveAgentBehaviorRole } from './agent-behavior-recipe'
 
 export interface RuntimeTurnPrompt {
   /** 交给 provider 的最终形态：Claude 是 `claude_code` preset + append，Pi 是纯文本。 */
@@ -125,6 +126,11 @@ export function buildRuntimeTurnPrompt(
     ...(options.shellPath ? { shellPath: options.shellPath } : {}),
     ...(input.cwd ? { agentCwd: input.cwd } : {}),
     projectCandidates: detectAttachedDirectoryProjects([...additionalDirectories]),
+    behaviorRole: resolveAgentBehaviorRole({
+      sourceDelegationId: meta?.sourceDelegationId,
+      parentSessionId: meta?.parentSessionId,
+      delegationRelation: meta?.delegationRelation,
+    }),
   }
   const assembly = assembleAgentSystemPrompt({
     mode: promptModeFromQuery(input),
@@ -194,6 +200,12 @@ export function buildRuntimeTurnUserPrompt(
 
   // 运行来源（谁发起的这一轮）—— 与旧链同一函数，`/compact` 内部会自行跳过。
   let enriched = input.context ? appendRunOriginPrompt(input.prompt, input.context) : input.prompt
+  const behaviorRole = resolveAgentBehaviorRole({
+    sourceDelegationId: meta?.sourceDelegationId,
+    parentSessionId: meta?.parentSessionId,
+    delegationRelation: meta?.delegationRelation,
+  })
+  enriched = appendAgentBehaviorUserSteer(enriched, behaviorRole, promptModeFromQuery(input), input.prompt)
 
   const referencedSessions = buildReferencedSessionsPrompt(
     input.sessionId,

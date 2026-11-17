@@ -9,7 +9,7 @@
  * - 动态 per-message 上下文（buildDynamicContext）：注入到用户消息前，每次实时读取磁盘
  */
 
-import { COLLABORATION_PLACEMENT_GUIDELINES, DELEGATION_GUIDELINES, buildTaskGraphGuideline, buildPlanningTodoGuideline, buildPresetToolList, buildToolUsageGuidelines, buildWebSearchGuideline, buildBrowserGuideline } from './agent-prompt-tools'
+import { COLLABORATION_PLACEMENT_GUIDELINES, DELEGATION_GUIDELINES, buildCollaborationContinuationGuideline, buildTaskGraphGuideline, buildPlanningTodoGuideline, buildPresetToolList, buildToolUsageGuidelines, buildWebSearchGuideline, buildBrowserGuideline } from './agent-prompt-tools'
 import { buildCoreAgentPrompt } from './agent-prompt-core'
 import { AGENT_IMAGE_OUTPUT_TEXT_RULE } from './agent-image-output-contract'
 import { AGENT_PRESET_CAPABILITY_GROUPS, isAgentPresetToolGroupDisabled } from '@profer/shared'
@@ -23,6 +23,7 @@ import { DEEPSEEK_SUBAGENT_MODEL_ID } from './agent-model-routing'
 import { buildAgentPlatformPrompt } from './agent-platform-prompt'
 import type { AgentPlatformProjectCandidate } from './agent-platform-prompt'
 import type { AgentPresetMutationOperation } from './agent-preset-operations'
+import { buildAgentBehaviorRolePrompt, type AgentBehaviorRole } from './agent-behavior-recipe'
 
 /** buildSystemPrompt 所需的上下文 */
 export interface SystemPromptContext {
@@ -40,7 +41,7 @@ export interface SystemPromptContext {
   claudeAvailable?: boolean
   /** DeepSeek 系列主模型下，运行时固定注入给 SubAgent 的模型 */
   deepSeekSubagentModel?: string
-  /** 本轮实际可用的派工工具短名；宿主已知时传入，避免描述未注册入口。 */
+  /** 本轮实际可用的协作工具短名；宿主已知时传入，避免描述未注册入口。 */
   collaborationToolNames?: readonly string[]
   /** 当前 runtime 是否为 Pi（影响记忆/文件提示词） */
   isPiRuntime?: boolean
@@ -55,6 +56,8 @@ export interface SystemPromptContext {
   shellPath?: string
   agentCwd?: string
   projectCandidates?: AgentPlatformProjectCandidate[]
+  /** GPT with Taste 宿主角色；缺省为主 Agent。 */
+  behaviorRole?: AgentBehaviorRole
 }
 
 interface WorkspacePromptPaths {
@@ -124,7 +127,7 @@ function buildManagedWorkspaceSection(workspaceName: string, p: WorkspacePromptP
 
 - 会话级 cwd/\`.context/\`：当前任务工作台（\`todo.md\`、\`plan/\`、主题文件）。
 - 工作区级 \`${p.workspaceContextDir}\`：跨会话调研、证据、决策和长期事项。
-- 按用户指定位置优先；恢复时先列出两个目录；只读取**实际存在且与当前任务相关**的文件。不得默认创建或读取 \`note.md\`、\`todo.md\`；为空或无关直接跳过。`
+- 按用户指定位置优先；仅按任务需要读取相关 Context。启动和普通对话不巡检；不默认创建或读取 \`note.md\`、\`todo.md\`。`
 }
 
 /**
@@ -149,7 +152,7 @@ function buildProjectWorkspaceSection(workspaceName: string, p: WorkspacePromptP
 
 - 会话级 \`.context/\`：当前任务工作台（\`todo.md\`、\`plan/\`、主题文件）；project 模式下由 Profer 放在项目之外的会话运行目录，不要写进项目根或 \`.profer/\`。
 - 跨会话资料 \`${p.workspaceContextDir}\`：调研、证据、决策和长期事项，随项目提交。
-- 按用户指定位置优先；恢复时先列出两个目录；只读取**实际存在且与当前任务相关**的文件。不得默认创建或读取 \`note.md\`、\`todo.md\`；为空或无关直接跳过。`
+- 按用户指定位置优先；仅按任务需要读取相关 Context。启动和普通对话不巡检；不默认创建或读取 \`note.md\`、\`todo.md\`。`
 }
 
 /**
@@ -204,17 +207,22 @@ ${suppress.has('task-graph') || capabilityDisabled('task-graph') ? '' : `${build
 
   // SubAgent 委派策略（Pi 无 SDK 内置 SubAgent，委派走 Profer 协作子会话；极简类预设可隐藏）
   const claudeAvailable = ctx.claudeAvailable !== false
-  const availableDelegationTools = ['delegate_agent', 'delegate_agents'].filter((name) => !capabilityDisabled('collaboration')
+  const availableCollaborationTools = new Set([
+    'delegate_agent', 'delegate_agents', 'list_delegations', 'get_delegation_results',
+    'continue_delegation', 'wait_for_delegations',
+  ].filter((name) => !capabilityDisabled('collaboration')
     && !toolDisabled(name)
-    && (ctx.collaborationToolNames === undefined || ctx.collaborationToolNames.includes(name)))
-  const collaborationPlacementGuidance = availableDelegationTools.length > 0
-    ? `\n\n${COLLABORATION_PLACEMENT_GUIDELINES}`
-    : ''
+    && (ctx.collaborationToolNames === undefined || ctx.collaborationToolNames.includes(name))))
+  const availableDelegationTools = ['delegate_agent', 'delegate_agents'].filter((name) => availableCollaborationTools.has(name))
+  const collaborationPlacementGuidance = [
+    availableDelegationTools.length > 0 ? COLLABORATION_PLACEMENT_GUIDELINES : '',
+    buildCollaborationContinuationGuideline(availableCollaborationTools, ctx.isPiRuntime),
+  ].filter(Boolean).map((guideline) => `\n\n${guideline}`).join('')
   const piDelegationToolGuidance = availableDelegationTools.length > 0
     ? `Pi 会话没有 SDK 内置 SubAgent 工具，委派通过 ${availableDelegationTools.map((name) => `\`mcp__collaboration__${name}\``).join(' / ')} 创建隔离的真实会话。需要结果时使用本轮实际提供的等待或结果查询工具。
 
 委派工具支持为每个子 Agent 指定目标预设：传入 \`presetReference\`（包含 \`presetId\`、\`presetScope\`，工作区预设还需 \`workspaceSlug\`，可选 \`presetVersion\`）。\`workspaceSlug\` 只对 \`presetScope=workspace\` 有效，内置/全局预设不要带。不传时子 Agent 继承当前父会话的稳定预设引用；目标预设必须是当前父会话工作区内可用且未禁用的预设。需要选择预设时直接照抄预设列表返回的 \`presetReference\`，不要自行补字段、猜测或只传裸 ID。`
-    : '当前会话未提供派工工具；直接完成任务。'
+    : '当前会话未提供新建派工工具；可按本轮已有协作入口跟进原任务，其余直接完成。'
   if (!suppress.has('subagents')) {
   if (ctx.isPiRuntime) {
     sections.push(`## SubAgent 委派策略
@@ -250,13 +258,7 @@ Profer 没有预定义内置 SubAgent。临时 SubAgent 继承当前主模型，
     sections.push(`## Pi Agent Runtime
 
 当前会话由 Profer Pi adapter 桥接；使用实际暴露的工具，不假设 Claude CLI 配置。附加目录可按授权绝对路径直接访问。
-- \`write\` 必须同时传 \`path\` 和完整字符串 \`content\`（空文件显式传 \`content: ""\`）。
-
-### Pi Runtime 自主执行准则
-
-- 修改前读实现、约定与工作树；只改任务范围，保留用户已有改动。
-- **修改后必须闭环**：按风险执行最小相关验证（重读 / 检查测试 / 实际渲染），通过后停止重复验证；系统不会自动追加验证轮次。
-- 报错合理定位重试；交付区分已完成、已验证、仍受阻。`)
+- \`write\` 必须同时传 \`path\` 和完整字符串 \`content\`（空文件显式传 \`content: ""\`）。`)
 
     // Pi Runtime 文件记忆小节（极简类预设可隐藏）
     if (!suppress.has('memory')) {
@@ -276,78 +278,14 @@ Pi 没有 Claude Agent SDK 的自动记忆后台机制，但 Profer 已为 Pi �
   } else {
     sections.push(`## Claude Agent Runtime
 
-当前会话运行在 Claude Agent SDK 运行时上，由 Profer 编排层桥接：
-
-- 你拥有 Claude 原生的 Read、Write、Edit、Bash、Grep、Glob、Skill 与 Profer 产品工具，可直接使用
-- 遵循本提示词中的工作区、权限、计划模式、Context 和知识维护规则
-- 修改本地文件后必须在当前任务中自行完成最小验证（重新读取改动片段，或运行与改动相称的最小检查/测试）；系统不会自动追加验证轮次。`)
-  }
-
-  if (ctx.platform) {
-    sections.push(buildAgentPlatformPrompt({
-      platform: ctx.platform,
-      shellPath: ctx.shellPath,
-      agentCwd: ctx.agentCwd,
-      projectCandidates: ctx.projectCandidates,
-      isPiRuntime: ctx.isPiRuntime,
-      workspaceMode: workspacePaths?.mode,
-    }))
-  }
-
-  // 用户信息（与 CLI 的 `profer profile context` 共用同一段文本）
-  sections.push(buildUserIdentitySection(userName))
-
-  // 工作区信息
-  if (ctx.workspaceName && workspacePaths) {
-    sections.push(workspacePaths.mode === 'project'
-      ? buildProjectWorkspaceSection(ctx.workspaceName, workspacePaths)
-      : buildManagedWorkspaceSection(ctx.workspaceName, workspacePaths))
+当前会话运行在 Claude Agent SDK，由 Profer 编排层桥接；使用本轮实际暴露的 Claude 原生工具和 Profer 产品工具。`)
   }
 
   // 不确定性处理策略
   sections.push(`## 不确定性处理
 
-- 非关键细节合理默认；仅用户能回答且影响关键取舍或授权时提问。明确产出请求不强制问卷。
-- AskUserQuestion：一题一维度，相关问题合并一次问；有候选必须放 options（label 简短、细节放 description），纯开放问题才留空；给推荐和依据。
-- 指出影响结果的错误前提，说明依据与影响；不确定时明确说明，不编造。`)
+- AskUserQuestion：一题一维度，相关问题合并一次问；有候选必须放 options（label 简短、细节放 description），纯开放问题才留空。`)
 
-
-  // 计划文件落点：managed 下 cwd 就是会话目录，相对路径 `.context/plan/` 正确；
-  // project 下 cwd 是项目根，相对路径会把计划写进用户仓库（违反 I3），必须给出
-  // storageDir 内的绝对路径。真相比源是 agent-session-manager 的
-  // `resolveAgentSessionWriteLayout().plansDir`（单测锁两者相等）；这里不直接 import 它，
-  // 避免提示词构建把会话管理器的模块级副作用（SDK 配置目录 / 环境变量）带进来。
-  const projectPlanDir = workspacePaths?.mode === 'project' && ctx.workspaceSlug
-    ? join(resolveAgentSessionWorkspacePath(ctx.workspaceSlug, ctx.sessionId), '.context', 'plan')
-    : undefined
-
-  // 计划模式指令（始终注入计划文件路径规则）。WebSearch 是 Claude 原生工具，
-  // 因此必须和 web 能力组同步，不能在禁用后仍出现在 Prompt 中。
-  if (ctx.permissionMode === 'plan') {
-    const planResearchTools = ['WebSearch', 'WebFetch'].filter((toolName) => !capabilityDisabled('web') && !toolDisabled(toolName))
-    const planResearchToolsText = ['Read', 'Glob', 'Grep', ...planResearchTools].join('、')
-    const planWriteRule = projectPlanDir
-      ? `1. 将计划文件写入 \`${projectPlanDir}/\`（如 \`${projectPlanDir}/my-plan.md\`）；该目录在项目之外，**不要写进项目根的 \`.context/plan/\`**`
-      : '1. 将计划文件写入当前工作目录的 `.context/plan/` 子目录（如 `.context/plan/my-plan.md`）'
-    sections.push(`## 计划模式
-
-你当前处于计划模式，只能进行调研和规划；仅可写入下面指定的计划文件，不能修改其他文件或执行实施操作。规则：
-${planWriteRule}
-2. 完成计划后，**不要立即调用 ExitPlanMode**
-3. 先向用户展示计划摘要，以及完整的计划文档的路径地址，然后等待用户确认后再退出计划模式
-4. 用户确认执行后，再调用 ExitPlanMode 退出计划模式
-5. 在计划模式下，你可以使用 ${planResearchToolsText} 等只读工具进行调研，也可以使用 Bash 执行只读命令（如 find、grep、cat、ls、head、tail 等）；但不能使用 Edit 或 Bash 写操作命令（如 rm、mv、sed -i、> 重定向等）`)
-  } else {
-    // 非计划模式不打印中央运行目录的绝对路径：工作区段的「单一路径语义」不允许把模型引回
-    // managed 形状的目录（`~/.profer/agent-workspaces/<slug>`）。只有真正处于计划模式时才需要它，
-    // 那时上面的分支会给出绝对计划目录。
-    const planPathRule = projectPlanDir
-      ? '当进入计划模式（EnterPlanMode）时，计划文件必须写入**会话运行目录**的 `.context/plan/`。进入计划模式后会在提示词中给出该目录的绝对路径；**不要写进项目根的 `.context/plan/`**。'
-      : '当进入计划模式（EnterPlanMode）时，计划文件必须写入当前工作目录的 `.context/plan/` 子目录（如 `.context/plan/my-plan.md`）。'
-    sections.push(`## 计划模式文件路径
-
-${planPathRule}`)
-  }
 
   // Profer 知识维护架构：常驻只保留归属、写入门槛和恢复路径；详细 SOP 按需由 Skill/工具提供。
   if (!suppress.has('memory')) {
@@ -364,25 +302,19 @@ ${planPathRule}`)
   if (!suppress.has('memory') && !capabilityDisabled('memory') && !toolDisabled('append_global_memory')) {
     sections.push(`## 全局用户记忆：主动积累
 
-- **每轮检查**：普通问答和执行任务收尾都检查本轮是否出现值得跨工作区复用的用户背景、长期目标或稳定偏好；不必等用户说“记住”，也不依赖 User Sense Skill 被触发。没有候选就跳过，不为凑数量记忆。
-- **事实与推断分流**：用户明确透露的背景用 \`append_global_memory\` 的 profile，稳定偏好用 preferences；至少两个不同会话重复出现且无反例的高置信度归纳用 inference，并提供真实 sessionId、日期、具体依据及 confidence=high。无法核实跨会话证据、单次选择、模型猜测不保存；推断不能写成用户确认事实。
-- **先读后写**：先搜索或读取对应全局主题，已有内容不重复；与旧内容冲突时先核对，不追加相互矛盾的结论。当前工具只追加，不覆写旧事实。全局主题已由索引覆盖，无须改索引。项目过程、代码修复和工作区专属经验仍归工作区记忆，不写进用户画像。
-- **边界与透明性**：凭据、健康/财务/政治等敏感信息、第三方个人信息及临时状态不自动保存。用户说不要记住/删除后不得重新推断补回。仅在工具实际可用且非计划模式时写入；成功后用一句话说明记住了什么，用户可在“我的画像”查看和编辑。不要宣称未成功的写入，也不要重复请求用户确认已明确透露的普通稳定信息。
-- **不扩大采集**：被动记忆只依据对话中已披露的信息；不为画像读取无关文件或扫描本机。环境扫描仍须按 User Sense 流程先获同意。`)
+- **每轮检查**：收尾检查对话中是否有值得跨工作区复用的背景、长期目标或稳定偏好，不等用户说“记住”或 Skill 触发；没有则跳过。
+- **事实与推断**：明确背景用 \`append_global_memory\` 的 profile，稳定偏好用 preferences；推断用 inference，须有至少两个不同会话的无反例证据，提供真实 sessionId、日期、依据及 confidence=high。单次选择、猜测或无法核实的跨会话证据不保存，不把推断当确认事实。
+- **先读后写**：先查对应主题，去重；冲突先核对，不追加矛盾结论。工具只追加，不覆写；全局索引无需改。项目过程、修复与工作区经验留工作区记忆。
+- **边界与透明性**：不自动保存凭据、健康/财务/政治等敏感信息、第三方个人信息或临时状态。用户要求不记/删除后不推断补回。仅在工具可用且非计划模式时写入；成功后一句话说明内容可在“我的画像”编辑，不虚报成功，不重复确认已明示的普通稳定信息。
+- **不扩大采集**：只用对话已披露信息，不读无关文件或扫描本机；环境扫描须先按 User Sense 流程获同意。`)
   }
 
-  // 任务完成标准
-  sections.push(`## 任务完成标准
-
-- 持续到交付，停止或受阻说明已完成与缺失部分。先给结果、文件可定位路径或可用文本，再给必要假设、验证与局限；保存不等于正确，未测不能称通过。
-- 收齐影响结论的委派结果，核对证据再整合，不把过程日志当交付。长度按任务复杂度和用户要求调整。`)
+  // 通用执行、交付与表达由 core 唯一持有；此处仅保留产品恢复流程。
 
   // 交互规范（定时任务条目按预设可隐藏：automation 工具组禁用时同步隐藏，三层一致）
   sections.push(`## 交互规范
 
-1. 默认中文，遵从用户语言要求；平等、自然、具体，不揣测动机，不作无关评判或通用免责。
-2. 长任务先简述，重要发现、方向变化或受阻时简短更新，不逐工具播报；解释深度适配用户。
-3. **会话恢复**：按需发现两级 Context，再读工作区资料（缺失才读旧版）、Memory 索引和相关 Skill；路径见工作区段。不要读取当前 cwd 下不存在的相对路径 \`CLAUDE.md\`，不全量盲读。
+3. **会话恢复**：只在任务需要时按需读取 Context；启动和普通对话不巡检。修改项目前仍读适用指令并检查工作树；不要读取 cwd 下不存在的相对路径 \`CLAUDE.md\`。
 6. **自检习惯**：复杂任务定期回顾已读工作区资料与当前计划。`)
 
   if (!suppress.has('automation') && !capabilityDisabled('automation')) {
@@ -437,6 +369,67 @@ ${planPathRule}`)
     sections.push(`## 当前预设已关闭的能力
 
 以下能力已由当前预设硬性关闭。用户请求这些能力时，直接说明已关闭并请用户在预设设置中启用；不得切换预设、调用旁路工具或自行解锁：${disabledCapabilities.join('、')}`)
+  }
+
+  // 同策略下先保留公共规则前缀，再追加角色、cwd 和会话私有路径；不删减权限信息。
+  sections.push(buildAgentBehaviorRolePrompt(ctx.behaviorRole ?? 'main'))
+
+  if (ctx.platform) {
+    sections.push(buildAgentPlatformPrompt({
+      platform: ctx.platform,
+      shellPath: ctx.shellPath,
+      agentCwd: ctx.agentCwd,
+      projectCandidates: ctx.projectCandidates,
+      isPiRuntime: ctx.isPiRuntime,
+      workspaceMode: workspacePaths?.mode,
+    }))
+  }
+
+  // 用户信息（与 CLI 的 `profer profile context` 共用同一段文本）
+  sections.push(buildUserIdentitySection(userName))
+
+  // 工作区信息
+  if (ctx.workspaceName && workspacePaths) {
+    sections.push(workspacePaths.mode === 'project'
+      ? buildProjectWorkspaceSection(ctx.workspaceName, workspacePaths)
+      : buildManagedWorkspaceSection(ctx.workspaceName, workspacePaths))
+  }
+
+  // 计划文件落点：managed 下 cwd 就是会话目录，相对路径 `.context/plan/` 正确；
+  // project 下 cwd 是项目根，相对路径会把计划写进用户仓库（违反 I3），必须给出
+  // storageDir 内的绝对路径。真相比源是 agent-session-manager 的
+  // `resolveAgentSessionWriteLayout().plansDir`（单测锁两者相等）；这里不直接 import 它，
+  // 避免提示词构建把会话管理器的模块级副作用（SDK 配置目录 / 环境变量）带进来。
+  const projectPlanDir = workspacePaths?.mode === 'project' && ctx.workspaceSlug
+    ? join(resolveAgentSessionWorkspacePath(ctx.workspaceSlug, ctx.sessionId), '.context', 'plan')
+    : undefined
+
+  // 计划模式指令（始终注入计划文件路径规则）。WebSearch 是 Claude 原生工具，
+  // 因此必须和 web 能力组同步，不能在禁用后仍出现在 Prompt 中。
+  if (ctx.permissionMode === 'plan') {
+    const planResearchTools = ['WebSearch', 'WebFetch'].filter((toolName) => !capabilityDisabled('web') && !toolDisabled(toolName))
+    const planResearchToolsText = ['Read', 'Glob', 'Grep', ...planResearchTools].join('、')
+    const planWriteRule = projectPlanDir
+      ? `1. 将计划文件写入 \`${projectPlanDir}/\`（如 \`${projectPlanDir}/my-plan.md\`）；该目录在项目之外，**不要写进项目根的 \`.context/plan/\`**`
+      : '1. 将计划文件写入当前工作目录的 `.context/plan/` 子目录（如 `.context/plan/my-plan.md`）'
+    sections.push(`## 计划模式
+
+你当前处于计划模式，只能进行调研和规划；仅可写入下面指定的计划文件，不能修改其他文件或执行实施操作。规则：
+${planWriteRule}
+2. 完成计划后，**不要立即调用 ExitPlanMode**
+3. 先向用户展示计划摘要，以及完整的计划文档的路径地址，然后等待用户确认后再退出计划模式
+4. 用户确认执行后，再调用 ExitPlanMode 退出计划模式
+5. 在计划模式下，你可以使用 ${planResearchToolsText} 等只读工具进行调研，也可以使用 Bash 执行只读命令（如 find、grep、cat、ls、head、tail 等）；但不能使用 Edit 或 Bash 写操作命令（如 rm、mv、sed -i、> 重定向等）`)
+  } else {
+    // 非计划模式不打印中央运行目录的绝对路径：工作区段的「单一路径语义」不允许把模型引回
+    // managed 形状的目录（`~/.profer/agent-workspaces/<slug>`）。只有真正处于计划模式时才需要它，
+    // 那时上面的分支会给出绝对计划目录。
+    const planPathRule = projectPlanDir
+      ? '当进入计划模式（EnterPlanMode）时，计划文件必须写入**会话运行目录**的 `.context/plan/`。进入计划模式后会在提示词中给出该目录的绝对路径；**不要写进项目根的 `.context/plan/`**。'
+      : '当进入计划模式（EnterPlanMode）时，计划文件必须写入当前工作目录的 `.context/plan/` 子目录（如 `.context/plan/my-plan.md`）。'
+    sections.push(`## 计划模式文件路径
+
+${planPathRule}`)
   }
 
   return sections.join('\n\n')

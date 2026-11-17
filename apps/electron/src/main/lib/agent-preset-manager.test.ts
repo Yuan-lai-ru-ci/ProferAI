@@ -117,16 +117,22 @@ describe('listAgentPresets', () => {
     expect(ids).toContain(BUILTIN_PRESET_MINIMAL)
   })
 
-  test('内置预设均标记 isBuiltin，且 standard 无提示词段（行为与默认一致）', () => {
+  test('内置预设的能力、提示词与版本和当前运行时契约一致', () => {
     const presets = listAgentPresets(WS_A)
-    for (const preset of presets) {
-      expect(preset.isBuiltin).toBe(true)
-    }
     const standard = presets.find((p) => p.id === BUILTIN_PRESET_STANDARD)!
-    expect(standard.promptSections).toBeUndefined()
-    expect(standard.description).toContain('默认工作模式')
+    expect(standard.version).toBe('1.2.0')
+    expect(standard.description).toContain('完整能力')
+    expect(standard.promptSections?.[0]).toContain('不要因为能力可用就主动扩大任务范围')
+    expect(standard.disabledToolGroups).toBeUndefined()
+    expect(standard.disabledTools).toBeUndefined()
+    expect(standard.skillSlugs).toBeUndefined()
+    expect(standard.mcpServerNames).toBeUndefined()
+    expect(standard.effort).toBeUndefined()
+    expect(standard.permissionMode).toBeUndefined()
+
     const code = presets.find((p) => p.id === BUILTIN_PRESET_CODE)!
-    expect(code.description).toContain('严格研发模式')
+    expect(code.version).toBe('1.5.0')
+    expect(code.description).toContain('既有图片输出')
     expect(code.effort).toBe('high')
     expect(code.disabledToolGroups).toEqual(['automation', 'browser', 'clipboard', 'ppt-materials'])
     expect(code.disabledTools).toEqual(['generate_image', 'create_skin'])
@@ -134,10 +140,13 @@ describe('listAgentPresets', () => {
     expect(code.mcpServerNames).toBeUndefined()
     expect(code.promptSections?.[0]).toContain('跨边界修改必须检查调用方和契约')
     expect(code.promptSections?.[0]).toContain('网页搜索/抓取与本地图片呈现保留')
+    expect(code.promptSections?.[0]).toContain('皮肤创建等非研发产品能力已关闭')
+
     const minimal = presets.find((p) => p.id === BUILTIN_PRESET_MINIMAL)!
-    expect(minimal.promptSections?.length).toBeGreaterThan(0)
-    expect(minimal.description).toContain('关闭全部产品能力组')
+    expect(minimal.version).toBe('1.3.0')
+    expect(minimal.disabledToolGroups).toEqual([...AGENT_PRESET_TOOL_GROUPS])
     expect(minimal.promptSections?.[0]).toContain('全部产品能力组已为本会话关闭')
+    expect(minimal.description).toContain('关闭全部产品能力组')
   })
 
   test('无工作区时仅返回内置三预设', () => {
@@ -1134,7 +1143,7 @@ describe('派生预设（basePresetId）', () => {
       presetId: BUILTIN_PRESET_CODE,
       presetScope: 'builtin-meta',
       presetVersion: '1.0.0',
-    }, WS_A).version).toBe('1.4.0')
+    }, WS_A).version).toBe('1.5.0')
   })
 
   test('基于代码元预设的岗位会跟随基座 Prompt 变化，但保留自己的描述和追加段', () => {

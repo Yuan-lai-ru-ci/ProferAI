@@ -72,6 +72,32 @@ function freezePolicy(sessionId: string, promptSections?: readonly string[]): vo
 }
 
 describe('runtime turn prompt', () => {
+  test.each(['claude', 'pi'] as const)('%s 按宿主角色装配，关闭配方后保留执行底线', runtime => {
+    const meta = sessions.createAgentSession('行为角色', undefined, undefined, 'model-1', runtime)
+    freezePolicy(meta.id)
+    sessions.updateAgentSessionMeta(meta.id, { sourceDelegationId: 'taste-role', parentSessionId: 'parent', delegationRelation: 'subtask' })
+    const sub = turnPrompt.buildRuntimeTurnPrompt(queryFor(meta.id, { runtime }))!
+    const subText = typeof sub.systemPrompt === 'string' ? sub.systemPrompt : sub.systemPrompt.append
+    expect(subText).toContain('父 Agent 负责跨任务整合和最终验收')
+    expect(turnPrompt.buildRuntimeTurnUserPrompt(queryFor(meta.id, { runtime }), { hasResume: true })).toContain('父任务目标')
+    sessions.updateAgentSessionMeta(meta.id, { delegationRelation: 'independent' })
+    const independent = turnPrompt.buildRuntimeTurnPrompt(queryFor(meta.id, { runtime }))!
+    expect(typeof independent.systemPrompt === 'string' ? independent.systemPrompt : independent.systemPrompt.append).toContain('独立工作目标')
+    expect(turnPrompt.buildRuntimeTurnUserPrompt(queryFor(meta.id, { runtime }), { hasResume: true })).not.toContain('GPT with Taste Steer')
+    const previous = process.env.PROFER_AGENT_TASTE
+    process.env.PROFER_AGENT_TASTE = '0'
+    try {
+      const disabled = turnPrompt.buildRuntimeTurnPrompt(queryFor(meta.id, { runtime }))!
+      const text = typeof disabled.systemPrompt === 'string' ? disabled.systemPrompt : disabled.systemPrompt.append
+      expect(text).not.toContain('GPT with Taste')
+      expect(text).toContain('## 不可变执行底线')
+      expect(text).toContain('不伪造工具调用')
+    } finally {
+      if (previous === undefined) delete process.env.PROFER_AGENT_TASTE
+      else process.env.PROFER_AGENT_TASTE = previous
+    }
+  })
+
   test('有策略快照时装配完整系统提示词（核心规则 + 预设段），而不是 profile 片段', () => {
     const meta = sessions.createAgentSession('提示词', undefined, undefined, 'model-1', 'pi')
     freezePolicy(meta.id, ['## 本预设专属段\n只做一件事。'])
@@ -145,6 +171,8 @@ describe('runtime turn user prompt', () => {
     expect(prompt).toContain('上一轮的问题')
     // 动态上下文包含当前时间与工作目录。
     expect(prompt).toContain('**当前时间:')
+    expect(prompt).toContain('## GPT with Taste Steer')
+    expect(prompt).toContain('用户目的、当前目标')
     // @ 会话引用。
     expect(prompt).toContain('被引用的会话')
     // 未被本轮加载的 MCP 不得出现在 mentioned_tools 里。

@@ -40,6 +40,7 @@ import { getConfigDir } from './config-paths'
 import { normalizeHeadlessSendInput } from './agent-input-origin'
 import { queueRuntimeUserMessage } from './agent-runtime-queue'
 import { buildReferencedSessionsPrompt } from './agent-prompt-utils'
+import { appendAgentBehaviorUserSteer, resolveAgentBehaviorRole } from './agent-behavior-recipe'
 import type { AgentRunClaimFailure } from '@profer/agent-runtime'
 import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
 import { PiAgentAdapter } from './adapters/pi-agent-adapter'
@@ -1478,8 +1479,10 @@ export async function queueAgentMessage(
       },
       interrupt: sessionId => adapter.interruptQuery?.(sessionId) ?? Promise.resolve(),
       enrich: queued => {
-        const references = buildReferencedSessionsPrompt(queued.sessionId, queued.mentionedSessionIds, getAgentSessionMeta(queued.sessionId)?.workspaceId)
-        return references ? `${references}\n\n${queued.userMessage}` : queued.userMessage
+        const meta = getAgentSessionMeta(queued.sessionId)
+        const references = buildReferencedSessionsPrompt(queued.sessionId, queued.mentionedSessionIds, meta?.workspaceId)
+        const message = references ? `${references}\n\n${queued.userMessage}` : queued.userMessage
+        return appendAgentBehaviorUserSteer(message, resolveAgentBehaviorRole(meta ?? {}), 'standard', queued.rawUserMessage ?? queued.userMessage)
       },
     })
   }
