@@ -13,7 +13,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { ArrowRightLeft, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { agentSessionStreamingStateAtomFamily, allPendingHandoffProposalsAtom } from '@/atoms/agent-atoms'
-import { handoffInFlightAtomFamily } from '@/atoms/session-handoff'
+import { handoffDismissedAtom, handoffInFlightAtomFamily } from '@/atoms/session-handoff'
 import { useSessionHandoff } from '@/hooks/useSessionHandoff'
 import type { HandoffProposal } from '@profer/shared'
 
@@ -29,6 +29,7 @@ export function HandoffProposalBanner({ sessionId }: HandoffProposalBannerProps)
   const [submitting, setSubmitting] = React.useState<'accept' | 'dismiss' | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const setInFlight = useSetAtom(handoffInFlightAtomFamily(sessionId))
+  const setDismissedIds = useSetAtom(handoffDismissedAtom)
   const { applyHandoffResult } = useSessionHandoff(sessionId)
   // 本会话自己的流式状态：交接文档撰写要往同一份 JSONL 追加，运行中不能并发。
   const running = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))?.running ?? false
@@ -58,6 +59,14 @@ export function HandoffProposalBanner({ sessionId }: HandoffProposalBannerProps)
       // 主进程确认分支已经 createHandoffSession，这里只做渲染层的切标签 / 首轮 prompt。
       if (accepted && result) applyHandoffResult(result)
       removeLocally(target.id)
+      if (!accepted) {
+        // 忽略模型卡片后，同一会话的阈值建议条不要立刻回弹：用户刚拒绝过交接。
+        setDismissedIds((prev) => {
+          const next = new Set(prev)
+          next.add(sessionId)
+          return next
+        })
+      }
     } catch (err) {
       // 撰写文档 / 新建会话失败时保留卡片，让用户看到原因后重试。
       setError(err instanceof Error ? err.message : String(err))
@@ -65,7 +74,7 @@ export function HandoffProposalBanner({ sessionId }: HandoffProposalBannerProps)
       if (accepted) setInFlight(false)
       setSubmitting(null)
     }
-  }, [submitting, setInFlight, applyHandoffResult, removeLocally])
+  }, [submitting, setInFlight, applyHandoffResult, removeLocally, setDismissedIds, sessionId])
 
   if (!proposal) return null
   const pendingCount = proposals.length

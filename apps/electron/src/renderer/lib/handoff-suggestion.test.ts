@@ -12,6 +12,7 @@ const BASE: HandoffSuggestionInput = {
   streaming: false,
   dismissed: false,
   inFlight: false,
+  proposalPending: false,
 }
 
 const resolve = (patch: Partial<HandoffSuggestionInput>) =>
@@ -43,6 +44,17 @@ describe('会话交接建议判定', () => {
 
   test('Given 该会话交接进行中 When 判定 Then 不显示', () => {
     expect(resolve({ turnCount: 40, inFlight: true })).toEqual({ visible: false, reason: null })
+  })
+
+  test('Given 已有模型提交的待确认交接提议 When 判定 Then 不叠加阈值建议条', () => {
+    expect(resolve({ turnCount: 40, proposalPending: true })).toEqual({
+      visible: false,
+      reason: null,
+    })
+    expect(resolve({ turnCount: 15, contextRatio: 0.95, proposalPending: true })).toEqual({
+      visible: false,
+      reason: null,
+    })
   })
 
   test('Given 上下文越过告警线且轮数过半 When 判定 Then 提前以上下文理由显示', () => {

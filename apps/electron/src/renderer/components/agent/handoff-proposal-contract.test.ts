@@ -25,6 +25,8 @@ const view = read('apps/electron/src/renderer/components/agent/AgentView.tsx')
 const contentBlock = read('apps/electron/src/renderer/components/agent/ContentBlock.tsx')
 const processGroup = read('apps/electron/src/renderer/components/agent/ProcessBlockGroup.tsx')
 const banner = read('apps/electron/src/renderer/components/agent/HandoffProposalBanner.tsx')
+const suggestionBar = read('apps/electron/src/renderer/components/agent/HandoffSuggestion.tsx')
+const suggestionLogic = read('apps/electron/src/renderer/lib/handoff-suggestion.ts')
 
 describe('主进程：工具 → 提案 → 事件 → 确认', () => {
   test('Given 新工具 When 登记 Then shared 里有提案类型、两个事件分支与两个 IPC 通道', () => {
@@ -89,6 +91,13 @@ describe('渲染层：事件 → 卡片 → 确认/叉掉', () => {
     expect(overlay).not.toContain('HandoffProposal')
     // AgentView 根本不订阅这个 atom：卡片自己读，闸门不可能被它影响。
     expect(view).not.toContain('allPendingHandoffProposalsAtom')
+  })
+
+  test('Given 模型卡片待确认 When 阈值建议也命中 Then 只保留模型卡片，忽略后不回弹', () => {
+    expect(suggestionLogic).toContain('proposalPending')
+    expect(suggestionBar).toContain('allPendingHandoffProposalsAtom')
+    expect(banner).toContain('handoffDismissedAtom')
+    expect(banner).toContain('setDismissedIds')
   })
 
   test('Given 工具调用块 When 渲染过程组 Then propose_handoff 不作为普通工具展示', () => {

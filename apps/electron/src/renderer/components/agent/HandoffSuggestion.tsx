@@ -15,7 +15,7 @@ import { useAtom, useAtomValue } from 'jotai'
 import { ArrowRightLeft, Loader2, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
-import { agentSessionStreamingStateAtomFamily } from '@/atoms/agent-atoms'
+import { agentSessionStreamingStateAtomFamily, allPendingHandoffProposalsAtom } from '@/atoms/agent-atoms'
 import {
   agentSessionTurnCountFamily,
   handoffDismissedAtom,
@@ -32,6 +32,7 @@ export function HandoffSuggestion({ sessionId }: HandoffSuggestionProps): React.
   const threshold = useAtomValue(handoffSuggestTurnCountAtom)
   const turnCount = useAtomValue(agentSessionTurnCountFamily(sessionId))
   const streamingState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
+  const pendingProposalCount = useAtomValue(allPendingHandoffProposalsAtom).get(sessionId)?.length ?? 0
   const [dismissedIds, setDismissedIds] = useAtom(handoffDismissedAtom)
   const { inFlight, startHandoff } = useSessionHandoff(sessionId)
 
@@ -49,6 +50,7 @@ export function HandoffSuggestion({ sessionId }: HandoffSuggestionProps): React.
     streaming: streamingState?.running ?? false,
     dismissed: dismissedIds.has(sessionId),
     inFlight,
+    proposalPending: pendingProposalCount > 0,
   })
 
   if (!suggestion.visible) return null
