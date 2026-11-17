@@ -71,7 +71,20 @@ test('文档类单页只显示自身，不往顶栏塞草稿', () => {
   expect(selectContextTabs(tabs, '__tutorial__', []).map((tab) => tab.id)).toEqual(['__tutorial__'])
 })
 
-test('没有激活 Tab 时保留全部 Tab，草稿仍在首位', () => {
-  const tabs = [agentTab('a1'), scratch]
-  expect(selectContextTabs(tabs, null, []).map((tab) => tab.id)).toEqual([SCRATCH_PAD_ID, 'a1'])
+test.each([null, 'removed-tab'])('Given 活动 Tab 为 %s When 计算顶栏 Then 只显示草稿而非所有后台 Tab', (activeId) => {
+  const tabs = [chatTab('c1'), agentTab('a1'), scratch, chatTab('c2')]
+  expect(selectContextTabs(tabs, activeId, []).map((tab) => tab.id)).toEqual([SCRATCH_PAD_ID])
+  expect(tabs.map((tab) => tab.id)).toEqual(['c1', 'a1', SCRATCH_PAD_ID, 'c2'])
+})
+
+test('Given 活动 Tab 失效且没有草稿 When 计算顶栏 Then 补出草稿而不展示其他会话', () => {
+  expect(selectContextTabs([chatTab('c1'), agentTab('a1')], 'removed-tab', [])
+    .map((tab) => tab.id)).toEqual([SCRATCH_PAD_ID])
+})
+
+test('Given 活动 Tab 失效后重新选择会话 When 计算顶栏 Then 恢复该会话上下文', () => {
+  const tabs = [scratch, chatTab('c1'), agentTab('a1'), agentTab('other')]
+  expect(selectContextTabs(tabs, 'removed-tab', []).map((tab) => tab.id)).toEqual([SCRATCH_PAD_ID])
+  expect(selectContextTabs(tabs, 'a1', []).map((tab) => tab.id)).toEqual([SCRATCH_PAD_ID, 'a1'])
+  expect(selectContextTabs(tabs, 'c1', []).map((tab) => tab.id)).toEqual([SCRATCH_PAD_ID, 'c1'])
 })

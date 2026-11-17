@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { Provider, createStore } from 'jotai'
 import type { SDKMessage } from '@profer/shared'
 import { TooltipProvider } from '@profer/ui/primitives/tooltip'
-import { groupIntoTurns, getGroupPreview, MessageGroupRenderer, parseAttachedFiles, buildHistoricalTaskSubjects, splitUserMessagePrefix, type MessageGroup, type EditResendRequest } from './SDKMessageRenderer'
+import { groupIntoTurns, extractTurnUsage, getGroupPreview, MessageGroupRenderer, parseAttachedFiles, buildHistoricalTaskSubjects, splitUserMessagePrefix, type MessageGroup, type EditResendRequest } from './SDKMessageRenderer'
 
 function userText(text: string): SDKMessage {
   return {
@@ -270,12 +270,14 @@ describe('用户消息操作入口渲染（修改重发）', () => {
     uuid?: string | undefined
     text?: string
     provenance?: SDKMessage['_provenance']
+    optimisticUserMessage?: boolean
   } = {}): string {
     const message = {
       type: 'user',
       ...(options.uuid === undefined ? { uuid: 'u1' } : options.uuid ? { uuid: options.uuid } : {}),
       message: { content: [{ type: 'text', text: options.text ?? '帮我改成 TypeScript' }] },
       ...(options.provenance ? { _provenance: options.provenance } : {}),
+      ...(options.optimisticUserMessage ? { _optimisticUserMessage: true } : {}),
       parent_tool_use_id: null,
     } as unknown as SDKMessage
     const groups = groupIntoTurns([message])
@@ -317,6 +319,12 @@ describe('用户消息操作入口渲染（修改重发）', () => {
     const markup = renderUserGroup({ provenance: { schemaVersion: 1, messageId: 'm1', author: { type: 'agent', id: 'handoff-agent' }, runId: 'run-1' } })
     expect(markup).toContain('Agent')
     expect(markup).not.toContain('handoff-agent')
+  })
+
+  test('乐观用户消息在主进程 provenance 回传前立即显示为用户', () => {
+    const markup = renderUserGroup({ optimisticUserMessage: true })
+    expect(markup).not.toContain('未知作者')
+    expect(markup).toContain('用户')
   })
 
   test('传入修改回调时渲染修改重发入口', () => {
@@ -477,5 +485,88 @@ describe('文件改动 chip 的草稿区基准', () => {
 
     expect(markup).toContain('file-changes-summary')
     expect(markup).not.toContain('a.ts')
+  })
+})
+
+describe('压缩切轮后的耗时归并', () => {
+  function resultMessage(durationMs: number): SDKMessage {
+    return {
+      type: 'result',
+      subtype: 'success',
+      _durationMs: durationMs,
+      usage: {
+        input_tokens: 100,
+        output_tokens: 10,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+    } as unknown as SDKMessage
+  }
+
+  function assistantTurns(groups: MessageGroup[]): Extract<MessageGroup, { type: 'assistant-turn' }>[] {
+    return groups.filter((group): group is Extract<MessageGroup, { type: 'assistant-turn' }> => group.type === 'assistant-turn')
+  }
+
+  test('自动压缩后本轮未继续：整轮 result 回挂到压缩前最后一条回复', () => {
+    const groups = groupIntoTurns([
+      userText('跑一下验证'),
+      assistantText('验证中'),
+      systemMessage('compacting'),
+      systemMessage('compact_boundary'),
+      resultMessage(47_989),
+    ])
+
+    const turns = assistantTurns(groups)
+    expect(turns).toHaveLength(1)
+    expect(extractTurnUsage(turns[0]!.turnMessages).durationMs).toBe(47_989)
+  })
+
+  test('自动压缩后继续：耗时挂在最后一段回复，压缩前段不重复显示', () => {
+    const groups = groupIntoTurns([
+      userText('跑一下验证'),
+      assistantText('压缩前'),
+      systemMessage('compact_boundary'),
+      assistantText('压缩后'),
+      resultMessage(235_057),
+    ])
+
+    const turns = assistantTurns(groups)
+    expect(turns).toHaveLength(2)
+    expect(extractTurnUsage(turns[0]!.turnMessages).durationMs).toBeUndefined()
+    expect(extractTurnUsage(turns[1]!.turnMessages).durationMs).toBe(235_057)
+  })
+
+  test('手动压缩是独立 run：压缩耗时不会回挂到上一条回复', () => {
+    const groups = groupIntoTurns([
+      userText('上一轮问题'),
+      assistantText('上一轮回复'),
+      resultMessage(12_000),
+      userText('/compact'),
+      systemMessage('compacting'),
+      systemMessage('compact_boundary'),
+      resultMessage(15_750),
+    ])
+
+    const turns = assistantTurns(groups)
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.turnMessages.filter((message) => message.type === 'result')).toHaveLength(1)
+    expect(extractTurnUsage(turns[0]!.turnMessages).durationMs).toBe(12_000)
+  })
+
+  test('新用户输入重置回挂目标：新 run 的 result 不会污染上一轮', () => {
+    const groups = groupIntoTurns([
+      userText('第一轮'),
+      assistantText('第一轮回复'),
+      systemMessage('compact_boundary'),
+      resultMessage(10_000),
+      userText('第二轮'),
+      assistantText('第二轮回复'),
+      resultMessage(20_000),
+    ])
+
+    const turns = assistantTurns(groups)
+    expect(turns).toHaveLength(2)
+    expect(extractTurnUsage(turns[0]!.turnMessages).durationMs).toBe(10_000)
+    expect(extractTurnUsage(turns[1]!.turnMessages).durationMs).toBe(20_000)
   })
 })

@@ -454,6 +454,12 @@ export type MessageGroup =
 export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string): MessageGroup[] {
   const groups: MessageGroup[] = []
   let currentTurn: AssistantTurn | null = null
+  // 当前用户轮次内最近的 assistant-turn（跨 compact_boundary 保留）。
+  // 自动压缩会把同一轮切成「压缩前 / 压缩后」两段：压缩后没有新输出时，整轮 result
+  // 落在 boundary 之后、currentTurn 已为 null。耗时属于整轮（含压缩前 + 压缩），必须
+  // 回挂到这最后一个 assistant-turn 上，而不是丢弃；压缩后仍有新输出时 result 正常
+  // 归入最新 turn，自然就是「挂在最后」。
+  const runState: { lastAssistantTurn: AssistantTurn | null } = { lastAssistantTurn: null }
   // 收到后台任务完成通知（task_notification）后，若没有用户输入就直接出现新的 assistant 输出，
   // 说明这是自动唤醒的新一轮，应另起独立消息块，而不是续接上一轮。
   // 注意：不能用 result 做信号——正常对话每轮也以 result 结束，会误伤普通回复。
@@ -462,6 +468,7 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
   const flushTurn = (): void => {
     if (currentTurn && currentTurn.assistantMessages.length > 0) {
       groups.push(currentTurn)
+      runState.lastAssistantTurn = currentTurn
     }
     currentTurn = null
   }
@@ -473,11 +480,14 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
         // Goal 迭代控制消息 → 独立分隔条，作为 turn 边界但不进入 turn 消息
         flushTurn()
         groups.push({ type: 'user', message: userMsg })
+        runState.lastAssistantTurn = null
         pendingWakeBoundary = false
       } else if (isUserInputMessage(userMsg)) {
-        // 真正的用户输入 → 结束当前 turn，开始新段落
+        // 真正的用户输入 → 结束当前 turn，开始新段落。
+        // 新 run 不得继承上一轮的 turn，否则新 run 的 result 会回挂到旧回复上。
         flushTurn()
         groups.push({ type: 'user', message: userMsg })
+        runState.lastAssistantTurn = null
         pendingWakeBoundary = false
       } else {
         // tool_result 消息 → 归入当前 turn
@@ -522,6 +532,8 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
           currentTurn.turnMessages.push(msg)
         } else {
           pendingWakeBoundary = true
+          // 后台唤醒是新一轮边界：不让随后的 result 回挂到唤醒前的旧 turn。
+          runState.lastAssistantTurn = null
         }
       } else if (currentTurn) {
         currentTurn.turnMessages.push(msg)
@@ -529,11 +541,18 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
     } else {
       // result, tool_progress 等 → 归入当前 turn
       // prompt_suggestion 不属于对话转录，不入 turn，避免被当作文本附加到助手消息末尾
-      if ((msg as { type: string }).type === 'prompt_suggestion') {
+      const messageType = (msg as { type: string }).type
+      if (messageType === 'prompt_suggestion') {
         continue
       }
       if (currentTurn) {
         currentTurn.turnMessages.push(msg)
+      } else if (messageType === 'result') {
+        // 自动压缩后本轮没有继续产出：整轮 result 落在 compact_boundary 之后，
+        // 当前没有 turn 可接收。回挂到该轮最后一个 assistant-turn，让耗时（已含
+        // 压缩前 + 压缩）仍显示在最后一条回复上，而不是被静默丢弃。
+        const fallbackTurn = runState.lastAssistantTurn
+        if (fallbackTurn) fallbackTurn.turnMessages.push(msg)
       }
     }
   }
@@ -1551,6 +1570,7 @@ function UserInputMessage({ message, basePath, basePaths, onEdit, isEditing = fa
   const imageFiles = attachedFiles.filter((f) => isImageFile(f.filename))
   const nonImageFiles = attachedFiles.filter((f) => !isImageFile(f.filename))
   const provenanceAuthor = projectMessageProvenance(message._provenance)?.author
+    ?? ((message as SDKMessage & { _optimisticUserMessage?: boolean })._optimisticUserMessage ? { type: 'user' as const } : undefined)
   const authorLabel = !provenanceAuthor
     ? '未知作者'
     : provenanceAuthor.type === 'user'

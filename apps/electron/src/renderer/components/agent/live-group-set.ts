@@ -61,6 +61,25 @@ export function hasAssistantTurnInCurrentTurn(groups: MessageGroup[]): boolean {
 }
 
 /**
+ * 找出最后一条用户消息之后是否还有 assistant 输出。
+ *
+ * 「已被用户中断」badge 挂在「被中断的那一轮」上；当被中断的一轮没有任何 assistant
+ * 输出（用户刚发出消息就点停止）时，磁盘上不存在新的 assistant-turn，
+ * `allGroups.findLast(assistant-turn)` 会错误地指向上一个有内容的轮次。
+ * 这里按分组结构判断最后一条用户消息之后是否真的有助手输出，没有则说明
+ * 中断发生在空轮上，badge 不应该渲染。
+ */
+export function hasAssistantOutputAfterLastUser(groups: MessageGroup[]): boolean {
+  for (let index = groups.length - 1; index >= 0; index--) {
+    const group = groups[index]!
+    if (group.type === 'system') continue
+    if (group.type === 'user') return false
+    return true
+  }
+  return false
+}
+
+/**
  * 找出当前这一轮正在流式输出的 assistant-turn。
  *
  * 实时消息与持久化副本合并后，对象身份并不总是能对上（重新落盘、外置内容替换等），

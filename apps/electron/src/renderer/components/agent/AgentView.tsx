@@ -152,7 +152,7 @@ const AGENT_REFRESH_HEADROOM = 100
 const AGENT_CACHE_WINDOW = DESKTOP_AGENT_PAGE_SIZE + AGENT_REFRESH_HEADROOM
 /** 无待发送引用时复用的稳定空数组，避免每次渲染产生新引用 */
 
-import { canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, MAX_ATTACHMENT_SIZE, isAgentPresetToolGroupDisabled, parseGoalCommand } from '@profer/shared'
+import { canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, MAX_ATTACHMENT_SIZE, isAgentPresetToolGroupDisabled, parseGoalCommand, DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import { fileToBase64, formatFileNames, getFileBaseName, getFileParentPath, isMissingAttachmentData } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
 import { AgentSendButton } from './AgentSendButton'
@@ -213,6 +213,8 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
     uuid,
     message: { content: [{ type: 'text', text }] },
     parent_tool_use_id: null,
+    // 临时消息先于主进程来源事实到达；仅用于即时作者展示，不冒充完整 provenance。
+    _optimisticUserMessage: true,
     _createdAt: createdAt,
   } as unknown as SDKMessage
 }
@@ -535,9 +537,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const [runtimeSwitchInFlight, setRuntimeSwitchInFlight] = React.useState(false)
   // state 渲染前的连续点击也必须串行化，不能仅依赖 disabled 的下一帧更新。
   const runtimeSwitchInFlightRef = React.useRef(false)
-  // 已加载会话以 metadata 为唯一真相来源；历史缺省 runtime 仍按 Claude 回退。
+  // 已加载会话以 metadata 为唯一真相来源；历史缺省 runtime 按产品默认内核回退。
   const sessionAgentRuntime: AgentRuntime = sessionMeta
-    ? sessionMeta.agentRuntime ?? 'claude'
+    ? sessionMeta.agentRuntime ?? DEFAULT_AGENT_RUNTIME
     : agentRuntime
   // 当前 Pi 模型的推理档位能力（异步桥接，供推理强度控件动态展示）。
   const [piReasoningCapability, setPiReasoningCapability] = React.useState<import('@profer/shared').ReasoningCapability | undefined>(undefined)

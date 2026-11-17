@@ -42,3 +42,13 @@ test('草稿在 Tab 列表里缺失时也会补出入口', () => {
   const html = renderTabBar([agentTab('a1')], 'a1')
   expect(html.match(/aria-label="草稿"/g)).toHaveLength(1)
 })
+
+test.each([null, 'removed-tab'])('Given 混合后台 Tab 且活动 ID 为 %s When 渲染顶栏 Then 不泄露任何后台会话', (activeId) => {
+  const html = renderTabBar([
+    agentTab('后台Agent'),
+    { id: 'chat-1', type: 'chat', sessionId: 'chat-1', title: '后台Chat' },
+  ], activeId)
+  expect(html).toContain('aria-label="草稿"')
+  expect(html).not.toContain('后台Agent')
+  expect(html).not.toContain('后台Chat')
+})
