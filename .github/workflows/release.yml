@@ -15,10 +15,17 @@ concurrency:
   group: release-verification-${{ inputs.ref }}
   cancel-in-progress: true
 
+env:
+  # WebUI 前端来自独立公开仓库 Profer-pocket（webui/ 子工程），固定 commit 保证可复现。
+  POCKET_WEBUI_REF: 7e8e41672c1f2b86d6deee538b1d94d983606215
+
 jobs:
   build-windows-x64:
     name: build (windows-latest, win, x64)
     runs-on: windows-latest
+    env:
+      # sync-webui-assets 的默认源目录是仓库外的兄弟目录；CI 检出在 GITHUB_WORKSPACE 内，需显式指定。
+      PROFER_WEBUI_SRC: ${{ github.workspace }}/Profer-pocket/webui/dist
 
     steps:
       - name: Checkout
@@ -70,6 +77,17 @@ jobs:
       - name: Run unit and regression tests
         # --isolate: bun 的 mock.module('electron') 是进程级注册表，默认并行下多文件互相覆盖导致误报；隔离模式保证每个测试文件独立
         run: bun test --isolate --timeout 30000
+
+      - name: Checkout WebUI frontend (Profer-pocket)
+        uses: actions/checkout@v4
+        with:
+          repository: Yuan-lai-ru-ci/Profer-pocket
+          ref: ${{ env.POCKET_WEBUI_REF }}
+          path: Profer-pocket
+
+      - name: Build WebUI frontend
+        working-directory: Profer-pocket
+        run: bun install --frozen-lockfile && bun run build:webui
 
       - name: Build GitHub app
         run: bun run electron:build:github
