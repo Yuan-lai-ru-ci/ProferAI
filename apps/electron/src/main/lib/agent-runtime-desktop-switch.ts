@@ -50,13 +50,14 @@ export function isDesktopRuntimeSwitchEnabled(env: DesktopSwitchEnv = process.en
  * 任一 Goal 字段存在即回旧链，避免 Goal 的执行权 / 结果回调在新链丢失。
  */
 export function canUseRuntimeDesktop(
-  input: Pick<AgentSendInput, 'goalRunId' | 'reportGoalResult' | 'goalProposal' | 'onRuntimeSessionId' | 'onRuntimeMessage'>,
+  input: Pick<AgentSendInput, 'goalRunId' | 'reportGoalResult' | 'goalProposal' | 'handoffProposal' | 'onRuntimeSessionId' | 'onRuntimeMessage'>,
   env: DesktopSwitchEnv = process.env,
 ): boolean {
   if (!isDesktopRuntimeSwitchEnabled(env)) return false
   return !input.goalRunId
     && !input.reportGoalResult
     && !input.goalProposal
+    && !input.handoffProposal
     && !input.onRuntimeSessionId
     && !input.onRuntimeMessage
 }
@@ -68,7 +69,7 @@ export function canUseRuntimeDesktop(
  * 刻意返回字符串而不是布尔：调用点必须显式写出两条分支，避免「顺手加个 if 就当成等价」。
  */
 export function resolveDesktopRunChain(
-  input: Pick<AgentSendInput, 'goalRunId' | 'reportGoalResult' | 'goalProposal' | 'onRuntimeSessionId' | 'onRuntimeMessage'>,
+  input: Pick<AgentSendInput, 'goalRunId' | 'reportGoalResult' | 'goalProposal' | 'handoffProposal' | 'onRuntimeSessionId' | 'onRuntimeMessage'>,
   env: DesktopSwitchEnv = process.env,
 ): DesktopRunChain {
   return canUseRuntimeDesktop(input, env) ? 'runtime' : 'orchestrator'

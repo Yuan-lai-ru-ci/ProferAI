@@ -43,7 +43,7 @@ import type {
   SDKToolResultBlock,
   SDKSystemMessage,
 } from '@profer/shared'
-import { isGoalProposalToolName, isGoalUpdateToolName, stripGoalResultBlocks } from '@profer/shared'
+import { isGoalProposalToolName, isGoalUpdateToolName, isHandoffProposalToolName, stripGoalResultBlocks } from '@profer/shared'
 import { hasRenderableThinking } from './render-block-derivation'
 
 // ===== useToolResult Hook =====
@@ -797,7 +797,7 @@ const ContentBlockView = function ContentBlock({ block, allMessages, basePath, b
     const toolBlock = block as SDKToolUseBlock
     // Goal 内部工具与 Goal 提议都不作为普通工具过程展示：前者是控制通道，
     // 后者有专门的确认卡片（GoalProposalBanner）。
-    if (isGoalUpdateToolName(toolBlock.name) || isGoalProposalToolName(toolBlock.name)) return null
+    if (isGoalUpdateToolName(toolBlock.name) || isGoalProposalToolName(toolBlock.name) || isHandoffProposalToolName(toolBlock.name)) return null
     return (
       <ToolUseBlock
         block={toolBlock}

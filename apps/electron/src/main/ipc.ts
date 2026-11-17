@@ -258,6 +258,7 @@ import { getAgentPresetByReference, presetReferenceForId } from './lib/agent-pre
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { goalProposalService, normalizeGoalProposalPolicy } from './lib/goal-proposal-service'
+import { handoffProposalService } from './lib/handoff-proposal-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
 import { assertMainWindowSender } from './lib/ipc-sender-guard'
 import { prepareAgentRewind, refineAgentRewind, executeAgentRewind, undoAgentRewind, submitAgentAfterRewind, legacyConversationRewind } from './lib/agent-rewind-gateway'
@@ -3267,7 +3268,11 @@ export function registerIpcHandlers(): void {
       input = normalizeUserSendInput(input)
       // 用户发起的普通轮次才注入 propose_goal：内部轮次（Goal / 自动化 / 委派）不提议。
       if (!input.triggeredBy || input.triggeredBy === 'user') {
-        input = { ...input, goalProposal: goalProposalInputFor(input.sessionId) }
+        input = {
+          ...input,
+          goalProposal: goalProposalInputFor(input.sessionId),
+          handoffProposal: handoffProposalInputFor(input.sessionId),
+        }
       }
       await coordinateAgentSend(input, {
         getSession: getAgentSessionMeta,
@@ -3367,6 +3372,58 @@ export function registerIpcHandlers(): void {
     emitGoalProposalEvent(proposal.sessionId, { type: 'goal_proposal_resolved', proposalId, accepted })
     return true
   })
+  // ===== 模型主动提议「交接对话」 =====
+  // 与 Goal 提议同形状：工具登记 → profer_event → 卡片 → 用户确认。
+  // 确认后复用 session-handoff-service（主进程单写者），结果回给渲染层切标签。
+  const emitHandoffProposalEvent = (sessionId: string, event: import('@profer/shared').ProferEvent): void => {
+    emitSessionStreamEvent(sessionId, { kind: 'profer_event', event })
+  }
+  const handoffProposalInputFor = (sessionId: string): import('@profer/shared').AgentSendInput['handoffProposal'] => {
+    if (isSessionPlanMode(sessionId)) return undefined
+    return {
+      planMode: false,
+      onPropose: (proposal) => emitHandoffProposalEvent(sessionId, { type: 'handoff_proposal', proposal }),
+    }
+  }
+  /** 交接要跑一次模型，同一提议从两个窗口几乎同时确认时绝不能执行两次。 */
+  const handoffProposalResponsesInFlight = new Set<string>()
+  ipcMain.handle(AGENT_IPC_CHANNELS.LIST_HANDOFF_PROPOSALS, async (event): Promise<import('@profer/shared').HandoffProposal[]> => {
+    assertSensitiveAgentIpcSender(event)
+    return handoffProposalService.list()
+  })
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.RESPOND_HANDOFF_PROPOSAL,
+    async (event, proposalId: string, accepted: boolean): Promise<AgentSessionHandoffResult | null> => {
+      assertSensitiveAgentIpcSender(event)
+      if (typeof proposalId !== 'string' || !proposalId) throw new Error('无效的交接提议标识')
+      // 先读不出队：交接失败时保留提议，卡片才能显示原因并允许重试。
+      const proposal = handoffProposalService.peek(proposalId)
+      if (!proposal) return null
+      if (handoffProposalResponsesInFlight.has(proposalId)) throw new Error('这条交接提议正在处理中')
+      handoffProposalResponsesInFlight.add(proposalId)
+      try {
+        registerWebContents(proposal.sessionId, event.sender)
+        let result: AgentSessionHandoffResult | null = null
+        if (accepted) {
+          // 卡片可能在模型这一轮还没跑完时就被确认：交接文档撰写是往同一份 JSONL
+          // 追加的一次 headless run，与本轮并发会撞车且读到半截转录。
+          // 抛错让卡片留在原处显示原因，本轮结束后用户可直接重试。
+          if (isAgentSessionActive(proposal.sessionId)) {
+            throw new Error('本轮还在运行，等它结束再交接（交接文档要读完整的会话记录）')
+          }
+          result = await createHandoffSession(proposal.sessionId)
+          feishuBridgeManager.ensureSessionMirror(result.session).catch((error) => {
+            console.error('[飞书 Session 镜像] 交接提议会话建群失败:', error)
+          })
+        }
+        handoffProposalService.remove(proposalId)
+        emitHandoffProposalEvent(proposal.sessionId, { type: 'handoff_proposal_resolved', proposalId, accepted })
+        return result
+      } finally {
+        handoffProposalResponsesInFlight.delete(proposalId)
+      }
+    },
+  )
   ipcMain.handle(AGENT_IPC_CHANNELS.GET_GOAL, async (event, sessionId: string): Promise<AgentGoalState | null> => {
     assertSensitiveAgentIpcSender(event)
     return goalSessionService.get(sessionId) ?? null

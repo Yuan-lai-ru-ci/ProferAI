@@ -691,6 +691,9 @@ export type AgentEvent =
   // 模型主动提议建立 Goal
   | { type: 'goal_proposal'; proposal: GoalProposal }
   | { type: 'goal_proposal_resolved'; proposalId: string; accepted: boolean }
+  // 模型主动提议交接对话
+  | { type: 'handoff_proposal'; proposal: HandoffProposal }
+  | { type: 'handoff_proposal_resolved'; proposalId: string; accepted: boolean }
   // ExitPlanMode 计划审批
   | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
   | { type: 'exit_plan_mode_resolved'; requestId: string }
@@ -756,6 +759,9 @@ export type ProferEvent =
   // 模型主动提议建立 Goal
   | { type: 'goal_proposal'; proposal: GoalProposal }
   | { type: 'goal_proposal_resolved'; proposalId: string; accepted: boolean }
+  // 模型主动提议交接对话
+  | { type: 'handoff_proposal'; proposal: HandoffProposal }
+  | { type: 'handoff_proposal_resolved'; proposalId: string; accepted: boolean }
   | { type: 'exit_plan_mode_request'; request: ExitPlanModeRequest }
   | { type: 'exit_plan_mode_resolved'; requestId: string }
   | { type: 'enter_plan_mode'; sessionId: string }
@@ -1803,6 +1809,15 @@ export interface AgentSendInput {
     planMode: boolean
     onPropose: (proposal: import('./agent').GoalProposal, contract?: import('./agent').AgentGoalContract) => void
   }
+  /**
+   * 模型主动提议「交接对话」的通道（仅用户发起的普通轮次提供）。
+   * 省略表示本轮不注入 propose_handoff 工具（内部轮次 / 计划模式）。
+   */
+  handoffProposal?: {
+    /** 计划模式下不提议。 */
+    planMode: boolean
+    onPropose: (proposal: import('./agent').HandoffProposal) => void
+  }
   /** Goal turn 是否使用独立的 runtime session，不得复用普通会话 SDK 上下文。 */
   isolatedRuntimeSession?: boolean
   /** Goal 当前运行 ID；用于把停止和结果绑定到具体 owner。 */
@@ -2276,6 +2291,23 @@ export interface GoalProposal {
 /** 模型主动提议建立 Goal 的策略：auto 直接创建 / alwaysAsk 每次确认 / disabled 关闭。 */
 export type GoalProposalPolicy = 'auto' | 'alwaysAsk' | 'disabled'
 
+/**
+ * 模型主动提议「交接对话」。
+ *
+ * 模型判断当前会话该换一个干净上下文继续时调用 propose_handoff，宿主弹出卡片，
+ * 用户点确认才真正撰写交接文档并新建会话；点忽略只丢弃这条提议。
+ * 与 Goal 提议一样不阻塞当前轮：登记后工具立即返回，模型把手上这轮做完。
+ */
+export interface HandoffProposal {
+  id: string
+  sessionId: string
+  /** 模型认为该交接的理由（展示在卡片上） */
+  reason: string
+  /** 建议接手者接下来做什么 */
+  nextSteps?: string
+  createdAt: number
+}
+
 /** AskUser 响应（渲染进程 → 主进程） */
 export interface AskUserResponse {
   /** 请求 ID */
@@ -2581,6 +2613,9 @@ export const AGENT_IPC_CHANNELS = {
   /** 模型主动提议建立 Goal：列出待确认提议 / 批准 / 忽略 */
   LIST_GOAL_PROPOSALS: 'agent:goal-proposals',
   RESPOND_GOAL_PROPOSAL: 'agent:goal-proposal-respond',
+  /** 模型主动提议交接对话：列出待确认提议 / 批准 / 忽略 */
+  LIST_HANDOFF_PROPOSALS: 'agent:handoff-proposals',
+  RESPOND_HANDOFF_PROPOSAL: 'agent:handoff-proposal-respond',
   /** 暂停当前 Goal */
   PAUSE_GOAL: 'agent:goal-pause',
   /** 恢复当前 Goal */

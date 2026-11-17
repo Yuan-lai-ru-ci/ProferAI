@@ -30,6 +30,7 @@ import {
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
   allPendingGoalProposalsAtom,
+  allPendingHandoffProposalsAtom,
   askUserAnswersAtom,
   allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
@@ -148,6 +149,10 @@ export function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[]
         return [{ type: 'goal_proposal', proposal: evt.proposal }]
       case 'goal_proposal_resolved':
         return [{ type: 'goal_proposal_resolved', proposalId: evt.proposalId, accepted: evt.accepted }]
+      case 'handoff_proposal':
+        return [{ type: 'handoff_proposal', proposal: evt.proposal }]
+      case 'handoff_proposal_resolved':
+        return [{ type: 'handoff_proposal_resolved', proposalId: evt.proposalId, accepted: evt.accepted }]
       case 'exit_plan_mode_request':
         return [{ type: 'exit_plan_mode_request', request: evt.request }]
       case 'exit_plan_mode_resolved':
@@ -431,6 +436,19 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     void window.electronAPI.listGoalProposals().then((proposals) => {
       if (!effectActive || proposals.length === 0) return
       store.set(allPendingGoalProposalsAtom, (prev) => {
+        const map = new Map(prev)
+        for (const proposal of proposals) {
+          const current = map.get(proposal.sessionId) ?? []
+          if (!current.some((item) => item.id === proposal.id)) map.set(proposal.sessionId, [...current, proposal])
+        }
+        return map
+      })
+    }).catch(() => {})
+    // 交接提议同样只在主进程内存里：窗口重载后必须重拉，否则卡片消失但
+    // 主进程 hasPending 仍会拒绝模型后续提议。
+    void window.electronAPI.listHandoffProposals().then((proposals) => {
+      if (!effectActive || proposals.length === 0) return
+      store.set(allPendingHandoffProposalsAtom, (prev) => {
         const map = new Map(prev)
         for (const proposal of proposals) {
           const current = map.get(proposal.sessionId) ?? []
@@ -1369,6 +1387,31 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
             )
           } else if (event.type === 'goal_proposal_resolved') {
             store.set(allPendingGoalProposalsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              const next = current.filter((item) => item.id !== event.proposalId)
+              if (next.length > 0) map.set(sessionId, next)
+              else map.delete(sessionId)
+              return map
+            })
+          } else if (event.type === 'handoff_proposal') {
+            // 模型提议交接对话：不阻塞当前轮，只排队等用户确认。
+            store.set(allPendingHandoffProposalsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              if (current.some((item) => item.id === event.proposal.id)) return prev
+              map.set(sessionId, [...current, event.proposal])
+              return map
+            })
+            const handoffTitle = getSessionTitle(sessionId)
+            sendDesktopNotification(
+              '建议交接对话',
+              `[${handoffTitle}] ${event.proposal.reason}`,
+              store.get(notificationsEnabledAtom),
+              { playSound: false, onNavigate: makeNavigateToSession(sessionId, handoffTitle) },
+            )
+          } else if (event.type === 'handoff_proposal_resolved') {
+            store.set(allPendingHandoffProposalsAtom, (prev) => {
               const map = new Map(prev)
               const current = map.get(sessionId) ?? []
               const next = current.filter((item) => item.id !== event.proposalId)

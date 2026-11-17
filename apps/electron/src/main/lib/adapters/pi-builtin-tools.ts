@@ -56,6 +56,8 @@ import {
 } from '../automation-scheduler'
 import { getAgentSessionMeta } from '../agent-session-manager'
 import { goalProposalService, normalizeGoalProposalInput } from '../goal-proposal-service'
+import { HANDOFF_PROPOSE_TOOL_NAME } from '@profer/shared'
+import { handoffProposalService, normalizeHandoffProposalInput, type HandoffProposalInput } from '../handoff-proposal-service'
 import {
   listAgentPresets,
   getDefaultPresetId,
@@ -174,6 +176,8 @@ export interface PiBuiltinToolsContext {
   reportGoalResult?: (result: import('@profer/shared').AgentGoalIterationResult) => void
   /** 模型主动提议建立 Goal（非 Goal 轮次提供）。 */
   goalProposal?: import('@profer/shared').AgentSendInput['goalProposal']
+  /** 模型主动提议「交接对话」（非 Goal 轮次提供）。 */
+  handoffProposal?: import('@profer/shared').AgentSendInput['handoffProposal']
   goalIteration?: number
   /** 仅由 orchestrator 注入的当前用户原文，供目标预设意图绑定。 */
   presetOperationUserMessage?: string
@@ -596,6 +600,44 @@ export function buildPiGoalProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCon
         proposalId: created.proposal.id,
         policy: proposal.policy,
         note: proposal.policy === 'auto' ? '已直接创建 Goal，后续轮次由 Goal 控制器接管' : '已提交给用户确认，先继续完成当前这一轮',
+      })
+    },
+  }) as unknown as ToolDefinition]
+}
+
+// ===== 交接对话提议工具 =====
+
+/**
+ * 模型主动提议「交接对话」（Pi runtime）。
+ * 与 Claude 侧同口径：登记后立即返回，不阻塞当前轮；确认后由主进程撰写文档并新建会话。
+ */
+export function buildPiHandoffProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsContext, 'sessionId' | 'handoffProposal'>): ToolDefinition[] {
+  const proposal = ctx.handoffProposal
+  if (!proposal || proposal.planMode) return []
+  return [sdk.defineTool({
+    name: HANDOFF_PROPOSE_TOOL_NAME,
+    label: '提议交接对话',
+    description: '当这个会话的上下文已经过长/杂乱、一个阶段的工作刚告一段落，或用户明确要求「交接一下 / 开个新会话继续」时，向用户提议交接。用户确认后才会撰写交接文档并新建会话；本工具不会自己切换会话，也不阻塞当前轮。',
+    promptSnippet: 'propose_handoff: propose handing this conversation over to a fresh session',
+    parameters: Type.Object({
+      reason: Type.String({ description: '为什么现在该交接：上下文、阶段进展或用户要求' }),
+      nextSteps: Type.Optional(Type.String({ description: '建议接手者接下来先做什么' })),
+    }),
+    execute: async (params: unknown) => {
+      const args = params as HandoffProposalInput
+      if (!normalizeHandoffProposalInput(args)) {
+        return jsonToolResult({ accepted: false, reason: 'reason 不能为空' })
+      }
+      if (handoffProposalService.hasPending(ctx.sessionId)) {
+        return jsonToolResult({ accepted: false, reason: '该会话已有待确认的交接提议，等待用户确认后再提议' })
+      }
+      const created = handoffProposalService.add(ctx.sessionId, args)
+      if (!created) return jsonToolResult({ accepted: false, reason: 'reason 不能为空' })
+      proposal.onPropose(created)
+      return jsonToolResult({
+        accepted: true,
+        proposalId: created.id,
+        note: '已提交给用户确认，先继续完成当前这一轮；用户确认后才会撰写交接文档并新建会话',
       })
     },
   }) as unknown as ToolDefinition]
@@ -1877,8 +1919,10 @@ export async function buildPiBuiltinTools(
 
   if (ctx.reportGoalResult) {
     tools.push(...buildPiGoalTools(sdk, ctx))
-  } else if (ctx.goalProposal) {
-    tools.push(...buildPiGoalProposalTools(sdk, ctx))
+  } else {
+    // 两种提议互不排斥：Goal 是「值得多轮持续做」，交接是「该换干净上下文」。
+    if (ctx.goalProposal) tools.push(...buildPiGoalProposalTools(sdk, ctx))
+    if (ctx.handoffProposal) tools.push(...buildPiHandoffProposalTools(sdk, ctx))
   }
 
   if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'image')) {

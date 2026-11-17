@@ -173,6 +173,7 @@ import {
 import { AUTO_SEND_RETRY_INTERVAL_MS, shouldAutoSendQueueHead } from '@/lib/agent-autosend-turn'
 import { AgentMessageQueue } from './AgentMessageQueue'
 import { HandoffSuggestion } from './HandoffSuggestion'
+import { HandoffProposalBanner } from './HandoffProposalBanner'
 import { useQuoteSourceHighlight } from '@/hooks/useQuoteSourceHighlight'
 import { QuoteSourceMarkers } from './QuoteSourceMarkers'
 import {
@@ -3281,8 +3282,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
               </div>
             )}
 
-            {/* 建议新开会话：命中轮数阈值或上下文告警线时出现，点击触发交接 */}
-            <HandoffSuggestion sessionId={sessionId} />
+            {/* 建议新开会话：命中轮数阈值或上下文告警线时出现，点击触发交接。
+                独立会话窗口没有 Tab 栏，交接完切不过去，这里不显示。 */}
+            {!standalone && <HandoffSuggestion sessionId={sessionId} />}
 
             <AgentMessageQueue
               items={queuedMessages}
@@ -3475,6 +3477,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
           {/* 模型主动提议建立 Goal：不阻塞当前轮，只等用户确认 */}
           <GoalProposalBanner sessionId={sessionId} />
+
+          {/* 模型主动提议交接对话：同样不阻塞，确认后才撰写文档并新建会话 */}
+          <HandoffProposalBanner sessionId={sessionId} />
         </div>
 
         {/* 输入区域 — 交互横幅显示时隐藏，由横幅替代。
