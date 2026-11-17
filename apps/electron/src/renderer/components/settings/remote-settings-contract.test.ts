@@ -8,10 +8,10 @@ function readSettingsFile(name: string): string {
 }
 
 describe('远程连接设置重构契约', () => {
-  test('Hub 保留六个入口并由外层 SettingsPanel 负责滚动', () => {
+  test('Hub 保留七个入口并由外层 SettingsPanel 负责滚动', () => {
     const source = readSettingsFile('./BotHubSettings.tsx')
 
-    for (const id of ['pocket', 'feishu', 'wechat', 'dingtalk', 'defaults', 'logos']) {
+    for (const id of ['webui', 'pocket', 'feishu', 'wechat', 'dingtalk', 'defaults', 'logos']) {
       expect(source).toContain(`id: '${id}'`)
     }
     expect(source).not.toContain("from '@profer/ui/primitives/scroll-area'")

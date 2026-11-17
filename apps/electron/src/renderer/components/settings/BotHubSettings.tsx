@@ -48,7 +48,7 @@ const PLATFORMS: readonly BotPlatformDef[] = [
   },
   {
     id: 'pocket',
-    name: '移动模式（试验版）',
+    name: '移动模式',
     icon: <Smartphone size={16} aria-hidden="true" />,
     iconTextClass: 'text-violet-600',
   },
