@@ -93,6 +93,18 @@ export async function updateGoalProposalPolicy(policy: import('@profer/shared').
   }
 }
 
+/** 模型主动提议「交接对话」的策略：alwaysAsk 每次确认 / disabled 不给工具。 */
+export const handoffProposalPolicyAtom = atom<import('@profer/shared').HandoffProposalPolicy>('alwaysAsk')
+
+/** 更新交接提议策略并持久化。 */
+export async function updateHandoffProposalPolicy(policy: import('@profer/shared').HandoffProposalPolicy): Promise<void> {
+  try {
+    await window.electronAPI.updateSettings({ handoffProposalPolicy: policy })
+  } catch (error) {
+    console.error('[交接提议] 更新策略失败:', error)
+  }
+}
+
 /** 各场景通知音配置 */
 export const notificationSoundsAtom = atom<NotificationSoundSettings>({})
 

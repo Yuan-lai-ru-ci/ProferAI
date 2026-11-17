@@ -162,6 +162,14 @@ export function isGoalProposalToolName(name: unknown): boolean {
   return name === GOAL_PROPOSE_TOOL_NAME || name === `mcp__goal_proposal__${GOAL_PROPOSE_TOOL_NAME}`
 }
 
+/** 模型主动提议「交接对话」的工具名。 */
+export const HANDOFF_PROPOSE_TOOL_NAME = 'propose_handoff'
+
+/** 交接提议工具不应作为普通工具过程展示（有专门的确认卡片）。 */
+export function isHandoffProposalToolName(name: unknown): boolean {
+  return name === HANDOFF_PROPOSE_TOOL_NAME || name === `mcp__handoff_proposal__${HANDOFF_PROPOSE_TOOL_NAME}`
+}
+
 /** Goal 内部状态工具不应作为普通工具过程展示。 */
 export function isGoalUpdateToolName(name: unknown): boolean {
   return name === GOAL_UPDATE_TOOL_NAME || name === `mcp__goal__${GOAL_UPDATE_TOOL_NAME}`

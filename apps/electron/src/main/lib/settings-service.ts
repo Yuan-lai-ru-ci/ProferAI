@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { getSettingsPath } from './config-paths'
 import { normalizeGoalProposalPolicy } from './goal-proposal-service'
+import { normalizeHandoffProposalPolicy } from './handoff-proposal-service'
 import { DEFAULT_AGENT_RUNTIME, DEFAULT_HANDOFF_SUGGEST_TURN_COUNT, MAX_HANDOFF_SUGGEST_TURN_COUNT, DEFAULT_INTERFACE_VARIANT, DEFAULT_PREVIEW_OPEN_MODE, DEFAULT_THEME_MODE, DEFAULT_USER_MESSAGE_POSITION } from '../../types'
 import { normalizeAgentRuntime } from '@profer/shared'
 import type { AppSettings } from '../../types'
@@ -35,6 +36,8 @@ function getDefaultSettings(): AppSettings {
     goalIdleCheckinMinutes: 0,
     goalIdleCheckinMaxCount: 3,
     goalProposalPolicy: 'alwaysAsk',
+    // 交接提议默认开启但必须用户确认：模型可建议换会话，但写文档/建会话由用户点确认触发。
+    handoffProposalPolicy: 'alwaysAsk',
     showCreditsInSidebar: true,
     userMessagePosition: DEFAULT_USER_MESSAGE_POSITION,
     previewModePreference: DEFAULT_PREVIEW_OPEN_MODE,
@@ -98,6 +101,7 @@ export function getSettings(): AppSettings {
       agentRuntime: normalizeAgentRuntime(data.agentRuntime),
       handoffSuggestTurnCount: normalizeHandoffSuggestTurnCount(data.handoffSuggestTurnCount),
       goalProposalPolicy: normalizeGoalProposalPolicy(data.goalProposalPolicy),
+      handoffProposalPolicy: normalizeHandoffProposalPolicy(data.handoffProposalPolicy),
       developerModeEnabled,
     }
     return _settingsCache

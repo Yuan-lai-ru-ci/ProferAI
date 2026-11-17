@@ -30,6 +30,8 @@ export interface HandoffSuggestionInput {
   dismissed: boolean
   /** 本会话是否已有交接在进行 */
   inFlight: boolean
+  /** 本会话是否已有模型提交的待确认交接提议；有则不再叠加阈值建议条 */
+  proposalPending: boolean
 }
 
 export type HandoffSuggestion =
@@ -39,7 +41,7 @@ export type HandoffSuggestion =
 const HIDDEN: HandoffSuggestion = { visible: false, reason: null }
 
 export function resolveHandoffSuggestion(input: HandoffSuggestionInput): HandoffSuggestion {
-  const { turnCount, threshold, contextRatio, streaming, dismissed, inFlight } = input
+  const { turnCount, threshold, contextRatio, streaming, dismissed, inFlight, proposalPending } = input
 
   // 关闭态优先于一切：用户把阈值设成 0 就是不想看到这条建议，
   // 上下文再满也不该冒出来（那时该由上下文徽标自己提示压缩）。
@@ -49,6 +51,10 @@ export function resolveHandoffSuggestion(input: HandoffSuggestionInput): Handoff
   if (streaming) return HIDDEN
   if (dismissed) return HIDDEN
   if (inFlight) return HIDDEN
+
+  // 模型已经提交了信息更完整的交接卡片时，不再叠一条阈值建议：两个入口同时出现，
+  // 用户不知道该点哪一个，而且卡片本身已经覆盖了「要不要现在交接」这个决定。
+  if (proposalPending) return HIDDEN
 
   if (turnCount >= threshold) return { visible: true, reason: 'turnThreshold' }
 

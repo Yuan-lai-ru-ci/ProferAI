@@ -30,6 +30,7 @@ import {
   allPendingPermissionRequestsAtom,
   allPendingAskUserRequestsAtom,
   allPendingGoalProposalsAtom,
+  allPendingHandoffProposalsAtom,
   askUserAnswersAtom,
   allPendingExitPlanRequestsAtom,
   agentPromptSuggestionsAtom,
@@ -145,9 +146,14 @@ export function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[]
       case 'ask_user_resolved':
         return [{ type: 'ask_user_resolved', requestId: evt.requestId }]
       case 'goal_proposal':
-        return [{ type: 'goal_proposal', proposal: evt.proposal }]
       case 'goal_proposal_resolved':
-        return [{ type: 'goal_proposal_resolved', proposalId: evt.proposalId, accepted: evt.accepted }]
+      case 'handoff_proposal':
+      case 'handoff_proposal_resolved':
+        // 卡片队列事件已在 profer_event 分支直接更新待确认列表，不投影成旧运行事件。
+        // 投影的后果：用户在 run 结束后才点忽略/确认，晚到的 resolved 会在没有流状态时
+        // 被兜底捏成 { running: true }，而 applyAgentEvent 不处理这些类型，界面永远停在
+        // 「Agent Running」。
+        return []
       case 'exit_plan_mode_request':
         return [{ type: 'exit_plan_mode_request', request: evt.request }]
       case 'exit_plan_mode_resolved':
@@ -431,6 +437,19 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     void window.electronAPI.listGoalProposals().then((proposals) => {
       if (!effectActive || proposals.length === 0) return
       store.set(allPendingGoalProposalsAtom, (prev) => {
+        const map = new Map(prev)
+        for (const proposal of proposals) {
+          const current = map.get(proposal.sessionId) ?? []
+          if (!current.some((item) => item.id === proposal.id)) map.set(proposal.sessionId, [...current, proposal])
+        }
+        return map
+      })
+    }).catch(() => {})
+    // 交接提议同样只在主进程内存里：窗口重载后必须重拉，否则卡片消失但
+    // 主进程 hasPending 仍会拒绝模型后续提议。
+    void window.electronAPI.listHandoffProposals().then((proposals) => {
+      if (!effectActive || proposals.length === 0) return
+      store.set(allPendingHandoffProposalsAtom, (prev) => {
         const map = new Map(prev)
         for (const proposal of proposals) {
           const current = map.get(proposal.sessionId) ?? []
@@ -993,6 +1012,57 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
             })
           } else if (proferEvent.type === 'visualization_updated' && proferEvent.sessionId === sessionId && proferEvent.record.sessionId === sessionId) {
             store.set(visualizationsAtom, (previous) => updateVisualizationSessionCache(previous, sessionId, [proferEvent.record]))
+          } else if (proferEvent.type === 'goal_proposal') {
+            // 模型提议建立 Goal：不阻塞当前轮，只排队等用户确认。
+            store.set(allPendingGoalProposalsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              if (current.some((item) => item.id === proferEvent.proposal.id)) return prev
+              map.set(sessionId, [...current, proferEvent.proposal])
+              return map
+            })
+            // 提议不阻塞当前轮：只在应用不在前台时提醒，避免用户在会话里被系统通知+提示音打扰。
+            const proposalSessionTitle = getSessionTitle(sessionId)
+            sendDesktopNotification(
+              '建议建立 Goal',
+              `[${proposalSessionTitle}] ${proferEvent.proposal.objective}`,
+              store.get(notificationsEnabledAtom),
+              { playSound: false, onNavigate: makeNavigateToSession(sessionId, proposalSessionTitle) }
+            )
+          } else if (proferEvent.type === 'goal_proposal_resolved') {
+            store.set(allPendingGoalProposalsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              const next = current.filter((item) => item.id !== proferEvent.proposalId)
+              if (next.length > 0) map.set(sessionId, next)
+              else map.delete(sessionId)
+              return map
+            })
+          } else if (proferEvent.type === 'handoff_proposal') {
+            // 模型提议交接对话：不阻塞当前轮，只排队等用户确认。
+            store.set(allPendingHandoffProposalsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              if (current.some((item) => item.id === proferEvent.proposal.id)) return prev
+              map.set(sessionId, [...current, proferEvent.proposal])
+              return map
+            })
+            const handoffTitle = getSessionTitle(sessionId)
+            sendDesktopNotification(
+              '建议交接对话',
+              `[${handoffTitle}] ${proferEvent.proposal.reason}`,
+              store.get(notificationsEnabledAtom),
+              { playSound: false, onNavigate: makeNavigateToSession(sessionId, handoffTitle) },
+            )
+          } else if (proferEvent.type === 'handoff_proposal_resolved') {
+            store.set(allPendingHandoffProposalsAtom, (prev) => {
+              const map = new Map(prev)
+              const current = map.get(sessionId) ?? []
+              const next = current.filter((item) => item.id !== proferEvent.proposalId)
+              if (next.length > 0) map.set(sessionId, next)
+              else map.delete(sessionId)
+              return map
+            })
           } else if (proferEvent.type === 'external_run_started') {
             activateExternalAgentRun(proferEvent)
           } else if (proferEvent.type === 'delegation_session_updated' || proferEvent.type === 'session_updated') {
@@ -1349,33 +1419,6 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
               event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
               'permissionRequest'
             )
-          } else if (event.type === 'goal_proposal') {
-            // 模型提议建立 Goal：不阻塞当前轮，只排队等用户确认。
-            store.set(allPendingGoalProposalsAtom, (prev) => {
-              const map = new Map(prev)
-              const current = map.get(sessionId) ?? []
-              if (current.some((item) => item.id === event.proposal.id)) return prev
-              map.set(sessionId, [...current, event.proposal])
-              return map
-            })
-            // 提议不阻塞当前轮：只在应用不在前台时提醒，避免用户在会话里被系统通知+提示音打扰。
-            const proposalEnabled = store.get(notificationsEnabledAtom)
-            const proposalSessionTitle = getSessionTitle(sessionId)
-            sendDesktopNotification(
-              '建议建立 Goal',
-              `[${proposalSessionTitle}] ${event.proposal.objective}`,
-              proposalEnabled,
-              { playSound: false, onNavigate: makeNavigateToSession(sessionId, proposalSessionTitle) }
-            )
-          } else if (event.type === 'goal_proposal_resolved') {
-            store.set(allPendingGoalProposalsAtom, (prev) => {
-              const map = new Map(prev)
-              const current = map.get(sessionId) ?? []
-              const next = current.filter((item) => item.id !== event.proposalId)
-              if (next.length > 0) map.set(sessionId, next)
-              else map.delete(sessionId)
-              return map
-            })
           } else if (event.type === 'ask_user_resolved') {
             // AskUser 已解决：从队列移除对应请求（双端在线时，另一端回答后也必须清理本地队列，
             // 否则 AskUserBanner 永远显示残留的最旧请求 → 回答发旧 requestId → “提问请求不存在”）。

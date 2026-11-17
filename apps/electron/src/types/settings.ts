@@ -305,6 +305,14 @@ export interface AppSettings {
    * - `disabled`：不给模型这个工具。
    */
   goalProposalPolicy?: import('@profer/shared').GoalProposalPolicy
+  /**
+   * 模型主动提议「交接对话」的策略。
+   * - `alwaysAsk`（默认）：允许模型提议，卡片等用户确认后才交接；
+   * - `disabled`：不给模型这个工具，模型只能在回复里用自然语言建议。
+   *
+   * 没有 auto：交接要写文档、建新会话并切标签，自动执行会打断用户当前工作。
+   */
+  handoffProposalPolicy?: import('@profer/shared').HandoffProposalPolicy
   /** 各场景通知音选择 */
   notificationSounds?: NotificationSoundSettings
   /** 用户添加的自定义通知音 */

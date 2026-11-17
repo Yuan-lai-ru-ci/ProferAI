@@ -11,6 +11,7 @@ import { permissionService } from './agent-permission-service'
 import { askUserService } from './agent-ask-user-service'
 import { exitPlanService } from './agent-exit-plan-service'
 import { goalProposalService } from './goal-proposal-service'
+import { handoffProposalService } from './handoff-proposal-service'
 import { browserController } from './browser-controller'
 import {
   hasAgentSessionProjectionPublisher,
@@ -164,6 +165,8 @@ export function drainSessionDeletionQueue(): Promise<void> {
             exitPlanService.clearSessionPending(sessionId)
             // 会话删了，待确认的 Goal 提议不能再留着：否则点「建立 Goal」会对着已删除会话创建。
             goalProposalService.clearSession(sessionId)
+            // 会话已删，待确认的交接提议点下去会对着不存在的会话撰写文档。
+            handoffProposalService.clearSession(sessionId)
             void browserController.close(sessionId)
           },
           // 带上 workspaceId：索引条目已被移除时仍能解析 session 目录继续清理。
