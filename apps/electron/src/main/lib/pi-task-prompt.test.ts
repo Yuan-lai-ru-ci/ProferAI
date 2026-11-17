@@ -69,6 +69,14 @@ describe('splitPiTaskPrompt', () => {
     expect(turns[2]!.taskPrompt).toBe('')
   })
 
+  test('派工与原 Worker 续跑输入恢复协作指导，但不绕过工具门禁', () => {
+    for (const userMessage of ['把后续工作派工出去', '续跑上一个任务', '让原 Worker 修正结论', 'continue_delegation']) {
+      const result = splitPiTaskPrompt({ basePrompt: BASE_PROMPT, userMessage, toolNames: ['mcp__collaboration__continue_delegation'] })
+      expect(result.taskPrompt).toContain('COLLABORATION_RULES')
+      expect(splitPiTaskPrompt({ basePrompt: BASE_PROMPT, userMessage, toolNames: [] }).taskPrompt).toBe('')
+    }
+  })
+
   test('所有任务 SOP 仍遵守原工具门禁', () => {
     const result = splitPiTaskPrompt({
       basePrompt: BASE_PROMPT,

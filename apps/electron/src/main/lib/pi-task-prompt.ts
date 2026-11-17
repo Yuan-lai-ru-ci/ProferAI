@@ -72,7 +72,7 @@ export function splitPiTaskPrompt(options: PiTaskPromptOptions): { systemPrompt:
   if (collaboration) {
     prompt = collaboration.rest
     const needsCollaboration = hasAnyTool(tools, (name) => name.startsWith('mcp__collaboration__'))
-      && matches(task, /(?:\b(?:agent|agents|subagent|sub-agent|parallel|delegate|delegation)\b|子\s*Agent|多会话|并行|协作|委派)/i)
+      && matches(task, /(?:\b(?:agent|agents|subagent|sub-agent|parallel|delegate|delegation|worker)\b|continue_delegation|子\s*Agent|多会话|并行|协作|委派|派工|续跑)/i)
     if (needsCollaboration) lowFrequency.push(collaboration.text)
   }
 

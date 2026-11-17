@@ -1068,6 +1068,8 @@ export interface AgentSessionMeta {
   rootSessionId?: string
   /** 来源委派 ID（委派子会话使用，标记所属委派记录） */
   sourceDelegationId?: string
+  /** 调用方显式任务键；仅在同一来源会话与工作区内定位原 Worker，不替代审计 taskId。 */
+  delegationTaskKey?: string
   /** 委派角色：explore / research / implement / review / custom */
   delegationRole?: string
   /** 委派任务目标描述 */

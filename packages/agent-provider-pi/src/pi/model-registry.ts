@@ -828,7 +828,14 @@ export async function buildModel(
       baseUrl,
       reasoning: modelDefaults.reasoning,
         thinkingLevelMap: modelDefaults.thinkingLevelMap,
-        compat: modelDefaults.compat,
+        // Chat 的 long 默认探测过于宽松：DeepSeek 自动缓存，未知网关不能按模型目录推断端点能力。
+        // 只信任精确官方端点；不改 Responses/Codex 的缓存键、连接身份或 Anthropic TTL。
+        compat: api === 'openai-completions'
+          && (input.provider === 'deepseek'
+            || ((input.provider === 'custom' || input.provider === 'openai')
+              && !['api.openai.com', 'openrouter.ai'].includes(new URL(baseUrl).hostname)))
+          ? { ...modelDefaults.compat, supportsLongCacheRetention: false }
+          : modelDefaults.compat,
       input: modelDefaults.input,
       cost: modelDefaults.cost,
       contextWindow: modelDefaults.contextWindow,

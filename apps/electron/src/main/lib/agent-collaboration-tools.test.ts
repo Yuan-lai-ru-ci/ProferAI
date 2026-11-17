@@ -39,7 +39,7 @@ let resolvedPreset: {
 } = { reference: { presetId: 'code', presetScope: 'workspace', workspaceSlug: 'project' }, preset: { id: 'code', name: '代码', permissionMode: 'auto', modelId: 'bound-model' } }
 const { buildPiCollaborationTools, injectAgentCollaborationMcpServer, stopDelegationsForParent, registerCollaborationEventBus, hasRunningDelegations } = await import('./agent-collaboration-tools')
 
-interface Tool { name: string; parameters: Record<string, unknown>; execute: (id: string, args: unknown) => Promise<{ content: Array<{ text: string }> }> }
+interface Tool { name: string; description: string; parameters: Record<string, unknown>; execute: (id: string, args: unknown) => Promise<{ content: Array<{ text: string }> }> }
 let sequence = 0
 function setup() {
   const source = `source-${++sequence}`
@@ -71,6 +71,18 @@ bus.on((sessionId, payload) => events.push({ sessionId, payload }))
 registerCollaborationEventBus(bus)
 
 describe('真实会话派工', () => {
+  test('完成结果才有 Agent Steer，失败与运行中不误报完成', async () => {
+    const { source, invoke } = setup()
+    const child = (await invoke('delegate_agent', { task: '行为边界' })).delegation
+    expect((await invoke('get_delegation_results', { delegationIds: [child.delegationId] })).behaviorSteer).toBeUndefined()
+    runs[0]!.handlers.onComplete?.([], { outcomeStatus: 'failed' })
+    expect((await invoke('get_delegation_results', { delegationIds: [child.delegationId] })).behaviorSteer).toBeUndefined()
+    sessions.set('taste-completed', { id: 'taste-completed', title: '完成结果', sourceSessionId: source, sourceDelegationId: 'taste-result', delegationStatus: 'completed', createdAt: 1, updatedAt: 1 })
+    expect((await invoke('get_delegation_results', { delegationIds: ['taste-result'] })).behaviorSteer).toContain('最终交付责任')
+    sessions.get(source)!.delegationRelation = 'independent'
+    expect((await invoke('get_delegation_results', { delegationIds: ['taste-result'] })).behaviorSteer).toBeUndefined()
+  })
+
   test('预设绑定模型时优先于父会话模型，显式 modelId 仍可覆盖', async () => {
     const { source, invoke } = setup()
     sessions.get(source)!.modelId = 'parent-model'
@@ -185,6 +197,7 @@ describe('真实会话派工', () => {
     expect(runs).toHaveLength(2)
     const results = await invoke('get_delegation_results', { delegationIds: [first.delegationId, second.delegationId] })
     expect(results.delegations).toHaveLength(2)
+    expect(results.behaviorSteer).toContain('GPT with Taste Agent Steer')
     parentActive = false
     bus.emit(source, { kind: 'profer_event', event: { type: 'run_idle', sessionId: source } } as AgentStreamPayload)
     expect(runs).toHaveLength(2)
@@ -196,20 +209,110 @@ describe('真实会话派工', () => {
     runs[0]!.handlers.onComplete?.([])
     const result = await waiting
     expect(result.delegations[0].status).toBe('completed')
+    expect(result.behaviorSteer).toContain('GPT with Taste Agent Steer')
     parentActive = false
     bus.emit(source, { kind: 'profer_event', event: { type: 'run_idle', sessionId: source } } as AgentStreamPayload)
     expect(runs).toHaveLength(1)
   })
+  test('taskKey 在 Claude/Pi 中只定位原 Worker，forceNew 显式换绑且不重复执行', async () => {
+    for (const runtime of ['pi', 'claude'] as const) {
+      const { source, invoke: piInvoke } = setup()
+      let invoke = piInvoke
+      if (runtime === 'claude') {
+        const tools = new Map<string, (args: unknown) => Promise<{ content: Array<{ text: string }> }>>()
+        const sdk = {
+          tool: (name: string, _description: string, _schema: unknown, execute: (args: unknown) => Promise<{ content: Array<{ text: string }> }>) => { tools.set(name, execute); return { name } },
+          createSdkMcpServer: () => ({}),
+        }
+        await injectAgentCollaborationMcpServer(sdk as never, {}, { sessionId: source, channelId: 'channel', workspaceId: 'project' })
+        invoke = async (name, args) => JSON.parse((await tools.get(name)!(args)).content[0]!.text)
+      }
+      const before = runs.length
+      const first = await invoke('delegate_agent', { task: '首次', taskKey: ' ticket-1 ' })
+      expect(first.reused).toBe(false)
+      const repeated = await invoke('delegate_agent', { task: '不能自动执行的追加', taskKey: 'ticket-1' })
+      expect(repeated.reused).toBe(true)
+      expect(repeated.delegation.childSessionId).toBe(first.delegation.childSessionId)
+      expect(repeated.note).toContain('task 未执行')
+      expect(runs).toHaveLength(before + 1)
+      await expect(invoke('delegate_agent', { task: '错误模型', taskKey: 'ticket-1', modelId: 'different' })).rejects.toThrow('forceNew')
+      const replacement = await invoke('delegate_agent', { task: '明确另建', taskKey: 'ticket-1', forceNew: true })
+      expect(replacement.delegation.childSessionId).not.toBe(first.delegation.childSessionId)
+      expect((await invoke('delegate_agent', { task: '再定位', taskKey: 'ticket-1' })).delegation.childSessionId).toBe(replacement.delegation.childSessionId)
+      expect(sessions.get(first.delegation.childSessionId)?.delegationTaskKey).toBeUndefined()
+      const other = setup()
+      expect((await other.invoke('delegate_agent', { task: '不同来源', taskKey: 'ticket-1' })).reused).toBe(false)
+    }
+  })
+  test('taskKey 并发查重与工作区隔离，无键调用仍独立新建', async () => {
+    const { source, invoke } = setup()
+    const [first, repeated] = await Promise.all([
+      invoke('delegate_agent', { task: '同任务', taskKey: 'concurrent' }),
+      invoke('delegate_agent', { task: '同任务重试', taskKey: 'concurrent' }),
+    ])
+    expect(first.delegation.childSessionId).toBe(repeated.delegation.childSessionId)
+    expect(runs).toHaveLength(1)
+    sessions.get(source)!.workspaceId = 'different-project'
+    const moved = await invoke('delegate_agent', { task: '另一工作区', taskKey: 'concurrent' })
+    expect(moved.reused).toBe(false)
+    expect(moved.delegation.childSessionId).not.toBe(first.delegation.childSessionId)
+    const a = await invoke('delegate_agent', { task: '完全相同正文' })
+    const b = await invoke('delegate_agent', { task: '完全相同正文' })
+    expect(a.delegation.childSessionId).not.toBe(b.delegation.childSessionId)
+  })
+  test('taskKey 批量重复与持久化恢复不双建，续跑取 child 最新模型渠道', async () => {
+    const { source, invoke } = setup()
+    const batch = await invoke('delegate_agents', { items: [{ task: '一', taskKey: 'batch-key' }, { task: '重复', taskKey: 'batch-key' }] })
+    expect(batch.createdCount).toBe(1)
+    expect(batch.reusedCount).toBe(1)
+    expect(batch.delegations[0].childSessionId).toBe(batch.delegations[1].childSessionId)
+    expect(runs).toHaveLength(1)
+    sessions.set('recovered-worker', { id: 'recovered-worker', title: '恢复', workspaceId: 'project', sourceSessionId: source, sourceDelegationId: 'recovered-task', delegationTaskKey: 'persisted-key', delegationStatus: 'running', channelId: 'new-channel', modelId: 'new-model', createdAt: 1, updatedAt: 1 })
+    const found = await invoke('delegate_agent', { task: '恢复后定位', taskKey: 'persisted-key' })
+    expect(found.reused).toBe(true)
+    expect(found.delegation.status).toBe('interrupted')
+    const continuation = invoke('continue_delegation', { delegationId: 'recovered-task', message: '继续' })
+    runs[1]!.handlers.onComplete?.([])
+    await continuation
+    expect(runs[1]!.input).toMatchObject({ sessionId: 'recovered-worker', channelId: 'new-channel', modelId: 'new-model' })
+    runs[0]!.handlers.onComplete?.([])
+    sessions.get(batch.delegations[0].childSessionId)!.modelId = 'changed-model'
+    const next = invoke('continue_delegation', { delegationId: batch.delegations[0].delegationId, message: '下一步' })
+    runs[2]!.handlers.onComplete?.([])
+    await next
+    expect(runs[2]!.input.modelId).toBe('changed-model')
+  })
+
   test('继续委派复用 taskId 并生成新的 triggerId', async () => {
     const { invoke } = setup()
     const first = (await invoke('delegate_agent', { task: '初始' })).delegation
     runs[0]!.handlers.onComplete?.([])
     const continuation = invoke('continue_delegation', { delegationId: first.delegationId, message: '下一步' })
     runs[1]!.handlers.onComplete?.([])
-    await continuation
+    const result = await continuation
+    expect(result.delegation.childSessionId).toBe(first.childSessionId)
+    expect(result.delegation.delegationId).toBe(first.delegationId)
+    expect(runs[1]!.input.sessionId).toBe(first.childSessionId)
     expect(runs[1]!.input.taskId).toBe(runs[0]!.input.taskId)
     expect(runs[1]!.input.triggerId).not.toBe(runs[0]!.input.triggerId)
     expect(runs[1]!.input.messageAuthor).toEqual(runs[0]!.input.messageAuthor)
+  })
+  test('持久化委派也给出原 Worker 续跑提示，遗留 running 按中断恢复', async () => {
+    const { source, invoke } = setup()
+    for (const status of ['completed', 'failed', 'cancelled', 'interrupted', 'running'] as const) {
+      const delegationId = `${source}-${status}`
+      const childSessionId = `${delegationId}-child`
+      sessions.set(childSessionId, { id: childSessionId, title: status, sourceSessionId: source, sourceDelegationId: delegationId, delegationStatus: status, createdAt: 1, updatedAt: 1 })
+      const expectedStatus = status === 'running' ? 'interrupted' : status
+      const listed = (await invoke('list_delegations', {})).delegations.find((item: { delegationId: string }) => item.delegationId === delegationId)
+      const result = (await invoke('get_delegation_results', { delegationIds: [delegationId] })).delegations[0]
+      for (const item of [listed, result]) {
+        expect(item.status).toBe(expectedStatus)
+        expect(item.resumable).toBe(true)
+        expect(item.continuationHint).toContain('原 Worker')
+        expect(item.continuationHint).not.toContain('保留完整上下文')
+      }
+    }
   })
   test('子会话后台任务等待不算终态，委派保持运行中', async () => {
     const { invoke } = setup()
@@ -362,15 +465,21 @@ describe('真实会话派工', () => {
 
   test('Claude/Pi schema 和禁用单工具保持对等', async () => {
     const { source, tools } = setup()
-    const captured: Array<{ name: string; schema: Record<string, unknown>; execute: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> = []
+    const captured: Array<{ name: string; description: string; schema: Record<string, unknown>; execute: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> = []
     let registered: typeof captured = []
-    const sdk = { tool: (name: string, _description: string, schema: Record<string, unknown>, execute: typeof captured[number]['execute']) => { const tool = { name, schema, execute }; captured.push(tool); return tool }, createSdkMcpServer: ({ tools: value }: { tools: typeof captured }) => { registered = value; return {} } }
+    const sdk = { tool: (name: string, description: string, schema: Record<string, unknown>, execute: typeof captured[number]['execute']) => { const tool = { name, description, schema, execute }; captured.push(tool); return tool }, createSdkMcpServer: ({ tools: value }: { tools: typeof captured }) => { registered = value; return {} } }
     await injectAgentCollaborationMcpServer(sdk as never, {}, { sessionId: source, channelId: 'channel', workspaceId: 'project' }, ['delegate_agents'])
     const claude = captured.find(tool => tool.name === 'delegate_agent')!.schema
     expect(Object.keys(claude)).toContain('placement')
     expect(Object.keys(claude)).toContain('relation')
     expect(Object.keys((tools.find(tool => tool.name.endsWith('__delegate_agent'))!.parameters.properties as object))).toEqual(Object.keys(claude))
     expect(registered.some(tool => tool.name === 'delegate_agents')).toBe(false)
+    for (const name of ['delegate_agent', 'delegate_agents', 'continue_delegation']) {
+      const description = captured.find(tool => tool.name === name)!.description
+      expect(tools.find(tool => tool.name.endsWith(`__${name}`))!.description).toBe(description)
+      expect(description).toContain('原 Worker')
+      expect(description).not.toContain('保留完整上下文')
+    }
     const { delegation } = JSON.parse((await captured.find(tool => tool.name === 'delegate_agent')!.execute({ task: 'Claude 独立工作', placement: 'independent' })).content[0]!.text)
     expect(delegation).toMatchObject({ sourceSessionId: source, relation: 'independent', placement: 'independent', taskId: delegation.delegationId })
     expect(runs[0]!.input.messageAuthor).toEqual({ type: 'agent', id: source })
