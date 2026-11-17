@@ -1132,10 +1132,9 @@ function GoalIdleCheckinSetting(): React.ReactElement {
   )
 }
 
-
 /**
- * 模型主动提议建立 Goal 的策略。
- * alwaysAsk：模型提议后要用户点确认（默认）；auto：直接创建；disabled：不给模型这个工具。
+ * 模型主动提议「交接对话」的策略。
+ * alwaysAsk：模型提议后要用户点确认（默认）；disabled：不给模型这个工具。
  */
 function HandoffProposalPolicySetting(): React.ReactElement {
   const [policy, setPolicy] = useAtom(handoffProposalPolicyAtom)
@@ -1165,6 +1164,10 @@ function HandoffProposalPolicySetting(): React.ReactElement {
   )
 }
 
+/**
+ * 模型主动提议建立 Goal 的策略。
+ * alwaysAsk：模型提议后要用户点确认（默认）；auto：直接创建；disabled：不给模型这个工具。
+ */
 function GoalProposalPolicySetting(): React.ReactElement {
   const [policy, setPolicy] = useAtom(goalProposalPolicyAtom)
   return (
