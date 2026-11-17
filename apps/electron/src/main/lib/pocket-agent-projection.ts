@@ -70,6 +70,80 @@ function collectPocketImageRefs(
   return found
 }
 
+/** 工具摘要的候选字段，按「人类最想先看到什么」排序。 */
+const POCKET_TOOL_SUMMARY_KEYS = [
+  'description', 'prompt', 'query', 'command', 'subject', 'title', 'task', 'objective',
+  'name', 'skill', 'pattern', 'url', 'uri', 'path', 'file_path', 'filePath', 'notebook_path',
+  'automationId', 'trigger_id', 'id', 'server', 'reason', 'message', 'to',
+]
+
+/** 摘要上限：一行、够看清在做什么，又不至于把整条命令/补丁带上 WebSocket。 */
+const POCKET_TOOL_SUMMARY_MAX_CHARS = 120
+
+/**
+ * WebUI 需要展开工具行看「完整输出 / 命令入参」（desktop 有、网页没有的能力补齐）。
+ * 完整放开会把重放日志与 WS 帧撑爆，也不安全（工具输出可能带文件内容）——
+ * 所以两头都有界：入参 1500 字、输出 4000 字，超长保留首尾（结论通常在首尾）。
+ */
+const POCKET_TOOL_INPUT_MAX_CHARS = 1500
+const POCKET_TOOL_OUTPUT_MAX_CHARS = 4000
+
+function capMiddle(value: string, limit: number): string {
+  if (value.length <= limit) return value
+  const head = Math.ceil(limit * 0.6)
+  const tail = Math.floor(limit * 0.25)
+  return `${value.slice(0, head)}\n…（中间省略 ${value.length - limit} 字符）…\n${value.slice(-tail)}`
+}
+
+/**
+ * 从 tool_result.content 提取可展示文本：字符串原样；块数组取 text 块（image 块已由
+ * 图片引用通道单独处理）。保留原始换行 —— 展开时按等宽正文渲染。
+ */
+function extractToolResultText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  const parts: string[] = []
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue
+    const item = block as Record<string, unknown>
+    if (typeof item.text === 'string' && item.text.trim()) parts.push(item.text)
+  }
+  return parts.join('\n')
+}
+
+function toSingleLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * 从工具入参里挑一行摘要（对齐桌面端 `extractFirstMeaningfulValue` 的口径）。
+ *
+ * 移动端拿不到完整入参：投影只留 `{ file_path }`，于是「执行过程」里每行都只剩一个裸工具名，
+ * 54 次调用滚下来分不清哪一步在干什么。摘要只下发结论性的那一小段，命令原文、补丁内容、
+ * 搜索结果仍然不出主进程。
+ */
+export function projectToolInputSummary(input: Record<string, unknown>): string | undefined {
+  const pick = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined
+    const line = toSingleLine(value)
+    if (!line) return undefined
+    return line.length > POCKET_TOOL_SUMMARY_MAX_CHARS
+      ? `${line.slice(0, POCKET_TOOL_SUMMARY_MAX_CHARS)}…`
+      : line
+  }
+  for (const key of POCKET_TOOL_SUMMARY_KEYS) {
+    const line = pick(input[key])
+    if (line) return line
+  }
+  // 各 MCP 服务的入参命名不统一（agent / skill_id / qurey…）：退回第一个像样的短字符串
+  for (const [key, value] of Object.entries(input)) {
+    if (key.startsWith('_')) continue
+    const line = pick(value)
+    if (line && line.length < 200) return line
+  }
+  return undefined
+}
+
 /**
  * Pocket 只需要渲染正文、工具活动摘要和有界的思考预览，不需要工具入参/结果或 SDK 内部字段。
  * 该投影在远程出口使用，避免完整 SDK 消息进入 WebSocket、重放日志和移动端缓存。
@@ -77,7 +151,7 @@ function collectPocketImageRefs(
 export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
   const record = message as Record<string, unknown>
   const base: Record<string, unknown> = { type: message.type }
-  for (const key of ['uuid', 'session_id', 'parent_tool_use_id', '_createdAt', '_partial', '_channelModelId', 'isReplay', 'isSynthetic', '_goalIteration']) {
+  for (const key of ['uuid', 'session_id', 'parent_tool_use_id', '_createdAt', '_partial', '_channelModelId', 'isReplay', 'isSynthetic', '_goalIteration', '_clientId']) {
     if (record[key] !== undefined) base[key] = record[key]
   }
   const provenance = projectMessageProvenance(record._provenance)
@@ -99,15 +173,19 @@ export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
       if (item.type === 'thinking') return []
       if (item.type === 'text' && typeof item.text === 'string') return [{ type: 'text', text: item.text }]
       if (item.type === 'tool_use' && typeof item.id === 'string' && typeof item.name === 'string') {
-        // 入参只透传文件路径：移动端需要在正文/回合末尾渲染文件 chip，
-        // 但不应该把完整工具参数（命令、补丁、搜索结果）带进 WebSocket。
+        // 入参只透传文件路径与一行摘要：移动端需要在正文/回合末尾渲染文件 chip，
+        // 也需要知道这一步在做什么，但不应该把完整工具参数（命令、补丁、搜索结果）带进 WebSocket。
         const input = item.input && typeof item.input === 'object' ? item.input as Record<string, unknown> : {}
         const filePath = input.file_path ?? input.filePath ?? input.path ?? input.notebook_path
+        const summary = projectToolInputSummary(input)
+        const inputText = capMiddle(JSON.stringify(input, null, 2), POCKET_TOOL_INPUT_MAX_CHARS)
         return [{
           type: 'tool_use',
           id: item.id,
           name: item.name,
           input: typeof filePath === 'string' ? { file_path: filePath } : {},
+          ...(summary ? { summary } : {}),
+          ...(inputText ? { inputText } : {}),
         }]
       }
       return []
@@ -135,11 +213,13 @@ export function projectSdkMessageForPocket(message: SDKMessage): SDKMessage {
       const item = block as Record<string, unknown>
       if (item.type === 'text' && typeof item.text === 'string') return [{ type: 'text', text: item.text }]
       if (item.type === 'tool_result' && typeof item.tool_use_id === 'string') {
+        const outputText = capMiddle(extractToolResultText(item.content), POCKET_TOOL_OUTPUT_MAX_CHARS)
         return [{
           type: 'tool_result',
           tool_use_id: item.tool_use_id,
           ...(item.is_error === true ? { is_error: true } : {}),
           ...(imageRefs.length > 0 ? { images: imageRefs } : {}),
+          ...(outputText ? { output: outputText } : {}),
         }]
       }
       return []

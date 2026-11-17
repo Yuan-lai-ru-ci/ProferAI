@@ -111,6 +111,11 @@ export class AgentAskUserService {
     return [...this.pendingRequests.values()].map((p) => p.request)
   }
 
+  /** 这条待处理请求属于哪个会话（远程出口做越权判定用；查不到返回 undefined）。 */
+  getPendingSessionId(requestId: string): string | undefined {
+    return this.pendingRequests.get(requestId)?.request.sessionId
+  }
+
   /**
    * 清除指定会话的所有待处理 AskUser 请求
    */

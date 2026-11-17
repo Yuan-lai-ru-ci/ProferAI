@@ -19,14 +19,20 @@ export interface RemoteAgentEventReplay {
 /**
  * 进程内 Agent 事件日志：为远程 Pocket 提供有限窗口的断线补发能力。
  * 事件内容不落盘，服务重启后由调用方通过快照恢复。
+ *
+ * 窗口尺寸（8000 条 / 8 小时）：客户端断线超过窗口时 resume 只能回
+ * requiresSnapshot（不补发事件），漏掉的 result / run_completed 只能靠重拉恢复 ——
+ * 手机锁屏/切后台一个上午是常态，10 分钟的旧窗口太小（曾导致「跑完的一轮永远
+ * 停在运行中」）。上限双保险：条数防内存爆（投影后每条约 1-3KB，8000 条典型 <25MB），
+ * 时长防陈旧事件无限堆积。
  */
 export class RemoteAgentEventLog {
   private readonly records: RemoteAgentEventRecord[] = []
   private nextEventId = 1
 
   constructor(
-    private readonly maxEvents = 2000,
-    private readonly maxAgeMs = 10 * 60 * 1000,
+    private readonly maxEvents = 8000,
+    private readonly maxAgeMs = 8 * 60 * 60 * 1000,
   ) {
     if (!Number.isInteger(maxEvents) || maxEvents < 1) {
       throw new Error('maxEvents 必须是正整数')

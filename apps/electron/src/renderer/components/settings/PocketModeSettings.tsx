@@ -303,7 +303,7 @@ export function PocketModeSettings(): React.ReactElement {
           <AlertDialogFooter><AlertDialogCancel disabled={saving}>取消</AlertDialogCancel><AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); void toggle(false) }}>关闭连接</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <SettingsSection title="移动模式（试验版）" description="通过一次性扫码配对，在局域网或自建可信 WSS 公网入口连接 Pocket。">
+      <SettingsSection title="移动模式" description="试验版：通过一次性扫码配对，在局域网或自建可信 WSS 公网入口连接 Pocket。">
         <SettingsCard divided>
           <SettingsToggle
             label="启用移动端连接"

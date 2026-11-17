@@ -44,6 +44,9 @@ env:
   # 固定到已在本地验证过的版本，避免 latest 改变 lockfile 或测试行为。
   BUN_VERSION: 1.3.14
   NODE_VERSION: '22'
+  # WebUI 前端来自独立公开仓库 Profer-pocket（webui/ 子工程）。
+  # 固定 commit，保证同一个 tag 反复构建得到相同的静态产物；升级 WebUI 时同步改这里。
+  POCKET_WEBUI_REF: 7e8e41672c1f2b86d6deee538b1d94d983606215
 
 jobs:
   # ============================================================
@@ -57,6 +60,9 @@ jobs:
     env:
       # Vite 处理 OOXML/WASM 资源时默认堆上限不足。
       NODE_OPTIONS: --max-old-space-size=6144
+      # checkout 放在工作区内，而 sync-webui-assets 的默认源目录是仓库外的兄弟目录，
+      # 所以这里显式指到 CI 的检出位置。
+      PROFER_WEBUI_SRC: ${{ github.workspace }}/Profer-pocket/webui/dist
 
     steps:
       - name: Checkout
@@ -117,6 +123,17 @@ jobs:
           packages/ui/src/markdown-preview.test.tsx
           packages/session-core/src/session-core.test.ts
           packages/project-core/src/project-core.test.ts
+
+      - name: Checkout WebUI frontend (Profer-pocket)
+        uses: actions/checkout@v4
+        with:
+          repository: Yuan-lai-ru-ci/Profer-pocket
+          ref: ${{ env.POCKET_WEBUI_REF }}
+          path: Profer-pocket
+
+      - name: Build WebUI frontend
+        working-directory: Profer-pocket
+        run: bun install --frozen-lockfile && bun run build:webui
 
       - name: Resolve macOS signing material
         id: signing
@@ -213,6 +230,9 @@ jobs:
   windows-x64:
     name: build (windows-latest, win, x64, oss)
     runs-on: windows-latest
+    env:
+      # 与 macOS 一致：显式指向 CI 工作区内的 Profer-pocket 产物。
+      PROFER_WEBUI_SRC: ${{ github.workspace }}/Profer-pocket/webui/dist
 
     steps:
       - name: Checkout
@@ -260,6 +280,17 @@ jobs:
           apps/electron/scripts/dist-platform.test.ts
           apps/electron/scripts/packaging-guards.test.ts
           scripts/release-asset-contract.test.ts
+
+      - name: Checkout WebUI frontend (Profer-pocket)
+        uses: actions/checkout@v4
+        with:
+          repository: Yuan-lai-ru-ci/Profer-pocket
+          ref: ${{ env.POCKET_WEBUI_REF }}
+          path: Profer-pocket
+
+      - name: Build WebUI frontend
+        working-directory: Profer-pocket
+        run: bun install --frozen-lockfile && bun run build:webui
 
       - name: Resolve Windows signing material
         id: signing

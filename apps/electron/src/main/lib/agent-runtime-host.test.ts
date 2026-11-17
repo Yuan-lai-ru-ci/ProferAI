@@ -98,6 +98,19 @@ const { agentRuntimePolicyRuns } = await import('./agent-runtime-policy-snapshot
 
 describe('Electron Agent host ports', () => {
 
+  test('Given onContextWindow callback When creating a runtime query Then it is forwarded via providerInput', () => {
+    // 回归：回调曾只挂在 AgentSendInput 上，runtime 的 toProviderInput() 不转发，
+    // Pi/Claude adapter 永远收不到 → 网页 run 一条 context_window 都不发。
+    const onContextWindow = () => {}
+    const query = createElectronAgentRuntimeQuery({
+      sessionId: 'session-ctx',
+      channelId: 'channel-1',
+      userMessage: 'hi',
+      onContextWindow,
+    }, { runtime: 'pi' })
+    expect(query.providerInput?.onContextWindow).toBe(onContextWindow)
+  })
+
   test('Given a headless send input When creating a runtime query Then runtime-neutral fields and provider policy are preserved', () => {
     const query = createElectronAgentRuntimeQuery({
       sessionId: 'session-query',

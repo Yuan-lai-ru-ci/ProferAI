@@ -18,7 +18,12 @@ export async function queueRuntimeUserMessage(input: AgentQueueMessageInput, dep
   await deps.queue({
     sessionId: input.sessionId,
     context,
-    message: { type: 'user', uuid, parent_tool_use_id: null, message: { content: [{ type: 'text', text: input.rawUserMessage ?? input.userMessage }] }, _createdAt: Date.now() },
+    message: {
+      type: 'user', uuid, parent_tool_use_id: null,
+      message: { content: [{ type: 'text', text: input.rawUserMessage ?? input.userMessage }] },
+      ...(input.clientId ? { _clientId: input.clientId } : {}),
+      _createdAt: Date.now(),
+    },
     receive: async ({ message, isCurrent }) => {
       const prompt = await deps.enrich?.(input) ?? input.userMessage
       if (!isCurrent()) throw new Error('会话未运行，无法追加消息')

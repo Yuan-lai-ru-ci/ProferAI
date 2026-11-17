@@ -47,6 +47,19 @@ export function loadRemoteToken(): string {
   const legacyFile = join(process.env.PROFER_CONFIG_DIR?.trim() || '.profer-dev', 'remote-token.json')
   return migrateRemoteToken(file, legacyFile, protectSecret, revealSecret)
 }
+
+/**
+ * WebUI 的独立访问凭据。
+ *
+ * 与 Pocket 的 token **必须是两个值**：网页链接是要发给别人/放进书签的，
+ * 而 Pocket 的凭据等同于「这台机器的远控权」。共用一个 token 时，任何拿到
+ * 分享链接的人都能拿着它去连 Pocket 的端口（同一局域网内直接可达）。
+ */
+export function loadWebuiToken(): string {
+  const file = join(getConfigDir(), 'webui-token.json')
+  if (process.env.PROFER_WEBUI_TOKEN) return process.env.PROFER_WEBUI_TOKEN
+  return migrateRemoteToken(file, file, protectSecret, revealSecret)
+}
 export function lanEndpoints(interfaces: ReturnType<typeof networkInterfaces>, port: number) {
   const addresses = new Set<string>()
   for (const nets of Object.values(interfaces)) for (const net of nets ?? []) {

@@ -37,6 +37,7 @@ import { AgentRuntimeCoordinator, createAgentRunOwnershipRegistry, createAgentRu
 import { fileWriteChips } from './agent-file-write-chips'
 import { createDesktopRunLedger } from './agent-run-ledger-host'
 import { getConfigDir } from './config-paths'
+import { listPersistedContextWindows, persistContextWindow } from './agent-context-window-persistence'
 import { normalizeHeadlessSendInput } from './agent-input-origin'
 import { queueRuntimeUserMessage } from './agent-runtime-queue'
 import { buildReferencedSessionsPrompt } from './agent-prompt-utils'
@@ -239,6 +240,26 @@ export function describeAgentRunRejection(failure: AgentRunClaimFailure): string
  */
 export function listActiveAgentRuntimeContexts(sessionIds?: readonly string[]) {
   return runtimeContextStore.list(sessionIds)
+}
+
+/**
+ * 列出「已知」上下文窗口：活跃运行时快照 + 各会话最后一次上报的窗口。
+ *
+ * `context_window` 是 run 开始时的瞬时事件，手机端经常错过；运行时快照又在
+ * `run_idle` 时清空。网页端「跑完一轮后刷新」必须还能水合出窗口大小，
+ * 因此这里把持久化的最后已知值并进来，活跃快照优先。
+ */
+export function listKnownAgentRuntimeContexts(sessionIds?: readonly string[]) {
+  const active = runtimeContextStore.list(sessionIds)
+  const activeIds = new Set(active.map((item) => item.sessionId))
+  const remembered = listPersistedContextWindows(sessionIds)
+    .filter((item) => !activeIds.has(item.sessionId))
+    .map((item) => ({
+      sessionId: item.sessionId,
+      contextWindow: item.contextWindow,
+      updatedAt: item.updatedAt,
+    }))
+  return [...active, ...remembered]
 }
 
 /**
@@ -527,6 +548,9 @@ eventBus.use((sessionId, payload, next) => {
   if (payload.kind === 'profer_event') {
     if (payload.event.type === 'context_window') {
       runtimeContextStore.setContextWindow(sessionId, payload.event.contextWindow)
+      // 跑完一轮后运行时快照会被 clear；窗口是模型属性，按会话记住最后一次值，
+      // 让手机端在「跑完之后」打开页面仍能水合出占用条。
+      persistContextWindow(sessionId, payload.event.contextWindow)
     } else if (payload.event.type === 'run_idle') {
       runtimeContextStore.clear(sessionId)
     }
@@ -936,6 +960,12 @@ export async function runAgentRuntimeHeadless(
   callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
   input = normalizeHeadlessSendInput(input, callbacks.source)
+  /**
+   * Pi 适配器从 `input.onContextWindow` 读取窗口上报回调（run 准备阶段回调一次）。
+   * 桌面路径由 orchestrator.sendMessage 自己装配；headless / 远程路径在这里装配 ——
+   * 以前没人挂，网页发起的 run 永远不发 context_window，占用条没有数据源。
+   */
+  if (callbacks.onContextWindow) input.onContextWindow = callbacks.onContextWindow
   // 已有窗口绑定时不得改绑到主窗口：会话可能正被独立会话窗口展示。
   // 改绑会给旧窗口发 SESSION_RELEASED（清掉它的运行态与实时消息），而新绑的主窗口
   // 并没有在展示这个会话——用户看到的子会话页从此收不到任何事件，过程区永远折叠。

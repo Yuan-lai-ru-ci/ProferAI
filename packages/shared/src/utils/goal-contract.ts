@@ -133,8 +133,10 @@ export function parseGoalContractInput(text: string): { goal: string; contract?:
         if (kind === 'verify' && !contract.verification) contract.verification = value
         else if (kind.startsWith('constraint') && !contract.constraints) contract.constraints = value
         else if (kind === 'stop' && !contract.stopWhen) contract.stopWhen = value
+        // 只有真正采纳为契约才吃掉这一行
+        continue
       }
-      continue
+      // 超长标记行不当作契约，但也不能静默丢弃 —— 退回成目标正文（与函数注释一致）
     }
     goalLines.push(rawLine)
   }

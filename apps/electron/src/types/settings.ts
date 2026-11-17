@@ -420,6 +420,14 @@ export interface AppSettings {
   pocketModeEnabled?: boolean
   /** 移动模式服务端口（正式版默认 7788，开发模式默认 7789；0/缺省表示使用默认端口）。 */
   pocketModePort?: number
+  /** WebUI「一个会话一个网页」开关；默认关闭，即默认 0 个网页。独立端口与独立凭据，与移动模式互不影响。 */
+  webuiEnabled?: boolean
+  /** WebUI 监听网卡（IPv4 字面量，默认 127.0.0.1）；仅作用于 WebUI 自己的监听。 */
+  webuiBindHost?: string
+  /** WebUI 监听端口（正式版默认 7800，开发模式默认 7801；0/缺省表示使用默认端口）。 */
+  webuiPort?: number
+  /** 已发布的会话白名单；/s/<id> 只对此列表内的会话返回页面，网页端 WS 也只能访问这些会话。默认空数组。 */
+  webuiPublishedSessionIds?: string[]
   /** Windows Shell 环境偏好：'auto'（自动检测，优先 Git Bash）| 'git-bash' | 'wsl'（默认 'auto'） */
   agentShellPreference?: 'auto' | 'git-bash' | 'wsl'
   /** 桌面输入工具栏的显示与排序偏好；移动端不读取此字段。 */
@@ -486,6 +494,49 @@ export interface PocketModeStatus {
   notice: string | null
 }
 
+/** 网卡下拉项（WebUI 选择监听地址用） */
+export interface WebuiNetworkInterface {
+  name: string
+  address: string
+  internal: boolean
+  /** 局域网 / 隧道 / 虚拟 等；面板据此标注「手机可能不可达」，避免选错网卡。 */
+  kind: 'loopback' | 'lan' | 'tunnel' | 'virtual' | 'link-local'
+}
+
+/** WebUI 面板可更新的配置；未提供的字段保持不变。 */
+export interface WebuiConfigPatch {
+  enabled?: boolean
+  bindHost?: string
+  port?: number
+  publishedSessionIds?: string[]
+}
+
+/** WebUI 面板状态。WebUI 有自己的监听端口、网卡与凭据，与移动模式完全独立。 */
+export interface WebuiStatus {
+  enabled: boolean
+  running: boolean
+  /** 实际监听端口（端口被占用顺延后与设置值不同） */
+  port: number
+  /** 设置里的期望端口（0 表示跟随默认） */
+  configuredPort: number
+  defaultPort: number
+  bindHost: string
+  interfaces: WebuiNetworkInterface[]
+  publishedSessionIds: string[]
+  token: string | null
+  urls: Array<{ sessionId: string; url: string }>
+  /** 监听 0.0.0.0 时用于展示的可达地址（第一张局域网网卡）；没有局域网网卡则为 null。 */
+  accessibleHost: string | null
+  /** 所有可能被手机访问到的局域网地址，按「最可能」排序；面板用来列出候选。 */
+  accessibleHosts: string[]
+  /** 宿主平台，面板据此决定是否展示 Windows 防火墙放行提示。 */
+  platform: string
+  assetDir: string
+  assetReady: boolean
+  /** WebUI 服务自身的错误（如端口占用）；与移动模式的状态互不影响 */
+  error: string | null
+}
+
 export const SKIN_IPC_CHANNELS = {
   GET_SKINS: 'skins:get-list',
   GET_SKIN_CSS: 'skins:get-css',
@@ -530,6 +581,11 @@ export const SETTINGS_IPC_CHANNELS = {
   SET_POCKET_PUBLIC_ENDPOINT: 'settings:set-pocket-public-endpoint',
   /** 获取安卓版 APK 扫码下载二维码（指向官网 profer.cn 域名；始终返回） */
   GET_APK_QR: 'settings:get-apk-qr',
+  /** WebUI「一个会话一个网页」：读取状态 / 更新配置（含热应用） */
+  GET_WEBUI_STATUS: 'settings:get-webui-status',
+  SET_WEBUI_CONFIG: 'settings:set-webui-config',
+  /** 在系统浏览器打开已发布的 WebUI 会话页（本机/局域网地址，不走 OPEN_EXTERNAL 的 SSRF 拦截） */
+  OPEN_WEBUI_SESSION: 'settings:open-webui-session',
 } as const
 
 /** 自定义通知音 IPC 通道 */

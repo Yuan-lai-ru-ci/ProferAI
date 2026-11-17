@@ -1523,6 +1523,8 @@ export class AgentOrchestrator {
         ...(input.uuid ? { uuid: input.uuid } : {}),
         // 旧调用方仍可使用 Goal 标记；新的 internalPrompt 路径不会写入消息。
         ...(input.triggeredBy === 'goal' ? { _goalIteration: input.goalIteration ?? true } : {}),
+        // 来源客户端只做展示标签：远程/网页发的消息与桌面端区分开，不影响任何鉴权或上下文。
+        ...(input.clientId ? { _clientId: input.clientId } : {}),
         _createdAt: Date.now(),
       } as unknown as SDKMessage
       const inputMessage = this.stampMessage(sessionId, userSDKMsg, runFacts?.context.messageAuthor ?? runFacts?.context.trigger.actor)

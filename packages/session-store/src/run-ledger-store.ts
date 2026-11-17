@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { fsyncBestEffort } from './durability'
 import { dirname } from 'node:path'
 import type { RunLedgerPort, RunLedgerSnapshot } from '@profer/agent-runtime'
 
@@ -63,7 +64,7 @@ export function createFileRunLedgerPort(path: string): RunLedgerPort {
       try {
         descriptor = openSync(temporaryPath, 'wx', 0o600)
         writeFileSync(descriptor, `${JSON.stringify(snapshot)}\n`, 'utf8')
-        fsyncSync(descriptor)
+        fsyncBestEffort(descriptor)
         closeSync(descriptor)
         descriptor = undefined
         renameSync(temporaryPath, path)

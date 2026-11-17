@@ -1,4 +1,5 @@
-import { existsSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs'
+import { existsSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs'
+import { fsyncBestEffort } from '../durability'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import type {
@@ -387,7 +388,7 @@ function writeJournalFile(path: string, entries: readonly ShadowJournalEntry[]):
     while (offset < buffer.length) {
       offset += writeSync(fd, buffer, offset, buffer.length - offset)
     }
-    fsyncSync(fd)
+    fsyncBestEffort(fd)
   } catch (error) {
     closeQuietly(fd)
     unlinkQuietly(tempPath)

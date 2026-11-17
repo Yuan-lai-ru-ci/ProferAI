@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expandHomeDirectory, resolveFilePath, resolveTargetPath } from './file-preview-service'
+import { expandHomeDirectory, readFileAsDataUrl, resolveFilePath, resolveTargetPath } from './file-preview-service'
 
 /**
  * resolveTargetPath 预检模式（skipGlobalSearch）浅层搜索行为测试。
@@ -22,6 +22,32 @@ describe('文件预览路径安全解析', () => {
     const home = homedir()
     const target = join(home, '.profer-preview-test-do-not-create')
     expect(resolveTargetPath('~/.profer-preview-test-do-not-create')).toBe(target)
+  })
+})
+
+describe('readFileAsDataUrl 的 MIME 判定', () => {
+  let tmpDir: string
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'fpc-mime-'))
+  })
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  test('Given PDF When 转 data URL Then 带 application/pdf（浏览器才会内嵌预览）', () => {
+    const file = join(tmpDir, '报告.pdf')
+    writeFileSync(file, Buffer.from('%PDF-1.4\n%%EOF'))
+    const result = readFileAsDataUrl(file, [tmpDir])
+    expect(result?.dataUrl.startsWith('data:application/pdf;base64,')).toBe(true)
+  })
+
+  test('Given 未知扩展名 When 转 data URL Then 回退 application/octet-stream', () => {
+    const file = join(tmpDir, 'a.bin')
+    writeFileSync(file, Buffer.from([1, 2, 3]))
+    const result = readFileAsDataUrl(file, [tmpDir])
+    expect(result?.dataUrl.startsWith('data:application/octet-stream;base64,')).toBe(true)
   })
 })
 

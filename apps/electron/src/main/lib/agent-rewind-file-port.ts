@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { lstat, readFile, rename, unlink, open, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve as resolveFsPath, sep } from 'node:path'
 import type { StoredFileVersion } from '@profer/session-store'
-import { RewindStoreError } from '@profer/session-store'
+import { RewindStoreError, syncBestEffort } from '@profer/session-store'
 
 export interface RewindFileRoot {
   rootId: string
@@ -79,7 +79,7 @@ export function createRewindFilePort(input: {
     if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new RewindStoreError('UNSAFE_PARENT', '目标父目录不安全')
     const temp = join(dirname(target), `.profer-rewind-${randomUUID()}.tmp`)
     const handle = await open(temp, 'wx', mode ?? 0o600)
-    try { await handle.writeFile(content); await handle.sync() } finally { await handle.close() }
+    try { await handle.writeFile(content); await syncBestEffort(handle) } finally { await handle.close() }
     const check = await inspect(rootId, filePath)
     if (!sameVersion(check.version, expected)) {
       await unlink(temp)

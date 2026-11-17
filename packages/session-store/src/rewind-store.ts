@@ -1,4 +1,5 @@
 import { mkdir, open, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { syncBestEffort } from './durability'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import type { SessionStorePaths } from './contracts'
@@ -209,7 +210,7 @@ async function atomicWrite(path: string, content: Buffer, mode: number): Promise
   const handle = await open(tempPath, 'wx', mode)
   try {
     await handle.writeFile(content)
-    await handle.sync()
+    await syncBestEffort(handle)
   } catch (error) {
     await handle.close()
     await unlinkMissing(tempPath)
@@ -219,7 +220,7 @@ async function atomicWrite(path: string, content: Buffer, mode: number): Promise
   try {
     await rename(tempPath, path)
     const dir = await open(dirname(path), 'r')
-    try { await dir.sync() } finally { await dir.close() }
+    try { await syncBestEffort(dir) } finally { await dir.close() }
   } catch (error) {
     await unlinkMissing(tempPath)
     throw error
