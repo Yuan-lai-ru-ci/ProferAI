@@ -27,6 +27,7 @@ import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { assertSafeSkillSegment, canonicalSkillSegmentKey } from './skill-path-security'
 import { readSkillManifest, writeSkillManifest } from './skill-manifest'
 import { diagnoseSkill } from './skill-doctor'
+import { probeSkillFrontmatterError } from './skill-routing'
 import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
 import { listAgentPresets, createAgentPreset } from './agent-preset-manager'
 import { canonicalizeWorkspaceRootPath, invalidateWorkspaceLocation, resolveWorkspaceLocation, type AgentWorkspaceIndexEntry } from './workspace-locator'
@@ -1981,17 +1982,20 @@ function workspaceSkillDirOrThrow(workspaceSlug: string, skillSlug: string): str
   return dir
 }
 
-function cardState(dir: string, skillSlug: string, removed: boolean): WorkspaceSkillCardState {
+async function cardState(dir: string, skillSlug: string, removed: boolean): Promise<WorkspaceSkillCardState> {
   const read = readSkillManifest(dir)
+  // frontmatter 结构校验必须 await import ESM 解析器（见 probeSkillFrontmatterError 注释），
+  // 所以这条链路是异步的；IPC 侧本来就 await 返回值。
+  const frontmatterError = await probeSkillFrontmatterError(dir).catch(() => undefined)
   return {
     present: removed ? false : read.present,
     ...(read.manifest ? { manifest: read.manifest } : {}),
     issues: read.issues,
-    doctor: diagnoseSkill({ dir, slug: skillSlug }).filter(issue => issue.severity !== 'info'),
+    doctor: diagnoseSkill({ dir, slug: skillSlug, frontmatterError }).filter(issue => issue.severity !== 'info'),
   }
 }
 
-export function readWorkspaceSkillCard(workspaceSlug: string, skillSlug: string): WorkspaceSkillCardState {
+export async function readWorkspaceSkillCard(workspaceSlug: string, skillSlug: string): Promise<WorkspaceSkillCardState> {
   return cardState(workspaceSkillDirOrThrow(workspaceSlug, skillSlug), skillSlug, false)
 }
 
@@ -1999,7 +2003,7 @@ export function readWorkspaceSkillCard(workspaceSlug: string, skillSlug: string)
  * 合并写入卡片；校验不过就报错不落盘（错误信息直接可展示给用户）。
  * 写成空内容时删除卡片，回到无卡片回退路径。
  */
-export function writeWorkspaceSkillCard(workspaceSlug: string, skillSlug: string, patch: SkillManifestPatch): WorkspaceSkillCardState {
+export async function writeWorkspaceSkillCard(workspaceSlug: string, skillSlug: string, patch: SkillManifestPatch): Promise<WorkspaceSkillCardState> {
   const dir = workspaceSkillDirOrThrow(workspaceSlug, skillSlug)
   return cardState(dir, skillSlug, writeSkillManifest(dir, patch).removed)
 }

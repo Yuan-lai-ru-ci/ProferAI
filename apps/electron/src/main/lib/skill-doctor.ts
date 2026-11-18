@@ -26,6 +26,11 @@ export interface SkillDoctorInput {
   sidecar?: SkillRoutingRules
   toolNames?: readonly string[]
   policy?: EffectiveAgentPresetPolicy
+  /**
+   * frontmatter 结构错误（首行信息），由调用方用 probeSkillFrontmatterError 取。
+   * 医生本身不解析 YAML：解析器在纯 ESM 包里，主进程只能 await import（见该函数注释）。
+   */
+  frontmatterError?: string
 }
 
 /** 描述里出现这些词说明写了「什么时候用」；只有介绍没有场景，路由和模型都难联想到。 */
@@ -63,12 +68,16 @@ function bodyBytes(dir: string): number {
  */
 export function diagnoseSkill(input: SkillDoctorInput): SkillDoctorIssue[] {
   const issues: SkillDoctorIssue[] = []
-  // 注意：不要在这里静态 import @earendil-works/pi-coding-agent。
-  // 它是纯 ESM（package.json exports 只有 import 条件），而主进程 bundle 是 CJS 且把它
-  // 标记为 external，静态 import 会生成顶层 require() 并在应用加载阶段抛
-  // ERR_PACKAGE_PATH_NOT_EXPORTED——0.16.27 就是这样起不来的。
-  // frontmatter 结构校验因此改为在路由侧（skill-routing 的动态 import）完成，
-  // 需要在这里展示时由调用方传入解析结果。
+  // frontmatter 结构校验由调用方通过 frontmatterError 传入：解析器是纯 ESM，
+  // 医生里不能静态 import（0.16.27 启动崩溃），而同步函数又不能 await import。
+  if (input.frontmatterError) {
+    issues.push({
+      code: 'frontmatter-invalid',
+      severity: 'error',
+      field: 'frontmatter',
+      message: `frontmatter 解析失败（路由会退回 skill-library.json 的描述）：${input.frontmatterError}`,
+    })
+  }
   const read = readSkillDescriptor(input.dir, input.slug)
   const { descriptor, manifest, manifestIssues, manifestPresent, frontmatter } = read
 

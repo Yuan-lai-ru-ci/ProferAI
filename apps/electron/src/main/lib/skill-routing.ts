@@ -80,6 +80,35 @@ function readLedgerDescription(directory: string): string | undefined {
   } catch { return undefined }
 }
 
+/**
+ * 检查 SKILL.md frontmatter 的 YAML 结构能否解析（供 skill-doctor 使用）。
+ *
+ * 必须走动态 import：`@earendil-works/pi-coding-agent` 是纯 ESM（package.json 的 exports
+ * 只有 import 条件），而主进程 bundle 是 CJS 且把它标记为 external。静态 import 会被 esbuild
+ * 保留成顶层 require()，应用加载阶段直接抛 ERR_PACKAGE_PATH_NOT_EXPORTED——0.16.27 就是
+ * 这样起不来的。这里复用路由侧同一条 await import 路径，不在别处再开第二份解析器。
+ *
+ * 返回首行错误信息；没有 frontmatter、或结构合法时返回 undefined。
+ * header 读不出来（文件缺失、超出读取预算）不算结构错误，交给其它诊断码。
+ */
+export async function probeSkillFrontmatterError(dir: string): Promise<string | undefined> {
+  const file = join(dir, 'SKILL.md')
+  if (!existsSync(file)) return undefined
+  let header: string
+  try {
+    header = await readHeader(file)
+  } catch {
+    return undefined
+  }
+  const { parseFrontmatter } = await import('@earendil-works/pi-coding-agent')
+  try {
+    parseFrontmatter<Record<string, unknown>>(header)
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message.split('\n')[0] : String(error)
+  }
+}
+
 async function readRules(root: string, directory: string): Promise<SkillRoutingRules> {
   const path = join(directory, ROUTING_SIDECAR_FILENAME)
   if (!existsSync(path)) return {}

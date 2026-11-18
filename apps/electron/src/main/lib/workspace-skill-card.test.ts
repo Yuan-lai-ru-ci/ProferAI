@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { __resetGlobalSkillRoots, __setGlobalSkillRoots } from './global-skill-manager'
 import { createWorkspaceSkill, readWorkspaceSkillCard, writeWorkspaceSkillCard } from './agent-workspace-manager'
 
@@ -43,17 +43,17 @@ function setup(): { slug: string } {
 }
 
 describe('工作区技能卡片：读写链路', () => {
-  test('没有卡片时读取为 present=false，且不报错', () => {
+  test('没有卡片时读取为 present=false，且不报错', async () => {
     const { slug } = setup()
-    const state = readWorkspaceSkillCard(slug, 'carded')
+    const state = await readWorkspaceSkillCard(slug, 'carded')
     expect(state.present).toBe(false)
     expect(state.manifest).toBeUndefined()
     expect(state.issues).toEqual([])
   })
 
-  test('写入触发词与依赖后能读回；没有工具清单时不瞎报依赖缺失', () => {
+  test('写入触发词与依赖后能读回；没有工具清单时不瞎报依赖缺失', async () => {
     const { slug } = setup()
-    const written = writeWorkspaceSkillCard(slug, 'carded', {
+    const written = await writeWorkspaceSkillCard(slug, 'carded', {
       triggers: { keywords: ['柱状图', '折线图'] },
       dependencies: { toolGroups: ['preview'], tools: ['present_visualization'] },
     })
@@ -64,42 +64,53 @@ describe('工作区技能卡片：读写链路', () => {
     expect(written.doctor.filter(issue => issue.severity === 'error')).toEqual([])
     expect(written.doctor.map(issue => issue.code)).not.toContain('dependency-tool-unavailable')
 
-    const reread = readWorkspaceSkillCard(slug, 'carded')
+    const reread = await readWorkspaceSkillCard(slug, 'carded')
     expect(reread.present).toBe(true)
     expect(reread.manifest?.dependencies?.tools).toEqual(['present_visualization'])
   })
 
-  test('清空后卡片文件被删除，回到无卡片回退路径', () => {
+  test('清空后卡片文件被删除，回到无卡片回退路径', async () => {
     const { slug } = setup()
-    writeWorkspaceSkillCard(slug, 'carded', { policy: { implicit: false } })
+    await writeWorkspaceSkillCard(slug, 'carded', { policy: { implicit: false } })
     const file = cardFile(slug)
     expect(existsSync(file)).toBe(true)
 
-    const cleared = writeWorkspaceSkillCard(slug, 'carded', { policy: null })
+    const cleared = await writeWorkspaceSkillCard(slug, 'carded', { policy: null })
     expect(cleared.present).toBe(false)
     expect(existsSync(file)).toBe(false)
   })
 
-  test('非法输入报错且不落盘；不存在的技能直接拒绝', () => {
+  test('非法输入报错且不落盘；不存在的技能直接拒绝', async () => {
     const { slug } = setup()
     const file = cardFile(slug)
-    expect(() => writeWorkspaceSkillCard(slug, 'carded', { triggers: { keywords: ['x'.repeat(200)] } })).toThrow(/校验未通过/)
+    await expect(writeWorkspaceSkillCard(slug, 'carded', { triggers: { keywords: ['x'.repeat(200)] } })).rejects.toThrow(/校验未通过/)
     expect(existsSync(file)).toBe(false)
-    expect(() => writeWorkspaceSkillCard(slug, 'missing', { triggers: { keywords: ['词'] } })).toThrow(/Skill 不存在/)
-    expect(() => readWorkspaceSkillCard(slug, 'missing')).toThrow(/Skill 不存在/)
+    await expect(writeWorkspaceSkillCard(slug, 'missing', { triggers: { keywords: ['词'] } })).rejects.toThrow(/Skill 不存在/)
+    await expect(readWorkspaceSkillCard(slug, 'missing')).rejects.toThrow(/Skill 不存在/)
   })
 
-  test('卡片保留未知字段，并把 frontmatter 里的名称/描述继续当作回退', () => {
+  test('卡片保留未知字段，并把 frontmatter 里的名称/描述继续当作回退', async () => {
     const { slug } = setup()
-    writeWorkspaceSkillCard(slug, 'carded', { triggers: { keywords: ['柱状图'] } })
+    await writeWorkspaceSkillCard(slug, 'carded', { triggers: { keywords: ['柱状图'] } })
     // 手工往卡片里加一个未来字段，下一次保存不能把它冲掉。
     const file = cardFile(slug)
     const raw = JSON.parse(readFileSync(file, 'utf8'))
     raw.futureField = { keep: true }
     writeFileSync(file, JSON.stringify(raw))
 
-    const next = writeWorkspaceSkillCard(slug, 'carded', { triggers: { keywords: ['折线图'] } })
+    const next = await writeWorkspaceSkillCard(slug, 'carded', { triggers: { keywords: ['折线图'] } })
     expect(next.manifest?.triggers?.keywords).toEqual(['折线图'])
     expect(JSON.parse(readFileSync(file, 'utf8')).futureField).toEqual({ keep: true })
+  })
+
+  test('frontmatter 结构坏掉时报 frontmatter-invalid，而不是整条技能消失', async () => {
+    const { slug } = setup()
+    // YAML 结构错误：方括号没闭合。解析器是纯 ESM 包，只能经运行时动态 import 校验。
+    writeFileSync(join(dirname(cardFile(slug)), 'SKILL.md'), '---\nname: 坏技能\ndescription: [未闭合\n---\n\n# 坏技能\n')
+
+    const state = await readWorkspaceSkillCard(slug, 'carded')
+    const invalid = state.doctor.find(issue => issue.code === 'frontmatter-invalid')
+    expect(invalid?.severity).toBe('error')
+    expect(invalid?.field).toBe('frontmatter')
   })
 })

@@ -2,9 +2,15 @@ import { app, BrowserWindow, dialog, Menu, powerMonitor, protocol, screen, shell
 import { join } from 'path'
 import { createConnection } from 'net'
 import { existsSync } from 'fs'
-import { getDevInstanceId, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
+import { getDevInstanceId, readUserDataDirSwitch, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
+import { STARTUP_STAGE_BOOTSTRAP_FAILED, STARTUP_STAGE_MAIN_LOADED, STARTUP_STAGE_WINDOW_CREATED, writeStartupProbe } from './lib/startup-probe'
 import { flushSDKMessagePersistence } from './lib/agent-session-manager'
+
+// 启动探针：只在发布前的启动冒烟里生效（PROFER_STARTUP_PROBE_FILE）。
+// 写在模块顶部是故意的：能到这里就说明 CJS bundle 的模块求值没崩，
+// 否则产物即使构建/签名全绿也一定起不来（见 0.16.27 事故）。
+writeStartupProbe(STARTUP_STAGE_MAIN_LOADED)
 
 /**
  * dev 模式下等待 Vite dev server 就绪的轮询参数。
@@ -36,10 +42,14 @@ function probeDevServerPort(hostname: string, port: number): Promise<boolean> {
 }
 
 // userData 和单实例锁必须在任何会读取 userData 的模块加载前隔离。
-// PROFER_DEV_INSTANCE / PROFER_USER_DATA_DIR 仅对开发版生效，正式版忽略这些参数。
+// PROFER_DEV_INSTANCE / PROFER_USER_DATA_DIR 仅对开发版生效；
+// 显式 `--user-data-dir` 在正式版也尊重（发布前的启动冒烟、QA 多开需要隔离）。
+// 不这样做的话，下面的 setPath 会把 Chromium 已按开关设好的路径覆盖回 appData，
+// 单实例锁也跟着落回真实用户数据目录，隔离启动会被当重复实例直接退出。
 const devInstanceId = getDevInstanceId()
 if (!app.isPackaged) app.setName(resolveDevAppName())
-app.setPath('userData', resolveDevUserDataPath(app.getPath('appData'), app.isPackaged, process.env))
+const explicitUserDataDir = readUserDataDirSwitch(process.argv)
+app.setPath('userData', explicitUserDataDir ?? resolveDevUserDataPath(app.getPath('appData'), app.isPackaged, process.env))
 if (devInstanceId) {
   console.log(`[启动] 开发隔离实例: ${devInstanceId}，userData=${app.getPath('userData')}`)
 }
@@ -490,6 +500,9 @@ function createWindow(): void {
   // 主窗口必须先注册到多窗口注册表，renderer 才能读到窗口引导信息；
   // 后续次级窗口（标签拖出 / 右键在新窗口打开）共用同一套注册表。
   registerMainAppWindow(mainWindow, { isPrimary: true })
+  // 启动冒烟的「窗口真的建出来了」信号：到这一步才算应用起得来；
+  // renderer 白屏不属本次事故的判定范围（那由 startup budget / 日常验收盯）。
+  writeStartupProbe(STARTUP_STAGE_WINDOW_CREATED, { version: app.getVersion() })
   // 主界面保持 100% 页面缩放：非整数缩放（如 110%）会与系统 DPI 相乘得到 1.375，
   // Chromium 会把 border-radius 圆角光栅成 45° 斜切（圆角被“切掉”）。
   // 详见 DEFAULT_MAIN_WINDOW_ZOOM_FACTOR 注释。
@@ -1241,6 +1254,9 @@ async function safeAwait(name: string, fn: () => Promise<unknown>): Promise<void
  */
 function handleBootstrapFailure(err: unknown): void {
   console.error('[启动] bootstrap 致命错误，进入降级模式:', err)
+  writeStartupProbe(STARTUP_STAGE_BOOTSTRAP_FAILED, {
+    error: err instanceof Error ? err.message.split('\n')[0] : String(err),
+  })
 
   try {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err)
