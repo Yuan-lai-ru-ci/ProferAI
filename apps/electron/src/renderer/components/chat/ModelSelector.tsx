@@ -28,7 +28,7 @@ import {
 } from '@/atoms/chat-atoms'
 import { authStatusAtom } from '@/atoms/identity-atoms'
 import { useConversationModelOptional } from '@/hooks/useConversationSettings'
-import { useConversationIdOptional } from '@/contexts/session-context'
+import { useAgentSessionIdOptional, useConversationIdOptional } from '@/contexts/session-context'
 import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { navigationController } from '@/lib/navigation-controller'
 import { cn } from '@/lib/utils'
@@ -208,6 +208,7 @@ export function ModelSelector({
   const compact = compactProp ?? compactCtx
   const [conversationModel, setConversationModel] = useConversationModelOptional()
   const conversationId = useConversationIdOptional()
+  const agentSessionId = useAgentSessionIdOptional()
   const setConversations = useSetAtom(conversationsAtom)
   const setGlobalModel = useSetAtom(selectedModelAtom)
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false)
@@ -237,13 +238,14 @@ export function ModelSelector({
 
   // 外部请求打开（ErrorMessage 的 select_model 恢复操作）：seq 变化时打开 Dialog。
   // 组件挂载时先记录当前 seq（不弹窗），后续新请求（seq+1）才会触发。
+  // 定向请求（带 agentSessionId）只打开目标会话的选择器，分屏下不会两边同时弹窗。
   const lastConsumedModelSelectorSeqRef = React.useRef(modelSelectorRequest.seq)
   React.useEffect(() => {
-    if (modelSelectorRequest.seq > lastConsumedModelSelectorSeqRef.current) {
-      lastConsumedModelSelectorSeqRef.current = modelSelectorRequest.seq
-      handleOpenChange(true)
-    }
-  }, [modelSelectorRequest, handleOpenChange])
+    if (modelSelectorRequest.seq <= lastConsumedModelSelectorSeqRef.current) return
+    lastConsumedModelSelectorSeqRef.current = modelSelectorRequest.seq
+    if (modelSelectorRequest.agentSessionId && modelSelectorRequest.agentSessionId !== agentSessionId) return
+    handleOpenChange(true)
+  }, [modelSelectorRequest, agentSessionId, handleOpenChange])
 
   // 外部模型优先 → per-conversation 模型
   const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : conversationModel

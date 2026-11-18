@@ -2,18 +2,19 @@ import { afterEach, describe, expect, mock, test } from 'bun:test'
 import * as React from 'react'
 import { atom, createStore } from 'jotai/vanilla'
 import type { Channel, ConversationMeta } from '@profer/shared'
-import { channelsAtom, channelsLoadedAtom, conversationsAtom, conversationModelsAtom, conversationModelAtomFamily, selectedModelAtom, channelCatalogRefreshAtom } from '../../atoms/chat-atoms'
+import { channelsAtom, channelsLoadedAtom, conversationsAtom, conversationModelsAtom, conversationModelAtomFamily, modelSelectorRequestAtom, selectedModelAtom, channelCatalogRefreshAtom } from '../../atoms/chat-atoms'
 import { authStatusAtom } from '../../atoms/identity-atoms'
 
 const store = createStore()
 const errors: string[] = []
+let agentSessionIdForTest: string | null = null
 mock.module('sonner', () => ({ toast: { error: (message: string) => errors.push(message) } }))
 mock.module('../../lib/model-logo', () => ({ getModelLogo: () => '', getChannelLogo: () => '', DefaultLogo: '' }))
 mock.module('../../lib/navigation-controller', () => ({ navigationController: { register: () => () => {} } }))
 mock.module('./ChannelPlanQuotaBadge', () => ({ ChannelPlanQuotaBadge: () => null }))
 mock.module('../ai-elements/composer/ComposerTool', () => ({ AgentComposerToolTooltip: () => null, getAgentComposerToolTriggerClass: () => '' }))
 mock.module('../../hooks/useConversationSettings', () => ({ useConversationModelOptional: () => [store.get(conversationModelAtomFamily('conversation')), (model: { channelId: string; modelId: string }) => store.set(conversationModelsAtom, new Map([['conversation', model]]))] }))
-mock.module('../../contexts/session-context', () => ({ useConversationIdOptional: () => 'conversation' }))
+mock.module('../../contexts/session-context', () => ({ useConversationIdOptional: () => 'conversation', useAgentSessionIdOptional: () => agentSessionIdForTest }))
 const setters = new Map<unknown, (next: unknown) => void>()
 const setter = (target: Parameters<typeof store.set>[0]) => {
   let set = setters.get(target)
@@ -117,7 +118,7 @@ function mount(channels = [fixture], conversation = meta, props: Parameters<type
     option: () => elements().find((element) => element.type === 'button' && typeof element.props.onMouseEnter === 'function')!,
   }
 }
-afterEach(() => { mounts.splice(0).forEach((cleanup) => cleanup()); Reflect.deleteProperty(globalThis, 'window') })
+afterEach(() => { mounts.splice(0).forEach((cleanup) => cleanup()); agentSessionIdForTest = null; Reflect.deleteProperty(globalThis, 'window') })
 
 describe('ModelSelector 真实交互（fixture IPC）', () => {
   test('打开弹窗请求统一本地目录刷新，组件自身不执行LIST', () => {
@@ -200,6 +201,27 @@ describe('ModelSelector 事件通知', () => {
 
     ;(scope.trigger().props.onClick as () => void)()
     expect(events).toEqual([true])
+  })
+})
+
+describe('ModelSelector 定向打开请求', () => {
+  test('带会话 ID 的请求只打开目标会话，未定向请求保持全局', () => {
+    agentSessionIdForTest = 'agent-a'
+    const events: boolean[] = []
+    const scope = mount(undefined, undefined, { open: false, onOpenChange: (open) => events.push(open) })
+    const base = store.get(modelSelectorRequestAtom).seq
+
+    store.set(modelSelectorRequestAtom, { seq: base + 1 })
+    scope.render()
+    expect(events).toEqual([true])
+
+    store.set(modelSelectorRequestAtom, { seq: base + 2, agentSessionId: 'agent-b' })
+    scope.render()
+    expect(events).toEqual([true])
+
+    store.set(modelSelectorRequestAtom, { seq: base + 3, agentSessionId: 'agent-a' })
+    scope.render()
+    expect(events).toEqual([true, true])
   })
 })
 
