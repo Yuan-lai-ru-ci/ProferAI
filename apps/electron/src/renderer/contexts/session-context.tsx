@@ -58,3 +58,8 @@ export function useAgentSessionId(): string {
   if (!id) throw new Error('useAgentSessionId 必须在 AgentSessionProvider 内使用')
   return id
 }
+
+/** 可选版本：在 Provider 外返回 null（ModelSelector 等双模式组件） */
+export function useAgentSessionIdOptional(): string | null {
+  return React.useContext(AgentSessionContext)
+}

@@ -24,13 +24,17 @@ export const channelCatalogRefreshAtom = atom(0)
 
 /** 模型选择器打开请求（ErrorMessage 的 select_model 恢复操作等全局触发入口）。
  * 用对象而非纯计数：请求携带自增 seq，消费方记录已消费的 seq，
- * 避免组件未挂载时计数变化被吞掉（切回视图后请求静默丢失）。 */
-export const modelSelectorRequestAtom = atom<{ seq: number }>({ seq: 0 })
+ * 避免组件未挂载时计数变化被吞掉（切回视图后请求静默丢失）。
+ * 可选 agentSessionId 用于分屏：只打开指定会话的选择器，避免两个 AgentView 同时弹窗。 */
+export const modelSelectorRequestAtom = atom<{ seq: number; agentSessionId?: string }>({ seq: 0 })
 
 /** 发起一次模型选择器打开请求 */
-export function requestModelSelectorOpen(): void {
-  const current = getDefaultStore().get(modelSelectorRequestAtom)
-  getDefaultStore().set(modelSelectorRequestAtom, { seq: current.seq + 1 })
+export function requestModelSelectorOpen(agentSessionId?: string): void {
+  const store = getDefaultStore()
+  const current = store.get(modelSelectorRequestAtom)
+  store.set(modelSelectorRequestAtom, agentSessionId
+    ? { seq: current.seq + 1, agentSessionId }
+    : { seq: current.seq + 1 })
 }
 
 /** 选中的模型信息 */

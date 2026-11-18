@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Channel } from '@profer/shared'
-import { isAgentModelSelectionValid, nextAgentChannelIdsAfterModelSelect, resolveAgentModelSelection, resolveAgentRuntimeSelection } from './agent-channel-selection'
+import { isAgentModelSelectionValid, nextAgentChannelIdsAfterModelSelect, resolveAgentBindingState, resolveAgentModelSelection, resolveAgentRuntimeSelection } from './agent-channel-selection'
 
 describe('历史会话模型有效性', () => {
   test('已停用模型不静默替换为其它模型', () => {
@@ -17,6 +17,35 @@ describe('历史会话模型有效性', () => {
     expect(isAgentModelSelectionValid([enabled], 'claude', [], { channelId: 'openai', modelId: 'model' })).toBe(false)
   })
 })
+describe('会话绑定状态', () => {
+  const enabled = channel('openai', 'openai', ['gpt-5.5'])
+  const bound = { channelId: 'openai', modelId: 'gpt-5.5' }
+
+  test('未绑定渠道时报告 unbound', () => {
+    expect(resolveAgentBindingState([enabled], 'pi', [], null)).toBe('unbound')
+    expect(resolveAgentBindingState([enabled], 'pi', [], {})).toBe('unbound')
+  })
+
+  test('渠道被删除时报告 channel_missing，而不是「没有可用模型」', () => {
+    expect(resolveAgentBindingState([enabled], 'pi', [], { channelId: 'missing', modelId: 'gpt-5.5' })).toBe('channel_missing')
+  })
+
+  test('渠道被停用时报告 channel_disabled', () => {
+    expect(resolveAgentBindingState([{ ...enabled, enabled: false }], 'pi', [], bound)).toBe('channel_disabled')
+  })
+
+  test('渠道在但绑定模型停用或内核不兼容时报告 model_unavailable', () => {
+    const modelDisabled = { ...enabled, models: [{ id: 'gpt-5.5', name: 'gpt-5.5', enabled: false }] }
+    expect(resolveAgentBindingState([modelDisabled], 'pi', [], bound)).toBe('model_unavailable')
+    const piOnly = { ...enabled, agentRuntimes: ['pi' as const] }
+    expect(resolveAgentBindingState([piOnly], 'claude', [], bound)).toBe('model_unavailable')
+  })
+
+  test('绑定有效时报告 ok', () => {
+    expect(resolveAgentBindingState([enabled], 'pi', [], bound)).toBe('ok')
+  })
+})
+
 function channel(id: string, provider: Channel['provider'], models: string[]): Channel {
   return {
     id,
