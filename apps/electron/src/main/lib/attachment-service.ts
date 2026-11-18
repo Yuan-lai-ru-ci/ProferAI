@@ -11,7 +11,7 @@
  */
 
 import { readFileSync, writeFileSync, unlinkSync, existsSync, rmSync, statSync } from 'node:fs'
-import { extname, basename, join, isAbsolute, normalize } from 'node:path'
+import { extname, basename, join, isAbsolute, normalize, relative, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { dialog, BrowserWindow } from 'electron'
 import {
@@ -19,6 +19,7 @@ import {
   getConversationAttachmentsDir,
   resolveAttachmentPath,
 } from './config-paths'
+import { listProjectWorkspaceRoots } from './workspace-locator'
 import type {
   FileAttachment,
   AttachmentSaveInput,
@@ -169,11 +170,31 @@ export function saveAttachment(input: AttachmentSaveInput): AttachmentSaveResult
 }
 
 /**
+ * 绝对路径附件的合法根目录。
+ *
+ * - 全局配置目录 `~/.profer/`：managed 会话附件、旧版 project 中央目录；
+ * - project 工作区的 `<rootPath>/.profer/sessions`：会话私有数据随项目走，
+ *   生图产物与会话附件都落在 `<sessions>/<sessionId>/` 下。
+ */
+function getAttachmentSafeRoots(): string[] {
+  const projectSessionRoots = listProjectWorkspaceRoots().map(({ rootPath }) =>
+    join(rootPath, '.profer', 'sessions'))
+  return [getConfigDir(), ...projectSessionRoots]
+}
+
+/** 路径边界判断：避免 `.profer-evil` 这类同前缀目录被当成子路径。 */
+function isPathWithinDir(dir: string, target: string): boolean {
+  const relation = relative(dir, target)
+  return relation.length > 0 && relation !== '..' && !relation.startsWith(`..${sep}`) && !isAbsolute(relation)
+}
+
+/**
  * 读取附件并返回 base64 编码
  *
  * 支持两种路径格式：
  * 1. 相对路径 {conversationId}/{uuid}.ext → 解析到 ~/.profer/attachments/
- * 2. 绝对路径（Agent 工作区附件）→ 需在 ~/.profer/ 目录下，直接读取
+ * 2. 绝对路径（Agent 会话附件/生图产物）→ 需在全局配置目录或 project 工作区的
+ *    会话私有目录下，直接读取
  *
  * @param localPath 相对路径或绝对路径
  * @returns base64 编码的文件数据
@@ -182,10 +203,9 @@ export function readAttachmentAsBase64(localPath: string): string {
   let fullPath: string
 
   if (isAbsolute(localPath)) {
-    // 绝对路径：验证在 ~/.profer/ 目录下，防止路径穿越
-    const configDir = getConfigDir()
+    // 绝对路径：只允许 Profer 自己管理的目录，防止路径穿越
     const normalized = normalize(localPath)
-    if (!normalized.startsWith(configDir)) {
+    if (!getAttachmentSafeRoots().some((root) => isPathWithinDir(root, normalized))) {
       throw new Error(`附件路径不在安全目录内: ${localPath}`)
     }
     fullPath = normalized
