@@ -22,6 +22,29 @@ const hasOssTarget = ossLiteral.test(bundle)
 const hasCommercialTarget = commercialLiteral.test(bundle)
 const hasUpdateFeed = bundle.includes(updateFeed)
 
+/**
+ * 纯 ESM 的 SDK 包在 CJS 主进程 bundle 里只能走动态 `await import()`。
+ * 静态 import 会被 esbuild 保留成顶层 `require()`，应用加载阶段直接抛
+ * `ERR_PACKAGE_PATH_NOT_EXPORTED`（exports 只有 import 条件）——0.16.27 就是这样起不来的。
+ * 构建时拦住，比发出去再回滚便宜得多。
+ */
+const esmOnlyPackages = [
+  '@earendil-works/pi-coding-agent',
+  '@earendil-works/pi-agent-core',
+  '@earendil-works/pi-ai',
+  '@earendil-works/pi-tui',
+]
+const staticRequires = esmOnlyPackages.filter((pkg) => (
+  bundle.includes(`require("${pkg}")`) || bundle.includes(`require('${pkg}')`)
+))
+if (staticRequires.length > 0) {
+  console.error(
+    `[verify-build-target] 主进程 bundle 静态 require 了纯 ESM 包：${staticRequires.join(', ')}；` +
+    '请改用 await import()（CJS 顶层 require 会在启动时抛 ERR_PACKAGE_PATH_NOT_EXPORTED）。',
+  )
+  process.exit(1)
+}
+
 if (expectedTarget === 'oss') {
   if (!hasOssTarget || hasCommercialTarget) {
     console.error('[verify-build-target] OSS build target mismatch: expected oss bundle.')

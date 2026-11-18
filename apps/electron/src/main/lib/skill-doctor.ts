@@ -5,9 +5,8 @@
  * 决定是否降级），因为用户自带技能不该被我们的规则挡在门外。硬约束（路径安全、正文超限）
  * 仍由 skill-routing / skill-manifest 在读取时把关。
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseFrontmatter } from '@earendil-works/pi-coding-agent'
 import { skillManifestToRoutingFields, type EffectiveAgentPresetPolicy, type SkillDoctorIssue, type SkillDoctorSeverity } from '@profer/shared'
 import { VISUALIZATION_HOST_PRIMITIVES } from '../../shared/visualization-style'
 import { readSkillDescriptor, SKILL_MANIFEST_FILENAME } from './skill-manifest'
@@ -64,23 +63,12 @@ function bodyBytes(dir: string): number {
  */
 export function diagnoseSkill(input: SkillDoctorInput): SkillDoctorIssue[] {
   const issues: SkillDoctorIssue[] = []
-  // 用与路由同一套解析器校验 frontmatter：展示字段的正则提取看不出 YAML 结构错误（如 description 里的 ": "）。
-  const skillFile = join(input.dir, 'SKILL.md')
-  if (existsSync(skillFile)) {
-    try {
-      const header = readFileSync(skillFile, 'utf8')
-        .slice(0, 16 * 1024)
-        .match(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[^\S\r\n]*(?:\r?\n|$)/)?.[0]
-      if (header) parseFrontmatter<Record<string, unknown>>(header)
-    } catch (error) {
-      issues.push({
-        code: 'frontmatter-invalid',
-        severity: 'error',
-        field: 'frontmatter',
-        message: `frontmatter 解析失败（路由会判为 unreadable）：${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
-      })
-    }
-  }
+  // 注意：不要在这里静态 import @earendil-works/pi-coding-agent。
+  // 它是纯 ESM（package.json exports 只有 import 条件），而主进程 bundle 是 CJS 且把它
+  // 标记为 external，静态 import 会生成顶层 require() 并在应用加载阶段抛
+  // ERR_PACKAGE_PATH_NOT_EXPORTED——0.16.27 就是这样起不来的。
+  // frontmatter 结构校验因此改为在路由侧（skill-routing 的动态 import）完成，
+  // 需要在这里展示时由调用方传入解析结果。
   const read = readSkillDescriptor(input.dir, input.slug)
   const { descriptor, manifest, manifestIssues, manifestPresent, frontmatter } = read
 
