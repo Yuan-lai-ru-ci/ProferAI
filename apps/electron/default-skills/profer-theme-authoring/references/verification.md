@@ -99,9 +99,10 @@ grep -nE '^\s*--(background|foreground|card|card-foreground|popover|popover-fore
 6. **选中态**：`selectedRowBg` 不能是 `rgba(0, 0, 0, 0)`；若选中行里有运行/等待/完成图标，`selectedRowStatusIcon` 应是状态色而不是统一文字色。
 7. **按钮**：至少看 default / outline / secondary 各一个；`primaryButtonBg` 不是透明，`outlineButtonBorder` 不是透明。
 8. **透明底**：`bodyBg` / `shellBg` / 主面板背景符合预期；若声称“看到桌面”，必须另行确认窗口层，不能只凭 renderer 的 computed 值。
-9. **经典界面**：切到 `ui-classic` 再看输入区、模式切换器、顶栏与圆角；`--radius` 可能被 `:root.ui-classic` 压回。
-10. 多窗口同步：开一个 Quick Task 窗口，在设置页删除当前皮肤，确认两个窗口都回退默认主题（`skins:changed` 广播生效）。
-11. 若皮肤改了圆角语义，检查 `.rounded-lg` 与 `.rounded-full` 在真实窗口中的计算圆角；iframe 可视化中不能只依赖 `--radius` 字面值。
+9. **壁纸可见性**：用户提供壁纸时，按 `wallpaper-visibility.md` §4 执行：确认 CSS 里确有面板 alpha 规则（`grep -n 'bg-content-area' skin.css`）、截图，并用画布区 p95−p5 ≥ 25（有纹理）、文字 p95−p50 ≥ 40（可读）判断。只写了 `.shell-bg` 而没有面板半透明，就按“缝隙可见”交付，不要暗示壁纸已经铺满窗口。
+10. **经典界面**：切到 `ui-classic` 再看输入区、模式切换器、顶栏与圆角；`--radius` 可能被 `:root.ui-classic` 压回。
+11. 多窗口同步：开一个 Quick Task 窗口，在设置页删除当前皮肤，确认两个窗口都回退默认主题（`skins:changed` 广播生效）。
+12. 若皮肤改了圆角语义，检查 `.rounded-lg` 与 `.rounded-full` 在真实窗口中的计算圆角；iframe 可视化中不能只依赖 `--radius` 字面值。
 
 若 class 存在、stylesheet 也已加载，但 computed token 仍是默认 `.dark`：优先检查 skin.css 是否真的被 `getSkinCss` 读到（磁盘缓存签名与格式版本），不要继续盲调色。
 

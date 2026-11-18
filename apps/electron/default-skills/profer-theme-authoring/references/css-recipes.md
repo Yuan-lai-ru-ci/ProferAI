@@ -132,14 +132,17 @@
 
 ## 5. 特例规则（皮肤文件内直接写；建议统一加 `html[class*="skin-"]` 前缀提高特异性）
 
-- **外壳壁纸**：挂在 `.shell-bg`，不要挂 `body`。
+- **外壳壁纸**：挂在 `.shell-bg`，不要挂 `body`。**壁纸皮肤按 `references/wallpaper-visibility.md` 走**：先量素材亮度（< 18% 必须提亮 1.45× 左右），再按 §2 表取 alpha（`content-area` 0.38–0.44、`sidebar` 0.44–0.50、`raised`/`card` 0.55–0.62、`dialog` 0.86–0.90、遮罩 0.04–0.10），最后截图验收。只写 `.shell-bg` 而不写面板 alpha，壁纸只会在缝隙露出；遮罩 ≥ 0.3 或面板 ≥ 0.7 时则几乎完全不可见。
   ```css
-  .shell-bg {
-    background: linear-gradient(hsl(222 30% 9% / 0.42), hsl(222 30% 9% / 0.42)),
-                url("assets/background.webp") center / cover no-repeat;
+  html[class*="skin-"] .shell-bg {
+    background-color: transparent !important;   /* 否则 bg-surface-shell 的底色会盖在壁纸下 */
+    background-image: linear-gradient(hsl(222 30% 9% / 0.42), hsl(222 30% 9% / 0.42)),
+                      url("assets/background.webp");
+    background-size: cover;
+    background-position: center;
   }
   ```
-  `skin-base.css` 的默认规则是 `:where(html[class*="skin-"]) .shell-bg { background: var(--shell-bg-gradient) }`，`:where()` 部分特异性为 0，整条是 (0,1,0)，与裸 `.shell-bg` 相同；皮肤 CSS 后注入，所以能覆盖。真正的坑是 `.shell-bg` 上还有 `bg-surface-shell` 的 `background-color`：`background` 简写会重置它，`background-image` 长写不会。
+  `skin-base.css` 的默认规则是 `:where(html[class*="skin-"]) .shell-bg { background: var(--shell-bg-gradient) }`，`:where()` 部分特异性为 0，整条是 (0,1,0)，与裸 `.shell-bg` 相同；皮肤 CSS 后注入，所以能覆盖。真正的坑是 `.shell-bg` 上还有 `bg-surface-shell` 的 `background-color`：`background` 简写与 `background-image` 长写都不会清除它（颜色在下层不会被图片挡住，但会让半透明区域发实），想让壁纸透出就把 `background-color` 显式设为 `transparent`。
 - **输入区**：`globals.css` 的 `.ui-classic .agent-input-surface` 用 `background-color: hsl(var(--background) / 0.7) !important` 覆盖了输入表面。皮肤要用**同特异性**规则 + `!important`，靠“皮肤 CSS 后注入”胜出：
   ```css
   html[class*="skin-"].ui-classic .agent-input-surface { background-color: hsl(var(--input-surface)) !important; }
