@@ -273,22 +273,40 @@ function localTagTarget() {
 function pushSourceAndTag() {
   // 预检之后再次检查，确保任何 git 写入前都不会覆盖冲突 tag。
   const head = run('git rev-parse HEAD');
-  const localTag = localTagTarget();
+  let localTag = localTagTarget();
   const remoteTag = remoteTagTarget();
-  if (localTag && localTag !== head) throw new Error(`本地 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
-  if (remoteTag && remoteTag !== head) throw new Error(`远端 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
+  if (!localTag && remoteTag) {
+    tryRun(`git fetch --quiet origin tag ${TAG}`);
+    localTag = localTagTarget();
+  }
+  if (localTag && remoteTag && localTag !== remoteTag) {
+    throw new Error(`本地 ${TAG} 与远端指向不同提交（${localTag} vs ${remoteTag}），拒绝发布。`);
+  }
+  const declared = localTag || remoteTag;
+  // tag 已存在但不指向 HEAD：只要它是 HEAD 的祖先就允许（发布脚本或无关改动领先）。
+  // 受保护的是「这个版本属于哪段源码」，不是发布脚本停在哪一个提交。
+  if (declared && declared !== head) {
+    if (!tryRun(`git merge-base --is-ancestor ${declared} HEAD`).ok) {
+      throw new Error(`${TAG} 指向 ${declared}，它不是 HEAD 的祖先，拒绝发布与版本无关的提交。`);
+    }
+    const ahead = run(`git rev-list --count ${declared}..HEAD`).trim();
+    console.log(`  ${TAG} 停在 ${declared.slice(0, 8)}，HEAD 领先 ${ahead} 个提交；不创建/移动 tag，按补发该版本资产处理。`);
+  }
   // 另一平台先发布后，tag 所在提交会落后 origin/main（通常只差一个 release-notes/releases.json
   // 同步提交）。补发场景不能推源码，但无需因此中止整个发布；与 push-mac-release.cjs 保持一致。
   const mainIsAncestor = tryRun('git merge-base --is-ancestor origin/main HEAD').ok;
   if (mainIsAncestor) {
     run('git push origin HEAD:main');
-  } else if (!localTag) {
+  } else if (!declared) {
     throw new Error('创建新 tag 前 HEAD 必须包含最新 origin/main；请先同步 main。');
   } else {
     console.log('  HEAD 不是 origin/main 的最新提交，跳过源码推送（按补充已发布版本资产处理）。');
   }
-  if (!localTag) run(`git tag ${TAG}`);
-  if (!remoteTag) run(`git push origin ${TAG}`);
+  // 只有 tag 两边都不存在时才就地新建：远端已有 tag 却不取回时绝不能拿 HEAD 补一个。
+  if (!declared) {
+    run(`git tag ${TAG}`);
+    run(`git push origin ${TAG}`);
+  }
 }
 
 function sha256(filePath) {
