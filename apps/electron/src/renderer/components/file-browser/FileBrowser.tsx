@@ -24,6 +24,8 @@ import {
   MessageSquarePlus,
   Upload,
   Download,
+  Copy,
+  Scissors,
   Eye,
   LayoutList,
   LayoutGrid,
@@ -48,7 +50,7 @@ import {
   DropdownMenuTrigger,
 } from '@profer/ui/primitives/dropdown-menu'
 import { cn } from '@/lib/utils'
-import { getLastPathSegments } from '@/lib/file-utils'
+import { getFileParentPath, getLastPathSegments } from '@/lib/file-utils'
 import { setFileReferenceDragData } from '@/lib/file-reference-drag'
 import { toast } from 'sonner'
 import { workspaceFilesVersionAtom, fileBrowserAutoRevealAtom, recentlyModifiedPathsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
@@ -115,6 +117,20 @@ interface FileBrowserProps {
   emptyHint?: string
   onAddToChat?: (entry: FileEntry) => void
   onFilePreview?: (filePath: string) => void
+  /** 非本机内核传入：目录内容来自所属 Core，而不是桌面本机磁盘。 */
+  loadDirectory?: (dirPath: string) => Promise<FileEntry[]>
+  /** 只读：隐藏上传/重命名/移动/删除/在文件夹中显示等本机文件操作。 */
+  readOnly?: boolean
+  /** 非本机内核：把重命名/删除交给所属 Core（删除进 Core 回收站）。 */
+  fileOps?: {
+    rename: (filePath: string, newName: string) => Promise<void>
+    remove: (filePath: string) => Promise<void>
+  }
+  /** 系统文件页：复制/剪切交给调用方维护的剪贴板。 */
+  onCopy?: (entry: FileEntry) => void
+  onCut?: (entry: FileEntry) => void
+  /** 非本机内核：跳到“系统文件”页并打开该文件所在目录。 */
+  onRevealInSystemFiles?: (filePath: string) => void
 }
 
 /**
@@ -166,7 +182,11 @@ function buildFileTree(flatEntries: FileEntry[]): FileEntry[] {
   return root
 }
 
-export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyHint, onAddToChat, onFilePreview }: FileBrowserProps): React.ReactElement {
+export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyHint, onAddToChat, onFilePreview, loadDirectory, readOnly = false, fileOps, onCopy, onCut, onRevealInSystemFiles }: FileBrowserProps): React.ReactElement {
+  /** 目录内容来源：本机内核走 IPC，非本机内核由调用方注入 Core 读取。 */
+  const listDir = React.useCallback((dirPath: string): Promise<FileEntry[]> => (
+    loadDirectory ? loadDirectory(dirPath) : window.electronAPI.listDirectory(dirPath)
+  ), [loadDirectory])
   const [entries, setEntries] = React.useState<FileEntry[]>([])
   const [loading, setLoading] = React.useState(false)
   const [uploading, setUploading] = React.useState(false)
@@ -235,7 +255,7 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
     setLoading(true)
     setError(null)
     try {
-      const items = await window.electronAPI.listDirectory(rootPath)
+      const items = await listDir(rootPath)
       setEntries(items)
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
@@ -244,10 +264,11 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
     } finally {
       setLoading(false)
     }
-  }, [rootPath])
+  }, [rootPath, listDir])
 
   /** 处理文件上传（拖拽或按钮触发） */
   const handleFileUpload = React.useCallback(async (files: File[]) => {
+    if (readOnly) return
     setUploading(true)
     let count = 0
     for (const file of files) {
@@ -290,16 +311,19 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
 
   /** 拖拽事件 */
   const handleDragOver = React.useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation(); setDragOver(true)
-  }, [])
+    e.preventDefault(); e.stopPropagation()
+    if (readOnly) return
+    setDragOver(true)
+  }, [readOnly])
   const handleDragLeave = React.useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation(); setDragOver(false)
   }, [])
   const handleDrop = React.useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation(); setDragOver(false)
+    if (readOnly) return
     const files = e.dataTransfer.files
     if (files.length > 0) handleFileUpload(Array.from(files))
-  }, [handleFileUpload])
+  }, [handleFileUpload, readOnly])
 
   React.useEffect(() => {
     loadRoot()
@@ -352,10 +376,10 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
 
   /** 执行重命名（失败统一走 toast 通知，与删除/回收站一致） */
   const handleRename = React.useCallback(async (filePath: string, newName: string): Promise<void> => {
-    // 同名检查
-    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'))
+    // 同名检查（父目录按原路径分隔符解析，兼容 Windows 反斜杠）
+    const parentDir = getFileParentPath(filePath) ?? ''
     try {
-      const siblings = await window.electronAPI.listDirectory(parentDir)
+      const siblings = await listDir(parentDir)
       const conflict = siblings.some((s) => s.name === newName && s.path !== filePath)
       if (conflict) {
         toast.error('同名文件已存在')
@@ -367,7 +391,8 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
     }
 
     try {
-      await window.electronAPI.renameFile(filePath, newName)
+      if (fileOps) await fileOps.rename(filePath, newName)
+      else await window.electronAPI.renameFile(filePath, newName)
       await loadRoot()
       setRenamingPath(null)
       setSelectedPaths(new Set())
@@ -390,10 +415,12 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
     try {
       const paths = selectedPaths.size > 1 ? [...selectedPaths] : [deleteTarget.path]
       for (const filePath of paths) {
-        await window.electronAPI.deleteFile(filePath)
+        if (fileOps) await fileOps.remove(filePath)
+        else await window.electronAPI.deleteFile(filePath)
       }
       setSelectedPaths(new Set())
       await loadRoot()
+      if (fileOps) toast.success('已移到 Core 回收站')
     } catch (err) {
       console.error('[FileBrowser] 删除失败:', err)
       toast.error(friendlyDeleteError(err, deleteTarget?.name ?? '项目'))
@@ -482,6 +509,13 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
           onAddToChat={onAddToChat}
           onFilePreview={handlePreviewFile}
           rootPath={rootPath}
+          listDirectory={listDir}
+          readOnly={readOnly}
+          canMove={!fileOps}
+          canUseLocalActions={!fileOps}
+          onCopy={onCopy}
+          onCut={onCut}
+          onRevealInSystemFiles={onRevealInSystemFiles}
         />
       ))}
     </div>
@@ -500,16 +534,18 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
           <span className="text-xs text-muted-foreground truncate flex-1" title={rootPath}>
             {breadcrumb}
           </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 flex-shrink-0"
-            onClick={() => window.electronAPI.openFile(rootPath).catch(console.error)}
-            title="在 Finder 中打开"
-          >
-            <ExternalLink className="size-3.5" />
-          </Button>
+          {!readOnly && !fileOps && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 flex-shrink-0"
+              onClick={() => window.electronAPI.openFile(rootPath).catch(console.error)}
+              title="在 Finder 中打开"
+            >
+              <ExternalLink className="size-3.5" />
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -520,29 +556,33 @@ export function FileBrowser({ rootPath, hideToolbar, embedded, hideEmpty, emptyH
           >
             <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
           </Button>
-          {/* 上传按钮 */}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 flex-shrink-0"
-            onClick={() => fileInputRef.current?.click()}
-            title="上传文件"
-          >
-            <Upload className="size-3.5" />
-          </Button>
-          {uploading && <span className="text-[10px] text-muted-foreground">上传中...</span>}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              const files = e.target.files
-              if (files) handleFileUpload(Array.from(files))
-              e.target.value = ''
-            }}
-          />
+          {/* 上传按钮（只读模式隐藏：文件写入属于所属 Core，本机上传不适用） */}
+          {!readOnly && !fileOps && (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 flex-shrink-0"
+                onClick={() => fileInputRef.current?.click()}
+                title="上传文件"
+              >
+                <Upload className="size-3.5" />
+              </Button>
+              {uploading && <span className="text-[10px] text-muted-foreground">上传中...</span>}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = e.target.files
+                  if (files) handleFileUpload(Array.from(files))
+                  e.target.value = ''
+                }}
+              />
+            </>
+          )}
           {/* 视图切换 */}
           <Button type="button" variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0"
             onClick={() => setViewMode(viewMode === 'list' ? 'grid' : 'list')}
@@ -745,6 +785,17 @@ interface FileTreeItemProps {
   onDownload?: (entry: FileEntry) => Promise<string | null>
   /** 文件浏览器的根路径，用于将相对路径解析为绝对路径 */
   rootPath: string
+  /** 目录内容加载器（本机走 IPC，非本机内核走 Core） */
+  listDirectory: (dirPath: string) => Promise<FileEntry[]>
+  /** 只读：隐藏本机文件操作菜单。 */
+  readOnly?: boolean
+  /** 是否允许“移动到...”菜单（非本机内核暂未提供目标目录选择）。 */
+  canMove?: boolean
+  /** 是否允许只在本机有意义的操作（在文件夹中显示、用默认应用打开）。 */
+  canUseLocalActions?: boolean
+  onCopy?: (entry: FileEntry) => void
+  onCut?: (entry: FileEntry) => void
+  onRevealInSystemFiles?: (filePath: string) => void
 }
 
 function FileTreeItem({
@@ -773,6 +824,13 @@ function FileTreeItem({
   onFilePreview,
   onDownload,
   rootPath,
+  listDirectory,
+  readOnly = false,
+  canMove = true,
+  canUseLocalActions = true,
+  onCopy,
+  onCut,
+  onRevealInSystemFiles,
 }: FileTreeItemProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [children, setChildren] = React.useState<FileEntry[]>([])
@@ -783,7 +841,7 @@ function FileTreeItem({
   // 当 refreshVersion 变化时，已展开的文件夹自动重新加载子项
   React.useEffect(() => {
     if (expanded && childrenLoaded && entry.isDirectory) {
-      window.electronAPI.listDirectory(entry.path)
+      listDirectory(entry.path)
         .then((items) => setChildren(items))
         .catch((err) => console.error('[FileTreeItem] 刷新子目录失败:', err))
     }
@@ -810,7 +868,7 @@ function FileTreeItem({
       const run = async (): Promise<void> => {
         if (!childrenLoaded) {
           try {
-            const items = await window.electronAPI.listDirectory(entry.path)
+            const items = await listDirectory(entry.path)
             if (!cancelled) {
               setChildren(items)
               setChildrenLoaded(true)
@@ -869,7 +927,7 @@ function FileTreeItem({
         return
       }
       try {
-        const items = await window.electronAPI.listDirectory(entry.path)
+        const items = await listDirectory(entry.path)
         setChildren(items)
         setChildrenLoaded(true)
 
@@ -877,7 +935,7 @@ function FileTreeItem({
         if (items.length === 0) {
           setTimeout(async () => {
             try {
-              const retryItems = await window.electronAPI.listDirectory(entry.path)
+              const retryItems = await listDirectory(entry.path)
               if (retryItems.length > 0) setChildren(retryItems)
             } catch { /* 静默忽略 */ }
           }, 800)
@@ -905,7 +963,7 @@ function FileTreeItem({
   const handleRefreshAfterDelete = async (): Promise<void> => {
     if (childrenLoaded) {
       try {
-        const items = await window.electronAPI.listDirectory(entry.path)
+        const items = await listDirectory(entry.path)
         setChildren(items)
       } catch {
         await onRefresh()
@@ -975,7 +1033,7 @@ function FileTreeItem({
 
   const { paddingLeft, guideLeft, stickyTop, stickyZIndex } = computeTreeRowLayout(depth)
   const isSticky = entry.isDirectory && expanded && canBeSticky(depth)
-  const showMenu = !isRenaming
+  const showMenu = !isRenaming && !readOnly
   const menuSelectedCount = isSelected ? selectedCount : 1
 
   /** 拖动整行到输入框 = 插入 @ 引用；重命名时不参与拖拽，避免抢走输入框里的文本选择。 */
@@ -1115,7 +1173,7 @@ function FileTreeItem({
                     添加到聊天
                   </DropdownMenuItem>
                 )}
-                {menuSelectedCount === 1 && (
+                {canUseLocalActions && menuSelectedCount === 1 && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
                     onSelect={() => onShowInFolder(entry)}
@@ -1124,7 +1182,16 @@ function FileTreeItem({
                     在文件夹中显示
                   </DropdownMenuItem>
                 )}
-                {menuSelectedCount === 1 && !entry.isDirectory && (
+                {onRevealInSystemFiles && menuSelectedCount === 1 && (
+                  <DropdownMenuItem
+                    className="text-xs py-1 [&>svg]:size-3.5"
+                    onSelect={() => onRevealInSystemFiles(entry.path)}
+                  >
+                    <FolderSearch />
+                    在系统文件中显示
+                  </DropdownMenuItem>
+                )}
+                {canUseLocalActions && menuSelectedCount === 1 && !entry.isDirectory && (
                   <DefaultAppMenuItem
                     filePath={entry.path}
                     probePath={entry.name}
@@ -1133,14 +1200,28 @@ function FileTreeItem({
                     className="text-xs py-1 [&>svg]:size-3.5"
                   />
                 )}
-                <DropdownMenuItem
-                  className="text-xs py-1 [&>svg]:size-3.5"
-                  disabled={moving}
-                  onSelect={() => { void onMove(entry) }}
-                >
-                  <FolderInput />
-                  {menuSelectedCount > 1 ? `移动选中 (${menuSelectedCount})` : '移动到...'}
-                </DropdownMenuItem>
+                {onCopy && menuSelectedCount === 1 && (
+                  <DropdownMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onCopy(entry)}>
+                    <Copy />
+                    复制
+                  </DropdownMenuItem>
+                )}
+                {onCut && menuSelectedCount === 1 && (
+                  <DropdownMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onCut(entry)}>
+                    <Scissors />
+                    剪切
+                  </DropdownMenuItem>
+                )}
+                {canMove && (
+                  <DropdownMenuItem
+                    className="text-xs py-1 [&>svg]:size-3.5"
+                    disabled={moving}
+                    onSelect={() => { void onMove(entry) }}
+                  >
+                    <FolderInput />
+                    {menuSelectedCount > 1 ? `移动选中 (${menuSelectedCount})` : '移动到...'}
+                  </DropdownMenuItem>
+                )}
                 {menuSelectedCount === 1 && (
                   <DropdownMenuItem
                     className="text-xs py-1 [&>svg]:size-3.5"
@@ -1208,6 +1289,13 @@ function FileTreeItem({
               onFilePreview={onFilePreview}
               onDownload={onDownload}
               rootPath={rootPath}
+              listDirectory={listDirectory}
+              readOnly={readOnly}
+              canMove={canMove}
+              canUseLocalActions={canUseLocalActions}
+              onCopy={onCopy}
+              onCut={onCut}
+              onRevealInSystemFiles={onRevealInSystemFiles}
             />
           ))}
         </div>

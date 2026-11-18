@@ -216,6 +216,29 @@ describe('工作区已被移除的会话：不把用户主目录当 cwd', () => 
   })
 })
 
+describe('SDK 文件回退授权边界', () => {
+  test('拒绝根外绝对路径和越界备份，同时恢复根内合法文件', () => {
+    createSessionWithSdk(PROJECT_WORKSPACE_ID)
+    const allowed = writeProjectFile('src/app.ts', 'EDITED')
+    const outside = join(sandbox, 'outside-user.txt')
+    writeFileSync(outside, 'USER CONTENT', 'utf8')
+    const blocked = writeProjectFile('src/blocked.ts', 'KEEP BLOCKED')
+    const sdkFile = join(configPaths.getSdkConfigDir(), 'projects', 'fixture-project', `${SDK_SESSION_ID}.jsonl`)
+    const lines = readFileSync(sdkFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    const snapshot = lines.find((line) => line.type === 'file-history-snapshot' && line.snapshot.messageId === 'u-2')
+    snapshot.snapshot.trackedFileBackups[outside] = { backupFileName: 'bak-after-first' }
+    snapshot.snapshot.trackedFileBackups['src/blocked.ts'] = { backupFileName: '../outside-backup' }
+    writeFileSync(join(configPaths.getSdkConfigDir(), 'file-history', 'outside-backup'), 'UNTRUSTED BACKUP', 'utf8')
+    writeFileSync(sdkFile, lines.map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf8')
+
+    const result = sessions.rewindFilesFromSnapshot(SDK_SESSION_ID, 'u-2', projectRoot)
+    expect(result.filesChanged).toEqual(['src/app.ts'])
+    expect(readFileSync(allowed, 'utf8')).toBe('ORIGINAL AT TURN 1')
+    expect(readFileSync(outside, 'utf8')).toBe('USER CONTENT')
+    expect(readFileSync(blocked, 'utf8')).toBe('KEEP BLOCKED')
+  })
+})
+
 describe('managed：cwd 仍等于会话存储目录（零回归）', () => {
   test('Given managed 会话 When 回退到此处 Then 文件恢复到会话目录（旧行为）', async () => {
     const sessionId = createSessionWithSdk(MANAGED_WORKSPACE_ID)

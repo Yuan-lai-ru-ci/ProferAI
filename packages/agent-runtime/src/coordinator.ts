@@ -350,9 +350,11 @@ export class AgentRuntimeCoordinator {
       const blocks = (message as { message?: { content?: Array<{ type?: unknown }> } }).message?.content
       if (Array.isArray(blocks) && blocks.some(block => block?.type === 'tool_use')) providerHasSideEffects = true
     }
+    // 同一产品消息的 partial/final/重放沿用首次源时间，事件与落盘不能分别计时。
+    const messageCreatedAt = new Map<string, number>()
     const stamp = (message: SDKMessage, author?: ActorRef, context = input.context): SDKMessage => {
       if (!run || !context) return message
-      const record = message as SDKMessage & { uuid?: string; message?: { id?: string }; _partial?: boolean; error?: unknown; _errorCode?: unknown }
+      const record = message as SDKMessage & { uuid?: string; message?: { id?: string }; _partial?: boolean; error?: unknown; _errorCode?: unknown; _createdAt?: unknown }
       const key = record.message?.id ? `${message.type}:${record.message.id}` : undefined
       let id = messageIds.get(message) ?? (key ? logicalMessageIds.get(key) : undefined)
         ?? (record.uuid ? logicalMessageIds.get(`uuid:${record.uuid}`) : undefined)
@@ -367,7 +369,13 @@ export class AgentRuntimeCoordinator {
       // 部分帧可能没有 UUID，终稿才有。Provider UUID 原样保留，产品消息身份沿用已分配的 ID。
       const sourced = { ...stamped, _provenance: { ...stamped._provenance!, messageId: id } }
       messageIds.set(sourced, id)
-      return sourced
+      const timeKey = `${message.type}:${id}`
+      const createdAt = messageCreatedAt.get(timeKey)
+        ?? (typeof record._createdAt === 'number' && Number.isFinite(record._createdAt) ? record._createdAt : this.now())
+      messageCreatedAt.set(timeKey, createdAt)
+      const normalized = normalizeRuntimeMessage({ ...sourced, _createdAt: createdAt } as SDKMessage, input.modelId, createdAt)
+      messageIds.set(normalized, id)
+      return normalized
     }
     const stop = async (reason: string): Promise<void> => {
       if (finished || this.active.get(input.sessionId)?.token !== token || controller.signal.aborted) return
@@ -664,13 +672,20 @@ export class AgentRuntimeCoordinator {
       .finally(async () => {
         input.abortSignal?.removeEventListener('abort', abort)
         const release = async (lateDrain = false) => {
+          let releaseBlocked = false
+          try { await input.onBeforeOwnerRelease?.(input) } catch (error) {
+            console.error('[Agent Runtime] 宿主收尾失败，保留会话执行权：', error)
+            const control = this.active.get(input.sessionId)
+            if (control?.token === token) control.quarantined = true
+            releaseBlocked = true
+          }
           if (lateDrain) {
             try { await input.onResourcesDrained?.() } catch (error) {
               console.warn('[Agent Runtime] 资源退出观察者失败:', error)
             }
           }
-          if (!input.retainOwnership || this.active.get(input.sessionId)?.quarantined) this.ownership.release(input.sessionId, token)
-          if (this.active.get(input.sessionId)?.token === token) this.active.delete(input.sessionId)
+          if (!releaseBlocked && (!input.retainOwnership || this.active.get(input.sessionId)?.quarantined)) this.ownership.release(input.sessionId, token)
+          if (!releaseBlocked && this.active.get(input.sessionId)?.token === token) this.active.delete(input.sessionId)
           markResourcesExited()
           if (lateDrain) {
             try { input.onOwnerReleased?.() } catch (error) { console.warn('[Agent Runtime] owner 释放观察者异常:', error) }

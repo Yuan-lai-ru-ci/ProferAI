@@ -36,6 +36,12 @@ const valid = (provider: ProviderType): unknown => provider === 'google'
   : provider === 'ollama' ? { models: [{ name: 'fixture:latest' }] }
   : { object: 'list', data: [{ id: 'fixture-model', object: 'model', display_name: 'Fixture' }] }
 
+function timeoutFixture(ms = 5): AbortSignal {
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(new DOMException('fixture timeout', 'TimeoutError')), ms)
+  return controller.signal
+}
+
 beforeEach(() => {
   requests.length = 0
   proxyArgs.length = 0
@@ -63,9 +69,13 @@ describe('F14：请求超时与测试能力边界', () => {
   })
 
   test('Given 挂起且遵循 signal 的 fetch When 超时 Then 测试/发现明确失败并能重试', async () => {
-    const originalTimeout = AbortSignal.timeout.bind(AbortSignal)
     const timeouts: number[] = []
-    spyOn(AbortSignal, 'timeout').mockImplementation((ms) => { timeouts.push(ms); return originalTimeout(5) })
+    spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      timeouts.push(ms)
+      const controller = new AbortController()
+      setTimeout(() => controller.abort(new DOMException('fixture timeout', 'TimeoutError')), 5)
+      return controller.signal
+    })
     spyOn(console, 'error').mockImplementation(() => {})
     responder = ({ init }) => new Promise((_resolve, reject) => {
       const signal = init.signal!
@@ -465,8 +475,7 @@ describe('F21：OpenAI 兼容渠道（Mistral 类上游）端点推导与 404 �
 })
 
 test('F14：Given 生成挂起或错误/空响应 When 测试 Then 不报告生成成功', async () => {
-  const originalTimeout = AbortSignal.timeout.bind(AbortSignal)
-  spyOn(AbortSignal, 'timeout').mockImplementation(() => originalTimeout(5))
+  spyOn(AbortSignal, 'timeout').mockImplementation(() => timeoutFixture())
   responder = ({ init }) => new Promise((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }))
   expect((await testChannelDirect(input('anthropic', { modelId: 'manual-fixture' }))).success).toBe(false)
   for (const payload of [{}, { content: [] }, { error: {}, content: [{ type: 'text', text: 'fixture' }] }]) {
@@ -477,8 +486,7 @@ test('F14：Given 生成挂起或错误/空响应 When 测试 Then 不报告生�
 
 test('F15：Given 第二页挂起 When 整次发现超时 Then 不返回第一页且只创建一次 signal', async () => {
   spyOn(console, 'error').mockImplementation(() => {})
-  const originalTimeout = AbortSignal.timeout.bind(AbortSignal)
-  const timeout = spyOn(AbortSignal, 'timeout').mockImplementation(() => originalTimeout(5))
+  const timeout = spyOn(AbortSignal, 'timeout').mockImplementation(() => timeoutFixture())
   responder = ({ url, init }) => new URL(url).searchParams.has('after_id')
     ? new Promise((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }))
     : Promise.resolve(json({ data: [{ id: 'a' }], has_more: true, last_id: 'a' }))

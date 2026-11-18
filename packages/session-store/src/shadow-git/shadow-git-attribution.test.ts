@@ -68,10 +68,10 @@ test('文件名带空格/中文/换行时不依赖转义', () => {
 })
 
 test('归属判定：证据命中为 confirmed，只有树差异为 unconfirmed', () => {
-  const rootPath = '/tmp/workspace-root'
+  const rootPath = join(tmpdir(), 'workspace-root')
   const evidence: ShadowTurnEvidenceItem[] = [
-    { seq: 1, toolUseId: 't1', toolName: 'Write', path: '/tmp/workspace-root/src/agent.ts', source: 'write' },
-    { seq: 2, toolUseId: 't2', toolName: 'Bash', path: '/tmp/workspace-root/src/bash-made.ts', source: 'bash' },
+    { seq: 1, toolUseId: 't1', toolName: 'Write', path: join(rootPath, 'src', 'agent.ts'), source: 'write' },
+    { seq: 2, toolUseId: 't2', toolName: 'Bash', path: join(rootPath, 'src', 'bash-made.ts'), source: 'bash' },
   ]
 
   const record = buildShadowTurnAttribution({
@@ -98,12 +98,13 @@ test('归属判定：证据命中为 confirmed，只有树差异为 unconfirmed'
     ['src/bash-made.ts', 'confirmed', 'bash'],
     ['src/user-edit.ts', 'unconfirmed', undefined],
   ])
-  expect(record.changes[0]?.absolutePath).toBe('/tmp/workspace-root/src/agent.ts')
+  expect(record.changes[0]?.absolutePath).toBe(join(rootPath, 'src', 'agent.ts'))
   expect(record.changes[0]?.evidenceSeq).toEqual([1])
   expect(record.unchangedEvidence).toEqual([])
 })
 
 test('证据写到根外：记进 unchangedEvidence 且标记 outside-roots', () => {
+  const rootPath = join(tmpdir(), 'workspace-root')
   const record = buildShadowTurnAttribution({
     workspaceId: WORKSPACE_ID,
     sessionId: SESSION_ID,
@@ -113,10 +114,10 @@ test('证据写到根外：记进 unchangedEvidence 且标记 outside-roots', ()
     endedAt: 2000,
     diff: [],
     evidence: [
-      { seq: 1, path: '/tmp/elsewhere/notes.md', source: 'write', toolName: 'Write' },
-      { seq: 2, path: '/tmp/workspace-root/src/noop.ts', source: 'edit', toolName: 'Edit' },
+      { seq: 1, path: join(tmpdir(), 'workspace-root-sibling', 'notes.md'), source: 'write', toolName: 'Write' },
+      { seq: 2, path: join(rootPath, 'src', 'noop.ts'), source: 'edit', toolName: 'Edit' },
     ],
-    roots: [root('root-1', '/tmp/workspace-root')],
+    roots: [root('root-1', rootPath)],
     partial: false,
   })
 
@@ -127,7 +128,7 @@ test('证据写到根外：记进 unchangedEvidence 且标记 outside-roots', ()
   ])
 })
 
-test('/private 前缀差异不算不同路径（macOS /var 与 /private/var）', () => {
+test('/private 前缀仅在 macOS 作为 /var 的系统别名', () => {
   const record = buildShadowTurnAttribution({
     workspaceId: WORKSPACE_ID,
     sessionId: SESSION_ID,
@@ -140,7 +141,19 @@ test('/private 前缀差异不算不同路径（macOS /var 与 /private/var）',
     roots: [root('root-1', '/var/tmp/root')],
     partial: false,
   })
-  expect(record.changes[0]?.attribution).toBe('confirmed')
+  expect(record.changes[0]?.attribution).toBe(process.platform === 'darwin' ? 'confirmed' : 'unconfirmed')
+})
+
+test('反斜杠仅在 Windows 作为目录分隔符，不合并 POSIX 不同文件名', () => {
+  const rootPath = join(tmpdir(), 'workspace-root')
+  const record = buildShadowTurnAttribution({
+    workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, turnId: 'separator-boundary',
+    runtime: 'pi', startedAt: 1, endedAt: 2,
+    diff: [{ rootId: 'root-1', path: 'nested/file.ts', status: 'modified' }],
+    evidence: [{ seq: 1, path: join(rootPath, 'nested\\file.ts'), source: 'edit' }],
+    roots: [root('root-1', rootPath)], partial: false,
+  })
+  expect(record.changes[0]?.attribution).toBe(process.platform === 'win32' ? 'confirmed' : 'unconfirmed')
 })
 
 test('同一路径被写多次：保留全部证据序号，不折叠成最后一次', () => {

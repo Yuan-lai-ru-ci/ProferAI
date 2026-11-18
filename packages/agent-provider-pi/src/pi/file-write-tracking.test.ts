@@ -1,11 +1,19 @@
 import { describe, expect, test } from 'bun:test'
 import * as sdk from '@earendil-works/pi-coding-agent'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { platform, tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { buildBuiltinToolDefinitions, type FileWriteFact } from '../pi-agent-adapter'
 
 const canUseTool = (async () => ({ behavior: 'allow' })) as never
+const shellPath = platform() === 'win32'
+  ? [
+      process.env.CLAUDE_CODE_SHELL,
+      join(process.env.USERPROFILE ?? '', 'PortableGit', 'bin', 'bash.exe'),
+      join(process.env.ProgramFiles ?? '', 'Git', 'bin', 'bash.exe'),
+      ...(process.env.PATH ?? '').split(delimiter).filter(path => /git/i.test(path)).map(path => join(path, 'bash.exe')),
+    ].find((path): path is string => Boolean(path && existsSync(path)))
+  : '/bin/bash'
 
 function buildTools(
   cwd: string,
@@ -18,7 +26,7 @@ function buildTools(
     'test-session',
     cwd,
     canUseTool,
-    { shellPath: '/bin/bash', shellKind: 'bash' } as never,
+    { env: {}, shellPath, shellKind: platform() === 'win32' ? 'git-bash' : 'posix' },
     undefined,
     undefined,
     undefined,
@@ -160,6 +168,7 @@ describe('Bash 写入归属边界', () => {
         (toolCallId, fact) => observed.push({ toolCallId, fact }),
       ).find((tool) => tool.name === 'bash')!
 
+      expect(shellPath).toBeTruthy()
       await bash.execute(
         'call-4',
         { command: "printf generated > report.md" } as never,
@@ -168,6 +177,7 @@ describe('Bash 写入归属边界', () => {
         undefined as never,
       )
 
+      expect(shellPath).toBeTruthy()
       expect(readFileSync(join(dir, 'report.md'), 'utf-8')).toBe('generated')
       expect(observed).toEqual([{ toolCallId: 'call-4', fact: { path: join(dir, 'report.md'), source: 'bash' } }])
       expect(writes).toEqual([])
@@ -336,5 +346,5 @@ describe('Bash 写入归属边界', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 })

@@ -6,6 +6,7 @@ import type { ActivePlanningReminder } from '@profer/shared'
 import { activePlanningRemindersAtom, planningSelectedTodoIdAtom, planningTabAtom } from '@/atoms/planning-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
 import { notificationsEnabledAtom, notificationSoundEnabledAtom, notificationSoundsAtom, playNotificationSoundForType } from '@/atoms/notifications'
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { Button } from '@profer/ui/primitives/button'
 
 function formatTriggerTime(timestamp: number): string {
@@ -22,6 +23,7 @@ function mergeReminders(current: ActivePlanningReminder[], incoming: ActivePlann
 
 /** 全局常驻提醒条。未确认提醒从 SQLite 恢复，不依赖一次性 toast 生命周期。 */
 export function PlanningReminderRail({ playSound = true }: { playSound?: boolean } = {}): React.ReactElement | null {
+  const core = useAtomValue(coreTargetsAtom)
   const [reminders, setReminders] = useAtom(activePlanningRemindersAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const setPlanningTab = useSetAtom(planningTabAtom)
@@ -30,17 +32,18 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
   const soundEnabled = useAtomValue(notificationSoundEnabledAtom)
   const sounds = useAtomValue(notificationSoundsAtom)
 
-  const load = React.useCallback(async () => {
-    try {
-      setReminders(await window.electronAPI.listActivePlanningReminders())
-    } catch (error) {
-      console.error('[任务/日程] 加载常驻提醒失败:', error)
-    }
-  }, [setReminders])
-
   React.useEffect(() => {
+    let disposed = false
+    const load = async (): Promise<void> => {
+      try {
+        const incoming = await window.electronAPI.listActivePlanningReminders()
+        if (!disposed) setReminders(incoming)
+      } catch (error) { if (!disposed) console.error('[任务/日程] 加载常驻提醒失败:', error) }
+    }
+    setReminders([])
     void load()
     const unsubscribeDue = window.electronAPI.onPlanningRemindersDue((due) => {
+      if (disposed) return
       setReminders((current) => mergeReminders(current, due))
       if (playSound && notificationsEnabled && soundEnabled && due.length > 0) {
         void playNotificationSoundForType('planningReminder', sounds)
@@ -49,8 +52,8 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
     const unsubscribeChanged = window.electronAPI.onPlanningChanged((change) => {
       if (change.resources.includes('reminders')) void load()
     })
-    return () => { unsubscribeDue(); unsubscribeChanged() }
-  }, [load, notificationsEnabled, playSound, setReminders, soundEnabled, sounds])
+    return () => { disposed = true; unsubscribeDue(); unsubscribeChanged() }
+  }, [core.currentId, core.generation, notificationsEnabled, playSound, setReminders, soundEnabled, sounds])
 
   const acknowledge = async (id: string) => {
     try {

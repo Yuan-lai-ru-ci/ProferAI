@@ -167,9 +167,13 @@ export interface ShadowTreeDiffEntry {
  */
 function comparablePath(value: string): string[] {
   const resolved = resolve(value)
-  const variants = [resolved]
-  if (resolved.startsWith('/private/')) variants.push(resolved.slice('/private'.length))
-  else variants.push(`/private${resolved}`)
+  const normalized = process.platform === 'win32' ? resolved.replace(/\\/g, '/').toLowerCase() : resolved
+  const variants = [normalized]
+  // /var 与 /private/var 只在 macOS 是系统别名，不能扩宽其他平台的目录边界。
+  if (process.platform === 'darwin') {
+    if (normalized.startsWith('/private/')) variants.push(normalized.slice('/private'.length))
+    else variants.push(`/private${normalized}`)
+  }
   return variants
 }
 

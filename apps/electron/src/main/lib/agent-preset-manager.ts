@@ -21,6 +21,8 @@ import {
   DEFAULT_PRESET_ID,
   PROFER_PERMISSION_MODES,
   mergeAgentPreset,
+  normalizeAgentPresetReference,
+  resolveAgentPresetReference,
   toAgentPresetExportEntry,
 } from '@profer/shared'
 import type {
@@ -310,75 +312,15 @@ export function listGlobalAgentPresets(workspaceSlug?: string): AgentPreset[] {
 
 /** 将 reference 校验为严格、可审计的形式；不会为未知 ID 静默回退。 */
 export function normalizePresetReference(reference: PresetReference, contextWorkspaceSlug?: string): PresetReference {
-  if (!reference || typeof reference.presetId !== 'string' || !reference.presetId.trim()) {
-    throw new AgentPresetError('PRESET_UNKNOWN_REFERENCE', '预设引用缺少有效 presetId')
-  }
-  if (!['builtin-meta', 'user-global', 'workspace'].includes(reference.presetScope)) {
-    throw new AgentPresetError('PRESET_UNKNOWN_REFERENCE', `未知预设作用域: ${String(reference.presetScope)}`)
-  }
-  if (reference.presetScope === 'workspace') {
-    // 上下文工作区优先：会话/任务迁移到新工作区后，旧引用里的 slug 不应把解析带回旧工作区。
-    const workspaceSlug = contextWorkspaceSlug || reference.workspaceSlug
-    if (!workspaceSlug) throw new AgentPresetError('PRESET_WORKSPACE_REQUIRED', '工作区预设引用必须提供 workspaceSlug')
-    return { ...reference, presetId: reference.presetId.trim(), workspaceSlug }
-  }
-  if (reference.workspaceSlug !== undefined) {
-    throw new AgentPresetError('PRESET_SCOPE_MISMATCH', '全局预设引用不得携带 workspaceSlug，请删除该字段或改用 workspace 作用域')
-  }
-  return { ...reference, presetId: reference.presetId.trim() }
+  return normalizeAgentPresetReference(reference, contextWorkspaceSlug)
 }
 
-/** 严格解析同一引用；Claude 与 Pi runtime 均应调用此入口。 */
+/** Core 与 Electron 复用同一严格引用/版本/继承解析。 */
 export function resolvePresetReference(reference: PresetReference, contextWorkspaceSlug?: string): AgentPreset {
-  return resolvePresetReferenceInternal(reference, contextWorkspaceSlug, new Set<string>(), true)
-}
-
-function resolvePresetReferenceInternal(
-  reference: PresetReference,
-  contextWorkspaceSlug: string | undefined,
-  visiting: Set<string>,
-  enforceWorkspaceAvailability: boolean,
-): AgentPreset {
-  const normalized = normalizePresetReference(reference, contextWorkspaceSlug)
-  const identity = `${normalized.presetScope}:${normalized.workspaceSlug ?? ''}:${normalized.presetId}`
-  if (visiting.has(identity)) {
-    throw new AgentPresetError('PRESET_INVALID_BASE', `检测到预设继承循环: ${identity}`, { identity })
-  }
-  const nextVisiting = new Set(visiting)
-  nextVisiting.add(identity)
-  if (enforceWorkspaceAvailability && (normalized.presetScope === 'user-global' || normalized.presetScope === 'builtin-meta') && contextWorkspaceSlug) {
-    const globalConfig = readGlobalConfig()
-    const scopes = globalConfig.workspaceScopes?.[normalized.presetId]
-    if (scopes && !scopes.includes(contextWorkspaceSlug)) {
-      throw new AgentPresetError('PRESET_UNKNOWN_REFERENCE', `全局预设已解除当前工作区生效范围: ${normalized.presetId}`)
-    }
-    if (readConfig(contextWorkspaceSlug).disabledGlobalPresetIds?.includes(normalized.presetId)) {
-      throw new AgentPresetError('PRESET_NOT_FOUND', `预设已在当前工作区禁用: ${normalized.presetId}`)
-    }
-  }
-  const candidates = normalized.presetScope === 'builtin-meta'
-    ? BUILTIN_AGENT_PRESETS
-    : normalized.presetScope === 'user-global'
-      ? readGlobalConfig().presets
-      : readConfig(normalized.workspaceSlug).presets
-  const raw = candidates.find((preset) => preset.id === normalized.presetId)
-  if (!raw) throw new AgentPresetError('PRESET_NOT_FOUND', `预设不存在: ${normalized.presetScope}/${normalized.presetId}`)
-  if (raw.migrationStatus === 'invalid-base') {
-    throw new AgentPresetError('PRESET_INVALID_BASE', raw.migrationReason ?? `预设基座无效: ${normalized.presetId}`, { presetId: normalized.presetId })
-  }
-  // builtin-meta 是随 Profer 发布演进的元预设：旧会话/派生引用中的版本只用于审计，
-  // 不能阻断它们跟随新的元预设定义。用户全局/工作区预设仍执行严格版本校验。
-  if (normalized.presetScope !== 'builtin-meta' && normalized.presetVersion && raw.version && normalized.presetVersion !== raw.version) {
-    throw new AgentPresetError('PRESET_CONCURRENT_UPDATE', `预设版本已变化: ${normalized.presetId}`)
-  }
-  const baseReference = raw.basePresetReference ?? (raw.basePresetId
-    ? { presetId: raw.basePresetId, presetScope: 'builtin-meta' as const }
-    : undefined)
-  if (!baseReference) return withSuppressMapping(raw)
-  // 基座是定义依赖，不是可选预设。即使元/全局基座在当前工作区的选择器中停用，
-  // 已启用的工作区派生预设仍应能解析和使用；只有顶层选择才检查工作区生效范围。
-  const base = resolvePresetReferenceInternal(baseReference, normalized.workspaceSlug, nextVisiting, false)
-  return withSuppressMapping(mergeAgentPreset(base, raw))
+  return resolveAgentPresetReference(reference, contextWorkspaceSlug, {
+    readGlobal: readGlobalConfig,
+    readWorkspace: readConfig,
+  })
 }
 
 function referenceForPreset(preset: AgentPreset, workspaceSlug?: string): PresetReference {
@@ -828,7 +770,13 @@ function migratePresetReferencesInFile(filePath: string, transform: (value: Reco
  * 已解除作用域、已归档会话和已暂停自动任务仍持有稳定引用，删除全局实体前也必须
  * 改绑，否则对象恢复使用时会变成悬空引用。status 只描述预设在该工作区是否生效。
  */
-export function getPresetReferenceReport(reference: PresetReference): PresetReferenceReport {
+/** 只描述“谁引用了这个预设”所需的最小字段；桌面与会话所属 Core 的数据都能直接喂进来。 */
+export interface PresetReferenceSource {
+  sessions?: ReadonlyArray<{ id: string; workspaceId?: string; presetId?: string; presetReference?: PresetReference }>
+  automations?: ReadonlyArray<{ id: string; workspaceId?: string; presetId?: string; presetReference?: PresetReference }>
+}
+
+export function getPresetReferenceReport(reference: PresetReference, source?: PresetReferenceSource): PresetReferenceReport {
   const normalized = normalizePresetReference(reference)
   const preset = resolvePresetReference(normalized)
   const blockers: PresetWorkspaceReference[] = []
@@ -838,8 +786,9 @@ export function getPresetReferenceReport(reference: PresetReference): PresetRefe
   const globalConfig = readGlobalConfig()
   const configuredScopes = globalConfig.workspaceScopes?.[normalized.presetId]
   const isGlobalReference = normalized.presetScope === 'user-global' || normalized.presetScope === 'builtin-meta'
-  const sessions = listAgentSessions(true)
-  const automations = listAutomations()
+  const sessions = source?.sessions ?? listAgentSessions(true)
+  // 本机 Core 接管 Automation 后，桌面账本只读会抛错；调用方可传入 Core 数据。
+  const automations = source?.automations ?? listAutomations()
   const workspaceScopes = isGlobalReference
     ? workspaces.filter((workspace) => {
         const workspaceConfig = readConfig(workspace.slug)

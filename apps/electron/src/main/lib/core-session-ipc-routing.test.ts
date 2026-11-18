@@ -1,0 +1,393 @@
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, isAgentRuntime, buildAgentSessionUiProjection } from '@profer/shared'
+import { projectRemoteRunEvent } from './core-run-projection'
+
+// 执行实际注册代码，避免测试里重复实现 Core/桌面分支。
+const source = readFileSync(new URL('../ipc.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+function handler(channel: string, dependencies: Record<string, unknown>) {
+  const group = channel.startsWith('PRESET:') ? 'AGENT_PRESET_IPC_CHANNELS' : 'AGENT_IPC_CHANNELS'
+  const name = channel.replace(/^PRESET:/, '')
+  const marker = `  ipcMain.handle(\n    ${group}.${name},`
+  const inlineMarker = `  ipcMain.handle(${group}.${name},`
+  const start = Math.max(source.indexOf(marker), source.indexOf(inlineMarker))
+  const inline = group === 'AGENT_PRESET_IPC_CHANNELS' && source.indexOf(inlineMarker) >= 0
+  const end = inline ? source.indexOf('\n  })', start) : source.indexOf('\n  )', start)
+  if (start < 0 || end < start) throw new Error(`IPC 注册边界不存在：${channel}`)
+  const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end + (inline ? 5 : 4)))
+  let invoke: ((...args: unknown[]) => Promise<unknown>) | undefined
+  const deps = {
+    AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, isAgentRuntime,
+    getCurrentCoreTargetId: () => 'local',
+    assertSensitiveAgentIpcSender: () => {},
+    assertLocalCoreTarget: () => {},
+    isAgentSessionActive: () => false,
+    getSettings: () => ({ agentRuntime: 'claude' }),
+    ...dependencies,
+    ipcMain: { handle: (_name: string, callback: typeof invoke) => { invoke = callback } },
+  }
+  new Function(...Object.keys(deps), js)(...Object.values(deps))
+  if (!invoke) throw new Error(`IPC 未注册：${channel}`)
+  return (...args: unknown[]) => invoke!({}, ...args)
+}
+
+const session = { id: 'core-session', title: 'Core', agentRuntime: 'claude', createdAt: 1, updatedAt: 1 }
+const noDesktop = () => { throw new Error('不应访问桌面存储') }
+
+describe('本机 Core 会话 IPC 归属', () => {
+  test('本机工作区读写全部路由Core，不回退桌面manager', async () => {
+    const calls: string[] = []
+    const workspace = { id: 'w1', name: 'Core workspace' }
+    const client = {
+      listWorkspaces: async () => { calls.push('list'); return [workspace] },
+      createManagedWorkspace: async (name: string) => { calls.push(`create:${name}`); return workspace },
+      updateWorkspace: async (id: string, updates: unknown) => { calls.push(`update:${id}`); return { ...workspace, updates } },
+      deleteWorkspace: async (id: string) => { calls.push(`delete:${id}`) },
+      reorderWorkspaces: async (ids: string[]) => { calls.push(`reorder:${ids.join(',')}`); return [workspace] },
+      bindProjectWorkspace: async () => { calls.push('bind'); return { workspace, created: true, warnings: [] } },
+      removeProjectWorkspace: async (id: string) => { calls.push(`unbind:${id}`) },
+      relocateProjectWorkspace: async () => { calls.push('relocate'); return { workspace, created: false, warnings: [] } },
+    }
+    const deps = { getLocalCoreClient: () => client, getActiveCoreClient: () => client, getCoreTargetGeneration: () => 1,
+      getAgentWorkspace: noDesktop, listAgentWorkspaces: noDesktop, createAgentWorkspace: noDesktop, updateAgentWorkspace: noDesktop,
+      deleteAgentWorkspace: noDesktop, reorderAgentWorkspaces: noDesktop, openProjectWorkspace: noDesktop,
+      createProjectWorkspace: noDesktop, removeProjectWorkspace: noDesktop, relocateProjectWorkspace: noDesktop,
+      scheduleProjectSessionMigration: () => Promise.resolve(), ensureProjectSessionPortability: () => Promise.resolve(),
+      reconcileProjectSessionIndexesSafely: () => {},
+      app: { getVersion: () => 'fixture' }, broadcastAgentWorkspacesChanged: () => {} }
+    await expect(handler('LIST_WORKSPACES', deps)()).resolves.toEqual([workspace])
+    await handler('CREATE_WORKSPACE', deps)('new')
+    await handler('UPDATE_WORKSPACE', deps)('w1', { name: 'Renamed' })
+    await handler('REORDER_WORKSPACES', deps)(['w1'])
+    await handler('DELETE_WORKSPACE', deps)('w1')
+    await handler('CREATE_PROJECT_WORKSPACE', deps)({ rootPath: '/fixture' })
+    await handler('OPEN_PROJECT_WORKSPACE', deps)({ rootPath: '/fixture', open: true })
+    await handler('REMOVE_PROJECT_WORKSPACE', deps)('w1')
+    await handler('RELOCATE_PROJECT_WORKSPACE', deps)({ id: 'w1', rootPath: '/fixture-new' })
+    expect(calls).toEqual(['list', 'create:new', 'update:w1', 'reorder:w1', 'delete:w1', 'bind', 'bind', 'unbind:w1', 'relocate'])
+    const failed = handler('CREATE_WORKSPACE', { ...deps, getLocalCoreClient: () => null, process: { env: { PROFER_CORE_LOCAL: '1' } } })
+    await expect(failed('new')).rejects.toThrow('本机Core尚未就绪')
+    expect(await handler('LIST_WORKSPACES', { ...deps, getLocalCoreClient: () => null,
+      process: { env: { PROFER_CORE_LOCAL: '0' } }, listAgentWorkspaces: () => [workspace] })()).toEqual([workspace])
+  })
+
+  test('本机工作区异步响应在切Core或client替换后拒绝且不广播', async () => {
+    const cases: Array<{ channel: string; method: string; args: unknown[]; result: unknown }> = [
+      { channel: 'LIST_WORKSPACES', method: 'listWorkspaces', args: [], result: [] },
+      { channel: 'CREATE_WORKSPACE', method: 'createManagedWorkspace', args: ['new'], result: { id: 'w' } },
+      { channel: 'UPDATE_WORKSPACE', method: 'updateWorkspace', args: ['w', { name: 'new' }], result: { id: 'w' } },
+      { channel: 'DELETE_WORKSPACE', method: 'deleteWorkspace', args: ['w'], result: undefined },
+      { channel: 'REORDER_WORKSPACES', method: 'reorderWorkspaces', args: [['w']], result: [] },
+      { channel: 'CREATE_PROJECT_WORKSPACE', method: 'bindProjectWorkspace', args: [{ rootPath: '/fixture' }], result: { workspace: { id: 'w' } } },
+      { channel: 'OPEN_PROJECT_WORKSPACE', method: 'bindProjectWorkspace', args: [{ rootPath: '/fixture' }], result: { workspace: { id: 'w' } } },
+      { channel: 'REMOVE_PROJECT_WORKSPACE', method: 'removeProjectWorkspace', args: ['w'], result: undefined },
+      { channel: 'RELOCATE_PROJECT_WORKSPACE', method: 'relocateProjectWorkspace', args: [{ id: 'w', rootPath: '/fixture' }], result: { workspace: { id: 'w' } } },
+    ]
+    for (const entry of cases) for (const change of ['generation', 'client', 'target']) {
+      let generation = 1, target = 'local', broadcasts = 0
+      let active: object
+      const client = { [entry.method]: async () => {
+        if (change === 'generation') generation++
+        if (change === 'client') active = {}
+        if (change === 'target') target = 'remote'
+        return entry.result
+      } }
+      active = client
+      const invoke = handler(entry.channel, { getCurrentCoreTargetId: () => target, getLocalCoreClient: () => active,
+        getCoreTargetGeneration: () => generation, getActiveCoreClient: () => null,
+        broadcastAgentWorkspacesChanged: () => { broadcasts++ }, createAgentWorkspace: noDesktop, listAgentWorkspaces: noDesktop })
+      await expect(invoke(...entry.args)).rejects.toThrow('Core已切换')
+      expect(broadcasts).toBe(0)
+    }
+  })
+
+  test('删除路由本地Core，失败不提交桌面删除队列', async () => {
+    const calls: string[] = []
+    const invoke = handler('DELETE_SESSION', {
+      getLocalCoreClient: () => ({ deleteSession: async (id: string) => { calls.push(id) } }), requestSessionDeletion: noDesktop,
+    })
+    await invoke(session.id)
+    expect(calls).toEqual([session.id])
+    const failed = handler('DELETE_SESSION', {
+      getLocalCoreClient: () => ({ deleteSession: async () => { throw new Error('Core failed') } }), requestSessionDeletion: noDesktop,
+    })
+    await expect(failed(session.id)).rejects.toThrow('Core failed')
+  })
+
+  test.each(['PRESET:UPDATE_SESSION_PRESET', 'PRESET:REBIND_SESSION_REFERENCE', 'UPDATE_SESSION_AGENT_RUNTIME'])('%s 只提交Core，不读写桌面会话和默认设置', async channel => {
+    const reference = { presetId: 'code', presetScope: 'builtin-meta' }
+    let submitted: unknown
+    const invoke = handler(channel, {
+      routeSessionMetaToCore: async (id: string, patch: unknown) => { submitted = { id, patch }; return session },
+      getAgentSessionMeta: noDesktop, updateAgentSessionMeta: noDesktop, updateSettings: noDesktop,
+      rebindAgentSessionPreset: noDesktop, publishAgentSessionProjection: noDesktop,
+    })
+    const preset = channel.startsWith('PRESET:')
+    expect(await invoke(session.id, preset ? channel.includes('REBIND') ? reference : 'code' : 'pi', 7)).toEqual(session)
+    expect(submitted).toEqual({ id: session.id, patch: preset
+      ? channel.includes('REBIND') ? { presetReference: reference, expectedRevision: 7 } : { presetId: 'code', expectedRevision: 7 }
+      : { agentRuntime: 'pi' } })
+  })
+
+  test('三个会话推理设置由当前Core写入，不读取桌面metadata；Core错误不回落', async () => {
+    const cases = [
+      ['UPDATE_SESSION_CODEX_FAST_MODE', true, { codexFastMode: true }],
+      ['UPDATE_SESSION_OPENAI_THINKING', 'xhigh', { openAIThinkingLevel: 'xhigh' }],
+      ['UPDATE_SESSION_AGENT_EFFORT', 'max', { agentEffort: 'max' }],
+    ] as const
+    for (const [channel, value, patch] of cases) {
+      let submitted: unknown
+      let guarded = false
+      const invoke = handler(channel, {
+        assertSensitiveAgentIpcSender: () => { guarded = true },
+        routeSessionMetaToCore: async (id: string, body: unknown) => { submitted = { id, body }; return { ...session, ...patch } },
+        getAgentSessionMeta: noDesktop, isAgentSessionActive: noDesktop, updateAgentSessionUiMeta: noDesktop,
+      })
+      expect(await invoke(session.id, value)).toMatchObject({ id: session.id, ...patch })
+      expect(guarded).toBe(true)
+      expect(submitted).toEqual({ id: session.id, body: patch })
+      const failed = handler(channel, {
+        routeSessionMetaToCore: async () => { throw new Error('Core unavailable') },
+        getAgentSessionMeta: noDesktop, isAgentSessionActive: noDesktop, updateAgentSessionUiMeta: noDesktop,
+      })
+      await expect(failed(session.id, value)).rejects.toThrow('Core unavailable')
+    }
+  })
+
+  test('Core推理设置只在合法值下接受更新', async () => {
+    const cases = [
+      ['UPDATE_SESSION_CODEX_FAST_MODE', 'true'],
+      ['UPDATE_SESSION_OPENAI_THINKING', 'ultra'],
+      ['UPDATE_SESSION_AGENT_EFFORT', 'xhigh'],
+    ] as const
+    for (const [channel, value] of cases) {
+      const invoke = handler(channel, { routeSessionMetaToCore: noDesktop, getAgentSessionMeta: noDesktop, isAgentSessionActive: noDesktop, updateAgentSessionUiMeta: noDesktop })
+      await expect(invoke(session.id, value)).rejects.toThrow()
+    }
+  })
+
+  test('手动标题更新由Core写入并生成定稿锁定状态', async () => {
+    let submitted: unknown
+    let guarded = false
+    const invoke = handler('UPDATE_TITLE', {
+      assertSensitiveAgentIpcSender: () => { guarded = true },
+      routeSessionMetaToCore: async (id: string, patch: unknown) => { expect(guarded).toBe(true); submitted = { id, patch }; return { ...session, title: 'Renamed' } },
+      updateAgentSessionUiMeta: noDesktop,
+    })
+    expect(await invoke(session.id, 'Renamed')).toMatchObject({ id: session.id, title: 'Renamed' })
+    expect(submitted).toEqual({ id: session.id, patch: { title: 'Renamed' } })
+    const failed = handler('UPDATE_TITLE', { routeSessionMetaToCore: async () => { throw new Error('Core unavailable') }, updateAgentSessionUiMeta: noDesktop })
+    await expect(failed(session.id, 'Renamed')).rejects.toThrow('Core unavailable')
+  })
+
+  test('Core修改失败不回落桌面；拒绝来自非当前Core的会话', async () => {
+    const invoke = handler('PRESET:UPDATE_SESSION_PRESET', {
+      routeSessionMetaToCore: async () => { throw new Error('Core unavailable') }, getAgentSessionMeta: noDesktop,
+    })
+    await expect(invoke(session.id, 'code')).rejects.toThrow('Core unavailable')
+    const start = source.indexOf('async function routeSessionMetaToCore(')
+    const end = source.indexOf('\nfunction assertLocalCoreTarget', start)
+    const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end))
+    const calls: unknown[] = []
+    const client = { updateSessionMeta: async (id: string, patch: unknown) => { calls.push({ id, patch }); return { id } } }
+    const route = new Function('getCurrentCoreTargetId', 'parseCoreSessionId', 'getActiveCoreClient', 'currentCoreId', 'getLocalCoreClient', `${js}; return routeSessionMetaToCore`)(
+      () => 'remote', (id: string) => ({ coreId: id === 'wrong' ? 'other' : 'owner', sessionId: 'raw' }), () => client, () => 'owner', () => null,
+    ) as (id: string, patch: object) => Promise<unknown>
+    await expect(route('wrong', { agentRuntime: 'pi' })).rejects.toThrow('远程会话不可用')
+    expect(calls).toEqual([])
+    expect(await route('core:owner:raw', { presetId: 'code', expectedRevision: 4 })).toMatchObject({ id: 'core:owner:raw' })
+    expect(calls).toEqual([{ id: 'raw', patch: { presetId: 'code', expectedRevision: 4 } }])
+  })
+
+  test.each([
+    ['TOGGLE_PIN', { type: 'toggle_pin' }],
+    ['TOGGLE_ARCHIVE', { type: 'toggle_archive' }],
+    ['CLEAR_COMPLETION_STATE', { type: 'set_unread', unread: false }],
+    ['SET_COMPLETION_STATE', { type: 'set_unread', unread: true }],
+  ])('%s 向Core提交业务动作，不接触桌面索引', async (channel, action) => {
+    let received: unknown
+    const invoke = handler(String(channel), {
+      routeSessionUiActionToCore: async (id: string, value: unknown) => { received = { id, action: value }; return session },
+      listAgentSessions: noDesktop, updateAgentSessionUiMeta: noDesktop, setAgentSessionUnread: noDesktop,
+    })
+    expect(await invoke(session.id)).toEqual(session)
+    expect(received).toEqual({ id: session.id, action })
+  })
+
+  test('中断说明交给Core清除，不写桌面metadata', async () => {
+    let received: unknown
+    const invoke = handler('UPDATE_INTERRUPTION_STATE', {
+      routeSessionUiActionToCore: async (id: string, action: unknown) => { received = { id, action }; return session },
+      updateAgentSessionUiMeta: noDesktop,
+    })
+    expect(await invoke({ sessionId: session.id, state: null })).toEqual(session)
+    expect(received).toEqual({ id: session.id, action: { type: 'set_interruption', state: null } })
+  })
+
+  test('Given 已连接 Core When 新建会话 Then runtime/预设严格引用提交 Core，不写桌面索引', async () => {
+    let submitted: unknown
+    const reference = { presetId: 'executor', presetScope: 'workspace', workspaceSlug: 'project' }
+    const invoke = handler('CREATE_SESSION', {
+      getLocalCoreClient: () => ({ createSession: async (input: unknown) => { submitted = input; return session } }),
+      getAgentWorkspace: () => ({ slug: 'project' }), getDefaultPresetId: () => 'executor',
+      presetReferenceForId: () => reference, createAgentSession: noDesktop,
+    })
+    expect(await invoke('Title', 'channel', 'workspace', 'model')).toEqual(session)
+    expect(submitted).toEqual({ title: 'Title', runtime: 'claude', channelId: 'channel', workspaceId: 'workspace', modelId: 'model', presetId: 'executor', presetReference: reference })
+  })
+
+  test('Given Core 创建失败 When 新建 Then 不回落桌面', async () => {
+    const invoke = handler('CREATE_SESSION', {
+      getLocalCoreClient: () => ({ createSession: async () => { throw new Error('Core unavailable') } }),
+      getAgentWorkspace: () => undefined, getDefaultPresetId: () => 'standard',
+      presetReferenceForId: () => ({ presetId: 'standard', presetScope: 'builtin-meta' }), createAgentSession: noDesktop,
+    })
+    await expect(invoke('Title')).rejects.toThrow('Core unavailable')
+  })
+
+  test('项目草稿由所属Core原子ensure，失败不读取桌面索引或创建普通会话', async () => {
+    let submitted: unknown
+    let guarded = false
+    const draft = { ...session, draft: true, workspaceId: 'owner-workspace' }
+    const client = { ensureProjectDraftSession: async (input: unknown) => { expect(guarded).toBe(true); submitted = input; return draft } }
+    const dependencies = {
+      assertSensitiveAgentIpcSender: () => { guarded = true },
+      getLocalCoreClient: () => client, getCoreTargetGeneration: () => 1,
+      getAgentWorkspace: noDesktop, ensureProjectDraftAgentSession: noDesktop, getSettings: noDesktop,
+    }
+    expect(await handler('ENSURE_PROJECT_DRAFT_SESSION', dependencies)('owner-workspace', 'channel', 'model')).toEqual(draft)
+    expect(submitted).toEqual({ workspaceId: 'owner-workspace', channelId: 'channel', modelId: 'model' })
+    const failed = { ensureProjectDraftSession: async () => { throw new Error('Core unavailable') } }
+    await expect(handler('ENSURE_PROJECT_DRAFT_SESSION', { ...dependencies, getLocalCoreClient: () => failed })('owner-workspace')).rejects.toThrow('Core unavailable')
+    const remote = { ...dependencies, getCurrentCoreTargetId: () => 'remote', getActiveCoreClient: () => client, currentCoreId: () => 'owner',
+      projectCoreSessionMeta: (value: typeof draft, coreId: string) => ({ ...value, id: `core:${coreId}:${value.id}` }) }
+    expect(await handler('ENSURE_PROJECT_DRAFT_SESSION', remote)('owner-workspace')).toEqual({ ...draft, id: `core:owner:${draft.id}` })
+    let generation = 1
+    const stale = { ensureProjectDraftSession: async () => { generation++; return draft } }
+    await expect(handler('ENSURE_PROJECT_DRAFT_SESSION', { ...remote, getActiveCoreClient: () => stale, getCoreTargetGeneration: () => generation })('owner-workspace')).rejects.toThrow('Core已切换')
+    await expect(handler('ENSURE_PROJECT_DRAFT_SESSION', { ...dependencies, getLocalCoreClient: () => stale, getCoreTargetGeneration: () => generation })('owner-workspace')).rejects.toThrow('Core已切换')
+  })
+
+  test('远程工作区更新和删除只调用当前Core，不访问桌面工作区', async () => {
+    const calls: unknown[] = []
+    const client = { updateWorkspace: async (id: string, updates: unknown) => { calls.push({ op: 'update', id, updates }); return { id, name: 'remote' } }, deleteWorkspace: async (id: string) => { calls.push({ op: 'delete', id }) } }
+    const deps = { getCurrentCoreTargetId: () => 'remote', getActiveCoreClient: () => client, getCoreTargetGeneration: () => 1, broadcastAgentWorkspacesChanged: () => {}, updateAgentWorkspace: noDesktop, deleteAgentWorkspace: noDesktop,
+      assertSensitiveAgentIpcSender: () => {} }
+    expect(await handler('UPDATE_WORKSPACE', deps)('workspace', { name: 'remote', archived: true })).toEqual({ id: 'workspace', name: 'remote' })
+    await handler('DELETE_WORKSPACE', deps)('workspace')
+    expect(calls).toEqual([{ op: 'update', id: 'workspace', updates: { name: 'remote', archived: true } }, { op: 'delete', id: 'workspace' }])
+    const failed = { ...deps, getActiveCoreClient: () => ({ updateWorkspace: async () => { throw new Error('Core unavailable') } }) }
+    await expect(handler('UPDATE_WORKSPACE', failed)('workspace', { name: 'remote' })).rejects.toThrow('Core unavailable')
+  })
+
+  test('远程工作区重排/解绑只发当前Core，失败和代次变化不走桌面也不广播旧结果', async () => {
+    const calls: unknown[] = []
+    let generation = 1, broadcasts = 0, allowed = false
+    const client = { reorderWorkspaces: async (ids: string[]) => { expect(allowed).toBe(true); calls.push(ids); return [{ id: 'remote' }] },
+      removeProjectWorkspace: async (id: string) => { expect(allowed).toBe(true); calls.push(id) } }
+    const deps = { getCurrentCoreTargetId: () => 'remote', getActiveCoreClient: () => client, getCoreTargetGeneration: () => generation,
+      assertSensitiveAgentIpcSender: () => { allowed = true }, broadcastAgentWorkspacesChanged: () => { broadcasts++ },
+      reorderAgentWorkspaces: noDesktop, removeProjectWorkspace: noDesktop, pauseAutomationsForWorkspace: noDesktop, withProjectWorkspaceErrorCode: noDesktop }
+    expect(await handler('REORDER_WORKSPACES', deps)(['remote'])).toEqual([{ id: 'remote' }])
+    await handler('REMOVE_PROJECT_WORKSPACE', deps)('project')
+    expect(calls).toEqual([['remote'], 'project'])
+    expect(broadcasts).toBe(2)
+    const stale = { reorderWorkspaces: async () => { generation++; return [] }, removeProjectWorkspace: async () => { generation++ } }
+    await expect(handler('REORDER_WORKSPACES', { ...deps, getActiveCoreClient: () => stale })(['remote'])).rejects.toThrow('Core已切换')
+    await expect(handler('REMOVE_PROJECT_WORKSPACE', { ...deps, getActiveCoreClient: () => stale })('project')).rejects.toThrow('Core已切换')
+    expect(broadcasts).toBe(2)
+    const failed = { reorderWorkspaces: async () => { throw new Error('Core unavailable') }, removeProjectWorkspace: async () => { throw new Error('Core unavailable') } }
+    await expect(handler('REORDER_WORKSPACES', { ...deps, getActiveCoreClient: () => failed })(['remote'])).rejects.toThrow('Core unavailable')
+    await expect(handler('REMOVE_PROJECT_WORKSPACE', { ...deps, getActiveCoreClient: () => failed })('project')).rejects.toThrow('Core unavailable')
+    await expect(handler('REORDER_WORKSPACES', { ...deps, getActiveCoreClient: () => null })(['remote'])).rejects.toThrow('未连接')
+    await expect(handler('REMOVE_PROJECT_WORKSPACE', { ...deps, getActiveCoreClient: () => null })('project')).rejects.toThrow('未连接')
+  })
+
+  test('远程项目重新定位不读写桌面路径，Core失败/切换不回退且不广播旧结果', async () => {
+    const input = { id: 'project', rootPath: '/remote/new' }
+    let generation = 1, broadcasts = 0, guarded = false
+    const result = { workspace: { id: 'project', slug: 'same' }, created: false, warnings: [] }
+    const client = { relocateProjectWorkspace: async (value: unknown) => { expect(guarded).toBe(true); expect(value).toEqual(input); return result } }
+    const deps = { getCurrentCoreTargetId: () => 'remote', getActiveCoreClient: () => client, getCoreTargetGeneration: () => generation,
+      assertSensitiveAgentIpcSender: () => { guarded = true }, broadcastAgentWorkspacesChanged: () => { broadcasts++ }, withProjectWorkspaceErrorCode: noDesktop, relocateProjectWorkspace: noDesktop }
+    expect(await handler('RELOCATE_PROJECT_WORKSPACE', deps)(input)).toEqual(result)
+    const failing = { relocateProjectWorkspace: async () => { throw new Error('Core unavailable') } }
+    await expect(handler('RELOCATE_PROJECT_WORKSPACE', { ...deps, getActiveCoreClient: () => failing })(input)).rejects.toThrow('Core unavailable')
+    const stale = { relocateProjectWorkspace: async () => { generation++; return result } }
+    await expect(handler('RELOCATE_PROJECT_WORKSPACE', { ...deps, getActiveCoreClient: () => stale })(input)).rejects.toThrow('Core已切换')
+    await expect(handler('RELOCATE_PROJECT_WORKSPACE', { ...deps, getActiveCoreClient: () => null })(input)).rejects.toThrow('未连接')
+    expect(broadcasts).toBe(1)
+  })
+
+  test('远程工作区断连不回退桌面路径', async () => {
+    const deps = { getCurrentCoreTargetId: () => 'remote', getActiveCoreClient: () => null, getCoreTargetGeneration: () => 1, updateAgentWorkspace: noDesktop, deleteAgentWorkspace: noDesktop,
+      assertSensitiveAgentIpcSender: () => {} }
+    await expect(handler('UPDATE_WORKSPACE', deps)('workspace', { name: 'remote' })).rejects.toThrow('未连接')
+    await expect(handler('DELETE_WORKSPACE', deps)('workspace')).rejects.toThrow('未连接')
+  })
+
+  test('Given Core 列表含归档 When 列出 Then 过滤归档并调用既有轻量投影', async () => {
+    const invoke = handler('LIST_SESSIONS', {
+      getLocalCoreClient: () => ({ listSessions: async () => [session, { ...session, id: 'archived', archived: true }] }),
+      listAgentSessions: noDesktop, toAgentSessionSummary: (value: typeof session) => ({ id: value.id }),
+    })
+    expect(await invoke(false)).toEqual([{ id: session.id }])
+    expect(await invoke(true)).toEqual([{ id: session.id }, { id: 'archived' }])
+  })
+
+  test('Given Core metadata When 查询 Then 读取 Core，缺失返回 null', async () => {
+    const invoke = handler('GET_SESSION_META', {
+      getLocalCoreClient: () => ({ listSessions: async () => [session] }), getAgentSessionMeta: noDesktop,
+    })
+    expect(await invoke(session.id)).toEqual(session)
+    expect(await invoke('missing')).toBeNull()
+  })
+
+  test('远程列表和metadata保留Core推理/显示状态，关联会话加命名空间且不泄漏原生资产', async () => {
+    const start = source.indexOf('function projectCoreSessionMeta(')
+    const end = source.indexOf('\nasync function routeSessionUiActionToCore', start)
+    const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end))
+    const project = new Function('buildAgentSessionUiProjection', 'projectRemoteRunEvent', 'namespaceCoreSessionId', `${js}; return projectCoreSessionMeta`)(
+      buildAgentSessionUiProjection, projectRemoteRunEvent, (id: string, coreId: string) => `core:${coreId}:${id}`,
+    ) as (value: object, coreId: string) => Record<string, unknown>
+    const metadata = { ...session, codexFastMode: true, agentEffort: 'max', openAIThinkingLevel: 'xhigh', permissionMode: 'plan',
+      completedButUnconfirmed: true, parentSessionId: 'parent', rootSessionId: 'parent', sdkSessionId: 'private', piSessionFile: 'private-file' }
+    const archived = { ...metadata, id: 'archived', archived: true }
+    const client = { listSessions: async () => [metadata, archived] }
+    const dependencies = { getCurrentCoreTargetId: () => 'target', currentCoreId: () => 'owner', getActiveCoreClient: () => client,
+      parseCoreSessionId: (id: string) => ({ coreId: id.startsWith('core:owner:') ? 'owner' : 'other', sessionId: id.split(':').at(-1) }),
+      projectCoreSessionMeta: project, getAgentSessionMeta: noDesktop, getLocalCoreClient: noDesktop, listAgentSessions: noDesktop }
+    const listed = await handler('LIST_SESSIONS', dependencies)(false) as Array<Record<string, unknown>>
+    expect(listed).toHaveLength(1)
+    expect(listed[0]).toMatchObject({ id: 'core:owner:core-session', codexFastMode: true, agentEffort: 'max', openAIThinkingLevel: 'xhigh', permissionMode: 'plan',
+      completedButUnconfirmed: true, parentSessionId: 'core:owner:parent', rootSessionId: 'core:owner:parent' })
+    expect(listed[0]?.sdkSessionId).toBeUndefined()
+    expect(listed[0]?.piSessionFile).toBeUndefined()
+    expect(await handler('LIST_SESSIONS', dependencies)(true)).toHaveLength(2)
+    expect(await handler('GET_SESSION_META', dependencies)('core:owner:core-session')).toEqual(listed[0])
+    expect(await handler('GET_SESSION_META', dependencies)('core:owner:missing')).toBeNull()
+    await expect(handler('GET_SESSION_META', dependencies)('core:other:core-session')).rejects.toThrow('远程会话不可用')
+    let active = client
+    const switching = { listSessions: async () => { active = client; return [metadata] } }
+    active = switching
+    await expect(handler('LIST_SESSIONS', { ...dependencies, getActiveCoreClient: () => active })(false)).rejects.toThrow('Core已切换')
+  })
+
+  test('Given Core 消息 When 分页 Then 保持桌面分页契约，不读桌面消息文件', async () => {
+    const invoke = handler('GET_SDK_MESSAGES', {
+      getLocalCoreClient: () => ({ getMessages: async () => ['one', 'two', 'three'] }), getAgentSessionSDKMessages: noDesktop,
+    })
+    expect(await invoke(session.id, { tail: 1, before: 2 })).toEqual({ messages: ['two'], total: 3, startIndex: 1, endIndex: 2, hasMore: true })
+  })
+
+  test('Given Core When 更新模型 Then 写 Core；运行中仍拒绝', async () => {
+    let writes = 0
+    const dependencies = {
+      getLocalCoreClient: () => ({ updateSessionMeta: async (id: string, patch: unknown) => { writes++; return { id, patch } } }),
+      updateAgentSessionUiMeta: noDesktop,
+    }
+    expect(await handler('UPDATE_SESSION_MODEL', dependencies)(session.id, 'channel', 'model')).toEqual({ id: session.id, patch: { channelId: 'channel', modelId: 'model' } })
+    await expect(handler('UPDATE_SESSION_MODEL', { ...dependencies, isAgentSessionActive: () => true })(session.id, 'channel', 'model')).rejects.toThrow('Agent 正在运行')
+    expect(writes).toBe(1)
+  })
+})

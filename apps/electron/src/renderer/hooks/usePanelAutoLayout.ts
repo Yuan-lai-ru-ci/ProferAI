@@ -61,6 +61,12 @@ function getCurrentLayout(): PanelLayoutState {
  */
 export function openFilePanel(): void {
   store.set(agentSidePanelOpenAtom, true)
+  // 还没有激活的 Agent 会话时，面板本来就不渲染；此时只记展开意图，
+  // 不能误报“窗口宽度不足”，否则切换内核后点开面板会被误导。
+  const appMode = store.get(appModeAtom)
+  const sessionId = store.get(currentAgentSessionIdAtom)
+  const scopeActive = store.get(layoutScopeActiveAtom)
+  if (!(scopeActive && appMode === 'agent' && sessionId)) return
   const windowWidth = store.get(windowWidthAtom)
   const layout = getCurrentLayout()
   const current = store.get(panelVisibilityAtom)

@@ -40,6 +40,22 @@ describe('渲染前消息顺序归一化', () => {
     expect(orderTranscriptMessages(list)).toBe(list)
   })
 
+  test('Given 迟到的同消息副本时间较晚 When 排序去重 Then 保留原时间和最新内容', () => {
+    const question = msg('user', 100, 'q', '你好')
+    const answer = msg('assistant', 200, 'a', '你好！')
+    const late = msg('user', 300, 'q', '完整版你好')
+    const result = orderTranscriptMessages([question, answer, late])
+    expect(result.map(message => message.uuid)).toEqual(['q', 'a'])
+    expect(result[0]).toMatchObject({ text: '完整版你好', _createdAt: 100 })
+    expect(late._createdAt).toBe(300)
+  })
+
+  test('Given 同毫秒问答 When 重复副本合并 Then 保持先问后答', () => {
+    const question = msg('user', 100, 'q')
+    const answer = msg('assistant', 100, 'a')
+    expect(orderTranscriptMessages([question, answer, { ...question }]).map(message => message.uuid)).toEqual(['q', 'a'])
+  })
+
   test('Given 空数组或单条 When 归一化 Then 原样返回', () => {
     const empty: Msg[] = []
     expect(orderTranscriptMessages(empty)).toBe(empty)

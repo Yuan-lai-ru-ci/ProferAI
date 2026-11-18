@@ -8,7 +8,7 @@ import type { ProferPluginPagePlacement, ProferPluginPagePlacementPreference, Pr
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type ChangelogEntry, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult } from '@profer/shared'
-import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
+import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, CORE_TARGET_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import { PROFER_PLUGIN_IPC_CHANNELS, type ProferInstalledPlugin, type ProferPluginOperationResult, type ProferPluginViewInstance, type ProferPluginViewLayout } from '@profer/plugin-api'
 import { VISUALIZATION_IPC, type VisualizationContent, type VisualizationRecord, type VisualizationViewState } from '@profer/shared'
 import type { CustomNotificationSound } from '../types'
@@ -610,7 +610,26 @@ export interface ElectronAPI {
   /** 通知主进程 renderer 已完成首屏初始化 */
   notifyRendererReady: () => void
 
-  /** 获取应用设置 */
+  /** 获取当前 Core 目标目录（不包含 Token）。 */
+  listCoreTargets: () => Promise<{ currentId: string; generation: number; targets: import('../types').CoreTargetSummary[] }>
+  listCoreChannels: () => Promise<Array<Omit<import('@profer/shared').Channel, 'apiKey' | 'createdAt' | 'updatedAt'>>>
+  createCoreChannel: (input: import('@profer/shared').ChannelCreateInput) => Promise<Omit<import('@profer/shared').Channel, 'apiKey' | 'createdAt' | 'updatedAt'>>
+  updateCoreChannel: (id: string, input: import('@profer/shared').ChannelUpdateInput) => Promise<Omit<import('@profer/shared').Channel, 'apiKey' | 'createdAt' | 'updatedAt'>>
+  deleteCoreChannel: (id: string) => Promise<void>
+  fetchCoreChannelModels: (input: import('@profer/shared').FetchModelsInput) => Promise<import('@profer/shared').FetchModelsResult>
+  testCoreChannel: (input: import('@profer/shared').FetchModelsInput) => Promise<import('@profer/shared').ChannelTestResult>
+  /** 验证远程 Core 身份与协议能力。 */
+  testCoreTarget: (input: { name: string; baseUrl: string; token: string }) => Promise<{ version: string; coreId: string; capabilities: string[] }>
+  /** 保存远程 Core，Token 仅在主进程加密持久化。 */
+  addCoreTarget: (input: { name: string; baseUrl: string; token: string }) => Promise<import('../types').CoreTargetSummary>
+  /** 切换当前 Core 目标。 */
+  selectCoreTarget: (id: string) => Promise<{ currentId: string; generation: number; targets: import('../types').CoreTargetSummary[] }>
+  /** 移除远程 Core 目标。 */
+  removeCoreTarget: (id: string) => Promise<{ currentId: string; generation: number; targets: import('../types').CoreTargetSummary[] }>
+  /** 订阅当前 Core 目标/连接状态变化。 */
+  onCoreTargetChanged: (callback: (snapshot: import('../types').CoreTargetsSnapshot) => void) => () => void
+
+
   getSettings: () => Promise<AppSettings>
 
   /** 更新应用设置 */
@@ -769,7 +788,7 @@ export interface ElectronAPI {
   getArchivedCounts: () => Promise<{ conversations: number; agentSessions: number }>
 
   /** 创建 Agent 会话 */
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => Promise<AgentSessionMeta>
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string, reuseWorkspaceSession?: boolean) => Promise<AgentSessionMeta>
   /** 交接当前会话：撰写交接文档并新建沿用执行前提的会话；首轮 prompt 由渲染层发出 */
   createAgentHandoffSession: (sessionId: string) => Promise<AgentSessionHandoffResult>
 
@@ -1056,6 +1075,9 @@ export interface ElectronAPI {
   /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流；多窗口下可限定本窗口拥有的会话 */
   restoreActiveAgentStreams: (sessionIds?: readonly string[]) => Promise<AgentRuntimeRestoreSnapshot[]>
 
+  /** 向所属内核核实会话是否真的在运行；远程内核返回 Core 的权威结果 */
+  getAgentSessionActivity: (sessionId: string) => Promise<boolean>
+
   /** 读取授权文件当前 SHA-256 revision，供正式 viewer 加载前后校验。 */
   getAgentFilePreviewRevision: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<string | null>
   /** 当前用户可见的正式 PPTX viewer 上报 ready/error。 */
@@ -1257,6 +1279,25 @@ export interface ElectronAPI {
 
   /** 列出目录内容 */
   listDirectory: (dirPath: string, access?: import('@profer/shared').FileAccessOptions) => Promise<FileEntry[]>
+
+  /** 非本机内核：Core 的浏览起点（平台/主目录/根） */
+  getCoreFileSystemOverview: () => Promise<import('@profer/shared').CoreFsOverview>
+  /** 非本机内核：列 Core 目录（默认仅目录，includeFiles 时含文件） */
+  listCoreDirectories: (dirPath: string, includeFiles?: boolean) => Promise<import('@profer/shared').CoreDirectoryListing>
+  /** 非本机内核：探测 Core 上的目录状态 */
+  probeCoreDirectory: (dirPath: string) => Promise<import('@profer/shared').CoreDirectoryProbe>
+  /** 非本机内核：新建项目规划（父目录缺失段 + 目标文件夹状态） */
+  planCoreProject: (input: { basePath: string; projectName?: string }) => Promise<import('@profer/shared').CoreProjectPlan>
+  /** 非本机内核：按完整路径在 Core 上创建文件夹（中间层级一并创建） */
+  createCoreDirectory: (input: { path: string }) => Promise<{ path: string }>
+  /** 非本机内核：会话可浏览的文件根 */
+  getCoreSessionFileRoots: (sessionId: string) => Promise<import('@profer/shared').CoreSessionFileRoots>
+  /** 非本机内核：列会话授权范围内的目录 */
+  listCoreSessionDirectory: (input: { sessionId: string; path: string }) => Promise<FileEntry[]>
+  /** 非本机内核：系统文件操作（重命名/移动/复制/删除到回收站/预览） */
+  coreFsOp: (input: import('@profer/shared').CoreFsOpInput) => Promise<{ path: string } | import('@profer/shared').CoreFilePreview | null>
+  /** 非本机内核：会话授权范围内的文件操作 */
+  coreSessionFsOp: (input: import('@profer/shared').CoreSessionFsOpInput) => Promise<{ path: string } | import('@profer/shared').CoreFilePreview | null>
 
   /** 删除文件/目录 */
   deleteFile: (filePath: string) => Promise<void>
@@ -1702,6 +1743,7 @@ export interface ElectronAPI {
   /** 切换启用/暂停 */
   toggleAutomation: (id: string, active: boolean) => Promise<Automation | undefined>
   /** 立即运行一次 */
+  automationMaintenance: (input: import('@profer/shared').AutomationMaintenanceInput) => Promise<unknown>
   runAutomationNow: (id: string) => Promise<void>
   /** 订阅任务列表变更事件 */
   onAutomationChanged: (callback: () => void) => () => void
@@ -2287,6 +2329,23 @@ const electronAPI: ElectronAPI = {
     return () => ipcRenderer.removeListener(PROFER_PLUGIN_IPC_CHANNELS.CHANGED, listener)
   },
 
+  listCoreTargets: () => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.LIST),
+  listCoreChannels: () => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.CHANNELS),
+  createCoreChannel: input => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.CREATE_CHANNEL, input),
+  updateCoreChannel: (id, input) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.UPDATE_CHANNEL, id, input),
+  deleteCoreChannel: id => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.DELETE_CHANNEL, id),
+  fetchCoreChannelModels: input => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.FETCH_MODELS, input),
+  testCoreChannel: input => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.TEST_CHANNEL, input),
+  testCoreTarget: (input) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.TEST, input),
+  addCoreTarget: (input) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.ADD, input),
+  selectCoreTarget: (id) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.SELECT, id),
+  removeCoreTarget: (id) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.REMOVE, id),
+  onCoreTargetChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../types').CoreTargetsSnapshot): void => callback(snapshot)
+    ipcRenderer.on('core-target:changed', listener)
+    return () => ipcRenderer.removeListener('core-target:changed', listener)
+  },
+
   // 应用设置
   notifyRendererReady: () => { ipcRenderer.send(SETTINGS_IPC_CHANNELS.RENDERER_READY) },
   getSettings: () => {
@@ -2501,8 +2560,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SESSION_META, id)
   },
 
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, presetId)
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, modelId?: string, presetId?: string, reuseWorkspaceSession?: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, modelId, presetId, reuseWorkspaceSession)
   },
 
   createAgentHandoffSession: (sessionId: string) => {
@@ -2597,6 +2656,10 @@ const electronAPI: ElectronAPI = {
 
   restoreActiveAgentStreams: (sessionIds?: readonly string[]) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTORE_ACTIVE_STREAMS, sessionIds ? [...sessionIds] : undefined)
+  },
+
+  getAgentSessionActivity: (sessionId: string): Promise<boolean> => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SESSION_ACTIVITY, sessionId)
   },
 
   getAgentFilePreviewRevision: (filePath: string, access?: import('@profer/shared').FileAccessOptions) => {
@@ -3226,6 +3289,42 @@ const electronAPI: ElectronAPI = {
 
   listDirectory: (dirPath: string, access?: import('@profer/shared').FileAccessOptions) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_DIRECTORY, dirPath, access)
+  },
+
+  getCoreFileSystemOverview: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_FS_OVERVIEW)
+  },
+
+  listCoreDirectories: (dirPath: string, includeFiles?: boolean) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_FS_LIST, dirPath, includeFiles === true)
+  },
+
+  probeCoreDirectory: (dirPath: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_FS_PROBE, dirPath)
+  },
+
+  planCoreProject: (input: { basePath: string; projectName?: string }) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_FS_PLAN, input)
+  },
+
+  createCoreDirectory: (input: { path: string }) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_FS_CREATE_DIR, input)
+  },
+
+  getCoreSessionFileRoots: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_SESSION_FILE_ROOTS, sessionId)
+  },
+
+  listCoreSessionDirectory: (input: { sessionId: string; path: string }) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_SESSION_LIST_DIRECTORY, input)
+  },
+
+  coreFsOp: (input: import('@profer/shared').CoreFsOpInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_FS_OP, input)
+  },
+
+  coreSessionFsOp: (input: import('@profer/shared').CoreSessionFsOpInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CORE_SESSION_FS_OP, input)
   },
 
   deleteFile: (filePath: string) => {
@@ -3926,6 +4025,7 @@ const electronAPI: ElectronAPI = {
   },
 
   // ===== 定时任务（Automation）=====
+  automationMaintenance: (input: import('@profer/shared').AutomationMaintenanceInput) => ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.MAINTENANCE, input),
   listAutomations: () => ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.LIST),
   createAutomation: (input: CreateAutomationInput) =>
     ipcRenderer.invoke(AUTOMATION_IPC_CHANNELS.CREATE, input),

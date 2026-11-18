@@ -221,7 +221,7 @@ export function executeWslBashCommand(
         child.stderr?.destroy()
         finish(() => resolvePromise(result(child.exitCode ?? null)))
       }, request.terminationGraceMs ?? LOCAL_BASH_TERMINATION_GRACE_MS)
-      terminationGraceHandle.unref?.()
+      // 此定时器负责让当前执行 Promise 收敛，不能 unref 后无限等待。
     }
     const onStdout = (data: Buffer): void => {
       stdout.append(data)

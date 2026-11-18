@@ -5,6 +5,7 @@
  * JSONL 持久化和历史会话展示在 SDK 迁移时一起改名。
  */
 
+import { normalizeGoalToolResult } from '@profer/agent-runtime/goal-result'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { CommandExecutionPort, BackgroundTaskPort, ProcessRegistrationPort, AgentRuntimePreparedContext } from '@profer/agent-runtime'
 import { createPiCommandBashOperations } from './pi/command-bash'
@@ -198,11 +199,15 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   context1m?: boolean | null
   maxTurns?: number
   permissionMode: ProferPermissionMode
+  /** Core 权威模式读取；提供时即使初始 bypass 也保留工具包装以支持运行中收紧。 */
+  getPermissionMode?: () => ProferPermissionMode
   canUseTool?: (
     toolName: string,
     input: Record<string, unknown>,
     options: PiCanUseToolOptions,
   ) => Promise<PiPermissionResult>
+  goalReport?: { iteration: number; report(result: import('@profer/shared').AgentGoalIterationResult): void }
+  onGoalResult?: (result: import('@profer/shared').AgentGoalIterationResult) => void
   systemPrompt: string
   /** 本轮工具装载；空数组表示纯对话，不改变预设权限。 */
   tools?: string[]
@@ -214,6 +219,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
     initialSources: ProjectInstructionSource[]
   }
   resumeSessionId?: string
+  /** Core 已在自身数据根内解析并校验的原生 transcript；远程 Core 不依赖桌面路径。 */
+  resumeSessionFile?: string
   piAgentDir: string
   piSessionDir: string
   customTools?: ToolDefinition[]
@@ -290,6 +297,7 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
    * Pi 的 custom tools 在 adapter 内才构建（`resolvePiPreparedToolAssembly`），而提示词里的工具指南
    * 必须描述**真实注册**的工具；在宿主侧先猜一份名单会让模型看到不存在的入口。
    */
+  preparePromptForTools?: (toolNames: string[]) => Promise<{ systemPrompt: string; taskPrompt?: string; prompt?: string }>
   resolvePromptForTools?: (toolNames: string[]) => { systemPrompt: string; taskPrompt?: string }
 }
 
@@ -342,10 +350,10 @@ export function applyPiPreparedQuery(input: PiAgentQueryOptions): PiAgentQueryOp
     ...(prepared.tools && { customTools: prepared.tools as ToolDefinition[] }),
     disallowedTools: [...new Set([...(input.disallowedTools ?? []), ...(prepared.disallowedTools ?? [])])],
     ...(prepared.collaborationAvailable !== undefined && { metadata: { ...input.metadata, collaborationAvailable: prepared.collaborationAvailable } }),
-    // bypassPermissions 语义就是「不打断」：Pi 的工具是本地包装，每次调用都会回调
-    // canUseTool（不像 SDK 会自己跳过），装了它就等于把无人值守入口挂死 ——
-    // automation / 飞书 / 调试通道都没有界面可以点批准。所以这里按模式不装。
-    ...(preparedCanUseTool && input.permissionMode !== 'bypassPermissions'
+    // 旧桌面宿主在初始 bypass 下不安装审批回调，保持既有无人值守语义。
+    // Core 提供实时模式读取器时始终保留包装，由其权威 gate 决定放行/拒绝/等待；
+    // 否则从 bypass 收紧到 plan/auto 时会绕过后续工具的权限检查。
+    ...(preparedCanUseTool && (input.getPermissionMode || input.permissionMode !== 'bypassPermissions')
       ? { canUseTool: (toolName, toolInput, options) => preparedCanUseTool(toolName, toolInput, options) }
       : {}),
   }
@@ -1259,11 +1267,25 @@ function normalizeStringArray(value: unknown): string[] | undefined {
 export function buildProferProductToolDefinitions(
   sdk: PiSdk,
   canUseTool: PiAgentQueryOptions['canUseTool'],
+  goalReport?: PiAgentQueryOptions['goalReport'],
 ): ToolDefinition[] {
   const tasks = new Map<string, ProferTaskItem>()
   let nextTaskId = 1
 
   const definitions = [
+    ...(goalReport ? [sdk.defineTool({
+      name: 'update_goal', label: '报告Goal结果', description: '报告本轮Goal结构化结果。', promptSnippet: '使用update_goal报告Goal结果。',
+        parameters: Type.Object({
+          status: Type.Union([Type.Literal('continue'), Type.Literal('complete'), Type.Literal('blocked')]),
+          summary: Type.String({ minLength: 1, maxLength: 2000 }),
+          evidence: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), { maxItems: 20 }),
+        }),
+        async execute(_id, params) {
+          const result = normalizeGoalToolResult(params as { status: unknown; summary: unknown; evidence: unknown })
+          goalReport.report(result)
+          return createJsonToolResult({ accepted: result.error === undefined, iteration: goalReport.iteration, status: result.status })
+        },
+    }) as unknown as ToolDefinition] : []),
     sdk.defineTool({
       name: 'EnterPlanMode',
       label: '进入计划模式',
@@ -2184,9 +2206,17 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       // 无 cwd 时的稳定回退：桌面应用启动目录（安装目录 / 快捷方式目录）不可预测，
       // 旧链同样以用户主目录作为无 workspace 的 agentCwd（`agentCwd = homedir()`）。
       const cwd = input.cwd ?? homedir()
-      const sessionFile = input.resumeSessionId ? findSessionFile(input.piSessionDir, input.resumeSessionId) : undefined
+      const sessionFile = input.resumeSessionFile ?? (input.resumeSessionId ? findSessionFile(input.piSessionDir, input.resumeSessionId) : undefined)
       if (input.resumeSessionId && !sessionFile) {
         throw new Error(`No conversation found with session ID ${input.resumeSessionId}`)
+      }
+      if (input.resumeSessionFile && !input.resumeSessionId) throw new Error('恢复 Pi 原生文件必须提供会话身份')
+      if (sessionFile && input.resumeSessionId && input.resumeSessionFile) {
+        const header = readFileSync(sessionFile, 'utf8').replace(/^\uFEFF/, '').split(String.fromCharCode(10), 1)[0]
+        let parsed: unknown
+        try { parsed = JSON.parse(header ?? '') } catch { throw new Error('Pi 原生会话文件头无效') }
+        if (!parsed || typeof parsed !== 'object' || (parsed as { type?: unknown }).type !== 'session'
+          || (parsed as { id?: unknown }).id !== input.resumeSessionId) throw new Error('Pi 原生会话文件身份不匹配')
       }
       // Profer 独占写：SDK 只跑内存态会话（`persist=false`，实测不写盘），
       // 正式文件由 `piSessionFileStore.flush()` 在本轮结束时追加。
@@ -2247,13 +2277,17 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           input.onFileMutation,
           input.onFileChangeObserved,
         ),
-        ...buildProferProductToolDefinitions(sdk, input.canUseTool),
+        ...buildProferProductToolDefinitions(sdk, input.canUseTool, input.goalReport),
       ])
       const customTools = input.tools?.length === 0 ? [] : finalizePiToolDefinitions([
         ...proferTools,
         ...wrapCustomToolDefinitions(input.customTools, input.canUseTool),
       ], input.disallowedTools)
 
+      if (input.preparePromptForTools) {
+        const prompt = await input.preparePromptForTools(customTools.map(tool => tool.name))
+        input = { ...input, systemPrompt: prompt.systemPrompt, ...(prompt.taskPrompt ? { taskPrompt: prompt.taskPrompt } : {}), ...(prompt.prompt !== undefined ? { prompt: prompt.prompt } : {}) }
+      }
       const settingsManager = sdk.SettingsManager.inMemory({
         // 使用 Pi SDK 原生压缩策略：
         // - 手动压缩由 session.compact() 触发；

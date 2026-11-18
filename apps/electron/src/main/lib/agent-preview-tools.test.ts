@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -76,19 +76,21 @@ describe('Agent preview Claude adapter', () => {
       expect(result.content[0]).toMatchObject({ type: 'text' })
       expect((result.content[0] as { type: 'text'; text: string }).text).not.toContain('base64')
       expect(events).toHaveLength(1)
+      const eventPath = realpathSync.native(events[0]!.filePath)
+      const eventBasePath = realpathSync.native(events[0]!.basePaths![0]!)
+      expect(eventPath).toBe(realpathSync.native(filePath))
+      expect(eventBasePath).toBe(realpathSync.native(dir))
       expect(events[0]).toMatchObject({
         type: 'preview_requested',
         sessionId: 'session-1',
-        filePath: realpathSync(filePath),
         revision: expect.stringMatching(/^sha256:/),
-        basePaths: [realpathSync(dir)],
         readOnly: true,
       })
       expect(events[0]?.requestId).toBeString()
       expect('file' in result.details).toBe(true)
       if ('file' in result.details) {
         expect(result.details.file.revision).toMatch(/^sha256:/)
-        expect(result.details.file.size).toBeGreaterThan(0)
+        expect(result.details.file.size).toBe(statSync(filePath).size)
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })

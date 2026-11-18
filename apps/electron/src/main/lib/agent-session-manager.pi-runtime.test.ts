@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { appendPiHarnessEvent } from './pi-harness/pi-harness-store'
 import { PI_HARNESS_EVENT_VERSION, type PiHarnessEvent } from './pi-harness/types'
 import { tmpdir } from 'node:os'
@@ -250,12 +250,13 @@ describe('Pi runtime 会话持久化隔离', () => {
     const before = sessions.getAgentSessionMeta(meta.id)
     const indexBefore = readFileSync(configPaths.getAgentSessionsIndexPath(), 'utf8')
     const transcriptBefore = readFileSync(transcript, 'utf8')
-    const checkpointBefore = readFileSync(checkpoint.path, 'utf8')
+    const checkpointManifest = statSync(checkpoint.path).isDirectory() ? join(checkpoint.path, '.manifest.json') : checkpoint.path
+    const checkpointBefore = readFileSync(checkpointManifest, 'utf8')
     expect(() => sessions.updateAgentSessionMeta(meta.id, { agentRuntime: 'claude' })).toThrow('内核已固定')
     expect(sessions.getAgentSessionMeta(meta.id)).toEqual(before)
     expect(readFileSync(configPaths.getAgentSessionsIndexPath(), 'utf8')).toBe(indexBefore)
     expect(readFileSync(transcript, 'utf8')).toBe(transcriptBefore)
-    expect(readFileSync(checkpoint.path, 'utf8')).toBe(checkpointBefore)
+    expect(readFileSync(checkpointManifest, 'utf8')).toBe(checkpointBefore)
   })
 
   test.each(['claude', 'pi'] as const)('Given 新 %s 会话 When 首次请求绑定后停止或重开草稿 Then 永久固定且同内核写入正常', (runtime) => {

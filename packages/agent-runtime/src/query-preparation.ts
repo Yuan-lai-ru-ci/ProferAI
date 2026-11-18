@@ -104,6 +104,9 @@ export function createAgentQueryPreparationPort(ports: AgentQueryPreparationOpti
         const emit: EventPort['emit'] = (sessionId, payload) => events.emit(sessionId, payload)
         prepared.canUseTool = ports.permissions.createCanUseTool({
           sessionId: input.sessionId,
+          runId: input.runId,
+          signal,
+          runLifecycle: input.runLifecycle,
           sendPermissionRequest: request => emit(input.sessionId, { kind: 'profer_event', event: { type: 'permission_request', request } }),
           sendAskUserRequest: request => emit(input.sessionId, { kind: 'profer_event', event: { type: 'ask_user_request', request } }),
           handleAskUser: (sessionId, toolInput, requestSignal, sendToRenderer) => {

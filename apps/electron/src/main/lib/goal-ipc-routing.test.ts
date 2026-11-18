@@ -8,14 +8,15 @@ const start = source.indexOf('  ipcMain.handle(AGENT_IPC_CHANNELS.START_GOAL,')
 const end = source.indexOf('  // ===== Agent 队列消息 =====', start)
 if (start < 0 || end < start) throw new Error('Goal IPC 注册边界不存在')
 const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end))
-const register = new Function('deps', `const { ipcMain, AGENT_IPC_CHANNELS, assertSensitiveAgentIpcSender, goalSessionService, feishuBridgeManager, stopAgentAndWait, isGoalRunActive } = deps; ${js}`)
+const register = new Function('deps', `const { ipcMain, AGENT_IPC_CHANNELS, assertSensitiveAgentIpcSender, goalSessionService, feishuBridgeManager, stopAgentAndWait, isGoalRunActive, getCurrentCoreTargetId, getActiveCoreClient, parseCoreSessionId, currentCoreId, routeGoalToCore } = deps; ${js}`)
 
-function harness(goalOwner = false) {
+function harness(goalOwner = false, remote?: { stopped: boolean; connected?: boolean }) {
   const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
   const calls: string[] = []
   const state = { id: 'g', activeRunId: 'run', status: 'active' }
   register({
     ipcMain: { handle: (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => handlers.set(channel, handler) },
+    routeGoalToCore: async () => null,
     AGENT_IPC_CHANNELS,
     assertSensitiveAgentIpcSender: () => { calls.push('guard') },
     goalSessionService: {
@@ -30,8 +31,16 @@ function harness(goalOwner = false) {
       history: () => { calls.push('history'); return [state] },
     },
     feishuBridgeManager: { stopSessionMirrorRun: () => { calls.push('mirror-stop') } },
-    stopAgentAndWait: async () => { calls.push('ordinary-stop') },
+    stopAgentAndWait: async () => { calls.push('ordinary-stop'); return 'stopped' },
     isGoalRunActive: () => goalOwner,
+    getCurrentCoreTargetId: () => remote ? 'remote' : 'local',
+    currentCoreId: () => 'remote-core',
+    parseCoreSessionId: (id: string) => id === 'remote-session'
+      ? { coreId: 'remote-core', sessionId: 'session' }
+      : { coreId: 'another-core', sessionId: 'session' },
+    getActiveCoreClient: () => remote?.connected === false ? null : {
+      stop: async (id: string) => { calls.push(`remote-stop:${id}`); return { stopped: remote?.stopped, sessionId: id } },
+    },
   })
   const invoke = (channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel)
@@ -57,6 +66,22 @@ describe('Goal IPC 控制路由', () => {
     const h = harness(false)
     await h.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, 's')
     expect(h.calls).toEqual(['guard', 'mirror-stop', 'ordinary-stop', 'goal-interrupt'])
+  })
+  test.each([
+    { stopped: true, outcome: 'stopped' },
+    { stopped: false, outcome: 'already_finished' },
+  ])('远程 Stop 将 stopped=$stopped 映射到统一返回值，不触碰本机运行', async ({ stopped, outcome }) => {
+    const h = harness(false, { stopped })
+    expect(await h.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, 'remote-session')).toBe(outcome)
+    expect(h.calls).toEqual(['guard', 'remote-stop:session'])
+  })
+  test('远程 Stop 未连接或会话不属于当前 Core 时拒绝，不触碰本机运行', async () => {
+    const disconnected = harness(false, { stopped: true, connected: false })
+    await expect(disconnected.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, 'remote-session')).rejects.toThrow('当前远程内核未连接')
+    expect(disconnected.calls).toEqual(['guard'])
+    const wrongCore = harness(false, { stopped: true })
+    await expect(wrongCore.invoke(AGENT_IPC_CHANNELS.STOP_AGENT, 'other-session')).rejects.toThrow('远程 Agent 会话不属于当前 Core')
+    expect(wrongCore.calls).toEqual(['guard'])
   })
   test('非法 start/update/history 不调用服务', async () => {
     const h = harness()

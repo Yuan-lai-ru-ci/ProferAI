@@ -148,7 +148,7 @@ function snapshotTree(root: string): string[] {
   }
   walk(root)
   // 会话运行时数据现在位于 `.profer/sessions`，属于工作区资产；这里断言的是「用户项目文件零污染」。
-  return entries.filter((entry) => !entry.startsWith('.profer/sessions')).sort()
+  return entries.filter((entry) => !entry.replace(/\\/g, '/').startsWith('.profer/sessions')).sort()
 }
 
 /** 最小合法 PNG（detectAgentImage 只需要签名）。 */
@@ -317,15 +317,15 @@ describe('新链 project：生图产物与记录落 storageDir', () => {
       )
       expect(result.ok).toBe(true)
       if (!result.ok) throw new Error('生图失败')
-      const imageDir = realpathSync(layout.imageOutputDir)
-      expect(result.output.image.localPath.startsWith(imageDir)).toBe(true)
+      const imageDir = realpathSync.native(layout.imageOutputDir)
+      expect(realpathSync.native(dirname(result.output.image.localPath))).toBe(imageDir)
       // 产物不在项目根内（project 的 cwd 是用户仓库）。
-      expect(result.output.image.localPath.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
+      expect(realpathSync.native(result.output.image.localPath).startsWith(realpathSync.native(join(root, '.profer', 'sessions')))).toBe(true)
       expect(result.output.image.relativePath.startsWith('.context/agent-output-images/')).toBe(true)
 
       const recordsPath = await getAgentImageGenerationRecordsPath(root, layout.storageDir)
       // 记录根按 realpath 归一化（macOS 临时目录 /var → /private/var），比较时同样归一化。
-      expect(recordsPath).toBe(join(realpathSync(layout.storageDir), '.context', 'image-generations.jsonl'))
+      expect(realpathSync.native(recordsPath)).toBe(realpathSync.native(join(layout.storageDir, '.context', 'image-generations.jsonl')))
       expect(existsSync(recordsPath)).toBe(true)
       expect(readFileSync(recordsPath, 'utf-8')).toContain('round-trip')
     } finally {
@@ -371,8 +371,8 @@ describe('新链 project：skin 参考图能读 storageDir 里的生成图', () 
       storageDir: layout.storageDir,
       allowedRoots: [],
     }, 'generated-image-skinref.png')
-    expect(generated.image.localPath.startsWith(realpathSync(layout.imageOutputDir))).toBe(true)
-    expect(generated.image.localPath.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
+    expect(realpathSync.native(dirname(generated.image.localPath))).toBe(realpathSync.native(layout.imageOutputDir))
+    expect(realpathSync.native(generated.image.localPath).startsWith(realpathSync.native(join(root, '.profer', 'sessions')))).toBe(true)
 
     const capabilities = await createElectronProductMcpCapabilities({ isPlanModeActive: () => false })({
       sessionId: meta.id,

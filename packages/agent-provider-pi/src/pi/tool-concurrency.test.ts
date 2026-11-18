@@ -6,6 +6,7 @@
  * Profer 之前两处都设了，导致 read/grep/find/ls 也被串行化。
  */
 import { describe, expect, test } from 'bun:test'
+import { platform } from 'node:os'
 import { buildBuiltinToolDefinitions, wrapToolWithPermission } from '../pi-agent-adapter'
 
 interface FakeTool {
@@ -29,6 +30,7 @@ function makeTool(name: string): FakeTool {
 
 function makeSdk(): Record<string, unknown> {
   return {
+    defineTool: (definition: unknown) => definition,
     createReadToolDefinition: () => makeTool('read'),
     createGrepToolDefinition: () => makeTool('grep'),
     createFindToolDefinition: () => makeTool('find'),
@@ -73,7 +75,9 @@ describe('内置工具的并发模式', () => {
     const parallel = tools.filter((t) => t.executionMode === undefined).map((t) => t.name).sort()
     const sequential = tools.filter((t) => t.executionMode === 'sequential').map((t) => t.name).sort()
     expect(parallel).toEqual(['find', 'grep', 'ls', 'read'])
-    expect(sequential).toEqual(['bash', 'edit', 'write'])
+    expect(sequential).toEqual(platform() === 'win32'
+      ? ['PowerShell', 'bash', 'edit', 'write']
+      : ['bash', 'edit', 'write'])
     expect(parallel.length + sequential.length).toBe(tools.length)
   })
 })

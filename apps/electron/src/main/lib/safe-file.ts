@@ -36,7 +36,7 @@ export function writeJsonFileAtomic(filePath: string, data: object, skipBackup =
  * 安全读取 JSON 索引文件
  * 优先读主文件，损坏则尝试 .tmp / .bak，都失败返回 null
  */
-export function readJsonFileSafe<T>(filePath: string): T | null {
+export function readJsonFileSafe<T>(filePath: string, readOnly = false): T | null {
   const tmpPath = filePath + '.tmp'
   const bakPath = filePath + '.bak'
 
@@ -59,7 +59,7 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
       if (raw.trim().length > 0) {
         const parsed = JSON.parse(raw) as T
         // .tmp 有效 → 提升为主文件
-        renameSync(tmpPath, filePath)
+        if (!readOnly) renameSync(tmpPath, filePath)
         console.log(`[数据恢复] 从 .tmp 文件恢复: ${filePath}`)
         return parsed
       }
@@ -67,7 +67,7 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
       // .tmp 也损坏，继续 fallback
     }
     // 清理无效的 .tmp
-    try { unlinkSync(tmpPath) } catch { /* ignore */ }
+    if (!readOnly) try { unlinkSync(tmpPath) } catch { /* ignore */ }
   }
 
   // 3. Fallback 到 .bak
@@ -77,7 +77,7 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
       if (raw.trim().length > 0) {
         const parsed = JSON.parse(raw) as T
         // 用 .bak 恢复主文件（跳过备份，避免用损坏的主文件覆盖好的 .bak）
-        writeJsonFileAtomic(filePath, parsed as object, true)
+        if (!readOnly) writeJsonFileAtomic(filePath, parsed as object, true)
         console.log(`[数据恢复] 从 .bak 文件恢复: ${filePath}`)
         return parsed
       }

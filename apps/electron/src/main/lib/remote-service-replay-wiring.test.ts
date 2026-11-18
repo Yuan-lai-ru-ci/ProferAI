@@ -14,7 +14,7 @@ import type { AgentStreamPayload } from '@profer/shared'
 import { RemoteAgentReplayRegistry } from './remote-agent-replay-registry'
 import { planAgentStreamsRestore } from './remote-service'
 
-const source = readFileSync(new URL('./remote-service.ts', import.meta.url), 'utf8')
+const source = readFileSync(new URL('./remote-service.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 function slice(from: string, to: string): string {
   const start = source.indexOf(from)

@@ -66,6 +66,7 @@ export * from './changelog'
 export * from './system-prompt'
 export * from './agent-preset'
 export * from './agent-preset-policy'
+export * from './agent-preset-resolution'
 export * from './task-graph-tools'
 
 // Chat 工具（function calling）相关类型
@@ -92,3 +93,6 @@ export * from './planning'
 
 // 文档布局 AST 契约（PDF / Office 共用，见 document-layout.ts 头部说明）
 export * from './document-layout'
+
+// Core 文件系统浏览（选择项目目录、侧栏文件面板共用）
+export * from './core-fs'

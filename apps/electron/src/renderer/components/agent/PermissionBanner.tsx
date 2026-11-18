@@ -87,6 +87,8 @@ export function PermissionBanner({ sessionId, onRequestStop }: PermissionBannerP
     try {
       await window.electronAPI.respondPermission({
         requestId: request.requestId,
+        runId: request.runId,
+        sessionId,
         behavior,
         alwaysAllow,
       })

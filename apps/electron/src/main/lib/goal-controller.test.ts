@@ -12,8 +12,9 @@ describe('GoalController', () => {
   test('runs one turn and schedules the next turn after continue', async () => {
     const runs: string[] = []
     const completions = deferred<void>()
+    const secondTurn = deferred<void>()
     const controller = new GoalController({
-      runTurn: async ({ state }) => { runs.push(`run-${state.iteration}`); await completions.promise; return { status: 'continue', summary: '继续', evidence: ['已执行'] } },
+      runTurn: async ({ state }) => { runs.push(`run-${state.iteration}`); if (runs.length === 2) secondTurn.resolve(); await completions.promise; return { status: 'continue', summary: '继续', evidence: ['已执行'] } },
       stopTurn: async () => {},
       onStateChange: () => {},
       // 默认不限轮次：用宏任务调度，避免 continue 循环饿死测试计时器。
@@ -25,7 +26,7 @@ describe('GoalController', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(runs).toEqual(['run-1'])
     completions.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await secondTurn.promise
     expect(runs.length).toBeGreaterThan(1)
     await controller.stop('session-1')
     expect(controller.get('session-1')?.status).toBe('stopped')

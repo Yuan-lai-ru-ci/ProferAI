@@ -15,6 +15,7 @@ import '@fontsource-variable/inter/index.css'
 
 import React, { useEffect, useMemo, useRef } from 'react'
 import ReactDOM from 'react-dom/client'
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { useSetAtom, useAtomValue, useStore } from 'jotai'
 import App from './App'
 import { SmoothWheelInitializer } from './hooks/useSmoothWheel'
@@ -352,11 +353,24 @@ function PlanningShortcutInitializer(): null {
 }
 
 function PlanningInitializer(): null {
+  const setCore = useSetAtom(coreTargetsAtom)
+  const core = useAtomValue(coreTargetsAtom)
+  const planningAvailable = core.currentId === 'local' || core.targets.some(target => target.id === core.currentId && target.capabilities?.includes('planning'))
   const setTodos = useSetAtom(todosAtom)
   const setCalendarEvents = useSetAtom(calendarEventsAtom)
   const setTodoGroups = useSetAtom(todoPlanningGroupsAtom)
   const setCalendarGroups = useSetAtom(calendarPlanningGroupsAtom)
   const setTags = useSetAtom(planningTagsAtom)
+
+  useEffect(() => {
+    let disposed = false
+    const update = (snapshot: import('@/types/settings').CoreTargetsSnapshot): void => {
+      if (!disposed) setCore(current => snapshot.generation < current.generation ? current : snapshot)
+    }
+    void window.electronAPI.listCoreTargets().then(update).catch(console.error)
+    const unsubscribe = window.electronAPI.onCoreTargetChanged(update)
+    return () => { disposed = true; unsubscribe() }
+  }, [setCore])
 
   useEffect(() => {
     let disposed = false
@@ -399,10 +413,16 @@ function PlanningInitializer(): null {
       if (includes('calendar_groups')) loadCalendarGroups()
       if (includes('tags')) loadTags()
     }
+    setTodos([])
+    setCalendarEvents([])
+    setTodoGroups([])
+    setCalendarGroups([])
+    setTags([])
+    if (!planningAvailable && core.currentId !== 'local') toast.error('当前 Core 尚不支持任务/日程，请更新 Core；未读取本机数据', { id: 'core-planning-unavailable' })
     load()
     const unsubscribe = window.electronAPI.onPlanningChanged((change) => load(change.resources))
     return () => { disposed = true; unsubscribe() }
-  }, [setCalendarEvents, setCalendarGroups, setTags, setTodoGroups, setTodos])
+  }, [core.currentId, core.generation, planningAvailable, setCalendarEvents, setCalendarGroups, setTags, setTodoGroups, setTodos])
 
   return null
 }

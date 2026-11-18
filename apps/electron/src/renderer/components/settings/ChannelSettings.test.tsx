@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import * as React from 'react'
 import { atom, createStore } from 'jotai/vanilla'
-import type { Channel, ChannelUpdateInput } from '@profer/shared'
+import type { Channel, ChannelCreateInput, ChannelUpdateInput } from '@profer/shared'
 import { channelsAtom } from '../../atoms/chat-atoms'
 import { authStatusAtom } from '../../atoms/identity-atoms'
 import { agentChannelIdsAtom } from '../../atoms/agent-atoms'
+import { coreChannelsAtom, coreTargetsAtom } from '../../atoms/core-target-atoms'
 
 mock.module('../../lib/model-logo', () => ({ getChannelLogo: () => '' }))
 mock.module('./ChannelForm', () => ({ ChannelForm: () => null }))
@@ -21,6 +22,7 @@ type ReadableAtom = Parameters<typeof store.get>[0]
 type WritableAtom = Parameters<typeof store.set>[0]
 mock.module('jotai', () => ({
   atom, useAtom: (target: WritableAtom) => [store.get(target), setter(target)],
+  useSetAtom: (target: WritableAtom) => setter(target),
   useAtomValue: (target: ReadableAtom) => store.get(target),
 }))
 const { ChannelSettings } = await import('./ChannelSettings')
@@ -36,16 +38,24 @@ function deferred<T>() {
   return { promise, resolve }
 }
 const mounts: (() => void)[] = []
-function mount(overrides: Record<string, unknown> = {}) {
+function mount(overrides: Record<string, unknown> = {}, remote = false) {
   errors.length = 0
-  store.set(channelsAtom, [])
+  const localSnapshot = [{ ...fixture, id: 'fixture-local-preserved' }]
+  store.set(channelsAtom, localSnapshot)
+  store.set(coreChannelsAtom, [])
+  store.set(coreTargetsAtom, { currentId: 'local', generation: 0, targets: [{ id: 'local', name: '本机内核', kind: 'local', status: 'disconnected' }] })
   store.set(authStatusAtom, { isLoggedIn: true, teamAccountId: 'a' })
   store.set(agentChannelIdsAtom, ['fixture-local'])
+  if (remote) store.set(coreTargetsAtom, { currentId: 'remote-a', generation: 1, targets: [{ id: 'local', name: '本机内核', kind: 'local', status: 'disconnected' }, { id: 'remote-a', name: 'Remote A', kind: 'remote', status: 'connected' }] })
   let local = [fixture]
   const reads: unknown[] = []
   const updates: ChannelUpdateInput[] = []
   const api = {
     listChannels: async (options: unknown) => { reads.push(options); return local },
+    listCoreChannels: async () => [fixture],
+    createCoreChannel: async (input: ChannelCreateInput) => ({ ...fixture, ...input, id: 'fixture-remote' }),
+    updateCoreChannel: async (_id: string, patch: ChannelUpdateInput) => ({ ...fixture, id: 'fixture-remote', ...patch }),
+    deleteCoreChannel: async () => {},
     getOfficialModelHealth: async () => [], updateSettings: async () => ({}),
     deleteChannel: async () => { local = [] },
     updateChannel: async (_id: string, patch: ChannelUpdateInput) => { updates.push(patch); local = [{ ...fixture, ...patch }]; return local[0] },
@@ -106,11 +116,15 @@ function mount(overrides: Record<string, unknown> = {}) {
   mounts.push(cleanup)
   render()
   return { flush, render, elements, reads, updates, cleanup,
-    row: () => elements().find((element) => element.props.channel === fixture && typeof element.props.onToggle === 'function')!,
+    row: () => elements().find((element) => (element.props.channel as Channel | undefined)?.id === fixture.id && typeof element.props.onToggle === 'function')!,
     findText: (text: string) => elements().find((element) => element.props.children === text)!,
   }
 }
-afterEach(() => { mounts.splice(0).forEach((cleanup) => cleanup()); Reflect.deleteProperty(globalThis, 'window') })
+afterEach(() => {
+  mounts.splice(0).forEach((cleanup) => cleanup())
+  store.set(coreTargetsAtom, { currentId: 'local', generation: 0, targets: [{ id: 'local', name: '本机内核', kind: 'local', status: 'disconnected' }] })
+  Reflect.deleteProperty(globalThis, 'window')
+})
 
 describe('ChannelSettings 实际事件回归（fixture IPC）', () => {
   test('Given 自配渠道 When 加载 Then 始终提供编辑与删除入口', async () => {
@@ -119,6 +133,28 @@ describe('ChannelSettings 实际事件回归（fixture IPC）', () => {
     const row = scope.row()
     expect(typeof row.props.onEdit).toBe('function')
     expect(typeof row.props.onDelete).toBe('function')
+  })
+  test('Given remote Core channel list When settings loads Then only shared remote snapshot changes', async () => {
+    const scope = mount({}, true)
+    await scope.flush()
+    expect(store.get(coreChannelsAtom)).toMatchObject([{ id: 'fixture-local', name: 'Fixture local', apiKey: '' }])
+    expect(store.get(channelsAtom)).toEqual([{ ...fixture, id: 'fixture-local-preserved' }])
+    expect(scope.reads).toEqual([])
+  })
+  test('Given remote Core channel delete When confirmed Then remote snapshot refreshes without changing local catalog', async () => {
+    const localSnapshot = [{ ...fixture, id: 'fixture-local-preserved' }]
+    let remote = [fixture]
+    const scope = mount({ listCoreChannels: async () => remote, deleteCoreChannel: async () => { remote = [] } }, true)
+    await scope.flush()
+    expect(store.get(coreChannelsAtom)).toHaveLength(1)
+    const remoteRow = scope.row()
+    ;(remoteRow.props.onDelete as () => void)()
+    scope.render()
+    const confirm = scope.findText('确认删除')
+    ;(confirm.props.onClick as (event: { preventDefault(): void }) => void)({ preventDefault() {} })
+    await scope.flush()
+    expect(store.get(coreChannelsAtom)).toEqual([])
+    expect(store.get(channelsAtom)).toEqual(localSnapshot)
   })
   test('Given LIST 未返回 When 目录事件已更新 atom Then 迟到 LIST 不覆盖目录', async () => {
     const old = deferred<Channel[]>()

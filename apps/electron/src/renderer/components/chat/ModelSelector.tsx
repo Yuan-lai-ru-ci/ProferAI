@@ -140,6 +140,8 @@ function groupByChannel(options: ModelOption[]): Map<string, ModelOption[]> {
 
 /** ModelSelector 可选属性 */
 interface ModelSelectorProps {
+  /** 可选的远程 Core 渠道快照；传入后选择器不读写本机渠道目录。 */
+  channelsOverride?: Channel[]
   /** 仅显示此渠道的模型 */
   filterChannelId?: string
   /** 仅显示这些渠道的模型（多渠道过滤） */
@@ -186,6 +188,7 @@ interface ModelSelectorProps {
 }
 
 export function ModelSelector({
+  channelsOverride,
   filterChannelId,
   filterChannelIds,
   externalSelectedModel,
@@ -218,7 +221,8 @@ export function ModelSelector({
     }
     onOpenChange?.(next)
   }, [controlledOpen, onOpenChange])
-  const channels = useAtomValue(channelsAtom)
+  const localChannels = useAtomValue(channelsAtom)
+  const channels = channelsOverride ?? localChannels
   const authStatus = useAtomValue(authStatusAtom)
   const channelsLoaded = useAtomValue(channelsLoadedAtom)
   const modelSelectorRequest = useAtomValue(modelSelectorRequestAtom)
@@ -252,8 +256,8 @@ export function ModelSelector({
   React.useEffect(() => {
     if (!open) return
     setSearch('')
-    requestCatalogRefresh((revision) => revision + 1)
-  }, [open, requestCatalogRefresh])
+    if (!channelsOverride) requestCatalogRefresh((revision) => revision + 1)
+  }, [open, channelsOverride, requestCatalogRefresh])
 
   // 未登录时隐藏服务端托管的官方渠道，避免残留缓存渠道展示给未登录用户
   const visibleChannels = React.useMemo(() => {
@@ -333,8 +337,8 @@ export function ModelSelector({
 
   /** 选择模型并持久化到当前对话 */
   const handleSelect = (option: ModelOption): void => {
-    if (disabled || selectionInFlightRef.current || !store.get(channelsLoadedAtom)) return
-    const currentChannels = store.get(channelsAtom).filter((channel) => store.get(authStatusAtom).isLoggedIn || !isOfficialChannel(channel))
+    if (disabled || selectionInFlightRef.current || (!channelsOverride && !store.get(channelsLoadedAtom))) return
+    const currentChannels = (channelsOverride ?? store.get(channelsAtom)).filter((channel) => channelsOverride || store.get(authStatusAtom).isLoggedIn || !isOfficialChannel(channel))
     const currentOption = buildModelOptions(currentChannels, option.channelId, filterChannelIds, preferredProtocol, strictProtocolFilter, runtime)
       .find((item) => item.modelId === option.modelId)
     if (!currentOption) {
@@ -418,7 +422,7 @@ export function ModelSelector({
     }, 100)
   }, [open, flatOptions, highlightIndex, handleSelect])
 
-  if (channelsLoaded && modelOptions.length === 0) {
+  if (!channelsOverride && channelsLoaded && modelOptions.length === 0) {
     if (hideTrigger) return <></>
     return (
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-2 py-1">

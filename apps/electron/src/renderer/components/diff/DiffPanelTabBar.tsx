@@ -6,7 +6,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { FileDiff, FolderOpen, FolderTree, PanelRightClose } from 'lucide-react'
+import { FileDiff, FolderOpen, FolderTree, HardDrive, PanelRightClose } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
@@ -18,6 +18,10 @@ interface DiffPanelTabBarProps {
   activeTab: DiffPanelTab
   onTabChange: (tab: DiffPanelTab) => void
   onClose?: () => void
+  /** 非本机内核没有本机 git 信息：隐藏“文件改动”Tab。 */
+  hideChanges?: boolean
+  /** 非本机内核：展示“系统文件”Tab（目标机器全盘管理）。 */
+  showSystemFiles?: boolean
 }
 
 interface PreviousTabState {
@@ -94,7 +98,7 @@ function FileViewTabButton({
   )
 }
 
-export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTabBarProps): React.ReactElement {
+export function DiffPanelTabBar({ activeTab, onTabChange, onClose, hideChanges = false, showSystemFiles = false }: DiffPanelTabBarProps): React.ReactElement {
   const unseenMap = useAtomValue(agentDiffUnseenChangesAtom)
   const setUnseenMap = useSetAtom(agentDiffUnseenChangesAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
@@ -147,14 +151,25 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose }: DiffPanelTa
           icon={<FolderTree className="size-3.5" />}
           onClick={() => onTabChange('workspace')}
         />
-        <FileViewTabButton
-          active={activeTab === 'changes'}
-          isClassic={isClassic}
-          label="文件改动"
-          icon={<FileDiff className="size-3.5" />}
-          badge={unseenChanges && activeTab !== 'changes'}
-          onClick={handleChangesClick}
-        />
+        {showSystemFiles && (
+          <FileViewTabButton
+            active={activeTab === 'system'}
+            isClassic={isClassic}
+            label="系统文件"
+            icon={<HardDrive className="size-3.5" />}
+            onClick={() => onTabChange('system')}
+          />
+        )}
+        {!hideChanges && (
+          <FileViewTabButton
+            active={activeTab === 'changes'}
+            isClassic={isClassic}
+            label="文件改动"
+            icon={<FileDiff className="size-3.5" />}
+            badge={unseenChanges && activeTab !== 'changes'}
+            onClick={handleChangesClick}
+          />
+        )}
       </div>
       {/* 折叠钮始终固定在右侧，不随大量探索 Tab 横向滚走。 */}
       {onClose && (

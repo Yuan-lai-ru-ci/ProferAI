@@ -8,8 +8,9 @@
  *   诊断日志）全部落在中央 storageDir，rootPath 内**不出现任何一个**；
  * - 计划目录只有一套真相：`agent-session-manager` 的写入布局与提示词里给模型的计划路径相同。
  */
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import * as fs from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -128,7 +129,7 @@ function projectSessionsDir(root: string): string {
 
 /** 项目根快照，忽略 Profer 会话目录：会话是工作区资产，不算用户项目文件的改动。 */
 function snapshotProjectTree(root: string): string[] {
-  return snapshotTree(root).filter((entry) => !entry.startsWith('.profer/sessions'))
+  return snapshotTree(root).filter((entry) => !entry.replace(/\\/g, '/').startsWith('.profer/sessions'))
 }
 
 /** 会话创建时可能落在会话目录里的历史落点（本次要求全部不进项目根）。 */
@@ -302,7 +303,14 @@ describe('project：创建失败与只读回退', () => {
     const root = makeProject('readonly-project')
     writeWorkspacesIndex([projectEntry('p-ro', root)])
     const proferDir = join(root, '.profer')
-    chmodSync(proferDir, 0o500)
+    const mkdir = fs.mkdirSync
+    const projectSessions = join(proferDir, 'sessions')
+    const denied = spyOn(fs, 'mkdirSync').mockImplementation((path, options) => {
+      if (String(path).startsWith(projectSessions)) {
+        throw Object.assign(new Error('fixture: project sessions are read-only'), { code: 'EACCES' })
+      }
+      return mkdir(path, options)
+    })
     try {
       const meta = createAgentSession('readonly session', undefined, 'id-p-ro', undefined, 'claude', false)
 
@@ -313,7 +321,7 @@ describe('project：创建失败与只读回退', () => {
       const sessions = (JSON.parse(readFileSync(sessionsIndexPath, 'utf-8')) as { sessions: Array<{ id: string }> }).sessions
       expect(sessions.some((session) => session.id === meta.id)).toBe(true)
     } finally {
-      chmodSync(proferDir, 0o700)
+      denied.mockRestore()
     }
   })
 })

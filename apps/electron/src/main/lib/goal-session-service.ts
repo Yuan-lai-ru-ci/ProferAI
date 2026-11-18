@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
+import { buildGoalVisibleResult, goalResultKey as resultKey } from '@profer/agent-runtime/goal-projection'
 import { isGoalResumableByMessage, isGoalUpdateToolName } from '@profer/shared'
 import type { AgentGoalContract, AgentGoalIterationResult, AgentGoalLimitsPatch, AgentGoalState, AgentGoalUsage, AgentRunInitiator, AgentSendInput, SDKMessage } from '@profer/shared'
 import { extractApiError, isAutoRetryableCatchError } from './agent-retry-utils'
@@ -31,53 +32,8 @@ type Dependencies = {
   idleCheckin?: () => { intervalMs: number; maxCount: number } | undefined
 }
 
-/** Goal 只读取当前轮 runtime usage；消息正文永远不能成为控制协议。 */
-export function collectGoalRunUsage(messages: SDKMessage[]): AgentGoalUsage | undefined {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index] as { type?: string; usage?: Record<string, unknown> }
-    if (message.type !== 'result' || !message.usage) continue
-    const value = (key: string) => {
-      const number = Number(message.usage?.[key] ?? 0)
-      return Number.isFinite(number) && number >= 0 ? number : 0
-    }
-    const inputTokens = value('input_tokens') + value('cache_read_input_tokens') + value('cache_creation_input_tokens')
-    const outputTokens = value('output_tokens')
-    return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }
-  }
-  return undefined
-}
-
-export type GoalTurnProgress = 'progress' | 'empty' | 'all_tools_failed'
-
-type ContentBlock = { type?: string; text?: string; name?: string; is_error?: boolean }
-
-function contentBlocks(message: SDKMessage): ContentBlock[] {
-  const content = (message as { message?: { content?: unknown } }).message?.content
-  return Array.isArray(content) ? content as ContentBlock[] : []
-}
-
-/**
- * 依据本轮真实 runtime 消息判断有无进展（对齐 Codex 的空回复 / exec 全失败判定）。
- * Goal 内部 update_goal 工具不算工作进展。
- */
-export function assessGoalTurnProgress(messages: SDKMessage[]): GoalTurnProgress {
-  let hasText = false
-  let toolCalls = 0
-  let toolResults = 0
-  let failedResults = 0
-  for (const message of messages) {
-    for (const block of contentBlocks(message)) {
-      if (message.type === 'assistant' && block.type === 'text' && block.text?.trim()) hasText = true
-      if (message.type === 'assistant' && block.type === 'tool_use' && !isGoalUpdateToolName(block.name)) toolCalls++
-      if (message.type === 'user' && block.type === 'tool_result') {
-        toolResults++
-        if (block.is_error) failedResults++
-      }
-    }
-  }
-  if (toolCalls === 0) return hasText ? 'progress' : 'empty'
-  return toolResults > 0 && failedResults === toolResults ? 'all_tools_failed' : 'progress'
-}
+export { collectGoalRunUsage, assessGoalTurnProgress, type GoalTurnProgress } from '@profer/agent-runtime/goal-progress'
+import { collectGoalRunUsage, assessGoalTurnProgress } from '@profer/agent-runtime/goal-progress'
 
 /** orchestrator 短重试预算（约 5 分钟）用尽后仍可能在分钟级恢复的限额类错误，交给 Goal 的长退避。 */
 const RATE_OR_USAGE_LIMIT_PATTERN = /rate.?limit|usage.?limit/i
@@ -86,15 +42,6 @@ const RATE_OR_USAGE_LIMIT_PATTERN = /rate.?limit|usage.?limit/i
 export function classifyGoalRunError(error: string | undefined): 'retryable' | 'fatal' {
   if (!error) return 'retryable'
   return isAutoRetryableCatchError(extractApiError(error), error) || RATE_OR_USAGE_LIMIT_PATTERN.test(error) ? 'retryable' : 'fatal'
-}
-
-function resultKey(state: AgentGoalState): string {
-  return state.lifecycle?.at(-1)?.id ?? `goal:${state.id}:${state.iteration}:${state.status}`
-}
-
-function stableUuid(key: string): string {
-  const hex = createHash('sha256').update(key).digest('hex')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`
 }
 
 /** 会话级 Goal 接线：生命周期、消息投影、Todo 与运行归属统一在这里。 */
@@ -264,17 +211,12 @@ export class GoalSessionService {
   }
 
   private persistVisibleResult(state: AgentGoalState): void {
-    if (!['completed', 'blocked', 'failed', 'budget_limited', 'stopped'].includes(state.status) || state.reasonCode === 'cleared' || state.stopReason === 'cleared') return
-    const record = state.history?.at(-1)
-    const summary = state.reasonDetail || state.stopReason || record?.summary || state.lastSummary
-    if (!summary) return
+    const message = buildGoalVisibleResult(state)
+    if (!message) return
+    const uuid = (message as { uuid?: string }).uuid
     const key = resultKey(state)
-    const uuid = stableUuid(key)
-    if (this.deps.readMessages(state.sessionId).some((message) => (message as { uuid?: string }).uuid === uuid || (message as { _goalResultKey?: string })._goalResultKey === key)) return
-    const labels: Record<string, string> = { completed: '已完成', blocked: '需要输入', failed: '执行失败', budget_limited: '预算已耗尽', stopped: '已停止' }
-    const evidence = record?.evidence ?? state.lastEvidence ?? []
-    const text = `Goal ${labels[state.status]}\n\n${summary}${evidence.length ? `\n\n证据：\n${evidence.map((item) => `- ${item}`).join('\n')}` : ''}`
-    this.deps.appendMessages(state.sessionId, [{ type: 'assistant', message: { content: [{ type: 'text', text }] }, parent_tool_use_id: null, uuid, _createdAt: state.updatedAt, _goalVisibleResult: true, _goalResultKey: key } as unknown as SDKMessage])
+    if (this.deps.readMessages(state.sessionId).some(value => (value as { uuid?: string }).uuid === uuid || (value as { _goalResultKey?: string })._goalResultKey === key)) return
+    this.deps.appendMessages(state.sessionId, [message])
   }
 
   private syncTodo(state: AgentGoalState, key: string): void {

@@ -1,6 +1,6 @@
 {
   "name": "@profer/agent-provider-claude",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "AGPL-3.0-only",
   "description": "Claude Agent SDK provider：宿主无关的 query 流、权限、后台任务与进程生命周期适配。",
   "type": "module",
@@ -10,7 +10,10 @@
     ".": "./src/index.ts",
     "./background-task-manager": "./src/background-task-manager.ts",
     "./task-events": "./src/task-events.ts",
-    "./write-target-guard": "./src/write-target-guard.ts"
+    "./write-target-guard": "./src/write-target-guard.ts",
+    "./goal-tools": "./src/goal-tools.ts",
+    "./automation-tools": "./src/automation-tools.ts",
+    "./delegation-tools": "./src/delegation-tools.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -21,7 +24,8 @@
     "@anthropic-ai/claude-agent-sdk": "0.3.316",
     "@profer/agent-runtime": "workspace:*",
     "@profer/core": "workspace:*",
-    "@profer/shared": "workspace:*"
+    "@profer/shared": "workspace:*",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0"

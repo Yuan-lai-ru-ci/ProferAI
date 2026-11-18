@@ -218,8 +218,11 @@ async function atomicWrite(path: string, content: Buffer, mode: number): Promise
   await handle.close()
   try {
     await rename(tempPath, path)
-    const dir = await open(dirname(path), 'r')
-    try { await dir.sync() } finally { await dir.close() }
+    // Windows 不支持目录 fsync；文件内容已在 rename 前同步，不能在提交后伪报失败。
+    if (process.platform !== 'win32') {
+      const dir = await open(dirname(path), 'r')
+      try { await dir.sync() } finally { await dir.close() }
+    }
   } catch (error) {
     await unlinkMissing(tempPath)
     throw error

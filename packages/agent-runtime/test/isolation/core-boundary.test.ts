@@ -39,6 +39,15 @@ describe('core dependency boundary', () => {
     expect(fabric.files.some((file) => file.startsWith(join(repoRoot, 'packages', 'agent-runtime')))).toBe(false)
   })
 
+  test('共享plan策略子入口不引入provider SDK、Electron或外部运行依赖', () => {
+    for (const name of ['plan-mode-tool-policy.ts', 'plan-mode-guards.ts']) {
+      const graph = collectDependencyGraph(join(packageRoot, 'src', name), repoRoot)
+      expect(graph.edges.filter(edge => isDeniedSpecifier(edge.specifier))).toEqual([])
+      expect(graph.valueExternalSpecifiers.filter(specifier => !specifier.startsWith('node:'))).toEqual([])
+      expect(graph.files.map(file => formatRelative(repoRoot, file))).toContain(`packages/agent-runtime/src/${name}`)
+    }
+  })
+
   test('Given the core entry When resolving the runtime closure Then it needs no bare external package', () => {
     const graph = collectDependencyGraph(entry, repoRoot)
     expect(graph.valueExternalSpecifiers).toEqual([])

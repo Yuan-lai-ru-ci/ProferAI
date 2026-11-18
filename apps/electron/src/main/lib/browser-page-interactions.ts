@@ -61,7 +61,8 @@ export class BrowserPageInteractions {
       const timeout = setTimeout(cancel, this.dialogTimeoutMs)
       // 仅等待提示期间检查 frame 存活；空闲页面没有常驻轮询。
       const liveness = setInterval(() => { if (!alive()) cancel() }, 250)
-      timeout.unref?.(); liveness.unref?.()
+      // 截止定时器负责完成当前 Promise；仅存活检测轮询可以不保活。
+      liveness.unref?.()
       this.pending = { state, alive, settle }
       signal.addEventListener('abort', cancel, { once: true })
       this.changed()

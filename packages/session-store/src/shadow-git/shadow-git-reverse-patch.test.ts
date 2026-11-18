@@ -307,14 +307,21 @@ test.skipIf(!GIT_PATH)(
       files: { 'secret.md': '# secret\n' },
       mutate: (root) => unlinkSync(join(root, 'secret.md')),
     })
-    // 用户重建并用 0600→0000 锁住：读失败不能被当成「文件不存在」。
+    // 模拟 Git 读取被宿主权限拒绝，不依赖 chmod 对 Windows/root 的不同语义。
     const target = join(fixture.rootPath, 'secret.md')
     writeFileSync(target, '# 用户重建\n', 'utf8')
-    chmodSync(target, 0o000)
-
+    const realRunner = fixture.runner
+    const deniedRunner: GitRunner = {
+      gitPath: realRunner.gitPath,
+      async run(args, options) {
+        if (args[0] === 'hash-object' && args.at(-1) === target) {
+          return { ok: false, stdout: '', stderr: 'fixture: permission denied', code: 128 }
+        }
+        return realRunner.run(args, options)
+      },
+    }
     const record = await attributionFor(fixture, [{ path: target }])
-    const result = await restore(fixture, record)
-    chmodSync(target, 0o644)
+    const result = await restore({ ...fixture, runner: deniedRunner }, record)
     expect(result.entries[0]).toMatchObject({ action: 'keep-current', reason: 'current-unreadable' })
     expect(readFileSync(target, 'utf8')).toBe('# 用户重建\n')
   },
@@ -388,7 +395,8 @@ test.skipIf(!GIT_PATH)(
     })
     const target = join(fixture.rootPath, 'script.sh')
     chmodSync(target, 0o755)
-    // 重新采集一次，让 after 记录 0755 与内容 echo 2
+    const expectedMode = statSync(target).mode & 0o777
+    // 重新采集一次，让 after 记录宿主支持的权限与内容 echo 2
     const after = await (await import('./repository')).WorkspaceShadowRepository.open({
       workspaceId: WORKSPACE_ID,
       repoDir: fixture.repoDir,
@@ -401,7 +409,7 @@ test.skipIf(!GIT_PATH)(
     const result = await restore({ ...fixture, afterCommitId: after.commitId }, record)
     expect(result.entries[0]?.action).toBe('restore')
     expect(readFileSync(target, 'utf8')).toBe('#!/bin/sh\necho 1\n')
-    expect(statSync(target).mode & 0o777).toBe(0o755)
+    expect(statSync(target).mode & 0o777).toBe(expectedMode)
   },
   30_000,
 )
@@ -464,10 +472,15 @@ test.skipIf(!GIT_PATH)(
 test.skipIf(!GIT_PATH)(
   '删除场景：Agent 删掉 0755 脚本，回退后恢复内容并且仍是 0755',
   async () => {
+    let expectedMode = 0
     const fixture = await setupTurn({
       files: { 'deploy.sh': '#!/bin/sh\necho 1\n' },
-      // before 快照里这个文件就是可执行的：恢复必须按 tree 里的 100755 还原。
-      prepare: (root) => chmodSync(join(root, 'deploy.sh'), 0o755),
+      // 恢复必须忠实保留宿主支持的权限（POSIX 为 0755，Windows 无执行位）。
+      prepare: (root) => {
+        const path = join(root, 'deploy.sh')
+        chmodSync(path, 0o755)
+        expectedMode = statSync(path).mode & 0o777
+      },
       mutate: (root) => unlinkSync(join(root, 'deploy.sh')),
     })
     const target = join(fixture.rootPath, 'deploy.sh')
@@ -477,7 +490,7 @@ test.skipIf(!GIT_PATH)(
     const result = await restore(fixture, record)
     expect(result.entries[0]).toMatchObject({ action: 'restore', reason: 'restored-verbatim' })
     expect(readFileSync(target, 'utf8')).toBe('#!/bin/sh\necho 1\n')
-    expect(statSync(target).mode & 0o777).toBe(0o755)
+    expect(statSync(target).mode & 0o777).toBe(expectedMode)
   },
   30_000,
 )

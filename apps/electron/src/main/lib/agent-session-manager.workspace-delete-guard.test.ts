@@ -121,7 +121,7 @@ function snapshotTree(root: string): string[] {
 
 /** 用户项目文件快照：忽略 Profer 会话目录（会话是工作区资产，不算用户文件改动）。 */
 function snapshotProjectTree(root: string): string[] {
-  return snapshotTree(root).filter((entry) => !entry.startsWith('.profer/sessions'))
+  return snapshotTree(root).filter((entry) => !entry.replace(/\\/g, '/').startsWith('.profer/sessions'))
 }
 
 /** project 会话的 storageDir（`<root>/.profer/sessions/<id>`）。 */

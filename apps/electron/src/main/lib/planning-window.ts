@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { MainWindowState } from '../../types'
 import { getPersistableMainWindowState } from './main-window-lifecycle'
 import { getSettings, updateSettings } from './settings-service'
+import { VITE_DEV_SERVER_URL } from './config-paths'
 import { resolveAppWindowIconPath } from './app-window-icon'
 
 const DEFAULT_WIDTH = 1180
@@ -50,7 +51,7 @@ function ensureWindowOnScreen(win: BrowserWindow): void {
 
 function isDevServerNavigation(url: string): boolean {
   try {
-    return new URL(url).origin === 'http://127.0.0.1:5173'
+    return new URL(url).origin === VITE_DEV_SERVER_URL
   } catch {
     return false
   }
@@ -99,7 +100,7 @@ function createPlanningWindow(): BrowserWindow {
 
   const isDev = !app.isPackaged
   if (isDev) {
-    void win.loadURL('http://127.0.0.1:5173?window=planning')
+    void win.loadURL(`${VITE_DEV_SERVER_URL}?window=planning`)
   } else {
     void win.loadFile(join(__dirname, 'renderer', 'index.html'), { query: { window: 'planning' } })
   }

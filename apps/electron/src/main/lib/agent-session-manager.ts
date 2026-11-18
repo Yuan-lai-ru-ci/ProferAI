@@ -149,9 +149,13 @@ import {
 } from '@profer/project-core'
 // GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
 
+import { getLocalCoreClient } from './core-local-bridge'
+
 // 索引存储独立管理缓存与原子读写；manager 保留现有公开入口。
+const coreOwnsSessionStore = () => process.env.PROFER_CORE_LOCAL === '1' || getLocalCoreClient() !== null
 const sessionIndex = createAgentSessionIndexStore(getAgentSessionsIndexPath)
-const readIndexRaw = sessionIndex.read
+const coreReadIndex = createAgentSessionIndexStore(getAgentSessionsIndexPath, { readOnly: () => true })
+const readIndexRaw = () => coreOwnsSessionStore() ? coreReadIndex.read() : sessionIndex.read()
 let lastLayoutSyncIndex: unknown = null
 
 let persistenceStatusPublisher: ((sessionId: string, status: 'pending' | 'saved' | 'failed', error?: string) => void) | undefined
@@ -525,6 +529,7 @@ const reconciledProjectRoots = new Set<string>()
 
 /** 供打开/重新定位项目后显式对账（同一进程内新出现的项目）。 */
 export function reconcileProjectSessionIndexesNow(): void {
+  if (coreOwnsSessionStore()) return
   const index = readIndexRaw()
   if (reconcileProjectSessionIndexes(index, true)) {
     sessionIndex.write(index)
@@ -541,7 +546,7 @@ export function reconcileProjectSessionIndexesNow(): void {
  */
 const readIndex = () => {
   const index = readIndexRaw()
-  if (reconcileProjectSessionIndexes(index)) sessionIndex.write(index)
+  if (!coreOwnsSessionStore() && reconcileProjectSessionIndexes(index)) sessionIndex.write(index)
   if (index !== lastLayoutSyncIndex) {
     lastLayoutSyncIndex = index
     syncSessionStorageLayouts(index.sessions)
@@ -718,6 +723,7 @@ export function createDelegatedChildSessionMeta(params: {
  * @returns 补齐的会话数
  */
 export function backfillPiSessionFiles(): number {
+  if (coreOwnsSessionStore()) return 0
   const index = readIndex()
   const candidates = index.sessions.filter((session) => normalizeAgentRuntime(session.agentRuntime) === 'pi'
     && session.sdkSessionId
@@ -3630,11 +3636,13 @@ export function rewindFilesFromSnapshot(
 
     for (const [filePath, backupFileName] of fileState) {
       // SDK 对 cwd 内文件使用相对路径，对 additionalDirectories 内文件使用绝对路径
-      const isAbsolute = filePath.startsWith('/')
-      const fullPath = isAbsolute ? resolve(filePath) : resolve(cwd, filePath)
+      const fullPath = isAbsolute(filePath) ? resolve(filePath) : resolve(cwd, filePath)
 
-      // 路径安全检查：文件必须位于 cwd 或 attachedDirectories 之内
-      const isInAllowedDir = allowedDirs.some((dir) => fullPath.startsWith(dir + '/') || fullPath === dir)
+      // 通过 relative 判定目录边界，不能用 POSIX 分隔符比较 Windows 路径。
+      const isInAllowedDir = allowedDirs.some((dir) => {
+        const relation = relative(dir, fullPath)
+        return relation === '' || (!isAbsolute(relation) && relation !== '..' && !relation.startsWith(`..${sep}`))
+      })
       if (!isInAllowedDir) {
         console.warn(`[Agent 会话] rewindFiles: 拒绝路径越界 ${filePath}`)
         continue
@@ -3655,7 +3663,8 @@ export function rewindFilesFromSnapshot(
         // 文件在 target 时存在 → 用备份恢复
         const backupPath = resolve(fileHistoryDir, backupFileName)
         // backupPath 越界检查
-        if (!backupPath.startsWith(resolve(fileHistoryDir) + '/') && backupPath !== resolve(fileHistoryDir)) {
+        const backupRelation = relative(resolve(fileHistoryDir), backupPath)
+        if (isAbsolute(backupRelation) || backupRelation === '..' || backupRelation.startsWith(`..${sep}`)) {
           console.warn(`[Agent 会话] rewindFiles: 拒绝备份路径越界 ${backupFileName}`)
           continue
         }
@@ -4484,6 +4493,7 @@ export async function rollbackProjectSessionLayouts(workspaceId?: string): Promi
 
 /** 启动时补齐项目镜像（会话索引 + 自动化在各自管理器内补齐）。 */
 export function ensureProjectSessionMirrors(): void {
+  if (coreOwnsSessionStore()) return
   const index = readIndex()
   mirrorProjectSessionIndexes(index)
 }

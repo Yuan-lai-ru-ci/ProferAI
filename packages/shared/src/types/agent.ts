@@ -849,6 +849,17 @@ export type AgentSessionProjectionPayload =
   | { kind: 'session_projection'; operation: 'upsert'; session: AgentSessionUiProjection }
   | { kind: 'session_projection'; operation: 'delete'; sessionId: string; revision: number }
 
+/** 删除事务状态独立于运行终态；仅含可展示字段，不包含私有会话快照。 */
+export interface AgentSessionDeletionStatusPayload {
+  kind: 'session_deletion'
+  requestId: string
+  sessionId: string
+  title: string
+  status: 'pending' | 'completed' | 'failed'
+  revision: number
+  error?: string
+}
+
 /** IPC 传输的统一 payload（替代 AgentEvent）；kind 是唯一分流依据 */
 export type AgentStreamPayload =
   | { kind: 'sdk_message'; message: SDKMessage }
@@ -856,6 +867,7 @@ export type AgentStreamPayload =
   | { kind: 'run_error'; error: string }
   | { kind: 'run_complete'; completion: AgentStreamCompletePayload }
   | AgentSessionProjectionPayload
+  | AgentSessionDeletionStatusPayload
   | AgentCatalogInvalidation
 
 // ===== Agent 会话管理 =====
@@ -2241,6 +2253,8 @@ export interface AskUserQuestion {
 export interface AskUserRequest {
   /** 请求唯一 ID */
   requestId: string
+  /** 所属Core业务Run；旧桌面入口可省略。 */
+  runId?: string
   /** 会话 ID */
   sessionId: string
   /** 问题列表 */
@@ -2280,6 +2294,8 @@ export type GoalProposalPolicy = 'auto' | 'alwaysAsk' | 'disabled'
 export interface AskUserResponse {
   /** 请求 ID */
   requestId: string
+  sessionId?: string
+  runId?: string
   /** 用户答案（问题文本 → 答案文本，与 SDK 约定一致） */
   answers: Record<string, string>
 }
@@ -2298,6 +2314,7 @@ export interface ExitPlanAllowedPrompt {
 export interface ExitPlanModeRequest {
   /** 请求唯一 ID */
   requestId: string
+  runId?: string
   /** 会话 ID */
   sessionId: string
   /** SDK 工具原始输入 */
@@ -2313,6 +2330,8 @@ export type ExitPlanModeAction = 'approve_auto' | 'approve_edit' | 'deny' | 'fee
 export interface ExitPlanModeResponse {
   /** 请求 ID */
   requestId: string
+  sessionId?: string
+  runId?: string
   /** 用户选择的行为 */
   action: ExitPlanModeAction
   /** 用户反馈内容（action 为 feedback 时有值） */
@@ -2374,6 +2393,8 @@ export type DangerLevel = 'safe' | 'normal' | 'dangerous'
 export interface PermissionRequest {
   /** 请求唯一 ID */
   requestId: string
+  /** Core 业务 Run 身份；不等于 Provider 会话 ID。 */
+  runId?: string
   /** 会话 ID */
   sessionId: string
   /** 工具名称 */
@@ -2411,6 +2432,10 @@ export interface PermissionRequest {
 /** 权限响应（渲染进程 → 主进程） */
 export interface PermissionResponse {
   requestId: string
+  /** 原请求的 Core 业务 Run 身份；不得用当前 UI Run 替换。 */
+  runId?: string
+  /** 权限请求所属会话；远程 Core 响应必须绑定此 Core 会话。 */
+  sessionId?: string
   behavior: 'allow' | 'deny'
   /** 是否记住选择（加入会话白名单） */
   alwaysAllow: boolean
@@ -2475,6 +2500,8 @@ export const AGENT_IPC_CHANNELS = {
   RETRY_IMAGE_GENERATION: 'agent:retry-image-generation',
   /** 刷新 renderer 后重新绑定并回放仍在运行的 Agent 流 */
   RESTORE_ACTIVE_STREAMS: 'agent:restore-active-streams',
+  /** 向所属内核核实某会话是否真的在运行（用于校正渲染层残留的运行态） */
+  GET_SESSION_ACTIVITY: 'agent:get-session-activity',
   /** 主进程 → renderer：该会话的流已转移到其他窗口，本窗口清理本地运行态 */
   SESSION_RELEASED: 'agent:session-released',
   /** renderer → main：读取授权文件当前 SHA-256，供 viewer 加载前后校验 revision。 */
@@ -2802,7 +2829,24 @@ export const AGENT_IPC_CHANNELS = {
   GET_SESSION_STORAGE_PATH: 'agent:get-session-storage-path',
   /** 列出目录内容 */
   LIST_DIRECTORY: 'agent:list-directory',
-  /** 删除文件/空目录 */
+  /** 非本机内核：Core 文件系统浏览起点（平台 / 主目录 / 根） */
+  CORE_FS_OVERVIEW: 'agent:core-fs-overview',
+  /** 非本机内核：列 Core 目录（仅目录，用于选择项目位置） */
+  CORE_FS_LIST: 'agent:core-fs-list',
+  /** 非本机内核：探测 Core 上的目录（存在/是否目录/是否为空） */
+  CORE_FS_PROBE: 'agent:core-fs-probe',
+  /** 非本机内核：新建项目规划（父目录缺失段 + 目标文件夹状态） */
+  CORE_FS_PLAN: 'agent:core-fs-plan',
+  /** 非本机内核：在 Core 上按完整路径创建文件夹 */
+  CORE_FS_CREATE_DIR: 'agent:core-fs-create-dir',
+  /** 非本机内核：会话可浏览的文件根 */
+  CORE_SESSION_FILE_ROOTS: 'agent:core-session-file-roots',
+  /** 非本机内核：列会话授权范围内的目录 */
+  CORE_SESSION_LIST_DIRECTORY: 'agent:core-session-list-directory',
+  /** 非本机内核：系统文件操作（重命名/移动/复制/删除到回收站/预览） */
+  CORE_FS_OP: 'agent:core-fs-op',
+  /** 非本机内核：会话授权范围内的文件操作 */
+  CORE_SESSION_FS_OP: 'agent:core-session-fs-op',  /** 删除文件/空目录 */
   DELETE_FILE: 'agent:delete-file',
   /** 移动文件/目录到系统回收站（可恢复） */
   MOVE_TO_TRASH: 'agent:move-to-trash',

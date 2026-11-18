@@ -130,6 +130,7 @@ export function broadcastChanged(): void {
  * @param manual 是否手动「立即运行」（手动运行也走同一路径，但不影响调度计时由 appendRun 统一推进）
  */
 export async function runAutomation(automation: Automation, manual = false): Promise<void> {
+  if (process.env.PROFER_CORE_LOCAL === '1') throw new Error('Automation已由本机Core接管，桌面不得执行旧任务')
   // 工作区已不可解析（project 被移除只删索引）时绝不执行：
   // 会话与 headless 运行会拿不到 workspaceSlug，cwd 回落用户主目录，
   // 等于把 ~ 当项目根跑无人值守命令。这里停用任务并结束。
@@ -484,6 +485,10 @@ function tick(): void {
  * 避免应用重启后一堆历史任务在同一 tick 内雪崩触发。
  */
 export function startScheduler(): void {
+  if (process.env.PROFER_CORE_LOCAL === '1') {
+    console.log('[定时任务] 本地Core已接管，桌面调度器不启动')
+    return
+  }
   if (tickTimer) return
   const now = Date.now()
   for (const automation of listAutomations()) {

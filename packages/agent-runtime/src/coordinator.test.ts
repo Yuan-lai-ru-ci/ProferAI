@@ -60,6 +60,36 @@ describe('AgentRuntimeCoordinator headless host', () => {
     expect(coordinator.isRunning(query.sessionId)).toBe(false)
   })
 
+  test('Given 带台账的同一条流式回复 When partial/final 重复到达 Then 实时与落盘沿用首次源时间', async () => {
+    const { ledger } = ledgerFixture()
+    const persisted: Array<import('@profer/shared').SDKMessage> = []
+    const events: AgentRuntimeEvent[] = []
+    let now = 100
+    const coordinator = new AgentRuntimeCoordinator({
+      runLedger: ledger, now: () => now,
+      adapters: { pi: streamAdapter(() => (async function* () {
+        now = 200
+        yield { type: 'assistant', uuid: 'stable-reply', _partial: true, message: { content: [{ type: 'text', text: '你' }] } } as never
+        now = 300
+        yield { type: 'assistant', uuid: 'stable-reply', _createdAt: 300, message: { content: [{ type: 'text', text: '你好！' }] } } as never
+      })()) },
+      ports: {
+        sessions: { getMeta: () => undefined, appendMessages: (_id, messages) => { persisted.push(...messages) }, updateMeta: () => undefined },
+        host: { emit: event => { events.push(event) } },
+      },
+    })
+    await expect(coordinator.run({ ...query, persistedUserMessage: {
+      type: 'user', uuid: 'stable-question', _createdAt: 100, parent_tool_use_id: null,
+      message: { content: [{ type: 'text', text: '你好' }] },
+    } as never }).promise).resolves.toEqual({ status: 'completed' })
+    const live = events.filter((event): event is Extract<AgentRuntimeEvent, { type: 'message' }> => event.type === 'message').map(event => event.message as Record<string, unknown>)
+    expect(live.map(message => message._createdAt)).toEqual([100, 200, 200])
+    expect(persisted.map(message => (message as Record<string, unknown>)._createdAt)).toEqual([100, 200])
+    expect(persisted.map(message => message.type)).toEqual(['user', 'assistant'])
+    expect(persisted[1]?._provenance?.messageId).toBe('stable-reply')
+    expect(live[1]?._provenance).toMatchObject({ messageId: 'stable-reply' })
+  })
+
   test('Given a Pi partial stream When messages are forwarded Then partial frames stay live-only and result keeps duration', async () => {
     const persisted: Array<import('@profer/shared').SDKMessage> = []
     const events: AgentRuntimeEvent[] = []

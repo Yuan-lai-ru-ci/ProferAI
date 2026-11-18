@@ -1,4 +1,4 @@
-import { getAgentMessageIdentity } from './agent-message-identity'
+import { getAgentMessageIdentity, preserveMessageCreatedAt } from './agent-message-identity'
 
 /**
  * 渲染前把消息数组归一化成「按时间有序、产品身份唯一」。
@@ -35,7 +35,7 @@ function dedupeByUuid<T extends TranscriptMessageLike>(messages: readonly T[]): 
       indexByKey.set(key, merged.length)
       merged.push(message)
     } else {
-      merged[existing] = message
+      merged[existing] = preserveMessageCreatedAt(merged[existing]!, message)
     }
   }
   return merged

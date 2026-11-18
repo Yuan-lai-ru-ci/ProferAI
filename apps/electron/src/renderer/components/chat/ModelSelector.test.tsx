@@ -120,6 +120,15 @@ function mount(channels = [fixture], conversation = meta, props: Parameters<type
 afterEach(() => { mounts.splice(0).forEach((cleanup) => cleanup()); Reflect.deleteProperty(globalThis, 'window') })
 
 describe('ModelSelector 真实交互（fixture IPC）', () => {
+  test('远程渠道目录为空或尚在加载时，受控 Dialog 仍保持挂载且不刷新本机目录', () => {
+    const previous = store.get(channelCatalogRefreshAtom)
+    const scope = mount([], undefined, { channelsOverride: [], hideTrigger: true, open: true, onOpenChange: () => {} })
+    expect(scope.elements().some((element) => element.props.open === true)).toBe(true)
+    expect(scope.elements().some((element) => element.props['aria-label'] === '搜索模型')).toBe(true)
+    expect(store.get(channelCatalogRefreshAtom)).toBe(previous)
+    expect(scope.lists()).toBe(0)
+  })
+
   test('打开弹窗请求统一本地目录刷新，组件自身不执行LIST', () => {
     const scope = mount()
     const previous = store.get(channelCatalogRefreshAtom)

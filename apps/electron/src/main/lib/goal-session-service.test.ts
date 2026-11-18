@@ -321,10 +321,12 @@ describe('Goal Service v2 副作用投影', () => {
     const h = harness()
     h.service.restore([{ ...createGoalState('session', '目标'), status: 'blocked', blockedTodoId: 'todo' }])
     h.setRun(async (input) => {
-      // failed 来自连续空回复（无进展），运行级错误改为暂停/重试，不再直接失败。
-      if (terminal !== 'failed') input.reportGoalResult?.({ status: 'continue', summary: '完成本轮', evidence: ['进展'] })
-      input.onRunOutcome?.(terminal === 'stopped' ? { status: 'stopped' } : { status: 'completed' })
+      // failed 来自真实恢复后轮次，使用 1 次无进展上限验证终态投影；运行级错误改为暂停/重试。
+      if (terminal === 'failed') input.onRunOutcome?.({ status: 'completed' })
+      else input.reportGoalResult?.({ status: 'continue', summary: '完成本轮', evidence: ['进展'] })
+      if (terminal !== 'failed') input.onRunOutcome?.(terminal === 'stopped' ? { status: 'stopped' } : { status: 'completed' })
     })
+    if (terminal === 'failed') h.service.update('session', { limits: { maxConsecutiveFailures: 1 } })
     if (terminal === 'budget_limited') h.service.update('session', { limits: { maxIterations: 1 } })
     await h.service.resume('session')
     expect(h.todoWrites).toEqual([{ id: 'todo', status: 'completed' }])

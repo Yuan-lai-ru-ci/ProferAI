@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const claude = readFileSync(resolve(import.meta.dir, 'automation-agent-tools.ts'), 'utf8')
-const pi = readFileSync(resolve(import.meta.dir, 'adapters/pi-builtin-tools.ts'), 'utf8')
+const claude = readFileSync(resolve(import.meta.dir, '../../../../../packages/agent-provider-claude/src/automation-tools.ts'), 'utf8')
+const pi = readFileSync(resolve(import.meta.dir, '../../../../../packages/agent-provider-pi/src/automation-tools.ts'), 'utf8')
 
 describe('Automation dispatch tool parity', () => {
   test('Claude MCP and Pi builtin schemas both expose create/update boundSessionId', () => {

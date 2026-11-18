@@ -1,3 +1,4 @@
+import { getCurrentCoreTargetId } from './core-target-service'
 import { BrowserWindow } from 'electron'
 import { PLANNING_IPC_CHANNELS, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type PlanningChangeResource } from '@profer/shared'
 
@@ -23,7 +24,7 @@ export function broadcastPlanningAgentOperation(operation: PlanningAgentOperatio
 
 /** 到期提醒独立事件。渲染进程据此播放一次声音并刷新固定提醒条。 */
 export function broadcastPlanningRemindersDue(reminders: ActivePlanningReminder[]): void {
-  if (reminders.length === 0) return
+  if (reminders.length === 0 || getCurrentCoreTargetId() !== 'local') return
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(PLANNING_IPC_CHANNELS.REMINDER_DUE, reminders)
   }

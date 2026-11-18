@@ -615,9 +615,9 @@ describe('AutomationRun 字段语义：新分支与旧分支不漂移', () => {
   })
 
   test('连续失败退避：只有 error 累加，skipped/success 清零（appendRun 源码核对）', () => {
-    const managerSource = readFileSync(new URL('./automation-manager.ts', import.meta.url), 'utf8')
+    const managerSource = readFileSync(new URL('../../../../../packages/agent-runtime/src/automation-manager.ts', import.meta.url), 'utf8')
     const appendRun = managerSource.slice(
-      managerSource.indexOf('export function appendRun('),
+      managerSource.indexOf('function appendRun('),
       managerSource.indexOf('/** 设置 nextRunAt'),
     )
     expect(appendRun).toContain("if (run.status === 'error') {")

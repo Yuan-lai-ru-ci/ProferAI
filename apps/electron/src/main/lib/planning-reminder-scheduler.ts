@@ -5,6 +5,7 @@
  * 未确认的提醒会由渲染进程从 SQLite 恢复为固定通知条。
  */
 
+import { getCurrentCoreTargetId } from './core-target-service'
 import { app, BrowserWindow, Notification } from 'electron'
 import { claimDuePlanningReminders } from './planning-manager'
 import { getSettings } from './settings-service'
@@ -38,11 +39,11 @@ function showPlanningSystemNotification(reminder: ActivePlanningReminder): void 
 }
 
 function checkDueReminders(): void {
-  if (checking) return
+  if (checking || getCurrentCoreTargetId() !== 'local') return
   checking = true
   try {
     const reminders = claimDuePlanningReminders()
-    if (reminders.length > 0) {
+    if (reminders.length > 0 && getCurrentCoreTargetId() === 'local') {
       for (const reminder of reminders) showPlanningSystemNotification(reminder)
       broadcastPlanningRemindersDue(reminders)
       broadcastPlanningChanged(['reminders'])

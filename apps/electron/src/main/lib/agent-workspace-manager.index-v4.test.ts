@@ -37,7 +37,7 @@ const configRoot = join(tmpdir(), `profer-workspace-index-v4-${Date.now()}`)
 process.env.PROFER_DEV = '1'
 process.env.PROFER_CONFIG_DIR = configRoot
 
-const { createAgentWorkspace, readIndex, writeIndex } = await import('./agent-workspace-manager')
+const { createAgentWorkspace, readIndex, writeIndex, claimWorkspaceIndexForCore, openProjectWorkspace, deleteAgentWorkspace } = await import('./agent-workspace-manager')
 const { getAgentWorkspacesIndexPath } = await import('./config-paths')
 const { resolveWorkspaceLocation } = await import('./workspace-locator')
 
@@ -208,5 +208,19 @@ describe('create 后 locator 立即可解析（缓存失效接线）', () => {
     expect(location.mode).toBe('managed')
     expect(location.configDir).toBe(join(configRoot, 'agent-workspaces', workspace.slug))
     expect(getAgentWorkspacesIndexPath()).toBe(indexPath)
+  })
+})
+
+describe('Core接管后桌面索引不再写入', () => {
+  test('Given Core已接管 When 桌面CRUD被旧调用方触发 Then 副作用前拒绝且读取仍可用', async () => {
+    writeRawIndex({ version: 4, workspaces: [{ id: 'keep', name: 'Keep', slug: 'keep', createdAt: 1, updatedAt: 1 }] })
+    const before = readFileSync(indexPath, 'utf8')
+    claimWorkspaceIndexForCore()
+    expect(() => writeIndex({ version: 4, workspaces: [] })).toThrow('Core接管')
+    expect(() => createAgentWorkspace('Denied')).toThrow('Core接管')
+    expect(() => openProjectWorkspace({ rootPath: join(configRoot, 'outside') })).toThrow('Core接管')
+    await expect(deleteAgentWorkspace('keep')).rejects.toThrow('Core接管')
+    expect(readIndex().workspaces[0]?.id).toBe('keep')
+    expect(readFileSync(indexPath, 'utf8')).toBe(before)
   })
 })

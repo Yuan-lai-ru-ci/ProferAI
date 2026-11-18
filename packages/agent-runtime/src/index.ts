@@ -9,6 +9,7 @@
  */
 
 export * from './query-preparation'
+export * from './session-deletion'
 export * from './contract'
 export * from './ports'
 export * from './events'

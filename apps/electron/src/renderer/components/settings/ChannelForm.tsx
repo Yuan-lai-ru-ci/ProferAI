@@ -48,6 +48,7 @@ import type {
   ChannelUpdateInput,
   ChannelModel,
   ChannelTestResult,
+  FetchModelsInput,
   FetchModelsResult,
   ProviderType,
   XaiApiProtocol,
@@ -79,6 +80,7 @@ import {
 interface ChannelFormProps {
   /** 编辑模式下传入已有渠道，创建模式传 null */
   channel: Channel | null
+  remoteCore?: boolean
   onSaved: (channel?: Channel) => void
   onAgentEligibilityChange?: (channel: Channel, eligible: boolean) => void | Promise<void>
   onCancel: () => void
@@ -347,7 +349,7 @@ function Model1MToggle({
   )
 }
 
-export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCancel }: ChannelFormProps): React.ReactElement {
+export function ChannelForm({ channel, remoteCore = false, onSaved, onAgentEligibilityChange, onCancel }: ChannelFormProps): React.ReactElement {
   const isEdit = channel !== null
 
   // 表单状态
@@ -490,6 +492,23 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   const setChannelFormDirty = useSetAtom(channelFormDirtyAtom)
   const setFormController = useSetAtom(channelFormControllerAtom)
   const setChannels = useSetAtom(channelsAtom)
+  const remoteCall = React.useCallback(<T,>(remote: () => Promise<T>, local: () => Promise<T>): Promise<T> => remoteCore ? remote() : local(), [remoteCore])
+  const updateChannel = React.useCallback((id: string, patch: ChannelUpdateInput) => remoteCall(
+    () => window.electronAPI.updateCoreChannel(id, patch) as Promise<Channel>,
+    () => window.electronAPI.updateChannel(id, patch),
+  ), [remoteCall])
+  const createChannel = React.useCallback((input: ChannelCreateInput) => remoteCall(
+    () => window.electronAPI.createCoreChannel(input) as Promise<Channel>,
+    () => window.electronAPI.createChannel(input),
+  ), [remoteCall])
+  const fetchModels = React.useCallback((input: FetchModelsInput) => remoteCall(
+    () => window.electronAPI.fetchCoreChannelModels(input),
+    () => window.electronAPI.fetchModels(input),
+  ), [remoteCall])
+  const testDirect = React.useCallback((input: FetchModelsInput) => remoteCall(
+    () => window.electronAPI.testCoreChannel(input),
+    () => window.electronAPI.testChannelDirect(input),
+  ), [remoteCall])
   const lastAgentEligibleRef = React.useRef(channel ? isAgentEligibleChannel(channel) : false)
 
   React.useEffect(() => {
@@ -532,7 +551,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
   /** OAuth 只由授权链路管理；慢解密不能覆盖用户输入或切供应商后的草稿。 */
   React.useEffect(() => {
-    if (!channel || usesOAuthCredentials(channel.provider, channel.credentialMode)) {
+    if (!channel || remoteCore || usesOAuthCredentials(channel.provider, channel.credentialMode)) {
       setApiKeyLoaded(true)
       return
     }
@@ -577,7 +596,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     }
     setSaving(true)
     try {
-      const savedChannel = await window.electronAPI.updateChannel(channel.id, patch)
+      const savedChannel = await updateChannel(channel.id, patch)
       setChannels((current) => current.map((item) => item.id === savedChannel.id ? savedChannel : item))
       const eligible = isAgentEligibleChannel(savedChannel)
       if (eligible !== lastAgentEligibleRef.current) {
@@ -783,7 +802,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
 
     try {
       // 目录探测跟着内核走：Claude / Anthropic 协议的 Pi 用 Agent 端点，其余用主地址。
-      const result = await window.electronAPI.fetchModels({
+      const result = await fetchModels({
         requestId: networkId,
         provider,
         baseUrl,
@@ -872,7 +891,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         activeNetworkRequestsRef.current.set(networkId, 'test')
         // Claude 与 Anthropic 协议的 Pi 都从 agentBaseUrl 推导请求地址，必须一起传下去。
         const consumesAgentEndpoint = runtime === 'claude' || (runtime === 'pi' && piConsumesAnthropicEndpoint)
-        const result = await window.electronAPI.testChannelDirect({
+        const result = await testDirect({
           requestId: networkId,
           provider, baseUrl, apiKey, runtime,
           ...(provider === 'xai' && credentialMode !== 'oauth' ? { apiProtocol } : {}),
@@ -939,6 +958,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   }, [provider, credentialMode, loadCodexModels, loadXaiModels])
 
   const handleCodexReauthorize = async (): Promise<void> => {
+    if (remoteCore) { setOauthError('远程 Core 暂不支持 OAuth 重新授权'); return }
     if (!channel) {
       await handleCreate()
       return
@@ -975,6 +995,10 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     if (createdChannelRef.current) return createdChannelRef.current
     if (creationRef.current) return creationRef.current
     if (saving || oauthLoginActiveRef.current) return null
+    if (remoteCore && (provider === 'openai-codex' || (provider === 'xai' && credentialMode === 'oauth'))) {
+      toast.warning('远程 Core 渠道暂不支持 OAuth 授权，请使用 API Key 认证')
+      return null
+    }
     const input: ChannelCreateInput = {
       name,
       provider,
@@ -1008,7 +1032,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         ? await window.electronAPI.loginCodexOAuth(oauthInput)
         : provider === 'xai' && credentialMode === 'oauth'
           ? await window.electronAPI.loginXaiOAuth(oauthInput)
-          : await window.electronAPI.createChannel(input)
+          : await createChannel(input)
       createdChannelRef.current = savedChannel
       if (isAgentEligibleChannel(savedChannel)) {
         try {

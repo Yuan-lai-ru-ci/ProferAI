@@ -106,6 +106,19 @@ describe('Runtime query preparation', () => {
     ])
   })
 
+  test('Given 已准入Run When 构造权限门禁 Then 原Run、取消信号及等待生命周期保持原对象', async () => {
+    const controller = new AbortController()
+    const lifecycle = { wait(_id: string) {}, resume(_id: string) {} }
+    let received: Parameters<NonNullable<import('./ports').PermissionPort['createCanUseTool']>>[0] | undefined
+    const port = createAgentQueryPreparationPort({ events: { emit() {} }, permissions: {
+      createCanUseTool: options => { received = options; return async () => ({ behavior: 'deny', message: 'fixture' }) },
+    } })
+    await port.prepare({ ...input, runId: 'admitted-run', runLifecycle: lifecycle }, controller.signal)
+    expect(received?.runId).toBe('admitted-run')
+    expect(received?.signal).toBe(controller.signal)
+    expect(received?.runLifecycle).toBe(lifecycle)
+  })
+
   test('Given a permission host without a notification port When preparing Then failure is explicit before creating pending requests', async () => {
     let invoked = false
     const port = createAgentQueryPreparationPort({ permissions: { createCanUseTool: () => { invoked = true; return async () => ({ behavior: 'allow' }) } } })

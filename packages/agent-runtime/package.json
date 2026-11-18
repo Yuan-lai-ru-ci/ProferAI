@@ -1,6 +1,6 @@
 {
   "name": "@profer/agent-runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "AGPL-3.0-only",
   "description": "Host-independent Agent execution contracts and pure runtime lifecycle utilities.",
   "type": "module",
@@ -11,7 +11,25 @@
     "./error-patterns": "./src/error-patterns.ts",
     "./runtime-guards": "./src/runtime-guards.ts",
     "./runtime-routing-adapter": "./src/runtime-routing-adapter.ts",
-    "./run-ledger": "./src/run-ledger.ts"
+    "./run-ledger": "./src/run-ledger.ts",
+    "./plan-mode-tool-policy": "./src/plan-mode-tool-policy.ts",
+    "./plan-mode-guards": "./src/plan-mode-guards.ts",
+    "./ask-user-service": "./src/ask-user-service.ts",
+    "./exit-plan-service": "./src/exit-plan-service.ts",
+    "./goal-loop": "./src/goal-loop.ts",
+    "./goal-controller": "./src/goal-controller.ts",
+    "./goal-store": "./src/goal-store.ts",
+    "./goal-result": "./src/goal-result.ts",
+    "./goal-progress": "./src/goal-progress.ts",
+    "./goal-projection": "./src/goal-projection.ts",
+    "./automation-dispatch": "./src/automation-dispatch.ts",
+    "./automation-schedule": "./src/automation-schedule.ts",
+    "./automation-manager": "./src/automation-manager.ts",
+    "./automation-tool-operations": "./src/automation-tool-operations.ts",
+    "./delegation-tools": "./src/delegation-tools.ts",
+    "./delegation-tool-operations": "./src/delegation-tool-operations.ts",
+    "./session-title-naming": "./src/session-title-naming.ts",
+    "./session-title-policy": "./src/session-title-policy.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -20,7 +38,8 @@
   },
   "dependencies": {
     "@profer/agent-fabric": "workspace:*",
-    "@profer/shared": "workspace:*"
+    "@profer/shared": "workspace:*",
+    "@profer/session-core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.0.0"
