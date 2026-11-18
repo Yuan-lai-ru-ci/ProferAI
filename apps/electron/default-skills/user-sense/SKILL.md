@@ -1,8 +1,8 @@
 ---
 name: user-sense
-description: Maintain and use cross-workspace user memory from normal conversations: explicitly disclosed background, lasting goals and stable preferences, plus high-confidence inferences supported by multiple conversations. Routine conversation capture uses append_global_memory and does not require a device scan. Also supports an optional local environment scan after explaining its scope and obtaining consent; never scan without consent. Trigger when user information is relevant, preferences are corrected, or the user asks to understand them better.
+description: "Maintain and use cross-workspace user memory from normal conversations: explicitly disclosed background, lasting goals and stable preferences, plus high-confidence inferences supported by multiple conversations. Routine conversation capture uses append_global_memory and does not require a device scan. Also supports an optional local environment scan after explaining its scope and obtaining consent; never scan without consent. Trigger when user information is relevant, preferences are corrected, or the user asks to understand them better."
 group: profer
-version: "1.1.0"
+version: "1.1.1"
 ---
 
 # UserSense (User Sense)

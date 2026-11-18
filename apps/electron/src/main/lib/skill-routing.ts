@@ -65,6 +65,21 @@ async function readHeader(path: string): Promise<string> {
   } finally { await file.close() }
 }
 
+const SKILL_LEDGER_FILENAME = 'skill-library.json'
+
+/**
+ * 读 builtin / global Skill 账本里的 description，作为 frontmatter 损坏时的回退。
+ * 目的：一个 YAML 标点错误不应让整个 Skill 在 catalog 里静默消失。
+ */
+function readLedgerDescription(directory: string): string | undefined {
+  const file = join(directory, SKILL_LEDGER_FILENAME)
+  try {
+    if (!existsSync(file)) return undefined
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { description?: unknown }
+    return typeof parsed.description === 'string' && parsed.description.trim() ? parsed.description.trim() : undefined
+  } catch { return undefined }
+}
+
 async function readRules(root: string, directory: string): Promise<SkillRoutingRules> {
   const path = join(directory, ROUTING_SIDECAR_FILENAME)
   if (!existsSync(path)) return {}
@@ -138,10 +153,17 @@ export async function createSkillRoutingSnapshot(input: {
     let manifestGateInvalid = false
     // 先过滤预设，拒绝项不读取正文，诊断也不含正文/路径。
     if (!blocked) {
+      let content: string | undefined
       try {
         const file = checkedFile(root, filePath, MAX_SKILL_BYTES)
-        const content = await readHeader(file.path)
-        const parsed = parseFrontmatter<Record<string, unknown>>(content)
+        content = await readHeader(file.path)
+      } catch { blocked = 'unreadable' }
+      if (!blocked && content) {
+        // frontmatter 坏了不能整条判死：路由继续用账本里的展示字段，正文仍可读。
+        let frontmatter: Record<string, unknown> = {}
+        try {
+          frontmatter = parseFrontmatter<Record<string, unknown>>(content).frontmatter
+        } catch { /* 回退到 skill-library.json 的 description */ }
         // 模块清单优先于 frontmatter：展示字段坏了回退 frontmatter；门禁字段读不出来时下面按 invalid-routing 拦截。
         const manifestRead = readSkillManifest(join(root, slug))
         manifest = manifestRead.manifest
@@ -150,15 +172,15 @@ export async function createSkillRoutingSnapshot(input: {
           dirName: slug,
           manifest: manifestRead.manifest,
           frontmatter: {
-            ...(typeof parsed.frontmatter.name === 'string' ? { name: parsed.frontmatter.name } : {}),
-            ...(typeof parsed.frontmatter.description === 'string' ? { description: parsed.frontmatter.description } : {}),
+            ...(typeof frontmatter.name === 'string' ? { name: frontmatter.name } : {}),
+            ...(typeof frontmatter.description === 'string' ? { description: frontmatter.description } : {}),
           },
         })
         name = descriptor.name
-        description = descriptor.description
-        disableModelInvocation = parsed.frontmatter['disable-model-invocation'] === true
+        description = descriptor.description.trim() || readLedgerDescription(join(root, slug)) || ''
+        disableModelInvocation = frontmatter['disable-model-invocation'] === true
         if (!description.trim()) blocked = 'unreadable'
-      } catch { blocked = 'unreadable' }
+      }
       if (!blocked && manifestGateInvalid) blocked = 'invalid-routing'
       if (!blocked) {
         try { rules = mergeSkillRoutingLayers(rules, await readRules(root, join(root, slug)), skillManifestToRoutingFields(manifest)) } catch { blocked = 'invalid-routing' }
