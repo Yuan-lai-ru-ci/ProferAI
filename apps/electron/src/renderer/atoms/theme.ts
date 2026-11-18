@@ -52,7 +52,7 @@ function getCachedThemeMode(): ThemeMode {
   } catch {
     // localStorage 不可用时忽略
   }
-  return 'dark'
+  return 'light'
 }
 
 /**

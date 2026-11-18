@@ -1,7 +1,7 @@
 ---
 name: guizang-ppt-skill
-description: Create horizontal-swipe web PPTs as a single HTML file, with templates for WebGL backgrounds, chapter title cards, large-data callouts, image grids, and more. Provides two styles: 1) "Digital Magazine x E-Ink" (serif + fluid background + warm colors), and 2) "Swiss Internationalism" (sans serif + grid/dot matrix + IKB/lemon yellow/lemon green/safety orange accents). Use when users need a share/talk/launch-event-style web PPT, or mention "magazine-style PPT", "Swiss-style PPT", "Swiss Style", or "horizontal swipe deck".
-version: 1.1.1
+description: "Create horizontal-swipe web PPTs as a single HTML file, with templates for WebGL backgrounds, chapter title cards, large-data callouts, image grids, and more. Provides two styles: 1) \"Digital Magazine x E-Ink\" (serif + fluid background + warm colors), and 2) \"Swiss Internationalism\" (sans serif + grid/dot matrix + IKB/lemon yellow/lemon green/safety orange accents). Use when users need a share/talk/launch-event-style web PPT, or mention \"magazine-style PPT\", \"Swiss-style PPT\", \"Swiss Style\", or \"horizontal swipe deck\"."
+version: "1.1.2"
 ---
 
 # Magazine Web Ppt

@@ -30,6 +30,7 @@ import {
 import { activeViewAtom } from '@/atoms/active-view'
 import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
+import { resolvePreferredAgentWorkspaceId } from '@/lib/agent-workspace-selection'
 
 export function AgentRecommendBanner(): React.ReactElement | null {
   const [recommendation, setRecommendation] = useAtom(pendingAgentRecommendationAtom)
@@ -58,7 +59,11 @@ export function AgentRecommendBanner(): React.ReactElement | null {
     setMigrating(true)
     try {
       const workspaces = store.get(agentWorkspacesAtom)
-      const defaultWorkspaceId = workspaces[0]?.id ?? null
+      // 不能用 workspaces[0]：索引首项可能是已收纳工作区，会话建完会因不可见而打不开。
+      const defaultWorkspaceId = resolvePreferredAgentWorkspaceId(
+        workspaces,
+        store.get(currentAgentWorkspaceIdAtom),
+      ) ?? null
 
       // 1. 创建 Agent 会话
       const session = await window.electronAPI.createAgentSession(

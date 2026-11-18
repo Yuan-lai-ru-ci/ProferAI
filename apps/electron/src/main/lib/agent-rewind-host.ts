@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { RewindTarget, SDKMessage } from '@profer/shared'
 import { createRewindStore, readShadowTurnAttributions } from '@profer/session-store'
-import { normalizeAgentRuntime } from '@profer/shared'
+import { normalizeAgentRuntime, DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import { createAgentRewindService, type RewindResolverResult } from './agent-rewind-service'
 import { getAgentSessionMeta, getAgentSessionSDKMessages, truncateSDKMessages, updateAgentSessionMeta, clearSDKMessages, appendSDKMessages } from './agent-session-manager'
 import { createElectronSessionStorePaths } from './session-store-host'
@@ -242,7 +242,6 @@ export function createElectronAgentRewindService() {
           if (runtime === 'pi') {
             // 先解析 Pi 分支点（只读）：解析失败时不能先截 Profer JSONL 留下半截状态。
             const entryId = await resolvePiBranchEntryId(sessionId, value.nativeResume)
-            if (!meta.sdkSessionId) throw new Error('Pi 会话缺少 sdkSessionId，无法回退 Pi transcript')
             // Profer JSONL 是唯一事实源：先存原始字节，重建失败要整份还原。
             const messagesPath = getAgentSessionMessagesPath(sessionId)
             let proferBefore: Buffer
@@ -255,26 +254,31 @@ export function createElectronAgentRewindService() {
             // Pi 文件由 Profer 独占写入（`pi/session-file-store`），因此回退就是「按保留历史重建」：
             // 结构异常（header 缺失 / entry 不存在 / 祖先链断裂）在写盘前失败，主文件原样保留；
             // 不再有「条截了但条数对不上 → 整份还原」这条路径，也就不需要备份与派生校验。
-            const rebuilt = rewindPiTranscript({
-              piSessionDir: getPiTranscriptDirForSession(sessionId),
-              sdkSessionId: meta.sdkSessionId,
-              entryId,
-            })
-            if (!rebuilt.ok) {
-              let restoreError: string | undefined
-              try {
-                restoreProferMessagesBytes(sessionId, proferBefore)
-              } catch (error) {
-                restoreError = error instanceof Error ? error.message : String(error)
+            //
+            // 没有 sdkSessionId 意味着 Pi 从未建立可 resume 的会话（例如首轮就被中断，
+            // 或 transcript 已丢失时元数据会被清空）：没有文件可重建，截断历史本身就是完整回退。
+            if (meta.sdkSessionId) {
+              const rebuilt = rewindPiTranscript({
+                piSessionDir: getPiTranscriptDirForSession(sessionId),
+                sdkSessionId: meta.sdkSessionId,
+                entryId,
+              })
+              if (!rebuilt.ok) {
+                let restoreError: string | undefined
+                try {
+                  restoreProferMessagesBytes(sessionId, proferBefore)
+                } catch (error) {
+                  restoreError = error instanceof Error ? error.message : String(error)
+                }
+                throw new Error([
+                  rebuilt.reason ?? 'Pi 记录重建失败',
+                  restoreError ? `会话历史还原失败，需要人工恢复: ${restoreError}` : '会话历史已还原',
+                ].join('；'))
               }
-              throw new Error([
-                rebuilt.reason ?? 'Pi 记录重建失败',
-                restoreError ? `会话历史还原失败，需要人工恢复: ${restoreError}` : '会话历史已还原',
-              ].join('；'))
+              console.log(
+                `[Agent 回退] Pi 记录已重建: session=${sessionId} 保留 ${rebuilt.kept} 条（对话 ${rebuilt.keptMessages ?? 0} 条），移除 ${rebuilt.removed} 条`,
+              )
             }
-            console.log(
-              `[Agent 回退] Pi 记录已重建: session=${sessionId} 保留 ${rebuilt.kept} 条（对话 ${rebuilt.keptMessages ?? 0} 条），移除 ${rebuilt.removed} 条`,
-            )
             await prunePiTrackerAfterRewind(sessionId, kept)
             // entry 绑定同样只保留保留历史里出现过的消息：指向已删 entry 的绑定会让下次回退必然失败。
             const keptUuids = new Set(kept.flatMap((message) => {
@@ -312,7 +316,7 @@ export function createElectronAgentRewindService() {
           const meta = getAgentSessionMeta(input.sessionId)
           const runtime = meta ? normalizeAgentRuntime(meta.agentRuntime) : undefined
           if (!meta || runtime !== (meta.agentRuntime ? normalizeAgentRuntime(meta.agentRuntime) : runtime)) {
-            return { supported: false, runtime: runtime ?? 'claude', reason: '当前 runtime 没有可用的回退适配器' }
+            return { supported: false, runtime: runtime ?? DEFAULT_AGENT_RUNTIME, reason: '当前 runtime 没有可用的回退适配器' }
           }
           const messages = getAgentSessionSDKMessages(input.sessionId)
           const positions = new Map<SDKMessage, number>()

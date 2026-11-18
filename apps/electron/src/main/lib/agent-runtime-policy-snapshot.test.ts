@@ -364,7 +364,7 @@ describe('能力裁剪：工具组 / PPT / skill / MCP', () => {
       policy: snapshot.policy,
       toolNames: ['Read', 'Bash'],
     })
-    const claudeRuntime = buildSkillRuntimeOptions(routing)
+    const claudeRuntime = buildSkillRuntimeOptions(routing, 'claude')
     const piRuntime = buildSkillRuntimeOptions(routing, 'pi')
     expect(claudeRuntime.skills).toEqual(['pdf'])
     expect(claudeRuntime.skillSlugs).toEqual(['pdf'])

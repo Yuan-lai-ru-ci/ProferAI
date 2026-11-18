@@ -4,7 +4,10 @@ import { AppShell } from './components/app-shell/AppShell'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { TutorialBanner } from './components/tutorial/TutorialBanner'
 import { TooltipProvider } from '@profer/ui/primitives/tooltip'
-import { conversationsAtom } from './atoms/chat-atoms'
+import { conversationsAtom, currentConversationIdAtom } from './atoms/chat-atoms'
+import { appModeAtom } from './atoms/app-mode'
+import { activeViewAtom } from './atoms/active-view'
+import { currentAgentSessionIdAtom } from './atoms/agent-atoms'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from './atoms/tab-atoms'
 import { replayIntroEnvironmentTestAtom, replayIntroOpenAtom } from './atoms/intro-atoms'
@@ -32,6 +35,8 @@ export default function App(): React.ReactElement {
   const [isLoading, setIsLoading] = React.useState(true)
   const [showOnboarding, setShowOnboarding] = React.useState(false)
   const [showOnboardingEnvironmentTest, setShowOnboardingEnvironmentTest] = useAtom(replayIntroEnvironmentTestAtom)
+  /** 本次启动刚走完首次引导：主界面已有界面蒙层引导在播，不再叠教程横幅 */
+  const [justFinishedOnboarding, setJustFinishedOnboarding] = React.useState(false)
 
   // 初始化：检查是否需要显示 Onboarding
   // macOS/Linux 上 SDK 自带 claude native binary 不依赖宿主 Node/Git；
@@ -65,6 +70,7 @@ export default function App(): React.ReactElement {
   // 完成 onboarding 回调：创建欢迎对话，可选打开教程 Tab
   const handleOnboardingComplete = async (openTutorial?: boolean) => {
     setShowOnboarding(false)
+    setJustFinishedOnboarding(true)
 
     if (openTutorial) {
       const tabs = store.get(tabsAtom)
@@ -89,10 +95,17 @@ export default function App(): React.ReactElement {
         store.set(tabsAtom, result.tabs)
         store.set(activeTabIdAtom, result.activeTabId)
 
-        // Onboarding 接力：进入主界面后自动播放一次界面蒙层引导；
-        // 等首帧渲染稳定再启动，保证锚点（输入区/模型选择器）已挂载。
-        window.setTimeout(() => store.set(coachTourOpenAtom, true), 600)
+        // 只开 Tab 不同步 appMode，会留下「当前是 Agent 模式、激活的却是 Chat 会话」的撕裂态：
+        // 左侧栏仍渲染 Agent 会话列表，欢迎对话又出现在 Agent 的 Tab 里，用户无法判断自己在哪种模式。
+        // 走 openSession 的语义，把模式与当前会话一起切到 Chat。
+        store.set(appModeAtom, 'chat')
+        store.set(activeViewAtom, 'conversations')
+        store.set(currentConversationIdAtom, meta.id)
+        store.set(currentAgentSessionIdAtom, null)
 
+        // Onboarding 接力：进入主界面后自动播放一次界面蒙层引导。
+        // 等首帧渲染稳定再启动，保证锚点（输入区/侧栏入口）已挂载。
+        window.setTimeout(() => store.set(coachTourOpenAtom, true), 600)
       }
     } catch (error) {
       console.error('[App] 创建欢迎对话失败:', error)
@@ -151,7 +164,7 @@ export default function App(): React.ReactElement {
       <React.Suspense fallback={null}>
         <SettingsDialog />
       </React.Suspense>
-      <TutorialBanner />
+      <TutorialBanner skip={justFinishedOnboarding} />
       <GlobalEnvironmentCheckDialog />
       <React.Suspense fallback={null}>
         <MigrationImportDialog />

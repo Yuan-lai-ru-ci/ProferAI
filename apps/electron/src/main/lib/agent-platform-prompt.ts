@@ -39,7 +39,7 @@ function projectRootsBlock(candidates: AgentPlatformProjectCandidate[], isProjec
     return `- 下列项目候选来自附加目录或当前项目本身；与当前 cwd 相同的那条就是本项目，直接以 cwd 为 root，不要再切换：\n${candidateList(candidates)}`
   }
   if (candidates.length === 0) {
-    return '- 当前没有由 Profer 探测到的项目候选；先检查实际目录树，再决定要操作的 root。'
+    return '- 当前没有由 Profer 探测到的项目候选；只有任务涉及项目文件时才检查实际目录树并确定 root。'
   }
   return `- Profer 已探测到以下项目候选。使用项目名、目录名、package name、Git remote 或类型消歧；只有唯一匹配时才直接使用对应的绝对 root：\n${candidateList(candidates)}`
 }
@@ -73,8 +73,8 @@ export function buildAgentPlatformPrompt(options: AgentPlatformPromptOptions): s
 
   if (options.platform === 'win32') {
     const cwdLine = isProjectWorkspace
-      ? `- 当前 Agent cwd：${cwd}；**这就是项目根**，相对路径直接落在项目里。不要另建项目目录，也不要因为 cwd 存在就猜测 \`src\` 或测试文件位置，先检查实际目录树。`
-      : `- 当前 Agent cwd：${cwd}。cwd 不是项目 root；不要因为 cwd 存在就猜测 \`src\` 或测试文件位置。`
+      ? `- 当前 Agent cwd：${cwd}；**这就是项目根**，相对路径直接落在项目里；仅当任务涉及项目文件时检查实际目录树，不要另建项目目录。`
+      : `- 当前 Agent cwd：${cwd}。仅当任务涉及项目文件时才检查项目 root，不要因为 cwd 存在就猜测 \`src\` 或测试文件位置。`
     return `## 当前平台与项目路径（Windows）
 
 - 当前平台：Windows（win32）。当前 Agent shell：${escapePromptText(shellPath)}。
@@ -87,21 +87,21 @@ ${commonToolingRules(options.isPiRuntime)}`
 
   if (options.platform === 'darwin') {
     const cwdLine = isProjectWorkspace
-      ? `- 当前 Agent cwd：${cwd}；**这就是项目根**，相对路径直接落在项目里，不要另建项目目录，也不要假设根级存在 \`src\`，先检查实际目录树。`
-      : `- 当前 Agent cwd：${cwd}。cwd 不是项目 root；不要默认仓库根目录存在 \`src\`，先检查实际目录树。`
+      ? `- 当前 Agent cwd：${cwd}；**这就是项目根**，相对路径直接落在项目里；仅当任务涉及项目文件时检查实际目录树，不要另找 root。`
+      : `- 当前 Agent cwd：${cwd}。仅当任务涉及项目文件时才检查项目 root，不要默认仓库根目录存在 \`src\`。`
     return `## 当前平台与项目路径（macOS）
 
 - 当前平台：macOS（darwin）。当前 Agent shell：${escapePromptText(shellPath)}；${shellExecutionDescription}
 - 当前执行环境是 POSIX shell；只使用该 shell 实际支持的命令和路径格式，不要把其他操作系统的命令、路径或环境变量当作当前事实。
 ${cwdLine}
 ${candidateBlock}
-- macOS GUI 进程的 PATH 可能比终端短；优先使用 Profer 提供的绝对路径、\`git -C <root> ...\`，以及从当前 shell 实际探测到的 bun/node/git，不要凭环境猜测。
+- macOS GUI 进程的 PATH 可能比终端短；任务需要执行命令时，优先使用 Profer 提供的绝对路径、\`git -C <root> ...\`，以及从当前 shell 实际探测到的 bun/node/git，不要凭环境猜测。
 ${commonToolingRules(options.isPiRuntime)}`
   }
 
   const cwdLine = isProjectWorkspace
-    ? `- 当前 Agent cwd：${cwd}；**这就是项目根**，相对路径直接落在项目里，先检查实际目录树，不要再找别的 root。`
-    : `- 当前 Agent cwd：${cwd}；先确认实际项目 root，不要默认存在根级 \`src\`。`
+    ? `- 当前 Agent cwd：${cwd}；**这就是项目根**，相对路径直接落在项目里；仅当任务涉及项目文件时检查实际目录树，不要再找别的 root。`
+    : `- 当前 Agent cwd：${cwd}；仅当任务涉及项目文件时才检查项目 root，不要默认存在根级 \`src\`。`
   return `## 当前平台与项目路径（POSIX）
 
 - 当前平台：${escapePromptText(options.platform)}。当前 Agent shell：${escapePromptText(shellPath)}。

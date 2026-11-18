@@ -30,6 +30,38 @@ export function isAgentModelSelectionValid(
     && channel.models.some((model) => model.id === selection.modelId && model.enabled)
 }
 
+export type AgentBindingState =
+  | 'ok'
+  | 'unbound'
+  | 'channel_missing'
+  | 'channel_disabled'
+  | 'model_unavailable'
+
+/**
+ * 区分「未绑定」「渠道已删除/停用」「渠道还在但模型不可用」。
+ *
+ * 三者都会让输入区不可用，但只有渠道存在的情况才该引导用户去设置页；
+ * 渠道引用悬空时去设置页看到的是一份完全正常的配置，必须改成「重新选择模型」。
+ */
+export function resolveAgentBindingState(
+  channels: Channel[],
+  runtime: AgentRuntime,
+  claudeChannelIds: string[],
+  bound: { channelId?: string | null; modelId?: string | null } | null | undefined,
+): AgentBindingState {
+  if (!bound?.channelId) return 'unbound'
+  const channel = channels.find((item) => item.id === bound.channelId)
+  if (!channel) return 'channel_missing'
+  if (!channel.enabled) return 'channel_disabled'
+  if (!bound.modelId) return 'model_unavailable'
+  return isAgentModelSelectionValid(channels, runtime, claudeChannelIds, {
+    channelId: bound.channelId,
+    modelId: bound.modelId,
+  })
+    ? 'ok'
+    : 'model_unavailable'
+}
+
 /** Resolve a model that is valid for the selected Agent runtime. */
 export function resolveAgentModelSelection(
   channels: Channel[],

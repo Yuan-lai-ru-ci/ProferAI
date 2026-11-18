@@ -401,6 +401,7 @@ export type SkillDoctorCode =
   | 'manifest-frontmatter-mismatch'
   | 'routing-duplicated'
   | 'description-missing'
+  | 'frontmatter-invalid'
   | 'description-too-short'
   | 'description-no-usage-marker'
   | 'keywords-missing'

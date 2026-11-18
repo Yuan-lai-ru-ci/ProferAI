@@ -56,6 +56,71 @@ describe('模块化提示词装配', () => {
     expect(partial.taskPrompt).toContain('`mcp__collaboration__delegate_agents`')
     expect(partial.taskPrompt).not.toContain('`mcp__collaboration__delegate_agent`')
   })
+  test('Claude/Pi 同任务优先续跑原 Worker，只描述本轮可用入口', () => {
+    for (const isPiRuntime of [false, true]) {
+      const base = { workspaceName: 'Demo', workspaceSlug: 'demo', sessionId: 'worker-reuse', permissionMode: 'auto' as const, isPiRuntime }
+      const continuation = isPiRuntime ? '`mcp__collaboration__continue_delegation`' : '`continue_delegation`'
+      const list = isPiRuntime ? '`mcp__collaboration__list_delegations`' : '`list_delegations`'
+      const prompt = buildSystemPrompt(base)
+      expect(prompt).toContain('同任务的补充、修正、重试或下一步优先回到原 Worker')
+      expect(prompt).toContain(continuation)
+      expect(prompt).toContain(list)
+      expect(prompt).toContain('不要为追加指令重复创建 Worker')
+      expect(buildSystemPrompt({ ...base, disabledToolGroups: ['collaboration'] })).not.toContain(continuation)
+      expect(buildSystemPrompt({ ...base, disabledTools: ['continue_delegation'] })).not.toContain(continuation)
+      const partial = buildSystemPrompt({ ...base, collaborationToolNames: ['continue_delegation'] })
+      expect(partial).toContain(continuation)
+      expect(partial).not.toContain(list)
+      expect(partial).not.toContain('placement=current')
+    }
+  })
+
+  test('Claude/Pi 公共规则先于角色和会话环境，managed sibling 共享稳定前缀', () => {
+    const lcp = (a: string, b: string) => {
+      let i = 0
+      while (i < a.length && i < b.length && a[i] === b[i]) i++
+      return i
+    }
+    for (const isPiRuntime of [false, true]) {
+      const base = { workspaceName: 'Demo', workspaceSlug: 'demo', permissionMode: 'plan' as const, isPiRuntime, platform: 'darwin' as const }
+      const main = buildSystemPrompt({ ...base, behaviorRole: 'main', sessionId: 'prefix-main', agentCwd: '/managed/prefix-main' })
+      const sub = buildSystemPrompt({ ...base, behaviorRole: 'sub', sessionId: 'prefix-sub1', agentCwd: '/managed/prefix-sub1' })
+      const sibling = buildSystemPrompt({ ...base, behaviorRole: 'sub', sessionId: 'prefix-sub2', agentCwd: '/managed/prefix-sub2' })
+      const stableEnd = sub.indexOf('## Markdown 与公式')
+      expect(stableEnd).toBeGreaterThan(0)
+      expect(sub.indexOf('## 任务责任')).toBeGreaterThan(stableEnd)
+      expect(sub.indexOf('/managed/prefix-sub1')).toBeGreaterThan(stableEnd)
+      expect(lcp(main, sub)).toBeGreaterThan(stableEnd)
+      expect(lcp(sub, sibling)).toBeGreaterThan(stableEnd)
+      expect(sub).toContain('不能修改其他文件或执行实施操作')
+      expect(sub).toContain('当前工作目录的 `.context/plan/`')
+      expect(sub).toContain('不恢复关闭能力')
+      expect(sub).toContain('当前会话目录（cwd）:')
+      expect(sub).toContain('不要创建新的协作子会话')
+    }
+  })
+
+  test('行为角色随 system prompt 一起装配，权限门禁逻辑不变', () => {
+    const base = { workspaceName: 'Demo', workspaceSlug: 'demo', sessionId: 'taste-role', permissionMode: 'auto' as const }
+    expect(buildSystemPrompt({ ...base, behaviorRole: 'main' })).toContain('你负责用户最终要达成的结果')
+    expect(buildSystemPrompt({ ...base, behaviorRole: 'sub' })).toContain('父 Agent 负责跨任务整合和最终验收')
+    expect(buildSystemPrompt({ ...base, behaviorRole: 'independent' })).toContain('你负责一个独立工作目标')
+  })
+
+  test('整合后的核心规则保持授权与执行边界，角色和质量增量不重复整段核心', () => {
+    const base = { workspaceName: 'Demo', workspaceSlug: 'demo', sessionId: 'core-contract', permissionMode: 'auto' as const }
+    for (const isPiRuntime of [true, false]) {
+      const prompt = buildSystemPrompt({ ...base, isPiRuntime })
+      expect(prompt).toContain('分析不擅自实施')
+      expect(prompt).toContain('对外发送、发布部署、付费、删除或覆盖重要数据')
+      expect(prompt).toContain('不恢复关闭能力')
+      expect(prompt).toContain('修改后必须闭环')
+      expect(prompt.match(/## 做事方式/g)).toHaveLength(1)
+      expect(prompt.match(/## 表达与判断/g)).toHaveLength(1)
+      expect(prompt).not.toContain('## GPT with Taste 行为配方')
+    }
+  })
+
   test('Claude/Pi 按实际工具解释位置与关系，禁用后不泄露派工指引', () => {
     for (const isPiRuntime of [false, true]) {
       const base = { workspaceName: 'Demo', workspaceSlug: 'demo', sessionId: 'source', permissionMode: 'auto' as const, isPiRuntime }
@@ -261,19 +326,20 @@ describe('buildSystemPrompt', () => {
     const workspaceRoot = join(getConfigDir(), 'agent-workspaces', slug)
     const workspaceProfile = join(workspaceRoot, 'workspace-profile.md')
     expect(prompt).toContain(`**Profer 工作区资料**: ${workspaceProfile}`)
-    expect(prompt).toContain('再读工作区资料（缺失才读旧版）、Memory 索引和相关 Skill')
+    expect(prompt).toContain('按用户指定位置优先；仅按任务需要读取相关 Context')
+    expect(prompt).toContain('启动和普通对话不巡检')
     // 绝对路径只在工作区段声明，恢复指引引用该段，不再每处重复长路径。
     expect(prompt.split(workspaceProfile)).toHaveLength(2)
     expect(prompt).toContain('旧版 Profer 工作区资料（仅兼容读取）')
     expect(prompt).toContain('项目中的 `AGENTS.md` / `CLAUDE.md` 属于用户资产')
-    expect(prompt).toContain('不要读取当前 cwd 下不存在的相对路径 `CLAUDE.md`')
+    expect(prompt).toContain('不要读取 cwd 下不存在的相对路径 `CLAUDE.md`')
     expect(prompt).not.toContain('维护工作区根目录下的 CLAUDE.md')
     expect(prompt).toContain(join(workspaceRoot, 'workspace-files', '.context'))
     expect(prompt).toContain(join(workspaceRoot, '.profer', 'memory', 'MEMORY.md'))
     expect(prompt).not.toContain('Profer 脱胎于开源项目')
   })
 
-  test('Context 恢复先发现目录内容，不默认读取或创建 note.md', () => {
+  test('Context 恢复只在任务需要时按需读取，不在启动时巡检目录', () => {
     const prompt = buildSystemPrompt({
       workspaceName: 'Demo',
       workspaceSlug: 'demo-workspace',
@@ -282,12 +348,9 @@ describe('buildSystemPrompt', () => {
       isPiRuntime: true,
     })
 
-    expect(prompt).toContain('先列出两个目录；只读取**实际存在且与当前任务相关**的文件')
-    expect(prompt).toContain('不得默认创建或读取 `note.md`、`todo.md`')
-    expect(prompt).toContain('Profer Memory')
-    expect(prompt).not.toContain('按主题命名的 Markdown — 研究与分析输出')
-    expect(prompt).toContain('按需检索和读取，不默认创建或读取通用 `note.md`')
-    expect(prompt).not.toContain('会话级 `.context/`（note.md、todo.md）')
+    expect(prompt).toContain('仅按任务需要读取相关 Context')
+    expect(prompt).toContain('启动和普通对话不巡检')
+    expect(prompt).toContain('不默认创建或读取 `note.md`、`todo.md`')
   })
 
   test('Pi 包含专属执行说明，Claude 不获得 Pi 专属段落', () => {

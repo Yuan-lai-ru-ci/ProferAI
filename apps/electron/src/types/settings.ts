@@ -199,8 +199,8 @@ export interface SkinManagerResult {
   message?: string
 }
 
-/** 默认主题模式 */
-export const DEFAULT_THEME_MODE: ThemeMode = 'dark'
+/** 默认主题模式：新用户首次启动为浅色 */
+export const DEFAULT_THEME_MODE: ThemeMode = 'light'
 
 /** 默认特殊风格 */
 export const DEFAULT_THEME_STYLE: ThemeStyle = 'default'
@@ -235,8 +235,8 @@ export type PreviewOpenMode = 'tab' | 'split'
 /** 默认文件预览打开方式：独立标签页（保持既有行为） */
 export const DEFAULT_PREVIEW_OPEN_MODE: PreviewOpenMode = 'tab'
 
-/** 默认 Agent runtime：Pi 执行链路完成灰度前始终使用 Claude。 */
-export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'claude'
+/** 默认 Agent runtime：2026-11-15 起新建会话默认使用 Pi。 */
+export const DEFAULT_AGENT_RUNTIME: AgentRuntime = 'pi'
 
 /**
  * 建议新开会话的轮数阈值默认值：0 = 关闭。
@@ -438,13 +438,20 @@ export interface ComposerToolbarPreferences {
   agent?: Record<string, ComposerToolbarItemPreference>
 }
 
-/** 主窗口大小、位置和最大化状态 */
+/** 主窗口大小、位置和最大化/全屏状态 */
 export interface MainWindowState {
   width: number
   height: number
   x: number
   y: number
   isMaximized: boolean
+  /**
+   * 退出时是否处于 macOS 原生全屏。
+   *
+   * 缺失（旧版写入的状态或首次启动）按 false 处理：历史实现只存 isMaximized，
+   * 从未能恢复全屏，所以旧状态本来就不存在「该恢复全屏」的语义。
+   */
+  isFullScreen?: boolean
 }
 
 /** 持久化的标签页状态 */

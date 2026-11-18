@@ -58,9 +58,11 @@ describe('Agent 消息发送归属校验', () => {
       .toEqual({ ok: true })
   })
 
-  test('Given 老 Codex 渠道 When Claude/Pi 会话发送 Then 按历史内核资格校验', () => {
+  test('Given 老 Codex 渠道 When Claude/Pi 会话发送 Then 按内核资格校验', () => {
     const codex = { ...channel, provider: 'openai-codex' as const }
-    expect(validateAgentSendBinding(input, session, true, codex))
+    // 缺省 runtime 现按产品默认内核（Pi）归一，Codex 渠道仅开放 Pi 时放行。
+    expect(validateAgentSendBinding(input, session, true, codex)).toEqual({ ok: true })
+    expect(validateAgentSendBinding(input, { ...session, agentRuntime: 'claude' }, true, codex))
       .toMatchObject({ ok: false, code: 'AGENT_CHANNEL_RUNTIME_DISABLED' })
     expect(validateAgentSendBinding(input, { ...session, agentRuntime: 'pi' }, true, codex)).toEqual({ ok: true })
   })

@@ -35,7 +35,8 @@ async function prepare(slugs: string[]) {
   })
   const policy = createEffectiveAgentPresetPolicy({ id: 'test', name: 'test', description: '', isBuiltin: false, createdAt: 0, updatedAt: 0, skillSlugs: slugs, disabledToolGroups: ['automation'] }, { presetId: 'test', presetScope: 'workspace', workspaceSlug: 'ws' }, { runtimeSupportsSubagents: true })
   const routing = await prepareAgentSkillRouting({ projection: { path: root, skills, diagnostics: [] }, policy, toolNames: ['Read', 'Bash'] })
-  const runtime = buildSkillRuntimeOptions(routing)
+  // 本链路验证 Claude 装配（默认参数已改为产品默认内核 Pi，必须显式声明）。
+  const runtime = buildSkillRuntimeOptions(routing, 'claude')
   const loader = new DefaultResourceLoader({ cwd: root, agentDir: root, noContextFiles: true, noExtensions: true, noSkills: true, additionalSkillPaths: [], settingsManager: SettingsManager.inMemory(), skillsOverride: createProferSkillsOverride(runtime.additionalSkillPaths, runtime.skillSlugs, loadSkillsFromDir) })
   await loader.reload()
   return { root, routing, runtime, loader }

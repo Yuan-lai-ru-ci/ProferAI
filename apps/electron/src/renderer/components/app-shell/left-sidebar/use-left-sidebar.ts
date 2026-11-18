@@ -13,6 +13,7 @@ import { interfaceVariantAtom } from '@/atoms/theme'
 import { activeViewAtom } from '@/atoms/active-view'
 import { automationFormAtom, automationsAtom } from '@/atoms/automation-atoms'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
+import { useSwitchAppMode } from '@/hooks/useSwitchAppMode'
 import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
 import {
   conversationsAtom,
@@ -2024,49 +2025,20 @@ export function useLeftSidebar() {
     [agentSessionGroups, progressiveCount]
   )
 
+  const switchAppMode = useSwitchAppMode()
+
+  /**
+   * 收起态 rail 上的 Agent / Chat 按钮。
+   *
+   * 曾经这里有一份与顶部 ModeSwitcher 几乎逐字重复的会话恢复逻辑（细节还有漂移：
+   * 这边排除 draft、那边不排除），且兜底分支都是「只改模式」——那正是模式与标签页
+   * 分叉的土壤。现在统一走 useSwitchAppMode，显示的模式由活动标签页派生。
+   */
   const handleRailModeSwitch = React.useCallback((targetMode: AppMode) => {
     setViewMode('active')
     if (targetMode === mode) return
-
-    const isChatMode = targetMode === 'chat'
-    const sessions = isChatMode ? conversations : agentSessions
-    const lastId = isChatMode ? currentConversationId : currentAgentSessionId
-
-    if (lastId) {
-      const match = sessions.find((s) => s.id === lastId)
-      if (match) {
-        openSession(targetMode, match.id, match.title)
-        return
-      }
-    }
-
-    const tab = tabs.find((t) => t.type === targetMode)
-    if (tab) {
-      openSession(targetMode, tab.sessionId, tab.title)
-      return
-    }
-
-    const recent = isChatMode
-      ? conversations.find((conversation) => !conversation.archived && !draftSessionIds.has(conversation.id))
-      : agentSessions.find((session) => !session.archived && !session.draft && !draftSessionIds.has(session.id))
-    if (recent) {
-      openSession(targetMode, recent.id, recent.title)
-      return
-    }
-
-    setMode(targetMode)
-  }, [
-    mode,
-    conversations,
-    agentSessions,
-    currentConversationId,
-    currentAgentSessionId,
-    tabs,
-    draftSessionIds,
-    openSession,
-    setMode,
-    setViewMode,
-  ])
+    void switchAppMode(targetMode)
+  }, [mode, switchAppMode, setViewMode])
 
   return {
     // 视图/模式

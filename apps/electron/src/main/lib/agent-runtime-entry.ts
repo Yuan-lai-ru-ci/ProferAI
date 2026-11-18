@@ -43,6 +43,8 @@ import { normalizeAgentRuntime } from '@profer/shared'
 import { createAgentRunRejectionError, resolveAgentInputOperationSource } from '@profer/agent-runtime'
 import { createElectronAgentRuntimeQuery, clearAgentRuntimeRunFacts, resolveRuntimeSessionWriteLayout, setAgentRuntimeRunFacts } from './agent-runtime-host'
 import { resolveCredentialPreflightTypedError } from './agent-preflight-typed-errors'
+import { markInsufficientCreditsMessage } from './agent-insufficient-credits'
+import { editionProviders } from './edition'
 import {
   agentRuntimePolicyRuns,
   AgentRuntimePolicySnapshotMissingError,
@@ -573,7 +575,13 @@ async function runOwnedRuntimeHeadlessEntry(
       if (type === 'assistant' || type === 'user') consumePendingRewindState()
       // Shadow Git 写入证据：两个 runtime 都从 tool_use 取路径。
       // Pi 在部分渠道下用 `Write` 工具执行写入，不走受控写入回调；只靠回调会把真实改动记成 unconfirmed。
-      if (type === 'assistant') collectShadowWriteEvidence(message, shadowLedger)
+      if (type === 'assistant') {
+        collectShadowWriteEvidence(message, shadowLedger)
+        // 额度不足：新链只迁移了凭证 preflight，provider 流错误默认透传。
+        // 这里补商业版代管 402 的结构化卡片；开源版 detector 恒返回 null，消息保持原样。
+        // 必须在 callbacks.onMessage（落盘 + 上屏）之前写入，渲染层才能拿到 _errorCode。
+        markInsufficientCreditsMessage(message, editionProviders.errors.detectInsufficientCredits)
+      }
       if (type === 'result') lastResultMessage = message
       void callbacks.onMessage?.(message)
     },

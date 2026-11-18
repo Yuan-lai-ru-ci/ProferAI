@@ -8,6 +8,7 @@
 import { ipcMain } from 'electron'
 import {
   AUTOMATION_IPC_CHANNELS,
+  DEFAULT_AGENT_RUNTIME,
   RECOMMENDATION_IPC_CHANNELS,
   type Automation,
   type CreateAutomationInput,
@@ -126,7 +127,7 @@ export function registerAutomationIpc(): void {
     const automation = {
       workspaceId,
       channelId,
-      agentRuntime: input.agentRuntime ?? existing?.agentRuntime ?? 'claude',
+      agentRuntime: input.agentRuntime ?? existing?.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
       presetId: input.presetId !== undefined ? (input.presetId || undefined) : existing?.presetId,
     }
     const session: AgentSessionMeta | undefined = getAgentSessionMeta(requested)

@@ -18,7 +18,7 @@ import { isGoalIterationMessage, projectMessageProvenance } from '@profer/shared
 import { isScheduledTaskInput, isTaskSourceInput, projectTaskInputTimeline } from '@/lib/task-input-timeline'
 import { getAgentMessageIdentity } from '@/lib/agent-message-identity'
 import { useOpenSession } from '@/hooks/useOpenSession'
-import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, GitFork, Undo2, RotateCw, Pencil, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, GitBranch, Wallet, Cpu, PackageOpen, Target, Zap } from 'lucide-react'
+import { Bot, Loader2, AlertTriangle, FileText, FileImage, Download, Split, GitFork, Undo2, RotateCw, Pencil, Plus, Minimize2, Wrench, Settings, ExternalLink, Quote, Clock, GitBranch, Wallet, Cpu, PackageOpen, Target } from 'lucide-react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { cn } from '@/lib/utils'
 import { parseQuotedSelectionRefs, type ParsedQuotedSelectionRef } from '@/lib/quoted-selection'
@@ -161,26 +161,25 @@ function formatSystemToolName(toolName: string): string {
   return toolName
 }
 
-/** 系统提示条：Skill 路由结果（已加载/未加载）与压缩被跳过等宿主侧事实直接给用户看，不依赖模型转述。 */
-/**
- * Skill 路由结果的提示卡。
- *
- * 失败（未加载）用警告样式；成功（正文已注入）必须用中性样式，
- * 否则「已加载 Skill」会带着琥珀底色和警告三角，看起来像出了问题。
- */
+/** 系统提示条：宿主侧拦下的操作（Skill 未加载、压缩被跳过等）直接给用户看，不依赖模型转述。 */
 function AgentNotice({ message, fallback }: { message: SDKSystemMessage; fallback: string }): React.ReactElement {
   const text = typeof message.message === 'string' && message.message.length > 0 ? message.message : fallback
-  const isSkillFailure = text.startsWith('Skill 未加载')
   return (
-    <TimelineNoticeCard tone={isSkillFailure ? 'warning' : 'neutral'}>
+    <TimelineNoticeCard tone="warning">
       <div className="flex items-start gap-2.5">
-        {isSkillFailure
-          ? <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-          : <Zap className="mt-0.5 size-4 shrink-0 text-primary/70" />}
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
         <p className="min-w-0 break-words">{text}</p>
       </div>
     </TimelineNoticeCard>
   )
+}
+
+/**
+ * v0.16.26 曾把「已加载 Skill」写成同一个 `skill_routing_notice` 的成功提示。
+ * 该提示已移除；历史 JSONL 里仍然落盘过这类消息，不能再按警告样式补渲染。
+ */
+function isLegacySkillAppliedNotice(message: SDKSystemMessage): boolean {
+  return typeof message.message === 'string' && message.message.startsWith('已加载 Skill')
 }
 
 /** 来源事实展示复用中性 token，不使用警告样式或推断可访问的跳转链接。 */
@@ -454,6 +453,12 @@ export type MessageGroup =
 export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string): MessageGroup[] {
   const groups: MessageGroup[] = []
   let currentTurn: AssistantTurn | null = null
+  // 当前用户轮次内最近的 assistant-turn（跨 compact_boundary 保留）。
+  // 自动压缩会把同一轮切成「压缩前 / 压缩后」两段：压缩后没有新输出时，整轮 result
+  // 落在 boundary 之后、currentTurn 已为 null。耗时属于整轮（含压缩前 + 压缩），必须
+  // 回挂到这最后一个 assistant-turn 上，而不是丢弃；压缩后仍有新输出时 result 正常
+  // 归入最新 turn，自然就是「挂在最后」。
+  const runState: { lastAssistantTurn: AssistantTurn | null } = { lastAssistantTurn: null }
   // 收到后台任务完成通知（task_notification）后，若没有用户输入就直接出现新的 assistant 输出，
   // 说明这是自动唤醒的新一轮，应另起独立消息块，而不是续接上一轮。
   // 注意：不能用 result 做信号——正常对话每轮也以 result 结束，会误伤普通回复。
@@ -462,6 +467,7 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
   const flushTurn = (): void => {
     if (currentTurn && currentTurn.assistantMessages.length > 0) {
       groups.push(currentTurn)
+      runState.lastAssistantTurn = currentTurn
     }
     currentTurn = null
   }
@@ -473,11 +479,14 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
         // Goal 迭代控制消息 → 独立分隔条，作为 turn 边界但不进入 turn 消息
         flushTurn()
         groups.push({ type: 'user', message: userMsg })
+        runState.lastAssistantTurn = null
         pendingWakeBoundary = false
       } else if (isUserInputMessage(userMsg)) {
-        // 真正的用户输入 → 结束当前 turn，开始新段落
+        // 真正的用户输入 → 结束当前 turn，开始新段落。
+        // 新 run 不得继承上一轮的 turn，否则新 run 的 result 会回挂到旧回复上。
         flushTurn()
         groups.push({ type: 'user', message: userMsg })
+        runState.lastAssistantTurn = null
         pendingWakeBoundary = false
       } else {
         // tool_result 消息 → 归入当前 turn
@@ -522,6 +531,8 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
           currentTurn.turnMessages.push(msg)
         } else {
           pendingWakeBoundary = true
+          // 后台唤醒是新一轮边界：不让随后的 result 回挂到唤醒前的旧 turn。
+          runState.lastAssistantTurn = null
         }
       } else if (currentTurn) {
         currentTurn.turnMessages.push(msg)
@@ -529,11 +540,18 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
     } else {
       // result, tool_progress 等 → 归入当前 turn
       // prompt_suggestion 不属于对话转录，不入 turn，避免被当作文本附加到助手消息末尾
-      if ((msg as { type: string }).type === 'prompt_suggestion') {
+      const messageType = (msg as { type: string }).type
+      if (messageType === 'prompt_suggestion') {
         continue
       }
       if (currentTurn) {
         currentTurn.turnMessages.push(msg)
+      } else if (messageType === 'result') {
+        // 自动压缩后本轮没有继续产出：整轮 result 落在 compact_boundary 之后，
+        // 当前没有 turn 可接收。回挂到该轮最后一个 assistant-turn，让耗时（已含
+        // 压缩前 + 压缩）仍显示在最后一条回复上，而不是被静默丢弃。
+        const fallbackTurn = runState.lastAssistantTurn
+        if (fallbackTurn) fallbackTurn.turnMessages.push(msg)
       }
     }
   }
@@ -1257,7 +1275,7 @@ export function SDKMessageRenderer({
       return null
     }
     if (subtype === 'skill_routing_notice') {
-      return <AgentNotice message={sysMsg} fallback="Skill 状态" />
+      return isLegacySkillAppliedNotice(sysMsg) ? null : <AgentNotice message={sysMsg} fallback="Skill 未加载" />
     }
     if (subtype === 'compact_skipped') {
       return <AgentNotice message={sysMsg} fallback="上下文压缩已跳过" />
@@ -1551,6 +1569,7 @@ function UserInputMessage({ message, basePath, basePaths, onEdit, isEditing = fa
   const imageFiles = attachedFiles.filter((f) => isImageFile(f.filename))
   const nonImageFiles = attachedFiles.filter((f) => !isImageFile(f.filename))
   const provenanceAuthor = projectMessageProvenance(message._provenance)?.author
+    ?? ((message as SDKMessage & { _optimisticUserMessage?: boolean })._optimisticUserMessage ? { type: 'user' as const } : undefined)
   const authorLabel = !provenanceAuthor
     ? '未知作者'
     : provenanceAuthor.type === 'user'
@@ -1970,7 +1989,7 @@ export function getGroupPreview(group: MessageGroup): string {
     if (group.message.subtype === 'compacting') return '正在压缩上下文...'
     if (group.message.subtype === 'permission_denied') return '自动审批已拒绝操作'
     if (group.message.subtype === 'interruption_record') return group.message.message ?? '任务中断'
-    if (group.message.subtype === 'skill_routing_notice') return group.message.message ?? 'Skill 状态'
+    if (group.message.subtype === 'skill_routing_notice') return isLegacySkillAppliedNotice(group.message) ? '' : group.message.message ?? 'Skill 未加载'
     if (group.message.subtype === 'compact_skipped') return group.message.message ?? '上下文压缩已跳过'
     return ''
   }
@@ -2036,7 +2055,7 @@ function MessageGroupRendererView({ sessionId, group, allMessages, historicalTas
     if (subtype === 'permission_denied') return <div data-message-id={groupId} data-message-nav-key={navKey}><PermissionDeniedNotice message={group.message} /></div>
     // 中断记录保留在消息数据中供恢复/续接使用，但不在会话正文显示。
     if (subtype === 'interruption_record') return null
-    if (subtype === 'skill_routing_notice') return <div data-message-id={groupId} data-message-nav-key={navKey}><AgentNotice message={group.message} fallback="Skill 状态" /></div>
+    if (subtype === 'skill_routing_notice') return isLegacySkillAppliedNotice(group.message) ? null : <div data-message-id={groupId} data-message-nav-key={navKey}><AgentNotice message={group.message} fallback="Skill 未加载" /></div>
     if (subtype === 'compact_skipped') return <div data-message-id={groupId} data-message-nav-key={navKey}><AgentNotice message={group.message} fallback="上下文压缩已跳过" /></div>
     return null
   }

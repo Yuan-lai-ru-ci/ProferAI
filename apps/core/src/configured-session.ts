@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isAgentRuntime, isProferPermissionMode, normalizeAgentPresetReference, type AgentSessionMeta } from '@profer/shared'
+import { DEFAULT_AGENT_RUNTIME, isAgentRuntime, isProferPermissionMode, normalizeAgentPresetReference, type AgentSessionMeta } from '@profer/shared'
 import type { CoreAgentRuntime } from './runtime'
 import type { CoreConfig } from './config'
 import { resolveCorePreset } from './preset-resources'
@@ -25,7 +25,7 @@ export function configuredSessionInput(config: CoreConfig, runtime: Pick<CoreAge
   if (input.permissionMode !== undefined && !isProferPermissionMode(input.permissionMode)) throw new Error('无效的权限模式')
   const path = join(config.configDir, 'settings.json')
   const settings: { agentRuntime?: unknown; agentChannelId?: unknown; agentModelId?: unknown } = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
-  const engine = input.runtime ?? (isAgentRuntime(settings.agentRuntime) ? settings.agentRuntime : 'claude')
+  const engine = input.runtime ?? (isAgentRuntime(settings.agentRuntime) ? settings.agentRuntime : DEFAULT_AGENT_RUNTIME)
   const workspace = input.workspaceId ? runtime.workspaces.list().find(item => item.id === input.workspaceId) : undefined
   if (input.workspaceId && !workspace) throw new Error('Core工作区不存在')
   const available = runtime.listChannelConfigs().filter(channel => channel.enabled !== false && (!channel.agentRuntimes || channel.agentRuntimes.includes(engine)))

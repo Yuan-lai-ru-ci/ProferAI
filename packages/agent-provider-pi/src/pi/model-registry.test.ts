@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { CreateModelRuntimeOptions } from '@earendil-works/pi-coding-agent'
+import { stream as streamCompletions } from '@earendil-works/pi-ai/api/openai-completions'
+import type { Model } from '@earendil-works/pi-ai'
+import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { XaiOAuthCredentials } from '@profer/shared'
 import { buildModel, buildXaiOAuthModel, buildCodexModel, getCodexCatalogModels, resolvePiReasoningCapability } from './model-registry'
 
@@ -21,6 +24,47 @@ function fakeSdk() {
 const credentials: XaiOAuthCredentials = { access: 'fixture-access', refresh: 'fixture-refresh', expires: 100 }
 
 describe('Pi model registry host boundaries', () => {
+  test('Given 全局 long When 注册 DeepSeek/未知 Chat 网关 Then 离线请求不携带 OpenAI 专属缓存参数', async () => {
+    for (const [provider, baseUrl] of [
+      ['deepseek', 'https://api.deepseek.com/v1'],
+      ['custom', 'https://gateway.invalid/v1'],
+      ['openai', 'https://gateway.invalid/v1'],
+    ] as const) {
+      const fixture = fakeSdk()
+      await buildModel(fixture.sdk, { sessionId: 'isolated-worker', apiKey: 'fixture-key', provider, model: 'deepseek-chat', baseUrl })
+      const registered = fixture.models[0]! as unknown as Model<'openai-completions'>
+      expect(registered.compat).toMatchObject({ supportsLongCacheRetention: false })
+      const requests: Record<string, unknown>[] = []
+      const message = await streamCompletions({ ...registered, provider: `profer-${provider}-isolated-worker` }, normalizeContext({
+        messages: [{ role: 'user', content: 'fixture', timestamp: 1 }],
+      }), {
+        apiKey: 'fixture-key', sessionId: 'isolated-worker', env: { PI_CACHE_RETENTION: 'long' },
+        fetch: (async (_url: unknown, init?: RequestInit) => {
+          requests.push(JSON.parse(String(init?.body)))
+          return new Response('data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })
+        }) as typeof fetch,
+      }).result()
+      expect(message.stopReason).toBe('stop')
+      expect(requests).toHaveLength(1)
+      expect(requests[0]).not.toHaveProperty('prompt_cache_key')
+      expect(requests[0]).not.toHaveProperty('prompt_cache_retention')
+    }
+  })
+
+  test('Given 已支持协议或精确官方端点 When 注册 Then 不禁用既有缓存能力', async () => {
+    for (const [provider, baseUrl, model] of [
+      ['openai', 'https://api.openai.com/v1', 'gpt-4o'],
+      ['custom', 'https://openrouter.ai/api/v1', 'anthropic/claude-sonnet-4'],
+      ['anthropic', 'https://api.anthropic.com', 'claude-sonnet-4'],
+      ['openai-responses', 'https://gateway.invalid/v1', 'gpt-5.1'],
+    ] as const) {
+      const fixture = fakeSdk()
+      await buildModel(fixture.sdk, { sessionId: 'isolated-worker', apiKey: 'fixture-key', provider, model, baseUrl })
+      const compat = fixture.models[0]?.compat as { supportsLongCacheRetention?: boolean } | undefined
+      expect(compat?.supportsLongCacheRetention).not.toBe(false)
+    }
+  })
+
   test('Given an official policy injected by a host When registering a model Then policy controls the verified window', async () => {
     const official = fakeSdk()
     const input = { sessionId: 'fixture', apiKey: 'fixture-key', provider: 'openai' as const, channelId: 'channel', model: 'gpt-5.6-sol', baseUrl: 'https://fixture.invalid/v1' }

@@ -43,7 +43,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/t
 import { groupIntoTurns, MessageGroupRenderer, getGroupId, getGroupNavKey, getGroupPreview, parseAttachedFiles as sdkParseAttachedFiles, isImageFile as sdkIsImageFile, CompactingIndicator, buildHistoricalTaskSubjects, type MessageGroup, type EditResendRequest } from './SDKMessageRenderer'
 import { extractUserText } from '@profer/session-core'
 import { shouldRegenerateFromRetry } from '@/lib/agent-regenerate-anchor'
-import { buildLiveGroupSet, findStreamingTurnGroup, hasAssistantTurnInCurrentTurn } from './live-group-set'
+import { buildLiveGroupSet, findStreamingTurnGroup, hasAssistantOutputAfterLastUser, hasAssistantTurnInCurrentTurn } from './live-group-set'
 import { mergeMessagesByUuid } from '@/lib/agent-message-merge'
 import { applyResolvedBlobMessages } from '@/lib/resolved-blob-messages'
 import { orderTranscriptMessages } from '@/lib/agent-transcript-order'
@@ -1057,9 +1057,13 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
               // 会话活跃态（streaming 或 backgroundWaiting）时禁用压缩/重试操作，
               // 防止用户误操作触发与正在运行的 agent session 冲突
               const isSessionActive = streaming || (streamState?.backgroundWaiting ?? false) || runningDelegationCount > 0
-              // 仅在最后一个 assistant-turn 上显示"已被用户中断" badge
+              // 仅在最后一个 assistant-turn 上显示"已被用户中断" badge。
+              // 被中断的一轮可能没有任何 assistant 输出（刚发消息就停止），此时磁盘上
+              // 不存在新的 assistant-turn，findLast 会错误指向上一个有内容的轮次——
+              // 先确认最后一条用户消息之后确实有助手输出，再比对是否为最后一轮。
               const isLastAssistantTurn = !streaming && stoppedByUser
                 && group.type === 'assistant-turn'
+                && hasAssistantOutputAfterLastUser(allGroups)
                 && getGroupId(group) === getGroupId(allGroups.findLast((g) => g.type === 'assistant-turn') ?? group)
               // 「确认已读」按钮的「最新一轮」判据：同一 findLast 口径，但不依赖中断状态
               // （中断态不显示分叉/回退属预期，但未读仍应可确认）。

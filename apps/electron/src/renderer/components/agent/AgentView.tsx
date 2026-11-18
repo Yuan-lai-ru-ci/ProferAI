@@ -30,7 +30,7 @@ import { agentGoalAtomFamily, getGoalActions, GOAL_STATUS_LABELS, goalEditorAtom
 import { ContextUsageBadge } from './ContextUsageBadge'
 import { resolvePlanQuotaChannelId } from './context-usage-badge-channel'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
-import { isAgentModelSelectionValid, nextAgentChannelIdsAfterModelSelect, resolveAgentRuntimeSelection } from '@/lib/agent-channel-selection'
+import { isAgentModelSelectionValid, nextAgentChannelIdsAfterModelSelect, resolveAgentBindingState, resolveAgentModelSelection, resolveAgentRuntimeSelection, type AgentBindingState } from '@/lib/agent-channel-selection'
 import { dropRewoundSessionFileChanges } from '@/lib/session-file-changes'
 import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
@@ -132,7 +132,7 @@ import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { activeViewAtom } from '@/atoms/active-view'
 import { activeTabIdAtom } from '@/atoms/tab-atoms'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
-import { channelsAtom, channelsLoadedAtom, thinkingExpandedAtom } from '@/atoms/chat-atoms'
+import { channelsAtom, channelsLoadedAtom, requestModelSelectorOpen, thinkingExpandedAtom } from '@/atoms/chat-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
@@ -153,7 +153,7 @@ const AGENT_REFRESH_HEADROOM = 100
 const AGENT_CACHE_WINDOW = DESKTOP_AGENT_PAGE_SIZE + AGENT_REFRESH_HEADROOM
 /** 无待发送引用时复用的稳定空数组，避免每次渲染产生新引用 */
 
-import { canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, MAX_ATTACHMENT_SIZE, isAgentPresetToolGroupDisabled, parseGoalCommand } from '@profer/shared'
+import { canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, MAX_ATTACHMENT_SIZE, isAgentPresetToolGroupDisabled, parseGoalCommand, DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import { fileToBase64, formatFileNames, getFileBaseName, getFileParentPath, isMissingAttachmentData } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
 import { AgentSendButton } from './AgentSendButton'
@@ -214,6 +214,8 @@ function createUserSDKMessage(text: string, uuid?: string, createdAt = Date.now(
     uuid,
     message: { content: [{ type: 'text', text }] },
     parent_tool_use_id: null,
+    // 临时消息先于主进程来源事实到达；仅用于即时作者展示，不冒充完整 provenance。
+    _optimisticUserMessage: true,
     _createdAt: createdAt,
   } as unknown as SDKMessage
 }
@@ -566,9 +568,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const [runtimeSwitchInFlight, setRuntimeSwitchInFlight] = React.useState(false)
   // state 渲染前的连续点击也必须串行化，不能仅依赖 disabled 的下一帧更新。
   const runtimeSwitchInFlightRef = React.useRef(false)
-  // 已加载会话以 metadata 为唯一真相来源；历史缺省 runtime 仍按 Claude 回退。
+  // 已加载会话以 metadata 为唯一真相来源；历史缺省 runtime 按产品默认内核回退。
   const sessionAgentRuntime: AgentRuntime = sessionMeta
-    ? sessionMeta.agentRuntime ?? 'claude'
+    ? sessionMeta.agentRuntime ?? DEFAULT_AGENT_RUNTIME
     : agentRuntime
   // 当前 Pi 模型的推理档位能力（异步桥接，供推理强度控件动态展示）。
   const [piReasoningCapability, setPiReasoningCapability] = React.useState<import('@profer/shared').ReasoningCapability | undefined>(undefined)
@@ -791,6 +793,29 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       ? isAgentModelSelectionValid(globalChannels, sessionAgentRuntime, effectiveAgentChannelIds, { channelId: agentChannelId, modelId: agentModelId })
       : false,
     [globalChannels, effectiveAgentChannelIds, sessionAgentRuntime, agentChannelId, agentModelId],
+  )
+  // 渠道目录未加载时不做绑定诊断，避免把「还没读到」误报成「渠道已删除」。
+  const bindingState = React.useMemo<AgentBindingState | null>(
+    () => channelsLoaded
+      ? resolveAgentBindingState(globalChannels, sessionAgentRuntime, agentChannelIds, {
+          channelId: agentChannelId,
+          modelId: agentModelId,
+        })
+      : null,
+    [channelsLoaded, globalChannels, agentChannelIds, sessionAgentRuntime, agentChannelId, agentModelId],
+  )
+  // 与工具栏模型选择器的过滤口径保持一致：判定「选择器里是否有可选模型」不能比它更宽松。
+  const repairCandidateChannels = React.useMemo(
+    () => sessionAgentRuntime === 'pi' || agentChannelIds.length === 0
+      ? globalChannels
+      : globalChannels.filter((channel) => agentChannelIds.includes(channel.id)),
+    [globalChannels, sessionAgentRuntime, agentChannelIds],
+  )
+  // 选择器里至少得有一个本内核可选的模型，否则引导用户去设置页。
+  const canRepairBinding = React.useMemo(
+    () => bindingState !== null && bindingState !== 'ok' && bindingState !== 'unbound'
+      && resolveAgentModelSelection(repairCandidateChannels, sessionAgentRuntime, agentChannelIds, null) !== null,
+    [bindingState, repairCandidateChannels, sessionAgentRuntime, agentChannelIds],
   )
   // 目录变化只影响可用性；历史空绑定也由用户明确选择模型后持久化。
   // 默认模型在启动 initializer 中解析，不通过历史会话反向改写默认或 metadata。
@@ -3281,17 +3306,25 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
               ) : null}
 
             {(isPlanMode || isPermissionPlanMode) && !isDragOver && <PlanModeDashedBorder />}
-            {/* 无 Agent 渠道或无可用模型提示 */}
-            {(!agentChannelId || !hasAvailableModel) && (
+            {/* 无 Agent 渠道 / 会话绑定失效 / 无可用模型提示 */}
+            {bindingState !== null && bindingState !== 'ok' && (
               <div className="flex items-center gap-2 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">
                 <Settings size={14} />
-                <span>{!agentChannelId ? '请在设置中选择 Agent 渠道' : '暂无可用模型，请在设置中启用 Agent 渠道并配置模型'}</span>
+                <span>
+                  {bindingState === 'unbound' && '请在设置中选择 Agent 渠道'}
+                  {bindingState === 'channel_missing' && '该会话绑定的渠道已被删除'}
+                  {bindingState === 'channel_disabled' && '该会话绑定的渠道已停用'}
+                  {bindingState === 'model_unavailable' && '该会话绑定的模型不可用'}
+                </span>
                 <button
                   type="button"
                   className="text-xs underline underline-offset-2 hover:text-foreground transition-colors"
-                  onClick={() => setSettingsOpen(true)}
+                  onClick={() => {
+                    if (canRepairBinding) requestModelSelectorOpen(sessionId)
+                    else setSettingsOpen(true)
+                  }}
                 >
-                  前往设置
+                  {canRepairBinding ? '重新选择模型' : '前往设置'}
                 </button>
               </div>
             )}
@@ -3384,9 +3417,13 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
                       ? sendWithCmdEnter
                         ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
                         : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
-                      : !agentChannelId
-                        ? '请先在设置中选择 Agent 供应商'
-                        : '暂无可用模型，请先在设置中启用渠道'
+                      : bindingState === null
+                        ? '正在加载渠道...'
+                        : bindingState === 'unbound'
+                          ? '请先在设置中选择 Agent 供应商'
+                          : bindingState === 'channel_missing' || bindingState === 'channel_disabled'
+                            ? '该会话绑定的渠道已失效，请重新选择模型'
+                            : '该会话绑定的模型不可用，请重新选择模型'
               }
               disabled={!agentChannelId || !hasAvailableModel}
               autoFocusTrigger={sessionId}

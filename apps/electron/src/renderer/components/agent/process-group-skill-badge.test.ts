@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { SDKContentBlock } from '@profer/shared'
-import { buildProcessGroupToolBadges } from './ProcessBlockGroup'
-import { extractSkillNameFromRead } from './tool-utils'
+import { buildProcessGroupToolBadges, isSkillBadge, selectVisibleToolBadges } from './ProcessBlockGroup'
+import { extractSkillNameFromRead, extractSkillNameFromTool } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 
 const tool = (
@@ -48,6 +48,68 @@ describe('Pi Runtime 的 Skill 识别', () => {
 
   test('Given 普通文件读取 When 生成短语 Then 维持原有行为', () => {
     expect(getToolPhrase('Read', { file_path: '/src/a.ts' }).label).toBe('读取 a.ts')
+  })
+})
+
+describe('Claude Runtime 的 Skill 工具', () => {
+  test('Given Claude 调用 Skill 工具 When 识别 Then 取出技能名', () => {
+    expect(extractSkillNameFromTool('Skill', { skill: 'pdf' })).toBe('pdf')
+    expect(extractSkillNameFromTool('skill', { name: 'code-honor' })).toBe('code-honor')
+  })
+
+  test('Given 技能名带路径或空白 When 识别 Then 拒绝，避免把路径当技能名展示', () => {
+    expect(extractSkillNameFromTool('Skill', { skill: '../escape/skill' })).toBeNull()
+    expect(extractSkillNameFromTool('Skill', { skill: '   ' })).toBeNull()
+    expect(extractSkillNameFromTool('Skill', {})).toBeNull()
+  })
+
+  test('Given Skill 工具调用 When 构建徽标 Then 与 Pi 同为闪电徽标并带技能名', () => {
+    const badges = buildProcessGroupToolBadges([tool('t1', 'Skill', { skill: 'pdf' }), tool('t2', 'Bash', { command: 'ls' })])
+    expect(badges.map((badge) => badge.key)).toEqual(['Skill:pdf', 'Bash'])
+    expect(badges[0]?.label).toBe('使用技能：pdf')
+    expect(isSkillBadge(badges[0]!)).toBe(true)
+  })
+
+  test('Given 拿不到技能名的 Skill 调用 When 构建徽标 Then 仍是闪电徽标而不是扳手', () => {
+    const badges = buildProcessGroupToolBadges([tool('t1', 'Skill', {})])
+    expect(badges.map((badge) => badge.key)).toEqual(['Skill'])
+    expect(badges[0]?.label).toBe('使用技能')
+    expect(isSkillBadge(badges[0]!)).toBe(true)
+  })
+})
+
+describe('图标位不足时 Skill 徽标优先保留', () => {
+  test('Given 5 个工具且 Skill 最后出现 When 截断 Then Skill 仍在可见位且顺序不变', () => {
+    const badges = buildProcessGroupToolBadges([
+      tool('t1', 'Bash', { command: 'ls' }),
+      tool('t2', 'Grep'),
+      tool('t3', 'Glob'),
+      tool('t4', 'WebFetch'),
+      tool('t5', 'Read', { file_path: '/w/skills/profer-coach/SKILL.md' }),
+    ])
+    const { visible, hidden } = selectVisibleToolBadges(badges)
+    expect(visible.map((badge) => badge.key)).toEqual(['Bash', 'Grep', 'Glob', 'Skill:profer-coach'])
+    expect(hidden).toBe(1)
+  })
+
+  test('Given 徽标数不超上限 When 选择 Then 原样返回且无隐藏计数', () => {
+    const badges = buildProcessGroupToolBadges([tool('t1', 'Bash', { command: 'ls' }), tool('t2', 'Grep')])
+    const { visible, hidden } = selectVisibleToolBadges(badges)
+    expect(visible.map((badge) => badge.key)).toEqual(['Bash', 'Grep'])
+    expect(hidden).toBe(0)
+  })
+
+  test('Given 多个 Skill 与很多工具 When 截断 Then 只保留上限内的 Skill 徽标', () => {
+    const badges = buildProcessGroupToolBadges([
+      tool('t1', 'Bash', { command: 'ls' }),
+      tool('t2', 'Grep'),
+      tool('t3', 'Glob'),
+      tool('t4', 'Read', { file_path: '/w/skills/a/SKILL.md' }),
+      tool('t5', 'Read', { file_path: '/w/skills/b/SKILL.md' }),
+    ])
+    const { visible, hidden } = selectVisibleToolBadges(badges)
+    expect(visible.map((badge) => badge.key)).toEqual(['Bash', 'Grep', 'Skill:a', 'Skill:b'])
+    expect(hidden).toBe(1)
   })
 })
 

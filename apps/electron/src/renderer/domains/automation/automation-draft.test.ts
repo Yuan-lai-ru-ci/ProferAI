@@ -16,13 +16,13 @@ test('旧 Atom 入口转发同一组草稿函数，默认对象各自独立', ()
   const second = createEmptyDraft()
   first.timeOfDay.push('12:00')
   expect(second.timeOfDay).toEqual(['09:00'])
-  expect(second).toMatchObject({ agentRuntime: 'claude', permissionMode: 'bypassPermissions', sessionMode: 'daily' })
+  expect(second).toMatchObject({ agentRuntime: 'pi', permissionMode: 'bypassPermissions', sessionMode: 'daily' })
 })
 
 test('旧任务缺省配置按原表单规则映射，显式空数组保留', () => {
   expect(automationToDraft(task)).toMatchObject({
     timeOfDay: ['09:00'], dayOfWeek: [1], dayOfMonth: [1],
-    agentRuntime: 'claude', permissionMode: 'bypassPermissions', sessionMode: 'daily',
+    agentRuntime: 'pi', permissionMode: 'bypassPermissions', sessionMode: 'daily',
   })
   expect(automationToDraft({ ...task, timeOfDay: [], dayOfWeek: [], dayOfMonth: [] })).toMatchObject({
     timeOfDay: [], dayOfWeek: [], dayOfMonth: [],
@@ -62,7 +62,7 @@ test('每个已保存配置字段变化都使 signature 失效，防止漏保存
   const patches: Array<Partial<typeof draft>> = [
     { id: 'task' }, { name: '新名称' }, { prompt: '新指令' }, { scheduleType: 'weekly' },
     { intervalMinutes: 30 }, { timeOfDay: ['18:00'] }, { dayOfWeek: [0] }, { dayOfMonth: [31] },
-    { channelId: 'channel' }, { modelId: 'model' }, { agentRuntime: 'pi' }, { workspaceId: 'workspace' },
+    { channelId: 'channel' }, { modelId: 'model' }, { agentRuntime: 'claude' }, { workspaceId: 'workspace' },
     { presetId: 'preset' }, { sessionMode: 'reuse' }, { boundSessionId: 'bound' }, { active: false },
     { notificationTargets: [{ type: 'feishu', enabled: true, trigger: 'always', botId: 'bot', chatId: 'chat' }] },
   ]

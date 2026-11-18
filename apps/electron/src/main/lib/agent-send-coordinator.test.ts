@@ -30,7 +30,8 @@ describe('SEND_MESSAGE 协调器', () => {
   })
 
   test('Given 渠道禁用当前内核 When 协调发送 Then 不启动 Agent 或镜像', async () => {
-    const d = deps({ getChannel: () => ({ ...channel, agentRuntimes: ['pi'] }) })
+    // 缺省 runtime 按产品默认内核（Pi）归一，渠道需排除 pi 才能触发拒绝。
+    const d = deps({ getChannel: () => ({ ...channel, agentRuntimes: ['claude'] }) })
     await expect(coordinateAgentSend(input, d.value)).rejects.toThrow('AGENT_CHANNEL_RUNTIME_DISABLED')
     expect(d.calls).toEqual([])
   })

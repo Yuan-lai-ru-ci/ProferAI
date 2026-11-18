@@ -177,6 +177,19 @@ describe('设置服务命名收敛兼容（Tablet* → Pocket*）', () => {
   })
 })
 
+describe('默认主题模式', () => {
+  test('Given 未落盘任何设置 When 读取 Then 默认浅色（新用户首启为 light）', () => {
+    expect(getSettings().themeMode).toBe('light')
+  })
+
+  test('Given 落盘为深色 When 读取 Then 保持深色（老用户设置不被默认值覆盖）', () => {
+    const configDir = process.env.PROFER_CONFIG_DIR!
+    writeSettingsFile(configDir, { themeMode: 'dark' })
+
+    expect(getSettings().themeMode).toBe('dark')
+  })
+})
+
 /**
  * 侧栏积分条显隐设置：默认显示，关闭后持久化并在重读时保持关闭。
  */

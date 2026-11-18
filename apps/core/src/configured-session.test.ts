@@ -47,6 +47,12 @@ test('Core配置创建原子解析runtime/渠道模型/岗位，拒绝非法选�
     const explicit = await post('/sessions/configured', { runtime: 'claude', channelId: 'claude', modelId: 'claude-model' })
     expect(explicit.status).toBe(201)
     expect(await explicit.json()).toMatchObject({ agentRuntime: 'claude', channelId: 'claude', modelId: 'claude-model' })
+    // 没有保存运行时偏好时也遵循共享默认 Pi；显式 Claude 仍由上面的用例覆盖。
+    await writeFile(join(root, 'settings.json'), '{}')
+    const defaultCreated = await post('/sessions/configured', {})
+    expect(defaultCreated.status).toBe(201)
+    expect(await defaultCreated.json()).toMatchObject({ agentRuntime: 'pi', channelId: 'pi', modelId: 'pi-model' })
+    await writeFile(join(root, 'settings.json'), settings)
     const drafts = await Promise.all(Array.from({ length: 4 }, () => post('/project-draft-sessions/configured', { workspaceId: workspace.id })))
     const values = await Promise.all(drafts.map(response => response.json())) as Array<{ id: string }>
     expect(new Set(values.map(value => value.id)).size).toBe(1)

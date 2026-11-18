@@ -80,7 +80,7 @@ test('旧 runtime 只在内存归一化为 Claude，合法 Pi 保留且不改写
     meta('pi', { agentRuntime: 'pi' }),
   ])
   const before = readFileSync(path, 'utf8')
-  expect(store.list(true).map((s) => s.agentRuntime)).toEqual(['claude', 'claude', 'pi'])
+  expect(store.list(true).map((s) => s.agentRuntime)).toEqual(['pi', 'pi', 'pi'])
   expect(readFileSync(path, 'utf8')).toBe(before)
 })
 

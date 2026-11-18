@@ -812,9 +812,20 @@ describe('Claude provider：错误映射与平台 helper', () => {
     expect(error.canRetry).toBe(true)
   })
 
-  test('Given 独立上游 billing 页面 402 When 映射错误 Then 识别为不可自动重试的额度不足', () => {
+  test('Given 独立上游 billing 页面 402 When 未注入额度检测器 Then 按普通上游错误处理（开源版不识别额度语义）', () => {
     const message = 'API Error: 402 Insufficient credit. Add funds at zyloo.io/dashboard/billing.'
     const error = mapSDKErrorToTypedError('unknown', message, message)
+    // 402 不属于 429/>=500 分支，额度识别缺失时只能落到兜底。
+    // 这是开源版的有意边界：开源包里不内置「额度不足，请充值」文案。
+    expect(error.code).toBe('unknown_error')
+    expect(error.code).not.toBe('insufficient_credits')
+  })
+
+  test('Given 独立上游 billing 页面 402 When 宿主注入额度检测器 Then 识别为不可自动重试的额度不足', () => {
+    const message = 'API Error: 402 Insufficient credit. Add funds at zyloo.io/dashboard/billing.'
+    const detectCredits = (text: unknown, status?: number) =>
+      status === 402 || /insufficient credit/i.test(String(text)) ? { message: '平台额度不足，请联系管理员充值' } : null
+    const error = mapSDKErrorToTypedError('unknown', message, message, detectCredits)
     expect(error.code).toBe('insufficient_credits')
     expect(error.title).toBe('额度不足')
     expect(error.canRetry).toBe(false)

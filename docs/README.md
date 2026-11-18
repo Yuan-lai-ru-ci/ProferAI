@@ -1,7 +1,7 @@
 # Profer 文档索引
 
 > 本目录收录 Profer 桌面端的设计、计划、调研与操作指南。
-> 最近核对：2026-11-14（补齐现存文档入口；状态只描述文档生命周期，具体实现仍以源码、测试和发布记录为准）。
+> 最近核对：2026-11-15（新增任务图工作事实视图设计入口；此前目录核对为 2026-11-14；状态只描述文档生命周期，具体实现仍以源码、测试和发布记录为准）。
 >
 > **约定**
 > - 目录分类：`guides/`（随代码维护的操作/契约文档）、`design/`（设计）、`plans/`（实施计划）、`research/`（调研）、`archive/`（生命周期已终结）。
@@ -51,6 +51,7 @@
 | [`plans/2026-11-07-agent-rewind-d4.md`](./plans/2026-11-07-agent-rewind-d4.md) · [`simple-git`](./plans/2026-11-08-rewind-simple-git.md) | Rewind 方案演进记录；simple-git 方向由 Shadow Git 方案取代，不作为现行实施入口 |
 | [`plans/2026-11-08-shadow-git-design.md`](./plans/2026-11-08-shadow-git-design.md) · [`changes`](./plans/2026-11-09-shadow-git-changes.md) · [`handoff`](./plans/2026-11-09-shadow-git-handoff.md) | Shadow Git 设计、审查清单、历史交接；未完成项必须回到当前 todo/源码核验 |
 | [`plans/2026-11-09-runtime-default-chain-plan.md`](./plans/2026-11-09-runtime-default-chain-plan.md) · [`handoff`](./plans/2026-11-09-runtime-default-chain-handoff.md) | 新 Runtime 默认链方案与交接快照；以当前实现及后续提交为准 |
+| [`plans/2026-11-15-task-graph-work-facts-design.md`](./plans/2026-11-15-task-graph-work-facts-design.md) | 任务图重审：执行事实追踪与宿主无关方向已确认；详细模型、迁移与验收建议待评审，未实施 |
 
 ## 调研（`research/`）
 

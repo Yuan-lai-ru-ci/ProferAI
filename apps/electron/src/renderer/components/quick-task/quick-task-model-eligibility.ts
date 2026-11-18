@@ -1,4 +1,5 @@
 import {
+  DEFAULT_AGENT_RUNTIME,
   isChannelEnabledForChat,
   isChannelEnabledForRuntime,
 } from '@profer/shared'
@@ -37,7 +38,7 @@ export function resolveQuickTaskModelInfo(
   const channel = channels.find((candidate) => candidate.id === selection.channelId)
   if (!channel) return null
   const channelEnabled = mode === 'agent'
-    ? isChannelEnabledForRuntime(channel, settings.agentRuntime ?? 'claude')
+    ? isChannelEnabledForRuntime(channel, settings.agentRuntime ?? DEFAULT_AGENT_RUNTIME)
     : isChannelEnabledForChat(channel)
   if (!channelEnabled) return null
   if (!channel.models.some((model) => model.id === selection.modelId && model.enabled)) return null

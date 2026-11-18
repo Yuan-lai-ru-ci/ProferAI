@@ -141,6 +141,26 @@ export function extractSkillNameFromRead(
   return match?.[1] ?? null
 }
 
+/** 技能名不允许带路径分隔符或空白，避免把一段路径误当成技能名展示。 */
+const BARE_SKILL_NAME = /^[^\s\\/]+$/
+
+/**
+ * 本轮工具调用是否实际触发了一个 Skill。
+ *
+ * - Pi：没有 Skill 工具，Skill 靠 `Read .../skills/<slug>/SKILL.md` 生效；
+ * - Claude：SDK 的 `Skill` 工具，入参 `{ skill: '<name>' }`。
+ * 两端归一到同一个技能名，折叠摘要里就能用同一枚闪电表示。
+ */
+export function extractSkillNameFromTool(toolName: string, input: Record<string, unknown>): string | null {
+  const canonical = canonicalAgentToolName(toolName)
+  if (canonical === 'Read') return extractSkillNameFromRead(toolName, input)
+  if (canonical.toLowerCase() !== 'skill') return null
+  const raw = input.skill ?? input.name ?? input.skill_name
+  if (typeof raw !== 'string') return null
+  const name = raw.trim()
+  return name && BARE_SKILL_NAME.test(name) ? name : null
+}
+
 /** 内置工具显示名称映射 */
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
   Edit: '编辑文件',

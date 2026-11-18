@@ -22,9 +22,8 @@ import Underline from '@tiptap/extension-underline'
 import Link from '@tiptap/extension-link'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import Mention from '@tiptap/extension-mention'
-import { QuoteRef, QUOTE_REF_NODE_NAME, type QuoteRefPayload } from './quote-ref-node'
+import { QuoteRef, QUOTE_REF_NODE_NAME, createQuoteRefInsertTransaction, type QuoteRefPayload } from './quote-ref-node'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
-import { getQuotedSelectionKey } from '@/lib/quoted-selection'
 import { renderSessionMention, handleSessionMentionMouseDown, handleSessionMentionClick, handleSessionMentionKeyDown } from './session-mention'
 import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
@@ -364,6 +363,7 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
     extensions: [
       StarterKit.configure({
         codeBlock: false, // 使用 CodeBlockLowlight 替代
+        dropcursor: false, // 输入框不显示拖放指示线，保留原生拖放与落点计算
         // TipTap v3 StarterKit 默认包含 Link 和 Underline
         // 禁用内置版本，使用下面单独配置的版本
         link: false,
@@ -925,55 +925,9 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
     insertQuoteReference: (quote) => {
       if (!editor || editor.isDestroyed || !editor.isEditable) return false
       const { ref: _ref, ...payload } = quote
-      const targetKey = getQuotedSelectionKey(quote)
-
-      // 引用统一排在正文最前面的一行里：先收齐现有引用，按文档顺序 + 新条目重排，
-      // 再整体删掉旧节点、在文档开头重新插入。这样编号顺序 = 行内顺序 = 插入顺序。
-      const existing: QuoteRefPayload[] = []
-      const positions: number[] = []
-      editor.state.doc.descendants((node, pos) => {
-        if (node.type.name !== QUOTE_REF_NODE_NAME) return
-        const current = node.attrs.quote as QuoteRefPayload | null
-        if (!current) return
-        positions.push(pos)
-        existing.push(current)
-      })
-      if (existing.some((current) => getQuotedSelectionKey(current) === targetKey)) return false
-
-      // 浏览器自动划词只保留最新一条，不累积
-      const kept = existing.filter((current) => !(payload.origin === 'browser-selection' && current.origin === 'browser-selection'))
-      const nextQuotes = [...kept, payload as QuoteRefPayload]
-
-      if (positions.length > 0) {
-        let removal = editor.chain()
-        for (const pos of [...positions].sort((a, b) => b - a)) {
-          removal = removal.deleteRange({ from: pos, to: pos + 1 })
-        }
-        removal.run()
-      }
-
-      const chipContent = nextQuotes.flatMap((current) => ([
-        // n 由 renumber 插件按文档顺序重排，这里给个占位值即可
-        { type: QUOTE_REF_NODE_NAME, attrs: { n: 1, quote: current } },
-        { type: 'text' as const, text: ' ' },
-      ]))
-
-      // 删掉旧胶囊后，如果首段正好空出来了（它就是引用行），直接复用它——
-      // 否则每加一条引用都会在最上面多留一个空段落。
-      const firstBlock = editor.state.doc.firstChild
-      const canReuseFirst = firstBlock?.type.name === 'paragraph' && firstBlock.content.size === 0
-
-      if (canReuseFirst) {
-        editor.chain().insertContentAt(1, chipContent).run()
-        // 整篇只有这一行（用户还没写正文）：光标落到引用行末尾，接着写
-        if (editor.state.doc.childCount === 1) {
-          const end = 1 + (editor.state.doc.firstChild?.content.size ?? 0)
-          editor.commands.setTextSelection(end)
-        }
-      } else {
-        // 已有正文：引用单独占**最前面一行**，正文整体下移，避免胶囊混在句子里
-        editor.chain().insertContentAt(0, { type: 'paragraph', content: chipContent }).run()
-      }
+      const transaction = createQuoteRefInsertTransaction(editor.state, payload)
+      if (!transaction) return false
+      editor.view.dispatch(transaction)
       return true
     },
     getQuoteSelections: () => {
@@ -1096,7 +1050,7 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           align-items: center;
           gap: 4px;
           height: 18px;
-          margin: 0 1px;
+          margin: 0 4px;
           /* 右侧常驻 15px：给 × 留位，避免 hover 时才挤开或压到下一个胶囊 */
           padding: 0 15px 0 2px;
           border-radius: 4px;
@@ -1107,8 +1061,24 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
           line-height: 1;
           white-space: nowrap;
           vertical-align: 1px;
-          cursor: default;
+          cursor: grab;
           user-select: none;
+        }
+        .quote-ref-chip:active {
+          cursor: grabbing;
+        }
+        .quote-ref-chip__edge {
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          width: 4px;
+          cursor: text;
+        }
+        .quote-ref-chip__edge--before {
+          left: -4px;
+        }
+        .quote-ref-chip__edge--after {
+          right: -4px;
         }
         .quote-ref-chip__n {
           display: inline-flex;

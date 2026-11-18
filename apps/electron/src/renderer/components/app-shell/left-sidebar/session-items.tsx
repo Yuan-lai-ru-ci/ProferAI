@@ -1067,24 +1067,35 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
                 {delegationSummary && (
                   <button
                     type="button"
-                    aria-label={`${delegationSummary.expanded ? '收起' : '展开'}${delegationSummary.label}`}
+                    aria-label={delegationSummary.showCount
+                      ? `${delegationSummary.expanded ? '收起' : '展开'}${delegationSummary.label}（${delegationSummary.completed}/${delegationSummary.total}）`
+                      : `${delegationSummary.expanded ? '收起' : '展开'}${delegationSummary.label}`}
+                    title={delegationSummary.showCount
+                      ? `${delegationSummary.completed}/${delegationSummary.total} ${delegationSummary.label}`
+                      : delegationSummary.label}
                     onClick={(event) => {
                       event.stopPropagation()
                       delegationSummary.onToggle()
                     }}
                     onDoubleClick={(event) => event.stopPropagation()}
-                    className="ml-auto flex-shrink-0 inline-flex items-center gap-0.5 text-[12px] leading-4 text-foreground/45 hover:text-foreground/65 transition-colors"
+                    className={cn(
+                      // 胶囊宽度随内容撑开：一位数和两位数都能包住数字，不再用负外边距去挤父行
+                      // （父行标题容器是 truncate/overflow-hidden，负外边距会把胶囊右缘切掉 2px）。
+                      'ml-auto flex-shrink-0 inline-flex h-[18px] items-center justify-center gap-0.5 rounded-[4px] px-1 text-[11px] leading-none tabular-nums text-foreground/40 hover:bg-foreground/[0.06] hover:text-foreground/70 transition-colors',
+                      delegationSummary.showCount ? 'min-w-[36px]' : 'min-w-[20px]',
+                    )}
                   >
                     <ChevronRight
                       size={10}
                       className={cn(
-                        'transition-transform duration-150',
+                        'shrink-0 transition-transform duration-150',
                         delegationSummary.expanded && 'rotate-90',
                       )}
                     />
-                    {/* 探索分支不显示 x/y：父行右侧已挤着时间/置顶/归档/菜单，只留箭头。 */}
+                    {/* 父行右侧已挤着时间/置顶/归档/菜单：只留 x/y 数字，完整含义放 tooltip。
+                        探索分支不显示 x/y，只留箭头。 */}
                     {delegationSummary.showCount && (
-                      <span>{delegationSummary.completed}/{delegationSummary.total} {delegationSummary.label}</span>
+                      <span>{delegationSummary.completed}/{delegationSummary.total}</span>
                     )}
                   </button>
                 )}

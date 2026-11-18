@@ -1,6 +1,6 @@
 import type { ActorRef, TaskAuthorization, TaskOrigin } from '@profer/agent-fabric'
 import type { AgentRuntime, AgentSessionMeta, AgentSendInput, Automation, AutomationTriggerRecord, Channel } from '@profer/shared'
-import { isChannelEnabledForRuntime } from '@profer/shared'
+import { DEFAULT_AGENT_RUNTIME, isChannelEnabledForRuntime } from '@profer/shared'
 
 export interface AutomationDispatchMetadata {
   taskId: string
@@ -68,7 +68,7 @@ export function validateBoundAutomationSession(
   if (!session) return { valid: false, reason: '绑定会话不存在或不可访问' }
   if (session.workspaceId !== automation.workspaceId) return { valid: false, reason: '绑定会话工作区不匹配' }
   if (session.channelId !== automation.channelId) return { valid: false, reason: '绑定会话渠道不匹配' }
-  if ((session.agentRuntime ?? 'claude') !== (automation.agentRuntime ?? 'claude')) {
+  if ((session.agentRuntime ?? DEFAULT_AGENT_RUNTIME) !== (automation.agentRuntime ?? DEFAULT_AGENT_RUNTIME)) {
     return { valid: false, reason: '绑定会话 Agent runtime 不匹配' }
   }
   const effectiveSessionPresetId = session.presetId ?? (automation.presetId ? undefined : expectedPresetId)
@@ -81,7 +81,7 @@ export function validateBoundAutomationChannel(
   session: Pick<AgentSessionMeta, 'modelId'>,
   channel: Pick<Channel, 'enabled' | 'provider' | 'agentExperimentalEnabled' | 'agentRuntimes' | 'models'> | undefined,
 ): { valid: true } | { valid: false; reason: string } {
-  const runtime = automation.agentRuntime ?? 'claude'
+  const runtime = automation.agentRuntime ?? DEFAULT_AGENT_RUNTIME
   if (!channel || !isChannelEnabledForRuntime(channel, runtime)) {
     return { valid: false, reason: '目标会话渠道未启用或不支持当前 Agent runtime' }
   }
@@ -134,5 +134,5 @@ export function isRecoverableAutomationTrigger(record: Pick<AutomationTriggerRec
 }
 
 export function runtimeForAutomation(automation: Pick<Automation, 'agentRuntime'>): AgentRuntime {
-  return automation.agentRuntime ?? 'claude'
+  return automation.agentRuntime ?? DEFAULT_AGENT_RUNTIME
 }

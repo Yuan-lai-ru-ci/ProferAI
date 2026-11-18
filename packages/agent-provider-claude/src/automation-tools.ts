@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import type { AutomationAgentToolContext, AutomationToolOperations } from '@profer/agent-runtime/automation-tool-operations'
 /**
  * Agent 内置定时任务工具
@@ -107,7 +108,7 @@ function summarizeAutomation(a: Automation, includeHistory: boolean): Record<str
     scheduledAt: a.scheduledAt,
     maxRuns: a.maxRuns,
     runCount: a.runCount ?? 0,
-    agentRuntime: a.agentRuntime ?? 'claude',
+    agentRuntime: a.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
     completedAt: a.completedAt,
     sessionMode: a.sessionMode,
     presetId: a.presetId,

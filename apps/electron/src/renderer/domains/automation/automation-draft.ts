@@ -6,7 +6,7 @@ import type {
   AutomationSessionMode,
   AgentRuntime,
 } from '@profer/shared'
-import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE } from '@profer/shared'
+import { AUTOMATION_DEFAULT_PERMISSION_MODE, AUTOMATION_DEFAULT_SESSION_MODE, DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 
 /** 自动任务编辑草稿；无 id 表示创建模式。 */
 export interface AutomationDraft {
@@ -43,7 +43,7 @@ export function createEmptyDraft(): AutomationDraft {
     dayOfWeek: [1],
     dayOfMonth: [1],
     channelId: '',
-    agentRuntime: 'claude',
+    agentRuntime: DEFAULT_AGENT_RUNTIME,
     permissionMode: AUTOMATION_DEFAULT_PERMISSION_MODE,
     sessionMode: AUTOMATION_DEFAULT_SESSION_MODE,
     bindToSession: false,
@@ -64,7 +64,7 @@ export function automationToDraft(a: Automation): AutomationDraft {
     dayOfMonth: Array.isArray(a.dayOfMonth) ? a.dayOfMonth : (a.dayOfMonth !== undefined ? [a.dayOfMonth] : [1]),
     channelId: a.channelId,
     modelId: a.modelId,
-    agentRuntime: a.agentRuntime ?? 'claude',
+    agentRuntime: a.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
     workspaceId: a.workspaceId,
     presetId: a.presetId,
     permissionMode: a.permissionMode ?? AUTOMATION_DEFAULT_PERMISSION_MODE,

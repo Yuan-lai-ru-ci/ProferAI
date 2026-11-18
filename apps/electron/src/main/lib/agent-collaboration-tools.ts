@@ -17,7 +17,7 @@ import type {
   ProferPermissionMode,
   SDKMessage,
 } from '@profer/shared'
-import { filterDisabledTools } from '@profer/shared'
+import { DEFAULT_AGENT_RUNTIME, filterDisabledTools } from '@profer/shared'
 import {
   DelegationBlockedRegistry,
   decideDelegationBlockedWake,
@@ -61,6 +61,7 @@ import {
   buildTypeBoxDelegationPresetReferenceSchema,
   buildZodDelegationPresetReferenceSchema,
 } from './agent-delegation-preset-schema'
+import { buildAgentBehaviorAgentSteer, resolveAgentBehaviorRole } from './agent-behavior-recipe'
 
 interface CollaborationToolContext {
   sessionId: string
@@ -80,6 +81,7 @@ interface CollaborationToolResult extends Record<string, unknown> {
 
 interface DelegationRecord {
   delegationId: string
+  taskKey?: string
   triggerId?: string
   sourceRunId?: string
   parentSessionId: string
@@ -107,6 +109,11 @@ interface DelegationRecord {
 type ZodModule = typeof import('zod')
 
 const MAX_WAIT_SECONDS = 2 * 60 * 60
+
+// 两个运行时使用同一创建/续跑契约；不通过父子共用原生会话来复用 Worker。
+const DELEGATE_AGENT_DESCRIPTION = '派工到隔离的真实 Worker。可传 taskKey 在同来源会话和工作区内定位原 Worker：命中只返回已有记录，不执行本次 task，追加须用 continue_delegation；forceNew 显式新建并替换该键后续定位，不停止旧 Worker。未传键则新建，不按文字猜测合并。placement 支持 current（父时间线投影）、child（附属子会话）、independent（保留来源但不随父停止）；relation 明确 subtask/independent。可用 presetReference 指定目标预设，不传则继承。按用户指令和任务选择组织方式，不增加固定批准步骤。'
+const DELEGATE_AGENTS_DESCRIPTION = '批量派工到隔离的真实 Worker。每项可传 taskKey，命中只返回原 Worker，不执行该项 task；追加用 continue_delegation。forceNew 显式新建并替换该键后续定位，不停止旧 Worker。无键直接新建，不按文字猜测合并。每个 item 可用 presetReference 指定目标预设，不传则继承。单个父会话运行中子会话最多 50 个。'
+const CONTINUE_DELEGATION_DESCRIPTION = '同任务的补充、修正、重试或下一步应优先用此工具续跑原 Worker。保持原 delegationId 与 childSessionId，向已完成、失败、取消或中断的会话追加指令；运行中先等待结束，必要时先停止并确认结束。会尝试恢复原生会话；原生记录缺失时可能降级恢复，不保证完整原生上下文或服务端缓存命中。'
 const DEFAULT_WAIT_SECONDS = 30 * 60
 const RESULT_SUMMARY_CHAR_LIMIT = 12_000
 const DELEGATION_GOAL_CHAR_LIMIT = 1_000
@@ -249,6 +256,11 @@ function jsonResult(payload: unknown): CollaborationToolResult {
   }
 }
 
+function completedDelegationSteer(sessionId: string, results: readonly Record<string, unknown>[]): string | undefined {
+  if (!results.some(item => item.status === 'completed')) return undefined
+  return buildAgentBehaviorAgentSteer(resolveAgentBehaviorRole(getAgentSessionMeta(sessionId) ?? {})) || undefined
+}
+
 function normalizeTitle(input: string | undefined, fallback: string): string {
   const trimmed = input?.trim()
   if (trimmed) return trimmed.slice(0, 80)
@@ -273,6 +285,9 @@ interface DelegateAgentArgs {
   title?: string
   role?: AgentDelegationRole
   task: string
+  /** 显式归属键，不从任务正文推断。 */
+  taskKey?: string
+  forceNew?: boolean
   expectedOutput?: string
   modelId?: string
   presetReference?: PresetReference
@@ -282,6 +297,7 @@ interface DelegateAgentArgs {
 
 interface StartDelegationResult {
   record: DelegationRecord
+  reused?: boolean
   effectivePermissionMode: ProferPermissionMode
   effectiveModelId?: string
   effectivePresetReference?: PresetReference
@@ -446,7 +462,7 @@ function buildParentInterruptionPrompt(records: DelegationRecord[]): string {
       finished.length > 0 ? `\n其余子会话已结束：\n${finished.map(buildDelegationSummaryBlock).join('\n\n')}` : '',
       '',
       '请决定如何处理，并在回复中说明选择：',
-      '1. 断点续跑：调用 continue_delegation，传 delegationId 和一条简短指令；子会话保留完整上下文继续。',
+      '1. 断点续跑：调用 continue_delegation，传 delegationId 和一条简短指令，回到原 Worker；原生记录缺失时可能降级恢复。',
       '2. 给出下一轮指示：在 continue_delegation 的 message 里写明新的要求、验收标准或边界。',
       '3. 放弃该子会话：说明原因并调整原任务计划，不要静默跳过。',
     ].join('\n'),
@@ -457,8 +473,9 @@ function buildParentInterruptionPrompt(records: DelegationRecord[]): string {
 function buildParentAutoContinuationPrompt(records: DelegationRecord[]): string {
   if (records.some(isCheckpointInterrupted)) return buildParentInterruptionPrompt(records)
   const summaries = records.map(buildDelegationSummaryBlock).join('\n\n')
+  const steer = completedDelegationSteer(records[0]!.parentSessionId, records.map(record => ({ status: record.status })))
   return truncateText(
-    `所有协作子会话均已结束。请基于下列结果继续完成用户的原始任务；核验子会话的结论，不要把未验证内容当作事实。\n\n${summaries}`,
+    `${steer ? `${steer}\n\n` : ''}所有协作子会话均已结束。请基于下列结果继续完成用户的原始任务；核验子会话的结论，不要把未验证内容当作事实。\n\n${summaries}`,
     AUTO_CONTINUATION_SUMMARY_LIMIT,
   )
 }
@@ -627,9 +644,20 @@ function wakeParentForBlockedDelegations(parentSessionId: string): void {
   })
 }
 
+function getDelegationContinuationFields(status: AgentDelegationStatus) {
+  return {
+    resumable: isResumableDelegationStatus(status),
+    resumableFromCheckpoint: status === 'interrupted',
+    continuationHint: status === 'running'
+      ? '原 Worker 正在运行；请等待结束，必要时先停止并确认结束，不要为同任务追加指令另建 Worker。'
+      : '同任务追加、修正或重试请用 continue_delegation 回到原 Worker；原生记录缺失时可能降级恢复，不保证缓存命中。',
+  }
+}
+
 function getDelegationSummary(record: DelegationRecord): Record<string, unknown> {
   return {
     delegationId: record.delegationId,
+    taskKey: record.taskKey,
     taskId: record.delegationId,
     triggerId: record.triggerId,
     sourceRunId: record.sourceRunId,
@@ -652,13 +680,7 @@ function getDelegationSummary(record: DelegationRecord): Record<string, unknown>
     presetReference: record.presetReference,
     status: record.status,
     ...(record.cancelRequested ? { cancelRequested: record.cancelRequested } : {}),
-    resumable: isResumableDelegationStatus(record.status),
-    resumableFromCheckpoint: record.status === 'interrupted',
-    continuationHint: record.status === 'interrupted'
-      ? '子会话在断点中断，可调用 continue_delegation 续跑或给出下一轮指示。'
-      : record.status !== 'running'
-        ? '可调用 continue_delegation 追加下一轮指令，子会话保留完整上下文。'
-        : undefined,
+    ...getDelegationContinuationFields(record.status),
     startedAt: record.startedAt,
     completedAt: record.completedAt,
     error: record.error,
@@ -675,31 +697,36 @@ function listKnownDelegations(parentSessionId: string): Array<Record<string, unk
   const liveIds = new Set(live.map((item) => item.delegationId))
   const persisted = listAgentSessions(true)
     .filter((session) => (session.sourceSessionId ?? session.parentSessionId) === parentSessionId && session.sourceDelegationId && !liveIds.has(session.sourceDelegationId))
-    .map((session) => ({
-      delegationId: session.sourceDelegationId,
-      taskId: session.sourceDelegationId,
-      sourceRunId: session.sourceRunId,
-      sourceSessionId: parentSessionId,
-      parentSessionId: session.parentSessionId,
-      relation: session.delegationRelation ?? 'subtask',
-      placement: session.delegationPlacement ?? 'child',
-      projection: session.delegationPlacement === 'current' ? {
-        sessionId: parentSessionId,
-        executionSessionId: session.id,
+    .map((session) => {
+      const { status } = buildRecoveredDelegationState({ parentSessionId, delegationId: session.sourceDelegationId!, session })
+      return {
+        delegationId: session.sourceDelegationId,
+        taskKey: session.delegationTaskKey,
         taskId: session.sourceDelegationId,
-      } : undefined,
-      childSessionId: session.id,
-      channelId: session.channelId,
-      modelId: session.modelId,
-      title: session.title,
-      role: session.delegationRole,
-      goal: session.delegationGoal,
-      permissionMode: session.permissionMode,
-      presetReference: session.presetReference,
-      status: session.delegationStatus,
-      startedAt: session.createdAt,
-      completedAt: session.delegationStatus && session.delegationStatus !== 'running' ? session.updatedAt : undefined,
-    }))
+        sourceRunId: session.sourceRunId,
+        sourceSessionId: parentSessionId,
+        parentSessionId: session.parentSessionId,
+        relation: session.delegationRelation ?? 'subtask',
+        placement: session.delegationPlacement ?? 'child',
+        projection: session.delegationPlacement === 'current' ? {
+          sessionId: parentSessionId,
+          executionSessionId: session.id,
+          taskId: session.sourceDelegationId,
+        } : undefined,
+        childSessionId: session.id,
+        channelId: session.channelId,
+        modelId: session.modelId,
+        title: session.title,
+        role: session.delegationRole,
+        goal: session.delegationGoal,
+        permissionMode: session.permissionMode,
+        presetReference: session.presetReference,
+        status,
+        ...getDelegationContinuationFields(status),
+        startedAt: session.createdAt,
+        completedAt: status !== 'running' ? session.updatedAt : undefined,
+      }
+    })
 
   return [...live, ...persisted]
 }
@@ -720,12 +747,14 @@ function getDelegationResult(parentSessionId: string, delegationId: string): Rec
     throw new Error(`未找到当前会话下的委派: ${delegationId}`)
   }
 
-  const resultSummary = session.delegationStatus && session.delegationStatus !== 'running'
+  const { status } = buildRecoveredDelegationState({ parentSessionId, delegationId, session })
+  const resultSummary = status !== 'running'
     ? summarizeChildResult(session.id)
     : undefined
 
   const result = {
     delegationId,
+    taskKey: session.delegationTaskKey,
     taskId: delegationId,
     sourceRunId: session.sourceRunId,
     sourceSessionId: session.sourceSessionId ?? session.parentSessionId,
@@ -744,9 +773,10 @@ function getDelegationResult(parentSessionId: string, delegationId: string): Rec
     role: session.delegationRole,
     goal: session.delegationGoal,
     permissionMode: session.permissionMode,
-    status: session.delegationStatus,
+    status,
+    ...getDelegationContinuationFields(status),
     startedAt: session.createdAt,
-    completedAt: session.delegationStatus && session.delegationStatus !== 'running' ? session.updatedAt : undefined,
+    completedAt: status !== 'running' ? session.updatedAt : undefined,
     resultSummary,
   }
   if (result.status && result.status !== 'running') acknowledgedDelegationResultIds.add(delegationId)
@@ -781,6 +811,7 @@ function recoverDelegationRecordFromSession(
   const completionHandle = createDelegationCompletion()
   const record: DelegationRecord = {
     ...state,
+    taskKey: session.delegationTaskKey,
     sourceRunId: session.sourceRunId,
     channelId: session.channelId ?? fallbackChannelId,
     modelId: session.modelId ?? fallbackModelId,
@@ -816,6 +847,18 @@ function prepareDelegationContinuation(
 ): AgentSessionMeta {
   const child = getAgentSessionMeta(record.childSessionId)
   if (!child) throw new Error(`委派执行会话不存在: ${record.childSessionId}`)
+  // child 持久化配置是续跑权威来源，避免活记录与重启恢复使用不同模型/渠道。
+  const continuationChannelId = child.channelId ?? record.channelId
+  const continuationModelId = assertEnabledModelForChannel({
+    channelId: continuationChannelId,
+    modelId: child.modelId ?? record.modelId,
+    runtime: child.agentRuntime ?? ctx.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
+    purpose: '续跑原 Worker',
+  })
+  record.channelId = continuationChannelId
+  record.modelId = continuationModelId
+  record.workspaceId = child.workspaceId ?? record.workspaceId
+  record.presetReference = child.presetReference ?? record.presetReference
   const parent = getAgentSessionMeta(ctx.sessionId)
   const workspaceId = child.workspaceId ?? record.workspaceId ?? ctx.workspaceId
   const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
@@ -920,7 +963,7 @@ function getAvailableAgentModels(ctx: CollaborationToolContext): Record<string, 
   const summary = listEnabledAgentModelsForChannel(
     ctx.channelId,
     '读取协作子会话可用模型',
-    ctx.agentRuntime ?? 'claude',
+    ctx.agentRuntime ?? DEFAULT_AGENT_RUNTIME,
   )
   return {
     channelId: summary.channelId,
@@ -1001,25 +1044,83 @@ export function stopDelegationsForParent(parentSessionId: string): number {
   return stopped
 }
 
+function findDelegationByTaskKey(
+  ctx: CollaborationToolContext,
+  workspaceId: string | undefined,
+  taskKey: string,
+): DelegationRecord | undefined {
+  // forceNew 正常情况下会清掉旧键；兼容异常中断留下的多份绑定时取最新创建记录。
+  const candidates = listAgentSessions(true).filter((session) =>
+    (session.sourceSessionId ?? session.parentSessionId) === ctx.sessionId
+    && session.workspaceId === workspaceId
+    && session.delegationTaskKey === taskKey
+    && session.sourceDelegationId)
+  const session = candidates.reduce<AgentSessionMeta | undefined>((latest, item) =>
+    !latest || item.createdAt >= latest.createdAt ? item : latest, undefined)
+  if (!session?.sourceDelegationId) return undefined
+  return getDelegationRecordForContinuation(ctx, session.sourceDelegationId)
+}
+
+function assertCompatibleTaskWorker(record: DelegationRecord, args: DelegateAgentArgs): void {
+  const child = getAgentSessionMeta(record.childSessionId)
+  if (!child) throw new Error('原 Worker 已不存在；核实后用 forceNew 显式新建')
+  if ((args.placement !== undefined && args.placement !== record.placement)
+    || (args.relation !== undefined && args.relation !== record.relation)
+    || (args.modelId !== undefined && args.modelId !== (child.modelId ?? record.modelId))) {
+    throw new Error('taskKey 已绑定不同位置、关系或模型的 Worker；请续跑原委派，或用 forceNew 显式新建')
+  }
+  const target = args.presetReference
+  const existing = child.presetReference ?? record.presetReference
+  if (target && (!existing || target.presetId !== existing.presetId
+    || target.presetScope !== existing.presetScope
+    || target.workspaceSlug !== existing.workspaceSlug
+    || (target.presetVersion !== undefined && target.presetVersion !== existing.presetVersion))) {
+    throw new Error('taskKey 已绑定不同预设的 Worker；请续跑原委派，或用 forceNew 显式新建')
+  }
+}
+
 function startDelegation(
   ctx: CollaborationToolContext,
   parent: AgentSessionMeta | undefined,
   args: DelegateAgentArgs,
 ): StartDelegationResult {
   const task = assertNonBlank(args.task, 'task')
+  const taskKey = args.taskKey === undefined ? undefined : assertNonBlank(args.taskKey, 'taskKey')
+  if (taskKey && taskKey.length > 200) throw new Error('taskKey 最多 200 个字符')
+  if (args.forceNew !== undefined && typeof args.forceNew !== 'boolean') throw new Error('forceNew 必须是布尔值')
+  const workspaceId = parent?.workspaceId ?? ctx.workspaceId
+  if (taskKey && !args.forceNew) {
+    const existing = findDelegationByTaskKey(ctx, workspaceId, taskKey)
+    if (existing) {
+      assertCompatibleTaskWorker(existing, args)
+      const child = getAgentSessionMeta(existing.childSessionId)!
+      existing.channelId = child.channelId ?? existing.channelId
+      existing.modelId = child.modelId ?? existing.modelId
+      existing.presetReference = child.presetReference ?? existing.presetReference
+      if (existing.status !== 'running') acknowledgedDelegationResultIds.add(existing.delegationId)
+      return {
+        record: existing,
+        reused: true,
+        effectivePermissionMode: child.permissionMode ?? existing.permissionMode,
+        effectiveModelId: child.modelId ?? existing.modelId,
+        effectivePresetReference: child.presetReference ?? existing.presetReference,
+      }
+    }
+  }
+  // 查重与建会话之间不 await：同进程并发调用和批量重复项不会双建。
+  assertCanCreateDelegation(ctx)
   const arrangement = resolveDelegationArrangement(args)
   const delegationId = randomUUID()
   const role = args.role ?? 'custom'
   const title = normalizeTitle(args.title, `协作：${task}`)
   const goal = truncateText(task, DELEGATION_GOAL_CHAR_LIMIT)
   // 优先从持久化父会话继承，旧会话/无父上下文才安全回退 Claude。
-  const inheritedRuntime = parent?.agentRuntime ?? ctx.agentRuntime ?? 'claude'
+  const inheritedRuntime = parent?.agentRuntime ?? ctx.agentRuntime ?? DEFAULT_AGENT_RUNTIME
 
   const { completion, resolveCompletion } = createDelegationCompletion()
 
   // 会话持久化后的工作区是唯一权威来源。工具调用上下文可能来自已切换项目的旧流，
   // 不能让它把子会话创建或执行到另一个项目中。
-  const workspaceId = parent?.workspaceId ?? ctx.workspaceId
   const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
   if (workspaceId && !workspaceSlug) {
     throw new Error(`父会话工作区不存在: ${workspaceId}`)
@@ -1085,6 +1186,7 @@ function startDelegation(
     delegationPlacement: arrangement.placement,
     rootSessionId,
     sourceDelegationId: delegationId,
+    delegationTaskKey: taskKey,
     // 继承父会话的定时任务来源，保留自动化血缘；前端以 sourceDelegationId 优先
     // 展示委派徽章，不会被误判为定时任务（#993）。
     sourceAutomationId: effectiveParent?.sourceAutomationId,
@@ -1096,8 +1198,21 @@ function startDelegation(
     permissionMode,
   })
 
+  if (taskKey && args.forceNew) {
+    // 换 Worker 后旧记录仍可按 delegationId 续跑，但不再占有业务任务键。
+    for (const previous of listAgentSessions(true)) {
+      if (previous.id !== child.id && previous.delegationTaskKey === taskKey
+        && (previous.sourceSessionId ?? previous.parentSessionId) === ctx.sessionId
+        && previous.workspaceId === workspaceId) {
+        updateAgentSessionMeta(previous.id, { delegationTaskKey: undefined, archived: previous.archived }, { touchUpdatedAt: false })
+        const live = previous.sourceDelegationId ? delegations.get(previous.sourceDelegationId) : undefined
+        if (live) live.taskKey = undefined
+      }
+    }
+  }
   const record: DelegationRecord = {
     delegationId,
+    taskKey,
     triggerId: randomUUID(),
     sourceRunId: ctx.sourceRunId,
     parentSessionId: ctx.sessionId,
@@ -1184,6 +1299,8 @@ function buildCollaborationSchemas(z: ZodModule['z']) {
     title: z.string().optional().describe('子会话标题，简短说明子任务'),
     role: role.optional().describe('子任务角色：explore/research/implement/review/custom'),
     task: nonBlankString.describe('发送给子 Agent 的完整任务说明，必须自包含必要上下文'),
+    taskKey: nonBlankString.max(200).optional().describe('可选显式业务任务键；同来源会话和工作区内命中则只返回原 Worker，不执行本次 task；追加用 continue_delegation'),
+    forceNew: z.boolean().optional().describe('显式新建并让同 taskKey 后续定位新 Worker；不停止或删除原 Worker'),
     expectedOutput: z.string().optional().describe('希望子 Agent 最终返回的格式或要点'),
     modelId: nonBlankString.optional().describe('可选目标模型 ID；显式传入时覆盖目标预设绑定模型；不传且预设未绑定时继承父会话当前模型'),
     presetReference: buildZodDelegationPresetReferenceSchema(z),
@@ -1223,7 +1340,7 @@ function buildCollaborationSchemas(z: ZodModule['z']) {
       permissionBehavior: z.enum(['allow', 'deny']).optional().describe('Permission 请求的回复行为，默认 allow'),
     },
     continueD: {
-      delegationId: nonBlankString.describe('要继续操作的委派 ID（必须是已完成/已失败/已取消状态）'),
+      delegationId: nonBlankString.describe('要续跑的原委派 ID（已完成/失败/取消/中断；运行中须先等待结束）'),
       message: nonBlankString.describe('追加给子 Agent 的后续指令'),
     },
   }
@@ -1257,10 +1374,10 @@ export async function injectAgentCollaborationMcpServer(
       ),
       sdk.tool(
         'delegate_agent',
-        '派发一个任务到隔离的真实执行会话。placement 支持 current（父时间线投影）、child（附属子会话）、independent（保留来源但不随父停止）；relation 明确 subtask/independent。可用 presetReference 指定目标预设，不传则继承。按用户指令和任务选择组织方式，不增加固定批准步骤。',
+        DELEGATE_AGENT_DESCRIPTION,
         schemas.delegate,
         async (args) => {
-          const parent = assertCanCreateDelegation(ctx)
+          const parent = assertCanCreateDelegation(ctx, 0)
           const result = startDelegation(ctx, parent, args)
 
           return jsonResult({
@@ -1268,16 +1385,19 @@ export async function injectAgentCollaborationMcpServer(
             effectivePermissionMode: result.effectivePermissionMode,
             effectiveModelId: result.effectiveModelId,
             effectivePresetReference: result.effectivePresetReference,
-            note: '子会话已启动。需要结果时调用 wait_for_delegations。',
+            reused: result.reused === true,
+            note: result.reused
+              ? '已定位原 Worker，本次 task 未执行。运行中请等待；追加或重试请调用 continue_delegation。'
+              : '子会话已启动。需要结果时调用 wait_for_delegations。',
           })
         },
       ),
       sdk.tool(
         'delegate_agents',
-        '批量创建多个真实可见的 Profer 协作子 Agent 会话；每个 item 都可用 presetReference 指定目标 Agent 预设，不传则继承当前父会话预设。适合把同一大任务拆成多片并行处理，单个父会话运行中子会话最多 50 个。',
+        DELEGATE_AGENTS_DESCRIPTION,
         schemas.delegateBatch,
         async (args) => {
-          const parent = assertCanCreateDelegation(ctx, args.items.length)
+          const parent = assertCanCreateDelegation(ctx, 0)
           const created: StartDelegationResult[] = []
           const failures: Array<{ index: number; title?: string; error: string }> = []
           args.items.forEach((item, index) => {
@@ -1299,7 +1419,7 @@ export async function injectAgentCollaborationMcpServer(
           })
 
           return jsonResult({
-            delegations: created.map((item) => getDelegationSummary(item.record)),
+            delegations: created.map((item) => ({ ...getDelegationSummary(item.record), reused: item.reused === true })),
             effectivePermissionModes: created.map((item) => ({
               delegationId: item.record.delegationId,
               permissionMode: item.effectivePermissionMode,
@@ -1313,12 +1433,11 @@ export async function injectAgentCollaborationMcpServer(
               presetReference: item.effectivePresetReference,
             })),
             failures,
-            createdCount: created.length,
+            createdCount: created.filter((item) => !item.reused).length,
+            reusedCount: created.filter((item) => item.reused).length,
             failedCount: failures.length,
             maxRunningDelegations: MAX_RUNNING_DELEGATIONS_PER_PARENT,
-            note: failures.length > 0
-              ? `批量子会话部分创建成功（成功 ${created.length}，失败 ${failures.length}）。失败项可修正后重试；需要结果时调用 wait_for_delegations。`
-              : '批量子会话已启动。需要结果时调用 wait_for_delegations，可用 mode=any 先收敛部分结果。',
+            note: '批量派工已处理；每项 reused=true 表示 task 未执行，追加请用 continue_delegation。新建项可用 wait_for_delegations 等待；失败项见 failures。',
           })
         },
       ),
@@ -1360,6 +1479,7 @@ export async function injectAgentCollaborationMcpServer(
             completedCount: allDelegations.filter((item) => item.status !== 'running').length,
             runningCount: allDelegations.filter((item) => item.status === 'running').length,
             delegations: allDelegations,
+            behaviorSteer: completedDelegationSteer(ctx.sessionId, allDelegations),
             note: waitResult.status === 'blocked'
               ? '子会话被阻塞：能确定答案就调用 answer_delegation_question 代答；确定不了就交给用户，问题已在用户界面等待回答。'
               : undefined,
@@ -1393,7 +1513,7 @@ export async function injectAgentCollaborationMcpServer(
           for (const item of results) {
             if (item.status !== 'running' && typeof item.delegationId === 'string') acknowledgedDelegationResultIds.add(item.delegationId)
           }
-          return jsonResult({ delegations: results })
+          return jsonResult({ delegations: results, behaviorSteer: completedDelegationSteer(ctx.sessionId, results) })
         },
         { annotations: { readOnlyHint: true } },
       ),
@@ -1464,7 +1584,7 @@ export async function injectAgentCollaborationMcpServer(
       ),
       sdk.tool(
         'continue_delegation',
-        '向已完成、已失败、已取消或已中断的协作子会话追加后续指令。子会话保留完整上下文继续执行。适合多轮协作场景：先让子 Agent 完成第一步，审查结果后继续下一步。',
+        CONTINUE_DELEGATION_DESCRIPTION,
         schemas.continueD,
         async (args) => {
           const record = getDelegationRecordForContinuation(ctx, args.delegationId)
@@ -1550,6 +1670,8 @@ export function buildPiCollaborationTools(
     title: Type.Optional(Type.String({ description: '子会话标题' })),
     role: roleType,
     task: Type.String({ description: '发送给子 Agent 的完整任务说明' }),
+    taskKey: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: '显式任务键；同来源会话和工作区内命中只返回原 Worker，不执行本次 task；追加用 continue_delegation' })),
+    forceNew: Type.Optional(Type.Boolean({ description: '显式新建并替换 taskKey 的后续定位，不停止或删除原 Worker' })),
     expectedOutput: Type.Optional(Type.String({ description: '希望子 Agent 最终返回的格式或要点' })),
     modelId: Type.Optional(Type.String({ description: '可选目标模型 ID' })),
     presetReference: buildTypeBoxDelegationPresetReferenceSchema(Type),
@@ -1577,32 +1699,38 @@ export function buildPiCollaborationTools(
     sdk.defineTool({
       name: 'mcp__collaboration__delegate_agent',
       label: '委派子 Agent',
-      description: '创建一个真实可见的 Profer 协作子 Agent 会话来并行处理独立子任务。支持用 presetReference 指定目标 Agent 预设；不传则继承当前父会话预设。只用于长耗时、可并行、需要追踪的任务。',
+      description: DELEGATE_AGENT_DESCRIPTION,
       parameters: delegateItemType,
       async execute(_toolCallId: string, params: unknown) {
         const args = params as DelegateAgentArgs
-        const parent = assertCanCreateDelegation(ctx)
+        const parent = assertCanCreateDelegation(ctx, 0)
         const result = startDelegation(ctx, parent, args)
         return piJsonResult({
           delegation: getDelegationSummary(result.record),
           effectivePermissionMode: result.effectivePermissionMode,
           effectiveModelId: result.effectiveModelId,
           effectivePresetReference: result.effectivePresetReference,
-          note: '子会话已启动。需要结果时调用 wait_for_delegations。',
+          reused: result.reused === true,
+          note: result.reused
+            ? '已定位原 Worker，本次 task 未执行。运行中请等待；追加或重试请调用 continue_delegation。'
+            : '子会话已启动。需要结果时调用 wait_for_delegations。',
         })
       },
     }),
     sdk.defineTool({
       name: 'mcp__collaboration__delegate_agents',
       label: '批量委派子 Agent',
-      description: '批量创建多个真实可见的 Profer 协作子 Agent 会话；每个 item 都可用 presetReference 指定目标 Agent 预设，不传则继承当前父会话预设。适合把同一大任务拆成多片并行处理。',
+      description: DELEGATE_AGENTS_DESCRIPTION,
       parameters: Type.Object({
         sharedContext: Type.Optional(Type.String({ description: '批量子任务共用背景' })),
-        items: Type.Array(delegateItemType, { description: '要创建的子会话列表，最多 50 个' }),
+        items: Type.Array(delegateItemType, { minItems: 1, maxItems: MAX_RUNNING_DELEGATIONS_PER_PARENT, description: '要派发的任务列表，最多 50 个' }),
       }),
       async execute(_toolCallId: string, params: unknown) {
         const args = params as { sharedContext?: string; items: DelegateAgentArgs[] }
-        const parent = assertCanCreateDelegation(ctx, args.items.length)
+        if (!Array.isArray(args.items) || args.items.length < 1 || args.items.length > MAX_RUNNING_DELEGATIONS_PER_PARENT) {
+          throw new Error('批量任务须为 1 到 50 项')
+        }
+        const parent = assertCanCreateDelegation(ctx, 0)
         const created: StartDelegationResult[] = []
         const failures: Array<{ index: number; title?: string; error: string }> = []
         args.items.forEach((item, index) => {
@@ -1623,7 +1751,7 @@ export function buildPiCollaborationTools(
           }
         })
         return piJsonResult({
-          delegations: created.map((item) => getDelegationSummary(item.record)),
+          delegations: created.map((item) => ({ ...getDelegationSummary(item.record), reused: item.reused === true })),
           effectivePermissionModes: created.map((item) => ({
             delegationId: item.record.delegationId,
             permissionMode: item.effectivePermissionMode,
@@ -1637,7 +1765,8 @@ export function buildPiCollaborationTools(
             presetReference: item.effectivePresetReference,
           })),
           failures,
-          createdCount: created.length,
+          createdCount: created.filter((item) => !item.reused).length,
+          reusedCount: created.filter((item) => item.reused).length,
           failedCount: failures.length,
           maxRunningDelegations: MAX_RUNNING_DELEGATIONS_PER_PARENT,
         })
@@ -1684,6 +1813,7 @@ export function buildPiCollaborationTools(
           completedCount: allDelegations.filter((item) => item.status !== 'running').length,
           runningCount: allDelegations.filter((item) => item.status === 'running').length,
           delegations: allDelegations,
+          behaviorSteer: completedDelegationSteer(ctx.sessionId, allDelegations),
           note: waitResult.status === 'blocked'
             ? '子会话被阻塞：能确定答案就调用 answer_delegation_question 代答；确定不了就交给用户，问题已在用户界面等待回答。'
             : undefined,
@@ -1723,7 +1853,7 @@ export function buildPiCollaborationTools(
         for (const item of results) {
           if (item.status !== 'running' && typeof item.delegationId === 'string') acknowledgedDelegationResultIds.add(item.delegationId)
         }
-        return piJsonResult({ delegations: results })
+        return piJsonResult({ delegations: results, behaviorSteer: completedDelegationSteer(ctx.sessionId, results) })
       },
     }),
     sdk.defineTool({
@@ -1809,7 +1939,7 @@ export function buildPiCollaborationTools(
     sdk.defineTool({
       name: 'mcp__collaboration__continue_delegation',
       label: '追加后续指令',
-      description: '向已完成、已失败、已取消或已中断的协作子会话追加后续指令。子会话保留完整上下文继续执行。',
+      description: CONTINUE_DELEGATION_DESCRIPTION,
       parameters: Type.Object({
         delegationId: Type.String({ description: '要继续操作的委派 ID' }),
         message: Type.String({ description: '追加给子 Agent 的后续指令' }),

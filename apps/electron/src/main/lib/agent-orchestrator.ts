@@ -163,7 +163,7 @@ import { createElectronSessionStorePaths } from './session-store-host'
 import { loadPiRewindTracker, persistPiRewindTracker } from './agent-rewind-pi'
 import { buildRewindNoticePrompt } from './agent-rewind-notice'
 import { prepareRuntimeSkills } from './global-skill-manager'
-import { buildSkillRoutingAppliedNotice, buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
+import { buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
 import { captureSkillToolInventory } from './skill-tool-inventory'
 import { getRuntimeStatus } from './runtime-init'
@@ -176,6 +176,7 @@ import { buildDynamicContext } from './agent-prompt-context'
 import { selectAgentPromptMode, type AgentPromptMode } from './agent-prompt-mode'
 import { assembleAgentSystemPrompt, appendAgentTaskPrompt } from './agent-prompt-assembly'
 import { resolveAgentSystemPromptPolicy } from './agent-system-prompt-policy'
+import { appendAgentBehaviorUserSteer, resolveAgentBehaviorRole } from './agent-behavior-recipe'
 import { injectPlanningMcpServer } from './planning-agent-tools'
 import { ensurePresetSystemReady, getAgentPresetByReference, presetReferenceForId } from './agent-preset-manager'
 import type { PermissionResult, CanUseToolOptions } from './agent-permission-service'
@@ -1118,9 +1119,7 @@ export class AgentOrchestrator {
    */
   /** 用户点名的 Skill 没加载时落盘一条系统提示并推给界面；失败只记日志，不影响本轮运行。 */
   private persistSkillRoutingNotice(sessionId: string, routed: SkillRoutingResult): void {
-    // 成功注入的 Skill 也走同一通道：正文注入不产生工具调用，
-    // 界面无任何痕迹会让用户以为 Skill 没生效。
-    const notice = buildSkillRoutingNotice(routed) ?? buildSkillRoutingAppliedNotice(routed)
+    const notice = buildSkillRoutingNotice(routed)
     if (!notice) return
     const message = { type: 'system', subtype: 'skill_routing_notice', message: notice, _createdAt: Date.now() } as unknown as SDKMessage
     this.eventPort.emit(sessionId, { kind: 'sdk_message', message })
@@ -2040,6 +2039,12 @@ export class AgentOrchestrator {
 
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅引用当前预设实际可用的能力。
       let enrichedMessage = runFacts ? appendRunOriginPrompt(runtimeUserMessage, runFacts.context) : runtimeUserMessage
+      const behaviorRole = resolveAgentBehaviorRole({
+        sourceDelegationId: sessionMeta?.sourceDelegationId,
+        parentSessionId: sessionMeta?.parentSessionId,
+        delegationRelation: sessionMeta?.delegationRelation,
+      })
+      enrichedMessage = appendAgentBehaviorUserSteer(enrichedMessage, behaviorRole, promptMode, runtimeUserMessage)
       // 11.45 回退后的一次性不可见上下文：告诉模型「哪些文件因用户改动被保留」。
       // 只拼进本轮 runtime prompt，不写入 Profer 对话；清理由首条 runtime 消息触发。
       if (promptMode === 'standard' && pendingRewindNotice) {
@@ -2450,6 +2455,11 @@ export class AgentOrchestrator {
           shellPath: promptShellPath,
           agentCwd,
           projectCandidates,
+          behaviorRole: resolveAgentBehaviorRole({
+            sourceDelegationId: sessionMeta?.sourceDelegationId,
+            parentSessionId: sessionMeta?.parentSessionId,
+            delegationRelation: sessionMeta?.delegationRelation,
+          }),
         },
         userMessage: runtimeUserMessage,
         toolNames: piCustomTools?.map((tool) => tool.name) ?? [],
@@ -4450,6 +4460,8 @@ export class AgentOrchestrator {
       ? `${buildDynamicContext({ userBrowserContext, mcpServerNames: activePolicy?.loadedMcpServerNames ? [...activePolicy.loadedMcpServerNames] : undefined, disabledToolGroups: activePolicy ? [...activePolicy.disabledToolGroups] : undefined, disabledTools: activePolicy?.disabledTools })}\n\n${text}`
       : text
     if (queueContext) enrichedText = appendRunOriginPrompt(enrichedText, queueContext)
+    enrichedText = appendAgentBehaviorUserSteer(enrichedText, resolveAgentBehaviorRole(sessionMeta ?? {}),
+      this.activePromptModes.get(sessionId) ?? 'standard', rawText ?? text)
     const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
     if (referencedSessionsBlock) {
       enrichedText = `${referencedSessionsBlock}\n\n${enrichedText}`

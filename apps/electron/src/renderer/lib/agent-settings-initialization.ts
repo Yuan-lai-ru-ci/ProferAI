@@ -1,6 +1,7 @@
 import type { createStore } from 'jotai/vanilla'
 import type { AgentRuntime, AgentWorkspace } from '@profer/shared'
 import type { AppSettings } from '../../types/settings'
+import { DEFAULT_AGENT_RUNTIME } from '../../types/settings'
 import {
   agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentRuntimeAtom,
   agentThinkingAtom, agentEffortAtom, agentMaxBudgetUsdAtom, agentMaxTurnsAtom,
@@ -67,7 +68,7 @@ export function initializeAgentSettings(
       if (!active || request !== generation) return
       // 启动读取期间已修改默认模型/内核时，旧设置回执不得覆盖用户选择。
       if (revision === defaultsRevision) {
-        const runtime = settings.agentRuntime ?? 'claude'
+        const runtime = settings.agentRuntime ?? DEFAULT_AGENT_RUNTIME
         store.set(agentRuntimeAtom, runtime)
         store.set(agentChannelIdAtom, settings.agentChannelId ?? null)
         store.set(agentModelIdAtom, settings.agentModelId ?? null)

@@ -65,6 +65,16 @@ async function readHeader(path: string): Promise<string> {
   } finally { await file.close() }
 }
 
+const SKILL_LEDGER_FILENAME = 'skill-library.json'
+
+/** 展示字段损坏时使用账本描述，门禁仍按原策略校验。 */
+function readLedgerDescription(directory: string): string | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(directory, SKILL_LEDGER_FILENAME), 'utf8')) as { description?: unknown }
+    return typeof parsed.description === 'string' && parsed.description.trim() ? parsed.description.trim() : undefined
+  } catch { return undefined }
+}
+
 async function readRules(root: string, directory: string): Promise<SkillRoutingRules> {
   const path = join(directory, ROUTING_SIDECAR_FILENAME)
   if (!existsSync(path)) return {}
@@ -142,10 +152,15 @@ export async function createSkillRoutingSnapshot(input: {
     let manifestGateInvalid = false
     // 先过滤预设，拒绝项不读取正文，诊断也不含正文/路径。
     if (!blocked) {
+      let content: string | undefined
       try {
         const file = checkedFile(root, filePath, MAX_SKILL_BYTES)
-        const content = await readHeader(file.path)
-        const parsed = parseFrontmatter<Record<string, unknown>>(content)
+        content = await readHeader(file.path)
+      } catch { blocked = 'unreadable' }
+      if (!blocked && content) {
+        let frontmatter: Record<string, unknown> = {}
+        try { frontmatter = parseFrontmatter<Record<string, unknown>>(content).frontmatter }
+        catch { /* 展示字段回退到账本，门禁继续校验。 */ }
         // 模块清单优先于 frontmatter：展示字段坏了回退 frontmatter；门禁字段读不出来时下面按 invalid-routing 拦截。
         const manifestRead = readSkillManifest(skillDir)
         manifest = manifestRead.manifest
@@ -154,15 +169,15 @@ export async function createSkillRoutingSnapshot(input: {
           dirName: slug,
           manifest: manifestRead.manifest,
           frontmatter: {
-            ...(typeof parsed.frontmatter.name === 'string' ? { name: parsed.frontmatter.name } : {}),
-            ...(typeof parsed.frontmatter.description === 'string' ? { description: parsed.frontmatter.description } : {}),
+            ...(typeof frontmatter.name === 'string' ? { name: frontmatter.name } : {}),
+            ...(typeof frontmatter.description === 'string' ? { description: frontmatter.description } : {}),
           },
         })
         name = descriptor.name
-        description = descriptor.description
-        disableModelInvocation = parsed.frontmatter['disable-model-invocation'] === true
+        description = descriptor.description.trim() || readLedgerDescription(skillDir) || ''
+        disableModelInvocation = frontmatter['disable-model-invocation'] === true
         if (!description.trim()) blocked = 'unreadable'
-      } catch { blocked = 'unreadable' }
+      }
       if (!blocked && manifestGateInvalid) blocked = 'invalid-routing'
       if (!blocked) {
         try { rules = mergeSkillRoutingLayers(rules, await readRules(root, skillDir), skillManifestToRoutingFields(manifest)) } catch { blocked = 'invalid-routing' }
@@ -320,22 +335,6 @@ const NOTICE_REASONS: Readonly<Record<SkillRoutingCode, string>> = {
   'not-found': '没有找到这个 Skill',
   ambiguous: '名称对应多个 Skill，请改用目录名',
   'budget-deferred': '正文超出本轮预算',
-}
-
-/**
- * 本轮已实际生效的 Skill 一行提示。
- *
- * Pi/Claude 都会把选中 Skill 的正文直接注入提示词，**不产生任何工具调用**，
- * 所以折叠摘要行的工具图标里永远不会出现 Skill 闪电；若这里不提示，
- * 用户完全无法看出本轮用过哪个 Skill。只列 `selected`（已注入），
- * `hints` 仅是用词猜测、正文未注入，不得计入。
- */
-export function buildSkillRoutingAppliedNotice(result: SkillRoutingResult): string | undefined {
-  const applied = result.selected.filter(item =>
-    !result.diagnostics.some(diagnostic => diagnostic.slug === item.slug))
-  if (!applied.length) return undefined
-  const names = applied.map(item => `「${item.slug}」`).join('、')
-  return `已加载 Skill：${names}`
 }
 
 /** 用户显式引用的 Skill 没加载时给界面的一行提示；正文超预算仍会按需读取，不算失败。 */

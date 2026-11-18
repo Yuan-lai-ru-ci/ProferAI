@@ -15,6 +15,7 @@ import { Type } from 'typebox'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { GraphEvent } from '@profer/project-core'
+import { DEFAULT_AGENT_RUNTIME } from '@profer/shared'
 import type {
   AgentFilePreviewInspectRequest,
   AgentFilePreviewInspectResult,

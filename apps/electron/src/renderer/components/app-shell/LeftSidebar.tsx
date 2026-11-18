@@ -42,12 +42,24 @@ const MIN_LIST_WIDTH = 230;
 export function LeftSidebar({
   width,
   noTransition,
+  collapsedOverride,
+  widthOverride,
+  listWidthOverride,
+  listTranslateX,
+  transitionDurationMs,
   renderSearchDialog = true,
 }: LeftSidebarProps): React.ReactElement {
   const s = useLeftSidebar();
   const isClassic = s.isClassic;
-  const sidebarCollapsed = s.sidebarCollapsed;
-  const listWidth = width ?? DEFAULT_LIST_WIDTH;
+  const sidebarCollapsed = collapsedOverride ?? s.sidebarCollapsed;
+  // rail 跟随当前吸附预览切换，不等待列表卸载或鼠标松开。
+  const sidebarModel = sidebarCollapsed === s.sidebarCollapsed
+    ? s
+    : { ...s, sidebarCollapsed };
+  const listWidth = listWidthOverride
+    ?? (widthOverride !== undefined
+      ? Math.max(0, widthOverride - RAIL_WIDTH)
+      : width ?? DEFAULT_LIST_WIDTH);
   // 面板顶边与 Tab 标签本体下沿对齐：运行时量真实 DOM，量不到才用常量兜底。
   const measuredPanelTop = useTabBarBottomOffset(SIDEBAR_PANEL_TOP);
   // Windows 顶部没有红绿灯，侧栏不需要给顶栏让位：rail 与列表直接顶到窗口上沿。
@@ -61,7 +73,9 @@ export function LeftSidebar({
       className={cn(
         "relative h-full overflow-hidden sidebar-collapse-ease",
         !noTransition &&
-          "transition-[width] duration-300 will-change-[width] contain-layout",
+          (transitionDurationMs !== undefined
+            ? "transition-[width] will-change-[width] contain-layout"
+            : "transition-[width] duration-300 will-change-[width] contain-layout"),
         // 着色层铺满整个外壳（含顶部留白与红绿灯区）：::before 画在外壳底色之上、
         // 子元素之下，列表容器再用 bg-sidebar 盖回浅色，形成「着色底 + 浅色内容卡」。
         "bg-sidebar rounded-2xl shadow-xl dark:shadow-md",
@@ -69,9 +83,16 @@ export function LeftSidebar({
         "isolate before:absolute before:inset-0 before:-z-10 before:bg-foreground/[0.035] before:content-['']",
       )}
       style={{
-        width: sidebarCollapsed ? COLLAPSED_WIDTH : RAIL_WIDTH + listWidth,
-        minWidth: sidebarCollapsed ? COLLAPSED_WIDTH : RAIL_WIDTH + MIN_LIST_WIDTH,
+        width: sidebarCollapsed
+          ? COLLAPSED_WIDTH
+          : RAIL_WIDTH + listWidth + (listTranslateX ?? 0),
+        minWidth: sidebarCollapsed
+          ? COLLAPSED_WIDTH
+          : RAIL_WIDTH + Math.min(MIN_LIST_WIDTH, listWidth) + (listTranslateX ?? 0),
         flexShrink: sidebarCollapsed ? 0 : 1,
+        ...(transitionDurationMs !== undefined && {
+          transition: `width ${transitionDurationMs}ms cubic-bezier(0.32, 0.72, 0, 1)`,
+        }),
       }}
     >
       {/* 顶部拖拽留白整条覆盖 rail + 列表，高度取 Tab 标签本体的下沿（运行时实测）；
@@ -80,15 +101,27 @@ export function LeftSidebar({
           窗口拖动交给 AppShell 顶部那条全局 8px 拖拽带。 */}
       {panelTop > 0 && <SidebarWindowDragStrip height={panelTop} />}
 
-      <div className="flex h-full min-h-0">
-        {/* rail 透明，直接露出外壳的着色层；收起态占满 58px。 */}
-        <div className={cn('flex-none', sidebarCollapsed ? 'w-full' : 'w-[54px]')}>
-          <SidebarRail s={s} topOffset={panelTop + SIDEBAR_HEADER_INSET} />
+      <div className="relative h-full min-h-0">
+        {/* rail 是固定层：始终占据左侧 54px，带不透明背景并压在列表滑动层上方。 */}
+        <div
+          className="relative z-20 isolate h-full overflow-hidden bg-sidebar transition-[width] duration-200 sidebar-collapse-ease motion-reduce:transition-none before:absolute before:inset-0 before:-z-10 before:bg-foreground/[0.035] before:content-['']"
+          style={{ width: sidebarCollapsed ? COLLAPSED_WIDTH : RAIL_WIDTH }}
+        >
+          <SidebarRail s={sidebarModel} topOffset={panelTop + SIDEBAR_HEADER_INSET} />
         </div>
-        {!sidebarCollapsed && (
-          <div className="min-w-0 flex-1" style={{ paddingTop: panelTop }}>
-            {/* 内容卡：bg-sidebar 把着色盖回浅色，只有左上角圆角让底下的着色露出来，
-                这条弧线就是 rail 与列表的分界收口。 */}
+        {(listTranslateX !== undefined || !sidebarCollapsed) && (
+          <div
+            className="absolute inset-y-0 z-10 min-w-0"
+            style={{
+              left: RAIL_WIDTH + (listTranslateX ?? 0),
+              width: listWidth,
+              paddingTop: panelTop,
+              ...(transitionDurationMs !== undefined && {
+                transition: `left ${transitionDurationMs}ms cubic-bezier(0.32, 0.72, 0, 1)`,
+              }),
+            }}
+          >
+            {/* 列表不参与 rail 的 flex 布局，达到最小宽度后整体滑到 rail 后方。 */}
             <div className="h-full overflow-hidden rounded-tl-[10px] bg-sidebar">
               <ExpandedSidebar s={s} />
             </div>

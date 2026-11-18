@@ -19,7 +19,8 @@ export function selectContextTabs(
   scratchPadOriginTabId: string | null = null,
 ): TabItem[] {
   const active = tabs.find((tab) => tab.id === activeTabId) ?? null
-  if (!active) return ensureScratchPadTab(tabs)
+  // 恢复或关闭期间活动 ID 可能暂时失效；缺少上下文时不能放出所有后台会话。
+  if (!active) return ensureScratchPadTab(tabs.filter((tab) => tab.type === 'scratch'))
 
   // 草稿不是独立会话：从会话进入时沿用来源会话的 rail；直接从全局入口打开时仅显示草稿。
   if (active.type === 'scratch') {

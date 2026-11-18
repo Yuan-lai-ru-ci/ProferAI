@@ -128,6 +128,11 @@
 */
 
 /* 可选：使用包内背景图。取消注释前，把图片放入 assets/background.webp。
+ * ⚠️ 只挂壁纸不等于看得见：面板（bg-content-area / bg-sidebar / bg-card / bg-dialog）
+ * 各自不透明，壁纸默认只在面板缝隙露出。要让壁纸整块可见，必须同时给面板承载类
+ * 写半透明；参数按 profer-theme-authoring references/wallpaper-visibility.md §2
+ * （content-area 0.38–0.44、sidebar 0.44–0.50、raised/card 0.55–0.62、dialog 0.86–0.90、
+ * 遮罩 0.04–0.10），壁纸均值 < 18% 时先把素材提亮 1.45× 左右。
  * ⚠️ 背景不能挂 body——AppShell 的 .shell-bg 是全屏外壳，body 背景不会成为应用壁纸；
  * 必须挂在 .shell-bg 上。assets/... 会由主进程安全改写为
  * profer-skin://<skin-id>/assets/...；不要使用 file:、data:、外链或 @import。

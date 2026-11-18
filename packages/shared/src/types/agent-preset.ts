@@ -452,6 +452,18 @@ export const BUILTIN_PRESET_STANDARD = "standard";
 export const BUILTIN_PRESET_CODE = "code";
 export const BUILTIN_PRESET_MINIMAL = "minimal";
 
+/** 标准预设提示词段 */
+const STANDARD_PROMPT_SECTIONS: string[] = [
+  `## 标准模式
+
+当前会话使用「标准」预设：保留当前运行时可用的完整能力，适合复杂研发、调研、文档和跨模块任务：
+
+- 先判断用户要交付的结果，再选择实际提供的工具、Skill 和 MCP；不要因为能力可用就主动扩大任务范围
+- 涉及文件、配置或代码时，先读取相关上下文，完成后按风险执行最小的可验证检查
+- 需要长期、重复或无人值守执行时才考虑自动化；记忆、协作和任务图遵循各自的用户意图与授权规则
+- 遇到权限、工具或信息不足时说明具体阻塞，不猜测、不绕过运行时门禁`,
+];
+
 /** 代码预设提示词段 */
 const CODE_PROMPT_SECTIONS: string[] = [
   `## 代码任务模式
@@ -463,7 +475,7 @@ const CODE_PROMPT_SECTIONS: string[] = [
 - 修改后按改动层级执行相称验证（单测 / typecheck / build / 最小运行流程），如实区分实际验证范围，绝不虚构"已验证通过"
 - 优先沿用仓库既有模式与工具，不引入新依赖；复杂任务先拆清边界和依赖，避免把无关重构混入当前改动
 - 完成前自检：错误处理、边界情况、类型安全、对既有行为的回归影响；无法完成的验证必须说明原因和风险
-- 自动化、受管浏览器、剪贴板与 PPT 交付等非研发产品能力已关闭；网页搜索/抓取与本地图片呈现保留给研发检索和交付，AI 生图仍关闭
+- 自动化、受管浏览器、剪贴板、PPT 交付与皮肤创建等非研发产品能力已关闭；网页搜索/抓取与本地图片呈现保留给研发检索和交付，AI 生图仍关闭
 - 详细的编码审查与安全规范由 code-honor 等 Skill 提供，本预设只定义严格工程任务的稳定工作姿态`
 ];
 
@@ -487,17 +499,18 @@ export const BUILTIN_AGENT_PRESETS: AgentPreset[] = [
       "默认工作模式：保留当前运行时可用的完整能力，适合复杂研发、调研、文档和跨模块任务",
     isBuiltin: true,
     scope: "builtin-meta",
-    version: "1.1.0",
+    promptSections: STANDARD_PROMPT_SECTIONS,
+    version: "1.2.0",
     createdAt: 0,
     updatedAt: 0,
   },
   {
     id: BUILTIN_PRESET_CODE,
     name: "代码",
-    description: "严格研发模式：保留工程协作、文件预览、网页检索与图片呈现，关闭自动化等非研发能力",
+    description: "严格研发模式：保留文件预览、网页检索和既有图片输出，关闭自动化、浏览器、剪贴板、PPT 交付与生图",
     isBuiltin: true,
     scope: "builtin-meta",
-    version: "1.4.0",
+    version: "1.5.0",
     effort: "high",
     promptSections: CODE_PROMPT_SECTIONS,
     disabledToolGroups: ["automation", "browser", "clipboard", "ppt-materials"],
@@ -511,10 +524,10 @@ export const BUILTIN_AGENT_PRESETS: AgentPreset[] = [
     id: BUILTIN_PRESET_MINIMAL,
     name: "极简",
     description:
-      "本地快速完成模式：关闭全部产品能力组，只保留基础文件、命令与必要交互工具",
+      "本地快速完成模式：关闭全部产品能力组，只保留基础文件、命令与必要交互工具，不使用网页、自动化、记忆或协作能力",
     isBuiltin: true,
     scope: "builtin-meta",
-    version: "1.2.0",
+    version: "1.3.0",
     promptSections: MINIMAL_PROMPT_SECTIONS,
     suppressPromptSections: ["subagents", "memory", "task-graph", "automation"],
     disabledToolGroups: [...AGENT_PRESET_TOOL_GROUPS],

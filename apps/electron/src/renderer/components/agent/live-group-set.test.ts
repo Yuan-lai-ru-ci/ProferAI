@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { AssistantTurn, MessageGroup } from './SDKMessageRenderer'
-import { findStreamingTurnGroup, hasAssistantTurnInCurrentTurn } from './live-group-set'
+import { findStreamingTurnGroup, hasAssistantOutputAfterLastUser, hasAssistantTurnInCurrentTurn } from './live-group-set'
 
 const RUN_STARTED_AT = 1_800_000_000_000
 
@@ -99,5 +99,24 @@ describe('本轮是否已有助手内容', () => {
 
   test('Given 助手输出后用户又发了新消息 When 判断 Then 新一轮尚无内容', () => {
     expect(hasAssistantTurnInCurrentTurn([userGroup, assistantTurn(RUN_STARTED_AT), userGroup])).toBe(false)
+  })
+})
+
+describe('最后一条用户消息之后是否有助手输出（中断 badge 归属）', () => {
+  test('Given 上一轮有助手输出且用户新消息之后无输出 When 判断 Then 视为无输出（badge 不应挂在上一轮）', () => {
+    expect(hasAssistantOutputAfterLastUser([userGroup, assistantTurn(RUN_STARTED_AT), userGroup])).toBe(false)
+  })
+
+  test('Given 最后一条用户消息之后已有助手轮 When 判断 Then 视为有输出', () => {
+    expect(hasAssistantOutputAfterLastUser([userGroup, assistantTurn(RUN_STARTED_AT)])).toBe(true)
+  })
+
+  test('Given 助手轮与最后用户消息之间隔着 system 分隔 When 判断 Then 跳过分隔继续向前判定', () => {
+    expect(hasAssistantOutputAfterLastUser([userGroup, assistantTurn(RUN_STARTED_AT), userGroup, compactBoundaryGroup])).toBe(false)
+    expect(hasAssistantOutputAfterLastUser([userGroup, compactBoundaryGroup, assistantTurn(RUN_STARTED_AT)])).toBe(true)
+  })
+
+  test('Given 空会话 When 判断 Then 视为无输出', () => {
+    expect(hasAssistantOutputAfterLastUser([])).toBe(false)
   })
 })
