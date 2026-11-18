@@ -81,6 +81,25 @@ describe('system 消息渲染分组', () => {
     expect(getGroupPreview(groups[1]!)).toBe('Skill 未加载：pptx（所需工具组已关闭）')
   })
 
+  test('历史里已移除的「已加载 Skill」成功提示不再补渲染为警告', () => {
+    const legacy = { ...systemMessage('skill_routing_notice'), message: '已加载 Skill：「code-honor」' } as unknown as SDKMessage
+    const groups = groupIntoTurns([userText('跑一遍流程'), legacy, assistantText('好的')])
+    expect(getGroupPreview(groups[1]!)).toBe('')
+
+    const markup = renderToStaticMarkup(
+      React.createElement(
+        Provider,
+        { store: createStore() },
+        React.createElement(MessageGroupRenderer, {
+          group: groups[1]!,
+          allMessages: [legacy],
+          historicalTaskSubjects: new Map<string, string>(),
+        }),
+      ),
+    )
+    expect(markup).not.toContain('已加载 Skill')
+  })
+
   test('压缩被跳过时独立成组，预览与渲染都给出原因', () => {
     const skipText = '最近 5 分钟内已连续压缩 2 次，暂时跳过本次压缩以免反复压缩。'
     const notice = { ...systemMessage('compact_skipped'), message: skipText } as unknown as SDKMessage

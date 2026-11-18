@@ -163,7 +163,7 @@ import { createElectronSessionStorePaths } from './session-store-host'
 import { loadPiRewindTracker, persistPiRewindTracker } from './agent-rewind-pi'
 import { buildRewindNoticePrompt } from './agent-rewind-notice'
 import { prepareRuntimeSkills } from './global-skill-manager'
-import { buildSkillRoutingAppliedNotice, buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
+import { buildSkillRoutingNotice, routeSkillsForTask, type SkillRoutingResult, type SkillRoutingSnapshot } from './skill-routing'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
 import { captureSkillToolInventory } from './skill-tool-inventory'
 import { getRuntimeStatus } from './runtime-init'
@@ -1119,9 +1119,7 @@ export class AgentOrchestrator {
    */
   /** 用户点名的 Skill 没加载时落盘一条系统提示并推给界面；失败只记日志，不影响本轮运行。 */
   private persistSkillRoutingNotice(sessionId: string, routed: SkillRoutingResult): void {
-    // 成功注入的 Skill 也走同一通道：正文注入不产生工具调用，
-    // 界面无任何痕迹会让用户以为 Skill 没生效。
-    const notice = buildSkillRoutingNotice(routed) ?? buildSkillRoutingAppliedNotice(routed)
+    const notice = buildSkillRoutingNotice(routed)
     if (!notice) return
     const message = { type: 'system', subtype: 'skill_routing_notice', message: notice, _createdAt: Date.now() } as unknown as SDKMessage
     this.eventPort.emit(sessionId, { kind: 'sdk_message', message })
