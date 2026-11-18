@@ -102,7 +102,9 @@ function getUpdateTargets() {
   return targets;
 }
 
-const BASH = 'C:/Program Files/Git/usr/bin/bash.exe';
+// scp / ssh 走 bash 解析引号：Windows 必须用 Git 自带的 bash，macOS / Linux 用系统 bash。
+// 写死 Windows 路径会让跨主机发布（在 mac 上跑本脚本）在第一步上传就 ENOENT。
+const BASH = process.env.PROFER_BASH || (process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/bash.exe' : '/bin/bash');
 const RELEASE_RETRY_DELAYS_MS = [0, 15_000, 45_000, 90_000];
 /**
  * curl 一律用 execFileSync 直呼：本脚本在 Windows 上通过 cmd.exe 执行 `run()`，
