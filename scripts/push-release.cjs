@@ -1,7 +1,13 @@
 /**
  * Profer Windows 发布（本地构建 + 双通道上传）
  *
- * 用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only]
+ * 用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--artifacts-dir <目录>] [--github-only] [--verify-only]
+ *
+ * --artifacts-dir: 从外部目录读已构建好的 Windows 资产（如 Windows 构建机回传的产物），
+ *   隐含 --artifacts-only。跨主机发布时 win-unpacked 不随资产搬运，改用
+ *   scripts/verify-windows-artifacts-portable.cjs 校验可搬运资产与构建机 Pi 闭包探针日志，
+ *   发布本身仍在持有版本库与 gh 凭据的机器上执行。
+ * --verify-only: 只跑本地门禁与资产校验，在第一次远端写入前退出（发版演练 / CI 复用）。
  *
  * 发布顺序不固定：macOS 可以先创建 tag/Release，本脚本随后只补充 Windows 资产；
  * 也可以先跑本脚本、再由 Apple Silicon 补 macOS 资产。release.yml 仅保留手动
@@ -18,20 +24,31 @@ const path = require('path');
 const { hasMacReleaseAssets, hasWindowsReleaseAssets } = require('./release-asset-contract.cjs');
 const { assertPreviousBlockmapPublished, findPurgedBlockmaps, classifyArtifactEdition, assertFeedDirectoryMatchesEdition } = require('./update-feed-contract.cjs');
 
+function argValue(flag) {
+  const inline = process.argv.find((arg) => arg.startsWith(`${flag}=`));
+  if (inline) return inline.slice(flag.length + 1);
+  const index = process.argv.indexOf(flag);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
 const VERSION = process.argv[2];
 const UNSIGNED_RELEASE = process.argv.includes('--unsigned');
-const ARTIFACTS_ONLY = process.argv.includes('--artifacts-only');
+const ARTIFACTS_DIR = argValue('--artifacts-dir');
+// 指定外部资产目录时必然不能重建：产物是别的主机打好的。
+const ARTIFACTS_ONLY = process.argv.includes('--artifacts-only') || Boolean(ARTIFACTS_DIR);
 const GITHUB_ONLY = process.argv.includes('--github-only');
+// 只跑本地门禁与资产校验，不产生任何远端写入（发版前演练 / CI 复用）。
+const VERIFY_ONLY = process.argv.includes('--verify-only');
 // 同版本重发：已发布的 Release 需要显式放行才能覆盖本平台资产（如仅修打包缺陷的重发）。
 const ALLOW_PUBLISHED_RELEASE = process.argv.includes('--allow-published-release');
 if (!VERSION) {
-  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only] [--allow-published-release]');
+  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--artifacts-dir <目录>] [--github-only] [--allow-published-release]');
   process.exit(1);
 }
 
 const ROOT = path.resolve(__dirname, '..');
 const ELECTRON = path.join(ROOT, 'apps/electron');
-const OUT = path.join(ELECTRON, 'out');
+const OUT = ARTIFACTS_DIR ? path.resolve(ROOT, ARTIFACTS_DIR) : path.join(ELECTRON, 'out');
 const TAG = `v${VERSION}`;
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
 // 本脚本发的是开源版（资产名 Profer-Setup-*），所以更新源也必须是开源目录：
@@ -381,8 +398,18 @@ async function ensureGitHubRelease(assets) {
     warnPurgedBlockmaps(UPDATE_FEED_URL);
   }
   if (ARTIFACTS_ONLY) {
-    run(`bun run ${UNSIGNED_RELEASE ? 'verify:release-assets:unsigned' : 'verify:release-assets'}`, ELECTRON);
-    run('bun run verify:packaged-pi-runtime', ELECTRON);
+    if (process.platform === 'win32') {
+      run(`bun run ${UNSIGNED_RELEASE ? 'verify:release-assets:unsigned' : 'verify:release-assets'}`, ELECTRON);
+      run('bun run verify:packaged-pi-runtime', ELECTRON);
+    } else {
+      // 跨主机发布：win-unpacked 与 PowerShell 探针都留在 Windows 构建机上，这里只校验
+      // 可搬运的资产（版本 / 大小 / SHA-512 / blockmap）与构建机留下的 Pi 闭包探针日志。
+      // 校验结论要进日志，所以直走 stdio: inherit，不用吞输出的 run()。
+      execSync(
+        `node scripts/verify-windows-artifacts-portable.cjs --dir ${quote(OUT)}${UNSIGNED_RELEASE ? ' --unsigned' : ''}`,
+        { cwd: ROOT, stdio: 'inherit' },
+      );
+    }
   } else {
     run('bun run typecheck');
     run('bun test --isolate --timeout 30000');
@@ -399,6 +426,12 @@ async function ensureGitHubRelease(assets) {
     if (!fs.existsSync(asset.path)) throw new Error(`缺少打包资产: ${asset.path}`);
     asset.size = fs.statSync(asset.path).size;
     asset.sha256 = sha256(asset.path);
+  }
+
+  if (VERIFY_ONLY) {
+    console.log(`[verify-only] 本地校验通过：${assets.map((asset) => asset.name).join('、')}`);
+    console.log('[verify-only] 未上传更新源、未推送源码/tag、未写 GitHub Release。');
+    return;
   }
 
   if (!UPDATE_FEED_URL.startsWith('https://')) {
