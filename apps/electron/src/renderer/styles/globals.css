@@ -3084,6 +3084,13 @@
   background-color: transparent;
 }
 
+/* 输入卡片保留外层聚焦反馈；正文区不再重复画空间导航焦点框，避免底边横贯末行与折叠按钮之间。
+ * 选择器优先级须高于通用 [tabindex]:not([tabindex="-1"]):focus-visible，其他编辑器和按钮不受影响。 */
+[data-profer-navigation-region="conversation"] .agent-input-surface .rich-text-input .ProseMirror:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-profer-navigation-item]:focus-visible,
   [data-profer-navigation-region] button:focus-visible,

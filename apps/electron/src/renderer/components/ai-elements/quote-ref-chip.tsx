@@ -40,7 +40,7 @@ interface PreviewAnchor {
   maxHeight: number
 }
 
-export function QuoteRefChipView({ node, deleteNode, editor }: NodeViewProps): React.ReactElement {
+export function QuoteRefChipView({ node, deleteNode, editor, getPos }: NodeViewProps): React.ReactElement {
   const payload = node.attrs.quote as QuoteRefPayload | null
   const n = Number(node.attrs.n) || 1
   const label = payload ? describeQuoteChipLabel(payload) : ''
@@ -150,6 +150,22 @@ export function QuoteRefChipView({ node, deleteNode, editor }: NodeViewProps): R
     }, resolveQuotePreviewDelay())
   }
 
+  const placeCaret = (after: boolean): void => {
+    if (editor.isDestroyed || !editor.isEditable) return
+    const pos = getPos()
+    if (typeof pos !== 'number') return
+    editor.commands.setTextSelection(pos + (after ? node.nodeSize : 0))
+    editor.view.focus()
+  }
+
+  const handleEdgeMouseDown = (event: React.MouseEvent<HTMLElement>, after: boolean): void => {
+    if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+    // 点击区在胶囊外沿，不写入占位字符；阻止浏览器把选区吸回不可编辑节点内。
+    event.preventDefault()
+    event.stopPropagation()
+    placeCaret(after)
+  }
+
   const visible = Boolean(preview && payload)
 
   return (
@@ -161,6 +177,19 @@ export function QuoteRefChipView({ node, deleteNode, editor }: NodeViewProps): R
         data-quote-n={n}
         aria-label={payload ? `引用 ${n}：${detail}，悬停 1 秒查看原文` : '引用来源已失效'}
         contentEditable={false}
+        draggable={editor.isEditable}
+        data-drag-handle={editor.isEditable ? '' : undefined}
+        onClick={(event: React.MouseEvent<HTMLElement>) => {
+          if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+          event.preventDefault()
+          event.stopPropagation()
+          const rect = event.currentTarget.getBoundingClientRect()
+          placeCaret(event.clientX >= (rect.left + rect.right) / 2)
+        }}
+        onDragStartCapture={() => {
+          clearOpenTimer()
+          if (phase === 'open' || phase === 'opening') beginClose()
+        }}
         onMouseEnter={(event: React.MouseEvent<HTMLElement>) => schedulePreview(event.currentTarget)}
         onMouseLeave={() => {
           // 离开胶囊（包括划出输入框）就收起：只清计时会让已弹出的预览一直挂着
@@ -168,6 +197,12 @@ export function QuoteRefChipView({ node, deleteNode, editor }: NodeViewProps): R
           if (phase === 'open' || phase === 'opening') beginClose()
         }}
       >
+        <span
+          className="quote-ref-chip__edge quote-ref-chip__edge--before"
+          aria-hidden="true"
+          draggable={false}
+          onMouseDown={(event) => handleEdgeMouseDown(event, false)}
+        />
         <span className="quote-ref-chip__n">{n}</span>
         {label ? <span className="quote-ref-chip__sep" aria-hidden="true" /> : null}
         {label ? <span className="quote-ref-chip__label">{label}</span> : null}
@@ -197,6 +232,12 @@ export function QuoteRefChipView({ node, deleteNode, editor }: NodeViewProps): R
         >
           ×
         </button>
+        <span
+          className="quote-ref-chip__edge quote-ref-chip__edge--after"
+          aria-hidden="true"
+          draggable={false}
+          onMouseDown={(event) => handleEdgeMouseDown(event, true)}
+        />
       </NodeViewWrapper>
 
       {visible && preview && payload

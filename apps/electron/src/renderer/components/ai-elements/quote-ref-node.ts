@@ -1,10 +1,10 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 import { ReactNodeViewRenderer } from '@tiptap/react'
 import { QuoteRefChipView } from './quote-ref-chip'
-import { Plugin, PluginKey } from '@tiptap/pm/state'
-import type { EditorState } from '@tiptap/pm/state'
+import { Plugin, PluginKey, NodeSelection, TextSelection } from '@tiptap/pm/state'
+import type { EditorState, Transaction } from '@tiptap/pm/state'
 import type { QuotedSelection } from '@/atoms/preview-atoms'
-import { describeQuoteChipDetail, describeQuoteChipLabel } from '@/lib/quoted-selection'
+import { describeQuoteChipDetail, describeQuoteChipLabel, getQuotedSelectionKey } from '@/lib/quoted-selection'
 
 /**
  * 内联引用节点（`[n] 文件名` 胶囊）。
@@ -43,16 +43,49 @@ function decodePayload(raw: string | null): QuoteRefPayload | null {
 
 const renumberKey = new PluginKey('quote-ref-renumber')
 
-/**
- * 每次文档变化后把引用编号重排为 1..k。
- *
- * 只改属性、不改结构，所以同一事务里可以安全地多次 setNodeMarkup。
- */
-function createRenumberPlugin(): Plugin {
+/** 在当前选区插入引用，只替换过期的浏览器划词，不搬动用户排好的其他引用。 */
+export function createQuoteRefInsertTransaction(state: EditorState, quote: QuoteRefPayload): Transaction | null {
+  const obsolete: Array<{ from: number; to: number }> = []
+  const targetKey = getQuotedSelectionKey(quote)
+  let duplicate = false
+  state.doc.descendants((node, pos) => {
+    if (node.type.name !== QUOTE_REF_NODE_NAME) return
+    const current = node.attrs.quote as QuoteRefPayload | null
+    if (!current) return
+    if (getQuotedSelectionKey(current) === targetKey) duplicate = true
+    if (quote.origin === 'browser-selection' && current.origin === 'browser-selection') {
+      obsolete.push({ from: pos, to: pos + node.nodeSize })
+    }
+  })
+  if (duplicate) return null
+
+  const tr = state.tr
+  for (const range of obsolete.reverse()) tr.delete(range.from, range.to)
+  tr.replaceSelectionWith(state.schema.nodes[QUOTE_REF_NODE_NAME]!.create({ n: 1, quote }))
+  // 保留一个真实空格，让后续键入、方向键和 IME 都走原生文本光标。
+  tr.insertText(' ', tr.selection.to)
+  return tr.scrollIntoView()
+}
+
+/** 编号跟随文档顺序；拖放结束后回到文本光标，避免下一次键入替换引用。 */
+export function createQuoteRefPlugin(): Plugin {
   return new Plugin({
     key: renumberKey,
+    props: {
+      handleDOMEvents: {
+        dragend: (view) => {
+          const { selection } = view.state
+          // 取消拖动时 TipTap 也可能留下临时 NodeSelection。
+          if (selection instanceof NodeSelection && selection.node.type.name === QUOTE_REF_NODE_NAME) {
+            view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, selection.to)))
+          }
+          return false
+        },
+      },
+    },
     appendTransaction: (transactions, _oldState, newState: EditorState) => {
-      if (!transactions.some((transaction) => transaction.docChanged)) return null
+      const dropped = transactions.some((transaction) => transaction.getMeta('uiEvent') === 'drop')
+      if (!dropped && !transactions.some((transaction) => transaction.docChanged)) return null
       const tr = newState.tr
       let index = 0
       let changed = false
@@ -64,6 +97,16 @@ function createRenumberPlugin(): Plugin {
           changed = true
         }
       })
+      if (dropped && !newState.selection.empty) {
+        let containsQuote = false
+        newState.doc.nodesBetween(newState.selection.from, newState.selection.to, (node) => {
+          if (node.type.name === QUOTE_REF_NODE_NAME) containsQuote = true
+        })
+        if (containsQuote) {
+          tr.setSelection(TextSelection.near(tr.doc.resolve(newState.selection.to)))
+          changed = true
+        }
+      }
       return changed ? tr : null
     },
   })
@@ -74,8 +117,8 @@ export const QuoteRef = Node.create({
   group: 'inline',
   inline: true,
   atom: true,
-  // 不可选中：否则点击胶囊右侧会把节点变成 NodeSelection，下一次按键直接把它替换掉，
-  // 表现为「输入文字后引用消失」。删除走 Backspace（光标紧邻时由 ProseMirror 处理）。
+  draggable: true,
+  // 普通点击仍使用文本光标；仅原生拖动期间由 TipTap 临时选中整颗引用。
   selectable: false,
 
   addAttributes() {
@@ -133,6 +176,6 @@ export const QuoteRef = Node.create({
   },
 
   addProseMirrorPlugins() {
-    return [createRenumberPlugin()]
+    return [createQuoteRefPlugin()]
   },
 })
