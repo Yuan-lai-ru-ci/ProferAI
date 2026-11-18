@@ -77,6 +77,7 @@ interface ExportResult {
   warnings?: string[]
   bytes?: number
   encrypted?: boolean
+  cancelled?: boolean
 }
 
 interface ExportProgress {
@@ -191,6 +192,7 @@ function MigrationSection(): React.ReactElement {
     new Set(['sessions', 'skills', 'mcp'])
   )
   const [exporting, setExporting] = React.useState(false)
+  const [cancelling, setCancelling] = React.useState(false)
   const exportRef = React.useRef(false)
   const [exportResult, setExportResult] = React.useState<ExportResult | null>(null)
   const [exportEncrypt, setExportEncrypt] = React.useState(false)
@@ -267,20 +269,16 @@ function MigrationSection(): React.ReactElement {
       return
     }
     exportRef.current = true
-    setExporting(true)
     setExportResult(null)
     setExportProgress(null)
     const taskId = crypto.randomUUID()
-    exportTaskIdRef.current = taskId
 
     try {
       const outputPath = await window.electronAPI.migrationSaveFileDialog(exportMode)
-      if (!outputPath) {
-        exportRef.current = false
-        setExporting(false)
-        exportTaskIdRef.current = null
-        return
-      }
+      if (!outputPath) return
+
+      setExporting(true)
+      exportTaskIdRef.current = taskId
 
       const components: MigrationComponent[] =
         exportMode === 'personal'
@@ -332,7 +330,23 @@ function MigrationSection(): React.ReactElement {
     } finally {
       exportRef.current = false
       setExporting(false)
+      setCancelling(false)
+      setExportProgress(null)
       exportTaskIdRef.current = null
+    }
+  }
+
+  const handleCancelExport = async (): Promise<void> => {
+    const taskId = exportTaskIdRef.current
+    if (!taskId || cancelling) return
+    setCancelling(true)
+    try {
+      // false 表示主进程尚未注册该任务（或已结束）：允许用户再次点击取消。
+      const accepted = await window.electronAPI.migrationCancelExport(taskId)
+      if (!accepted) setCancelling(false)
+    } catch (error) {
+      console.error('[导出] 取消请求失败:', error)
+      setCancelling(false)
     }
   }
 
@@ -641,6 +655,17 @@ function MigrationSection(): React.ReactElement {
               {exporting ? '导出中...' : '选择保存位置并导出'}
             </button>
 
+            {exporting && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleCancelExport()}
+                disabled={cancelling}
+              >
+                {cancelling ? '取消中...' : '取消导出'}
+              </Button>
+            )}
+
             {exporting && exportProgress && (
               <div className="w-full max-w-sm space-y-1">
                 <div className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -664,12 +689,19 @@ function MigrationSection(): React.ReactElement {
             )}
 
             {exportResult && (
-              <div className={cn('flex items-center gap-1.5 text-sm', exportResult.success ? 'text-green-600' : 'text-red-500')}>
-                {exportResult.success ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
-                {exportResult.success
-                  ? `已导出至 ${exportResult.filePath ? getFileBaseName(exportResult.filePath) : ''}${exportResult.bytes ? `（${formatBytes(exportResult.bytes)}${exportResult.encrypted ? '，已加密' : ''}）` : ''}`
-                  : exportResult.error}
-              </div>
+              exportResult.cancelled ? (
+                <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <XCircle size={15} />
+                  已取消导出，未生成备份文件
+                </div>
+              ) : (
+                <div className={cn('flex items-center gap-1.5 text-sm', exportResult.success ? 'text-green-600' : 'text-red-500')}>
+                  {exportResult.success ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
+                  {exportResult.success
+                    ? `已导出至 ${exportResult.filePath ? getFileBaseName(exportResult.filePath) : ''}${exportResult.bytes ? `（${formatBytes(exportResult.bytes)}${exportResult.encrypted ? '，已加密' : ''}）` : ''}`
+                    : exportResult.error}
+                </div>
+              )
             )}
           </div>
 

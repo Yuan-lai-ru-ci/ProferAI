@@ -209,7 +209,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
   const [testResult, setTestResult] = React.useState<TestResultView | null>(
     server?.entry.lastTestResult ?? null
   )
-  // 重启服务
+  // 重启常驻连接
   const [restarting, setRestarting] = React.useState(false)
   const [restartResult, setRestartResult] = React.useState<{ ok: boolean; message: string } | null>(null)
   // 运行时连接快照（本地 UI 状态，不进 Jotai）
@@ -435,14 +435,14 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
     }
   }
 
-  /** 重启常驻 MCP 服务（仅编辑态可用） */
+  /** 重启常驻 MCP 连接（仅编辑态可用，仅作用于 Pi 运行时） */
   const handleRestart = async (): Promise<void> => {
     const serverName = name.trim()
     if (!isEdit || !serverName) return
 
     const bridge = getMcpBridge()
     if (!bridge.restartMcpServer) {
-      setRestartResult({ ok: false, message: '当前版本不支持重启服务' })
+      setRestartResult({ ok: false, message: '当前版本不支持重启连接' })
       return
     }
 
@@ -451,7 +451,9 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
     try {
       const result = await bridge.restartMcpServer(serverName)
       if (!mountedRef.current) return
-      setRestartResult(result.ok ? { ok: true, message: '已重启，下一轮会话生效' } : result)
+      // 原样呈现主进程结果：`0 个连接` 必须如实显示，
+      // 不能一律报「已重启」——Claude 会话没有常驻连接，点了本来就不会有变化。
+      setRestartResult(result)
     } catch (error) {
       if (!mountedRef.current) return
       setRestartResult({
@@ -690,9 +692,10 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
                     size="sm"
                     onClick={() => void handleRestart()}
                     disabled={restarting || !name.trim()}
+                    title="重建 Pi 运行时的常驻连接；下一轮会话生效"
                   >
                     {restarting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                    <span>{restarting ? '重启中...' : '重启服务'}</span>
+                    <span>{restarting ? '重启中...' : '重启连接'}</span>
                   </Button>
                 )}
                 <Button
@@ -727,10 +730,13 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
               </div>
             )}
 
-            {/* 运行时状态 */}
+            {/* Pi 运行时连接状态 */}
             <div className="rounded-lg bg-muted/40 px-3 py-2.5 space-y-2">
               <div className="flex items-center justify-between">
-                <div className="text-sm font-medium text-foreground">运行时状态</div>
+                <div className="space-y-0.5">
+                  <div className="text-sm font-medium text-foreground">Pi 运行时连接</div>
+                  <div className="text-xs text-muted-foreground">只包含 Pi 的常驻连接；Claude 会话每轮重建连接，不在此列</div>
+                </div>
                 <Button
                   type="button"
                   variant="ghost"
@@ -752,7 +758,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
                 </div>
               ) : (
                 <div className="text-xs text-muted-foreground">
-                  {statusReady ? '当前没有活跃连接' : '正在读取运行状态…'}
+                  {statusReady ? '当前没有 Pi 运行时的活跃连接' : '正在读取运行状态…'}
                 </div>
               )}
               {connection?.externalStateStale && (

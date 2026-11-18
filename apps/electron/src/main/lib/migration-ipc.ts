@@ -10,6 +10,9 @@ function forwardProgress(event: IpcMainInvokeEvent, taskId: unknown, progress: u
   }
 }
 
+/** 正在进行的导出任务：taskId → AbortController，供用户取消。 */
+const exportControllers = new Map<string, AbortController>()
+
 export function registerMigrationIpc(): void {
   ipcMain.handle('migration:getExportPreview', async (_, workspaceId: string) => {
     const { getExportPreview } = await import('./migration-service')
@@ -33,11 +36,26 @@ export function registerMigrationIpc(): void {
   })
   ipcMain.handle('migration:exportV2', async (event, options) => {
     const { exportDataV2 } = await import('./migration-service')
-    const { taskId, ...rest } = options ?? {}
-    return exportDataV2({
-      ...rest,
-      onProgress: (progress) => forwardProgress(event, taskId, progress),
-    })
+    const { taskId: rawTaskId, ...rest } = options ?? {}
+    const taskId = typeof rawTaskId === 'string' && rawTaskId ? rawTaskId : null
+    const controller = taskId ? new AbortController() : null
+    if (controller && taskId) exportControllers.set(taskId, controller)
+    try {
+      return await exportDataV2({
+        ...rest,
+        signal: controller?.signal,
+        onProgress: (progress) => forwardProgress(event, taskId, progress),
+      })
+    } finally {
+      if (taskId) exportControllers.delete(taskId)
+    }
+  })
+  ipcMain.handle('migration:cancelExport', (_, taskId: unknown) => {
+    if (typeof taskId !== 'string') return false
+    const controller = exportControllers.get(taskId)
+    if (!controller) return false
+    controller.abort()
+    return true
   })
   ipcMain.handle('migration:parseImportFile', async (_, filePath: string, passphrase?: string) => {
     const { parseImportFile } = await import('./migration-service')

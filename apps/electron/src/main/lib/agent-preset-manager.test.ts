@@ -91,8 +91,11 @@ describe('Capability Registry', () => {
     expect(tools.every((tool) => tool.label && tool.hint && tool.runtimes.length > 0)).toBe(true)
     expect(tools.every((tool) => ['read', 'write', 'external', 'destructive'].includes(tool.risk))).toBe(true)
     expect(getAgentPresetCapabilityTool('mcp__collaboration__delegate_agent')?.risk).toBe('write')
-    expect(getAgentPresetCapabilityTools('claude').length).toBe(tools.length)
+    // MCP 常驻连接只存在于 Pi runtime，所以这两个工具是 pi 专属；其余工具两侧一致。
+    const piOnly = tools.filter((tool) => tool.runtimes.includes('pi') && !tool.runtimes.includes('claude'))
+    expect(piOnly.map((tool) => tool.name).sort()).toEqual(['list_mcp_servers', 'restart_mcp_server'])
     expect(getAgentPresetCapabilityTools('pi').length).toBe(tools.length)
+    expect(getAgentPresetCapabilityTools('claude').length).toBe(tools.length - piOnly.length)
   })
 })
 

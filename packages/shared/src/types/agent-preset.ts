@@ -269,6 +269,15 @@ export const AGENT_PRESET_CAPABILITY_GROUPS = [
       capabilityTool('audit_ppt_delivery', '审计 PPT 交付', '检查 PPT 交付结果'),
     ],
   }),
+  // MCP 常驻连接只存在于 Pi runtime（主进程桥接层自己持有连接表）；
+  // Claude runtime 每轮 query 重新注入 mcpServers，没有可重启的连接，因此标 pi 专属。
+  capabilityGroup({
+    id: 'mcp', label: 'MCP 连接', hint: '查看与重启用户 MCP 服务器的常驻连接',
+    tools: [
+      capabilityTool('list_mcp_servers', '列出 MCP 连接', '查看工作区 MCP 服务器与连接状态', 'read', ['pi']),
+      capabilityTool('restart_mcp_server', '重启 MCP 服务器', '重建常驻连接，下一轮会话生效', 'destructive', ['pi']),
+    ],
+  }),
 ] as const satisfies readonly AgentPresetCapabilityGroup[];
 
 export type AgentPresetToolGroup =

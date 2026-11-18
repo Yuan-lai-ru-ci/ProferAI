@@ -14,10 +14,12 @@ import {
   __reapIdleConnectionsForTest,
   __resetMcpBridgeForTest,
   __setMcpConnectionFactoryForTest,
+  buildPiMcpTools,
   disconnectMcpServer,
   discoverExternalMcpTools,
   listMcpConnectionSnapshots,
   reconcileMcpServers,
+  refreshStaleMcpConnections,
   restartMcpServer,
 } from './pi-mcp-tools'
 
@@ -118,6 +120,30 @@ describe('Pi MCP 连接生命周期', () => {
     expect(await restartMcpServer('not-connected')).toEqual({ ok: true, message: '已重启 0 个连接' })
   })
 
+  test('带 workspaceSlug 的 restart 只关该工作区连接，不影响其它工作区', async () => {
+    const servers = { demo: { type: 'stdio', command: 'demo-server' } }
+    await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-a' })
+    await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-b' })
+
+    const result = await restartMcpServer('demo', { workspaceSlug: 'ws-a' })
+    expect(result).toEqual({ ok: true, message: '已重启 1 个连接（仅工作区 ws-a）' })
+
+    // ws-a 的旧连接已关闭，ws-b 仍在
+    const remaining = listMcpConnectionSnapshots()
+    expect(remaining.map(item => item.workspaceSlug)).toEqual(['ws-b'])
+    expect(created.filter(item => item.transport.closed)).toHaveLength(1)
+  })
+
+  test('显式传空对象等同于全量 restart，保持设置页原有语义', async () => {
+    const servers = { demo: { type: 'stdio', command: 'demo-server' } }
+    await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-a' })
+    await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-b' })
+
+    const result = await restartMcpServer('demo', {})
+    expect(result).toEqual({ ok: true, message: '已重启 2 个连接' })
+    expect(listMcpConnectionSnapshots()).toHaveLength(0)
+  })
+
   test('reconcile 关闭未列出的 server，保留列出的', async () => {
     const servers = {
       keep: { type: 'stdio', command: 'keep-server' },
@@ -161,6 +187,69 @@ describe('Pi MCP 连接生命周期', () => {
     const future = new Date(snapshot!.connectedAt + 60_000)
     utimesSync(statePath, future, future)
     expect(listMcpConnectionSnapshots()[0]!.externalStateStale).toBe(true)
+
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('外部配置变更后 refreshStaleMcpConnections 只关闭受影响的连接', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pi-mcp-refresh-'))
+    const statePath = join(dir, 'server.toml')
+    writeFileSync(statePath, 'x = 1\n')
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(statePath, past, past)
+
+    await discoverExternalMcpTools(
+      { demo: { type: 'stdio', command: 'demo-server' }, other: { type: 'stdio', command: 'other-server' } },
+      { workspaceSlug: 'ws', externalStatePaths: { demo: [statePath] } },
+    )
+    expect(listMcpConnectionSnapshots()).toHaveLength(2)
+
+    // 文件没动：一条都不关
+    expect(await refreshStaleMcpConnections({ demo: [statePath] })).toEqual([])
+    expect(listMcpConnectionSnapshots()).toHaveLength(2)
+
+    // 文件在连接建立后被改写：只关 demo，其它 server 不受牵连
+    const future = new Date(Date.now() + 60_000)
+    utimesSync(statePath, future, future)
+    expect(await refreshStaleMcpConnections({ demo: [statePath] })).toEqual(['demo'])
+    expect(listMcpConnectionSnapshots().map(item => item.serverName)).toEqual(['other'])
+    expect(created.find(item => item.serverName === 'demo')!.transport.closed).toBe(true)
+    expect(created.find(item => item.serverName === 'other')!.transport.closed).toBe(false)
+
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('buildPiMcpTools 每轮准备时自动淘汰外部配置已变更的连接并重建', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pi-mcp-rebuild-'))
+    const statePath = join(dir, 'server.toml')
+    writeFileSync(statePath, 'x = 1\n')
+    // 用可控时钟：mtime 必须落在「旧连接建立后、下次准备前」，才不会连新连接也判过期
+    const base = Date.now()
+    setSystemTime(base)
+    const past = new Date(base - 60_000)
+    utimesSync(statePath, past, past)
+
+    const servers = { demo: { type: 'stdio', command: 'demo-server' } }
+    const options = { workspaceSlug: 'ws', externalStatePaths: { demo: [statePath] } }
+
+    await buildPiMcpTools(servers, undefined, options)
+    expect(created).toHaveLength(1)
+    const first = created[0]!
+
+    // 配置没变：复用同一条连接，不重建
+    await buildPiMcpTools(servers, undefined, options)
+    expect(created).toHaveLength(1)
+    expect(first.transport.closed).toBe(false)
+
+    // 配置文件在连接建立后变更 → 下次准备淘汰旧连接并重建，新连接不再 stale
+    const changedAt = new Date(base + 1_000)
+    utimesSync(statePath, changedAt, changedAt)
+    setSystemTime(base + 5_000)
+    await buildPiMcpTools(servers, undefined, options)
+
+    expect(first.transport.closed).toBe(true)
+    expect(created).toHaveLength(2)
+    expect(listMcpConnectionSnapshots()[0]!.externalStateStale).toBe(false)
 
     rmSync(dir, { recursive: true, force: true })
   })

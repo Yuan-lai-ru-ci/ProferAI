@@ -123,6 +123,8 @@ export interface ExportResult {
   encrypted?: boolean
   /** 默认全量导出时被自动排除的工作区（当前只有 project 模式） */
   excluded?: ExcludedWorkspace[]
+  /** 用户主动取消：此时不会残留半成品文件 */
+  cancelled?: boolean
 }
 
 /** 默认全量导出时被自动排除的工作区，附带面向用户的原因。 */
@@ -264,6 +266,8 @@ export interface ExportOptionsV2 {
   workspaceSelections?: WorkspaceSelection[]
   /** 个人备份口令；设置后整个归档用 AES-256-GCM 加密 */
   passphrase?: string
+  /** 仅主进程内使用：用户取消导出时中止写入与加密 */
+  signal?: AbortSignal
   /** 仅主进程内使用，不经 IPC 传递 */
   onProgress?: (progress: ExportProgress) => void
 }
@@ -577,17 +581,29 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
   }
 
   const passphrase = _resolvePassphrase(mode, options.passphrase)
+  const signal = options.signal
   const reporter = createExportReporter(options.onProgress)
   reporter.setPhase('preparing')
-  reporter.setTotal(mode === 'personal'
-    ? await estimatePersonalExportBytes(targetWorkspaces.map((entry) => entry.workspace), components)
-    : 0)
+  let estimatedTotal = 0
+  try {
+    estimatedTotal = mode === 'personal'
+      ? await estimatePersonalExportBytes(targetWorkspaces.map((entry) => entry.workspace), components, signal)
+      : 0
+  } catch (error) {
+    if (isExportAborted(error)) return { success: false, filePath: '', cancelled: true }
+    throw error
+  }
+  reporter.setTotal(estimatedTotal)
 
   const stagingPath = passphrase ? join(tmpdir(), `profer-backup-staging-${randomUUID()}`) : outputPath
-  const writer = new ZipStreamWriter(stagingPath, { onBytesWritten: (_archiveBytes, consumedBytes) => reporter.onBytes(consumedBytes) })
+  const writer = new ZipStreamWriter(stagingPath, {
+    onBytesWritten: (_archiveBytes, consumedBytes) => reporter.onBytes(consumedBytes),
+    signal,
+  })
   const blobRefs = new Map<string, number>()
 
   try {
+    signal?.throwIfAborted()
     reporter.setPhase('packing')
     if (components.includes('sessions')) {
       manifest.runtimeArtifacts = await _addRuntimeArtifacts(
@@ -631,11 +647,12 @@ export async function exportDataV2(options: ExportOptionsV2): Promise<ExportResu
 
     reporter.setPhase('finalizing')
     await writer.addBuffer(JSON.stringify(manifest, null, 2), 'manifest.json')
-    const result = await _finishExport({ writer, stagingPath, outputPath, passphrase, warnings, reporter })
+    const result = await _finishExport({ writer, stagingPath, outputPath, passphrase, warnings, reporter, signal })
     return excluded.length > 0 ? { ...result, excluded } : result
   } catch (error) {
     await writer.abort()
     if (passphrase) rmSync(stagingPath, { force: true })
+    if (isExportAborted(error)) return { success: false, filePath: '', cancelled: true }
     throw error
   }
 }
@@ -732,6 +749,7 @@ async function _addRuntimeArtifacts(
         await writer.addFile(candidate.sourcePath, `runtime/pi/${candidate.sessionId}.jsonl`)
         refs.piSessions.push({ sessionId: candidate.sessionId, proferSessionId: candidate.proferSessionId, path: candidate.path, workspaceId: candidate.workspaceId, runtime: 'pi' })
       } catch (error) {
+        if (isExportAborted(error)) throw error
         addExportWarning(warnings, `已跳过 Pi 原生会话: ${candidate.sourcePath} (${formatErrorMessage(error)})`)
       }
       continue
@@ -748,6 +766,7 @@ async function _addRuntimeArtifacts(
         runtime: 'claude',
       })
     } catch (error) {
+      if (isExportAborted(error)) throw error
       addExportWarning(warnings, `已跳过 Claude 原生会话: ${candidate.sourcePath} (${formatErrorMessage(error)})`)
     }
   }
@@ -882,6 +901,7 @@ async function _addSessions(
         try {
           await writer.addFile(msgPath, `sessions/chat/${basename(msgPath)}`)
         } catch (error) {
+          if (isExportAborted(error)) throw error
           addExportWarning(warnings, `已跳过 Chat 对话: ${msgPath} (${formatErrorMessage(error)})`)
         }
       }
@@ -949,6 +969,7 @@ async function _addSessionsMultiWorkspace(
         try {
           await writer.addFile(msgPath, `sessions/chat/${basename(msgPath)}`)
         } catch (error) {
+          if (isExportAborted(error)) throw error
           addExportWarning(warnings, `已跳过 Chat 对话: ${msgPath} (${formatErrorMessage(error)})`)
         }
       }
@@ -970,6 +991,7 @@ async function _addSessionMessages(
   try {
     await writer.addFile(msgPath, `sessions/agent/${basename(msgPath)}`)
   } catch (error) {
+    if (isExportAborted(error)) throw error
     addExportWarning(warnings, `已跳过会话文件: ${msgPath} (${formatErrorMessage(error)})`)
     return false
   }
@@ -1217,6 +1239,7 @@ async function _addReferencedBlobs(
       blobCount += 1
       blobBytes += Math.max(statSync(sourcePath).size, declaredBytes)
     } catch (error) {
+      if (isExportAborted(error)) throw error
       missingBlobs += 1
       addExportWarning(warnings, `已跳过会话原文: ${hex} (${formatErrorMessage(error)})`)
     }
@@ -1270,6 +1293,7 @@ async function _addPersonalConfigFiles(writer: ZipStreamWriter, warnings: string
       await writer.addFile(file.path, file.entry)
       sections.add(file.section)
     } catch (error) {
+      if (isExportAborted(error)) throw error
       addExportWarning(warnings, `已跳过 ${file.entry}: ${formatErrorMessage(error)}`)
     }
   }
@@ -1332,6 +1356,7 @@ async function _addWorkspacePayload(
       await writer.addFile(presetsPath, `${prefix}/config/agent-presets.json`)
       sections.push('工作区预设')
     } catch (error) {
+      if (isExportAborted(error)) throw error
       addExportWarning(warnings, `已跳过工作区预设: ${formatErrorMessage(error)}`)
     }
   }
@@ -2554,21 +2579,26 @@ function _resolvePassphrase(mode: MigrationMode, passphrase: string | undefined)
 export async function estimatePersonalExportBytes(
   workspaces: AgentWorkspace[],
   components: MigrationComponent[] = ['sessions', 'skills', 'mcp', 'channels', 'chattools'],
+  signal?: AbortSignal,
 ): Promise<number> {
   let total = 0
+  signal?.throwIfAborted()
   if (components.includes('sessions')) {
-    total += await _sumBytes(getAgentSessionsDir()) + await _sumBytes(blobRootDir())
+    total += await _sumBytes(getAgentSessionsDir(), signal) + await _sumBytes(blobRootDir(), signal)
   }
   for (const workspace of workspaces) {
-    total += await _sumBytes(getAgentWorkspacePath(workspace.slug))
+    signal?.throwIfAborted()
+    total += await _sumBytes(getAgentWorkspacePath(workspace.slug), signal)
   }
   for (const dir of _personalDirectorySources()) {
-    total += await _sumBytes(dir.path)
+    signal?.throwIfAborted()
+    total += await _sumBytes(dir.path, signal)
   }
   return total
 }
 
-async function _sumBytes(target: string): Promise<number> {
+async function _sumBytes(target: string, signal?: AbortSignal): Promise<number> {
+  signal?.throwIfAborted()
   let isDirectory = false
   try {
     const stat = await fsp.stat(target)
@@ -2588,10 +2618,11 @@ async function _sumBytes(target: string): Promise<number> {
 
   let total = 0
   for (const entry of entries) {
+    signal?.throwIfAborted()
     if (entry.isSymbolicLink()) continue
     if (entry.isDirectory()) {
       if (BACKUP_EXCLUDED_DIRS.has(entry.name)) continue
-      total += await _sumBytes(join(target, entry.name))
+      total += await _sumBytes(join(target, entry.name), signal)
       continue
     }
     if (!entry.isFile() || BACKUP_EXCLUDED_FILES.has(entry.name) || entry.name.endsWith('.tmp')) continue
@@ -2611,12 +2642,13 @@ async function _finishExport(params: {
   passphrase?: string
   warnings: string[]
   reporter: ExportReporter
+  signal?: AbortSignal
 }): Promise<ExportResult> {
   const { bytes, entries } = await params.writer.finalize()
 
   if (params.passphrase) {
     params.reporter.setPhase('encrypting')
-    await encryptBackupFile(params.stagingPath, params.outputPath, params.passphrase)
+    await encryptBackupFile(params.stagingPath, params.outputPath, params.passphrase, params.signal)
     rmSync(params.stagingPath, { force: true })
   }
 
@@ -2634,6 +2666,11 @@ async function _finishExport(params: {
 
 function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** 取消导出不能被「降级为警告」的容错分支吞掉，否则会继续扫完剩余文件。 */
+function isExportAborted(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
 }
 
 function addExportWarning(warnings: string[], message: string): void {
@@ -2670,6 +2707,7 @@ async function _addDirToZip(
     try {
       await writer.addFile(fullPath, entryZipPath)
     } catch (error) {
+      if (isExportAborted(error)) throw error
       addExportWarning(warnings, `已跳过无法读取的备份项目: ${fullPath} (${formatErrorMessage(error)})`)
     }
   }

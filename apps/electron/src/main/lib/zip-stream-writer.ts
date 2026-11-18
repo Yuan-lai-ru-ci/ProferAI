@@ -117,6 +117,8 @@ export interface ZipStreamWriterOptions {
    * 调用方自行节流。
    */
   onBytesWritten?: (archiveBytes: number, consumedBytes: number) => void
+  /** 用户取消导出：中止后所有写入调用立即抛 AbortError。 */
+  signal?: AbortSignal
 }
 
 /**
@@ -154,7 +156,15 @@ export class ZipStreamWriter {
     return this.entries.length
   }
 
+  private throwIfAborted(): void {
+    if (!this.options.signal?.aborted) return
+    const error = new Error('导出已取消')
+    error.name = 'AbortError'
+    throw error
+  }
+
   private async write(chunk: Buffer): Promise<void> {
+    this.throwIfAborted()
     if (this.streamError) throw this.streamError
     this.offset += chunk.length
     this.options.onBytesWritten?.(this.offset, this.consumed)
@@ -166,6 +176,7 @@ export class ZipStreamWriter {
 
   /** 把一个本地文件写进归档。文件不存在时抛错，由调用方决定是否降级为警告。 */
   async addFile(absolutePath: string, entryName: string): Promise<void> {
+    this.throwIfAborted()
     const stat = await fsp.stat(absolutePath)
     if (!stat.isFile()) throw new Error(`不是普通文件: ${absolutePath}`)
 
@@ -215,9 +226,9 @@ export class ZipStreamWriter {
     })
 
     if (store) {
-      await pipeline(createReadStream(absolutePath), counter, sink)
+      await pipeline(createReadStream(absolutePath), counter, sink, { signal: this.options.signal })
     } else {
-      await pipeline(createReadStream(absolutePath), counter, createDeflateRaw({ level: 6 }), sink)
+      await pipeline(createReadStream(absolutePath), counter, createDeflateRaw({ level: 6 }), sink, { signal: this.options.signal })
     }
     if (this.streamError) throw this.streamError
 
@@ -244,6 +255,7 @@ export class ZipStreamWriter {
 
   /** 写入内存内容（manifest、索引、小配置文件）。大小已知，不需要 data descriptor。 */
   async addBuffer(content: Buffer | string, entryName: string): Promise<void> {
+    this.throwIfAborted()
     const raw = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8')
     const store = shouldStore(entryName)
     const method = store ? METHOD_STORE : METHOD_DEFLATE
@@ -285,6 +297,7 @@ export class ZipStreamWriter {
 
   /** 收尾：中心目录 + EOCD，并原子替换目标文件。返回最终体积与条目数。 */
   async finalize(): Promise<ZipFinalizeResult> {
+    this.throwIfAborted()
     if (this.finished) throw new Error('归档已经收尾，不能重复 finalize')
     this.finished = true
 

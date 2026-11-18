@@ -386,10 +386,11 @@ export class PiMcpClientManager {
     await Promise.allSettled(keys.map((key) => this.closeSlot(key, 'app quit')))
   }
 
-  /** 关闭指定 serverName 下的所有 key（跨 workspace 与不同配置 hash）。 */
-  async closeServer(serverName: string, reason: string): Promise<number> {
+  /** 关闭指定 serverName 下的 key；给出工作区时仅关闭该工作区。 */
+  async closeServer(serverName: string, reason: string, workspaceSlug?: string): Promise<number> {
     const keys = [...this.connections.entries()]
-      .filter(([, slot]) => slot.serverName === serverName)
+      .filter(([, slot]) => slot.serverName === serverName
+        && (workspaceSlug === undefined || slot.workspaceSlug === workspaceSlug))
       .map(([key]) => key)
     await Promise.all(keys.map((key) => this.closeSlot(key, reason)))
     return keys.length
@@ -413,6 +414,22 @@ export class PiMcpClientManager {
     if (idle.length === 0) return
     console.log(`[Pi MCP] 回收 ${idle.length} 个空闲超过 ${Math.round(ttlMs / 1000)}s 的 MCP 连接`)
     await Promise.all(idle.map((key) => this.closeSlot(key, '空闲回收')))
+  }
+
+  /** 每轮工具装配前关闭外部配置已变更的连接，不在并发调用热路径重建。 */
+  async closeStaleExternalState(externalStatePaths?: Record<string, string[]>): Promise<string[]> {
+    const targets: Array<{ key: string; serverName: string }> = []
+    for (const [key, slot] of this.connections.entries()) {
+      const conn = slot.connection
+      if (!conn) continue
+      const paths = externalStatePaths?.[conn.serverName] ?? conn.externalStatePaths
+      if (isExternalStateStale(paths, conn.connectedAt)) targets.push({ key, serverName: conn.serverName })
+    }
+    if (targets.length === 0) return []
+    const serverNames = [...new Set(targets.map(target => target.serverName))]
+    console.log(`[Pi MCP] 外部配置已变更，重建连接: ${serverNames.join('、')}`)
+    await Promise.all(targets.map(target => this.closeSlot(target.key, '外部配置已变更')))
+    return serverNames
   }
 
   /** 只输出已建立完成的连接；pending 与 rejected 一律跳过。 */
@@ -679,7 +696,21 @@ export async function discoverExternalMcpTools(mcpServers: PiMcpServers, options
   return discovered
 }
 
+/** 在工具装配前淘汰外部配置已变更的连接，失败仅告警。 */
+export async function refreshStaleMcpConnections(
+  externalStatePaths?: Record<string, string[]>,
+  clientManager: PiMcpClientManager = manager,
+): Promise<string[]> {
+  try {
+    return await clientManager.closeStaleExternalState(externalStatePaths)
+  } catch (error) {
+    console.warn('[Pi MCP] 重建外部配置已变更的连接失败（忽略）:', error)
+    return []
+  }
+}
+
 export async function buildPiMcpTools(mcpServers: PiMcpServers, policy?: EffectiveAgentPresetPolicy, options?: PiMcpBridgeOptions): Promise<ToolDefinition[]> {
+  await refreshStaleMcpConnections(options?.externalStatePaths, options?.manager ?? manager)
   const tools: ToolDefinition[] = []
   const seenToolNames = new Set<string>()
   for (const { serverName, config, tool } of await discoverExternalMcpTools(Object.fromEntries(Object.entries(mcpServers).filter(([name]) => !policy || isEffectiveAgentPresetMcpServerAllowed(policy, name))), options)) {
@@ -711,17 +742,19 @@ export async function buildPiMcpTools(mcpServers: PiMcpServers, policy?: Effecti
   return tools
 }
 
-/**
- * 重启单个 MCP server：关闭它名下所有连接（跨 workspace 与配置 hash），
- * 丢弃 tools 缓存并递增代际。下次 listTools 会重建连接与子进程。
- * 不会置位 disposed，因此重启后桥接仍可正常使用。
- */
-export async function restartMcpServer(serverName: string): Promise<McpServerRestartResult> {
+/** 给出工作区时仅重启该工作区的连接；缺省保持全局重启行为。 */
+export interface McpRestartScope {
+  workspaceSlug?: string
+}
+
+/** 关闭匹配范围连接并递增代际；下次列出工具时重建。 */
+export async function restartMcpServer(serverName: string, scope?: McpRestartScope): Promise<McpServerRestartResult> {
   // 代际递增：即使没有旧连接，新连接的 epoch 也必须大于重启前的任何探测结果
   nextEpoch()
-  const closed = await manager.closeServer(serverName, '手动重启')
-  console.log(`[Pi MCP] 重启 MCP server ${serverName}：已关闭 ${closed} 个连接`)
-  return { ok: true, message: `已重启 ${closed} 个连接` }
+  const closed = await manager.closeServer(serverName, '手动重启', scope?.workspaceSlug)
+  const scopeNote = scope?.workspaceSlug ? `（仅工作区 ${scope.workspaceSlug}）` : ''
+  console.log(`[Pi MCP] 重启 MCP server ${serverName}：已关闭 ${closed} 个连接${scopeNote}`)
+  return { ok: true, message: `已重启 ${closed} 个连接${scopeNote}` }
 }
 
 /** 断开单个 MCP server 的所有连接；不清 disposed，下次调用会自动重连。 */

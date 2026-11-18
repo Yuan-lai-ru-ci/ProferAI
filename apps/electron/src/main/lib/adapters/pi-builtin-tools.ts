@@ -88,7 +88,7 @@ import { downloadInstaller, launchInstaller } from '../installer-downloader'
 import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { appendGraphEvent, queryNodeById } from '../project-graph-service'
-import { getWorkspaceMemoryArchivePath } from '../agent-workspace-manager'
+import { getWorkspaceMcpConfig, getWorkspaceMemoryArchivePath } from '../agent-workspace-manager'
 import { searchGlobalMemory, readGlobalMemoryFile } from '../global-memory-service'
 import { appendGlobalMemoryEntry, GLOBAL_MEMORY_APPEND_DESCRIPTION, type GlobalMemoryEntry } from '../global-memory-operations'
 import {
@@ -102,6 +102,7 @@ import { browserController } from '../browser-controller'
 import { compressToolImageForModel } from '../agent-image-compression'
 import { resolveBrowserProfileKey } from '../browser-profile-policy'
 import { writeClipboardText } from '../clipboard-agent-tools'
+import { listMcpConnectionSnapshots, restartMcpServer } from './pi-mcp-tools'
 import { auditPptDelivery, planPptVisuals } from '../ppt-delivery-audit-service'
 import { sendAgentLocalImage } from '../agent-image-output-service'
 import { formatAgentImageOutputToolResult } from '../agent-image-output-tools'
@@ -456,7 +457,10 @@ export function buildPiGoalProposalTools(sdk: PiSdk, ctx: Pick<PiBuiltinToolsCon
       constraints: Type.Optional(Type.String({ description: '必须遵守的约束' })),
       stopWhen: Type.Optional(Type.String({ description: '什么情况下应该停下来问用户' })),
     }),
-    execute: async (params: unknown) => {
+    // Pi SDK 的 execute 签名是 (toolCallId, params, signal?)，第一个参数不是参数对象。
+    // 曾误写成单参 execute(params)，把 toolCallId 当成 params，objective 永远读不到，
+    // 于是无论模型填什么内容都返回「objective 不能为空」。
+    async execute(_toolCallId, params) {
       const args = params as { objective: unknown; rationale?: unknown; verification?: unknown; constraints?: unknown; stopWhen?: unknown }
       const normalized = normalizeGoalProposalInput(args)
       if (!normalized) return jsonToolResult({ accepted: false, reason: 'objective 不能为空' })
@@ -1006,6 +1010,123 @@ function buildPiClipboardTools(sdk: PiSdk): ToolDefinition[] {
   ] as unknown as ToolDefinition[]
 }
 
+// ===== 用户 MCP 连接管理工具（Pi 专属） =====
+
+/**
+ * Pi runtime 专属：用户 MCP 的常驻连接由主进程桥接层自己持有（`pi-mcp-tools` 的 manager）。
+ * 配置 hash 不变时不会重建，外部配置文件被改也只会打上 stale 标记——此前只能由用户在设置页
+ * 手点「重启服务」。这里把「查连接」和「重建连接」暴露给 Agent，让它在工具行为异常时自救。
+ *
+ * Claude runtime 不注册：它每轮 query 重新注入 `mcpServers`，没有可重启的常驻连接。
+ */
+export function buildPiMcpAdminTools(
+  sdk: PiSdk,
+  ctx: Pick<PiBuiltinToolsContext, 'workspaceSlug'>,
+): ToolDefinition[] {
+  const workspaceSlug = ctx.workspaceSlug
+
+  /** 工作区缺失或配置损坏时按「无配置」处理，不能因此让连接快照也查不到 */
+  const readConfigured = (): Record<string, { type?: string; enabled?: boolean }> => {
+    if (!workspaceSlug) return {}
+    try {
+      return getWorkspaceMcpConfig(workspaceSlug).servers ?? {}
+    } catch (error) {
+      console.warn('[Pi MCP] 读取工作区 MCP 配置失败，按无配置处理:', error)
+      return {}
+    }
+  }
+
+  /** 只读本工作区的连接，避免把其它工作区的 server 名、pid 泄露给当前会话 */
+  const readSnapshots = () => listMcpConnectionSnapshots()
+    .filter((snapshot) => !workspaceSlug || snapshot.workspaceSlug === workspaceSlug)
+
+  return [
+    sdk.defineTool({
+      name: 'list_mcp_servers',
+      label: '列出 MCP 服务器连接',
+      description: '列出当前工作区配置的用户 MCP 服务器及其常驻连接状态。needsRestart=true 表示该服务的配置文件已变更，但常驻进程仍在用旧配置，重启后才能读到新值。工具调用持续报连接类错误、或返回的工具清单明显陈旧时，先查这里再决定是否重启。',
+      parameters: Type.Object({}),
+      async execute() {
+        const configured = readConfigured()
+        const snapshots = readSnapshots()
+        const byName = new Map(snapshots.map((snapshot) => [snapshot.serverName, snapshot]))
+        const names = [...new Set([...Object.keys(configured), ...byName.keys()])].sort()
+
+        const servers = names.map((name) => {
+          const entry = configured[name]
+          const snapshot = byName.get(name)
+          const stale = snapshot?.externalStateStale === true
+          const note = entry?.enabled === false
+            ? '已在设置中禁用；启用后下一轮消息生效'
+            : !snapshot
+              ? '当前没有常驻连接，首次调用其工具时会自动建立'
+              : undefined
+          return {
+            name,
+            type: entry?.type ?? 'unknown',
+            enabled: entry ? entry.enabled !== false : undefined,
+            connected: !!snapshot,
+            ...(snapshot
+              ? {
+                  toolCount: snapshot.toolCount,
+                  pid: snapshot.pid,
+                  connectedAt: new Date(snapshot.connectedAt).toISOString(),
+                  lastUsedAt: new Date(snapshot.lastUsedAt).toISOString(),
+                }
+              : {}),
+            externalStateStale: stale,
+            needsRestart: stale,
+            ...(note ? { note } : {}),
+          }
+        })
+
+        const hints: string[] = []
+        if (servers.length === 0) hints.push('当前工作区没有配置用户 MCP 服务器。')
+        if (servers.some((server) => server.needsRestart)) {
+          hints.push('存在 needsRestart=true 的服务：用 restart_mcp_server 重启它，重启后本会话的工具清单要到下一轮消息才更新。')
+        }
+
+        return jsonToolResult({ workspaceSlug: workspaceSlug ?? null, servers, hints })
+      },
+    }),
+    sdk.defineTool({
+      name: 'restart_mcp_server',
+      label: '重启 MCP 服务器连接',
+      description: '关闭并重建指定 MCP 服务器的常驻连接。适用于 list_mcp_servers 显示 needsRestart、工具调用持续报连接类错误、或怀疑工具清单陈旧。只关闭当前工作区的连接，不影响其它工作区；下一轮消息才会用上新连接与新工具清单，所以重启后不要立刻重试同一个工具。',
+      parameters: Type.Object({
+        server: Type.String({ description: 'MCP 服务器名，与 list_mcp_servers 返回的 name 一致。' }),
+      }),
+      async execute(_toolCallId, params) {
+        const args = params as { server?: string }
+        const server = typeof args.server === 'string' ? args.server.trim() : ''
+        if (!server) {
+          return jsonToolError(new Error('缺少 server 参数：需要传入 list_mcp_servers 返回的服务器名。'))
+        }
+
+        const known = new Set([
+          ...Object.keys(readConfigured()),
+          ...readSnapshots().map((snapshot) => snapshot.serverName),
+        ])
+        if (known.size === 0) {
+          return jsonToolError(new Error('当前工作区没有配置任何用户 MCP 服务器，无需重启。'))
+        }
+        if (!known.has(server)) {
+          return jsonToolError(new Error(`未找到 MCP 服务器「${server}」。可用：${[...known].sort().join('、')}`))
+        }
+
+        const result = await restartMcpServer(server, workspaceSlug ? { workspaceSlug } : undefined)
+        return jsonToolResult({
+          server,
+          ...result,
+          scope: workspaceSlug ?? 'all-workspaces',
+          nextTurnRequired: true,
+          note: '连接已关闭，下一次使用该服务的工具时会自动重建；本会话已加载的工具清单要到下一轮消息才更新。',
+        })
+      },
+    }),
+  ] as unknown as ToolDefinition[]
+}
+
 // ===== 受管浏览器工具 =====
 
 function buildBrowserTools(sdk: PiSdk, ctx: PiBuiltinToolsContext): ToolDefinition[] {
@@ -1447,6 +1568,15 @@ export async function buildPiBuiltinTools(
       tools.push(...buildPiClipboardTools(sdk))
     } catch (error) {
       console.error('[Pi 桥接] 注入系统剪贴板工具失败:', error)
+    }
+  }
+
+  // 用户 MCP 常驻连接的自查与重建；Claude runtime 无等价连接，工具本身只在 Pi 侧注册。
+  if (!isAgentPresetToolGroupDisabled(ctx.disabledToolGroups, 'mcp')) {
+    try {
+      tools.push(...buildPiMcpAdminTools(sdk, ctx))
+    } catch (error) {
+      console.error('[Pi 桥接] 注入 MCP 连接管理工具失败:', error)
     }
   }
 

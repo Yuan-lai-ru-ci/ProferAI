@@ -12,7 +12,7 @@
  * - 流式实现避免把 GB 级备份读进内存
  */
 
-import { createCipheriv, createDecipheriv, pbkdf2, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, pbkdf2, randomBytes, randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream, promises as fsp } from 'node:fs'
 import { dirname } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -69,33 +69,37 @@ export async function isEncryptedBackup(filePath: string): Promise<boolean> {
 /**
  * 把明文归档加密到 destPath。
  *
- * 顺序必须是「写头 → 流式加密追加 → 追加标签」；中途失败删除半成品，
- * 避免留下看着像备份、实际无法解密的文件。
+ * 顺序必须是「写头 → 流式加密追加 → 追加标签」。先写 `<目标>.tmp-*` 再原子替换：
+ * 失败或用户取消时不会截断/删除目标路径上原有的备份。
  */
 export async function encryptBackupFile(
   sourcePath: string,
   destPath: string,
   passphrase: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   assertPassphrase(passphrase)
+  signal?.throwIfAborted()
 
   const salt = randomBytes(SALT_LENGTH)
   const iv = randomBytes(IV_LENGTH)
   const key = await deriveKey(passphrase, salt)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const tmpPath = `${destPath}.tmp-${process.pid}-${randomUUID().slice(0, 8)}`
 
   await fsp.mkdir(dirname(destPath), { recursive: true })
   try {
-    const handle = await fsp.open(destPath, 'w')
+    const handle = await fsp.open(tmpPath, 'w', 0o600)
     try {
       await handle.write(Buffer.concat([ENCRYPTED_BACKUP_MAGIC, salt, iv]))
     } finally {
       await handle.close()
     }
-    await pipeline(createReadStream(sourcePath), cipher, createWriteStream(destPath, { flags: 'a' }))
-    await fsp.appendFile(destPath, cipher.getAuthTag())
+    await pipeline(createReadStream(sourcePath), cipher, createWriteStream(tmpPath, { flags: 'a' }), { signal })
+    await fsp.appendFile(tmpPath, cipher.getAuthTag())
+    await fsp.rename(tmpPath, destPath)
   } catch (error) {
-    await fsp.rm(destPath, { force: true })
+    await fsp.rm(tmpPath, { force: true })
     throw error
   }
 }
