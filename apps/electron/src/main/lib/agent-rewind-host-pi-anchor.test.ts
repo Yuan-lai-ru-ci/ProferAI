@@ -32,9 +32,11 @@ mock.module('electron', () => ({
 
 const SESSION_ID = 'session-pi-anchor'
 const SDK_SESSION_ID = 'pi-sdk-anchor'
+const NO_SDK_SESSION_ID = 'session-pi-no-sdk'
 
 let root = ''
 let messagesPath = ''
+let noSdkMessagesPath = ''
 let piFilePath = ''
 let host: typeof import('./agent-rewind-host')
 
@@ -61,6 +63,15 @@ beforeEach(async () => {
           createdAt: 1,
           updatedAt: 1,
         },
+        {
+          // Pi 首轮就被中断：从未建立 Pi 会话，也就没有 sdkSessionId / transcript。
+          id: NO_SDK_SESSION_ID,
+          workspaceId: 'workspace-pi-anchor',
+          agentRuntime: 'pi',
+          title: 'Pi 首轮中断',
+          createdAt: 1,
+          updatedAt: 1,
+        },
       ],
     }),
     'utf8',
@@ -70,6 +81,15 @@ beforeEach(async () => {
   writeFileSync(
     messagesPath,
     [message('user', 'u1'), message('assistant', 'a1'), message('user', 'u2'), message('assistant', 'a2')].join('\n') + '\n',
+    'utf8',
+  )
+  noSdkMessagesPath = join(root, 'agent-sessions', `${NO_SDK_SESSION_ID}.jsonl`)
+  writeFileSync(
+    noSdkMessagesPath,
+    [
+      message('user', 'u1'),
+      JSON.stringify({ type: 'system', subtype: 'interruption_record', message: '已被用户中断' }),
+    ].join('\n') + '\n',
     'utf8',
   )
   // 合法 Pi transcript：entry-1 存在且祖先链完整，所以「退到 entry-1」是能截断成功的。
@@ -117,5 +137,23 @@ describe('Pi 回退锚点必须精确到目标消息', () => {
     expect(readFileSync(piFilePath).equals(piBefore)).toBe(true)
     // 失败发生在任何写盘之前：Pi 文件甚至没有被重写。
     expect(existsSync(piFilePath)).toBe(true)
+  })
+
+  test('从未建立 Pi 会话（无 sdkSessionId）时回退到会话起点：清空历史并提交', async () => {
+    const service = host.createElectronAgentRewindService()
+    const { plan } = await service.prepare({
+      sessionId: NO_SDK_SESSION_ID,
+      mode: 'conversation',
+      target: { kind: 'session-start' },
+    })
+    const result = await service.execute({
+      sessionId: NO_SDK_SESSION_ID,
+      planId: plan.planId,
+      expectedRevision: plan.revision,
+    })
+
+    // 没有 transcript 可重建，但截断 Profer 历史本身就是完整回退，不能判失败。
+    expect(result.status).toBe('committed')
+    expect(readFileSync(noSdkMessagesPath, 'utf8')).toBe('')
   })
 })

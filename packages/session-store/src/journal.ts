@@ -1,6 +1,6 @@
-import { mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { readFile, readdir, unlink } from 'node:fs/promises'
+import { join } from 'node:path'
+import { atomicWriteJson } from './atomic-write'
 
 export type SessionJournalOperation = 'delete' | 'fork' | 'rewind'
 export type SessionJournalStatus = 'started' | 'committed' | 'failed'
@@ -26,7 +26,7 @@ export function createSessionJournalStore(rootDir: string) {
 
   const write = async (journal: SessionOperationJournal): Promise<void> => {
     const path = pathFor(journal.operationId)
-    await atomicJson(path, journal)
+    await atomicWriteJson(path, journal)
   }
 
   const read = async (operationId: string): Promise<SessionOperationJournal | undefined> => {
@@ -58,34 +58,4 @@ export function createSessionJournalStore(rootDir: string) {
   }
 
   return { pathFor, write, read, list, remove }
-}
-
-async function atomicJson(path: string, value: unknown): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  const tempPath = `${path}.${randomUUID()}.tmp`
-  const handle = await open(tempPath, 'wx', 0o600)
-  try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8')
-    await handle.sync()
-  } catch (error) {
-    await handle.close()
-    await unlinkMissing(tempPath)
-    throw error
-  }
-  await handle.close()
-  try {
-    await rename(tempPath, path)
-    const dir = await open(dirname(path), 'r')
-    try { await dir.sync() } finally { await dir.close() }
-  } catch (error) {
-    await unlinkMissing(tempPath)
-    throw error
-  }
-}
-
-async function unlinkMissing(path: string): Promise<void> {
-  try { await unlink(path) }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-  }
 }

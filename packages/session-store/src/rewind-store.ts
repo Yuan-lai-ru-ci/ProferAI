@@ -1,8 +1,9 @@
-import { mkdir, open, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
-import { createHash, randomUUID } from 'node:crypto'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { mkdir, readFile, readdir, unlink } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { join, relative, resolve, sep } from 'node:path'
 import type { SessionStorePaths } from './contracts'
 import { sessionRewindPath } from './paths'
+import { atomicWriteFile, atomicWriteJson } from './atomic-write'
 
 export type StoredFileVersion =
   | { kind: 'absent' }
@@ -77,7 +78,7 @@ export function createRewindStore(paths: Pick<SessionStorePaths, 'configDir' | '
       if (hash(existing) !== sha256) throw new RewindStoreError('OBJECT_HASH_MISMATCH', `内容对象损坏: ${sha256}`)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      await atomicWrite(target, content, 0o600)
+      await atomicWriteFile(target, content, 0o600)
     }
     return { kind: 'file', contentRef: sha256, sha256, size: content.length, ...(version.mode === undefined ? {} : { mode: version.mode }) }
   }
@@ -106,7 +107,7 @@ export function createRewindStore(paths: Pick<SessionStorePaths, 'configDir' | '
   const writeManifest = async (manifest: RewindManifest): Promise<void> => {
     if (manifest.sessionId !== sessionId) throw new RewindStoreError('SESSION_MISMATCH', '恢复记录 sessionId 不匹配')
     for (const ref of manifest.refs) objectPath(ref)
-    await atomicJson(manifestPath(manifest.recoveryId), manifest)
+    await atomicWriteJson(manifestPath(manifest.recoveryId), manifest)
   }
   const readManifest = async (id: string): Promise<RewindManifest | undefined> => {
     const manifest = await readJson<RewindManifest>(manifestPath(id))
@@ -134,7 +135,7 @@ export function createRewindStore(paths: Pick<SessionStorePaths, 'configDir' | '
   const writeJournal = async (journal: RewindJournal): Promise<void> => {
     if (journal.sessionId !== sessionId) throw new RewindStoreError('SESSION_MISMATCH', '操作 journal sessionId 不匹配')
     for (const ref of journal.refs) objectPath(ref)
-    await atomicJson(journalPath(journal.operationId), journal)
+    await atomicWriteJson(journalPath(journal.operationId), journal)
   }
   const readJournal = async (id: string): Promise<RewindJournal | undefined> => {
     const journal = await readJson<RewindJournal>(journalPath(id))
@@ -197,33 +198,6 @@ export function resolveProjectRelativePath(projectRoot: string, filePath: string
     throw new RewindStoreError('INVALID_RELATIVE_PATH', '恢复路径必须是项目内文件相对路径')
   }
   return rel.split(sep).join('/')
-}
-
-async function atomicJson(path: string, value: unknown): Promise<void> {
-  await atomicWrite(path, Buffer.from(`${JSON.stringify(value, null, 2)}\n`), 0o600)
-}
-
-async function atomicWrite(path: string, content: Buffer, mode: number): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  const tempPath = `${path}.${randomUUID()}.tmp`
-  const handle = await open(tempPath, 'wx', mode)
-  try {
-    await handle.writeFile(content)
-    await handle.sync()
-  } catch (error) {
-    await handle.close()
-    await unlinkMissing(tempPath)
-    throw error
-  }
-  await handle.close()
-  try {
-    await rename(tempPath, path)
-    const dir = await open(dirname(path), 'r')
-    try { await dir.sync() } finally { await dir.close() }
-  } catch (error) {
-    await unlinkMissing(tempPath)
-    throw error
-  }
 }
 
 async function readJson<T>(path: string): Promise<T | undefined> {
