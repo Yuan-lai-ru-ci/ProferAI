@@ -57,13 +57,14 @@ export function WelcomeView(): React.ReactElement {
 
     // 标记当前 mode 的请求，用于取消过期的异步回调
     const currentMode = mode
+    let cancelled = false
     initRef.current = mode
 
     // 从后端 IPC 拿最新数据，避免 HMR 导致 atoms 重置为空时重复创建会话
     if (currentMode === 'chat') {
       window.electronAPI.listConversations().then((freshConversations) => {
         // 如果 mode 已切换，丢弃过期回调
-        if (initRef.current !== currentMode) return
+        if (cancelled || initRef.current !== currentMode) return
         const {
           tabs: currentTabs,
           draftSessionIds: currentDrafts,
@@ -92,7 +93,7 @@ export function WelcomeView(): React.ReactElement {
     } else {
       window.electronAPI.listAgentSessions().then((freshSessions) => {
         // 如果 mode 已切换，丢弃过期回调
-        if (initRef.current !== currentMode) return
+        if (cancelled || initRef.current !== currentMode) return
         const {
           tabs: currentTabs,
           draftSessionIds: currentDrafts,
@@ -121,6 +122,7 @@ export function WelcomeView(): React.ReactElement {
         currentCreateAgent({ draft: true })
       }).catch(console.error)
     }
+    return () => { cancelled = true; initRef.current = null }
   }, [mode, agentSettingsReady])
 
   // 短暂的过渡状态（通常几十毫秒内就会被 TabContent 替换）

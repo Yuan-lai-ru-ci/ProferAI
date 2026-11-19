@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { toast } from 'sonner'
 import { promoteMru } from '@profer/shared'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -16,6 +16,7 @@ import {
   tabMruAtom,
   type TabType,
 } from '@/atoms/tab-atoms'
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
 import { automationFormAtom } from '@/atoms/automation-atoms'
@@ -35,6 +36,7 @@ import { isAgentWorkspaceIdVisible } from '@/lib/product-feature-flags'
 type OpenSessionFn = (type: TabType, sessionId: string, title: string, parentSessionId?: string) => void
 
 export function useOpenSession(): OpenSessionFn {
+  const store = useStore()
   const [tabs, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const setTabMru = useSetAtom(tabMruAtom)
@@ -57,6 +59,11 @@ export function useOpenSession(): OpenSessionFn {
       if (typeof window !== 'undefined' && window.location?.search?.includes('window=session')) {
         toast.info('独立窗口暂不支持切换会话，请在主窗口打开')
         return
+      }
+      const target = store.get(coreTargetsAtom)
+      const isCurrentTarget = (): boolean => {
+        const current = store.get(coreTargetsAtom)
+        return current.currentId === target.currentId && current.generation === target.generation
       }
       const knownSession = type === 'agent' || type === 'preview'
         ? agentSessions.find((session) => session.id === sessionId)
@@ -106,6 +113,7 @@ export function useOpenSession(): OpenSessionFn {
         if (shouldAutoClearUnreadOnView(manualReadConfirmEnabled ? 'manual' : 'auto')) {
           window.electronAPI.clearAgentCompletionState(sessionId)
             .then((meta) => {
+              if (!isCurrentTarget()) return
               setAgentSessions((prev) => prev.map((s) => (s.id === meta.id ? meta : s)))
             })
             .catch(console.error)
@@ -115,17 +123,17 @@ export function useOpenSession(): OpenSessionFn {
         const session = agentSessions.find((s) => s.id === sessionId)
         if (session?.workspaceId) {
           setCurrentAgentWorkspaceId(session.workspaceId)
-          window.electronAPI.updateSettings({
+          if (target.currentId === 'local') window.electronAPI.updateSettings({
             agentWorkspaceId: session.workspaceId,
           }).catch(console.error)
         } else {
           // 归档会话不在活跃列表：拉取单条 meta 兜底，供 AgentView 等消费者读取
           window.electronAPI.getAgentSessionMeta(sessionId).then((meta) => {
-            if (!meta) return
+            if (!meta || !isCurrentTarget()) return
             setAgentSessions((prev) => upsertAgentSession(prev, meta))
             if (meta.workspaceId) {
               setCurrentAgentWorkspaceId(meta.workspaceId)
-              window.electronAPI.updateSettings({
+              if (target.currentId === 'local') window.electronAPI.updateSettings({
                 agentWorkspaceId: meta.workspaceId,
               }).catch(console.error)
             }
@@ -137,6 +145,6 @@ export function useOpenSession(): OpenSessionFn {
         setCurrentAgentSessionId(null)
       }
     },
-    [tabs, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions, manualReadConfirmEnabled],
+    [store, tabs, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions, manualReadConfirmEnabled],
   )
 }

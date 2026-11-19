@@ -110,15 +110,8 @@ import {
 } from './atoms/planning-atoms'
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { initShortcutRegistry, updateShortcutOverrides } from './lib/shortcut-registry'
-import { tabsAtom, activeTabIdAtom, ensureScratchPadTab, getPersistableTabState, scratchPadContentAtom, scratchPadLoadedAtom, SCRATCH_PAD_ID } from './atoms/tab-atoms'
-import {
-  fromPersistedTabGroup,
-  fromPersistedTabGroups,
-  reconcileTabGroups,
-  tabGroupsAtom,
-  toPersistedTabGroups,
-} from './atoms/tab-group-atoms'
-import type { TabItem } from './atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, ensureScratchPadTab, scratchPadContentAtom, scratchPadLoadedAtom, SCRATCH_PAD_ID } from './atoms/tab-atoms'
+import { initializeCoreSessionNavigation } from './lib/core-session-navigation'
 import { chatToolsAtom } from './atoms/chat-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
@@ -135,11 +128,10 @@ function ProferToaster(props: Omit<React.ComponentProps<typeof Toaster>, 'theme'
   return <Toaster theme={theme} {...props} />
 }
 import { toast } from 'sonner'
-import { diffCapabilities, isVisibleAgentSession } from '@profer/shared'
+import { diffCapabilities } from '@profer/shared'
 import type { WorkspaceCapabilities } from '@profer/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { invalidateFileSnapshotCache, invalidateWorkspaceCapabilitiesCache } from './components/agent/mention-query-utils'
-import { getVisibleAgentWorkspaces, isAgentWorkspaceVisible } from './lib/product-feature-flags'
 import { UpdateDialog } from './components/settings/UpdateDialog'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
@@ -1010,197 +1002,27 @@ function WeChatInitializer(): null {
  * 旧版（分屏时代）持久化结构——仅用于向后兼容读取迁移。
  * 新版已扁平化为 { tabs, activeTabId }；旧版是 { tabs, splitLayout }。
  */
-interface LegacyTabStateWithSplitLayout {
-  splitLayout?: {
-    focusedPanelIndex?: number
-    panels?: Array<{ activeTabId?: string | null }>
-  }
-}
-
-/** 从旧版 splitLayout 结构中提取原焦点面板的 activeTabId */
-function extractLegacyActiveTabId(tabState: unknown): string | null {
-  if (!tabState || typeof tabState !== 'object') return null
-  const legacy = tabState as LegacyTabStateWithSplitLayout
-  const panels = legacy.splitLayout?.panels
-  if (!Array.isArray(panels) || panels.length === 0) return null
-  const focusedIndex = legacy.splitLayout?.focusedPanelIndex ?? 0
-  return panels[focusedIndex]?.activeTabId ?? panels[0]?.activeTabId ?? null
-}
-
 function TabStatePersistenceInitializer(): null {
   const store = useStore()
-  const restoredRef = useRef(false)
-
-  // 启动恢复：读取 settings.tabState + 校验会话有效性
   useEffect(() => {
-    Promise.all([
-      window.electronAPI.getSettings(),
-      // 启动恢复需要校验所有 tab 的会话有效性（含已归档，否则归档会话 tab 会被误过滤）
-      window.electronAPI.listConversations(true),
-      window.electronAPI.listAgentSessions(true),
-      window.electronAPI.listAgentWorkspaces(),
-    ]).then(([settings, conversations, agentSessions, agentWorkspaces]) => {
-      const tabState = settings.tabState
-      if (!tabState?.tabs?.length) {
-        restoredRef.current = true
-        return
+    const navigation = initializeCoreSessionNavigation(store, {
+      getSettings: () => window.electronAPI.getSettings(),
+      listCoreTargets: () => window.electronAPI.listCoreTargets(),
+      listConversations: () => window.electronAPI.listConversations(true),
+      listAgentSessions: () => window.electronAPI.listAgentSessions(true),
+      listWorkspaces: () => window.electronAPI.listAgentWorkspaces(),
+      updateSettings: (patch) => window.electronAPI.updateSettings(patch),
+      onFailure: (error) => { console.error('[Core 会话恢复] 失败:', error); toast.error('恢复当前内核会话失败，请重新连接或选择会话') },
+    })
+    const beforeUnload = (): void => {
+      const patch = navigation.beforeUnload()
+      if (patch && !window.electronAPI.updateSettingsSync(patch)) {
+        console.error('[Core 会话恢复] 关闭前保存失败')
       }
-
-      // 构建有效 sessionId 集合。普通 draft 仍不恢复，但如果刷新前正打开的是
-      // 项目入口创建的持久化 draft，则必须恢复该 tab；否则 Ctrl+R 会把用户正在
-      // 使用的项目临时会话过滤掉。该会话仍保留 draft 标记，不会出现在侧栏列表。
-      const persistedDraftAgentTabIds = new Set(
-        tabState.tabs
-          .filter((tab): tab is TabItem => (
-            typeof tab === 'object'
-            && tab !== null
-            && 'type' in tab
-            && 'sessionId' in tab
-            && tab.type === 'agent'
-            && typeof tab.sessionId === 'string'
-          ))
-          .map((tab) => tab.sessionId),
-      )
-      const visibleWorkspaceIds = new Set(
-        getVisibleAgentWorkspaces(agentWorkspaces).map((workspace) => workspace.id),
-      )
-      const visibleAgentSessionIds = new Set(
-        agentSessions
-          .filter((session) => !session.workspaceId || visibleWorkspaceIds.has(session.workspaceId))
-          .map((session) => session.id),
-      )
-      const validSessionIds = new Set([
-        ...conversations.map((c) => c.id),
-        ...agentSessions
-          .filter((session) => isVisibleAgentSession(session) || persistedDraftAgentTabIds.has(session.id))
-          .map((session) => session.id),
-      ])
-
-      // 过滤 diff 类型 Tab（不持久化），同时过滤掉已被删除的会话
-      const validTabs = tabState.tabs.filter(
-        (t): t is TabItem =>
-          typeof t === 'object' &&
-          t !== null &&
-          'id' in t &&
-          'sessionId' in t &&
-          'type' in t &&
-          'title' in t &&
-          (t.type === 'chat' || t.type === 'agent') &&
-          validSessionIds.has(t.sessionId) &&
-          (t.type !== 'agent' || visibleAgentSessionIds.has(t.sessionId)),
-      )
-      if (validTabs.length === 0) {
-        restoredRef.current = true
-        return
-      }
-
-      const validTabIds = new Set(validTabs.map((t) => t.id))
-
-      // 恢复 activeTabId（校验有效性）
-      let restoredActiveTabId: string | null = null
-      if (tabState.activeTabId && validTabIds.has(tabState.activeTabId)) {
-        restoredActiveTabId = tabState.activeTabId
-      } else {
-        // 向后兼容：从旧版 splitLayout 结构中恢复原焦点面板的 activeTabId
-        const legacyId = extractLegacyActiveTabId(tabState)
-        if (legacyId && validTabIds.has(legacyId)) {
-          restoredActiveTabId = legacyId
-        } else {
-          restoredActiveTabId = validTabs[0]?.id ?? null
-        }
-      }
-
-      const activeTab = validTabs.find((t) => t.id === restoredActiveTabId) ?? validTabs[0] ?? null
-      store.set(tabsAtom, ensureScratchPadTab(validTabs))
-      store.set(activeTabIdAtom, activeTab?.id ?? SCRATCH_PAD_ID)
-      // 新版支持多个组合；旧版单个 group 自动包装迁移。
-      const persistedGroups = tabState.groups?.length
-        ? fromPersistedTabGroups(tabState.groups)
-        : [fromPersistedTabGroup(tabState.group)].filter((group) => group !== null)
-      store.set(tabGroupsAtom, reconcileTabGroups(persistedGroups, validTabIds))
-
-      // 同步 appMode、currentSessionId 和 Agent 所属工作区。
-      // 团队 Tab 恢复时必须以会话元数据为准，否则页面会按旧的个人工作区渲染。
-      if (activeTab) {
-        if (activeTab.type === 'chat') {
-          store.set(appModeAtom, 'chat')
-          store.set(currentConversationIdAtom, activeTab.sessionId)
-          store.set(currentAgentSessionIdAtom, null)
-        } else {
-          store.set(appModeAtom, 'agent')
-          store.set(currentAgentSessionIdAtom, activeTab.sessionId)
-          const activeSession = agentSessions.find((session) => session.id === activeTab.sessionId)
-          if (activeSession?.workspaceId) {
-            store.set(currentAgentWorkspaceIdAtom, activeSession.workspaceId)
-          }
-        }
-      }
-
-      console.log(`[TabRestore] 已恢复 ${validTabs.length} 个标签页`)
-    }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
-      .finally(() => { restoredRef.current = true })
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => { window.removeEventListener('beforeunload', beforeUnload); navigation.dispose() }
   }, [store])
-
-  // 自动保存：监听 tabsAtom / activeTabIdAtom 变化，防抖写入 settings.json
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null
-
-    const save = (): void => {
-      const tabs = store.get(tabsAtom)
-      const activeTabId = store.get(activeTabIdAtom)
-      const persistableTabState = getPersistableTabState(tabs, activeTabId)
-      const groups = toPersistedTabGroups(
-        store.get(tabGroupsAtom),
-        new Set(persistableTabState.tabs.map((tab) => tab.id)),
-      )
-      window.electronAPI.updateSettings({
-        tabState: { ...persistableTabState, ...(groups.length > 0 ? { groups } : {}) },
-      }).catch(console.error)
-    }
-
-    const debouncedSave = (): void => {
-      if (!restoredRef.current) return
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(save, 500)
-    }
-
-    const unsub1 = store.sub(tabsAtom, debouncedSave)
-    const unsub2 = store.sub(activeTabIdAtom, debouncedSave)
-    const unsub3 = store.sub(tabGroupsAtom, debouncedSave)
-
-    // 窗口关闭前立即刷新，避免最后 500ms 内的变更丢失
-    const handleBeforeUnload = (): void => {
-      if (timer) clearTimeout(timer)
-      // 使用同步 IPC 确保关闭前数据写入磁盘
-      const tabs = store.get(tabsAtom)
-      const activeTabId = store.get(activeTabIdAtom)
-      const persistableTabState = getPersistableTabState(tabs, activeTabId)
-      const groups = toPersistedTabGroups(
-        store.get(tabGroupsAtom),
-        new Set(persistableTabState.tabs.map((tab) => tab.id)),
-      )
-      const tabState = { ...persistableTabState, ...(groups.length > 0 ? { groups } : {}) }
-      if (tabs.length > 0 && window.electronAPI.updateSettingsSync) {
-        const ok = window.electronAPI.updateSettingsSync({ tabState })
-        if (!ok) {
-          console.warn('[TabPersist] sync IPC failed, falling back to async save')
-          save()
-        }
-      } else {
-        save()
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-
-    return () => {
-      unsub1()
-      unsub2()
-      unsub3()
-      if (timer) clearTimeout(timer)
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-    }
-  }, [store])
-
   return null
 }
 
@@ -1239,7 +1061,7 @@ function ScratchPadPersistence(): null {
         }
 
         // 恢复 scratch 激活状态：如果上次关闭时在 scratch 页，则激活它。
-        if (settings.scratchPadActive) {
+        if (!settings.coreTabStates && settings.scratchPadActive) {
           store.set(activeTabIdAtom, SCRATCH_PAD_ID)
         }
 

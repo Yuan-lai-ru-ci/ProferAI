@@ -73,7 +73,7 @@ import { updateComposerRuntime, updateComposerSettings, openComposerFileDialog, 
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { autoPreviewEnabledAtom, previewFileMapAtom, pendingQuoteInsertMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
-import { coreTargetsAtom, coreChannelsAtom } from '@/atoms/core-target-atoms'
+import { coreTargetsAtom, coreChannelsAtom, coreChannelsLoadedAtom } from '@/atoms/core-target-atoms'
 import { openFilePreviewTabForSession } from '@/components/diff/preview-opener'
 import type { AgentInterruptionState } from '@/atoms/preview-atoms'
 import {
@@ -300,6 +300,7 @@ export interface AgentViewProps {
 }
 
 export function AgentView({ sessionId, standalone = false }: AgentViewProps): React.ReactElement {
+  const store = useStore()
   const minimapHostRef = React.useRef<HTMLDivElement>(null)
   const [pendingGoalReplacement, setPendingGoalReplacement] = useAtom(goalReplacementAtomFamily(sessionId))
   const [goalStatusOpen, setGoalStatusOpen] = React.useState(false)
@@ -516,13 +517,18 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     [isRemoteCore, globalChannels, agentChannelIds],
   )
   const localChannelsLoaded = useAtomValue(channelsLoadedAtom)
-  const channelsLoaded = isRemoteCore ? true : localChannelsLoaded
+  const remoteChannelsLoaded = useAtomValue(coreChannelsLoadedAtom)
+  const setRemoteChannelsLoaded = useSetAtom(coreChannelsLoadedAtom)
+  const channelsLoaded = isRemoteCore
+    ? remoteChannelsLoaded?.targetId === coreTarget.currentId && remoteChannelsLoaded.generation === coreTarget.generation
+    : localChannelsLoaded
   React.useEffect(() => {
     let active = true
     const targetId = coreTarget.currentId
     const generation = coreTarget.generation
     if (!isRemoteCore) return
     setRemoteChannels([])
+    setRemoteChannelsLoaded(null)
     const isCurrentTarget = (): boolean => {
       const current = store.get(coreTargetsAtom)
       return active && current.currentId === targetId && current.generation === generation
@@ -530,9 +536,10 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     void window.electronAPI.listCoreChannels().then((items) => {
       if (!isCurrentTarget()) return
       setRemoteChannels(items.map((item) => ({ ...item, apiKey: '', baseUrl: item.baseUrl ?? '', models: item.models ?? [], enabled: item.enabled !== false, createdAt: 0, updatedAt: 0 } as Channel)))
+      setRemoteChannelsLoaded({ targetId, generation })
     }).catch((error) => { if (isCurrentTarget()) { console.error('[Core] 读取远程模型目录失败:', error); setRemoteChannels([]) } })
     return () => { active = false }
-  }, [coreTarget.currentId, coreTarget.generation, isRemoteCore, setRemoteChannels])
+  }, [coreTarget.currentId, coreTarget.generation, isRemoteCore, setRemoteChannels, setRemoteChannelsLoaded, store])
   const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
 
   // 加载当前工作区的 Agent 预设列表（预设为工作区级；失败静默留空由 UI 兑底）。
@@ -629,7 +636,6 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const agentError = streamErrors.get(sessionId) ?? null
   const planModeSessions = useAtomValue(agentPlanModeSessionsAtom)
   const isPlanMode = planModeSessions.has(sessionId)
-  const store = useStore()
   // 划词组件（历史消息 / 浏览器列 / 可视化）把引用投到这里，由本组件落进编辑器
   const pendingQuoteInserts = useAtomValue(pendingQuoteInsertMapAtom).get(sessionId)
   const setPendingQuoteInsertMap = useSetAtom(pendingQuoteInsertMapAtom)

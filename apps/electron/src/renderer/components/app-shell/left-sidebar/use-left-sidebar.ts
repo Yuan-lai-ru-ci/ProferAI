@@ -671,26 +671,31 @@ export function useLeftSidebar() {
 
   /** 刷新归档计数（轻量，不拉列表） */
   const refreshArchivedCounts = React.useCallback(() => {
+    const target = store.get(coreTargetsAtom)
     window.electronAPI.getArchivedCounts().then(({ conversations, agentSessions }) => {
+      const current = store.get(coreTargetsAtom)
+      if (current.currentId !== target.currentId || current.generation !== target.generation) return
       setArchivedConversationCount(conversations)
       setArchivedAgentSessionCount(agentSessions)
     }).catch(console.error)
-  }, [])
+  }, [store])
 
   /**
    * 按当前视图拉取会话列表 + 归档计数。
    * 活跃视图只拉活跃会话；归档视图才拉归档会话；计数走轻量 getArchivedCounts。
    */
-  const targetGenerationRef = React.useRef(0)
-
   const refreshSidebarLists = React.useCallback(() => {
-    const requestGeneration = targetGenerationRef.current
+    const requestTarget = store.get(coreTargetsAtom)
+    const isCurrentTarget = (): boolean => {
+      const current = store.get(coreTargetsAtom)
+      return current.currentId === requestTarget.currentId && current.generation === requestTarget.generation
+    }
     const includeArchived = viewMode === 'archived'
     window.electronAPI.listConversations(includeArchived).then(items => {
-      if (requestGeneration === targetGenerationRef.current) setConversations(items)
+      if (isCurrentTarget()) setConversations(items)
     }).catch(console.error)
     window.electronAPI.listAgentSessions(includeArchived).then((sessions) => {
-      if (requestGeneration !== targetGenerationRef.current) return
+      if (!isCurrentTarget()) return
       setAgentSessions(sessions)
       // 启动恢复：把持久化 completedButUnconfirmed 的会话 id 加回未读集合（Set 幂等），重启后绿标仍在
       const persistedUnreadIds = sessions.filter((s) => s.completedButUnconfirmed).map((s) => s.id)
@@ -709,10 +714,10 @@ export function useLeftSidebar() {
     }).catch(console.error)
     // 顺带刷新工作区列表：窗口聚焦/列表刷新时同步最新工作区（否则 pocket 新建工作区一直不出现）
     window.electronAPI.listAgentWorkspaces().then(workspaces => {
-      if (requestGeneration === targetGenerationRef.current) setWorkspacesStable(workspaces)
+      if (isCurrentTarget()) setWorkspacesStable(workspaces)
     }).catch(console.error)
     refreshArchivedCounts()
-  }, [viewMode, setConversations, setAgentSessions, setUnviewedCompleted, setWorkspacesStable, refreshArchivedCounts])
+  }, [store, viewMode, setConversations, setAgentSessions, setUnviewedCompleted, setWorkspacesStable, refreshArchivedCounts])
 
   // 初始加载：用户档案 + 按当前视图拉取列表/计数（viewMode effect 挂载时也会拉，重复无害）
   React.useEffect(() => {
@@ -723,27 +728,11 @@ export function useLeftSidebar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setUserProfile])
 
-  // 内核切换时清除旧环境列表与选中项，等待当前目标的新快照加载。
+  // 会话导航由全局按Core恢复器统一处理；侧栏只失效旧请求并刷新目录。
   React.useEffect(() => {
-    const handleCoreTargetChanged = (event: Event): void => {
-      const snapshot = (event as CustomEvent<{ generation: number }>).detail
-      targetGenerationRef.current = snapshot.generation
-      setAgentSessions([])
-      setConversations([])
-      setWorkspacesStable([])
-      setCurrentWorkspaceId(null)
-      setCurrentAgentSessionId(null)
-      setAgentMessagesCache(new Map())
-      setResolvedBlobMessages(new Map())
-      refreshSidebarLists()
-    }
-    window.addEventListener('profer-core-target-changed', handleCoreTargetChanged)
-    return () => window.removeEventListener('profer-core-target-changed', handleCoreTargetChanged)
-  }, [refreshSidebarLists, setAgentSessions, setWorkspacesStable, setCurrentWorkspaceId, setCurrentAgentSessionId, setAgentMessagesCache, setResolvedBlobMessages])
-
-  React.useEffect(() => {
+    projectSelectionRequestRef.current += 1
     refreshSidebarLists()
-  }, [refreshSidebarLists])
+  }, [coreTargetState.currentId, coreTargetState.generation, refreshSidebarLists])
 
   // 窗口聚焦时重新同步列表，修复长时间后前后端不一致（按当前视图，不捎带归档）
   React.useEffect(() => {
@@ -761,18 +750,15 @@ export function useLeftSidebar() {
   // 但工作区 id 是新建的（解绑再绑定会换 id），只刷工作区列表的话侧栏仍按旧 id 过滤，
   // 页面就停在「暂无会话」，直到下一次发消息触发列表刷新才「突然出现」。
   React.useEffect(() => {
-    const unsub = window.electronAPI.onAgentWorkspacesChanged(() => {
-      window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
-      refreshSidebarLists()
-    })
+    const unsub = window.electronAPI.onAgentWorkspacesChanged(refreshSidebarLists)
     return unsub
-  }, [setWorkspacesStable, refreshSidebarLists])
+  }, [refreshSidebarLists])
 
   // authStatus 变化时刷新工作区（登录/登出）
   // 仅立即刷新一次，避免重复请求
   React.useEffect(() => {
-    window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
-  }, [authStatus.isLoggedIn, setWorkspacesStable])
+    refreshSidebarLists()
+  }, [authStatus.isLoggedIn, refreshSidebarLists])
 
   /** 打开规划中心的某个分区（Todo · 日程 · 定时任务）。
    *  三个入口共享 activeView='planning'，分区由 planningTab 决定；再次点击当前分区

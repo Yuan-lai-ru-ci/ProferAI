@@ -311,6 +311,8 @@ export interface AppSettings {
   customNotificationSounds?: CustomNotificationSound[]
   /** 标签页持久化状态（重启恢复） */
   tabState?: PersistedTabSettings
+  /** 按执行Core分别保存桌面会话导航，不与Core业务数据混写。 */
+  coreTabStates?: Record<string, CoreTabSettings>
   /** Agent 思考模式 */
   agentThinking?: ThinkingConfig
   /** Agent 推理深度 */
@@ -462,6 +464,11 @@ export interface PersistedTabSettings {
   group?: import('../renderer/atoms/tab-group-atoms').PersistedTabGroup
   /** 可选的多个左右组合布局；缺省或空数组表示单栏。 */
   groups?: import('../renderer/atoms/tab-group-atoms').PersistedTabGroup[]
+}
+
+/** 当前Core上次打开的会话与工作区；key使用Core身份，本机保留local。 */
+export interface CoreTabSettings extends PersistedTabSettings {
+  workspaceId?: string | null
 }
 
 /** 移动模式（Pocket 远程接入）服务状态与连接信息 */

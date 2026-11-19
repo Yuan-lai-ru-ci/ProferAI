@@ -24,6 +24,10 @@ export interface CoreChannelSnapshot {
 }
 
 export const coreChannelsAtom = atom<Channel[]>([])
+/** 目录是否已为当前目标加载；空目录与加载中不是同一状态。 */
+export const coreChannelsLoadedAtom = atom<{ targetId: string; generation: number } | null>(null)
+/** 全局会话恢复器的阶段；空态不得触发WelcomeView自动创建/复用其他会话。 */
+export const coreSessionNavigationPhaseAtom = atom<'loading' | 'ready' | 'error' | null>('loading')
 
 export async function loadCoreTargets(): Promise<CoreTargetsSnapshot> {
   return window.electronAPI.listCoreTargets()

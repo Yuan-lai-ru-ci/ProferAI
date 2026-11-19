@@ -10,7 +10,8 @@
  */
 
 import { useCallback } from 'react'
-import { useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { currentConversationIdAtom } from '@/atoms/chat-atoms'
 import {
@@ -25,6 +26,7 @@ import type { TabItem } from '@/atoms/tab-atoms'
 export type SyncActiveTabSideEffects = (newActiveTab: TabItem | null) => void
 
 export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
+  const store = useStore()
   const setAppMode = useSetAtom(appModeAtom)
   const setCurrentConversationId = useSetAtom(currentConversationIdAtom)
   const setCurrentAgentSessionId = useSetAtom(currentAgentSessionIdAtom)
@@ -85,12 +87,13 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
       const session = agentSessions.find((s) => s.id === newActiveTab.sessionId)
       if (session?.workspaceId) {
         setCurrentAgentWorkspaceId(session.workspaceId)
-        window.electronAPI.updateSettings({
+        if (store.get(coreTargetsAtom).currentId === 'local') window.electronAPI.updateSettings({
           agentWorkspaceId: session.workspaceId,
         }).catch(console.error)
       }
     },
     [
+      store,
       appMode,
       setAppMode,
       setCurrentConversationId,
