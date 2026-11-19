@@ -62,11 +62,34 @@ function assertCleanWorktree() {
   if (!tryRun('git diff --check').ok) throw new Error('存在空白错误，不能发布。')
 }
 
+/**
+ * tag 已存在时只要求它指向 HEAD 的祖先或等于 HEAD：
+ * 受保护的是「这个版本属于哪段源码」，不是「发布脚本恰好停在哪一个提交」。
+ * 把后者当成门禁会让改一行发布脚本就锁死整个版本，而它并不能证明产物真由 tag 构建。
+ * tag 指向无关历史（既不是 HEAD 也不是祖先）时才说明版本与源码对不上，必须拒绝。
+ */
 function assertTagTargets(head) {
-  const localTag = localTagTarget()
+  let localTag = localTagTarget()
   const remoteTag = remoteTagTarget()
-  if (localTag && localTag !== head) throw new Error(`本地 ${tag} 不指向 HEAD，拒绝覆盖已有 tag。`)
-  if (remoteTag && remoteTag !== head) throw new Error(`远端 ${tag} 不指向 HEAD，拒绝覆盖已有 tag。`)
+  if (!localTag && remoteTag) {
+    // 远端已有 tag、本地没有：先拉下来才能做祖先判定，不能就地新建一个指向 HEAD 的 tag。
+    tryRun(`git fetch --quiet origin tag ${tag}`)
+    localTag = localTagTarget()
+  }
+  if (localTag && remoteTag && localTag !== remoteTag) {
+    throw new Error(`本地 ${tag} 与远端指向不同提交（${localTag} vs ${remoteTag}），拒绝发布。`)
+  }
+  const declared = localTag || remoteTag
+  if (!declared) return
+  if (declared === head) return
+  if (!tryRun(`git merge-base --is-ancestor ${declared} HEAD`).ok) {
+    throw new Error(`${tag} 指向 ${declared}，它不是 HEAD 的祖先；拒绝用一个与版本无关的提交发布。`)
+  }
+  const ahead = Number(run(`git rev-list --count ${declared}..HEAD`)) || 0
+  console.warn(
+    `[release-preflight] HEAD 比 ${tag} 多 ${ahead} 个提交（发布工具链或无关改动）：` +
+    `不为该版本创建/移动 tag，但产物仍应来自 ${tag} 指向的源码。`,
+  )
 }
 
 function assertExistingRelease() {
@@ -97,4 +120,6 @@ if (!tryRun('git merge-base --is-ancestor origin/main HEAD').ok) {
 const head = run('git rev-parse HEAD')
 assertTagTargets(head)
 assertExistingRelease()
-console.log(`[release-preflight] ${tag} -> ${head} OK${allowPublishedRelease ? '（允许补充已发布 Release 资产）' : ''}`)
+const tagTarget = localTagTarget()
+const tagNote = tagTarget && tagTarget !== head ? `（${tag} 停在 ${tagTarget.slice(0, 8)}，HEAD ${head.slice(0, 8)}）` : ''
+console.log(`[release-preflight] ${tag} -> ${head} OK${tagNote}${allowPublishedRelease ? '（允许补充已发布 Release 资产）' : ''}`)

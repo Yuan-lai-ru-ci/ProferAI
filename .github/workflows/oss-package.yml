@@ -345,6 +345,14 @@ jobs:
           }
           Write-Host "Pi runtime closure verified"
 
+      - name: Startup smoke (launch packaged app)
+        shell: pwsh
+        working-directory: apps/electron
+        # 0.16.27 的四套包「构建/签名/元数据全绿但起不来」：这一步真的把 win-unpacked
+        # 拉起来一次，等主进程探针写出 window-created；加载阶段崩溃（如纯 ESM 包被
+        # 顶层 require 抛 ERR_PACKAGE_PATH_NOT_EXPORTED）会直接失败，阻断上传。
+        run: bun run verify:startup
+
       - name: Summarize Windows build
         shell: pwsh
         run: |

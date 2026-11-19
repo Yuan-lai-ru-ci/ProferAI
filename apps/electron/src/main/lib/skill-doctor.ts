@@ -5,9 +5,8 @@
  * 决定是否降级），因为用户自带技能不该被我们的规则挡在门外。硬约束（路径安全、正文超限）
  * 仍由 skill-routing / skill-manifest 在读取时把关。
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseFrontmatter } from '@earendil-works/pi-coding-agent'
 import { skillManifestToRoutingFields, type EffectiveAgentPresetPolicy, type SkillDoctorIssue, type SkillDoctorSeverity } from '@profer/shared'
 import { VISUALIZATION_HOST_PRIMITIVES } from '../../shared/visualization-style'
 import { readSkillDescriptor, SKILL_MANIFEST_FILENAME } from './skill-manifest'
@@ -27,6 +26,11 @@ export interface SkillDoctorInput {
   sidecar?: SkillRoutingRules
   toolNames?: readonly string[]
   policy?: EffectiveAgentPresetPolicy
+  /**
+   * frontmatter 结构错误（首行信息），由调用方用 probeSkillFrontmatterError 取。
+   * 医生本身不解析 YAML：解析器在纯 ESM 包里，主进程只能 await import（见该函数注释）。
+   */
+  frontmatterError?: string
 }
 
 /** 描述里出现这些词说明写了「什么时候用」；只有介绍没有场景，路由和模型都难联想到。 */
@@ -64,22 +68,15 @@ function bodyBytes(dir: string): number {
  */
 export function diagnoseSkill(input: SkillDoctorInput): SkillDoctorIssue[] {
   const issues: SkillDoctorIssue[] = []
-  // 用与路由同一套解析器校验 frontmatter：展示字段的正则提取看不出 YAML 结构错误（如 description 里的 ": "）。
-  const skillFile = join(input.dir, 'SKILL.md')
-  if (existsSync(skillFile)) {
-    try {
-      const header = readFileSync(skillFile, 'utf8')
-        .slice(0, 16 * 1024)
-        .match(/^---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[^\S\r\n]*(?:\r?\n|$)/)?.[0]
-      if (header) parseFrontmatter<Record<string, unknown>>(header)
-    } catch (error) {
-      issues.push({
-        code: 'frontmatter-invalid',
-        severity: 'error',
-        field: 'frontmatter',
-        message: `frontmatter 解析失败（路由会判为 unreadable）：${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
-      })
-    }
+  // frontmatter 结构校验由调用方通过 frontmatterError 传入：解析器是纯 ESM，
+  // 医生里不能静态 import（0.16.27 启动崩溃），而同步函数又不能 await import。
+  if (input.frontmatterError) {
+    issues.push({
+      code: 'frontmatter-invalid',
+      severity: 'error',
+      field: 'frontmatter',
+      message: `frontmatter 解析失败（路由会退回 skill-library.json 的描述）：${input.frontmatterError}`,
+    })
   }
   const read = readSkillDescriptor(input.dir, input.slug)
   const { descriptor, manifest, manifestIssues, manifestPresent, frontmatter } = read

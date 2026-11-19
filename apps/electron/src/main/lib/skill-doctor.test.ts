@@ -61,6 +61,17 @@ describe('Skill 医生：清单与元数据', () => {
     expect(broken).not.toContain('description-missing')
   })
 
+  test('调用方传入 frontmatter 结构错误时报 frontmatter-invalid（医生自己不解析 YAML）', () => {
+    const dir = makeSkill('demo')
+    // 解析器在纯 ESM 包里，医生只能接收调用方（probeSkillFrontmatterError）给的结果。
+    expect(codes(dir)).not.toContain('frontmatter-invalid')
+    const issues = diagnoseSkill({ dir, frontmatterError: 'bad indentation of a mapping entry' })
+    const invalid = issues.find(issue => issue.code === 'frontmatter-invalid')
+    expect(invalid?.severity).toBe('error')
+    expect(invalid?.field).toBe('frontmatter')
+    expect(invalid?.message).toContain('bad indentation')
+  })
+
   test('清单与 frontmatter / 目录名不一致分别报出', () => {
     const withVersion = makeSkill('demo', { version: '1.0.0', manifest: { schemaVersion: 1, name: '另一个名字', version: '2.0.0' } })
     const both = codes(withVersion)

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { win32 } from 'node:path'
-import { resolveDevAppName, resolveDevUserDataPath, resolveDevVitePort } from './dev-instance'
+import { resolve, win32 } from 'node:path'
+import { readUserDataDirSwitch, resolveDevAppName, resolveDevUserDataPath, resolveDevVitePort } from './dev-instance'
 
 describe('开发隔离实例', () => {
   test('Given instance id When resolving Then userData and lock name are isolated', () => {
@@ -36,5 +36,14 @@ describe('开发隔离实例', () => {
     expect(resolveDevVitePort({ PROFER_VITE_PORT: '80' })).toBe(5174)
     expect(resolveDevVitePort({ PROFER_VITE_PORT: 'not-a-port' })).toBe(5174)
     expect(resolveDevVitePort({ PROFER_VITE_PORT: '5187' })).toBe(5187)
+  })
+
+  // 发布前的启动冒烟靠 `--user-data-dir` 隔离：主进程若把它覆盖回 appData，
+  // 单实例锁会落回真实用户数据目录，冒烟会被当作重复实例直接退出（实测踩过）。
+  test('Given --user-data-dir switch When parsing Then it is honoured; absent/empty is ignored', () => {
+    expect(readUserDataDirSwitch(['/Applications/Profer.app/Contents/MacOS/Profer', '--user-data-dir=/tmp/profer-smoke'])).toBe(resolve('/tmp/profer-smoke'))
+    expect(readUserDataDirSwitch(['Profer.exe', '--user-data-dir=C:\\temp\\profer-smoke'])).toBe(resolve('C:\\temp\\profer-smoke'))
+    expect(readUserDataDirSwitch(['Profer.exe'])).toBeUndefined()
+    expect(readUserDataDirSwitch(['Profer.exe', '--user-data-dir='])).toBeUndefined()
   })
 })
