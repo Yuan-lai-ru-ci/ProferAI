@@ -75,6 +75,30 @@ function readLedgerDescription(directory: string): string | undefined {
   } catch { return undefined }
 }
 
+function skillFrontmatterError(error: unknown): string {
+  return error instanceof Error ? error.message.split('\n')[0]! : String(error)
+}
+
+/** 复用路由的异步 ESM 解析器；导入或文件读取异常向调用方传播，不伪装成诊断成功。 */
+export async function probeSkillFrontmatterError(dir: string): Promise<string | undefined> {
+  const file = join(dir, 'SKILL.md')
+  if (!existsSync(file)) return undefined
+  let header: string
+  try {
+    header = await readHeader(file)
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Skill header 超出预算或缺失') return undefined
+    throw error
+  }
+  const { parseFrontmatter } = await import('@earendil-works/pi-coding-agent')
+  try {
+    parseFrontmatter<Record<string, unknown>>(header)
+    return undefined
+  } catch (error) {
+    return skillFrontmatterError(error)
+  }
+}
+
 async function readRules(root: string, directory: string): Promise<SkillRoutingRules> {
   const path = join(directory, ROUTING_SIDECAR_FILENAME)
   if (!existsSync(path)) return {}

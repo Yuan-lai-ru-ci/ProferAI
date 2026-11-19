@@ -13,7 +13,8 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { diagnoseSkillRoot, formatSkillDoctorReport } from '../apps/electron/src/main/lib/skill-doctor'
+import { diagnoseSkillRoot, doctorSkill, formatSkillDoctorReport } from '../apps/electron/src/main/lib/skill-doctor'
+import { probeSkillFrontmatterError } from '../apps/electron/src/main/lib/skill-routing'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -33,7 +34,9 @@ if (!existsSync(root)) {
 // 同时接受「Skill 根目录」与「单个 Skill 目录」两种用法，避免作者多写一层壳。
 const isSingleSkill = existsSync(join(root, 'SKILL.md'))
 const reports = isSingleSkill ? diagnoseSkillRoot(dirname(root)) : diagnoseSkillRoot(root)
-const target = reports.filter(report => !isSingleSkill || report.dir === root)
+const target = await Promise.all(reports.filter(report => !isSingleSkill || report.dir === root).map(async report =>
+  doctorSkill({ dir: report.dir, slug: report.slug, frontmatterError: await probeSkillFrontmatterError(report.dir) }),
+))
 
 if (!target.length) {
   console.error(`没有找到含 SKILL.md 的 Skill 目录: ${root}`)
