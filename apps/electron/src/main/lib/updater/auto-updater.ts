@@ -377,7 +377,8 @@ async function runUpdateCheck(): Promise<void> {
 
   try {
     // 先并发探活再决定顺序：串行回退遇到黑洞 IP 时，每次检查都会先白等满一次超时。
-    const declaredSources = getUpdateSources()
+    // 版本号决定更新通道：-internal.N 只读 Core 实测目录，正式版只读正式目录。
+    const declaredSources = getUpdateSources(undefined, process.platform, undefined, getCurrentAppVersion())
     const sources = await orderSourcesByReachability(declaredSources, probeSourceReachable)
     console.log(`[更新] 源可达性探测：${describeProbeOutcomes(declaredSources, sources)}`)
     logLifecycle('update.check-sources', {

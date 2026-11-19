@@ -2,9 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import {
   COMMERCIAL_FALLBACK_UPDATE_FEED_URL,
   COMMERCIAL_UPDATE_FEED_URL,
+  CORE_FALLBACK_UPDATE_FEED_URL,
+  CORE_UPDATE_FEED_URL,
   OSS_FALLBACK_UPDATE_FEED_URL,
   OSS_UPDATE_FEED_URL,
   getUpdateSources,
+  isCoreChannelVersion,
   isSecureUpdateFeedUrl,
   updateMetadataFileName,
 } from './update-sources'
@@ -109,5 +112,31 @@ describe('更新源优先级', () => {
     expect(sources[0]?.probeUrl).toBe('https://profer.cn/profer-updates/oss/latest.yml')
     expect(sources[1]?.probeUrl).toBe('https://updates.profer.cn/oss/latest.yml')
     expect(sources.map((source) => source.probeUrl ?? '').join()).not.toContain('//latest')
+  })
+
+  test('Core 实测线只读独立目录：不回退 GitHub，也不接受覆盖源', () => {
+    expect(isCoreChannelVersion('0.17.0-internal.1')).toBe(true)
+    expect(isCoreChannelVersion('v0.17.0-internal.12')).toBe(true)
+    expect(isCoreChannelVersion('0.17.0')).toBe(false)
+    expect(isCoreChannelVersion('0.16.28')).toBe(false)
+    expect(isCoreChannelVersion(undefined)).toBe(false)
+
+    const sources = getUpdateSources('https://updates.example.com/feed/', 'win32', 'oss', '0.17.0-internal.1')
+    // 没有 override、没有 GitHub：公共 Release 上是正式线产物，回退过去等于跨线覆盖
+    expect(sources.map((source) => source.id)).toEqual(['domestic', 'domestic-fallback'])
+    expect(sources[0]?.configuration).toMatchObject({ provider: 'generic', url: CORE_UPDATE_FEED_URL })
+    expect(sources[1]?.configuration).toMatchObject({ provider: 'generic', url: CORE_FALLBACK_UPDATE_FEED_URL })
+    expect(sources[0]?.probeUrl).toBe('https://profer.cn/profer-updates/core/latest.yml')
+    expect(sources[1]?.probeUrl).toBe('https://updates.profer.cn/core/latest.yml')
+
+    // 目录必须互相隔离：同名元数据文件不能落在同一个目录
+    expect(CORE_UPDATE_FEED_URL).not.toBe(OSS_UPDATE_FEED_URL)
+    expect(CORE_FALLBACK_UPDATE_FEED_URL).not.toBe(OSS_FALLBACK_UPDATE_FEED_URL)
+
+    // 正式版完全不受影响：还是原目录 + GitHub 兜底
+    expect(getUpdateSources(undefined, 'win32', 'oss', '0.16.28').map((source) => source.id))
+      .toEqual(['domestic', 'domestic-fallback', 'github'])
+    expect(getUpdateSources(undefined, 'win32').map((source) => source.id))
+      .toEqual(['domestic', 'domestic-fallback', 'github'])
   })
 })

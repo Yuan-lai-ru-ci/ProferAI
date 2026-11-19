@@ -1,6 +1,12 @@
 {
   "releases": [
     {
+      "version": "0.17.0-internal.1",
+      "date": "2026-11-19",
+      "title": "v0.17.0-internal.1",
+      "notes": "## 实测说明\n\n- 本版为 Core 解耦架构的**本地实测包**，不发布到 GitHub Release、不进正式更新通道。\n- 桌面 Agent 执行改由本机 Core 承载；数据目录（`~/.profer`）与会话格式与 0.16.x 保持一致，无手工迁移。\n- 首次启动会一次性导入自动化定义到 `core-automations.json`（源文件保留）；旧 Goal 历史（userData/goals.json）与 Core 的 `core-goals.json` 不互通。\n- 回退到 0.16.x 时，Core 期间产生的自动化/Goal 改动在旧版本不可见。"
+    },
+    {
       "version": "0.16.28",
       "date": "2026-11-19",
       "title": "v0.16.28",

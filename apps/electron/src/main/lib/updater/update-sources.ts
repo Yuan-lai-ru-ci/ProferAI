@@ -27,6 +27,28 @@ export const OSS_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/oss/'
 export const OSS_FALLBACK_UPDATE_FEED_URL = 'https://updates.profer.cn/oss/'
 
 /**
+ * Core 实测线的独立更新目录。
+ *
+ * 与正式线（oss/）物理隔离：两边元数据文件同名（latest.yml / latest-mac.yml），
+ * 放进同一目录会互相覆盖，正式版用户也会看到未验收的 Core 构建。
+ * 带 `-internal.N` 的版本只读这里；反过来说，正式版只读 oss/，永远看不到这条线。
+ */
+export const CORE_UPDATE_FEED_URL = 'https://profer.cn/profer-updates/core/'
+export const CORE_FALLBACK_UPDATE_FEED_URL = 'https://updates.profer.cn/core/'
+
+const CORE_CHANNEL_VERSION_PATTERN = /^v?\d+\.\d+\.\d+-internal\.\d+$/i
+
+/**
+ * 版本号带 `-internal.N` 视为 Core 实测线。
+ *
+ * 用版本号而不是构建开关判断，是因为安装包落在用户机器上后没有构建上下文；
+ * 版本号是唯一随包一起走、且能解释“这条线该读哪个目录”的身份。
+ */
+export function isCoreChannelVersion(version: string | undefined): boolean {
+  return typeof version === 'string' && CORE_CHANNEL_VERSION_PATTERN.test(version.trim())
+}
+
+/**
  * 商业版国内主源：沿用存量平铺目录。
  *
  * 已安装的商业版老用户读的就是这个地址，改路径等于让存量用户停止收到更新，
@@ -119,12 +141,14 @@ export function getUpdateSources(
   overrideUrl = process.env.PROFER_UPDATE_FEED_URL,
   platform: NodeJS.Platform = process.platform,
   edition: UpdateEdition = isCommercialBuild() ? 'commercial' : 'oss',
+  appVersion?: string,
 ): UpdateSource[] {
   const sources: UpdateSource[] = []
   const metadataFile = updateMetadataFileName(platform)
-  const commercial = edition === 'commercial'
-  const primaryUrl = commercial ? COMMERCIAL_UPDATE_FEED_URL : OSS_UPDATE_FEED_URL
-  const fallbackUrl = commercial ? COMMERCIAL_FALLBACK_UPDATE_FEED_URL : OSS_FALLBACK_UPDATE_FEED_URL
+  const coreChannel = isCoreChannelVersion(appVersion)
+  const commercial = !coreChannel && edition === 'commercial'
+  const primaryUrl = coreChannel ? CORE_UPDATE_FEED_URL : commercial ? COMMERCIAL_UPDATE_FEED_URL : OSS_UPDATE_FEED_URL
+  const fallbackUrl = coreChannel ? CORE_FALLBACK_UPDATE_FEED_URL : commercial ? COMMERCIAL_FALLBACK_UPDATE_FEED_URL : OSS_FALLBACK_UPDATE_FEED_URL
   const normalizedDomesticUrl = normalizeFeedUrl(primaryUrl)
   const normalizedFallbackUrl = normalizeFeedUrl(fallbackUrl)
 
@@ -150,7 +174,8 @@ export function getUpdateSources(
   }
 
   const normalizedOverride = overrideUrl ? normalizeFeedUrl(overrideUrl) : ''
-  if (isSecureUpdateFeedUrl(overrideUrl) && normalizedOverride !== normalizedDomesticUrl && normalizedOverride !== normalizedFallbackUrl) {
+  // Core 实测线不接受覆盖源：误配成正式目录会让两条线互相串包，宁可少了调试入口。
+  if (!coreChannel && isSecureUpdateFeedUrl(overrideUrl) && normalizedOverride !== normalizedDomesticUrl && normalizedOverride !== normalizedFallbackUrl) {
     sources.push(genericSource('override', '环境变量更新源', normalizedOverride))
   }
 
@@ -158,6 +183,7 @@ export function getUpdateSources(
   sources.push(genericSource('domestic', '国内更新服务器', primaryUrl))
   sources.push(genericSource('domestic-fallback', '备用国内更新源', fallbackUrl))
   // 商业版到此为止：绝不能拿公共 Release 的开源产物覆盖商业安装。
-  if (!commercial) sources.push(GITHUB_UPDATE_SOURCE)
+  // Core 实测线同理：公共 Release 上是正式线产物，回退过去等于跨线覆盖。
+  if (!commercial && !coreChannel) sources.push(GITHUB_UPDATE_SOURCE)
   return sources
 }
