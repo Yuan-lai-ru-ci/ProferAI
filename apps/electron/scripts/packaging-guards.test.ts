@@ -100,18 +100,34 @@ describe('Windows 随包 CLI 契约', () => {
 
     const wrongBinDir = createBinDir()
     writeFileSync(join(wrongBinDir, 'profer'), 'mac-cli')
-    expect(() => verifyPackagedWindowsCli(wrongBinDir)).toThrow('必须且只能包含 profer.exe')
+    expect(() => verifyPackagedWindowsCli(wrongBinDir)).toThrow('必须包含 profer.exe')
   })
 
   test('Given 两种宿主 CLI 并存或 exe 为空 When 验证 Then 拒绝', () => {
     const mixedBinDir = createBinDir()
     writeFileSync(join(mixedBinDir, 'profer'), 'mac-cli')
     writeFileSync(join(mixedBinDir, 'profer.exe'), 'windows-cli')
-    expect(() => verifyPackagedWindowsCli(mixedBinDir)).toThrow('必须且只能包含 profer.exe')
+    expect(() => verifyPackagedWindowsCli(mixedBinDir)).toThrow('只允许')
 
     const emptyBinDir = createBinDir()
     writeFileSync(join(emptyBinDir, 'profer.exe'), '')
     expect(() => verifyPackagedWindowsCli(emptyBinDir)).toThrow('不能为空')
+  })
+
+  test('Given 随包附带非空 profer-core.exe When 验证 Then 通过', () => {
+    const binDir = createBinDir()
+    writeFileSync(join(binDir, 'profer.exe'), 'windows-cli')
+    writeFileSync(join(binDir, 'profer-core.exe'), 'core-binary')
+
+    expect(verifyPackagedWindowsCli(binDir)).toBe(join(binDir, 'profer.exe'))
+  })
+
+  test('Given profer-core.exe 为空 When 验证 Then 拒绝', () => {
+    const binDir = createBinDir()
+    writeFileSync(join(binDir, 'profer.exe'), 'windows-cli')
+    writeFileSync(join(binDir, 'profer-core.exe'), '')
+
+    expect(() => verifyPackagedWindowsCli(binDir)).toThrow('不能为空')
   })
 })
 
@@ -127,7 +143,10 @@ describe('平台打包入口配置', () => {
     expect(commonResources).not.toContain('resources/bin')
     expect(macConfig).toContain('from: resources/bin/profer\n      to: bin/profer')
     expect(linuxConfig).toContain('from: resources/bin/profer\n      to: bin/profer')
-    expect(winConfig).toContain('from: resources/bin/profer.exe\n      to: bin/profer.exe')
+    // Windows 用目录 + filter：Core 实测线才会放入 profer-core.exe，主线不带也不能打包失败。
+    expect(winConfig).toContain('from: resources/bin\n      to: bin')
+    expect(winConfig).toContain('- profer.exe')
+    expect(winConfig).toContain('- profer-core.exe')
   })
 
   test('Given electron-builder 配置 When 打包 macOS Then 挂上签名补签钩子', () => {

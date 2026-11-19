@@ -270,7 +270,9 @@ import { getLocalCoreClient, getLocalCoreStartFailure } from './lib/core-local-b
 /** 本机 Core 不可用时，把启动失败原因一并带出，避免只剩“未就绪”。 */
 function localCoreNotReadyMessage(): string {
   const reason = getLocalCoreStartFailure()
-  return reason ? `本机Core尚未就绪：${reason}` : localCoreNotReadyMessage()
+  // Core 启动中还没有失败原因时，不能回调用自己：递归会在每次工作区/会话请求上
+  // 抛 RangeError，把「正在启动」伪装成代码崩溃。
+  return reason ? `本机Core尚未就绪：${reason}` : '本机Core尚未就绪（正在启动，请稍后重试）'
 }
 import { routeGoalToCore } from './lib/goal-core-routing'
 import { registerCoreTargetIpc } from './lib/core-target-ipc'

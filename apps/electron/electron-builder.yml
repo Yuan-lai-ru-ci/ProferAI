@@ -173,9 +173,14 @@ linux:
 win:
   icon: icon.ico
   # Windows 包必须只携带 .exe；发布校验会再次检查最终 unpacked 目录。
+  # 用目录 + filter 而不是逐个文件映射：只有 Core 实测线才会放入 profer-core.exe，
+  # 主线不带时 from 目录仍然存在，不会因缺少文件而打包失败。
   extraResources:
-    - from: resources/bin/profer.exe
-      to: bin/profer.exe
+    - from: resources/bin
+      to: bin
+      filter:
+        - profer.exe
+        - profer-core.exe
     # 手写 OCR 脚本（Windows.Media.Ocr，系统自带能力，无额外依赖）
     - from: resources/pen-ocr/PenOcr.ps1
       to: pen-ocr/PenOcr.ps1

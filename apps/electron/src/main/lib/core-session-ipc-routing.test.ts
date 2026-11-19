@@ -23,6 +23,9 @@ function handler(channel: string, dependencies: Record<string, unknown>) {
     assertLocalCoreTarget: () => {},
     isAgentSessionActive: () => false,
     getSettings: () => ({ agentRuntime: 'claude' }),
+    // ipc.ts 顶部的消息构造函数不在切片范围内；这里注入等价实现，
+    // 保证分支新代码经 new Function 执行时不会因缺少依赖而误报。
+    localCoreNotReadyMessage: () => '本机Core尚未就绪（正在启动，请稍后重试）',
     ...dependencies,
     ipcMain: { handle: (_name: string, callback: typeof invoke) => { invoke = callback } },
   }
