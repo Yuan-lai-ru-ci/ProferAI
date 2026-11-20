@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { coreBuildPlan, CORE_RUNTIME_BANNER } from './build-runtime'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 test('Core磁盘bundle清除解释器专用环境，子进程不继承BUN_BE_BUN', async () => {
   const root = mkdtempSync(join(tmpdir(), 'profer-core-env-'))
@@ -19,7 +19,7 @@ test('Core磁盘bundle清除解释器专用环境，子进程不继承BUN_BE_BUN
 
 test('宿主目录保留 external Pi 与目标 Claude native', () => {
   const plan = coreBuildPlan('/tmp/core-output', 'darwin', 'arm64')
-  expect(plan.executable).toBe('/tmp/core-output/profer-core')
+  expect(plan.executable).toBe(join(resolve('/tmp/core-output'), 'profer-core'))
   expect(plan.nativeClaudePackage).toBe('@anthropic-ai/claude-agent-sdk-darwin-arm64')
   expect(plan.external).toContain('@earendil-works/pi-coding-agent')
   expect(plan.external).toContain('@earendil-works/pi-ai')

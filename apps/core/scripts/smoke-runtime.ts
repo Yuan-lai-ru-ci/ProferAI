@@ -4,6 +4,15 @@ import assert from 'node:assert/strict'
 import { cpSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+
+async function terminateRuntime(processHandle: ReturnType<typeof Bun.spawn>): Promise<void> {
+  if (process.platform !== 'win32') { processHandle.kill('SIGTERM'); return }
+  // Windows 的 kill(SIGTERM) 不是可捕获的 POSIX 信号；与桌面生命周期一致终止整棵树。
+  const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
+  const killer = Bun.spawn([taskkill, '/PID', String(processHandle.pid), '/T', '/F'], { stdout: 'pipe', stderr: 'pipe' })
+  assert.equal(await killer.exited, 0, await new Response(killer.stderr).text())
+}
+
 const root = mkdtempSync(join(tmpdir(), 'profer-core-smoke-'))
 let child: ReturnType<typeof Bun.spawn> | undefined
 let sdk: ReturnType<typeof Bun.spawn> | undefined
@@ -63,14 +72,31 @@ for (const addon of addons) { const native = require(join(dir, addon)); console.
 console.log('Pi/WASM exports', Object.keys(pi).length, Object.keys(ai).length, Object.keys(photon).length);`)
   sdk = Bun.spawn([executable, check], { cwd, env: { ...env, BUN_BE_BUN: '1' }, stdout: 'inherit', stderr: 'inherit' })
   assert.equal(await deadline(sdk.exited), 0)
-  child.kill('SIGTERM')
-  assert.equal(await deadline(child.exited), 0)
-  console.log('[Core smoke] 通过：HTTP/WS 鉴权、事件恢复、Pi/native/WASM、SIGTERM 正常退出')
+  await terminateRuntime(child)
+  const exitCode = await deadline(child.exited)
+  if (process.platform === 'win32') {
+    assert.notEqual(exitCode, 0, 'Windows /F 是强制终止，不应冒充优雅退出')
+    let stopped = false
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try {
+        const released = Bun.listen({ hostname: '127.0.0.1', port, socket: { data() {} } })
+        released.stop(true)
+        stopped = true
+        break
+      } catch {}
+      await Bun.sleep(100)
+    }
+    assert(stopped, 'Core launcher 已退出但监听进程仍存活')
+    console.log('[Core smoke] 通过：HTTP/WS 鉴权、事件恢复、Pi/native/WASM、Windows 进程树强制终止及端口释放（非优雅退出）')
+  } else {
+    assert.equal(exitCode, 0)
+    console.log('[Core smoke] 通过：HTTP/WS 鉴权、事件恢复、Pi/native/WASM、SIGTERM 正常退出')
+  }
 } finally {
   for (const ws of sockets) ws.close()
   if (sdk && sdk.exitCode === null) { sdk.kill('SIGKILL'); await sdk.exited }
   if (child && child.exitCode === null) {
-    child.kill('SIGTERM')
+    await terminateRuntime(child)
     try { await deadline(child.exited, 3000) } catch { child.kill('SIGKILL'); await child.exited }
   }
   rmSync(root, { recursive: true, force: true })
