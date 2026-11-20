@@ -7,6 +7,8 @@ import { syncRuntimeDeps } from '../../electron/scripts/sync-runtime-deps'
 const coreDir = resolve(import.meta.dir, '..')
 const repoRoot = resolve(coreDir, '../..')
 const marker = 'core-runtime.json'
+// BUN_BE_BUN 仅用于启动磁盘 bundle，不能传给随后执行的 Bun 编译 CLI。
+export const CORE_RUNTIME_BANNER = 'delete process.env.BUN_BE_BUN;'
 export function coreBuildPlan(output: string, platform: string = process.platform, arch: string = process.arch) {
   if (!['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'win32-x64', 'win32-arm64'].includes(`${platform}-${arch}`)) throw new Error(`不支持的平台: ${platform}-${arch}`)
   const outDir = resolve(output)
@@ -19,7 +21,7 @@ export async function buildCoreRuntime(output = join(coreDir, 'dist')) {
   const plan = coreBuildPlan(output)
   if (existsSync(plan.outDir) && readdirSync(plan.outDir).length && !existsSync(join(plan.outDir, marker))) throw new Error('拒绝覆盖现有非 Core 构建目录')
   mkdirSync(plan.outDir, { recursive: true })
-  const bundled = await Bun.build({ entrypoints: [join(coreDir, 'src/index.ts')], outdir: plan.outDir, naming: 'core.js', target: 'bun', external: plan.external })
+  const bundled = await Bun.build({ entrypoints: [join(coreDir, 'src/index.ts')], outdir: plan.outDir, naming: 'core.js', target: 'bun', external: plan.external, banner: CORE_RUNTIME_BANNER })
   if (!bundled.success) throw new AggregateError(bundled.logs, 'Core bundle 失败')
   const result = await Bun.build({ entrypoints: [join(import.meta.dir, 'compiled-launcher.ts')], target: 'bun', compile: { outfile: plan.executable } })
   if (!result.success) throw new AggregateError(result.logs, 'Core 编译失败')

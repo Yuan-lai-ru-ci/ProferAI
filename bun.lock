@@ -40,7 +40,7 @@
     },
     "apps/core": {
       "name": "@profer/core-daemon",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "bin": {
         "profer-core": "./src/index.ts",
       },
