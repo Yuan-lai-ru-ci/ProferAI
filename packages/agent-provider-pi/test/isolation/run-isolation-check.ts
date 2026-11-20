@@ -34,6 +34,7 @@ const OWN_SDK_SPECIFIERS = [
   '@earendil-works/pi-agent-core',
   '@earendil-works/pi-ai',
   '@earendil-works/pi-coding-agent',
+  '@modelcontextprotocol/sdk',
   'typebox',
   'undici',
 ]
@@ -55,7 +56,7 @@ const SUPPORT_PACKAGES = ['typescript', '@types']
  */
 const WORKSPACE_SUPPORT_SPECIFIERS = ['dompurify']
 
-const WORKSPACE_PACKAGES = ['shared', 'agent-fabric', 'agent-runtime', 'core', 'agent-provider-pi']
+const WORKSPACE_PACKAGES = ['shared', 'agent-fabric', 'agent-runtime', 'core', 'project-core', 'session-core', 'agent-provider-pi']
 
 const ADAPTER_EXPORT = 'PiAgentAdapter'
 const RUNNER_PATH = 'test/minimal-pi-runner.ts'
@@ -126,7 +127,15 @@ function resolveBunTypesDir(): string {
 
 function linkSpecifier(sandbox: string, specifier: string): void {
   const manifest = Bun.resolveSync(`${specifier}/package.json`, packageDir)
-  const target = dirname(manifest)
+  // 某些包的exports将package.json映射到dist内部；沿目录向上核对真实包名，
+  // 不能把dist/esm误当包根，否则client/*子入口会被拼成dist/esm/dist/esm。
+  let target = dirname(manifest)
+  while (!existsSync(join(target, 'package.json'))
+    || JSON.parse(readFileSync(join(target, 'package.json'), 'utf8')).name !== specifier) {
+    const parent = dirname(target)
+    if (parent === target) throw new Error(`找不到依赖包根目录：${specifier}`)
+    target = parent
+  }
   const linkPath = join(sandbox, 'node_modules', specifier)
   mkdirSync(dirname(linkPath), { recursive: true })
   symlinkSync(target, linkPath, 'dir')
@@ -147,7 +156,7 @@ function prepareSandbox(): string {
   for (const name of WORKSPACE_PACKAGES) {
     copyTree(join(laneRoot, 'packages', name), join(sandbox, 'packages', name))
   }
-  for (const name of ['shared', 'agent-fabric', 'agent-runtime', 'core']) {
+  for (const name of WORKSPACE_PACKAGES.filter(name => name !== 'agent-provider-pi')) {
     symlinkSync(join(sandbox, 'packages', name), join(sandbox, 'node_modules', '@profer', name), 'dir')
   }
 
@@ -213,7 +222,9 @@ function checkResolvability(sandbox: string): void {
   const ownFailed: string[] = []
   for (const specifier of OWN_SDK_SPECIFIERS) {
     try {
-      ownResolved.push(Bun.resolveSync(specifier, sandbox))
+      // MCP SDK没有根入口，必须验证生产实际使用的公开子入口。
+      const entry = specifier === '@modelcontextprotocol/sdk' ? `${specifier}/client/index.js` : specifier
+      ownResolved.push(Bun.resolveSync(entry, sandbox))
     } catch {
       ownFailed.push(specifier)
     }

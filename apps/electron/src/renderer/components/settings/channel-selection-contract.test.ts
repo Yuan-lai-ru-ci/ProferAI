@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import type { Channel } from '@profer/shared'
+import { isAgentModelSelectionValid } from '@/lib/agent-channel-selection'
 
 test('表单连接测试使用启用模型并分别检查已勾选内核', () => {
   const form = readFileSync(new URL('./ChannelForm.tsx', import.meta.url), 'utf8')
@@ -27,9 +29,20 @@ test('官方分组保留所有渠道与停用模型的启停入口', () => {
   expect(panel).toContain('resolveAgentModelSelection(channels, runtime, agentChannelIds')
 })
 
-test('已有 Agent 绑定按实际模型有效性判断，不只检查任一模型', () => {
+test('Given 所属Core有效渠道 When 校验历史绑定 Then 检查指定模型且不沿用桌面渠道白名单', () => {
   const view = readFileSync(new URL('../agent/AgentView.tsx', import.meta.url), 'utf8')
-  expect(view).toContain('isAgentModelSelectionValid(globalChannels, sessionAgentRuntime, agentChannelIds, { channelId: agentChannelId, modelId: agentModelId })')
+  // 接线守卫只盯实际校验调用；模型是否可用由下面的真实函数行为断言覆盖。
+  expect(view).toMatch(/isAgentModelSelectionValid\(globalChannels,\s*sessionAgentRuntime,\s*effectiveAgentChannelIds,/)
+  expect(view).toContain('isRemoteCore ? globalChannels.map(channel => channel.id) : agentChannelIds')
+  const channel: Channel = { id: 'core-channel', name: 'Core', provider: 'anthropic', baseUrl: '', apiKey: '',
+    enabled: true, createdAt: 0, updatedAt: 0,
+    models: [{ id: 'bound-model', name: 'Bound', enabled: true }, { id: 'other-model', name: 'Other', enabled: true }] }
+  const selection = { channelId: channel.id, modelId: 'bound-model' }
+  expect(isAgentModelSelectionValid([channel], 'claude', [channel.id], selection)).toBe(true)
+  expect(isAgentModelSelectionValid([channel], 'claude', ['desktop-channel'], selection)).toBe(false)
+  const unavailable = { ...channel, models: channel.models.map(model => ({ ...model, enabled: model.id !== 'bound-model' })) }
+  expect(isAgentModelSelectionValid([unavailable], 'claude', [channel.id], selection)).toBe(false)
+  expect(isAgentModelSelectionValid([channel], 'claude', [channel.id], { ...selection, modelId: 'missing' })).toBe(false)
 })
 
 test('历史 Agent metadata 缺模型时不会继承其它默认，不自动改写metadata', () => {

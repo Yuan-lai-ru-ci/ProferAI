@@ -54,7 +54,7 @@ describe('Core lifecycle launch selection', () => {
     }
   }, 20000)
 
-  test('passes the validated host Bash path to an owned Core child', async () => {
+  test('Given 宿主平台 When 启动自身Core Then 仅Windows透传Bash配置且POSIX保留宿主路径', async () => {
     const root = mkdtempSync(join(tmpdir(), 'profer-local-core-shell-'))
     let childEnv: NodeJS.ProcessEnv | undefined
     const spawnImpl = ((command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
@@ -64,13 +64,22 @@ describe('Core lifecycle launch selection', () => {
     }) as typeof import('node:child_process').spawn
     const lifecycle = new LocalCoreLifecycle({
       configDir: root, workspaceRoot: join(root, 'workspaces'), bunCommand: process.execPath,
-      env: { Path: 'C:\\Git\\bin', CLAUDE_CODE_SHELL: 'C:\\Git\\bin\\bash.exe', PROFER_WINDOWS_SHELL: 'git-bash' },
+      env: process.platform === 'win32'
+        ? { Path: 'C:\\Git\\bin', CLAUDE_CODE_SHELL: 'C:\\Git\\bin\\bash.exe', PROFER_WINDOWS_SHELL: 'git-bash' }
+        : { PATH: '/usr/bin:/bin', HOME: root, CLAUDE_CODE_SHELL: 'C:\\Git\\bin\\bash.exe', PROFER_WINDOWS_SHELL: 'git-bash' },
       spawnImpl,
     })
     try {
       await lifecycle.start()
-      expect(childEnv?.CLAUDE_CODE_SHELL).toBe('C:\\Git\\bin\\bash.exe')
-      expect(childEnv?.PROFER_WINDOWS_SHELL).toBe('git-bash')
+      if (process.platform === 'win32') {
+        expect(childEnv?.CLAUDE_CODE_SHELL).toBe('C:\\Git\\bin\\bash.exe')
+        expect(childEnv?.PROFER_WINDOWS_SHELL).toBe('git-bash')
+      } else {
+        expect(childEnv?.PATH).toBe('/usr/bin:/bin')
+        expect(childEnv?.HOME).toBe(root)
+        expect(childEnv?.CLAUDE_CODE_SHELL).toBeUndefined()
+        expect(childEnv?.PROFER_WINDOWS_SHELL).toBeUndefined()
+      }
     } finally {
       await lifecycle.stop()
       rmSync(root, { recursive: true, force: true })

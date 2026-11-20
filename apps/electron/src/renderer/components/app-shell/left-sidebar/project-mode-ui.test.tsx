@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import * as React from 'react'
 import { createStore, Provider } from 'jotai'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { TooltipProvider } from '@profer/ui/primitives/tooltip'
 import type { AgentWorkspace, ProjectWorkspaceOpenResult } from '@profer/shared'
 import {
   bindProjectFolderFromPicker,
@@ -292,6 +293,7 @@ describe('新建项目弹窗分支', () => {
     expect(html).not.toContain('直接输入路径')
     expect(html).not.toContain('选一个本地文件夹作为项目根')
     const pathHtml = renderToStaticMarkup(
+      <TooltipProvider>
       <CreateProjectDialogBody
         mode="remote-path"
         name=""
@@ -306,11 +308,12 @@ describe('新建项目弹窗分支', () => {
         onOpenFolder={() => {}}
         onManagedSubmit={() => {}}
         onNameKeyDown={() => {}}
-      />,
+      />
+      </TooltipProvider>,
     )
-    // 绑定/打开都直接进入 Core 文件夹面板：路径输入框内嵌，没有独立入口或新建文件夹按钮。
+    // 使用现有Core浏览器：内嵌路径输入及创建目录按钮，不恢复独立路径入口。
     expect(pathHtml).toContain('core-folder-browser')
-    expect(pathHtml).not.toContain('新建文件夹')
+    expect(pathHtml).toContain('aria-label="新建文件夹"')
   })
 
   test('Given 选中托管目录 When 渲染 Then 出现名称输入而非托管入口行', () => {
