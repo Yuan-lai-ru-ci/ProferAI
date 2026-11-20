@@ -21,6 +21,9 @@ nsis:
 mac:
   artifactName: Profer-Commercial-${version}-${arch}.${ext}
 
+linux:
+  artifactName: Profer-Commercial-${version}-linux-${arch}.${ext}
+
 # publish 必须写成数组：对象形式会与基础配置深度合并，把 GitHub 的
 # owner / repo / releaseType 残留进来（provider 已是 generic，用不上却会写进
 # app-update.yml）。数组形式是整体替换，已验证合并结果为单条 generic 配置。

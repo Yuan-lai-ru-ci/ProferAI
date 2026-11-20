@@ -12,14 +12,16 @@ function verifyPackagedWindowsCli(binDir) {
   }
 
   const entries = fs.readdirSync(binDir, { withFileTypes: true })
-  if (entries.length !== 1 || entries[0].name !== WINDOWS_CLI_NAME) {
+  const coreEntries = new Set(['profer-core.exe', 'core.js', 'core-runtime.json', 'node_modules'])
+  const invalid = entries.filter(entry => entry.name !== WINDOWS_CLI_NAME && !coreEntries.has(entry.name))
+  if (!entries.some(entry => entry.name === WINDOWS_CLI_NAME) || invalid.length) {
     const actual = entries.map((entry) => entry.name).sort().join(', ') || '<空>'
     throw new Error(
       `Windows 随包 CLI 目录必须且只能包含 ${WINDOWS_CLI_NAME}，实际为: ${actual}`,
     )
   }
 
-  const entry = entries[0]
+  const entry = entries.find(entry => entry.name === WINDOWS_CLI_NAME)
   const cliPath = path.join(binDir, entry.name)
   if (!entry.isFile()) {
     throw new Error(`Windows 随包 CLI 必须是普通文件: ${cliPath}`)

@@ -198,6 +198,7 @@ export function resolveBuildSteps(target: DistOptions['target']): { name: string
     { name: '构建渲染进程 (Vite)', script: commercial ? 'build:renderer:commercial' : 'build:renderer' },
     { name: '校验界面发行版', script: `verify:renderer-edition:${target}` },
     { name: '编译 Profer CLI (bun --compile)', script: 'build:cli' },
+    { name: '构建内置 Core 运行目录', script: 'build:core' },
     { name: '编译手写笔 OCR', script: 'build:pen-ocr' },
     { name: '复制资源文件', script: 'build:resources' },
     { name: '同步主进程运行时依赖', script: 'sync:runtime-deps' },
@@ -270,7 +271,7 @@ function main(): void {
   const results: StepResult[] = []
 
   try {
-    // 目标平台支持门禁（当前 Linux 未纳入发布目标，原因见 packaging-host.cjs 注释）。
+    // 目标平台/架构及原生构建宿主门禁；Linux只开放x64。
     assertSupportedPackagingTarget(opts.platform)
     assertPackagingHost(opts.platform, process.platform)
   } catch (error) {
@@ -300,7 +301,7 @@ function main(): void {
   printSeparator()
 
   const buildSteps = resolveBuildSteps(opts.target)
-  const totalSteps = buildSteps.length + 1 + (opts.platform === 'mac' ? 3 : 0) + 1
+  const totalSteps = buildSteps.length + 1 + (opts.platform === 'mac' ? 3 : opts.platform === 'linux' ? 1 : 0) + 2
   const outputDir = resolveOutputDir(opts.target)
   let step = 0
 
@@ -399,6 +400,23 @@ function main(): void {
     printStepResult(results[results.length - 1])
     if (!results[results.length - 1].success) return printSummary(results)
   }
+
+  if (opts.platform === 'linux') {
+    step++
+    printStepStart(step, totalSteps, '验证 Linux 运行依赖闭包')
+    results.push(runStep('验证 Linux 安装包', 'node', ['scripts/verify-linux-package.cjs', `${outputDir}/linux-unpacked`], { verbose: true }))
+    printStepResult(results[results.length - 1])
+    if (!results[results.length - 1].success) return printSummary(results)
+  }
+
+  step++
+  printStepStart(step, totalSteps, '验证包内 Core（独立环境 HTTP/WS/native）')
+  results.push(runStep('验证包内 Core', 'bun', ['run', 'verify:packaged-core'], {
+    verbose: true,
+    env: { PROFER_ELECTRON_OUTPUT_DIR: outputDir },
+  }))
+  printStepResult(results[results.length - 1])
+  if (!results[results.length - 1].success) return printSummary(results)
 
   // 启动冒烟：唯一真正启动产物的门禁。0.16.27 的四套包就是「构建/签名/元数据全绿但起不来」，
   // 只有这一步能拦住。失败必须中止，不能再往下走发布。

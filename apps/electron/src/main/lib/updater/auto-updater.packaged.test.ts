@@ -30,7 +30,7 @@ mock.module('./update-probe', () => ({
 }))
 const { checkForUpdates, getUpdateStatus, initAutoUpdater, cleanupUpdater } = await import('./auto-updater')
 
-test('包态：内测同/低正式基线零提示零下载；多源回退、更高版本及正式包保真', async () => {
+test('包态：预发布版禁止检查下载；正式版多源回退与下载保真', async () => {
   const originalVersion = app.getVersion
   const originalPackaged = app.isPackaged
   const originalTimeout = globalThis.setTimeout
@@ -45,25 +45,14 @@ test('包态：内测同/低正式基线零提示零下载；多源回退、更�
     initAutoUpdater({ on: () => undefined, webContents: { send: (_channel: string, status: { status: string }) => sent.push(status) } } as never)
     expect(updater.autoDownload).toBe(false)
     expect(updater.autoInstallOnAppQuit).toBe(false)
-    for (const version of ['0.15.85', '0.15.84']) {
-      candidate = version
-      sent.length = 0
-      await checkForUpdates()
-      handlers.get('update-downloaded')?.({ version })
-      handlers.get('download-progress')?.({ percent: 50, transferred: 5, total: 10, bytesPerSecond: 1 } as never)
-      expect(download).not.toHaveBeenCalled()
-      expect(getUpdateStatus()).toEqual({ status: 'not-available' })
-      expect(sent.some(status => ['available', 'downloading', 'downloaded'].includes(status.status))).toBe(false)
-    }
-    // 两个国内源不可达，GitHub同基线也不得下载。
-    candidate = '0.15.85'
-    failCount = 2
-    setFeedURL.mockClear()
+    // 所有预发布版（包括旧 internal 包）统一手动安装，不接触任何更新源。
     await checkForUpdates()
-    expect(setFeedURL).toHaveBeenCalledTimes(3)
+    expect(setFeedURL).not.toHaveBeenCalled()
     expect(download).not.toHaveBeenCalled()
+    expect(getUpdateStatus()).toMatchObject({ status: 'error' })
     // 正式包仍沿原有 electron-updater 结果下载。
     Object.assign(app, { getVersion: () => '0.15.84' })
+    initAutoUpdater({ on: () => undefined, webContents: { send: (_channel: string, status: { status: string }) => sent.push(status) } } as never)
     await checkForUpdates()
     expect(download).toHaveBeenCalledTimes(1)
     // 检查一有结论就返回，下载在后台跑：状态直接进入 downloading，不再等下载完成。
@@ -71,7 +60,7 @@ test('包态：内测同/低正式基线零提示零下载；多源回退、更�
     // 下载失败会回到可重试状态；downloading 期间会跳过检查，所以这里必须先把状态推进到终态。
     handlers.get('error')?.(new Error('模拟下载失败') as never)
     expect(getUpdateStatus().status).toBe('error')
-    Object.assign(app, { getVersion: () => '0.15.85-internal.4' })
+    Object.assign(app, { getVersion: () => '0.15.85' })
     candidate = '0.16.0'
     failCount = 2
     setFeedURL.mockClear()

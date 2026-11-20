@@ -94,6 +94,16 @@ describe('Windows 随包 CLI 契约', () => {
     expect(verifyPackagedWindowsCli(binDir)).toBe(cliPath)
   })
 
+  test('Given Windows CLI 与完整 Core 资源同目录 Then CLI 校验允许明确的 Core 文件', () => {
+    const binDir = createBinDir()
+    writeFileSync(join(binDir, 'profer.exe'), 'windows-cli')
+    for (const name of ['profer-core.exe', 'core.js', 'core-runtime.json']) writeFileSync(join(binDir, name), 'core-fixture')
+    mkdirSync(join(binDir, 'node_modules'))
+    expect(verifyPackagedWindowsCli(binDir)).toBe(join(binDir, 'profer.exe'))
+    writeFileSync(join(binDir, 'profer-core'), 'wrong-platform')
+    expect(() => verifyPackagedWindowsCli(binDir)).toThrow()
+  })
+
   test('Given CLI 缺失或只有无扩展名文件 When 验证 Then 拒绝', () => {
     const missingBinDir = join(createTemporaryRoot(), 'bin')
     expect(() => verifyPackagedWindowsCli(missingBinDir)).toThrow('目录不存在')

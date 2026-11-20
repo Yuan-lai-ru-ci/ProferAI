@@ -1,0 +1,16 @@
+# 示例：安装者须替换路径并准备权限0600的环境文件，本包不会自动注册或启用。
+[Unit]
+Description=Profer Core Beta (user-managed)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/absolute/path/to/profer-core-runtime
+ExecStart=/absolute/path/to/profer-core-runtime/profer-core
+EnvironmentFile=%h/.config/profer-core-beta/core.env
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

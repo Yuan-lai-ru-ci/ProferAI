@@ -24,6 +24,7 @@ describe('dist.ts 发行版构建链', () => {
       target === 'commercial' ? 'build:renderer:commercial' : 'build:renderer',
       `verify:renderer-edition:${target}`,
       'build:cli',
+      'build:core',
       'build:pen-ocr',
       'build:resources',
       'sync:runtime-deps',
@@ -52,7 +53,7 @@ describe('dist.ts 构建执行（注入替身，不启动外部命令）', () =>
       return { name: step.name, duration: 0, success: true, skipped: false }
     })
     expect(called).toEqual(resolveBuildSteps(target).map((step) => step.script))
-    expect(results).toHaveLength(10)
+    expect(results).toHaveLength(11)
     expect(results.every((result) => result.success)).toBe(true)
   })
 
@@ -82,17 +83,23 @@ describe('dist.ts 默认平台推导', () => {
     expect(() => assertPackagingHost('win', 'win32')).not.toThrow()
   })
 
-  test('Given Linux 宿主且未指定平台 Then 解析为 linux，但打包入口显式拒绝（当前不是发布目标）', () => {
+  test('Given Linux x64 宿主 Then 显式及默认目标通过，跨宿主和不支持架构拒绝', () => {
     expect(defaultPlatformForHost('linux')).toBe('linux')
     expect(parseArgs([], 'linux').platform).toBe('linux')
-    // 不因为「electron-builder.yml 有 linux 段」就当支持：缺 Claude 原生二进制与 Linux 验证。
-    expect(() => assertSupportedPackagingTarget('linux')).toThrow('Linux 不是受支持的发布目标')
-    expect(() => assertBuilderPackagingHost(['--linux'], 'linux')).toThrow('Linux 不是受支持的发布目标')
-    // 不给平台参数时 electron-builder 仍按宿主默认打 linux，门禁必须同样拒绝。
-    expect(() => assertBuilderPackagingHost([], 'linux')).toThrow('Linux 不是受支持的发布目标')
-    expect(() => assertBuilderPackagingHost(['--dir'], 'linux')).toThrow('Linux 不是受支持的发布目标')
-    expect(() => assertSupportedPackagingTarget('mac')).not.toThrow()
-    expect(() => assertSupportedPackagingTarget('win')).not.toThrow()
+    expect(() => assertSupportedPackagingTarget('linux', 'x64')).not.toThrow()
+    for (const args of [[], ['--dir'], ['--linux'], ['-l', '--x64']]) {
+      expect(() => assertBuilderPackagingHost(args, 'linux', 'x64')).not.toThrow()
+    }
+    for (const host of ['darwin', 'win32']) {
+      expect(() => assertPackagingHost('linux', host, 'x64')).toThrow('Linux 打包必须在 Linux 宿主')
+    }
+    for (const arch of ['arm64', 'ia32', 'armv7l', 'universal']) {
+      expect(() => assertBuilderPackagingHost(['--linux', `--${arch}`], 'linux', 'x64')).toThrow('仅支持 x64')
+      expect(() => assertBuilderPackagingHost(['--dir'], 'linux', arch)).toThrow('仅支持 x64')
+    }
+    expect(() => assertBuilderPackagingHost(['--linux', '--x64', '--arm64'], 'linux', 'x64')).toThrow()
+    expect(() => assertBuilderPackagingHost(['--linux', '--arch=arm64'], 'linux', 'x64')).toThrow()
+    expect(() => assertBuilderPackagingHost(['--linux', '--arch', 'ia32'], 'linux', 'x64')).toThrow()
   })
 
   test('Given 未指定平台参数 When 宿主为 macOS 或 Windows Then 按宿主默认目标校验并通过', () => {

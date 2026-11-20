@@ -1,5 +1,6 @@
 import type { AppUpdater } from 'electron-updater'
 import { isCommercialBuild } from '../build-target'
+import { requiresManualUpdate } from './update-policy'
 
 type UpdateFeedConfiguration = Exclude<Parameters<AppUpdater['setFeedURL']>[0], string>
 
@@ -119,7 +120,9 @@ export function getUpdateSources(
   overrideUrl = process.env.PROFER_UPDATE_FEED_URL,
   platform: NodeJS.Platform = process.platform,
   edition: UpdateEdition = isCommercialBuild() ? 'commercial' : 'oss',
+  currentVersion = '',
 ): UpdateSource[] {
+  if (requiresManualUpdate(currentVersion)) return []
   const sources: UpdateSource[] = []
   const metadataFile = updateMetadataFileName(platform)
   const commercial = edition === 'commercial'

@@ -13,6 +13,7 @@ import { runWithUpdateSourceFallback } from './update-fallback'
 import { orderSourcesByReachability, describeProbeOutcomes } from './update-probe'
 import { getUpdateSources, UPDATE_PROBE_TIMEOUT_MS, type UpdateSource } from './update-sources'
 import { canReplaceUpdateStatus } from './update-state'
+import { requiresManualUpdate, manualUpdateStatus } from './update-policy'
 import { withDeadline, UpdateTimeoutError } from './update-deadline'
 import { getLatestRelease } from '../github-release-service'
 import { logLifecycle } from '../lifecycle-diagnostics'
@@ -77,6 +78,7 @@ let quietStatusUpdates = false
 
 /** 更新状态并推送给渲染进程 */
 function setStatus(status: UpdateStatus): void {
+  if (enforceManualUpdatePolicy()) return
   if (!canReplaceUpdateStatus(currentStatus, status)) {
     console.log(`[更新] 保留已下载状态，忽略迟到的 ${status.status} 事件`)
     return
@@ -85,8 +87,20 @@ function setStatus(status: UpdateStatus): void {
   win?.webContents?.send(UPDATER_IPC_CHANNELS.ON_STATUS_CHANGED, status)
 }
 
+/** 所有入口共享同一版本策略，开发模式和环境变量都不能绕过。 */
+function enforceManualUpdatePolicy(): boolean {
+  if (!requiresManualUpdate(getCurrentAppVersion())) return false
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = false
+  // 即使残留下载事件曾产生 downloaded，也不允许预发布版露出安装入口。
+  currentStatus = manualUpdateStatus()
+  win?.webContents?.send(UPDATER_IPC_CHANNELS.ON_STATUS_CHANGED, currentStatus)
+  return true
+}
+
 /** 获取当前更新状态 */
 export function getUpdateStatus(): UpdateStatus {
+  enforceManualUpdatePolicy()
   return currentStatus
 }
 
@@ -113,6 +127,7 @@ function lateEventIgnored(event: string): boolean {
  * 这里按「检查成功的源 + 其后的备用源」逐个尝试。
  */
 function startBackgroundDownload(version: string, sources: readonly UpdateSource[], usedSource: UpdateSource): void {
+  if (enforceManualUpdatePolicy()) return
   if (currentStatus.status === 'downloading' || currentStatus.status === 'downloaded') {
     console.log('[更新] 已在下载中或已下载完成，跳过重复下载')
     return
@@ -126,6 +141,7 @@ function startBackgroundDownload(version: string, sources: readonly UpdateSource
 async function runDownloadWithFallback(version: string, candidates: readonly UpdateSource[]): Promise<void> {
   const failures: string[] = []
   for (const [index, source] of candidates.entries()) {
+    if (enforceManualUpdatePolicy()) return
     if (index > 0) {
       // 换源必须重新检查：electron-updater 的下载地址是检查结果里的绝对 URL，
       // 只改 feed 不会改变已缓存的 updateInfo，重试仍会打回那个失败的源。
@@ -188,6 +204,7 @@ async function runDownloadWithFallback(version: string, candidates: readonly Upd
  * 停滞必须 reject 出去让上层换源，而不是把进度条永远停在某个百分比。
  */
 function downloadOnce(): Promise<void> {
+  if (enforceManualUpdatePolicy()) return Promise.resolve()
   const attempt = ++downloadAttempt
   lastDownloadProgressAt = Date.now()
   const pendingDownload = autoUpdater.downloadUpdate()
@@ -377,7 +394,7 @@ async function runUpdateCheck(): Promise<void> {
 
   try {
     // 先并发探活再决定顺序：串行回退遇到黑洞 IP 时，每次检查都会先白等满一次超时。
-    const declaredSources = getUpdateSources()
+    const declaredSources = getUpdateSources(undefined, process.platform, undefined, getCurrentAppVersion())
     const sources = await orderSourcesByReachability(declaredSources, probeSourceReachable)
     console.log(`[更新] 源可达性探测：${describeProbeOutcomes(declaredSources, sources)}`)
     logLifecycle('update.check-sources', {
@@ -461,6 +478,7 @@ function hasLiveInFlight(): boolean {
 
 /** 手动触发检查更新 */
 export async function checkForUpdates(): Promise<void> {
+  if (enforceManualUpdatePolicy()) return
   // 开发版不能把安装包覆盖到源码目录，但可以检查最新 Release，方便开发期间及时获知
   // 新版本；真正安装仍由用户打开发布页下载正式安装包完成。
   if (!app.isPackaged) {
@@ -530,6 +548,7 @@ function cancelInstallForceExit(): void {
 
 /** 退出并安装已下载的更新 */
 export function quitAndInstall(): void {
+  if (enforceManualUpdatePolicy()) return
   // 移除所有窗口的 close 监听器，避免 preventDefault 阻止退出
   for (const w of BrowserWindow.getAllWindows()) {
     w.removeAllListeners('close')
@@ -537,6 +556,7 @@ export function quitAndInstall(): void {
 
   // 延迟调用确保 IPC 响应已发送回渲染进程
   setImmediate(() => {
+    if (enforceManualUpdatePolicy()) return
     const version = (currentStatus as { version?: string }).version
     logLifecycle('update.install-start', { version })
     autoUpdater.quitAndInstall(true, true)
@@ -678,6 +698,12 @@ function setupPackagedAutoUpdater(): void {
  */
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
   win = mainWindow
+
+  if (enforceManualUpdatePolicy()) {
+    cleanupUpdater()
+    mainWindow.on('closed', () => { win = null })
+    return
+  }
 
   // 开发版不能把安装包覆盖到源码目录，feed URL 也只在打包后嵌入，因此不装配
   // electron-updater；但下面的调度照旧执行，走 checkDevelopmentUpdate 检查最新

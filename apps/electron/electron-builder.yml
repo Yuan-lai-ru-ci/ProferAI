@@ -74,6 +74,16 @@ files:
 
 # 通用额外资源
 extraResources:
+  # Core 是独立 Bun 宿主，必须携带整个运行目录，不能只复制二进制。
+  # 由 build:core 原生构建；不走 ASAR，外置 SDK/native 由 Bun 从真实目录加载。
+  - from: ../core/dist
+    to: bin
+    filter:
+      - profer-core
+      - profer-core.exe
+      - core.js
+      - core-runtime.json
+      - node_modules/**/*
   # 默认 Skills 模板（首次启动时同步到 ~/.profer/default-skills/）
   - from: default-skills
     to: default-skills
@@ -163,6 +173,14 @@ dmg:
 
 # Linux CLI 与 macOS 同名，但仍按平台精确复制，避免未来 Linux 构建回归。
 linux:
+  executableName: profer
+  category: Development
+  artifactName: Profer-${version}-linux-${arch}.${ext}
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
   extraResources:
     - from: resources/bin/profer
       to: bin/profer

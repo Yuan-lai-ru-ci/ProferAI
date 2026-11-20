@@ -25,14 +25,16 @@ const out = path.join(
   process.env.PROFER_ELECTRON_OUTPUT_DIR ?? (edition === 'commercial' ? 'out-commercial' : 'out'),
 )
 const version = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version
-const metadataPath = path.join(out, 'latest-mac.yml')
+const { releaseMetadataName } = require('./release-metadata-name.cjs')
+const metadataName = releaseMetadataName(version, 'darwin')
+const metadataPath = path.join(out, metadataName)
 
 function assertFile(filePath, description) {
   if (!fs.existsSync(filePath)) throw new Error(`缺少 macOS 更新资产: ${description} (${filePath})`)
   if (fs.statSync(filePath).size <= 0) throw new Error(`macOS 更新资产为空: ${filePath}`)
 }
 
-assertFile(metadataPath, 'latest-mac.yml')
+assertFile(metadataPath, metadataName)
 
 const metadata = fs.readFileSync(metadataPath, 'utf8')
 if (!/^path:\s*\S+\.zip\s*$/m.test(metadata)) {

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const VERSION = '0.1.3'
+const VERSION = '0.1.4'
 const CORE_ID_FILE = 'core-id'
 
 function stableCoreId(configDir: string, configured?: string): string {

@@ -41,10 +41,11 @@ const version = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), '
 const installerName = `${installerPrefix}-${version}.exe`
 const blockmapName = `${installerName}.blockmap`
 const unsignedRelease = process.env.PROFER_UNSIGNED_RELEASE === '1' || args.includes('--unsigned')
-const signatureName = 'latest.yml.sig'
+const metadataName = require('./release-metadata-name.cjs').releaseMetadataName(version, 'win32')
+const signatureName = `${metadataName}.sig`
 const expected = unsignedRelease
-  ? ['latest.yml', installerName, blockmapName]
-  : ['latest.yml', signatureName, installerName, blockmapName]
+  ? [metadataName, installerName, blockmapName]
+  : [metadataName, signatureName, installerName, blockmapName]
 
 for (const name of expected) {
   const filePath = path.join(out, name)
@@ -74,7 +75,7 @@ function parseLatestYml(text) {
   return { sha512: hashMatch[1], size: Number(sizeMatch[1]) }
 }
 
-const metadata = parseLatestYml(fs.readFileSync(path.join(out, 'latest.yml'), 'utf8'))
+const metadata = parseLatestYml(fs.readFileSync(path.join(out, metadataName), 'utf8'))
 if (!/^[A-Za-z0-9+/]+={0,2}$/.test(metadata.sha512)) {
   throw new Error('latest.yml sha512 不是合法的 base64')
 }
