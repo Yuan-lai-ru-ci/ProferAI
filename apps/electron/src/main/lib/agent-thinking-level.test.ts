@@ -30,8 +30,8 @@ describe('resolveGlobalThinkingLevel', () => {
 })
 
 describe('resolvePiThinkingLevel', () => {
-  test('Given 无 reasoning 协议的 provider(google) Then 返回 off', () => {
-    expect(resolvePiThinkingLevel('high', defaults, 'google')).toBe('off')
+  test('Given Google 原生协议支持推理档位 Then 不再强制关闭', () => {
+    expect(resolvePiThinkingLevel('high', defaults, 'google')).toBe('high')
   })
 
   test('Given anthropic provider 且开启 Then 返回档位（原生 extended thinking）', () => {

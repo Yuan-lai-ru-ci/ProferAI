@@ -279,6 +279,7 @@ const PROVIDER_LOGO_MAP: Record<ProviderType, string> = {
   'openai-codex': OpenAILogo,
   xai: GrokLogo,
   ollama: DefaultLogo,
+  local: DefaultLogo,
   custom: DefaultLogo,
 }
 

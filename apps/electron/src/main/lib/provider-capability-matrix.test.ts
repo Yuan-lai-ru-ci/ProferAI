@@ -37,9 +37,9 @@ const selector = new Function('isChannelEnabledForChat', 'getChannelProtocol', '
   isChannelEnabledForChat, () => 'openai', (channel: Parameters<typeof isChannelEnabledForRuntime>[0], protocol: string) => isChannelEnabledForRuntime(channel, protocol === 'anthropic' ? 'claude' : 'pi'), () => 'self-configured',
 ) as (channels: unknown[], id?: string, ids?: string[], protocol?: string, strict?: boolean) => unknown[]
 
-describe('F10/F13/F19：23 Provider 表驱动本地协议矩阵', () => {
+describe('F10/F13/F19：24 Provider 表驱动本地协议矩阵', () => {
   test('枚举、默认 URL、标签、设置入口覆盖一致；Chat adapter 只有 Codex 明确缺席', () => {
-    expect(Object.keys(nativeProtocols)).toHaveLength(23)
+    expect(Object.keys(nativeProtocols)).toHaveLength(24)
     expect(Object.keys(nativeProtocols).sort()).toEqual(Object.keys(PROVIDER_LABELS).sort())
     expect(Object.keys(PROVIDER_DEFAULT_URLS).sort()).toEqual(Object.keys(nativeProtocols).sort())
     const form = readFileSync(new URL('../../renderer/components/settings/ChannelForm.tsx', import.meta.url), 'utf8')

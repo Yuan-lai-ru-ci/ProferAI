@@ -209,12 +209,14 @@ export class GoogleAdapter implements ProviderAdapter {
     const generationConfig: Record<string, unknown> = {}
 
     // 思考模式配置：
-    // - 启用时：显示思考过程 + 设置 thinkingBudget 控制深度
+    // - Gemini 4 使用离散 thinkingLevel；旧模型保留 token budget
     // - 关闭时：不传 thinkingConfig，模型使用默认行为
     if (input.thinkingEnabled) {
       generationConfig.thinkingConfig = {
         includeThoughts: true,
-        thinkingBudget: 16384,
+        ...(/^gemini-4-(?:carbon|argon|hydrogen)(?:-|$)/i.test(input.modelId)
+          ? { thinkingLevel: 'HIGH' }
+          : { thinkingBudget: 16384 }),
       }
     }
 

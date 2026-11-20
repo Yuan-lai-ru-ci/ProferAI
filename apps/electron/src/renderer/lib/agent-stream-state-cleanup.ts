@@ -71,6 +71,7 @@ export function compactCompletedBackgroundStreamState(
     cacheReadTokens: state.cacheReadTokens,
     cacheCreationTokens: state.cacheCreationTokens,
     contextWindow: state.contextWindow,
+    usageUpdatedAt: state.usageUpdatedAt,
     model: state.model,
   }
 }

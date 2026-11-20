@@ -39,6 +39,7 @@ import {
   inferAgentRuntimeModes,
   isChannelEnabledForAnyRuntime,
   isChannelEnabledForRuntime,
+  isLocalModelProvider,
   resolveProviderNativeProtocol,
 } from '@profer/shared'
 import type {
@@ -54,6 +55,7 @@ import type {
 } from '@profer/shared'
 import { inferAgentBaseUrl, isAnthropicShapedEndpoint, normalizeBaseUrl, normalizeGoogleBaseUrl, resolveAnthropicMessagesUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl } from '@profer/core'
 import { getProviderLogo } from '@/lib/model-logo'
+import { LOCAL_RUNTIME_PRESETS, localRuntimePresetBaseUrl, resolveLocalRuntimePresetId } from '@/lib/local-runtime-presets'
 import { applyModelDiscoveryResult, buildModelDiscoveryAttemptKey, shouldAutoDiscoverModels } from '@/lib/channel-model-discovery'
 import { addManualModel } from '@/lib/channel-manual-model'
 import { resolveModel1MToggleState } from '@/lib/model-1m-toggle'
@@ -90,7 +92,7 @@ interface ChannelFormProps {
 const CN_PROVIDERS: ProviderType[] = ['deepseek', 'qwen', 'qwen-anthropic', 'zhipu', 'zhipu-coding', 'zhipu-coding-team', 'doubao', 'ark-coding-plan', 'kimi-api', 'kimi-coding', 'minimax', 'xiaomi', 'xiaomi-token-plan']
 
 /** 境外供应商 */
-const GLOBAL_PROVIDERS: ProviderType[] = ['anthropic', 'openai', 'openai-responses', 'opencode-go-openai', 'google', 'xai', 'anthropic-compatible', 'openai-codex', 'ollama', 'custom']
+const GLOBAL_PROVIDERS: ProviderType[] = ['anthropic', 'openai', 'openai-responses', 'opencode-go-openai', 'google', 'xai', 'anthropic-compatible', 'openai-codex', 'ollama', 'local', 'custom']
 
 /** 所有可选供应商 */
 const PROVIDER_OPTIONS: ProviderType[] = [...CN_PROVIDERS, ...GLOBAL_PROVIDERS]
@@ -123,8 +125,8 @@ function isSameEndpoint(left: string, right: string): boolean {
   return normalizeBaseUrl(left) === normalizeBaseUrl(right)
 }
 
-/** 根据 Ollama 地址提示请求是否会离开本机。 */
-function getOllamaNetworkScope(baseUrl: string): string {
+/** 根据本地服务地址提示请求是否会离开本机。 */
+function getLocalNetworkScope(baseUrl: string): string {
   try {
     const hostname = new URL(baseUrl).hostname.toLowerCase()
     if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return '仅本机访问'
@@ -147,6 +149,9 @@ function buildPreviewUrl(baseUrl: string, provider: ProviderType, xaiApiProtocol
   const trimmed = baseUrl.trim().replace(/\/+$/, '')
   if (provider === 'ollama') {
     return `${trimmed.replace(/\/v1$/, '')}/v1/chat/completions（Agent: /v1/messages）`
+  }
+  if (provider === 'local') {
+    return `${resolveOpenAIChatCompletionsUrl(baseUrl, provider)}（Chat / Pi 同端点）`
   }
   // 官方厂商端点（Anthropic / Gemini）挂在 OpenAI 兼容渠道上时，运行时按原生协议发请求
   // （见 core 的 getAdapter）；预览必须跟着切，否则会把并不存在的 /chat/completions
@@ -261,6 +266,9 @@ function describeEndpointMismatch(baseUrl: string, provider: ProviderType, xaiAp
   }
   if (provider === 'ollama' && /\/(chat\/completions|messages)$/.test(path)) {
     return '；Ollama 只填服务根地址（如 http://127.0.0.1:11434），不要带请求端点'
+  }
+  if (provider === 'local' && /\/(messages|responses)$/.test(path)) {
+    return '；本地模型渠道应填 OpenAI 兼容地址（通常以 /v1 结尾）；Anthropic / Responses 端点不能用于此渠道'
   }
   if (provider === 'google' && /(chat\/completions|\/responses|\/messages)/.test(path)) {
     return '；Gemini 渠道应填协议根地址（如 https://host），不要填写 OpenAI / Anthropic 端点'
@@ -572,7 +580,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     }
     const patch = buildChannelDraftPatch(baselineRef.current, next)
     if (Object.keys(patch).length === 0) return
-    if (next.provider !== channel.provider && next.provider !== 'ollama' && !next.apiKey && !usesOAuthCredentials(next.provider!, next.credentialMode)) {
+    if (next.provider !== undefined && next.provider !== channel.provider && !isLocalModelProvider(next.provider) && !next.apiKey && !usesOAuthCredentials(next.provider, next.credentialMode)) {
       throw new Error('更换供应商后请填写新的 API Key')
     }
     setSaving(true)
@@ -710,6 +718,24 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     }
   }
 
+  /**
+   * 切换本地服务预设：只覆盖 OpenAI 兼容端点。
+   *
+   * 「自定义地址」不覆写输入框，方便用户先选预设再改端口。名称仅在仍是
+   * 默认名或上一个预设名时才跟着变，避免覆盖用户自己起的渠道名。
+   */
+  const handleLocalRuntimePresetChange = (presetId: string): void => {
+    const presetBaseUrl = localRuntimePresetBaseUrl(presetId)
+    if (!presetBaseUrl) return
+    handleBaseUrlChange(presetBaseUrl)
+    const presetLabel = LOCAL_RUNTIME_PRESETS.find((preset) => preset.id === presetId)?.label
+    const trimmedName = name.trim()
+    const followsPresetLabel = LOCAL_RUNTIME_PRESETS.some((preset) => preset.label === trimmedName)
+    if (presetLabel && (!trimmedName || trimmedName === PROVIDER_LABELS.local || followsPresetLabel)) {
+      setName(presetLabel)
+    }
+  }
+
   /** 添加模型 */
   const handleAddModel = (): void => {
     const result = addManualModel(models, newModelId, newModelName)
@@ -761,7 +787,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
    * Ollama 走本机 /api/tags，不需要 Key；其余供应商必须同时有地址与凭证。
    */
   const canDiscoverModels = discoveryEndpointReady
-    && (provider === 'ollama' || Boolean(apiKey.trim()))
+    && (isLocalModelProvider(provider) || Boolean(apiKey.trim()))
     && !oauthCredentials
 
   /**
@@ -852,7 +878,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   /** 测试连接（直接使用表单当前值，无需先保存） */
   const handleTest = async (): Promise<void> => {
     if (oauthCredentials) return
-    if ((provider !== 'ollama' && !apiKey.trim()) || !testEndpointReady) return
+    if ((!isLocalModelProvider(provider) && !apiKey.trim()) || !testEndpointReady) return
 
     cancelNetworkRequests('test')
     setTesting(true)
@@ -1164,7 +1190,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           <Button
             size="sm"
             onClick={handleCreate}
-            disabled={saving || oauthLoggingIn || !name.trim() || (provider !== 'ollama' && !oauthCredentials && !apiKey.trim())}
+            disabled={saving || oauthLoggingIn || !name.trim() || (!isLocalModelProvider(provider) && !oauthCredentials && !apiKey.trim())}
           >
             {saving && <Loader2 size={14} className="animate-spin" />}
             <span>{oauthCredentials ? '登录并创建' : '创建'}</span>
@@ -1188,6 +1214,17 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             options={PROVIDER_SELECT_OPTIONS}
             placeholder="选择供应商"
           />
+          {provider === 'local' && (
+            <SettingsSelect
+              label="本地服务"
+              disabled={oauthLoggingIn || saving}
+              value={resolveLocalRuntimePresetId(baseUrl)}
+              onValueChange={handleLocalRuntimePresetChange}
+              options={LOCAL_RUNTIME_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }))}
+              placeholder="选择本地服务"
+              description="预设只填入 OpenAI 兼容端点（通常为 /v1）；端口不同可直接改下方地址，不影响连接方式。"
+            />
+          )}
           <SettingsInput
             label="供应商名称"
             value={name}
@@ -1241,10 +1278,10 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
               label={primaryEndpointLabel}
               value={baseUrl}
               onChange={(value) => handleBaseUrlChange(value)}
-              placeholder="https://api.example.com/v1"
+              placeholder={provider === 'local' ? 'http://127.0.0.1:1234/v1' : 'https://api.example.com/v1'}
               description={baseUrl.trim()
-                ? provider === 'ollama'
-                  ? `预览：${buildPreviewUrl(baseUrl, provider, apiProtocol)}；${getOllamaNetworkScope(baseUrl)}${describeEndpointMismatch(baseUrl, provider, apiProtocol)}`
+                ? isLocalModelProvider(provider)
+                  ? `预览：${buildPreviewUrl(baseUrl, provider, apiProtocol)}；${getLocalNetworkScope(baseUrl)}${describeEndpointMismatch(baseUrl, provider, apiProtocol)}`
                   : `预览：${buildPreviewUrl(baseUrl, provider, apiProtocol)}${describeEndpointMismatch(baseUrl, provider, apiProtocol)}`
                 : undefined}
             />
@@ -1277,7 +1314,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           {/* API Key + 测试连接同行 */}
           <div className="px-4 py-3 space-y-2">
             <div className="flex items-center justify-between">
-              <label htmlFor={oauthCredentials ? undefined : 'channel-api-key'} className="text-sm font-medium text-foreground">{oauthCredentials ? '订阅凭据' : `API Key${provider === 'ollama' ? '（可选）' : ''}`}</label>
+              <label htmlFor={oauthCredentials ? undefined : 'channel-api-key'} className="text-sm font-medium text-foreground">{oauthCredentials ? '订阅凭据' : `API Key${isLocalModelProvider(provider) ? '（可选）' : ''}`}</label>
               <Button
                 variant="outline"
                 size="sm"
@@ -1288,7 +1325,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
                   setTesting(false)
                   setTestResult({ success: false, cancelled: true, message: '测试已取消' })
                 } : handleTest}
-                disabled={oauthCredentials || (provider !== 'ollama' && !apiKey.trim()) || !testEndpointReady}
+                disabled={oauthCredentials || (!isLocalModelProvider(provider) && !apiKey.trim()) || !testEndpointReady}
                 className="h-7 text-xs"
               >
                 {testing ? (
@@ -1354,8 +1391,8 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={(e) => { discoveryRequestRef.current += 1; testRequestRef.current += 1; keyRevisionRef.current += 1; keyEditedRef.current = true; setKeyEdited(true); setApiKey(e.target.value) }}
-                placeholder={provider === 'ollama' ? 'Ollama 默认使用本地认证标识，无需填写' : (isEdit ? '留空则不更新' : '输入 API Key')}
-                required={!isEdit && provider !== 'ollama'}
+                placeholder={isLocalModelProvider(provider) ? '本地服务通常无需 Key；要求认证时填写它生成的 Key' : (isEdit ? '留空则不更新' : '输入 API Key')}
+                required={!isEdit && !isLocalModelProvider(provider)}
                 className="pr-10"
               />
               <button
@@ -1413,7 +1450,9 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
               {models.length === 0
                 ? provider === 'openai-codex'
                   ? 'Codex 模型目录尚未加载'
-                  : '还没有模型清单：填写 API Key 后会自动从供应商获取，也可以手动添加模型 ID'
+                  : isLocalModelProvider(provider)
+                    ? '还没有模型清单：选择本地服务并填写地址后会自动读取，也可以手动添加模型 ID'
+                    : '还没有模型清单：填写 API Key 后会自动从供应商获取，也可以手动添加模型 ID'
                 : '还没有启用任何模型，从下方可用模型中选择'}
             </div>
           ) : (
@@ -1468,7 +1507,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             ) : (
               <Download size={12} />
             )}
-            <span>{fetchingModels ? '取消获取' : provider === 'openai-codex' ? '读取 Codex 目录' : provider === 'xai' && credentialMode === 'oauth' ? '读取 xAI 目录' : provider === 'ollama' ? '读取本机模型' : '从供应商获取'}</span>
+            <span>{fetchingModels ? '取消获取' : provider === 'openai-codex' ? '读取 Codex 目录' : provider === 'xai' && credentialMode === 'oauth' ? '读取 xAI 目录' : isLocalModelProvider(provider) ? '读取本机模型' : '从供应商获取'}</span>
           </Button>
         }
       >
@@ -1609,7 +1648,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             <AlertDialogCancel onClick={(event) => { event.preventDefault(); void handleDiscard() }}>放弃未保存更改</AlertDialogCancel>
             <AlertDialogAction
               onClick={(event) => { event.preventDefault(); void handleSaveAndClose() }}
-              disabled={saving || oauthLoggingIn || !name.trim() || (!isEdit && provider !== 'ollama' && !oauthCredentials && !apiKey.trim())}
+              disabled={saving || oauthLoggingIn || !name.trim() || (!isEdit && !isLocalModelProvider(provider) && !oauthCredentials && !apiKey.trim())}
             >
               {saving ? <><Loader2 size={14} className="animate-spin" /> 保存中...</> : '保存并关闭'}
             </AlertDialogAction>

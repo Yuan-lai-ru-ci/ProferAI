@@ -11,7 +11,7 @@
  */
 
 import type { ProviderType } from '@profer/shared'
-import { resolveLowestReasoningEffort, resolveReasoningProfile } from '@profer/shared'
+import { resolveLocalModelApiKey, resolveLowestReasoningEffort, resolveReasoningProfile } from '@profer/shared'
 import type {
   ProviderAdapter,
   ProviderRequest,
@@ -239,7 +239,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   buildStreamRequest(input: StreamRequestInput): ProviderRequest {
     const url = resolveOpenAIChatCompletionsUrl(input.baseUrl, this.providerType)
-    const apiKey = this.providerType === 'ollama' ? (input.apiKey || 'ollama') : input.apiKey
+    const apiKey = resolveLocalModelApiKey(this.providerType, input.apiKey)
     const messages = toOpenAIMessages(input)
 
     // 工具续接消息（必须在构造 bodyObj 之前完成，避免隐式修改已赋值的 messages 引用）
@@ -323,7 +323,7 @@ export class OpenAIAdapter implements ProviderAdapter {
 
   buildTitleRequest(input: TitleRequestInput): ProviderRequest {
     const url = resolveOpenAIChatCompletionsUrl(input.baseUrl, this.providerType)
-    const apiKey = this.providerType === 'ollama' ? (input.apiKey || 'ollama') : input.apiKey
+    const apiKey = resolveLocalModelApiKey(this.providerType, input.apiKey)
     const modelId = input.modelId.toLowerCase()
     const isDeepSeekV4 = /^(?:deepseek-(?:v4-)?(?:flash|pro)|deepseek-v4)/.test(modelId)
     const reasoningProfile = resolveReasoningProfile({ modelId, transport: 'openai-completions' })

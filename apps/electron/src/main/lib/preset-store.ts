@@ -48,7 +48,8 @@ import type {
   WorkspaceStorageMode,
 } from '@profer/shared'
 import { writeJsonFileAtomic } from './safe-file'
-import { resolveWorkspaceLocation, WorkspaceRootMissingError } from './workspace-locator'
+import { resolveGlobalMcpForWorkspace } from './global-mcp-store'
+import { getIndexedWorkspaceId, resolveWorkspaceLocation, WorkspaceRootMissingError } from './workspace-locator'
 
 /** `_config.json` schema（主版本不认识 → 只读，禁止保存）。 */
 export const PRESET_CONFIG_SCHEMA = 'profer.presets/1'
@@ -1105,7 +1106,10 @@ function readMcpServers(configDir: string): Record<string, { enabled?: boolean }
 function listReferenceDiagnostics(workspaceSlug: string, config: AgentPresetConfig, configDir: string): PresetStoreDiagnostic[] {
   const diagnostics: PresetStoreDiagnostic[] = []
   const availableSkills = collectAvailableSkillSlugs(workspaceSlug)
-  const mcpServers = readMcpServers(configDir)
+  const localMcpServers = readMcpServers(configDir)
+  const workspaceId = getIndexedWorkspaceId(workspaceSlug)
+  // 诊断只消费 enabled，不把共享凭据写入预设，也不为诊断创建项目目录。
+  const mcpServers = { ...(workspaceId ? resolveGlobalMcpForWorkspace(workspaceId, { servers: {} }).servers : {}), ...localMcpServers }
 
   for (const preset of config.presets) {
     for (const skillSlug of preset.skillSlugs ?? []) {

@@ -27,7 +27,7 @@ import { createElectronSessionStore } from './session-store-host'
 import { appendSDKMessages, enqueueSDKMessages, getAgentSessionMessages, getAgentSessionMeta, getAgentSessionSDKMessages, updateAgentSessionMeta, lockAgentSessionRuntime, resolveAgentSessionWriteLayout } from './agent-session-manager'
 import { resolveRuntimeCredentials } from './agent-runtime-credentials'
 import { getVisibleChannelById } from './channel-manager'
-import { getWorkspaceMcpConfig, getWorkspaceSkills, getAgentWorkspace, readWorkspaceProfile } from './agent-workspace-manager'
+import { getEffectiveWorkspaceMcpConfig, getWorkspaceSkills, getAgentWorkspace, readWorkspaceProfile } from './agent-workspace-manager'
 import { prepareRuntimeSkills } from './global-skill-manager'
 import { buildPiMcpTools, mcpToolName } from './adapters/pi-mcp-tools'
 import { buildSkillRuntimeOptions, prepareAgentSkillRouting } from './skill-runtime-routing'
@@ -760,7 +760,7 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
 
       const profile = readWorkspaceProfile(workspaceSlug)
       const skills = getWorkspaceSkills(workspaceSlug)
-      const mcpConfig = getWorkspaceMcpConfig(workspaceSlug)
+      const mcpConfig = getEffectiveWorkspaceMcpConfig(workspaceSlug)
       const enabledSkills = skills.filter((skill) => skill.enabled).map((skill) => skill.slug)
       const enabledMcpResources = Object.entries(mcpConfig.servers ?? {})
         .filter(([, value]) => value.enabled)
@@ -797,7 +797,7 @@ export function createElectronResourcePort(options: ElectronResourcePortOptions 
       }
     },
     getMcpConfig({ workspaceSlug }) {
-      return getWorkspaceMcpConfig(workspaceSlug)
+      return getEffectiveWorkspaceMcpConfig(workspaceSlug)
     },
   }
 }
@@ -812,7 +812,7 @@ function resolveExternalStatePaths(
 ): Record<string, string[]> | undefined {
   if (!workspaceSlug || serverNames.length === 0) return undefined
   try {
-    const { servers } = getWorkspaceMcpConfig(workspaceSlug)
+    const { servers } = getEffectiveWorkspaceMcpConfig(workspaceSlug)
     const entries = serverNames.flatMap((name) => {
       const paths = servers[name]?.externalStatePaths
       return Array.isArray(paths) && paths.length > 0 ? [[name, paths] as const] : []

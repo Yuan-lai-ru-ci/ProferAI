@@ -46,6 +46,7 @@ export type ProviderType =
   | 'openai-codex'
   | 'xai'
   | 'ollama'
+  | 'local'
   | 'custom'
 
 /**
@@ -74,6 +75,8 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   'openai-codex': '',
   xai: 'https://api.x.ai/v1',
   ollama: 'http://127.0.0.1:11434',
+  // 本地服务端口各不相同，统一由表单预设填充，避免把某一家服务伪装成默认值。
+  local: '',
   custom: ''
 }
 
@@ -121,6 +124,7 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
   'openai-codex': 'ChatGPT 订阅 (Codex)',
   xai: 'xAI / Grok',
   ollama: 'Ollama 本地模型',
+  local: '本地模型（OpenAI 兼容）',
   custom: 'OpenAI 兼容格式',
 }
 
@@ -142,6 +146,30 @@ export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<Pro
  */
 export function isAgentCompatibleProvider(provider: ProviderType): boolean {
   return AGENT_COMPATIBLE_PROVIDERS.has(provider)
+}
+
+/**
+ * 本地模型服务：API Key 可以留空，空值用本地哨兵而不是空 Bearer。
+ *
+ * Ollama 同时提供原生目录与 Anthropic 兼容入口，单独保留；local 覆盖
+ * LM Studio / Unsloth Studio / llama.cpp / vLLM 等 OpenAI 兼容的本地服务。
+ */
+export function isLocalModelProvider(provider: ProviderType): boolean {
+  return provider === 'ollama' || provider === 'local'
+}
+
+/**
+ * 本地服务的空凭据哨兵。
+ *
+ * 多数本地服务忽略 Authorization，但个别客户端/反代不接受空 Bearer；
+ * 用固定值占位，既不发真实密钥，也不让请求头退化成 `Bearer `。
+ */
+export function resolveLocalModelApiKey(provider: ProviderType, apiKey: string): string {
+  const trimmed = apiKey.trim()
+  if (trimmed) return apiKey
+  if (provider === 'ollama') return 'ollama'
+  if (provider === 'local') return 'profer-local'
+  return apiKey
 }
 
 /** Agent 内核标识。 */

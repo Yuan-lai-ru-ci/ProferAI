@@ -187,18 +187,18 @@ describe('DeepSeek reasoning profile', () => {
 })
 
 describe('Claude adaptive thinking profile', () => {
-  test('Given claude-haiku-5-5 When resolving on Anthropic transport Then uses adaptive effort and omits thinking when off', () => {
+  test('Given claude-haiku-5-5 When resolving on Anthropic transport Then uses native xhigh and supports disabled thinking', () => {
     const profile = resolveReasoningProfile({ modelId: 'claude-haiku-5-5', transport: 'anthropic-messages' })
 
     expect(profile?.id).toBe('claude-adaptive')
     expect(profile?.encodings['anthropic-messages']?.kind).toBe('adaptive-effort')
     expect(profile?.encodings['anthropic-messages']?.effortMap).toMatchObject({
-      off: null,
+      off: undefined,
       minimal: 'low',
       low: 'low',
       medium: 'medium',
       high: 'high',
-      xhigh: 'max',
+      xhigh: 'xhigh',
       max: 'max',
     })
   })

@@ -29,6 +29,9 @@ export type ReasoningModelTag =
   | 'openai-gpt-5-max'
   | 'openai-gpt-6'
   | 'openai-o-series'
+  | 'google-gemini-4'
+  | 'qwen-4'
+  | 'minimax-m3.1-flash'
   | 'claude-adaptive'
   | 'deepseek-v4-flash'
   | 'deepseek-v4-pro'
@@ -143,6 +146,14 @@ export const REASONING_MODEL_TAG_RULES: readonly ReasoningModelTagRule[] = [
   { tag: 'grok-4.5', prefix: 'grok-', minVersion: '4.5' },
   // 4.3：可关闭思考，最高只到 high。
   { tag: 'grok-4.3', prefix: 'grok-', minVersion: '4.3' },
+
+  // ===== Google Gemini =====
+  { tag: 'google-gemini-4', shortNames: ['gemini-4-carbon', 'gemini-4-argon', 'gemini-4-hydrogen'] },
+
+  // ===== Qwen 4 =====
+  // Qwen4 Max 正式版 / Preview 都支持 reasoning_effort，但档位与默认值不同。
+  { tag: 'qwen-4', shortNames: ['qwen4-max'] },
+  { tag: 'minimax-m3.1-flash', shortNames: ['minimax-m3.1-flash'] },
 
   // ===== 阿里 Qwen =====
   // 3.8 起 reasoning_effort 为 low/medium/xhigh（更早的 3.x 只有开关）。

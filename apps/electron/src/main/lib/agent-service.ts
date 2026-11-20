@@ -16,6 +16,7 @@ import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE, resolveRunInitiator, AgentSessionRuntimeMismatchError } from '@profer/shared'
 import type {
+  AgentContextUsageSnapshot,
   AgentSendInput,
   AgentMessage,
   AgentGenerateTitleInput,
@@ -74,6 +75,8 @@ import {
 import { shouldClearSessionUnreadOnRunStart, shouldMarkSessionUnreadOnCompletion } from './agent-unread-policy'
 import { getAgentUnreadPolicyMode } from './agent-unread-mode'
 import { AgentRuntimeContextStore } from './agent-runtime-context'
+import { createContextUsageRecorder } from './agent-context-usage-recorder'
+import { deleteAgentContextUsageSnapshot, readAgentContextUsageSnapshot, saveAgentContextUsageSnapshot } from './agent-context-usage-store'
 import { createExecutionService } from './execution-service'
 import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { createElectronAgentHost } from './agent-runtime-host'
@@ -197,6 +200,13 @@ setAgentStopper(stopAgentOwner)
  */
 setAgentSessionActiveChecker((sessionId) => orchestrator.isActive(sessionId) || runtimeCoordinator.isRunning(sessionId))
 const runtimeContextStore = new AgentRuntimeContextStore()
+const usageRecorder = createContextUsageRecorder({ save: saveAgentContextUsageSnapshot, remove: deleteAgentContextUsageSnapshot })
+
+export async function getAgentContextUsageSnapshot(sessionId: string): Promise<AgentContextUsageSnapshot | null> {
+  // 初始化项目会话布局，并排除不存在的会话；压缩后不能把尚待刷盘的旧历史回填进来。
+  if (!getAgentSessionMeta(sessionId) || usageRecorder.hidesPreCompactReading(sessionId)) return null
+  return readAgentContextUsageSnapshot(sessionId)
+}
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
@@ -383,6 +393,7 @@ function isAgentExecutionActive(sessionId: string): boolean {
 
 function beginActiveStreamBacklog(sessionId: string): void {
   if (isAgentExecutionActive(sessionId)) return
+  usageRecorder.begin(sessionId)
   activeStreamEventBacklogs.set(sessionId, [])
   completedStreamEventBacklogs.delete(sessionId)
 }
@@ -390,6 +401,7 @@ function beginActiveStreamBacklog(sessionId: string): void {
 function finishActiveStreamBacklog(sessionId: string): void {
   if (isAgentExecutionActive(sessionId)) return
   runtimeContextStore.clear(sessionId)
+  usageRecorder.finish(sessionId)
   if (sessionWebContents.has(sessionId)) recordStreamBinding({ kind: 'unbind-on-finish', sessionId })
   sessionWebContents.delete(sessionId)
   preserveCompletedBacklog(sessionId)
@@ -532,6 +544,7 @@ eventBus.use((sessionId, payload, next) => {
       runtimeContextStore.clear(sessionId)
     }
   }
+  usageRecorder.observe(sessionId, payload, runtimeContextStore.get(sessionId)?.contextWindow)
   next()
 })
 

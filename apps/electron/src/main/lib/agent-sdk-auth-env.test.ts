@@ -38,4 +38,11 @@ describe('Agent SDK auth env', () => {
     })
     expect(process.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
   })
+
+  test('Given 本地 OpenAI 兼容服务 without API key When Claude credentials are applied Then use local sentinel', () => {
+    const env: Record<string, string | undefined> = {}
+    applyAgentSdkAuthEnv(env, 'local', '')
+    expect(env).toEqual({ ANTHROPIC_AUTH_TOKEN: 'profer-local' })
+    expect(process.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+  })
 })

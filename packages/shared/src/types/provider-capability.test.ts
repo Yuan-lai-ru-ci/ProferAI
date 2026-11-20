@@ -1,5 +1,17 @@
 import { describe, expect, test } from 'bun:test'
+import { isLocalModelProvider, resolveLocalModelApiKey } from './channel'
 import { isResponsesShapedEndpoint, resolveProviderNativeProtocol } from './provider-capability'
+
+describe('本地模型服务判定', () => {
+  test('只有 Ollama 与 local 允许空 Key，且空 Key 使用各自哨兵', () => {
+    expect(isLocalModelProvider('ollama')).toBe(true)
+    expect(isLocalModelProvider('local')).toBe(true)
+    expect(isLocalModelProvider('custom')).toBe(false)
+    expect(resolveLocalModelApiKey('ollama', '')).toBe('ollama')
+    expect(resolveLocalModelApiKey('local', '  ')).toBe('profer-local')
+    expect(resolveLocalModelApiKey('local', 'sk-unsloth-fixture')).toBe('sk-unsloth-fixture')
+  })
+})
 
 describe('isResponsesShapedEndpoint', () => {
   test('识别完整 /responses 端点（含尾斜杠、query、缺 scheme）', () => {

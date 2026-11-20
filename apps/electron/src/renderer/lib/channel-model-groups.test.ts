@@ -35,6 +35,8 @@ describe('渠道的 Agent 内核勾选', () => {
     expect(inferAgentRuntimeModes({ provider: 'anthropic' })).toEqual(['pi', 'claude'])
     expect(inferAgentRuntimeModes({ provider: 'anthropic-compatible' })).toEqual(['pi', 'claude'])
     expect(inferAgentRuntimeModes({ provider: 'ollama' })).toEqual(['pi', 'claude'])
+    // 本地 OpenAI 兼容服务默认只给 Pi；Claude 需服务自身提供 Anthropic 入口，由用户显式勾选。
+    expect(inferAgentRuntimeModes({ provider: 'local' })).toEqual(['pi'])
     // 非白名单类型历史上只能用 Pi
     expect(inferAgentRuntimeModes({ provider: 'custom' })).toEqual(['pi'])
     expect(inferAgentRuntimeModes({ provider: 'zhipu' })).toEqual(['pi'])

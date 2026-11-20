@@ -69,6 +69,7 @@ describe('compactCompletedBackgroundStreamState', () => {
       outputTokens: 80,
       cacheReadTokens: 300,
       cacheCreationTokens: 40,
+      usageUpdatedAt: 100,
       contextWindow: 200000,
       model: 'test-model',
     }))).toEqual({
@@ -79,6 +80,7 @@ describe('compactCompletedBackgroundStreamState', () => {
       outputTokens: 80,
       cacheReadTokens: 300,
       cacheCreationTokens: 40,
+      usageUpdatedAt: 100,
       contextWindow: 200000,
       model: 'test-model',
     })

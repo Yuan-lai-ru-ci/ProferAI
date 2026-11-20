@@ -1,3 +1,69 @@
+diff --git a/dist/api/google-shared.d.ts b/dist/api/google-shared.d.ts
+index fd2322e14b46c6e483d44eed99b57ada486f0117..c3b077a77426bca96d80d00fdf168d0ca1de66f2 100644
+--- a/dist/api/google-shared.d.ts
++++ b/dist/api/google-shared.d.ts
+@@ -5,11 +5,11 @@ import { type Content, FinishReason, FunctionCallingConfigMode, ThinkingLevel as
+ import type { Model, StopReason, StreamOptions, ThinkingLevel, Tool, TranscriptContext } from "../types.ts";
+ type GoogleApiType = "google-generative-ai" | "google-vertex";
+ /**
+- * Thinking level for Gemini 3 models.
++ * Thinking level for Gemini 3/4 models.
+  * Mirrors Google's ThinkingLevel enum values.
+  */
+-export type GoogleApiThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
+-export type ResolvedGoogleThinkingLevel = Exclude<ThinkingLevel, "xhigh" | "max">;
++export type GoogleApiThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | "XHIGH";
++export type ResolvedGoogleThinkingLevel = Exclude<ThinkingLevel, "max">;
+ /** Resolve a supported pi level or model-specific Google mapping to a standard Google level. */
+ export declare function resolveGoogleThinkingLevel<T extends GoogleApiType>(model: Model<T>, level: ThinkingLevel): ResolvedGoogleThinkingLevel;
+ /**
+@@ -19,7 +19,7 @@ export declare function resolveGoogleThinkingLevel<T extends GoogleApiType>(mode
+  */
+ export declare function usesGoogleThinkingLevel<T extends GoogleApiType>(model: Model<T>): boolean;
+ export declare function toGoogleThinkingLevel(level: ResolvedGoogleThinkingLevel): GoogleApiThinkingLevel;
+-export declare function toGoogleSdkThinkingLevel(level: GoogleApiThinkingLevel): GoogleSdkThinkingLevel;
++export declare function toGoogleSdkThinkingLevel(level: GoogleApiThinkingLevel): GoogleSdkThinkingLevel | "XHIGH";
+ export declare function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(model: Model<T>): ThinkingConfig;
+ /**
+  * Determines whether a streamed Gemini `Part` should be treated as "thinking".
+diff --git a/dist/api/google-shared.js b/dist/api/google-shared.js
+index 478c2c387b3a9c781c04a2268677c62a26093d42..0403c6d6bd89695cd01c5fa223d26efb27544a97 100644
+--- a/dist/api/google-shared.js
++++ b/dist/api/google-shared.js
+@@ -14,6 +14,8 @@ const GOOGLE_SDK_THINKING_LEVEL_MAP = {
+     LOW: GoogleSdkThinkingLevel.LOW,
+     MEDIUM: GoogleSdkThinkingLevel.MEDIUM,
+     HIGH: GoogleSdkThinkingLevel.HIGH,
++    // genai 2.x passes through this Gemini 4 wire value without an enum member.
++    XHIGH: "XHIGH",
+ };
+ /** Resolve a supported pi level or model-specific Google mapping to a standard Google level. */
+ export function resolveGoogleThinkingLevel(model, level) {
+@@ -24,6 +26,7 @@ export function resolveGoogleThinkingLevel(model, level) {
+         case "low":
+         case "medium":
+         case "high":
++        case "xhigh":
+             return resolvedLevel;
+         default:
+             throw new Error(`Unsupported Google thinking level mapping for ${model.provider}/${model.id}: ${level} -> ${String(mapped)}`);
+@@ -40,6 +43,7 @@ export function usesGoogleThinkingLevel(model) {
+     // Match Gemini 3 Pro/Flash IDs with or without a minor version, such as
+     // gemini-3-flash-preview, gemini-3.1-pro-preview, and gemini-3.8-flash.
+     /gemini-3(?:\.\d+)?-(?:pro|flash)/.test(id) ||
++        /^gemini-4-(?:carbon|argon|hydrogen)(?:-|$)/.test(id) ||
+         id === "gemini-flash-latest" ||
+         id === "gemini-flash-lite-latest" ||
+         // Match both hosted Gemma 4 naming forms: gemma-4-* and gemma4-*.
+@@ -55,6 +59,8 @@ export function toGoogleThinkingLevel(level) {
+             return "MEDIUM";
+         case "high":
+             return "HIGH";
++        case "xhigh":
++            return "XHIGH";
+     }
+ }
+ export function toGoogleSdkThinkingLevel(level) {
 diff --git a/dist/utils/retry.js b/dist/utils/retry.js
 index 65c7c9e..5909052 100644
 --- a/dist/utils/retry.js
@@ -26,3 +92,49 @@ index 65c7c9e..5909052 100644
      "stream ended before message_stop",
      "stream ended before a terminal response event",
      "http2 request did not get a response",
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -590,6 +590,16 @@
+         }
+         else {
+             params.max_completion_tokens = options.maxTokens;
++        }
++    }
++    // Qwen4 Max 正式版非思考输出最多 128K；preview 和其他 Qwen 型号不受影响。
++    const normalizedModelId = model.id.trim().toLowerCase().split("/").pop();
++    if (normalizedModelId === "qwen4-max" && !options?.reasoningEffort) {
++        if (params.max_tokens !== undefined) {
++            params.max_tokens = Math.min(params.max_tokens, 131072);
++        }
++        if (params.max_completion_tokens !== undefined) {
++            params.max_completion_tokens = Math.min(params.max_completion_tokens, 131072);
+         }
+     }
+     if (options?.temperature !== undefined) {
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -885,7 +885,11 @@
+             const display = options.thinkingDisplay ?? "summarized";
+             if (model.compat?.forceAdaptiveThinking === true) {
+                 // Adaptive thinking: Claude decides when and how much to think.
+-                params.thinking = { type: "adaptive", display };
++                const normalizedModelId = model.id.trim().toLowerCase().split("/").pop();
++                // 阿里 Qwen4 使用 enabled + output_config.effort，而非 Claude adaptive。
++                params.thinking = normalizedModelId === "qwen4-max" || normalizedModelId === "qwen4-max-preview"
++                    ? { type: "enabled" }
++                    : { type: "adaptive", display };
+                 if (options.effort) {
+                     params.output_config = { effort: options.effort };
+                 }
+@@ -901,6 +905,9 @@
+         }
+         else if (options?.thinkingEnabled === false && model.thinkingLevelMap?.off !== null) {
+             params.thinking = { type: "disabled" };
++            if (model.id.trim().toLowerCase().split("/").pop() === "qwen4-max") {
++                params.max_tokens = Math.min(params.max_tokens, 131072);
++            }
+         }
+     }
+     if (options?.metadata) {

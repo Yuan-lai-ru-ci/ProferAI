@@ -120,6 +120,16 @@ describe('Pi MCP 连接生命周期', () => {
     expect(await restartMcpServer('not-connected')).toEqual({ ok: true, message: '已重启 0 个连接' })
   })
 
+  for (const operation of ['disconnect', 'reconcile'] as const) {
+    test(`${operation} 不误断其它工作区的同名连接`, async () => {
+      const servers = { demo: { type: 'stdio', command: 'demo-server' } }
+      for (const workspaceSlug of ['ws-a', 'ws-b']) await discoverExternalMcpTools(servers, { workspaceSlug })
+      if (operation === 'disconnect') await disconnectMcpServer('demo', 'ws-a')
+      else await reconcileMcpServers([], 'ws-a')
+      expect(listMcpConnectionSnapshots().map(item => item.workspaceSlug)).toEqual(['ws-b'])
+    })
+  }
+
   test('带 workspaceSlug 的 restart 只关该工作区连接，不影响其它工作区', async () => {
     const servers = { demo: { type: 'stdio', command: 'demo-server' } }
     await discoverExternalMcpTools(servers, { workspaceSlug: 'ws-a' })
@@ -205,14 +215,15 @@ describe('Pi MCP 连接生命周期', () => {
     expect(listMcpConnectionSnapshots()).toHaveLength(2)
 
     // 文件没动：一条都不关
-    expect(await refreshStaleMcpConnections({ demo: [statePath] })).toEqual([])
+    expect(await refreshStaleMcpConnections({ demo: [statePath] }, 'ws')).toEqual([])
     expect(listMcpConnectionSnapshots()).toHaveLength(2)
 
+    await discoverExternalMcpTools({ demo: { type: 'stdio', command: 'same-name' } }, { workspaceSlug: 'other-ws' })
     // 文件在连接建立后被改写：只关 demo，其它 server 不受牵连
     const future = new Date(Date.now() + 60_000)
     utimesSync(statePath, future, future)
-    expect(await refreshStaleMcpConnections({ demo: [statePath] })).toEqual(['demo'])
-    expect(listMcpConnectionSnapshots().map(item => item.serverName)).toEqual(['other'])
+    expect(await refreshStaleMcpConnections({ demo: [statePath] }, 'ws')).toEqual(['demo'])
+    expect(listMcpConnectionSnapshots().map(item => item.serverName)).toEqual(['other', 'demo'])
     expect(created.find(item => item.serverName === 'demo')!.transport.closed).toBe(true)
     expect(created.find(item => item.serverName === 'other')!.transport.closed).toBe(false)
 

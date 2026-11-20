@@ -327,6 +327,21 @@ function extractUrlPath(rawUrl: string): string {
 }
 
 /**
+ * 规范化本地 OpenAI 兼容服务的 Base URL。
+ *
+ * 本地服务（LM Studio / Unsloth Studio / llama.cpp / vLLM 等）的文档常让人只填
+ * `http://127.0.0.1:1234`，而 OpenAI 兼容端点实际在 `/v1` 下。只在协议根上补
+ * `/v1`，已带版本段或自定义路由的地址保持原样，避免猜错反代路径。
+ */
+export function normalizeLocalOpenAIBaseUrl(baseUrl: string): string {
+  const normalized = trimTrailingUrlPathSlash(baseUrl)
+  if (!normalized) return normalized
+  const path = extractUrlPath(normalized)
+  if (path === '' || path === '/') return appendUrlPath(normalized, '/v1')
+  return normalized
+}
+
+/**
  * 解析 OpenAI Chat Completions 请求地址。
  *
  * 通用兼容渠道（custom）允许直接填写完整请求端点，此时原样使用。
@@ -344,6 +359,12 @@ function extractUrlPath(rawUrl: string): string {
 export function resolveOpenAIChatCompletionsUrl(baseUrl: string, provider: ProviderType = 'openai'): string {
   if (provider === 'ollama') {
     return mapUrlPath(baseUrl, (path) => `${path.replace(/\/v1$/, '')}/v1/chat/completions`)
+  }
+  if (provider === 'local') {
+    const normalized = normalizeLocalOpenAIBaseUrl(baseUrl)
+    if (!normalized) return normalized
+    if (hasPathSuffix(normalized, '/chat/completions')) return normalized
+    return appendUrlPath(normalized, '/chat/completions')
   }
   if (provider === 'custom') {
     const normalized = trimTrailingUrlPathSlash(baseUrl)
@@ -380,15 +401,16 @@ export function resolveOpenAIResponsesUrl(baseUrl: string, _provider: ProviderTy
  *
  * 当用户把兼容格式配置为完整 /chat/completions 或 /responses 端点时，模型列表需要回到同级 /models。
  */
-export function resolveOpenAIModelsUrl(baseUrl: string): string {
-  if (hasPathSuffix(baseUrl, '/chat/completions')) {
-    return replacePathSuffix(baseUrl, '/chat/completions', '/models')
+export function resolveOpenAIModelsUrl(baseUrl: string, provider: ProviderType = 'openai'): string {
+  const normalizedBaseUrl = provider === 'local' ? normalizeLocalOpenAIBaseUrl(baseUrl) : baseUrl
+  if (hasPathSuffix(normalizedBaseUrl, '/chat/completions')) {
+    return replacePathSuffix(normalizedBaseUrl, '/chat/completions', '/models')
   }
-  if (hasPathSuffix(baseUrl, '/responses')) {
-    return replacePathSuffix(baseUrl, '/responses', '/models')
+  if (hasPathSuffix(normalizedBaseUrl, '/responses')) {
+    return replacePathSuffix(normalizedBaseUrl, '/responses', '/models')
   }
-  if (hasPathSuffix(baseUrl, '/models')) return trimTrailingUrlPathSlash(baseUrl)
-  return appendUrlPath(baseUrl, '/models')
+  if (hasPathSuffix(normalizedBaseUrl, '/models')) return trimTrailingUrlPathSlash(normalizedBaseUrl)
+  return appendUrlPath(normalizedBaseUrl, '/models')
 }
 
 /**

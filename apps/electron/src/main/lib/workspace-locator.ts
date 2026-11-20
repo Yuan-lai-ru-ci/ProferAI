@@ -200,6 +200,12 @@ function loadEntries(): Map<string, AgentWorkspaceIndexEntry> {
   return entries
 }
 
+/** 全局能力授权绑定不可复用的工作区 ID，而非可重新占用的 slug。 */
+export function getIndexedWorkspaceId(slug: string): string | undefined {
+  const entry = loadEntries().get(slug)
+  return !entry?.isDeleted && typeof entry?.id === 'string' && entry.id.length > 0 ? entry.id : undefined
+}
+
 function toLocation(slug: string, entry: AgentWorkspaceIndexEntry | undefined): WorkspaceLocation {
   // P1-5：合法绝对 `rootPath` 是 project 的唯一事实来源，`storageMode` 只作辅助。
   // 索引损坏时（storageMode 缺失/非法）若降级 managed，删除入口会级联删掉该项目的全部会话；

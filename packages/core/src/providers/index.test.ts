@@ -52,14 +52,14 @@ describe('provider adapter instances', () => {
     expect(getAdapter('openai', undefined, 'https://api.openai.com/v1')).toBeInstanceOf(OpenAIAdapter)
   })
 
-  test('23 种 Provider：22 个 Chat adapter 与 Pi-only Codex 边界', () => {
+  test('24 种 Provider：23 个 Chat adapter 与 Pi-only Codex 边界', () => {
     const providers: ProviderType[] = [
       'anthropic', 'anthropic-compatible', 'openai', 'openai-responses', 'deepseek', 'google',
       'kimi-api', 'kimi-coding', 'opencode-go-openai', 'zhipu', 'zhipu-coding', 'zhipu-coding-team',
       'ark-coding-plan', 'minimax', 'doubao', 'qwen', 'qwen-anthropic', 'xiaomi', 'xiaomi-token-plan',
-      'openai-codex', 'xai', 'ollama', 'custom',
+      'openai-codex', 'xai', 'ollama', 'local', 'custom',
     ]
-    expect(providers).toHaveLength(23)
+    expect(providers).toHaveLength(24)
     for (const provider of providers.filter((item) => item !== 'openai-codex')) expect(() => getAdapter(provider)).not.toThrow()
     expect(() => getAdapter('openai-codex')).toThrow('不支持的供应商')
   })

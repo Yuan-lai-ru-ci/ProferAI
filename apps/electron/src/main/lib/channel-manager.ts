@@ -25,7 +25,7 @@ import type {
   XaiApiProtocol,
   XaiOAuthCredentials,
 } from '@profer/shared'
-import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_URLS, extractZhipuCodingTeamApiToken, isChannelEnabledForAnyRuntime, isCodexCredentialExpired, isLocalOllamaBaseUrl, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, resolveProviderNativeProtocol, resolveXaiCredentialMode, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
+import { PROVIDER_CAPABILITIES, PROVIDER_DEFAULT_URLS, extractZhipuCodingTeamApiToken, isChannelEnabledForAnyRuntime, isCodexCredentialExpired, isLocalModelProvider, isLocalOllamaBaseUrl, isXaiCredentialExpired, parseCodexCredentials, parseXaiCredentials, resolveLocalModelApiKey, resolveProviderNativeProtocol, resolveXaiCredentialMode, serializeCodexCredentials, serializeXaiCredentials, supportsProviderPlanQuota } from '@profer/shared'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { assertSdkBaseUrlSupportsRouting, isAnthropicShapedEndpoint, normalizeGoogleBaseUrl, resolveAnthropicMessagesUrl, resolveAnthropicModelsUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl, resolveOpenAIModelsUrl, getProferUserAgent, getWhitelistCompatUserAgent } from '@profer/core'
@@ -881,8 +881,12 @@ async function testAnthropicCompatible(
     'anthropic-version': '2023-06-01',
     'content-type': 'application/json',
   }
-  if (provider === 'ollama') {
-    headers.Authorization = `Bearer ${apiKey || 'ollama'}`
+  if (isLocalModelProvider(provider)) {
+    // 本地服务没有真实 Key；Claude 兼容入口仍需一个非空认证值，
+    // 与 Ollama 哨兵保持同一套语义。
+    const token = resolveLocalModelApiKey(provider, apiKey)
+    headers['x-api-key'] = token
+    headers.Authorization = `Bearer ${token}`
   } else if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team') {
     const token = provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
     headers.Authorization = `Bearer ${token}`
@@ -941,18 +945,19 @@ async function testOpenAICompatible(
   apiProtocol?: 'responses' | 'chat-completions',
 ): Promise<ChannelTestResult> {
   if (!modelId?.trim()) {
-    const result = await fetchOpenAICompatibleModels(baseUrl, apiKey, proxyUrl, signal)
+    const result = await fetchOpenAICompatibleModels(baseUrl, apiKey, proxyUrl, signal, provider)
     return { success: result.success, message: result.success ? '模型目录可达（未验证模型生成）' : result.message }
   }
   const responsesApi = provider === 'openai-responses' || (provider === 'xai' && apiProtocol !== 'chat-completions')
   const url = responsesApi ? resolveOpenAIResponsesUrl(baseUrl) : resolveOpenAIChatCompletionsUrl(baseUrl, provider)
   const fetchFn = getFetchFn(proxyUrl)
+  const authKey = resolveLocalModelApiKey(provider, apiKey)
 
   const response = await fetchFn(url, withTimeout({
     signal,
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${authKey}`,
       'content-type': 'application/json',
     },
     body: JSON.stringify(responsesApi
@@ -966,7 +971,7 @@ async function testOpenAICompatible(
   }
 
   if (response.status === 401) {
-    return { success: false, message: 'API Key 无效' }
+    return { success: false, message: isLocalModelProvider(provider) ? '本地服务要求认证，请填写它生成的 API Key' : 'API Key 无效' }
   }
 
   const text = await response.text().catch(() => '')
@@ -1687,7 +1692,7 @@ export async function fetchModels(input: FetchModelsInput, signal?: AbortSignal)
       case 'ollama':
         return await fetchOllamaModels(input.baseUrl, input.apiKey, proxyUrl, signal)
       case 'openai':
-        return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl, signal)
+        return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl, signal, input.provider)
       case 'google':
         return await fetchGoogleModels(input.baseUrl, input.apiKey, proxyUrl, signal)
       case 'unsupported':
@@ -1801,7 +1806,11 @@ async function fetchAnthropicCompatibleModels(
   const headers: Record<string, string> = {
     'anthropic-version': '2023-06-01',
   }
-  if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team') {
+  if (isLocalModelProvider(provider)) {
+    const token = resolveLocalModelApiKey(provider, apiKey)
+    headers['x-api-key'] = token
+    headers.Authorization = `Bearer ${token}`
+  } else if (provider === 'kimi-coding' || provider === 'zhipu-coding' || provider === 'zhipu-coding-team') {
     const token = provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
     headers.Authorization = `Bearer ${token}`
     headers['User-Agent'] = getWhitelistCompatUserAgent(pkg.version)
@@ -1847,20 +1856,21 @@ async function fetchAnthropicCompatibleModels(
  * API: GET {baseUrl}/models
  * 通用 OpenAI 兼容格式，适用于大部分第三方供应商。
  */
-async function fetchOpenAICompatibleModels(baseUrl: string, apiKey: string, proxyUrl?: string, signal?: AbortSignal): Promise<FetchModelsResult> {
-  const url = resolveOpenAIModelsUrl(baseUrl)
+async function fetchOpenAICompatibleModels(baseUrl: string, apiKey: string, proxyUrl?: string, signal?: AbortSignal, provider: ProviderType = 'openai'): Promise<FetchModelsResult> {
+  const url = resolveOpenAIModelsUrl(baseUrl, provider)
   const fetchFn = getFetchFn(proxyUrl)
+  const authKey = resolveLocalModelApiKey(provider, apiKey)
 
   const response = await fetchFn(url, withTimeout({
     signal,
     method: 'GET',
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${authKey}`,
     },
   }))
 
   if (response.status === 401) {
-    return { success: false, message: 'API Key 无效', models: [] }
+    return { success: false, message: isLocalModelProvider(provider) ? '本地服务要求认证，请填写它生成的 API Key' : 'API Key 无效', models: [] }
   }
 
   if (!response.ok) {

@@ -22,3 +22,8 @@ describe('Agent composer toolbar descriptor', () => {
     expect(items[0]?.canOverflow).toBe(false)
   })
 })
+
+test('无用量时不创建工具栏项目，包括溢出菜单候选', () => {
+  const items = createAgentComposerToolbarItems({ model: 'm', runtime: 'r', permissionMode: 'p', preset: 's', attach: 'a' })
+  expect(items.some(item => item.key === 'context-usage')).toBe(false)
+})

@@ -37,3 +37,15 @@ export function mergeEntryWithExisting(
 
   return { ...(preserved as Partial<McpServerEntry>), ...entry }
 }
+
+/** 全局定义只持久化配置；本次测试结果与内置标识不属于全局 store 契约。 */
+export function buildGlobalFormEntry(entry: McpServerEntry, existing?: McpServerEntry): McpServerEntry {
+  const { type, enabled, command, args, env, timeout, url, headers } = entry
+  return {
+    type, enabled,
+    ...(type === 'stdio' ? {
+      command, ...(args && { args }), ...(env && { env }), ...(timeout !== undefined && { timeout }),
+    } : { url, ...(headers && { headers }) }),
+    ...(existing?.externalStatePaths && { externalStatePaths: existing.externalStatePaths }),
+  }
+}

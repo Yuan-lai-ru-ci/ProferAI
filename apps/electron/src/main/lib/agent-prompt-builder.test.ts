@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 
 // prompt builder 经 config-paths 间接导入 Electron；Bun 单测需提供最小主进程 mock。
 mock.module('./workspace-mcp-config', () => ({
-  getWorkspaceMcpConfig: () => ({
+  getEffectiveWorkspaceMcpConfig: () => ({
     servers: {
       allowed: { type: 'http', enabled: true, url: 'https://allowed.example.test/mcp' },
       denied: { type: 'stdio', enabled: true, command: '/private/denied-mcp', args: ['--secret'] },

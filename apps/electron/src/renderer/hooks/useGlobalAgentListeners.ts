@@ -133,6 +133,14 @@ function uniqueTruthyPaths(paths: Array<string | null | undefined>): string[] {
 // ============================================================================
 
 export function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
+  const events = legacyEventsFromPayload(payload)
+  if (payload.kind !== 'sdk_message' || !payload.contextUsage) return events
+  const snapshot = payload.contextUsage
+  // 保留 complete / compact_complete 的先后语义，再用宿主实际保存的读数覆盖本地推断。
+  return [...events.filter(event => event.type !== 'usage_update'), { type: 'usage_update', usage: snapshot, snapshot }]
+}
+
+function legacyEventsFromPayload(payload: AgentStreamPayload): AgentEvent[] {
   if (payload.kind === 'profer_event') {
     const evt = payload.event
     switch (evt.type) {
@@ -231,6 +239,8 @@ export function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[]
       // Usage（保留完整字段用于详细展示）
       if (!aMsg.parent_tool_use_id && aMsg.message.usage) {
         const u = aMsg.message.usage
+        if (![u.input_tokens, u.output_tokens ?? 0, u.cache_read_input_tokens ?? 0, u.cache_creation_input_tokens ?? 0]
+          .every(value => Number.isSafeInteger(value) && value >= 0)) return events
         const inputTokens = u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
         // 流式过程中 SDK 不返回 contextWindow，按模型名推断一个默认值作为 fallback。
         // 注意：必须优先用 _channelModelId（用户在 UI 上选择的原始模型 ID），
@@ -276,33 +286,26 @@ export function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[]
     case 'result': {
       const rMsg = msg as SDKResultMessage
       const contextWindow = resolveContextWindowFromModelUsage(rMsg.modelUsage, rMsg._channelModelId)
-      // result.usage 是整个 query 内所有模型调用的累计求和，不能当成当前上下文占用，
-      // 否则进度环会虚高、冲破 100%（PR #821 修的正是这个问题）。
-      //
-      // 但 GLM-5.2 等走 Anthropic 兼容端点的渠道，流式 assistant 消息不携带 usage 字段，
-      // 真实值只在 result 中返回。若完全不透传，这些渠道的 ContextUsageBadge 永远不显示。
-      //
-      // 折中：完整透传 result.usage 字段，由 agent-atoms 的 complete 分支按
-      // 「流式 usage_update 从未写入过」条件兜底（needFallback），避免覆盖流式真实值。
-      const u = rMsg.usage
-      const inputTokens = u ? u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) : undefined
       return [{
         type: 'complete',
         stopReason: rMsg.subtype === 'success' ? 'end_turn' : 'error',
-        usage: (rMsg.total_cost_usd != null || contextWindow != null || u != null) ? {
+        usage: (rMsg.total_cost_usd != null || contextWindow != null) ? {
           costUsd: rMsg.total_cost_usd,
           contextWindow,
-          ...(inputTokens != null && { inputTokens }),
-          ...(u && { outputTokens: u.output_tokens }),
-          ...(u && { cacheReadTokens: u.cache_read_input_tokens }),
-          ...(u && { cacheCreationTokens: u.cache_creation_input_tokens }),
         } : undefined,
       }]
     }
 
     case 'system': {
       const sMsg = msg as SDKSystemMessage
-      if (sMsg.subtype === 'compact_boundary') return [{ type: 'compact_complete' }]
+      if (sMsg.subtype === 'compact_boundary') {
+        const post = (sMsg.compact_metadata as { post_tokens?: unknown } | undefined)?.post_tokens
+        const events: AgentEvent[] = [{ type: 'compact_complete' }]
+        if (typeof post === 'number' && Number.isSafeInteger(post) && post > 0) {
+          events.push({ type: 'usage_update', usage: { inputTokens: post } })
+        }
+        return events
+      }
       if (sMsg.subtype === 'compacting') return [{ type: 'compacting' }]
       // 压缩失败/取消/跳过不会发 compact_boundary：适配器只发 status(compact_result) 或 compact_skipped。
       // 不释放压缩锁会让本轮剩余时间既没有运行指示也不能输入。
@@ -1507,7 +1510,6 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
             startedAt: undefined,
             ...(restored?.contextWindow !== undefined ? {
               contextWindow: restored.contextWindow,
-              usageUpdatedAt: restored.contextUpdatedAt ?? Date.now(),
             } : {}),
           })
         }

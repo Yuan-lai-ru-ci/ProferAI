@@ -6,6 +6,7 @@ import { getDevInstanceId, readUserDataDirSwitch, resolveDevAppName, resolveDevU
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
 import { STARTUP_STAGE_BOOTSTRAP_FAILED, STARTUP_STAGE_MAIN_LOADED, STARTUP_STAGE_WINDOW_CREATED, writeStartupProbe } from './lib/startup-probe'
 import { flushSDKMessagePersistence } from './lib/agent-session-manager'
+import { flushAgentContextUsageWrites } from './lib/agent-context-usage-store'
 
 // 启动探针：只在发布前的启动冒烟里生效（PROFER_STARTUP_PROBE_FILE）。
 // 写在模块顶部是故意的：能到这里就说明 CJS bundle 的模块求值没崩，
@@ -1331,6 +1332,7 @@ app.on('before-quit', (event) => {
     const flushPromise = Promise.resolve().then(async () => {
       const flushed = await flushSDKMessagePersistence(timeoutMs)
       if (!flushed) throw new Error('超过退出 flush 预算')
+      await flushAgentContextUsageWrites()
     })
     void awaitQuitCleanup(flushPromise, timeoutMs).then((result) => {
       persistenceExitPending = false

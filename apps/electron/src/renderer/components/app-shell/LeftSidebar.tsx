@@ -76,8 +76,7 @@ export function LeftSidebar({
           (transitionDurationMs !== undefined
             ? "transition-[width] will-change-[width] contain-layout"
             : "transition-[width] duration-300 will-change-[width] contain-layout"),
-        // 着色层铺满整个外壳（含顶部留白与红绿灯区）：::before 画在外壳底色之上、
-        // 子元素之下，列表容器再用 bg-sidebar 盖回浅色，形成「着色底 + 浅色内容卡」。
+        // rail 与顶部共用外壳底面；列表单独着色，不能再给 rail 重复铺底。
         "bg-sidebar rounded-2xl shadow-xl dark:shadow-md",
         // isolate + -z-10：着色层压在 stacking context 底部，位于外壳底色之上、所有内容之下。
         "isolate before:absolute before:inset-0 before:-z-10 before:bg-foreground/[0.035] before:content-['']",
@@ -102,28 +101,33 @@ export function LeftSidebar({
       {panelTop > 0 && <SidebarWindowDragStrip height={panelTop} />}
 
       <div className="relative h-full min-h-0">
-        {/* rail 是固定层：始终占据左侧 54px，带不透明背景并压在列表滑动层上方。 */}
+        {/* rail 只承载导航，列表由右侧视口裁切，不依赖不透明背景遮挡。 */}
         <div
-          className="relative z-20 isolate h-full overflow-hidden bg-sidebar transition-[width] duration-200 sidebar-collapse-ease motion-reduce:transition-none before:absolute before:inset-0 before:-z-10 before:bg-foreground/[0.035] before:content-['']"
+          className="relative z-20 h-full overflow-hidden transition-[width] duration-200 sidebar-collapse-ease motion-reduce:transition-none"
           style={{ width: sidebarCollapsed ? COLLAPSED_WIDTH : RAIL_WIDTH }}
         >
           <SidebarRail s={sidebarModel} topOffset={panelTop + SIDEBAR_HEADER_INSET} />
         </div>
         {(listTranslateX !== undefined || !sidebarCollapsed) && (
           <div
-            className="absolute inset-y-0 z-10 min-w-0"
-            style={{
-              left: RAIL_WIDTH + (listTranslateX ?? 0),
-              width: listWidth,
-              paddingTop: panelTop,
-              ...(transitionDurationMs !== undefined && {
-                transition: `left ${transitionDurationMs}ms cubic-bezier(0.32, 0.72, 0, 1)`,
-              }),
-            }}
+            className="absolute inset-y-0 right-0 z-10 overflow-clip"
+            style={{ left: sidebarCollapsed ? COLLAPSED_WIDTH : RAIL_WIDTH }}
           >
-            {/* 列表不参与 rail 的 flex 布局，达到最小宽度后整体滑到 rail 后方。 */}
-            <div className="h-full overflow-hidden rounded-tl-[10px] bg-sidebar">
-              <ExpandedSidebar s={s} />
+            <div
+              className="relative h-full min-w-0"
+              style={{
+                left: listTranslateX ?? 0,
+                width: listWidth,
+                paddingTop: panelTop,
+                ...(transitionDurationMs !== undefined && {
+                  transition: `left ${transitionDurationMs}ms cubic-bezier(0.32, 0.72, 0, 1)`,
+                }),
+              }}
+            >
+              {/* 固定视口裁掉滑入 rail 的部分，包括半透明底色与鼠标命中区域。 */}
+              <div className="h-full overflow-hidden rounded-tl-[10px] bg-sidebar">
+                <ExpandedSidebar s={s} />
+              </div>
             </div>
           </div>
         )}

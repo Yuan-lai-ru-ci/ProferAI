@@ -564,7 +564,7 @@ export function getSkinCss(skinId: string): string | null {
  * 皮肤 assets 通过稳定协议引用（替代 base64 内联），URL 由 getSkinCss 生成；
  * skinId 走 kebab-case 白名单，路径仅允许皮肤目录内 assets/ 图片，防目录穿越。
  */
-export function handleProferSkinRequest(request: Request): Promise<Response> | Response {
+export async function handleProferSkinRequest(request: Request): Promise<Response> {
   let url: URL
   try {
     url = new URL(request.url)
@@ -589,7 +589,11 @@ export function handleProferSkinRequest(request: Request): Promise<Response> | R
     return new Response('Not Found', { status: 404 })
   }
   if (!stat.isFile()) return new Response('Not Found', { status: 404 })
-  return net.fetch(pathToFileURL(target).toString())
+  // 皮肤包可被 create_skin 覆盖替换；同一 URL 继续命中旧图会让“改完皮肤没变化”。
+  const response = await net.fetch(pathToFileURL(target).toString())
+  const headers = new Headers(response.headers)
+  headers.set('Cache-Control', 'no-store')
+  return new Response(response.body, { status: response.status, headers })
 }
 
 /** 读取皮肤预览图为 data URL；无 preview 文件返回 null（缓存按预览文件 mtime+size 失效） */

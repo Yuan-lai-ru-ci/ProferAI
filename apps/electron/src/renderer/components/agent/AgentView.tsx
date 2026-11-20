@@ -126,7 +126,7 @@ import { requestConversationFollowAtom } from '@/atoms/conversation-scroll-inten
 import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import { generateSummary } from '@profer/project-core'
 import { isTaskProgressTool } from './task-progress'
-import type { AgentContextStatus } from '@/atoms/agent-atoms'
+import { useSessionContextUsage } from './use-session-context-usage'
 import { settingsOpenAtom } from '@/atoms/settings-tab'
 import { activeViewAtom } from '@/atoms/active-view'
 import { activeTabIdAtom } from '@/atoms/tab-atoms'
@@ -587,12 +587,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     }
   }, [sessionId, sessionMetaChannelId, sessionMetaModelId, hasSessionMeta, defaultChannelId, defaultModelId, setSessionChannelMap, setSessionModelMap])
 
-  const contextStatus: AgentContextStatus = {
-    isCompacting: streamState?.isCompacting ?? false,
-    inputTokens: streamState?.inputTokens,
-    contextWindow: streamState?.contextWindow,
-    usageUpdatedAt: streamState?.usageUpdatedAt,
-  }
+  const contextStatus = useSessionContextUsage(sessionId, streamState)
   const setAgentStreamErrors = useSetAtom(agentStreamErrorsAtom)
   const streamErrors = useAtomValue(agentStreamErrorsAtom)
   const agentError = streamErrors.get(sessionId) ?? null
@@ -1174,6 +1169,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
                 outputTokens: state.outputTokens,
                 cacheReadTokens: state.cacheReadTokens,
                 cacheCreationTokens: state.cacheCreationTokens,
+                usageUpdatedAt: state.usageUpdatedAt,
                 contextWindow: state.contextWindow,
                 model: state.model,
               })
@@ -1278,7 +1274,6 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           toolActivities: [],
           model: snapshot.modelId,
           startedAt: streamStartedAt,
-          inputTokens: existing?.inputTokens,
           contextWindow: existing?.contextWindow,
         })
         return map
@@ -1947,7 +1942,6 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           toolActivities: [],
           model: agentModelId || undefined,
           startedAt: streamStartedAt,
-          inputTokens: existing?.inputTokens,
           contextWindow: existing?.contextWindow,
         })
         return map
@@ -2423,7 +2417,6 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         toolActivities: carryOver,
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
-        inputTokens: existing?.inputTokens,
         contextWindow: existing?.contextWindow,
       })
       return map
@@ -2716,7 +2709,6 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         toolActivities: [],
         model: agentModelId || undefined,
         startedAt: streamStartedAt,
-        inputTokens: existing?.inputTokens,
         contextWindow: existing?.contextWindow,
       })
       return map
@@ -3079,7 +3071,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   }, [ownsGlobalShortcuts, togglePreviewPanel])
 
   const hasTextInput = hasInputDraft
-  const isCompacting = contextStatus.isCompacting
+  const isCompacting = streamState?.isCompacting ?? false
   const canSend = !runtimeSwitchInFlight && messagesLoaded && !presetSelectionRequired && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput) && !isCompacting && !streamState?.stopping
   const voiceDictationEnabled = useAtomValue(voiceDictationEnabledAtom)
   const composerToolbarPreferences = useAtomValue(composerToolbarPreferencesAtom)
@@ -3158,25 +3150,20 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       ),
     },
     // Fast Mode 保留会话/请求层能力，但不在输入工具栏暴露切换入口。
-    {
+    ...(contextStatus ? [{
       key: 'context-usage',
       node: (
         <ContextUsageBadge
-          inputTokens={contextStatus.inputTokens}
-          outputTokens={contextStatus.outputTokens}
-          cacheReadTokens={contextStatus.cacheReadTokens}
-          cacheCreationTokens={contextStatus.cacheCreationTokens}
-          contextWindow={contextStatus.contextWindow}
-          usageUpdatedAt={contextStatus.usageUpdatedAt}
-          isCompacting={contextStatus.isCompacting}
+          key={sessionId}
+          {...contextStatus}
+          isCompacting={isCompacting}
           isProcessing={streaming || backgroundWaiting}
           planQuotaChannelId={planQuotaChannelId}
-          sessionId={sessionId}
           onCompact={handleCompact}
           composerTool
         />
       ),
-    },
+    }] : []),
     ...(taskGraphEnabled ? [{
       key: 'graph',
       node: <ToolbarGraphButton sessionId={sessionId} onClick={() => { setGraphDialogOpen(true); setGraphRefreshVersion(v => v + 1) }} />,
@@ -3203,13 +3190,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     setThinkingExpanded,
     handleOpenFileDialog,
     handleAttachFolder,
-    contextStatus.inputTokens,
-    contextStatus.outputTokens,
-    contextStatus.contextWindow,
-    contextStatus.isCompacting,
-    contextStatus.cacheReadTokens,
-    contextStatus.cacheCreationTokens,
-    contextStatus.usageUpdatedAt,
+    contextStatus,
+    planQuotaChannelId,
+    isCompacting,
     streaming,
     backgroundWaiting,
     runtimeSwitchInFlight,

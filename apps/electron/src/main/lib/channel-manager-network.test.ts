@@ -46,6 +46,13 @@ beforeEach(() => {
 afterEach(() => mock.restore())
 
 describe('F14：请求超时与测试能力边界', () => {
+  test('Given 本地 OpenAI 兼容服务 When 空 Key 且只填服务根 Then 自动补 /v1 并使用本地哨兵', async () => {
+    responder = async () => json(valid('openai'))
+
+    expect((await fetchModels(input('local', { baseUrl: 'http://127.0.0.1:1234', apiKey: '' }))).success).toBe(true)
+    expect(requests[0]!.url).toBe('http://127.0.0.1:1234/v1/models')
+    expect(new Headers(requests[0]!.init.headers).get('Authorization')).toBe('Bearer profer-local')
+  })
   test('Given 各协议目录 When 测试/发现 Then 每条请求复用 15s signal 且代理参数未丢失', async () => {
     const timeouts: number[] = []
     const originalTimeout = AbortSignal.timeout.bind(AbortSignal)

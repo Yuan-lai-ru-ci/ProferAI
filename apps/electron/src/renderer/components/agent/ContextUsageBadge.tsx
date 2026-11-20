@@ -2,7 +2,7 @@
  * ContextUsageBadge — 上下文使用量指示器
  *
  * 输入框工具栏上的一个 36×36 圆形按钮：
- * - 内部为 16px 圆环，按 displayTokens / displayWindow 比例渲染
+ * - 内部为 16px 圆环，按 inputTokens / contextWindow 比例渲染
  * - hover 弹出 Popover，内含 token 明细 + 订阅额度（可手动刷新）+ 手动压缩按钮（长按 650ms 触发，带进度动画）
  * - 订阅额度与模型选择器徽章共享数据与刷新状态；刷新中刷新图标转圈并锁定，旧额度保持可见
  * - 压缩中时按钮位置显示 Loader2 旋转图标
@@ -16,7 +16,7 @@ import { Button } from '@profer/ui/primitives/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@profer/ui/primitives/popover'
 import { cn } from '@/lib/utils'
 import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
-import type { ChannelPlanQuotaResult, ChannelPlanQuotaWindow } from '@profer/shared'
+import type { AgentContextUsageSnapshot, ChannelPlanQuotaWindow } from '@profer/shared'
 import { usePlanQuota } from '@/hooks/use-plan-quota'
 import { formatTokens } from '@/lib/format-tokens'
 
@@ -32,15 +32,7 @@ const HOVER_CLOSE_DELAY = 150
 /** 手动压缩长按触发时长（ms），文件路径搜索长按复用其一半。 */
 export const LONG_PRESS_DURATION = 650
 
-interface ContextUsageBadgeProps {
-  inputTokens?: number
-  outputTokens?: number
-  cacheReadTokens?: number
-  cacheCreationTokens?: number
-  costUsd?: number
-  contextWindow?: number
-  /** usage 数据最后更新时间戳（毫秒），用于显示数据时效 */
-  usageUpdatedAt?: number
+interface ContextUsageBadgeProps extends AgentContextUsageSnapshot {
   isCompacting: boolean
   isProcessing: boolean
   onCompact: () => void
@@ -48,11 +40,6 @@ interface ContextUsageBadgeProps {
    * 当前 Agent 渠道 ID，用于 hover 时查询订阅 Plan 剩余额度
    */
   planQuotaChannelId?: string
-  /**
-   * 当前会话 ID，用于在切换会话时清空 stableRef，
-   * 避免新会话尚未发消息时仍显示上一个会话的 token 数。
-   */
-  sessionId?: string
   /** Agent Composer 传入时，使用统一触发器的 hover/focus/尺寸外壳。 */
   composerTool?: boolean
 }
@@ -171,7 +158,12 @@ function PlanQuotaRow({ quotaWindow }: PlanQuotaRowProps): React.ReactElement {
   )
 }
 
-export function ContextUsageBadge({
+export function ContextUsageBadge(props: ContextUsageBadgeProps): React.ReactElement | null {
+  if (!Number.isSafeInteger(props.inputTokens) || props.inputTokens <= 0) return null
+  return <MeasuredContextUsageBadge {...props} />
+}
+
+function MeasuredContextUsageBadge({
   inputTokens,
   outputTokens,
   cacheReadTokens,
@@ -182,32 +174,11 @@ export function ContextUsageBadge({
   isProcessing,
   onCompact,
   planQuotaChannelId,
-  sessionId,
   composerTool = false,
 }: ContextUsageBadgeProps): React.ReactElement | null {
   // 订阅 Plan 额度状态：数据与刷新状态跨入口共享（usePlanQuota + planQuotaStateAtomFamily），
   // 挂载预取、hover 补查、手动刷新统一由 hook 处理，refreshing 反映任何来源的请求在飞。
   const { quota, refreshing, refresh } = usePlanQuota(planQuotaChannelId)
-
-  // 保留最近一次有效的 token 值，避免切换会话时闪烁消失
-  const stableRef = React.useRef<{
-    inputTokens: number
-    outputTokens?: number
-    cacheReadTokens?: number
-    cacheCreationTokens?: number
-    contextWindow?: number
-  } | null>(null)
-  // 会话切换时清空陈旧值，避免新会话尚未上报 usage 时显示上个会话的数字
-  const lastSessionRef = React.useRef<string | undefined>(sessionId)
-  React.useEffect(() => {
-    if (lastSessionRef.current !== sessionId) {
-      stableRef.current = null
-      lastSessionRef.current = sessionId
-    }
-  }, [sessionId])
-  if (inputTokens && inputTokens > 0) {
-    stableRef.current = { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, contextWindow }
-  }
 
   const [open, setOpen] = React.useState(false)
   const closeTimerRef = React.useRef<number | null>(null)
@@ -299,32 +270,19 @@ export function ContextUsageBadge({
     )
   }
 
-  // 使用稳定值：优先当前数据，回退到上次有效数据
-  const stable = stableRef.current
-  const hasCurrent = inputTokens != null && inputTokens > 0
-  const displayTokens = hasCurrent ? inputTokens : stable?.inputTokens
-  const displayWindow = hasCurrent ? contextWindow : stable?.contextWindow
-  const displayOutput = hasCurrent ? outputTokens : stable?.outputTokens
-  const displayCacheRead = hasCurrent ? cacheReadTokens : stable?.cacheReadTokens
-  const displayCacheCreation = hasCurrent ? cacheCreationTokens : stable?.cacheCreationTokens
-
-  // 即使当前会话还没有 usage 数据，也保留工具栏按钮，避免工具栏因首轮消息前后跳动。
-  const hasUsage = Boolean(displayTokens && displayTokens > 0)
-  const safeDisplayTokens = displayTokens ?? 0
-
   // 警告阈值：基于压缩阈值（contextWindow × 0.775 × 80%）
-  const compactThreshold = displayWindow
-    ? Math.floor(displayWindow * COMPACT_THRESHOLD_RATIO)
+  const compactThreshold = contextWindow
+    ? Math.floor(contextWindow * COMPACT_THRESHOLD_RATIO)
     : undefined
-  const isWarning = Boolean(compactThreshold && hasUsage && safeDisplayTokens / compactThreshold >= WARNING_RATIO)
+  const isWarning = Boolean(compactThreshold && inputTokens / compactThreshold >= WARNING_RATIO)
 
-  const ratio = displayWindow && hasUsage ? safeDisplayTokens / displayWindow : 0
+  const ratio = contextWindow ? inputTokens / contextWindow : 0
 
   // 纯输入 = 总上下文 - 缓存读取 - 缓存写入
-  const pureInput = safeDisplayTokens - (displayCacheRead ?? 0) - (displayCacheCreation ?? 0)
+  const pureInput = inputTokens - (cacheReadTokens ?? 0) - (cacheCreationTokens ?? 0)
 
-  const percent = displayWindow && hasUsage
-    ? Math.round((safeDisplayTokens / displayWindow) * 100)
+  const percent = contextWindow
+    ? Math.round((inputTokens / contextWindow) * 100)
     : undefined
 
   /** 计算数据时效提示（普通变量，非 useMemo — 避免在 isCompacting early return 后 hook 数不一致） */
@@ -354,6 +312,7 @@ export function ContextUsageBadge({
           <Button
             type="button"
             variant="ghost"
+            aria-label={percent != null ? `上下文使用量：${percent}%` : '上下文使用量'}
             size="icon"
             className={cn('size-[36px] rounded-full', isWarning ? 'text-amber-600 dark:text-amber-400' : 'text-foreground/60 hover:text-foreground')}
             onMouseEnter={() => { cancelClose(); setOpen(true) }}
@@ -376,23 +335,17 @@ export function ContextUsageBadge({
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <div className="flex flex-col gap-1.5">
-          {hasUsage ? (
-            <>
-              {pureInput > 0 && <DetailRow label="输入" value={pureInput.toLocaleString()} />}
-              {displayOutput ? <DetailRow label="输出" value={displayOutput.toLocaleString()} /> : null}
-              {displayCacheCreation ? <DetailRow label="缓存写入" value={displayCacheCreation.toLocaleString()} /> : null}
-              {displayCacheRead ? <DetailRow label="缓存读取" value={displayCacheRead.toLocaleString()} /> : null}
-            </>
-          ) : (
-            <div className="py-1 text-center text-xs text-muted-foreground">暂无上下文使用数据</div>
-          )}
+          {pureInput > 0 && <DetailRow label="输入" value={pureInput.toLocaleString()} />}
+          {outputTokens ? <DetailRow label="输出" value={outputTokens.toLocaleString()} /> : null}
+          {cacheCreationTokens ? <DetailRow label="缓存写入" value={cacheCreationTokens.toLocaleString()} /> : null}
+          {cacheReadTokens ? <DetailRow label="缓存读取" value={cacheReadTokens.toLocaleString()} /> : null}
 
-          {displayWindow && hasUsage ? (
+          {contextWindow ? (
             <>
               <div className="h-px bg-border my-0.5" />
               <DetailRow
                 label="上下文"
-                value={`${formatTokens(safeDisplayTokens)} / ${formatTokens(displayWindow)}`}
+                value={`${formatTokens(inputTokens)} / ${formatTokens(contextWindow)}`}
                 emphasized
               />
               {percent != null && (

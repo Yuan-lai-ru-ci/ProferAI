@@ -94,3 +94,15 @@ describe('applyAgentEvent 压缩状态', () => {
     expect(failed).toMatchObject({ running: true, isCompacting: false })
   })
 })
+
+test('新调用不继承旧缓存明细；窗口校准不刷新读数时间，压缩边界后不恢复累计计数', () => {
+  const first = state({ inputTokens: 123, cacheReadTokens: 40, usageUpdatedAt: 1234 })
+  const windowOnly = applyAgentEvent(first, { type: 'context_window', contextWindow: 1000 })
+  expect(windowOnly.usageUpdatedAt).toBe(1234)
+  const next = applyAgentEvent(windowOnly, { type: 'usage_update', usage: { inputTokens: 40, outputTokens: 2 } })
+  expect(next.cacheReadTokens).toBeUndefined()
+  expect(next.inputTokens).toBe(40)
+  const compact = applyAgentEvent(next, { type: 'compact_complete' })
+  expect(compact.usageUpdatedAt).toBeUndefined()
+  expect(applyAgentEvent(compact, { type: 'complete', usage: { inputTokens: 9999 } }).inputTokens).toBeUndefined()
+})

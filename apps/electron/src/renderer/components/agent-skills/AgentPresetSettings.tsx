@@ -351,16 +351,11 @@ export function AgentPresetSettings({
       try {
         const [skills, mcp, channels] = await Promise.all([
           window.electronAPI.getWorkspaceSkills(workspaceSlug),
-          window.electronAPI.getWorkspaceMcpConfig(workspaceSlug),
+          window.electronAPI.getWorkspaceCapabilities(workspaceSlug),
           window.electronAPI.listChannels({ localOnly: true }),
         ]);
         setAvailableSkills(skills);
-        setAvailableMcpServers(
-          Object.entries(mcp.servers).map(([name, entry]) => ({
-            name,
-            enabled: !!entry.enabled,
-          })),
-        );
+        setAvailableMcpServers(mcp.mcpServers);
         setAvailableChannels(channels);
       } catch (err) {
         console.error("[预设设置] 加载 Skill/MCP 列表失败:", err);

@@ -23,10 +23,11 @@ import {
   resolveReasoningProfile,
   type ReasoningCapability,
   resolveProviderNativeProtocol,
+  resolveLocalModelApiKey,
   isLocalOllamaBaseUrl,
   isMistralEffortReasoningModel,
 } from '@profer/shared'
-import { assertSdkBaseUrlSupportsRouting, getWhitelistCompatUserAgent, normalizeAnthropicBaseUrlForSdk, normalizeGoogleBaseUrl, normalizeOpenAIBaseUrlForSdk } from '@profer/core/providers'
+import { assertSdkBaseUrlSupportsRouting, getWhitelistCompatUserAgent, normalizeAnthropicBaseUrlForSdk, normalizeGoogleBaseUrl, normalizeLocalOpenAIBaseUrl, normalizeOpenAIBaseUrlForSdk } from '@profer/core/providers'
 import type { Api, KnownProvider, Model } from '@earendil-works/pi-ai/compat'
 import { createIsolatedModelRuntimeOptions } from './model-runtime-options'
 
@@ -118,7 +119,7 @@ const GPT_6_ASTRA_MODEL_ID = 'gpt-6-astra'
  * gpt-6.1-sol 尚未进入 Pi catalog，不靠 catalog 的 272K 兜底，也不对自建网关做能力假设：
  * 只有官方代管渠道按已验证的 1.05M 注册（与 GPT-5.6 系列同一规则）。
  */
-const OFFICIAL_GPT_6_MODEL_IDS = new Set([GPT_6_ASTRA_MODEL_ID, 'gpt-6.1-sol'])
+const OFFICIAL_GPT_6_MODEL_IDS = new Set([GPT_6_ASTRA_MODEL_ID, 'gpt-6.1-sol', 'gpt-6.2-astra', 'gpt-6.2-sol'])
 
 /**
  * 尚未进入 Pi catalog 的官方 SKU 元数据（按模型 ID 归一后匹配）。
@@ -129,6 +130,144 @@ const OFFICIAL_GPT_6_MODEL_IDS = new Set([GPT_6_ASTRA_MODEL_ID, 'gpt-6.1-sol'])
  * 自建网关仍保留保守默认值。
  */
 const KNOWN_MODEL_METADATA: Readonly<Record<string, PiModelMetadata>> = {
+  'gpt-6.2-astra': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 8, output: 40, cacheRead: 0.4, cacheWrite: 10 },
+    maxTokens: 128_000,
+  },
+  'gpt-6.2-sol': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+    maxTokens: 128_000,
+  },
+  'claude-fable-5-2': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'claude-opus-5-5': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'claude-sonnet-5-5': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'claude-haiku-5-5': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'gemini-4-carbon': {
+    reasoning: true,
+    thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
+    input: ['text', 'image'],
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+  },
+  'gemini-4-argon': {
+    reasoning: true,
+    thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
+    input: ['text', 'image'],
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+  },
+  'gemini-4-hydrogen': {
+    reasoning: true,
+    thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: null },
+    input: ['text', 'image'],
+    cost: { input: 1.5, output: 7.5, cacheRead: 0.075, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+  },
+  'glm-5.3-flash': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'glm-5.3-flashx': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 0.37, output: 1.25, cacheRead: 0.075, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'mimo-v2.6-pro': {
+    reasoning: true,
+    compat: { thinkingFormat: 'deepseek', supportsReasoningEffort: false, requiresReasoningContentOnAssistantMessages: true },
+    input: ['text', 'image'],
+    cost: { input: 0.435, output: 0.87, cacheRead: 0.0036, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'mimo-v2.6-flash': {
+    reasoning: true,
+    compat: { thinkingFormat: 'deepseek', supportsReasoningEffort: false, requiresReasoningContentOnAssistantMessages: true },
+    input: ['text', 'image'],
+    cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'mimo-v2.6-pro-ultraspeed': {
+    reasoning: true,
+    compat: { thinkingFormat: 'deepseek', supportsReasoningEffort: false, requiresReasoningContentOnAssistantMessages: true },
+    input: ['text', 'image'],
+    cost: { input: 4.35, output: 8.7, cacheRead: 0.036, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+  },
+  'kimi-k3.1-pro-highspeed': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 4 },
+    contextWindow: 1_048_576,
+    maxTokens: 131_072,
+  },
+  'minimax-m3.1-flash': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 0.15, output: 0.6, cacheRead: 0.015, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+  },
+  'qwen4-max': {
+    reasoning: true,
+    // 正式版：off 保持缺省（Pi 用 null 表示不支持关闭），实际 effort 为 low/high/xhigh。
+    thinkingLevelMap: { minimal: 'low', low: 'low', medium: 'high', high: 'xhigh', xhigh: 'xhigh', max: 'xhigh' },
+    input: ['text', 'image'],
+    // 官方美元基价未核实，不覆盖 catalog 已有定价；目录无值时沿用未知成本兜底。
+    contextWindow: 1_000_000,
+    maxTokens: 262_144,
+  },
+  'qwen4-max-preview': {
+    reasoning: true,
+    thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: 'medium', high: 'xhigh', xhigh: 'xhigh', max: 'xhigh' },
+    input: ['text', 'image'],
+    // Token Plan 临时 SKU，没有按量单价，不套用正式版价格。
+    contextWindow: 1_000_000,
+    maxTokens: 393_216,
+  },
+  'grok-4.7': {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    contextWindow: 500_000,
+  },
   'gpt-6.1-sol': {
     reasoning: true,
     input: ['text', 'image'],
@@ -140,10 +279,26 @@ const KNOWN_MODEL_METADATA: Readonly<Record<string, PiModelMetadata>> = {
     reasoning: true,
     input: ['text', 'image'],
     // 官方价：输入 $2 / 缓存命中 $0.20 / 输出 $10；上下文 1M，默认输出 131072。
-    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
+    // 官方自动缓存 5 分钟写入基价；1 小时写入为 $4 / MTok。
+    cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 },
     contextWindow: 1_048_576,
     maxTokens: 131_072,
   },
+}
+
+/**
+ * 官方新 SKU 属性。价格采用 Standard 基础价，不等同于最终账单；
+ * cacheWrite=0 表示没有单列写入费或未公布，不能推导存在免费显式写缓存 API。
+ * Gemini Carbon/Argon 官方已公告 12 月 1 日调价，按 UTC 生效日切换估算基价。
+ */
+export function resolveKnownPiModelMetadata(modelId: string, now = Date.now()): PiModelMetadata | undefined {
+  const id = normalizeModelIdTail(modelId) ?? ''
+  const metadata = KNOWN_MODEL_METADATA[id]
+  if (metadata && (id === 'gemini-4-carbon' || id === 'gemini-4-argon')
+    && now >= Date.parse('2026-12-01T00:00:00Z')) {
+    return { ...metadata, cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 } }
+  }
+  return metadata
 }
 
 /** Pi 内置 OpenAI/Codex catalog 当前把这三个已验证 SKU 误标为 272K。 */
@@ -161,6 +316,16 @@ function applyVerifiedGpt56ContextWindow(model: PiCatalogModel): PiCatalogModel 
 }
 
 const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
+  ...(['gpt-6.2-astra', 'gpt-6.2-sol'] as const).map((id): PiCatalogModelPatch => ({
+    ...KNOWN_MODEL_METADATA[id],
+    id,
+    name: id === 'gpt-6.2-astra' ? 'GPT-6.2 Astra' : 'GPT-6.2 Sol',
+    api: 'openai-codex-responses',
+    provider: 'openai-codex',
+    baseUrl: CODEX_BASE_URL,
+    thinkingLevelMap: { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+    contextWindow: 1_050_000,
+  })),
   {
     id: GPT_6_ASTRA_MODEL_ID,
     name: 'GPT-6 Astra',
@@ -258,6 +423,8 @@ function toReasoningTransport(api: Api): ReasoningTransport {
       return 'openai-completions'
     case 'openai-responses':
       return 'openai-responses'
+    case 'google-generative-ai':
+      return 'google-generative-ai'
     case 'mistral-conversations':
       return 'mistral-conversations'
     default:
@@ -429,15 +596,17 @@ export async function resolvePiReasoningCapability(
 
   const profile = resolveReasoningProfile({ modelId, transport })
   const catalogModel = await findPiCatalogModel(provider, modelId)
+  const knownMetadata = resolveKnownPiModelMetadata(modelId)
+  const metadata = knownMetadata ? { ...catalogModel, ...knownMetadata } : catalogModel
   return resolveReasoningCapability({
     profile,
     // profile 已按 transport 过滤过，这里取到的就是实际会用的编码；
     // 界面据此展示「档位 → 实际请求值」。
     encoding: profile?.encodings[transport],
-    catalog: catalogModel
+    catalog: metadata
       ? {
-          reasoning: catalogModel.reasoning,
-          thinkingLevelMap: catalogModel.thinkingLevelMap,
+          reasoning: metadata.reasoning,
+          thinkingLevelMap: metadata.thinkingLevelMap,
         }
       : undefined,
   })
@@ -474,11 +643,9 @@ async function resolvePiModelDefaults(
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
   // 官方新 SKU 常常还没进 Pi catalog：用 Profer 维护的元数据补齐窗口 / 输出 / 价格，
   // 否则新模型会静默拿到 200K / 64K / 零成本，与它实际的官方规格不符。
-  const knownMetadata = input.model
-    ? KNOWN_MODEL_METADATA[normalizeModelIdTail(input.model) ?? '']
-    : undefined
+  const knownMetadata = input.model ? resolveKnownPiModelMetadata(input.model) : undefined
   const modelMetadata: PiModelMetadata | undefined = catalogModel && knownMetadata
-    ? { ...catalogModel, ...knownMetadata }
+    ? { ...catalogModel, ...knownMetadata, compat: { ...catalogModel.compat, ...knownMetadata.compat } }
     : catalogModel ?? knownMetadata
   const api = normalizePiApi(input.provider, input.baseUrl)
   // catalog compat 必须参与合并：profile 只负责档位与 effort 编码，
@@ -613,6 +780,11 @@ function normalizePiBaseUrl(baseUrl: string | undefined, provider: ProviderType)
     const normalized = normalizeOpenAIBaseUrlForSdk(baseUrl)
     return /\/v1$/i.test(normalized) ? normalized : `${normalized}/v1`
   }
+  if (provider === 'local') {
+    // 本地服务的文档常只给服务根（如 http://127.0.0.1:1234）；Pi 自行拼
+    // /chat/completions，所以 baseUrl 必须是 /v1 协议根。
+    return normalizeLocalOpenAIBaseUrl(normalizeOpenAIBaseUrlForSdk(baseUrl))
+  }
   const api = normalizePiApi(provider, baseUrl)
   if (api === 'mistral-conversations') {
     // Pi 的 Mistral 适配器自己拼 `/v1/chat/completions`，baseUrl 只能是站点根：
@@ -681,7 +853,7 @@ function shouldUseRuntimeApiKey(provider: ProviderType): boolean {
  * 与 Claude runtime 的 applyAgentSdkAuthEnv 保持一致。
  */
 export function resolvePiApiKey(provider: ProviderType, apiKey: string): string {
-  if (provider === 'ollama') return apiKey.trim() || 'ollama'
+  if (provider === 'ollama' || provider === 'local') return resolveLocalModelApiKey(provider, apiKey)
   return provider === 'zhipu-coding-team' ? extractZhipuCodingTeamApiToken(apiKey) : apiKey
 }
 
@@ -975,10 +1147,30 @@ function createXaiRuntimeCredentialStore(
   }
 }
 
-/** 列出 Pi SDK 内置的 xAI（Grok）模型 ID，供订阅登录后拉取模型使用。 */
-export async function listXaiModels(): Promise<{ id: string; name: string }[]> {
+/** xAI 目录漏项与 API Key / OAuth 共用属性，避免订阅路径继续回退旧窗口。 */
+export async function getXaiCatalogModels(): Promise<PiCatalogModel[]> {
   const { getModels } = await loadPiAiCompat()
-  return [...getModels('xai')].map((m) => ({ id: m.id, name: m.name }))
+  const models: PiCatalogModel[] = [...getModels('xai')]
+  const known = resolveKnownPiModelMetadata('grok-4.7')!
+  const index = models.findIndex((model) => model.id === 'grok-4.7')
+  const existing = index >= 0 ? models[index] : undefined
+  const capabilities = compilePiReasoningCapabilities('openai-responses', 'grok-4.7', existing?.compat)
+  const model: PiCatalogModel = {
+    id: 'grok-4.7', name: 'Grok 4.7', provider: 'xai', api: 'openai-responses',
+    baseUrl: 'https://api.x.ai/v1', reasoning: true, input: ['text', 'image'],
+    cost: { ...ZERO_MODEL_COST }, contextWindow: 500_000,
+    // 官方未公布输出上限：仅保留现有目录值或保守运行预算，不把窗口当输出上限。
+    maxTokens: DEFAULT_MAX_TOKENS,
+    ...existing, ...known, ...capabilities,
+  }
+  if (index >= 0) models[index] = model
+  else models.push(model)
+  return models
+}
+
+/** 列出 Pi SDK 内置及已核验补齐的 xAI（Grok）模型 ID。 */
+export async function listXaiModels(): Promise<{ id: string; name: string }[]> {
+  return (await getXaiCatalogModels()).map((m) => ({ id: m.id, name: m.name }))
 }
 
 /**
@@ -1006,18 +1198,15 @@ async function buildXaiApiKeyModel(sdk: PiSdk, input: PiModelRegistryInput) {
   // 第三方 Grok 中转常只实现 Chat Completions；协议由渠道配置决定，
   // 不能因为 provider 是 xai 就固定要求 /responses。
   const api: Api = input.xaiApiProtocol === 'chat-completions' ? 'openai-completions' : 'openai-responses'
-  const reasoningCapabilities = compilePiReasoningCapabilities(api, resolvedModelId)
+  const defaults = await resolvePiModelDefaults({ ...input, model: resolvedModelId })
+  const reasoningCapabilities = compilePiReasoningCapabilities(api, resolvedModelId, defaults.compat)
   const modelConfig = {
+    ...defaults,
     id: resolvedModelId,
     name: catalogModel?.name ?? resolvedModelId,
     api,
-    reasoning: catalogModel?.reasoning ?? true,
-    thinkingLevelMap: reasoningCapabilities?.thinkingLevelMap ?? catalogModel?.thinkingLevelMap,
-    compat: reasoningCapabilities?.compat ?? catalogModel?.compat,
-    input: catalogModel ? [...catalogModel.input] : ['text', 'image'] as ('text' | 'image')[],
-    cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
-    contextWindow: applyModel1MContextPreference(catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW, input.context1m),
-    maxTokens: catalogModel?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    thinkingLevelMap: reasoningCapabilities?.thinkingLevelMap ?? defaults.thinkingLevelMap,
+    compat: reasoningCapabilities?.compat ?? defaults.compat,
   }
 
   modelRuntime.registerProvider('xai', {
@@ -1040,9 +1229,11 @@ export async function buildXaiOAuthModel(sdk: PiSdk, input: XaiModelInput, host:
     createXaiRuntimeCredentialStore(host, input.channelId, input.xaiOAuthCredentials, input.onXaiOAuthCredentialsRefreshed),
   ))
   const resolvedModelId = stripAgentSdkContextSuffix(input.model)
-  const { getModels } = await loadPiAiCompat()
-  const xaiModels = [...getModels('xai')]
-  const model =
+  const xaiModels = await getXaiCatalogModels()
+  const verifiedModel = resolvedModelId?.toLowerCase() === 'grok-4.7'
+    ? findCatalogModelById(xaiModels, resolvedModelId)
+    : undefined
+  const model = verifiedModel ??
     (resolvedModelId ? modelRuntime.getModel('xai', resolvedModelId) : undefined) ??
     (resolvedModelId ? findCatalogModelById(xaiModels, resolvedModelId) : undefined) ??
     modelRuntime.getModels('xai')[0]

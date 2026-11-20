@@ -165,6 +165,7 @@ import { registerLarkIpc } from './lib/lark-ipc'
 import { registerWeChatIpc } from './lib/wechat-ipc'
 import { registerDingTalkIpc } from './lib/dingtalk-ipc'
 import { registerFeishuIpc } from './lib/feishu-ipc'
+import { registerGlobalMcpIpc } from './lib/global-mcp-ipc'
 import { registerGlobalSkillIpc } from './lib/global-skill-ipc'
 import { registerKnowledgeIpc } from './lib/knowledge-ipc'
 import { registerDesktopNotificationIpc } from './lib/desktop-notification-ipc'
@@ -239,7 +240,7 @@ import {
 import { listAgentPresets, listGlobalAgentPresets, getDefaultPresetId, setDefaultPresetId, setDefaultPresetReference, enableGlobalPresetInWorkspace, disableGlobalPresetInWorkspace, rebindAndDisableGlobalPresetScope, setWorkspacePresetEnabled, rebindAgentSessionPreset, rebindAutomationPreset, createAgentPreset, createGlobalAgentPreset, promoteWorkspacePresetToGlobal, copyAgentPreset, copyPresetToWorkspace, updateAgentPreset, updateGlobalAgentPreset, deleteAgentPreset, deleteGlobalAgentPreset, getAgentPreset, getPresetReferenceReport, serializeAgentPresetsForExport, importAgentPresets } from './lib/agent-preset-manager'
 import { getAgentSessionNavigationIndex } from './lib/agent-navigation-index'
 import { createHandoffSession } from './lib/session-handoff-service'
-import { onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher, type AgentStopOutcome } from './lib/agent-service'
+import { getAgentContextUsageSnapshot, onAgentRunComplete, runAgent, stopAgent, stopAgentAndWait, stopGoalRunAndWait, isGoalRunActive, generateAgentTitle, regenerateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, restoreActiveAgentStreams, registerWebContents, getSessionWebContents, getAgentRuntimeCapabilities, getAgentTaskOutput, stopAgentTask, emitSessionStreamEvent, agentCatalogInvalidationPublisher, type AgentStopOutcome } from './lib/agent-service'
 import { publishAgentSessionProjection, setAgentSessionUnread, updateAgentSessionUiMeta } from './lib/agent-session-ui-projection-publisher'
 import { requestSessionDeletion, requestSessionDeletions, resumePendingSessionDeletions, waitForSessionDeletions } from './lib/agent-session-deletion-service'
 import { setQuoteableSelection } from './menu'
@@ -292,6 +293,7 @@ import {
   ensureDefaultWorkspace,
   ensureProjectWorkspaceGitignores,
   getWorkspaceMcpConfig,
+  getEffectiveWorkspaceMcpConfig,
   saveWorkspaceMcpConfig,
   saveMcpServerTestResult,
   getAllWorkspaceSkills,
@@ -2409,6 +2411,8 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(AGENT_IPC_CHANNELS.GET_CONTEXT_USAGE_SNAPSHOT, (_, id: string) => getAgentContextUsageSnapshot(id))
+
   // 获取会话「消息导航」全量轮次索引（只读）
   // 渲染层只加载尾部一页消息；导航总数必须来自全会话，否则会话越长总数越小。
   ipcMain.handle(
@@ -3036,13 +3040,13 @@ export function registerIpcHandlers(): void {
       saveWorkspaceMcpConfig(workspaceSlug, config)
       // 禁用/删除即断开：把落盘后的 enabled 名单同步给 Pi 常驻连接。
       // 不 await：保存不能被连接释放拖住；失败只警告，连接会在下次使用时重建。
-      const activeNames = Object.entries(config.servers ?? {})
+      const activeNames = Object.entries(getEffectiveWorkspaceMcpConfig(workspaceSlug).servers)
         .filter(([, entry]) => entry.enabled)
         .map(([name]) => name)
       void (async () => {
         try {
           const { reconcileMcpServers } = await import('./lib/adapters/pi-mcp-tools')
-          await reconcileMcpServers(activeNames)
+          await reconcileMcpServers(activeNames, workspaceSlug)
         } catch (error) {
           console.warn('[IPC] 保存 MCP 配置后同步 Pi 连接失败:', error)
         }
@@ -3086,9 +3090,10 @@ export function registerIpcHandlers(): void {
   // 重启单个 MCP server 的常驻连接（Pi runtime；Claude runtime 每轮由 SDK 自行起进程）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.RESTART_MCP_SERVER,
-    async (_, name: string): Promise<McpServerRestartResult> => {
+    async (_, name: string, workspaceSlug: string): Promise<McpServerRestartResult> => {
+      assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
       const { restartMcpServer } = await import('./lib/adapters/pi-mcp-tools')
-      return restartMcpServer(name)
+      return restartMcpServer(name, { workspaceSlug })
     }
   )
 
@@ -3258,6 +3263,7 @@ export function registerIpcHandlers(): void {
 
   // ===== 全局 Skill 体系与元 Skill 兼容读取 =====
   registerGlobalSkillIpc()
+  registerGlobalMcpIpc()
 
   // 发送 Agent 消息（触发 Agent SDK 流式响应）
   ipcMain.handle(

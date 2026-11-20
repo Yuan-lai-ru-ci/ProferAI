@@ -215,17 +215,17 @@ Profer 可以先以本地工作区使用，不必因为看不到团队页面而�
 
 1. 新增或编辑渠道。
 2. 选择供应商类型，确认原生协议和需要启用的 Pi/Claude 模式。
-3. 填写名称、端点与 API Key；订阅授权走下文的专用登录入口，Ollama 的 Key 可选。
+3. 填写名称、端点与 API Key；订阅授权走下文的专用登录入口，Ollama 与本地模型的 Key 可选。
 4. 获取或手动添加模型 ID，逐个启用需要的模型，创建并检查保存状态。
 5. 回到 Chat 或 Agent 输入区选择模型。
 
-当前配置页列出 23 个 provider 类型，包含 API、Coding Plan、兼容协议、订阅和 Ollama；类型数量不是每个账号能用的模型数量，也不代表所有类型都支持 Chat、Claude 和 Pi。**Agent-only** 订阅渠道是 ChatGPT 订阅（Codex）和 xAI 的 Grok/X 订阅 OAuth：只供 Pi Agent，不会进入 Chat 选择器；xAI API Key 可以用于 Chat，Pi Agent 属实验能力；xAI/Codex 均不支持 Claude。
+当前配置页列出 24 个 provider 类型，包含 API、Coding Plan、兼容协议、订阅、Ollama 与本地 OpenAI 兼容服务；类型数量不是每个账号能用的模型数量，也不代表所有类型都支持 Chat、Claude 和 Pi。**Agent-only** 订阅渠道是 ChatGPT 订阅（Codex）和 xAI 的 Grok/X 订阅 OAuth：只供 Pi Agent，不会进入 Chat 选择器；xAI API Key 可以用于 Chat，Pi Agent 属实验能力；xAI/Codex 均不支持 Claude。
 
 自定义 OpenAI 兼容格式应填写完整 `/chat/completions` 请求端点；Anthropic 兼容格式按其 Messages 端点配置。Claude 使用独立的 Anthropic 端点，留空的推导方式见字段提示；不要以为勾选 Claude 就能把 OpenAI-only 服务变成 Anthropic 服务。DeepSeek 的 Chat 与 Agent 端点路径可能不同，修改地址后分别核对测试结果和实际模式。
 
 Chat 和模型发现直接请求允许带查询参数的完整端点；当前 Pi/Claude SDK 的 Agent 地址不支持 query/hash 路由，含 `?` 或 `#` 时会明确拒绝，不会静默删除参数。Agent 应使用供应商提供的不带 query/hash 的协议地址。
 
-Ollama 读取的是已安装模型目录，不会自动下载模型；只有地址确实指向本机时才是本地请求，远程地址会离开本机。Chat 与 Agent 的过滤规则不同，Agent 还会按运行时、协议、渠道启用状态和 `agentRuntimes` 过滤。
+Ollama 读取的是已安装模型目录，不会自动下载模型；只有地址确实指向本机时才是本地请求，远程地址会离开本机。本地模型渠道统一连接 LM Studio、Unsloth Studio、llama.cpp、vLLM 等服务的 OpenAI 兼容 `/v1` 端点，表单预设只填默认端口；服务需由用户自行启动，Profer 不会拉起服务或下载模型。若本地服务同时提供 Anthropic 兼容入口，可另勾 Claude 内核。Chat 与 Agent 的过滤规则不同，Agent 还会按运行时、协议、渠道启用状态和 `agentRuntimes` 过滤。
 
 **推理档位**：官方模型按模型维度声明推理能力（如 Mistral 等），已开通推理的账号能用上思考档位；同渠道第三方模型 id 的推理档位保持禁用，不要手动启用。
 

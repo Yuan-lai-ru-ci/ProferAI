@@ -30,7 +30,8 @@ import { diagnoseSkill } from './skill-doctor'
 import { probeSkillFrontmatterError } from './skill-routing'
 import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
 import { listAgentPresets, createAgentPreset } from './agent-preset-manager'
-import { canonicalizeWorkspaceRootPath, invalidateWorkspaceLocation, resolveWorkspaceLocation, type AgentWorkspaceIndexEntry } from './workspace-locator'
+import { resolveGlobalMcpForWorkspace, summarizeGlobalMcpForWorkspace } from './global-mcp-store'
+import { getIndexedWorkspaceId, canonicalizeWorkspaceRootPath, invalidateWorkspaceLocation, resolveWorkspaceLocation, type AgentWorkspaceIndexEntry } from './workspace-locator'
 import { assertNotProjectLifecyclePath } from './workspace-delete-guard'
 import type { AgentWorkspace, WorkspaceMcpConfig, McpServerEntry, SkillMeta, SkillImportSource, WorkspaceSkillSource, OtherWorkspaceSkillsGroup, OtherWorkspacePresetsGroup, WorkspaceSkillCardState, SkillManifestPatch, WorkspaceCapabilities, SkillFileNode, SkillFileContent, WorkspaceMemorySummary, AgentPreset, CreateProjectWorkspaceInput, OpenProjectWorkspaceInput, ProjectWorkspaceOpenResult, ProjectWorkspaceErrorCode } from '@profer/shared'
 
@@ -1326,7 +1327,7 @@ function revertLocalMcpOverrides(
 }
 
 /**
- * 读取工作区 MCP 配置（运行时生效视图）。
+ * 读取工作区自己的配置（编辑、导出与写回使用，不包含用户全局定义）。
  *
  * project 模式在 base `mcp.json` 之上叠加只读的 `mcp.local.json`（本机密钥层）。
  * managed 行为不变：不读 local 覆盖层。
@@ -1347,6 +1348,18 @@ export function getWorkspaceMcpConfig(workspaceSlug: string): WorkspaceMcpConfig
 
   inferMcpTransportTypes(baseServers)
   return { servers: baseServers }
+}
+
+/** 启动、能力摘要与预设解析使用；不要把此结果交给保存/导出链路。 */
+export function getEffectiveWorkspaceMcpConfig(workspaceSlug: string): WorkspaceMcpConfig {
+  const local = getWorkspaceMcpConfig(workspaceSlug)
+  const id = getIndexedWorkspaceId(workspaceSlug)
+  return id ? resolveGlobalMcpForWorkspace(id, local) : local
+}
+
+export function listWorkspaceGlobalMcpServers(workspaceSlug: string): import('@profer/shared').WorkspaceGlobalMcpSummary[] {
+  const id = getIndexedWorkspaceId(workspaceSlug)
+  return id ? summarizeGlobalMcpForWorkspace(id, getWorkspaceMcpConfig(workspaceSlug)) : []
 }
 
 export function saveWorkspaceMcpConfig(workspaceSlug: string, config: WorkspaceMcpConfig): void {
@@ -1500,7 +1513,7 @@ export function parseSkillFrontmatter(content: string, slug: string, enabled: bo
 // ===== 工作区能力摘要 =====
 
 export function getWorkspaceCapabilities(workspaceSlug: string): WorkspaceCapabilities {
-  const mcpConfig = getWorkspaceMcpConfig(workspaceSlug)
+  const mcpConfig = getEffectiveWorkspaceMcpConfig(workspaceSlug)
   const skills = getWorkspaceSkills(workspaceSlug)
 
   const mcpServers = Object.entries(mcpConfig.servers ?? {}).map(([name, entry]) => ({

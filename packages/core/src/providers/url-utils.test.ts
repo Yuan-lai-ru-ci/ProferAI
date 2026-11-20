@@ -266,6 +266,21 @@ describe('resolveOpenAIChatCompletionsUrl', () => {
     )
   })
 
+  test('本地服务根地址自动补 /v1，已带版本段或完整端点不重复拼接', () => {
+    expect(resolveOpenAIChatCompletionsUrl('http://127.0.0.1:1234', 'local')).toBe(
+      'http://127.0.0.1:1234/v1/chat/completions',
+    )
+    expect(resolveOpenAIChatCompletionsUrl('http://127.0.0.1:1234/v1', 'local')).toBe(
+      'http://127.0.0.1:1234/v1/chat/completions',
+    )
+    expect(resolveOpenAIChatCompletionsUrl('http://127.0.0.1:8888/v1/chat/completions', 'local')).toBe(
+      'http://127.0.0.1:8888/v1/chat/completions',
+    )
+    expect(resolveOpenAIChatCompletionsUrl('http://127.0.0.1:8080/api', 'local')).toBe(
+      'http://127.0.0.1:8080/api/chat/completions',
+    )
+  })
+
   test('保留查询参数', () => {
     expect(resolveOpenAIChatCompletionsUrl('https://api.example.com/v1/chat/completions?api-version=2024', 'custom')).toBe(
       'https://api.example.com/v1/chat/completions?api-version=2024',
@@ -302,6 +317,14 @@ describe('resolveOpenAIModelsUrl', () => {
 
   test('协议根地址推导 /models', () => {
     expect(resolveOpenAIModelsUrl('https://api.openai.com/v1')).toBe('https://api.openai.com/v1/models')
+  })
+
+  test('本地服务根地址自动补 /v1/models，完整端点回退同级', () => {
+    expect(resolveOpenAIModelsUrl('http://127.0.0.1:1234', 'local')).toBe('http://127.0.0.1:1234/v1/models')
+    expect(resolveOpenAIModelsUrl('http://127.0.0.1:1234/v1/', 'local')).toBe('http://127.0.0.1:1234/v1/models')
+    expect(resolveOpenAIModelsUrl('http://127.0.0.1:1234/v1/chat/completions', 'local')).toBe(
+      'http://127.0.0.1:1234/v1/models',
+    )
   })
 
   test('保留查询参数', () => {

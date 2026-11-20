@@ -382,6 +382,7 @@ describe('能力裁剪：工具组 / PPT / skill / MCP', () => {
     expect(filtered.map(resource => resource.name)).toEqual(['alpha'])
     // 与旧路径同一判定函数：白名单外一律不允许。
     expect(snapshot.policy.allowedMcpServerNames).toEqual(['alpha'])
+    expect(buildPolicyToolAssemblyContext(snapshot, {}).allowedMcpServerNames).toEqual(['alpha'])
   })
 
   test('Given 空数组白名单 When 过滤 Then 表示全部禁用（与 undefined 语义区分）', () => {

@@ -28,4 +28,17 @@ describe('侧栏 rail 吸附预览接线', () => {
     expect(sidebar).toContain('transition-[width] duration-200 sidebar-collapse-ease motion-reduce:transition-none')
     expect(sidebar).not.toContain("? 'w-full' : 'w-[54px]'")
   })
+
+  test('rail 与顶栏共用唯一着色底面，列表保留独立背景', () => {
+    expect(sidebar.match(/before:bg-foreground\/\[0\.035\]/g)).toHaveLength(1)
+    expect(sidebar.match(/\bbg-sidebar\b/g)).toHaveLength(2)
+    expect(sidebar).toContain('className="relative z-20 h-full overflow-hidden transition-[width]')
+  })
+
+  test('列表在固定视口内滑动，收起端点不留可见或可点击区域', () => {
+    expect(sidebar).toContain('className="absolute inset-y-0 right-0 z-10 overflow-clip"')
+    expect(sidebar).toContain('style={{ left: sidebarCollapsed ? COLLAPSED_WIDTH : RAIL_WIDTH }}')
+    expect(sidebar).toContain('left: listTranslateX ?? 0,')
+    expect(sidebar).not.toContain('left: RAIL_WIDTH + (listTranslateX ?? 0),')
+  })
 })

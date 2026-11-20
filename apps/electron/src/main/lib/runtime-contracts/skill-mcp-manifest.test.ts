@@ -9,7 +9,7 @@ mock.module('../agent-session-manager', () => ({
 mock.module('../agent-workspace-manager', () => ({
   getAgentWorkspace: () => ({ slug: 'manifest-fixture' }), readWorkspaceProfile: () => ({ content: '' }),
   getWorkspaceAttachedDirectories: () => [], getWorkspaceAttachedFiles: () => [], getWorkspaceMemoryArchivePath: () => '/tmp/fixture', getWorkspaceAutoMemoryDir: () => '/tmp/fixture',
-  getWorkspaceSkills: () => [], getWorkspaceMcpConfig: () => ({ servers: {} }),
+  getWorkspaceSkills: () => [], getEffectiveWorkspaceMcpConfig: () => ({ servers: {} }),
 }))
 mock.module('../global-skill-manager', () => ({
   prepareRuntimeSkills: () => ({ path: '/fixture/source' }),

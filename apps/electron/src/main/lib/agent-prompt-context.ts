@@ -1,6 +1,6 @@
 import { isAgentPresetToolGroupDisabled, type AgentPresetToolGroup } from '@profer/shared'
 import { buildGlobalMemoryIndexBlock, escapeContextText } from '@profer/user-memory'
-import { getWorkspaceMcpConfig } from './workspace-mcp-config'
+import { getEffectiveWorkspaceMcpConfig } from './workspace-mcp-config'
 import { readGlobalMemoryFile } from './global-memory-service'
 import type { BrowserUserContextSnapshot } from './browser-controller'
 
@@ -52,7 +52,7 @@ export function buildDynamicContext(ctx: DynamicContext): string {
     }
 
     // MCP 服务器列表
-    const mcpConfig = getWorkspaceMcpConfig(ctx.workspaceSlug)
+    const mcpConfig = getEffectiveWorkspaceMcpConfig(ctx.workspaceSlug)
     const serverEntries = Object.entries(mcpConfig.servers ?? {})
       .filter(([name, entry]) => entry.enabled && name !== 'memos-cloud')
       .filter(([name]) => ctx.mcpServerNames === undefined || ctx.mcpServerNames.includes(name))

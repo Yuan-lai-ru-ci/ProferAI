@@ -43,14 +43,14 @@ test('tutorial claims map to the local provider, credential, save, and settings 
   const tokenCrypto = read(tokenCryptoPath)
   const settingsPanel = read(settingsPanelPath)
 
-  expect(Object.keys(PROVIDER_LABELS)).toHaveLength(23)
+  expect(Object.keys(PROVIDER_LABELS)).toHaveLength(24)
   expect(isChannelEnabledForChat({ provider: 'openai-codex', enabled: true, baseUrl: '' })).toBe(false)
   expect(isChannelEnabledForChat({ provider: 'xai', credentialMode: 'oauth', enabled: true, baseUrl: 'https://api.x.ai/v1' })).toBe(false)
   expect(isChannelEnabledForChat({ provider: 'xai', credentialMode: 'api-key', enabled: true, baseUrl: 'https://api.x.ai/v1' })).toBe(true)
   for (const provider of ['xai', 'openai-codex'] as const) {
     expect(isChannelEnabledForRuntime({ provider, enabled: true, agentRuntimes: ['claude', 'pi'] }, 'claude')).toBe(false)
   }
-  expect(tutorial).toContain('23 个 provider 类型')
+  expect(tutorial).toContain('24 个 provider 类型')
   expect(tutorial).toContain('Agent-only')
   expect(tutorial).toContain('只供 Pi Agent')
   expect(channelTypes).toContain("channel.provider === 'openai-codex'")

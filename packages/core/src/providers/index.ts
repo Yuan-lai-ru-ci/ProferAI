@@ -48,6 +48,7 @@ const adapterRegistry = new Map<ProviderType, () => ProviderAdapter>([
   ['qwen-anthropic', () => new AnthropicAdapter('qwen-anthropic')],
   ['minimax', () => new AnthropicAdapter('minimax')],
   ['ollama', () => new OpenAIAdapter('ollama')],
+  ['local', () => new OpenAIAdapter('local')],
   ['doubao', () => new OpenAIAdapter('doubao')],
   ['qwen', () => new OpenAIAdapter('qwen')],
   ['xiaomi', () => new AnthropicAdapter('xiaomi')],

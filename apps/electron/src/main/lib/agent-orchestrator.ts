@@ -153,7 +153,7 @@ import { normalizeAgentEndReason } from './agent-end-reason'
 import { createPiFileCheckpoint, prunePiFileCheckpoints } from './pi-file-checkpoint'
 import {
   getAgentWorkspace,
-  getWorkspaceMcpConfig,
+  getEffectiveWorkspaceMcpConfig,
   getWorkspaceAutoMemoryDir,
   getWorkspaceMemoryArchivePath,
   ensurePluginManifest,
@@ -523,7 +523,7 @@ export class AgentOrchestrator {
       },
       resources: {
         load: () => ({}),
-        getMcpConfig: ({ workspaceSlug }) => getWorkspaceMcpConfig(workspaceSlug),
+        getMcpConfig: ({ workspaceSlug }) => getEffectiveWorkspaceMcpConfig(workspaceSlug),
       },
       permissions: createElectronPermissionPort(),
       events: {
@@ -774,7 +774,7 @@ export class AgentOrchestrator {
 
     const externalStatePaths: Record<string, string[]> = {}
 
-    const mcpConfig = this.resourcePort.getMcpConfig?.({ sessionId, workspaceSlug }) ?? getWorkspaceMcpConfig(workspaceSlug)
+    const mcpConfig = this.resourcePort.getMcpConfig?.({ sessionId, workspaceSlug }) ?? getEffectiveWorkspaceMcpConfig(workspaceSlug)
     for (const [name, entry] of Object.entries(mcpConfig.servers ?? {})) {
       if (!entry.enabled) continue
       if (name === 'memos-cloud') continue
@@ -2136,6 +2136,7 @@ export class AgentOrchestrator {
             const piSdk = await import('@earendil-works/pi-coding-agent')
             const builtin = await this.buildPiBuiltinTools(piSdk, {
               ...runToolContext,
+              allowedMcpServerNames: presetPolicy.allowedMcpServerNames,
               sessionId,
               channelId,
               modelId,

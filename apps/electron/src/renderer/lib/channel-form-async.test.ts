@@ -125,6 +125,7 @@ describe('渠道表单异步控制', () => {
     expect(validateChannelCreation({ ...input, baseUrl: ' ' })).not.toBeNull()
     expect(validateChannelCreation({ ...input, apiKey: ' ' })).not.toBeNull()
     expect(validateChannelCreation({ ...input, provider: 'ollama', apiKey: '' })).toBeNull()
+    expect(validateChannelCreation({ ...input, provider: 'local', apiKey: '' })).toBeNull()
     expect(validateChannelCreation({ ...input, provider: 'xai', credentialMode: 'oauth', apiKey: '' })).toBeNull()
     expect(validateChannelCreation({ ...input, provider: 'openai-codex', baseUrl: '', apiKey: '' })).toBeNull()
     // 只勾 Claude 时由 Anthropic 端点独立满足「有服务端点」；两者都空仍拒绝。

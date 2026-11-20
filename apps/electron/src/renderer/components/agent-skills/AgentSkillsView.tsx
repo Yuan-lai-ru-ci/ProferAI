@@ -30,6 +30,9 @@ import {
 import type { McpServerEntry, SkillMeta } from "@profer/shared";
 import { useAgentSkillsData } from "./useAgentSkillsData";
 import { SkillCard } from "./SkillCard";
+import { GlobalMcpPanel } from "./GlobalMcpPanel";
+import { workspaceMcpList } from "./workspace-mcp-list";
+import { useWorkspaceGlobalMcp, WorkspaceGlobalMcpList } from "./WorkspaceGlobalMcpList";
 import { McpCard } from "./McpCard";
 import { SkillDetailSheet } from "./SkillDetailSheet";
 import { McpDetailSheet } from "./McpDetailSheet";
@@ -73,8 +76,9 @@ export function AgentSkillsView(): React.ReactElement {
   const [showImport, setShowImport] = React.useState(false);
   const [globalConfigOpen, setGlobalConfigOpen] = React.useState(false);
   const [globalConfigTab, setGlobalConfigTab] = React.useState<
-    "skills" | "presets"
+    CapabilityTab
   >("skills");
+  const [globalMcpOpen, setGlobalMcpOpen] = React.useState(false);
   const [globalCreateSkillToken, setGlobalCreateSkillToken] = React.useState(0);
   const [globalImportSkillToken, setGlobalImportSkillToken] = React.useState(0);
   const [globalCreatePresetToken, setGlobalCreatePresetToken] =
@@ -122,20 +126,8 @@ export function AgentSkillsView(): React.ReactElement {
     (s) => s.hasUpdate && isWorkspaceLocalSkill(s),
   ).length;
 
-  const serverEntries = React.useMemo(() => {
-    return Object.entries(data.mcpConfig.servers ?? {})
-      .filter(([name]) => name !== "memos-cloud")
-      .filter(([name]) => !q || name.toLowerCase().includes(q));
-  }, [data.mcpConfig, q]);
-
-  // 不含搜索过滤的 MCP 总数（标签计数与空态判断用）
-  const mcpCount = React.useMemo(
-    () =>
-      Object.keys(data.mcpConfig.servers ?? {}).filter(
-        (n) => n !== "memos-cloud",
-      ).length,
-    [data.mcpConfig],
-  );
+  const summaries = useWorkspaceGlobalMcp(data.workspaceSlug);
+  const mcpList = workspaceMcpList(data.mcpConfig.servers ?? {}, summaries?.items ?? [], q);
 
   // 顶部 Skills/MCP/预设切换按钮：支持 ←/→ 循环切换 + Home/End。
   // 记忆已拆成 rail 上的独立「Agent 记忆」视图，不再作为本页标签。
@@ -143,7 +135,7 @@ export function AgentSkillsView(): React.ReactElement {
   const tabList: Array<{ value: CapabilityTab; label: string; count: number }> =
     [
       { value: "skills", label: "Skills", count: data.skills.length },
-      { value: "mcp", label: "MCP", count: mcpCount },
+      { value: "mcp", label: "MCP", count: mcpList.total },
       { value: "presets", label: "预设", count: presetList.length },
     ];
   const handleTabKeyDown = React.useCallback(
@@ -219,7 +211,7 @@ export function AgentSkillsView(): React.ReactElement {
         title={globalConfigOpen ? "Agent 技能 · 全局" : "Agent 技能"}
         subtitle={
           globalConfigOpen
-            ? "管理跨工作区生效的 Skills 与预设"
+            ? "管理跨工作区使用的 Skills、MCP 与预设"
             : "管理当前工作区的 Skills、预设与其他 Agent 能力"
         }
         back={{
@@ -262,6 +254,7 @@ export function AgentSkillsView(): React.ReactElement {
             globalConfigOpen
               ? [
                   { value: "skills", label: "全局 Skill" },
+                  { value: "mcp", label: "全局 MCP" },
                   { value: "presets", label: "全局预设" },
                 ]
               : tabList
@@ -271,7 +264,7 @@ export function AgentSkillsView(): React.ReactElement {
             globalConfigOpen
               ? globalConfigTab === "skills"
                 ? "搜索全局 Skills…"
-                : "搜索全局预设…"
+                : globalConfigTab === "mcp" ? "搜索全局 MCP…" : "搜索全局预设…"
               : tab === "skills"
                 ? "搜索 Skills..."
                 : tab === "mcp"
@@ -280,7 +273,7 @@ export function AgentSkillsView(): React.ReactElement {
           }
           onDomainChange={(value) => {
             if (globalConfigOpen)
-              setGlobalConfigTab(value === "presets" ? "presets" : "skills");
+              setGlobalConfigTab(value as CapabilityTab);
             else setTab(value as CapabilityTab);
           }}
           onSearchChange={setSearch}
@@ -289,6 +282,7 @@ export function AgentSkillsView(): React.ReactElement {
               ? () => {
                   if (globalConfigTab === "skills")
                     setGlobalCreateSkillToken((value) => value + 1);
+                  else if (globalConfigTab === "mcp") setGlobalMcpOpen(true);
                   else setGlobalCreatePresetToken((value) => value + 1);
                 }
               : tab === "skills"
@@ -331,9 +325,11 @@ export function AgentSkillsView(): React.ReactElement {
       {/* 内容 */}
       <ViewBody width="standard" scroll>
         <div data-tour="agent-skills-panel" className="w-full">
-          {globalConfigOpen ? (
+          {globalConfigOpen && globalConfigTab === "mcp" ? (
+            <GlobalMcpPanel search={q} workspaces={workspaces.filter(w => !w.isDeleted)} open={globalMcpOpen} setOpen={setGlobalMcpOpen} />
+          ) : globalConfigOpen ? (
             <GlobalCapabilitiesView
-              initialTab={globalConfigTab}
+              initialTab={globalConfigTab === "presets" ? "presets" : "skills"}
               workspaceSlug={data.workspaceSlug}
               search={search}
               createSkillRequestToken={globalCreateSkillToken}
@@ -373,9 +369,12 @@ export function AgentSkillsView(): React.ReactElement {
               onPromote={(skill) => setPromoteSkill(skill)}
             />
           ) : (
+            <>
+            {summaries?.failed && <p role="alert">未能读取此工作区的全局 MCP。</p>}
+            <WorkspaceGlobalMcpList items={mcpList.global} />
             <McpTab
-              entries={serverEntries}
-              total={mcpCount}
+              entries={mcpList.local}
+              empty={summaries && !summaries.failed ? mcpList.empty : null}
               onOpen={(name, entry) => {
                 setEditingMcp({ name, entry });
                 setMcpSheetOpen(true);
@@ -387,6 +386,7 @@ export function AgentSkillsView(): React.ReactElement {
                 setMcpSheetOpen(true);
               }}
             />
+            </>
           )}
         </div>
       </ViewBody>
@@ -765,7 +765,7 @@ function SkillSection({
 
 interface McpTabProps {
   entries: Array<[string, McpServerEntry]>;
-  total: number;
+  empty: ReturnType<typeof workspaceMcpList>["empty"];
   onOpen: (name: string, entry: McpServerEntry) => void;
   onToggle: (name: string, enabled: boolean) => void;
   onRequestDelete: (name: string) => void;
@@ -774,17 +774,17 @@ interface McpTabProps {
 
 function McpTab({
   entries,
-  total,
+  empty,
   onOpen,
   onToggle,
   onRequestDelete,
   onAdd,
 }: McpTabProps): React.ReactElement {
-  if (total === 0) {
+  if (empty === "unconfigured") {
     return (
       <EmptyState
         icon={<Plus className="size-8 text-foreground/30" />}
-        title="还没有 MCP 服务器"
+        title="此工作区还没有 MCP 服务器"
         hint="点击右上角「添加服务器」开始，或在 Agent 模式下让 Profer 帮你查找并配置。"
         action={
           <button
@@ -799,7 +799,7 @@ function McpTab({
       />
     );
   }
-  if (entries.length === 0) {
+  if (empty === "unmatched") {
     return (
       <EmptyState
         icon={<Search className="size-8 text-foreground/30" />}

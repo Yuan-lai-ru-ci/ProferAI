@@ -843,31 +843,12 @@ export function applyAgentEvent(
       // 这避免了用户在后端尚未完成清理时就能发送新消息的竞态条件
       // 同时将未完成的工具活动标记为 done（兜底）
       //
-      // token 计数（inputTokens / 缓存 / outputTokens）默认只信任流式中每条 assistant
-      // 消息的 usage_update：单条模型调用的 input+缓存 ≈ 当轮完整 prompt = 当前真实上下文。
-      // SDK 的 result.usage 是整个 query 内所有模型调用的累计求和（cache_read 会被累加 N 次），
-      // 直接覆盖会让进度环虚高、冲破 100%（PR #821 修的正是这个问题）。
-      //
-      // 但 GLM-5.2 等走 Anthropic 兼容端点的渠道，流式 assistant 消息不携带 usage 字段，
-      // 真实值只在 result 中返回。若完全不用 result.usage，这些渠道的 ContextUsageBadge
-      // 永远停留在 inputTokens=0 不显示。
-      //
-      // 折中：仅当「整个 query 期间从未收到流式 usage_update」（prev.inputTokens 为空/0）
-      // 才从 result.usage 兜底写入 token 字段；已有流式真实值时不动。
-      // - contextWindow：始终覆盖（result 才是权威分母）
-      // - costUsd：始终覆盖（本就该是整轮累计成本）
-      const needResultFallback = !prev.inputTokens || prev.inputTokens <= 0
+      // result 是整轮累计，不能用作单次上下文占用；无流式用量时由会话快照兜底。
       return {
         ...prev,
         ...(event.usage ? {
           ...(event.usage.costUsd != null && { costUsd: event.usage.costUsd }),
           ...(event.usage.contextWindow != null && { contextWindow: event.usage.contextWindow }),
-          ...(event.usage.contextWindow != null && { usageUpdatedAt: Date.now() }),
-          ...(needResultFallback && event.usage.inputTokens != null && { inputTokens: event.usage.inputTokens }),
-          ...(needResultFallback && event.usage.outputTokens != null && { outputTokens: event.usage.outputTokens }),
-          ...(needResultFallback && event.usage.cacheReadTokens != null && { cacheReadTokens: event.usage.cacheReadTokens }),
-          ...(needResultFallback && event.usage.cacheCreationTokens != null && { cacheCreationTokens: event.usage.cacheCreationTokens }),
-          ...(needResultFallback && { usageUpdatedAt: Date.now() }),
         } : {}),
         retrying: preserveFailedRetry(prev),
         ...finalizeStreamingActivities(prev.toolActivities),
@@ -894,21 +875,21 @@ export function applyAgentEvent(
       return {
         ...prev,
         contextWindow: event.contextWindow,
-        usageUpdatedAt: Date.now(),
       }
 
     case 'usage_update':
+      if (event.usage.inputTokens == null || !Number.isSafeInteger(event.usage.inputTokens) || event.usage.inputTokens <= 0) return prev
       return {
         ...prev,
-        ...(event.usage.inputTokens != null && { inputTokens: event.usage.inputTokens }),
-        ...(event.usage.outputTokens != null && { outputTokens: event.usage.outputTokens }),
-        ...(event.usage.cacheReadTokens != null && { cacheReadTokens: event.usage.cacheReadTokens }),
-        ...(event.usage.cacheCreationTokens != null && { cacheCreationTokens: event.usage.cacheCreationTokens }),
+        inputTokens: event.usage.inputTokens,
+        outputTokens: event.usage.outputTokens,
+        cacheReadTokens: event.usage.cacheReadTokens,
+        cacheCreationTokens: event.usage.cacheCreationTokens,
         ...(event.usage.costUsd != null && { costUsd: event.usage.costUsd }),
         // 流式中 assistant 消息的 usage_update 可能携带推断的 contextWindow，
         // 若已有 result 消息提供的真实值，则不再覆盖
-        ...(event.usage.contextWindow && !prev.contextWindow && { contextWindow: event.usage.contextWindow }),
-        usageUpdatedAt: Date.now(),
+        contextWindow: event.snapshot ? event.snapshot.contextWindow : prev.contextWindow ?? event.usage.contextWindow,
+        usageUpdatedAt: event.snapshot ? event.snapshot.usageUpdatedAt : Date.now(),
       }
 
     case 'compacting':
@@ -918,7 +899,9 @@ export function applyAgentEvent(
       return { ...prev, isCompacting: true }
 
     case 'compact_complete':
-      return { ...prev, isCompacting: false }
+      // 压缩前的读数已经失效，重新读取宿主快照或等待下一次模型调用。
+      return { ...prev, isCompacting: false, inputTokens: undefined, outputTokens: undefined,
+        cacheReadTokens: undefined, cacheCreationTokens: undefined, usageUpdatedAt: undefined }
 
     case 'compact_failed':
       // 压缩失败/取消不会发 compact_boundary；同样必须释放压缩锁，

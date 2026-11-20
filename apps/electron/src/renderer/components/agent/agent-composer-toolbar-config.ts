@@ -10,7 +10,7 @@ export interface AgentComposerToolbarNodes {
   preset: ReactNode
   speech?: ReactNode
   attach: ReactNode
-  contextUsage: ReactNode
+  contextUsage?: ReactNode
   graph?: ReactNode
 }
 
@@ -30,7 +30,7 @@ export function createAgentComposerToolbarItems(input: AgentComposerToolbarNodes
     { key: 'preset', node: input.preset },
     ...(input.speech ? [{ key: 'speech', node: input.speech }] : []),
     { key: 'attach', node: input.attach },
-    { key: 'context-usage', node: input.contextUsage },
+    ...(input.contextUsage ? [{ key: 'context-usage', node: input.contextUsage }] : []),
     ...(input.graph ? [{ key: 'graph', node: input.graph }] : []),
   ], preferences)
 }

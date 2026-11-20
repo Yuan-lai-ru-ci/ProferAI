@@ -26,7 +26,7 @@ import {
   SettingsSelect,
   SettingsToggle,
 } from './primitives'
-import { mergeEntryWithExisting } from './mcp-form-entry'
+import { buildGlobalFormEntry, mergeEntryWithExisting } from './mcp-form-entry'
 
 /** 编辑中的服务器 */
 interface EditingServer {
@@ -34,11 +34,12 @@ interface EditingServer {
   entry: McpServerEntry
 }
 
-interface McpServerFormProps {
+type McpServerFormProps = ({ workspaceSlug: string; onGlobalSave?: never } | {
+  workspaceSlug?: never
+  onGlobalSave: (name: string, entry: McpServerEntry) => Promise<void>
+}) & {
   /** 编辑模式传入已有服务器，创建模式传 null */
   server: EditingServer | null
-  /** 当前工作区 slug */
-  workspaceSlug: string
   onSaved: () => void
   onChanged?: () => void
   onCancel: () => void
@@ -100,7 +101,7 @@ type TestResultView = McpTestOutcome & { timestamp?: number }
  */
 interface McpRuntimeBridge {
   testMcpServer: (name: string, entry: McpServerEntry, workspaceSlug?: string) => Promise<McpTestOutcome>
-  restartMcpServer?: (name: string) => Promise<McpServerRestartResult>
+  restartMcpServer?: (name: string, workspaceSlug: string) => Promise<McpServerRestartResult>
   getMcpConnectionStatus?: () => Promise<McpConnectionSnapshot[]>
 }
 
@@ -182,14 +183,15 @@ function buildEntryFromValues(values: McpFormValues, includeTestResult = false):
   return base
 }
 
-export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCancel }: McpServerFormProps): React.ReactElement {
+export function McpServerForm({ server, workspaceSlug, onGlobalSave, onSaved, onChanged, onCancel }: McpServerFormProps): React.ReactElement {
   const isEdit = server !== null
   const isBuiltin = server?.entry.isBuiltin === true
 
   // 表单状态
   const [name, setName] = React.useState(server?.name ?? '')
   const [transportType, setTransportType] = React.useState<McpTransportType>(server?.entry.type ?? 'stdio')
-  const [enabled, setEnabled] = React.useState(server?.entry.enabled ?? false) // 默认关闭
+  // 全局定义由显式勾选的工作区授权，空范围不加载；工作区本地创建保持原有默认关闭。
+  const [enabled, setEnabled] = React.useState(server?.entry.enabled ?? Boolean(onGlobalSave))
 
   // stdio 字段
   const [command, setCommand] = React.useState(server?.entry.command ?? '')
@@ -278,6 +280,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
 
   /** 执行自动保存 */
   const doSaveEntry = React.useCallback(async (serverName: string, entry: McpServerEntry) => {
+    if (!workspaceSlug) return
     const generation = ++saveGenerationRef.current
     try {
       const config = await window.electronAPI.getWorkspaceMcpConfig(workspaceSlug)
@@ -311,7 +314,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
 
   // 编辑模式下监听字段变化，防抖自动保存
   React.useEffect(() => {
-    if (!isEdit) return
+    if (!isEdit || !workspaceSlug) return
     // 首次渲染跳过，避免加载时触发 auto-save
     if (isFirstRenderRef.current) {
       isFirstRenderRef.current = false
@@ -334,7 +337,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
       }
     }
   }, [
-    isEdit,
+    isEdit, workspaceSlug,
     name,
     transportType,
     command,
@@ -367,7 +370,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
   /** 读取当前 server 的运行时连接快照；失败不阻塞表单 */
   const refreshConnectionStatus = React.useCallback(async (): Promise<void> => {
     const target = name.trim()
-    if (!target) {
+    if (!workspaceSlug || !target) {
       if (mountedRef.current) {
         setConnection(null)
         setStatusReady(true)
@@ -438,7 +441,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
   /** 重启常驻 MCP 连接（仅编辑态可用，仅作用于 Pi 运行时） */
   const handleRestart = async (): Promise<void> => {
     const serverName = name.trim()
-    if (!isEdit || !serverName) return
+    if (!workspaceSlug || !isEdit || !serverName) return
 
     const bridge = getMcpBridge()
     if (!bridge.restartMcpServer) {
@@ -449,7 +452,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
     setRestarting(true)
     setRestartResult(null)
     try {
-      const result = await bridge.restartMcpServer(serverName)
+      const result = await bridge.restartMcpServer(serverName, workspaceSlug)
       if (!mountedRef.current) return
       // 原样呈现主进程结果：`0 个连接` 必须如实显示，
       // 不能一律报「已重启」——Claude 会话没有常驻连接，点了本来就不会有变化。
@@ -469,7 +472,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
   /** 提交表单（仅创建模式） */
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
-    if (isEdit) return
+    if (isEdit && !onGlobalSave) return
 
     const serverName = name.trim()
     if (!serverName) return
@@ -485,9 +488,16 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
 
     setSaving(true)
     try {
+      const entry = buildEntry(true)
+      if (onGlobalSave) {
+        // 只改工作区范围时，不重新拆分已有参数中的逗号。
+        if (server?.entry.args && entry.type === 'stdio' && argsText === server.entry.args.join(', ')) entry.args = server.entry.args
+        await onGlobalSave(serverName, buildGlobalFormEntry(entry, server?.entry))
+        onSaved()
+        return
+      }
       // 读取现有配置
       const config = await window.electronAPI.getWorkspaceMcpConfig(workspaceSlug)
-      const entry = buildEntry(true) // 保存时包含测试结果
 
       // 日志记录实际保存的状态
       console.log(`[MCP 表单] 保存 MCP: ${serverName}, enabled: ${entry.enabled}, testResult: ${testResult?.success}`)
@@ -563,10 +573,10 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
             </span>
           </div>
         )}
-        {!isEdit && (
+        {(!isEdit || onGlobalSave) && (
           <Button size="sm" type="submit" disabled={saving || !canSubmit()}>
             {saving && <Loader2 size={14} className="animate-spin" />}
-            <span>创建服务器</span>
+            <span>{isEdit ? '保存修改' : '创建服务器'}</span>
           </Button>
         )}
       </div>
@@ -685,7 +695,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {isEdit && (
+                {isEdit && workspaceSlug && (
                   <Button
                     type="button"
                     variant="outline"
@@ -731,7 +741,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
             )}
 
             {/* Pi 运行时连接状态 */}
-            <div className="rounded-lg bg-muted/40 px-3 py-2.5 space-y-2">
+            {workspaceSlug && <div className="rounded-lg bg-muted/40 px-3 py-2.5 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <div className="text-sm font-medium text-foreground">Pi 运行时连接</div>
@@ -767,7 +777,7 @@ export function McpServerForm({ server, workspaceSlug, onSaved, onChanged, onCan
                   <span>该服务的配置文件已变更，当前进程仍在用旧配置，建议重启此服务</span>
                 </div>
               )}
-            </div>
+            </div>}
 
             {/* 测试结果显示 */}
             {testResult && (

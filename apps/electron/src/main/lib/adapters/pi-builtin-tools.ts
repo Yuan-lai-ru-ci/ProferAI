@@ -87,7 +87,7 @@ import { downloadInstaller, launchInstaller } from '../installer-downloader'
 import { fetchInstallerManifest, findInstallerSource } from '../installer-manifest'
 import { shouldOfferWindowsShellInstaller } from './windows-shell-installer'
 import { appendGraphEvent, queryNodeById } from '../project-graph-service'
-import { getWorkspaceMcpConfig, getWorkspaceMemoryArchivePath } from '../agent-workspace-manager'
+import { getEffectiveWorkspaceMcpConfig, getWorkspaceMemoryArchivePath } from '../agent-workspace-manager'
 import { searchGlobalMemory, readGlobalMemoryFile } from '../global-memory-service'
 import { appendGlobalMemoryEntry, GLOBAL_MEMORY_APPEND_DESCRIPTION, type GlobalMemoryEntry } from '../global-memory-operations'
 import {
@@ -138,6 +138,7 @@ export interface PiBuiltinToolsContext {
   agentRuntime?: AgentRuntime
   workspaceId?: string
   workspaceSlug?: string
+  allowedMcpServerNames?: readonly string[]
   permissionMode?: ProferPermissionMode
   triggeredBy?: 'user' | 'automation' | 'delegation' | 'goal'
   /** 当前 Agent 工作目录；用于解析生图产物、参考图和本地网页预览的相对路径。 */
@@ -1458,15 +1459,21 @@ function buildPiClipboardTools(sdk: PiSdk): ToolDefinition[] {
  */
 export function buildPiMcpAdminTools(
   sdk: PiSdk,
-  ctx: Pick<PiBuiltinToolsContext, 'workspaceSlug'>,
+  ctx: Pick<PiBuiltinToolsContext, 'workspaceSlug' | 'allowedMcpServerNames'>,
+  deps: {
+    readConfig: (slug: string) => { servers?: Record<string, { type?: string; enabled?: boolean }> }
+    snapshots: typeof listMcpConnectionSnapshots
+    restart: typeof restartMcpServer
+  } = { readConfig: getEffectiveWorkspaceMcpConfig, snapshots: listMcpConnectionSnapshots, restart: restartMcpServer },
 ): ToolDefinition[] {
   const workspaceSlug = ctx.workspaceSlug
 
-  /** 工作区缺失或配置损坏时按「无配置」处理，不能因此让连接快照也查不到 */
+  /** 只接受当前有效配置；历史连接不构成授权 */
   const readConfigured = (): Record<string, { type?: string; enabled?: boolean }> => {
     if (!workspaceSlug) return {}
     try {
-      return getWorkspaceMcpConfig(workspaceSlug).servers ?? {}
+      return Object.fromEntries(Object.entries(deps.readConfig(workspaceSlug).servers ?? {})
+        .filter(([name]) => !ctx.allowedMcpServerNames || ctx.allowedMcpServerNames.includes(name)))
     } catch (error) {
       console.warn('[Pi MCP] 读取工作区 MCP 配置失败，按无配置处理:', error)
       return {}
@@ -1474,8 +1481,8 @@ export function buildPiMcpAdminTools(
   }
 
   /** 只读本工作区的连接，避免把其它工作区的 server 名、pid 泄露给当前会话 */
-  const readSnapshots = () => listMcpConnectionSnapshots()
-    .filter((snapshot) => !workspaceSlug || snapshot.workspaceSlug === workspaceSlug)
+  const readSnapshots = () => !workspaceSlug ? [] : deps.snapshots()
+    .filter((snapshot) => snapshot.workspaceSlug === workspaceSlug)
 
   return [
     sdk.defineTool({
@@ -1487,7 +1494,7 @@ export function buildPiMcpAdminTools(
         const configured = readConfigured()
         const snapshots = readSnapshots()
         const byName = new Map(snapshots.map((snapshot) => [snapshot.serverName, snapshot]))
-        const names = [...new Set([...Object.keys(configured), ...byName.keys()])].sort()
+        const names = Object.keys(configured).sort()
 
         const servers = names.map((name) => {
           const entry = configured[name]
@@ -1540,22 +1547,19 @@ export function buildPiMcpAdminTools(
           return jsonToolError(new Error('缺少 server 参数：需要传入 list_mcp_servers 返回的服务器名。'))
         }
 
-        const known = new Set([
-          ...Object.keys(readConfigured()),
-          ...readSnapshots().map((snapshot) => snapshot.serverName),
-        ])
-        if (known.size === 0) {
+        const known = new Set(Object.keys(readConfigured()))
+        if (!workspaceSlug || known.size === 0) {
           return jsonToolError(new Error('当前工作区没有配置任何用户 MCP 服务器，无需重启。'))
         }
         if (!known.has(server)) {
           return jsonToolError(new Error(`未找到 MCP 服务器「${server}」。可用：${[...known].sort().join('、')}`))
         }
 
-        const result = await restartMcpServer(server, workspaceSlug ? { workspaceSlug } : undefined)
+        const result = await deps.restart(server, { workspaceSlug })
         return jsonToolResult({
           server,
           ...result,
-          scope: workspaceSlug ?? 'all-workspaces',
+          scope: workspaceSlug,
           nextTurnRequired: true,
           note: '连接已关闭，下一次使用该服务的工具时会自动重建；本会话已加载的工具清单要到下一轮消息才更新。',
         })

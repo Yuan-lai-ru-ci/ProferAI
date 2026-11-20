@@ -82,7 +82,8 @@ interface OneMillionFamilyRule {
 }
 
 const ONE_MILLION_FAMILY_RULES: readonly OneMillionFamilyRule[] = [
-  // Claude：Sonnet 4+、Opus 4.6+、Fable 5+（Haiku 一律不支持，见提前返回）
+  // Claude：Haiku 5.5 起原生 1M，旧代 Haiku 仍为 200K。
+  { prefix: 'claude-haiku-', minVersion: '5.5' },
   { prefix: 'claude-sonnet-', minVersion: '4' },
   { prefix: 'claude-opus-', minVersion: '4.6' },
   { prefix: 'claude-fable-', minVersion: '5' },
@@ -99,8 +100,11 @@ const ONE_MILLION_FAMILY_RULES: readonly OneMillionFamilyRule[] = [
   { prefix: 'mimo-v', minVersion: '2.5', exact: ['mimo-v2-pro'] },
   // MiniMax：M3 及之后
   { prefix: 'minimax-m', minVersion: '3' },
-  // xAI：Grok 4.6 及之后
-  { prefix: 'grok-', minVersion: '4.6' },
+  // Google Gemini 4 / Qwen 4 的原生窗口；仅用于能力与 UI fallback，不擅自给端点追加后缀。
+  { prefix: 'gemini-', minVersion: '4' },
+  { prefix: 'qwen', minVersion: '4' },
+  // xAI：4.6 为 1M，4.7 已下调至 500K，不能继续继承旧窗口。
+  { prefix: 'grok-', minVersion: '4.6', exclude: (modelId) => modelId.startsWith('grok-4.7') },
 ]
 
 function matchesOneMillionFamilyRule(model: string, rule: OneMillionFamilyRule): boolean {
@@ -123,7 +127,7 @@ function matchesOneMillionFamilyRule(model: string, rule: OneMillionFamilyRule):
  */
 export function isNextGeneration1MContextModel(modelId?: string): boolean {
   const model = normalizeContextModelId(modelId)
-  if (!model || model.includes('haiku')) return false
+  if (!model) return false
   // Kimi K3 短 ID（精确匹配，避免误匹配其他含 "k3" 子串的模型名）
   if (model === KIMI_K3_SHORT_MODEL_ID || model.startsWith(`${KIMI_K3_SHORT_MODEL_ID}[`)) return true
   return ONE_MILLION_FAMILY_RULES.some((rule) => matchesOneMillionFamilyRule(model, rule))
@@ -135,9 +139,9 @@ export function isNextGeneration1MContextModel(modelId?: string): boolean {
  * 采用「代际默认」规则（见 ONE_MILLION_FAMILY_RULES）：DeepSeek V4 这一代及之后的
  * 模型家族都按 1M 处理，家族新版本自动继承，不再逐个 SKU 维护白名单。
  *
- * 当前覆盖：Claude Sonnet 4+ / Opus 4.6+ / Fable 5、GPT-5.4+（mini 除外）、
+ * 当前覆盖：Claude Sonnet 4+ / Opus 4.6+ / Fable 5 / Haiku 5.5+、GPT-5.4+（mini 除外）、
  * DeepSeek V4+（含官方无版本号短名 deepseek-flash / deepseek-pro，以及旧的 deepseek-v4-flash 写法）、Kimi K3+、
- * 智谱 GLM-5.2+、小米 MiMo V2.5+（含已确认的 V2 Pro）、MiniMax M3+、Grok 4.6+，
+ * 智谱 GLM-5.2+、小米 MiMo V2.5+（含已确认的 V2 Pro）、MiniMax M3+、Gemini 4 / Qwen 4、Grok 4.6（4.7 为 500K），
  * 以及显式声明 `[1m]` 的 GLM-X-Preview。
  *
  * 参考：https://docs.anthropic.com/en/docs/build-with-claude/context-windows
@@ -145,7 +149,7 @@ export function isNextGeneration1MContextModel(modelId?: string): boolean {
 export function supports1MContext(modelId: string): boolean {
   if (!modelId) return false
   const m = normalizeContextModelId(modelId)
-  if (!m || m.includes('haiku')) return false
+  if (!m) return false
   // 未知兼容网关可用显式 `[1m]` 后缀声明 1M（如 GLM-X-Preview[1m]）
   if (/\[1m\]$/i.test(modelId.trim()) && m.includes('glm-x-preview')) return true
   return isNextGeneration1MContextModel(m)
@@ -180,6 +184,8 @@ export function inferContextWindow(model?: string): number | undefined {
     return normalized === GPT_54_MINI_MODEL_ID ? CODEX_GPT_54_MINI_CONTEXT_WINDOW : DEFAULT_CONTEXT_WINDOW
   }
   if (isCodexGenerationGptModel(normalized)) return CODEX_GPT_CONTEXT_WINDOW
+  if (normalized.startsWith('gemini-4-')) return 1_048_576
+  if (/^grok-4\.7(?:-|$)/.test(normalized)) return 500_000
   if (supports1MContext(model)) return ONE_MILLION_CONTEXT_WINDOW
   return DEFAULT_CONTEXT_WINDOW
 }
@@ -192,7 +198,7 @@ export function inferContextWindow(model?: string): number | undefined {
  * 不会仅凭模型名被追加后缀。
  */
 const AGENT_SDK_1M_PROVIDER_FAMILIES: Partial<Record<ProviderType, readonly string[]>> = {
-  anthropic: ['claude-sonnet-', 'claude-opus-', 'claude-fable-'],
+  anthropic: ['claude-sonnet-', 'claude-opus-', 'claude-fable-', 'claude-haiku-'],
   deepseek: ['deepseek-v', ...DEEPSEEK_SHORT_MODEL_NAMES],
   'kimi-api': ['kimi-k', KIMI_K3_SHORT_MODEL_ID],
   'kimi-coding': ['kimi-k', KIMI_K3_SHORT_MODEL_ID],

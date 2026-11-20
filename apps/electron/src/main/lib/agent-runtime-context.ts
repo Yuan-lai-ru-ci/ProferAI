@@ -18,6 +18,10 @@ export class AgentRuntimeContextStore {
     this.snapshots.set(sessionId, { sessionId, contextWindow, updatedAt })
   }
 
+  get(sessionId: string): AgentRuntimeContextSnapshot | undefined {
+    return this.snapshots.get(sessionId)
+  }
+
   clear(sessionId: string): void {
     this.snapshots.delete(sessionId)
   }

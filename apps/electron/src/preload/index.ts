@@ -54,6 +54,7 @@ import type {
   ReasoningCapability,
   SDKMessage,
   AgentSendInput,
+  AgentContextUsageSnapshot,
   AgentStreamEvent,
   AgentStreamCompletePayload,
   AgentRuntimeRestoreSnapshot,
@@ -73,6 +74,8 @@ import type {
   GetTaskOutputResult,
   StopTaskInput,
   WorkspaceMcpConfig,
+  GlobalMcpDefinition,
+  WorkspaceGlobalMcpSummary,
   SkillMeta,
   OtherWorkspaceSkillsGroup,
   OtherWorkspacePresetsGroup,
@@ -831,6 +834,9 @@ export interface ElectronAPI {
   /** 为项目创建或复用隐藏的 Agent 草稿会话 */
   ensureProjectDraftAgentSession: (workspaceId: string, channelId?: string, modelId?: string) => Promise<AgentSessionMeta>
 
+  /** 上下文圆环的上次读数；没有可靠记录则为 null。 */
+  getAgentContextUsageSnapshot: (id: string) => Promise<AgentContextUsageSnapshot | null>
+
   /** 获取 Agent 会话 SDKMessage（Phase 4 新格式）。传 opts.tail/before 时返回分页结果 */
   getAgentSessionSDKMessages: {
     (id: string): Promise<SDKMessage[]>
@@ -982,6 +988,11 @@ export interface ElectronAPI {
   /** 获取工作区 MCP 配置 */
   getWorkspaceMcpConfig: (workspaceSlug: string) => Promise<WorkspaceMcpConfig>
 
+  listGlobalMcpServers: () => Promise<GlobalMcpDefinition[]>
+  saveGlobalMcpServer: (definition: GlobalMcpDefinition, mode: 'create' | 'update') => Promise<void>
+  deleteGlobalMcpServer: (name: string) => Promise<void>
+  listWorkspaceGlobalMcpServers: (workspaceSlug: string) => Promise<WorkspaceGlobalMcpSummary[]>
+
   /** 保存工作区 MCP 配置 */
   saveWorkspaceMcpConfig: (workspaceSlug: string, config: WorkspaceMcpConfig) => Promise<void>
 
@@ -989,7 +1000,7 @@ export interface ElectronAPI {
   testMcpServer: (name: string, entry: import('@profer/shared').McpServerEntry, workspaceSlug?: string) => Promise<{ success: boolean; message: string; reason?: import('@profer/shared').McpProbeFailureReason; tools?: import('@profer/shared').McpToolSummary[] }>
 
   /** 重启单个 MCP server 的常驻连接（Pi runtime） */
-  restartMcpServer: (name: string) => Promise<import('@profer/shared').McpServerRestartResult>
+  restartMcpServer: (name: string, workspaceSlug: string) => Promise<import('@profer/shared').McpServerRestartResult>
 
   /** 获取当前 MCP 连接快照（不含凭据） */
   getMcpConnectionStatus: () => Promise<import('@profer/shared').McpConnectionSnapshot[]>
@@ -2594,6 +2605,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SDK_MESSAGES, id, opts)
   },
 
+  getAgentContextUsageSnapshot: (id: string) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_CONTEXT_USAGE_SNAPSHOT, id),
+
   getAgentNavigationIndex: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_NAVIGATION_INDEX, id)
   },
@@ -2802,6 +2815,11 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_CAPABILITIES, workspaceSlug)
   },
 
+  listGlobalMcpServers: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_GLOBAL_MCP),
+  saveGlobalMcpServer: (definition, mode) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SAVE_GLOBAL_MCP, definition, mode),
+  deleteGlobalMcpServer: (name) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_GLOBAL_MCP, name),
+  listWorkspaceGlobalMcpServers: (workspaceSlug) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_WORKSPACE_GLOBAL_MCP, workspaceSlug),
+
   getWorkspaceMcpConfig: (workspaceSlug: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_MCP_CONFIG, workspaceSlug)
   },
@@ -2814,8 +2832,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TEST_MCP_SERVER, name, entry, workspaceSlug) as Promise<{ success: boolean; message: string; reason?: import('@profer/shared').McpProbeFailureReason; tools?: import('@profer/shared').McpToolSummary[] }>
   },
 
-  restartMcpServer: (name: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTART_MCP_SERVER, name) as Promise<import('@profer/shared').McpServerRestartResult>
+  restartMcpServer: (name: string, workspaceSlug: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTART_MCP_SERVER, name, workspaceSlug) as Promise<import('@profer/shared').McpServerRestartResult>
   },
 
   getMcpConnectionStatus: () => {

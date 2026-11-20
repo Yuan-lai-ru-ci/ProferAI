@@ -63,7 +63,7 @@ mock.module('./agent-workspace-manager', () => ({
   getAgentWorkspace: (id: string) => id === 'workspace-1' ? { id, slug: 'fixture-workspace' } : undefined,
   readWorkspaceProfile: () => ({ content: 'project instructions', relativePath: 'workspace-profile.md', isText: true, size: 20 }),
   getWorkspaceSkills: () => [{ slug: 'skill-a', enabled: true }, { slug: 'skill-disabled', enabled: false }],
-  getWorkspaceMcpConfig: () => ({ servers: { fixture: { enabled: true, command: 'fixture' }, disabled: { enabled: false, command: 'disabled' } } }),
+  getEffectiveWorkspaceMcpConfig: () => ({ servers: { fixture: { enabled: true, command: 'fixture' }, disabled: { enabled: false, command: 'disabled' } } }),
   getWorkspaceMemoryArchivePath: (slug: string) => `/fixture/${slug}/.context/memory-archive`,
   // provider preparation 在 project 模式下用它与 settings 文件同值下发 autoMemoryDirectory。
   getWorkspaceAutoMemoryDir: (slug: string) => `/fixture/${slug}/.profer/memory`,

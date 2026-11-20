@@ -170,12 +170,12 @@ type PiRetrySettings = {
 /**
  * Pi SDK 原生重试按 provider 隔离。
  *
- * Ollama 的兼容层可能在一次工具结果续请求失败后再次提交同一份上下文；
- * 这类重试应交给 Profer 编排层统一判断，否则会绕过 Ollama 特判并在用户看来
+ * Ollama 等本地兼容层可能在一次工具结果续请求失败后再次提交同一份上下文；
+ * 这类重试应交给 Profer 编排层统一判断，否则会绕过本地特判并在用户看来
  * "一发就开始重试"。GPT 等其他渠道继续保留 Pi 原生断流重试。
  */
 export function buildPiRetrySettings(provider: ProviderType): PiRetrySettings {
-  if (provider === 'ollama') return { enabled: false }
+  if (provider === 'ollama' || provider === 'local') return { enabled: false }
   return {
     enabled: true,
     maxRetries: PI_NATIVE_MAX_RETRIES,

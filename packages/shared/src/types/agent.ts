@@ -545,6 +545,14 @@ export interface AgentEventUsage {
   contextWindow?: number
 }
 
+/** 圆环最近一次有效读数；inputTokens 包含缓存读写，不是整轮累计用量。 */
+export interface AgentContextUsageSnapshot extends Omit<AgentEventUsage, 'costUsd' | 'inputTokens'> {
+  inputTokens: number
+  /** 实际读数的时间；旧记录没有可信时间时留空，不能用打开时间代替。 */
+  usageUpdatedAt?: number
+  model?: string
+}
+
 /** SDK 子任务 / SubAgent 用量统计 */
 export interface TaskUsage {
   /** 总 Token 数 */
@@ -674,7 +682,7 @@ export type AgentEvent =
   | { type: 'retry_cleared' }  // 新增：重试成功，清除状态
   | { type: 'retry_failed'; finalAttempt: RetryAttempt }  // 新增：重试失败
   // Usage 更新
-  | { type: 'usage_update'; usage: AgentEventUsage }
+  | { type: 'usage_update'; usage: AgentEventUsage; snapshot?: AgentContextUsageSnapshot }
   // 主端/SDK 确认的会话级上下文窗口；必须可覆盖模型名推断的临时 fallback。
   | { type: 'context_window'; contextWindow: number }
   // 上下文压缩
@@ -851,7 +859,7 @@ export type AgentSessionProjectionPayload =
 
 /** IPC 传输的统一 payload（替代 AgentEvent）；kind 是唯一分流依据 */
 export type AgentStreamPayload =
-  | { kind: 'sdk_message'; message: SDKMessage }
+  | { kind: 'sdk_message'; message: SDKMessage; contextUsage?: AgentContextUsageSnapshot }
   | { kind: 'profer_event'; event: ProferEvent }
   | { kind: 'run_error'; error: string }
   | { kind: 'run_complete'; completion: AgentStreamCompletePayload }
@@ -1318,6 +1326,20 @@ export interface McpServerRestartResult {
 /** 工作区 MCP 配置文件 */
 export interface WorkspaceMcpConfig {
   servers: Record<string, McpServerEntry>
+}
+
+/** 用户级定义仅存本机；空引用列表表示不自动启用到任何工作区。 */
+export interface GlobalMcpDefinition {
+  name: string
+  entry: McpServerEntry
+  workspaceIds: string[]
+}
+
+/** 工作区设置页使用无凭据摘要，不能拿它写回本地 mcp.json。 */
+export interface WorkspaceGlobalMcpSummary {
+  name: string
+  enabled: boolean
+  shadowed: boolean
 }
 
 // ===== Skill 元数据 =====
@@ -2469,6 +2491,7 @@ export const AGENT_IPC_CHANNELS = {
   ENSURE_PROJECT_DRAFT_SESSION: 'agent:ensure-project-draft-session',
   /** 获取会话 SDKMessage（Phase 4 新格式） */
   GET_SDK_MESSAGES: 'agent:get-sdk-messages',
+  GET_CONTEXT_USAGE_SNAPSHOT: 'agent:get-context-usage-snapshot',
   /** 获取会话「消息导航」的全量轮次索引（一轮一行，覆盖整个会话；只读） */
   GET_NAVIGATION_INDEX: 'agent:get-navigation-index',
   /** 列出当前会话已持久化的图片生成独立时间线卡片 */
@@ -2665,6 +2688,10 @@ export const AGENT_IPC_CHANNELS = {
   GET_CAPABILITIES: 'agent:get-capabilities',
   /** 获取工作区 MCP 配置 */
   GET_MCP_CONFIG: 'agent:get-mcp-config',
+  LIST_GLOBAL_MCP: 'agent:list-global-mcp',
+  SAVE_GLOBAL_MCP: 'agent:save-global-mcp',
+  DELETE_GLOBAL_MCP: 'agent:delete-global-mcp',
+  LIST_WORKSPACE_GLOBAL_MCP: 'agent:list-workspace-global-mcp',
   /** 保存工作区 MCP 配置 */
   SAVE_MCP_CONFIG: 'agent:save-mcp-config',
   /** 测试 MCP 服务器连接 */

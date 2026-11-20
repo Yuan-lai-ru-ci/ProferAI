@@ -391,10 +391,10 @@ class PiMcpClientManager {
   }
 
   /** 关闭 serverName 不在 activeServerNames 里的连接（禁用/删除即断开）。 */
-  async reconcile(activeServerNames: readonly string[]): Promise<void> {
+  async reconcile(activeServerNames: readonly string[], workspaceSlug?: string): Promise<void> {
     const active = new Set(activeServerNames)
     const stale = [...this.connections.entries()]
-      .filter(([, slot]) => !active.has(slot.serverName))
+      .filter(([, slot]) => (workspaceSlug === undefined || slot.workspaceSlug === workspaceSlug) && !active.has(slot.serverName))
       .map(([key]) => key)
     await Promise.all(stale.map((key) => this.closeSlot(key, 'server 已禁用或删除')))
   }
@@ -420,11 +420,12 @@ class PiMcpClientManager {
    */
   async closeStaleExternalState(
     externalStatePaths: Record<string, string[]> | undefined,
+    workspaceSlug?: string,
   ): Promise<string[]> {
     const targets: Array<{ key: string; serverName: string }> = []
     for (const [key, slot] of this.connections.entries()) {
       const conn = slot.connection
-      if (!conn) continue
+      if (!conn || slot.workspaceSlug !== workspaceSlug) continue
       // 当前配置里的路径优先；连接上记录的是建立时的快照，可能已过期
       const paths = externalStatePaths?.[conn.serverName] ?? conn.externalStatePaths
       if (!isExternalStateStale(paths, conn.connectedAt)) continue
@@ -702,9 +703,10 @@ export async function discoverExternalMcpTools(mcpServers: PiMcpServers, options
  */
 export async function refreshStaleMcpConnections(
   externalStatePaths?: Record<string, string[]>,
+  workspaceSlug?: string,
 ): Promise<string[]> {
   try {
-    return await manager.closeStaleExternalState(externalStatePaths)
+    return await manager.closeStaleExternalState(externalStatePaths, workspaceSlug)
   } catch (error) {
     console.warn('[Pi MCP] 重建外部配置已变更的连接失败（忽略）:', error)
     return []
@@ -714,7 +716,7 @@ export async function refreshStaleMcpConnections(
 export async function buildPiMcpTools(mcpServers: PiMcpServers, policy?: EffectiveAgentPresetPolicy, options?: PiMcpBridgeOptions): Promise<ToolDefinition[]> {
   // 外部配置文件（如 server 自己的 TOML）改了不会改变 mcpServers 的配置 hash，
   // 必须在这里主动淘汰旧连接，否则整轮会话都在用旧配置且没有任何提示。
-  await refreshStaleMcpConnections(options?.externalStatePaths)
+  await refreshStaleMcpConnections(options?.externalStatePaths, options?.workspaceSlug)
   const tools: ToolDefinition[] = []
   const seenToolNames = new Set<string>()
   for (const { serverName, config, tool } of await discoverExternalMcpTools(Object.fromEntries(Object.entries(mcpServers).filter(([name]) => !policy || isEffectiveAgentPresetMcpServerAllowed(policy, name))), options)) {
@@ -764,14 +766,14 @@ export async function restartMcpServer(serverName: string, scope?: McpRestartSco
 }
 
 /** 断开单个 MCP server 的所有连接；不清 disposed，下次调用会自动重连。 */
-export async function disconnectMcpServer(serverName: string): Promise<void> {
-  const closed = await manager.closeServer(serverName, '手动断开')
+export async function disconnectMcpServer(serverName: string, workspaceSlug?: string): Promise<void> {
+  const closed = await manager.closeServer(serverName, '手动断开', workspaceSlug)
   console.log(`[Pi MCP] 断开 MCP server ${serverName}：已关闭 ${closed} 个连接`)
 }
 
 /** 关闭 serverName 不在 activeServerNames 里的连接，用于禁用/删除 server 即断开。 */
-export async function reconcileMcpServers(activeServerNames: readonly string[]): Promise<void> {
-  await manager.reconcile(activeServerNames)
+export async function reconcileMcpServers(activeServerNames: readonly string[], workspaceSlug?: string): Promise<void> {
+  await manager.reconcile(activeServerNames, workspaceSlug)
 }
 
 /** 当前运行时连接快照（不含凭据）；只包含已建立完成的连接。 */

@@ -68,6 +68,22 @@ describe('OpenAIAdapter Ollama Chat', () => {
   })
 })
 
+describe('OpenAIAdapter 本地模型服务', () => {
+  test('根地址自动补 /v1，空 Key 使用本地哨兵', () => {
+    const request = new OpenAIAdapter('local').buildStreamRequest({
+      baseUrl: 'http://127.0.0.1:1234',
+      apiKey: '',
+      modelId: 'qwen3-8b',
+      history: [],
+      userMessage: '你好',
+      readImageAttachments: () => [],
+    })
+
+    expect(request.url).toBe('http://127.0.0.1:1234/v1/chat/completions')
+    expect(request.headers.Authorization).toBe('Bearer profer-local')
+  })
+})
+
 describe('OpenAIAdapter 流式 content 内容块', () => {
   test('Given 内容块数组 When 解析 Then 正文与思考分开且不出现 [object Object]', () => {
     const adapter = new OpenAIAdapter('custom')

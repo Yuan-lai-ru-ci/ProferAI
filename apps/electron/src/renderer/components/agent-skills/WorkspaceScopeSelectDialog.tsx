@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { Check, ArrowLeft, Trash2, Save } from 'lucide-react'
+import { WorkspaceMultiSelect } from './WorkspaceMultiSelect'
+import { ArrowLeft, Trash2, Save } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@profer/ui/primitives/dialog'
 import type { AgentWorkspace } from '@profer/shared'
@@ -17,7 +18,6 @@ interface Props {
 /** 提升能力的两步选择器：先选全局范围，再明确选择保留或删除当前工作区副本。 */
 export function WorkspaceScopeSelectDialog({ open, title, description, workspaces, initialWorkspaceSlug, onOpenChange, onConfirm }: Props): React.ReactElement {
   const [selected, setSelected] = React.useState<Set<string>>(new Set())
-  const [query, setQuery] = React.useState('')
   const [step, setStep] = React.useState<1 | 2>(1)
   const [keepWorkspaceCopy, setKeepWorkspaceCopy] = React.useState(true)
   const [busy, setBusy] = React.useState(false)
@@ -25,19 +25,11 @@ export function WorkspaceScopeSelectDialog({ open, title, description, workspace
   React.useEffect(() => {
     if (open) {
       setSelected(new Set(initialWorkspaceSlug ? [initialWorkspaceSlug] : []))
-      setQuery('')
       setStep(1)
       setKeepWorkspaceCopy(true)
     }
   }, [open, initialWorkspaceSlug])
 
-  const visible = workspaces.filter((workspace) => `${workspace.name} ${workspace.slug}`.toLowerCase().includes(query.trim().toLowerCase()))
-  const toggle = (slug: string): void => setSelected((previous) => {
-    const next = new Set(previous)
-    if (next.has(slug)) next.delete(slug)
-    else next.add(slug)
-    return next
-  })
   const confirm = async (): Promise<void> => {
     setBusy(true)
     try { await onConfirm([...selected], keepWorkspaceCopy) } finally { setBusy(false) }
@@ -51,11 +43,7 @@ export function WorkspaceScopeSelectDialog({ open, title, description, workspace
           <DialogDescription>{step === 1 ? description : '请选择是否保留当前工作区中的原能力。此选择会立即影响当前工作区。'}</DialogDescription>
         </DialogHeader>
         {step === 1 ? (
-          <div className="flex flex-col gap-3">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索工作区…" className="h-9 rounded-md border border-border bg-transparent px-3 text-sm outline-none focus:ring-1 focus:ring-ring" />
-            <div className="flex items-center justify-between text-xs text-muted-foreground"><span>已选择 {selected.size} 个工作区</span><div className="flex gap-2"><button type="button" onClick={() => setSelected((current) => new Set([...current, ...visible.map((workspace) => workspace.slug)]))} className="hover:text-foreground">全选</button><button type="button" onClick={() => setSelected(new Set())} className="hover:text-foreground">清空</button></div></div>
-            <div className="grid max-h-64 gap-1 overflow-y-auto rounded-md border border-border/60 p-1">{visible.map((workspace) => <button key={workspace.id} type="button" onClick={() => toggle(workspace.slug)} className="flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-accent"><span className="flex size-4 items-center justify-center rounded border border-border">{selected.has(workspace.slug) && <Check size={12} className="text-primary" />}</span><span className="truncate">{workspace.name}</span></button>)}{visible.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">没有匹配的工作区</p>}</div>
-          </div>
+          <WorkspaceMultiSelect workspaces={workspaces} valueKey="slug" values={[...selected]} onChange={values => setSelected(new Set(values))} />
         ) : (
           <div className="flex flex-col gap-3">
             <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border/60 p-3 hover:bg-accent/40"><input type="radio" name="promote-copy-policy" checked={keepWorkspaceCopy} onChange={() => setKeepWorkspaceCopy(true)} className="mt-0.5" /><span><span className="block text-sm font-medium">保留并关闭原工作区能力</span><span className="mt-1 block text-xs text-muted-foreground">原条目保留在原排序位置，但立即变为关闭状态。</span></span></label>

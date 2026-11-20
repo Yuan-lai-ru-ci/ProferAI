@@ -92,7 +92,7 @@ function cap(
   }
 }
 
-/** 23 个 ProviderType 的能力描述符表。键序与 PROVIDER_DEFAULT_URLS 对齐。 */
+/** 24 个 ProviderType 的能力描述符表。键序与 PROVIDER_DEFAULT_URLS 对齐。 */
 export const PROVIDER_CAPABILITIES: Readonly<Record<ProviderType, ProviderCapability>> = {
   anthropic: cap('anthropic', 'anthropic-messages', '/v1/messages', 'vendor-api'),
   'anthropic-compatible': cap('anthropic-compatible', 'anthropic-messages', '/v1/messages', 'manual'),
@@ -116,6 +116,10 @@ export const PROVIDER_CAPABILITIES: Readonly<Record<ProviderType, ProviderCapabi
   'openai-codex': cap('openai-codex', 'openai-responses', '', 'oauth-builtin', { supportsClaude: false }),
   xai: cap('xai', 'openai-responses', '/responses', 'vendor-api', { supportsClaude: false }),
   ollama: cap('ollama', 'anthropic-messages', '/v1/chat/completions', 'manual', { protocolVariesByEndpoint: true }),
+  // 本地 OpenAI 兼容服务：Chat 与 Pi 统一走 /v1/chat/completions；
+  // 服务根地址（无 /v1）由 URL 层按本地约定补全。Claude 需服务自身提供
+  // Anthropic 兼容入口，因此这里不默认给 Claude 内核。
+  local: cap('local', 'openai-completions', '/chat/completions', 'vendor-api', { supportsClaude: false }),
   custom: cap('custom', 'openai-completions', '/chat/completions', 'manual', { supportsClaude: false }),
 }
 

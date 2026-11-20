@@ -137,6 +137,11 @@ describe('Pi runtime 智谱团队版认证', () => {
     expect(resolvePiApiKey('ollama', '  ')).toBe('ollama')
   })
 
+  test('Given 本地 OpenAI 兼容服务 When resolving empty key Then use local sentinel', () => {
+    expect(resolvePiApiKey('local', '  ')).toBe('profer-local')
+    expect(resolvePiApiKey('local', 'sk-unsloth-fixture')).toBe('sk-unsloth-fixture')
+  })
+
   test('Given local Ollama Agent When building headers Then use local sentinel Bearer without User-Agent requirement', () => {
     const headers = buildPiRequestHeaders('ollama', 'ollama', 'http://127.0.0.1:11434')
     expect(headers?.Authorization).toBe('Bearer ollama')
@@ -325,6 +330,26 @@ describe('Pi runtime Ollama 双协议注册', () => {
 
     expect(result.model.api).toBe('openai-completions')
     expect(result.model.baseUrl).toBe('https://ollama.example.com/v1')
+  })
+
+  test('Given 本地 OpenAI 兼容服务只填服务根 When buildModel Then 自动补 /v1', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-local-root',
+      prompt: 'hi',
+      apiKey: '',
+      provider: 'local',
+      baseUrl: 'http://127.0.0.1:1234',
+      model: 'qwen3-8b',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.api).toBe('openai-completions')
+    expect(result.model.baseUrl).toBe('http://127.0.0.1:1234/v1')
+    expect(result.model.id).toBe('qwen3-8b')
   })
 })
 
@@ -599,7 +624,7 @@ describe('Pi runtime DeepSeek 双协议端点判定', () => {
 })
 
 describe('Pi runtime Claude adaptive thinking metadata', () => {
-  test('Given Claude Haiku 5.5 on an Anthropic channel When registered Then forces adaptive thinking and omits disabled thinking', async () => {
+  test('Given Claude Haiku 5.5 on an Anthropic channel When registered Then forces adaptive thinking and allows disabled at the default effort', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')
     const result = await buildModel(sdk, {
       sessionId: 'session-claude-haiku-5-5',
@@ -616,8 +641,9 @@ describe('Pi runtime Claude adaptive thinking metadata', () => {
 
     expect(result.model.api).toBe('anthropic-messages')
     expect(result.model.compat).toMatchObject({ forceAdaptiveThinking: true })
-    // off=null 让 Pi 省略 thinking 字段，而不是发送这些模型不接受的 disabled。
-    expect(result.model.thinkingLevelMap).toMatchObject({ off: null, low: 'low', high: 'high', max: 'max' })
+    // Haiku 5.5 在 high 及以下可 disabled，xhigh 是独立原生档位。
+    expect(result.model.thinkingLevelMap).toMatchObject({ low: 'low', high: 'high', xhigh: 'xhigh', max: 'max' })
+    expect(result.model.thinkingLevelMap?.off).toBeUndefined()
   })
 
   test('Given Claude Haiku 4.5 When registered Then keeps the legacy manual thinking path', async () => {
@@ -716,7 +742,7 @@ describe('Pi runtime Kimi 模型数据补齐', () => {
 
     expect(result.model.contextWindow).toBe(1_048_576)
     expect(result.model.maxTokens).toBe(131_072)
-    expect(result.model.cost).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 })
+    expect(result.model.cost).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 })
     expect(result.model.input).toEqual(['text', 'image'])
     // K3 代际思考始终开启，只暴露 low / high / max。
     expect(result.model.thinkingLevelMap).toMatchObject({ off: null, low: 'low', high: 'high', max: 'max' })

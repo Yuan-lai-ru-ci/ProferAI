@@ -41,8 +41,8 @@ export function resolvePiThinkingLevel(
   // 已关闭则直接返回，无需再判断 provider 能力
   if (baseLevel === 'off') return 'off'
 
-  // 无 reasoning 协议的 provider（如 google）无法产出思考块，回退 off。
-  // 其它 provider 的具体档位兼容由 Pi SDK 按模型 catalog 元数据 clamp。
+  // 无 reasoning 协议的 provider 无法产出思考块，回退 off。
+  // Google 等支持的 provider 由 Pi 按模型 catalog/profile 收窄具体档位。
   if (!supportsReasoningLevel(provider)) return 'off'
 
   return baseLevel

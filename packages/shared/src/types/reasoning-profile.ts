@@ -1,6 +1,7 @@
 import type { AgentRuntimeMode, ProviderType, XaiApiProtocol } from './channel'
 import type { AgentThinkingLevel } from './agent'
 import type { ReasoningModelTag } from './reasoning-model-tag'
+import { normalizeModelIdTail } from './deepseek-model-alias'
 import { resolveReasoningModelTag } from './reasoning-model-tag'
 import { resolveProviderNativeProtocol } from './provider-capability'
 
@@ -13,6 +14,7 @@ export type ReasoningTransport =
   | 'anthropic-messages'
   | 'openai-completions'
   | 'openai-responses'
+  | 'google-generative-ai'
   | 'mistral-conversations'
   | 'other'
 
@@ -38,7 +40,7 @@ export function inferReasoningTransport(
     case 'openai-responses':
       return 'openai-responses'
     case 'google-generative-ai':
-      return 'other'
+      return 'google-generative-ai'
     case 'mistral-conversations':
       // Mistral 原生协议有自己的推理字段（prompt_mode / reasoning_effort），
       // 由 Pi 的 mistral-conversations 适配器编码，必须单独成一个 transport：
@@ -68,7 +70,7 @@ export interface ReasoningEncoding {
 }
 
 export interface ReasoningProfile {
-  id: 'deepseek-v4-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'kimi-k2.6-toggle' | 'kimi-k2.7-always-on' | 'glm-5.2' | 'glm-5.3' | 'glm-legacy-toggle' | 'grok-4.3' | 'grok-4.5' | 'grok-4.6' | 'qwen-3.8' | 'qwen-toggle' | 'mimo-toggle' | 'mistral-reasoning-toggle' | 'mistral-effort' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-gpt6' | 'claude-adaptive'
+  id: 'deepseek-v4-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'kimi-k2.6-toggle' | 'kimi-k2.7-always-on' | 'glm-5.2' | 'glm-5.3' | 'glm-legacy-toggle' | 'grok-4.3' | 'grok-4.5' | 'grok-4.6' | 'qwen-3.8' | 'qwen-4' | 'google-gemini-4' | 'minimax-m3.1-flash' | 'qwen-toggle' | 'mimo-toggle' | 'mistral-reasoning-toggle' | 'mistral-effort' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-gpt6' | 'claude-adaptive'
   levels: readonly AgentThinkingLevel[]
   defaultLevel: AgentThinkingLevel
   normalize(level: AgentThinkingLevel | undefined): AgentThinkingLevel
@@ -122,6 +124,10 @@ const GLM_52_LEVELS = ['off', 'high', 'max'] as const satisfies readonly AgentTh
 // GLM-5.3 起思考强制开启，官方 reasoning_effort 为 low/high/max。
 const GLM_53_LEVELS = ['low', 'high', 'max'] as const satisfies readonly AgentThinkingLevel[]
 const QWEN_38_LEVELS = ['low', 'medium', 'high'] as const satisfies readonly AgentThinkingLevel[]
+const GEMINI_4_LEVELS = ['low', 'medium', 'high'] as const satisfies readonly AgentThinkingLevel[]
+const GEMINI_4_HYDROGEN_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const satisfies readonly AgentThinkingLevel[]
+const QWEN_4_LEVELS = ['off', 'low', 'medium', 'high'] as const satisfies readonly AgentThinkingLevel[]
+const QWEN_4_PREVIEW_LEVELS = ['low', 'medium', 'high'] as const satisfies readonly AgentThinkingLevel[]
 // 只有 thinking 开关的家族（MiMo / 旧 GLM / Qwen3.x / Kimi K2.6）共用的两档。
 const TOGGLE_LEVELS = ['off', 'high'] as const satisfies readonly AgentThinkingLevel[]
 const OPENAI_STANDARD_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh'] as const satisfies readonly AgentThinkingLevel[]
@@ -213,6 +219,37 @@ const THINKING_ALWAYS_ON_LEVEL_MAP: ReasoningEffortMap = {
 const QWEN_38_EFFORT_MAP: ReasoningEffortMap = {
   off: null,
   minimal: 'low',
+  low: 'low',
+  medium: 'medium',
+  high: 'xhigh',
+  xhigh: 'xhigh',
+  max: 'xhigh',
+}
+const GEMINI_4_EFFORT_MAP: ReasoningEffortMap = {
+  off: null,
+  minimal: null,
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: null,
+  max: null,
+}
+const GEMINI_4_HYDROGEN_EFFORT_MAP: ReasoningEffortMap = {
+  ...GEMINI_4_EFFORT_MAP,
+  xhigh: 'xhigh',
+}
+const QWEN_4_EFFORT_MAP: ReasoningEffortMap = {
+  // off 必须缺省：Pi 用 null 禁止该档，而不是表示关闭思考。
+  minimal: 'low',
+  low: 'low',
+  medium: 'high',
+  high: 'xhigh',
+  xhigh: 'xhigh',
+  max: 'xhigh',
+}
+const QWEN_4_PREVIEW_EFFORT_MAP: ReasoningEffortMap = {
+  off: null,
+  minimal: null,
   low: 'low',
   medium: 'medium',
   high: 'xhigh',
@@ -437,6 +474,49 @@ const QWEN_38_PROFILE: ReasoningProfile = {
   },
 }
 
+const GEMINI_4_PROFILE: ReasoningProfile = {
+  id: 'google-gemini-4',
+  levels: GEMINI_4_LEVELS,
+  defaultLevel: 'medium',
+  normalize: (level) => level === undefined ? 'medium' : normalizeQwen38Level(level),
+  encodings: {
+    'google-generative-ai': { kind: 'provider-toggle', effortMap: GEMINI_4_EFFORT_MAP },
+  },
+}
+
+const GEMINI_4_HYDROGEN_PROFILE: ReasoningProfile = {
+  id: 'google-gemini-4',
+  levels: GEMINI_4_HYDROGEN_LEVELS,
+  defaultLevel: 'high',
+  normalize: (level) => level === 'xhigh' || level === 'max' ? 'xhigh' : normalizeQwen38Level(level),
+  encodings: {
+    'google-generative-ai': { kind: 'provider-toggle', effortMap: GEMINI_4_HYDROGEN_EFFORT_MAP },
+  },
+}
+
+const QWEN_4_PROFILE: ReasoningProfile = {
+  id: 'qwen-4',
+  levels: QWEN_4_LEVELS,
+  defaultLevel: 'medium',
+  normalize: (level) => level === 'off' ? 'off' : level === undefined ? 'medium' : normalizeQwen38Level(level),
+  encodings: {
+    'openai-completions': { kind: 'qwen-thinking-effort', effortMap: QWEN_4_EFFORT_MAP },
+    // Pi 的请求补丁按精确 Qwen4 ID 转成 enabled + output_config.effort，而非 Claude adaptive。
+    'anthropic-messages': { kind: 'adaptive-effort', effortMap: QWEN_4_EFFORT_MAP },
+  },
+}
+
+const QWEN_4_PREVIEW_PROFILE: ReasoningProfile = {
+  id: 'qwen-4',
+  levels: QWEN_4_PREVIEW_LEVELS,
+  defaultLevel: 'high',
+  normalize: normalizeQwen38Level,
+  encodings: {
+    'openai-completions': { kind: 'qwen-thinking-effort', effortMap: QWEN_4_PREVIEW_EFFORT_MAP },
+    'anthropic-messages': { kind: 'adaptive-effort', effortMap: QWEN_4_PREVIEW_EFFORT_MAP },
+  },
+}
+
 /** 小米 MiMo V2.5+：thinking.type 开关，没有 effort 档位。 */
 const MIMO_PROFILE: ReasoningProfile = {
   id: 'mimo-toggle',
@@ -648,6 +728,45 @@ const CLAUDE_ADAPTIVE_PROFILE: ReasoningProfile = {
   },
 }
 
+const CLAUDE_NATIVE_EFFORT_MAP: ReasoningEffortMap = {
+  off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
+}
+const CLAUDE_ALWAYS_ON_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const satisfies readonly AgentThinkingLevel[]
+
+/** 新款 Claude 原生 xhigh；不把 always-on 型号伪装成可关闭。旧代继续使用原 profile。 */
+const CLAUDE_NATIVE_PROFILE: ReasoningProfile = {
+  id: 'claude-adaptive',
+  levels: CLAUDE_ALWAYS_ON_LEVELS,
+  defaultLevel: 'high',
+  normalize: (level) => level === 'off' || level === 'minimal' ? 'low' : level ?? 'high',
+  encodings: { 'anthropic-messages': { kind: 'adaptive-effort', effortMap: CLAUDE_NATIVE_EFFORT_MAP } },
+}
+const CLAUDE_NATIVE_MEDIUM_PROFILE: ReasoningProfile = {
+  ...CLAUDE_NATIVE_PROFILE,
+  defaultLevel: 'medium',
+  normalize: (level) => level === undefined ? 'medium' : CLAUDE_NATIVE_PROFILE.normalize(level),
+}
+
+const CLAUDE_HAIKU_55_PROFILE: ReasoningProfile = {
+  ...CLAUDE_NATIVE_MEDIUM_PROFILE,
+  // Haiku 5.5 可在 high 及以下关闭；off 不标 null，Pi 才会发送 disabled。
+  levels: ['off', ...CLAUDE_ALWAYS_ON_LEVELS],
+  normalize: (level) => level === 'off' ? 'off' : CLAUDE_NATIVE_MEDIUM_PROFILE.normalize(level),
+  encodings: { 'anthropic-messages': { kind: 'adaptive-effort', effortMap: { ...CLAUDE_NATIVE_EFFORT_MAP, off: undefined } } },
+}
+
+const MINIMAX_FLASH_PROFILE: ReasoningProfile = {
+  ...CLAUDE_NATIVE_PROFILE,
+  id: 'minimax-m3.1-flash',
+  defaultLevel: 'max',
+  normalize: (level) => level === undefined ? 'max' : CLAUDE_NATIVE_PROFILE.normalize(level),
+  encodings: {
+    'anthropic-messages': { kind: 'adaptive-effort', effortMap: CLAUDE_NATIVE_EFFORT_MAP },
+    'openai-completions': { kind: 'openai-reasoning-effort', effortMap: CLAUDE_NATIVE_EFFORT_MAP },
+    'openai-responses': { kind: 'openai-reasoning-effort', effortMap: CLAUDE_NATIVE_EFFORT_MAP },
+  },
+}
+
 export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   DEEPSEEK_V4_FLASH_PROFILE,
   DEEPSEEK_V4_PRO_PROFILE,
@@ -661,6 +780,14 @@ export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   GROK_45_PROFILE,
   GROK_46_PROFILE,
   QWEN_38_PROFILE,
+  QWEN_4_PROFILE,
+  QWEN_4_PREVIEW_PROFILE,
+  GEMINI_4_PROFILE,
+  GEMINI_4_HYDROGEN_PROFILE,
+  MINIMAX_FLASH_PROFILE,
+  CLAUDE_NATIVE_PROFILE,
+  CLAUDE_NATIVE_MEDIUM_PROFILE,
+  CLAUDE_HAIKU_55_PROFILE,
   QWEN_TOGGLE_PROFILE,
   MIMO_PROFILE,
   MISTRAL_REASONING_PROFILE,
@@ -690,6 +817,9 @@ const TAG_TO_PROFILE: Readonly<Record<ReasoningModelTag, ReasoningProfile>> = {
   'grok-4.5': GROK_45_PROFILE,
   'grok-4.6': GROK_46_PROFILE,
   'qwen-3.8': QWEN_38_PROFILE,
+  'qwen-4': QWEN_4_PROFILE,
+  'google-gemini-4': GEMINI_4_PROFILE,
+  'minimax-m3.1-flash': MINIMAX_FLASH_PROFILE,
   'qwen-toggle': QWEN_TOGGLE_PROFILE,
   'mimo-toggle': MIMO_PROFILE,
   'mistral-reasoning': MISTRAL_REASONING_PROFILE,
@@ -707,7 +837,18 @@ const TAG_TO_PROFILE: Readonly<Record<ReasoningModelTag, ReasoningProfile>> = {
 export function resolveReasoningProfile(input: ResolveReasoningProfileInput): ReasoningProfile | undefined {
   const tag = resolveReasoningModelTag(input.modelId)
   if (tag) {
-    const profile = TAG_TO_PROFILE[tag]
+    const model = normalizeModelIdTail(input.modelId) ?? ''
+    let profile = TAG_TO_PROFILE[tag]
+    if (tag === 'google-gemini-4' && model.startsWith('gemini-4-hydrogen')) profile = GEMINI_4_HYDROGEN_PROFILE
+    if (tag === 'qwen-4' && model.startsWith('qwen4-max-preview')) profile = QWEN_4_PREVIEW_PROFILE
+    if (tag === 'claude-adaptive') {
+      if (/^claude-(?:opus|sonnet|haiku)-5-5(?:-|$)/.test(model)) {
+        profile = model.startsWith('claude-haiku-') ? CLAUDE_HAIKU_55_PROFILE
+          : model.startsWith('claude-sonnet-') ? CLAUDE_NATIVE_PROFILE : CLAUDE_NATIVE_MEDIUM_PROFILE
+      } else if (/^claude-fable-5-2(?:-|$)/.test(model)) {
+        profile = CLAUDE_NATIVE_PROFILE
+      }
+    }
     if (profile.encodings[input.transport]) return profile
   }
   // Mistral 网关托管的第三方推理模型（deepseek-v4-1-flash 等）没有自己的
@@ -914,7 +1055,7 @@ export function resolveLowestReasoningEffort(
  * 元数据 clamp 不支持的档位（对 reasoning:false 的模型安全忽略 thinkingLevel），
  * 而对 Anthropic 原生 extended thinking（anthropic/kimi/minimax/xiaomi 等）由 Pi
  * 原生 thinkingLevel 参数直接控制，不经过 reasoning profile 的 effort 重写。
- * 因此只需排除无 reasoning 协议的 transport（如 google）即可。
+ * 因此只需排除无 reasoning 协议的 transport；Google 则由 catalog/profile 收窄具体档位。
  */
 export function supportsReasoningLevel(provider: ProviderType | undefined): boolean {
   return inferReasoningTransport(provider) !== 'other'

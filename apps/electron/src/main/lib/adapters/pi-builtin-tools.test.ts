@@ -720,6 +720,27 @@ describe('Pi MCP 连接管理工具', () => {
     expect(Object.keys(restartParameters.properties as object)).toEqual(['server'])
   })
 
+  test('管理工具只列出和重启有效配置与冻结名单的交集', async () => {
+    const { sdk, tools } = createPiSdkStub()
+    const restart = mock(async () => ({ ok: true, message: 'ok' }))
+    buildPiMcpAdminTools(sdk, { workspaceSlug: 'test', allowedMcpServerNames: ['visible', 'deleted'] }, {
+      readConfig: () => ({ servers: { visible: {}, hidden: {} } }),
+      snapshots: () => ['deleted', 'hidden', 'visible'].map(serverName => ({
+        serverName, workspaceSlug: serverName === 'visible' ? 'other' : 'test',
+        connectedAt: 1, lastUsedAt: 1, epoch: 1, toolCount: 1, pid: null, externalStateStale: false,
+      })), restart,
+    })
+    const list = await tools[0]!.execute!('list', {}) as { details: { servers: { name: string; connected: boolean }[] } }
+    expect(list.details.servers.map(server => server.name)).toEqual(['visible'])
+    expect(list.details.servers[0]?.connected).toBe(false)
+    for (const server of ['deleted', 'hidden']) {
+      expect((await tools[1]!.execute!('restart', { server }) as { isError?: boolean }).isError).toBe(true)
+    }
+    expect(restart).not.toHaveBeenCalled()
+    await tools[1]!.execute!('restart', { server: 'visible' })
+    expect(restart).toHaveBeenCalledWith('visible', { workspaceSlug: 'test' })
+  })
+
   // 下面三条都不传 workspaceSlug：readConfigured() 直接返回空表，避免测试去读写真实配置目录。
   test('Given 没有配置也没有连接 When list_mcp_servers Then 返回空清单与提示而不是报错', async () => {
     const { sdk, tools } = createPiSdkStub()

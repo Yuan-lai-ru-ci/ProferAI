@@ -1,5 +1,5 @@
 import type { ChannelCreateInput, ChannelUpdateInput } from '@profer/shared'
-import { resolveProviderNativeProtocol } from '@profer/shared'
+import { isLocalModelProvider, resolveProviderNativeProtocol } from '@profer/shared'
 import { inferAgentBaseUrl } from '@profer/core'
 
 export interface SerialDraftQueue<T> {
@@ -64,7 +64,7 @@ export function buildChannelDraftPatch(baseline: ChannelUpdateInput, draft: Chan
 export function validateChannelCreation(input: ChannelCreateInput): string | null {
   if (!input.name.trim()) return '请填写供应商名称'
   if (input.provider !== 'openai-codex' && !hasUsableEndpoint(input)) return '请填写服务端点'
-  if (input.provider !== 'ollama' && !usesOAuthCredentials(input.provider, input.credentialMode) && !input.apiKey.trim()) {
+  if (!isLocalModelProvider(input.provider) && !usesOAuthCredentials(input.provider, input.credentialMode) && !input.apiKey.trim()) {
     return '请填写 API Key'
   }
   if (!input.models.some((model) => model.enabled)) {

@@ -209,6 +209,7 @@ export function resolveProviderPermissionMode(
 
 /** 工具装配 context 中由策略决定的字段（其余字段由宿主按原样透传）。 */
 export interface AgentRuntimePolicyToolAssemblyFields {
+  allowedMcpServerNames?: readonly string[]
   permissionMode: ProferPermissionMode
   disabledToolGroups: readonly string[]
   disabledTools: readonly string[]
@@ -229,6 +230,7 @@ export function buildPolicyToolAssemblyContext<T extends Record<string, unknown>
 ): T & AgentRuntimePolicyToolAssemblyFields {
   return {
     ...base,
+    allowedMcpServerNames: snapshot.policy.allowedMcpServerNames,
     permissionMode: snapshot.policy.permissionMode,
     disabledToolGroups: [...snapshot.policy.disabledToolGroups],
     disabledTools: snapshot.policy.disabledTools ? [...snapshot.policy.disabledTools] : [],

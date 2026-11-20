@@ -14,6 +14,7 @@ import { rm as rmAsync, copyFile as copyFileAsync, mkdir as mkdirAsync, rename a
 import { createAgentSessionIndexStore } from './agent-session-index'
 import { createSyncSessionMessageStore, type AgentSessionsIndex } from '@profer/session-store'
 import { SessionPersistenceQueue, type PersistenceReceipt } from './session-persistence-queue'
+import { deleteAgentContextUsageSnapshot } from './agent-context-usage-store'
 import { createSnippet, extractTextFromPersistedMessage, matchAgentJsonlLine } from './agent-session-search'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -1477,6 +1478,7 @@ export interface DeleteAgentSessionOptions {
  * 此时必须继续清掉检查点等大目录，否则它们永远没有引用可回收。
  */
 export async function cleanupResidualSessionFiles(id: string, workspaceId?: string): Promise<void> {
+  await deleteAgentContextUsageSnapshot(id)
   for (const [label, filePath] of [
     ['消息', getAgentSessionMessagesPath(id)],
     ['任务图', getAgentSessionGraphPath(id)],
@@ -1618,6 +1620,7 @@ export async function deleteAgentSession(
   // 索引落盘成功后才登记删除墓碑：写盘失败时队列会重试，不能提前吞掉后续消息。
   writeIndex(index)
   deletedSessionIds.add(id)
+  await deleteAgentContextUsageSnapshot(id)
   unregisterSessionLayout(id)
 
   // 删除消息与任务图文件。任务图和会话消息均属于该 Profer session，删除必须同步清理。

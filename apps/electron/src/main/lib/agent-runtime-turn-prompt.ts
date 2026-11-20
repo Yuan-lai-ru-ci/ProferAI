@@ -229,7 +229,7 @@ export function buildRuntimeTurnUserPrompt(
     ...(workspace?.name ? { workspaceName: workspace.name } : {}),
     ...(workspaceSlug ? { workspaceSlug } : {}),
     ...(input.cwd ? { agentCwd: input.cwd } : {}),
-    ...(availableMcp.length > 0 ? { mcpServerNames: availableMcp } : {}),
+    mcpServerNames: availableMcp, // 空交集同样是约束，不能回退到磁盘的全量清单。
     ...(policy?.disabledToolGroups ? { disabledToolGroups: policy.disabledToolGroups } : {}),
     ...(policy?.disabledTools ? { disabledTools: policy.disabledTools } : {}),
   })

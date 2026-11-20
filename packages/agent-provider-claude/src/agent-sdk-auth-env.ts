@@ -1,4 +1,5 @@
 import type { ProviderType } from '@profer/shared'
+import { resolveLocalModelApiKey } from '@profer/shared'
 import { getWhitelistCompatUserAgent } from '@profer/core/providers'
 
 /**
@@ -29,6 +30,12 @@ export function applyAgentSdkAuthEnv(
   forceBearerAuth = false,
   userAgentVersion?: string,
 ): void {
+  if (provider === 'local') {
+    // 本地 OpenAI 兼容服务同样没有真实 API Key：Claude 走服务的 Anthropic
+    // 兼容入口时用哨兵占位，避免把空 token 写进 SDK env。
+    target.ANTHROPIC_AUTH_TOKEN = resolveLocalModelApiKey(provider, apiKey)
+    return
+  }
   if (provider === 'ollama') {
     target.ANTHROPIC_AUTH_TOKEN = apiKey || 'ollama'
     // Ollama 兼容层的普通文本流仍保持开启；仅关闭 Claude Code 将 tool
