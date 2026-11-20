@@ -9,7 +9,10 @@
  * - 支持跳过代码签名（--no-sign，Mac 验收包专用）
  * - macOS 一律在打包后补做 ad-hoc 签名并钉死 designated requirement；
  *   无签名包会导致 Squirrel.Mac 静默拒绝所有自更新（见 scripts/macos-signature.cjs）
+ * - 打包后必跑启动冒烟（scripts/startup-smoke.ts）：真的把产物拉起来，等主窗口创建；
+ *   0.16.27 的四套包正是「构建/签名/元数据全绿但起不来」，只有这一步能拦
  * - 支持只构建 DMG 或 ZIP（--dmg / --zip）
+ * - 打包后必跑启动冒烟（verify:startup）；排查构建流程时可用 --skip-startup-smoke 临时跳过，正式出包不得跳过
  *
  * 使用：
  * bun run scripts/dist.ts --win                 # 完整 Windows 打包
@@ -17,6 +20,7 @@
  * bun run scripts/dist.ts --current-arch --verbose   # 当前架构 + 详细日志
  * bun run scripts/dist.ts --current-arch --dmg       # 当前架构 + 只构建 DMG
  * bun run scripts/dist.ts --mac --current-arch --no-sign # Apple Silicon 本地 macOS 包
+ * bun run scripts/dist.ts --current-arch --skip-startup-smoke # 仅排查构建流程
  *
  * 未显式指定平台时按宿主推导（darwin→mac / win32→win / linux→linux）。
  * 注意：Linux 当前不是受支持的发布目标（缺少 Claude 原生二进制与 Linux 构建验证），
@@ -46,6 +50,8 @@ interface DistOptions {
   currentArch: boolean
   verbose: boolean
   noSign: boolean
+  /** 跳过打包后的启动冒烟（仅限排查构建流程时用；正式出包不能跳过）。 */
+  skipStartupSmoke: boolean
   targetFormat: 'all' | 'dmg' | 'zip' | 'dir'
   platform: 'mac' | 'win' | 'linux'
   /** 发行版：决定主进程构建目标、打包配置与产物目录。 */
@@ -239,6 +245,7 @@ export function parseArgs(
     currentArch: args.includes('--current-arch'),
     verbose: args.includes('--verbose'),
     noSign: args.includes('--no-sign'),
+    skipStartupSmoke: args.includes('--skip-startup-smoke'),
     target: rawTarget,
     targetFormat: args.includes('--dmg')
       ? 'dmg'
@@ -293,7 +300,7 @@ function main(): void {
   printSeparator()
 
   const buildSteps = resolveBuildSteps(opts.target)
-  const totalSteps = buildSteps.length + 1 + (opts.platform === 'mac' ? 3 : 0)
+  const totalSteps = buildSteps.length + 1 + (opts.platform === 'mac' ? 3 : 0) + 1
   const outputDir = resolveOutputDir(opts.target)
   let step = 0
 
@@ -379,14 +386,32 @@ function main(): void {
 
     step++
     printStepStart(step, totalSteps, '验证 macOS 更新元数据')
+    // 只产 DMG 时 latest-mac.yml 里没有 ZIP path/blockmap，这一步的断言本来就不适用（
+    // --dmg 是文档里的合法选项，以前会在这里误报失败，连带把后面的启动冒烟也挡掉）。
     results.push(
-      runStep('验证 macOS 更新元数据', 'node', ['scripts/verify-macos-update-assets.cjs', '--edition', opts.target], {
-        verbose: opts.verbose,
-        env: verifyEnv,
-      })
+      opts.targetFormat === 'dmg'
+        ? { name: '验证 macOS 更新元数据', duration: 0, success: true, skipped: true }
+        : runStep('验证 macOS 更新元数据', 'node', ['scripts/verify-macos-update-assets.cjs', '--edition', opts.target], {
+            verbose: opts.verbose,
+            env: verifyEnv,
+          })
     )
     printStepResult(results[results.length - 1])
+    if (!results[results.length - 1].success) return printSummary(results)
   }
+
+  // 启动冒烟：唯一真正启动产物的门禁。0.16.27 的四套包就是「构建/签名/元数据全绿但起不来」，
+  // 只有这一步能拦住。失败必须中止，不能再往下走发布。
+  step++
+  printStepStart(step, totalSteps, '启动冒烟（真实拉起打包产物）')
+  results.push(
+    runStep('启动冒烟', 'bun', ['run', 'verify:startup'], {
+      verbose: opts.verbose,
+      env: { PROFER_ELECTRON_OUTPUT_DIR: outputDir },
+      skip: opts.skipStartupSmoke,
+    })
+  )
+  printStepResult(results[results.length - 1])
 
   printSummary(results)
 }

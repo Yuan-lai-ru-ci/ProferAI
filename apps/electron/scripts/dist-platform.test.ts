@@ -123,10 +123,13 @@ describe('dist.ts 默认平台推导', () => {
 
   test('Given 其它开关 Then 解析结果与既有行为一致', () => {
     const options = parseArgs(['--current-arch', '--verbose', '--no-sign', '--dmg', '--mac'], 'darwin')
-    expect(options).toEqual({ currentArch: true, verbose: true, noSign: true, targetFormat: 'dmg', platform: 'mac', target: 'oss' })
+    expect(options).toEqual({ currentArch: true, verbose: true, noSign: true, skipStartupSmoke: false, targetFormat: 'dmg', platform: 'mac', target: 'oss' })
     expect(parseArgs(['--zip'], 'darwin').targetFormat).toBe('zip')
     expect(parseArgs(['--dir'], 'darwin').targetFormat).toBe('dir')
     expect(parseArgs([], 'darwin').targetFormat).toBe('all')
+    // 启动冒烟默认开启；只有显式开关才能跳过（仅限排查构建流程）。
+    expect(parseArgs([], 'darwin').skipStartupSmoke).toBe(false)
+    expect(parseArgs(['--skip-startup-smoke'], 'darwin').skipStartupSmoke).toBe(true)
   })
 
   test('Given --target Then 发行版决定主进程构建与打包配置', () => {

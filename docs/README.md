@@ -20,6 +20,7 @@
 | [`guides/profer-remote-service.md`](./guides/profer-remote-service.md) | 桌面端远程服务（HTTP + WebSocket）使用说明 |
 | [`guides/windows-execution-acceptance-guide.md`](./guides/windows-execution-acceptance-guide.md) | Windows 执行能力（ShellSnapshot / ProcessHandle）验收指南 |
 | [`guides/oss-ci-packaging-and-signing.md`](./guides/oss-ci-packaging-and-signing.md) | OSS CI 构建、签名输入与发布边界；线上 Secrets/证书状态须另行核验 |
+| [`guides/main-process-bundle-constraints.md`](./guides/main-process-bundle-constraints.md) | 主进程 CJS bundle 的模块约束（纯 ESM 只能 `await import`）与构建期/启动冒烟两道发版门禁 |
 
 ## 设计（`design/`）
 

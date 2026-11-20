@@ -60,3 +60,21 @@ export function resolveDevAppName(env: DevInstanceEnvironment = process.env): st
   const instanceId = getDevInstanceId(env)
   return instanceId ? `profer-dev-${instanceId}` : 'profer-dev'
 }
+
+/**
+ * 读取显式的 `--user-data-dir` 开关。
+ *
+ * 为什么主进程要自己读：正式版原本把 userData 固定成 `appData/@profer/electron`，
+ * 会把 Chromium 已按开关设置好的路径再覆盖回去，于是 `--user-data-dir` 形同虚设，
+ * 单实例锁也因此仍落在真实用户数据目录里——发布前的启动冒烟与 QA 多开需要真正隔离。
+ * 只接受命令行显式传入；不读任何环境变量，不影响双击启动。
+ */
+export function readUserDataDirSwitch(argv: readonly string[]): string | undefined {
+  const prefix = '--user-data-dir='
+  for (const arg of argv) {
+    if (!arg.startsWith(prefix)) continue
+    const value = arg.slice(prefix.length).trim()
+    return value ? resolve(value) : undefined
+  }
+  return undefined
+}

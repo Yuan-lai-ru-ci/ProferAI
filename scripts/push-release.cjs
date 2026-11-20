@@ -1,7 +1,13 @@
 /**
  * Profer Windows 发布（本地构建 + 双通道上传）
  *
- * 用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only]
+ * 用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--artifacts-dir <目录>] [--github-only] [--verify-only]
+ *
+ * --artifacts-dir: 从外部目录读已构建好的 Windows 资产（如 Windows 构建机回传的产物），
+ *   隐含 --artifacts-only。跨主机发布时 win-unpacked 不随资产搬运，改用
+ *   scripts/verify-windows-artifacts-portable.cjs 校验可搬运资产与构建机 Pi 闭包探针日志，
+ *   发布本身仍在持有版本库与 gh 凭据的机器上执行。
+ * --verify-only: 只跑本地门禁与资产校验，在第一次远端写入前退出（发版演练 / CI 复用）。
  *
  * 发布顺序不固定：macOS 可以先创建 tag/Release，本脚本随后只补充 Windows 资产；
  * 也可以先跑本脚本、再由 Apple Silicon 补 macOS 资产。release.yml 仅保留手动
@@ -18,20 +24,31 @@ const path = require('path');
 const { hasMacReleaseAssets, hasWindowsReleaseAssets } = require('./release-asset-contract.cjs');
 const { assertPreviousBlockmapPublished, findPurgedBlockmaps, classifyArtifactEdition, assertFeedDirectoryMatchesEdition } = require('./update-feed-contract.cjs');
 
+function argValue(flag) {
+  const inline = process.argv.find((arg) => arg.startsWith(`${flag}=`));
+  if (inline) return inline.slice(flag.length + 1);
+  const index = process.argv.indexOf(flag);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
 const VERSION = process.argv[2];
 const UNSIGNED_RELEASE = process.argv.includes('--unsigned');
-const ARTIFACTS_ONLY = process.argv.includes('--artifacts-only');
+const ARTIFACTS_DIR = argValue('--artifacts-dir');
+// 指定外部资产目录时必然不能重建：产物是别的主机打好的。
+const ARTIFACTS_ONLY = process.argv.includes('--artifacts-only') || Boolean(ARTIFACTS_DIR);
 const GITHUB_ONLY = process.argv.includes('--github-only');
+// 只跑本地门禁与资产校验，不产生任何远端写入（发版前演练 / CI 复用）。
+const VERIFY_ONLY = process.argv.includes('--verify-only');
 // 同版本重发：已发布的 Release 需要显式放行才能覆盖本平台资产（如仅修打包缺陷的重发）。
 const ALLOW_PUBLISHED_RELEASE = process.argv.includes('--allow-published-release');
 if (!VERSION) {
-  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--github-only] [--allow-published-release]');
+  console.error('用法: node scripts/push-release.cjs <版本号> [--unsigned] [--artifacts-only] [--artifacts-dir <目录>] [--github-only] [--allow-published-release]');
   process.exit(1);
 }
 
 const ROOT = path.resolve(__dirname, '..');
 const ELECTRON = path.join(ROOT, 'apps/electron');
-const OUT = path.join(ELECTRON, 'out');
+const OUT = ARTIFACTS_DIR ? path.resolve(ROOT, ARTIFACTS_DIR) : path.join(ELECTRON, 'out');
 const TAG = `v${VERSION}`;
 const GH_REPO = 'Yuan-lai-ru-ci/ProferAI';
 // 本脚本发的是开源版（资产名 Profer-Setup-*），所以更新源也必须是开源目录：
@@ -85,7 +102,9 @@ function getUpdateTargets() {
   return targets;
 }
 
-const BASH = 'C:/Program Files/Git/usr/bin/bash.exe';
+// scp / ssh 走 bash 解析引号：Windows 必须用 Git 自带的 bash，macOS / Linux 用系统 bash。
+// 写死 Windows 路径会让跨主机发布（在 mac 上跑本脚本）在第一步上传就 ENOENT。
+const BASH = process.env.PROFER_BASH || (process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/bash.exe' : '/bin/bash');
 const RELEASE_RETRY_DELAYS_MS = [0, 15_000, 45_000, 90_000];
 /**
  * curl 一律用 execFileSync 直呼：本脚本在 Windows 上通过 cmd.exe 执行 `run()`，
@@ -256,22 +275,40 @@ function localTagTarget() {
 function pushSourceAndTag() {
   // 预检之后再次检查，确保任何 git 写入前都不会覆盖冲突 tag。
   const head = run('git rev-parse HEAD');
-  const localTag = localTagTarget();
+  let localTag = localTagTarget();
   const remoteTag = remoteTagTarget();
-  if (localTag && localTag !== head) throw new Error(`本地 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
-  if (remoteTag && remoteTag !== head) throw new Error(`远端 ${TAG} 不指向 HEAD，拒绝覆盖已有 tag。`);
+  if (!localTag && remoteTag) {
+    tryRun(`git fetch --quiet origin tag ${TAG}`);
+    localTag = localTagTarget();
+  }
+  if (localTag && remoteTag && localTag !== remoteTag) {
+    throw new Error(`本地 ${TAG} 与远端指向不同提交（${localTag} vs ${remoteTag}），拒绝发布。`);
+  }
+  const declared = localTag || remoteTag;
+  // tag 已存在但不指向 HEAD：只要它是 HEAD 的祖先就允许（发布脚本或无关改动领先）。
+  // 受保护的是「这个版本属于哪段源码」，不是发布脚本停在哪一个提交。
+  if (declared && declared !== head) {
+    if (!tryRun(`git merge-base --is-ancestor ${declared} HEAD`).ok) {
+      throw new Error(`${TAG} 指向 ${declared}，它不是 HEAD 的祖先，拒绝发布与版本无关的提交。`);
+    }
+    const ahead = run(`git rev-list --count ${declared}..HEAD`).trim();
+    console.log(`  ${TAG} 停在 ${declared.slice(0, 8)}，HEAD 领先 ${ahead} 个提交；不创建/移动 tag，按补发该版本资产处理。`);
+  }
   // 另一平台先发布后，tag 所在提交会落后 origin/main（通常只差一个 release-notes/releases.json
   // 同步提交）。补发场景不能推源码，但无需因此中止整个发布；与 push-mac-release.cjs 保持一致。
   const mainIsAncestor = tryRun('git merge-base --is-ancestor origin/main HEAD').ok;
   if (mainIsAncestor) {
     run('git push origin HEAD:main');
-  } else if (!localTag) {
+  } else if (!declared) {
     throw new Error('创建新 tag 前 HEAD 必须包含最新 origin/main；请先同步 main。');
   } else {
     console.log('  HEAD 不是 origin/main 的最新提交，跳过源码推送（按补充已发布版本资产处理）。');
   }
-  if (!localTag) run(`git tag ${TAG}`);
-  if (!remoteTag) run(`git push origin ${TAG}`);
+  // 只有 tag 两边都不存在时才就地新建：远端已有 tag 却不取回时绝不能拿 HEAD 补一个。
+  if (!declared) {
+    run(`git tag ${TAG}`);
+    run(`git push origin ${TAG}`);
+  }
 }
 
 function sha256(filePath) {
@@ -381,8 +418,18 @@ async function ensureGitHubRelease(assets) {
     warnPurgedBlockmaps(UPDATE_FEED_URL);
   }
   if (ARTIFACTS_ONLY) {
-    run(`bun run ${UNSIGNED_RELEASE ? 'verify:release-assets:unsigned' : 'verify:release-assets'}`, ELECTRON);
-    run('bun run verify:packaged-pi-runtime', ELECTRON);
+    if (process.platform === 'win32') {
+      run(`bun run ${UNSIGNED_RELEASE ? 'verify:release-assets:unsigned' : 'verify:release-assets'}`, ELECTRON);
+      run('bun run verify:packaged-pi-runtime', ELECTRON);
+    } else {
+      // 跨主机发布：win-unpacked 与 PowerShell 探针都留在 Windows 构建机上，这里只校验
+      // 可搬运的资产（版本 / 大小 / SHA-512 / blockmap）与构建机留下的 Pi 闭包探针日志。
+      // 校验结论要进日志，所以直走 stdio: inherit，不用吞输出的 run()。
+      execSync(
+        `node scripts/verify-windows-artifacts-portable.cjs --dir ${quote(OUT)}${UNSIGNED_RELEASE ? ' --unsigned' : ''}`,
+        { cwd: ROOT, stdio: 'inherit' },
+      );
+    }
   } else {
     run('bun run typecheck');
     run('bun test --isolate --timeout 30000');
@@ -399,6 +446,12 @@ async function ensureGitHubRelease(assets) {
     if (!fs.existsSync(asset.path)) throw new Error(`缺少打包资产: ${asset.path}`);
     asset.size = fs.statSync(asset.path).size;
     asset.sha256 = sha256(asset.path);
+  }
+
+  if (VERIFY_ONLY) {
+    console.log(`[verify-only] 本地校验通过：${assets.map((asset) => asset.name).join('、')}`);
+    console.log('[verify-only] 未上传更新源、未推送源码/tag、未写 GitHub Release。');
+    return;
   }
 
   if (!UPDATE_FEED_URL.startsWith('https://')) {
