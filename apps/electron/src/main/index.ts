@@ -4,6 +4,7 @@ import { createConnection } from 'net'
 import { existsSync } from 'fs'
 import { getDevInstanceId, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
+import { localCoreOwnsBusinessData } from './lib/core-business-ownership'
 import { flushSDKMessagePersistence } from './lib/agent-session-manager'
 
 /**
@@ -1320,7 +1321,7 @@ async function startLocalCoreIfEnabled(): Promise<void> {
   stopLocalCoreResourceSync?.()
   stopLocalCoreResourceSync = localResources.maintainLocalCoreChannels(started.client)
   attachLocalCoreClient(started.client)
-  setLocalCoreClient(started.client)
+  setLocalCoreClient(started.client, await started.client.identity())
   await transferLegacySessionDeletions(started.client)
   if (readSavedCurrentCoreTargetId() !== 'local') void activateSavedCoreTarget()
 }
@@ -1385,6 +1386,8 @@ app.on('before-quit', (event) => {
     persistenceExitPending = true
     const timeoutMs = 1_500
     const flushPromise = Promise.resolve().then(async () => {
+      // Core 已在上一阶段负责 shutdown 持久化；桌面不得重新刷回旧队列。
+      if (localCoreOwnsBusinessData()) return
       const flushed = await flushSDKMessagePersistence(timeoutMs)
       if (!flushed) throw new Error('超过退出 flush 预算')
     })

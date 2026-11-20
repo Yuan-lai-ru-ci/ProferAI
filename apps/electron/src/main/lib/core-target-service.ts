@@ -4,7 +4,9 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { projectRemoteRunEvent } from './core-run-projection'
-import { CoreClient } from './core-client'
+import { projectCoreChatEvent } from './core-chat-projection'
+import { pushChatStream } from './chat-stream-bus'
+import { CoreClient, type CoreChatEvent } from './core-client'
 import { configureCoreHostConnection } from './core-host-connection'
 const relayedSessions = new Set<string>()
 export function markCoreRunRelayed(sessionId: string, active: boolean): void {
@@ -35,7 +37,10 @@ const LOCAL_TARGET_ID = 'local'
 const PROTOCOL_VERSION = 1
 let activeClient: CoreClient | null = null
 let localClient: CoreClient | null = null
+let localIdentity: Awaited<ReturnType<CoreClient['identity']>> | undefined
 let unsubscribeLocalPlanning: (() => void) | undefined
+let unsubscribeLocalChat: (() => void) | undefined
+let unsubscribeLocalChatSnapshot: (() => void) | undefined
 let targetStatus: 'connected' | 'disconnected' | 'error' = 'disconnected'
 let generation = 0
 let selectionQueue: Promise<void> = Promise.resolve()
@@ -73,6 +78,18 @@ function writeStore(store: TargetStore): void {
   writeFileSync(path, JSON.stringify(store, null, 2), { mode: 0o600 })
 }
 
+function publishCoreChat(event: CoreChatEvent, coreId: string): void {
+  const projected = projectCoreChatEvent(event, coreId)
+  pushChatStream(null, projected.conversationId, projected.channel, projected.payload)
+}
+function publishChatSnapshot(chat: import('./core-client').CoreRecoverySnapshot['chat'], coreId: string): void {
+  if (!chat) return
+  const state = listCoreTargets()
+  const payload = { targetId: state.currentId, generation: state.generation, ...chat, conversations: chat.conversations.map(meta => ({ ...meta, id: `core-chat:${encodeURIComponent(coreId)}:${meta.id}` })),
+    activeRuns: chat.activeRuns.map(run => ({ ...run, conversationId: `core-chat:${encodeURIComponent(coreId)}:${run.conversationId}` })) }
+  for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send('core-chat:snapshot', payload)
+}
+
 function encryptToken(token: string): string {
   if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) {
     throw new Error('系统安全存储不可用，不能安全保存 Core Token')
@@ -93,9 +110,14 @@ function clientFor(target: StoredTarget): CoreClient {
     baseUrl: target.baseUrl,
     token: decryptToken(target.encryptedToken),
     recoverEvents: true,
+    onChatEvent: event => {
+      if (activeClient !== client || readStore().currentId !== target.id || !target.coreId) return
+      publishCoreChat(event, target.coreId)
+    },
     onSnapshot: snapshot => {
       if (activeClient !== client || readStore().currentId !== target.id || !target.coreId) return
       const ns = (id: string) => namespaceCoreSessionId(id, target.coreId!)
+      publishChatSnapshot(snapshot.chat, target.coreId)
       goalSessions.clear()
       for (const goal of snapshot.goals) {
         if (goal.status === 'active' || goal.status === 'stopping') goalSessions.add(goal.sessionId)
@@ -144,6 +166,13 @@ function clientFor(target: StoredTarget): CoreClient {
       const data = event.type === 'changed' ? { resources: event.resources }
         : event.type === 'reminders_due' ? event.reminders
         : { ...(event.operation as Record<string, unknown>), sessionId: namespaceCoreSessionId(String((event.operation as { sessionId?: unknown })?.sessionId), target.coreId) }
+      if (event.type === 'reminders_due') {
+        // 仅通知端口；不查询或领取提醒。异步加载后再次确认目标，拒绝旧连接晚到。
+        void import('./planning-reminder-scheduler').then(({ showPlanningSystemNotification }) => {
+          if (activeClient !== client || readStore().currentId !== target.id) return
+          for (const reminder of event.reminders as import('@profer/shared').ActivePlanningReminder[] ?? []) showPlanningSystemNotification(reminder)
+        }).catch(error => console.error('[Core Planning] 通知失败', error))
+      }
       for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(channel, data)
     },
     onStatus: status => {
@@ -163,7 +192,8 @@ function clientFor(target: StoredTarget): CoreClient {
 function summaries(): CoreTargetSummary[] {
   const store = readStore()
   return [
-    { id: LOCAL_TARGET_ID, name: '本机内核', kind: 'local', status: activeClient && store.currentId === LOCAL_TARGET_ID ? targetStatus : 'disconnected' },
+    { id: LOCAL_TARGET_ID, name: '本机内核', kind: 'local', status: activeClient && store.currentId === LOCAL_TARGET_ID ? targetStatus : 'disconnected',
+      ...(localIdentity ? { coreId: localIdentity.coreId, version: localIdentity.version, capabilities: localIdentity.capabilities, platform: localIdentity.platform } : {}) },
     ...store.targets.map(target => ({
       id: target.id, name: target.name, kind: 'remote' as const, baseUrl: target.baseUrl,
       status: store.currentId === target.id ? targetStatus : 'disconnected',
@@ -236,6 +266,7 @@ async function selectCoreTargetNow(id: string): Promise<ReturnType<typeof listCo
     writeStore(store)
     generation = nextGeneration
     publishSnapshot()
+    if (localClient && localIdentity?.capabilities.includes('chat')) await localClient.refreshSnapshot()
     return listCoreTargets()
   }
   const target = store.targets.find(item => item.id === id)
@@ -280,14 +311,32 @@ async function selectCoreTargetNow(id: string): Promise<ReturnType<typeof listCo
   }
 }
 
-export function setLocalCoreClient(client: CoreClient): void {
+export function setLocalCoreClient(client: CoreClient, identity?: Awaited<ReturnType<CoreClient['identity']>>): void {
+  localIdentity = identity
+  unsubscribeLocalChat?.()
+  unsubscribeLocalChat = client.addChatEventListener(event => {
+    if (activeClient !== client || readStore().currentId !== LOCAL_TARGET_ID || !localIdentity?.coreId) return
+    publishCoreChat(event, localIdentity.coreId)
+  })
+  unsubscribeLocalChatSnapshot?.()
+  unsubscribeLocalChatSnapshot = client.addSnapshotListener(snapshot => {
+    if (activeClient !== client || readStore().currentId !== LOCAL_TARGET_ID || !localIdentity?.coreId) return
+    publishChatSnapshot(snapshot.chat, localIdentity.coreId)
+  })
   unsubscribeLocalPlanning?.()
   unsubscribeLocalPlanning = client.addPlanningEventListener(payload => {
     if (activeClient !== client || readStore().currentId !== LOCAL_TARGET_ID || !payload || typeof payload !== 'object') return
-    const event = payload as { type?: string; resources?: unknown; operation?: unknown }
-    const channel = event.type === 'changed' ? PLANNING_IPC_CHANNELS.CHANGED : event.type === 'agent_operation' ? PLANNING_IPC_CHANNELS.AGENT_OPERATION : undefined
+    const event = payload as { type?: string; resources?: unknown; operation?: unknown; reminders?: import('@profer/shared').ActivePlanningReminder[] }
+    const channel = event.type === 'changed' ? PLANNING_IPC_CHANNELS.CHANGED : event.type === 'agent_operation' ? PLANNING_IPC_CHANNELS.AGENT_OPERATION : event.type === 'reminders_due' ? PLANNING_IPC_CHANNELS.REMINDER_DUE : undefined
     if (!channel) return
-    for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(channel, event.type === 'changed' ? { resources: event.resources } : event.operation)
+    if (event.type === 'reminders_due') {
+      void import('./planning-reminder-scheduler').then(({ showPlanningSystemNotification }) => {
+        if (activeClient !== client || readStore().currentId !== LOCAL_TARGET_ID) return
+        for (const reminder of event.reminders ?? []) showPlanningSystemNotification(reminder)
+      }).catch(error => console.error('[Core Planning] 通知失败', error))
+    }
+    const data = event.type === 'changed' ? { resources: event.resources } : event.type === 'reminders_due' ? event.reminders : event.operation
+    for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(channel, data)
   })
   localClient = client
   if (readStore().currentId === LOCAL_TARGET_ID) {
@@ -296,6 +345,7 @@ export function setLocalCoreClient(client: CoreClient): void {
     attachLocalCoreClient(client)
     targetStatus = 'connected'
     publishSnapshot()
+    if (identity?.capabilities.includes('chat')) void client.refreshSnapshot().catch(error => console.error('[Core Chat] 本机快照恢复失败：', error))
   }
 }
 

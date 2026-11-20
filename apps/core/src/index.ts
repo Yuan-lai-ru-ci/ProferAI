@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const VERSION = '0.1.1'
+const VERSION = '0.1.2'
 const CORE_ID_FILE = 'core-id'
 
 function stableCoreId(configDir: string, configured?: string): string {
@@ -33,20 +33,29 @@ export async function startCore(argv = process.argv.slice(2)): Promise<void> {
     ...(config.debug ? { debug: { configDir: config.configDir, workspaceRoot: config.workspaceRoot, mockAgent: config.mockAgent === true, startedAt } } : {}),
   })
 
-  const shutdown = async (signal: string): Promise<void> => {
-    process.stdout.write(`[Core] received ${signal}, shutting down\n`)
-    await closeCoreServer(server)
-    await runtime.shutdown()
+  let shutdownPromise: Promise<void> | undefined
+  const shutdown = (signal: string): Promise<void> => {
+    if (shutdownPromise) return shutdownPromise
+    process.stdout.write(`[Core] 收到 ${signal}，正在关闭\n`)
+    shutdownPromise = (async () => {
+      await closeCoreServer(server)
+      await runtime.shutdown()
+    })()
+    return shutdownPromise
   }
   const onSignal = (signal: string): void => {
-    void shutdown(signal).then(() => process.exit(0)).catch((error: unknown) => {
-      console.error('[Core] shutdown failed', error)
-      process.exit(1)
+    void shutdown(signal).then(() => {
+      process.removeListener('SIGINT', onSignal)
+      process.removeListener('SIGTERM', onSignal)
+      process.exitCode = 0
+    }).catch((error: unknown) => {
+      console.error('[Core] 关闭失败', error)
+      process.exitCode = 1
     })
   }
 
-  process.once('SIGINT', onSignal)
-  process.once('SIGTERM', onSignal)
+  process.on('SIGINT', onSignal)
+  process.on('SIGTERM', onSignal)
 
   try {
     await listenCoreServer(server, config.host, config.port)

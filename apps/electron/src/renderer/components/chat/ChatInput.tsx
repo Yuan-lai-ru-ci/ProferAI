@@ -15,6 +15,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { CornerDownLeft, Square, Brain, Paperclip, Library, X } from 'lucide-react'
+import { chatKnowledgeUnavailableReasonAtom } from '@/atoms/chat-tool-atoms'
 import type { KnowledgeReference } from '@profer/shared'
 import { KnowledgeReferencePicker } from '@/components/knowledge-base/KnowledgeReferencePicker'
 import { openKnowledgePreview } from '@/components/knowledge-base/KnowledgePreviewPanel'
@@ -92,6 +93,7 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
   const [thinkingEnabled, setThinkingEnabled] = useConversationThinkingEnabled()
   const setPendingAttachments = onSetPendingAttachments
   const [isDragOver, setIsDragOver] = React.useState(false)
+  const knowledgeUnavailable = useAtomValue(chatKnowledgeUnavailableReasonAtom)
   const [knowledgePickerOpen, setKnowledgePickerOpen] = React.useState(false)
   const stagedAttachmentDataRef = React.useRef(new Map<string, { base64: string; previewUrl?: string }>())
 
@@ -401,9 +403,10 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           ) : null}
 
           {/* 附件预览区域 — Cherry Studio: padding 5px 15px, flex-wrap, gap 4px */}
+          {knowledgeUnavailable && pendingKnowledgeReferences.length > 0 && <p role="status" className="px-3 text-xs text-muted-foreground">{knowledgeUnavailable}，请移除资料引用后发送</p>}
           {(pendingAttachments.length > 0 || pendingKnowledgeReferences.length > 0) && (
             <div className="flex flex-wrap gap-1 px-[15px] pt-[10px] pb-[15px]">
-              {pendingKnowledgeReferences.map((reference) => <span key={reference.itemId} className="inline-flex h-8 max-w-[260px] items-center gap-1 rounded border border-primary/20 bg-primary/5 px-2 text-xs text-primary"><button type="button" onClick={() => openKnowledgePreview(reference)} className="inline-flex min-w-0 items-center gap-1 hover:underline"><Library className="size-3.5 shrink-0"/><span className="truncate">{reference.title}</span></button><button type="button" aria-label={`移除资料 ${reference.title}`} onClick={() => onSetPendingKnowledgeReferences?.((items) => items.filter((item) => item.itemId !== reference.itemId))}><X className="size-3.5"/></button></span>)}
+              {pendingKnowledgeReferences.map((reference) => <span key={reference.itemId} className="inline-flex h-8 max-w-[260px] items-center gap-1 rounded border border-primary/20 bg-primary/5 px-2 text-xs text-primary"><button type="button" disabled={Boolean(knowledgeUnavailable)} title={knowledgeUnavailable ?? undefined} onClick={() => { if (!knowledgeUnavailable) openKnowledgePreview(reference) }} className="inline-flex min-w-0 items-center gap-1 hover:underline"><Library className="size-3.5 shrink-0"/><span className="truncate">{reference.title}</span></button><button type="button" aria-label={`移除资料 ${reference.title}`} onClick={() => onSetPendingKnowledgeReferences?.((items) => items.filter((item) => item.itemId !== reference.itemId))}><X className="size-3.5"/></button></span>)}
               {pendingAttachments.map((att) => (
                 <AttachmentPreviewItem
                   key={att.id}
@@ -432,7 +435,8 @@ export function ChatInput({ conversationId, streaming, pendingAttachments, onSet
           <ComposerToolbar items={toolbarItems} trailing={trailingNode} />
         </div>
 
-        <KnowledgeReferencePicker open={knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen} onConfirm={async (itemIds) => {
+        <KnowledgeReferencePicker open={!knowledgeUnavailable && knowledgePickerOpen} onOpenChange={setKnowledgePickerOpen} onConfirm={async (itemIds) => {
+          if (knowledgeUnavailable) return
           const snapshot = await listComposerKnowledgeItems()
           const itemsById = new Map(snapshot.map((item) => [item.id, item]))
           const additions = itemIds.map((itemId) => {

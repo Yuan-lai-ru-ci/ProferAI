@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { realpathSync } from 'node:fs'
 import { request } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -38,7 +39,7 @@ describe('core server', () => {
     const port = (server.address() as AddressInfo).port
     try {
       const workspace = runtime.workspaces.createManaged('binding')
-      const preset = { id: 'strict', name: 'strict', version: '1', basePresetId: 'code', permissionMode: 'plan', createdAt: 1, updatedAt: 1 }
+      const preset = { id: 'strict', name: 'strict', description: 'Strict preset fixture', version: '1', basePresetId: 'code', permissionMode: 'plan', createdAt: 1, updatedAt: 1 }
       await writeFile(join(config.workspaceRoot, workspace.slug, 'agent-presets.json'), JSON.stringify({ presets: [preset] }))
       const session = runtime.sessions.create({ title: 'empty', runtime: 'claude', workspaceId: workspace.id, permissionMode: 'bypassPermissions' })
       const patch = (body: object, authenticated = true) => requestJson(port, `/sessions/${session.id}`, { method: 'PATCH', body, ...(authenticated ? { apiKey: 'fixture-only' } : {}) })
@@ -66,11 +67,11 @@ describe('core server', () => {
       expect((await patch({ presetReference: strict })).statusCode).toBe(400)
       runtime.sessions.appendMessages(session.id, [{ type: 'user', uuid: 'fixture-user', session_id: session.id, parent_tool_use_id: null, message: { role: 'user', content: 'history' } }])
       expect(await patch({ agentRuntime: 'claude' })).toMatchObject({ statusCode: 400, body: { error: expect.stringContaining('内核已固定') } })
-      const native = runtime.sessions.create({ title: 'native', runtime: 'pi' })
+      const native = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'native', runtime: 'pi' })
       runtime.sessions.updateMeta(native.id, { sdkSessionId: 'existing-native' })
       const nativeChange = await requestJson(port, `/sessions/${native.id}`, { method: 'PATCH', apiKey: 'fixture-only', body: { agentRuntime: 'claude' } })
       expect(nativeChange).toMatchObject({ statusCode: 400 })
-      const racing = runtime.sessions.create({ title: 'racing', runtime: 'claude' })
+      const racing = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'racing', runtime: 'claude' })
       const results = await Promise.all(['pi', 'claude'].map(agentRuntime => requestJson(port, `/sessions/${racing.id}`, { method: 'PATCH', apiKey: 'fixture-only', body: { agentRuntime, presetId: 'code', expectedRevision: 0 } })))
       expect(results.filter(result => result.statusCode === 200)).toHaveLength(1)
       expect(results.filter(result => result.statusCode === 400)).toHaveLength(1)
@@ -88,7 +89,7 @@ describe('core server', () => {
     const server = createCoreServer({ version: 'reasoning-test', runtime, apiKey: 'fixture-only' })
     await listenCoreServer(server, '127.0.0.1', 0)
     const port = (server.address() as AddressInfo).port
-    const session = runtime.sessions.create({ title: 'reasoning' })
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'reasoning' })
     const patch = (body: object) => requestJson(port, `/sessions/${session.id}`, { method: 'PATCH', body, apiKey: 'fixture-only' })
     try {
       expect((await patch({ codexFastMode: 'yes' })).statusCode).toBe(400)
@@ -145,9 +146,9 @@ describe('core server', () => {
       await expect(requestJson(port, '/identity')).resolves.toEqual({ statusCode: 401, body: { error: 'unauthorized' } })
       const response = await requestJson(port, '/identity', { apiKey: 'identity-secret' })
       expect(response).toEqual({ statusCode: 200, body: {
-        protocolVersion: 1, coreId: 'ubuntu-staging', version: 'identity-test',
+        protocolVersion: 1, coreId: 'ubuntu-staging', version: 'identity-test', platform: process.platform,
         hostCapabilities: (await import('./host-capabilities')).CORE_HOST_CAPABILITIES,
-        capabilities: ['sessions.read', 'sessions.write', 'workspaces.read', 'workspaces.write', 'agent.pi', 'agent.events', 'agent.stop', 'planning', 'automation', 'delegation', 'agent.events.resume'],
+        capabilities: ['sessions.read', 'sessions.write', 'workspaces.read', 'workspaces.write', 'agent.pi', 'agent.events', 'agent.stop', 'planning', 'automation', 'delegation', 'agent.events.resume', 'resources.manage', 'chat'],
       } })
     } finally {
       await closeCoreServer(server)
@@ -171,7 +172,7 @@ describe('core server', () => {
         method: 'POST', apiKey: 'workspace-secret', body: { rootPath: projectRoot, name: 'Remote project' },
       })
       expect(created.statusCode).toBe(201)
-      expect(created.body).toMatchObject({ created: true, workspace: { name: 'Remote project', storageMode: 'project', rootPath: projectRoot } })
+      expect(created.body).toMatchObject({ created: true, workspace: { name: 'Remote project', storageMode: 'project', rootPath: realpathSync(projectRoot) } })
       const listed = await requestJson(port, '/workspaces', { apiKey: 'workspace-secret' })
       expect(listed).toMatchObject({ statusCode: 200, body: { workspaces: [expect.objectContaining({ name: 'Remote project' })] } })
     } finally {
@@ -257,28 +258,31 @@ describe('core server', () => {
     try {
       const project = runtime.workspaces.bindProject({ rootPath: projectRoot, name: 'Project' }).workspace
       const projectSession = runtime.sessions.create({ title: 'Project session', runtime: 'pi', workspaceId: project.id })
-      expect(runtime.createQuery(projectSession, 'hello').cwd).toBe(projectRoot)
+      expect(runtime.createQuery(projectSession, 'hello').cwd).toBe(realpathSync(projectRoot))
 
       const managed = runtime.workspaces.createManaged('Managed')
       const managedSession = runtime.sessions.create({ title: 'Managed session', runtime: 'pi', workspaceId: managed.id })
       expect(runtime.createQuery(managedSession, 'hello').cwd).toBe(join(workspaceRoot, managed.slug))
 
+      const canonicalProjectRoot = realpathSync(projectRoot)
       await import('node:fs/promises').then(({ rm }) => rm(projectRoot, { recursive: true }))
-      expect(() => runtime.createQuery(projectSession, 'hello')).toThrow(`Core 项目工作区根目录不存在：${projectRoot}`)
+      expect(() => runtime.createQuery(projectSession, 'hello')).toThrow(`Core 项目工作区根目录不存在：${canonicalProjectRoot}`)
       expect(await import('node:fs/promises').then(({ stat }) => stat(projectRoot).then(() => true, () => false))).toBe(false)
 
       const nonDirectoryRoot = join(configDir, 'not-a-directory')
       await import('node:fs/promises').then(({ mkdir }) => mkdir(nonDirectoryRoot))
       const nonDirectoryWorkspace = runtime.workspaces.bindProject({ rootPath: nonDirectoryRoot, name: 'Not a directory' }).workspace
       const nonDirectorySession = runtime.sessions.create({ title: 'Invalid project session', runtime: 'pi', workspaceId: nonDirectoryWorkspace.id })
+      const canonicalNonDirectoryRoot = realpathSync(nonDirectoryRoot)
       await import('node:fs/promises').then(async ({ rm, writeFile }) => {
         await rm(nonDirectoryRoot, { recursive: true })
         await writeFile(nonDirectoryRoot, 'file')
       })
-      expect(() => runtime.createQuery(nonDirectorySession, 'hello')).toThrow(`Core 项目工作区根路径不是目录：${nonDirectoryRoot}`)
+      expect(() => runtime.createQuery(nonDirectorySession, 'hello')).toThrow(`Core 项目工作区根路径不是目录：${canonicalNonDirectoryRoot}`)
 
-      const orphanedSession = runtime.sessions.create({ title: 'Orphaned session', runtime: 'pi', workspaceId: 'missing-workspace' })
-      expect(() => runtime.createQuery(orphanedSession, 'hello')).toThrow('Core 工作区不存在：missing-workspace')
+      const orphanedSession = runtime.sessions.create({ title: 'Orphaned session', runtime: 'pi', workspaceId: managed.id })
+      runtime.sessions.updateMeta(orphanedSession.id, { workspaceId: 'missing-workspace' })
+      expect(() => runtime.createQuery(runtime.sessions.getMeta(orphanedSession.id)!, 'hello')).toThrow('Core 工作区不存在：missing-workspace')
     } finally {
       runtime.dispose()
       await rm(configDir, { recursive: true, force: true })
@@ -334,7 +338,7 @@ describe('core server', () => {
       const created = await requestJson(port, '/sessions', {
         method: 'POST',
         apiKey: 'test-secret',
-        body: { title: 'Pi session', runtime: 'pi', channelId: 'deepseek', modelId: 'deepseek-chat' },
+        body: { workspaceId: runtime.workspaces.createManaged('测试工作区').id, title: 'Pi session', runtime: 'pi', channelId: 'deepseek', modelId: 'deepseek-chat' },
       })
       expect(created.statusCode).toBe(201)
       expect(created.body).toEqual(expect.objectContaining({ agentRuntime: 'pi', channelId: 'deepseek', modelId: 'deepseek-chat' }))
@@ -353,7 +357,7 @@ describe('core server', () => {
     await listenCoreServer(server, '127.0.0.1', 0)
     const port = (server.address() as AddressInfo).port
     try {
-      const created = await requestJson(port, '/sessions', { method: 'POST', apiKey: 'test-secret', body: { title: 'Permission mode', permissionMode: 'auto' } })
+      const created = await requestJson(port, '/sessions', { method: 'POST', apiKey: 'test-secret', body: { workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Permission mode', permissionMode: 'auto' } })
       expect(created).toMatchObject({ statusCode: 201, body: { permissionMode: 'auto' } })
       const sessionId = (created.body as { id: string }).id
       expect(await requestJson(port, `/sessions/${sessionId}`, { method: 'PATCH', apiKey: 'test-secret', body: { permissionMode: 'plan', expectedRevision: 0 } })).toMatchObject({ statusCode: 200, body: { permissionMode: 'plan', revision: 1 } })
@@ -384,7 +388,7 @@ describe('core server', () => {
     await listenCoreServer(server, '127.0.0.1', 0)
     const port = (server.address() as AddressInfo).port
     try {
-      const created = await requestJson(port, '/sessions', { method: 'POST', apiKey: 'test-secret', body: { title: 'Settings test' } })
+      const created = await requestJson(port, '/sessions', { method: 'POST', apiKey: 'test-secret', body: { workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Settings test' } })
       const sessionId = (created.body as { id: string }).id
       expect(await requestJson(port, `/sessions/${sessionId}`, { method: 'PATCH', apiKey: 'test-secret', body: { channelId: 'missing', modelId: 'model-1' } })).toMatchObject({ statusCode: 400, body: { error: '渠道不可用或不存在' } })
       expect(await requestJson(port, `/sessions/${sessionId}`, { method: 'PATCH', apiKey: 'test-secret', body: { channelId: 'channel-1', modelId: 'missing' } })).toMatchObject({ statusCode: 400, body: { error: '模型不属于当前渠道或未启用' } })
@@ -449,7 +453,7 @@ describe('core server', () => {
       })
       await expect(requestJson(port, '/workspaces')).resolves.toMatchObject({ statusCode: 401, body: { error: 'unauthorized' } })
 
-      const created = await requestJson(port, '/sessions', { method: 'POST', apiKey: 'test-secret', body: { title: 'Ubuntu session', cwd: configDir } })
+      const created = await requestJson(port, '/sessions', { method: 'POST', apiKey: 'test-secret', body: { workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Ubuntu session', cwd: configDir } })
       expect(created.statusCode).toBe(201)
       const session = created.body as { id: string; title: string }
       expect(session.title).toBe('Ubuntu session')

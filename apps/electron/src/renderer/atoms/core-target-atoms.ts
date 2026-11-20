@@ -32,3 +32,8 @@ export const coreSessionNavigationPhaseAtom = atom<'loading' | 'ready' | 'error'
 export async function loadCoreTargets(): Promise<CoreTargetsSnapshot> {
   return window.electronAPI.listCoreTargets()
 }
+
+/** 本机 Core 同样拥有 Chat 目录；旧桌面 local 不声明 chat 能力。 */
+export function ownsCoreChat(target: CoreTargetsSnapshot): boolean {
+  return target.currentId !== 'local' || Boolean(target.targets.find(item => item.id === target.currentId)?.capabilities?.includes('chat'))
+}

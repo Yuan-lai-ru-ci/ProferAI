@@ -27,3 +27,5 @@ export * from './shadow-git'
 export * from './planning-store'
 
 export * from './planning-agent-operations'
+
+export * from './conversation-store'

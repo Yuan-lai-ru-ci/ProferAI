@@ -1,3 +1,6 @@
+import { routeAutomationToCore } from './lib/automation-core-routing'
+import { registerCoreResourceHandler } from './lib/core-resource-routing'
+import { registerCoreChatHandler } from './lib/core-chat-routing'
 import { invokeCoreNative, forkCoreNative, captureCoreNativeRoute } from './lib/core-native-routing'
 /**
  * IPC 处理器模块
@@ -270,7 +273,7 @@ import { getLocalCoreClient, getLocalCoreStartFailure } from './lib/core-local-b
 /** 本机 Core 不可用时，把启动失败原因一并带出，避免只剩“未就绪”。 */
 function localCoreNotReadyMessage(): string {
   const reason = getLocalCoreStartFailure()
-  return reason ? `本机Core尚未就绪：${reason}` : localCoreNotReadyMessage()
+  return reason ? `本机Core尚未就绪：${reason}` : '本机Core尚未就绪'
 }
 import { routeGoalToCore } from './lib/goal-core-routing'
 import { registerCoreTargetIpc } from './lib/core-target-ipc'
@@ -1562,7 +1565,7 @@ export function registerIpcHandlers(): void {
   })
 
   // ===== 对话管理相关 =====
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.LIST_CONVERSATIONS,
     async (_, includeArchived?: boolean): Promise<ConversationMeta[]> => {
       if (getCurrentCoreTargetId() !== 'local') return []
@@ -1571,7 +1574,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 创建对话
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.CREATE_CONVERSATION,
     async (_, title?: string, modelId?: string, channelId?: string): Promise<ConversationMeta> => {
       if (getCurrentCoreTargetId() !== 'local') throw new Error('当前远程内核尚不支持 Chat 对话，请切回本机内核')
@@ -1580,7 +1583,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取对话消息
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.GET_MESSAGES,
     async (_, id: string): Promise<ChatMessage[]> => {
       if (getCurrentCoreTargetId() !== 'local') throw new Error('当前远程内核尚不支持 Chat 消息，请切回本机内核')
@@ -1589,7 +1592,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取对话最近 N 条消息（分页加载）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.GET_RECENT_MESSAGES,
     async (_, id: string, limit: number): Promise<RecentMessagesResult> => {
       return getRecentMessages(id, limit)
@@ -1597,7 +1600,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 更新对话标题（用户手动命名：同时定稿锁定，自动命名窗口永久退让）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.UPDATE_TITLE,
     async (_, id: string, title: string): Promise<ConversationMeta> => {
       return updateConversationMeta(id, { title, titleLockedAt: Date.now() })
@@ -1605,7 +1608,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 自动命名窗口（Chat）：流结束后由主进程按前几轮有效用户消息生成/精修标题
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.AUTO_TITLE,
     async (_, input: AutoTitleConversationInput): Promise<ConversationMeta | null> => {
       if (!input || typeof input.conversationId !== 'string' || !input.conversationId.trim()) return null
@@ -1614,7 +1617,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 手动重新生成对话标题：绕过定稿锁定，用前几轮有效消息重命名并重新锁定
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.REGENERATE_TITLE,
     async (_, id: string, channelId?: string, modelId?: string): Promise<ConversationMeta | null> => {
       return regenerateConversationTitle(id, channelId, modelId)
@@ -1622,7 +1625,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 更新对话使用的模型/渠道
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.UPDATE_MODEL,
     async (_, id: string, modelId?: string, channelId?: string): Promise<ConversationMeta> => {
       return updateConversationMeta(id, { modelId, channelId })
@@ -1630,7 +1633,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 删除对话
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.DELETE_CONVERSATION,
     async (_, id: string): Promise<void> => {
       return deleteConversation(id)
@@ -1638,7 +1641,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 切换对话置顶状态
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.TOGGLE_PIN,
     async (_, id: string): Promise<ConversationMeta> => {
       const conversations = listConversations(true)
@@ -1656,7 +1659,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 切换对话归档状态
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.TOGGLE_ARCHIVE,
     async (_, id: string): Promise<ConversationMeta> => {
       const conversations = listConversations(true)
@@ -1674,7 +1677,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 搜索对话消息内容
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.SEARCH_MESSAGES,
     async (_, query: string) => {
       return searchConversationMessages(query)
@@ -1682,7 +1685,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取教程内容
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.GET_TUTORIAL_CONTENT,
     async (): Promise<string | null> => {
       return getTutorialContent()
@@ -1690,7 +1693,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 创建欢迎对话（含教程附件）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.CREATE_WELCOME_CONVERSATION,
     async (): Promise<ConversationMeta | null> => {
       return createWelcomeConversation()
@@ -1698,7 +1701,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取“自建 FRP 服务器”教程内容
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.GET_FRP_GUIDE_CONTENT,
     async (): Promise<string | null> => {
       return getFrpGuideContent()
@@ -1707,7 +1710,7 @@ export function registerIpcHandlers(): void {
 
   // 发送消息（触发 AI 流式响应）
   // 注意：通过 event.sender 获取 webContents 用于推送流式事件
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.SEND_MESSAGE,
     async (event, input: ChatSendInput): Promise<void> => {
       if (getCurrentCoreTargetId() !== 'local') throw new Error('当前远程内核尚不支持 Chat 对话，请切回本机内核')
@@ -1716,7 +1719,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 资料引用是独立消息，不能伪装为附件，否则删除/截断会误删资料实体。
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES,
     async (_, conversationId: string, itemIds: string[]): Promise<ChatMessage> => {
       if (typeof conversationId !== 'string' || !conversationId.trim()) throw new Error('对话标识无效')
@@ -1730,7 +1733,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 中止生成
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.STOP_GENERATION,
     async (_, conversationId: string): Promise<void> => {
       stopGeneration(conversationId)
@@ -1738,7 +1741,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 删除消息
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.DELETE_MESSAGE,
     async (_, conversationId: string, messageId: string): Promise<ChatMessage[]> => {
       return deleteMessage(conversationId, messageId)
@@ -1746,7 +1749,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 从指定消息开始截断（包含该消息）— 已废弃，仅保留兼容入口
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.TRUNCATE_MESSAGES_FROM,
     async (
       _,
@@ -1764,7 +1767,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取当前激活分支（线性消息流）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.GET_BRANCH,
     async (_, conversationId: string): Promise<ChatMessage[]> => {
       return getConversationBranch(conversationId)
@@ -1772,7 +1775,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 设置激活分支
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.SET_ACTIVE_PATH,
     async (_, conversationId: string, path: string[]) => {
       setActivePath(conversationId, path)
@@ -1781,7 +1784,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取全量分支树快照
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.GET_BRANCH_TREE,
     async (_, conversationId: string) => {
       return getBranchTree(conversationId)
@@ -1789,7 +1792,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 在 anchorId 的兄弟位置 fork 一条新 user message（用于重发/编辑重发）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.FORK_BRANCH_AT,
     async (
       _,
@@ -1802,7 +1805,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 按 ID 取单条消息的完整 content（BranchTreeView hover popover 用）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.GET_MESSAGE_CONTENT,
     async (_, conversationId: string, messageId: string): Promise<string | null> => {
       return getMessageContent(conversationId, messageId)
@@ -1810,7 +1813,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 更新上下文分隔线
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.UPDATE_CONTEXT_DIVIDERS,
     async (_, conversationId: string, dividers: string[]): Promise<ConversationMeta> => {
       return updateContextDividers(conversationId, dividers)
@@ -1818,7 +1821,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 生成对话标题
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.GENERATE_TITLE,
     async (_, input: GenerateTitleInput): Promise<string | null> => {
       return generateTitle(input)
@@ -1828,7 +1831,7 @@ export function registerIpcHandlers(): void {
   // ===== 附件管理相关 =====
 
   // 保存附件到本地
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.SAVE_ATTACHMENT,
     async (_, input: AttachmentSaveInput): Promise<AttachmentSaveResult> => {
       return saveAttachment(input)
@@ -1836,7 +1839,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 读取附件（返回 base64）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.READ_ATTACHMENT,
     async (_, localPath: string): Promise<string> => {
       return readAttachmentAsBase64(localPath)
@@ -1847,7 +1850,7 @@ export function registerIpcHandlers(): void {
   // 走主进程 clipboard.writeImage 而非渲染层 navigator.clipboard.write：后者依赖窗口聚焦
   // 与剪贴板权限，Electron 里窗口失焦时静默失败；主进程没有这个限制。
   // 复用 readAttachmentAsBase64 的安全目录校验，非法路径直接抛错由渲染层提示。
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.COPY_IMAGE,
     async (_, localPath: string): Promise<boolean> => {
       const base64 = readAttachmentAsBase64(localPath)
@@ -1860,7 +1863,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 另存图片到用户选择的位置（原生 Save As 对话框）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.SAVE_IMAGE_AS,
     async (event, localPath: string, defaultFilename: string): Promise<boolean> => {
       const { dialog, BrowserWindow } = await import('electron')
@@ -1889,7 +1892,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 保存应用内置资源文件到用户选择的位置（原生 Save As 对话框）
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.SAVE_RESOURCE_FILE_AS,
     async (event, resourceRelativePath: string, defaultFilename: string): Promise<boolean> => {
       const { dialog, BrowserWindow } = await import('electron')
@@ -1929,7 +1932,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 删除附件
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.DELETE_ATTACHMENT,
     async (_, localPath: string): Promise<void> => {
       deleteAttachment(localPath)
@@ -1937,7 +1940,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 打开文件选择对话框
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG,
     async (): Promise<FileDialogResult> => {
       return openFileDialog()
@@ -1945,7 +1948,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 提取附件文档的文本内容
-  ipcMain.handle(
+  registerCoreChatHandler(
     CHAT_IPC_CHANNELS.EXTRACT_ATTACHMENT_TEXT,
     async (_, localPath: string): Promise<string> => {
       return extractTextFromAttachment(localPath)
@@ -2097,10 +2100,14 @@ export function registerIpcHandlers(): void {
       if (getCurrentCoreTargetId() !== 'local') {
         const client = getActiveCoreClient()
         if (!client) throw new Error('当前远程内核未连接')
+        const coreId = currentCoreId()
+        const generation = getCoreTargetGeneration()
+        if (!coreId) throw new Error('当前远程内核身份未确认')
         const remote = workspaceId && reuseWorkspaceSession
           ? await client.ensureWorkspaceSession({ workspaceId, channelId, modelId })
-          : await client.createSession({ title, runtime: 'pi', channelId, modelId, workspaceId })
-        return { id: namespaceCoreSessionId(remote.id, currentCoreId() ?? 'remote'), title: remote.title, agentRuntime: remote.agentRuntime === 'pi' ? 'pi' : 'claude',
+          : await client.createSession({ useCoreDefaults: true, title, channelId, modelId, workspaceId, presetId })
+        if (getActiveCoreClient() !== client || currentCoreId() !== coreId || getCoreTargetGeneration() !== generation) throw new Error('Core已切换，忽略旧会话创建响应')
+        return { id: namespaceCoreSessionId(remote.id, coreId), title: remote.title, agentRuntime: remote.agentRuntime === 'pi' ? 'pi' : 'claude',
           agentRuntimeLocked: false,
           ...(remote.workspaceId ? { workspaceId: remote.workspaceId } : {}),
           ...(remote.channelId ? { channelId: remote.channelId } : {}), ...(remote.modelId ? { modelId: remote.modelId } : {}),
@@ -2108,18 +2115,19 @@ export function registerIpcHandlers(): void {
           createdAt: remote.createdAt ?? Date.now(), updatedAt: remote.updatedAt ?? Date.now(),
         } as AgentSessionMeta
       }
-      // 未显式指定预设时继承该工作区默认预设，保证快捷新建/协作子会话/机器人桥等入口统一行为
-      const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
-      const effectivePresetId = presetId ?? getDefaultPresetId(workspaceSlug)
       const localCoreClient = getLocalCoreClient()
       if (localCoreClient || process.env.PROFER_CORE_LOCAL === '1') {
-        if (!localCoreClient) throw new Error('本地Core未就绪')
+        if (!localCoreClient) throw new Error(localCoreNotReadyMessage())
+        const generation = getCoreTargetGeneration()
         const session = workspaceId && reuseWorkspaceSession
           ? await localCoreClient.ensureWorkspaceSession({ workspaceId, channelId, modelId })
-          : await localCoreClient.createSession({ title, runtime: getSettings().agentRuntime ?? DEFAULT_AGENT_RUNTIME, channelId, modelId, workspaceId, presetId: effectivePresetId,
-            presetReference: presetReferenceForId(workspaceSlug, effectivePresetId) })
+          : await localCoreClient.createSession({ useCoreDefaults: true, title, channelId, modelId, workspaceId, presetId })
+        if (getCurrentCoreTargetId() !== 'local' || getLocalCoreClient() !== localCoreClient || getCoreTargetGeneration() !== generation) throw new Error('Core已切换，忽略旧会话创建响应')
         return session as AgentSessionMeta
       }
+      // 只有未接管的旧桌面链解析桌面默认配置。
+      const workspaceSlug = workspaceId ? getAgentWorkspace(workspaceId)?.slug : undefined
+      const effectivePresetId = presetId ?? getDefaultPresetId(workspaceSlug)
       const session = createAgentSession(title, channelId, workspaceId, modelId, getSettings().agentRuntime ?? DEFAULT_AGENT_RUNTIME, false, effectivePresetId)
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
@@ -2142,16 +2150,16 @@ export function registerIpcHandlers(): void {
   )
 
   // Agent 预设
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS,
     async (_, workspaceSlug?: string, includeInactiveGlobal = false): Promise<AgentPreset[]> => {
       return listAgentPresets(workspaceSlug, includeInactiveGlobal)
     },
   )
 
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.LIST_GLOBAL_PRESETS, async (): Promise<AgentPreset[]> => listGlobalAgentPresets())
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.LIST_GLOBAL_PRESETS, async (): Promise<AgentPreset[]> => listGlobalAgentPresets())
 
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.GET_REFERENCE_REPORT, async (_, reference: PresetReference): Promise<PresetReferenceReport> => {
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.GET_REFERENCE_REPORT, async (_, reference: PresetReference): Promise<PresetReferenceReport> => {
     const local = getCurrentCoreTargetId() === 'local'
     const client = local ? getLocalCoreClient() : getActiveCoreClient()
     if (!client) {
@@ -2171,26 +2179,26 @@ export function registerIpcHandlers(): void {
     })
   })
 
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.DELETE_GLOBAL_PRESET, async (_, reference: PresetReference): Promise<void> => {
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.DELETE_GLOBAL_PRESET, async (_, reference: PresetReference): Promise<void> => {
     return deleteGlobalAgentPreset(reference)
   })
 
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.COPY_TO_WORKSPACE, async (_, reference: PresetReference, workspaceSlug: string, name?: string): Promise<AgentPreset> => {
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.COPY_TO_WORKSPACE, async (_, reference: PresetReference, workspaceSlug: string, name?: string): Promise<AgentPreset> => {
     return copyPresetToWorkspace(reference, workspaceSlug, name)
   })
 
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.CREATE_GLOBAL_PRESET, async (_, input: AgentPresetCreateInput): Promise<AgentPreset> => createGlobalAgentPreset(input))
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.PROMOTE_WORKSPACE_PRESET_TO_GLOBAL, async (_, workspaceSlug: string, presetId: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true): Promise<AgentPreset> => promoteWorkspacePresetToGlobal(workspaceSlug, presetId, targetWorkspaceSlugs, keepWorkspaceCopy))
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.UPDATE_GLOBAL_PRESET, async (_, presetId: string, updates: AgentPresetUpdateInput): Promise<AgentPreset> => updateGlobalAgentPreset(presetId, updates))
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_REFERENCE, async (_, workspaceSlug: string, reference: PresetReference): Promise<PresetReference> => setDefaultPresetReference(workspaceSlug, reference))
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.ENABLE_GLOBAL_IN_WORKSPACE, async (_, workspaceSlug: string, reference: PresetReference): Promise<void> => enableGlobalPresetInWorkspace(workspaceSlug, reference))
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.DISABLE_GLOBAL_IN_WORKSPACE, async (_, workspaceSlug: string, reference: PresetReference): Promise<void> => disableGlobalPresetInWorkspace(workspaceSlug, reference))
-  ipcMain.handle(
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.CREATE_GLOBAL_PRESET, async (_, input: AgentPresetCreateInput): Promise<AgentPreset> => createGlobalAgentPreset(input))
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.PROMOTE_WORKSPACE_PRESET_TO_GLOBAL, async (_, workspaceSlug: string, presetId: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true): Promise<AgentPreset> => promoteWorkspacePresetToGlobal(workspaceSlug, presetId, targetWorkspaceSlugs, keepWorkspaceCopy))
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.UPDATE_GLOBAL_PRESET, async (_, presetId: string, updates: AgentPresetUpdateInput): Promise<AgentPreset> => updateGlobalAgentPreset(presetId, updates))
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_REFERENCE, async (_, workspaceSlug: string, reference: PresetReference): Promise<PresetReference> => setDefaultPresetReference(workspaceSlug, reference))
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.ENABLE_GLOBAL_IN_WORKSPACE, async (_, workspaceSlug: string, reference: PresetReference): Promise<void> => enableGlobalPresetInWorkspace(workspaceSlug, reference))
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.DISABLE_GLOBAL_IN_WORKSPACE, async (_, workspaceSlug: string, reference: PresetReference): Promise<void> => disableGlobalPresetInWorkspace(workspaceSlug, reference))
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.REBIND_AND_DISABLE_GLOBAL_SCOPE,
     async (_, workspaceSlug: string, source: PresetReference, replacement?: PresetReference): Promise<PresetScopeRebindResult> =>
       rebindAndDisableGlobalPresetScope(workspaceSlug, source, replacement),
   )
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.SET_WORKSPACE_ENABLED, async (_, workspaceSlug: string, presetId: string, enabled: boolean): Promise<void> => setWorkspacePresetEnabled(workspaceSlug, presetId, enabled))
+  registerCoreResourceHandler(AGENT_PRESET_IPC_CHANNELS.SET_WORKSPACE_ENABLED, async (_, workspaceSlug: string, presetId: string, enabled: boolean): Promise<void> => setWorkspacePresetEnabled(workspaceSlug, presetId, enabled))
   ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.REBIND_SESSION_REFERENCE, async (event, sessionId: string, reference: PresetReference, expectedRevision?: number): Promise<AgentSessionMeta> => {
     assertSensitiveAgentIpcSender(event)
     const core = await routeSessionMetaToCore(sessionId, { presetReference: reference, expectedRevision })
@@ -2202,9 +2210,14 @@ export function registerIpcHandlers(): void {
     publishAgentSessionProjection(updated)
     return updated
   })
-  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.REBIND_AUTOMATION_REFERENCE, async (_, automationId: string, reference: PresetReference | null) => rebindAutomationPreset(automationId, reference))
+  ipcMain.handle(AGENT_PRESET_IPC_CHANNELS.REBIND_AUTOMATION_REFERENCE, async (_, automationId: string, reference: PresetReference | null) => {
+    const core = await routeAutomationToCore(AUTOMATION_IPC_CHANNELS.UPDATE, [{ id: automationId,
+      presetId: reference?.presetId ?? '', ...(reference ? { presetReference: reference } : {}) }])
+    if (core) return core.result
+    return rebindAutomationPreset(automationId, reference)
+  })
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.GET_DEFAULT_PRESET,
     async (_, workspaceSlug?: string): Promise<string> => {
       return getDefaultPresetId(workspaceSlug)
@@ -2230,35 +2243,35 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_PRESET,
     async (_, workspaceSlug: string, presetId: string): Promise<string> => {
       return setDefaultPresetId(workspaceSlug, presetId)
     },
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.CREATE_PRESET,
     async (_, workspaceSlug: string, input: AgentPresetCreateInput): Promise<AgentPreset> => {
       return createAgentPreset(workspaceSlug, input)
     },
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.COPY_PRESET,
     async (_, workspaceSlug: string, fromId: string, name?: string): Promise<AgentPreset> => {
       return copyAgentPreset(workspaceSlug, fromId, name)
     },
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.UPDATE_PRESET,
     async (_, workspaceSlug: string, presetId: string, updates: AgentPresetUpdateInput): Promise<AgentPreset> => {
       return updateAgentPreset(workspaceSlug, presetId, updates)
     },
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.DELETE_PRESET,
     async (_, workspaceSlug: string, presetId: string): Promise<void> => {
       return deleteAgentPreset(workspaceSlug, presetId)
@@ -2266,14 +2279,14 @@ export function registerIpcHandlers(): void {
   )
 
   // 跨工作区预设导入（与 Skill 导入同构）
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.GET_OTHER_WORKSPACE_PRESETS,
     async (_, currentSlug: string): Promise<OtherWorkspacePresetsGroup[]> => {
       return getOtherWorkspacePresets(currentSlug)
     },
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESET_FROM_WORKSPACE,
     async (_, targetSlug: string, sourceSlug: string, presetId: string): Promise<AgentPreset> => {
       return importPresetFromWorkspace(targetSlug, sourceSlug, presetId)
@@ -2281,7 +2294,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 预设导出为 JSON 文件（跨机器分享）；返回 null 表示用户取消保存对话框
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.EXPORT_PRESETS,
     async (_, workspaceSlug: string, presetIds?: string[]): Promise<{ filePath: string; count: number } | null> => {
       // 未指定则导出全部可用预设（内置 + 自定义）；指定时忽略未知 ID
@@ -2306,7 +2319,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 从 JSON 文件导入预设；返回 null 表示用户取消打开对话框；格式非法抛错（渲染层展示）
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESETS,
     async (_, workspaceSlug: string): Promise<AgentPresetImportResult | null> => {
       const result = await dialog.showOpenDialog({
@@ -2932,6 +2945,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.MOVE_SESSION_TO_WORKSPACE,
     async (_, input: MoveSessionToWorkspaceInput): Promise<AgentSessionMeta> => {
+      const core = captureCoreNativeRoute(input.sessionId)
+      if (core) throw new Error('Core暂不支持跨工作区迁移会话；不会修改桌面副本')
       // 渲染进程的 running 状态可能比主进程 activeSessions 清理更早变为 false
       // （STREAM_COMPLETE 在 finally 之前发送），短暂等待后重试一次
       if (isAgentSessionActive(input.sessionId)) {
@@ -3455,7 +3470,7 @@ export function registerIpcHandlers(): void {
   // ===== 工作区能力（MCP + Skill） =====
 
   // 获取工作区能力摘要
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.GET_CAPABILITIES,
     async (_, workspaceSlug: string): Promise<WorkspaceCapabilities> => {
       return getWorkspaceCapabilities(workspaceSlug)
@@ -3463,7 +3478,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取工作区 MCP 配置
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.GET_MCP_CONFIG,
     async (_, workspaceSlug: string): Promise<WorkspaceMcpConfig> => {
       return getWorkspaceMcpConfig(workspaceSlug)
@@ -3471,7 +3486,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 保存工作区 MCP 配置
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.SAVE_MCP_CONFIG,
     async (_, workspaceSlug: string, config: WorkspaceMcpConfig): Promise<void> => {
       saveWorkspaceMcpConfig(workspaceSlug, config)
@@ -3492,7 +3507,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 测试 MCP 服务器连接：真实握手 + 工具清单，结果落盘到该工作区配置
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.TEST_MCP_SERVER,
     async (_, name: string, entry: import('@profer/shared').McpServerEntry, workspaceSlug?: string): Promise<{ success: boolean; message: string; reason?: McpProbeFailureReason; tools?: McpToolSummary[] }> => {
       const { probeMcpServer, mcpConfigFingerprint } = await import('./lib/mcp-probe')
@@ -3525,7 +3540,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 重启单个 MCP server 的常驻连接（Pi runtime；Claude runtime 每轮由 SDK 自行起进程）
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.RESTART_MCP_SERVER,
     async (_, name: string): Promise<McpServerRestartResult> => {
       const { restartMcpServer } = await import('./lib/adapters/pi-mcp-tools')
@@ -3534,7 +3549,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取当前 MCP 连接快照（不含凭据，供设置页展示）
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.GET_MCP_CONNECTION_STATUS,
     async (): Promise<McpConnectionSnapshot[]> => {
       const { listMcpConnectionSnapshots } = await import('./lib/adapters/pi-mcp-tools')
@@ -3542,12 +3557,12 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle(AGENT_IPC_CHANNELS.PROMOTE_SKILL_TO_GLOBAL, async (_, workspaceSlug: string, skillSlug: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true): Promise<import('@profer/shared').GlobalSkillManifest> => {
+  registerCoreResourceHandler(AGENT_IPC_CHANNELS.PROMOTE_SKILL_TO_GLOBAL, async (_, workspaceSlug: string, skillSlug: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true): Promise<import('@profer/shared').GlobalSkillManifest> => {
     return promoteWorkspaceSkillToGlobal(workspaceSlug, skillSlug, targetWorkspaceSlugs, keepWorkspaceCopy)
   })
 
   // 获取工作区 Skill 列表（含活跃和不活跃，设置页 UI 用）
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.GET_SKILLS,
     async (_, workspaceSlug: string): Promise<SkillMeta[]> => {
       return getAllWorkspaceSkills(workspaceSlug, true)
@@ -3555,7 +3570,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取工作区 Skills 目录绝对路径
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.GET_SKILLS_DIR,
     async (_, workspaceSlug: string): Promise<string> => {
       return getWorkspaceSkillsDir(workspaceSlug)
@@ -3563,7 +3578,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 创建工作区 Skill
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.CREATE_SKILL,
     async (_, workspaceSlug: string, skillSlug: string, name: string, description: string, content: string): Promise<void> => {
       createWorkspaceSkill(workspaceSlug, skillSlug, name, description, content)
@@ -3571,7 +3586,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 删除工作区 Skill
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.DELETE_SKILL,
     async (_, workspaceSlug: string, skillSlug: string): Promise<void> => {
       return deleteWorkspaceSkill(workspaceSlug, skillSlug)
@@ -3579,7 +3594,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 切换工作区 Skill 启用/禁用
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.TOGGLE_SKILL,
     async (_, workspaceSlug: string, skillSlug: string, enabled: boolean, sourceSkillId?: string): Promise<void> => {
       assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
@@ -3591,7 +3606,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取其他工作区的 Skill 列表
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.GET_OTHER_WORKSPACE_SKILLS,
     async (_, currentSlug: string) => {
       return getOtherWorkspaceSkills(currentSlug)
@@ -3599,7 +3614,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 获取默认 Skills 的 slug 列表（来自 ~/.profer/default-skills/）
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS,
     async () => {
       return getDefaultSkillSlugs()
@@ -3607,7 +3622,7 @@ export function registerIpcHandlers(): void {
   )
 
   // 从其他工作区导入 Skill
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.IMPORT_SKILL_FROM_WORKSPACE,
     async (_, targetSlug: string, sourceSlug: string, skillSlug: string): Promise<SkillMeta> => {
       assertSafeSkillSegment(targetSlug, 'target workspaceSlug')
@@ -3618,35 +3633,35 @@ export function registerIpcHandlers(): void {
   )
 
   // 从源工作区同步更新已导入的 Skill
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.UPDATE_SKILL_FROM_SOURCE,
     async (_, targetSlug: string, skillSlug: string): Promise<SkillMeta> => {
       return updateSkillFromSource(targetSlug, skillSlug)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.READ_SKILL_CONTENT,
     async (_, workspaceSlug: string, skillSlug: string): Promise<string> => {
       return readWorkspaceSkillContent(workspaceSlug, skillSlug)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.WRITE_SKILL_CONTENT,
     async (_, workspaceSlug: string, skillSlug: string, content: string): Promise<void> => {
       writeWorkspaceSkillContent(workspaceSlug, skillSlug, content)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.READ_SKILL_CARD,
     async (_, workspaceSlug: string, skillSlug: string) => {
       return readWorkspaceSkillCard(workspaceSlug, skillSlug)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.WRITE_SKILL_CARD,
     async (_, workspaceSlug: string, skillSlug: string, patch: import('@profer/shared').SkillManifestPatch) => {
       return writeWorkspaceSkillCard(workspaceSlug, skillSlug, patch)
@@ -3655,42 +3670,42 @@ export function registerIpcHandlers(): void {
 
   // ===== Skill 子文件管理 =====
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.LIST_SKILL_FILES,
     async (_, workspaceSlug: string, skillSlug: string) => {
       return listSkillFiles(workspaceSlug, skillSlug)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.READ_SKILL_FILE,
     async (_, workspaceSlug: string, skillSlug: string, relativePath: string) => {
       return readSkillFile(workspaceSlug, skillSlug, relativePath)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.WRITE_SKILL_FILE,
     async (_, workspaceSlug: string, skillSlug: string, relativePath: string, content: string): Promise<void> => {
       writeSkillFile(workspaceSlug, skillSlug, relativePath, content)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.CREATE_SKILL_ENTRY,
     async (_, workspaceSlug: string, skillSlug: string, relativePath: string, type: 'file' | 'directory'): Promise<void> => {
       createSkillEntry(workspaceSlug, skillSlug, relativePath, type)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.DELETE_SKILL_ENTRY,
     async (_, workspaceSlug: string, skillSlug: string, relativePath: string): Promise<void> => {
       deleteSkillEntry(workspaceSlug, skillSlug, relativePath)
     }
   )
 
-  ipcMain.handle(
+  registerCoreResourceHandler(
     AGENT_IPC_CHANNELS.RENAME_SKILL_ENTRY,
     async (_, workspaceSlug: string, skillSlug: string, fromRelative: string, toRelative: string): Promise<void> => {
       renameSkillEntry(workspaceSlug, skillSlug, fromRelative, toRelative)
@@ -3710,14 +3725,20 @@ export function registerIpcHandlers(): void {
         if (!client) throw new Error('当前远程内核未连接')
         const remoteSessionId = parseCoreSessionId(input.sessionId)
         if (!remoteSessionId || remoteSessionId.coreId !== currentCoreId()) throw new Error('远程 Agent 会话不属于当前 Core')
+        const coreId = currentCoreId()
+        const generation = getCoreTargetGeneration()
         const currentSession = (await client.listSessions()).find(session => session.id === remoteSessionId.sessionId)
+        const assertCurrent = () => {
+          if (getActiveCoreClient() !== client || currentCoreId() !== coreId || getCoreTargetGeneration() !== generation) throw new Error('Core已切换，拒绝向旧目标发送')
+        }
+        assertCurrent()
         if (!currentSession) throw new Error('远程 Agent 会话不存在')
         if (currentSession.agentRuntime !== 'pi' && currentSession.agentRuntime !== 'claude') throw new Error('远程Core不支持此Agent runtime')
         registerWebContents(input.sessionId, event.sender)
         relayRemoteCoreRun(input.sessionId, remoteSessionId.sessionId, client, event.sender)
         const messageUuid = input.uuid ?? randomUUID()
         const context = createAgentRunContext({ sessionId: remoteSessionId.sessionId, uuid: messageUuid, initiator: 'user', triggeredBy: 'user' }, randomUUID)
-        await client.sendMessage(remoteSessionId.sessionId, input.userMessage, { uuid: messageUuid, rawUserMessage: input.rawUserMessage, startedAt: input.startedAt, context })
+        await client.sendMessage(remoteSessionId.sessionId, input.userMessage, { channelId: input.channelId, modelId: input.modelId, uuid: messageUuid, rawUserMessage: input.rawUserMessage, startedAt: input.startedAt, context }, assertCurrent)
         return
       }
       input = normalizeUserSendInput(input)
@@ -3730,6 +3751,8 @@ export function registerIpcHandlers(): void {
         workspaceExists: (workspaceId) => Boolean(getAgentWorkspace(workspaceId)),
         getChannel: getChannelById,
         validatePreset: (session) => {
+          // Core按所属资源校验并保存预设；桌面不得自愈共享业务索引。
+          if (getLocalCoreClient() || process.env.PROFER_CORE_LOCAL === '1') return
           const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
           // 兼容作用域引用上线前/回归期间产生的脏会话：若引用缺失或为空，
           // 按会话 ID 重新解析；连 presetId 也缺失时使用内置 standard。

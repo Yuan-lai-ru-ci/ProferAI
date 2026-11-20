@@ -1,3 +1,4 @@
+import { assertResourcePath } from './resource-paths'
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { GlobalSkillManifest, ResolvedSkillMeta, WorkspaceSkillOverridesFile, WorkspaceSkillSource } from '@profer/shared'
@@ -7,6 +8,7 @@ import { readSkillDescriptor } from '@profer/agent-provider-pi/skills/skill-mani
 import type { CoreConfig } from './config'
 
 function read(path: string): Record<string, unknown> | undefined {
+  assertResourcePath(path)
   if (!existsSync(path)) return undefined
   const value: unknown = JSON.parse(readFileSync(path, 'utf8'))
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Core Skill来源配置格式错误')
@@ -18,6 +20,7 @@ export function resolveCoreSkillSources(config: CoreConfig, workspaceConfigDir?:
   const globals: Array<GlobalSkillManifest & { path: string }> = []
   for (const [directory, type] of [['builtin', 'builtin-meta'], ['user', 'user-global']] as const) {
     const root = join(config.configDir, 'global-skills', directory)
+    assertResourcePath(root)
     if (!existsSync(root)) continue
     for (const entry of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       if (entry.name.startsWith('.')) continue
@@ -28,6 +31,7 @@ export function resolveCoreSkillSources(config: CoreConfig, workspaceConfigDir?:
       const value = read(join(path, 'skill-library.json')) ?? read(join(path, 'skill.manifest.json'))
       if (!value || value.schemaVersion !== 1 || value.skillId !== entry.name || value.type !== type || typeof value.slug !== 'string' || typeof value.name !== 'string' || typeof value.version !== 'string') throw new Error('Core全局Skill账本无效，不按同名猜测来源')
       assertSafeSkillSegment(value.slug, 'global Skill slug')
+      assertResourcePath(join(path, 'SKILL.md')); assertResourcePath(join(path, 'SKILL.json'))
       if (!existsSync(join(path, 'SKILL.md'))) throw new Error('Core全局Skill正文缺失')
       globals.push({ ...(value as unknown as GlobalSkillManifest), path })
     }
@@ -41,6 +45,7 @@ export function resolveCoreSkillSources(config: CoreConfig, workspaceConfigDir?:
   const local: ResolvedSkillMeta[] = [], localAll: ResolvedSkillMeta[] = []
   if (workspaceConfigDir) for (const [directory, enabled] of [['skills', true], ['skills-inactive', false]] as const) {
     const root = join(workspaceConfigDir, directory)
+    assertResourcePath(root)
     if (!existsSync(root)) continue
     for (const entry of readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       if (entry.name.startsWith('.')) continue
@@ -50,6 +55,7 @@ export function resolveCoreSkillSources(config: CoreConfig, workspaceConfigDir?:
       if (!entry.isDirectory() || !existsSync(join(path, 'SKILL.md'))) continue
       if (lstatSync(join(path, 'SKILL.md')).isSymbolicLink()) throw new Error('Core不支持软链Skill正文')
       const source = read(join(path, '.source.json')) as WorkspaceSkillSource | undefined
+      assertResourcePath(join(path,'SKILL.json'))
       const descriptor = readSkillDescriptor(path, entry.name).descriptor
       const meta: ResolvedSkillMeta = { ...source, slug: entry.name, name: descriptor.name, version: descriptor.version, path, scope: 'workspace', actualSource: 'workspace' }
       localAll.push(meta)

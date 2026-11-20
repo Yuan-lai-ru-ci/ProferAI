@@ -1,3 +1,4 @@
+import { resolveNativePiSessionFile } from './native-session-pi'
 import { createPlanningAgentOperations, createPlanningStore, type PlanningStore, createSyncSessionIndexStore, createSyncSessionMessageStore, createSessionStorePaths, createFileRunLedgerPort } from '@profer/session-store'
 import { registerOwnedSessionLayout, mirrorProjectSessionIndexes, restoreProjectSessionIndexes } from '@profer/session-store'
 import { configuredSessionInput, type CoreConfiguredSessionInput } from './configured-session'
@@ -47,9 +48,12 @@ import { openCorePlanningDatabase } from './planning-database'
 import type { CoreMessageOptions } from './message-input'
 import { createPlanModeToolPolicy } from '@profer/agent-runtime/plan-mode-tool-policy'
 import { AgentExitPlanService } from '@profer/agent-runtime/exit-plan-service'
+import { executeCoreResourceOperation } from './resource-operations'
+import type { CoreResourceOperationBody } from './resource-operations'
 import { CoreGoalStore } from './goal-store'
 import { CoreGoalService } from './goal-service'
 import { AgentAskUserService } from '@profer/agent-runtime/ask-user-service'
+import { createCoreChat, type CoreChat } from './chat'
 import { loadCoreMcpServers } from './mcp-resources'
 import { buildPiMcpTools, discoverExternalMcpTools, PiMcpClientManager, type PiMcpServers } from '@profer/agent-provider-pi/pi/mcp-tools'
 import { withLoadedMcpServerNames } from '@profer/shared'
@@ -85,12 +89,14 @@ function isSessionDescendant(sessions: readonly AgentSessionMeta[], candidateId:
 }
 
 export interface CoreEvent {
-  type: 'runtime' | 'message' | 'complete' | 'error' | 'planning' | 'automation' | 'workspace'
+  type: 'chat' | 'runtime' | 'message' | 'complete' | 'error' | 'planning' | 'automation' | 'workspace'
   sessionId: string
   payload: unknown
 }
 
 export interface CoreAgentRuntime {
+  chat: CoreChat
+  resourceOperation(body: CoreResourceOperationBody): Promise<unknown>
   deletions: CoreSessionDeletionService
   delegations: CoreDelegationService
   automations: CoreAutomationService
@@ -142,6 +148,8 @@ export interface CoreAgentRuntime {
   createQuery(session: AgentSessionMeta, prompt: string, options?: CoreMessageOptions): AgentRuntimeQuery
   subscribe(listener: (event: CoreEvent) => void): () => void
   publish(event: CoreEvent): void
+  beginShutdown(): void
+  assertAcceptingRuns(): void
   shutdown(): Promise<void>
   dispose(): void
   listRuns(): import('@profer/agent-runtime').AgentRun[]
@@ -230,6 +238,7 @@ function createCoreSessionStore(configDir: string, defaultRuntime: AgentRuntime,
     return readMeta(sessionId)!
   }
   const createSession = (input: { title: string; runtime?: AgentRuntime; draft?: boolean; modelId?: string; channelId?: string; cwd?: string; workspaceId?: string; presetId?: string; presetReference?: AgentSessionMeta['presetReference']; permissionMode?: AgentSessionMeta['permissionMode'] }): AgentSessionMeta => {
+    if (!input.workspaceId || !workspaceFor(input.workspaceId)) throw new Error('会话必须显式指定合法Core工作区')
     if (input.workspaceId && isWorkspaceDeleting(input.workspaceId)) throw new Error('工作区正在删除，不能创建会话')
     reconcileProjects()
     const now = Date.now()
@@ -253,15 +262,10 @@ function createCoreSessionStore(configDir: string, defaultRuntime: AgentRuntime,
     return meta
   }
   const ensureWorkspaceSession = (input: { workspaceId: string; channelId?: string; modelId?: string }): AgentSessionMeta => {
+    if (!input.workspaceId || !workspaceFor(input.workspaceId)) throw new Error('会话必须显式指定合法Core工作区')
+    if (isWorkspaceDeleting(input.workspaceId)) throw new Error('工作区正在删除，不能创建会话')
     const existing = index.list(true).find(session => session.workspaceId === input.workspaceId && !session.archived && !deletions.isDeleting(session.id))
-    if (existing) {
-      const patch = {
-        ...(input.channelId ? { channelId: input.channelId } : {}),
-        ...(input.modelId ? { modelId: input.modelId } : {}),
-      }
-      if (Object.keys(patch).length) updateUi(existing.id, patch)
-      return index.get(existing.id) ?? existing
-    }
+    if (existing) return existing
     return createSession({ title: 'New session', runtime: 'pi', ...input })
   }
   return {
@@ -505,11 +509,13 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
       if (existsSync(directory)) {
         const stats = statSync(directory)
         if (!stats.isDirectory()) throw new Error('工作区路径不再是目录')
-        // managed目录属于Core私有工作区；事务已冻结全部会话和任务，并确认根身份。
-        // 项目绑定不进入此分支。失败保留operation，重试继续清理，索引只在成功后移除。
-        const { rm } = await import('node:fs/promises')
+        // 会话资产已由归属删除器精确清理；没有文件级所有权证据的剩余内容必须保留。
+        // 不递归删除目录（包括空子目录）：它可能是用户产物或异常软链。
+        const { readdir, rmdir } = await import('node:fs/promises')
+        if ((await readdir(directory)).length) throw new Error('工作区存在未纳管文件或目录，请显式移走后重试')
         workspaces.assertManagedDeleteTarget(workspaceId)
-        await rm(directory, { recursive: true, force: true })
+        // rmdir 原子拒绝并发新增的内容；失败保留事务和索引，允许同 operationId 重试。
+        await rmdir(directory)
       }
       workspaces.removeManagedAfterCascade(workspaceId)
       workspaceOperations.finish(operation.operationId)
@@ -859,7 +865,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
           systemPrompt: typeof prepared.systemPrompt === 'string' ? prepared.systemPrompt : corePrompt,
           piAgentDir: join(config.configDir, 'pi'),
           piSessionDir: resolveCorePiSessionDir(config.configDir, session.sdkSessionId),
-          ...(session.sdkSessionId ? { resumeSessionId: session.sdkSessionId, ...(session.piSessionFile ? { resumeSessionFile: session.piSessionFile } : {}) } : {}),
+          ...(session.sdkSessionId ? { resumeSessionId: session.sdkSessionId, resumeSessionFile: resolveNativePiSessionFile(config.configDir, session.sdkSessionId) } : {}),
           ...(credential.codexOAuthCredentials ? { codexOAuthCredentials: credential.codexOAuthCredentials } : {}),
           ...(credential.xaiOAuthCredentials ? { xaiOAuthCredentials: credential.xaiOAuthCredentials } : {}),
           ...(credential.xaiCredentialMode ? { xaiCredentialMode: credential.xaiCredentialMode } : {}),
@@ -1041,8 +1047,8 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
       if (reminders.length) publish({ type: 'planning', sessionId: '', payload: { type: 'reminders_due', reminders } })
     } catch (error) { console.error('[Core Planning] reminder check failed', error) }
   }
-  // Desktop-owned local Core shares planning.db; Electron retains that reminder scheduler.
-  const planningTimer = config.desktopWorkspaceIndexPath ? undefined : setInterval(checkPlanningReminders, 30_000)
+  // Core 是提醒业务唯一领取者，包含 Electron 组合模式；桌面仅消费通知事件。
+  const planningTimer = setInterval(checkPlanningReminders, 30_000)
   planningTimer?.unref()
   const sessionUpdates = new Map<string, Promise<unknown>>()
   const updateSessionMeta = (sessionId: string, patch: Parameters<CoreAgentRuntime['updateSessionMeta']>[1], expectedRevision?: number, isCurrent: () => boolean = () => true): Promise<AgentSessionMeta> => {
@@ -1184,7 +1190,14 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     if (!workspace) throw new Error('会话工作区不存在')
     return { session, workspace }
   }
+  const chat = createCoreChat({ configDir: config.configDir, listChannels: () => channels, emit: (sessionId, channel, payload) => publish({ type: 'chat', sessionId, payload: { channel, payload } }) })
+  let closing = false
+  let shutdownPromise: Promise<void> | undefined
+  const assertAcceptingRuns = (): void => {
+    if (closing) throw new Error('Core 正在关闭，不再接受新运行')
+  }
   const runtime: CoreAgentRuntime = {
+    chat,
     deletions,
     delegations,
     automations,
@@ -1215,6 +1228,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     planning,
     sessions,
     workspaces,
+    resourceOperation: body => executeCoreResourceOperation({ config, workspaces, sessions, automations }, body),
     syncDesktopChannels: next => {
       if (!config.desktopWorkspaceIndexPath) throw new Error('仅桌面拥有的本地Core接受内存渠道快照')
       if (next.some(channel => !channel.id || !channel.provider || typeof channel.apiKey !== 'string')) throw new Error('渠道快照无效')
@@ -1377,6 +1391,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
       await (session.agentRuntime === 'claude' ? claude : pi).stopTask(sessionId, taskId, expectedType)
     },
     queueMessage: (sessionId, prompt, options = {}) => {
+      assertAcceptingRuns()
       const session = sessions.getMeta(sessionId)
       if (!session) throw new Error('Agent会话不存在')
       const uuid = options.uuid ?? randomUUID()
@@ -1386,12 +1401,15 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
       return coordinator.queueMessage({ sessionId, context, message, receive: async queued => {
         const provider = session.agentRuntime === 'claude' ? claude : pi
         if (options.interrupt && session.agentRuntime === 'claude') await provider.interruptQuery(sessionId)
+        assertAcceptingRuns()
         if (!queued.isCurrent()) throw new Error('原运行已经结束，不能追加到新运行')
         await provider.sendQueuedMessage(sessionId, { type: 'user', uuid, session_id: sessionId, parent_tool_use_id: null,
           message: { role: 'user', content: prompt }, priority: 'next' }, { interrupt: options.interrupt, isCurrent: queued.isCurrent })
       } })
     },
-    createQuery: (session, prompt, options) => ({
+    createQuery: (session, prompt, options) => {
+      assertAcceptingRuns()
+      return ({
       ...createRuntimeQuery(session, prompt, config, options),
       cwd: workspaceCwd(session).cwd,
       onBeforeOwnerRelease: async admitted => {
@@ -1402,6 +1420,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
         }
       },
       onRunAdmitted: query => {
+        assertAcceptingRuns()
         const current = sessions.getMeta(session.id)!
         const workspace = workspaces.list().find(workspace => workspace.id === current.workspaceId)
         const resources = resolveResources(current, workspace)
@@ -1409,6 +1428,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
         mcpRuns.set(query.runId, { servers })
         presetRuns.set(session.id, { runId: query.runId, resources })
         sessions.updateMeta(session.id, { channelId: query.channelId, modelId: query.modelId,
+          presetId: resources.preset.id, presetReference: normalizeAgentPresetReference(resources.reference, workspace?.slug),
           ...(query.initiator === 'user' || query.initiator === 'external' ? { stoppedByUser: false } : {}) })
         // 终态后只撤销原 Run 的请求，不误清随后启动的新 Run。
         const unsubscribe = () => listeners.delete(onEvent)
@@ -1433,7 +1453,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
         }
         listeners.add(onEvent)
       },
-    }),
+    }) },
     subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) },
     publish,
     listRuns: () => runLedger.list(),
@@ -1455,8 +1475,14 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
       desktopBindings.set(sessionId, connectionId)
     },
     unbindDesktopHost: connectionId => { for (const [id, connection] of desktopBindings) if (connection === connectionId) desktopBindings.delete(id) },
-    shutdown: async () => { await deletions.shutdown(); await automations.shutdown(); await delegations.shutdown(); await goals.shutdown(); await coordinator.stopAll('core_shutdown'); await Promise.all([...browserSessions.values()].map(tools => tools.host.dispose())); await mcpManager.dispose(); runtime.dispose() },
-    dispose: () => { desktopHosts.dispose(); deletions.dispose(); delegations.dispose(); automations.dispose(); goals.dispose(); for (const session of sessions.list()) { askUser.clearSessionPending(session.id); exitPlan.clearSessionPending(session.id) }; clearInterval(planningTimer); planning.closePlanningDatabase(); claude.dispose(); pi.dispose() },
+    beginShutdown: () => { closing = true },
+    assertAcceptingRuns,
+    shutdown: () => {
+      closing = true
+      shutdownPromise ??= (async () => { await chat.shutdown(); await deletions.shutdown(); await automations.shutdown(); await delegations.shutdown(); await goals.shutdown(); await coordinator.stopAll('core_shutdown'); await Promise.all([...browserSessions.values()].map(tools => tools.host.dispose())); await mcpManager.dispose(); runtime.dispose() })()
+      return shutdownPromise
+    },
+    dispose: () => { closing = true; desktopHosts.dispose(); deletions.dispose(); delegations.dispose(); automations.dispose(); goals.dispose(); for (const session of sessions.list()) { askUser.clearSessionPending(session.id); exitPlan.clearSessionPending(session.id) }; clearInterval(planningTimer); planning.closePlanningDatabase(); claude.dispose(); pi.dispose() },
   }
   // 恢复必须在所有busy依赖初始化后、任何调度器绑定前进行。
   nativePorts.recover()

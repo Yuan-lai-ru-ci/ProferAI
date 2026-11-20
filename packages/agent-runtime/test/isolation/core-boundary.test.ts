@@ -54,7 +54,7 @@ describe('core dependency boundary', () => {
     expect(graph.externalSpecifiers.filter(isDeniedSpecifier)).toEqual([])
   })
 
-  test('Given the package manifest When declaring dependencies Then only shared and fabric workspace packages remain', () => {
+  test('Given the package manifest When declaring dependencies Then only host-independent workspace packages remain', () => {
     const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
       peerDependencies?: Record<string, string>
@@ -65,7 +65,11 @@ describe('core dependency boundary', () => {
       ...Object.keys(manifest.peerDependencies ?? {}),
     ]
     expect(declared.filter(isDeniedSpecifier)).toEqual([])
-    expect(manifest.dependencies).toEqual({ '@profer/agent-fabric': 'workspace:*', '@profer/shared': 'workspace:*' })
+    expect(manifest.dependencies).toEqual({ '@profer/agent-fabric': 'workspace:*', '@profer/shared': 'workspace:*', '@profer/session-core': 'workspace:*' })
+    // 标题策略依赖session-core的纯文本语义；验证其闭包而不是只放行包名。
+    const sessionCore = collectDependencyGraph(join(repoRoot, 'packages', 'session-core', 'src', 'index.ts'), repoRoot)
+    expect(sessionCore.edges.filter(edge => isDeniedSpecifier(edge.specifier))).toEqual([])
+    expect(sessionCore.valueExternalSpecifiers).toEqual([])
     const exportedSubpaths = Object.keys(manifest.exports ?? {})
     expect(exportedSubpaths.filter((subpath) => subpath.startsWith('./pi'))).toEqual([])
     expect(exportedSubpaths).toContain('.')

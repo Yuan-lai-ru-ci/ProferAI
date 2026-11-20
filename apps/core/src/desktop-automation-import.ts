@@ -5,7 +5,7 @@ import { assertProjectPathSafe } from '@profer/session-store/project-session-pat
 import { migrateLegacyAutomationFields, type AutomationsIndex } from '@profer/agent-runtime/automation-manager'
 import { DEFAULT_TIME_OF_DAY, DEFAULT_DAY_OF_WEEK, DEFAULT_DAY_OF_MONTH, type Automation, type AutomationTriggerRecord } from '@profer/shared'
 import type { CoreConfig } from './config'
-import { CoreAutomationStore } from './automation-store'
+import { CoreAutomationStore, assertAutomationNotificationTargets } from './automation-store'
 
 const IMPORT_ID = 'desktop-automations-v4-import'
 const nonterminal = new Set(['queued', 'blocked', 'running', 'interrupted'])
@@ -135,6 +135,7 @@ export function importDesktopAutomations(config: CoreConfig, store: CoreAutomati
       || (task.permissionMode !== undefined && task.permissionMode !== 'bypassPermissions')
       || (task.sessionMode !== undefined && !['daily', 'reuse'].includes(task.sessionMode))) throw new Error('桌面Automation定义身份或格式无效，源数据保留')
     ids.add(task.id)
+    assertAutomationNotificationTargets(task.notificationTargets)
     // 通知配置随历史保留；无宿主时由Core outbox保留待投递状态。
     if (task.scheduleType === 'interval' && (!Number.isFinite(task.intervalMinutes) || task.intervalMinutes < 1)) throw new Error('旧Automation间隔无效')
     if (task.scheduleType === 'once' && !Number.isFinite(task.scheduledAt)) throw new Error('旧Automation一次性时间无效')

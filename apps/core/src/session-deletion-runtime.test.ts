@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createCoreAgentRuntime } from './runtime'
@@ -54,7 +54,8 @@ test('独立Core拒绝历史桌面删除接管，不创建事务', async () => {
   const root = await mkdtemp(join(tmpdir(), 'core-delete-import-denied-'))
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true })
   try {
-    const session = runtime.sessions.create({ title: 'untouched', runtime: 'pi' })
+    const workspace = runtime.workspaces.createManaged('fixture')
+    const session = runtime.sessions.create({ title: 'untouched', runtime: 'pi', workspaceId: workspace.id })
     expect(() => runtime.deletions.importLegacyRequest({ sourceRequestId: 'legacy', sessionId: session.id, sessionIds: [session.id] })).toThrow('仅桌面自有')
     expect(runtime.deletions.snapshot()).toEqual([])
   } finally { await runtime.shutdown(); await rm(root, { recursive: true, force: true }) }
@@ -62,20 +63,21 @@ test('独立Core拒绝历史桌面删除接管，不创建事务', async () => {
 
 test('历史请求导入逐项校验快照且sourceRequestId重复只产生一条事务', async () => {
   const root = await mkdtemp(join(tmpdir(), 'core-delete-import-'))
-  const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), desktopWorkspaceIndexPath: join(root, 'desktop-workspaces.json'), mockAgent: true }
+  const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), desktopWorkspaceIndexPath: join(root, 'desktop-workspaces.json'), desktopWorkspaceIndexWritable: true, mockAgent: true }
   let runtime = createCoreAgentRuntime(config)
   try {
-    const first = runtime.sessions.create({ title: 'first', runtime: 'pi' })
-    const second = runtime.sessions.create({ title: 'second', runtime: 'pi' })
-    const snapshot = { sourceRequestId: 'old-request', sessionId: first.id, sessionIds: [second.id, first.id] }
+    const workspace = runtime.workspaces.createManaged('fixture')
+    const first = runtime.sessions.create({ title: 'first', runtime: 'pi', workspaceId: workspace.id })
+    const second = runtime.sessions.create({ title: 'second', runtime: 'pi', workspaceId: workspace.id })
+    const snapshot = { sourceRequestId: 'old-request', workspaceId: workspace.id, sessionId: first.id, sessionIds: [second.id, first.id] }
     expect(runtime.deletions.importLegacyRequest(snapshot)).toEqual(expect.objectContaining({ requestId: expect.any(String), sessionIds: [second.id, first.id] }))
     expect(runtime.deletions.importLegacyRequest(snapshot)).toEqual(expect.objectContaining({ sessionIds: [second.id, first.id] }))
     expect(runtime.deletions.snapshot()).toHaveLength(1)
     const conflicting = await Promise.resolve().then(() => runtime.deletions.importLegacyRequest({ ...snapshot, sessionIds: [first.id] })).then(() => 'accepted', error => String(error))
     expect(conflicting).toContain('参数冲突')
     expect(runtime.deletions.snapshot()).toHaveLength(1)
-    const otherSession = runtime.sessions.create({ title: 'other request', runtime: 'pi' })
-    const missing = await Promise.resolve().then(() => runtime.deletions.importLegacyRequest({ sourceRequestId: 'missing', sessionId: otherSession.id, sessionIds: [otherSession.id, 'not-in-core'] })).then(() => 'accepted', error => String(error))
+    const otherSession = runtime.sessions.create({ title: 'other request', runtime: 'pi', workspaceId: workspace.id })
+    const missing = await Promise.resolve().then(() => runtime.deletions.importLegacyRequest({ sourceRequestId: 'missing', workspaceId: workspace.id, sessionId: otherSession.id, sessionIds: [otherSession.id, 'not-in-core'] })).then(() => 'accepted', error => String(error))
     expect(missing).toContain('缺少Core元数据')
     expect(runtime.deletions.snapshot()).toHaveLength(1)
     await runtime.deletions.drain()
@@ -92,9 +94,10 @@ test('Core删除级联仅含附属委派，保留独立会话和项目文件；�
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true }
   const runtime = createCoreAgentRuntime(config)
   try {
-    const parent = runtime.sessions.create({ title: 'parent', runtime: 'pi' })
-    const child = runtime.sessions.create({ title: 'child', runtime: 'pi' })
-    const independent = runtime.sessions.create({ title: 'independent', runtime: 'pi' })
+    const workspace = runtime.workspaces.createManaged('fixture')
+    const parent = runtime.sessions.create({ title: 'parent', runtime: 'pi', workspaceId: workspace.id })
+    const child = runtime.sessions.create({ title: 'child', runtime: 'pi', workspaceId: workspace.id })
+    const independent = runtime.sessions.create({ title: 'independent', runtime: 'pi', workspaceId: workspace.id })
     runtime.sessions.updateMeta(child.id, { parentSessionId: parent.id, sourceDelegationId: 'child-fixture', delegationRelation: 'subtask' })
     runtime.sessions.updateMeta(independent.id, { parentSessionId: parent.id, sourceDelegationId: 'independent-fixture', delegationRelation: 'independent' })
     const requested = runtime.deletions.request(parent.id)
@@ -102,7 +105,7 @@ test('Core删除级联仅含附属委派，保留独立会话和项目文件；�
     await runtime.deletions.drain()
     expect(runtime.deletions.snapshot()[0]?.status).toBe('completed')
     expect(runtime.sessions.getMeta(independent.id)?.id).toBe(independent.id)
-    const blocked = runtime.sessions.create({ title: 'locked', runtime: 'pi' })
+    const blocked = runtime.sessions.create({ title: 'locked', runtime: 'pi', workspaceId: workspace.id })
     const owner = runtime.coordinator.ownership.claim({ sessionId: blocked.id, runtime: 'pi' })
     if (!owner.ok) throw new Error('fixture owner failed')
     runtime.deletions.request(blocked.id)
@@ -126,12 +129,13 @@ test('Core重启恢复pending删除，原生资源共享和符号链接均阻止
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true }
   let runtime = createCoreAgentRuntime(config)
   try {
-    const session = runtime.sessions.create({ title: 'restart', runtime: 'pi' })
+    const workspace = runtime.workspaces.createManaged('fixture')
+    const session = runtime.sessions.create({ title: 'restart', runtime: 'pi', workspaceId: workspace.id })
     const native = join(root, 'pi-sessions')
     await mkdir(native)
     await writeFile(join(native, 'owned.jsonl'), JSON.stringify({ type: 'session', id: 'native-shared' }) + '\n')
     runtime.sessions.updateMeta(session.id, { sdkSessionId: 'native-shared' })
-    const other = runtime.sessions.create({ title: 'other', runtime: 'pi' })
+    const other = runtime.sessions.create({ title: 'other', runtime: 'pi', workspaceId: workspace.id })
     runtime.sessions.updateMeta(other.id, { forkSourceSdkSessionId: 'native-shared' })
     runtime.deletions.request(session.id)
     await runtime.deletions.drain()
@@ -147,7 +151,7 @@ test('Core重启恢复pending删除，原生资源共享和符号链接均阻止
     expect(runtime.deletions.snapshot()[0]?.status).toBe('completed')
     expect(runtime.sessions.getMeta(session.id)).toBeUndefined()
     expect(runtime.sessions.getMeta(other.id)?.id).toBe(other.id)
-    const linked = runtime.sessions.create({ title: 'linked', runtime: 'pi' })
+    const linked = runtime.sessions.create({ title: 'linked', runtime: 'pi', workspaceId: workspace.id })
     const outside = join(root, 'external-asset')
     await mkdir(outside)
     await writeFile(join(outside, 'keep.txt'), 'untouched')
@@ -161,7 +165,8 @@ test('Core重启恢复pending删除，原生资源共享和符号链接均阻止
 }, 20000)
 
 test('Core项目冲突保留双方，损坏或未来版本索引不以空文件覆盖', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'core-project-conflict-'))
+  // macOS 的临时目录含 /var 别名；fixture 与绑定后的规范路径保持同一身份。
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'core-project-conflict-')))
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true })
   try {
     const first = join(root, 'first'), second = join(root, 'second')
@@ -184,11 +189,15 @@ test('Core项目冲突保留双方，损坏或未来版本索引不以空文件�
     expect(runtime.deletions.excludedIds(secondWorkspace.id).has(owned.id)).toBe(false)
     const third = join(root, 'third')
     await mkdir(join(third, '.profer', 'sessions'), { recursive: true })
+    const thirdIndex = join(third, '.profer', 'sessions', 'index.json')
     const future = JSON.stringify({ version: 99, sessions: [] })
-    await writeFile(join(third, '.profer', 'sessions', 'index.json'), future)
+    await writeFile(thirdIndex, future)
     runtime.workspaces.bindProject({ rootPath: third })
     expect(() => runtime.sessions.list()).toThrow('版本')
-    expect(await readFile(join(third, '.profer', 'sessions', 'index.json'), 'utf8')).toBe(future)
+    expect(await readFile(thirdIndex, 'utf8')).toBe(future)
+    await writeFile(thirdIndex, '{broken-fixture')
+    expect(() => runtime.sessions.list()).toThrow()
+    expect(await readFile(thirdIndex, 'utf8')).toBe('{broken-fixture')
     // 仅fixture恢复受支持版本，以便正常释放隔离runtime资源。
     await writeFile(join(third, '.profer', 'sessions', 'index.json'), JSON.stringify({ version: 1, sessions: [] }))
   } finally { runtime.dispose(); await rm(root, { recursive: true, force: true }) }
@@ -242,7 +251,8 @@ test('Core清理中途失败后拒绝晚到写入，重启显式重试继续清�
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true }
   let runtime = createCoreAgentRuntime(config)
   try {
-    const session = runtime.sessions.create({ title: 'partial', runtime: 'pi' })
+    const workspace = runtime.workspaces.createManaged('fixture')
+    const session = runtime.sessions.create({ title: 'partial', runtime: 'pi', workspaceId: workspace.id })
     const message = { type: 'user' as const, uuid: 'late', session_id: session.id, parent_tool_use_id: null, message: { role: 'user' as const, content: 'fixture' } }
     runtime.sessions.appendMessages(session.id, [message])
     const remove = runtime.sessions.remove
@@ -299,7 +309,8 @@ test('Core完成墓碑覆盖全局索引旧备份恢复，状态监听者失败�
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true }
   let runtime = createCoreAgentRuntime(config)
   try {
-    const session = runtime.sessions.create({ title: 'deleted', runtime: 'pi' })
+    const workspace = runtime.workspaces.createManaged('fixture')
+    const session = runtime.sessions.create({ title: 'deleted', runtime: 'pi', workspaceId: workspace.id })
     const indexPath = join(root, 'agent-sessions.json')
     const stale = await readFile(indexPath, 'utf8')
     const unsubscribe = runtime.subscribe(event => {
@@ -318,7 +329,7 @@ test('Core完成墓碑覆盖全局索引旧备份恢复，状态监听者失败�
     expect(runtime.sessions.getMeta(session.id)).toBeUndefined()
     expect(runtime.sessions.list(true).some(meta => meta.id === session.id)).toBe(false)
     expect(() => runtime.sessions.readMessages(session.id)).toThrow('session not found')
-    runtime.sessions.create({ title: 'new unrelated', runtime: 'pi' })
+    runtime.sessions.create({ title: 'new unrelated', runtime: 'pi', workspaceId: workspace.id })
     expect(JSON.parse(await readFile(indexPath, 'utf8')).sessions.some((meta: { id: string }) => meta.id === session.id)).toBe(false)
   } finally { await runtime.shutdown(); await rm(root, { recursive: true, force: true }) }
 })
@@ -327,7 +338,8 @@ test('Core删除准确匹配本Core原生Pi身份，不删除别的transcript或
   const root = await mkdtemp(join(tmpdir(), 'core-delete-native-'))
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true })
   try {
-    const session = runtime.sessions.create({ title: 'native', runtime: 'pi' })
+    const workspace = runtime.workspaces.createManaged('fixture')
+    const session = runtime.sessions.create({ title: 'native', runtime: 'pi', workspaceId: workspace.id })
     const nativeDir = join(root, 'pi-sessions')
     await mkdir(nativeDir)
     const owned = join(nativeDir, 'owned.jsonl'), other = join(nativeDir, 'unrelated.jsonl')

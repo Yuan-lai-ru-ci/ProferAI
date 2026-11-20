@@ -21,13 +21,13 @@ test('Core Pi 下一轮应用会话覆盖、预设与所属Core默认推理设�
   try {
     await writeFile(join(root, 'settings.json'), JSON.stringify({ agentThinking: { type: 'enabled' }, agentEffort: 'medium' }))
     await writeFile(join(root, 'agent-presets.json'), JSON.stringify({ presets: [
-      { id: 'reasoning', name: 'reasoning', effort: 'low', promptSections: [], skillSlugs: [], mcpServerNames: [] },
+      { id: 'reasoning', name: 'reasoning', description: '离线推理夹具', createdAt: 0, updatedAt: 0, effort: 'low', promptSections: [], skillSlugs: [], mcpServerNames: [] },
     ] }))
-    const session = runtime.sessions.create({ title: 'reasoning', runtime: 'pi', channelId: 'offline',
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'reasoning', runtime: 'pi', channelId: 'offline',
       presetReference: { presetId: 'reasoning', presetScope: 'user-global' } })
     const run = async () => {
       const outcome = await runtime.coordinator.run(runtime.createQuery(runtime.sessions.getMeta(session.id)!, 'offline reasoning fixture')).promise
-      expect(outcome.status).toBe('completed')
+      expect(outcome).toEqual({ status: 'completed' })
       return calls.at(-1)!
     }
     expect(await run()).toMatchObject({ thinkingLevel: 'low', codexFastMode: false })
@@ -40,7 +40,7 @@ test('Core Pi 下一轮应用会话覆盖、预设与所属Core默认推理设�
     expect(cleared).toMatchObject({ thinkingLevel: 'low', codexFastMode: false })
     expect(cleared.openAIThinkingLevel).toBeUndefined()
     await writeFile(join(root, 'agent-presets.json'), JSON.stringify({ presets: [
-      { id: 'reasoning', name: 'reasoning', promptSections: [], skillSlugs: [], mcpServerNames: [] },
+      { id: 'reasoning', name: 'reasoning', description: '离线推理夹具', createdAt: 0, updatedAt: 0, promptSections: [], skillSlugs: [], mcpServerNames: [] },
     ] }))
     expect(await run()).toMatchObject({ thinkingLevel: 'medium' })
     await writeFile(join(root, 'settings.json'), JSON.stringify({ agentThinking: { type: 'disabled' }, agentEffort: 'high' }))
@@ -60,15 +60,16 @@ test('Core Claude 会话effort覆盖预设，清空覆盖后下一轮恢复预�
   }, { claude: { sdkLoader: async () => sdk.module, spawnProcess: sdk.spawnProcess } })
   try {
     await writeFile(join(root, 'agent-presets.json'), JSON.stringify({ presets: [
-      { id: 'reasoning', name: 'reasoning', effort: 'low', promptSections: [], skillSlugs: [], mcpServerNames: [] },
+      { id: 'reasoning', name: 'reasoning', description: '离线推理夹具', createdAt: 0, updatedAt: 0, effort: 'low', promptSections: [], skillSlugs: [], mcpServerNames: [] },
     ] }))
-    const session = runtime.sessions.create({ title: 'reasoning', runtime: 'claude', channelId: 'offline',
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'reasoning', runtime: 'claude', channelId: 'offline',
       presetReference: { presetId: 'reasoning', presetScope: 'user-global' } })
     const run = async (expected: string) => {
       const before = sdk.state.options
       const handle = runtime.coordinator.run(runtime.createQuery(runtime.sessions.getMeta(session.id)!, 'offline effort fixture'))
       const deadline = Date.now() + 4000
-      while (sdk.state.options === before && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
+      while (sdk.state.options === before && runtime.coordinator.isRunning(session.id) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
+      if (!sdk.state.options) expect(await handle.promise).toEqual({ status: 'completed' })
       expect(sdk.state.options).not.toBe(before)
       expect(sdk.state.options?.effort).toBe(expected)
       sdk.push({ type: 'result', subtype: 'success', session_id: 'offline-native', terminal_reason: 'completed' })

@@ -58,7 +58,7 @@ describe('core debug surface', () => {
   test('serves debug state with sanitized channels and sessions', async () => {
     await withCoreServer({ debug: true, mockAgent: true }, async ({ port, runtime, configDir }) => {
       runtime.createChannel({ id: 'debug-channel', name: 'Debug', provider: 'anthropic', apiKey: 'secret-key' })
-      runtime.sessions.create({ title: '调试会话', runtime: 'pi' })
+      runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: '调试会话', runtime: 'pi' })
 
       const unauthorized = await requestJson(port, '/debug/state')
       expect(unauthorized.statusCode).toBe(401)
@@ -82,7 +82,7 @@ describe('core debug surface', () => {
 
   test('requires explicit confirmation before resetting session data', async () => {
     await withCoreServer({ debug: true }, async ({ port, runtime }) => {
-      const session = runtime.sessions.create({ title: '要被清理', runtime: 'pi' })
+      const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: '要被清理', runtime: 'pi' })
       expect(runtime.sessions.list()).toHaveLength(1)
 
       const rejected = await requestJson(port, '/debug/reset', { method: 'POST', apiKey: 'debug-secret', body: {} })
@@ -98,7 +98,7 @@ describe('core debug surface', () => {
   })
 
   test('mock agent produces a synthetic reply without provider credentials', async () => {    await withCoreServer({ debug: true, mockAgent: true }, async ({ port, runtime }) => {
-      const session = runtime.sessions.create({ title: 'mock run', runtime: 'pi', channelId: 'not-configured' })
+      const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'mock run', runtime: 'pi', channelId: 'not-configured' })
       const startedAt = 1760000000999
       let echoedStartedAt: unknown
       const completed = new Promise<void>((resolve, reject) => {

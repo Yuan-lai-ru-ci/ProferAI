@@ -31,7 +31,7 @@ test('项目重新定位只更新Core绑定，保留身份和消息，重启后�
     expect((await relocate(workspace.id, 3)).status).toBe(400)
     expect((await relocate(workspace.id, 'relative')).status).toBe(400)
     expect((await relocate(workspace.id, emptyRoot)).status).toBe(400)
-    expect(runtime.workspaces.list()[0]?.rootPath).toBe(oldRoot)
+    expect(runtime.workspaces.list()[0]?.rootPath).toBe(realpathSync(oldRoot))
     await writeFile(join(emptyRoot, '.profer'), 'not a directory')
     expect((await relocate(workspace.id, emptyRoot)).status).toBe(400)
     expect(await readFile(join(emptyRoot, '.profer'), 'utf8')).toBe('not a directory')
@@ -96,6 +96,6 @@ test('重新定位拒绝旧原生资产、身份冲突和不完整任务图，�
     await writeFile(sidecar, original)
     runtime.sessions.updateMeta(session.id, { piSessionFile: join(root, 'missing-native.jsonl') })
     expect(() => runtime.workspaces.relocateProject({ id: workspace.id, rootPath: newRoot })).toThrow('原生')
-    expect(runtime.workspaces.list()[0]?.rootPath).toBe(oldRoot)
+    expect(runtime.workspaces.list()[0]?.rootPath).toBe(realpathSync(oldRoot))
   } finally { await runtime.shutdown(); await rm(root, { recursive: true, force: true }) }
 }, 20000)

@@ -7,7 +7,7 @@
 
 import * as React from "react";
 import { toast } from "sonner";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import {
   Plus,
   Copy,
@@ -45,6 +45,7 @@ import {
   SettingsCard,
 } from "@/components/settings/primitives";
 import { workspacePresetsAtom } from "@/atoms/agent-preset-atoms";
+import { coreTargetsAtom } from "@/atoms/core-target-atoms";
 import { workspaceCapabilitiesVersionAtom } from "@/atoms/agent-atoms";
 import { cn } from "@/lib/utils";
 import {
@@ -300,9 +301,17 @@ export function AgentPresetSettings({
   importFileRequestToken = 0,
   exportRequestToken = 0,
 }: AgentPresetSettingsProps): React.ReactElement {
-  const [workspacePresets, setWorkspacePresets] = useAtom(
+  const [workspacePresets, writeWorkspacePresets] = useAtom(
     workspacePresetsAtom(workspaceSlug),
   );
+  const store = useStore();
+  const coreTarget = useAtomValue(coreTargetsAtom);
+  // 异步加载/回滚捕获原目标，卸载后的旧请求不得写入同名工作区的新Core缓存。
+  const setWorkspacePresets = React.useCallback((items: AgentPreset[]) => {
+    const current = store.get(coreTargetsAtom);
+    if (current.currentId !== coreTarget.currentId || current.generation !== coreTarget.generation) return;
+    writeWorkspacePresets(items);
+  }, [store, coreTarget.currentId, coreTarget.generation, writeWorkspacePresets]);
   const [globalPresets, setGlobalPresets] = React.useState<AgentPreset[]>([]);
   const presets = globalMode ? globalPresets : workspacePresets;
   const [loading, setLoading] = React.useState(true);
@@ -352,7 +361,11 @@ export function AgentPresetSettings({
         const [skills, mcp, channels] = await Promise.all([
           window.electronAPI.getWorkspaceSkills(workspaceSlug),
           window.electronAPI.getWorkspaceMcpConfig(workspaceSlug),
-          window.electronAPI.listChannels({ localOnly: true }),
+          coreTarget.currentId === 'local'
+            ? window.electronAPI.listChannels({ localOnly: true })
+            : window.electronAPI.listCoreChannels().then(channels => channels.map(channel => ({
+              ...channel, apiKey: '', createdAt: 0, updatedAt: 0, models: channel.models ?? [],
+            }))),
         ]);
         setAvailableSkills(skills);
         setAvailableMcpServers(
@@ -366,7 +379,7 @@ export function AgentPresetSettings({
         console.error("[预设设置] 加载 Skill/MCP 列表失败:", err);
       }
     })();
-  }, [dialogOpen, workspaceSlug]);
+  }, [dialogOpen, workspaceSlug, coreTarget.currentId, coreTarget.generation]);
 
   // 白名单勾选集合（文本字段为真源，面板为其视图）
   const selectedSkillSlugs = React.useMemo(

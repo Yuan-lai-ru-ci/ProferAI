@@ -74,7 +74,7 @@ describe('Core 每轮凭据与作者集成', () => {
         expect(completions).toHaveLength(count)
       }
       // Core 启动时没有任何渠道；旧会话含已删除渠道，当前请求必须覆盖它。
-      const old = runtime.sessions.create({ title: 'old session', runtime: 'pi', channelId: 'removed-channel', modelId: 'removed-model' })
+      const old = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'old session', runtime: 'pi', channelId: 'removed-channel', modelId: 'removed-model' })
       const historical: SDKMessage = { type: 'user', uuid: 'historical-without-author', session_id: old.id, parent_tool_use_id: null, message: { role: 'user', content: 'historical input' } }
       runtime.sessions.appendMessages(old.id, [historical])
       const first = options(old.id, 'user-first', 'offline-first-key', 'new-channel')
@@ -128,8 +128,8 @@ describe('Core 每轮凭据与作者集成', () => {
       expect(runtime.sessions.readMessages(old.id)).toHaveLength(beforeCount)
 
       // 并发的两个新会话不能共享凭据；每个 SDK runtime 都拿到自己的 key/model。
-      const a = runtime.sessions.create({ title: 'a', runtime: 'pi' })
-      const b = runtime.sessions.create({ title: 'b', runtime: 'pi' })
+      const a = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'a', runtime: 'pi' })
+      const b = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'b', runtime: 'pi' })
       transport = createScriptedTransport([{ textChunks: ['concurrent answer a'] }, { textChunks: ['concurrent answer b'] }])
       await Promise.all([
         sendMessage(a.id, 'parallel a', options(a.id, 'uuid-a', 'offline-key-a', 'channel-a')),
@@ -171,7 +171,7 @@ describe('Core 每轮凭据与作者集成', () => {
     })
     try {
       for (const [channelId, expected] of [['deleted', 'channel_not_found'], ['missing-key', 'api_key_missing']]) {
-        const session = runtime.sessions.create({ title: 'test', runtime: 'pi', channelId, modelId: 'claude-sonnet-4-5' })
+        const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'test', runtime: 'pi', channelId, modelId: 'claude-sonnet-4-5' })
         const failures: unknown[] = []
         const handle = runtime.coordinator.run(runtime.createQuery(session, 'test'), {
           onEvent() {}, onComplete() {}, onError() {}, onPreparationFailure: failure => { failures.push(failure) },

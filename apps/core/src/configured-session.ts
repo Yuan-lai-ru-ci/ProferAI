@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 import { DEFAULT_AGENT_RUNTIME, isAgentRuntime, isProferPermissionMode, normalizeAgentPresetReference, type AgentSessionMeta } from '@profer/shared'
 import type { CoreAgentRuntime } from './runtime'
 import type { CoreConfig } from './config'
@@ -26,8 +26,15 @@ export function configuredSessionInput(config: CoreConfig, runtime: Pick<CoreAge
   const path = join(config.configDir, 'settings.json')
   const settings: { agentRuntime?: unknown; agentChannelId?: unknown; agentModelId?: unknown } = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
   const engine = input.runtime ?? (isAgentRuntime(settings.agentRuntime) ? settings.agentRuntime : DEFAULT_AGENT_RUNTIME)
+  if (!input.workspaceId) throw new Error('会话必须显式指定Core工作区')
   const workspace = input.workspaceId ? runtime.workspaces.list().find(item => item.id === input.workspaceId) : undefined
   if (input.workspaceId && !workspace) throw new Error('Core工作区不存在')
+  if (workspace?.storageMode === 'project') {
+    if (!workspace.rootPath || !isAbsolute(workspace.rootPath)) throw new Error('Core项目工作区根目录无效')
+    let stats
+    try { stats = statSync(workspace.rootPath) } catch { throw new Error('Core项目工作区根目录不存在') }
+    if (!stats.isDirectory()) throw new Error('Core项目工作区根路径不是目录')
+  }
   const available = runtime.listChannelConfigs().filter(channel => channel.enabled !== false && (!channel.agentRuntimes || channel.agentRuntimes.includes(engine)))
   const preferred = input.channelId ?? (typeof settings.agentChannelId === 'string' ? settings.agentChannelId : undefined)
   const channel = available.find(item => item.id === preferred) ?? (input.channelId === undefined ? available[0] : undefined)

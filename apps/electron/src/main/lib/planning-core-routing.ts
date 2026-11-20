@@ -1,3 +1,4 @@
+import { localCoreOwnsBusinessData } from './core-business-ownership'
 import { broadcastPlanningChanged } from './planning-events'
 import { PLANNING_IPC_CHANNELS, type StartTodoAgentResult, type Todo } from '@profer/shared'
 import { currentCoreId, getActiveCoreClient, getCurrentCoreTargetId, listCoreTargets, namespaceCoreSessionId, parseCoreSessionId } from './core-target-service'
@@ -25,15 +26,16 @@ const OPERATIONS: Record<string, string> = {
   [PLANNING_IPC_CHANNELS.SNOOZE_REMINDER]: 'snoozePlanningReminder',
 }
 
-/** Returns null only for the explicitly selected local target, never on remote errors. */
+/** 只有未启用 Core 的旧桌面链可回本机数据库；Core 断连不回退。 */
 export async function routePlanningToCore(channel: string, args: unknown[]): Promise<{ result: unknown } | null> {
   const targetId = getCurrentCoreTargetId()
-  if (targetId === 'local') return null
+  const local = targetId === 'local'
+  if (local && !localCoreOwnsBusinessData()) return null
   const snapshot = listCoreTargets()
   const target = snapshot.targets.find(item => item.id === targetId)
   const client = getActiveCoreClient()
   const coreId = currentCoreId()
-  if (!client || !coreId) throw new Error('当前 Core 未连接，不能访问任务/日程')
+  if (!client || (!local && !coreId)) throw new Error('当前 Core 未连接，不能访问任务/日程')
   if (!target?.capabilities?.includes('planning')) throw new Error('当前 Core 尚不支持任务/日程，请更新 Core；不会回退到本机数据')
   const operation = OPERATIONS[channel]
   if (!operation) throw new Error('当前 Core 尚不支持此 Planning 操作')
@@ -55,14 +57,16 @@ export async function routePlanningToCore(channel: string, args: unknown[]): Pro
     const record = { ...input } as Record<string, unknown>
     if (record.sessionId !== undefined) {
       const owner = typeof record.sessionId === 'string' ? parseCoreSessionId(record.sessionId) : null
-      if (!owner || owner.coreId !== coreId) throw new Error('Planning 会话不属于当前 Core')
-      record.sessionId = owner.sessionId
+      if (local ? owner !== null || typeof record.sessionId !== 'string' || !record.sessionId : !owner || owner.coreId !== coreId) throw new Error('Planning 会话不属于当前 Core')
+      if (!local && owner) record.sessionId = owner.sessionId
     }
     forwarded[0] = record
   }
   const result = await client.planningOperation<unknown>(operation, forwarded)
   if (getCurrentCoreTargetId() !== targetId || getActiveCoreClient() !== client || listCoreTargets().generation !== snapshot.generation) throw new Error('Core 已切换，忽略旧 Core 的任务/日程响应')
   if (!operation.startsWith('list')) broadcastPlanningChanged()
+  if (local) return { result: result ?? undefined }
+  if (!coreId) throw new Error('当前 Core 未连接')
   const namespace = (todo: Todo): Todo => ({ ...todo, sessionLinks: todo.sessionLinks.map(link => ({ ...link, sessionId: namespaceCoreSessionId(link.sessionId, coreId) })) })
   if (operation === 'startTodoAgent') {
     const started = result as StartTodoAgentResult

@@ -50,11 +50,24 @@ function validate(state: CoreTabSettings | undefined, sessions: AgentSessionMeta
   const owned = (id: string): boolean => target.currentId === 'local'
     ? !id.startsWith('core:') : Boolean(coreId && id.startsWith(`core:${encodeURIComponent(coreId)}:`))
   const validAgent = new Set(sessions.filter(session => owned(session.id) && session.workspaceId && visible.has(session.workspaceId)).map(session => session.id))
-  const validChat = new Set(conversations.map(conversation => conversation.id))
-  const tabs = (state?.tabs ?? []).filter((tab): tab is TabItem => Boolean(tab && typeof tab.id === 'string' && typeof tab.sessionId === 'string'
-    && typeof tab.title === 'string' && (tab.type === 'agent' ? validAgent.has(tab.sessionId) : tab.type === 'chat' && target.currentId === 'local' && validChat.has(tab.sessionId))))
+  const ownedChat = (id: string): boolean => id.startsWith('core-chat:')
+    ? Boolean(coreId && id.startsWith(`core-chat:${encodeURIComponent(coreId)}:`))
+    : target.currentId === 'local'
+  const validChat = new Set(conversations.filter(conversation => ownedChat(conversation.id)).map(conversation => conversation.id))
+  // 旧桌面 local Tab 用 rawId，迁入本机 Core 时只按目录中确实存在的同 rawId 恢复。
+  const migratedIds = new Map<string, string>()
+  const candidates = (state?.tabs ?? []).map(tab => {
+    if (target.currentId !== 'local' || tab.type !== 'chat' || tab.sessionId.startsWith('core-chat:') || validChat.has(tab.sessionId)) return tab
+    const match = conversations.find(item => item.id === `core-chat:${encodeURIComponent(coreId ?? '')}:${tab.sessionId}`)
+    if (!match) return tab
+    migratedIds.set(tab.id, match.id)
+    return { ...tab, id: match.id, sessionId: match.id }
+  })
+  const tabs = candidates.filter((tab): tab is TabItem => Boolean(tab && typeof tab.id === 'string' && typeof tab.sessionId === 'string'
+    && typeof tab.title === 'string' && (tab.type === 'agent' ? validAgent.has(tab.sessionId) : tab.type === 'chat' && validChat.has(tab.sessionId))))
   const ids = new Set(tabs.map(tab => tab.id))
-  const requested = state?.activeTabId ?? (state ? legacyActiveId(state) : null)
+  const oldRequested = state?.activeTabId ?? (state ? legacyActiveId(state) : null)
+  const requested = oldRequested ? migratedIds.get(oldRequested) ?? oldRequested : null
   const activeTabId = requested === SCRATCH_PAD_ID ? SCRATCH_PAD_ID : requested && ids.has(requested) ? requested : null
   const active = tabs.find(tab => tab.id === activeTabId)
   const workspaceId = active?.type === 'agent' ? sessions.find(session => session.id === active.sessionId)?.workspaceId ?? null

@@ -26,7 +26,7 @@ test.each(['approve_auto', 'approve_edit', 'deny', 'feedback'] as const)('Core P
   }
   const runtime = createCoreAgentRuntime(config)
   const server = createCoreServer({ version: 'plan-approval-test', runtime, apiKey: 'fixture-only' })
-  const session = runtime.sessions.create({ title: 'plan fixture', runtime: 'pi', channelId: 'fixture', modelId: 'claude-sonnet-4-5', permissionMode: 'plan' })
+  const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'plan fixture', runtime: 'pi', channelId: 'fixture', modelId: 'claude-sonnet-4-5', permissionMode: 'plan' })
   let socket: WebSocket | undefined
   const unsubscribe = runtime.subscribe(event => {
     const payload = event.payload as { event?: { type?: string; request?: import('@profer/shared').PermissionRequest } }

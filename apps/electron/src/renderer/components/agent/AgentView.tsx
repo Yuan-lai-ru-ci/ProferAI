@@ -38,7 +38,7 @@ import { BackgroundTaskControls } from './BackgroundTaskControls'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { PresetSelector } from './PresetSelector'
 import { referenceForSelectablePreset, selectablePresetMatchesReference } from './preset-selector-utils'
-import { agentPresetCacheKey, agentPresetsAtom, agentPresetsLoadedAtom } from '@/atoms/agent-preset-atoms'
+import { agentPresetCacheKey, coreScopedPresetCacheKey, agentPresetsAtom, agentPresetsLoadedAtom } from '@/atoms/agent-preset-atoms'
 import { AskUserBanner } from './AskUserBanner'
 import { GoalProposalBanner } from './GoalProposalBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
@@ -545,10 +545,14 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   // 加载当前工作区的 Agent 预设列表（预设为工作区级；失败静默留空由 UI 兑底）。
   // 订阅能力版本号：技能页增删改/导入预设后立即重拉，对齐 Skills 刷新机制。
   React.useEffect(() => {
+    let active = true
+    const target = coreTarget
+    const isCurrent = (): boolean => active && coreTarget.currentId === target.currentId && coreTarget.generation === target.generation
     const slug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug
     void listComposerPresets(slug)
       .then((list) => {
-        const cacheKey = agentPresetCacheKey(slug)
+        if (!isCurrent()) return
+        const cacheKey = coreScopedPresetCacheKey(slug, coreTarget)
         setAgentPresets((prev) => {
           const next = new Map(prev)
           next.set(cacheKey, list)
@@ -556,8 +560,10 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         })
         setLoadedPresetCaches((prev) => new Set(prev).add(cacheKey))
       })
-      .catch((error) => console.error('[Agent] 加载预设列表失败:', error))
-  }, [setAgentPresets, setLoadedPresetCaches, workspaces, currentWorkspaceId, capabilitiesVersion])
+      .catch((error) => { if (isCurrent()) console.error('[Agent] 加载预设列表失败:', error) })
+    return () => { active = false }
+    return () => { active = false }
+  }, [setAgentPresets, setLoadedPresetCaches, workspaces, currentWorkspaceId, capabilitiesVersion, coreTarget.currentId, coreTarget.generation])
   // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
   const stableChannelIdRef = React.useRef(agentChannelId)
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
@@ -853,7 +859,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   // 预设有效性由工作区预设 API 返回；优先按稳定作用域引用匹配，旧会话才回退裸 ID。
   const sessionPresetId = sessionMeta?.presetId
   const sessionPresetReference = sessionMeta?.presetReference
-  const presetCacheKey = agentPresetCacheKey(workspaceSlug ?? undefined)
+  const presetCacheKey = coreScopedPresetCacheKey(workspaceSlug ?? undefined, coreTarget)
   const workspacePresetList = agentPresetsMap.get(presetCacheKey) ?? []
   const presetsLoaded = loadedPresetCaches.has(presetCacheKey)
   const hasUsableSessionPreset = Boolean(sessionPresetId && workspacePresetList.some((preset) => {
@@ -872,16 +878,18 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     const timer = window.setTimeout(() => setShowPresetSelectionRequired(true), 500)
     return () => window.clearTimeout(timer)
   }, [presetSelectionRequired])
-  // 旧会话或异常入口没有有效绑定时，自动采用当前工作区列表中的首个可用预设，避免把内部修复问题暴露给用户。
+  // Core预设缺失或失效必须显式修复，不能由客户端选另一岗位改变执行能力。
   React.useEffect(() => {
-    if (!sessionMeta || !presetsLoaded || hasUsableSessionPreset) return
+    const coreOwnsPresets = coreTarget.currentId !== 'local'
+      || coreTarget.targets.some(target => target.id === 'local' && target.capabilities?.includes('resources.manage'))
+    if (coreOwnsPresets || !sessionMeta || !presetsLoaded || hasUsableSessionPreset) return
     const fallback = workspacePresetList.find((preset) => preset.enabledInWorkspace !== false)
     if (!fallback) return
     const reference = referenceForSelectablePreset(fallback, workspaceSlug ?? undefined)
     void rebindComposerPreset(sessionId, reference)
       .then((updated) => setAgentSessions((previous) => previous.map((session) => session.id === sessionId ? updated : session)))
       .catch((error) => console.error('[Agent] 自动匹配预设失败:', error))
-  }, [hasUsableSessionPreset, presetsLoaded, sessionId, sessionMeta, setAgentSessions, workspacePresetList, workspaceSlug])
+  }, [coreTarget, hasUsableSessionPreset, presetsLoaded, sessionId, sessionMeta, setAgentSessions, workspacePresetList, workspaceSlug])
   // 会话绑定的当前预设（与 PresetSelector 同源解析）：决定本会话权限上限 / 岗位能力。
   // 切换预设后 sessionPresetReference 更新即触发重算，权限图标随岗位立即联动。
   const permissionModeMap = useAtomValue(agentPermissionModeMapAtom)

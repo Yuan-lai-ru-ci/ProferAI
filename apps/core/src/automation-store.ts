@@ -3,6 +3,16 @@ import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { CoreAutomationIndex } from './automation-project-mirror'
 
+/** 通知目标是持久化资产；缺字段或未知渠道不能静默当作可投递配置。 */
+export function assertAutomationNotificationTargets(value: unknown): void {
+  if (value === undefined) return
+  if (!Array.isArray(value) || value.some(target => !target || typeof target !== 'object'
+    || target.type !== 'feishu' || typeof target.enabled !== 'boolean'
+    || !['always', 'success', 'error'].includes(target.trigger)
+    || typeof target.botId !== 'string' || !target.botId.trim()
+    || typeof target.chatId !== 'string' || !target.chatId.trim())) throw new Error('Core Automation通知目标格式无效，拒绝覆盖或导入')
+}
+
 /** Core私有单写者存储；每次返回副本，写盘失败不发布内存中的半成功修改。 */
 export class CoreAutomationStore {
   constructor(private readonly path: string) {}
@@ -14,6 +24,7 @@ export class CoreAutomationStore {
     for (const item of value.automations) {
       if (!item || typeof item.id !== 'string' || !item.id || ids.has(item.id) || !Array.isArray(item.runHistory)
         || !Number.isFinite(item.nextRunAt) || typeof item.active !== 'boolean') throw new Error('Core Automation定义无效')
+      assertAutomationNotificationTargets(item.notificationTargets)
       ids.add(item.id)
     }
     for (const record of value.triggers) {
@@ -31,6 +42,7 @@ export class CoreAutomationStore {
     return value
   }
   write(index: CoreAutomationIndex): void {
+    for (const item of index.automations) assertAutomationNotificationTargets(item.notificationTargets)
     mkdirSync(dirname(this.path), { recursive: true })
     const temp = `${this.path}.${randomUUID()}.tmp`
     try {

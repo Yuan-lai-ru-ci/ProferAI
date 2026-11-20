@@ -26,7 +26,7 @@ test('Core配置创建原子解析runtime/渠道模型/岗位，拒绝非法选�
   try {
     const workspace = runtime.workspaces.createManaged('Owner')
     await writeFile(join(config.workspaceRoot, workspace.slug, 'agent-presets.json'), JSON.stringify({ presets: [
-      { id: 'owner-preset', name: 'Owner', permissionMode: 'plan', promptSections: [], skillSlugs: [], mcpServerNames: [] },
+      { id: 'owner-preset', name: 'Owner', description: 'Configured session owner fixture', createdAt: 0, updatedAt: 0, permissionMode: 'plan', promptSections: [], skillSlugs: [], mcpServerNames: [] },
     ], defaultPresetId: 'owner-preset', defaultPresetReference: { presetId: 'owner-preset', presetScope: 'workspace', workspaceSlug: workspace.slug } }))
     expect((await post('/sessions/configured', {}, false)).status).toBe(401)
     const created = await post('/sessions/configured', { workspaceId: workspace.id, title: 'Pocket Core', permissionMode: 'bypassPermissions' })
@@ -35,21 +35,27 @@ test('Core配置创建原子解析runtime/渠道模型/岗位，拒绝非法选�
     expect(runtime.sessions.getMeta(session.id)).toMatchObject({ title: 'Pocket Core', workspaceId: workspace.id, agentRuntime: 'pi',
       channelId: 'pi', modelId: 'pi-model', presetId: 'owner-preset', permissionMode: 'plan' })
     const count = runtime.sessions.list().length
+    // Given 已有合法工作区，When 省略或显式传入无效归属，Then 拒绝且不隐式绑定。
+    for (const path of ['/sessions', '/sessions/configured']) {
+      expect((await post(path, {})).status).toBeGreaterThanOrEqual(400)
+      expect((await post(path, { workspaceId: 'missing' })).status).toBeGreaterThanOrEqual(400)
+      expect(runtime.sessions.list()).toHaveLength(count)
+    }
     for (const input of [
       { runtime: 'unsupported' }, { runtime: 'claude', channelId: 'pi' }, { channelId: 'missing' }, { channelId: 'disabled' },
       { channelId: 'pi', modelId: 'claude-model' }, { channelId: 'pi', modelId: 'missing' }, { workspaceId: 'missing' },
       { presetId: 'missing-preset' }, { permissionMode: 'allow' }, { modelId: 42 },
     ]) {
-      const response = await post('/sessions/configured', input)
+      const response = await post('/sessions/configured', { workspaceId: workspace.id, ...input })
       expect(response.status).toBeGreaterThanOrEqual(400)
       expect(runtime.sessions.list()).toHaveLength(count)
     }
-    const explicit = await post('/sessions/configured', { runtime: 'claude', channelId: 'claude', modelId: 'claude-model' })
+    const explicit = await post('/sessions/configured', { workspaceId: workspace.id, runtime: 'claude', channelId: 'claude', modelId: 'claude-model' })
     expect(explicit.status).toBe(201)
     expect(await explicit.json()).toMatchObject({ agentRuntime: 'claude', channelId: 'claude', modelId: 'claude-model' })
     // 没有保存运行时偏好时也遵循共享默认 Pi；显式 Claude 仍由上面的用例覆盖。
     await writeFile(join(root, 'settings.json'), '{}')
-    const defaultCreated = await post('/sessions/configured', {})
+    const defaultCreated = await post('/sessions/configured', { workspaceId: workspace.id })
     expect(defaultCreated.status).toBe(201)
     expect(await defaultCreated.json()).toMatchObject({ agentRuntime: 'pi', channelId: 'pi', modelId: 'pi-model' })
     await writeFile(join(root, 'settings.json'), settings)

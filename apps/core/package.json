@@ -1,6 +1,6 @@
 {
   "name": "@profer/core-daemon",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "AGPL-3.0-only",
   "description": "Profer 的无界面、宿主无关核心进程入口。",
   "type": "module",

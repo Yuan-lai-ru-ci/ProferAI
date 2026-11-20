@@ -61,11 +61,11 @@ export interface ComposerPreloadApi {
 }
 
 /** 输入区工具栏的 preload 适配器；只编排既有业务 channel，不新增旁路协议。 */
-export function createComposerApi(ipcRenderer: Pick<IpcRenderer, 'invoke'>): ComposerPreloadApi {
+export function createComposerApi(ipcRenderer: Pick<IpcRenderer, 'invoke'>, invokeResource: IpcRenderer['invoke'] = ipcRenderer.invoke.bind(ipcRenderer)): ComposerPreloadApi {
   return {
     chat: {
-      updateModel: (id, modelId, channelId) => ipcRenderer.invoke(CHAT_IPC_CHANNELS.UPDATE_MODEL, id, modelId, channelId),
-      openFileDialog: () => ipcRenderer.invoke(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG),
+      updateModel: (id, modelId, channelId) => invokeResource(CHAT_IPC_CHANNELS.UPDATE_MODEL, id, modelId, channelId),
+      openFileDialog: () => invokeResource(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG),
       listKnowledgeItems: () => ipcRenderer.invoke(KNOWLEDGE_IPC_CHANNELS.LIST_ITEMS),
     },
     agent: {
@@ -74,9 +74,9 @@ export function createComposerApi(ipcRenderer: Pick<IpcRenderer, 'invoke'>): Com
       updateOpenAIThinkingLevel: (sessionId, level) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_OPENAI_THINKING, sessionId, level),
       updateEffort: (sessionId, effort) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_EFFORT, sessionId, effort),
       updateRuntime: (sessionId, runtime) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_AGENT_RUNTIME, sessionId, runtime),
-      listPresets: (workspaceSlug, includeInactiveGlobal) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS, workspaceSlug, includeInactiveGlobal),
+      listPresets: (workspaceSlug, includeInactiveGlobal) => invokeResource(AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS, workspaceSlug, includeInactiveGlobal),
       rebindPreset: (sessionId, reference, expectedRevision) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_SESSION_REFERENCE, sessionId, reference, expectedRevision),
-      openFileDialog: () => ipcRenderer.invoke(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG),
+      openFileDialog: () => invokeResource(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG),
       openFolderDialog: () => ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FOLDER_DIALOG),
       getReasoningCapability: (provider, modelId, baseUrl) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY, provider, modelId, baseUrl),
       getGraphSummary: (sessionId) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_GRAPH_SUMMARY, sessionId),

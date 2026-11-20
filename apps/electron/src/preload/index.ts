@@ -1,3 +1,6 @@
+import { CORE_CHAT_CHANNELS } from '../lib/core-chat-channels'
+import { CORE_RESOURCE_OPERATIONS } from '../lib/core-resource-channels'
+import type { CoreResourceScope } from '../lib/core-resource-channels'
 import type { ProferPluginPagePlacement, ProferPluginPagePlacementPreference, ProferPluginTaskReference, ProferPluginRoutingState } from '@profer/plugin-api'
 /**
  * Preload 脚本
@@ -11,6 +14,34 @@ import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNE
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, CORE_TARGET_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import { PROFER_PLUGIN_IPC_CHANNELS, type ProferInstalledPlugin, type ProferPluginOperationResult, type ProferPluginViewInstance, type ProferPluginViewLayout } from '@profer/plugin-api'
 import { VISUALIZATION_IPC, type VisualizationContent, type VisualizationRecord, type VisualizationViewState } from '@profer/shared'
+
+let resourceTarget: CoreResourceScope | null = null
+let resourceSnapshotRequest: Promise<void> | null = null
+let resourceTargetVersion = 0
+function updateResourceTarget(snapshot: { currentId: string; generation: number }): void {
+  resourceTarget = { targetId: snapshot.currentId, generation: snapshot.generation }
+}
+ipcRenderer.on('core-target:changed', (_event, snapshot: { currentId: string; generation: number }) => { resourceTargetVersion += 1; updateResourceTarget(snapshot) })
+async function invokeScopedCoreResource(channel: string, ...args: unknown[]): ReturnType<typeof ipcRenderer.invoke> {
+  if (!CORE_RESOURCE_OPERATIONS[channel] && !CORE_CHAT_CHANNELS.has(channel)) throw new Error('未知 Core 资源通道')
+  const captured = resourceTarget
+  const capturedVersion = resourceTargetVersion
+  if (!captured) {
+    resourceSnapshotRequest ??= ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.LIST).then((snapshot: { currentId: string; generation: number }) => {
+      // 查询期间广播优先；迟到的旧目录不能覆盖已选目标。
+      if (resourceTargetVersion === capturedVersion && !resourceTarget) updateResourceTarget(snapshot)
+    }).finally(() => { resourceSnapshotRequest = null })
+    await resourceSnapshotRequest
+    if (resourceTargetVersion !== capturedVersion) throw new Error('Core 已切换，请重新操作')
+  }
+  const scope = captured ?? resourceTarget
+  if (!scope || resourceTarget?.targetId !== scope.targetId || resourceTarget.generation !== scope.generation) throw new Error('Core 已切换，请重新操作')
+  const forwarded = args.slice()
+  while (forwarded.length > 0 && forwarded[forwarded.length - 1] === undefined) forwarded.pop()
+  const result: unknown = await ipcRenderer.invoke(channel, ...forwarded, { __proferCoreResourceScope: scope })
+  if (resourceTarget?.targetId !== scope.targetId || resourceTarget.generation !== scope.generation) throw new Error('Core 已切换，忽略旧资源响应')
+  return result
+}
 import type { CustomNotificationSound } from '../types'
 import type { AgentNavigationIndexEntry, AgentNavigationIndexPayload } from '@profer/shared'
 import type { PresetReference, PresetReferenceReport, PresetScopeRebindResult, LarkCliStatus, LarkCliOperationResult, LarkLoginStartResult, LarkLoginEvent, LarkMcpCredentialsInput, LarkMcpSetupResult, LarkMcpStatus } from '@profer/shared'
@@ -627,6 +658,7 @@ export interface ElectronAPI {
   /** 移除远程 Core 目标。 */
   removeCoreTarget: (id: string) => Promise<{ currentId: string; generation: number; targets: import('../types').CoreTargetSummary[] }>
   /** 订阅当前 Core 目标/连接状态变化。 */
+  onCoreChatSnapshot: (callback: (snapshot: import('../types').CoreChatSnapshot) => void) => () => void
   onCoreTargetChanged: (callback: (snapshot: import('../types').CoreTargetsSnapshot) => void) => () => void
 
 
@@ -1822,7 +1854,7 @@ let _settingsPromise: Promise<AppSettings> | null = null
 
 const electronAPI: ElectronAPI = {
   listVisualizations: (sessionId) => ipcRenderer.invoke(VISUALIZATION_IPC.LIST, sessionId),
-  composer: createComposerApi(ipcRenderer),
+  composer: createComposerApi(ipcRenderer, invokeScopedCoreResource),
 
   readVisualization: (input) => ipcRenderer.invoke(VISUALIZATION_IPC.READ, input),
   readVisualizationViewState: (input) => ipcRenderer.invoke(VISUALIZATION_IPC.VIEW_STATE, input),
@@ -2105,7 +2137,7 @@ const electronAPI: ElectronAPI = {
 
   // 对话管理
   listConversations: (includeArchived?: boolean) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.LIST_CONVERSATIONS, includeArchived)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.LIST_CONVERSATIONS, includeArchived)
   },
 
   /** 轻量归档计数（对话 + Agent 会话） */
@@ -2114,77 +2146,77 @@ const electronAPI: ElectronAPI = {
   },
 
   createConversation: (title?: string, modelId?: string, channelId?: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.CREATE_CONVERSATION, title, modelId, channelId)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.CREATE_CONVERSATION, title, modelId, channelId)
   },
 
   getConversationMessages: (id: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_MESSAGES, id)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.GET_MESSAGES, id)
   },
 
   getRecentMessages: (id: string, limit: number) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_RECENT_MESSAGES, id, limit)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.GET_RECENT_MESSAGES, id, limit)
   },
 
   updateConversationTitle: (id: string, title: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.UPDATE_TITLE, id, title)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.UPDATE_TITLE, id, title)
   },
 
   autoTitleConversation: (input: { conversationId: string; channelId: string; modelId: string }) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.AUTO_TITLE, input)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.AUTO_TITLE, input)
   },
 
   regenerateConversationTitle: (id: string, channelId?: string, modelId?: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.REGENERATE_TITLE, id, channelId, modelId)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.REGENERATE_TITLE, id, channelId, modelId)
   },
 
   updateConversationModel: (id: string, modelId?: string, channelId?: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.UPDATE_MODEL, id, modelId, channelId)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.UPDATE_MODEL, id, modelId, channelId)
   },
 
   deleteConversation: (id: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.DELETE_CONVERSATION, id)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.DELETE_CONVERSATION, id)
   },
 
   togglePinConversation: (id: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.TOGGLE_PIN, id)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.TOGGLE_PIN, id)
   },
 
   toggleArchiveConversation: (id: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.TOGGLE_ARCHIVE, id)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.TOGGLE_ARCHIVE, id)
   },
 
   searchConversationMessages: (query: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SEARCH_MESSAGES, query)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.SEARCH_MESSAGES, query)
   },
 
   // 教程
   getTutorialContent: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_TUTORIAL_CONTENT)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.GET_TUTORIAL_CONTENT)
   },
 
   createWelcomeConversation: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.CREATE_WELCOME_CONVERSATION)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.CREATE_WELCOME_CONVERSATION)
   },
 
   getFrpGuideContent: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_FRP_GUIDE_CONTENT)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.GET_FRP_GUIDE_CONTENT)
   },
 
   // 消息发送
   sendMessage: (input: ChatSendInput) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SEND_MESSAGE, input)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.SEND_MESSAGE, input)
   },
 
   addKnowledgeReferences: (conversationId: string, itemIds: string[]) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES, conversationId, itemIds)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.ADD_KNOWLEDGE_REFERENCES, conversationId, itemIds)
   },
 
   stopGeneration: (conversationId: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.STOP_GENERATION, conversationId)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.STOP_GENERATION, conversationId)
   },
 
   deleteMessage: (conversationId: string, messageId: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.DELETE_MESSAGE, conversationId, messageId)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.DELETE_MESSAGE, conversationId, messageId)
   },
 
   truncateMessagesFrom: (
@@ -2192,7 +2224,7 @@ const electronAPI: ElectronAPI = {
     messageId: string,
     preserveFirstMessageAttachments = false,
   ) => {
-    return ipcRenderer.invoke(
+    return invokeScopedCoreResource(
       CHAT_IPC_CHANNELS.TRUNCATE_MESSAGES_FROM,
       conversationId,
       messageId,
@@ -2201,15 +2233,15 @@ const electronAPI: ElectronAPI = {
   },
 
   getBranch: (conversationId: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_BRANCH, conversationId)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.GET_BRANCH, conversationId)
   },
 
   setActivePath: (conversationId: string, path: string[]) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SET_ACTIVE_PATH, conversationId, path)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.SET_ACTIVE_PATH, conversationId, path)
   },
 
   getBranchTree: (conversationId: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_BRANCH_TREE, conversationId)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.GET_BRANCH_TREE, conversationId)
   },
 
   forkBranchAt: (
@@ -2222,48 +2254,48 @@ const electronAPI: ElectronAPI = {
       knowledgeReferences?: ChatMessage['knowledgeReferences']
     },
   ) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.FORK_BRANCH_AT, conversationId, anchorId, payload)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.FORK_BRANCH_AT, conversationId, anchorId, payload)
   },
 
   getMessageContent: (conversationId: string, messageId: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GET_MESSAGE_CONTENT, conversationId, messageId)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.GET_MESSAGE_CONTENT, conversationId, messageId)
   },
 
   updateContextDividers: (conversationId: string, dividers: string[]) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.UPDATE_CONTEXT_DIVIDERS, conversationId, dividers)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.UPDATE_CONTEXT_DIVIDERS, conversationId, dividers)
   },
 
   generateTitle: (input: GenerateTitleInput) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.GENERATE_TITLE, input)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.GENERATE_TITLE, input)
   },
 
   // 附件管理
   saveAttachment: (input: AttachmentSaveInput) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SAVE_ATTACHMENT, input)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.SAVE_ATTACHMENT, input)
   },
 
   readAttachment: (localPath: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.READ_ATTACHMENT, localPath)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.READ_ATTACHMENT, localPath)
   },
 
   copyImage: (localPath: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.COPY_IMAGE, localPath)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.COPY_IMAGE, localPath)
   },
 
   saveImageAs: (localPath: string, defaultFilename: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SAVE_IMAGE_AS, localPath, defaultFilename)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.SAVE_IMAGE_AS, localPath, defaultFilename)
   },
 
   saveResourceFileAs: (resourceRelativePath: string, defaultFilename: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.SAVE_RESOURCE_FILE_AS, resourceRelativePath, defaultFilename)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.SAVE_RESOURCE_FILE_AS, resourceRelativePath, defaultFilename)
   },
 
   deleteAttachment: (localPath: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.DELETE_ATTACHMENT, localPath)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.DELETE_ATTACHMENT, localPath)
   },
 
   openFileDialog: () => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.OPEN_FILE_DIALOG)
   },
 
   // 通用个人资料库
@@ -2278,7 +2310,7 @@ const electronAPI: ElectronAPI = {
   },
 
   extractAttachmentText: (localPath: string) => {
-    return ipcRenderer.invoke(CHAT_IPC_CHANNELS.EXTRACT_ATTACHMENT_TEXT, localPath)
+    return invokeScopedCoreResource(CHAT_IPC_CHANNELS.EXTRACT_ATTACHMENT_TEXT, localPath)
   },
 
   // 用户档案
@@ -2343,6 +2375,14 @@ const electronAPI: ElectronAPI = {
   addCoreTarget: (input) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.ADD, input),
   selectCoreTarget: (id) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.SELECT, id),
   removeCoreTarget: (id) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.REMOVE, id),
+  onCoreChatSnapshot: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../types').CoreChatSnapshot): void => {
+      if (resourceTarget?.targetId !== snapshot.targetId || resourceTarget.generation !== snapshot.generation) return
+      callback(snapshot)
+    }
+    ipcRenderer.on('core-chat:snapshot', listener)
+    return () => { ipcRenderer.removeListener('core-chat:snapshot', listener) }
+  },
   onCoreTargetChanged: callback => {
     const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../types').CoreTargetsSnapshot): void => callback(snapshot)
     ipcRenderer.on('core-target:changed', listener)
@@ -2584,25 +2624,25 @@ const electronAPI: ElectronAPI = {
 
   // Agent 预设
   listAgentPresets: (workspaceSlug?: string, includeInactiveGlobal?: boolean) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS, workspaceSlug, includeInactiveGlobal)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.LIST_PRESETS, workspaceSlug, includeInactiveGlobal)
   },
-  listGlobalAgentPresets: () => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.LIST_GLOBAL_PRESETS),
-  createGlobalAgentPreset: (input: AgentPresetCreateInput) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.CREATE_GLOBAL_PRESET, input),
-  promoteWorkspacePresetToGlobal: (workspaceSlug: string, presetId: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.PROMOTE_WORKSPACE_PRESET_TO_GLOBAL, workspaceSlug, presetId, targetWorkspaceSlugs, keepWorkspaceCopy),
-  updateGlobalAgentPreset: (presetId: string, updates: AgentPresetUpdateInput) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.UPDATE_GLOBAL_PRESET, presetId, updates),
-  getPresetReferenceReport: (reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.GET_REFERENCE_REPORT, reference),
-  copyPresetToWorkspace: (reference: PresetReference, workspaceSlug: string, name?: string) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.COPY_TO_WORKSPACE, reference, workspaceSlug, name),
-  deleteGlobalAgentPreset: (reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.DELETE_GLOBAL_PRESET, reference),
-  setDefaultAgentPresetReference: (workspaceSlug: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_REFERENCE, workspaceSlug, reference),
-  enableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.ENABLE_GLOBAL_IN_WORKSPACE, workspaceSlug, reference),
-  disableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.DISABLE_GLOBAL_IN_WORKSPACE, workspaceSlug, reference),
-  rebindAndDisableGlobalPresetScope: (workspaceSlug: string, source: PresetReference, replacement?: PresetReference) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_AND_DISABLE_GLOBAL_SCOPE, workspaceSlug, source, replacement),
-  setWorkspacePresetEnabled: (workspaceSlug: string, presetId: string, enabled: boolean) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.SET_WORKSPACE_ENABLED, workspaceSlug, presetId, enabled),
+  listGlobalAgentPresets: () => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.LIST_GLOBAL_PRESETS),
+  createGlobalAgentPreset: (input: AgentPresetCreateInput) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.CREATE_GLOBAL_PRESET, input),
+  promoteWorkspacePresetToGlobal: (workspaceSlug: string, presetId: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.PROMOTE_WORKSPACE_PRESET_TO_GLOBAL, workspaceSlug, presetId, targetWorkspaceSlugs, keepWorkspaceCopy),
+  updateGlobalAgentPreset: (presetId: string, updates: AgentPresetUpdateInput) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.UPDATE_GLOBAL_PRESET, presetId, updates),
+  getPresetReferenceReport: (reference: PresetReference) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.GET_REFERENCE_REPORT, reference),
+  copyPresetToWorkspace: (reference: PresetReference, workspaceSlug: string, name?: string) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.COPY_TO_WORKSPACE, reference, workspaceSlug, name),
+  deleteGlobalAgentPreset: (reference: PresetReference) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.DELETE_GLOBAL_PRESET, reference),
+  setDefaultAgentPresetReference: (workspaceSlug: string, reference: PresetReference) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_REFERENCE, workspaceSlug, reference),
+  enableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.ENABLE_GLOBAL_IN_WORKSPACE, workspaceSlug, reference),
+  disableGlobalPresetInWorkspace: (workspaceSlug: string, reference: PresetReference) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.DISABLE_GLOBAL_IN_WORKSPACE, workspaceSlug, reference),
+  rebindAndDisableGlobalPresetScope: (workspaceSlug: string, source: PresetReference, replacement?: PresetReference) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.REBIND_AND_DISABLE_GLOBAL_SCOPE, workspaceSlug, source, replacement),
+  setWorkspacePresetEnabled: (workspaceSlug: string, presetId: string, enabled: boolean) => invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.SET_WORKSPACE_ENABLED, workspaceSlug, presetId, enabled),
   rebindAgentSessionPresetReference: (sessionId: string, reference: PresetReference, expectedRevision?: number) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_SESSION_REFERENCE, sessionId, reference, expectedRevision),
   rebindAutomationPresetReference: (automationId: string, reference: PresetReference | null) => ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.REBIND_AUTOMATION_REFERENCE, automationId, reference),
 
   getDefaultAgentPreset: (workspaceSlug?: string) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.GET_DEFAULT_PRESET, workspaceSlug)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.GET_DEFAULT_PRESET, workspaceSlug)
   },
 
   updateAgentSessionPreset: (sessionId: string, presetId: string) => {
@@ -2610,39 +2650,39 @@ const electronAPI: ElectronAPI = {
   },
 
   setDefaultAgentPreset: (workspaceSlug: string, presetId: string) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_PRESET, workspaceSlug, presetId)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.SET_DEFAULT_PRESET, workspaceSlug, presetId)
   },
 
   createAgentPreset: (workspaceSlug: string, input: AgentPresetCreateInput) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.CREATE_PRESET, workspaceSlug, input)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.CREATE_PRESET, workspaceSlug, input)
   },
 
   copyAgentPreset: (workspaceSlug: string, fromId: string, name?: string) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.COPY_PRESET, workspaceSlug, fromId, name)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.COPY_PRESET, workspaceSlug, fromId, name)
   },
 
   updateAgentPreset: (workspaceSlug: string, presetId: string, updates: AgentPresetUpdateInput) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.UPDATE_PRESET, workspaceSlug, presetId, updates)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.UPDATE_PRESET, workspaceSlug, presetId, updates)
   },
 
   deleteAgentPreset: (workspaceSlug: string, presetId: string) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.DELETE_PRESET, workspaceSlug, presetId)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.DELETE_PRESET, workspaceSlug, presetId)
   },
 
   getOtherWorkspacePresets: (currentSlug: string) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.GET_OTHER_WORKSPACE_PRESETS, currentSlug)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.GET_OTHER_WORKSPACE_PRESETS, currentSlug)
   },
 
   importPresetFromWorkspace: (targetSlug: string, sourceSlug: string, presetId: string) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESET_FROM_WORKSPACE, targetSlug, sourceSlug, presetId)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESET_FROM_WORKSPACE, targetSlug, sourceSlug, presetId)
   },
 
   exportAgentPresets: (workspaceSlug: string, presetIds?: string[]) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.EXPORT_PRESETS, workspaceSlug, presetIds)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.EXPORT_PRESETS, workspaceSlug, presetIds)
   },
 
   importAgentPresets: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESETS, workspaceSlug)
+    return invokeScopedCoreResource(AGENT_PRESET_IPC_CHANNELS.IMPORT_PRESETS, workspaceSlug)
   },
 
   ensureProjectDraftAgentSession: (workspaceId: string, channelId?: string, modelId?: string) => {
@@ -2862,60 +2902,60 @@ const electronAPI: ElectronAPI = {
 
   // 工作区能力（MCP + Skill）
   getWorkspaceCapabilities: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_CAPABILITIES, workspaceSlug)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.GET_CAPABILITIES, workspaceSlug)
   },
 
   getWorkspaceMcpConfig: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_MCP_CONFIG, workspaceSlug)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.GET_MCP_CONFIG, workspaceSlug)
   },
 
   saveWorkspaceMcpConfig: (workspaceSlug: string, config: WorkspaceMcpConfig) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SAVE_MCP_CONFIG, workspaceSlug, config)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.SAVE_MCP_CONFIG, workspaceSlug, config)
   },
 
   testMcpServer: (name: string, entry: import('@profer/shared').McpServerEntry, workspaceSlug?: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TEST_MCP_SERVER, name, entry, workspaceSlug) as Promise<{ success: boolean; message: string; reason?: import('@profer/shared').McpProbeFailureReason; tools?: import('@profer/shared').McpToolSummary[] }>
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.TEST_MCP_SERVER, name, entry, workspaceSlug) as Promise<{ success: boolean; message: string; reason?: import('@profer/shared').McpProbeFailureReason; tools?: import('@profer/shared').McpToolSummary[] }>
   },
 
   restartMcpServer: (name: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTART_MCP_SERVER, name) as Promise<import('@profer/shared').McpServerRestartResult>
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.RESTART_MCP_SERVER, name) as Promise<import('@profer/shared').McpServerRestartResult>
   },
 
   getMcpConnectionStatus: () => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_MCP_CONNECTION_STATUS) as Promise<import('@profer/shared').McpConnectionSnapshot[]>
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.GET_MCP_CONNECTION_STATUS) as Promise<import('@profer/shared').McpConnectionSnapshot[]>
   },
 
   getWorkspaceSkills: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SKILLS, workspaceSlug)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.GET_SKILLS, workspaceSlug)
   },
 
   getWorkspaceSkillsDir: (workspaceSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SKILLS_DIR, workspaceSlug)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.GET_SKILLS_DIR, workspaceSlug)
   },
 
   createWorkspaceSkill: (workspaceSlug: string, skillSlug: string, name: string, description: string, content: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SKILL, workspaceSlug, skillSlug, name, description, content)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.CREATE_SKILL, workspaceSlug, skillSlug, name, description, content)
   },
-  promoteWorkspaceSkillToGlobal: (workspaceSlug: string, skillSlug: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.PROMOTE_SKILL_TO_GLOBAL, workspaceSlug, skillSlug, targetWorkspaceSlugs, keepWorkspaceCopy),
+  promoteWorkspaceSkillToGlobal: (workspaceSlug: string, skillSlug: string, targetWorkspaceSlugs: string[], keepWorkspaceCopy = true) => invokeScopedCoreResource(AGENT_IPC_CHANNELS.PROMOTE_SKILL_TO_GLOBAL, workspaceSlug, skillSlug, targetWorkspaceSlugs, keepWorkspaceCopy),
 
   deleteWorkspaceSkill: (workspaceSlug: string, skillSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_SKILL, workspaceSlug, skillSlug)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.DELETE_SKILL, workspaceSlug, skillSlug)
   },
 
   toggleWorkspaceSkill: (workspaceSlug: string, skillSlug: string, enabled: boolean, sourceSkillId?: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.TOGGLE_SKILL, workspaceSlug, skillSlug, enabled, sourceSkillId)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.TOGGLE_SKILL, workspaceSlug, skillSlug, enabled, sourceSkillId)
   },
 
   getOtherWorkspaceSkills: (currentSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_OTHER_WORKSPACE_SKILLS, currentSlug)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.GET_OTHER_WORKSPACE_SKILLS, currentSlug)
   },
 
   getDefaultSkillSlugs: () => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS)
   },
 
   importSkillFromWorkspace: (targetSlug: string, sourceSlug: string, skillSlug: string) => {
-    return ipcRenderer.invoke(
+    return invokeScopedCoreResource(
       AGENT_IPC_CHANNELS.IMPORT_SKILL_FROM_WORKSPACE,
       targetSlug,
       sourceSlug,
@@ -2924,7 +2964,7 @@ const electronAPI: ElectronAPI = {
   },
 
   updateSkillFromSource: (targetSlug: string, skillSlug: string) => {
-    return ipcRenderer.invoke(
+    return invokeScopedCoreResource(
       AGENT_IPC_CHANNELS.UPDATE_SKILL_FROM_SOURCE,
       targetSlug,
       skillSlug,
@@ -2932,7 +2972,7 @@ const electronAPI: ElectronAPI = {
   },
 
   readSkillContent: (workspaceSlug: string, skillSlug: string) => {
-    return ipcRenderer.invoke(
+    return invokeScopedCoreResource(
       AGENT_IPC_CHANNELS.READ_SKILL_CONTENT,
       workspaceSlug,
       skillSlug,
@@ -2940,7 +2980,7 @@ const electronAPI: ElectronAPI = {
   },
 
   writeSkillContent: (workspaceSlug: string, skillSlug: string, content: string) => {
-    return ipcRenderer.invoke(
+    return invokeScopedCoreResource(
       AGENT_IPC_CHANNELS.WRITE_SKILL_CONTENT,
       workspaceSlug,
       skillSlug,
@@ -2949,7 +2989,7 @@ const electronAPI: ElectronAPI = {
   },
 
   readSkillCard: (workspaceSlug: string, skillSlug: string) => {
-    return ipcRenderer.invoke(
+    return invokeScopedCoreResource(
       AGENT_IPC_CHANNELS.READ_SKILL_CARD,
       workspaceSlug,
       skillSlug,
@@ -2957,7 +2997,7 @@ const electronAPI: ElectronAPI = {
   },
 
   writeSkillCard: (workspaceSlug: string, skillSlug: string, patch: import('@profer/shared').SkillManifestPatch) => {
-    return ipcRenderer.invoke(
+    return invokeScopedCoreResource(
       AGENT_IPC_CHANNELS.WRITE_SKILL_CARD,
       workspaceSlug,
       skillSlug,
@@ -2966,27 +3006,27 @@ const electronAPI: ElectronAPI = {
   },
 
   listSkillFiles: (workspaceSlug: string, skillSlug: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SKILL_FILES, workspaceSlug, skillSlug)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.LIST_SKILL_FILES, workspaceSlug, skillSlug)
   },
 
   readSkillFile: (workspaceSlug: string, skillSlug: string, relativePath: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.READ_SKILL_FILE, workspaceSlug, skillSlug, relativePath)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.READ_SKILL_FILE, workspaceSlug, skillSlug, relativePath)
   },
 
   writeSkillFile: (workspaceSlug: string, skillSlug: string, relativePath: string, content: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.WRITE_SKILL_FILE, workspaceSlug, skillSlug, relativePath, content)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.WRITE_SKILL_FILE, workspaceSlug, skillSlug, relativePath, content)
   },
 
   createSkillEntry: (workspaceSlug: string, skillSlug: string, relativePath: string, type: 'file' | 'directory') => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SKILL_ENTRY, workspaceSlug, skillSlug, relativePath, type)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.CREATE_SKILL_ENTRY, workspaceSlug, skillSlug, relativePath, type)
   },
 
   deleteSkillEntry: (workspaceSlug: string, skillSlug: string, relativePath: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_SKILL_ENTRY, workspaceSlug, skillSlug, relativePath)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.DELETE_SKILL_ENTRY, workspaceSlug, skillSlug, relativePath)
   },
 
   renameSkillEntry: (workspaceSlug: string, skillSlug: string, fromRelative: string, toRelative: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RENAME_SKILL_ENTRY, workspaceSlug, skillSlug, fromRelative, toRelative)
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.RENAME_SKILL_ENTRY, workspaceSlug, skillSlug, fromRelative, toRelative)
   },
 
   onAgentStreamEvent: (callback: (event: AgentStreamEvent) => void) => {
@@ -4083,39 +4123,39 @@ const electronAPI: ElectronAPI = {
   // ===== 全局 Skill 体系 =====
   // ===== 全局 Skill 体系 =====
   globalSkill: {
-    list: (workspaceSlug?: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.LIST, workspaceSlug),
-    read: (skillId: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.READ, skillId),
-    readWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.READ_WORKSPACE_COPY, workspaceSlug, workspaceSkillId),
-    saveWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string, content: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.SAVE_WORKSPACE_COPY, workspaceSlug, workspaceSkillId, content),
-    save: (skillId: string, content: string, workspaceSlug: string | undefined, scope: 'global' | 'workspace') => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.SAVE, skillId, content, workspaceSlug ?? '', scope),
-    copyToUser: (skillId: string, slug?: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_USER, skillId, slug),
-    createUser: (slug: string, name: string, description: string, content: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, slug, name, description, content),
-    copyToWorkspace: (skillId: string, workspaceSlug: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_WORKSPACE, skillId, workspaceSlug),
-    getDeleteBlockers: (skillId: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.GET_DELETE_BLOCKERS, skillId),
-    deleteUser: (skillId: string, confirmationToken?: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.DELETE_USER, skillId, confirmationToken),
-    setEnabled: (workspaceSlug: string, skillId: string, enabled: boolean) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.SET_ENABLED, workspaceSlug, skillId, enabled),
-    restore: (workspaceSlug: string, skillId: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.RESTORE, workspaceSlug, skillId),
-    getOverrides: (workspaceSlug: string) => ipcRenderer.invoke(GLOBAL_SKILL_IPC_CHANNELS.GET_OVERRIDES, workspaceSlug),
+    list: (workspaceSlug?: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.LIST, workspaceSlug),
+    read: (skillId: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.READ, skillId),
+    readWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.READ_WORKSPACE_COPY, workspaceSlug, workspaceSkillId),
+    saveWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string, content: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.SAVE_WORKSPACE_COPY, workspaceSlug, workspaceSkillId, content),
+    save: (skillId: string, content: string, workspaceSlug: string | undefined, scope: 'global' | 'workspace') => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.SAVE, skillId, content, workspaceSlug ?? '', scope),
+    copyToUser: (skillId: string, slug?: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_USER, skillId, slug),
+    createUser: (slug: string, name: string, description: string, content: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, slug, name, description, content),
+    copyToWorkspace: (skillId: string, workspaceSlug: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_WORKSPACE, skillId, workspaceSlug),
+    getDeleteBlockers: (skillId: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.GET_DELETE_BLOCKERS, skillId),
+    deleteUser: (skillId: string, confirmationToken?: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.DELETE_USER, skillId, confirmationToken),
+    setEnabled: (workspaceSlug: string, skillId: string, enabled: boolean) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.SET_ENABLED, workspaceSlug, skillId, enabled),
+    restore: (workspaceSlug: string, skillId: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.RESTORE, workspaceSlug, skillId),
+    getOverrides: (workspaceSlug: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.GET_OVERRIDES, workspaceSlug),
   },
 
   // ===== 全局元 Skill（master 库）=====
   skillMaster: {
     list: () =>
-      ipcRenderer.invoke(SKILL_MASTER_IPC_CHANNELS.LIST),
+      invokeScopedCoreResource(SKILL_MASTER_IPC_CHANNELS.LIST),
     read: (slug: string) =>
-      ipcRenderer.invoke(SKILL_MASTER_IPC_CHANNELS.READ, slug),
+      invokeScopedCoreResource(SKILL_MASTER_IPC_CHANNELS.READ, slug),
     save: (slug: string, content: string, note?: string) =>
-      ipcRenderer.invoke(SKILL_MASTER_IPC_CHANNELS.SAVE, slug, content, note),
+      invokeScopedCoreResource(SKILL_MASTER_IPC_CHANNELS.SAVE, slug, content, note),
     renameMeta: (slug: string, patches: { name?: string; description?: string }) =>
-      ipcRenderer.invoke(SKILL_MASTER_IPC_CHANNELS.RENAME_META, slug, patches),
+      invokeScopedCoreResource(SKILL_MASTER_IPC_CHANNELS.RENAME_META, slug, patches),
     listHistory: (slug: string) =>
-      ipcRenderer.invoke(SKILL_MASTER_IPC_CHANNELS.LIST_HISTORY, slug),
+      invokeScopedCoreResource(SKILL_MASTER_IPC_CHANNELS.LIST_HISTORY, slug),
     rollback: (slug: string, snapshotId: string, note?: string) =>
-      ipcRenderer.invoke(SKILL_MASTER_IPC_CHANNELS.ROLLBACK, slug, snapshotId, note),
+      invokeScopedCoreResource(SKILL_MASTER_IPC_CHANNELS.ROLLBACK, slug, snapshotId, note),
     syncToWorkspaces: (slug: string, targetWorkspaceSlugs: string[], options?: { force?: boolean; forceSlugs?: string[] }) =>
-      ipcRenderer.invoke(SKILL_MASTER_IPC_CHANNELS.SYNC_TO_WORKSPACES, slug, targetWorkspaceSlugs, options),
+      invokeScopedCoreResource(SKILL_MASTER_IPC_CHANNELS.SYNC_TO_WORKSPACES, slug, targetWorkspaceSlugs, options),
     detectConflict: (workspaceSlug: string, skillSlug: string) =>
-      ipcRenderer.invoke(SKILL_MASTER_IPC_CHANNELS.DETECT_CONFLICT, workspaceSlug, skillSlug),
+      invokeScopedCoreResource(SKILL_MASTER_IPC_CHANNELS.DETECT_CONFLICT, workspaceSlug, skillSlug),
   },
 
 }

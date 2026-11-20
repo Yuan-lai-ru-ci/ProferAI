@@ -41,7 +41,7 @@ test.each(['success', 'uncertain-call'] as const)('Core Pi所属MCP实际握手/
     const configDir = join(root, 'workspaces', workspace.slug)
     await mkdir(configDir, { recursive: true })
     await writeFile(join(configDir, 'mcp.json'), JSON.stringify({ servers: { fixture: { type: 'http', url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp` } } }))
-    await writeFile(join(configDir, 'agent-presets.json'), JSON.stringify({ presets: [{ id: 'mcp-fixture', name: 'MCP fixture', version: '1', createdAt: 0, updatedAt: 0, mcpServerNames: ['fixture'], skillSlugs: [] }] }))
+    await writeFile(join(configDir, 'agent-presets.json'), JSON.stringify({ presets: [{ id: 'mcp-fixture', name: 'MCP fixture', description: 'Isolated local MCP fixture', version: '1', createdAt: 0, updatedAt: 0, mcpServerNames: ['fixture'], skillSlugs: [] }] }))
     const session = runtime.sessions.create({ title: 'MCP fixture', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'offline', modelId: 'claude-sonnet-4-5', workspaceId: workspace.id,
       presetReference: { presetId: 'mcp-fixture', presetScope: 'workspace', workspaceSlug: workspace.slug } })
     expect(await runtime.coordinator.run(runtime.createQuery(session, 'Run the isolated MCP fixture')).promise).toEqual({ status: 'completed' })

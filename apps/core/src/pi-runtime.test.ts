@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -272,7 +273,7 @@ describe('Core Pi 恢复集成（真实 SDK + 脚本模型 + WS）', () => {
       channels: [{ id: 'fixture', name: 'offline', provider: 'anthropic', apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }] })
     const workspace = runtime.workspaces.createManaged('preset-gate')
     const presetPath = join(root, 'workspaces', workspace.slug, 'agent-presets.json')
-    await writeFile(presetPath, JSON.stringify({ presets: [{ id: 'no-write', name: 'No Write', version: '1', createdAt: 0, updatedAt: 0, disabledTools: ['Write'], promptSections: ['PRESET_PROMPT_SENTINEL'] }] }))
+    await writeFile(presetPath, JSON.stringify({ presets: [{ id: 'no-write', name: 'No Write', description: 'Offline tool restriction fixture', version: '1', createdAt: 0, updatedAt: 0, disabledTools: ['Write'], promptSections: ['PRESET_PROMPT_SENTINEL'] }] }))
     const session = runtime.sessions.create({ title: 'preset gate', runtime: 'pi', channelId: 'fixture', modelId: 'claude-sonnet-4-5', workspaceId: workspace.id, permissionMode: 'bypassPermissions',
       presetReference: { presetId: 'no-write', presetScope: 'workspace', workspaceSlug: workspace.slug } })
     const transport = createScriptedTransport([
@@ -303,7 +304,7 @@ describe('Core Pi 恢复集成（真实 SDK + 脚本模型 + WS）', () => {
       channels: [{ id: 'fixture', name: 'offline', provider: 'anthropic', apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }] })
     const workspace = runtime.workspaces.createManaged('preset-frozen')
     const presetPath = join(root, 'workspaces', workspace.slug, 'agent-presets.json')
-    const preset = { id: 'frozen', name: 'Frozen', version: '1', createdAt: 0, updatedAt: 0, disabledTools: ['Write'], promptSections: ['FROZEN_PRESET_ONE'] }
+    const preset = { id: 'frozen', name: 'Frozen', description: 'Offline run snapshot fixture', version: '1', createdAt: 0, updatedAt: 0, disabledTools: ['Write'], promptSections: ['FROZEN_PRESET_ONE'] }
     await writeFile(presetPath, JSON.stringify({ presets: [preset] }))
     const session = runtime.sessions.create({ title: 'preset freeze', runtime: 'pi', channelId: 'fixture', modelId: 'claude-sonnet-4-5', workspaceId: workspace.id, permissionMode: 'bypassPermissions',
       presetReference: { presetId: 'frozen', presetScope: 'workspace', workspaceSlug: workspace.slug } })
@@ -370,7 +371,7 @@ describe('Core Pi 恢复集成（真实 SDK + 脚本模型 + WS）', () => {
       expect(sdkId.length).toBeGreaterThan(0)
       expect(seededFile.length).toBeGreaterThan(0)
       const seededContent = await readFile(seededFile, 'utf8')
-      const session = runtime.sessions.create({ title: 'migrated', runtime: 'pi', channelId: 'test-channel', modelId: 'claude-sonnet-4-5' })
+      const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'migrated', runtime: 'pi', channelId: 'test-channel', modelId: 'claude-sonnet-4-5' })
       runtime.sessions.updateMeta(session.id, { sdkSessionId: sdkId, piSessionFile: join(root, 'outside-current-config', 'obsolete.jsonl') })
       await listenCoreServer(server, '127.0.0.1', 0)
       const port = (server.address() as AddressInfo).port
@@ -387,11 +388,11 @@ describe('Core Pi 恢复集成（真实 SDK + 脚本模型 + WS）', () => {
       expect(await handle.promise).toEqual({ status: 'completed' })
       expect(transport.calls[0]?.userTexts.join('\n')).toContain('core migration sentinel')
       expect(runtime.sessions.getMeta(session.id)?.sdkSessionId).toBe(sdkId)
-      expect(runtime.sessions.getMeta(session.id)?.piSessionFile).toBe(seededFile)
+      expect(runtime.sessions.getMeta(session.id)?.piSessionFile).toBe(realpathSync(seededFile))
       expect((await readFile(seededFile, 'utf8')).startsWith(seededContent)).toBe(true)
 
       transport = createScriptedTransport([{ textChunks: ['new reply'] }])
-      const fresh = runtime.sessions.create({ title: 'fresh', runtime: 'pi', channelId: 'test-channel', modelId: 'claude-sonnet-4-5' })
+      const fresh = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'fresh', runtime: 'pi', channelId: 'test-channel', modelId: 'claude-sonnet-4-5' })
       const freshHandle = runtime.coordinator.run(runtime.createQuery(fresh, 'fresh context sentinel'), { onEvent() {}, onComplete() {}, onError() {} })
       expect(await freshHandle.promise).toEqual({ status: 'completed' })
       const freshMeta = runtime.sessions.getMeta(fresh.id)!
@@ -406,7 +407,7 @@ describe('Core Pi 恢复集成（真实 SDK + 脚本模型 + WS）', () => {
       expect(completions.every(event => event.resultSubtype === 'success' && event.resultErrors === undefined)).toBe(true)
 
       // 缺失上下文必须在模型请求前失败，不能重建空会话伪装成功。
-      const missing = runtime.sessions.create({ title: 'missing', runtime: 'pi', channelId: 'test-channel', modelId: 'claude-sonnet-4-5' })
+      const missing = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'missing', runtime: 'pi', channelId: 'test-channel', modelId: 'claude-sonnet-4-5' })
       runtime.sessions.updateMeta(missing.id, { sdkSessionId: 'missing-pi-session' })
       transport = createScriptedTransport([])
       const missingHandle = runtime.coordinator.run(runtime.createQuery(runtime.sessions.getMeta(missing.id)!, 'do not reset history'), { onEvent() {}, onComplete() {}, onError() {} })
@@ -415,7 +416,7 @@ describe('Core Pi 恢复集成（真实 SDK + 脚本模型 + WS）', () => {
       expect(runtime.sessions.getMeta(missing.id)?.sdkSessionId).toBe('missing-pi-session')
 
       // 用真实 coordinator 停止等待中的模型流，核对 WS 不会误报成功/异常。
-      const stoppable = runtime.sessions.create({ title: 'stop', runtime: 'pi', channelId: 'test-channel', modelId: 'claude-sonnet-4-5' })
+      const stoppable = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'stop', runtime: 'pi', channelId: 'test-channel', modelId: 'claude-sonnet-4-5' })
       transport = createScriptedTransport([{ pending: true }])
       const stopHandle = runtime.coordinator.run(runtime.createQuery(stoppable, 'wait for stop'), { onEvent() {}, onComplete() {}, onError() {} })
       for (let wait = 0; transport.calls.length === 0 && wait < 100; wait++) await new Promise(resolve => setTimeout(resolve, 10))

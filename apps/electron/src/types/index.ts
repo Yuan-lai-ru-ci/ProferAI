@@ -7,3 +7,5 @@
 export * from './settings'
 export * from './user-profile'
 export * from './identity'
+
+export * from './core-chat'

@@ -5,6 +5,7 @@
  * 未确认的提醒会由渲染进程从 SQLite 恢复为固定通知条。
  */
 
+import { localCoreOwnsBusinessData } from './core-business-ownership'
 import { getCurrentCoreTargetId } from './core-target-service'
 import { app, BrowserWindow, Notification } from 'electron'
 import { claimDuePlanningReminders } from './planning-manager'
@@ -17,7 +18,7 @@ let timer: ReturnType<typeof setInterval> | null = null
 let checking = false
 
 /** 原生通知由主进程发送，窗口被隐藏或未聚焦时也不依赖渲染进程的 Web Notification。 */
-function showPlanningSystemNotification(reminder: ActivePlanningReminder): void {
+export function showPlanningSystemNotification(reminder: ActivePlanningReminder): void {
   if (!getSettings().notificationsEnabled || !Notification.isSupported()) return
   // macOS：Electron 的 willPresentNotification 固定返回 UNNotificationPresentationOptionSound，
   // 前台呈现通知必然播放系统提示音（silent 无效）。前台已有常驻提醒条与可配置提示音，
@@ -39,7 +40,7 @@ function showPlanningSystemNotification(reminder: ActivePlanningReminder): void 
 }
 
 function checkDueReminders(): void {
-  if (checking || getCurrentCoreTargetId() !== 'local') return
+  if (checking || getCurrentCoreTargetId() !== 'local' || localCoreOwnsBusinessData()) return
   checking = true
   try {
     const reminders = claimDuePlanningReminders()

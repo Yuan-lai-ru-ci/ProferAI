@@ -41,7 +41,8 @@ test('Core无法取得原预设时在provider前失败，不创建默认替代�
   const root = await mkdtemp(join(tmpdir(), 'profer-core-preset-missing-'))
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true })
   try {
-    const session = runtime.sessions.create({ title: 'missing', runtime: 'pi', presetReference: { presetId: 'not-on-core', presetScope: 'user-global' } })
+    const workspace = runtime.workspaces.createManaged('missing-preset')
+    const session = runtime.sessions.create({ title: 'missing', runtime: 'pi', workspaceId: workspace.id, presetReference: { presetId: 'not-on-core', presetScope: 'user-global' } })
     const handle = runtime.coordinator.run(runtime.createQuery(session, 'must not use standard'))
     expect(await handle.promise).toMatchObject({ status: 'failed', error: expect.stringContaining('预设不存在') })
     expect(runtime.sessions.getMeta(session.id)?.presetReference?.presetId).toBe('not-on-core')

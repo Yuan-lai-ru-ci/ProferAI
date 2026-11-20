@@ -7,13 +7,14 @@ const end = source.indexOf('\nexport function startPlanningReminderScheduler', s
 if (start < 0 || end < start) throw new Error('Planning reminder scheduler boundary missing')
 const body = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end))
 
-function fixture(targetId: string) {
+function fixture(targetId: string, coreOwned = false) {
   const calls: string[] = []
-  const run = new Function('getCurrentCoreTargetId', 'claimDuePlanningReminders', 'showPlanningSystemNotification', 'broadcastPlanningRemindersDue', 'broadcastPlanningChanged', `
+  const run = new Function('localCoreOwnsBusinessData', 'getCurrentCoreTargetId', 'claimDuePlanningReminders', 'showPlanningSystemNotification', 'broadcastPlanningRemindersDue', 'broadcastPlanningChanged', `
     let checking = false;
     ${body}
     return checkDueReminders;
   `)(
+    () => coreOwned,
     () => targetId,
     () => { calls.push('claim'); return [{ id: 'reminder' }] },
     () => calls.push('system'),
@@ -37,3 +38,5 @@ describe('Planning reminder Core ownership', () => {
     expect(f.calls.filter(call => call === 'claim')).toHaveLength(2)
   })
 })
+
+test('本机Core接管后桌面timer不查询或领取业务提醒', () => { const f = fixture('local', true); f.run(); expect(f.calls).toEqual([]) })

@@ -19,8 +19,10 @@ function handler(channel: string, dependencies: Record<string, unknown>) {
   const deps = {
     AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, isAgentRuntime,
     getCurrentCoreTargetId: () => 'local',
+    getCoreTargetGeneration: () => 1,
     assertSensitiveAgentIpcSender: () => {},
     assertLocalCoreTarget: () => {},
+    localCoreNotReadyMessage: () => '本机Core尚未就绪',
     isAgentSessionActive: () => false,
     getSettings: () => ({ agentRuntime: 'claude' }),
     ...dependencies,
@@ -224,16 +226,18 @@ describe('本机 Core 会话 IPC 归属', () => {
     expect(received).toEqual({ id: session.id, action: { type: 'set_interruption', state: null } })
   })
 
-  test('Given 已连接 Core When 新建会话 Then runtime/预设严格引用提交 Core，不写桌面索引', async () => {
+  test('Given 已连接 Core When 新建会话 Then 默认runtime/预设由Core解析，不读取桌面配置', async () => {
     let submitted: unknown
-    const reference = { presetId: 'executor', presetScope: 'workspace', workspaceSlug: 'project' }
+    const client = { createSession: async (input: unknown) => { submitted = input; return session } }
     const invoke = handler('CREATE_SESSION', {
-      getLocalCoreClient: () => ({ createSession: async (input: unknown) => { submitted = input; return session } }),
-      getAgentWorkspace: () => ({ slug: 'project' }), getDefaultPresetId: () => 'executor',
-      presetReferenceForId: () => reference, createAgentSession: noDesktop,
+      getLocalCoreClient: () => client,
+      getAgentWorkspace: noDesktop, getDefaultPresetId: noDesktop, getSettings: noDesktop,
+      presetReferenceForId: noDesktop, createAgentSession: noDesktop,
     })
     expect(await invoke('Title', 'channel', 'workspace', 'model')).toEqual(session)
-    expect(submitted).toEqual({ title: 'Title', runtime: 'claude', channelId: 'channel', workspaceId: 'workspace', modelId: 'model', presetId: 'executor', presetReference: reference })
+    expect(submitted).toEqual({ useCoreDefaults: true, title: 'Title', channelId: 'channel', workspaceId: 'workspace', modelId: 'model', presetId: undefined })
+    expect(await invoke('Title', 'channel', 'workspace', 'model', 'explicit-preset')).toEqual(session)
+    expect(submitted).toMatchObject({ presetId: 'explicit-preset' })
   })
 
   test('Given Core 创建失败 When 新建 Then 不回落桌面', async () => {

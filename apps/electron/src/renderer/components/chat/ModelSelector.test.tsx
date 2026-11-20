@@ -3,6 +3,7 @@ import * as React from 'react'
 import { atom, createStore } from 'jotai/vanilla'
 import type { Channel, ConversationMeta } from '@profer/shared'
 import { channelsAtom, channelsLoadedAtom, conversationsAtom, conversationModelsAtom, conversationModelAtomFamily, modelSelectorRequestAtom, selectedModelAtom, channelCatalogRefreshAtom } from '../../atoms/chat-atoms'
+import { coreTargetsAtom } from '../../atoms/core-target-atoms'
 import { authStatusAtom } from '../../atoms/identity-atoms'
 
 const store = createStore()
@@ -292,4 +293,14 @@ describe('ModelSelector 跨内核选项', () => {
     expect(row(scope, 'ClaudeModel')).toBeUndefined()
     expect(row(scope, 'Model').props.disabled).toBe(false)
   })
+})
+
+test('Given 模型保存中 When Core generation变化 Then 旧模型回执不得覆盖会话绑定', async () => {
+ const scope = mount([fixture, { ...fixture, id:'second' }], { ...meta, channelId:'second' })
+ const select = scope.option().props.onClick as () => void
+ select()
+ const current = store.get(coreTargetsAtom)
+ store.set(coreTargetsAtom, { ...current, generation:current.generation+1 })
+ scope.requests[0]!.resolve({ ...meta }); await scope.flush()
+ expect(store.get(selectedModelAtom)?.channelId).toBe('second')
 })

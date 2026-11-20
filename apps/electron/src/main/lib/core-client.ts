@@ -1,5 +1,5 @@
 import WebSocket from 'ws'
-import { buildAgentSessionUiProjection } from '@profer/shared'
+import { buildAgentSessionUiProjection, CHAT_IPC_CHANNELS } from '@profer/shared'
 import type { AgentWorkspace, ProjectWorkspaceOpenResult } from '@profer/shared'
 import type { AgentRuntimeQuery, RuntimeCredential } from '@profer/agent-runtime'
 
@@ -50,7 +50,15 @@ export interface CoreAgentEvent {
   [key: string]: unknown
 }
 
+export interface CoreChatEvent {
+  kind: 'chat_event'
+  conversationId: string
+  channel: string
+  payload: unknown
+}
+
 export interface CoreRecoverySnapshot {
+  chat?: { conversations: import('@profer/shared').ConversationMeta[]; activeRuns: Array<{ conversationId: string; runId: string }> }
   deletionStatuses?: import('@profer/shared').AgentSessionDeletionStatusPayload[]
   tombstones?: Array<{ sessionId: string; revision: number }>
   sessions: CoreSession[]
@@ -75,6 +83,7 @@ export interface CoreClientOptions {
   webSocketFactory?: (url: string, options: { headers: Record<string, string>; protocols: string[] }) => CoreWebSocket
   reconnect?: boolean
   reconnectDelayMs?: number
+  onChatEvent?: (event: CoreChatEvent) => void
   onEvent?: (event: CoreAgentEvent) => void
   onAutomationEvent?: (payload: unknown) => void
   onWorkspaceEvent?: () => void
@@ -149,6 +158,8 @@ export class CoreClient {
   private readonly webSocketFactory: (url: string, options: { headers: Record<string, string>; protocols: string[] }) => CoreWebSocket
   private readonly reconnect: boolean
   private readonly reconnectDelayMs: number
+  private readonly onChatEvent?: (event: CoreChatEvent) => void
+  private readonly chatEventListeners = new Set<(event: CoreChatEvent) => void>()
   private readonly onEvent?: (event: CoreAgentEvent) => void
   private readonly onAutomationEvent?: (payload: unknown) => void
   private readonly onWorkspaceEvent?: () => void
@@ -182,6 +193,7 @@ export class CoreClient {
     this.webSocketFactory = options.webSocketFactory ?? ((url, connectionOptions) => new WebSocket(url, connectionOptions.protocols, { headers: connectionOptions.headers }) as unknown as CoreWebSocket)
     this.reconnect = options.reconnect ?? true
     this.reconnectDelayMs = options.reconnectDelayMs ?? 500
+    this.onChatEvent = options.onChatEvent
     this.onEvent = options.onEvent
     this.onAutomationEvent = options.onAutomationEvent
     this.onWorkspaceEvent = options.onWorkspaceEvent
@@ -384,6 +396,28 @@ export class CoreClient {
     })
   }
 
+  /** 发送前连接事件流；connect/recovery异步等待后必须重新核对调用目标。 */
+  async chatOperation<T>(operation: string, args: unknown[] = [], assertCurrent?: () => void): Promise<T> {
+    assertCurrent?.()
+    if (operation === 'chat:send-message') {
+      await this.connect()
+      assertCurrent?.()
+    }
+    const body = await this.request('/chat/operations', { method: 'POST', body: { operation, args } }) as { result: T }
+    assertCurrent?.()
+    return body.result
+  }
+
+  addChatEventListener(listener: (event: CoreChatEvent) => void): () => void {
+    this.chatEventListeners.add(listener)
+    return () => this.chatEventListeners.delete(listener)
+  }
+
+  async resourceOperation<T>(operation: string, args: unknown[] = []): Promise<T> {
+    const body = await this.request('/resources/operations', { method: 'POST', body: { operation, args } }) as { result: T }
+    return body.result
+  }
+
   async planningOperation<T>(operation: string, args: unknown[] = []): Promise<T> {
     const body = await this.request('/planning/operations', { method: 'POST', body: { operation, args } }) as { result: T }
     return body.result
@@ -483,13 +517,18 @@ export class CoreClient {
     return body.messages ?? []
   }
 
-  async sendMessage(sessionId: string, prompt: string, options: CoreMessageOptions = {}): Promise<{ accepted: boolean; sessionId: string }> {
+  async sendMessage(sessionId: string, prompt: string, options: CoreMessageOptions = {}, assertCurrent: () => void = () => {}): Promise<{ accepted: boolean; sessionId: string }> {
+    assertCurrent()
     if (this.hostRequestHandler) {
       this.hostSessionIds.add(sessionId)
       await this.connect()
+      assertCurrent()
       await this.hostRegistration
+      assertCurrent()
       await this.sendCommand({ type: 'bind_desktop_host', sessionId })
+      assertCurrent()
     }
+    assertCurrent()
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/messages`, { method: 'POST', body: { ...options, prompt } }) as Promise<{ accepted: boolean; sessionId: string }>
   }
 
@@ -742,6 +781,14 @@ export class CoreClient {
       if (this.eventCursor && record.eventId.slice(0, split) === this.eventCursor.slice(0, oldSplit)
         && Number(record.eventId.slice(split + 1)) <= Number(this.eventCursor.slice(oldSplit + 1))) return
       this.eventCursor = record.eventId
+    }
+    if (record.kind === 'chat_event' && typeof record.conversationId === 'string' && typeof record.channel === 'string') {
+      // Core事件只可转发既有Chat流通道，不能借channel字段调用任意桌面IPC事件。
+      if (!record.channel.startsWith('chat:stream:') || !(Object.values(CHAT_IPC_CHANNELS) as string[]).includes(record.channel)) return
+      const event = record as unknown as CoreChatEvent
+      this.onChatEvent?.(event)
+      for (const listener of this.chatEventListeners) listener(event)
+      return
     }
     if (record.kind === 'workspace_event') {
       this.notifyWorkspaceChanged()

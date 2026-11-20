@@ -10,6 +10,7 @@ import { atom } from 'jotai'
 import { atomFamily } from 'jotai/utils'
 import type { AgentPreset } from '@profer/shared'
 import { DEFAULT_PRESET_ID } from '@profer/shared'
+import { coreTargetsAtom } from './core-target-atoms'
 
 /** 按工作区缓存的预设列表（预设为工作区级配置） */
 export const agentPresetsAtom = atom<Map<string, AgentPreset[]>>(new Map())
@@ -30,14 +31,24 @@ export function agentPresetCacheKey(workspaceSlug: string | undefined): string {
   return workspaceSlug ?? NO_WORKSPACE_PRESET_CACHE_KEY
 }
 
+export function coreScopedPresetCacheKey(workspaceSlug: string | undefined, target: { currentId: string; generation: number }): string {
+  return `${target.currentId}:${target.generation}:${agentPresetCacheKey(workspaceSlug)}`
+}
+
 /** 某工作区的预设缓存读写原子；无工作区会话也缓存并展示内置元预设。 */
 export const workspacePresetsAtom = atomFamily((workspaceSlug: string | undefined) => {
-  const cacheKey = agentPresetCacheKey(workspaceSlug)
+  // Core 身份/代际参与缓存键，切换后不会复用旧 Core 的同名工作区数据。
   return atom<AgentPreset[], [AgentPreset[]], void>(
-    (get) => get(agentPresetsAtom).get(cacheKey) ?? [],
+    (get) => {
+      const target = get(coreTargetsAtom)
+      const targetKey = coreScopedPresetCacheKey(workspaceSlug, target)
+      return get(agentPresetsAtom).get(targetKey) ?? []
+    },
     (get, set, presets: AgentPreset[]) => {
+      const target = get(coreTargetsAtom)
+      const targetKey = coreScopedPresetCacheKey(workspaceSlug, target)
       const next = new Map(get(agentPresetsAtom))
-      next.set(cacheKey, presets)
+      next.set(targetKey, presets)
       set(agentPresetsAtom, next)
     },
   )

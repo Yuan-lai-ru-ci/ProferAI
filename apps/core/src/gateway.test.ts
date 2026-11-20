@@ -102,7 +102,7 @@ describe('Core WebSocket 终态协议', () => {
     }
     try {
       await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject) })
-      const session = runtime.sessions.create({ title: 'Approval test', runtime: 'pi' })
+      const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Approval test', runtime: 'pi' })
       const controller = new AbortController()
       const resultPromise = runtime.permissions.createCanUseTool({ sessionId: session.id, runId: 'ws-run-1', sendPermissionRequest: request => runtime.publish({ type: 'runtime', sessionId: session.id, payload: { type: 'host_event', sessionId: session.id, event: { type: 'permission_request', request } } }) })('Execute', { fixture: 'isolated' }, { signal: controller.signal, toolUseID: 'tool-1' })
       let requestId = ''
@@ -147,7 +147,7 @@ describe('Core WebSocket 终态协议', () => {
     })
     try {
       await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject) })
-      const session = runtime.sessions.create({ title: 'Goal WS fixture', runtime: 'pi', permissionMode: 'plan' })
+      const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Goal WS fixture', runtime: 'pi', permissionMode: 'plan' })
       expect(await command({ type: 'goal_start', sessionId: session.id, goal: 'fixture', limits: { maxConsecutiveFailures: 0 } })).toMatchObject({ ok: false })
       const created = await command({ type: 'goal_start', sessionId: session.id, goal: 'fixture', limits: { maxConsecutiveFailures: 3, maxIterations: 2 } })
       expect(created).toMatchObject({ ok: true, data: { sessionId: session.id, status: 'active' } })

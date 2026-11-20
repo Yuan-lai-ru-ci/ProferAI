@@ -11,7 +11,8 @@ test('Core 重启对账结束旧 waiting Run，不恢复可授权的旧请求或
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true }
   let runtime = createCoreAgentRuntime(config)
   try {
-    const session = runtime.sessions.create({ title: 'restart fixture', runtime: 'pi', permissionMode: 'auto' })
+    const workspace = runtime.workspaces.createManaged('permission-restart')
+    const session = runtime.sessions.create({ title: 'restart fixture', runtime: 'pi', workspaceId: workspace.id, permissionMode: 'auto' })
     const ledger = new AgentRunLedger(createFileRunLedgerPort(join(root, 'core-agent-runs.json')))
     const trigger = { schemaVersion: 1 as const, id: 'fixture-trigger', kind: 'user_message' as const, actor: { type: 'user' as const }, createdAt: Date.now() }
     const { run } = ledger.begin({ trigger, sessionRef: session.id, executorRef: session.id, runtime: 'pi' })

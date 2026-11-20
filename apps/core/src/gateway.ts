@@ -64,6 +64,7 @@ export function attachCoreWebSocketGateway(options: CoreGatewayOptions): WebSock
     for (const client of clients) if (client.readyState === WebSocket.OPEN) client.send(encoded)
   }
   const snapshot = () => ({
+    chat: options.runtime.chat.snapshot(),
     deletionStatuses: options.runtime.deletions.statusSnapshots(),
     tombstones: options.runtime.deletions.snapshot().flatMap(record => record.sessions.map(meta => ({ sessionId: meta.id, revision: record.revision }))),
     sessions: options.runtime.sessions.list(), goals: options.runtime.goals.list(), automations: options.runtime.automations.list(),
@@ -78,6 +79,11 @@ export function attachCoreWebSocketGateway(options: CoreGatewayOptions): WebSock
   /** 桌面端用 startedAt 区分新旧流；终态必须携带同一轮的开始时间，否则会被当成迟到终态丢弃。 */
   const startedAtBySession = new Map<string, number>()
   const unsubscribe = options.runtime.subscribe(event => {
+    if (event.type === 'chat') {
+      const data = event.payload as { channel: string; payload: unknown }
+      broadcast({ kind: 'chat_event', conversationId: event.sessionId, channel: data.channel, payload: data.payload })
+      return
+    }
     if (event.type === 'workspace') {
       broadcast({ kind: 'workspace_event', payload: event.payload })
       return
@@ -201,8 +207,11 @@ export function attachCoreWebSocketGateway(options: CoreGatewayOptions): WebSock
           } else if (type === 'core_snapshot') data = snapshot()
           else if (type === 'list_sessions') data = options.runtime.sessions.list()
           else if (type === 'create_session') {
+            const workspaceId = typeof command.workspaceId === 'string' ? command.workspaceId : ''
+            if (!workspaceId || !options.runtime.workspaces.list().some(workspace => workspace.id === workspaceId)) throw new Error('会话必须显式指定合法Core工作区')
             const requestedRuntime = command.runtime === 'claude' || command.runtime === 'pi' ? command.runtime : undefined
             data = options.runtime.sessions.create({
+              workspaceId,
               title: typeof command.title === 'string' ? command.title : 'New session',
               ...(requestedRuntime ? { runtime: requestedRuntime } : {}),
               modelId: typeof command.modelId === 'string' ? command.modelId : undefined,
@@ -220,9 +229,20 @@ export function attachCoreWebSocketGateway(options: CoreGatewayOptions): WebSock
             const meta = options.runtime.sessions.getMeta(sessionId)
             const prompt = typeof command.userMessage === 'string' ? command.userMessage : typeof command.prompt === 'string' ? command.prompt : ''
             if (!meta || !prompt) throw new Error('session or message missing')
+            options.runtime.assertAcceptingRuns()
             await options.runtime.goals.prepareUserTurn(sessionId)
-            const handle = options.runtime.coordinator.run({ ...options.runtime.createQuery(meta, prompt, parseCoreMessageOptions(command, true)), initiator: 'user' }, { onEvent() {}, onComplete() {}, onError() {} })
-            void handle.promise.catch(() => {})
+            options.runtime.assertAcceptingRuns()
+            let settleAdmission!: (failure?: string) => void
+            const admission = new Promise<string | undefined>(resolve => { settleAdmission = resolve })
+            const handle = options.runtime.coordinator.run({ ...options.runtime.createQuery(meta, prompt, parseCoreMessageOptions(command, true)), initiator: 'user' }, {
+              onEvent() {}, onError() {},
+              onRunStarted() { settleAdmission() },
+              onPreparationFailure(failure) { settleAdmission(failure.message) },
+              onComplete(outcome) { settleAdmission(outcome.status === 'failed' ? outcome.error : undefined) },
+            })
+            void handle.promise.then(outcome => settleAdmission(outcome.status === 'failed' ? outcome.error : undefined), error => settleAdmission(error instanceof Error ? error.message : String(error)))
+            const preparationError = await admission
+            if (preparationError) throw new Error(preparationError)
             data = { accepted: true, sessionId }
           } else if (type === 'queue_message') {
             const sessionId = String(command.sessionId ?? '')

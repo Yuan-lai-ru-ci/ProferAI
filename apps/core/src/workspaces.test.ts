@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, symlinkSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCoreWorkspaceStore } from './workspaces'
@@ -115,7 +115,7 @@ describe('Core workspace store', () => {
     const projectPath = join(root, 'repo')
     mkdirSync(projectPath)
     const created = store.bindProject({ rootPath: projectPath, name: 'Repo' })
-    expect(created.workspace).toMatchObject({ storageMode: 'project', rootPath: projectPath })
+    expect(created.workspace).toMatchObject({ storageMode: 'project', rootPath: realpathSync(projectPath) })
     expect(created.created).toBe(true)
     expect(store.bindProject({ rootPath: projectPath, open: true })).toMatchObject({ workspace: created.workspace, created: false })
     expect(() => store.bindProject({ rootPath: projectPath })).toThrow('已绑定')

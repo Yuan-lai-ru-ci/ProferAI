@@ -4,7 +4,9 @@
  * 从 LeftSidebar 提取，供 WelcomeView 模式切换和侧边栏共同使用。
  */
 
-import { useAtomValue, useSetAtom } from 'jotai'
+import { toast } from 'sonner'
+import { ownsCoreChat, coreTargetsAtom, coreChannelsAtom } from '@/atoms/core-target-atoms'
+import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
   conversationsAtom,
   selectedModelAtom,
@@ -37,6 +39,7 @@ interface CreateSessionActions {
 }
 
 export function useCreateSession(): CreateSessionActions {
+  const store = useStore()
   const openSession = useOpenSession()
   const setActiveView = useSetAtom(activeViewAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
@@ -54,12 +57,15 @@ export function useCreateSession(): CreateSessionActions {
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
 
   const createChat = async (options?: CreateSessionOptions): Promise<string | undefined> => {
+    const target = store.get(coreTargetsAtom)
+    const model = !ownsCoreChat(target) || store.get(coreChannelsAtom).some(channel => channel.id === selectedModel?.channelId && channel.models.some(item => item.id === selectedModel?.modelId)) ? selectedModel : null
     try {
       const meta = await window.electronAPI.createConversation(
         undefined,
-        selectedModel?.modelId,
-        selectedModel?.channelId,
+        model?.modelId,
+        model?.channelId,
       )
+      if (store.get(coreTargetsAtom).currentId !== target.currentId || store.get(coreTargetsAtom).generation !== target.generation) return undefined
       setConversations((prev) => [meta, ...prev])
       openSession('chat', meta.id, meta.title)
       setActiveView('conversations')
@@ -72,11 +78,13 @@ export function useCreateSession(): CreateSessionActions {
       return meta.id
     } catch (error) {
       console.error('[创建会话] 创建 Chat 对话失败:', error)
+      toast.error(error instanceof Error ? error.message : '创建 Chat 对话失败，请重试')
       return undefined
     }
   }
 
   const createAgent = async (options?: CreateSessionOptions): Promise<string | undefined> => {
+    const target = store.get(coreTargetsAtom)
     try {
       const meta = await window.electronAPI.createAgentSession(
         undefined,
@@ -84,6 +92,7 @@ export function useCreateSession(): CreateSessionActions {
         currentWorkspaceId || undefined,
         options?.modelId ?? agentModelId ?? undefined,
       )
+      if (store.get(coreTargetsAtom).currentId !== target.currentId || store.get(coreTargetsAtom).generation !== target.generation) return undefined
       setAgentSessions((prev) => [meta, ...prev])
       openSession('agent', meta.id, meta.title)
       setActiveView('conversations')
@@ -93,6 +102,7 @@ export function useCreateSession(): CreateSessionActions {
       return meta.id
     } catch (error) {
       console.error('[创建会话] 创建 Agent 会话失败:', error)
+      toast.error(error instanceof Error ? error.message : '创建 Agent 会话失败，请重试')
       return undefined
     }
   }

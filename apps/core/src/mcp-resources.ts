@@ -1,3 +1,4 @@
+import { assertResourcePath } from './resource-paths'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isEffectiveAgentPresetMcpServerAllowed } from '@profer/shared'
@@ -5,6 +6,7 @@ import type { EffectiveAgentPresetPolicy } from '@profer/shared'
 import type { PiMcpServers } from '@profer/agent-provider-pi/pi/mcp-tools'
 
 function read(path: string): PiMcpServers {
+  assertResourcePath(path)
   if (!existsSync(path)) return {}
   const value: unknown = JSON.parse(readFileSync(path, 'utf8'))
   if (!value || typeof value !== 'object' || !('servers' in value) || !value.servers || typeof value.servers !== 'object' || Array.isArray(value.servers)) throw new Error('Core MCP配置servers格式错误')

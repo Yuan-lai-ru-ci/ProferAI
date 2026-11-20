@@ -5,6 +5,7 @@ import { getSettings } from './settings-service'
 import { calculateStorageStats, cleanupStorage, cleanupTempFiles, type CleanupOptions } from './storage-service'
 import { compactAgentSessionStorage, previewAgentSessionCompaction } from './agent-session-compaction'
 import { autoArchiveAgentSessions, cleanupStaleAttachedPaths, DEFAULT_ARCHIVE_KEEP_PER_WORKSPACE, resolveMessageBlobs } from './agent-session-manager'
+import { localCoreOwnsBusinessData } from './core-business-ownership'
 import { autoArchiveConversations } from './conversation-manager'
 import { cleanupStaleWorkspaceAttachedPaths } from './agent-workspace-manager'
 
@@ -15,8 +16,8 @@ export function registerStorageIpc(): void {
       const days = settings.archiveAfterDays ?? 7
       const keepRecent = settings.archiveKeepRecentPerWorkspace ?? DEFAULT_ARCHIVE_KEEP_PER_WORKSPACE
       if (days > 0) {
-        const archivedChats = autoArchiveConversations(days)
-        const archivedSessions = autoArchiveAgentSessions(days, keepRecent)
+        const archivedChats = localCoreOwnsBusinessData() ? 0 : autoArchiveConversations(days)
+        const archivedSessions = localCoreOwnsBusinessData() ? 0 : autoArchiveAgentSessions(days, keepRecent)
         if (archivedChats + archivedSessions > 0) {
           console.log(`[自动归档] 已归档 ${archivedChats} 个对话, ${archivedSessions} 个 Agent 会话`)
         }

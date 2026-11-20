@@ -23,7 +23,7 @@ test.each(['complete', 'blocked'] as const)('Core Goal结构化continue后自主
   let runtime: CoreAgentRuntime | undefined
   try {
     runtime = createCoreAgentRuntime(config)
-    const session = runtime.sessions.create({ title: 'goal fixture', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'goal fixture', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
     const state = await runtime.goals.start(session.id, 'Goal fixture', { maxConsecutiveFailures: 2, maxIterations: 3 })
     await waitFor(() => runtime!.goals.get(state.id).status === (target === 'complete' ? 'completed' : 'blocked'))
     const current = runtime.goals.get(state.id)
@@ -66,7 +66,7 @@ test.each(['invalid-report', 'provider-error'] as const)('Core Goal %s 不能当
   prototype.stream = transport.streamSimple; prototype.streamSimple = transport.streamSimple
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), channels: [{ id: 'fixture', name: 'offline', provider: 'anthropic', apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }] })
   try {
-    const session = runtime.sessions.create({ title: 'invalid report', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'invalid report', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
     const state = await runtime.goals.start(session.id, 'invalid report fixture', { maxConsecutiveFailures: 1, maxIterations: 1 })
     await waitFor(() => !['active', 'stopping'].includes(runtime.goals.get(state.id).status))
     const final = runtime.goals.get(state.id)
@@ -88,7 +88,7 @@ test.each(['tokens', 'duration'] as const)('Core Goal %s预算按实际用量在
   prototype.stream = transport.streamSimple; prototype.streamSimple = transport.streamSimple
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), channels: [{ id: 'fixture', name: 'offline', provider: 'anthropic', apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }] })
   try {
-    const session = runtime.sessions.create({ title: 'resource budget', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'resource budget', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
     const state = await runtime.goals.start(session.id, 'resource budget', { maxConsecutiveFailures: 3, ...(kind === 'tokens' ? { maxTokens: 1 } : { maxDurationMs: 1 }) })
     await waitFor(() => runtime.goals.get(state.id).status === 'budget_limited')
     const final = runtime.goals.get(state.id)
@@ -110,7 +110,7 @@ test('Core Goal正文声称完成不结束Goal，预算在轮次边界生效', a
   prototype.stream = transport.streamSimple; prototype.streamSimple = transport.streamSimple
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), channels: [{ id: 'fixture', name: 'offline', provider: 'anthropic', apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }] })
   try {
-    const session = runtime.sessions.create({ title: 'budget fixture', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'budget fixture', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
     const state = await runtime.goals.start(session.id, 'budget fixture', { maxConsecutiveFailures: 3, maxIterations: 1 })
     await waitFor(() => runtime.goals.get(state.id).status === 'budget_limited')
     expect(runtime.goals.get(state.id).iteration).toBe(1)

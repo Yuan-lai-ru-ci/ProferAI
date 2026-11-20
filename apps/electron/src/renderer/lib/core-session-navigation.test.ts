@@ -4,6 +4,7 @@ import type { AgentSessionMeta, AgentWorkspace } from '@profer/shared'
 import type { AppSettings, CoreTargetsSnapshot, CoreTabSettings } from '../../types/settings'
 import { activeTabIdAtom, tabsAtom } from '../atoms/tab-atoms'
 import { agentSessionsAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom } from '../atoms/agent-atoms'
+import { conversationsAtom, currentConversationIdAtom } from '../atoms/chat-atoms'
 import { coreTargetsAtom } from '../atoms/core-target-atoms'
 import { initializeCoreSessionNavigation } from './core-session-navigation'
 
@@ -133,4 +134,42 @@ test('Given 当前为草稿页 When 切走和刷新 Then 恢复草稿而不是�
  await x.navigation.flush();const y=setup(x.writes.at(-1));await y.navigation.ready
  expect(y.store.get(activeTabIdAtom)).toBe('__scratch-pad__')
  expect(y.store.get(currentAgentSessionIdAtom)).toBeNull()
+})
+
+test('Given Linux Chat历史 When 切换Core并返回 Then 按Core恢复列表Tab及当前对话且兼容本机裸ID', async () => {
+ const store = createStore()
+ store.set(coreTargetsAtom, snapshot('local', 0))
+ const chatState = (id: string): CoreTabSettings => ({ tabs: [{ id, sessionId:id, title:id, type:'chat' }], activeTabId:id })
+ const navigation = initializeCoreSessionNavigation(store, {
+  getSettings:async()=>({ themeMode:'system', coreTabStates:{ local:chatState('old-local'), 'core:linux':chatState('core-chat:linux:chat') } }),
+  listCoreTargets:async()=>snapshot('local',0),
+  listConversations:async()=>[{ id:store.get(coreTargetsAtom).currentId === 'local' ? 'old-local' : 'core-chat:linux:chat', title:'Chat', createdAt:1, updatedAt:1 }],
+  listAgentSessions:async()=>[], listWorkspaces:async()=>[], updateSettings:async()=>({}), onFailure:error=>{ throw error },
+ })
+ cleanups.push(navigation.dispose)
+ await navigation.ready
+ expect(store.get(currentConversationIdAtom)).toBe('old-local')
+ store.set(coreTargetsAtom,snapshot('linux-target',1))
+ expect(store.get(currentConversationIdAtom)).toBeNull()
+ await settle()
+ expect(store.get(currentConversationIdAtom)).toBe('core-chat:linux:chat')
+ expect(store.get(conversationsAtom).map(item=>item.id)).toEqual(['core-chat:linux:chat'])
+ store.set(coreTargetsAtom,snapshot('local',2));await settle()
+ expect(store.get(currentConversationIdAtom)).toBe('old-local')
+})
+
+test('Given 旧本机裸ID历史 When 本机Core返回同rawId Then 迁移Tab和活动对话不丢历史', async () => {
+ const store=createStore()
+ const target:CoreTargetsSnapshot={currentId:'local',generation:1,targets:[{id:'local',name:'本机Core',kind:'local',status:'connected',coreId:'machine',capabilities:['chat']}]}
+ store.set(coreTargetsAtom,target)
+ const navigation=initializeCoreSessionNavigation(store,{
+  getSettings:async()=>({themeMode:'system',coreTabStates:{local:{tabs:[{id:'old',sessionId:'old',title:'历史',type:'chat'}],activeTabId:'old'}}}),
+  listCoreTargets:async()=>target,listAgentSessions:async()=>[],listWorkspaces:async()=>[],
+  listConversations:async()=>[{id:'core-chat:machine:old',title:'历史',createdAt:0,updatedAt:0}],
+  updateSettings:async()=>({}),onFailure:error=>{throw error},
+ })
+ cleanups.push(navigation.dispose)
+ await navigation.ready
+ expect(store.get(currentConversationIdAtom)).toBe('core-chat:machine:old')
+ expect(store.get(activeTabIdAtom)).toBe('core-chat:machine:old')
 })

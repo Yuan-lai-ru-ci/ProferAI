@@ -7,6 +7,8 @@
  * 参照 useGlobalAgentListeners 模式，使用 useStore() 直接操作 atoms。
  */
 
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
+import { applyCoreChatSnapshot, markCoreChatDisconnected } from '@/lib/core-chat-recovery'
 import { useEffect } from 'react'
 import { useStore } from 'jotai'
 import {
@@ -128,6 +130,11 @@ export function useGlobalChatListeners(): void {
       })
     })
 
+    const cleanupSnapshot = window.electronAPI.onCoreChatSnapshot?.(snapshot => {
+      applyCoreChatSnapshot(store, snapshot, id => deltaBatcher.cancel(id))
+    })
+    const cleanupConnection = store.sub(coreTargetsAtom, () => markCoreChatDisconnected(store, id => deltaBatcher.cancel(id)))
+
     const cleanupChunk = window.electronAPI.onStreamChunk(
       (event: StreamChunkEvent) => {
         deltaBatcher.enqueue(event.conversationId, { runId: event.runId, content: event.delta })
@@ -164,9 +171,14 @@ export function useGlobalChatListeners(): void {
         })
 
         // 刷新对话列表（updatedAt 已更新；按当前视图拉取，避免归档视图被活跃列表覆盖）
+        const requestTarget = store.get(coreTargetsAtom)
+        const isCurrentTarget = (): boolean => {
+          const current = store.get(coreTargetsAtom)
+          return current.currentId === requestTarget.currentId && current.generation === requestTarget.generation
+        }
         window.electronAPI
           .listConversations(store.get(sidebarViewModeAtom) === 'archived')
-          .then((convs) => store.set(conversationsAtom, convs))
+          .then((convs) => { if (isCurrentTarget()) store.set(conversationsAtom, convs) })
           .catch(console.error)
 
         // 自动命名窗口：本轮回复完成后，由主进程按前几轮有效用户消息生成/精修标题。
@@ -182,7 +194,7 @@ export function useGlobalChatListeners(): void {
               modelId: titleInput.modelId,
             })
             .then((updated) => {
-              if (!updated) return
+              if (!updated || !isCurrentTarget()) return
               console.log('[GlobalChatListeners] 自动命名窗口更新标题:', updated.title)
               store.set(conversationsAtom, (prev) =>
                 prev.map((c) => (c.id === updated.id ? updated : c)),
@@ -309,6 +321,8 @@ export function useGlobalChatListeners(): void {
     )
 
     return () => {
+      cleanupSnapshot?.()
+      cleanupConnection()
       deltaBatcher.flushAll()
       cleanupChunk()
       cleanupReasoning()

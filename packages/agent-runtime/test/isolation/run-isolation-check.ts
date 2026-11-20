@@ -25,6 +25,7 @@ const packageDir = resolve(import.meta.dir, '..', '..')
 const laneRoot = resolve(packageDir, '..', '..')
 const sharedDir = join(laneRoot, 'packages', 'shared')
 const fabricDir = join(laneRoot, 'packages', 'agent-fabric')
+const sessionCoreDir = join(laneRoot, 'packages', 'session-core')
 const bunBin = process.execPath
 const keepSandbox = process.argv.includes('--keep')
 
@@ -124,6 +125,8 @@ function prepareSandbox(): string {
   copyTree(packageDir, join(sandbox, 'packages', 'agent-runtime'))
   copyTree(sharedDir, join(sandbox, 'packages', 'shared'))
   copyTree(fabricDir, join(sandbox, 'packages', 'agent-fabric'))
+  copyTree(sessionCoreDir, join(sandbox, 'packages', 'session-core'))
+  symlinkSync(join(sandbox, 'packages', 'session-core'), join(sandbox, 'node_modules', '@profer', 'session-core'), 'dir')
   symlinkSync(join(sandbox, 'packages', 'shared'), join(sandbox, 'node_modules', '@profer', 'shared'), 'dir')
   symlinkSync(join(sandbox, 'packages', 'agent-fabric'), join(sandbox, 'node_modules', '@profer', 'agent-fabric'), 'dir')
   for (const name of SUPPORT_PACKAGES) {

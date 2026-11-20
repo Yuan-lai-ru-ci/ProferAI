@@ -22,7 +22,7 @@ test('Core Goal暂停释放原owner，恢复后新Run完成；停止不继续调
   prototype.stream = stream; prototype.streamSimple = stream
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), channels: [{ id: 'fixture', name: 'offline', provider: 'anthropic', apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }] })
   try {
-    const create = (title: string) => runtime.sessions.create({ title, runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
+    const create = (title: string) => runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title, runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
     const first = create('pause fixture')
     const goal = await runtime.goals.start(first.id, 'pause/resume fixture', { maxConsecutiveFailures: 2, maxIterations: 5 })
     await waitFor(() => transport.calls.length === 1)
@@ -57,7 +57,7 @@ test('Core关闭等待Goal原Run释放，磁盘保留可恢复暂停状态', asy
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), channels: [{ id: 'fixture', name: 'offline', provider: 'anthropic' as const, apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }] }
   const runtime = createCoreAgentRuntime(config)
   try {
-    const session = runtime.sessions.create({ title: 'shutdown fixture', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'shutdown fixture', runtime: 'pi', permissionMode: 'bypassPermissions', channelId: 'fixture', modelId: 'claude-sonnet-4-5' })
     const goal = await runtime.goals.start(session.id, 'shutdown fixture')
     await waitFor(() => transport.calls.length === 1)
     await runtime.shutdown()
@@ -75,7 +75,7 @@ test('Core Goal重启恢复暂停旧active/stopping，不盲目重放原工具',
   const root = await mkdtemp(join(tmpdir(), 'profer-core-goal-restart-'))
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true }
   const runtime = createCoreAgentRuntime(config)
-  const session = runtime.sessions.create({ title: 'restart fixture', runtime: 'pi' })
+  const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'restart fixture', runtime: 'pi' })
   runtime.dispose()
   const state = { ...createGoalState(session.id, 'restart fixture'), activeRunId: crypto.randomUUID(), iteration: 1 }
   saveGoalStates(join(root, 'core-goals.json'), [state])

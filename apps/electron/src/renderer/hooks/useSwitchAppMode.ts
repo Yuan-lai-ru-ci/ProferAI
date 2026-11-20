@@ -18,6 +18,8 @@
  */
 
 import * as React from 'react'
+import { toast } from 'sonner'
+import { coreSessionNavigationPhaseAtom } from '@/atoms/core-target-atoms'
 import { useAtomValue } from 'jotai'
 import type { AppMode } from '@/atoms/app-mode'
 import { conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
@@ -46,6 +48,7 @@ export interface SwitchAppModeResult {
 }
 
 export function useSwitchAppMode(): (target: AppMode) => Promise<SwitchAppModeResult> {
+  const phase = useAtomValue(coreSessionNavigationPhaseAtom)
   const openSession = useOpenSession()
   const { createChat, createAgent } = useCreateSession()
   const conversations = useAtomValue(conversationsAtom)
@@ -57,6 +60,10 @@ export function useSwitchAppMode(): (target: AppMode) => Promise<SwitchAppModeRe
 
   return React.useCallback(
     async (target: AppMode): Promise<SwitchAppModeResult> => {
+      if (phase === 'loading' || phase === 'error') {
+        toast.error(phase === 'loading' ? '正在加载 Core 会话，请稍候' : 'Core 会话加载失败，请检查连接后重试')
+        return { switched: false, createdDraft: false }
+      }
       if (target === 'scratch') {
         // 草稿本由标签页 ID 表达，不在本 hook 的会话恢复范围内。
         return { switched: false, createdDraft: false }
@@ -98,6 +105,7 @@ export function useSwitchAppMode(): (target: AppMode) => Promise<SwitchAppModeRe
       return { switched: createdId !== undefined, createdDraft: createdId !== undefined }
     },
     [
+      phase,
       openSession,
       createChat,
       createAgent,

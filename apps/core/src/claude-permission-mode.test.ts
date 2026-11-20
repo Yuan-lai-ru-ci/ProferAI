@@ -14,7 +14,7 @@ test('Core Claude 模式同步成功才保存，失败停止原Run并保留权�
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'),
     channels: [{ id: 'offline', name: 'offline', provider: 'anthropic', apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }],
   }, { claude: { sdkLoader: async () => sdk.module, spawnProcess: sdk.spawnProcess } })
-  const session = runtime.sessions.create({ title: 'Claude mode fixture', runtime: 'claude', permissionMode: 'auto', channelId: 'offline' })
+  const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Claude mode fixture', runtime: 'claude', permissionMode: 'auto', channelId: 'offline' })
   try {
     const handle = runtime.coordinator.run(runtime.createQuery(session, 'offline fixture'))
     const deadline = Date.now() + 3000
@@ -47,7 +47,7 @@ test('Claude 模式同步迟到失败不停止同会话的新Run', async () => {
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'),
     channels: [{ id: 'offline', name: 'offline', provider: 'anthropic', apiKey: 'unused' }],
   }, { claude: { sdkLoader: async () => sdk.module, spawnProcess: sdk.spawnProcess } })
-  const session = runtime.sessions.create({ title: 'mode race', runtime: 'claude', channelId: 'offline', permissionMode: 'auto' })
+  const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'mode race', runtime: 'claude', channelId: 'offline', permissionMode: 'auto' })
   let release = () => {}
   try {
     const first = runtime.coordinator.run(runtime.createQuery(session, 'first'))

@@ -71,6 +71,26 @@ test('损坏/未来版本/通知/重复ID/目标冲突/非本机拒绝且源与�
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
+test('通知目标离线保留，损坏目标在Core读写边界拒绝且不覆盖现有资产', () => {
+  const { root, store, task } = fixture()
+  const path = join(root, 'core-automations.json')
+  try {
+    const target = { type: 'feishu' as const, enabled: true, trigger: 'always' as const, botId: 'fixture-bot', chatId: 'fixture-chat' }
+    const valid = { version: 4, automations: [{ ...task, notificationTargets: [target] }], triggers: [] }
+    store.write(valid)
+    expect(store.read().automations[0]?.notificationTargets).toEqual([target])
+    const before = readFileSync(path, 'utf8')
+    const invalid = { ...valid, automations: [{ ...task, notificationTargets: [{ ...target, chatId: '' }] }] }
+    expect(() => store.write(invalid)).toThrow('通知目标')
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    // 只破坏fixture：验证已有损坏索引不会被读成空集合。
+    const broken = JSON.stringify(invalid)
+    writeFileSync(path, broken)
+    expect(() => store.read()).toThrow('通知目标')
+    expect(readFileSync(path, 'utf8')).toBe(broken)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test('项目镜像未对账或缺失中央文件时拒绝遗漏，同版本冲突不猜覆盖', () => {
   const { root, config, store, task, source } = fixture()
   try {

@@ -439,6 +439,27 @@ describe('CoreClient', () => {
     expect(calls[1]?.init?.body).toBeUndefined()
   })
 
+  test('发送内部连接等待结束后复核目标，过期请求不bind也不HTTP发送', async () => {
+    let current = true
+    const requests: string[] = []
+    const client = new CoreClient({ baseUrl: 'http://127.0.0.1:7790', token: 'fixture', reconnect: false,
+      webSocketFactory: (url, options) => new FakeSocket(url, options),
+      fetchImpl: async url => { requests.push(String(url)); return Response.json({ accepted: true, sessionId: 'session' }) },
+    })
+    client.setHostRequestHandler(async request => ({ coreId: request.coreId, sessionId: request.sessionId,
+      runId: request.runId, requestId: request.requestId, ok: true, value: null }))
+    const sending = client.sendMessage('session', 'fixture', {}, () => { if (!current) throw new Error('Core已切换') })
+    const socket = FakeSocket.latest!
+    current = false
+    socket.open()
+    await expect(sending).rejects.toThrow('Core已切换')
+    expect(requests).toEqual([])
+    expect(socket.sent.map(line => JSON.parse(line).type)).not.toContain('bind_desktop_host')
+    const registration = socket.sent.map(line => JSON.parse(line)).find(command => command.type === 'register_desktop_host')
+    if (registration) socket.message({ kind: 'command_result', commandId: registration._cmdId, ok: true, data: true })
+    client.close()
+  })
+
   test('connects with bearer auth in the websocket header, forwards events, and stops reconnecting after close', async () => {
     const events: unknown[] = []
     const statuses: string[] = []

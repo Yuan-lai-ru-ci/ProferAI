@@ -25,7 +25,7 @@ test.each(['auto', 'plan', 'bypassPermissions'] as const)('Core Pi %s 问答恢�
   })
   const server = createCoreServer({ version: 'ask-fixture', runtime, apiKey: 'ask-test-only' })
   let socket: WebSocket | undefined
-  const session = runtime.sessions.create({ title: 'ask fixture', runtime: 'pi', channelId: 'fixture', modelId: 'claude-sonnet-4-5', permissionMode })
+  const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'ask fixture', runtime: 'pi', channelId: 'fixture', modelId: 'claude-sonnet-4-5', permissionMode })
   try {
     await listenCoreServer(server, '127.0.0.1', 0)
     const port = (server.address() as AddressInfo).port

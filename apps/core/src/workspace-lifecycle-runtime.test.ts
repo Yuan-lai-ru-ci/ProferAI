@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, mkdir, rm, writeFile, readFile, stat, unlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile, stat, unlink, symlink, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request } from 'node:http'
@@ -270,3 +270,58 @@ test('桌面只读Core工作区删除在清理任何任务或会话前拒绝', a
     await expect(runtime.deleteWorkspace('target', { projectOnly: true })).rejects.toThrow('只读')
   } finally { await runtime.shutdown(); await rm(root, { recursive: true, force: true }) }
 }, 20000)
+
+for (const asset of ['workspace-files', 'empty-directory', 'symlink', 'dangling-symlink'] as const) {
+  test(`managed删除保护${asset}，重启后同事务只在用户移走资产后完成`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'profer-core-delete-assets-'))
+    const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true }
+    let runtime = createCoreAgentRuntime(config)
+    try {
+      const workspace = runtime.workspaces.createManaged('Protected')
+      runtime.workspaces.createManaged('Keep')
+      const directory = join(config.workspaceRoot, workspace.slug)
+      const external = join(root, 'external.txt')
+      await writeFile(external, 'external sentinel')
+      const path = join(directory, asset)
+      if (asset === 'workspace-files') {
+        await mkdir(path)
+        await writeFile(join(path, 'report.md'), 'user artifact')
+      } else if (asset === 'empty-directory') await mkdir(path)
+      else await symlink(asset === 'symlink' ? external : join(root, 'missing'), path)
+      const operationId = `protect-${asset}`
+      await expect(runtime.deleteWorkspace(workspace.id, { operationId })).rejects.toThrow('未纳管')
+      expect(await readFile(external, 'utf8')).toBe('external sentinel')
+      if (asset === 'workspace-files') expect(await readFile(join(path, 'report.md'), 'utf8')).toBe('user artifact')
+      expect(runtime.listWorkspaceDeleteOperations()[0]?.status).toBe('failed')
+      await runtime.shutdown()
+      runtime = createCoreAgentRuntime(config)
+      await expect(runtime.retryWorkspaceDelete(operationId)).rejects.toThrow('未纳管')
+      await rename(path, join(root, 'user-moved-asset'))
+      await runtime.retryWorkspaceDelete(operationId)
+      expect(runtime.listWorkspaceDeleteOperations()[0]?.status).toBe('completed')
+      expect(await stat(directory).then(() => true, () => false)).toBe(false)
+      expect(await readFile(external, 'utf8')).toBe('external sentinel')
+    } finally { await runtime.shutdown(); await rm(root, { recursive: true, force: true }) }
+  })
+}
+
+test('managed根被替换为软链或普通文件时拒绝删除并保留外部内容', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'profer-core-delete-root-'))
+  const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true })
+  try {
+    const workspace = runtime.workspaces.createManaged('Protected')
+    runtime.workspaces.createManaged('Keep')
+    const directory = join(root, 'workspaces', workspace.slug)
+    await rename(directory, join(root, 'original'))
+    const external = join(root, 'external')
+    await mkdir(external)
+    await writeFile(join(external, 'user.txt'), 'preserve')
+    await symlink(external, directory)
+    await expect(runtime.deleteWorkspace(workspace.id)).rejects.toThrow('不安全')
+    expect(await readFile(join(external, 'user.txt'), 'utf8')).toBe('preserve')
+    await unlink(directory)
+    await writeFile(directory, 'not a directory')
+    await expect(runtime.deleteWorkspace(workspace.id)).rejects.toThrow('不安全')
+    expect(await readFile(directory, 'utf8')).toBe('not a directory')
+  } finally { await runtime.shutdown(); await rm(root, { recursive: true, force: true }) }
+})

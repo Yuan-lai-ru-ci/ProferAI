@@ -48,15 +48,16 @@ class SessionClient {
 
 test('Core WebSocket幂等接管旧删除快照，不重算并拒绝同sourceRequestId异参', async () => {
   const root = await mkdtemp(join(tmpdir(), 'profer-core-legacy-delete-wire-'))
+  await writeFile(join(root, 'desktop-workspaces.json'), JSON.stringify({ version: 4, workspaces: [{ id: 'legacy-workspace', name: '历史工作区', slug: 'legacy', createdAt: 0, updatedAt: 0 }] }))
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true, desktopWorkspaceIndexPath: join(root, 'desktop-workspaces.json') })
   const server = createCoreServer({ version: 'test', runtime, apiKey: 'fixture-only' })
   await listenCoreServer(server, '127.0.0.1', 0)
   const client = new SessionClient((server.address() as { port: number }).port, () => {})
   try {
-    const parent = runtime.sessions.create({ title: 'legacy parent', runtime: 'pi' })
-    const child = runtime.sessions.create({ title: 'old snapshot child', runtime: 'pi' })
+    const parent = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'legacy parent', runtime: 'pi' })
+    const child = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'old snapshot child', runtime: 'pi' })
     runtime.sessions.updateMeta(child.id, { parentSessionId: parent.id, sourceDelegationId: 'relation' })
-    const snapshot = { sourceRequestId: 'legacy-request', sessionId: parent.id, sessionIds: [parent.id], workspaceId: undefined }
+    const snapshot = { sourceRequestId: 'legacy-request', sessionId: parent.id, sessionIds: [parent.id], workspaceId: parent.workspaceId }
     await client.connect()
     const accepted = await client.command({ type: 'import_legacy_deletion', ...snapshot })
     expect(accepted).toMatchObject({ sessionIds: [parent.id] })
@@ -78,7 +79,7 @@ test('Core拥有显示状态：鉴权命令、原子toggle、revision冲突、�
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true }
   await writeFile(join(root, 'settings.json'), JSON.stringify({ manualReadConfirmEnabled: true }))
   let runtime = createCoreAgentRuntime(config)
-  const session = runtime.sessions.create({ title: 'fixture', runtime: 'pi' })
+  const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'fixture', runtime: 'pi' })
   const server = createCoreServer({ version: 'test', runtime, apiKey: 'fixture-only' })
   await listenCoreServer(server, '127.0.0.1', 0)
   const port = (server.address() as { port: number }).port
@@ -94,7 +95,7 @@ test('Core拥有显示状态：鉴权命令、原子toggle、revision冲突、�
     try {
       expect(await (await fetch(`http://127.0.0.1:${port}/sessions/${session.id}/detail`, { headers: { authorization: 'Bearer fixture-only' } })).json()).toMatchObject({ active: true })
     } finally { runtime.coordinator.ownership.release(session.id, owner.owner.token) }
-    const idle = runtime.sessions.create({ title: 'idle stop fixture', runtime: 'pi' })
+    const idle = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'idle stop fixture', runtime: 'pi' })
     expect(await client.command({ type: 'stop_agent', sessionId: idle.id })).toEqual({ sessionId: idle.id, stopped: false })
     const missingStop = await client.command({ type: 'stop_agent', sessionId: 'missing' }).then(() => 'unexpected success', error => String(error))
     expect(missingStop).toContain('session not found')
@@ -119,7 +120,7 @@ test('Core拥有显示状态：鉴权命令、原子toggle、revision冲突、�
     await client.applySessionUiAction(session.id, { type: 'set_interruption', state })
     await client.applySessionUiAction(session.id, { type: 'set_interruption', state: null })
     expect(runtime.sessions.getMeta(session.id)?.lastInterruptReason).toBeUndefined()
-    const child = runtime.sessions.create({ title: 'child', runtime: 'pi' })
+    const child = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'child', runtime: 'pi' })
     runtime.sessions.updateMeta(child.id, { parentSessionId: session.id, sdkSessionId: 'private-native-id', piSessionFile: 'private-path' })
     const childDetail = await (await fetch(`http://127.0.0.1:${port}/sessions/${child.id}/detail`, { headers: { authorization: 'Bearer fixture-only' } })).json()
     expect(JSON.stringify(childDetail)).not.toContain('private-native-id')
@@ -159,7 +160,7 @@ test('Core运行开始/结束维护草稿和未读，不依赖桌面连接', asy
   await writeFile(join(root, 'settings.json'), JSON.stringify({ manualReadConfirmEnabled: true }))
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true })
   try {
-    const session = runtime.sessions.create({ title: 'fixture', runtime: 'pi' })
+    const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'fixture', runtime: 'pi' })
     runtime.sessions.updateMeta(session.id, { draft: true, completedButUnconfirmed: true })
     const events: string[] = []
     runtime.subscribe(event => {

@@ -1,3 +1,4 @@
+import type { Socket } from 'node:net'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AgentSessionMeta, ChannelCreateInput, ChannelUpdateInput } from '@profer/shared'
 import type { CoreAgentRuntime, CoreEvent } from './runtime'
@@ -146,7 +147,7 @@ export function createCoreServer(options: CoreServerOptions): Server {
         /** 所属 Core 的运行平台；桌面据此决定路径文案和“本机/对面”行为。 */
         platform: process.platform,
         hostCapabilities: CORE_HOST_CAPABILITIES,
-        capabilities: ['sessions.read', 'sessions.write', 'workspaces.read', 'workspaces.write', 'agent.pi', 'agent.events', 'agent.stop', 'planning', 'automation', 'delegation', 'agent.events.resume'],
+        capabilities: ['sessions.read', 'sessions.write', 'workspaces.read', 'workspaces.write', 'agent.pi', 'agent.events', 'agent.stop', 'planning', 'automation', 'delegation', 'agent.events.resume', 'resources.manage', ...(runtime?.chat ? ['chat'] : [])],
       })
       return
     }
@@ -156,6 +157,20 @@ export function createCoreServer(options: CoreServerOptions): Server {
       return
     }
     try {
+      if (request.method === 'POST' && url.pathname === '/chat/operations') {
+        const body = await readBoundedJson(request, CORE_ATTACHMENT_BODY_MAX_BYTES, 'Core Chat')
+        if (typeof body.operation !== 'string' || !Array.isArray(body.args)) throw new Error('Core Chat操作或参数无效')
+        const result = await runtime.chat.operation(body.operation, body.args)
+        sendJson(response, 200, { result: result ?? null })
+        return
+      }
+      if (request.method === 'POST' && url.pathname === '/resources/operations') {
+        const body = await readBoundedJson(request, 2 * 1024 * 1024, 'Core resources')
+        if (typeof body.operation !== 'string' || !Array.isArray(body.args)) throw new Error('Core资源操作或参数无效')
+        const result = await runtime.resourceOperation({ operation: body.operation, args: body.args })
+        sendJson(response, 200, { result: result ?? null })
+        return
+      }
       if (request.method === 'POST' && url.pathname === '/planning/operations') {
         try {
           const body = await readPlanningJson(request)
@@ -277,7 +292,8 @@ export function createCoreServer(options: CoreServerOptions): Server {
       if (request.method === 'POST' && (url.pathname === '/sessions' || url.pathname === '/sessions/configured')) {
         const body = await readJson(request)
         const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId : undefined
-        if (workspaceId && !runtime.workspaces.list().some(workspace => workspace.id === workspaceId)) {
+        if (!workspaceId) { sendJson(response, 400, { error: 'workspace_id_required' }); return }
+        if (!runtime.workspaces.list().some(workspace => workspace.id === workspaceId)) {
           sendJson(response, 404, { error: 'workspace_not_found' }); return
         }
         if (body.useCoreDefaults !== undefined && typeof body.useCoreDefaults !== 'boolean') throw new Error('invalid useCoreDefaults')
@@ -607,11 +623,17 @@ export function createCoreServer(options: CoreServerOptions): Server {
         const input = parseCoreMessageOptions(body, Boolean(options.apiKey))
         const actor = input.context?.trigger.actor.type
         const initiator = actor === 'automation' ? 'automation' : actor === 'agent' ? 'delegation' : actor === 'system' ? 'external' : 'user'
+        runtime.assertAcceptingRuns()
         if (initiator === 'user' || initiator === 'external') await runtime.goals.prepareUserTurn(session.id)
+        runtime.assertAcceptingRuns()
         const ownershipToken = Symbol(`core-http-message:${session.id}`)
+        let settleAdmission!: (failure?: string) => void
+        const admission = new Promise<string | undefined>(resolve => { settleAdmission = resolve })
         const handle = runtime.coordinator.run({ ...runtime.createQuery(session, prompt, input), initiator, ownershipToken }, {
           onEvent() {},
-          onComplete() {},
+          onRunStarted() { settleAdmission() },
+          onPreparationFailure(failure) { settleAdmission(failure.message) },
+          onComplete(outcome) { settleAdmission(outcome.status === 'failed' ? outcome.error : undefined) },
           onError() {},
         })
         // 占用登记在 run() 内同步取得：持有者不是本次请求的 token，说明这一轮根本没启动
@@ -622,7 +644,9 @@ export function createCoreServer(options: CoreServerOptions): Server {
           sendJson(response, 409, { error: failure instanceof Error ? failure.message : '运行未能启动' })
           return
         }
-        void handle.promise.catch(() => {})
+        void handle.promise.then(outcome => settleAdmission(outcome.status === 'failed' ? outcome.error : undefined), error => settleAdmission(error instanceof Error ? error.message : String(error)))
+        const preparationError = await admission
+        if (preparationError) { sendJson(response, 400, { error: preparationError }); return }
         sendJson(response, 202, { accepted: true, sessionId: session.id })
         return
       }
@@ -647,6 +671,14 @@ export function createCoreServer(options: CoreServerOptions): Server {
       sendJson(response, error instanceof BoundedBodyError ? error.statusCode : 400, { error: error instanceof Error ? error.message : String(error) })
     }
   })
+  // HTTP close 不会回收已升级的 WebSocket；统一追踪底层连接以关闭准入。
+  const sockets = new Set<Socket>()
+  server.on('connection', socket => {
+    sockets.add(socket)
+    socket.once('close', () => sockets.delete(socket))
+  })
+  coreServerSockets.set(server, sockets)
+  if (runtime) coreServerBeginShutdown.set(server, () => runtime.beginShutdown())
   if (options.runtime && options.apiKey) attachCoreWebSocketGateway({ server, runtime: options.runtime, token: options.apiKey })
   return server
 }
@@ -661,7 +693,20 @@ export function listenCoreServer(server: Server, host: string, port: number): Pr
   })
 }
 
+const coreServerBeginShutdown = new WeakMap<Server, () => void>()
+const coreServerSockets = new WeakMap<Server, Set<Socket>>()
+const coreServerClosures = new WeakMap<Server, Promise<void>>()
+
 export function closeCoreServer(server: Server): Promise<void> {
+  coreServerBeginShutdown.get(server)?.()
+  const pending = coreServerClosures.get(server)
+  if (pending) return pending
   if (!server.listening) return Promise.resolve()
-  return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close(error => error ? reject(error) : resolve())
+    // 先停止监听，再断开传输；运行的取消与持久化由 runtime.shutdown 等待。
+    for (const socket of coreServerSockets.get(server) ?? []) socket.destroy()
+  })
+  coreServerClosures.set(server, closed)
+  return closed
 }

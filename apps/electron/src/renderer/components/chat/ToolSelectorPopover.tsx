@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils'
 import { AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { listComposerTools, updateComposerToolState } from '@/domains/composer/composer-api'
 import { Wrench, Brain, Globe, Settings, ImagePlus } from 'lucide-react'
-import { chatToolsAtom, hasActiveToolsAtom } from '@/atoms/chat-tool-atoms'
+import { chatToolsUnavailableReasonAtom, chatToolsAtom, hasActiveToolsAtom } from '@/atoms/chat-tool-atoms'
 import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
 
 /** 工具 ID 到图标的映射 */
@@ -43,6 +43,7 @@ function getToolIcon(iconName?: string): React.ReactElement {
 
 export function ToolSelectorPopover({ composerTool = false }: { composerTool?: boolean } = {}): React.ReactElement {
   const [open, setOpen] = useState(false)
+  const unavailableReason = useAtomValue(chatToolsUnavailableReasonAtom)
   const tools = useAtomValue(chatToolsAtom)
   const setChatTools = useSetAtom(chatToolsAtom)
   const hasActiveTools = useAtomValue(hasActiveToolsAtom)
@@ -54,6 +55,7 @@ export function ToolSelectorPopover({ composerTool = false }: { composerTool?: b
     toolId: string,
     currentEnabled: boolean,
   ): Promise<void> => {
+    if (unavailableReason) return
     try {
       await updateComposerToolState(toolId, {
         enabled: !currentEnabled,
@@ -75,6 +77,8 @@ export function ToolSelectorPopover({ composerTool = false }: { composerTool?: b
   const trigger = composerTool ? (
     <AgentComposerToolTrigger
       label="工具"
+      disabled={Boolean(unavailableReason)}
+      tooltip={unavailableReason ?? '工具'}
       className={hasActiveTools ? 'text-blue-500 hover:text-blue-500' : undefined}
     >
       <Wrench className="size-5" />
@@ -82,6 +86,7 @@ export function ToolSelectorPopover({ composerTool = false }: { composerTool?: b
   ) : (
     <Button
       type="button"
+      disabled={Boolean(unavailableReason)}
       variant="ghost"
       size="icon"
       className={cn(
@@ -96,13 +101,13 @@ export function ToolSelectorPopover({ composerTool = false }: { composerTool?: b
   )
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={!unavailableReason && open} onOpenChange={value => setOpen(!unavailableReason && value)}>
       <Tooltip open={open ? false : undefined}>
         <TooltipTrigger asChild>
-          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          <span className="inline-flex"><PopoverTrigger asChild>{trigger}</PopoverTrigger></span>
         </TooltipTrigger>
         <TooltipContent side="top">
-          <p>工具</p>
+          <p>{unavailableReason ?? '工具'}</p>
         </TooltipContent>
       </Tooltip>
       <PopoverContent className="w-64" side="top" align="center">

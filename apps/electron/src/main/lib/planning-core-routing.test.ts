@@ -1,5 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { PLANNING_IPC_CHANNELS as C } from '@profer/shared'
+let localAttached = false
+mock.module('./core-local-bridge', () => ({ getLocalCoreClient: () => localAttached ? client : null }))
 let selected = 'local'
 let connected = true
 let supported = true
@@ -62,3 +64,22 @@ describe('Planning IPC Core ownership', () => {
     ])
   })
 })
+
+ test('本机 Core 接管后保留裸会话 ID，未就绪不回退', async () => {
+    selected = 'local'; connected = true; supported = true; localAttached = true
+    try {
+      const response = await routePlanningToCore(C.LIST_TODOS, [])
+      expect((response?.result as Array<{ sessionLinks: Array<{ sessionId: string }> }>)[0]?.sessionLinks[0]?.sessionId).toBe('session')
+      await routePlanningToCore(C.CREATE_TODO, [{ title: 'x', sessionId: 'session' }])
+      expect(calls.at(-1)?.args).toEqual([{ title: 'x', sessionId: 'session' }])
+      await expect(routePlanningToCore(C.CREATE_TODO, [{ sessionId: 'core:owner:session' }])).rejects.toThrow('不属于当前')
+      connected = false
+      await expect(routePlanningToCore(C.LIST_TODOS, [])).rejects.toThrow('未连接')
+    } finally { localAttached = false; connected = true }
+    connected = false
+    await expect(routePlanningToCore(C.LIST_TODOS, [])).rejects.toThrow('未连接')
+    const previous = process.env.PROFER_CORE_LOCAL
+    process.env.PROFER_CORE_LOCAL = '1'; connected = false
+    try { await expect(routePlanningToCore(C.LIST_TODOS, [])).rejects.toThrow('未连接') }
+    finally { if (previous === undefined) delete process.env.PROFER_CORE_LOCAL; else process.env.PROFER_CORE_LOCAL = previous; connected = true }
+ })

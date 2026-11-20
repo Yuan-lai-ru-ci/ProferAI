@@ -1,0 +1,968 @@
+/** 宿主无关的完整 Chat 编排；宿主能力必须显式注入。 */
+const randomUUID = (): string => globalThis.crypto.randomUUID()
+import { CHAT_IPC_CHANNELS, getChatUnavailableReason, isChannelEnabledForChat, resolveXaiCredentialMode } from '@profer/shared'
+import type { Channel, ChatSendInput, ChatMessage, ConversationMeta, GenerateTitleInput, FileAttachment, ChatToolActivity } from '@profer/shared'
+import { getAdapter, resolveTitleBaseUrl, streamSSE, fetchTitleWithRetry } from './providers/index.ts'
+import type { ImageAttachmentData, ContinuationMessage } from './providers/index.ts'
+import type { ChatRuntimePorts, AutoTitleConversationInput } from './chat-runtime-ports.ts'
+export type { ChatRuntimePorts, AutoTitleConversationInput } from './chat-runtime-ports.ts'
+
+export function createChatRuntime(ports: ChatRuntimePorts) {
+  const { emit, routePluginModel, listChannels, decryptApiKey, readAttachmentAsBase64, isImageAttachment,
+  extractTextFromAttachment, isDocumentAttachment, getFetchFn, getEffectiveProxyUrl, getEnabledTools,
+  executeToolCalls, editionProviders, searchKnowledgeItemsForChat, prepareChatKnowledgeRequest,
+  normalizeChatStreamError, resolveEditionBearerToken } = ports
+  const { appendBranchTail, updateConversationMeta, getConversationBranch, getConversationMeta, DEFAULT_CONVERSATION_TITLE } = ports.conversations
+  const { buildTitlePrompt, buildWindowTitlePrompt, collectTitleSources, mergeTitleRefineAttempts, planTitleWindow,
+  preflightTitleWindow, sanitizeGeneratedTitle, MAX_TITLE_LENGTH, SHORT_MESSAGE_THRESHOLD } = ports.titlePolicy
+  /** 单个对话的活跃 Chat run。`settled` 在该 run 完成落盘与事件收尾后 resolve。 */
+  interface ActiveChatRun {
+    runId: string
+    controller: AbortController
+    /** 用户已请求停止：新请求应等待旧 run 收尾，避免与它争抢同一份 JSONL。 */
+    stopping: boolean
+    settled: Promise<void>
+    resolveSettled: () => void
+  }
+
+  /** 活跃的 Chat run（conversationId → run）。 */
+  const activeControllers = new Map<string, ActiveChatRun>()
+
+  /** 等待被停止的旧 run 收尾的最长时间；超时后拒绝新请求而不是无限等待。 */
+  const STOP_SETTLE_WAIT_MS = 3_000
+
+  /** 最大工具续接轮数（安全上限，防止极端情况下的无限循环） */
+  const MAX_TOOL_ROUNDS = 999
+
+  const ANTHROPIC_PROXY_PROVIDERS = new Set([
+    'anthropic',
+    'anthropic-compatible',
+    'kimi-api',
+    'kimi-coding',
+    'minimax',
+    'xiaomi',
+    'xiaomi-token-plan',
+    'zhipu-coding',
+  ])
+
+  /** 标题和故障重试仍使用原绑定，禁止回落到其它模型。 */
+  function isChatModelAvailable(channel: Channel, modelId: string): boolean {
+    return isChannelEnabledForChat(channel)
+      && channel.models.some((model) => model.id === modelId && model.enabled)
+  }
+
+  function isInvalidRelayTokenError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error)
+    return /API 错误 \(401\):.*relay 令牌无效/i.test(message)
+  }
+
+  // ===== 平台相关：图片附件读取器 =====
+
+  /**
+   * 读取图片附件的 base64 数据
+   *
+   * 此函数作为 ImageAttachmentReader 注入给 core 层，
+   * 因为文件系统读取属于 Electron 平台操作。
+   */
+  function getImageAttachmentData(attachments?: FileAttachment[]): ImageAttachmentData[] {
+    if (!attachments || attachments.length === 0) return []
+
+    return attachments
+      .filter((att) => isImageAttachment(att.mediaType))
+      .map((att) => ({
+        mediaType: att.mediaType,
+        data: readAttachmentAsBase64(att.localPath),
+      }))
+  }
+
+  // ===== 文档附件文本提取 =====
+
+  /**
+   * 为单条消息提取文档附件的文本内容
+   *
+   * 将非图片附件的文本内容提取后，以结构化格式追加到消息文本后面。
+   * 图片附件由适配器层单独处理，这里只处理文档类附件。
+   *
+   * @param messageText 原始消息文本
+   * @param attachments 消息的附件列表
+   * @returns 包含文档文本的增强消息
+   */
+  async function enrichMessageWithDocuments(
+    messageText: string,
+    attachments?: FileAttachment[],
+  ): Promise<string> {
+    if (!attachments || attachments.length === 0) return messageText
+
+    // 筛选出文档类附件（非图片）
+    const docAttachments = attachments.filter((att) => isDocumentAttachment(att.mediaType))
+    if (docAttachments.length === 0) return messageText
+
+    const parts: string[] = [messageText]
+
+    for (const att of docAttachments) {
+      try {
+        const text = await extractTextFromAttachment(att.localPath)
+        if (text.trim()) {
+          parts.push(`\n<file name="${att.filename}">\n${text}\n</file>`)
+        } else {
+          parts.push(`\n<file name="${att.filename}">\n[文件内容为空]\n</file>`)
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : '未知错误'
+        console.warn(`[聊天服务] 文档提取失败: ${att.filename}`, error)
+        parts.push(`\n<file name="${att.filename}">\n[文件内容提取失败: ${errorMsg}]\n</file>`)
+      }
+    }
+
+    return parts.join('')
+  }
+
+  /**
+   * 为历史消息列表注入文档附件文本
+   *
+   * 遍历历史消息，对包含文档附件的用户消息进行文本增强。
+   * 返回新的消息数组（不修改原始消息）。
+   */
+  async function enrichHistoryWithDocuments(
+    history: ChatMessage[],
+  ): Promise<ChatMessage[]> {
+    const enriched: ChatMessage[] = []
+
+    for (const msg of history) {
+      // 只对包含附件的用户消息进行文档提取
+      if (msg.role === 'user' && msg.attachments && msg.attachments.length > 0) {
+        const hasDocuments = msg.attachments.some((att) => isDocumentAttachment(att.mediaType))
+        if (hasDocuments) {
+          const enrichedContent = await enrichMessageWithDocuments(msg.content, msg.attachments)
+          enriched.push({ ...msg, content: enrichedContent })
+          continue
+        }
+      }
+      enriched.push(msg)
+    }
+
+    return enriched
+  }
+
+  // ===== 上下文过滤 =====
+
+  /**
+   * 根据分隔线和上下文长度裁剪历史消息
+   *
+   * 三层过滤：
+   * 1. 分隔线过滤：仅保留最后一个分隔线之后的消息
+   * 2. 轮数裁剪：按轮数（user+assistant = 1 轮）限制历史
+   * 3. contextLength === 'infinite' 或 undefined 时保留全部
+   */
+  function filterHistory(
+    messageHistory: ChatMessage[],
+    contextDividers?: string[],
+    contextLength?: number | 'infinite',
+  ): ChatMessage[] {
+    // 过滤掉空内容的助手消息，避免发送无效消息给 API
+    let filtered = messageHistory.filter(
+      (msg) => !(msg.role === 'assistant' && !msg.content.trim()),
+    )
+
+    // 分隔线过滤：仅保留最后一个分隔线之后的消息
+    if (contextDividers && contextDividers.length > 0) {
+      const lastDividerId = contextDividers[contextDividers.length - 1]
+      const dividerIndex = filtered.findIndex((msg) => msg.id === lastDividerId)
+      if (dividerIndex >= 0) {
+        filtered = filtered.slice(dividerIndex + 1)
+      }
+    }
+
+    // 上下文长度过滤：按轮数裁剪
+    if (typeof contextLength === 'number' && contextLength >= 0) {
+      if (contextLength === 0) {
+        return []
+      }
+      // 从后往前，收集 N 轮对话
+      const collected: ChatMessage[] = []
+      let roundCount = 0
+      for (let i = filtered.length - 1; i >= 0; i--) {
+        const msg = filtered[i] as ChatMessage
+        collected.unshift(msg)
+        // 每遇到一条 user 消息算一轮结束
+        if (msg.role === 'user') {
+          roundCount++
+          if (roundCount >= contextLength) break
+        }
+      }
+      return collected
+    }
+
+    // contextLength === 'infinite' 或 undefined 时保留全部
+    return filtered
+  }
+
+  // ===== 核心流式函数 =====
+
+  /**
+   * 发送消息并流式返回 AI 响应
+   *
+   * 通过 ChatToolRegistry 获取启用的工具定义，
+   * 通过 ChatToolExecutor 统一执行工具调用。
+   *
+   * @param input 发送参数
+   * @param webContents 渲染进程的 webContents 实例（用于推送事件）
+   */
+  async function sendMessage(
+    input: ChatSendInput,
+  ): Promise<void> {
+    input = routePluginModel(`chat:${input.conversationId}`, input)
+    const runId = input.runId
+    const {
+      conversationId, userMessage, channelId,
+      modelId, systemMessage, contextLength, contextDividers, attachments,
+      thinkingEnabled, enabledToolIds, knowledgeReferences, pendingUserMessageId,
+    } = input
+
+    // 1. 查找渠道
+    const channels = listChannels()
+    const channel = channels.find((c) => c.id === channelId)
+    if (!channel) {
+      emit(conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
+        conversationId,
+        runId,
+        error: '渠道不存在',
+      })
+      return
+    }
+    if (!isChannelEnabledForChat(channel)) {
+      // 按真实原因报错：只填了 Agent 端点的渠道不能被说成「仅支持 Pi Agent」，
+      // 否则用户会去改内核勾选，而真正缺的是 Chat 端点。
+      const reason = getChatUnavailableReason(channel)
+      emit(conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
+        conversationId,
+        runId,
+        error: reason === 'no-endpoint'
+          ? '当前渠道未配置 Chat 端点（只填写了 Agent 端点），不能用于 Chat，请重新选择 Chat 模型'
+          : reason === 'disabled'
+            ? '当前渠道已停用，请重新选择可用模型'
+            : '当前渠道仅支持 Pi Agent，不能用于 Chat，请重新选择可用模型',
+      })
+      return
+    }
+    const selectedChannelModel = channel.models.find((m) => m.id === modelId)
+    if (!selectedChannelModel || !selectedChannelModel.enabled) {
+      emit(conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
+        conversationId,
+        runId,
+        error: '当前模型配置已失效，请在模型选择器中重新选择',
+      })
+      return
+    }
+
+    let apiKey: string
+    let proxyBaseUrl = ''
+    // 代管模式判定集中由商业旁侧策略提供；自配渠道继续走直连。
+    const shouldUseCommercialProxy = editionProviders.credentials.shouldUseManagedRoute(channel, { respectDirectDataPlane: true })
+
+    if (shouldUseCommercialProxy) {
+      const auth = await editionProviders.account.getSession()
+      if (!auth) {
+        emit(conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
+          conversationId,
+          runId,
+          error: '团队账号登录已过期，请重新登录后再使用商业渠道',
+        })
+        return
+      }
+
+      const proxyPath = editionProviders.credentials.managedPath(ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? 'messages' : 'chat')
+      proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
+      apiKey = resolveEditionBearerToken(auth)
+    } else {
+      try {
+        apiKey = decryptApiKey(channelId)
+        if (channel.provider === 'xai' && resolveXaiCredentialMode(channel.credentialMode, apiKey) === 'oauth') {
+          emit(conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
+            conversationId,
+            runId,
+            error: 'xAI 订阅 OAuth 当前仅支持 Pi Agent 实验模式；Chat 请配置 xAI API Key',
+          })
+          return
+        }
+      } catch {
+        emit(conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
+          conversationId,
+          runId,
+          error: '解密 API Key 失败',
+        })
+        return
+      }
+    }
+
+    // 串行化：同一对话同一时刻只允许一个 run，且必须在任何 side effect / await 之前登记。
+    // 若把检查放在追加用户消息之后，被拒绝的并发请求会先在 JSONL 里留下一条孤儿 user 消息。
+    // 用户刚点停止时，等待旧 run 收尾（它可能仍在把已输出的部分回复写盘），
+    // 否则旧 run 的 assistant 节点会落在新 run 的 user 节点之后，破坏会话顺序。
+    const existingRun = activeControllers.get(conversationId)
+    if (existingRun) {
+      if (existingRun.stopping) {
+        await Promise.race([
+          existingRun.settled,
+          new Promise<void>((resolve) => setTimeout(resolve, STOP_SETTLE_WAIT_MS)),
+        ])
+      }
+      if (activeControllers.has(conversationId)) {
+        emit(conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
+          conversationId,
+          runId,
+          error: '上一条消息仍在处理中，请稍候再试',
+        })
+        return
+      }
+    }
+    let resolveSettled!: () => void
+    const settled = new Promise<void>((resolve) => { resolveSettled = resolve })
+    const controller = new AbortController()
+    const activeRun: ActiveChatRun = { runId, controller, stopping: false, settled, resolveSettled }
+    activeControllers.set(conversationId, activeRun)
+
+    // 在 try 外累积流式内容，abort 时 catch 块仍可访问
+    let accumulatedContent = ''
+    let accumulatedReasoning = ''
+    const accumulatedToolActivities: ChatToolActivity[] = []
+    const accumulatedGeneratedAttachments: FileAttachment[] = []
+
+    try {
+      // 3. 先读取历史消息（在追加用户消息之前，避免 adapter 重复发送当前消息）
+      //    关键：发送上下文只取当前 activePath 对应的线性消息流，绝不混入其他分支——否则
+      //    模型会看到「另一条分支的历史」（PR #121 review by Yuan-lai-ru-ci & Copilot）。
+      const fullHistory = getConversationBranch(conversationId)
+
+      // 4. 追加用户消息到 JSONL（用 appendBranchTail 自动按 activePath 接链 + 字段 parentId）
+      //    重发 / 编辑后重发：user 节点已由 forkBranchAt 创建，这里不能再追加，否则会多出一条重复的 user 消息。
+      if (!pendingUserMessageId) {
+        const persistedUserMessage = appendBranchTail(conversationId, {
+          role: 'user',
+          content: userMessage,
+          attachments: attachments && attachments.length > 0 ? attachments : undefined,
+          knowledgeReferences: knowledgeReferences && knowledgeReferences.length > 0 ? knowledgeReferences : undefined,
+        })
+        // 持久化即广播：桌面端发起的消息也要进入事件流，否则移动端实时视图里只剩助手回复。
+        // 携带真实 id，客户端按 id 合并，本地乐观副本自动让位。
+        emit(conversationId, CHAT_IPC_CHANNELS.STREAM_USER, {
+          conversationId,
+          runId,
+          message: persistedUserMessage,
+        })
+      }
+
+      // 5. 过滤历史并提取文档附件文本
+      //    重发场景：历史里会包含刚 fork 出来的那条 user 节点（它代表当前的"这条问题"），
+      //    若不剔除，会出现"用户问了 1 次但模型看到 2 次同样内容"。这里把它从发送给模型的历史中剔除。
+      const historyExcludingPending = pendingUserMessageId
+        ? fullHistory.filter((m) => m.id !== pendingUserMessageId)
+        : fullHistory
+      const filteredHistory = filterHistory(historyExcludingPending, contextDividers, contextLength)
+      const enrichedHistory = await enrichHistoryWithDocuments(filteredHistory)
+      let enrichedUserMessage = await enrichMessageWithDocuments(userMessage, attachments)
+      try {
+        const prepared = await prepareChatKnowledgeRequest(
+          { userMessage, attachments, history: filteredHistory, currentReferences: knowledgeReferences },
+          {
+            enrichMessage: enrichMessageWithDocuments,
+            search: (query, allowedItemIds, options) => searchKnowledgeItemsForChat(query, allowedItemIds, options.topK),
+          },
+        )
+        enrichedUserMessage = prepared.providerUserMessage
+        console.info('[聊天服务] 资料上下文已准备:', { conversationId, references: prepared.effectiveReferences.length, contextChars: prepared.knowledgeContextChars, providerUserMessageChars: prepared.providerUserMessage.length })
+      } catch (error) {
+        // 资料检索失败不能阻断用户原始问题，亦不伪造“已使用资料”。
+        console.warn('[聊天服务] 资料库片段检索失败，已跳过:', error)
+      }
+
+      // 7. 获取适配器
+      const adapter = getAdapter(channel.provider, channel.apiProtocol, proxyBaseUrl || channel.baseUrl)
+
+      // 8. 从工具注册表获取启用的工具
+      const { tools, systemPromptAppend } = getEnabledTools(enabledToolIds)
+
+      // 注入工具系统提示词
+      const effectiveSystemMessage = systemPromptAppend && systemMessage
+        ? systemMessage + systemPromptAppend
+        : systemPromptAppend
+          ? systemPromptAppend
+          : systemMessage
+
+      const proxyUrl = await getEffectiveProxyUrl()
+      const fetchFn = getFetchFn(proxyUrl)
+
+      const streamWithRelayRecovery = async (request: { url: string; headers: Record<string, string>; body: string }) => {
+        try {
+          return await streamSSE({ request, adapter, signal: controller.signal, fetchFn, onEvent: handleStreamEvent })
+        } catch (error) {
+          const canRecover = !controller.signal.aborted && (isInvalidRelayTokenError(error) || channel.directDataPlane === true)
+          if (!canRecover) throw error
+
+          const recovered = await editionProviders.account.recoverSession()
+          if (!recovered) throw error
+
+          if (channel.directDataPlane === true) {
+            try {
+              await ports.syncRecoveredChannels(recovered.baseUrl, recovered.token)
+            } catch (syncError) {
+              console.warn('[聊天服务] 直连失败后的 Relay 渠道同步失败:', syncError)
+            }
+            const fallbackChannel = listChannels().find((candidate) => candidate.id === channelId)
+            if (!fallbackChannel || fallbackChannel.directDataPlane === true
+              || !isChatModelAvailable(fallbackChannel, modelId)) throw error
+            const fallbackApiKey = decryptApiKey(channelId)
+            const fallbackAdapter = getAdapter(fallbackChannel.provider, fallbackChannel.apiProtocol, fallbackChannel.baseUrl)
+            const fallbackRequest = fallbackAdapter.buildStreamRequest({
+              baseUrl: fallbackChannel.baseUrl,
+              apiKey: fallbackApiKey,
+              modelId,
+              history: enrichedHistory,
+              userMessage: enrichedUserMessage,
+              systemMessage: effectiveSystemMessage,
+              attachments,
+              readImageAttachments: getImageAttachmentData,
+              thinkingEnabled,
+              tools,
+              continuationMessages: continuationMessages.length > 0 ? continuationMessages : undefined,
+            })
+            console.warn('[聊天服务] New API 直连失败，已切换到 Relay 重试')
+            return streamSSE({ request: fallbackRequest, adapter: fallbackAdapter, signal: controller.signal, fetchFn, onEvent: handleStreamEvent })
+          }
+
+          const currentChannel = listChannels().find((candidate) => candidate.id === channelId)
+          if (!currentChannel || !isChatModelAvailable(currentChannel, modelId)) throw error
+          proxyBaseUrl = `${recovered.baseUrl}${editionProviders.credentials.managedPath(ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? 'messages' : 'chat')}`
+          apiKey = recovered.proxyToken || recovered.token
+          request.url = proxyBaseUrl
+          request.headers.Authorization = `Bearer ${apiKey}`
+          console.warn('[聊天服务] relay 令牌已刷新，正在重试一次代理请求')
+          return streamSSE({ request, adapter, signal: controller.signal, fetchFn, onEvent: handleStreamEvent })
+        }
+      }
+
+      // 9. 工具续接循环
+      let continuationMessages: ContinuationMessage[] = []
+      let round = 0
+      /** 标记最近一轮是否执行了工具（用于判断是否需要最终响应轮） */
+      let pendingToolResults = false
+
+      /** 流式事件处理器（工具轮和最终响应轮复用） */
+      const handleStreamEvent = (event: { type: string; delta?: string; toolCallId?: string; toolName?: string }): void => {
+        switch (event.type) {
+          case 'chunk':
+            accumulatedContent += event.delta ?? ''
+            emit(conversationId, CHAT_IPC_CHANNELS.STREAM_CHUNK, {
+              conversationId,
+              runId,
+              delta: event.delta,
+            })
+            break
+          case 'reasoning':
+            accumulatedReasoning += event.delta ?? ''
+            emit(conversationId, CHAT_IPC_CHANNELS.STREAM_REASONING, {
+              conversationId,
+              runId,
+              delta: event.delta,
+            })
+            break
+          case 'tool_call_start':
+            accumulatedToolActivities.push({
+              toolCallId: event.toolCallId!,
+              toolName: event.toolName!,
+              type: 'start',
+            })
+            emit(conversationId, CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, {
+              conversationId,
+              runId,
+              activity: { type: 'start', toolName: event.toolName!, toolCallId: event.toolCallId! },
+            })
+            break
+          // done 事件在外部处理
+        }
+      }
+
+      while (round < MAX_TOOL_ROUNDS) {
+        round++
+        pendingToolResults = false
+
+        const request = adapter.buildStreamRequest({
+          baseUrl: proxyBaseUrl || channel.baseUrl,
+          apiKey,
+          modelId,
+          history: enrichedHistory,
+          userMessage: enrichedUserMessage,
+          systemMessage: effectiveSystemMessage,
+          attachments,
+          readImageAttachments: getImageAttachmentData,
+          thinkingEnabled,
+          tools,
+          continuationMessages: continuationMessages.length > 0 ? continuationMessages : undefined,
+        })
+
+        // 商业模式：覆盖 URL 为服务端代理地址
+        if (proxyBaseUrl) {
+          request.url = proxyBaseUrl
+        }
+
+        const { content, reasoning, thinkingBlocks, toolCalls, stopReason } = await streamWithRelayRecovery(request)
+
+        // 如果没有工具调用或不是 tool_use 停止，退出循环
+        if (!toolCalls || toolCalls.length === 0 || stopReason !== 'tool_use') {
+          break
+        }
+
+        // 执行工具调用（通过统一执行器）
+        // 提取前一轮对话的附件（用于参考图支持）
+        const lastUserMsg = fullHistory.filter((m) => m.role === 'user').at(-1)
+        const lastAssistantMsg = fullHistory.filter((m) => m.role === 'assistant').at(-1)
+        const toolResults = await executeToolCalls(toolCalls, {
+          conversationId,
+          runId,
+          currentAttachments: attachments,
+          previousUserAttachments: lastUserMsg?.attachments,
+          previousAssistantAttachments: lastAssistantMsg?.attachments,
+        })
+
+        // 累积工具结果到持久化数据
+        for (const tc of toolCalls) {
+          const tr = toolResults.find((r) => r.toolCallId === tc.id)
+          if (tr) {
+            accumulatedToolActivities.push({
+              toolCallId: tc.id,
+              toolName: tc.name,
+              type: 'result',
+              result: tr.content,
+              isError: tr.isError,
+              input: tc.arguments,
+            })
+            // 收集工具生成的附件（如生图工具的图片）
+            if (tr.generatedAttachments) {
+              accumulatedGeneratedAttachments.push(...tr.generatedAttachments)
+            }
+          }
+        }
+
+        // 构建续接消息
+        // thinkingBlocks 保留服务端原始的 thinking 块结构（含签名），
+        // 在思考+工具模式下必须原样回传给 Anthropic 协议家族（Anthropic/DeepSeek/Kimi）
+        continuationMessages = [
+          ...continuationMessages,
+          { role: 'assistant' as const, content, reasoning, thinkingBlocks, toolCalls },
+          { role: 'tool' as const, results: toolResults },
+        ]
+        pendingToolResults = true
+
+        // 注意：不重置 accumulatedContent/accumulatedReasoning，跨轮次持续累积
+      }
+
+      // 10. 最终响应轮：如果因达到 MAX_TOOL_ROUNDS 退出但仍有待处理的工具结果，
+      // 再发起一次 API 调用（不传 tools）让模型基于工具结果生成最终文本回复
+      if (pendingToolResults && continuationMessages.length > 0) {
+        console.log(`[聊天服务] 工具轮次已达上限 (${MAX_TOOL_ROUNDS})，发起最终响应轮`)
+
+        const finalRequest = adapter.buildStreamRequest({
+          baseUrl: proxyBaseUrl || channel.baseUrl,
+          apiKey,
+          modelId,
+          history: enrichedHistory,
+          userMessage: enrichedUserMessage,
+          systemMessage: effectiveSystemMessage,
+          attachments,
+          readImageAttachments: getImageAttachmentData,
+          thinkingEnabled,
+          continuationMessages,
+        })
+
+        if (proxyBaseUrl) finalRequest.url = proxyBaseUrl
+
+        await streamWithRelayRecovery(finalRequest)
+      }
+
+      // 10. 保存 assistant 消息（空内容不保存，除非有生成的附件）
+      const assistantMsgId = randomUUID()
+      if (accumulatedContent.trim() || accumulatedGeneratedAttachments.length > 0) {
+        appendBranchTail(conversationId, {
+          id: assistantMsgId,
+          role: 'assistant',
+          content: accumulatedContent,
+          model: modelId,
+          reasoning: accumulatedReasoning || undefined,
+          toolActivities: accumulatedToolActivities.length > 0 ? accumulatedToolActivities : undefined,
+          attachments: accumulatedGeneratedAttachments.length > 0 ? accumulatedGeneratedAttachments : undefined,
+        })
+
+        // 更新对话索引的 updatedAt
+        try {
+          updateConversationMeta(conversationId, {})
+        } catch {
+          // 索引更新失败不影响主流程
+        }
+      } else {
+        console.warn(`[聊天服务] 模型返回空内容且无生成附件，跳过保存 (对话 ${conversationId})`)
+      }
+
+      emit(conversationId, CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
+        conversationId,
+        runId,
+        model: modelId,
+        messageId: (accumulatedContent.trim() || accumulatedGeneratedAttachments.length > 0) ? assistantMsgId : undefined,
+      })
+    } catch (error) {
+      // 被中止的请求：保存已输出的部分内容，通知前端停止
+      if (controller.signal.aborted) {
+        console.log(`[聊天服务] 对话 ${conversationId} 已被用户中止`)
+
+        // 保存已累积的部分助手消息
+        if (accumulatedContent) {
+          const assistantMsgId = randomUUID()
+          appendBranchTail(conversationId, {
+            id: assistantMsgId,
+            role: 'assistant',
+            content: accumulatedContent,
+            model: modelId,
+            reasoning: accumulatedReasoning || undefined,
+            stopped: true,
+            toolActivities: accumulatedToolActivities.length > 0 ? accumulatedToolActivities : undefined,
+          })
+
+          try {
+            updateConversationMeta(conversationId, {})
+          } catch {
+            // 索引更新失败不影响主流程
+          }
+
+          emit(conversationId, CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
+            conversationId,
+            runId,
+            model: modelId,
+            messageId: assistantMsgId,
+          })
+        } else {
+          emit(conversationId, CHAT_IPC_CHANNELS.STREAM_COMPLETE, {
+            conversationId,
+            runId,
+            model: modelId,
+          })
+        }
+        return
+      }
+
+      console.error(`[聊天服务] 流式请求失败:`, error)
+
+      // 额度不足（402）：把原始报错替换成「额度不足，请充值」结构化引导。
+      // 其他上游瞬时错误只在日志保留原文，UI 使用稳定、可读的提示。
+      const normalizedError = normalizeChatStreamError(channel.provider, error)
+      // 额度不足属于商业版语义：识别规则由发行版注入，开源版恒为 null。
+      const insufficient = editionProviders.errors.detectInsufficientCredits(error)
+      const displayError = insufficient ? insufficient.message : normalizedError.message
+      const errorCode = insufficient ? 'insufficient_credits' : normalizedError.code
+      const errorTitle = insufficient ? '额度不足' : normalizedError.errorTitle
+
+      // 保存已累积的部分助手消息（与 abort 逻辑一致，防止内容丢失）
+      if (accumulatedContent) {
+        const assistantMsgId = randomUUID()
+        appendBranchTail(conversationId, {
+          id: assistantMsgId,
+          role: 'assistant',
+          content: accumulatedContent,
+          model: modelId,
+          reasoning: accumulatedReasoning || undefined,
+          stopped: true,
+          error: displayError,
+          toolActivities: accumulatedToolActivities.length > 0 ? accumulatedToolActivities : undefined,
+        })
+
+        try {
+          updateConversationMeta(conversationId, {})
+        } catch {
+          // 索引更新失败不影响主流程
+        }
+      }
+
+      emit(conversationId, CHAT_IPC_CHANNELS.STREAM_ERROR, {
+        conversationId,
+        runId,
+        error: displayError,
+        ...(errorCode ? { code: errorCode } : {}),
+        ...(errorTitle ? { errorTitle } : {}),
+      })
+    } finally {
+      // 先唤醒等待中的新请求，再移除登记项；仅在仍是自己登记时才移除（旧 run 不能删除已替换的新 run）。
+      activeRun.resolveSettled()
+      if (activeControllers.get(conversationId) === activeRun) activeControllers.delete(conversationId)
+    }
+  }
+
+  /**
+   * 中止指定对话的生成
+   */
+  function stopGeneration(conversationId: string): void {
+    const active = activeControllers.get(conversationId)
+    if (!active) return
+    // 只标记停止并 abort，登记项由该 run 自己的 finally 释放：
+    // 立刻删除会让新请求与尚未收尾的旧 run 同时写同一份 JSONL。
+    active.stopping = true
+    active.controller.abort()
+    console.log(`[聊天服务] 已中止对话: ${conversationId}`)
+  }
+
+  /** 中止所有活跃的聊天流（应用退出时调用） */
+  function stopAllGenerations(): void {
+    if (activeControllers.size === 0) return
+    console.log(`[聊天服务] 正在中止所有活跃对话 (${activeControllers.size} 个)...`)
+    for (const [conversationId, active] of activeControllers) {
+      active.stopping = true
+      active.controller.abort()
+      console.log(`[聊天服务] 已中止对话: ${conversationId}`)
+    }
+  }
+
+  // ===== 标题生成 =====
+
+  /**
+   * 调用 AI 生成对话标题
+   *
+   * 使用与聊天相同的渠道和模型，发送非流式请求，
+   * 让模型根据用户第一条消息生成简短标题。
+   *
+   * @param input 生成标题参数
+   * @returns 生成的标题，失败时返回 null
+   */
+  async function generateTitle(input: GenerateTitleInput): Promise<string | null> {
+    const { userMessage, channelId, modelId, contextMessages } = input
+    console.log('[标题生成] 开始生成标题:', { channelId, modelId, sourceCount: contextMessages?.length ?? 1, userMessage: userMessage.slice(0, 50) })
+
+    // 即使是本地短标题，也先确认原绑定仍是启用且可用于 Chat 的模型。
+    const channels = listChannels()
+    const channel = channels.find((candidate) => candidate.id === channelId)
+    if (!channel || !isChatModelAvailable(channel, modelId)) {
+      console.warn('[标题生成] 渠道或模型不可用于 Chat:', { channelId, modelId })
+      return null
+    }
+
+    // 短消息直接使用原文作为标题，避免 AI 幻觉。
+    // 窗口路径（contextMessages）已经在收集阶段过滤过信息量，不再走这条短路。
+    const trimmedMessage = userMessage.trim()
+    if ((!contextMessages || contextMessages.length === 0) && trimmedMessage.length <= SHORT_MESSAGE_THRESHOLD) {
+      const shortTitle = trimmedMessage.slice(0, MAX_TITLE_LENGTH)
+      console.log('[标题生成] 消息过短，直接使用原文作为标题:', shortTitle)
+      return shortTitle
+    }
+
+    const titlePrompt = contextMessages && contextMessages.length > 0
+      ? buildWindowTitlePrompt(contextMessages)
+      : buildTitlePrompt(userMessage)
+
+    try {
+      const storedSecret = decryptApiKey(channelId)
+      if (channel.provider === 'xai' && resolveXaiCredentialMode(channel.credentialMode, storedSecret) === 'oauth') {
+        console.info('[标题生成] xAI 订阅 OAuth 不走 Chat API Key 标题生成')
+        return null
+      }
+    } catch {
+      console.warn('[标题生成] 解密 API Key 失败')
+      return null
+    }
+
+    let apiKey: string
+    let proxyBaseUrl = ''
+    const shouldUseCommercialProxy = editionProviders.credentials.shouldUseManagedRoute(channel, { respectDirectDataPlane: true })
+
+    if (shouldUseCommercialProxy) {
+      const auth = await editionProviders.account.getSession().catch((error) => {
+        console.warn('[标题生成] 获取团队认证失败:', error)
+        return null
+      })
+      if (!auth) {
+        console.warn('[标题生成] 团队账号登录已过期，跳过 AI 标题生成')
+        return null
+      }
+      const proxyPath = editionProviders.credentials.managedPath(ANTHROPIC_PROXY_PROVIDERS.has(channel.provider) ? 'messages' : 'chat')
+      proxyBaseUrl = `${auth.baseUrl}${proxyPath}`
+      apiKey = resolveEditionBearerToken(auth)
+    } else {
+      try {
+        apiKey = decryptApiKey(channelId)
+      } catch {
+        console.warn('[标题生成] 解密 API Key 失败')
+        return null
+      }
+    }
+
+    try {
+      const adapter = getAdapter(channel.provider, channel.apiProtocol, proxyBaseUrl || channel.baseUrl)
+      const request = adapter.buildTitleRequest({
+        baseUrl: proxyBaseUrl || resolveTitleBaseUrl(channel.provider, channel.baseUrl, channel.apiProtocol) || channel.baseUrl,
+        apiKey,
+        modelId,
+        prompt: titlePrompt,
+      })
+
+      if (proxyBaseUrl) request.url = proxyBaseUrl
+
+      const proxyUrl = await getEffectiveProxyUrl()
+      const fetchFn = getFetchFn(proxyUrl)
+      const title = (await fetchTitleWithRetry(request, adapter, fetchFn)).title
+      if (!title) {
+        console.warn('[标题生成] API 返回空标题')
+        return null
+      }
+
+      // 清洗引号/书名号并截断；兼容部分端点把 content 返回为内容块数组的情况
+      const result = sanitizeGeneratedTitle(title)
+      if (!result) {
+        console.warn('[标题生成] 标题清洗后为空')
+        return null
+      }
+      console.log('[标题生成] 成功生成标题:', result)
+      return result
+    } catch (error) {
+      console.warn('[标题生成] 请求失败:', error)
+      return null
+    }
+  }
+
+  // ===== 自动命名窗口（Chat 链路） =====
+
+  /** 自动命名窗口输入：渠道/模型由渲染层传入本轮的当前选择，避免用到过期的会话元数据。 */
+
+
+  /**
+   * 收集对话「激活分支」上可用于命名的用户消息。
+   *
+   * 只取激活分支，避免把已被切走/回退的分支内容算进主题；
+   * 信息量过滤（命令、寒暄、注入块）统一在 title-generation 里做。
+   */
+  function collectConversationTitleSources(conversationId: string): string[] {
+    try {
+      const messages = getConversationBranch(conversationId)
+      return collectTitleSources(messages.filter((m) => m.role === 'user').map((m) => m.content))
+    } catch (error) {
+      console.warn('[聊天服务] 读取对话消息用于命名失败:', error)
+      return []
+    }
+  }
+
+  /**
+   * 自动命名：流结束后使用首条有效用户消息生成标题；寒暄/命令不触发。
+   * 标题写入后立即定稿，失败时由 generateTitle 返回本地兜底。
+   */
+  async function autoTitleConversation(input: AutoTitleConversationInput): Promise<ConversationMeta | null> {
+    const { conversationId, channelId, modelId } = input
+    const meta = getConversationMeta(conversationId)
+    if (!meta) return null
+
+    const windowInput = {
+      title: meta.title,
+      defaultTitle: DEFAULT_CONVERSATION_TITLE,
+      titleAutoGeneratedAt: meta.titleAutoGeneratedAt,
+      titleRefineAttempts: meta.titleRefineAttempts,
+      titleLockedAt: meta.titleLockedAt,
+    }
+
+    // 先做只看元数据的预判：已定稿 / 人工命名 / 次数用尽都不需要读对话分支。
+    const preflight = preflightTitleWindow(windowInput)
+    if (preflight) {
+      if (preflight.action === 'lock') {
+        console.log(`[聊天服务] 自动命名窗口关闭（${preflight.reason}）`)
+        updateConversationMeta(conversationId, { titleLockedAt: Date.now() })
+      }
+      return null
+    }
+
+    const sources = collectConversationTitleSources(conversationId)
+    const decision = planTitleWindow({ ...windowInput, sourceCount: sources.length })
+    if (decision.action !== 'generate') {
+      // 此处只可能是「无有效来源」：不消耗调用次数，等下一个有内容的轮次。
+      console.log('[聊天服务] 标题来源无信息量，跳过本次自动命名')
+      return null
+    }
+
+    // 在第一次 await 前同步预占次数。JS 同步段不会被另一个调用插入，
+    // 因此并发结束的 Chat 流会依次拿到 1、2、3…，不会重复使用同一预算。
+    updateConversationMeta(conversationId, { titleRefineAttempts: decision.attempts })
+
+    const persistReservedAttempt = () => {
+      const latest = getConversationMeta(conversationId)
+      if (!latest) return
+      updateConversationMeta(conversationId, {
+        titleRefineAttempts: mergeTitleRefineAttempts(latest.titleRefineAttempts, decision.attempts),
+      })
+    }
+
+    try {
+      const title = await generateTitle({
+        userMessage: sources[0] ?? '',
+        channelId,
+        modelId,
+        contextMessages: sources,
+      })
+      if (!title) {
+        // 只有来源为空时才无法写入标题；正常有效来源的 provider 失败会在 generateTitle 内本地兜底。
+        persistReservedAttempt()
+        return null
+      }
+
+      // 标题请求是异步的；期间用户可能手动重命名或已定稿，不能覆盖用户决定。
+      const latest = getConversationMeta(conversationId)
+      if (!latest || latest.titleLockedAt || latest.title !== meta.title) return null
+
+      const updated = updateConversationMeta(conversationId, {
+        title,
+        titleAutoGeneratedAt: Date.now(),
+        titleRefineAttempts: mergeTitleRefineAttempts(latest.titleRefineAttempts, decision.attempts),
+        ...(decision.lockAfterApply ? { titleLockedAt: Date.now() } : {}),
+      })
+      console.log(`[聊天服务] 自动命名窗口完成: "${title}"（来源 ${sources.length} 条，${decision.lockAfterApply ? '已定稿' : '待精修'}）`)
+      return updated
+    } catch (error) {
+      console.warn('[聊天服务] 自动命名窗口失败:', error)
+      persistReservedAttempt()
+      return null
+    }
+  }
+
+  /**
+   * 手动「重新生成标题」：绕过定稿锁定，用当前激活分支上的有效用户消息重新命名并重新锁定。
+   */
+  async function regenerateConversationTitle(
+    conversationId: string,
+    channelId?: string,
+    modelId?: string,
+  ): Promise<ConversationMeta | null> {
+    const meta = getConversationMeta(conversationId)
+    if (!meta) return null
+    const requestUpdatedAt = meta.updatedAt
+    const resolvedChannelId = channelId || meta.channelId
+    const resolvedModelId = modelId || meta.modelId
+    if (!resolvedChannelId || !resolvedModelId) {
+      throw new Error('重新生成标题失败：当前对话没有可用渠道或模型')
+    }
+
+    const sources = collectConversationTitleSources(conversationId)
+    if (sources.length === 0) {
+      throw new Error('重新生成标题失败：当前对话没有可用于生成标题的有效用户消息')
+    }
+
+    const title = await generateTitle({
+      userMessage: sources[0] ?? '',
+      channelId: resolvedChannelId,
+      modelId: resolvedModelId,
+      contextMessages: sources,
+    })
+    if (!title) throw new Error('重新生成标题失败：标题模型没有返回可用结果')
+
+    const latest = getConversationMeta(conversationId)
+    if (!latest || latest.updatedAt !== requestUpdatedAt) {
+      throw new Error('重新生成标题失败：生成期间对话状态已变化，请重试')
+    }
+    return updateConversationMeta(conversationId, {
+      title,
+      titleAutoGeneratedAt: Date.now(),
+      titleLockedAt: Date.now(),
+    })
+  }
+
+  return { sendMessage, stopGeneration, stopAllGenerations, generateTitle, autoTitleConversation, regenerateConversationTitle }
+}
