@@ -34,6 +34,7 @@ import { markdownToHtml } from '@/lib/markdown-rich-text'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { panelVisibilityAtom } from '@/atoms/panel-layout-atoms'
 import { FileBrowser, FileDropZone, FileTypeIcon, FileSearchBar, computeRevealAncestors, isPathUnderRoot, computeTreeRowLayout, AncestorGuides, STICKY_ROW_BASE_CLASS, canBeSticky } from '@/components/file-browser'
+import { CoreSystemFilesPanel } from '@/components/file-browser/CoreSystemFilesPanel'
 import { DiffPanelTabBar } from '@/components/diff/DiffPanelTabBar'
 import { DiffChangesList } from '@/components/diff/DiffChangesList'
 import {
@@ -59,8 +60,10 @@ import {
   agentSessionDraftHtmlAtom,
   agentSessionIndicatorMapAtom,
   type AgentSidePanelTab,
+  coreSystemRevealAtom,
 } from '@/atoms/agent-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { detectIsWindows } from '@profer/ui'
 import { getFileBaseName, getFileParentPath, getLastPathSegments } from '@/lib/file-utils'
@@ -102,15 +105,27 @@ interface SidePanelProps {
 
 const filePanelActionButtonClass = 'h-6 w-6 flex-shrink-0 rounded-md text-muted-foreground/75 hover:bg-accent/70 hover:text-foreground [&_svg]:size-3.5'
 
-export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, width = 280 }: SidePanelProps): React.ReactElement {
+export function SidePanel(props: SidePanelProps): React.ReactElement {
+  const target = useAtomValue(coreTargetsAtom)
+  // 切换目标即销毁旧面板，文件树展开态及路径不能跨 Core 复用。
+  return <CoreSidePanel key={`${target.currentId}:${target.generation}`} {...props} />
+}
+
+function CoreSidePanel({ sessionId, sessionPath, activeTab, onTabChange, width = 280 }: SidePanelProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const sessions = useAtomValue(agentSessionsAtom)
+  const isRemoteCore = useAtomValue(coreTargetsAtom).currentId !== 'local'
+  const effectiveSessionPath = isRemoteCore ? null : sessionPath
 
   // 「会话文件」的根：会话私有目录（storageDir）。
   // project 下 `sessionPath` 是项目根（相对路径基准），拿它当会话文件根会让所有会话互通，
   // 且用户上传到会话目录的文件看不到。
   const [sessionStoragePath, setSessionStoragePath] = React.useState<string | null>(null)
   React.useEffect(() => {
+    if (isRemoteCore) {
+      setSessionStoragePath(null)
+      return
+    }
     const workspaceId = sessions.find((item) => item.id === sessionId)?.workspaceId
     if (!workspaceId) {
       setSessionStoragePath(null)
@@ -122,14 +137,54 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
       .then((path) => { if (!cancelled) setSessionStoragePath(path) })
       .catch(() => { if (!cancelled) setSessionStoragePath(null) })
     return () => { cancelled = true }
-  }, [sessions, sessionId])
-  const sessionFileRoot = sessionStoragePath ?? sessionPath
+  }, [sessions, sessionId, isRemoteCore])
+  // 非本机内核：文件根由所属 Core 授权并返回，桌面不臆造路径。
+  const [coreFileRoots, setCoreFileRoots] = React.useState<import('@profer/shared').CoreSessionFileRoots | null>(null)
+  React.useEffect(() => {
+    if (!isRemoteCore) {
+      setCoreFileRoots(null)
+      return
+    }
+    let cancelled = false
+    window.electronAPI.getCoreSessionFileRoots(sessionId)
+      .then((roots) => { if (!cancelled) setCoreFileRoots(roots) })
+      .catch(() => { if (!cancelled) setCoreFileRoots(null) })
+    return () => { cancelled = true }
+  }, [isRemoteCore, sessionId])
+  /** 非本机内核的目录加载器；只读浏览，写入仍由 Agent 在 Core 侧执行。 */
+  const loadCoreDirectory = React.useCallback(
+    (dirPath: string): Promise<FileEntry[]> => window.electronAPI.listCoreSessionDirectory({ sessionId, path: dirPath }),
+    [sessionId],
+  )
+  const setCoreSystemReveal = useSetAtom(coreSystemRevealAtom)
+  /** 从会话/工作区文件跳到“系统文件”页并打开所在目录。 */
+  const revealInSystemFiles = React.useCallback((filePath: string): void => {
+    const dir = getFileParentPath(filePath) ?? filePath
+    setCoreSystemReveal({ dir, ts: Date.now() })
+    onTabChange('system')
+  }, [setCoreSystemReveal, onTabChange])
+  /** 远程内核的文件写操作：重命名与删除（删除进 Core 回收站）。 */
+  const coreFileOps = React.useMemo(() => isRemoteCore ? {
+    rename: async (filePath: string, newName: string): Promise<void> => {
+      await window.electronAPI.coreSessionFsOp({ sessionId, op: 'rename', path: filePath, name: newName })
+    },
+    remove: async (filePath: string): Promise<void> => {
+      await window.electronAPI.coreSessionFsOp({ sessionId, op: 'trash', path: filePath })
+    },
+  } : undefined, [isRemoteCore, sessionId])
+  const sessionFileRoot = isRemoteCore ? (coreFileRoots?.sessionStorage ?? null) : (sessionStoragePath ?? effectiveSessionPath)
   const sessionIndicators = useAtomValue(agentSessionIndicatorMapAtom)
   const isClassic = interfaceVariant === 'classic'
 
   // 显示状态（B）= 展开意图 A（agentSidePanelOpenAtom）且窗口宽度足够。
   // 宽度过渡动画基于 isOpen（B）：手动开/关与窗口 resize 导致的可见性变化都会平滑过渡；
   // 关闭动作（onClose）只改 A（意图），窗口不足时 B 自动为 false、A 保持不变。
+  // 非本机内核没有本机 git 信息，“文件改动”Tab 不展示；若历史状态停在它上面，回落到会话文件。
+  // 非本机内核没有本机 git 信息（无“文件改动”）；本机内核没有“系统文件”。
+  // 历史状态落在不可见的 Tab 上时回落到会话文件。
+  const visibleTab: AgentSidePanelTab = isRemoteCore
+    ? (activeTab === 'changes' ? 'session' : activeTab)
+    : (activeTab === 'system' ? 'session' : activeTab)
   const isOpen = useAtomValue(panelVisibilityAtom).filePanel
   const setAgentPanelOpen = useSetAtom(agentSidePanelOpenAtom)
   // 懒挂载：首次展开时才渲染面板内容（避免启动即渲染右侧面板），收起后保活不重挂载
@@ -227,18 +282,18 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   // 附加目录列表（会话级）
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
   const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
-  const attachedDirs = attachedDirsMap.get(sessionId) ?? []
+  const attachedDirs = isRemoteCore ? [] : (attachedDirsMap.get(sessionId) ?? [])
   const attachedFilesMap = useAtomValue(agentAttachedFilesMapAtom)
   const setAttachedFilesMap = useSetAtom(agentAttachedFilesMapAtom)
-  const attachedFiles = attachedFilesMap.get(sessionId) ?? []
+  const attachedFiles = isRemoteCore ? [] : (attachedFilesMap.get(sessionId) ?? [])
 
   // 附加目录列表（工作区级）
   const wsAttachedDirsMap = useAtomValue(workspaceAttachedDirectoriesMapAtom)
   const setWsAttachedDirsMap = useSetAtom(workspaceAttachedDirectoriesMapAtom)
-  const wsAttachedDirs = currentWorkspaceId ? (wsAttachedDirsMap.get(currentWorkspaceId) ?? []) : []
+  const wsAttachedDirs = !isRemoteCore && currentWorkspaceId ? (wsAttachedDirsMap.get(currentWorkspaceId) ?? []) : []
   const wsAttachedFilesMap = useAtomValue(workspaceAttachedFilesMapAtom)
   const setWsAttachedFilesMap = useSetAtom(workspaceAttachedFilesMapAtom)
-  const wsAttachedFiles = currentWorkspaceId ? (wsAttachedFilesMap.get(currentWorkspaceId) ?? []) : []
+  const wsAttachedFiles = !isRemoteCore && currentWorkspaceId ? (wsAttachedFilesMap.get(currentWorkspaceId) ?? []) : []
 
   const extraPathsMemo = React.useMemo(
     () => [...attachedDirs, ...wsAttachedDirs],
@@ -250,33 +305,24 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     [extraPathsMemo, attachedFiles, wsAttachedFiles]
   )
 
-  // 加载工作区级附加目录
+  // 加载工作区级附件；组件卸载后忽略返回值，避免旧 Core 写回共享缓存。
   React.useEffect(() => {
-    if (!workspaceSlug || !currentWorkspaceId) return
-    window.electronAPI.getWorkspaceDirectories(workspaceSlug)
-      .then((dirs) => {
-        setWsAttachedDirsMap((prev) => {
-          const map = new Map(prev)
-          map.set(currentWorkspaceId, dirs)
-          return map
-        })
-      })
-      .catch(console.error)
-  }, [workspaceSlug, currentWorkspaceId, setWsAttachedDirsMap])
+    let cancelled = false
+    if (isRemoteCore || !workspaceSlug || !currentWorkspaceId) return
+    void window.electronAPI.getWorkspaceDirectories(workspaceSlug)
+      .then(dirs => { if (!cancelled) setWsAttachedDirsMap(prev => new Map(prev).set(currentWorkspaceId, dirs)) })
+      .catch(error => { if (!cancelled) console.error(error) })
+    return () => { cancelled = true }
+  }, [workspaceSlug, currentWorkspaceId, setWsAttachedDirsMap, isRemoteCore])
 
-  // 加载工作区级附加文件
   React.useEffect(() => {
-    if (!workspaceSlug || !currentWorkspaceId) return
-    window.electronAPI.getWorkspaceAttachedFiles(workspaceSlug)
-      .then((files) => {
-        setWsAttachedFilesMap((prev) => {
-          const map = new Map(prev)
-          map.set(currentWorkspaceId, files)
-          return map
-        })
-      })
-      .catch(console.error)
-  }, [workspaceSlug, currentWorkspaceId, setWsAttachedFilesMap])
+    let cancelled = false
+    if (isRemoteCore || !workspaceSlug || !currentWorkspaceId) return
+    void window.electronAPI.getWorkspaceAttachedFiles(workspaceSlug)
+      .then(files => { if (!cancelled) setWsAttachedFilesMap(prev => new Map(prev).set(currentWorkspaceId, files)) })
+      .catch(error => { if (!cancelled) console.error(error) })
+    return () => { cancelled = true }
+  }, [workspaceSlug, currentWorkspaceId, setWsAttachedFilesMap, isRemoteCore])
 
   // === 会话级：附加/移除目录 ===
 
@@ -560,19 +606,26 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   // 面包屑：显示根路径最后两段（公共实现 R5）
   const breadcrumb = React.useMemo(() => getLastPathSegments(sessionFileRoot ?? sessionPath ?? ''), [sessionFileRoot, sessionPath])
 
-  // 工作区文件目录路径
+  // 工作区文件目录路径：清空旧值，且不接受已经卸载的面板请求。
   const [workspaceFilesPath, setWorkspaceFilesPath] = React.useState<string | null>(null)
   React.useEffect(() => {
-    if (!workspaceSlug) {
-      setWorkspaceFilesPath(null)
-      return
+    let cancelled = false
+    setWorkspaceFilesPath(null)
+    if (isRemoteCore) {
+      if (coreFileRoots?.workspaceFiles) setWorkspaceFilesPath(coreFileRoots.workspaceFiles)
+      return () => { cancelled = true }
     }
-    window.electronAPI.getWorkspaceFilesPath(workspaceSlug).then(setWorkspaceFilesPath).catch(() => setWorkspaceFilesPath(null))
-  }, [workspaceSlug])
+    if (workspaceSlug) {
+      void window.electronAPI.getWorkspaceFilesPath(workspaceSlug)
+        .then(path => { if (!cancelled) setWorkspaceFilesPath(path) })
+        .catch(() => { if (!cancelled) setWorkspaceFilesPath(null) })
+    }
+    return () => { cancelled = true }
+  }, [workspaceSlug, isRemoteCore, coreFileRoots])
 
   const worktreeRepoPathsMemo = React.useMemo(
-    () => [sessionPath, workspaceFilesPath, ...extraPathsMemo].filter(Boolean) as string[],
-    [sessionPath, workspaceFilesPath, extraPathsMemo]
+    () => [effectiveSessionPath, workspaceFilesPath, ...extraPathsMemo].filter(Boolean) as string[],
+    [effectiveSessionPath, workspaceFilesPath, extraPathsMemo]
   )
 
   // Agent 写文件触发自动定位时，把 Tab 切到该文件所在的面板（session / workspace），
@@ -602,7 +655,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   // RightSidePanel 完全由用户控制，不因 Agent 文件变更自动打开
 
   // 同步 basePaths ref（供 handleFilePreview 使用，避免 hooks 声明顺序问题）
-  basePathsRef.current = [sessionPath, sessionStoragePath, workspaceFilesPath, ...fileAccessPathsMemo].filter(Boolean) as string[]
+  basePathsRef.current = isRemoteCore ? [] : [effectiveSessionPath, sessionStoragePath, workspaceFilesPath, ...fileAccessPathsMemo].filter(Boolean) as string[]
   const hasSessionAttachedItems = attachedDirs.length > 0 || attachedFiles.length > 0
   const hasWorkspaceAttachedItems = wsAttachedDirs.length > 0 || wsAttachedFiles.length > 0
 
@@ -634,18 +687,20 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
         )}
         >
           <DiffPanelTabBar
-            activeTab={activeTab}
+            activeTab={visibleTab}
             onTabChange={onTabChange}
             onClose={() => setAgentPanelOpen(false)}
+            hideChanges={isRemoteCore}
+            showSystemFiles={isRemoteCore}
           />
 
-          {activeTab === 'changes' ? (
-            sessionPath ? (
+          {visibleTab === 'changes' ? (
+            effectiveSessionPath ? (
               <DiffChangesList
                 key={sessionId}
-                dirPath={sessionPath}
+                dirPath={effectiveSessionPath}
                 sessionId={sessionId}
-                sessionPath={sessionPath}
+                sessionPath={effectiveSessionPath}
                 workspaceFilesPath={workspaceFilesPath || undefined}
                 extraPaths={fileAccessPathsMemo}
                 refreshVersion={diffRefreshVersion}
@@ -660,7 +715,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
             ) : (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">等待会话初始化...</div>
             )
-          ) : activeTab === 'session' ? (
+          ) : visibleTab === 'session' ? (
             <div className="flex-1 min-h-0 flex flex-col pt-0.5 mx-2 mb-2">
               {sessionFileRoot ? (
                 <>
@@ -678,32 +733,36 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                     <span className="text-[10px] text-muted-foreground/70 truncate flex-1 min-w-0" title={sessionFileRoot}>
                       {breadcrumb}
                     </span>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className={filePanelActionButtonClass}
-                          onClick={() => window.electronAPI.openFile(sessionFileRoot).catch(console.error)}
-                        >
-                          <FolderSearch />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        <p>在 Finder 中打开</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    {!isRemoteCore && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className={filePanelActionButtonClass}
+                            onClick={() => window.electronAPI.openFile(sessionFileRoot).catch(console.error)}
+                          >
+                            <FolderSearch />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          <p>在 Finder 中打开</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                   </div>
-                  <FileSearchBar
-                    workspaceFilesPath={null}
-                    sessionPath={sessionFileRoot}
-                    sessionAttachedDirs={attachedDirs}
-                    workspaceAttachedDirs={[]}
-                    placeholder="搜索会话文件..."
-                    sessionId={sessionId}
-                    onFilePreview={handleFilePreview}
-                  />
+                  {!isRemoteCore && (
+                    <FileSearchBar
+                      workspaceFilesPath={null}
+                      sessionPath={sessionFileRoot}
+                      sessionAttachedDirs={attachedDirs}
+                      workspaceAttachedDirs={[]}
+                      placeholder="搜索会话文件..."
+                      sessionId={sessionId}
+                      onFilePreview={handleFilePreview}
+                    />
+                  )}
                   <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
                     {attachedFiles.length > 0 && (
                       <AttachedFilesSection
@@ -734,23 +793,35 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                       {hasSessionAttachedItems && (
                         <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3 pt-2">工作文件（存储于该工作区目录）</div>
                       )}
-                      <FileBrowser rootPath={sessionFileRoot} hideToolbar embedded hideEmpty={hasSessionAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} />
+                      <FileBrowser
+                        rootPath={sessionFileRoot}
+                        hideToolbar
+                        embedded
+                        hideEmpty={hasSessionAttachedItems}
+                        onAddToChat={isRemoteCore ? undefined : handleAddToChat}
+                        onFilePreview={isRemoteCore ? undefined : handleFilePreview}
+                        {...(isRemoteCore ? { loadDirectory: loadCoreDirectory, fileOps: coreFileOps, onRevealInSystemFiles: revealInSystemFiles } : {})}
+                      />
                     </>
-                    <FileDropZone
-                      workspaceSlug={workspaceSlug ?? ''}
-                      sessionId={sessionId}
-                      target="session"
-                      onFilesUploaded={handleFilesUploaded}
-                      onFilesAttached={handleSessionFilesAttached}
-                      onAttachFolder={handleAttachFolder}
-                      onFoldersDropped={handleSessionFoldersDropped}
-                    />
+                    {!isRemoteCore && (
+                      <FileDropZone
+                        workspaceSlug={workspaceSlug ?? ''}
+                        sessionId={sessionId}
+                        target="session"
+                        onFilesUploaded={handleFilesUploaded}
+                        onFilesAttached={handleSessionFilesAttached}
+                        onAttachFolder={handleAttachFolder}
+                        onFoldersDropped={handleSessionFoldersDropped}
+                      />
+                    )}
                   </div>
                 </>
               ) : (
                 <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">等待会话初始化...</div>
               )}
             </div>
+          ) : visibleTab === 'system' ? (
+            <CoreSystemFilesPanel />
           ) : (
             <div className="flex-1 min-h-0 flex flex-col pt-0.5">
               <div className="flex-1 min-h-0 flex flex-col mx-2 mb-2">
@@ -766,7 +837,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                     </TooltipContent>
                   </Tooltip>
                   <div className="flex-1" />
-                  {workspaceFilesPath && (
+                  {!isRemoteCore && workspaceFilesPath && (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
@@ -780,20 +851,22 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="bottom">
-                        <p>{isProjectWorkspace ? '在 Finder 中打开项目文件夹' : '在 Finder 中打开工作区文件目录'}</p>
+                        <p>{isProjectWorkspace ? '在文件管理器中打开项目文件夹' : '在文件管理器中打开工作区文件目录'}</p>
                       </TooltipContent>
                     </Tooltip>
                   )}
                 </div>
-                <FileSearchBar
-                  workspaceFilesPath={workspaceFilesPath}
-                  sessionPath={null}
-                  sessionAttachedDirs={[]}
-                  workspaceAttachedDirs={wsAttachedDirs}
-                  placeholder="搜索工作区文件..."
-                  sessionId={sessionId}
-                  onFilePreview={handleFilePreview}
-                />
+                {!isRemoteCore && (
+                  <FileSearchBar
+                    workspaceFilesPath={workspaceFilesPath}
+                    sessionPath={null}
+                    sessionAttachedDirs={[]}
+                    workspaceAttachedDirs={wsAttachedDirs}
+                    placeholder="搜索工作区文件..."
+                    sessionId={sessionId}
+                    onFilePreview={handleFilePreview}
+                  />
+                )}
                 <div className="flex-1 min-h-0 overflow-y-auto pb-1 scrollbar-thin">
                   {wsAttachedFiles.length > 0 && (
                     <AttachedFilesSection
@@ -825,10 +898,18 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                       {hasWorkspaceAttachedItems && (
                         <div className="text-[11px] font-medium text-muted-foreground mb-1 px-3 pt-2">工作文件（存储于该工作区目录）</div>
                       )}
-                      <FileBrowser rootPath={workspaceFilesPath!} hideToolbar embedded hideEmpty={hasWorkspaceAttachedItems} onAddToChat={handleAddToChat} onFilePreview={handleFilePreview} />
+                      <FileBrowser
+                        rootPath={workspaceFilesPath!}
+                        hideToolbar
+                        embedded
+                        hideEmpty={hasWorkspaceAttachedItems}
+                        onAddToChat={isRemoteCore ? undefined : handleAddToChat}
+                        onFilePreview={isRemoteCore ? undefined : handleFilePreview}
+                        {...(isRemoteCore ? { loadDirectory: loadCoreDirectory, fileOps: coreFileOps, onRevealInSystemFiles: revealInSystemFiles } : {})}
+                      />
                     </>
                   )}
-                  {!isProjectWorkspace && (
+                  {!isProjectWorkspace && !isRemoteCore && (
                     <FileDropZone
                       workspaceSlug={workspaceSlug ?? ''}
                       target="workspace"

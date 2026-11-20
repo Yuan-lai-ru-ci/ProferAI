@@ -120,8 +120,8 @@ describe('resolveHostAgentRuntimeEnv（新链 Pi runtimeEnv 与旧链同源）',
     })
 
     expect(result.shellKind).toBe('wsl')
-    // 非 Windows 宿主上 `join` 用 posix 分隔符，这里只断言命中 System32\\wsl.exe 候选。
-    expect(result.wslCommand?.endsWith('System32/wsl.exe')).toBe(true)
+    // 目标为 Windows 时必须使用 Windows 路径，不受执行测试的宿主平台影响。
+    expect(result.wslCommand).toBe('C:\\Windows\\System32\\wsl.exe')
     expect(result.wslDistro).toBe('Ubuntu-22.04')
     expect(result.env.PROFER_WINDOWS_SHELL).toBe('wsl')
     expect(result.env.PROFER_WSL_DISTRO).toBe('Ubuntu-22.04')

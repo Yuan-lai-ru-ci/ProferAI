@@ -646,8 +646,10 @@ describe('Claude provider：终态、取消与清理', () => {
 
       await harness.adapter.interruptQuery('queued')
       expect(harness.double.state.interruptCalls).toBe(1)
-      await harness.adapter.setPermissionMode('queued', 'bypassPermissions')
-      expect(harness.double.state.permissionModeCalls).toEqual(['bypassPermissions'])
+      await harness.adapter.setPermissionMode('queued', 'bypassPermissions', true)
+      await harness.adapter.setPermissionMode('queued', 'plan', true)
+      expect(harness.double.state.permissionModeCalls).toEqual(['bypassPermissions', 'plan'])
+      await expect(harness.adapter.setPermissionMode('not-active', 'plan', true)).rejects.toThrow('尚未就绪或已结束')
 
       harness.double.push({ type: 'result', subtype: 'success', session_id: 's', terminal_reason: 'completed' })
       await pending

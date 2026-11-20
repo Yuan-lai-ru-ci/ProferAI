@@ -35,7 +35,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 const quietConsole = { log() {}, info() {}, warn() {}, error() {} }
-const serviceSource = readFileSync(new URL('./agent-service.ts', import.meta.url), 'utf8')
+const serviceSource = readFileSync(new URL('./agent-service.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 /** 切一段真实 service 源码；标记失效立即抛错，避免“切到空串仍假绿”。 */
 function serviceSlice(label: string, startMarker: string, endMarker: string): string {
@@ -58,7 +58,7 @@ const headlessGateSource = serviceSlice('headless 开关判定', 'function canUs
 // 运行时才 ReferenceError，整类契约会静默失效。
 const runAgentSource = `${activeSessionHelpersSource}\n${serviceSlice('runAgent', 'function resolveInputInitiator(', '/**\n * 无渲染进程')}`
 if (!runAgentSource.includes('export async function runAgent(')) throw new Error('runAgent slice 起点已失效：未包含 runAgent 函数体')
-const orchestratorSource = readFileSync(new URL('./agent-orchestrator.ts', import.meta.url), 'utf8')
+const orchestratorSource = readFileSync(new URL('./agent-orchestrator.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
 type RunOutcome = Parameters<NonNullable<AgentSendInput['onRunOutcome']>>[0]
 type UnreadPolicyMode = 'auto' | 'manual'
@@ -68,6 +68,8 @@ function serviceFixture(sendMessage: (input: AgentSendInput, callbacks: SessionC
   const webContents = { isDestroyed: () => false, send() {} }
   const run = compile<(input: AgentSendInput, wc: typeof webContents) => Promise<void>>(runAgentSource, 'runAgent', {
     orchestrator: { sendMessage, isActive, checkEntryGuards: () => undefined },
+    shouldUseLocalCorePi: () => false,
+    isLocalCoreSessionActive: () => false,
     // 桌面 runtime 开关默认关：本 fixture 固定走旧分支（新分支由入口路由 parity 覆盖）。
     resolveDesktopRunChain: () => 'orchestrator',
     // isAgentExecutionActive 真实实现读两个模块单例：旧 orchestrator 与新 runtime coordinator。
@@ -114,6 +116,8 @@ test('桌面与 headless 的内核不匹配拒绝不广播假终态，也不清�
     normalizeHeadlessSendInput,
     resolveRunInitiator,
     orchestrator: { isActive: () => true, sendMessage: async () => { throw new AgentSessionRuntimeMismatchError('pi', 'claude') } },
+    shouldUseLocalCorePi: () => false,
+    isLocalCoreSessionActive: () => false,
     runtimeCoordinator: { isRunning: () => false },
     activeStreamEventBacklogs: backlog,
     completedStreamEventBacklogs: new Map(),
@@ -174,6 +178,7 @@ function ownerFixture(
   }
   const Orchestrator = compile<typeof AgentOrchestrator>(orchestratorSource.slice(orchestratorSource.indexOf('export class AgentOrchestrator')), 'AgentOrchestrator', {
     registerCollaborationEventBus() {}, setHeadlessAgentRunner() {}, setAgentStopper() {},
+    getRuntimeStatus: () => null,
     normalizeAgentRuntime,
     // 工作区守卫在类外定义（与 agent-service 共用）：本 fixture 的会话/输入都没有 workspaceId，
     // 因此只需注入「无工作区 → undefined」的等价实现；真实守卫行为由 agent-run-workspace-guard.test.ts 覆盖。

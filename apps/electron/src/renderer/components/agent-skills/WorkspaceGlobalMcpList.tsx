@@ -1,3 +1,4 @@
+import { coreTargetsAtom, ownsCoreResources } from '@/atoms/core-target-atoms'
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
@@ -10,17 +11,20 @@ interface SummaryState {
 }
 
 export function useWorkspaceGlobalMcp(workspaceSlug: string) {
+  const target = useAtomValue(coreTargetsAtom)
+  const coreOwned = ownsCoreResources(target)
   const version = useAtomValue(workspaceCapabilitiesVersionAtom)
   const [result, setResult] = React.useState<SummaryState | null>(null)
   React.useEffect(() => {
-    if (!workspaceSlug) return
+    if (!workspaceSlug || coreOwned) return
     let current = true
     void window.electronAPI.listWorkspaceGlobalMcpServers(workspaceSlug).then(
       items => { if (current) setResult({ slug: workspaceSlug, items, failed: false }) },
       () => { if (current) setResult({ slug: workspaceSlug, items: [], failed: true }) },
     )
     return () => { current = false }
-  }, [workspaceSlug, version])
+  }, [workspaceSlug, version, coreOwned, target.generation])
+  if (coreOwned) return null
   return result?.slug === workspaceSlug ? result : null
 }
 

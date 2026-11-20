@@ -2,12 +2,20 @@
  * Shared utility functions for profer
  */
 
-// Placeholder - will be expanded as needed
+export { shouldNotifyAutomationTarget, extractAssistantText, buildAutomationFeishuCard } from './automation-notification-format'
+export type { AutomationNotificationCardPayload } from './automation-notification-format'
 export function noop(): void {
   // no-op
 }
 
 export { isGoalTransitionAllowed, getGoalActions, normalizeGoalReason, isGoalResumableByMessage, createGoalLifecycleEvent, applyGoalTransition, capGoalLifecycle, GOAL_LIFECYCLE_LIMIT, GOAL_STATUSES, GOAL_REASON_CODES, GOAL_REASON_LABELS } from './goal-lifecycle'
+export { resolvePiThinkingLevel, resolveGlobalThinkingLevel } from './agent-thinking-level'
+export type { ThinkingLevelSettings } from './agent-thinking-level'
+export { buildAgentSessionUiProjection } from './agent-session-ui-projection'
+export { parseAgentSessionUiAction, buildAgentSessionUiUpdates } from './agent-session-ui-action'
+export type { AgentSessionUiAction } from './agent-session-ui-action'
+export { buildArchiveToggleUpdates, shouldClearSessionUnreadOnRunStart, shouldMarkSessionUnreadOnCompletion } from './agent-unread-policy'
+export type { AgentUnreadPolicyMode, AgentCompletionUnreadInput, ArchiveToggleUpdates } from './agent-unread-policy'
 export { diffCapabilities } from './capabilities-diff'
 export { canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, AgentSessionRuntimeMismatchError, AgentRunAlreadyActiveError, resolveAgentRuntimeChannelConflict, runtimeDisplayName } from './agent-session-runtime'
 export type { CapabilityChange } from './capabilities-diff'

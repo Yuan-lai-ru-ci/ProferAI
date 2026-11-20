@@ -80,6 +80,8 @@ export interface Automation {
   /** 运行间隔（分钟），scheduleType==='interval' 时使用 */
   intervalMinutes: number
   /** 触发时刻 "HH:MM"，scheduleType==='daily'|'weekly'|'monthly' 时使用。支持多个时间点。 */
+  /** 创建宿主记录的IANA时区；旧任务缺省沿用原宿主本地时间。 */
+  timeZone?: string
   timeOfDay?: string[]
   /** 星期几（0=周日 … 6=周六），scheduleType==='weekly' 时使用。支持多选。 */
   dayOfWeek?: number[]
@@ -199,6 +201,8 @@ export interface CreateAutomationInput {
   scheduleType: AutomationScheduleType
   intervalMinutes: number
   /** 触发时刻（可多个）；兼容旧调用传单值 string */
+  /** IANA时区；跨Core不能用目标宿主时区静默替代。 */
+  timeZone?: string
   timeOfDay?: string | string[]
   /** 星期几（可多选）；兼容旧调用传单值 number */
   dayOfWeek?: number | number[]
@@ -235,6 +239,8 @@ export interface UpdateAutomationInput {
   scheduleType?: AutomationScheduleType
   intervalMinutes?: number
   /** 触发时刻（可多个）；兼容旧调用传单值 string */
+  /** IANA时区；跨Core不能用目标宿主时区静默替代。 */
+  timeZone?: string
   timeOfDay?: string | string[]
   /** 星期几（可多选）；兼容旧调用传单值 number */
   dayOfWeek?: number | number[]
@@ -284,9 +290,18 @@ export type AutomationPendingTrigger = Readonly<Pick<AutomationTriggerRecord,
   'triggerId' | 'scheduledAt' | 'boundSessionId' | 'targetSessionId' | 'runId' | 'error' | 'updatedAt'
 > & { status: 'queued' | 'blocked' | 'running' | 'interrupted' }>
 
+export interface AutomationMaintenanceInput {
+  operation: 'mirrors' | 'mirror_inspect' | 'mirror_restore' | 'mirror_resolve' | 'mirrors_retry' | 'outbox' | 'notification_retry'
+  coreGeneration?: number
+  workspaceId?: string
+  expectedHash?: string
+  id?: string
+}
+
 /** Automation 相关 IPC 通道常量 */
 export const AUTOMATION_IPC_CHANNELS = {
   /** 获取全部定时任务 */
+  MAINTENANCE: 'automation:maintenance',
   LIST: 'automation:list',
   /** 创建定时任务 */
   CREATE: 'automation:create',

@@ -9,7 +9,8 @@
  */
 
 import { spawn } from 'node:child_process'
-import { closeSync, existsSync, openSync } from 'node:fs'
+import { accessSync, closeSync, constants, existsSync, openSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 
 export interface GitCommandResult {
   ok: boolean
@@ -82,6 +83,15 @@ function describeArgs(args: string[]): string {
   return joined.length > 200 ? `${joined.slice(0, 200)}…` : joined
 }
 
+function resolveSafeCwd(workTree?: string): string {
+  const candidates = [workTree, (() => { try { return process.cwd() } catch { return undefined } })(), tmpdir()]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    try { accessSync(candidate, constants.X_OK); return candidate } catch { /* 试下一个 */ }
+  }
+  return '/'
+}
+
 function runGit(gitPath: string, args: string[], options: GitCommandOptions): Promise<GitCommandResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const fullArgs: string[] = []
@@ -90,7 +100,9 @@ function runGit(gitPath: string, args: string[], options: GitCommandOptions): Pr
   fullArgs.push(...args)
 
   // 工作区可能已被删除（会话目录清理中），此时仍要能执行 update-ref / cat-file 这类仓库级操作。
-  const cwd = options.workTree && existsSync(options.workTree) ? options.workTree : process.cwd()
+  // 服务若从不可进入的目录（如 /root）启动，process.cwd() 会让 git 的 posix_spawn 直接 EACCES，
+  // 所以这里挑一个当前进程确实有权进入的目录。
+  const cwd = resolveSafeCwd(options.workTree)
   const env: Record<string, string | undefined> = { ...process.env, ...options.env }
   // 采集绝不接受交互式凭据输入：没有控制台时提示会一直挂到超时。
   env.GIT_TERMINAL_PROMPT = '0'

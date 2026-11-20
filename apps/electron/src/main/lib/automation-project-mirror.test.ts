@@ -39,6 +39,7 @@ const {
   createAutomation,
   listAutomations,
   updateAutomation,
+  claimAutomationsForCore,
   __resetAutomationManagerForTests,
 } = await import('./automation-manager')
 const { projectAutomationsPath } = await import('./project-automation-store')
@@ -161,5 +162,15 @@ describe('项目定时任务镜像', () => {
 
     expect(readProjectFile(rootA).automations.map((item) => item.id)).not.toContain(task.id)
     expect(readProjectFile(rootB).automations.map((item) => item.id)).toContain(task.id)
+  })
+
+  test('Given Core已接管 When 旧manager被调用 Then 不读取恢复副本、不写旧文件', () => {
+    writeWorkspaces([managedEntry('default')])
+    createTask('id-default', 'keep task')
+    const before = readFileSync(automationsPath, 'utf8')
+    claimAutomationsForCore()
+    expect(() => listAutomations()).toThrow('Core接管')
+    expect(() => createTask('id-default', 'denied')).toThrow('Core接管')
+    expect(readFileSync(automationsPath, 'utf8')).toBe(before)
   })
 })

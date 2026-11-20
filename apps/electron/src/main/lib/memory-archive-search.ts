@@ -22,7 +22,7 @@
  * - 无需常驻进程、无需定时任务，天然适配"写后即查、查前刷新"。
  */
 
-import { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { extname, join, relative, resolve } from 'node:path'
@@ -179,6 +179,8 @@ export function createMemoryArchiveSearcher(memoryArchivePath: string) {
 
   const ensureOpen = () => {
     if (db) return
+    // 与数据库本身一样惰性加载：仅注册 Agent 工具时不应要求宿主已支持 SQLite。
+    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
     db = new DatabaseSync(':memory:')
     db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS mem_fts USING fts5(
       path,

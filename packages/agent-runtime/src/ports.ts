@@ -148,6 +148,10 @@ export interface PermissionPort {
   canUseTool?(input: ToolPermissionInput): Promise<PermissionDecision> | PermissionDecision
   createCanUseTool?(input: {
     sessionId: string
+    /** 真实业务 Run 及生命周期；宿主不从 Provider 会话或 UI 状态推断。 */
+    runId?: string
+    signal?: AbortSignal
+    runLifecycle?: { wait(requestId: string): void; resume(requestId: string): void }
     sendPermissionRequest: (request: import('@profer/shared').PermissionRequest) => void
     handleAskUser?: (sessionId: string, toolInput: Record<string, unknown>, signal: AbortSignal, sendAskUser: (request: AskUserRequest) => void) => Promise<RuntimePermissionResult>
     sendAskUserRequest?: (request: AskUserRequest) => void
@@ -237,12 +241,12 @@ export interface ProcessHandle {
 }
 
 export interface ProcessLifecyclePort {
-  onSpawn?(sessionId: string, pid: number, runtime: 'pi' | 'claude'): void
-  onTaskEvent?(sessionId: string, event: { taskId: string; type?: 'agent' | 'shell'; status: 'running' | 'completed' | 'failed' | 'stopped'; summary?: string; outputFile?: string }): void
+  onSpawn?(sessionId: string, pid: number, runtime: 'pi' | 'claude', attemptId?: string): void
+  onTaskEvent?(sessionId: string, event: { taskId: string; type?: 'agent' | 'shell'; status: 'running' | 'completed' | 'failed' | 'stopped'; summary?: string; outputFile?: string }, attemptId?: string): void
   getTaskOutput?(sessionId: string, taskId: string, options?: { block?: boolean; timeoutMs?: number }): Promise<import('@profer/shared').GetTaskOutputResult>
   /** 先校验任务归属和类型，再执行 providerStop；成功后才记录 stopped。 */
   stopTask?(sessionId: string, taskId: string, expectedType?: 'agent' | 'shell', providerStop?: () => Promise<void>): Promise<void>
-  onExit?(sessionId: string): void
+  onExit?(sessionId: string, attemptId?: string): void
 }
 export interface ProcessRegistrationInput {
   sessionId: string

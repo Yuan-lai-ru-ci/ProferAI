@@ -5,6 +5,7 @@
  * 上下文管理、并排模式、思考模式等。
  */
 
+import { ownsCoreChat, coreTargetsAtom, coreChannelsAtom, coreChannelsLoadedAtom } from './core-target-atoms'
 import { atom } from 'jotai'
 import { atomFamily, atomWithStorage } from 'jotai/utils'
 import { isChannelEnabledForChat } from '@profer/shared'
@@ -339,10 +340,14 @@ export const conversationModelAtomFamily = atomFamily((conversationId: string | 
     : conversation?.channelId && conversation.modelId
       ? { channelId: conversation.channelId, modelId: conversation.modelId }
       : get(selectedModelAtom)
-  if (!selection || !get(channelsLoadedAtom)) return null
-  const channel = get(channelsAtom).find((item) => item.id === selection.channelId)
+  const target = get(coreTargetsAtom)
+  const usesCore = ownsCoreChat(target) || Boolean(conversationId?.startsWith('core-chat:'))
+  const loaded = get(coreChannelsLoadedAtom)
+  const ready = usesCore ? loaded?.targetId === target.currentId && loaded.generation === target.generation : get(channelsLoadedAtom)
+  if (!selection || !ready) return null
+  const channel = (usesCore ? get(coreChannelsAtom) : get(channelsAtom)).find((item) => item.id === selection.channelId)
   if (!channel || !isChannelEnabledForChat(channel)
-    || (!get(authStatusAtom).isLoggedIn && isOfficialChannel(channel))
+    || (!usesCore && !get(authStatusAtom).isLoggedIn && isOfficialChannel(channel))
     || !channel.models.some((model) => model.id === selection.modelId && model.enabled)) return null
   return selection
 }))

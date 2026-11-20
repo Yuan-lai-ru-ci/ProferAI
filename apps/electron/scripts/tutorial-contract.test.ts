@@ -119,7 +119,9 @@ test('tutorial distinguishes plain MCP fields, paid generation checks, and real 
 test('tutorial browser identity and local-network boundaries match the current implementation', () => {
   const tutorial = read(resourcePath)
   const profile = read(resolve(repoRoot, 'apps/electron/src/main/lib/browser-profile-policy.ts'))
-  const policy = read(resolve(repoRoot, 'apps/electron/src/main/lib/browser-policy.ts'))
+  const desktopPolicy = read(resolve(repoRoot, 'apps/electron/src/main/lib/browser-policy.ts'))
+  expect(desktopPolicy).toContain("export * from '../../../../../packages/agent-runtime/src/browser-policy.ts'")
+  const policy = read(resolve(repoRoot, 'packages/agent-runtime/src/browser-policy.ts'))
   expect(profile).toContain("const GLOBAL_BROWSER_PROFILE_KEY = 'global-browser-profile'")
   expect(policy).toContain('公网页面不得访问本机或私网子资源')
   expect(tutorial).toContain('共用本机持久化登录身份')

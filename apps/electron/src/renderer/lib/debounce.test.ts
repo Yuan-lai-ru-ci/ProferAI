@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { createDebouncedCallback } from './debounce'
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -85,23 +85,38 @@ describe('createDebouncedCallback', () => {
     expect(debounced.pending()).toBe(true)
   })
 
-  test('maxWait：持续触发时至少每 maxWait 执行一次（避免落盘被无限推迟）', async () => {
+  test('maxWait：持续触发时至少每 maxWait 执行一次（避免落盘被无限推迟）', () => {
     const calls: number[] = []
-    // wait 30ms、maxWait 60ms；每 10ms 触发一次，永无静默期
-    const debounced = createDebouncedCallback((value: number) => calls.push(value), 30, {
+    const clock = spyOn(Date, 'now').mockReturnValue(0)
+    const debounced = createDebouncedCallback((value: number) => calls.push(value), 1000, {
       maxWait: 60,
     })
 
-    for (let i = 0; i < 12; i++) {
-      debounced(i)
-      await sleep(10)
-    }
+    try {
+      // 控制逻辑时钟，不把操作系统定时器的调度延迟当成 debounce 契约。
+      for (let i = 0; i < 6; i++) {
+        clock.mockReturnValue(i * 10)
+        debounced(i)
+      }
+      expect(calls).toEqual([])
+      clock.mockReturnValue(60)
+      debounced(6)
+      expect(calls).toEqual([6])
+      expect(debounced.pending()).toBe(false)
 
-    // 未被无限推迟：至少执行了一次，且取值在递增（证明是“突发中途”执行，而不是等到结束）
-    expect(calls.length).toBeGreaterThanOrEqual(1)
-    expect(calls[0]).toBeGreaterThanOrEqual(4)
-    const increasing = calls.every((value, index) => index === 0 || value > (calls[index - 1] ?? -1))
-    expect(increasing).toBe(true)
+      // 下一次调用必须开启新一轮，flush 仍取最新参数。
+      clock.mockReturnValue(70)
+      debounced(7)
+      clock.mockReturnValue(80)
+      debounced(8)
+      expect(calls).toEqual([6])
+      expect(debounced.pending()).toBe(true)
+      debounced.flush()
+      expect(calls).toEqual([6, 8])
+    } finally {
+      debounced.cancel()
+      clock.mockRestore()
+    }
   })
 
   test('maxWait 触发后重新开始计时（不会每帧都执行）', async () => {

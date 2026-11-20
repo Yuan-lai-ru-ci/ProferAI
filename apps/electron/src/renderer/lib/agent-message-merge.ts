@@ -1,4 +1,4 @@
-import { getAgentMessageIdentity } from './agent-message-identity'
+import { getAgentMessageIdentity, preserveMessageCreatedAt } from './agent-message-identity'
 
 /**
  * 将持久化与实时转录合并，同时以产品消息身份（兼容 UUID）去重。
@@ -6,7 +6,7 @@ import { getAgentMessageIdentity } from './agent-message-identity'
  * 实时消息会覆盖同 UUID 的持久化副本，但保留该消息在持久化转录中的原有位置。
  * 这样切换会话后既不会重复渲染 `/compact`，也不会把 live 副本错误挪到对话末尾。
  */
-export function mergeMessagesByUuid<T extends { type?: unknown; uuid?: unknown; _provenance?: unknown }>(
+export function mergeMessagesByUuid<T extends { type?: unknown; uuid?: unknown; _provenance?: unknown; _createdAt?: unknown }>(
   persisted: readonly T[],
   live: readonly T[],
 ): T[] {
@@ -28,7 +28,7 @@ export function mergeMessagesByUuid<T extends { type?: unknown; uuid?: unknown; 
     }
 
     // 新副本（特别是 live 的 partial/final）更新内容，但不改变原有时间顺序。
-    merged[existingIndex] = message
+    merged[existingIndex] = preserveMessageCreatedAt(merged[existingIndex]!, message)
   }
 
   persisted.forEach(appendOrReplace)

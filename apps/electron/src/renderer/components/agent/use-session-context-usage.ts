@@ -1,3 +1,5 @@
+import { useAtomValue } from 'jotai'
+import { coreTargetsAtom, ownsCoreResources } from '@/atoms/core-target-atoms'
 import { useEffect, useMemo, useState } from 'react'
 import type { AgentContextUsageSnapshot } from '@profer/shared'
 
@@ -17,6 +19,8 @@ export function readSessionContextUsage(
 }
 
 export function useSessionContextUsage(sessionId: string, live?: LiveUsage | null): AgentContextUsageSnapshot | null {
+  const target = useAtomValue(coreTargetsAtom)
+  const coreOwned = ownsCoreResources(target)
   const { inputTokens, outputTokens, contextWindow, cacheReadTokens, cacheCreationTokens, usageUpdatedAt } = live ?? {}
   const current = useMemo(() => inputTokens != null && Number.isSafeInteger(inputTokens) && inputTokens > 0
     ? { inputTokens, outputTokens, contextWindow, cacheReadTokens, cacheCreationTokens, usageUpdatedAt }
@@ -25,12 +29,13 @@ export function useSessionContextUsage(sessionId: string, live?: LiveUsage | nul
   const hasCurrent = current !== null
   const compacting = !!live?.isCompacting
   const running = !!live?.running
-  const request = useMemo(() => ({ sessionId }), [sessionId, hasCurrent, compacting, running])
+  const request = useMemo(() => ({ sessionId }), [sessionId, hasCurrent, compacting, running, target.currentId, target.generation])
   const [saved, setSaved] = useState<{ request: typeof request; usage: AgentContextUsageSnapshot } | null>(null)
   useEffect(() => {
-    if (hasCurrent || !request.sessionId) return
+    if (coreOwned || hasCurrent || !request.sessionId) return
     return readSessionContextUsage(request.sessionId, window.electronAPI.getAgentContextUsageSnapshot,
       usage => setSaved({ request, usage }))
-  }, [request, hasCurrent])
+  }, [request, hasCurrent, coreOwned])
+  if (coreOwned) return null
   return current ?? (saved?.request === request ? saved.usage : null)
 }

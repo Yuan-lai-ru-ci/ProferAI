@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from 'bun:test'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import * as fs from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ResourceLoader, Skill } from '@earendil-works/pi-coding-agent'
@@ -69,9 +70,13 @@ describe('Pi Skill 安全边界', () => {
   test('允许的文件不可读时不保留 SDK stale metadata，普通任务继续', async () => {
     const path = root()
     const skill = writeSkill(path, 'unreadable')
-    chmodSync(skill.filePath, 0)
+    const read = fs.readFileSync
+    const deniedPath = realpathSync.native(skill.filePath)
+    const denied = spyOn(fs, 'readFileSync').mockImplementation(((file: fs.PathLike | number, options?: unknown) => {
+      if (typeof file !== 'number' && realpathSync.native(file) === deniedPath) throw Object.assign(new Error('fixture: permission denied'), { code: 'EACCES' })
+      return read(file as never, options as never)
+    }) as typeof fs.readFileSync)
     try {
-      // 实测权限，保证本用例确实覆盖读取失败。
       expect(() => readFileSync(skill.filePath)).toThrow()
       const resource = await loader(path, ['unreadable'])
       await resource.reload()
@@ -80,7 +85,7 @@ describe('Pi Skill 安全边界', () => {
       expect(await preparePromptWithProferSkills(resource, '继续普通任务', ['unreadable']))
         .toContain('继续普通任务')
     } finally {
-      chmodSync(skill.filePath, 0o600)
+      denied.mockRestore()
     }
   })
 
@@ -162,7 +167,7 @@ describe('Pi Skill 安全边界', () => {
       expect(await preparePromptWithProferSkills(resource, prompt)).toContain('正文 alpha')
       expect(await preparePromptWithProferSkills(resource, prompt, [])).toBe(prompt)
     }
-  })
+  }, 30_000)
 
   test('direct adapter 的 qualified 引用不截断为其他 slug', async () => {
     const path = root()

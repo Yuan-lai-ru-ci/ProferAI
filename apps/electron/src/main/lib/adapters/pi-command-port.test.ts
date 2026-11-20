@@ -32,6 +32,7 @@ function bashDefinition(commands: CommandExecutionPort, cwd: string, observed: A
   registerShell: (_input) => { events.push('spawn'); return { id: 'task-1', startTime: 1 } },
 }) {
   const fakeSdk = {
+    defineTool: (definition: unknown) => definition,
     createBashToolDefinition: (_cwd: string, input: { spawnHook: (request: { command: string; cwd: string; env: NodeJS.ProcessEnv }) => { command: string; cwd: string; env: NodeJS.ProcessEnv }; operations: { exec: (command: string, cwd: string, options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; onData: (data: Buffer) => void }) => Promise<{ exitCode: number | null }> } }) => ({
       name: 'bash',
       async execute(_id: string, params: { command: string }, signal: AbortSignal, onUpdate: (data: string) => void) {

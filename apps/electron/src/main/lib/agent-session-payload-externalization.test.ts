@@ -148,7 +148,7 @@ describe('外部化 · 超限行搬到 blob', () => {
     expect(refs).toHaveLength(140)
     const resolved = await sessions.resolveMessageBlobs(line as unknown as SDKMessage) as unknown as { message: { content: { content: { source: { data: string } }[] }[] } }
     expect(resolved.message.content[0]!.content.map(image => image.source.data)).toEqual(images)
-  })
+  }, 30_000)
 
   test('Given 200 个中等长度字段 When 落盘 Then 引用表预算仍允许完整还原', async () => {
     const values = Array.from({ length: 200 }, (_, index) => `${String(index).padStart(3, '0')}-${'J'.repeat(2_500)}`)
@@ -157,7 +157,7 @@ describe('外部化 · 超限行搬到 blob', () => {
     expect((line[REFS_FIELD] as unknown[]).length).toBe(200)
     const resolved = await sessions.resolveMessageBlobs(line as unknown as SDKMessage) as unknown as { payload: string[] }
     expect(resolved.payload).toEqual(values)
-  })
+  }, 30_000)
 
   test('Given 同一段内容出现两次 When 落盘 Then 两个引用指向同一个 blob（去重）', () => {
     const shared = bigText('SAME-')

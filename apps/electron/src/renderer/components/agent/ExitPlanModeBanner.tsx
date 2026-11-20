@@ -100,6 +100,8 @@ export function ExitPlanModeBanner({ sessionId, onRequestStop }: ExitPlanModeBan
     try {
       await window.electronAPI.respondExitPlanMode({
         requestId: request.requestId,
+        sessionId: request.sessionId,
+        runId: request.runId,
         action,
         feedback: action === 'feedback' ? feedbackText.trim() : undefined,
       })

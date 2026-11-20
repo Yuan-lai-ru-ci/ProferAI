@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { delimiter, dirname, join, win32 } from 'node:path'
+import { delimiter, posix, win32 } from 'node:path'
 import type { RuntimeStatus } from '@profer/shared'
 import { getBundledCliPath } from './config-paths'
 
@@ -71,7 +71,7 @@ export function prependPathEntry(
 }
 
 export function dirnameForPlatform(path: string, platform: NodeJS.Platform): string {
-  return platform === 'win32' ? win32.dirname(path) : dirname(path)
+  return platform === 'win32' ? win32.dirname(path) : posix.dirname(path)
 }
 
 /**
@@ -96,7 +96,7 @@ export function resolvePosixShellPath(
 
   for (const directory of (processEnv[pathKey] ?? '').split(pathDelimiter)) {
     const trimmedDirectory = directory.trim()
-    if (trimmedDirectory) candidates.push(join(trimmedDirectory, 'bash'))
+    if (trimmedDirectory) candidates.push(posix.join(trimmedDirectory, 'bash'))
   }
 
   return candidates.find(pathExists)
@@ -134,8 +134,8 @@ function getWslCommandPath(
   const systemRoot = processEnv.SystemRoot ?? processEnv.SYSTEMROOT ?? processEnv.windir ?? processEnv.WINDIR
   const candidates = systemRoot
     ? [
-        join(systemRoot, 'System32', 'wsl.exe'),
-        join(systemRoot, 'Sysnative', 'wsl.exe'),
+        win32.join(systemRoot, 'System32', 'wsl.exe'),
+        win32.join(systemRoot, 'Sysnative', 'wsl.exe'),
       ]
     : []
 

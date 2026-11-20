@@ -8,13 +8,14 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { BriefcaseBusiness, AlertTriangle, Loader2, Settings2 } from 'lucide-react'
 import { AgentComposerToolMenuItem, AgentComposerToolPopover, AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { Switch } from '@profer/ui/primitives/switch'
-import { agentPresetCacheKey, agentPresetsLoadedAtom, workspacePresetsAtom } from '@/atoms/agent-preset-atoms'
+import { coreScopedPresetCacheKey, agentPresetsLoadedAtom, workspacePresetsAtom } from '@/atoms/agent-preset-atoms'
 import { agentSessionsAtom, workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import type { AgentEffort, AgentPreset, PresetReference, ProferPermissionMode } from '@profer/shared'
 import { cn } from '@/lib/utils'
 import { referenceForSelectablePreset, selectableAgentPresets, selectablePresetMatchesReference } from './preset-selector-utils'
@@ -62,6 +63,8 @@ interface PresetSelectorProps {
 export function PresetSelector({ sessionId, persistedPresetId, persistedPresetReference, persistedRevision, workspaceSlug, open, onOpenChange, onManagePresets }: PresetSelectorProps): React.ReactElement {
   const [presets, setPresets] = useAtom(workspacePresetsAtom(workspaceSlug))
   const loadedPresetCaches = useAtomValue(agentPresetsLoadedAtom)
+  const coreTarget = useAtomValue(coreTargetsAtom)
+  const store = useStore()
   const setLoadedPresetCaches = useSetAtom(agentPresetsLoadedAtom)
   const [internalOpen, setInternalOpen] = React.useState(false)
   const [switchingReference, setSwitchingReference] = React.useState<PresetReference | null>(null)
@@ -78,13 +81,21 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
   const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
 
   React.useEffect(() => {
+    let active = true
+    const target = coreTarget
+    const isCurrent = (): boolean => {
+      const current = store.get(coreTargetsAtom)
+      return active && current.currentId === target.currentId && current.generation === target.generation
+    }
     void listComposerPresets(workspaceSlug)
       .then((list) => {
+        if (!isCurrent()) return
         setPresets(list)
-        setLoadedPresetCaches((prev) => new Set(prev).add(agentPresetCacheKey(workspaceSlug)))
+        setLoadedPresetCaches((prev) => new Set(prev).add(coreScopedPresetCacheKey(workspaceSlug, coreTarget)))
       })
-      .catch((error) => console.error('[PresetSelector] 加载工作区预设失败:', error))
-  }, [workspaceSlug, capabilitiesVersion, setPresets, setLoadedPresetCaches])
+      .catch((error) => { if (isCurrent()) console.error('[PresetSelector] 加载工作区预设失败:', error) })
+    return () => { active = false }
+  }, [workspaceSlug, capabilitiesVersion, coreTarget, store, setPresets, setLoadedPresetCaches])
 
   // Manager 返回当前工作区可见预设；明确停用项不能出现在菜单中（含元预设）。
   const availablePresets = React.useMemo(
@@ -94,7 +105,7 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
   const current = persistedPresetReference
     ? availablePresets.find((preset) => selectablePresetMatchesReference(preset, persistedPresetReference))
     : availablePresets.find((preset) => preset.id === persistedPresetId)
-  const presetsLoaded = loadedPresetCaches.has(agentPresetCacheKey(workspaceSlug))
+  const presetsLoaded = loadedPresetCaches.has(coreScopedPresetCacheKey(workspaceSlug, coreTarget))
   const presetRequired = presetsLoaded && availablePresets.length > 0 && !current
   const [showPresetRequired, setShowPresetRequired] = React.useState(false)
   React.useEffect(() => {
@@ -147,8 +158,12 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
           onOpenChange?.(nextOpen)
           // 打开时刷新，保证技能页导入/编辑后的最新预设可见
           if (nextOpen) {
+            const target = store.get(coreTargetsAtom)
             void listComposerPresets(workspaceSlug)
-              .then(setPresets)
+              .then(list => {
+                const current = store.get(coreTargetsAtom)
+                if (current.currentId === target.currentId && current.generation === target.generation) setPresets(list)
+              })
               .catch((error) => console.error('[PresetSelector] 刷新工作区预设失败:', error))
           }
       }}

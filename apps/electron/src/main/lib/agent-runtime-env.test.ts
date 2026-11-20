@@ -24,6 +24,7 @@ describe('Agent runtime CLI PATH', () => {
       platform: 'darwin',
       pathDelimiter: ':',
       processEnv: { PATH: '/usr/bin:/bin', SHELL: '/bin/zsh' },
+      pathExists: (path) => path === '/bin/bash',
       runtimeStatus: {
         node: { available: false, path: null, version: null, error: null },
         bun: { available: true, path: '/Users/alice/.bun/bin/bun', version: '1.4.0', source: 'system', error: null },

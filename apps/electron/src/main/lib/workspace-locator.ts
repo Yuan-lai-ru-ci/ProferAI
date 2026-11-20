@@ -184,7 +184,7 @@ function loadEntries(): Map<string, AgentWorkspaceIndexEntry> {
   if (snapshot && snapshot.signature === signature) return snapshot.entries
 
   const entries = new Map<string, AgentWorkspaceIndexEntry>()
-  const data = readJsonFileSafe<{ workspaces?: unknown }>(indexPath)
+  const data = readJsonFileSafe<{ workspaces?: unknown }>(indexPath, true)
   if (data && Array.isArray(data.workspaces)) {
     for (const raw of data.workspaces) {
       if (!raw || typeof raw !== 'object') continue

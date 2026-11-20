@@ -9,6 +9,8 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
+import { coreSessionNavigationPhaseAtom } from '@/atoms/core-target-atoms'
+import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import { tabsAtom, activeTabIdAtom, activeTabAtom, tabIndicatorMapAtom, createBrowserTabId } from '@/atoms/tab-atoms'
 import { BrowserShortcutBridge } from '@/components/browser/BrowserShortcutBridge'
 import { BrowserGuestHost } from '@/components/browser/BrowserGuestHost'
@@ -97,6 +99,7 @@ const GROUP_COLLAPSE_SNAP_MS = 160
 const GROUP_COLLAPSE_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)'
 
 export function MainArea(): React.ReactElement {
+  const coreNavigationPhase = useAtomValue(coreSessionNavigationPhaseAtom)
   const tabs = useAtomValue(tabsAtom)
   // 浏览器订阅只随会话变化；标签排序/标题更新不能重新触发状态恢复。
   const tabsRef = React.useRef(tabs)
@@ -516,10 +519,11 @@ export function MainArea(): React.ReactElement {
   }, [tabs.length])
 
   React.useEffect(() => {
+    if (coreNavigationPhase !== null) return
     if (tabs.length > 0 && !activeTabId) {
       setActiveTabId(tabs[0]!.id)
     }
-  }, [tabs, activeTabId, setActiveTabId])
+  }, [tabs, activeTabId, coreNavigationPhase, setActiveTabId])
 
   // 对话区表面必须显式上色（bg-content-area）：皮肤把 --content-area 定义为「比侧栏浅」
   // 的内容区色，缺这层底色时面板会透出外层 .shell-bg 缝隙渐变（比侧栏更深），
@@ -608,6 +612,12 @@ export function MainArea(): React.ReactElement {
                     <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
                       <AutomationFormView />
                     </React.Suspense>
+                  ) : !contentTabId && coreNavigationPhase !== null ? (
+                    <div className="flex h-full flex-col items-center justify-center gap-4 text-muted-foreground" data-core-session-empty>
+                      {coreNavigationPhase === 'loading' ? '正在恢复当前内核会话…'
+                        : coreNavigationPhase === 'error' ? '当前内核会话加载失败，请重新连接'
+                          : <><WelcomeEmptyState variant="inline" /><p className="text-sm">选择左侧会话，或新建会话</p></>}
+                    </div>
                   ) : tabs.length === 0 ? (
                     <React.Suspense fallback={LAZY_VIEW_FALLBACK}>
                       <WelcomeView />

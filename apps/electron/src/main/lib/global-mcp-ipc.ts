@@ -4,6 +4,14 @@ import { AGENT_IPC_CHANNELS, type GlobalMcpDefinition } from '@profer/shared'
 import { listGlobalMcpServers, saveGlobalMcpServer, deleteGlobalMcpServer } from './global-mcp-store'
 import { getWorkspaceMcpConfig, listAgentWorkspaces, listWorkspaceGlobalMcpServers } from './agent-workspace-manager'
 import { assertSafeSkillSegment } from './skill-path-security'
+import { localCoreOwnsBusinessData } from './core-business-ownership'
+import { listCoreTargets } from './core-target-service'
+
+function assertDesktopGlobalMcpAvailable(): void {
+  if (listCoreTargets().currentId !== 'local' || localCoreOwnsBusinessData()) {
+    throw new Error('当前 Core 尚未实现全局 MCP 管理；不会读取或写入桌面本机配置')
+  }
+}
 
 /** 只有之前实际使用全局定义、且配置已变化/撤销的工作区需要释放旧连接。 */
 async function retireChangedConnections(previous: GlobalMcpDefinition | undefined, next?: GlobalMcpDefinition): Promise<void> {
@@ -32,14 +40,17 @@ function retireAfterSave(previous: GlobalMcpDefinition | undefined, next?: Globa
 
 export function registerGlobalMcpIpc(): void {
   ipcMain.handle(AGENT_IPC_CHANNELS.LIST_GLOBAL_MCP, () => {
+    assertDesktopGlobalMcpAvailable()
     const known = new Set(listAgentWorkspaces().filter(ws => !ws.isDeleted).map(ws => ws.id))
     return listGlobalMcpServers().map(row => ({ ...row, workspaceIds: row.workspaceIds.filter(id => known.has(id)) }))
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.LIST_WORKSPACE_GLOBAL_MCP, (_, workspaceSlug: string) => {
+    assertDesktopGlobalMcpAvailable()
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     return listWorkspaceGlobalMcpServers(workspaceSlug)
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.SAVE_GLOBAL_MCP, async (_, definition: GlobalMcpDefinition, mode: 'create' | 'update') => {
+    assertDesktopGlobalMcpAvailable()
     const known = new Set(listAgentWorkspaces().filter(ws => !ws.isDeleted).map(ws => ws.id))
     if (!Array.isArray(definition?.workspaceIds) || !definition.workspaceIds.every(id => known.has(id))) throw new Error('请选择仍然存在的工作区')
     const previous = mode === 'update' ? listGlobalMcpServers().find(row => row.name === definition.name) : undefined
@@ -47,6 +58,7 @@ export function registerGlobalMcpIpc(): void {
     await retireAfterSave(previous, definition)
   })
   ipcMain.handle(AGENT_IPC_CHANNELS.DELETE_GLOBAL_MCP, async (_, name: string) => {
+    assertDesktopGlobalMcpAvailable()
     const previous = listGlobalMcpServers().find(row => row.name === name)
     deleteGlobalMcpServer(name)
     await retireAfterSave(previous)

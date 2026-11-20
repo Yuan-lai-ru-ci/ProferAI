@@ -1,3 +1,4 @@
+import { registerCoreResourceHandler } from './core-resource-routing'
 import { ipcMain } from 'electron'
 import { GLOBAL_SKILL_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS } from '@profer/shared'
 import {
@@ -24,67 +25,67 @@ import {
 import { assertSafeSkillSegment } from './skill-path-security'
 
 export function registerGlobalSkillIpc(): void {
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.LIST, async (_, workspaceSlug?: string) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.LIST, async (_, workspaceSlug?: string) => {
     if (workspaceSlug !== undefined) assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     return listGlobalSkills(workspaceSlug)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.READ, async (_, skillId: string) => readGlobalSkillContent(skillId))
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.READ_WORKSPACE_COPY, async (_, workspaceSlug: string, workspaceSkillId: string) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.READ, async (_, skillId: string) => readGlobalSkillContent(skillId))
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.READ_WORKSPACE_COPY, async (_, workspaceSlug: string, workspaceSkillId: string) => {
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     assertSafeSkillSegment(workspaceSkillId, 'workspaceSkillId')
     return readWorkspaceSkillCopyContent(workspaceSlug, workspaceSkillId)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.SAVE_WORKSPACE_COPY, async (_, workspaceSlug: string, workspaceSkillId: string, content: string): Promise<void> => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.SAVE_WORKSPACE_COPY, async (_, workspaceSlug: string, workspaceSkillId: string, content: string): Promise<void> => {
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     assertSafeSkillSegment(workspaceSkillId, 'workspaceSkillId')
     saveWorkspaceSkillCopyContent(workspaceSlug, workspaceSkillId, content)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.SAVE, async (_, skillId: string, content: string, workspaceSlug: string, scope: 'global' | 'workspace') => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.SAVE, async (_, skillId: string, content: string, workspaceSlug: string, scope: 'global' | 'workspace') => {
     if (scope !== 'global' && scope !== 'workspace') throw new Error('必须明确选择全局版本或当前工作区')
     if (scope === 'workspace') assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     return editGlobalSkill(skillId, workspaceSlug, scope, content)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_USER, async (_, skillId: string, slug?: string) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_USER, async (_, skillId: string, slug?: string) => {
     if (slug !== undefined) assertSafeSkillSegment(slug.trim(), 'global Skill slug')
     return copyGlobalSkillToUserGlobal(skillId, slug)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, async (_, slug: string, name: string, description: string, content: string) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, async (_, slug: string, name: string, description: string, content: string) => {
     assertSafeSkillSegment(slug.trim(), 'global Skill slug')
     return createUserGlobalSkill(slug, name, description, content)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_WORKSPACE, async (_, skillId: string, workspaceSlug: string) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_WORKSPACE, async (_, skillId: string, workspaceSlug: string) => {
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     return copyGlobalSkillToWorkspace(skillId, workspaceSlug)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.GET_DELETE_BLOCKERS, async (_, skillId: string) => getGlobalSkillDeleteBlockers(skillId))
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.DELETE_USER, async (_, skillId: string, confirmationToken?: string) => deleteUserGlobalSkill(skillId, confirmationToken))
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.SET_ENABLED, async (_, workspaceSlug: string, skillId: string, enabled: boolean) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.GET_DELETE_BLOCKERS, async (_, skillId: string) => getGlobalSkillDeleteBlockers(skillId))
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.DELETE_USER, async (_, skillId: string, confirmationToken?: string) => deleteUserGlobalSkill(skillId, confirmationToken))
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.SET_ENABLED, async (_, workspaceSlug: string, skillId: string, enabled: boolean) => {
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     return setGlobalSkillEnabled(workspaceSlug, skillId, enabled)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.RESTORE, async (_, workspaceSlug: string, skillId: string) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.RESTORE, async (_, workspaceSlug: string, skillId: string) => {
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     return restoreGlobalSkill(workspaceSlug, skillId)
   })
-  ipcMain.handle(GLOBAL_SKILL_IPC_CHANNELS.GET_OVERRIDES, async (_, workspaceSlug: string) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.GET_OVERRIDES, async (_, workspaceSlug: string) => {
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     return getWorkspaceGlobalSkillOverrides(workspaceSlug)
   })
 
-  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.LIST, async () => listMasterSkills())
-  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.READ, async (_, slug: string) => readMasterSkillContent(slug))
-  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.SAVE, async (): Promise<never> => {
+  registerCoreResourceHandler(SKILL_MASTER_IPC_CHANNELS.LIST, async () => listMasterSkills())
+  registerCoreResourceHandler(SKILL_MASTER_IPC_CHANNELS.READ, async (_, slug: string) => readMasterSkillContent(slug))
+  registerCoreResourceHandler(SKILL_MASTER_IPC_CHANNELS.SAVE, async (): Promise<never> => {
     throw new Error('旧元 Skill 写接口已停用，请通过全局 Skill 体系复制后编辑')
   })
-  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.RENAME_META, async (): Promise<never> => {
+  registerCoreResourceHandler(SKILL_MASTER_IPC_CHANNELS.RENAME_META, async (): Promise<never> => {
     throw new Error('旧元 Skill 写接口已停用，请通过全局 Skill 体系复制后编辑')
   })
-  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.LIST_HISTORY, async (_, slug: string) => listMasterSkillHistory(slug))
-  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.ROLLBACK, async (): Promise<never> => {
+  registerCoreResourceHandler(SKILL_MASTER_IPC_CHANNELS.LIST_HISTORY, async (_, slug: string) => listMasterSkillHistory(slug))
+  registerCoreResourceHandler(SKILL_MASTER_IPC_CHANNELS.ROLLBACK, async (): Promise<never> => {
     throw new Error('旧元 Skill 写接口已停用，请通过全局 Skill 体系复制后编辑')
   })
-  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.SYNC_TO_WORKSPACES, async (): Promise<never> => {
+  registerCoreResourceHandler(SKILL_MASTER_IPC_CHANNELS.SYNC_TO_WORKSPACES, async (): Promise<never> => {
     throw new Error('旧元 Skill 同步接口已停用，请使用全局 Skill 的工作区副本功能')
   })
-  ipcMain.handle(SKILL_MASTER_IPC_CHANNELS.DETECT_CONFLICT, async (_, workspaceSlug: string, skillSlug: string) => detectSkillConflict(workspaceSlug, skillSlug))
+  registerCoreResourceHandler(SKILL_MASTER_IPC_CHANNELS.DETECT_CONFLICT, async (_, workspaceSlug: string, skillSlug: string) => detectSkillConflict(workspaceSlug, skillSlug))
 }

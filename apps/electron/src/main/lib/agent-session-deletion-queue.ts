@@ -65,6 +65,22 @@ function isRequest(value: unknown): value is SessionDeletionRequest {
     && typeof candidate.attempts === 'number'
 }
 
+const isTransferRequest = (value: unknown): value is SessionDeletionRequest => {
+  if (!isRequest(value)) return false
+  const request = value as SessionDeletionRequest
+  const ids = request.sessionIds
+  return /^[a-zA-Z0-9_-]{1,160}$/.test(request.id)
+    && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(request.sessionId)
+    && !request.sessionId.endsWith('.')
+    && ids.length > 0 && ids.length <= 1000
+    && ids.every(id => /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(id) && !id.endsWith('.'))
+    && new Set(ids).size === ids.length && ids.includes(request.sessionId)
+    && (request.workspaceId === undefined || (typeof request.workspaceId === 'string' && request.workspaceId.length > 0))
+    && Number.isFinite(request.requestedAt) && request.requestedAt >= 0
+    && ['user', 'workspace', 'resume'].includes(request.reason)
+    && Number.isSafeInteger(request.attempts) && request.attempts >= 0
+}
+
 /** 由请求列表推导待删除集合；任何异常都降级为空集合，绝不冒泡到列表读取。 */
 function buildPendingIds(requests: SessionDeletionRequest[]): Set<string> {
   const next = new Set<string>()
@@ -217,6 +233,33 @@ export function completeSessionDeletion(requestId: string): void {
   load()
   if (!state!.requests.some((request) => request.id === requestId)) return
   commit(state!.requests.filter((request) => request.id !== requestId))
+}
+
+/** 交接读取必须完整且只读：不能把损坏/未来版本队列降级为空后出队。 */
+export function listSessionDeletionRequestsForTransfer(): SessionDeletionRequest[] {
+  for (const path of [queuePath(), `${queuePath()}.tmp`]) {
+    if (!existsSync(path)) continue
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''))
+    if (!parsed || typeof parsed !== 'object' || !('version' in parsed) || parsed.version !== 1
+      || !('requests' in parsed) || !Array.isArray(parsed.requests) || !parsed.requests.every(isTransferRequest)) throw new Error('历史删除队列损坏或版本不支持，未执行交接')
+    const requests = parsed.requests as SessionDeletionRequest[]
+    if (new Set(requests.map(item => item.id)).size !== requests.length) throw new Error('历史删除请求ID重复，未执行交接')
+    return structuredClone(requests)
+  }
+  return []
+}
+
+/** 仅在Core已持久确认且源快照未变化时出队，保留期间新到达的请求。 */
+export function acknowledgeTransferredSessionDeletions(accepted: readonly SessionDeletionRequest[]): void {
+  if (!accepted.length) return
+  const current = listSessionDeletionRequestsForTransfer()
+  const wanted = new Map(accepted.map(request => [request.id, request]))
+  for (const request of current) {
+    const original = wanted.get(request.id)
+    if (original && JSON.stringify(original) !== JSON.stringify(request)) throw new Error('历史删除请求在交接期间变化，旧队列保留')
+  }
+  const next = current.filter(request => !wanted.has(request.id))
+  if (next.length !== current.length) commit(next)
 }
 
 /** 记录一次失败；达到上限时放弃（会话会重新出现在列表里）。 */

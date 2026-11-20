@@ -4,6 +4,7 @@ import { createConnection } from 'net'
 import { existsSync } from 'fs'
 import { getDevInstanceId, readUserDataDirSwitch, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
+import { localCoreOwnsBusinessData } from './lib/core-business-ownership'
 import { STARTUP_STAGE_BOOTSTRAP_FAILED, STARTUP_STAGE_MAIN_LOADED, STARTUP_STAGE_WINDOW_CREATED, writeStartupProbe } from './lib/startup-probe'
 import { flushSDKMessagePersistence } from './lib/agent-session-manager'
 import { flushAgentContextUsageWrites } from './lib/agent-context-usage-store'
@@ -175,8 +176,14 @@ import { createElectronAgentRewindService } from './lib/agent-rewind-host'
 import { setRemoteServiceEnabled, startRemoteService, stopRemoteService } from './lib/remote-service'
 import { startAgentFabricService, stopAgentFabricService } from './lib/agent-fabric/agent-fabric-service'
 import { createTray, destroyTray, getTray } from './tray'
-import { initializeRuntime } from './lib/runtime-init'
+import { getRuntimeStatus, initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills, VITE_DEV_SERVER_URL } from './lib/config-paths'
+import { getConfigDir } from './lib/config-paths'
+import { getWorkspacesRootPath } from './lib/workspace-locator'
+import { LocalCoreLifecycle } from './lib/core-lifecycle'
+import { attachLocalCoreClient, detachLocalCoreClient } from './lib/core-local-bridge'
+import { listSessionDeletionRequestsForTransfer, acknowledgeTransferredSessionDeletions, type SessionDeletionRequest } from './lib/agent-session-deletion-queue'
+import { setLocalCoreClient, activateSavedCoreTarget, getCurrentCoreTargetId as readSavedCurrentCoreTargetId } from './lib/core-target-service'
 import { configureGlobalSkillSystem, ensureGlobalSkillSystemReady } from './lib/global-skill-manager'
 import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
@@ -1046,6 +1053,9 @@ async function bootstrap(): Promise<void> {
   registerIpcHandlers()
   registerPluginIpcHandlers()
 
+  // 本地 Core 组合模式显式启用，默认桌面 Agent 链仍保持 Electron 本地执行。
+  void safeAwait('startLocalCore', startLocalCoreIfEnabled)
+
   // 远程服务（remote-service）：显式启动参数 PROFER_REMOTE=1 兼容保留；
   // 设置页开启「启用移动端连接」后，下次启动自动恢复监听（正式版与开发版一致）。
   // 开发版默认端口 7789、正式版 7788，端口已隔离，dev 与打包版并存不会互相抢占。
@@ -1292,6 +1302,66 @@ app.on('window-all-closed', () => {
   }
 })
 
+let localCoreLifecycle: LocalCoreLifecycle | null = null
+let stopLocalCoreResourceSync: (() => void) | undefined
+
+async function startLocalCoreIfEnabled(): Promise<void> {
+  if (process.env.PROFER_CORE_LOCAL !== '1') {
+    void activateSavedCoreTarget()
+    return
+  }
+  const { claimWorkspaceIndexForCore } = await import('./lib/agent-workspace-manager')
+  claimWorkspaceIndexForCore()
+  const { claimAutomationsForCore } = await import('./lib/automation-manager')
+  claimAutomationsForCore()
+  localCoreLifecycle = new LocalCoreLifecycle({
+    configDir: getConfigDir(),
+    workspaceRoot: getWorkspacesRootPath(),
+    resourcesPath: process.resourcesPath,
+    packaged: app.isPackaged,
+    bunCommand: process.env.PROFER_BUN_PATH ?? getRuntimeStatus()?.bun?.path ?? undefined,
+    // 凭据在每次发送时由桌面解析，经已鉴权请求传递；不冻结启动时快照。
+    onOutput: line => { if (line) console.log(`[Core] ${line}`) },
+  })
+  const { setLocalCorePublisher } = await import('./lib/core-local-bridge')
+  setLocalCorePublisher((channel, payload) => { for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(channel, payload) })
+  let started: Awaited<ReturnType<typeof localCoreLifecycle.start>>
+  try {
+    started = await localCoreLifecycle.start()
+  } catch (error) {
+    const { setLocalCoreStartFailure } = await import('./lib/core-local-bridge')
+    setLocalCoreStartFailure(error instanceof Error ? error.message : String(error))
+    throw error
+  }
+  const localResources = await import('./lib/core-local-resources')
+  await localResources.syncLocalCoreChannels(started.client)
+  stopLocalCoreResourceSync?.()
+  stopLocalCoreResourceSync = localResources.maintainLocalCoreChannels(started.client)
+  attachLocalCoreClient(started.client)
+  setLocalCoreClient(started.client, await started.client.identity())
+  await transferLegacySessionDeletions(started.client)
+  if (readSavedCurrentCoreTargetId() !== 'local') void activateSavedCoreTarget()
+}
+
+async function transferLegacySessionDeletions(client: import('./lib/core-client').CoreClient): Promise<void> {
+  let requests: SessionDeletionRequest[]
+  try { requests = listSessionDeletionRequestsForTransfer() }
+  catch (error) { console.error('[Core] 历史删除队列未能安全读取，未交接：', error); return }
+  if (!requests.length) return
+  const acknowledged: SessionDeletionRequest[] = []
+  for (const request of requests) {
+    try {
+      // 不预读可见列表：Core已接管/完成后会隐藏会话，重复交接必须仍可按源ID取回ACK。
+      const result = await client.importLegacyDeletion({ sourceRequestId: request.id, sessionId: request.sessionId,
+        sessionIds: request.sessionIds, workspaceId: request.workspaceId, requestedAt: request.requestedAt, reason: request.reason })
+      if (!result.requestId || result.sessionIds.length !== request.sessionIds.length || result.sessionIds.some((id, index) => id !== request.sessionIds[index])) throw new Error('Core确认快照与原请求不一致')
+      acknowledged.push(request)
+    } catch (error) { console.error(`[Core] 历史删除请求${request.id}未确认，旧队列保留：`, error) }
+  }
+  try { acknowledgeTransferredSessionDeletions(acknowledged) }
+  catch (error) { console.error('[Core] Core已接管但旧队列未能安全出队，下次启动幂等重试：', error) }
+}
+
 let remoteExitComplete = false
 let remoteExitPending = false
 let persistenceExitComplete = false
@@ -1303,7 +1373,10 @@ app.on('before-quit', (event) => {
     if (remoteExitPending) return
     remoteExitPending = true
     const timeoutMs = resolveQuitCleanupTimeoutMs()
-    void awaitQuitCleanup(stopRemoteService(), timeoutMs).then((result) => {
+    stopLocalCoreResourceSync?.()
+    stopLocalCoreResourceSync = undefined
+    const cleanup = Promise.all([stopRemoteService(), localCoreLifecycle?.stop().finally(() => detachLocalCoreClient())])
+    void awaitQuitCleanup(cleanup, timeoutMs).then((result) => {
       remoteExitPending = false
       remoteExitComplete = true
       if (result.outcome === 'completed') {
@@ -1330,6 +1403,8 @@ app.on('before-quit', (event) => {
     persistenceExitPending = true
     const timeoutMs = 1_500
     const flushPromise = Promise.resolve().then(async () => {
+      // Core 已在上一阶段负责 shutdown 持久化；桌面不得重新刷回旧队列。
+      if (localCoreOwnsBusinessData()) return
       const flushed = await flushSDKMessagePersistence(timeoutMs)
       if (!flushed) throw new Error('超过退出 flush 预算')
       await flushAgentContextUsageWrites()

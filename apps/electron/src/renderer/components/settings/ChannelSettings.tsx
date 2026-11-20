@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Plus, Pencil, Trash2, RefreshCw, ChevronDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
@@ -17,6 +17,7 @@ import { getChannelLogo } from '@/lib/model-logo'
 import { resolvePiCoreState } from '@/lib/channel-model-groups'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentRuntimeAtom } from '@/atoms/agent-atoms'
 import { channelsAtom, selectedModelAtom } from '@/atoms/chat-atoms'
+import { coreTargetsAtom, coreChannelsAtom } from '@/atoms/core-target-atoms'
 import { resolveAgentModelSelection } from '@/lib/agent-channel-selection'
 import { authStatusAtom } from '@/atoms/identity-atoms'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
@@ -39,7 +40,13 @@ import { aggregateModelHealth } from '@/lib/channel-health-aggregation'
 type ViewMode = 'list' | 'create' | 'edit'
 
 export function ChannelSettings(): React.ReactElement {
-  const [channels, setChannels] = useAtom(channelsAtom)
+  const [localChannels, setChannels] = useAtom(channelsAtom)
+  const coreTargets = useAtomValue(coreTargetsAtom)
+  const remoteCore = coreTargets.currentId !== 'local'
+  const remoteChannels = useAtomValue(coreChannelsAtom)
+  const channels = remoteCore ? remoteChannels : localChannels
+  const setCoreChannels = useSetAtom(coreChannelsAtom)
+  const activeCoreTarget = coreTargets.targets.find(target => target.id === coreTargets.currentId)
   const [officialHealth, setOfficialHealth] = React.useState<OfficialChannelHealth[]>([])
   const [viewMode, setViewMode] = React.useState<ViewMode>('list')
   const [editingChannel, setEditingChannel] = React.useState<Channel | null>(null)
@@ -86,12 +93,21 @@ export function ChannelSettings(): React.ReactElement {
     setLoading(true)
     setLoadError('')
     try {
-      const list = await window.electronAPI.listChannels({ localOnly })
+      const list = remoteCore
+        ? await window.electronAPI.listCoreChannels() as Channel[]
+        : await window.electronAPI.listChannels({ localOnly })
       if (version !== requestVersion.current || account !== currentAccount.current) return []
       // 读取期间目录事件可能已提交更新快照，不用旧 LIST 结果覆盖它。
       if (previousChannels !== currentChannels.current) return currentChannels.current
-      const visible = account.isLoggedIn ? list : list.filter((c) => !isOfficialChannel(c))
-      setChannels(visible)
+      const listed = remoteCore || account.isLoggedIn ? list : list.filter((c) => !isOfficialChannel(c))
+      const visible = remoteCore
+        ? listed.map(channel => ({ ...channel, apiKey: '', models: channel.models ?? [], enabled: channel.enabled !== false, createdAt: 0, updatedAt: 0 })) as Channel[]
+        : listed
+      if (remoteCore) {
+        setCoreChannels(visible)
+      } else {
+        setChannels(visible)
+      }
       return visible
     } catch (error) {
       console.error('[渠道设置] 加载渠道列表失败:', error)
@@ -100,7 +116,7 @@ export function ChannelSettings(): React.ReactElement {
     } finally {
       if (version === requestVersion.current && account === currentAccount.current) setLoading(false)
     }
-  }, [authStatus, setChannels])
+  }, [authStatus, remoteCore, coreTargets.currentId, coreTargets.generation, setChannels, setCoreChannels])
 
   React.useEffect(() => {
     let active = true
@@ -118,7 +134,7 @@ export function ChannelSettings(): React.ReactElement {
   // 判据必须覆盖任一内核：主推 Pi 后，只勾选 Pi 的渠道（典型是 xAI）也必须进入列表；
   // 具体内核的过滤交给模型选择器的协议过滤，不在这里用 Claude 白名单一刀切。
   React.useEffect(() => {
-    if (loading || loadError) return
+    if (loading || loadError || remoteCore) return
     const derivedIds = channels
       .filter((c) => isChannelEnabledForAnyRuntime(c))
       .map((c) => c.id)
@@ -130,9 +146,9 @@ export function ChannelSettings(): React.ReactElement {
     agentChannelIdsRef.current = derivedIds
     setAgentChannelIds(derivedIds)
     window.electronAPI.updateSettings({ agentChannelIds: derivedIds }).catch(console.error)
-  }, [channels, loading, loadError, setAgentChannelIds])
+  }, [channels, loading, loadError, remoteCore, setAgentChannelIds])
   React.useEffect(() => {
-    if (loading || loadError) return
+    if (loading || loadError || remoteCore) return
     const selection = resolveAgentModelSelection(channels, runtime, agentChannelIds,
       agentChannelId && agentModelId ? { channelId: agentChannelId, modelId: agentModelId } : null)
     if (selection?.channelId !== (agentChannelId ?? undefined) || selection?.modelId !== (agentModelId ?? undefined)) {
@@ -147,12 +163,13 @@ export function ChannelSettings(): React.ReactElement {
         setSelectedChatModel(null)
       }
     }
-  }, [channels, loading, loadError, runtime, agentChannelIds, agentChannelId, agentModelId, selectedChatModel, setAgentChannelId, setAgentModelId, setSelectedChatModel])
+  }, [channels, loading, loadError, remoteCore, runtime, agentChannelIds, agentChannelId, agentModelId, selectedChatModel, setAgentChannelId, setAgentModelId, setSelectedChatModel])
 
   const syncAgentChannelEligibility = React.useCallback(async (
     channel: Channel,
     eligible: boolean,
   ): Promise<void> => {
+    if (remoteCore) return
     const currentIds = agentChannelIdsRef.current
 
     if (eligible) {
@@ -160,7 +177,7 @@ export function ChannelSettings(): React.ReactElement {
       const newIds = [...currentIds, channel.id]
       agentChannelIdsRef.current = newIds
       setAgentChannelIds(newIds)
-      await window.electronAPI.updateSettings({ agentChannelIds: newIds }).catch(console.error)
+      if (!remoteCore) await window.electronAPI.updateSettings({ agentChannelIds: newIds }).catch(console.error)
       return
     }
 
@@ -172,8 +189,15 @@ export function ChannelSettings(): React.ReactElement {
     const updates: Parameters<typeof window.electronAPI.updateSettings>[0] = {
       agentChannelIds: newIds,
     }
-    await window.electronAPI.updateSettings(updates).catch(console.error)
-  }, [setAgentChannelIds, setAgentChannelId, setAgentModelId])
+    if (!remoteCore) await window.electronAPI.updateSettings(updates).catch(console.error)
+  }, [setAgentChannelIds, setAgentChannelId, setAgentModelId, remoteCore])
+
+  const deleteRemoteChannel = React.useCallback((id: string) => remoteCore
+    ? window.electronAPI.deleteCoreChannel(id)
+    : window.electronAPI.deleteChannel(id), [remoteCore])
+  const updateRemoteChannel = React.useCallback((id: string, patch: import('@profer/shared').ChannelUpdateInput) => remoteCore
+    ? window.electronAPI.updateCoreChannel(id, patch) as Promise<Channel>
+    : window.electronAPI.updateChannel(id, patch), [remoteCore])
 
   /** 删除渠道 */
   const handleDeleteRequest = (channel: Channel): void => {
@@ -188,20 +212,22 @@ export function ChannelSettings(): React.ReactElement {
     setBusyIds([...pendingMutations.current])
     const account = currentAccount.current
     try {
-      await window.electronAPI.deleteChannel(target.id)
+      await deleteRemoteChannel(target.id)
       if (!mounted.current || account !== currentAccount.current) return
 
-      const newIds = agentChannelIds.filter((id) => id !== target.id)
-      setAgentChannelIds(newIds)
+      if (!remoteCore) {
+        const newIds = agentChannelIds.filter((id) => id !== target.id)
+        setAgentChannelIds(newIds)
+      }
 
       setDeleteTarget(null)
-      if (agentChannelId === target.id) {
+      if (!remoteCore && agentChannelId === target.id) {
         setAgentChannelId(null)
         setAgentModelId(null)
       }
 
-      await window.electronAPI.updateSettings({
-        agentChannelIds: newIds,
+      if (!remoteCore) await window.electronAPI.updateSettings({
+        agentChannelIds: agentChannelIds.filter((id) => id !== target.id),
         ...(agentChannelId === target.id && { agentChannelId: undefined, agentModelId: undefined }),
       }).catch(() => toast.error('渠道已删除，但默认模型设置保存失败'))
 
@@ -223,7 +249,7 @@ export function ChannelSettings(): React.ReactElement {
     setBusyIds([...pendingMutations.current])
     const account = currentAccount.current
     try {
-      const savedChannel = await window.electronAPI.updateChannel(channel.id, { enabled: !channel.enabled })
+      const savedChannel = await updateRemoteChannel(channel.id, { enabled: !channel.enabled })
       if (!mounted.current || account !== currentAccount.current) return
       await syncAgentChannelEligibility(
         savedChannel,
@@ -247,7 +273,7 @@ export function ChannelSettings(): React.ReactElement {
     setBusyIds([...pendingMutations.current])
     const account = currentAccount.current
     try {
-      await window.electronAPI.updateChannel(channel.id, {
+      await updateRemoteChannel(channel.id, {
         models: channel.models.map((model) => model.id === modelId ? { ...model, enabled: !model.enabled } : model),
       })
       if (!mounted.current || account !== currentAccount.current) return
@@ -278,6 +304,7 @@ export function ChannelSettings(): React.ReactElement {
     return (
       <ChannelForm
         channel={editingChannel}
+        remoteCore={remoteCore}
         onSaved={handleFormSaved}
         onAgentEligibilityChange={syncAgentChannelEligibility}
         onCancel={handleFormCancel}
@@ -291,7 +318,9 @@ export function ChannelSettings(): React.ReactElement {
       {/* 模型配置（Chat 与 Agent 统一） */}
       <SettingsSection
         title="模型配置"
-        description="管理 AI 供应商连接，配置 API Key 和可用模型。支持 Agent 的渠道会显示对应标签"
+        description={remoteCore
+          ? `配置保存在当前远程内核：${activeCoreTarget?.name ?? '远程 Core'}。凭据由该内核持有。`
+          : '管理 AI 供应商连接，配置 API Key 和可用模型。支持 Agent 的渠道会显示对应标签'}
         action={
           <Button size="sm" disabled={loading || Boolean(loadError)} onClick={() => setViewMode('create')}>
             <Plus size={16} />

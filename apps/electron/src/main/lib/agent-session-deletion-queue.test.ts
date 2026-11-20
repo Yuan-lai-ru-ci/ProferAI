@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   __setSessionDeletionQueuePathForTest,
+  acknowledgeTransferredSessionDeletions,
+  listSessionDeletionRequestsForTransfer,
   completeSessionDeletion,
   enqueueSessionDeletion,
   enqueueSessionDeletions,
@@ -27,6 +29,36 @@ afterEach(() => {
 })
 
 describe('会话删除队列', () => {
+  test('历史队列只在逐项Core ACK后移除准确请求，不合并或重算子树', () => {
+    const first = enqueueSessionDeletion({ sessionId: 'parent', sessionIds: ['child', 'parent'], workspaceId: 'workspace', reason: 'user' })!
+    const second = enqueueSessionDeletion({ sessionId: 'other', sessionIds: ['other'], reason: 'resume' })!
+    const pending = listSessionDeletionRequests()
+    expect(pending.map(request => request.sessionId)).toEqual(['parent', 'other'])
+    acknowledgeTransferredSessionDeletions([first])
+    expect(listSessionDeletionRequests()).toEqual([second])
+    expect(isSessionDeletionPending('child')).toBe(false)
+    expect(isSessionDeletionPending('other')).toBe(true)
+  })
+
+  test('交接期间快照变化不出队，新请求不受其他请求ACK影响', () => {
+    enqueueSessionDeletion({ sessionId: 'parent', sessionIds: ['parent'] })
+    const original = listSessionDeletionRequestsForTransfer()[0]!
+    enqueueSessionDeletion({ sessionId: 'parent', sessionIds: ['child'] })
+    expect(() => acknowledgeTransferredSessionDeletions([original])).toThrow('变化')
+    const updated = listSessionDeletionRequestsForTransfer()[0]!
+    const added = enqueueSessionDeletion({ sessionId: 'new', sessionIds: ['new'] })!
+    acknowledgeTransferredSessionDeletions([updated])
+    expect(listSessionDeletionRequestsForTransfer()).toEqual([added])
+  })
+
+  test('交接读取损坏或未来版本队列不改写源文件', () => {
+    for (const value of ['{broken', JSON.stringify({ version: 99, requests: [] })]) {
+      writeFileSync(queuePath, value)
+      expect(() => listSessionDeletionRequestsForTransfer()).toThrow()
+      expect(readFileSync(queuePath, 'utf8')).toBe(value)
+    }
+  })
+
   test('Given 入队 When 查询 Then 整棵树都标记为待删除且已落盘', () => {
     enqueueSessionDeletion({ sessionId: 'parent', sessionIds: ['child', 'parent'], reason: 'user' })
 

@@ -28,12 +28,13 @@ function readLines(file: string): string[] {
 describe('Profer 独占写 Pi session 文件', () => {
   test('新会话立即可写 header，SDK 自己的 append 不会落盘', () => {
     const dir = scratch()
-    const store = openPiSessionFile({ sdk, sessionDir: dir, cwd: '/tmp/cwd' })
+    const cwd = join(dir, 'cwd')
+    const store = openPiSessionFile({ sdk, sessionDir: dir, cwd })
     expect(existsSync(store.file)).toBe(true)
     expect(store.file.startsWith(dir)).toBe(true)
     const lines = readLines(store.file)
     expect(lines).toHaveLength(1)
-    expect(JSON.parse(lines[0]!)).toMatchObject({ type: 'session', id: store.sessionId, cwd: '/tmp/cwd' })
+    expect(JSON.parse(lines[0]!)).toMatchObject({ type: 'session', id: store.sessionId, cwd })
     // 文件就在 header 之后被彻底交给 Profer：SessionManager 是内存态。
     expect(store.sessionManager.isPersisted()).toBe(false)
     expect(store.sessionManager.getSessionFile()).toBeUndefined()

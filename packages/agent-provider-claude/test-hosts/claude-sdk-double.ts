@@ -69,6 +69,8 @@ export interface ClaudeSdkDoubleState {
   /** adapter 主动结束 SDK iterator（for-await break 触发 return()）。 */
   returnCalls: number
   permissionModeCalls: string[]
+  permissionModeError?: Error
+  permissionModeWait?: Promise<void>
   spawnCalls: number
   spawnedEnvs: Array<Record<string, string | undefined>>
   /** 最后一次进程替身，供模拟 exit。 */
@@ -190,6 +192,8 @@ export function createClaudeSdkDouble(): ClaudeSdkDouble {
     },
     async setPermissionMode(mode: string) {
       state.permissionModeCalls.push(mode)
+      await state.permissionModeWait
+      if (state.permissionModeError) throw state.permissionModeError
     },
   }
 

@@ -17,6 +17,7 @@ import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { Clock, Pause, Play, Power, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AutomationMaintenance } from './AutomationMaintenance'
 import { AutomationRecommendations } from './AutomationRecommendations'
 import type { Recommendation } from '@profer/shared'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@profer/ui/primitives/tooltip'
@@ -133,6 +134,7 @@ export function AutomationsListView({ embedded = false }: { embedded?: boolean }
   return (
     <div className={cn('h-full flex flex-col overflow-hidden', embedded && 'rounded-b-2xl bg-card')}>
       <div className="flex-1 min-h-0 overflow-y-auto">
+        <AutomationMaintenance />
         <div className="w-full px-2 pt-2"><AutomationRecommendations recommendations={recommendations} onRefresh={refreshList} /></div>
         {automations.length === 0 ? (
           <EmptyState onCreate={handleCreate} />

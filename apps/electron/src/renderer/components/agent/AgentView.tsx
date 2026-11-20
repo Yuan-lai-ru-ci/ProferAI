@@ -38,7 +38,7 @@ import { BackgroundTaskControls } from './BackgroundTaskControls'
 import { PermissionModeSelector } from './PermissionModeSelector'
 import { PresetSelector } from './PresetSelector'
 import { referenceForSelectablePreset, selectablePresetMatchesReference } from './preset-selector-utils'
-import { agentPresetCacheKey, agentPresetsAtom, agentPresetsLoadedAtom } from '@/atoms/agent-preset-atoms'
+import { agentPresetCacheKey, coreScopedPresetCacheKey, agentPresetsAtom, agentPresetsLoadedAtom } from '@/atoms/agent-preset-atoms'
 import { AskUserBanner } from './AskUserBanner'
 import { GoalProposalBanner } from './GoalProposalBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
@@ -73,6 +73,7 @@ import { updateComposerRuntime, updateComposerSettings, openComposerFileDialog, 
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { autoPreviewEnabledAtom, previewFileMapAtom, pendingQuoteInsertMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
+import { coreTargetsAtom, coreChannelsAtom, coreChannelsLoadedAtom } from '@/atoms/core-target-atoms'
 import { openFilePreviewTabForSession } from '@/components/diff/preview-opener'
 import type { AgentInterruptionState } from '@/atoms/preview-atoms'
 import {
@@ -141,7 +142,7 @@ import { resolveDelegationConversationRunState, resolveDelegationRuntimeDisplay 
 import { AgentModelReasoningPicker } from './AgentModelReasoningPicker'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentRunInitiator, AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage, SDKUserMessage, AgentSessionMeta } from '@profer/shared'
+import type { AgentRunInitiator, AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage, SDKUserMessage, AgentSessionMeta, Channel } from '@profer/shared'
 import { isUserInputMessage } from '@profer/session-core'
 
 /** 桌面端 Agent 会话懒加载单页消息数（与 main/agent-session-manager 的 DESKTOP_AGENT_PAGE_SIZE 同步） */
@@ -299,6 +300,7 @@ export interface AgentViewProps {
 }
 
 export function AgentView({ sessionId, standalone = false }: AgentViewProps): React.ReactElement {
+  const store = useStore()
   const minimapHostRef = React.useRef<HTMLDivElement>(null)
   const [pendingGoalReplacement, setPendingGoalReplacement] = useAtom(goalReplacementAtomFamily(sessionId))
   const [goalStatusOpen, setGoalStatusOpen] = React.useState(false)
@@ -421,6 +423,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const coreTarget = useAtomValue(coreTargetsAtom)
+  const isRemoteCore = coreTarget.currentId !== 'local'
   const sessions = useAtomValue(agentSessionsAtom)
   const runningDelegationCount = React.useMemo(
     () => countRunningDelegations(sessions, sessionId),
@@ -502,17 +506,53 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtomFamily(sessionId))
   const workspaces = useAtomValue(agentWorkspacesAtom)
-  const globalChannels = useAtomValue(channelsAtom)
-  const channelsLoaded = useAtomValue(channelsLoadedAtom)
+  const localChannels = useAtomValue(channelsAtom)
+  const remoteChannels = useAtomValue(coreChannelsAtom)
+  const setRemoteChannels = useSetAtom(coreChannelsAtom)
+  const globalChannels = isRemoteCore ? remoteChannels : localChannels
+  // 非本机内核的渠道归属所属 Core，桌面没有“已启用渠道”清单；
+  // 若继续套用桌面 agentChannelIds，新配置的渠道/模型要切一次模式才会出现。
+  const effectiveAgentChannelIds = React.useMemo(
+    () => isRemoteCore ? globalChannels.map(channel => channel.id) : agentChannelIds,
+    [isRemoteCore, globalChannels, agentChannelIds],
+  )
+  const localChannelsLoaded = useAtomValue(channelsLoadedAtom)
+  const remoteChannelsLoaded = useAtomValue(coreChannelsLoadedAtom)
+  const setRemoteChannelsLoaded = useSetAtom(coreChannelsLoadedAtom)
+  const channelsLoaded = isRemoteCore
+    ? remoteChannelsLoaded?.targetId === coreTarget.currentId && remoteChannelsLoaded.generation === coreTarget.generation
+    : localChannelsLoaded
+  React.useEffect(() => {
+    let active = true
+    const targetId = coreTarget.currentId
+    const generation = coreTarget.generation
+    if (!isRemoteCore) return
+    setRemoteChannels([])
+    setRemoteChannelsLoaded(null)
+    const isCurrentTarget = (): boolean => {
+      const current = store.get(coreTargetsAtom)
+      return active && current.currentId === targetId && current.generation === generation
+    }
+    void window.electronAPI.listCoreChannels().then((items) => {
+      if (!isCurrentTarget()) return
+      setRemoteChannels(items.map((item) => ({ ...item, apiKey: '', baseUrl: item.baseUrl ?? '', models: item.models ?? [], enabled: item.enabled !== false, createdAt: 0, updatedAt: 0 } as Channel)))
+      setRemoteChannelsLoaded({ targetId, generation })
+    }).catch((error) => { if (isCurrentTarget()) { console.error('[Core] 读取远程模型目录失败:', error); setRemoteChannels([]) } })
+    return () => { active = false }
+  }, [coreTarget.currentId, coreTarget.generation, isRemoteCore, setRemoteChannels, setRemoteChannelsLoaded, store])
   const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
 
   // 加载当前工作区的 Agent 预设列表（预设为工作区级；失败静默留空由 UI 兑底）。
   // 订阅能力版本号：技能页增删改/导入预设后立即重拉，对齐 Skills 刷新机制。
   React.useEffect(() => {
+    let active = true
+    const target = coreTarget
+    const isCurrent = (): boolean => active && coreTarget.currentId === target.currentId && coreTarget.generation === target.generation
     const slug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug
     void listComposerPresets(slug)
       .then((list) => {
-        const cacheKey = agentPresetCacheKey(slug)
+        if (!isCurrent()) return
+        const cacheKey = coreScopedPresetCacheKey(slug, coreTarget)
         setAgentPresets((prev) => {
           const next = new Map(prev)
           next.set(cacheKey, list)
@@ -520,14 +560,18 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         })
         setLoadedPresetCaches((prev) => new Set(prev).add(cacheKey))
       })
-      .catch((error) => console.error('[Agent] 加载预设列表失败:', error))
-  }, [setAgentPresets, setLoadedPresetCaches, workspaces, currentWorkspaceId, capabilitiesVersion])
+      .catch((error) => { if (isCurrent()) console.error('[Agent] 加载预设列表失败:', error) })
+    return () => { active = false }
+    return () => { active = false }
+  }, [setAgentPresets, setLoadedPresetCaches, workspaces, currentWorkspaceId, capabilitiesVersion, coreTarget.currentId, coreTarget.generation])
   // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
   const stableChannelIdRef = React.useRef(agentChannelId)
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
   const stableChannelId = resolvePlanQuotaChannelId(agentChannelId, stableChannelIdRef.current)
   // 仅官方支持查询的订阅渠道才允许 ContextUsageBadge 发起额度请求。
-  const planQuotaChannelId = globalChannels.some(
+  // 额度查询目前只有桌面本机渠道可用；非本机内核的渠道凭据在 Core 里，
+  // 桌面查不到，直接不发起，避免一直转圈失败（真实支持需要 Core 提供额度接口）。
+  const planQuotaChannelId = !isRemoteCore && globalChannels.some(
     (channel) => channel.id === stableChannelId && supportsChannelPlanQuota(channel),
   ) ? stableChannelId : undefined
 
@@ -593,7 +637,6 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const agentError = streamErrors.get(sessionId) ?? null
   const planModeSessions = useAtomValue(agentPlanModeSessionsAtom)
   const isPlanMode = planModeSessions.has(sessionId)
-  const store = useStore()
   // 划词组件（历史消息 / 浏览器列 / 可视化）把引用投到这里，由本组件落进编辑器
   const pendingQuoteInserts = useAtomValue(pendingQuoteInsertMapAtom).get(sessionId)
   const setPendingQuoteInsertMap = useSetAtom(pendingQuoteInsertMapAtom)
@@ -660,15 +703,15 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const openSession = useOpenSession()
   const setAttachedDirsMap = useSetAtom(agentAttachedDirectoriesMapAtom)
   const attachedDirsMap = useAtomValue(agentAttachedDirectoriesMapAtom)
-  const attachedDirs = attachedDirsMap.get(sessionId) ?? []
+  const attachedDirs = isRemoteCore ? [] : (attachedDirsMap.get(sessionId) ?? [])
   const setAttachedFilesMap = useSetAtom(agentAttachedFilesMapAtom)
   const attachedFilesMap = useAtomValue(agentAttachedFilesMapAtom)
-  const attachedFiles = attachedFilesMap.get(sessionId) ?? []
+  const attachedFiles = isRemoteCore ? [] : (attachedFilesMap.get(sessionId) ?? [])
   const wsAttachedDirsMap = useAtomValue(workspaceAttachedDirectoriesMapAtom)
-  const wsAttachedDirs = currentWorkspaceId ? (wsAttachedDirsMap.get(currentWorkspaceId) ?? []) : []
+  const wsAttachedDirs = isRemoteCore || !currentWorkspaceId ? [] : (wsAttachedDirsMap.get(currentWorkspaceId) ?? [])
   const setWsAttachedFilesMap = useSetAtom(workspaceAttachedFilesMapAtom)
   const wsAttachedFilesMap = useAtomValue(workspaceAttachedFilesMapAtom)
-  const wsAttachedFiles = currentWorkspaceId ? (wsAttachedFilesMap.get(currentWorkspaceId) ?? []) : []
+  const wsAttachedFiles = isRemoteCore || !currentWorkspaceId ? [] : (wsAttachedFilesMap.get(currentWorkspaceId) ?? [])
 
   // 草稿正文延迟同步到全局 Map；输入区只保留一个空/非空标记供按钮即时响应。
   const inputContent = useAtomValue(agentSessionDraftAtomFamily(sessionId))
@@ -736,8 +779,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   }, [setInputContent, setInputHtmlContent])
   const sessionPathMap = useAtomValue(agentSessionPathMapAtom)
   const setSessionPathMap = useSetAtom(agentSessionPathMapAtom)
-  const sessionPath = sessionPathMap.get(sessionId) ?? null
-  const [workspaceFilesPath, setWorkspaceFilesPath] = React.useState<string | null>(null)
+  const sessionPath = isRemoteCore ? null : (sessionPathMap.get(sessionId) ?? null)
+  const [workspaceFilesPathState, setWorkspaceFilesPath] = React.useState<string | null>(null)
+  const workspaceFilesPath = isRemoteCore ? null : workspaceFilesPathState
   const [isDragOver, setIsDragOver] = React.useState(false)
   const [errorCopied, setErrorCopied] = React.useState(false)
 
@@ -753,9 +797,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   // 检查当前 Agent runtime 是否存在协议兼容的可用模型。
   const hasAvailableModel = React.useMemo(
     () => agentChannelId && agentModelId
-      ? isAgentModelSelectionValid(globalChannels, sessionAgentRuntime, agentChannelIds, { channelId: agentChannelId, modelId: agentModelId })
+      ? isAgentModelSelectionValid(globalChannels, sessionAgentRuntime, effectiveAgentChannelIds, { channelId: agentChannelId, modelId: agentModelId })
       : false,
-    [globalChannels, agentChannelIds, sessionAgentRuntime, agentChannelId, agentModelId],
+    [globalChannels, effectiveAgentChannelIds, sessionAgentRuntime, agentChannelId, agentModelId],
   )
   // 渠道目录未加载时不做绑定诊断，避免把「还没读到」误报成「渠道已删除」。
   const bindingState = React.useMemo<AgentBindingState | null>(
@@ -783,49 +827,34 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   // 目录变化只影响可用性；历史空绑定也由用户明确选择模型后持久化。
   // 默认模型在启动 initializer 中解析，不通过历史会话反向改写默认或 metadata。
 
-  // 获取当前 session 的工作路径（文件浏览器需要）
+  // 切换 Core 后丢弃旧目标的路径响应，禁止迟到结果回填本机目录。
   React.useEffect(() => {
-    if (!currentWorkspaceId) {
-      setSessionPathMap((prev) => {
-        const map = new Map(prev)
-        map.delete(sessionId)
-        return map
+    let cancelled = false
+    const isCurrent = () => !cancelled && store.get(coreTargetsAtom).generation === coreTarget.generation
+      && store.get(coreTargetsAtom).currentId === coreTarget.currentId
+    const updatePath = (path: string | null) => {
+      if (!isCurrent()) return
+      setSessionPathMap(previous => {
+        const next = new Map(previous)
+        if (path) next.set(sessionId, path)
+        else next.delete(sessionId)
+        return next
       })
-      return
     }
-
-    window.electronAPI
-      .getAgentSessionPath(currentWorkspaceId, sessionId)
-      .then((path) => {
-        if (path) {
-          setSessionPathMap((prev) => {
-            const map = new Map(prev)
-            map.set(sessionId, path)
-            return map
-          })
-        } else {
-          setSessionPathMap((prev) => {
-            const map = new Map(prev)
-            map.delete(sessionId)
-            return map
-          })
-        }
-      })
-      .catch(() => {
-        setSessionPathMap((prev) => {
-          const map = new Map(prev)
-          map.delete(sessionId)
-          return map
-        })
-      })
-  }, [sessionId, currentWorkspaceId, setSessionPathMap])
+    updatePath(null)
+    if (!isRemoteCore && currentWorkspaceId) {
+      void window.electronAPI.getAgentSessionPath(currentWorkspaceId, sessionId)
+        .then(updatePath).catch(() => updatePath(null))
+    }
+    return () => { cancelled = true }
+  }, [sessionId, currentWorkspaceId, setSessionPathMap, isRemoteCore, coreTarget.currentId, coreTarget.generation, store])
 
   // 获取工作区共享文件目录路径（@ 引用时需要搜索）
   const workspaceSlug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null
   // 预设有效性由工作区预设 API 返回；优先按稳定作用域引用匹配，旧会话才回退裸 ID。
   const sessionPresetId = sessionMeta?.presetId
   const sessionPresetReference = sessionMeta?.presetReference
-  const presetCacheKey = agentPresetCacheKey(workspaceSlug ?? undefined)
+  const presetCacheKey = coreScopedPresetCacheKey(workspaceSlug ?? undefined, coreTarget)
   const workspacePresetList = agentPresetsMap.get(presetCacheKey) ?? []
   const presetsLoaded = loadedPresetCaches.has(presetCacheKey)
   const hasUsableSessionPreset = Boolean(sessionPresetId && workspacePresetList.some((preset) => {
@@ -844,16 +873,18 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     const timer = window.setTimeout(() => setShowPresetSelectionRequired(true), 500)
     return () => window.clearTimeout(timer)
   }, [presetSelectionRequired])
-  // 旧会话或异常入口没有有效绑定时，自动采用当前工作区列表中的首个可用预设，避免把内部修复问题暴露给用户。
+  // Core预设缺失或失效必须显式修复，不能由客户端选另一岗位改变执行能力。
   React.useEffect(() => {
-    if (!sessionMeta || !presetsLoaded || hasUsableSessionPreset) return
+    const coreOwnsPresets = coreTarget.currentId !== 'local'
+      || coreTarget.targets.some(target => target.id === 'local' && target.capabilities?.includes('resources.manage'))
+    if (coreOwnsPresets || !sessionMeta || !presetsLoaded || hasUsableSessionPreset) return
     const fallback = workspacePresetList.find((preset) => preset.enabledInWorkspace !== false)
     if (!fallback) return
     const reference = referenceForSelectablePreset(fallback, workspaceSlug ?? undefined)
     void rebindComposerPreset(sessionId, reference)
       .then((updated) => setAgentSessions((previous) => previous.map((session) => session.id === sessionId ? updated : session)))
       .catch((error) => console.error('[Agent] 自动匹配预设失败:', error))
-  }, [hasUsableSessionPreset, presetsLoaded, sessionId, sessionMeta, setAgentSessions, workspacePresetList, workspaceSlug])
+  }, [coreTarget, hasUsableSessionPreset, presetsLoaded, sessionId, sessionMeta, setAgentSessions, workspacePresetList, workspaceSlug])
   // 会话绑定的当前预设（与 PresetSelector 同源解析）：决定本会话权限上限 / 岗位能力。
   // 切换预设后 sessionPresetReference 更新即触发重算，权限图标随岗位立即联动。
   const permissionModeMap = useAtomValue(agentPermissionModeMapAtom)
@@ -893,40 +924,41 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   }, [setActiveView, standalone])
   const openPresetMenu = React.useCallback(() => setPresetMenuOpen(true), [])
   React.useEffect(() => {
-    if (!workspaceSlug) {
-      setWorkspaceFilesPath(null)
-      return
+    let cancelled = false
+    const isCurrent = () => !cancelled && store.get(coreTargetsAtom).generation === coreTarget.generation
+      && store.get(coreTargetsAtom).currentId === coreTarget.currentId
+    setWorkspaceFilesPath(null)
+    if (!isRemoteCore && workspaceSlug) {
+      void window.electronAPI.getWorkspaceFilesPath(workspaceSlug)
+        .then(path => { if (isCurrent()) setWorkspaceFilesPath(path) })
+        .catch(() => { if (isCurrent()) setWorkspaceFilesPath(null) })
     }
-    window.electronAPI
-      .getWorkspaceFilesPath(workspaceSlug)
-      .then(setWorkspaceFilesPath)
-      .catch(() => setWorkspaceFilesPath(null))
-  }, [workspaceSlug])
+    return () => { cancelled = true }
+  }, [workspaceSlug, isRemoteCore, coreTarget.currentId, coreTarget.generation, store])
 
   // 获取工作区级附加文件（@ 引用和路径解析都需要）
   React.useEffect(() => {
-    if (!workspaceSlug || !currentWorkspaceId) return
-    window.electronAPI
-      .getWorkspaceAttachedFiles(workspaceSlug)
-      .then((files) => {
-        setWsAttachedFilesMap((prev) => {
-          const map = new Map(prev)
-          map.set(currentWorkspaceId, files)
-          return map
-        })
-      })
-      .catch(console.error)
-  }, [workspaceSlug, currentWorkspaceId, setWsAttachedFilesMap])
+    let cancelled = false
+    if (isRemoteCore || !workspaceSlug || !currentWorkspaceId) return
+    void window.electronAPI.getWorkspaceAttachedFiles(workspaceSlug)
+      .then(files => {
+        if (cancelled || store.get(coreTargetsAtom).generation !== coreTarget.generation
+          || store.get(coreTargetsAtom).currentId !== coreTarget.currentId) return
+        setWsAttachedFilesMap(previous => new Map(previous).set(currentWorkspaceId, files))
+      }).catch(error => { if (!cancelled) console.error(error) })
+    return () => { cancelled = true }
+  }, [workspaceSlug, currentWorkspaceId, setWsAttachedFilesMap, isRemoteCore, coreTarget.currentId, coreTarget.generation, store])
 
   // 工作区级目录（workspace shared files + 工作区级附加目录），@ 引用标记为工作区文件
   const workspaceDirs = React.useMemo(() => {
     const dirs: string[] = []
+    if (isRemoteCore) return dirs
     if (workspaceFilesPath) dirs.push(workspaceFilesPath)
     for (const d of wsAttachedDirs) {
       if (!dirs.includes(d)) dirs.push(d)
     }
     return dirs
-  }, [workspaceFilesPath, wsAttachedDirs])
+  }, [workspaceFilesPath, wsAttachedDirs, isRemoteCore])
 
   const attachedFileDirectories = React.useMemo(() => {
     const dirs: string[] = []
@@ -1805,11 +1837,11 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   React.useEffect(() => {
     if (!channelsLoaded || !sessionMeta || !canSelectAgentSessionRuntime(sessionMeta)) return
     if (streaming || backgroundWaiting || runtimeSwitchInFlight || hasAvailableModel) return
-    const selection = resolveAgentRuntimeSelection(globalChannels, sessionAgentRuntime, agentChannelIds, null)
+    const selection = resolveAgentRuntimeSelection(globalChannels, sessionAgentRuntime, effectiveAgentChannelIds, null)
     if (!selection || selection.runtime === sessionAgentRuntime) return
     void handleAgentRuntimeChange(selection.runtime)
   }, [channelsLoaded, sessionMeta, streaming, backgroundWaiting, runtimeSwitchInFlight, hasAvailableModel,
-    globalChannels, sessionAgentRuntime, agentChannelIds, handleAgentRuntimeChange])
+    globalChannels, sessionAgentRuntime, effectiveAgentChannelIds, handleAgentRuntimeChange])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const computedSelectedModel = React.useMemo(() => {
@@ -3118,8 +3150,21 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           thinkingExpanded={thinkingExpanded}
           onThinkingExpandedChange={setThinkingExpanded}
           externalSelectedModel={externalSelectedModel}
-          onModelSelect={handleModelSelect}
-          filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
+          channelsOverride={isRemoteCore ? remoteChannels : undefined}
+          onModelSelect={(option) => {
+            if (isRemoteCore) {
+              const updatedChannelIds = nextAgentChannelIdsAfterModelSelect(agentChannelIds, option.channelId, sessionAgentRuntime)
+              if (updatedChannelIds !== agentChannelIds) setAgentChannelIds(updatedChannelIds)
+              setDefaultChannelId(option.channelId)
+              setDefaultModelId(option.modelId)
+              updateAgentComposerModel(sessionId, option.channelId, option.modelId).then(updated => {
+                setSessionChannelMap(prev => new Map(prev).set(sessionId, updated.channelId ?? option.channelId))
+                setSessionModelMap(prev => new Map(prev).set(sessionId, updated.modelId ?? option.modelId))
+                setAgentSessions(prev => prev.map(item => item.id === sessionId ? updated : item))
+              }).catch(error => toast.error(error instanceof Error ? error.message : '模型选择保存失败'))
+            } else handleModelSelect(option)
+          }}
+          filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : effectiveAgentChannelIds}
           preferredProtocol={sessionAgentRuntime === 'pi' ? 'openai' : 'anthropic'}
           strictProtocolFilter
           runtime={sessionAgentRuntime}

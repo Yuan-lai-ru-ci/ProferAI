@@ -269,6 +269,50 @@ describe('新建项目弹窗分支', () => {
     expect(html).toContain('Profer 托管目录')
   })
 
+  test('Given 远程 Core When 选择绑定入口 Then 走 Core 文件夹浏览并保留手输路径兜底', () => {
+    const html = renderToStaticMarkup(
+      <CreateProjectDialogBody
+        mode="choose"
+        name=""
+        busy={false}
+        isRemoteCore
+        remoteProjectPath=""
+        onRemoteProjectPathChange={() => {}}
+        onRemoteProjectSubmit={() => {}}
+        onModeChange={() => {}}
+        onNameChange={() => {}}
+        onBindFolder={() => {}}
+        onOpenFolder={() => {}}
+        onManagedSubmit={() => {}}
+        onNameKeyDown={() => {}}
+      />,
+    )
+    expect(html).toContain('绑定 Core 上的项目文件夹')
+    expect(html).toContain('在内核所在的机器上选择已有文件夹')
+    expect(html).not.toContain('直接输入路径')
+    expect(html).not.toContain('选一个本地文件夹作为项目根')
+    const pathHtml = renderToStaticMarkup(
+      <CreateProjectDialogBody
+        mode="remote-path"
+        name=""
+        busy={false}
+        isRemoteCore
+        remoteProjectPath=""
+        onRemoteProjectPathChange={() => {}}
+        onRemoteProjectSubmit={() => {}}
+        onModeChange={() => {}}
+        onNameChange={() => {}}
+        onBindFolder={() => {}}
+        onOpenFolder={() => {}}
+        onManagedSubmit={() => {}}
+        onNameKeyDown={() => {}}
+      />,
+    )
+    // 绑定/打开都直接进入 Core 文件夹面板：路径输入框内嵌，没有独立入口或新建文件夹按钮。
+    expect(pathHtml).toContain('core-folder-browser')
+    expect(pathHtml).not.toContain('新建文件夹')
+  })
+
   test('Given 选中托管目录 When 渲染 Then 出现名称输入而非托管入口行', () => {
     const html = renderToStaticMarkup(
       <CreateProjectDialogBody

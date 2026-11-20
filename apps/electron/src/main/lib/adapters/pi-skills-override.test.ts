@@ -133,7 +133,7 @@ describe('真实 DefaultResourceLoader Skill 门禁', () => {
     const loader = await makeLoader(['same-b'])
     await loader.reload()
     expect(loader.getSkills().skills.map((skill) => skill.name)).toEqual(['same-b'])
-    expect(loader.getSkills().skills[0]?.filePath).toBe(join(realpathSync(realSkillsRoot), 'same-b', 'SKILL.md'))
+    expect(realpathSync.native(loader.getSkills().skills[0]!.filePath)).toBe(realpathSync.native(join(realSkillsRoot, 'same-b', 'SKILL.md')))
     expect(JSON.stringify(loader.getSkills())).not.toContain('same a')
     expect(JSON.stringify(loader.getSkills().diagnostics)).not.toContain('same-a')
   })

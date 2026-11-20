@@ -39,7 +39,7 @@ mock.module('electron', () => ({
 const { buildSystemPrompt, buildDynamicContext } = await import('./agent-prompt-builder')
 const { buildPiTaskPrompt } = await import('./pi-task-prompt')
 const { assembleAgentSystemPrompt, appendAgentTaskPrompt } = await import('./agent-prompt-assembly')
-const { getConfigDirName } = await import('./config-paths')
+const { getConfigDir, getConfigDirName } = await import('./config-paths')
 
 describe('模块化提示词装配', () => {
   test('Pi 任务指导只描述实际注册的派工入口', () => {
@@ -199,7 +199,8 @@ describe('模块化提示词装配', () => {
     expect(standard.text).toContain('workspace-profile.md')
     expect(light.chars).toBe(light.text.length)
     expect(light.chars).toBeLessThan(standard.chars / 5)
-    expect(standard.chars).toBeLessThan(6500)
+    // 配置根可能是很长的隔离目录；预算约束提示词结构，不惩罚宿主路径长度。
+    expect(standard.text.split(getConfigDir()).join('<config>').length).toBeLessThan(6500)
     console.log(`[Prompt 字符对照] standard=${standard.chars}, light=${light.chars}`)
   })
   test('自定义预设段不被轻量化吞掉，Claude 轻量不追加 claude_code', () => {
@@ -315,7 +316,6 @@ describe('buildSystemPrompt', () => {
   test('工作区会话恢复指向 Profer workspace profile，而非用户项目指令文件', () => {
     const slug = 'demo-workspace'
     const sessionId = 'session-123'
-    const configDirName = getConfigDirName()
     const prompt = buildSystemPrompt({
       workspaceName: 'Demo',
       workspaceSlug: slug,
@@ -323,7 +323,7 @@ describe('buildSystemPrompt', () => {
       permissionMode: 'bypassPermissions',
     })
 
-    const workspaceRoot = join(homedir(), configDirName, 'agent-workspaces', slug)
+    const workspaceRoot = join(getConfigDir(), 'agent-workspaces', slug)
     const workspaceProfile = join(workspaceRoot, 'workspace-profile.md')
     expect(prompt).toContain(`**Profer 工作区资料**: ${workspaceProfile}`)
     expect(prompt).toContain('按用户指定位置优先；仅按任务需要读取相关 Context')

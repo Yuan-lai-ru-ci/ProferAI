@@ -64,6 +64,7 @@ beforeEach(() => {
     rmSync(`${file}.tmp`, { force: true })
   }
   rmSync(join(configRoot, 'agent-workspaces'), { recursive: true, force: true })
+  rmSync(join(configRoot, 'agent-sessions'), { recursive: true, force: true })
   rmSync(join(sandbox, 'projects'), { recursive: true, force: true })
   invalidateWorkspaceLocation()
 })

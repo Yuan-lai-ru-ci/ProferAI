@@ -1,6 +1,6 @@
 {
   "name": "@profer/agent-provider-pi",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "license": "AGPL-3.0-only",
   "description": "Host-independent Pi Agent SDK provider: full agent adapter, message conversion and Pi tool integration.",
   "type": "module",
@@ -34,7 +34,20 @@
     "./pi/powershell-tool": "./src/pi/powershell-tool.ts",
     "./pi/request-proxy": "./src/pi/request-proxy.ts",
     "./pi/tool-definition-compaction": "./src/pi/tool-definition-compaction.ts",
-    "./host/minimal-pi-host": "./src/host/minimal-pi-host.ts"
+    "./pi/codex-title-generator": "./src/pi/codex-title-generator.ts",
+    "./host/minimal-pi-host": "./src/host/minimal-pi-host.ts",
+    "./skills/skill-routing": "./src/skills/skill-routing.ts",
+    "./skills/skill-routing-rules": "./src/skills/skill-routing-rules.ts",
+    "./skills/skill-path-security": "./src/skills/skill-path-security.ts",
+    "./skills/skill-lexical-match": "./src/skills/skill-lexical-match.ts",
+    "./skills/skill-manifest": "./src/skills/skill-manifest.ts",
+    "./pi/mcp-tools": "./src/pi/mcp-tools.ts",
+    "./skills/skill-resolution": "./src/skills/skill-resolution.ts",
+    "./automation-tools": "./src/automation-tools.ts",
+    "./delegation-tools": "./src/delegation-tools.ts",
+    "./host-tools": "./src/host-tools.ts",
+    "./task-graph-tools": "./src/task-graph-tools.ts",
+    "./harness/*": "./src/harness/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -47,7 +60,8 @@
     "@profer/core": "workspace:*",
     "@profer/shared": "workspace:*",
     "typebox": "1.1.38",
-    "undici": "^7.21.0"
+    "undici": "^7.21.0",
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0"

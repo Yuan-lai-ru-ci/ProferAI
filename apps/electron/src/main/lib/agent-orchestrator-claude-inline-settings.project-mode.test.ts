@@ -62,7 +62,7 @@ const { invalidateWorkspaceLocation } = await import('./workspace-locator')
  * 验证的仍是生产源码本身，并让切片标记失效时立刻报错（不静默变成空串）。
  */
 const orchestratorSource = readFileSync(new URL('./agent-orchestrator.ts', import.meta.url), 'utf8')
-const builderModuleSource = readFileSync(new URL('./agent-claude-inline-sdk-settings.ts', import.meta.url), 'utf8')
+const builderModuleSource = readFileSync(new URL('./agent-claude-inline-sdk-settings.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const sliceStartMarker = 'export function buildClaudeInlineSdkSettings('
 const sliceEndMarker = '\n}\n'
 const sliceStart = builderModuleSource.indexOf(sliceStartMarker)

@@ -19,6 +19,7 @@ import { visualizationsAtom, updateVisualizationSessionCache } from '@/atoms/vis
 import { unstable_batchedUpdates } from 'react-dom'
 import { useStore } from 'jotai'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { sidebarViewModeAtom } from '@/atoms/sidebar-atoms'
 import {
   agentPersistenceMapAtom,
@@ -70,6 +71,7 @@ import {
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
 import { shouldClaimAgentStream } from '@/lib/agent-stream-claim'
+import { shouldClearStaleRunState } from '@/lib/agent-run-state-reconcile'
 import { tabsAtom, activeTabIdAtom, activeTabAtom, activeSessionIdAtom, openTab, updateTabTitle, reconcileAgentTabTitles } from '@/atoms/tab-atoms'
 import { planFollowWorkTab, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 import { openFilePreviewTab } from '@/components/diff/preview-opener'
@@ -535,6 +537,10 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     })
     const streamStateBatcher = createSessionUpdateBatcher<AgentEvent>((sessionId, events) => {
       store.set(agentStreamingStatesAtom, (previous) => {
+        // TEMP 诊断：无状态会话被事件点亮成“运行中”，用于定位假运行态来源。
+        if (!previous.has(sessionId)) {
+          console.info('[Agent][运行态] 无状态会话新建运行占位', { sessionId, source: 'batcher', events: events.map(event => event.type) })
+        }
         const current = previous.get(sessionId) ?? {
           running: true,
           content: '',
@@ -851,6 +857,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     const unsubscribeTabsTitleReconcile = store.sub(tabsAtom, reconcileTabTitles)
 
     // ===== 1. 流式事件 =====
+    const deletionRevisions = new Map<string, number>()
     const cleanupEvent = window.electronAPI.onAgentStreamEvent(
       (streamEvent: AgentStreamEvent) => {
         unstable_batchedUpdates(() => {
@@ -865,6 +872,31 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         // running/backgroundWaiting）会判定「已结束」并跳过收尾，导致桌面通知、未查看标记、
         // 中断 chip、后台任务清理、finalize 等副作用全部丢失。
         if (payload.kind === 'run_complete' || payload.kind === 'run_error') return
+
+        if (payload.kind === 'session_deletion') {
+          const targetGeneration = store.get(coreTargetsAtom).generation
+          const previous = deletionRevisions.get(payload.requestId) ?? -1
+          if (payload.revision <= previous) return
+          deletionRevisions.set(payload.requestId, payload.revision)
+          const toastId = `session-deletion:${payload.requestId}`
+          if (payload.status === 'failed') {
+            toast.error(`“${payload.title}”未能删除`, {
+              id: toastId,
+              description: payload.error || 'Core保留了未清理的数据，请处理原因后重试。',
+              duration: Infinity,
+              action: { label: '重试删除', onClick: () => {
+                if (store.get(coreTargetsAtom).generation !== targetGeneration) {
+                  toast.error('已切换Core，请回到原Core后再重试删除')
+                  return
+                }
+                void window.electronAPI.deleteAgentSession(payload.sessionId).catch(error => {
+                  toast.error(error instanceof Error ? error.message : '删除重试请求未送达Core')
+                })
+              } },
+            })
+          } else toast.dismiss(toastId)
+          return
+        }
 
         if (payload.kind === 'session_projection') {
           if (payload.operation === 'upsert') {
@@ -1093,6 +1125,10 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
             } else {
               streamStateBatcher.flush(sessionId)
               store.set(agentStreamingStatesAtom, (prev) => {
+                // TEMP 诊断：同上，记录具体事件类别。
+                if (!prev.has(sessionId)) {
+                  console.info('[Agent][运行态] 无状态会话新建运行占位', { sessionId, source: 'event', event: event.type, kind: payload.kind })
+                }
                 const current: AgentStreamState = prev.get(sessionId) ?? {
                   running: true,
                   content: '',
@@ -1537,10 +1573,52 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     // 运行态：过程区一直折叠、没有 spinner、消息停在打开时的快照上。
     // 认领由主进程仲裁：已由独立会话窗口持有的会话不会被抢（见 restoreActiveAgentStreams）。
     const claimedSessionIds = new Set<string>()
+    /**
+     * 用所属内核的权威结果收掉渲染层残留的假运行态。
+     *
+     * 只在远程内核上做：远程流事件是主进程投影后发来的，渲染层可能因非「开跑」事件
+     * 建出 `running: true` 占位；这个占位没有对应的终态事件，会一直挂着。
+     */
+    const reconcileStaleRunState = async (sessionId: string): Promise<void> => {
+      if (store.get(coreTargetsAtom).currentId === 'local') return
+      const state = store.get(agentStreamingStatesAtom).get(sessionId)
+      if (!state?.running) return
+      let coreActive: boolean
+      try {
+        coreActive = await window.electronAPI.getAgentSessionActivity(sessionId)
+      } catch {
+        // 查不到权威结果时保持现状，不能凭失败去清运行态。
+        return
+      }
+      if (!shouldClearStaleRunState({
+        running: state.running === true,
+        stopping: state.stopping === true,
+        coreActive,
+      })) return
+      // 请求返回期间可能有新事件改写了同一会话：只在状态仍是刚才那一份时清理。
+      if (store.get(agentStreamingStatesAtom).get(sessionId) !== state) return
+      store.set(agentStreamingStatesAtom, (prev) => {
+        if (!prev.has(sessionId)) return prev
+        const next = new Map(prev)
+        next.delete(sessionId)
+        return next
+      })
+    }
+    /** 假运行态往往在打开会话之后才由迟到事件点亮，补一次短延时校正。 */
+    let reconcileTimer: ReturnType<typeof setTimeout> | undefined
+    const scheduleRunStateReconcile = (sessionId: string): void => {
+      if (store.get(coreTargetsAtom).currentId === 'local') return
+      clearTimeout(reconcileTimer)
+      reconcileTimer = setTimeout(() => { void reconcileStaleRunState(sessionId) }, 2500)
+    }
     const claimActiveSessionStream = (): void => {
       const tab = store.get(activeTabAtom)
       if (!tab) return
       const sessionId = tab.sessionId
+      if (tab.type === 'agent') {
+        void reconcileStaleRunState(sessionId)
+        scheduleRunStateReconcile(sessionId)
+      }
       const state = store.get(agentStreamingStatesAtom).get(sessionId)
       if (!shouldClaimAgentStream({
         tabType: tab.type,

@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'bun:test'
 import type { PreviewImageSource } from './agent-skin-tools'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 /** 派生缩略图用的 nativeImage 替身：1536 宽（超过 1200 上限，会走 resize 分支）。 */
 const DERIVED_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0])
@@ -104,7 +105,7 @@ describe('Agent Profer skin tool', () => {
       applied: true,
       wallpaper: 'assets/wallpaper.png',
       validated: true,
-      installedPath: '~/.profer-dev/skins/test-skin',
+      installedPath: join('~', '.profer-dev', 'skins', 'test-skin'),
     })
     expect(stagedPackage?.css).toContain('assets/wallpaper.png')
     expect(JSON.parse(stagedPackage!.manifest)).toMatchObject({ id: 'test-skin', contractVersion: 2 })
@@ -183,7 +184,7 @@ describe('Agent 皮肤工具：缩略图（preview）支持', () => {
     const handler = await loadHandler()
     const result = await handler({ ...base }) as { details?: { preview?: string; installedPath?: string } }
     // 单测环境没有真实 Electron，nativeImage 不可用 —— 此时必须静默降级，而不是让整个安装失败
-    expect(result.details?.installedPath).toBe('~/.profer-dev/skins/preview-skin')
+    expect(result.details?.installedPath).toBe(join('~', '.profer-dev', 'skins', 'preview-skin'))
     expect(stagedPackage?.previewName).toBeUndefined()
   })
 

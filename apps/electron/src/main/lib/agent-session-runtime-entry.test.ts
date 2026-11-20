@@ -22,6 +22,7 @@ function fixture(meta: AgentSessionMeta, active = false, settingsFail = false) {
   const deps = {
     normalizeAgentRuntime, isAgentRuntime, canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE,
     assertSensitiveAgentIpcSender() {},
+    routeSessionMetaToCore: async () => null,
     getAgentSessionMeta: (id: string) => id === session.id ? session : undefined,
     isAgentSessionActive: () => active,
     snapshotAgentRuntimeMeta: () => ({ ...session }),

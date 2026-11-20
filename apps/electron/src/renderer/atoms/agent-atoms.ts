@@ -368,7 +368,7 @@ export const agentSidePanelWidthAtom = atomWithStorage<number>('profer-agent-sid
 /** @deprecated 保留以兼容旧代码，但实际所有 session 都读全局 atom */
 export const agentSidePanelOpenMapAtom = atom<Map<string, boolean>>(new Map())
 
-export type AgentSidePanelBaseTab = 'session' | 'workspace' | 'changes'
+export type AgentSidePanelBaseTab = 'session' | 'workspace' | 'changes' | 'system'
 /** 右侧工作区 Tab：探索分支 Tab 化后只剩文件视图。 */
 export type AgentSidePanelTab = AgentSidePanelBaseTab
 
@@ -1245,3 +1245,6 @@ export const stoppedByUserSessionsAtom = atom<Set<string>>(new Set<string>())
 
 /** AgentSettingsInitializer 是否已完成加载（渠道/工作区/设置全部就绪） */
 export const agentSettingsReadyAtom = atom(false)
+
+/** 从会话/工作区文件面板跳到“系统文件”页并打开所在目录。 */
+export const coreSystemRevealAtom = atom<{ dir: string; ts: number } | null>(null)

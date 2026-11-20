@@ -43,6 +43,7 @@ import type {
 import { TRANSIENT_NETWORK_PATTERN, isMalformedResponseError } from '@profer/agent-runtime/error-patterns'
 import { spawn as spawnChild, execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { resolve, win32 } from 'node:path'
 import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
 import { normalizeClaudeTaskEvent } from './task-events'
@@ -865,6 +866,7 @@ const ANTHROPIC_PROXY_PROVIDERS = new Set<ProviderType>([
 ])
 
 export class ClaudeAgentAdapter implements AgentProviderAdapter {
+  private readonly taskOwners = new Map<string, { attemptId: string; stop: () => Promise<void> }>()
   private readonly sessionLifecycles = new Map<string, ProcessLifecyclePort>()
 
   constructor(private readonly ports: ClaudeProviderDependencies = {}) {}
@@ -980,9 +982,9 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     if (lifecycle) {
       if (!lifecycle.stopTask) throw new Error('Claude task stop host is not configured')
       await lifecycle.stopTask(sessionId, taskId, expectedType, async () => {
-        const query = activeQueries.get(sessionId)
-        if (!query) throw new Error(`后台任务所属 Agent 已结束: ${taskId}`)
-        await query.stopTask(taskId)
+        const owner = this.taskOwners.get(JSON.stringify([sessionId, taskId]))
+        if (!owner) throw new Error(`后台任务所属 Agent 已结束: ${taskId}`)
+        await owner.stop()
       })
       return
     }
@@ -993,9 +995,9 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       throw new Error(`后台任务类型不匹配: 期望 ${expectedType}，实际 ${record.type}`)
     }
     if (record.status !== 'running') return
-    const query = activeQueries.get(sessionId)
-    if (!query) throw new Error(`后台任务所属 Agent 已结束: ${taskId}`)
-    await query.stopTask(taskId)
+    const owner = this.taskOwners.get(JSON.stringify([sessionId, taskId]))
+    if (!owner) throw new Error(`后台任务所属 Agent 已结束: ${taskId}`)
+    await owner.stop()
     backgroundTaskManager.markStopped(sessionId, taskId)
   }
 
@@ -1027,7 +1029,8 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
     activeChannels.clear()
     sessionReadyStates.clear()
     backgroundTaskManager.clear()
-    for (const [sessionId, lifecycle] of this.sessionLifecycles) lifecycle.onExit?.(sessionId)
+    // dispose 不是进程退出证据；真实 exit 回调按 attempt 结算。
+    this.taskOwners.clear()
     this.sessionLifecycles.clear()
   }
 
@@ -1044,6 +1047,22 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
 
     // 创建 AbortController
     const controller = new AbortController()
+    const attemptId = randomUUID()
+    let exited = false
+    const settleExit = (): void => {
+      if (exited) return
+      exited = true
+      for (const [key, owner] of this.taskOwners) {
+        if (owner.attemptId !== attemptId) continue
+        this.taskOwners.delete(key)
+        if (!processLifecycle) {
+          const [sessionId, taskId] = JSON.parse(key) as [string, string]
+          const task = backgroundTaskManager.get(sessionId, taskId)
+          if (task?.status === 'running') backgroundTaskManager.upsert({ ...task, status: 'failed', summary: 'Claude 执行进程已退出，后台任务中断。' })
+        }
+      }
+      processLifecycle?.onExit?.(options.sessionId, attemptId)
+    }
     let registeredQuery: SDKQuery | undefined
     let registeredChannel: MessageChannel | undefined
     const registeredController = controller
@@ -1247,14 +1266,13 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
           }
           if (child.pid) {
             pidMap.set(options.sessionId, child.pid)
-            options.processLifecycle?.onSpawn?.(options.sessionId, child.pid, 'claude')
-            child.once('exit', () => {
-              // 仅当当前记录就是这个 pid 时才清理，防止并发会话误删
-              if (pidMap.get(options.sessionId) === child.pid) {
-                pidMap.delete(options.sessionId)
-              }
-            })
+            options.processLifecycle?.onSpawn?.(options.sessionId, child.pid, 'claude', attemptId)
           }
+          child.once('exit', () => {
+            // 先清理 PID，再通知宿主；宿主持久化失败不能阻止 PID 清理。
+            if (child.pid && pidMap.get(options.sessionId) === child.pid) pidMap.delete(options.sessionId)
+            settleExit()
+          })
           return child as unknown as import('@anthropic-ai/claude-agent-sdk').SpawnedProcess
         },
       } as import('@anthropic-ai/claude-agent-sdk').Options
@@ -1314,10 +1332,18 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         }
 
         const taskEvent = normalizeClaudeTaskEvent(msg)
-        if (taskEvent) {
+        if (taskEvent && !exited) {
+          const key = JSON.stringify([options.sessionId, taskEvent.taskId])
+          const previous = this.taskOwners.get(key)
+          // 同名任务仍属于原 attempt 时，拒绝让新 query 接管停止权限。
+          if (previous && previous.attemptId !== attemptId) throw new Error('后台任务 ID 已被其他 query attempt 占用')
+          this.taskOwners.set(key, { attemptId, stop: async () => {
+            if (exited) throw new Error(`后台任务所属 Agent 已结束: ${taskEvent.taskId}`)
+            await queryIterator.stopTask(taskEvent.taskId)
+          } })
           if (options.processLifecycle) {
             if (!options.processLifecycle.onTaskEvent) throw new Error('Claude task event host is not configured')
-            options.processLifecycle.onTaskEvent(options.sessionId, taskEvent)
+            options.processLifecycle.onTaskEvent(options.sessionId, taskEvent, attemptId)
           } else {
             backgroundTaskManager.upsert({ sessionId: options.sessionId, ...taskEvent })
           }
@@ -1463,15 +1489,17 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
    * 通过 SDK Query.setPermissionMode() 方法在查询进行中切换权限模式。
    * 典型场景：Plan 模式审批通过后切换到 bypassPermissions 或 auto。
    */
-  async setPermissionMode(sessionId: string, mode: string): Promise<void> {
+  async setPermissionMode(sessionId: string, mode: string, requireActive = false): Promise<void> {
     const query = activeQueries.get(sessionId)
     if (!query) {
+      if (requireActive) throw new Error(`Claude 查询尚未就绪或已结束：${sessionId}`)
       console.warn(`[Claude 适配器] 无活跃查询，跳过权限模式切换: ${sessionId}`)
       return
     }
     await (query as ReturnType<typeof import('@anthropic-ai/claude-agent-sdk').query>).setPermissionMode(
       mode as import('@anthropic-ai/claude-agent-sdk').PermissionMode,
     )
+    if (requireActive && activeQueries.get(sessionId) !== query) throw new Error(`Claude 查询代际已变化：${sessionId}`)
     console.log(`[Claude 适配器] 权限模式已切换: sessionId=${sessionId}, mode=${mode}`)
   }
 }

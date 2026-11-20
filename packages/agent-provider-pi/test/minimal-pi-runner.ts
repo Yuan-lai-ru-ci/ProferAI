@@ -16,6 +16,7 @@ import * as realSdk from '@earendil-works/pi-coding-agent'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import type { SDKMessage } from '@profer/shared'
+import { PiAgentAdapter } from '../src/pi-agent-adapter'
 import { createScriptedTransport, type ScriptedTransport, type ScriptedTurn } from './pi-scripted-transport'
 import { createMinimalPiHost, type MinimalPiHost } from '../src/host/minimal-pi-host'
 
@@ -23,6 +24,14 @@ import { createMinimalPiHost, type MinimalPiHost } from '../src/host/minimal-pi-
 let activeTransport: ScriptedTransport | undefined
 /** 最近一次场景使用的传输；用于断言真实 session 确实调用了脚本模型流。 */
 let lastTransport: ScriptedTransport | undefined
+
+export interface ScenarioResult {
+  name: string
+  passed: boolean
+  detail: string
+}
+
+const results: ScenarioResult[] = []
 
 // 真实 SDK 的 ModelRuntime 保持原样，只有模型响应流被替换：
 // Session、工具装配、事件流、abort/dispose、内存/磁盘 session 记录全部走真实实现。
@@ -35,16 +44,7 @@ function installScriptedTransport(): void {
 
 installScriptedTransport()
 
-const { PiAgentAdapter } = await import('../src/pi-agent-adapter')
 type PiAgentAdapterInstance = InstanceType<typeof PiAgentAdapter>
-
-export interface ScenarioResult {
-  name: string
-  passed: boolean
-  detail: string
-}
-
-const results: ScenarioResult[] = []
 
 function check(name: string, condition: boolean, detail: string): void {
   results.push({ name, passed: condition, detail })

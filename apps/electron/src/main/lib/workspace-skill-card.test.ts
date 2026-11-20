@@ -103,6 +103,13 @@ describe('工作区技能卡片：读写链路', () => {
     expect(JSON.parse(readFileSync(file, 'utf8')).futureField).toEqual({ keep: true })
   })
 
+  test('没有 frontmatter 的正文不新增 YAML 错误诊断', async () => {
+    const { slug } = setup()
+    writeFileSync(join(dirname(cardFile(slug)), 'SKILL.md'), '# 普通正文\n')
+    const state = await readWorkspaceSkillCard(slug, 'carded')
+    expect(state.doctor.map(issue => issue.code)).not.toContain('frontmatter-invalid')
+  })
+
   test('frontmatter 结构坏掉时报 frontmatter-invalid，而不是整条技能消失', async () => {
     const { slug } = setup()
     // YAML 结构错误：方括号没闭合。解析器是纯 ESM 包，只能经运行时动态 import 校验。

@@ -321,7 +321,7 @@ describe('能力裁剪：工具组 / PPT / skill / MCP', () => {
     expect(gatedNames.length).toBeLessThan(fullNames.length)
     // 未被禁用的组仍可用：策略只裁剪，不误伤。
     expect(gatedNames).toContain('open_file_preview')
-    expect(gatedNames).toContain('WebSearch')
+    expect(gatedNames).toContain('mcp__task-graph__profer_task_create')
   })
 
   test('Given 策略未禁用任何组 When 装配上下文 Then 工具面与未裁剪时一致', async () => {

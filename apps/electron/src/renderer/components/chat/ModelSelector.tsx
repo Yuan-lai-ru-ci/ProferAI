@@ -11,6 +11,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
+import { ownsCoreChat, coreTargetsAtom, coreChannelsAtom, coreChannelsLoadedAtom } from '@/atoms/core-target-atoms'
 import { ChevronDown, Cpu, Search, Layers2 } from 'lucide-react'
 import {
   Dialog,
@@ -140,6 +141,8 @@ function groupByChannel(options: ModelOption[]): Map<string, ModelOption[]> {
 
 /** ModelSelector 可选属性 */
 interface ModelSelectorProps {
+  /** 可选的远程 Core 渠道快照；传入后选择器不读写本机渠道目录。 */
+  channelsOverride?: Channel[]
   /** 仅显示此渠道的模型 */
   filterChannelId?: string
   /** 仅显示这些渠道的模型（多渠道过滤） */
@@ -186,6 +189,7 @@ interface ModelSelectorProps {
 }
 
 export function ModelSelector({
+  channelsOverride,
   filterChannelId,
   filterChannelIds,
   externalSelectedModel,
@@ -219,9 +223,17 @@ export function ModelSelector({
     }
     onOpenChange?.(next)
   }, [controlledOpen, onOpenChange])
-  const channels = useAtomValue(channelsAtom)
+  const target = useAtomValue(coreTargetsAtom)
+  const coreChannels = useAtomValue(coreChannelsAtom)
+  const coreLoaded = useAtomValue(coreChannelsLoadedAtom)
+  const setCoreChannels = useSetAtom(coreChannelsAtom)
+  const setCoreLoaded = useSetAtom(coreChannelsLoadedAtom)
+  const usesCoreCatalog = !channelsOverride && (ownsCoreChat(target) || Boolean(conversationId?.startsWith('core-chat:')))
+  const localChannels = useAtomValue(channelsAtom)
+  const channels = channelsOverride ?? (usesCoreCatalog ? coreChannels : localChannels)
   const authStatus = useAtomValue(authStatusAtom)
-  const channelsLoaded = useAtomValue(channelsLoadedAtom)
+  const localChannelsLoaded = useAtomValue(channelsLoadedAtom)
+  const channelsLoaded = usesCoreCatalog ? coreLoaded?.targetId === target.currentId && coreLoaded.generation === target.generation : localChannelsLoaded
   const modelSelectorRequest = useAtomValue(modelSelectorRequestAtom)
   const [search, setSearch] = React.useState('')
   const [saving, setSaving] = React.useState(false)
@@ -233,8 +245,26 @@ export function ModelSelector({
   React.useEffect(() => {
     mountedRef.current = true
     const unsubscribe = store.sub(authStatusAtom, () => { selectionGenerationRef.current += 1 })
-    return () => { mountedRef.current = false; selectionGenerationRef.current += 1; unsubscribe() }
+    const unsubscribeCore = store.sub(coreTargetsAtom, () => { selectionGenerationRef.current += 1 })
+    return () => { mountedRef.current = false; selectionGenerationRef.current += 1; unsubscribe(); unsubscribeCore() }
   }, [store, conversationId])
+
+  React.useEffect(() => {
+    if (!usesCoreCatalog) return
+    let active = true
+    setCoreChannels([])
+    setCoreLoaded(null)
+    const isCurrent = (): boolean => {
+      const current = store.get(coreTargetsAtom)
+      return active && current.currentId === target.currentId && current.generation === target.generation
+    }
+    void window.electronAPI.listCoreChannels().then(items => {
+      if (!isCurrent()) return
+      setCoreChannels(items.map(item => ({ ...item, apiKey: '', baseUrl: item.baseUrl ?? '', models: item.models ?? [], enabled: item.enabled !== false, createdAt: 0, updatedAt: 0 } as Channel)))
+      setCoreLoaded({ targetId: target.currentId, generation: target.generation })
+    }).catch((error: unknown) => { if (isCurrent()) toast.error(error instanceof Error ? error.message : '读取 Core 模型目录失败') })
+    return () => { active = false }
+  }, [usesCoreCatalog, target.currentId, target.generation, store, setCoreChannels, setCoreLoaded])
 
   // 外部请求打开（ErrorMessage 的 select_model 恢复操作）：seq 变化时打开 Dialog。
   // 组件挂载时先记录当前 seq（不弹窗），后续新请求（seq+1）才会触发。
@@ -254,14 +284,14 @@ export function ModelSelector({
   React.useEffect(() => {
     if (!open) return
     setSearch('')
-    requestCatalogRefresh((revision) => revision + 1)
-  }, [open, requestCatalogRefresh])
+    if (!channelsOverride && !usesCoreCatalog) requestCatalogRefresh((revision) => revision + 1)
+  }, [open, channelsOverride, usesCoreCatalog, requestCatalogRefresh])
 
   // 未登录时隐藏服务端托管的官方渠道，避免残留缓存渠道展示给未登录用户
   const visibleChannels = React.useMemo(() => {
-    if (authStatus.isLoggedIn) return channels
+    if (usesCoreCatalog || channelsOverride || authStatus.isLoggedIn) return channels
     return channels.filter((c) => !isOfficialChannel(c))
-  }, [channels, authStatus.isLoggedIn])
+  }, [channels, usesCoreCatalog, channelsOverride, authStatus.isLoggedIn])
 
   const modelOptions = React.useMemo(
     () => buildModelOptions(visibleChannels, filterChannelId, filterChannelIds, preferredProtocol, strictProtocolFilter, runtime),
@@ -335,8 +365,8 @@ export function ModelSelector({
 
   /** 选择模型并持久化到当前对话 */
   const handleSelect = (option: ModelOption): void => {
-    if (disabled || selectionInFlightRef.current || !store.get(channelsLoadedAtom)) return
-    const currentChannels = store.get(channelsAtom).filter((channel) => store.get(authStatusAtom).isLoggedIn || !isOfficialChannel(channel))
+    if (disabled || selectionInFlightRef.current || (!channelsOverride && !channelsLoaded)) return
+    const currentChannels = (channelsOverride ?? (usesCoreCatalog ? store.get(coreChannelsAtom) : store.get(channelsAtom))).filter((channel) => usesCoreCatalog || channelsOverride || store.get(authStatusAtom).isLoggedIn || !isOfficialChannel(channel))
     const currentOption = buildModelOptions(currentChannels, option.channelId, filterChannelIds, preferredProtocol, strictProtocolFilter, runtime)
       .find((item) => item.modelId === option.modelId)
     if (!currentOption) {
@@ -420,7 +450,7 @@ export function ModelSelector({
     }, 100)
   }, [open, flatOptions, highlightIndex, handleSelect])
 
-  if (channelsLoaded && modelOptions.length === 0) {
+  if (!channelsOverride && channelsLoaded && modelOptions.length === 0) {
     if (hideTrigger) return <></>
     return (
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-2 py-1">

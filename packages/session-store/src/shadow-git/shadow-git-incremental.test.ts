@@ -10,7 +10,7 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { createGitRunner } from './git-command'
@@ -221,7 +221,9 @@ test.skipIf(!gitPath)(
       const [mode] = (meta ?? '').split(' ')
       if (path && mode) modes.set(path, mode)
     }
-    expect(modes.get(`roots/${WORKSPACE_ID}/a.txt`)).toBe('100755')
+    // Windows 不提供 POSIX 可执行位；仍验证快照忠实记录宿主实际提供的 mode。
+    const executableMode = (statSync(join(setup.rootPath, 'a.txt')).mode & 0o111) !== 0 ? '100755' : '100644'
+    expect(modes.get(`roots/${WORKSPACE_ID}/a.txt`)).toBe(executableMode)
     expect(modes.get(`roots/${WORKSPACE_ID}/b.txt`)).toBe('100644')
 
     // 模拟升级前写下的清单：条目没有 mode。这种条目不能复用，

@@ -40,6 +40,8 @@ import { normalizeReasoningCapabilityLevel } from '@profer/shared'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import type { ChannelProtocol } from '@/lib/channel-model-groups'
 
+import { openModelSelectorAfterPopoverClose } from './model-selector-dialog'
+
 export interface AgentModelReasoningPickerProps {
   sessionId: string
   sessionMeta?: AgentSessionMeta
@@ -57,6 +59,7 @@ export interface AgentModelReasoningPickerProps {
   // 模型选择
   externalSelectedModel?: { channelId: string; modelId: string } | null
   onModelSelect?: (option: ModelOption) => void
+  channelsOverride?: import('@profer/shared').Channel[]
   filterChannelIds?: string[]
   preferredProtocol?: ChannelProtocol
   strictProtocolFilter?: boolean
@@ -97,6 +100,7 @@ export function AgentModelReasoningPicker({
   onThinkingExpandedChange,
   externalSelectedModel,
   onModelSelect,
+  channelsOverride,
   filterChannelIds,
   preferredProtocol = 'openai',
   strictProtocolFilter = true,
@@ -193,11 +197,9 @@ export function AgentModelReasoningPicker({
   )
 
   const handleOpenModelDialog = () => {
-    // 直接拉起完整模型选择 Dialog：不先卸载 Popover，避免 Radix 关闭动画的
-    // focus 回退与 Dialog 的 outside-dismiss 监听互相触发，导致刚打开就被关掉。
-    setModelSelectorOpen(true)
+    // 先让 Radix 完成父 Popover 关闭，再挂载 Dialog，避免 outside-dismiss 抢先关掉新弹层。
+    openModelSelectorAfterPopoverClose(() => setPopoverOpen(false), () => setModelSelectorOpen(true))
   }
-
   const tooltipText = `模型与思考 · ${modelDisplayName} (${resolvedLevelLabel})`
 
   return (
@@ -293,7 +295,7 @@ export function AgentModelReasoningPicker({
 
       {/* 隐藏的完整模型选择 Dialog，点击卡片第一行触发 */}
       <ModelSelector
-        filterChannelIds={filterChannelIds}
+        channelsOverride={channelsOverride}
         preferredProtocol={preferredProtocol}
         strictProtocolFilter={strictProtocolFilter}
         {...(runtime ? { runtime } : {})}

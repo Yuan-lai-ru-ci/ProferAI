@@ -87,7 +87,7 @@ mock.module('./build-target', () => ({ isCommercialBuild: () => false }))
 mock.module('./official-channel', () => ({ isOfficialManagedChannel: () => true }))
 mock.module('./knowledge-item-service', () => ({ searchKnowledgeItemsForChat: () => [] }))
 mock.module('./chat-knowledge-request', () => ({ prepareChatKnowledgeRequest: async (input: { userMessage: string }) => ({ providerUserMessage: input.userMessage, effectiveReferences: [], knowledgeContextChars: 0 }) }))
-mock.module('@profer/core', () => ({
+mock.module('../../../../../packages/core/src/providers/index.ts', () => ({
   getAdapter: () => ({
     buildStreamRequest: (input: { modelId: string; baseUrl: string }) => { requests.push(input); return { url: input.baseUrl, headers: {}, body: '{}' } },
     buildTitleRequest: (input: { modelId: string; baseUrl: string }) => { requests.push(input); return { url: input.baseUrl, headers: {}, body: '{}' } },

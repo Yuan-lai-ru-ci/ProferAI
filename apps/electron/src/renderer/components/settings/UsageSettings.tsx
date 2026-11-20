@@ -1024,7 +1024,7 @@ function AddSoundDialog({
  * 接管了但主线程跟不上，观感会不如原生。
  */
 function SmoothScrollDiagnostics({ enabled, force }: { enabled: boolean; force: boolean }): React.ReactElement {
-  React.useSyncExternalStore(subscribeSmoothWheelSamples, readSmoothWheelVersion)
+  React.useSyncExternalStore(subscribeSmoothWheelSamples, readSmoothWheelVersion, () => 0)
   const samples = readSmoothWheelSamples()
   const reducedMotion = React.useMemo(
     () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false,

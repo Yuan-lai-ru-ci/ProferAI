@@ -195,8 +195,8 @@ describe('旧链 project：skin 参考图能读 storageDir 里的生成图', () 
       storageDir: layout.storageDir,
       allowedRoots: [],
     }, 'generated-image-skinref.png')
-    expect(generated.image.localPath.startsWith(realpathSync(layout.imageOutputDir))).toBe(true)
-    expect(generated.image.localPath.startsWith(join(root, '.profer', 'sessions'))).toBe(true)
+    expect(realpathSync.native(dirname(generated.image.localPath))).toBe(realpathSync.native(layout.imageOutputDir))
+    expect(realpathSync.native(generated.image.localPath).startsWith(realpathSync.native(join(root, '.profer', 'sessions')))).toBe(true)
 
     const attachedDirectories: string[] = []
     const productArtifactDirectories: string[] = []

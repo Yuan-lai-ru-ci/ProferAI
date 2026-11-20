@@ -3,6 +3,7 @@ import * as React from 'react'
 import { atom, createStore } from 'jotai/vanilla'
 import type { Channel, ConversationMeta } from '@profer/shared'
 import { channelsAtom, channelsLoadedAtom, conversationsAtom, conversationModelsAtom, conversationModelAtomFamily, modelSelectorRequestAtom, selectedModelAtom, channelCatalogRefreshAtom } from '../../atoms/chat-atoms'
+import { coreTargetsAtom } from '../../atoms/core-target-atoms'
 import { authStatusAtom } from '../../atoms/identity-atoms'
 
 const store = createStore()
@@ -121,6 +122,15 @@ function mount(channels = [fixture], conversation = meta, props: Parameters<type
 afterEach(() => { mounts.splice(0).forEach((cleanup) => cleanup()); agentSessionIdForTest = null; Reflect.deleteProperty(globalThis, 'window') })
 
 describe('ModelSelector 真实交互（fixture IPC）', () => {
+  test('远程渠道目录为空或尚在加载时，受控 Dialog 仍保持挂载且不刷新本机目录', () => {
+    const previous = store.get(channelCatalogRefreshAtom)
+    const scope = mount([], undefined, { channelsOverride: [], hideTrigger: true, open: true, onOpenChange: () => {} })
+    expect(scope.elements().some((element) => element.props.open === true)).toBe(true)
+    expect(scope.elements().some((element) => element.props['aria-label'] === '搜索模型')).toBe(true)
+    expect(store.get(channelCatalogRefreshAtom)).toBe(previous)
+    expect(scope.lists()).toBe(0)
+  })
+
   test('打开弹窗请求统一本地目录刷新，组件自身不执行LIST', () => {
     const scope = mount()
     const previous = store.get(channelCatalogRefreshAtom)
@@ -283,4 +293,14 @@ describe('ModelSelector 跨内核选项', () => {
     expect(row(scope, 'ClaudeModel')).toBeUndefined()
     expect(row(scope, 'Model').props.disabled).toBe(false)
   })
+})
+
+test('Given 模型保存中 When Core generation变化 Then 旧模型回执不得覆盖会话绑定', async () => {
+ const scope = mount([fixture, { ...fixture, id:'second' }], { ...meta, channelId:'second' })
+ const select = scope.option().props.onClick as () => void
+ select()
+ const current = store.get(coreTargetsAtom)
+ store.set(coreTargetsAtom, { ...current, generation:current.generation+1 })
+ scope.requests[0]!.resolve({ ...meta }); await scope.flush()
+ expect(store.get(selectedModelAtom)?.channelId).toBe('second')
 })

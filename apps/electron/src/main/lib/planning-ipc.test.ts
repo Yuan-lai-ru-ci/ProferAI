@@ -24,6 +24,13 @@ describe('Planning IPC 注册（结构检查）', () => {
     expect(source).toContain('TODO_AGENT_SESSION_READY')
     expect(source).toContain('broadcastPlanningChanged')
   })
+  test('standalone Planning window uses the selected dev instance origin rather than a hardcoded port', () => {
+    const windowSource = readFileSync(resolve(import.meta.dir, 'planning-window.ts'), 'utf8')
+    expect(windowSource).toContain('loadURL(`${VITE_DEV_SERVER_URL}?window=planning`)')
+    expect(windowSource).toContain('new URL(url).origin === VITE_DEV_SERVER_URL')
+    expect(windowSource).not.toContain('http://127.0.0.1:5173')
+  })
+
   test('ipc.ts 只保留注册入口', () => {
     expect(source).toContain('export function registerPlanningIpc(): void')
     expect(ipc).toContain('registerPlanningIpc()')

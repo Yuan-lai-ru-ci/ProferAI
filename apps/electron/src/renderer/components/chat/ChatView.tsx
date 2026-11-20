@@ -42,7 +42,7 @@ import {
 } from '@/atoms/chat-atoms'
 import type { PendingAttachment, ChatPendingMessage } from '@/atoms/chat-atoms'
 import { promptConfigAtom, promptSidebarOpenAtom, conversationPromptIdAtom, resolveSystemMessage, selectedPromptIdAtom } from '@/atoms/system-prompt-atoms'
-import { activeToolIdsAtom } from '@/atoms/chat-tool-atoms'
+import { chatKnowledgeUnavailableReasonAtom, activeToolIdsAtom } from '@/atoms/chat-tool-atoms'
 import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { ConversationProvider } from '@/contexts/session-context'
@@ -185,10 +185,12 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
 
   // ===== 加载消息 + 上下文分隔线 =====
   React.useEffect(() => {
+    let active = true
     setMessagesLoaded(false)
     window.electronAPI
       .getBranch(conversationId)
       .then((msgs) => {
+        if (!active) return
         setMessages(msgs)
         setHasMoreMessages(false)
         setMessagesLoaded(true)
@@ -204,6 +206,7 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
         })
       })
       .catch(console.error)
+    return () => { active = false }
   }, [conversationId, refreshVersion, setStreamingStates])
 
   // ===== 外部用户消息公告（桌面/移动端任一端发送） =====
@@ -296,6 +299,12 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
 
     const consumePending = options?.consumePendingAttachments ?? true
     const knowledgeReferences = options?.knowledgeReferences ?? pendingKnowledgeReferences
+    const knowledgeUnavailable = store.get(chatKnowledgeUnavailableReasonAtom)
+    if (knowledgeReferences.length && knowledgeUnavailable) {
+      toast.error(`${knowledgeUnavailable}，请移除资料引用后重试`)
+      return
+    }
+    const ownedToolIds = store.get(activeToolIdsAtom)
 
     // 清除当前对话的错误消息
     setChatStreamErrors((prev) => {
@@ -428,7 +437,7 @@ function ChatViewInner({ conversationId, standalone = false }: ChatViewProps): R
       knowledgeReferences: knowledgeReferences.length > 0 ? knowledgeReferences : undefined,
       thinkingEnabled: thinkingEnabled || undefined,
       systemMessage: resolveSystemMessage(conversationPromptId, promptConfig, userProfile.userName),
-      enabledToolIds: activeToolIds.length > 0 ? activeToolIds : undefined,
+      enabledToolIds: ownedToolIds.length > 0 ? ownedToolIds : undefined,
       ...(options?.pendingUserMessageId ? { pendingUserMessageId: options.pendingUserMessageId } : {}),
     }
 

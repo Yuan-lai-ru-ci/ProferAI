@@ -50,6 +50,7 @@ import { getAgentWorkspace } from './agent-workspace-manager'
 import { createAgentSession } from './agent-session-manager'
 import { getSettings } from './settings-service'
 import { feishuBridgeManager } from './feishu-bridge-manager'
+import { routePlanningToCore } from './planning-core-routing'
 
 const isPlanningTitle = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 500
@@ -86,16 +87,40 @@ function parseCalendarEventListQuery(input: unknown): CalendarEventListQuery {
 }
 
 export function registerPlanningIpc(): void {
-  ipcMain.handle(PLANNING_IPC_CHANNELS.OPEN_WINDOW, async (): Promise<void> => {
+  const handle = <Args extends unknown[], Result>(
+    channel: string,
+    local: (event: Electron.IpcMainInvokeEvent, ...args: Args) => Result,
+  ): void => {
+    ipcMain.handle(channel, async (event, ...args: Args) => {
+      if (channel !== PLANNING_IPC_CHANNELS.OPEN_WINDOW) {
+        const routed = await routePlanningToCore(channel, args)
+        if (routed) {
+          if (channel === PLANNING_IPC_CHANNELS.START_TODO_AGENT) {
+            const result = routed.result as StartTodoAgentResult
+            const mainWindow = BrowserWindow.getAllWindows().find(win => !win.isDestroyed() && new URL(win.webContents.getURL()).searchParams.get('window') === null)
+            if (new URL(event.sender.getURL()).searchParams.get('window') === 'planning' && mainWindow) {
+              if (mainWindow.isMinimized()) mainWindow.restore()
+              mainWindow.show(); mainWindow.focus()
+              mainWindow.webContents.send(PLANNING_IPC_CHANNELS.TODO_AGENT_SESSION_READY, result)
+            }
+          }
+          return routed.result
+        }
+      }
+      return local(event, ...args)
+    })
+  }
+
+  handle(PLANNING_IPC_CHANNELS.OPEN_WINDOW, async (): Promise<void> => {
     const { showPlanningWindow } = await import('./planning-window')
     showPlanningWindow()
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.LIST_TODOS, async (_, input?: unknown): Promise<Todo[]> => {
+  handle(PLANNING_IPC_CHANNELS.LIST_TODOS, async (_, input?: unknown): Promise<Todo[]> => {
     return listTodos(parseTodoListQuery(input))
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.CREATE_TODO, async (_, input: CreateTodoInput): Promise<Todo> => {
+  handle(PLANNING_IPC_CHANNELS.CREATE_TODO, async (_, input: CreateTodoInput): Promise<Todo> => {
     if (!input || !isPlanningTitle(input.title)) throw new Error('Todo 标题不能为空且不能超过 500 字')
     if (input.priority !== undefined && !isTodoPriority(input.priority)) throw new Error('Todo priority 非法')
     if (input.dueAt !== undefined && !isPlanningTimestamp(input.dueAt)) throw new Error('Todo dueAt 非法')
@@ -106,7 +131,7 @@ export function registerPlanningIpc(): void {
     return todo
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.START_TODO_AGENT, (event, input: StartTodoAgentInput): StartTodoAgentResult => {
+  handle(PLANNING_IPC_CHANNELS.START_TODO_AGENT, (event, input: StartTodoAgentInput): StartTodoAgentResult => {
     if (!input || typeof input.todoId !== 'string' || !input.todoId.trim()) throw new Error('Todo id 必填')
     if (typeof input.workspaceId !== 'string' || !input.workspaceId.trim()) throw new Error('项目 id 必填')
     if (!isPlanningTimestamp(input.expectedUpdatedAt)) throw new Error('Todo expectedUpdatedAt 非法')
@@ -155,7 +180,7 @@ export function registerPlanningIpc(): void {
     return { todo, session }
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.UPDATE_TODO, async (_, input: UpdateTodoInput): Promise<Todo | undefined> => {
+  handle(PLANNING_IPC_CHANNELS.UPDATE_TODO, async (_, input: UpdateTodoInput): Promise<Todo | undefined> => {
     if (!input || typeof input.id !== 'string' || !input.id) throw new Error('Todo id 必填')
     if (input.title !== undefined && !isPlanningTitle(input.title)) throw new Error('Todo 标题不能为空且不能超过 500 字')
     if (input.priority !== undefined && !isTodoPriority(input.priority)) throw new Error('Todo priority 非法')
@@ -170,18 +195,18 @@ export function registerPlanningIpc(): void {
     return todo
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.DELETE_TODO, async (_, id: string, workspaceId?: string): Promise<boolean> => {
+  handle(PLANNING_IPC_CHANNELS.DELETE_TODO, async (_, id: string, workspaceId?: string): Promise<boolean> => {
     if (!id || typeof id !== 'string') throw new Error('Todo id 必填')
     const deleted = deleteTodo(id)
     if (deleted) broadcastPlanningChanged(['todos', 'calendar_events', 'reminders'])
     return deleted
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.LIST_CALENDAR_EVENTS, async (_, input?: unknown): Promise<CalendarEvent[]> => {
+  handle(PLANNING_IPC_CHANNELS.LIST_CALENDAR_EVENTS, async (_, input?: unknown): Promise<CalendarEvent[]> => {
     return listCalendarEvents(parseCalendarEventListQuery(input))
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.CREATE_CALENDAR_EVENT, async (_, input: CreateCalendarEventInput): Promise<CalendarEvent> => {
+  handle(PLANNING_IPC_CHANNELS.CREATE_CALENDAR_EVENT, async (_, input: CreateCalendarEventInput): Promise<CalendarEvent> => {
     if (!input || !isPlanningTitle(input.title) || !isPlanningTimestamp(input.startAt)) throw new Error('日程标题和 startAt 必填')
     if (input.endAt !== undefined && (!isPlanningTimestamp(input.endAt) || input.endAt < input.startAt)) throw new Error('日程 endAt 非法')
     const event = createCalendarEvent(input)
@@ -189,7 +214,7 @@ export function registerPlanningIpc(): void {
     return event
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.UPDATE_CALENDAR_EVENT, async (_, input: UpdateCalendarEventInput): Promise<CalendarEvent | undefined> => {
+  handle(PLANNING_IPC_CHANNELS.UPDATE_CALENDAR_EVENT, async (_, input: UpdateCalendarEventInput): Promise<CalendarEvent | undefined> => {
     if (!input || typeof input.id !== 'string' || !input.id) throw new Error('日程 id 必填')
     if (input.title !== undefined && !isPlanningTitle(input.title)) throw new Error('日程标题不能为空且不能超过 500 字')
     if (input.startAt !== undefined && !isPlanningTimestamp(input.startAt)) throw new Error('日程 startAt 非法')
@@ -200,68 +225,68 @@ export function registerPlanningIpc(): void {
     return event
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.DELETE_CALENDAR_EVENT, async (_, id: string, workspaceId?: string): Promise<boolean> => {
+  handle(PLANNING_IPC_CHANNELS.DELETE_CALENDAR_EVENT, async (_, id: string, workspaceId?: string): Promise<boolean> => {
     if (!id || typeof id !== 'string') throw new Error('日程 id 必填')
     const deleted = deleteCalendarEvent(id)
     if (deleted) broadcastPlanningChanged(['calendar_events', 'reminders'])
     return deleted
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.LIST_GROUPS, async (_, scope: PlanningGroupScope, workspaceId?: string): Promise<PlanningGroup[]> => {
+  handle(PLANNING_IPC_CHANNELS.LIST_GROUPS, async (_, scope: PlanningGroupScope, workspaceId?: string): Promise<PlanningGroup[]> => {
     if (!isPlanningGroupScope(scope)) throw new Error('分组范围非法')
     return listPlanningGroups(scope)
   })
-  ipcMain.handle(PLANNING_IPC_CHANNELS.CREATE_GROUP, async (_, input: CreatePlanningGroupInput): Promise<PlanningGroup> => {
+  handle(PLANNING_IPC_CHANNELS.CREATE_GROUP, async (_, input: CreatePlanningGroupInput): Promise<PlanningGroup> => {
     if (!input || !isPlanningGroupScope(input.scope) || !isPlanningShortName(input.name) || !isOptionalColor(input.color)) throw new Error('分组参数非法')
     const group = createPlanningGroup(input)
     broadcastPlanningChanged(input.scope === 'todo' ? ['todo_groups', 'todos', 'reminders'] : ['calendar_groups', 'calendar_events', 'reminders'])
     return group
   })
-  ipcMain.handle(PLANNING_IPC_CHANNELS.UPDATE_GROUP, async (_, input: UpdatePlanningGroupInput): Promise<PlanningGroup | undefined> => {
+  handle(PLANNING_IPC_CHANNELS.UPDATE_GROUP, async (_, input: UpdatePlanningGroupInput): Promise<PlanningGroup | undefined> => {
     if (!input || !isPlanningGroupScope(input.scope) || typeof input.id !== 'string' || (input.name !== undefined && !isPlanningShortName(input.name)) || !isOptionalColor(input.color)) throw new Error('分组参数非法')
     const group = updatePlanningGroup(input)
     if (group) broadcastPlanningChanged(input.scope === 'todo' ? ['todo_groups', 'todos', 'reminders'] : ['calendar_groups', 'calendar_events', 'reminders'])
     return group
   })
-  ipcMain.handle(PLANNING_IPC_CHANNELS.DELETE_GROUP, async (_, scope: PlanningGroupScope, id: string, workspaceId?: string): Promise<boolean> => {
+  handle(PLANNING_IPC_CHANNELS.DELETE_GROUP, async (_, scope: PlanningGroupScope, id: string, workspaceId?: string): Promise<boolean> => {
     if (!isPlanningGroupScope(scope) || !id || typeof id !== 'string') throw new Error('分组参数非法')
     const deleted = deletePlanningGroup(scope, id)
     if (deleted) broadcastPlanningChanged(scope === 'todo' ? ['todo_groups', 'todos', 'reminders'] : ['calendar_groups', 'calendar_events', 'reminders'])
     return deleted
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.LIST_TAGS, async (_, workspaceId?: string): Promise<PlanningTag[]> => {
+  handle(PLANNING_IPC_CHANNELS.LIST_TAGS, async (_, workspaceId?: string): Promise<PlanningTag[]> => {
     return listPlanningTags()
   })
-  ipcMain.handle(PLANNING_IPC_CHANNELS.CREATE_TAG, async (_, input: CreatePlanningTagInput): Promise<PlanningTag> => {
+  handle(PLANNING_IPC_CHANNELS.CREATE_TAG, async (_, input: CreatePlanningTagInput): Promise<PlanningTag> => {
     if (!input || !isPlanningShortName(input.name) || !isOptionalColor(input.color)) throw new Error('标签参数非法')
     const tag = createPlanningTag(input)
     broadcastPlanningChanged(['tags', 'todos', 'calendar_events', 'reminders'])
     return tag
   })
-  ipcMain.handle(PLANNING_IPC_CHANNELS.UPDATE_TAG, async (_, input: UpdatePlanningTagInput): Promise<PlanningTag | undefined> => {
+  handle(PLANNING_IPC_CHANNELS.UPDATE_TAG, async (_, input: UpdatePlanningTagInput): Promise<PlanningTag | undefined> => {
     if (!input || typeof input.id !== 'string' || !input.id || (input.name !== undefined && !isPlanningShortName(input.name)) || !isOptionalColor(input.color)) throw new Error('标签参数非法')
     const tag = updatePlanningTag(input)
     if (tag) broadcastPlanningChanged(['tags', 'todos', 'calendar_events', 'reminders'])
     return tag
   })
-  ipcMain.handle(PLANNING_IPC_CHANNELS.DELETE_TAG, async (_, id: string, workspaceId?: string): Promise<boolean> => {
+  handle(PLANNING_IPC_CHANNELS.DELETE_TAG, async (_, id: string, workspaceId?: string): Promise<boolean> => {
     if (!id || typeof id !== 'string') throw new Error('标签 id 必填')
     const deleted = deletePlanningTag(id)
     if (deleted) broadcastPlanningChanged(['tags', 'todos', 'calendar_events', 'reminders'])
     return deleted
   })
 
-  ipcMain.handle(PLANNING_IPC_CHANNELS.LIST_ACTIVE_REMINDERS, async (_, workspaceId?: string): Promise<ActivePlanningReminder[]> => {
+  handle(PLANNING_IPC_CHANNELS.LIST_ACTIVE_REMINDERS, async (_, workspaceId?: string): Promise<ActivePlanningReminder[]> => {
     return listActivePlanningReminders()
   })
-  ipcMain.handle(PLANNING_IPC_CHANNELS.ACKNOWLEDGE_REMINDER, async (_, id: string, workspaceId?: string): Promise<PlanningReminder | undefined> => {
+  handle(PLANNING_IPC_CHANNELS.ACKNOWLEDGE_REMINDER, async (_, id: string, workspaceId?: string): Promise<PlanningReminder | undefined> => {
     if (!id || typeof id !== 'string') throw new Error('提醒 id 必填')
     const reminder = acknowledgePlanningReminder(id)
     if (reminder) broadcastPlanningChanged(['todos', 'calendar_events', 'reminders'])
     return reminder
   })
-  ipcMain.handle(PLANNING_IPC_CHANNELS.SNOOZE_REMINDER, async (_, input: SnoozePlanningReminderInput, workspaceId?: string): Promise<PlanningReminder | undefined> => {
+  handle(PLANNING_IPC_CHANNELS.SNOOZE_REMINDER, async (_, input: SnoozePlanningReminderInput, workspaceId?: string): Promise<PlanningReminder | undefined> => {
     if (!input || typeof input.id !== 'string' || !Number.isInteger(input.minutes) || input.minutes < 1 || input.minutes > 10080) throw new Error('推迟分钟数非法')
     const reminder = snoozePlanningReminder(input.id, input.minutes)
     if (reminder) broadcastPlanningChanged(['todos', 'calendar_events', 'reminders'])

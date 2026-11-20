@@ -71,6 +71,7 @@ export function parseProjectWorkspaceError(message: string | null | undefined): 
   const raw = message ?? ''
   const unwrapped = raw
     .replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, '')
+    .replace(/^(?:Error:\s*)?CoreClientError:\s*/, '')
     .trim()
   const tagged = /^\[PROJECT:([a-z-]+)\]\s*([\s\S]*)$/.exec(unwrapped)
   if (!tagged) return { text: unwrapped }

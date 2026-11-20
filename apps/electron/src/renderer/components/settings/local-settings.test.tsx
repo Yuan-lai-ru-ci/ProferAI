@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 // 隔离 hook 宿主运行真实页面事件；API 全为内存 fixture，不访问用户配置或服务。
 const store = createStore()
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
 type AtomTarget = Parameters<typeof store.get>[0]
 type WritableTarget = Parameters<typeof store.set>[0]
 const setters = new Map<WritableTarget, (value: unknown) => void>()
@@ -167,6 +168,7 @@ const fail = async () => { throw new Error('fixture failure') }
 function api(overrides: Props = {}) {
   Object.defineProperty(globalThis, 'window', { configurable: true, value: {
     innerHeight: 800, addEventListener() {}, removeEventListener() {},
+    matchMedia: () => ({ matches: false }),
     electronAPI: {
       getSettings: async () => ({ archiveAfterDays: 7, inputCompactViewportHeight: 700, inputCompactMinHeight: 60, inputCompactMaxHeight: 140 }),
       getSystemPromptConfig: async () => store.get(promptConfigAtom),
@@ -189,6 +191,8 @@ afterEach(() => {
   errors.length = 0
   successes.length = 0
   store.set(showCurrentSessionSectionAtom, true)
+  if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+  else Reflect.deleteProperty(globalThis, 'window')
 })
 
 describe('AccountSettings 真实事件（mock IPC）', () => {
@@ -512,6 +516,7 @@ describe('UsageSettings 低风险持久化与删除', () => {
 })
 
 test('真实 React SSR：头像触发器为按钮、提示词编辑标签关联、初始 Usage 高度禁用', () => {
+  api()
   store.set(userProfileAtom, { userName: 'Fixture', avatar: 'F' })
   store.set(authStatusAtom, { isLoggedIn: false })
   const account = renderToStaticMarkup(<AccountSettings />)

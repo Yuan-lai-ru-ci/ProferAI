@@ -8,6 +8,8 @@
  * - 不直接或间接导入 apps/electron。
  */
 
+export { loadPiFileCheckpoint, restorePiFileCheckpoint, adoptPiFileCheckpoints } from './pi/native-file-checkpoint'
+export * from './native-session'
 export * from './pi-agent-adapter'
 export type {
   PiAgentAdapterPorts,
@@ -35,3 +37,6 @@ export type {
 } from './pi/rewind-evidence'
 export { findPiSessionFile, rewindPiTranscript } from './pi-transcript-rewind'
 export type { PiTranscriptRewindResult } from './pi-transcript-rewind'
+
+export { buildPiPlanningToolDefinitions, loadPiPlanningToolDefinitions, type PlanningToolOperations } from './planning-tools'
+export { buildPiCollaborationTools } from './delegation-tools'

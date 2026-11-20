@@ -73,6 +73,9 @@ export interface AgentRuntimeQuery {
   /** 业务 Run 身份，与 ownershipToken、Provider 会话或进程身份无关。 */
   runId?: string
   taskId?: string
+  goalRunId?: string
+  goalIteration?: number
+  onGoalResult?: (result: import('@profer/shared').AgentGoalIterationResult) => void
   trigger?: TaskTrigger
   /** 由受信宿主入口解析的来源上下文；runtime 不从 Provider role 或正文推断身份。 */
   context?: AgentRunContext & { executorRef?: string }
@@ -112,6 +115,8 @@ export interface AgentRuntimeQuery {
   ownershipToken?: import('./run-ownership').AgentRunOwnershipToken
   /** 宿主出口完成后释放；quarantine 迟到 drain 由 core 释放。 */
   retainOwnership?: boolean
+  /** 宿主证据等收尾必须早于执行权释放；正常、准备失败及迟到 drain 均调用。 */
+  onBeforeOwnerRelease?(input: AgentRuntimeQuery): void | Promise<void>
   /** 资源晚退出时在释放隔离 owner 前清宿主状态；不等于逻辑终态回调。 */
   onResourcesDrained?(): void | Promise<void>
   /** 隔离资源退出且 owner 已释放后的宿主通知。 */

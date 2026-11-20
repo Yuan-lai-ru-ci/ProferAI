@@ -6,7 +6,7 @@
  * - 工作区目录：~/.profer/agent-workspaces/{slug}/（Agent 的 cwd）
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync, realpathSync, rmdirSync, unlinkSync, lstatSync } from 'node:fs'
 import { rm as rmAsync } from 'node:fs/promises'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
@@ -46,6 +46,13 @@ interface AgentWorkspacesIndex {
  * v4 新增 `storageMode`（缺省语义 = managed）与 `rootPath`（仅 project 落盘）。
  */
 const INDEX_VERSION = 4
+let coreOwnsWorkspaceIndex = false
+
+/** 启动初始化之后、Core启动之前锁定；启动失败也不允许桌面接回写权。 */
+export function claimWorkspaceIndexForCore(): void { coreOwnsWorkspaceIndex = true }
+function assertDesktopWorkspaceWriter(): void {
+  if (coreOwnsWorkspaceIndex) throw new Error('工作区索引已由本机Core接管，请通过Core操作')
+}
 
 /**
  * 归一化索引条目（P1-5 / P1-残留-2）：合法绝对 `rootPath` 是 project 的唯一事实来源。
@@ -129,11 +136,15 @@ function normalizeIndex(data: unknown): AgentWorkspacesIndex {
 /** @internal 供同步/团队管理器使用，普通调用方用 listAgentWorkspaces() */
 export function readIndex(): AgentWorkspacesIndex {
   const indexPath = getAgentWorkspacesIndexPath()
-  const index = normalizeIndex(readJsonFileSafe<unknown>(indexPath))
+  const raw: unknown = coreOwnsWorkspaceIndex
+    ? (existsSync(indexPath) ? JSON.parse(readFileSync(indexPath, 'utf8')) : { version: INDEX_VERSION, workspaces: [] })
+    : readJsonFileSafe<unknown>(indexPath)
+  if (coreOwnsWorkspaceIndex && (!raw || typeof raw !== 'object' || !('version' in raw) || raw.version !== INDEX_VERSION || !('workspaces' in raw) || !Array.isArray(raw.workspaces))) throw new Error('Core工作区索引格式无效，桌面不恢复或改写')
+  const index = normalizeIndex(raw)
 
   // 版本迁移（幂等，顺序执行）。迁移写盘失败不能让读路径抛错：
   // 调用方要的是一份可用的工作区列表，而不是二次崩。
-  if (index.version < INDEX_VERSION) {
+  if (index.version < INDEX_VERSION && !coreOwnsWorkspaceIndex) {
     try {
       migrateIndex(index, index.version)
     } catch (error) {
@@ -274,6 +285,7 @@ function normalizeIndexBeforeWrite(index: AgentWorkspacesIndex): void {
 
 /** @internal 供同步/团队管理器使用 */
 export function writeIndex(index: AgentWorkspacesIndex): void {
+  assertDesktopWorkspaceWriter()
   const indexPath = getAgentWorkspacesIndexPath()
 
   // P1-5：先把「有 rootPath 但 storageMode 缺失/非法」的条目归一成 project，再校验
@@ -373,6 +385,7 @@ export function createAgentWorkspace(
   name: string,
   opts?: { type?: 'personal' },
 ): AgentWorkspace {
+  assertDesktopWorkspaceWriter()
   const index = readIndex()
 
   const duplicate = index.workspaces.find((w) => w.name === name)
@@ -495,6 +508,7 @@ export async function deleteAgentWorkspace(
   id: string,
   options: { cascadeSessions?: boolean } = {},
 ): Promise<void> {
+  assertDesktopWorkspaceWriter()
   const index = readIndex()
   const idx = index.workspaces.findIndex((w) => w.id === id)
 
@@ -537,6 +551,20 @@ export async function deleteAgentWorkspace(
   // 必须在级联清理与 rmSync 之前就拦截，绝不递归删项目。
   assertNotProjectLifecyclePath(workspaceDir)
 
+  // managed工作区内容属于该工作区资产，显式授权删除时由受限managed根内的事务级联清理。
+  // 路径身份与符号链接在删除前校验，避免把项目根或根外路径当作managed目录。
+  const rootStats = lstatSync(workspacesRoot)
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) throw new Error('托管工作区根目录不安全')
+  let workspaceStats
+  try { workspaceStats = lstatSync(workspaceDir) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  if (workspaceStats) {
+    const stats = workspaceStats
+    if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error(`工作区目录不安全，已跳过删除: ${workspaceDir}`)
+    const actual = realpathSync(workspaceDir)
+    const canonicalRoot = realpathSync(workspacesRoot)
+    if (actual === canonicalRoot || !isPathInsideOrEqual(actual, canonicalRoot)) throw new Error(`工作区目录身份越界，已跳过删除: ${workspaceDir}`)
+  }
+
   // 防御性级联清理：删除仍指向该工作区的会话（索引 + 消息/任务图文件 + session 目录 + SDK 数据）。
   // 正常流程由 ipc DELETE_WORKSPACE handler 先行删除（含停止运行中 Agent、清理运行时状态），
   // 这里兜底防止其他调用路径绕过后残留孤儿会话 —— 孤儿会话会让移动端把 workspaceId
@@ -546,26 +574,26 @@ export async function deleteAgentWorkspace(
     // 调用方已把会话交给删除队列时传 cascadeSessions: false，避免重复遍历。
     if (options.cascadeSessions !== false) await deleteAgentSessionsByWorkspace(id)
   } catch (error) {
-    console.warn(`[Agent 工作区] 级联清理会话失败 (${target.slug}):`, error)
+    console.warn(`[Agent 工作区] 级联清理会话失败，保留工作区索引和目录 (${target.slug}):`, error)
+    throw error
   }
 
-  // 先移除索引条目并落盘，再删目录：
-  // 即使随后 rmSync 失败，也只会残留一个无引用目录（无害，可被同 slug 重建覆盖），
-  // 而不会留下指向已删目录的孤儿索引条目导致 UI 状态不一致
-  const removed = index.workspaces.splice(idx, 1)[0]!
-  writeIndex(index)
-  // 索引里已经没有该 slug：缓存必须作废，否则后续解析会拿到指向已删目录的旧结论
-  invalidateWorkspaceLocation(target.slug)
-
+  // 事务调用方已完成工作区内容级联；此处递归仅作用于已校验的managed私有根。
+  // 失败时保留索引，允许同一 operation 重试，不制造“索引已删但目录残留”的不可恢复状态。
+  const removed = index.workspaces[idx]!
+  // 级联期间可能发生异步写入；销毁前再次校验索引身份和目录链接。
+  const latestIndex = readIndex()
+  const latestTarget = latestIndex.workspaces.find(workspace => workspace.id === id)
+  if (!latestTarget || latestTarget.storageMode === 'project' || latestTarget.degradedFromProject === true || latestTarget.slug !== target.slug || latestTarget.rootPath !== target.rootPath) throw new Error('工作区身份已变化，保留目录并中止删除')
+  assertNotProjectLifecyclePath(workspaceDir)
   if (existsSync(workspaceDir)) {
-    try {
-      await rmAsync(workspaceDir, { recursive: true, force: true })
-      console.log(`[Agent 工作区] 已删除工作区目录: ${workspaceDir}`)
-    } catch (error) {
-      console.warn(`[Agent 工作区] 删除工作区目录失败，已残留无引用目录 (${target.slug}):`, error)
-    }
+    const stats = lstatSync(workspaceDir)
+    if (stats.isSymbolicLink() || !stats.isDirectory() || !isPathInsideOrEqual(realpathSync(workspaceDir), realpathSync(workspacesRoot)) || realpathSync(workspaceDir) === realpathSync(workspacesRoot)) throw new Error('工作区目录身份已变化，中止删除')
+    await rmAsync(workspaceDir, { recursive: true, force: false, maxRetries: 2, retryDelay: 100 })
   }
-
+  latestIndex.workspaces = latestIndex.workspaces.filter(workspace => workspace.id !== id)
+  writeIndex(latestIndex)
+  invalidateWorkspaceLocation(target.slug)
   console.log(`[Agent 工作区] 已删除工作区: ${removed.name} (slug: ${removed.slug})`)
 }
 
@@ -879,6 +907,7 @@ function materializeProjectSkeleton(configDir: string, options: MaterializeProje
  * 避免创建/打开两套骨架逻辑漂移。
  */
 export function openProjectWorkspace(input: OpenProjectWorkspaceInput): ProjectWorkspaceOpenResult {
+  assertDesktopWorkspaceWriter()
   // 打开只校验形状与边界：骨架已经齐全的只读项目也应该能打开（写入失败在下面单独映射）
   const canonicalRoot = resolveProjectRootPath(input?.rootPath)
   const configDir = join(canonicalRoot, PROJECT_CONFIG_DIR_NAME)
@@ -958,6 +987,7 @@ export function openProjectWorkspace(input: OpenProjectWorkspaceInput): ProjectW
  * 且要求调用方提供 `proferVersion`；骨架生成完全复用打开路径。
  */
 export function createProjectWorkspace(input: CreateProjectWorkspaceInput): ProjectWorkspaceOpenResult {
+  assertDesktopWorkspaceWriter()
   if (typeof input?.proferVersion !== 'string' || input.proferVersion.trim().length === 0) {
     throw new Error('创建项目工作区需要 proferVersion（由主进程注入）')
   }
@@ -1010,6 +1040,7 @@ function removeProjectIndexEntry(index: AgentWorkspacesIndex, target: AgentWorks
  * 这里只需要把绑定指过去，不搬任何会话文件。
  */
 export function relocateProjectWorkspace(input: { id: string; rootPath: string; proferVersion?: string }): ProjectWorkspaceOpenResult {
+  assertDesktopWorkspaceWriter()
   const canonicalRoot = resolveProjectRootPath(input?.rootPath)
   const index = readIndex()
   const target = index.workspaces.find((workspace) => workspace.id === input?.id)
@@ -1999,7 +2030,7 @@ async function cardState(dir: string, skillSlug: string, removed: boolean): Prom
   const read = readSkillManifest(dir)
   // frontmatter 结构校验必须 await import ESM 解析器（见 probeSkillFrontmatterError 注释），
   // 所以这条链路是异步的；IPC 侧本来就 await 返回值。
-  const frontmatterError = await probeSkillFrontmatterError(dir).catch(() => undefined)
+  const frontmatterError = await probeSkillFrontmatterError(dir)
   return {
     present: removed ? false : read.present,
     ...(read.manifest ? { manifest: read.manifest } : {}),

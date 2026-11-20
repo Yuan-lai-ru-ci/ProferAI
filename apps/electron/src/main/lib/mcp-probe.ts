@@ -341,7 +341,7 @@ function runWithTimeout<T>(task: Promise<T>, timeoutMs: number, label: string): 
       settled = true
       reject(new McpProbeTimeoutError(label, timeoutMs))
     }, Math.max(1, timeoutMs))
-    ;(timer as { unref?: () => void }).unref?.()
+    // 截止时间属于当前待完成请求，必须保持事件循环直到 resolve/reject。
 
     task.then(
       (value) => {

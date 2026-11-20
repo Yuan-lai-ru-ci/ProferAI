@@ -1,5 +1,6 @@
+import { coreTargetsAtom, ownsCoreResources } from '@/atoms/core-target-atoms'
 import * as React from 'react'
-import { useSetAtom } from 'jotai'
+import { useAtomValue, useSetAtom } from 'jotai'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
 import { ConfirmDialog } from '@profer/ui/primitives/confirm-dialog'
@@ -17,6 +18,7 @@ interface Props {
 }
 
 export function GlobalMcpPanel({ workspaces, search, open, setOpen }: Props): React.ReactElement {
+  const coreOwned = ownsCoreResources(useAtomValue(coreTargetsAtom))
   const [items, setItems] = React.useState<GlobalMcpDefinition[]>([])
   const [editing, setEditing] = React.useState<GlobalMcpDefinition | null>(null)
   const [ids, setIds] = React.useState<string[]>([])
@@ -25,13 +27,14 @@ export function GlobalMcpPanel({ workspaces, search, open, setOpen }: Props): Re
   const [revision, refresh] = React.useReducer(n => n + 1, 0)
   const bump = useSetAtom(workspaceCapabilitiesVersionAtom)
   React.useEffect(() => {
+    if (coreOwned) return
     let current = true
     void window.electronAPI.listGlobalMcpServers().then(
       list => { if (current) setItems(list) },
       () => { if (current) toast.error('读取全局 MCP 失败') },
     )
     return () => { current = false }
-  }, [revision])
+  }, [revision, coreOwned])
   const close = () => { setOpen(false); setEditing(null); setIds([]) }
   const changed = () => { refresh(); bump(v => v + 1) }
   const visible = items.filter(item => item.name.toLowerCase().includes(search))
@@ -41,6 +44,7 @@ export function GlobalMcpPanel({ workspaces, search, open, setOpen }: Props): Re
     setOpen(true)
   }
   const save = async (name: string, entry: McpServerEntry) => {
+    if (coreOwned) throw new Error('Core 暂不支持全局 MCP 管理')
     setBusy(true)
     try {
       await window.electronAPI.saveGlobalMcpServer({ name, entry, workspaceIds: ids }, editing ? 'update' : 'create')
@@ -52,7 +56,7 @@ export function GlobalMcpPanel({ workspaces, search, open, setOpen }: Props): Re
     }
   }
   const remove = async () => {
-    if (!deleting || busy) return
+    if (coreOwned || !deleting || busy) return
     setBusy(true)
     try {
       await window.electronAPI.deleteGlobalMcpServer(deleting)
@@ -64,6 +68,8 @@ export function GlobalMcpPanel({ workspaces, search, open, setOpen }: Props): Re
       setBusy(false)
     }
   }
+
+  if (coreOwned) return <p role="status" className="text-sm text-muted-foreground">当前 Core 暂不支持全局 MCP 管理。请使用工作区 MCP 配置；不会读取或修改桌面全局配置。</p>
 
   return (
     <section aria-label="全局 MCP" className="space-y-3">

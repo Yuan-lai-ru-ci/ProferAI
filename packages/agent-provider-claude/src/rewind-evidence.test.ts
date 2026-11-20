@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import {
   createClaudeRewindEvidenceHooks,
@@ -51,7 +52,7 @@ describe('Claude rewind evidence hooks', () => {
       prompt_id: 'turn-2', tool_name: 'Edit', tool_use_id: 'write-1',
       tool_input: { file_path: 'other.txt' }, tool_response: 'ok',
     }, 'sdk-callback-id', { signal: new AbortController().signal })
-    expect(records.at(-1)).toMatchObject({ sessionId: 'product-session', promptId: 'turn-2', path: '/tmp/other.txt', status: 'complete' })
+    expect(records.at(-1)).toMatchObject({ sessionId: 'product-session', promptId: 'turn-2', path: resolve('/tmp', 'other.txt'), status: 'complete' })
     await hooks.PreToolUse[0]!.hooks[0]!({
       hook_event_name: 'PreToolUse', session_id: 's', transcript_path: '/tmp/s', cwd: '/tmp',
       tool_name: 'Bash', tool_use_id: 'bash-1', tool_input: { command: 'printf x > tracked.txt' },
@@ -64,8 +65,8 @@ describe('Claude rewind evidence hooks', () => {
       ['after', 'write-1', 'Edit'],
     ])
     expect(records).toHaveLength(2)
-    expect(records[0]).toMatchObject({ toolUseId: 'write-1', path: '/tmp/tracked.txt', status: 'complete' })
-    expect(records[1]).toMatchObject({ toolUseId: 'write-1', path: '/tmp/other.txt', status: 'complete' })
+    expect(records[0]).toMatchObject({ toolUseId: 'write-1', path: resolve('/tmp', 'tracked.txt'), status: 'complete' })
+    expect(records[1]).toMatchObject({ toolUseId: 'write-1', path: resolve('/tmp', 'other.txt'), status: 'complete' })
     expect(records[0]?.before?.revision).toBe('before:write-1')
     expect(records[0]?.after?.revision).toBe('after:write-1')
   })

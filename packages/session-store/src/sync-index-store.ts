@@ -1,5 +1,6 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { dirname, join } from 'node:path'
 import type { AgentSessionMeta } from '@profer/shared'
 import { normalizeSessionIndexData } from '@profer/session-core'
 import type { AgentSessionsIndex, SyncSessionIndexStore } from './contracts'
@@ -19,7 +20,21 @@ interface FileSignature {
 /** 上一次写盘时各会话 Pi 字段的对象引用，用于判断独立文件是否真的需要重写。 */
 type PiReferenceSnapshot = Map<string, { entryBindings?: unknown; fileCheckpoints?: unknown }>
 
-export function createSyncSessionIndexStore(getPath: () => string): SyncSessionIndexStore {
+/** 无效索引不能降级为空列表，否则下一次创建会话会覆盖已有历史。 */
+function isSessionIndex(value: unknown): value is AgentSessionsIndex {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Partial<AgentSessionsIndex>
+  if (!Array.isArray(candidate.sessions)) return false
+  if (candidate.version !== undefined && (typeof candidate.version !== 'number' || !Number.isFinite(candidate.version))) return false
+  const ids = new Set<string>()
+  for (const session of candidate.sessions) {
+    if (!session || typeof session !== 'object' || typeof session.id !== 'string' || !session.id.trim() || ids.has(session.id)) return false
+    ids.add(session.id)
+  }
+  return true
+}
+
+export function createSyncSessionIndexStore(getPath: () => string, options: { readOnly?: () => boolean } = {}): SyncSessionIndexStore {
   let cache: {
     data: AgentSessionsIndex
     indexSignature: FileSignature | null
@@ -57,7 +72,7 @@ export function createSyncSessionIndexStore(getPath: () => string): SyncSessionI
     if (!skipBackup && existsSync(filePath)) {
       try { copyFileSync(filePath, `${filePath}.bak`) } catch { /* backup is best effort */ }
     }
-    const tempPath = `${filePath}.tmp`
+    const tempPath = skipBackup ? `${filePath}.recover-${randomUUID()}` : `${filePath}.tmp`
     writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8')
     renameSync(tempPath, filePath)
   }
@@ -76,19 +91,29 @@ export function createSyncSessionIndexStore(getPath: () => string): SyncSessionI
   }
 
   const readSafe = (): AgentSessionsIndex | null => {
-    for (const candidate of [getPath(), `${getPath()}.tmp`, `${getPath()}.bak`]) {
+    const filePath = getPath()
+    let foundIndex = false
+    for (const candidate of [filePath, `${filePath}.tmp`, `${filePath}.bak`]) {
       if (!existsSync(candidate)) continue
+      foundIndex = true
+      let parsed: unknown
       try {
-        const raw = readFileSync(candidate, 'utf8')
-        if (!raw.trim()) continue
-        const parsed = JSON.parse(raw) as AgentSessionsIndex
-        if (candidate !== getPath()) writeAtomic(getPath(), parsed, true)
-        return parsed
+        const raw = readFileSync(candidate, 'utf8').replace(/^\uFEFF/, '')
+        parsed = JSON.parse(raw)
       } catch {
-        if (candidate.endsWith('.tmp')) {
-          try { unlinkSync(candidate) } catch { /* ignore */ }
-        }
+        // 保留损坏文件供恢复，不让它遮住后续有效备份。
+        continue
       }
+      if (!isSessionIndex(parsed)) continue
+      if (candidate !== filePath && !options.readOnly?.()) writeAtomic(filePath, parsed, true)
+      return parsed
+    }
+    if (foundIndex) throw new Error(`Agent 会话索引损坏且无可用备份，已阻止覆盖，请先恢复: ${filePath}`)
+    const piPath = getPiStatePath()
+    const sessionsDir = join(dirname(filePath), 'agent-sessions')
+    const hasMessages = existsSync(sessionsDir) && readdirSync(sessionsDir).some(name => name.endsWith('.jsonl'))
+    if (hasMessages || [piPath, `${piPath}.tmp`, `${piPath}.bak`].some(path => existsSync(path))) {
+      throw new Error(`Agent 会话索引缺失，但历史数据仍存在，已阻止覆盖，请恢复索引: ${filePath}`)
     }
     return null
   }
@@ -165,7 +190,7 @@ export function createSyncSessionIndexStore(getPath: () => string): SyncSessionI
     // 旧格式迁移：索引里仍带 Pi 大字段时抽到独立文件，并从索引剔除。
     const { light: stripped, pi } = splitSessionIndex(light)
     const needsSplit = stripped !== light
-    if (needsSplit) {
+    if (needsSplit && !options.readOnly?.()) {
       try {
         // 顺序关键：先写旁路状态，再剥索引。
         // 反过来的话，第二步失败（ENOSPC/EACCES）会留下「索引已无 Pi 字段、状态文件不存在」
@@ -176,7 +201,7 @@ export function createSyncSessionIndexStore(getPath: () => string): SyncSessionI
       } catch {
         // 迁移失败不阻断读取：本次仍返回合并后的完整对象，下次读取再重试。
       }
-    } else if (normalized.removedLegacyKnowledgeReferences) {
+    } else if (normalized.removedLegacyKnowledgeReferences && !options.readOnly?.()) {
       try { writeAtomic(filePath, light) } catch { cache = null; return light }
     }
 
@@ -187,6 +212,14 @@ export function createSyncSessionIndexStore(getPath: () => string): SyncSessionI
   }
 
   const write = (index: AgentSessionsIndex): void => {
+    if (options.readOnly?.()) throw new Error('会话索引由Core管理，桌面不能写入')
+    if (!isSessionIndex(index)) throw new Error('Agent 会话索引格式无效，已阻止写入')
+    // 直接 write 和读后外部损坏都必须经过磁盘校验；正常热路径不重复解析索引。
+    if (!cache || !cache.indexSignature
+      || !signatureEquals(statSignature(getPath()), cache.indexSignature)
+      || !signatureEquals(statSignature(getPiStatePath()), cache.piSignature)) {
+      readSafe()
+    }
     try {
       const { light, pi } = splitSessionIndex(index)
       const piChanged = piStateChanged(index)

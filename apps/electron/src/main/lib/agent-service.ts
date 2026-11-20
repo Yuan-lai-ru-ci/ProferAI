@@ -75,6 +75,8 @@ import {
 import { shouldClearSessionUnreadOnRunStart, shouldMarkSessionUnreadOnCompletion } from './agent-unread-policy'
 import { getAgentUnreadPolicyMode } from './agent-unread-mode'
 import { AgentRuntimeContextStore } from './agent-runtime-context'
+import { localCoreOwnsBusinessData } from './core-business-ownership'
+import { listCoreTargets } from './core-target-service'
 import { createContextUsageRecorder } from './agent-context-usage-recorder'
 import { deleteAgentContextUsageSnapshot, readAgentContextUsageSnapshot, saveAgentContextUsageSnapshot } from './agent-context-usage-store'
 import { createExecutionService } from './execution-service'
@@ -82,6 +84,8 @@ import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { createElectronAgentHost } from './agent-runtime-host'
 import { runRuntimeHeadlessEntry, type RuntimeEntryRunContext, type RuntimeEntryTitleNaming } from './agent-runtime-entry'
 import { resolveDesktopRunChain } from './agent-runtime-desktop-switch'
+import { getLocalCoreClient, shouldUseLocalCorePi, isLocalCoreSessionActive, registerLocalCoreSession, prepareLocalCoreMessage, sendLocalCoreMessage, stopLocalCoreSession } from './core-local-bridge'
+import { getChannelById } from './channel-manager'
 import { runDesktopRuntimeAgent } from './agent-runtime-desktop-entry'
 import { beginPiCheckpointTurn } from './pi-file-checkpoint-lifecycle'
 import type { AgentRuntimePolicyResolutionInput } from './agent-runtime-policy-snapshot'
@@ -190,7 +194,13 @@ const stopAgentOwner = createAgentStopRouter({
   stopChildren: stopDelegationsForParent,
   onError: (sessionId, error) => console.error(`[Agent 服务] 请求停止失败: sessionId=${sessionId}`, error),
 })
-setAgentStopper(stopAgentOwner)
+setAgentStopper((sessionId, source) => {
+  if (isLocalCoreSessionActive(sessionId)) {
+    void stopLocalCoreSession(sessionId).catch(error => console.error('[Core] 停止失败：', error))
+    return
+  }
+  stopAgentOwner(sessionId, source)
+})
 /**
  * 只读的「是否有活跃 run」查询（backlog / 恢复路由用）。
  *
@@ -198,11 +208,14 @@ setAgentStopper(stopAgentOwner)
  * 接线后 `orchestrator.isActive` 本身就读共享登记表，因此 OR 的语义是
  * 「登记表里是否有 owner」（两个分支实际同源），**不是**互斥手段。
  */
-setAgentSessionActiveChecker((sessionId) => orchestrator.isActive(sessionId) || runtimeCoordinator.isRunning(sessionId))
+setAgentSessionActiveChecker((sessionId) => orchestrator.isActive(sessionId) || runtimeCoordinator.isRunning(sessionId) || isLocalCoreSessionActive(sessionId))
 const runtimeContextStore = new AgentRuntimeContextStore()
 const usageRecorder = createContextUsageRecorder({ save: saveAgentContextUsageSnapshot, remove: deleteAgentContextUsageSnapshot })
 
 export async function getAgentContextUsageSnapshot(sessionId: string): Promise<AgentContextUsageSnapshot | null> {
+  if (listCoreTargets().currentId !== 'local' || localCoreOwnsBusinessData()) {
+    throw new Error('当前 Core 尚未实现上下文用量快照读取；不会回退桌面本机')
+  }
   // 初始化项目会话布局，并排除不存在的会话；压缩后不能把尚待刷盘的旧历史回填进来。
   if (!getAgentSessionMeta(sessionId) || usageRecorder.hidesPreCompactReading(sessionId)) return null
   return readAgentContextUsageSnapshot(sessionId)
@@ -388,7 +401,7 @@ export function getSessionWebContents(sessionId: string): WebContents | null {
 }
 
 function isAgentExecutionActive(sessionId: string): boolean {
-  return orchestrator.isActive(sessionId) || runtimeCoordinator.isRunning(sessionId)
+  return orchestrator.isActive(sessionId) || runtimeCoordinator.isRunning(sessionId) || isLocalCoreSessionActive(sessionId)
 }
 
 function beginActiveStreamBacklog(sessionId: string): void {
@@ -748,11 +761,132 @@ function applyCompletionUnreadPolicy(input: {
   }
 }
 
+function isLocalCorePiInput(input: AgentSendInput): boolean {
+  const session = getAgentSessionMeta(input.sessionId)
+  return shouldUseLocalCorePi(input.agentRuntime ?? session?.agentRuntime)
+}
+
+async function runAgentThroughLocalCore(input: AgentSendInput, webContents?: WebContents, callbacks?: HeadlessAgentRunCallbacks): Promise<void> {
+  if (isAgentExecutionActive(input.sessionId)) throw new AgentRunAlreadyActiveError(false)
+
+  if (webContents) registerWebContents(input.sessionId, webContents)
+  beginActiveStreamBacklog(input.sessionId)
+  // Core 在 runtime_started 时清未读/晋升草稿；桌面不再写共享索引。
+
+  let settled = false
+  let resolveTerminal: (() => void) | undefined
+  const terminal = new Promise<void>(resolve => {
+    resolveTerminal = resolve
+  })
+  let release: (() => void) | undefined
+  const finish = (): void => {
+    if (settled) return
+    settled = true
+    release?.()
+    finishActiveStreamBacklog(input.sessionId)
+    resolveTerminal?.()
+  }
+  const target = (): WebContents | undefined => getSessionWebContents(input.sessionId) ?? webContents
+  let observedError: string | undefined
+  let expectedTriggerId: string | undefined
+  let admittedRunId: string | undefined
+  const runMessages = new Map<string, AgentMessage>()
+
+  release = registerLocalCoreSession(input.sessionId, event => {
+    const payload = event.payload
+    if (!payload || typeof payload !== 'object') return
+    const record = payload as Record<string, unknown>
+    if (record.kind === 'profer_event' && record.event && typeof record.event === 'object') {
+      const event = record.event as Record<string, unknown>
+      if (event.type === 'runtime_started' || event.type === 'runtime_claimed') {
+        if (!expectedTriggerId || event.triggerId !== expectedTriggerId) return
+        if (typeof event.runId === 'string') admittedRunId = event.runId
+      }
+      if (event.type === 'run_completed' && (!expectedTriggerId || (event.triggerId !== expectedTriggerId && event.runId !== admittedRunId))) return
+    }
+    if (record.kind === 'sdk_message' && record.message && typeof record.message === 'object') {
+      const provenance = (record.message as { _provenance?: { runId?: string; triggerId?: string } })._provenance
+      if (admittedRunId && provenance?.runId && provenance.runId !== admittedRunId) return
+      if (!admittedRunId && provenance?.triggerId && provenance.triggerId !== expectedTriggerId) return
+      const message = record.message as import('@profer/shared').SDKMessage
+      input.onRuntimeMessage?.(message)
+      const assistant = message as { type?: string; uuid?: string; _createdAt?: number; message?: { model?: string; content?: unknown } }
+      if (assistant.type === 'assistant' && Array.isArray(assistant.message?.content)) {
+        const content = assistant.message.content.filter((block): block is { type: string; text: string } => !!block && block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
+        if (content) {
+          const id = assistant.uuid ?? `${admittedRunId ?? expectedTriggerId}:assistant`
+          runMessages.set(id, { id, role: 'assistant', content, createdAt: assistant._createdAt ?? Date.now(), model: assistant.message.model })
+        }
+      }
+      emitSessionStreamEvent(input.sessionId, { kind: 'sdk_message', message })
+      return
+    }
+    if (record.kind === 'session_projection') {
+      emitSessionStreamEvent(input.sessionId, record as unknown as import('@profer/shared').AgentStreamPayload)
+      return
+    }
+    if (record.kind === 'run_error') {
+      const error = typeof record.error === 'string' ? record.error : 'Core Pi 执行失败'
+      emitSessionStreamEvent(input.sessionId, { kind: 'run_error', error })
+      observedError = error
+      try { callbacks?.onError(error) } catch (observerError) { console.warn('[Core] headless错误观察者异常：', observerError) }
+      try { const wc = target(); if (wc && !wc.isDestroyed()) wc.send(AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId: input.sessionId, error }) } catch {}
+      // Core的run_completed是唯一终态；错误帧本身不释放本轮处理器。
+      return
+    }
+    if (record.kind !== 'profer_event' || !record.event || typeof record.event !== 'object') return
+    const proferEvent = record.event as Record<string, unknown>
+    emitSessionStreamEvent(input.sessionId, { kind: 'profer_event', event: proferEvent as import('@profer/shared').ProferEvent })
+    if (proferEvent.type === 'title_updated' && typeof proferEvent.title === 'string') callbacks?.onTitleUpdated(proferEvent.title)
+    if (proferEvent.type !== 'run_completed') return
+    if (settled) return
+    const completion: AgentStreamCompletePayload = {
+      sessionId: input.sessionId,
+      messages: callbacks ? [...runMessages.values()] : getAgentSessionMessages(input.sessionId),
+      runId: typeof proferEvent.runId === 'string' ? proferEvent.runId : undefined,
+      stopReason: typeof proferEvent.stopReason === 'string' ? proferEvent.stopReason : undefined,
+      outcomeStatus: proferEvent.outcomeStatus === 'completed' || proferEvent.outcomeStatus === 'failed' || proferEvent.outcomeStatus === 'stopped' ? proferEvent.outcomeStatus : proferEvent.stoppedByUser === true ? 'stopped' : proferEvent.resultSubtype === 'success' ? 'completed' : 'failed',
+      stoppedByUser: proferEvent.stoppedByUser === true,
+      startedAt: typeof input.startedAt === 'number' ? input.startedAt : undefined,
+      resultSubtype: typeof proferEvent.resultSubtype === 'string' ? proferEvent.resultSubtype : undefined,
+      resultErrors: Array.isArray(proferEvent.resultErrors) ? proferEvent.resultErrors.filter((value): value is string => typeof value === 'string') : undefined,
+      backgroundTasksPending: proferEvent.backgroundTasksPending === true,
+      initiator: input.initiator,
+    }
+    try {
+      if (callbacks) {
+        if (completion.outcomeStatus === 'failed' && !observedError) {
+          try { callbacks.onError(completion.resultErrors?.join('\n') || 'Core执行失败') } catch (error) { console.warn('[Core] headless错误观察者异常：', error) }
+        }
+        try { callbacks.onComplete(completion.messages, { ...completion, messagesScope: 'run' }) } catch (error) { console.warn('[Core] headless终态观察者异常：', error) }
+      }
+      try { input.onRunOutcome?.(completion.outcomeStatus === 'completed' ? { status: 'completed' } : completion.outcomeStatus === 'stopped' ? { status: 'stopped', stopReason: completion.stopReason } : { status: 'failed', error: completion.resultErrors?.join('\n') || observedError || 'Core执行失败' }) } catch (error) { console.warn('[Core] 运行结果观察者异常：', error) }
+      emitSessionStreamEvent(input.sessionId, { kind: 'run_complete', completion })
+      const wc = target(); if (wc && !wc.isDestroyed()) wc.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, completion)
+    } finally { finish() }
+  })
+
+  try {
+    const options = await prepareLocalCoreMessage(input, {
+      getSession: getAgentSessionMeta,
+      getChannel: getChannelById,
+      credentials: agentRuntimeHost.credentials,
+    })
+    expectedTriggerId = options.context?.trigger.id
+    await sendLocalCoreMessage(input.sessionId, input.internalPrompt ?? input.userMessage, options)
+    await terminal
+  } catch (error) {
+    release?.()
+    finishActiveStreamBacklog(input.sessionId)
+    throw error
+  }
+}
+
 /**
- * 运行 Agent 并流式推送事件到渲染进程
- *
- * 注册 webContents 到 EventBus 映射，委托给 Orchestrator。
+ * 本地 Core 的 Pi 最小桌面闭环。Core 负责 Pi 执行与 SDK 消息持久化，
+ * Electron 只负责把 Core 事件投影到现有 renderer 流协议。
  */
+
 export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
@@ -764,6 +898,10 @@ export async function runAgent(
   // 本函数不自读环境变量（parity 断言：函数体内不得出现开关字面量），只调判定函数一次。
   // 顺序：开关判定 → 桌面入口自承担 registerWebContents / backlog / 入口清未读 → 守卫 → claim；
   // claim 之前不得有 await（runDesktopRuntimeAgent 内部同样保证）。
+  if (isLocalCorePiInput(input)) {
+    await runAgentThroughLocalCore(input, webContents)
+    return
+  }
   if (resolveDesktopRunChain(input) === 'runtime') {
     await runDesktopRuntimeAgent(input, {
       sender: webContents,
@@ -950,6 +1088,11 @@ export async function runAgentRuntimeHeadless(
   callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
   input = normalizeHeadlessSendInput(input, callbacks.source)
+  if (isLocalCorePiInput(input)) {
+    const initiator = input.initiator ?? resolveRunInitiator(input.triggeredBy, callbacks.source)
+    await runAgentThroughLocalCore({ ...input, initiator }, getSessionWebContents(input.sessionId) ?? getMainRendererWebContents() ?? undefined, callbacks)
+    return
+  }
   // 已有窗口绑定时不得改绑到主窗口：会话可能正被独立会话窗口展示。
   // 改绑会给旧窗口发 SESSION_RELEASED（清掉它的运行态与实时消息），而新绑的主窗口
   // 并没有在展示这个会话——用户看到的子会话页从此收不到任何事件，过程区永远折叠。
@@ -1187,6 +1330,11 @@ export async function runAgentHeadless(
   callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
   input = normalizeHeadlessSendInput(input, callbacks.source)
+  if (isLocalCorePiInput(input)) {
+    const initiator = input.initiator ?? (callbacks.source ? resolveRunInitiator(input.triggeredBy, callbacks.source) : 'external')
+    await runAgentThroughLocalCore({ ...input, initiator }, getSessionWebContents(input.sessionId) ?? getMainRendererWebContents() ?? undefined, callbacks)
+    return
+  }
   if (canUseRuntimeHeadless(input)) {
     await runAgentRuntimeHeadless(input, callbacks)
     return
@@ -1369,6 +1517,10 @@ export async function regenerateAgentTitle(
  * 中止指定会话的 Agent 执行
  */
 export function stopAgent(sessionId: string): void {
+  if (isLocalCoreSessionActive(sessionId)) {
+    void stopLocalCoreSession(sessionId).catch(error => console.error('[Core] 停止失败：', error))
+    return
+  }
   stopAgentOwner(sessionId, 'user')
 }
 
@@ -1393,6 +1545,10 @@ export type AgentStopOutcome = 'stopped' | 'already_finished'
 
 /** 删除运行中会话前停止并等待其真实运行生命周期结束。 */
 export async function stopAgentAndWait(sessionId: string): Promise<AgentStopOutcome> {
+  if (isLocalCoreSessionActive(sessionId)) {
+    await stopLocalCoreSession(sessionId)
+    return 'stopped'
+  }
   if (runtimeCoordinator.isRunning(sessionId)) {
     stopAgentOwner(sessionId, 'user')
     await runtimeCoordinator.stopAndWait(sessionId)
@@ -1441,7 +1597,7 @@ export async function rewindAgentSession(
  * 检查指定会话是否正在运行
  */
 export function isAgentSessionActive(sessionId: string): boolean {
-  return orchestrator.isActive(sessionId) || runtimeCoordinator.isRunning(sessionId)
+  return orchestrator.isActive(sessionId) || runtimeCoordinator.isRunning(sessionId) || isLocalCoreSessionActive(sessionId)
 }
 
 /** 中止所有活跃的 Agent 会话（应用退出时调用） */
@@ -1468,6 +1624,12 @@ export function killOrphanedClaudeSubprocesses(): void {
  * 同时更新 Profer 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
  */
 export async function updateAgentPermissionMode(sessionId: string, mode: ProferPermissionMode): Promise<void> {
+  if (isLocalCoreSessionActive(sessionId) || process.env.PROFER_CORE_LOCAL === '1' && getLocalCoreClient()) {
+    const client = getLocalCoreClient()
+    if (!client) throw new Error('本地Core未连接')
+    await client.updateSessionMeta(sessionId, { permissionMode: mode })
+    return
+  }
   await orchestrator.updateSessionPermissionMode(sessionId, mode)
 }
 
@@ -1482,6 +1644,13 @@ export async function queueAgentMessage(
   input: AgentQueueMessageInput,
   _webContents: WebContents,
 ): Promise<string> {
+  if (isLocalCoreSessionActive(input.sessionId)) {
+    const client = getLocalCoreClient()
+    if (!client) throw new Error('本地Core未连接')
+    const result = await client.queueMessage(input.sessionId, input.userMessage, { uuid: input.uuid, rawUserMessage: input.rawUserMessage, interrupt: input.interrupt })
+    if (result.recordingError) console.error('[Core] 追加已接收，但运行记账失败：', result.recordingError)
+    return result.messageId
+  }
   if (runtimeCoordinator.isRunning(input.sessionId)) {
     return queueRuntimeUserMessage(input, {
       runtime: normalizeAgentRuntime(getAgentSessionMeta(input.sessionId)?.agentRuntime),

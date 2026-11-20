@@ -182,5 +182,5 @@ export function collectDependencyGraph(entryFile: string, repoRoot: string): Dep
 }
 
 export function formatRelative(repoRoot: string, file: string): string {
-  return relative(repoRoot, file)
+  return relative(repoRoot, file).replace(/\\/g, '/')
 }

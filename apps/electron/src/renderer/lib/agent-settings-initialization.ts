@@ -7,6 +7,7 @@ import {
   agentThinkingAtom, agentEffortAtom, agentMaxBudgetUsdAtom, agentMaxTurnsAtom,
   agentSettingsReadyAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom,
 } from '../atoms/agent-atoms'
+import { coreTargetsAtom } from '../atoms/core-target-atoms'
 import { channelsAtom, channelsLoadedAtom } from '../atoms/chat-atoms'
 import { authStatusAtom } from '../atoms/identity-atoms'
 import { resolveAgentRuntimeSelection } from './agent-channel-selection'
@@ -64,6 +65,7 @@ export function initializeAgentSettings(
     const turns = store.get(agentMaxTurnsAtom)
     const workspaceId = store.get(currentAgentWorkspaceIdAtom)
     const workspaceSnapshot = store.get(agentWorkspacesAtom)
+    const coreTarget = store.get(coreTargetsAtom)
     void Promise.all([deps.getSettings(), deps.listWorkspaces()]).then(([settings, workspaces]) => {
       if (!active || request !== generation) return
       // 启动读取期间已修改默认模型/内核时，旧设置回执不得覆盖用户选择。
@@ -80,8 +82,10 @@ export function initializeAgentSettings(
       if (store.get(agentEffortAtom) === effort && settings.agentEffort !== undefined) store.set(agentEffortAtom, settings.agentEffort)
       if (store.get(agentMaxBudgetUsdAtom) === budget && settings.agentMaxBudgetUsd !== undefined) store.set(agentMaxBudgetUsdAtom, settings.agentMaxBudgetUsd)
       if (store.get(agentMaxTurnsAtom) === turns && settings.agentMaxTurns !== undefined) store.set(agentMaxTurnsAtom, settings.agentMaxTurns)
-      if (store.get(agentWorkspacesAtom) === workspaceSnapshot) store.set(agentWorkspacesAtom, workspaces)
-      if (store.get(currentAgentWorkspaceIdAtom) === workspaceId) {
+      const currentCore = store.get(coreTargetsAtom)
+      const sameCore = currentCore.currentId === coreTarget.currentId && currentCore.generation === coreTarget.generation
+      if (sameCore && store.get(agentWorkspacesAtom) === workspaceSnapshot) store.set(agentWorkspacesAtom, workspaces)
+      if (sameCore && !settings.coreTabStates && store.get(currentAgentWorkspaceIdAtom) === workspaceId) {
         const currentWorkspaces = store.get(agentWorkspacesAtom)
         const saved = currentWorkspaces.find((workspace) => workspace.id === settings.agentWorkspaceId)
         store.set(currentAgentWorkspaceIdAtom, saved && isAgentWorkspaceVisible(saved)

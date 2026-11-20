@@ -311,6 +311,8 @@ export interface AppSettings {
   customNotificationSounds?: CustomNotificationSound[]
   /** 标签页持久化状态（重启恢复） */
   tabState?: PersistedTabSettings
+  /** 按执行Core分别保存桌面会话导航，不与Core业务数据混写。 */
+  coreTabStates?: Record<string, CoreTabSettings>
   /** Agent 思考模式 */
   agentThinking?: ThinkingConfig
   /** Agent 推理深度 */
@@ -462,6 +464,11 @@ export interface PersistedTabSettings {
   group?: import('../renderer/atoms/tab-group-atoms').PersistedTabGroup
   /** 可选的多个左右组合布局；缺省或空数组表示单栏。 */
   groups?: import('../renderer/atoms/tab-group-atoms').PersistedTabGroup[]
+}
+
+/** 当前Core上次打开的会话与工作区；key使用Core身份，本机保留local。 */
+export interface CoreTabSettings extends PersistedTabSettings {
+  workspaceId?: string | null
 }
 
 /** 移动模式（Pocket 远程接入）服务状态与连接信息 */
@@ -683,7 +690,42 @@ export const TRAY_IPC_CHANNELS = {
   CREATE_SESSION: 'tray:create-session',
 } as const
 
-/** 存储管理 IPC 通道 */
+/** 当前 Core 内核目标的去敏展示信息。 */
+export interface CoreTargetSummary {
+  id: string
+  name: string
+  kind: 'local' | 'remote'
+  baseUrl?: string
+  status: 'connected' | 'disconnected' | 'error'
+  version?: string
+  coreId?: string
+  capabilities?: string[]
+  /** 所属 Core 的运行平台；新建项目选择器据此决定路径文案。 */
+  platform?: string
+}
+
+export interface CoreTargetsSnapshot {
+  currentId: string
+  generation: number
+  targets: CoreTargetSummary[]
+}
+
+/** 当前 Core 内核目标管理。 */
+export const CORE_TARGET_IPC_CHANNELS = {
+  LIST: 'core-target:list',
+  CHANNELS: 'core-target:channels',
+  CREATE_CHANNEL: 'core-target:create-channel',
+  UPDATE_CHANNEL: 'core-target:update-channel',
+  DELETE_CHANNEL: 'core-target:delete-channel',
+  FETCH_MODELS: 'core-target:fetch-models',
+  TEST_CHANNEL: 'core-target:test-channel',
+  TEST: 'core-target:test',
+  ADD: 'core-target:add',
+  SELECT: 'core-target:select',
+  REMOVE: 'core-target:remove',
+} as const
+
+
 export const STORAGE_IPC_CHANNELS = {
   /** 计算各目录存储统计 */
   GET_STATS: 'storage:get-stats',

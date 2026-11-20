@@ -151,9 +151,17 @@ import {
 } from '@profer/project-core'
 // GPT Image 生图工具仅在 Chat 模式可用，Agent 模式不需要清理逻辑
 
+import { localCoreOwnsBusinessData } from './core-business-ownership'
+
 // 索引存储独立管理缓存与原子读写；manager 保留现有公开入口。
-const sessionIndex = createAgentSessionIndexStore(getAgentSessionsIndexPath)
-const readIndexRaw = sessionIndex.read
+const coreOwnsSessionStore = localCoreOwnsBusinessData
+const sessionIndex = createAgentSessionIndexStore(getAgentSessionsIndexPath, { readOnly: coreOwnsSessionStore })
+const coreReadIndex = createAgentSessionIndexStore(getAgentSessionsIndexPath, { readOnly: () => true })
+const readIndexRaw = () => coreOwnsSessionStore() ? coreReadIndex.read() : sessionIndex.read()
+/** Core 接管后桌面只读投影，业务修改必须经 Core 命令。 */
+function assertDesktopSessionWriteAllowed(): void {
+  if (coreOwnsSessionStore()) throw new Error('CORE_SESSION_STORE_OWNED: 会话已由本机 Core 接管，请通过 Core 操作')
+}
 let lastLayoutSyncIndex: unknown = null
 
 let persistenceStatusPublisher: ((sessionId: string, status: 'pending' | 'saved' | 'failed', error?: string) => void) | undefined
@@ -178,11 +186,17 @@ const persistenceQueue = new SessionPersistenceQueue({
 })
 
 export function enqueueSDKMessages(id: string, messages: readonly SDKMessage[]): PersistenceReceipt {
+  assertDesktopSessionWriteAllowed()
   if (deletedSessionIds.has(id)) return { accepted: false, reason: 'deleted' }
   return persistenceQueue.enqueue(id, messages)
 }
 
 export function flushSDKMessagePersistence(timeoutMs?: number): Promise<boolean> {
+  // Core 模式不得在退出时重放旧桌面队列。未确认批次由队列按失败结算。
+  if (coreOwnsSessionStore()) {
+    persistenceQueue.dispose()
+    return Promise.resolve(false)
+  }
   return persistenceQueue.flush(timeoutMs)
 }
 
@@ -527,6 +541,7 @@ const reconciledProjectRoots = new Set<string>()
 
 /** 供打开/重新定位项目后显式对账（同一进程内新出现的项目）。 */
 export function reconcileProjectSessionIndexesNow(): void {
+  if (coreOwnsSessionStore()) return
   const index = readIndexRaw()
   if (reconcileProjectSessionIndexes(index, true)) {
     sessionIndex.write(index)
@@ -543,7 +558,7 @@ export function reconcileProjectSessionIndexesNow(): void {
  */
 const readIndex = () => {
   const index = readIndexRaw()
-  if (reconcileProjectSessionIndexes(index)) sessionIndex.write(index)
+  if (!coreOwnsSessionStore() && reconcileProjectSessionIndexes(index)) sessionIndex.write(index)
   if (index !== lastLayoutSyncIndex) {
     lastLayoutSyncIndex = index
     syncSessionStorageLayouts(index.sessions)
@@ -552,6 +567,7 @@ const readIndex = () => {
 }
 
 const writeIndex = (index: AgentSessionsIndex) => {
+  assertDesktopSessionWriteAllowed()
   sessionIndex.write(index)
   mirrorProjectSessionIndexes(index)
 }
@@ -608,6 +624,7 @@ export function snapshotAgentRuntimeMeta(meta: AgentSessionMeta): AgentRuntimeMe
  * 回滚也递增 revision，确保各端接收的是更新的快照。
  */
 export function restoreAgentRuntimeMeta(id: string, snapshot: AgentRuntimeMetaSnapshot): AgentSessionMeta {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
   if (idx === -1) throw new Error(`Agent 会话不存在: ${id}`)
@@ -659,6 +676,7 @@ export function createDelegatedChildSessionMeta(params: {
   delegationGoal?: string
   permissionMode?: import('@profer/shared').ProferPermissionMode
 }): AgentSessionMeta {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   const now = Date.now()
 
@@ -720,6 +738,7 @@ export function createDelegatedChildSessionMeta(params: {
  * @returns 补齐的会话数
  */
 export function backfillPiSessionFiles(): number {
+  if (coreOwnsSessionStore()) return 0
   const index = readIndex()
   const candidates = index.sessions.filter((session) => normalizeAgentRuntime(session.agentRuntime) === 'pi'
     && session.sdkSessionId
@@ -936,6 +955,7 @@ function buildAgentSessionWriteLayout(location: WorkspaceLocation, storageDir: s
  * **禁止**把这里的目标换成 cwd：project 下 cwd 是用户项目根，会直接改用户仓库。
  */
 export function ensureAgentSessionWriteLayout(workspaceSlug: string, sessionId: string): AgentSessionWriteLayout {
+  assertDesktopSessionWriteAllowed()
   const location = resolveWorkspaceLocation(workspaceSlug)
   const layout = resolveAgentSessionWriteLayout(workspaceSlug, sessionId)
   // storageDir 带 mkdir 副作用；project 目录不可写时它会回退到中央 runtimeDir（见 getAgentSessionStorageDir）。
@@ -995,6 +1015,7 @@ export function createAgentSession(
   draft = false,
   presetId?: string,
 ): AgentSessionMeta {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   const now = Date.now()
 
@@ -1054,6 +1075,7 @@ export function ensureProjectDraftAgentSession(
   modelId?: string,
   agentRuntime: AgentRuntime = DEFAULT_AGENT_RUNTIME,
 ): AgentSessionMeta {
+  assertDesktopSessionWriteAllowed()
   const existing = listAgentSessions(true).find((session) =>
     session.workspaceId === workspaceId && session.draft && !session.archived,
   )
@@ -1115,6 +1137,7 @@ export function getAgentSessionMessages(id: string): AgentMessage[] {
  * 追加一条消息到会话的 JSONL 文件
  */
 export function appendAgentMessage(id: string, message: AgentMessage): void {
+  assertDesktopSessionWriteAllowed()
   const filePath = getAgentSessionMessagesPath(id)
   if (message.role === 'user') {
     const session = getAgentSessionMeta(id)
@@ -1195,6 +1218,7 @@ export {
  * 超过 256K chars 的消息会被自动截断以防止存储膨胀。
  */
 export function appendSDKMessages(id: string, messages: SDKMessage[]): void {
+  assertDesktopSessionWriteAllowed()
   // 注意：这里不再丢弃「瞬时断流」错误卡。丢弃必须在读取时结合「之后是否已恢复」判断
   // （见 dropRecoveredEphemeralTransportErrors）——写入时就丢掉，会让一次最终失败的
   // 网络错误在历史里彻底消失，用户看到的是「Agent Running 一闪就什么都没有了」。
@@ -1420,6 +1444,7 @@ export function updateAgentSessionMeta(
   updates: Partial<Pick<AgentSessionMeta, 'title' | 'titleAutoGeneratedAt' | 'titleRefineAttempts' | 'titleLockedAt' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'piFileCheckpoints' | 'agentRuntime' | 'agentRuntimeLocked' | 'codexFastMode' | 'openAIThinkingLevel' | 'agentEffort' | 'workspaceId' | 'storageLayout' | 'pinned' | 'archived' | 'draft' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'explorationParentSessionId' | 'explorationSourceMessageId' | 'explorationSourceLabel' | 'explorationTitleInitializedAt' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'pendingRewindNotice' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'sourceSessionId' | 'sourceRunId' | 'delegationRelation' | 'delegationPlacement' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationTaskKey' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal' | 'lastAnalyzedTurn' | 'presetId' | 'pptCapabilityActive' | 'lastInterruptReason' | 'lastInterruptLabel' | 'lastInterruptAt' | 'presetReference'>>,
   options: UpdateAgentSessionMetaOptions = {},
 ): AgentSessionMeta {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
 
@@ -1478,6 +1503,7 @@ export interface DeleteAgentSessionOptions {
  * 此时必须继续清掉检查点等大目录，否则它们永远没有引用可回收。
  */
 export async function cleanupResidualSessionFiles(id: string, workspaceId?: string): Promise<void> {
+  assertDesktopSessionWriteAllowed()
   await deleteAgentContextUsageSnapshot(id)
   for (const [label, filePath] of [
     ['消息', getAgentSessionMessagesPath(id)],
@@ -1531,6 +1557,7 @@ export async function deleteAgentSession(
   id: string,
   options: DeleteAgentSessionOptions = {},
 ): Promise<void> {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
 
@@ -1772,6 +1799,7 @@ export async function deleteAgentSession(
  * @returns 删除的会话数量
  */
 export async function deleteAgentSessionsByWorkspace(workspaceId: string): Promise<number> {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   const affected = index.sessions.filter((s) => s.workspaceId === workspaceId)
   if (affected.length === 0) return 0
@@ -1975,6 +2003,7 @@ export function moveSessionToWorkspace(
   targetWorkspaceId: string,
   options?: { allowDelegatedChild?: boolean },
 ): AgentSessionMeta {
+  assertDesktopSessionWriteAllowed()
   let index = readIndex()
   let idx = index.sessions.findIndex((s) => s.id === sessionId)
   if (idx === -1) {
@@ -2178,6 +2207,7 @@ export function moveSessionToWorkspace(
  * 工具活动、推理、附件等 Chat 特有字段不迁移。
  */
 export function migrateChatToAgentSession(conversationId: string, agentSessionId: string): void {
+  assertDesktopSessionWriteAllowed()
   const chatMessages = getConversationMessages(conversationId)
 
   if (chatMessages.length === 0) {
@@ -2415,6 +2445,7 @@ export async function rewindPiSession(
   assistantMessageUuid: string,
   sessionMeta: AgentSessionMeta,
 ): Promise<RewindSessionResult> {
+  assertDesktopSessionWriteAllowed()
   const piSessionFile = sessionMeta.piSessionFile
   if (!piSessionFile || !existsSync(piSessionFile)) {
     throw new Error('未找到 Pi session artifact，无法回退')
@@ -2585,6 +2616,7 @@ export async function resetPiSession(
   sessionId: string,
   sessionMeta: AgentSessionMeta,
 ): Promise<RewindSessionResult> {
+  assertDesktopSessionWriteAllowed()
   const piSessionFile = sessionMeta.piSessionFile
   // 没有 Pi artifact（会话在第一轮建会话之前就失败了）时无 transcript 可截断。
   // 清 Profer JSONL 本身就足够且完整（下一轮会建一个全新的 Pi 会话），
@@ -2802,6 +2834,7 @@ async function endWriteStream(stream: WriteStream): Promise<void> {
  * @returns 新创建的会话元数据
  */
 export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSessionMeta> {
+  assertDesktopSessionWriteAllowed()
   const { sessionId } = input
   const sourceMeta = getAgentSessionMeta(sessionId)
   if (!sourceMeta) {
@@ -3204,6 +3237,7 @@ function rewritePathsInSDKMessage(msg: SDKMessage, sourceDir: string, destDir: s
  * @returns 截断后保留的消息列表
  */
 export function truncateSDKMessages(id: string, upToUuidInclusive: string): SDKMessage[] {
+  assertDesktopSessionWriteAllowed()
   const messages = getAgentSessionSDKMessages(id)
   const cutIndex = messages.findIndex(
     (m) => 'uuid' in m && (m as { uuid?: string }).uuid === upToUuidInclusive,
@@ -3236,6 +3270,7 @@ function isRealUserMessageInSdkJsonl(m: Record<string, unknown>): boolean {
  * 目标是空历史。写成空文件而不是删文件，保持“会话消息文件始终存在”的隐含约定。
  */
 export function clearSDKMessages(id: string): SDKMessage[] {
+  assertDesktopSessionWriteAllowed()
   const filePath = getAgentSessionMessagesPath(id)
   const previousCount = getAgentSessionSDKMessages(id).length
   writeFileSync(filePath, '', 'utf-8')
@@ -3398,6 +3433,7 @@ export function resolveFirstUserUuidFromSDK(
  * 不能让快照问题把用户卡在“既清不掉也重来不了”的状态。
  */
 export function resetClaudeSession(sessionId: string, sessionMeta: AgentSessionMeta): RewindSessionResult {
+  assertDesktopSessionWriteAllowed()
   // 两种路径语义不能混用（P1-1）：storageDir 用于定位会话私有数据；
   // cwd 是快照相对路径的基准 + 允许写入根，project 下必须是项目根。
   let storageDir: string | undefined
@@ -3514,6 +3550,7 @@ export function rewindFilesFromSnapshot(
   forkSourceSdkSessionId?: string,
   attachedDirectories?: string[],
 ): { canRewind: boolean; error?: string; filesChanged?: string[]; insertions?: number; deletions?: number } {
+  assertDesktopSessionWriteAllowed()
   const sdkConfigDir = getSdkConfigDir()
 
   // 1. 查找 SDK session JSONL（优先当前 session，找不到目标 UUID 时 fallback 到源会话）
@@ -3634,11 +3671,13 @@ export function rewindFilesFromSnapshot(
 
     for (const [filePath, backupFileName] of fileState) {
       // SDK 对 cwd 内文件使用相对路径，对 additionalDirectories 内文件使用绝对路径
-      const isAbsolute = filePath.startsWith('/')
-      const fullPath = isAbsolute ? resolve(filePath) : resolve(cwd, filePath)
+      const fullPath = isAbsolute(filePath) ? resolve(filePath) : resolve(cwd, filePath)
 
-      // 路径安全检查：文件必须位于 cwd 或 attachedDirectories 之内
-      const isInAllowedDir = allowedDirs.some((dir) => fullPath.startsWith(dir + '/') || fullPath === dir)
+      // 通过 relative 判定目录边界，不能用 POSIX 分隔符比较 Windows 路径。
+      const isInAllowedDir = allowedDirs.some((dir) => {
+        const relation = relative(dir, fullPath)
+        return relation === '' || (!isAbsolute(relation) && relation !== '..' && !relation.startsWith(`..${sep}`))
+      })
       if (!isInAllowedDir) {
         console.warn(`[Agent 会话] rewindFiles: 拒绝路径越界 ${filePath}`)
         continue
@@ -3659,7 +3698,8 @@ export function rewindFilesFromSnapshot(
         // 文件在 target 时存在 → 用备份恢复
         const backupPath = resolve(fileHistoryDir, backupFileName)
         // backupPath 越界检查
-        if (!backupPath.startsWith(resolve(fileHistoryDir) + '/') && backupPath !== resolve(fileHistoryDir)) {
+        const backupRelation = relative(resolve(fileHistoryDir), backupPath)
+        if (isAbsolute(backupRelation) || backupRelation === '..' || backupRelation.startsWith(`..${sep}`)) {
           console.warn(`[Agent 会话] rewindFiles: 拒绝备份路径越界 ${backupFileName}`)
           continue
         }
@@ -3751,6 +3791,7 @@ export function autoArchiveAgentSessions(
   daysThreshold: number,
   keepRecentPerWorkspace = 0,
 ): number {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   // 兜底：非正数阈值意味着「立刻全部归档」，调用方误传时直接不做事。
   if (!Number.isFinite(daysThreshold) || daysThreshold <= 0) return 0
@@ -3807,6 +3848,7 @@ export function autoArchiveAgentSessions(
  * @returns 清理的条目总数
  */
 export function cleanupStaleAttachedPaths(): number {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   let count = 0
 
@@ -4231,6 +4273,7 @@ function copyProjectSessionBlobs(sessionId: string, messagesPath: string, projec
 export async function migrateProjectSessionLayouts(
   options: { workspaceId?: string; force?: boolean } = {},
 ): Promise<ProjectSessionLayoutMigrationResult> {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   const workspaces = listAgentWorkspaces().filter((workspace) => (
     workspace.storageMode === 'project'
@@ -4371,6 +4414,7 @@ const portableCheckedRoots = new Set<string>()
 export async function ensureProjectSessionPortability(
   workspaceId?: string,
 ): Promise<{ checkedSessions: number; copiedBlobs: number }> {
+  assertDesktopSessionWriteAllowed()
   const workspaces = listAgentWorkspaces().filter((workspace) => (
     workspace.storageMode === 'project'
     && typeof workspace.rootPath === 'string'
@@ -4423,6 +4467,7 @@ export async function ensureProjectSessionPortability(
 
 /** 回滚到中央布局（仅供排障/升级回退使用）。 */
 export async function rollbackProjectSessionLayouts(workspaceId?: string): Promise<{ rolledBack: number }> {
+  assertDesktopSessionWriteAllowed()
   const index = readIndex()
   const workspaces = listAgentWorkspaces().filter((workspace) => (
     workspace.storageMode === 'project'
@@ -4488,6 +4533,7 @@ export async function rollbackProjectSessionLayouts(workspaceId?: string): Promi
 
 /** 启动时补齐项目镜像（会话索引 + 自动化在各自管理器内补齐）。 */
 export function ensureProjectSessionMirrors(): void {
+  if (coreOwnsSessionStore()) return
   const index = readIndex()
   mirrorProjectSessionIndexes(index)
 }

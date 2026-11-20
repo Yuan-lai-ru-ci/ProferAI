@@ -32,11 +32,12 @@ import {
 } from '@profer/ui/primitives/dialog'
 import { Button } from '@profer/ui/primitives/button'
 import { cn } from '@/lib/utils'
+import { CoreFolderBrowser } from '@/components/file-browser/CoreFolderBrowser'
 import type { AgentWorkspace } from '@profer/shared'
 import type { SidebarModel } from './use-left-sidebar'
 
 /** 新建弹窗当前的入口状态 */
-export type CreateProjectMode = 'choose' | 'managed'
+export type CreateProjectMode = 'choose' | 'managed' | 'remote-path' | 'remote-open-path'
 
 /** 项目移除/删除弹窗的文案（project 与 managed 是两种完全不同的动作） */
 export interface WorkspaceRemovalCopy {
@@ -56,7 +57,7 @@ export interface WorkspaceRemovalCopy {
  */
 export function getWorkspaceRemovalCopy(workspace: AgentWorkspace | null): WorkspaceRemovalCopy {
   const name = workspace?.name ?? '该项目'
-  if (workspace?.storageMode === 'project') {
+  if (workspace?.storageMode === 'project' || (workspace as (AgentWorkspace & { degradedFromProject?: boolean }) | null)?.degradedFromProject === true) {
     return {
       title: '从 Profer 移除项目',
       description: `将从 Profer 列表中移除「${name}」。不会删除项目文件或 .profer 目录，之后可以重新绑定这个文件夹。`,
@@ -118,6 +119,11 @@ export interface CreateProjectDialogBodyProps {
   mode: CreateProjectMode
   name: string
   busy: boolean
+  isRemoteCore?: boolean
+  remoteProjectPath?: string
+  pendingRelocateWorkspaceId?: string | null
+  onRemoteProjectPathChange?: (path: string) => void
+  onRemoteProjectSubmit?: (open: boolean, path?: string, name?: string) => void
   onModeChange: (mode: CreateProjectMode) => void
   onNameChange: (name: string) => void
   onBindFolder: () => void
@@ -130,6 +136,10 @@ export function CreateProjectDialogBody({
   mode,
   name,
   busy,
+  isRemoteCore = false,
+  remoteProjectPath = '',
+  pendingRelocateWorkspaceId = null,
+  onRemoteProjectSubmit,
   onModeChange,
   onNameChange,
   onBindFolder,
@@ -137,22 +147,38 @@ export function CreateProjectDialogBody({
   onManagedSubmit,
   onNameKeyDown,
 }: CreateProjectDialogBodyProps): React.ReactElement {
+  // 非本机内核：直接展示 Core 文件夹浏览器。路径输入框内嵌在面板里，
+  // 不再有独立的“直接输入路径”入口，也不单独提供“新建文件夹”。
+  if (isRemoteCore && (mode === 'remote-path' || mode === 'remote-open-path')) {
+    const relocating = Boolean(pendingRelocateWorkspaceId)
+    return (
+      <div className="flex flex-col gap-1.5" data-testid="create-project-options">
+        <CoreFolderBrowser
+          initialPath={remoteProjectPath}
+          requireName={mode === 'remote-path' && !relocating}
+          confirmLabel={relocating ? '重新定位到此文件夹' : mode === 'remote-open-path' ? '打开此文件夹' : '创建项目'}
+          onCancel={() => onModeChange('choose')}
+          onSelect={(path, projectName) => onRemoteProjectSubmit?.(mode === 'remote-open-path', path, projectName)}
+        />
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col gap-1.5" data-testid="create-project-options">
       <ProjectEntryOption
         testId="create-project-bind-folder"
         icon={<FolderPlus size={15} />}
-        title="绑定项目文件夹"
-        description="选一个本地文件夹作为项目根，Profer 在其中生成 .profer 配置；代码和文件都留在原处"
-        disabled={busy}
+        title={isRemoteCore ? '绑定 Core 上的项目文件夹' : '绑定项目文件夹'}
+        description={isRemoteCore ? '在内核所在的机器上选择已有文件夹；Profer 只把路径交给所属 Core，不会选择本机目录' : '选一个本地文件夹作为项目根，Profer 在其中生成 .profer 配置；代码和文件都留在原处'}
+        disabled={busy || !!pendingRelocateWorkspaceId}
         onClick={onBindFolder}
       />
       <ProjectEntryOption
         testId="create-project-open-folder"
         icon={<FolderOpen size={15} />}
-        title="打开已有项目"
-        description="选择已有的项目文件夹；带 .profer 的项目会被识别并沿用原有配置"
-        disabled={busy}
+        title={isRemoteCore ? '打开 Core 上的项目文件夹' : '打开已有项目'}
+        description={isRemoteCore ? '在内核所在的机器上选择已有项目目录；带 .profer 的项目会沿用原有配置' : '选择已有的项目文件夹；带 .profer 的项目会被识别并沿用原有配置'}
+        disabled={busy || !!pendingRelocateWorkspaceId}
         onClick={onOpenFolder}
       />
       {mode === 'managed' ? (
@@ -184,8 +210,8 @@ export function CreateProjectDialogBody({
           testId="create-project-managed"
           icon={<HardDrive size={15} />}
           title="Profer 托管目录"
-          description="在 Profer 数据目录里新建托管工作区（原有方式），不在本地建目录"
-          disabled={busy}
+          description={isRemoteCore ? '在当前 Core 的数据目录里新建托管工作区' : '在本机 Profer 数据目录里新建托管工作区'}
+          disabled={busy || !!pendingRelocateWorkspaceId}
           onClick={() => onModeChange('managed')}
         />
       )}
@@ -215,6 +241,11 @@ export function SidebarDialogs({ s }: { s: SidebarModel }): React.ReactElement {
     setCreateProjectMode,
     newProjectName,
     setNewProjectName,
+    remoteProjectPath,
+    setRemoteProjectPath,
+    pendingRelocateWorkspaceId,
+    isRemoteCore,
+    handleBindRemoteProject,
     handleBindProjectFolder,
     handleOpenProjectFolder,
     handleCreateProject,
@@ -263,7 +294,7 @@ export function SidebarDialogs({ s }: { s: SidebarModel }): React.ReactElement {
       <Dialog open={createProjectDialogOpen} onOpenChange={handleCreateProjectDialogOpenChange}>
         <DialogContent className="max-w-[420px] gap-3 p-4" data-testid="create-project-dialog">
           <DialogHeader className="gap-1">
-            <DialogTitle className="text-[15px]">新建项目</DialogTitle>
+            <DialogTitle className="text-[15px]">{pendingRelocateWorkspaceId ? '重新定位项目' : '新建项目'}</DialogTitle>
             <DialogDescription className="text-[11px] leading-4 text-foreground/45">
               项目可以是任意本地文件夹，也可以放在 Profer 数据目录下托管。
             </DialogDescription>
@@ -272,7 +303,15 @@ export function SidebarDialogs({ s }: { s: SidebarModel }): React.ReactElement {
             mode={createProjectMode}
             name={newProjectName}
             busy={projectPickerBusy}
-            onModeChange={setCreateProjectMode}
+            isRemoteCore={isRemoteCore}
+            remoteProjectPath={remoteProjectPath}
+            pendingRelocateWorkspaceId={pendingRelocateWorkspaceId}
+            onRemoteProjectPathChange={setRemoteProjectPath}
+            onRemoteProjectSubmit={(open, path, projectName) => { void handleBindRemoteProject(open, path, projectName) }}
+            onModeChange={(mode) => {
+              if (mode === 'choose' && pendingRelocateWorkspaceId) handleCreateProjectDialogOpenChange(false)
+              else setCreateProjectMode(mode)
+            }}
             onNameChange={setNewProjectName}
             onBindFolder={() => { void handleBindProjectFolder() }}
             onOpenFolder={() => { void handleOpenProjectFolder() }}

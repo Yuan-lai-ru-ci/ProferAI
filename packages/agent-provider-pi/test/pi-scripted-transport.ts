@@ -7,7 +7,9 @@
  */
 
 import type { AssistantMessage, AssistantMessageEvent, JsonObject, Model, ToolCall, Usage } from '@earendil-works/pi-ai'
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai'
+import { createAssistantMessageEventStream, getCurrentSystemPrompt, normalizeContext, type Context } from '@earendil-works/pi-ai'
+// 跨包集成测试从 provider 的依赖作用域加载同一份真实 SDK，避免解析到其他版本。
+export { ModelRuntime } from '@earendil-works/pi-coding-agent'
 
 export interface ScriptedToolCall {
   id: string
@@ -73,12 +75,13 @@ export function createScriptedTransport(turns: ScriptedTurn[]): ScriptedTranspor
   const streamSimple: ScriptedTransport['streamSimple'] = (model, context, options) => {
     const stream = createAssistantMessageEventStream()
     const turnIndex = calls.length
-    const contextMessages = (context as { messages?: Array<{ role?: string; content?: unknown }> } | undefined)?.messages
-    const systemMessage = contextMessages?.find(message => message.role === 'system')
+    const contextRecord = context as { systemPrompt?: unknown; messages?: Array<{ role?: string; content?: unknown }> } | undefined
+    const contextMessages = contextRecord?.messages
+    const transcript = normalizeContext(context as Context)
     calls.push({
       turn: turnIndex,
       messageCount: Array.isArray(contextMessages) ? contextMessages.length : 0,
-      ...(typeof systemMessage?.content === 'string' ? { systemPrompt: systemMessage.content } : {}),
+      systemPrompt: getCurrentSystemPrompt(transcript.messages),
       userTexts: (contextMessages ?? [])
         .filter(message => message.role === 'user')
         .map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)),

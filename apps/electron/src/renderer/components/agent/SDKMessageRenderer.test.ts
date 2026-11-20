@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { Provider, createStore } from 'jotai'
 import type { SDKMessage } from '@profer/shared'
 import { TooltipProvider } from '@profer/ui/primitives/tooltip'
+import { userProfileAtom } from '../../atoms/user-profile'
+import { mergeMessagesByUuid } from '../../lib/agent-message-merge'
 import { groupIntoTurns, extractTurnUsage, getGroupPreview, MessageGroupRenderer, parseAttachedFiles, buildHistoricalTaskSubjects, splitUserMessagePrefix, type MessageGroup, type EditResendRequest } from './SDKMessageRenderer'
 
 function userText(text: string): SDKMessage {
@@ -332,6 +334,28 @@ describe('用户消息操作入口渲染（修改重发）', () => {
     expect(markup).toContain('message-header-model')
     expect(markup).not.toContain('message-header-author')
     expect(markup).not.toContain('worker-7')
+  })
+
+  test('Core 返回的用户来源在实时合并和重载后显示配置昵称，历史未知作者保持未知', () => {
+    const store = createStore()
+    store.set(userProfileAtom, { ...store.get(userProfileAtom), userName: 'Core 昵称测试' })
+    const message: SDKMessage = {
+      type: 'user', uuid: 'core-user-message', session_id: 'session', parent_tool_use_id: null,
+      message: { role: 'user', content: [{ type: 'text', text: '测试新消息' }] },
+      _provenance: { schemaVersion: 1, messageId: 'core-user-message', author: { type: 'user' }, runId: 'core-run', triggerId: 'message:session:core-user-message' },
+    }
+    const render = (input: SDKMessage): string => renderToStaticMarkup(React.createElement(Provider, { store }, React.createElement(MessageGroupRenderer, {
+      group: groupIntoTurns([input])[0]!, allMessages: [input], historicalTaskSubjects: new Map<string, string>(),
+    })))
+    const optimistic = { ...message, _provenance: undefined }
+    const live = mergeMessagesByUuid([optimistic], [message])[0]!
+    for (const input of [live, structuredClone(message)]) {
+      expect(render(input)).toContain('Core 昵称测试')
+      expect(render(input)).not.toContain('未知作者')
+    }
+    const legacy = render({ ...message, _provenance: undefined })
+    expect(legacy).toContain('未知作者')
+    expect(legacy).not.toContain('Core 昵称测试')
   })
 
   test('协议 user 消息带 Agent provenance 时展示真实作者', () => {

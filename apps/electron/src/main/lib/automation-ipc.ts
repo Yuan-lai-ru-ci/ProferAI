@@ -28,9 +28,12 @@ import { getAgentSessionMeta, listAgentSessions } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { getVisibleChannelById } from './channel-manager'
 import { resolvePresetId, getDefaultPresetId } from './agent-preset-manager'
+import { routeCoreAutomationMaintenance } from './core-automation-routing'
+import { routeAutomationToCore } from './automation-core-routing'
 import { validateBoundAutomationChannel, validateBoundAutomationSession, withTrustedAutomationPromptAuthor } from './automation-dispatch'
 
 export function registerAutomationIpc(): void {
+  ipcMain.handle(AUTOMATION_IPC_CHANNELS.MAINTENANCE, (_, input: import('@profer/shared').AutomationMaintenanceInput) => routeCoreAutomationMaintenance(input))
 
   // 渲染进程可能被注入内容污染（XSS via markdown / MCP tool output），主进程必须自己校验入参，
   // 否则 NaN / -Infinity / 越界值会污染 ~/.profer/automations.json，无法回滚。
@@ -152,12 +155,20 @@ export function registerAutomationIpc(): void {
     return result
   })
 
-  ipcMain.handle(
+  const handleAutomation = (channel: string, handler: Parameters<typeof ipcMain.handle>[1]): void => {
+    ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+      const routed = await routeAutomationToCore(channel, args)
+      if (routed) return routed.result
+      return handler(event, ...args)
+    })
+  }
+
+  handleAutomation(
     AUTOMATION_IPC_CHANNELS.LIST,
     async (): Promise<Automation[]> => listAutomations()
   )
 
-  ipcMain.handle(
+  handleAutomation(
     AUTOMATION_IPC_CHANNELS.CREATE,
     async (_, input: CreateAutomationInput): Promise<Automation> => {
       if (!input || typeof input !== 'object') throw new Error('input 必须是对象')
@@ -176,7 +187,7 @@ export function registerAutomationIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  handleAutomation(
     AUTOMATION_IPC_CHANNELS.UPDATE,
     async (_, input: UpdateAutomationInput): Promise<Automation | undefined> => {
       if (!input || typeof input !== 'object') throw new Error('input 必须是对象')
@@ -201,7 +212,7 @@ export function registerAutomationIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  handleAutomation(
     AUTOMATION_IPC_CHANNELS.DELETE,
     async (_, id: string): Promise<boolean> => {
       if (!isNonEmptyString(id)) throw new Error('id 必填')
@@ -211,7 +222,7 @@ export function registerAutomationIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  handleAutomation(
     AUTOMATION_IPC_CHANNELS.TOGGLE,
     async (_, id: string, active: boolean): Promise<Automation | undefined> => {
       if (!isNonEmptyString(id)) throw new Error('id 必填')
@@ -222,7 +233,7 @@ export function registerAutomationIpc(): void {
     }
   )
 
-  ipcMain.handle(
+  handleAutomation(
     AUTOMATION_IPC_CHANNELS.RUN_NOW,
     async (_, id: string): Promise<void> => {
       if (!isNonEmptyString(id)) throw new Error('id 必填')

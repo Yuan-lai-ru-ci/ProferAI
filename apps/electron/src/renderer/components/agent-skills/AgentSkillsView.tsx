@@ -1,3 +1,4 @@
+import { coreTargetsAtom } from "../../atoms/core-target-atoms";
 /**
  * AgentSkillsView — 「Agent 技能」全屏视图
  *
@@ -57,6 +58,11 @@ import {
 type CapabilityTab = "skills" | "mcp" | "presets";
 
 export function AgentSkillsView(): React.ReactElement {
+  const target = useAtomValue(coreTargetsAtom);
+  return <AgentSkillsBody key={`${target.currentId}:${target.generation}`} />;
+}
+
+function AgentSkillsBody(): React.ReactElement {
   const data = useAgentSkillsData();
   const setActiveView = useSetAtom(activeViewAtom);
   const bumpCapabilities = useSetAtom(workspaceCapabilitiesVersionAtom);

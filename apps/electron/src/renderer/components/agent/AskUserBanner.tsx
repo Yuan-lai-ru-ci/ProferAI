@@ -229,7 +229,7 @@ export function AskUserBanner({ sessionId, onRequestStop }: AskUserBannerProps):
           answersRecord[key] = answer.selected.join(', ')
         }
       }
-      await window.electronAPI.respondAskUser({ requestId: request.requestId, answers: answersRecord })
+      await window.electronAPI.respondAskUser({ requestId: request.requestId, sessionId: request.sessionId, runId: request.runId, answers: answersRecord })
       requestFollow(sessionId)
       setAllRequests((prev) => {
         const map = new Map(prev)

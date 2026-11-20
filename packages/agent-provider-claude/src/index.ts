@@ -6,9 +6,13 @@
  * 通过 ClaudeProviderDependencies 注入 SDK 加载、进程生命周期与权限回调。
  */
 
+export * from './native-session'
 export * from './task-events'
 export * from './background-task-manager'
 export * from './agent-sdk-auth-env'
 export * from './write-target-guard'
 export * from './claude-agent-adapter'
 export * from './rewind-evidence'
+
+export { injectClaudePlanningMcpServer, type ClaudePlanningOperations } from './planning-tools'
+export { injectClaudeDelegationTools } from './delegation-tools'

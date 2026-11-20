@@ -1,0 +1,61 @@
+import { PROFER_DEFAULT_PERMISSION_MODE, type AgentSessionMeta, type AgentSessionUiProjection } from '../types/agent'
+import { normalizeAgentRuntime } from '../types/agent-provider'
+import { canSelectAgentSessionRuntime } from './agent-session-runtime'
+
+/** Convert private session metadata into the safe cross-device UI snapshot. */
+export function buildAgentSessionUiProjection(meta: AgentSessionMeta): AgentSessionUiProjection {
+  const presetReference = meta.presetReference
+    ? {
+        presetId: meta.presetReference.presetId,
+        presetScope: meta.presetReference.presetScope,
+        ...(meta.presetReference.workspaceSlug ? { workspaceSlug: meta.presetReference.workspaceSlug } : {}),
+        ...(meta.presetReference.presetVersion ? { presetVersion: meta.presetReference.presetVersion } : {}),
+      }
+    : null
+
+  return {
+    schemaVersion: 1,
+    id: meta.id,
+    revision: Math.max(0, meta.revision ?? 0),
+    title: meta.title,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    channelId: meta.channelId ?? null,
+    modelId: meta.modelId ?? null,
+    agentRuntime: normalizeAgentRuntime(meta.agentRuntime),
+    agentRuntimeLocked: !canSelectAgentSessionRuntime(meta),
+    permissionMode: meta.permissionMode ?? PROFER_DEFAULT_PERMISSION_MODE,
+    presetId: meta.presetId ?? null,
+    presetReference,
+    openAIThinkingLevel: meta.openAIThinkingLevel ?? null,
+    codexFastMode: meta.codexFastMode ?? false,
+    agentEffort: meta.agentEffort ?? null,
+    attachedDirectories: meta.attachedDirectories ?? [],
+    attachedFiles: meta.attachedFiles ?? [],
+    workspaceId: meta.workspaceId ?? null,
+    // 子会话（委派 / 探索分支）不参与置顶：位置由母会话决定，历史残留的 pinned 不对外投影。
+    pinned: !!meta.pinned && !meta.parentSessionId && !meta.explorationParentSessionId,
+    archived: meta.archived ?? false,
+    draft: meta.draft ?? false,
+    parentSessionId: meta.parentSessionId ?? null,
+    rootSessionId: meta.rootSessionId ?? null,
+    sourceDelegationId: meta.sourceDelegationId ?? null,
+    explorationParentSessionId: meta.explorationParentSessionId ?? null,
+    explorationSourceMessageId: meta.explorationSourceMessageId ?? null,
+    explorationSourceLabel: meta.explorationSourceLabel ?? null,
+    delegationRole: meta.delegationRole ?? null,
+    delegationStatus: meta.delegationStatus ?? null,
+    delegationDepth: meta.delegationDepth ?? null,
+    sourceAutomationId: meta.sourceAutomationId ?? null,
+    sourceSessionId: meta.sourceSessionId ?? null,
+    sourceRunId: meta.sourceRunId ?? null,
+    delegationRelation: meta.delegationRelation ?? null,
+    delegationPlacement: meta.delegationPlacement ?? null,
+    automationGraduated: meta.automationGraduated ?? false,
+    completedButUnconfirmed: meta.completedButUnconfirmed ?? false,
+    stoppedByUser: meta.stoppedByUser ?? false,
+    lastInterruptReason: meta.lastInterruptReason ?? null,
+    lastInterruptLabel: meta.lastInterruptLabel ?? null,
+    lastInterruptAt: meta.lastInterruptAt ?? null,
+  }
+}

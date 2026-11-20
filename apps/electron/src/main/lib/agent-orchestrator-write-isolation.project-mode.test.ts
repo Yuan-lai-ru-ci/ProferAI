@@ -124,7 +124,7 @@ function snapshotTree(root: string): string[] {
   }
   walk(root)
   // 会话运行时数据现在位于 `.profer/sessions`，属于工作区资产；这里断言的是「用户项目文件零污染」。
-  return entries.filter((entry) => !entry.startsWith('.profer/sessions')).sort()
+  return entries.filter((entry) => !entry.replace(/\\/g, '/').startsWith('.profer/sessions')).sort()
 }
 
 /** 最小合法 PNG（只有签名 + 少量字节，足够 detectAgentImage 判定）。 */
@@ -165,8 +165,8 @@ describe('project：一轮写入后 rootPath 零污染', () => {
       allowedRoots: [],
     })
     // 产物真实落点：macOS 临时目录 realpath 会去掉 /private 前缀，比较时统一用 realpath
-    expect(output.image.localPath.startsWith(realpathSync(layout.imageOutputDir))).toBe(true)
-    expect(output.image.relativePath).toBe(relative(realpathSync(layout.storageDir), output.image.localPath).split(sep).join('/'))
+    expect(realpathSync.native(dirname(output.image.localPath))).toBe(realpathSync.native(layout.imageOutputDir))
+    expect(output.image.relativePath).toBe(relative(realpathSync.native(layout.storageDir), realpathSync.native(output.image.localPath)).split(sep).join('/'))
 
     const record = await createImageGenerationRecord({
       sessionId: meta.id,
@@ -197,7 +197,7 @@ describe('project：一轮写入后 rootPath 零污染', () => {
       storageDir: layout.storageDir,
       allowedRoots: [],
     })
-    expect(sent.image.localPath.startsWith(realpathSync(layout.imageOutputDir))).toBe(true)
+    expect(realpathSync.native(dirname(sent.image.localPath))).toBe(realpathSync.native(layout.imageOutputDir))
 
     // 5) 记录可回放
     const cards = await listImageGenerationCards({ sessionId: meta.id, agentCwd: root, storageDir: layout.storageDir })
@@ -285,7 +285,7 @@ describe('managed：写入落点保持改造前行为', () => {
       storageDir: layout.storageDir,
       allowedRoots: [],
     })
-    expect(output.image.localPath.startsWith(realpathSync(join(layout.storageDir, '.context', 'agent-output-images')))).toBe(true)
+    expect(realpathSync.native(dirname(output.image.localPath))).toBe(realpathSync.native(join(layout.storageDir, '.context', 'agent-output-images')))
 
     await createImageGenerationRecord({
       sessionId: meta.id,
@@ -301,6 +301,6 @@ describe('managed：写入落点保持改造前行为', () => {
   test('Given 未传 storageDir 的旧调用方 When 生图 Then 回落 cwd（不破坏既有调用）', async () => {
     const root = makeProject('legacy-caller')
     const output = await writeAgentImageOutput(pngBytes(), 'image/png', { agentCwd: root, allowedRoots: [] })
-    expect(output.image.localPath.startsWith(join(root, '.context', 'agent-output-images'))).toBe(true)
+    expect(realpathSync.native(dirname(output.image.localPath))).toBe(realpathSync.native(join(root, '.context', 'agent-output-images')))
   })
 })

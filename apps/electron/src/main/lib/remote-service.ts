@@ -82,6 +82,8 @@ import {
 } from './agent-preset-manager'
 import type { AgentPresetCreateInput, AgentPresetUpdateInput } from '@profer/shared'
 import { onSessionDeletionCommitted, requestSessionDeletion } from './agent-session-deletion-service'
+import { getLocalCoreClient } from './core-local-bridge'
+import { routePocketSessionToCore } from './pocket-core-session-routing'
 import { resolvePiReasoningCapability } from './adapters/pi-model-registry'
 import { searchRemoteWorkspaceFiles } from './remote-workspace-file-search'
 import { listSwitchableChannels, getEnabledModels } from './bridge-model-utils'
@@ -1065,12 +1067,31 @@ export async function handleRemoteCommand(
   if (typeof parsed.sessionId === 'string' && parsed.sessionId) {
     context && (context.activeSessionId = parsed.sessionId)
   }
+  // 只补传输身份，不采纳旧版access中的授权根；文件能力仍由所属Core重新判定。
+  const coreInput = (type === 'resolve_and_read_file' || type === 'read_file_as_data_url') && parsed.sessionId === undefined
+    ? { ...parsed, sessionId: (parsed.access && typeof parsed.access === 'object' && 'sessionId' in parsed.access && typeof parsed.access.sessionId === 'string')
+      ? parsed.access.sessionId : context?.activeSessionId }
+    : parsed
+  const coreResult = await routePocketSessionToCore(coreInput, { getClient: getLocalCoreClient,
+    coreEnabled: () => process.env.PROFER_CORE_LOCAL === '1', sessionItem: buildSessionItem, paginateMessages: paginateSDKMessages })
+  if (coreResult) return coreResult
   switch (type) {
     case 'ping': {
       return { ok: true, data: { pong: true, time: Date.now() } }
     }
 
     case 'list_sessions': {
+      // Pocket这条桌面连接使用本机会话ID，不跟随桌面选择另一台远程Core。
+      const core = getLocalCoreClient()
+      if (core || process.env.PROFER_CORE_LOCAL === '1') {
+        if (!core) return { ok: false, error: '本地Core未就绪' }
+        try {
+          const liveWorkspaceIds = new Set(listAgentWorkspaces().filter(workspace => !workspace.archived).map(workspace => workspace.id))
+          const sessions = await core.listSessions()
+          return { ok: true, data: sessions.filter(session => !session.archived && (!session.workspaceId || liveWorkspaceIds.has(session.workspaceId)))
+            .map(session => buildSessionItem(session as AgentSessionMeta)) }
+        } catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'Core会话列表读取失败' } }
+      }
       return { ok: true, data: buildSessionList() }
     }
 
@@ -1092,7 +1113,19 @@ export async function handleRemoteCommand(
     case 'delete_session': {
       const sessionId = typeof parsed.sessionId === 'string' ? parsed.sessionId : ''
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      if (sessionId.startsWith('core:')) return { ok: false, error: 'Pocket桌面连接不能删除另一Core的命名空间会话' }
       try {
+        const core = getLocalCoreClient()
+        if (core || process.env.PROFER_CORE_LOCAL === '1') {
+          if (!core) throw new Error('本地Core未就绪')
+          const accepted = await core.deleteSession(sessionId)
+          // 使用Core确认的级联集合，不能根据桌面旧索引猜测要隐藏哪些子会话。
+          for (const id of accepted.sessionIds) {
+            remoteAgentReplayRegistry.clearSession(id)
+            publishSessionDeleted(id)
+          }
+          return { ok: true, data: { sessionId, requestId: accepted.requestId, sessionIds: accepted.sessionIds } }
+        }
         requestSessionDeletion({ sessionId, reason: 'user' })
         // 会话已删：同时释放它的回放登记，避免刷新后的 Pocket 拿到已删会话的在飞事件。
         remoteAgentReplayRegistry.clearSession(sessionId)
@@ -2585,6 +2618,7 @@ function startRemoteServiceAttempt(port: number): Promise<RemoteListenOutcome> {
     // 自身 completion 事件表达同一语义，不下发它们可避免旧版 Pocket 客户端
     // 处理未知 payload.kind，也避免事件日志里出现重复终态。
     if (payload.kind === 'run_complete' || payload.kind === 'run_error') return
+    if (payload.kind === 'session_projection' && payload.operation === 'delete') remoteAgentReplayRegistry.clearSession(payload.sessionId)
     broadcastAgentEvent(sessionId, payload)
   })
 

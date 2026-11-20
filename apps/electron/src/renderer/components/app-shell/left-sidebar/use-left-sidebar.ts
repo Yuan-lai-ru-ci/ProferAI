@@ -69,6 +69,7 @@ import {
 } from '@/atoms/agent-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { agentGoalsAtom, goalStatusBySessionAtom } from '@/atoms/goal-atoms'
+import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { summarizeGoalRailCounts } from '@/domains/goal/goal-display-policy'
 import { previewFileMapAtom, previewFilesByTabAtom } from '@/atoms/preview-atoms'
 import {
@@ -159,6 +160,8 @@ export function useLeftSidebar() {
   const activeViewRef = React.useRef(activeView)
   activeViewRef.current = activeView
   const authStatus = useAtomValue(authStatusAtom)
+  const coreTargetState = useAtomValue(coreTargetsAtom)
+  const isRemoteCore = coreTargetState.currentId !== 'local'
   const setAutomationForm = useSetAtom(automationFormAtom)
   const automations = useAtomValue(automationsAtom)
   const setAutomations = useSetAtom(automationsAtom)
@@ -315,8 +318,10 @@ export function useLeftSidebar() {
   const [projectDropIndicator, setProjectDropIndicator] = React.useState<{ id: string; position: 'before' | 'after' } | null>(null)
   /** 新建项目弹窗：先选入口（绑定文件夹 / 打开已有 / Profer 托管目录），托管目录再填名称 */
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = React.useState(false)
-  const [createProjectMode, setCreateProjectMode] = React.useState<'choose' | 'managed'>('choose')
+  const [createProjectMode, setCreateProjectMode] = React.useState<'choose' | 'managed' | 'remote-path' | 'remote-open-path'>('choose')
   const [newProjectName, setNewProjectName] = React.useState('')
+  const [remoteProjectPath, setRemoteProjectPath] = React.useState('')
+  const [pendingRelocateWorkspaceId, setPendingRelocateWorkspaceId] = React.useState<string | null>(null)
   /** 目录选择/绑定的在途标记：防止连点重复绑定 */
   const [projectPickerBusy, setProjectPickerBusy] = React.useState(false)
   /** project 工作区根路径可用性；missing 时在项目行显示「项目路径不可用」 */
@@ -666,20 +671,31 @@ export function useLeftSidebar() {
 
   /** 刷新归档计数（轻量，不拉列表） */
   const refreshArchivedCounts = React.useCallback(() => {
+    const target = store.get(coreTargetsAtom)
     window.electronAPI.getArchivedCounts().then(({ conversations, agentSessions }) => {
+      const current = store.get(coreTargetsAtom)
+      if (current.currentId !== target.currentId || current.generation !== target.generation) return
       setArchivedConversationCount(conversations)
       setArchivedAgentSessionCount(agentSessions)
     }).catch(console.error)
-  }, [])
+  }, [store])
 
   /**
    * 按当前视图拉取会话列表 + 归档计数。
    * 活跃视图只拉活跃会话；归档视图才拉归档会话；计数走轻量 getArchivedCounts。
    */
   const refreshSidebarLists = React.useCallback(() => {
+    const requestTarget = store.get(coreTargetsAtom)
+    const isCurrentTarget = (): boolean => {
+      const current = store.get(coreTargetsAtom)
+      return current.currentId === requestTarget.currentId && current.generation === requestTarget.generation
+    }
     const includeArchived = viewMode === 'archived'
-    window.electronAPI.listConversations(includeArchived).then(setConversations).catch(console.error)
+    window.electronAPI.listConversations(includeArchived).then(items => {
+      if (isCurrentTarget()) setConversations(items)
+    }).catch(console.error)
     window.electronAPI.listAgentSessions(includeArchived).then((sessions) => {
+      if (!isCurrentTarget()) return
       setAgentSessions(sessions)
       // 启动恢复：把持久化 completedButUnconfirmed 的会话 id 加回未读集合（Set 幂等），重启后绿标仍在
       const persistedUnreadIds = sessions.filter((s) => s.completedButUnconfirmed).map((s) => s.id)
@@ -697,9 +713,11 @@ export function useLeftSidebar() {
       }
     }).catch(console.error)
     // 顺带刷新工作区列表：窗口聚焦/列表刷新时同步最新工作区（否则 pocket 新建工作区一直不出现）
-    window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
+    window.electronAPI.listAgentWorkspaces().then(workspaces => {
+      if (isCurrentTarget()) setWorkspacesStable(workspaces)
+    }).catch(console.error)
     refreshArchivedCounts()
-  }, [viewMode, setConversations, setAgentSessions, setUnviewedCompleted, setWorkspacesStable, refreshArchivedCounts])
+  }, [store, viewMode, setConversations, setAgentSessions, setUnviewedCompleted, setWorkspacesStable, refreshArchivedCounts])
 
   // 初始加载：用户档案 + 按当前视图拉取列表/计数（viewMode effect 挂载时也会拉，重复无害）
   React.useEffect(() => {
@@ -710,10 +728,11 @@ export function useLeftSidebar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setUserProfile])
 
-  // 挂载 + 视图切换（活跃/归档）时按需重拉列表与计数
+  // 会话导航由全局按Core恢复器统一处理；侧栏只失效旧请求并刷新目录。
   React.useEffect(() => {
+    projectSelectionRequestRef.current += 1
     refreshSidebarLists()
-  }, [refreshSidebarLists])
+  }, [coreTargetState.currentId, coreTargetState.generation, refreshSidebarLists])
 
   // 窗口聚焦时重新同步列表，修复长时间后前后端不一致（按当前视图，不捎带归档）
   React.useEffect(() => {
@@ -731,18 +750,15 @@ export function useLeftSidebar() {
   // 但工作区 id 是新建的（解绑再绑定会换 id），只刷工作区列表的话侧栏仍按旧 id 过滤，
   // 页面就停在「暂无会话」，直到下一次发消息触发列表刷新才「突然出现」。
   React.useEffect(() => {
-    const unsub = window.electronAPI.onAgentWorkspacesChanged(() => {
-      window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
-      refreshSidebarLists()
-    })
+    const unsub = window.electronAPI.onAgentWorkspacesChanged(refreshSidebarLists)
     return unsub
-  }, [setWorkspacesStable, refreshSidebarLists])
+  }, [refreshSidebarLists])
 
   // authStatus 变化时刷新工作区（登录/登出）
   // 仅立即刷新一次，避免重复请求
   React.useEffect(() => {
-    window.electronAPI.listAgentWorkspaces().then(setWorkspacesStable).catch(console.error)
-  }, [authStatus.isLoggedIn, setWorkspacesStable])
+    refreshSidebarLists()
+  }, [authStatus.isLoggedIn, refreshSidebarLists])
 
   /** 打开规划中心的某个分区（Todo · 日程 · 定时任务）。
    *  三个入口共享 activeView='planning'，分区由 planningTab 决定；再次点击当前分区
@@ -1091,7 +1107,7 @@ export function useLeftSidebar() {
       const targetWorkspaceId = workspaceId ?? currentWorkspaceId ?? undefined
       if (targetWorkspaceId && targetWorkspaceId !== currentWorkspaceId) {
         setCurrentWorkspaceId(targetWorkspaceId)
-        window.electronAPI.updateSettings({ agentWorkspaceId: targetWorkspaceId }).catch(console.error)
+        if (!isRemoteCore) window.electronAPI.updateSettings({ agentWorkspaceId: targetWorkspaceId }).catch(console.error)
       }
 
       const meta = await window.electronAPI.createAgentSession(
@@ -1124,7 +1140,7 @@ export function useLeftSidebar() {
       console.error('[侧边栏] 创建 Agent 会话失败:', error)
       toast.error(error instanceof Error ? error.message : '创建会话失败')
     }
-  }, [agentChannelId, agentModelId, currentWorkspaceId, openSession, setActiveView, setAgentSessions, setCurrentWorkspaceId, setSessionChannelMap, setSessionModelMap])
+  }, [agentChannelId, agentModelId, currentWorkspaceId, isRemoteCore, openSession, setActiveView, setAgentSessions, setCurrentWorkspaceId, setSessionChannelMap, setSessionModelMap])
 
   /** 创建新 Agent 会话 */
   const handleNewAgentSession = React.useCallback(async (): Promise<void> => {
@@ -1139,7 +1155,20 @@ export function useLeftSidebar() {
     setCurrentWorkspaceId(workspaceId)
     setActiveView('conversations')
     setCollapsedWorkspaceIds((prev) => deleteSetEntry(prev, workspaceId))
-    window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
+    if (isRemoteCore) {
+      try {
+        const meta = await window.electronAPI.createAgentSession(undefined, agentChannelId || undefined, workspaceId, agentModelId || undefined, undefined, true)
+        if (requestId !== projectSelectionRequestRef.current) return
+        setAgentSessions(previous => [meta, ...previous.filter(item => item.id !== meta.id)])
+        setCurrentAgentSessionId(meta.id)
+        openSession('agent', meta.id, meta.title)
+      } catch (error) {
+        console.error('[侧边栏] 创建远程工作区会话失败:', error)
+        toast.error(error instanceof Error ? error.message : '创建远程工作区会话失败')
+      }
+      return
+    }
+    if (!isRemoteCore) window.electronAPI.updateSettings({ agentWorkspaceId: workspaceId }).catch(console.error)
 
     try {
       const session = await window.electronAPI.ensureProjectDraftAgentSession(
@@ -1166,7 +1195,7 @@ export function useLeftSidebar() {
       console.error('[侧边栏] 创建项目草稿会话失败:', error)
       toast.error(error instanceof Error ? error.message : '创建项目草稿会话失败')
     }
-  }, [agentChannelId, agentModelId, openSession, setActiveView, setAgentSessions, setCollapsedWorkspaceIds, setCurrentAgentSessionId, setCurrentWorkspaceId, setDraftSessionIds, visibleWorkspaceIds])
+  }, [agentChannelId, agentModelId, isRemoteCore, openSession, setActiveView, setAgentSessions, setCollapsedWorkspaceIds, setCurrentAgentSessionId, setCurrentWorkspaceId, setDraftSessionIds, visibleWorkspaceIds])
 
   const handleToggleProjectCollapse = React.useCallback((workspaceId: string): void => {
     setCollapsedWorkspaceIds((previous) => toggleSetEntry(previous, workspaceId))
@@ -1204,9 +1233,9 @@ export function useLeftSidebar() {
       return
     }
 
-    const isProjectWorkspace = workspace.storageMode === 'project'
+    const isProjectWorkspace = workspace.storageMode === 'project' || (workspace as AgentWorkspace & { degradedFromProject?: boolean }).degradedFromProject === true
 
-    const deletedSessionIds = new Set(
+    const deletedSessionIds = isProjectWorkspace ? new Set<string>() : new Set(
       agentSessions
         .filter((session) => session.workspaceId === workspaceId)
         .map((session) => session.id),
@@ -1287,7 +1316,7 @@ export function useLeftSidebar() {
       if (workspaceId === currentWorkspaceId) {
         const fallback = remainingWorkspaces.find((item) => item.slug === 'default') ?? remainingWorkspaces[0] ?? null
         setCurrentWorkspaceId(fallback?.id ?? null)
-        if (fallback) {
+        if (fallback && !isRemoteCore) {
           window.electronAPI.updateSettings({ agentWorkspaceId: fallback.id }).catch(console.error)
         }
       }
@@ -1327,6 +1356,7 @@ export function useLeftSidebar() {
     setCurrentWorkspaceId,
     viewMode,
     refreshArchivedCounts,
+    isRemoteCore,
   ])
 
   /** 展开某个项目时每次额外显示的会话数量 */
@@ -1448,13 +1478,15 @@ export function useLeftSidebar() {
     ))
     setCurrentWorkspaceId(workspace.id)
     setActiveView('conversations')
-    window.electronAPI.updateSettings({ agentWorkspaceId: workspace.id }).catch(console.error)
-  }, [setActiveView, setCurrentWorkspaceId, setWorkspaces])
+    if (!isRemoteCore) window.electronAPI.updateSettings({ agentWorkspaceId: workspace.id }).catch(console.error)
+  }, [isRemoteCore, setActiveView, setCurrentWorkspaceId, setWorkspaces])
 
   /** 打开新建项目弹窗；每次打开都从入口选择重新开始 */
   const handleStartCreateProject = React.useCallback((): void => {
     setCreateProjectMode('choose')
     setNewProjectName('')
+    setRemoteProjectPath('')
+    setPendingRelocateWorkspaceId(null)
     setCreateProjectDialogOpen(true)
   }, [])
 
@@ -1463,6 +1495,8 @@ export function useLeftSidebar() {
     if (!open) {
       setCreateProjectMode('choose')
       setNewProjectName('')
+      setRemoteProjectPath('')
+      setPendingRelocateWorkspaceId(null)
     }
   }, [])
 
@@ -1516,25 +1550,43 @@ export function useLeftSidebar() {
 
   /** 绑定本地文件夹为项目（新建入口 · 绑定项目文件夹）；名称默认取目录名 */
   const handleBindProjectFolder = React.useCallback(async (): Promise<void> => {
+    if (isRemoteCore) {
+      setPendingRelocateWorkspaceId(null)
+      setCreateProjectMode('remote-path')
+      return
+    }
     const deps = createProjectPickerDeps()
     await runProjectPick(() => bindProjectFolderFromPicker(deps))
-  }, [runProjectPick])
+  }, [runProjectPick, isRemoteCore])
 
   /** 打开已有项目文件夹（新建入口 · 打开已有项目） */
   const handleOpenProjectFolder = React.useCallback(async (): Promise<void> => {
+    if (isRemoteCore) {
+      setPendingRelocateWorkspaceId(null)
+      setCreateProjectMode('remote-open-path')
+      return
+    }
     const deps = createProjectPickerDeps()
     await runProjectPick(() => openProjectFolderFromPicker(deps))
-  }, [runProjectPick])
+  }, [runProjectPick, isRemoteCore])
 
   /** 重新定位路径失效的项目：选新目录后把旧索引绑定替换掉 */
   const handleRelocateProject = React.useCallback(async (workspaceId: string): Promise<void> => {
+    if (isRemoteCore) {
+      const workspace = workspaces.find((item) => item.id === workspaceId)
+      setRemoteProjectPath(workspace?.rootPath ?? '')
+      setCreateProjectMode('remote-open-path')
+      setPendingRelocateWorkspaceId(workspaceId)
+      setCreateProjectDialogOpen(true)
+      return
+    }
     const workspace = workspaces.find((item) => item.id === workspaceId)
     if (!workspace) return
     const deps = createProjectPickerDeps()
     await runProjectPick(() => relocateProjectFromPicker(deps, { id: workspace.id, name: workspace.name }))
-  }, [runProjectPick, workspaces])
+  }, [runProjectPick, workspaces, isRemoteCore, setRemoteProjectPath])
 
-  /** 在 Profer 数据目录下新建托管项目（旧行为），并设为当前项目 */
+  /** 在当前 Core 数据目录下新建托管工作区，并设为当前项目 */
   const handleCreateProject = React.useCallback(async (): Promise<void> => {
     const trimmed = newProjectName.trim()
     if (!trimmed || projectPickerBusy) return
@@ -1546,6 +1598,7 @@ export function useLeftSidebar() {
       setCreateProjectDialogOpen(false)
       setCreateProjectMode('choose')
       setNewProjectName('')
+      setRemoteProjectPath('')
     } catch (error) {
       toast.error(toProjectErrorMessage(error, '创建项目失败'))
     } finally {
@@ -1553,17 +1606,53 @@ export function useLeftSidebar() {
     }
   }, [applyOpenedProject, newProjectName, projectPickerBusy])
 
+  const handleBindRemoteProject = React.useCallback(async (open: boolean, pathOverride?: string, projectNameOverride?: string): Promise<void> => {
+    // 路径合法性由所属 Core 判定（Windows 盘符 / POSIX 根目录各按自己的规则），桌面只拦空值和 NUL。
+    const rootPath = (pathOverride ?? remoteProjectPath).trim()
+    if (!rootPath || projectPickerBusy) return
+    if (rootPath.includes('\0')) {
+      toast.error('项目路径无效')
+      return
+    }
+    setProjectPickerBusy(true)
+    try {
+      const result = pendingRelocateWorkspaceId
+        ? await window.electronAPI.relocateProjectWorkspace({ id: pendingRelocateWorkspaceId, rootPath })
+        : open
+          ? await window.electronAPI.openProjectWorkspace({ rootPath, name: projectNameOverride?.trim() || newProjectName.trim() || undefined })
+          : await window.electronAPI.createProjectWorkspace({ rootPath, name: projectNameOverride?.trim() || newProjectName.trim() || undefined })
+      applyOpenedProject(result.workspace)
+      setCreateProjectDialogOpen(false)
+      setCreateProjectMode('choose')
+      setNewProjectName('')
+      setRemoteProjectPath('')
+      setPendingRelocateWorkspaceId(null)
+      toast.success(pendingRelocateWorkspaceId ? '项目路径已更新' : result.created ? '项目已绑定' : '已打开项目')
+      for (const warning of result.warnings) toast.warning(warning)
+    } catch (error) {
+      toast.error(toProjectErrorMessage(error, '项目操作失败'))
+    } finally {
+      setProjectPickerBusy(false)
+    }
+  }, [applyOpenedProject, newProjectName, pendingRelocateWorkspaceId, projectPickerBusy, remoteProjectPath])
+
   const handleCreateProjectKeyDown = React.useCallback((e: React.KeyboardEvent): void => {
     if (e.key === 'Enter') {
       if (e.nativeEvent.isComposing) return
       e.preventDefault()
-      void handleCreateProject()
+      if (createProjectMode === 'remote-path' || createProjectMode === 'remote-open-path') {
+        void handleBindRemoteProject(createProjectMode === 'remote-open-path')
+      } else {
+        void handleCreateProject()
+      }
     } else if (e.key === 'Escape') {
       e.preventDefault()
       setCreateProjectMode('choose')
       setNewProjectName('')
+      setRemoteProjectPath('')
+      setPendingRelocateWorkspaceId(null)
     }
-  }, [handleCreateProject])
+  }, [createProjectMode, handleBindRemoteProject, handleCreateProject])
 
   /** 选择 Agent 会话（打开或聚焦标签页）。探索分支打开为父会话上下文内的子会话 Tab。 */
   const handleSelectAgentSession = React.useCallback((id: string, title: string): void => {
@@ -2056,6 +2145,11 @@ export function useLeftSidebar() {
     setNewProjectName,
     handleBindProjectFolder,
     handleOpenProjectFolder,
+    handleBindRemoteProject,
+    remoteProjectPath,
+    setRemoteProjectPath,
+    pendingRelocateWorkspaceId,
+    isRemoteCore,
     projectPickerBusy,
 
     // project 路径可用性（missing 时项目行显示「项目路径不可用」）
