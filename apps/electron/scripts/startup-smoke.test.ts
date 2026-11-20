@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { evaluateStartup, parseArgs, parseProbeStages, resolveStartupArtifact } from './startup-smoke'
 
 const roots: string[] = []
@@ -110,12 +110,12 @@ describe('启动冒烟：参数解析', () => {
   test('默认走 out/，超时可覆盖；非法超时直接报错', () => {
     const options = parseArgs([], {})
     expect(options.timeoutMs).toBe(45_000)
-    expect(options.outputDir.endsWith('/out')).toBe(true)
+    expect(basename(options.outputDir)).toBe('out')
     expect(options.keepProfile).toBe(false)
 
     const commercial = parseArgs(['--target', 'commercial', '--timeout', '90000', '--keep-profile'], {})
     expect(commercial.timeoutMs).toBe(90_000)
-    expect(commercial.outputDir.endsWith('/out-commercial')).toBe(true)
+    expect(basename(commercial.outputDir)).toBe('out-commercial')
     expect(commercial.keepProfile).toBe(true)
 
     expect(() => parseArgs(['--timeout', '10'], {})).toThrow(/--timeout/)
