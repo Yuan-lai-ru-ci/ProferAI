@@ -8,16 +8,22 @@ function readSettingsFile(name: string): string {
 }
 
 describe('远程连接设置重构契约', () => {
-  test('Hub 保留六个入口并由外层 SettingsPanel 负责滚动', () => {
+  test('Hub 保留七个入口并由外层 SettingsPanel 负责滚动', () => {
     const source = readSettingsFile('./BotHubSettings.tsx')
 
-    for (const id of ['pocket', 'feishu', 'wechat', 'dingtalk', 'defaults', 'logos']) {
+    for (const id of ['pocket', 'core', 'feishu', 'wechat', 'dingtalk', 'defaults', 'logos']) {
       expect(source).toContain(`id: '${id}'`)
     }
     expect(source).not.toContain("from '@profer/ui/primitives/scroll-area'")
     expect(source).not.toContain('className="-mx-6 -my-5')
     expect(source).toContain('aria-current={isActive ? \'page\' : undefined}')
     expect(source).toContain('aria-controls={`bot-settings-panel-${platform.id}`}')
+  })
+
+  test('通过 Core、HTTPS 或线路可以搜索到远程连接入口', () => {
+    const settings = readSettingsFile('./SettingsPanel.tsx')
+    const botEntry = settings.split('\n').find(line => line.includes('id: "bots"'))
+    for (const term of ['远程内核', 'Core', 'HTTPS', 'Token', '线路']) expect(botEntry).toContain(`"${term}"`)
   })
 
   test('默认配置与 Logo 页面保持现有能力并具备响应式布局契约', () => {

@@ -18,8 +18,7 @@ function readObject(path: string): Record<string, unknown> | undefined {
 }
 
 /** 只读Core资源边界；不迁移、不创建资源，不读取桌面或另一Core的全局目录。 */
-export function resolveCorePreset(config: CoreConfig, session: AgentSessionMeta, workspace: AgentWorkspace | undefined) {
-  if (session.workspaceId && !workspace) throw new Error('Core资源所属工作区不存在')
+export function corePresetStore(config: CoreConfig, workspace: AgentWorkspace | undefined) {
   if(workspace?.storageMode==='project' && (!workspace.rootPath || !isAbsolute(workspace.rootPath))) throw new Error('Core项目根必须为绝对路径')
   const configDir = workspace?.storageMode === 'project' && workspace.rootPath ? join(workspace.rootPath, '.profer')
     : workspace ? join(config.workspaceRoot, workspace.slug) : undefined
@@ -52,6 +51,12 @@ export function resolveCorePreset(config: CoreConfig, session: AgentSessionMeta,
   const readGlobal = (): GlobalAgentPresetConfig => {
     return globalConfig({ config })
   }
+  return { readGlobal, readWorkspace, configDir }
+}
+
+export function resolveCorePreset(config: CoreConfig, session: AgentSessionMeta, workspace: AgentWorkspace | undefined) {
+  if (session.workspaceId && !workspace) throw new Error('Core资源所属工作区不存在')
+  const { readGlobal, readWorkspace, configDir } = corePresetStore(config, workspace)
   let reference = session.presetReference
   if (!reference && session.presetId) {
     const builtin = BUILTIN_AGENT_PRESETS.find(preset => preset.id === session.presetId)

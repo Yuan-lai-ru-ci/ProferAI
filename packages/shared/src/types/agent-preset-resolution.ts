@@ -49,3 +49,35 @@ export function resolveAgentPresetReference(reference: PresetReference, contextW
   }
   return resolve(reference, contextWorkspaceSlug, new Set(), true)
 }
+
+/** 只在新建派工时调用：不能把省略目标解释为选择父预设。 */
+export function selectNewDelegationPreset(target: PresetReference | undefined, slug: string | undefined, store: PresetResolutionStore): PresetReference {
+  if (target !== undefined) {
+    if (target?.presetScope === 'workspace' && (!slug || target.workspaceSlug !== slug)) {
+      throw new Error('目标工作区预设必须提供父工作区的 workspaceSlug')
+    }
+    const reference = normalizeAgentPresetReference(target, slug)
+    if (reference.presetScope === 'workspace' && store.readWorkspace(slug!).disabledWorkspacePresetIds?.includes(reference.presetId)) {
+      throw new Error(`目标预设已在当前工作区禁用: ${reference.presetId}`)
+    }
+    return reference // 调用方仍须严格解析版本与基座后才能创建。
+  }
+  const global = store.readGlobal(), local = slug ? store.readWorkspace(slug) : undefined
+  const options: Array<{ name: string; presetReference: PresetReference }> = []
+  const snapshot: PresetResolutionStore = { readGlobal: () => global, readWorkspace: key => key === slug && local ? local : store.readWorkspace(key) }
+  const collect = (presets: AgentPreset[], presetScope: PresetReference['presetScope']) => {
+    for (const preset of presets) {
+      if (presetScope === 'workspace' && local?.disabledWorkspacePresetIds?.includes(preset.id)) continue
+      const ref = { presetId: preset.id, presetScope, ...(presetScope === 'workspace' ? { workspaceSlug: slug } : {}), ...(preset.version ? { presetVersion: preset.version } : {}) }
+      try { resolveAgentPresetReference(ref, slug, snapshot) }
+      catch (error) { if (error instanceof AgentPresetError) continue; throw error }
+      options.push({ name: preset.name, presetReference: ref })
+    }
+  }
+  collect(BUILTIN_AGENT_PRESETS, 'builtin-meta')
+  collect(global.presets, 'user-global')
+  collect(local?.presets ?? [], 'workspace')
+  if (!options.length) throw new Error('当前工作区没有可用于派工的预设')
+  if (options.length > 1) throw new Error(`新建子会话必须按职责显式选择 presetReference（包括选用父预设）。可选预设：${JSON.stringify(options)}`)
+  return options[0]!.presetReference
+}

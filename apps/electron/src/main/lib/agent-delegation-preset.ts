@@ -2,6 +2,7 @@ import type { AgentPreset, AgentSessionMeta, PresetReference } from '@profer/sha
 import {
   getAgentPresetByReference,
   normalizePresetReference,
+  newDelegationPresetReference,
   presetReferenceForId,
 } from './agent-preset-manager'
 
@@ -72,4 +73,9 @@ export function resolveDelegationPreset(
 
   const preset = getAgentPresetByReference(reference, input.workspaceSlug)
   return { reference, preset }
+}
+
+export function resolveNewDelegationPreset(target: PresetReference | undefined, workspaceSlug?: string): DelegationPresetResolution {
+  const reference = newDelegationPresetReference(target && sanitizeDelegationReference(target), workspaceSlug)
+  return { reference, preset: getAgentPresetByReference(reference, workspaceSlug) }
 }

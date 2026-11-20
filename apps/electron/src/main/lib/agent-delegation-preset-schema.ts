@@ -8,7 +8,7 @@ type ZodModule = typeof import('zod')
  * 四字段对象，因此在描述里明确「照抄、不要自行补字段」，并在委派边界做归一化
  * （见 `agent-delegation-preset.ts` 的 `sanitizeDelegationReference`）。
  */
-const PRESET_REFERENCE_DESCRIPTION = '可选目标预设；直接照抄 preset_list 返回的 presetReference，不要自行补字段；不传则继承父会话预设'
+const PRESET_REFERENCE_DESCRIPTION = '新建且有多个可用预设时必填；按职责照抄 preset_list 返回的 presetReference，不要自行补字段'
 const WORKSPACE_SLUG_DESCRIPTION = '仅 presetScope=workspace 时使用；内置/全局预设不要传该字段'
 
 export function buildZodDelegationPresetReferenceSchema(z: ZodModule['z']) {

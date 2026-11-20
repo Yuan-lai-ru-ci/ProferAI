@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 
 const source = readFileSync(new URL('./core-target-service.ts', import.meta.url), 'utf8')
 const start = source.indexOf('function clientFor(')
-const end = source.indexOf('\nfunction summaries(', start)
+const end = source.indexOf('\nfunction selectedEndpoint(', start)
 if (start < 0 || end < start) throw new Error('Core client factory boundary missing')
 const factory = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end))
 
@@ -19,7 +19,15 @@ function harness() {
   let currentId = 'remote'
   let publications = 0
   const channels: string[] = []
-  const create = new Function('CoreClient', 'decryptToken', 'readStore', 'publishSnapshot', 'BrowserWindow', 'AGENT_IPC_CHANNELS', 'AUTOMATION_IPC_CHANNELS', `
+  const create = new Function('CoreClient', 'decryptToken', 'activeId', 'publishSnapshot', 'BrowserWindow', 'AGENT_IPC_CHANNELS', 'AUTOMATION_IPC_CHANNELS', `
+    const clearLatency = () => {};
+    const observeLatency = () => {};
+    const publishConnectedResources = () => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send(AUTOMATION_IPC_CHANNELS.CHANGED);
+        window.webContents.send(AGENT_IPC_CHANNELS.WORKSPACES_CHANGED);
+      }
+    };
     let activeClient = null;
     let targetStatus = 'disconnected';
     ${factory}
@@ -29,9 +37,9 @@ function harness() {
       status() { return targetStatus; }
     };
   `)
-  const fixture = create(FixtureClient, () => 'fixture-token', () => ({ currentId }), () => { publications++ },
+  const fixture = create(FixtureClient, () => 'fixture-token', () => currentId, () => { publications++ },
     { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: (channel: string) => channels.push(channel) } }] }, AGENT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS) as {
-    clientFor(target: { id: string; baseUrl: string; encryptedToken: string }): FixtureClient
+    clientFor(target: { id: string }, endpoint: { baseUrl: string; encryptedToken: string }): FixtureClient
     activate(client: FixtureClient | null): void
     status(): string
   }
@@ -42,9 +50,9 @@ const target = { id: 'remote', coreId: 'owner-core', baseUrl: 'http://127.0.0.1:
 describe('Core target connection status ownership', () => {
   test('late events from a retired connection cannot overwrite its replacement for the same target', () => {
     const h = harness()
-    const retired = h.clientFor(target)
+    const retired = h.clientFor(target, target)
     h.activate(retired)
-    const replacement = h.clientFor(target)
+    const replacement = h.clientFor(target, target)
     h.activate(replacement)
     retired.emit('closed')
     retired.emit('error')
@@ -60,9 +68,9 @@ describe('Core target connection status ownership', () => {
 
   test('工作区刷新只允许当前已提交Core，替换连接/切Core后旧通知不发布', () => {
     const h = harness()
-    const retired = h.clientFor(target)
+    const retired = h.clientFor(target, target)
     h.activate(retired)
-    const active = h.clientFor(target)
+    const active = h.clientFor(target, target)
     h.activate(active)
     retired.workspace()
     expect(h.channels).toEqual([])
@@ -78,9 +86,9 @@ describe('Core target connection status ownership', () => {
 
   test('unselected and not-yet-committed clients cannot publish state for the active target', () => {
     const h = harness()
-    const active = h.clientFor(target)
+    const active = h.clientFor(target, target)
     h.activate(active)
-    const candidate = h.clientFor(target)
+    const candidate = h.clientFor(target, target)
     candidate.emit('open')
     candidate.emit('closed')
     expect(h.publications()).toBe(0)

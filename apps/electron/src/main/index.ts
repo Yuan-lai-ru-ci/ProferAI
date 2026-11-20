@@ -181,9 +181,9 @@ import { seedDefaultSkills, VITE_DEV_SERVER_URL } from './lib/config-paths'
 import { getConfigDir } from './lib/config-paths'
 import { getWorkspacesRootPath } from './lib/workspace-locator'
 import { LocalCoreLifecycle } from './lib/core-lifecycle'
-import { attachLocalCoreClient, detachLocalCoreClient } from './lib/core-local-bridge'
+import { detachLocalCoreClient } from './lib/core-local-bridge'
 import { listSessionDeletionRequestsForTransfer, acknowledgeTransferredSessionDeletions, type SessionDeletionRequest } from './lib/agent-session-deletion-queue'
-import { setLocalCoreClient, activateSavedCoreTarget, getCurrentCoreTargetId as readSavedCurrentCoreTargetId } from './lib/core-target-service'
+import { setLocalCoreClient, activateSavedCoreTarget } from './lib/core-target-service'
 import { configureGlobalSkillSystem, ensureGlobalSkillSystemReady } from './lib/global-skill-manager'
 import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
@@ -1306,10 +1306,8 @@ let localCoreLifecycle: LocalCoreLifecycle | null = null
 let stopLocalCoreResourceSync: (() => void) | undefined
 
 async function startLocalCoreIfEnabled(): Promise<void> {
-  if (process.env.PROFER_CORE_LOCAL !== '1') {
-    void activateSavedCoreTarget()
-    return
-  }
+  void activateSavedCoreTarget().catch(error => console.error('[Core] 无法读取启动内核配置:', error))
+  if (process.env.PROFER_CORE_LOCAL !== '1') return
   const { claimWorkspaceIndexForCore } = await import('./lib/agent-workspace-manager')
   claimWorkspaceIndexForCore()
   const { claimAutomationsForCore } = await import('./lib/automation-manager')
@@ -1337,10 +1335,8 @@ async function startLocalCoreIfEnabled(): Promise<void> {
   await localResources.syncLocalCoreChannels(started.client)
   stopLocalCoreResourceSync?.()
   stopLocalCoreResourceSync = localResources.maintainLocalCoreChannels(started.client)
-  attachLocalCoreClient(started.client)
   setLocalCoreClient(started.client, await started.client.identity())
   await transferLegacySessionDeletions(started.client)
-  if (readSavedCurrentCoreTargetId() !== 'local') void activateSavedCoreTarget()
 }
 
 async function transferLegacySessionDeletions(client: import('./lib/core-client').CoreClient): Promise<void> {

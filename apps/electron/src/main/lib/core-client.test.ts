@@ -515,4 +515,36 @@ describe('CoreClient', () => {
       expect(error).toMatchObject({ status: 401, code: 'AUTH_FAILED', message: 'unauthorized' })
     }
   })
+
+  test('候选 WebSocket 连通不依赖事件恢复；刷新失败不关闭连接', async () => {
+    const client = new CoreClient({ baseUrl: 'https://core.example', token: 'fixture', reconnect: false,
+      recoverEvents: true, deferEventRecovery: true, webSocketFactory: (url, options) => new FakeSocket(url, options) })
+    const connected = client.connect()
+    const socket = FakeSocket.latest!
+    socket.open()
+    await connected
+    expect(socket.sent).toEqual([])
+    client.startEventRecovery()
+    const refresh = JSON.parse(socket.sent[0]!)
+    expect(refresh.type).toBe('resume_agent_events')
+    socket.message({ kind: 'command_result', commandId: refresh._cmdId, ok: false, error: 'fixture refresh failure' })
+    await Bun.sleep(0)
+    expect(client.isConnected).toBe(true)
+    client.close()
+  })
+
+  test('延迟来自当前 WebSocket 的 ping/pong，断开后不能沿用', async () => {
+    const client = new CoreClient({ baseUrl: 'https://core.example', token: 'fixture', reconnect: false,
+      webSocketFactory: (url, options) => new FakeSocket(url, options) })
+    const connected = client.connect()
+    const socket = FakeSocket.latest!
+    socket.open()
+    await connected
+    const delay = client.probeLatency()
+    expect(socket.sent.map(frame => JSON.parse(frame))).toEqual([{ type: 'ping' }])
+    socket.message({ kind: 'pong' })
+    expect(await delay).toBeGreaterThanOrEqual(0)
+    client.close()
+    await expect(client.probeLatency()).rejects.toThrow('未连接')
+  })
 })

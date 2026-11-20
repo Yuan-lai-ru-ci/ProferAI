@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { buildCoreAgentPrompt } from './agent-prompt-core'
 import {
   appendAgentBehaviorUserSteer,
   buildAgentBehaviorAgentSteer,
@@ -9,6 +11,31 @@ import {
 } from './agent-behavior-recipe'
 
 describe('GPT with Taste 行为配方适配', () => {
+  test('主 steer 保留判断、接续与读者优先方法，不退化为泛泛的授权提醒', () => {
+    const steer = buildAgentBehaviorUserSteer('main')
+    for (const clause of ['普通细节由你判断', '已有授权足够就行动', '不要反复确认已定事项', '继续完成职责内的修复、实现和相称验证', '删掉无助于下一步行动的自证']) {
+      expect(steer).toContain(clause)
+    }
+    expect(steer).not.toContain('将本轮输入接回用户目的、当前目标与已定选择，继续下一步授权工作。')
+    const craft = buildAgentBehaviorCraftPrompt()
+    expect(craft).toContain('不为假想风险增加前置检查')
+    expect(craft).toContain('不因想象中的批评削弱结论')
+    expect(craft).toContain('实际使用者')
+  })
+
+  test('明确实现不另设固定确认，真实权限与只读要求仍保留', () => {
+    const core = buildCoreAgentPrompt()
+    expect(core).toContain('不另设固定确认轮次')
+    expect(core).toContain('岗位限定')
+    expect(core).toContain('分析不擅自实施')
+    expect(core).toContain('不恢复关闭能力')
+    const skill = readFileSync(new URL('../../../default-skills/brainstorming/SKILL.md', import.meta.url), 'utf8')
+    expect(skill).toContain('do the necessary design and continue into implementation')
+    expect(skill).toContain('Respect actual plan mode, role restrictions')
+    expect(skill).not.toContain('checking after each section whether it looks right so far')
+    expect(skill).not.toContain('Commit the design document to git')
+  })
+
   test('按宿主事实区分主、子和独立角色', () => {
     expect(resolveAgentBehaviorRole({})).toBe('main')
     expect(resolveAgentBehaviorRole({ sourceDelegationId: 'd-1', parentSessionId: 'p-1' })).toBe('sub')

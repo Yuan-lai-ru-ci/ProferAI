@@ -22,6 +22,7 @@ import {
   PROFER_PERMISSION_MODES,
   mergeAgentPreset,
   normalizeAgentPresetReference,
+  selectNewDelegationPreset,
   resolveAgentPresetReference,
   toAgentPresetExportEntry,
 } from '@profer/shared'
@@ -321,6 +322,10 @@ export function resolvePresetReference(reference: PresetReference, contextWorksp
     readGlobal: readGlobalConfig,
     readWorkspace: readConfig,
   })
+}
+
+export function newDelegationPresetReference(target: PresetReference | undefined, workspaceSlug?: string): PresetReference {
+  return selectNewDelegationPreset(target, workspaceSlug, { readGlobal: readGlobalConfig, readWorkspace: readConfig })
 }
 
 function referenceForPreset(preset: AgentPreset, workspaceSlug?: string): PresetReference {

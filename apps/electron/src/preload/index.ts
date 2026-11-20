@@ -21,7 +21,11 @@ let resourceTargetVersion = 0
 function updateResourceTarget(snapshot: { currentId: string; generation: number }): void {
   resourceTarget = { targetId: snapshot.currentId, generation: snapshot.generation }
 }
-ipcRenderer.on('core-target:changed', (_event, snapshot: { currentId: string; generation: number }) => { resourceTargetVersion += 1; updateResourceTarget(snapshot) })
+ipcRenderer.on('core-target:changed', (_event, snapshot: { currentId: string; generation: number }) => {
+  if (resourceTarget?.targetId === snapshot.currentId && resourceTarget.generation === snapshot.generation) return
+  resourceTargetVersion += 1
+  updateResourceTarget(snapshot)
+})
 async function invokeScopedCoreResource(channel: string, ...args: unknown[]): ReturnType<typeof ipcRenderer.invoke> {
   if (!CORE_RESOURCE_OPERATIONS[channel] && !CORE_CHAT_CHANNELS.has(channel)) throw new Error('未知 Core 资源通道')
   const captured = resourceTarget
@@ -645,7 +649,7 @@ export interface ElectronAPI {
   notifyRendererReady: () => void
 
   /** 获取当前 Core 目标目录（不包含 Token）。 */
-  listCoreTargets: () => Promise<{ currentId: string; generation: number; targets: import('../types').CoreTargetSummary[] }>
+  listCoreTargets: () => Promise<import('../types').CoreTargetsSnapshot>
   listCoreChannels: () => Promise<Array<Omit<import('@profer/shared').Channel, 'apiKey' | 'createdAt' | 'updatedAt'>>>
   createCoreChannel: (input: import('@profer/shared').ChannelCreateInput) => Promise<Omit<import('@profer/shared').Channel, 'apiKey' | 'createdAt' | 'updatedAt'>>
   updateCoreChannel: (id: string, input: import('@profer/shared').ChannelUpdateInput) => Promise<Omit<import('@profer/shared').Channel, 'apiKey' | 'createdAt' | 'updatedAt'>>
@@ -653,13 +657,17 @@ export interface ElectronAPI {
   fetchCoreChannelModels: (input: import('@profer/shared').FetchModelsInput) => Promise<import('@profer/shared').FetchModelsResult>
   testCoreChannel: (input: import('@profer/shared').FetchModelsInput) => Promise<import('@profer/shared').ChannelTestResult>
   /** 验证远程 Core 身份与协议能力。 */
-  testCoreTarget: (input: { name: string; baseUrl: string; token: string }) => Promise<{ version: string; coreId: string; capabilities: string[] }>
+  testCoreTarget: (input: import('../types').CoreTargetInput) => Promise<{ version: string; coreId: string; capabilities: string[]; platform?: string }>
   /** 保存远程 Core，Token 仅在主进程加密持久化。 */
-  addCoreTarget: (input: { name: string; baseUrl: string; token: string }) => Promise<import('../types').CoreTargetSummary>
+  addCoreTarget: (input: import('../types').CoreTargetInput) => Promise<import('../types').CoreTargetSummary>
+  updateCoreTarget: (id: string, input: {name: string}) => Promise<import('../types').CoreTargetsSnapshot>
+  saveCoreEndpoint: (id: string, input: import('../types').CoreEndpointInput) => Promise<import('../types').CoreTargetsSnapshot>
+  selectCoreEndpoint: (id: string, endpointId: string) => Promise<import('../types').CoreTargetsSnapshot>
+  removeCoreEndpoint: (id: string, endpointId: string) => Promise<import('../types').CoreTargetsSnapshot>
   /** 切换当前 Core 目标。 */
-  selectCoreTarget: (id: string) => Promise<{ currentId: string; generation: number; targets: import('../types').CoreTargetSummary[] }>
+  selectCoreTarget: (id: string) => Promise<import('../types').CoreTargetsSnapshot>
   /** 移除远程 Core 目标。 */
-  removeCoreTarget: (id: string) => Promise<{ currentId: string; generation: number; targets: import('../types').CoreTargetSummary[] }>
+  removeCoreTarget: (id: string) => Promise<import('../types').CoreTargetsSnapshot>
   /** 订阅当前 Core 目标/连接状态变化。 */
   onCoreChatSnapshot: (callback: (snapshot: import('../types').CoreChatSnapshot) => void) => () => void
   onCoreTargetChanged: (callback: (snapshot: import('../types').CoreTargetsSnapshot) => void) => () => void
@@ -2384,6 +2392,10 @@ const electronAPI: ElectronAPI = {
   testCoreChannel: input => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.TEST_CHANNEL, input),
   testCoreTarget: (input) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.TEST, input),
   addCoreTarget: (input) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.ADD, input),
+  updateCoreTarget: (id, input) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.UPDATE, id, input),
+  saveCoreEndpoint: (id, input) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.SAVE_ENDPOINT, id, input),
+  selectCoreEndpoint: (id, endpointId) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.SELECT_ENDPOINT, id, endpointId),
+  removeCoreEndpoint: (id, endpointId) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.REMOVE_ENDPOINT, id, endpointId),
   selectCoreTarget: (id) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.SELECT, id),
   removeCoreTarget: (id) => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.REMOVE, id),
   onCoreChatSnapshot: callback => {

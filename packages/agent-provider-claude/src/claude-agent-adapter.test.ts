@@ -666,6 +666,7 @@ describe('Claude provider：终态、取消与清理', () => {
       const pending = stream.next()
       await waitUntil(() => harness.double.state.options !== undefined)
       const controller = harness.double.state.options!.abortController as AbortController
+      const child = harness.double.spawn() as FakeChildProcess
       expect(controller.signal.aborted).toBe(false)
       harness.adapter.abort('abort')
       expect(harness.double.state.closeCalls).toBe(1)
@@ -674,7 +675,11 @@ describe('Claude provider：终态、取消与清理', () => {
       // 会话状态已清理：getTaskOutput 不再命中本进程内兜底记录。
       await expect(harness.adapter.getTaskOutput('abort', 'missing')).rejects.toThrow('后台任务不存在')
       harness.adapter.dispose()
-      expect(exits).toContain('abort')
+      // close/abort/dispose 都不是进程退出证据，真实 exit 后才通知一次。
+      expect(exits).toEqual([])
+      child.exit()
+      child.exit()
+      expect(exits).toEqual(['abort'])
     } finally {
       harness.dispose()
     }
@@ -702,19 +707,23 @@ describe('Claude provider：终态、取消与清理', () => {
     }
   })
 
-  test('Given dispose When 释放资源 Then 关闭所有 query 并通知宿主 onExit', async () => {
+  test('Given dispose When 释放资源 Then 关闭所有 query，进程真实退出后才通知宿主 onExit', async () => {
     const { port, exits } = createFakeClaudeLifecyclePort()
     const harness = createHarness({ processLifecycle: port })
     try {
       const stream = harness.adapter.query(baseInput('dispose'))[Symbol.asyncIterator]()
       const pending = stream.next()
       await waitUntil(() => harness.double.state.options !== undefined)
+      const child = harness.double.spawn() as FakeChildProcess
       harness.double.push({ type: 'system', subtype: 'init', session_id: 's' })
       await expect(pending).resolves.toMatchObject({ done: false })
       harness.adapter.dispose()
       expect(harness.double.state.closeCalls).toBe(1)
-      expect(exits).toContain('dispose')
+      expect(exits).toEqual([])
       expect((await stream.next()).done).toBe(true)
+      child.exit()
+      child.exit()
+      expect(exits).toEqual(['dispose'])
 
       // dispose 后 adapter 仍可再次发起 query（证明实例级状态未损坏）。
       const second = harness.adapter.query(baseInput('dispose-2'))[Symbol.asyncIterator]()

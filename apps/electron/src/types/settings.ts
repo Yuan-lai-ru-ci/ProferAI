@@ -691,11 +691,35 @@ export const TRAY_IPC_CHANNELS = {
 } as const
 
 /** 当前 Core 内核目标的去敏展示信息。 */
+export interface CoreEndpointSummary {
+  id: string
+  label: string
+  baseUrl: string
+}
+
+export interface CoreTargetInput {
+  name: string
+  baseUrl: string
+  token: string
+  label?: string
+  expectedCoreId?: string
+}
+
+export interface CoreEndpointInput {
+  endpointId?: string
+  label?: string
+  baseUrl: string
+  token?: string
+}
+
 export interface CoreTargetSummary {
   id: string
   name: string
   kind: 'local' | 'remote'
   baseUrl?: string
+  endpoints?: CoreEndpointSummary[]
+  selectedEndpointId?: string
+  latencyMs?: number
   status: 'connected' | 'disconnected' | 'error'
   version?: string
   coreId?: string
@@ -707,6 +731,8 @@ export interface CoreTargetSummary {
 export interface CoreTargetsSnapshot {
   currentId: string
   generation: number
+  revision?: number
+  startup?: 'restoring' | 'fallback'
   targets: CoreTargetSummary[]
 }
 
@@ -721,6 +747,10 @@ export const CORE_TARGET_IPC_CHANNELS = {
   TEST_CHANNEL: 'core-target:test-channel',
   TEST: 'core-target:test',
   ADD: 'core-target:add',
+  UPDATE: 'core-target:update',
+  SAVE_ENDPOINT: 'core-target:save-endpoint',
+  SELECT_ENDPOINT: 'core-target:select-endpoint',
+  REMOVE_ENDPOINT: 'core-target:remove-endpoint',
   SELECT: 'core-target:select',
   REMOVE: 'core-target:remove',
 } as const

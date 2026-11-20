@@ -19,7 +19,8 @@ test('Core委派完整生命周期：隔离会话、结果、消费、重启恢�
     // 不在fixture结束后自动启动父模型轮次；实际唤醒规则仍由服务测试覆盖。
     runtime.sessions.updateMeta(parent.id, { stoppedByUser: true })
     const ctx: DelegationContext = { sessionId: parent.id, workspaceId: workspace.id, channelId: 'fixture', modelId: 'fixture-model', agentRuntime: 'pi', permissionMode: 'bypassPermissions' }
-    const request = { operationId: 'fixture-create-once', task: 'Return synthetic fixture result', placement: 'current' as const }
+    const request = { operationId: 'fixture-create-once', task: 'Return synthetic fixture result', placement: 'current' as const,
+      presetReference: { presetId: 'standard', presetScope: 'builtin-meta' as const } }
     const created = await runtime.delegations.delegate(ctx, request)
     const repeated = await runtime.delegations.delegate(ctx, request)
     expect(repeated).toEqual(created)
@@ -39,8 +40,8 @@ test('Core委派完整生命周期：隔离会话、结果、消费、重启恢�
     expect((follow.delegation as { childSessionId: string }).childSessionId).toBe(view.childSessionId)
     await runtime.delegations.stop(ctx, view.delegationId)
     expect(runtime.delegations.snapshot()[0]?.status).toBe('cancelled')
-    const sub = await runtime.delegations.delegate(ctx, { task: 'subtask' })
-    const independent = await runtime.delegations.delegate(ctx, { task: 'independent', placement: 'independent', relation: 'independent' })
+    const sub = await runtime.delegations.delegate(ctx, { task: 'subtask', presetReference: request.presetReference })
+    const independent = await runtime.delegations.delegate(ctx, { task: 'independent', placement: 'independent', relation: 'independent', presetReference: request.presetReference })
     const subId = (sub.delegation as { delegationId: string }).delegationId
     const independentId = (independent.delegation as { delegationId: string }).delegationId
     await runtime.stopDelegationsForParent(parent.id)

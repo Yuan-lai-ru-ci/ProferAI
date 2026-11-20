@@ -8,7 +8,7 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
-import { BriefcaseBusiness, ChevronRight, Image, Smartphone } from 'lucide-react'
+import { BriefcaseBusiness, ChevronRight, Cpu, Image, Smartphone } from 'lucide-react'
 import { feishuBotStatesAtom } from '@/atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from '@/atoms/dingtalk-atoms'
 import { wechatBridgeStateAtom } from '@/atoms/wechat-atoms'
@@ -18,6 +18,7 @@ import { WeChatSettings } from './WeChatSettings'
 import { BotDefaultSettings } from './BotDefaultSettings'
 import { ProferLogoSettings } from './ProferLogoSettings'
 import { PocketModeSettings } from './PocketModeSettings'
+import { RemoteCoreSettings } from './RemoteCoreSettings'
 import feishuLogo from '@/assets/bots/feishu.png'
 import dingtalkLogo from '@/assets/bots/dingding.png'
 import wechatLogo from '@/assets/bots/wechat.png'
@@ -25,7 +26,7 @@ import proferModelLogo from '@/assets/models/profer.png'
 
 // ===== 类型 =====
 
-type BotPlatformId = 'feishu' | 'dingtalk' | 'wechat' | 'pocket' | 'defaults' | 'logos'
+type BotPlatformId = 'feishu' | 'dingtalk' | 'wechat' | 'pocket' | 'core' | 'defaults' | 'logos'
 
 interface BotPlatformDef {
   id: BotPlatformId
@@ -44,6 +45,12 @@ const PLATFORMS: readonly BotPlatformDef[] = [
     name: '移动模式（试验版）',
     icon: <Smartphone size={16} aria-hidden="true" />,
     iconTextClass: 'text-violet-600',
+  },
+  {
+    id: 'core',
+    name: '远程内核',
+    icon: <Cpu size={16} aria-hidden="true" />,
+    iconTextClass: 'text-primary',
   },
   {
     id: 'feishu',
@@ -90,7 +97,7 @@ function PlatformStatusDot({ platformId }: { platformId: BotPlatformId }): React
   const dingtalkBotStates = useAtomValue(dingtalkBotStatesAtom)
   const wechatState = useAtomValue(wechatBridgeStateAtom)
 
-  if (platformId === 'defaults' || platformId === 'logos' || platformId === 'pocket') return null
+  if (platformId === 'defaults' || platformId === 'logos' || platformId === 'pocket' || platformId === 'core') return null
 
   const statusMap: Record<string, string> = {
     feishu: getPlatformStatus(feishuBotStates),
@@ -163,6 +170,7 @@ function PlatformSidebarItem({
 /** 平台能力提示：不同平台的接入方式和能力边界差别很大，进面板先讲清楚 */
 const PLATFORM_CAPABILITY_NOTES: Record<BotPlatformId, string> = {
   pocket: '手机 / 平板连接本机 Profer：扫码配对，需同一局域网或自建公网入口。',
+  core: '桌面 Profer 连接已部署的远程内核，与手机连接本机的移动模式独立。',
   feishu: '扫码创建自建应用即可接入 · 支持多 Bot、群聊、会话绑定管理与会话镜像。',
   wechat: '扫码登录你的微信账号 · 单账号、仅单聊，不支持多 Bot 与群聊。',
   dingtalk: '需先在钉钉开放平台创建企业内部应用 · 支持多 Bot 与群聊。',
@@ -191,6 +199,8 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
       return <div className="space-y-5">{note}<WeChatSettings /></div>
     case 'pocket':
       return <div className="space-y-5">{note}<PocketModeSettings /></div>
+    case 'core':
+      return <div className="space-y-5">{note}<RemoteCoreSettings /></div>
     case 'defaults':
       return <div className="space-y-5">{note}<BotDefaultSettings /></div>
     case 'logos':

@@ -56,7 +56,7 @@ import {
 } from './agent-collaboration-utils'
 import { assertEnabledModelForChannel, listEnabledAgentModelsForChannel } from './agent-model-selection'
 import { getAgentWorkspace } from './agent-workspace-manager'
-import { resolveDelegationPreset } from './agent-delegation-preset'
+import { resolveDelegationPreset, resolveNewDelegationPreset } from './agent-delegation-preset'
 import {
   buildTypeBoxDelegationPresetReferenceSchema,
   buildZodDelegationPresetReferenceSchema,
@@ -111,8 +111,8 @@ type ZodModule = typeof import('zod')
 const MAX_WAIT_SECONDS = 2 * 60 * 60
 
 // 两个运行时使用同一创建/续跑契约；不通过父子共用原生会话来复用 Worker。
-const DELEGATE_AGENT_DESCRIPTION = '派工到隔离的真实 Worker。可传 taskKey 在同来源会话和工作区内定位原 Worker：命中只返回已有记录，不执行本次 task，追加须用 continue_delegation；forceNew 显式新建并替换该键后续定位，不停止旧 Worker。未传键则新建，不按文字猜测合并。placement 支持 current（父时间线投影）、child（附属子会话）、independent（保留来源但不随父停止）；relation 明确 subtask/independent。可用 presetReference 指定目标预设，不传则继承。按用户指令和任务选择组织方式，不增加固定批准步骤。'
-const DELEGATE_AGENTS_DESCRIPTION = '批量派工到隔离的真实 Worker。每项可传 taskKey，命中只返回原 Worker，不执行该项 task；追加用 continue_delegation。forceNew 显式新建并替换该键后续定位，不停止旧 Worker。无键直接新建，不按文字猜测合并。每个 item 可用 presetReference 指定目标预设，不传则继承。单个父会话运行中子会话最多 50 个。'
+const DELEGATE_AGENT_DESCRIPTION = '派工到隔离的真实 Worker。可传 taskKey 在同来源会话和工作区内定位原 Worker：命中只返回已有记录，不执行本次 task，追加须用 continue_delegation；forceNew 显式新建并替换该键后续定位，不停止旧 Worker。未传键则新建，不按文字猜测合并。placement 支持 current（父时间线投影）、child（附属子会话）、independent（保留来源但不随父停止）；relation 明确 subtask/independent。新建且有多个可用预设时必须按职责指定 presetReference。按用户指令和任务选择组织方式，不增加固定批准步骤。'
+const DELEGATE_AGENTS_DESCRIPTION = '批量派工到隔离的真实 Worker。每项可传 taskKey，命中只返回原 Worker，不执行该项 task；追加用 continue_delegation。forceNew 显式新建并替换该键后续定位，不停止旧 Worker。无键直接新建，不按文字猜测合并。每个 item 新建且有多个可用预设时必须按职责指定 presetReference。单个父会话运行中子会话最多 50 个。'
 const CONTINUE_DELEGATION_DESCRIPTION = '同任务的补充、修正、重试或下一步应优先用此工具续跑原 Worker。保持原 delegationId 与 childSessionId，向已完成、失败、取消或中断的会话追加指令；运行中先等待结束，必要时先停止并确认结束。会尝试恢复原生会话；原生记录缺失时可能降级恢复，不保证完整原生上下文或服务端缓存命中。'
 const DEFAULT_WAIT_SECONDS = 30 * 60
 const RESULT_SUMMARY_CHAR_LIMIT = 12_000
@@ -1125,31 +1125,24 @@ function startDelegation(
   if (workspaceId && !workspaceSlug) {
     throw new Error(`父会话工作区不存在: ${workspaceId}`)
   }
-  // 未指定目标时继承父会话稳定引用；显式目标仍必须在持久化父工作区内解析。
   // 所有可能失败的校验都必须发生在晋升草稿父会话之前，避免失败调用产生可见副作用。
-  const resolvedPreset = resolveDelegationPreset({
-    parent,
-    target: args.presetReference,
-    workspaceSlug,
-  })
-  const effectiveChannelId = resolvedPreset?.preset.channelId?.trim() || ctx.channelId
-  if (resolvedPreset?.preset.channelId && !args.modelId && !resolvedPreset.preset.modelId) {
+  const resolvedPreset = resolveNewDelegationPreset(args.presetReference, workspaceSlug)
+  const effectiveChannelId = resolvedPreset.preset.channelId?.trim() || ctx.channelId
+  if (resolvedPreset.preset.channelId && !args.modelId && !resolvedPreset.preset.modelId) {
     throw new Error(`预设「${resolvedPreset.preset.name}」已绑定渠道，但没有绑定模型`)
   }
-  const requestedModelId = args.modelId ?? resolvedPreset?.preset.modelId ?? ctx.modelId?.trim() ?? undefined
+  const requestedModelId = args.modelId ?? resolvedPreset.preset.modelId ?? ctx.modelId?.trim() ?? undefined
   const effectiveModelId = assertEnabledModelForChannel({
     channelId: effectiveChannelId,
     modelId: requestedModelId,
     runtime: inheritedRuntime,
     purpose: args.modelId !== undefined
       ? '创建协作子会话'
-      : resolvedPreset?.preset.modelId
+      : resolvedPreset.preset.modelId
         ? `预设「${resolvedPreset.preset.name}」绑定模型`
         : '创建协作子会话',
   })
-  const sourcePreset = args.presetReference
-    ? resolveDelegationPreset({ parent, workspaceSlug })
-    : resolvedPreset
+  const sourcePreset = resolveDelegationPreset({ parent, workspaceSlug })
   const sourcePermissionMode = resolveDelegationPermissionMode(
     ctx.permissionMode ?? getCurrentParentPermissionMode(parent, undefined),
     sourcePreset?.preset.permissionMode,
@@ -1157,7 +1150,7 @@ function startDelegation(
   )
   const permissionMode = resolveDelegationPermissionMode(
     sourcePermissionMode,
-    resolvedPreset?.preset.permissionMode,
+    resolvedPreset.preset.permissionMode,
     inheritedRuntime,
   )
 
@@ -1176,7 +1169,7 @@ function startDelegation(
     // 先按既有默认创建，再在启动前写入严格解析后的稳定引用，避免裸 ID 作用域歧义。
     undefined,
   )
-  const effectivePresetReference = resolvedPreset?.reference ?? child.presetReference
+  const effectivePresetReference = resolvedPreset.reference
   const rootSessionId = effectiveParent?.rootSessionId ?? effectiveParent?.id ?? ctx.sessionId
   const childMeta = updateAgentSessionMeta(child.id, {
     parentSessionId: arrangement.relation === 'subtask' ? ctx.sessionId : undefined,
@@ -1190,7 +1183,8 @@ function startDelegation(
     // 继承父会话的定时任务来源，保留自动化血缘；前端以 sourceDelegationId 优先
     // 展示委派徽章，不会被误判为定时任务（#993）。
     sourceAutomationId: effectiveParent?.sourceAutomationId,
-    ...(resolvedPreset ? { presetId: resolvedPreset.preset.id, presetReference: resolvedPreset.reference } : {}),
+    presetId: resolvedPreset.preset.id,
+    presetReference: effectivePresetReference,
     delegationRole: role,
     delegationStatus: 'running',
     delegationDepth: (parent?.delegationDepth ?? 0) + 1,

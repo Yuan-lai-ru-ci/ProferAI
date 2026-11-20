@@ -117,6 +117,10 @@ describe('模块化提示词装配', () => {
       expect(prompt).toContain('修改后必须闭环')
       expect(prompt.match(/## 做事方式/g)).toHaveLength(1)
       expect(prompt.match(/## 表达与判断/g)).toHaveLength(1)
+      expect(prompt).toContain('不为假想风险增加前置检查')
+      expect(prompt).toContain('不因想象中的批评削弱结论')
+      expect(prompt).toContain('不另设固定确认轮次')
+      expect(prompt).toContain('用户明确要求讨论、只读、计划审批或岗位限定时按其范围工作')
       expect(prompt).not.toContain('## GPT with Taste 行为配方')
     }
   })
@@ -200,7 +204,9 @@ describe('模块化提示词装配', () => {
     expect(light.chars).toBe(light.text.length)
     expect(light.chars).toBeLessThan(standard.chars / 5)
     // 配置根可能是很长的隔离目录；预算约束提示词结构，不惩罚宿主路径长度。
-    expect(standard.text.split(getConfigDir()).join('<config>').length).toBeLessThan(6500)
+    // 保留具体工作判断而非压成口号；7000 是长度预警，不作为模型质量指标。
+    // 2026-11-20 增补反复确认、假想风险与防御性表达指导，原6500不再覆盖必要内容。
+    expect(standard.text.split(getConfigDir()).join('<config>').length).toBeLessThan(7000)
     console.log(`[Prompt 字符对照] standard=${standard.chars}, light=${light.chars}`)
   })
   test('自定义预设段不被轻量化吞掉，Claude 轻量不追加 claude_code', () => {
@@ -519,7 +525,8 @@ describe('buildSystemPrompt', () => {
     expect(standardPrompt).toContain('profer_task_create')
     expect(standardPrompt).toContain('## SubAgent 委派策略')
     expect(standardPrompt).toContain('presetReference')
-    expect(standardPrompt).toContain('不传时子 Agent 继承当前父会话的稳定预设引用')
+    expect(standardPrompt).toContain('新建时有多个可用预设就必须逐项按子任务职责显式选择')
+    expect(standardPrompt).toContain('复用或续跑已有 Worker 不重新选择')
     expect(standardPrompt).toContain('## Profer 知识维护架构')
     expect(standardPrompt).toContain('### Pi Runtime 与文件记忆')
   })

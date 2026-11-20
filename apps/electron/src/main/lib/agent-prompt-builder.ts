@@ -221,7 +221,7 @@ ${suppress.has('task-graph') || capabilityDisabled('task-graph') ? '' : `${build
   const piDelegationToolGuidance = availableDelegationTools.length > 0
     ? `Pi 会话没有 SDK 内置 SubAgent 工具，委派通过 ${availableDelegationTools.map((name) => `\`mcp__collaboration__${name}\``).join(' / ')} 创建隔离的真实会话。需要结果时使用本轮实际提供的等待或结果查询工具。
 
-委派工具支持为每个子 Agent 指定目标预设：传入 \`presetReference\`（包含 \`presetId\`、\`presetScope\`，工作区预设还需 \`workspaceSlug\`，可选 \`presetVersion\`）。\`workspaceSlug\` 只对 \`presetScope=workspace\` 有效，内置/全局预设不要带。不传时子 Agent 继承当前父会话的稳定预设引用；目标预设必须是当前父会话工作区内可用且未禁用的预设。需要选择预设时直接照抄预设列表返回的 \`presetReference\`，不要自行补字段、猜测或只传裸 ID。`
+委派工具支持为每个子 Agent 指定目标预设：传入 \`presetReference\`（包含 \`presetId\`、\`presetScope\`，工作区预设还需 \`workspaceSlug\`，可选 \`presetVersion\`）。\`workspaceSlug\` 只对 \`presetScope=workspace\` 有效，内置/全局预设不要带。新建时有多个可用预设就必须逐项按子任务职责显式选择，包括选择父预设；只有一个时自动使用，复用或续跑已有 Worker 不重新选择；目标预设必须是当前父会话工作区内可用且未禁用的预设。需要选择预设时直接照抄预设列表返回的 \`presetReference\`，不要自行补字段、猜测或只传裸 ID。`
     : '当前会话未提供新建派工工具；可按本轮已有协作入口跟进原任务，其余直接完成。'
   if (!suppress.has('subagents')) {
   if (ctx.isPiRuntime) {

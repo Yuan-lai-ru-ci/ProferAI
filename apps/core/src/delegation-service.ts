@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentSessionMeta, SDKMessage, DelegationBlockedEvent, PermissionRequest, AskUserRequest } from '@profer/shared'
-import { getEffectiveDisabledToolNames, resolveEffectivePermissionMode } from '@profer/shared'
+import { getEffectiveDisabledToolNames, resolveEffectivePermissionMode, selectNewDelegationPreset } from '@profer/shared'
 import { createAgentRunContext, DelegationBlockedRegistry, waitForDelegationProgress, decideDelegationBlockedWake, type AgentRunLedger, type AgentRuntimeRunHandle } from '@profer/agent-runtime'
 import { resolveDelegationArrangement, resolveDelegationPermissionMode, buildDelegationDispatchFacts, buildDelegationPrompt, buildDelegationTaskWithSharedContext, MAX_RUNNING_DELEGATIONS_PER_PARENT } from '@profer/agent-runtime/delegation-tools'
 import { DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS, type DelegationContext, type DelegateInput, type DelegateBatchInput, type DelegationWaitInput, type DelegationAnswerInput, type DelegationToolOperations } from '@profer/agent-runtime/delegation-tool-operations'
-import { resolveCorePreset } from './preset-resources'
+import { corePresetStore, resolveCorePreset } from './preset-resources'
 import type { CoreConfig } from './config'
 import type { CoreAgentRuntime, CoreEvent } from './runtime'
 import { CoreDelegationStore, type CoreDelegationRecord } from './delegation-store'
@@ -71,10 +71,11 @@ export class CoreDelegationService implements DelegationToolOperations {
     try { this.store.write(index) } catch (error) { this.failure = error; throw error }
     return record
   }
-  private resources(parent: AgentSessionMeta, target?: DelegateInput['presetReference']) {
+  private resources(parent: AgentSessionMeta, target: DelegateInput['presetReference'], mode: 'create' | 'continue') {
     const workspace = this.runtime!.workspaces.list().find(w => w.id === parent.workspaceId)
     if (!workspace) throw new Error('父工作区不存在')
     const source = resolveCorePreset(this.config, parent, workspace)
+    if (mode === 'create') target = selectNewDelegationPreset(target, workspace.slug, corePresetStore(this.config, workspace))
     const selected = target ? resolveCorePreset(this.config, { ...parent, presetId: target.presetId, presetReference: target }, workspace) : source
     return { source, selected }
   }
@@ -144,7 +145,7 @@ export class CoreDelegationService implements DelegationToolOperations {
     if (typeof input.task !== 'string' || !input.task.trim()) throw new Error('任务不能为空')
     if (input.role && !['explore', 'research', 'implement', 'review', 'custom'].includes(input.role)) throw new Error('委派角色无效')
     if (this.records().filter(r => r.parentSessionId === parent.id && r.status === 'running').length >= MAX_RUNNING_DELEGATIONS_PER_PARENT) throw new Error('运行中委派超过上限')
-    const arrangement = resolveDelegationArrangement(input), { source, selected } = this.resources(parent, input.presetReference)
+    const arrangement = resolveDelegationArrangement(input), { source, selected } = this.resources(parent, input.presetReference, 'create')
     const channelId = selected.preset.channelId?.trim() || parent.channelId
     const channel = runtime.listChannelConfigs().find(c => c.id === channelId)
     const agentRuntime = parent.agentRuntime ?? 'claude'
@@ -312,7 +313,7 @@ export class CoreDelegationService implements DelegationToolOperations {
     if (typeof input.message !== 'string' || !input.message.trim()) throw new Error('追加指令不能为空')
     const child = this.runtime!.sessions.getMeta(previous.childSessionId)
     if (!child || child.workspaceId !== parent.workspaceId) throw new Error('原委派子会话不存在或工作区不符')
-    const { selected, source } = this.resources(parent, previous.presetReference)
+    const { selected, source } = this.resources(parent, previous.presetReference, 'continue')
     const channel = this.runtime!.listChannelConfigs().find(c => c.id === previous.channelId)
     if (!channel || channel.enabled === false || !channel.models?.some(m => m.id === previous.modelId && m.enabled)) throw new Error('委派原渠道或模型已不可用')
     if (this.runtime!.coordinator.ownership.getOwner(child.id)) throw new Error('原子会话仍有运行占用，不能续跑')

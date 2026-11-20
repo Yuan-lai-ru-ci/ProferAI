@@ -115,7 +115,7 @@ const EXPERIENCE_GROUP_ITEMS: SettingsTabItem[] = [
 
 /** 连接：远程连接 / 代理（公网 FRP 暂不开放） */
 const CONNECTION_GROUP_ITEMS: SettingsTabItem[] = [
-  { id: "bots", label: "远程连接", icon: <Bot size={16} />, searchTerms: ["机器人", "Bot", "飞书", "钉钉", "微信", "远程", "工作区", "默认工作区", "绑定"] },
+  { id: "bots", label: "远程连接", icon: <Bot size={16} />, searchTerms: ["机器人", "Bot", "飞书", "钉钉", "微信", "远程", "工作区", "默认工作区", "绑定", "远程内核", "Core", "HTTPS", "Token", "线路"] },
   { id: "proxy", label: "代理设置", icon: <Network size={16} />, searchTerms: ["网络代理", "HTTP proxy", "HTTPS proxy", "代理地址", "端口"] },
 ];
 

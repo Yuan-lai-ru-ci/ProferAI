@@ -57,13 +57,13 @@ const PRESERVED_PARAMETER_DESCRIPTIONS: Record<string, Record<string, string>> =
   mcp__collaboration__delegate_agent: {
     task: '发送给子 Agent 的完整任务说明，必须自包含必要上下文',
     modelId: '可选目标模型 ID；先从可用模型工具读取，不要猜测',
-    presetReference: '可选目标预设；直接照抄 preset_list 返回的 presetReference，不要自行补字段；不传则继承父会话预设',
+    presetReference: '新建且有多个可用预设时必填；按职责照抄 preset_list 返回的 presetReference，不要自行补字段',
     workspaceSlug: '仅 presetScope=workspace 时使用；内置/全局预设不要传',
   },
   mcp__collaboration__delegate_agents: {
     items: '要创建的子会话列表，最多 50 个',
     sharedContext: '批量子任务共用背景，会自动拼接到每个子任务前',
-    presetReference: '可选目标预设；直接照抄 preset_list 返回的 presetReference，不要自行补字段',
+    presetReference: '新建且有多个可用预设时必填；按职责照抄 preset_list 返回的 presetReference，不要自行补字段',
     workspaceSlug: '仅 presetScope=workspace 时使用；内置/全局预设不要传',
   },
   mcp__collaboration__wait_for_delegations: {

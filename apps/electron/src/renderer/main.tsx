@@ -356,8 +356,14 @@ function PlanningInitializer(): null {
 
   useEffect(() => {
     let disposed = false
+    let fallbackShown = false
     const update = (snapshot: import('@/types/settings').CoreTargetsSnapshot): void => {
-      if (!disposed) setCore(current => snapshot.generation < current.generation ? current : snapshot)
+      if (disposed) return
+      setCore(current => (snapshot.revision ?? snapshot.generation) < (current.revision ?? current.generation) ? current : snapshot)
+      if (snapshot.startup === 'fallback' && !fallbackShown) {
+        fallbackShown = true
+        toast.info('上次使用的内核不可达，已回到本机', { id: 'core-startup-fallback' })
+      }
     }
     void window.electronAPI.listCoreTargets().then(update).catch(console.error)
     const unsubscribe = window.electronAPI.onCoreTargetChanged(update)
@@ -410,11 +416,12 @@ function PlanningInitializer(): null {
     setTodoGroups([])
     setCalendarGroups([])
     setTags([])
-    if (!planningAvailable && core.currentId !== 'local') toast.error('当前 Core 尚不支持任务/日程，请更新 Core；未读取本机数据', { id: 'core-planning-unavailable' })
+    if (!planningAvailable && core.startup !== 'restoring' && core.currentId !== 'local') toast.error('当前 Core 尚不支持任务/日程，请更新 Core；未读取本机数据', { id: 'core-planning-unavailable' })
+    if (!planningAvailable || core.startup === 'restoring') return
     load()
     const unsubscribe = window.electronAPI.onPlanningChanged((change) => load(change.resources))
     return () => { disposed = true; unsubscribe() }
-  }, [core.currentId, core.generation, planningAvailable, setCalendarEvents, setCalendarGroups, setTags, setTodoGroups, setTodos])
+  }, [core.currentId, core.generation, core.startup, planningAvailable, setCalendarEvents, setCalendarGroups, setTags, setTodoGroups, setTodos])
 
   return null
 }
@@ -1005,9 +1012,29 @@ function WeChatInitializer(): null {
 function TabStatePersistenceInitializer(): null {
   const store = useStore()
   useEffect(() => {
+    // 启动连接未决时只等连接结果；原会话导航和持久化规则不变。
+    let disposed = false
+    let stopWaiting: (() => void) | undefined
+    let releaseWait: (() => void) | undefined
+    const listReadyCoreTargets = async () => {
+      const initial = await window.electronAPI.listCoreTargets()
+      if (disposed || initial.startup !== 'restoring') return initial
+      return new Promise<typeof initial>(resolve => {
+        releaseWait = () => resolve(initial)
+        const readSettled = () => {
+          const current = store.get(coreTargetsAtom)
+          if (current.startup === 'restoring' || (current.revision ?? 0) <= (initial.revision ?? 0)) return
+          stopWaiting?.()
+          releaseWait = undefined
+          resolve(current)
+        }
+        stopWaiting = store.sub(coreTargetsAtom, readSettled)
+        readSettled()
+      })
+    }
     const navigation = initializeCoreSessionNavigation(store, {
       getSettings: () => window.electronAPI.getSettings(),
-      listCoreTargets: () => window.electronAPI.listCoreTargets(),
+      listCoreTargets: listReadyCoreTargets,
       listConversations: () => window.electronAPI.listConversations(true),
       listAgentSessions: () => window.electronAPI.listAgentSessions(true),
       listWorkspaces: () => window.electronAPI.listAgentWorkspaces(),
@@ -1021,7 +1048,13 @@ function TabStatePersistenceInitializer(): null {
       }
     }
     window.addEventListener('beforeunload', beforeUnload)
-    return () => { window.removeEventListener('beforeunload', beforeUnload); navigation.dispose() }
+    return () => {
+      disposed = true
+      window.removeEventListener('beforeunload', beforeUnload)
+      navigation.dispose()
+      stopWaiting?.()
+      releaseWait?.()
+    }
   }, [store])
   return null
 }

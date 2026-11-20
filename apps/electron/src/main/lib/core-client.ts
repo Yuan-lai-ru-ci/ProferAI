@@ -90,6 +90,8 @@ export interface CoreClientOptions {
   onPlanningEvent?: (payload: unknown) => void
   onSnapshot?: (snapshot: CoreRecoverySnapshot) => void
   recoverEvents?: boolean
+  /** 候选线路先验证连接，提交后再启用现有事件流。 */
+  deferEventRecovery?: boolean
   onStatus?: (status: CoreConnectionStatus) => void
 }
 
@@ -166,6 +168,8 @@ export class CoreClient {
   private readonly onPlanningEvent?: (payload: unknown) => void
   private readonly onSnapshot?: (snapshot: CoreRecoverySnapshot) => void
   private readonly recoverEvents: boolean
+  private readonly deferEventRecovery: boolean
+  private eventFlowActive = false
   private connecting?: Promise<void>
   private recovery?: Promise<void>
   private eventCursor: string | null = null
@@ -183,6 +187,10 @@ export class CoreClient {
   private closedByUser = false
   private readonly hostSessionIds = new Set<string>()
   private hostRegistration?: Promise<unknown>
+  private cancelHandshake?: (error: Error) => void
+  private latencyProbe?: { promise: Promise<number>; finish: (error?: Error) => void }
+  private waitingPong = false
+  private readonly hostCalls = new Set<Promise<void>>()
   private hostRequestHandler?: (request: CoreHostIncomingRequest) => Promise<CoreHostOutgoingResponse>
 
   constructor(options: CoreClientOptions) {
@@ -200,6 +208,7 @@ export class CoreClient {
     this.onPlanningEvent = options.onPlanningEvent
     this.onSnapshot = options.onSnapshot
     this.recoverEvents = options.recoverEvents ?? false
+    this.deferEventRecovery = options.deferEventRecovery ?? false
     this.onStatus = options.onStatus
   }
 
@@ -216,8 +225,8 @@ export class CoreClient {
     return this.request('/health', { auth: false }) as Promise<{ status: string; service: string; version: string }>
   }
 
-  async identity(): Promise<{ protocolVersion: number; coreId: string; version: string; capabilities: string[]; platform?: string }> {
-    return this.request('/identity') as Promise<{ protocolVersion: number; coreId: string; version: string; capabilities: string[]; platform?: string }>
+  async identity(timeoutMs?: number): Promise<{ protocolVersion: number; coreId: string; version: string; capabilities: string[]; platform?: string }> {
+    return this.request('/identity', { timeoutMs }) as Promise<{ protocolVersion: number; coreId: string; version: string; capabilities: string[]; platform?: string }>
   }
 
   /** Core 的文件浏览起点；仅非本机内核的选择器使用。 */
@@ -631,15 +640,15 @@ export class CoreClient {
     return () => this.eventListeners.delete(listener)
   }
 
-  connect(): Promise<void> {
+  connect(timeoutMs = 5_000): Promise<void> {
     if (this.connecting) return this.connecting
-    const connecting = this.connectInternal()
+    const connecting = this.connectInternal(timeoutMs)
     this.connecting = connecting
     void connecting.finally(() => { if (this.connecting === connecting) this.connecting = undefined }).catch(() => {})
     return connecting
   }
 
-  private connectInternal(): Promise<void> {
+  private connectInternal(timeoutMs: number): Promise<void> {
     this.closedByUser = false
     const socket = this.socket
     if (socket?.readyState === OPEN) return this.recovery ?? Promise.resolve()
@@ -652,20 +661,33 @@ export class CoreClient {
       })
       this.socket = socket
       let settled = false
+      const settleHandshake = (error?: Error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        this.cancelHandshake = undefined
+        if (error) reject(error)
+      }
+      this.cancelHandshake = settleHandshake
+      const timer = setTimeout(() => {
+        settleHandshake(new CoreClientError('Core WebSocket 连接超时'))
+        socket.close()
+      }, timeoutMs)
       socket.onopen = () => {
         if (this.socket !== socket) return
-        settled = true
+        settleHandshake()
         this.closedByUser = false
         if (this.hostRequestHandler) {
           this.hostRegistration = this.sendOnSocket(socket, { type: 'register_desktop_host', sessionIds: [...this.hostSessionIds] })
           void this.hostRegistration.catch(error => console.error('[Core] 桌面宿主重连注册失败:', error))
         }
-        if (this.recoverEvents) {
+        if (this.recoverEvents && !this.deferEventRecovery) {
           this.bufferedEvents = []
           this.recovery = this.recover(socket).finally(() => { this.recovery = undefined })
           this.recovery.then(() => { if (this.socket === socket) this.onStatus?.('open'); resolve() }, error => { reject(error); if (this.socket === socket) socket.close() })
         } else {
           this.onStatus?.('open')
+          if (this.eventFlowActive && this.recoverEvents) this.refreshEventFlow(socket)
           resolve()
         }
       }
@@ -673,11 +695,13 @@ export class CoreClient {
       socket.onerror = error => {
         if (this.socket !== socket) return
         this.onStatus?.('error')
-        if (!settled) { settled = true; reject(new CoreClientError(`Core WebSocket 连接失败: ${String(error)}`)) }
+        settleHandshake(new CoreClientError(`Core WebSocket 连接失败: ${String(error)}`))
+        socket.close()
       }
       socket.onclose = () => {
         if (this.socket !== socket) return
         this.socket = null
+        this.clearProbe()
         this.hostRegistration = undefined
         this.bufferedEvents = undefined
         for (const pending of this.pendingCommands.values()) {
@@ -686,13 +710,85 @@ export class CoreClient {
         }
         this.pendingCommands.clear()
         this.onStatus?.('closed')
-        if (!settled) { settled = true; reject(new CoreClientError('Core WebSocket 在建立连接前关闭')) }
+        settleHandshake(new CoreClientError('Core WebSocket 在建立连接前关闭'))
         this.scheduleReconnect()
       }
     })
   }
 
+  get isConnected(): boolean { return this.socket?.readyState === OPEN }
+
+  /** 连接已提交：复用既有事件恢复，失败不把已连接的设备标为离线。 */
+  startEventRecovery(): void {
+    this.eventFlowActive = true
+    const socket = this.socket
+    if (!this.recoverEvents || socket?.readyState !== OPEN) return
+    this.refreshEventFlow(socket)
+  }
+
+  private refreshEventFlow(socket: CoreWebSocket): void {
+    this.bufferedEvents = []
+    void this.recover(socket).catch(error => {
+      if (this.socket !== socket) return
+      const frames = this.bufferedEvents ?? []
+      this.bufferedEvents = undefined
+      for (const frame of frames) if (frame.replay !== true) this.deliverFrame(frame)
+      console.warn('[Core] 已连接，但事件刷新失败:', error)
+      this.notifyWorkspaceChanged()
+    })
+  }
+
+  /** 让旧线路上已有的桌面调用正常返回，不拒绝任何新请求。 */
+  async waitForHostIdle(timeoutMs: number): Promise<void> {
+    if (!this.hostCalls.size) return
+    const deadline = Date.now() + timeoutMs
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const expire = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new CoreClientError('桌面工具仍在执行，已保留原线路')), timeoutMs)
+      })
+      while (this.hostCalls.size) {
+        if (Date.now() >= deadline) throw new CoreClientError('桌面工具仍在执行，已保留原线路')
+        await Promise.race([Promise.all(this.hostCalls), expire])
+      }
+    } finally { clearTimeout(timer) }
+  }
+
+  probeLatency(timeoutMs = 2_000): Promise<number> {
+    const socket = this.socket
+    if (socket?.readyState !== OPEN) return Promise.reject(new CoreClientError('远程 Core WebSocket 未连接'))
+    if (this.latencyProbe) return this.latencyProbe.promise
+    // 现有 pong 没有请求 ID；等迟到的 pong 或连接重建，避免误计下一次。
+    if (this.waitingPong) return Promise.reject(new CoreClientError('仍在等待上一次 Core pong'))
+    const started = performance.now()
+    let finish!: (error?: Error) => void
+    const promise = new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => finish(new CoreClientError('Core 延迟探测超时')), timeoutMs)
+      finish = error => {
+        clearTimeout(timer)
+        this.latencyProbe = undefined
+        if (error) reject(error)
+        else resolve(performance.now() - started)
+      }
+    })
+    this.latencyProbe = { promise, finish }
+    this.waitingPong = true
+    try { socket.send(JSON.stringify({ type: 'ping' })) }
+    catch (error) {
+      this.waitingPong = false
+      finish(error instanceof Error ? error : new Error(String(error)))
+    }
+    return promise
+  }
+
+  private clearProbe(): void {
+    this.waitingPong = false
+    this.latencyProbe?.finish(new CoreClientError('远程 Core 连接已关闭'))
+  }
+
   close(): void {
+    this.cancelHandshake?.(new CoreClientError('远程 Core 连接已关闭'))
+    this.clearProbe()
     this.closedByUser = true
     this.clearReconnectTimer()
     const socket = this.socket
@@ -754,18 +850,26 @@ export class CoreClient {
     try { message = JSON.parse(typeof raw === 'string' ? raw : String(raw)) as unknown } catch { return }
     if (!message || typeof message !== 'object') return
     const record = message as Record<string, unknown>
+    if (record.kind === 'pong') {
+      this.waitingPong = false
+      this.latencyProbe?.finish()
+      return
+    }
+    if (this.deferEventRecovery && !this.eventFlowActive && record.kind !== 'command_result') return
     if (record.kind === 'host_request') {
       const request = record.request as CoreHostIncomingRequest | undefined
       const socket = this.socket
       if (!request || !socket || socket.readyState !== OPEN || !this.hostRequestHandler) return
-      void this.hostRequestHandler(request).then(response => {
+      const call = this.hostRequestHandler(request).then(response => {
         if (this.socket === socket && socket.readyState === OPEN) socket.send(JSON.stringify({ type: 'desktop_host_response', response }))
       }).catch(error => {
         if (this.socket === socket && socket.readyState === OPEN) socket.send(JSON.stringify({ type: 'desktop_host_response', response: {
           coreId: request.coreId, sessionId: request.sessionId, runId: request.runId, requestId: request.requestId,
           ok: false, error: error instanceof Error ? error.message : String(error),
         } }))
-      })
+      }).catch(error => console.warn('[Core] 桌面工具回执发送失败:', error))
+      this.hostCalls.add(call)
+      void call.finally(() => this.hostCalls.delete(call))
       return
     }
     if (record.kind !== 'command_result' && this.bufferedEvents) {

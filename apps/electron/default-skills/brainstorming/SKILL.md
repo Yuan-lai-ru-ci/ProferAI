@@ -1,56 +1,38 @@
 ---
 name: brainstorming
-description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
-version: "1.0.0"
----
-version: "1.0.0"
+description: "Use before creative implementation to understand purpose and choose a design. Adapt depth to the task: explicit implementation requests proceed through necessary design into execution; discussion requests remain discussion."
+version: "1.1.0"
 ---
 # Brainstorming Ideas Into Designs
 
-## Overview
+## Purpose
 
-Help turn ideas into fully formed designs and specs through natural collaborative dialogue.
+Understand what the user needs, choose a worthwhile design, and use that judgment to advance the requested work. Design is a means to a usable outcome, not a mandatory interview or approval ceremony.
 
-Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design in small sections (200-300 words), checking after each section whether it looks right so far.
+## Establish the assignment
 
-## The Process
+Read the current project, relevant conventions and conversation. Identify purpose, non-goals, actual authority and observable success. Reuse settled decisions and available evidence.
 
-**Understanding the idea:**
-- Check out the current project state first (files, docs, recent commits)
-- Ask questions one at a time to refine the idea
-- Prefer multiple choice questions when possible, but open-ended is fine too
-- Only one question per message - if a topic needs more exploration, break it into multiple questions
-- Focus on understanding: purpose, constraints, success criteria
+- For an explicit discussion or assessment, give the judgment and options; do not implement.
+- For an explicit implementation request, do the necessary design and continue into implementation within the authorized scope. Do not ask “Ready to implement?” after the user has already requested implementation.
+- Respect actual plan mode, role restrictions, user-required approval and tool permissions. Design guidance cannot grant authority or restore unavailable capabilities.
 
-**Exploring approaches:**
-- Propose 2-3 different approaches with trade-offs
-- Present options conversationally with your recommendation and reasoning
-- Lead with your recommended option and explain why
+## Resolve decisions, not questionnaires
 
-**Presenting the design:**
-- Once you believe you understand what you're building, present the design
-- Break it into sections of 200-300 words
-- Ask after each section whether it looks right so far
-- Cover: architecture, components, data flow, error handling, testing
-- Be ready to go back and clarify if something doesn't make sense
+Make ordinary reversible choices using context and reasonable defaults. Ask only when the answer materially changes the goal, authority, significant cost, irreversible consequences or acceptance. Offer concrete options and a recommendation. If a question is necessary, ask one decision at a time while advancing independent work.
 
-## After the Design
+For a simple change, select the existing pattern and proceed. For a substantial unresolved design, compare the most useful alternatives, explain the recommended approach and relevant trade-offs. Do not generate alternatives or request confirmation for decisions already settled.
 
-**Documentation:**
-- Write the validated design to `docs/plans/YYYY-MM-DD-<topic>-design.md`
-- Use elements-of-style:writing-clearly-and-concisely skill if available
-- Commit the design document to git
+## Design at the necessary depth
 
-**Implementation (if continuing):**
-- Ask: "Ready to set up for implementation?"
-- Use superpowers:using-git-worktrees to create isolated workspace
-- Use superpowers:writing-plans to create detailed implementation plan
+Consider architecture, components, data flow, errors and verification only as far as they affect this task. Use existing components and keep the change complete but small. State significant choices briefly; no fixed word count, section-by-section confirmation or approval of every edit.
 
-## Key Principles
+Use real failure paths and constraints. Do not turn ordinary work into speculative risk reviews, unrelated check matrices or additional process requirements.
 
-- **One question at a time** - Don't overwhelm with multiple questions
-- **Multiple choice preferred** - Easier to answer than open-ended when possible
-- **YAGNI ruthlessly** - Remove unnecessary features from all designs
-- **Explore alternatives** - Always propose 2-3 approaches before settling
-- **Incremental validation** - Present design in sections, validate each
-- **Be flexible** - Go back and clarify when something doesn't make sense
+## Carry the result forward
+
+When implementation is requested and authority is sufficient, implement the chosen design, run the relevant checks, repair failures and deliver the usable result. Apply feedback to the ongoing assignment rather than restarting the interview.
+
+Write a design document when it helps implementation, coordination or future maintenance; use the project's chosen location. Do not create a document, worktree or commit merely to satisfy this Skill. Git operations follow the user's authorization and project conventions.
+
+Deliver the result, decisive reasons and actual dependencies. Stop when the requested outcome and material issues are resolved.

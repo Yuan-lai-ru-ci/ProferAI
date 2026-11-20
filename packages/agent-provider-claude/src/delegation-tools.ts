@@ -30,8 +30,8 @@ export async function injectClaudeDelegationTools(
     continue_delegation: { operationId: z.string().min(1).max(200).optional(), delegationId: z.string().min(1), message: z.string().trim().min(1) },
   }
   const descriptions: Record<string, string> = {
-    list_available_agent_models: '列出当前Core可委派的模型。', delegate_agent: '创建独立执行上下文；current/child为附属任务，independent不随父级停止。',
-    delegate_agents: '批量创建隔离子会话。', wait_for_delegations: '等待委派进展；阻塞时提前返回。', list_delegations: '列出当前父会话的委派。',
+    list_available_agent_models: '列出当前Core可委派的模型。', delegate_agent: '创建独立执行上下文；current/child为附属任务，independent不随父级停止。多个可用预设时须按职责指定 presetReference。',
+    delegate_agents: '批量创建隔离子会话。多个可用预设时每项须按职责指定 presetReference。', wait_for_delegations: '等待委派进展；阻塞时提前返回。', list_delegations: '列出当前父会话的委派。',
     get_delegation_results: '读取委派结果。', stop_delegation: '停止一项委派。', stop_delegations: '停止多项委派。',
     answer_delegation_question: '回答子Agent阻塞；权限允许仍须宿主审批。', continue_delegation: '在原子会话追加指令并续跑。',
   }

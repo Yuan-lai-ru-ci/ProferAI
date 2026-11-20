@@ -1,9 +1,9 @@
 import { getLocalCoreClient } from './core-local-bridge'
-import { ipcMain } from 'electron'
-import { addCoreTarget, getActiveCoreClient, getCurrentCoreTargetId, listCoreTargets, removeCoreTarget, selectCoreTarget, testCoreTarget } from './core-target-service'
+import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { addCoreTarget, getActiveCoreClient, getCurrentCoreTargetId, listCoreTargets, removeCoreEndpoint, removeCoreTarget, saveCoreEndpoint, selectCoreEndpoint, selectCoreTarget, testCoreTarget, updateCoreTarget } from './core-target-service'
 import { CORE_TARGET_IPC_CHANNELS } from '../../types'
 
-export function registerCoreTargetIpc(): void {
+export function registerCoreTargetIpc(authorize: (event: IpcMainInvokeEvent) => void): void {
   ipcMain.handle(CORE_TARGET_IPC_CHANNELS.LIST, () => listCoreTargets())
   ipcMain.handle(CORE_TARGET_IPC_CHANNELS.CHANNELS, async () => {
     const state = listCoreTargets()
@@ -41,8 +41,12 @@ export function registerCoreTargetIpc(): void {
     if (!client || getCurrentCoreTargetId() === 'local') throw new Error('当前远程内核未连接')
     return client.testChannel(input)
   })
-  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.TEST, (_event, input) => testCoreTarget(input))
-  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.ADD, (_event, input) => addCoreTarget(input))
-  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.SELECT, (_event, id: string) => selectCoreTarget(id))
-  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.REMOVE, (_event, id: string) => removeCoreTarget(id))
+  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.TEST, (event, input) => { authorize(event); return testCoreTarget(input) })
+  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.ADD, (event, input) => { authorize(event); return addCoreTarget(input) })
+  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.UPDATE, (event, id, input) => { authorize(event); return updateCoreTarget(id, input) })
+  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.SAVE_ENDPOINT, (event, id, input) => { authorize(event); return saveCoreEndpoint(id, input) })
+  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.SELECT_ENDPOINT, (event, id, endpointId) => { authorize(event); return selectCoreEndpoint(id, endpointId) })
+  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.REMOVE_ENDPOINT, (event, id, endpointId) => { authorize(event); return removeCoreEndpoint(id, endpointId) })
+  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.SELECT, (event, id: string) => { authorize(event); return selectCoreTarget(id) })
+  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.REMOVE, (event, id: string) => { authorize(event); return removeCoreTarget(id) })
 }

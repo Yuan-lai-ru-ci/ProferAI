@@ -278,7 +278,7 @@ function localCoreNotReadyMessage(): string {
 }
 import { routeGoalToCore } from './lib/goal-core-routing'
 import { registerCoreTargetIpc } from './lib/core-target-ipc'
-import { getActiveCoreClient, markCoreRunRelayed, getCurrentCoreTargetId, getCoreTargetGeneration, currentCoreId, namespaceCoreSessionId, parseCoreSessionId, setBeforeCoreTargetSwitch } from './lib/core-target-service'
+import { getActiveCoreClient, markCoreRunRelayed, getCurrentCoreTargetId, getCoreTargetGeneration, currentCoreId, namespaceCoreSessionId, parseCoreSessionId } from './lib/core-target-service'
 import { projectRemoteRunEvent } from './lib/core-run-projection'
 import { createAgentRunContext } from '@profer/agent-runtime'
 import { registerHeatmapMigrationIpc } from './lib/heatmap-migration-ipc'
@@ -1348,7 +1348,7 @@ function assertLocalWorkspaceFiles(): void {
 
 function relayRemoteCoreRun(localSessionId: string, remoteSessionId: string, client: import('./lib/core-client').CoreClient, sender: WebContents): void {
   remoteCoreRunReleases.get(localSessionId)?.()
-  markCoreRunRelayed(remoteSessionId, true)
+  markCoreRunRelayed(client, remoteSessionId, true)
   const unsubscribe = client.addEventListener(event => {
     if (event.sessionId !== remoteSessionId) return
     const projected = projectRemoteRunEvent(event, localSessionId)
@@ -1358,7 +1358,7 @@ function relayRemoteCoreRun(localSessionId: string, remoteSessionId: string, cli
     }
     if (projected.completion) {
       emitSessionStreamEvent(localSessionId, { kind: 'run_complete', completion: projected.completion }, sender)
-      sender.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, projected.completion)
+      if (!sender.isDestroyed()) sender.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, projected.completion)
       remoteCoreRunReleases.get(localSessionId)?.()
       remoteCoreRunReleases.delete(localSessionId)
     }
@@ -1372,29 +1372,25 @@ function relayRemoteCoreRun(localSessionId: string, remoteSessionId: string, cli
         resultErrors: [projected.error],
       }
       emitSessionStreamEvent(localSessionId, { kind: 'run_complete', completion }, sender)
-      sender.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, completion)
+      if (!sender.isDestroyed()) sender.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, completion)
       remoteCoreRunReleases.get(localSessionId)?.()
       remoteCoreRunReleases.delete(localSessionId)
     }
   })
-  const release = () => { markCoreRunRelayed(remoteSessionId, false); unsubscribe() }
+  const release = () => {
+    markCoreRunRelayed(client, remoteSessionId, false)
+    unsubscribe()
+    sender.removeListener('destroyed', forget)
+  }
+  const forget = () => {
+    if (remoteCoreRunReleases.get(localSessionId) !== release) return
+    remoteCoreRunReleases.delete(localSessionId)
+    release()
+  }
+  sender.once('destroyed', forget)
   remoteCoreRunReleases.set(localSessionId, release)
 }
 export function registerIpcHandlers(): void {
-  setBeforeCoreTargetSwitch(async () => {
-    if (getCurrentCoreTargetId() === 'local') {
-      const running = listAgentSessions(true).filter(session => isAgentSessionActive(session.id))
-      if (running.length) throw new Error(`请先停止本机正在运行的 Agent 会话：${running.map(session => session.title || session.id).join('、')}`)
-      return
-    }
-    const client = getActiveCoreClient()
-    const remoteRuns = [...remoteCoreRunReleases.keys()]
-      .map(id => ({ localId: id, remote: parseCoreSessionId(id) }))
-      .filter((entry): entry is { localId: string; remote: NonNullable<ReturnType<typeof parseCoreSessionId>> } => Boolean(entry.remote && entry.remote.coreId === currentCoreId()))
-    if (remoteRuns.length && !client) throw new Error('远程 Agent 仍在运行，但当前 Core 已断开；恢复连接或等待运行结束后再切换')
-    if (client) await Promise.all(remoteRuns.map(entry => client.stop(entry.remote.sessionId)))
-  })
-
   // 幂等守卫：正常启动与启动失败降级路径（index.ts:520 / index.ts:748）都会调用本函数。
   // ipcMain.handle 会按 channel 去重覆盖，但 ipcMain.on / nativeTheme.on / setInterval 等副作用
   // 不会去重，重复调用会累积监听器和定时器（内存泄露）。此守卫确保只注册一次。
@@ -1964,7 +1960,7 @@ export function registerIpcHandlers(): void {
   registerSkinIpc()
 
   // ===== 应用设置相关 =====
-  registerCoreTargetIpc()
+  registerCoreTargetIpc(assertSensitiveAgentIpcSender)
   registerSettingsIpc()
 
   // ===== 远程连接（配对 / FRP）相关 =====

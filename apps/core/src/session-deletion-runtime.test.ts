@@ -287,7 +287,7 @@ test('Core删除活跃委派时终态不重新投影已隐藏的子会话', asyn
     const workspace = runtime.workspaces.createManaged('delegation')
     const parent = runtime.sessions.create({ title: 'parent', runtime: 'pi', workspaceId: workspace.id, channelId: 'fixture', modelId: 'fixture-model', permissionMode: 'bypassPermissions' })
     const context = { sessionId: parent.id, workspaceId: workspace.id, channelId: 'fixture', modelId: 'fixture-model', agentRuntime: 'pi' as const, permissionMode: 'bypassPermissions' as const }
-    const created = await runtime.delegations.delegate(context, { task: 'offline fixture' })
+    const created = await runtime.delegations.delegate(context, { task: 'offline fixture', presetReference: { presetId: 'standard', presetScope: 'builtin-meta' } })
     const childId = (created.delegation as { childSessionId: string }).childSessionId
     const resurrecting: unknown[] = []
     const unsubscribe = runtime.subscribe(event => {
