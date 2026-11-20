@@ -73,7 +73,7 @@ function verifyLinuxPackage(packageDir) {
   const electron = path.join(result.root, 'profer')
   const nodeEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
   // 使用成品 Electron 的 ASAR 感知解析器验证主包，而非构建机 node_modules。
-  const sdkProbe = `const {createRequire}=require('node:module'); const {pathToFileURL}=require('node:url'); const r=createRequire(process.argv[1]+'/app.asar/dist/main.cjs'); r.resolve('@earendil-works/pi-coding-agent'); import(pathToFileURL(r.resolve('@anthropic-ai/claude-agent-sdk')).href).catch(e=>{console.error(e);process.exitCode=1});`
+  const sdkProbe = `const {createRequire}=require('node:module'); const {pathToFileURL}=require('node:url'); const r=createRequire(process.argv[1]+'/app.asar/dist/main.cjs'); import(pathToFileURL(r.resolve('@anthropic-ai/claude-agent-sdk')).href).catch(e=>{console.error(e);process.exitCode=1});`
   run(electron, ['-e', sdkProbe, result.resources], nodeEnv)
   run(electron, [path.join(__dirname, 'packaged-pi-probe.cjs'), result.resources], nodeEnv)
   return { ok: true, ...result }

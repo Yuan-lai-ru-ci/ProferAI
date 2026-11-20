@@ -2,6 +2,7 @@
   "name": "@profer/electron",
   "version": "0.17.1-beta.1",
   "description": "Profer",
+  "homepage": "https://profer.cn",
   "main": "dist/main.cjs",
   "author": "Profer Team",
   "private": true,

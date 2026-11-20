@@ -93,6 +93,8 @@ describe('Linux 包闭包结构 fixture（不执行伪造产物）', () => {
     const base = readFileSync(join(import.meta.dir, '../electron-builder.yml'), 'utf8').split('\nlinux:\n')[1]!.split('\nwin:')[0]!
     expect(base).toContain('executableName: profer')
     expect(base).toContain('category: Development')
+    expect(base).toContain('maintainer: Profer Team <ybwwsnbb@126.com>')
+    expect(JSON.parse(readFileSync(join(import.meta.dir, '../package.json'), 'utf8')).homepage).toBe('https://profer.cn')
     expect(base).toContain('target: AppImage\n      arch: [x64]')
     expect(base).toContain('target: deb\n      arch: [x64]')
     const commercial = readFileSync(join(import.meta.dir, '../electron-builder.commercial.yml'), 'utf8')
