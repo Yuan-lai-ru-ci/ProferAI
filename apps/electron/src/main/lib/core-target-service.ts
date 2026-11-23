@@ -1,3 +1,4 @@
+import { isIndependentLocalCore } from './core-local-mode'
 import { AGENT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS } from '@profer/shared'
 import { BrowserWindow, app, safeStorage } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -5,7 +6,9 @@ import { join } from 'node:path'
 import { projectRemoteRunEvent } from './core-run-projection'
 import { projectCoreChatEvent } from './core-chat-projection'
 import { pushChatStream } from './chat-stream-bus'
-import { CoreClient, type CoreChatEvent } from './core-client'
+import { getLocalCoreState } from './core-local-service'
+import { discoverPairedCore } from './core-discovery'
+import { CoreClient, CoreClientError, type CoreChatEvent } from './core-client'
 import { configureCoreHostConnection } from './core-host-connection'
 import type { CoreEndpointInput, CoreTargetInput, CoreTargetSummary, CoreTargetsSnapshot } from '../../types'
 import { attachLocalCoreClient, detachLocalCoreClient } from './core-local-bridge'
@@ -35,6 +38,8 @@ let latencyMs: number | undefined
 let probeTimer: ReturnType<typeof setTimeout> | undefined
 let startup: CoreTargetsSnapshot['startup']
 let startupRestore: Promise<void> | undefined
+let startupRetry: ReturnType<typeof setTimeout> | undefined
+let pairedRecoveryTimer: ReturnType<typeof setTimeout> | undefined
 let explicitSelection = 0
 let generation = 0
 let revision = 0
@@ -116,6 +121,9 @@ function clientFor(target: StoredCoreTarget, endpoint: StoredCoreEndpoint): Core
   const client = new CoreClient({
     baseUrl: endpoint.baseUrl,
     token: decryptToken(endpoint.encryptedToken),
+    identityPin: endpoint.identityPin,
+    // 已配对设备由目标恢复流程先检查 HTTP 身份，避免独立 WS 重试绕过授权拒绝。
+    reconnect: !endpoint.bindingId,
     deferEventRecovery: true,
     recoverEvents: true,
     onChatEvent: event => {
@@ -188,10 +196,36 @@ function clientFor(target: StoredCoreTarget, endpoint: StoredCoreEndpoint): Core
       publishSnapshot()
       if (status === 'open') observeLatency(client)
       if (status === 'open') publishConnectedResources()
+      if (endpoint.identityPin) {
+        if (status === 'open') { clearTimeout(pairedRecoveryTimer); pairedRecoveryTimer = undefined }
+        else schedulePairedRecovery(client, target.id)
+      }
     },
   })
   return client
 }
+
+function schedulePairedRecovery(client: CoreClient, targetId: string): void {
+  if (pairedRecoveryTimer) return
+  pairedRecoveryTimer = setTimeout(() => {
+    pairedRecoveryTimer = undefined
+    if (activeClient !== client || activeId() !== targetId || client.isConnected) return
+    void serialize(async () => {
+      if (activeClient !== client || activeId() !== targetId || client.isConnected) return
+      const store = readStore()
+      const target = requireTarget(store, targetId)
+      try {
+        await connectTarget(store, target, { accept: () => activeClient === client && activeId() === targetId && !client.isConnected })
+      } catch (error) {
+        if (error instanceof PairedBindingRejected) return
+        if (activeClient === client && activeId() === targetId && !client.isConnected) schedulePairedRecovery(client, targetId)
+      }
+    })
+  }, 3_000)
+  pairedRecoveryTimer.unref?.()
+}
+
+class PairedBindingRejected extends Error {}
 
 function selectedEndpoint(target: StoredCoreTarget): StoredCoreEndpoint {
   const endpoint = target.endpoints.find(item => item.id === target.selectedEndpointId)
@@ -207,23 +241,30 @@ function requireTarget(store: CoreTargetStore, id: string): StoredCoreTarget {
 
 function summaries(store: CoreTargetStore): CoreTargetSummary[] {
   const currentId = activeId(store)
+  const local = getLocalCoreState()
+  const localName = local.status === 'failed' ? '本机 Core（启动失败）' : local.status === 'starting' ? '本机 Core（启动中）' : local.status === 'stopped' ? '本机 Core（已停止）' : '本机 Core'
   return [
-    { id: LOCAL_TARGET_ID, name: '本机内核', kind: 'local', status: currentId === LOCAL_TARGET_ID && activeClient ? targetStatus : 'disconnected',
-      ...(localIdentity ? { coreId: localIdentity.coreId, version: localIdentity.version, capabilities: localIdentity.capabilities, platform: localIdentity.platform } : {}) },
+    { id: LOCAL_TARGET_ID, name: localName, kind: 'local', status: currentId === LOCAL_TARGET_ID && activeClient && local.status === 'running' ? targetStatus : local.status === 'failed' ? 'error' : 'disconnected',
+      ...(isIndependentLocalCore() ? { independent: true } : {}),
+      ...(localIdentity ? { coreId: localIdentity.coreId, version: localIdentity.version, capabilities: localIdentity.capabilities, platform: localIdentity.platform, osId: localIdentity.osId } : {}) },
     ...store.targets.map(target => ({
       id: target.id, name: target.name, kind: 'remote' as const, baseUrl: selectedEndpoint(target).baseUrl,
       endpoints: target.endpoints.map(({ id, label, baseUrl }) => ({ id, label, baseUrl })),
       selectedEndpointId: target.selectedEndpointId,
       status: currentId === target.id ? targetStatus : 'disconnected' as const,
       ...(currentId === target.id && targetStatus === 'connected' && latencyMs !== undefined ? { latencyMs } : {}),
-      coreId: target.coreId, version: target.version, capabilities: target.capabilities, platform: target.platform,
+      expiresAt: target.expiresAt, coreId: target.coreId, version: target.version, capabilities: target.capabilities, platform: target.platform, osId: target.osId,
     })),
   ]
 }
 
 export function listCoreTargets(): CoreTargetsSnapshot {
   const store = readStore()
-  return { currentId: activeId(store), generation, revision, startup: startup ?? (!selectedId && store.preferredId !== LOCAL_TARGET_ID ? 'restoring' : undefined), targets: summaries(store) }
+  const currentId = activeId(store)
+  const startupState = currentId === LOCAL_TARGET_ID
+    ? (getLocalCoreState().status === 'starting' ? 'restoring' : undefined)
+    : startup ?? (!selectedId ? 'restoring' : undefined)
+  return { currentId, generation, revision, startup: startupState, targets: summaries(store) }
 }
 
 function validName(value: string): string {
@@ -255,9 +296,9 @@ function assertIdentity(identity: CoreIdentity, coreId?: string): void {
   if (coreId && identity.coreId !== coreId) throw new Error('这是另一台内核，请添加为新连接')
 }
 
-async function verifyEndpoint(baseUrl: string, token: string, coreId?: string): Promise<CoreIdentity> {
+async function verifyEndpoint(baseUrl: string, token: string, coreId?: string, identityPin?: string): Promise<CoreIdentity> {
   if (!token) throw new Error('Core Token 不能为空')
-  const client = new CoreClient({ baseUrl, token, reconnect: false })
+  const client = new CoreClient({ baseUrl, token, identityPin, reconnect: false })
   try {
     const identity = await client.identity(CONNECTION_TIMEOUT_MS)
     assertIdentity(identity, coreId)
@@ -277,16 +318,68 @@ export async function addCoreTarget(input: CoreTargetInput): Promise<CoreTargetS
   const label = validLabel(input.label)
   const token = input.token?.trim()
   const identity = await verifyEndpoint(baseUrl, token, input.expectedCoreId)
-  return serialize(() => {
+  return serialize(async () => {
     const store = readStore()
     if (store.targets.some(target => target.endpoints.some(endpoint => endpoint.baseUrl === baseUrl))) {
       throw new Error('该地址已保存，请在现有连接中编辑，或为新内核使用不同地址')
     }
     const existing = store.targets.find(target => target.coreId === identity.coreId)
-    const endpoint = { id: randomUUID(), label: label ?? (existing ? '备用地址' : '默认地址'), baseUrl, encryptedToken: encryptToken(token) }
+    const knownPin = existing?.endpoints.find(item => item.identityPin)?.identityPin
+    if (knownPin) await verifyEndpoint(baseUrl, token, existing!.coreId, knownPin)
+    const endpoint = { id: randomUUID(), label: label ?? (existing ? '备用地址' : '默认地址'), baseUrl, encryptedToken: encryptToken(token), ...(knownPin ? { identityPin: knownPin } : {}) }
     const target = existing ?? { id: randomUUID(), name, coreId: identity.coreId, selectedEndpointId: endpoint.id, endpoints: [] }
     target.endpoints.push(endpoint)
-    Object.assign(target, { version: identity.version, capabilities: identity.capabilities, platform: identity.platform })
+    Object.assign(target, { version: identity.version, capabilities: identity.capabilities, platform: identity.platform, osId: identity.osId })
+    if (!existing) store.targets.push(target)
+    writeStore(store)
+    publishSnapshot()
+    return summaries(store).find(item => item.id === target.id)!
+  })
+}
+
+export interface PairedCoreTargetInput {
+  tunnel?: boolean
+  expiresAt?: number
+  name: string
+  coreId: string
+  endpoints: string[]
+  identityPin: string
+  bindingId: string
+  credential: string
+}
+
+/** 配对服务已固定身份，再验证业务协议后一次保存整组线路。 */
+export async function savePairedCoreTarget(input: PairedCoreTargetInput): Promise<CoreTargetSummary> {
+  const name = validName(input.name)
+  if (!/^sha256\/[A-Za-z0-9+/]{43}=$/.test(input.identityPin) || !input.bindingId || !input.credential) throw new Error('Core 配对结果无效')
+  const endpoints = [...new Set(input.endpoints.map(normalizeUrl))]
+  if (!endpoints.length) throw new Error('Core 邀请缺少连接地址')
+  const known = readStore().targets.find(target => target.coreId === input.coreId)
+  const knownPin = known?.endpoints.find(endpoint => endpoint.identityPin)?.identityPin
+  if (knownPin && knownPin !== input.identityPin) throw new Error('Core 身份与已有配对不一致，请先移除旧连接')
+  let identity: CoreIdentity | undefined
+  let preferred = ''
+  for (const baseUrl of endpoints) {
+    try { identity = await verifyEndpoint(baseUrl, input.credential, input.coreId, input.identityPin); preferred = baseUrl; break }
+    catch { /* 配对已成功，离线时仍保存授权，稍后通过固定身份重试。 */ }
+  }
+  const verified = identity
+  return serialize(() => {
+    const store = readStore()
+    const existing = store.targets.find(target => target.coreId === input.coreId)
+    const pin = existing?.endpoints.find(endpoint => endpoint.identityPin)?.identityPin
+    if (pin && pin !== input.identityPin) throw new Error('Core 身份与已有配对不一致')
+    const target: StoredCoreTarget = existing ?? { id: randomUUID(), name, coreId: input.coreId, selectedEndpointId: '', endpoints: [] }
+    target.expiresAt = input.expiresAt
+    const encryptedToken = encryptToken(input.credential)
+    for (const baseUrl of endpoints) {
+      const old = target.endpoints.find(endpoint => endpoint.baseUrl === baseUrl)
+      const endpoint: StoredCoreEndpoint = { id: old?.id ?? randomUUID(), label: input.tunnel ? '隧道' : '局域网', baseUrl, encryptedToken, identityPin: input.identityPin, bindingId: input.bindingId, ...(input.tunnel ? { tunnel: true } : {}) }
+      if (old) target.endpoints = target.endpoints.map(item => item.id === old.id ? endpoint : item)
+      else target.endpoints.push(endpoint)
+      if (baseUrl === preferred || !target.selectedEndpointId || input.tunnel) target.selectedEndpointId = endpoint.id
+    }
+    if (verified) Object.assign(target, { version: verified.version, capabilities: verified.capabilities, platform: verified.platform, osId: verified.osId })
     if (!existing) store.targets.push(target)
     writeStore(store)
     publishSnapshot()
@@ -314,14 +407,17 @@ export function saveCoreEndpoint(id: string, input: CoreEndpointInput): Promise<
     if (store.targets.some(item => item.endpoints.some(e => e.baseUrl === baseUrl && e.id !== old?.id))) throw new Error('该 Core 地址已保存')
     const token = input.token?.trim() || (old ? decryptToken(old.encryptedToken) : '')
     if (!token) throw new Error('Core Token 不能为空')
+    const knownPin = old?.identityPin ?? target.endpoints.find(item => item.identityPin)?.identityPin
     const endpoint = { id: old?.id ?? randomUUID(), label: validLabel(input.label) ?? old?.label ?? '备用地址', baseUrl,
+      ...(old?.tunnel ? { tunnel: true } : {}),
+      ...(knownPin ? { identityPin: knownPin, bindingId: old?.bindingId } : {}),
       encryptedToken: input.token?.trim() || !old ? encryptToken(token) : old.encryptedToken }
     const activeEndpointEdited = old && activeId(store) === id && target.selectedEndpointId === old.id
       && (old.baseUrl !== baseUrl || Boolean(input.token?.trim()))
     if (old) target.endpoints = target.endpoints.map(item => item.id === old.id ? endpoint : item)
     else target.endpoints.push(endpoint)
     if (activeEndpointEdited) return changeRemoteConnection(store, target, endpoint)
-    await verifyEndpoint(baseUrl, token, target.coreId)
+    await verifyEndpoint(baseUrl, token, target.coreId, endpoint.identityPin)
     writeStore(store)
     publishSnapshot()
     return listCoreTargets()
@@ -336,7 +432,7 @@ export function selectCoreEndpoint(id: string, endpointId: string): Promise<Core
     if (!endpoint) throw new Error('找不到指定的 Core 地址')
     if (target.selectedEndpointId === endpoint.id) return listCoreTargets()
     if (activeId(store) === id) return changeRemoteConnection(store, target, endpoint)
-    await verifyEndpoint(endpoint.baseUrl, decryptToken(endpoint.encryptedToken), target.coreId)
+    await verifyEndpoint(endpoint.baseUrl, decryptToken(endpoint.encryptedToken), target.coreId, endpoint.identityPin)
     target.selectedEndpointId = endpoint.id
     writeStore(store)
     publishSnapshot()
@@ -375,14 +471,16 @@ function activateLocal(store: CoreTargetStore, persist: boolean): CoreTargetsSna
   return listCoreTargets()
 }
 
-export function selectCoreTarget(id: string): Promise<CoreTargetsSnapshot> {
-  if (id === LOCAL_TARGET_ID) explicitSelection += 1
+export function selectCoreTarget(id: string, options: { reconnect?: boolean } = {}): Promise<CoreTargetsSnapshot> {
+  explicitSelection += 1
+  clearTimeout(startupRetry)
+  startupRetry = undefined
   return serialize(() => {
     const store = readStore()
     if (id === LOCAL_TARGET_ID) return activateLocal(store, true)
     const target = requireTarget(store, id)
-    if (id === activeId(store) && targetStatus === 'connected') return listCoreTargets()
-    return changeRemoteConnection(store, target, selectedEndpoint(target), { remember: true })
+    if (!options.reconnect && id === activeId(store) && targetStatus === 'connected') return listCoreTargets()
+    return connectTarget(store, target, { remember: true })
   })
 }
 
@@ -390,6 +488,35 @@ interface ConnectOptions {
   remember?: boolean
   timeoutMs?: number
   accept?: () => boolean
+}
+
+async function connectTarget(store: CoreTargetStore, target: StoredCoreTarget, options: ConnectOptions = {}): Promise<CoreTargetsSnapshot> {
+  const selected = selectedEndpoint(target)
+  const candidates = selected.tunnel ? [selected] : [selected, ...target.endpoints.filter(endpoint => endpoint.id !== selected.id && endpoint.identityPin === selected.identityPin && !endpoint.tunnel)]
+  let failure: unknown
+  for (const endpoint of candidates) {
+    if (options.accept?.() === false) throw new Error('Core 连接已被替换')
+    try { return await changeRemoteConnection(store, target, endpoint, options) }
+    catch (error) {
+      if (error instanceof PairedBindingRejected && endpoint.bindingId === selected.bindingId) throw error
+      failure = error
+    }
+  }
+  if (!selected.tunnel && selected.identityPin && options.accept?.() !== false) {
+    const found = await discoverPairedCore({ coreId: target.coreId, pin: { algorithm: 'spki-sha256', value: selected.identityPin }, timeoutMs: 1_500 })
+    for (const baseUrl of found?.endpoints ?? []) {
+      if (candidates.some(endpoint => endpoint.baseUrl === baseUrl)) continue
+      const endpoint = { ...selected, id: randomUUID(), baseUrl: normalizeUrl(baseUrl) }
+      target.endpoints.push(endpoint)
+      try { return await changeRemoteConnection(store, target, endpoint, options) }
+      catch (error) {
+        target.endpoints = target.endpoints.filter(item => item.id !== endpoint.id)
+        if (error instanceof PairedBindingRejected) throw error
+        failure = error
+      }
+    }
+  }
+  throw failure ?? new Error('Core 不可达')
 }
 
 async function changeRemoteConnection(store: CoreTargetStore, target: StoredCoreTarget, endpoint: StoredCoreEndpoint,
@@ -405,14 +532,19 @@ async function changeRemoteConnection(store: CoreTargetStore, target: StoredCore
   const client = clientFor(target, endpoint)
   let committed = false
   try {
-    const identity = await client.identity(remaining())
+    const identity = await client.identity(remaining()).catch(error => {
+      if (endpoint.bindingId && error instanceof CoreClientError && error.status === 401) {
+        throw new PairedBindingRejected('Core 设备授权已被拒绝，请重新配对', { cause: error })
+      }
+      throw error
+    })
     assertIdentity(identity, target.coreId)
     await client.connect(remaining())
     if (sameCore && old) await old.waitForHostIdle(remaining())
     remaining()
     if (!client.isConnected) throw new Error('远程 Core 已断开')
     target.selectedEndpointId = endpoint.id
-    Object.assign(target, { version: identity.version, capabilities: identity.capabilities, platform: identity.platform })
+    Object.assign(target, { version: identity.version, capabilities: identity.capabilities, platform: identity.platform, osId: identity.osId })
     const changed = activeId() !== target.id
     if (options.remember) store.preferredId = target.id
     writeStore(store)
@@ -429,7 +561,7 @@ async function changeRemoteConnection(store: CoreTargetStore, target: StoredCore
       sessionId: raw => namespaceCoreSessionId(raw, target.coreId),
       isCurrent: () => activeClient === client && activeId() === target.id,
       emitPreview: (sessionId, payload) => {
-        for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: namespaceCoreSessionId(sessionId, target.coreId), payload })
+        for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload })
       },
     })
     // 先让 preload 接到新的路由世代，再投递已恢复的事件和审批。
@@ -443,6 +575,17 @@ async function changeRemoteConnection(store: CoreTargetStore, target: StoredCore
   } finally {
     if (!committed) client.close()
   }
+}
+
+export function clearLocalCoreTargetClient(): void {
+  const wasActive = activeClient === localClient && localClient !== null
+  unsubscribeLocalChat?.(); unsubscribeLocalChat = undefined
+  unsubscribeLocalChatSnapshot?.(); unsubscribeLocalChatSnapshot = undefined
+  unsubscribeLocalPlanning?.(); unsubscribeLocalPlanning = undefined
+  localClient = null
+  localIdentity = undefined
+  if (wasActive) { activeClient = null; targetStatus = 'error'; detachLocalCoreClient(false) }
+  publishSnapshot()
 }
 
 export function setLocalCoreClient(client: CoreClient, identity?: Awaited<ReturnType<CoreClient['identity']>>): void {
@@ -493,6 +636,7 @@ export async function activateSavedCoreTarget(): Promise<void> {
   startup = 'restoring'
   publishSnapshot()
   startupRestore = (async () => {
+    let bindingRejected = false
     const deadline = Date.now() + STARTUP_TIMEOUT_MS
     while (request === explicitSelection && startup === 'restoring' && Date.now() < deadline) {
       try {
@@ -500,7 +644,7 @@ export async function activateSavedCoreTarget(): Promise<void> {
           if (request !== explicitSelection || startup !== 'restoring') return
           const store = readStore()
           const target = requireTarget(store, preferred)
-          return changeRemoteConnection(store, target, selectedEndpoint(target), {
+          return connectTarget(store, target, {
             timeoutMs: Math.min(CONNECTION_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
             accept: () => request === explicitSelection,
           })
@@ -508,6 +652,7 @@ export async function activateSavedCoreTarget(): Promise<void> {
         return
       } catch (error) {
         console.warn('[Core] 启动时连接上次内核失败:', error instanceof Error ? error.message : String(error))
+        if (error instanceof PairedBindingRejected) { bindingRejected = true; break }
       }
       const delay = Math.min(1_000, deadline - Date.now())
       if (delay > 0 && request === explicitSelection) await new Promise(resolve => setTimeout(resolve, delay))
@@ -515,14 +660,25 @@ export async function activateSavedCoreTarget(): Promise<void> {
     if (request !== explicitSelection || startup !== 'restoring') return
     await serialize(() => {
       if (request !== explicitSelection || startup !== 'restoring') return
-      startup = 'fallback'
-      activateLocal(readStore(), false)
+      startup = 'offline'
+      targetStatus = 'error'
+      publishSnapshot()
+      if (bindingRejected) return
+      startupRetry = setTimeout(() => {
+        if (request !== explicitSelection || activeId() !== preferred) return
+        startupRestore = undefined
+        void activateSavedCoreTarget().catch(error => console.warn('[Core] 重新连接失败:', error instanceof Error ? error.message : String(error)))
+      }, 5_000)
+      startupRetry.unref?.()
     })
   })()
   return startupRestore
 }
 
+export function publishCoreTargetsSnapshot(): void { publishSnapshot() }
+
 export function getActiveCoreClient(): CoreClient | null { return activeClient }
+export function getManagedLocalCoreClient(): CoreClient | null { return localClient }
 
 export function namespaceCoreSessionId(sessionId: string, coreId: string): string {
   return `core:${encodeURIComponent(coreId)}:${sessionId}`

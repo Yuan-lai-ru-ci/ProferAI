@@ -5,7 +5,7 @@
  * 门禁字段（依赖、策略）损坏由 skillManifestGateInvalid 交给路由拦截。
  * 本文件是 main 进程里唯一决定「元数据从哪来」的地方，config-paths / global-skill-manager / skill-routing 共用它，避免三份解析漂移。
  */
-import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, isAbsolute, join, relative } from 'node:path'
 import {
   parseSkillManifest,
@@ -20,6 +20,39 @@ import {
 
 
 export { SKILL_MANIFEST_FILENAME }
+
+/** 缺卡提醒只针对缺文件；损坏的卡片应由诊断提示，不应被默认卡覆盖。 */
+export function hasSkillCard(dir: string): boolean {
+  return lstatSync(join(dir, SKILL_MANIFEST_FILENAME), { throwIfNoEntry: false }) !== undefined
+}
+
+/** 仅在没有卡片时创建；默认卡不覆盖正文描述，也不改变原有触发或依赖。 */
+export function ensureSkillCard(dir: string): void {
+  try {
+    writeFileSync(join(dir, SKILL_MANIFEST_FILENAME), `${JSON.stringify({ schemaVersion: SKILL_MANIFEST_SCHEMA_VERSION }, null, 2)}\n`, { flag: 'wx' })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+  }
+}
+
+/** 用户的提醒选择不是技能本体，不随复制、导出或运行投影传播。 */
+export const SKILL_CARD_DISMISSALS_FILE = 'skill-card-dismissals.json'
+
+export function skillCardDismissalKey(scope: 'global' | 'workspace', id: string, workspaceSlug?: string): string {
+  return JSON.stringify(scope === 'global' ? [scope, id] : [scope, workspaceSlug, id])
+}
+
+export function readSkillCardDismissals(configDir: string): Set<string> {
+  const path = join(configDir, SKILL_CARD_DISMISSALS_FILE)
+  try {
+    const stored: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!Array.isArray(stored) || !stored.every(key => typeof key === 'string')) throw new Error('Skill 路由卡片提醒记录无效')
+    return new Set(stored)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set()
+    throw error
+  }
+}
 
 /** 清单体积上限；远小于正文，避免把清单当数据文件用。 */
 export const MAX_SKILL_MANIFEST_BYTES = 32 * 1024
@@ -40,8 +73,8 @@ function manifestInvalid(message: string, field?: string): SkillManifestReadResu
  */
 export function readSkillManifest(dir: string): SkillManifestReadResult {
   const path = join(dir, SKILL_MANIFEST_FILENAME)
-  if (!existsSync(path)) return { issues: [], present: false }
   try {
+    if (!hasSkillCard(dir)) return { issues: [], present: false }
     const realDir = realpathSync(dir)
     const real = realpathSync(path)
     const rel = relative(realDir, real)

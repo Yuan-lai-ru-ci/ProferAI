@@ -12,7 +12,7 @@ import type { SkillMeta } from '@profer/shared'
 
 /** 工作区本地 Skill（含已关闭、位于 skills-inactive/ 的副本）：按稳定 ID 判定。 */
 export function isWorkspaceLocalSkill(skill: SkillMeta): boolean {
-  return Boolean(skill.workspaceSkillId)
+  return skill.scope === 'workspace' || Boolean(skill.workspaceSkillId)
 }
 
 /** 从全局库定义派生的引用条目（不含工作区副本身份）。 */
@@ -51,7 +51,7 @@ export function partitionSkills(skills: SkillMeta[]): SkillListSections {
 /** 列表与详情的稳定 key：工作区副本按 workspaceSkillId，全局定义按来源 ID。 */
 export function skillListKey(skill: SkillMeta): string {
   return isWorkspaceLocalSkill(skill)
-    ? `workspace:${skill.workspaceSkillId}`
+    ? `workspace:${skill.workspaceSkillId ?? skill.slug}`
     : `global:${skill.sourceSkillId ?? skill.slug}`
 }
 

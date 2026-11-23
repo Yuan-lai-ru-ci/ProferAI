@@ -14,11 +14,13 @@ export interface SkillCardForm {
   toolGroups: AgentPresetToolGroup[]
   /** 需要但不在能力组里的工具名（如 mcp__server__tool）。 */
   tools: string
+  /** MCP 配置中的服务器名。 */
+  mcpServers: string
   /** true = 只接受 `/skill:<slug>` 显式引用（等价 implicit:false）。 */
   explicitOnly: boolean
 }
 
-export const EMPTY_SKILL_CARD_FORM: SkillCardForm = { toolGroups: [], tools: '', explicitOnly: false }
+export const EMPTY_SKILL_CARD_FORM: SkillCardForm = { toolGroups: [], tools: '', mcpServers: '', explicitOnly: false }
 
 /** 分隔符按中文习惯多收几种：逗号、顿号、分号、换行；去空白、去重、保序。 */
 export function splitPhrases(text: string): string[] {
@@ -42,6 +44,7 @@ export function cardFormFromManifest(manifest: SkillManifest | undefined): Skill
   return {
     toolGroups: [...(manifest.dependencies?.toolGroups ?? [])],
     tools: joinPhrases(manifest.dependencies?.tools),
+    mcpServers: joinPhrases(manifest.dependencies?.mcpServers),
     explicitOnly: manifest.policy?.implicit === false,
   }
 }
@@ -53,12 +56,12 @@ export function cardFormFromManifest(manifest: SkillManifest | undefined): Skill
 export function cardPatchFromForm(form: SkillCardForm): SkillManifestPatch {
   const tools = splitPhrases(form.tools)
   return {
-    dependencies: form.toolGroups.length || tools.length ? { toolGroups: form.toolGroups, tools } : null,
+    dependencies: { toolGroups: form.toolGroups, tools, mcpServers: splitPhrases(form.mcpServers) },
     policy: { implicit: form.explicitOnly ? false : null },
   }
 }
 
 /** 表单是否有内容：用于判断「没卡片」是空表单还是用户确实写了东西。 */
 export function isSkillCardFormEmpty(form: SkillCardForm): boolean {
-  return !form.tools.trim() && form.toolGroups.length === 0 && !form.explicitOnly
+  return !form.tools.trim() && !form.mcpServers.trim() && form.toolGroups.length === 0 && !form.explicitOnly
 }

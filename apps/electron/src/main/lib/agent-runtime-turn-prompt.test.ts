@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * 新链系统提示词装配：必须与旧链同一份实现，而不是「工作区 profile 正文」。
  *

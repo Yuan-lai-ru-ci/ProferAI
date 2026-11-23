@@ -14,12 +14,14 @@ export interface ParsedArgs {
   flags: Record<string, string | boolean>
 }
 
-export function parseArgs(argv: string[]): ParsedArgs {
+export function parseArgs(argv: string[], options?: { aliases?: Record<string, string>; booleans?: readonly string[] }): ParsedArgs {
   const positionals: string[] = []
   const flags: Record<string, string | boolean> = {}
 
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!
+    const raw = argv[i]!
+    const arg = options?.aliases?.[raw] ?? raw
+    if (options && arg === '--') { positionals.push(...argv.slice(i + 1)); break }
     if (arg.startsWith('--')) {
       const body = arg.slice(2)
       const eq = body.indexOf('=')
@@ -27,7 +29,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         flags[body.slice(0, eq)] = body.slice(eq + 1)
       } else {
         const next = argv[i + 1]
-        if (next !== undefined && !next.startsWith('--')) {
+        if (!options?.booleans?.includes(body) && next !== undefined && !next.startsWith('--') && options?.aliases?.[next] === undefined) {
           flags[body] = next
           i++
         } else {

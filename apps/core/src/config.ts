@@ -10,6 +10,9 @@ export interface CoreChannelConfig {
   name: string
   provider: ProviderType
   apiKey: string
+  forceBearerAuth?: boolean
+  serverManaged?: boolean
+  directDataPlane?: boolean
   baseUrl?: string
   agentBaseUrl?: string
   credentialMode?: 'api-key' | 'oauth'
@@ -23,6 +26,8 @@ export interface CoreChannelConfig {
 }
 
 export interface CoreConfig {
+  /** 仅可编程注入的隔离测试服务器；不从环境或CLI读取。 */
+  accountServerUrl?: string
   host: string
   port: number
   configDir: string
@@ -61,7 +66,7 @@ function readFlag(argv: string[], name: string): string | undefined {
   return value && !value.startsWith('--') ? value : undefined
 }
 
-function parseListen(value: string): Pick<CoreConfig, 'host' | 'port'> {
+function parseListen(value: string, independent: boolean): Pick<CoreConfig, 'host' | 'port'> {
   const trimmed = value.trim()
   if (!trimmed) throw new Error('listen address cannot be empty')
 
@@ -70,7 +75,7 @@ function parseListen(value: string): Pick<CoreConfig, 'host' | 'port'> {
   const portText = separator > 0 ? trimmed.slice(separator + 1) : trimmed
   const port = Number(portText)
 
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!Number.isInteger(port) || port < (independent && host === '127.0.0.1' ? 0 : 1) || port > 65535) {
     throw new Error(`invalid listen port: ${portText}`)
   }
   if (!host || host.includes('/') || host.includes(' ')) {
@@ -141,10 +146,11 @@ function parseChannels(env: NodeJS.ProcessEnv): CoreChannelConfig[] {
 export function parseCoreConfig(input: CoreConfigInput = {}): CoreConfig {
   const argv = input.argv ?? process.argv.slice(2)
   const env = input.env ?? process.env
-  const listen = readFlag(argv, 'listen') ?? env.PROFER_CORE_LISTEN ?? `${DEFAULT_CORE_HOST}:${DEFAULT_CORE_PORT}`
+  const independent = argv.includes('--desktop-independent')
+  const listen = readFlag(argv, 'listen') ?? env.PROFER_CORE_LISTEN ?? `${DEFAULT_CORE_HOST}:${independent ? 0 : DEFAULT_CORE_PORT}`
   const configDir = readFlag(argv, 'config-dir') ?? env.PROFER_CONFIG_DIR ?? join(input.homeDir ?? homedir(), '.profer')
   const workspaceRoot = env.PROFER_CORE_WORKSPACE_ROOT ?? join(configDir, 'workspaces')
-  const parsedListen = parseListen(listen)
+  const parsedListen = parseListen(listen, independent)
   const channels = parseChannels(env)
 
   return {

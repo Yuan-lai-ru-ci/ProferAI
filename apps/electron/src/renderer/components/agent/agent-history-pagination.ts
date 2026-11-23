@@ -1,4 +1,11 @@
-import type { SDKMessage } from '@profer/shared'
+import type { RewindTarget, SDKMessage } from '@profer/shared'
+
+/** 使用已提交的回退锚点，避免用后端 UUID 计数裁剪包含无 UUID 记录的分页。 */
+export function clipAgentHistoryAfterRewind(messages: SDKMessage[], target: RewindTarget): SDKMessage[] {
+  if (target.kind !== 'message') return []
+  const end = messages.findIndex(message => 'uuid' in message && message.uuid === target.messageUuid)
+  return messages.slice(0, end + 1)
+}
 
 export interface AgentHistoryPageLike {
   messages: SDKMessage[]

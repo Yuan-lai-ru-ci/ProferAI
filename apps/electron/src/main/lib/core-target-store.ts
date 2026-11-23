@@ -7,15 +7,22 @@ export interface StoredCoreEndpoint {
   label: string
   baseUrl: string
   encryptedToken: string
+  /** 配对身份锚，不从地址更新或高级表单自动替换。 */
+  identityPin?: string
+  bindingId?: string
+  /** 显式隧道线路不自动回退到局域网地址或发现结果。 */
+  tunnel?: boolean
 }
 
 export interface StoredCoreTarget {
+  expiresAt?: number
   id: string
   name: string
   coreId: string
   version?: string
   capabilities?: string[]
   platform?: string
+  osId?: string
   selectedEndpointId: string
   endpoints: StoredCoreEndpoint[]
 }
@@ -47,10 +54,15 @@ export function migrateCoreTargetStore(value: unknown): CoreTargetStore {
     if (!Array.isArray(endpoints) || !endpoints.length || endpoints.some(endpoint => !endpoint || !endpoint.id || !endpoint.baseUrl || !endpoint.encryptedToken)) {
       throw new Error('远程内核配置包含无效地址')
     }
+    if ((endpoints as StoredCoreEndpoint[]).some(endpoint => endpoint.identityPin !== undefined && !/^sha256\/[A-Za-z0-9+/]{43}=$/.test(endpoint.identityPin))) throw new Error('Core 配对身份指纹无效')
+    const pins = new Set((endpoints as StoredCoreEndpoint[]).map(endpoint => endpoint.identityPin).filter(Boolean))
+    if (pins.size > 1) throw new Error('同一 Core 包含不一致的配对身份')
     const selected = endpoints.find(endpoint => endpoint.id === (item.selectedEndpointId ?? item.id))
     if (!selected) throw new Error('远程内核配置缺少首选地址')
     const existing = byCore.get(item.coreId)
     if (existing) {
+      const knownPin = existing.endpoints.find(endpoint => endpoint.identityPin)?.identityPin
+      if (knownPin && pins.size && !pins.has(knownPin)) throw new Error('Core 配对身份与已有目标不一致')
       for (const endpoint of endpoints as StoredCoreEndpoint[]) {
         const prior = existing.endpoints.find(e => e.baseUrl === endpoint.baseUrl)
         if (!prior) existing.endpoints.push({ ...endpoint })
@@ -58,8 +70,8 @@ export function migrateCoreTargetStore(value: unknown): CoreTargetStore {
       }
       if (preferredId === item.id) preferredId = existing.id
     } else {
-      byCore.set(item.coreId, { id: item.id, name: item.name, coreId: item.coreId, platform: item.platform,
-        version: item.version, capabilities: item.capabilities, selectedEndpointId: selected.id,
+      byCore.set(item.coreId, { id: item.id, name: item.name, coreId: item.coreId, platform: item.platform, osId: item.osId,
+        expiresAt: item.expiresAt, version: item.version, capabilities: item.capabilities, selectedEndpointId: selected.id,
         endpoints: (endpoints as StoredCoreEndpoint[]).map(endpoint => ({ ...endpoint })) })
     }
   }

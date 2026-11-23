@@ -16,7 +16,7 @@ export interface CoreConfiguredSessionInput {
 }
 
 /** 在所属Core内解析默认配置；显式错误选择拒绝，绝不从桌面默认值猜测。 */
-export function configuredSessionInput(config: CoreConfig, runtime: Pick<CoreAgentRuntime, 'workspaces' | 'listChannelConfigs'>, input: CoreConfiguredSessionInput) {
+export function configuredSessionInput(config: CoreConfig, runtime: Pick<CoreAgentRuntime, 'workspaces' | 'listChannelConfigs'>, input: CoreConfiguredSessionInput, accountDefaults?: { agentChannelId?: string; agentModelId?: string }) {
   for (const field of ['title', 'workspaceId', 'channelId', 'modelId', 'presetId'] as const) {
     if (input[field] !== undefined && (typeof input[field] !== 'string' || !input[field]!.trim())) throw new Error(`会话创建字段无效：${field}`)
   }
@@ -36,10 +36,10 @@ export function configuredSessionInput(config: CoreConfig, runtime: Pick<CoreAge
     if (!stats.isDirectory()) throw new Error('Core项目工作区根路径不是目录')
   }
   const available = runtime.listChannelConfigs().filter(channel => channel.enabled !== false && (!channel.agentRuntimes || channel.agentRuntimes.includes(engine)))
-  const preferred = input.channelId ?? (typeof settings.agentChannelId === 'string' ? settings.agentChannelId : undefined)
+  const preferred = input.channelId ?? accountDefaults?.agentChannelId ?? (typeof settings.agentChannelId === 'string' ? settings.agentChannelId : undefined)
   const channel = available.find(item => item.id === preferred) ?? (input.channelId === undefined ? available[0] : undefined)
   if (!channel) throw new Error('Core没有可用的所属渠道，或所选渠道不支持当前runtime')
-  const preferredModel = input.modelId ?? (typeof settings.agentModelId === 'string' ? settings.agentModelId : undefined)
+  const preferredModel = input.modelId ?? accountDefaults?.agentModelId ?? (typeof settings.agentModelId === 'string' ? settings.agentModelId : undefined)
   const models = channel.models?.filter(model => model.enabled)
   const modelId = models?.find(model => model.id === preferredModel)?.id
     ?? (input.modelId === undefined ? models?.[0]?.id : undefined)

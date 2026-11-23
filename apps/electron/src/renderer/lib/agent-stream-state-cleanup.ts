@@ -1,13 +1,27 @@
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 
+export function applyCoreRunStarted(
+  state: AgentStreamState | undefined,
+  event: { runId?: string; startedAt: number; modelId?: string },
+): AgentStreamState | undefined {
+  if (!Number.isFinite(event.startedAt) || (state?.startedAt != null && state.startedAt > event.startedAt)) return state
+  if (event.runId && state?.runId === event.runId) return state
+  if (state?.startedAt === event.startedAt && !state.running) return state
+  // 发起端已经乐观设置了本轮状态；旁观端则不能继承上一轮的工具、停止或重试状态。
+  const current = state?.running && !state.runId ? state : undefined
+  return { content: '', toolActivities: [], ...current, running: true,
+    runId: event.runId, startedAt: event.startedAt, model: event.modelId ?? current?.model }
+}
+
 /**
  * 判断终态事件是否仍属于当前 run。旧 run 的 completion 不能触发通知、标记或关闭新 run。
  */
 export function isCurrentAgentStreamCompletion(
   state: AgentStreamState | undefined,
-  completion: { startedAt?: number },
+  completion: { runId?: string; startedAt?: number },
 ): state is AgentStreamState {
   if (!state || (!state.running && !state.backgroundWaiting)) return false
+  if (state.runId && completion.runId) return state.runId === completion.runId
   return state.startedAt == null || (completion.startedAt != null && state.startedAt <= completion.startedAt)
 }
 

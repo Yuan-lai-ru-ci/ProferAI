@@ -30,11 +30,13 @@ export function registerStorageIpc(): void {
   runAutoArchive()
   setInterval(runAutoArchive, 24 * 60 * 60 * 1000)
 
-  try {
-    cleanupStaleAttachedPaths()
-    cleanupStaleWorkspaceAttachedPaths()
-  } catch (error) {
-    console.error('[启动清理] 清理失效附加路径失败:', error)
+  if (!localCoreOwnsBusinessData()) {
+    try {
+      cleanupStaleAttachedPaths()
+      cleanupStaleWorkspaceAttachedPaths()
+    } catch (error) {
+      console.error('[启动清理] 清理失效附加路径失败:', error)
+    }
   }
 
   ipcMain.handle(STORAGE_IPC_CHANNELS.GET_STATS, async () => calculateStorageStats())

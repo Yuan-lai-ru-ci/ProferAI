@@ -17,7 +17,7 @@ import { getChannelLogo } from '@/lib/model-logo'
 import { resolvePiCoreState } from '@/lib/channel-model-groups'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentRuntimeAtom } from '@/atoms/agent-atoms'
 import { channelsAtom, selectedModelAtom } from '@/atoms/chat-atoms'
-import { coreTargetsAtom, coreChannelsAtom } from '@/atoms/core-target-atoms'
+import { coreTargetsAtom, coreChannelsAtom, usesIndependentLocalCore } from '@/atoms/core-target-atoms'
 import { resolveAgentModelSelection } from '@/lib/agent-channel-selection'
 import { authStatusAtom } from '@/atoms/identity-atoms'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
@@ -42,11 +42,13 @@ type ViewMode = 'list' | 'create' | 'edit'
 export function ChannelSettings(): React.ReactElement {
   const [localChannels, setChannels] = useAtom(channelsAtom)
   const coreTargets = useAtomValue(coreTargetsAtom)
-  const remoteCore = coreTargets.currentId !== 'local'
+  const independent = usesIndependentLocalCore(coreTargets)
+  const remoteCore = coreTargets.currentId !== 'local' || independent
   const remoteChannels = useAtomValue(coreChannelsAtom)
   const channels = remoteCore ? remoteChannels : localChannels
   const setCoreChannels = useSetAtom(coreChannelsAtom)
   const activeCoreTarget = coreTargets.targets.find(target => target.id === coreTargets.currentId)
+  const independentStatus = independent ? activeCoreTarget?.status : undefined
   const [officialHealth, setOfficialHealth] = React.useState<OfficialChannelHealth[]>([])
   const [viewMode, setViewMode] = React.useState<ViewMode>('list')
   const [editingChannel, setEditingChannel] = React.useState<Channel | null>(null)
@@ -121,14 +123,14 @@ export function ChannelSettings(): React.ReactElement {
   React.useEffect(() => {
     let active = true
     loadChannels()
-    if (authStatus.isLoggedIn) {
+    if (!independent && authStatus.isLoggedIn) {
       window.electronAPI.getOfficialModelHealth().then((health) => { if (active) setOfficialHealth(health) })
         .catch(() => { if (active) setOfficialHealth([]) })
     } else {
       setOfficialHealth([])
     }
     return () => { active = false; requestVersion.current += 1 }
-  }, [loadChannels, authStatus.isLoggedIn])
+  }, [loadChannels, authStatus.isLoggedIn, independent, independentStatus])
 
   // 渠道启用/可用内核变化 → 自动同步 Agent 渠道列表。
   // 判据必须覆盖任一内核：主推 Pi 后，只勾选 Pi 的渠道（典型是 xAI）也必须进入列表；
@@ -297,6 +299,32 @@ export function ChannelSettings(): React.ReactElement {
   const handleFormCancel = (): void => {
     setViewMode('list')
     setEditingChannel(null)
+  }
+
+  if (independent) {
+    return (
+      <SettingsSection title="模型配置" description="模型和 Key 由本机 Core 保存。配置完成后，点「刷新目录」即可在 Agent 中选用。"
+        action={<Button size="sm" variant="outline" disabled={loading} onClick={() => { void loadChannels() }}>刷新目录</Button>}>
+        <SettingsCard divided={false} className="space-y-2 p-4 text-sm">
+          <p>在终端用新版 Profer CLI 添加模型，按提示输入 Key：</p>
+          <code className="block break-words select-text">profer channel add --name NAME --provider PROVIDER --model MODEL_ID</code>
+          <p className="text-muted-foreground">如果找不到 <code>channel</code> 命令，请用当前应用安装包内的 <code>bin/profer</code>：macOS 在应用的 <code>Contents/Resources</code> 下，Linux 在安装目录的 <code>resources</code> 下。</p>
+          <p className="text-muted-foreground">开发版加 <code>--dev</code>；如果桌面使用自定义数据目录，CLI 加 <code>--config-dir 目录</code> 指向同一个目录。更换 Key 用 <code>profer channel rotate-key</code>。</p>
+        </SettingsCard>
+        {loading ? <p role="status">正在读取模型目录…</p> : loadError ? <p role="alert" className="text-destructive">{loadError}</p> : channels.length === 0 ? (
+          <p className="text-sm text-muted-foreground">尚未配置模型渠道。</p>
+        ) : (
+          <SettingsCard>
+            <ul className="divide-y divide-border">
+              {channels.map(channel => <li key={channel.id} className="px-4 py-3">
+                <div className="text-sm font-medium">{channel.name}{!channel.enabled && '（已停用）'}</div>
+                <div className="text-sm text-muted-foreground">{channel.models.filter(model => model.enabled).map(model => model.name).join('、') || '无启用模型'}</div>
+              </li>)}
+            </ul>
+          </SettingsCard>
+        )}
+      </SettingsSection>
+    )
   }
 
   // 表单视图

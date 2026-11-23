@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import * as React from 'react'
+import { Button } from '@profer/ui/primitives/button'
 import type { Channel } from '@profer/shared'
 import type { QuickTaskSubmitInput } from '../../../types/settings'
 import type { QuickTaskSettings } from './quick-task-model-eligibility'
@@ -99,18 +100,25 @@ function mount() {
   render()
   return { requests, submitted, flush, unmount, writesAfterUnmount: () => writesAfterUnmount,
     modelInfo: () => slots[4]?.value,
+    modes: () => elements().filter((element) => element.props['aria-pressed'] !== undefined),
     resolve: (position: number, value = settings, channels = [fixture]) => { requests[position]!.settings.resolve(value); requests[position]!.channels.resolve(channels) },
-    switchMode: (mode: string) => { const button = elements().find((element) => element.type === 'button' && element.props.children === mode)!; (button.props.onClick as () => void)(); render() },
+    switchMode: (mode: string) => { const button = elements().find((element) => (element.type === 'button' || element.type === Button) && element.props.children === mode)!; (button.props.onClick as () => void)(); render() },
     focus: () => { focusListeners.forEach((listener) => listener()); render() },
     listeners: () => focusListeners.size,
     rawSelection: (raw: string) => { storedModel = raw },
     typeText: (value: string) => { const textarea = elements().find((element) => element.type === 'textarea')!; (textarea.props.onChange as (event: unknown) => void)({ target: { value } }); render() },
-    submit: async () => { const button = elements().find((element) => element.type === 'button' && Array.isArray(element.props.children) && element.props.children.includes('发送'))!; await (button.props.onClick as () => Promise<void>)(); render() },
+    submit: async () => { const button = elements().find((element) => (element.type === 'button' || element.type === Button) && Array.isArray(element.props.children) && element.props.children.includes('发送'))!; await (button.props.onClick as () => Promise<void>)(); render() },
   }
 }
 afterEach(() => { restorers.splice(0).reverse().forEach((restore) => restore()) })
 
 describe('QuickTask 真实组件事件（fixture IPC）', () => {
+  test('模式按钮向辅助技术暴露当前选择', () => {
+    const scope = mount()
+    expect(scope.modes().map((element) => element.props['aria-pressed'])).toEqual([false, true])
+    scope.switchMode('Chat')
+    expect(scope.modes().map((element) => element.props['aria-pressed'])).toEqual([true, false])
+  })
   test('模式切换后旧成功/失败响应均不覆盖当前模式', async () => {
     const scope = mount()
     scope.switchMode('Chat')

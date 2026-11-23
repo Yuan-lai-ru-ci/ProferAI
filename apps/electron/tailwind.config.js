@@ -56,6 +56,8 @@ export default {
         destructive: {
           DEFAULT: 'hsl(var(--destructive))',
           foreground: 'hsl(var(--destructive-foreground))',
+          // 错误正文向主题前景混合，避免按钮用危险底色在深色卡片上对比不足。
+          text: 'color-mix(in srgb, hsl(var(--destructive)) 72%, hsl(var(--foreground)))',
         },
         card: {
           DEFAULT: 'hsl(var(--card))',

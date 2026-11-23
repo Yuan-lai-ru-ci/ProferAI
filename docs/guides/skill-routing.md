@@ -34,6 +34,9 @@
 
 ## 模块清单（SKILL.json）与门禁
 
+- 在 Profer 新建的 Skill 默认附带 `{"schemaVersion": 1}`；默认卡不改变触发方式或工具依赖。通过 Skill Creator 创建的新 Skill 也应同时提交这两个文件。
+- 「Agent 技能」会逐个提示可编辑的缺卡 Skill。可直接创建默认卡，也可选「不再询问」，按 Skill 身份记住选择；不修改技能正文，不影响现有路由。之后仍可手动创建。
+
 - 清单字段分两类。展示字段（name / description / interface）坏了，回退 frontmatter。
 - 门禁字段（dependencies / policy）读不出来，一律按 `invalid-routing` 拦截。包括 JSON 损坏、schemaVersion 不受支持、字段校验失败。读不出依赖不等于没有依赖。
 - 内置 Skill 的最低依赖按 slug 生效，与卡片取并集：卡片只能加严，不能放宽。

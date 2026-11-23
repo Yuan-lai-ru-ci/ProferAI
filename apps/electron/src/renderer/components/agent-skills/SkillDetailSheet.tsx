@@ -327,6 +327,7 @@ function SkillDetailBody({
               {/* 路由卡片：触发词 / 依赖 / 触发方式（名称与描述仍由上面的元数据编辑区负责） */}
               <SkillCardSection
                 workspaceSlug={workspaceSlug}
+                workspaceSkillId={skill.workspaceSkillId}
                 skillSlug={skill.slug}
                 canEdit={!isBuiltin}
                 onChanged={onChanged}

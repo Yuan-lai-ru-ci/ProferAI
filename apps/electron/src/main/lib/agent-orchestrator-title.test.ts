@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'

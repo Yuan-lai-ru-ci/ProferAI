@@ -29,3 +29,5 @@ export * from './planning-store'
 export * from './planning-agent-operations'
 
 export * from './conversation-store'
+
+export * from './execution-lock'

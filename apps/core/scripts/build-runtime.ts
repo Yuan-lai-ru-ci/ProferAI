@@ -2,6 +2,7 @@
 /** 原生宿主构建；整个输出目录必须一起复制，不能只取可执行文件。 */
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
+import { buildWindowsOwnerHelper, OWNER_HELPER } from './windows-owner-build'
 import { syncRuntimeDeps } from '../../electron/scripts/sync-runtime-deps'
 
 const coreDir = resolve(import.meta.dir, '..')
@@ -11,6 +12,7 @@ const marker = 'core-runtime.json'
 export const CORE_RUNTIME_BANNER = 'delete process.env.BUN_BE_BUN;'
 export function coreBuildPlan(output: string, platform: string = process.platform, arch: string = process.arch) {
   if (!['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'win32-x64', 'win32-arm64'].includes(`${platform}-${arch}`)) throw new Error(`不支持的平台: ${platform}-${arch}`)
+  if (platform === 'win32' && arch !== 'x64') throw new Error(`Windows Core helper 尚未验证支持架构: ${arch}`)
   const outDir = resolve(output)
   if (outDir === repoRoot || repoRoot.startsWith(outDir + sep) || (outDir.startsWith(repoRoot + sep) && !outDir.startsWith(join(coreDir, 'dist') + sep) && outDir !== join(coreDir, 'dist'))) throw new Error('拒绝覆盖仓库源目录')
   const external = ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/sdk', '@earendil-works/pi-coding-agent', '@earendil-works/pi-agent-core', '@earendil-works/pi-ai']
@@ -21,6 +23,7 @@ export async function buildCoreRuntime(output = join(coreDir, 'dist')) {
   const plan = coreBuildPlan(output)
   if (existsSync(plan.outDir) && readdirSync(plan.outDir).length && !existsSync(join(plan.outDir, marker))) throw new Error('拒绝覆盖现有非 Core 构建目录')
   mkdirSync(plan.outDir, { recursive: true })
+  if (plan.platform === 'win32') buildWindowsOwnerHelper(plan.outDir, join(repoRoot, 'packages/session-store/native/windows'), plan.arch)
   const bundled = await Bun.build({ entrypoints: [join(coreDir, 'src/index.ts')], outdir: plan.outDir, naming: 'core.js', target: 'bun', external: plan.external, banner: CORE_RUNTIME_BANNER })
   if (!bundled.success) throw new AggregateError(bundled.logs, 'Core bundle 失败')
   const result = await Bun.build({ entrypoints: [join(import.meta.dir, 'compiled-launcher.ts')], target: 'bun', compile: { outfile: plan.executable } })
@@ -38,7 +41,7 @@ export async function buildCoreRuntime(output = join(coreDir, 'dist')) {
   cpSync(join(coreDir, 'resources', 'HEADLESS-README.md'), join(plan.outDir, 'README.md'))
   cpSync(join(coreDir, 'resources', 'profer-core.service.example'), join(plan.outDir, 'profer-core.service.example'))
   cpSync(join(repoRoot, 'LICENSE'), join(plan.outDir, 'LICENSE'))
-  writeFileSync(join(plan.outDir, marker), JSON.stringify({ format: 1, coreVersion, platform: plan.platform, arch: plan.arch, bun: Bun.version, executable: 'profer-core' + (process.platform === 'win32' ? '.exe' : ''), copiedPackages: deps.copiedPackageCount }, null, 2) + '\n')
+  writeFileSync(join(plan.outDir, marker), JSON.stringify({ format: 1, ...(plan.platform === 'win32' ? { ownerHelper: OWNER_HELPER } : {}), coreVersion, platform: plan.platform, arch: plan.arch, bun: Bun.version, executable: 'profer-core' + (process.platform === 'win32' ? '.exe' : ''), copiedPackages: deps.copiedPackageCount }, null, 2) + '\n')
   return plan
 }
 

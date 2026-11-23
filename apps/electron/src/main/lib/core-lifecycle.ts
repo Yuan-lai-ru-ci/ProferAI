@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { delimiter, join, resolve } from 'node:path'
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
+import { ensureIndependentOwner, pickLocalCoreEnvironment, shutdownIndependentCore, type LocalCoreOwnerEndpoint } from '@profer/session-store/execution-lock'
+import { awaitQuitCleanup } from './quit-cleanup'
 import { CoreClient } from './core-client'
 import type { ProviderType } from '@profer/shared'
+
+const LOCAL_CORE_PROTOCOL_VERSION = 1
 
 export interface CoreLaunchSpec {
   command: string
@@ -13,6 +17,7 @@ export interface CoreLaunchSpec {
 }
 
 export interface CoreLifecycleOptions {
+  independent?: boolean
   configDir: string
   workspaceRoot: string
   coreBinary?: string
@@ -34,9 +39,10 @@ export interface CoreLifecycleOptions {
     codexOAuthCredentials?: Record<string, unknown>
     xaiOAuthCredentials?: Record<string, unknown>
   }>
-  spawnImpl?: typeof spawn
+  spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>
   healthTimeoutMs?: number
+  onStatus?: (status: 'starting' | 'ready' | 'error' | 'stopped', error?: string) => void
   onOutput?: (line: string) => void
 }
 
@@ -47,25 +53,6 @@ export interface StartedCore {
 
 function isExecutableFile(path: string | undefined): path is string {
   return Boolean(path && existsSync(path))
-}
-
-const WINDOWS_SHELL_ENV_KEYS = ['CLAUDE_CODE_SHELL', 'PROFER_WINDOWS_SHELL', 'PROFER_WSL_DISTRO'] as const
-
-function pickCoreEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const allowed = process.platform === 'win32'
-    ? ['PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']
-    : ['PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'PROFER_ANTHROPIC_API_KEY']
-  const selected = Object.fromEntries(allowed.flatMap(key => {
-    const entry = Object.entries(source).find(([name]) => name.toLowerCase() === key.toLowerCase())
-    return entry?.[1] ? [[entry[0], entry[1]]] : []
-  }))
-  if (process.platform === 'win32') {
-    for (const key of WINDOWS_SHELL_ENV_KEYS) {
-      const value = Object.entries(source).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1]
-      if (value) selected[key] = value
-    }
-  }
-  return selected
 }
 
 export function resolveCoreLaunchSpec(options: Pick<CoreLifecycleOptions, 'coreBinary' | 'coreEntry' | 'bunCommand' | 'resourcesPath' | 'packaged' | 'env'>): CoreLaunchSpec {
@@ -110,11 +97,16 @@ async function reserveLoopbackPort(): Promise<number> {
 
 export class LocalCoreLifecycle {
   private readonly options: CoreLifecycleOptions
-  private readonly spawnImpl: typeof spawn
+  private readonly spawnImpl: NonNullable<CoreLifecycleOptions['spawnImpl']>
   private child: ChildProcess | null = null
+  private attaching: CoreClient | null = null
   private started: StartedCore | null = null
   private token: string | null = null
   private startupError: Error | null = null
+  private starting: Promise<StartedCore> | null = null
+  private stopping = false
+  private shuttingDown = false
+  private independentOwner: Promise<LocalCoreOwnerEndpoint> | undefined
 
   constructor(options: CoreLifecycleOptions) {
     this.options = options
@@ -123,11 +115,24 @@ export class LocalCoreLifecycle {
 
   async start(): Promise<StartedCore> {
     if (this.started) return this.started
+    if (this.starting) return this.starting
+    this.options.onStatus?.('starting')
+    this.starting = this.startOnce().catch(error => {
+      this.options.onStatus?.('error', error instanceof Error ? error.message : String(error))
+      throw error
+    }).finally(() => { this.starting = null })
+    return this.starting
+  }
+
+  private async startOnce(): Promise<StartedCore> {
+    this.stopping = false
+    if (this.options.independent) return this.attachIndependent()
     const port = await reserveLoopbackPort()
+    if (this.stopping) throw new Error('本机 Core 启动已取消')
     const token = randomUUID()
     const spec = resolveCoreLaunchSpec(this.options)
     const env = {
-      ...pickCoreEnvironment(this.options.env ?? process.env),
+      ...pickLocalCoreEnvironment(this.options.env ?? process.env, process.platform, true),
       PROFER_CORE_LISTEN: `127.0.0.1:${port}`,
       PROFER_CORE_API_KEY: token,
       PROFER_CONFIG_DIR: resolve(this.options.configDir),
@@ -146,6 +151,13 @@ export class LocalCoreLifecycle {
     this.child = child
     this.startupError = null
     child.on('error', error => { this.startupError = error })
+    child.once('exit', (code, signal) => {
+      if (this.child !== child || this.stopping) return
+      this.started?.client.close()
+      this.started = null
+      this.token = null
+      this.options.onStatus?.('error', `Profer Core 已退出（${signal ?? code ?? 'unknown'}）`)
+    })
     child.stdout?.on('data', chunk => this.options.onOutput?.(String(chunk).trim()))
     child.stderr?.on('data', chunk => this.options.onOutput?.(String(chunk).trim()))
     const baseUrl = `http://127.0.0.1:${port}`
@@ -154,15 +166,85 @@ export class LocalCoreLifecycle {
       await this.waitForHealth(client)
       await client.connect()
     } catch (error) {
+      client.close()
       await this.stop()
       throw error
     }
     this.token = token
     this.started = { baseUrl, client }
+    this.options.onStatus?.('ready')
     return this.started
   }
 
+  private async attachIndependent(): Promise<StartedCore> {
+    const runtimeDir = process.platform === 'win32' ? this.windowsRuntimeDir() : undefined
+    const discovery = this.independentOwner = ensureIndependentOwner(this.options.configDir, {
+      runtimeDir,
+      launch: () => ({ ...resolveCoreLaunchSpec(this.options), ...(runtimeDir ? { runtimeDir } : {}) }),
+      env: this.options.env,
+      timeoutMs: this.options.healthTimeoutMs,
+      cancelled: () => this.stopping && !this.shuttingDown,
+      spawnImpl: this.spawnImpl,
+    })
+    const endpoint = await discovery.finally(() => {
+      if (this.independentOwner === discovery) this.independentOwner = undefined
+    })
+    if (this.stopping) throw new Error('本机 Core 接入已取消')
+    const baseUrl = `http://127.0.0.1:${endpoint.port}`
+    const fetchImpl = this.options.fetchImpl ?? fetch
+    const client = new CoreClient({ baseUrl, token: endpoint.token, recoverEvents: true,
+      fetchImpl: (input, init) => fetchImpl(input, { ...init, redirect: 'error' }),
+    })
+    this.attaching = client
+    try {
+      const identity = await client.identity(5_000)
+      if (identity.coreId !== endpoint.coreId) throw new Error('本机 Core 身份与连接文件不一致')
+      if (identity.protocolVersion !== LOCAL_CORE_PROTOCOL_VERSION) throw new Error(`本机 Core 协议版本不兼容: ${String(identity.protocolVersion)}`)
+      if (this.stopping) throw new Error('本机 Core 接入已取消')
+      await client.connect()
+      if (this.stopping) throw new Error('本机 Core 接入已取消')
+      this.started = { baseUrl, client }
+      this.options.onStatus?.('ready')
+      return this.started
+    } catch (error) {
+      client.close()
+      throw error
+    } finally { this.attaching = null }
+  }
+
+  private windowsRuntimeDir(): string {
+    const spec = resolveCoreLaunchSpec(this.options)
+    if (spec.args.length || !isAbsolute(spec.command)) throw new Error('Windows 独立 Core 需要明确选择已构建的 Core 安装目录')
+    return dirname(spec.command)
+  }
+
+  /** 用户完全退出桌面时显式停止本机 Core。重试、接入失败仍只断开独立连接。 */
+  async quit(timeoutMs: number): Promise<void> {
+    if (!this.options.independent) return this.stop()
+    const deadline = Date.now() + timeoutMs
+    this.shuttingDown = true
+    const pending = this.independentOwner
+    try {
+      await this.stop()
+      // 退出可能赶在冷启动发布入口之前。先等本次启动给出入口，再请求关机。
+      if (pending) {
+        const result = await awaitQuitCleanup(pending, Math.max(1, deadline - Date.now()))
+        if (result.outcome !== 'completed') throw new Error(result.error ?? '等待本机 Core 启动以完成退出时超时')
+      }
+      await shutdownIndependentCore(this.options.configDir, {
+        ...(process.platform === 'win32' ? { runtimeDir: this.windowsRuntimeDir() } : {}),
+        fetchImpl: this.options.fetchImpl,
+        timeoutMs: Math.max(1, deadline - Date.now()),
+      })
+    } finally {
+      this.shuttingDown = false
+    }
+  }
+
   async stop(): Promise<void> {
+    this.stopping = true
+    this.options.onStatus?.('stopped')
+    this.attaching?.close()
     const child = this.child
     this.child = null
     this.started?.client.close()

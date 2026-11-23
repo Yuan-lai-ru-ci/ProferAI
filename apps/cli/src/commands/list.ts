@@ -2,9 +2,11 @@
  * profer session list — 列出会话索引（便宜，不读 JSONL 正文）。
  */
 import { register } from '../registry'
+import { connectLocalCore } from '../local-core'
+import type { PathOptions } from '../paths'
 import { listSessions } from '../sessions'
 import { emitJson, emitText, info, EXIT_OK } from '../output'
-import { numFlag, strFlag } from '../args'
+import { boolFlag, numFlag, strFlag } from '../args'
 
 interface MetaLike {
   id: string
@@ -15,15 +17,22 @@ interface MetaLike {
   archived?: boolean
 }
 
+async function listCoreSessions(pathOpts: PathOptions): Promise<MetaLike[]> {
+  const core = await connectLocalCore(pathOpts)
+  const result = await core.json<{ sessions?: MetaLike[] } | null>('/sessions')
+  if (!Array.isArray(result?.sessions)) throw new Error('本机 Core 会话响应无效')
+  return result.sessions.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+}
+
 register({
   namespace: 'session',
   name: 'list',
   summary: '列出会话（id / 标题 / 更新时间 / 工作区），按更新时间降序',
-  usage: 'session list [--limit N] [--workspace W] [--json]',
-  run: (ctx) => {
+  usage: 'session list [--core] [--limit N] [--workspace W] [--json]',
+  run: async (ctx) => {
     const limit = numFlag(ctx.args.flags, 'limit')
     const workspace = strFlag(ctx.args.flags, 'workspace')
-    let sessions = listSessions(ctx.pathOpts) as MetaLike[]
+    let sessions = boolFlag(ctx.args.flags, 'core') ? await listCoreSessions(ctx.pathOpts) : listSessions(ctx.pathOpts)
     if (workspace) sessions = sessions.filter((s) => s.workspaceId === workspace)
     if (limit && limit > 0) sessions = sessions.slice(0, limit)
 

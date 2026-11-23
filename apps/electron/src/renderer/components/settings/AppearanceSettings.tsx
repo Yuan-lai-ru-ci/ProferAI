@@ -103,7 +103,7 @@ const ZOOM_HINT = isMac
 // macOS 专属的 Dock 图标切换暂不对外展示；保留实现，后续可直接恢复。
 const SHOW_MACOS_SETTINGS = false
 
-export function AppearanceSettings(): React.ReactElement {
+export function AppearanceSettings({ revealAdvanced = false }: { revealAdvanced?: boolean } = {}): React.ReactElement {
   const [themeMode, setThemeMode] = useAtom(themeModeAtom)
   const [themeStyle, setThemeStyle] = useAtom(themeStyleAtom)
   const systemIsDark = useAtomValue(systemIsDarkAtom)
@@ -220,14 +220,12 @@ export function AppearanceSettings(): React.ReactElement {
     <div className="space-y-6" aria-busy={busy}>
       {error && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       <SettingsSection
-        title="外观设置"
-        description="自定义应用的视觉风格"
+        title="主题与显示"
       >
         <SettingsCard>
           {/* 主题模式 - 最上面 */}
           <SettingsSegmentedControl
             label="主题模式"
-            description="选择应用的配色方案"
             value={themeMode}
             onValueChange={handleThemeChange}
             options={THEME_OPTIONS}
@@ -270,13 +268,13 @@ export function AppearanceSettings(): React.ReactElement {
       <AlertDialog open={conflict !== null} onOpenChange={(open) => { if (!open && !busyRef.current) setConflict(null) }}>
         <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>皮肤已存在</AlertDialogTitle><AlertDialogDescription>是否以新导入的皮肤替换同名用户皮肤？原皮肤文件会被覆盖。</AlertDialogDescription></AlertDialogHeader>{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<AlertDialogFooter><AlertDialogCancel disabled={busy}>取消</AlertDialogCancel><AlertDialogAction disabled={busy} onClick={(event) => { event.preventDefault(); if (conflict) void importSkin(conflict.kind, true, conflict.path) }}>{busy ? '替换中…' : '替换皮肤'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
       </AlertDialog>
-      {SHOW_MACOS_SETTINGS && <AppIconPicker />}
+      {SHOW_MACOS_SETTINGS && <AppIconPicker reveal={revealAdvanced} />}
     </div>
   )
 }
 
 /** 应用图标选择器 */
-function AppIconPicker(): React.ReactElement {
+function AppIconPicker({ reveal }: { reveal: boolean }): React.ReactElement {
   const [activeIcon, setActiveIcon] = React.useState<string>('default')
   const [isLoading, setIsLoading] = React.useState(false)
 
@@ -315,10 +313,13 @@ function AppIconPicker(): React.ReactElement {
     <SettingsSection
       title="应用图标"
       description="自定义 Dock 栏中的应用图标样式"
+      collapsible
+      defaultOpen={false}
+      reveal={reveal}
     >
       <SettingsCard divided={false}>
         <div className="px-4 py-3">
-          <div className="grid grid-cols-7 gap-3">
+          <div className="grid grid-cols-3 gap-3 sm:grid-cols-5 lg:grid-cols-7">
             {ICON_VARIANTS.map((variant) => (
               <IconCard
                 key={variant.id}

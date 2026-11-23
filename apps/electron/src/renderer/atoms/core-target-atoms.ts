@@ -24,6 +24,8 @@ export interface CoreChannelSnapshot {
 }
 
 export const coreChannelsAtom = atom<Channel[]>([])
+/** 当前Core资源变化只刷新目录，不改变路由代际或会话导航。 */
+export const coreCatalogRevisionAtom = atom(0)
 /** 目录是否已为当前目标加载；空目录与加载中不是同一状态。 */
 export const coreChannelsLoadedAtom = atom<{ targetId: string; generation: number } | null>(null)
 /** 全局会话恢复器的阶段；空态不得触发WelcomeView自动创建/复用其他会话。 */
@@ -41,4 +43,8 @@ export function ownsCoreChat(target: CoreTargetsSnapshot): boolean {
 /** Core 接管（包括本机断连）后不得调用仅桌面实现的资源入口。 */
 export function ownsCoreResources(target: CoreTargetsSnapshot): boolean {
   return target.currentId !== 'local' || Boolean(target.targets.find(item => item.id === target.currentId)?.capabilities?.includes('resources.manage'))
+}
+
+export function usesIndependentLocalCore(target: CoreTargetsSnapshot): boolean {
+  return target.currentId === 'local' && target.targets.some(item => item.id === 'local' && item.independent)
 }

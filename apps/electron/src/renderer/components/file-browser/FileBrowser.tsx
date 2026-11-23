@@ -722,10 +722,10 @@ function FileGridView({ entries, loading, error, emptyHint, onSelect, onDelete, 
           {/* 底部信息行：同步状态 + 上传者 + 大小 */}
           <div className="flex items-center gap-1.5 w-full justify-center flex-wrap">
             {entry.syncStatus && entry.syncStatus !== 'synced' && (
-              <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', {
-                'bg-blue-400 animate-pulse': entry.syncStatus === 'syncing',
-                'bg-amber-400': entry.syncStatus === 'cloud-only' || entry.syncStatus === 'local-only',
-                'bg-red-400': entry.syncStatus === 'conflict',
+              <span role="img" aria-label={syncStatusLabel(entry.syncStatus)} title={syncStatusLabel(entry.syncStatus)} className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', {
+                'bg-info animate-pulse': entry.syncStatus === 'syncing',
+                'bg-warning': entry.syncStatus === 'cloud-only' || entry.syncStatus === 'local-only',
+                'bg-destructive': entry.syncStatus === 'conflict',
               })} />
             )}
             {entry.uploadedByName && (
@@ -1115,10 +1115,11 @@ function FileTreeItem({
         {/* 文件同步状态指示（团队工作区） */}
         {entry.syncStatus && entry.syncStatus !== 'synced' && (
           <span
+            role="img" aria-label={syncStatusLabel(entry.syncStatus)}
             className={cn('flex-shrink-0 w-2 h-2 rounded-full', {
-              'bg-blue-400 animate-pulse': entry.syncStatus === 'syncing',
-              'bg-amber-400': entry.syncStatus === 'cloud-only' || entry.syncStatus === 'local-only',
-              'bg-red-400': entry.syncStatus === 'conflict',
+              'bg-info animate-pulse': entry.syncStatus === 'syncing',
+              'bg-warning': entry.syncStatus === 'cloud-only' || entry.syncStatus === 'local-only',
+              'bg-destructive': entry.syncStatus === 'conflict',
             })}
             title={
               entry.syncStatus === 'syncing' ? '同步中' :
@@ -1303,4 +1304,8 @@ function FileTreeItem({
 
     </div>
   )
+}
+
+function syncStatusLabel(status: string): string {
+  return ({ syncing: '同步中', 'cloud-only': '仅云端', 'local-only': '仅本地', conflict: '有冲突' } as Record<string, string>)[status] ?? status
 }

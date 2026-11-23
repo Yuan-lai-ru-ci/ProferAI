@@ -32,7 +32,7 @@ mock.module('./agent-headless-runner-registry', () => ({
 }))
 mock.module('./agent-workspace-manager', () => ({ getAgentWorkspace: () => ({ slug: 'project' }) }))
 mock.module('./agent-model-selection', () => ({ assertEnabledModelForChannel: ({ modelId }: { modelId: string }) => modelId, listEnabledAgentModelsForChannel: () => ({ models: [] }) }))
-mock.module('./agent-delegation-preset', () => ({ resolveDelegationPreset: () => resolvedPreset }))
+mock.module('./agent-delegation-preset', () => ({ resolveDelegationPreset: () => resolvedPreset, resolveNewDelegationPreset: () => resolvedPreset }))
 let resolvedPreset: {
   reference: { presetId: string; presetScope: 'workspace'; workspaceSlug: string }
   preset: { id: string; name: string; permissionMode: string; channelId?: string; modelId?: string }

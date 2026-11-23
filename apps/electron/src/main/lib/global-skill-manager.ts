@@ -13,6 +13,7 @@ import {
   getBuiltinGlobalSkillsDir,
   getDefaultSkillsDir,
   getGlobalSkillsIndexPath,
+  getConfigDir,
   getUserGlobalSkillsDir,
   getWorkspaceRuntimeSkillsDir,
   getWorkspaceSkillOverridesPath,
@@ -26,7 +27,7 @@ import {
 } from './config-paths'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { normalizeDefaultSkillSlug } from './default-skill-slugs'
-import { readSkillDescriptor, SKILL_MANIFEST_FILENAME } from './skill-manifest'
+import { ensureSkillCard, hasSkillCard, readSkillCardDismissals, readSkillDescriptor, readSkillManifest, writeSkillManifest, skillCardDismissalKey, SKILL_MANIFEST_FILENAME } from './skill-manifest'
 import { migrateRoutingSidecar } from './skill-sidecar-migration'
 import type {
   GlobalSkillManifest,
@@ -37,6 +38,8 @@ import type {
   GlobalSkillType,
   ResolvedSkillMeta,
   RuntimeSkillsProjection,
+  SkillManifestPatch,
+  WorkspaceSkillCardState,
   WorkspaceGlobalSkillOverride,
   WorkspaceSkillCopyResult,
   WorkspaceSkillOverridesFile,
@@ -426,6 +429,7 @@ export function listGlobalSkills(workspaceSlug?: string): GlobalSkillMeta[] {
   if (workspaceSlug !== undefined) assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
   const overrides = workspaceSlug !== undefined ? readWorkspaceSkillOverrides(workspaceSlug) : { schemaVersion: 1 as const, globalSkills: {} }
   const workspaceSkills = workspaceSlug === undefined ? [] : scanWorkspaceSkills(workspaceSlug)
+  const dismissed = workspaceSlug === undefined ? readSkillCardDismissals(getConfigDir()) : undefined
   const result: GlobalSkillMeta[] = allGlobalManifests().map((manifest) => {
     const override = overrides.globalSkills[manifest.skillId]
     const replaced = Boolean(override?.replacementWorkspaceSkillId ?? override?.replacementWorkspaceSkillSlug)
@@ -445,6 +449,8 @@ export function listGlobalSkills(workspaceSlug?: string): GlobalSkillMeta[] {
     // 仍由 resolver 按 workspace 优先级处理，但不能把全局定义伪装成 workspace 来源。
     return {
       ...manifest,
+      ...(dismissed && manifest.type === 'user-global' && !hasSkillCard(sourcePath(manifest))
+        && !dismissed.has(skillCardDismissalKey('global', manifest.skillId)) ? { needsCardReminder: true } : {}),
       enabledInWorkspace: override?.enabled ?? true,
       replacedInWorkspace: replaced,
       sourceStatus: (replacementSkill?.sourceStatus ?? replacementSource?.sourceStatus ?? 'available') as GlobalSkillMeta['sourceStatus'],
@@ -484,7 +490,7 @@ export function copyGlobalSkillToUserGlobalWithSource(skillId: string, slug?: st
 }
 
 /** 创建用户全局 Skill；创建本身不自动绑定任何工作区，范围由详情页单独管理。 */
-export function createUserGlobalSkill(slug: string, name: string, description: string, content: string): GlobalSkillManifest {
+export function createUserGlobalSkill(slug: string, name: string, description: string, content: string, options: { importMarkdown?: boolean; fromWorkspaceDir?: string } = {}): GlobalSkillManifest {
   assertSafeSkillSegment(slug, 'global Skill slug')
   const normalizedSlug = slug.trim()
   const normalizedName = name.trim()
@@ -514,6 +520,12 @@ export function createUserGlobalSkill(slug: string, name: string, description: s
   mkdirSync(temporarySource, { recursive: true })
   copyDirectoryAtomic(temporarySource, target, (staged) => {
     writeFileSync(join(staged, 'SKILL.md'), updateFrontmatterVersion(withFrontmatter, manifest.version), 'utf-8')
+    const sourceCard = options.fromWorkspaceDir ? join(options.fromWorkspaceDir, SKILL_MANIFEST_FILENAME) : undefined
+    if (sourceCard && lstatSync(sourceCard, { throwIfNoEntry: false })?.isFile()) {
+      copyFileSync(sourceCard, join(staged, SKILL_MANIFEST_FILENAME))
+    } else if (!options.importMarkdown) {
+      ensureSkillCard(staged)
+    }
     writeJsonFileAtomic(join(staged, LEDGER_FILENAME), manifest)
   }, () => saveGlobalIndex(index))
   rmSync(temporarySource, { recursive: true, force: true })
@@ -713,6 +725,22 @@ export function readGlobalSkillContent(skillId: string): string {
 
 function assertEditable(skill: GlobalSkillManifest): void {
   if (skill.type === 'builtin-meta') throw new Error('内置元 Skill 只读，不允许修改或删除')
+}
+
+export function resolveUserGlobalSkillCardDir(skillId: string): string {
+  const skill = getGlobalSkill(skillId)
+  assertEditable(skill)
+  return sourcePath(skill)
+}
+
+export function readGlobalSkillCard(skillId: string): WorkspaceSkillCardState {
+  const skill = getGlobalSkill(skillId)
+  return { ...readSkillManifest(sourcePath(skill)), doctor: [] }
+}
+
+export function writeGlobalSkillCard(skillId: string, patch: SkillManifestPatch): WorkspaceSkillCardState {
+  writeSkillManifest(resolveUserGlobalSkillCardDir(skillId), patch)
+  return readGlobalSkillCard(skillId)
 }
 
 export function saveGlobalSkillContent(skillId: string, content: string): GlobalSkillManifest {

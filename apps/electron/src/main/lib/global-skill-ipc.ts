@@ -1,6 +1,6 @@
 import { registerCoreResourceHandler } from './core-resource-routing'
 import { ipcMain } from 'electron'
-import { GLOBAL_SKILL_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS } from '@profer/shared'
+import { GLOBAL_SKILL_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, type SkillManifestPatch } from '@profer/shared'
 import {
   copyGlobalSkillToUserGlobal,
   copyGlobalSkillToWorkspace,
@@ -11,6 +11,8 @@ import {
   getWorkspaceGlobalSkillOverrides,
   listGlobalSkills,
   readGlobalSkillContent,
+  readGlobalSkillCard,
+  writeGlobalSkillCard,
   readWorkspaceSkillCopyContent,
   restoreGlobalSkill,
   saveWorkspaceSkillCopyContent,
@@ -30,6 +32,8 @@ export function registerGlobalSkillIpc(): void {
     return listGlobalSkills(workspaceSlug)
   })
   registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.READ, async (_, skillId: string) => readGlobalSkillContent(skillId))
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.READ_CARD, async (_, skillId: string) => readGlobalSkillCard(skillId))
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.WRITE_CARD, async (_, skillId: string, patch: SkillManifestPatch) => writeGlobalSkillCard(skillId, patch))
   registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.READ_WORKSPACE_COPY, async (_, workspaceSlug: string, workspaceSkillId: string) => {
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
     assertSafeSkillSegment(workspaceSkillId, 'workspaceSkillId')
@@ -49,9 +53,9 @@ export function registerGlobalSkillIpc(): void {
     if (slug !== undefined) assertSafeSkillSegment(slug.trim(), 'global Skill slug')
     return copyGlobalSkillToUserGlobal(skillId, slug)
   })
-  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, async (_, slug: string, name: string, description: string, content: string) => {
+  registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, async (_, slug: string, name: string, description: string, content: string, importMarkdown?: boolean) => {
     assertSafeSkillSegment(slug.trim(), 'global Skill slug')
-    return createUserGlobalSkill(slug, name, description, content)
+    return createUserGlobalSkill(slug, name, description, content, { importMarkdown: importMarkdown === true })
   })
   registerCoreResourceHandler(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_WORKSPACE, async (_, skillId: string, workspaceSlug: string) => {
     assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')

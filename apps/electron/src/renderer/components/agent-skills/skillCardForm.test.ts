@@ -26,10 +26,10 @@ describe('路由卡片表单：清单 ⇄ 表单', () => {
     const form = cardFormFromManifest({
       schemaVersion: 1,
       triggers: { keywords: ['柱状图'], excludeKeywords: ['不要图表'] },
-      dependencies: { toolGroups: ['preview'], tools: ['present_visualization'] },
+      dependencies: { toolGroups: ['preview'], tools: ['present_visualization'], mcpServers: ['github'] },
       policy: { implicit: false },
     })
-    expect(form).toEqual({ toolGroups: ['preview'], tools: 'present_visualization', explicitOnly: true })
+    expect(form).toEqual({ toolGroups: ['preview'], tools: 'present_visualization', mcpServers: 'github', explicitOnly: true })
     // 保存时不得把 triggers 当成「清空」提交，否则旧词表会被界面抹掉。
     expect(cardPatchFromForm(form)).not.toHaveProperty('triggers')
   })
@@ -40,16 +40,19 @@ describe('路由卡片表单：清单 ⇄ 表单', () => {
   })
 
   test('表单转补丁：有依赖就写，空依赖变成删除（null）', () => {
-    expect(cardPatchFromForm({ toolGroups: ['preview'], tools: '', explicitOnly: true })).toEqual({
-      dependencies: { toolGroups: ['preview'], tools: [] },
+    expect(cardPatchFromForm({ ...EMPTY_SKILL_CARD_FORM, toolGroups: ['preview'], mcpServers: 'github，reports, github', explicitOnly: true })).toEqual({
+      dependencies: { toolGroups: ['preview'], tools: [], mcpServers: ['github', 'reports'] },
       policy: { implicit: false },
     })
-    // 全空 = 删除依赖并取消显式引用；写入器随后会删掉空卡片，回到无卡片回退路径。
-    expect(cardPatchFromForm(EMPTY_SKILL_CARD_FORM)).toEqual({ dependencies: null, policy: { implicit: null } })
+    // 按字段清空，不触碰表单不管理的 commands 等字段。
+    expect(cardPatchFromForm(EMPTY_SKILL_CARD_FORM)).toEqual({
+      dependencies: { toolGroups: [], tools: [], mcpServers: [] }, policy: { implicit: null },
+    })
   })
 
   test('空表单判定只看卡片自己管的东西', () => {
     expect(isSkillCardFormEmpty({ ...EMPTY_SKILL_CARD_FORM, toolGroups: ['preview'] })).toBe(false)
     expect(isSkillCardFormEmpty({ ...EMPTY_SKILL_CARD_FORM, explicitOnly: true })).toBe(false)
+    expect(isSkillCardFormEmpty({ ...EMPTY_SKILL_CARD_FORM, mcpServers: 'github' })).toBe(false)
   })
 })

@@ -69,24 +69,30 @@ export const DiffView = React.memo(function DiffView({ oldContent, newContent, f
         --diffs-deletion-bg: hsl(var(--diff-deletion-bg));
         --diffs-separator-bg: hsl(var(--raised-surface));
         --diffs-gap-style: 3px solid hsl(var(--surface-border));
-        --diffs-scrollbar-thumb: light-dark(hsl(var(--muted-foreground) / 0.6), hsl(var(--muted-foreground) / 0.2));
-        --diffs-scrollbar-thumb-hover: light-dark(hsl(var(--muted-foreground) / 0.8), hsl(var(--muted-foreground) / 0.35));
+        --diffs-scrollbar-thumb: var(--scrollbar-thumb-idle);
+        --diffs-scrollbar-thumb-hover: var(--scrollbar-thumb-hover);
       }
-      .diff-scroll [data-code]::-webkit-scrollbar {
+      [data-code]::-webkit-scrollbar {
         width: var(--scrollbar-size-compact, 6px);
         height: var(--scrollbar-size-compact, 6px);
       }
-      .diff-scroll [data-code]::-webkit-scrollbar-track {
+      [data-code]::-webkit-scrollbar:horizontal {
+        height: 0;
+      }
+      [data-code]::-webkit-scrollbar-track {
         background: transparent;
       }
-      .diff-scroll [data-code]::-webkit-scrollbar-thumb {
+      [data-code]::-webkit-scrollbar-thumb {
         background: var(--diffs-scrollbar-thumb);
         border-radius: 3px;
       }
-      .diff-scroll [data-code]::-webkit-scrollbar-thumb:hover {
+      [data-code]::-webkit-scrollbar-thumb:hover {
         background: var(--diffs-scrollbar-thumb-hover);
       }
-      .diff-scroll [data-code]::-webkit-scrollbar-corner {
+      [data-code]::-webkit-scrollbar-thumb:active {
+        background: var(--scrollbar-thumb-active);
+      }
+      [data-code]::-webkit-scrollbar-corner {
         background: transparent;
       }
       [data-separator=line-info],

@@ -1,3 +1,4 @@
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import * as React from 'react'
 import type { BrowserStartPageState } from '@profer/shared'
 import { Bookmark, Clock, Globe2, Search, Sparkles, Trash2, X } from 'lucide-react'
@@ -27,7 +28,7 @@ export function BrowserStartPage({ state, onNavigate, onRemoveBookmark, onClearH
   }
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin bg-browser-host">
+    <ScrollRegion className="flex-1 min-h-0 overflow-y-auto bg-browser-host">
       <div className="mx-auto flex max-w-3xl flex-col items-center px-6 py-14">
         {/* Logo + 标题 */}
         <div className="mb-8 flex flex-col items-center gap-3">
@@ -82,7 +83,7 @@ export function BrowserStartPage({ state, onNavigate, onRemoveBookmark, onClearH
                     <button
                       type="button"
                       onClick={() => onRemoveBookmark(bookmark.id)}
-                      className="absolute right-1 top-1 hidden size-5 items-center justify-center rounded-full bg-control text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/90 hover:text-destructive-foreground group-hover:flex group-hover:opacity-100"
+                      className="absolute right-1 top-1 hidden size-5 items-center justify-center rounded-full bg-control text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/90 hover:text-destructive-foreground group-hover:flex group-hover:opacity-100 group-focus-within:flex group-focus-within:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label={`删除书签 ${bookmark.title}`}
                     >
                       <X className="size-3" />
@@ -136,6 +137,6 @@ export function BrowserStartPage({ state, onNavigate, onRemoveBookmark, onClearH
           </div>
         )}
       </div>
-    </div>
+    </ScrollRegion>
   )
 }

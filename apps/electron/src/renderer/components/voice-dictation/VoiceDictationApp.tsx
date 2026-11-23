@@ -5,6 +5,7 @@
 import * as React from 'react'
 import { Check, Clipboard, Loader2, Mic, Square, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import type { VoiceDictationCommitResult, VoiceDictationSettings, VoiceDictationStateEvent, VoiceDictationTranscriptEvent } from '../../../types'
 import { CHUNK_BYTES, concatAudioBuffers, floatTo16BitPcm, splitChunk } from './voice-audio-utils'
 import { mergeVoiceDictationTranscript } from './voice-transcript-merge'
@@ -480,6 +481,7 @@ export function VoiceDictationApp(): React.ReactElement {
                 variant="ghost"
                 size="icon"
                 className="voice-dictation-no-drag size-8 rounded-full text-destructive"
+                aria-label="停止录音"
                 onClick={() => stopRecording().catch(console.error)}
               >
                 <Square className="size-3.5" fill="currentColor" strokeWidth={0} />
@@ -490,6 +492,7 @@ export function VoiceDictationApp(): React.ReactElement {
               variant="ghost"
               size="icon"
               className="voice-dictation-no-drag size-8 rounded-full text-muted-foreground"
+              aria-label="取消并关闭"
               onClick={cancelAndHide}
             >
               <X className="size-4" />
@@ -511,9 +514,9 @@ export function VoiceDictationApp(): React.ReactElement {
               )}
             </div>
             <div className="h-px bg-border/70" />
-            <div
+            <ScrollRegion
               ref={transcriptBoxRef}
-              className="box-border min-h-[34px] px-3 pt-2.5 pb-2.5 text-[15px] leading-7 text-foreground [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+              className="box-border min-h-[34px] px-3 pt-2.5 pb-2.5 text-[15px] leading-7 text-foreground"
               style={{
                 maxHeight: transcriptMaxHeight ?? undefined,
                 overflowY: 'auto',
@@ -526,7 +529,7 @@ export function VoiceDictationApp(): React.ReactElement {
                   </span>
                 )}
               </div>
-            </div>
+            </ScrollRegion>
           </div>
         </div>
       </div>

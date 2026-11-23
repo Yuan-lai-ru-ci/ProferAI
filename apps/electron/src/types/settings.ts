@@ -713,9 +713,11 @@ export interface CoreEndpointInput {
 }
 
 export interface CoreTargetSummary {
+  expiresAt?: number
   id: string
   name: string
   kind: 'local' | 'remote'
+  independent?: boolean
   baseUrl?: string
   endpoints?: CoreEndpointSummary[]
   selectedEndpointId?: string
@@ -726,13 +728,15 @@ export interface CoreTargetSummary {
   capabilities?: string[]
   /** 所属 Core 的运行平台；新建项目选择器据此决定路径文案。 */
   platform?: string
+  /** Linux os-release 的发行版 ID；旧版 Core 可缺省。 */
+  osId?: string
 }
 
 export interface CoreTargetsSnapshot {
   currentId: string
   generation: number
   revision?: number
-  startup?: 'restoring' | 'fallback'
+  startup?: 'restoring' | 'offline' | 'fallback'
   targets: CoreTargetSummary[]
 }
 

@@ -44,7 +44,8 @@ describe('Mac 设置页接线契约', () => {
   test('Given Mac 通用设置 When 渲染 Shell 控件 Then 仅 Windows 条件允许显示', () => {
     const general = source('renderer/components/settings/GeneralSettings.tsx')
     expect(general).toContain('const isWindows = detectIsWindows()')
-    expect(general).toMatch(/\{isWindows && <SettingsSelect\s+label="Agent Shell 环境"/)
+    const windowsSection = between(general, '{isWindows && (', '</SettingsSection>')
+    expect(windowsSection).toMatch(/<SettingsSelect\s+label="Agent Shell 环境"/)
   })
 
   test('Given 系统登录项被用户修改 When 打开设置或启动 Mac Then 读取系统而不覆盖它', () => {

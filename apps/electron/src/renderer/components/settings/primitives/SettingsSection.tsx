@@ -23,6 +23,8 @@ interface SettingsSectionProps {
   collapsible?: boolean
   /** 可折叠区块的初始状态。 */
   defaultOpen?: boolean
+  /** 搜索到页面时展开低频区块，避免配置仍藏在折叠内容里。 */
+  reveal?: boolean
 }
 
 export function SettingsSection({
@@ -32,19 +34,22 @@ export function SettingsSection({
   children,
   collapsible = false,
   defaultOpen = true,
+  reveal = false,
 }: SettingsSectionProps): React.ReactElement {
+  const [open, setOpen] = React.useState(defaultOpen || reveal)
+  React.useEffect(() => { if (reveal) setOpen(true) }, [reveal])
   const header = (
     <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 basis-48">
         {collapsible ? (
           <CollapsibleTrigger
-            className="group flex max-w-full items-start gap-2 text-left"
+            className="group flex max-w-full items-start gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             aria-label={`展开或收起${typeof title === 'string' ? title : '设置区块'}`}
           >
-            <ChevronDown className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+            <ChevronDown className="mt-0.5 size-4 shrink-0 text-muted-foreground motion-safe:transition-transform group-data-[state=open]:rotate-180" />
             <span className="min-w-0">
               <span role="heading" aria-level={3} className={SECTION_TITLE_CLASS}>{title}</span>
-              {description && <span className={SECTION_DESCRIPTION_CLASS}>{description}</span>}
+              {description && <span className={`block ${SECTION_DESCRIPTION_CLASS}`}>{description}</span>}
             </span>
           </CollapsibleTrigger>
         ) : (
@@ -54,7 +59,7 @@ export function SettingsSection({
           </>
         )}
       </div>
-      {action && <div className="flex-shrink-0">{action}</div>}
+      {action && <div className="min-w-0 max-w-full flex-shrink-0">{action}</div>}
     </div>
   )
 
@@ -68,7 +73,7 @@ export function SettingsSection({
   }
 
   return (
-    <Collapsible defaultOpen={defaultOpen} className="settings-section space-y-3">
+    <Collapsible open={open} onOpenChange={setOpen} className="settings-section space-y-3">
       <section>
         {header}
         <CollapsibleContent className="mt-3">{children}</CollapsibleContent>

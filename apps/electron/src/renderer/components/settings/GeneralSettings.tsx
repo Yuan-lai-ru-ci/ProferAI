@@ -1,9 +1,8 @@
 /**
  * GeneralSettings - 通用设置页
  *
- * 只保留系统级与环境配置：工作流入口（语言、快捷任务、界面引导）和系统环境（启动方式、Shell、新标签页）。
- * 使用中的高频开关（通知与声音、对话浏览、输入体验）已拆分至 UsageSettings（使用偏好）。
- * 账户与个人资料由 AccountSettings 独立管理。
+ * 日常使用和浏览器首页直接展示；语言、引导与 Windows Shell 收在低频区块。
+ * 通知、对话阅读和输入体验由 UsageSettings 管理，账户资料由 AccountSettings 管理。
  */
 
 import * as React from 'react'
@@ -31,7 +30,7 @@ import { getAcceleratorDisplay, isMac } from '@/lib/shortcut-registry'
 import { Button } from '@profer/ui/primitives/button'
 import type { RuntimeStatus } from '@profer/shared'
 
-export function GeneralSettings(): React.ReactElement {
+export function GeneralSettings({ revealAdvanced = false }: { revealAdvanced?: boolean } = {}): React.ReactElement {
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
   const setCoachTourOpen = useSetAtom(coachTourOpenAtom)
   const setReplayIntroOpen = useSetAtom(replayIntroOpenAtom)
@@ -200,17 +199,15 @@ export function GeneralSettings(): React.ReactElement {
   return (
     <div className="space-y-6">
       {settingsError && <p role="alert" className="text-sm text-destructive">{settingsError}</p>}
-      <SettingsSection
-        title="工作流与引导"
-        description="控制任务入口和界面引导"
-      >
+      <SettingsSection title="日常使用">
         <SettingsCard>
-          <SettingsRow
-            label="当前语言"
-            description="简体中文"
-          >
-            <span className="text-xs text-muted-foreground">更多语言敬请期待</span>
-          </SettingsRow>
+          <SettingsToggle
+            label="开机自启动"
+            description="系统启动时自动运行 Profer"
+            checked={autoLaunch}
+            disabled={autoLaunchBusy}
+            onCheckedChange={handleAutoLaunchChange}
+          />
           <SettingsToggle
             label={`快速任务（${quickTaskShortcut || '快捷键已禁用'}）`}
             description={quickTaskShortcut
@@ -220,52 +217,6 @@ export function GeneralSettings(): React.ReactElement {
             disabled={settingsLoading || Boolean(settingsError) || quickTaskBusy}
             onCheckedChange={handleQuickTaskToggle}
           />
-          <SettingsRow
-            label="界面引导"
-            description="重新播放首次进入时的界面蒙层引导（Esc 可随时退出）"
-          >
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (replayPendingRef.current) return
-                replayPendingRef.current = true
-                // 先关设置再开播：引导遮罩在主界面上方取景，避免盖住设置对话框
-                setSettingsOpen(false)
-                window.setTimeout(() => {
-                  setCoachTourOpen(true)
-                  window.setTimeout(() => { replayPendingRef.current = false }, 500)
-                }, 200)
-              }}
-            >
-              重新播放
-            </Button>
-          </SettingsRow>
-          <SettingsRow
-            label="首次引导"
-            description="重播欢迎页、功能导览和导入指引；不会重置任何设置或数据"
-          >
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setSettingsOpen(false)
-                window.setTimeout(() => setReplayIntroOpen(true), 200)
-              }}
-            >
-              重新播放
-            </Button>
-          </SettingsRow>
-        </SettingsCard>
-      </SettingsSection>
-
-      <SettingsSection
-        title="界面交互"
-        description="控制常用区域的悬停与显示行为"
-      >
-        <SettingsCard>
           <SettingsToggle
             label="会话悬浮预览"
             description="鼠标在侧栏会话上停住时弹出内容迷你预览；关闭后不再弹出（全局搜索同样生效）"
@@ -276,47 +227,8 @@ export function GeneralSettings(): React.ReactElement {
         </SettingsCard>
       </SettingsSection>
 
-      <SettingsSection
-        title="系统环境"
-        description="配置 Profer 的启动方式、命令执行环境和新标签页"
-      >
+      <SettingsSection title="浏览器">
         <SettingsCard>
-          <SettingsToggle
-            label="开机自启动"
-            description="系统启动时自动运行 Profer"
-            checked={autoLaunch}
-            disabled={autoLaunchBusy}
-            onCheckedChange={handleAutoLaunchChange}
-          />
-
-          {isWindows && <SettingsSelect
-            label="Agent Shell 环境"
-            description="Windows 上 Agent 执行命令的 Shell。切换后新会话生效，不影响已打开的会话。"
-            value={shellPreference}
-            disabled={settingsLoading || Boolean(settingsError) || shellBusy}
-            onValueChange={async (value) => {
-              const pref = value as 'auto' | 'git-bash' | 'wsl'
-              if (settingsLoading || settingsError || shellBusy) return
-              const previous = shellPreference
-              setShellBusy(true)
-              setShellPreference(pref)
-              try {
-                await window.electronAPI.updateSettings({ agentShellPreference: pref })
-              } catch (error) {
-                console.error('[通用设置] 更新 Shell 偏好失败:', error)
-                setShellPreference(previous)
-                toast.error('Shell 偏好保存失败，请重试')
-              } finally {
-                setShellBusy(false)
-              }
-            }}
-            options={[
-              { value: 'auto', label: '自动检测（优先 Git Bash）' },
-              { value: 'git-bash', label: `Git Bash${!shellRuntimeStatus?.shell?.gitBash?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.gitBash?.version ? ` (v${shellRuntimeStatus.shell.gitBash.version})` : ''}` },
-              { value: 'wsl', label: `WSL${!shellRuntimeStatus?.shell?.wsl?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.wsl?.defaultDistro ? ` (${shellRuntimeStatus.shell.wsl.defaultDistro})` : ''}` },
-            ]}
-          />}
-
           <SettingsInput
             label="新标签页默认首页"
             description="留空时新建标签页显示起始页（书签与最近访问）；填入 URL 后新建标签页直接打开该地址"
@@ -331,6 +243,84 @@ export function GeneralSettings(): React.ReactElement {
             onBlur={handleBrowserHomeUrlBlur}
             placeholder="例如 https://example.com"
           />
+        </SettingsCard>
+      </SettingsSection>
+
+      {isWindows && (
+        <SettingsSection title="命令执行环境" collapsible defaultOpen={false} reveal={revealAdvanced}>
+          <SettingsCard>
+            <SettingsSelect
+              label="Agent Shell 环境"
+              description="Windows 上 Agent 执行命令的 Shell。切换后新会话生效，不影响已打开的会话。"
+              value={shellPreference}
+              disabled={settingsLoading || Boolean(settingsError) || shellBusy}
+              onValueChange={async (value) => {
+                const pref = value as 'auto' | 'git-bash' | 'wsl'
+                if (settingsLoading || settingsError || shellBusy) return
+                const previous = shellPreference
+                setShellBusy(true)
+                setShellPreference(pref)
+                try {
+                  await window.electronAPI.updateSettings({ agentShellPreference: pref })
+                } catch (error) {
+                  console.error('[通用设置] 更新 Shell 偏好失败:', error)
+                  setShellPreference(previous)
+                  toast.error('Shell 偏好保存失败，请重试')
+                } finally {
+                  setShellBusy(false)
+                }
+              }}
+              options={[
+                { value: 'auto', label: '自动检测（优先 Git Bash）' },
+                { value: 'git-bash', label: `Git Bash${!shellRuntimeStatus?.shell?.gitBash?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.gitBash?.version ? ` (v${shellRuntimeStatus.shell.gitBash.version})` : ''}` },
+                { value: 'wsl', label: `WSL${!shellRuntimeStatus?.shell?.wsl?.available ? '（未检测到）' : shellRuntimeStatus?.shell?.wsl?.defaultDistro ? ` (${shellRuntimeStatus.shell.wsl.defaultDistro})` : ''}` },
+              ]}
+            />
+          </SettingsCard>
+        </SettingsSection>
+      )}
+
+      <SettingsSection title="语言与引导" collapsible defaultOpen={false} reveal={revealAdvanced}>
+        <SettingsCard>
+          <SettingsRow label="当前语言"><span className="text-sm text-muted-foreground">简体中文</span></SettingsRow>
+          <SettingsRow
+            label="界面引导"
+            description="重新播放界面操作引导；按 Esc 退出"
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (replayPendingRef.current) return
+                replayPendingRef.current = true
+                // 先关闭设置，让引导在主界面上取景。
+                setSettingsOpen(false)
+                window.setTimeout(() => {
+                  setCoachTourOpen(true)
+                  window.setTimeout(() => { replayPendingRef.current = false }, 500)
+                }, 200)
+              }}
+            >
+              重新播放
+            </Button>
+          </SettingsRow>
+          <SettingsRow
+            label="首次引导"
+            description="重播欢迎页、功能导览和导入指引；不会重置设置或数据"
+          >
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setSettingsOpen(false)
+                window.setTimeout(() => setReplayIntroOpen(true), 200)
+              }}
+            >
+              重新播放
+            </Button>
+          </SettingsRow>
         </SettingsCard>
       </SettingsSection>
     </div>

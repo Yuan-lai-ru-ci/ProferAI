@@ -4,10 +4,11 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve, sep, relative } from 'node:path'
 import { atomicWriteFile, atomicWriteJson } from '../../../packages/session-store/src/atomic-write'
 import { assertSafeSkillSegment, canonicalSkillSegmentKey } from '@profer/agent-provider-pi/skills/skill-path-security'
-import { readSkillDescriptor, readSkillManifest } from '@profer/agent-provider-pi/skills/skill-manifest'
+import { ensureSkillCard, hasSkillCard, readSkillDescriptor, skillCardDismissalKey } from '@profer/agent-provider-pi/skills/skill-manifest'
+import type { SkillCardReminderDecision, SkillMeta } from '@profer/shared'
 import { CORE_PRESET_OPERATION_ARITY, executeCorePresetOperation } from './resource-presets'
-import { parseSkillManifest, SKILL_MANIFEST_FILENAME, SKILL_MANIFEST_SCHEMA_VERSION } from '@profer/shared'
-import { resolveCoreSkillSources } from './skill-sources'
+import { applyCoreSkillCardDecision, readCoreSkillCard, readCoreSkillCardDismissals, writeCoreSkillCard } from './resource-skill-cards'
+import { readCoreGlobalSkillDefinitions, resolveCoreSkillSources } from './skill-sources'
 
 export type { CoreResourceOperationContext, CoreResourceOperationBody } from './resource-paths'
 import type { CoreResourceOperationContext, CoreResourceOperationBody } from './resource-paths'
@@ -75,6 +76,7 @@ const arity: Record<string, [number, number]> = {
   getWorkspaceMcpConfig: [1,1], saveWorkspaceMcpConfig: [2,2], getWorkspaceCapabilities: [1,1],
   getAllWorkspaceSkills: [1,2], getWorkspaceSkillsDir: [1,1], getDefaultSkillSlugs: [0,0],
   createWorkspaceSkill: [5,5], deleteWorkspaceSkill: [2,2], toggleWorkspaceSkill: [3,4],
+  resolveSkillCardReminder: [2,2],
   readWorkspaceSkillContent: [2,2], writeWorkspaceSkillContent: [3,3], readWorkspaceSkillCard: [2,2], writeWorkspaceSkillCard: [3,3],
   listSkillFiles: [2,2], readSkillFile: [3,3], writeSkillFile: [4,4], createSkillEntry: [4,4], deleteSkillEntry: [3,3], renameSkillEntry: [4,4],
   ...CORE_PRESET_OPERATION_ARITY,
@@ -95,7 +97,15 @@ async function executeResourceOperation(context: CoreResourceOperationContext, b
     const root = join(context.config.configDir, 'global-skills', 'builtin'); safeTree(root)
     return existsSync(root) ? readdirSync(root).map(id => resourceText(readResourceObject(join(root, id, 'skill-library.json'))?.slug)) : []
   }
-  const { workspace, directory } = coreWorkspaceDirectory(context, args[0])
+  let reminder: { target: Record<string, unknown>; decision: SkillCardReminderDecision } | undefined
+  if (operation === 'resolveSkillCardReminder') {
+    const target = resourceObject(args[0]), decision = args[1]
+    if (decision !== 'create' && decision !== 'dismiss') throw new Error('Skill 路由卡片提醒选项无效')
+    if (target.scope === 'global') return executeCoreGlobalSkillOperation(context, 'globalSkill.resolveCardReminder', [target.skillId, decision])
+    if (target.scope !== 'workspace') throw new Error('Skill 路由卡片提醒作用域无效')
+    reminder = { target, decision }
+  }
+  const { workspace, directory } = coreWorkspaceDirectory(context, reminder ? reminder.target.workspaceSlug : args[0])
   const mcpPath = join(directory, 'mcp.json')
   if (operation === 'getWorkspaceMcpConfig' || operation === 'saveWorkspaceMcpConfig') {
     const base = mcp(mcpPath), local = workspace.storageMode === 'project' ? mcp(join(directory, 'mcp.local.json')) : { servers: {} as Record<string, Record<string, unknown>> }
@@ -144,17 +154,46 @@ async function executeResourceOperation(context: CoreResourceOperationContext, b
   const projection = resolveCoreSkillSources(context.config, directory)
   const local = ['skills', 'skills-inactive'].flatMap(root => {
     const path = join(directory, root)
-    return existsSync(path) ? readdirSync(path).filter(slug => !slug.startsWith('.') && existsSync(join(path, slug, 'SKILL.md'))).map(slug => ({ ...readResourceObject(join(path, slug, '.source.json')), ...readSkillDescriptor(join(path, slug), slug).descriptor, slug, enabled: root === 'skills', actualSource: root === 'skills' ? 'workspace' : 'none', path: join(path, slug) })) : []
+    if (!existsSync(path)) return []
+    return readdirSync(path).filter(slug => !slug.startsWith('.') && existsSync(join(path, slug, 'SKILL.md'))).map(slug => {
+      const skillPath = join(path, slug), source = readResourceObject(join(skillPath, '.source.json'))
+      const workspaceSkillId = typeof source?.workspaceSkillId === 'string' && source.workspaceSkillId ? source.workspaceSkillId : undefined
+      return { ...source, scope: 'workspace' as const, workspaceSkillId, ...readSkillDescriptor(skillPath, slug).descriptor, slug, enabled: root === 'skills', actualSource: root === 'skills' ? 'workspace' : 'none', path: skillPath }
+    })
   })
   if (operation === 'getWorkspaceSkillsDir') return join(directory, 'skills')
   if (operation === 'getWorkspaceCapabilities') return { builtinMcpServers: [], memory: resourceMemory(directory, workspace.storageMode === 'project'), mcpServers: Object.entries(mergeMcp(mcp(mcpPath).servers, workspace.storageMode === 'project' ? mcp(join(directory, 'mcp.local.json')).servers : {})).map(([name, value]) => ({ name, ...value })), skills: projection.skills.map(skill => ({ ...skill, enabled: true })) }
   if (operation === 'getAllWorkspaceSkills') {
     if (args[1] !== undefined) bool(args[1])
-    // projection只含生效来源；全局禁用条目也必须可重新启用。
-    const global = resolveCoreSkillSources(context.config).skills.map(skill => ({ ...skill, enabled: projection.skills.some(item => item.sourceSkillId === skill.sourceSkillId && item.actualSource === 'global') }))
-    return args[1] ? [...local, ...global] : local
+    // 管理列表按定义身份分组；运行时投影只用于判断此工作区实际加载哪份定义。
+    const effectiveGlobalIds = new Set(projection.skills.filter(skill => skill.actualSource === 'global').map(skill => skill.sourceSkillId))
+    const global = args[1] ? readCoreGlobalSkillDefinitions(context.config).map((definition): SkillMeta => {
+      const enabled = effectiveGlobalIds.has(definition.skillId)
+      return {
+        scope: 'global', slug: definition.slug, name: definition.name, description: definition.description,
+        version: definition.version, enabled, actualSource: enabled ? 'global' : 'none',
+        sourceSkillId: definition.skillId, sourceSkillType: definition.type, sourceVersion: definition.version, sourceStatus: 'available',
+      }
+    }) : []
+    const dismissed = readCoreSkillCardDismissals(context.config.configDir)
+    const withReminders = local.map(skill => ({
+      ...skill,
+      needsCardReminder: !hasSkillCard(skill.path) && (!skill.workspaceSkillId || !dismissed.has(skillCardDismissalKey('workspace', skill.workspaceSkillId, workspace.slug))),
+    }))
+    return [...withReminders, ...global]
   }
-  const slug = segment(args[1]), item = local.find(entry => canonicalSkillSegmentKey(entry.slug) === canonicalSkillSegmentKey(slug))
+  const slug = segment(reminder ? reminder.target.skillSlug : args[1]), item = local.find(entry => canonicalSkillSegmentKey(entry.slug) === canonicalSkillSegmentKey(slug))
+  if (reminder) {
+    const expectedId = reminder.target.workspaceSkillId
+    if (!item || (expectedId !== undefined && expectedId !== item.workspaceSkillId)) throw new Error('Skill 已变更，请刷新后再试')
+    if (hasSkillCard(item.path)) return
+    const id = item.workspaceSkillId ?? randomUUID()
+    if (!item.workspaceSkillId) {
+      const sourcePath = join(item.path, '.source.json')
+      await atomicWriteJson(sourcePath, { ...(readResourceObject(sourcePath) ?? { scope: 'workspace' }), workspaceSkillId: id })
+    }
+    return applyCoreSkillCardDecision(context.config.configDir, item.path, skillCardDismissalKey('workspace', id, workspace.slug), reminder.decision)
+  }
   if (operation === 'toggleWorkspaceSkill') {
     const enabled = bool(args[2]), source = args[3] === undefined ? undefined : resourceText(args[3])
     if (source || (!item && source === undefined)) {
@@ -176,9 +215,17 @@ async function executeResourceOperation(context: CoreResourceOperationContext, b
     if (!name.trim()) throw new Error('Core Skill名称不能为空')
     const path = join(directory, 'skills', slug); assertResourcePath(path)
     if (existsSync(path) || existsSync(join(directory, 'skills-inactive', slug))) throw new Error('Core Skill目标已存在')
-    mkdirSync(path, { recursive: true })
-    await atomicWriteFile(join(path, 'SKILL.md'), `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\nversion: 1.0.0\n---\n\n${content}`)
-    await atomicWriteJson(join(path, '.source.json'), { scope: 'workspace', workspaceSkillId: randomUUID() }); return
+    mkdirSync(dirname(path), { recursive: true })
+    mkdirSync(path)
+    try {
+      ensureSkillCard(path)
+      await atomicWriteJson(join(path, '.source.json'), { scope: 'workspace', workspaceSkillId: randomUUID() })
+      await atomicWriteFile(join(path, 'SKILL.md'), `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\nversion: 1.0.0\n---\n\n${content}`)
+    } catch (error) {
+      rmSync(path, { recursive: true, force: true })
+      throw error
+    }
+    return
   }
   if (!item) throw new Error('Core工作区Skill不存在；全局Skill不可直接修改')
   if (operation === 'listSkillFiles') return skillFiles(item.path)
@@ -208,28 +255,8 @@ async function executeResourceOperation(context: CoreResourceOperationContext, b
   }
   if (operation === 'readWorkspaceSkillContent') return readFileSync(join(item.path, 'SKILL.md'), 'utf8')
   if (operation === 'writeWorkspaceSkillContent') { await atomicWriteFile(join(item.path, 'SKILL.md'), resourceText(args[2], 1_000_000)); return }
-  if (operation === 'readWorkspaceSkillCard') return { ...readSkillManifest(item.path), doctor: [] }
-  if (operation === 'writeWorkspaceSkillCard') {
-    const path = join(item.path, SKILL_MANIFEST_FILENAME)
-    const merged = readResourceObject(path) ?? {}
-    const patch = resourceObject(args[2])
-    for (const [key, value] of Object.entries(patch)) {
-      if (value === null || value === '') { delete merged[key]; continue }
-      if (['interface','policy','triggers','dependencies','requires'].includes(key)) {
-        const group = { ...resourceObject(merged[key] ?? {}) }
-        for (const [field, v] of Object.entries(resourceObject(value))) {
-          if (v === null || v === '' || Array.isArray(v) && v.length === 0) delete group[field]
-          else group[field] = v
-        }
-        if (Object.keys(group).length) merged[key] = group; else delete merged[key]
-      } else merged[key] = value
-    }
-    merged.schemaVersion = SKILL_MANIFEST_SCHEMA_VERSION
-    const parsed = parseSkillManifest(merged)
-    if (!parsed.manifest || parsed.issues.some(issue => issue.severity === 'error')) throw new Error('Core Skill卡片校验未通过')
-    if (Object.keys(merged).every(key => key === 'schemaVersion')) { if (existsSync(path)) rmSync(path); return { present: false, issues: [], doctor: [] } }
-    await atomicWriteJson(path, merged); return { ...readSkillManifest(item.path), doctor: [] }
-  }
+  if (operation === 'readWorkspaceSkillCard') return readCoreSkillCard(item.path)
+  if (operation === 'writeWorkspaceSkillCard') return writeCoreSkillCard(item.path, args[2])
   if (operation === 'deleteWorkspaceSkill') { rmSync(item.path, { recursive: true }); return }
   throw new Error(`Core资源操作未实现：${operation}`)
 }

@@ -1494,7 +1494,6 @@ function TabBarInner({
                     : undefined
                 }
                 hideWorkspaceName={tabCompressionLevel === "title-only"}
-                hideRenameControl={tabCompressionLevel === "title-only"}
                 isAutomation={
                   tab.type === "agent" && automationSessionIds.has(tab.sessionId)
                 }

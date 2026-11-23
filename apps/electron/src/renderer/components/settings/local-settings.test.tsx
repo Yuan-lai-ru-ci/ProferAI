@@ -532,8 +532,11 @@ test('真实 React SSR：头像触发器为按钮、提示词编辑标签关联�
   }
   expect(html).toContain('aria-pressed="true"')
   const usage = renderToStaticMarkup(<UsageSettings />)
-  // 三个矮窗口紧凑档输入框 + 一个「当前会话最多显示」输入框
-  expect(usage.match(/<input[^>]*type="number"[^>]*disabled=""/g)).toHaveLength(4)
+  // 首屏只显示「当前会话最多显示」；三个紧凑档高度收在低频区块中。
+  expect(usage.match(/<input[^>]*type="number"[^>]*disabled=""/g)).toHaveLength(1)
+  expect(usage).toContain('aria-expanded="false"')
+  const expandedUsage = renderToStaticMarkup(<UsageSettings revealAdvanced />)
+  expect(expandedUsage.match(/<input[^>]*type="number"[^>]*disabled=""/g)).toHaveLength(4)
 })
 
 test('四页源码不再保留裸 label，工具显隐按钮可命名且可 Tab 聚焦', () => {

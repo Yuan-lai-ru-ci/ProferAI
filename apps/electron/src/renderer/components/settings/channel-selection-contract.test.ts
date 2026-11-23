@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import type { Channel } from '@profer/shared'
+import { usesIndependentLocalCore } from '@/atoms/core-target-atoms'
+import type { CoreTargetsSnapshot } from '../../../types/settings'
 import { isAgentModelSelectionValid } from '@/lib/agent-channel-selection'
 
 test('表单连接测试使用启用模型并分别检查已勾选内核', () => {
@@ -33,11 +35,23 @@ test('Given 所属Core有效渠道 When 校验历史绑定 Then 检查指定模�
   const view = readFileSync(new URL('../agent/AgentView.tsx', import.meta.url), 'utf8')
   // 接线守卫只盯实际校验调用；模型是否可用由下面的真实函数行为断言覆盖。
   expect(view).toMatch(/isAgentModelSelectionValid\(globalChannels,\s*sessionAgentRuntime,\s*effectiveAgentChannelIds,/)
-  expect(view).toContain('isRemoteCore ? globalChannels.map(channel => channel.id) : agentChannelIds')
+  expect(view).toContain('const usesCoreCatalog = isRemoteCore || independentCore')
+  expect(view).toContain('const independentCore = usesIndependentLocalCore(coreTarget)')
+  // 执行组件实际使用的目录选择表达式，避免复制分支实现后测试与接线脱节。
+  const expression = view.match(/\(\) => (usesCoreCatalog \? globalChannels\.map\(channel => channel\.id\) : agentChannelIds),/)?.[1]
+  expect(expression).toBeDefined()
+  const selectIds = new Function('usesCoreCatalog', 'globalChannels', 'agentChannelIds', `return ${expression}`) as (core: boolean, channels: Channel[], ids: string[]) => string[]
   const channel: Channel = { id: 'core-channel', name: 'Core', provider: 'anthropic', baseUrl: '', apiKey: '',
     enabled: true, createdAt: 0, updatedAt: 0,
     models: [{ id: 'bound-model', name: 'Bound', enabled: true }, { id: 'other-model', name: 'Other', enabled: true }] }
   const selection = { channelId: channel.id, modelId: 'bound-model' }
+  for (const [currentId, independent, expected] of [['remote', false, true], ['local', true, true], ['local', false, false]] as const) {
+    const target: CoreTargetsSnapshot = { currentId, generation: 1, targets: [{ id: currentId, name: currentId, kind: currentId === 'local' ? 'local' : 'remote', status: 'connected', independent }] }
+    const usesCoreCatalog = currentId !== 'local' || usesIndependentLocalCore(target)
+    const ids = selectIds(usesCoreCatalog, [channel], ['desktop-channel'])
+    expect(ids).toEqual(expected ? [channel.id] : ['desktop-channel'])
+    expect(isAgentModelSelectionValid([channel], 'claude', ids, selection)).toBe(expected)
+  }
   expect(isAgentModelSelectionValid([channel], 'claude', [channel.id], selection)).toBe(true)
   expect(isAgentModelSelectionValid([channel], 'claude', ['desktop-channel'], selection)).toBe(false)
   const unavailable = { ...channel, models: channel.models.map(model => ({ ...model, enabled: model.id !== 'bound-model' })) }

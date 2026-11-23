@@ -783,6 +783,7 @@ export type ProferEvent =
   | { type: 'session_updated'; session: AgentSessionMeta }
   | { type: 'session_deleted'; sessionId: string; revision?: number }
   | { type: 'run_resumed'; sessionId: string }
+  | { type: 'runtime_started'; sessionId: string; runId?: string; startedAt: number; modelId?: string }
   | { type: 'session_persistence'; runId?: string; watermark?: number; status: 'pending' | 'saved' | 'failed'; message?: string }
   // 会话 run 结束、active 所有权已释放（含手动压缩 /compact 等非对话 run）。
   // 协作层监听它做「父会话空闲后重查自动续跑」，修复 compaction 占位导致的续跑遗漏。
@@ -1372,6 +1373,10 @@ export interface SkillImportSource {
 
 /** 工作区 Skill 元数据 */
 export interface SkillMeta {
+  /** 存放层；Core 可在旧 Skill 尚未分配稳定 ID 时声明工作区归属。 */
+  scope?: import('./global-skill').SkillScope
+  /** 仅在 Skill 缺卡且仍需询问用户时为 true。 */
+  needsCardReminder?: boolean
   /** 工作区本地 Skill 的稳定 ID；旧数据缺失时迁移会回填。 */
   workspaceSkillId?: string
   slug: string
@@ -2754,6 +2759,7 @@ export const AGENT_IPC_CHANNELS = {
   READ_SKILL_CARD: 'agent:read-skill-card',
   /** 合并写入 Skill 路由卡片（补丁语义：null / 空值 = 删除字段） */
   WRITE_SKILL_CARD: 'agent:write-skill-card',
+  RESOLVE_SKILL_CARD_REMINDER: 'agent:resolve-skill-card-reminder',
   /** 列出 Skill 目录下的子文件树（不含 SKILL.md） */
   LIST_SKILL_FILES: 'agent:list-skill-files',
   /** 读取 Skill 目录下的子文件内容 */
@@ -3019,6 +3025,8 @@ export const AUTH_IPC_CHANNELS = {
 export const GLOBAL_SKILL_IPC_CHANNELS = {
   LIST: 'global-skill:list',
   READ: 'global-skill:read',
+  READ_CARD: 'global-skill:read-card',
+  WRITE_CARD: 'global-skill:write-card',
   READ_WORKSPACE_COPY: 'global-skill:read-workspace-copy',
   SAVE_WORKSPACE_COPY: 'global-skill:save-workspace-copy',
   SAVE: 'global-skill:save',

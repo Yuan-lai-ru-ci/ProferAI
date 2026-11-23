@@ -8,6 +8,8 @@ let generation = 1
 let auth: { baseUrl: string; teamAccountId: string; token: string } | null
 let respond: () => Promise<Response>
 let calls = 0
+let settings: { agentChannelIds?: string[]; agentChannelId?: string; agentModelId?: string } = {}
+const settingsUpdates: object[] = []
 const invalidations: string[] = []
 mock.module('./agent-service', () => ({ agentCatalogInvalidationPublisher: { invalidate: (catalog: string) => invalidations.push(catalog) } }))
 // 账号能力已收口到发行版契约：mock 接缝从 auth-service 移到 ./edition。
@@ -37,7 +39,7 @@ mock.module('./edition', () => ({
 mock.module('./proxy-settings-service', () => ({ getEffectiveProxyUrl: async () => undefined }))
 mock.module('./proxy-fetch', () => ({ getFetchFn: () => async () => { calls += 1; return respond() } }))
 mock.module('./identity-service', () => ({ getOrCreateDeviceIdentity: () => ({ deviceId: 'fixture-sync-device' }) }))
-mock.module('./settings-service', () => ({ getSettings: () => ({ agentChannelIds: ['fixture-local'] }), updateSettings: () => {} }))
+mock.module('./settings-service', () => ({ getSettings: () => settings, updateSettings: (updates: object) => { settingsUpdates.push(updates) } }))
 mock.module('./codex-oauth-service', () => ({ loginCodexOAuth: async () => { throw new Error('禁止真实OAuth') }, refreshCodexOAuth: async () => { throw new Error('禁止真实OAuth') } }))
 const { syncFromServer } = await import('./edition/commercial/channel-sync')
 const { channelStore } = await import('./channel-manager')
@@ -59,6 +61,7 @@ beforeEach(() => {
   process.env.PROFER_CONFIG_DIR = dir
   path = join(dir, 'channels.json')
   generation = 1; calls = 0
+  settings = { agentChannelIds: ['fixture-local'] }; settingsUpdates.length = 0
   invalidations.length = 0
   auth = { baseUrl: serverUrl, teamAccountId: 'a', token: 'fixture-a' }
   const local: Channel = { id: 'fixture-local', name: 'Fixture local', provider: 'custom', baseUrl: serverUrl,
@@ -74,6 +77,23 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 describe('服务端渠道同步：写盘代际', () => {
+  test('Given 首次同步尚无Agent配置 When 同步成功 Then 自动配置供应商且保留已有单项选择', async () => {
+    settings = { agentChannelId: 'manual-channel', agentModelId: 'manual-model' }
+    expect(await syncFromServer(channelStore, serverUrl, 'fixture-a')).toBe(true)
+    expect(settingsUpdates).toEqual([{
+      agentChannelIds: ['fixture-local', 'newapi-fixture'],
+      agentChannelId: 'manual-channel', agentModelId: 'manual-model',
+    }])
+    settings = { agentChannelIds: ['fixture-local'] }
+    await syncFromServer(channelStore, serverUrl, 'fixture-a')
+    expect(settingsUpdates).toHaveLength(1)
+    settings = {}
+    await syncFromServer(channelStore, serverUrl, 'fixture-a')
+    expect(settingsUpdates[1]).toEqual({
+      agentChannelIds: ['fixture-local', 'newapi-fixture'],
+      agentChannelId: 'fixture-local', agentModelId: 'local',
+    })
+  })
   test('Given 当前账号 When 同步成功 Then 保留本地及官方模型偏好、仅落密文', async () => {
     expect(await syncFromServer(channelStore, serverUrl, 'fixture-a')).toBe(true)
     const saved = JSON.parse(readFileSync(path, 'utf8')) as { channels: Channel[] }

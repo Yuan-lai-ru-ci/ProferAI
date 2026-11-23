@@ -60,7 +60,7 @@ export function LeftSidebar({
     ?? (widthOverride !== undefined
       ? Math.max(0, widthOverride - RAIL_WIDTH)
       : width ?? DEFAULT_LIST_WIDTH);
-  // 面板顶边与 Tab 标签本体下沿对齐：运行时量真实 DOM，量不到才用常量兜底。
+  // 面板顶边与整个 TabBar 外框下沿对齐：运行时量真实 DOM，量不到才用常量兜底。
   const measuredPanelTop = useTabBarBottomOffset(SIDEBAR_PANEL_TOP);
   // Windows 顶部没有红绿灯，侧栏不需要给顶栏让位：rail 与列表直接顶到窗口上沿。
   // 此时 ModeSwitcher 轨道（pt-2 + 40）与主区 TabBar 外框（p-2 + 40）同高，横竖都对得上。
@@ -94,12 +94,6 @@ export function LeftSidebar({
         }),
       }}
     >
-      {/* 顶部拖拽留白整条覆盖 rail + 列表，高度取 Tab 标签本体的下沿（运行时实测）；
-          rail 图标与列表内容都从这条线开始，红绿灯（18–38）落在它上方。
-          Windows 的 panelTop 为 0（没有红绿灯要让位），不再渲染这条 0 高拖拽条；
-          窗口拖动交给 AppShell 顶部那条全局 8px 拖拽带。 */}
-      {panelTop > 0 && <SidebarWindowDragStrip height={panelTop} />}
-
       <div className="relative h-full min-h-0">
         {/* rail 只承载导航，列表由右侧视口裁切，不依赖不透明背景遮挡。 */}
         <div
@@ -132,6 +126,9 @@ export function LeftSidebar({
           </div>
         )}
       </div>
+
+      {/* 覆盖侧栏顶部留白并置于内容之上，恢复窗口拖动命中区；Mac 红绿灯仍压在其上层。 */}
+      {panelTop > 0 && <SidebarWindowDragStrip height={panelTop} />}
 
       {/* 红绿灯必须最后渲染，确保位于左上拖拽层之上；只有这块区域退出窗口拖拽。 */}
       {s.isMac && (

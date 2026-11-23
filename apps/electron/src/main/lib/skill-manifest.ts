@@ -93,11 +93,12 @@ function isEmptyManifest(record: Record<string, unknown>): boolean {
 
 /**
  * 合并写入模块清单：保留未知字段，先校验后落盘，校验不过就原样报错不写。
- * 卡片被写成空内容时删除文件，回到 frontmatter / 侧车回退路径。
+ * 清空已配置的卡片会删除文件；直接保存默认卡片则保留它。
  */
 export function writeSkillManifest(dir: string, patch: SkillManifestPatch): SkillManifestWriteResult {
   const path = join(dir, SKILL_MANIFEST_FILENAME)
   const merged = readRawManifestFile(path)
+  const keepDefault = merged.schemaVersion === SKILL_MANIFEST_SCHEMA_VERSION && isEmptyManifest(merged)
   merged.schemaVersion = SKILL_MANIFEST_SCHEMA_VERSION
   // 先处理顶层标量（含 provenance），再逐组合并：分组不能被整份覆盖，否则磁盘上没在补丁里出现的字段会丢。
   for (const [key, value] of Object.entries(patch)) {
@@ -129,7 +130,7 @@ export function writeSkillManifest(dir: string, patch: SkillManifestPatch): Skil
   }
   const issues = parsed.issues.filter(issue => issue.severity !== 'error')
 
-  if (isEmptyManifest(merged)) {
+  if (isEmptyManifest(merged) && !keepDefault) {
     if (existsSync(path)) rmSync(path, { force: true })
     return { path, removed: true, issues }
   }

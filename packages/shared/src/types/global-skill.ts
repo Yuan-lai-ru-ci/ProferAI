@@ -66,6 +66,8 @@ export interface WorkspaceSkillOverridesFile {
 }
 
 export interface GlobalSkillMeta extends GlobalSkillManifest {
+  /** 仅可写且尚未拒绝提醒的旧 Skill 为 true。 */
+  needsCardReminder?: boolean
   enabledInWorkspace: boolean
   replacedInWorkspace: boolean
   sourceStatus: 'available'
@@ -142,6 +144,12 @@ export interface WorkspaceSkillCardState {
   /** 医生诊断（只含 warning / error，界面直接可展示）。 */
   doctor: SkillDoctorIssue[]
 }
+
+export type SkillCardReminderTarget =
+  | { scope: 'workspace'; workspaceSlug: string; skillSlug: string; workspaceSkillId?: string }
+  | { scope: 'global'; skillId: string }
+
+export type SkillCardReminderDecision = 'create' | 'dismiss'
 
 export interface GlobalSkillEditRequest {
   skillId: string

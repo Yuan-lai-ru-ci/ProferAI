@@ -1,3 +1,6 @@
+// 独立进程验收旧桌面存储路径，不改变产品默认新核。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * conversation-manager 分支树契约单测
  *

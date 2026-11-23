@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * 回退后的派生缓存修复：只验证两件会真正「残留」的东西。
  *

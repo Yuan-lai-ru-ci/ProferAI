@@ -48,3 +48,25 @@ test('远端发送完整转发本轮渠道模型，list迟到目标切换时不�
     }
   }
 })
+
+test('独立本机发送保留本机会话 ID，失败不进入桌面绑定', async () => {
+  const start = source.indexOf('  ipcMain.handle(\n    AGENT_IPC_CHANNELS.SEND_MESSAGE,')
+  const end = source.indexOf('\n  )', start)
+  const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end + 4))
+  const sender = {}
+  const input = { sessionId: 'local-session', channelId: 'core-channel', userMessage: 'fixture' }
+  let invoke: ((event: object, input: object) => Promise<void>) | undefined
+  const deps = {
+    AGENT_IPC_CHANNELS, assertSensitiveAgentIpcSender() {}, getCurrentCoreTargetId: () => 'local',
+    normalizeUserSendInput: (value: object) => value, isIndependentLocalCore: () => true,
+    coordinateAgentSend: () => { throw new Error('unexpected desktop fallback') },
+    async runAgent(value: object, owner: object) {
+      expect(value).toEqual(input)
+      expect(owner).toBe(sender)
+      throw new Error('fixture Core unavailable')
+    },
+    ipcMain: { handle: (_name: string, callback: typeof invoke) => { invoke = callback } },
+  }
+  new Function(...Object.keys(deps), js)(...Object.values(deps))
+  await expect(invoke!({ sender }, input)).rejects.toThrow('fixture Core unavailable')
+})

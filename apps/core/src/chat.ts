@@ -6,10 +6,13 @@ import { getAdapter } from '../../../packages/core/src/providers/index'
 import { createChatRuntime } from '../../../packages/core/src/chat-runtime'
 import { createConversationStore, DEFAULT_CONVERSATION_TITLE } from '../../../packages/session-store/src/conversation-store'
 import * as titlePolicy from '@profer/agent-runtime/session-title-policy'
+import type { CoreAccountService } from './account-service'
 import type { CoreChannelConfig } from './config'
 import { assertChatId, createCoreChatAttachments } from './chat-attachments'
 
 export interface CoreChatOptions {
+  account?: CoreAccountService
+  defaultSelection?: () => { channelId?: string; modelId?: string }
   configDir: string
   listChannels(): CoreChannelConfig[]
   emit(conversationId: string, channel: string, payload: unknown): void
@@ -49,14 +52,15 @@ export function createCoreChat(options: CoreChatOptions) {
     extractTextFromAttachment: attachments.extractText,
     getEffectiveProxyUrl: async () => undefined, getFetchFn: () => options.fetch ?? globalThis.fetch,
     getEnabledTools: ids => { if (ids?.length) unsupported(); return { tools: [] } }, executeToolCalls: async () => unsupported(),
-    editionProviders: { credentials: { shouldUseManagedRoute: () => false, managedPath: () => unsupported() }, account: { getSession: async () => null, recoverSession: async () => null }, errors: { detectInsufficientCredits: () => null } },
-    syncRecoveredChannels: async () => unsupported(), resolveEditionBearerToken: () => unsupported(), searchKnowledgeItemsForChat: async () => unsupported(),
+    editionProviders: { credentials: { shouldUseManagedRoute: channel => channel.serverManaged === true && !channel.directDataPlane, managedPath: kind => kind === 'messages' ? '/v1/proxy/messages' : '/v1/proxy/chat' }, account: { getSession: async () => await options.account?.operation('teamAuth') as never ?? null, recoverSession: async () => { await options.account?.refresh(); return await options.account?.operation('teamAuth') as never ?? null } }, errors: { detectInsufficientCredits: () => null } },
+    syncRecoveredChannels: async () => {}, resolveEditionBearerToken: auth => auth.proxyToken || auth.token, searchKnowledgeItemsForChat: async () => unsupported(),
     prepareChatKnowledgeRequest: async (input, deps) => { if (input.currentReferences?.length || input.history.some(message => message.knowledgeReferences?.length)) unsupported(); return { providerUserMessage: await deps.enrichMessage(input.userMessage, input.attachments), effectiveReferences: [], knowledgeContextChars: 0 } },
     normalizeChatStreamError: (_provider, error) => ({ message: error instanceof Error ? error.message : String(error) }),
   })
   const active = new Map<string, { runId: string; promise: Promise<void> }>()
   let closed = false
   const text = (value: unknown): string => { if (typeof value !== 'string' || value.length > 1_000_000) throw new Error('Chat文本参数无效'); return value }
+  const defaults = () => options.defaultSelection?.() ?? {}
   const id = (value: unknown): string => { assertChatId(value); if (!store.getConversationMeta(value)) throw new Error('Chat对话不存在'); return value }
   const model = (channelId: unknown, modelId: unknown) => {
     const channel = channels().find(item => item.id === channelId)
@@ -83,7 +87,7 @@ export function createCoreChat(options: CoreChatOptions) {
     const [a, b, c] = normalized
     switch (operation) {
       case C.LIST_CONVERSATIONS: if (a !== undefined && typeof a !== 'boolean') throw new Error('Chat归档参数无效'); return store.listConversations(a ?? false)
-      case C.CREATE_CONVERSATION: if (b !== undefined || c !== undefined) model(c, b); return store.createConversation(a === undefined ? undefined : text(a), b as string | undefined, c as string | undefined)
+      case C.CREATE_CONVERSATION: if (b !== undefined || c !== undefined) model(c ?? defaults().channelId, b ?? defaults().modelId); return store.createConversation(a === undefined ? undefined : text(a), b as string | undefined ?? defaults().modelId, c as string | undefined ?? defaults().channelId)
       case C.GET_MESSAGES: return store.getConversationMessages(id(a))
       case C.GET_RECENT_MESSAGES: if (!Number.isInteger(b) || Number(b) < 1 || Number(b) > 10000) throw new Error('Chat分页参数无效'); return store.getRecentMessages(id(a), Number(b))
       case C.GET_BRANCH: return store.getConversationBranch(id(a))

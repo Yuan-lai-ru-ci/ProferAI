@@ -65,9 +65,9 @@ export function EnvironmentCheckCard({
 
   const iconColor = {
     checking: 'text-muted-foreground',
-    success: 'text-green-600 dark:text-green-500',
-    warning: 'text-yellow-600 dark:text-yellow-500',
-    error: 'text-red-600 dark:text-red-500',
+    success: 'text-success',
+    warning: 'text-warning',
+    error: 'text-destructive',
   }[status]
 
   const statusTextDefault = {

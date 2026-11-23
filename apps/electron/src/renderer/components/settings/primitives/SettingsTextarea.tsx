@@ -62,7 +62,7 @@ export function SettingsTextarea({
         style={{ minHeight }}
       />
       {error && (
-        <p id={errorId} role="alert" className="text-xs text-destructive">{error}</p>
+        <p id={errorId} role="alert" className="text-xs text-destructive-text">{error}</p>
       )}
     </div>
   )

@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * P0-A2：删除守卫 + project 工作区「移除」生命周期
  *

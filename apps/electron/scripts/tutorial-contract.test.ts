@@ -24,7 +24,7 @@ test('tutorial resources stay identical and contain current entry points', () =>
   expect(resource).toContain('设置 → 帮助 → Profer 教程')
   expect(resource).toContain('设置 → 模型与能力 → 模型配置')
   expect(resource).toContain('设置 → 模型与能力 → Chat 工具')
-  expect(resource).toContain('设置 → 连接 → 远程连接')
+  expect(resource).toContain('设置 → 连接 → 设备与连接')
   expect(resource).toContain('Agent 技能')
   expect(resource).toContain('Claude')
   expect(resource).toContain('Pi')

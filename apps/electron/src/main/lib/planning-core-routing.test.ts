@@ -26,9 +26,9 @@ mock.module('./core-target-service', () => ({
 const { routePlanningToCore } = await import('./planning-core-routing')
 
 describe('Planning IPC Core ownership', () => {
-  test('only explicitly local target may use local database', async () => {
-    selected = 'local'
-    expect(await routePlanningToCore(C.LIST_TODOS, [])).toBeNull()
+  test('本机 Core 未就绪和远端断线均不回退旧数据库', async () => {
+    selected = 'local'; connected = false
+    await expect(routePlanningToCore(C.LIST_TODOS, [])).rejects.toThrow('未连接')
     selected = 'remote'; connected = false
     await expect(routePlanningToCore(C.LIST_TODOS, [])).rejects.toThrow('未连接')
     connected = true; supported = false
@@ -77,9 +77,6 @@ describe('Planning IPC Core ownership', () => {
       await expect(routePlanningToCore(C.LIST_TODOS, [])).rejects.toThrow('未连接')
     } finally { localAttached = false; connected = true }
     connected = false
-    await expect(routePlanningToCore(C.LIST_TODOS, [])).rejects.toThrow('未连接')
-    const previous = process.env.PROFER_CORE_LOCAL
-    process.env.PROFER_CORE_LOCAL = '1'; connected = false
     try { await expect(routePlanningToCore(C.LIST_TODOS, [])).rejects.toThrow('未连接') }
-    finally { if (previous === undefined) delete process.env.PROFER_CORE_LOCAL; else process.env.PROFER_CORE_LOCAL = previous; connected = true }
+    finally { connected = true }
  })

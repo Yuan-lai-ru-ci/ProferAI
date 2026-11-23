@@ -1,3 +1,6 @@
+import { Button } from '@profer/ui/primitives/button'
+import { EmptyState as SharedEmptyState } from '@profer/ui/primitives/empty-state'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 /**
  * 定时任务列表视图（codex Automations 风格）
  *
@@ -133,7 +136,7 @@ export function AutomationsListView({ embedded = false }: { embedded?: boolean }
 
   return (
     <div className={cn('h-full flex flex-col overflow-hidden', embedded && 'rounded-b-2xl bg-card')}>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <ScrollRegion className="flex-1 min-h-0 overflow-y-auto">
         <AutomationMaintenance />
         <div className="w-full px-2 pt-2"><AutomationRecommendations recommendations={recommendations} onRefresh={refreshList} /></div>
         {automations.length === 0 ? (
@@ -148,7 +151,7 @@ export function AutomationsListView({ embedded = false }: { embedded?: boolean }
             )}
           </div>
         )}
-      </div>
+      </ScrollRegion>
     </div>
   )
 }
@@ -324,26 +327,5 @@ function Section({ title, automations, onEdit, onRefresh, variant, presetNames }
 }
 
 function EmptyState({ onCreate }: { onCreate: () => void }): React.ReactElement {
-  return (
-    <div className="max-w-2xl mx-auto pt-24 flex flex-col items-center text-center gap-4">
-      <div className="size-16 rounded-2xl bg-foreground/[0.04] flex items-center justify-center">
-        <Clock className="size-8 text-foreground/30" />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <div className="text-[16px] font-medium text-foreground/85">暂无定时任务</div>
-        <div className="text-[13px] text-foreground/50 leading-relaxed max-w-md">
-          定时任务可以让 AI 周期性地执行某项任务，如每天总结新邮件、每小时检查 GitHub 仓库等。
-          也可以在对话中用「以后每隔 X 分钟…」让 Profer 自动识别并创建。
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={onCreate}
-	        className="mt-2 flex items-center gap-1.5 px-4 py-2 rounded-md text-[13px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
-      >
-        <Plus size={14} />
-        <span>新建定时任务</span>
-      </button>
-    </div>
-  )
+  return <SharedEmptyState icon={<Clock />} title="暂无定时任务" description="按设定时间运行任务，也可在对话中创建。" action={<Button size="sm" onClick={onCreate}><Plus size={14} />新建定时任务</Button>} />
 }

@@ -1,3 +1,6 @@
+// 本文件独立验收旧桌面执行/存储路径。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * P1-7：远程/Pocket 在 project 工作区下必须能读到「用户项目文件」
  *

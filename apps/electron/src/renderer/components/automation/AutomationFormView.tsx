@@ -117,13 +117,13 @@ function SaveStatusBadge({
     icon = <Loader2 className="size-3 animate-spin" />
     text = '保存中…'
   } else if (status === 'saved') {
-    icon = <Check className="size-3 text-emerald-500" />
+    icon = <Check className="size-3 text-success" />
     text = '已保存 · 刚刚'
     tone = 'text-foreground/70'
   } else if (status === 'error') {
     icon = <AlertTriangle className="size-3" />
     text = '保存失败'
-    tone = 'text-red-500'
+    tone = 'text-destructive'
   } else {
     icon = <Check className="size-3 text-muted-foreground/50" />
     text = '已保存'
@@ -640,7 +640,7 @@ export function AutomationFormView(): React.ReactElement | null {
                 </span>
               </div>
               {live?.dispatchBlockReason && !live.pendingTriggers?.length && (
-                <div className="mt-1 rounded-md bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-400">
+                <div className="mt-1 rounded-md bg-warning/10 px-2 py-1.5 text-warning-foreground">
                   目标会话暂不可用，任务已保留待处理：{live.dispatchBlockReason}
                 </div>
               )}
@@ -990,7 +990,7 @@ export function AutomationFormView(): React.ReactElement | null {
           <div className="flex flex-col gap-2">
             <Label>选择模型</Label>
             {form.agentRuntime === 'claude' && agentChannelIds.length === 0 ? (
-              <div className="flex items-center gap-2 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+              <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
                 <Settings size={14} className="shrink-0" />
                 <span>尚未启用任何 Agent 兼容渠道</span>
                 <button
@@ -1021,7 +1021,7 @@ export function AutomationFormView(): React.ReactElement | null {
           <div className="flex flex-col gap-2">
             <Label>工作区</Label>
             {workspaces.length === 0 ? (
-              <div className="flex items-center gap-2 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+              <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
                 <Settings size={14} className="shrink-0" />
                 <span>尚未创建任何工作区</span>
                 <button
@@ -1213,7 +1213,7 @@ export function AutomationFormView(): React.ReactElement | null {
           </div>
 
           {form.permissionMode === 'bypassPermissions' && (
-            <div className="flex gap-2 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+            <div className="flex gap-2 rounded-lg bg-warning/10 p-3 text-xs text-warning-foreground">
               <AlertTriangle className="size-4 shrink-0 mt-0.5" />
               <span>此任务将以「完全权限」无人值守运行，可自主读写文件、执行命令。请确认任务内容安全可信。</span>
             </div>

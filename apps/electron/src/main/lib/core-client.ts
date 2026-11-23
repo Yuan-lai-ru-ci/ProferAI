@@ -1,4 +1,5 @@
 import WebSocket from 'ws'
+import { createPinnedCoreTransport } from './core-pinned-transport'
 import { buildAgentSessionUiProjection, CHAT_IPC_CHANNELS } from '@profer/shared'
 import type { AgentWorkspace, ProjectWorkspaceOpenResult } from '@profer/shared'
 import type { AgentRuntimeQuery, RuntimeCredential } from '@profer/agent-runtime'
@@ -79,6 +80,8 @@ export interface CoreRecoveryResult {
 export interface CoreClientOptions {
   baseUrl: string
   token: string
+  /** 仅配对连接使用；高级 HTTPS 入口继续使用系统 CA。 */
+  identityPin?: string
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>
   webSocketFactory?: (url: string, options: { headers: Record<string, string>; protocols: string[] }) => CoreWebSocket
   reconnect?: boolean
@@ -191,14 +194,17 @@ export class CoreClient {
   private latencyProbe?: { promise: Promise<number>; finish: (error?: Error) => void }
   private waitingPong = false
   private readonly hostCalls = new Set<Promise<void>>()
+  private readonly closeTransport?: () => void
   private hostRequestHandler?: (request: CoreHostIncomingRequest) => Promise<CoreHostOutgoingResponse>
 
   constructor(options: CoreClientOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl)
     this.token = options.token
     if (!this.token.trim()) throw new CoreClientError('Core token 不能为空')
-    this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init))
-    this.webSocketFactory = options.webSocketFactory ?? ((url, connectionOptions) => new WebSocket(url, connectionOptions.protocols, { headers: connectionOptions.headers }) as unknown as CoreWebSocket)
+    const pairedTransport = options.identityPin ? createPinnedCoreTransport(this.baseUrl, options.identityPin) : undefined
+    this.closeTransport = pairedTransport?.close
+    this.fetchImpl = options.fetchImpl ?? pairedTransport?.fetchImpl ?? ((input, init) => fetch(input, init))
+    this.webSocketFactory = options.webSocketFactory ?? pairedTransport?.webSocketFactory ?? ((url, connectionOptions) => new WebSocket(url, connectionOptions.protocols, { headers: connectionOptions.headers }) as unknown as CoreWebSocket)
     this.reconnect = options.reconnect ?? true
     this.reconnectDelayMs = options.reconnectDelayMs ?? 500
     this.onChatEvent = options.onChatEvent
@@ -225,8 +231,24 @@ export class CoreClient {
     return this.request('/health', { auth: false }) as Promise<{ status: string; service: string; version: string }>
   }
 
-  async identity(timeoutMs?: number): Promise<{ protocolVersion: number; coreId: string; version: string; capabilities: string[]; platform?: string }> {
-    return this.request('/identity', { timeoutMs }) as Promise<{ protocolVersion: number; coreId: string; version: string; capabilities: string[]; platform?: string }>
+  async identity(timeoutMs?: number): Promise<{ protocolVersion: number; coreId: string; version: string; capabilities: string[]; platform?: string; osId?: string }> {
+    return this.request('/identity', { timeoutMs }) as Promise<{ protocolVersion: number; coreId: string; version: string; capabilities: string[]; platform?: string; osId?: string }>
+  }
+
+  async connectionState(): Promise<import('@profer/shared').CoreConnectionState> {
+    return this.request('/connection/state', { timeoutMs: 5_000 }) as Promise<import('@profer/shared').CoreConnectionState>
+  }
+
+  async setSharing(enabled: boolean): Promise<import('@profer/shared').CoreConnectionState> {
+    return this.request('/connection/sharing', { method: 'PUT', body: { enabled }, timeoutMs: 10_000 }) as Promise<import('@profer/shared').CoreConnectionState>
+  }
+
+  async createInvitation(input: { addresses?: string[]; name?: string; ttlSeconds?: number; bindingTtlSeconds?: number } = {}): Promise<import('@profer/shared').CoreConnectionInvitation> {
+    return this.request('/connection/invitations', { method: 'POST', body: input, timeoutMs: 5_000 }) as Promise<import('@profer/shared').CoreConnectionInvitation>
+  }
+
+  async revokeBinding(bindingId: string): Promise<void> {
+    await this.request(`/connection/bindings/${encodeURIComponent(bindingId)}`, { method: 'DELETE', timeoutMs: 5_000 })
   }
 
   /** Core 的文件浏览起点；仅非本机内核的选择器使用。 */
@@ -422,6 +444,16 @@ export class CoreClient {
     return () => this.chatEventListeners.delete(listener)
   }
 
+  private accountEventListeners = new Set<() => void>()
+  addAccountEventListener(listener: () => void): () => void { this.accountEventListeners.add(listener); return () => this.accountEventListeners.delete(listener) }
+  private emitAccountEvent(): void { for (const listener of this.accountEventListeners) listener() }
+
+  async accountOperation<T>(operation: string, args: unknown[] = []): Promise<T> {
+    const body = await this.request('/account/operations', { method: 'POST', body: { operation, args } }) as { result: T }
+    if (['login', 'register', 'logout', 'refresh', 'revokeDevice'].includes(operation)) this.emitAccountEvent()
+    return body.result
+  }
+
   async resourceOperation<T>(operation: string, args: unknown[] = []): Promise<T> {
     const body = await this.request('/resources/operations', { method: 'POST', body: { operation, args } }) as { result: T }
     return body.result
@@ -594,8 +626,8 @@ export class CoreClient {
   private applySnapshot(snapshot: CoreRecoverySnapshot): void {
     this.latestSnapshot = snapshot
     if (this.hostRequestHandler && this.socket?.readyState === OPEN) {
-      this.hostSessionIds.clear()
-      for (const session of snapshot.sessions) this.hostSessionIds.add(session.id)
+      const available = new Set(snapshot.sessions.map(session => session.id))
+      for (const sessionId of this.hostSessionIds) if (!available.has(sessionId)) this.hostSessionIds.delete(sessionId)
       this.hostRegistration = this.sendOnSocket(this.socket, { type: 'register_desktop_host', sessionIds: [...this.hostSessionIds] })
       void this.hostRegistration.catch(error => console.error('[Core] 会话宿主恢复绑定失败:', error))
     }
@@ -676,6 +708,7 @@ export class CoreClient {
       socket.onopen = () => {
         if (this.socket !== socket) return
         settleHandshake()
+        this.emitAccountEvent()
         this.closedByUser = false
         if (this.hostRequestHandler) {
           this.hostRegistration = this.sendOnSocket(socket, { type: 'register_desktop_host', sessionIds: [...this.hostSessionIds] })
@@ -701,6 +734,7 @@ export class CoreClient {
       socket.onclose = () => {
         if (this.socket !== socket) return
         this.socket = null
+        this.emitAccountEvent()
         this.clearProbe()
         this.hostRegistration = undefined
         this.bufferedEvents = undefined
@@ -799,6 +833,7 @@ export class CoreClient {
       pending.reject(new CoreClientError('远程 Core 连接已关闭'))
     }
     this.pendingCommands.clear()
+    this.closeTransport?.()
     this.onStatus?.('closed')
   }
 

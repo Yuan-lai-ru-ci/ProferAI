@@ -48,7 +48,7 @@ test('Pocket关闭Core时保留旧删除，不因桌面选择另一Core删除远
     getLocalCoreClient: () => null,
     requestSessionDeletion: (value: unknown) => calls.push(value),
     remoteAgentReplayRegistry: { clearSession() {} }, publishSessionDeleted() {},
-    process: { env: { PROFER_CORE_LOCAL: '0' } },
+    isLocalCoreEnabled: () => false,
   })({ type: 'delete_session', sessionId: 'local-session' })
   expect(result).toMatchObject({ ok: true, data: { sessionId: 'local-session' } })
   expect(calls).toEqual([{ sessionId: 'local-session', reason: 'user' }])
@@ -60,6 +60,6 @@ test('Pocket会话列表取本地Core，过滤归档和无效工作区，不读�
     listAgentWorkspaces: () => [{ id: 'workspace' }], buildSessionItem: (value: unknown) => value, buildSessionList: noDesktop,
   })({ type: 'list_sessions' })
   expect(result).toEqual({ ok: true, data: [{ id: 'visible', workspaceId: 'workspace' }] })
-  const unavailable = await handler('list_sessions', { getLocalCoreClient: () => null, process: { env: { PROFER_CORE_LOCAL: '1' } }, buildSessionList: noDesktop })({ type: 'list_sessions' })
+  const unavailable = await handler('list_sessions', { getLocalCoreClient: () => null, isLocalCoreEnabled: () => true, buildSessionList: noDesktop })({ type: 'list_sessions' })
   expect(unavailable).toEqual({ ok: false, error: '本地Core未就绪' })
 })

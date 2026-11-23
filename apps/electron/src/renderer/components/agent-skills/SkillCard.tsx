@@ -75,7 +75,7 @@ export function SkillCard({
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="rounded-xl bg-amber-500/12 p-2 text-amber-500 shadow-sm shrink-0">
+        <div className="rounded-xl bg-muted p-2 text-muted-foreground shadow-sm shrink-0">
           <Sparkles size={18} />
         </div>
         <div className="min-w-0 flex-1">
@@ -114,7 +114,7 @@ export function SkillCard({
 
       <div className="mt-auto flex items-center gap-2">
         {isBuiltin ? (
-          <span className="flex items-center gap-1 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+          <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
             <ShieldCheck size={12} /> Profer 内置
           </span>
         ) : skill.sourceSkillType === "user-global" ? (
@@ -141,7 +141,7 @@ export function SkillCard({
                   onUpdate();
                 }}
                 disabled={updating}
-                className="ml-auto flex items-center gap-1 rounded-md bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 hover:bg-blue-500/20 transition-colors disabled:opacity-60 dark:text-blue-400"
+                className="ml-auto flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-accent transition-colors disabled:opacity-60"
               >
                 <RefreshCw
                   size={12}
@@ -163,7 +163,7 @@ export function SkillCard({
                   onPublish();
                 }}
                 disabled={publishing}
-                className="ml-auto flex items-center gap-1 rounded-md bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-600 hover:bg-green-500/20 transition-colors disabled:opacity-60 dark:text-green-400"
+                className="ml-auto flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-accent transition-colors disabled:opacity-60"
               >
                 <Upload
                   size={12}

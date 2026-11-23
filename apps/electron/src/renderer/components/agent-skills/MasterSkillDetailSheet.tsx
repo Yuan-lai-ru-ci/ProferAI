@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { SkillDetailSheetFrame } from "./SkillDetailSheetFrame";
 import { SkillDetailLayout } from "./SkillDetailLayout";
+import { SkillCardSection } from "./SkillCardSection";
 import { Button } from "@profer/ui/primitives/button";
 import {
   Tooltip,
@@ -502,6 +503,15 @@ function MasterSkillBody({
                   </div>
                 )}
               </div>
+
+              {isGlobal && (
+                <SkillCardSection
+                  globalSkillId={skill.skillId}
+                  skillSlug={slug}
+                  canEdit={canEditBody}
+                  onChanged={onChanged}
+                />
+              )}
 
               <div className="flex items-center justify-between">
                 <div className="font-mono text-xs text-muted-foreground">

@@ -1,6 +1,6 @@
 {
   "name": "@profer/ui",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "license": "AGPL-3.0-only",
   "description": "Shared UI components for Profer",
   "type": "module",

@@ -7,7 +7,7 @@
  */
 import * as React from 'react'
 import { toast } from 'sonner'
-import { Pencil, Save, X } from 'lucide-react'
+import { FilePlus2, Pencil, Save, X } from 'lucide-react'
 import { AGENT_PRESET_CAPABILITY_GROUPS, type SkillDoctorIssue, type WorkspaceSkillCardState } from '@profer/shared'
 import { Button } from '@profer/ui/primitives/button'
 import { Input } from '@profer/ui/primitives/input'
@@ -17,13 +17,14 @@ import { SettingsCard } from '@/components/settings/primitives'
 import { cn } from '@/lib/utils'
 import { cardFormFromManifest, cardPatchFromForm, EMPTY_SKILL_CARD_FORM, type SkillCardForm } from './skillCardForm'
 
-interface SkillCardSectionProps {
-  workspaceSlug: string
+type SkillCardSectionProps = {
   skillSlug: string
-  /** 内置源只读；只有工作区里的技能才允许改卡片。 */
   canEdit: boolean
   onChanged?: () => void
-}
+} & (
+  | { workspaceSlug: string; workspaceSkillId?: string; globalSkillId?: never }
+  | { globalSkillId: string; workspaceSlug?: never; workspaceSkillId?: never }
+)
 
 const SEVERITY_CLASS: Record<SkillDoctorIssue['severity'], string> = {
   error: 'text-destructive',
@@ -31,7 +32,7 @@ const SEVERITY_CLASS: Record<SkillDoctorIssue['severity'], string> = {
   info: 'text-muted-foreground',
 }
 
-export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged }: SkillCardSectionProps): React.ReactElement {
+export function SkillCardSection({ workspaceSlug, workspaceSkillId, globalSkillId, skillSlug, canEdit, onChanged }: SkillCardSectionProps): React.ReactElement {
   const [card, setCard] = React.useState<WorkspaceSkillCardState | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -39,12 +40,15 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
   const [saving, setSaving] = React.useState(false)
   const [form, setForm] = React.useState<SkillCardForm>({ ...EMPTY_SKILL_CARD_FORM })
 
+  const read = React.useCallback(() => globalSkillId !== undefined
+    ? window.electronAPI.globalSkill.readCard(globalSkillId)
+    : window.electronAPI.readSkillCard(workspaceSlug, skillSlug), [globalSkillId, workspaceSlug, skillSlug])
+
   React.useEffect(() => {
     let active = true
     setLoading(true)
     setEditing(false)
-    window.electronAPI
-      .readSkillCard(workspaceSlug, skillSlug)
+    read()
       .then((state) => {
         if (!active) return
         setCard(state)
@@ -55,7 +59,6 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
         console.error('[SkillDetail] 读取路由卡片失败:', cause)
         if (!active) return
         setCard(null)
-        // 内置源不在当前工作区，读不到是正常情况；把原因说清楚，不要显示成“暂无卡片”。
         setError(cause instanceof Error ? cause.message : '读取失败')
       })
       .finally(() => {
@@ -64,12 +67,31 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
     return () => {
       active = false
     }
-  }, [workspaceSlug, skillSlug])
+  }, [read])
+
+  const create = async (): Promise<void> => {
+    setSaving(true)
+    try {
+      await window.electronAPI.resolveSkillCardReminder(globalSkillId !== undefined
+        ? { scope: 'global', skillId: globalSkillId }
+        : { scope: 'workspace', workspaceSlug, skillSlug, workspaceSkillId }, 'create')
+      setCard(await read())
+      onChanged?.()
+      toast.success('已创建路由卡片')
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : '创建路由卡片失败')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const save = async (): Promise<void> => {
     setSaving(true)
     try {
-      const next = await window.electronAPI.writeSkillCard(workspaceSlug, skillSlug, cardPatchFromForm(form))
+      const patch = cardPatchFromForm(form)
+      const next = globalSkillId !== undefined
+        ? await window.electronAPI.globalSkill.writeCard(globalSkillId, patch)
+        : await window.electronAPI.writeSkillCard(workspaceSlug, skillSlug, patch)
       setCard(next)
       setForm(cardFormFromManifest(next.manifest))
       setEditing(false)
@@ -91,8 +113,11 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
   const excludeKeywords = manifest?.triggers?.excludeKeywords ?? []
   const toolGroups = manifest?.dependencies?.toolGroups ?? []
   const tools = manifest?.dependencies?.tools ?? []
+  const mcpServers = manifest?.dependencies?.mcpServers ?? []
+  const dependencies = [...toolGroups, ...tools, ...mcpServers]
   const explicitOnly = manifest?.policy?.implicit === false
   const doctor = (card?.doctor ?? []).filter((issue) => issue.severity !== 'info')
+  const diagnostics = doctor.length > 0 ? doctor : (card?.issues ?? [])
 
   return (
     <div className="space-y-2">
@@ -100,12 +125,17 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           路由卡片
         </h4>
-        {canEdit &&
-          (!editing ? (
+        {canEdit && !loading && !error &&
+          (!card?.present ? (
+            <Button size="sm" variant="outline" disabled={saving} onClick={() => void create()}>
+              <FilePlus2 size={14} /> {saving ? '创建中…' : '创建卡片'}
+            </Button>
+          ) : !editing ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
+                  aria-label="编辑路由卡片"
                   onClick={() => {
                     setForm(cardFormFromManifest(card?.manifest))
                     setEditing(true)
@@ -133,7 +163,7 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
         <div className="px-1 text-xs text-muted-foreground">加载中...</div>
       ) : error ? (
         <div className="px-1 text-xs text-muted-foreground">
-          {canEdit ? `读取失败：${error}` : '内置源随技能本体发布；复制到当前工作区后才能编辑依赖与触发方式。'}
+          读取失败：{error}
         </div>
       ) : (
         <SettingsCard divided={false}>
@@ -144,7 +174,7 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
                   「什么时候用」写在上面元数据的描述里（例如 “Use when: 画图表、流程图、可调参的讲解”）——
                   模型读到的就是描述，写在那里就够了；这里只填程序要判定的依赖与触发方式。
                 </p>
-                <Field label="需要的能力组" hint="缺任意一项时该技能不会自动触发">
+                <Field label="需要的能力组" hint="缺少必需能力时，此 Skill 不会加载">
                   <div className="flex flex-wrap gap-1.5">
                     {AGENT_PRESET_CAPABILITY_GROUPS.map((group) => {
                       const selected = form.toolGroups.includes(group.id)
@@ -152,6 +182,7 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
                         <button
                           key={group.id}
                           type="button"
+                          aria-pressed={selected}
                           onClick={() =>
                             setForm((current) => ({
                               ...current,
@@ -171,9 +202,18 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
                 </Field>
                 <Field label="额外工具" hint="不在能力组里的工具名，如 mcp__server__tool">
                   <Input
+                    aria-label="额外工具"
                     value={form.tools}
                     onChange={(e) => setForm((current) => ({ ...current, tools: e.target.value }))}
                     placeholder="present_visualization"
+                  />
+                </Field>
+                <Field label="必需的 MCP 服务器" hint="填写配置里的服务器名，多个用逗号分开">
+                  <Input
+                    aria-label="必需的 MCP 服务器"
+                    value={form.mcpServers}
+                    onChange={(e) => setForm((current) => ({ ...current, mcpServers: e.target.value }))}
+                    placeholder="github"
                   />
                 </Field>
                 <label className="flex cursor-pointer items-center justify-between gap-2 select-none">
@@ -186,15 +226,15 @@ export function SkillCardSection({ workspaceSlug, skillSlug, canEdit, onChanged 
               </div>
             ) : (
               <>
-                <CardRow label="依赖" value={toolGroups.length || tools.length ? [...toolGroups, ...tools].join('、') : '未声明'} />
+                {card?.present && <CardRow label="依赖" value={dependencies.join('、') || '无额外声明'} />}
                 <CardRow label="触发依据" value={keywords.length ? `描述里的「什么时候用」 + 旧词表（${keywords.length} 个）` : '描述里的「什么时候用」'} />
                 {excludeKeywords.length > 0 && <CardRow label="排除词" value={excludeKeywords.join('、')} />}
                 {explicitOnly && <CardRow label="触发方式" value="只接受显式引用" />}
                 <CardRow
                   label="状态"
-                  value={card?.present ? '已写入 SKILL.json' : '暂无卡片（回退读正文 frontmatter / 侧车）'}
+                  value={card?.present ? (manifest ? '已写入 SKILL.json' : '卡片存在，内容无法读取') : '未创建卡片，沿用默认规则'}
                 />
-                {doctor.map((issue) => (
+                {diagnostics.map((issue) => (
                   <div key={`${issue.code}-${issue.message}`} className="flex items-start gap-4 px-4 py-2.5">
                     <span className="w-16 shrink-0 pt-0.5 text-xs text-muted-foreground">体检</span>
                     <span className={cn('min-w-0 flex-1 break-words text-xs', SEVERITY_CLASS[issue.severity])}>{issue.message}</span>

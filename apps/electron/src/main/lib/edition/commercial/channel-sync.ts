@@ -9,6 +9,7 @@
  * 会话快照、目录失效通知），本模块因此不 import channel-manager，避免
  * `channel-manager → edition → commercial → channel-manager` 的循环依赖。
  */
+import { isIndependentLocalCore } from '../../core-local-mode'
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import type { ChannelsConfig, ChannelModel, ProviderType } from '@profer/shared'
 import { isChannelEnabledForAnyRuntime } from '@profer/shared'
@@ -16,6 +17,7 @@ import type { EditionChannelStore } from '@profer/edition-contract'
 import { decryptToken } from '../../token-crypto'
 import { getFetchFn } from '../../proxy-fetch'
 import { mergeServerChannelModels, normalizeChannelForCurrentSchema } from '../../channel-url-routing'
+import { getSettings, updateSettings } from '../../settings-service'
 
 /** 登出清理官方代管渠道的结果 */
 export interface PruneChannelsResult {
@@ -152,6 +154,8 @@ export function restoreForAccount(store: EditionChannelStore, accountId: string)
  * 同时备份旧配置到 channels.json.server-backup。
  */
 export async function syncFromServer(store: EditionChannelStore, serverBaseUrl: string, accessToken: string): Promise<boolean> {
+  // 独立 Core 的渠道由 owner 持有，通过资源事件刷新；不落桌面副本。
+  if (isIndependentLocalCore()) return false
   // 记录请求发起时的账号身份。登出后旧请求即使返回成功，也不得把官方渠道写回本地。
   // 账号能力经发行版契约获取：开源版恒为 null，这条路径在那里会直接抛错退出。
   const generationAtStart = store.getSessionGeneration()
@@ -264,7 +268,6 @@ export async function syncFromServer(store: EditionChannelStore, serverBaseUrl: 
   // 首次同步时自动配置 Agent 供应商（用户手动配过后不再覆盖）
   if (config.channels.length > 0) {
     try {
-      const { updateSettings, getSettings } = require('./settings-service')
       const settings = getSettings()
       // 已配置过 → 不覆盖用户选择
       if (settings.agentChannelIds && settings.agentChannelIds.length > 0) {

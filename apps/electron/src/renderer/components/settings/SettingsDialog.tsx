@@ -55,6 +55,11 @@ export function SettingsDialog({ tabsOverride }: SettingsDialogProps): React.Rea
               }
             }
           }}
+          onEscapeKeyDown={(event) => {
+            // Radix 在捕获阶段处理 Esc；搜索非空时先交给搜索框清空，不关闭设置。
+            const target = event.target
+            if (target instanceof HTMLInputElement && target.id === 'settings-nav-search' && target.value) event.preventDefault()
+          }}
           data-browser-blocking
           className="settings-dialog dialog-dim fixed left-[50%] top-[50%] z-[100] translate-x-[-50%] translate-y-[-50%] h-[calc(100dvh-24px)] w-[calc(100vw-24px)] max-h-[860px] max-w-[1120px] overflow-hidden rounded-lg border border-surface-border/60 bg-dialog text-dialog-foreground titlebar-no-drag md:h-[88dvh] md:w-[92vw] motion-safe:transition-all motion-safe:duration-100 data-[state=open]:opacity-100 data-[state=closed]:opacity-0"
         >

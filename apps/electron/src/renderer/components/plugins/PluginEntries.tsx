@@ -1,3 +1,4 @@
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { Blocks } from 'lucide-react'
@@ -54,13 +55,13 @@ function PluginPageIcon({ entry, size = 16 }: { entry: PluginPageEntry; size?: n
 export function PluginSidebarEntries({ collapsed = false }: { collapsed?: boolean }): React.ReactElement | null {
   const { pages, open } = usePluginPages('sidebar')
   if (!pages.length) return null
-  return <div className={collapsed ? 'flex max-h-40 flex-col items-center gap-[3px] overflow-y-auto scrollbar-thin' : 'max-h-48 overflow-y-auto px-3 py-1 space-y-1'}>
+  return <ScrollRegion className={collapsed ? 'flex max-h-40 flex-col items-center gap-[3px] overflow-y-auto scrollbar-thin' : 'max-h-48 overflow-y-auto px-3 py-1 space-y-1'}>
     {pages.map((entry) => <button key={`${entry.pluginId}:${entry.page.id}`} type="button" title={entry.page.title} aria-label={entry.page.title}
       className={`titlebar-no-drag flex flex-none items-center gap-2 rounded-[9px] text-[15px] leading-5 text-foreground/40 transition-colors duration-100 hover:bg-foreground/[0.045] hover:text-foreground/[0.72] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${collapsed ? 'size-[36px] justify-center' : 'w-full px-3 py-2'}`}
       onClick={() => void open(entry.pluginId, entry.page.id, entry.page.title, undefined, 'sidebar').catch(report)}>
       <PluginPageIcon entry={entry} size={collapsed ? 19 : 16} />{!collapsed && <span className="truncate">{entry.page.title}</span>}
     </button>)}
-  </div>
+  </ScrollRegion>
 }
 
 /** 声明了顶栏入口的插件页面逐个渲染为图标按钮；没有可展示页面时不占顶栏。 */

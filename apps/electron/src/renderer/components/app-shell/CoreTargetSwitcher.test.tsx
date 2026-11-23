@@ -7,7 +7,7 @@ import type { CoreTargetsSnapshot, CoreTargetSummary } from '@/types/settings'
 import { CoreTargetPanel, CoreTargetSwitcher, getCoreSwitcherTargets } from './CoreTargetSwitcher'
 
 const local: CoreTargetSummary = { id: 'local', kind: 'local', name: '本机内核', status: 'connected' }
-const remote: CoreTargetSummary = { id: 'remote', kind: 'remote', name: '远程开发机', coreId: 'core-1', status: 'disconnected' }
+const remote: CoreTargetSummary = { id: 'remote', kind: 'remote', name: '远程开发机', coreId: 'core-1', status: 'disconnected', platform: 'linux', osId: 'ubuntu' }
 
 function renderSwitcher(targets: CoreTargetSummary[], currentId = local.id): string {
   const store = createStore()
@@ -40,9 +40,10 @@ describe('Rail Core 切换器', () => {
     const snapshot: CoreTargetsSnapshot = { generation: 1, currentId: 'local', targets: [target, local] }
     expect(getCoreSwitcherTargets(snapshot)).toEqual([local, target])
     const markup = renderPanel(target)
-    expect(markup.match(/<button[^>]+>/g)).toHaveLength(2)
+    expect(markup.match(/<button[^>]+>/g)).toHaveLength(3)
+    expect(markup.match(/<button[^>]+>/g)?.at(-1)).toContain('aria-label="设置内核"')
     expect(markup).not.toContain('https://a.example')
-    expect(markup).toContain('scrollbar-none overflow-x-auto')
+    expect(markup).not.toContain('管理设备与连接')
   })
 
   test('等待时旧点保持选中；收到已切换快照后新点选中', () => {
@@ -59,6 +60,26 @@ describe('Rail Core 切换器', () => {
     const restoring = renderPanel(remote, false, true)
     expect(restoring).toContain('正在恢复连接')
     expect(dot(restoring, '重试连接 远程开发机')).toContain('aria-disabled="true"')
+  })
+
+  test('分段轨道替代圆点，当前设备高亮，摘要不重复', () => {
+    const markup = renderPanel({ ...remote, status: 'connected' })
+    expect(markup).toContain('aria-label="切换 Core"')
+    expect(markup).toContain('rounded-full bg-primary/5 px-1 py-0.5')
+    expect(markup).toContain('w-1 rounded-full')
+    expect(dot(markup, '本机内核')).toContain('w-4')
+    expect(dot(markup, '本机内核')).toContain('motion-reduce:transition-none')
+    expect(dot(markup, '远程开发机')).toContain('data-expanded="true"')
+    expect(dot(markup, '远程开发机')).toContain('bg-primary text-primary-foreground')
+    expect(markup).not.toContain('bg-foreground')
+    expect(markup).not.toContain('border-t')
+    expect(markup).not.toContain('h-44')
+    expect(markup).not.toContain('size-11')
+    expect(markup).not.toContain('size-2.5 rounded-full border')
+    expect(markup.match(/>远程开发机<\/div>/g)).toHaveLength(1)
+    expect(markup).not.toContain('当前使用中')
+    expect(markup).not.toContain('管理设备与连接')
+    expect(renderSwitcher([local, remote])).toContain('size-[36px]')
   })
 
   test('仅已连接的当前远程显示 WebSocket 延迟', () => {

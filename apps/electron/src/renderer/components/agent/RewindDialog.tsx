@@ -119,7 +119,7 @@ export function RewindDialog({ open, onOpenChange, sessionId, target, client, in
         executingPlanId.current = null
         setLoading(false)
       })
-  }, [client, coordinator, onCommitted, onError, sessionId])
+  }, [client, coordinator, sessionId])
 
   // 打开即准备：没有文件回退时直接执行，不显示确认框。
   React.useEffect(() => {

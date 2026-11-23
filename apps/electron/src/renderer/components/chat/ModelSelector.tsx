@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { ownsCoreChat, coreTargetsAtom, coreChannelsAtom, coreChannelsLoadedAtom } from '@/atoms/core-target-atoms'
+import { ownsCoreChat, coreTargetsAtom, coreChannelsAtom, coreChannelsLoadedAtom, coreCatalogRevisionAtom } from '@/atoms/core-target-atoms'
 import { ChevronDown, Cpu, Search, Layers2 } from 'lucide-react'
 import {
   Dialog,
@@ -224,6 +224,8 @@ export function ModelSelector({
     onOpenChange?.(next)
   }, [controlledOpen, onOpenChange])
   const target = useAtomValue(coreTargetsAtom)
+  const catalogStatus = target.targets.find(item => item.id === target.currentId)?.status
+  const catalogRevision = useAtomValue(coreCatalogRevisionAtom)
   const coreChannels = useAtomValue(coreChannelsAtom)
   const coreLoaded = useAtomValue(coreChannelsLoadedAtom)
   const setCoreChannels = useSetAtom(coreChannelsAtom)
@@ -264,7 +266,7 @@ export function ModelSelector({
       setCoreLoaded({ targetId: target.currentId, generation: target.generation })
     }).catch((error: unknown) => { if (isCurrent()) toast.error(error instanceof Error ? error.message : '读取 Core 模型目录失败') })
     return () => { active = false }
-  }, [usesCoreCatalog, target.currentId, target.generation, store, setCoreChannels, setCoreLoaded])
+  }, [usesCoreCatalog, target.currentId, target.generation, catalogStatus, catalogRevision, store, setCoreChannels, setCoreLoaded])
 
   // 外部请求打开（ErrorMessage 的 select_model 恢复操作）：seq 变化时打开 Dialog。
   // 组件挂载时先记录当前 seq（不弹窗），后续新请求（seq+1）才会触发。

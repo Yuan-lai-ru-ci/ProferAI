@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentRunLedger } from '@profer/agent-runtime'
 import { createFileRunLedgerPort } from '@profer/session-store'
+import { writeCoreChannelStore } from './channel-store'
 import { createCoreAgentRuntime } from './runtime'
 import { createClaudeSdkDouble } from '../../../packages/agent-provider-claude/test-hosts/claude-sdk-double'
 
@@ -11,15 +12,18 @@ import { createClaudeSdkDouble } from '../../../packages/agent-provider-claude/t
 test('Core Claude 模式同步成功才保存，失败停止原Run并保留权威模式', async () => {
   const root = await mkdtemp(join(tmpdir(), 'profer-core-claude-mode-'))
   const sdk = createClaudeSdkDouble()
-  const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'),
-    channels: [{ id: 'offline', name: 'offline', provider: 'anthropic', apiKey: 'unused', baseUrl: 'https://api.anthropic.com' }],
-  }, { claude: { sdkLoader: async () => sdk.module, spawnProcess: sdk.spawnProcess } })
-  const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Claude mode fixture', runtime: 'claude', permissionMode: 'auto', channelId: 'offline' })
+  const apiKey = 'fixture-core-owned-key'
+  writeCoreChannelStore(root, [{ id: 'offline', name: 'offline', provider: 'anthropic', apiKey, agentRuntimes: ['claude'],
+    models: [{ id: 'claude-sonnet-4-5', name: 'Claude', enabled: true }] }])
+  const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces') },
+    { independent: true, claude: { sdkLoader: async () => sdk.module, spawnProcess: sdk.spawnProcess } })
+  const session = runtime.createConfiguredSession({ workspaceId: runtime.workspaces.createManaged('测试工作区').id,
+    title: 'Claude mode fixture', runtime: 'claude', channelId: 'offline' })
   try {
     const handle = runtime.coordinator.run(runtime.createQuery(session, 'offline fixture'))
     const deadline = Date.now() + 3000
     while (!sdk.state.options && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
-    expect(sdk.state.options).toBeDefined()
+    expect(sdk.state.options).toMatchObject({ model: 'claude-sonnet-4-5', env: { ANTHROPIC_API_KEY: apiKey } })
     expect(sdk.state.options!.permissionMode).toBe('auto')
     expect(sdk.state.options!.allowedTools).not.toContain('Write')
     expect(sdk.state.options!.allowedTools).not.toContain('mcp__planning__*')

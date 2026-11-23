@@ -12,7 +12,15 @@ function verifyPackagedWindowsCli(binDir) {
   }
 
   const entries = fs.readdirSync(binDir, { withFileTypes: true })
-  const coreEntries = new Set(['profer-core.exe', 'core.js', 'core-runtime.json', 'node_modules'])
+  const coreEntries = new Set(['profer-core.exe', 'profer-core-owner.exe', 'core.js', 'core-runtime.json', 'node_modules'])
+  if (entries.some(entry => coreEntries.has(entry.name))) {
+    for (const name of coreEntries) {
+      const file = path.join(binDir, name)
+      if (!fs.existsSync(file)) throw new Error(`Windows Core 资源缺失: ${file}`)
+      const stat = fs.lstatSync(file)
+      if (stat.isSymbolicLink() || (name === 'node_modules' ? !stat.isDirectory() : !stat.isFile() || stat.size <= 0)) throw new Error(`Windows Core 资源无效: ${file}`)
+    }
+  }
   const invalid = entries.filter(entry => entry.name !== WINDOWS_CLI_NAME && !coreEntries.has(entry.name))
   if (!entries.some(entry => entry.name === WINDOWS_CLI_NAME) || invalid.length) {
     const actual = entries.map((entry) => entry.name).sort().join(', ') || '<空>'

@@ -1,3 +1,5 @@
+import { Button } from '@profer/ui/primitives/button'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 /**
  * GoalOverviewList — 规划中心的跨会话 Goal 总览
  *
@@ -250,24 +252,24 @@ export function GoalOverviewList(): React.ReactElement {
                 <span className="text-[11px] text-warning" title="预算耗尽，需回到会话内状态栏提高预算">预算已满</span>
               )}
               {actions.canResume && (
-                <button type="button" disabled={busy} onClick={() => void run(goal.id, () => window.electronAPI.resumeGoal(goal.sessionId), 'Goal 已恢复')} className="inline-flex h-7 items-center gap-1 rounded-md border border-surface-border/50 px-2 text-xs hover:bg-muted/60 disabled:opacity-50">
+                <Button variant="outline" size="sm" type="button" disabled={busy} onClick={() => void run(goal.id, () => window.electronAPI.resumeGoal(goal.sessionId), 'Goal 已恢复')} className="h-7 gap-1 px-2">
                   <Play className="size-3" /> 恢复
-                </button>
+                </Button>
               )}
               {actions.canPause && (
-                <button type="button" disabled={busy} onClick={() => void run(goal.id, () => window.electronAPI.pauseGoal(goal.sessionId), 'Goal 已暂停')} className="inline-flex h-7 items-center gap-1 rounded-md border border-surface-border/50 px-2 text-xs hover:bg-muted/60 disabled:opacity-50">
+                <Button variant="outline" size="sm" type="button" disabled={busy} onClick={() => void run(goal.id, () => window.electronAPI.pauseGoal(goal.sessionId), 'Goal 已暂停')} className="h-7 gap-1 px-2">
                   <Pause className="size-3" /> 暂停
-                </button>
+                </Button>
               )}
               {actions.canStop && (
-                <button type="button" disabled={busy} onClick={() => void run(goal.id, () => window.electronAPI.stopGoal(goal.sessionId), 'Goal 已停止')} className="inline-flex h-7 items-center gap-1 rounded-md border border-surface-border/50 px-2 text-xs hover:bg-muted/60 disabled:opacity-50">
+                <Button variant="outline" size="sm" type="button" disabled={busy} onClick={() => void run(goal.id, () => window.electronAPI.stopGoal(goal.sessionId), 'Goal 已停止')} className="h-7 gap-1 px-2">
                   <Square className="size-3" /> 停止
-                </button>
+                </Button>
               )}
               {actions.canClear && (
-                <button type="button" disabled={busy} onClick={() => void run(goal.id, () => window.electronAPI.clearGoal(goal.sessionId), 'Goal 已清除并归档')} className="inline-flex h-7 items-center rounded-md px-2 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground disabled:opacity-50">
+                <Button variant="ghost" size="sm" type="button" disabled={busy} onClick={() => void run(goal.id, () => window.electronAPI.clearGoal(goal.sessionId), 'Goal 已清除并归档')} className="h-7 px-2 text-muted-foreground">
                   清除
-                </button>
+                </Button>
               )}
             </div>
           )}
@@ -307,7 +309,7 @@ export function GoalOverviewList(): React.ReactElement {
 
   const empty = liveEntries.length === 0 && endedEntries.length === 0 && !loading
   return (
-    <div className="h-full overflow-y-auto px-4 py-3 sm:px-5">
+    <ScrollRegion className="h-full overflow-y-auto px-4 py-3 sm:px-5">
       {empty ? (
         <div className="mx-auto mt-16 flex max-w-md flex-col items-center gap-2 text-center">
           <Target className="size-8 text-muted-foreground/50" aria-hidden="true" />
@@ -335,6 +337,6 @@ export function GoalOverviewList(): React.ReactElement {
           </p>
         </div>
       )}
-    </div>
+    </ScrollRegion>
   )
 }

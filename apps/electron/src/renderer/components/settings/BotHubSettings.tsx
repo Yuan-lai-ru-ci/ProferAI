@@ -1,14 +1,13 @@
 /**
  * BotHubSettings - 多平台机器人连接设置 Hub
  *
- * 左侧平台选择栏 + 右侧配置面板。
- * 支持飞书、钉钉、微信（WeClaw）三个平台。
+ * 按设备、消息平台与偏好分组导航，右侧展示对应连接管理。
  */
 
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import { cn } from '@/lib/utils'
-import { BriefcaseBusiness, ChevronRight, Cpu, Image, Smartphone } from 'lucide-react'
+import { ArrowUpRight, BriefcaseBusiness, Cpu, Image, Smartphone } from 'lucide-react'
 import { feishuBotStatesAtom } from '@/atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from '@/atoms/dingtalk-atoms'
 import { wechatBridgeStateAtom } from '@/atoms/wechat-atoms'
@@ -42,13 +41,13 @@ interface BotPlatformDef {
 const PLATFORMS: readonly BotPlatformDef[] = [
   {
     id: 'pocket',
-    name: '移动模式（试验版）',
+    name: '移动端连接',
     icon: <Smartphone size={16} aria-hidden="true" />,
-    iconTextClass: 'text-violet-600',
+    iconTextClass: 'text-muted-foreground',
   },
   {
     id: 'core',
-    name: '远程内核',
+    name: '内核连接',
     icon: <Cpu size={16} aria-hidden="true" />,
     iconTextClass: 'text-primary',
   },
@@ -81,13 +80,16 @@ const PLATFORMS: readonly BotPlatformDef[] = [
   },
 ] as const
 
-/** 连接状态颜色映射 */
+/** 状态颜色只作辅助，连接状态同时提供文字语义。 */
 const BRIDGE_STATUS_COLORS = {
-  disconnected: 'bg-gray-400',
-  connecting: 'bg-yellow-400 animate-pulse',
-  connected: 'bg-green-500',
-  error: 'bg-red-500',
+  disconnected: 'bg-muted-foreground/40',
+  connecting: 'bg-warning',
+  connected: 'bg-success',
+  error: 'bg-destructive',
 } as const
+const BRIDGE_STATUS_LABELS: Record<string, string> = {
+  disconnected: '未连接', connecting: '连接中', connected: '已连接', error: '连接异常',
+}
 
 // ===== 子组件 =====
 
@@ -105,11 +107,12 @@ function PlatformStatusDot({ platformId }: { platformId: BotPlatformId }): React
     wechat: wechatState.status,
   }
   const status = statusMap[platformId] ?? 'disconnected'
-  const colorClass = BRIDGE_STATUS_COLORS[status as keyof typeof BRIDGE_STATUS_COLORS] ?? 'bg-gray-400'
+  const colorClass = BRIDGE_STATUS_COLORS[status as keyof typeof BRIDGE_STATUS_COLORS] ?? 'bg-muted-foreground/40'
 
   return (
     <span
-      aria-label={`连接状态：${status}`}
+      title={BRIDGE_STATUS_LABELS[status] ?? '未连接'}
+      aria-label={`连接状态：${BRIDGE_STATUS_LABELS[status] ?? '未连接'}`}
       className={cn('h-1.5 w-1.5 shrink-0 rounded-full', colorClass)}
     />
   )
@@ -135,15 +138,17 @@ function PlatformSidebarItem({
   isActive: boolean
   onClick: () => void
 }): React.ReactElement {
+  const isDevice = platform.id === 'pocket' || platform.id === 'core'
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        'flex min-w-0 shrink-0 items-center gap-2 border-b-2 px-3 py-2.5 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+        'group relative flex min-w-0 items-center gap-3 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus motion-reduce:transition-none',
+        isDevice ? 'rounded-xl border px-4 py-3' : 'rounded-lg px-2.5 py-2',
         isActive
-          ? 'border-primary text-foreground'
-          : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground',
+          ? isDevice ? 'border-foreground/20 bg-card text-foreground shadow-sm' : 'bg-muted text-foreground font-medium'
+          : isDevice ? 'border-transparent bg-muted/40 text-muted-foreground hover:bg-muted/70' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
       )}
       id={`bot-settings-tab-${platform.id}`}
       aria-current={isActive ? 'page' : undefined}
@@ -154,15 +159,16 @@ function PlatformSidebarItem({
       {platform.iconSrc ? (
         <img src={platform.iconSrc} alt="" className="h-5 w-5 rounded object-contain" />
       ) : (
-        <span className={cn('flex h-5 w-5 items-center justify-center', platform.iconTextClass)}>
+        <span className={cn('flex shrink-0 items-center justify-center', isDevice ? 'size-8 rounded-lg bg-background shadow-sm' : 'size-5')}>
           {platform.icon}
         </span>
       )}
 
       {/* 名称 */}
-      <span className="min-w-0 truncate">{platform.name}</span>
-      <PlatformStatusDot platformId={platform.id} />
-      {isActive && <ChevronRight size={14} className="ml-auto shrink-0" aria-hidden="true" />}
+      <span className="min-w-0 flex-1">
+        <span className={cn('block truncate', isDevice && 'font-semibold text-foreground')}>{platform.name}</span>
+      </span>
+      {isDevice ? <ArrowUpRight className={cn('size-4 shrink-0 transition-colors', isActive ? 'text-foreground' : 'text-muted-foreground/50')} aria-hidden="true" /> : <PlatformStatusDot platformId={platform.id} />}
     </button>
   )
 }
@@ -198,9 +204,9 @@ function renderPlatformPanel(id: BotPlatformId): React.ReactElement {
     case 'wechat':
       return <div className="space-y-5">{note}<WeChatSettings /></div>
     case 'pocket':
-      return <div className="space-y-5">{note}<PocketModeSettings /></div>
+      return <PocketModeSettings />
     case 'core':
-      return <div className="space-y-5">{note}<RemoteCoreSettings /></div>
+      return <RemoteCoreSettings />
     case 'defaults':
       return <div className="space-y-5">{note}<BotDefaultSettings /></div>
     case 'logos':
@@ -214,22 +220,25 @@ export function BotHubSettings(): React.ReactElement {
   const [selectedPlatform, setSelectedPlatform] = React.useState<BotPlatformId>('pocket')
 
   return (
-    <div className="space-y-5">
-      <nav className="-mx-1 flex min-w-0 gap-1 overflow-x-auto border-b border-border/60 px-1" aria-label="远程连接平台">
-        {PLATFORMS.map((p) => (
-          <PlatformSidebarItem
-            key={p.id}
-            platform={p}
-            isActive={selectedPlatform === p.id}
-            onClick={() => setSelectedPlatform(p.id)}
-          />
-        ))}
+    <div className="min-w-0 space-y-6">
+      <nav className="space-y-3" aria-label="远程连接平台">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-label="设备与内核">
+          {PLATFORMS.filter(platform => platform.id === 'pocket' || platform.id === 'core').map(platform => <PlatformSidebarItem key={platform.id} platform={platform} isActive={selectedPlatform === platform.id} onClick={() => setSelectedPlatform(platform.id)} />)}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border/50 pb-4">
+          <div className="flex flex-wrap items-center gap-1" aria-label="消息平台">
+            {PLATFORMS.filter(platform => ['feishu', 'wechat', 'dingtalk'].includes(platform.id)).map(platform => <PlatformSidebarItem key={platform.id} platform={platform} isActive={selectedPlatform === platform.id} onClick={() => setSelectedPlatform(platform.id)} />)}
+          </div>
+          <div className="flex flex-wrap gap-1" aria-label="连接偏好">
+            {PLATFORMS.filter(platform => platform.id === 'defaults' || platform.id === 'logos').map(platform => <PlatformSidebarItem key={platform.id} platform={platform} isActive={selectedPlatform === platform.id} onClick={() => setSelectedPlatform(platform.id)} />)}
+          </div>
+        </div>
       </nav>
       <div
+        className="min-w-0 pt-1"
         id={`bot-settings-panel-${selectedPlatform}`}
         role="region"
         aria-labelledby={`bot-settings-tab-${selectedPlatform}`}
-        aria-live="polite"
       >
         {renderPlatformPanel(selectedPlatform)}
       </div>

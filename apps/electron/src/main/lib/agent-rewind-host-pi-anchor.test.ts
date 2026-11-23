@@ -1,3 +1,6 @@
+// 本文件独立验收旧桌面执行/存储路径。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * Pi 回退锚点必须精确：只接受「目标消息 uuid 自己」的 entry 绑定。
  *

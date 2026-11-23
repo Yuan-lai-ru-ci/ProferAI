@@ -1,3 +1,4 @@
+import { CoreAccountService } from './account-service'
 import { resolveNativePiSessionFile } from './native-session-pi'
 import { createPlanningAgentOperations, createPlanningStore, type PlanningStore, createSyncSessionIndexStore, createSyncSessionMessageStore, createSessionStorePaths, createFileRunLedgerPort } from '@profer/session-store'
 import { registerOwnedSessionLayout, mirrorProjectSessionIndexes, restoreProjectSessionIndexes } from '@profer/session-store'
@@ -113,6 +114,8 @@ export interface CoreAgentRuntime {
   sessions: CoreSessionStore
   workspaces: CoreWorkspaceStore
   channels: Array<Omit<CoreChannelConfig, 'apiKey' | 'codexOAuthCredentials' | 'xaiOAuthCredentials'>>
+  accountAvailable: boolean
+  accountOperation(operation: string, args?: unknown[]): Promise<unknown>
   syncDesktopChannels(channels: CoreChannelConfig[]): void
   listChannelConfigs(): CoreChannelConfig[]
   createChannel(input: Omit<CoreChannelConfig, 'id'> & { id?: string }): CoreChannelConfig
@@ -301,7 +304,7 @@ function channelCredential(channel: CoreChannelConfig): RuntimeCredential {
     apiKey: channel.apiKey,
     baseUrl: channel.baseUrl,
     provider: channel.provider,
-    forceBearerAuth: channel.provider === 'openai-codex' || channel.provider === 'openai-responses',
+    forceBearerAuth: channel.forceBearerAuth === true || channel.provider === 'openai-codex' || channel.provider === 'openai-responses',
     ...(channel.codexOAuthCredentials ? { codexOAuthCredentials: channel.codexOAuthCredentials as unknown as CodexOAuthCredentials } : {}),
     ...(channel.xaiOAuthCredentials ? { xaiOAuthCredentials: channel.xaiOAuthCredentials as unknown as XaiOAuthCredentials } : {}),
     ...(channel.credentialMode ? { xaiCredentialMode: channel.credentialMode } : {}),
@@ -309,8 +312,12 @@ function channelCredential(channel: CoreChannelConfig): RuntimeCredential {
   }
 }
 
-function createCredentialPort(channels: readonly CoreChannelConfig[]): CredentialPort {  return {
+function createCredentialPort(channels: readonly CoreChannelConfig[], account?: CoreAccountService): CredentialPort {  return {
     async resolve(input) {
+      await account?.ready
+      if (account && (input.channelId ? channels.find(channel => channel.id === input.channelId)?.serverManaged : channels[0]?.serverManaged)) {
+        if (!await account.operation('teamAuth')) throw new AgentRuntimePreparationError('官方账号未登录或已过期', 'api_key_missing', 'credentials')
+      }
       if (input.channelId) {
         const selected = channels.find(item => item.id === input.channelId)
         if (!selected) throw new AgentRuntimePreparationError('所选渠道不存在或已删除，请重新选择渠道', 'channel_not_found', 'credentials')
@@ -343,13 +350,30 @@ function channelFor(channels: readonly CoreChannelConfig[], channelId: string | 
   return (channelId ? channels.find(channel => channel.id === channelId) : undefined) ?? channels[0]
 }
 
-export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claude?: ConstructorParameters<typeof ClaudeAgentAdapter>[0] } = {}): CoreAgentRuntime {
-  const channels = readCoreChannelStore(config.configDir, config.channels ?? [])
+export function createCoreAgentRuntime(config: CoreConfig, dependencies: { independent?: boolean; claude?: ConstructorParameters<typeof ClaudeAgentAdapter>[0] } = {}): CoreAgentRuntime {
+  const ownedChannels = readCoreChannelStore(config.configDir, config.channels ?? [])
+  const listeners = new Set<(event: CoreEvent) => void>()
+  const publish = (event: CoreEvent): void => { for (const listener of listeners) listener(event) }
+  const channels = dependencies.independent ? [...ownedChannels] : ownedChannels
+  let desktopChannels: CoreChannelConfig[] = []
+  let account: CoreAccountService | undefined
+  const refreshChannels = () => {
+    if (!dependencies.independent) return
+    const ownedIds = new Set(ownedChannels.map(channel => channel.id))
+    channels.splice(0, channels.length, ...ownedChannels, ...desktopChannels.filter(channel => !ownedIds.has(channel.id)), ...(account?.channels ?? []).filter(channel => !ownedIds.has(channel.id)))
+    publish({ type: 'workspace', sessionId: '', payload: { type: 'changed' } })
+  }
+  if (dependencies.independent) {
+    account = new CoreAccountService(config.configDir, config.accountServerUrl, refreshChannels, () => new Set([...ownedChannels, ...desktopChannels].map(channel => channel.id)))
+    refreshChannels()
+  }
+  const persistChannels = () => {
+    writeCoreChannelStore(config.configDir, ownedChannels)
+    refreshChannels()
+  }
   mkdirSync(config.workspaceRoot, { recursive: true })
   const defaultRuntime: AgentRuntime = config.mockAgent || channels.length > 0 ? 'pi' : 'claude'
   let sessions: CoreSessionStore
-  const listeners = new Set<(event: CoreEvent) => void>()
-  const publish = (event: CoreEvent): void => { for (const listener of listeners) listener(event) }
   const workspaces = createCoreWorkspaceStore(config.configDir, config.workspaceRoot, config.desktopWorkspaceIndexPath, () => sessions?.list(true) ?? [],
     () => publish({ type: 'workspace', sessionId: '', payload: { type: 'changed' } }), workspace => {
       const owned = sessions.list(true).filter(session => session.workspaceId === workspace.id)
@@ -357,6 +381,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
         || goals.list(session.id).some(goal => goal.status === 'active' || goal.status === 'stopping'))) throw new Error('工作区仍有活跃运行或Goal，不能重新定位')
       if (deletions.snapshot().some(record => record.status !== 'completed' && record.sessions.some(session => session.workspaceId === workspace.id))) throw new Error('工作区仍有未完成会话删除，不能重新定位')
     }, config.desktopWorkspaceIndexWritable)
+  workspaces.ensureDesktopDefault()
   const deletions = new CoreSessionDeletionService(config)
   const workspaceOperations = new CoreWorkspaceOperationStore(join(config.configDir, 'core-workspace-operations.json'))
   sessions = createCoreSessionStore(config.configDir, defaultRuntime, workspaces, deletions,
@@ -644,7 +669,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
       publish({ type: event.type === 'message' ? 'message' : 'runtime', sessionId: event.sessionId, payload: event })
     },
   }
-  const credentials = config.mockAgent ? createMockCredentialPort() : createCredentialPort(channels)
+  const credentials = config.mockAgent ? createMockCredentialPort() : createCredentialPort(channels, account)
   const planning = createPlanningStore({ databasePath: () => join(config.configDir, 'planning.db'), openDatabase: openCorePlanningDatabase })
   const createPlanningOperations = (approve?: (toolName: string, input: Record<string, unknown>) => Promise<void>, providerGatesWrites = false) => createPlanningAgentOperations(planning, {
     beforeWrite: async (ctx, toolName, input) => {
@@ -962,11 +987,14 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     updateMeta: (id, patch) => { if (!deletions.isDeleting(id)) sessions.updateMeta(id, patch) },
     readMessages: id => [...sessions.readMessages(id)],
     onTitleUpdated: (sessionId, title) => publish({ type: 'runtime', sessionId, payload: { kind: 'profer_event', event: { type: 'title_updated', sessionId, title } } }),
-    onCodexCredentialsRefreshed: (channelId, credentials) => {
-      const channel = channels.find(item => item.id === channelId)
-      if (!channel) throw new Error('标题渠道已移除')
+    onCodexCredentialsRefreshed: (source, credentials) => {
+      const channel = channels.find(item => item.id === source.id)
+      if (!channel || (dependencies.independent && channel !== source)) throw new Error('标题渠道已移除或变更')
+      const previous = channel.codexOAuthCredentials
       channel.codexOAuthCredentials = { ...credentials }
-      writeCoreChannelStore(config.configDir, channels)
+      if (ownedChannels.includes(channel)) {
+        try { persistChannels() } catch (error) { channel.codexOAuthCredentials = previous; throw error }
+      }
     },
   })
   const processes = new CoreProcessHost(join(config.configDir, 'core-runtime'))
@@ -1190,7 +1218,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     if (!workspace) throw new Error('会话工作区不存在')
     return { session, workspace }
   }
-  const chat = createCoreChat({ configDir: config.configDir, listChannels: () => channels, emit: (sessionId, channel, payload) => publish({ type: 'chat', sessionId, payload: { channel, payload } }) })
+  const chat = createCoreChat({ account, defaultSelection: () => ({ channelId: account?.defaultChannelId, modelId: account?.defaultModelId }), configDir: config.configDir, listChannels: () => channels, emit: (sessionId, channel, payload) => publish({ type: 'chat', sessionId, payload: { channel, payload } }) })
   let closing = false
   let shutdownPromise: Promise<void> | undefined
   const assertAcceptingRuns = (): void => {
@@ -1229,34 +1257,46 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     sessions,
     workspaces,
     resourceOperation: body => executeCoreResourceOperation({ config, workspaces, sessions, automations }, body),
+    accountAvailable: Boolean(account),
+    accountOperation: async (operation, args) => {
+      if (!account) throw new Error('当前宿主不提供独立账号操作')
+      await account.ready
+      return account.operation(operation, args)
+    },
     syncDesktopChannels: next => {
       if (!config.desktopWorkspaceIndexPath) throw new Error('仅桌面拥有的本地Core接受内存渠道快照')
       if (next.some(channel => !channel.id || !channel.provider || typeof channel.apiKey !== 'string')) throw new Error('渠道快照无效')
-      channels.splice(0, channels.length, ...structuredClone(next))
+      if (dependencies.independent) {
+        desktopChannels = structuredClone(next).filter(channel => !ownedChannels.some(owned => owned.id === channel.id))
+        refreshChannels()
+      } else channels.splice(0, channels.length, ...structuredClone(next))
     },
     listChannelConfigs: () => channels.map(channel => structuredClone(channel)),
     createChannel: input => {
+      if (input.serverManaged) throw new Error('官方渠道不可通过自配渠道接口创建')
       const id = input.id?.trim() || randomUUID()
       if (channels.some(channel => channel.id === id)) throw new Error(`渠道 ID 已存在: ${id}`)
       const channel = { ...input, id }
-      channels.push(channel)
-      try { writeCoreChannelStore(config.configDir, channels) } catch (error) { channels.pop(); throw error }
+      ownedChannels.push(channel)
+      try { persistChannels() } catch (error) { ownedChannels.pop(); throw error }
       return structuredClone(channel)
     },
     updateChannel: (id, patch) => {
-      const index = channels.findIndex(channel => channel.id === id)
+      if ((!ownedChannels.some(channel => channel.id === id) && account?.channels.some(channel => channel.id === id)) || patch.serverManaged) throw new Error('官方渠道不可修改')
+      const index = ownedChannels.findIndex(channel => channel.id === id)
       if (index < 0) throw new Error(`渠道不存在: ${id}`)
-      const previous = channels[index]!
+      const previous = ownedChannels[index]!
       const updated = { ...previous, ...patch, id }
-      channels[index] = updated
-      try { writeCoreChannelStore(config.configDir, channels) } catch (error) { channels[index] = previous; throw error }
+      ownedChannels[index] = updated
+      try { persistChannels() } catch (error) { ownedChannels[index] = previous; throw error }
       return structuredClone(updated)
     },
     deleteChannel: id => {
-      const index = channels.findIndex(channel => channel.id === id)
+      if (!ownedChannels.some(channel => channel.id === id) && account?.channels.some(channel => channel.id === id)) throw new Error('官方渠道不可删除')
+      const index = ownedChannels.findIndex(channel => channel.id === id)
       if (index < 0) throw new Error(`渠道不存在: ${id}`)
-      const [removed] = channels.splice(index, 1)
-      try { writeCoreChannelStore(config.configDir, channels) } catch (error) { channels.splice(index, 0, removed!); throw error }
+      const [removed] = ownedChannels.splice(index, 1)
+      try { persistChannels() } catch (error) { ownedChannels.splice(index, 0, removed!); throw error }
     },
     ensureWorkspaceSession: input => sessions.ensureWorkspaceSession(input),
     updateWorkspace: (id, updates) => workspaces.update(id, updates),
@@ -1287,7 +1327,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     },
     listWorkspaceDeleteOperations: () => workspaceOperations.list(),
     createConfiguredSession: input => {
-      const resolved = configuredSessionInput(config, runtime, input)
+      const resolved = configuredSessionInput(config, runtime, input, account ? { agentChannelId: account.defaultChannelId, agentModelId: account.defaultModelId } : undefined)
       workspaceCwd({ workspaceId: resolved.workspaceId } as AgentSessionMeta)
       return sessions.create(resolved)
     },
@@ -1302,7 +1342,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
         return sessions.getMeta(existing.id)!
       }
       if (input.useCoreDefaults) {
-        const resolved = configuredSessionInput(config, runtime, { workspaceId: input.workspaceId, channelId: input.channelId, modelId: input.modelId })
+        const resolved = configuredSessionInput(config, runtime, { workspaceId: input.workspaceId, channelId: input.channelId, modelId: input.modelId }, account ? { agentChannelId: account.defaultChannelId, agentModelId: account.defaultModelId } : undefined)
         workspaceCwd({ workspaceId: resolved.workspaceId } as AgentSessionMeta)
         return sessions.create({ ...resolved, draft: true })
       }
@@ -1410,7 +1450,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     createQuery: (session, prompt, options) => {
       assertAcceptingRuns()
       return ({
-      ...createRuntimeQuery(session, prompt, config, options),
+      ...createRuntimeQuery(session, prompt, { ...config, channels }, { ...options, modelId: options?.modelId ?? session.modelId ?? channelFor(channels, options?.channelId ?? session.channelId)?.models?.find(model => model.enabled)?.id }),
       cwd: workspaceCwd(session).cwd,
       onBeforeOwnerRelease: async admitted => {
         const evidence = runEvidence.get(admitted.runId ?? '')
@@ -1472,6 +1512,8 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     desktopHosts,
     bindDesktopHost: (sessionId, connectionId) => {
       if (!sessions.getMeta(sessionId) || !desktopHosts.isConnected(connectionId)) throw new Error('桌面宿主绑定无效')
+      const previous = desktopBindings.get(sessionId)
+      if (previous && previous !== connectionId && coordinator.ownership.getOwner(sessionId)) throw new Error('会话正在运行，不能改派桌面宿主')
       desktopBindings.set(sessionId, connectionId)
     },
     unbindDesktopHost: connectionId => { for (const [id, connection] of desktopBindings) if (connection === connectionId) desktopBindings.delete(id) },
@@ -1479,10 +1521,10 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     assertAcceptingRuns,
     shutdown: () => {
       closing = true
-      shutdownPromise ??= (async () => { await chat.shutdown(); await deletions.shutdown(); await automations.shutdown(); await delegations.shutdown(); await goals.shutdown(); await coordinator.stopAll('core_shutdown'); await Promise.all([...browserSessions.values()].map(tools => tools.host.dispose())); await mcpManager.dispose(); runtime.dispose() })()
+      shutdownPromise ??= (async () => { account?.dispose(); await chat.shutdown(); await deletions.shutdown(); await automations.shutdown(); await delegations.shutdown(); await goals.shutdown(); await coordinator.stopAll('core_shutdown'); await Promise.all([...browserSessions.values()].map(tools => tools.host.dispose())); await mcpManager.dispose(); runtime.dispose() })()
       return shutdownPromise
     },
-    dispose: () => { closing = true; desktopHosts.dispose(); deletions.dispose(); delegations.dispose(); automations.dispose(); goals.dispose(); for (const session of sessions.list()) { askUser.clearSessionPending(session.id); exitPlan.clearSessionPending(session.id) }; clearInterval(planningTimer); planning.closePlanningDatabase(); claude.dispose(); pi.dispose() },
+    dispose: () => { account?.dispose(); closing = true; desktopHosts.dispose(); deletions.dispose(); delegations.dispose(); automations.dispose(); goals.dispose(); for (const session of sessions.list()) { askUser.clearSessionPending(session.id); exitPlan.clearSessionPending(session.id) }; clearInterval(planningTimer); planning.closePlanningDatabase(); claude.dispose(); pi.dispose() },
   }
   // 恢复必须在所有busy依赖初始化后、任何调度器绑定前进行。
   nativePorts.recover()

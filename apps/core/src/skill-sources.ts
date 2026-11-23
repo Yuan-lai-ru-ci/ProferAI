@@ -15,8 +15,8 @@ function read(path: string): Record<string, unknown> | undefined {
   return value as Record<string, unknown>
 }
 
-/** 只读Core来源；不执行旧账本改名/修复/UUID回填，不写入用户Skill库。 */
-export function resolveCoreSkillSources(config: CoreConfig, workspaceConfigDir?: string) {
+/** 只读全局定义；不执行旧账本改名或修复。 */
+export function readCoreGlobalSkillDefinitions(config: CoreConfig) {
   const globals: Array<GlobalSkillManifest & { path: string }> = []
   for (const [directory, type] of [['builtin', 'builtin-meta'], ['user', 'user-global']] as const) {
     const root = join(config.configDir, 'global-skills', directory)
@@ -36,6 +36,12 @@ export function resolveCoreSkillSources(config: CoreConfig, workspaceConfigDir?:
       globals.push({ ...(value as unknown as GlobalSkillManifest), path })
     }
   }
+  return globals
+}
+
+/** 只读Core来源；不执行旧账本改名/修复/UUID回填，不写入用户Skill库。 */
+export function resolveCoreSkillSources(config: CoreConfig, workspaceConfigDir?: string) {
+  const globals = readCoreGlobalSkillDefinitions(config)
   const raw = workspaceConfigDir ? read(join(workspaceConfigDir, 'skill-overrides.json')) : undefined
   if (raw && (raw.schemaVersion !== 1 || !raw.globalSkills || typeof raw.globalSkills !== 'object' || Array.isArray(raw.globalSkills))) throw new Error('Core Skill覆盖配置格式错误')
   const overrides = (raw ?? { schemaVersion: 1, globalSkills: {} }) as unknown as WorkspaceSkillOverridesFile

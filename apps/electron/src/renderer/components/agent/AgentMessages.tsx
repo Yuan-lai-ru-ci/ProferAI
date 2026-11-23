@@ -568,17 +568,19 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
 
 export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, runStartedAtFallback, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true, hidden = false }: AgentMessagesProps): React.ReactElement {
   const store = useStore()
+  const isRemoteSession = sessionId.startsWith('core:')
   // 草稿区基准（storageDir）：显式传入优先，否则按会话所属工作区只读解析。
   const resolvedDraftRoot = useAgentSessionDraftRoot(sessionId, draftRoot)
   React.useEffect(() => {
-    if (!window.electronAPI?.listVisualizations) return
+    // 当前可视化 IPC 只读取桌面本机记录，不能拿远程会话 ID 查本机文件。
+    if (isRemoteSession || !window.electronAPI?.listVisualizations) return
     let cancelled = false
     window.electronAPI.listVisualizations(sessionId).then((records) => {
       if (cancelled) return
       store.set(visualizationsAtom, (previous) => updateVisualizationSessionCache(previous, sessionId, records))
     }).catch((error: unknown) => console.error('[可视化] 加载结果失败:', error))
     return () => { cancelled = true }
-  }, [sessionId, store])
+  }, [isRemoteSession, sessionId, store])
   const userProfile = useAtomValue(userProfileAtom)
   const setMinimapCache = useSetAtom(tabMinimapCacheAtom)
   const channels = useAtomValue(channelsAtom)
@@ -886,6 +888,8 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
 
   React.useEffect(() => {
     setSessionNavEntries(null)
+    // 远程 Core 还没有全量索引端点，直接沿用已加载消息的导航。
+    if (isRemoteSession) return
     const api = window.electronAPI as unknown as {
       getAgentNavigationIndex?: (id: string) => Promise<AgentNavigationIndexPayload>
     }
@@ -903,7 +907,7 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
       })
     return () => { cancelled = true }
     // 会话切换或落盘窗口变化时重建；流式期间靠本地分组即时反映新轮次，不每帧打主进程。
-  }, [sessionId, persistedNavSignature])
+  }, [isRemoteSession, sessionId, persistedNavSignature])
 
   /**
    * 把「用户提问轮数」发布给会话交接建议条。

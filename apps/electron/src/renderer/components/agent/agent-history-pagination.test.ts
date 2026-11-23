@@ -1,9 +1,21 @@
 import { describe, expect, test } from 'bun:test'
-import { normalizeAgentHistoryRefresh, normalizeAgentHistoryResult } from './agent-history-pagination'
+import { clipAgentHistoryAfterRewind, normalizeAgentHistoryRefresh, normalizeAgentHistoryResult } from './agent-history-pagination'
 
 const message = (id: string) => ({ type: 'user', uuid: id } as never)
 const range = (from: number, count: number) => Array.from({ length: count }, (_, i) => message(`m${from + i}`))
 const uuids = (messages: readonly unknown[]) => messages.map((item) => (item as { uuid: string }).uuid)
+
+test('修改重发先移除旧轮，保留锚点和前面的无 UUID 记录，再插入同正文的新消息', () => {
+  const boundary = message('previous-answer')
+  const withoutUuid = { type: 'system', subtype: 'status' } as const
+  const old = { ...message('old-user') as object, text: 'same text', uuid: 'old-user' }
+  const sent = { ...old, uuid: 'new-user' }
+  const page = [withoutUuid, boundary, old, message('old-assistant')] as unknown as Parameters<typeof clipAgentHistoryAfterRewind>[0]
+  const kept = clipAgentHistoryAfterRewind(page, { kind: 'message', messageUuid: 'previous-answer' })
+  expect([...kept, sent]).toEqual([withoutUuid, boundary, sent])
+  expect(clipAgentHistoryAfterRewind(page, { kind: 'session-start' })).toEqual([])
+  expect(clipAgentHistoryAfterRewind(page, { kind: 'message', messageUuid: 'outside-loaded-page' })).toEqual([])
+})
 
 describe('Agent history pagination compatibility', () => {
   test('legacy arrays preserve cursor and use the legacy hasMore signal', () => {

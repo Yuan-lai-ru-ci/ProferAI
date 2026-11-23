@@ -20,6 +20,7 @@ import { ArrowLeft, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { detectIsWindows } from '@profer/ui'
 import { WindowControlsHost } from '@/components/WindowControlsTemplate'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import { resolveWindowControlsRightInset } from '@/lib/window-controls-layout'
 
 /** 顶部拖拽带高度：窗口按钮所在的高度带，页面标题从这条带子下方开始。 */
@@ -195,17 +196,18 @@ export function ViewBody({
   children: React.ReactNode
   className?: string
 }): React.ReactElement {
+  const Container = scroll ? ScrollRegion : 'div'
   return (
-    <div
+    <Container
       className={cn(
         'flex min-h-0 w-full flex-1 flex-col',
-        scroll && 'profer-scroll-region overflow-y-auto pb-10',
+        scroll && 'overflow-y-auto pb-10',
         viewContentWidthClass(width),
         className,
       )}
     >
       {children}
-    </div>
+    </Container>
   )
 }
 

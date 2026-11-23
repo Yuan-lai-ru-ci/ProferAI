@@ -3,6 +3,7 @@
  * 支持个人注册（激活码）和团队注册（邀请码）
  */
 import * as React from 'react'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import { useAtom } from 'jotai'
 import { toast } from 'sonner'
 import { Mail, Lock, User, Ticket, LogIn, UserPlus, Monitor, Send, CheckCircle2 } from 'lucide-react'
@@ -179,25 +180,27 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
           </DialogHeader>
 
           {/* 模式切换 */}
-          <div className="flex gap-1 mt-3 p-0.5 bg-muted/60 rounded-lg">
-            <button
+          <div role="group" aria-label="账户访问方式" className="flex gap-1 mt-3 p-0.5 bg-muted/60 rounded-lg">
+            <Button variant="ghost"
               type="button"
+              aria-pressed={mode === 'login'}
               onClick={() => switchMode('login')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-medium rounded-md transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-medium rounded-md transition-colors ${
                 mode === 'login' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               <LogIn size={14} />登录
-            </button>
-            <button
+            </Button>
+            <Button variant="ghost"
               type="button"
+              aria-pressed={mode === 'register'}
               onClick={() => switchMode('register')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-medium rounded-md transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-sm font-medium rounded-md transition-colors ${
                 mode === 'register' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               <UserPlus size={14} />注册
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -208,7 +211,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
             <div className="text-sm text-muted-foreground leading-relaxed">
               该账号已达设备上限（最多 {deviceLimit.maxDevices} 台）。登出其中一台后即可在本机登录：
             </div>
-            <div className="space-y-2 max-h-[260px] overflow-y-auto">
+            <ScrollRegion className="space-y-2 max-h-[260px] overflow-y-auto">
               {deviceLimit.devices.map((d) => (
                 <div key={d.id} className="flex items-center gap-2.5 p-2.5 rounded-lg border border-border">
                   <Monitor size={16} className="text-muted-foreground shrink-0" />
@@ -224,7 +227,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps): React.Rea
                   </Button>
                 </div>
               ))}
-            </div>
+            </ScrollRegion>
             <Button type="button" variant="ghost" className="w-full h-9" onClick={() => setDeviceLimit(null)}>
               返回
             </Button>

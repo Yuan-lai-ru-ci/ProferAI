@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * 回归：project 会话 fork 后，任务图必须落在 fork 会话自己的项目数据目录。
  *

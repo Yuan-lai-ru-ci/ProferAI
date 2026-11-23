@@ -23,6 +23,7 @@ import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
 import { tabMinimapItemsAtomFamily } from '@/atoms/tab-atoms'
 import { TabPreviewPanel } from './TabPreviewPanel'
 import { readNativePageRects, resolveTabPreviewLeft } from '@/lib/tab-preview-position'
+import { SESSION_STATUS_DOT_CLASS, SESSION_STATUS_LABEL } from '@/lib/session-status-visual'
 
 export interface TabBarItemProps {
   id: string
@@ -31,8 +32,6 @@ export interface TabBarItemProps {
   workspaceName?: string
   /** 标签栏整体空间不足时隐藏工作区徽标，让位给会话标题 */
   hideWorkspaceName?: boolean
-  /** 标签栏整体空间不足时隐藏重命名按钮 */
-  hideRenameControl?: boolean
   isActive: boolean
   isStreaming: SessionIndicatorStatus
   /** 是否显示 hover 预览面板（由父级管理） */
@@ -78,7 +77,6 @@ export function TabBarItem({
   title,
   workspaceName,
   hideWorkspaceName = false,
-  hideRenameControl = false,
   isActive,
   isStreaming,
   isHovered,
@@ -105,6 +103,12 @@ export function TabBarItem({
   const buttonRef = React.useRef<HTMLButtonElement>(null)
   const pointerStartRef = React.useRef<{ x: number; y: number } | null>(null)
   const suppressClickRef = React.useRef(false)
+  const titleRef = React.useRef<HTMLSpanElement>(null)
+  // 在捕获指针前记录真实命中；click 的 target 可能已被重定向到父按钮。
+  const titlePointerRef = React.useRef(false)
+  const lastTitleClickRef = React.useRef<number | null>(null)
+  const renameOpenRef = React.useRef(false)
+  const renameSavingRef = React.useRef(false)
   const [isNarrow, setIsNarrow] = React.useState(false)
   const [editingTitle, setEditingTitle] = React.useState(false)
   const [draftTitle, setDraftTitle] = React.useState(title)
@@ -138,6 +142,7 @@ export function TabBarItem({
 
   const handlePointerDown = (e: React.PointerEvent): void => {
     if (e.button !== 0) return
+    titlePointerRef.current = !!titleRef.current?.contains(e.target as Node)
     pointerStartRef.current = { x: e.clientX, y: e.clientY }
     suppressClickRef.current = false
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -145,11 +150,30 @@ export function TabBarItem({
   }
 
   const handleClick = (e: React.MouseEvent): void => {
+    const titlePointer = titlePointerRef.current
+    titlePointerRef.current = false
     if (suppressClickRef.current) {
       e.preventDefault()
       e.stopPropagation()
       suppressClickRef.current = false
+      lastTitleClickRef.current = null
       return
+    }
+    const rect = titleRef.current?.getBoundingClientRect()
+    const titleHit = titlePointer && e.detail > 0 && rect
+      && e.clientX >= rect.left && e.clientX <= rect.right
+      && e.clientY >= rect.top && e.clientY <= rect.bottom
+    const now = Date.now()
+    if (titleHit && onRename && !editingTitle) {
+      const previous = lastTitleClickRef.current
+      lastTitleClickRef.current = now
+      if (previous !== null && now - previous < 320) {
+        lastTitleClickRef.current = null
+        startRename(e)
+        return
+      }
+    } else {
+      lastTitleClickRef.current = null
     }
     onActivate()
   }
@@ -167,6 +191,11 @@ export function TabBarItem({
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
     pointerStartRef.current = null
+    if (e.type === 'pointercancel') {
+      titlePointerRef.current = false
+      lastTitleClickRef.current = null
+      suppressClickRef.current = true
+    }
   }
 
   const handleCloseClick = (e: React.MouseEvent): void => {
@@ -174,9 +203,12 @@ export function TabBarItem({
     onClose()
   }
 
-  const startRename = (e: React.MouseEvent): void => {
-    e.stopPropagation()
+  const startRename = (e?: React.MouseEvent): void => {
+    e?.stopPropagation()
     if (!onRename) return
+    if (renameSavingRef.current) return
+    renameOpenRef.current = true
+    lastTitleClickRef.current = null
     setDraftTitle(title)
     setEditingTitle(true)
     requestAnimationFrame(() => {
@@ -188,17 +220,28 @@ export function TabBarItem({
     })
   }
 
+  // 标题双击进入行内重命名：不再常驻铅笔按钮，避免高频切换标签时误点。
+  // 实际判定在 handleClick 里完成（指针捕获会改写 dblclick 的 target）。
+
   const finishRename = async (): Promise<void> => {
+    // Enter / blur / 保存按钮可能在 React 提交状态前连续触发。
+    if (!renameOpenRef.current || renameSavingRef.current) return
     const nextTitle = draftTitle.trim()
     if (!nextTitle || nextTitle === title || !onRename) {
+      renameOpenRef.current = false
       setEditingTitle(false)
       return
     }
+    renameSavingRef.current = true
     setSavingTitle(true)
     try {
       await onRename(nextTitle)
+      renameOpenRef.current = false
       setEditingTitle(false)
+    } catch {
+      // TabBar 的 onRename 已统一记录错误并 toast；保留草稿，允许重试。
     } finally {
+      renameSavingRef.current = false
       setSavingTitle(false)
     }
   }
@@ -310,6 +353,16 @@ export function TabBarItem({
       >
         {tabTypeIcon}
 
+        {/* 非激活标签的运行呼吸点：只提供环境感知，不抢激活标签的白色层级；
+         * 激活标签的运行状态仍由 2px 蓝色状态环表达（见 globals.css）。 */}
+        {isStreaming === 'running' && !isActive && (
+          <span
+            className={cn('topbar-tab-running-dot size-1.5 shrink-0 rounded-full motion-reduce:animate-none', SESSION_STATUS_DOT_CLASS.running)}
+            title={SESSION_STATUS_LABEL.running}
+            aria-hidden="true"
+          />
+        )}
+
         {/* 标题（窄状态下隐藏，用 spacer 撑开让关闭按钮靠右） */}
         {isNarrow ? (
           <span className="flex-1" />
@@ -334,29 +387,27 @@ export function TabBarItem({
                 onChange={(event) => setDraftTitle(event.target.value)}
                 onBlur={() => void finishRename()}
                 onKeyDown={(event) => {
+                  event.stopPropagation()
+                  if (event.nativeEvent.isComposing) return
                   if (event.key === 'Enter') {
                     event.preventDefault()
                     void finishRename()
                   } else if (event.key === 'Escape') {
                     event.preventDefault()
-                    setEditingTitle(false)
+                    if (!renameSavingRef.current) {
+                      renameOpenRef.current = false
+                      setEditingTitle(false)
+                    }
                   }
                 }}
               />
             ) : (
-              <span className="min-w-0 flex-1 truncate">{title}</span>
-            )}
-            {onRename && !editingTitle && !hideRenameControl && (
               <span
-                role="button"
-                tabIndex={-1}
-                aria-label="重命名会话"
-                className="flex size-4 shrink-0 items-center justify-center rounded-sm opacity-60 transition-opacity hover:bg-muted-foreground/20 hover:opacity-100"
-                onPointerDown={(event) => event.stopPropagation()}
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={startRename}
+                ref={titleRef}
+                className={cn('min-w-0 flex-1 truncate', onRename && 'cursor-text')}
+                title={onRename ? `${title}（双击重命名）` : title}
               >
-                <Pencil className="size-2.5" />
+                {title}
               </span>
             )}
             {editingTitle && (
@@ -366,7 +417,7 @@ export function TabBarItem({
                 aria-label="保存会话标题"
                 className="flex size-4 shrink-0 items-center justify-center rounded-sm hover:bg-muted-foreground/20"
                 onPointerDown={(event) => event.stopPropagation()}
-                onMouseDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => { event.preventDefault(); event.stopPropagation() }}
                 onClick={(event) => { event.stopPropagation(); void finishRename() }}
               >
                 <Check className="size-2.5" />
@@ -423,22 +474,26 @@ export function TabBarItem({
   )
 
   // 草稿已在上方提前返回；其余 Tab 只要有任一项菜单动作就挂右键菜单：
-  // 「在新窗口打开」只属于会话 Tab，批量关闭对所有非草稿 Tab 都成立（预览/浏览器同样有用）。
-  if (!onOpenInNewWindow && !onCloseOthers && !onCloseToRight) return tabBody
+  // 「在新窗口打开」「重命名」只属于支持对应能力的会话 Tab，批量关闭对所有非草稿 Tab 都成立。
+  if (!onOpenInNewWindow && !onCloseOthers && !onCloseToRight && !onRename) return tabBody
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{tabBody}</ContextMenuTrigger>
       <ContextMenuContent className="z-[9999] w-44 min-w-0 p-0.5">
         {onOpenInNewWindow && (
-          <>
-            <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onOpenInNewWindow}>
-              <AppWindow size={14} />
-              在新窗口打开
-            </ContextMenuItem>
-            <ContextMenuSeparator className="my-0.5" />
-          </>
+          <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onOpenInNewWindow}>
+            <AppWindow size={14} />
+            在新窗口打开
+          </ContextMenuItem>
         )}
+        {onRename && (
+          <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => startRename()}>
+            <Pencil size={14} />
+            重命名
+          </ContextMenuItem>
+        )}
+        {(onOpenInNewWindow || onRename) && <ContextMenuSeparator className="my-0.5" />}
         <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onClose}>
           <X size={14} />
           关闭

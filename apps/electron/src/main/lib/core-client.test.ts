@@ -27,6 +27,40 @@ class FakeSocket implements CoreWebSocket {
 }
 
 describe('CoreClient', () => {
+  test('账号操作使用 owner 鉴权 POST 并解包 result', async () => {
+    let received: { url: string; init?: RequestInit } | undefined
+    const client = new CoreClient({ baseUrl: 'http://127.0.0.1:7790', token: 'synthetic-owner', reconnect: false,
+      fetchImpl: async (url, init) => { received = { url: String(url), init }; return Response.json({ result: { success: true } }) } })
+    expect(await client.accountOperation<{ success: boolean }>('login', ['a@example.invalid', 'synthetic-password'])).toEqual({ success: true })
+    expect(received?.url).toBe('http://127.0.0.1:7790/account/operations')
+    expect(received?.init?.method).toBe('POST')
+    expect(new Headers(received?.init?.headers).get('Authorization')).toBe('Bearer synthetic-owner')
+    expect(JSON.parse(String(received?.init?.body))).toEqual({ operation: 'login', args: ['a@example.invalid', 'synthetic-password'] })
+    client.close()
+  })
+
+  test('共享快照不会把其他客户端的全部会话绑定为本机宿主', async () => {
+    const client = new CoreClient({ baseUrl: 'http://127.0.0.1:7790', token: 'fixture', reconnect: false,
+      fetchImpl: async () => Response.json({ coreId: 'core', protocolVersion: 1 }),
+      webSocketFactory: (url, options) => new FakeSocket(url, options) })
+    client.setHostRequestHandler(async request => ({ ...request, ok: true, value: null }))
+    const connecting = client.connect(); const socket = FakeSocket.latest!; socket.open(); await connecting
+    const registered = JSON.parse(socket.sent[0]!)
+    socket.message({ kind: 'command_result', commandId: registered._cmdId, ok: true, data: { registered: true } })
+    const refreshing = client.refreshSnapshot()
+    await new Promise(resolve => setTimeout(resolve, 1))
+    const command = JSON.parse(socket.sent[1]!)
+    socket.message({ kind: 'command_result', commandId: command._cmdId, ok: true, data: {
+      sessions: [{ id: 'other-client-session', title: 'Other', createdAt: 1, updatedAt: 1 }],
+      goals: [], automations: [], delegations: [], pending: [], cursor: 'epoch:1',
+    } })
+    await refreshing
+    const rebound = JSON.parse(socket.sent.at(-1)!)
+    expect(rebound).toMatchObject({ type: 'register_desktop_host', sessionIds: [] })
+    socket.message({ kind: 'command_result', commandId: rebound._cmdId, ok: true, data: { registered: true } })
+    client.close()
+  })
+
   test('删除提交Core，权威快照投影墓碑且不复活旧运行', async () => {
     const events: Array<{ payload?: unknown }> = []
     const client = new CoreClient({ baseUrl: 'http://127.0.0.1:7790', token: 'fixture', reconnect: false,

@@ -73,7 +73,7 @@ import { updateComposerRuntime, updateComposerSettings, openComposerFileDialog, 
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { autoPreviewEnabledAtom, previewFileMapAtom, pendingQuoteInsertMapAtom, agentInterruptionMapAtom } from '@/atoms/preview-atoms'
-import { coreTargetsAtom, coreChannelsAtom, coreChannelsLoadedAtom } from '@/atoms/core-target-atoms'
+import { coreTargetsAtom, coreChannelsAtom, coreChannelsLoadedAtom, coreCatalogRevisionAtom, usesIndependentLocalCore } from '@/atoms/core-target-atoms'
 import { openFilePreviewTabForSession } from '@/components/diff/preview-opener'
 import type { AgentInterruptionState } from '@/atoms/preview-atoms'
 import {
@@ -128,7 +128,7 @@ import { persistedGraphAtomFamily } from '@/atoms/graph-atoms'
 import { generateSummary } from '@profer/project-core'
 import { isTaskProgressTool } from './task-progress'
 import { useSessionContextUsage } from './use-session-context-usage'
-import { settingsOpenAtom } from '@/atoms/settings-tab'
+import { settingsOpenAtom, settingsTabAtom } from '@/atoms/settings-tab'
 import { activeViewAtom } from '@/atoms/active-view'
 import { activeTabIdAtom } from '@/atoms/tab-atoms'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
@@ -157,7 +157,7 @@ import { canSelectAgentSessionRuntime, AGENT_SESSION_RUNTIME_LOCKED_MESSAGE, MAX
 import { fileToBase64, formatFileNames, getFileBaseName, getFileParentPath, isMissingAttachmentData } from '@/lib/file-utils'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
 import { AgentSendButton } from './AgentSendButton'
-import { normalizeAgentHistoryRefresh, normalizeAgentHistoryResult } from './agent-history-pagination'
+import { clipAgentHistoryAfterRewind, normalizeAgentHistoryRefresh, normalizeAgentHistoryResult } from './agent-history-pagination'
 import { clearSessionReferenceDragState, getSessionReferenceDragData, canReferenceDraggedSession } from '@/lib/session-reference-drag'
 import { getFileReferenceDragData, isFileReferenceDrag, toFileReferenceMentions } from '@/lib/file-reference-drag'
 import { isSupportedInputDrop } from '@/lib/input-drop-payload'
@@ -421,6 +421,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const [thinkingExpanded, setThinkingExpanded] = useAtom(thinkingExpandedAtom)
   const globalEffort = useAtomValue(agentEffortAtom)
   const setSettingsOpen = useSetAtom(settingsOpenAtom)
+  const setSettingsTab = useSetAtom(settingsTabAtom)
   const setActiveView = useSetAtom(activeViewAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const coreTarget = useAtomValue(coreTargetsAtom)
@@ -509,24 +510,28 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const localChannels = useAtomValue(channelsAtom)
   const remoteChannels = useAtomValue(coreChannelsAtom)
   const setRemoteChannels = useSetAtom(coreChannelsAtom)
-  const globalChannels = isRemoteCore ? remoteChannels : localChannels
+  const independentCore = usesIndependentLocalCore(coreTarget)
+  const usesCoreCatalog = isRemoteCore || independentCore
+  const catalogStatus = coreTarget.targets.find(target => target.id === coreTarget.currentId)?.status
+  const catalogRevision = useAtomValue(coreCatalogRevisionAtom)
+  const globalChannels = usesCoreCatalog ? remoteChannels : localChannels
   // 非本机内核的渠道归属所属 Core，桌面没有“已启用渠道”清单；
   // 若继续套用桌面 agentChannelIds，新配置的渠道/模型要切一次模式才会出现。
   const effectiveAgentChannelIds = React.useMemo(
-    () => isRemoteCore ? globalChannels.map(channel => channel.id) : agentChannelIds,
-    [isRemoteCore, globalChannels, agentChannelIds],
+    () => usesCoreCatalog ? globalChannels.map(channel => channel.id) : agentChannelIds,
+    [usesCoreCatalog, globalChannels, agentChannelIds],
   )
   const localChannelsLoaded = useAtomValue(channelsLoadedAtom)
   const remoteChannelsLoaded = useAtomValue(coreChannelsLoadedAtom)
   const setRemoteChannelsLoaded = useSetAtom(coreChannelsLoadedAtom)
-  const channelsLoaded = isRemoteCore
+  const channelsLoaded = usesCoreCatalog
     ? remoteChannelsLoaded?.targetId === coreTarget.currentId && remoteChannelsLoaded.generation === coreTarget.generation
     : localChannelsLoaded
   React.useEffect(() => {
     let active = true
     const targetId = coreTarget.currentId
     const generation = coreTarget.generation
-    if (!isRemoteCore) return
+    if (!usesCoreCatalog) return
     setRemoteChannels([])
     setRemoteChannelsLoaded(null)
     const isCurrentTarget = (): boolean => {
@@ -537,9 +542,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       if (!isCurrentTarget()) return
       setRemoteChannels(items.map((item) => ({ ...item, apiKey: '', baseUrl: item.baseUrl ?? '', models: item.models ?? [], enabled: item.enabled !== false, createdAt: 0, updatedAt: 0 } as Channel)))
       setRemoteChannelsLoaded({ targetId, generation })
-    }).catch((error) => { if (isCurrentTarget()) { console.error('[Core] 读取远程模型目录失败:', error); setRemoteChannels([]) } })
+    }).catch((error) => { if (isCurrentTarget()) { console.error('[Core] 读取模型目录失败:', error); setRemoteChannels([]) } })
     return () => { active = false }
-  }, [coreTarget.currentId, coreTarget.generation, isRemoteCore, setRemoteChannels, setRemoteChannelsLoaded, store])
+  }, [coreTarget.currentId, coreTarget.generation, catalogStatus, catalogRevision, usesCoreCatalog, setRemoteChannels, setRemoteChannelsLoaded, store])
   const capabilitiesVersion = useAtomValue(workspaceCapabilitiesVersionAtom)
 
   // 加载当前工作区的 Agent 预设列表（预设为工作区级；失败静默留空由 UI 兑底）。
@@ -571,7 +576,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   // 仅官方支持查询的订阅渠道才允许 ContextUsageBadge 发起额度请求。
   // 额度查询目前只有桌面本机渠道可用；非本机内核的渠道凭据在 Core 里，
   // 桌面查不到，直接不发起，避免一直转圈失败（真实支持需要 Core 提供额度接口）。
-  const planQuotaChannelId = !isRemoteCore && globalChannels.some(
+  const planQuotaChannelId = !usesCoreCatalog && globalChannels.some(
     (channel) => channel.id === stableChannelId && supportsChannelPlanQuota(channel),
   ) ? stableChannelId : undefined
 
@@ -820,10 +825,11 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   )
   // 选择器里至少得有一个本内核可选的模型，否则引导用户去设置页。
   const canRepairBinding = React.useMemo(
-    () => bindingState !== null && bindingState !== 'ok' && bindingState !== 'unbound'
+    () => bindingState !== null && bindingState !== 'ok' && (bindingState !== 'unbound' || independentCore)
       && resolveAgentModelSelection(repairCandidateChannels, sessionAgentRuntime, agentChannelIds, null) !== null,
-    [bindingState, repairCandidateChannels, sessionAgentRuntime, agentChannelIds],
+    [bindingState, independentCore, repairCandidateChannels, sessionAgentRuntime, agentChannelIds],
   )
+  const unboundModelHint = independentCore ? '请先配置或选择本机 Core 的模型' : '请在设置中选择 Agent 渠道'
   // 目录变化只影响可用性；历史空绑定也由用户明确选择模型后持久化。
   // 默认模型在启动 initializer 中解析，不通过历史会话反向改写默认或 metadata。
 
@@ -3025,6 +3031,20 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       toast.error('回退未完成', { description: `执行状态：${result.status}` })
       return
     }
+    if (result.conversation) {
+      // Core 已提交截断；先替换本地历史窗口，再追加新的乐观用户消息。
+      const kept = clipAgentHistoryAfterRewind(persistedSDKMessagesRef.current, request.target)
+      pendingOptimisticMessagesRef.current.clear()
+      persistedSDKMessagesRef.current = kept
+      setPersistedSDKMessages(kept)
+      setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, kept))
+      setLiveMessagesMap((prev) => {
+        if (!prev.has(sessionId)) return prev
+        const next = new Map(prev)
+        next.delete(sessionId)
+        return next
+      })
+    }
     setRewindRequest(null)
     if (request.intent === 'edit-resend') setEditingUserMessageUuid(null)
     if (request.resendText) sendUserMessageInCurrentSession(request.resendText, request.retryDraft ?? request.resendText)
@@ -3052,7 +3072,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       map.set(sessionId, next)
       return map
     })
-  }, [rewindRequest, sendUserMessageInCurrentSession, sessionId, store])
+  }, [rewindRequest, sendUserMessageInCurrentSession, sessionId, setLiveMessagesMap, setMessagesCache, store])
 
   const handleRewindError = React.useCallback((error: Error): void => {
     toast.error(rewindRequest?.intent === 'regenerate' ? '重新生成失败' : rewindRequest?.intent === 'edit-resend' ? '修改重发失败' : '回退失败', { description: error.message })
@@ -3150,9 +3170,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           thinkingExpanded={thinkingExpanded}
           onThinkingExpandedChange={setThinkingExpanded}
           externalSelectedModel={externalSelectedModel}
-          channelsOverride={isRemoteCore ? remoteChannels : undefined}
+          channelsOverride={usesCoreCatalog ? remoteChannels : undefined}
           onModelSelect={(option) => {
-            if (isRemoteCore) {
+            if (usesCoreCatalog) {
               const updatedChannelIds = nextAgentChannelIdsAfterModelSelect(agentChannelIds, option.channelId, sessionAgentRuntime)
               if (updatedChannelIds !== agentChannelIds) setAgentChannelIds(updatedChannelIds)
               setDefaultChannelId(option.channelId)
@@ -3308,7 +3328,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
               <div className="flex items-center gap-2 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">
                 <Settings size={14} />
                 <span>
-                  {bindingState === 'unbound' && '请在设置中选择 Agent 渠道'}
+                  {bindingState === 'unbound' && unboundModelHint}
                   {bindingState === 'channel_missing' && '该会话绑定的渠道已被删除'}
                   {bindingState === 'channel_disabled' && '该会话绑定的渠道已停用'}
                   {bindingState === 'model_unavailable' && '该会话绑定的模型不可用'}
@@ -3318,10 +3338,13 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
                   className="text-xs underline underline-offset-2 hover:text-foreground transition-colors"
                   onClick={() => {
                     if (canRepairBinding) requestModelSelectorOpen(sessionId)
-                    else setSettingsOpen(true)
+                    else {
+                      if (independentCore) setSettingsTab('channels')
+                      setSettingsOpen(true)
+                    }
                   }}
                 >
-                  {canRepairBinding ? '重新选择模型' : '前往设置'}
+                  {canRepairBinding ? (bindingState === 'unbound' ? '选择模型' : '重新选择模型') : independentCore ? '打开模型配置' : '前往设置'}
                 </button>
               </div>
             )}
@@ -3417,7 +3440,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
                       : bindingState === null
                         ? '正在加载渠道...'
                         : bindingState === 'unbound'
-                          ? '请先在设置中选择 Agent 供应商'
+                          ? independentCore ? unboundModelHint : '请先在设置中选择 Agent 供应商'
                           : bindingState === 'channel_missing' || bindingState === 'channel_disabled'
                             ? '该会话绑定的渠道已失效，请重新选择模型'
                             : '该会话绑定的模型不可用，请重新选择模型'

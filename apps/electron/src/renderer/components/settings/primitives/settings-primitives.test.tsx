@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import * as React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { createLoadedHost } from '../../../../../scripts/settings-loaded-visual-host'
+import { Collapsible } from '@profer/ui/primitives/collapsible'
 import { SettingsInput } from './SettingsInput'
 import { SettingsTextarea } from './SettingsTextarea'
 import { SettingsToggle } from './SettingsToggle'
@@ -31,6 +33,7 @@ describe('设置基础控件真实 React 渲染语义', () => {
     expect(references).toHaveLength(2)
     for (const id of references) expect(html).toContain(`id="${id}"`)
     expect(html).toContain('role="alert"')
+    expect(html).toContain('text-destructive-text')
   })
 
   test('Given 多行输入无说明无错误 When 渲染 Then 不生成悬空描述引用', () => {
@@ -38,6 +41,8 @@ describe('设置基础控件真实 React 渲染语义', () => {
     const control = expectLabelAssociation(html, /<textarea[^>]*>/)
     expect(attribute(control, 'aria-describedby')).toBeUndefined()
     expect(attribute(control, 'aria-invalid')).toBe('false')
+    const invalid = renderToStaticMarkup(<SettingsTextarea label="提示词" value="" onChange={() => {}} error="请填写提示词" />)
+    expect(invalid).toContain('text-destructive-text')
   })
 
   test('Given 开关与下拉 When 渲染 Then 可见标签关联 switch/combobox', () => {
@@ -69,6 +74,32 @@ describe('设置基础控件真实 React 渲染语义', () => {
     const controls = html.match(/<input[^>]*>/g) ?? []
     expect(controls).toHaveLength(2)
     expect(attribute(controls[0]!, 'id')).not.toBe(attribute(controls[1]!, 'id'))
+  })
+
+  test('Given 可折叠设置区块 When 渲染 Then 说明独占一行且触发器保留焦点反馈', () => {
+    const html = renderToStaticMarkup(<SettingsSection title="连接" description="管理服务地址" collapsible><div>字段</div></SettingsSection>)
+    expect(html).toContain('class="block text-sm text-muted-foreground mt-1"')
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('focus-visible:ring-2')
+    expect(html).toContain('focus-visible:ring-focus')
+  })
+
+  test('Given 低频区块 When 搜索展开后手动收起 Then 搜索不锁死展开状态且可再次展开', async () => {
+    let reveal = false
+    const host = createLoadedHost(() => <SettingsSection title="高级" collapsible defaultOpen={false} reveal={reveal}><div>配置</div></SettingsSection>, new Set(['SettingsSection']))
+    const root = () => host.elements().find((node) => node.type === Collapsible)!
+    try {
+      await host.settle()
+      expect(root().props.open).toBe(false)
+      reveal = true; await host.settle()
+      expect(root().props.open).toBe(true)
+      ;(root().props.onOpenChange as (open: boolean) => void)(false)
+      await host.settle()
+      expect(root().props.open).toBe(false)
+      reveal = false; await host.settle()
+      reveal = true; await host.settle()
+      expect(root().props.open).toBe(true)
+    } finally { host.dispose() }
   })
 
   test('Given 设置区块 When 渲染 Then 使用 section 和连续标题层级', () => {

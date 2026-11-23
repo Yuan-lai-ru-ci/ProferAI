@@ -81,6 +81,7 @@ extraResources:
     filter:
       - profer-core
       - profer-core.exe
+      - profer-core-owner.exe
       - core.js
       - core-runtime.json
       - node_modules/**/*

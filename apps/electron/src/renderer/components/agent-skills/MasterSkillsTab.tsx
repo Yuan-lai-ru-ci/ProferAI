@@ -11,6 +11,7 @@ import type {
 import { SkillCard } from "./SkillCard";
 import { MasterSkillDetailSheet } from "./MasterSkillDetailSheet";
 import { CreateGlobalSkillDialog } from "./CreateGlobalSkillDialog";
+import { SkillCardReminder } from "./SkillCardReminder";
 
 interface Props {
   globalMode?: boolean;
@@ -52,7 +53,6 @@ export function MasterSkillsTab({
   const [importing, setImporting] = React.useState(false);
 
   const load = React.useCallback(() => {
-    setLoading(true);
     void (
       globalMode
         ? window.electronAPI.globalSkill.list()
@@ -67,6 +67,7 @@ export function MasterSkillsTab({
   }, [globalMode]);
 
   React.useEffect(() => {
+    setLoading(true);
     load();
   }, [load]);
   React.useEffect(() => {
@@ -101,6 +102,7 @@ export function MasterSkillsTab({
         readField("name") || slug,
         readField("description"),
         content,
+        true,
       );
       toast.success(`已导入全局 Skill：${readField("name") || slug}`);
       load();
@@ -141,6 +143,16 @@ export function MasterSkillsTab({
 
   return (
     <div className="flex flex-col gap-6">
+      {globalMode && (
+        <SkillCardReminder
+          candidates={skills.flatMap((skill) => isGlobalSkill(skill) && skill.type === "user-global" && skill.needsCardReminder ? [{
+            key: skill.skillId,
+            name: skill.name,
+            target: { scope: "global" as const, skillId: skill.skillId },
+          }] : [])}
+          onResolved={load}
+        />
+      )}
       {!hideToolbar && (
         <div className="flex items-center justify-between px-1">
           <div className="flex items-center gap-2">

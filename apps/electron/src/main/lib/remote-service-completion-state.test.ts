@@ -1,3 +1,6 @@
+// 本文件独立验收旧桌面执行/存储路径。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { AgentSessionMeta } from '@profer/shared'
 import * as actualSessionManager from './agent-session-manager'

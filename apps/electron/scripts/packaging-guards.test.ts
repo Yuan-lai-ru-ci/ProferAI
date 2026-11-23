@@ -99,6 +99,8 @@ describe('Windows 随包 CLI 契约', () => {
     writeFileSync(join(binDir, 'profer.exe'), 'windows-cli')
     for (const name of ['profer-core.exe', 'core.js', 'core-runtime.json']) writeFileSync(join(binDir, name), 'core-fixture')
     mkdirSync(join(binDir, 'node_modules'))
+    expect(() => verifyPackagedWindowsCli(binDir)).toThrow('profer-core-owner.exe')
+    writeFileSync(join(binDir, 'profer-core-owner.exe'), 'helper-fixture')
     expect(verifyPackagedWindowsCli(binDir)).toBe(join(binDir, 'profer.exe'))
     writeFileSync(join(binDir, 'profer-core'), 'wrong-platform')
     expect(() => verifyPackagedWindowsCli(binDir)).toThrow()

@@ -1,3 +1,6 @@
+// 本文件独立验收旧桌面执行/存储路径。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * 修复项 1：跨项目同 ID 会话冲突必须被拒绝，不能静默抢占归属。
  *

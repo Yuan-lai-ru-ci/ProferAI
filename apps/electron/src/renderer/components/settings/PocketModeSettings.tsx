@@ -39,6 +39,30 @@ function ConnectionValue({ label, value, secret = false }: { label: string; valu
   )
 }
 
+export function pocketServiceLabel(status: PocketModeStatus, timedOut = false): string {
+  if (!status.enabled) return '未开启'
+  if (status.error || timedOut) return '服务未就绪'
+  return status.running ? '可供移动端连接' : '正在启动'
+}
+
+export function PocketServiceSummary({ status, timedOut = false }: { status: PocketModeStatus; timedOut?: boolean }): React.ReactElement {
+  const failed = status.enabled && Boolean(status.error || timedOut)
+  const ready = status.enabled && status.running && !failed
+  return <div className="flex items-start gap-4 bg-muted/30 px-4 py-5" role="status">
+    <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-background shadow-sm">
+      <Smartphone className="size-5 text-muted-foreground" aria-hidden="true" />
+    </div>
+    <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold">移动连接服务</p>
+        <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${failed ? 'bg-destructive/10 text-destructive' : ready ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
+          <span className="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />{pocketServiceLabel(status, timedOut)}
+        </span>
+      </div>
+      {failed && <p className="mt-2 text-xs text-destructive-text">检查端口或重试启动</p>}
+    </div>
+  </div>
+}
+
 /** 局域网移动端的连接与凭据设置。 */
 export function PocketModeSettings(): React.ReactElement {
   const [status, setStatus] = React.useState<PocketModeStatus | null>(null)
@@ -289,7 +313,11 @@ export function PocketModeSettings(): React.ReactElement {
   }
 
   if (!status) {
-    return <IntegrationSettingsFeedback loading={!loadError} message={loadError || '正在加载移动模式…'} onRetry={loadError ? () => void refresh() : undefined} />
+    return <div className="space-y-4 rounded-xl bg-muted/30 p-5" aria-busy={!loadError}>
+      <div className="flex items-center gap-3"><div className="flex size-11 items-center justify-center rounded-xl bg-background shadow-sm"><Smartphone className="size-5 text-muted-foreground" aria-hidden="true" /></div><div><h3 className="text-sm font-semibold">移动端连接</h3><p className="mt-1 text-xs text-muted-foreground">本机服务 · Pocket 配对</p></div></div>
+      <IntegrationSettingsFeedback loading={!loadError} message={loadError || '正在加载移动模式…'} onRetry={loadError ? () => void refresh() : undefined} />
+      {!loadError && <div aria-hidden="true" className="space-y-2"><div className="h-2 w-2/3 rounded-full bg-muted" /><div className="h-2 w-1/3 rounded-full bg-muted" /></div>}
+    </div>
   }
 
   return (
@@ -303,14 +331,15 @@ export function PocketModeSettings(): React.ReactElement {
           <AlertDialogFooter><AlertDialogCancel disabled={saving}>取消</AlertDialogCancel><AlertDialogAction disabled={saving} onClick={(event) => { event.preventDefault(); void toggle(false) }}>关闭连接</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <SettingsSection title="移动模式（试验版）" description="通过一次性扫码配对，在局域网或自建可信 WSS 公网入口连接 Pocket。">
+      <SettingsSection title="移动端连接">
         <SettingsCard divided>
+          <PocketServiceSummary status={status} timedOut={listenTimedOut} />
           <SettingsToggle
             label="启用移动端连接"
-            description="开启后立即启动本机服务，并在下次启动 Profer 时自动恢复。"
+            description="随 Profer 自动启动"
             checked={status.enabled}
             onCheckedChange={(enabled) => { if (!enabled) setDisableOpen(true); else void toggle(true) }}
-            disabled={saving || savingPort || Boolean(loadError)}
+            disabled={saving || savingPort || savingPublic || Boolean(loadError)}
           />
           {status.error && (
             <div className="border-t border-destructive/20 bg-destructive/5 px-4 py-3 text-xs leading-5 text-destructive">
@@ -322,6 +351,42 @@ export function PocketModeSettings(): React.ReactElement {
               {status.notice}
             </div>
           )}
+        </SettingsCard>
+      </SettingsSection>
+
+      {status.enabled && (
+        <SettingsSection
+          title="设备配对"
+          description={status.running ? undefined : status.error || listenTimedOut ? '服务未就绪' : '正在启动…'}
+        >
+          <SettingsCard divided={false}>
+            {status.running ? (
+              <>
+                <RemotePairingSettings
+                  refreshKey={publicEndpoint ? `${publicEndpoint.host}:${publicEndpoint.port}` : 'lan'}
+                  large={Boolean(publicEndpoint)}
+                />
+                <details className="px-4 pb-4">
+                  <summary className="cursor-pointer rounded-md py-2 text-sm text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">手动连接地址与凭据</summary>
+                  {status.lanUrl && <ConnectionValue label="移动端访问地址" value={status.lanUrl} />}
+                  {status.token && <ConnectionValue label="连接凭据（请勿外传）" value={status.token} secret />}
+                </details>
+              </>
+            ) : status.error || listenTimedOut ? (
+              <IntegrationSettingsFeedback loading={saving} message={status.error || '启动等待已超时，请重试启动或更换端口。'} onRetry={() => void toggle(true)} />
+            ) : (
+              <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />正在监听端口 {status.port}...</div>
+            )}
+          </SettingsCard>
+
+        </SettingsSection>
+      )}
+
+      <details className="group min-w-0 rounded-xl bg-muted/20 p-4">
+        <summary className="cursor-pointer rounded-md text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">网络配置 <span className="ml-2 text-xs font-normal text-muted-foreground">端口 {status.port} · {publicEndpoint ? '已配置公网入口' : '仅局域网'}</span></summary>
+        <div className="mt-5 space-y-5">
+        <SettingsSection title="服务端口" description="更改后将重启服务。">
+          <SettingsCard divided={false}>
           <div className="flex flex-col gap-2.5 px-4 py-3.5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -353,7 +418,7 @@ export function PocketModeSettings(): React.ReactElement {
                   if (e.key === 'Enter' && portChanged && !savingPort) void savePort()
                 }}
                 aria-label="移动模式服务端口"
-                disabled={saving || savingPort || Boolean(loadError)}
+                disabled={saving || savingPort || savingPublic || Boolean(loadError)}
                 aria-invalid={!portValid && !portEmpty}
                 className={`w-32 flex-shrink-0 tabular-nums ${
                   !portValid && !portEmpty ? 'border-destructive focus-visible:ring-destructive/30' : ''
@@ -362,7 +427,7 @@ export function PocketModeSettings(): React.ReactElement {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={!portChanged || savingPort || saving || Boolean(loadError)}
+                disabled={!portChanged || savingPort || saving || savingPublic || Boolean(loadError)}
                 onClick={() => void savePort()}
               >
                 {savingPort ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
@@ -372,7 +437,7 @@ export function PocketModeSettings(): React.ReactElement {
                 <Button
                   variant="ghost"
                   size="sm"
-                  disabled={savingPort || saving || Boolean(loadError)}
+                  disabled={savingPort || saving || savingPublic || Boolean(loadError)}
                   onClick={() => void resetPort()}
                 >
                   <RotateCcw className="size-3.5" />
@@ -387,38 +452,9 @@ export function PocketModeSettings(): React.ReactElement {
               <p className="text-xs leading-4 text-muted-foreground">使用默认端口 {status.defaultPort}</p>
             )}
           </div>
-        </SettingsCard>
-      </SettingsSection>
-
-      {status.enabled && (
-        <SettingsSection
-          title="连接信息"
-          description={status.running ? 'Pocket 配对' : status.error || listenTimedOut ? '服务尚未就绪。检查端口或重试启动。' : '正在启动服务，请稍候…'}
-        >
-          <SettingsCard divided={false}>
-            {status.running ? (
-              <>
-                {status.lanUrl && <ConnectionValue label="移动端访问地址" value={status.lanUrl} />}
-                <RemotePairingSettings
-                  refreshKey={publicEndpoint ? `${publicEndpoint.host}:${publicEndpoint.port}` : 'lan'}
-                  large={Boolean(publicEndpoint)}
-                />
-                {status.token && <ConnectionValue label="手动连接凭据（Token）" value={status.token} secret />}
-              </>
-            ) : status.error || listenTimedOut ? (
-              <IntegrationSettingsFeedback loading={saving} message={status.error || '启动等待已超时，请重试启动或更换端口。'} onRetry={() => void toggle(true)} />
-            ) : (
-              <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />正在监听端口 {status.port}...</div>
-            )}
           </SettingsCard>
-          <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
-            <Wifi className="mt-0.5 size-4 shrink-0 text-amber-600" />
-            <span>局域网内直接扫码连接；配了公网地址时，外网也能扫码直连（需你自己的 FRP / 端口映射已就绪）。Token 等同连接凭据，请勿分享给不受信任的人。</span>
-          </div>
         </SettingsSection>
-      )}
-
-      {/* 公网连接地址：用户自建 FRP / 端口映射后，二维码带上公网端点，手机扫码即可在外网直连。 */}
+      {/* 公网连接地址：保留自建 FRP / 端口映射与证书信任语义。 */}
       <SettingsSection
         title="公网连接地址（可选）"
         description="自己配置了 FRP 内网穿透时填写。二维码会一并带上公网地址，手机扫码即可在外网连接；不填则只带局域网地址。"
@@ -434,7 +470,7 @@ export function PocketModeSettings(): React.ReactElement {
                 value={publicHost}
                 onChange={(e) => { publicDirtyRef.current = true; setPublicHost(e.target.value) }}
                 disabled={saving || savingPort || savingPublic}
-                className="w-56"
+                className="w-full min-w-0 sm:w-56"
               />
               <Input
                 aria-label="公网端口"
@@ -459,7 +495,7 @@ export function PocketModeSettings(): React.ReactElement {
                 保存
               </Button>
               {publicEndpoint && (
-                <Button variant="ghost" size="sm" disabled={savingPublic || saving} onClick={() => void clearPublic()}>
+                <Button variant="ghost" size="sm" disabled={savingPublic || saving || savingPort} onClick={() => void clearPublic()}>
                   清除
                 </Button>
               )}
@@ -520,6 +556,12 @@ export function PocketModeSettings(): React.ReactElement {
         </SettingsCard>
       </SettingsSection>
 
+        </div>
+      </details>
+
+      <details className="rounded-xl bg-muted/30 p-4">
+        <summary className="cursor-pointer rounded-md text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">还没有 Pocket？下载安卓版 App</summary>
+        <div className="mt-4">
       {/* 安卓版 App 扫码下载：指向官网 profer.cn 域名直链，任何场景都可用，不依赖移动模式是否开启。 */}
       <SettingsSection
         title="下载安卓版 App"
@@ -580,6 +622,9 @@ export function PocketModeSettings(): React.ReactElement {
           </div>
         </SettingsCard>
       </SettingsSection>
+
+        </div>
+      </details>
 
       <div className="flex items-start gap-2 rounded-lg bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
         <Smartphone className="mt-0.5 size-4 shrink-0" />

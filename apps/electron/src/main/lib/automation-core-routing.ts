@@ -1,3 +1,4 @@
+import { isLocalCoreEnabled } from './core-local-mode'
 import { randomUUID } from 'node:crypto'
 import { AUTOMATION_IPC_CHANNELS, type Automation } from '@profer/shared'
 import { getLocalCoreClient } from './core-local-bridge'
@@ -14,7 +15,7 @@ export function projectCoreAutomation(task: Automation, coreId: string): Automat
 /** 仅显式local返回null；断线、错误归属和旧响应拒绝，不能回落桌面调度器。 */
 export async function routeAutomationToCore(channel: string, args: unknown[]): Promise<{ result: unknown } | null> {
   const local = getCurrentCoreTargetId() === 'local'
-  if (local && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') return null
+  if (local && !getLocalCoreClient() && !isLocalCoreEnabled()) return null
   const client = local ? getLocalCoreClient() : getActiveCoreClient(), coreId = local ? 'local' : currentCoreId(), generation = getCoreTargetGeneration()
   if (!client || !coreId) throw new Error('当前远程Core未连接，不能访问Automation')
   const rawId = (value: unknown): string => {

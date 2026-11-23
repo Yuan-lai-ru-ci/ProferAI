@@ -1,12 +1,13 @@
 {
   "name": "@profer/session-store",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "AGPL-3.0-only",
   "description": "Node-side Profer session storage primitives and host-neutral operation contracts.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
+    "./execution-lock": "./src/execution-lock.ts",
     ".": "./src/index.ts",
     "./project-session-paths": "./src/project-session-paths.ts",
     "./remote-workspace-file-search": "./src/remote-workspace-file-search.ts",

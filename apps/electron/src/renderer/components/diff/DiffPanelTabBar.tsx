@@ -8,7 +8,6 @@ import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
 import { FileDiff, FolderOpen, FolderTree, HardDrive, PanelRightClose } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import { agentDiffUnseenChangesAtom, currentAgentSessionIdAtom, type AgentSidePanelTab } from '@/atoms/agent-atoms'
 
@@ -39,7 +38,6 @@ interface PreviousTabState {
  */
 function FileViewTabButton({
   active,
-  isClassic,
   label,
   icon,
   onClick,
@@ -47,7 +45,6 @@ function FileViewTabButton({
   badge = false,
 }: {
   active: boolean
-  isClassic: boolean
   label: string
   icon: React.ReactNode
   onClick: () => void
@@ -62,14 +59,13 @@ function FileViewTabButton({
       onClick={onClick}
       className={cn(
         'relative flex items-center h-[40px] text-xs transition-colors select-none cursor-pointer',
-        'border-t border-l border-r',
-        isClassic ? 'rounded-t-lg' : 'rounded-none',
+        'border border-transparent rounded-t-lg',
         compact
           ? 'w-11 shrink-0 justify-center'
           : 'min-w-0 flex-1 justify-center gap-1 overflow-hidden px-3',
         active
-          ? isClassic ? 'bg-content-area text-foreground border-border/50' : 'app-tab-active text-foreground border-border/80'
-          : isClassic ? 'text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/50' : 'app-tab-inactive text-muted-foreground border-transparent hover:text-foreground',
+          ? 'app-tab-active text-foreground'
+          : 'app-tab-inactive text-muted-foreground hover:text-foreground',
       )}
     >
       {compact ? (
@@ -102,8 +98,6 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose, hideChanges =
   const unseenMap = useAtomValue(agentDiffUnseenChangesAtom)
   const setUnseenMap = useSetAtom(agentDiffUnseenChangesAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
-  const interfaceVariant = useAtomValue(interfaceVariantAtom)
-  const isClassic = interfaceVariant === 'classic'
   const unseenChanges = unseenMap.get(currentSessionId ?? '') ?? false
   const prevTabStateRef = React.useRef<PreviousTabState>({ sessionId: currentSessionId, activeTab })
 
@@ -139,14 +133,12 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose, hideChanges =
       <div className="relative flex min-w-0 items-end flex-1 titlebar-no-drag overflow-x-auto scrollbar-none">
         <FileViewTabButton
           active={activeTab === 'session'}
-          isClassic={isClassic}
           label="会话文件"
           icon={<FolderOpen className="size-3.5" />}
           onClick={() => onTabChange('session')}
         />
         <FileViewTabButton
           active={activeTab === 'workspace'}
-          isClassic={isClassic}
           label="工作区文件"
           icon={<FolderTree className="size-3.5" />}
           onClick={() => onTabChange('workspace')}
@@ -154,7 +146,6 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose, hideChanges =
         {showSystemFiles && (
           <FileViewTabButton
             active={activeTab === 'system'}
-            isClassic={isClassic}
             label="系统文件"
             icon={<HardDrive className="size-3.5" />}
             onClick={() => onTabChange('system')}
@@ -163,7 +154,6 @@ export function DiffPanelTabBar({ activeTab, onTabChange, onClose, hideChanges =
         {!hideChanges && (
           <FileViewTabButton
             active={activeTab === 'changes'}
-            isClassic={isClassic}
             label="文件改动"
             icon={<FileDiff className="size-3.5" />}
             badge={unseenChanges && activeTab !== 'changes'}

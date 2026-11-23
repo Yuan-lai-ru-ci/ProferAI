@@ -1,3 +1,5 @@
+import { createAgentRunContext } from '@profer/agent-runtime'
+import { readCoreOsId } from './os-identity'
 import type { Socket } from 'node:net'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AgentSessionMeta, ChannelCreateInput, ChannelUpdateInput } from '@profer/shared'
@@ -23,6 +25,8 @@ export interface CoreServerOptions {
   runtime?: CoreAgentRuntime
   apiKey?: string
   coreId?: string
+  authorizeRequest?: (request: IncomingMessage) => boolean
+  connectionHandler?: (request: IncomingMessage, response: ServerResponse) => Promise<boolean>
   onEvent?: (event: CoreEvent) => void
   /** 仅 PROFER_CORE_DEBUG=1 时传入；不存在时不挂载 /debug/*。 */
   debug?: CoreDebugOptions
@@ -131,12 +135,27 @@ export function createCoreServer(options: CoreServerOptions): Server {
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    if (options.connectionHandler && await options.connectionHandler(request, response)) return
     if (request.method === 'GET' && url.pathname === '/health') {
       sendJson(response, 200, { status: 'ok', service: 'profer-core', version: options.version } satisfies CoreHealth)
       return
     }
-    if (!authorized(request, options.apiKey)) {
+    if (!(options.authorizeRequest ? options.authorizeRequest(request) : authorized(request, options.apiKey))) {
       sendJson(response, 401, { error: 'unauthorized' })
+      return
+    }
+    if (url.pathname === '/account/operations') {
+      const address = request.socket.remoteAddress
+      // authorizeRequest 是配对/LAN 的设备授权，绝不能提升为本机 owner。
+      if (!runtime?.accountAvailable || options.authorizeRequest || !options.apiKey || !authorized(request, options.apiKey) || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address ?? '')) {
+        sendJson(response, 403, { error: '账号操作仅允许本机 owner' }); return
+      }
+      if (request.method !== 'POST') { sendJson(response, 405, { error: 'method not allowed' }); return }
+      try {
+        const body = await readBoundedJson(request, 64 * 1024, 'Core account')
+        if (typeof body.operation !== 'string' || !Array.isArray(body.args)) throw new Error('账号操作参数无效')
+        sendJson(response, 200, { result: await runtime.accountOperation(body.operation, body.args) })
+      } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : '账号操作失败' }) }
       return
     }
     if (request.method === 'GET' && url.pathname === '/identity') {
@@ -146,6 +165,7 @@ export function createCoreServer(options: CoreServerOptions): Server {
         version: options.version,
         /** 所属 Core 的运行平台；桌面据此决定路径文案和“本机/对面”行为。 */
         platform: process.platform,
+        osId: readCoreOsId(),
         hostCapabilities: CORE_HOST_CAPABILITIES,
         capabilities: ['sessions.read', 'sessions.write', 'workspaces.read', 'workspaces.write', 'agent.pi', 'agent.events', 'agent.stop', 'planning', 'automation', 'delegation', 'agent.events.resume', 'resources.manage', ...(runtime?.chat ? ['chat'] : [])],
       })
@@ -214,6 +234,7 @@ export function createCoreServer(options: CoreServerOptions): Server {
       if (request.method === 'GET' && url.pathname === '/channels') {
         sendJson(response, 200, { channels: runtime.channels.map(channel => ({
           ...channel,
+          ...(channel.serverManaged ? { apiKey: undefined } : {}),
           models: channel.models ?? [],
           enabled: channel.enabled !== false,
         })) })
@@ -620,7 +641,11 @@ export function createCoreServer(options: CoreServerOptions): Server {
         const body = await readJson(request)
         const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : ''
         if (!prompt) { sendJson(response, 400, { error: 'prompt_required' }); return }
-        const input = parseCoreMessageOptions(body, Boolean(options.apiKey))
+        // 共享入口已经校验了设备绑定，但它不是 owner。允许桌面发起用户轮次，
+        // 由 Core 按真实会话生成来源；不采用客户端声明的身份、授权或凭据。
+        const pairedContext = !options.apiKey && options.authorizeRequest && body.context !== undefined
+        const input = parseCoreMessageOptions(pairedContext ? { ...body, context: undefined } : body, Boolean(options.apiKey))
+        if (pairedContext) input.context = createAgentRunContext({ sessionId: session.id, uuid: input.uuid, initiator: 'user' }, () => crypto.randomUUID())
         const actor = input.context?.trigger.actor.type
         const initiator = actor === 'automation' ? 'automation' : actor === 'agent' ? 'delegation' : actor === 'system' ? 'external' : 'user'
         runtime.assertAcceptingRuns()
@@ -671,6 +696,7 @@ export function createCoreServer(options: CoreServerOptions): Server {
       sendJson(response, error instanceof BoundedBodyError ? error.statusCode : 400, { error: error instanceof Error ? error.message : String(error) })
     }
   })
+  server.once('close', () => unsubscribe?.())
   // HTTP close 不会回收已升级的 WebSocket；统一追踪底层连接以关闭准入。
   const sockets = new Set<Socket>()
   server.on('connection', socket => {

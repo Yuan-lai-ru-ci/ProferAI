@@ -68,6 +68,8 @@ function serviceFixture(sendMessage: (input: AgentSendInput, callbacks: SessionC
   const webContents = { isDestroyed: () => false, send() {} }
   const run = compile<(input: AgentSendInput, wc: typeof webContents) => Promise<void>>(runAgentSource, 'runAgent', {
     orchestrator: { sendMessage, isActive, checkEntryGuards: () => undefined },
+    usageRecorder: { begin: () => {}, finish: () => {}, observe: () => {} },
+    isIndependentLocalCore: () => false,
     shouldUseLocalCorePi: () => false,
     isLocalCoreSessionActive: () => false,
     // 桌面 runtime 开关默认关：本 fixture 固定走旧分支（新分支由入口路由 parity 覆盖）。
@@ -116,6 +118,8 @@ test('桌面与 headless 的内核不匹配拒绝不广播假终态，也不清�
     normalizeHeadlessSendInput,
     resolveRunInitiator,
     orchestrator: { isActive: () => true, sendMessage: async () => { throw new AgentSessionRuntimeMismatchError('pi', 'claude') } },
+    usageRecorder: { begin: () => {}, finish: () => {}, observe: () => {} },
+    isIndependentLocalCore: () => false,
     shouldUseLocalCorePi: () => false,
     isLocalCoreSessionActive: () => false,
     runtimeCoordinator: { isRunning: () => false },

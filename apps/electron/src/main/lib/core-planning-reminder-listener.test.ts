@@ -13,13 +13,13 @@ test('本机Core提醒listener广播并通知；目标切换后旧listener及延
   let release: (() => void) | undefined
   const gate = new Promise<void>(resolve => { release = resolve })
   const client = { addPlanningEventListener(callback: (payload: unknown) => void) { listener = callback; return () => undefined } }
-  const run = new Function('client', 'readStore', 'BrowserWindow', 'PLANNING_IPC_CHANNELS', 'loadNotificationPort', `
+  const run = new Function('client', 'activeId', 'BrowserWindow', 'PLANNING_IPC_CHANNELS', 'loadNotificationPort', `
     let unsubscribeLocalPlanning;
     const activeClient = client;
     const LOCAL_TARGET_ID = 'local';
     ${body}
   `)
-  run(client, () => ({ currentId: selected }), { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: (...args: unknown[]) => broadcasts.push(args) } }] }, { REMINDER_DUE: 'due' }, async () => { await gate; return { showPlanningSystemNotification: (value: unknown) => notifications.push(value) } })
+  run(client, () => selected, { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: (...args: unknown[]) => broadcasts.push(args) } }] }, { REMINDER_DUE: 'due' }, async () => { await gate; return { showPlanningSystemNotification: (value: unknown) => notifications.push(value) } })
   listener({ type: 'reminders_due', reminders: [{ id: 'one' }] })
   expect(broadcasts).toEqual([['due', [{ id: 'one' }]]])
   release?.(); await Bun.sleep(0)

@@ -18,6 +18,7 @@ function handler(channel: string, dependencies: Record<string, unknown>) {
   let invoke: ((...args: unknown[]) => Promise<unknown>) | undefined
   const deps = {
     AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, isAgentRuntime,
+    isLocalCoreEnabled: () => false,
     getCurrentCoreTargetId: () => 'local',
     getCoreTargetGeneration: () => 1,
     assertSensitiveAgentIpcSender: () => {},
@@ -37,6 +38,19 @@ const session = { id: 'core-session', title: 'Core', agentRuntime: 'claude', cre
 const noDesktop = () => { throw new Error('不应访问桌面存储') }
 
 describe('本机 Core 会话 IPC 归属', () => {
+  test('首次 Core 启动由 Core 创建默认工作区，IPC 不再写 legacy 索引', () => {
+    const start = source.indexOf('  // Core 模式由持锁的 Core 初始化默认工作区')
+    const end = source.indexOf('  // 上次退出/崩溃前已接受', start)
+    expect(start).toBeGreaterThan(0)
+    const script = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end))
+    let calls = 0
+    const initialize = new Function('isLocalCoreEnabled', 'ensureDefaultWorkspace', script)
+    initialize(() => true, () => { calls++ })
+    expect(calls).toBe(0)
+    initialize(() => false, () => { calls++ })
+    expect(calls).toBe(1)
+  })
+
   test('本机工作区读写全部路由Core，不回退桌面manager', async () => {
     const calls: string[] = []
     const workspace = { id: 'w1', name: 'Core workspace' }
@@ -67,10 +81,10 @@ describe('本机 Core 会话 IPC 归属', () => {
     await handler('REMOVE_PROJECT_WORKSPACE', deps)('w1')
     await handler('RELOCATE_PROJECT_WORKSPACE', deps)({ id: 'w1', rootPath: '/fixture-new' })
     expect(calls).toEqual(['list', 'create:new', 'update:w1', 'reorder:w1', 'delete:w1', 'bind', 'bind', 'unbind:w1', 'relocate'])
-    const failed = handler('CREATE_WORKSPACE', { ...deps, getLocalCoreClient: () => null, process: { env: { PROFER_CORE_LOCAL: '1' } } })
+    const failed = handler('CREATE_WORKSPACE', { ...deps, getLocalCoreClient: () => null, isLocalCoreEnabled: () => true })
     await expect(failed('new')).rejects.toThrow('本机Core尚未就绪')
     expect(await handler('LIST_WORKSPACES', { ...deps, getLocalCoreClient: () => null,
-      process: { env: { PROFER_CORE_LOCAL: '0' } }, listAgentWorkspaces: () => [workspace] })()).toEqual([workspace])
+      isLocalCoreEnabled: () => false, listAgentWorkspaces: () => [workspace] })()).toEqual([workspace])
   })
 
   test('本机工作区异步响应在切Core或client替换后拒绝且不广播', async () => {
@@ -377,11 +391,120 @@ describe('本机 Core 会话 IPC 归属', () => {
     await expect(handler('LIST_SESSIONS', { ...dependencies, getActiveCoreClient: () => active })(false)).rejects.toThrow('Core已切换')
   })
 
-  test('Given Core 消息 When 分页 Then 保持桌面分页契约，不读桌面消息文件', async () => {
-    const invoke = handler('GET_SDK_MESSAGES', {
-      getLocalCoreClient: () => ({ getMessages: async () => ['one', 'two', 'three'] }), getAgentSessionSDKMessages: noDesktop,
+  describe('Core 消息历史与运行态路由', () => {
+    // 与 IPC fixture 一样执行生产代码，只替换依赖；不在测试中重写归属/代次校验。
+    const routeSource = readFileSync(new URL('./core-native-routing.ts', import.meta.url), 'utf8')
+    const routeCode = new Bun.Transpiler({ loader: 'ts' }).transformSync(routeSource
+      .slice(routeSource.indexOf('export function captureCoreNativeRoute('), routeSource.indexOf('export interface CoreNativeSnapshot'))
+      .replace('export function', 'function'))
+
+    function setup({ remote = false, enabled = true, getMessages = async (_id: string) => ['one', 'two', 'three'],
+      getSessionDetail = async (_id: string): Promise<{ active?: boolean }> => ({ active: false }) } = {}) {
+      const client = { getMessages, getSessionDetail, isConnected: true }
+      const state = { remote, generation: 1, client: client as typeof client | null }
+      const dependencies = {
+        getCurrentCoreTargetId: () => state.remote ? 'target' : 'local',
+        getCoreTargetGeneration: () => state.generation,
+        getActiveCoreClient: () => state.client,
+        getLocalCoreClient: () => state.client,
+        isLocalCoreEnabled: () => enabled,
+        currentCoreId: () => 'owner',
+        parseCoreSessionId: (id: string) => {
+          const match = /^core:([^:]+):(.+)$/.exec(id)
+          return match ? { coreId: match[1], sessionId: match[2] } : null
+        },
+      }
+      const captureCoreNativeRoute = new Function(...Object.keys(dependencies), `${routeCode}\nreturn captureCoreNativeRoute`)(...Object.values(dependencies))
+      const history = (getAgentSessionSDKMessages: (...args: unknown[]) => unknown = noDesktop) =>
+        handler('GET_SDK_MESSAGES', { captureCoreNativeRoute, getAgentSessionSDKMessages })
+      const activity = (isAgentSessionActive: (id: string) => boolean = noDesktop) =>
+        handler('GET_SESSION_ACTIVITY', { captureCoreNativeRoute, isAgentSessionActive })
+      return { state, client, history, activity, id: remote ? `core:owner:${session.id}` : session.id }
+    }
+
+    test.each([false, true])('本机/远端（remote=%s）保持同一分页和无分页契约', async remote => {
+      const reads: string[] = []
+      const { history, id } = setup({ remote, getMessages: async id => { reads.push(id); return ['one', 'two', 'three'] } })
+      const invoke = history()
+      expect(await invoke(id, { tail: 1, before: 2 })).toEqual({ messages: ['two'], total: 3, startIndex: 1, endIndex: 2, hasMore: true })
+      expect(await invoke(id)).toEqual(['one', 'two', 'three'])
+      expect(reads).toEqual([session.id, session.id])
     })
-    expect(await invoke(session.id, { tail: 1, before: 2 })).toEqual({ messages: ['two'], total: 3, startIndex: 1, endIndex: 2, hasMore: true })
+
+    test.each([false, true])('本机/远端（remote=%s）拒绝非当前 Core 会话和未连接', async remote => {
+      const { state, history, id } = setup({ remote, getMessages: noDesktop })
+      const invoke = history()
+      await expect(invoke(`core:other:${session.id}`, { tail: 1 })).rejects.toThrow('不属于当前')
+      state.client = null
+      await expect(invoke(id)).rejects.toThrow('未连接')
+    })
+
+    test.each([false, true])('丢弃迟到历史：同代次换客户端（%s）或切换代次', async replaceClient => {
+      const read = Promise.withResolvers<string[]>()
+      const { state, history, id } = setup({ remote: replaceClient, getMessages: () => read.promise })
+      const pending = history()(id, { tail: 1 })
+      if (replaceClient) state.client = { ...state.client!, getMessages: noDesktop }
+      else { state.remote = true; state.generation += 1 }
+      read.resolve(['old'])
+      await expect(pending).rejects.toThrow('忽略旧会话响应')
+    })
+
+    test.each([false, true])('从本机/远端 Core 获取权威 true/false', async remote => {
+      let active = true
+      const { activity, id } = setup({ remote, getSessionDetail: async coreId => {
+        expect(coreId).toBe(session.id)
+        return { active }
+      } })
+      const invoke = activity()
+      expect(await invoke(id)).toBe(true)
+      active = false
+      expect(await invoke(id)).toBe(false)
+    })
+
+    test.each([false, true])('本机/远端运行态不可用不会返回 false', async remote => {
+      const read = Promise.withResolvers<{ active?: boolean }>()
+      const { state, client, activity, id } = setup({ remote, getSessionDetail: () => read.promise })
+      const invoke = activity()
+      await expect(invoke(`core:other:${session.id}`)).rejects.toThrow('不属于当前')
+      const pending = invoke(id)
+      client.isConnected = false
+      read.resolve({ active: false })
+      await expect(pending).rejects.toThrow('已断开')
+      await expect(invoke(id)).rejects.toThrow('未连接')
+      state.client = null
+      await expect(invoke(id)).rejects.toThrow('未连接')
+    })
+
+    test('运行态请求失败或缺少 active 不视为已停止', async () => {
+      const offline = setup({ getSessionDetail: async () => { throw new Error('读取失败') } })
+      await expect(offline.activity()(offline.id)).rejects.toThrow('读取失败')
+      const incomplete = setup({ getSessionDetail: async () => ({}) })
+      await expect(incomplete.activity()(incomplete.id)).rejects.toThrow('未返回有效')
+    })
+
+    test.each([false, true])('拒绝切换目标或同代次换连接后的迟到运行态', async replaceClient => {
+      const read = Promise.withResolvers<{ active: boolean }>()
+      const { state, client, activity, id } = setup({ remote: replaceClient, getSessionDetail: () => read.promise })
+      const pending = activity()(id)
+      if (replaceClient) state.client = { ...client }
+      else { state.remote = true; state.generation += 1 }
+      read.resolve({ active: false })
+      await expect(pending).rejects.toThrow('忽略旧会话响应')
+    })
+
+    test('明确的 legacy 模式保留桌面运行态', async () => {
+      const { state, activity, id } = setup({ enabled: false })
+      state.client = null
+      expect(await activity(sessionId => sessionId === id)(id)).toBe(true)
+    })
+
+    test('仅在 legacy 模式下原样调用桌面历史读取', async () => {
+      const { state, history, id } = setup({ enabled: false })
+      state.client = null
+      const invoke = history((...args) => args)
+      expect(await invoke(id)).toEqual([id])
+      expect(await invoke(id, { tail: 1 })).toEqual([id, { tail: 1 }])
+    })
   })
 
   test('Given Core When 更新模型 Then 写 Core；运行中仍拒绝', async () => {

@@ -8,6 +8,7 @@ import type { AgentSessionMeta, AgentWorkspace } from '@profer/shared'
 interface WorkspaceIndex { version: number; workspaces: AgentWorkspace[]; [key: string]: unknown }
 
 export interface CoreWorkspaceStore {
+  ensureDesktopDefault(): AgentWorkspace | undefined
   list(): AgentWorkspace[]
   createManaged(name: string): AgentWorkspace
   update(id: string, updates: { name?: string; archived?: boolean }): AgentWorkspace
@@ -95,6 +96,7 @@ export function createCoreWorkspaceStore(configDir: string, workspaceRoot: strin
   // 未显式授权写入时，桌面索引仍是宿主权威，独立Core不得覆盖桌面数据。
   if (desktopIndexPath && !desktopIndexWritable) {
     return {
+      ensureDesktopDefault() { return undefined },
       list() {
         if (!existsSync(desktopIndexPath)) return []
         const parsed: unknown = JSON.parse(readFileSync(desktopIndexPath, 'utf8'))
@@ -159,13 +161,13 @@ export function createCoreWorkspaceStore(configDir: string, workspaceRoot: strin
     try { onChanged?.() } catch (error) { console.error('[Core] 工作区变更通知失败，重连后可重新读取：', error) }
   }
   const list = (): AgentWorkspace[] => read().workspaces.slice()
-  const create = (name: string, storageMode: 'managed' | 'project', rootPath?: string): AgentWorkspace => {
+  const create = (name: string, storageMode: 'managed' | 'project', rootPath?: string, fixedSlug?: string): AgentWorkspace => {
     const normalizedName = name.trim()
     if (!normalizedName || normalizedName.length > 80) throw new Error('工作区名称不能为空且不能超过 80 个字符')
     const index = read()
     if (index.workspaces.some(item => item.name.toLocaleLowerCase() === normalizedName.toLocaleLowerCase())) throw new Error(`工作区名称「${normalizedName}」已存在`)
     if (rootPath && index.workspaces.some(item => item.storageMode === 'project' && item.rootPath === rootPath)) throw new Error(`该 Linux 项目目录已绑定：${rootPath}`)
-    const slug = slugify(normalizedName, new Set(index.workspaces.map(item => item.slug)))
+    const slug = fixedSlug ?? slugify(normalizedName, new Set(index.workspaces.map(item => item.slug)))
     const now = Date.now()
     const workspace: AgentWorkspace = {
       id: randomUUID(), name: normalizedName, slug, createdAt: now, updatedAt: now,
@@ -283,6 +285,20 @@ export function createCoreWorkspaceStore(configDir: string, workspaceRoot: strin
     assertManagedDeleteTarget,
     removeManagedAfterCascade,
     remove,
+    ensureDesktopDefault() {
+      if (!desktopIndexPath || !desktopIndexWritable) return undefined
+      const existing = read().workspaces.find(item => item.slug.toLowerCase() === 'default')
+      if (existing) return existing
+      mkdirSync(workspaceRoot, { recursive: true })
+      const directory = join(workspaceRoot, 'default')
+      const existed = existsSync(directory)
+      if (existed) {
+        const stat = lstatSync(directory)
+        if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('默认工作区目录不安全')
+      } else mkdirSync(directory)
+      try { return create('默认工作区', 'managed', undefined, 'default') }
+      catch (error) { if (!existed) { try { rmdirSync(directory) } catch {} }; throw error }
+    },
     createManaged(name) {
       const normalizedName = name.trim()
       if (!normalizedName || normalizedName.length > 80) throw new Error('工作区名称不能为空且不能超过 80 个字符')

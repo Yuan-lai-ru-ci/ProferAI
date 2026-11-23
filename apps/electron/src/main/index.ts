@@ -1,8 +1,10 @@
+import { isIndependentLocalCore, isLocalCoreEnabled } from './lib/core-local-mode'
+import './lib/core-local-bootstrap'
+import { configureLocalCoreRetry, updateLocalCoreStatus } from './lib/core-local-service'
 import { app, BrowserWindow, dialog, Menu, powerMonitor, protocol, screen, shell } from 'electron'
 import { join } from 'path'
 import { createConnection } from 'net'
 import { existsSync } from 'fs'
-import { getDevInstanceId, readUserDataDirSwitch, resolveDevAppName, resolveDevUserDataPath } from './lib/dev-instance'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
 import { localCoreOwnsBusinessData } from './lib/core-business-ownership'
 import { STARTUP_STAGE_BOOTSTRAP_FAILED, STARTUP_STAGE_MAIN_LOADED, STARTUP_STAGE_WINDOW_CREATED, writeStartupProbe } from './lib/startup-probe'
@@ -43,20 +45,6 @@ function probeDevServerPort(hostname: string, port: number): Promise<boolean> {
   })
 }
 
-// userData 和单实例锁必须在任何会读取 userData 的模块加载前隔离。
-// PROFER_DEV_INSTANCE / PROFER_USER_DATA_DIR 仅对开发版生效；
-// 显式 `--user-data-dir` 在正式版也尊重（发布前的启动冒烟、QA 多开需要隔离）。
-// 不这样做的话，下面的 setPath 会把 Chromium 已按开关设好的路径覆盖回 appData，
-// 单实例锁也跟着落回真实用户数据目录，隔离启动会被当重复实例直接退出。
-const devInstanceId = getDevInstanceId()
-if (!app.isPackaged) app.setName(resolveDevAppName())
-const explicitUserDataDir = readUserDataDirSwitch(process.argv)
-app.setPath('userData', explicitUserDataDir ?? resolveDevUserDataPath(app.getPath('appData'), app.isPackaged, process.env))
-if (devInstanceId) {
-  console.log(`[启动] 开发隔离实例: ${devInstanceId}，userData=${app.getPath('userData')}`)
-}
-
-
 // 仅正式 Windows 安装版声明 AUMID，使任务栏与 Profer.exe / 开始菜单快捷方式绑定。
 // 开发版由裸 electron.exe 承载，刻意不声明 AUMID：任务栏使用 Electron 默认图标，
 // 避免开发环境向 Windows Shell 注册或污染生产 com.profer.app 身份。
@@ -65,23 +53,8 @@ if (process.platform === 'win32' && app.isPackaged) {
 }
 
 
-// 单实例锁：防止重复启动同一个版本。
-// `--quit` 由安装器/卸载器使用：已有实例时，本次启动只把退出请求转给主实例。
-const quitRequested = isQuitRequest(process.argv)
-if (!app.requestSingleInstanceLock()) {
-  console.warn(
-    '[启动] 已有 Profer 进程持有单实例锁，本次启动将退出。\n' +
-      '  如果窗口未出现，可能旧进程已卡死。请运行 `killall Profer` 后重试。',
-  )
-  app.quit()
-} else if (quitRequested) {
-  // 没有正在运行的实例：退出请求不需要真的启动应用（安装器可能只是探测）。
-  console.log('[退出] 收到退出请求，但当前没有运行中的实例，直接退出')
-  app.exit(0)
-} else {
-  // 主流程：正常启动（单实例锁已获取）
-  registerProtocolsAndHandlers()
-}
+// bootstrap 已完成单实例检查，执行存储锁由随后启动的 Core 持有。
+registerProtocolsAndHandlers()
 
 function registerProtocolsAndHandlers(): void {
   // 注册自定义协议方案为“特权”（必须在 app ready 之前）
@@ -183,7 +156,7 @@ import { getWorkspacesRootPath } from './lib/workspace-locator'
 import { LocalCoreLifecycle } from './lib/core-lifecycle'
 import { detachLocalCoreClient } from './lib/core-local-bridge'
 import { listSessionDeletionRequestsForTransfer, acknowledgeTransferredSessionDeletions, type SessionDeletionRequest } from './lib/agent-session-deletion-queue'
-import { setLocalCoreClient, activateSavedCoreTarget } from './lib/core-target-service'
+import { setLocalCoreClient, clearLocalCoreTargetClient, publishCoreTargetsSnapshot, activateSavedCoreTarget } from './lib/core-target-service'
 import { configureGlobalSkillSystem, ensureGlobalSkillSystemReady } from './lib/global-skill-manager'
 import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
@@ -1049,12 +1022,30 @@ async function bootstrap(): Promise<void> {
     startDebugChannel()
   })
 
+  // 默认新核先冻结旧 writer；显式 legacy 启动已在 bootstrap 取得同根锁。
+  if (isLocalCoreEnabled()) {
+    const { claimWorkspaceIndexForCore } = await import('./lib/agent-workspace-manager')
+    const { claimAutomationsForCore } = await import('./lib/automation-manager')
+    claimWorkspaceIndexForCore()
+    claimAutomationsForCore()
+  }
+
   // Register IPC handlers
   registerIpcHandlers()
   registerPluginIpcHandlers()
 
-  // 本地 Core 组合模式显式启用，默认桌面 Agent 链仍保持 Electron 本地执行。
-  void safeAwait('startLocalCore', startLocalCoreIfEnabled)
+  if (isLocalCoreEnabled()) {
+    configureLocalCoreRetry(startLocalCore)
+
+    // 与 Profer 一同启动；是否共享由独立的连接开关控制。
+    void safeAwait('startLocalCore', async () => {
+      try { await startLocalCore() }
+      catch (error) {
+        updateLocalCoreStatus('failed', error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    })
+  }
 
   // 远程服务（remote-service）：显式启动参数 PROFER_REMOTE=1 兼容保留；
   // 设置页开启「启用移动端连接」后，下次启动自动恢复监听（正式版与开发版一致）。
@@ -1305,14 +1296,24 @@ app.on('window-all-closed', () => {
 let localCoreLifecycle: LocalCoreLifecycle | null = null
 let stopLocalCoreResourceSync: (() => void) | undefined
 
-async function startLocalCoreIfEnabled(): Promise<void> {
+async function startLocalCore(): Promise<void> {
+  if (!isLocalCoreEnabled() || remoteExitPending || remoteExitComplete) return
   void activateSavedCoreTarget().catch(error => console.error('[Core] 无法读取启动内核配置:', error))
-  if (process.env.PROFER_CORE_LOCAL !== '1') return
+  stopLocalCoreResourceSync?.()
+  stopLocalCoreResourceSync = undefined
+  await localCoreLifecycle?.stop()
+  clearLocalCoreTargetClient()
+  detachLocalCoreClient()
+  const { setLocalCoreStartFailure } = await import('./lib/core-local-bridge')
+  setLocalCoreStartFailure(null)
+  updateLocalCoreStatus('starting')
   const { claimWorkspaceIndexForCore } = await import('./lib/agent-workspace-manager')
   claimWorkspaceIndexForCore()
   const { claimAutomationsForCore } = await import('./lib/automation-manager')
   claimAutomationsForCore()
-  localCoreLifecycle = new LocalCoreLifecycle({
+  if (remoteExitPending || remoteExitComplete) return
+  const lifecycle = localCoreLifecycle = new LocalCoreLifecycle({
+    independent: isIndependentLocalCore(),
     configDir: getConfigDir(),
     workspaceRoot: getWorkspacesRootPath(),
     resourcesPath: process.resourcesPath,
@@ -1320,23 +1321,50 @@ async function startLocalCoreIfEnabled(): Promise<void> {
     bunCommand: process.env.PROFER_BUN_PATH ?? getRuntimeStatus()?.bun?.path ?? undefined,
     // 凭据在每次发送时由桌面解析，经已鉴权请求传递；不冻结启动时快照。
     onOutput: line => { if (line) console.log(`[Core] ${line}`) },
+    // 生命周期 ready 仅表示握手完成；资源同步与 target 接线完成后才向 UI 报 ready。
+    onStatus: (status, error) => {
+      if (status === 'ready') return
+      updateLocalCoreStatus(status === 'error' ? 'failed' : status, error)
+      if (status === 'error' || status === 'stopped') clearLocalCoreTargetClient()
+      else publishCoreTargetsSnapshot()
+    },
   })
   const { setLocalCorePublisher } = await import('./lib/core-local-bridge')
   setLocalCorePublisher((channel, payload) => { for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(channel, payload) })
-  let started: Awaited<ReturnType<typeof localCoreLifecycle.start>>
+  let started: Awaited<ReturnType<typeof lifecycle.start>>
   try {
-    started = await localCoreLifecycle.start()
+    started = await lifecycle.start()
   } catch (error) {
     const { setLocalCoreStartFailure } = await import('./lib/core-local-bridge')
     setLocalCoreStartFailure(error instanceof Error ? error.message : String(error))
     throw error
   }
-  const localResources = await import('./lib/core-local-resources')
-  await localResources.syncLocalCoreChannels(started.client)
-  stopLocalCoreResourceSync?.()
-  stopLocalCoreResourceSync = localResources.maintainLocalCoreChannels(started.client)
-  setLocalCoreClient(started.client, await started.client.identity())
-  await transferLegacySessionDeletions(started.client)
+  try {
+    if (!isIndependentLocalCore()) {
+      const localResources = await import('./lib/core-local-resources')
+      await localResources.syncLocalCoreChannels(started.client)
+      stopLocalCoreResourceSync = localResources.maintainLocalCoreChannels(started.client)
+    }
+    const identity = await started.client.identity()
+    if (remoteExitPending || remoteExitComplete) { stopLocalCoreResourceSync?.(); stopLocalCoreResourceSync = undefined; return }
+    setLocalCoreClient(started.client, identity)
+    // 本机 owner 接线完成后恢复账号；启动早期的恢复可能尚无 Core。
+    safeRun('core:restoreAccountSession', async () => {
+      const { editionProviders } = require('./lib/edition') as typeof import('./lib/edition')
+      await editionProviders.account.restoreSession()
+    })
+    await transferLegacySessionDeletions(started.client)
+    updateLocalCoreStatus('running')
+    publishCoreTargetsSnapshot()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    stopLocalCoreResourceSync?.()
+    stopLocalCoreResourceSync = undefined
+    await lifecycle.stop()
+    updateLocalCoreStatus('failed', message)
+    detachLocalCoreClient()
+    throw error
+  }
 }
 
 async function transferLegacySessionDeletions(client: import('./lib/core-client').CoreClient): Promise<void> {
@@ -1371,24 +1399,19 @@ app.on('before-quit', (event) => {
     const timeoutMs = resolveQuitCleanupTimeoutMs()
     stopLocalCoreResourceSync?.()
     stopLocalCoreResourceSync = undefined
-    const cleanup = Promise.all([stopRemoteService(), localCoreLifecycle?.stop().finally(() => detachLocalCoreClient())])
-    void awaitQuitCleanup(cleanup, timeoutMs).then((result) => {
+    const cleanup = Promise.all([
+      awaitQuitCleanup(stopRemoteService(), timeoutMs),
+      awaitQuitCleanup(localCoreLifecycle?.quit(timeoutMs).finally(() => detachLocalCoreClient()) ?? Promise.resolve(), timeoutMs),
+    ])
+    void cleanup.then(([remote, core]) => {
       remoteExitPending = false
       remoteExitComplete = true
-      if (result.outcome === 'completed') {
-        console.log(`[退出] 远控服务已停止（${result.elapsedMs}ms）`)
-      } else {
-        // 超时或失败都继续退出：卡住的 FRP 不值得让用户只能强制退出，更不能让已下载的
-        // 更新因为旧进程没退而装不上（Windows NSIS 会一直等旧进程释放 exe）。
-        // 残留的 frpc 由下次启动的孤儿清理兜底，这里只留证据。
-        console.error(`[退出] 远控服务清理未完成（${result.outcome}，${result.elapsedMs}ms）：${result.error ?? '超过预算'}；继续退出`)
+      for (const [service, result] of [['远控服务', remote], ['本机 Core', core]] as const) {
+        if (result.outcome === 'completed') continue
+        console.error(`[退出] ${service}清理未完成（${result.outcome}，${result.elapsedMs}ms）：${result.error ?? '超过预算'}；继续退出`)
       }
-      logLifecycle('quit.remote-cleanup', {
-        outcome: result.outcome,
-        elapsedMs: result.elapsedMs,
-        timeoutMs,
-        error: result.error,
-      })
+      logLifecycle('quit.remote-cleanup', { ...remote, timeoutMs })
+      logLifecycle('quit.core-cleanup', { ...core, timeoutMs })
       app.quit()
     })
     return
@@ -1399,7 +1422,7 @@ app.on('before-quit', (event) => {
     persistenceExitPending = true
     const timeoutMs = 1_500
     const flushPromise = Promise.resolve().then(async () => {
-      // Core 已在上一阶段负责 shutdown 持久化；桌面不得重新刷回旧队列。
+      // 无论 Core 已停止还是仍独立运行，桌面不得重新刷回旧队列。
       if (localCoreOwnsBusinessData()) return
       const flushed = await flushSDKMessagePersistence(timeoutMs)
       if (!flushed) throw new Error('超过退出 flush 预算')

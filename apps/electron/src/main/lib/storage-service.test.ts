@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -371,6 +374,8 @@ describe('孤儿清理 · 会话侧车文件', () => {
   })
 
   test('Given 解析不出会话 ID 的 .jsonl When 统计并清理 Then 计入总量但不算孤儿、不被删除', async () => {
+    // 空索引是合法 fixture；缺索引且有历史文件属于恢复保护，不属于孤儿清理。
+    writeFileSync(join(configPaths.getConfigDir(), 'agent-sessions.json'), JSON.stringify({ version: 1, sessions: [] }))
     const unparsable = writeSessionFile('.jsonl', 'y'.repeat(50))
 
     const before = await agentSessionsCategory()

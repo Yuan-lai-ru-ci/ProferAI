@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * 可移植项目：把带 `.profer/` 的文件夹拷到另一台电脑（新配置根、新项目路径）后，
  * 不依赖全局索引/全局 blob，也能恢复会话列表、历史、Pi transcript 与预设归属。

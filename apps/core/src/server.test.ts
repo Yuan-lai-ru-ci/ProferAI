@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readCoreChannelStore } from './channel-store'
+
 import { realpathSync } from 'node:fs'
 import { request } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -7,6 +9,7 @@ import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { closeCoreServer, createCoreServer, listenCoreServer } from './server'
 import { createCoreAgentRuntime } from './runtime'
+import { readCoreOsId } from './os-identity'
 
 async function requestJson(port: number, path: string, options: { method?: string; body?: unknown; apiKey?: string } = {}): Promise<{ statusCode: number | undefined; body: unknown }> {
   return new Promise((resolve, reject) => {
@@ -145,8 +148,10 @@ describe('core server', () => {
     try {
       await expect(requestJson(port, '/identity')).resolves.toEqual({ statusCode: 401, body: { error: 'unauthorized' } })
       const response = await requestJson(port, '/identity', { apiKey: 'identity-secret' })
+      const osId = readCoreOsId()
       expect(response).toEqual({ statusCode: 200, body: {
         protocolVersion: 1, coreId: 'ubuntu-staging', version: 'identity-test', platform: process.platform,
+        ...(osId ? { osId } : {}),
         hostCapabilities: (await import('./host-capabilities')).CORE_HOST_CAPABILITIES,
         capabilities: ['sessions.read', 'sessions.write', 'workspaces.read', 'workspaces.write', 'agent.pi', 'agent.events', 'agent.stop', 'planning', 'automation', 'delegation', 'agent.events.resume', 'resources.manage', 'chat'],
       } })
@@ -201,7 +206,9 @@ describe('core server', () => {
       expect(JSON.stringify(created.body)).not.toContain(secret)
       expect(created.body).toMatchObject({ name: 'Remote test', models: [{ id: 'm1' }] })
       const createdId = (created.body as { id: string }).id
+      // 当前公开创建契约生成 ID；请求中的 ID 不可用于旧会话渠道交接。
       expect(createdId).toBeTruthy()
+      expect(createdId).not.toBe('remote-test')
       const files = await import('node:fs/promises').then(({ readdir, readFile }) => readdir(configDir, { withFileTypes: true }).then(async entries => Promise.all(entries.filter(entry => entry.isFile()).map(entry => readFile(join(configDir, entry.name))))))
       expect(Buffer.concat(files).includes(Buffer.from(secret))).toBe(false)
       const persisted = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir, workspaceRoot: join(configDir, 'workspaces') })
@@ -464,4 +471,32 @@ describe('core server', () => {
       await rm(configDir, { recursive: true, force: true })
     }
   })
+})
+
+test('独立 Core 的持久渠道优先，桌面快照不持久化；内置模式仍整表更新临时快照', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'core-channel-sources-'))
+  const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'work'), desktopWorkspaceIndexPath: join(root, 'agent-workspaces.json'), mockAgent: true }
+  const runtime = createCoreAgentRuntime(config, { independent: true })
+  const stored = { id: 'shared', provider: 'anthropic' as const, name: 'Core', apiKey: 'fixture-core' }
+  const transient = { ...stored, id: 'desktop', apiKey: 'fixture-desktop' }
+  try {
+    runtime.createChannel(stored)
+    runtime.syncDesktopChannels([{ ...stored, apiKey: 'fixture-conflict' }, transient])
+    expect(runtime.listChannelConfigs()).toEqual([stored, transient])
+    expect(runtime.channels.map(channel => channel.id)).toEqual(['shared', 'desktop'])
+    expect(() => runtime.createChannel(transient)).toThrow('渠道 ID 已存在')
+    expect(() => runtime.updateChannel(transient.id, { name: 'wrong' })).toThrow()
+    expect(() => runtime.deleteChannel(transient.id)).toThrow()
+    runtime.updateChannel(stored.id, { name: 'Updated' })
+    expect(readCoreChannelStore(root)).toEqual([{ ...stored, name: 'Updated' }])
+    runtime.syncDesktopChannels([])
+    expect(runtime.listChannelConfigs()).toEqual([{ ...stored, name: 'Updated' }])
+    const embedded = createCoreAgentRuntime(config)
+    try {
+      embedded.syncDesktopChannels([transient])
+      expect(embedded.listChannelConfigs()).toEqual([transient])
+      embedded.syncDesktopChannels([])
+      expect(embedded.listChannelConfigs()).toEqual([])
+    } finally { await embedded.shutdown() }
+  } finally { await runtime.shutdown(); await rm(root, { recursive: true, force: true }) }
 })

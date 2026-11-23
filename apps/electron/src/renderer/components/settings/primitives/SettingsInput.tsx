@@ -70,7 +70,7 @@ export function SettingsInput({
         className={cn(error && 'border-destructive focus-visible:ring-destructive')}
       />
       {error && (
-        <p id={errorId} role="alert" className="text-xs text-destructive">{error}</p>
+        <p id={errorId} role="alert" className="text-xs text-destructive-text">{error}</p>
       )}
     </div>
   )

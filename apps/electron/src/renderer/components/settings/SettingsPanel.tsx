@@ -7,7 +7,6 @@
 
 import * as React from "react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { cn } from "@/lib/utils";
 import {
   Settings,
   Radio,
@@ -20,7 +19,6 @@ import {
   GraduationCap,
   X,
   Keyboard,
-  Users,
   Coins,
   CreditCard,
   Database,
@@ -29,9 +27,8 @@ import {
   Blocks,
   FlaskConical,
   SlidersHorizontal,
-  Search,
 } from "lucide-react";
-import { ScrollArea } from "@profer/ui/primitives/scroll-area";
+import { ScrollRegion } from "@/components/ai-elements/scroll-region";
 import { Button } from '@profer/ui/primitives/button';
 import { settingsTabAtom, channelFormControllerAtom, channelFormDirtyAtom, settingsCloseRequestedAtom, settingsOpenAtom } from "@/atoms/settings-tab";
 import type { SettingsTab } from "@/atoms/settings-tab";
@@ -71,25 +68,11 @@ import { PluginSettings } from "./PluginSettings";
 import { DeveloperSettings } from "./DeveloperSettings";
 import { DevicesSettings } from "./DevicesSettings";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
-import { matchesSettingsSearch } from "./settings-search";
+import { SettingsNavigation, type SettingsTabItem, type SettingsTabGroup } from "./SettingsNavigation";
 import { filterSettingsGroups } from "./settings-visibility";
 import { isCommercialBuild } from "@/lib/build-target";
 
-/** 设置 Tab 定义 */
-export interface SettingsTabItem {
-  id: SettingsTab;
-  label: string;
-  icon: React.ReactNode;
-  /** 页面内的常用配置名称和同义词，用于设置导航搜索。 */
-  searchTerms?: readonly string[];
-}
-
-/** 导航分组：标题 + 该分组内的 tab */
-export interface SettingsTabGroup {
-  /** 分组标题；为空则不渲染分组标题（用于不带标题的起始组） */
-  title?: string;
-  items: SettingsTabItem[];
-}
+export type { SettingsTabItem, SettingsTabGroup } from "./SettingsNavigation";
 
 /** 账户：身份、额度、订阅和团队能力。开放 API 暂不开放入口。 */
 const ACCOUNT_GROUP_ITEMS: SettingsTabItem[] = [
@@ -106,8 +89,10 @@ const MODEL_GROUP_ITEMS: SettingsTabItem[] = [
   { id: "tools", label: "Chat 工具", icon: <Wrench size={16} />, searchTerms: ["工具", "联网搜索", "Tavily", "AI 图片生成", "图片", "自定义工具", "HTTP API"] },
 ];
 
-/** 体验：外观 / 快捷键 */
-const EXPERIENCE_GROUP_ITEMS: SettingsTabItem[] = [
+/** 工作偏好：通用、使用偏好和界面呈现。 */
+const PREFERENCE_GROUP_ITEMS: SettingsTabItem[] = [
+  { id: "general", label: "通用", icon: <Settings size={16} />, searchTerms: ["语言", "启动", "开机启动", "快速任务", "快捷任务", "引导", "Shell", "终端", "新标签页", "URL", "悬浮预览", "迷你地图", "悬停", "侧栏预览"] },
+  { id: "usage", label: "使用偏好", icon: <SlidersHorizontal size={16} />, searchTerms: ["通知", "声音", "音效", "归档", "会话", "对话", "用户消息", "头像", "左右", "输入框", "粘贴", "Markdown", "预览", "紧凑模式", "侧栏", "侧边栏", "当前会话", "显示", "隐藏", "语音", "豆包", "Goal", "空闲自检", "滚动", "已读"] },
   { id: "appearance", label: "外观设置", icon: <Palette size={16} />, searchTerms: ["主题", "深色", "浅色", "暗色", "亮色", "缩放", "字体", "字号", "皮肤", "Logo", "图标", "Dock"] },
   { id: "shortcuts", label: "快捷键管理", icon: <Keyboard size={16} />, searchTerms: ["快捷键", "键盘", "快捷方式", "录制"] },
   { id: "composer-toolbar", label: "输入工具栏", icon: <SlidersHorizontal size={16} />, searchTerms: ["工具栏", "排序", "显示", "隐藏", "输入区", "Chat", "Agent"] },
@@ -115,7 +100,7 @@ const EXPERIENCE_GROUP_ITEMS: SettingsTabItem[] = [
 
 /** 连接：远程连接 / 代理（公网 FRP 暂不开放） */
 const CONNECTION_GROUP_ITEMS: SettingsTabItem[] = [
-  { id: "bots", label: "远程连接", icon: <Bot size={16} />, searchTerms: ["机器人", "Bot", "飞书", "钉钉", "微信", "远程", "工作区", "默认工作区", "绑定", "远程内核", "Core", "HTTPS", "Token", "线路"] },
+  { id: "bots", label: "设备与连接", icon: <Bot size={16} />, searchTerms: ["机器人", "Bot", "飞书", "钉钉", "微信", "远程", "工作区", "默认工作区", "绑定", "远程内核", "Core", "HTTPS", "Token", "线路"] },
   { id: "proxy", label: "代理设置", icon: <Network size={16} />, searchTerms: ["网络代理", "HTTP proxy", "HTTPS proxy", "代理地址", "端口"] },
 ];
 
@@ -154,12 +139,12 @@ const PLUGIN_SYSTEM_ITEM: SettingsTabItem = {
 };
 
 /** 根据标签页 id 渲染对应内容 */
-function renderTabContent(tab: SettingsTab): React.ReactElement {
+function renderTabContent(tab: SettingsTab, revealAdvanced: boolean): React.ReactElement {
   switch (tab) {
     case "general":
-      return <GeneralSettings />;
+      return <GeneralSettings revealAdvanced={revealAdvanced} />;
     case "usage":
-      return <UsageSettings />;
+      return <UsageSettings revealAdvanced={revealAdvanced} />;
     case "account":
       return <AccountSettings />;
     case "devices":
@@ -175,7 +160,7 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
     case "composer-toolbar":
       return <ComposerToolbarSettings />;
     case "appearance":
-      return <AppearanceSettings />;
+      return <AppearanceSettings revealAdvanced={revealAdvanced} />;
     case "about":
       return <AboutSettings />;
     case "bots":
@@ -300,13 +285,11 @@ export function SettingsPanel({
       : SYSTEM_GROUP_ITEMS
 
     const allGroups: SettingsTabGroup[] = [
-      { items: [{ id: "general", label: "通用", icon: <Settings size={16} />, searchTerms: ["语言", "启动", "开机启动", "Shell", "终端", "新标签页", "URL", "悬浮预览", "迷你地图", "悬停", "侧栏预览"] }, { id: "usage", label: "使用偏好", icon: <SlidersHorizontal size={16} />, searchTerms: ["通知", "声音", "归档", "会话", "对话", "用户消息", "头像", "左右", "输入框", "粘贴", "Markdown", "预览", "紧凑模式", "侧栏", "侧边栏", "当前会话", "显示", "隐藏"] }] },
-      { title: "账户", items: ACCOUNT_GROUP_ITEMS },
+      { title: "工作偏好", items: PREFERENCE_GROUP_ITEMS },
       { title: "模型与能力", items: modelItems },
-      { title: "体验", items: EXPERIENCE_GROUP_ITEMS },
       { title: "连接", items: CONNECTION_GROUP_ITEMS },
-      { title: "系统", items: systemItems },
-      { title: "帮助", items: HELP_GROUP_ITEMS },
+      { title: "账户", items: ACCOUNT_GROUP_ITEMS },
+      { title: "应用", items: [...systemItems, ...HELP_GROUP_ITEMS] },
     ]
 
     return filterSettingsGroups(allGroups, { isLoggedIn: authStatus.isLoggedIn, commercial })
@@ -317,16 +300,6 @@ export function SettingsPanel({
     () => groups.flatMap((g) => g.items),
     [groups]
   )
-
-  const filteredGroups = React.useMemo(() => {
-    if (!navQuery.trim()) return groups
-    return groups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => matchesSettingsSearch(item, group.title, navQuery)),
-      }))
-      .filter((group) => group.items.length > 0)
-  }, [groups, navQuery]);
 
   // 统一回落：activeTab 不在当前可见列表（白名单过滤 / 未登录过滤）时回落到首项，
   // 避免渲染未暴露的设置页（如登录/订阅/团队管理）。
@@ -377,6 +350,7 @@ export function SettingsPanel({
 
   // 当前 tab 标题
   const activeTabLabel = tabs.find((t) => t.id === effectiveTab)?.label ?? "设置";
+  const activeGroupLabel = groups.find((group) => group.items.some((tab) => tab.id === effectiveTab))?.title;
 
   return (
     <div className="settings-body relative flex h-full min-h-0 flex-col md:flex-row">
@@ -387,100 +361,20 @@ export function SettingsPanel({
       >
         跳到设置内容
       </button>
-      {/* 窄窗口使用顶部分类选择器，桌面保留固定侧栏。 */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-surface-border/50 bg-surface-sunken/30 px-4 py-3 md:hidden">
-        <label htmlFor="settings-mobile-nav" className="sr-only">设置分类</label>
-        <select
-          id="settings-mobile-nav"
-          value={effectiveTab}
-          onChange={(event) => handleTabChange(event.target.value as SettingsTab)}
-          className="h-9 min-w-0 flex-1 rounded-md border border-surface-border/60 bg-input/40 px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-focus/15"
-        >
-          {tabs.map((tab) => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
-        </select>
-        {onClose && (
-          <button
-            type="button"
-            onClick={handleClose}
-            aria-label="关闭设置"
-            title="关闭设置"
-            className="rounded-md p-2 text-muted-foreground/70 transition-colors hover:bg-control hover:text-foreground focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-focus/15"
-          >
-            <X size={18} aria-hidden="true" />
-          </button>
-        )}
-      </div>
-
-      <aside className="settings-nav hidden w-[240px] flex-shrink-0 flex-col overflow-y-auto border-r border-surface-border/50 bg-surface-sunken/30 px-2.5 py-4 scrollbar-thin md:flex">
-        <div className="settings-nav-header flex items-center justify-between px-3 pb-4">
-          <h2 className="text-base font-semibold text-foreground">设置</h2>
-        </div>
-        <div className="relative mb-2 px-1">
-          <Search size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/70" />
-          <label htmlFor="settings-nav-search" className="sr-only">搜索设置</label>
-          <input
-            id="settings-nav-search"
-            value={navQuery}
-            onChange={(event) => setNavQuery(event.target.value)}
-            placeholder="搜索设置"
-            className="h-9 w-full rounded-md border border-surface-border/50 bg-input/30 pl-8 pr-3 text-sm text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-focus/15"
-          />
-        </div>
-        <nav
-          className="flex flex-col gap-0.5"
-          aria-label="设置分类"
-          onKeyDown={(event) => {
-            if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
-            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button'))
-            const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
-            if (index < 0) return
-            event.preventDefault()
-            const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
-            buttons[next]?.focus()
-          }}
-        >
-          {filteredGroups.map((group) => (
-            <React.Fragment key={group.title ?? "__root__"}>
-              {group.title && (
-                <div className="px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground">
-                  {group.title}
-                </div>
-              )}
-              {group.items.map((tab) => (
-                <button
-                  type="button"
-                  key={tab.id}
-                  onClick={() => handleTabChange(tab.id)}
-                  aria-current={effectiveTab === tab.id ? 'page' : undefined}
-                  className={cn(
-                    "group flex min-h-9 items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-focus/15",
-                    effectiveTab === tab.id
-                      ? "bg-surface-selected text-foreground font-medium shadow-sm"
-                      : "text-muted-foreground hover:bg-surface-selected/50 hover:text-foreground",
-                  )}
-                >
-                  <span className={cn(
-                    "flex-shrink-0 transition-colors",
-                    effectiveTab === tab.id ? "text-primary" : "text-muted-foreground/70 group-hover:text-foreground"
-                  )} aria-hidden="true">{tab.icon}</span>
-                  <span className="min-w-0 flex-1 truncate text-left">{tab.label}</span>
-                  {tab.id === "about" && (hasUpdate || hasEnvironmentIssues) && (
-                    <span className="ml-auto size-2 flex-shrink-0 rounded-full bg-destructive" aria-label="有待处理事项" />
-                  )}
-                </button>
-              ))}
-            </React.Fragment>
-          ))}
-          {filteredGroups.length === 0 && (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground">没有匹配的设置</p>
-          )}
-        </nav>
-      </aside>
+      <SettingsNavigation
+        groups={groups}
+        activeTab={effectiveTab}
+        query={navQuery}
+        onQueryChange={setNavQuery}
+        onTabChange={handleTabChange}
+        onClose={onClose ? handleClose : undefined}
+        needsAttention={hasUpdate || hasEnvironmentIssues}
+      />
 
       <section className="settings-main flex min-h-0 min-w-0 flex-1 flex-col" aria-label={`${activeTabLabel}设置`}>
-        <div className="settings-main-header hidden min-h-[72px] flex-shrink-0 items-center justify-between px-8 py-5 md:flex">
+        <div className="settings-main-header flex min-h-[88px] shrink-0 items-start justify-between gap-4 px-4 py-5 sm:px-6 md:px-8 md:pt-6">
           <div className="min-w-0">
-            <p className="mb-1 text-xs font-medium text-muted-foreground">设置</p>
+            {activeGroupLabel && <p className="mb-1 text-xs font-medium text-muted-foreground">{activeGroupLabel}</p>}
             <h2 className="truncate text-xl font-semibold text-foreground">{activeTabLabel}</h2>
           </div>
           {onClose && (
@@ -489,19 +383,19 @@ export function SettingsPanel({
               onClick={handleClose}
               aria-label="关闭设置"
               title="关闭设置"
-              className="rounded-md p-2 text-muted-foreground/60 transition-colors hover:bg-control hover:text-foreground focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-focus/15"
+              className="hidden rounded-md p-2 text-muted-foreground transition-colors hover:bg-control hover:text-foreground focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-focus/15 md:inline-flex"
             >
               <X size={18} aria-hidden="true" />
             </button>
           )}
         </div>
-        <ScrollArea key={effectiveTab} className="min-h-0 flex-1">
-          <main id="settings-main-content" tabIndex={-1} className="settings-content px-4 pb-8 pt-5 outline-none sm:px-6 md:px-8 md:pt-1">
+        <ScrollRegion key={effectiveTab} className="min-h-0 flex-1 overflow-y-auto">
+          <main id="settings-main-content" tabIndex={-1} className="settings-content px-4 pb-8 pt-1 outline-none sm:px-6 md:px-8">
             <div className="mx-auto w-full max-w-3xl">
-              {renderTabContent(effectiveTab)}
+              {renderTabContent(effectiveTab, Boolean(navQuery.trim()))}
             </div>
           </main>
-        </ScrollArea>
+        </ScrollRegion>
       </section>
 
       {/* 退出拦截弹窗（侧边栏导航 / X 关闭 / Cmd+W） */}

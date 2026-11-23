@@ -1,10 +1,9 @@
 /**
  * TutorialBanner - 教程推荐卡片
  *
- * 从右下角浮出，给三条真正能点的上手路径：
+ * 从右下角浮出，给两条真正能点的上手路径：
  *  - 打开教程（设置 → 帮助 → Profer 教程 的同一入口）
  *  - 重播界面导览（Coach Tour）
- *  - 直接看常见任务示例
  *
  * 关闭按钮放在标题行内，与卡片内边距同一条基线；不再绝对定位到角落。
  * 点击任意路径或「稍后」都会写入 tutorialBannerDismissed，之后不再出现。
@@ -12,7 +11,7 @@
 
 import * as React from 'react'
 import { useAtom, useSetAtom } from 'jotai'
-import { BookOpen, ChevronRight, Compass, ListChecks, X } from 'lucide-react'
+import { BookOpen, ChevronRight, Compass, X } from 'lucide-react'
 import { Button } from '@profer/ui/primitives/button'
 import { tabsAtom, activeTabIdAtom, openTab, TUTORIAL_TAB_ID } from '@/atoms/tab-atoms'
 import { coachTourOpenAtom } from '@/atoms/coach-tour-atoms'
@@ -89,7 +88,7 @@ export function TutorialBanner({ skip = false }: TutorialBannerProps = {}): Reac
           </span>
           <div className="min-w-0 flex-1">
             <h3 className="text-[13px] font-semibold text-foreground">用 5 分钟，把 Profer 用起来</h3>
-            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">三条上手路径，随时可以回来</p>
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">教程与界面导览</p>
           </div>
           <button
             type="button"
@@ -104,13 +103,9 @@ export function TutorialBanner({ skip = false }: TutorialBannerProps = {}): Reac
         <div className="px-2">
           <PathRow icon={<BookOpen size={14} />} title="5 分钟上手" hint="从 Chat 到 Agent 的最短路径" onClick={openTutorial} />
           <PathRow icon={<Compass size={14} />} title="重播界面导览" hint="高亮每一个入口，跟着点一遍" onClick={replayTour} />
-          <PathRow icon={<ListChecks size={14} />} title="看看常见任务" hint="10 个可以直接复制的提示词" onClick={openTutorial} />
         </div>
 
         <div className="flex items-center gap-2 px-4 pb-4 pt-2">
-          <Button size="sm" onClick={openTutorial} className="h-8 flex-1 text-xs">
-            打开教程
-          </Button>
           <Button size="sm" variant="ghost" onClick={handleDismiss} className="h-8 text-xs text-muted-foreground">
             稍后
           </Button>

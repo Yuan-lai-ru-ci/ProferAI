@@ -2,10 +2,10 @@ import { afterEach, expect, test } from 'bun:test'
 import { createStore } from 'jotai/vanilla'
 import type { AgentSessionMeta, AgentWorkspace } from '@profer/shared'
 import type { AppSettings, CoreTargetsSnapshot, CoreTabSettings } from '../../types/settings'
-import { activeTabIdAtom, tabsAtom } from '../atoms/tab-atoms'
+import { activeTabIdAtom, ensureScratchPadTab, tabsAtom } from '../atoms/tab-atoms'
 import { agentSessionsAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom } from '../atoms/agent-atoms'
 import { conversationsAtom, currentConversationIdAtom } from '../atoms/chat-atoms'
-import { coreTargetsAtom } from '../atoms/core-target-atoms'
+import { coreSessionNavigationPhaseAtom, coreTargetsAtom } from '../atoms/core-target-atoms'
 import { initializeCoreSessionNavigation } from './core-session-navigation'
 
 const remoteId = 'core:linux:remote-session'
@@ -21,18 +21,22 @@ const state = (item:AgentSessionMeta): CoreTabSettings => ({tabs:[{id:item.id,se
 const cleanups:(()=>void)[]=[]
 afterEach(()=>cleanups.splice(0).forEach(f=>f()))
 const settle=async()=>{for(let i=0;i<20;i++)await Promise.resolve()}
-function setup(saved:Partial<AppSettings>={}, options:{deferRemote?:boolean;failRemote?:boolean}={}) {
+function setup(saved:Partial<AppSettings>={}, options:{deferRemote?:boolean;failRemote?:boolean;failLocal?:boolean}={}) {
  const store=createStore()
  store.set(coreTargetsAtom,snapshot('local',0))
  let resolveRemote!:(items:AgentSessionMeta[])=>void
  const remotePromise=new Promise<AgentSessionMeta[]>(resolve=>{resolveRemote=resolve})
  const writes:Partial<AppSettings>[]=[]
  const failures:unknown[]=[]
+ let failLocal = Boolean(options.failLocal)
  const navigation=initializeCoreSessionNavigation(store,{
   getSettings:async()=>({themeMode:'system',...saved}),listCoreTargets:async()=>snapshot('local',0),
   listConversations:async()=>[],
   listAgentSessions:async()=>{
-   if(store.get(coreTargetsAtom).currentId==='local')return [localSession]
+   if(store.get(coreTargetsAtom).currentId==='local') {
+    if(failLocal)throw new Error('local catalog unavailable')
+    return [localSession]
+   }
    if(options.failRemote)throw new Error('remote catalog unavailable')
    return options.deferRemote?remotePromise:[remoteSession]
   },
@@ -41,7 +45,7 @@ function setup(saved:Partial<AppSettings>={}, options:{deferRemote?:boolean;fail
   onFailure:error=>failures.push(error),
  })
  cleanups.push(navigation.dispose)
- return {store,navigation,writes,failures,resolveRemote}
+ return {store,navigation,writes,failures,resolveRemote,setFailLocal:(value:boolean)=>{failLocal=value}}
 }
 test('Given 两个Core各有历史 When 往返切换 Then 同步卸载来源Tab并恢复目标会话/工作区',async()=>{
  const x=setup({coreTabStates:{local:state(localSession),'core:linux':state(remoteSession)}})
@@ -86,6 +90,50 @@ test('Given 旧全局tabState When 启动 Then 只迁移当前Core目录中有�
  x.store.set(coreTargetsAtom,snapshot('linux-target',1));await settle()
  expect(x.store.get(currentAgentSessionIdAtom)).toBeNull()
 })
+test('Given 本机 Core 慢启动 When 就绪并初始化 Scratch Pad Then 恢复原会话', async () => {
+ const store = createStore()
+ const initial = snapshot('local', 0)
+ initial.startup = 'restoring'
+ initial.targets[0]!.status = 'disconnected'
+ const reads: string[] = []
+ const failures: unknown[] = []
+ const navigation = initializeCoreSessionNavigation(store, {
+  getSettings: async () => ({themeMode:'system', coreTabStates:{local:state(localSession)}}),
+  listCoreTargets: async () => initial,
+  listAgentSessions: async () => {
+   reads.push('sessions')
+   store.set(tabsAtom, ensureScratchPadTab(store.get(tabsAtom)))
+   return [localSession]
+  },
+  listConversations: async () => { reads.push('chat'); return [] },
+  listWorkspaces: async () => { reads.push('workspaces'); return [workspace('local-ws')] },
+  updateSettings: async () => ({}), onFailure: error => failures.push(error),
+ })
+ cleanups.push(navigation.dispose)
+ await settle()
+ expect(reads).toEqual([])
+ expect(store.get(coreSessionNavigationPhaseAtom)).toBe('loading')
+ store.set(coreTargetsAtom, {...snapshot('local', 0), revision: 1})
+ await settle()
+ expect(reads).toEqual(['sessions', 'chat', 'workspaces'])
+ expect(failures).toEqual([])
+ expect(store.get(coreSessionNavigationPhaseAtom)).toBe('ready')
+ expect(store.get(currentAgentSessionIdAtom)).toBe(localSession.id)
+})
+
+test('Given 会话加载失败 When 同Core就绪状态更新 Then 重试恢复原会话', async () => {
+ const x = setup({coreTabStates:{local:state(localSession)}}, {failLocal:true})
+ x.store.set(coreTargetsAtom,{...snapshot('local',0),revision:1,targets:[{id:'local',name:'本机',kind:'local',status:'error'}]})
+ await x.navigation.ready
+ expect(x.store.get(coreSessionNavigationPhaseAtom)).toBe('error')
+ x.setFailLocal(false)
+ x.store.set(coreTargetsAtom,{...snapshot('local',0),revision:2})
+ await settle()
+ expect(x.store.get(coreSessionNavigationPhaseAtom)).toBe('ready')
+ expect(x.store.get(currentAgentSessionIdAtom)).toBe(localSession.id)
+ expect(x.failures).toHaveLength(1)
+})
+
 test('Given 同Core状态广播 When generation不变 Then 不清空用户新选会话',async()=>{
  const x=setup({coreTabStates:{local:state(localSession)}});await x.navigation.ready
  x.store.set(coreTargetsAtom,snapshot('local',0));await settle()

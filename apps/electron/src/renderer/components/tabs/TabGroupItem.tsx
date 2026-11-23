@@ -66,7 +66,7 @@ function StatusDot({ status }: { status: SessionIndicatorStatus }): React.ReactE
   if (status === 'idle') return null
   return (
     <span
-      className={cn('size-1.5 shrink-0 rounded-full', SESSION_STATUS_DOT_CLASS[status])}
+      className={cn('size-1.5 shrink-0 rounded-full motion-reduce:animate-none', status === 'running' && 'topbar-tab-running-dot', SESSION_STATUS_DOT_CLASS[status])}
       title={SESSION_STATUS_LABEL[status]}
       aria-hidden="true"
     />
@@ -175,7 +175,7 @@ export function TabGroupItem({
           aria-hidden="true"
           className={cn(
             'absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full',
-            isActive ? 'bg-tab/60' : focusedSide === 'left' ? 'bg-primary/70' : 'bg-primary/40',
+            isActive ? 'bg-primary/60' : focusedSide === 'left' ? 'bg-primary/70' : 'bg-primary/40',
           )}
         />
         <Columns2 className="size-3.5 shrink-0 opacity-80" aria-hidden="true" />
@@ -193,7 +193,7 @@ export function TabGroupItem({
           <StatusDot status={leftStatus} />
         </span>
 
-        <span aria-hidden="true" className={cn('h-3 w-px shrink-0', isActive ? 'bg-tab/35' : 'bg-border/60')} />
+        <span aria-hidden="true" className={cn('h-3 w-px shrink-0', isActive ? 'bg-foreground/15' : 'bg-border/60')} />
 
         <span className="flex min-w-0 shrink items-center gap-1">
           <span

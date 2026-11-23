@@ -8,6 +8,7 @@ const enabled = process.env.PROFER_CORE_LOCAL
 process.env.PROFER_CONFIG_DIR = root
 delete process.env.PROFER_CORE_LOCAL
 let attached = false
+mock.module('./core-local-mode', () => ({ isLocalCoreEnabled: () => process.env.PROFER_CORE_LOCAL === '1' }))
 mock.module('./core-local-bridge', () => ({ getLocalCoreClient: () => attached ? {} : null }))
 mock.module('electron', () => ({
   BrowserWindow: { getAllWindows: () => [], fromWebContents: () => undefined },

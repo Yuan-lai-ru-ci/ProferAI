@@ -54,6 +54,7 @@ function fixture(runtime: AgentRuntime, taskRuntime: AgentRuntime, mode: 'reuse'
   }
   let sessionBusy = initiallyBusy
   const deps = {
+    isLocalCoreEnabled: () => false,
     normalizeAgentRuntime, AUTOMATION_DEFAULT_SESSION_MODE, AUTOMATION_MAX_CONSECUTIVE_FAILURES,
     randomUUID, createAutomationTriggerId, buildAutomationDispatchMetadata, transitionAutomationTrigger, isSettledAutomationTrigger,
     findAgentRunForTrigger: (triggerId: string) => { if (ledgerError) throw ledgerError; return sharedRuns.get(triggerId) },

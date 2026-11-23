@@ -9,6 +9,8 @@
  *   login → POST {baseUrl}/v1/auth/login
  */
 
+import { isIndependentLocalCore } from './core-local-mode'
+import { localAccount } from './local-account-routing'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { fetch as undiciFetch } from 'undici'
 import { getTeamServersConfigPath } from './config-paths'
@@ -209,6 +211,7 @@ export async function login(
   password: string,
   revokeSlotId?: string,
 ): Promise<LoginResult> {
+  if (isIndependentLocalCore()) return localAccount.operation('login', [email, password, revokeSlotId])
   const serverUrl = DEFAULT_TEAM_SERVER_URL
 
   // 自动注册服务器配置
@@ -377,6 +380,7 @@ async function requestPublicAuth<T>(path: string, body?: unknown): Promise<{ ok:
 }
 
 export async function getRegistrationOptions(): Promise<RegistrationOptions> {
+  if (isIndependentLocalCore()) return localAccount.operation('registrationOptions')
   try {
     const result = await requestPublicAuth<RegistrationOptions>('/registration-options')
     return result.ok ? { openRegistration: !!result.data.openRegistration } : { openRegistration: false }
@@ -386,6 +390,7 @@ export async function getRegistrationOptions(): Promise<RegistrationOptions> {
 }
 
 export async function sendRegistrationOtp(email: string): Promise<RegistrationOtpResult> {
+  if (isIndependentLocalCore()) return localAccount.operation('sendRegistrationOtp', [email])
   try {
     const result = await requestPublicAuth<{ otpToken?: string; resendAfterSec?: number }>('/register-otp/send', { email })
     if (!result.ok) return { success: false, error: result.data.error || `服务器错误 (${result.status})`, resendAfterSec: result.data.resendAfterSec }
@@ -396,6 +401,7 @@ export async function sendRegistrationOtp(email: string): Promise<RegistrationOt
 }
 
 export async function verifyRegistrationOtp(email: string, otpToken: string, code: string): Promise<{ success: boolean; error?: string }> {
+  if (isIndependentLocalCore()) return localAccount.operation('verifyRegistrationOtp', [email, otpToken, code])
   try {
     const result = await requestPublicAuth<{ verified?: boolean }>('/register-otp/verify', { email, otpToken, code })
     return result.ok && result.data.verified ? { success: true } : { success: false, error: result.data.error || '验证码校验失败' }
@@ -415,6 +421,7 @@ export async function register(
   otpToken?: string,
   emailOtp?: string,
 ): Promise<LoginResult> {
+  if (isIndependentLocalCore()) return localAccount.operation('register', [email, password, displayName, inviteCode, activationCode, invitationToken, otpToken, emailOtp])
   const serverUrl = DEFAULT_TEAM_SERVER_URL
   const url = `${serverUrl}${API_PREFIX}/auth/register`
 
@@ -528,6 +535,7 @@ export async function register(
 
 /** 检查是否存储了有效的 refreshToken（用于启动/休眠恢复时尝试恢复会话） */
 export function hasStoredRefreshToken(): boolean {
+  if (isIndependentLocalCore()) return false
   const tokens = readTokens()
   for (const id of Object.keys(tokens)) {
     if (tokens[id]?.refreshToken) return true
@@ -537,6 +545,10 @@ export function hasStoredRefreshToken(): boolean {
 
 /** 尝试用 refreshToken 恢复过期会话。返回 true 表示恢复成功 */
 export async function tryRestoreSession(): Promise<boolean> {
+  if (isIndependentLocalCore()) {
+    await localAccount.operation('status')
+    return localAccount.snapshot().status.isLoggedIn
+  }
   if (getAuthStatus().isLoggedIn) return true
   if (!hasStoredRefreshToken()) return false
   console.log('[认证] accessToken 已过期，尝试用 refreshToken 恢复会话...')
@@ -566,7 +578,10 @@ export function getAuthStatus(): {
   isLoggedIn: boolean
   teamAccountId?: string
   teamEmail?: string
+  commercialMode?: boolean
+  isAdmin?: boolean
 } {
+  if (isIndependentLocalCore()) return localAccount.snapshot().status
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
 
@@ -607,6 +622,7 @@ export interface LogoutResult {
  * 仅官方代管渠道（服务端下发的 relay 凭据）会被清理，下次登录自动重新同步。
  */
 export async function logout(): Promise<LogoutResult> {
+  if (isIndependentLocalCore()) return localAccount.operation('logout')
   // 先让所有已在飞行中的 refresh 结果失效，并停止后续自动续期。
   // 否则 refresh 在 logout 网络请求期间完成时会把旧 token 写回磁盘。
   logoutInProgress = true
@@ -673,6 +689,7 @@ const AUTO_REFRESH_BACKOFF_MS = [60_000, 300_000, 900_000, 1_800_000, 3_600_000]
 
 /** 启动主动 token 续期：accessToken 过期前 5 分钟自动刷新 */
 export function scheduleAutoRefresh(): void {
+  if (isIndependentLocalCore()) return
   if (logoutInProgress) return
   if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer)
   const tokens = readTokens()
@@ -797,6 +814,7 @@ async function refreshAuthTokenImpl(): Promise<boolean> {
  * 防止服务器轮换 refresh token 后第二个请求覆盖或误报失效。
  */
 export function refreshAuthToken(): Promise<boolean> {
+  if (isIndependentLocalCore()) return localAccount.operation('refresh')
   if (refreshInFlight) return refreshInFlight
   refreshInFlight = refreshAuthTokenImpl().finally(() => {
     refreshInFlight = null
@@ -811,6 +829,10 @@ export function refreshAuthToken(): Promise<boolean> {
  * 随后同步官方渠道，使聊天和 Agent 下次请求使用同一份最新本地配置。
  */
 export async function recoverCommercialProxyAuth(): Promise<{ baseUrl: string; token: string; proxyToken?: string; membershipTier?: string; teamEmail?: string; teamAccountId?: string } | null> {
+  if (isIndependentLocalCore()) {
+    await localAccount.operation('refresh')
+    return localAccount.snapshot().auth
+  }
   const refreshed = await refreshAuthToken().catch(() => false)
   if (!refreshed) return null
 
@@ -829,6 +851,7 @@ export async function recoverCommercialProxyAuth(): Promise<{ baseUrl: string; t
 
 /** 当前会话是否处于商业模式（登录时存储的标记，不依赖 token 是否过期） */
 export function getCommercialMode(): boolean {
+  if (isIndependentLocalCore()) return localAccount.snapshot().status.commercialMode === true
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
   for (const id of serverIds) {
@@ -841,6 +864,7 @@ export function getCommercialMode(): boolean {
 
 /** 当前用户是否为管理员 */
 export function getIsAdmin(): boolean {
+  if (isIndependentLocalCore()) return localAccount.snapshot().status.isAdmin === true
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
   for (const id of serverIds) {
@@ -855,6 +879,7 @@ export function getIsAdmin(): boolean {
  * 获取有效的访问令牌（自动刷新过期令牌）
  */
 export function getAccessToken(): string | null {
+  if (isIndependentLocalCore()) return localAccount.snapshot().auth?.token ?? null
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
   if (serverIds.length === 0) return null
@@ -876,6 +901,10 @@ export function getAccessToken(): string | null {
  */
 /** 获取已连接服务器信息列表 */
 export function getServerInfoList(): Array<{ baseUrl: string; email: string; isLoggedIn: boolean }> {
+  if (isIndependentLocalCore()) {
+    const { auth, status } = localAccount.snapshot()
+    return auth ? [{ baseUrl: auth.baseUrl, email: auth.teamEmail ?? '', isLoggedIn: status.isLoggedIn }] : []
+  }
   const tokens = readTokens()
   const servers = listTeamServers()
   const now = Date.now()
@@ -890,6 +919,7 @@ export function getServerInfoList(): Array<{ baseUrl: string; email: string; isL
 }
 
 export function getTeamAuth(): { baseUrl: string; token: string; proxyToken?: string; membershipTier?: string; teamEmail?: string; teamAccountId?: string } | null {
+  if (isIndependentLocalCore()) return localAccount.snapshot().auth
   const tokens = readTokens()
   const servers = listTeamServers()
   const now = Date.now()
@@ -921,6 +951,7 @@ export function getTeamAuth(): { baseUrl: string; token: string; proxyToken?: st
 
 /** 取当前团队服务器 baseUrl + 有效 accessToken（JWT，过期先刷新）。无登录返回 null。 */
 async function getAccessTokenForApi(): Promise<{ baseUrl: string; token: string } | null> {
+  if (isIndependentLocalCore()) return localAccount.operation('teamAuth')
   const pick = () => {
     const tokens = readTokens()
     for (const server of listTeamServers()) {
@@ -970,6 +1001,7 @@ export async function listRemoteDevices(): Promise<{
   currentDeviceId?: string
   error?: string
 }> {
+  if (isIndependentLocalCore()) return localAccount.operation('listDevices')
   const currentDeviceId = getDeviceAuthInfo().deviceId
   const auth = await getAccessTokenForApi()
   if (!auth) return { ok: false, error: '未登录团队账号', currentDeviceId }
@@ -996,6 +1028,7 @@ export async function listRemoteDevices(): Promise<{
 
 /** 撤销（远程登出）指定设备槽位。走 accessToken(JWT)。 */
 export async function revokeRemoteDevice(slotId: string): Promise<{ ok: boolean; error?: string }> {
+  if (isIndependentLocalCore()) return localAccount.operation('revokeDevice', [slotId])
   const auth = await getAccessTokenForApi()
   if (!auth) return { ok: false, error: '未登录团队账号' }
   try {
@@ -1023,6 +1056,7 @@ export function isSelfConfigAllowed(): boolean {
 
 /** 获取当前用户的 membershipTier（不存在则返回 'free'，不依赖 token 过期） */
 export function getMembershipTier(): string {
+  if (isIndependentLocalCore()) return localAccount.snapshot().auth?.membershipTier ?? 'free'
   const tokens = readTokens()
   const serverIds = Object.keys(tokens)
   for (const id of serverIds) {
@@ -1032,6 +1066,7 @@ export function getMembershipTier(): string {
 }
 
 export async function getTeamAuthWithRefresh(): Promise<{ baseUrl: string; token: string; proxyToken?: string; membershipTier?: string; teamEmail?: string; teamAccountId?: string } | null> {
+  if (isIndependentLocalCore()) return localAccount.operation('teamAuth')
   const current = getTeamAuth()
   if (current) return current
 

@@ -1,4 +1,5 @@
 import { atom, type createStore } from 'jotai/vanilla'
+import { selectAtom } from 'jotai/vanilla/utils'
 import type { AgentSessionMeta, AgentWorkspace, ConversationMeta } from '@profer/shared'
 import type { AppSettings, CoreTabSettings, CoreTargetsSnapshot } from '../../types/settings'
 import { activeTabIdAtom, ensureScratchPadTab, getPersistableTabState, SCRATCH_PAD_ID, tabMruAtom, tabsAtom, type TabItem } from '../atoms/tab-atoms'
@@ -93,6 +94,10 @@ const applyNavigationAtom = atom(null, (_get, set, input: { state: CoreTabSettin
   set(appModeAtom, active?.type === 'chat' ? 'chat' : 'agent')
 })
 
+// 启动时补入或重建 Scratch Pad 标签不算用户导航；显式选中它仍由 activeTabIdAtom 记录。
+const navigationTabsAtom = selectAtom(tabsAtom, tabs => tabs.filter(tab => tab.id !== SCRATCH_PAD_ID),
+  (before, after) => before.length === after.length && before.every((tab, i) => tab === after[i]))
+
 /** 同时负责启动恢复、切换恢复及落盘；不再由侧栏和全局tabState各恢复一遍。 */
 export function initializeCoreSessionNavigation(store: Store, deps: NavigationDeps) {
   let active = true
@@ -144,6 +149,7 @@ export function initializeCoreSessionNavigation(store: Store, deps: NavigationDe
     const requestedTarget = target
     canCapture = false
     clear()
+    if (requestedTarget.startup === 'restoring') return
     const initialNavigationRevision = navigationRevision
     try {
       const [settings, sessions, conversations, workspaces] = await Promise.all([
@@ -169,12 +175,21 @@ export function initializeCoreSessionNavigation(store: Store, deps: NavigationDe
       }
     }
   }
-  const subscriptions = [tabsAtom, activeTabIdAtom, tabGroupsAtom, currentAgentWorkspaceIdAtom, currentAgentSessionIdAtom, currentConversationIdAtom].map(item => store.sub(item, saveSoon))
+  const subscriptions = [navigationTabsAtom, activeTabIdAtom, tabGroupsAtom, currentAgentWorkspaceIdAtom, currentAgentSessionIdAtom, currentConversationIdAtom].map(item => store.sub(item, saveSoon))
   subscriptions.push(store.sub(coreTargetsAtom, () => {
     const next = store.get(coreTargetsAtom)
     const nextKey = scopeKey(next)
     if (!loaded) { target = next; key = nextKey; return }
-    if (nextKey === key && next.generation === target.generation) { target = next; return }
+    if (nextKey === key && next.generation === target.generation) {
+      const previous = target
+      target = next
+      const phase = store.get(coreSessionNavigationPhaseAtom)
+      // 就绪或手动重连不一定改变 generation，普通延迟/状态广播不重载已打开的会话。
+      if (phase !== 'ready' && ((previous.startup === 'restoring' && next.startup !== 'restoring')
+        || (previous.targets.find(item => item.id === next.currentId)?.status !== 'connected'
+          && next.targets.find(item => item.id === next.currentId)?.status === 'connected'))) void load()
+      return
+    }
     remember()
     if (timer) { clearTimeout(timer); timer = undefined }
     target = next
@@ -186,7 +201,7 @@ export function initializeCoreSessionNavigation(store: Store, deps: NavigationDe
     if (!active) return
     history = { ...settings.coreTabStates }
     const current = store.get(coreTargetsAtom)
-    if (initial.generation >= current.generation) store.set(coreTargetsAtom, initial)
+    if ((initial.revision ?? initial.generation) >= (current.revision ?? current.generation)) store.set(coreTargetsAtom, initial)
     target = store.get(coreTargetsAtom)
     key = scopeKey(target)
     if (!settings.coreTabStates) legacyKey = key

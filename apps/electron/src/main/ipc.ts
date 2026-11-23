@@ -1,5 +1,8 @@
+import { isIndependentLocalCore, isLocalCoreEnabled } from './lib/core-local-mode'
 import { routeAutomationToCore } from './lib/automation-core-routing'
 import { registerCoreResourceHandler } from './lib/core-resource-routing'
+import { resolveSkillCardReminder } from './lib/skill-card-reminder'
+import type { SkillCardReminderDecision, SkillCardReminderTarget } from '@profer/shared'
 import { registerCoreChatHandler } from './lib/core-chat-routing'
 import { invokeCoreNative, forkCoreNative, captureCoreNativeRoute } from './lib/core-native-routing'
 /**
@@ -443,11 +446,11 @@ const goalSessionService = new GoalSessionService({
 
 // 人发起的运行结束后，受阻 / 被中断的 Goal 自动续上（桌面、Pocket、IM 入口共用）。
 onAgentRunComplete((sessionId, initiator) => {
-  if (process.env.PROFER_CORE_LOCAL !== '1' && !getLocalCoreClient()) void goalSessionService.onRunFinished(sessionId, initiator)
+  if (!isLocalCoreEnabled() && !getLocalCoreClient()) void goalSessionService.onRunFinished(sessionId, initiator)
 })
 
 function restoreGoalStatesOnce(): void {
-  if (process.env.PROFER_CORE_LOCAL === '1' || getLocalCoreClient()) return
+  if (isLocalCoreEnabled() || getLocalCoreClient()) return
   try { goalSessionService.restore() } catch (error) { console.error('[goal] 状态恢复失败', error) }
 }
 
@@ -1303,7 +1306,7 @@ async function routeSessionUiActionToCore(sessionId: string, action: import('@pr
     return { ...updated, id: sessionId } as AgentSessionMeta
   }
   const client = getLocalCoreClient()
-  if (!client && process.env.PROFER_CORE_LOCAL !== '1') return null
+  if (!client && !isLocalCoreEnabled()) return null
   if (!client) throw new Error('本地Core未就绪')
   return await client.applySessionUiAction(sessionId, action) as AgentSessionMeta
 }
@@ -1316,7 +1319,7 @@ async function routeSessionMetaToCore(sessionId: string, patch: Parameters<impor
     return { ...await client.updateSessionMeta(remote.sessionId, patch), id: sessionId } as AgentSessionMeta
   }
   const client = getLocalCoreClient()
-  if (!client && process.env.PROFER_CORE_LOCAL !== '1') return null
+  if (!client && !isLocalCoreEnabled()) return null
   if (!client) throw new Error('本地Core未就绪')
   return await client.updateSessionMeta(sessionId, patch) as AgentSessionMeta
 }
@@ -1330,7 +1333,7 @@ function resolveSessionCoreRoute(sessionId: string): { client: import('./lib/cor
   }
   if (remote) throw new Error('远程会话不能由本机Core处理')
   const client = getLocalCoreClient()
-  if (!client && process.env.PROFER_CORE_LOCAL !== '1') return null
+  if (!client && !isLocalCoreEnabled()) return null
   if (!client) throw new Error('本地Core未就绪')
   return { client, sessionId }
 }
@@ -2026,7 +2029,7 @@ export function registerIpcHandlers(): void {
         return sessions.filter(session => includeArchived || !session.archived).map(session => projectCoreSessionMeta(session, coreId))
       }
       const localCoreClient = getLocalCoreClient()
-      if (localCoreClient || process.env.PROFER_CORE_LOCAL === '1') {
+      if (localCoreClient || isLocalCoreEnabled()) {
         if (!localCoreClient) throw new Error('本地Core未就绪')
         const sessions = await localCoreClient.listSessions()
         return sessions.filter(session => includeArchived || !session.archived).map(session => toAgentSessionSummary({
@@ -2075,7 +2078,7 @@ export function registerIpcHandlers(): void {
       }
       if (typeof id !== 'string' || !id.trim()) return null
       const localCoreClient = getLocalCoreClient()
-      if (localCoreClient || process.env.PROFER_CORE_LOCAL === '1') {
+      if (localCoreClient || isLocalCoreEnabled()) {
         if (!localCoreClient) throw new Error('本地Core未就绪')
         return ((await localCoreClient.listSessions()).find(session => session.id === id) as AgentSessionMeta | undefined) ?? null
       }
@@ -2114,7 +2117,7 @@ export function registerIpcHandlers(): void {
         } as AgentSessionMeta
       }
       const localCoreClient = getLocalCoreClient()
-      if (localCoreClient || process.env.PROFER_CORE_LOCAL === '1') {
+      if (localCoreClient || isLocalCoreEnabled()) {
         if (!localCoreClient) throw new Error(localCoreNotReadyMessage())
         const generation = getCoreTargetGeneration()
         const session = workspaceId && reuseWorkspaceSession
@@ -2161,7 +2164,7 @@ export function registerIpcHandlers(): void {
     const local = getCurrentCoreTargetId() === 'local'
     const client = local ? getLocalCoreClient() : getActiveCoreClient()
     if (!client) {
-      if (local && process.env.PROFER_CORE_LOCAL === '1') throw new Error(localCoreNotReadyMessage())
+      if (local && isLocalCoreEnabled()) throw new Error(localCoreNotReadyMessage())
       return getPresetReferenceReport(reference)
     }
     // 会话与自动化归所属 Core：引用报告必须用 Core 的数据，避免桌面旧账本抛错或漏判。
@@ -2348,7 +2351,7 @@ export function registerIpcHandlers(): void {
         return projectCoreSessionMeta(session, coreId)
       }
       const client = getLocalCoreClient()
-      if (client || process.env.PROFER_CORE_LOCAL === '1') {
+      if (client || isLocalCoreEnabled()) {
         if (!client) throw new Error('本地Core未就绪')
         const generation = getCoreTargetGeneration()
         const session = await client.ensureProjectDraftSession({ workspaceId, channelId, modelId })
@@ -2649,27 +2652,14 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SDK_MESSAGES,
     async (_, id: string, opts?: { tail?: number; before?: number }): Promise<SDKMessage[] | import('./lib/agent-session-manager').SDKMessagePage> => {
-      if (getCurrentCoreTargetId() !== 'local') {
-        const client = getActiveCoreClient()
-        if (!client) throw new Error('当前远程内核未连接')
-        const remoteSessionId = parseCoreSessionId(id)
-        if (!remoteSessionId || remoteSessionId.coreId !== currentCoreId()) return []
-        const messages = await client.getMessages(remoteSessionId.sessionId) as SDKMessage[]
-        if (!opts) return messages
-        const endIndex = opts.before ?? messages.length
-        const startIndex = Math.max(0, endIndex - (opts.tail ?? messages.length))
-        return { messages: messages.slice(startIndex, endIndex), total: messages.length, startIndex, endIndex, hasMore: startIndex > 0 }
-      }
-      const localCoreClient = getLocalCoreClient()
-      if (localCoreClient || process.env.PROFER_CORE_LOCAL === '1') {
-        if (!localCoreClient) throw new Error('本地Core未就绪')
-        const messages = await localCoreClient.getMessages(id) as SDKMessage[]
-        if (!opts) return messages
-        const endIndex = opts.before ?? messages.length
-        const startIndex = Math.max(0, endIndex - (opts.tail ?? messages.length))
-        return { messages: messages.slice(startIndex, endIndex), total: messages.length, startIndex, endIndex, hasMore: startIndex > 0 }
-      }
-      return opts ? getAgentSessionSDKMessages(id, opts) : getAgentSessionSDKMessages(id)
+      const route = captureCoreNativeRoute(id)
+      if (!route) return opts ? getAgentSessionSDKMessages(id, opts) : getAgentSessionSDKMessages(id)
+      const messages = await route.client.getMessages(route.sessionId) as SDKMessage[]
+      route.assertCurrent()
+      if (!opts) return messages
+      const endIndex = opts.before ?? messages.length
+      const startIndex = Math.max(0, endIndex - (opts.tail ?? messages.length))
+      return { messages: messages.slice(startIndex, endIndex), total: messages.length, startIndex, endIndex, hasMore: startIndex > 0 }
     }
   )
 
@@ -2697,22 +2687,18 @@ export function registerIpcHandlers(): void {
       return restoreActiveAgentStreams(event.sender, ids)
     },
   )
-  // 向所属内核核实会话是否真的在运行。
-  // 远程内核的流事件只有 run 类 payload 会转发，渲染层却可能因其它事件残留“运行中”；
-  // 以 Core 的 active 为权威结果，才能把假运行态收掉。
+  // Core 模式以所属内核的运行态为准；查询失败不能视为已停止。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SESSION_ACTIVITY,
     async (_, sessionId: string): Promise<boolean> => {
-      if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('无效的会话标识')
-      if (getCurrentCoreTargetId() !== 'local') {
-        const client = getActiveCoreClient()
-        if (!client) return false
-        const remote = parseCoreSessionId(sessionId)
-        if (!remote || remote.coreId !== currentCoreId()) return false
-        const detail = await client.getSessionDetail(remote.sessionId)
-        return detail.active === true
-      }
-      return isAgentSessionActive(sessionId)
+      const route = captureCoreNativeRoute(sessionId)
+      if (!route) return isAgentSessionActive(sessionId)
+      if (!route.client.isConnected) throw new Error('当前 Core 未连接，不能查询会话运行态')
+      const { active } = await route.client.getSessionDetail(route.sessionId)
+      route.assertCurrent()
+      if (!route.client.isConnected) throw new Error('当前 Core 已断开，无法确认会话运行态')
+      if (typeof active !== 'boolean') throw new Error('Core 未返回有效的会话运行态')
+      return active
     },
   )
   ipcMain.handle(AGENT_IPC_CHANNELS.FILE_PREVIEW_REVISION, async (event, filePath: string, access?: FileAccessOptions | string[]): Promise<string | null> => {
@@ -2761,7 +2747,7 @@ export function registerIpcHandlers(): void {
         throw new Error('Agent 正在运行，完成后再切换模型')
       }
       const localCoreClient = getLocalCoreClient()
-      if (localCoreClient || process.env.PROFER_CORE_LOCAL === '1') {
+      if (localCoreClient || isLocalCoreEnabled()) {
         if (!localCoreClient) throw new Error('本地Core未就绪')
         return await localCoreClient.updateSessionMeta(id, { channelId, modelId }) as AgentSessionMeta
       }
@@ -2780,7 +2766,7 @@ export function registerIpcHandlers(): void {
       }
       const client = getLocalCoreClient()
       if (client) return client.generateTitle(input)
-      if (process.env.PROFER_CORE_LOCAL === '1') throw new Error('本地Core未就绪')
+      if (isLocalCoreEnabled()) throw new Error('本地Core未就绪')
       return generateAgentTitle(input)
     }
   )
@@ -2822,7 +2808,7 @@ export function registerIpcHandlers(): void {
         return
       }
       const client = getLocalCoreClient()
-      if (client || process.env.PROFER_CORE_LOCAL === '1') {
+      if (client || isLocalCoreEnabled()) {
         if (!client) throw new Error('本地Core未就绪')
         await client.deleteSession(id)
         return
@@ -3116,14 +3102,14 @@ export function registerIpcHandlers(): void {
 
   // ===== Agent 工作区管理相关 =====
 
-  // 确保默认工作区存在
-  ensureDefaultWorkspace()
+  // Core 模式由持锁的 Core 初始化默认工作区，桌面只初始化 legacy 索引。
+  if (!isLocalCoreEnabled()) ensureDefaultWorkspace()
   // 上次退出/崩溃前已接受但未完成的删除请求，启动后继续执行，避免会话复活。
-  if (process.env.PROFER_CORE_LOCAL !== '1' && !getLocalCoreClient()) resumePendingSessionDeletions()
+  if (!isLocalCoreEnabled() && !getLocalCoreClient()) resumePendingSessionDeletions()
   // 空闲时先迁移存量项目会话布局，再补齐历史 Pi transcript 路径。
   setTimeout(() => {
     // Core模式不由Electron迁移/补写会话资产；避免与Core索引写入交错。
-    if (getLocalCoreClient() || process.env.PROFER_CORE_LOCAL === '1') return
+    if (getLocalCoreClient() || isLocalCoreEnabled()) return
     void migrateProjectSessionLayouts()
       .then(() => ensureProjectSessionPortability())
       .catch((error) => {
@@ -3138,7 +3124,7 @@ export function registerIpcHandlers(): void {
       })
   }, 3000).unref?.()
   // 旧项目不会重新走 open，启动时幂等补齐 .profer/.gitignore（会话/运行时投影不应进仓库）
-  if (process.env.PROFER_CORE_LOCAL !== '1' && !getLocalCoreClient()) {
+  if (!isLocalCoreEnabled() && !getLocalCoreClient()) {
     ensureProjectWorkspaceGitignores()
     try { ensureProjectSessionMirrors() } catch (error) { console.warn('[Agent 会话] 补齐项目会话镜像失败:', error) }
     try { ensureProjectAutomationMirrors() } catch (error) { console.warn('[定时任务] 补齐项目任务镜像失败:', error) }
@@ -3148,7 +3134,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.LIST_WORKSPACES,
     async (): Promise<AgentWorkspace[]> => {
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         return listAgentWorkspaces()
       }
       const local = getCurrentCoreTargetId() === 'local'
@@ -3165,7 +3151,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_WORKSPACE,
     async (_, name: string): Promise<AgentWorkspace> => {
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         const workspace = createAgentWorkspace(name)
         broadcastAgentWorkspacesChanged()
         return workspace
@@ -3186,7 +3172,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.UPDATE_WORKSPACE,
     async (event, id: string, updates: { name?: string; archived?: boolean }): Promise<AgentWorkspace> => {
       assertSensitiveAgentIpcSender(event)
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         const workspace = updateAgentWorkspace(id, updates)
         broadcastAgentWorkspacesChanged()
         return workspace
@@ -3207,7 +3193,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.DELETE_WORKSPACE,
     async (event, id: string): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         const deletingWorkspace = getAgentWorkspace(id)
         if (!deletingWorkspace) {
           return deleteAgentWorkspace(id)
@@ -3279,7 +3265,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.REORDER_WORKSPACES,
     async (event, orderedIds: string[]): Promise<AgentWorkspace[]> => {
       assertSensitiveAgentIpcSender(event)
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         const workspaces = reorderAgentWorkspaces(orderedIds)
         broadcastAgentWorkspacesChanged()
         return workspaces
@@ -3344,7 +3330,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_PROJECT_WORKSPACE,
     async (_, input: ProjectWorkspaceTarget): Promise<ProjectWorkspaceOpenResult> => {
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         return withProjectWorkspaceErrorCode(() => {
           // 版本号由主进程注入：manager 不依赖 electron，才能被单元测试直接驱动
           const result = createProjectWorkspace({ ...input, proferVersion: app.getVersion() })
@@ -3389,7 +3375,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_PROJECT_WORKSPACE,
     async (_, input: ProjectWorkspaceTarget): Promise<ProjectWorkspaceOpenResult> => {
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         return withProjectWorkspaceErrorCode(() => {
           const result = openProjectWorkspace({ ...input, proferVersion: app.getVersion() })
           reconcileProjectSessionIndexesSafely()
@@ -3418,7 +3404,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.REMOVE_PROJECT_WORKSPACE,
     async (event, id: string): Promise<void> => {
       assertSensitiveAgentIpcSender(event)
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         return withProjectWorkspaceErrorCode(() => {
           // 先停用绑定任务：移除后调度侧解析不到工作区，任务不能再跑。
           if (pauseAutomationsForWorkspace(id).length > 0) {
@@ -3443,7 +3429,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.RELOCATE_PROJECT_WORKSPACE,
     async (event, input: { id: string; rootPath: string }): Promise<ProjectWorkspaceOpenResult> => {
       assertSensitiveAgentIpcSender(event)
-      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') {
+      if (getCurrentCoreTargetId() === 'local' && !getLocalCoreClient() && !isLocalCoreEnabled()) {
         return withProjectWorkspaceErrorCode(() => {
           const result = relocateProjectWorkspace({ ...input, proferVersion: app.getVersion() })
           reconcileProjectSessionIndexesSafely()
@@ -3669,6 +3655,11 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  registerCoreResourceHandler(
+    AGENT_IPC_CHANNELS.RESOLVE_SKILL_CARD_REMINDER,
+    (_, target: SkillCardReminderTarget, decision: SkillCardReminderDecision) => resolveSkillCardReminder(target, decision),
+  )
+
   // ===== Skill 子文件管理 =====
 
   registerCoreResourceHandler(
@@ -3744,6 +3735,7 @@ export function registerIpcHandlers(): void {
         return
       }
       input = normalizeUserSendInput(input)
+      if (isIndependentLocalCore()) return runAgent(input, event.sender)
       // 用户发起的普通轮次才注入 propose_goal：内部轮次（Goal / 自动化 / 委派）不提议。
       if (!input.triggeredBy || input.triggeredBy === 'user') {
         input = { ...input, goalProposal: goalProposalInputFor(input.sessionId) }
@@ -3754,7 +3746,7 @@ export function registerIpcHandlers(): void {
         getChannel: getChannelById,
         validatePreset: (session) => {
           // Core按所属资源校验并保存预设；桌面不得自愈共享业务索引。
-          if (getLocalCoreClient() || process.env.PROFER_CORE_LOCAL === '1') return
+          if (getLocalCoreClient() || isLocalCoreEnabled()) return
           const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
           // 兼容作用域引用上线前/回归期间产生的脏会话：若引用缺失或为空，
           // 按会话 ID 重新解析；连 presetId 也缺失时使用内置 standard。
@@ -4040,7 +4032,7 @@ export function registerIpcHandlers(): void {
         if (!handled) throw new Error('远程 Core 已不存在该权限请求')
         return
       }
-      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || process.env.PROFER_CORE_LOCAL === '1')) {
+      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || isLocalCoreEnabled())) {
         const client = getLocalCoreClient()
         if (!client || !response.sessionId) throw new Error('本地Core未就绪或审批缺少会话身份')
         if (!await client.respondPermission({ sessionId: response.sessionId, requestId, runId: response.runId, behavior, alwaysAllow })) throw new Error('Core权限请求已失效')
@@ -4113,7 +4105,7 @@ export function registerIpcHandlers(): void {
       if (expectedRevision !== undefined && (current.revision ?? 0) !== expectedRevision) {
         throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
       }
-      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || process.env.PROFER_CORE_LOCAL === '1')) {
+      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || isLocalCoreEnabled())) {
         const client = getLocalCoreClient()
         if (!client) throw new Error('本地Core未就绪')
         return await client.updateSessionMeta(sessionId, { permissionMode: mode, expectedRevision }) as AgentSessionMeta
@@ -4470,7 +4462,7 @@ export function registerIpcHandlers(): void {
         if (!await client.respondAskUser({ sessionId: remote.sessionId, requestId, runId: response.runId, answers })) throw new Error('远程问答已失效或归属不匹配')
         return
       }
-      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || process.env.PROFER_CORE_LOCAL === '1')) {
+      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || isLocalCoreEnabled())) {
         const client = getLocalCoreClient()
         if (!client || !response.sessionId) throw new Error('本地Core未就绪或问答缺少会话身份')
         if (!await client.respondAskUser({ sessionId: response.sessionId, requestId, runId: response.runId, answers })) throw new Error('Core问答已失效')
@@ -4504,7 +4496,7 @@ export function registerIpcHandlers(): void {
         if (!await client.respondExitPlan({ ...response, sessionId: remote.sessionId })) throw new Error('远程计划审批已失效或归属不匹配')
         return
       }
-      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || process.env.PROFER_CORE_LOCAL === '1')) {
+      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || isLocalCoreEnabled())) {
         const client = getLocalCoreClient()
         if (!client || !response.sessionId) throw new Error('本地Core未就绪或计划审批缺少会话身份')
         if (!await client.respondExitPlan({ ...response, sessionId: response.sessionId })) throw new Error('Core计划审批已失效')
@@ -4569,7 +4561,7 @@ export function registerIpcHandlers(): void {
         if (getActiveCoreClient() !== client || currentCoreId() !== coreId || getCoreTargetGeneration() !== generation) throw new Error('Core已切换，忽略旧待处理请求快照')
         return { permissions: snapshots.flatMap(item => item.permissions), askUsers: snapshots.flatMap(item => item.askUsers), exitPlans: snapshots.flatMap(item => item.exitPlans), goalProposals: [] }
       }
-      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || process.env.PROFER_CORE_LOCAL === '1')) {
+      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || isLocalCoreEnabled())) {
         const client = getLocalCoreClient()
         if (!client) throw new Error('本地Core未就绪')
         const snapshots = await Promise.all((await client.listSessions()).map(session => client.listPendingRequests(session.id)))

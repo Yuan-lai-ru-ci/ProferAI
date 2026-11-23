@@ -15,7 +15,7 @@ import { Input } from '@profer/ui/primitives/input'
 import { Textarea } from '@profer/ui/primitives/textarea'
 import { Separator } from '@profer/ui/primitives/separator'
 import { Switch } from '@profer/ui/primitives/switch'
-import { ScrollArea } from '@profer/ui/primitives/scroll-area'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import { cn } from '@/lib/utils'
 import {
   promptConfigAtom,
@@ -152,7 +152,7 @@ export function PromptEditorSidebar(): React.ReactElement {
         {saveState === 'error' && <Button type="button" size="sm" variant="outline" onClick={() => { void debounceSave.flush().catch(() => {}) }}>重试保存</Button>}
       </div>
       {/* 提示词列表 */}
-      <ScrollArea className="max-h-[200px] shrink-0">
+      <ScrollRegion className="max-h-[200px] shrink-0 overflow-y-auto">
         <div className="py-1">
           {config.prompts.map((prompt) => (
             <SidebarPromptItem
@@ -168,13 +168,13 @@ export function PromptEditorSidebar(): React.ReactElement {
             />
           ))}
         </div>
-      </ScrollArea>
+      </ScrollRegion>
 
       <Separator />
 
       {/* 编辑区 */}
       {selectedPrompt && (
-        <div className="flex-1 min-h-0 flex flex-col overflow-y-auto p-3 gap-3">
+        <ScrollRegion className="flex-1 min-h-0 flex flex-col overflow-y-auto p-3 gap-3">
           <div>
             <label htmlFor={nameId} className="text-xs font-medium text-muted-foreground mb-1.5 block">名称</label>
             <Input
@@ -200,7 +200,7 @@ export function PromptEditorSidebar(): React.ReactElement {
               placeholder="输入系统提示词内容..."
             />
           </div>
-        </div>
+        </ScrollRegion>
       )}
 
       {/* 底部追加设置 */}

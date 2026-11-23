@@ -5,14 +5,14 @@ import { AUTOMATION_IPC_CHANNELS } from '@profer/shared'
 // 执行生产路由函数，宿主连接与Electron由窄端口替身提供。
 const source = readFileSync(new URL('./automation-core-routing.ts', import.meta.url), 'utf8').replace(/^import .*\n/gm, '')
 const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(source).replaceAll('export ', '')
-const load = new Function('deps', `const { randomUUID, AUTOMATION_IPC_CHANNELS, getLocalCoreClient, currentCoreId, getActiveCoreClient, getCoreTargetGeneration, getCurrentCoreTargetId, namespaceCoreSessionId, parseCoreSessionId } = deps; ${js}; return { routeAutomationToCore, projectCoreAutomation }`)
+const load = new Function('deps', `const { isLocalCoreEnabled, randomUUID, AUTOMATION_IPC_CHANNELS, getLocalCoreClient, currentCoreId, getActiveCoreClient, getCoreTargetGeneration, getCurrentCoreTargetId, namespaceCoreSessionId, parseCoreSessionId } = deps; ${js}; return { routeAutomationToCore, projectCoreAutomation }`)
 function harness() {
   let target = 'remote', generation = 1, connected = true
   let answer: unknown = []
   let pending: Promise<unknown> | undefined
   const calls: unknown[] = []
   const client = { automationRequest: async (operation: string, input: unknown) => { calls.push([operation, input]); return pending ?? answer } }
-  const route = load({ getLocalCoreClient: () => null, randomUUID: () => 'fixture-op', AUTOMATION_IPC_CHANNELS, currentCoreId: () => 'A', getActiveCoreClient: () => connected ? client : null,
+  const route = load({ isLocalCoreEnabled: () => false, getLocalCoreClient: () => null, randomUUID: () => 'fixture-op', AUTOMATION_IPC_CHANNELS, currentCoreId: () => 'A', getActiveCoreClient: () => connected ? client : null,
     getCoreTargetGeneration: () => generation, getCurrentCoreTargetId: () => target,
     namespaceCoreSessionId: (id: string, core: string) => `core:${core}:${id}`,
     parseCoreSessionId: (id: string) => { const match = /^core:([^:]+):(.+)$/.exec(id); return match ? { coreId: match[1], sessionId: match[2] } : null },

@@ -1,3 +1,4 @@
+import { Input } from '@profer/ui/primitives/input'
 import * as React from 'react'
 import { toast } from 'sonner'
 import { Button } from '@profer/ui/primitives/button'
@@ -13,8 +14,8 @@ export function PluginCredentialField({ pluginId, id, title, origin }: { pluginI
   }
   return <label className="mt-3 block text-xs text-muted-foreground">{title} · {origin}
     <span className="mt-1 flex flex-wrap items-center gap-2">
-      <input type="password" value={secret} autoComplete="new-password" placeholder="输入或替换服务凭据" aria-label={title}
-        onChange={(event) => setSecret(event.target.value)} className="min-w-40 flex-1 rounded-lg bg-muted px-3 py-2" />
+      <Input type="password" value={secret} autoComplete="new-password" placeholder="输入或替换服务凭据" aria-label={title}
+        onChange={(event) => setSecret(event.target.value)} className="min-w-40 flex-1" />
       <Button size="sm" variant="outline" disabled={busy || !secret} onClick={() => void save(false)}>保存</Button>
       <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save(true)}>清除</Button>
     </span>

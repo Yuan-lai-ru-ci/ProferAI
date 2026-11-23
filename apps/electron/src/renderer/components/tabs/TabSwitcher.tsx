@@ -4,6 +4,7 @@
  * 列表按 MRU（最近访问）顺序排列，键盘和鼠标共享同一套选择模型。
  */
 
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import { useAtomValue, useSetAtom, useStore } from 'jotai'
@@ -386,7 +387,7 @@ export function TabSwitcher(): ReactElement | null {
           </div>
         </div>
 
-        <div ref={listRef} className="py-1.5 max-h-[420px] overflow-y-auto scrollbar-thin">
+        <ScrollRegion ref={listRef} className="py-1.5 max-h-[420px] overflow-y-auto scrollbar-thin">
           {switcherModel.sections.map((section, sectionIndex) => (
             <div key={section.id}>
               {sectionIndex > 0 && (
@@ -417,7 +418,7 @@ export function TabSwitcher(): ReactElement | null {
               })}
             </div>
           ))}
-        </div>
+        </ScrollRegion>
 
         <div className="flex items-center justify-between gap-2 px-5 py-2 border-t border-border/40 bg-muted/30 text-[11px] text-muted-foreground">
           <span className="truncate">松开 Ctrl 确认，也可以直接点击选择</span>

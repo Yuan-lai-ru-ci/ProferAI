@@ -1,3 +1,4 @@
+import { EmptyState as SharedEmptyState } from "@profer/ui/primitives/empty-state";
 import { coreTargetsAtom } from "../../atoms/core-target-atoms";
 /**
  * AgentSkillsView — 「Agent 技能」全屏视图
@@ -44,6 +45,7 @@ import { ImportPresetDialog } from "./ImportPresetDialog";
 import { GlobalCapabilitiesView } from "./GlobalCapabilitiesView";
 import { MasterSkillDetailSheet } from "./MasterSkillDetailSheet";
 import { CreateWorkspaceSkillDialog } from "./CreateWorkspaceSkillDialog";
+import { SkillCardReminder } from "./SkillCardReminder";
 import { WorkspaceScopeSelectDialog } from "./WorkspaceScopeSelectDialog";
 import { AgentSkillsToolbar } from "./AgentSkillsToolbar";
 import {
@@ -167,8 +169,9 @@ function AgentSkillsBody(): React.ReactElement {
   );
 
   const skillKey = skillListKey;
-  const selectedSkill =
-    data.skills.find((s) => skillKey(s) === selectedSkillKey) ?? null;
+  const selectedSkill = data.skillsWorkspaceSlug === data.workspaceSlug
+    ? data.skills.find((s) => skillKey(s) === selectedSkillKey) ?? null
+    : null;
   // workspaceSkillId 标识工作区副本（含已关闭的）；actualSource 只表示当前实际加载层，
   // 不能用来判断一个条目是不是全局定义。
   const selectedIsGlobal = Boolean(
@@ -361,19 +364,32 @@ function AgentSkillsBody(): React.ReactElement {
               加载中...
             </div>
           ) : tab === "skills" ? (
-            <SkillsTab
-              workspaceSkills={workspaceSkills}
-              globalSkills={globalSkills}
-              builtinSkills={builtinSkills}
-              total={data.skills.length}
-              updateCount={updateCount}
-              updatingSkill={data.updatingSkill}
-              isBuiltin={() => false}
-              onOpen={(skill) => setSelectedSkillKey(skillKey(skill))}
-              onToggle={data.toggleSkill}
-              onUpdate={data.updateSkill}
-              onPromote={(skill) => setPromoteSkill(skill)}
-            />
+            <>
+              {data.skillsWorkspaceSlug === data.workspaceSlug && (
+                <SkillCardReminder
+                  key={data.workspaceSlug}
+                  candidates={data.skills.filter((skill) => skill.needsCardReminder && isWorkspaceLocalSkill(skill)).map((skill) => ({
+                    key: skillListKey(skill),
+                    name: skill.name,
+                    target: { scope: "workspace", workspaceSlug: data.workspaceSlug, skillSlug: skill.slug, workspaceSkillId: skill.workspaceSkillId },
+                  }))}
+                  onResolved={() => bumpCapabilities((v) => v + 1)}
+                />
+              )}
+              <SkillsTab
+                workspaceSkills={workspaceSkills}
+                globalSkills={globalSkills}
+                builtinSkills={builtinSkills}
+                total={data.skills.length}
+                updateCount={updateCount}
+                updatingSkill={data.updatingSkill}
+                isBuiltin={() => false}
+                onOpen={(skill) => setSelectedSkillKey(skillKey(skill))}
+                onToggle={data.toggleSkill}
+                onUpdate={data.updateSkill}
+                onPromote={(skill) => setPromoteSkill(skill)}
+              />
+            </>
           ) : (
             <>
             {summaries?.failed && <p role="alert">未能读取此工作区的全局 MCP。</p>}
@@ -845,19 +861,6 @@ function EmptyState({
   action?: React.ReactNode;
 }): React.ReactElement {
   return (
-    <div className="mx-auto flex max-w-md flex-col items-center gap-4 pt-24 text-center">
-      <div className="flex size-16 items-center justify-center rounded-2xl bg-foreground/[0.04]">
-        {icon}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <div className="text-[15px] font-medium text-foreground/85">
-          {title}
-        </div>
-        <div className="text-[13px] leading-relaxed text-foreground/50">
-          {hint}
-        </div>
-      </div>
-      {action}
-    </div>
+    <SharedEmptyState icon={icon} title={title} description={hint} action={action} />
   );
 }

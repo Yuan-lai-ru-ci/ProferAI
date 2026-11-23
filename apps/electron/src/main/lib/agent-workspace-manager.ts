@@ -6,7 +6,7 @@
  * - 工作区目录：~/.profer/agent-workspaces/{slug}/（Agent 的 cwd）
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync, realpathSync, rmdirSync, unlinkSync, lstatSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync, cpSync, rmSync, mkdirSync, statSync, renameSync, openSync, readSync, closeSync, realpathSync, rmdirSync, unlinkSync, lstatSync } from 'node:fs'
 import { rm as rmAsync } from 'node:fs/promises'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
@@ -25,7 +25,7 @@ import {
 } from './config-paths'
 import { findAllGitRoots, normalizeGitRoot } from './git-diff-service'
 import { assertSafeSkillSegment, canonicalSkillSegmentKey } from './skill-path-security'
-import { readSkillManifest, writeSkillManifest } from './skill-manifest'
+import { readSkillManifest, writeSkillManifest, ensureSkillCard, hasSkillCard, readSkillCardDismissals, skillCardDismissalKey, SKILL_MANIFEST_FILENAME } from './skill-manifest'
 import { diagnoseSkill } from './skill-doctor'
 import { probeSkillFrontmatterError } from './skill-routing'
 import { deleteAgentSessionsByWorkspace } from './agent-session-manager'
@@ -1570,10 +1570,16 @@ export function createWorkspaceSkill(workspaceSlug: string, skillSlug: string, n
     || findSkillPathInRoot(getInactiveSkillsDir(workspaceSlug), normalizedSlug)) {
     throw new Error(`Skill 已存在: ${normalizedSlug}`)
   }
-  mkdirSync(target, { recursive: true })
   const frontmatter = `---\nname: ${name.trim()}\ndescription: ${description.trim()}\nversion: 1.0.0\n---\n\n${content}`
-  writeFileSync(join(target, 'SKILL.md'), frontmatter, 'utf-8')
-  writeSkillSource(target, { scope: 'workspace', workspaceSkillId: randomUUID() })
+  mkdirSync(target)
+  try {
+    ensureSkillCard(target)
+    writeSkillSource(target, { scope: 'workspace', workspaceSkillId: randomUUID() })
+    writeFileSync(join(target, 'SKILL.md'), frontmatter, 'utf-8')
+  } catch (error) {
+    rmSync(target, { recursive: true, force: true })
+    throw error
+  }
   console.log(`[Agent 工作区] 已创建 Skill: ${workspaceSlug}/${normalizedSlug}`)
 }
 
@@ -1585,7 +1591,8 @@ export function promoteWorkspaceSkillToGlobal(workspaceSlug: string, skillSlug: 
   const skill = getAllWorkspaceSkills(workspaceSlug).find((item) => canonicalSkillSegmentKey(item.slug) === skillSlugKey && item.actualSource === 'workspace')
   if (!skill) throw new Error(`工作区 Skill 不存在: ${skillSlug}`)
   const content = readWorkspaceSkillContent(workspaceSlug, skill.slug)
-  const created = createUserGlobalSkill(skill.slug, skill.name, skill.description ?? '', content)
+  const fromWorkspaceDir = workspaceSkillDirOrThrow(workspaceSlug, skill.slug)
+  const created = createUserGlobalSkill(skill.slug, skill.name, skill.description ?? '', content, { fromWorkspaceDir })
   for (const target of targetWorkspaceSlugs) {
     assertSafeSkillSegment(target, 'target workspaceSlug')
     setGlobalSkillEnabled(target, created.skillId, true)
@@ -1613,7 +1620,7 @@ export function deleteWorkspaceSkill(workspaceSlug: string, skillSlug: string): 
 }
 
 /** 扫描指定目录下的 Skills，供 getWorkspaceSkills 和 getAllWorkspaceSkills 复用 */
-export function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
+export function scanSkillsInDir(dir: string, enabled: boolean, reminder?: { workspaceSlug: string; dismissed: ReadonlySet<string> }): SkillMeta[] {
   const skills: SkillMeta[] = []
 
   try {
@@ -1642,6 +1649,9 @@ export function scanSkillsInDir(dir: string, enabled: boolean): SkillMeta[] {
           writeSkillSource(skillDir, source)
         }
         meta.workspaceSkillId = source.workspaceSkillId
+        if (reminder && entry.isDirectory() && source.workspaceSkillId && !hasSkillCard(skillDir)) {
+          meta.needsCardReminder = !reminder.dismissed.has(skillCardDismissalKey('workspace', source.workspaceSkillId, reminder.workspaceSlug))
+        }
         if (source) {
           if (isWorkspaceSkillSource(source)) {
             if (source.sourceSkillId) meta.sourceSkillId = source.sourceSkillId
@@ -1687,8 +1697,9 @@ export function getDefaultSkillSlugs(): string[] {
 /** 获取工作区所有 Skills（含活跃和不活跃），用于设置页 UI */
 export function getAllWorkspaceSkills(workspaceSlug: string, includeGlobalSkills = false): SkillMeta[] {
   assertSafeSkillSegment(workspaceSlug, 'workspaceSlug')
-  const activeSkills = scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true)
-  const inactiveSkills = scanSkillsInDir(getInactiveSkillsDir(workspaceSlug), false)
+  const reminder = includeGlobalSkills ? { workspaceSlug, dismissed: readSkillCardDismissals(getConfigDir()) } : undefined
+  const activeSkills = scanSkillsInDir(getWorkspaceSkillsDir(workspaceSlug), true, reminder)
+  const inactiveSkills = scanSkillsInDir(getInactiveSkillsDir(workspaceSlug), false, reminder)
   const globalSkills = listGlobalSkills(workspaceSlug).map((skill): SkillMeta => ({
     slug: skill.slug,
     name: skill.name,
@@ -1918,6 +1929,10 @@ export function updateSkillFromSource(
   const tmpPath = join(parentDir, `.${actualSkillSlug}.updating`)
   try {
     copySkillDirectorySafely(sourcePath, tmpPath, { exclude: LEDGER_FILENAMES })
+    const currentCard = join(targetPath, SKILL_MANIFEST_FILENAME)
+    if (!hasSkillCard(tmpPath) && lstatSync(currentCard, { throwIfNoEntry: false })?.isFile()) {
+      copyFileSync(currentCard, join(tmpPath, SKILL_MANIFEST_FILENAME))
+    }
   } catch (err) {
     // 复制失败时清理临时目录，保留原目录不变
     if (existsSync(tmpPath)) rmSync(tmpPath, { recursive: true, force: true })
@@ -1929,6 +1944,7 @@ export function updateSkillFromSource(
   // 更新来源元数据（保留原始 importedAt）
   const sourceWorkspace = listAgentWorkspaces().find((w) => w.slug === existingSource.sourceWorkspaceSlug)
   const updatedSource: SkillImportSource = {
+    workspaceSkillId: existingSource.workspaceSkillId,
     sourceWorkspaceSlug: existingSource.sourceWorkspaceSlug,
     sourceWorkspaceName: sourceWorkspace?.name ?? existingSource.sourceWorkspaceName,
     importedAt: existingSource.importedAt,
@@ -2024,6 +2040,16 @@ function workspaceSkillDirOrThrow(workspaceSlug: string, skillSlug: string): str
   const dir = resolveSkillDir(workspaceSlug, skillSlug)
   if (!dir) throw new Error(`Skill 不存在: ${workspaceSlug}/${skillSlug}`)
   return dir
+}
+
+export function resolveWorkspaceSkillCardTarget(workspaceSlug: string, skillSlug: string, expectedId?: string): { dir: string; id: string } {
+  const dir = workspaceSkillDirOrThrow(workspaceSlug, skillSlug)
+  if (!existsSync(join(dir, 'SKILL.md'))) throw new Error('Skill 正文不存在')
+  const source = readSkillSource(dir)
+  if (expectedId !== undefined && source?.workspaceSkillId !== expectedId) throw new Error('Skill 已变更，请刷新后再试')
+  const id = source?.workspaceSkillId ?? randomUUID()
+  if (!source?.workspaceSkillId) writeSkillSource(dir, { ...(source ?? { scope: 'workspace' as const }), workspaceSkillId: id })
+  return { dir, id }
 }
 
 async function cardState(dir: string, skillSlug: string, removed: boolean): Promise<WorkspaceSkillCardState> {

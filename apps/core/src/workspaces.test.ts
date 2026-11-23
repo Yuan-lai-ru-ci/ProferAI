@@ -165,3 +165,51 @@ describe('Core workspace store', () => {
   })
 
 })
+
+test('桌面托管 fresh boot 初始化 v4 默认工作区，重复初始化不重复写入', () => {
+  root = mkdtempSync(join(tmpdir(), 'core-default-'))
+  const index = join(root, 'agent-workspaces.json')
+  const store = createCoreWorkspaceStore(root, join(root, 'workspaces'), index, undefined, undefined, undefined, true)
+  const workspace = store.ensureDesktopDefault()
+  expect(workspace).toMatchObject({ slug: 'default', name: '默认工作区', storageMode: 'managed' })
+  expect(existsSync(join(root, 'workspaces/default'))).toBe(true)
+  const before = readFileSync(index, 'utf8')
+  expect(JSON.parse(before).version).toBe(4)
+  expect(createCoreWorkspaceStore(root, join(root, 'workspaces'), index, undefined, undefined, undefined, true).ensureDesktopDefault()?.id).toBe(workspace?.id)
+  expect(readFileSync(index, 'utf8')).toBe(before)
+  expect(existsSync(join(root, 'workspaces.json'))).toBe(false)
+})
+
+test('默认初始化保留已有项目与索引元数据，不改变 headless 和只读桌面行为', () => {
+  const headless = setup()
+  expect(headless.ensureDesktopDefault()).toBeUndefined()
+  expect(headless.list()).toEqual([])
+  const index = join(root, 'agent-workspaces.json')
+  const original = { version: 4, selected: 'project', workspaces: [{ id: 'project', name: 'Project', slug: 'project', rootPath: root, storageMode: 'project', createdAt: 1, updatedAt: 1 }] }
+  writeFileSync(index, JSON.stringify(original))
+  const readonly = createCoreWorkspaceStore(root, join(root, 'workspaces'), index)
+  expect(readonly.ensureDesktopDefault()).toBeUndefined()
+  expect(JSON.parse(readFileSync(index, 'utf8'))).toEqual(original)
+  const writable = createCoreWorkspaceStore(root, join(root, 'workspaces'), index, undefined, undefined, undefined, true)
+  writable.ensureDesktopDefault()
+  const saved = JSON.parse(readFileSync(index, 'utf8'))
+  expect(saved.selected).toBe('project')
+  expect(saved.workspaces.find((item: { id: string }) => item.id === 'project')).toEqual(original.workspaces[0])
+  expect(saved.workspaces.filter((item: { slug: string }) => item.slug === 'default')).toHaveLength(1)
+})
+
+test('桌面托管 runtime 首次启动即提供默认工作区，重启身份不变', async () => {
+  const { createCoreAgentRuntime } = await import('./runtime')
+  root = mkdtempSync(join(tmpdir(), 'core-runtime-default-'))
+  const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), desktopWorkspaceIndexPath: join(root, 'agent-workspaces.json'), desktopWorkspaceIndexWritable: true }
+  let runtime = createCoreAgentRuntime(config)
+  let id: string
+  try {
+    expect(runtime.workspaces.list()).toHaveLength(1)
+    expect(runtime.workspaces.list()[0]).toMatchObject({ slug: 'default', name: '默认工作区' })
+    id = runtime.workspaces.list()[0]!.id
+  } finally { await runtime.shutdown() }
+  runtime = createCoreAgentRuntime(config)
+  try { expect(runtime.workspaces.list().map(item => item.id)).toEqual([id]) }
+  finally { await runtime.shutdown() }
+})

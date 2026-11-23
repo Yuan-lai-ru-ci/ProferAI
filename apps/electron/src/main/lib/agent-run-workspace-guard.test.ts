@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * P1-残留-1：会话所属工作区不存在时，任何运行入口都不得把 `$HOME` 当 cwd 执行。
  *

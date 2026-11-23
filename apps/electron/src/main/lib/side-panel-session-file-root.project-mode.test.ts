@@ -19,11 +19,11 @@ const source = readFileSync(
 describe('SidePanel 会话文件根', () => {
   test('会话文件根优先取 storageDir，sessionPath 只作兜底', () => {
     expect(source).toContain('getAgentSessionStoragePath')
-    expect(source).toContain('const sessionFileRoot = sessionStoragePath ?? sessionPath')
+    expect(source).toContain('const sessionFileRoot = isRemoteCore ? (coreFileRoots?.sessionStorage ?? null) : (sessionStoragePath ?? effectiveSessionPath)')
   })
 
   test('会话 Tab 的文件浏览器与搜索都用 sessionFileRoot', () => {
-    expect(source).toContain('<FileBrowser rootPath={sessionFileRoot}')
+    expect(source).toMatch(/<FileBrowser\s+rootPath=\{sessionFileRoot\}/)
     expect(source).toContain('sessionPath={sessionFileRoot}')
   })
 

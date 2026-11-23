@@ -70,12 +70,14 @@ function containsKeyword(text: string, keyword: string): boolean {
   return new RegExp(`(?:^|[^a-z0-9_-])${escaped}(?:$|[^a-z0-9_-])`, 'i').test(source)
 }
 
+const NEW_SKILL = /(?:(?:创建|新建|添加|编写|写|做成|封装成)\s*(?:(?:一个|个)\s*)?(?:新\s*)?(?:skill\b|技能)(?!\s*(?:的时候|时|卡片|编辑器|列表|入口))|\b(?:create|write|make|build)\s+(?:a\s+)?(?:new\s+)?skill\b(?!\s+(?:card|router|editor|catalog)))/i
 const NEG = '(?:不要|不需要|无需|不用)'
 
 /** 内置 Skill 的否定信号：用户明确拒绝时，关键词与字符 n-gram 兜底都不得推荐。 */
 const DECLINED: Readonly<Record<string, RegExp>> = {
   'code-honor': NOT_CODE,
   brainstorming: NOT_CODE,
+  'skill-creator': /(?:不要|不需要|无需|不用).{0,6}(?:创建|新建|添加|写).{0,10}(?:skill\b|技能)|\b(?:do not|don't) (?:create|write|make|build)\s+(?:a\s+)?(?:new\s+)?skill\b/i,
   'agent-collaboration': new RegExp(`${NEG}.{0,5}(?:并行|协作|委派|Agent)`, 'i'),
   automation: new RegExp(`${NEG}.{0,5}(?:定时|自动|周期)|一次性|\\b(?:one.off|do not schedule)\\b`, 'i'),
   'in-app-browser': /(?:不要|不需要|不使用|不用).{0,5}(?:浏览器|网页)|只用.*(?:API|MCP|CLI)/i,
@@ -98,6 +100,7 @@ export function skillTaskMatch(slug: string, message: string, rules: SkillRoutin
   if (skillTaskDeclined(slug, message, rules)) return undefined
   const text = cleanSkillTaskText(message)
   if (rules.keywords?.some(word => containsKeyword(text, word))) return 'configured-keyword'
+  if (slug === 'skill-creator' && NEW_SKILL.test(text)) return 'skill-creation'
   if (!ACTION.test(text)) return undefined
   switch (slug) {
     case 'code-honor': return CODE.test(text) ? 'code-task' : undefined

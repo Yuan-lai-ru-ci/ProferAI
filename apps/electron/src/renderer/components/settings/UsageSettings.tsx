@@ -1,14 +1,9 @@
 /**
  * UsageSettings - 使用偏好页
  *
- * 承接使用中的高频开关，按场景分三个 section：
- * - 通知与声音：桌面通知、提示音与各场景音效
- * - 对话浏览：自动归档、消息悬浮置顶条、手动确认已读
- * - Agent 执行展示：自动预览修改中文件、输出完保持展开
- * - 输入体验：长文本粘贴转附件、Markdown 渲染、矮窗口紧凑输入框
- * - 语音输入：豆包流式语音输入（从原 Chat 工具页迁入）
- *
- * 从原「通用偏好」（GeneralSettings）拆分而来；系统级与环境配置保留在 GeneralSettings。
+ * 常用的通知、侧栏、对话阅读、文件与输入设置直接展示。
+ * 音效、归档、紧凑输入框与 Goal 的低频参数默认折叠，搜索时展开。
+ * 语音输入仍复用独立配置组件；系统环境配置保留在 GeneralSettings。
  */
 
 import * as React from 'react'
@@ -125,7 +120,7 @@ import { VoiceInputSettings } from './VoiceInputSettings'
 import { Button } from '@profer/ui/primitives/button'
 import type { NotificationSoundId, NotificationSoundType, NotificationSoundSettings, PreviewOpenMode } from '@/types/settings'
 
-export function UsageSettings(): React.ReactElement {
+export function UsageSettings({ revealAdvanced = false }: { revealAdvanced?: boolean } = {}): React.ReactElement {
   const [notificationsEnabled, setNotificationsEnabled] = useAtom(notificationsEnabledAtom)
   const [notificationSoundEnabled, setNotificationSoundEnabled] = useAtom(notificationSoundEnabledAtom)
   const [notificationSounds, setNotificationSounds] = useAtom(notificationSoundsAtom)
@@ -470,7 +465,6 @@ export function UsageSettings(): React.ReactElement {
       )}
       <SettingsSection
         title="通知与声音"
-        description="设置任务完成和需要你处理时的提醒方式"
       >
         <SettingsCard>
           <SettingsToggle
@@ -482,8 +476,6 @@ export function UsageSettings(): React.ReactElement {
               updateNotificationsEnabled(checked)
             }}
           />
-          <GoalIdleCheckinSetting />
-          <GoalProposalPolicySetting />
           <SettingsToggle
             label="通知提示音"
             description="阻塞操作（权限确认、问题回答、计划审批）触发时播放提示音"
@@ -494,102 +486,13 @@ export function UsageSettings(): React.ReactElement {
               updateNotificationSoundEnabled(checked)
             }}
           />
-          <SoundPicker
-            label="任务完成音效"
-            type="taskComplete"
-            sounds={notificationSounds}
-            allSounds={allSounds}
-            customSounds={customSounds}
-            disabled={!notificationsEnabled || !notificationSoundEnabled}
-            onSoundChange={async (type, soundId) => {
-              const newSounds = await updateNotificationSound(type, soundId, notificationSounds)
-              setNotificationSounds(newSounds)
-            }}
-            onAddSound={() => {
-              setAddSoundFilePath(null)
-              setAddSoundLabel('')
-              setAddSoundOpen(true)
-            }}
-            onRemoveSound={(id) => setRemoveSoundTarget(customSounds.find((sound) => sound.id === id) ?? null)}
-          />
-          <SoundPicker
-            label="权限审批音效"
-            type="permissionRequest"
-            sounds={notificationSounds}
-            allSounds={allSounds}
-            customSounds={customSounds}
-            disabled={!notificationsEnabled || !notificationSoundEnabled}
-            onSoundChange={async (type, soundId) => {
-              const newSounds = await updateNotificationSound(type, soundId, notificationSounds)
-              setNotificationSounds(newSounds)
-            }}
-            onAddSound={() => {
-              setAddSoundFilePath(null)
-              setAddSoundLabel('')
-              setAddSoundOpen(true)
-            }}
-            onRemoveSound={(id) => setRemoveSoundTarget(customSounds.find((sound) => sound.id === id) ?? null)}
-          />
-          <SoundPicker
-            label="计划审批音效"
-            type="exitPlanMode"
-            sounds={notificationSounds}
-            allSounds={allSounds}
-            customSounds={customSounds}
-            disabled={!notificationsEnabled || !notificationSoundEnabled}
-            onSoundChange={async (type, soundId) => {
-              const newSounds = await updateNotificationSound(type, soundId, notificationSounds)
-              setNotificationSounds(newSounds)
-            }}
-            onAddSound={() => {
-              setAddSoundFilePath(null)
-              setAddSoundLabel('')
-              setAddSoundOpen(true)
-            }}
-            onRemoveSound={(id) => setRemoveSoundTarget(customSounds.find((sound) => sound.id === id) ?? null)}
-          />
         </SettingsCard>
       </SettingsSection>
 
       <SettingsSection
-        title="对话浏览"
-        description="控制会话列表与对话阅读体验"
+        title="侧栏"
       >
         <SettingsCard>
-          <SettingsRow
-            label="自动归档"
-            description="超过指定天数未更新的会话将从列表里收纳起来（置顶、进行中、有未完成任务的除外）。归档只改变显示与排序，不释放磁盘空间；需要回收请到「数据管理 → 存储用量」。"
-          >
-            <Select disabled={settingsLoading || Boolean(settingsError) || archiveSaving} value={String(archiveAfterDays)} onValueChange={handleArchiveDaysChange}>
-              <SelectTrigger aria-label="自动归档" className="w-[120px] h-8 text-[13px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="0">禁用</SelectItem>
-                <SelectItem value="7">7 天</SelectItem>
-                <SelectItem value="14">14 天</SelectItem>
-                <SelectItem value="30">30 天</SelectItem>
-                <SelectItem value="60">60 天</SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingsRow>
-          <SettingsRow
-            label="每个工作区保留"
-            description="按最后活跃时间保留最近若干个会话，这些会话即使超时也不会自动归档；定时任务、委派子会话不占名额"
-          >
-            <Select disabled={settingsLoading || Boolean(settingsError) || archiveSaving} value={String(archiveKeepRecent)} onValueChange={handleArchiveKeepRecentChange}>
-              <SelectTrigger aria-label="每个工作区保留会话数" className="w-[120px] h-8 text-[13px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="0">不保留</SelectItem>
-                <SelectItem value="1">1 个</SelectItem>
-                <SelectItem value="3">3 个</SelectItem>
-                <SelectItem value="5">5 个</SelectItem>
-                <SelectItem value="10">10 个</SelectItem>
-              </SelectContent>
-            </Select>
-          </SettingsRow>
           <SettingsToggle
             label="显示「当前会话」区域"
             description="在左侧栏顶部列出已打开的会话入口；关闭后会话仍保留在对话 / 项目列表中"
@@ -615,6 +518,11 @@ export function UsageSettings(): React.ReactElement {
               void updateShowCreditsInSidebar(checked)
             }}
           />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="对话阅读">
+        <SettingsCard>
           <SettingsToggle
             label="消息悬浮置顶条"
             description="滚动浏览对话时，在顶部显示最近的用户消息摘要"
@@ -670,8 +578,7 @@ export function UsageSettings(): React.ReactElement {
       </SettingsSection>
 
       <SettingsSection
-        title="Agent 执行展示"
-        description="控制 Agent 修改文件和输出过程的展示行为"
+        title="文件与执行过程"
       >
         <SettingsCard divided>
           <SettingsToggle
@@ -699,7 +606,6 @@ export function UsageSettings(): React.ReactElement {
 
       <SettingsSection
         title="输入体验"
-        description="控制输入框的粘贴、渲染和高度行为"
       >
         <SettingsCard>
           <SettingsToggle
@@ -720,6 +626,11 @@ export function UsageSettings(): React.ReactElement {
               updateRichTextRenderingEnabled(checked)
             }}
           />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="紧凑输入框" description="矮窗口下的输入框高度" collapsible defaultOpen={false} reveal={revealAdvanced}>
+        <SettingsCard>
           <SettingsInput
             label="矮窗口压缩输入框"
             description={`窗口内高（px，${COMPACT_VIEWPORT_HEIGHT_RANGE.min}–${COMPACT_VIEWPORT_HEIGHT_RANGE.max}）低于该值时输入框整体变矮，给消息区让出空间；0 = 关闭。默认 ${DEFAULT_COMPACT_VIEWPORT_HEIGHT}。当前窗口内高 ${viewportHeight}px${compactTriggered ? '，已进入紧凑档' : '，未触发'}（退出需回到阈值 + 60px 以上）`}
@@ -753,6 +664,82 @@ export function UsageSettings(): React.ReactElement {
             onBlur={handleCompactMaxHeightBlur}
             placeholder={String(DEFAULT_COMPACT_MAX_HEIGHT)}
           />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="会话整理" description="自动归档与保留数量" collapsible defaultOpen={false} reveal={revealAdvanced}>
+        <SettingsCard>
+          <SettingsRow
+            label="自动归档"
+            description="超过指定天数未更新的会话将从列表里收纳起来（置顶、进行中、有未完成任务的除外）。归档只改变显示与排序，不释放磁盘空间；需要回收请到「数据管理 → 存储用量」。"
+          >
+            <Select disabled={settingsLoading || Boolean(settingsError) || archiveSaving} value={String(archiveAfterDays)} onValueChange={handleArchiveDaysChange}>
+              <SelectTrigger aria-label="自动归档" className="w-[120px] h-8 text-[13px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">禁用</SelectItem>
+                <SelectItem value="7">7 天</SelectItem>
+                <SelectItem value="14">14 天</SelectItem>
+                <SelectItem value="30">30 天</SelectItem>
+                <SelectItem value="60">60 天</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+          <SettingsRow
+            label="每个工作区保留"
+            description="按最后活跃时间保留最近若干个会话，这些会话即使超时也不会自动归档；定时任务、委派子会话不占名额"
+          >
+            <Select disabled={settingsLoading || Boolean(settingsError) || archiveSaving} value={String(archiveKeepRecent)} onValueChange={handleArchiveKeepRecentChange}>
+              <SelectTrigger aria-label="每个工作区保留会话数" className="w-[120px] h-8 text-[13px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">不保留</SelectItem>
+                <SelectItem value="1">1 个</SelectItem>
+                <SelectItem value="3">3 个</SelectItem>
+                <SelectItem value="5">5 个</SelectItem>
+                <SelectItem value="10">10 个</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="通知音效" description="为任务完成和审批分别选择提示音" collapsible defaultOpen={false} reveal={revealAdvanced}>
+        <SettingsCard>
+          {([
+            { type: 'taskComplete', label: '任务完成音效' },
+            { type: 'permissionRequest', label: '权限审批音效' },
+            { type: 'exitPlanMode', label: '计划审批音效' },
+          ] as const).map(({ type, label }) => (
+            <SoundPicker
+              key={type}
+              label={label}
+              type={type}
+              sounds={notificationSounds}
+              allSounds={allSounds}
+              customSounds={customSounds}
+              disabled={!notificationsEnabled || !notificationSoundEnabled}
+              onSoundChange={async (soundType, soundId) => {
+                const newSounds = await updateNotificationSound(soundType, soundId, notificationSounds)
+                setNotificationSounds(newSounds)
+              }}
+              onAddSound={() => {
+                setAddSoundFilePath(null)
+                setAddSoundLabel('')
+                setAddSoundOpen(true)
+              }}
+              onRemoveSound={(id) => setRemoveSoundTarget(customSounds.find((sound) => sound.id === id) ?? null)}
+            />
+          ))}
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="持续任务（Goal）" description="空闲自检与建立任务的提议方式" collapsible defaultOpen={false} reveal={revealAdvanced}>
+        <SettingsCard>
+          <GoalIdleCheckinSetting />
+          <GoalProposalPolicySetting />
         </SettingsCard>
       </SettingsSection>
 

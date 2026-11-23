@@ -15,7 +15,7 @@ export interface CoreSessionTitlePorts {
   onTitleUpdated(sessionId: string, title: string): void
   /** OAuth 必须使用所属 Core 的凭据与 provider 传输，禁止回落桌面账号。 */
   generateOAuthTitle?(channel: CoreChannelConfig, modelId: string, prompt: string): Promise<string | null>
-  onCodexCredentialsRefreshed?(channelId: string, credentials: CodexOAuthCredentials): void | Promise<void>
+  onCodexCredentialsRefreshed?(channel: CoreChannelConfig, credentials: CodexOAuthCredentials): void | Promise<void>
   fetch?: typeof fetch
 }
 
@@ -38,7 +38,7 @@ export class CoreSessionTitleService {
           || typeof raw.expires !== 'number') throw new Error('所属 Core 的 OAuth 标题凭据或刷新持久化端口未装配')
         return sanitizeGeneratedTitle(await generateCodexTitle({ modelId, prompt,
           credentials: raw as unknown as CodexOAuthCredentials,
-          onCredentialsRefreshed: credentials => this.ports.onCodexCredentialsRefreshed!(channel.id, credentials) }))
+          onCredentialsRefreshed: credentials => this.ports.onCodexCredentialsRefreshed!(channel, credentials) }))
       }
       const adapter = getAdapter(channel.provider, channel.apiProtocol, channel.baseUrl)
       const request = adapter.buildTitleRequest({ apiKey: channel.apiKey, modelId, prompt,

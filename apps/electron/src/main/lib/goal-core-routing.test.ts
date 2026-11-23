@@ -16,8 +16,9 @@ mock.module('./core-target-service', () => ({
   parseCoreSessionId: (value: string) => { const match = /^core:([^:]+):(.+)$/.exec(value); return match ? { coreId: match[1], sessionId: match[2] } : null },
 }))
 const { routeGoalToCore } = await import('./goal-core-routing')
-test('Goal仅显式本机返回null，断线/归属错误不回退', async () => {
-  expect(await routeGoalToCore('list')).toBeNull()
+test('本机 Core 未就绪和远端断线均不回退旧 Goal 后端', async () => {
+  selected = 'local'
+  await expect(routeGoalToCore('list')).rejects.toThrow('未连接')
   selected = 'remote'; connected = false
   await expect(routeGoalToCore('list')).rejects.toThrow('未连接')
   connected = true

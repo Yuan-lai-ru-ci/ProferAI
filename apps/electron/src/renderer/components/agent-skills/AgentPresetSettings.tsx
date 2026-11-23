@@ -45,7 +45,7 @@ import {
   SettingsCard,
 } from "@/components/settings/primitives";
 import { workspacePresetsAtom } from "@/atoms/agent-preset-atoms";
-import { coreTargetsAtom } from "@/atoms/core-target-atoms";
+import { coreTargetsAtom, usesIndependentLocalCore } from "@/atoms/core-target-atoms";
 import { workspaceCapabilitiesVersionAtom } from "@/atoms/agent-atoms";
 import { cn } from "@/lib/utils";
 import {
@@ -361,7 +361,7 @@ export function AgentPresetSettings({
         const [skills, mcp, channels] = await Promise.all([
           window.electronAPI.getWorkspaceSkills(workspaceSlug),
           window.electronAPI.getWorkspaceCapabilities(workspaceSlug),
-          coreTarget.currentId === "local"
+          coreTarget.currentId === "local" && !usesIndependentLocalCore(coreTarget)
             ? window.electronAPI.listChannels({ localOnly: true })
             : window.electronAPI.listCoreChannels().then((channels) =>
                 channels.map((channel) => ({
@@ -380,7 +380,7 @@ export function AgentPresetSettings({
         console.error("[预设设置] 加载 Skill/MCP 列表失败:", err);
       }
     })();
-  }, [dialogOpen, workspaceSlug, coreTarget.currentId, coreTarget.generation]);
+  }, [dialogOpen, workspaceSlug, coreTarget.currentId, coreTarget.generation, usesIndependentLocalCore(coreTarget)]);
 
   // 白名单勾选集合（文本字段为真源，面板为其视图）
   const selectedSkillSlugs = React.useMemo(

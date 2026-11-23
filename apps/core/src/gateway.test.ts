@@ -197,3 +197,22 @@ describe('Core WebSocket 终态协议', () => {
     }
   })
 })
+
+test('活跃会话的桌面宿主不能被另一连接改派', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'core-host-binding-'))
+  const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces') })
+  const session = runtime.sessions.create({ title: 'host-owner', workspaceId: runtime.workspaces.createManaged('host-owner').id })
+  const detachA = runtime.desktopHosts.attach('client-a', () => {})
+  const detachB = runtime.desktopHosts.attach('client-b', () => {})
+  const original = runtime.coordinator.ownership.getOwner.bind(runtime.coordinator.ownership)
+  try {
+    runtime.bindDesktopHost(session.id, 'client-a')
+    // 只需真实 ownership 的有无；具体 token 不参与绑定判定。
+    const { spyOn } = await import('bun:test')
+    const spy = spyOn(runtime.coordinator.ownership, 'getOwner').mockImplementation(() => ({ token: 'fixture' }) as ReturnType<typeof original>)
+    try {
+      expect(() => runtime.bindDesktopHost(session.id, 'client-b')).toThrow('不能改派')
+      expect(() => runtime.bindDesktopHost(session.id, 'client-a')).not.toThrow()
+    } finally { spy.mockRestore() }
+  } finally { detachA(); detachB(); runtime.dispose(); await rm(root, { recursive: true, force: true }) }
+})

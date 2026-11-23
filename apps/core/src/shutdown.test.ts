@@ -8,6 +8,11 @@ import { createServer, Agent, request } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { WebSocket } from 'ws'
 
+import type { CoreConnectionInvitation } from '@profer/shared'
+import { request as requestTls } from 'node:https'
+import { readLocalCoreOwner } from '@profer/session-store/execution-lock'
+import { MOCK_AGENT_NOTICE } from './mock-agent'
+
 async function freePort(): Promise<number> {
   const server = createServer()
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -24,6 +29,23 @@ async function bounded<T>(promise: Promise<T>, milliseconds = 5000): Promise<T> 
       timer = setTimeout(() => reject(new Error('关机未在限定时间内完成')), milliseconds)
     })])
   } finally { clearTimeout(timer!) }
+}
+
+function spawnMockCore(root: string, port: number | undefined, ...args: string[]) {
+  return Bun.spawn([process.execPath, join(import.meta.dir, 'index.ts'), ...(port === undefined ? [] : ['--listen', `127.0.0.1:${port}`]), '--config-dir', root, '--mock-agent', ...args], {
+    env: { ...process.env, PROFER_CORE_LISTEN: undefined, PROFER_CORE_API_KEY: 'shutdown-fixture', PROFER_CORE_WORKSPACE_ROOT: join(root, 'workspaces'), PROFER_CORE_CHANNELS_JSON: '[]' },
+    stdout: 'pipe', stderr: 'pipe',
+  })
+}
+
+async function waitForMockCore(child: ReturnType<typeof spawnMockCore>, base: string): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(await new Response(child.stderr).text())
+    try { if ((await fetch(`${base}/health`, { signal: AbortSignal.timeout(500) })).ok) return } catch {}
+    await Bun.sleep(30)
+  }
+  throw new Error('mock Core 未就绪')
 }
 
 test('Given Core已监听 When 重复关闭 Then 共享同一关闭等待且可重复调用', async () => {
@@ -45,18 +67,9 @@ test('Given 临时mock Core有WebSocket和HTTP长连接 When SIGTERM Then 正常
   const base = `http://127.0.0.1:${port}`
   const headers = { authorization: 'Bearer shutdown-fixture' }
   const launch = async () => {
-    const child = Bun.spawn([process.execPath, join(import.meta.dir, 'index.ts'), '--listen', `127.0.0.1:${port}`, '--config-dir', root, '--mock-agent'], {
-      env: { ...process.env, PROFER_CORE_API_KEY: 'shutdown-fixture', PROFER_CORE_WORKSPACE_ROOT: join(root, 'workspaces'), PROFER_CORE_CHANNELS_JSON: '[]' },
-      stdout: 'pipe', stderr: 'pipe',
-    })
+    const child = spawnMockCore(root, port)
     children.push(child)
-    await bounded((async () => {
-      for (;;) {
-        if (child.exitCode !== null) throw new Error(await new Response(child.stderr).text())
-        try { if ((await fetch(`${base}/health`)).ok) return } catch {}
-        await Bun.sleep(30)
-      }
-    })(), 10000)
+    await waitForMockCore(child, base)
     return child
   }
   const connect = async () => {
@@ -158,3 +171,116 @@ for (const transport of ['HTTP', 'WebSocket'] as const) {
     }
   })
 }
+
+test.skipIf(!['darwin', 'linux'].includes(process.platform))('owner 断连不影响独立 Core：配对客户端继续运行、同根拒绝第二进程、owner 可重连', async () => {
+  const port = await freePort()
+  const root = await mkdtemp(join(tmpdir(), 'core-owner-disconnect-'))
+  const baseUrl = `http://127.0.0.1:${port}`
+  const token = 'shutdown-fixture'
+  let child = spawnMockCore(root, port, '--desktop-independent')
+  let contender: ReturnType<typeof spawnMockCore> | undefined
+  let owner: WebSocket | undefined
+  let reopened: WebSocket | undefined
+  const ownerRequest = async (path: string, method = 'GET', body?: object) => {
+    const response = await fetch(`${baseUrl}${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: body && JSON.stringify(body), signal: AbortSignal.timeout(5000) })
+    expect(response.status).toBe(200)
+    return response.json()
+  }
+  const ownerSocket = () => new WebSocket(`ws://127.0.0.1:${port}/ws?token=${token}`)
+  const open = (ws: WebSocket) => bounded(new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject) }))
+  try {
+    await waitForMockCore(child, baseUrl)
+    const endpoint = readLocalCoreOwner(root)
+    expect(endpoint).toMatchObject({ pid: child.pid, port, token })
+    owner = ownerSocket()
+    await open(owner)
+    const identity = await ownerRequest('/identity')
+    await ownerRequest('/connection/sharing', 'PUT', { enabled: true })
+    const invitation = await ownerRequest('/connection/invitations', 'POST', { addresses: ['127.0.0.1'] }) as CoreConnectionInvitation
+    let credential: string | undefined
+    const pairedRequest = <T>(path: string, method = 'GET', body?: object) => bounded(new Promise<T>((resolve, reject) => {
+      const req = requestTls(`${invitation.endpoints[0]}${path}`, {
+        // 与 connection-host 测试一致：仅对测试进程的回环自签 listener。
+        method, agent: false, rejectUnauthorized: false, headers: { 'content-type': 'application/json', ...(credential ? { authorization: `Bearer ${credential}` } : {}) },
+      }, response => {
+        let data = ''
+        response.setEncoding('utf8').on('data', chunk => { data += chunk })
+        response.once('error', reject)
+        response.once('end', () => {
+          if (!response.statusCode || response.statusCode >= 300) return reject(new Error(`${path}: ${response.statusCode} ${data}`))
+          try { resolve(JSON.parse(data) as T) } catch (error) { reject(error) }
+        })
+      })
+      req.once('error', reject)
+      req.setTimeout(4000, () => req.destroy(new Error(`${path}: TLS 请求超时`)))
+      req.end(body && JSON.stringify(body))
+    }))
+    const binding = await pairedRequest<{ credential: string; bindingId: string }>('/connection/pair', 'POST', { invitationToken: invitation.invitationToken, clientName: 'fixture' })
+    credential = binding.credential
+    await bounded(new Promise<void>(resolve => { owner!.once('close', resolve); owner!.close() }))
+
+    contender = spawnMockCore(root, await freePort())
+    expect(await bounded(contender.exited)).toBe(1)
+    expect(await new Response(contender.stderr).text()).toContain('同一配置根已有 Core 执行进程')
+
+    const workspace = await pairedRequest<{ id: string }>('/workspaces', 'POST', { name: 'owner-disconnected' })
+    const session = await pairedRequest<{ id: string }>('/workspace-sessions', 'POST', { workspaceId: workspace.id, runtime: 'pi', title: '断连后新任务' })
+    const path = `/sessions/${session.id}/messages`
+    const prompt = 'owner 已关闭，配对客户端发起任务'
+    expect(await pairedRequest(path, 'POST', { prompt })).toMatchObject({ accepted: true })
+    const deadline = Date.now() + 6000
+    let messages = ''
+    do {
+      messages = JSON.stringify(await pairedRequest(path))
+      if (messages.includes(MOCK_AGENT_NOTICE)) break
+      await Bun.sleep(30)
+    } while (Date.now() < deadline)
+    expect(messages).toContain(prompt)
+    expect(messages).toContain(MOCK_AGENT_NOTICE)
+    expect(child.exitCode).toBeNull()
+    reopened = ownerSocket()
+    await open(reopened)
+    expect(await ownerRequest('/identity')).toEqual(identity)
+    expect((await ownerRequest('/connection/state')).bindings).toContainEqual(expect.objectContaining({ id: binding.bindingId }))
+    expect(JSON.stringify(await ownerRequest(path))).toContain(MOCK_AGENT_NOTICE)
+    for (const token of [undefined, credential]) {
+      const denied = await fetch(`${baseUrl}/connection/shutdown`, {
+        method: 'POST', headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(3000),
+      })
+      expect(denied.status).toBe(401)
+    }
+    await expect(pairedRequest('/connection/shutdown', 'POST', {})).rejects.toThrow('403')
+    expect(child.exitCode).toBeNull()
+    const accepted = await fetch(`${baseUrl}/connection/shutdown`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(3000),
+    })
+    expect(accepted.status).toBe(202)
+    expect(await accepted.json()).toEqual({ accepted: true })
+    expect(await bounded(child.exited)).toBe(0)
+    expect(() => readLocalCoreOwner(root)).toThrow()
+    child = spawnMockCore(root, undefined, '--desktop-independent')
+    const restarted = await bounded((async () => {
+      for (;;) {
+        if (child.exitCode !== null) throw new Error(await new Response(child.stderr).text())
+        try { return readLocalCoreOwner(root) } catch { await Bun.sleep(30) }
+      }
+    })())
+    expect(restarted).toMatchObject({ pid: child.pid, coreId: endpoint.coreId })
+    expect(restarted.port).toBeGreaterThan(0)
+    const restartedIdentity = await fetch(`http://127.0.0.1:${restarted.port}/identity`, {
+      headers: { authorization: `Bearer ${restarted.token}` }, signal: AbortSignal.timeout(3000),
+    })
+    expect(await restartedIdentity.json()).toEqual(identity)
+    expect(await pairedRequest('/identity')).toEqual(identity)
+    expect(JSON.stringify(await pairedRequest(path))).toContain(MOCK_AGENT_NOTICE)
+  } finally {
+    owner?.terminate()
+    reopened?.terminate()
+    for (const process of [child, contender]) {
+      if (!process) continue
+      if (process.exitCode === null) process.kill('SIGKILL')
+      await process.exited
+    }
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30000)

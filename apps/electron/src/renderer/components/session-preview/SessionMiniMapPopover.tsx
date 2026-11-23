@@ -11,6 +11,7 @@ import { useAtom, useAtomValue } from 'jotai'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AlertTriangle, Bot, Loader2, MessageSquare } from 'lucide-react'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import { UserAvatar } from '@/components/chat/UserAvatar'
 import { tabMinimapCacheAtom, type TabMinimapItem } from '@/atoms/tab-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
@@ -653,7 +654,7 @@ function SessionMiniMapPopoverContent({
           )}
 
           {!loading && !error && items.length > 0 && (
-            <div className="h-full overflow-y-auto space-y-1 scrollbar-thin session-minimap-content-enter">
+            <ScrollRegion className="h-full overflow-y-auto space-y-1 session-minimap-content-enter">
               {renderedItems.map((item, index) => (
                 <div
                   key={`${item.id}-${index}`}
@@ -673,7 +674,7 @@ function SessionMiniMapPopoverContent({
                   </div>
                 </div>
               ))}
-            </div>
+            </ScrollRegion>
           )}
         </div>
       </div>

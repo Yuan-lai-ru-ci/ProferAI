@@ -1,3 +1,4 @@
+import { isIndependentLocalCore, isLocalCoreEnabled } from './core-local-mode'
 /**
  * Agent 服务层（IPC 薄层）
  *
@@ -84,7 +85,8 @@ import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { createElectronAgentHost } from './agent-runtime-host'
 import { runRuntimeHeadlessEntry, type RuntimeEntryRunContext, type RuntimeEntryTitleNaming } from './agent-runtime-entry'
 import { resolveDesktopRunChain } from './agent-runtime-desktop-switch'
-import { getLocalCoreClient, shouldUseLocalCorePi, isLocalCoreSessionActive, registerLocalCoreSession, prepareLocalCoreMessage, sendLocalCoreMessage, stopLocalCoreSession } from './core-local-bridge'
+import { getLocalCoreClient, shouldUseLocalCorePi, isLocalCoreSessionActive, registerLocalCoreSession, prepareLocalCoreMessage, prepareIndependentCoreMessage, sendLocalCoreMessage, stopLocalCoreSession } from './core-local-bridge'
+import { captureCoreNativeRoute } from './core-native-routing'
 import { getChannelById } from './channel-manager'
 import { runDesktopRuntimeAgent } from './agent-runtime-desktop-entry'
 import { beginPiCheckpointTurn } from './pi-file-checkpoint-lifecycle'
@@ -767,6 +769,9 @@ function isLocalCorePiInput(input: AgentSendInput): boolean {
 }
 
 async function runAgentThroughLocalCore(input: AgentSendInput, webContents?: WebContents, callbacks?: HeadlessAgentRunCallbacks): Promise<void> {
+  const independent = isIndependentLocalCore()
+  const route = independent ? captureCoreNativeRoute(input.sessionId) : null
+  if (independent && (!route || route.coreId !== 'local' || !route.client.isConnected)) throw new Error('独立本机 Core 未连接')
   if (isAgentExecutionActive(input.sessionId)) throw new AgentRunAlreadyActiveError(false)
 
   if (webContents) registerWebContents(input.sessionId, webContents)
@@ -867,13 +872,15 @@ async function runAgentThroughLocalCore(input: AgentSendInput, webContents?: Web
   })
 
   try {
-    const options = await prepareLocalCoreMessage(input, {
+    const options = route ? await prepareIndependentCoreMessage(input, route.client, route.assertCurrent) : await prepareLocalCoreMessage(input, {
       getSession: getAgentSessionMeta,
       getChannel: getChannelById,
       credentials: agentRuntimeHost.credentials,
     })
     expectedTriggerId = options.context?.trigger.id
-    await sendLocalCoreMessage(input.sessionId, input.internalPrompt ?? input.userMessage, options)
+    const prompt = input.internalPrompt ?? input.userMessage
+    if (route) await route.client.sendMessage(route.sessionId, prompt, options, route.assertCurrent)
+    else await sendLocalCoreMessage(input.sessionId, prompt, options)
     await terminal
   } catch (error) {
     release?.()
@@ -898,7 +905,7 @@ export async function runAgent(
   // 本函数不自读环境变量（parity 断言：函数体内不得出现开关字面量），只调判定函数一次。
   // 顺序：开关判定 → 桌面入口自承担 registerWebContents / backlog / 入口清未读 → 守卫 → claim；
   // claim 之前不得有 await（runDesktopRuntimeAgent 内部同样保证）。
-  if (isLocalCorePiInput(input)) {
+  if (isIndependentLocalCore() || isLocalCorePiInput(input)) {
     await runAgentThroughLocalCore(input, webContents)
     return
   }
@@ -1088,7 +1095,7 @@ export async function runAgentRuntimeHeadless(
   callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
   input = normalizeHeadlessSendInput(input, callbacks.source)
-  if (isLocalCorePiInput(input)) {
+  if (isIndependentLocalCore() || isLocalCorePiInput(input)) {
     const initiator = input.initiator ?? resolveRunInitiator(input.triggeredBy, callbacks.source)
     await runAgentThroughLocalCore({ ...input, initiator }, getSessionWebContents(input.sessionId) ?? getMainRendererWebContents() ?? undefined, callbacks)
     return
@@ -1330,7 +1337,7 @@ export async function runAgentHeadless(
   callbacks: HeadlessAgentRunCallbacks,
 ): Promise<void> {
   input = normalizeHeadlessSendInput(input, callbacks.source)
-  if (isLocalCorePiInput(input)) {
+  if (isIndependentLocalCore() || isLocalCorePiInput(input)) {
     const initiator = input.initiator ?? (callbacks.source ? resolveRunInitiator(input.triggeredBy, callbacks.source) : 'external')
     await runAgentThroughLocalCore({ ...input, initiator }, getSessionWebContents(input.sessionId) ?? getMainRendererWebContents() ?? undefined, callbacks)
     return
@@ -1624,7 +1631,7 @@ export function killOrphanedClaudeSubprocesses(): void {
  * 同时更新 Profer 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
  */
 export async function updateAgentPermissionMode(sessionId: string, mode: ProferPermissionMode): Promise<void> {
-  if (isLocalCoreSessionActive(sessionId) || process.env.PROFER_CORE_LOCAL === '1' && getLocalCoreClient()) {
+  if (isLocalCoreSessionActive(sessionId) || isLocalCoreEnabled() && getLocalCoreClient()) {
     const client = getLocalCoreClient()
     if (!client) throw new Error('本地Core未连接')
     await client.updateSessionMeta(sessionId, { permissionMode: mode })

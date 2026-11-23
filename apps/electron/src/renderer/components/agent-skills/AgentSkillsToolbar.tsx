@@ -1,3 +1,4 @@
+import { Input } from "@profer/ui/primitives/input";
 import * as React from "react";
 import {
   Blocks,
@@ -55,6 +56,20 @@ export function AgentSkillsToolbar({
   onExport,
   exportLabel = "导出",
 }: AgentSkillsToolbarProps): React.ReactElement {
+  const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  const handleTabKeyDown = (event: React.KeyboardEvent, index: number): void => {
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    else return;
+    event.preventDefault();
+    const tab = tabs[next];
+    if (!tab) return;
+    onDomainChange(tab.value);
+    tabRefs.current[next]?.focus();
+  };
   return (
     <div className="titlebar-no-drag flex w-full min-w-0 flex-wrap items-center gap-2">
       <div
@@ -62,11 +77,14 @@ export function AgentSkillsToolbar({
         role="tablist"
         aria-label={scope === "global" ? "全局能力领域" : "Agent 技能领域"}
       >
-        {tabs.map((tab) => (
+        {tabs.map((tab, index) => (
           <button
             key={tab.value}
             type="button"
             role="tab"
+            ref={(element) => { tabRefs.current[index] = element; }}
+            tabIndex={domain === tab.value ? 0 : -1}
+            onKeyDown={(event) => handleTabKeyDown(event, index)}
             aria-selected={domain === tab.value}
             onClick={() => onDomainChange(tab.value)}
             className={cn(
@@ -91,11 +109,12 @@ export function AgentSkillsToolbar({
 
       <div className="flex h-8 min-w-[180px] flex-1 items-center gap-2 rounded-lg border border-border/60 bg-content-area px-2.5 transition-colors focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
         <Search size={13} className="shrink-0 text-foreground/40" />
-        <input
+        <Input
+          aria-label={searchPlaceholder}
           value={search}
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder={searchPlaceholder}
-          className="w-full bg-transparent text-[13px] text-foreground placeholder:text-foreground/35 focus:outline-none"
+          className="h-auto w-full border-0 bg-transparent p-0 text-[13px] shadow-none focus-visible:ring-0"
         />
       </div>
 

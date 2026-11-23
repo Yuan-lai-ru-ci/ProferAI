@@ -27,9 +27,12 @@ import './commands/outline'
 import './commands/search'
 import './commands/export'
 import './commands/profile'
+import './commands/run'
+import './commands/core'
+import './commands/channel'
 
 /** 已知命名空间。`session` 的命令历史上注册为顶层名，查找时会回落到顶层。 */
-const NAMESPACES = ['session', 'profile'] as const
+const NAMESPACES = ['session', 'profile', 'core', 'channel'] as const
 
 function printSection(title: string, commands: ReturnType<typeof commandsInNamespace>): void {
   if (commands.length === 0) return
@@ -45,6 +48,8 @@ function printHelp(): void {
   info('用法: profer <namespace> <command> [args] [--flags]\n')
   printSection('会话（渐进式读取）', commandsInNamespace('session'))
   printSection('用户画像（跨工作区，无需 UI）', commandsInNamespace('profile'))
+  printSection('独立 Core', commandsInNamespace('core'))
+  printSection('模型配置（由 Core 持有）', commandsInNamespace('channel'))
   const topLevel = commandsInNamespace(undefined)
   if (topLevel.length > 0) printSection('其它', topLevel)
   info('全局 flag: --json  --config-dir DIR  --dev')
@@ -52,8 +57,14 @@ function printHelp(): void {
   info('画像用法建议: `profer profile context` 输出可直接拼进 system prompt 的画像块，任何 CLI Agent 都能消费')
 }
 
+const RUN_ARG_OPTIONS = { aliases: { '-p': '--print', '-c': '--continue', '-r': '--resume' }, booleans: ['print', 'continue', 'json', 'dev'] }
+const RUN_ENTRY_FLAGS = ['-p', '--print', '-c', '--continue', '--resume', '-r', '--workspace', '--channel', '--model', '--runtime', '--config-dir', '--dev']
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2)
+  // 保留老命令入口；只把运行旗标或 TTY 裸调用归入 run。
+  if ((argv.length === 0 && process.stdin.isTTY && process.stdout.isTTY)
+    || RUN_ENTRY_FLAGS.some(flag => argv[0] === flag || argv[0]?.startsWith(`${flag}=`))) argv.unshift('run')
   if (argv.length === 0 || argv[0] === 'help' || argv[0] === '--help' || argv[0] === '-h') {
     printHelp()
     return EXIT_OK
@@ -74,14 +85,16 @@ async function main(): Promise<number> {
     return EXIT_USAGE
   }
 
-  const command = (namespace ? getCommand(cmdName, namespace) : undefined) ?? getCommand(cmdName)
+  const command = namespace === 'core' || namespace === 'channel'
+    ? commandsInNamespace(namespace).find(item => item.name === cmdName)
+    : (namespace ? getCommand(cmdName, namespace) : undefined) ?? getCommand(cmdName)
   if (!command) {
     errorLine(namespace ? `未知命令: ${namespace} ${cmdName}` : `未知命令: ${cmdName}`)
     printHelp()
     return EXIT_USAGE
   }
 
-  const parsed = parseArgs(rest.slice(1))
+  const parsed = parseArgs(rest.slice(1), cmdName === 'run' && !namespace ? RUN_ARG_OPTIONS : undefined)
   const pathOpts: PathOptions = {
     configDir: strFlag(parsed.flags, 'config-dir'),
     dev: boolFlag(parsed.flags, 'dev'),

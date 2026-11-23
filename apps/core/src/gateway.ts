@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import type { DesktopHostResponse } from './host-bridge'
 import { parseCoreMessageOptions } from './message-input'
 
-export interface CoreGatewayOptions { server: Server; runtime: CoreAgentRuntime; token: string }
+export interface CoreGatewayOptions { server: Server; runtime: CoreAgentRuntime; token: string; authenticate?: (token: string | undefined) => boolean }
 
 function tokenFromUpgrade(request: IncomingMessage): string | undefined {
   const authorization = request.headers.authorization
@@ -117,7 +117,7 @@ export function attachCoreWebSocketGateway(options: CoreGatewayOptions): WebSock
   options.server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
     if (url.pathname !== '/ws') { socket.destroy(); return }
-    if (tokenFromUpgrade(request) !== options.token) { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return }
+    if (!(options.authenticate ? options.authenticate(tokenFromUpgrade(request)) : tokenFromUpgrade(request) === options.token)) { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return }
     wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request))
   })
   wss.on('connection', ws => {
@@ -230,6 +230,7 @@ export function attachCoreWebSocketGateway(options: CoreGatewayOptions): WebSock
             const prompt = typeof command.userMessage === 'string' ? command.userMessage : typeof command.prompt === 'string' ? command.prompt : ''
             if (!meta || !prompt) throw new Error('session or message missing')
             options.runtime.assertAcceptingRuns()
+            if (detachHost) options.runtime.bindDesktopHost(sessionId, connectionId)
             await options.runtime.goals.prepareUserTurn(sessionId)
             options.runtime.assertAcceptingRuns()
             let settleAdmission!: (failure?: string) => void

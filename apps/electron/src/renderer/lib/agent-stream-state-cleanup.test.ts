@@ -1,10 +1,27 @@
 import { describe, expect, test } from 'bun:test'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
-import { compactCompletedBackgroundStreamState, rollbackRejectedAgentRunState, settleCompletedAgentStreamState } from './agent-stream-state-cleanup'
+import { applyCoreRunStarted, compactCompletedBackgroundStreamState, isCurrentAgentStreamCompletion, rollbackRejectedAgentRunState, settleCompletedAgentStreamState } from './agent-stream-state-cleanup'
 
 function state(overrides: Partial<AgentStreamState> = {}): AgentStreamState {
   return { running: false, content: 'partial output', toolActivities: [{ toolUseId: 'tool-1', toolName: 'Read', input: {}, done: false }], ...overrides }
 }
+
+test('旁观端只凭 Core 开始事件点亮，迟到终态和重复开始不污染新旧轮次', () => {
+  const event = { runId: 'core-run-2', startedAt: 100, modelId: 'core-model' }
+  const running = applyCoreRunStarted(state({ runId: 'core-run-1', startedAt: 80, stopping: true }), event)!
+  expect(running).toEqual({ runId: event.runId, startedAt: event.startedAt, model: 'core-model', running: true, content: '', toolActivities: [] })
+  expect(isCurrentAgentStreamCompletion(running, { runId: 'core-run-1', startedAt: 200 })).toBe(false)
+  expect(isCurrentAgentStreamCompletion(running, { runId: 'core-run-2', startedAt: 105 })).toBe(true)
+  const settled = settleCompletedAgentStreamState(running, false)
+  expect(applyCoreRunStarted(settled, event)).toBe(settled)
+  expect(applyCoreRunStarted(running, { runId: 'core-run-1', startedAt: 80 })).toBe(running)
+})
+
+test('发起设备收到同轮开始事件时保留乐观状态与已到的流式输出', () => {
+  const current = state({ running: true, startedAt: 120, stopping: true })
+  const running = applyCoreRunStarted(current, { runId: 'run', startedAt: 120 })
+  expect(running).toEqual({ ...current, runId: 'run', model: undefined })
+})
 
 describe('rollbackRejectedAgentRunState', () => {
   test('Given an optimistic compact is rejected before an Agent run starts When rolling back Then no input lock remains', () => {

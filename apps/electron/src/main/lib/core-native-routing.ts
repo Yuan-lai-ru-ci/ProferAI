@@ -1,3 +1,4 @@
+import { isLocalCoreEnabled } from './core-local-mode'
 import type { CoreClient } from './core-client'
 import { getLocalCoreClient } from './core-local-bridge'
 import { currentCoreId, getActiveCoreClient, getCoreTargetGeneration, getCurrentCoreTargetId, namespaceCoreSessionId, parseCoreSessionId } from './core-target-service'
@@ -18,7 +19,7 @@ export function captureCoreNativeRoute(sessionId: string): CoreNativeRoute | nul
   const owner = parseCoreSessionId(sessionId)
   if (local && owner) throw new Error('会话不属于当前本机 Core')
   const client = local ? getLocalCoreClient() : getActiveCoreClient()
-  if (local && !client && process.env.PROFER_CORE_LOCAL !== '1') return null
+  if (local && !client && !isLocalCoreEnabled()) return null
   const coreId = local ? 'local' : currentCoreId()
   if (!coreId || !client) throw new Error('当前 Core 未连接，不能访问会话历史')
   if (!local && (!owner || owner.coreId !== coreId)) throw new Error('会话不属于当前 Core')

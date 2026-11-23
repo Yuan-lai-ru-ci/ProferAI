@@ -37,9 +37,9 @@ interface ScrollbarRevealOptions {
   /**
    * 在这个元素上监听用户滚动交互。
    *
-   * 原生滚动条的标记就打在滚动容器自己身上，调用方已经在处理交互事件，
-   * 所以不传；进度条渲染在滚动容器外面（Conversation 的兄弟节点），
-   * 需要它自己监听容器上的滚轮/触摸/翻页键。
+   * 普通容器传自身，直接复用用户滚动事件监听；对话区自己处理交互事件时不传。
+   * 进度条在滚动容器外面（Conversation 的兄弟节点），传其实际滚动容器。
+   * watchElement 与标记目标是同一元素时，也保留右边缘热区检测。
    */
   watchElement?: HTMLElement | null
 }
@@ -153,7 +153,7 @@ export function attachScrollbarReveal(
   const detach = options.watchElement ? bindUserScroll(options.watchElement, reveal) : null
   /* 自己就是滚动容器（对话区原生滚动条）时，补一条右边缘悬停检测；
    * 进度条场景（传了 watchElement）不需要——它自己就是 11px 的 DOM 元素，CSS :hover 足够。 */
-  const detachHover = options.watchElement ? null : bindScrollbarHover(el)
+  const detachHover = !options.watchElement || options.watchElement === el ? bindScrollbarHover(el) : null
 
   return {
     reveal,

@@ -3,6 +3,8 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, cpSync, renameSync, r
 import { join, dirname } from 'node:path'
 import { atomicWriteFile, atomicWriteJson } from '../../../packages/session-store/src/atomic-write'
 import { assertSafeSkillSegment, canonicalSkillSegmentKey } from '@profer/agent-provider-pi/skills/skill-path-security'
+import { ensureSkillCard, hasSkillCard, skillCardDismissalKey } from '@profer/agent-provider-pi/skills/skill-manifest'
+import { applyCoreSkillCardDecision, readCoreSkillCard, readCoreSkillCardDismissals, writeCoreSkillCard } from './resource-skill-cards'
 import { assertResourcePath, coreWorkspaceDirectory, readResourceObject, resourceObject, resourceText } from './resource-paths'
 import type { CoreResourceOperationContext } from './resource-paths'
 
@@ -36,7 +38,8 @@ function replaceDirectory(source: string | undefined,target: string,prepare:(sta
   } finally { if(existsSync(stage)) rmSync(stage,{recursive:true}) }
 }
 export const CORE_GLOBAL_SKILL_ARITY: Record<string,[number,number]> = {
-  'globalSkill.list': [0,1], 'globalSkill.read': [1,1], 'globalSkill.createUser': [4,4], 'globalSkill.save': [4,4],
+  'globalSkill.list': [0,1], 'globalSkill.read': [1,1], 'globalSkill.createUser': [4,5], 'globalSkill.save': [4,4],
+  'globalSkill.readCard': [1,1], 'globalSkill.writeCard': [2,2],
   'globalSkill.copyToUser': [1,2], 'globalSkill.copyToWorkspace': [2,2], 'globalSkill.setEnabled': [3,3],
   'globalSkill.getOverrides': [1,1], 'globalSkill.restore': [2,2], 'globalSkill.readWorkspaceCopy': [2,2], 'globalSkill.saveWorkspaceCopy': [3,3],
 }
@@ -70,9 +73,12 @@ export async function executeCoreGlobalSkillOperation(context: CoreResourceOpera
   if (operation === 'globalSkill.list') {
     const dir = args[0] == null ? undefined : coreWorkspaceDirectory(context,args[0]).directory
     const map = dir ? resourceObject(overrides(dir).globalSkills) : {}
-    return entries.map(({manifest}) => {
+    const dismissed = dir ? undefined : readCoreSkillCardDismissals(context.config.configDir)
+    return entries.map(({manifest, path}) => {
       const override = resourceObject(map[String(manifest.skillId)] ?? {})
-      return { ...manifest, enabledInWorkspace: override.enabled ?? true, replacedInWorkspace: Boolean(override.replacementWorkspaceSkillId), actualSource: override.replacementWorkspaceSkillId ? 'workspace' : override.enabled === false ? 'none' : 'global', sourceStatus: 'available', ...(override.replacementWorkspaceSkillId ? { workspaceSkillId: override.replacementWorkspaceSkillId, replacementForSkillId: manifest.skillId } : {}) }
+      const needsCardReminder = dismissed && manifest.type === 'user-global' && !hasSkillCard(path)
+        && !dismissed.has(skillCardDismissalKey('global', String(manifest.skillId)))
+      return { ...manifest, ...(needsCardReminder ? { needsCardReminder: true } : {}), enabledInWorkspace: override.enabled ?? true, replacedInWorkspace: Boolean(override.replacementWorkspaceSkillId), actualSource: override.replacementWorkspaceSkillId ? 'workspace' : override.enabled === false ? 'none' : 'global', sourceStatus: 'available', ...(override.replacementWorkspaceSkillId ? { workspaceSkillId: override.replacementWorkspaceSkillId, replacementForSkillId: manifest.skillId } : {}) }
     })
   }
   if (operation === 'globalSkill.getOverrides') return overrides(coreWorkspaceDirectory(context,args[0]).directory)
@@ -96,13 +102,26 @@ export async function executeCoreGlobalSkillOperation(context: CoreResourceOpera
     const manifest = { schemaVersion: 1, skillId: id, slug, name, description, type: 'user-global', version: '1.0.0', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
     const normalized=frontmatter(frontmatter(frontmatter(content,'name',name),'description',description),'version',manifest.version)
     await metadata(normalized)
-    replaceDirectory(undefined,path,stage=>{ writeFileSync(join(stage,'SKILL.md'),normalized); writeFileSync(join(stage,'skill-library.json'),JSON.stringify(manifest,null,2)) }); return manifest
+    if (args[4] !== undefined && typeof args[4] !== 'boolean') throw new Error('Core Skill导入参数无效')
+    replaceDirectory(undefined, path, stage => {
+      writeFileSync(join(stage, 'SKILL.md'), normalized)
+      if (args[4] !== true) ensureSkillCard(stage)
+      writeFileSync(join(stage, 'skill-library.json'), JSON.stringify(manifest, null, 2))
+    }); return manifest
   }
   const workspaceOp = operation === 'globalSkill.setEnabled' || operation === 'globalSkill.restore'
   const id = resourceText(args[workspaceOp ? 1 : 0]); assertSafeSkillSegment(id,'skillId')
   const item = entries.find(e => e.manifest.skillId === id)
   if (!item) throw new Error('Core全局Skill不存在')
   if (operation === 'globalSkill.read') return readFileSync(join(item.path,'SKILL.md'),'utf8')
+  if (operation === 'globalSkill.readCard') return readCoreSkillCard(item.path)
+  if (operation === 'globalSkill.writeCard' || operation === 'globalSkill.resolveCardReminder') {
+    if (item.manifest.type !== 'user-global') throw new Error('Core内置Skill不可直接修改')
+    if (operation === 'globalSkill.writeCard') return writeCoreSkillCard(item.path, args[1])
+    const decision = args[1]
+    if (decision !== 'create' && decision !== 'dismiss') throw new Error('Skill 路由卡片提醒选项无效')
+    return applyCoreSkillCardDecision(context.config.configDir, item.path, skillCardDismissalKey('global', id), decision)
+  }
   if (operation === 'globalSkill.copyToUser') {
     const slug=resourceText(args[1]??`${item.manifest.slug}-copy`); assertSafeSkillSegment(slug,'slug')
     if(entries.some(e=>canonicalSkillSegmentKey(String(e.manifest.slug))===canonicalSkillSegmentKey(slug))) throw new Error('Core全局Skill slug已存在')
@@ -144,7 +163,12 @@ export async function executeCoreGlobalSkillOperation(context: CoreResourceOpera
       writeFileSync(join(stage,'SKILL.md'),normalized)
       // 模块清单是descriptor最高优先级，存在时同步展示字段，防止运行投影继续使用旧名称版本。
       const card=readResourceObject(join(stage,'SKILL.json'))
-      if(card) writeFileSync(join(stage,'SKILL.json'),JSON.stringify({...card,name:updated.name,description:updated.description,version:updated.version},null,2))
+      if (card) writeFileSync(join(stage,'SKILL.json'), JSON.stringify({
+        ...card,
+        ...(card.name !== undefined ? { name: updated.name } : {}),
+        ...(card.description !== undefined ? { description: updated.description } : {}),
+        ...(card.version !== undefined ? { version: updated.version } : {}),
+      }, null, 2))
       writeFileSync(join(stage,'skill-library.json'),JSON.stringify(updated,null,2))
     }); return updated
   }

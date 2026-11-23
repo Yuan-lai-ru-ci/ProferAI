@@ -1,3 +1,6 @@
+// 本文件独立验收旧桌面执行/存储路径。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 import { describe, expect, test } from 'bun:test'
 import { handleRemoteCommand } from './remote-service'
 

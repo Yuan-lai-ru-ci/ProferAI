@@ -134,6 +134,25 @@ describe('ChannelSettings 实际事件回归（fixture IPC）', () => {
     expect(typeof row.props.onEdit).toBe('function')
     expect(typeof row.props.onDelete).toBe('function')
   })
+  test('独立本机目录只读，可刷新且不读取桌面渠道', async () => {
+    let catalog = [fixture]
+    const scope = mount({ listCoreChannels: async () => catalog })
+    scope.reads.length = 0
+    store.set(coreTargetsAtom, { currentId: 'local', generation: 1, targets: [
+      { id: 'local', name: '本机内核', kind: 'local', status: 'connected', independent: true },
+    ] })
+    scope.render()
+    await scope.flush()
+    expect(scope.findText('刷新目录')).toBeDefined()
+    expect(scope.findText('profer channel add --name NAME --provider PROVIDER --model MODEL_ID')).toBeDefined()
+    expect(scope.findText('添加配置')).toBeUndefined()
+    expect(scope.row()).toBeUndefined()
+    expect(scope.reads).toEqual([])
+    catalog = [{ ...fixture, name: 'New Core catalog' }]
+    ;(scope.findText('刷新目录').props.onClick as () => void)()
+    await scope.flush()
+    expect(store.get(coreChannelsAtom)[0]?.name).toBe('New Core catalog')
+  })
   test('Given remote Core channel list When settings loads Then only shared remote snapshot changes', async () => {
     const scope = mount({}, true)
     await scope.flush()

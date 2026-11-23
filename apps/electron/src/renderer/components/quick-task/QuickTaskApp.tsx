@@ -1,4 +1,5 @@
-﻿/**
+import { Button } from '@profer/ui/primitives/button'
+/**
  * QuickTaskApp — 快速任务窗口根组件
  *
  * 当 URL 含 ?window=quick-task 时渲染此组件（替代主 App）。
@@ -287,28 +288,30 @@ export function QuickTaskApp(): React.ReactElement {
           <div className="flex items-center gap-2">
             {/* 模式切换器 */}
             <div className="flex gap-0.5 rounded-lg bg-muted/60 p-0.5">
-              <button
+              <Button variant="ghost" size="sm"
                 type="button"
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
+                className={`h-auto rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
                   mode === 'chat'
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
+                aria-pressed={mode === 'chat'}
                 onClick={() => setMode('chat')}
               >
                 Chat
-              </button>
-              <button
+              </Button>
+              <Button variant="ghost" size="sm"
                 type="button"
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
+                className={`h-auto rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
                   mode === 'agent'
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
+                aria-pressed={mode === 'agent'}
                 onClick={() => setMode('agent')}
               >
                 Agent
-              </button>
+              </Button>
             </div>
 
             {/* 模型信息 */}
@@ -362,7 +365,7 @@ export function QuickTaskApp(): React.ReactElement {
         <div className="flex items-center justify-between px-4 pb-3 pt-1">
           <div className="flex items-center gap-1">
             {/* 附件按钮 */}
-            <button
+            <Button variant="ghost" size="sm"
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
@@ -372,7 +375,7 @@ export function QuickTaskApp(): React.ReactElement {
                 <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
               </svg>
               附件
-            </button>
+            </Button>
             <input
               ref={fileInputRef}
               type="file"
@@ -388,11 +391,11 @@ export function QuickTaskApp(): React.ReactElement {
           </div>
 
           {/* 发送按钮 */}
-          <button
+          <Button size="sm"
             type="button"
             onClick={handleSubmit}
             disabled={!hasContent || isSubmitting}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-30 disabled:cursor-not-allowed"
+            className="gap-1.5"
           >
             {isSubmitting ? (
               <span className="inline-block size-3 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
@@ -403,7 +406,7 @@ export function QuickTaskApp(): React.ReactElement {
               </svg>
             )}
             发送
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -427,16 +430,18 @@ function AttachmentChip({ filename, mediaType, previewUrl, onRemove }: Attachmen
     return (
       <div className="group/chip relative size-14 shrink-0 rounded-lg overflow-hidden">
         <img src={previewUrl} alt={filename} className="size-full object-cover" />
-        <button
+        <Button variant="ghost"
           type="button"
+          aria-label={`移除 ${filename}`}
           onClick={onRemove}
-          className="absolute top-0.5 right-0.5 size-4 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover/chip:opacity-100 transition-opacity"
+          size="icon-sm"
+          className="absolute top-0.5 right-0.5 size-6 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover/chip:opacity-100 focus-visible:opacity-100 group-focus-within/chip:opacity-100 transition-opacity"
         >
           <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
             <path d="M18 6 6 18" />
             <path d="m6 6 12 12" />
           </svg>
-        </button>
+        </Button>
       </div>
     )
   }
@@ -447,16 +452,18 @@ function AttachmentChip({ filename, mediaType, previewUrl, onRemove }: Attachmen
         <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
       </svg>
       <span className="max-w-[120px] truncate">{displayName}</span>
-      <button
+      <Button variant="ghost"
         type="button"
+        aria-label={`移除 ${filename}`}
         onClick={onRemove}
-        className="ml-0.5 size-3.5 rounded-full flex items-center justify-center text-muted-foreground/50 hover:text-foreground hover:bg-muted opacity-0 group-hover/chip:opacity-100 transition-all"
+        size="icon-sm"
+        className="ml-0.5 size-6 rounded-full flex items-center justify-center text-muted-foreground/50 hover:text-foreground hover:bg-muted opacity-0 group-hover/chip:opacity-100 focus-visible:opacity-100 group-focus-within/chip:opacity-100 transition-all"
       >
         <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
           <path d="M18 6 6 18" />
           <path d="m6 6 12 12" />
         </svg>
-      </button>
+      </Button>
     </div>
   )
 }

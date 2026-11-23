@@ -1,3 +1,4 @@
+import { isLocalCoreEnabled } from './core-local-mode'
 import type { AgentSendInput, AgentSessionMeta, Channel } from '@profer/shared'
 import { createAgentRunContext, type CredentialPort } from '@profer/agent-runtime'
 import { randomUUID } from 'node:crypto'
@@ -97,8 +98,8 @@ export function getLocalCoreClient(): CoreClient | null {
   return client
 }
 
-/** 显式启用 Core 时不能因启动失败静默退回旧 Pi 链路。 */
-export function shouldUseLocalCorePi(runtime: string | undefined, enabled = process.env.PROFER_CORE_LOCAL === '1'): boolean {
+/** 内置 Core 未就绪时明确报错，不退回旧桌面执行链。 */
+export function shouldUseLocalCorePi(runtime: string | undefined, enabled = isLocalCoreEnabled()): boolean {
   if ((runtime !== 'pi' && runtime !== 'claude') || (!enabled && !client)) return false
   if (!client) throw new Error('本地 Core 尚未就绪或启动失败，请检查启动日志后重试')
   return true
@@ -141,6 +142,20 @@ export async function prepareLocalCoreMessage(input: AgentSendInput, deps: {
     context: createAgentRunContext({ ...input, uuid }, randomUUID),
     credentials: result.credentials,
   }
+}
+
+/** 独立 Core 持有渠道凭据，桌面只校验绑定并发送标识。 */
+export async function prepareIndependentCoreMessage(input: AgentSendInput, core: Pick<CoreClient, 'getSessionDetail' | 'listChannels'>, assertCurrent: () => void): Promise<CoreMessageOptions> {
+  const [{ session }, channels] = await Promise.all([core.getSessionDetail(input.sessionId), core.listChannels()])
+  assertCurrent()
+  if (session.agentRuntime !== 'pi' && session.agentRuntime !== 'claude') throw new Error('独立 Core 不支持此 Agent runtime')
+  const selected = channels.find(channel => channel.id === input.channelId)
+  const channel = selected && { ...selected, models: selected.models ?? [], enabled: selected.enabled !== false }
+  const binding = validateAgentSendBinding(input, session as AgentSessionMeta, true, channel as Channel | undefined)
+  if (!binding.ok) throw new Error(`${binding.code}: ${binding.message}`)
+  const uuid = input.uuid ?? randomUUID()
+  return { channelId: input.channelId, modelId: input.modelId, uuid, rawUserMessage: input.rawUserMessage ?? input.userMessage,
+    startedAt: input.startedAt, context: createAgentRunContext({ ...input, uuid }, randomUUID) }
 }
 
 export async function sendLocalCoreMessage(sessionId: string, prompt: string, options?: CoreMessageOptions): Promise<void> {

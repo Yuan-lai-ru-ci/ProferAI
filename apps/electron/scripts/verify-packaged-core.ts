@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 /** 从本次桌面产物定位完整 Core 目录，复用独立成品冒烟。 */
 import { existsSync, readdirSync } from 'node:fs'
+import { resolveWindowsOwnerHelper } from '../../../packages/session-store/src/windows-core-owner'
+import { verifyWindowsOwnerExecutable } from '../../core/scripts/windows-owner-build'
 import { join, resolve } from 'node:path'
 
 export function resolvePackagedCoreRuntime(outputDir: string, platform: NodeJS.Platform): string {
@@ -17,6 +19,16 @@ export function resolvePackagedCoreRuntime(outputDir: string, platform: NodeJS.P
   return join(outputDir, platform === 'win32' ? 'win-unpacked' : 'linux-unpacked', 'resources', 'bin')
 }
 
+export function verifyPackagedCoreRuntime(runtime: string, platform: NodeJS.Platform, arch = process.arch): void {
+  for (const file of ['core.js', 'core-runtime.json', platform === 'win32' ? 'profer-core.exe' : 'profer-core']) {
+    if (!existsSync(join(runtime, file))) throw new Error(`桌面包缺少 Core 运行资源: ${join(runtime, file)}`)
+  }
+  if (platform === 'win32') {
+    if (arch !== 'x64') throw new Error(`Windows Core helper 尚未验证支持架构: ${arch}`)
+    verifyWindowsOwnerExecutable(resolveWindowsOwnerHelper(runtime, arch))
+  }
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2)
   const targetIndex = args.indexOf('--target')
@@ -25,9 +37,7 @@ if (import.meta.main) {
   const appDir = resolve(import.meta.dir, '..')
   const outputDir = resolve(appDir, process.env.PROFER_ELECTRON_OUTPUT_DIR ?? (target === 'commercial' ? 'out-commercial' : 'out'))
   const runtime = resolvePackagedCoreRuntime(outputDir, process.platform)
-  for (const file of ['core.js', 'core-runtime.json', process.platform === 'win32' ? 'profer-core.exe' : 'profer-core']) {
-    if (!existsSync(join(runtime, file))) throw new Error(`桌面包缺少 Core 运行资源: ${join(runtime, file)}`)
-  }
+  verifyPackagedCoreRuntime(runtime, process.platform)
   const child = Bun.spawn([process.execPath, resolve(appDir, '../core/scripts/smoke-runtime.ts'), runtime], { stdout: 'inherit', stderr: 'inherit' })
   process.exitCode = await child.exited
 }

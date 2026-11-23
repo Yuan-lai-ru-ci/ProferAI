@@ -24,6 +24,8 @@ export interface AgentSkillsData {
   hasWorkspace: boolean
   loading: boolean
   skills: SkillMeta[]
+  /** 列表刚切换工作区尚未刷新时，不允许旧列表发起当前作用域的写操作。 */
+  skillsWorkspaceSlug: string
   defaultSkillSlugs: Set<string>
   skillsDir: string
   mcpConfig: WorkspaceMcpConfig
@@ -46,6 +48,7 @@ export function useAgentSkillsData(): AgentSkillsData {
 
   const [loading, setLoading] = React.useState(true)
   const [skills, setSkills] = React.useState<SkillMeta[]>([])
+  const [skillsWorkspaceSlug, setSkillsWorkspaceSlug] = React.useState('')
   const [defaultSkillSlugs, setDefaultSkillSlugs] = React.useState<Set<string>>(new Set())
   const [skillsDir, setSkillsDir] = React.useState('')
   const [mcpConfig, setMcpConfig] = React.useState<WorkspaceMcpConfig>({ servers: {} })
@@ -56,6 +59,7 @@ export function useAgentSkillsData(): AgentSkillsData {
       if (!isCurrent()) return
 
       setSkills([])
+      setSkillsWorkspaceSlug('')
       setMcpConfig({ servers: {} })
       setLoading(false)
       return
@@ -70,6 +74,7 @@ export function useAgentSkillsData(): AgentSkillsData {
       if (!isCurrent()) return
       setMcpConfig(config)
       setSkills(skillList)
+      setSkillsWorkspaceSlug(workspaceSlug)
       setSkillsDir(dir)
       setDefaultSkillSlugs(new Set(defaultSlugs))
     } catch (error) {
@@ -210,6 +215,7 @@ export function useAgentSkillsData(): AgentSkillsData {
     hasWorkspace: !!currentWorkspace,
     loading,
     skills,
+    skillsWorkspaceSlug,
     defaultSkillSlugs,
     skillsDir,
     mcpConfig,

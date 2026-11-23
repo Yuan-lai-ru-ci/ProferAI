@@ -360,9 +360,9 @@ function PlanningInitializer(): null {
     const update = (snapshot: import('@/types/settings').CoreTargetsSnapshot): void => {
       if (disposed) return
       setCore(current => (snapshot.revision ?? snapshot.generation) < (current.revision ?? current.generation) ? current : snapshot)
-      if (snapshot.startup === 'fallback' && !fallbackShown) {
+      if (snapshot.startup === 'offline' && !fallbackShown) {
         fallbackShown = true
-        toast.info('上次使用的内核不可达，已回到本机', { id: 'core-startup-fallback' })
+        toast.info('所选 Core 暂时离线，已保留原目标；可重试连接或主动切回本机', { id: 'core-startup-offline' })
       }
     }
     void window.electronAPI.listCoreTargets().then(update).catch(console.error)

@@ -103,6 +103,8 @@ export interface AgentStreamState {
    * 自动压缩（阈值/溢出）不置位：压缩结束后本轮还要继续执行，运行指示必须立即恢复。
    */
   compactInFlight?: boolean
+  /** Core 确认的本轮身份；桌面乐观发送阶段尚未取得。 */
+  runId?: string
   /** 流式开始时间戳（用于思考计时持久化） */
   startedAt?: number
   /** 重试状态（扩展版） */

@@ -7,6 +7,7 @@
  * 支持：Markdown 快捷输入、图片粘贴、Todo 列表（- [ ] 触发）、代码高亮（lowlight）、数学公式（$..$ / $$..$$ 触发）、导出为 Markdown
  */
 
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import * as React from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
@@ -341,15 +342,12 @@ export function ScratchPadView(): React.ReactElement {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="flex-1 overflow-auto scrollbar-thin px-8 pt-6 pb-20">
+      <ScrollRegion className="flex-1 overflow-auto scrollbar-thin px-8 pt-6 pb-20">
         <div className="max-w-3xl mx-auto">
           <div className="mb-5 flex flex-col gap-3">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h1 className="text-xl font-semibold tracking-normal text-foreground">草稿页</h1>
-                <p className="mt-1 text-[13px] leading-5 text-muted-foreground">
-                  把文字、图片和临时想法先放在这里，再整理到会话或工作区。
-                </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <input
@@ -398,7 +396,7 @@ export function ScratchPadView(): React.ReactElement {
             </div>
           )}
         </div>
-      </div>
+      </ScrollRegion>
       {/* 底部居中悬浮：圆形语音输入按钮 */}
       <div className="absolute left-1/2 -translate-x-1/2 bottom-10 z-20">
         <SpeechButton className="size-11 rounded-full bg-background/95 border border-border/60 shadow-md backdrop-blur hover:bg-accent text-foreground/80" />

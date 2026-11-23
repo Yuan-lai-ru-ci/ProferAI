@@ -16,7 +16,10 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@profer/ui/primitives/dialog'
-import { cn } from '@/lib/utils'
+import { Button } from '@profer/ui/primitives/button'
+import { Input } from '@profer/ui/primitives/input'
+import { Label } from '@profer/ui/primitives/label'
+import { ScrollRegion } from '@/components/ai-elements/scroll-region'
 import {
   migrationImportDialogOpenAtom,
   migrationImportInitialFilePathAtom,
@@ -29,6 +32,7 @@ export function MigrationImportDialog(): React.ReactElement {
   const [open, setOpen] = useAtom(migrationImportDialogOpenAtom)
   const [initialFilePath, setInitialFilePath] = useAtom(migrationImportInitialFilePathAtom)
   const localWorkspaces = useAtomValue(agentWorkspacesAtom)
+  const passphraseId = React.useId()
 
   const {
     importing,
@@ -72,15 +76,15 @@ export function MigrationImportDialog(): React.ReactElement {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-xl max-h-[80vh] flex flex-col">
+        <DialogHeader className="shrink-0">
           <DialogTitle>导入配置</DialogTitle>
           <DialogDescription>
             从备份文件导入数据，支持 .profer-backup 和 .profer-share 格式
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 mt-2">
+        <ScrollRegion className="min-h-0 overflow-y-auto space-y-4 mt-2">
           {/* 阶段 1：选择文件 / 输入口令 */}
           {!importPreview && !importResult?.success && (
             <div className="flex flex-col items-center gap-4 py-6">
@@ -97,7 +101,11 @@ export function MigrationImportDialog(): React.ReactElement {
                   <p className="text-sm text-muted-foreground text-center">
                     该备份已加密，请输入导出时设置的口令。
                   </p>
-                  <input
+                  <Label htmlFor={passphraseId}>备份口令</Label>
+                  <Input
+                    id={passphraseId}
+                    aria-invalid={Boolean(passphraseError)}
+                    aria-describedby={passphraseError ? `${passphraseId}-error` : undefined}
                     type="password"
                     autoFocus
                     value={passphrase}
@@ -107,31 +115,25 @@ export function MigrationImportDialog(): React.ReactElement {
                     }}
                     disabled={importing}
                     placeholder="备份口令"
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                   />
                   {passphraseError && (
-                    <p className="text-xs text-red-500">{passphraseError}</p>
+                    <p id={`${passphraseId}-error`} role="alert" className="text-xs text-destructive-text">{passphraseError}</p>
                   )}
                   <div className="flex items-center justify-center gap-2">
-                    <button
+                    <Button type="button"
                       onClick={submitPassphrase}
                       disabled={importing || passphrase.length === 0}
-                      className={cn(
-                        'flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-colors',
-                        'bg-primary text-primary-foreground hover:bg-primary/90',
-                        'disabled:opacity-50 disabled:cursor-not-allowed'
-                      )}
                     >
                       {importing ? <Loader2 size={16} className="animate-spin" /> : <LockKeyhole size={16} />}
                       {importing ? '解密中...' : '解密并解析'}
-                    </button>
-                    <button
+                    </Button>
+                    <Button type="button"
                       onClick={cancelPassphrase}
                       disabled={importing}
-                      className="px-4 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                      variant="ghost"
                     >
                       返回
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : (
@@ -139,18 +141,13 @@ export function MigrationImportDialog(): React.ReactElement {
                   <p className="text-sm text-muted-foreground text-center">
                     选择 .profer-backup 或 .profer-share 文件开始导入
                   </p>
-                  <button
+                  <Button type="button"
                     onClick={handleSelectImportFile}
                     disabled={importing}
-                    className={cn(
-                      'flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                      'bg-primary text-primary-foreground hover:bg-primary/90',
-                      'disabled:opacity-50 disabled:cursor-not-allowed'
-                    )}
                   >
                     {importing ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
                     {importing ? '解析中...' : '选择文件'}
-                  </button>
+                  </Button>
                 </>
               )}
 
@@ -251,14 +248,9 @@ export function MigrationImportDialog(): React.ReactElement {
 
               {/* 确认 / 取消 */}
               <div className="flex items-center gap-3 pt-2">
-                <button
+                <Button type="button"
                   onClick={handleConfirmImport}
                   disabled={importConfirming}
-                  className={cn(
-                    'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-                    'bg-primary text-primary-foreground hover:bg-primary/90',
-                    'disabled:opacity-50 disabled:cursor-not-allowed'
-                  )}
                 >
                   {importConfirming ? (
                     <Loader2 size={16} className="animate-spin" />
@@ -266,17 +258,17 @@ export function MigrationImportDialog(): React.ReactElement {
                     <Upload size={16} />
                   )}
                   {importConfirming ? '导入中...' : '确认导入'}
-                </button>
-                <button
+                </Button>
+                <Button type="button"
                   onClick={() => {
                     reset()
                     setInitialFilePath(null)
                   }}
                   disabled={importConfirming}
-                  className="px-4 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                  variant="ghost"
                 >
                   取消
-                </button>
+                </Button>
               </div>
 
               {importResult && !importResult.success && (
@@ -318,18 +310,14 @@ export function MigrationImportDialog(): React.ReactElement {
                   </div>
                 </div>
               )}
-              <button
+              <Button type="button"
                 onClick={() => handleOpenChange(false)}
-                className={cn(
-                  'px-5 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                  'bg-primary text-primary-foreground hover:bg-primary/90'
-                )}
               >
                 关闭
-              </button>
+              </Button>
             </div>
           )}
-        </div>
+        </ScrollRegion>
       </DialogContent>
     </Dialog>
   )

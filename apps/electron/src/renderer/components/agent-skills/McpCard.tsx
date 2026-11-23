@@ -45,7 +45,7 @@ export function McpCard({ name, entry, onOpen, onToggle, onRequestDelete }: McpC
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="rounded-xl bg-blue-500/12 p-2 text-blue-500 shadow-sm shrink-0">
+        <div className="rounded-xl bg-muted p-2 text-muted-foreground shadow-sm shrink-0">
           <Plug size={18} />
         </div>
         <div className="min-w-0 flex-1">
@@ -58,7 +58,7 @@ export function McpCard({ name, entry, onOpen, onToggle, onRequestDelete }: McpC
           <div className="mt-0.5 truncate text-xs text-muted-foreground">{target || '未配置地址'}</div>
         </div>
         {isManagedLarkMcp ? (
-          <span className="shrink-0 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+          <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
             专用管理
           </span>
         ) : (
@@ -73,7 +73,7 @@ export function McpCard({ name, entry, onOpen, onToggle, onRequestDelete }: McpC
 
       <div className="mt-auto flex items-center gap-2">
         {isBuiltin && (
-          <span className="flex items-center gap-1 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+          <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
             <ShieldCheck size={12} /> {isManagedLarkMcp ? '官方托管' : '内置'}
           </span>
         )}
@@ -82,7 +82,7 @@ export function McpCard({ name, entry, onOpen, onToggle, onRequestDelete }: McpC
             className={cn(
               'flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium',
               test.success
-                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                ? 'bg-success/10 text-success'
                 : 'bg-destructive/10 text-destructive',
             )}
           >

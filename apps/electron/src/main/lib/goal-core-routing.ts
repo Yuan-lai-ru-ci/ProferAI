@@ -1,3 +1,4 @@
+import { isLocalCoreEnabled } from './core-local-mode'
 import type { AgentGoalState } from '@profer/shared'
 import { getLocalCoreClient } from './core-local-bridge'
 import { currentCoreId, getActiveCoreClient, getCoreTargetGeneration, getCurrentCoreTargetId, namespaceCoreSessionId, parseCoreSessionId } from './core-target-service'
@@ -5,7 +6,7 @@ import { currentCoreId, getActiveCoreClient, getCoreTargetGeneration, getCurrent
 /** 只返回显式本机null；远程断线/错误/旧响应永远不回退本机Goal。 */
 export async function routeGoalToCore(operation: string, sessionId?: string, input: Record<string, unknown> = {}): Promise<{ result: unknown } | null> {
   const local = getCurrentCoreTargetId() === 'local'
-  if (local && !getLocalCoreClient() && process.env.PROFER_CORE_LOCAL !== '1') return null
+  if (local && !getLocalCoreClient() && !isLocalCoreEnabled()) return null
   const client = local ? getLocalCoreClient() : getActiveCoreClient(), coreId = local ? 'local' : currentCoreId(), generation = getCoreTargetGeneration()
   if (!client || !coreId) throw new Error('当前远程内核未连接')
   const remote = sessionId === undefined ? undefined : local ? { coreId: 'local', sessionId } : parseCoreSessionId(sessionId)

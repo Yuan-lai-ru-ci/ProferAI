@@ -1,3 +1,6 @@
+// 独立进程验收旧桌面全局 MCP IPC。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 import { afterAll, expect, spyOn, test } from 'bun:test'
 import { ipcMain } from 'electron'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'

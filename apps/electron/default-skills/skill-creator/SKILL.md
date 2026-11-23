@@ -1,7 +1,7 @@
 ---
 name: skill-creator
-description: Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.
-version: "1.1.2"
+description: Create new skills, modify and improve existing skills, and measure skill performance. Use when the user asks to 创建、新建或编写一个 Skill (make a new Skill), turn a workflow into a Skill, edit or optimize an existing Skill, or run evals and improve triggering accuracy. For new Profer Skills, write both SKILL.md and the SKILL.json routing card.
+version: "1.1.3"
 ---
 
 # Skill Creator
@@ -72,6 +72,20 @@ Based on the user interview, fill in these components:
 - **description**: When to trigger, what it does. This is the primary triggering mechanism - include both what the skill does AND specific contexts for when to use it. All "when to use" info goes here, not in the body. Note: currently Claude has a tendency to "undertrigger" skills -- to not use them when they'd be useful. To combat this, please make the skill descriptions a little bit "pushy". So for instance, instead of "How to build a simple fast dashboard to display internal Anthropic data.", you might write "How to build a simple fast dashboard to display internal Anthropic data. Make sure to use this skill whenever the user mentions dashboards, data visualization, internal metrics, or wants to display any kind of company data, even if they don't explicitly ask for a 'dashboard.'"
 - **compatibility**: Required tools, dependencies (optional, rarely needed)
 - **the rest of the skill :)**
+
+### Create the Profer routing card
+
+When creating a **new** Skill for Profer, create `SKILL.json` beside `SKILL.md` before testing or packaging. The default card is valid even when it has no extra settings:
+
+```json
+{
+  "schemaVersion": 1
+}
+```
+
+Fill in `dependencies.toolGroups`, `dependencies.tools` (use the full `mcp__server__tool` name for MCP tools), or `dependencies.mcpServers` only for verified requirements without which the Skill cannot work. Add `policy.implicit: false` only when the user wants the Skill to be invoked explicitly with `/skill:<slug>`. Keep natural-language usage and trigger examples in the `SKILL.md` description. Do not duplicate the description or invent a keyword list in the card.
+
+Before delivering a new Skill, verify that both files are in the delivered directory or package. When updating or importing an existing Skill, preserve its existing card without replacing it. If the original has no card, leave that decision to Profer's per-Skill reminder or the user's explicit request.
 
 ### Skill Writing Guide
 

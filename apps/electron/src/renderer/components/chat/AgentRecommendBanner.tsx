@@ -123,7 +123,7 @@ export function AgentRecommendBanner(): React.ReactElement | null {
   }
 
   return (
-    <div className="mx-4 mb-3 rounded-xl bg-card shadow-lg overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
+    <div className="mx-4 mb-3 rounded-md bg-muted/40 overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
       {/* 头部 */}
       <div className="px-4 pt-3 pb-2">
         <div className="flex items-center justify-between">
@@ -131,13 +131,16 @@ export function AgentRecommendBanner(): React.ReactElement | null {
             <Sparkles className="size-4 text-primary" />
             <span className="text-sm font-medium text-foreground">推荐使用 Agent 模式</span>
           </div>
-          <button
+          <Button
             type="button"
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="关闭 Agent 模式推荐"
+            className="text-muted-foreground"
             onClick={handleDismiss}
           >
             <X className="size-3.5" />
-          </button>
+          </Button>
         </div>
       </div>
 

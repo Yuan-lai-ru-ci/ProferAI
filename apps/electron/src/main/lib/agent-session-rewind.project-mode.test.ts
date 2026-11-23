@@ -1,3 +1,6 @@
+// 本文件验收旧桌面 writer；新核默认与归属保护由 Core 专项测试覆盖。
+process.env.PROFER_LOCAL_CORE_MODE = 'legacy'
+
 /**
  * P1-1 回归：project 工作区的「回退到此处 / 清空对话」必须把文件快照恢复到项目根，
  * 不能写到中央会话存储目录（storageDir）。

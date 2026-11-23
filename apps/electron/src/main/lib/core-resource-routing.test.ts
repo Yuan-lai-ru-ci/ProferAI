@@ -13,6 +13,15 @@ describe('Core resource routing ownership', () => {
     await expect(routeCoreResource(AGENT_IPC_CHANNELS.GET_SKILLS, ['ws', { __proferCoreResourceScope: { targetId: 'remote-a', generation: 3 } }], () => snapshot)).resolves.toEqual({ result: ['core'] })
     expect(called).toBe(true)
   })
+  test('缺卡决定路由到当前 Core，并保留明确的 Skill 身份', async () => {
+    const received: Array<{ operation: string; args: unknown[] }> = []
+    const state = makeSnapshot({ client: { resourceOperation: async <T>(operation: string, args: unknown[]) => {
+      received.push({ operation, args }); return undefined as T
+    } } })
+    const target = { scope: 'workspace', workspaceSlug: 'ws', skillSlug: 'sample', workspaceSkillId: 'stable-id' }
+    await routeCoreResource(AGENT_IPC_CHANNELS.RESOLVE_SKILL_CARD_REMINDER, [target, 'dismiss', { __proferCoreResourceScope: { targetId: 'remote-a', generation: 3 } }], () => state)
+    expect(received).toEqual([{ operation: 'resolveSkillCardReminder', args: [target, 'dismiss'] }])
+  })
   test('old desktop falls back without scope', async () => {
     const snapshot = makeSnapshot({ targetId: 'local', ownsBusinessData: false, client: null })
     await expect(routeCoreResource(AGENT_IPC_CHANNELS.GET_SKILLS, ['ws'], () => snapshot)).resolves.toBeNull()

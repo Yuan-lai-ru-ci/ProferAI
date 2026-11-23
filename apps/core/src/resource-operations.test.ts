@@ -1,10 +1,10 @@
 import { afterAll, test, expect } from 'bun:test'
-import { mkdtempSync, realpathSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { executeCoreResourceOperation } from './resource-operations'
 import type { CoreConfig } from './config'
-import type { AgentWorkspace } from '@profer/shared'
+import type { AgentWorkspace, GlobalSkillMeta, SkillMeta } from '@profer/shared'
 
 const fixtureRoots: string[] = []
 afterAll(() => { for (const root of fixtureRoots) rmSync(root, { recursive: true, force: true }) })
@@ -20,6 +20,44 @@ function fixture(project = false) {
   const call = (operation: string, ...args: unknown[]) => executeCoreResourceOperation(context, { operation, args })
   return { root, config, directory, context, call }
 }
+test('Core 工作区新建随附默认卡；旧 Skill 的拒绝与创建以各自身份持久化', async () => {
+  const f = fixture(true)
+  await f.call('createWorkspaceSkill', 'same', 'new-skill', 'New skill', 'Use when needed', 'body')
+  expect(await f.call('readWorkspaceSkillCard', 'same', 'new-skill')).toMatchObject({ present: true, manifest: { schemaVersion: 1 } })
+  expect(await f.call('writeWorkspaceSkillCard', 'same', 'new-skill', { policy: { implicit: null } })).toMatchObject({ present: true })
+  const legacyDir = join(f.directory, 'skills', 'old-skill')
+  mkdirSync(legacyDir)
+  writeFileSync(join(legacyDir, 'SKILL.md'), '---\nname: Old Skill\n---\n')
+  const target = { scope: 'workspace', workspaceSlug: 'same', skillSlug: 'old-skill' }
+  const get = async () => (await f.call('getAllWorkspaceSkills', 'same') as SkillMeta[]).find(skill => skill.slug === 'old-skill')!
+  expect((await get()).needsCardReminder).toBe(true)
+  await expect(f.call('resolveSkillCardReminder', { ...target, workspaceSkillId: 'stale' }, 'dismiss')).rejects.toThrow('Skill 已变更')
+  await f.call('resolveSkillCardReminder', target, 'dismiss')
+  expect(existsSync(join(legacyDir, 'SKILL.json'))).toBe(false)
+  expect(await get()).toMatchObject({ needsCardReminder: false, workspaceSkillId: expect.any(String) })
+  await f.call('toggleWorkspaceSkill', 'same', 'old-skill', false, '')
+  expect(await get()).toMatchObject({ enabled: false, needsCardReminder: false })
+  await f.call('resolveSkillCardReminder', target, 'create')
+  expect(await f.call('readWorkspaceSkillCard', 'same', 'old-skill')).toMatchObject({ present: true, manifest: { schemaVersion: 1 } })
+})
+
+test('Core 用户全局创建默认卡，导入没有卡且各自保留创建或拒绝决定', async () => {
+  const f = fixture()
+  const added = await f.call('globalSkill.createUser', 'new-skill', 'New', '', 'body') as GlobalSkillMeta
+  const imported = await f.call('globalSkill.createUser', 'imported', 'Imported', '', 'body', true) as GlobalSkillMeta
+  const other = await f.call('globalSkill.createUser', 'other', 'Other', '', 'body', true) as GlobalSkillMeta
+  expect(await f.call('globalSkill.readCard', added.skillId)).toMatchObject({ manifest: { schemaVersion: 1 } })
+  const reminderSlugs = async () => (await f.call('globalSkill.list') as GlobalSkillMeta[]).filter(skill => skill.needsCardReminder).map(skill => skill.slug).sort()
+  expect(await reminderSlugs()).toEqual(['imported', 'other'])
+  await f.call('resolveSkillCardReminder', { scope: 'global', skillId: imported.skillId }, 'dismiss')
+  expect(await f.call('globalSkill.readCard', imported.skillId)).toMatchObject({ present: false })
+  expect(await reminderSlugs()).toEqual(['other'])
+  await f.call('resolveSkillCardReminder', { scope: 'global', skillId: other.skillId }, 'create')
+  expect(await f.call('globalSkill.readCard', other.skillId)).toMatchObject({ present: true, manifest: { schemaVersion: 1 } })
+  expect(await f.call('globalSkill.writeCard', other.skillId, { dependencies: { mcpServers: ['github'] } })).toMatchObject({ manifest: { dependencies: { mcpServers: ['github'] } } })
+  expect(await reminderSlugs()).toEqual([])
+})
+
 test('资源工作区目录失效不补建；Skill条目不能改名覆盖来源身份', async () => {
   const f = fixture(true)
   const projectRoot = f.context.workspaces.list()[0]!.rootPath!
@@ -116,6 +154,23 @@ test('Skill文件CRUD与越界、身份保护', async () => {
   await call('renameSkillEntry', 'same', 'sample', 'docs/a.txt', 'docs/b.txt')
   await call('deleteSkillEntry', 'same', 'sample', 'docs/b.txt')
   expect(await call('listSkillFiles', 'same', 'sample')).toBeArray()
+})
+test('Core Skill 管理列表返回元 Skill 和用户全局 Skill 的定义身份，而不是复制来源身份', async () => {
+  const { call, config } = fixture()
+  const builtin = join(config.configDir, 'global-skills', 'builtin', 'builtin-id')
+  mkdirSync(builtin, { recursive: true })
+  writeFileSync(join(builtin, 'skill-library.json'), JSON.stringify({ schemaVersion: 1, skillId: 'builtin-id', slug: 'builtin-skill', name: 'Builtin', version: '1.0.0', type: 'builtin-meta', description: 'Built in' }))
+  writeFileSync(join(builtin, 'SKILL.md'), '---\nname: Builtin\n---\nbody')
+  const user = await call('globalSkill.copyToUser', 'builtin-id', 'user-copy') as GlobalSkillMeta
+  const userManifest = join(config.configDir, 'global-skills', 'user', user.skillId, 'skill-library.json')
+  writeFileSync(userManifest, JSON.stringify({ ...user, source: { sourceSkillId: 'builtin-id', sourceSkillType: 'builtin-meta', sourceVersion: '0.9.0', copiedAt: 'fixture' } }))
+  await call('toggleWorkspaceSkill', 'same', 'user-copy', false, user.skillId)
+
+  expect(await call('getAllWorkspaceSkills', 'same')).toEqual([])
+  expect(await call('getAllWorkspaceSkills', 'same', true)).toMatchObject([
+    { slug: 'builtin-skill', sourceSkillId: 'builtin-id', sourceSkillType: 'builtin-meta', sourceVersion: '1.0.0', description: 'Built in', enabled: true, actualSource: 'global' },
+    { slug: 'user-copy', sourceSkillId: user.skillId, sourceSkillType: 'user-global', sourceVersion: '1.0.0', enabled: false, actualSource: 'none' },
+  ])
 })
 test('全局Skill三态开关不误改同名本地，运行读取同份覆盖', async () => {
   const { call, config, directory } = fixture()

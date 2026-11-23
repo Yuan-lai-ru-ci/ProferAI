@@ -11,6 +11,7 @@ import type { ProferPluginPagePlacement, ProferPluginPagePlacementPreference, Pr
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, LARK_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, CHANGELOG_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, RECOMMENDATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, AUTH_IPC_CHANNELS, SKILL_MASTER_IPC_CHANNELS, GLOBAL_SKILL_IPC_CHANNELS, KNOWLEDGE_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, type Todo, type CalendarEvent, type TodoListQuery, type CalendarEventListQuery, type PlanningGroup, type PlanningGroupScope, type PlanningTag, type PlanningReminder, type ActivePlanningReminder, type PlanningAgentOperation, type PlanningChange, type CreateTodoInput, type UpdateTodoInput, type CreateCalendarEventInput, type UpdateCalendarEventInput, type CreatePlanningGroupInput, type UpdatePlanningGroupInput, type CreatePlanningTagInput, type UpdatePlanningTagInput, type SnoozePlanningReminderInput, type StartTodoAgentInput, type StartTodoAgentResult, type TodoAgentSessionActivation, type ChangelogEntry, type AgentPreset, type AgentPresetCreateInput, type AgentPresetUpdateInput, type AgentPresetImportResult } from '@profer/shared'
+import { CORE_CONNECTION_IPC_CHANNELS } from '../types'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, CORE_TARGET_IPC_CHANNELS, SKIN_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, NOTIFICATION_SOUND_IPC_CHANNELS, DESKTOP_NOTIFICATION_IPC_CHANNELS } from '../types'
 import { PROFER_PLUGIN_IPC_CHANNELS, type ProferInstalledPlugin, type ProferPluginOperationResult, type ProferPluginViewInstance, type ProferPluginViewLayout } from '@profer/plugin-api'
 import { VISUALIZATION_IPC, type VisualizationContent, type VisualizationRecord, type VisualizationViewState } from '@profer/shared'
@@ -648,6 +649,14 @@ export interface ElectronAPI {
   /** 通知主进程 renderer 已完成首屏初始化 */
   notifyRendererReady: () => void
 
+  getCoreConnectionState: () => Promise<import('../types').CoreConnectionState>
+  retryLocalCore: () => Promise<import('../types').LocalCoreState>
+  setCoreSharing: (enabled: boolean) => Promise<import('../types').CoreConnectionState>
+  createCoreInvitation: (ttlSeconds?: number, bindingTtlSeconds?: number) => Promise<import('../types').CoreInvitationResult>
+  pairCoreInvitation: (invitation: string, tunnelUrl?: string) => Promise<import('../types').CoreTargetsSnapshot>
+  pairAndSelectCoreInvitation: (invitation: string, tunnelUrl?: string) => Promise<import('../types').CoreTargetsSnapshot>
+  revokeCoreBinding: (bindingId: string) => Promise<import('../types').CoreConnectionState>
+
   /** 获取当前 Core 目标目录（不包含 Token）。 */
   listCoreTargets: () => Promise<import('../types').CoreTargetsSnapshot>
   listCoreChannels: () => Promise<Array<Omit<import('@profer/shared').Channel, 'apiKey' | 'createdAt' | 'updatedAt'>>>
@@ -657,7 +666,7 @@ export interface ElectronAPI {
   fetchCoreChannelModels: (input: import('@profer/shared').FetchModelsInput) => Promise<import('@profer/shared').FetchModelsResult>
   testCoreChannel: (input: import('@profer/shared').FetchModelsInput) => Promise<import('@profer/shared').ChannelTestResult>
   /** 验证远程 Core 身份与协议能力。 */
-  testCoreTarget: (input: import('../types').CoreTargetInput) => Promise<{ version: string; coreId: string; capabilities: string[]; platform?: string }>
+  testCoreTarget: (input: import('../types').CoreTargetInput) => Promise<{ version: string; coreId: string; capabilities: string[]; platform?: string; osId?: string }>
   /** 保存远程 Core，Token 仅在主进程加密持久化。 */
   addCoreTarget: (input: import('../types').CoreTargetInput) => Promise<import('../types').CoreTargetSummary>
   updateCoreTarget: (id: string, input: {name: string}) => Promise<import('../types').CoreTargetsSnapshot>
@@ -1104,6 +1113,7 @@ export interface ElectronAPI {
 
   /** 合并写入 Skill 路由卡片（null / 空值 = 删除该字段） */
   writeSkillCard: (workspaceSlug: string, skillSlug: string, patch: import('@profer/shared').SkillManifestPatch) => Promise<import('@profer/shared').WorkspaceSkillCardState>
+  resolveSkillCardReminder: (target: import('@profer/shared').SkillCardReminderTarget, decision: import('@profer/shared').SkillCardReminderDecision) => Promise<void>
 
   /** 列出 Skill 目录下的子文件树（不含 SKILL.md） */
   listSkillFiles: (workspaceSlug: string, skillSlug: string) => Promise<import('@profer/shared').SkillFileNode[]>
@@ -1827,11 +1837,13 @@ export interface ElectronAPI {
   globalSkill: {
     list: (workspaceSlug?: string) => Promise<Array<import('@profer/shared').GlobalSkillMeta>>
     read: (skillId: string) => Promise<string>
+    readCard: (skillId: string) => Promise<import('@profer/shared').WorkspaceSkillCardState>
+    writeCard: (skillId: string, patch: import('@profer/shared').SkillManifestPatch) => Promise<import('@profer/shared').WorkspaceSkillCardState>
     readWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string) => Promise<string>
     saveWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string, content: string) => Promise<void>
     save: (skillId: string, content: string, workspaceSlug: string | undefined, scope: 'global' | 'workspace') => Promise<import('@profer/shared').GlobalSkillManifest | import('@profer/shared').WorkspaceSkillCopyResult>
     copyToUser: (skillId: string, slug?: string) => Promise<import('@profer/shared').GlobalSkillManifest>
-    createUser: (slug: string, name: string, description: string, content: string) => Promise<import('@profer/shared').GlobalSkillManifest>
+    createUser: (slug: string, name: string, description: string, content: string, importMarkdown?: boolean) => Promise<import('@profer/shared').GlobalSkillManifest>
     copyToWorkspace: (skillId: string, workspaceSlug: string) => Promise<import('@profer/shared').WorkspaceSkillCopyResult>
     deleteUser: (skillId: string, confirmationToken?: string) => Promise<void>
     getDeleteBlockers: (skillId: string) => Promise<import('@profer/shared').GlobalSkillDeleteBlockers>
@@ -2383,6 +2395,13 @@ const electronAPI: ElectronAPI = {
     return () => ipcRenderer.removeListener(PROFER_PLUGIN_IPC_CHANNELS.CHANGED, listener)
   },
 
+  getCoreConnectionState: () => ipcRenderer.invoke(CORE_CONNECTION_IPC_CHANNELS.STATE),
+  retryLocalCore: () => ipcRenderer.invoke(CORE_CONNECTION_IPC_CHANNELS.RETRY_LOCAL),
+  setCoreSharing: enabled => ipcRenderer.invoke(CORE_CONNECTION_IPC_CHANNELS.SET_SHARING, enabled),
+  createCoreInvitation: (ttlSeconds, bindingTtlSeconds) => ipcRenderer.invoke(CORE_CONNECTION_IPC_CHANNELS.INVITE, ttlSeconds, bindingTtlSeconds),
+  pairAndSelectCoreInvitation: (invitation, tunnelUrl) => ipcRenderer.invoke(CORE_CONNECTION_IPC_CHANNELS.PAIR_AND_SELECT, invitation, tunnelUrl),
+  pairCoreInvitation: (invitation, tunnelUrl) => ipcRenderer.invoke(CORE_CONNECTION_IPC_CHANNELS.PAIR, invitation, tunnelUrl),
+  revokeCoreBinding: id => ipcRenderer.invoke(CORE_CONNECTION_IPC_CHANNELS.REVOKE, id),
   listCoreTargets: () => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.LIST),
   listCoreChannels: () => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.CHANNELS),
   createCoreChannel: input => ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.CREATE_CHANNEL, input),
@@ -3033,6 +3052,10 @@ const electronAPI: ElectronAPI = {
       skillSlug,
       patch,
     )
+  },
+
+  resolveSkillCardReminder: (target: import('@profer/shared').SkillCardReminderTarget, decision: import('@profer/shared').SkillCardReminderDecision) => {
+    return invokeScopedCoreResource(AGENT_IPC_CHANNELS.RESOLVE_SKILL_CARD_REMINDER, target, decision)
   },
 
   listSkillFiles: (workspaceSlug: string, skillSlug: string) => {
@@ -4155,11 +4178,13 @@ const electronAPI: ElectronAPI = {
   globalSkill: {
     list: (workspaceSlug?: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.LIST, workspaceSlug),
     read: (skillId: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.READ, skillId),
+    readCard: (skillId: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.READ_CARD, skillId),
+    writeCard: (skillId: string, patch: import('@profer/shared').SkillManifestPatch) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.WRITE_CARD, skillId, patch),
     readWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.READ_WORKSPACE_COPY, workspaceSlug, workspaceSkillId),
     saveWorkspaceCopy: (workspaceSlug: string, workspaceSkillId: string, content: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.SAVE_WORKSPACE_COPY, workspaceSlug, workspaceSkillId, content),
     save: (skillId: string, content: string, workspaceSlug: string | undefined, scope: 'global' | 'workspace') => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.SAVE, skillId, content, workspaceSlug ?? '', scope),
     copyToUser: (skillId: string, slug?: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_USER, skillId, slug),
-    createUser: (slug: string, name: string, description: string, content: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, slug, name, description, content),
+    createUser: (slug: string, name: string, description: string, content: string, importMarkdown?: boolean) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.CREATE_USER, slug, name, description, content, importMarkdown),
     copyToWorkspace: (skillId: string, workspaceSlug: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.COPY_TO_WORKSPACE, skillId, workspaceSlug),
     getDeleteBlockers: (skillId: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.GET_DELETE_BLOCKERS, skillId),
     deleteUser: (skillId: string, confirmationToken?: string) => invokeScopedCoreResource(GLOBAL_SKILL_IPC_CHANNELS.DELETE_USER, skillId, confirmationToken),

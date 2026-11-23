@@ -10,7 +10,7 @@ declare module 'ws' {
     readonly readyState: number
     readonly protocol: string
     constructor(url: string, options?: { headers?: Record<string, string>; handshakeTimeout?: number; rejectUnauthorized?: boolean })
-    constructor(url: string, protocols: string | string[], options?: { headers?: Record<string, string>; handshakeTimeout?: number; rejectUnauthorized?: boolean; ca?: string })
+    constructor(url: string, protocols: string | string[], options?: { headers?: Record<string, string>; handshakeTimeout?: number; rejectUnauthorized?: boolean; ca?: string; agent?: import('node:https').Agent })
     send(data: Buffer | ArrayBuffer | Uint8Array | string): void
     close(code?: number, reason?: string): void
     terminate(): void

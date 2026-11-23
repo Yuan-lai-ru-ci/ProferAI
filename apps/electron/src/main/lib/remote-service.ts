@@ -1,3 +1,4 @@
+import { isLocalCoreEnabled } from './core-local-mode'
 /**
  * Profer Remote Service — 移动端（Pocket）远程接入服务
  *
@@ -1073,7 +1074,7 @@ export async function handleRemoteCommand(
       ? parsed.access.sessionId : context?.activeSessionId }
     : parsed
   const coreResult = await routePocketSessionToCore(coreInput, { getClient: getLocalCoreClient,
-    coreEnabled: () => process.env.PROFER_CORE_LOCAL === '1', sessionItem: buildSessionItem, paginateMessages: paginateSDKMessages })
+    coreEnabled: () => isLocalCoreEnabled(), sessionItem: buildSessionItem, paginateMessages: paginateSDKMessages })
   if (coreResult) return coreResult
   switch (type) {
     case 'ping': {
@@ -1083,7 +1084,7 @@ export async function handleRemoteCommand(
     case 'list_sessions': {
       // Pocket这条桌面连接使用本机会话ID，不跟随桌面选择另一台远程Core。
       const core = getLocalCoreClient()
-      if (core || process.env.PROFER_CORE_LOCAL === '1') {
+      if (core || isLocalCoreEnabled()) {
         if (!core) return { ok: false, error: '本地Core未就绪' }
         try {
           const liveWorkspaceIds = new Set(listAgentWorkspaces().filter(workspace => !workspace.archived).map(workspace => workspace.id))
@@ -1116,7 +1117,7 @@ export async function handleRemoteCommand(
       if (sessionId.startsWith('core:')) return { ok: false, error: 'Pocket桌面连接不能删除另一Core的命名空间会话' }
       try {
         const core = getLocalCoreClient()
-        if (core || process.env.PROFER_CORE_LOCAL === '1') {
+        if (core || isLocalCoreEnabled()) {
           if (!core) throw new Error('本地Core未就绪')
           const accepted = await core.deleteSession(sessionId)
           // 使用Core确认的级联集合，不能根据桌面旧索引猜测要隐藏哪些子会话。

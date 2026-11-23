@@ -77,6 +77,12 @@ const builtinDefinition: SkillMeta = {
 }
 
 describe('Skill 分区：已关闭的工作区副本不得消失', () => {
+  test('Core 明确标记无稳定 ID 的历史本地 Skill，仍可进入详情', () => {
+    const legacy: SkillMeta = { slug: 'old', name: '旧 Skill', enabled: false, actualSource: 'none', scope: 'workspace' }
+    expect(partitionSkills([legacy]).workspaceSkills).toEqual([legacy])
+    expect(skillListKey(legacy)).toBe('workspace:old')
+  })
+
   test('关闭后仍归入「工作区 Skills」，只是 enabled 变 false', () => {
     const open = partitionSkills([enabledLocal])
     const closed = partitionSkills([closedLocal])

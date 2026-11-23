@@ -17,15 +17,28 @@ test('Given 本机Core具有Chat能力 When 获取模型目录 Then 读取本机
   const start=source.indexOf('  ipcMain.handle(CORE_TARGET_IPC_CHANNELS.CHANNELS,')
   const end=source.indexOf('\n  ipcMain.handle(',start+5)
   const script=new Bun.Transpiler({loader:'ts'}).transformSync(source.slice(start,end))
-  for(const stale of [false,true]){
-    let generation=2,calls=0,handler:(()=>Promise<unknown>)|undefined
-    const client={listChannels:async()=>{calls++;if(stale)generation++;return [{id:'from-local-core'}]}}
-    const dependencies={ipcMain:{handle:(_channel:string,callback:()=>Promise<unknown>)=>{handler=callback}},CORE_TARGET_IPC_CHANNELS,
-      listCoreTargets:()=>({currentId:'local',generation,targets:[{id:'local',capabilities:['chat']}]}),getLocalCoreClient:()=>client,getActiveCoreClient:()=>null}
-    new Function(...Object.keys(dependencies),script)(...Object.values(dependencies))
-    if(!handler)throw new Error('未注册本机目录handler')
-    if(stale)await expect(handler()).rejects.toThrow('忽略旧')
-    else await expect(handler()).resolves.toEqual([{id:'from-local-core'}])
+  for (const { independent, stale } of [
+    { independent: false, stale: 'none' },
+    { independent: false, stale: 'generation' },
+    { independent: true, stale: 'none' },
+    { independent: true, stale: 'client' },
+  ]) {
+    let generation = 2, calls = 0, handler: (() => Promise<unknown>) | undefined
+    let current = true
+    const client = { listChannels: async () => {
+      calls++
+      if (stale === 'generation') generation++
+      if (stale === 'client') current = false
+      return [{ id: 'from-local-core' }]
+    } }
+    const dependencies = { ipcMain: { handle: (_channel: string, callback: () => Promise<unknown>) => { handler = callback } }, CORE_TARGET_IPC_CHANNELS,
+      isIndependentLocalCore: () => independent,
+      listCoreTargets: () => ({ currentId: 'local', generation, targets: [{ id: 'local', capabilities: independent ? [] : ['chat'] }] }),
+      getLocalCoreClient: () => current ? client : null, getActiveCoreClient: () => null }
+    new Function(...Object.keys(dependencies), script)(...Object.values(dependencies))
+    if (!handler) throw new Error('未注册本机目录handler')
+    if (stale !== 'none') await expect(handler()).rejects.toThrow('忽略旧')
+    else await expect(handler()).resolves.toEqual([{ id: 'from-local-core' }])
     expect(calls).toBe(1)
   }
 })
