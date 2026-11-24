@@ -15,6 +15,7 @@ import { join, dirname, basename, sep } from 'node:path'
 import { writeFileSync, mkdirSync, existsSync, appendFileSync, statSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
+import { isMainAppWindowSender, isSecondaryWindowSessionOwner, isWindowTabHandoffPending, setLocalHandoffRestore } from './main-app-windows'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE, resolveRunInitiator, AgentSessionRuntimeMismatchError } from '@profer/shared'
 import type {
   AgentContextUsageSnapshot,
@@ -423,8 +424,10 @@ function finishActiveStreamBacklog(sessionId: string): void {
   activeStreamEventBacklogs.delete(sessionId)
 }
 
-function isSessionWindowContents(wc: WebContents | null): boolean {
+function isSessionWindowContents(wc: WebContents | null, sessionId: string): boolean {
   if (!wc || wc.isDestroyed()) return false
+  if (isSecondaryWindowSessionOwner(wc, { type: 'agent', sessionId })) return true
+  // 已注册的完整窗口必须按实际上报的 Tab 集合判断；旧轻量窗口保留 URL 兼容。
   try {
     return wc.getURL().includes('window=session')
   } catch {
@@ -452,7 +455,7 @@ export function restoreActiveAgentStreams(
   const snapshots = new Map([...completedStreamEventBacklogs, ...activeStreamEventBacklogs])
   if (allowed) {
     for (const sessionId of [...snapshots.keys()]) {
-      if (!allowed.has(sessionId)) {
+      if (!allowed.has(sessionId) || isWindowTabHandoffPending(webContents, sessionId)) {
         snapshots.delete(sessionId)
         continue
       }
@@ -460,7 +463,7 @@ export function restoreActiveAgentStreams(
       // 抢走会给那个窗口发 SESSION_RELEASED，它的运行态与实时消息被清掉，
       // 页面冻结在快照上（过程区一直折叠）。
       const owner = getSessionWebContents(sessionId)
-      if (owner && owner !== webContents && isSessionWindowContents(owner)) {
+      if (owner && owner !== webContents && isSessionWindowContents(owner, sessionId)) {
         snapshots.delete(sessionId)
       }
     }
@@ -469,7 +472,7 @@ export function restoreActiveAgentStreams(
     // 否则会话窗口会收到 SESSION_RELEASED，正在看的流和引用高亮都会被打断。
     for (const sessionId of [...snapshots.keys()]) {
       const owner = getSessionWebContents(sessionId)
-      if (owner && owner !== webContents && isSessionWindowContents(owner)) {
+      if (owner && owner !== webContents && isSessionWindowContents(owner, sessionId)) {
         snapshots.delete(sessionId)
       }
     }
@@ -514,9 +517,9 @@ export function restoreActiveAgentStreams(
   // 否则那个窗口会收到 SESSION_RELEASED 并冻结在快照上。
   if (allowed) {
     for (const sessionId of allowed) {
-      if (snapshots.has(sessionId) || !isAgentExecutionActive(sessionId)) continue
+      if (isWindowTabHandoffPending(webContents, sessionId) || snapshots.has(sessionId) || !isAgentExecutionActive(sessionId)) continue
       const owner = getSessionWebContents(sessionId)
-      if (owner && owner !== webContents && isSessionWindowContents(owner)) continue
+      if (owner && owner !== webContents && isSessionWindowContents(owner, sessionId)) continue
       registerWebContents(sessionId, webContents)
       const context = contextSnapshots.get(sessionId)
       restored.push({
@@ -532,6 +535,7 @@ export function restoreActiveAgentStreams(
 
 function isMainRendererWindow(win: BrowserWindow): boolean {
   if (win.isDestroyed()) return false
+  if (isMainAppWindowSender(win.webContents)) return true
   const url = win.webContents.getURL()
   if (!url) return false
   if (url.startsWith('data:')) return false
@@ -1797,3 +1801,5 @@ export function saveFilesToWorkspaceFiles(input: AgentSaveWorkspaceFilesInput): 
 
   return results
 }
+
+setLocalHandoffRestore((sender, sessionId) => { registerWebContents(sessionId, sender); restoreActiveAgentStreams(sender, [sessionId]) })

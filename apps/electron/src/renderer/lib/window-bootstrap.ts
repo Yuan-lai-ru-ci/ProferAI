@@ -16,6 +16,7 @@ function fallbackBootstrap(): MainWindowBootstrap {
     kind: isSessionWindow ? 'session' : 'main',
     isPrimary: !isSessionWindow,
     initialTab: null,
+    openWindows: [],
   }
 }
 

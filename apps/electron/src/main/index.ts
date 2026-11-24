@@ -1,3 +1,5 @@
+import './lib/core-ipc-scope'
+import { windowUsesLocalCore } from './lib/core-target-service'
 import { isIndependentLocalCore, isLocalCoreEnabled } from './lib/core-local-mode'
 import './lib/core-local-bootstrap'
 import { configureLocalCoreRetry, updateLocalCoreStatus } from './lib/core-local-service'
@@ -160,7 +162,7 @@ import { setLocalCoreClient, clearLocalCoreTargetClient, publishCoreTargetsSnaps
 import { configureGlobalSkillSystem, ensureGlobalSkillSystemReady } from './lib/global-skill-manager'
 import { ensurePresetSystemReady } from './lib/agent-preset-manager'
 import { getMainWindow, setMainWindow } from './lib/main-window-state'
-import { focusSessionWindow, getSessionWindowSummaries, hasOtherVisibleMainWindow, registerMainAppWindow, setMainAppWindowsChangedHandler } from './lib/main-app-windows'
+import { focusSessionWindow, getSessionWindowSummaries, hasOtherVisibleMainWindow, findPrimaryWindowSuccessor, registerMainAppWindow, setPrimaryWindowCloseHandler, setPrimaryWindowChangedHandler, setMainAppWindowsChangedHandler } from './lib/main-app-windows'
 import { stopAllAgents, killOrphanedClaudeSubprocesses, initializeAgentRunLedger } from './lib/agent-service'
 import {
   reconcileWorkspaceShadowOnStartup,
@@ -428,6 +430,59 @@ function saveMainWindowState(): void {
   })
 }
 
+setPrimaryWindowChangedHandler(win => {
+  mainWindow = win
+  if (win) {
+    browserController.setOwnerWindow(win)
+    pluginViewManager.setOwnerWindow(win)
+    // 监听器原先捕获旧窗口，重新绑定后文件变化仍可到达接任窗口。
+    stopWorkspaceWatcher()
+    startWorkspaceWatcher(win)
+    // 接任窗口原先只有次级窗口事件；补主窗口状态持久化，不改变其 Core/Tab。
+    let saveTimer: ReturnType<typeof setTimeout> | undefined
+    const saveIfPrimary = (): void => {
+      if (saveTimer) clearTimeout(saveTimer)
+      saveTimer = setTimeout(() => {
+        saveTimer = undefined
+        if (getMainWindow() === win) saveMainWindowState()
+      }, 500)
+    }
+    win.on('resize', saveIfPrimary)
+    win.on('move', saveIfPrimary)
+    win.once('closed', () => { if (saveTimer) clearTimeout(saveTimer) })
+  } else {
+    browserController.dispose()
+    pluginViewManager.dispose()
+  }
+})
+
+setPrimaryWindowCloseHandler(win => {
+  if (getIsQuitting()) return true
+  saveMainWindowState()
+  if (findPrimaryWindowSuccessor(win)) return true
+  if (process.platform === 'darwin') {
+    // 只剩最后一个完整窗口时保持原 macOS 隐藏语义；异步回调绑定窗口实例。
+    let hidden = false
+    const hide = (): void => {
+      if (hidden || win.isDestroyed() || getIsQuitting()) return
+      hidden = true
+      win.hide()
+      if (!hasOtherVisibleMainWindow(win)) app.hide()
+    }
+    if (win.isFullScreen()) {
+      win.setFullScreen(false)
+      const timeout = setTimeout(hide, 1000)
+      win.once('leave-full-screen', () => { clearTimeout(timeout); hide() })
+    } else hide()
+    return false
+  }
+  if (process.platform === 'win32' && getTray()) {
+    win.hide()
+    return false
+  }
+  return true
+})
+
 function createWindow(): void {
   const iconPath = resolveAppWindowIconPath()
   const iconExists = iconPath != null
@@ -457,7 +512,7 @@ function createWindow(): void {
     ? { width: savedState.width, height: savedState.height, x: savedState.x, y: savedState.y }
     : { width: 1400, height: 900 }
 
-  mainWindow = new BrowserWindow({
+  const createdWindow = new BrowserWindow({
     ...initialBounds,
     minWidth: 800,
     minHeight: 600,
@@ -480,18 +535,18 @@ function createWindow(): void {
   })
   // 主窗口必须先注册到多窗口注册表，renderer 才能读到窗口引导信息；
   // 后续次级窗口（标签拖出 / 右键在新窗口打开）共用同一套注册表。
-  registerMainAppWindow(mainWindow, { isPrimary: true })
+  registerMainAppWindow(createdWindow, { isPrimary: true })
   // 启动冒烟的「窗口真的建出来了」信号：到这一步才算应用起得来；
   // renderer 白屏不属本次事故的判定范围（那由 startup budget / 日常验收盯）。
   writeStartupProbe(STARTUP_STAGE_WINDOW_CREATED, { version: app.getVersion() })
   // 主界面保持 100% 页面缩放：非整数缩放（如 110%）会与系统 DPI 相乘得到 1.375，
   // Chromium 会把 border-radius 圆角光栅成 45° 斜切（圆角被“切掉”）。
   // 详见 DEFAULT_MAIN_WINDOW_ZOOM_FACTOR 注释。
-  mainWindow.webContents.setZoomFactor(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR)
+  createdWindow.webContents.setZoomFactor(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR)
   // GPU 合成/光栅状态落日志：GPU 进程崩溃后 Chromium 会静默降级到软件合成且不自动恢复，
   // 表现为动画与流式输出掉到个位数帧率。没有这条日志时，这种降级会被误判成「渲染代码慢」，
   // 从而在错误的层面做优化。等页面加载完再读，保证 GPU 进程已完成能力协商。
-  mainWindow.webContents.once('did-finish-load', () => {
+  createdWindow.webContents.once('did-finish-load', () => {
     const status = app.getGPUFeatureStatus()
     const diagnostics = summarizeGpuFeatureStatus(status)
     if (diagnostics.degraded) {
@@ -507,7 +562,7 @@ function createWindow(): void {
   if (!app.isPackaged) {
     const diagnosticsDir = join(app.getPath('userData'), 'diagnostics')
 
-    mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    createdWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
       const severity = ['verbose', 'info', 'warning', 'error'][level] ?? String(level)
       console.log(`[renderer:${severity}] ${sourceId}:${line} ${message}`)
 
@@ -537,22 +592,22 @@ function createWindow(): void {
     // 默认关闭：需要时设 PROFER_DEV_DIAGNOSTICS=1 启动 dev（与 renderer 侧观测一起使用）。
     const logWindowGeometry = (): void => {
       if (process.env.PROFER_DEV_DIAGNOSTICS !== '1') return
-      if (mainWindow === null || mainWindow.isDestroyed()) return
+      if (createdWindow === null || createdWindow.isDestroyed()) return
       appendDevDiagnostic(diagnosticsDir, 'window-geometry-debug.jsonl', {
         timestamp: new Date().toISOString(),
         epoch: Date.now(),
-        bounds: mainWindow.getBounds(),
-        contentBounds: mainWindow.getContentBounds(),
-        zoomFactor: mainWindow.webContents.getZoomFactor(),
+        bounds: createdWindow.getBounds(),
+        contentBounds: createdWindow.getContentBounds(),
+        zoomFactor: createdWindow.webContents.getZoomFactor(),
       })
     }
-    mainWindow.on('resize', logWindowGeometry)
-    mainWindow.on('resized', logWindowGeometry)
+    createdWindow.on('resize', logWindowGeometry)
+    createdWindow.on('resized', logWindowGeometry)
     let devServerLoadRetries = 0
-    mainWindow.webContents.on('did-finish-load', () => {
+    createdWindow.webContents.on('did-finish-load', () => {
       devServerLoadRetries = 0
     })
-    mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    createdWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
       console.error(`[renderer:did-fail-load] mainFrame=${isMainFrame} code=${errorCode} ${errorDescription}: ${validatedURL}`)
       // 兜底重试：dev server 端口抖动 / 刚重启时（-102 CONNECTION_REFUSED、-105 NAME_NOT_RESOLVED），
       // 有限次退避重试，避免主窗口永久停在加载态。仅限开发模式（外层已是 !app.isPackaged）。
@@ -562,33 +617,33 @@ function createWindow(): void {
       const delay = 500 * devServerLoadRetries
       console.warn(`[renderer] dev server 未就绪，${delay}ms 后重试第 ${devServerLoadRetries}/${DEV_SERVER_LOAD_MAX_RETRIES} 次`)
       setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) loadRenderer()
+        if (createdWindow && !createdWindow.isDestroyed()) loadRenderer()
       }, delay)
     })
-    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    createdWindow.webContents.on('render-process-gone', (_event, details) => {
       console.error(`[renderer:process-gone] reason=${details.reason} exitCode=${details.exitCode}`)
     })
   }
   // 原生 traffic lights 不支持调整尺寸，改由 renderer 中的可控按钮替代。
-  if (isMac) mainWindow.setWindowButtonVisibility(false)
+  if (isMac) createdWindow.setWindowButtonVisibility(false)
   // Windows 开发运行时的 Electron 壳不会稳定继承 BrowserWindow 构造参数中的图标；
   // 显式设置一次，确保任务栏窗口图标使用当前资源文件。
   if (process.platform === 'win32' && iconPath) {
-    mainWindow.setIcon(iconPath)
+    createdWindow.setIcon(iconPath)
     // 任务栏按钮图标 = 进程身份（AUMID）决定，不随 WM_SETICON。
     // appIconPath 故意指向 exe 而不是散装 .ico：Shell 会长期引用这个路径，
     // 指向 resources/app-icon.ico 会让下一次升级覆盖安装时文件被占用。
     if (app.isPackaged) {
-      mainWindow.setAppDetails({
+      createdWindow.setAppDetails({
         appId: 'com.profer.app',
         appIconPath: process.execPath,
       })
     }
   }
-  installWindowsZoomInFallback(mainWindow)
-  installMacTrafficLightZoomSync(mainWindow)
-  updateWindowFrameAppearance(mainWindow)
-  browserController.setOwnerWindow(mainWindow)
+  installWindowsZoomInFallback(createdWindow)
+  installMacTrafficLightZoomSync(createdWindow)
+  updateWindowFrameAppearance(createdWindow)
+  browserController.setOwnerWindow(createdWindow)
 
   // 主窗口隐藏加载 renderer；独立 splash 窗口覆盖整个初始化阶段，避免导航替换掉启动画面。
   const isDev = !app.isPackaged
@@ -608,7 +663,7 @@ function createWindow(): void {
   let refreshWasMaximized = false
 
   const showWhenReady = (): void => {
-    if (!rendererReady || !splashShown || mainWindow?.isDestroyed()) return
+    if (!rendererReady || !splashShown || createdWindow?.isDestroyed()) return
     if (showTimer) clearTimeout(showTimer)
     const remaining = Math.max(0, STARTUP_SPLASH_MIN_MS - (Date.now() - splashStartedAt))
     showTimer = setTimeout(() => {
@@ -621,24 +676,24 @@ function createWindow(): void {
         && savedState?.isMaximized === true
         && !restoreFullScreen
 
-      if (!isRefreshReload && mainWindow && startupDisplayWorkArea && restoreFullScreen) {
+      if (!isRefreshReload && createdWindow && startupDisplayWorkArea && restoreFullScreen) {
         // 全屏恢复必须让窗口先覆盖完整工作区，否则会在普通尺寸上 setFullScreen，
         // 页面内容容器跟着从左上角扩展，出现顶边对齐、底边/右侧偏移的现象。
-        mainWindow.setBounds(startupDisplayWorkArea)
+        createdWindow.setBounds(startupDisplayWorkArea)
       }
       if (process.platform === 'darwin' && app.dock) app.dock.show()
       // 全屏刷新：窗口可见前先恢复全屏。若先以普通尺寸 show 再 setFullScreen，窗口从左上角
       // 扩展到全屏，页面内组件（初始化动画等）容器会随之在底边/右侧偏移（顶边/左侧不动）。
       // 隐藏窗口上 setFullScreen 在 Windows 有效，主窗口 show 时直接就是全屏，无扩展过程。
-      if (isRefreshReload && refreshWasFullScreen) mainWindow?.setFullScreen(true)
-      if (restoreFullScreen) mainWindow?.setFullScreen(true)
+      if (isRefreshReload && refreshWasFullScreen) createdWindow?.setFullScreen(true)
+      if (restoreFullScreen) createdWindow?.setFullScreen(true)
 
       // renderer 已经 ready：先显示主窗口（保持隐藏阶段已设好的尺寸/全屏状态），
       // 再同步原生最大化，最后淡出并关闭 Splash。
-      mainWindow?.showInactive()
+      createdWindow?.showInactive()
       // 仅当上次退出时确实是最大化才最大化；普通窗口保持 savedState 的 bounds。
-      if (!isRefreshReload && restoreMaximized && mainWindow && !mainWindow.isMaximized()) {
-        mainWindow.maximize()
+      if (!isRefreshReload && restoreMaximized && createdWindow && !createdWindow.isMaximized()) {
+        createdWindow.maximize()
       }
       // 交接：先让 splash 淡出再关窗，避免窗口消失瞬间露出桌面。
       // 淡出期间主窗口已经在后面完整可见，视觉上是同一张纸铺开。
@@ -662,8 +717,8 @@ function createWindow(): void {
         }, STARTUP_SPLASH_FADE_OUT_MS)
       }
       // 兜底：隐藏窗口阶段 setFullScreen 未生效时（个别平台），show 后立即再恢复一次全屏
-      if (isRefreshReload && refreshWasFullScreen && mainWindow && !mainWindow.isFullScreen()) {
-        mainWindow.setFullScreen(true)
+      if (isRefreshReload && refreshWasFullScreen && createdWindow && !createdWindow.isFullScreen()) {
+        createdWindow.setFullScreen(true)
       }
     }, remaining)
   }
@@ -671,7 +726,7 @@ function createWindow(): void {
   setRendererReadyHandler((sender) => {
     // 只有主窗口的首次 ready 才驱动启动闪屏/最大化；
     // 次级窗口也会发送同一个信号，不能让它重复 show/maximize 主窗口。
-    if (!mainWindow || mainWindow.isDestroyed() || sender !== mainWindow.webContents) return
+    if (!createdWindow || createdWindow.isDestroyed() || sender !== createdWindow.webContents) return
     rendererReady = true
     showWhenReady()
   })
@@ -756,7 +811,7 @@ function createWindow(): void {
     if (!port) return
     const deadline = Date.now() + DEV_SERVER_READY_TIMEOUT_MS
     while (Date.now() < deadline) {
-      if (!mainWindow || mainWindow.isDestroyed()) return
+      if (!createdWindow || createdWindow.isDestroyed()) return
       if (await probeDevServerPort(target.hostname, port)) return
       await new Promise((resolve) => setTimeout(resolve, DEV_SERVER_READY_POLL_MS))
     }
@@ -765,23 +820,23 @@ function createWindow(): void {
 
   const loadRenderer = (): void => {
     if (!rendererUrl) {
-      void mainWindow?.loadFile(rendererFile)
+      void createdWindow?.loadFile(rendererFile)
       return
     }
     void (async () => {
       await waitForDevServerReady()
-      if (mainWindow && !mainWindow.isDestroyed()) void mainWindow.loadURL(rendererUrl)
+      if (createdWindow && !createdWindow.isDestroyed()) void createdWindow.loadURL(rendererUrl)
     })()
   }
 
   const replayStartupSplash = (): void => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (!createdWindow || createdWindow.isDestroyed()) return
     if (showTimer) clearTimeout(showTimer)
     // 标记为热刷新，showWhenReady 据此跳过恢复最大化，保持刷新前窗口状态
     isRefreshReload = true
     // 在 hide 之前记录窗口状态，show 前恢复（全屏 hide/show 会丢失全屏状态）
-    refreshWasFullScreen = mainWindow.isFullScreen()
-    refreshWasMaximized = mainWindow.isMaximized()
+    refreshWasFullScreen = createdWindow.isFullScreen()
+    refreshWasMaximized = createdWindow.isMaximized()
     splashStartedAt = Date.now()
     // 热刷新不再创建覆盖整个窗口的独立 splash。独立窗口一旦与 renderer-ready 通知竞态，
     // 就会一直压在主窗口上，表现为浏览器标签栏和其他页面全部无法点击。
@@ -792,11 +847,11 @@ function createWindow(): void {
     pluginViewManager.hideAll()
     if (startupSplashWindow && !startupSplashWindow.isDestroyed()) startupSplashWindow.close()
     startupSplashWindow = null
-    mainWindow.show()
+    createdWindow.show()
     loadRenderer()
   }
 
-  mainWindow.webContents.on('before-input-event', (event, input) => {
+  createdWindow.webContents.on('before-input-event', (event, input) => {
     if (event.defaultPrevented || input.isComposing || input.isAutoRepeat) return
     const isRefresh = input.type === 'keyDown' && input.key.toLowerCase() === 'r' && (input.control || input.meta) && !input.alt
     if (!isRefresh) return
@@ -813,25 +868,25 @@ function createWindow(): void {
     if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer)
     windowStateSaveTimer = setTimeout(() => {
       windowStateSaveTimer = null
-      saveMainWindowState()
+      if (getMainWindow() === createdWindow) saveMainWindowState()
     }, 500)
   }
-  mainWindow.on('resize', scheduleWindowStateSave)
-  mainWindow.on('move', scheduleWindowStateSave)
+  createdWindow.on('resize', scheduleWindowStateSave)
+  createdWindow.on('move', scheduleWindowStateSave)
   const notifyMaximizeChanged = (): void => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    mainWindow.webContents.send(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, mainWindow.isMaximized())
+    if (!createdWindow || createdWindow.isDestroyed()) return
+    createdWindow.webContents.send(IPC_CHANNELS.WINDOW_MAXIMIZE_CHANGED, createdWindow.isMaximized())
   }
-  mainWindow.on('maximize', notifyMaximizeChanged)
-  mainWindow.on('unmaximize', notifyMaximizeChanged)
-  mainWindow.on('restore', notifyMaximizeChanged)
+  createdWindow.on('maximize', notifyMaximizeChanged)
+  createdWindow.on('unmaximize', notifyMaximizeChanged)
+  createdWindow.on('restore', notifyMaximizeChanged)
   if (process.platform === 'darwin') {
     const notifyFullScreenChanged = (): void => {
-      if (!mainWindow || mainWindow.isDestroyed()) return
-      mainWindow.webContents.send('window:full-screen-changed', mainWindow.isFullScreen())
+      if (!createdWindow || createdWindow.isDestroyed()) return
+      createdWindow.webContents.send('window:full-screen-changed', createdWindow.isFullScreen())
     }
-    mainWindow.on('enter-full-screen', notifyFullScreenChanged)
-    mainWindow.on('leave-full-screen', notifyFullScreenChanged)
+    createdWindow.on('enter-full-screen', notifyFullScreenChanged)
+    createdWindow.on('leave-full-screen', notifyFullScreenChanged)
   }
   // 将 file:// 或 Windows 绝对路径转为系统路径
   const toSystemPath = (u: string): string | null => {
@@ -847,12 +902,12 @@ function createWindow(): void {
   }
 
   // 内联可视化只能运行 srcDoc；阻止脚本 location 导航，不外发生成页面的 URL。
-  mainWindow.webContents.on('will-frame-navigate', (event) => {
+  createdWindow.webContents.on('will-frame-navigate', (event) => {
     if (!event.isMainFrame && (event.frame?.url === 'about:srcdoc' || event.frame?.name.startsWith('profer-visualization:'))) event.preventDefault()
   })
 
   // 拦截页面内导航，外部链接用系统浏览器打开，防止 Electron 窗口被覆盖
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  createdWindow.webContents.on('will-navigate', (event, url) => {
     // 允许开发模式下的 Vite HMR 热重载
     if (isDev && url.startsWith('http://localhost:')) return
     event.preventDefault()
@@ -865,7 +920,7 @@ function createWindow(): void {
   })
 
   // 拦截 window.open / target="_blank" 链接
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  createdWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url)
     } else {
@@ -875,62 +930,13 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // macOS: 点击关闭按钮时隐藏窗口+应用，而不是退出
-  // 同时隐藏应用（类似 Cmd+H），确保点击 Dock 图标时 macOS 能正确触发 activate 事件
-  if (process.platform === 'darwin') {
-    mainWindow.on('close', async (event) => {
-      if (!getIsQuitting()) {
-        event.preventDefault()
-        // 若当前处于全屏状态，先退出全屏再保存状态，
-        // 避免全屏坐标被持久化导致下次启动黑屏（上游 PR #1119）
-        if (mainWindow?.isFullScreen()) {
-          mainWindow.setFullScreen(false)
-          // 等待 leave-full-screen 事件，超时后无论如何继续
-          await new Promise<void>((resolve) => {
-            const timeout = setTimeout(() => resolve(), 1000)
-            const onLeave = (): void => { clearTimeout(timeout); resolve() }
-            mainWindow?.once('leave-full-screen', onLeave)
-          })
-        }
-        // 隐藏前先刷新挂起的窗口状态保存
-        if (windowStateSaveTimer) {
-          clearTimeout(windowStateSaveTimer)
-          windowStateSaveTimer = null
-        }
-        saveMainWindowState()
-        mainWindow?.hide()
-        // 还有其他主应用窗口时只隐藏主窗口，不把整个 App 一起隐藏；
-        // 否则用户关掉主窗口会连次级窗口一起看不见。
-        if (mainWindow && !hasOtherVisibleMainWindow(mainWindow)) app.hide()
-      }
-    })
-  }
-
-  // Windows: 点击关闭按钮时隐藏窗口到托盘，而不是退出
-  if (process.platform === 'win32') {
-    mainWindow.on('close', (event) => {
-      if (!getIsQuitting() && getTray()) {
-        // 隐藏前先刷新挂起的窗口状态保存
-        if (windowStateSaveTimer) {
-          clearTimeout(windowStateSaveTimer)
-          windowStateSaveTimer = null
-        }
-        saveMainWindowState()
-        event.preventDefault()
-        mainWindow?.hide()
-      }
-    })
-  }
-
-  mainWindow.on('closed', () => {
-    mainWindow = null
-    setMainWindow(null)
-    browserController.dispose()
-    pluginViewManager.dispose()
+  createdWindow.on('closed', () => {
+    if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer)
   })
+  mainWindow = createdWindow
 
-  setMainWindow(mainWindow)
-  pluginViewManager.setOwnerWindow(mainWindow)
+  setMainWindow(createdWindow)
+  pluginViewManager.setOwnerWindow(createdWindow)
 }
 
 function sendToMainWindow(channel: string, data?: unknown): void {
@@ -1330,7 +1336,7 @@ async function startLocalCore(): Promise<void> {
     },
   })
   const { setLocalCorePublisher } = await import('./lib/core-local-bridge')
-  setLocalCorePublisher((channel, payload) => { for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send(channel, payload) })
+  setLocalCorePublisher((channel, payload) => { for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed() && windowUsesLocalCore(window.webContents.id)) window.webContents.send(channel, payload) })
   let started: Awaited<ReturnType<typeof lifecycle.start>>
   try {
     started = await lifecycle.start()

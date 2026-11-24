@@ -556,6 +556,13 @@ export function detachTab(
     nextActiveTabId = targetTab?.id ?? nextTabs[Math.min(tabIndex, nextTabs.length - 1)]?.id ?? null
   }
 
+  if (activeTabId === tabId) {
+    // 拆窗与关闭一样优先同模式，但最后会话移走时保留原模式空态，不跳 Chat/Scratch。
+    const sameMode = nextMru.map(id => nextTabs.find(item => item.type === tab.type && (item.id === id || item.sessionId === id)))
+      .find(Boolean) ?? nextTabs.find(item => item.type === tab.type)
+    const workFallback = tab.type === 'agent' ? nextTabs.find(item => item.id === nextActiveTabId && (item.type === 'preview' || item.type === 'browser')) : undefined
+    nextActiveTabId = sameMode?.id ?? workFallback?.id ?? null
+  }
   return { tabs: nextTabs, activeTabId: nextActiveTabId, mru: nextMru }
 }
 

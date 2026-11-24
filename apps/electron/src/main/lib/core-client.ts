@@ -597,6 +597,8 @@ export class CoreClient {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST', timeoutMs: REMOTE_STOP_TIMEOUT_MS }) as Promise<{ stopped: boolean; sessionId: string }>
   }
 
+  isChatGenerationActive(conversationId: string): boolean { return !!this.latestSnapshot?.chat?.activeRuns.some(run => run.conversationId === conversationId) }
+
   addSnapshotListener(listener: (snapshot: CoreRecoverySnapshot) => void): () => void {
     this.snapshotListeners.add(listener)
     if (this.latestSnapshot) listener(this.latestSnapshot)

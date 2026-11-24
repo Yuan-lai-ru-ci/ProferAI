@@ -1,3 +1,4 @@
+import { editorReadinessEvents } from '@/lib/window-phase'
 /**
  * AI Elements - TipTap 富文本输入组件
  *
@@ -154,6 +155,7 @@ function useCompactViewport(threshold: number, viewportHeight: number): boolean 
 // ===== 组件接口 =====
 
 interface RichTextInputProps {
+  onEditorReady?: (ready: boolean) => void
   /** 当前值（Markdown） */
   value: string
   /** 值变更回调 */
@@ -233,6 +235,7 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
   onChange,
   onDraftPresenceChange,
   onSubmit,
+  onEditorReady,
   onPasteFiles,
   onPasteLongText,
   longTextPasteThreshold,
@@ -359,7 +362,10 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
     [],
   )
 
+  const editorReadyCallback = useRef(onEditorReady)
+  editorReadyCallback.current = onEditorReady
   const editor = useEditor({
+    ...editorReadinessEvents(ready => editorReadyCallback.current?.(ready)),
     extensions: [
       StarterKit.configure({
         codeBlock: false, // 使用 CodeBlockLowlight 替代

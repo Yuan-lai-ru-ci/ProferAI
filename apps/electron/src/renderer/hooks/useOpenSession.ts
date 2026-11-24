@@ -6,7 +6,6 @@
  */
 
 import * as React from 'react'
-import { toast } from 'sonner'
 import { promoteMru } from '@profer/shared'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import {
@@ -16,6 +15,8 @@ import {
   tabMruAtom,
   type TabType,
 } from '@/atoms/tab-atoms'
+import { appWindowsAtom, windowBootstrapAtom } from '@/atoms/app-windows'
+import { focusSessionOrOpenLocal, hasOtherSessionWindow } from '@/lib/app-windows'
 import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -35,9 +36,9 @@ import { isAgentWorkspaceIdVisible } from '@/lib/product-feature-flags'
 
 type OpenSessionFn = (type: TabType, sessionId: string, title: string, parentSessionId?: string) => void
 
-export function useOpenSession(): OpenSessionFn {
+export function useOpenSession(options?: { localOnly?: boolean }): OpenSessionFn {
   const store = useStore()
-  const [tabs, setTabs] = useAtom(tabsAtom)
+  const [, setTabs] = useAtom(tabsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const setTabMru = useSetAtom(tabMruAtom)
   const setAppMode = useSetAtom(appModeAtom)
@@ -55,96 +56,97 @@ export function useOpenSession(): OpenSessionFn {
 
   return React.useCallback(
     (type: TabType, sessionId: string, title: string, parentSessionId?: string): void => {
-      // 独立会话窗口没有 Tab 栏；跨会话导航交给主窗口，避免创建看不见的 Tab。
-      if (typeof window !== 'undefined' && window.location?.search?.includes('window=session')) {
-        toast.info('独立窗口暂不支持切换会话，请在主窗口打开')
-        return
-      }
-      const target = store.get(coreTargetsAtom)
-      const isCurrentTarget = (): boolean => {
-        const current = store.get(coreTargetsAtom)
-        return current.currentId === target.currentId && current.generation === target.generation
-      }
-      const knownSession = type === 'agent' || type === 'preview'
-        ? agentSessions.find((session) => session.id === sessionId)
-        : undefined
-      if ((type === 'agent' || type === 'preview')
-        && !isAgentWorkspaceIdVisible(knownSession?.workspaceId, agentWorkspaces)) {
-        return
-      }
+      const openLocal = (): void => {
+        const target = store.get(coreTargetsAtom)
+        const isCurrentTarget = (): boolean => {
+          const current = store.get(coreTargetsAtom)
+          return current.currentId === target.currentId && current.generation === target.generation
+        }
+        const knownSession = type === 'agent' || type === 'preview'
+          ? agentSessions.find((session) => session.id === sessionId)
+          : undefined
+        if ((type === 'agent' || type === 'preview')
+          && !isAgentWorkspaceIdVisible(knownSession?.workspaceId, agentWorkspaces)) {
+          return
+        }
 
-      // 子会话血缘（委派 parentSessionId / 探索 explorationParentSessionId）：
-      // 显式参数优先，再从会话 meta 派生，保证所有打开路径产出一致的子会话 Tab。
-      const lineageParentId = parentSessionId
-        ?? knownSession?.parentSessionId
-        ?? knownSession?.explorationParentSessionId
-      const result = openTab(tabs, {
-        type,
-        sessionId,
-        title,
-        ...(lineageParentId ? { parentSessionId: lineageParentId } : {}),
-      })
-      setTabs(result.tabs)
-      setActiveTabId(result.activeTabId)
-      if (type === 'chat' || type === 'agent' || type === 'preview') {
-        setTabMru((previous) => promoteMru(previous, sessionId))
-      }
-      setAutomationForm({ open: false, draft: null })
-      setActiveView('conversations')
-
-      if (type === 'chat') {
-        setAppMode('chat')
-        setCurrentConversationId(sessionId)
-      } else if (type === 'agent' || type === 'preview') {
-        setAppMode('agent')
-        setCurrentAgentSessionId(sessionId)
-
-        // 打开查看后只清除未读角标；是否完成由用户通过对勾确认。
-        setUnviewedCompleted((prev) => {
-          if (!prev.has(sessionId)) return prev
-          const next = new Set(prev)
-          next.delete(sessionId)
-          return next
+        // 子会话血缘（委派 parentSessionId / 探索 explorationParentSessionId）：
+        // 显式参数优先，再从会话 meta 派生，保证所有打开路径产出一致的子会话 Tab。
+        const lineageParentId = parentSessionId
+          ?? knownSession?.parentSessionId
+          ?? knownSession?.explorationParentSessionId
+        const result = openTab(store.get(tabsAtom), {
+          type,
+          sessionId,
+          title,
+          ...(lineageParentId ? { parentSessionId: lineageParentId } : {}),
         })
-
-        // 打开查看即消费持久化的「标记未读」：清除 completedButUnconfirmed，重启后绿标不"复活"。
-        // IPC 幂等（未标记会话无副作用）；用 map 更新保持列表顺序不变。
-        // 开启态下这一步不执行——看一眼会话不能算用户确认已读（需求 §3.2-2）。
-        if (shouldAutoClearUnreadOnView(manualReadConfirmEnabled ? 'manual' : 'auto')) {
-          window.electronAPI.clearAgentCompletionState(sessionId)
-            .then((meta) => {
-              if (!isCurrentTarget()) return
-              setAgentSessions((prev) => prev.map((s) => (s.id === meta.id ? meta : s)))
-            })
-            .catch(console.error)
+        setTabs(result.tabs)
+        setActiveTabId(result.activeTabId)
+        if (type === 'chat' || type === 'agent' || type === 'preview') {
+          setTabMru((previous) => promoteMru(previous, sessionId))
         }
+        setAutomationForm({ open: false, draft: null })
+        setActiveView('conversations')
 
-        // 同步 workspaceId，确保与 TabBar 切换行为一致
-        const session = agentSessions.find((s) => s.id === sessionId)
-        if (session?.workspaceId) {
-          setCurrentAgentWorkspaceId(session.workspaceId)
-          if (target.currentId === 'local') window.electronAPI.updateSettings({
-            agentWorkspaceId: session.workspaceId,
-          }).catch(console.error)
+        if (type === 'chat') {
+          setAppMode('chat')
+          setCurrentConversationId(sessionId)
+        } else if (type === 'agent' || type === 'preview') {
+          setAppMode('agent')
+          setCurrentAgentSessionId(sessionId)
+
+          // 打开查看后只清除未读角标；是否完成由用户通过对勾确认。
+          setUnviewedCompleted((prev) => {
+            if (!prev.has(sessionId)) return prev
+            const next = new Set(prev)
+            next.delete(sessionId)
+            return next
+          })
+
+          // 打开查看即消费持久化的「标记未读」：清除 completedButUnconfirmed，重启后绿标不"复活"。
+          // IPC 幂等（未标记会话无副作用）；用 map 更新保持列表顺序不变。
+          // 开启态下这一步不执行——看一眼会话不能算用户确认已读（需求 §3.2-2）。
+          if (shouldAutoClearUnreadOnView(manualReadConfirmEnabled ? 'manual' : 'auto')) {
+            window.electronAPI.clearAgentCompletionState(sessionId)
+              .then((meta) => {
+                if (!isCurrentTarget()) return
+                setAgentSessions((prev) => prev.map((s) => (s.id === meta.id ? meta : s)))
+              })
+              .catch(console.error)
+          }
+
+          // 同步 workspaceId，确保与 TabBar 切换行为一致
+          const session = agentSessions.find((s) => s.id === sessionId)
+          if (session?.workspaceId) {
+            setCurrentAgentWorkspaceId(session.workspaceId)
+            if (target.currentId === 'local' && store.get(windowBootstrapAtom)?.isPrimary !== false) window.electronAPI.updateSettings({
+              agentWorkspaceId: session.workspaceId,
+            }).catch(console.error)
+          } else {
+            // 归档会话不在活跃列表：拉取单条 meta 兜底，供 AgentView 等消费者读取
+            window.electronAPI.getAgentSessionMeta(sessionId).then((meta) => {
+              if (!meta || !isCurrentTarget()) return
+              setAgentSessions((prev) => upsertAgentSession(prev, meta))
+              if (meta.workspaceId) {
+                setCurrentAgentWorkspaceId(meta.workspaceId)
+                if (target.currentId === 'local' && store.get(windowBootstrapAtom)?.isPrimary !== false) window.electronAPI.updateSettings({
+                  agentWorkspaceId: meta.workspaceId,
+                }).catch(console.error)
+              }
+            }).catch(console.error)
+          }
         } else {
-          // 归档会话不在活跃列表：拉取单条 meta 兜底，供 AgentView 等消费者读取
-          window.electronAPI.getAgentSessionMeta(sessionId).then((meta) => {
-            if (!meta || !isCurrentTarget()) return
-            setAgentSessions((prev) => upsertAgentSession(prev, meta))
-            if (meta.workspaceId) {
-              setCurrentAgentWorkspaceId(meta.workspaceId)
-              if (target.currentId === 'local') window.electronAPI.updateSettings({
-                agentWorkspaceId: meta.workspaceId,
-              }).catch(console.error)
-            }
-          }).catch(console.error)
+          setAppMode('scratch')
+          setCurrentConversationId(null)
+          setCurrentAgentSessionId(null)
         }
-      } else {
-        setAppMode('scratch')
-        setCurrentConversationId(null)
-        setCurrentAgentSessionId(null)
       }
+      if (!options?.localOnly && (type === 'chat' || type === 'agent')
+        && hasOtherSessionWindow(store.get(appWindowsAtom), store.get(windowBootstrapAtom)?.windowId, { type, sessionId })) {
+        void focusSessionOrOpenLocal(() => window.electronAPI.focusSessionWindow({ type, sessionId }), openLocal)
+      } else openLocal()
     },
-    [store, tabs, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions, manualReadConfirmEnabled],
+    [options?.localOnly, store, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions, manualReadConfirmEnabled],
   )
 }

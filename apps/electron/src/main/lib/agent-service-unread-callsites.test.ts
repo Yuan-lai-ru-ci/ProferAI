@@ -194,7 +194,7 @@ describe('流绑定归主进程仲裁', () => {
     // 回归：认领路径（带 sessionIds）此前只会按 sessionIds 过滤，不做归属判定，
     // 于是主窗口切 Tab 认领时会把独立会话窗口正在看的流抢走（对方向 SESSION_RELEASED），
     // 那个窗口随即冻结在快照上 —— 现象就是「过程区一直折叠、看不出在运行」。
-    expect(allowedBranch).toContain('isSessionWindowContents(owner)')
+    expect(allowedBranch).toContain('isSessionWindowContents(owner, sessionId)')
     expect(allowedBranch).toContain('owner !== webContents')
     expect(allowedBranch).toContain('snapshots.delete(sessionId)')
   })
@@ -224,7 +224,7 @@ async function loadRestoreActiveAgentStreams() {
     .transformSync(source.slice(from, to).replace('export function', 'function'))
   return (dependencies: Record<string, unknown>) => new Function(
     ...Object.keys(dependencies),
-    `${compiled}\nreturn restoreActiveAgentStreams`,
+    `const isWindowTabHandoffPending = () => false;\n${compiled}\nreturn restoreActiveAgentStreams`,
   )(...Object.values(dependencies)) as (
     webContents: { isDestroyed(): boolean; send(channel: string, payload?: unknown): void },
     sessionIds?: readonly string[],
@@ -238,7 +238,7 @@ function restoreHarness(owner: unknown) {
     completedStreamEventBacklogs: new Map<string, unknown[]>(),
     activeStreamEventBacklogs: new Map<string, unknown[]>(),
     getSessionWebContents: () => owner,
-    isSessionWindowContents: (target: unknown) => target === owner,
+    isSessionWindowContents: (target: unknown, _sessionId: string) => target === owner,
     runtimeContextStore: { list: () => [] },
     isAgentExecutionActive: () => true,
     registerWebContents: (sessionId: string) => { bindings.push(sessionId) },
@@ -275,3 +275,31 @@ describe('活跃但尚无 backlog 的会话同样受窗口归属保护', () => {
     expect(bindings).toEqual(['session-a'])
   })
 })
+
+
+async function loadWindowOwnerPredicate() {
+  const source = await readAgentService()
+  const body = slice(source, 'function isSessionWindowContents(', '/**\n * renderer 刷新后的重连入口')
+  const compiled = new Bun.Transpiler({ loader: 'ts' }).transformSync(body)
+  return new Function('isSecondaryWindowSessionOwner', 'isMainAppWindowSender', `${compiled}; return isSessionWindowContents`)(
+    (wc: { closed: boolean; sessions: string[] }, session: { sessionId: string }) => !wc.closed && wc.sessions.includes(session.sessionId),
+    () => true,
+  ) as (wc: unknown, sessionId: string) => boolean
+}
+
+for (const mode of ['primary-all', 'primary-explicit', 'self', 'closed', 'tab-closed'] as const) {
+  test(`完整次级窗口流恢复归属: ${mode}`, async () => {
+    const predicate = await loadWindowOwnerPredicate()
+    const owner = { closed: mode === 'closed', sessions: mode === 'tab-closed' ? [] : ['session-a'],
+      isDestroyed() { return this.closed }, getURL: () => 'http://localhost:5173/' }
+    const { bindings, caller, dependencies } = restoreHarness(owner)
+    dependencies.activeStreamEventBacklogs.set('session-a', [])
+    dependencies.isSessionWindowContents = predicate
+    const restore = (await loadRestoreActiveAgentStreams())(dependencies)
+    const result = restore(mode === 'self' ? owner as unknown as typeof caller : caller,
+      mode === 'primary-all' ? undefined : ['session-a'])
+    const protectedOwner = mode === 'primary-all' || mode === 'primary-explicit'
+    expect(result.length).toBe(protectedOwner ? 0 : 1)
+    expect(bindings).toEqual(protectedOwner ? [] : ['session-a'])
+  })
+}

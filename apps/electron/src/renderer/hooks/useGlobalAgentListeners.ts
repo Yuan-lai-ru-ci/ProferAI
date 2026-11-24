@@ -1,3 +1,5 @@
+import { agentWindowListenersReadyAtom } from '@/lib/confirm-window-handoff'
+import { getWindowBootstrap } from '@/lib/window-bootstrap'
 import { decidePersistenceAck, decideStreamFinalize } from '@/lib/agent-persistence'
 /**
  * useGlobalAgentListeners — 全局 Agent IPC 监听器
@@ -1571,11 +1573,15 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         .finally(release)
     }
 
-    // 独立会话窗口只接管自己的会话；主窗口保持「恢复全部活跃流」的刷新语义。
-    void restoreActiveStreams(standaloneSessionId ? [standaloneSessionId] : undefined)
-      .catch((error) => {
-        console.error('[Agent] 刷新后恢复活跃流失败:', error)
-      })
+    // 次级完整窗口启动时只恢复交接会话，不争抢 primary 的其他活跃流。
+    let restoringDisposed = false
+    void getWindowBootstrap().then(bootstrap => {
+      if (restoringDisposed) return
+      const initial = bootstrap.initialTab
+      const ids = standaloneSessionId ? [standaloneSessionId]
+        : bootstrap.isPrimary ? undefined : initial?.type === 'agent' ? [initial.sessionId] : []
+      return restoreActiveStreams(ids)
+    }).catch(error => console.error('[Agent] 刷新后恢复活跃流失败:', error))
 
     // 切到某个 Agent 会话时主动“认领”本轮流。
     //
@@ -2065,7 +2071,10 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     }
     window.addEventListener('focus', onWindowFocus)
 
+    store.set(agentWindowListenersReadyAtom, true)
     return () => {
+      store.set(agentWindowListenersReadyAtom, false)
+      restoringDisposed = true
       effectActive = false
       liveMessageBatcher.flushAll()
       streamStateBatcher.flushAll()

@@ -40,3 +40,5 @@ export async function sendMessage(input: ChatSendInput, webContents: WebContents
   try { await runtime.sendMessage(input) } finally { targets.delete(key) }
 }
 export const { stopGeneration, stopAllGenerations, generateTitle, autoTitleConversation, regenerateConversationTitle } = runtime
+
+export function isChatGenerationActive(conversationId: string): boolean { return [...targets.keys()].some(key => key.startsWith(`${conversationId}:`)) }

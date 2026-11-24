@@ -15,6 +15,7 @@ const endpointPins = new Map<string, string>()
 let discoveredEndpoints: string[] = []
 let emitPreview: ((sessionId: string, payload: unknown) => void) | undefined
 const published: Array<{ channel: string; data: unknown }> = []
+let identityGate: Promise<void> | undefined
 let clockOffset = 0
 const now = Date.now
 class FixtureCoreClient {
@@ -24,6 +25,7 @@ class FixtureCoreClient {
   disconnect() { this.connected = false; this.options.onStatus?.('closed') }
   get address() { return this.options.baseUrl }
   async identity(): Promise<{ coreId: string; version: string; protocolVersion: number; capabilities: string[]; platform: string; osId: string }> {
+    await identityGate
     identityCalls.push(this.address)
     if (rejectedEndpoints.has(this.address)) throw new CoreClientError('unauthorized', { status: 401 })
     const pin = endpointPins.get(this.address)
@@ -56,6 +58,7 @@ mock.module('./core-host-connection', () => ({ configureCoreHostConnection: (_cl
 const { BrowserWindow } = await import('electron')
 const originalWindows = BrowserWindow.getAllWindows
 const previewWindow = new BrowserWindow({ show: false })
+previewWindow.webContents.isDestroyed = () => false
 previewWindow.webContents.send = (channel: string, data: unknown) => { published.push({ channel, data }) }
 BrowserWindow.getAllWindows = () => [previewWindow]
 mock.module('./chat-stream-bus', () => ({ pushChatStream: () => {} }))
@@ -166,4 +169,118 @@ test('本机摘要透传发行版 ID，旧 Core 缺省时仍兼容', () => {
   const { osId: _osId, ...legacyIdentity } = identity
   service.setLocalCoreClient(client as unknown as Parameters<typeof service.setLocalCoreClient>[0], legacyIdentity)
   expect(service.listCoreTargets().targets.find(target => target.kind === 'local')?.osId).toBeUndefined()
+})
+
+test('完整窗口的选择、并行 await、事件和关闭相互隔离，后台默认保持兼容', async () => {
+  const { runCoreWindow, registerCoreWindow, unregisterCoreWindow } = await import('./core-window-scope')
+  network.set(A, 'core-one')
+  network.set(C, 'core-other')
+  await service.selectCoreTarget('local')
+  const one = service.listCoreTargets().targets.find(target => target.coreId === 'core-one')!
+  const other = service.listCoreTargets().targets.find(target => target.coreId === 'core-other')!
+  const second = new BrowserWindow({ show: false })
+  second.webContents.isDestroyed = () => false
+  const original = BrowserWindow.getAllWindows
+  BrowserWindow.getAllWindows = () => [previewWindow, second]
+  const received: string[] = []
+  second.webContents.send = channel => { received.push(channel) }
+  Object.defineProperty(second.webContents, "id", { value: 8032, configurable: true })
+  const id = second.webContents.id
+  registerCoreWindow(id)
+  try {
+    await service.initializeWindowCore(id)
+    const localBefore = service.getActiveCoreClient()
+    const [remote, local] = await Promise.all([
+      runCoreWindow(id, async () => {
+        await service.selectCoreTarget(one.id)
+        const client = service.getActiveCoreClient()
+        const generation = service.getCoreTargetGeneration()
+        await Bun.sleep(10)
+        expect(service.getActiveCoreClient()).toBe(client)
+        expect(service.getCoreTargetGeneration()).toBe(generation)
+        return service.getCurrentCoreTargetId()
+      }),
+      (async () => { await Bun.sleep(2); expect(service.getCurrentCoreTargetId()).toBe('local'); return service.getActiveCoreClient() })(),
+    ])
+    expect(remote).toBe(one.id)
+    expect(local).toBe(localBefore)
+    const before = received.length
+    await service.selectCoreTarget(other.id)
+    expect(received.length).toBe(before)
+    expect(runCoreWindow(id, () => service.getCurrentCoreTargetId())).toBe(one.id)
+    // 外部连接回调在默认调用栈触发，也不能串到默认上下文。
+    const secondaryClient = runCoreWindow(id, () => service.getActiveCoreClient()) as unknown as FixtureCoreClient
+    secondaryClient.disconnect()
+    expect(runCoreWindow(id, () => service.listCoreTargets()).targets.find(value => value.id === one.id)?.status).toBe('error')
+    expect(service.listCoreTargets().targets.find(value => value.id === other.id)?.status).toBe('connected')
+    await runCoreWindow(id, () => service.selectCoreTarget('local'))
+    expect(service.getCurrentCoreTargetId()).toBe(other.id)
+    // 真实 IPC 注册入口必须把 scope 传进异步业务路由，而非只隔离状态查询。
+    const { installCoreIpcScope } = await import('./core-ipc-scope')
+    let handler: ((event: unknown) => unknown) | undefined
+    const ipc = {
+      handle: (_channel: string, listener: (event: unknown) => unknown) => { handler = listener },
+      on: () => ipc,
+    }
+    installCoreIpcScope(ipc as unknown as Parameters<typeof installCoreIpcScope>[0])
+    ipc.handle('test:core-window-route', async () => {
+      await Bun.sleep(1)
+      return service.getCurrentCoreTargetId()
+    })
+    expect(await handler!({ sender: second.webContents })).toBe('local')
+    expect(await handler!({ sender: { id: -999 } })).toBe(other.id)
+    const stale = runCoreWindow(id, async () => {
+      await Bun.sleep(2)
+      return service.getCurrentCoreTargetId()
+    })
+    const background = service.getActiveCoreClient()
+    service.disposeWindowCore(id)
+    await expect(stale).rejects.toThrow('Core 窗口已关闭')
+    expect(service.getActiveCoreClient()).toBe(background)
+    expect(service.getCurrentCoreTargetId()).toBe(other.id)
+    expect(received).toContain('core-target:changed')
+  } finally {
+    service.disposeWindowCore(id)
+    unregisterCoreWindow(id)
+    BrowserWindow.getAllWindows = original
+    await service.selectCoreTarget('local')
+  }
+})
+
+
+test('延迟远端握手不阻塞 Renderer 加载，首份快照已继承目标', async () => {
+  const { runCoreWindow } = await import('./core-window-scope')
+  network.set(A, 'core-one')
+  const target = service.listCoreTargets().targets.find(value => value.coreId === 'core-one')!
+  await service.selectCoreTarget(target.id)
+  let release!: () => void
+  identityGate = new Promise<void>(resolve => { release = resolve })
+  const id = 8040
+  let settled = false
+  const coreReady = service.initializeWindowCore(id).finally(() => { settled = true })
+  try {
+    expect(runCoreWindow(id, service.listCoreTargets)).toMatchObject({ currentId: target.id, startup: 'restoring' })
+    expect(runCoreWindow(id, service.getActiveCoreClient)).toBeNull()
+    // 执行生产建窗函数最后的加载片段，不靠计时阈值推断并行。
+    const source = readFileSync(new URL('./main-app-windows.ts', import.meta.url), 'utf8')
+    const start = source.indexOf('  void coreReady.then')
+    const end = source.indexOf('  console.log(`[窗口] 已创建会话窗口', start)
+    expect(start).toBeGreaterThan(0)
+    let loaded = false
+    new Function('coreReady', 'record', 'win', 'loadRenderer', 'logWindowPhase', 'handoffId', source.slice(start, end))(
+      coreReady, { completeBootstrap: () => {} }, {}, () => { loaded = true }, () => {}, "test",
+    )
+    await Bun.sleep(2)
+    expect(loaded).toBe(true)
+    expect(settled).toBe(false)
+    release()
+    await coreReady
+    expect(runCoreWindow(id, service.listCoreTargets)).toMatchObject({ currentId: target.id, startup: undefined })
+    expect(runCoreWindow(id, service.getActiveCoreClient)).not.toBe(service.getActiveCoreClient())
+  } finally {
+    release(); identityGate = undefined
+    await coreReady.catch(() => {})
+    service.disposeWindowCore(id)
+    await service.selectCoreTarget('local')
+  }
 })

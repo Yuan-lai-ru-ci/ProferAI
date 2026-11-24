@@ -10,6 +10,14 @@ export interface CoreTargetsState {
 
 export const coreTargetsAtom = atom<CoreTargetsSnapshot>({ currentId: 'local', generation: 0, targets: [{ id: 'local', name: '本机内核', kind: 'local', status: 'disconnected' }] })
 
+/** 比较同一窗口路由的快照版本；迟到查询不能覆盖已收到的较新切换。 */
+export function mergeWindowCoreSnapshot(current: CoreTargetsSnapshot, incoming: CoreTargetsSnapshot): CoreTargetsSnapshot {
+  const version = incoming.revision ?? incoming.generation
+  const currentVersion = current.revision ?? current.generation
+  if (version < currentVersion) return current
+  return incoming
+}
+
 export interface CoreChannelSnapshot {
   id: string
   name: string

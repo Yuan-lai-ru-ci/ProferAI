@@ -1,20 +1,23 @@
-/**
- * 主应用窗口注册表与独立会话窗口创建。
- *
- * - 主窗口：完整 Profer 主界面，负责全局 Tab 持久化与启动闪屏；
- * - 会话窗口：只渲染一个被拆出的 chat / agent 会话，不复制侧边栏和全局初始化器；
- * - 浏览器 / 插件页依赖主窗口原生 View，文件预览属于会话工作 Tab，暂不迁移。
- */
+import { getIsQuitting } from './app-lifecycle'
+import { setMainWindow } from './main-window-state'
+import { logLifecycle } from './lifecycle-diagnostics'
+import { beginWindowHandoff, finishWindowHandoff } from './window-handoff-buffer'
+import { registerCoreWindow, unregisterCoreWindow, runCoreWindow } from './core-window-scope'
+import { initializeWindowCore, disposeWindowCore, selectCoreForWindowSession, getCoreTargetGeneration, listCoreTargets } from './core-target-service'
+/** 完整主应用窗口注册表、会话关联与可靠的跨窗口草稿交接。 */
 
 import { app, BrowserWindow, screen, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type {
+  AppWindowSession,
+  AppWindowSummary,
   MainWindowBootstrap,
   MainWindowKind,
   MainWindowTabPayload,
   OpenTabInNewWindowResult,
+  WindowTabHandoffEvent,
 } from '@profer/shared'
 import { IPC_CHANNELS } from '@profer/shared'
 import { resolveAppWindowIconPath } from './app-window-icon'
@@ -34,10 +37,22 @@ interface MainAppWindowRecord {
   kind: MainWindowKind
   isPrimary: boolean
   initialTab: MainWindowTabPayload | null
+  sessions: AppWindowSession[]
+  handoffId?: string
+  /** 首次开窗计时关联，commit 后保留；不参与交接权限判断。 */
+  timingHandoffId?: string
+  createdAt?: number
+  phases?: Set<string>
+  bootstrapReady?: boolean
+  sessionsReported?: boolean
+  completeBootstrap?: (result: OpenTabInNewWindowResult) => void
 }
 
 /** 以 webContents.id 为键：窗口重建后 id 变化，不会误命中旧记录。 */
 const records = new Map<number, MainAppWindowRecord>()
+const pending = new Map<string, { id: string; windowId: string; sourceId?: number; tab: MainWindowTabPayload }>()
+const recoverable = new Map<string, WindowTabHandoffEvent>()
+
 
 function getRecordBySender(sender: WebContents | undefined | null): MainAppWindowRecord | null {
   if (!sender || sender.isDestroyed()) return null
@@ -51,15 +66,35 @@ export function registerMainAppWindow(
 ): MainAppWindowRecord {
   const record: MainAppWindowRecord = {
     id: options.isPrimary ? PRIMARY_WINDOW_ID : randomUUID(),
-    kind: options.kind ?? (options.isPrimary ? 'main' : 'session'),
+    kind: options.kind ?? 'main',
     isPrimary: options.isPrimary,
     initialTab: options.initialTab ?? null,
+    sessions: [],
   }
   const webContentsId = win.webContents.id
   records.set(webContentsId, record)
+  registerCoreWindow(webContentsId)
+  if (options.isPrimary) void initializeWindowCore(webContentsId, undefined, true)
+  if (options.isPrimary) setMainWindow(win)
   notifyMainAppWindowsChanged()
+  win.on?.('close', event => {
+    if (record.isPrimary && !getIsQuitting() && !shouldClosePrimaryWindow(win)) event.preventDefault()
+  })
   win.once('closed', () => {
+    record.completeBootstrap?.({ ok: false, error: '目标窗口已关闭' })
+    disposeWindowCore(webContentsId)
+    unregisterCoreWindow(webContentsId)
     records.delete(webContentsId)
+    if (record.isPrimary) {
+      const successor = getIsQuitting() ? null : findPrimaryWindowSuccessor(win)
+      if (successor) {
+        const next = records.get(successor.webContents.id)!
+        next.isPrimary = true
+        next.kind = 'main'
+      }
+      setMainWindow(successor)
+      primaryWindowChangedHandler?.(successor)
+    }
     notifyMainAppWindowsChanged()
   })
   return record
@@ -101,7 +136,7 @@ export function getSessionWindowSummaries(): SessionWindowSummary[] {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue
     const record = records.get(win.webContents.id)
-    if (!record || record.kind !== 'session') continue
+    if (!record || record.isPrimary) continue
     summaries.push({
       id: record.id,
       title: win.getTitle() || record.initialTab?.title || '会话窗口',
@@ -116,7 +151,7 @@ export function focusSessionWindow(id: string): boolean {
   const win = BrowserWindow.getAllWindows().find((candidate) => {
     if (candidate.isDestroyed()) return false
     return records.get(candidate.webContents.id)?.id === id
-      && records.get(candidate.webContents.id)?.kind === 'session'
+      && records.get(candidate.webContents.id)?.isPrimary === false
   })
   if (!win || win.isDestroyed()) return false
   if (win.isMinimized()) win.restore()
@@ -126,6 +161,36 @@ export function focusSessionWindow(id: string): boolean {
 }
 
 let mainAppWindowsChangedHandler: (() => void) | null = null
+let primaryWindowChangedHandler: ((win: BrowserWindow | null) => void) | null = null
+
+export function setPrimaryWindowChangedHandler(handler: typeof primaryWindowChangedHandler): void {
+  primaryWindowChangedHandler = handler
+}
+
+/** 可见且 bootstrap 已确认的完整窗口优先；交接中的窗口不接任。 */
+export function findPrimaryWindowSuccessor(closing: BrowserWindow): BrowserWindow | null {
+  const candidates = BrowserWindow.getAllWindows().filter(win => {
+    if (win === closing || win.isDestroyed()) return false
+    const record = records.get(win.webContents.id)
+    return !!record && !record.handoffId
+  })
+  return candidates.find(win => win.isVisible() && records.get(win.webContents.id)?.bootstrapReady)
+    ?? candidates.find(win => win.isVisible())
+    ?? candidates.find(win => records.get(win.webContents.id)?.bootstrapReady)
+    ?? candidates[0] ?? null
+}
+
+let primaryWindowCloseHandler: ((win: BrowserWindow) => boolean) | null = null
+
+/** 应用层处理主窗口关闭：返回 true 表示当前窗口应真正关闭并交接主角色。 */
+export function setPrimaryWindowCloseHandler(handler: typeof primaryWindowCloseHandler): void {
+  primaryWindowCloseHandler = handler
+}
+
+/** 主窗口关闭策略由应用生命周期决定，完整窗口保持可测且不绑定平台细节。 */
+export function shouldClosePrimaryWindow(win: BrowserWindow): boolean {
+  return primaryWindowCloseHandler?.(win) ?? false
+}
 
 /** 应用层注册窗口集合变化回调（用于重建动态 Window 菜单）。 */
 export function setMainAppWindowsChangedHandler(handler: (() => void) | null): void {
@@ -133,8 +198,19 @@ export function setMainAppWindowsChangedHandler(handler: (() => void) | null): v
 }
 
 /** 通知菜单等宿主窗口集合已变化。 */
+let windowsNotificationQueued = false
 export function notifyMainAppWindowsChanged(): void {
-  mainAppWindowsChangedHandler?.()
+  // 同一轮建窗的注册与 pending 更新合并，菜单构建不阻塞首次 loadRenderer。
+  if (windowsNotificationQueued) return
+  windowsNotificationQueued = true
+  setImmediate(() => {
+    windowsNotificationQueued = false
+    mainAppWindowsChangedHandler?.()
+    const snapshot = getAppWindowSummaries()
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed() && records.has(win.webContents.id)) win.webContents.send(IPC_CHANNELS.WINDOW_APP_WINDOWS_CHANGED, snapshot)
+    }
+  })
 }
 
 /** 读取当前窗口的引导信息；非主应用窗口返回 null。 */
@@ -143,7 +219,7 @@ export function getMainWindowBootstrap(sender: WebContents | undefined | null): 
   if (!record) return null
   // 草稿只交付一次：刷新后不把用户已清空的旧草稿重新写回编辑器。
   const initialTab = record.initialTab ? { ...record.initialTab } : null
-  if (record.initialTab?.draft || record.initialTab?.draftHtml) {
+  if (!record.handoffId && (record.initialTab?.draft || record.initialTab?.draftHtml)) {
     const rest = { ...record.initialTab }
     delete rest.draft
     delete rest.draftHtml
@@ -151,9 +227,12 @@ export function getMainWindowBootstrap(sender: WebContents | undefined | null): 
   }
   return {
     windowId: record.id,
+    openWindows: getAppWindowSummaries(),
     kind: record.kind,
     isPrimary: record.isPrimary,
     initialTab,
+    handoffId: record.handoffId,
+    recoverableHandoffs: (record.isPrimary ? [...recoverable.values()] : []).map(event => ({ ...event, tab: { ...event.tab } })),
   }
 }
 
@@ -194,9 +273,9 @@ export function normalizeInitialTab(input: unknown): MainWindowTabPayload | null
 
 export function buildSessionTitleBarOptions(platform: NodeJS.Platform = process.platform): Record<string, unknown> {
   if (platform === 'darwin') {
-    // 独立会话窗口保留原生交通灯：轻量壳只需要一条拖拽条，不必再自绘窗口按钮。
+    // 完整 App 使用自绘交通灯，hiddenInset 会拦截自绘按钮的点击区域。
     return {
-      titleBarStyle: 'hiddenInset',
+      titleBarStyle: 'hidden',
       trafficLightPosition: DEFAULT_TRAFFIC_LIGHT_POSITION,
       vibrancy: 'under-window',
       visualEffectState: 'followWindow',
@@ -231,6 +310,8 @@ export function installSessionWindowChrome(
   platform: NodeJS.Platform = process.platform,
 ): void {
   installSessionWindowMaximizeNotifications(win, platform)
+  // 完整 App 已绘制 MacTrafficLights，与 primary 保持唯一窗口按钮契约。
+  if (platform === 'darwin') win.setWindowButtonVisibility(false)
   // 会话窗口没有标签栏，Windows/Linux 的全局菜单栏会压住自绘标题条；
   // 快捷键（含 Ctrl+W）由应用菜单加速器和 SessionWindowShortcuts 处理。
   if (platform !== 'darwin') win.setMenuBarVisibility(false)
@@ -278,16 +359,28 @@ function loadRenderer(win: BrowserWindow, query?: Record<string, string>): void 
 /**
  * 创建独立会话窗口。
  *
- * 窗口只渲染被拆出的 chat / agent 会话（`window=session`），不加载完整主界面；
- * 会话元数据、草稿和初始标题通过窗口引导信息与 URL query 传入。
+ * 加载同一完整 App；会话和草稿由一次性 bootstrap 交付，等待 renderer 确认才完成移动。
  */
 export function createSecondaryMainWindow(
   inputTab: unknown,
   sourceWindow?: BrowserWindow | null,
-): OpenTabInNewWindowResult {
+): Promise<OpenTabInNewWindowResult> {
   const initialTab = normalizeInitialTab(inputTab)
-  if (!initialTab) return { ok: false, error: '不支持的标签类型' }
+  if (!initialTab) return Promise.resolve({ ok: false, error: '不支持的标签类型' })
 
+  const createdAt = Date.now()
+  const sourceState = runCoreWindow(sourceWindow?.webContents.id, listCoreTargets)
+  const sourceCore = { targetId: sourceState.currentId, coreId: sourceState.targets.find(target => target.id === sourceState.currentId)?.coreId }
+  const key = `${sourceCore.coreId ?? sourceCore.targetId}:${initialTab.type}:${initialTab.sessionId}`
+  const existing = pending.get(key)
+  if (existing) {
+    focusSessionWindow(existing.windowId)
+    if (existing.sourceId !== sourceWindow?.webContents.id || JSON.stringify(existing.tab) !== JSON.stringify(initialTab)) return Promise.resolve({ ok: false, error: '此会话已有待完成交接，请保留当前草稿' })
+    return Promise.resolve({ ok: true, accepted: true, handoffId: existing.id })
+  }
+  const owner = [...records.values()].find(record => !record.isPrimary && record.sessions.some(item => item.type === initialTab.type && item.sessionId === initialTab.sessionId))
+  if (owner && focusSessionWindow(owner.id)) return Promise.resolve({ ok: true })
+  const handoffId = randomUUID()
   const cursor = screen.getCursorScreenPoint()
   const display = screen.getDisplayNearestPoint(cursor)
   // 最大化 / 全屏时用还原尺寸；会话窗口不照搬整个屏幕，限制在更适合阅读的尺寸。
@@ -297,7 +390,7 @@ export function createSecondaryMainWindow(
         : sourceWindow.getBounds())
     : undefined
   const sourceSize = sourceBounds
-    ? { width: Math.min(sourceBounds.width, 1100), height: Math.min(sourceBounds.height, 900) }
+    ? { width: sourceBounds.width, height: sourceBounds.height }
     : undefined
   const bounds = resolveSecondaryWindowBounds({
     cursor,
@@ -305,10 +398,11 @@ export function createSecondaryMainWindow(
     sourceSize,
   })
 
+  logLifecycle('window.handoff-phase', { handoffId, phase: 'before-create', elapsedMs: Date.now() - createdAt })
   const win = new BrowserWindow({
     ...bounds,
-    minWidth: 560,
-    minHeight: 480,
+    minWidth: 800,
+    minHeight: 600,
     title: initialTab.title,
     icon: resolveAppWindowIconPath(),
     backgroundColor: getWindowFrameColor(),
@@ -317,13 +411,47 @@ export function createSecondaryMainWindow(
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
       // 与主窗口一致：隐藏/遮挡时仍要接收 Agent 实时事件，不能降频定时器。
       backgroundThrottling: false,
     },
     ...buildSessionTitleBarOptions(),
   })
 
-  registerMainAppWindow(win, { isPrimary: false, kind: 'session', initialTab })
+  logLifecycle('window.handoff-phase', { handoffId, phase: 'window-constructed', elapsedMs: Date.now() - createdAt })
+  const coreReady = initializeWindowCore(win.webContents.id, sourceWindow?.webContents.id)
+  const record = registerMainAppWindow(win, { isPrimary: false, kind: 'main', initialTab })
+  beginWindowHandoff(win.webContents.id, initialTab.sessionId)
+  record.createdAt = createdAt
+  record.phases = new Set()
+  record.handoffId = handoffId
+  record.timingHandoffId = handoffId
+  // main 托管归属：在目标首次上报前也不允许其他窗口抢走会话。
+  record.sessions = [{ type: initialTab.type, sessionId: initialTab.sessionId }]
+  pending.set(key, { id: handoffId, windowId: record.id, sourceId: sourceWindow?.webContents.id, tab: { ...initialTab } })
+  notifyMainAppWindowsChanged()
+  const timer = setTimeout(() => record.completeBootstrap?.({ ok: false, error: '目标窗口初始化超时' }), 30_000)
+  record.completeBootstrap = value => {
+    if (pending.get(key)?.id !== handoffId) return
+    clearTimeout(timer)
+    pending.delete(key)
+    record.completeBootstrap = undefined
+    record.handoffId = undefined
+    const event: WindowTabHandoffEvent = { sourceCore, status: value.ok ? 'committed' : 'failed', handoffId, tab: { ...initialTab }, ...(value.error ? { error: value.error } : {}) }
+    if (!value.ok) recoverable.set(handoffId, event)
+    const source = sourceWindow?.webContents
+    if (source && !source.isDestroyed()) source.send(IPC_CHANNELS.WINDOW_TAB_HANDOFF, event)
+    finishWindowHandoff(win.webContents, value.ok)
+    if (value.ok) {
+      if (record.initialTab) { delete record.initialTab.draft; delete record.initialTab.draftHtml }
+      logWindowPhase(record, handoffId, 'confirmed')
+    } else if (!win.isDestroyed()) win.destroy()
+    notifyMainAppWindowsChanged()
+  }
+  win.webContents.once('render-process-gone', () => { logWindowPhase(record, handoffId, 'render-process-gone'); record.completeBootstrap?.({ ok: false, error: '目标窗口渲染进程退出' }) })
+  win.webContents.once('did-start-loading', () => logWindowPhase(record, handoffId, 'did-start-loading'))
+  win.webContents.once('did-finish-load', () => logWindowPhase(record, handoffId, 'did-finish-load'))
+  win.webContents.once('dom-ready', () => logWindowPhase(record, handoffId, 'dom-ready'))
   installSessionWindowChrome(win)
 
   win.webContents.setZoomFactor(DEFAULT_MAIN_WINDOW_ZOOM_FACTOR)
@@ -332,11 +460,7 @@ export function createSecondaryMainWindow(
   updateWindowFrameAppearance(win)
   installNavigationHandlers(win)
 
-  const windowQuery = {
-    window: 'session',
-    sessionId: initialTab.sessionId,
-    sessionType: initialTab.type,
-  }
+
 
   // 会话窗口同样支持 ⌘/Ctrl+R 刷新；刷新后重新拉取会话与流状态。
   win.webContents.on('before-input-event', (event, input) => {
@@ -350,8 +474,11 @@ export function createSecondaryMainWindow(
   })
 
   win.once('ready-to-show', () => {
+    logWindowPhase(record, handoffId, 'ready-to-show')
     if (!win.isDestroyed()) win.show()
   })
+  win.on('enter-full-screen', () => win.webContents.send(IPC_CHANNELS.WINDOW_FULL_SCREEN_CHANGED, true))
+  win.on('leave-full-screen', () => win.webContents.send(IPC_CHANNELS.WINDOW_FULL_SCREEN_CHANGED, false))
   win.on('page-title-updated', () => notifyMainAppWindowsChanged())
   win.on('minimize', () => notifyMainAppWindowsChanged())
   win.on('restore', () => notifyMainAppWindowsChanged())
@@ -368,8 +495,10 @@ export function createSecondaryMainWindow(
     if (!app.isPackaged && (code === -102 || code === -105) && loadRetries < 5) {
       loadRetries += 1
       setTimeout(() => {
-        if (!win.isDestroyed()) loadRenderer(win, windowQuery)
+        if (!win.isDestroyed()) loadRenderer(win)
       }, 500 * loadRetries)
+    } else {
+      record.completeBootstrap?.({ ok: false, error: `目标窗口加载失败: ${description}` })
     }
   })
   win.on('closed', () => {
@@ -377,7 +506,125 @@ export function createSecondaryMainWindow(
     console.log(`[窗口] 会话窗口已关闭: ${initialTab.sessionId}`)
   })
 
-  loadRenderer(win, windowQuery)
+  // context 已同步继承，网络握手与 bundle 加载并行；交接仍由 renderer 确认。
+  void coreReady.then(() => logWindowPhase(record, handoffId, 'core-ready')).catch(error => { logWindowPhase(record, handoffId, 'core-failed'); record.completeBootstrap?.({ ok: false, error: String(error) }) })
+  loadRenderer(win)
   console.log(`[窗口] 已创建会话窗口: type=${initialTab.type} session=${initialTab.sessionId}`)
-  return { ok: true }
+  logWindowPhase(record, handoffId, 'created')
+  return Promise.resolve({ ok: true, accepted: true, handoffId })
+}
+
+/** 仅发布注册的完整应用窗口，不包含插件和预览。 */
+export function getAppWindowSummaries(): AppWindowSummary[] {
+  return [...records.values()].map(record => ({
+    windowId: record.id, isPrimary: record.isPrimary,
+    sessions: record.sessions.map(session => ({ ...session })),
+  }))
+}
+
+export function normalizeWindowSessions(input: unknown): AppWindowSession[] {
+  if (!Array.isArray(input)) throw new Error('窗口会话列表无效')
+  const unique = new Map<string, AppWindowSession>()
+  for (const item of input) {
+    if (!item || (item.type !== 'chat' && item.type !== 'agent')
+      || typeof item.sessionId !== 'string' || !item.sessionId.length || item.sessionId.length > 200) {
+      throw new Error('窗口会话信息无效')
+    }
+    unique.set(`${item.type}:${item.sessionId}`, { type: item.type, sessionId: item.sessionId })
+  }
+  return [...unique.values()]
+}
+
+export function reportWindowSessions(sender: WebContents, input: unknown): void {
+  const record = getRecordBySender(sender)
+  if (!record) throw new Error('仅 Profer 主应用窗口可以上报会话')
+  record.sessions = normalizeWindowSessions(input)
+  record.sessionsReported = true
+  notifyMainAppWindowsChanged()
+}
+
+export function confirmWindowBootstrap(sender: WebContents, handoffId?: string): void {
+  const record = getRecordBySender(sender)
+  if (!record) throw new Error('仅 Profer 主应用窗口可以确认引导')
+  if (handoffId && !record.handoffId) throw new Error('窗口交接已结束')
+  if (record.handoffId) {
+    if (handoffId !== record.handoffId) throw new Error('窗口交接标识不匹配')
+    const state = runCoreWindow(sender.id, listCoreTargets)
+    if (state.startup === 'restoring' || state.startup === 'offline') throw new Error('目标 Core 尚未就绪')
+    const tab = record.initialTab
+    if (!record.sessionsReported || !tab || !record.sessions.some(item => item.type === tab.type && item.sessionId === tab.sessionId)) throw new Error('目标会话尚未注册')
+  }
+  const tab = record.initialTab
+  if (record.handoffId && tab?.type === 'agent' && !tab.sessionId.startsWith('core:')) {
+    // 同步恢复时临时去掉 pending 标记，让既有 backlog 回放完成后再 commit。
+    const id = record.handoffId
+    record.handoffId = undefined
+    try { localHandoffRestore?.(sender, tab.sessionId) } finally { record.handoffId = id }
+  }
+  record.bootstrapReady = true
+  record.completeBootstrap?.({ ok: true })
+}
+
+export async function focusWindowForSession(
+  sender: WebContents, input: unknown,
+  resolveTab: (session: AppWindowSession) => MainWindowTabPayload | null | Promise<MainWindowTabPayload | null>,
+): Promise<boolean> {
+  if (!getRecordBySender(sender)) throw new Error('仅 Profer 主应用窗口可以聚焦会话')
+  const [session] = normalizeWindowSessions([input])
+  if (!session) return false
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents === sender) continue
+    const record = records.get(win.webContents.id)
+    if (!record || record.isPrimary || !record.sessions.some(item => item.type === session.type && item.sessionId === session.sessionId)) continue
+    await runCoreWindow(win.webContents.id, () => selectCoreForWindowSession(session.sessionId))
+    const generation = runCoreWindow(win.webContents.id, getCoreTargetGeneration)
+    const payload = await runCoreWindow(win.webContents.id, () => resolveTab(session))
+    if (win.isDestroyed() || runCoreWindow(win.webContents.id, getCoreTargetGeneration) !== generation) return false
+    if (!payload || !focusSessionWindow(record.id)) continue
+    win.webContents.send(IPC_CHANNELS.WINDOW_REATTACH_TAB, payload)
+    return true
+  }
+  return false
+}
+
+/** 活着的次级窗口是否仍实际承载指定会话（不消费 bootstrap 草稿）。 */
+export function isSecondaryWindowSessionOwner(sender: WebContents | null, session: AppWindowSession): boolean {
+  const record = getRecordBySender(sender)
+  return !!record && !record.isPrimary && record.sessions.some(item => (
+    item.type === session.type && item.sessionId === session.sessionId
+  ))
+}
+
+/** 恢复请求先安装 listener，但 pending 本机流只在确认时回放一次。 */
+export function isWindowTabHandoffPending(sender: WebContents, sessionId: string): boolean {
+ const record = getRecordBySender(sender)
+ return !!record?.handoffId && record.initialTab?.sessionId === sessionId
+}
+
+let localHandoffRestore: ((sender: WebContents, sessionId: string) => void) | undefined
+export function setLocalHandoffRestore(handler: typeof localHandoffRestore): void { localHandoffRestore = handler }
+
+export function ackWindowTabHandoff(sender: WebContents, handoffId: string): void {
+ if (!getRecordBySender(sender)) throw new Error('仅完整应用窗口可以确认恢复')
+ const event = recoverable.get(handoffId)
+ if (!event) throw new Error('不存在可恢复的失败交接')
+ const state = runCoreWindow(sender.id, listCoreTargets)
+ const coreId = state.targets.find(target => target.id === state.currentId)?.coreId
+ if (state.startup === 'restoring' || state.startup === 'offline' || state.currentId !== event.sourceCore.targetId || coreId !== event.sourceCore.coreId) throw new Error('恢复窗口 Core 不匹配或尚未就绪')
+ recoverable.delete(handoffId)
+}
+
+const RENDERER_WINDOW_PHASES = new Set(['app-ready', 'target-meta-ready', 'target-interactive'])
+function logWindowPhase(record: MainAppWindowRecord, handoffId: string, phase: string): void {
+ if (record.phases?.has(phase)) return
+ record.phases?.add(phase)
+ logLifecycle('window.handoff-phase', { handoffId, windowId: record.id, phase, elapsedMs: Date.now() - (record.createdAt ?? Date.now()) })
+}
+export function reportWindowPhase(sender: WebContents, phase: unknown): void {
+ const record = getRecordBySender(sender)
+ if (!record) throw new Error('仅完整应用窗口可以上报阶段')
+ if (typeof phase !== 'string' || !RENDERER_WINDOW_PHASES.has(phase)) throw new Error('无效窗口阶段')
+ // 不接收 Renderer 提交的 ID、时间或任意数据。
+ // 只记录首次开窗；刷新沿用 phases 去重，不重置时间或重新开放交接权限。
+ if (record.timingHandoffId) logWindowPhase(record, record.timingHandoffId, phase)
 }

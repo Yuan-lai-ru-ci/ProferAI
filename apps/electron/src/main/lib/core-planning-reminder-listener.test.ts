@@ -15,6 +15,9 @@ test('本机Core提醒listener广播并通知；目标切换后旧listener及延
   const client = { addPlanningEventListener(callback: (payload: unknown) => void) { listener = callback; return () => undefined } }
   const run = new Function('client', 'activeId', 'BrowserWindow', 'PLANNING_IPC_CHANNELS', 'loadNotificationPort', `
     let unsubscribeLocalPlanning;
+    const disposed = false;
+    const windowId = undefined;
+    const recipientWindows = () => BrowserWindow.getAllWindows();
     const activeClient = client;
     const LOCAL_TARGET_ID = 'local';
     ${body}

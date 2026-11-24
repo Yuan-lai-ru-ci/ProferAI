@@ -25,13 +25,13 @@
  */
 
 import { atom } from 'jotai'
-import { atomWithStorage } from 'jotai/utils'
+import { atomWithStorage, createJSONStorage } from 'jotai/utils'
 import { SCRATCH_PAD_ID, activeTabAtom, type TabItem } from './tab-atoms'
 
 export type AppMode = 'chat' | 'agent' | 'scratch'
 
-/** 用户意图模式，自动持久化到 localStorage（刷新后保持上次选择）。 */
-export const appModeIntentAtom = atomWithStorage<AppMode>('profer-app-mode', 'agent')
+/** 用户意图模式，按窗口持久化到 sessionStorage（刷新后保持上次选择）。 */
+export const appModeIntentAtom = atomWithStorage<AppMode>('profer-app-mode', 'agent', createJSONStorage<AppMode>(() => globalThis.sessionStorage))
 
 /**
  * 从标签页推导模式。

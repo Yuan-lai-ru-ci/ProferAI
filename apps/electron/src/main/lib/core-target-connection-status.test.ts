@@ -20,6 +20,10 @@ function harness() {
   let publications = 0
   const channels: string[] = []
   const create = new Function('CoreClient', 'decryptToken', 'activeId', 'publishSnapshot', 'BrowserWindow', 'AGENT_IPC_CHANNELS', 'AUTOMATION_IPC_CHANNELS', `
+    const sendCoreWindowEvent = (target, channel, payload) => target.send(channel, payload);
+    const disposed = false;
+    const bindCallbacks = value => value;
+    const recipientWindows = () => BrowserWindow.getAllWindows();
     const clearLatency = () => {};
     const observeLatency = () => {};
     const publishConnectedResources = () => {

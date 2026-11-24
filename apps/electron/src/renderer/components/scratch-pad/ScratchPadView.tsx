@@ -249,12 +249,11 @@ export function ScratchPadView(): React.ReactElement {
   // 但 ID 保持不变，从而确保识别完成回填的文本会路由到这里而不是被 RichTextInput / agent draft 抢走。
   React.useEffect(() => {
     if (!editor) return
-    const dom = editor.view.dom
     const handleFocus = (): void => {
       setLastFocusedVoiceInputId(SCRATCH_PAD_VOICE_INPUT_ID)
     }
-    dom.addEventListener('focus', handleFocus, true)
-    return () => dom.removeEventListener('focus', handleFocus, true)
+    editor.on('focus', handleFocus)
+    return () => { editor.off('focus', handleFocus) }
   }, [editor])
 
   // 监听语音输入回填事件：仅在"上次聚焦目标"是 Scratch Pad 时消费，插入到当前光标位置

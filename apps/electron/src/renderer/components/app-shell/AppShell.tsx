@@ -1,3 +1,4 @@
+import { reportWindowPhase } from '@/lib/window-phase'
 /**
  * AppShell - 应用主布局容器
  *
@@ -50,6 +51,10 @@ export interface AppShellProps {
 }
 
 export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
+  React.useEffect(() => {
+    const frame = requestAnimationFrame(() => { reportWindowPhase('app-ready') })
+    return () => cancelAnimationFrame(frame)
+  }, [])
   const appMode = useAtomValue(appModeAtom)
   const currentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const interfaceVariant = useAtomValue(interfaceVariantAtom)

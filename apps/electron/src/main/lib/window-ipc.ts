@@ -1,7 +1,15 @@
+import { getActiveCoreClient } from './core-target-service'
 import { app, BrowserWindow, ipcMain } from 'electron'
+import { getAgentSessionMeta } from './agent-session-manager'
+import { getConversationMeta } from './conversation-manager'
 import { IPC_CHANNELS, type MainWindowBootstrap, type OpenTabInNewWindowResult } from '@profer/shared'
 import {
   createSecondaryMainWindow,
+  ackWindowTabHandoff,
+  reportWindowPhase,
+  reportWindowSessions,
+  focusWindowForSession,
+  confirmWindowBootstrap,
   getMainWindowBootstrap,
   getPrimaryMainWindow,
   getSessionWindowInitialTab,
@@ -11,6 +19,23 @@ import {
 } from './main-app-windows'
 
 export function registerWindowIpc(): void {
+  ipcMain.handle(IPC_CHANNELS.WINDOW_REPORT_PHASE, (event, phase: unknown) => reportWindowPhase(event.sender, phase))
+  ipcMain.handle(IPC_CHANNELS.WINDOW_ACK_TAB_HANDOFF, (event, id: string) => ackWindowTabHandoff(event.sender, id))
+  ipcMain.handle(IPC_CHANNELS.WINDOW_REPORT_SESSIONS, (event, sessions: unknown) => reportWindowSessions(event.sender, sessions))
+  ipcMain.handle(IPC_CHANNELS.WINDOW_FOCUS_SESSION, (event, session: unknown) => focusWindowForSession(event.sender, session, async (target) => {
+    if (/^core(?:-chat)?:[^:]+:.+$/.test(target.sessionId)) {
+      const client = getActiveCoreClient()
+      if (!client) return null
+      const rawId = target.sessionId.replace(/^core(?:-chat)?:[^:]+:/, "")
+      const values = target.type === "agent" ? await client.listSessions() : await client.chatOperation<Array<{ id: string; title: string }>>('chat:list-conversations', [])
+      const meta = values.find(value => value.id === rawId)
+      return meta ? { id: target.sessionId, ...target, title: meta.title } : null
+    }
+    const meta = target.type === 'agent' ? getAgentSessionMeta(target.sessionId) : getConversationMeta(target.sessionId)
+    if (!meta) return null
+    return { id: target.sessionId, ...target, title: meta.title }
+  }))
+  ipcMain.handle(IPC_CHANNELS.WINDOW_CONFIRM_BOOTSTRAP, (event, handoffId?: string) => confirmWindowBootstrap(event.sender, handoffId))
   ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win && !win.isDestroyed()) win.minimize()
@@ -50,6 +75,14 @@ export function registerWindowIpc(): void {
     async (event, tab: unknown): Promise<OpenTabInNewWindowResult> => {
       if (!isMainAppWindowSender(event.sender)) {
         throw new Error('仅 Profer 主应用窗口可以创建新窗口')
+      }
+      const normalized = normalizeInitialTab(tab)
+      if (normalized?.type === 'chat') {
+        const match = /^core-chat:[^:]+:(.+)$/.exec(normalized.sessionId)
+        const active = match
+          ? getActiveCoreClient()?.isChatGenerationActive(match[1]!)
+          : (await import('./chat-service')).isChatGenerationActive(normalized.sessionId)
+        if (active) return { ok: false, error: '生成中的 Chat 暂不支持移窗' }
       }
       const sourceWindow = BrowserWindow.fromWebContents(event.sender)
       return createSecondaryMainWindow(tab, sourceWindow)

@@ -6,12 +6,17 @@ import { activeTabIdAtom, ensureScratchPadTab, getPersistableTabState, SCRATCH_P
 import { fromPersistedTabGroup, fromPersistedTabGroups, reconcileTabGroups, tabGroupsAtom, toPersistedTabGroups } from '../atoms/tab-group-atoms'
 import { agentSDKMessagesCacheAtom, agentSessionsAtom, agentWorkspacesAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom, resolvedBlobMessagesAtom } from '../atoms/agent-atoms'
 import { conversationsAtom, currentConversationIdAtom } from '../atoms/chat-atoms'
-import { coreChannelsAtom, coreChannelsLoadedAtom, coreSessionNavigationPhaseAtom, coreTargetsAtom } from '../atoms/core-target-atoms'
+import { coreChannelsAtom, coreChannelsLoadedAtom, coreSessionNavigationPhaseAtom, coreTargetsAtom, mergeWindowCoreSnapshot } from '../atoms/core-target-atoms'
 import { appModeAtom } from '../atoms/app-mode'
 import { activeViewAtom } from '../atoms/active-view'
+import { windowBootstrapAtom } from '../atoms/app-windows'
 import { getVisibleAgentWorkspaces } from './product-feature-flags'
 
 interface NavigationDeps {
+  /** 次级窗口只保留自身内存导航，不读写 primary 历史。 */
+  isolated?: boolean
+  seedInitialSession?: () => Promise<AgentSessionMeta | null>
+  onInitialSessionReady?: (activate: boolean) => void
   getSettings: () => Promise<AppSettings>
   listCoreTargets: () => Promise<CoreTargetsSnapshot>
   listConversations: () => Promise<ConversationMeta[]>
@@ -113,8 +118,15 @@ export function initializeCoreSessionNavigation(store: Store, deps: NavigationDe
   let legacyKey: string | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let writes = Promise.resolve()
+  let promotion: Promise<void> | undefined
+  let promotionReady = true
+  let wasIsolated = Boolean(deps.isolated)
+  const isIsolated = () => deps.isolated === true && store.get(windowBootstrapAtom)?.isPrimary !== true
   const settingsPromise = deps.getSettings()
   const persist = (): Promise<void> => {
+    if (isIsolated()) return Promise.resolve()
+    if (promotion) return promotion.then(() => promotionReady ? persist() : undefined)
+    if (!promotionReady) return refreshPromotionHistory().then(() => promotionReady ? persist() : undefined)
     const patch = { coreTabStates: structuredClone(history) }
     const request = writes.catch(() => undefined).then(() => deps.updateSettings(patch)).then(() => undefined)
     writes = request
@@ -143,22 +155,46 @@ export function initializeCoreSessionNavigation(store: Store, deps: NavigationDe
     store.set(activeViewAtom, 'conversations')
     applying = false
   }
+  let seeded = false
+  let seedKey: string | undefined
+  let firstLoad = true
   const load = async (): Promise<void> => {
     const request = ++revision
     const requestedKey = key
     const requestedTarget = target
     canCapture = false
-    clear()
+    const preserveScratch = firstLoad && store.get(activeTabIdAtom) === SCRATCH_PAD_ID
+    firstLoad = false
+    if (!preserveScratch) clear()
+    else store.set(coreSessionNavigationPhaseAtom, 'loading')
+    seedKey ??= requestedKey
     if (requestedTarget.startup === 'restoring') return
     const initialNavigationRevision = navigationRevision
+    let acceptedMeta: AgentSessionMeta | null = null
     try {
-      const [settings, sessions, conversations, workspaces] = await Promise.all([
+      const catalogs = Promise.all([
         settingsPromise, deps.listAgentSessions(), deps.listConversations(), deps.listWorkspaces(),
       ])
+      void catalogs.catch(() => {})
+      if (!seeded && seedKey === requestedKey && deps.seedInitialSession) {
+        const meta = await deps.seedInitialSession()
+        if (!active || request !== revision) return
+        if (!meta) throw new Error('目标会话不可用，无法确认交接')
+        acceptedMeta = meta
+        seeded = true
+        store.set(agentSessionsAtom, [meta])
+        deps.onInitialSessionReady?.(!preserveScratch && navigationRevision === initialNavigationRevision)
+        store.set(coreSessionNavigationPhaseAtom, 'ready')
+      }
+      const [settings, catalogSessions, conversations, workspaces] = await catalogs
+      // 仅本次已点查的成功交接补入迟到目录；明确删除或下一次加载不沿用。
+      const sessions = acceptedMeta && !catalogSessions.some(item => item.id === acceptedMeta!.id)
+        && store.get(agentSessionsAtom).some(item => item.id === acceptedMeta!.id)
+        ? [...catalogSessions, acceptedMeta] : catalogSessions
       if (!active || request !== revision) return
       const legacy = requestedKey === legacyKey && settings.tabState
         ? { ...settings.tabState, ...(settings.scratchPadActive ? { activeTabId: SCRATCH_PAD_ID } : {}) } : undefined
-      const candidate = navigationRevision !== initialNavigationRevision
+      const candidate = preserveScratch || acceptedMeta || navigationRevision !== initialNavigationRevision
         ? capture(store) : history[requestedKey] ?? (legacy as CoreTabSettings | undefined)
       const state = validate(candidate, sessions, conversations, workspaces, requestedTarget)
       applying = true
@@ -170,12 +206,35 @@ export function initializeCoreSessionNavigation(store: Store, deps: NavigationDe
       saveSoon()
     } catch (error) {
       if (active && request === revision) {
-        store.set(coreSessionNavigationPhaseAtom, 'error')
+        if (acceptedMeta) {
+          canCapture = true
+          history[requestedKey] = capture(store)
+          store.set(coreSessionNavigationPhaseAtom, 'ready')
+        } else store.set(coreSessionNavigationPhaseAtom, 'error')
         deps.onFailure(error)
       }
     }
   }
+  const refreshPromotionHistory = (): Promise<void> => {
+    if (promotion) return promotion
+    // 接任只刷新保存基线，不读取旧主窗口的 Tab 覆盖当前页面和输入。
+    promotionReady = false
+    promotion = deps.getSettings().then(settings => {
+      if (!active) return
+      history = { ...settings.coreTabStates, ...history }
+      promotionReady = true
+    }).catch(error => { deps.onFailure(error) }).finally(() => {
+      promotion = undefined
+      if (active && promotionReady) saveSoon()
+    })
+    return promotion
+  }
   const subscriptions = [navigationTabsAtom, activeTabIdAtom, tabGroupsAtom, currentAgentWorkspaceIdAtom, currentAgentSessionIdAtom, currentConversationIdAtom].map(item => store.sub(item, saveSoon))
+  subscriptions.push(store.sub(windowBootstrapAtom, () => {
+    if (!wasIsolated || isIsolated()) return
+    wasIsolated = false
+    void refreshPromotionHistory()
+  }))
   subscriptions.push(store.sub(coreTargetsAtom, () => {
     const next = store.get(coreTargetsAtom)
     const nextKey = scopeKey(next)
@@ -199,17 +258,19 @@ export function initializeCoreSessionNavigation(store: Store, deps: NavigationDe
   }))
   const ready = Promise.all([settingsPromise, deps.listCoreTargets()]).then(async ([settings, initial]) => {
     if (!active) return
-    history = { ...settings.coreTabStates }
+    history = isIsolated() ? {} : { ...settings.coreTabStates }
+    wasIsolated = isIsolated()
     const current = store.get(coreTargetsAtom)
-    if ((initial.revision ?? initial.generation) >= (current.revision ?? current.generation)) store.set(coreTargetsAtom, initial)
+    store.set(coreTargetsAtom, mergeWindowCoreSnapshot(current, initial))
     target = store.get(coreTargetsAtom)
     key = scopeKey(target)
-    if (!settings.coreTabStates) legacyKey = key
+    if (!isIsolated() && !settings.coreTabStates) legacyKey = key
     loaded = true
     await load()
   }).catch(error => { if (active) { store.set(coreSessionNavigationPhaseAtom, 'error'); deps.onFailure(error) } })
   return {
     ready,
+    retry: load,
     flush(): Promise<void> {
       if (!loaded) return Promise.resolve()
       if (timer) { clearTimeout(timer); timer = undefined }
@@ -217,7 +278,7 @@ export function initializeCoreSessionNavigation(store: Store, deps: NavigationDe
       return persist()
     },
     beforeUnload(): Partial<AppSettings> | null {
-      if (!loaded) return null
+      if (!loaded || isIsolated() || promotion || !promotionReady) return null
       remember()
       return {coreTabStates: structuredClone(history)}
     },

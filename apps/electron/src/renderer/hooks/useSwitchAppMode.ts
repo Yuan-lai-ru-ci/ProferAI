@@ -49,7 +49,7 @@ export interface SwitchAppModeResult {
 
 export function useSwitchAppMode(): (target: AppMode) => Promise<SwitchAppModeResult> {
   const phase = useAtomValue(coreSessionNavigationPhaseAtom)
-  const openSession = useOpenSession()
+  const openSession = useOpenSession({ localOnly: true })
   const { createChat, createAgent } = useCreateSession()
   const conversations = useAtomValue(conversationsAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)

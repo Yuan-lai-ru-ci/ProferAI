@@ -11,7 +11,7 @@ import { tabsAtom } from '@/atoms/tab-atoms'
 import { markdownTocOpenAtom } from '@/atoms/markdown-toc'
 import { ChatView } from '@/components/chat'
 import { AgentView } from '@/components/agent'
-import { MarkdownRichEditor } from '@/components/diff/MarkdownRichEditor'
+const MarkdownRichEditor = React.lazy(() => import('@/components/diff/MarkdownRichEditor').then(module => ({ default: module.MarkdownRichEditor })))
 import { MarkdownToc } from '@/components/diff/MarkdownToc'
 import { TabErrorBoundary } from './TabErrorBoundary'
 
@@ -66,9 +66,11 @@ export function TabContent({ tabId }: TabContentProps): React.ReactElement {
 
   if (tab.type === 'scratch') {
     return (
-      <React.Suspense fallback={LAZY_TAB_FALLBACK}>
-        <ScratchPadView />
-      </React.Suspense>
+      <TabErrorBoundary key={tab.id} sessionId={tab.id}>
+        <React.Suspense fallback={LAZY_TAB_FALLBACK}>
+          <ScratchPadView />
+        </React.Suspense>
+      </TabErrorBoundary>
     )
   }
 
@@ -162,6 +164,7 @@ function MarkdownDocTab({ load, errorText, docClassName }: { load: () => Promise
       <MarkdownToc containerRef={scrollRef as React.RefObject<HTMLElement>} contentKey={content.slice(0, 100)} enabled={tocOpen} />
       <div ref={scrollRef} className={docClassName ? 'flex-1 min-w-0 overflow-y-auto px-8 py-12' : 'flex-1 min-w-0 overflow-y-auto p-8'}>
         <div className={docClassName}>
+          <React.Suspense fallback={LAZY_TAB_FALLBACK}>
           <MarkdownRichEditor
             value={content}
             editing={false}
@@ -169,6 +172,7 @@ function MarkdownDocTab({ load, errorText, docClassName }: { load: () => Promise
             onSave={() => {}}
             onCancel={() => {}}
           />
+          </React.Suspense>
         </div>
       </div>
     </div>

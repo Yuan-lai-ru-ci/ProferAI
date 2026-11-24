@@ -44,8 +44,10 @@ test('配对成功但连接失败时保留已保存设备并抛出不含秘密�
 
 test('保存配对设备即使所有业务探针离线也持久化，且不修改当前目标', async () => {
   const targetSource = readFileSync(new URL('./core-target-service.ts', import.meta.url), 'utf8')
-  const start = targetSource.indexOf('export async function savePairedCoreTarget')
-  const end = targetSource.indexOf('export function updateCoreTarget', start)
+  const start = targetSource.indexOf('async function savePairedCoreTarget(')
+  const end = targetSource.indexOf('\nfunction updateCoreTarget(', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
   const saveScript = new Bun.Transpiler({ loader: 'ts' }).transformSync(targetSource.slice(start, end).replace('export ', ''))
   const store = { currentId: 'old', targets: [] as Array<{ id: string; coreId: string; endpoints: unknown[] }> }
   let written = false

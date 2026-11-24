@@ -5,7 +5,10 @@ import type { AppSettings, CoreTargetsSnapshot, CoreTabSettings } from '../../ty
 import { activeTabIdAtom, ensureScratchPadTab, tabsAtom } from '../atoms/tab-atoms'
 import { agentSessionsAtom, currentAgentSessionIdAtom, currentAgentWorkspaceIdAtom } from '../atoms/agent-atoms'
 import { conversationsAtom, currentConversationIdAtom } from '../atoms/chat-atoms'
-import { coreSessionNavigationPhaseAtom, coreTargetsAtom } from '../atoms/core-target-atoms'
+import { mergeWindowCoreSnapshot, coreSessionNavigationPhaseAtom, coreTargetsAtom } from '../atoms/core-target-atoms'
+import { applyInitialWindowTab } from './app-windows'
+import { appWindowsAtom, windowBootstrapAtom } from '../atoms/app-windows'
+import { agentSessionDraftsAtom } from '../atoms/agent-atoms'
 import { initializeCoreSessionNavigation } from './core-session-navigation'
 
 const remoteId = 'core:linux:remote-session'
@@ -21,7 +24,7 @@ const state = (item:AgentSessionMeta): CoreTabSettings => ({tabs:[{id:item.id,se
 const cleanups:(()=>void)[]=[]
 afterEach(()=>cleanups.splice(0).forEach(f=>f()))
 const settle=async()=>{for(let i=0;i<20;i++)await Promise.resolve()}
-function setup(saved:Partial<AppSettings>={}, options:{deferRemote?:boolean;failRemote?:boolean;failLocal?:boolean}={}) {
+function setup(saved:Partial<AppSettings>={}, options:{deferRemote?:boolean;failRemote?:boolean;failLocal?:boolean;isolated?:boolean}={}) {
  const store=createStore()
  store.set(coreTargetsAtom,snapshot('local',0))
  let resolveRemote!:(items:AgentSessionMeta[])=>void
@@ -30,6 +33,7 @@ function setup(saved:Partial<AppSettings>={}, options:{deferRemote?:boolean;fail
  const failures:unknown[]=[]
  let failLocal = Boolean(options.failLocal)
  const navigation=initializeCoreSessionNavigation(store,{
+  isolated: options.isolated,
   getSettings:async()=>({themeMode:'system',...saved}),listCoreTargets:async()=>snapshot('local',0),
   listConversations:async()=>[],
   listAgentSessions:async()=>{
@@ -220,4 +224,138 @@ test('Given 旧本机裸ID历史 When 本机Core返回同rawId Then 迁移Tab和
  await navigation.ready
  expect(store.get(currentConversationIdAtom)).toBe('core-chat:machine:old')
  expect(store.get(activeTabIdAtom)).toBe('core-chat:machine:old')
+})
+
+test('接任刷新共享历史后只合并本窗口历史，等待期间不保存陈旧整包', async () => {
+ const store=createStore()
+ store.set(windowBootstrapAtom,{windowId:'next',kind:'session',isPrimary:false,initialTab:null,openWindows:[]})
+ let reads=0
+ let release!:(settings:AppSettings)=>void
+ const latest=new Promise<AppSettings>(resolve=>{release=resolve})
+ const writes:Partial<AppSettings>[]=[]
+ const nav=initializeCoreSessionNavigation(store,{
+  isolated:true,getSettings:()=>++reads===1?Promise.resolve({themeMode:'system',coreTabStates:{'core:linux':state(remoteSession)}}):latest,
+  listCoreTargets:async()=>snapshot('local',0),listAgentSessions:async()=>[localSession],listConversations:async()=>[],listWorkspaces:async()=>[workspace('local-ws')],
+  updateSettings:async patch=>{writes.push(patch)},onFailure:error=>{throw error},
+ })
+ cleanups.push(nav.dispose)
+ await nav.ready
+ applyInitialWindowTab(store,{...state(localSession).tabs[0]!,type:'agent',draft:'keep'})
+ store.set(appWindowsAtom,[{windowId:'next',isPrimary:true,sessions:[]}])
+ expect(reads).toBe(2)
+ expect(nav.beforeUnload()).toBeNull()
+ const flushing=nav.flush()
+ await settle()
+ expect(writes).toHaveLength(0)
+ const newer={...state(remoteSession),activeTabId:'new-at-old-primary-close'}
+ release({themeMode:'system',coreTabStates:{'core:linux':newer,'core:new':state(remoteSession)}})
+ await flushing
+ expect(writes.at(-1)?.coreTabStates?.['core:linux']?.activeTabId).toBe('new-at-old-primary-close')
+ expect(writes.at(-1)?.coreTabStates?.['core:new']).toEqual(state(remoteSession))
+ expect(writes.at(-1)?.coreTabStates?.local?.activeTabId).toBe(localSession.id)
+ expect(store.get(activeTabIdAtom)).toBe(localSession.id)
+ expect(store.get(agentSessionDraftsAtom).get(localSession.id)).toBe('keep')
+})
+
+test('次级窗口接任后不重载当前Tab或草稿，只接续主窗口导航持久化', async () => {
+ const x=setup({coreTabStates:{'core:linux':state(remoteSession)}},{isolated:true})
+ x.store.set(windowBootstrapAtom,{windowId:'successor',kind:'session',isPrimary:false,initialTab:null,openWindows:[]})
+ await x.navigation.ready
+ applyInitialWindowTab(x.store,{...state(localSession).tabs[0]!,type:'agent',draft:'keep draft'})
+ await x.navigation.flush()
+ expect(x.writes).toHaveLength(0)
+ x.store.set(appWindowsAtom,[{windowId:'successor',isPrimary:true,sessions:[{type:'agent',sessionId:localSession.id}]}])
+ await x.navigation.flush()
+ expect(x.store.get(windowBootstrapAtom)?.isPrimary).toBe(true)
+ expect(x.store.get(activeTabIdAtom)).toBe(localSession.id)
+ expect(x.store.get(agentSessionDraftsAtom).get(localSession.id)).toBe('keep draft')
+ expect(x.writes.at(-1)?.coreTabStates?.local?.activeTabId).toBe(localSession.id)
+ expect(x.writes.at(-1)?.coreTabStates?.['core:linux']?.activeTabId).toBe(remoteId)
+ expect(x.navigation.beforeUnload()?.coreTabStates?.local?.activeTabId).toBe(localSession.id)
+})
+
+test('次级窗口不读取 primary 导航，不向共享 settings 落盘，Core 切换仍保留自身历史', async () => {
+ const {store,navigation,writes}=setup({coreTabStates:{local:state(localSession)}},{isolated:true})
+ await navigation.ready
+ expect(store.get(tabsAtom).filter(tab=>tab.type==='agent')).toEqual([])
+ store.set(tabsAtom,ensureScratchPadTab(state(localSession).tabs))
+ store.set(activeTabIdAtom,localSession.id)
+ store.set(coreTargetsAtom,snapshot('linux-target',1))
+ await settle()
+ store.set(coreTargetsAtom,snapshot('local',2))
+ await settle()
+ expect(store.get(activeTabIdAtom)).toBe(localSession.id)
+ await navigation.flush()
+ expect(navigation.beforeUnload()).toBeNull()
+ expect(writes).toEqual([])
+})
+
+test('两个窗口各自消费 Core 路由快照，切换 A 不改变 B 的目录与导航', async () => {
+ const a=setup({}, {isolated:true})
+ const b=setup({}, {isolated:true})
+ await Promise.all([a.navigation.ready,b.navigation.ready])
+ b.store.set(tabsAtom,ensureScratchPadTab(state(localSession).tabs))
+ b.store.set(activeTabIdAtom,localSession.id)
+ a.store.set(coreTargetsAtom,snapshot('linux-target',1))
+ await settle()
+ expect(a.store.get(coreTargetsAtom).currentId).toBe('linux-target')
+ expect(a.store.get(agentSessionsAtom).map(item=>item.id)).toEqual([remoteId])
+ expect(b.store.get(coreTargetsAtom).currentId).toBe('local')
+ expect(b.store.get(agentSessionsAtom).map(item=>item.id)).toEqual([localSession.id])
+ expect(b.store.get(activeTabIdAtom)).toBe(localSession.id)
+})
+
+test('窗口 Core 新快照收到后，迟到 list 查询不回退路由', () => {
+ const current={...snapshot('linux-target',2),revision:5}
+ expect(mergeWindowCoreSnapshot(current,{...snapshot('local',1),revision:4})).toBe(current)
+ expect(mergeWindowCoreSnapshot(snapshot('local',0),snapshot('linux-target',1)).currentId).toBe('linux-target')
+})
+
+test('初始点查先于无关目录确认，迟到目录保留用户选择；点查失败不确认', async () => {
+ for (const fail of [false,true]) {
+  const store=createStore()
+  store.set(coreTargetsAtom,snapshot('local',0))
+  let release!:(items:AgentWorkspace[])=>void
+  const slow=new Promise<AgentWorkspace[]>(resolve=>{release=resolve})
+  let confirmed=0
+  const nav=initializeCoreSessionNavigation(store,{
+   isolated:true,getSettings:async()=>({themeMode:'system'}),listCoreTargets:async()=>snapshot('local',0),
+   listAgentSessions:async()=>[localSession],listConversations:async()=>[],listWorkspaces:()=>slow,
+   updateSettings:async()=>({}),onFailure:()=>{},seedInitialSession:async()=>fail?null:localSession,
+   onInitialSessionReady:()=>{confirmed++;store.set(tabsAtom,state(localSession).tabs);store.set(activeTabIdAtom,localSession.id)},
+  })
+  await settle()
+  expect(confirmed).toBe(fail?0:1)
+  if(!fail){store.set(activeTabIdAtom,null)}
+  release([workspace('local-ws')]);await nav.ready
+  if(!fail)expect(store.get(activeTabIdAtom)).toBeNull()
+  nav.dispose()
+ }
+})
+
+test('seed 后目录失败保持 Tab 草稿 ready，并可切换下一 Core；迟到空列表不删已点查目标', async () => {
+ for(const rejectCatalog of [true,false]) {
+  const store=createStore();store.set(coreTargetsAtom,snapshot('local',0))
+  let reject!:(e:Error)=>void,resolve!:(items:AgentSessionMeta[])=>void
+  const catalog=new Promise<AgentSessionMeta[]>((res,rej)=>{resolve=res;reject=rej})
+  let failures=0
+  const nav=initializeCoreSessionNavigation(store,{
+   isolated:true,getSettings:async()=>({themeMode:'system'}),listCoreTargets:async()=>snapshot('local',0),
+   listAgentSessions:()=>store.get(coreTargetsAtom).currentId==='local'?catalog:Promise.resolve([remoteSession]),
+   listConversations:async()=>[],listWorkspaces:async()=>[workspace('local-ws'),workspace('linux-ws')],
+   updateSettings:async()=>({}),onFailure:()=>{failures++},seedInitialSession:async()=>localSession,
+   onInitialSessionReady:()=>applyInitialWindowTab(store,{...state(localSession).tabs[0]!,type:'agent',draft:'saved'}),
+  })
+  await settle()
+  if(rejectCatalog)reject(new Error('catalog offline'));else resolve([])
+  await nav.ready
+  expect(store.get(coreSessionNavigationPhaseAtom)).toBe('ready')
+  expect(store.get(activeTabIdAtom)).toBe(localSession.id)
+  expect(store.get(agentSessionDraftsAtom).get(localSession.id)).toBe('saved')
+  expect(failures).toBe(rejectCatalog?1:0)
+  store.set(coreTargetsAtom,snapshot('linux-target',1));await settle()
+  expect(store.get(coreSessionNavigationPhaseAtom)).toBe('ready')
+  expect(store.get(agentSessionsAtom).map(item=>item.id)).toEqual([remoteId])
+  nav.dispose()
+ }
 })

@@ -166,6 +166,7 @@ export function resolveDeleteShortcutAction(
  * 两者不互相替代：Goal 暂停或等待输入时竖条已经消失，标记仍然要在。
  */
 export type SessionLeadingMarker =
+  | 'window'
   | 'pin'
   | 'goal'
   | 'automation'
@@ -185,6 +186,7 @@ export type SessionLeadingMarker =
 export function resolveSessionLeadingMarkers(input: {
   /** 子会话不参与置顶，也不显示置顶标记 */
   pinnable: boolean
+  inWindow?: boolean
   pinned: boolean
   /** 置顶分区已用分区标题表达状态，不再重复画大头针 */
   showPinIcon: boolean
@@ -200,6 +202,7 @@ export function resolveSessionLeadingMarkers(input: {
   const markers: SessionLeadingMarker[] = []
   const hasLiveGoal = input.goalStatus !== undefined && isGoalLive({ status: input.goalStatus })
   if (input.pinnable && input.pinned && input.showPinIcon) markers.push('pin')
+  if (input.inWindow) markers.push('window')
   if (hasLiveGoal) markers.push('goal')
   if (input.sourceAutomationId && !input.sourceDelegationId && !hasLiveGoal) markers.push('automation')
   if (input.explorationParentSessionId && input.explorationSourceMessageId) {

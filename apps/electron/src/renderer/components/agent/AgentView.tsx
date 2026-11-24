@@ -1,3 +1,5 @@
+import { isTargetInteractive, reportWindowPhase } from '@/lib/window-phase'
+import { windowBootstrapAtom } from '@/atoms/app-windows'
 import { canReplaceAgentHistory, decideAgentHistoryLoad } from '@/lib/agent-persistence'
 /**
  * AgentView — Agent 模式主视图容器
@@ -1045,6 +1047,17 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
   // 消息是否已完成首次加载（用于 auto-send 等待）
   const [messagesLoaded, setMessagesLoaded] = React.useState(false)
+  const loadedTimingSession = React.useRef<string | null>(null)
+  const [composerReady, setComposerReady] = React.useState(false)
+  const bootstrapForTiming = useAtomValue(windowBootstrapAtom)
+  React.useEffect(() => {
+    if (bootstrapForTiming?.initialTab?.type === 'agent' && isTargetInteractive({
+      sessionId, targetSessionId: bootstrapForTiming.initialTab.sessionId,
+      loadedSessionId: loadedTimingSession.current, messagesLoaded,
+      editorReady: composerReady, channelReady: Boolean(agentChannelId), modelReady: hasAvailableModel,
+    })) reportWindowPhase('target-interactive')
+  }, [messagesLoaded, composerReady, agentChannelId, hasAvailableModel, bootstrapForTiming, sessionId])
+
   const loadingSessionIdRef = React.useRef<string | null>(null)
 
   // 加载当前会话消息
@@ -1081,8 +1094,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       const cached = store.get(agentSDKMessagesCacheAtom).get(sessionId)
       if (cached) {
         setPersistedSDKMessages(cached)
-        setMessagesLoaded(true)
+        loadedTimingSession.current = sessionId; setMessagesLoaded(true)
       } else {
+        loadedTimingSession.current = null
         setPersistedSDKMessages([])
         setMessagesLoaded(false)
       }
@@ -1121,12 +1135,14 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           streamNow: streamAtResult,
         })
         if (decision === 'discard') {
+          // 不应用的迟到快照不能建立新的计时就绪凭据，已有有效缓存凭据保持。
           setMessagesLoaded(true)
           return
         }
         if (decision === 'retry') {
           // 落盘停在 pending/failed：历史仍要显示（否则整段空窗），但不能拿这次快照
           // 去清实时副本。补一次读盘让窗口收敛；重读时状态已稳定，不会反复触发。
+          // 等待落盘时只保留此前成功加载/缓存建立的计时凭据。
           setMessagesLoaded(true)
           store.set(agentMessageRefreshAtom, (prev) => {
             const map = new Map(prev)
@@ -1164,7 +1180,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         setMessagesCache((prev) => setSessionMessagesCache(prev, sessionId, cacheValue))
         unstable_batchedUpdates(() => {
           setPersistedSDKMessages(merged)
-          setMessagesLoaded(true)
+          loadedTimingSession.current = sessionId; setMessagesLoaded(true)
 
           // 桌面：从分页结果同步 hasMore；非分页时从服务端读累计状态
           if (refreshed.isPage) {
@@ -1244,6 +1260,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       .catch((error) => {
         if (cancelled) return
         console.error(error)
+        loadedTimingSession.current = null
         setMessagesLoaded(true)
       })
     return () => { cancelled = true }
@@ -3421,6 +3438,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
             )}
             <RichTextInput
               ref={richTextInputRef}
+              onEditorReady={setComposerReady}
               value={inputContent}
               onChange={setInputContent}
               onDraftPresenceChange={setHasInputDraft}

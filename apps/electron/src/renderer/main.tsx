@@ -1,3 +1,5 @@
+import { reportWindowPhase } from '@/lib/window-phase'
+import { confirmHandoffWhenReady } from './lib/confirm-window-handoff'
 /**
  * 渲染进程入口
  *
@@ -15,7 +17,9 @@ import '@fontsource-variable/inter/index.css'
 
 import React, { useEffect, useMemo, useRef } from 'react'
 import ReactDOM from 'react-dom/client'
-import { coreTargetsAtom } from '@/atoms/core-target-atoms'
+import { windowBootstrapAtom } from './atoms/app-windows'
+import { coreSessionNavigationPhaseAtom } from './atoms/core-target-atoms'
+import { coreTargetsAtom, mergeWindowCoreSnapshot } from '@/atoms/core-target-atoms'
 import { useSetAtom, useAtomValue, useStore } from 'jotai'
 import App from './App'
 import { SmoothWheelInitializer } from './hooks/useSmoothWheel'
@@ -136,10 +140,8 @@ import { UpdateDialog } from './components/settings/UpdateDialog'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { NavigationInputProvider } from './components/navigation/NavigationInputProvider'
-import { SessionWindowApp } from './components/session-window/SessionWindowApp'
-import { TooltipProvider } from '@profer/ui/primitives/tooltip'
-import { settingsOpenAtom } from './atoms/settings-tab'
-import { sendWithCmdEnterAtom, shortcutOverridesAtom } from './atoms/shortcut-atoms'
+import { getWindowBootstrap } from './lib/window-bootstrap'
+import { AppWindowsInitializer, applyInitialWindowTab, collectWindowSessions } from './lib/app-windows'
 import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
 import './styles/globals.css'
 import './styles/skin-base.css'
@@ -151,9 +153,6 @@ const isVoiceDictationWindow = new URLSearchParams(window.location.search).get('
 const isDetachedPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'detached-preview'
 const isAgentPreviewWindow = new URLSearchParams(window.location.search).get('window') === 'agent-preview'
 const isPlanningWindow = new URLSearchParams(window.location.search).get('window') === 'planning'
-const isSessionWindow = new URLSearchParams(window.location.search).get('window') === 'session'
-const sessionWindowId = new URLSearchParams(window.location.search).get('sessionId')
-const sessionWindowType = new URLSearchParams(window.location.search).get('sessionType')
 
 /**
  * 主题初始化组件
@@ -359,7 +358,7 @@ function PlanningInitializer(): null {
     let fallbackShown = false
     const update = (snapshot: import('@/types/settings').CoreTargetsSnapshot): void => {
       if (disposed) return
-      setCore(current => (snapshot.revision ?? snapshot.generation) < (current.revision ?? current.generation) ? current : snapshot)
+      setCore(current => mergeWindowCoreSnapshot(current, snapshot))
       if (snapshot.startup === 'offline' && !fallbackShown) {
         fallbackShown = true
         toast.info('所选 Core 暂时离线，已保留原目标；可重试连接或主动切回本机', { id: 'core-startup-offline' })
@@ -740,7 +739,7 @@ function AgentListenersInitializer(): null {
 /** 主窗口接收「移回主窗口」的会话：先恢复草稿，再打开/聚焦 Tab。 */
 function ReattachTabListener(): null {
   const store = useStore()
-  const openSession = useOpenSession()
+  const openSession = useOpenSession({ localOnly: true })
   useEffect(() => {
     return window.electronAPI.onReattachTab((tab) => {
       if (tab.type === 'agent') {
@@ -760,59 +759,6 @@ function ReattachTabListener(): null {
       }
     })
   }, [openSession, store])
-  return null
-}
-
-/** 独立会话窗口：只接管该会话，不挂载浏览器/插件相关的全局桥接。 */
-function SessionAgentListenersInitializer({ sessionId }: { sessionId: string }): null {
-  useGlobalAgentListeners({ standaloneSessionId: sessionId })
-  return null
-}
-
-/** 独立会话窗口的键盘快捷键：只保留关闭窗口，Tab 相关快捷键由主窗口负责。 */
-function SessionWindowShortcuts(): null {
-  const setSendWithCmdEnter = useSetAtom(sendWithCmdEnterAtom)
-  const setShortcutOverrides = useSetAtom(shortcutOverridesAtom)
-  useEffect(() => {
-    // Agent/Chat 视图内部通过 registerShortcut 注册的快捷键需要 dispatcher。
-    initShortcutRegistry()
-    // 会话窗口不挂 GlobalShortcuts，但发送键与自定义快捷键仍需与主窗口一致。
-    void window.electronAPI.getSettings().then((settings) => {
-      if (settings.shortcutOverrides) {
-        setShortcutOverrides(settings.shortcutOverrides)
-        updateShortcutOverrides(settings.shortcutOverrides)
-      }
-      setSendWithCmdEnter(settings.sendWithCmdEnter ?? false)
-    }).catch(console.error)
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return
-      if (event.key.toLowerCase() !== 'w') return
-      event.preventDefault()
-      void window.electronAPI.windowClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    // 应用菜单的 CmdOrCtrl+W 加速器会先于 DOM keydown 触发；主窗口由 GlobalShortcuts
-    // 处理 close-tab，轻量窗口没有挂它，这里直接把“关闭标签页”解释为关闭当前窗口。
-    const unsubMenuCloseTab = window.electronAPI.onMenuCloseTab(() => {
-      void window.electronAPI.windowClose()
-    })
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      unsubMenuCloseTab()
-    }
-  }, [setSendWithCmdEnter, setShortcutOverrides])
-  return null
-}
-
-/** 独立会话窗口没有设置页：把“前往设置”的意图明确引导回主窗口。 */
-function SessionWindowSettingsGuard(): null {
-  const settingsOpen = useAtomValue(settingsOpenAtom)
-  const setSettingsOpen = useSetAtom(settingsOpenAtom)
-  useEffect(() => {
-    if (!settingsOpen) return
-    setSettingsOpen(false)
-    toast.info('请在主窗口修改设置')
-  }, [settingsOpen, setSettingsOpen])
   return null
 }
 
@@ -1032,17 +978,56 @@ function TabStatePersistenceInitializer(): null {
         readSettled()
       })
     }
-    const navigation = initializeCoreSessionNavigation(store, {
-      getSettings: () => window.electronAPI.getSettings(),
-      listCoreTargets: listReadyCoreTargets,
-      listConversations: () => window.electronAPI.listConversations(true),
-      listAgentSessions: () => window.electronAPI.listAgentSessions(true),
-      listWorkspaces: () => window.electronAPI.listAgentWorkspaces(),
-      updateSettings: (patch) => window.electronAPI.updateSettings(patch),
-      onFailure: (error) => { console.error('[Core 会话恢复] 失败:', error); toast.error('恢复当前内核会话失败，请重新连接或选择会话') },
+    const handoffAbort = new AbortController()
+    let userNavigated = false
+    const stopUserNavigation = store.sub(activeTabIdAtom, () => {
+      if (store.get(activeTabIdAtom)) userNavigated = true
+    })
+    let stopBootstrap: (() => void) | undefined
+    let navigation: ReturnType<typeof initializeCoreSessionNavigation> | undefined
+    void getWindowBootstrap().then((bootstrap) => {
+      if (disposed) return
+      let initialized = false
+      navigation = initializeCoreSessionNavigation(store, {
+        isolated: !bootstrap.isPrimary,
+        ...(bootstrap.initialTab?.type === 'agent' ? {
+          seedInitialSession: () => window.electronAPI.getAgentSessionMeta(bootstrap.initialTab!.sessionId),
+          onInitialSessionReady: (activate: boolean) => {
+            if (disposed) return
+            reportWindowPhase('target-meta-ready')
+            applyInitialWindowTab(store, bootstrap.initialTab, activate && !userNavigated)
+            store.set(windowBootstrapAtom, bootstrap)
+            initialized = true
+            void confirmHandoffWhenReady(store, bootstrap, handoffAbort.signal).catch(console.error)
+          },
+        } : {}),
+        getSettings: () => window.electronAPI.getSettings(),
+        listCoreTargets: listReadyCoreTargets,
+        listConversations: () => window.electronAPI.listConversations(true),
+        listAgentSessions: () => window.electronAPI.listAgentSessions(true),
+        listWorkspaces: () => window.electronAPI.listAgentWorkspaces(),
+        updateSettings: (patch) => window.electronAPI.updateSettings(patch),
+        onFailure: (error) => {
+          console.error('[Core 会话恢复] 失败:', error)
+          const available = store.get(coreSessionNavigationPhaseAtom) === 'ready'
+          toast.error(available ? '会话已打开，但侧栏目录加载失败' : '恢复当前内核会话失败，请重新连接或选择会话', {
+            action: { label: '重试目录', onClick: () => { void navigation?.retry() } },
+          })
+        },
+      })
+      const finishBootstrap = (): void => {
+        if (initialized || disposed || store.get(coreSessionNavigationPhaseAtom) !== 'ready') return
+        initialized = true
+        if (bootstrap.initialTab) reportWindowPhase('target-meta-ready')
+        applyInitialWindowTab(store, bootstrap.initialTab, !userNavigated)
+        store.set(windowBootstrapAtom, bootstrap)
+        void confirmHandoffWhenReady(store, bootstrap, handoffAbort.signal).catch(console.error)
+      }
+      stopBootstrap = store.sub(coreSessionNavigationPhaseAtom, finishBootstrap)
+      void navigation.ready.then(finishBootstrap)
     })
     const beforeUnload = (): void => {
-      const patch = navigation.beforeUnload()
+      const patch = navigation?.beforeUnload()
       if (patch && !window.electronAPI.updateSettingsSync(patch)) {
         console.error('[Core 会话恢复] 关闭前保存失败')
       }
@@ -1051,7 +1036,10 @@ function TabStatePersistenceInitializer(): null {
     return () => {
       disposed = true
       window.removeEventListener('beforeunload', beforeUnload)
-      navigation.dispose()
+      handoffAbort.abort()
+      stopUserNavigation()
+      stopBootstrap?.()
+      navigation?.dispose()
       stopWaiting?.()
       releaseWait?.()
     }
@@ -1094,7 +1082,7 @@ function ScratchPadPersistence(): null {
         }
 
         // 恢复 scratch 激活状态：如果上次关闭时在 scratch 页，则激活它。
-        if (!settings.coreTabStates && settings.scratchPadActive) {
+        if ((await getWindowBootstrap()).isPrimary && !settings.coreTabStates && settings.scratchPadActive) {
           store.set(activeTabIdAtom, SCRATCH_PAD_ID)
         }
 
@@ -1114,6 +1102,7 @@ function ScratchPadPersistence(): null {
     const save = (): void => {
       const html = store.get(scratchPadContentAtom)
       if (window.electronAPI.saveScratchPad) {
+        saveTimerRef.current = undefined
         const md = htmlToMarkdown(html)
         window.electronAPI.saveScratchPad(md).then((ok) => {
           if (!ok) console.error('[ScratchPad] 保存失败')
@@ -1131,6 +1120,7 @@ function ScratchPadPersistence(): null {
 
     // beforeunload 时同步写入
     const handleBeforeUnload = (): void => {
+      if (!saveTimerRef.current) return
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       const html = store.get(scratchPadContentAtom)
       if (window.electronAPI.saveScratchPadSync) {
@@ -1150,6 +1140,7 @@ function ScratchPadPersistence(): null {
   // 监听 activeTabIdAtom 变化，持久化 scratchPadActive 到 settings
   useEffect(() => {
     const unsub = store.sub(activeTabIdAtom, () => {
+      if (!store.get(windowBootstrapAtom)?.isPrimary) return
       const activeTabId = store.get(activeTabIdAtom)
       const isScratchActive = activeTabId === SCRATCH_PAD_ID
       window.electronAPI.updateSettings({
@@ -1209,40 +1200,6 @@ if (isQuickTaskWindow) {
       </React.StrictMode>
     )
   })
-} else if (isSessionWindow) {
-  // ===== 独立会话窗口：只渲染单个会话，不挂载主界面壳与全局业务初始化器 =====
-  const sessionId = sessionWindowId
-  const sessionType = sessionWindowType === 'chat' ? 'chat' : 'agent'
-  if (!sessionId) {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
-      <div className="flex h-screen items-center justify-center bg-background text-sm text-muted-foreground">
-        会话窗口参数缺失
-      </div>,
-    )
-  } else {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
-      <React.StrictMode>
-        <TooltipProvider delayDuration={200}>
-          <ThemeInitializer />
-          <AgentSettingsInitializer />
-          <NotificationsInitializer />
-          <AgentUnreadSettingsInitializer />
-          <UiPreferencesInitializer />
-          <SmoothWheelInitializer />
-          <ComposerToolbarPreferencesInitializer />
-          <MarkdownFontSizeInitializer />
-          <UiScaleInitializer />
-          <ChatToolInitializer />
-          <ChatListenersInitializer />
-          <SessionAgentListenersInitializer sessionId={sessionId} />
-          <SessionWindowSettingsGuard />
-          <SessionWindowShortcuts />
-          <SessionWindowApp sessionId={sessionId} type={sessionType} />
-          <ProferToaster position="top-right" offset={16} />
-        </TooltipProvider>
-      </React.StrictMode>
-    )
-  }
 } else {
   // ===== 主窗口：完整渲染 =====
   ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -1273,6 +1230,7 @@ if (isQuickTaskWindow) {
       <DingTalkInitializer />
       <WeChatInitializer />
       <TabStatePersistenceInitializer />
+      <AppWindowsInitializer />
       <ScratchPadPersistence />
       <GlobalShortcuts />
       <NavigationInputProvider />

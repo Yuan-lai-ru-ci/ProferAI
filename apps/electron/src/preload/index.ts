@@ -394,6 +394,13 @@ export interface ElectronAPI {
   /** 订阅窗口最大化/还原状态变化 */
   onWindowMaximizeChanged: (callback: (isMaximized: boolean) => void) => () => void
   /** 读取当前主应用窗口的引导信息（窗口 ID、是否主窗口、初始 Tab） */
+  reportWindowSessions: (sessions: import('@profer/shared').AppWindowSession[]) => Promise<void>
+  focusSessionWindow: (session: import('@profer/shared').AppWindowSession) => Promise<boolean>
+  reportWindowPhase: (phase: 'app-ready' | 'target-meta-ready' | 'target-interactive') => Promise<void>
+  ackWindowTabHandoff: (handoffId: string) => Promise<void>
+  confirmWindowBootstrap: (handoffId?: string) => Promise<void>
+  onWindowTabHandoff: (callback: (event: import('@profer/shared').WindowTabHandoffEvent) => void) => () => void
+  onAppWindowsChanged: (callback: (windows: import('@profer/shared').AppWindowSummary[]) => void) => () => void
   getWindowBootstrap: () => Promise<import('@profer/shared').MainWindowBootstrap>
   /** 把当前窗口的会话 Tab 移动到一个新主窗口 */
   openTabInNewWindow: (tab: import('@profer/shared').MainWindowTabPayload) => Promise<import('@profer/shared').OpenTabInNewWindowResult>
@@ -2077,6 +2084,21 @@ const electronAPI: ElectronAPI = {
     return () => window.removeEventListener('resize', handler)
   },
 
+  reportWindowSessions: (sessions: import('@profer/shared').AppWindowSession[]) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_REPORT_SESSIONS, sessions),
+  focusSessionWindow: (session: import('@profer/shared').AppWindowSession) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_FOCUS_SESSION, session),
+  reportWindowPhase: (phase: 'app-ready' | 'target-meta-ready' | 'target-interactive') => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_REPORT_PHASE, phase),
+  ackWindowTabHandoff: (handoffId: string) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_ACK_TAB_HANDOFF, handoffId),
+  confirmWindowBootstrap: (handoffId?: string) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CONFIRM_BOOTSTRAP, handoffId),
+  onWindowTabHandoff: (callback: (event: import('@profer/shared').WindowTabHandoffEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, event: import('@profer/shared').WindowTabHandoffEvent): void => callback(event)
+    ipcRenderer.on(IPC_CHANNELS.WINDOW_TAB_HANDOFF, listener)
+    return () => { ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_TAB_HANDOFF, listener) }
+  },
+  onAppWindowsChanged: (callback: (windows: import('@profer/shared').AppWindowSummary[]) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, windows: import('@profer/shared').AppWindowSummary[]): void => callback(windows)
+    ipcRenderer.on(IPC_CHANNELS.WINDOW_APP_WINDOWS_CHANGED, listener)
+    return () => { ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_APP_WINDOWS_CHANGED, listener) }
+  },
   getWindowBootstrap: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.WINDOW_GET_BOOTSTRAP)
   },

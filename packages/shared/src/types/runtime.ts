@@ -409,6 +409,13 @@ export const IPC_CHANNELS = {
   WINDOW_MAXIMIZE_CHANGED: 'window:maximize-changed',
   /** 读取当前主应用窗口的引导信息（窗口 ID、是否主窗口、初始 Tab） */
   WINDOW_GET_BOOTSTRAP: 'window:get-bootstrap',
+  WINDOW_REPORT_SESSIONS: 'window:report-sessions',
+  WINDOW_APP_WINDOWS_CHANGED: 'window:app-windows-changed',
+  WINDOW_FOCUS_SESSION: 'window:focus-session',
+  WINDOW_REPORT_PHASE: 'window:report-phase',
+  WINDOW_ACK_TAB_HANDOFF: 'window:ack-tab-handoff',
+  WINDOW_TAB_HANDOFF: 'window:tab-handoff',
+  WINDOW_CONFIRM_BOOTSTRAP: 'window:confirm-bootstrap',
   /** 把当前窗口的会话 Tab 移动到一个新主窗口 */
   WINDOW_OPEN_TAB_IN_NEW_WINDOW: 'window:open-tab-in-new-window',
   /** 独立会话窗口把当前会话移回主窗口（renderer → main） */
@@ -445,21 +452,45 @@ export interface MainWindowTabPayload {
 /** 主应用窗口类型：完整主界面 / 独立会话窗口 */
 export type MainWindowKind = 'main' | 'session'
 
+export interface AppWindowSession {
+  type: 'chat' | 'agent'
+  sessionId: string
+}
+
+export interface AppWindowSummary {
+  windowId: string
+  isPrimary: boolean
+  sessions: AppWindowSession[]
+}
+
 /** 主应用窗口启动时向主进程读取的引导信息 */
 export interface MainWindowBootstrap {
-  /** 主进程分配的窗口 ID；主窗口固定为 'primary' */
+  /** 主进程分配的稳定窗口 ID；首个主窗口为 'primary'，接任不改变原窗口 ID。 */
   windowId: string
+  openWindows: AppWindowSummary[]
   /** 窗口类型：main = 完整主界面，session = 单会话独立窗口 */
   kind: MainWindowKind
   /** 是否是应用主窗口（负责持久化 Tab 状态与启动闪屏） */
   isPrimary: boolean
   /** 会话窗口创建时指定要打开的 Tab；主窗口为 null */
   initialTab: MainWindowTabPayload | null
+  handoffId?: string
+  recoverableHandoffs?: WindowTabHandoffEvent[]
 }
 
 /** 「在新窗口打开」的结果 */
+export interface WindowTabHandoffEvent {
+  sourceCore: { targetId: string; coreId?: string }
+  status: 'committed' | 'failed'
+  handoffId: string
+  tab: MainWindowTabPayload
+  error?: string
+}
+
 export interface OpenTabInNewWindowResult {
   ok: boolean
+  accepted?: boolean
+  handoffId?: string
   error?: string
 }
 

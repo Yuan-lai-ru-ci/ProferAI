@@ -11,7 +11,8 @@
 import * as React from 'react'
 import { startTransition } from 'react'
 import { useAtomValue } from 'jotai'
-import { appModeAtom, type AppMode } from '@/atoms/app-mode'
+import { appModeAtom, appModeIntentAtom, type AppMode } from '@/atoms/app-mode'
+import { tabsAtom, scratchPadOriginTabIdAtom } from '@/atoms/tab-atoms'
 import { Bot, MessageSquare } from 'lucide-react'
 import { useSwitchAppMode } from '@/hooks/useSwitchAppMode'
 import { cn } from '@/lib/utils'
@@ -24,7 +25,13 @@ const modes: { value: AppMode; label: string; icon: React.ReactNode }[] = [
 ]
 
 export function ModeSwitcher(): React.ReactElement {
-  const mode = useAtomValue(appModeAtom)
+  const actualMode = useAtomValue(appModeAtom)
+  const intent = useAtomValue(appModeIntentAtom)
+  const tabs = useAtomValue(tabsAtom)
+  const originId = useAtomValue(scratchPadOriginTabIdAtom)
+  const origin = tabs.find(tab => tab.id === originId)
+  const scratchMode = origin?.type === 'chat' ? 'chat' : origin?.type === 'agent' || origin?.type === 'preview' || origin?.type === 'browser' ? 'agent' : intent === 'chat' ? 'chat' : 'agent'
+  const mode = actualMode === 'scratch' ? scratchMode : actualMode
   const switchAppMode = useSwitchAppMode()
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const isClassic = interfaceVariant === 'classic'
@@ -38,7 +45,7 @@ export function ModeSwitcher(): React.ReactElement {
   }, [mode])
 
   const handleModeSwitch = React.useCallback((targetMode: AppMode) => {
-    if (targetMode === mode) return
+    if (targetMode === mode && actualMode !== 'scratch') return
     // 先写意图 + 移动滑块，让 UI 立刻响应；会话/标签页的切换在空闲时完成，
     // 避免模式切换动画被内容重渲染卡住。
     // 注意：界面显示的模式最终由活动标签页派生，所以真正“生效”发生在标签页切换后；
@@ -47,7 +54,7 @@ export function ModeSwitcher(): React.ReactElement {
     startTransition(() => {
       void switchAppMode(targetMode)
     })
-  }, [mode, switchAppMode])
+  }, [mode, actualMode, switchAppMode])
 
   const isFocusInModeRegion = (activeElement: Element | null): boolean =>
     activeElement instanceof HTMLElement

@@ -11,12 +11,14 @@
 import * as React from 'react'
 import { useAtomValue } from 'jotai'
 import {
-  Pencil, Pin, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, MailOpen, Sparkles, Target, X, XCircle, XSquare, AlertTriangle,
+  PanelsTopLeft, Pencil, Pin, Trash2, MoreHorizontal, Clock, GitBranch, GitFork, Globe, Loader2, ChevronRight, FolderOpen, GripVertical, Settings, ArrowRightLeft, Archive, ArchiveRestore, Plus, Mail, MailOpen, Sparkles, Target, X, XCircle, XSquare, AlertTriangle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useShortcut } from '@/hooks/useShortcut'
 import { clearSessionReferenceDragState, setSessionReferenceDragData } from '@/lib/session-reference-drag'
 import { resolveSessionUnreadMenuItem } from '@/lib/session-unread-menu'
+import { focusSessionOrOpenLocal } from '@/lib/app-windows'
+import { windowSessionKeysAtom } from '@/atoms/app-windows'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
 import {
@@ -40,7 +42,7 @@ import {
 } from '@/components/session-preview/SessionMiniMapPopover'
 import { browserStateMapAtom } from '@/atoms/browser-atoms'
 import { currentAgentSessionIdAtom, unviewedCompletedSessionIdsAtom, type SessionIndicatorStatus } from '@/atoms/agent-atoms'
-import type { ConversationMeta, AgentGoalState, AgentSessionMeta, AgentWorkspace } from '@profer/shared'
+import type { AppWindowSession, ConversationMeta, AgentGoalState, AgentSessionMeta, AgentWorkspace } from '@profer/shared'
 import { needsGoalAttention } from '@/domains/goal/goal-display-policy'
 import { formatRelativeUpdatedAt, limitSessionLeadingMarkers, resolveSessionLeadingMarkers, sidebarRowClass, type SessionLeadingMarker } from './sidebar-utils'
 import type { ShortcutRegistrationOptions } from '@/lib/shortcut-registry'
@@ -98,12 +100,43 @@ const SESSION_MARKER_ICON_CLASS = 'flex-shrink-0 text-foreground/40'
 /** `+N` 折叠时说明被折叠的是哪些标记：只留一个数字用户无从判断要不要展开 */
 const SESSION_MARKER_LABELS: Record<SessionLeadingMarker, string> = {
   pin: '已置顶',
+  window: '已在新窗口打开',
   goal: '进行中的目标',
   automation: '由定时任务创建',
   exploration: '探索分支',
   delegation: '委派子会话',
   browser: '正在使用浏览器',
   regeneratingTitle: '正在重新生成标题',
+}
+
+export function SessionWindowMarker({ session, onSelect }: {
+  session: AppWindowSession
+  onSelect: () => void
+}): React.ReactElement {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="聚焦会话窗口"
+          onClick={(event) => {
+            event.stopPropagation()
+            void focusSessionOrOpenLocal(() => window.electronAPI.focusSessionWindow(session), onSelect)
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          className={cn(
+            SESSION_MARKER_BOX_CLASS,
+            'rounded text-foreground/40 transition-colors hover:text-foreground/75',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+          )}
+        >
+          <PanelsTopLeft size={11} className={SESSION_MARKER_ICON_CLASS} aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>已在新窗口打开</TooltipContent>
+    </Tooltip>
+  )
 }
 
 /** 已置顶标记：点击取消置顶；尺寸与灰度跟其它行首标记完全一致 */
@@ -507,6 +540,7 @@ export const ConversationItem = React.memo(function ConversationItem({
   // 故必须用 exclusive 收敛到单行，否则两行同时进入编辑态。
   useShortcut('rename-item', startEdit, active && !editing, RENAME_SHORTCUT_OPTIONS)
 
+  const inWindow = useAtomValue(windowSessionKeysAtom).has(`chat:${conversation.id}`)
   const isPinned = !!conversation.pinned
 
   const menuItems = (
@@ -614,6 +648,7 @@ export const ConversationItem = React.memo(function ConversationItem({
                     onTogglePin={() => onTogglePin(conversation.id)}
                   />
                 )}
+                {inWindow && <SessionWindowMarker session={{ type: 'chat', sessionId: conversation.id }} onSelect={() => onSelect(conversation.id, conversation.title)} />}
                 {regeneratingTitle ? (
                   <>
                     <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
@@ -830,11 +865,13 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
   // 有几个就按这个顺序从标题左侧依次向右堆；没有标记时不占位，标题直接贴左。
   // Goal 标记的颜色跟随「要不要你管」：受阻 / 预算耗尽用 warning，与此刻已经变橙的左侧竖条同色相；
   // 正常推进用中性灰。不新增色相，也不跟竖条的 info 抢注意力。
+  const inWindow = useAtomValue(windowSessionKeysAtom).has(`agent:${session.id}`)
   const goalNeedsAttention = goalStatus !== undefined && needsGoalAttention({ status: goalStatus })
   // 顺序即优先级，超出上限的部分折叠成 +N（见 MAX_SESSION_LEADING_MARKERS）
   const { visible: visibleMarkerKinds, overflow: overflowMarkerKinds } = limitSessionLeadingMarkers(
     resolveSessionLeadingMarkers({
       pinnable,
+      inWindow,
       pinned: !!session.pinned,
       showPinIcon: !!showPinIcon,
       sourceAutomationId: session.sourceAutomationId,
@@ -850,6 +887,8 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
     switch (kind) {
       case 'pin':
         return <SessionLeadingPin key={kind} onTogglePin={() => onTogglePin(session.id)} />
+      case 'window':
+        return <SessionWindowMarker key={kind} session={{ type: 'agent', sessionId: session.id }} onSelect={() => onSelect(session.id, session.title)} />
       case 'goal':
         return (
           <Target
