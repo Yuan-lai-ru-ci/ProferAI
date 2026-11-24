@@ -69,8 +69,10 @@ describe('启动冒烟：探针解析与结论', () => {
     expect(parseProbeStages('')).toEqual([])
   })
 
-  test('写出 window-created 即通过', () => {
-    expect(evaluateStartup({ stages: ['main-loaded', 'window-created'], stderr: '', exitCode: null, timedOut: false }).ok).toBe(true)
+  test('窗口创建且Core就绪才通过', () => {
+    expect(evaluateStartup({ stages: ['main-loaded', 'window-created', 'core-ready'], stderr: '', exitCode: null, timedOut: false }).ok).toBe(true)
+    expect(evaluateStartup({ stages: ['main-loaded', 'window-created'], stderr: '', exitCode: null, timedOut: true }).ok).toBe(false)
+    expect(evaluateStartup({ stages: ['main-loaded', 'window-created', 'core-failed'], stderr: '', exitCode: null, timedOut: false }).ok).toBe(false)
   })
 
   test('加载阶段崩溃（纯 ESM 包被顶层 require）单独报出，与“没有探针”区分开', () => {

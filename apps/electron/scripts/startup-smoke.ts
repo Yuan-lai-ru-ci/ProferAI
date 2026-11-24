@@ -120,7 +120,7 @@ export function parseProbeStages(content: string): string[] {
 /**
  * 判定一次启动是否成功。
  *
- * - 只看 `window-created`：它是“应用真的起来了”的唯一充分信号；
+ * - 窗口创建与 Core 就绪都必须通过；
  * - stderr 特征串优先报出来，方便直接认出 0.16.27 这类加载期崩溃；
  * - 只有 `main-loaded` 说明模块求值过了但没建出窗口，与完全没加载区分开。
  */
@@ -130,13 +130,12 @@ export function evaluateStartup(input: {
   exitCode: number | null
   timedOut: boolean
 }): StartupEvaluation {
-  if (input.stages.includes('window-created')) return { ok: true, reason: '主窗口已创建' }
-
+  if (input.stages.includes('core-failed')) return { ok: false, reason: '本机 Core 启动失败' }
   const fatal = FATAL_STDERR_PATTERNS.find(pattern => input.stderr.includes(pattern))
   if (fatal) return { ok: false, reason: `主进程加载阶段崩溃（stderr 命中 "${fatal}"）` }
-
-  const bootstrapFailed = input.stages.includes('bootstrap-failed')
-  if (bootstrapFailed) return { ok: false, reason: 'bootstrap 抛错（探针记录 bootstrap-failed），应用进入了降级模式' }
+  if (input.stages.includes('bootstrap-failed')) return { ok: false, reason: 'bootstrap 抛错（探针记录 bootstrap-failed），应用进入了降级模式' }
+  if (input.stages.includes('window-created') && input.stages.includes('core-ready')) return { ok: true, reason: '主窗口已创建且本机 Core 已连接' }
+  if (input.stages.includes('window-created')) return { ok: false, reason: '主窗口已创建，但本机 Core 未就绪' }
 
   if (input.stages.includes('main-loaded')) {
     return {
@@ -264,14 +263,14 @@ async function main(): Promise<void> {
   while (Date.now() - startedAt < options.timeoutMs) {
     if (existsSync(probeFile)) {
       stages = parseProbeStages(readFileSync(probeFile, 'utf8'))
-      if (stages.includes('window-created')) break
+      if ((stages.includes('window-created') && stages.includes('core-ready')) || stages.includes('core-failed') || stages.includes('bootstrap-failed')) break
     }
     if (exitCode !== null) break
     // 加载阶段崩溃时 Electron 会弹模态对话框并一直挂着：命中特征串就端掉，不等超时。
     if (FATAL_STDERR_PATTERNS.some(pattern => stderr.includes(pattern))) break
     await new Promise(resolvePromise => setTimeout(resolvePromise, POLL_INTERVAL_MS))
   }
-  if (!stages.includes('window-created') && exitCode === null) timedOut = true
+  if (!(stages.includes('window-created') && stages.includes('core-ready')) && exitCode === null) timedOut = true
 
   const evaluation = evaluateStartup({ stages, stderr, exitCode, timedOut })
   if (child.pid) {

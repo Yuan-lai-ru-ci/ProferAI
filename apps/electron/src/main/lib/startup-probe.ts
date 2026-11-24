@@ -15,14 +15,20 @@ export const STARTUP_PROBE_ENV = 'PROFER_STARTUP_PROBE_FILE'
 
 /** 加载阶段已完成（bundle 的模块求值走到 index.ts 顶部）。 */
 export const STARTUP_STAGE_MAIN_LOADED = 'main-loaded'
-/** 主窗口对象已创建。启动冒烟以此判定“应用真的起来了”。 */
+/** 主窗口对象已创建；仍需等待 Core 就绪才能通过启动验收。 */
 export const STARTUP_STAGE_WINDOW_CREATED = 'window-created'
-/** bootstrap 抛错后的降级路径；不算启动成功，用于区分“没加载”和“加载了但起窗口失败”。 */
+/** 本机 Core 完成连接、资源同步与目标接线。 */
+export const STARTUP_STAGE_CORE_READY = 'core-ready'
+/** 本机 Core 启动失败。 */
+export const STARTUP_STAGE_CORE_FAILED = 'core-failed'
+/** bootstrap 抛错后的降级路径，不算启动成功。 */
 export const STARTUP_STAGE_BOOTSTRAP_FAILED = 'bootstrap-failed'
 
 export type StartupStage =
   | typeof STARTUP_STAGE_MAIN_LOADED
   | typeof STARTUP_STAGE_WINDOW_CREATED
+  | typeof STARTUP_STAGE_CORE_READY
+  | typeof STARTUP_STAGE_CORE_FAILED
   | typeof STARTUP_STAGE_BOOTSTRAP_FAILED
 
 /** 追加一条探针记录；任何失败都静默（观测手段不能影响启动）。 */

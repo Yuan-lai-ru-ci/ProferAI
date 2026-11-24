@@ -2,7 +2,7 @@ import type { CoreAccountService } from './account-service'
 declare const __PROFER_BUILD_TARGET__: 'oss' | 'commercial'
 const COMMERCIAL_BUILD = typeof __PROFER_BUILD_TARGET__ === 'undefined' || __PROFER_BUILD_TARGET__ === 'commercial'
 const CoreAccountServiceRuntime = (typeof __PROFER_BUILD_TARGET__ === 'undefined' || __PROFER_BUILD_TARGET__ === 'commercial') ? require('./account-service').CoreAccountService as typeof CoreAccountService : undefined
-import { resolveNativePiSessionFile } from './native-session-pi'
+import { resolveNativePiSessionFile, listNativePiRewindSessionIds } from './native-session-pi'
 import { createPlanningAgentOperations, createPlanningStore, type PlanningStore, createSyncSessionIndexStore, createSyncSessionMessageStore, createSessionStorePaths, createFileRunLedgerPort } from '@profer/session-store'
 import { registerOwnedSessionLayout, mirrorProjectSessionIndexes, restoreProjectSessionIndexes } from '@profer/session-store'
 import { configuredSessionInput, type CoreConfiguredSessionInput } from './configured-session'
@@ -1531,8 +1531,9 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
   }
   // 恢复必须在所有busy依赖初始化后、任何调度器绑定前进行。
   nativePorts.recover()
+  const pendingPiRewinds = listNativePiRewindSessionIds(config.configDir)
   for (const meta of sessions.list()) {
-    if (meta.agentRuntime !== 'pi' || !meta.sdkSessionId) continue
+    if (meta.agentRuntime !== 'pi' || !meta.sdkSessionId || !pendingPiRewinds.has(meta.sdkSessionId)) continue
     // 工作区被删除后残留的原生会话无法恢复，也不能因此让整个 Core 启动失败；
     // 其他恢复错误仍然抛出，避免带着损坏的回退事务继续运行。
     if (meta.workspaceId && !workspaces.list().some(workspace => workspace.id === meta.workspaceId)) {

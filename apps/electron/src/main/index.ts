@@ -9,7 +9,7 @@ import { createConnection } from 'net'
 import { existsSync } from 'fs'
 import { appendDevDiagnostic } from './lib/dev-diagnostics-log'
 import { localCoreOwnsBusinessData } from './lib/core-business-ownership'
-import { STARTUP_STAGE_BOOTSTRAP_FAILED, STARTUP_STAGE_MAIN_LOADED, STARTUP_STAGE_WINDOW_CREATED, writeStartupProbe } from './lib/startup-probe'
+import { STARTUP_STAGE_CORE_READY, STARTUP_STAGE_CORE_FAILED, STARTUP_STAGE_BOOTSTRAP_FAILED, STARTUP_STAGE_MAIN_LOADED, STARTUP_STAGE_WINDOW_CREATED, writeStartupProbe } from './lib/startup-probe'
 import { flushSDKMessagePersistence } from './lib/agent-session-manager'
 import { flushAgentContextUsageWrites } from './lib/agent-context-usage-store'
 
@@ -1047,6 +1047,8 @@ async function bootstrap(): Promise<void> {
     void safeAwait('startLocalCore', async () => {
       try { await startLocalCore() }
       catch (error) {
+        writeStartupProbe(STARTUP_STAGE_CORE_FAILED)
+        logLifecycle('core.start-failed', { error: error instanceof Error ? error.message : String(error) })
         updateLocalCoreStatus('failed', error instanceof Error ? error.message : String(error))
         throw error
       }
@@ -1361,6 +1363,7 @@ async function startLocalCore(): Promise<void> {
     })
     await transferLegacySessionDeletions(started.client)
     updateLocalCoreStatus('running')
+    writeStartupProbe(STARTUP_STAGE_CORE_READY)
     publishCoreTargetsSnapshot()
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
