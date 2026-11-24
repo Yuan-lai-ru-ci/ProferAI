@@ -7,6 +7,18 @@ export function isTargetInteractive(state: { sessionId: string; targetSessionId?
   return state.sessionId === state.targetSessionId && state.loadedSessionId === state.sessionId
     && state.messagesLoaded && state.editorReady && state.channelReady && state.modelReady
 }
-export function editorReadinessEvents(notify: (ready: boolean) => void) {
-  return { onCreate: () => notify(true), onDestroy: () => notify(false) }
+export function observeEditorReadiness(
+  editor: { isInitialized: boolean; isDestroyed: boolean; on(event: 'create' | 'destroy', callback: () => void): unknown; off(event: 'create' | 'destroy', callback: () => void): unknown },
+  notify: (ready: boolean) => void,
+): () => void {
+  const onCreate = () => notify(true)
+  const onDestroy = () => notify(false)
+  editor.on('create', onCreate)
+  editor.on('destroy', onDestroy)
+  notify(editor.isInitialized && !editor.isDestroyed)
+  return () => {
+    editor.off('create', onCreate)
+    editor.off('destroy', onDestroy)
+    notify(false)
+  }
 }

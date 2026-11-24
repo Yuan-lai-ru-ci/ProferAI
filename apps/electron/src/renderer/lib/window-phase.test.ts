@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { editorReadinessEvents, isTargetInteractive, reportWindowPhase } from './window-phase'
+import { observeEditorReadiness, isTargetInteractive, reportWindowPhase } from './window-phase'
 
 test('phase API 缺失或拒绝时不抛同步错误', async () => {
  const old=globalThis.window;const calls:string[]=[]
@@ -18,7 +18,18 @@ test('只对匹配且新鲜会话、消息/editor/channel/model全ready发intera
  for(const patch of [{sessionId:'b'},{targetSessionId:'b'},{loadedSessionId:'b'},{messagesLoaded:false},{editorReady:false},{channelReady:false},{modelReady:false}])
   expect(isTargetInteractive({...base,...patch})).toBe(false)
 })
-test('editor destroy 清除ready，不复用已销毁实例',()=>{
- const states:boolean[]=[];const events=editorReadinessEvents(ready=>states.push(ready))
- events.onCreate();events.onDestroy();expect(states).toEqual([true,false])
+test('editor就绪仅在effect订阅后通知，覆盖create早于挂载、销毁和清理后的迟到事件',()=>{
+ const states:boolean[]=[]
+ const listeners=new Map<string,Set<()=>void>>()
+ const editor={isInitialized:true,isDestroyed:false,on(event:string,callback:()=>void){if(!listeners.has(event))listeners.set(event,new Set());listeners.get(event)!.add(callback)},off(event:string,callback:()=>void){listeners.get(event)?.delete(callback)}}
+ const emit=(event:string)=>{for(const fn of listeners.get(event)??[])fn()}
+ emit('create');expect(states).toEqual([])
+ const cleanup=observeEditorReadiness(editor,ready=>states.push(ready))
+ expect(states).toEqual([true])
+ emit('destroy');expect(states).toEqual([true,false])
+ cleanup();const count=states.length
+ emit('create');emit('destroy');expect(states).toHaveLength(count)
+ editor.isInitialized=false
+ const next=observeEditorReadiness(editor,ready=>states.push(ready))
+ expect(states.at(-1)).toBe(false);emit('create');expect(states.at(-1)).toBe(true);next()
 })

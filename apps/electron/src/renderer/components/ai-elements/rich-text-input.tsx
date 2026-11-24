@@ -1,4 +1,4 @@
-import { editorReadinessEvents } from '@/lib/window-phase'
+import { observeEditorReadiness } from '@/lib/window-phase'
 /**
  * AI Elements - TipTap 富文本输入组件
  *
@@ -365,7 +365,6 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
   const editorReadyCallback = useRef(onEditorReady)
   editorReadyCallback.current = onEditorReady
   const editor = useEditor({
-    ...editorReadinessEvents(ready => editorReadyCallback.current?.(ready)),
     extensions: [
       StarterKit.configure({
         codeBlock: false, // 使用 CodeBlockLowlight 替代
@@ -747,6 +746,12 @@ export const RichTextInput = forwardRef<RichTextInputHandle, RichTextInputProps>
       })
     },
   }, [])
+
+  // TipTap 会在构造后异步触发 create；仅在React提交挂载后通知父组件。
+  useEffect(() => {
+    if (!editor) return
+    return observeEditorReadiness(editor, ready => editorReadyCallback.current?.(ready))
+  }, [editor])
 
   const flushDraft = useCallback((): string => {
     if (!hasPendingLocalDraftRef.current) return lastSyncedValueRef.current
