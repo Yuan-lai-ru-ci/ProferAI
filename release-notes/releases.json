@@ -1,5 +1,16 @@
 [
   {
+    "id": "RE_kwDOTfo-884bN6Su",
+    "tag_name": "v0.17.2",
+    "name": "Profer v0.17.2",
+    "body": "# Profer v0.17.2\n\n## 独立 Core 与跨设备连接\n\n- 本机 Core 默认运行，桌面与独立 Headless 共用执行内核；保留显式 legacy 启动入口。\n- 支持一次性邀请、持久 TLS 身份、局域网发现和离线目标保留，各 Core 分别维护会话与导航。\n- Core 与旧桌面共用执行锁，升级后接续已有会话与工作区；修复预览命名空间和共享快照宿主绑定。\n- 商业版 Core 管理商业账号、续期与官方模型目录；开源版 Core 排除商业账号与代管路由实现。\n- 新建本机 Core 配置目录使用 0700，修复 Linux 组可写 umask 下首次启动失败。\n\n## 多窗口与界面\n\n- 支持会话拆窗的确认交接与失败恢复，窗口分别保留 Core 连接、会话与草稿。\n- 主页面关闭后由剩余完整窗口接任；接任时保留其他 Core 的最新历史。\n- 收敛设置导航、Tab、共享滚动和空状态，增加 Skill 路由卡缺失提醒。\n- 更新模型目录、推理参数适配和上下文用量展示。\n- 修复后台索引镜像可能重建已删除项目根的问题。\n\n## 下载\n\nGitHub Assets 提供开源版；商业版使用独立更新目录，两个发行版均为稳定版 0.17.2。\n\n| 平台 | 开源版 | 商业版 |\n| --- | --- | --- |\n| macOS arm64 | [DMG](https://profer.cn/profer-updates/oss/Profer-0.17.2-arm64.dmg) | [DMG](https://profer.cn/profer-updates/Profer-Commercial-0.17.2-arm64.dmg) |\n| Windows x64 | [安装包](https://profer.cn/profer-updates/oss/Profer-Setup-0.17.2.exe) | [安装包](https://profer.cn/profer-updates/Profer-Commercial-Setup-0.17.2.exe) |\n| Linux x64 | [AppImage](https://profer.cn/profer-updates/oss/Profer-0.17.2-linux-x86_64.AppImage) · [deb](https://profer.cn/profer-updates/oss/Profer-0.17.2-linux-amd64.deb) | [AppImage](https://profer.cn/profer-updates/Profer-Commercial-0.17.2-linux-x86_64.AppImage) · [deb](https://profer.cn/profer-updates/Profer-Commercial-0.17.2-linux-amd64.deb) |\n| Linux Headless Core | [tar.gz](https://profer.cn/profer-updates/oss/Profer-Core-0.17.2-linux-x64.tar.gz) | [tar.gz](https://profer.cn/profer-updates/Profer-Commercial-Core-0.17.2-linux-x64.tar.gz) |\n\n桌面两版共享 appId，不能并存安装。Headless Core 版本为 0.1.7，解压后须保留完整运行目录，按包内 README 启动。\n\nmacOS 采用 ad-hoc 签名，未做 Developer ID 公证；Windows 安装包未签名。各平台均验证包内 Core 与真实窗口创建；完整 GUI 操作、安装/卸载以及真实账号、真实模型调用未作为本轮自动化验收。Linux 验收保留 Chromium sandbox，并在宿主配置标准 sandbox helper 权限。\n",
+    "draft": false,
+    "prerelease": false,
+    "created_at": "2026-11-24T10:52:40Z",
+    "published_at": "2026-11-24T11:09:10Z",
+    "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.17.2"
+  },
+  {
     "id": "RE_kwDOTfo-884a2END",
     "tag_name": "v0.16.28",
     "name": "Profer v0.16.28",
@@ -9,17 +20,6 @@
     "created_at": "2026-11-18T18:11:23Z",
     "published_at": "2026-11-18T18:26:01Z",
     "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.16.28"
-  },
-  {
-    "id": "RE_kwDOTfo-884a1WUg",
-    "tag_name": "v0.16.27",
-    "name": "Profer v0.16.27",
-    "body": "# Profer v0.16.27\n\n## 新功能\n\n- **默认 Agent 内核切换为 Pi**：新建会话默认走 Pi，散落在主进程与 renderer 的 `?? 'claude'` 兜底统一收敛到 `DEFAULT_AGENT_RUNTIME`；已持久化内核的历史会话不受影响。\n- **首次引导与教学模式重做**：引导页与界面蒙层引导改为暖纸视觉，锚点跟随新布局；欢迎对话打上 `isWelcome` 标记，不再被「切换到 Agent 模式」迁进空跑的 Agent 会话。\n- **协作派工缓存基础**：单个/批量派工支持 `taskKey` 与 `forceNew`，同来源会话命中 `taskKey` 时直接复用原 Worker 并持久化 `delegationTaskKey`，重启后可定位原会话；批量结果区分创建/复用/失败数量。\n- **启动闪屏与窗口状态恢复**：闪屏改为暖纸配色、按实际加载速度交接（最短 240ms 防闪烁），窗口按上次退出时的最大化/全屏状态恢复，首帧不再闪色差。\n- **模式由活动标签页派生**：`appModeIntent` 与 `appMode` 拆分，⌘⇧M 等路径不再出现「高亮 Agent、看的是 Chat」；侧栏收起态可悬停展开。\n- **导出可中途取消**：备份导出支持中途取消，不再只能等它跑完。\n\n## 优化\n\n- **核心提示词瘦身**：执行准则、信息与工具、表达与判断合并收敛，平台路径、用户身份、计划模式、全局记忆等段落改为按需触发；新增 `agent-behavior-recipe` 按宿主角色注入行为差异，预设契约版本随之升级。\n- **Skill 使用痕迹统一**：折叠摘要行把 Claude 的 Skill 工具与 Pi 的 `read SKILL.md` 归一到同一枚闪电徽标，图标位不足时优先保留；移除重复的「已加载 Skill」系统提示。\n- **默认浅色主题**：新安装默认浅色，老用户已落盘的深色设置不受影响。\n- **壁纸皮肤可见性规范**：主题作者 Skill 新增 `wallpaper-visibility.md`，给出素材亮度检查、面板 alpha 表、CSS 骨架与截图验收指标，避免「只挂 `.shell-bg` 就当壁纸铺满」。\n- **Skill 诊断更严格**：`skill-doctor` 复用路由同一套 YAML 解析器校验 frontmatter，新增 `frontmatter-invalid` 错误码。\n- **侧栏 Goal 标记**：有 Goal 的会话在行首显示靶心标记，便于快速定位盯着的任务。\n\n## 修复\n\n- 修复 Windows 上回退准备报 `EPERM: operation not permitted, fsync`：原子写改为文件 `fsync` 强制、目录项 `fsync` 尽力而为，`rename` 已提交后不再把平台不支持判成写盘失败；`journal` / `rewind-store` 复用同一份实现。\n- 修复 Pi 会话首轮被中断、从未建立 Pi 会话时回退被误判为 `recovery-required`：没有 `sdkSessionId` 时跳过 transcript 重建，截断 history 本身就是完整回退。\n- 修复历史会话绑定的渠道被删除或停用后只提示「暂无可用模型」：现在按「渠道已删除 / 已停用 / 模型不可用」分别提示，并提供「重新选择模型」入口直接打开选择器；分屏下只弹出目标会话的选择器。\n- 修复引用胶囊不能换位：支持拖拽换位、拖放后回收 NodeSelection，引用改为插在光标处；点击胶囊左右半边与两侧热区把光标落在节点前后。\n- 修复输入区 `.ProseMirror` 在导航焦点框之外重复画一条横线，焦点反馈统一交回外层输入卡片。\n- 修复 Skill frontmatter 解析失败时整条 Skill 从 catalog 静默消失：展示字段回退到 `skill-library.json`，正文仍可读。\n- 修复 MCP 重启结果不如实呈现，且未标明只作用于 Pi 运行时。\n- 修复 Pi `propose_goal` 未按 SDK 签名接收 params，导致 objective 恒为空。\n- 修复交接会话首轮用户气泡重复显示。\n- 修复自动压缩后耗时回挂错位、中断徽标误判与后台 Tab 泄漏。\n- 修复商业版额度不足时缺少结构化错误卡片。\n\n## 升级提示\n\n- 默认内核改为 Pi 只影响新建会话与历史缺省值归一化；已保存 `agentRuntime` 的会话仍按自身 metadata 运行。\n- 新安装默认浅色主题；此前选择过深色的用户保持深色。\n- 本版继续保持 macOS Apple Silicon 构建范围；macOS 本地验收包仍为 ad-hoc、无公证。\n- 本版无数据迁移。\n",
-    "draft": false,
-    "prerelease": true,
-    "created_at": "2026-11-18T13:41:42Z",
-    "published_at": "2026-11-18T15:48:09Z",
-    "html_url": "https://github.com/Yuan-lai-ru-ci/ProferAI/releases/tag/v0.16.27"
   },
   {
     "id": "RE_kwDOTfo-884ajRCs",
