@@ -10,21 +10,24 @@ const repoRoot = resolve(coreDir, '../..')
 const marker = 'core-runtime.json'
 // BUN_BE_BUN 仅用于启动磁盘 bundle，不能传给随后执行的 Bun 编译 CLI。
 export const CORE_RUNTIME_BANNER = 'delete process.env.BUN_BE_BUN;'
-export function coreBuildPlan(output: string, platform: string = process.platform, arch: string = process.arch) {
+export function coreBuildDefines(edition: 'oss' | 'commercial') {
+  return { __PROFER_BUILD_TARGET__: JSON.stringify(edition) }
+}
+export function coreBuildPlan(output: string, platform: string = process.platform, arch: string = process.arch, edition: 'oss' | 'commercial' = 'commercial') {
   if (!['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'win32-x64', 'win32-arm64'].includes(`${platform}-${arch}`)) throw new Error(`不支持的平台: ${platform}-${arch}`)
   if (platform === 'win32' && arch !== 'x64') throw new Error(`Windows Core helper 尚未验证支持架构: ${arch}`)
   const outDir = resolve(output)
   if (outDir === repoRoot || repoRoot.startsWith(outDir + sep) || (outDir.startsWith(repoRoot + sep) && !outDir.startsWith(join(coreDir, 'dist') + sep) && outDir !== join(coreDir, 'dist'))) throw new Error('拒绝覆盖仓库源目录')
   const external = ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/sdk', '@earendil-works/pi-coding-agent', '@earendil-works/pi-agent-core', '@earendil-works/pi-ai']
-  return { outDir, executable: join(outDir, platform === 'win32' ? 'profer-core.exe' : 'profer-core'), nativeClaudePackage: `@anthropic-ai/claude-agent-sdk-${platform}-${arch}`, external, platform, arch }
+  return { outDir, executable: join(outDir, platform === 'win32' ? 'profer-core.exe' : 'profer-core'), nativeClaudePackage: `@anthropic-ai/claude-agent-sdk-${platform}-${arch}`, external, platform, arch, edition }
 }
 
-export async function buildCoreRuntime(output = join(coreDir, 'dist')) {
-  const plan = coreBuildPlan(output)
+export async function buildCoreRuntime(output = join(coreDir, 'dist'), edition: 'oss' | 'commercial' = 'commercial') {
+  const plan = coreBuildPlan(output, process.platform, process.arch, edition)
   if (existsSync(plan.outDir) && readdirSync(plan.outDir).length && !existsSync(join(plan.outDir, marker))) throw new Error('拒绝覆盖现有非 Core 构建目录')
   mkdirSync(plan.outDir, { recursive: true })
   if (plan.platform === 'win32') buildWindowsOwnerHelper(plan.outDir, join(repoRoot, 'packages/session-store/native/windows'), plan.arch)
-  const bundled = await Bun.build({ entrypoints: [join(coreDir, 'src/index.ts')], outdir: plan.outDir, naming: 'core.js', target: 'bun', external: plan.external, banner: CORE_RUNTIME_BANNER })
+  const bundled = await Bun.build({ entrypoints: [join(coreDir, 'src/index.ts')], outdir: plan.outDir, naming: 'core.js', target: 'bun', external: plan.external, banner: CORE_RUNTIME_BANNER, define: coreBuildDefines(edition), minify: { syntax: true, whitespace: false, identifiers: false } })
   if (!bundled.success) throw new AggregateError(bundled.logs, 'Core bundle 失败')
   const result = await Bun.build({ entrypoints: [join(import.meta.dir, 'compiled-launcher.ts')], target: 'bun', compile: { outfile: plan.executable } })
   if (!result.success) throw new AggregateError(result.logs, 'Core 编译失败')
@@ -41,7 +44,7 @@ export async function buildCoreRuntime(output = join(coreDir, 'dist')) {
   cpSync(join(coreDir, 'resources', 'HEADLESS-README.md'), join(plan.outDir, 'README.md'))
   cpSync(join(coreDir, 'resources', 'profer-core.service.example'), join(plan.outDir, 'profer-core.service.example'))
   cpSync(join(repoRoot, 'LICENSE'), join(plan.outDir, 'LICENSE'))
-  writeFileSync(join(plan.outDir, marker), JSON.stringify({ format: 1, ...(plan.platform === 'win32' ? { ownerHelper: OWNER_HELPER } : {}), coreVersion, platform: plan.platform, arch: plan.arch, bun: Bun.version, executable: 'profer-core' + (process.platform === 'win32' ? '.exe' : ''), copiedPackages: deps.copiedPackageCount }, null, 2) + '\n')
+  writeFileSync(join(plan.outDir, marker), JSON.stringify({ format: 1, edition, ...(plan.platform === 'win32' ? { ownerHelper: OWNER_HELPER } : {}), coreVersion, platform: plan.platform, arch: plan.arch, bun: Bun.version, executable: 'profer-core' + (process.platform === 'win32' ? '.exe' : ''), copiedPackages: deps.copiedPackageCount }, null, 2) + '\n')
   return plan
 }
 
@@ -60,7 +63,9 @@ export function archiveLinuxRuntime(output: string, archive: string) {
 if (import.meta.main) {
   const args = process.argv.slice(2)
   const value = (flag: string) => { const index = args.indexOf(flag); if (index < 0) return undefined; const next = args[index + 1]; if (!next || next.startsWith('--')) throw new Error(`缺少 ${flag} 参数`); return next }
-  const plan = await buildCoreRuntime(value('--out'))
+  const target = value('--target') ?? 'commercial'
+  if (target !== 'oss' && target !== 'commercial') throw new Error('--target 只能为 oss 或 commercial')
+  const plan = await buildCoreRuntime(value('--out'), target)
   const archive = value('--tar-gz')
   if (archive) archiveLinuxRuntime(plan.outDir, archive)
   console.log(`[Core build] ${plan.outDir}`)

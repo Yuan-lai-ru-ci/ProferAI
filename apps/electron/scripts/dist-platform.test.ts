@@ -24,7 +24,7 @@ describe('dist.ts 发行版构建链', () => {
       target === 'commercial' ? 'build:renderer:commercial' : 'build:renderer',
       `verify:renderer-edition:${target}`,
       'build:cli',
-      'build:core',
+      target === 'commercial' ? 'build:core:commercial' : 'build:core',
       'build:pen-ocr',
       'build:resources',
       'sync:runtime-deps',

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import type { AgentSessionMeta, AgentWorkspace } from '@profer/shared'
 import { isAgentRuntime } from '@profer/shared'
 import type { AgentSessionsIndex } from './contracts'
@@ -37,7 +37,15 @@ function readIndex(root: string): ProjectSessionIndex | undefined {
 }
 function writeJson(root: string, path: string, value: object): void {
   for (const target of [path, `${path}.tmp`]) assertProjectPathSafe(root, target)
-  mkdirSync(dirname(path), { recursive: true })
+  const directory = dirname(path)
+  const pending: string[] = []
+  const projectRoot = resolve(root)
+  for (let current = resolve(directory); current !== projectRoot && !existsSync(current); current = dirname(current)) pending.unshift(current)
+  // 不递归创建项目根；外部删除项目时，后台镜像必须失败，不能重建一个空项目。
+  for (const current of pending) {
+    try { mkdirSync(current) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  }
   writeFileSync(`${path}.tmp`, JSON.stringify(value, null, 2), 'utf8')
   renameSync(`${path}.tmp`, path)
 }

@@ -10,6 +10,8 @@ import type { CoreAccountService } from './account-service'
 import type { CoreChannelConfig } from './config'
 import { assertChatId, createCoreChatAttachments } from './chat-attachments'
 
+declare const __PROFER_BUILD_TARGET__: 'oss' | 'commercial'
+
 export interface CoreChatOptions {
   account?: CoreAccountService
   defaultSelection?: () => { channelId?: string; modelId?: string }
@@ -52,7 +54,9 @@ export function createCoreChat(options: CoreChatOptions) {
     extractTextFromAttachment: attachments.extractText,
     getEffectiveProxyUrl: async () => undefined, getFetchFn: () => options.fetch ?? globalThis.fetch,
     getEnabledTools: ids => { if (ids?.length) unsupported(); return { tools: [] } }, executeToolCalls: async () => unsupported(),
-    editionProviders: { credentials: { shouldUseManagedRoute: channel => channel.serverManaged === true && !channel.directDataPlane, managedPath: kind => kind === 'messages' ? '/v1/proxy/messages' : '/v1/proxy/chat' }, account: { getSession: async () => await options.account?.operation('teamAuth') as never ?? null, recoverSession: async () => { await options.account?.refresh(); return await options.account?.operation('teamAuth') as never ?? null } }, errors: { detectInsufficientCredits: () => null } },
+    editionProviders: typeof __PROFER_BUILD_TARGET__ !== 'undefined' && __PROFER_BUILD_TARGET__ === 'oss'
+      ? { credentials: { shouldUseManagedRoute: () => false, managedPath: () => { throw new Error('开源版不提供代管渠道') } }, account: { getSession: async () => null, recoverSession: async () => null }, errors: { detectInsufficientCredits: () => null } }
+      : { credentials: { shouldUseManagedRoute: channel => channel.serverManaged === true && !channel.directDataPlane, managedPath: kind => kind === 'messages' ? '/v1/proxy/messages' : '/v1/proxy/chat' }, account: { getSession: async () => await options.account?.operation('teamAuth') as never ?? null, recoverSession: async () => { await options.account?.refresh(); return await options.account?.operation('teamAuth') as never ?? null } }, errors: { detectInsufficientCredits: () => null } },
     syncRecoveredChannels: async () => {}, resolveEditionBearerToken: auth => auth.proxyToken || auth.token, searchKnowledgeItemsForChat: async () => unsupported(),
     prepareChatKnowledgeRequest: async (input, deps) => { if (input.currentReferences?.length || input.history.some(message => message.knowledgeReferences?.length)) unsupported(); return { providerUserMessage: await deps.enrichMessage(input.userMessage, input.attachments), effectiveReferences: [], knowledgeContextChars: 0 } },
     normalizeChatStreamError: (_provider, error) => ({ message: error instanceof Error ? error.message : String(error) }),

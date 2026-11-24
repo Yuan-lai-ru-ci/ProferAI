@@ -1,4 +1,7 @@
-import { CoreAccountService } from './account-service'
+import type { CoreAccountService } from './account-service'
+declare const __PROFER_BUILD_TARGET__: 'oss' | 'commercial'
+const COMMERCIAL_BUILD = typeof __PROFER_BUILD_TARGET__ === 'undefined' || __PROFER_BUILD_TARGET__ === 'commercial'
+const CoreAccountServiceRuntime = (typeof __PROFER_BUILD_TARGET__ === 'undefined' || __PROFER_BUILD_TARGET__ === 'commercial') ? require('./account-service').CoreAccountService as typeof CoreAccountService : undefined
 import { resolveNativePiSessionFile } from './native-session-pi'
 import { createPlanningAgentOperations, createPlanningStore, type PlanningStore, createSyncSessionIndexStore, createSyncSessionMessageStore, createSessionStorePaths, createFileRunLedgerPort } from '@profer/session-store'
 import { registerOwnedSessionLayout, mirrorProjectSessionIndexes, restoreProjectSessionIndexes } from '@profer/session-store'
@@ -364,7 +367,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
     publish({ type: 'workspace', sessionId: '', payload: { type: 'changed' } })
   }
   if (dependencies.independent) {
-    account = new CoreAccountService(config.configDir, config.accountServerUrl, refreshChannels, () => new Set([...ownedChannels, ...desktopChannels].map(channel => channel.id)))
+    if (COMMERCIAL_BUILD && CoreAccountServiceRuntime) account = new CoreAccountServiceRuntime(config.configDir, config.accountServerUrl, refreshChannels, () => new Set([...ownedChannels, ...desktopChannels].map(channel => channel.id)))
     refreshChannels()
   }
   const persistChannels = () => {
@@ -1257,9 +1260,9 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
     sessions,
     workspaces,
     resourceOperation: body => executeCoreResourceOperation({ config, workspaces, sessions, automations }, body),
-    accountAvailable: Boolean(account),
+    accountAvailable: COMMERCIAL_BUILD && Boolean(account),
     accountOperation: async (operation, args) => {
-      if (!account) throw new Error('当前宿主不提供独立账号操作')
+      if (!COMMERCIAL_BUILD || !account) throw new Error('当前宿主不提供独立账号操作')
       await account.ready
       return account.operation(operation, args)
     },

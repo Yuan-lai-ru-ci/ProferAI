@@ -1,6 +1,6 @@
 {
   "name": "@profer/session-store",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "AGPL-3.0-only",
   "description": "Node-side Profer session storage primitives and host-neutral operation contracts.",
   "type": "module",

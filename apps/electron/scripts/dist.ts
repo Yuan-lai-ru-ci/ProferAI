@@ -23,8 +23,7 @@
  * bun run scripts/dist.ts --current-arch --skip-startup-smoke # 仅排查构建流程
  *
  * 未显式指定平台时按宿主推导（darwin→mac / win32→win / linux→linux）。
- * 注意：Linux 当前不是受支持的发布目标（缺少 Claude 原生二进制与 Linux 构建验证），
- * 因此 --linux 会被 packaging-host 门禁显式拒绝，而不是产出一个 Claude 必然失败的包。
+ * Linux 发布限定在原生 Linux x64 宿主，并校验 SDK/native/Core 闭包及真实窗口启动。
  */
 
 import { spawnSync } from 'child_process'
@@ -198,7 +197,7 @@ export function resolveBuildSteps(target: DistOptions['target']): { name: string
     { name: '构建渲染进程 (Vite)', script: commercial ? 'build:renderer:commercial' : 'build:renderer' },
     { name: '校验界面发行版', script: `verify:renderer-edition:${target}` },
     { name: '编译 Profer CLI (bun --compile)', script: 'build:cli' },
-    { name: '构建内置 Core 运行目录', script: 'build:core' },
+    { name: '构建内置 Core 运行目录', script: commercial ? 'build:core:commercial' : 'build:core' },
     { name: '编译手写笔 OCR', script: 'build:pen-ocr' },
     { name: '复制资源文件', script: 'build:resources' },
     { name: '同步主进程运行时依赖', script: 'sync:runtime-deps' },
@@ -411,7 +410,7 @@ function main(): void {
 
   step++
   printStepStart(step, totalSteps, '验证包内 Core（独立环境 HTTP/WS/native）')
-  results.push(runStep('验证包内 Core', 'bun', ['run', 'verify:packaged-core'], {
+  results.push(runStep('验证包内 Core', 'bun', ['run', 'verify:packaged-core', '--target', opts.target], {
     verbose: true,
     env: { PROFER_ELECTRON_OUTPUT_DIR: outputDir },
   }))
