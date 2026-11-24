@@ -27,7 +27,7 @@ import { CoreBackgroundTaskHost } from './background-task-host'
 import { createCoreToolResultPersist } from './tool-result-host'
 import { CoreWorkspaceOperationStore } from './workspace-operation-store'
 import { CoreSessionDeletionService } from './session-deletion-service'
-import { existsSync, mkdirSync, statSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, readFileSync, rmdirSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, win32 } from 'node:path'
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
@@ -405,8 +405,9 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
     if (prior && prior.operationId !== operationId) throw new Error(`工作区已有删除事务，请通过其operationId重试: ${prior.operationId}`)
     if (prior && prior.workspace.id !== workspaceId) throw new Error('工作区删除operationId归属冲突')
     if (prior?.status === 'completed') return
-    if (prior?.status === 'failed') workspaceOperations.retry(prior.operationId)
     const workspace = workspaces.list().find(item => item.id === workspaceId)
+    if (workspace) workspaces.assertManagedDeleteTarget(workspaceId)
+    if (prior?.status === 'failed') workspaceOperations.retry(prior.operationId)
     if (!workspace && prior) {
       const sessionsRemaining = sessions.list(true).filter(session => session.workspaceId === workspaceId || prior.sessionIds.includes(session.id))
       const automationsRemaining = automations.list().filter(item => item.workspaceId === workspaceId || prior.automationIds.includes(item.id))
@@ -424,7 +425,6 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
       return
     }
     if (!workspace) throw new Error(`Agent 工作区不存在: ${workspaceId}`)
-    workspaces.assertManagedDeleteTarget(workspaceId)
     if (workspaceOperations.active(workspaceId)) automations.blockWorkspace(workspaceId)
     const currentSessions = sessions.list(true).filter(session => session.workspaceId === workspaceId)
     const currentAutomations = automations.list().filter(item => item.workspaceId === workspaceId)
@@ -502,14 +502,13 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { claud
       const directory = join(config.workspaceRoot, operation.workspace.slug)
       const current = workspaces.assertManagedDeleteTarget(workspaceId)
       if (current.slug !== operation.workspace.slug) throw new Error('工作区身份在删除期间发生变化')
-      if (existsSync(directory)) {
-        const stats = statSync(directory)
-        if (!stats.isDirectory()) throw new Error('工作区路径不再是目录')
-        // managed目录属于Core私有工作区；事务已冻结全部会话和任务，并确认根身份。
-        // 项目绑定不进入此分支。失败保留operation，重试继续清理，索引只在成功后移除。
-        const { rm } = await import('node:fs/promises')
-        workspaces.assertManagedDeleteTarget(workspaceId)
-        await rm(directory, { recursive: true, force: true })
+      // 只移除空目录。即使终检之后写入了新文件，文件系统也会拒绝删除。
+      try {
+        rmdirSync(directory)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOTEMPTY' || code === 'EEXIST') throw new Error('工作区内有未纳管文件或目录，请移走后重试', { cause: error })
+        if (code !== 'ENOENT') throw error
       }
       workspaces.removeManagedAfterCascade(workspaceId)
       workspaceOperations.finish(operation.operationId)

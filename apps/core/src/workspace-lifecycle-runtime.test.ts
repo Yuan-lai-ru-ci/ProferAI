@@ -133,7 +133,7 @@ test('索引提交后崩溃恢复必须有完成删除记录，无证据不补�
   } finally { await runtime.shutdown(); await rm(root, { recursive: true, force: true }) }
 }, 20000)
 
-test('managed删除持久化快照、精确清理并为未纳管文件保留可重试事务', async () => {
+test('managed删除先保护未纳管文件，执行中新增的文件也保留并可重试', async () => {
   const root = await mkdtemp(join(tmpdir(), 'profer-core-managed-delete-'))
   const config = { host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces'), mockAgent: true,
     channels: [{ id: 'offline', name: 'offline', provider: 'anthropic' as const, apiKey: 'fixture-only' }] }
@@ -146,11 +146,26 @@ test('managed删除持久化快照、精确清理并为未纳管文件保留可�
   const unmanagedFile = join(config.workspaceRoot, workspace.slug, 'user.txt')
   await writeFile(unmanagedFile, 'preserve')
   const operationId = 'workspace-delete-fixture'
+  const automationBefore = structuredClone(runtime.automations.list().find(item => item.id === automation.id))
   try {
     await expect(runtime.deleteWorkspace(workspace.id, { operationId })).rejects.toThrow('未纳管文件')
+    expect(runtime.sessions.getMeta(session.id)).toEqual(session)
+    expect(runtime.automations.list().find(item => item.id === automation.id)).toEqual(automationBefore)
+    expect(runtime.workspaces.list().find(item => item.id === workspace.id)).toEqual(workspace)
+    expect(await readFile(unmanagedFile, 'utf8')).toBe('preserve')
+    expect(runtime.deletions.snapshot()).toHaveLength(0)
+    expect(runtime.listWorkspaceDeleteOperations()).toHaveLength(0)
+
+    await unlink(unmanagedFile)
+    const stopAndWait = runtime.coordinator.stopAndWait.bind(runtime.coordinator)
+    runtime.coordinator.stopAndWait = async (...args) => {
+      await writeFile(unmanagedFile, 'added during deletion')
+      return stopAndWait(...args)
+    }
+    await expect(runtime.deleteWorkspace(workspace.id, { operationId })).rejects.toThrow('未纳管文件')
+    expect(await readFile(unmanagedFile, 'utf8')).toBe('added during deletion')
     expect(runtime.sessions.getMeta(session.id)).toBeUndefined()
     expect(runtime.automations.list().some(item => item.id === automation.id)).toBe(false)
-    expect(runtime.workspaces.list().some(item => item.id === workspace.id)).toBe(true)
     const ledgerPath = join(config.configDir, 'core-workspace-operations.json')
     expect(JSON.parse(await readFile(ledgerPath, 'utf8')).operations[0]).toMatchObject({ operationId, status: 'failed', sessionIds: [session.id], automationIds: [automation.id] })
     await runtime.shutdown()
@@ -216,10 +231,9 @@ test('Core工作区HTTP更新持久化；project解绑只暂停任务保留文�
     const userFile = join(config.workspaceRoot, other.slug, 'user.txt')
     expect(await readFile(userFile, 'utf8')).toBe('user data')
     const deletionList = await json(port, '/workspace-deletions', 'GET')
-    const failedOperation = (deletionList.body.operations as Array<{ operationId: string; workspaceId: string; status: string }>).find(item => item.workspaceId === other.id)
-    expect(failedOperation?.status).toBe('failed')
+    expect((deletionList.body.operations as Array<{ workspaceId: string }>).some(item => item.workspaceId === other.id)).toBe(false)
     await unlink(userFile)
-    expect((await json(port, '/workspaces/delete/retry', 'POST', { operationId: failedOperation?.operationId })).status).toBe(204)
+    expect((await json(port, `/workspaces/${other.id}`, 'DELETE')).status).toBe(204)
     expect(runtime.workspaces.list().some(item => item.id === other.id)).toBe(false)
     const projectRoot = join(root, 'project')
     await mkdir(projectRoot)
@@ -239,6 +253,7 @@ test('Core工作区HTTP更新持久化；project解绑只暂停任务保留文�
     expect(runtime.workspaces.list().some(item => item.id === project.id)).toBe(false)
     expect(runtime.automations.list().find(item => item.id === projectTask.id)?.active).toBe(false)
     expect(runtime.sessions.getMeta(child.id)?.id).toBe(child.id)
+    expect(await readFile(join(projectRoot, 'user.txt'), 'utf8')).toBe('external data')
     expect(runtime.deletions.snapshot()).toHaveLength(deletionsBeforeProjectUnlink)
     await closeCoreServer(server)
     await runtime.shutdown()

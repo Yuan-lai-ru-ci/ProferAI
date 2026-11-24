@@ -228,7 +228,6 @@ export function createCoreWorkspaceStore(configDir: string, workspaceRoot: strin
       const actual = realpathSync(directory)
       if (index.workspaces.some(item => item.id !== id && item.rootPath && existsSync(item.rootPath)
         && realpathSync(item.rootPath) === actual)) throw new Error('工作区目录仍是项目根，拒绝删除')
-      if (readdirSync(directory).length) throw new Error('工作区仍有文件，完整级联删除尚未接入，文件保留')
     }
     return target
   }
@@ -260,6 +259,8 @@ export function createCoreWorkspaceStore(configDir: string, workspaceRoot: strin
       const projectRoot = existsSync(item.rootPath) ? realpathSync(item.rootPath) : resolve(item.rootPath)
       if (actual === projectRoot || inside(actual, projectRoot) || inside(projectRoot, actual)) throw new Error('工作区目录与项目根重叠，拒绝删除')
     }
+    // 会话产物由独立的会话删除器按归属清理，工作区目录内容不能仅凭位置认定为纳管。
+    if (stats && readdirSync(directory).length > 0) throw new Error('工作区内有未纳管文件或目录，请移走后重新删除')
     return target
   }
   const removeManagedAfterCascade = (id: string): void => {
