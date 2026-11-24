@@ -1,18 +1,19 @@
 /** 显示层只消费运行事实；不释放 owner，不调用宿主，也不从正文推断模型是否仍在执行。 */
 export interface AgentSessionMetaLike {
+  id?: string
   parentSessionId?: string
   sourceDelegationId?: string
   delegationStatus?: string
   explorationParentSessionId?: string
 }
 
-/** 显示域只按持久化委派状态计数；探索分支和普通子会话不混入。 */
-export function countRunningDelegations(sessions: readonly AgentSessionMetaLike[], parentSessionId: string): number {
+/** Prefer observed child activity; persisted running is only a cold-start fallback. */
+export function countRunningDelegations(sessions: readonly AgentSessionMetaLike[], parentSessionId: string, observed?: ReadonlyMap<string, 'active' | 'inactive' | 'unknown'>): number {
   return sessions.filter((session) => (
     session.parentSessionId === parentSessionId
     && Boolean(session.sourceDelegationId)
     && !session.explorationParentSessionId
-    && session.delegationStatus === 'running'
+    && (session.id && observed?.has(session.id) ? observed.get(session.id) === 'active' : session.delegationStatus === 'running')
   )).length
 }
 

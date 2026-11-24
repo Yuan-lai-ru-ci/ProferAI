@@ -2,10 +2,12 @@ import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'nod
 import { join, parse, resolve, sep, isAbsolute } from 'node:path'
 import type { AgentWorkspace, PresetReference } from '@profer/shared'
 import type { CoreConfig } from './config'
+import type { PiMcpClientManager } from '@profer/agent-provider-pi/pi/mcp-tools'
 import { assertSafeSkillSegment } from '@profer/agent-provider-pi/skills/skill-path-security'
 
 export interface CoreResourceOperationContext {
   config: CoreConfig
+  mcpManager?: PiMcpClientManager
   workspaces: { list(): AgentWorkspace[] }
   sessions?: { list(): Array<{ id: string; workspaceId?: string; presetId?: string; presetReference?: PresetReference }> }
   automations?: { list(): Array<{ id: string; workspaceId?: string; presetId?: string; presetReference?: PresetReference }> }

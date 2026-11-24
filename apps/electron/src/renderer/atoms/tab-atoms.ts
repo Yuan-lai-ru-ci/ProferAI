@@ -417,7 +417,7 @@ export function openTab(
 
   // 会话绑定的工作 Tab（文件预览 / 浏览器）：挂在 owner 会话 Tab 之后。
   // - preview：每文件一个实例（id 含 filePath），重复打开同一文件 = 聚焦既有 Tab；
-  // - browser：每会话单例。
+  // - browser：每个网页一个实例。
   if (item.type === 'preview' || item.type === 'browser') {
     const workTab: TabItem = item.type === 'preview'
       ? {

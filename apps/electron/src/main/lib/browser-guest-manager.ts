@@ -101,8 +101,8 @@ export class BrowserGuestManager {
     }
     for (const [id, binding] of this.bindings) {
       if (binding.sessionId !== sessionId || binding.tabId !== tabId) continue
-      this.bindings.delete(id)
       if (!binding.guest.isDestroyed()) binding.guest.close()
+      this.bindings.delete(id)
       return true
     }
     return false

@@ -39,10 +39,11 @@ test('Chat initialTab 恢复草稿且空引导不覆盖已有 Tab', () => {
   expect(store.get(conversationDraftsAtom).get('c')).toBe('hello')
 })
 
-test('聚焦路由仅匹配其他次级窗口，不拦截自身及 primary', () => {
+test('聚焦路由对称匹配主次窗口，不拦截自身', () => {
   const session = {type:'agent' as const,sessionId:'a'}
   const windows = [{windowId:'own',isPrimary:false,sessions:[session]},{windowId:'primary',isPrimary:true,sessions:[session]}]
-  expect(hasOtherSessionWindow(windows,'own',session)).toBe(false)
+  expect(hasOtherSessionWindow(windows,'own',session)).toBe(true)
+  expect(hasOtherSessionWindow([windows[0]!],'own',session)).toBe(false)
   expect(hasOtherSessionWindow([...windows,{windowId:'other',isPrimary:false,sessions:[session]}],'own',session)).toBe(true)
   expect(hasOtherSessionWindow(windows,'own',{type:'chat',sessionId:'a'})).toBe(false)
   expect(hasOtherSessionWindow([], 'own', session)).toBe(false)

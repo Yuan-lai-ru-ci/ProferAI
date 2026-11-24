@@ -317,6 +317,7 @@ export function createCoreServer(options: CoreServerOptions): Server {
         if (!runtime.workspaces.list().some(workspace => workspace.id === workspaceId)) {
           sendJson(response, 404, { error: 'workspace_not_found' }); return
         }
+        if ('permissionModeSource' in body || 'userPermissionMode' in body) throw new Error('权限来源仅可由Core写入')
         if (body.useCoreDefaults !== undefined && typeof body.useCoreDefaults !== 'boolean') throw new Error('invalid useCoreDefaults')
         if (url.pathname === '/sessions/configured' || body.useCoreDefaults === true) {
           for (const key of ['title', 'workspaceId', 'channelId', 'modelId', 'presetId', 'runtime', 'permissionMode'] as const) {
@@ -412,6 +413,7 @@ export function createCoreServer(options: CoreServerOptions): Server {
         for (const field of ['channelId', 'modelId'] as const) {
           if (body[field] !== undefined && typeof body[field] !== 'string') throw new Error(`invalid ${field}`)
         }
+        if ('permissionModeSource' in body || 'userPermissionMode' in body) throw new Error('权限来源仅可由Core写入')
         if (body.useCoreDefaults !== undefined && typeof body.useCoreDefaults !== 'boolean') throw new Error('invalid useCoreDefaults')
         const session = runtime.ensureProjectDraftSession({ workspaceId,
           useCoreDefaults: url.pathname === '/project-draft-sessions/configured' || body.useCoreDefaults === true,
@@ -439,6 +441,7 @@ export function createCoreServer(options: CoreServerOptions): Server {
         const sessionId = sessionIdFromPath(url.pathname, '')
         if (!sessionId) { sendJson(response, 400, { error: 'session_id_required' }); return }
         const body = await readJson(request)
+        if ('permissionModeSource' in body || 'userPermissionMode' in body) throw new Error('权限来源仅可由Core写入')
         const patch: Parameters<CoreAgentRuntime['updateSessionMeta']>[1] = {}
         if (typeof body.channelId === 'string' || body.channelId === null) patch.channelId = body.channelId || undefined
         if (typeof body.modelId === 'string' || body.modelId === null) patch.modelId = body.modelId || undefined

@@ -5,19 +5,12 @@
  * （自动审批 / 完全自动 / 计划模式），不再单击循环——循环切换在「完全自动」与
  * 「计划模式」相邻时容易误触放宽权限。每个会话独立维护自己的权限模式。
  *
- * 权限显示规则（与主进程 EffectiveAgentPresetPolicy 同语义）：
- * - 预设声明的 permissionMode 是本会话的权限上限；
- * - 用户通过本控件切换属于「显式 override」，只能把模式保持或收紧到预设上限内，
- *   不能从 auto/plan 放宽到 bypassPermissions；
- * - 未显式 override 时，工具栏直接显示预设上限（未设置预设则跟随默认完全自动），
- *   不再用全局默认值掩盖真实运行权限；
- * - 超出预设上限的模式在菜单里保持可见但禁用，并说明受限原因：主进程
- *   `UPDATE_SESSION_PERMISSION_MODE` 只校验模式合法性、不按预设上限收敛，
- *   渲染层的这道门禁是唯一阻止用户持久化「比预设上限更宽松」的误导性模式值的地方。
+ * Core/主进程返回的会话权限是唯一权威值；预设只提供初始默认。
+ * 明确的用户选择可以切换全部模式，运行时硬边界仍由后端执行。
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { Zap, Compass, Map as MapIcon } from 'lucide-react'
 import {
@@ -26,18 +19,13 @@ import {
   AgentComposerToolTrigger,
 } from '@/components/ai-elements/composer/ComposerTool'
 import { Popover, PopoverAnchor, PopoverContent } from '@profer/ui/primitives/popover'
-import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom, sessionExistsAtom, agentPlanModeSessionsAtom, agentSessionsAtom } from '@/atoms/agent-atoms'
+import { agentPermissionModeMapAtom, agentDefaultPermissionModeAtom, sessionPersistedPermissionModeAtom } from '@/atoms/agent-atoms'
 import type { ProferPermissionMode } from '@profer/shared'
 import { PROFER_PERMISSION_MODE_CONFIG } from '@profer/shared'
-import { updatePlanModeSessionSet } from '@/lib/agent-plan-mode'
+import { applyAuthoritativeSessionPermission, resolveSessionPermissionMode } from '@/lib/agent-session-permission'
 import { useSessionSettingMutation } from '@/lib/use-session-setting-mutation'
 import { updateComposerPermissionMode } from '@/domains/composer/composer-api'
-import {
-  buildPermissionModeMenu,
-  canSelectPermissionMode,
-  describePermissionModeRestriction,
-  resolveSelectorMode,
-} from './permission-mode-selector-utils'
+import { buildPermissionModeMenu } from './permission-mode-selector-utils'
 
 const MODE_ICONS: Record<ProferPermissionMode, React.ComponentType<{ className?: string }>> = {
   auto: Compass,
@@ -66,118 +54,48 @@ export function PermissionModeSelector({
   composerTool = false,
   persistedRevision,
 }: PermissionModeSelectorProps): React.ReactElement | null {
-  const [modeMap, setModeMap] = useAtom(agentPermissionModeMapAtom)
-  const setPlanModeSessions = useSetAtom(agentPlanModeSessionsAtom)
-  const setAgentSessions = useSetAtom(agentSessionsAtom)
+  const store = useStore()
+  const modeMap = useAtomValue(agentPermissionModeMapAtom)
   const { pending, mutate } = useSessionSettingMutation()
   const defaultMode = useAtomValue(agentDefaultPermissionModeAtom)
   const persistedSessionMode = useAtomValue(sessionPersistedPermissionModeAtom(sessionId))
-  const sessionExistsInList = useAtomValue(sessionExistsAtom(sessionId))
   const [open, setOpen] = React.useState(false)
-  const latestLocalRequestRef = React.useRef(0)
 
-  // 预设上限：预设显式声明 > 全局默认（完全自动）。
-  const presetCapMode = presetPermissionMode ?? defaultMode
-  // 用户显式选择只存 modeMap（本会话瞬时）；重启后由 session meta.permissionMode 恢复。
-  const modeMapValue = modeMap.get(sessionId)
-  const hasRequestedOverride = modeMapValue !== undefined || persistedSessionMode !== undefined
-  const requestedMode = modeMapValue ?? persistedSessionMode
-  const mode = hasRequestedOverride
-    ? resolveSelectorMode(presetCapMode, requestedMode)
-    : presetCapMode
+  const presetDefaultMode = presetPermissionMode ?? defaultMode
+  const mode = resolveSessionPermissionMode(presetDefaultMode, persistedSessionMode, modeMap.get(sessionId))
 
-  // 远端 projection 是唯一权威来源。请求在途时保留本地最新选择，避免旧 projection 回填造成闪回。
-  React.useEffect(() => {
-    if (!sessionExistsInList || persistedSessionMode === undefined) return
-    if (latestLocalRequestRef.current > 0 && pending) return
-
-    setModeMap((prev: Map<string, ProferPermissionMode>) => {
-      const current = prev.get(sessionId)
-      if (current === persistedSessionMode) return prev
-      const next = new Map(prev)
-      next.set(sessionId, persistedSessionMode)
-      return next
-    })
-  }, [sessionId, persistedSessionMode, sessionExistsInList, pending, setModeMap])
-
-  // 桌面权限菜单遵循显式用户选择：三种模式都允许切换。
-  // 预设权限只作为运行策略元数据保留，不在这里阻断用户的 runtime/权限切换。
-  const canSelectMode = React.useCallback(
-    (_candidate: ProferPermissionMode): boolean => true,
-    [],
-  )
-
-  /**
-   * 切换到指定模式（弹层选择后触发）。
-   *
-   * 门禁有两层：菜单项 disabled（正常路径），以及这里的防御性检查 + toast 兜底
-   * （菜单被程序化触发或上限变化时仍不能把更宽松的模式写回会话 meta）。
-   */
+  // 等待权威回执后再更新显示，避免失败回滚、旧 projection 与跨会话请求相互覆盖。
   const selectMode = React.useCallback(async (nextMode: ProferPermissionMode) => {
-    const prevRequested = modeMap.get(sessionId) ?? persistedSessionMode
     setOpen(false)
-
-    const requestSequence = latestLocalRequestRef.current + 1
-    latestLocalRequestRef.current = requestSequence
-    if (nextMode === mode) {
+    if (pending || nextMode === mode) {
       focusComposerInput()
       return
     }
-    if (!canSelectMode(nextMode)) {
-      toast.info(describePermissionModeRestriction(presetCapMode))
-      focusComposerInput()
-      return
-    }
-
-    // 乐观更新当前 session 的模式
-    setModeMap((prev: Map<string, ProferPermissionMode>) => {
-      const next = new Map(prev)
-      next.set(sessionId, nextMode)
-      return next
-    })
-    setPlanModeSessions((prev: Set<string>) =>
-      updatePlanModeSessionSet(prev, sessionId, nextMode === 'plan')
-    )
-
     void mutate({
       execute: (expectedRevision) => updateComposerPermissionMode(sessionId, nextMode, expectedRevision),
       applyAuthoritative: (updated) => {
-        if (requestSequence !== latestLocalRequestRef.current) return
-        setModeMap((prev: Map<string, ProferPermissionMode>) => {
-          const next = new Map(prev)
-          next.set(sessionId, updated.permissionMode ?? nextMode)
-          return next
-        })
-        setPlanModeSessions((prev: Set<string>) => updatePlanModeSessionSet(prev, sessionId, (updated.permissionMode ?? nextMode) === 'plan'))
-        setAgentSessions((previous) => previous.map((session) => session.id === updated.id ? updated : session))
+        applyAuthoritativeSessionPermission(store, updated)
       },
-      rollback: () => {
-        if (requestSequence !== latestLocalRequestRef.current) return
-        setModeMap((prev: Map<string, ProferPermissionMode>) => {
-          const next = new Map(prev)
-          if (prevRequested === undefined) next.delete(sessionId)
-          else next.set(sessionId, prevRequested)
-          return next
-        })
-        setPlanModeSessions((prev: Set<string>) => updatePlanModeSessionSet(prev, sessionId, (prevRequested ?? presetCapMode) === 'plan'))
+      rollback: () => {},
+      onError: (error) => {
+        console.error('[PermissionModeSelector] 切换权限模式失败:', error)
+        toast.error('切换权限模式失败', { description: error instanceof Error ? error.message : '请重试' })
       },
-      onError: (error) => console.error('[PermissionModeSelector] 运行中切换权限模式失败，回滚 UI:', error),
     }, persistedRevision)
     focusComposerInput()
-  }, [mode, mutate, pending, persistedRevision, presetCapMode, sessionId, setAgentSessions, setModeMap, setPlanModeSessions, persistedSessionMode, modeMap, canSelectMode])
+  }, [mode, mutate, pending, persistedRevision, sessionId, store])
 
   const config = PROFER_PERMISSION_MODE_CONFIG[mode]
-  const capConfig = PROFER_PERMISSION_MODE_CONFIG[presetCapMode]
+  const defaultConfig = PROFER_PERMISSION_MODE_CONFIG[presetDefaultMode]
   const Icon = MODE_ICONS[mode]
   const triggerLabel = `${config.label}：${config.description}`
 
   const menu = (
     <div className="flex flex-col py-0.5">
-      {buildPermissionModeMenu(presetCapMode).map(({ mode: candidate }) => {
+      {buildPermissionModeMenu(presetDefaultMode).map(({ mode: candidate }) => {
         const itemConfig = PROFER_PERMISSION_MODE_CONFIG[candidate]
         const ItemIcon = MODE_ICONS[candidate]
         const selected = candidate === mode
-        const restriction = ''
         const item = (
           <AgentComposerToolMenuItem
             key={candidate}
@@ -203,7 +121,7 @@ export function PermissionModeSelector({
       <p className="font-medium">{config.label}</p>
       <p className="mt-0.5 text-xs text-muted-foreground">{config.description}</p>
       {presetPermissionMode !== undefined && (
-        <p className="mt-1 text-xs text-foreground/60">预设上限 · {capConfig.label}</p>
+        <p className="mt-1 text-xs text-foreground/60">预设默认 · {defaultConfig.label}</p>
       )}
       <p className="mt-1 text-xs text-muted-foreground">点击选择模式</p>
     </div>

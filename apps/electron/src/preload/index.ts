@@ -1,5 +1,6 @@
 import { CORE_CHAT_CHANNELS } from '../lib/core-chat-channels'
 import { CORE_RESOURCE_OPERATIONS } from '../lib/core-resource-channels'
+import type { AcceptWindowSessionMove, AppWindowSession, PrepareWindowSessionMove, PrepareWindowSessionMoveResult, WindowMoveResult } from '@profer/shared'
 import type { CoreResourceScope } from '../lib/core-resource-channels'
 import type { ProferPluginPagePlacement, ProferPluginPagePlacementPreference, ProferPluginTaskReference, ProferPluginRoutingState } from '@profer/plugin-api'
 /**
@@ -17,7 +18,7 @@ import { PROFER_PLUGIN_IPC_CHANNELS, type ProferInstalledPlugin, type ProferPlug
 import { VISUALIZATION_IPC, type VisualizationContent, type VisualizationRecord, type VisualizationViewState } from '@profer/shared'
 
 let resourceTarget: CoreResourceScope | null = null
-let resourceSnapshotRequest: Promise<void> | null = null
+let resourceSnapshotRequest: Promise<{ currentId: string; generation: number }> | null = null
 let resourceTargetVersion = 0
 function updateResourceTarget(snapshot: { currentId: string; generation: number }): void {
   resourceTarget = { targetId: snapshot.currentId, generation: snapshot.generation }
@@ -35,9 +36,12 @@ async function invokeScopedCoreResource(channel: string, ...args: unknown[]): Re
     resourceSnapshotRequest ??= ipcRenderer.invoke(CORE_TARGET_IPC_CHANNELS.LIST).then((snapshot: { currentId: string; generation: number }) => {
       // 查询期间广播优先；迟到的旧目录不能覆盖已选目标。
       if (resourceTargetVersion === capturedVersion && !resourceTarget) updateResourceTarget(snapshot)
+      return snapshot
     }).finally(() => { resourceSnapshotRequest = null })
-    await resourceSnapshotRequest
-    if (resourceTargetVersion !== capturedVersion) throw new Error('Core 已切换，请重新操作')
+    const initial = await resourceSnapshotRequest
+    // 首次接入收到广播并不等于切换：查询与广播确认同一路由时请求仍有效。
+    // 真正切换（包括同目标的新代次）仍不得把旧请求转发到新路由。
+    if (resourceTarget?.targetId !== initial.currentId || resourceTarget.generation !== initial.generation) throw new Error('Core 已切换，请重新操作')
   }
   const scope = captured ?? resourceTarget
   if (!scope || resourceTarget?.targetId !== scope.targetId || resourceTarget.generation !== scope.generation) throw new Error('Core 已切换，请重新操作')
@@ -396,6 +400,9 @@ export interface ElectronAPI {
   /** 读取当前主应用窗口的引导信息（窗口 ID、是否主窗口、初始 Tab） */
   reportWindowSessions: (sessions: import('@profer/shared').AppWindowSession[]) => Promise<void>
   focusSessionWindow: (session: import('@profer/shared').AppWindowSession) => Promise<boolean>
+  moveSessionToThisWindow: (session: AppWindowSession) => Promise<WindowMoveResult>
+  onPrepareWindowSessionMove: (callback: (request: PrepareWindowSessionMove) => PrepareWindowSessionMoveResult | Promise<PrepareWindowSessionMoveResult>) => () => void
+  onAcceptWindowSessionMove: (callback: (request: AcceptWindowSessionMove) => WindowMoveResult | Promise<WindowMoveResult>) => () => void
   reportWindowPhase: (phase: 'app-ready' | 'target-meta-ready' | 'target-interactive') => Promise<void>
   ackWindowTabHandoff: (handoffId: string) => Promise<void>
   confirmWindowBootstrap: (handoffId?: string) => Promise<void>
@@ -1159,6 +1166,9 @@ export interface ElectronAPI {
   /** 订阅「会话流已转移到其他窗口」通知；本窗口应清理该会话的运行态 */
   onAgentSessionReleased: (callback: (sessionId: string) => void) => () => void
 
+  /** 同一 Core 会话的活动状态可能变化；不携带消息/终态，不转移流归属。 */
+  onAgentSessionActivityInvalidated: (callback: (data: { sessionId: string }) => void) => () => void
+
   /** 订阅 Agent 流式完成事件 */
   onAgentStreamComplete: (callback: (data: AgentStreamCompletePayload) => void) => () => void
 
@@ -1890,6 +1900,20 @@ interface MigrationExportResult {
 /** 启动时去重：多个初始化组件同时调用 getSettings()，共享同一个 Promise */
 let _settingsPromise: Promise<AppSettings> | null = null
 
+/** 不向 renderer 暴露任意通道或 Electron 事件，回复仅绑定 main 提供的 handoffId。 */
+function listenForWindowMove<T extends { handoffId: string }>(
+  channel: typeof IPC_CHANNELS.WINDOW_MOVE_PREPARE | typeof IPC_CHANNELS.WINDOW_MOVE_ACCEPT,
+  callback: (request: T) => unknown,
+): () => void {
+  const listener = async (_event: Electron.IpcRendererEvent, request: T): Promise<void> => {
+    let result: unknown
+    try { result = await callback(request) } catch (error) { result = { ok: false, error: String(error) } }
+    ipcRenderer.send(IPC_CHANNELS.WINDOW_MOVE_REPLY, request.handoffId, result)
+  }
+  ipcRenderer.on(channel, listener)
+  return () => { ipcRenderer.removeListener(channel, listener) }
+}
+
 const electronAPI: ElectronAPI = {
   listVisualizations: (sessionId) => ipcRenderer.invoke(VISUALIZATION_IPC.LIST, sessionId),
   composer: createComposerApi(ipcRenderer, invokeScopedCoreResource),
@@ -2086,6 +2110,9 @@ const electronAPI: ElectronAPI = {
 
   reportWindowSessions: (sessions: import('@profer/shared').AppWindowSession[]) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_REPORT_SESSIONS, sessions),
   focusSessionWindow: (session: import('@profer/shared').AppWindowSession) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_FOCUS_SESSION, session),
+  moveSessionToThisWindow: session => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_MOVE_SESSION_HERE, session),
+  onPrepareWindowSessionMove: callback => listenForWindowMove(IPC_CHANNELS.WINDOW_MOVE_PREPARE, callback),
+  onAcceptWindowSessionMove: callback => listenForWindowMove(IPC_CHANNELS.WINDOW_MOVE_ACCEPT, callback),
   reportWindowPhase: (phase: 'app-ready' | 'target-meta-ready' | 'target-interactive') => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_REPORT_PHASE, phase),
   ackWindowTabHandoff: (handoffId: string) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_ACK_TAB_HANDOFF, handoffId),
   confirmWindowBootstrap: (handoffId?: string) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CONFIRM_BOOTSTRAP, handoffId),
@@ -3108,6 +3135,12 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, event: AgentStreamEvent): void => callback(event)
     ipcRenderer.on(AGENT_IPC_CHANNELS.STREAM_EVENT, listener)
     return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.STREAM_EVENT, listener) }
+  },
+
+  onAgentSessionActivityInvalidated: (callback: (data: { sessionId: string }) => void) => {
+    const listener = (_: unknown, data: { sessionId: string }): void => callback(data)
+    ipcRenderer.on(AGENT_IPC_CHANNELS.SESSION_ACTIVITY_INVALIDATED, listener)
+    return () => { ipcRenderer.removeListener(AGENT_IPC_CHANNELS.SESSION_ACTIVITY_INVALIDATED, listener) }
   },
 
   onAgentSessionReleased: (callback: (sessionId: string) => void) => {

@@ -39,6 +39,10 @@ interface SeamFixture {
   runApprovalWithLifecycle<T>(sessionId: string, facts: { run: AgentRun; context: AgentRunContext; started: boolean; onStart(): void | Promise<void>; messageIds: WeakMap<object, string>; logicalMessageIds: Map<string, string>; pendingApprovalRequestIds?: Set<string>; finished?: boolean } | undefined, signal: AbortSignal, operation: (publish: (requestId: string, emit: () => void) => void) => Promise<T>): Promise<T>
   finishLedgerRun(facts: { run: AgentRun; context: AgentRunContext; started: boolean; onStart(): void | Promise<void>; messageIds: WeakMap<object, string>; logicalMessageIds: Map<string, string> }, outcome: Parameters<AgentRunLedger['finish']>[1]): AgentRun
   stampMessage(sessionId: string, message: SDKMessage): SDKMessage
+  sessionPermissionModes: Map<string, import('@profer/shared').ProferPermissionMode>
+  activePresetPolicies: Map<string, import('@profer/shared').EffectiveAgentPresetPolicy>
+  sessionPlanModeSetters: Map<string, (active: boolean) => void>
+  updateSessionPermissionMode(id: string, mode: import('@profer/shared').ProferPermissionMode): Promise<void>
   activeRunFacts: Map<string, { run: AgentRun; context: AgentRunContext; started: boolean; onStart(): void | Promise<void>; messageIds: WeakMap<object, string>; logicalMessageIds: Map<string, string> }>
   persistSDKMessages(sessionId: string, messages: SDKMessage[], durationMs?: number): void
   persistSkillRoutingNotice(sessionId: string, routed: unknown): void
@@ -71,6 +75,8 @@ function fixture(ports: AgentRuntimePorts & { runLedger?: AgentRunLedger } = {},
     appendAgentTaskPrompt, appendAgentBehaviorUserSteer, resolveAgentBehaviorRole,
     console: { log() {}, warn() {}, error() {} },
     collectSessionTitleSources, runSessionTitleNaming, isPartialSDKMessage,
+    resolveSessionDelegationPermissionCap: () => undefined,
+    sdkPermissionModeForProferMode: (mode: string) => mode === 'plan' ? 'plan' : mode === 'auto' ? 'acceptEdits' : 'bypassPermissions',
     normalizeAgentRuntime, tryReserveQueuedMessage, shouldPreInterruptQueuedMessage,
     getAgentWorkspace: () => undefined,
     buildReferencedSessionsPrompt: () => '',
@@ -667,5 +673,35 @@ describe('AgentOrchestrator host seams', () => {
     expect(await h.instance.buildPiBuiltinTools({}, { sessionId: 'session-seam', channelId: 'channel-seam' })).toBe(h.builtinResult)
     expect(h.legacyBuilds()).toBe(1)
     h.manager.dispose()
+  })
+})
+
+
+describe('可信用户运行中权限热切换', () => {
+  test('Given 活跃 run When SDK 接受 bypass Then Map/计划态/事件一起生效', async () => {
+    const calls: string[] = [], plans: boolean[] = []
+    const h = fixture({}, { setPermissionMode: async (_id: string, mode: string) => { calls.push(mode) } })
+    h.ownership.claim({ sessionId: 's', runtime: 'pi', token: 'owner' })
+    h.instance.sessionPermissionModes.set('s', 'plan')
+    h.instance.sessionPlanModeSetters.set('s', active => plans.push(active))
+    await h.instance.updateSessionPermissionMode('s', 'bypassPermissions')
+    expect(calls).toEqual(['bypassPermissions'])
+    expect(h.instance.sessionPermissionModes.get('s')).toBe('bypassPermissions')
+    expect(plans).toEqual([false])
+    expect(h.events).toContainEqual({ sessionId: 's', payload: { kind: 'profer_event', event: { type: 'plan_mode_changed', sessionId: 's', active: false, source: 'permission' } } })
+    h.ownership.release('s', 'owner')
+  })
+
+  test('Given SDK 部分更新后报错 When 热切换 Then 尝试回滚 SDK 且 Map/计划态/事件不变', async () => {
+    const calls: string[] = [], plans: boolean[] = []
+    const h = fixture({}, { setPermissionMode: async (_id: string, mode: string) => { calls.push(mode); if (mode === 'bypassPermissions') throw new Error('SDK failed') } })
+    h.ownership.claim({ sessionId: 's', runtime: 'pi', token: 'owner' })
+    h.instance.sessionPermissionModes.set('s', 'plan')
+    h.instance.sessionPlanModeSetters.set('s', active => plans.push(active))
+    await expect(h.instance.updateSessionPermissionMode('s', 'bypassPermissions')).rejects.toThrow('SDK failed')
+    expect(calls).toEqual(['bypassPermissions', 'plan'])
+    expect(h.instance.sessionPermissionModes.get('s')).toBe('plan')
+    expect(plans).toEqual([])
+    expect(h.events).toEqual([])
   })
 })

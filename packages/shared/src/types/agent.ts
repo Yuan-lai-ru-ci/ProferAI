@@ -929,6 +929,8 @@ export interface AgentSessionUiProjection {
   /** 缺省兼容旧 projection；consumer 按历史已绑定处理。 */
   agentRuntimeLocked?: boolean
   permissionMode: ProferPermissionMode
+  /** 仅宿主权威配置写入；缺失不视为用户放权。 */
+  permissionModeSource?: 'preset' | 'user'
   presetId: string | null
   presetReference: import('./agent-preset').PresetReference | null
   openAIThinkingLevel: AgentThinkingLevel | null
@@ -1074,8 +1076,10 @@ export interface AgentSessionMeta {
   lastInterruptLabel?: string
   /** 最近中断时间戳 */
   lastInterruptAt?: number
-  /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。未设置时新会话默认 auto */
+  /** 该会话当前的权限模式（持久化到磁盘，重启后恢复）。 */
   permissionMode?: ProferPermissionMode
+  /** 可信手动配置才可写 user；缺失来源的历史值仍按预设收紧。 */
+  permissionModeSource?: 'preset' | 'user'
   /** 来源定时任务 ID（该会话由定时任务自动创建/复用时标记，用于侧栏显示钟表图标 + 跳转设置） */
   sourceAutomationId?: string
   /** 创建该会话的来源会话/执行轮次与派工关系。 */
@@ -2532,6 +2536,8 @@ export const AGENT_IPC_CHANNELS = {
   RESTORE_ACTIVE_STREAMS: 'agent:restore-active-streams',
   /** 向所属内核核实某会话是否真的在运行（用于校正渲染层残留的运行态） */
   GET_SESSION_ACTIVITY: 'agent:get-session-activity',
+  /** 主进程 → renderer：仅提示向当前 Core 重读活动状态，不是流事件或完成通知。 */
+  SESSION_ACTIVITY_INVALIDATED: 'agent:session-activity-invalidated',
   /** 主进程 → renderer：该会话的流已转移到其他窗口，本窗口清理本地运行态 */
   SESSION_RELEASED: 'agent:session-released',
   /** renderer → main：读取授权文件当前 SHA-256，供 viewer 加载前后校验 revision。 */

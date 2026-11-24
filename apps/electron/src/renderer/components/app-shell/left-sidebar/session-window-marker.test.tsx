@@ -1,14 +1,16 @@
 import { expect, test } from 'bun:test'
 import * as React from 'react'
+import { Provider, createStore } from 'jotai'
+import type { ContextMenuItem } from '@profer/ui/primitives/context-menu'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { TooltipProvider } from '@profer/ui/primitives/tooltip'
-import { SessionWindowMarker } from './session-items'
+import { OtherWindowMenuItems, SessionWindowMarker } from './session-items'
 
 test('窗口标记与置顶/Goal共用无底色线性标记规格及焦点样式', () => {
-  const html = renderToStaticMarkup(<TooltipProvider><SessionWindowMarker session={{type:'chat',sessionId:'c'}} onSelect={() => {}} /></TooltipProvider>)
+  const html = renderToStaticMarkup(<TooltipProvider><SessionWindowMarker onSelect={() => {}} /></TooltipProvider>)
   expect(html).toContain('<button')
   expect(html).toContain('type="button"')
-  expect(html).toContain('aria-label="聚焦会话窗口"')
+  expect(html).toContain('aria-label="前往所在窗口"')
   expect(html).toContain('focus-visible:ring-2')
   expect(html).toContain('size-[13px]')
   expect(html).toContain('width="11"')
@@ -19,30 +21,33 @@ test('窗口标记与置顶/Goal共用无底色线性标记规格及焦点样式
   expect(html).not.toContain('rounded-md')
 })
 
-test('Chat/Agent 标记正确聚焦；失败回退且点击/键盘/双击不冒泡', async () => {
+test('标记只调用一次行导航，菜单才请求移入；两者不互相触发', async () => {
   const previous = globalThis.window
+  let selected = 0
+  let stopped = 0
+  const calls: unknown[] = []
+  globalThis.window = { electronAPI: { moveSessionToThisWindow: async (session: unknown) => { calls.push(session); return { ok: true } } } } as unknown as Window & typeof globalThis
   try {
-    for (const type of ['chat','agent'] as const) {
-      const calls: unknown[] = []
-      let fallback = 0
-      let stopped = 0
-      let focused = true
-      globalThis.window = { electronAPI: { focusSessionWindow: async (session: unknown) => { calls.push(session); return focused } } } as unknown as Window & typeof globalThis
-      const tree = SessionWindowMarker({session:{type,sessionId:'target'},onSelect:() => { fallback += 1 }})
-      const trigger = React.Children.toArray(tree.props.children)[0] as React.ReactElement
-      const button = trigger.props.children as React.ReactElement
-      const event = {stopPropagation:() => { stopped += 1 }}
-      button.props.onKeyDown(event)
-      button.props.onDoubleClick(event)
-      button.props.onClick(event)
-      await Promise.resolve(); await Promise.resolve()
-      expect(calls).toEqual([{type,sessionId:'target'}])
-      expect(fallback).toBe(0)
-      focused = false
-      button.props.onClick(event)
-      await Promise.resolve(); await Promise.resolve()
-      expect(fallback).toBe(1)
-      expect(stopped).toBe(4)
+    const tree = SessionWindowMarker({ onSelect: () => { selected++ } })
+    const trigger = React.Children.toArray(tree.props.children)[0] as React.ReactElement
+    const button = trigger.props.children as React.ReactElement
+    const event = { stopPropagation: () => { stopped++ } }
+    button.props.onKeyDown(event); button.props.onDoubleClick(event); button.props.onClick(event)
+    expect(stopped).toBe(3); expect(selected).toBe(1); expect(calls).toEqual([])
+    for (const type of ['agent', 'chat'] as const) {
+      const session = { type, sessionId: 'target' }
+      const handlers: Array<() => void> = []
+      const MenuItem = (({ children, onSelect }: { children: React.ReactNode; onSelect: () => void }) => {
+        handlers.push(onSelect)
+        return <button>{children}</button>
+      }) as unknown as typeof ContextMenuItem
+      const html = renderToStaticMarkup(<Provider store={createStore()}><OtherWindowMenuItems MenuItem={MenuItem} session={session} onGo={() => { selected++ }} /></Provider>)
+      expect(html).toContain('前往所在窗口'); expect(html).toContain('移到此窗口')
+      const priorMoves = calls.length
+      handlers[0]!(); expect(calls).toHaveLength(priorMoves)
+      handlers[1]!(); await Promise.resolve()
+      expect(calls.at(-1)).toEqual(session)
     }
+    expect(selected).toBe(3)
   } finally { globalThis.window = previous }
 })

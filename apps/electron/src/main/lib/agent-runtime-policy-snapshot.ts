@@ -53,6 +53,8 @@ export interface AgentRuntimePolicyResolutionInput {
   presetReference: PresetReference
   /** 调用方请求的权限模式；共享实现只会保持或收紧预设上限。 */
   permissionModeOverride?: ProferPermissionMode
+  /** 仅宿主从已持久化 user 来源读取，不从发送输入推断。 */
+  userPermissionMode?: ProferPermissionMode
   /** Profer 内部 Goal 循环标记；不改变权限级别。 */
   triggeredBy?: 'goal'
   /** 宿主已判定的会话级 PPT 能力门禁结果（由既有 evaluatePptCapability + 组禁用组合得出）。 */
@@ -98,6 +100,7 @@ export function resolveAgentRuntimePolicySnapshot(
   input: AgentRuntimePolicyResolutionInput,
 ): AgentRuntimePolicySnapshot {
   const policy = createEffectiveAgentPresetPolicy(input.preset, input.presetReference, {
+    ...(input.userPermissionMode ? { userPermissionMode: input.userPermissionMode } : {}),
     ...(input.permissionModeOverride ? { permissionMode: input.permissionModeOverride } : {}),
     ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
     ...(input.pptCapabilityActive !== undefined ? { pptCapabilityActive: input.pptCapabilityActive } : {}),

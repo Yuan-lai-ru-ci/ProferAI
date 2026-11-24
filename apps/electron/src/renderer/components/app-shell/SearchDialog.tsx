@@ -424,7 +424,6 @@ export function SearchDialog(): React.ReactElement {
   // 导航到对话/会话
   const navigateToResult = React.useCallback((result: TitleResult | ContentResult) => {
     setOpen(false)
-    setActiveView('conversations')
 
     if (result.type === 'chat') {
       const conv = conversations.find((c) => c.id === result.id)
@@ -435,7 +434,7 @@ export function SearchDialog(): React.ReactElement {
       const title = session?.title ?? result.title
       openSession('agent', result.id, title)
     }
-  }, [setOpen, setActiveView, openSession, conversations, agentSessions])
+  }, [setOpen, openSession, conversations, agentSessions])
 
   /**
    * Enter 键语义：

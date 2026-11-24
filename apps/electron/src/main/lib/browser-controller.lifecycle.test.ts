@@ -2,8 +2,9 @@ import { expect, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
 import type { WebContents } from 'electron'
 import { BrowserController } from './browser-controller'
+import { AGENT_IPC_CHANNELS } from '@profer/shared'
 
-test('关闭最后一个标签时释放guest和DOM请求，不创建残留原生命中区域', async () => {
+for (const method of ['closeTab', 'closeAgentTab', 'close'] as const) test(`${method} 关闭最后一个标签时释放 guest，并广播权威空状态`, async () => {
   const sent: unknown[][] = []
   let closed = 0
   const contents = {
@@ -15,12 +16,13 @@ test('关闭最后一个标签时释放guest和DOM请求，不创建残留原生
   const tab = { tabId: 'tab-1', contents, state: { visible: true } }
   const browserSession = {
     sessionId: 'session-1', tabs: new Map([[tab.tabId, tab]]), activeTabId: tab.tabId,
-    agentTabId: tab.tabId,
+    agentTabId: tab.tabId, executionSource: 'user',
   }
   const owner = { isDestroyed: () => false, webContents: { send: (...args: unknown[]) => { sent.push(args) } } }
   const controller = new BrowserController()
   const internals = controller as unknown as {
     owner: typeof owner
+    assertRiskDisclaimerAcknowledged: () => void
     foregroundSessionId: string | null
     sessions: Map<string, typeof browserSession>
     guestRequests: Map<string, { sessionId: string; tabId: string }>
@@ -29,12 +31,54 @@ test('关闭最后一个标签时释放guest和DOM请求，不创建残留原生
   internals.foregroundSessionId = browserSession.sessionId
   internals.sessions.set(browserSession.sessionId, browserSession)
   internals.guestRequests.set(JSON.stringify([browserSession.sessionId, tab.tabId]), { sessionId: browserSession.sessionId, tabId: tab.tabId })
-  expect(await controller.closeTab(browserSession.sessionId, tab.tabId)).toBeNull()
+  internals.assertRiskDisclaimerAcknowledged = () => undefined
+  await controller[method](browserSession.sessionId, tab.tabId)
+  expect(await controller.closeTab(browserSession.sessionId, tab.tabId)).toBeNull() // 连关不创建页面
   expect(controller.getState(browserSession.sessionId)).toBeNull()
   expect(internals.foregroundSessionId).toBe(browserSession.sessionId)
   expect(internals.guestRequests.size).toBe(0)
-  expect(sent.at(-1)?.[1]).toEqual([])
+  expect(sent).toContainEqual([AGENT_IPC_CHANNELS.BROWSER_GUESTS_CHANGED, []])
+  expect(sent.at(-1)?.[0]).toBe(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED)
+  expect(sent.at(-1)?.[1]).toMatchObject({ sessionId: 'session-1', tabs: [], activeTabId: '', agentTabId: null })
   expect(closed).toBe(1)
+})
+
+test('原生关闭抛错时保留 guest 和会话，重试才广播终态', async () => {
+  let fail = true
+  const contents = { isDestroyed: () => false, close() { if (fail) throw Error('close failed') } }
+  const tab = { tabId: 't', contents }
+  const session = { sessionId: 's', tabs: new Map([['t', tab]]) }
+  const controller = new BrowserController()
+  const internals = controller as unknown as { sessions: Map<string, typeof session> }
+  internals.sessions.set('s', session)
+  await expect(controller.close('s')).rejects.toThrow('close failed')
+  expect(session.tabs.get('t')?.contents).toBe(contents)
+  expect(internals.sessions.has('s')).toBe(true)
+  fail = false
+  await controller.close('s')
+  expect(internals.sessions.has('s')).toBe(false)
+})
+
+test('关页后，迟到的显式页面命令、guest 准备和旧会话推送均不能重建页面', async () => {
+  const sent: unknown[] = []
+  const tab = { tabId: 'old' }
+  const session = { sessionId: 's', tabs: new Map([['old', tab]]) }
+  const controller = new BrowserController()
+  const internals = controller as unknown as {
+    owner: { isDestroyed: () => boolean; webContents: { send: (channel: string) => void } }
+    sessions: Map<string, typeof session>
+    prepareTab: (record: typeof session, page: typeof tab) => Promise<void>
+    emit: (record: typeof session) => void
+  }
+  internals.owner = { isDestroyed: () => false, webContents: { send: channel => { sent.push(channel) } } }
+  internals.sessions.set('s', session)
+  await controller.close('s')
+  sent.length = 0
+  await expect(controller.navigateDisplay('s', 'https://example.com', 'old')).rejects.toThrow('会话不存在')
+  await expect(internals.prepareTab(session, tab)).rejects.toThrow('页面已关闭')
+  internals.emit(session)
+  expect(controller.getState('s')).toBeNull()
+  expect(sent).toEqual([])
 })
 
 test('销毁回调不重新读取已经失效的 WebContents.debugger getter', () => {
@@ -240,4 +284,45 @@ test('会话记录存在但 activeTabId 已失效时 listTabs 返回可判定的
   expect(result.activeTabId).toBeNull()
   expect(result.agentTabId).toBeNull()
   expect(result.tabs.map((tab) => tab.tabId)).toEqual(['tab-closing'])
+})
+
+test('发声推送只归属当前 guest，重复事件不广播，页面重建后不继承旧 guest 声音', async () => {
+  const guest = (id: number) => Object.assign(new EventEmitter(), {
+    id, setWindowOpenHandler: () => undefined,
+    debugger: Object.assign(new EventEmitter(), { attach: () => undefined, sendCommand: async () => ({}) }),
+  })
+  const original = guest(1)
+  const replacement = guest(2)
+  const tab = { tabId: 'background', contents: original, state: { visible: false } }
+  const other = { tabId: 'active', contents: guest(3), state: { visible: true } }
+  const session = { sessionId: 's', activeTabId: other.tabId, tabs: new Map([[tab.tabId, tab], [other.tabId, other]]), ledger: [] }
+  const controller = new BrowserController()
+  const internals = controller as unknown as {
+    installTabContents: (record: typeof session, page: typeof tab, contents: typeof original) => Promise<void>
+    sessions: Map<string, typeof session>
+    emit: () => void
+  }
+  internals.sessions.set('s', session)
+  let pushes = 0
+  internals.emit = () => { pushes++ }
+  await internals.installTabContents(session, tab, original)
+  const audible = () => controller.getState('s')?.tabs.map(page => page.audible)
+  expect(audible()).toEqual([false, false])
+  original.emit('audio-state-changed', { audible: true })
+  original.emit('audio-state-changed', { audible: true })
+  expect(pushes).toBe(1)
+  expect(audible()).toEqual([true, false])
+  expect(controller.listTabs('s').tabs.map(page => page.audible)).toEqual([true, false])
+  original.emit('audio-state-changed', { audible: false })
+  expect(audible()).toEqual([false, false])
+  original.emit('audio-state-changed', { audible: true })
+  original.emit('destroyed')
+  expect(audible()).toEqual([false, false])
+  tab.contents = replacement
+  await internals.installTabContents(session, tab, replacement)
+  original.emit('audio-state-changed', { audible: true })
+  expect(pushes).toBe(4)
+  expect(audible()).toEqual([false, false])
+  replacement.emit('audio-state-changed', { audible: true })
+  expect(audible()).toEqual([true, false])
 })

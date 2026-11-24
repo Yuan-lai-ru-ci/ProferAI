@@ -19,7 +19,7 @@
  */
 
 import * as React from 'react'
-import { ChevronRight, Columns2, Ungroup, X, XCircle } from 'lucide-react'
+import { ChevronRight, Columns2, Volume2, Ungroup, X, XCircle } from 'lucide-react'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -38,6 +38,8 @@ export interface TabGroupItemProps {
   /** 该栏标题；null = 空栏（等用户选择） */
   leftTitle: string | null
   rightTitle: string | null
+  leftAudible?: boolean
+  rightAudible?: boolean
   leftStatus: SessionIndicatorStatus
   rightStatus: SessionIndicatorStatus
   isActive: boolean
@@ -77,6 +79,8 @@ export function TabGroupItem({
   id,
   leftTitle,
   rightTitle,
+  leftAudible,
+  rightAudible,
   leftStatus,
   rightStatus,
   isActive,
@@ -155,7 +159,7 @@ export function TabGroupItem({
         type="button"
         role="tab"
         aria-selected={isActive}
-        aria-label={`组合标签页：${leftTitle ?? '空栏'} 与 ${rightTitle ?? '空栏'}（左右双栏）`}
+        aria-label={`组合标签页：${leftTitle ?? '空栏'}${leftAudible ? '（正在发声）' : ''} 与 ${rightTitle ?? '空栏'}${rightAudible ? '（正在发声）' : ''}（左右双栏）`}
         className={cn(
           'group relative flex h-[37px] w-full items-center gap-1.5 overflow-hidden rounded-[8px] px-2 pl-2.5 text-xs',
           'border border-transparent transition-colors select-none cursor-grab active:cursor-grabbing focus-visible:ring-0 focus-visible:ring-offset-0',
@@ -190,6 +194,7 @@ export function TabGroupItem({
           >
             {leftLabel}
           </span>
+          {leftAudible && <Volume2 className="size-3.5 shrink-0 text-primary" aria-hidden="true" />}
           <StatusDot status={leftStatus} />
         </span>
 
@@ -205,6 +210,7 @@ export function TabGroupItem({
           >
             {rightLabel}
           </span>
+          {rightAudible && <Volume2 className="size-3.5 shrink-0 text-primary" aria-hidden="true" />}
           <StatusDot status={rightStatus} />
         </span>
 

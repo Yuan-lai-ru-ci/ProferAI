@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { Blocks, BookOpen, Bot, ChevronRight, FileText, GitBranch, GitFork, Globe2, MessageSquare, StickyNote, X, XCircle, Clock, Pencil, Check, AppWindow } from 'lucide-react'
+import { Blocks, BookOpen, Bot, ChevronRight, FileText, GitBranch, GitFork, Globe2, Volume2, MessageSquare, StickyNote, X, XCircle, Clock, Pencil, Check, AppWindow } from 'lucide-react'
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -44,7 +44,7 @@ export interface TabBarItemProps {
   onClose: () => void
   onMiddleClick: () => void
   onDragStart: (e: React.PointerEvent) => void
-  /** 右键菜单「在新窗口打开」；仅会话 Tab 由 TabBar 传入 */
+  /** 右键菜单「移到新窗口」；仅会话 Tab 由 TabBar 传入 */
   onOpenInNewWindow?: () => void
   /** 右键菜单「关闭其他」；由 TabBar 按顶栏可见条目算出范围 */
   onCloseOthers?: () => void
@@ -59,6 +59,7 @@ export interface TabBarItemProps {
   childKind?: 'exploration' | 'delegation'
   /** 浏览器页由 Agent 创建（顶栏显示 Agent 徽标） */
   agentOwned?: boolean
+  audible?: boolean
   /** 在顶部标签栏中重命名 Agent 会话 */
   onRename?: (title: string) => Promise<void>
   /** hover 进入 Tab */
@@ -94,6 +95,7 @@ export function TabBarItem({
   isAutomation,
   childKind,
   agentOwned,
+  audible,
   onRename,
   onHoverEnter,
   onHoverLeave,
@@ -258,7 +260,9 @@ export function TabBarItem({
       : type === 'preview'
         ? <FileText className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         : type === 'browser'
-          ? <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          ? audible
+            ? <Volume2 className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+            : <Globe2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           : (type === 'tutorial' || type === 'frp-guide')
           ? <BookOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           : type === 'plugin'
@@ -334,6 +338,7 @@ export function TabBarItem({
         type="button"
         role="tab"
         aria-selected={isActive}
+        aria-label={type === 'browser' && audible ? `${title}，正在发声` : undefined}
         className={cn(
           'group relative flex items-center gap-1.5 px-3 h-[37px] w-full rounded-[8px] overflow-hidden',
           'text-xs transition-colors select-none cursor-grab active:cursor-grabbing focus-visible:ring-0 focus-visible:ring-offset-0',
@@ -474,7 +479,7 @@ export function TabBarItem({
   )
 
   // 草稿已在上方提前返回；其余 Tab 只要有任一项菜单动作就挂右键菜单：
-  // 「在新窗口打开」「重命名」只属于支持对应能力的会话 Tab，批量关闭对所有非草稿 Tab 都成立。
+  // 「移到新窗口」「重命名」只属于支持对应能力的会话 Tab，批量关闭对所有非草稿 Tab 都成立。
   if (!onOpenInNewWindow && !onCloseOthers && !onCloseToRight && !onRename) return tabBody
 
   return (
@@ -484,7 +489,7 @@ export function TabBarItem({
         {onOpenInNewWindow && (
           <ContextMenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onOpenInNewWindow}>
             <AppWindow size={14} />
-            在新窗口打开
+            移到新窗口
           </ContextMenuItem>
         )}
         {onRename && (

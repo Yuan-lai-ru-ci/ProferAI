@@ -34,7 +34,7 @@ test('远端发送完整转发本轮渠道模型，list迟到目标切换时不�
       AGENT_IPC_CHANNELS, assertSensitiveAgentIpcSender() {}, getCurrentCoreTargetId: () => 'remote',
       getActiveCoreClient: () => client, getCoreTargetGeneration: () => generation, currentCoreId: () => 'linux',
       parseCoreSessionId: () => ({ coreId: 'linux', sessionId: 'session' }),
-      registerWebContents() {}, relayRemoteCoreRun() {}, randomUUID: () => 'fixture-uuid',
+      registerWebContents() {}, randomUUID: () => 'fixture-uuid',
       createAgentRunContext: () => ({ traceId: 'fixture' }),
       ipcMain: { handle: (_channel: string, callback: typeof invoke) => { invoke = callback } },
     }

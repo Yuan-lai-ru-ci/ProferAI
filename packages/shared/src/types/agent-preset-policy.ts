@@ -70,6 +70,8 @@ export interface EffectiveAgentPresetPolicy {
 export interface EffectiveAgentPresetPolicyOptions {
   /** 调用方请求的权限模式；只能保持或收紧预设声明的上限。 */
   permissionMode?: ProferPermissionMode
+  /** 仅可信宿主根据已持久化的用户授权传入；可替换预设模式，不改变能力禁用。 */
+  userPermissionMode?: ProferPermissionMode
   /** Profer 内部 Goal 循环需要保持无人值守权限语义。 */
   triggeredBy?: 'goal'
   pptCapabilityActive?: boolean
@@ -179,7 +181,7 @@ export function createEffectiveAgentPresetPolicy(
     runtimeSupportsSubagents: options.runtimeSupportsSubagents === true,
     sessionCanUseSubagents: options.runtimeSupportsSubagents === true && !disabledToolGroups.has('collaboration'),
     // Goal 持续执行不改变用户或预设授予的权限级别。
-    permissionMode: resolveEffectivePermissionMode(preset.permissionMode, options.permissionMode),
+    permissionMode: resolveEffectivePermissionMode(options.userPermissionMode ?? preset.permissionMode, options.permissionMode),
     ...(preset.effort !== undefined && { effort: preset.effort }),
     pptCapabilityActive: options.pptCapabilityActive === true,
     source: sourceForScope(presetReference.presetScope ?? preset.scope),

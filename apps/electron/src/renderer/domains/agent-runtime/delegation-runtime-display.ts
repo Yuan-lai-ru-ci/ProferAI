@@ -23,6 +23,7 @@ export type PersistedDelegationStatus =
 export const DELEGATION_RUNNING_STALE_MS = 10 * 60_000
 
 export interface DelegationRuntimeDisplayInput {
+  observed?: 'active' | 'inactive' | 'unknown'
   parentSessionId?: string | null
   /** 独立工作关系（placement=independent）没有父会话，用来源会话表达血缘。 */
   sourceSessionId?: string | null
@@ -91,13 +92,13 @@ export function resolveDelegationRuntimeDisplay(
 ): DelegationRuntimeDisplay {
   if (!isDelegatedChildSessionLike(input)) return HIDDEN
 
-
-  if (input.liveRunning) {
+  if (input.observed === 'unknown') return { visible: true, phase: 'unknown', live: false, label: '子代理状态待确认' }
+  if (input.liveRunning || input.observed === 'active') {
     return {
       visible: true,
       phase: 'running',
-      startedAt: input.liveStartedAt,
-      live: true,
+      startedAt: input.liveRunning ? input.liveStartedAt : undefined,
+      live: input.liveRunning,
       label: '子代理运行中',
     }
   }
@@ -107,6 +108,7 @@ export function resolveDelegationRuntimeDisplay(
   const active = now - input.sessionUpdatedAt < DELEGATION_RUNNING_STALE_MS
 
   if (persisted === 'running') {
+    if (input.observed === 'inactive') return { visible: true, phase: 'unknown', live: false, label: '子代理当前未运行' }
     // 没有实时流状态时必须先确认最近仍有活动，避免重启后滞留的 running 伪装成运行中。
     // 起点只从本轮人类输入回退，不用会话年龄冒充耗时。
     return active

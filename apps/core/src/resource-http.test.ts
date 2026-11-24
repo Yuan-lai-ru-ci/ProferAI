@@ -38,3 +38,21 @@ test('Core资源HTTP必须鉴权、声明能力且在所属Core读写，同名sl
     expect((await a.call('getWorkspaceMcpConfig', ['../escape'])).status).toBe(400)
   } finally { await a.close(); await b.close() }
 })
+
+test('Given HTTP 资源管理 When 查询删除全局Skill并提升预设 Then 不再返回不支持且严格验证确认参数', async () => {
+  const f = await fixture()
+  try {
+    const created = await f.call('globalSkill.createUser', ['http-skill', 'HTTP skill', '', 'body'])
+    expect(created.status).toBe(200)
+    const id = (created.body.result as { skillId: string }).skillId
+    expect((await f.call('globalSkill.getDeleteBlockers', [id])).body.result).toMatchObject({ references: [{ blocksDeletion: true }] })
+    expect((await f.call('globalSkill.deleteUser', [id, `delete:${id}`])).status).toBe(400)
+    expect((await f.call('globalSkill.setEnabled', [f.workspace.slug, id, false])).status).toBe(200)
+    expect((await f.call('globalSkill.deleteUser', [id])).status).toBe(400)
+    expect((await f.call('globalSkill.deleteUser', [id, `delete:${id}`])).status).toBe(200)
+    const preset = await f.call('createAgentPreset', [f.workspace.slug, { name: 'HTTP preset', description: '' }])
+    const promoted = await f.call('promoteWorkspacePresetToGlobal', [f.workspace.slug, (preset.body.result as { id: string }).id, [f.workspace.slug], true])
+    expect(promoted.status).toBe(200)
+    expect(promoted.body.result).toMatchObject({ name: 'HTTP preset', scope: 'user-global' })
+  } finally { await f.close() }
+})

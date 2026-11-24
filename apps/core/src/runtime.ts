@@ -63,7 +63,7 @@ import { buildPiMcpTools, discoverExternalMcpTools, PiMcpClientManager, type PiM
 import { withLoadedMcpServerNames } from '@profer/shared'
 import { prepareCoreWorkspaceSkills } from './skill-resources'
 import { resolveCorePreset } from './preset-resources'
-import { getEffectiveDisabledToolNames, isEffectiveAgentPresetToolDisabled, resolveEffectivePermissionMode, canonicalAgentToolName } from '@profer/shared'
+import { getEffectiveDisabledToolNames, isEffectiveAgentPresetToolDisabled, resolveEffectivePermissionMode, isProferPermissionMode, canonicalAgentToolName } from '@profer/shared'
 import { loadPiAutomationToolDefinitions } from '@profer/agent-provider-pi/automation-tools'
 import { injectAutomationMcpServer } from '@profer/agent-provider-claude/automation-tools'
 import type { AutomationToolOperations } from '@profer/agent-runtime/automation-tool-operations'
@@ -199,7 +199,8 @@ export interface CoreSessionStore extends SessionPort {
   readMessages(sessionId: string): readonly SDKMessage[]
 }
 
-function createCoreSessionStore(configDir: string, defaultRuntime: AgentRuntime, workspaces: CoreWorkspaceStore, deletions: CoreSessionDeletionService, isWorkspaceDeleting: (workspaceId: string) => boolean, onChanged: (meta: AgentSessionMeta) => void): CoreSessionStore {
+function createCoreSessionStore(config: CoreConfig, defaultRuntime: AgentRuntime, workspaces: CoreWorkspaceStore, deletions: CoreSessionDeletionService, isWorkspaceDeleting: (workspaceId: string) => boolean, onChanged: (meta: AgentSessionMeta) => void): CoreSessionStore {
+  const configDir = config.configDir
   const paths = createSessionStorePaths(configDir)
   const index = createSyncSessionIndexStore(() => paths.sessionsIndex)
   const messages = createSyncSessionMessageStore(() => paths)
@@ -259,10 +260,14 @@ function createCoreSessionStore(configDir: string, defaultRuntime: AgentRuntime,
       ...(input.workspaceId ? { workspaceId: input.workspaceId, storageLayout: workspaceFor(input.workspaceId)?.storageMode === 'project' ? 'project' as const : 'managed' as const } : {}),
       ...(input.presetId ? { presetId: input.presetId } : {}),
       ...(input.presetReference ? { presetReference: input.presetReference } : {}),
-      permissionMode: input.permissionMode ?? 'auto',
+      permissionMode: input.permissionMode,
       createdAt: now,
       updatedAt: now,
     }
+    // 新会话默认跟随新预设；显式传值仅是可收紧请求，不代表手动授权。
+    const resources = resolveCorePreset(config, meta, workspaceFor(input.workspaceId))
+    meta.permissionMode = resources.policy.permissionMode
+    meta.permissionModeSource = 'preset'
     writeIndex([...index.list(true), meta])
     onChanged(meta)
     return meta
@@ -387,7 +392,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
   workspaces.ensureDesktopDefault()
   const deletions = new CoreSessionDeletionService(config)
   const workspaceOperations = new CoreWorkspaceOperationStore(join(config.configDir, 'core-workspace-operations.json'))
-  sessions = createCoreSessionStore(config.configDir, defaultRuntime, workspaces, deletions,
+  sessions = createCoreSessionStore(config, defaultRuntime, workspaces, deletions,
     workspaceId => !!workspaceOperations.active(workspaceId),
     meta => {
       if (deletions.isDeleting(meta.id)) return
@@ -573,10 +578,10 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
   const mcpManager = new PiMcpClientManager()
   const mcpRuns = new Map<string, { servers: PiMcpServers; tools?: Promise<Awaited<ReturnType<typeof buildPiMcpTools>>> }>()
   const skillRuns = new Map<string, Promise<Awaited<ReturnType<typeof prepareCoreWorkspaceSkills>>>>()
-  const presetRuns = new Map<string, { runId: string; resources: ReturnType<typeof resolveCorePreset> }>()
-  const resolveResources = (session: AgentSessionMeta, workspace: ReturnType<CoreWorkspaceStore['list']>[number] | undefined) => {
+  const presetRuns = new Map<string, { runId: string; resources: ReturnType<typeof resolveCorePreset> & { permissionModeCap?: AgentSessionMeta['permissionMode'] } }>()
+  const resolveResources = (session: AgentSessionMeta, workspace: ReturnType<CoreWorkspaceStore['list']>[number] | undefined): ReturnType<typeof resolveCorePreset> & { permissionModeCap?: AgentSessionMeta['permissionMode'] } => {
     const resolved = resolveCorePreset(config, session, workspace)
-    if (!session.sourceDelegationId) return resolved
+    if (!session.sourceDelegationId) return { ...resolved, permissionModeCap: undefined }
     const inherited = new CoreDelegationStore(join(config.configDir, 'core-delegations.json')).read().records
       .find(record => record.delegationId === session.sourceDelegationId && record.childSessionId === session.id)?.parentPolicy
     if (!inherited) throw new Error('委派缺少持久化父级能力上限')
@@ -589,17 +594,24 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
       allowedMcpServerNames: intersect(resolved.policy.allowedMcpServerNames, inherited.allowedMcpServerNames),
       allowSubagents: false, sessionCanUseSubagents: false,
     }
-    return { ...resolved, policy, preset: { ...resolved.preset, permissionMode } }
+    return { ...resolved, policy, permissionModeCap: inherited.permissionMode }
   }
   const effectiveMode = (sessionId: string) => {
     const session = sessions.getMeta(sessionId)
     if (!session) return 'plan' as const
-    const preset = presetRuns.get(sessionId)?.resources.preset
-      ?? resolveResources(session, workspaces.list().find(workspace => workspace.id === session.workspaceId)).preset
-    return resolveEffectivePermissionMode(preset.permissionMode, session.permissionMode ?? 'auto')
+    const resources = presetRuns.get(sessionId)?.resources
+      ?? resolveResources(session, workspaces.list().find(workspace => workspace.id === session.workspaceId))
+    return modeForResources(session, resources)
+  }
+  const modeForResources = (session: AgentSessionMeta, resources: ReturnType<typeof resolveResources>) => {
+    const mode = session.permissionModeSource === 'user' && session.permissionMode
+      ? session.permissionMode : resolveEffectivePermissionMode(resources.preset.permissionMode, session.permissionMode)
+    return resources.permissionModeCap ? resolveEffectivePermissionMode(resources.permissionModeCap, mode) : mode
   }
   const toolDisabled = (sessionId: string, toolName: string) => {
+    const session = sessions.getMeta(sessionId)
     const policy = presetRuns.get(sessionId)?.resources.policy
+      ?? (session ? resolveResources(session, workspaces.list().find(workspace => workspace.id === session.workspaceId)).policy : undefined)
     return !!policy && (isEffectiveAgentPresetToolDisabled(policy, toolName) || isEffectiveAgentPresetToolDisabled(policy, canonicalAgentToolName(toolName)))
   }
   const permissions = new CorePermissionService(
@@ -758,7 +770,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
           if (toolName === 'EnterPlanMode') {
             try {
               await updateSessionMeta(input.sessionId, { permissionMode: 'plan' }, undefined,
-                () => !signal.aborted && runLedger.get(input.runId ?? '')?.status === 'running')
+                () => !signal.aborted && runLedger.get(input.runId ?? '')?.status === 'running', false)
               return { behavior: 'allow', updatedInput: toolInput }
             } catch (error) { return { behavior: 'deny', message: String(error) } }
           }
@@ -1082,9 +1094,12 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
   const planningTimer = setInterval(checkPlanningReminders, 30_000)
   planningTimer?.unref()
   const sessionUpdates = new Map<string, Promise<unknown>>()
-  const updateSessionMeta = (sessionId: string, patch: Parameters<CoreAgentRuntime['updateSessionMeta']>[1], expectedRevision?: number, isCurrent: () => boolean = () => true): Promise<AgentSessionMeta> => {
+  // 对外仅暴露可信配置入口；模型工具必须显式传 trustedUser=false，不从patch/发送参数读取来源。
+  const updateSessionMeta = (sessionId: string, patch: Parameters<CoreAgentRuntime['updateSessionMeta']>[1], expectedRevision?: number, isCurrent: () => boolean = () => true, trustedUser = true): Promise<AgentSessionMeta> => {
     // 捕获请求，排队期间调用方不可改变待校验的目标。
+    if ('permissionModeSource' in patch) return Promise.reject(new Error('权限来源仅可由Core写入'))
     patch = structuredClone(patch)
+    let source: AgentSessionMeta['permissionModeSource']
     const previous = sessionUpdates.get(sessionId) ?? Promise.resolve()
     const update = previous.catch(() => {}).then(async () => {
       if (!isCurrent()) throw new Error('请求所属Run已失效')
@@ -1093,6 +1108,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
       if (!current) throw new Error('Agent 会话不存在')
       if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || expectedRevision < 0)) throw new Error('invalid expected revision')
       if (expectedRevision !== undefined && (current.revision ?? 0) !== expectedRevision) throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
+      if (patch.permissionMode !== undefined && !isProferPermissionMode(patch.permissionMode)) throw new Error('无效的权限模式')
       const validOpenAiThinkingLevels = [null, 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
       const validAgentEfforts = [null, 'low', 'medium', 'high', 'max']
       if (patch.codexFastMode !== undefined && typeof patch.codexFastMode !== 'boolean') throw new Error('无效的 Codex Fast Mode 状态')
@@ -1132,18 +1148,21 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
           patch.presetReference = normalizeAgentPresetReference(patch.presetReference, workspace?.slug)
           if (patch.presetId !== undefined && patch.presetId !== patch.presetReference.presetId) throw new Error('预设ID与引用不一致')
         }
-        const candidate = { ...current, ...patch, presetReference: patch.presetReference,
+        const candidate = { ...current, ...patch, permissionMode: undefined, permissionModeSource: undefined, presetReference: patch.presetReference,
           presetId: patch.presetReference?.presetId ?? patch.presetId }
         // 按所属Core读取预设、版本、禁用与作用域，未知ID绝不回退默认岗位。
         const resources = resolveResources(candidate, workspace)
         patch.presetId = resources.preset.id
         patch.presetReference = normalizeAgentPresetReference(resources.reference, workspace?.slug)
-        patch.permissionMode = resolveEffectivePermissionMode(resources.policy.permissionMode, patch.permissionMode ?? current.permissionMode ?? 'auto')
+        patch.permissionMode = resources.policy.permissionMode
+        source = 'preset'
       }
       const mode = patch.permissionMode
       if (mode !== undefined) {
         const resources = presetRuns.get(sessionId)?.resources ?? resolveResources({ ...current, ...patch }, workspace)
-        if (resolveEffectivePermissionMode(resources.preset.permissionMode, mode) !== mode) throw new Error('预设权限上限不允许此模式；不会放宽实际执行权限')
+        source ??= trustedUser ? 'user' : 'preset'
+        const candidate = { ...current, ...patch, permissionModeSource: source }
+        if (modeForResources(candidate, resources) !== mode) throw new Error('预设或父级权限上限不允许此模式；不会放宽实际执行权限')
       }
       const ownerToken = coordinator.ownership.getOwner(sessionId)?.token
       const stopOriginalOwner = async () => {
@@ -1164,7 +1183,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
         if (changesExecution && coordinator.ownership.getOwner(sessionId)) throw new Error('Agent 已开始运行，不能修改本轮执行前提')
         if (needsSdkSync && coordinator.ownership.getOwner(sessionId)?.token !== ownerToken) throw new Error('权限同步的运行已结束或被替换')
         if (needsSdkSync && (sessions.getMeta(sessionId)?.revision ?? 0) !== (current.revision ?? 0)) throw new Error('REVISION_CONFLICT: 权限同步期间会话已变化')
-        sessions.updateMeta(sessionId, { ...patch, ...(patch.title !== undefined ? { titleLockedAt: Date.now() } : {}) })
+        sessions.updateMeta(sessionId, { ...patch, ...(mode !== undefined ? { permissionModeSource: source } : {}), ...(patch.title !== undefined ? { titleLockedAt: Date.now() } : {}) })
       } catch (error) {
         if (needsSdkSync) await stopOriginalOwner()
         throw error
@@ -1199,7 +1218,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
         const sameOwner = () => coordinator.ownership.getOwner(response.sessionId)?.token === owner
         if (sameOwner()) {
           // 同步收紧metadata并发起停止，早于被拒工具Promise的下一次续跑。
-          try { sessions.updateMeta(response.sessionId, { permissionMode: 'plan' }) }
+          try { sessions.updateMeta(response.sessionId, { permissionMode: 'plan', permissionModeSource: 'preset' }) }
           finally { if (sameOwner()) await coordinator.stopAndWait(response.sessionId) }
         }
         throw new Error('计划审批恢复失败，运行已停止且权限已收紧')
@@ -1259,7 +1278,7 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
     planning,
     sessions,
     workspaces,
-    resourceOperation: body => executeCoreResourceOperation({ config, workspaces, sessions, automations }, body),
+    resourceOperation: body => executeCoreResourceOperation({ config, workspaces, sessions, automations, mcpManager }, body),
     accountAvailable: COMMERCIAL_BUILD && Boolean(account),
     accountOperation: async (operation, args) => {
       if (!COMMERCIAL_BUILD || !account) throw new Error('当前宿主不提供独立账号操作')
@@ -1390,27 +1409,27 @@ export function createCoreAgentRuntime(config: CoreConfig, dependencies: { indep
     },
     renameSessionEntry: (sessionId, path, name) => {
       const { session, workspace } = sessionScope(sessionId)
-      return renameEntry(assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, path), name, config.configDir)
+      return renameEntry(assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, path), name, config.configDir, join(config.configDir, 'session-workspaces', session.id))
     },
     moveSessionEntry: (sessionId, path, toDir, overwrite) => {
       const { session, workspace } = sessionScope(sessionId)
       const source = assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, path)
       const target = assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, toDir)
-      return moveEntry(source, target, config.configDir, overwrite === true)
+      return moveEntry(source, target, config.configDir, overwrite === true, join(config.configDir, 'session-workspaces', session.id))
     },
     copySessionEntry: (sessionId, path, toDir, overwrite) => {
       const { session, workspace } = sessionScope(sessionId)
       const source = assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, path)
       const target = assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, toDir)
-      return copyEntry(source, target, config.configDir, overwrite === true)
+      return copyEntry(source, target, config.configDir, overwrite === true, join(config.configDir, 'session-workspaces', session.id))
     },
     trashSessionEntry: (sessionId, path) => {
       const { session, workspace } = sessionScope(sessionId)
-      return trashEntry(assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, path), config.configDir)
+      return trashEntry(assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, path), config.configDir, join(config.configDir, 'session-workspaces', session.id))
     },
     previewSessionFile: (sessionId, path) => {
       const { session, workspace } = sessionScope(sessionId)
-      return readEntryPreview(assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, path), config.configDir)
+      return readEntryPreview(assertSessionPathAllowed(config.configDir, config.workspaceRoot, workspace, session, path), config.configDir, undefined, join(config.configDir, 'session-workspaces', session.id))
     },
     renameSystemEntry: (path, name) => renameEntry(path, name, config.configDir),
     moveSystemEntry: (path, toDir, overwrite) => moveEntry(path, toDir, config.configDir, overwrite === true),

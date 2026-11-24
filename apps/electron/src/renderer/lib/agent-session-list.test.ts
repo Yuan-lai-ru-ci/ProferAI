@@ -145,6 +145,15 @@ describe('upsertAgentSessionProjection', () => {
     ...extra,
   })
 
+  test('投影保留权威权限来源，历史缺失来源不会伪造用户授权', () => {
+    const chosen = upsertAgentSessionProjection([], projection(2, { permissionMode: 'bypassPermissions', permissionModeSource: 'user' }))
+    expect(chosen[0]?.permissionModeSource).toBe('user')
+    const rebound = upsertAgentSessionProjection(chosen, projection(3, { permissionMode: 'plan', permissionModeSource: 'preset' }))
+    expect(rebound[0]?.permissionModeSource).toBe('preset')
+    const historical = upsertAgentSessionProjection(chosen, projection(4))
+    expect(historical[0]?.permissionModeSource).toBeUndefined()
+  })
+
   test('实时投影保留未知探索分支的三字段', () => {
     const result = upsertAgentSessionProjection([], projection(2, {
       id: 'exploration-branch',

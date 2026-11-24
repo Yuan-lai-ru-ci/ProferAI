@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, isAgentRuntime, buildAgentSessionUiProjection } from '@profer/shared'
+import { AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode, buildAgentSessionUiProjection } from '@profer/shared'
 import { projectRemoteRunEvent } from './core-run-projection'
 
 // 执行实际注册代码，避免测试里重复实现 Core/桌面分支。
@@ -17,7 +17,7 @@ function handler(channel: string, dependencies: Record<string, unknown>) {
   const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end + (inline ? 5 : 4)))
   let invoke: ((...args: unknown[]) => Promise<unknown>) | undefined
   const deps = {
-    AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, isAgentRuntime,
+    AGENT_IPC_CHANNELS, AGENT_PRESET_IPC_CHANNELS, isAgentRuntime, isProferPermissionMode,
     isLocalCoreEnabled: () => false,
     getCurrentCoreTargetId: () => 'local',
     getCoreTargetGeneration: () => 1,
@@ -252,6 +252,17 @@ describe('本机 Core 会话 IPC 归属', () => {
     expect(submitted).toEqual({ useCoreDefaults: true, title: 'Title', channelId: 'channel', workspaceId: 'workspace', modelId: 'model', presetId: undefined })
     expect(await invoke('Title', 'channel', 'workspace', 'model', 'explicit-preset')).toEqual(session)
     expect(submitted).toMatchObject({ presetId: 'explicit-preset' })
+  })
+
+  test('Given 远程 Core 新建会话 When 返回 Then 保留权威权限模式/来源/revision', async () => {
+    const remote = { ...session, permissionMode: 'plan', permissionModeSource: 'preset', revision: 2 }
+    const client = { createSession: async () => remote }
+    const invoke = handler('CREATE_SESSION', {
+      getCurrentCoreTargetId: () => 'remote', getActiveCoreClient: () => client,
+      currentCoreId: () => 'remote', namespaceCoreSessionId: (id: string, coreId: string) => `core:${coreId}:${id}`,
+      getLocalCoreClient: noDesktop, createAgentSession: noDesktop,
+    })
+    expect(await invoke('Title')).toMatchObject({ id: 'core:remote:core-session', permissionMode: 'plan', permissionModeSource: 'preset', revision: 2 })
   })
 
   test('Given Core 创建失败 When 新建 Then 不回落桌面', async () => {
@@ -517,4 +528,179 @@ describe('本机 Core 会话 IPC 归属', () => {
     await expect(handler('UPDATE_SESSION_MODEL', { ...dependencies, isAgentSessionActive: () => true })(session.id, 'channel', 'model')).rejects.toThrow('Agent 正在运行')
     expect(writes).toBe(1)
   })
+})
+
+
+describe('可信手动权限入口', () => {
+  test('Given Core owns session When 用户选择权限 Then 只提交模式，由 Core 判定来源', async () => {
+    let submitted: unknown
+    const invoke = handler('UPDATE_SESSION_PERMISSION_MODE', {
+      routeSessionMetaToCore: async (id: string, patch: unknown) => { submitted = { id, patch }; return session },
+      getAgentSessionMeta: noDesktop, updateAgentSessionMeta: noDesktop,
+    })
+    expect(await invoke(session.id, 'bypassPermissions', 3)).toEqual(session)
+    expect(submitted).toEqual({ id: session.id, patch: { permissionMode: 'bypassPermissions', expectedRevision: 3 } })
+  })
+
+  test.each([false, true])('Given legacy active=%s When 手动选择 Then 保存 user 来源并发布', async active => {
+    let stored = { ...session, permissionMode: 'plan', permissionModeSource: 'preset' }
+    const published: unknown[] = [], synced: string[] = []
+    const invoke = handler('UPDATE_SESSION_PERMISSION_MODE', {
+      routeSessionMetaToCore: async () => null, getLocalCoreClient: () => null,
+      getAgentSessionMeta: () => stored,
+      updateAgentSessionMeta: (_id: string, patch: object) => (stored = { ...stored, ...patch }),
+      isAgentSessionActive: () => active,
+      updateAgentPermissionMode: async (_id: string, mode: string) => { synced.push(mode) },
+      publishAgentSessionProjection: (meta: unknown) => published.push(meta), goalSessionService: { nudge() {} },
+    })
+    expect(await invoke(session.id, 'bypassPermissions')).toMatchObject({ permissionMode: 'bypassPermissions', permissionModeSource: 'user' })
+    expect(synced).toEqual(active ? ['bypassPermissions'] : [])
+    expect(published).toEqual([stored])
+  })
+
+  test('Given 运行中 SDK 切换失败 When 选择权限 Then 模式与来源一并回滚且不 nudge', async () => {
+    let stored = { ...session, permissionMode: 'plan', permissionModeSource: 'preset' }
+    const published: unknown[] = []
+    const invoke = handler('UPDATE_SESSION_PERMISSION_MODE', {
+      routeSessionMetaToCore: async () => null, getLocalCoreClient: () => null,
+      getAgentSessionMeta: () => stored,
+      updateAgentSessionMeta: (_id: string, patch: object) => (stored = { ...stored, ...patch }),
+      isAgentSessionActive: () => true,
+      updateAgentPermissionMode: async () => { throw new Error('SDK failed') },
+      publishAgentSessionProjection: (meta: unknown) => published.push(meta), goalSessionService: { nudge: noDesktop },
+    })
+    await expect(invoke(session.id, 'bypassPermissions')).rejects.toThrow('SDK failed')
+    expect(stored).toMatchObject({ permissionMode: 'plan', permissionModeSource: 'preset' })
+    expect(published).toEqual([stored])
+  })
+
+  test('Given revision 冲突 When 手动选择 Then 不写存储/SDK', async () => {
+    const invoke = handler('UPDATE_SESSION_PERMISSION_MODE', {
+      routeSessionMetaToCore: async () => null, getLocalCoreClient: () => null,
+      getAgentSessionMeta: () => ({ ...session, revision: 4 }), updateAgentSessionMeta: noDesktop,
+      updateAgentPermissionMode: noDesktop,
+    })
+    await expect(invoke(session.id, 'plan', 3)).rejects.toThrow('REVISION_CONFLICT')
+  })
+
+  test.each(['PRESET:UPDATE_SESSION_PRESET', 'PRESET:REBIND_SESSION_REFERENCE'])('Given legacy 正在运行 When %s Then 拒绝且不改绑', async channel => {
+    const invoke = handler(channel, {
+      routeSessionMetaToCore: async () => null, getAgentSessionMeta: () => session,
+      isAgentSessionActive: () => true, rebindAgentSessionPreset: noDesktop,
+      getAgentPreset: noDesktop, updateAgentSessionUiMeta: noDesktop,
+    })
+    await expect(invoke(session.id, 'code')).rejects.toThrow('正在运行')
+  })
+})
+
+
+function remotePermissionCommand(dependencies: Record<string, unknown>) {
+  const source = readFileSync(new URL('./remote-service.ts', import.meta.url), 'utf8')
+  const start = source.indexOf("    case 'update_permission_mode':")
+  const end = source.indexOf("    // Agent 预设", start)
+  const ts = `async function invoke(parsed) { switch(parsed.type) { ${source.slice(start, end)} } }; return invoke;`
+  const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(ts)
+  const deps = { validateExpectedRevision: () => null, buildSessionItem: (meta: unknown) => meta, ...dependencies }
+  return new Function(...Object.keys(deps), js)(...Object.values(deps)) as (input: object) => Promise<unknown>
+}
+
+test('Given Pocket 显式权限设置 When 成功 Then 同样写 user 来源；SDK 失败一并回滚', async () => {
+  let stored = { ...session, permissionMode: 'plan', permissionModeSource: 'preset' }
+  let shouldFail = false
+  const invoke = remotePermissionCommand({
+    getAgentSessionMeta: () => stored,
+    updateAgentSessionMeta: (_id: string, patch: object) => (stored = { ...stored, ...patch }),
+    isAgentSessionActive: () => true,
+    updateAgentPermissionMode: async () => { if (shouldFail) throw new Error('SDK failed') },
+    publishAgentSessionProjection() {}, agentEventBus: { emit() {} },
+  })
+  expect(await invoke({ type: 'update_permission_mode', sessionId: session.id, mode: 'bypassPermissions' })).toMatchObject({ ok: true, data: { permissionModeSource: 'user' } })
+  shouldFail = true
+  expect(await invoke({ type: 'update_permission_mode', sessionId: session.id, mode: 'plan' })).toMatchObject({ ok: false, error: 'SDK failed' })
+  expect(stored).toMatchObject({ permissionMode: 'bypassPermissions', permissionModeSource: 'user' })
+})
+
+function runtimePermissionUpdate(dependencies: Record<string, unknown>) {
+  const source = readFileSync(new URL('./agent-service.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('export async function updateAgentPermissionMode(')
+  const end = source.indexOf('// ===== 流式追加消息', start)
+  const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(source.slice(start, end).replace('export async', 'async') + '; return updateAgentPermissionMode;')
+  const deps = {
+    isLocalCoreSessionActive: () => false, isLocalCoreEnabled: () => false,
+    runtimeCoordinator: { isRunning: () => true }, getAgentSessionMeta: () => session,
+    resolveSessionDelegationPermissionCap: () => undefined,
+    sdkPermissionModeForProferMode: (mode: string) => mode,
+    orchestrator: { updateSessionPermissionMode: noDesktop }, ...dependencies,
+  }
+  return new Function(...Object.keys(deps), js)(...Object.values(deps)) as (id: string, mode: string) => Promise<void>
+}
+
+test('Given runtime SDK 热切换 When SDK 确认/失败 Then 本轮控制器后写/不写且失败回滚 SDK', async () => {
+  const calls: string[] = [], modes: string[] = []
+  let shouldFail = false
+  const controller = { getMode: () => 'plan', setMode: (mode: string) => modes.push(mode) }
+  const update = runtimePermissionUpdate({
+    getAgentRuntimePlanMode: () => controller,
+    adapter: { setPermissionMode: async (_id: string, mode: string) => { calls.push(mode); if (shouldFail && mode === 'bypassPermissions') throw new Error('SDK failed') } },
+  })
+  await update(session.id, 'bypassPermissions')
+  expect(modes).toEqual(['bypassPermissions'])
+  modes.length = calls.length = 0
+  shouldFail = true
+  await expect(update(session.id, 'bypassPermissions')).rejects.toThrow('SDK failed')
+  expect(modes).toEqual([])
+  expect(calls).toEqual(['bypassPermissions', 'plan'])
+})
+
+test('Given SDK 等待中旧 run 被换 When 成功返回 Then 不污染新 run 的控制器', async () => {
+  const modes: string[] = []
+  let current = { getMode: () => 'plan', setMode: (mode: string) => modes.push(mode) }
+  const update = runtimePermissionUpdate({
+    getAgentRuntimePlanMode: () => current,
+    adapter: { setPermissionMode: async () => { current = { getMode: () => 'auto', setMode: noDesktop } } },
+  })
+  await update(session.id, 'bypassPermissions')
+  expect(modes).toEqual([])
+})
+
+
+test('Given 桌面 ExitPlan 用户审批 When 生效 Then 保存可信 user 来源', async () => {
+  let stored = { ...session, permissionMode: 'plan', permissionModeSource: 'preset' }
+  const invoke = handler('EXIT_PLAN_MODE_RESPOND', {
+    getLocalCoreClient: () => null,
+    exitPlanService: { respondToExitPlanMode: () => ({ sessionId: session.id, targetMode: 'bypassPermissions' }) },
+    getAgentSessionMeta: () => stored,
+    updateAgentSessionMeta: (_id: string, patch: object) => (stored = { ...stored, ...patch }),
+    publishAgentSessionProjection() {}, emitSessionStreamEvent() {},
+  })
+  await invoke({ requestId: 'approval', action: 'approve_auto' })
+  expect(stored).toMatchObject({ permissionMode: 'bypassPermissions', permissionModeSource: 'user' })
+})
+
+test('Given Pocket ExitPlan 用户审批 When 生效 Then 保存可信 user 来源', async () => {
+  const source = readFileSync(new URL('./remote-service.ts', import.meta.url), 'utf8')
+  const start = source.indexOf("    case 'respond_exit_plan_mode':")
+  const end = source.indexOf("    case 'get_sdk_messages':", start)
+  const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function invoke(parsed) { switch(parsed.type) { ${source.slice(start, end)} } }; return invoke;`)
+  let stored = { ...session, permissionMode: 'plan', permissionModeSource: 'preset' }
+  const deps = {
+    exitPlanService: { respondToExitPlanMode: () => ({ sessionId: session.id, targetMode: 'auto' }) },
+    updateAgentSessionUiMeta: (_id: string, patch: object) => (stored = { ...stored, ...patch }),
+    agentEventBus: { emit() {} },
+  }
+  const invoke = new Function(...Object.keys(deps), js)(...Object.values(deps))
+  await invoke({ type: 'respond_exit_plan_mode', requestId: 'approval', action: 'approve_edit' })
+  expect(stored).toMatchObject({ permissionMode: 'auto', permissionModeSource: 'user' })
+})
+
+test('Given SDK 更新及回滚均失败 When 本轮仍有效 Then 停止权限未知的运行', async () => {
+  const stops: string[] = []
+  const controller = { getMode: () => 'plan', setMode: noDesktop }
+  const update = runtimePermissionUpdate({
+    getAgentRuntimePlanMode: () => controller,
+    runtimeCoordinator: { isRunning: () => true, stop: async (id: string) => { stops.push(id) } },
+    adapter: { setPermissionMode: async () => { throw new Error('SDK failed') } },
+  })
+  await expect(update(session.id, 'bypassPermissions')).rejects.toThrow('SDK failed')
+  expect(stops).toEqual([session.id])
 })

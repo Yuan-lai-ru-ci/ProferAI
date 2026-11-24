@@ -119,7 +119,7 @@ describe('渲染层自动清除点（R1–R10）一个都不能少', () => {
     {
       id: 'R9 侧边栏点击会话 / 探索分支',
       file: 'src/renderer/components/app-shell/left-sidebar/use-left-sidebar.ts',
-      snippets: ['setUnviewedCompleted((previous) => {', 'next.delete(id)'],
+      snippets: ["openSession('agent', id, title)"],
     },
     {
       id: 'R10 个人工作区切换会话',
@@ -149,7 +149,7 @@ describe('启动恢复与手动标记（S1/S2）保留', () => {
       'window.electronAPI.setAgentCompletionState(id)',
       'window.electronAPI.clearAgentCompletionState(id)',
       // 关闭态内存集合仍是显示权威 ⇒ handler 必须双向维护内存集合。
-      'setUnviewedCompleted((prev: Set<string>) => {',
+      'applySessionUnreadToMemoryIds(prev, id, nextUnread)',
     ])
   })
 })

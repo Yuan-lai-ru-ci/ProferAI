@@ -72,10 +72,7 @@ import { agentGoalsAtom, goalStatusBySessionAtom } from '@/atoms/goal-atoms'
 import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { summarizeGoalRailCounts } from '@/domains/goal/goal-display-policy'
 import { previewFileMapAtom, previewFilesByTabAtom } from '@/atoms/preview-atoms'
-import {
-  browserPanelDismissedSessionIdsAtom,
-  browserStateMapAtom,
-} from '@/atoms/browser-atoms'
+import { browserStateMapAtom } from '@/atoms/browser-atoms'
 // 只从 preview-cache 取清缓存入口：直接 import DiffTabContent 会把整棵预览子树拖进入口 chunk
 import { clearPreviewCacheForSession } from '@/components/diff/preview-cache'
 import {
@@ -106,7 +103,6 @@ import {
   type ProjectPickOutcome,
 } from '@/hooks/useProjectActions'
 import { useShortcut } from '@/hooks/useShortcut'
-import { openExplorationBranchTab } from '@/lib/exploration-tab'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 import { detectIsMac } from '@profer/ui'
 import { navigationController } from '@/lib/navigation-controller'
@@ -496,7 +492,6 @@ export function useLeftSidebar() {
   const setPreviewFile = useSetAtom(previewFileMapAtom)
   const setPreviewFilesByTab = useSetAtom(previewFilesByTabAtom)
   const setBrowserState = useSetAtom(browserStateMapAtom)
-  const setBrowserDismissed = useSetAtom(browserPanelDismissedSessionIdsAtom)
   const setDiffPanelTab = useSetAtom(agentDiffPanelTabAtom)
   const setDiffRefreshVersion = useSetAtom(agentDiffRefreshVersionAtom)
   const setDiffUnseen = useSetAtom(agentDiffUnseenChangesAtom)
@@ -527,12 +522,6 @@ export function useLeftSidebar() {
     setConvPromptId(deleteKey)
     setPreviewFile(deleteKey)
     setBrowserState(deleteKey)
-    setBrowserDismissed((prev) => {
-      if (!prev.has(id)) return prev
-      const next = new Set(prev)
-      next.delete(id)
-      return next
-    })
     setDiffPanelTab(deleteKey)
     setDiffRefreshVersion(deleteKey)
     setDiffUnseen(deleteKey)
@@ -602,7 +591,7 @@ export function useLeftSidebar() {
     sessionExistsAtom.remove(id)
 
     clearPreviewCacheForSession(id)
-  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewFile, setPreviewFilesByTab, setBrowserState, setBrowserDismissed, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store, setAgentMessagesCache, setResolvedBlobMessages])
+  }, [setConvModels, setConvContextLength, setConvThinking, setConvParallel, setConvPromptId, setPreviewFile, setPreviewFilesByTab, setBrowserState, setDiffPanelTab, setDiffRefreshVersion, setDiffUnseen, setDiffUnseenFiles, setDiffData, setSessionChannelMap, setSessionModelMap, setSessionPathMap, setStreamingStates, setLiveMessagesMap, setAgentStreamErrors, setAgentPromptSuggestions, setAllPendingPermissionRequests, setAllPendingAskUserRequests, setAskUserAnswers, setAllPendingExitPlanRequests, setSessionPendingFiles, store, setAgentMessagesCache, setResolvedBlobMessages])
 
 
   const currentWorkspaceSlug = React.useMemo(() => {
@@ -841,8 +830,7 @@ export function useLeftSidebar() {
   /** 选择对话（打开或聚焦标签页） */
   const handleSelectConversation = React.useCallback((id: string, title: string): void => {
     openSession('chat', id, title)
-    setActiveView('conversations')
-  }, [openSession, setActiveView])
+  }, [openSession])
 
   /** 请求删除对话（弹出确认框） */
   const handleRequestDelete = React.useCallback((id: string): void => {
@@ -1656,31 +1644,8 @@ export function useLeftSidebar() {
 
   /** 选择 Agent 会话（打开或聚焦标签页）。探索分支打开为父会话上下文内的子会话 Tab。 */
   const handleSelectAgentSession = React.useCallback((id: string, title: string): void => {
-    const selected = agentSessions.find((session) => session.id === id)
-    if (selected?.explorationParentSessionId && selected.explorationSourceMessageId) {
-      const parent = agentSessions.find((session) => session.id === selected.explorationParentSessionId)
-      if (parent) {
-        openExplorationBranchTab(store, parent.id, { sessionId: id, title: selected.title || '探索分支' })
-        setActiveView('conversations')
-        setUnviewedCompleted((previous) => {
-          if (!previous.has(id)) return previous
-          const next = new Set(previous)
-          next.delete(id)
-          return next
-        })
-        return
-      }
-    }
     openSession('agent', id, title)
-    setActiveView('conversations')
-    // 清除该会话的"已完成未查看"标记
-    setUnviewedCompleted((prev: Set<string>) => {
-      if (!prev.has(id)) return prev
-      const next = new Set(prev)
-      next.delete(id)
-      return next
-    })
-  }, [agentSessions, openSession, setActiveView, setUnviewedCompleted, store])
+  }, [openSession])
 
   /**
    * 切换 Agent 会话的未读状态（侧边栏菜单按状态切换）。

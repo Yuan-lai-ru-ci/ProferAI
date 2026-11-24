@@ -15,8 +15,8 @@ import {
   tabMruAtom,
   type TabType,
 } from '@/atoms/tab-atoms'
-import { appWindowsAtom, windowBootstrapAtom } from '@/atoms/app-windows'
-import { focusSessionOrOpenLocal, hasOtherSessionWindow } from '@/lib/app-windows'
+import { windowBootstrapAtom } from '@/atoms/app-windows'
+import { navigateWindowSession } from '@/lib/app-windows'
 import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -142,9 +142,8 @@ export function useOpenSession(options?: { localOnly?: boolean }): OpenSessionFn
           setCurrentAgentSessionId(null)
         }
       }
-      if (!options?.localOnly && (type === 'chat' || type === 'agent')
-        && hasOtherSessionWindow(store.get(appWindowsAtom), store.get(windowBootstrapAtom)?.windowId, { type, sessionId })) {
-        void focusSessionOrOpenLocal(() => window.electronAPI.focusSessionWindow({ type, sessionId }), openLocal)
+      if (!options?.localOnly && (type === 'chat' || type === 'agent')) {
+        navigateWindowSession(store, { type, sessionId }, openLocal)
       } else openLocal()
     },
     [options?.localOnly, store, setTabs, setActiveTabId, setTabMru, setAutomationForm, setActiveView, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, agentWorkspaces, setCurrentAgentWorkspaceId, setUnviewedCompleted, setAgentSessions, manualReadConfirmEnabled],

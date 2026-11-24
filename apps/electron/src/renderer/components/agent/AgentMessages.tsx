@@ -119,6 +119,8 @@ interface AgentMessagesProps {
   messagesLoaded?: boolean
   /** Phase 4: 持久化的 SDKMessage（新格式） */
   persistedSDKMessages?: SDKMessage[]
+  /** 只用于操作门禁与显示；观察状态不能让历史中的助手消息变成实时消息。 */
+  observedActivity?: 'active' | 'inactive' | 'unknown'
   streaming: boolean
   /**
    * 运行态兜底起点：渲染层没有实时流状态时（委派子会话常见），用它代替
@@ -566,7 +568,7 @@ function AgentRunningIndicator({ startedAt }: { startedAt?: number }): React.Rea
   )
 }
 
-export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, runStartedAtFallback, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true, hidden = false }: AgentMessagesProps): React.ReactElement {
+export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agentRuntime, messagesLoaded, persistedSDKMessages, streaming, observedActivity, runStartedAtFallback, streamState, runningDelegationCount = 0, liveMessages, sessionPath, draftRoot, attachedDirs, stoppedByUser, streamError, onRetry, onRetryInNewSession, onRegenerateLastTurn, onEditUserMessage, onSubmitEditUserMessage, onCancelEditUserMessage, editingUserMessageUuid, onFork, onExplore, onRewind, onCompact, imageGenerations, onLoadEarlierHistory, historyMoreAvailable, historyLoadingEarlier, explorationEnabled = true, hidden = false }: AgentMessagesProps): React.ReactElement {
   const store = useStore()
   const isRemoteSession = sessionId.startsWith('core:')
   // 草稿区基准（storageDir）：显式传入优先，否则按会话所属工作区只读解析。
@@ -632,7 +634,8 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
   const streamingContent = streamState?.content ?? ''
   const streamingModelId = streamState?.model || sessionModelId
   const agentStreamingModel = streamingModelId ? resolveModelDisplayName(streamingModelId, channels) : undefined
-  const retrying = streamState?.retrying
+  const activityUnconfirmed = observedActivity === 'unknown'
+  const retrying = activityUnconfirmed ? undefined : streamState?.retrying
   const startedAt = streamState?.startedAt ?? runStartedAtFallback
 
   // 是否渲染模型的 thinking 块。
@@ -989,7 +992,7 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
     liveMessages,
     runningDelegationCount,
   })
-  const showAgentRunningIndicator = runtimeDisplay.showRunningIndicator
+  const showAgentRunningIndicator = !activityUnconfirmed && runtimeDisplay.showRunningIndicator
   const showRuntimeStatus = runtimeDisplay.kind === 'stopping'
     || (runtimeDisplay.kind === 'interrupted' && !runtimeDisplay.showRetry)
     || runtimeDisplay.kind === 'background'
@@ -1048,7 +1051,7 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
             </ConversationHistoryButton>
           </div>
         )}
-        {!hasContent && !runtimeDisplay.active ? (
+        {!hasContent && !runtimeDisplay.active && observedActivity !== 'active' ? (
           <EmptyState />
         ) : (
           <>
@@ -1060,7 +1063,7 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
               const shouldDisableActions = isLive
               // 会话活跃态（streaming 或 backgroundWaiting）时禁用压缩/重试操作，
               // 防止用户误操作触发与正在运行的 agent session 冲突
-              const isSessionActive = streaming || (streamState?.backgroundWaiting ?? false) || runningDelegationCount > 0
+              const isSessionActive = streaming || observedActivity === 'active' || activityUnconfirmed || (streamState?.backgroundWaiting ?? false) || runningDelegationCount > 0
               // 仅在最后一个 assistant-turn 上显示"已被用户中断" badge。
               // 被中断的一轮可能没有任何 assistant 输出（刚发消息就停止），此时磁盘上
               // 不存在新的 assistant-turn，findLast 会错误指向上一个有内容的轮次——
@@ -1172,7 +1175,7 @@ export function AgentMessages({ minimapHostRef, sessionId, sessionModelId, agent
                 视觉上被流中新出现的"上下文已压缩"分隔符无缝替换 */}
             {streamState?.isCompacting && <CompactingIndicator />}
 
-            {showRuntimeStatus && !suppressAgentRunning && (
+            {!activityUnconfirmed && showRuntimeStatus && !suppressAgentRunning && (
               <div className="pl-[56px] min-h-[28px]">
                 <AgentRuntimeStatus display={runtimeDisplay} />
               </div>

@@ -3,7 +3,7 @@ import { setMainWindow } from './main-window-state'
 import { logLifecycle } from './lifecycle-diagnostics'
 import { beginWindowHandoff, finishWindowHandoff } from './window-handoff-buffer'
 import { registerCoreWindow, unregisterCoreWindow, runCoreWindow } from './core-window-scope'
-import { initializeWindowCore, disposeWindowCore, selectCoreForWindowSession, getCoreTargetGeneration, listCoreTargets } from './core-target-service'
+import { initializeWindowCore, disposeWindowCore, listCoreTargets } from './core-target-service'
 /** 完整主应用窗口注册表、会话关联与可靠的跨窗口草稿交接。 */
 
 import { app, BrowserWindow, screen, shell } from 'electron'
@@ -11,7 +11,11 @@ import type { WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type {
+  AcceptWindowSessionMove,
   AppWindowSession,
+  PrepareWindowSessionMove,
+  WindowMoveCore,
+  WindowMoveResult,
   AppWindowSummary,
   MainWindowBootstrap,
   MainWindowKind,
@@ -151,7 +155,6 @@ export function focusSessionWindow(id: string): boolean {
   const win = BrowserWindow.getAllWindows().find((candidate) => {
     if (candidate.isDestroyed()) return false
     return records.get(candidate.webContents.id)?.id === id
-      && records.get(candidate.webContents.id)?.isPrimary === false
   })
   if (!win || win.isDestroyed()) return false
   if (win.isMinimized()) win.restore()
@@ -378,8 +381,12 @@ export function createSecondaryMainWindow(
     if (existing.sourceId !== sourceWindow?.webContents.id || JSON.stringify(existing.tab) !== JSON.stringify(initialTab)) return Promise.resolve({ ok: false, error: '此会话已有待完成交接，请保留当前草稿' })
     return Promise.resolve({ ok: true, accepted: true, handoffId: existing.id })
   }
-  const owner = [...records.values()].find(record => !record.isPrimary && record.sessions.some(item => item.type === initialTab.type && item.sessionId === initialTab.sessionId))
-  if (owner && focusSessionWindow(owner.id)) return Promise.resolve({ ok: true })
+  if (movingSessions.has(key)) return Promise.resolve({ ok: false, error: '会话正在移窗' })
+  const owner = findOtherOwners(sourceWindow?.webContents, initialTab)[0]
+  if (owner && focusSessionWindow(records.get(owner.webContents.id)!.id)) {
+    // 只聚焦不代表草稿交付；不能返回 ok 触发源 renderer 清除标签和草稿。
+    return Promise.resolve({ ok: false, error: '会话已在其他窗口打开，当前草稿已保留' })
+  }
   const handoffId = randomUUID()
   const cursor = screen.getCursorScreenPoint()
   const display = screen.getDisplayNearestPoint(cursor)
@@ -540,6 +547,11 @@ export function reportWindowSessions(sender: WebContents, input: unknown): void 
   if (!record) throw new Error('仅 Profer 主应用窗口可以上报会话')
   record.sessions = normalizeWindowSessions(input)
   record.sessionsReported = true
+  if (!record.handoffId && record.initialTab && !ownsSession(record, record.initialTab)) record.initialTab = null
+  // 源窗口收到 commit 后必须确实摘除标签；保留新编辑/新挂载的子树不能谎报搬迁成功。
+  for (const move of pendingDetaches.values()) {
+    if (move.source === sender && !ownsSession(record, move.session)) move.done()
+  }
   notifyMainAppWindowsChanged()
 }
 
@@ -565,6 +577,36 @@ export function confirmWindowBootstrap(sender: WebContents, handoffId?: string):
   record.completeBootstrap?.({ ok: true })
 }
 
+function ownsSession(record: MainAppWindowRecord | null | undefined, session: AppWindowSession): boolean {
+  return !!record?.sessions.some(item => item.type === session.type && item.sessionId === session.sessionId)
+}
+
+/** 不使用过期上报把实际窗口切到另一个 Core；原始（无 namespace）ID 只属于本机。 */
+function sessionRoute(sender: WebContents, session: AppWindowSession): WindowMoveCore | undefined {
+  if (!getRecordBySender(sender)) return
+  const state = runCoreWindow(sender.id, listCoreTargets)
+  const target = state.targets.find(item => item.id === state.currentId)
+  if (!target || state.startup === 'restoring' || state.startup === 'offline') return
+  if (/^core(?:-chat)?:/.test(session.sessionId)) {
+    const match = /^(core|core-chat):([^:]+):(.+)$/.exec(session.sessionId)
+    if (!match || (match[1] === 'core') !== (session.type === 'agent') || target.status !== 'connected') return
+    try { if (decodeURIComponent(match[2]!) !== target.coreId) return } catch { return }
+  } else if (target.id !== 'local') return
+  return { targetId: target.id, coreId: target.coreId, generation: state.generation }
+}
+
+function sameRoute(current: WindowMoveCore | undefined, expected: WindowMoveCore): boolean {
+  return !!current && current.targetId === expected.targetId && current.coreId === expected.coreId && current.generation === expected.generation
+}
+
+function findOtherOwners(sender: WebContents | undefined, session: AppWindowSession): BrowserWindow[] {
+  return BrowserWindow.getAllWindows().filter(win => {
+    if (win.isDestroyed() || win.webContents === sender) return false
+    const record = getRecordBySender(win.webContents)
+    return !!record && !record.handoffId && ownsSession(record, session) && !!sessionRoute(win.webContents, session)
+  })
+}
+
 export async function focusWindowForSession(
   sender: WebContents, input: unknown,
   resolveTab: (session: AppWindowSession) => MainWindowTabPayload | null | Promise<MainWindowTabPayload | null>,
@@ -572,19 +614,173 @@ export async function focusWindowForSession(
   if (!getRecordBySender(sender)) throw new Error('仅 Profer 主应用窗口可以聚焦会话')
   const [session] = normalizeWindowSessions([input])
   if (!session) return false
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents === sender) continue
-    const record = records.get(win.webContents.id)
-    if (!record || record.isPrimary || !record.sessions.some(item => item.type === session.type && item.sessionId === session.sessionId)) continue
-    await runCoreWindow(win.webContents.id, () => selectCoreForWindowSession(session.sessionId))
-    const generation = runCoreWindow(win.webContents.id, getCoreTargetGeneration)
-    const payload = await runCoreWindow(win.webContents.id, () => resolveTab(session))
-    if (win.isDestroyed() || runCoreWindow(win.webContents.id, getCoreTargetGeneration) !== generation) return false
-    if (!payload || !focusSessionWindow(record.id)) continue
-    win.webContents.send(IPC_CHANNELS.WINDOW_REATTACH_TAB, payload)
+  const origin = sessionRoute(sender, session)
+  if (!origin) return false
+  for (const win of findOtherOwners(sender, session)) {
+    const target = win.webContents
+    const route = sessionRoute(target, session)!
+    const payload = await runCoreWindow(target.id, () => resolveTab(session))
+    if (!sameRoute(sessionRoute(sender, session), origin)) return false
+    if (!payload || win.isDestroyed() || !sameRoute(sessionRoute(target, session), route)) continue
+    const record = getRecordBySender(target)
+    if (!record || !ownsSession(record, session) || !focusSessionWindow(record.id)) continue
+    target.send(IPC_CHANNELS.WINDOW_REATTACH_TAB, payload)
     return true
   }
   return false
+}
+
+const movingSessions = new Set<string>()
+const incomingMoves = new Map<number, string>()
+const pendingDetaches = new Map<string, { source: WebContents; session: AppWindowSession; done: () => void }>()
+const moveReplies = new Map<string, { sender: WebContents; reply: (value: unknown) => void }>()
+
+export function replyToWindowMove(sender: WebContents, id: unknown, value: unknown): void {
+  if (typeof id !== 'string' || !getRecordBySender(sender)) return
+  const waiting = moveReplies.get(id)
+  if (waiting?.sender === sender) waiting.reply(value)
+}
+
+/** 仅指定窗口可答复；reload、关闭、崩溃和超时都清理待决请求。 */
+function askMoveWindow(sender: WebContents, channel: string, request: PrepareWindowSessionMove | AcceptWindowSessionMove, signal: AbortSignal): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const finish = (fn: () => void): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', abort)
+      moveReplies.delete(request.handoffId)
+      fn()
+    }
+    const abort = (): void => finish(() => reject(new Error('交接窗口已关闭或重新加载')))
+    const timer = setTimeout(() => finish(() => reject(new Error('窗口未及时确认交接'))), 10_000)
+    if (signal.aborted) { abort(); return }
+    signal.addEventListener('abort', abort, { once: true })
+    moveReplies.set(request.handoffId, { sender, reply: value => finish(() => resolve(value)) })
+    try { sender.send(channel, request) } catch (error) { finish(() => reject(error)) }
+  })
+}
+
+/** 源窗口持有原标签直到目标明确接受并上报归属；旧响应和其他窗口无权提交。 */
+export async function moveSessionToThisWindow(
+  destination: WebContents, input: unknown,
+  isChatActive: (sessionId: string) => Promise<boolean> | boolean,
+): Promise<WindowMoveResult> {
+  try {
+    const [session] = normalizeWindowSessions([input])
+    const destRecord = getRecordBySender(destination)
+    if (!session || !destRecord || destRecord.handoffId) throw new Error('目标窗口不可用')
+    if (ownsSession(destRecord, session)) throw new Error('此会话已在当前窗口打开')
+    const destCore = sessionRoute(destination, session)
+    if (!destCore) throw new Error('目标窗口 Core 不匹配或尚未就绪')
+    const owners = findOtherOwners(destination, session)
+    if (owners.length !== 1) throw new Error(owners.length ? '会话在多个窗口中打开，无法确定草稿来源' : '源窗口已关闭或不再持有会话')
+    const source = owners[0]!.webContents
+    const sourceCore = sessionRoute(source, session)!
+    if (sourceCore.targetId !== destCore.targetId || sourceCore.coreId !== destCore.coreId) throw new Error('交接窗口的 Core 不匹配')
+    const key = `${sourceCore.coreId ?? sourceCore.targetId}:${session.type}:${session.sessionId}`
+    if (movingSessions.has(key) || incomingMoves.has(destination.id) || pending.has(key)) throw new Error('会话正在移窗')
+    const handoffId = randomUUID()
+    const controller = new AbortController()
+    let sourceGone = false
+    const abortSource = (): void => { sourceGone = true; controller.abort() }
+    const abortTarget = (): void => controller.abort()
+    const stopSource = watchMoveWindow(source, abortSource)
+    const stopTarget = watchMoveWindow(destination, abortTarget)
+    const guard = (): void => {
+      if (controller.signal.aborted || !sameRoute(sessionRoute(destination, session), destCore)
+        || !sameRoute(sessionRoute(source, session), sourceCore) || !ownsSession(getRecordBySender(source), session)) {
+        throw new Error('窗口、会话归属或 Core 已变更，未完成交接')
+      }
+    }
+    const guardStream = async (): Promise<void> => {
+      if (session.type === 'chat' && await runCoreWindow(source.id, () => isChatActive(session.sessionId))) throw new Error('生成中的 Chat 暂不支持移窗')
+      guard()
+    }
+    let tab: MainWindowTabPayload | null = null
+    movingSessions.add(key)
+    incomingMoves.set(destination.id, session.sessionId)
+    let buffered = false
+    let releaseSent = false
+    try {
+      await guardStream()
+      const snapshot = await askMoveWindow(source, IPC_CHANNELS.WINDOW_MOVE_PREPARE, { handoffId, session, core: sourceCore }, controller.signal)
+      if (!snapshot || typeof snapshot !== 'object' || !('tab' in snapshot)) throw new Error(moveError(snapshot, '源窗口无法交付会话'))
+      const raw = snapshot.tab
+      tab = normalizeInitialTab(raw)
+      if (!raw || typeof raw !== 'object' || !tab || tab.type !== session.type || tab.sessionId !== session.sessionId
+        || !('id' in raw) || raw.id !== tab.id || ('draft' in raw && raw.draft !== '' && raw.draft !== tab.draft)
+        || ('draftHtml' in raw && raw.draftHtml !== '' && raw.draftHtml !== tab.draftHtml) || ('parentSessionId' in raw && raw.parentSessionId !== tab.parentSessionId)) {
+        tab = null
+        throw new Error('无法完整移交此标签或草稿，已保留源标签')
+      }
+      await guardStream()
+      if (ownsSession(destRecord, session)) throw new Error('目标窗口已打开此会话')
+      beginWindowHandoff(destination.id, session.sessionId)
+      buffered = true
+      const result = await askMoveWindow(destination, IPC_CHANNELS.WINDOW_MOVE_ACCEPT, { handoffId, tab, core: destCore }, controller.signal)
+      if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) throw new Error(moveError(result, '目标窗口未接受会话'))
+      await guardStream()
+      if (!ownsSession(destRecord, session)) throw new Error('目标窗口未确认会话归属')
+      const event: WindowTabHandoffEvent = { handoffId, sourceCore, sourceGeneration: sourceCore.generation, existingWindowMove: true, tab, status: 'committed' }
+      releaseSent = true
+      await confirmSourceDetach(source, event, controller.signal)
+      if (!sameRoute(sessionRoute(destination, session), destCore) || !ownsSession(destRecord, session)) throw new Error('目标窗口或 Core 已变化')
+      incomingMoves.delete(destination.id)
+      if (tab.type === 'agent' && !tab.sessionId.startsWith('core:')) {
+        runCoreWindow(destination.id, () => localHandoffRestore?.(destination, session.sessionId))
+      }
+      finishWindowHandoff(destination, true)
+      buffered = false
+      return { ok: true }
+    } catch (error) {
+      // 源已关/刷新且目标未确认时仍托管最后一次完整草稿，复用既有恢复通道。
+      if (tab && (sourceGone || source.isDestroyed() || (releaseSent && !ownsSession(getRecordBySender(source), session))
+        || (releaseSent && controller.signal.aborted))) {
+        recoverable.set(handoffId, { handoffId, sourceCore, tab, status: 'failed', error: '窗口状态已改变，交接未完成' })
+      }
+      throw error
+    } finally {
+      if (buffered) finishWindowHandoff(destination, false)
+      incomingMoves.delete(destination.id)
+      stopSource()
+      stopTarget()
+      movingSessions.delete(key)
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : '移窗失败' }
+  }
+}
+
+function confirmSourceDetach(source: WebContents, event: WindowTabHandoffEvent, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const finish = (callback: () => void): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', abort)
+      pendingDetaches.delete(event.handoffId)
+      callback()
+    }
+    const abort = (): void => finish(() => reject(new Error('交接窗口已关闭或重新加载')))
+    const timer = setTimeout(() => finish(() => reject(new Error('目标已收到会话，但源标签未移除；请检查是否有新草稿或子会话'))), 5_000)
+    if (signal.aborted) { abort(); return }
+    signal.addEventListener('abort', abort, { once: true })
+    pendingDetaches.set(event.handoffId, { source, session: event.tab, done: () => finish(resolve) })
+    try { source.send(IPC_CHANNELS.WINDOW_TAB_HANDOFF, event) } catch (error) { finish(() => reject(error)) }
+  })
+}
+
+function watchMoveWindow(contents: WebContents, abort: () => void): () => void {
+  contents.once('destroyed', abort)
+  contents.once('render-process-gone', abort)
+  contents.once('did-start-loading', abort)
+  return () => {
+    contents.removeListener('destroyed', abort)
+    contents.removeListener('render-process-gone', abort)
+    contents.removeListener('did-start-loading', abort)
+  }
+}
+
+function moveError(value: unknown, fallback: string): string {
+  return value && typeof value === 'object' && 'error' in value && typeof value.error === 'string'
+    ? value.error.slice(0, 300) || fallback : fallback
 }
 
 /** 活着的次级窗口是否仍实际承载指定会话（不消费 bootstrap 草稿）。 */
@@ -598,7 +794,7 @@ export function isSecondaryWindowSessionOwner(sender: WebContents | null, sessio
 /** 恢复请求先安装 listener，但 pending 本机流只在确认时回放一次。 */
 export function isWindowTabHandoffPending(sender: WebContents, sessionId: string): boolean {
  const record = getRecordBySender(sender)
- return !!record?.handoffId && record.initialTab?.sessionId === sessionId
+ return incomingMoves.get(sender.id) === sessionId || (!!record?.handoffId && record.initialTab?.sessionId === sessionId)
 }
 
 let localHandoffRestore: ((sender: WebContents, sessionId: string) => void) | undefined

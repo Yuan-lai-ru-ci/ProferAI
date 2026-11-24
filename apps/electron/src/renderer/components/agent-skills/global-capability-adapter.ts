@@ -103,7 +103,7 @@ export const globalCapabilityPreloadAdapter: GlobalCapabilityAdapter = {
 
   async delete(item) {
     if (item.domain === 'skill') {
-      await window.electronAPI.globalSkill.deleteUser(item.id)
+      await window.electronAPI.globalSkill.deleteUser(item.id, `delete:${item.id}`)
       return
     }
     await window.electronAPI.deleteGlobalAgentPreset({ presetId: item.id, presetScope: item.scope })

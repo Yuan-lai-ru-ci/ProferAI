@@ -4,24 +4,22 @@
  * 浏览器内部标签（每个网页）与顶栏 Tab 一一对应：`__browser__:${sessionId}:${tabId}`。
  * - reconcile：以主进程推送的 BrowserViewState 为准，增删/改标题同步顶栏 Tab；
  *   主进程会话销毁（state.tabs 为空）时该会话全部浏览器 Tab 消失。
- * - 手动打开 = 清除 dismissed 标记 + reconcile + 激活当前页 Tab；
- * - Agent 推送默认只更新已打开页面的标题/关闭状态，不新增页签或改变分屏；
- *   用户可主动打开后台页；已显示页面的新窗口链接仍能接管原 Pane。
- * - 关闭顶栏 Tab = 关闭对应网页（useCloseTab 调 closeAgentBrowserTab）；
- *   用户关掉该会话最后一个浏览器 Tab 时记入 dismissed，推送不再自动重开。
+ * - Agent 的真实网页始终有独立页签；页签同步与焦点、分屏互不绑定。
+ * - 用户点击已有可见页的新窗口链接时，新页可沿用原栏；关闭页签关闭实际网页。
  */
 
 import { getDefaultStore, useStore } from 'jotai'
 import {
   activeTabIdAtom,
   createBrowserTabId,
+  closeTab,
+  tabMruAtom,
   isBrowserTab,
   openTab,
   tabsAtom,
   type TabItem,
 } from '@/atoms/tab-atoms'
-import { browserPanelDismissedSessionIdsAtom } from '@/atoms/browser-atoms'
-import { findTabGroup, groupTabIds, planAutoGroupWorkTab, planReplaceGroupMember, tabGroupsAtom } from '@/atoms/tab-group-atoms'
+import { findTabGroup, groupTabIds, planReplaceGroupMember, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 import { appModeAtom } from '@/atoms/app-mode'
 import { activeViewAtom, type ActiveView } from '@/atoms/active-view'
 import { currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
@@ -33,16 +31,12 @@ type JotaiStore = ReturnType<typeof useStore>
 /**
  * 浏览器 Tab 同步（纯函数）：按主进程状态增删顶栏 Tab、同步标题。
  *
- * @param dismissed 为 true 时不新增 Tab（用户已手动收掉该会话的浏览器页），
- *                  但仍会移除已不存在的页并同步既有 Tab 标题。
  * @returns 同步后的 tabs（无变化时返回原数组引用）
  */
 export function planBrowserTabReconcile(
   tabs: readonly TabItem[],
   sessionId: string,
   state: BrowserViewState,
-  dismissed: boolean,
-  newTabIds?: ReadonlySet<string>,
 ): TabItem[] {
   const desired = new Map(state.tabs.map((tab) => [createBrowserTabId(sessionId, tab.tabId), tab]))
   let next = tabs.filter((tab) => {
@@ -63,34 +57,31 @@ export function planBrowserTabReconcile(
       }
       continue
     }
-    if (dismissed || (newTabIds && !newTabIds.has(page.tabId))) continue
-    const result = openTab(next, {
+    next = openTab(next, {
       type: 'browser',
       sessionId,
       title,
       browserTabId: page.tabId,
-    })
-    next = result.tabs
+    }).tabs
     changed = true
   }
   return changed ? next : (tabs as TabItem[])
 }
 
-/** 当前激活页对应的顶栏 Tab id；无激活页时返回 null。 */
-export function activeBrowserTopTabId(sessionId: string, state: BrowserViewState): string | null {
-  return state.activeTabId ? createBrowserTabId(sessionId, state.activeTabId) : null
-}
-
-/**
- * 按浏览器状态推送同步顶栏 Tab（所有推送路径共用）。
- * @returns 激活页的顶栏 Tab id（不存在时 null）
- */
-export function reconcileBrowserTabs(store: JotaiStore, state: BrowserViewState, newTabIds?: ReadonlySet<string>): string | null {
-  const dismissed = store.get(browserPanelDismissedSessionIdsAtom).has(state.sessionId)
+function reconcileBrowserTabs(store: JotaiStore, state: BrowserViewState): void {
   const tabs = store.get(tabsAtom)
-  const next = planBrowserTabReconcile(tabs, state.sessionId, state, dismissed, newTabIds)
-  if (next !== tabs) store.set(tabsAtom, next)
-  return activeBrowserTopTabId(state.sessionId, state)
+  const next = planBrowserTabReconcile(tabs, state.sessionId, state)
+  if (next === tabs) return
+  store.set(tabsAtom, next)
+  const activeId = store.get(activeTabIdAtom)
+  const removed = tabs.find(tab => tab.id === activeId && isBrowserTab(tab) && tab.sessionId === state.sessionId)
+  if (removed && !next.some(tab => tab.id === activeId)) {
+    // 正在看的页被关闭时不能留一个悬空的 activeId；优先回到用户原本看到的另一栏。
+    const otherPane = groupTabIds(findTabGroup(store.get(tabGroupsAtom), activeId)).find(id => next.some(tab => tab.id === id))
+    const fallback = otherPane ?? next.find(tab => tab.id === state.sessionId)?.id
+      ?? closeTab([...next, removed], activeId, removed.id, store.get(tabMruAtom)).activeTabId
+    store.set(activeTabIdAtom, fallback)
+  }
 }
 
 /**
@@ -124,7 +115,7 @@ function followReplacedBrowserPage(
   if (plan.activeTabId !== activeTabId) store.set(activeTabIdAtom, plan.activeTabId)
 }
 
-/** 只有当前可见的用户页内新窗口链接可以隐式创建对应 UI；后台新页无展示权。 */
+/** 只有当前可见的用户页内新窗口链接可以接管原栏；Agent 新页只新增顶栏页签。 */
 function shouldFollowNewDisplayPage(store: JotaiStore, state: BrowserViewState, previousState: BrowserViewState | null): boolean {
   if (!previousState || previousState.sessionId !== state.sessionId) return false
   if (!previousState.activeTabId || previousState.activeTabId === state.activeTabId) return false
@@ -138,34 +129,16 @@ function shouldFollowNewDisplayPage(store: JotaiStore, state: BrowserViewState, 
     || groupTabIds(findTabGroup(store.get(tabGroupsAtom), activeTabId)).includes(previousTopId)
 }
 
-/**
- * 被动同步浏览器状态。autoOpen 时新增页面并在侧边自动建组展示；否则只同步已有页面。
- * 用户正在查看的页面内新链接仍可接管原 Pane，但后台会话不能改变当前布局。
- */
+/** 所有实际页面（含其他会话的页面）都可在顶栏找到；新增页签不等于选中或分屏。 */
 export function openBrowserTabFromPush(
   state: BrowserViewState,
-  options?: { autoOpen?: boolean; autoGroup?: boolean; previousState?: BrowserViewState | null },
+  previousState: BrowserViewState | null = null,
 ): void {
   const store = getDefaultStore()
-  const sessionId = state.sessionId
-  // 只处理当前会话：后台会话的页面变化等切回时由 getState 恢复路径统一对账，
-  // 避免非当前会话的推送动顶栏布局。
-  if (store.get(appModeAtom) !== 'agent' || store.get(activeViewAtom) !== 'conversations' || sessionId !== store.get(currentAgentSessionIdAtom)) return
-  // 自动组合仅发生在页面首次进入顶栏时；已有页的状态刷新不能撤销用户的解散/排序。
-  const hadBrowserTabs = store.get(tabsAtom).some((tab) => isBrowserTab(tab) && tab.sessionId === sessionId)
-  const previousState = options?.previousState ?? null
-  const followNewPage = shouldFollowNewDisplayPage(store, state, previousState)
-  const newTabIds = options?.autoOpen ? undefined : new Set(followNewPage ? [state.activeTabId] : [])
-  const topTabId = reconcileBrowserTabs(store, state, newTabIds)
-  if (followNewPage) followReplacedBrowserPage(store, state, previousState)
-  if (!options?.autoOpen || !topTabId || options.autoGroup === false || hadBrowserTabs) return
-  const next = planAutoGroupWorkTab({
-    groups: store.get(tabGroupsAtom),
-    agentTabId: sessionId,
-    workTabId: topTabId,
-    activeTabId: store.get(activeTabIdAtom),
-  })
-  if (next) store.set(tabGroupsAtom, next)
+  const followUserLink = store.get(appModeAtom) === 'agent' && store.get(activeViewAtom) === 'conversations'
+    && state.sessionId === store.get(currentAgentSessionIdAtom) && shouldFollowNewDisplayPage(store, state, previousState)
+  reconcileBrowserTabs(store, state)
+  if (followUserLink) followReplacedBrowserPage(store, state, previousState)
 }
 
 /** 用户动作发起时的界面位置；异步结果不能将用户从后来切换到的界面拉回。 */
@@ -184,8 +157,8 @@ export function captureBrowserOpenIntent(sessionId: string, sourcePageId?: strin
   }
 }
 
-/** 手动打开/聚焦页面，保留同栏分屏；可附带发起意图，拒绝过期的异步唤起。 */
-export function openBrowserTabManually(sessionId: string, state: BrowserViewState, browserTabId?: string, intent?: BrowserOpenIntent): void {
+/** 手动打开/聚焦页面，保留同栏分屏；必须校验发起意图，拒绝过期的异步唤起。 */
+export function openBrowserTabManually(sessionId: string, state: BrowserViewState, browserTabId: string | undefined, intent: BrowserOpenIntent): void {
   const store = getDefaultStore()
   const targetPageId = browserTabId ?? state.activeTabId
   if (!state.tabs.some((page) => page.tabId === targetPageId)) return
@@ -193,21 +166,14 @@ export function openBrowserTabManually(sessionId: string, state: BrowserViewStat
   const currentActiveId = store.get(activeTabIdAtom)
   const currentGroup = findTabGroup(store.get(tabGroupsAtom), currentActiveId)
   const visibleIds = new Set([currentActiveId, ...groupTabIds(currentGroup)])
-  if (intent) {
-    if (store.get(appModeAtom) !== 'agent' || store.get(currentAgentSessionIdAtom) !== sessionId
-      || store.get(activeViewAtom) !== intent.activeView || intent.activeView !== 'conversations') return
-    // 实时推送可能已先将同一用户动作的新页接管到原栏；不把正常接管误判成过期。
-    const alreadyVisible = visibleIds.has(topTabId)
-    if (!alreadyVisible && (currentActiveId !== intent.activeTabId || (intent.sourceTabId && !visibleIds.has(intent.sourceTabId)))) return
-  }
-  store.set(browserPanelDismissedSessionIdsAtom, (prev) => {
-    if (!prev.has(sessionId)) return prev
-    const next = new Set(prev)
-    next.delete(sessionId)
-    return next
-  })
-  reconcileBrowserTabs(store, state)
-  if (intent?.sourceTabId && intent.sourceTabId !== topTabId) {
+  // open/create/select 均先推送页签，再返回结果。旧回包不能重建已关闭的页面。
+  if (!store.get(tabsAtom).some(tab => tab.id === topTabId)) return
+  if (store.get(appModeAtom) !== 'agent' || store.get(currentAgentSessionIdAtom) !== sessionId
+    || store.get(activeViewAtom) !== intent.activeView || intent.activeView !== 'conversations') return
+  // 实时推送可能已先将同一用户动作的新页接管到原栏；不把正常接管误判成过期。
+  const alreadyVisible = visibleIds.has(topTabId)
+  if (!alreadyVisible && (currentActiveId !== intent.activeTabId || (intent.sourceTabId && !visibleIds.has(intent.sourceTabId)))) return
+  if (intent.sourceTabId && intent.sourceTabId !== topTabId) {
     const groups = store.get(tabGroupsAtom)
     const plan = planReplaceGroupMember({ groups, previousTabId: intent.sourceTabId, nextTabId: topTabId, activeTabId: currentActiveId })
     if (plan) {

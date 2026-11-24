@@ -13,6 +13,7 @@ import { existsSync, readFileSync, mkdirSync, copyFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import {
+  createEffectiveAgentPresetPolicy,
   AGENT_PRESET_SUPPRESS_KEYS,
   AGENT_PRESET_TOOL_GROUPS,
   AGENT_PRESET_TOOL_GROUP_SUPPRESS_MAP,
@@ -937,7 +938,11 @@ export function rebindAgentSessionPreset(sessionId: string, reference: PresetRef
     : undefined
   const normalized = normalizePresetReference(reference, workspaceSlug)
   const preset = resolvePresetReference(normalized, workspaceSlug)
-  return updateAgentSessionMeta(sessionId, { presetId: preset.id, presetReference: normalized })
+  return updateAgentSessionMeta(sessionId, {
+    presetId: preset.id, presetReference: normalized,
+    permissionMode: createEffectiveAgentPresetPolicy(preset, normalized).permissionMode,
+    permissionModeSource: 'preset',
+  })
 }
 
 /** 自动任务预设改绑；undefined/空引用表示跟随工作区默认。 */

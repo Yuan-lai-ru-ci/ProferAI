@@ -14,7 +14,8 @@ import { BriefcaseBusiness, AlertTriangle, Loader2, Settings2 } from 'lucide-rea
 import { AgentComposerToolMenuItem, AgentComposerToolPopover, AgentComposerToolTrigger } from '@/components/ai-elements/composer/ComposerTool'
 import { Switch } from '@profer/ui/primitives/switch'
 import { coreScopedPresetCacheKey, agentPresetsLoadedAtom, workspacePresetsAtom } from '@/atoms/agent-preset-atoms'
-import { agentSessionsAtom, workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
+import { workspaceCapabilitiesVersionAtom } from '@/atoms/agent-atoms'
+import { applyAuthoritativeSessionPermission } from '@/lib/agent-session-permission'
 import { coreTargetsAtom } from '@/atoms/core-target-atoms'
 import type { AgentEffort, AgentPreset, PresetReference, ProferPermissionMode } from '@profer/shared'
 import { cn } from '@/lib/utils'
@@ -69,7 +70,6 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
   const [internalOpen, setInternalOpen] = React.useState(false)
   const [switchingReference, setSwitchingReference] = React.useState<PresetReference | null>(null)
   const isOpen = open ?? internalOpen
-  const setAgentSessions = useSetAtom(agentSessionsAtom)
   const { pending, mutate } = useSessionSettingMutation()
   // 记住上次选择的「极简」紧凑显示偏好（localStorage 惰性初始化）
   const [compactMode, setCompactMode] = React.useState<boolean>(readStoredCompactMode)
@@ -134,7 +134,7 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
       await mutate({
       execute: () => rebindComposerPreset(sessionId, reference, persistedRevision),
       applyAuthoritative: (updated) => {
-        setAgentSessions((prev) => prev.map((session) => (session.id === sessionId ? updated : session)))
+        applyAuthoritativeSessionPermission(store, updated)
         closeMenu()
         requestAnimationFrame(() => document.querySelector<HTMLElement>('.ProseMirror')?.focus())
         toast.success(`已切换到「${preset.name}」`, { description: '将在下一轮消息中生效' })
@@ -148,7 +148,7 @@ export function PresetSelector({ sessionId, persistedPresetId, persistedPresetRe
     } finally {
       setSwitchingReference(null)
     }
-  }, [closeMenu, mutate, persistedPresetId, persistedPresetReference, persistedRevision, sessionId, setAgentSessions, switchingReference, workspaceSlug])
+  }, [closeMenu, mutate, persistedPresetId, persistedPresetReference, persistedRevision, sessionId, store, switchingReference, workspaceSlug])
 
   return (
     <AgentComposerToolPopover

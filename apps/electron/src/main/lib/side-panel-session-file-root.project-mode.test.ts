@@ -1,12 +1,4 @@
-/**
- * 「会话文件」必须绑定到会话私有目录（storageDir），不是 UI 根。
- *
- * project 下 `sessionPath` 是项目根（相对路径基准）。若拿它当会话文件根：
- * - 所有会话看到同一批文件（互通）
- * - 用户上传到会话目录（storageDir）的文件看不到
- *
- * 这是一个源码守卫：SidePanel 的会话 Tab 必须用 `sessionFileRoot`（storageDir 优先）。
- */
+/** 会话文件必须绑定私有根：Core 工作台或 legacy storageDir，不是项目 UI 根。 */
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -17,9 +9,9 @@ const source = readFileSync(
 )
 
 describe('SidePanel 会话文件根', () => {
-  test('会话文件根优先取 storageDir，sessionPath 只作兜底', () => {
+  test('Core 使用工作台，legacy 优先 storageDir 而不是项目 UI 根', () => {
     expect(source).toContain('getAgentSessionStoragePath')
-    expect(source).toContain('const sessionFileRoot = isRemoteCore ? (coreFileRoots?.sessionStorage ?? null) : (sessionStoragePath ?? effectiveSessionPath)')
+    expect(source).toContain('const sessionFileRoot = hasCoreFiles ? (coreFileRoots?.workbench ?? null) : (sessionStoragePath ?? effectiveSessionPath)')
   })
 
   test('会话 Tab 的文件浏览器与搜索都用 sessionFileRoot', () => {
@@ -29,6 +21,14 @@ describe('SidePanel 会话文件根', () => {
 
   test('会话 Tab 不再直接拿 sessionPath 当文件根', () => {
     expect(source).not.toContain('<FileBrowser rootPath={sessionPath}')
+  })
+
+  test('本机 Core 不按远程标志误走旧目录；根失败可见且切会话清空旧树', () => {
+    expect(source).toContain('const hasCoreFiles = ownsCoreResources(target)')
+    expect(source).toContain('key={`${target.currentId}:${target.generation}:${props.sessionId}`}')
+    expect(source).toContain('{...(hasCoreFiles ? { loadDirectory: loadCoreDirectory, fileOps: coreFileOps } : {})}')
+    expect(source).toContain("role={fileRootsError ? 'alert' : undefined}")
+    expect(source).toContain('effectiveSessionPath, sessionFileRoot, workspaceFilesPath')
   })
 
   test('面包屑跟随会话文件根', () => {

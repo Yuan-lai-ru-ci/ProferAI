@@ -10,7 +10,7 @@
  */
 
 import { useStore } from 'jotai'
-import { toast } from 'sonner'
+import { navigateWindowSession } from './app-windows'
 import { activeTabIdAtom, openTab, tabsAtom } from '@/atoms/tab-atoms'
 import { createGroup, findTabGroup, replaceTabGroup, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 
@@ -22,40 +22,35 @@ type JotaiStore = ReturnType<typeof useStore>
  *
  * @param autoGroup 为 true 且父/分支都未入组时，建立左右并排组合
  * （父会话左、分支右，焦点在分支）；用户已有布局时保持不动。
- * @returns 分支 Tab id（即分支 sessionId）
  */
 export function openExplorationBranchTab(
   store: JotaiStore,
   parentSessionId: string,
   branch: { sessionId: string; title: string },
   options: { autoGroup?: boolean } = {},
-): string {
-  // 独立会话窗口没有 Tab 栏；分支 Tab 只能回主窗口打开。
-  if (typeof window !== 'undefined' && window.location?.search?.includes('window=session')) {
-    toast.info('独立窗口暂不支持打开分支 Tab，请在主窗口打开')
-    return branch.sessionId
-  }
-  const tabs = store.get(tabsAtom)
-  const result = openTab(tabs, {
-    type: 'agent',
-    sessionId: branch.sessionId,
-    title: branch.title,
-    parentSessionId,
-  })
-  store.set(tabsAtom, result.tabs)
-  store.set(activeTabIdAtom, result.activeTabId)
+): void {
+  navigateWindowSession(store, { type: 'agent', sessionId: branch.sessionId }, () => {
+    const tabs = store.get(tabsAtom)
+    const result = openTab(tabs, {
+      type: 'agent',
+      sessionId: branch.sessionId,
+      title: branch.title,
+      parentSessionId,
+    })
+    store.set(tabsAtom, result.tabs)
+    store.set(activeTabIdAtom, result.activeTabId)
 
-  if (options.autoGroup === true) {
-    const groups = store.get(tabGroupsAtom)
-    const parentTabExists = result.tabs.some((tab) => tab.id === parentSessionId)
-    if (
-      parentTabExists
-      && !findTabGroup(groups, parentSessionId)
-      && !findTabGroup(groups, branch.sessionId)
-    ) {
-      const group = createGroup(parentSessionId, branch.sessionId, branch.sessionId)
-      if (group) store.set(tabGroupsAtom, replaceTabGroup(groups, null, group))
+    if (options.autoGroup === true) {
+      const groups = store.get(tabGroupsAtom)
+      const parentTabExists = result.tabs.some((tab) => tab.id === parentSessionId)
+      if (
+        parentTabExists
+        && !findTabGroup(groups, parentSessionId)
+        && !findTabGroup(groups, branch.sessionId)
+      ) {
+        const group = createGroup(parentSessionId, branch.sessionId, branch.sessionId)
+        if (group) store.set(tabGroupsAtom, replaceTabGroup(groups, null, group))
+      }
     }
-  }
-  return branch.sessionId
+  })
 }

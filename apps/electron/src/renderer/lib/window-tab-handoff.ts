@@ -1,12 +1,14 @@
 import type { createStore } from 'jotai/vanilla';
 import type { MainWindowTabPayload, WindowTabHandoffEvent } from '@profer/shared';
 import { coreSessionNavigationPhaseAtom, coreTargetsAtom } from '../atoms/core-target-atoms';
-import { tabsAtom, openTab } from '../atoms/tab-atoms';
+import { tabsAtom, openTab, type TabItem } from '../atoms/tab-atoms';
 import { agentSessionDraftsAtom, agentSessionDraftHtmlAtom } from '../atoms/agent-atoms';
 import { conversationDraftsAtom } from '../atoms/chat-atoms';
 import { toast } from 'sonner';
+import { clearMovedDraft, detachMovedTab, matchesMoveCore, sameMovedSnapshot, snapshotSessionForMove, type SyncMovedTab } from './window-session-move';
 type Store = ReturnType<typeof createStore>;
 interface Pending {
+    source?: { generation: number; item: TabItem; sync: SyncMovedTab };
     tab: MainWindowTabPayload;
 }
 const states = new WeakMap<Store, {
@@ -37,11 +39,20 @@ export function receiveHandoff(store: Store, event: WindowTabHandoffEvent, recov
     if (event.status === 'committed') {
         if (!pending)
             return;
-        const atom = tab.type === 'agent' ? agentSessionDraftsAtom : conversationDraftsAtom;
-        store.set(atom, previous => { if (previous.get(tab.sessionId) !== tab.draft)
-            return previous; const next = new Map(previous); next.delete(tab.sessionId); return next; });
-        store.set(agentSessionDraftHtmlAtom, previous => { if (tab.type !== 'agent' || previous.get(tab.sessionId) !== tab.draftHtml)
-            return previous; const next = new Map(previous); next.delete(tab.sessionId); return next; });
+        if (pending.source) {
+            if (!matchesMoveCore(store, { ...event.sourceCore, generation: pending.source.generation })) {
+                finish(store, event.handoffId);
+                return;
+            }
+            const current = snapshotSessionForMove(store, tab);
+            if (!store.get(tabsAtom).includes(pending.source.item) || !('tab' in current) || !sameMovedSnapshot(tab, current.tab)) {
+                toast.warning('会话已送达目标窗口，但源窗口内容已变化，原标签已保留');
+                finish(store, event.handoffId);
+                return;
+            }
+            detachMovedTab(store, tab, pending.source.sync);
+        }
+        clearMovedDraft(store, tab);
     }
     else {
         const core = store.get(coreTargetsAtom);
@@ -79,11 +90,11 @@ function finish(store: Store, id: string): void {
     if (value.done.size > 256)
         value.done.delete(value.done.values().next().value!);
 }
-export function trackHandoff(store: Store, id: string, tab: MainWindowTabPayload, _coreId: string): void {
+export function trackHandoff(store: Store, id: string, tab: MainWindowTabPayload, _coreId: string, source?: Pending['source']): void {
     const value = state(store);
     if (value.done.has(id))
         return;
-    value.pending.set(id, { tab });
+    value.pending.set(id, { tab, source });
     const event = value.events.get(id);
     if (event) {
         value.events.delete(id);

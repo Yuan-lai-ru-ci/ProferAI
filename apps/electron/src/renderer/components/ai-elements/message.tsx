@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { userMessagePositionAtom } from '@/atoms/ui-preferences'
 import { normalizeLatexDelimiters } from '@/lib/normalize-latex'
 import { normalizeMarkdownEmphasisWhitespace } from '@/lib/normalize-markdown-emphasis'
+import { remarkCjkEmphasis } from '@/lib/remark-cjk-emphasis'
 import { getFileBaseName } from '@/lib/file-utils'
 import { Button } from '@profer/ui/primitives/button'
 import { ImageLightbox } from '@profer/ui/primitives/image-lightbox'
@@ -516,7 +517,7 @@ interface MessageResponseProps {
 }
 
 /** 稳定引用的插件数组，避免 react-markdown 每帧重建插件管线 */
-const REMARK_PLUGINS = [remarkGfm, remarkMath]
+const REMARK_PLUGINS = [remarkGfm, remarkMath, remarkCjkEmphasis]
 // Agent 输出偶尔会把中文说明或标点放入数学分隔符；这类 KaTeX strict 警告不影响渲染，
 // 且在流式更新时会重复刷屏，因此仅对 Markdown 消息关闭该诊断。
 const REHYPE_PLUGINS: NonNullable<React.ComponentProps<typeof Markdown>['rehypePlugins']> = [

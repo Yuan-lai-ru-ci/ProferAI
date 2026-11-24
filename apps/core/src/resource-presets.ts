@@ -1,11 +1,11 @@
 import { lists, validateFields, preset, reference, globalConfig } from './resource-preset-validation'
 import { assertSafeSkillSegment } from '@profer/agent-provider-pi/skills/skill-path-security'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, unlinkSync } from 'node:fs'
+import { existsSync, readdirSync, unlinkSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { BUILTIN_AGENT_PRESETS, DEFAULT_PRESET_ID, normalizeAgentPresetReference, resolveAgentPresetReference, AGENT_PRESET_SUPPRESS_KEYS, AGENT_PRESET_TOOL_NAMES, AGENT_PRESET_CAPABILITY_GROUPS } from '@profer/shared'
 import type { AgentPreset, AgentPresetConfig, GlobalAgentPresetConfig, PresetReference, PresetReferenceReport } from '@profer/shared'
-import { atomicWriteJson } from '../../../packages/session-store/src/atomic-write'
+import { atomicWriteFile, atomicWriteJson } from '../../../packages/session-store/src/atomic-write'
 import { assertResourcePath, coreWorkspaceDirectory, readResourceObject, resourceObject, resourceText } from './resource-paths'
 import type { CoreResourceOperationContext } from './resource-paths'
 
@@ -38,7 +38,7 @@ export const CORE_PRESET_OPERATION_ARITY: Record<string, [number,number]> = {
   listAgentPresets: [0,2], listGlobalAgentPresets: [0,0], getDefaultPresetId: [0,1], setDefaultPresetId: [2,2], setDefaultPresetReference: [2,2],
   createAgentPreset: [2,2], copyAgentPreset: [2,3], updateAgentPreset: [3,3], deleteAgentPreset: [2,2], setWorkspacePresetEnabled: [3,3],
   getPresetReferenceReport: [1,1],
-  copyPresetToWorkspace: [2,3], importPresetFromWorkspace: [3,3],
+  copyPresetToWorkspace: [2,3], importPresetFromWorkspace: [3,3], promoteWorkspacePresetToGlobal: [3,4],
   enableGlobalPresetInWorkspace: [2,2], disableGlobalPresetInWorkspace: [2,2], getOtherWorkspacePresets: [1,1],
 }
 function referenceForId(config: AgentPresetConfig, id: string, slug: string): PresetReference {
@@ -70,6 +70,43 @@ function reportReferences(context: CoreResourceOperationContext, ref: PresetRefe
 }
 export async function executeCorePresetOperation(context: CoreResourceOperationContext, operation: string, args: unknown[]): Promise<unknown> {
   if (operation === 'getPresetReferenceReport') return reportReferences(context, reference(args[0]))
+  if (operation === 'promoteWorkspacePresetToGlobal') {
+    const slug = resourceText(args[0]), id = resourceText(args[1])
+    const state = readCorePresetResources(context, slug)
+    const source = state.config.presets.find(item => item.id === id)
+    if (!source) throw new Error('Core工作区预设不存在')
+    if (!Array.isArray(args[2]) || args[2].length > 512) throw new Error('Core预设目标工作区范围无效')
+    const scopes = [...new Set(args[2].map(value => coreWorkspaceDirectory(context, value).workspace.slug))]
+    const keep = args[3] ?? true
+    if (typeof keep !== 'boolean') throw new Error('Core预设保留副本参数无效')
+    const ref: PresetReference = { presetId: id, presetScope: 'workspace', workspaceSlug: slug }
+    if (!keep && reportReferences(context, ref).blockers.length) throw new Error('Core预设仍被引用，请先解除引用')
+    const defaultRef = state.config.defaultPresetReference ?? referenceForId(state.config, state.config.defaultPresetId, slug)
+    if (keep && defaultRef.presetId === id && defaultRef.presetScope === 'workspace') throw new Error('Core不能禁用当前默认预设；请先更换默认预设引用')
+    // 提升为独立全局实体，展开基座以免新实体依赖原工作区。
+    const expanded = resolveAgentPresetReference(ref, slug, { ...state.store, readWorkspace: (key: string) => key === slug ? state.config : state.store.readWorkspace(key) })
+    const result: AgentPreset = { ...expanded, id: randomUUID(), scope: 'user-global', isBuiltin: false, createdAt: Date.now(), updatedAt: Date.now() }
+    delete result.workspaceSlug; delete result.basePresetId; delete result.basePresetReference
+    const globalPath = join(context.config.configDir, 'agent-presets.json')
+    const paths = [globalPath, ...(state.directoryConfig ? [join(state.dir, '_config.json'), join(state.dir, `${id}.json`)] : [join(state.directory, 'agent-presets.json')])]
+    const before = paths.map(path => { assertResourcePath(path); return { path, content: existsSync(path) ? readFileSync(path, 'utf8') : undefined } })
+    const global = state.global
+    global.presets.push(result)
+    global.workspaceScopes = { ...global.workspaceScopes, [result.id]: scopes }
+    try {
+      await atomicWriteJson(globalPath, global)
+      await executeCorePresetOperation(context, keep ? 'setWorkspacePresetEnabled' : 'deleteAgentPreset', keep ? [slug, id, false] : [slug, id])
+    } catch (error) {
+      const failures: unknown[] = [error]
+      for (const { path, content } of before) {
+        try { if (content === undefined) { if (existsSync(path)) unlinkSync(path) } else await atomicWriteFile(path, content) }
+        catch (restoreError) { failures.push(restoreError) }
+      }
+      if (failures.length > 1) throw new AggregateError(failures, 'Core预设提升及恢复失败')
+      throw error
+    }
+    return result
+  }
   if (args[0] == null && ['createAgentPreset','copyAgentPreset','updateAgentPreset','deleteAgentPreset'].includes(operation)) {
     const global = globalConfig(context)
     const id = operation === 'createAgentPreset' ? randomUUID() : resourceText(args[1])
@@ -202,6 +239,7 @@ export async function executeCorePresetOperation(context: CoreResourceOperationC
     for (const item of context.automations.list()) if (matches(item.presetReference,item.presetId,item.workspaceId)) blockers.push(`自动化:${item.id}`)
     if (blockers.length) throw new Error(`Core预设仍被引用：${blockers.join('，')}`)
     config.presets = config.presets.filter(p => p.id !== id)
+    config.disabledWorkspacePresetIds = config.disabledWorkspacePresetIds?.filter(value => value !== id)
     await save(undefined,id); return
   }
   let result: AgentPreset

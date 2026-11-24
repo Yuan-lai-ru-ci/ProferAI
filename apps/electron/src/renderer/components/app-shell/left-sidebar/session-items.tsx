@@ -17,7 +17,8 @@ import { cn } from '@/lib/utils'
 import { useShortcut } from '@/hooks/useShortcut'
 import { clearSessionReferenceDragState, setSessionReferenceDragData } from '@/lib/session-reference-drag'
 import { resolveSessionUnreadMenuItem } from '@/lib/session-unread-menu'
-import { focusSessionOrOpenLocal } from '@/lib/app-windows'
+import { toast } from 'sonner'
+import { useMoveSessionHere } from '@/lib/app-windows'
 import { windowSessionKeysAtom } from '@/atoms/app-windows'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@profer/ui/primitives/tooltip'
@@ -100,7 +101,7 @@ const SESSION_MARKER_ICON_CLASS = 'flex-shrink-0 text-foreground/40'
 /** `+N` 折叠时说明被折叠的是哪些标记：只留一个数字用户无从判断要不要展开 */
 const SESSION_MARKER_LABELS: Record<SessionLeadingMarker, string> = {
   pin: '已置顶',
-  window: '已在新窗口打开',
+  window: '在其他窗口打开，点击前往',
   goal: '进行中的目标',
   automation: '由定时任务创建',
   exploration: '探索分支',
@@ -109,8 +110,27 @@ const SESSION_MARKER_LABELS: Record<SessionLeadingMarker, string> = {
   regeneratingTitle: '正在重新生成标题',
 }
 
-export function SessionWindowMarker({ session, onSelect }: {
+export function OtherWindowMenuItems({ MenuItem, session, onGo }: {
+  onGo: () => void
+  MenuItem: typeof ContextMenuItem | typeof DropdownMenuItem
   session: AppWindowSession
+}): React.ReactElement {
+  const moveHere = useMoveSessionHere()
+  const move = async (): Promise<void> => {
+    try {
+      const result = await moveHere(session)
+      if (!result.ok) toast.error(result.error ?? '移动会话失败')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '移动会话失败')
+    }
+  }
+  return <>
+    <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={onGo}><PanelsTopLeft size={14} />前往所在窗口</MenuItem>
+    <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => { void move() }}><ArrowRightLeft size={14} />移到此窗口</MenuItem>
+  </>
+}
+
+export function SessionWindowMarker({ onSelect }: {
   onSelect: () => void
 }): React.ReactElement {
   return (
@@ -118,10 +138,10 @@ export function SessionWindowMarker({ session, onSelect }: {
       <TooltipTrigger asChild>
         <button
           type="button"
-          aria-label="聚焦会话窗口"
+          aria-label="前往所在窗口"
           onClick={(event) => {
             event.stopPropagation()
-            void focusSessionOrOpenLocal(() => window.electronAPI.focusSessionWindow(session), onSelect)
+            onSelect()
           }}
           onKeyDown={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
@@ -134,7 +154,7 @@ export function SessionWindowMarker({ session, onSelect }: {
           <PanelsTopLeft size={11} className={SESSION_MARKER_ICON_CLASS} aria-hidden="true" />
         </button>
       </TooltipTrigger>
-      <TooltipContent>已在新窗口打开</TooltipContent>
+      <TooltipContent>在其他窗口打开，点击前往</TooltipContent>
     </Tooltip>
   )
 }
@@ -548,6 +568,7 @@ export const ConversationItem = React.memo(function ConversationItem({
     MenuSeparator: typeof ContextMenuSeparator | typeof DropdownMenuSeparator,
   ) => (
     <>
+      {inWindow && <OtherWindowMenuItems MenuItem={MenuItem} onGo={() => onSelect(conversation.id, conversation.title)} session={{ type: 'chat', sessionId: conversation.id }} />}
       {renderCloseMenuGroup(MenuItem, MenuSeparator, { onCloseTab, onCloseOtherTabs, onCloseAllTabs })}
       <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onTogglePin(conversation.id)}>
         {isPinned ? <Pin size={14} className="fill-current" /> : <Pin size={14} />}
@@ -648,7 +669,7 @@ export const ConversationItem = React.memo(function ConversationItem({
                     onTogglePin={() => onTogglePin(conversation.id)}
                   />
                 )}
-                {inWindow && <SessionWindowMarker session={{ type: 'chat', sessionId: conversation.id }} onSelect={() => onSelect(conversation.id, conversation.title)} />}
+                {inWindow && <SessionWindowMarker onSelect={() => onSelect(conversation.id, conversation.title)} />}
                 {regeneratingTitle ? (
                   <>
                     <Loader2 size={11} className="flex-shrink-0 text-info animate-spin" aria-label="正在重新生成标题" />
@@ -888,7 +909,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
       case 'pin':
         return <SessionLeadingPin key={kind} onTogglePin={() => onTogglePin(session.id)} />
       case 'window':
-        return <SessionWindowMarker key={kind} session={{ type: 'agent', sessionId: session.id }} onSelect={() => onSelect(session.id, session.title)} />
+        return <SessionWindowMarker key={kind} onSelect={() => onSelect(session.id, session.title)} />
       case 'goal':
         return (
           <Target
@@ -950,6 +971,7 @@ export const AgentSessionItem = React.memo(function AgentSessionItem({
     MenuSeparator: typeof ContextMenuSeparator | typeof DropdownMenuSeparator,
   ) => (
     <>
+      {inWindow && <OtherWindowMenuItems MenuItem={MenuItem} onGo={() => onSelect(session.id, session.title)} session={{ type: 'agent', sessionId: session.id }} />}
       {renderCloseMenuGroup(MenuItem, MenuSeparator, { onCloseTab, onCloseOtherTabs, onCloseAllTabs })}
       {pinnable && (
         <MenuItem className="text-xs py-1 [&>svg]:size-3.5" onSelect={() => onTogglePin(session.id)}>

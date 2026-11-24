@@ -63,9 +63,12 @@ describe('core server', () => {
       ]) expect((await patch(body)).statusCode).toBe(400)
       expect(runtime.sessions.getMeta(session.id)?.revision).toBe(1)
       expect(await patch({ presetReference: strict, expectedRevision: 1 })).toMatchObject({ statusCode: 200, body: { presetId: 'strict', presetReference: strict, permissionMode: 'plan', revision: 2 } })
+      expect(await patch({ permissionModeSource: 'user', permissionMode: 'bypassPermissions' })).toMatchObject({ statusCode: 400 })
+      expect(await patch({ userPermissionMode: 'bypassPermissions' })).toMatchObject({ statusCode: 400 })
+      expect(runtime.sessions.getMeta(session.id)).toMatchObject({ permissionMode: 'plan', permissionModeSource: 'preset', revision: 2 })
       expect(await patch({ presetId: 'code', expectedRevision: 1 })).toMatchObject({ statusCode: 400, body: { error: expect.stringContaining('REVISION_CONFLICT') } })
-      // 放宽岗位不自动放宽会话权限；裸ID由Core解析成稳定引用。
-      expect(await patch({ presetId: 'code', expectedRevision: 2 })).toMatchObject({ statusCode: 200, body: { presetId: 'code', presetReference: { presetId: 'code', presetScope: 'builtin-meta' }, permissionMode: 'plan', revision: 3 } })
+      // 换岗采用新预设默认；裸ID由Core解析成稳定引用。
+      expect(await patch({ presetId: 'code', expectedRevision: 2 })).toMatchObject({ statusCode: 200, body: { presetId: 'code', presetReference: { presetId: 'code', presetScope: 'builtin-meta' }, permissionMode: 'bypassPermissions', permissionModeSource: 'preset', revision: 3 } })
       await writeFile(join(config.workspaceRoot, workspace.slug, 'agent-presets.json'), JSON.stringify({ presets: [preset], disabledWorkspacePresetIds: ['strict'] }))
       expect((await patch({ presetReference: strict })).statusCode).toBe(400)
       runtime.sessions.appendMessages(session.id, [{ type: 'user', uuid: 'fixture-user', session_id: session.id, parent_tool_use_id: null, message: { role: 'user', content: 'history' } }])
@@ -81,7 +84,7 @@ describe('core server', () => {
       await closeCoreServer(server)
       await runtime.shutdown()
       runtime = createCoreAgentRuntime(config)
-      expect(runtime.sessions.getMeta(session.id)).toMatchObject({ agentRuntime: 'pi', presetId: 'code', permissionMode: 'plan', revision: 3 })
+      expect(runtime.sessions.getMeta(session.id)).toMatchObject({ agentRuntime: 'pi', presetId: 'code', permissionMode: 'bypassPermissions', permissionModeSource: 'preset', revision: 3 })
     } finally { await closeCoreServer(server); await runtime.shutdown(); await rm(configDir, { recursive: true, force: true }) }
   }, 20000)
 

@@ -1,3 +1,5 @@
+import { CORE_MCP_OPERATION_ARITY, executeCoreMcpOperation, reconcileCoreMcpConnections } from './resource-mcp'
+import { CORE_WORKSPACE_SKILL_ARITY, coreWorkspaceSkillImportMeta, executeCoreWorkspaceSkillOperation } from './resource-workspace-skills'
 import { CORE_GLOBAL_SKILL_ARITY, executeCoreGlobalSkillOperation } from './resource-global-skills'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -81,6 +83,8 @@ const arity: Record<string, [number, number]> = {
   listSkillFiles: [2,2], readSkillFile: [3,3], writeSkillFile: [4,4], createSkillEntry: [4,4], deleteSkillEntry: [3,3], renameSkillEntry: [4,4],
   ...CORE_PRESET_OPERATION_ARITY,
   ...CORE_GLOBAL_SKILL_ARITY,
+  ...CORE_WORKSPACE_SKILL_ARITY,
+  ...CORE_MCP_OPERATION_ARITY,
 }
 export const CORE_RESOURCE_OPERATIONS = Object.freeze(Object.keys(arity))
 /** 固定操作集合；未知及尚不支持的操作明确拒绝，不存在桌面fallback。 */
@@ -91,6 +95,8 @@ async function executeResourceOperation(context: CoreResourceOperationContext, b
   const args = input.args
   const [min, max] = arity[operation]!
   if (!Array.isArray(args) || args.length < min || args.length > max || JSON.stringify(args).length > 2_000_000) throw new Error('Core资源参数数量或长度无效')
+  if (Object.hasOwn(CORE_MCP_OPERATION_ARITY, operation)) return executeCoreMcpOperation(context, operation, args)
+  if (Object.hasOwn(CORE_WORKSPACE_SKILL_ARITY, operation)) return executeCoreWorkspaceSkillOperation(context, operation, args)
   if (Object.hasOwn(CORE_GLOBAL_SKILL_ARITY, operation)) return executeCoreGlobalSkillOperation(context, operation, args)
   if (Object.hasOwn(CORE_PRESET_OPERATION_ARITY, operation)) return executeCorePresetOperation(context, operation, args)
   if (operation === 'getDefaultSkillSlugs') {
@@ -146,6 +152,7 @@ async function executeResourceOperation(context: CoreResourceOperationContext, b
         throw error
       }
     } else await atomicWriteJson(mcpPath,baseValue)
+    await reconcileCoreMcpConnections(context, workspace.id, Object.entries(mergeMcp(servers, locals)).filter(([, entry]) => entry.enabled !== false).map(([name]) => name))
     return
   }
   for (const root of ['skills', 'skills-inactive']) safeTree(join(directory, root))
@@ -158,7 +165,7 @@ async function executeResourceOperation(context: CoreResourceOperationContext, b
     return readdirSync(path).filter(slug => !slug.startsWith('.') && existsSync(join(path, slug, 'SKILL.md'))).map(slug => {
       const skillPath = join(path, slug), source = readResourceObject(join(skillPath, '.source.json'))
       const workspaceSkillId = typeof source?.workspaceSkillId === 'string' && source.workspaceSkillId ? source.workspaceSkillId : undefined
-      return { ...source, scope: 'workspace' as const, workspaceSkillId, ...readSkillDescriptor(skillPath, slug).descriptor, slug, enabled: root === 'skills', actualSource: root === 'skills' ? 'workspace' : 'none', path: skillPath }
+      return { ...source, ...coreWorkspaceSkillImportMeta(context, skillPath, slug), scope: 'workspace' as const, workspaceSkillId, ...readSkillDescriptor(skillPath, slug).descriptor, slug, enabled: root === 'skills', actualSource: root === 'skills' ? 'workspace' : 'none', path: skillPath }
     })
   })
   if (operation === 'getWorkspaceSkillsDir') return join(directory, 'skills')

@@ -71,6 +71,7 @@ import {
   getWorkspaceAttachedFiles,
 } from './agent-workspace-manager'
 import {
+  rebindAgentSessionPreset,
   listAgentPresets,
   getDefaultPresetId,
   setDefaultPresetId,
@@ -791,6 +792,7 @@ export function buildSessionItem(s: ReturnType<typeof listAgentSessions>[number]
     agentRuntime: s.agentRuntime,
     agentRuntimeLocked: !canSelectAgentSessionRuntime(s),
     permissionMode: s.permissionMode,
+    permissionModeSource: s.permissionModeSource,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     pinned: s.pinned,
@@ -1251,7 +1253,7 @@ export async function handleRemoteCommand(
       if (!result) return { ok: false, error: '计划审批不存在或已处理' }
       agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'exit_plan_mode_resolved', requestId } })
       if (result.targetMode) {
-        updateAgentSessionUiMeta(result.sessionId, { permissionMode: result.targetMode })
+        updateAgentSessionUiMeta(result.sessionId, { permissionMode: result.targetMode, permissionModeSource: 'user' })
         agentEventBus.emit(result.sessionId, { kind: 'profer_event', event: { type: 'permission_mode_changed', mode: result.targetMode } })
       }
       return { ok: true, data: { sessionId: result.sessionId } }
@@ -1299,6 +1301,7 @@ export async function handleRemoteCommand(
             workspaceId: meta.workspaceId,
             agentRuntime: meta.agentRuntime,
             permissionMode: meta.permissionMode,
+            permissionModeSource: meta.permissionModeSource,
             // 思考强度：会话级档位覆盖必须随会话详情下发，否则移动端打开会话时
             // 只能按「字段缺失」处理，把本地已知的档位退回默认。null 表示跟随预设。
             openAIThinkingLevel: meta.openAIThinkingLevel ?? null,
@@ -1432,11 +1435,11 @@ export async function handleRemoteCommand(
       if (!getAgentSessionMeta(sessionId)) return { ok: false, error: '会话不存在' }
       const current = getAgentSessionMeta(sessionId)
       if (!current) return { ok: false, error: '会话不存在' }
-      const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
+      const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode, permissionModeSource: 'user' })
       try {
         if (isAgentSessionActive(sessionId)) await updateAgentPermissionMode(sessionId, mode)
       } catch (error) {
-        const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode })
+        const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode, permissionModeSource: current.permissionModeSource })
         publishAgentSessionProjection(restored)
         return { ok: false, error: error instanceof Error ? error.message : '切换权限模式失败' }
       }
@@ -1483,11 +1486,13 @@ export async function handleRemoteCommand(
       if (!session) return { ok: false, error: '会话不存在' }
       const presetRevisionError = validateExpectedRevision(parsed, sessionId)
       if (presetRevisionError) return presetRevisionError
+      if (isAgentSessionActive(sessionId)) return { ok: false, error: 'Agent 正在运行，完成后再切换预设' }
       // 按会话所属工作区解析；存在性校验：未知 ID 报错而非静默回退 standard（与桌面 UPDATE_SESSION_PRESET 同语义）
       const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
       const resolved = getAgentPreset(workspaceSlug, presetId)
       if (resolved.id !== presetId) return { ok: false, error: `预设不存在: ${presetId}` }
-      const updated = updateAgentSessionUiMeta(sessionId, { presetId, presetReference: presetReferenceForId(workspaceSlug, presetId) })
+      const updated = rebindAgentSessionPreset(sessionId, presetReferenceForId(workspaceSlug, presetId))
+      publishAgentSessionProjection(updated)
       return { ok: true, data: buildSessionItem(updated) }
     }
 

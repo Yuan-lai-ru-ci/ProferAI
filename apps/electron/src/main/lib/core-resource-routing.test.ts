@@ -38,8 +38,17 @@ describe('Core resource routing ownership', () => {
   test('unsupported capability never falls back', async () => {
     await expect(routeCoreResource(AGENT_IPC_CHANNELS.GET_SKILLS, ['ws', { __proferCoreResourceScope: { targetId: 'remote-a', generation: 3 } }], () => makeSnapshot({ capabilities: [] }))).rejects.toThrow('不会回退')
   })
-  test('unsupported operation rejects', async () => {
-    await expect(routeCoreResource(AGENT_IPC_CHANNELS.TEST_MCP_SERVER, ['x', {}, { __proferCoreResourceScope: { targetId: 'remote-a', generation: 3 } }], () => makeSnapshot())).rejects.toThrow('不支持')
+  test.each([
+    [AGENT_IPC_CHANNELS.TEST_MCP_SERVER, 'probeMcpServer', ['demo', { type: 'http', url: 'http://fixture.invalid', enabled: true }, 'ws']],
+    [AGENT_IPC_CHANNELS.RESTART_MCP_SERVER, 'restartMcpServer', ['demo', 'ws']],
+    [AGENT_IPC_CHANNELS.GET_MCP_CONNECTION_STATUS, 'listMcpConnectionSnapshots', []],
+  ])('MCP 管理 %s 交给当前 Core，不落到本机', async (channel, operation, args) => {
+    const received: unknown[] = []
+    const state = makeSnapshot({ client: { resourceOperation: async <T>(op: string, input: unknown[]) => {
+      received.push(op, input); return { ok: true } as T
+    } } })
+    await expect(routeCoreResource(channel, [...args, { __proferCoreResourceScope: { targetId: 'remote-a', generation: 3 } }], () => state)).resolves.toEqual({ result: { ok: true } })
+    expect(received).toEqual([operation, args])
   })
   test('late response rejects after target switch', async () => {
     let current = makeSnapshot()

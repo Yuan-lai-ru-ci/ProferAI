@@ -5,6 +5,8 @@ import { getConversationMeta } from './conversation-manager'
 import { IPC_CHANNELS, type MainWindowBootstrap, type OpenTabInNewWindowResult } from '@profer/shared'
 import {
   createSecondaryMainWindow,
+  moveSessionToThisWindow,
+  replyToWindowMove,
   ackWindowTabHandoff,
   reportWindowPhase,
   reportWindowSessions,
@@ -18,10 +20,30 @@ import {
   normalizeInitialTab,
 } from './main-app-windows'
 
+async function isMovingChatActive(sessionId: string): Promise<boolean> {
+  const match = /^core-chat:[^:]+:(.+)$/.exec(sessionId)
+  if (match) {
+    const client = getActiveCoreClient()
+    if (!client) throw new Error('会话所属 Core 尚未就绪')
+    return client.isChatGenerationActive(match[1]!)
+  }
+  return (await import('./chat-service')).isChatGenerationActive(sessionId)
+}
+
 export function registerWindowIpc(): void {
+  ipcMain.handle(IPC_CHANNELS.WINDOW_MOVE_SESSION_HERE, (event, session: unknown) => {
+    if (event.senderFrame !== event.sender.mainFrame) return { ok: false, error: '仅应用主页面可以移窗' }
+    return moveSessionToThisWindow(event.sender, session, isMovingChatActive)
+  })
+  ipcMain.on(IPC_CHANNELS.WINDOW_MOVE_REPLY, (event, id: unknown, result: unknown) => {
+    if (event.senderFrame === event.sender.mainFrame) replyToWindowMove(event.sender, id, result)
+  })
   ipcMain.handle(IPC_CHANNELS.WINDOW_REPORT_PHASE, (event, phase: unknown) => reportWindowPhase(event.sender, phase))
   ipcMain.handle(IPC_CHANNELS.WINDOW_ACK_TAB_HANDOFF, (event, id: string) => ackWindowTabHandoff(event.sender, id))
-  ipcMain.handle(IPC_CHANNELS.WINDOW_REPORT_SESSIONS, (event, sessions: unknown) => reportWindowSessions(event.sender, sessions))
+  ipcMain.handle(IPC_CHANNELS.WINDOW_REPORT_SESSIONS, (event, sessions: unknown) => {
+    if (event.senderFrame !== event.sender.mainFrame) throw new Error('仅应用主页面可以上报会话')
+    reportWindowSessions(event.sender, sessions)
+  })
   ipcMain.handle(IPC_CHANNELS.WINDOW_FOCUS_SESSION, (event, session: unknown) => focusWindowForSession(event.sender, session, async (target) => {
     if (/^core(?:-chat)?:[^:]+:.+$/.test(target.sessionId)) {
       const client = getActiveCoreClient()
@@ -78,11 +100,7 @@ export function registerWindowIpc(): void {
       }
       const normalized = normalizeInitialTab(tab)
       if (normalized?.type === 'chat') {
-        const match = /^core-chat:[^:]+:(.+)$/.exec(normalized.sessionId)
-        const active = match
-          ? getActiveCoreClient()?.isChatGenerationActive(match[1]!)
-          : (await import('./chat-service')).isChatGenerationActive(normalized.sessionId)
-        if (active) return { ok: false, error: '生成中的 Chat 暂不支持移窗' }
+        if (await isMovingChatActive(normalized.sessionId)) return { ok: false, error: '生成中的 Chat 暂不支持移窗' }
       }
       const sourceWindow = BrowserWindow.fromWebContents(event.sender)
       return createSecondaryMainWindow(tab, sourceWindow)

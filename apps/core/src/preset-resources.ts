@@ -74,6 +74,10 @@ export function resolveCorePreset(config: CoreConfig, session: AgentSessionMeta,
   }
   reference ??= { presetId: DEFAULT_PRESET_ID, presetScope: 'builtin-meta' }
   const preset = resolveAgentPresetReference(reference, workspace?.slug, { readGlobal, readWorkspace })
-  const policy = createEffectiveAgentPresetPolicy(preset, reference, { permissionMode: session.permissionMode ?? 'auto', runtimeSupportsSubagents: true })
+  const policy = createEffectiveAgentPresetPolicy(preset, reference, {
+    permissionMode: session.permissionModeSource === 'user' ? undefined : session.permissionMode,
+    userPermissionMode: session.permissionModeSource === 'user' ? session.permissionMode : undefined,
+    runtimeSupportsSubagents: true,
+  })
   return { preset, reference, policy, configDir }
 }

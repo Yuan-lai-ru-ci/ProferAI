@@ -80,6 +80,7 @@ export function upsertAgentSessionProjection(
     agentRuntime: projection.agentRuntime,
     agentRuntimeLocked: projection.agentRuntimeLocked !== false,
     permissionMode: projection.permissionMode,
+    permissionModeSource: projection.permissionModeSource,
     presetId: projection.presetId ?? undefined,
     presetReference: projection.presetReference ?? undefined,
     openAIThinkingLevel: projection.openAIThinkingLevel ?? undefined,

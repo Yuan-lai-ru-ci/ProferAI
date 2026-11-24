@@ -9,6 +9,7 @@ import { resolveCredentialPreflightTypedError } from './agent-preflight-typed-er
 import type { CoreAgentEvent, CoreMessageOptions } from './core-client'
 import { CoreClient } from './core-client'
 import { AGENT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS } from '@profer/shared'
+import { invalidatesAgentActivity, isAgentCatalogPayload } from './agent-window-delivery'
 import { projectRemoteRunEvent } from './core-run-projection'
 import { invalidateWorkspaceLocation } from './workspace-locator'
 import { configureCoreHostConnection } from './core-host-connection'
@@ -30,7 +31,7 @@ let unsubscribeWorkspace: (() => void) | undefined
 const handlers = new Map<string, LocalCoreSessionEventHandler>()
 const activeSessions = new Set<string>()
 
-export function attachLocalCoreClient(next: CoreClient): void {
+export function attachLocalCoreClient(next: CoreClient, publishSession: (channel: string, sessionId: string, payload: unknown) => void = (channel, _sessionId, payload) => publishLocal(channel, payload)): void {
   unsubscribe?.()
   unsubscribeSnapshot?.()
   unsubscribeAutomation?.()
@@ -40,14 +41,15 @@ export function attachLocalCoreClient(next: CoreClient): void {
     contentRoot: join(app.getPath('temp'), 'profer-core-host'),
     sessionId: value => value,
     isCurrent: () => client === next,
-    emitPreview: (sessionId, payload) => publishLocal(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId, payload }),
+    emitPreview: (sessionId, payload) => publishSession(AGENT_IPC_CHANNELS.STREAM_EVENT, sessionId, { sessionId, payload }),
   })
   const publish = (channel: string, payload?: unknown) => { if (client === next) publishLocal(channel, payload) }
   unsubscribe = next.addEventListener(event => {
     if (client !== next) return
     const payload = event.payload as { kind?: string; event?: { type?: string; state?: import('@profer/shared').AgentGoalState } }
     if (payload?.event?.type === 'runtime_started') activeSessions.add(event.sessionId)
-    if (payload?.event?.type === 'run_completed') activeSessions.delete(event.sessionId)
+    if (payload?.event?.type === 'run_completed' || payload?.event?.type === 'runtime_idle' || payload?.kind === 'run_error') activeSessions.delete(event.sessionId)
+    if (invalidatesAgentActivity(payload)) publishSession(AGENT_IPC_CHANNELS.SESSION_ACTIVITY_INVALIDATED, event.sessionId, { sessionId: event.sessionId })
     const handler = handlers.get(event.sessionId)
     if (handler) { handler(event); return }
     if (payload?.event?.type === 'goal_state') {
@@ -55,8 +57,13 @@ export function attachLocalCoreClient(next: CoreClient): void {
       return
     }
     const projected = projectRemoteRunEvent(event, event.sessionId)
-    if (projected?.eventPayload) publish(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: event.sessionId, payload: projected.eventPayload })
-    if (projected?.completion) publish(AGENT_IPC_CHANNELS.STREAM_COMPLETE, projected.completion)
+    if (projected?.eventPayload) {
+      const frame = { sessionId: event.sessionId, payload: projected.eventPayload }
+      if (isAgentCatalogPayload(payload)) publish(AGENT_IPC_CHANNELS.STREAM_EVENT, frame)
+      else publishSession(AGENT_IPC_CHANNELS.STREAM_EVENT, event.sessionId, frame)
+    }
+    if (projected?.completion) publishSession(AGENT_IPC_CHANNELS.STREAM_COMPLETE, event.sessionId, projected.completion)
+    if (projected?.error) publishSession(AGENT_IPC_CHANNELS.STREAM_ERROR, event.sessionId, { sessionId: event.sessionId, error: projected.error })
   })
   unsubscribeSnapshot = next.addSnapshotListener(snapshot => {
     if (client !== next) return
@@ -65,7 +72,7 @@ export function attachLocalCoreClient(next: CoreClient): void {
     for (const goal of snapshot.goals) publish(AGENT_IPC_CHANNELS.GOAL_EVENT, { sessionId: goal.sessionId, state: goal })
     for (const pending of snapshot.pending) {
       const requests = [...pending.permissions.map(request => ({ type: 'permission_request', request })), ...pending.askUsers.map(request => ({ type: 'ask_user_request', request })), ...pending.exitPlans.map(request => ({ type: 'exit_plan_mode_request', request }))]
-      for (const event of requests) publish(AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: pending.sessionId, payload: { kind: 'profer_event', event } })
+      for (const event of requests) publishSession(AGENT_IPC_CHANNELS.STREAM_EVENT, pending.sessionId, { sessionId: pending.sessionId, payload: { kind: 'profer_event', event } })
     }
     publish(AUTOMATION_IPC_CHANNELS.CHANGED)
     invalidateWorkspaceLocation()

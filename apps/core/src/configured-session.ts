@@ -47,7 +47,7 @@ export function configuredSessionInput(config: CoreConfig, runtime: Pick<CoreAge
   const selectedModel = modelId ?? (channel.models === undefined ? input.modelId : undefined)
   if (!selectedModel) throw new Error('Core所选模型不存在、未启用或缺少模型配置')
   const candidate: AgentSessionMeta = { id: '', title: input.title?.trim() ?? '新 Agent 会话', agentRuntime: engine, workspaceId: input.workspaceId,
-    presetId: input.presetId, permissionMode: input.permissionMode ?? 'auto', createdAt: 0, updatedAt: 0 }
+    presetId: input.presetId, createdAt: 0, updatedAt: 0 }
   const resources = resolveCorePreset(config, candidate, workspace)
   return { title: candidate.title, runtime: engine, channelId: channel.id, modelId: selectedModel, workspaceId: input.workspaceId,
     presetId: resources.preset.id, presetReference: normalizeAgentPresetReference(resources.reference, workspace?.slug), permissionMode: resources.policy.permissionMode }

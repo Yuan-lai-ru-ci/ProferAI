@@ -98,6 +98,23 @@ function createSkillProjection(slugs: readonly string[]) {
 }
 
 describe('权限模式来源', () => {
+  test('Given 可信用户已放宽 plan When 解析快照 Then 使用 user 模式且工具禁用保留', () => {
+    const snapshot = resolveAgentRuntimePolicySnapshot({
+      preset: preset({ permissionMode: 'plan', disabledTools: ['Bash'] }), presetReference: reference,
+      userPermissionMode: 'bypassPermissions',
+    })
+    expect(snapshot.policy.permissionMode).toBe('bypassPermissions')
+    expect(snapshot.policy.disabledTools).toContain('Bash')
+  })
+
+  test('Given user 放宽但外部 cap 为 plan When 解析快照 Then cap 仍收紧', () => {
+    const snapshot = resolveAgentRuntimePolicySnapshot({
+      preset: preset({ permissionMode: 'plan' }), presetReference: reference,
+      userPermissionMode: 'bypassPermissions', permissionModeOverride: 'plan',
+    })
+    expect(snapshot.policy.permissionMode).toBe('plan')
+  })
+
   test('Given 预设未声明权限模式 When 解析快照 Then 取共享默认值而不是 provider preparation 的猜测', () => {
     const snapshot = resolveAgentRuntimePolicySnapshot({ preset: preset(), presetReference: reference })
     expect(snapshot.policy.permissionMode).toBe(PROFER_DEFAULT_PERMISSION_MODE)

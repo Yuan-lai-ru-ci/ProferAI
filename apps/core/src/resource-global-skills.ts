@@ -1,9 +1,11 @@
+import type { GlobalSkillDeleteBlockers, GlobalSkillWorkspaceReference } from '@profer/shared'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, mkdirSync, cpSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { atomicWriteFile, atomicWriteJson } from '../../../packages/session-store/src/atomic-write'
 import { assertSafeSkillSegment, canonicalSkillSegmentKey } from '@profer/agent-provider-pi/skills/skill-path-security'
 import { ensureSkillCard, hasSkillCard, skillCardDismissalKey } from '@profer/agent-provider-pi/skills/skill-manifest'
+import { resolveCoreSkillSources } from './skill-sources'
 import { applyCoreSkillCardDecision, readCoreSkillCard, readCoreSkillCardDismissals, writeCoreSkillCard } from './resource-skill-cards'
 import { assertResourcePath, coreWorkspaceDirectory, readResourceObject, resourceObject, resourceText } from './resource-paths'
 import type { CoreResourceOperationContext } from './resource-paths'
@@ -40,6 +42,7 @@ function replaceDirectory(source: string | undefined,target: string,prepare:(sta
 export const CORE_GLOBAL_SKILL_ARITY: Record<string,[number,number]> = {
   'globalSkill.list': [0,1], 'globalSkill.read': [1,1], 'globalSkill.createUser': [4,5], 'globalSkill.save': [4,4],
   'globalSkill.readCard': [1,1], 'globalSkill.writeCard': [2,2],
+  'globalSkill.getDeleteBlockers': [1,1], 'globalSkill.deleteUser': [1,2],
   'globalSkill.copyToUser': [1,2], 'globalSkill.copyToWorkspace': [2,2], 'globalSkill.setEnabled': [3,3],
   'globalSkill.getOverrides': [1,1], 'globalSkill.restore': [2,2], 'globalSkill.readWorkspaceCopy': [2,2], 'globalSkill.saveWorkspaceCopy': [3,3],
 }
@@ -67,6 +70,64 @@ function overrides(directory: string) {
   if (value.schemaVersion !== 1) throw new Error('Core Skill覆盖schema错误')
   for (const item of Object.values(resourceObject(value.globalSkills))) if (typeof resourceObject(item).enabled !== 'boolean') throw new Error('Core Skill覆盖损坏')
   return value
+}
+function deleteReferences(context: CoreResourceOperationContext, manifest: Record<string, unknown>): GlobalSkillDeleteBlockers {
+  const skillId = String(manifest.skillId)
+  const references: GlobalSkillWorkspaceReference[] = context.workspaces.list().map(workspace => {
+    const { directory } = coreWorkspaceDirectory(context, workspace.slug)
+    const override = resourceObject(resourceObject(overrides(directory).globalSkills)[skillId] ?? {})
+    const local = ['skills', 'skills-inactive'].flatMap(kind => {
+      const root = join(directory, kind); tree(root)
+      return existsSync(root) ? readdirSync(root).filter(slug => existsSync(join(root, slug, 'SKILL.md'))).map(slug => ({ slug, enabled: kind === 'skills', source: readResourceObject(join(root, slug, '.source.json')) ?? {} })) : []
+    })
+    const replacement = override.replacementWorkspaceSkillId
+      ? local.find(item => item.source.workspaceSkillId === override.replacementWorkspaceSkillId)
+      : override.replacementWorkspaceSkillSlug ? local.find(item => item.source.sourceSkillId === skillId) : undefined
+    const conflict = local.find(item => item.enabled && canonicalSkillSegmentKey(item.slug) === canonicalSkillSegmentKey(String(manifest.slug)))
+    const base = { workspaceSlug: workspace.slug, workspaceName: workspace.name }
+    const effective = resolveCoreSkillSources(context.config, directory)
+    if (effective.skills.some(skill => skill.actualSource === 'global' && skill.sourceSkillId === skillId)) return { ...base, status: 'enabled', actualSource: 'global', reason: 'active-global-skill', blocksDeletion: true }
+    if (replacement) return { ...base, status: 'replaced-by-workspace-copy', actualSource: 'workspace', reason: 'workspace-copy-replacement', blocksDeletion: false, ...(typeof replacement.source.workspaceSkillId === 'string' ? { workspaceSkillId: replacement.source.workspaceSkillId } : {}) }
+    if (override.enabled === false) return { ...base, status: 'disabled', actualSource: 'none', reason: 'disabled-in-workspace', blocksDeletion: false }
+    if (conflict) return { ...base, status: 'workspace-only', actualSource: 'workspace', reason: 'workspace-local-skill', blocksDeletion: false, ...(typeof conflict.source.workspaceSkillId === 'string' ? { workspaceSkillId: conflict.source.workspaceSkillId } : {}) }
+    return { ...base, status: 'enabled', actualSource: 'global', reason: 'active-global-skill', blocksDeletion: true }
+  })
+  return { skillId, skillType: manifest.type === 'builtin-meta' ? 'builtin-meta' : 'user-global', references }
+}
+async function deleteUserSkill(context: CoreResourceOperationContext, item: { manifest: Record<string, unknown>; path: string }, confirmation: unknown): Promise<void> {
+  if (item.manifest.type !== 'user-global') throw new Error('Core内置Skill不可删除')
+  const id = String(item.manifest.skillId)
+  const blockers = deleteReferences(context, item.manifest).references.filter(reference => reference.blocksDeletion)
+  if (blockers.length) throw new Error(`仍有 ${blockers.length} 个工作区正在使用该全局 Skill，请先停用或切换为副本`)
+  if (confirmation !== `delete:${id}`) throw new Error('删除全局 Skill 需要二次确认')
+  const writes: Array<{ path: string; value: Record<string, unknown>; before: string }> = []
+  for (const workspace of context.workspaces.list()) {
+    const { directory } = coreWorkspaceDirectory(context, workspace.slug)
+    const path = join(directory, 'skill-overrides.json'), value = overrides(directory), map = resourceObject(value.globalSkills)
+    if (!Object.hasOwn(map, id)) continue
+    delete map[id]
+    writes.push({ path, value, before: readFileSync(path, 'utf8') })
+  }
+  const indexPath = join(context.config.configDir, 'global-skills', 'index.json'), index = readResourceObject(indexPath)
+  if (index) {
+    const skills = resourceObject(index.skills); delete skills[id]
+    writes.push({ path: indexPath, value: index, before: readFileSync(indexPath, 'utf8') })
+  }
+  const backup = join(dirname(item.path), `.deleting-${randomUUID()}`)
+  assertResourcePath(backup)
+  renameSync(item.path, backup)
+  try {
+    for (const { path, value } of writes) await atomicWriteJson(path, value)
+    rmSync(backup, { recursive: true })
+  } catch (error) {
+    const failures: unknown[] = [error]
+    try { renameSync(backup, item.path) } catch (restoreError) { failures.push(restoreError) }
+    for (const { path, before } of writes) {
+      try { await atomicWriteFile(path, before) } catch (restoreError) { failures.push(restoreError) }
+    }
+    if (failures.length > 1) throw new AggregateError(failures, 'Core全局Skill删除及恢复失败')
+    throw error
+  }
 }
 export async function executeCoreGlobalSkillOperation(context: CoreResourceOperationContext, operation: string, args: unknown[]): Promise<unknown> {
   const entries = globals(context)
@@ -113,6 +174,8 @@ export async function executeCoreGlobalSkillOperation(context: CoreResourceOpera
   const id = resourceText(args[workspaceOp ? 1 : 0]); assertSafeSkillSegment(id,'skillId')
   const item = entries.find(e => e.manifest.skillId === id)
   if (!item) throw new Error('Core全局Skill不存在')
+  if (operation === 'globalSkill.getDeleteBlockers') return deleteReferences(context, item.manifest)
+  if (operation === 'globalSkill.deleteUser') return deleteUserSkill(context, item, args[1])
   if (operation === 'globalSkill.read') return readFileSync(join(item.path,'SKILL.md'),'utf8')
   if (operation === 'globalSkill.readCard') return readCoreSkillCard(item.path)
   if (operation === 'globalSkill.writeCard' || operation === 'globalSkill.resolveCardReminder') {

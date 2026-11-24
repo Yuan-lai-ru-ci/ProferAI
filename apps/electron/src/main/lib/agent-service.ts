@@ -1,3 +1,6 @@
+import { getAgentRuntimePlanMode } from './agent-runtime-plan-mode'
+import { resolveEffectivePermissionMode } from '@profer/shared'
+import { resolveSessionDelegationPermissionCap, resolveSessionPermissionOptions } from './agent-session-permission-policy'
 import { isIndependentLocalCore, isLocalCoreEnabled } from './core-local-mode'
 /**
  * Agent 服务层（IPC 薄层）
@@ -12,7 +15,7 @@ import { isIndependentLocalCore, isLocalCoreEnabled } from './core-local-mode'
  */
 
 import { join, dirname, basename, sep } from 'node:path'
-import { writeFileSync, mkdirSync, existsSync, appendFileSync, statSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import { isMainAppWindowSender, isSecondaryWindowSessionOwner, isWindowTabHandoffPending, setLocalHandoffRestore } from './main-app-windows'
@@ -78,7 +81,9 @@ import { shouldClearSessionUnreadOnRunStart, shouldMarkSessionUnreadOnCompletion
 import { getAgentUnreadPolicyMode } from './agent-unread-mode'
 import { AgentRuntimeContextStore } from './agent-runtime-context'
 import { localCoreOwnsBusinessData } from './core-business-ownership'
-import { listCoreTargets } from './core-target-service'
+import { listCoreTargets, localAgentWindows, agentStreamOwner } from './core-target-service'
+import { createStreamBindingLog } from './stream-binding-log'
+import { sessionWebContents, invalidateAgentActivity } from './agent-window-delivery'
 import { createContextUsageRecorder } from './agent-context-usage-recorder'
 import { deleteAgentContextUsageSnapshot, readAgentContextUsageSnapshot, saveAgentContextUsageSnapshot } from './agent-context-usage-store'
 import { createExecutionService } from './execution-service'
@@ -269,14 +274,6 @@ export function listActiveAgentRuntimeContexts(sessionIds?: readonly string[]) {
 }
 
 /**
- * 会话 → webContents 映射
- *
- * EventBus IPC 转发中间件通过此映射找到目标 webContents。
- * runAgent 开始时注册，结束时清理。
- */
-const sessionWebContents = new Map<string, WebContents>()
-
-/**
  * 当前活跃 run 的可回放事件。renderer 刷新会丢掉 Jotai 内存，但 main 中的
  * orchestrator 仍在运行；保存本轮已发出的事件可让新 renderer 重建相同 UI 状态。
  * 最终历史仍由 session JSONL 保存，故这里只保留 active run，结束立即释放。
@@ -310,50 +307,8 @@ function preserveCompletedBacklog(sessionId: string): void {
  */
 const wcWithCleanupHook = new WeakSet<WebContents>()
 
-/**
- * 记录会话流绑定的变更（谁在什么时候把会话绑到/解绑自哪个窗口）。
- *
- * 为什么需要：子会话页「冻结在打开时快照、过程区一直折叠」的根因类是绑定被别的窗口
- * 抢走（改绑会向旧窗口发 SESSION_RELEASED，旧窗口随后收不到任何事件）。这条链路
- * 完全在运行时隐式发生，没有日志就只能靠猜。
- *
- * 跨平台约束：
- * - 路径统一走 `node:path` 的 `join`，不拼分隔符；
- * - Windows 上杀软/索引服务会短暂占用日志文件，`appendFileSync` 可能抛 EBUSY/EPERM。
- *   这里连续失败就**停用**日志，避免每次绑定都抛一次异常拖慢主流程；
- * - 文件大小设上限，长时间运行不会把用户目录写满（超限后停用而不是截断）。
- */
-const STREAM_BINDING_LOG_MAX_BYTES = 1_000_000
-const STREAM_BINDING_LOG_MAX_FAILURES = 3
-let streamBindingLogDisabled = false
-let streamBindingLogFailures = 0
-/** 已知文件大小；-1 表示尚未探测。 */
-let streamBindingLogBytes = -1
-
-function recordStreamBinding(event: Record<string, unknown>): void {
-  if (streamBindingLogDisabled) return
-  try {
-    const dir = join(getConfigDir(), 'diagnostics')
-    mkdirSync(dir, { recursive: true })
-    const file = join(dir, 'stream-binding.log')
-    if (streamBindingLogBytes < 0) {
-      streamBindingLogBytes = existsSync(file) ? statSync(file).size : 0
-    }
-    if (streamBindingLogBytes >= STREAM_BINDING_LOG_MAX_BYTES) {
-      streamBindingLogDisabled = true
-      return
-    }
-    const stack = new Error().stack?.split('\n').slice(2, 9).join(' | ') ?? ''
-    const line = `${JSON.stringify({ ...event, at: Date.now(), stack })}\n`
-    appendFileSync(file, line, 'utf8')
-    streamBindingLogBytes += Buffer.byteLength(line, 'utf8')
-    streamBindingLogFailures = 0
-  } catch {
-    // 诊断日志失败不得影响主流程；连续失败（Windows 文件锁/权限）直接停用。
-    streamBindingLogFailures += 1
-    if (streamBindingLogFailures >= STREAM_BINDING_LOG_MAX_FAILURES) streamBindingLogDisabled = true
-  }
-}
+/** 绑定抢占按时间记录；轮转保留最近两份日志，失败时不中断主流程。 */
+const recordStreamBinding = createStreamBindingLog(() => join(getConfigDir(), 'diagnostics', 'stream-binding.log'))
 
 /**
  * 注册 sessionId → webContents 映射，并在 webContents 销毁时自动清理所有相关条目。
@@ -577,6 +532,10 @@ eventBus.use((sessionId, payload, next) => {
 })
 
 eventBus.use((sessionId, payload, next) => {
+  // 新 runtime 统一投影 external_run_started；旧桌面链在真实 onRunStarted 提示。
+  if (!sessionId.startsWith('core:') && payload.kind === 'profer_event' && (payload.event.type === 'external_run_started' || payload.event.type === 'run_idle')) {
+    invalidateAgentActivity(localAgentWindows(), sessionId)
+  }
   const targets = payload.kind === 'session_projection' || payload.kind === 'catalog_invalidation'
     ? BrowserWindow.getAllWindows().map((window) => window.webContents)
     : [sessionWebContents.get(sessionId)]
@@ -915,8 +874,12 @@ export async function runAgent(
   }
   if (resolveDesktopRunChain(input) === 'runtime') {
     await runDesktopRuntimeAgent(input, {
-      sender: webContents,
-      registerWebContents,
+      // 桌面入口在结束时调用 sender；原始窗口可能已交出会话，按当前绑定送达一次。
+      sender: {
+        isDestroyed: () => !getSessionWebContents(input.sessionId),
+        send: (channel, payload) => getSessionWebContents(input.sessionId)?.send(channel, payload),
+      },
+      registerWebContents: sessionId => registerWebContents(sessionId, webContents),
       isExecutionActive: isAgentExecutionActive,
       beginActiveStreamBacklog,
       finishActiveStreamBacklog,
@@ -1021,6 +984,7 @@ export async function runAgent(
       },
       onRunStarted: async ({ startedAt }) => {
         runStarted = true
+        invalidateAgentActivity(localAgentWindows(), input.sessionId)
         // 用户自己发出新一轮：旧未读随新 run 失效（非用户发起的运行不清，见 agent-unread-policy）。
         applyRunStartUnreadPolicy(input.sessionId, initiator)
         const beforePromotion = getAgentSessionMeta(input.sessionId)
@@ -1101,7 +1065,7 @@ export async function runAgentRuntimeHeadless(
   input = normalizeHeadlessSendInput(input, callbacks.source)
   if (isIndependentLocalCore() || isLocalCorePiInput(input)) {
     const initiator = input.initiator ?? resolveRunInitiator(input.triggeredBy, callbacks.source)
-    await runAgentThroughLocalCore({ ...input, initiator }, getSessionWebContents(input.sessionId) ?? getMainRendererWebContents() ?? undefined, callbacks)
+    await runAgentThroughLocalCore({ ...input, initiator }, getSessionWebContents(input.sessionId) ?? agentStreamOwner(localAgentWindows(), input.sessionId) ?? undefined, callbacks)
     return
   }
   // 已有窗口绑定时不得改绑到主窗口：会话可能正被独立会话窗口展示。
@@ -1109,7 +1073,7 @@ export async function runAgentRuntimeHeadless(
   // 并没有在展示这个会话——用户看到的子会话页从此收不到任何事件，过程区永远折叠。
   const existingOwner = getSessionWebContents(input.sessionId)
   if (!existingOwner) {
-    const wc = getMainRendererWebContents()
+    const wc = agentStreamOwner(localAgentWindows(), input.sessionId)
     if (wc) registerWebContents(input.sessionId, wc)
   }
   beginActiveStreamBacklog(input.sessionId)
@@ -1318,10 +1282,12 @@ function resolveRuntimeHeadlessPolicyContext(
     active: sessionMeta?.pptCapabilityActive === true,
     hasActiveDeckProject: sessionMeta?.pptCapabilityActive === true,
   })
+  const modes = resolveSessionPermissionOptions(sessionMeta, input.permissionModeOverride)
   return {
     preset,
     presetReference,
-    ...(input.permissionModeOverride ? { permissionModeOverride: input.permissionModeOverride } : {}),
+    ...(modes.userPermissionMode ? { userPermissionMode: modes.userPermissionMode } : {}),
+    ...(modes.permissionMode ? { permissionModeOverride: modes.permissionMode } : {}),
     ...(input.triggeredBy === 'goal' ? { triggeredBy: 'goal' as const } : {}),
     pptCapabilityActive: !preset.disabledToolGroups?.includes('ppt-materials') && pptDecision.active,
     runtimeSupportsSubagents:
@@ -1343,7 +1309,7 @@ export async function runAgentHeadless(
   input = normalizeHeadlessSendInput(input, callbacks.source)
   if (isIndependentLocalCore() || isLocalCorePiInput(input)) {
     const initiator = input.initiator ?? (callbacks.source ? resolveRunInitiator(input.triggeredBy, callbacks.source) : 'external')
-    await runAgentThroughLocalCore({ ...input, initiator }, getSessionWebContents(input.sessionId) ?? getMainRendererWebContents() ?? undefined, callbacks)
+    await runAgentThroughLocalCore({ ...input, initiator }, getSessionWebContents(input.sessionId) ?? agentStreamOwner(localAgentWindows(), input.sessionId) ?? undefined, callbacks)
     return
   }
   if (canUseRuntimeHeadless(input)) {
@@ -1355,7 +1321,7 @@ export async function runAgentHeadless(
   // 收不到任何运行事件（过程区一直折叠、看不出在运行）。
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
   const existingOwner = getSessionWebContents(runInput.sessionId)
-  const wc = existingOwner ?? getMainRendererWebContents()
+  const wc = existingOwner ?? agentStreamOwner(localAgentWindows(), runInput.sessionId)
   const startedAt = runInput.startedAt!
   // 本轮发起者：run 内不变。
   // fail-safe（design §2.3）：headless 运行没有显式 source 时按 'external' 处理（不清未读），
@@ -1639,6 +1605,28 @@ export async function updateAgentPermissionMode(sessionId: string, mode: ProferP
     const client = getLocalCoreClient()
     if (!client) throw new Error('本地Core未连接')
     await client.updateSessionMeta(sessionId, { permissionMode: mode })
+    return
+  }
+  if (runtimeCoordinator.isRunning(sessionId)) {
+    const controller = getAgentRuntimePlanMode(sessionId)
+    if (!controller) throw new Error('运行权限尚未准备完成，请稍后重试')
+    const cap = resolveSessionDelegationPermissionCap(getAgentSessionMeta(sessionId))
+    const effectiveMode = cap ? resolveEffectivePermissionMode(cap, mode) : mode
+    const previousMode = controller.getMode()
+    try {
+      await adapter.setPermissionMode?.(sessionId, sdkPermissionModeForProferMode(effectiveMode))
+    } catch (error) {
+      if (getAgentRuntimePlanMode(sessionId) === controller) {
+        await adapter.setPermissionMode?.(sessionId, sdkPermissionModeForProferMode(previousMode)).catch((rollbackError: unknown) => {
+          console.warn('[Agent 运行时] SDK 权限回滚失败，停止原运行:', rollbackError)
+          if (getAgentRuntimePlanMode(sessionId) === controller) {
+            void runtimeCoordinator.stop(sessionId, 'user').catch(stopError => console.error('[Agent 运行时] 停止权限未知运行失败:', stopError))
+          }
+        })
+      }
+      throw error
+    }
+    if (getAgentRuntimePlanMode(sessionId) === controller) controller.setMode(effectiveMode, 'permission')
     return
   }
   await orchestrator.updateSessionPermissionMode(sessionId, mode)

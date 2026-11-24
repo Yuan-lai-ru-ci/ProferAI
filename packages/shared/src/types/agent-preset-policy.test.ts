@@ -36,6 +36,18 @@ describe('EffectiveAgentPresetPolicy', () => {
     expect(resolveEffectivePermissionMode('plan', 'auto')).toBe('plan')
   })
 
+  test('可信用户模式可以突破预设默认，但不解除工具禁用', () => {
+    const policy = createEffectiveAgentPresetPolicy(preset({ permissionMode: 'plan', disabledTools: ['Write'], disabledToolGroups: ['browser'] }), reference, {
+      userPermissionMode: 'bypassPermissions',
+    })
+    expect(policy.permissionMode).toBe('bypassPermissions')
+    expect(isEffectiveAgentPresetToolDisabled(policy, 'Write')).toBe(true)
+    expect(isEffectiveAgentPresetToolGroupDisabled(policy, 'browser')).toBe(true)
+    expect(createEffectiveAgentPresetPolicy(preset({ permissionMode: 'plan' }), reference, {
+      userPermissionMode: 'bypassPermissions', permissionMode: 'auto',
+    }).permissionMode).toBe('auto')
+  })
+
   test('Goal 沿用预设/会话权限交集，不因持续执行提升 Plan/auto', () => {
     for (const permissionMode of ['plan', 'auto', 'bypassPermissions'] as const) {
       expect(createEffectiveAgentPresetPolicy(preset({ permissionMode }), reference, {

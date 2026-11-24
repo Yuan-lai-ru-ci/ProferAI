@@ -58,7 +58,7 @@ const {
   requireAgentRunWorkspace,
 } = await import('./agent-orchestrator')
 const { runRuntimeHeadlessEntry } = await import('./agent-runtime-entry')
-const { createAgentSession, getAgentSessionMeta } = await import('./agent-session-manager')
+const { createAgentSession, getAgentSessionMeta, updateAgentSessionMeta } = await import('./agent-session-manager')
 const { handleRemoteCommand } = await import('./remote-service')
 const { invalidateWorkspaceLocation } = await import('./workspace-locator')
 
@@ -305,4 +305,62 @@ describe('Pocket list_sessions：不再下发已删除工作区的会话', () =>
     expect(ids).not.toContain(deadSession.id)
     expect(ids).not.toContain(archivedSession.id)
   })
+})
+
+
+test('Given 预设 plan When headless 读取 user 来源 Then 用户模式生效但普通 override 不放权', async () => {
+  writeWorkspacesIndex([managedEntry('managed-ws')])
+  const { createAgentPreset } = await import('./agent-preset-manager')
+  const preset = createAgentPreset('managed-ws', { name: '权限测试', description: '', permissionMode: 'plan', disabledTools: ['delegate_agent'] })
+  const meta = createAgentSession('policy', 'channel-fixture', 'id-managed-ws', 'model-fixture', 'pi', false, preset.id)
+  const request = { ...sendInput(meta.id, 'id-managed-ws'), agentRuntime: 'pi' as const, permissionModeOverride: 'bypassPermissions' as const }
+  expect(buildRuntimeHeadlessRunContext(request).policy?.userPermissionMode).toBeUndefined()
+  const { resolveAgentRuntimePolicySnapshot } = await import('./agent-runtime-policy-snapshot')
+  const first = buildRuntimeHeadlessRunContext(request).policy!
+  expect(resolveAgentRuntimePolicySnapshot(first).policy.permissionMode).toBe('plan')
+  updateAgentSessionMeta(meta.id, { permissionMode: 'bypassPermissions', permissionModeSource: 'user' })
+  const selected = buildRuntimeHeadlessRunContext(request).policy!
+  expect(resolveAgentRuntimePolicySnapshot(selected).policy).toMatchObject({ permissionMode: 'bypassPermissions', disabledTools: ['delegate_agent'] })
+  updateAgentSessionMeta(meta.id, { permissionModeSource: undefined })
+  expect(resolveAgentRuntimePolicySnapshot(buildRuntimeHeadlessRunContext(request).policy!).policy.permissionMode).toBe('plan')
+})
+
+
+test('Given delegated 子会话 user bypass When 父级 plan Then headless 保持父级 cap', async () => {
+  writeWorkspacesIndex([managedEntry('managed-ws')])
+  const { createAgentPreset } = await import('./agent-preset-manager')
+  const preset = createAgentPreset('managed-ws', { name: '委派计划权限', description: '', permissionMode: 'plan' })
+  const parent = createAgentSession('parent', 'channel-fixture', 'id-managed-ws', 'model-fixture', 'pi', false, preset.id)
+  const child = createAgentSession('child', 'channel-fixture', 'id-managed-ws', 'model-fixture', 'pi', false, 'standard')
+  updateAgentSessionMeta(child.id, { sourceDelegationId: 'delegation-test', parentSessionId: parent.id, permissionModeSource: 'user', permissionMode: 'bypassPermissions' })
+  const { resolveAgentRuntimePolicySnapshot } = await import('./agent-runtime-policy-snapshot')
+  const snapshot = resolveAgentRuntimePolicySnapshot(buildRuntimeHeadlessRunContext({ ...sendInput(child.id), agentRuntime: 'pi' }).policy!)
+  expect(snapshot.policy.permissionMode).toBe('plan')
+})
+
+
+test('Given 委派父级 cap When 用户批准 ExitPlan Then plan 不退出，auto 不升级 bypass', async () => {
+  writeWorkspacesIndex([managedEntry('managed-ws')])
+  const { createAgentPreset } = await import('./agent-preset-manager')
+  const { exitPlanService } = await import('./agent-exit-plan-service')
+  const { createElectronPermissionPort } = await import('./agent-runtime-permission-port')
+  const { createAgentRuntimePlanModeController, registerAgentRuntimePlanMode, clearAgentRuntimePlanMode } = await import('./agent-runtime-plan-mode')
+  for (const cap of ['plan', 'auto'] as const) {
+    const preset = createAgentPreset('managed-ws', { name: `审批边界-${cap}`, description: '', permissionMode: cap })
+    const parent = createAgentSession('parent', undefined, 'id-managed-ws', undefined, 'pi', false, preset.id)
+    const child = createAgentSession('child', undefined, 'id-managed-ws', undefined, 'pi', false, 'standard')
+    updateAgentSessionMeta(child.id, { parentSessionId: parent.id, sourceDelegationId: 'exit-cap' })
+    const controller = createAgentRuntimePlanModeController({ sessionId: child.id, initialMode: 'plan', emit() {} })
+    registerAgentRuntimePlanMode(controller)
+    try {
+      const callback = createElectronPermissionPort().createCanUseTool!({ sessionId: child.id, sendPermissionRequest() {} })
+      const pending = callback('ExitPlanMode', {}, { signal: new AbortController().signal })
+      const request = exitPlanService.getPendingRequests().find(item => item.sessionId === child.id)!
+      const response = exitPlanService.respondToExitPlanMode({ requestId: request.requestId, action: 'approve_auto' })
+      expect(response).toMatchObject({ sessionId: child.id, targetMode: cap === 'plan' ? null : 'auto' })
+      await expect(pending).resolves.toMatchObject(cap === 'plan' ? { behavior: 'deny' } : { behavior: 'allow', targetMode: 'auto' })
+      expect(controller.getMode()).toBe(cap)
+      expect(controller.isPlanActive()).toBe(cap === 'plan')
+    } finally { clearAgentRuntimePlanMode(child.id); exitPlanService.clearSessionPending(child.id) }
+  }
 })

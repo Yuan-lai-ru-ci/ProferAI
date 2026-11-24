@@ -156,6 +156,8 @@ export interface BrowserTabSummary extends BrowserPageInteractionState {
   loading: boolean
   /** 当前网页标签的独立缩放倍率，1 = 100%。 */
   zoomFactor: number
+  /** 当前 guest 正在发声；旧版本未提供时视为 false。 */
+  audible?: boolean
   /** 此标签由 Agent 创建（与当前默认工作标签无关）。 */
   openedByAgent: boolean
   /** 每页状态供两页同时分屏；缺失仅用于兼容旧状态。 */

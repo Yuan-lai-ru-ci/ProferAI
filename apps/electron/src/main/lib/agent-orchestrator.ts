@@ -1,3 +1,4 @@
+import { resolveSessionPermissionOptions, resolveSessionDelegationPermissionCap } from './agent-session-permission-policy'
 import { routePluginModel } from './plugins/plugin-routing'
 import { buildPluginAgentTools } from './plugins/plugin-agent-tools'
 import { injectGoalMcpServer } from './goal-tools'
@@ -59,6 +60,7 @@ import {
   strip1MContextSuffix,
   AGENT_PRESET_CAPABILITY_GROUPS,
   createEffectiveAgentPresetPolicy,
+  resolveEffectivePermissionMode,
   withLoadedMcpServerNames,
   isEffectiveAgentPresetMcpServerAllowed,
 } from '@profer/shared'
@@ -471,6 +473,8 @@ export class AgentOrchestrator {
 
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, ProferPermissionMode>()
+  /** 热切换同步本轮计划态闭包，避免 UI 已退出 plan 而可视化仍被旧状态挡住。 */
+  private sessionPlanModeSetters = new Map<string, (active: boolean) => void>()
 
   /** 每轮真实运行的退出信号；仅 owner finally 可以 resolve。 */
   private runCompletions = new Map<string, { token: string; promise: Promise<void>; resolve: () => void }>()
@@ -1772,7 +1776,7 @@ export class AgentOrchestrator {
         sessionPreset,
         currentPresetReference,
         {
-          permissionMode: input.permissionModeOverride,
+          ...resolveSessionPermissionOptions(presetSessionMeta, input.permissionModeOverride),
           triggeredBy: input.triggeredBy === 'goal' ? 'goal' : undefined,
           pptCapabilityActive,
           runtimeSupportsSubagents: this.adapter.getRuntimeCapabilities?.(agentRuntime)?.runtimeSupportsSubagents
@@ -1915,6 +1919,7 @@ export class AgentOrchestrator {
         })
       }
       let planModeEntered = presetPolicy.permissionMode === 'plan'
+      this.sessionPlanModeSetters.set(sessionId, active => { planModeEntered = active })
       const assertCanPresentVisualization = (): void => {
         if (this.stoppedBySessions.has(sessionId) || this.activeSessions.get(sessionId) !== runGeneration) throw new Error('本轮已取消，不能公布可视化')
         if (planModeEntered || (this.sessionPermissionModes.get(sessionId) ?? presetPolicy.permissionMode) === 'plan') throw new Error('计划模式不能公布可视化；请先完成计划审批')
@@ -4013,6 +4018,7 @@ export class AgentOrchestrator {
         this.activePromptModes.delete(sessionId)
         this.activePresetPolicies.delete(sessionId)
         this.sessionPermissionModes.delete(sessionId)
+        this.sessionPlanModeSetters.delete(sessionId)
         this.queuedMessageUuids.delete(sessionId)
         this.permissionPort.clearSessionPending?.(sessionId)
         const currentCompletion = this.runCompletions.get(sessionId)
@@ -4218,20 +4224,35 @@ export class AgentOrchestrator {
    */
   async updateSessionPermissionMode(sessionId: string, mode: ProferPermissionMode): Promise<void> {
     if (!this.activeSessions.has(sessionId)) return
+    if (!this.sessionPermissionModes.has(sessionId)) throw new Error('运行权限尚未准备完成，请稍后重试')
+    const cap = resolveSessionDelegationPermissionCap(this.sessionPort.getMeta(sessionId))
+    if (cap) mode = resolveEffectivePermissionMode(cap, mode)
+    const generation = this.activeSessions.get(sessionId)
+    const previousMode = this.sessionPermissionModes.get(sessionId)
+    // 先等待 SDK 确认；失败时 Map/计划态/事件保持原样，并尽力恢复可能部分生效的 SDK。
+    if (this.adapter.setPermissionMode) {
+      try {
+        await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForProferMode(mode))
+      } catch (error) {
+        if (previousMode && this.activeSessions.get(sessionId) === generation) {
+          await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForProferMode(previousMode)).catch((rollbackError: unknown) => {
+            console.warn('[Agent 编排] SDK 权限模式回滚失败，停止原运行:', rollbackError)
+            if (this.activeSessions.get(sessionId) === generation) this.stop(sessionId)
+          })
+        }
+        throw error
+      }
+    }
+    // SDK 等待期间旧 run 可能结束或被替换，不污染新 run。
+    if (this.activeSessions.get(sessionId) !== generation) return
     this.sessionPermissionModes.set(sessionId, mode)
+    this.sessionPlanModeSetters.get(sessionId)?.(mode === 'plan')
+    const policy = this.activePresetPolicies.get(sessionId)
+    if (policy) this.activePresetPolicies.set(sessionId, Object.freeze({ ...policy, permissionMode: mode }))
     this.eventPort.emit(sessionId, {
       kind: 'profer_event',
-      event: {
-        type: 'plan_mode_changed',
-        sessionId,
-        active: mode === 'plan',
-        source: 'permission',
-      },
+      event: { type: 'plan_mode_changed', sessionId, active: mode === 'plan', source: 'permission' },
     })
-    // 同步通知 SDK 侧
-    if (this.adapter.setPermissionMode) {
-      await this.adapter.setPermissionMode(sessionId, sdkPermissionModeForProferMode(mode))
-    }
     console.log(`[Agent 编排] 运行中权限模式已切换: sessionId=${sessionId}, mode=${mode}`)
   }
 

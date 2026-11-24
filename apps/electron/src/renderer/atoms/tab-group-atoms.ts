@@ -67,7 +67,7 @@ export type TabGroupsState = TabGroupState[]
  * 判据是「这个标签有独立的内容身份、可以并排看」：
  * - agent / chat：会话；
  * - preview：文件（拖进分区 = 用一栏展示这个文件）；
- * - browser：受管浏览器（Agent 推送时也会经 planAutoGroupWorkTab 自动与对话成组）；
+ * - browser：受管浏览器（由用户决定是否与对话成组）；
  * - scratch / tutorial / frp-guide：单例固定 tab，不能有两份；
  * - plugin：PluginViewport 是独立宿主视口，同屏两份会冲突。
  */

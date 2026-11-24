@@ -28,7 +28,7 @@ function scopeOf(value: unknown): CoreResourceScope | null {
   if (!scope || typeof scope !== 'object' || !('targetId' in scope) || !('generation' in scope) || typeof scope.targetId !== 'string' || !Number.isSafeInteger(scope.generation)) throw new Error('Core 资源目标 scope 无效')
   return scope as CoreResourceScope
 }
-const UNSUPPORTED = new Set(['probeMcpServer', 'restartMcpServer', 'listMcpConnectionSnapshots', 'saveMasterSkill', 'renameMasterSkillMeta', 'rollbackMasterSkill', 'syncMasterSkillToWorkspaces', 'exportAgentPresets', 'importAgentPresets', 'rebindAndDisableGlobalPresetScope'])
+const UNSUPPORTED = new Set(['saveMasterSkill', 'renameMasterSkillMeta', 'rollbackMasterSkill', 'syncMasterSkillToWorkspaces', 'exportAgentPresets', 'importAgentPresets', 'rebindAndDisableGlobalPresetScope'])
 /** 在 HTTP 前验证调用归属，在响应后验证连接/代际，禁止回落本机。 */
 export async function routeCoreResource(channel: string, input: unknown[], readSnapshot = snapshot): Promise<{ result: unknown } | null> {
   const current = readSnapshot()

@@ -8,7 +8,7 @@
  * - 拒绝根目录、Core 配置目录及其祖先/子孙，避免一次误操作把 Core 自己删掉。
  */
 
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -32,25 +32,30 @@ export function assertEntryName(input: string): string {
 /**
  * 路径安全校验：
  * - 源（要改/删的东西）不能是配置目录、配置目录内部，也不能是配置目录的祖先；
- * - 目标目录可以是配置目录的祖先（例如把文件放回上层临时目录），但不能是配置目录本身或它的子目录。
+ * - 目标目录可以是配置目录的祖先（例如把文件放回上层临时目录），但不能是配置目录本身或它的子目录；
+ * - runtime 可显式授权当前会话工作台的子项，工作台根不能作为源被改名/移动/删除。
  */
-export function assertOperablePath(input: string, configDir: string, mode: 'source' | 'destination' = 'source'): string {
+export function assertOperablePath(input: string, configDir: string, mode: 'source' | 'destination' = 'source', sessionWorkbench?: string): string {
   const raw = typeof input === 'string' ? input.trim() : ''
   if (!raw || raw.includes(String.fromCharCode(0)) || !isAbsolute(raw)) throw new Error('路径无效，必须是绝对路径')
   const target = resolve(raw)
   if (parse(target).root === target) throw new Error('不能对根目录执行此操作')
   const config = resolve(configDir)
   const insideConfig = isInside(config, target)
-  if (target === config || insideConfig) throw new Error('不能操作 Core 配置目录及其内部路径')
+  // 唯一例外是由 runtime 提供的当前会话工作台；禁止操作根本身或借符号链接逃逸。
+  const allowedWorkbench = sessionWorkbench && resolve(sessionWorkbench) !== config && isInside(config, sessionWorkbench)
+    && existsSync(sessionWorkbench)
+    && realpathSync(sessionWorkbench) === join(realpathSync(config), relative(config, resolve(sessionWorkbench)))
+    && isInside(sessionWorkbench, target) && (mode === 'destination' || resolve(sessionWorkbench) !== target)
+    && isInside(realpathSync(sessionWorkbench), realpathSync(existsSync(target) ? target : dirname(target)))
+  if ((target === config || insideConfig) && !allowedWorkbench) throw new Error('不能操作 Core 配置目录及其内部路径')
   if (mode === 'source' && isInside(target, config)) throw new Error('不能操作 Core 配置目录的上级目录')
   return target
 }
 
-/** 目标最终路径也要挡在配置目录之外，避免覆盖配置本身。 */
-function assertTargetOutsideConfig(target: string, configDir: string): string {
-  const config = resolve(configDir)
-  if (target === config || isInside(config, target)) throw new Error('不能覆盖 Core 配置目录')
-  return target
+/** 最终目标与源一样检查配置保护，避免覆盖配置或经现有链接越界。 */
+function assertTargetOutsideConfig(target: string, configDir: string, sessionWorkbench?: string): string {
+  return assertOperablePath(target, configDir, 'destination', sessionWorkbench)
 }
 
 function rmTree(path: string): void {
@@ -78,22 +83,22 @@ function prepareDestination(target: string, overwrite: boolean): void {
   rmTree(target)
 }
 
-export function renameEntry(path: string, newName: string, configDir: string): { path: string } {
-  const source = assertOperablePath(path, configDir)
+export function renameEntry(path: string, newName: string, configDir: string, sessionWorkbench?: string): { path: string } {
+  const source = assertOperablePath(path, configDir, 'source', sessionWorkbench)
   const name = assertEntryName(newName)
-  const target = join(dirname(source), name)
+  const target = assertTargetOutsideConfig(join(dirname(source), name), configDir, sessionWorkbench)
   if (target === source) return { path: source }
   prepareDestination(target, false)
   try { renameSync(source, target) } catch { copyTree(source, target); rmTree(source) }
   return { path: target }
 }
 
-export function moveEntry(from: string, toDir: string, configDir: string, overwrite = false): { path: string } {
-  const source = assertOperablePath(from, configDir)
-  const dir = assertOperablePath(toDir, configDir, 'destination')
+export function moveEntry(from: string, toDir: string, configDir: string, overwrite = false, sessionWorkbench?: string): { path: string } {
+  const source = assertOperablePath(from, configDir, 'source', sessionWorkbench)
+  const dir = assertOperablePath(toDir, configDir, 'destination', sessionWorkbench)
   if (!statSync(dir).isDirectory()) throw new Error('目标不是文件夹')
   if (lstatSync(source).isDirectory() && isInside(source, dir)) throw new Error('不能把文件夹移动到它自己里面')
-  const target = assertTargetOutsideConfig(join(dir, basename(source)), configDir)
+  const target = assertTargetOutsideConfig(join(dir, basename(source)), configDir, sessionWorkbench)
   if (target === source) return { path: source }
   prepareDestination(target, overwrite)
   try {
@@ -107,12 +112,12 @@ export function moveEntry(from: string, toDir: string, configDir: string, overwr
   return { path: target }
 }
 
-export function copyEntry(from: string, toDir: string, configDir: string, overwrite = false): { path: string } {
-  const source = assertOperablePath(from, configDir)
-  const dir = assertOperablePath(toDir, configDir, 'destination')
+export function copyEntry(from: string, toDir: string, configDir: string, overwrite = false, sessionWorkbench?: string): { path: string } {
+  const source = assertOperablePath(from, configDir, 'source', sessionWorkbench)
+  const dir = assertOperablePath(toDir, configDir, 'destination', sessionWorkbench)
   if (!statSync(dir).isDirectory()) throw new Error('目标不是文件夹')
   if (lstatSync(source).isDirectory() && isInside(source, dir)) throw new Error('不能把文件夹复制到它自己里面')
-  const target = assertTargetOutsideConfig(join(dir, basename(source)), configDir)
+  const target = assertTargetOutsideConfig(join(dir, basename(source)), configDir, sessionWorkbench)
   if (target === source) throw new Error('源和目标是同一个位置')
   prepareDestination(target, overwrite)
   copyTree(source, target)
@@ -120,8 +125,8 @@ export function copyEntry(from: string, toDir: string, configDir: string, overwr
 }
 
 /** 删除到 Core 自带的回收站：三平台一致，附带恢复所需的原始路径。 */
-export function trashEntry(path: string, configDir: string): { path: string } {
-  const source = assertOperablePath(path, configDir)
+export function trashEntry(path: string, configDir: string, sessionWorkbench?: string): { path: string } {
+  const source = assertOperablePath(path, configDir, 'source', sessionWorkbench)
   const bucket = join(resolve(configDir), 'trash', `${Date.now()}-${randomUUID().slice(0, 8)}`)
   mkdirSync(bucket, { recursive: true })
   const target = join(bucket, basename(source))
@@ -138,8 +143,8 @@ const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.json', '.jsonc', '.js', '.ts',
 const IMAGE_MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.ico': 'image/x-icon' }
 
 /** 预览读取：只给文本与图片，限制大小；二进制返回 null 由调用方提示。 */
-export function readEntryPreview(path: string, configDir: string, maxBytes = 10 * 1024 * 1024): { path: string; base64: string; mime: string; size: number } | null {
-  const target = assertOperablePath(path, configDir)
+export function readEntryPreview(path: string, configDir: string, maxBytes = 10 * 1024 * 1024, sessionWorkbench?: string): { path: string; base64: string; mime: string; size: number } | null {
+  const target = assertOperablePath(path, configDir, 'source', sessionWorkbench)
   if (!existsSync(target)) throw new Error('文件不存在')
   const stat = statSync(target)
   if (!stat.isFile()) throw new Error('只能预览文件')

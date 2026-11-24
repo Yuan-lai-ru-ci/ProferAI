@@ -240,3 +240,21 @@ test('release 后不重复 close；owner 销毁中止全部 pending 并移除监
   await expect(h.manager.requestGuest('s', 'c', 'persist:test')).rejects.toThrow('unavailable')
   expect(h.owner.listenerCount('will-attach-webview')).toBe(0)
 })
+
+test('原生页关闭失败保留绑定，下次可关闭同一网页', async () => {
+  const h = harness()
+  const result = h.manager.requestGuest('s', 't', 'persist:test')
+  h.will()
+  const guest = h.did()
+  h.bind(h.requests[0]!, guest)
+  await result
+  const close = guest.close.bind(guest)
+  guest.close = () => { throw new Error('close failed') }
+  expect(() => h.manager.release('s', 't')).toThrow('close failed')
+  expect(h.manager.getBinding(guest.id)?.guest).toBe(guest.asContents())
+  guest.close = close
+  expect(h.manager.release('s', 't')).toBe(true)
+  expect(guest.destroyed).toBe(true)
+  expect(h.manager.getBinding(guest.id)).toBeUndefined()
+  h.manager.dispose()
+})

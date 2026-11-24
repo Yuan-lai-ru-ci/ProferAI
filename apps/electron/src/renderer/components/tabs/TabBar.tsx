@@ -14,7 +14,7 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { PluginTopBarEntries } from '@/components/plugins/PluginEntries'
 import { resolvePluginPageSurfaceVisibility } from '@profer/plugin-api'
 import { installedPluginsAtom } from '@/atoms/plugin-system'
-import { Globe2, PanelRight, Ungroup, Blocks } from "lucide-react";
+import { Globe2, PanelRight, Ungroup, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   tabsAtom,
@@ -71,11 +71,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@profer/ui/primitives/tooltip";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@profer/ui/primitives/dropdown-menu";
 import { WindowControlsHost } from "@/components/WindowControlsTemplate";
 import { TabBarItem } from "./TabBarItem";
 import { TabGroupItem } from "./TabGroupItem";
-import { selectContextTabs } from "./tab-context";
+import { selectBackgroundAudioSources, selectContextTabs } from "./tab-context";
 import { buildTabBarEntries, selectScopeTabIds } from "./tab-close-scope";
+import { useSyncActiveTabSideEffects } from "@/hooks/useSyncActiveTabSideEffects";
 import { useCloseTab } from "@/hooks/useCloseTab";
 import { useMoveTabToNewWindow } from "@/hooks/useMoveTabToNewWindow";
 import { detectIsWindows } from "@profer/ui";
@@ -134,6 +136,7 @@ export function TabBar(): React.ReactElement {
 
   // 统一关闭逻辑：关闭当前会话入口并回到 Scratch Pad，不停止后台 Agent
   const { requestClose, requestCloseMany } = useCloseTab();
+  const syncActiveTabSideEffects = useSyncActiveTabSideEffects();
   const moveTabToNewWindow = useMoveTabToNewWindow();
   const store = useStore();
 
@@ -305,6 +308,9 @@ export function TabBar(): React.ReactElement {
       } else if (tab.type === "chat") {
         setAppMode("chat");
         setCurrentConversationId(tab.sessionId);
+      } else if (tab.type === "browser") {
+        // 声音入口也能从 Chat / 草稿跳入另一会话，不能只切 activeTab 而留下原会话上下文。
+        syncActiveTabSideEffects(tab);
       } else if (tab.type === "agent" || tab.type === "preview") {
         setAppMode("agent");
         setCurrentAgentSessionId(tab.sessionId);
@@ -348,6 +354,7 @@ export function TabBar(): React.ReactElement {
       setCurrentAgentWorkspaceId,
       setUnviewedCompleted,
       setScratchPadOriginTabId,
+      syncActiveTabSideEffects,
       activeTabId,
     ],
   );
@@ -612,7 +619,13 @@ function TabBarInner({
   onMoveToNewWindow: (tabId: string) => void;
 }): React.ReactElement {
   const agentSessions = useAtomValue(agentSessionsAtom);
+  const allTabs = useAtomValue(tabsAtom);
   const browserStateMap = useAtomValue(browserStateMapAtom);
+  const audioSources = React.useMemo(() => selectBackgroundAudioSources(allTabs, tabs, browserStateMap),
+    [allTabs, tabs, browserStateMap]);
+  const pageForTab = (tab: TabItem | null) => tab?.type === "browser" && tab.browserTabId
+    ? browserStateMap.get(tab.sessionId)?.tabs.find((page) => page.tabId === tab.browserTabId)
+    : undefined;
 
   const [hoveredTabId, setHoveredTabId] = React.useState<string | null>(null);
   const store = useStore();
@@ -643,7 +656,12 @@ function TabBarInner({
   );
   const activeChatSessionId = activeTab?.type === "chat" ? activeTab.sessionId : null;
   const [tabGroups, setTabGroups] = useAtom(tabGroupsAtom);
-  const activeGroup = findTabGroup(tabGroups, activeTabId);
+  // 旧组合可能有成员被当前上下文过滤。只有全部非空成员都在 rail 才显示整组操作。
+  const railGroups = React.useMemo(() => {
+    const visible = new Set(tabs.map(tab => tab.id));
+    return tabGroups.filter(group => groupTabIds(group).every(id => visible.has(id)));
+  }, [tabs, tabGroups]);
+  const activeGroup = findTabGroup(railGroups, activeTabId);
   // 顶栏右侧工具是「会话上下文」动作，不是「会话 Tab」动作：
   // 预览/浏览器等工作 Tab 激活时，入口仍归口到其宿主会话，不能凭空消失。
   const activeSessionId = !activeTab
@@ -669,7 +687,6 @@ function TabBarInner({
   const showOpenPanelButton = !filePanelVisible && activeAgentSessionId !== null;
   const filePanelForcedHidden = isPanelOpen && !filePanelVisible;
   // 受管浏览器入口：仅当当前标签是 Agent 会话时展示。主进程按会话隔离浏览器。
-  const setBrowserStateMap = useSetAtom(browserStateMapAtom);
   // 每页一个浏览器 Tab 后「浏览器 Tab」是一组页：首个页 Tab 用于入口聚焦，
   // 「正在展示」指激活的本来就是该会话的浏览器页 Tab。
   const activeBrowserTab = activeAgentSessionId
@@ -724,14 +741,9 @@ function TabBarInner({
       setForeground(activeAgentSessionId);
     const intent = captureBrowserOpenIntent(activeAgentSessionId);
     const state = await open(activeAgentSessionId);
-    setBrowserStateMap((previous) => {
-      const next = new Map(previous);
-      next.set(activeAgentSessionId, state);
-      return next;
-    });
-    // Tab 化：创建/聚焦浏览器页 Tab 并清除“已手动关闭”标记（reconcile 以主进程状态为准）。
+    // 显式点击入口才激活网页，普通状态推送只登记页签。
     openBrowserTabManually(activeAgentSessionId, state, undefined, intent);
-  }, [activeAgentSessionId, setBrowserStateMap]);
+  }, [activeAgentSessionId]);
 
   // 浏览器图标在浏览器 Tab 未展示时出现：存在后台浏览器 Tab → 点击聚焦；不存在 → 打开。
   const toggleBrowser = React.useCallback(() => {
@@ -752,7 +764,7 @@ function TabBarInner({
   // 每个组合在顶栏的锚点：成员中在 tabsAtom 里靠前的那个，另一个折叠隐藏。
   const groupAnchorByMemberId = React.useMemo(() => {
     const result = new Map<string, string>();
-    for (const group of tabGroups) {
+    for (const group of railGroups) {
       const present = groupTabIds(group)
         .map((id) => ({ id, index: tabs.findIndex((tab) => tab.id === id) }))
         .filter((entry) => entry.index >= 0)
@@ -762,7 +774,7 @@ function TabBarInner({
       for (const memberId of groupTabIds(group)) result.set(memberId, anchor);
     }
     return result;
-  }, [tabGroups, tabs]);
+  }, [railGroups, tabs]);
 
   const dissolveGroup = React.useCallback((group: ReturnType<typeof findTabGroup>) => {
     setTabGroups((previous) => removeTabGroup(previous, group));
@@ -771,7 +783,7 @@ function TabBarInner({
   // 右键批量关闭的作用范围：按顶栏的「渲染条目」算（组合折叠成一个条目），而不是按数组下标——
   // 组合成员可能不相邻，按下标会把视觉上位于左边的成员算成右侧（见 tab-close-scope）。
   const closeScopeByEntryId = React.useMemo(() => {
-    const entries = buildTabBarEntries(tabs, tabGroups);
+    const entries = buildTabBarEntries(tabs, railGroups);
     const result = new Map<string, { others: string[]; right: string[] }>();
     for (const entry of entries) {
       result.set(entry.id, {
@@ -780,7 +792,7 @@ function TabBarInner({
       });
     }
     return result;
-  }, [tabs, tabGroups]);
+  }, [tabs, railGroups]);
 
   /** 批量关闭：范围为空时菜单已置灰，这里再挡一层，避免空提交。 */
   const closeInScope = React.useCallback(
@@ -800,6 +812,11 @@ function TabBarInner({
   }, [onClose, setTabGroups]);
 
   const topBarTools: TopBarTool[] = [
+    {
+      id: "background-audio",
+      visible: audioSources.length > 0,
+      element: <BackgroundAudioButton sources={audioSources} onActivate={onActivate} />,
+    },
     {
       id: "managed-browser",
       // 工具优先于标签：浏览器分栏压窄会话区时仍保留完整入口，标签区自行滚动压缩。
@@ -826,10 +843,7 @@ function TabBarInner({
     {
       id: "plugin-pages",
       visible: activeSessionId !== null && hasPluginPages,
-      label: "打开插件页面",
-      tooltip: "打开插件页面",
-      icon: <Blocks className="size-3.5" />,
-      onClick: () => undefined,
+      element: <PluginTopBarEntries />,
     },
     {
       id: "tab-group",
@@ -1013,7 +1027,7 @@ function TabBarInner({
     };
 
     const handleUp = (me: PointerEvent): void => {
-      const shouldTearOff = armed || isOutsideWindow(me.clientX, me.clientY);
+      const shouldTearOff = isOutsideWindow(me.clientX, me.clientY);
       cleanup();
       if (!shouldTearOff) return;
       // 先取消排序 / 清掉合并投放高亮，避免源窗口残留 transform 或虚线框。
@@ -1117,13 +1131,15 @@ function TabBarInner({
         setTabGroupDrag({ draggingTabId: tabId, hoveredPosition: hoveredSide });
       };
 
-      const handleUp = (): void => {
+      const handleUp = (event: PointerEvent): void => {
         document.removeEventListener("pointermove", handleMove);
         document.removeEventListener("pointerup", handleUp);
         document.removeEventListener("pointercancel", handleUp);
         setTearingOff(null);
 
-        const side = committable ? hoveredSide : null;
+        // 以最终落点为准；离窗松手/取消不应再提交上一帧残留的分栏。
+        const inside = event.type === 'pointerup' && event.clientX >= 0 && event.clientX <= window.innerWidth && event.clientY >= 0 && event.clientY <= window.innerHeight;
+        const side = inside && committable ? hoveredSide : null;
         clearDropState();
         if (mode !== "group" || !side) return;
 
@@ -1399,7 +1415,7 @@ function TabBarInner({
       {tearOffHint && (
         <div className="pointer-events-none absolute inset-x-0 top-full z-50 flex justify-center pt-2">
           <div className="rounded-full bg-foreground/90 px-3 py-1 text-xs text-background shadow-lg">
-            松开鼠标，在新窗口打开
+            松开鼠标，移到新窗口
           </div>
         </div>
       )}
@@ -1443,7 +1459,7 @@ function TabBarInner({
             {tabs.map((tab) => {
               // 每个组合的两个成员在顶栏折叠成一个条目：跳过另一个成员，
               // 在锚点（列表中靠前的那个成员）位置渲染组合条目。
-              const tabGroup = findTabGroup(tabGroups, tab.id);
+              const tabGroup = findTabGroup(railGroups, tab.id);
               const groupAnchorTabId = groupAnchorByMemberId.get(tab.id);
               if (tabGroup && groupAnchorTabId) {
                 if (tab.id !== groupAnchorTabId) return null;
@@ -1461,6 +1477,8 @@ function TabBarInner({
                       id={tab.id}
                       leftTitle={leftTab?.title ?? null}
                       rightTitle={rightTab?.title ?? null}
+                      leftAudible={pageForTab(leftTab)?.audible}
+                      rightAudible={pageForTab(rightTab)?.audible}
                       leftStatus={leftTab ? streamingMap.get(leftTab.id) ?? "idle" : "idle"}
                       rightStatus={rightTab ? streamingMap.get(rightTab.id) ?? "idle" : "idle"}
                       isActive={isGroupActive(tabGroup, activeTabId)}
@@ -1481,6 +1499,7 @@ function TabBarInner({
                 }
               }
 
+              const page = pageForTab(tab);
               const closeScope = closeScopeByEntryId.get(tab.id) ?? EMPTY_CLOSE_SCOPE;
               return (
               <TabBarItem
@@ -1506,11 +1525,8 @@ function TabBarInner({
                         : undefined
                     : undefined
                 }
-                agentOwned={
-                  tab.type === "browser" && !!tab.browserTabId
-                    ? browserStateMap.get(tab.sessionId)?.tabs.find((page) => page.tabId === tab.browserTabId)?.openedByAgent
-                    : undefined
-                }
+                agentOwned={page?.openedByAgent}
+                audible={page?.audible}
                 onRename={
                   tab.type === "agent"
                     ? (title) => handleRenameAgentSession(tab.sessionId, title)
@@ -1538,7 +1554,7 @@ function TabBarInner({
                 onMiddleClick={() => onClose(tab.id)}
                 onDragStart={(e) => handleDragStartWithTearOff(tab.id, e)}
                 onOpenInNewWindow={
-                  isMovableSessionTab(tab) && !tabGroup
+                  isMovableSessionTab(tab) && !findTabGroup(tabGroups, tab.id)
                     ? () => onMoveToNewWindow(tab.id)
                     : undefined
                 }
@@ -1574,7 +1590,30 @@ function TabBarInner({
   );
 }
 
-interface TopBarTool {
+function BackgroundAudioButton({ sources, onActivate }: { sources: ReturnType<typeof selectBackgroundAudioSources>; onActivate: (id: string) => void }) {
+  const first = sources[0];
+  if (!first) return null;
+  const label = sources.length === 1 ? `前往正在发声的页面：${first.label}` : `选择正在发声的页面（${sources.length} 个）`;
+  const button = (
+    <Button type="button" size="icon" variant="ghost" className="topbar-tool-button h-7 w-7 text-primary"
+      aria-label={label} title={label} onClick={sources.length === 1 ? () => onActivate(first.id) : undefined}>
+      <Volume2 className="size-3.5" aria-hidden="true" />
+    </Button>
+  );
+  if (sources.length === 1) return button;
+  return <DropdownMenu>
+    <DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>
+    <DropdownMenuContent align="end" aria-label="正在发声的页面">
+      {sources.map(source => (
+        <DropdownMenuItem key={source.id} onSelect={() => onActivate(source.id)}>
+          <span className="max-w-80 truncate">{source.label}</span>
+        </DropdownMenuItem>
+      ))}
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
+type TopBarTool = { id: string; visible: boolean; element: React.ReactElement } | {
   id: string;
   visible: boolean;
   label: string;
@@ -1619,8 +1658,8 @@ function TopBarActions({
           role="toolbar"
           aria-label="顶栏工具"
         >
-          {visibleTools.map((tool) => tool.id === "plugin-pages"
-            ? <PluginTopBarEntries key={tool.id} />
+          {visibleTools.map((tool) => "element" in tool
+            ? <React.Fragment key={tool.id}>{tool.element}</React.Fragment>
             : (
               <Tooltip key={tool.id}>
                 <TooltipTrigger asChild>

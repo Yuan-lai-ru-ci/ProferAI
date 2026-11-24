@@ -26,7 +26,7 @@ describe('全局能力 renderer adapter', () => {
           globalSkill: {
             list: async () => [{ skillId: 'skill-1', type: 'user-global', version: '1.0.0', name: 'Skill A', description: '测试', createdAt: '', updatedAt: '', schemaVersion: 1 }],
             getDeleteBlockers: async (id: string) => ({ skillId: id, skillType: 'user-global', references: [] }),
-            deleteUser: async (id: string) => { calls.push(`delete-skill:${id}`) },
+            deleteUser: async (id: string, token?: string) => { calls.push(`delete-skill:${id}:${token}`) },
             copyToWorkspace: async (id: string, slug: string) => { calls.push(`copy-skill:${id}:${slug}`) },
             setEnabled: async (slug: string, id: string, enabled: boolean) => { calls.push(`enabled:${slug}:${id}:${enabled}`) },
             restore: async (slug: string, id: string) => { calls.push(`restore:${slug}:${id}`) },
@@ -50,6 +50,6 @@ describe('全局能力 renderer adapter', () => {
     await globalCapabilityPreloadAdapter.setSkillEnabled('workspace-a', 'skill-1', false)
     await globalCapabilityPreloadAdapter.restoreSkill('workspace-a', 'skill-1')
     await globalCapabilityPreloadAdapter.delete(skill!)
-    expect(calls).toEqual(['copy-skill:skill-1:workspace-a', 'enabled:workspace-a:skill-1:false', 'restore:workspace-a:skill-1', 'delete-skill:skill-1'])
+    expect(calls).toEqual(['copy-skill:skill-1:workspace-a', 'enabled:workspace-a:skill-1:false', 'restore:workspace-a:skill-1', 'delete-skill:skill-1:delete:skill-1'])
   })
 })

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -26,7 +26,9 @@ test.each(['approve_auto', 'approve_edit', 'deny', 'feedback'] as const)('Core P
   }
   const runtime = createCoreAgentRuntime(config)
   const server = createCoreServer({ version: 'plan-approval-test', runtime, apiKey: 'fixture-only' })
-  const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'plan fixture', runtime: 'pi', channelId: 'fixture', modelId: 'claude-sonnet-4-5', permissionMode: 'plan' })
+  const workspace = runtime.workspaces.createManaged('测试工作区')
+  await writeFile(join(config.workspaceRoot, workspace.slug, 'agent-presets.json'), JSON.stringify({ presets: [{ id: 'plan-only', name: 'Plan', description: 'strict plan fixture', version: '1', permissionMode: 'plan', createdAt: 0, updatedAt: 0 }] }))
+  const session = runtime.sessions.create({ workspaceId: workspace.id, presetId: 'plan-only', title: 'plan fixture', runtime: 'pi', channelId: 'fixture', modelId: 'claude-sonnet-4-5', permissionMode: 'plan' })
   let socket: WebSocket | undefined
   const unsubscribe = runtime.subscribe(event => {
     const payload = event.payload as { event?: { type?: string; request?: import('@profer/shared').PermissionRequest } }
@@ -67,6 +69,7 @@ test.each(['approve_auto', 'approve_edit', 'deny', 'feedback'] as const)('Core P
     expect(await handle.promise).toEqual({ status: 'completed' })
     const expectedMode = action === 'approve_auto' ? 'bypassPermissions' : action === 'approve_edit' ? 'auto' : 'plan'
     expect(runtime.sessions.getMeta(session.id)?.permissionMode).toBe(expectedMode)
+    if (expectedMode !== 'plan') expect(runtime.sessions.getMeta(session.id)?.permissionModeSource).toBe('user')
     const target = join(runtime.createQuery(session, '').cwd!, 'approved.txt')
     if (expectedMode === 'plan') expect(await Bun.file(target).exists()).toBe(false)
     else expect(await readFile(target, 'utf8')).toBe('plan approval fixture')

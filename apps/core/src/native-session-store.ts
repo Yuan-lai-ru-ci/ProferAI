@@ -1,10 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, copyFileSync } from 'node:fs'
 import { dirname, join, resolve, basename } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { AgentSessionMeta, SDKMessage } from '@profer/shared'
+import { resolveEffectivePermissionMode } from '@profer/shared'
 import { createSessionStorePaths, createSyncSessionIndexStore, registerOwnedSessionLayout, resolveOwnedSessionLayout, sessionMessagesPath, sessionGraphPath, sessionHarnessPath, mirrorProjectSessionIndexes } from '@profer/session-store'
 import { locateClaudeNativeSession, relocateClaudeNativeSession } from '@profer/agent-provider-claude'
 import { replacePiNativeTranscript } from '@profer/agent-provider-pi'
+import type { AgentSessionMeta, SDKMessage } from '@profer/shared'
+import { CoreDelegationStore } from './delegation-store'
+import { resolveCorePreset } from './preset-resources'
 import type { CoreSessionStore } from './runtime'
 import type { CoreWorkspaceStore } from './workspaces'
 import type { CoreConfig } from './config'
@@ -148,6 +151,15 @@ export function createCoreNativeSessionPorts(options: CoreNativeSessionStoreOpti
     if (options.busy(source.id)) throw new Error('源会话占用中，禁止分叉')
     const current = read(source.id)
     if (nativeSessionRevision(current) !== nativeSessionRevision({ meta: source, messages: current.messages })) throw new Error('REVISION_CONFLICT: 分叉源已变化')
+    // 普通分叉保留可信手动选择；委派分叉脱离归属时不能携带其 user 授权或丢失模式 cap。
+    const permissionModeSource = !source.sourceDelegationId && source.permissionModeSource === 'user' ? 'user' : 'preset'
+    let permissionMode = resolveCorePreset(config, { ...source, permissionModeSource }, workspace(source)).policy.permissionMode
+    if (source.sourceDelegationId) {
+      const inherited = new CoreDelegationStore(join(config.configDir, 'core-delegations.json')).read().records
+        .find(record => record.delegationId === source.sourceDelegationId && record.childSessionId === source.id)?.parentPolicy
+      if (!inherited) throw new Error('委派缺少持久化父级能力上限，禁止分叉')
+      permissionMode = resolveEffectivePermissionMode(inherited.permissionMode, permissionMode)
+    }
     const now = Date.now()
     // 白名单继承配置，不继承 Goal/委派/自动化/运行态归属。
     const meta: AgentSessionMeta = {
@@ -155,7 +167,7 @@ export function createCoreNativeSessionPorts(options: CoreNativeSessionStoreOpti
       workspaceId: source.workspaceId, storageLayout: source.storageLayout,
       agentRuntime: source.agentRuntime, agentRuntimeLocked: true,
       channelId: source.channelId, modelId: source.modelId, presetId: source.presetId, presetReference: source.presetReference,
-      permissionMode: source.permissionMode, agentCwdMode: source.agentCwdMode, sessionWorkbenchLayout: source.sessionWorkbenchLayout,
+      permissionMode, permissionModeSource, agentCwdMode: source.agentCwdMode, sessionWorkbenchLayout: source.sessionWorkbenchLayout,
       attachedDirectories: source.attachedDirectories, attachedFiles: source.attachedFiles,
       agentEffort: source.agentEffort, openAIThinkingLevel: source.openAIThinkingLevel, codexFastMode: source.codexFastMode,
       sdkSessionId: patch.sdkSessionId, piSessionFile: patch.piSessionFile, piEntryBindings: patch.piEntryBindings,

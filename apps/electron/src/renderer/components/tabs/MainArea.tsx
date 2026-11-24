@@ -2,8 +2,8 @@
  * MainArea — 主内容区域
  *
  * 组合 TabBar + TabContent。文件预览与受管浏览器都是顶栏的工作 Tab：
- * - 每文件一个预览 Tab，浏览器每会话单例；
- * - 并排统一走 Tab 组合（左侧组内成员 + 右侧组内成员）；Agent 推送只同步后台状态，
+ * - 每文件一个预览 Tab，每个网页一个浏览器 Tab；
+ * - 并排统一走 Tab 组合（左侧组内成员 + 右侧组内成员）；Agent 推送只同步页签，
  *   不隐式打开浏览器或改变用户的组合。
  */
 
@@ -15,10 +15,8 @@ import { tabsAtom, activeTabIdAtom, activeTabAtom, tabIndicatorMapAtom, createBr
 import { BrowserShortcutBridge } from '@/components/browser/BrowserShortcutBridge'
 import { BrowserGuestHost } from '@/components/browser/BrowserGuestHost'
 import { Panel } from '@/components/app-shell/Panel'
-import { browserPanelDismissedSessionIdsAtom, browserStateMapAtom } from '@/atoms/browser-atoms'
+import { browserStateMapAtom } from '@/atoms/browser-atoms'
 import { openBrowserTabFromPush } from '@/lib/browser-tab'
-import { isBrowserTab } from '@/atoms/tab-atoms'
-import { shouldAutoOpenBrowserFromPush } from '@/lib/browser-auto-open'
 import type { BrowserViewState } from '@profer/shared'
 import { TabBar } from './TabBar'
 import { TabContent } from './TabContent'
@@ -121,7 +119,6 @@ export function MainArea(): React.ReactElement {
 
   // ===== 受管浏览器（Tab 化）=====
   const setBrowserStateMap = useSetAtom(browserStateMapAtom)
-  const browserDismissed = useAtomValue(browserPanelDismissedSessionIdsAtom)
   const currentBrowserSessionIdRef = React.useRef<string | null>(null)
   // 浏览器仅属于 Agent 会话；必须同时满足「激活 tab 绑定了 agent 会话」（agent / 预览 / 浏览器 Tab）
   // 和「当前处于 agent 模式」。否则 toggle-mode 快捷键（只切 appMode 不切 tab）会造成
@@ -134,38 +131,22 @@ export function MainArea(): React.ReactElement {
   const browserPaneVisible = activeTab?.type === 'browser'
     || (tabGroup ? groupTabIds(tabGroup).some((id) => tabs.find((tab) => tab.id === id)?.type === 'browser') : false)
 
-  const publishBrowserState = React.useCallback((state: BrowserViewState, options?: { autoOpen?: boolean; autoGroup?: boolean }) => {
-    // 先取旧状态：页内新开页需要在 reconcile 后判断“新页接管原分屏栏”。
+  const pendingRestore = React.useRef<string | null>(null)
+  const publishBrowserState = React.useCallback((state: BrowserViewState, followUserLink: boolean) => {
+    if (pendingRestore.current === state.sessionId) pendingRestore.current = null
     const previousState = store.get(browserStateMapAtom).get(state.sessionId) ?? null
-    // 同步浏览器内容状态（tabs/url/标题/trace 等）。状态可以保留在后台会话，
-    // 但后台会话的状态推送不能改变当前会话的浏览器 Tab。
-    setBrowserStateMap((previous) => { const next = new Map(previous); next.set(state.sessionId, state); return next })
-    // 只有显式跟随才允许推送打开；getState 恢复和普通推送默认没有展示权。
-    if (state.sessionId !== currentBrowserSessionIdRef.current) return
-    const dismissed = browserDismissed.has(state.sessionId)
-    const hasBrowserTabs = tabsRef.current.some((tab) => isBrowserTab(tab) && tab.sessionId === state.sessionId)
-    // 已手动收掉且没有遗留页 Tab：不重建；仍有页 Tab 则继续同步（页面可能被 Agent 关掉）
-    if (dismissed && !hasBrowserTabs) return
-    const autoOpen = options?.autoOpen === true && !dismissed
-    // 只读动作推送且没有既有页 Tab：不创建（保持安静）
-    if (!hasBrowserTabs && !autoOpen) return
-    // 后台状态仅同步用户已打开的页面；显式跟随才可创建页签/组合。
-    openBrowserTabFromPush(state, {
-      autoOpen,
-      autoGroup: autoOpen && options?.autoGroup !== false,
-      previousState,
+    setBrowserStateMap((previous) => {
+      const next = new Map(previous)
+      if (state.tabs.length) next.set(state.sessionId, state)
+      else next.delete(state.sessionId)
+      return next
     })
-  }, [browserDismissed, setBrowserStateMap, store])
-
-  /**
-   * 订阅实时状态推送。
-   *
-   * Agent 导航/新建页面时在侧边自动展示浏览器面板；只读同步与后台会话仍不改变当前布局。
-   * 用户点击浏览器入口走显式打开路径；切回会话的 getState 只被动同步。
-   */
-  const handleBrowserStatePush = React.useCallback((state: BrowserViewState) => {
-    publishBrowserState(state, { autoOpen: shouldAutoOpenBrowserFromPush(state) })
-  }, [publishBrowserState])
+    const previousActive = store.get(activeTabIdAtom)
+    openBrowserTabFromPush(state, followUserLink ? previousState : null)
+    if (previousActive && !store.get(tabsAtom).some(tab => tab.id === previousActive) && store.get(activeTabIdAtom) !== previousActive) {
+      syncActiveTabSideEffects(store.get(activeTabAtom))
+    }
+  }, [setBrowserStateMap, store, syncActiveTabSideEffects])
 
   React.useLayoutEffect(() => {
     // 前台会话仅作为用户输入和 popup 的上下文，不获得页面展示权。
@@ -182,25 +163,26 @@ export function MainArea(): React.ReactElement {
     // 但绝不能让整个主界面崩溃。完整 Electron preload 就绪后会正常订阅。
     const subscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onAgentBrowserStateChanged
     if (typeof subscribe !== 'function') return
-    return subscribe(handleBrowserStatePush)
-  }, [handleBrowserStatePush])
+    return subscribe((state) => publishBrowserState(state, true))
+  }, [publishBrowserState])
 
   React.useEffect(() => {
     if (!browserSessionId) return
     const getState = (window.electronAPI as Partial<typeof window.electronAPI>).getAgentBrowserState
     if (typeof getState !== 'function') return
     let cancelled = false
+    pendingRestore.current = browserSessionId
     void getState(browserSessionId)
       .then((state) => {
-        if (!cancelled && state) {
-          // 恢复已有 UI 状态，不替用户打开此前只在后台运行的页面。
-          publishBrowserState(state, { autoOpen: false, autoGroup: false })
+        if (!cancelled && state && pendingRestore.current === browserSessionId) {
+          // 恢复只对账页签，不跟随链接；迟到的读取不能覆盖更新的推送。
+          publishBrowserState(state, false)
         }
       })
       // 后台会话及已删除会话会被主进程拒绝或返回空状态；无需打断当前界面。
       .catch(() => undefined)
     return () => { cancelled = true }
-  }, [browserDismissed, browserSessionId, publishBrowserState])
+  }, [browserSessionId, publishBrowserState])
 
   // 文件面板可见性由 usePanelAutoLayout 按主区栏数和窗口宽度统一计算；
   // 组合视图不能回写用户的展开意图，否则会与顶栏打开动作冲突。

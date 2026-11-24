@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentRunLedger } from '@profer/agent-runtime'
 import { createFileRunLedgerPort } from '@profer/session-store'
 import { writeCoreChannelStore } from './channel-store'
 import { createCoreAgentRuntime } from './runtime'
+import type { ClaudeAgentQueryOptions } from '@profer/agent-provider-claude'
 import { createClaudeSdkDouble } from '../../../packages/agent-provider-claude/test-hosts/claude-sdk-double'
 
 // 外部SDK和进程替身；真实Core、Coordinator、adapter和文件账本。无网络/真实模型。
@@ -17,20 +18,28 @@ test('Core Claude 模式同步成功才保存，失败停止原Run并保留权�
     models: [{ id: 'claude-sonnet-4-5', name: 'Claude', enabled: true }] }])
   const runtime = createCoreAgentRuntime({ host: '127.0.0.1', port: 0, configDir: root, workspaceRoot: join(root, 'workspaces') },
     { independent: true, claude: { sdkLoader: async () => sdk.module, spawnProcess: sdk.spawnProcess } })
-  const session = runtime.createConfiguredSession({ workspaceId: runtime.workspaces.createManaged('测试工作区').id,
-    title: 'Claude mode fixture', runtime: 'claude', channelId: 'offline' })
+  const workspace = runtime.workspaces.createManaged('测试工作区')
+  await writeFile(join(root, 'workspaces', workspace.slug, 'agent-presets.json'), JSON.stringify({ presets: [{ id: 'plan-only', name: 'Plan', description: 'strict fixture', version: '1', permissionMode: 'plan', createdAt: 0, updatedAt: 0 }] }))
+  const session = runtime.createConfiguredSession({ workspaceId: workspace.id,
+    title: 'Claude mode fixture', runtime: 'claude', channelId: 'offline', presetId: 'plan-only' })
   try {
-    const handle = runtime.coordinator.run(runtime.createQuery(session, 'offline fixture'))
+    const handle = runtime.coordinator.run(runtime.createQuery(session, 'offline fixture', { permissionModeOverride: 'bypassPermissions', userPermissionMode: 'bypassPermissions', permissionModeSource: 'user' } as never))
     const deadline = Date.now() + 3000
     while (!sdk.state.options && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
     expect(sdk.state.options).toMatchObject({ model: 'claude-sonnet-4-5', env: { ANTHROPIC_API_KEY: apiKey } })
-    expect(sdk.state.options!.permissionMode).toBe('auto')
+    expect(sdk.state.options!.permissionMode).toBe('plan')
     expect(sdk.state.options!.allowedTools).not.toContain('Write')
     expect(sdk.state.options!.allowedTools).not.toContain('mcp__planning__*')
+    const canUseTool = sdk.state.options!.canUseTool as NonNullable<ClaudeAgentQueryOptions['canUseTool']>
+    expect((await canUseTool('EnterPlanMode', {}, { signal: new AbortController().signal })).behavior).toBe('allow')
+    expect(runtime.sessions.getMeta(session.id)?.permissionModeSource).toBe('preset')
     const revision = runtime.sessions.getMeta(session.id)?.revision ?? 0
-    const changed = await runtime.updateSessionMeta(session.id, { permissionMode: 'plan' }, revision)
+    const raised = await runtime.updateSessionMeta(session.id, { permissionMode: 'bypassPermissions' }, revision)
+    expect(raised).toMatchObject({ permissionMode: 'bypassPermissions', permissionModeSource: 'user' })
+    expect(runtime.permissions.getMode(session.id)).toBe('bypassPermissions')
+    const changed = await runtime.updateSessionMeta(session.id, { permissionMode: 'plan' }, raised.revision)
     expect(changed.permissionMode).toBe('plan')
-    expect(sdk.state.permissionModeCalls).toEqual(['plan'])
+    expect(sdk.state.permissionModeCalls).toEqual(['plan', 'bypassPermissions', 'plan'])
     sdk.state.permissionModeError = new Error('fixture SDK mode rejected')
     await expect(runtime.updateSessionMeta(session.id, { permissionMode: 'bypassPermissions' }, changed.revision)).rejects.toThrow('fixture SDK mode rejected')
     expect(runtime.sessions.getMeta(session.id)?.permissionMode).toBe('plan')

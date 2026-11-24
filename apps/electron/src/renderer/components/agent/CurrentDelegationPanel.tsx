@@ -7,6 +7,7 @@ import {
   agentSDKMessagesCacheAtom,
   agentSessionPathMapAtom,
   agentSessionStreamingStateAtomFamily,
+  agentObservedActivityAtomFamily,
   agentSessionsAtom,
   liveMessagesAtomFamily,
   setSessionMessagesCache,
@@ -28,6 +29,7 @@ function ExecutionTranscript({ execution }: { execution: CurrentDelegationExecut
   const store = useStore()
   const setCache = useSetAtom(agentSDKMessagesCacheAtom)
   const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(id))
+  const observed = useAtomValue(agentObservedActivityAtomFamily(id))
   const liveMessages = useAtomValue(liveMessagesAtomFamily(id))
   const paths = useAtomValue(agentSessionPathMapAtom)
   const refreshVersions = useAtomValue(agentMessageRefreshAtom)
@@ -102,7 +104,7 @@ function ExecutionTranscript({ execution }: { execution: CurrentDelegationExecut
       <div className="flex h-[min(24rem,32vh)] min-h-0 flex-col" data-delegation-transcript-session={id}>
         {error && <div role="alert" className="flex items-center gap-2 px-3 py-2 text-xs text-destructive"><span className="min-w-0 flex-1 break-words">无法加载执行记录：{error}</span><button type="button" className="shrink-0 underline underline-offset-2" onClick={() => setRetry(value => value + 1)}>重试</button></div>}
         {!loaded && liveMessages.length === 0 && <div role="status" className="px-3 py-3 text-xs text-muted-foreground">正在加载执行记录…</div>}
-        <AgentMessages sessionId={id} sessionModelId={execution.session?.modelId} agentRuntime={execution.session?.agentRuntime} messagesLoaded={loaded} persistedSDKMessages={messages} liveMessages={liveMessages} streaming={streamState?.running ?? false} streamState={streamState} sessionPath={sessionPath} attachedDirs={execution.session?.attachedDirectories} stoppedByUser={execution.session?.stoppedByUser} onLoadEarlierHistory={cursor.hasMore ? loadEarlier : undefined} historyMoreAvailable={cursor.hasMore} historyLoadingEarlier={loadingEarlier} explorationEnabled={false} />
+        <AgentMessages sessionId={id} sessionModelId={execution.session?.modelId} agentRuntime={execution.session?.agentRuntime} messagesLoaded={loaded} persistedSDKMessages={messages} liveMessages={liveMessages} streaming={streamState?.running ?? false} observedActivity={observed} streamState={streamState} sessionPath={sessionPath} attachedDirs={execution.session?.attachedDirectories} stoppedByUser={execution.session?.stoppedByUser} onLoadEarlierHistory={cursor.hasMore ? loadEarlier : undefined} historyMoreAvailable={cursor.hasMore} historyLoadingEarlier={loadingEarlier} explorationEnabled={false} />
       </div>
     </AgentSessionProvider>
   )
@@ -110,7 +112,9 @@ function ExecutionTranscript({ execution }: { execution: CurrentDelegationExecut
 
 function ExecutionStatus({ execution }: { execution: CurrentDelegationExecution }): React.ReactElement {
   const stream = useAtomValue(agentSessionStreamingStateAtomFamily(execution.executionSessionId))
+  const observed = useAtomValue(agentObservedActivityAtomFamily(execution.executionSessionId))
   const display = resolveDelegationRuntimeDisplay({
+    observed,
     parentSessionId: execution.session?.parentSessionId ?? 'projection', sourceDelegationId: execution.taskId,
     delegationStatus: execution.status, liveRunning: stream?.running ?? false, liveStartedAt: stream?.startedAt,
     sessionUpdatedAt: execution.session?.updatedAt ?? execution.createdAt,

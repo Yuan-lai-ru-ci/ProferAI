@@ -1,3 +1,4 @@
+import { createAgentRuntimePlanModeController, registerAgentRuntimePlanMode, clearAgentRuntimePlanMode } from './agent-runtime-plan-mode'
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { AskUserRequest, ExitPlanModeRequest, PermissionRequest } from '@profer/shared'
 import { createAgentQueryPreparationPort } from '@profer/agent-runtime'
@@ -10,6 +11,7 @@ const sessionId = 'permission-port-lifecycle'
 const otherSessionId = 'permission-port-other'
 afterEach(() => {
   for (const id of [sessionId, otherSessionId]) {
+    clearAgentRuntimePlanMode(id)
     permissionService.clearSessionPending(id)
     permissionService.clearSessionWhitelist(id)
     askUserService.clearSessionPending(id)
@@ -117,4 +119,23 @@ describe('Electron runtime permission lifecycle', () => {
     await askUserService.respondToAskUser(requests[0]!.requestId, { '继续？': '继续' })
     await expect(answer).resolves.toMatchObject({ behavior: 'allow', updatedInput: { metadata: 'keep', answers: { '继续？': '继续' } } })
   })
+})
+
+
+test('Given 本轮 auto 回调已创建 When 用户热切换 bypass 再 auto Then 同一回调跟随本轮控制器', async () => {
+  const controller = createAgentRuntimePlanModeController({ sessionId, initialMode: 'auto', emit() {} })
+  registerAgentRuntimePlanMode(controller)
+  const requests: PermissionRequest[] = []
+  const port = createElectronPermissionPort({ isBypassPermissions: () => false })
+  const callback = port.createCanUseTool!({ sessionId, sendPermissionRequest: request => requests.push(request) })
+  controller.setMode('bypassPermissions')
+  const first = callback('Write', { file_path: '/fixture' }, { signal: new AbortController().signal })
+  // 不等 Promise 超时：同步断言是否误落审批。
+  expect(requests).toHaveLength(0)
+  await expect(first).resolves.toMatchObject({ behavior: 'allow' })
+  controller.setMode('auto')
+  const second = callback('Write', { file_path: '/fixture' }, { signal: new AbortController().signal })
+  expect(requests).toHaveLength(1)
+  permissionService.respondToPermission(requests[0]!.requestId, 'deny', false)
+  await expect(second).resolves.toMatchObject({ behavior: 'deny' })
 })

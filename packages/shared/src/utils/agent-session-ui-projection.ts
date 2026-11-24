@@ -25,6 +25,7 @@ export function buildAgentSessionUiProjection(meta: AgentSessionMeta): AgentSess
     agentRuntime: normalizeAgentRuntime(meta.agentRuntime),
     agentRuntimeLocked: !canSelectAgentSessionRuntime(meta),
     permissionMode: meta.permissionMode ?? PROFER_DEFAULT_PERMISSION_MODE,
+    ...(meta.permissionModeSource ? { permissionModeSource: meta.permissionModeSource } : {}),
     presetId: meta.presetId ?? null,
     presetReference,
     openAIThinkingLevel: meta.openAIThinkingLevel ?? null,

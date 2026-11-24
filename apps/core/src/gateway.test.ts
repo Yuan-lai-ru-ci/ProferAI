@@ -102,7 +102,7 @@ describe('Core WebSocket 终态协议', () => {
     }
     try {
       await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject) })
-      const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Approval test', runtime: 'pi' })
+      const session = runtime.sessions.create({ workspaceId: (runtime.workspaces.list()[0] ?? runtime.workspaces.createManaged('测试工作区')).id, title: 'Approval test', runtime: 'pi', permissionMode: 'auto' })
       const controller = new AbortController()
       const resultPromise = runtime.permissions.createCanUseTool({ sessionId: session.id, runId: 'ws-run-1', sendPermissionRequest: request => runtime.publish({ type: 'runtime', sessionId: session.id, payload: { type: 'host_event', sessionId: session.id, event: { type: 'permission_request', request } } }) })('Execute', { fixture: 'isolated' }, { signal: controller.signal, toolUseID: 'tool-1' })
       let requestId = ''

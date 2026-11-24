@@ -76,7 +76,7 @@ export class CoreDelegationService implements DelegationToolOperations {
     if (!workspace) throw new Error('父工作区不存在')
     const source = resolveCorePreset(this.config, parent, workspace)
     if (mode === 'create') target = selectNewDelegationPreset(target, workspace.slug, corePresetStore(this.config, workspace))
-    const selected = target ? resolveCorePreset(this.config, { ...parent, presetId: target.presetId, presetReference: target }, workspace) : source
+    const selected = target ? resolveCorePreset(this.config, { ...parent, presetId: target.presetId, presetReference: target, permissionMode: undefined, permissionModeSource: undefined }, workspace) : source
     return { source, selected }
   }
   listAvailableModels(ctx: DelegationContext): Record<string, unknown> {
@@ -320,7 +320,7 @@ export class CoreDelegationService implements DelegationToolOperations {
     if (child.agentRuntime !== parent.agentRuntime) throw new Error('子会话runtime与父级已不匹配')
     if (channel.agentRuntimes && !channel.agentRuntimes.includes(child.agentRuntime ?? 'claude')) throw new Error('原渠道已禁用当前runtime')
     const mode = resolveEffectivePermissionMode(selected.preset.permissionMode, this.runtime!.permissions.getMode(parent.id))
-    this.runtime!.sessions.updateMeta(child.id, { permissionMode: mode, delegationStatus: 'running' })
+    this.runtime!.sessions.updateMeta(child.id, { permissionMode: mode, permissionModeSource: 'preset', delegationStatus: 'running' })
     const record = this.mutate(previous.delegationId, r => {
       r.status = 'running'; r.triggerId = `delegation:${r.delegationId}:${randomUUID()}`; r.permissionMode = mode; r.sourceRunId = ctx.sourceRunId
       r.startedAt = Date.now(); r.parentPolicy = source.policy; r.completedAt = undefined; r.error = undefined; r.resultSummary = undefined; r.cancelRequested = undefined; r.resultConsumedAt = undefined; r.blockedEvents = []

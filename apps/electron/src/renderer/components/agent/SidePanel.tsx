@@ -63,7 +63,7 @@ import {
   coreSystemRevealAtom,
 } from '@/atoms/agent-atoms'
 import { previewFileMapAtom } from '@/atoms/preview-atoms'
-import { coreTargetsAtom } from '@/atoms/core-target-atoms'
+import { coreTargetsAtom, ownsCoreResources } from '@/atoms/core-target-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import { detectIsWindows } from '@profer/ui'
 import { getFileBaseName, getFileParentPath, getLastPathSegments } from '@/lib/file-utils'
@@ -108,21 +108,21 @@ const filePanelActionButtonClass = 'h-6 w-6 flex-shrink-0 rounded-md text-muted-
 export function SidePanel(props: SidePanelProps): React.ReactElement {
   const target = useAtomValue(coreTargetsAtom)
   // 切换目标即销毁旧面板，文件树展开态及路径不能跨 Core 复用。
-  return <CoreSidePanel key={`${target.currentId}:${target.generation}`} {...props} />
+  return <CoreSidePanel key={`${target.currentId}:${target.generation}:${props.sessionId}`} {...props} />
 }
 
 function CoreSidePanel({ sessionId, sessionPath, activeTab, onTabChange, width = 280 }: SidePanelProps): React.ReactElement {
   const interfaceVariant = useAtomValue(interfaceVariantAtom)
   const sessions = useAtomValue(agentSessionsAtom)
-  const isRemoteCore = useAtomValue(coreTargetsAtom).currentId !== 'local'
+  const target = useAtomValue(coreTargetsAtom)
+  const isRemoteCore = target.currentId !== 'local'
+  const hasCoreFiles = ownsCoreResources(target)
   const effectiveSessionPath = isRemoteCore ? null : sessionPath
 
-  // 「会话文件」的根：会话私有目录（storageDir）。
-  // project 下 `sessionPath` 是项目根（相对路径基准），拿它当会话文件根会让所有会话互通，
-  // 且用户上传到会话目录的文件看不到。
+  // legacy 使用 storageDir；Core 使用工作台。项目根只是相对路径基准，不能当会话私有根。
   const [sessionStoragePath, setSessionStoragePath] = React.useState<string | null>(null)
   React.useEffect(() => {
-    if (isRemoteCore) {
+    if (hasCoreFiles) {
       setSessionStoragePath(null)
       return
     }
@@ -137,21 +137,28 @@ function CoreSidePanel({ sessionId, sessionPath, activeTab, onTabChange, width =
       .then((path) => { if (!cancelled) setSessionStoragePath(path) })
       .catch(() => { if (!cancelled) setSessionStoragePath(null) })
     return () => { cancelled = true }
-  }, [sessions, sessionId, isRemoteCore])
-  // 非本机内核：文件根由所属 Core 授权并返回，桌面不臆造路径。
+  }, [sessions, sessionId, hasCoreFiles])
+  // 本机和远程 Core 同源：桌面不臆造路径，也不回落到旧会话目录。
   const [coreFileRoots, setCoreFileRoots] = React.useState<import('@profer/shared').CoreSessionFileRoots | null>(null)
+  const [fileRootsError, setFileRootsError] = React.useState<string | null>(null)
   React.useEffect(() => {
-    if (!isRemoteCore) {
+    setFileRootsError(null)
+    if (!hasCoreFiles) {
       setCoreFileRoots(null)
       return
     }
     let cancelled = false
     window.electronAPI.getCoreSessionFileRoots(sessionId)
       .then((roots) => { if (!cancelled) setCoreFileRoots(roots) })
-      .catch(() => { if (!cancelled) setCoreFileRoots(null) })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setCoreFileRoots(null)
+          setFileRootsError(error instanceof Error ? error.message : '会话文件目录加载失败')
+        }
+      })
     return () => { cancelled = true }
-  }, [isRemoteCore, sessionId])
-  /** 非本机内核的目录加载器；只读浏览，写入仍由 Agent 在 Core 侧执行。 */
+  }, [hasCoreFiles, sessionId])
+  /** Core 会话目录加载器；本机也不再读取桌面旧目录。 */
   const loadCoreDirectory = React.useCallback(
     (dirPath: string): Promise<FileEntry[]> => window.electronAPI.listCoreSessionDirectory({ sessionId, path: dirPath }),
     [sessionId],
@@ -163,16 +170,16 @@ function CoreSidePanel({ sessionId, sessionPath, activeTab, onTabChange, width =
     setCoreSystemReveal({ dir, ts: Date.now() })
     onTabChange('system')
   }, [setCoreSystemReveal, onTabChange])
-  /** 远程内核的文件写操作：重命名与删除（删除进 Core 回收站）。 */
-  const coreFileOps = React.useMemo(() => isRemoteCore ? {
+  /** Core 会话文件写操作：重命名与删除（删除进 Core 回收站）。 */
+  const coreFileOps = React.useMemo(() => hasCoreFiles ? {
     rename: async (filePath: string, newName: string): Promise<void> => {
       await window.electronAPI.coreSessionFsOp({ sessionId, op: 'rename', path: filePath, name: newName })
     },
     remove: async (filePath: string): Promise<void> => {
       await window.electronAPI.coreSessionFsOp({ sessionId, op: 'trash', path: filePath })
     },
-  } : undefined, [isRemoteCore, sessionId])
-  const sessionFileRoot = isRemoteCore ? (coreFileRoots?.sessionStorage ?? null) : (sessionStoragePath ?? effectiveSessionPath)
+  } : undefined, [hasCoreFiles, sessionId])
+  const sessionFileRoot = hasCoreFiles ? (coreFileRoots?.workbench ?? null) : (sessionStoragePath ?? effectiveSessionPath)
   const sessionIndicators = useAtomValue(agentSessionIndicatorMapAtom)
   const isClassic = interfaceVariant === 'classic'
 
@@ -655,7 +662,7 @@ function CoreSidePanel({ sessionId, sessionPath, activeTab, onTabChange, width =
   // RightSidePanel 完全由用户控制，不因 Agent 文件变更自动打开
 
   // 同步 basePaths ref（供 handleFilePreview 使用，避免 hooks 声明顺序问题）
-  basePathsRef.current = isRemoteCore ? [] : [effectiveSessionPath, sessionStoragePath, workspaceFilesPath, ...fileAccessPathsMemo].filter(Boolean) as string[]
+  basePathsRef.current = isRemoteCore ? [] : [effectiveSessionPath, sessionFileRoot, workspaceFilesPath, ...fileAccessPathsMemo].filter(Boolean) as string[]
   const hasSessionAttachedItems = attachedDirs.length > 0 || attachedFiles.length > 0
   const hasWorkspaceAttachedItems = wsAttachedDirs.length > 0 || wsAttachedFiles.length > 0
 
@@ -800,7 +807,8 @@ function CoreSidePanel({ sessionId, sessionPath, activeTab, onTabChange, width =
                         hideEmpty={hasSessionAttachedItems}
                         onAddToChat={isRemoteCore ? undefined : handleAddToChat}
                         onFilePreview={isRemoteCore ? undefined : handleFilePreview}
-                        {...(isRemoteCore ? { loadDirectory: loadCoreDirectory, fileOps: coreFileOps, onRevealInSystemFiles: revealInSystemFiles } : {})}
+                        {...(hasCoreFiles ? { loadDirectory: loadCoreDirectory, fileOps: coreFileOps } : {})}
+                        {...(isRemoteCore ? { onRevealInSystemFiles: revealInSystemFiles } : {})}
                       />
                     </>
                     {!isRemoteCore && (
@@ -817,7 +825,7 @@ function CoreSidePanel({ sessionId, sessionPath, activeTab, onTabChange, width =
                   </div>
                 </>
               ) : (
-                <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">等待会话初始化...</div>
+                <div role={fileRootsError ? 'alert' : undefined} className="flex-1 flex items-center justify-center text-muted-foreground text-xs">{fileRootsError ?? '等待会话初始化...'}</div>
               )}
             </div>
           ) : visibleTab === 'system' ? (

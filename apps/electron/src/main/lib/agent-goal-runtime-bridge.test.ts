@@ -66,7 +66,10 @@ function serviceFixture(sendMessage: (input: AgentSendInput, callbacks: SessionC
   const events: AgentStreamPayload[] = []
   const unreadWrites: Array<{ sessionId: string; unread: boolean }> = []
   const webContents = { isDestroyed: () => false, send() {} }
+  const invalidations: string[] = []
   const run = compile<(input: AgentSendInput, wc: typeof webContents) => Promise<void>>(runAgentSource, 'runAgent', {
+    localAgentWindows: () => [webContents],
+    invalidateAgentActivity: (_windows: unknown, id: string) => invalidations.push(id),
     orchestrator: { sendMessage, isActive, checkEntryGuards: () => undefined },
     usageRecorder: { begin: () => {}, finish: () => {}, observe: () => {} },
     isIndependentLocalCore: () => false,
@@ -98,7 +101,7 @@ function serviceFixture(sendMessage: (input: AgentSendInput, callbacks: SessionC
     AGENT_IPC_CHANNELS: {},
     console: quietConsole,
   })
-  return { run: (input: AgentSendInput) => run(input, webContents), events, unreadWrites }
+  return { run: (input: AgentSendInput) => run(input, webContents), events, unreadWrites, invalidations }
 }
 
 test('桌面与 headless 的内核不匹配拒绝不广播假终态，也不清除已有 backlog', async () => {
@@ -113,7 +116,8 @@ test('桌面与 headless 的内核不匹配拒绝不广播假终态，也不清�
   const notifications: string[] = []
   const source = `${activeSessionHelpersSource}\n${unreadPolicyHelpersSource}\n${headlessGateSource}\n${serviceSlice('runAgentHeadless', 'export async function runAgentHeadless(', '// headless run 的渲染进程 completion')}`
   const headless = compile<(input: AgentSendInput, callbacks: { onError: () => void; onComplete: () => void; onTitleUpdated: () => void }) => Promise<void>>(source, 'runAgentHeadless', {
-    getMainRendererWebContents: () => undefined,
+    localAgentWindows: () => [],
+    agentStreamOwner: () => undefined,
     getSessionWebContents: () => null,
     normalizeHeadlessSendInput,
     resolveRunInitiator,
@@ -459,6 +463,7 @@ test('Goal 真实 onRunStarted 才建立前端运行态', async () => {
     callbacks.onComplete([], { resultSubtype: 'success', startedAt })
   })
   await h.run({ sessionId: 'session', channelId: 'channel', userMessage: '', triggeredBy: 'goal', goalRunId: 'run' })
+  expect(h.invalidations).toEqual(['session'])
   const events = h.events.filter((payload) => payload.kind === 'profer_event' && payload.event.type === 'external_run_started')
   expect(events).toEqual([{ kind: 'profer_event', event: { type: 'external_run_started', source: 'goal', sessionId: 'session', startedAt, title: undefined, workspaceId: undefined, modelId: undefined, session: undefined } }])
 })

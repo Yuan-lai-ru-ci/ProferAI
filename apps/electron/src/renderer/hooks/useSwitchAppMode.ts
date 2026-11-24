@@ -28,6 +28,7 @@ import {
   currentAgentSessionIdAtom,
 } from '@/atoms/agent-atoms'
 import { tabsAtom } from '@/atoms/tab-atoms'
+import { windowSessionKeysAtom } from '@/atoms/app-windows'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useOpenSession } from './useOpenSession'
 import { useCreateSession } from './useCreateSession'
@@ -56,6 +57,7 @@ export function useSwitchAppMode(): (target: AppMode) => Promise<SwitchAppModeRe
   const currentConversationId = useAtomValue(currentConversationIdAtom)
   const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
   const tabs = useAtomValue(tabsAtom)
+  const otherWindowSessions = useAtomValue(windowSessionKeysAtom)
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
 
   return React.useCallback(
@@ -70,9 +72,9 @@ export function useSwitchAppMode(): (target: AppMode) => Promise<SwitchAppModeRe
       }
 
       const isChat = target === 'chat'
-      const sessions: RestorableSession[] = isChat
-        ? conversations
-        : agentSessions.filter(isVisibleAgentSession)
+      // 切换模式不是跨窗前往，也不是移入请求。只挑本窗可打开的候选，否则新建草稿。
+      const candidates: RestorableSession[] = isChat ? conversations : agentSessions.filter(isVisibleAgentSession)
+      const sessions = candidates.filter(session => !otherWindowSessions.has(`${target}:${session.id}`))
 
       // 1. 上次在该模式下查看的会话仍在 → 直接恢复
       const lastId = isChat ? currentConversationId : currentAgentSessionId
@@ -115,6 +117,7 @@ export function useSwitchAppMode(): (target: AppMode) => Promise<SwitchAppModeRe
       currentAgentSessionId,
       tabs,
       draftSessionIds,
+      otherWindowSessions,
     ],
   )
 }

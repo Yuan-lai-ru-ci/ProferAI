@@ -1,5 +1,7 @@
 import { afterAll, describe, expect, mock, test } from 'bun:test'
 import { app, safeStorage } from 'electron'
+import { AGENT_IPC_CHANNELS as C_CHANNEL } from '@profer/shared'
+import type { CoreAgentEvent } from './core-client'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -20,7 +22,8 @@ let clockOffset = 0
 const now = Date.now
 class FixtureCoreClient {
   private connected = true
-  constructor(private readonly options: { baseUrl: string; identityPin?: string; reconnect?: boolean; onStatus?: (value: 'open' | 'closed') => void }) {}
+  constructor(private readonly options: { baseUrl: string; identityPin?: string; reconnect?: boolean; onEvent?: (event: CoreAgentEvent) => void; onStatus?: (value: 'open' | 'closed') => void }) {}
+  agent(event: CoreAgentEvent) { this.options.onEvent?.(event) }
   get reconnect() { return this.options.reconnect }
   disconnect() { this.connected = false; this.options.onStatus?.('closed') }
   get address() { return this.options.baseUrl }
@@ -281,6 +284,57 @@ test('延迟远端握手不阻塞 Renderer 加载，首份快照已继承目标'
     release(); identityGate = undefined
     await coreReady.catch(() => {})
     service.disposeWindowCore(id)
+    await service.selectCoreTarget('local')
+  }
+})
+
+
+test('同远端 Core 的独立连接只提示本人窗口、仅一个流接收者；本机及退役连接不收到活动或完成', async () => {
+  const { runCoreWindow } = await import('./core-window-scope')
+  const { sessionWebContents } = await import('./agent-window-delivery')
+  const original = BrowserWindow.getAllWindows
+  const make = (id: number) => {
+    const frames: Array<[string, unknown]> = []
+    const win = { isDestroyed: () => false, webContents: { id, isDestroyed: () => false, send: (channel: string, value: unknown) => frames.push([channel, value]) } } as unknown as import('electron').BrowserWindow
+    return { id, frames, win }
+  }
+  const primary = make(8050), owner = make(8051), local = make(8052), extra = make(8053)
+  const all = [primary, owner, local, extra]
+  BrowserWindow.getAllWindows = () => all.map(w => w.win)
+  const remote = service.listCoreTargets().targets.find(t => t.coreId === 'core-one')!
+  const id = service.namespaceCoreSessionId('same', 'core-one')
+  try {
+    await service.initializeWindowCore(primary.id, undefined, true)
+    await service.selectCoreTarget(remote.id)
+    await service.initializeWindowCore(owner.id, primary.id)
+    await service.initializeWindowCore(local.id, primary.id)
+    await runCoreWindow(local.id, () => service.selectCoreTarget('local'))
+    sessionWebContents.set(id, owner.win.webContents)
+    all.forEach(w => w.frames.length = 0)
+    const client = service.getActiveCoreClient() as unknown as FixtureCoreClient
+    const second = runCoreWindow(owner.id, service.getActiveCoreClient) as unknown as FixtureCoreClient
+    for (const c of [client, second]) {
+      c.agent({ kind: 'agent_event', sessionId: 'same', payload: { kind: 'profer_event', event: { type: 'runtime_started' } } })
+      c.agent({ kind: 'agent_event', sessionId: 'same', payload: { kind: 'sdk_message', message: { text: 'token' } } })
+      c.agent({ kind: 'agent_event', sessionId: 'same', payload: { kind: 'profer_event', event: { type: 'run_completed' } } })
+    }
+    expect(primary.frames).toEqual(Array(2).fill([C_CHANNEL.SESSION_ACTIVITY_INVALIDATED, { sessionId: id }]))
+    expect(owner.frames.filter(([c]) => c === C_CHANNEL.STREAM_COMPLETE)).toHaveLength(1)
+    expect(owner.frames.filter(([c]) => c === C_CHANNEL.STREAM_EVENT)).toHaveLength(3)
+    expect(local.frames).toBeEmpty(); expect(extra.frames).toBeEmpty()
+    const final = { kind: 'agent_event', sessionId: 'same', eventId: 'epoch:99', payload: { kind: 'profer_event', event: { type: 'run_completed' } } }
+    second.agent(final)
+    sessionWebContents.set(id, primary.win.webContents)
+    client.agent(final) // 同一个网络帧晚于移窗；新 owner 不应再发通知或标记完成。
+    expect(primary.frames.filter(([c]) => c === C_CHANNEL.STREAM_COMPLETE)).toBeEmpty()
+    await runCoreWindow(owner.id, () => service.selectCoreTarget('local'))
+    owner.frames.length = 0
+    second.agent({ kind: 'agent_event', sessionId: 'same', payload: { kind: 'profer_event', event: { type: 'run_completed' } } })
+    expect(owner.frames).toBeEmpty()
+  } finally {
+    sessionWebContents.delete(id)
+    all.forEach(w => service.disposeWindowCore(w.id))
+    BrowserWindow.getAllWindows = original
     await service.selectCoreTarget('local')
   }
 })

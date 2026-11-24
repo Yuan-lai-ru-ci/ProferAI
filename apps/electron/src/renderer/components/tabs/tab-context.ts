@@ -9,7 +9,7 @@
  * 文档类单页（教程 / 自建 FRP 教程 / 全局插件页）仍只渲染自身，不往它的顶栏塞草稿。
  */
 
-import type { AgentSessionMeta } from '@profer/shared'
+import type { AgentSessionMeta, BrowserViewState } from '@profer/shared'
 import { ensureScratchPadTab, type TabItem } from '@/atoms/tab-atoms'
 
 export function selectContextTabs(
@@ -50,7 +50,7 @@ export function selectContextTabs(
       return ensureScratchPadTab(tabs.filter((tab) => tab.sessionId === sessionId))
     }
     const rootSessionId =
-      activeSession?.parentSessionId ?? activeSession?.explorationParentSessionId ?? sessionId
+      activeSession?.parentSessionId ?? activeSession?.explorationParentSessionId ?? ownerTab?.parentSessionId ?? sessionId
     const sessionIds = new Set(
       agentSessions
         .filter(
@@ -68,4 +68,17 @@ export function selectContextTabs(
   }
 
   return tabs.filter((tab) => tab.id === active.id)
+}
+
+/** 独立于 rail 的跳转入口：只列真正发声且尚未在当前上下文展示的页面，不携带组合另一栏。 */
+export function selectBackgroundAudioSources(
+  tabs: readonly TabItem[],
+  contextTabs: readonly TabItem[],
+  states: ReadonlyMap<string, BrowserViewState>,
+): Array<{ id: string; label: string }> {
+  const visible = new Set(contextTabs.map(tab => tab.id))
+  const owners = new Map(tabs.filter(tab => tab.type === 'agent' || tab.type === 'chat').map(tab => [tab.sessionId, tab.title]))
+  return tabs.filter(tab => tab.type === 'browser' && !visible.has(tab.id) && tab.browserTabId
+    && states.get(tab.sessionId)?.tabs.some(page => page.tabId === tab.browserTabId && page.audible))
+    .map(tab => ({ id: tab.id, label: `${tab.title}（${owners.get(tab.sessionId) || tab.sessionId}）` }))
 }

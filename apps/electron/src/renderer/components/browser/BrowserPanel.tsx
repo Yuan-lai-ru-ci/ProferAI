@@ -324,7 +324,7 @@ export function BrowserPanel({ sessionId, state, visible, active = false, avoidW
     }
   }, [sessionId, state?.activeTabId])
 
-  /** 用户显式新建时主动展示；普通状态推送不再承担打开页签的职责。 */
+  /** 推送登记新页签；只有用户显式新建才在此主动展示。 */
   const createPage = React.useCallback(async () => {
     const create = (window.electronAPI as Partial<typeof window.electronAPI>).createAgentBrowserTab
     if (typeof create !== 'function') return
@@ -334,15 +334,6 @@ export function BrowserPanel({ sessionId, state, visible, active = false, avoidW
       openBrowserTabManually(sessionId, next, next.activeTabId, intent)
     } catch (error) { console.error('[受管浏览器] 新建标签失败:', error) }
   }, [sessionId, state?.activeTabId])
-
-  const closeTab = React.useCallback(async (tabId: string) => {
-    const closeBrowserTab = (window.electronAPI as Partial<typeof window.electronAPI>).closeAgentBrowserTab
-    if (typeof closeBrowserTab !== 'function') return
-    try {
-      const next = await closeBrowserTab({ sessionId, tabId })
-      if (!next) onClose()
-    } catch (error) { console.error('[受管浏览器] 关闭标签失败:', error) }
-  }, [onClose, sessionId])
 
   // OFV 本地预览会复用受管浏览器标签，但不应把用户困在文件页面里。
   // 有历史记录先后退，保留 Agent 工作标签；没有历史时才关闭预览标签。
@@ -357,8 +348,8 @@ export function BrowserPanel({ sessionId, state, visible, active = false, avoidW
         console.error('[受管浏览器] 返回预览前页面失败:', error)
       }
     }
-    await closeTab(state.activeTabId)
-  }, [closeTab, sessionId, state?.activeTabId, state?.canGoBack, state?.localFile])
+    onClose()
+  }, [onClose, sessionId, state?.activeTabId, state?.canGoBack, state?.localFile])
 
   useShortcut('browser-reload', React.useCallback(() => { void runNavigationAction('reload') }, [runNavigationAction]), active && visible && !riskBlocked && !state?.dialog, shortcutOptions)
   useShortcut('browser-new-page', React.useCallback(() => { void createPage() }, [createPage]), active && visible && !riskBlocked, shortcutOptions)

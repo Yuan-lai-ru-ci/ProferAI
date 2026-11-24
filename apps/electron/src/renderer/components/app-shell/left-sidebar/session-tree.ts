@@ -116,7 +116,7 @@ export function getDelegatedChildStatus(
   // completed 指示、后更新 delegationStatus。只要持久化委派仍是 running，
   // 就不能让这段时序窗口把父会话误显示为已完成。
   if (status === 'blocked' || status === 'running') return status
-  if (session.delegationStatus === 'running') return 'running'
+  if (session.delegationStatus === 'running') return status === 'idle' ? 'idle' : 'running'
   // 持久化的中断是可靠事实，即使本轮 stream 已收尾（先出 completed 指示）也要表达出来，
   // 否则可续跑的断点会被完成态掩盖。
   if (session.delegationStatus === 'interrupted') return 'interrupted'

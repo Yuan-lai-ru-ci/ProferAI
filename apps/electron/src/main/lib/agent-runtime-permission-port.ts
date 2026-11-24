@@ -43,8 +43,9 @@ export interface ElectronPermissionPortOptions extends Pick<PermissionPort, 'can
 export function createElectronPermissionPort(options?: ElectronPermissionPortOptions): PermissionPort {
   return {
     createCanUseTool(input) {
-      // 绑定本次 callback 创建时的有效模式；迟到调用不能重新读取下一轮的 session 模式。
+      // 绑定本轮控制器（不是下轮同 ID）；本轮可信热切换动态生效，无控制器才冻结初始值。
       const bypassPermissions = options?.isBypassPermissions?.(input.sessionId) === true
+      const planMode = getAgentRuntimePlanMode(input.sessionId)
       const callback = permissionService.createCanUseTool(
         input.sessionId,
         input.sendPermissionRequest,
@@ -53,7 +54,7 @@ export function createElectronPermissionPort(options?: ElectronPermissionPortOpt
       )
       const inner: RuntimeCanUseTool = async (toolName, toolInput, canUseOptions) => {
         // 完全自动模式：不打断、不落审批请求（与 Claude SDK 在 bypassPermissions 下的行为同义）。
-        if (bypassPermissions) {
+        if (planMode ? planMode.getMode() === 'bypassPermissions' : bypassPermissions) {
           return {
             behavior: 'allow' as const,
             updatedInput: toolInput,
@@ -64,7 +65,6 @@ export function createElectronPermissionPort(options?: ElectronPermissionPortOpt
       }
       // 计划模式责任方：入口注册了本轮控制器时，EnterPlanMode / ExitPlanMode 与 plan 只读工具面
       // 必须在进入通用权限判定之前拦截；未注册时保持既有行为（不新增隐藏默认值）。
-      const planMode = getAgentRuntimePlanMode(input.sessionId)
       if (!planMode) return inner
       return createPlanModeGatedCanUseTool({
         controller: planMode,

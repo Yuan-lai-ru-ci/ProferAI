@@ -412,6 +412,10 @@ export const IPC_CHANNELS = {
   WINDOW_REPORT_SESSIONS: 'window:report-sessions',
   WINDOW_APP_WINDOWS_CHANGED: 'window:app-windows-changed',
   WINDOW_FOCUS_SESSION: 'window:focus-session',
+  WINDOW_MOVE_SESSION_HERE: 'window:move-session-here',
+  WINDOW_MOVE_PREPARE: 'window:move-prepare',
+  WINDOW_MOVE_ACCEPT: 'window:move-accept',
+  WINDOW_MOVE_REPLY: 'window:move-reply',
   WINDOW_REPORT_PHASE: 'window:report-phase',
   WINDOW_ACK_TAB_HANDOFF: 'window:ack-tab-handoff',
   WINDOW_TAB_HANDOFF: 'window:tab-handoff',
@@ -457,6 +461,28 @@ export interface AppWindowSession {
   sessionId: string
 }
 
+/** main 在每个接收窗口的 Core 上下文中采样，异步交接不得跨 generation。 */
+export interface WindowMoveCore {
+  targetId: string
+  coreId?: string
+  generation: number
+}
+
+export interface PrepareWindowSessionMove {
+  handoffId: string
+  session: AppWindowSession
+  core: WindowMoveCore
+}
+
+export interface AcceptWindowSessionMove {
+  handoffId: string
+  tab: MainWindowTabPayload
+  core: WindowMoveCore
+}
+
+export type PrepareWindowSessionMoveResult = { tab: MainWindowTabPayload } | { error: string }
+export interface WindowMoveResult { ok: boolean; error?: string }
+
 export interface AppWindowSummary {
   windowId: string
   isPrimary: boolean
@@ -480,6 +506,9 @@ export interface MainWindowBootstrap {
 
 /** 「在新窗口打开」的结果 */
 export interface WindowTabHandoffEvent {
+  /** 既有窗口交接的源标签一直保留到目标确认（与创建新窗口的提前 detach 不同）。 */
+  existingWindowMove?: true
+  sourceGeneration?: number
   sourceCore: { targetId: string; coreId?: string }
   status: 'committed' | 'failed'
   handoffId: string

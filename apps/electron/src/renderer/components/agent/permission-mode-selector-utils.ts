@@ -1,53 +1,22 @@
-/**
- * 权限模式选择器的纯逻辑层（无 React/Electron 依赖，可直接单测）。
- *
- * 抽出来的唯一动机：预设权限上限门禁是本组件的关键语义（渲染层是唯一阻止用户持久化
- * 一个「比预设上限更宽松」的误导性模式值的地方，见 IPC `UPDATE_SESSION_PERMISSION_MODE`
- * 不做上限收敛），但组件本身依赖 Radix/Jotai，无法在无 DOM 的 bun test 中渲染。
- */
-
+/** 权限选择菜单只表达用户可选模式；实际权限由 Core/主进程权威返回，不在 UI 重施预设上限。 */
 import type { ProferPermissionMode } from '@profer/shared'
-import { PROFER_PERMISSION_MODE_CONFIG, PROFER_PERMISSION_MODE_ORDER, resolveEffectivePermissionMode } from '@profer/shared'
+import { PROFER_PERMISSION_MODE_ORDER } from '@profer/shared'
+import { resolveSessionPermissionMode } from '@/lib/agent-session-permission'
 
-/** 候选模式是否能在当前预设上限内生效（更宽松会被 resolve 收紧，视为不可选）。 */
-export function canSelectPermissionMode(
-  capMode: ProferPermissionMode,
-  candidate: ProferPermissionMode,
-): boolean {
-  return resolveEffectivePermissionMode(capMode, candidate) === candidate
-}
-
-/**
- * 当前有效模式：有显式 override 时按预设上限收紧，否则直接显示预设上限本身。
- *
- * `requestedMode === undefined` 表示用户从未显式选择过（只有预设声明的上限生效），
- * 此时不能回落到全局默认值，否则工具栏显示会与实际运行权限脱节。
- */
+/** 无会话选择时跟随预设默认，否则原样显示后端已确认的模式。 */
 export function resolveSelectorMode(
-  capMode: ProferPermissionMode,
-  requestedMode: ProferPermissionMode | undefined,
+  presetDefault: ProferPermissionMode,
+  selectedMode: ProferPermissionMode | undefined,
 ): ProferPermissionMode {
-  return requestedMode === undefined ? capMode : resolveEffectivePermissionMode(capMode, requestedMode)
+  return resolveSessionPermissionMode(presetDefault, selectedMode)
 }
 
 export interface PermissionModeMenuEntry {
   mode: ProferPermissionMode
-  /** 超出预设上限时为 false（菜单项渲染为 disabled）。 */
   selectable: boolean
 }
 
-/**
- * 菜单项顺序恒定取自 `PROFER_PERMISSION_MODE_ORDER`（双端同源同值），
- * 这里只补充每个候选的「是否可选」标注，不在任一端手写顺序。
- */
-export function buildPermissionModeMenu(capMode: ProferPermissionMode): PermissionModeMenuEntry[] {
-  return PROFER_PERMISSION_MODE_ORDER.map((mode) => ({
-    mode,
-    selectable: canSelectPermissionMode(capMode, mode),
-  }))
-}
-
-/** 超出预设上限时的统一说明文案（菜单 disabled 项与越权兜底 toast 共用一份措辞）。 */
-export function describePermissionModeRestriction(capMode: ProferPermissionMode): string {
-  return `当前预设将权限限制为「${PROFER_PERMISSION_MODE_CONFIG[capMode].label}」，不能切换到更宽松的模式`
+/** 顺序与双端同源；显式可信用户设置允许选择全部模式。 */
+export function buildPermissionModeMenu(_presetDefault: ProferPermissionMode): PermissionModeMenuEntry[] {
+  return PROFER_PERMISSION_MODE_ORDER.map(mode => ({ mode, selectable: true }))
 }

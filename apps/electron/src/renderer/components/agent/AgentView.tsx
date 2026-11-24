@@ -38,6 +38,7 @@ import { PermissionBanner } from './PermissionBanner'
 import { RuntimeProcessPanel } from './RuntimeProcessPanel'
 import { BackgroundTaskControls } from './BackgroundTaskControls'
 import { PermissionModeSelector } from './PermissionModeSelector'
+import { applyAuthoritativeSessionPermission, resolveSessionPermissionMode } from '@/lib/agent-session-permission'
 import { PresetSelector } from './PresetSelector'
 import { referenceForSelectablePreset, selectablePresetMatchesReference } from './preset-selector-utils'
 import { agentPresetCacheKey, coreScopedPresetCacheKey, agentPresetsAtom, agentPresetsLoadedAtom } from '@/atoms/agent-preset-atoms'
@@ -81,6 +82,8 @@ import type { AgentInterruptionState } from '@/atoms/preview-atoms'
 import {
   agentStreamingStatesAtom,
   agentSessionStreamingStateAtomFamily,
+  agentObservedActivityAtom,
+  visibleAgentViewsAtom,
   agentChannelIdAtom,
   agentModelIdAtom,
   agentChannelIdsAtom,
@@ -303,6 +306,15 @@ export interface AgentViewProps {
 
 export function AgentView({ sessionId, standalone = false }: AgentViewProps): React.ReactElement {
   const store = useStore()
+  React.useEffect(() => {
+    store.set(visibleAgentViewsAtom, prev => new Map(prev).set(sessionId, (prev.get(sessionId) ?? 0) + 1))
+    return () => store.set(visibleAgentViewsAtom, prev => {
+      const next = new Map(prev)
+      const remaining = (prev.get(sessionId) ?? 1) - 1
+      if (remaining) next.set(sessionId, remaining); else next.delete(sessionId)
+      return next
+    })
+  }, [sessionId, store])
   const minimapHostRef = React.useRef<HTMLDivElement>(null)
   const [pendingGoalReplacement, setPendingGoalReplacement] = useAtom(goalReplacementAtomFamily(sessionId))
   const [goalStatusOpen, setGoalStatusOpen] = React.useState(false)
@@ -373,25 +385,28 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   // 流式期间其他 session 的高频更新（每 token 一次）通过 base map atom 传播但派生
   // atom 输出引用未变，订阅者跳过通知。
   const streamState = useAtomValue(agentSessionStreamingStateAtomFamily(sessionId))
-  const streaming = streamState?.running ?? false
+  const observedActivities = useAtomValue(agentObservedActivityAtom)
+  const observedActivity = observedActivities.get(sessionId)
+  const ownerStreaming = streamState?.running ?? false
+  const streaming = ownerStreaming || (observedActivity === 'active' && !streamState?.backgroundWaiting)
   const setPersistedGraph = useSetAtom(persistedGraphAtomFamily(sessionId))
   // 软空闲态：本轮主体已结束、UI 可输入，但 SDK 通道仍开着等后台任务唤醒。
   // 此时服务端 activeSessions 仍保留，新消息须走注入通道而非新建 run。
   const backgroundWaiting = streamState?.backgroundWaiting ?? false
 
   // 流式结束后从 JSONL 加载持久化 Graph，确保 ProjectGraphPanel 有数据可展示
-  const prevStreamingRef = React.useRef(streaming)
+  const prevStreamingRef = React.useRef(ownerStreaming)
   React.useEffect(() => {
     const wasStreaming = prevStreamingRef.current
-    prevStreamingRef.current = streaming
+    prevStreamingRef.current = ownerStreaming
     // 仅在 streaming: true → false 时触发一次加载
-    if (wasStreaming && !streaming && sessionId) {
+    if (wasStreaming && !ownerStreaming && sessionId) {
       const api = window.electronAPI as { getGraph?: (id: string) => Promise<import('@profer/project-core').TaskGraph> }
       api.getGraph?.(sessionId)
         .then((g) => { if (g && Object.keys(g.nodes).length > 0) setPersistedGraph(g) })
         .catch(() => {})
     }
-  }, [streaming, sessionId, setPersistedGraph])
+  }, [ownerStreaming, sessionId, setPersistedGraph])
   const stoppedByUserSessions = useAtomValue(stoppedByUserSessionsAtom)
   const sendWithCmdEnter = useAtomValue(sendWithCmdEnterAtom)
   const setSendWithCmdEnter = useSetAtom(sendWithCmdEnterAtom)
@@ -430,8 +445,8 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   const isRemoteCore = coreTarget.currentId !== 'local'
   const sessions = useAtomValue(agentSessionsAtom)
   const runningDelegationCount = React.useMemo(
-    () => countRunningDelegations(sessions, sessionId),
-    [sessions, sessionId],
+    () => countRunningDelegations(sessions, sessionId, observedActivities),
+    [sessions, sessionId, observedActivities],
   )
   // 委派子会话自身的运行态：实时流优先，持久化委派状态兜底。
   // 子会话页常在运行中途才打开，过程区又默认折叠，只靠流式计时行很容易看不出在跑。
@@ -455,13 +470,14 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
       sourceSessionId: meta.sourceSessionId,
       sourceDelegationId: meta.sourceDelegationId,
       delegationStatus: meta.delegationStatus,
+      observed: observedActivity,
       liveRunning: streamState?.running === true,
       liveStartedAt: streamState?.startedAt,
       fallbackStartedAt: delegationFallbackStartedAt,
       sessionUpdatedAt: meta.updatedAt,
       now: Date.now(),
     })
-  }, [sessions, sessionId, streamState?.running, streamState?.startedAt, delegationFallbackStartedAt])
+  }, [sessions, sessionId, observedActivity, streamState?.running, streamState?.startedAt, delegationFallbackStartedAt])
   /**
    * 对话区使用的运行态：实时流优先，持久化委派状态兜底。
    *
@@ -473,9 +489,10 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     () => resolveDelegationConversationRunState({
       liveRunning: streamState?.running === true,
       liveStartedAt: streamState?.startedAt,
-      delegation: delegationRuntimeDisplay,
+      // An observed active bit supplies neither a live assistant body nor a run timestamp.
+      delegation: observedActivity ? undefined : delegationRuntimeDisplay,
     }),
-    [streamState?.running, streamState?.startedAt, delegationRuntimeDisplay],
+    [streamState?.running, streamState?.startedAt, observedActivity, delegationRuntimeDisplay],
   )
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
@@ -890,10 +907,13 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     if (!fallback) return
     const reference = referenceForSelectablePreset(fallback, workspaceSlug ?? undefined)
     void rebindComposerPreset(sessionId, reference)
-      .then((updated) => setAgentSessions((previous) => previous.map((session) => session.id === sessionId ? updated : session)))
-      .catch((error) => console.error('[Agent] 自动匹配预设失败:', error))
-  }, [coreTarget, hasUsableSessionPreset, presetsLoaded, sessionId, sessionMeta, setAgentSessions, workspacePresetList, workspaceSlug])
-  // 会话绑定的当前预设（与 PresetSelector 同源解析）：决定本会话权限上限 / 岗位能力。
+      .then((updated) => { applyAuthoritativeSessionPermission(store, updated) })
+      .catch((error) => {
+        console.error('[Agent] 自动匹配预设失败:', error)
+        toast.error('自动匹配预设失败', { description: error instanceof Error ? error.message : '请选择预设后重试' })
+      })
+  }, [coreTarget, hasUsableSessionPreset, presetsLoaded, sessionId, sessionMeta, store, workspacePresetList, workspaceSlug])
+  // 会话绑定的当前预设（与 PresetSelector 同源解析）：决定默认权限 / 岗位能力。
   // 切换预设后 sessionPresetReference 更新即触发重算，权限图标随岗位立即联动。
   const permissionModeMap = useAtomValue(agentPermissionModeMapAtom)
   const defaultPermissionMode = useAtomValue(agentDefaultPermissionModeAtom)
@@ -912,9 +932,9 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
   // 权限模式由会话显式选择决定。预设权限仍作为未显式选择时的默认值，
   // 但不能在这里再次把用户已选择的 plan/bypassPermissions 压回旧模式，否则
   // 工具栏图标与输入框计划态会分叉。
-  const requestedPermissionMode = permissionModeMap.get(sessionId) ?? persistedPermissionMode
-  const presetPermissionCapMode = sessionBoundPreset?.permissionMode ?? defaultPermissionMode
-  const permissionMode = requestedPermissionMode ?? presetPermissionCapMode
+  const permissionMode = resolveSessionPermissionMode(
+    sessionBoundPreset?.permissionMode ?? defaultPermissionMode, persistedPermissionMode, permissionModeMap.get(sessionId),
+  )
   const isPermissionPlanMode = permissionMode === 'plan'
   const [presetMenuOpen, setPresetMenuOpen] = React.useState(false)
   const openWorkspacePresets = React.useCallback(() => {
@@ -1204,7 +1224,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           setStreamingStates((prev) => {
             const state = prev.get(sessionId)
             // 仍在运行中：不清除
-            if (!state || state.running) return prev
+            if (!state || state.running || state.awaitingOwnerTerminal) return prev
             const map = new Map(prev)
             // 软空闲态（后台任务等待）：必须保留 backgroundWaiting 标志（否则 handleSend 误走新建 run），
             // 但展示字段 content 仍要清空——否则上一轮流式文本残留会被兜底气泡渲染成重复消息。
@@ -1250,7 +1270,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
             if (!prev.has(sessionId)) return prev
             // 仍在运行中，不清除实时消息（与 streamingStates 保护逻辑一致）
             const streamingState = store.get(agentStreamingStatesAtom).get(sessionId)
-            if (streamingState?.running) return prev
+            if (streamingState?.running || streamingState?.awaitingOwnerTerminal) return prev
             const map = new Map(prev)
             map.delete(sessionId)
             return map
@@ -2062,7 +2082,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
     && Boolean(agentChannelId) && hasAvailableModel && streamState?.stopping !== true
 
   /** 自动发送队首：必须真正空闲。运行中/后台等待都不发，否则每轮都会被自己打断重开 */
-  const canSendQueuedNow = queueSendPrerequisitesMet && !streaming && !backgroundWaiting
+  const canSendQueuedNow = queueSendPrerequisitesMet && !streaming && !backgroundWaiting && observedActivity !== 'unknown'
 
   /**
    * 「立即发送」按钮：运行中也可点。点下去由 sendPlainTextAgentMessage 走软打断
@@ -3310,6 +3330,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
 
   // 新会话（空会话）：欢迎语与输入框一起垂直居中，而不是让输入框贴底
   const isEmptySession = messagesLoaded
+    && !streaming
     && !conversationRunState.streaming
     && !(streamState?.backgroundWaiting ?? false)
     && persistedSDKMessages.length === 0
@@ -3498,6 +3519,11 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
         <div className="shrink-0">
           {!standalone && <AgentHeader sessionId={sessionId} />}
         </div>
+        {!delegationRuntimeDisplay?.visible && (observedActivity === 'unknown' || (observedActivity === 'active' && !ownerStreaming && !backgroundWaiting)) && (
+          <div role="status" className="shrink-0 px-3 py-1 text-xs text-muted-foreground">
+            {observedActivity === 'active' ? 'Agent 运行中' : '运行状态待确认'}
+          </div>
+        )}
         {delegationRuntimeDisplay && <div className="shrink-0"><DelegationRuntimeBar display={delegationRuntimeDisplay} /></div>}
         {/* 探索分支：来源标注 + 带回主线（原侧面板分支条，随分支 Tab 化迁入）。
             独立会话窗口没有父会话 Tab，避免把引用写进本窗口的临时草稿。 */}
@@ -3543,6 +3569,7 @@ export function AgentView({ sessionId, standalone = false }: AgentViewProps): Re
           messagesLoaded={messagesLoaded}
           persistedSDKMessages={persistedSDKMessages}
           streaming={conversationRunState.streaming}
+          observedActivity={observedActivity}
           runStartedAtFallback={conversationRunState.startedAt ?? delegationFallbackStartedAt}
           streamState={streamState}
           runningDelegationCount={runningDelegationCount}

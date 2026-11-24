@@ -6,11 +6,10 @@
  */
 
 import * as React from 'react'
-import { useAtomValue } from 'jotai'
+import { useAtomValue, useStore } from 'jotai'
 import { Split } from 'lucide-react'
 import { agentSessionsAtom } from '@/atoms/agent-atoms'
 import { openExplorationBranchTab } from '@/lib/exploration-tab'
-import { getDefaultStore } from 'jotai'
 import { Button } from '@profer/ui/primitives/button'
 import {
   DropdownMenu,
@@ -24,6 +23,7 @@ interface AgentHeaderProps {
 }
 
 export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement | null {
+  const store = useStore()
   const sessions = useAtomValue(agentSessionsAtom)
   const branches = React.useMemo(
     () => sessions
@@ -35,8 +35,8 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
   /** 分支是顶栏 Tab：重开 = 建 Tab 并激活（必要时自动与父会话并排）。 */
   const reopen = React.useCallback((branch: (typeof branches)[number]): void => {
     if (!branch.explorationSourceMessageId) return
-    openExplorationBranchTab(getDefaultStore(), sessionId, { sessionId: branch.id, title: branch.title || '探索分支' }, { autoGroup: true })
-  }, [sessionId])
+    openExplorationBranchTab(store, sessionId, { sessionId: branch.id, title: branch.title || '探索分支' }, { autoGroup: true })
+  }, [sessionId, store])
 
   if (branches.length === 0) return null
 

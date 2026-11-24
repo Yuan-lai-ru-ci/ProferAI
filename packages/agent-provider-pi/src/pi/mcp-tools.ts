@@ -748,13 +748,15 @@ export async function buildPiMcpTools(mcpServers: PiMcpServers, policy?: Effecti
 /** 给出工作区时仅重启该工作区的连接；缺省保持全局重启行为。 */
 export interface McpRestartScope {
   workspaceSlug?: string
+  /** 独立 Core 注入自己的连接管理器；桌面缺省沿用进程级 manager。 */
+  manager?: PiMcpClientManager
 }
 
 /** 关闭匹配范围连接并递增代际；下次列出工具时重建。 */
 export async function restartMcpServer(serverName: string, scope?: McpRestartScope): Promise<McpServerRestartResult> {
   // 代际递增：即使没有旧连接，新连接的 epoch 也必须大于重启前的任何探测结果
   nextEpoch()
-  const closed = await manager.closeServer(serverName, '手动重启', scope?.workspaceSlug)
+  const closed = await (scope?.manager ?? manager).closeServer(serverName, '手动重启', scope?.workspaceSlug)
   const scopeNote = scope?.workspaceSlug ? `（仅工作区 ${scope.workspaceSlug}）` : ''
   console.log(`[Pi MCP] 重启 MCP server ${serverName}：已关闭 ${closed} 个连接${scopeNote}`)
   return { ok: true, message: `已重启 ${closed} 个连接${scopeNote}` }

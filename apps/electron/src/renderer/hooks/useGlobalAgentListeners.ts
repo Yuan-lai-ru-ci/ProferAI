@@ -45,7 +45,6 @@ import {
   liveMessagesMapAtom,
   agentSessionModelMapAtom,
   agentModelIdAtom,
-  agentPermissionModeMapAtom,
   stoppedByUserSessionsAtom,
   agentPlanModeSessionsAtom,
   currentAgentSessionIdAtom,
@@ -57,7 +56,7 @@ import {
   workspaceAttachedFilesMapAtom,
   unviewedCompletedSessionIdsAtom,
   agentSessionPathMapAtom,
-  agentSessionIndicatorMapAtom,
+  ownerSessionIndicatorMapAtom,
   agentDiffRefreshVersionAtom,
   agentNonGitFileChangesAtom,
   agentFileChangesCurrentRunAtom,
@@ -72,9 +71,8 @@ import {
   sendDesktopNotification,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { shouldClaimAgentStream } from '@/lib/agent-stream-claim'
-import { shouldClearStaleRunState } from '@/lib/agent-run-state-reconcile'
-import { tabsAtom, activeTabIdAtom, activeTabAtom, activeSessionIdAtom, openTab, updateTabTitle, reconcileAgentTabTitles } from '@/atoms/tab-atoms'
+import { installAgentActivityObserver } from '@/lib/agent-activity-observer'
+import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle, reconcileAgentTabTitles } from '@/atoms/tab-atoms'
 import { planFollowWorkTab, tabGroupsAtom } from '@/atoms/tab-group-atoms'
 import { openFilePreviewTab } from '@/components/diff/preview-opener'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
@@ -96,6 +94,7 @@ import { getSessionFileChangeKind, upsertSessionFileChange } from '@/lib/session
 import { applyCoreRunStarted, compactCompletedBackgroundStreamState, isCurrentAgentStreamCompletion, settleCompletedAgentStreamState } from '@/lib/agent-stream-state-cleanup'
 import { AgentStreamRestoreGate } from '@/lib/agent-stream-restore-gate'
 import { decideRestoreMerge } from '@/lib/agent-stream-restore-merge'
+import { applyAuthoritativeSessionPermission, syncAuthoritativePermissionMode } from '@/lib/agent-session-permission'
 import { isAbsoluteFilePath } from '@/lib/file-utils'
 import { inspectOfficialPptxPreview } from '@/components/file-browser/office-preview/official-preview-session'
 import { isAgentWorkspaceIdVisible } from '@/lib/product-feature-flags'
@@ -430,8 +429,31 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     onFailure: (error) => console.error('[渠道目录] 本地目录刷新失败，保留当前列表:', error),
     initialRefresh: true,
   }), [store])
-  useEffect(() => {
+  useEffect(() => installGlobalAgentListeners(store, { standaloneSessionId }), [store, standaloneSessionId])
+}
+
+/** 安装真实全局会话监听；独立于 React 挂载，便于以隔离 store 回归完整处理路径。 */
+export function installGlobalAgentListeners(
+  store: ReturnType<typeof useStore>,
+  options?: GlobalAgentListenerOptions,
+): () => void {
+    const standaloneSessionId = options?.standaloneSessionId
     let effectActive = true
+    const activityObserver = installAgentActivityObserver(store, {
+      read: id => window.electronAPI.getAgentSessionActivity(id),
+      subscribe: callback => window.electronAPI.onAgentSessionActivityInvalidated(({ sessionId }) => callback(sessionId)),
+      isVisible: () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
+      onReveal: callback => {
+        window.addEventListener?.('focus', callback)
+        globalThis.document?.addEventListener('visibilitychange', callback)
+        return () => {
+          window.removeEventListener?.('focus', callback)
+          globalThis.document?.removeEventListener('visibilitychange', callback)
+        }
+      },
+      every: (callback, ms) => { const timer = setInterval(callback, ms); return () => clearInterval(timer) },
+      now: Date.now,
+    })
     // 启动时水合 Goal 状态（含重启后待恢复的 paused Goal）
     void window.electronAPI.listGoals().then((goals) => {
       if (!effectActive) return
@@ -825,7 +847,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       // 独立会话窗口没有顶栏 Tab，不自动为委派子会话建 Tab。
       if (standaloneSessionId) return
       const sessions = store.get(agentSessionsAtom)
-      const indicatorMap = store.get(agentSessionIndicatorMapAtom)
+      const indicatorMap = store.get(ownerSessionIndicatorMapAtom)
       store.set(tabsAtom, (tabs) => {
         let next = tabs
         for (const child of sessions) {
@@ -844,7 +866,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       })
     }
     const unsubscribeDelegationSessionTabs = store.sub(agentSessionsAtom, ensureDelegationChildTabs)
-    const unsubscribeDelegationIndicatorTabs = store.sub(agentSessionIndicatorMapAtom, ensureDelegationChildTabs)
+    const unsubscribeDelegationIndicatorTabs = store.sub(ownerSessionIndicatorMapAtom, ensureDelegationChildTabs)
 
     // ===== 0.6 标题收敛：会话 meta 是 agent Tab 标题的唯一事实源 =====
     // tab.title 只是打开那一刻的快照；左栏 / 切换器读的是会话列表。任何没走到
@@ -910,18 +932,13 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
             // 草稿晋升后必须同步解除 renderer 的内存草稿标记：可见性判定同时看持久化
             // draft 与内存标记，迟一步会话就会卡在「已跑起来但仍被当草稿隐藏」。
             store.set(draftSessionIdsAtom, (previous) => syncDraftSessionId(previous, payload.session))
-            if (payload.session.permissionMode) {
-              store.set(agentPermissionModeMapAtom, (previous) => {
-                const next = new Map(previous)
-                next.set(payload.session.id, payload.session.permissionMode)
-                return next
-              })
-              store.set(agentPlanModeSessionsAtom, (previous) =>
-                updatePlanModeSessionSet(previous, payload.session.id, payload.session.permissionMode === 'plan')
-              )
+            const accepted = store.get(agentSessionsAtom).find(session => session.id === payload.session.id)
+            if (accepted && accepted.revision === payload.session.revision) {
+              syncAuthoritativePermissionMode(store, accepted.id, accepted.permissionMode)
             }
             store.set(tabsAtom, (tabs) => updateTabTitle(tabs, payload.session.id, payload.session.title))
           } else {
+            activityObserver.forget(payload.sessionId)
             store.set(agentSessionsAtom, (previous) => previous.filter((session) => session.id !== payload.sessionId))
           }
           return
@@ -1036,30 +1053,18 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
             store.set(visualizationsAtom, (previous) => updateVisualizationSessionCache(previous, sessionId, [proferEvent.record]))
           } else if (proferEvent.type === 'runtime_started') {
             if (proferEvent.sessionId !== sessionId) return
-            store.set(agentStreamingStatesAtom, (prev) => {
-              const current = prev.get(sessionId)
-              const next = applyCoreRunStarted(current, proferEvent)
-              return next && next !== current ? new Map(prev).set(sessionId, next) : prev
-            })
+            const current = store.get(agentStreamingStatesAtom).get(sessionId)
+            const next = applyCoreRunStarted(current, proferEvent)
+            if (next && next !== current) {
+              activityObserver.forget(sessionId)
+              store.set(agentStreamingStatesAtom, prev => new Map(prev).set(sessionId, next))
+            }
           } else if (proferEvent.type === 'external_run_started') {
+            activityObserver.forget(sessionId)
             activateExternalAgentRun(proferEvent)
           } else if (proferEvent.type === 'delegation_session_updated' || proferEvent.type === 'session_updated') {
             const incomingSession = proferEvent.session
-            store.set(agentSessionsAtom, (previous) => {
-              const current = previous.find((session) => session.id === incomingSession.id)
-              if (current && (incomingSession.revision ?? 0) < (current.revision ?? 0)) return previous
-              return upsertAgentSession(previous, incomingSession)
-            })
-            if (incomingSession.permissionMode) {
-              store.set(agentPermissionModeMapAtom, (previous) => {
-                const current = store.get(agentSessionsAtom).find((session) => session.id === incomingSession.id)
-                if (current && (incomingSession.revision ?? 0) < (current.revision ?? 0)) return previous
-                const next = new Map(previous)
-                next.set(incomingSession.id, incomingSession.permissionMode!)
-                return next
-              })
-              store.set(agentPlanModeSessionsAtom, (previous) => updatePlanModeSessionSet(previous, incomingSession.id, incomingSession.permissionMode === 'plan'))
-            }
+            applyAuthoritativeSessionPermission(store, incomingSession)
             store.set(tabsAtom, (tabs) => updateTabTitle(tabs, incomingSession.id, incomingSession.title))
             // 委派子会话的后台 Tab 由会话列表与流指示统一补齐；本事件只负责收敛会话和权限状态。
           } else if (proferEvent.type === 'session_deleted') {
@@ -1114,6 +1119,17 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         const legacyEvents = payloadToLegacyEvents(payload)
 
         for (const event of legacyEvents) {
+          // 配置事件不证明 run 已启动：必须在通用 running fallback 和所有 run 副作用前分流。
+          if (event.type === 'plan_mode_changed') {
+            store.set(agentPlanModeSessionsAtom, previous => updatePlanModeSessionSet(previous, sessionId, event.active))
+            continue
+          }
+          if (event.type === 'permission_mode_changed') {
+            syncAuthoritativePermissionMode(store, sessionId, event.mode)
+            store.set(agentSessionsAtom, previous => previous.map(session =>
+              session.id === sessionId ? { ...session, permissionMode: event.mode } : session))
+            continue
+          }
           // 会话首次进入 running 时，清除旧的完成提醒状态
           if (event.type !== 'prompt_suggestion') {
             const prevState = store.get(agentStreamingStatesAtom).get(sessionId)
@@ -1493,22 +1509,8 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
             store.set(agentPlanModeSessionsAtom, (prev: Set<string>) =>
               updatePlanModeSessionSet(prev, sessionId, true)
             )
-          } else if (event.type === 'plan_mode_changed') {
-            // 计划阶段变化只影响输入框/横幅状态，不改用户选择的权限模式
-            store.set(agentPlanModeSessionsAtom, (prev: Set<string>) =>
-              updatePlanModeSessionSet(prev, sessionId, event.active)
-            )
-          } else if (event.type === 'permission_mode_changed') {
-            // 权限模式变更（如 Plan 模式退出后切换到自动审批或完全自动）
-            store.set(agentPermissionModeMapAtom, (prev: Map<string, import('@profer/shared').ProferPermissionMode>) => {
-              const next = new Map(prev)
-              next.set(sessionId, event.mode)
-              return next
-            })
-            store.set(agentPlanModeSessionsAtom, (prev: Set<string>) =>
-              updatePlanModeSessionSet(prev, sessionId, event.mode === 'plan')
-            )
           } else if (event.type === 'run_resumed') {
+            activityObserver.forget(sessionId)
             // 后台任务完成自动唤醒：从"空闲可输入"恢复到"运行中"。
             store.set(agentStreamingStatesAtom, (prev) => {
               const current = prev.get(sessionId)
@@ -1583,80 +1585,8 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       return restoreActiveStreams(ids)
     }).catch(error => console.error('[Agent] 刷新后恢复活跃流失败:', error))
 
-    // 切到某个 Agent 会话时主动“认领”本轮流。
-    //
-    // 为什么需要：建绑只发生在窗口挂载时（以及 run 启动时对主窗口的绑定），切 Tab 不会重绑。
-    // 一旦该会话的流被别的窗口接管、或 run 由移动端发起而事件进了别处，本窗口就永远没有
-    // 运行态：过程区一直折叠、没有 spinner、消息停在打开时的快照上。
-    // 认领由主进程仲裁：已由独立会话窗口持有的会话不会被抢（见 restoreActiveAgentStreams）。
-    const claimedSessionIds = new Set<string>()
-    const pendingActivityReads = new Map<string, symbol>()
-    /** 打开会话时向所属 Core 补读运行态，覆盖刷新窗口前已收到的开始事件。 */
-    const reconcileRunState = async (sessionId: string): Promise<void> => {
-      const target = store.get(coreTargetsAtom)
-      const state = store.get(agentStreamingStatesAtom).get(sessionId)
-      const request = Symbol()
-      pendingActivityReads.set(sessionId, request)
-      const coreActive = await window.electronAPI.getAgentSessionActivity(sessionId).catch(() => undefined)
-      if (pendingActivityReads.get(sessionId) !== request) return
-      pendingActivityReads.delete(sessionId)
-      // 查不到权威结果时保持现状，不能凭失败去清运行态。
-      if (coreActive === undefined) return
-      const latest = store.get(coreTargetsAtom)
-      if (!effectActive || latest.currentId !== target.currentId || latest.generation !== target.generation
-          || store.get(agentStreamingStatesAtom).get(sessionId) !== state) return
-      if (coreActive) {
-        if (!state?.running && !state?.backgroundWaiting) store.set(agentStreamingStatesAtom, (prev) =>
-          new Map(prev).set(sessionId, { running: true, content: '', toolActivities: [] }))
-        return
-      }
-      if (target.currentId === 'local' || !state || !shouldClearStaleRunState({
-        running: state.running === true,
-        stopping: state.stopping === true,
-        coreActive,
-      })) return
-      store.set(agentStreamingStatesAtom, (prev) => {
-        if (!prev.has(sessionId)) return prev
-        const next = new Map(prev)
-        next.delete(sessionId)
-        return next
-      })
-    }
-    /** 假运行态往往在打开会话之后才由迟到事件点亮，补一次短延时校正。 */
-    let reconcileTimer: ReturnType<typeof setTimeout> | undefined
-    const scheduleRunStateReconcile = (sessionId: string): void => {
-      if (store.get(coreTargetsAtom).currentId === 'local') return
-      clearTimeout(reconcileTimer)
-      reconcileTimer = setTimeout(() => { void reconcileRunState(sessionId) }, 2500)
-    }
-    const claimActiveSessionStream = (): void => {
-      const tab = store.get(activeTabAtom)
-      if (!tab) return
-      const sessionId = tab.sessionId
-      if (tab.type === 'agent') {
-        void reconcileRunState(sessionId)
-        scheduleRunStateReconcile(sessionId)
-      }
-      const state = store.get(agentStreamingStatesAtom).get(sessionId)
-      if (!shouldClaimAgentStream({
-        tabType: tab.type,
-        hasRunningState: Boolean(state?.running || state?.backgroundWaiting),
-        alreadyClaimed: claimedSessionIds.has(sessionId),
-        standalone: Boolean(standaloneSessionId),
-      })) return
-      claimedSessionIds.add(sessionId)
-      void restoreActiveStreams([sessionId])
-        .catch((error) => {
-          console.error('[Agent] 认领会话流失败:', error)
-        })
-    }
-    if (standaloneSessionId) void reconcileRunState(standaloneSessionId)
-    else claimActiveSessionStream()
-    const unsubscribeActiveSessionClaim = store.sub(activeTabAtom, claimActiveSessionStream)
-
     // ===== 2. 流式完成 =====
     const handleStreamComplete = (data: AgentStreamCompletePayload): void => {
-        pendingActivityReads.delete(data.sessionId)
         // STREAM_COMPLETE 是该 session 的提交屏障：先收敛尚未执行的 rAF 批次，
         // 再刷新持久化消息和清理状态，避免终态抢在最后一条流式消息之前。
         liveMessageBatcher.flush(data.sessionId)
@@ -1670,6 +1600,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
         // 防止迟到的旧终态通知、标记或关闭新 run。
         const activeStreamState = store.get(agentStreamingStatesAtom).get(data.sessionId)
         if (!isCurrentAgentStreamCompletion(activeStreamState, data)) return
+        activityObserver.forget(data.sessionId)
         store.set(agentPersistenceMapAtom, (prev) => {
           const next = new Map(prev)
           if (data.persistence) next.set(data.sessionId, { ...data.persistence, runId: data.runId, startedAt: activeStreamState.startedAt })
@@ -1955,7 +1886,7 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
     })
 
     const cleanupSessionUpdated = window.electronAPI.onAgentSessionUpdated(({ session }) => {
-      store.set(agentSessionsAtom, (previous) => upsertAgentSession(previous, session))
+      applyAuthoritativeSessionPermission(store, session)
       store.set(tabsAtom, (tabs) => updateTabTitle(tabs, session.id, session.title))
       store.set(draftSessionIdsAtom, (previous) => syncDraftSessionId(previous, session))
     })
@@ -2087,13 +2018,11 @@ export function useGlobalAgentListeners(options?: GlobalAgentListenerOptions): v
       cleanupSessionUpdated()
       cleanupTodoSessionReady()
       clearInterval(pruneTimer)
-      clearTimeout(reconcileTimer)
       unsubscribeDelegationSessionTabs()
       unsubscribeDelegationIndicatorTabs()
       unsubscribeTabTitleReconcile()
       unsubscribeTabsTitleReconcile()
-      unsubscribeActiveSessionClaim()
+      activityObserver.dispose()
       window.removeEventListener('focus', onWindowFocus)
     }
-  }, [store, standaloneSessionId]) // store 引用稳定；独立窗口的 sessionId 在窗口生命周期内不变
 }

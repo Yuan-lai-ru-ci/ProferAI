@@ -42,6 +42,7 @@
     "./skills/skill-lexical-match": "./src/skills/skill-lexical-match.ts",
     "./skills/skill-manifest": "./src/skills/skill-manifest.ts",
     "./pi/mcp-tools": "./src/pi/mcp-tools.ts",
+    "./pi/mcp-probe": "./src/pi/mcp-probe.ts",
     "./skills/skill-resolution": "./src/skills/skill-resolution.ts",
     "./automation-tools": "./src/automation-tools.ts",
     "./delegation-tools": "./src/delegation-tools.ts",

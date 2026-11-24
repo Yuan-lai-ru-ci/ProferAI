@@ -265,6 +265,8 @@ export class BrowserController {
   private guestHostGeneration = 0
   private ownerMainFrameReady = false
   private shortcutContext: (import('@profer/shared').BrowserShortcutContext & { ticket?: string }) | null = null
+  /** 声音属于 guest 实例，不属于可重建的逻辑页签。新 guest 从 about:blank 静音开始。 */
+  private readonly audibleGuests = new WeakSet<WebContents>()
   private readonly resettingGuestIds = new Set<number>()
   private readonly guestRequests = new Map<string, BrowserGuestRequest>()
 
@@ -444,6 +446,7 @@ export class BrowserController {
   }
 
   private emit(browserSession: BrowserSessionRecord): void {
+    if (this.sessions.get(browserSession.sessionId) !== browserSession) return
     if (!this.owner || this.owner.isDestroyed()) return
     this.owner.webContents.send(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, this.buildState(browserSession))
   }
@@ -474,6 +477,7 @@ export class BrowserController {
         loading: tab.state.loading,
         zoomFactor: tab.zoomFactor,
         openedByAgent: tab.openedByAgent,
+        audible: !!tab.contents && this.audibleGuests.has(tab.contents),
         visible: tab.state.visible,
         canGoBack: tab.state.canGoBack,
         canGoForward: tab.state.canGoForward,
@@ -915,6 +919,8 @@ export class BrowserController {
   }
 
   private async prepareTab(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): Promise<void> {
+    // 旧命令可能刚排到队头；在申请 guest ticket 之前就拒绝已经关闭的页。
+    if (this.sessions.get(browserSession.sessionId) !== browserSession || browserSession.tabs.get(tab.tabId) !== tab) throw new Error('浏览器页面已关闭。')
     if (tab.ready) return tab.ready
     if (tab.contents && !tab.contents.isDestroyed()) return
     const manager = this.guestManager
@@ -926,7 +932,7 @@ export class BrowserController {
       if (generation !== this.guestHostGeneration
         || this.sessions.get(browserSession.sessionId) !== browserSession
         || browserSession.tabs.get(tab.tabId) !== tab) {
-        guest.close()
+        if (!guest.isDestroyed()) guest.close()
         throw new Error('页面在接入前已关闭或宿主已重载。')
       }
       tab.contents = guest
@@ -1112,6 +1118,12 @@ export class BrowserController {
       // 导航会重建文档，因而在每次加载完成后重新注入展示层滚动条样式。
       void contents.insertCSS(PROFER_BROWSER_SCROLLBAR_CSS).catch(() => undefined)
       this.updateNavigationState(browserSession, tab)
+    })
+    contents.on('audio-state-changed', ({ audible }) => {
+      if (!isCurrentGuest() || this.audibleGuests.has(contents) === audible) return
+      if (audible) this.audibleGuests.add(contents)
+      else this.audibleGuests.delete(contents)
+      this.emit(browserSession)
     })
     contents.on('page-title-updated', () => { if (isCurrentGuest()) this.updateNavigationState(browserSession, tab) })
     contents.on('did-navigate', () => { if (!isCurrentGuest()) return; tab.state.loadError = null; this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
@@ -1303,6 +1315,7 @@ export class BrowserController {
         loading: tab.state.loading,
         zoomFactor: tab.zoomFactor,
         openedByAgent: tab.openedByAgent,
+        audible: !!tab.contents && this.audibleGuests.has(tab.contents),
         visible: tab.state.visible,
         canGoBack: tab.state.canGoBack,
         canGoForward: tab.state.canGoForward,
@@ -1332,16 +1345,23 @@ export class BrowserController {
   }
 
   private disposeTab(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): void {
+    const contents = tab.contents
+    // close 期间的 destroyed 回调不应把主动关闭误判为崩溃。原生关闭抛错时保留可重试的页。
+    tab.contents = null
+    try {
+      const released = this.guestManager?.release(browserSession.sessionId, tab.tabId) ?? false
+      if (!released && contents && !contents.isDestroyed()) contents.close()
+    } catch (error) {
+      tab.contents = contents
+      throw error
+    }
     browserSession.tabs.delete(tab.tabId)
     tab.dialogScripts?.dispose()
     tab.dialogEndpoint?.dispose()
     tab.interactions?.dispose()
     this.clearAgentTargetHighlight(tab)
-    const contents = tab.contents
     try { if (contents?.debugger.isAttached()) contents.debugger.detach() } catch { /* 已销毁 */ }
     this.guestRequests.delete(this.guestKey(browserSession.sessionId, tab.tabId))
-    const guestReleased = this.guestManager?.release(browserSession.sessionId, tab.tabId) ?? false
-    if (!guestReleased && contents && !contents.isDestroyed()) contents.close()
     this.publishGuestRequests()
   }
 
@@ -1444,24 +1464,33 @@ export class BrowserController {
   /** Agent 关闭标签的显式入口；UI 关闭使用 closeTab，不应绕过浏览器风险告知。 */
   async closeAgentTab(sessionId: string, tabId: string): Promise<BrowserViewState | null> {
     this.assertRiskDisclaimerAcknowledged()
+    this.getDisplayTab(this.getSession(sessionId), tabId) // Agent 显式操作仍报告无效目标。
     return this.closeTab(sessionId, tabId)
   }
 
   async closeTab(sessionId: string, tabId: string): Promise<BrowserViewState | null> {
-    const browserSession = this.getSession(sessionId)
-    const tab = this.getDisplayTab(browserSession, tabId)
-    const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
-    this.actionGuards.clearTab(browserSession.sessionId, tab.tabId)
-    this.disposeTab(browserSession, tab)
-    if (browserSession.tabs.size === 0) {
-      this.disposeSession(browserSession)
+    // UI 可并发关闭同一页（快捷键、父标签、Agent）；重复请求只确认已关闭，不创建会话。
+    const browserSession = this.sessions.get(sessionId)
+    if (!browserSession) return null
+    const tab = browserSession.tabs.get(tabId)
+    if (!tab) return browserSession.tabs.size ? structuredClone(this.buildState(browserSession)) : null
+    this.closePage(browserSession, tab)
+    if (!browserSession.tabs.size) {
+      this.finishClosedSession(browserSession)
       return null
     }
+    return structuredClone(this.buildState(browserSession))
+  }
+
+  private closePage(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): void {
+    const closingIndex = [...browserSession.tabs.keys()].indexOf(tab.tabId)
+    this.disposeTab(browserSession, tab)
+    this.actionGuards.clearTab(browserSession.sessionId, tab.tabId)
+    if (browserSession.tabs.size === 0) return
+    if (browserSession.agentTabId === tab.tabId) browserSession.agentTabId = null
     if (browserSession.activeTabId === tab.tabId) this.selectMruActiveTab(browserSession, tab.tabId, closingIndex)
     browserSession.tabMru = removeMruId(browserSession.tabMru, tab.tabId)
-    if (browserSession.agentTabId === tab.tabId) browserSession.agentTabId = null
     this.emit(browserSession)
-    return structuredClone(this.buildState(browserSession))
   }
 
   async previewOpen(
@@ -1571,8 +1600,13 @@ export class BrowserController {
     }), 'Page.navigate', BROWSER_OBSERVE_TIMEOUT_MS + 3_000, signal)
   }
 
+  /** 只有未指定目标的操作可使用默认起始页。迟到的显式 tabId 不能意外新建空白页。 */
+  private getPageOperationSession(sessionId: string, tabId?: string): BrowserSessionRecord {
+    return tabId === undefined ? this.getOrCreateSession(sessionId) : this.getSession(sessionId)
+  }
+
   async navigate(sessionId: string, url: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
-    const browserSession = this.getOrCreateSession(sessionId, [])
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     const safeUrl = await assertSafeBrowserDestination(url)
@@ -1651,7 +1685,7 @@ export class BrowserController {
 
   /** 用户地址栏导航当前显示 tab，不会改变 Agent 的工作 tab。 */
   async navigateDisplay(sessionId: string, url: string, tabId?: string): Promise<BrowserViewState> {
-    const browserSession = this.getOrCreateSession(sessionId, [])
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     this.markUserBrowserContext(browserSession)
     const tab = this.getDisplayTab(browserSession, tabId)
@@ -1680,7 +1714,7 @@ export class BrowserController {
   }
 
   async goBack(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -1698,7 +1732,7 @@ export class BrowserController {
   }
 
   async goForward(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -1716,7 +1750,7 @@ export class BrowserController {
   }
 
   async reload(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -1807,7 +1841,7 @@ export class BrowserController {
    * 返回新翻译态；失败时返回 error 供前端提示（不抛出）。
    */
   async translatePage(sessionId: string, tabId?: string): Promise<BrowserTranslateResult> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     let browserSessionForState = browserSession
     try {
       this.assertRiskDisclaimerAcknowledged()
@@ -1879,7 +1913,7 @@ export class BrowserController {
   }
 
   async scroll(sessionId: string, input: BrowserScrollInput, tabId?: string, signal?: AbortSignal): Promise<BrowserScrollResult> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     const direction = input.direction ?? 'down'
@@ -1912,7 +1946,7 @@ export class BrowserController {
   }
 
   async extract(sessionId: string, input: BrowserExtractInput, tabId?: string, signal?: AbortSignal): Promise<BrowserExtractResult> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     const mode = input.mode ?? 'text'
@@ -1940,7 +1974,7 @@ export class BrowserController {
   }
 
   async observe(sessionId: string, tabId?: string, requestedMaxElements?: number, signal?: AbortSignal): Promise<BrowserObservation> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, (operationSignal) => this.observeInternal(browserSession, tab, requestedMaxElements, operationSignal))
@@ -2125,7 +2159,7 @@ export class BrowserController {
   }
 
   async click(sessionId: string, ref: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     const guard: BrowserActionGuardKey = { sessionId, tabId: tab.tabId, ref, action: 'click' }
@@ -2195,7 +2229,7 @@ export class BrowserController {
 
   async fill(sessionId: string, ref: string, text: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     if (text.length > 10_000) throw new Error('单次输入不能超过 10000 个字符。')
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -2239,7 +2273,7 @@ export class BrowserController {
 
   async press(sessionId: string, key: string, tabId?: string, signal?: AbortSignal): Promise<BrowserActionResult> {
     const action = parseBrowserPressAction(key)
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -2276,7 +2310,7 @@ export class BrowserController {
   async waitFor(sessionId: string, condition: { kind: 'url' | 'text' | 'selector'; value: string }, timeoutMs = 10_000, tabId?: string, signal?: AbortSignal): Promise<{ tabId: string; url: string; title: string; matched: boolean }> {
     if (!condition.value.trim()) throw new Error('等待条件不能为空。')
     if (!Number.isFinite(timeoutMs) || timeoutMs < 250 || timeoutMs > 30_000) throw new Error('等待超时必须在 250 到 30000 毫秒之间。')
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -2309,7 +2343,7 @@ export class BrowserController {
    * 表达式由主进程生成，selector/text 均按数据而非代码传入。
    */
   async domAction(sessionId: string, input: BrowserDomActionInput, tabId?: string, signal?: AbortSignal): Promise<{ tabId: string; url: string; result: unknown }> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -2324,7 +2358,7 @@ export class BrowserController {
    * 仅由用户主动调用（工具栏粘贴按钮），不向 Agent 工具面暴露读剪贴板能力。
    */
   async pasteClipboard(sessionId: string, tabId?: string): Promise<BrowserTranslateResult> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     let browserSessionForState = browserSession
     try {
       this.assertRiskDisclaimerAcknowledged()
@@ -2356,7 +2390,7 @@ export class BrowserController {
    */
   async evaluate(sessionId: string, script: string, tabId?: string, signal?: AbortSignal): Promise<{ tabId: string; url: string; result: unknown }> {
     assertBrowserScript(script)
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -2367,7 +2401,7 @@ export class BrowserController {
   }
 
   async screenshot(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<{ tabId: string; url: string; mimeType: string; base64: string }> {
-    const browserSession = this.getOrCreateSession(sessionId)
+    const browserSession = this.getPageOperationSession(sessionId, tabId)
     this.assertRiskDisclaimerAcknowledged()
     const tab = this.getAgentTab(browserSession, tabId)
     return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
@@ -2405,17 +2439,26 @@ export class BrowserController {
     for (const browserSession of this.sessions.values()) this.hide(browserSession.sessionId)
   }
 
-  private disposeSession(browserSession: BrowserSessionRecord): void {
+  private finishClosedSession(browserSession: BrowserSessionRecord): void {
     if (this.sessions.get(browserSession.sessionId) !== browserSession) return
     this.sessions.delete(browserSession.sessionId)
     this.actionGuards.clearSession(browserSession.sessionId)
-    for (const tab of [...browserSession.tabs.values()]) this.disposeTab(browserSession, tab)
+    if (!this.owner || this.owner.isDestroyed()) return
+    // Agent 关闭最后一页时没有 renderer invoke 回包。用同一条有序状态通道发布终态。
+    const { tabId: activeTabId, ...page } = emptyTabState('')
+    const empty: BrowserViewState = {
+      ...page, title: '', sessionId: browserSession.sessionId, executionSource: browserSession.executionSource,
+      activeTabId, agentTabId: null, tabs: [], activity: null,
+    }
+    this.owner.webContents.send(AGENT_IPC_CHANNELS.BROWSER_STATE_CHANGED, empty)
   }
 
   async close(sessionId: string): Promise<void> {
     const browserSession = this.sessions.get(sessionId)
     if (!browserSession) return
-    this.disposeSession(browserSession)
+    // 中途失败也只移除实际关闭的页，仍可查询并重试剩余页。
+    for (const tab of [...browserSession.tabs.values()]) this.closePage(browserSession, tab)
+    if (!browserSession.tabs.size) this.finishClosedSession(browserSession)
   }
 
   dispose(): void {

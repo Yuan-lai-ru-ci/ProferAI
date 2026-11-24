@@ -1,4 +1,7 @@
-import { sendCoreWindowEvent } from './window-handoff-buffer'
+import { sendCoreWindowEvent, isSessionWindowHandoff } from './window-handoff-buffer'
+import type { WebContents } from 'electron'
+import { invalidatesAgentActivity, invalidateAgentActivity, isAgentCatalogPayload, sessionWebContents } from './agent-window-delivery'
+import { getAppWindowSummaries, getPrimaryMainWindow, isSecondaryWindowSessionOwner } from './main-app-windows'
 import { isIndependentLocalCore } from './core-local-mode'
 import { AGENT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS } from '@profer/shared'
 import { BrowserWindow, app, safeStorage } from 'electron'
@@ -27,19 +30,22 @@ export interface PairedCoreTargetInput {
   bindingId: string
   credential: string
 }
+// 不同 WebSocket 对同一终态的到达时间可能跨过移窗 commit。即使 owner 已变也只交付一次。
+const deliveredRemoteTerminals = new Set<string>()
+function takeRemoteTerminal(sessionId: string, eventId: unknown): boolean {
+  if (typeof eventId !== 'string') return true
+  const key = `${sessionId}\0${eventId}`
+  if (deliveredRemoteTerminals.has(key)) return false
+  deliveredRemoteTerminals.add(key)
+  if (deliveredRemoteTerminals.size > 1024) deliveredRemoteTerminals.delete(deliveredRemoteTerminals.values().next().value!)
+  return true
+}
+
 type CoreIdentity = Awaited<ReturnType<CoreClient['identity']>>
 
 function createCoreContext(windowId?: number) {
   let disposed = false
   function recipientWindows() { return disposed ? [] : BrowserWindow.getAllWindows().filter(window => windowId === undefined ? !windowContexts.has(window.webContents.id) : window.webContents.id === windowId) }
-const relayedSessions = new WeakMap<CoreClient, Set<string>>()
-function markCoreRunRelayed(client: CoreClient, sessionId: string, active: boolean): void {
-  let sessions = relayedSessions.get(client)
-  if (active && !sessions) relayedSessions.set(client, sessions = new Set())
-  if (active) sessions?.add(sessionId)
-  else sessions?.delete(sessionId)
-}
-
 const LOCAL_TARGET_ID = 'local'
 const PROTOCOL_VERSION = 1
 const CONNECTION_TIMEOUT_MS = 5_000
@@ -162,9 +168,15 @@ function clientFor(target: StoredCoreTarget, endpoint: StoredCoreEndpoint): Core
       for (const goal of snapshot.goals) {
         for (const window of recipientWindows()) if (!window.isDestroyed()) sendCoreWindowEvent(window.webContents, AGENT_IPC_CHANNELS.GOAL_EVENT, { sessionId: ns(goal.sessionId), state: { ...goal, sessionId: ns(goal.sessionId) } })
       }
+      const peers = agentWindowsForTarget(target.id)
       for (const pending of snapshot.pending) {
+        if (!pending.permissions.length && !pending.askUsers.length && !pending.exitPlans.length) continue
+        const id = ns(pending.sessionId)
+        const owner = agentStreamOwner(peers, id)
+        const recipients = recipientWindows().filter(win => !win.isDestroyed() && peers.includes(win.webContents)
+          && (win.webContents === owner || isSessionWindowHandoff(win.webContents.id, id)))
         const requests = [...pending.permissions.map(request => ({ type: 'permission_request', request })), ...pending.askUsers.map(request => ({ type: 'ask_user_request', request })), ...pending.exitPlans.map(request => ({ type: 'exit_plan_mode_request', request }))]
-        for (const event of requests) for (const window of recipientWindows()) if (!window.isDestroyed()) sendCoreWindowEvent(window.webContents, AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: ns(pending.sessionId), payload: { kind: 'profer_event', event: { ...event, request: { ...event.request, sessionId: ns(pending.sessionId) } } } })
+        for (const event of requests) for (const window of recipients) sendCoreWindowEvent(window.webContents, AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: id, payload: { kind: 'profer_event', event: { ...event, request: { ...event.request, sessionId: ns(pending.sessionId) } } } })
       }
       for (const window of recipientWindows()) if (!window.isDestroyed()) window.webContents.send(AUTOMATION_IPC_CHANNELS.CHANGED)
     },
@@ -177,13 +189,18 @@ function clientFor(target: StoredCoreTarget, endpoint: StoredCoreEndpoint): Core
         for (const window of recipientWindows()) if (!window.isDestroyed()) sendCoreWindowEvent(window.webContents, AGENT_IPC_CHANNELS.GOAL_EVENT, { sessionId: localId, state: state.reasonCode === 'cleared' ? null : state })
         return
       }
-      if (relayedSessions.get(client)?.has(event.sessionId)) return
+      // 独立连接各自只通知所属窗口；只有当前完整应用窗口且仍选中本目标才可收到提示。
+      const peers = agentWindowsForTarget(target.id)
+      const recipients = recipientWindows().map(win => win.webContents).filter(wc => peers.includes(wc))
+      if (invalidatesAgentActivity(payload)) invalidateAgentActivity(recipients, localId)
+      const owner = agentStreamOwner(peers, localId)
       const projection = projectRemoteRunEvent(event, localId)
-      for (const window of recipientWindows()) {
-        if (window.isDestroyed()) continue
-        if (projection?.eventPayload) sendCoreWindowEvent(window.webContents, AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: localId, payload: projection.eventPayload })
-        if (projection?.completion) sendCoreWindowEvent(window.webContents, AGENT_IPC_CHANNELS.STREAM_COMPLETE, projection.completion)
-        if (projection?.error) sendCoreWindowEvent(window.webContents, AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId: localId, error: projection.error })
+      for (const wc of recipients) {
+        if (!isAgentCatalogPayload(payload) && owner !== wc && !isSessionWindowHandoff(wc.id, localId)) continue
+        if (projection?.eventPayload) sendCoreWindowEvent(wc, AGENT_IPC_CHANNELS.STREAM_EVENT, { sessionId: localId, payload: projection.eventPayload })
+        if (wc !== owner || (!projection?.completion && !projection?.error) || !takeRemoteTerminal(localId, event.eventId)) continue
+        if (projection.completion) sendCoreWindowEvent(wc, AGENT_IPC_CHANNELS.STREAM_COMPLETE, projection.completion)
+        if (projection.error) sendCoreWindowEvent(wc, AGENT_IPC_CHANNELS.STREAM_ERROR, { sessionId: localId, error: projection.error })
       }
     },
     onWorkspaceEvent: () => {
@@ -477,7 +494,7 @@ function activateLocal(store: CoreTargetStore, persist: boolean): CoreTargetsSna
   targetStatus = localClient ? 'connected' : 'disconnected'
   clearLatency()
   if (changed) generation += 1
-  if (windowId === undefined && localClient && (changed || previous !== localClient)) attachLocalCoreClient(localClient)
+  if (windowId === undefined && localClient && (changed || previous !== localClient)) attachLocalCoreClient(localClient, publishLocalAgentEvent)
   if (previous && previous !== localClient) previous.close()
   publishSnapshot()
   if (changed) publishConnectedResources()
@@ -607,7 +624,7 @@ function clearLocalCoreTargetClient(): void {
 
 function setLocalCoreClient(client: CoreClient, identity?: Awaited<ReturnType<CoreClient['identity']>>): void {
   localIdentity = identity
-  if (windowId === undefined) attachLocalCoreClient(client)
+  if (windowId === undefined) attachLocalCoreClient(client, publishLocalAgentEvent)
   unsubscribeLocalChat?.()
   unsubscribeLocalChat = client.addChatEventListener(bindCallbacks({ event: (event: CoreChatEvent) => {
     if (disposed || activeClient !== client || activeId() !== LOCAL_TARGET_ID || !localIdentity?.coreId) return
@@ -750,7 +767,7 @@ function restoreInheritedTarget(): Promise<void> {
   })
 }
 
-return { inheritTarget, restoreInheritedTarget, markCoreRunRelayed, listCoreTargets, testCoreTarget, addCoreTarget, savePairedCoreTarget, updateCoreTarget, saveCoreEndpoint, selectCoreEndpoint, removeCoreEndpoint, selectCoreTarget, clearLocalCoreTargetClient, setLocalCoreClient, activateSavedCoreTarget, publishCoreTargetsSnapshot, getActiveCoreClient, getManagedLocalCoreClient, namespaceCoreSessionId, parseCoreSessionId, currentCoreId, getCoreTargetGeneration, getCurrentCoreTargetId, removeCoreTarget, dispose() {
+return { inheritTarget, restoreInheritedTarget, listCoreTargets, testCoreTarget, addCoreTarget, savePairedCoreTarget, updateCoreTarget, saveCoreEndpoint, selectCoreEndpoint, removeCoreEndpoint, selectCoreTarget, clearLocalCoreTargetClient, setLocalCoreClient, activateSavedCoreTarget, publishCoreTargetsSnapshot, getActiveCoreClient, getManagedLocalCoreClient, namespaceCoreSessionId, parseCoreSessionId, currentCoreId, getCoreTargetGeneration, getCurrentCoreTargetId, removeCoreTarget, dispose() {
  disposed = true
  explicitSelection += 1
  clearTimeout(probeTimer); clearTimeout(startupRetry); clearTimeout(pairedRecoveryTimer)
@@ -780,7 +797,6 @@ export function initializeWindowCore(id: number, sourceId?: number, primary = fa
  return target.restoreInheritedTarget()
 }
 export function disposeWindowCore(id: number): void { windowContexts.get(id)?.dispose(); windowContexts.delete(id); primaryWindows.delete(id) }
-export const markCoreRunRelayed: ReturnType<typeof createCoreContext>["markCoreRunRelayed"] = (...args) => context().markCoreRunRelayed(...args)
 export const listCoreTargets: ReturnType<typeof createCoreContext>["listCoreTargets"] = (...args) => context().listCoreTargets(...args)
 export const testCoreTarget: ReturnType<typeof createCoreContext>["testCoreTarget"] = (...args) => context().testCoreTarget(...args)
 export const addCoreTarget: ReturnType<typeof createCoreContext>["addCoreTarget"] = async (...args) => { const result = await context().addCoreTarget(...args); publishAllContextSnapshots(); return result }
@@ -826,4 +842,38 @@ export async function selectCoreForWindowSession(sessionId: string): Promise<voi
 function publishAllContextSnapshots(): void {
  defaultContext.publishCoreTargetsSnapshot()
  for (const target of windowContexts.values()) target.publishCoreTargetsSnapshot()
+}
+
+/** 只向完整应用窗口发送；预览/设置等辅助窗口没有 Core 窗口上下文。 */
+function agentWindowsForTarget(targetId: string): WebContents[] {
+  return BrowserWindow.getAllWindows().filter(win => !win.isDestroyed()).map(win => win.webContents).filter(wc => {
+    const ctx = primaryWindows.has(wc.id) ? defaultContext : windowContexts.get(wc.id)
+    return !wc.isDestroyed() && ctx?.getCurrentCoreTargetId() === targetId
+  })
+}
+export function localAgentWindows(): WebContents[] { return agentWindowsForTarget('local') }
+
+/** 标签归属优先，已有流绑定次之；外部后台运行默认交付给同 Core 的主窗口。 */
+export function agentStreamOwner(peers: readonly WebContents[], sessionId: string): WebContents | undefined {
+  if (peers.length < 2) return peers[0]
+  const eligible = peers.filter(wc => !isSessionWindowHandoff(wc.id, sessionId))
+  const secondary = eligible.find(wc => isSecondaryWindowSessionOwner(wc, { type: 'agent', sessionId }))
+  if (secondary) return secondary
+  const primary = getPrimaryMainWindow()?.webContents
+  if (primary && eligible.includes(primary)) {
+    const record = getAppWindowSummaries().find(window => window.isPrimary)
+    if (record?.sessions.some(session => session.type === 'agent' && session.sessionId === sessionId)) return primary
+  }
+  return eligible.find(wc => wc === sessionWebContents.get(sessionId))
+    ?? eligible.find(wc => wc === primary) ?? eligible[0]
+}
+
+function publishLocalAgentEvent(channel: string, sessionId: string, payload: unknown): void {
+  const peers = localAgentWindows()
+  if (channel === AGENT_IPC_CHANNELS.SESSION_ACTIVITY_INVALIDATED) {
+    invalidateAgentActivity(peers, sessionId)
+    return
+  }
+  const owner = agentStreamOwner(peers, sessionId)
+  if (owner) sendCoreWindowEvent(owner, channel, payload)
 }

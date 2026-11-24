@@ -44,6 +44,23 @@ test('首次资源请求初始化目标后成功带scope，不要求先收到广
   expect(f.calls).toEqual([{ channel: 'resource:save', args: ['same', { __proferCoreResourceScope: { targetId: 'core-a', generation: 1 } }] }])
 })
 
+test('Given Cmd+R后首次查询目标 When 同一路由的连接或延迟广播先到 Then 目录请求正常完成', async () => {
+  let resolve!: (snapshot: Snapshot) => void
+  const pending = new Promise<Snapshot>(done => { resolve = done })
+  let lookups = 0
+  const f = fixture(() => { lookups += 1; return pending })
+  const first = f.invoke('chat:list-conversations')
+  const second = f.invoke('resource:save', 'same')
+  f.changed({ targetId: 'local', generation: 0 })
+  f.changed({ targetId: 'local', generation: 0 })
+  resolve({ currentId: 'local', generation: 0 })
+  expect(await first).toBe('ok')
+  expect(await second).toBe('ok')
+  expect(lookups).toBe(1)
+  expect(f.calls).toHaveLength(2)
+  expect(f.calls[0]?.args).toEqual([{ __proferCoreResourceScope: { targetId: 'local', generation: 0 } }])
+})
+
 test('首次LIST迟到不能覆盖已选新Core或把旧请求发给新目标', async () => {
   let resolve!: (snapshot: Snapshot) => void
   const pending = new Promise<Snapshot>(done => { resolve = done })
@@ -55,6 +72,18 @@ test('首次LIST迟到不能覆盖已选新Core或把旧请求发给新目标', 
   expect(f.calls).toEqual([])
   expect(await f.invoke('resource:save', 'same')).toBe('ok')
   expect(f.calls[0]?.args).toEqual(['same', { __proferCoreResourceScope: { targetId: 'core-b', generation: 2 } }])
+})
+
+test('Given 冷启动首次路由查询 When 同目标已进入新代次 Then 旧代次请求仍被拒绝', async () => {
+  let resolve!: (snapshot: Snapshot) => void
+  const f = fixture(() => new Promise<Snapshot>(done => { resolve = done }))
+  const first = f.invoke('chat:list-conversations')
+  f.changed({ targetId: 'local', generation: 1 })
+  resolve({ currentId: 'local', generation: 0 })
+  await expect(first).rejects.toThrow('Core')
+  expect(f.calls).toEqual([])
+  expect(await f.invoke('chat:list-conversations')).toBe('ok')
+  expect(f.calls[0]?.args).toEqual([{ __proferCoreResourceScope: { targetId: 'local', generation: 1 } }])
 })
 
 test('响应晚到在preload拒绝，捕获原目标和代次不替换请求', async () => {

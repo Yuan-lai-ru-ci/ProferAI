@@ -65,6 +65,8 @@ export function finalizeStreamingActivities(
 /** Agent 会话的流式状态 */
 export interface AgentStreamState {
   running: boolean
+  /** Activity probes corrected a stranded owner flag; a late genuine terminal is still eligible. */
+  awaitingOwnerTerminal?: boolean
   /**
    * renderer 已请求停止、仍在等待主进程的真实 run completion。
    * Phase 0 过渡标记：停止超时/失败时不得据此伪装为空闲。
@@ -234,6 +236,13 @@ export const agentSessionChannelMapAtom = atom<Map<string, string>>(new Map())
 export const agentSessionModelMapAtom = atom<Map<string, string>>(new Map())
 export const currentAgentSessionIdAtom = atom<string | null>(null)
 export const agentStreamingStatesAtom = atom<Map<string, AgentStreamState>>(new Map())
+
+/** Host activity is a display fact, never a stream/approval owner or replay cursor. */
+export type ObservedAgentActivity = 'active' | 'inactive' | 'unknown'
+export const agentObservedActivityAtom = atom<ReadonlyMap<string, ObservedAgentActivity>>(new Map())
+export const agentObservedActivityAtomFamily = atomFamily((id: string) => atom(get => get(agentObservedActivityAtom).get(id)))
+/** Mounted AgentViews (including split panes and standalone views), scoped to this window's store. */
+export const visibleAgentViewsAtom = atom<ReadonlyMap<string, number>>(new Map())
 
 /** 图片生成卡片按会话缓存；JSONL hydration 和实时 EventBus 更新均在此去重。 */
 export const agentImageGenerationsAtom = atom<Map<string, AgentImageGenerationCard[]>>(new Map())
@@ -614,6 +623,10 @@ export const agentRunningSessionIdsAtom = atom<Set<string>>((get) => {
   for (const [id, state] of states) {
     if (state.running) ids.add(id)
   }
+  for (const [id, status] of get(agentObservedActivityAtom)) {
+    if (status === 'active') ids.add(id)
+    if (status === 'unknown') ids.delete(id)
+  }
   return ids
 })
 
@@ -681,7 +694,7 @@ export const dockBadgeCountAtom = atom<number>((get) => {
  * 每个会话的指示点状态（只包含非 idle 的会话）
  * 优先级：blocked > running > completed > idle
  */
-export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((get) => {
+export const ownerSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((get) => {
   const streamStates = get(agentStreamingStatesAtom)
   const pendingPerms = get(allPendingPermissionRequestsAtom)
   const pendingAskUser = get(allPendingAskUserRequestsAtom)
@@ -711,6 +724,28 @@ export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorSta
   }
 
   return getStableIndicatorMap(Array.from(map.entries()))
+})
+
+/** Read-only decorations; never feed observed activity back into owner-only effects. */
+export const agentSessionIndicatorMapAtom = atom<Map<string, SessionIndicatorStatus>>((get) => {
+  const owner = get(ownerSessionIndicatorMapAtom)
+  const observed = get(agentObservedActivityAtom)
+  if (!observed.size) return owner
+  const map = new Map(owner)
+  const permissions = get(allPendingPermissionRequestsAtom)
+  const questions = get(allPendingAskUserRequestsAtom)
+  const plans = get(allPendingExitPlanRequestsAtom)
+  for (const [id, status] of observed) {
+    if (owner.get(id) === 'blocked') continue
+    if (permissions.get(id)?.length || questions.get(id)?.length || plans.get(id)?.length) {
+      map.set(id, 'blocked')
+      continue
+    }
+    if (status === 'active') map.set(id, 'running')
+    // Explicit idle also prevents persisted delegationStatus=running from resurrecting a stale badge.
+    else if (!owner.has(id) || (owner.get(id) === 'running' && status === 'unknown')) map.set(id, 'idle')
+  }
+  return map
 })
 
 /**

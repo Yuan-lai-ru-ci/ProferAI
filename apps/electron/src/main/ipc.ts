@@ -281,7 +281,7 @@ function localCoreNotReadyMessage(): string {
 }
 import { routeGoalToCore } from './lib/goal-core-routing'
 import { registerCoreTargetIpc } from './lib/core-target-ipc'
-import { getActiveCoreClient, markCoreRunRelayed, getCurrentCoreTargetId, getCoreTargetGeneration, currentCoreId, namespaceCoreSessionId, parseCoreSessionId } from './lib/core-target-service'
+import { getActiveCoreClient, getCurrentCoreTargetId, getCoreTargetGeneration, currentCoreId, namespaceCoreSessionId, parseCoreSessionId } from './lib/core-target-service'
 import { projectRemoteRunEvent } from './lib/core-run-projection'
 import { createAgentRunContext } from '@profer/agent-runtime'
 import { registerHeatmapMigrationIpc } from './lib/heatmap-migration-ipc'
@@ -294,7 +294,7 @@ import { registerDockBadgeIpc } from './lib/dock-badge-ipc'
 import { registerEnvironmentIpc } from './lib/environment-ipc'
 import { registerNotificationSoundIpc } from './lib/notification-sound-ipc'
 import { registerScratchPadIpc } from './lib/scratch-pad-ipc'
-import { getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getAgentWorkspacePath, resolveWorkspaceFilesUiRootPath } from './lib/config-paths'
+import { getConfigDir, getAgentSessionWorkspacePath, getAgentWorkspacesDir, getWorkspaceSkillsDir, getWorkspaceFilesDir, getAgentWorkspacePath, resolveWorkspaceFilesUiRootPath } from './lib/config-paths'
 import { isProjectWorkspaceRootPath, listProjectWorkspaceRoots, resolveWorkspaceLocation } from './lib/workspace-locator'
 import { resolveProjectInternalEntryDir, scanWorkspaceRoot } from './lib/remote-workspace-file-search'
 import { assertProjectFileDeletionAllowed } from './lib/workspace-delete-guard'
@@ -545,6 +545,35 @@ function assertInsideAgentWorkspaces(targetPath: string): void {
   }
 
   throw new Error('访问路径超出 Agent 工作区范围')
+}
+
+/** 用户点击打开/定位：Core 工作台由所属 Core 确认，不把旧目录守卫扩大到写操作。 */
+async function resolveAgentShellPath(filePath: string): Promise<string> {
+  assertLocalWorkspaceFiles()
+  if (typeof filePath !== 'string' || !filePath || filePath.includes('\0') || !isAbsolute(filePath)) {
+    throw new Error('打开路径无效，必须是绝对路径')
+  }
+  const requested = resolve(filePath)
+  const workbenches = realpathOrResolve(join(getConfigDir(), 'session-workspaces'))
+  const resolved = realpathSync(requested)
+  const isWorkbenchPath = isResolvedPathInsideRoot(requested, workbenches) || isResolvedPathInsideRoot(resolved, workbenches)
+  if (!isWorkbenchPath) {
+    assertInsideAgentWorkspaces(requested)
+    return requested
+  }
+  // 从真实路径取得身份，根目录本身以及逃出工作台的链接都不能当作会话授权。
+  const parts = relative(workbenches, resolved).split(sep)
+  const sessionId = parts[0]
+  if (!sessionId || sessionId === '..' || isAbsolute(relative(workbenches, resolved))) throw new Error('路径不属于有效的 Core 会话工作台')
+  const route = captureCoreNativeRoute(sessionId)
+  if (!route) throw new Error('当前会话未由 Core 管理')
+  const roots = await route.client.getSessionFileRoots(route.sessionId)
+  route.assertCurrent()
+  const workbench = realpathSync(roots.workbench)
+  if (workbench !== resolve(workbenches, sessionId) || !isResolvedPathInsideRoot(resolved, workbench)) {
+    throw new Error('路径不属于当前 Core 会话工作台')
+  }
+  return resolved
 }
 
 /**
@@ -1284,7 +1313,6 @@ export function setRendererReadyHandler(handler: ((sender: WebContents) => void)
   rendererReadyHandler = handler
 }
 
-const remoteCoreRunReleases = new Map<string, () => void>()
 
 function projectCoreSessionMeta(session: import('./lib/core-client').CoreSession, coreId: string): AgentSessionMeta {
   const safe = buildAgentSessionUiProjection({ ...session, agentRuntime: session.agentRuntime === 'pi' ? 'pi' : 'claude',
@@ -1349,50 +1377,6 @@ function assertLocalWorkspaceFiles(): void {
   assertLocalCoreTarget('工作区文件操作')
 }
 
-function relayRemoteCoreRun(localSessionId: string, remoteSessionId: string, client: import('./lib/core-client').CoreClient, sender: WebContents): void {
-  remoteCoreRunReleases.get(localSessionId)?.()
-  markCoreRunRelayed(client, remoteSessionId, true)
-  const unsubscribe = client.addEventListener(event => {
-    if (event.sessionId !== remoteSessionId) return
-    const projected = projectRemoteRunEvent(event, localSessionId)
-    if (!projected) return
-    if (projected.eventPayload) {
-      emitSessionStreamEvent(localSessionId, projected.eventPayload as import('@profer/shared').AgentStreamPayload, sender)
-    }
-    if (projected.completion) {
-      emitSessionStreamEvent(localSessionId, { kind: 'run_complete', completion: projected.completion }, sender)
-      if (!sender.isDestroyed()) sender.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, projected.completion)
-      remoteCoreRunReleases.get(localSessionId)?.()
-      remoteCoreRunReleases.delete(localSessionId)
-    }
-    if (projected.error) {
-      emitSessionStreamEvent(localSessionId, { kind: 'run_error', error: projected.error }, sender)
-      const completion = {
-        sessionId: localSessionId,
-        messages: [],
-        stoppedByUser: false,
-        resultSubtype: 'error_during_execution',
-        resultErrors: [projected.error],
-      }
-      emitSessionStreamEvent(localSessionId, { kind: 'run_complete', completion }, sender)
-      if (!sender.isDestroyed()) sender.send(AGENT_IPC_CHANNELS.STREAM_COMPLETE, completion)
-      remoteCoreRunReleases.get(localSessionId)?.()
-      remoteCoreRunReleases.delete(localSessionId)
-    }
-  })
-  const release = () => {
-    markCoreRunRelayed(client, remoteSessionId, false)
-    unsubscribe()
-    sender.removeListener('destroyed', forget)
-  }
-  const forget = () => {
-    if (remoteCoreRunReleases.get(localSessionId) !== release) return
-    remoteCoreRunReleases.delete(localSessionId)
-    release()
-  }
-  sender.once('destroyed', forget)
-  remoteCoreRunReleases.set(localSessionId, release)
-}
 export function registerIpcHandlers(): void {
   // 幂等守卫：正常启动与启动失败降级路径（index.ts:520 / index.ts:748）都会调用本函数。
   // ipcMain.handle 会按 channel 去重覆盖，但 ipcMain.on / nativeTheme.on / setInterval 等副作用
@@ -2108,7 +2092,7 @@ export function registerIpcHandlers(): void {
           ? await client.ensureWorkspaceSession({ workspaceId, channelId, modelId })
           : await client.createSession({ useCoreDefaults: true, title, channelId, modelId, workspaceId, presetId })
         if (getActiveCoreClient() !== client || currentCoreId() !== coreId || getCoreTargetGeneration() !== generation) throw new Error('Core已切换，忽略旧会话创建响应')
-        return { id: namespaceCoreSessionId(remote.id, coreId), title: remote.title, agentRuntime: remote.agentRuntime === 'pi' ? 'pi' : 'claude',
+        return { ...remote, id: namespaceCoreSessionId(remote.id, coreId), title: remote.title, agentRuntime: remote.agentRuntime === 'pi' ? 'pi' : 'claude',
           agentRuntimeLocked: false,
           ...(remote.workspaceId ? { workspaceId: remote.workspaceId } : {}),
           ...(remote.channelId ? { channelId: remote.channelId } : {}), ...(remote.modelId ? { modelId: remote.modelId } : {}),
@@ -2207,6 +2191,7 @@ export function registerIpcHandlers(): void {
     const session = getAgentSessionMeta(sessionId)
     if (!session) throw new Error('会话不存在')
     if (expectedRevision !== undefined && (session.revision ?? 0) !== expectedRevision) throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
+    if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换预设')
     const updated = rebindAgentSessionPreset(sessionId, reference)
     publishAgentSessionProjection(updated)
     return updated
@@ -2234,11 +2219,12 @@ export function registerIpcHandlers(): void {
       const session = getAgentSessionMeta(sessionId)
       if (!session) throw new Error('会话不存在')
       if (expectedRevision !== undefined && (session.revision ?? 0) !== expectedRevision) throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
+      if (isAgentSessionActive(sessionId)) throw new Error('Agent 正在运行，完成后再切换预设')
       // 按会话所属工作区解析；存在性校验：未知 ID 报错而非静默回退 standard
       const workspaceSlug = session.workspaceId ? getAgentWorkspace(session.workspaceId)?.slug : undefined
       const resolved = getAgentPreset(workspaceSlug, presetId)
       if (resolved.id !== presetId) throw new Error(`预设不存在: ${presetId}`)
-      const updated = updateAgentSessionUiMeta(sessionId, { presetId, presetReference: presetReferenceForId(workspaceSlug, presetId) })
+      const updated = rebindAgentSessionPreset(sessionId, presetReferenceForId(workspaceSlug, presetId))
       publishAgentSessionProjection(updated)
       return updated
     },
@@ -3728,7 +3714,7 @@ export function registerIpcHandlers(): void {
         if (!currentSession) throw new Error('远程 Agent 会话不存在')
         if (currentSession.agentRuntime !== 'pi' && currentSession.agentRuntime !== 'claude') throw new Error('远程Core不支持此Agent runtime')
         registerWebContents(input.sessionId, event.sender)
-        relayRemoteCoreRun(input.sessionId, remoteSessionId.sessionId, client, event.sender)
+        // Each window already receives Core projections. Do not install a second terminal relay tied to the original sender.
         const messageUuid = input.uuid ?? randomUUID()
         const context = createAgentRunContext({ sessionId: remoteSessionId.sessionId, uuid: messageUuid, initiator: 'user', triggeredBy: 'user' }, randomUUID)
         await client.sendMessage(remoteSessionId.sessionId, input.userMessage, { channelId: input.channelId, modelId: input.modelId, uuid: messageUuid, rawUserMessage: input.rawUserMessage, startedAt: input.startedAt, context }, assertCurrent)
@@ -4078,7 +4064,7 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // 热切换指定会话的权限模式（运行中生效，不广播）
+  // 可信手动切换会话权限：保存来源，运行中热切换并投影权威状态。
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_SESSION_PERMISSION_MODE,
     async (event, sessionId: string, mode: ProferPermissionMode, expectedRevision?: number): Promise<AgentSessionMeta> => {
@@ -4086,17 +4072,9 @@ export function registerIpcHandlers(): void {
       if (!isProferPermissionMode(mode)) {
         throw new Error(`无效的权限模式: ${mode}`)
       }
-      if (getCurrentCoreTargetId() !== 'local') {
-        const remote = parseCoreSessionId(sessionId)
-        const client = getActiveCoreClient()
-        if (!remote || remote.coreId !== currentCoreId() || !client) throw new Error('远程会话不属于当前 Core')
-        const current = (await client.listSessions()).find(session => session.id === remote.sessionId)
-        if (!current) throw new Error('Agent 会话不存在')
-        if (expectedRevision !== undefined && (current.revision ?? 0) !== expectedRevision) throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
-        const updated = await client.updateSessionMeta(remote.sessionId, { permissionMode: mode, expectedRevision })
-        publishAgentSessionProjection({ ...updated, id: sessionId } as AgentSessionMeta)
-        return { ...updated, id: sessionId } as AgentSessionMeta
-      }
+      // Core 自己记录可信配置来源；IPC 不允许发送方自报 user 标记。
+      const core = await routeSessionMetaToCore(sessionId, { permissionMode: mode, expectedRevision })
+      if (core) return core
       // 会话不存在时直接抛错（避免 updateAgentSessionMeta 的通用异常被降级为 warn）
       if (!getAgentSessionMeta(sessionId)) {
         throw new Error(`Agent 会话不存在: ${sessionId}`)
@@ -4105,16 +4083,11 @@ export function registerIpcHandlers(): void {
       if (expectedRevision !== undefined && (current.revision ?? 0) !== expectedRevision) {
         throw new Error('REVISION_CONFLICT: 会话状态已更新，请刷新后重试')
       }
-      if (getCurrentCoreTargetId() === 'local' && (getLocalCoreClient() || isLocalCoreEnabled())) {
-        const client = getLocalCoreClient()
-        if (!client) throw new Error('本地Core未就绪')
-        return await client.updateSessionMeta(sessionId, { permissionMode: mode, expectedRevision }) as AgentSessionMeta
-      }
-      const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode })
+      const updated = updateAgentSessionMeta(sessionId, { permissionMode: mode, permissionModeSource: 'user' })
       // 若 session 正在跑，同步热切换运行时模式；失败时广播回滚后的权威状态。
       if (isAgentSessionActive(sessionId)) {
         await updateAgentPermissionMode(sessionId, mode).catch((err) => {
-          const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode })
+          const restored = updateAgentSessionMeta(sessionId, { permissionMode: current.permissionMode, permissionModeSource: current.permissionModeSource })
           publishAgentSessionProjection(restored)
           throw err
         })
@@ -4522,7 +4495,7 @@ export function registerIpcHandlers(): void {
           // 持久化到 session meta，和 cycleMode 路径保持一致（重启后该 session 能恢复）
           if (meta) {
             try {
-              const updated = updateAgentSessionMeta(sessionId, { permissionMode: targetMode })
+              const updated = updateAgentSessionMeta(sessionId, { permissionMode: targetMode, permissionModeSource: 'user' })
               publishAgentSessionProjection(updated)
             } catch (err) {
               console.warn(`[IPC] ExitPlanMode 持久化 session 权限模式失败: sessionId=${sessionId}`, err)
@@ -4644,7 +4617,18 @@ export function registerIpcHandlers(): void {
   // 保存文件到 Agent session 工作目录
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SAVE_FILES_TO_SESSION,
-    async (_, input: AgentSaveFilesInput): Promise<AgentSavedFile[]> => {
+    async (event, input: AgentSaveFilesInput): Promise<AgentSavedFile[]> => {
+      assertSensitiveAgentIpcSender(event)
+      const route = captureCoreNativeRoute(input.sessionId)
+      if (route) {
+        const results: AgentSavedFile[] = []
+        for (const file of input.files) {
+          const saved = await route.client.saveAttachment(route.sessionId, file.filename, file.data)
+          route.assertCurrent()
+          results.push({ filename: saved.filename, targetPath: saved.path })
+        }
+        return results
+      }
       assertLocalWorkspaceFiles()
       return saveFilesToAgentSession(input)
     }
@@ -4859,6 +4843,12 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SESSION_PATH,
     async (_, workspaceId: string, sessionId: string): Promise<string | null> => {
+      const route = captureCoreNativeRoute(sessionId)
+      if (route) {
+        const roots = await route.client.getSessionFileRoots(route.sessionId)
+        route.assertCurrent()
+        return roots.project ? roots.workspaceRoot : roots.workbench
+      }
       assertLocalWorkspaceFiles()
       return resolveAgentSessionUiRootPath(workspaceId, sessionId) ?? null
     }
@@ -4871,6 +4861,12 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_SESSION_STORAGE_PATH,
     async (_, workspaceId: string, sessionId: string): Promise<string | null> => {
+      const route = captureCoreNativeRoute(sessionId)
+      if (route) {
+        const roots = await route.client.getSessionFileRoots(route.sessionId)
+        route.assertCurrent()
+        return roots.workbench
+      }
       assertLocalWorkspaceFiles()
       return resolveAgentSessionStoragePath(workspaceId, sessionId) ?? null
     }
@@ -4986,10 +4982,11 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.CORE_SESSION_FILE_ROOTS,
     async (event, sessionId: string): Promise<import('@profer/shared').CoreSessionFileRoots> => {
       assertSensitiveAgentIpcSender(event)
-      const client = requireRemoteCoreClientForFiles()
-      const remote = parseCoreSessionId(sessionId)
-      if (!remote || remote.coreId !== currentCoreId()) throw new Error('远程会话不属于当前 Core')
-      return await client.getSessionFileRoots(remote.sessionId)
+      const route = captureCoreNativeRoute(sessionId)
+      if (!route) throw new Error('当前会话未由 Core 管理')
+      const result = await route.client.getSessionFileRoots(route.sessionId)
+      route.assertCurrent()
+      return result
     }
   )
 
@@ -5005,10 +5002,11 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.CORE_SESSION_FS_OP,
     async (event, input: import('@profer/shared').CoreSessionFsOpInput): Promise<unknown> => {
       assertSensitiveAgentIpcSender(event)
-      const client = requireRemoteCoreClientForFiles()
-      const remote = parseCoreSessionId(input?.sessionId)
-      if (!remote || remote.coreId !== currentCoreId()) throw new Error('远程会话不属于当前 Core')
-      return await client.sessionFileOp({ ...input, sessionId: remote.sessionId })
+      const route = captureCoreNativeRoute(input?.sessionId)
+      if (!route) throw new Error('当前会话未由 Core 管理')
+      const result = await route.client.sessionFileOp({ ...input, sessionId: route.sessionId })
+      route.assertCurrent()
+      return result
     }
   )
 
@@ -5016,10 +5014,11 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.CORE_SESSION_LIST_DIRECTORY,
     async (event, input: { sessionId: string; path: string }): Promise<import('@profer/shared').CoreFsEntry[]> => {
       assertSensitiveAgentIpcSender(event)
-      const client = requireRemoteCoreClientForFiles()
-      const remote = parseCoreSessionId(input?.sessionId)
-      if (!remote || remote.coreId !== currentCoreId()) throw new Error('远程会话不属于当前 Core')
-      return await client.listSessionDirectory(remote.sessionId, String(input?.path ?? ''))
+      const route = captureCoreNativeRoute(input?.sessionId)
+      if (!route) throw new Error('当前会话未由 Core 管理')
+      const result = await route.client.listSessionDirectory(route.sessionId, String(input?.path ?? ''))
+      route.assertCurrent()
+      return result
     }
   )
 
@@ -5165,15 +5164,12 @@ export function registerIpcHandlers(): void {
   // 用系统默认应用打开文件
   ipcMain.handle(
     AGENT_IPC_CHANNELS.OPEN_FILE,
-    async (_, filePath: string): Promise<void> => {
+    async (event, filePath: string): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      const safePath = await resolveAgentShellPath(filePath)
       assertLocalWorkspaceFiles()
-      const { resolve } = await import('node:path')
-
-      const safePath = resolve(filePath)
-      assertInsideAgentWorkspaces(safePath)
-
       const errMsg = await shell.openPath(safePath)
-      if (errMsg) console.warn('[IPC] agent:open-file 打开失败:', errMsg)
+      if (errMsg) throw new Error(`打开文件失败: ${errMsg}`)
     }
   )
 
@@ -5217,13 +5213,10 @@ export function registerIpcHandlers(): void {
   // 在系统文件管理器中显示文件
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SHOW_IN_FOLDER,
-    async (_, filePath: string): Promise<void> => {
+    async (event, filePath: string): Promise<void> => {
+      assertSensitiveAgentIpcSender(event)
+      const safePath = await resolveAgentShellPath(filePath)
       assertLocalWorkspaceFiles()
-      const { resolve } = await import('node:path')
-
-      const safePath = resolve(filePath)
-      assertInsideAgentWorkspaces(safePath)
-
       shell.showItemInFolder(safePath)
     }
   )

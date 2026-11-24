@@ -20,7 +20,7 @@ export function isCurrentAgentStreamCompletion(
   state: AgentStreamState | undefined,
   completion: { runId?: string; startedAt?: number },
 ): state is AgentStreamState {
-  if (!state || (!state.running && !state.backgroundWaiting)) return false
+  if (!state || (!state.running && !state.backgroundWaiting && !state.awaitingOwnerTerminal)) return false
   if (state.runId && completion.runId) return state.runId === completion.runId
   return state.startedAt == null || (completion.startedAt != null && state.startedAt <= completion.startedAt)
 }
@@ -53,6 +53,7 @@ export function settleCompletedAgentStreamState(
   return {
     ...state,
     running: false,
+    awaitingOwnerTerminal: false,
     backgroundWaiting: backgroundTasksPending,
     stopping: false,
     // compact_boundary 并非所有失败路径都会出现。任何真实终态都必须释放压缩 UI 锁，

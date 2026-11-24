@@ -1,3 +1,4 @@
+import { getAgentRuntimePlanMode } from './agent-runtime-plan-mode'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { createAgentRunContext } from '@profer/agent-runtime'
@@ -1181,6 +1182,8 @@ export function createElectronAgentHost(options: ElectronAgentHostOptions = {}):
     // 快照缺失时才看 override 与会话元数据：预设未声明权限的历史会话与移动端会话因此不会
     // 退化成「每一步都要确认」。
     isBypassPermissions: (sessionId: string) => {
+      const controller = getAgentRuntimePlanMode(sessionId)
+      if (controller) return controller.getMode() === 'bypassPermissions'
       const snapshot = agentRuntimePolicyRuns.getForRun(sessionId)
       if (snapshot) return snapshot.policy.permissionMode === 'bypassPermissions'
       const override = getAgentRuntimeRunFacts(sessionId)?.permissionModeOverride

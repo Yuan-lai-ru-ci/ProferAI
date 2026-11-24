@@ -46,8 +46,10 @@ const {
   getAgentSessionMeta,
   getAgentSessionSDKMessages,
   moveSessionToWorkspace,
+  updateAgentSessionMeta,
   resolveMessageBlobs,
 } = await import('./agent-session-manager')
+const { createAgentPreset, rebindAgentSessionPreset } = await import('./agent-preset-manager')
 const { getAgentSessionGraphPath, getAgentSessionMessagesPath, getPiHarnessEventsPath, getPiTranscriptDirForSession } = await import('./config-paths')
 const { resolvePiTranscriptPath } = await import('./pi-session-files')
 const { appendGraphEvent } = await import('./project-graph-service')
@@ -98,6 +100,18 @@ function appendUserMessage(sessionId: string, text: string): void {
 }
 
 describe('会话存储布局', () => {
+  test('Given 委派父级为 auto When 用户试图持久化 bypass Then 写盘前拒绝且 revision 不变', () => {
+    writeWorkspaces([managedEntry('default')])
+    const parent = createAgentSession('parent', undefined, 'id-default', undefined, 'pi', false, 'standard')
+    updateAgentSessionMeta(parent.id, { permissionMode: 'auto', permissionModeSource: 'user' })
+    const child = createAgentSession('child', undefined, 'id-default', undefined, 'pi', false, 'standard')
+    const before = updateAgentSessionMeta(child.id, { sourceDelegationId: 'delegation-fixture', parentSessionId: parent.id, permissionMode: 'plan', permissionModeSource: 'preset' })
+    expect(() => updateAgentSessionMeta(child.id, { permissionMode: 'bypassPermissions', permissionModeSource: 'user' })).toThrow('父级权限上限')
+    expect(getAgentSessionMeta(child.id)?.revision).toBe(before.revision)
+    expect(getAgentSessionMeta(child.id)?.permissionMode).toBe('plan')
+    expect(updateAgentSessionMeta(child.id, { permissionMode: 'auto', permissionModeSource: 'user' }).permissionMode).toBe('auto')
+  })
+
   test('Given project 工作区 When 新建会话并写消息 Then 落在项目 .profer/sessions/<sid>/messages.jsonl', () => {
     const root = makeProject('p1')
     writeWorkspaces([projectEntry('p1', root), managedEntry('default')])
@@ -277,4 +291,21 @@ describe('会话存储布局', () => {
     expect(getAgentSessionMessagesPath('legacy-session')).toBe(legacyPath)
     expect(getAgentSessionSDKMessages('legacy-session').length).toBe(1)
   })
+})
+
+
+test('Given legacy 预设默认权限 When 新建/手动改绑 Then 模式跟随预设并清除旧 user 来源', () => {
+  writeWorkspaces([managedEntry('default')])
+  const plan = createAgentPreset('default', { name: '计划预设', description: '', permissionMode: 'plan' })
+  const auto = createAgentPreset('default', { name: '自动预设', description: '', permissionMode: 'auto' })
+  const session = createAgentSession('permission', undefined, 'id-default', undefined, 'pi', false, plan.id)
+  expect(session).toMatchObject({ permissionMode: 'plan', permissionModeSource: 'preset' })
+  updateAgentSessionMeta(session.id, { permissionMode: 'bypassPermissions', permissionModeSource: 'user' })
+  expect(getAgentSessionMeta(session.id)).toMatchObject({ permissionMode: 'bypassPermissions', permissionModeSource: 'user' })
+  const saved = JSON.parse(readFileSync(join(configRoot, 'agent-sessions.json'), 'utf8'))
+  expect(saved.sessions.find((item: { id: string }) => item.id === session.id)).toMatchObject({ permissionMode: 'bypassPermissions', permissionModeSource: 'user' })
+  const rebound = rebindAgentSessionPreset(session.id, { presetId: auto.id, presetScope: 'workspace', workspaceSlug: 'default' })
+  expect(rebound).toMatchObject({ permissionMode: 'auto', permissionModeSource: 'preset' })
+  const back = rebindAgentSessionPreset(session.id, { presetId: plan.id, presetScope: 'workspace', workspaceSlug: 'default' })
+  expect(back).toMatchObject({ permissionMode: 'plan', permissionModeSource: 'preset' })
 })

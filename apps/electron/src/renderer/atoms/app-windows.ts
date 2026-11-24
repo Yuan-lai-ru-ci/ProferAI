@@ -1,4 +1,5 @@
 import { atom } from 'jotai'
+import { tabsAtom } from './tab-atoms'
 import type { AppWindowSummary, MainWindowBootstrap } from '@profer/shared'
 
 const windowBootstrapStateAtom = atom<MainWindowBootstrap | null>(null)
@@ -15,6 +16,10 @@ export const windowBootstrapAtom = atom(
   },
   (_get, set, bootstrap: MainWindowBootstrap | null) => set(windowBootstrapStateAtom, bootstrap),
 )
-export const windowSessionKeysAtom = atom((get) => new Set(get(appWindowsAtom)
-  .filter(window => !window.isPrimary)
-  .flatMap(window => window.sessions.map(session => `${session.type}:${session.sessionId}`))))
+/** 只标记别的窗口；primary 是持久化角色，不是用户导航的特殊目的地。 */
+export const windowSessionKeysAtom = atom((get) => {
+  const ownId = get(windowBootstrapAtom)?.windowId
+  const local = new Set(get(tabsAtom).map(tab => `${tab.type}:${tab.sessionId}`))
+  return new Set(get(appWindowsAtom).filter(window => ownId && window.windowId !== ownId)
+    .flatMap(window => window.sessions.map(session => `${session.type}:${session.sessionId}`)).filter(key => !local.has(key)))
+})
