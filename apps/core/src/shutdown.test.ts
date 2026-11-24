@@ -33,7 +33,7 @@ async function bounded<T>(promise: Promise<T>, milliseconds = 5000): Promise<T> 
 
 function spawnMockCore(root: string, port: number | undefined, ...args: string[]) {
   return Bun.spawn([process.execPath, join(import.meta.dir, 'index.ts'), ...(port === undefined ? [] : ['--listen', `127.0.0.1:${port}`]), '--config-dir', root, '--mock-agent', ...args], {
-    env: { ...process.env, PROFER_CORE_LISTEN: undefined, PROFER_CORE_API_KEY: 'shutdown-fixture', PROFER_CORE_WORKSPACE_ROOT: join(root, 'workspaces'), PROFER_CORE_CHANNELS_JSON: '[]' },
+    env: { ...process.env, PROFER_CORE_DESKTOP_PARENT_PIPE: undefined, PROFER_CORE_LISTEN: undefined, PROFER_CORE_API_KEY: 'shutdown-fixture', PROFER_CORE_WORKSPACE_ROOT: join(root, 'workspaces'), PROFER_CORE_CHANNELS_JSON: '[]' },
     stdout: 'pipe', stderr: 'pipe',
   })
 }
