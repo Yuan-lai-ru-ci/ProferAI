@@ -56,7 +56,7 @@ function releaseAssets(v: string, data: Buffer) {
   // linux 归档摘要供“一条命令自举”部署指令使用；linuxDigest=false 模拟官方未提供摘要 → 导出必须 fail closed
   const hostAsset = `${hostOs}_${hostCpu}.${hostOs === 'windows' ? 'zip' : 'tar.gz'}`
   const names = [...new Set([hostAsset, ...(linuxDigest ? ['linux_amd64.tar.gz', 'linux_arm64.tar.gz', 'linux_arm.tar.gz'] : [])])]
-  return names.map(asset)
+  return names.map(name => { const result = asset(name); return !linuxDigest && name.startsWith('linux_') ? { ...result, digest: undefined } : result })
 }
 globalThis.fetch = (async (url: string | URL | Request) => {
   const value = String(url); const v = value.match(/v(0\.\d+\.\d+)/)?.[1] ?? version; const data = archive(v)

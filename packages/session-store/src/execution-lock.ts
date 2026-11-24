@@ -28,7 +28,7 @@ const EXECUTION_LOCK = '.core-execution-lock'
 
 /** Core 与旧桌面 writer 共用同一协议；只读宿主不获取此锁。 */
 export function acquireCoreExecutionLock(configDir: string): () => void {
-  mkdirSync(configDir, { recursive: true })
+  mkdirSync(configDir, { recursive: true, mode: 0o700 })
   const directory = join(realpathSync(configDir), EXECUTION_LOCK)
   const owner = join(directory, 'owner')
   const alive = (pid: number): boolean => {

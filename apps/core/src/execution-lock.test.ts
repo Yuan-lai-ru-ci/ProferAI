@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { acquireCoreExecutionLock } from './execution-lock'
@@ -25,6 +25,20 @@ test.skipIf(process.platform !== 'win32')('Given Windows 未启用独立模式 W
     expect(launches).toBe(0)
     expect(existsSync(absent)).toBe(false)
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test.skipIf(process.platform === 'win32')('新配置根在组可写umask下仍为0700，不改变已有目录', () => {
+  const root = mkdtempSync(join(tmpdir(), 'core-lock-mode-'))
+  const mask = process.umask(0o002)
+  try {
+    const config = join(root, 'new-config')
+    const release = acquireCoreExecutionLock(config); release()
+    expect(statSync(config).mode & 0o777).toBe(0o700)
+    const existing = join(root, 'existing'); mkdirSync(existing, { mode: 0o775 })
+    const prior = statSync(existing).mode
+    const releaseExisting = acquireCoreExecutionLock(existing); releaseExisting()
+    expect(statSync(existing).mode).toBe(prior)
+  } finally { process.umask(mask); rmSync(root, { recursive: true, force: true }) }
 })
 
 test('同根单写、正常释放与已退出进程锁恢复', () => {

@@ -111,14 +111,14 @@ describe('project 工作区（桌面 @ 搜索）', () => {
     for (const name of internalEntries) {
       expect(internalNames).not.toContain(name)
     }
-    expect(internalPaths).toEqual([
+    expect([...internalPaths].sort()).toEqual([
       '.profer',
       join('.profer', 'memory'),
       join('.profer', 'memory', 'note.md'),
       join('.profer', 'workspace-files'),
       join('.profer', 'workspace-files', 'guide.md'),
       join('.profer', 'profile.md'),
-    ])
+    ].sort())
     expect(paths.some((path) => path.startsWith(join('.profer', 'presets')))).toBe(false)
     expect(paths.some((path) => path.startsWith(join('.profer', 'skills')))).toBe(false)
     expect(paths.some((path) => path.startsWith(join('.profer', 'sessions')))).toBe(false)

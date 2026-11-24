@@ -12,7 +12,7 @@ describe('shell environment loading', () => {
     expect(invocation.args[2]).toContain('env')
   })
 
-  test('loads environment from macOS zsh without interactive zle initialization', async () => {
+  test.skipIf(process.platform !== 'darwin')('loads environment from macOS zsh without interactive zle initialization', async () => {
     const env = await getShellEnv('/bin/zsh')
 
     expect(env.PATH).toBeString()

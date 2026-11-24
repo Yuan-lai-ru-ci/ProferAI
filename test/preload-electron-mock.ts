@@ -167,6 +167,7 @@ mock.module('electron', () => ({
     stop: () => undefined,
   },
   safeStorage: {
+    getSelectedStorageBackend: () => 'test',
     isEncryptionAvailable: () => false,
     encryptString: (s: string) => Buffer.from(s),
     decryptString: (b: Buffer) => b.toString(),

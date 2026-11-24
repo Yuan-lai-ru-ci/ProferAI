@@ -33,7 +33,7 @@ test.skipIf(!['darwin', 'linux'].includes(process.platform))('CLI opt-in cold st
     delete process.env.PROFER_CORE_BIN
     process.env.PATH = root
     async function command(name: 'start' | 'status' | 'stop', ...extra: string[]) {
-      const child = Bun.spawn([process.execPath, join(import.meta.dir, 'index.ts'), 'core', name, '--config-dir', configDir, '--json', ...extra], { stdout: 'pipe', stderr: 'pipe' })
+      const child = Bun.spawn([process.execPath, join(import.meta.dir, 'index.ts'), 'core', name, '--config-dir', configDir, '--json', ...extra], { env: { ...process.env }, stdout: 'pipe', stderr: 'pipe' })
       const [code, stdout, stderr] = await Promise.all([child.exited, child.stdout.text(), child.stderr.text()])
       return { code, stdout, stderr }
     }
