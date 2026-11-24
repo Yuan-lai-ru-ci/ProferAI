@@ -63,6 +63,7 @@ async function startOwnedCore(config: ReturnType<typeof parseCoreConfig>, releas
   const shutdown = (signal: string): Promise<void> => {
     if (shutdownPromise) return shutdownPromise
     process.stdout.write(`[Core] 收到 ${signal}，正在关闭\n`)
+    if (!independent && process.env.PROFER_CORE_DESKTOP_PARENT_PIPE === '1') process.stdin.pause()
     shutdownPromise = (async () => {
       try { await owner?.remove() } catch (error) { console.error('[Core] 无法撤下本机连接文件', error) }
       await connection.close()
@@ -85,6 +86,12 @@ async function startOwnedCore(config: ReturnType<typeof parseCoreConfig>, releas
 
   process.on('SIGINT', finishShutdown)
   process.on('SIGTERM', finishShutdown)
+  // 随桌面启动的 Core 通过匿名管道感知宿主消失；独立服务不绑定桌面寿命。
+  if (!independent && process.env.PROFER_CORE_DESKTOP_PARENT_PIPE === '1') {
+    process.stdin.once('end', () => finishShutdown('desktop pipe closed'))
+    process.stdin.resume()
+    if (process.stdin.readableEnded) finishShutdown('desktop pipe closed')
+  }
 
   let boundPort = config.port
   try {

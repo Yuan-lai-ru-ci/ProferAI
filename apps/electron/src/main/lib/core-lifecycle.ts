@@ -133,6 +133,7 @@ export class LocalCoreLifecycle {
     const spec = resolveCoreLaunchSpec(this.options)
     const env = {
       ...pickLocalCoreEnvironment(this.options.env ?? process.env, process.platform, true),
+      PROFER_CORE_DESKTOP_PARENT_PIPE: '1',
       PROFER_CORE_LISTEN: `127.0.0.1:${port}`,
       PROFER_CORE_API_KEY: token,
       PROFER_CONFIG_DIR: resolve(this.options.configDir),
@@ -145,7 +146,7 @@ export class LocalCoreLifecycle {
     const child = this.spawnImpl(spec.command, spec.args, {
       cwd: spec.cwd,
       env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
     })
     this.child = child
@@ -159,7 +160,11 @@ export class LocalCoreLifecycle {
       this.options.onStatus?.('error', `Profer Core 已退出（${signal ?? code ?? 'unknown'}）`)
     })
     child.stdout?.on('data', chunk => this.options.onOutput?.(String(chunk).trim()))
-    child.stderr?.on('data', chunk => this.options.onOutput?.(String(chunk).trim()))
+    let startupStderr = ''
+    child.stderr?.on('data', chunk => {
+      startupStderr = (startupStderr + String(chunk)).slice(-4096)
+      this.options.onOutput?.(String(chunk).trim())
+    })
     const baseUrl = `http://127.0.0.1:${port}`
     const client = new CoreClient({ baseUrl, token, fetchImpl: this.options.fetchImpl, recoverEvents: true })
     try {
@@ -168,6 +173,11 @@ export class LocalCoreLifecycle {
     } catch (error) {
       client.close()
       await this.stop()
+      if (startupStderr.trim()) {
+        // 只保留明确的错误行，不将完整stderr（可能含业务参数）回显到界面。
+        const cause = startupStderr.split(/\r?\n/).map(line => line.trim()).find(line => /^(?:error:|Error:|\[Core\] failed to start)/.test(line) && !/\d+ \|/.test(line))
+        if (cause && error instanceof Error) throw new Error(`${error.message}：${cause.slice(0, 300)}`)
+      }
       throw error
     }
     this.token = token
