@@ -1,6 +1,6 @@
 {
   "name": "@profer/electron",
-  "version": "0.17.1",
+  "version": "0.17.2",
   "description": "Profer",
   "homepage": "https://profer.cn",
   "main": "dist/main.cjs",
